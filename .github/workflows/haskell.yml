@@ -15,7 +15,11 @@ jobs:
   build:
 
     runs-on: ubuntu-latest
-
+    
+    defaults:
+      run:
+        working-directory: ./ychr-compiler
+        
     steps:
     - uses: actions/checkout@v3
     - uses: actions/setup-haskell@v1
