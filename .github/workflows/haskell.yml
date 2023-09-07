@@ -6,7 +6,9 @@ on:
       - "ychr-compiler"
       - ".github/workflows/haskell.yml"
   pull_request:
-    branches: [ "ychr-compiler" ]
+    paths:
+      - "ychr-compiler"
+      - ".github/workflows/haskell.yml"
 
 permissions:
   contents: read
