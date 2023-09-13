@@ -1,10 +1,10 @@
+{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module YCHR.Compiler.Rename.Tests (tests) where
 
 import Test.Tasty
 import Test.Tasty.HUnit
-
 import YCHR.Compiler.Rename
 import YCHR.Types.Common
 import YCHR.Types.Parsed
@@ -21,14 +21,14 @@ tests =
 psModule1 :: PsModule
 psModule1 =
   Module
-    { moduleName = "module1"
-    , imports = [Import "module2" ["constr2", "constr3"]]
-    , constraints = [ConstraintDef "constr1"]
-    , rules = [psRule1]
+    { moduleName = "module1",
+      imports = [Import "module2" ["constr2", "constr3"]],
+      constraints = [ConstraintDef "constr1"],
+      rules = [psRule1]
     }
 
 rnModule1 :: RnModule
-rnModule1 = psModule1{rules = [rnRule1]}
+rnModule1 = psModule1 {rules = [rnRule1]}
 
 psRule1 :: PsRule
 psRule1 = Simplification Nothing (Head [psConstr1]) (Guard []) (Body [ChrConstr psConstr2])

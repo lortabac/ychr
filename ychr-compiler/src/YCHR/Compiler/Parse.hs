@@ -6,6 +6,7 @@ module YCHR.Compiler.Parse where
 import Control.Monad (void)
 import qualified Control.Monad.Combinators.NonEmpty as NE
 import Data.Char (GeneralCategory (..), generalCategory)
+import Data.Functor (($>))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Void (Void)
@@ -19,7 +20,7 @@ type Parser = Parsec Void Text
 
 parseRule :: Parser PsRule
 parseRule = do
-  n <- try $ optional parseRuleName
+  n <- optional $ try parseRuleName
   h <- parseHead
   ruleChoiceSym <- parseRuleChoiceSym
   case ruleChoiceSym of
@@ -61,7 +62,8 @@ parseBody = Body <$> NE.sepBy1 parseConstraint argSeparator <* sc <* ruleEndSym 
 
 parseConstraint :: Parser PsConstraint
 parseConstraint =
-  fmap ChrConstr parseChrConstraint
+  (symbol "true" $> TrueConstr)
+    <|> fmap ChrConstr parseChrConstraint
     <|> fmap HostConstr parseHostConstraint
     <* sc
 

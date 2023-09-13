@@ -55,9 +55,11 @@ test-suite test-ychr
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
     other-modules:    YCHR.Compiler.Rename.Tests
+                    , YCHR.Compiler.Parse.Tests
                     , YCHR.Compiler.Normalize.Tests
     -- other-extensions:
     build-depends:    base ^>=4.18.0.0
+                    , megaparsec
                     , tasty
                     , tasty-hunit
                     , text
