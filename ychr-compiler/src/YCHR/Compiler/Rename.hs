@@ -22,7 +22,7 @@ qualifyModuleNames mdl = sequenceA $ fmap qualify mdl
         [ModuleName modName] -> Right $ QualifiedName modName ident
         (_ : _) -> Left $ AmbiguousName ident
         [] -> Left $ NameNotFound ident
-    qualify (PsQualifiedName modName ident) =
+    qualify (PsQualifiedName (QualifiedName modName ident)) =
       case findImportByModuleName mdl modName of
         Just imp -> case listNameInImport ident imp of
           Just (ModuleName _) -> Right $ QualifiedName modName ident

@@ -1,8 +1,6 @@
 module YCHR.Types.Renamed where
 
-import Data.Text (Text)
 import YCHR.Types.Common
-import YCHR.Types.Parsed
 
 -- | Renamed module
 type RnModule = Module Variable QualifiedName
@@ -28,7 +26,3 @@ type RnChrConstraint = ChrConstraint Variable QualifiedName
 
 -- | Renamed constraint
 type RnConstraint = Constraint Variable QualifiedName
-
--- | Qualified name (module name and identifier)
-data QualifiedName = QualifiedName Text Text
-  deriving (Eq, Show, Ord)

@@ -8,7 +8,7 @@ where
 import Data.List (nub)
 import Data.Map (Map)
 import qualified Data.Map.Strict as Map
-import YCHR.Types.Parsed
+import YCHR.Types.Common
 import YCHR.Types.Prepared
 
 newtype VariableMap = VariableMap {getVariableMap :: Map Variable VariableId}

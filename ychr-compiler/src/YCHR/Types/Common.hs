@@ -7,6 +7,7 @@
 module YCHR.Types.Common where
 
 import Data.Data (Data)
+import Data.List.NonEmpty (NonEmpty)
 import Data.String (IsString)
 import Data.Text (Text)
 
@@ -52,6 +53,15 @@ data Term var
   | String Text
   deriving (Eq, Show, Ord, Data, Functor, Foldable, Traversable)
 
+-- | Qualified name (module name and identifier)
+data QualifiedName = QualifiedName Text Text
+  deriving (Eq, Show, Ord, Data)
+
+-- | Textual variable
+newtype Variable = Variable {getVariable :: Text}
+  deriving stock (Eq, Show, Ord, Data)
+  deriving newtype (IsString)
+
 -- | CHR constraint
 data ChrConstraint var name = ChrConstraint
   { name :: name,
@@ -85,7 +95,10 @@ newtype Remove var name = Remove {getRemove :: [ChrConstraint var name]}
 newtype Guard var name = Guard {getGuard :: [Constraint var name]}
   deriving (Eq, Show, Data, Functor, Foldable, Traversable)
 
-newtype Body var name = Body {getConstraint :: [Constraint var name]}
+emptyGuard :: Guard var name
+emptyGuard = Guard []
+
+newtype Body var name = Body {getConstraint :: NonEmpty (Constraint var name)}
   deriving (Eq, Show, Data, Functor, Foldable, Traversable)
 
 data Operator var

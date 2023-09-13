@@ -1,8 +1,6 @@
 module YCHR.Types.Normalized where
 
 import YCHR.Types.Common
-import YCHR.Types.Parsed
-import YCHR.Types.Renamed
 
 type NmHead = Head Variable QualifiedName
 
