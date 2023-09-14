@@ -3,11 +3,11 @@ name: Haskell CI
 on:
   push:
     paths:
-      - "ychr-compiler"
+      - "ychr-compiler/**"
       - ".github/workflows/haskell.yml"
   pull_request:
     paths:
-      - "ychr-compiler"
+      - "ychr-compiler/**"
       - ".github/workflows/haskell.yml"
 
 permissions:
