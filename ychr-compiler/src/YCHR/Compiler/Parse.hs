@@ -1,7 +1,7 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module YCHR.Compiler.Parse where
+module YCHR.Compiler.Parse (Parser, parseRule) where
 
 import Control.Monad (void)
 import qualified Control.Monad.Combinators.NonEmpty as NE
@@ -71,7 +71,7 @@ parseHostConstraint :: Parser PsHostConstraint
 parseHostConstraint = HostConstraint <$> hostConstrFunction <*> parseArguments
 
 hostConstrFunction :: Parser Text
-hostConstrFunction = hostConstrSuffix *> genericIdentifier
+hostConstrFunction = hostConstrSuffix *> hostConstrIdentifier
 
 parseChrConstraint :: Parser PsChrConstraint
 parseChrConstraint = ChrConstraint <$> parsePsName <*> parseArguments <* sc
@@ -83,7 +83,7 @@ argSeparator :: Parser ()
 argSeparator = void $ symbol ","
 
 parseRuleName :: Parser RuleName
-parseRuleName = fmap RuleName genericIdentifier <* sc <* nameSym <* sc
+parseRuleName = fmap RuleName genericAlnumIdentifier <* sc <* nameSym <* sc
 
 parsePsName :: Parser PsName
 parsePsName =
@@ -105,6 +105,9 @@ parseVariable =
   fmap Variable $
     T.cons <$> variableHead <*> identifierTail
 
+hostConstrIdentifier :: Parser Text
+hostConstrIdentifier = takeWhile1P Nothing (\c -> isIdentifierChar c && c == '.')
+
 nameHead :: Parser Char
 nameHead = lowerChar
 
@@ -114,8 +117,8 @@ variableHead = upperChar <|> char 'c'
 identifierTail :: Parser Text
 identifierTail = takeWhileP Nothing isIdentifierChar
 
-genericIdentifier :: Parser Text
-genericIdentifier = takeWhile1P Nothing isIdentifierChar
+genericAlnumIdentifier :: Parser Text
+genericAlnumIdentifier = takeWhile1P Nothing isIdentifierChar
 
 isIdentifierChar :: Char -> Bool
 isIdentifierChar c =
