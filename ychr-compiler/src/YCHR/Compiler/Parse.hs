@@ -1,7 +1,13 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module YCHR.Compiler.Parse (Parser, parseRule) where
+module YCHR.Compiler.Parse
+  ( Parser,
+    parseFile,
+    parseConstraintDefs,
+    parseRule,
+  )
+where
 
 import Control.Monad (void)
 import qualified Control.Monad.Combinators.NonEmpty as NE
@@ -17,6 +23,26 @@ import YCHR.Types.Common
 import YCHR.Types.Parsed
 
 type Parser = Parsec Void Text
+
+parseFile :: Parser PsModule
+parseFile = do
+  defs <- parseConstraintDefs
+  rs <- many parseRule
+  pure
+    Module
+      { moduleName = "$file",
+        imports = [], -- TODO parse imports
+        constraints = defs,
+        rules = rs
+      }
+
+parseConstraintDefs :: Parser [ConstraintDef]
+parseConstraintDefs = do
+  _ <- symbol "constraints"
+  sepBy parseConstraintDef argSeparator
+
+parseConstraintDef :: Parser ConstraintDef
+parseConstraintDef = ConstraintDef <$> parseFunctor
 
 parseRule :: Parser PsRule
 parseRule = do
@@ -92,10 +118,13 @@ parsePsName =
 
 parseQualifiedName :: Parser QualifiedName
 parseQualifiedName = do
-  modName <- parseFunctor
+  modName <- parseModuleName
   _ <- char ':'
   func <- parseFunctor
   pure $ QualifiedName modName func
+
+parseModuleName :: Parser Text
+parseModuleName = takeWhile1P Nothing (\c -> isIdentifierChar c && c == '/')
 
 parseFunctor :: Parser Text
 parseFunctor = T.cons <$> nameHead <*> identifierTail
