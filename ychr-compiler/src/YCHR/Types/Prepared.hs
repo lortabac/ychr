@@ -17,14 +17,16 @@ type PrGuard = Guard VariableId ConstraintId
 
 type PrBody = Body VariableId ConstraintId
 
+type PrTerm = Term VariableId
+
 type OccurrenceMap = Map ConstraintId PrRule
 
 newtype VariableId = VariableId {getVariableId :: Int}
-  deriving stock (Eq, Show)
+  deriving stock (Eq, Show, Ord)
   deriving newtype (Enum)
 
 newtype ConstraintId = ConstraintId {getConstraintId :: Int}
-  deriving stock (Eq, Show)
+  deriving stock (Eq, Show, Ord)
   deriving newtype (Enum)
 
 newtype OccurrenceNumber = OccurrenceNumber {getOccurrenceNumber :: Int}
