@@ -65,14 +65,14 @@ newtype Variable = Variable {getVariable :: Text}
 -- | CHR constraint
 data ChrConstraint var name = ChrConstraint
   { name :: name,
-    args :: [Term var]
+    arguments :: [Term var]
   }
   deriving (Eq, Show, Ord, Data, Functor, Foldable, Traversable)
 
 -- | Constraint in the host language
 data HostConstraint var = HostConstraint
   { name :: Text,
-    args :: [Term var]
+    arguments :: [Term var]
   }
   deriving (Eq, Show, Data)
 

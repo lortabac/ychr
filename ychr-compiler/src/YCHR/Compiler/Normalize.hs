@@ -69,7 +69,7 @@ normalizeHead constrs = do
 
 normalizeChrConstraint :: RnChrConstraint -> State NmState (NmChrConstraint, [NmConstraint])
 normalizeChrConstraint constr@(ChrConstraint name _) = do
-  results <- traverse normalizeArgVar constr.args
+  results <- traverse normalizeArgVar constr.arguments
   let args' = map fst results
       constrs = concatMap snd results
   pure (ChrConstraint name (map Var args'), constrs)

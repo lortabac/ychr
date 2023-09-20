@@ -29,11 +29,11 @@ data Imp t var where
   SuspStore :: Suspension -> Imp () var
   SuspKill :: Suspension -> Imp () var
   SuspAlive :: Suspension -> Imp Bool var
-  SuspLookup :: ConstraintId -> Imp var [Suspension]
-  AddToHistory :: RuleId -> [Suspension] -> Imp () var
-  NotInHistory :: RuleId -> [Suspension] -> Imp Bool var
-  Activate :: Suspension -> Imp () var
-  Foreach :: var -> [Suspension] -> Imp () var
+  SuspLookup :: ConstraintId -> Imp [Suspension] var
+  AddToHistory :: RuleId -> Imp [Suspension] var -> Imp () var
+  NotInHistory :: RuleId -> Imp [Suspension] var -> Imp Bool var
+  Activate :: Imp Suspension var -> Imp () var
+  Foreach :: var -> Imp [Suspension] var -> Imp () var -> Imp () var
   Assign :: Imp a var -> Imp a var -> Imp var ()
   CallConstraintProc :: ConstraintId -> [PrTerm] -> Imp () var
   CallOccurrenceProc ::
@@ -44,12 +44,15 @@ data Imp t var where
     Imp () var
   CallActivateProc :: Suspension -> Imp () var
   If :: Imp Bool var -> Imp () var -> Imp () var
+  And :: Imp Bool var -> Imp Bool var -> Imp Bool var
+  Neq :: Imp a var -> Imp a var -> Imp Bool var
   SuspVar :: var -> Imp Suspension var
   TermVar :: var -> Imp PrTerm var
+  Noop :: Imp () var
 
 data Suspension = Suspension
   { constraintId :: ConstraintId,
-    args :: [PrTerm],
+    arguments :: [PrTerm],
     suspensionId :: SuspensionId,
     stored :: Bool,
     alive :: Bool,

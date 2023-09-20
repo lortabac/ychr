@@ -22,6 +22,7 @@ library
                     , YCHR.Compiler.Parse
                     , YCHR.Compiler.Normalize
                     , YCHR.Compiler.Rename
+                    , YCHR.Compiler.Compile
                     , YCHR.Types.Common
                     , YCHR.Types.ConstraintMap
                     , YCHR.Types.Normalized
