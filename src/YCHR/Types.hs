@@ -5,12 +5,17 @@
 module YCHR.Types
   ( -- * Constraints
     Constraint (..),
+    ConstraintType (..),
     Name (..),
 
     -- * Terms
     Term (..),
   )
 where
+
+-- | A numeric identifier for a constraint type, assigned by the symbol table.
+newtype ConstraintType = ConstraintType {unConstraintType :: Int}
+  deriving (Show, Eq, Ord)
 
 -- | Represents a name that can be either raw or module-qualified.
 data Name

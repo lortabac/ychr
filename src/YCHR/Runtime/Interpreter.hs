@@ -76,8 +76,8 @@ instance Show ControlFlow where
 
 -- | Interpret a VM program by calling a named procedure with the given arguments.
 interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO RuntimeVal
-interpret (Program procs) hostCalls entryName args = do
-  let procMap = Map.fromList [(procName p, p) | p <- procs]
+interpret Program {progNumTypes, progProcedures} hostCalls entryName args = do
+  let procMap = Map.fromList [(procName p, p) | p <- progProcedures]
       argVals = map RVal args
   runEff
     . runUnifyWithWriter
@@ -93,7 +93,7 @@ interpret (Program procs) hostCalls entryName args = do
         . fmap fst
         . runWriter @[SuspensionId]
         $ m
-    runCHRStoreEff = YCHR.Runtime.Store.runCHRStore
+    runCHRStoreEff = YCHR.Runtime.Store.runCHRStore progNumTypes
     runPropHistoryEff = YCHR.Runtime.History.runPropHistory
     runReactQueueEff = YCHR.Runtime.Reactivation.runReactQueue
 
@@ -153,7 +153,7 @@ execStmt pm hc (If cond thenBranch elseBranch) = do
     RVal (VBool False) -> execStmts pm hc elseBranch
     _ -> error "If: condition is not a boolean"
 execStmt pm hc (Foreach lbl cType suspVar conditions body) = do
-  snapshot <- getStoreSnapshot (unName cType)
+  snapshot <- getStoreSnapshot cType
   let susps = toList snapshot
   execForeach pm hc lbl suspVar conditions body susps
 execStmt _ _ (Continue lbl) = throwError (CFContinue lbl)
@@ -289,7 +289,7 @@ evalExpr pm hc (GetArg expr idx) = do
   RVal <$> getArg (toValue v) idx
 evalExpr pm hc (CreateConstraint cType args) = do
   argVals <- mapM (evalExpr pm hc) args
-  sid <- createConstraint (unName cType) (map toValue argVals)
+  sid <- createConstraint cType (map toValue argVals)
   pure (RConstraint sid)
 evalExpr pm hc (Alive expr) = do
   v <- evalExpr pm hc expr
@@ -305,7 +305,7 @@ evalExpr pm hc (IdEqual e1 e2) = do
 evalExpr pm hc (IsConstraintType expr cType) = do
   v <- evalExpr pm hc expr
   case v of
-    RConstraint sid -> RVal . VBool <$> isConstraintType sid (unName cType)
+    RConstraint sid -> RVal . VBool <$> isConstraintType sid cType
     _ -> error "IsConstraintType: expected constraint identifier"
 evalExpr pm hc (NotInHistory ruleName args) = do
   argVals <- mapM (evalExpr pm hc) args
@@ -327,7 +327,7 @@ evalExpr pm hc (FieldGet expr field) = do
     RConstraint sid -> case field of
       FieldId -> pure (RConstraint sid)
       FieldArg (ArgIndex i) -> RVal <$> getConstraintArg sid i
-      FieldType -> RVal . VAtom <$> getConstraintType sid
+      FieldType -> RVal . VInt . unConstraintType <$> getConstraintType sid
     _ -> error "FieldGet: expected constraint identifier"
 
 -- ---------------------------------------------------------------------------

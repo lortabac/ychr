@@ -35,14 +35,15 @@ where
 import Data.IORef
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
-import Data.Map.Strict (Map)
-import Data.Map.Strict qualified as Map
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
+import Data.Vector.Mutable (IOVector)
+import Data.Vector.Mutable qualified as MV
 import Effectful
 import Effectful.Dispatch.Static
 import YCHR.Runtime.Types (SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, addObserver, deref)
+import YCHR.Types (ConstraintType (..))
 
 -- ---------------------------------------------------------------------------
 -- Types
@@ -51,14 +52,14 @@ import YCHR.Runtime.Var (Unify, addObserver, deref)
 -- | A constraint suspension in the store.
 data Suspension = Suspension
   { suspId :: !SuspensionId,
-    suspType :: !String,
+    suspType :: !ConstraintType,
     suspArgs :: ![Value],
     suspAlive :: !(IORef Bool)
   }
 
 -- | Internal state of the constraint store.
 data StoreState = StoreState
-  { storeByType :: !(IORef (Map String (Seq Suspension))),
+  { storeByType :: !(IOVector (Seq Suspension)),
     storeById :: !(IORef (IntMap Suspension)),
     storeNextId :: !(IORef Int)
   }
@@ -73,10 +74,12 @@ type instance DispatchOf CHRStore = Static WithSideEffects
 
 newtype instance StaticRep CHRStore = CHRStoreRep StoreState
 
--- | Run a computation that uses 'CHRStore'.
-runCHRStore :: (IOE :> es) => Eff (CHRStore : es) a -> Eff es a
-runCHRStore m = do
-  byType <- liftIO $ newIORef Map.empty
+-- | Run a computation that uses 'CHRStore'. The @numTypes@ argument is the
+-- number of distinct constraint types; the store pre-allocates a vector of
+-- that size.
+runCHRStore :: (IOE :> es) => Int -> Eff (CHRStore : es) a -> Eff es a
+runCHRStore numTypes m = do
+  byType <- liftIO $ MV.replicate numTypes Seq.empty
   byId <- liftIO $ newIORef IntMap.empty
   nextId <- liftIO $ newIORef 0
   evalStaticRep (CHRStoreRep (StoreState byType byId nextId)) m
@@ -104,7 +107,7 @@ lookupSusp (SuspensionId sid) = do
 
 -- | Allocate a new constraint suspension. The constraint is alive but
 -- not yet in the type-indexed store. Use 'storeConstraint' to add it.
-createConstraint :: (CHRStore :> es) => String -> [Value] -> Eff es SuspensionId
+createConstraint :: (CHRStore :> es) => ConstraintType -> [Value] -> Eff es SuspensionId
 createConstraint cType args = do
   st <- getStoreState
   sid <- unsafeEff_ $ do
@@ -122,9 +125,8 @@ storeConstraint :: (CHRStore :> es, Unify :> es) => SuspensionId -> Eff es ()
 storeConstraint sid = do
   susp <- lookupSusp sid
   st <- getStoreState
-  unsafeEff_ $ modifyIORef' (storeByType st) $ \m ->
-    let existing = Map.findWithDefault Seq.empty (suspType susp) m
-     in Map.insert (suspType susp) (existing Seq.|> susp) m
+  let ConstraintType idx = suspType susp
+  unsafeEff_ $ MV.modify (storeByType st) (Seq.|> susp) idx
   -- Register as observer on each variable argument
   mapM_ (registerObserver sid) (suspArgs susp)
 
@@ -158,7 +160,7 @@ getConstraintArg sid idx = do
     else error $ "getConstraintArg: index " ++ show idx ++ " out of bounds"
 
 -- | Get the constraint type of a suspension.
-getConstraintType :: (CHRStore :> es) => SuspensionId -> Eff es String
+getConstraintType :: (CHRStore :> es) => SuspensionId -> Eff es ConstraintType
 getConstraintType sid = suspType <$> lookupSusp sid
 
 -- | Compare two suspension IDs for equality. Pure.
@@ -166,7 +168,7 @@ idEqual :: SuspensionId -> SuspensionId -> Bool
 idEqual = (==)
 
 -- | Check if a suspension has the given constraint type.
-isConstraintType :: (CHRStore :> es) => SuspensionId -> String -> Eff es Bool
+isConstraintType :: (CHRStore :> es) => SuspensionId -> ConstraintType -> Eff es Bool
 isConstraintType sid cType = do
   t <- getConstraintType sid
   pure (t == cType)
@@ -174,11 +176,13 @@ isConstraintType sid cType = do
 -- | Get a snapshot of all suspensions of a given type. The returned
 -- 'Seq' is an immutable snapshot: new constraints appended after this
 -- call are invisible to the iterator.
-getStoreSnapshot :: (CHRStore :> es) => String -> Eff es (Seq Suspension)
-getStoreSnapshot cType = do
+getStoreSnapshot :: (CHRStore :> es) => ConstraintType -> Eff es (Seq Suspension)
+getStoreSnapshot (ConstraintType idx) = do
   st <- getStoreState
-  byType <- unsafeEff_ $ readIORef (storeByType st)
-  pure $ Map.findWithDefault Seq.empty cType byType
+  let vec = storeByType st
+  if idx >= 0 && idx < MV.length vec
+    then unsafeEff_ $ MV.read vec idx
+    else pure Seq.empty
 
 -- | Check if a suspension is alive by reading its IORef.
 isSuspAlive :: (CHRStore :> es) => Suspension -> Eff es Bool

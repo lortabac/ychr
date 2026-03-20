@@ -7,7 +7,7 @@ import YCHR.DSL
 import YCHR.Desugar (DesugarError (..), desugarProgram, extractSymbolTable)
 import YCHR.Desugared qualified as D
 import YCHR.Parsed
-import YCHR.Types
+import YCHR.Types (ConstraintType (..), Name (..))
 
 tests :: TestTree
 tests =
@@ -201,7 +201,7 @@ symbolTableTests =
                     []
                     []
                 ]
-        extractSymbolTable prog @?= Map.singleton (Qualified "M" "leq") 0,
+        extractSymbolTable prog @?= Map.singleton (Qualified "M" "leq") (ConstraintType 0),
       testCase "two distinct qualified constraints get sequential ids" $ do
         let prog =
               D.Program
@@ -222,7 +222,7 @@ symbolTableTests =
                     []
                     [D.BodyConstraint (Constraint (Qualified "M" "leq") [])]
                 ]
-        extractSymbolTable prog @?= Map.singleton (Qualified "M" "leq") 0,
+        extractSymbolTable prog @?= Map.singleton (Qualified "M" "leq") (ConstraintType 0),
       testCase "unqualified name in body not in table" $ do
         let prog =
               D.Program
@@ -251,5 +251,5 @@ symbolTableTests =
                 ]
         let table = extractSymbolTable prog
         (Map.lookup (Qualified "A" "z") table, Map.lookup (Qualified "B" "a") table)
-          @?= (Just 0, Just 1)
+          @?= (Just (ConstraintType 0), Just (ConstraintType 1))
     ]

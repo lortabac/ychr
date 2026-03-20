@@ -10,6 +10,7 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Runtime.Store
 import YCHR.Runtime.Types (SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, equal, newVar, runUnify, unify)
+import YCHR.Types (ConstraintType (..))
 
 tests :: TestTree
 tests =
@@ -29,7 +30,7 @@ tests =
 
 -- | Run an Eff computation with CHRStore, Unify, Writer, and IOE.
 runStoreEnv :: Eff [Writer [SuspensionId], CHRStore, Unify, IOE] a -> IO (a, [SuspensionId])
-runStoreEnv = runEff . runUnify . runCHRStore . runWriter @[SuspensionId]
+runStoreEnv = runEff . runUnify . runCHRStore 100 . runWriter @[SuspensionId]
 
 runStoreEnv_ :: Eff [Writer [SuspensionId], CHRStore, Unify, IOE] a -> IO a
 runStoreEnv_ m = fst <$> runStoreEnv m
@@ -52,12 +53,12 @@ createTests =
     "createConstraint"
     [ testCase "returns distinct IDs" $ do
         runStoreEnv_ $ do
-          id1 <- createConstraint "leq" [VInt 1, VInt 2]
-          id2 <- createConstraint "leq" [VInt 3, VInt 4]
+          id1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
+          id2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
           liftIO $ assertBool "IDs should differ" (not (idEqual id1 id2)),
       testCase "constraint is alive before storing" $ do
         runStoreEnv_ $ do
-          sid <- createConstraint "leq" [VInt 1, VInt 2]
+          sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           alive <- aliveConstraint sid
           liftIO $ alive @?= True
     ]
@@ -72,31 +73,31 @@ storeTests =
     "storeConstraint"
     [ testCase "appears in snapshot" $ do
         runStoreEnv_ $ do
-          sid <- createConstraint "leq" [VInt 1, VInt 2]
+          sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           storeConstraint sid
-          snap <- getStoreSnapshot "leq"
+          snap <- getStoreSnapshot (ConstraintType 0)
           liftIO $ length snap @?= 1,
       testCase "multiple same type" $ do
         runStoreEnv_ $ do
-          s1 <- createConstraint "leq" [VInt 1, VInt 2]
-          s2 <- createConstraint "leq" [VInt 3, VInt 4]
+          s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
+          s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
           storeConstraint s1
           storeConstraint s2
-          snap <- getStoreSnapshot "leq"
+          snap <- getStoreSnapshot (ConstraintType 0)
           liftIO $ length snap @?= 2,
       testCase "different types" $ do
         runStoreEnv_ $ do
-          s1 <- createConstraint "leq" [VInt 1, VInt 2]
-          s2 <- createConstraint "gcd" [VInt 5]
+          s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
+          s2 <- createConstraint (ConstraintType 1) [VInt 5]
           storeConstraint s1
           storeConstraint s2
-          snapLeq <- getStoreSnapshot "leq"
-          snapGcd <- getStoreSnapshot "gcd"
+          snapLeq <- getStoreSnapshot (ConstraintType 0)
+          snapGcd <- getStoreSnapshot (ConstraintType 1)
           liftIO $ length snapLeq @?= 1
           liftIO $ length snapGcd @?= 1,
       testCase "empty snapshot for unknown type" $ do
         runStoreEnv_ $ do
-          snap <- getStoreSnapshot "nonexistent"
+          snap <- getStoreSnapshot (ConstraintType 99)
           liftIO $ length snap @?= 0
     ]
 
@@ -110,22 +111,22 @@ killTests =
     "killConstraint"
     [ testCase "alive becomes False" $ do
         runStoreEnv_ $ do
-          sid <- createConstraint "leq" [VInt 1, VInt 2]
+          sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           storeConstraint sid
           killConstraint sid
           alive <- aliveConstraint sid
           liftIO $ alive @?= False,
       testCase "still in snapshot after kill" $ do
         runStoreEnv_ $ do
-          sid <- createConstraint "leq" [VInt 1, VInt 2]
+          sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           storeConstraint sid
           killConstraint sid
-          snap <- getStoreSnapshot "leq"
+          snap <- getStoreSnapshot (ConstraintType 0)
           liftIO $ length snap @?= 1,
       testCase "doesn't affect other constraints" $ do
         runStoreEnv_ $ do
-          s1 <- createConstraint "leq" [VInt 1, VInt 2]
-          s2 <- createConstraint "leq" [VInt 3, VInt 4]
+          s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
+          s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
           storeConstraint s1
           storeConstraint s2
           killConstraint s1
@@ -145,34 +146,34 @@ fieldTests =
     "fields"
     [ testCase "getConstraintArg" $ do
         runStoreEnv_ $ do
-          sid <- createConstraint "leq" [VInt 10, VAtom "x"]
+          sid <- createConstraint (ConstraintType 0) [VInt 10, VAtom "x"]
           a0 <- getConstraintArg sid 0
           a1 <- getConstraintArg sid 1
           liftIO $ case a0 of VInt 10 -> pure (); _ -> assertBool "arg 0" False
           liftIO $ case a1 of VAtom "x" -> pure (); _ -> assertBool "arg 1" False,
       testCase "getConstraintType" $ do
         runStoreEnv_ $ do
-          sid <- createConstraint "gcd" [VInt 5]
+          sid <- createConstraint (ConstraintType 1) [VInt 5]
           t <- getConstraintType sid
-          liftIO $ t @?= "gcd",
+          liftIO $ t @?= ConstraintType 1,
       testCase "idEqual same" $ do
         runStoreEnv_ $ do
-          sid <- createConstraint "leq" [VInt 1, VInt 2]
+          sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           liftIO $ assertBool "same id" (idEqual sid sid),
       testCase "idEqual different" $ do
         runStoreEnv_ $ do
-          s1 <- createConstraint "leq" [VInt 1, VInt 2]
-          s2 <- createConstraint "leq" [VInt 3, VInt 4]
+          s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
+          s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
           liftIO $ assertBool "different id" (not (idEqual s1 s2)),
       testCase "isConstraintType true" $ do
         runStoreEnv_ $ do
-          sid <- createConstraint "leq" [VInt 1, VInt 2]
-          r <- isConstraintType sid "leq"
+          sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
+          r <- isConstraintType sid (ConstraintType 0)
           liftIO $ r @?= True,
       testCase "isConstraintType false" $ do
         runStoreEnv_ $ do
-          sid <- createConstraint "leq" [VInt 1, VInt 2]
-          r <- isConstraintType sid "gcd"
+          sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
+          r <- isConstraintType sid (ConstraintType 1)
           liftIO $ r @?= False
     ]
 
@@ -186,34 +187,34 @@ iterationTests =
     "iteration"
     [ testCase "skip dead in snapshot" $ do
         runStoreEnv_ $ do
-          s1 <- createConstraint "leq" [VInt 1, VInt 2]
-          s2 <- createConstraint "leq" [VInt 3, VInt 4]
+          s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
+          s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
           storeConstraint s1
           storeConstraint s2
           killConstraint s1
-          snap <- getStoreSnapshot "leq"
+          snap <- getStoreSnapshot (ConstraintType 0)
           alive <- countAlive (toList snap)
           liftIO $ alive @?= 1,
       testCase "new constraints invisible to captured snapshot" $ do
         runStoreEnv_ $ do
-          s1 <- createConstraint "leq" [VInt 1, VInt 2]
+          s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           storeConstraint s1
-          snap <- getStoreSnapshot "leq"
+          snap <- getStoreSnapshot (ConstraintType 0)
           -- Add another constraint after snapshot
-          s2 <- createConstraint "leq" [VInt 3, VInt 4]
+          s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
           storeConstraint s2
           -- Original snapshot should still have only 1
           liftIO $ length snap @?= 1
           -- Fresh snapshot should have 2
-          snap2 <- getStoreSnapshot "leq"
+          snap2 <- getStoreSnapshot (ConstraintType 0)
           liftIO $ length snap2 @?= 2,
       testCase "kill visible during iteration via isSuspAlive" $ do
         runStoreEnv_ $ do
-          s1 <- createConstraint "leq" [VInt 1, VInt 2]
-          s2 <- createConstraint "leq" [VInt 3, VInt 4]
+          s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
+          s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
           storeConstraint s1
           storeConstraint s2
-          snap <- getStoreSnapshot "leq"
+          snap <- getStoreSnapshot (ConstraintType 0)
           -- Kill s1 after snapshot
           killConstraint s1
           -- isSuspAlive sees the kill through the IORef
@@ -226,22 +227,22 @@ iterationTests =
           liftIO $ a2 @?= True,
       testCase "filter by argument equality" $ do
         runStoreEnv_ $ do
-          s1 <- createConstraint "leq" [VInt 1, VInt 2]
-          s2 <- createConstraint "leq" [VInt 3, VInt 4]
-          s3 <- createConstraint "leq" [VInt 1, VInt 5]
+          s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
+          s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
+          s3 <- createConstraint (ConstraintType 0) [VInt 1, VInt 5]
           storeConstraint s1
           storeConstraint s2
           storeConstraint s3
-          snap <- getStoreSnapshot "leq"
+          snap <- getStoreSnapshot (ConstraintType 0)
           -- Filter: first arg equal to VInt 1
           let susps = toList snap
           matches <- filterByArg 0 (VInt 1) susps
           liftIO $ length matches @?= 2,
       testCase "suspArg pure access" $ do
         runStoreEnv_ $ do
-          sid <- createConstraint "leq" [VInt 10, VAtom "y"]
+          sid <- createConstraint (ConstraintType 0) [VInt 10, VAtom "y"]
           storeConstraint sid
-          snap <- getStoreSnapshot "leq"
+          snap <- getStoreSnapshot (ConstraintType 0)
           s <- liftIO $ case toList snap of
             (s : _) -> pure s
             [] -> assertFailure "expected at least 1 suspension in \"leq\" store"
@@ -271,22 +272,22 @@ observerTests =
     [ testCase "unifying a constraint's var arg emits SuspensionId" $ do
         (_, obs) <- runStoreEnv $ do
           x <- newVar
-          sid <- createConstraint "leq" [x, VInt 2]
+          sid <- createConstraint (ConstraintType 0) [x, VInt 2]
           storeConstraint sid
           _ <- unify x (VInt 1)
           pure ()
         assertBool "should contain the suspension id" (SuspensionId 0 `elem` obs),
       testCase "ground args produce no observer" $ do
         (_, obs) <- runStoreEnv $ do
-          sid <- createConstraint "leq" [VInt 1, VInt 2]
+          sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           storeConstraint sid
           pure ()
         obs @?= [],
       testCase "multiple constraints on same variable" $ do
         (_, obs) <- runStoreEnv $ do
           x <- newVar
-          s1 <- createConstraint "leq" [x, VInt 2]
-          s2 <- createConstraint "gcd" [x]
+          s1 <- createConstraint (ConstraintType 0) [x, VInt 2]
+          s2 <- createConstraint (ConstraintType 1) [x]
           storeConstraint s1
           storeConstraint s2
           _ <- unify x (VInt 1)

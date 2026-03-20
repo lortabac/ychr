@@ -28,32 +28,38 @@ tests =
 -- LEQ VM program
 -- ---------------------------------------------------------------------------
 
+leqType :: ConstraintType
+leqType = ConstraintType 0
+
 leqProgram :: Program
 leqProgram =
   Program
-    [ tellLeq,
-      activateLeq,
-      occurrenceLeq1,
-      occurrenceLeq2,
-      occurrenceLeq3,
-      occurrenceLeq4,
-      occurrenceLeq5,
-      occurrenceLeq6,
-      occurrenceLeq7,
-      reactivateDispatch
-    ]
+    { progNumTypes = 1,
+      progProcedures =
+        [ tellLeq,
+          activateLeq,
+          occurrenceLeq1,
+          occurrenceLeq2,
+          occurrenceLeq3,
+          occurrenceLeq4,
+          occurrenceLeq5,
+          occurrenceLeq6,
+          occurrenceLeq7,
+          reactivateDispatch
+        ]
+    }
 
 leqProcMap :: Map.Map Name Procedure
 leqProcMap =
-  let Program procs = leqProgram
-   in Map.fromList [(procName p, p) | p <- procs]
+  let Program {progProcedures} = leqProgram
+   in Map.fromList [(procName p, p) | p <- progProcedures]
 
 tellLeq :: Procedure
 tellLeq =
   Procedure
     "tell_leq"
     ["X", "Y"]
-    [ Let "id" (CreateConstraint "leq" [Var "X", Var "Y"]),
+    [ Let "id" (CreateConstraint leqType [Var "X", Var "Y"]),
       Store (Var "id"),
       ExprStmt (CallExpr "activate_leq" [Var "id", Var "X", Var "Y"])
     ]
@@ -101,7 +107,7 @@ occurrenceLeq2 =
     ["id", "X", "Y"]
     [ Foreach
         "L1"
-        "leq"
+        leqType
         "susp"
         []
         [ Let "pId" (FieldGet (Var "susp") FieldId),
@@ -140,7 +146,7 @@ occurrenceLeq3 =
     ["id", "X", "Y"]
     [ Foreach
         "L1"
-        "leq"
+        leqType
         "susp"
         []
         [ Let "pId" (FieldGet (Var "susp") FieldId),
@@ -179,7 +185,7 @@ occurrenceLeq4 =
     ["id", "X", "Y"]
     [ Foreach
         "L1"
-        "leq"
+        leqType
         "susp"
         []
         [ Let "pId" (FieldGet (Var "susp") FieldId),
@@ -213,7 +219,7 @@ occurrenceLeq5 =
     ["id", "X", "Y"]
     [ Foreach
         "L1"
-        "leq"
+        leqType
         "susp"
         []
         [ Let "pId" (FieldGet (Var "susp") FieldId),
@@ -245,7 +251,7 @@ occurrenceLeq6 =
     ["id", "X", "Y"]
     [ Foreach
         "L1"
-        "leq"
+        leqType
         "susp"
         []
         [ Let "pId" (FieldGet (Var "susp") FieldId),
@@ -284,7 +290,7 @@ occurrenceLeq7 =
     ["id", "X", "Y"]
     [ Foreach
         "L1"
-        "leq"
+        leqType
         "susp"
         []
         [ Let "pId" (FieldGet (Var "susp") FieldId),
@@ -322,7 +328,7 @@ reactivateDispatch =
     "reactivate_dispatch"
     ["susp"]
     [ If
-        (IsConstraintType (Var "susp") "leq")
+        (IsConstraintType (Var "susp") leqType)
         [ Let "rx" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))),
           Let "ry" (FieldGet (Var "susp") (FieldArg (ArgIndex 1))),
           ExprStmt (CallExpr "activate_leq" [Var "susp", Var "rx", Var "ry"])
@@ -342,7 +348,7 @@ leqHostCalls = Map.empty
 -- ---------------------------------------------------------------------------
 
 -- | Count alive constraints of a given type in the store.
-countAlive :: (CHRStore :> es) => String -> Eff es Int
+countAlive :: (CHRStore :> es) => ConstraintType -> Eff es Int
 countAlive cType = do
   snapshot <- getStoreSnapshot cType
   alives <- mapM isSuspAlive (toList snapshot)
@@ -363,7 +369,7 @@ runFullStack ::
 runFullStack m =
   runEff
     . runUnify
-    . runCHRStore
+    . runCHRStore 1
     . runPropHistory
     . runReactQueue
     . fmap fst
@@ -393,12 +399,12 @@ leqTests =
     [ testCase "reflexivity: leq(3, 3) fires, store empty" $ do
         n <- runFullStack $ do
           _ <- callTellLeq (VInt 3) (VInt 3)
-          countAlive "leq"
+          countAlive leqType
         n @?= 0,
       testCase "no rule fires: leq(1, 2) stays" $ do
         n <- runFullStack $ do
           _ <- callTellLeq (VInt 1) (VInt 2)
-          countAlive "leq"
+          countAlive leqType
         n @?= 1,
       testCase "antisymmetry: leq(X, Y), leq(Y, X) unifies X=Y, store empty" $ do
         (n, areEqual) <- runFullStack $ do
@@ -406,7 +412,7 @@ leqTests =
           y <- newVar
           _ <- callTellLeq x y
           _ <- callTellLeq y x
-          n <- countAlive "leq"
+          n <- countAlive leqType
           eq <- equal x y
           pure (n, eq)
         n @?= 0
@@ -415,14 +421,14 @@ leqTests =
         n <- runFullStack $ do
           _ <- callTellLeq (VInt 1) (VInt 2)
           _ <- callTellLeq (VInt 2) (VInt 3)
-          countAlive "leq"
+          countAlive leqType
         -- leq(1,2), leq(2,3) stay, transitivity adds leq(1,3) = 3 total
         n @?= 3,
       testCase "idempotence: leq(1,2), leq(1,2) removes duplicate" $ do
         n <- runFullStack $ do
           _ <- callTellLeq (VInt 1) (VInt 2)
           _ <- callTellLeq (VInt 1) (VInt 2)
-          countAlive "leq"
+          countAlive leqType
         n @?= 1,
       testCase "full cycle: leq(a,b), leq(b,c), leq(c,a) — all removed, all unified" $ do
         (n, eqAB, eqBC) <- runFullStack $ do
@@ -432,7 +438,7 @@ leqTests =
           _ <- callTellLeq a b
           _ <- callTellLeq b c
           _ <- callTellLeq c a
-          n <- countAlive "leq"
+          n <- countAlive leqType
           eqAB <- equal a b
           eqBC <- equal b c
           pure (n, eqAB, eqBC)

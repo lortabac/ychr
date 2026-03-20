@@ -42,7 +42,7 @@ data DesugarError
 
 -- | A map from a fully qualified CHR name to a unique, 0-indexed integer.
 -- This is used by the compiler to generate efficient instructions.
-type SymbolTable = Map.Map Name Int
+type SymbolTable = Map.Map Name ConstraintType
 
 -- | The primary entry point: converts parsed modules to a desugared program.
 desugarProgram :: [P.Module] -> Either [DesugarError] D.Program
@@ -62,7 +62,7 @@ extractSymbolTable (D.Program rules) =
       -- 2. Only include 'Qualified' names in the table.
       -- Unqualified names (host calls) do not get integer IDs.
       qualifiedNames = [n | n@(Qualified _ _) <- Set.toList allNames]
-   in Map.fromList (zip qualifiedNames [0 ..])
+   in Map.fromList (zip qualifiedNames (map ConstraintType [0 ..]))
 
 -- | Helper to find every constraint instance in a desugared rule.
 getRuleConstraints :: D.Rule -> [Constraint]

@@ -45,6 +45,7 @@ module YCHR.VM
     Expr (..),
 
     -- * Supporting types
+    ConstraintType (..),
     Field (..),
     Literal (..),
     ArgIndex (..),
@@ -55,9 +56,15 @@ module YCHR.VM
 where
 
 import Data.String (IsString (..))
+import YCHR.Types (ConstraintType (..))
 
 -- | A VM program is a collection of named procedures.
-data Program = Program [Procedure]
+data Program = Program
+  { -- | Number of distinct constraint types (for pre-allocating the store).
+    progNumTypes :: !Int,
+    -- | The procedures that make up the program.
+    progProcedures :: [Procedure]
+  }
   deriving (Show, Eq)
 
 -- | A named procedure with parameters and a body.
@@ -102,7 +109,7 @@ data Stmt
     -- The iterator must satisfy the robustness, correctness,
     -- completeness, and weak termination properties as specified
     -- in the CHR compilation literature.
-    Foreach Label Name Name [(ArgIndex, Expr)] [Stmt]
+    Foreach Label ConstraintType Name [(ArgIndex, Expr)] [Stmt]
   | -- | Jump to the next iteration of the labeled 'Foreach' loop.
     Continue Label
   | -- | Exit the labeled 'Foreach' loop.
@@ -180,7 +187,7 @@ data Expr
     -- | Create a new constraint suspension with the given type and
     -- arguments. Returns a constraint identifier. The constraint
     -- is not yet stored; use 'Store' to add it to the constraint store.
-    CreateConstraint Name [Expr]
+    CreateConstraint ConstraintType [Expr]
   | -- | Check whether a constraint (identified by its constraint
     -- identifier) is still alive in the constraint store.
     Alive Expr
@@ -188,7 +195,7 @@ data Expr
     IdEqual Expr Expr
   | -- | Check whether a constraint suspension has the given type.
     -- Used for dispatching in the reactivation procedure.
-    IsConstraintType Expr Name
+    IsConstraintType Expr ConstraintType
   | -- Propagation history
 
     -- | Check that a rule has not previously fired with the given
