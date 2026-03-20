@@ -1,0 +1,13 @@
+cabal.project.local
+cabal.project.local~
+.ghc.environment.*
+TAGS
+tags
+/dist
+/dist-newstyle
+.hiedb
+.hiefiles/
+CLAUDE.local.md
+.env
+.envrc.local
+
