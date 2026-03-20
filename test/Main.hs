@@ -1,18 +1,20 @@
 module Main (main) where
 
 import Test.Tasty (defaultMain, testGroup)
-
-import qualified YCHR.Runtime.VarTest
-import qualified YCHR.Runtime.StoreTest
-import qualified YCHR.Runtime.HistoryTest
-import qualified YCHR.Runtime.ReactivationTest
-import qualified YCHR.Runtime.InterpreterTest
+import YCHR.Runtime.HistoryTest qualified
+import YCHR.Runtime.InterpreterTest qualified
+import YCHR.Runtime.ReactivationTest qualified
+import YCHR.Runtime.StoreTest qualified
+import YCHR.Runtime.VarTest qualified
 
 main :: IO ()
-main = defaultMain $ testGroup "ychr"
-  [ YCHR.Runtime.VarTest.tests
-  , YCHR.Runtime.StoreTest.tests
-  , YCHR.Runtime.HistoryTest.tests
-  , YCHR.Runtime.ReactivationTest.tests
-  , YCHR.Runtime.InterpreterTest.tests
-  ]
+main =
+  defaultMain $
+    testGroup
+      "ychr"
+      [ YCHR.Runtime.VarTest.tests,
+        YCHR.Runtime.StoreTest.tests,
+        YCHR.Runtime.HistoryTest.tests,
+        YCHR.Runtime.ReactivationTest.tests,
+        YCHR.Runtime.InterpreterTest.tests
+      ]

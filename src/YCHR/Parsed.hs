@@ -17,29 +17,29 @@
 --     @CompoundTerm "=" [VarTerm "X", VarTerm "Y"]@, and @leq(X, Z)@
 --     as @CompoundTerm "leq" [VarTerm "X", VarTerm "Z"]@.
 --     The atom @true@ is represented as @AtomTerm "true"@.
-
 module YCHR.Parsed
   ( -- * Program structure
-    Program (..)
-  , Declaration (..)
-  , Rule (..)
-  , Head (..)
+    Program (..),
+    Declaration (..),
+    Rule (..),
+    Head (..),
 
     -- * Re-exports from YCHR.Types
-  , Constraint (..)
-  , Term (..)
-  ) where
+    Constraint (..),
+    Term (..),
+  )
+where
 
 import YCHR.Types (Constraint (..), Term (..))
 
-
 -- | A surface-level CHR program: declarations followed by rules.
 data Program = Program
-  { progDeclarations :: [Declaration]  -- ^ Constraint declarations
-  , progRules        :: [Rule]         -- ^ CHR rules
+  { -- | Constraint declarations
+    progDeclarations :: [Declaration],
+    -- | CHR rules
+    progRules :: [Rule]
   }
   deriving (Show, Eq)
-
 
 -- | A constraint declaration, specifying the constraint's name and arity.
 --
@@ -48,11 +48,12 @@ data Program = Program
 -- > :- constraint leq/2.
 -- > :- constraint mem/2, pc/1, prog/4.
 data Declaration = ConstraintDecl
-  { declName  :: String  -- ^ Constraint name
-  , declArity :: Int     -- ^ Number of arguments
+  { -- | Constraint name
+    declName :: String,
+    -- | Number of arguments
+    declArity :: Int
   }
   deriving (Show, Eq)
-
 
 -- | A CHR rule with explicit rule kind.
 --
@@ -62,26 +63,29 @@ data Declaration = ConstraintDecl
 -- > transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
 -- > idempotence @ leq(X, Y) \ leq(X, Y) <=> true.
 data Rule = Rule
-  { ruleName  :: Maybe String  -- ^ Optional rule name (before @\@@)
-  , ruleHead  :: Head          -- ^ Head constraints with rule kind
-  , ruleGuard :: [Term]        -- ^ Guard conditions (unclassified terms)
-  , ruleBody  :: [Term]        -- ^ Body goals (unclassified terms)
+  { -- | Optional rule name (before @\@@)
+    ruleName :: Maybe String,
+    -- | Head constraints with rule kind
+    ruleHead :: Head,
+    -- | Guard conditions (unclassified terms)
+    ruleGuard :: [Term],
+    -- | Body goals (unclassified terms)
+    ruleBody :: [Term]
   }
   deriving (Show, Eq)
 
-
 -- | The head of a CHR rule, with explicit rule kind.
 data Head
-  = Simplification [Constraint]
-    -- ^ All head constraints are removed.
+  = -- | All head constraints are removed.
     --
     -- > h1, ..., hn <=> guard | body.
-  | Propagation [Constraint]
-    -- ^ All head constraints are kept.
+    Simplification [Constraint]
+  | -- | All head constraints are kept.
     --
     -- > h1, ..., hn ==> guard | body.
-  | Simpagation [Constraint] [Constraint]
-    -- ^ Some constraints kept, some removed.
+    Propagation [Constraint]
+  | -- | Some constraints kept, some removed.
     --
     -- > kept1, ..., keptn \ removed1, ..., removedn <=> guard | body.
+    Simpagation [Constraint] [Constraint]
   deriving (Show, Eq)

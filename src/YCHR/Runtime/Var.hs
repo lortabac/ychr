@@ -12,69 +12,67 @@
 -- selective constraint reactivation (per the paper, Section 5.3).
 -- Path compression is applied during dereferencing to amortize
 -- future lookups.
-
 module YCHR.Runtime.Var
   ( -- * Types (re-exported from YCHR.Runtime.Types)
-    VarId (..)
-  , Var (..)
-  , VarState (..)
-  , Value (..)
+    VarId (..),
+    Var (..),
+    VarState (..),
+    Value (..),
 
     -- * Unify effect
-  , Unify
-  , runUnify
+    Unify,
+    runUnify,
 
     -- * Operations
-  , newVar
-  , deref
-  , unify
-  , equal
-  , makeTerm
-  , matchTerm
-  , getArg
-  , addObserver
-  , getVarId
-  ) where
+    newVar,
+    deref,
+    unify,
+    equal,
+    makeTerm,
+    matchTerm,
+    getArg,
+    addObserver,
+    getVarId,
+  )
+where
 
 import Data.IORef
-
 import Effectful
 import Effectful.Dispatch.Static
 import Effectful.Writer.Static.Local (Writer, tell)
-
-import YCHR.Runtime.Types (SuspensionId (..), VarId (..), Var (..), VarState (..), Value (..))
-
+import YCHR.Runtime.Types (SuspensionId (..), Value (..), Var (..), VarId (..), VarState (..))
 
 -- ---------------------------------------------------------------------------
 -- Unify effect
 -- ---------------------------------------------------------------------------
 
 data Unify :: Effect
+
 type instance DispatchOf Unify = Static WithSideEffects
+
 newtype instance StaticRep Unify = UnifyRep (IORef VarId)
 
 -- | Run a computation that uses 'Unify'. Requires 'IOE' only at the
 -- runner level; individual operations do not need it.
-runUnify :: IOE :> es => Eff (Unify : es) a -> Eff es a
+runUnify :: (IOE :> es) => Eff (Unify : es) a -> Eff es a
 runUnify m = do
   counter <- liftIO $ newIORef (VarId 0)
   evalStaticRep (UnifyRep counter) m
-
 
 -- ---------------------------------------------------------------------------
 -- Internal Unify primitives
 -- ---------------------------------------------------------------------------
 
-readVarState :: Unify :> es => Var -> Eff es VarState
+readVarState :: (Unify :> es) => Var -> Eff es VarState
 readVarState (Var ref) = unsafeEff_ $ readIORef ref
 
-writeVarState :: Unify :> es => Var -> VarState -> Eff es ()
+writeVarState :: (Unify :> es) => Var -> VarState -> Eff es ()
 writeVarState (Var ref) st = unsafeEff_ $ writeIORef ref st
 
-newVarRef :: Unify :> es => VarState -> Eff es Var
+newVarRef :: (Unify :> es) => VarState -> Eff es Var
 newVarRef st = unsafeEff_ $ Var <$> newIORef st
 
-freshVarId :: Unify :> es => Eff es VarId
+freshVarId :: (Unify :> es) => Eff es VarId
 freshVarId = do
   UnifyRep counter <- getStaticRep
   unsafeEff_ $ do
@@ -82,13 +80,12 @@ freshVarId = do
     writeIORef counter (VarId (n + 1))
     pure vid
 
-
 -- ---------------------------------------------------------------------------
 -- Operations
 -- ---------------------------------------------------------------------------
 
 -- | Create a fresh unbound logical variable.
-newVar :: Unify :> es => Eff es Value
+newVar :: (Unify :> es) => Eff es Value
 newVar = do
   vid <- freshVarId
   v <- newVarRef (Unbound vid [])
@@ -97,17 +94,17 @@ newVar = do
 -- | Follow binding chains to find the ultimate value, applying
 -- path compression along the way. If the result is an unbound
 -- variable, returns the 'VVar' wrapping it.
-deref :: Unify :> es => Value -> Eff es Value
+deref :: (Unify :> es) => Value -> Eff es Value
 deref val@(VVar var@(Var ref)) = do
   st <- readVarState var
   case st of
-    Unbound{} -> pure val
+    Unbound {} -> pure val
     Bound v -> do
       v' <- deref v
       -- Path compression: point directly to the end of the chain.
       case v' of
         VVar (Var ref')
-          | ref == ref' -> pure ()  -- already pointing to itself
+          | ref == ref' -> pure () -- already pointing to itself
         _ -> writeVarState var (Bound v')
       pure v'
 deref val = pure val
@@ -132,7 +129,7 @@ unify' (VVar (Var ref1)) (VVar (Var ref2))
 unify' (VVar var1) v2@(VVar var2) = do
   st1 <- readVarState var1
   case st1 of
-    Bound{} -> error "unify': unexpected Bound after deref"
+    Bound {} -> error "unify': unexpected Bound after deref"
     Unbound _ obs1 -> do
       st2 <- readVarState var2
       case st2 of
@@ -141,12 +138,12 @@ unify' (VVar var1) v2@(VVar var2) = do
           writeVarState var2 (Unbound vid2 (obs1 ++ obs2))
           tell obs1
           pure True
-        Bound{} -> error "unify': unexpected Bound after deref"
+        Bound {} -> error "unify': unexpected Bound after deref"
 -- Var-NonVar: bind var to value
 unify' (VVar var) v = do
   st <- readVarState var
   case st of
-    Bound{} -> error "unify': unexpected Bound after deref"
+    Bound {} -> error "unify': unexpected Bound after deref"
     Unbound _ obs -> do
       writeVarState var (Bound v)
       tell obs
@@ -169,24 +166,24 @@ unify' _ _ = pure False
 -- Short-circuits on the first failure.
 unifyArgs :: (Writer [SuspensionId] :> es, Unify :> es) => [Value] -> [Value] -> Eff es Bool
 unifyArgs [] [] = pure True
-unifyArgs (a:as) (b:bs) = do
+unifyArgs (a : as) (b : bs) = do
   ok <- unify a b
   if ok
     then unifyArgs as bs
     else pure False
-unifyArgs _ _ = pure False  -- arity mismatch (shouldn't happen)
+unifyArgs _ _ = pure False -- arity mismatch (shouldn't happen)
 
 -- | Check equality of two values (ask semantics, Prolog @==@).
 --
 -- No mutation beyond path compression during dereferencing.
 -- Two distinct unbound variables are /not/ equal.
-equal :: Unify :> es => Value -> Value -> Eff es Bool
+equal :: (Unify :> es) => Value -> Value -> Eff es Bool
 equal v1 v2 = do
   d1 <- deref v1
   d2 <- deref v2
   equal' d1 d2
 
-equal' :: Unify :> es => Value -> Value -> Eff es Bool
+equal' :: (Unify :> es) => Value -> Value -> Eff es Bool
 -- Var-Var: equal iff same underlying ref (same VarId)
 equal' (VVar (Var ref1)) (VVar (Var ref2)) = pure (ref1 == ref2)
 -- Var-NonVar or NonVar-Var: not equal
@@ -202,9 +199,9 @@ equal' (VTerm f1 args1) (VTerm f2 args2)
 equal' _ _ = pure False
 
 -- | Check pairwise equality of argument lists. Short-circuits on first mismatch.
-allEqual :: Unify :> es => [Value] -> [Value] -> Eff es Bool
+allEqual :: (Unify :> es) => [Value] -> [Value] -> Eff es Bool
 allEqual [] [] = pure True
-allEqual (a:as) (b:bs) = do
+allEqual (a : as) (b : bs) = do
   ok <- equal a b
   if ok then allEqual as bs else pure False
 allEqual _ _ = pure False
@@ -215,17 +212,17 @@ makeTerm = VTerm
 
 -- | Check whether a value is a compound term with the given functor and arity.
 -- Dereferences first.
-matchTerm :: Unify :> es => Value -> String -> Int -> Eff es Bool
+matchTerm :: (Unify :> es) => Value -> String -> Int -> Eff es Bool
 matchTerm v functor arity = do
   d <- deref v
   case d of
     VTerm f args -> pure (f == functor && length args == arity)
-    _            -> pure False
+    _ -> pure False
 
 -- | Extract an argument from a compound term by 0-based index.
 -- Dereferences first. Raises an error if the value is not a term
 -- or the index is out of bounds.
-getArg :: Unify :> es => Value -> Int -> Eff es Value
+getArg :: (Unify :> es) => Value -> Int -> Eff es Value
 getArg v idx = do
   d <- deref v
   case d of
@@ -236,7 +233,7 @@ getArg v idx = do
 
 -- | Register an observer on a logical variable. If the value is not
 -- an unbound variable (after dereferencing), this is a no-op.
-addObserver :: Unify :> es => SuspensionId -> Value -> Eff es ()
+addObserver :: (Unify :> es) => SuspensionId -> Value -> Eff es ()
 addObserver oid v = do
   d <- deref v
   case d of
@@ -244,12 +241,12 @@ addObserver oid v = do
       st <- readVarState var
       case st of
         Unbound vid obs -> writeVarState var (Unbound vid (oid : obs))
-        Bound{} -> pure ()  -- already bound, no-op
+        Bound {} -> pure () -- already bound, no-op
     _ -> pure ()
 
 -- | Extract the 'VarId' of an unbound variable after dereferencing.
 -- Returns 'Nothing' if the value is not an unbound variable.
-getVarId :: Unify :> es => Value -> Eff es (Maybe VarId)
+getVarId :: (Unify :> es) => Value -> Eff es (Maybe VarId)
 getVarId v = do
   d <- deref v
   case d of
@@ -257,5 +254,5 @@ getVarId v = do
       st <- readVarState var
       case st of
         Unbound vid _ -> pure (Just vid)
-        Bound{}       -> pure Nothing  -- shouldn't happen after deref
+        Bound {} -> pure Nothing -- shouldn't happen after deref
     _ -> pure Nothing

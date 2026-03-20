@@ -1,13 +1,13 @@
 -- | Shared types for the CHR Haskell runtime.
-
 module YCHR.Runtime.Types
-  ( SuspensionId (..)
-  , VarId (..)
-  , Var (..)
-  , VarState (..)
-  , Value (..)
-  , RuntimeVal (..)
-  ) where
+  ( SuspensionId (..),
+    VarId (..),
+    Var (..),
+    VarState (..),
+    Value (..),
+    RuntimeVal (..),
+  )
+where
 
 import Data.IORef
 
@@ -25,21 +25,21 @@ newtype Var = Var (IORef VarState)
 
 -- | The state of a logical variable.
 data VarState
-  = Unbound !VarId ![SuspensionId]
-    -- ^ Not yet bound. Carries a unique ID and a list of observer IDs
+  = -- | Not yet bound. Carries a unique ID and a list of observer IDs
     -- (constraints watching this variable for reactivation).
-  | Bound !Value
-    -- ^ Bound to a value (possibly another variable, forming a chain).
+    Unbound !VarId ![SuspensionId]
+  | -- | Bound to a value (possibly another variable, forming a chain).
+    Bound !Value
 
 -- | Runtime values that flow through the VM.
 data Value
-  = VVar !Var
-    -- ^ A logical variable (possibly unbound, possibly bound).
+  = -- | A logical variable (possibly unbound, possibly bound).
+    VVar !Var
   | VInt !Int
   | VAtom !String
   | VBool !Bool
-  | VTerm !String ![Value]
-    -- ^ Compound term: functor and arguments.
+  | -- | Compound term: functor and arguments.
+    VTerm !String ![Value]
 
 -- | Runtime values for the interpreter. Constraint IDs never flow into
 -- unification or term construction.

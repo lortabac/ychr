@@ -33,37 +33,35 @@
 --
 --   5. Recursion optimizations (trampolining, explicit stack) are the
 --      responsibility of each backend, not the VM.
-
 module YCHR.VM
   ( -- * Program structure
-    Program (..)
-  , Procedure (..)
+    Program (..),
+    Procedure (..),
 
     -- * Statements
-  , Stmt (..)
+    Stmt (..),
 
     -- * Expressions
-  , Expr (..)
+    Expr (..),
 
     -- * Supporting types
-  , Field (..)
-  , Literal (..)
-  , ArgIndex (..)
-  , Name (..)
-  , Label (..)
-  , RuleName (..)
-  ) where
+    Field (..),
+    Literal (..),
+    ArgIndex (..),
+    Name (..),
+    Label (..),
+    RuleName (..),
+  )
+where
 
 import Data.String (IsString (..))
-
 
 -- | A VM program is a collection of named procedures.
 data Program = Program [Procedure]
   deriving (Show, Eq)
 
-
 -- | A named procedure with parameters and a body.
--- 
+--
 -- The compiler generates procedures for:
 --   * @tell_c@: adding a constraint from host language or rule bodies
 --   * @activate_c@: trying all occurrences for a constraint
@@ -71,29 +69,26 @@ data Program = Program [Procedure]
 --   * @reactivate_dispatch@: dispatching reactivation by constraint type
 --   * @reactivate_all@: reactivating all constraints in the store
 data Procedure = Procedure
-  { procName   :: Name      -- ^ Procedure name
-  , procParams :: [Name]    -- ^ Parameter names
-  , procBody   :: [Stmt]    -- ^ Body statements
+  { -- | Procedure name
+    procName :: Name,
+    -- | Parameter names
+    procParams :: [Name],
+    -- | Body statements
+    procBody :: [Stmt]
   }
   deriving (Show, Eq)
 
-
 -- | Statements (imperative, side-effecting).
 data Stmt
+  = -- General control flow
 
-  -- General control flow
-
-  = Let Name Expr
-    -- ^ Bind a local variable to the result of an expression.
-
-  | Assign Name Expr
-    -- ^ Mutate an existing variable.
-
-  | If Expr [Stmt] [Stmt]
-    -- ^ Conditional: condition, then-branch, else-branch.
-
-  | Foreach Label Name Name [(ArgIndex, Expr)] [Stmt]
-    -- ^ Labeled loop over constraint store.
+    -- | Bind a local variable to the result of an expression.
+    Let Name Expr
+  | -- | Mutate an existing variable.
+    Assign Name Expr
+  | -- | Conditional: condition, then-branch, else-branch.
+    If Expr [Stmt] [Stmt]
+  | -- | Labeled loop over constraint store.
     --
     -- @Foreach label constraintType suspVar indexConditions body@
     --
@@ -107,42 +102,34 @@ data Stmt
     -- The iterator must satisfy the robustness, correctness,
     -- completeness, and weak termination properties as specified
     -- in the CHR compilation literature.
+    Foreach Label Name Name [(ArgIndex, Expr)] [Stmt]
+  | -- | Jump to the next iteration of the labeled 'Foreach' loop.
+    Continue Label
+  | -- | Exit the labeled 'Foreach' loop.
+    Break Label
+  | -- | Return a value from the current procedure.
+    Return Expr
+  | -- | Evaluate an expression for its side effects, discard the result.
+    ExprStmt Expr
+  | -- Constraint store operations
 
-  | Continue Label
-    -- ^ Jump to the next iteration of the labeled 'Foreach' loop.
-
-  | Break Label
-    -- ^ Exit the labeled 'Foreach' loop.
-
-  | Return Expr
-    -- ^ Return a value from the current procedure.
-
-  | ExprStmt Expr
-    -- ^ Evaluate an expression for its side effects, discard the result.
-
-  -- Constraint store operations
-
-  | Store Expr
-    -- ^ Add a constraint suspension to the constraint store.
+    -- | Add a constraint suspension to the constraint store.
     -- The argument should be a constraint identifier (as returned
     -- by 'CreateConstraint'). This also registers the constraint
     -- as an observer of its arguments for reactivation purposes.
-
-  | Kill Expr
-    -- ^ Remove a constraint from the constraint store and mark it
+    Store Expr
+  | -- | Remove a constraint from the constraint store and mark it
     -- as no longer alive. The argument is a constraint identifier.
+    Kill Expr
+  | -- Propagation history
 
-  -- Propagation history
-
-  | AddHistory RuleName [Expr]
-    -- ^ Record that a rule has fired with the given combination
+    -- | Record that a rule has fired with the given combination
     -- of constraint identifiers, to prevent redundant re-firing
     -- of propagation rules.
+    AddHistory RuleName [Expr]
+  | -- Reactivation
 
-  -- Reactivation
-
-  | DrainReactivationQueue Name [Stmt]
-    -- ^ Process all constraints pending reactivation.
+    -- | Process all constraints pending reactivation.
     --
     -- @DrainReactivationQueue suspVar body@
     --
@@ -150,143 +137,118 @@ data Stmt
     -- effect of 'Unify'), binding each pending constraint suspension
     -- to @suspVar@ and executing @body@. The body typically dispatches
     -- to the appropriate @activate_c@ procedure based on constraint type.
-
+    DrainReactivationQueue Name [Stmt]
   deriving (Show, Eq)
-
 
 -- | Expressions (side-effect-free, except for 'Unify' and 'HostCall').
 data Expr
+  = -- General
 
-  -- General
-
-  = Var Name
-    -- ^ Reference to a variable (local or parameter).
-
-  | Lit Literal
-    -- ^ A literal value.
-
-  | CallExpr Name [Expr]
-    -- ^ Call a compiler-generated procedure and return its result.
-
-  | HostCall Name [Expr]
-    -- ^ Call a host language function. Used for arithmetic operators,
+    -- | Reference to a variable (local or parameter).
+    Var Name
+  | -- | A literal value.
+    Lit Literal
+  | -- | Call a compiler-generated procedure and return its result.
+    CallExpr Name [Expr]
+  | -- | Call a host language function. Used for arithmetic operators,
     -- comparisons, and user-written expressions in guards and bodies.
+    HostCall Name [Expr]
+  | -- Boolean operations
 
-  -- Boolean operations
+    -- | Logical negation.
+    Not Expr
+  | -- | Logical conjunction (short-circuiting).
+    And Expr Expr
+  | -- | Logical disjunction (short-circuiting).
+    Or Expr Expr
+  | -- Logical variables
 
-  | Not Expr
-    -- ^ Logical negation.
+    -- | Create a fresh unbound logical variable.
+    NewVar
+  | -- Term operations
 
-  | And Expr Expr
-    -- ^ Logical conjunction (short-circuiting).
-
-  | Or Expr Expr
-    -- ^ Logical disjunction (short-circuiting).
-
-  -- Logical variables
-
-  | NewVar
-    -- ^ Create a fresh unbound logical variable.
-
-  -- Term operations
-
-  | MakeTerm Name [Expr]
-    -- ^ Construct a compound term: @MakeTerm functor args@.
-
-  | MatchTerm Expr Name Int
-    -- ^ Check whether a value is a compound term with the given
+    -- | Construct a compound term: @MakeTerm functor args@.
+    MakeTerm Name [Expr]
+  | -- | Check whether a value is a compound term with the given
     -- functor and arity: @MatchTerm expr functor arity@.
     -- Returns a boolean.
+    MatchTerm Expr Name Int
+  | -- | Extract an argument from a compound term by index (0-based).
+    GetArg Expr Int
+  | -- Constraint operations
 
-  | GetArg Expr Int
-    -- ^ Extract an argument from a compound term by index (0-based).
-
-  -- Constraint operations
-
-  | CreateConstraint Name [Expr]
-    -- ^ Create a new constraint suspension with the given type and
+    -- | Create a new constraint suspension with the given type and
     -- arguments. Returns a constraint identifier. The constraint
     -- is not yet stored; use 'Store' to add it to the constraint store.
-
-  | Alive Expr
-    -- ^ Check whether a constraint (identified by its constraint
+    CreateConstraint Name [Expr]
+  | -- | Check whether a constraint (identified by its constraint
     -- identifier) is still alive in the constraint store.
-
-  | IdEqual Expr Expr
-    -- ^ Compare two constraint identifiers for equality.
-
-  | IsConstraintType Expr Name
-    -- ^ Check whether a constraint suspension has the given type.
+    Alive Expr
+  | -- | Compare two constraint identifiers for equality.
+    IdEqual Expr Expr
+  | -- | Check whether a constraint suspension has the given type.
     -- Used for dispatching in the reactivation procedure.
+    IsConstraintType Expr Name
+  | -- Propagation history
 
-  -- Propagation history
-
-  | NotInHistory RuleName [Expr]
-    -- ^ Check that a rule has not previously fired with the given
+    -- | Check that a rule has not previously fired with the given
     -- combination of constraint identifiers. Returns a boolean.
+    NotInHistory RuleName [Expr]
+  | -- Unification and equality
 
-  -- Unification and equality
-
-  | Unify Expr Expr
-    -- ^ Unify two terms (tell semantics). Returns a boolean indicating
+    -- | Unify two terms (tell semantics). Returns a boolean indicating
     -- success. May mutate logical variables as a side effect. On
     -- success, also pushes affected constraints onto the reactivation
     -- queue (see 'DrainReactivationQueue').
-
-  | Equal Expr Expr
-    -- ^ Check equality of two terms (ask semantics). Returns a boolean.
+    Unify Expr Expr
+  | -- | Check equality of two terms (ask semantics). Returns a boolean.
     -- No mutation. Uses Prolog @==@ semantics: two distinct unbound
     -- variables are not equal.
+    Equal Expr Expr
+  | -- Suspension field access
 
-  -- Suspension field access
-
-  | FieldGet Expr Field
-    -- ^ Access a field of a constraint suspension.
-
+    -- | Access a field of a constraint suspension.
+    FieldGet Expr Field
   deriving (Show, Eq)
-
 
 -- | Fields of a constraint suspension.
 data Field
-  = FieldId
-    -- ^ The unique constraint identifier.
-  | FieldArg ArgIndex
-    -- ^ A constraint argument by index.
-  | FieldType
-    -- ^ The constraint type (for dispatch in reactivation).
+  = -- | The unique constraint identifier.
+    FieldId
+  | -- | A constraint argument by index.
+    FieldArg ArgIndex
+  | -- | The constraint type (for dispatch in reactivation).
+    FieldType
   deriving (Show, Eq)
-
 
 -- | Literal values.
 data Literal
-  = IntLit Int
-    -- ^ Integer literal.
-  | AtomLit String
-    -- ^ Atom literal (symbolic constant).
-  | BoolLit Bool
-    -- ^ Boolean literal.
+  = -- | Integer literal.
+    IntLit Int
+  | -- | Atom literal (symbolic constant).
+    AtomLit String
+  | -- | Boolean literal.
+    BoolLit Bool
   deriving (Show, Eq)
-
 
 -- | Zero-based index into a constraint's argument list.
 newtype ArgIndex = ArgIndex Int
   deriving (Show, Eq)
 
-
 -- | Variable or procedure name.
-newtype Name = Name { unName :: String }
+newtype Name = Name {unName :: String}
   deriving (Show, Eq, Ord)
 
 instance IsString Name where fromString = Name
 
 -- | Label for 'Foreach' loops, used with 'Continue' and 'Break'.
-newtype Label = Label { unLabel :: String }
+newtype Label = Label {unLabel :: String}
   deriving (Show, Eq, Ord)
 
 instance IsString Label where fromString = Label
 
 -- | Rule identifier, used for propagation history.
-newtype RuleName = RuleName { unRuleName :: String }
+newtype RuleName = RuleName {unRuleName :: String}
   deriving (Show, Eq, Ord)
 
 instance IsString RuleName where fromString = RuleName
