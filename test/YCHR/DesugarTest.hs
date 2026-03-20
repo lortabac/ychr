@@ -1,0 +1,255 @@
+module YCHR.DesugarTest (tests) where
+
+import Data.Map qualified as Map
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
+import YCHR.DSL
+import YCHR.Desugar (DesugarError (..), desugarProgram, extractSymbolTable)
+import YCHR.Desugared qualified as D
+import YCHR.Parsed
+import YCHR.Types
+
+tests :: TestTree
+tests =
+  testGroup
+    "Desugar"
+    [ headTests,
+      guardTests,
+      bodyTests,
+      errorTests,
+      flatteningTests,
+      ruleNameTests,
+      symbolTableTests
+    ]
+
+desugar :: [Module] -> IO D.Program
+desugar mods = case desugarProgram mods of
+  Right p -> return p
+  Left errs -> assertFailure $ "unexpected errors: " ++ show errs
+
+singleRule :: [Module] -> IO D.Rule
+singleRule mods = do
+  D.Program rules <- desugar mods
+  case rules of
+    [r] -> return r
+    rs -> assertFailure $ "expected 1 rule, got " ++ show (length rs)
+
+leqQual :: Constraint
+leqQual = "M" .: con "leq" [var "X", var "Y"]
+
+leqQual2 :: Constraint
+leqQual2 = "M" .: con "leq" [var "A", var "B"]
+
+mod1rule :: Head -> Rule
+mod1rule h = Rule Nothing h [] [atom "true"]
+
+simpleModule :: Head -> Module
+simpleModule h = module' "M" `defining` [mod1rule h]
+
+--------------------------------------------------------------------------------
+-- Head normalization
+--------------------------------------------------------------------------------
+
+headTests :: TestTree
+headTests =
+  testGroup
+    "head-normalization"
+    [ testCase "Simplification maps to kept=[], removed=constraints" $ do
+        rule <- singleRule [simpleModule (Simplification [leqQual])]
+        D.ruleHead rule @?= D.Head {D.headKept = [], D.headRemoved = [leqQual]},
+      testCase "Propagation maps to kept=constraints, removed=[]" $ do
+        rule <- singleRule [simpleModule (Propagation [leqQual])]
+        D.ruleHead rule @?= D.Head {D.headKept = [leqQual], D.headRemoved = []},
+      testCase "Simpagation maps kept and removed correctly" $ do
+        rule <- singleRule [simpleModule (Simpagation [leqQual] [leqQual2])]
+        D.ruleHead rule @?= D.Head {D.headKept = [leqQual], D.headRemoved = [leqQual2]}
+    ]
+
+--------------------------------------------------------------------------------
+-- Guard classification
+--------------------------------------------------------------------------------
+
+guardTests :: TestTree
+guardTests =
+  testGroup
+    "guard-classification"
+    [ testCase "== becomes GuardEqual" $ do
+        let m =
+              module' "M"
+                `defining` [ (Rule Nothing (Simplification [leqQual]) [func "==" [var "X", var "Y"]] [atom "true"])
+                           ]
+        rule <- singleRule [m]
+        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "X") (VarTerm "Y")],
+      testCase "host call becomes GuardHostCall" $ do
+        let m =
+              module' "M"
+                `defining` [ Rule Nothing (Simplification [leqQual]) [func "gt" [var "X", IntTerm 0]] [atom "true"]
+                           ]
+        rule <- singleRule [m]
+        D.ruleGuard rule @?= [D.GuardHostCall "gt" [VarTerm "X", IntTerm 0]],
+      testCase "atom true becomes GuardCommon GoalTrue" $ do
+        let m =
+              module' "M"
+                `defining` [ Rule Nothing (Simplification [leqQual]) [atom "true"] [atom "true"]
+                           ]
+        rule <- singleRule [m]
+        D.ruleGuard rule @?= [D.GuardCommon D.GoalTrue]
+    ]
+
+--------------------------------------------------------------------------------
+-- Body goal classification
+--------------------------------------------------------------------------------
+
+bodyTests :: TestTree
+bodyTests =
+  testGroup
+    "body-classification"
+    [ testCase "= becomes BodyUnify" $ do
+        rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" .=. var "Y"]]
+        D.ruleBody rule @?= [D.BodyUnify (VarTerm "X") (VarTerm "Y")],
+      testCase "<- becomes BodyHostCall" $ do
+        rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" .<-. func "readInt" []]]
+        D.ruleBody rule @?= [D.BodyHostCall "X" "readInt" []],
+      testCase "Qualified compound becomes BodyConstraint" $ do
+        let body = [CompoundTerm (Qualified "M" "leq") [var "X"]]
+        rule <- singleRule [simpleModule' (Simplification [leqQual]) body]
+        D.ruleBody rule @?= [D.BodyConstraint (Constraint (Qualified "M" "leq") [VarTerm "X"])],
+      testCase "hostStmt becomes BodyHostStmt" $ do
+        rule <- singleRule [simpleModule' (Simplification [leqQual]) [hostStmt "print" [var "X"]]]
+        D.ruleBody rule @?= [D.BodyHostStmt "print" [VarTerm "X"]],
+      testCase "atom true becomes BodyCommon GoalTrue" $ do
+        rule <- singleRule [simpleModule' (Simplification [leqQual]) [atom "true"]]
+        D.ruleBody rule @?= [D.BodyCommon D.GoalTrue]
+    ]
+  where
+    simpleModule' h body = module' "M" `defining` [Rule Nothing h [] body]
+
+--------------------------------------------------------------------------------
+-- Error handling
+--------------------------------------------------------------------------------
+
+errorTests :: TestTree
+errorTests =
+  testGroup
+    "error-handling"
+    [ testCase "unqualified compound in body produces UnexpectedBodyTerm" $ do
+        let badTerm = func "foo" [var "X"]
+            m = module' "M" `defining` [Rule Nothing (Simplification [leqQual]) [] [badTerm]]
+        desugarProgram [m] @?= Left [UnexpectedBodyTerm badTerm],
+      testCase "two unqualified compounds collect both errors" $ do
+        let bad1 = func "foo" [var "X"]
+            bad2 = func "bar" [var "Y"]
+            m = module' "M" `defining` [Rule Nothing (Simplification [leqQual]) [] [bad1, bad2]]
+        desugarProgram [m] @?= Left [UnexpectedBodyTerm bad1, UnexpectedBodyTerm bad2]
+    ]
+
+--------------------------------------------------------------------------------
+-- Multi-module flattening
+--------------------------------------------------------------------------------
+
+flatteningTests :: TestTree
+flatteningTests =
+  testGroup
+    "flattening"
+    [ testCase "two modules with one rule each yield two rules" $ do
+        let m1 = module' "A" `defining` [[("A" .: con "c" [])] <=> [atom "true"]]
+            m2 = module' "B" `defining` [[("B" .: con "d" [])] <=> [atom "true"]]
+        D.Program rules <- desugar [m1, m2]
+        length rules @?= 2,
+      testCase "empty module list yields empty program" $
+        desugarProgram [] @?= Right (D.Program []),
+      testCase "module with no rules contributes no rules" $ do
+        let empty = module' "Empty"
+            m = module' "M" `defining` [[("M" .: con "c" [])] <=> [atom "true"]]
+        D.Program rules <- desugar [empty, m]
+        length rules @?= 1
+    ]
+
+--------------------------------------------------------------------------------
+-- Rule name preservation
+--------------------------------------------------------------------------------
+
+ruleNameTests :: TestTree
+ruleNameTests =
+  testGroup
+    "rule-name"
+    [ testCase "named rule preserves name" $ do
+        let m = module' "M" `defining` ["my_rule" @: ([leqQual] <=> [atom "true"])]
+        rule <- singleRule [m]
+        D.ruleName rule @?= Just "my_rule",
+      testCase "anonymous rule has Nothing name" $ do
+        rule <- singleRule [simpleModule (Simplification [leqQual])]
+        D.ruleName rule @?= Nothing
+    ]
+
+--------------------------------------------------------------------------------
+-- Symbol table
+--------------------------------------------------------------------------------
+
+symbolTableTests :: TestTree
+symbolTableTests =
+  testGroup
+    "symbol-table"
+    [ testCase "empty program yields empty table" $
+        extractSymbolTable (D.Program []) @?= Map.empty,
+      testCase "one qualified constraint in head gets id 0" $ do
+        let prog =
+              D.Program
+                [ D.Rule
+                    Nothing
+                    (D.Head [] [Constraint (Qualified "M" "leq") []])
+                    []
+                    []
+                ]
+        extractSymbolTable prog @?= Map.singleton (Qualified "M" "leq") 0,
+      testCase "two distinct qualified constraints get sequential ids" $ do
+        let prog =
+              D.Program
+                [ D.Rule
+                    Nothing
+                    (D.Head [] [Constraint (Qualified "A" "c") [], Constraint (Qualified "B" "d") []])
+                    []
+                    []
+                ]
+        let table = extractSymbolTable prog
+        Map.size table @?= 2,
+      testCase "same constraint in head and body appears only once" $ do
+        let prog =
+              D.Program
+                [ D.Rule
+                    Nothing
+                    (D.Head [] [Constraint (Qualified "M" "leq") []])
+                    []
+                    [D.BodyConstraint (Constraint (Qualified "M" "leq") [])]
+                ]
+        extractSymbolTable prog @?= Map.singleton (Qualified "M" "leq") 0,
+      testCase "unqualified name in body not in table" $ do
+        let prog =
+              D.Program
+                [ D.Rule
+                    Nothing
+                    (D.Head [] [Constraint (Qualified "M" "leq") []])
+                    []
+                    [D.BodyHostStmt "print" []]
+                ]
+        let table = extractSymbolTable prog
+        Map.member (Unqualified "print") table @?= False,
+      testCase "ids assigned in Set.toList order (module-first then name)" $ do
+        -- Qualified "A" "z" < Qualified "B" "a" by derived Ord
+        let prog =
+              D.Program
+                [ D.Rule
+                    Nothing
+                    ( D.Head
+                        []
+                        [ Constraint (Qualified "A" "z") [],
+                          Constraint (Qualified "B" "a") []
+                        ]
+                    )
+                    []
+                    []
+                ]
+        let table = extractSymbolTable prog
+        (Map.lookup (Qualified "A" "z") table, Map.lookup (Qualified "B" "a") table)
+          @?= (Just 0, Just 1)
+    ]

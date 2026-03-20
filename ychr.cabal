@@ -81,7 +81,10 @@ test-suite ychr-tests
     import:           warnings
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
-    other-modules:    YCHR.Runtime.VarTest
+    other-modules:    YCHR.DSLTest
+                    , YCHR.DesugarTest
+                    , YCHR.RenameTest
+                    , YCHR.Runtime.VarTest
                     , YCHR.Runtime.StoreTest
                     , YCHR.Runtime.HistoryTest
                     , YCHR.Runtime.ReactivationTest
@@ -100,7 +103,10 @@ library
     import:           warnings
 
     exposed-modules:  YCHR.Desugared
+                    , YCHR.Desugar
+                    , YCHR.DSL
                     , YCHR.Parsed
+                    , YCHR.Rename
                     , YCHR.Types
                     , YCHR.VM
                     , YCHR.Runtime.Interpreter

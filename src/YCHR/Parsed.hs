@@ -19,7 +19,7 @@
 --     The atom @true@ is represented as @AtomTerm "true"@.
 module YCHR.Parsed
   ( -- * Program structure
-    Program (..),
+    Module (..),
     Declaration (..),
     Rule (..),
     Head (..),
@@ -32,60 +32,30 @@ where
 
 import YCHR.Types (Constraint (..), Term (..))
 
--- | A surface-level CHR program: declarations followed by rules.
-data Program = Program
-  { -- | Constraint declarations
-    progDeclarations :: [Declaration],
-    -- | CHR rules
-    progRules :: [Rule]
+data Module = Module
+  { modName :: String,
+    modImports :: [String],
+    modDecls :: [Declaration],
+    modRules :: [Rule]
   }
   deriving (Show, Eq)
 
--- | A constraint declaration, specifying the constraint's name and arity.
---
--- Corresponds to surface syntax like:
---
--- > :- constraint leq/2.
--- > :- constraint mem/2, pc/1, prog/4.
 data Declaration = ConstraintDecl
-  { -- | Constraint name
-    declName :: String,
-    -- | Number of arguments
+  { declName :: String,
     declArity :: Int
   }
   deriving (Show, Eq)
 
--- | A CHR rule with explicit rule kind.
---
--- Corresponds to surface syntax like:
---
--- > reflexivity @ leq(X, X) <=> true.
--- > transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
--- > idempotence @ leq(X, Y) \ leq(X, Y) <=> true.
 data Rule = Rule
-  { -- | Optional rule name (before @\@@)
-    ruleName :: Maybe String,
-    -- | Head constraints with rule kind
+  { ruleName :: Maybe String,
     ruleHead :: Head,
-    -- | Guard conditions (unclassified terms)
     ruleGuard :: [Term],
-    -- | Body goals (unclassified terms)
     ruleBody :: [Term]
   }
   deriving (Show, Eq)
 
--- | The head of a CHR rule, with explicit rule kind.
 data Head
-  = -- | All head constraints are removed.
-    --
-    -- > h1, ..., hn <=> guard | body.
-    Simplification [Constraint]
-  | -- | All head constraints are kept.
-    --
-    -- > h1, ..., hn ==> guard | body.
-    Propagation [Constraint]
-  | -- | Some constraints kept, some removed.
-    --
-    -- > kept1, ..., keptn \ removed1, ..., removedn <=> guard | body.
-    Simpagation [Constraint] [Constraint]
+  = Simplification [Constraint]
+  | Propagation [Constraint]
+  | Simpagation [Constraint] [Constraint]
   deriving (Show, Eq)

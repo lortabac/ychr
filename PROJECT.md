@@ -307,6 +307,9 @@ The paper describes numerous optimizations. Each should be considered individual
 
 - Surface AST types in `src/YCHR/Parsed.hs`.
 - Desugared AST types in `src/YCHR/Desugared.hs`.
+- Renaming (qualifying constraint names) in `src/YCHR/Rename.hs`.
+- Desugaring in `src/YCHR/Desugar.hs`.
+- A user-friendly DSL to construct a CHR program in Haskell in `src/YCHR/DSL.hs`.
 - VM types in `src/YCHR/VM.hs`.
 - Unification variables for the Haskell runtime in `src/YCHR/Runtime/Var.hs`.
 - Constraint store for the Haskell runtime in `src/YCHR/Runtime/Store.hs`.
@@ -320,7 +323,6 @@ The paper describes numerous optimizations. Each should be considered individual
 The following components have not yet been implemented:
 
 - **Frontend parser**: Parse standard CHR with Prolog-compatible syntax into a close-to-surface representation of handlers, constraints, and rules.
-- **Desugaring**: Desugar the surface AST into a more semantically rich internal respresentation.
 - **CHR-to-VM compiler**: Transform parsed CHR handlers into VM programs. Includes HNF transformation, occurrence numbering, and generation of all required procedures.
 - **Optimizations**: Implement the optimizations listed above, at the appropriate stage.
 - **JavaScript backend**: Translate VM programs to JavaScript code.

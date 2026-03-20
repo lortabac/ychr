@@ -1,34 +1,36 @@
 -- | Shared types for CHR representations.
 --
 -- This module contains types that are identical across the surface
--- language AST ('CHR.Surface') and the internal AST ('CHR.AST').
+-- language AST ('YCHR.Parsed') and the internal AST ('YCHR.Desugared').
 module YCHR.Types
   ( -- * Constraints
     Constraint (..),
+    Name (..),
 
     -- * Terms
     Term (..),
   )
 where
 
--- | A CHR constraint occurrence: a constraint name applied to arguments.
+-- | Represents a name that can be either raw or module-qualified.
+data Name
+  = -- | e.g., "leq"
+    Unqualified String
+  | -- | e.g., "Order", "leq"
+    Qualified String String
+  deriving (Show, Eq, Ord)
+
+-- | A CHR constraint occurrence.
 data Constraint = Constraint
-  { -- | Constraint name (e.g., "leq")
-    conName :: String,
-    -- | Constraint arguments
+  { conName :: Name,
     conArgs :: [Term]
   }
   deriving (Show, Eq)
 
 -- | Prolog-compatible terms.
 data Term
-  = -- | A variable (e.g., @X@, @Y1@)
-    VarTerm String
-  | -- | An integer literal
-    IntTerm Int
-  | -- | An atom (symbolic constant, e.g., @foo@, @add@)
-    AtomTerm String
-  | -- | A compound term: functor applied to arguments
-    --   (e.g., @f(X, g(Y))@)
-    CompoundTerm String [Term]
+  = VarTerm String
+  | IntTerm Int
+  | AtomTerm String
+  | CompoundTerm Name [Term]
   deriving (Show, Eq)
