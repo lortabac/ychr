@@ -97,7 +97,7 @@ desugarGuard _ = D.GuardCommon D.GoalTrue
 desugarBodyGoal :: Term -> Eff '[Writer [DesugarError]] D.BodyGoal
 desugarBodyGoal t = case t of
   CompoundTerm (Unqualified "=") [l, r] -> pure $ D.BodyUnify l r
-  CompoundTerm (Unqualified "<-") [VarTerm v, CompoundTerm (Unqualified f) args] ->
+  CompoundTerm (Unqualified ":=") [VarTerm v, CompoundTerm (Unqualified f) args] ->
     pure $ D.BodyHostCall v f args
   CompoundTerm (Qualified m n) args ->
     pure $ D.BodyConstraint (Constraint (Qualified m n) args)

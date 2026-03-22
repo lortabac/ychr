@@ -84,9 +84,9 @@ atom = AtomTerm
 (.=.) :: Term -> Term -> Term
 l .=. r = CompoundTerm (Unqualified "=") [l, r]
 
--- | Host assignment: @var "X" .<-. func "get_val" []@
-(.<-.) :: Term -> Term -> Term
-v .<-. f = CompoundTerm (Unqualified "<-") [v, f]
+-- | Host assignment: @var "X" .:=. func "get_val" []@
+(.:=.) :: Term -> Term -> Term
+v .:=. f = CompoundTerm (Unqualified ":=") [v, f]
 
 -- | Host statement: @hostStmt "print" [var "X"]@
 hostStmt :: String -> [Term] -> Term

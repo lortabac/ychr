@@ -130,9 +130,9 @@ termTests =
       testCase "(.=.) produces unification term" $
         var "X" .=. var "Y"
           @?= CompoundTerm (Unqualified "=") [VarTerm "X", VarTerm "Y"],
-      testCase "(.<-.) produces assignment term" $
-        var "X" .<-. func "get_val" []
-          @?= CompoundTerm (Unqualified "<-") [VarTerm "X", CompoundTerm (Unqualified "get_val") []],
+      testCase "(.:=.) produces assignment term" $
+        var "X" .:=. func "get_val" []
+          @?= CompoundTerm (Unqualified ":=") [VarTerm "X", CompoundTerm (Unqualified "get_val") []],
       testCase "hostStmt produces $ wrapper" $
         hostStmt "print" [var "X"]
           @?= CompoundTerm (Unqualified "$") [CompoundTerm (Unqualified "print") [VarTerm "X"]]

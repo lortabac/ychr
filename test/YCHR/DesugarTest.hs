@@ -107,8 +107,8 @@ bodyTests =
     [ testCase "= becomes BodyUnify" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" .=. var "Y"]]
         D.ruleBody rule @?= [D.BodyUnify (VarTerm "X") (VarTerm "Y")],
-      testCase "<- becomes BodyHostCall" $ do
-        rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" .<-. func "readInt" []]]
+      testCase ":= becomes BodyHostCall" $ do
+        rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" .:=. func "readInt" []]]
         D.ruleBody rule @?= [D.BodyHostCall "X" "readInt" []],
       testCase "Qualified compound becomes BodyConstraint" $ do
         let body = [CompoundTerm (Qualified "M" "leq") [var "X"]]

@@ -387,14 +387,14 @@ reservedSymbolTests =
         rule <- singleRule m
         ruleBody rule
           @?= [CompoundTerm (Unqualified "==") [VarTerm "X", VarTerm "Y"]],
-      testCase "<- in body stays Unqualified" $ do
+      testCase ":= in body stays Unqualified" $ do
         let m =
               module' "M"
                 `declaring` ["c" // 0]
-                `defining` [[con "c" []] <=> [func "<-" [var "X", var "Y"]]]
+                `defining` [[con "c" []] <=> [func ":=" [var "X", var "Y"]]]
         rule <- singleRule m
         ruleBody rule
-          @?= [CompoundTerm (Unqualified "<-") [VarTerm "X", VarTerm "Y"]],
+          @?= [CompoundTerm (Unqualified ":=") [VarTerm "X", VarTerm "Y"]],
       testCase "$ in body stays Unqualified" $ do
         let m =
               module' "M"
