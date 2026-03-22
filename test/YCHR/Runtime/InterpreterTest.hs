@@ -21,7 +21,8 @@ tests :: TestTree
 tests =
   testGroup
     "YCHR.Runtime.Interpreter"
-    [ leqTests
+    [ leqTests,
+      builtinTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -445,4 +446,103 @@ leqTests =
         n @?= 0
         assertBool "a and b should be unified" eqAB
         assertBool "b and c should be unified" eqBC
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Builtin operator tests
+-- ---------------------------------------------------------------------------
+
+builtinProgram :: Program
+builtinProgram =
+  Program
+    { progNumTypes = 0,
+      progProcedures =
+        [ Procedure
+            "test_add"
+            ["x", "y"]
+            [Return (Builtin "+" [Var "x", Var "y"])],
+          Procedure
+            "test_sub"
+            ["x", "y"]
+            [Return (Builtin "-" [Var "x", Var "y"])],
+          Procedure
+            "test_mul"
+            ["x", "y"]
+            [Return (Builtin "*" [Var "x", Var "y"])],
+          Procedure
+            "test_div"
+            ["x", "y"]
+            [Return (Builtin "/" [Var "x", Var "y"])],
+          Procedure
+            "test_mod"
+            ["x", "y"]
+            [Return (Builtin "mod" [Var "x", Var "y"])],
+          Procedure
+            "test_lt"
+            ["x", "y"]
+            [Return (Builtin "<" [Var "x", Var "y"])],
+          Procedure
+            "test_neg"
+            ["x"]
+            [Return (Builtin "neg" [Var "x"])],
+          Procedure
+            "test_eq"
+            ["x", "y"]
+            [Return (Builtin "=:=" [Var "x", Var "y"])],
+          Procedure
+            "test_neq"
+            ["x", "y"]
+            [Return (Builtin "=\\=" [Var "x", Var "y"])]
+        ]
+    }
+
+builtinProcMap :: Map.Map Name Procedure
+builtinProcMap =
+  let Program {progProcedures} = builtinProgram
+   in Map.fromList [(procName p, p) | p <- progProcedures]
+
+-- | Assert that a RuntimeVal is a specific integer.
+assertInt :: Int -> RuntimeVal -> IO ()
+assertInt expected (RVal (VInt n)) = n @?= expected
+assertInt _ _ = assertBool "expected VInt" False
+
+-- | Assert that a RuntimeVal is a specific boolean.
+assertBoolVal :: Bool -> RuntimeVal -> IO ()
+assertBoolVal expected (RVal (VBool b)) = b @?= expected
+assertBoolVal _ _ = assertBool "expected VBool" False
+
+builtinTests :: TestTree
+builtinTests =
+  testGroup
+    "Builtin operators"
+    [ testCase "addition: 3 + 4 = 7" $ do
+        r <- runFullStack $ callProc builtinProcMap Map.empty "test_add" [RVal (VInt 3), RVal (VInt 4)]
+        assertInt 7 r,
+      testCase "subtraction: 10 - 3 = 7" $ do
+        r <- runFullStack $ callProc builtinProcMap Map.empty "test_sub" [RVal (VInt 10), RVal (VInt 3)]
+        assertInt 7 r,
+      testCase "multiplication: 5 * 6 = 30" $ do
+        r <- runFullStack $ callProc builtinProcMap Map.empty "test_mul" [RVal (VInt 5), RVal (VInt 6)]
+        assertInt 30 r,
+      testCase "division: 15 / 4 = 3" $ do
+        r <- runFullStack $ callProc builtinProcMap Map.empty "test_div" [RVal (VInt 15), RVal (VInt 4)]
+        assertInt 3 r,
+      testCase "mod: 15 mod 4 = 3" $ do
+        r <- runFullStack $ callProc builtinProcMap Map.empty "test_mod" [RVal (VInt 15), RVal (VInt 4)]
+        assertInt 3 r,
+      testCase "less-than: 3 < 5 = True" $ do
+        r <- runFullStack $ callProc builtinProcMap Map.empty "test_lt" [RVal (VInt 3), RVal (VInt 5)]
+        assertBoolVal True r,
+      testCase "less-than: 5 < 3 = False" $ do
+        r <- runFullStack $ callProc builtinProcMap Map.empty "test_lt" [RVal (VInt 5), RVal (VInt 3)]
+        assertBoolVal False r,
+      testCase "negation: neg 7 = -7" $ do
+        r <- runFullStack $ callProc builtinProcMap Map.empty "test_neg" [RVal (VInt 7)]
+        assertInt (-7) r,
+      testCase "=:= equal: 5 =:= 5 = True" $ do
+        r <- runFullStack $ callProc builtinProcMap Map.empty "test_eq" [RVal (VInt 5), RVal (VInt 5)]
+        assertBoolVal True r,
+      testCase "=\\= not equal: 3 =\\= 5 = True" $ do
+        r <- runFullStack $ callProc builtinProcMap Map.empty "test_neq" [RVal (VInt 3), RVal (VInt 5)]
+        assertBoolVal True r
     ]

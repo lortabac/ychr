@@ -93,7 +93,14 @@ guardTests =
                 `defining` [ Rule Nothing (Simplification [leqQual]) [atom "true"] [atom "true"]
                            ]
         rule <- singleRule [m]
-        D.ruleGuard rule @?= [D.GuardCommon D.GoalTrue]
+        D.ruleGuard rule @?= [D.GuardCommon D.GoalTrue],
+      testCase "builtin operator becomes GuardBuiltin" $ do
+        let m =
+              module' "M"
+                `defining` [ Rule Nothing (Simplification [leqQual]) [func ">" [var "X", IntTerm 0]] [atom "true"]
+                           ]
+        rule <- singleRule [m]
+        D.ruleGuard rule @?= [D.GuardBuiltin ">" [VarTerm "X", IntTerm 0]]
     ]
 
 --------------------------------------------------------------------------------
@@ -119,7 +126,10 @@ bodyTests =
         D.ruleBody rule @?= [D.BodyHostStmt "print" [VarTerm "X"]],
       testCase "atom true becomes BodyCommon GoalTrue" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [atom "true"]]
-        D.ruleBody rule @?= [D.BodyCommon D.GoalTrue]
+        D.ruleBody rule @?= [D.BodyCommon D.GoalTrue],
+      testCase ":= with builtin becomes BodyBuiltin" $ do
+        rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "Z" .:=. (var "X" .+. var "Y")]]
+        D.ruleBody rule @?= [D.BodyBuiltin "Z" "+" [VarTerm "X", VarTerm "Y"]]
     ]
   where
     simpleModule' h body = module' "M" `defining` [Rule Nothing h [] body]

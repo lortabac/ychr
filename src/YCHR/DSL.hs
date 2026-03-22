@@ -92,6 +92,30 @@ v .:=. f = CompoundTerm (Unqualified ":=") [v, f]
 hostStmt :: String -> [Term] -> Term
 hostStmt f args = CompoundTerm (Unqualified "$") [CompoundTerm (Unqualified f) args]
 
+--------------------------------------------------------------------------------
+-- Built-in Operator Helpers
+--------------------------------------------------------------------------------
+
+-- | Addition: @var "X" .+. var "Y"@
+(.+.) :: Term -> Term -> Term
+l .+. r = CompoundTerm (Unqualified "+") [l, r]
+
+-- | Subtraction: @var "X" .-. var "Y"@
+(.-.) :: Term -> Term -> Term
+l .-. r = CompoundTerm (Unqualified "-") [l, r]
+
+-- | Multiplication: @var "X" .*. var "Y"@
+(.*.) :: Term -> Term -> Term
+l .*. r = CompoundTerm (Unqualified "*") [l, r]
+
+-- | Division: @var "X" ./. var "Y"@
+(./.) :: Term -> Term -> Term
+l ./. r = CompoundTerm (Unqualified "/") [l, r]
+
+-- | Negation: @neg (var "X")@
+neg :: Term -> Term
+neg x = CompoundTerm (Unqualified "neg") [x]
+
 {-
 
 Examples:

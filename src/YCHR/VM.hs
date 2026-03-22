@@ -52,9 +52,14 @@ module YCHR.VM
     Name (..),
     Label (..),
     RuleName (..),
+
+    -- * Built-in operators
+    builtinOps,
+    isBuiltin,
   )
 where
 
+import Data.Set qualified as Set
 import Data.String (IsString (..))
 import YCHR.Types (ConstraintType (..))
 
@@ -216,6 +221,11 @@ data Expr
 
     -- | Access a field of a constraint suspension.
     FieldGet Expr Field
+  | -- Built-in operators
+
+    -- | Apply a built-in operator (arithmetic, comparison, unary).
+    -- @Builtin op args@ where @op@ is one of the operators in 'builtinOps'.
+    Builtin String [Expr]
   deriving (Show, Eq)
 
 -- | Fields of a constraint suspension.
@@ -259,3 +269,17 @@ newtype RuleName = RuleName {unRuleName :: String}
   deriving (Show, Eq, Ord)
 
 instance IsString RuleName where fromString = RuleName
+
+-- | The set of built-in operator names recognized by the compiler.
+--
+-- Arithmetic: @+@, @-@, @*@, @/@, @mod@
+-- Comparison: @<@, @>@, @=<@, @>=@, @=:=@, @=\\=@
+-- Unary: @neg@
+builtinOps :: Set.Set String
+builtinOps =
+  Set.fromList
+    ["+", "-", "*", "/", "mod", "<", ">", "=<", ">=", "=:=", "=\\=", "neg"]
+
+-- | Check whether a name is a built-in operator.
+isBuiltin :: String -> Bool
+isBuiltin = (`Set.member` builtinOps)
