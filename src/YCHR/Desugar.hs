@@ -35,7 +35,6 @@ import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import YCHR.Desugared qualified as D
 import YCHR.Parsed qualified as P
 import YCHR.Types
-import YCHR.VM (isBuiltin)
 
 data DesugarError
   = UnexpectedBodyTerm Term
@@ -91,18 +90,15 @@ desugarHead h = case h of
 
 desugarGuard :: Term -> D.Guard
 desugarGuard (CompoundTerm (Unqualified "==") [l, r]) = D.GuardEqual l r
-desugarGuard (CompoundTerm (Unqualified f) args)
-  | isBuiltin f = D.GuardBuiltin f args
-  | otherwise = D.GuardHostCall f args
+desugarGuard (CompoundTerm (Unqualified f) args) = D.GuardHostCall f args
 desugarGuard (AtomTerm "true") = D.GuardCommon D.GoalTrue
 desugarGuard _ = D.GuardCommon D.GoalTrue
 
 desugarBodyGoal :: Term -> Eff '[Writer [DesugarError]] D.BodyGoal
 desugarBodyGoal t = case t of
   CompoundTerm (Unqualified "=") [l, r] -> pure $ D.BodyUnify l r
-  CompoundTerm (Unqualified ":=") [VarTerm v, CompoundTerm (Unqualified f) args]
-    | isBuiltin f -> pure $ D.BodyBuiltin v f args
-    | otherwise -> pure $ D.BodyHostCall v f args
+  CompoundTerm (Unqualified ":=") [VarTerm v, CompoundTerm (Unqualified f) args] ->
+    pure $ D.BodyHostCall v f args
   CompoundTerm (Qualified m n) args ->
     pure $ D.BodyConstraint (Constraint (Qualified m n) args)
   CompoundTerm (Unqualified "$") [CompoundTerm (Unqualified f) args] ->

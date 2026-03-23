@@ -329,11 +329,6 @@ evalExpr pm hc (FieldGet expr field) = do
       FieldArg (ArgIndex i) -> RVal <$> getConstraintArg sid i
       FieldType -> RVal . VInt . unConstraintType <$> getConstraintType sid
     _ -> error "FieldGet: expected constraint identifier"
-evalExpr pm hc (Builtin op args) = do
-  argVals <- mapM (evalExpr pm hc) args
-  case Map.lookup op builtinRegistry of
-    Just f -> pure (f argVals)
-    Nothing -> error $ "unknown builtin: " ++ op
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -343,26 +338,3 @@ evalExpr pm hc (Builtin op args) = do
 toValue :: RuntimeVal -> Value
 toValue (RVal v) = v
 toValue (RConstraint _) = error "toValue: cannot convert constraint ID to Value"
-
--- | Registry of built-in operator implementations.
-builtinRegistry :: Map String ([RuntimeVal] -> RuntimeVal)
-builtinRegistry =
-  Map.fromList
-    [ ("+", binIntOp (+)),
-      ("-", binIntOp (-)),
-      ("*", binIntOp (*)),
-      ("/", binIntOp div),
-      ("mod", binIntOp mod),
-      ("<", binIntCmp (<)),
-      (">", binIntCmp (>)),
-      ("=<", binIntCmp (<=)),
-      (">=", binIntCmp (>=)),
-      ("=:=", binIntCmp (==)),
-      ("=\\=", binIntCmp (/=)),
-      ("neg", \case [RVal (VInt n)] -> RVal (VInt (negate n)); _ -> error "neg: expected one integer argument")
-    ]
-  where
-    binIntOp f [RVal (VInt a), RVal (VInt b)] = RVal (VInt (f a b))
-    binIntOp _ _ = error "builtin: expected two integer arguments"
-    binIntCmp f [RVal (VInt a), RVal (VInt b)] = RVal (VBool (f a b))
-    binIntCmp _ _ = error "builtin: expected two integer arguments"

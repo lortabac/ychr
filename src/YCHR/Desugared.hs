@@ -56,7 +56,6 @@ data Guard
   = GuardCommon CommonGoal
   | GuardEqual Term Term
   | GuardHostCall String [Term]
-  | GuardBuiltin String [Term]
   deriving (Show, Eq)
 
 data BodyGoal
@@ -65,5 +64,4 @@ data BodyGoal
   | BodyUnify Term Term
   | BodyHostStmt String [Term]
   | BodyHostCall String String [Term]
-  | BodyBuiltin String String [Term]
   deriving (Show, Eq)
