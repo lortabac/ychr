@@ -281,7 +281,7 @@ genFireStmts symTab varMap occ =
       -- Kill removed constraints
       killStmts = genKillStmts occ
       -- Body goals
-      bodyStmts = concatMap (compileBodyGoal symTab varMap) (D.ruleBody rule)
+      bodyStmts = compileBodyGoals symTab varMap (D.ruleBody rule)
       -- Early drop check after body
       earlyDropStmts
         | activeIsRemoved = [Return (Lit (BoolLit True))]
@@ -361,6 +361,28 @@ compileGuards varMap guards =
 -- ---------------------------------------------------------------------------
 -- Compile body goals
 -- ---------------------------------------------------------------------------
+
+-- | Compile a list of body goals, threading the varMap so that variables
+-- introduced by one goal (via ':=' or new constraint arguments) are visible
+-- to all subsequent goals.
+compileBodyGoals :: SymbolTable -> Map.Map String Expr -> [D.BodyGoal] -> [Stmt]
+compileBodyGoals _ _ [] = []
+compileBodyGoals symTab varMap (goal : rest) = case goal of
+  D.BodyHostCall v f args ->
+    let stmt = Let (Name v) (HostCall (Name f) (map (compileTerm varMap) args))
+        varMap' = Map.insert v (Var (Name v)) varMap
+     in stmt : compileBodyGoals symTab varMap' rest
+  D.BodyConstraint con ->
+    let argVars = [v | T.VarTerm v <- T.conArgs con, Map.notMember v varMap]
+        newStmts = [Let (Name v) NewVar | v <- argVars]
+        varMap' = foldl' (\m v -> Map.insert v (Var (Name v)) m) varMap argVars
+        tellName = procNameFor "tell" (T.conName con)
+        callArgs = map (compileTerm varMap') (T.conArgs con)
+     in newStmts
+          ++ [ExprStmt (CallExpr tellName callArgs)]
+          ++ compileBodyGoals symTab varMap' rest
+  _ ->
+    compileBodyGoal symTab varMap goal ++ compileBodyGoals symTab varMap rest
 
 compileBodyGoal :: SymbolTable -> Map.Map String Expr -> D.BodyGoal -> [Stmt]
 compileBodyGoal _ _ (D.BodyCommon D.GoalTrue) = []

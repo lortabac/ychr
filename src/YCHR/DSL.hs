@@ -76,6 +76,10 @@ func n args = CompoundTerm (Unqualified n) args
 atom :: String -> Term
 atom = AtomTerm
 
+-- | Integer literal term
+int :: Int -> Term
+int = IntTerm
+
 -- | Wildcard term: matches anything without binding
 wildcard :: Term
 wildcard = Wildcard

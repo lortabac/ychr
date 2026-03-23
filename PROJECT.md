@@ -311,6 +311,7 @@ The paper describes numerous optimizations. Each should be considered individual
 - Desugaring in `src/YCHR/Desugar.hs`.
 - A user-friendly DSL to construct a CHR program in Haskell in `src/YCHR/DSL.hs`.
 - VM types in `src/YCHR/VM.hs`.
+- CHR-to-VM compiler in `src/YCHR/Compile.hs`.
 - Unification variables for the Haskell runtime in `src/YCHR/Runtime/Var.hs`.
 - Constraint store for the Haskell runtime in `src/YCHR/Runtime/Store.hs`.
 - Propagation history for the Haskell runtime in `src/YCHR/Runtime/History.hs`.

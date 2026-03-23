@@ -26,7 +26,8 @@ tests :: TestTree
 tests =
   testGroup
     "YCHR.Compile"
-    [ leqTests
+    [ leqTests,
+      fibTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -185,4 +186,110 @@ leqTests =
         n @?= 0
         assertBool "a and b should be unified" eqAB
         assertBool "b and c should be unified" eqBC
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Fibonacci handler construction via DSL pipeline
+-- ---------------------------------------------------------------------------
+
+fibModule :: [Module]
+fibModule =
+  [ module' "Fib"
+      `declaring` ["fib" // 2]
+      `defining` [ "base0" @: ([con "fib" [int 0, var "R"]] <=> [var "R" .=. int 0]),
+                   "base1" @: ([con "fib" [int 1, var "R"]] <=> [var "R" .=. int 1]),
+                   "rec"
+                     @: ( [con "fib" [var "N", var "R"]]
+                            <=> [ var "N1" .:=. func "-" [var "N", int 1],
+                                  var "N2" .:=. func "-" [var "N", int 2],
+                                  func "fib" [var "N1", var "R1"],
+                                  func "fib" [var "N2", var "R2"],
+                                  var "Tmp" .:=. func "+" [var "R1", var "R2"],
+                                  var "R" .=. var "Tmp"
+                                ]
+                        )
+                 ]
+  ]
+
+compiledFibProgram :: VM.Program
+compiledFibProgram =
+  let Right renamed = renameProgram fibModule
+      Right desugared = desugarProgram renamed
+      symTab = extractSymbolTable desugared
+   in compile desugared symTab
+
+fibProcMap :: Map.Map VM.Name VM.Procedure
+fibProcMap =
+  let VM.Program {VM.progProcedures} = compiledFibProgram
+   in Map.fromList [(VM.procName p, p) | p <- progProcedures]
+
+-- ---------------------------------------------------------------------------
+-- Host call registry for fibonacci (+, -)
+-- ---------------------------------------------------------------------------
+
+fibHostCalls :: HostCallRegistry
+fibHostCalls =
+  Map.fromList
+    [ (VM.Name "+", \[RVal (VInt a), RVal (VInt b)] -> RVal (VInt (a + b))),
+      (VM.Name "-", \[RVal (VInt a), RVal (VInt b)] -> RVal (VInt (a - b)))
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Test helpers
+-- ---------------------------------------------------------------------------
+
+runFibStack ::
+  Eff
+    [ Writer [SuspensionId],
+      ReactQueue,
+      PropHistory,
+      CHRStore,
+      Unify,
+      IOE
+    ]
+    a ->
+  IO a
+runFibStack m =
+  runEff
+    . runUnify
+    . runCHRStore (VM.progNumTypes compiledFibProgram)
+    . runPropHistory
+    . runReactQueue
+    . fmap fst
+    . runWriter @[SuspensionId]
+    $ m
+
+tellFibName :: VM.Name
+tellFibName =
+  case [VM.procName p | p <- VM.progProcedures compiledFibProgram, "tell_" `isPrefixOfName` VM.procName p] of
+    (n : _) -> n
+    [] -> error "No tell procedure found for fib"
+
+callTellFib ::
+  ( Writer [SuspensionId] :> es,
+    Unify :> es,
+    CHRStore :> es,
+    PropHistory :> es,
+    ReactQueue :> es
+  ) =>
+  Value ->
+  Value ->
+  Eff es RuntimeVal
+callTellFib x y =
+  callProc fibProcMap fibHostCalls tellFibName [RVal x, RVal y]
+
+-- ---------------------------------------------------------------------------
+-- Tests
+-- ---------------------------------------------------------------------------
+
+fibTests :: TestTree
+fibTests =
+  testGroup
+    "Fibonacci handler (compiled)"
+    [ testCase "fib 10 = 55" $ do
+        result <- runFibStack $ do
+          r <- newVar
+          _ <- callTellFib (VInt 10) r
+          equal r (VInt 55)
+        assertBool "fib 10 should equal 55" result
     ]

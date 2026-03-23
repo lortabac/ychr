@@ -43,7 +43,7 @@ import YCHR.Runtime.Store
     suspId,
   )
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (Unify, equal, getArg, makeTerm, matchTerm, newVar, runUnify, unify)
+import YCHR.Runtime.Var (Unify, deref, equal, getArg, makeTerm, matchTerm, newVar, runUnify, unify)
 import YCHR.VM
 
 -- ---------------------------------------------------------------------------
@@ -258,9 +258,13 @@ evalExpr pm hc (CallExpr name args) = do
   callProc pm hc name argVals
 evalExpr pm hc (HostCall name args) = do
   argVals <- mapM (evalExpr pm hc) args
+  derefedVals <- mapM derefRV argVals
   case Map.lookup name hc of
-    Just f -> pure (f argVals)
+    Just f -> pure (f derefedVals)
     Nothing -> error $ "evalExpr: unknown host call " ++ unName name
+  where
+    derefRV (RVal v) = RVal <$> deref v
+    derefRV rc = pure rc
 evalExpr pm hc (Not expr) = do
   v <- evalExpr pm hc expr
   case v of
