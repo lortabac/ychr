@@ -81,7 +81,8 @@ test-suite ychr-tests
     import:           warnings
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
-    other-modules:    YCHR.DSLTest
+    other-modules:    YCHR.CompileTest
+                    , YCHR.DSLTest
                     , YCHR.DesugarTest
                     , YCHR.RenameTest
                     , YCHR.Runtime.VarTest
@@ -102,7 +103,8 @@ library
     -- Import common warning flags.
     import:           warnings
 
-    exposed-modules:  YCHR.Desugared
+    exposed-modules:  YCHR.Compile
+                    , YCHR.Desugared
                     , YCHR.Desugar
                     , YCHR.DSL
                     , YCHR.Parsed
