@@ -81,7 +81,7 @@ test-suite ychr-tests
     import:           warnings
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
-    other-modules:    YCHR.CompileTest
+    other-modules:    YCHR.EndToEndTest
                     , YCHR.DSLTest
                     , YCHR.DesugarTest
                     , YCHR.ParserTest
@@ -99,6 +99,7 @@ test-suite ychr-tests
                     , megaparsec ^>=9.6
                     , tasty
                     , tasty-hunit
+                    , text
     default-language: GHC2021
 
 library
@@ -106,6 +107,7 @@ library
     import:           warnings
 
     exposed-modules:  YCHR.Compile
+                    , YCHR.EndToEnd
                     , YCHR.Desugared
                     , YCHR.Desugar
                     , YCHR.DSL
@@ -129,6 +131,7 @@ library
                     , containers
                     , effectful-core
                     , megaparsec ^>=9.6
+                    , text
                     , vector
 
     -- Directories containing source files.

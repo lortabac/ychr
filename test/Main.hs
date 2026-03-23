@@ -1,9 +1,9 @@
 module Main (main) where
 
 import Test.Tasty (defaultMain, testGroup)
-import YCHR.CompileTest qualified
 import YCHR.DSLTest qualified
 import YCHR.DesugarTest qualified
+import YCHR.EndToEndTest qualified
 import YCHR.ParserTest qualified
 import YCHR.RenameTest qualified
 import YCHR.Runtime.HistoryTest qualified
@@ -17,7 +17,7 @@ main =
   defaultMain $
     testGroup
       "ychr"
-      [ YCHR.CompileTest.tests,
+      [ YCHR.EndToEndTest.tests,
         YCHR.DSLTest.tests,
         YCHR.DesugarTest.tests,
         YCHR.ParserTest.tests,

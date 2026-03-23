@@ -351,7 +351,7 @@ leqHostCalls = Map.empty
 countAlive :: (CHRStore :> es) => ConstraintType -> Eff es Int
 countAlive cType = do
   snapshot <- getStoreSnapshot cType
-  alives <- mapM isSuspAlive (toList snapshot)
+  alives <- traverse isSuspAlive (toList snapshot)
   pure (length (filter id alives))
 
 -- | Run within the full effect stack, returning a result.

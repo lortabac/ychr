@@ -1,6 +1,10 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module YCHR.ParserTest (tests) where
 
 import Data.Either (isLeft)
+import Data.Text (Text)
+import Data.Text qualified as Text
 import Data.Void (Void)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
@@ -22,7 +26,7 @@ tests =
     ]
 
 -- | Parse a source string with no filename.
-p :: String -> Either (ParseErrorBundle String Void) Module
+p :: Text -> Either (ParseErrorBundle Text Void) Module
 p = parseModule ""
 
 -- ---------------------------------------------------------------------------
@@ -217,9 +221,9 @@ moduleTests =
           @?= Right ""
     ]
 
-leqSource :: String
+leqSource :: Text
 leqSource =
-  unlines
+  Text.unlines
     [ ":- module(order, []).",
       ":- chr_constraint leq/2.",
       "",
@@ -265,14 +269,14 @@ errorTests =
 -- Helpers
 -- ---------------------------------------------------------------------------
 
-bodyOf :: String -> IO [Term]
+bodyOf :: Text -> IO [Term]
 bodyOf src = case p src of
   Left err -> assertFailure (show err)
   Right m -> case modRules m of
     [] -> assertFailure "expected at least one rule, got none"
     (r : _) -> pure (ruleBody r)
 
-headOf :: String -> IO Head
+headOf :: Text -> IO Head
 headOf src = case p src of
   Left err -> assertFailure (show err)
   Right m -> case modRules m of

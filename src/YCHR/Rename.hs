@@ -51,37 +51,37 @@ reservedSymbols = Set.fromList ["true", "fail", "=", "==", ":=", "$"]
 renameProgram :: [Module] -> Either [RenameError] [Module]
 renameProgram mods =
   let env = buildGlobalEnv mods
-      (result, errs) = runPureEff . runWriter $ mapM (renameModule env) mods
+      (result, errs) = runPureEff . runWriter $ traverse (renameModule env) mods
    in if null errs then Right result else Left errs
 
 renameModule :: GlobalEnv -> Module -> Eff '[Writer [RenameError]] Module
 renameModule env m = do
-  rules <- mapM (renameRule env m) (modRules m)
+  rules <- traverse (renameRule env m) (modRules m)
   pure m {modRules = rules}
 
 renameRule :: GlobalEnv -> Module -> Rule -> Eff '[Writer [RenameError]] Rule
 renameRule env m r = do
   h <- renameHead env m (ruleHead r)
-  g <- mapM (renameTerm env m False) (ruleGuard r)
-  b <- mapM (renameTerm env m True) (ruleBody r)
+  g <- traverse (renameTerm env m False) (ruleGuard r)
+  b <- traverse (renameTerm env m True) (ruleBody r)
   pure r {ruleHead = h, ruleGuard = g, ruleBody = b}
 
 renameHead :: GlobalEnv -> Module -> Head -> Eff '[Writer [RenameError]] Head
 renameHead env m h = case h of
-  Simplification cs -> Simplification <$> mapM (renameCon env m) cs
-  Propagation cs -> Propagation <$> mapM (renameCon env m) cs
-  Simpagation k r -> Simpagation <$> mapM (renameCon env m) k <*> mapM (renameCon env m) r
+  Simplification cs -> Simplification <$> traverse (renameCon env m) cs
+  Propagation cs -> Propagation <$> traverse (renameCon env m) cs
+  Simpagation k r -> Simpagation <$> traverse (renameCon env m) k <*> traverse (renameCon env m) r
 
 renameCon :: GlobalEnv -> Module -> Constraint -> Eff '[Writer [RenameError]] Constraint
 renameCon env m (Constraint name args) = do
   renamedName <- resolveName env m name (length args)
-  renamedArgs <- mapM (renameTerm env m False) args
+  renamedArgs <- traverse (renameTerm env m False) args
   pure (Constraint renamedName renamedArgs)
 
 renameTerm :: GlobalEnv -> Module -> Bool -> Term -> Eff '[Writer [RenameError]] Term
 renameTerm env m isGoal t = case t of
   CompoundTerm name args -> do
-    renamedArgs <- mapM (renameTerm env m False) args
+    renamedArgs <- traverse (renameTerm env m False) args
     newName <- if isGoal then resolveName env m name (length args) else pure name
     pure (CompoundTerm newName renamedArgs)
   other -> pure other

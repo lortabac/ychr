@@ -49,7 +49,7 @@ type SymbolTable = Map.Map Name ConstraintType
 desugarProgram :: [P.Module] -> Either [DesugarError] D.Program
 desugarProgram mods =
   let (result, errs) = runPureEff . runWriter $ do
-        rules <- mapM desugarRule [r | m <- mods, r <- P.modRules m]
+        rules <- traverse desugarRule [r | m <- mods, r <- P.modRules m]
         pure (D.Program rules)
    in if null errs then Right result else Left errs
 
@@ -74,7 +74,7 @@ getRuleConstraints r =
 
 desugarRule :: P.Rule -> Eff '[Writer [DesugarError]] D.Rule
 desugarRule r = do
-  body <- mapM desugarBodyGoal (P.ruleBody r)
+  body <- traverse desugarBodyGoal (P.ruleBody r)
   let rawHead = desugarHead (P.ruleHead r)
       (hnfGuards, normalizedHead) = normalizeHead rawHead
       userGuards = map desugarGuard (P.ruleGuard r)

@@ -16,7 +16,7 @@ module YCHR.Runtime.Interpreter
   )
 where
 
-import Data.Foldable (toList)
+import Data.Foldable (toList, traverse_)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Effectful
@@ -134,7 +134,7 @@ callProc procMap hostCalls name args = do
 execStmts ::
   (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
   ProcMap -> HostCallRegistry -> [Stmt] -> Eff es ()
-execStmts procMap hostCalls = mapM_ (execStmt procMap hostCalls)
+execStmts procMap hostCalls = traverse_ (execStmt procMap hostCalls)
 
 -- | Execute a single statement.
 execStmt ::
@@ -175,7 +175,7 @@ execStmt pm hc (Kill expr) = do
     RConstraint sid -> killConstraint sid
     _ -> error "Kill: expected constraint identifier"
 execStmt pm hc (AddHistory ruleName exprs) = do
-  ids <- mapM (evalExpr pm hc) exprs
+  ids <- traverse (evalExpr pm hc) exprs
   let sids = map (\case RConstraint s -> s; _ -> error "AddHistory: expected constraint id") ids
   addHistory ruleName sids
 execStmt pm hc (DrainReactivationQueue suspVar body) = do
@@ -254,11 +254,11 @@ evalExpr _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
 evalExpr _ _ (Lit (BoolLit b)) = pure (RVal (VBool b))
 evalExpr _ _ (Lit WildcardLit) = pure (RVal VWildcard)
 evalExpr pm hc (CallExpr name args) = do
-  argVals <- mapM (evalExpr pm hc) args
+  argVals <- traverse (evalExpr pm hc) args
   callProc pm hc name argVals
 evalExpr pm hc (HostCall name args) = do
-  argVals <- mapM (evalExpr pm hc) args
-  derefedVals <- mapM derefRV argVals
+  argVals <- traverse (evalExpr pm hc) args
+  derefedVals <- traverse derefRV argVals
   case Map.lookup name hc of
     Just f -> pure (f derefedVals)
     Nothing -> error $ "evalExpr: unknown host call " ++ unName name
@@ -284,7 +284,7 @@ evalExpr pm hc (Or e1 e2) = do
     _ -> error "Or: expected boolean"
 evalExpr _ _ NewVar = RVal <$> newVar
 evalExpr pm hc (MakeTerm functor args) = do
-  argVals <- mapM (evalExpr pm hc) args
+  argVals <- traverse (evalExpr pm hc) args
   pure $ RVal $ makeTerm (unName functor) (map toValue argVals)
 evalExpr pm hc (MatchTerm expr functor arity) = do
   v <- evalExpr pm hc expr
@@ -293,7 +293,7 @@ evalExpr pm hc (GetArg expr idx) = do
   v <- evalExpr pm hc expr
   RVal <$> getArg (toValue v) idx
 evalExpr pm hc (CreateConstraint cType args) = do
-  argVals <- mapM (evalExpr pm hc) args
+  argVals <- traverse (evalExpr pm hc) args
   sid <- createConstraint cType (map toValue argVals)
   pure (RConstraint sid)
 evalExpr pm hc (Alive expr) = do
@@ -313,7 +313,7 @@ evalExpr pm hc (IsConstraintType expr cType) = do
     RConstraint sid -> RVal . VBool <$> isConstraintType sid cType
     _ -> error "IsConstraintType: expected constraint identifier"
 evalExpr pm hc (NotInHistory ruleName args) = do
-  argVals <- mapM (evalExpr pm hc) args
+  argVals <- traverse (evalExpr pm hc) args
   let sids = map (\case RConstraint s -> s; _ -> error "NotInHistory: expected constraint id") argVals
   RVal . VBool <$> notInHistory ruleName sids
 evalExpr pm hc (Unify e1 e2) = do

@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Parser for the CHR surface language.
 --
 -- Parses Prolog-compatible CHR syntax into a 'Module' value.
@@ -26,6 +28,7 @@ module YCHR.Parser
 where
 
 import Control.Monad (void)
+import Data.Text (Text)
 import Data.Void (Void)
 import Text.Megaparsec
 import Text.Megaparsec.Char
@@ -33,16 +36,16 @@ import Text.Megaparsec.Char.Lexer qualified as L
 import YCHR.Parsed
 import YCHR.Types
 
--- | Parser type: 'String' input, no custom error components.
-type Parser = Parsec Void String
+-- | Parser type: 'Text' input, no custom error components.
+type Parser = Parsec Void Text
 
 -- | Parse a CHR module from source text.
 --
 -- The first argument is the source file name (used in error messages only).
 parseModule ::
   String ->
-  String ->
-  Either (ParseErrorBundle String Void) Module
+  Text ->
+  Either (ParseErrorBundle Text Void) Module
 parseModule = parse (sc *> moduleP <* eof)
 
 -- ---------------------------------------------------------------------------
@@ -58,7 +61,7 @@ lexeme :: Parser a -> Parser a
 lexeme = L.lexeme sc
 
 -- | Parse a fixed string and consume trailing whitespace.
-symbol :: String -> Parser String
+symbol :: Text -> Parser Text
 symbol = L.symbol sc
 
 -- | Parse something enclosed in parentheses.
