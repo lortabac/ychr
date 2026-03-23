@@ -84,6 +84,7 @@ test-suite ychr-tests
     other-modules:    YCHR.CompileTest
                     , YCHR.DSLTest
                     , YCHR.DesugarTest
+                    , YCHR.ParserTest
                     , YCHR.RenameTest
                     , YCHR.Runtime.VarTest
                     , YCHR.Runtime.StoreTest
@@ -95,6 +96,7 @@ test-suite ychr-tests
                     , ychr
                     , containers
                     , effectful-core
+                    , megaparsec ^>=9.6
                     , tasty
                     , tasty-hunit
     default-language: GHC2021
@@ -107,6 +109,7 @@ library
                     , YCHR.Desugared
                     , YCHR.Desugar
                     , YCHR.DSL
+                    , YCHR.Parser
                     , YCHR.Parsed
                     , YCHR.Rename
                     , YCHR.Types
@@ -125,6 +128,7 @@ library
     build-depends:    base ^>=4.21.0.0
                     , containers
                     , effectful-core
+                    , megaparsec ^>=9.6
                     , vector
 
     -- Directories containing source files.
