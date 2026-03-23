@@ -122,6 +122,9 @@ unify v1 v2 = do
   unify' d1 d2
 
 unify' :: (Writer [SuspensionId] :> es, Unify :> es) => Value -> Value -> Eff es Bool
+-- Wildcard: unifies with anything without binding
+unify' VWildcard _ = pure True
+unify' _ VWildcard = pure True
 -- Var-Var, same variable
 unify' (VVar (Var ref1)) (VVar (Var ref2))
   | ref1 == ref2 = pure True

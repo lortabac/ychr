@@ -252,6 +252,7 @@ evalExpr _ _ (Var name) = do
 evalExpr _ _ (Lit (IntLit n)) = pure (RVal (VInt n))
 evalExpr _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
 evalExpr _ _ (Lit (BoolLit b)) = pure (RVal (VBool b))
+evalExpr _ _ (Lit WildcardLit) = pure (RVal VWildcard)
 evalExpr pm hc (CallExpr name args) = do
   argVals <- mapM (evalExpr pm hc) args
   callProc pm hc name argVals

@@ -40,6 +40,8 @@ data Value
   | VBool !Bool
   | -- | Compound term: functor and arguments.
     VTerm !String ![Value]
+  | -- | Wildcard: unifies with anything without binding.
+    VWildcard
 
 -- | Runtime values for the interpreter. Constraint IDs never flow into
 -- unification or term construction.

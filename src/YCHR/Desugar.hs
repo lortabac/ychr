@@ -28,6 +28,7 @@ module YCHR.Desugar
   )
 where
 
+import Data.List (mapAccumL)
 import Data.Map qualified as Map
 import Data.Set qualified as Set
 import Effectful (Eff, runPureEff)
@@ -74,11 +75,14 @@ getRuleConstraints r =
 desugarRule :: P.Rule -> Eff '[Writer [DesugarError]] D.Rule
 desugarRule r = do
   body <- mapM desugarBodyGoal (P.ruleBody r)
+  let rawHead = desugarHead (P.ruleHead r)
+      (hnfGuards, normalizedHead) = normalizeHead rawHead
+      userGuards = map desugarGuard (P.ruleGuard r)
   pure
     D.Rule
       { D.ruleName = P.ruleName r,
-        D.ruleHead = desugarHead (P.ruleHead r),
-        D.ruleGuard = map desugarGuard (P.ruleGuard r),
+        D.ruleHead = normalizedHead,
+        D.ruleGuard = hnfGuards ++ userGuards,
         D.ruleBody = body
       }
 
@@ -87,6 +91,51 @@ desugarHead h = case h of
   P.Simplification rs -> D.Head [] rs
   P.Propagation ks -> D.Head ks []
   P.Simpagation ks rs -> D.Head ks rs
+
+-- Head Normal Form (HNF) transformation
+-- All head arguments become distinct variables; duplicate variables and
+-- non-variable terms are replaced with fresh variables and explicit
+-- GuardEqual guards are generated.
+
+data HnfState = HnfState
+  { hnfCounter :: !Int,
+    hnfSeen :: Map.Map String (),
+    hnfGuards :: [D.Guard] -- accumulated in reverse
+  }
+
+normalizeHead :: D.Head -> ([D.Guard], D.Head)
+normalizeHead (D.Head kept removed) =
+  let initState = HnfState 0 Map.empty []
+      (st1, kept') = mapAccumL normalizeConstraint initState kept
+      (st2, removed') = mapAccumL normalizeConstraint st1 removed
+   in (reverse (hnfGuards st2), D.Head kept' removed')
+
+normalizeConstraint :: HnfState -> Constraint -> (HnfState, Constraint)
+normalizeConstraint st (Constraint name args) =
+  let (st', args') = mapAccumL normalizeArg st args
+   in (st', Constraint name args')
+
+normalizeArg :: HnfState -> Term -> (HnfState, Term)
+normalizeArg st (VarTerm v)
+  | Map.member v (hnfSeen st) =
+      let fresh = "_hnf_" ++ show (hnfCounter st)
+       in ( st
+              { hnfCounter = hnfCounter st + 1,
+                hnfGuards = D.GuardEqual (VarTerm v) (VarTerm fresh) : hnfGuards st
+              },
+            VarTerm fresh
+          )
+  | otherwise =
+      (st {hnfSeen = Map.insert v () (hnfSeen st)}, VarTerm v)
+normalizeArg st Wildcard = (st, Wildcard)
+normalizeArg st term =
+  let fresh = "_hnf_" ++ show (hnfCounter st)
+   in ( st
+          { hnfCounter = hnfCounter st + 1,
+            hnfGuards = D.GuardEqual (VarTerm fresh) term : hnfGuards st
+          },
+        VarTerm fresh
+      )
 
 desugarGuard :: Term -> D.Guard
 desugarGuard (CompoundTerm (Unqualified "==") [l, r]) = D.GuardEqual l r

@@ -76,6 +76,10 @@ func n args = CompoundTerm (Unqualified n) args
 atom :: String -> Term
 atom = AtomTerm
 
+-- | Wildcard term: matches anything without binding
+wildcard :: Term
+wildcard = Wildcard
+
 --------------------------------------------------------------------------------
 -- Syntax Sugar for Body Goals
 --------------------------------------------------------------------------------

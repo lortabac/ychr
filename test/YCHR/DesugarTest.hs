@@ -14,6 +14,7 @@ tests =
   testGroup
     "Desugar"
     [ headTests,
+      hnfTests,
       guardTests,
       bodyTests,
       errorTests,
@@ -63,6 +64,94 @@ headTests =
       testCase "Simpagation maps kept and removed correctly" $ do
         rule <- singleRule [simpleModule (Simpagation [leqQual] [leqQual2])]
         D.ruleHead rule @?= D.Head {D.headKept = [leqQual], D.headRemoved = [leqQual2]}
+    ]
+
+--------------------------------------------------------------------------------
+-- Head Normal Form
+--------------------------------------------------------------------------------
+
+hnfTests :: TestTree
+hnfTests =
+  testGroup
+    "hnf"
+    [ testCase "distinct variables: no change" $ do
+        let m = simpleModule (Simplification ["M" .: con "leq" [var "X", var "Y"]])
+        rule <- singleRule [m]
+        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]]
+        D.ruleGuard rule @?= [],
+      testCase "duplicate variable generates equality guard" $ do
+        let m = simpleModule (Simplification ["M" .: con "leq" [var "X", var "X"]])
+        rule <- singleRule [m]
+        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "_hnf_0"]]
+        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "X") (VarTerm "_hnf_0")],
+      testCase "non-variable argument (integer) generates equality guard" $ do
+        let m = simpleModule (Simplification ["M" .: con "leq" [var "X", IntTerm 5]])
+        rule <- singleRule [m]
+        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "_hnf_0"]]
+        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "_hnf_0") (IntTerm 5)],
+      testCase "non-variable argument (atom) generates equality guard" $ do
+        let m = simpleModule (Simplification ["M" .: con "leq" [var "X", atom "foo"]])
+        rule <- singleRule [m]
+        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "_hnf_0"]]
+        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "_hnf_0") (AtomTerm "foo")],
+      testCase "cross-constraint duplicate variable" $ do
+        let m =
+              simpleModule
+                ( Simplification
+                    [ "M" .: con "leq" [var "X", var "Y"],
+                      "M" .: con "leq" [var "Y", var "Z"]
+                    ]
+                )
+        rule <- singleRule [m]
+        D.ruleHead rule
+          @?= D.Head
+            []
+            [ Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"],
+              Constraint (Qualified "M" "leq") [VarTerm "_hnf_0", VarTerm "Z"]
+            ]
+        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "Y") (VarTerm "_hnf_0")],
+      testCase "simpagation: kept processed before removed" $ do
+        let m =
+              simpleModule
+                ( Simpagation
+                    ["M" .: con "leq" [var "X", var "Y"]]
+                    ["M" .: con "leq" [var "Y", var "Z"]]
+                )
+        rule <- singleRule [m]
+        D.ruleHead rule
+          @?= D.Head
+            [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]]
+            [Constraint (Qualified "M" "leq") [VarTerm "_hnf_0", VarTerm "Z"]]
+        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "Y") (VarTerm "_hnf_0")],
+      testCase "hnf guards prepended before user guards" $ do
+        let m =
+              module' "M"
+                `defining` [ Rule
+                               Nothing
+                               (Simplification ["M" .: con "leq" [var "X", var "X"]])
+                               [func "gt" [var "X", IntTerm 0]]
+                               [atom "true"]
+                           ]
+        rule <- singleRule [m]
+        D.ruleGuard rule
+          @?= [ D.GuardEqual (VarTerm "X") (VarTerm "_hnf_0"),
+                D.GuardHostCall "gt" [VarTerm "X", IntTerm 0]
+              ],
+      testCase "wildcard passes through HNF unchanged" $ do
+        let m = simpleModule (Simplification ["M" .: con "foo" [wildcard]])
+        rule <- singleRule [m]
+        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "foo") [Wildcard]]
+        D.ruleGuard rule @?= [],
+      testCase "two wildcards stay as wildcards without guards" $ do
+        let m = simpleModule (Simplification ["M" .: con "foo" [wildcard, wildcard]])
+        rule <- singleRule [m]
+        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "foo") [Wildcard, Wildcard]]
+        D.ruleGuard rule @?= [],
+      testCase "wildcard and non-variable: only non-variable gets guard" $ do
+        let m = simpleModule (Simplification ["M" .: con "foo" [wildcard, IntTerm 1]])
+        rule <- singleRule [m]
+        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "foo") [Wildcard, VarTerm "_hnf_0"]]
+        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "_hnf_0") (IntTerm 1)]
     ]
 
 --------------------------------------------------------------------------------

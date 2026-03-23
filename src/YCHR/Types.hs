@@ -38,4 +38,5 @@ data Term
   | IntTerm Int
   | AtomTerm String
   | CompoundTerm Name [Term]
+  | Wildcard
   deriving (Show, Eq)

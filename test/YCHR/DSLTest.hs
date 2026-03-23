@@ -135,7 +135,9 @@ termTests =
           @?= CompoundTerm (Unqualified ":=") [VarTerm "X", CompoundTerm (Unqualified "get_val") []],
       testCase "hostStmt produces $ wrapper" $
         hostStmt "print" [var "X"]
-          @?= CompoundTerm (Unqualified "$") [CompoundTerm (Unqualified "print") [VarTerm "X"]]
+          @?= CompoundTerm (Unqualified "$") [CompoundTerm (Unqualified "print") [VarTerm "X"]],
+      testCase "wildcard produces Wildcard" $
+        wildcard @?= Wildcard
     ]
 
 integrationTests :: TestTree

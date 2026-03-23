@@ -17,7 +17,8 @@ tests =
       equalTests,
       observerTests,
       derefTests,
-      termTests
+      termTests,
+      wildcardTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -342,4 +343,45 @@ termTests =
           liftIO $ case a of
             VInt 5 -> pure ()
             _ -> assertBool "expected VInt 5" False
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Wildcard tests
+-- ---------------------------------------------------------------------------
+
+wildcardTests :: TestTree
+wildcardTests =
+  testGroup
+    "wildcard"
+    [ testCase "Wildcard unifies with Int" $ do
+        r <- runTestEnv_ $ unify VWildcard (VInt 42)
+        r @?= True,
+      testCase "Int unifies with Wildcard" $ do
+        r <- runTestEnv_ $ unify (VInt 42) VWildcard
+        r @?= True,
+      testCase "Wildcard unifies with Wildcard" $ do
+        r <- runTestEnv_ $ unify VWildcard VWildcard
+        r @?= True,
+      testCase "Wildcard unifies with unbound Var" $ do
+        runTestEnv_ $ do
+          x <- newVar
+          ok <- unify VWildcard x
+          liftIO $ ok @?= True,
+      testCase "Wildcard does not bind Var" $ do
+        runTestEnv_ $ do
+          x <- newVar
+          _ <- unify VWildcard x
+          d <- deref x
+          liftIO $ case d of
+            VVar _ -> pure ()
+            _ -> assertBool "var should remain unbound" False,
+      testCase "Wildcard equal to Int is False" $ do
+        r <- runTestEnv_ $ equal VWildcard (VInt 42)
+        r @?= False,
+      testCase "Int equal to Wildcard is False" $ do
+        r <- runTestEnv_ $ equal (VInt 42) VWildcard
+        r @?= False,
+      testCase "Wildcard equal to Wildcard is False" $ do
+        r <- runTestEnv_ $ equal VWildcard VWildcard
+        r @?= False
     ]
