@@ -86,7 +86,7 @@ leqSource =
   \:- chr_constraint leq/2.\n\
   \\n\
   \reflexivity @ leq(X, X) <=> true.\n\
-  \antisymmetry @ leq(X, Y), leq(Y, X) <=> '='(X, Y).\n\
+  \antisymmetry @ leq(X, Y), leq(Y, X) <=> X = Y.\n\
   \idempotence @ leq(X, Y) \\ leq(X, Y) <=> true.\n\
   \transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).\n"
 
@@ -177,9 +177,9 @@ fibSource =
   ":- module(fib, []).\n\
   \:- chr_constraint fib/2.\n\
   \\n\
-  \base0 @ fib(0, R) <=> '='(R, 0).\n\
-  \base1 @ fib(1, R) <=> '='(R, 1).\n\
-  \rec @ fib(N, R) <=> is(N1, '-'(N, 1)), is(N2, '-'(N, 2)), fib(N1, R1), fib(N2, R2), is(Tmp, '+'(R1, R2)), '='(R, Tmp).\n"
+  \base0 @ fib(0, R) <=> R = 0.\n\
+  \base1 @ fib(1, R) <=> R = 1.\n\
+  \rec @ fib(N, R) <=> N1 is N - 1, N2 is N - 2, fib(N1, R1), fib(N2, R2), Tmp is R1 + R2, R = Tmp.\n"
 
 extractIntArgs :: String -> [RuntimeVal] -> (Int, Int)
 extractIntArgs _ [RVal (VInt a), RVal (VInt b)] = (a, b)

@@ -19,6 +19,7 @@ tests =
     "YCHR.Parser"
     [ directiveTests,
       termTests,
+      operatorTests,
       ruleTests,
       moduleTests,
       commentTests,
@@ -106,6 +107,104 @@ termTests =
       testCase "nested compound" $
         bodyOf "c <=> f(g(X))."
           >>= (@?= [CompoundTerm (Unqualified "f") [CompoundTerm (Unqualified "g") [VarTerm "X"]]])
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Operator expressions
+-- ---------------------------------------------------------------------------
+
+operatorTests :: TestTree
+operatorTests =
+  testGroup
+    "operator expressions"
+    [ -- Arithmetic precedence and associativity
+      testCase "multiplication binds tighter than addition" $
+        bodyOf "c <=> 1 + 2 * 3."
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "+")
+                      [IntTerm 1, CompoundTerm (Unqualified "*") [IntTerm 2, IntTerm 3]]
+                  ]
+              ),
+      testCase "subtraction is left-associative" $
+        bodyOf "c <=> 1 - 2 - 3."
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "-")
+                      [CompoundTerm (Unqualified "-") [IntTerm 1, IntTerm 2], IntTerm 3]
+                  ]
+              ),
+      testCase "parentheses override precedence" $
+        bodyOf "c <=> (1 + 2) * 3."
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "*")
+                      [CompoundTerm (Unqualified "+") [IntTerm 1, IntTerm 2], IntTerm 3]
+                  ]
+              ),
+      -- Comparison operators
+      testCase "less-than operator" $
+        bodyOf "c <=> X < Y."
+          >>= (@?= [CompoundTerm (Unqualified "<") [VarTerm "X", VarTerm "Y"]]),
+      testCase "less-than-or-equal operator" $
+        bodyOf "c <=> X =< Y."
+          >>= (@?= [CompoundTerm (Unqualified "=<") [VarTerm "X", VarTerm "Y"]]),
+      testCase "greater-than-or-equal operator" $
+        bodyOf "c <=> X >= Y."
+          >>= (@?= [CompoundTerm (Unqualified ">=") [VarTerm "X", VarTerm "Y"]]),
+      testCase "structural equality operator" $
+        bodyOf "c <=> X == Y."
+          >>= (@?= [CompoundTerm (Unqualified "==") [VarTerm "X", VarTerm "Y"]]),
+      testCase "unification operator" $
+        bodyOf "c <=> X = Y."
+          >>= (@?= [CompoundTerm (Unqualified "=") [VarTerm "X", VarTerm "Y"]]),
+      testCase "greater-than operator" $
+        bodyOf "c <=> X > Y."
+          >>= (@?= [CompoundTerm (Unqualified ">") [VarTerm "X", VarTerm "Y"]]),
+      testCase "assignment operator" $
+        bodyOf "c <=> X := Y."
+          >>= (@?= [CompoundTerm (Unqualified ":=") [VarTerm "X", VarTerm "Y"]]),
+      -- Word operators
+      testCase "is operator with arithmetic" $
+        bodyOf "c <=> N is X + 1."
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "is")
+                      [VarTerm "N", CompoundTerm (Unqualified "+") [VarTerm "X", IntTerm 1]]
+                  ]
+              ),
+      testCase "div operator" $
+        bodyOf "c <=> X div Y."
+          >>= (@?= [CompoundTerm (Unqualified "div") [VarTerm "X", VarTerm "Y"]]),
+      testCase "mod operator" $
+        bodyOf "c <=> X mod Y."
+          >>= (@?= [CompoundTerm (Unqualified "mod") [VarTerm "X", VarTerm "Y"]]),
+      testCase "div is left-associative at same precedence as mul" $
+        bodyOf "c <=> X div Y * Z."
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "*")
+                      [CompoundTerm (Unqualified "div") [VarTerm "X", VarTerm "Y"], VarTerm "Z"]
+                  ]
+              ),
+      -- Operators in guard position
+      testCase "operator in guard" $
+        guardOf "r @ c(X) <=> X > 0 | b(X)."
+          >>= (@?= [CompoundTerm (Unqualified ">") [VarTerm "X", IntTerm 0]]),
+      -- Operators as compound term arguments
+      testCase "operator expressions as arguments" $
+        bodyOf "c <=> f(X + 1, Y * 2)."
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "f")
+                      [ CompoundTerm (Unqualified "+") [VarTerm "X", IntTerm 1],
+                        CompoundTerm (Unqualified "*") [VarTerm "Y", IntTerm 2]
+                      ]
+                  ]
+              ),
+      -- Non-associativity
+      testCase "chained non-associative operator fails" $
+        assertBool "expected parse failure" (isLeft (p "c <=> X < Y < Z."))
     ]
 
 -- ---------------------------------------------------------------------------
@@ -282,3 +381,10 @@ headOf src = case p src of
   Right m -> case modRules m of
     [] -> assertFailure "expected at least one rule, got none"
     (r : _) -> pure (ruleHead r)
+
+guardOf :: Text -> IO [Term]
+guardOf src = case p src of
+  Left err -> assertFailure (show err)
+  Right m -> case modRules m of
+    [] -> assertFailure "expected at least one rule, got none"
+    (r : _) -> pure (ruleGuard r)

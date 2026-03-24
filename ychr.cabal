@@ -131,6 +131,7 @@ library
                     , containers
                     , effectful-core
                     , megaparsec ^>=9.6
+                    , parser-combinators
                     , text
                     , vector
 

@@ -324,7 +324,6 @@ The paper describes numerous optimizations. Each should be considered individual
 The following components have not yet been implemented:
 
 - **Frontend parser**: Parse standard CHR with Prolog-compatible syntax into a close-to-surface representation of handlers, constraints, and rules.
-- **CHR-to-VM compiler**: Transform parsed CHR handlers into VM programs. Includes HNF transformation, occurrence numbering, and generation of all required procedures.
 - **Optimizations**: Implement the optimizations listed above, at the appropriate stage.
 - **JavaScript backend**: Translate VM programs to JavaScript code.
 - **JavaScript runtime**: Implement logical variables, compound terms, constraint store, propagation history, reactivation queue, and iterators in JavaScript.

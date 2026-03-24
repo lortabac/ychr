@@ -28,7 +28,9 @@ module YCHR.Parser
 where
 
 import Control.Monad (void)
+import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Text (Text)
+import Data.Text qualified as Text
 import Data.Void (Void)
 import Text.Megaparsec
 import Text.Megaparsec.Char
@@ -80,6 +82,10 @@ comma = void (symbol ",")
 -- Atoms, variables, wildcards, integers
 -- ---------------------------------------------------------------------------
 
+-- | Reserved words that cannot be used as unquoted atoms (they are operators).
+reservedWords :: [String]
+reservedWords = ["is", "div", "mod"]
+
 -- | Parse an atom: a lowercase identifier or a single-quoted string.
 --
 -- Single-quoted atoms support:
@@ -93,7 +99,11 @@ comma = void (symbol ",")
 atomP :: Parser String
 atomP = lexeme (unquotedP <|> quotedP)
   where
-    unquotedP = (:) <$> lowerChar <*> many (alphaNumChar <|> char '_')
+    unquotedP = do
+      name <- (:) <$> lowerChar <*> many (alphaNumChar <|> char '_')
+      if name `elem` reservedWords
+        then fail ("reserved word: " ++ name)
+        else pure name
     quotedP = char '\'' *> go
       where
         go =
@@ -140,18 +150,71 @@ intP :: Parser Term
 intP = lexeme (IntTerm <$> L.decimal)
 
 -- ---------------------------------------------------------------------------
+-- Operator tokens
+-- ---------------------------------------------------------------------------
+
+-- | Parse a word operator (e.g. @is@, @div@, @mod@).
+-- Fails if the keyword is immediately followed by an alphanumeric character or @_@.
+wordOp :: String -> Parser String
+wordOp w = lexeme $ try $ do
+  _ <- string (Text.pack w)
+  notFollowedBy (alphaNumChar <|> char '_')
+  pure w
+
+-- | Parse a symbol operator (e.g. @=<@, @==@, @+@).
+-- Reads the longest run of symbol characters and checks for an exact match,
+-- backtracking if the run does not equal the expected operator.
+symbolOp :: String -> Parser String
+symbolOp op = lexeme $ try $ do
+  s <- some (oneOf (":=<>+-*/" :: String))
+  if s == op
+    then pure s
+    else fail ("expected operator " ++ show op)
+
+-- ---------------------------------------------------------------------------
 -- Terms
 -- ---------------------------------------------------------------------------
 
--- | Parse a term: compound, wildcard, variable, integer, or bare atom.
-termP :: Parser Term
-termP =
+-- | Parse an atomic (non-operator) term.
+atomicTermP :: Parser Term
+atomicTermP =
   choice
     [ wildcardP,
       varP,
       try intP,
+      try (parens termP),
       atomOrCompoundP
     ]
+
+-- | Operator table from lowest to highest precedence.
+operatorTable :: [[Operator Parser Term]]
+operatorTable =
+  [ -- Fixity 400: left-associative (yfx) — tightest binding (listed first)
+    [ InfixL (binOp "*" <$ symbolOp "*"),
+      InfixL (binOp "div" <$ wordOp "div"),
+      InfixL (binOp "mod" <$ wordOp "mod")
+    ],
+    -- Fixity 500: left-associative (yfx)
+    [ InfixL (binOp "+" <$ symbolOp "+"),
+      InfixL (binOp "-" <$ symbolOp "-")
+    ],
+    -- Fixity 700: non-associative (xfx) — loosest binding (listed last)
+    [ InfixN (binOp ":=" <$ symbolOp ":="),
+      InfixN (binOp "is" <$ wordOp "is"),
+      InfixN (binOp "=" <$ symbolOp "="),
+      InfixN (binOp "==" <$ symbolOp "=="),
+      InfixN (binOp "<" <$ symbolOp "<"),
+      InfixN (binOp ">" <$ symbolOp ">"),
+      InfixN (binOp "=<" <$ symbolOp "=<"),
+      InfixN (binOp ">=" <$ symbolOp ">=")
+    ]
+  ]
+  where
+    binOp op l r = CompoundTerm (Unqualified op) [l, r]
+
+-- | Parse a term, including infix operator expressions.
+termP :: Parser Term
+termP = makeExprParser atomicTermP operatorTable
 
 -- | Parse an atom optionally followed by a parenthesised argument list.
 -- Produces 'CompoundTerm' if arguments are present, 'AtomTerm' otherwise.
