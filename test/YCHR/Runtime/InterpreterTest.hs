@@ -8,9 +8,9 @@ import Data.Map.Strict qualified as Map
 import Effectful
 import Effectful.Writer.Static.Local (Writer, runWriter)
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertBool, testCase, (@?=))
+import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Runtime.History (PropHistory, runPropHistory)
-import YCHR.Runtime.Interpreter (HostCallRegistry, callProc)
+import YCHR.Runtime.Interpreter (HostCallRegistry, callProc, interpret)
 import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
@@ -21,7 +21,8 @@ tests :: TestTree
 tests =
   testGroup
     "YCHR.Runtime.Interpreter"
-    [ leqTests
+    [ leqTests,
+      hostEvalTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -445,4 +446,54 @@ leqTests =
         n @?= 0
         assertBool "a and b should be unified" eqAB
         assertBool "b and c should be unified" eqBC
+    ]
+
+-- ---------------------------------------------------------------------------
+-- HostEval tests
+-- ---------------------------------------------------------------------------
+
+arithCalls :: HostCallRegistry
+arithCalls =
+  Map.fromList
+    [ ("+", \[RVal (VInt a), RVal (VInt b)] -> RVal (VInt (a + b))),
+      ("*", \[RVal (VInt a), RVal (VInt b)] -> RVal (VInt (a * b)))
+    ]
+
+makeCalcProc :: Expr -> Program
+makeCalcProc body =
+  Program
+    { progNumTypes = 0,
+      progProcedures =
+        [ Procedure
+            "calc"
+            ["x"]
+            [ Let "y" (HostEval body),
+              Return (Var "y")
+            ]
+        ]
+    }
+
+runCalc :: Expr -> Value -> IO RuntimeVal
+runCalc body x = interpret (makeCalcProc body) arithCalls "calc" [x]
+
+expectInt :: RuntimeVal -> IO Int
+expectInt (RVal (VInt n)) = pure n
+expectInt _ = assertFailure "expected RVal (VInt _)"
+
+hostEvalTests :: TestTree
+hostEvalTests =
+  testGroup
+    "HostEval"
+    [ testCase "flat: +(2, 3) = 5" $ do
+        result <- runCalc (MakeTerm "+" [Lit (IntLit 2), Lit (IntLit 3)]) (VInt 0)
+        expectInt result >>= (@?= 5),
+      testCase "variable: x + 1, x=5 = 6" $ do
+        result <- runCalc (MakeTerm "+" [Var "x", Lit (IntLit 1)]) (VInt 5)
+        expectInt result >>= (@?= 6),
+      testCase "nested: 2 * (x + 3), x=4 = 14" $ do
+        result <- runCalc (MakeTerm "*" [Lit (IntLit 2), MakeTerm "+" [Var "x", Lit (IntLit 3)]]) (VInt 4)
+        expectInt result >>= (@?= 14),
+      testCase "literal passthrough: 42 = 42" $ do
+        result <- runCalc (Lit (IntLit 42)) (VInt 0)
+        expectInt result >>= (@?= 42)
     ]

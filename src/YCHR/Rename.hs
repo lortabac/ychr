@@ -46,7 +46,7 @@ buildGlobalEnv mods =
     ]
 
 reservedSymbols :: Set.Set String
-reservedSymbols = Set.fromList ["true", "fail", "=", "==", ":=", "$"]
+reservedSymbols = Set.fromList ["true", "fail", "=", "==", ":=", "$", "is"]
 
 renameProgram :: [Module] -> Either [RenameError] [Module]
 renameProgram mods =

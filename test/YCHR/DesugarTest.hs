@@ -199,6 +199,9 @@ bodyTests =
       testCase ":= becomes BodyHostCall" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" .:=. func "readInt" []]]
         D.ruleBody rule @?= [D.BodyHostCall "X" "readInt" []],
+      testCase "is becomes BodyIs" $ do
+        rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" `is` func "+" [int 1, int 2]]]
+        D.ruleBody rule @?= [D.BodyIs "X" (CompoundTerm (Unqualified "+") [IntTerm 1, IntTerm 2])],
       testCase "Qualified compound becomes BodyConstraint" $ do
         let body = [CompoundTerm (Qualified "M" "leq") [var "X"]]
         rule <- singleRule [simpleModule' (Simplification [leqQual]) body]

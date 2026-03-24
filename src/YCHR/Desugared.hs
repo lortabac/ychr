@@ -64,4 +64,5 @@ data BodyGoal
   | BodyUnify Term Term
   | BodyHostStmt String [Term]
   | BodyHostCall String String [Term]
+  | BodyIs String Term
   deriving (Show, Eq)

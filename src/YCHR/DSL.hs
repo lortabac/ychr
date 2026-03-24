@@ -96,6 +96,12 @@ l .=. r = CompoundTerm (Unqualified "=") [l, r]
 (.:=.) :: Term -> Term -> Term
 v .:=. f = CompoundTerm (Unqualified ":=") [v, f]
 
+-- | Arithmetic evaluation: @var "X" \`is\` func "+" [int 2, var "Y"]@
+is :: Term -> Term -> Term
+is v e = CompoundTerm (Unqualified "is") [v, e]
+
+infixr 3 `is`
+
 -- | Host statement: @hostStmt "print" [var "X"]@
 hostStmt :: String -> [Term] -> Term
 hostStmt f args = CompoundTerm (Unqualified "$") [CompoundTerm (Unqualified f) args]

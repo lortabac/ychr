@@ -334,6 +334,29 @@ evalExpr pm hc (FieldGet expr field) = do
       FieldArg (ArgIndex i) -> RVal <$> getConstraintArg sid i
       FieldType -> RVal . VInt . unConstraintType <$> getConstraintType sid
     _ -> error "FieldGet: expected constraint identifier"
+evalExpr pm hc (HostEval expr) = evalArith pm hc expr
+
+-- ---------------------------------------------------------------------------
+-- evalArith
+-- ---------------------------------------------------------------------------
+
+evalArith ::
+  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
+  ProcMap -> HostCallRegistry -> Expr -> Eff es RuntimeVal
+evalArith _ _ (Lit (IntLit n)) = pure (RVal (VInt n))
+evalArith _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
+evalArith _ _ (Lit (BoolLit b)) = pure (RVal (VBool b))
+evalArith pm hc (Var name) = do
+  v <- evalExpr pm hc (Var name)
+  case v of
+    RVal val -> RVal <$> deref val
+    rv -> pure rv
+evalArith pm hc (MakeTerm name args) = do
+  argVals <- traverse (evalArith pm hc) args
+  case Map.lookup name hc of
+    Just f -> pure (f argVals)
+    Nothing -> error $ "evalArith: unknown operator " ++ unName name
+evalArith _ _ expr = error $ "evalArith: unsupported expression " ++ show expr
 
 -- ---------------------------------------------------------------------------
 -- Helpers

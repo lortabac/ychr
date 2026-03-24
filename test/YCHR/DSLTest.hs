@@ -137,7 +137,12 @@ termTests =
         hostStmt "print" [var "X"]
           @?= CompoundTerm (Unqualified "$") [CompoundTerm (Unqualified "print") [VarTerm "X"]],
       testCase "wildcard produces Wildcard" $
-        wildcard @?= Wildcard
+        wildcard @?= Wildcard,
+      testCase "`is` produces is term" $
+        var "X" `is` func "+" [int 1, int 2]
+          @?= CompoundTerm
+            (Unqualified "is")
+            [VarTerm "X", CompoundTerm (Unqualified "+") [IntTerm 1, IntTerm 2]]
     ]
 
 integrationTests :: TestTree

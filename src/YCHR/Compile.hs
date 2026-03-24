@@ -375,6 +375,12 @@ compileBodyGoals symTab varMap (goal : rest) = case goal of
         varMap' = Map.insert v (Var (Name v)) varMap
     rest' <- compileBodyGoals symTab varMap' rest
     pure (stmt : rest')
+  D.BodyIs v expr -> do
+    expr' <- compileTerm varMap expr
+    let stmt = Let (Name v) (HostEval expr')
+        varMap' = Map.insert v (Var (Name v)) varMap
+    rest' <- compileBodyGoals symTab varMap' rest
+    pure (stmt : rest')
   D.BodyConstraint con -> do
     let argVars = [v | T.VarTerm v <- T.conArgs con, Map.notMember v varMap]
         newStmts = [Let (Name v) NewVar | v <- argVars]
@@ -408,6 +414,9 @@ compileBodyGoal _ varMap (D.BodyHostStmt f args) = do
 compileBodyGoal _ varMap (D.BodyHostCall v f args) = do
   args' <- traverse (compileTerm varMap) args
   pure [Let (Name v) (HostCall (Name f) args')]
+compileBodyGoal _ varMap (D.BodyIs v expr) = do
+  expr' <- compileTerm varMap expr
+  pure [Let (Name v) (HostEval expr')]
 
 -- ---------------------------------------------------------------------------
 -- reactivate_dispatch

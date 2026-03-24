@@ -148,6 +148,8 @@ desugarBodyGoal t = case t of
   CompoundTerm (Unqualified "=") [l, r] -> pure $ D.BodyUnify l r
   CompoundTerm (Unqualified ":=") [VarTerm v, CompoundTerm (Unqualified f) args] ->
     pure $ D.BodyHostCall v f args
+  CompoundTerm (Unqualified "is") [VarTerm v, expr] ->
+    pure $ D.BodyIs v expr
   CompoundTerm (Qualified m n) args ->
     pure $ D.BodyConstraint (Constraint (Qualified m n) args)
   CompoundTerm (Unqualified "$") [CompoundTerm (Unqualified f) args] ->
