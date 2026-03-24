@@ -188,8 +188,8 @@ extractIntArgs context vals = error $ context ++ ": expected 2 Int arguments, go
 fibHostCalls :: HostCallRegistry
 fibHostCalls =
   Map.fromList
-    [ (VM.Name "+", \args -> let (a, b) = extractIntArgs "+" args in RVal (VInt (a + b))),
-      (VM.Name "-", \args -> let (a, b) = extractIntArgs "-" args in RVal (VInt (a - b)))
+    [ (VM.Name "+", \args -> let (a, b) = extractIntArgs "+" args in pure (RVal (VInt (a + b)))),
+      (VM.Name "-", \args -> let (a, b) = extractIntArgs "-" args in pure (RVal (VInt (a - b))))
     ]
 
 fibTests :: TestTree

@@ -379,7 +379,8 @@ runFullStack m =
 
 -- | Call tell_leq within the full effect stack.
 callTellLeq ::
-  ( Writer [SuspensionId] :> es,
+  ( IOE :> es,
+    Writer [SuspensionId] :> es,
     Unify :> es,
     CHRStore :> es,
     PropHistory :> es,
@@ -455,8 +456,8 @@ leqTests =
 arithCalls :: HostCallRegistry
 arithCalls =
   Map.fromList
-    [ ("+", \[RVal (VInt a), RVal (VInt b)] -> RVal (VInt (a + b))),
-      ("*", \[RVal (VInt a), RVal (VInt b)] -> RVal (VInt (a * b)))
+    [ ("+", \[RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (a + b)))),
+      ("*", \[RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (a * b))))
     ]
 
 makeCalcProc :: Expr -> Program

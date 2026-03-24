@@ -10,6 +10,7 @@ module YCHR.Runtime.Interpreter
   ( -- * Public API
     interpret,
     HostCallRegistry,
+    defaultHostCallRegistry,
 
     -- * Internal (for testing)
     callProc,
@@ -17,6 +18,7 @@ module YCHR.Runtime.Interpreter
 where
 
 import Data.Foldable (toList, traverse_)
+import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Effectful
@@ -51,7 +53,7 @@ import YCHR.VM
 -- ---------------------------------------------------------------------------
 
 -- | Registry of host language functions.
-type HostCallRegistry = Map Name ([RuntimeVal] -> RuntimeVal)
+type HostCallRegistry = Map Name ([RuntimeVal] -> IO RuntimeVal)
 
 -- | Map from procedure name to procedure definition.
 type ProcMap = Map Name Procedure
@@ -69,6 +71,38 @@ instance Show ControlFlow where
   show (CFReturn _) = "CFReturn <val>"
   show (CFContinue l) = "CFContinue " ++ unLabel l
   show (CFBreak l) = "CFBreak " ++ unLabel l
+
+-- | A default host call registry providing arithmetic, comparison, and IO operations.
+defaultHostCallRegistry :: HostCallRegistry
+defaultHostCallRegistry =
+  Map.fromList
+    [ (Name "+", arith2 (+)),
+      (Name "-", arith2 (-)),
+      (Name "*", arith2 (*)),
+      (Name "div", arith2 div),
+      (Name "mod", arith2 mod),
+      (Name "<", cmp (<)),
+      (Name ">", cmp (>)),
+      (Name "=<", cmp (<=)),
+      (Name ">=", cmp (>=)),
+      ( Name "print",
+        \args -> do
+          mapM_ (putStrLn . showVal) args
+          pure (RVal (VBool True))
+      )
+    ]
+  where
+    arith2 op [RVal (VInt a), RVal (VInt b)] = pure (RVal (VInt (op a b)))
+    arith2 _ args = error $ "arithmetic host call: expected 2 Int arguments, got " ++ show (length args)
+    cmp op [RVal (VInt a), RVal (VInt b)] = pure (RVal (VBool (op a b)))
+    cmp _ args = error $ "comparison host call: expected 2 Int arguments, got " ++ show (length args)
+    showVal (RVal (VInt n)) = show n
+    showVal (RVal (VAtom s)) = s
+    showVal (RVal (VBool b)) = show b
+    showVal (RVal (VTerm f xs)) = f ++ "(" ++ intercalate ", " (map (showVal . RVal) xs) ++ ")"
+    showVal (RVal VWildcard) = "_"
+    showVal (RVal (VVar _)) = "<var>"
+    showVal (RConstraint (SuspensionId n)) = "<constraint:" ++ show n ++ ">"
 
 -- ---------------------------------------------------------------------------
 -- Public API
@@ -103,7 +137,8 @@ interpret Program {progNumTypes, progProcedures} hostCalls entryName args = do
 
 -- | The effect constraints needed by the interpreter.
 type InterpEffects es =
-  ( Writer [SuspensionId] :> es,
+  ( IOE :> es,
+    Writer [SuspensionId] :> es,
     Unify :> es,
     CHRStore :> es,
     PropHistory :> es,
@@ -260,7 +295,7 @@ evalExpr pm hc (HostCall name args) = do
   argVals <- traverse (evalExpr pm hc) args
   derefedVals <- traverse derefRV argVals
   case Map.lookup name hc of
-    Just f -> pure (f derefedVals)
+    Just f -> liftIO (f derefedVals)
     Nothing -> error $ "evalExpr: unknown host call " ++ unName name
   where
     derefRV (RVal v) = RVal <$> deref v
@@ -354,7 +389,7 @@ evalArith pm hc (Var name) = do
 evalArith pm hc (MakeTerm name args) = do
   argVals <- traverse (evalArith pm hc) args
   case Map.lookup name hc of
-    Just f -> pure (f argVals)
+    Just f -> liftIO (f argVals)
     Nothing -> error $ "evalArith: unknown operator " ++ unName name
 evalArith _ _ expr = error $ "evalArith: unsupported expression " ++ show expr
 
