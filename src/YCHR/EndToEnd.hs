@@ -2,8 +2,11 @@
 
 module YCHR.EndToEnd
   ( Error (..),
+    CompiledProgram (..),
+    ExportResolution (..),
     compileModules,
     compileFiles,
+    resolveQueryConstraint,
     runQueryDSL,
     runQuery,
   )
@@ -11,8 +14,11 @@ where
 
 import Control.Monad (unless)
 import Data.Bifunctor (first)
+import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text.IO qualified as TIO
 import Data.Void (Void)
@@ -23,7 +29,7 @@ import Text.Megaparsec (ParseErrorBundle)
 import YCHR.Compile (CompileError, compile, procNameFor)
 import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable)
 import YCHR.Parser (parseConstraint, parseModule)
-import YCHR.Rename (RenameError, renameProgram)
+import YCHR.Rename (RenameError, buildExportEnv, renameProgram)
 import YCHR.Runtime.History (runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallRegistry, callProc)
 import YCHR.Runtime.Reactivation (runReactQueue)
@@ -41,31 +47,76 @@ data Error
   | CompileErrors [CompileError]
   deriving (Show)
 
-compileModules :: [(FilePath, Text)] -> Either Error Program
+-- | A compiled CHR program together with module visibility information.
+data CompiledProgram = CompiledProgram
+  { cpProgram :: Program,
+    cpExportMap :: Map (String, Int) ExportResolution,
+    cpExportedSet :: Set T.Name
+  }
+
+data ExportResolution
+  = UniqueExport T.Name
+  | AmbiguousExport [String]
+  deriving (Show, Eq)
+
+compileModules :: [(FilePath, Text)] -> Either Error CompiledProgram
 compileModules inputs = do
   parsed <- mapM (\(fp, txt) -> first (ParseError fp) (parseModule fp txt)) inputs
+  let exportEnv = buildExportEnv parsed
+      exportMap =
+        Map.fromList
+          [ ((n, a), toResolution n ms)
+          | ((n, a), ms) <- Map.toList exportEnv
+          ]
+      exportedSet =
+        Set.fromList
+          [T.Qualified m n | ((n, _), ms) <- Map.toList exportEnv, m <- ms]
   renamed <- first RenameErrors (renameProgram parsed)
   desugared <- first DesugarErrors (desugarProgram renamed)
   let symTab = extractSymbolTable desugared
-  first CompileErrors (compile desugared symTab)
+  prog <- first CompileErrors (compile desugared symTab)
+  pure (CompiledProgram prog exportMap exportedSet)
+  where
+    toResolution n [m] = UniqueExport (T.Qualified m n)
+    toResolution _ ms = AmbiguousExport ms
 
-compileFiles :: [FilePath] -> IO (Either Error Program)
+compileFiles :: [FilePath] -> IO (Either Error CompiledProgram)
 compileFiles paths = do
   contents <- mapM (\fp -> (fp,) <$> TIO.readFile fp) paths
   pure (compileModules contents)
 
+-- | Resolve a query constraint against the export map.
+resolveQueryConstraint :: CompiledProgram -> Constraint -> Either String Constraint
+resolveQueryConstraint cp (Constraint name args) = case name of
+  T.Unqualified n ->
+    let arity = length args
+     in case Map.lookup (n, arity) (cpExportMap cp) of
+          Just (UniqueExport qname) ->
+            Right (Constraint qname args)
+          Just (AmbiguousExport ms) ->
+            Left
+              ( "Ambiguous constraint: "
+                  ++ n
+                  ++ "/"
+                  ++ show arity
+                  ++ ", exported by: "
+                  ++ intercalate ", " ms
+              )
+          Nothing -> Left ("Unknown constraint: " ++ n ++ "/" ++ show arity)
+  T.Qualified m n ->
+    if Set.member (T.Qualified m n) (cpExportedSet cp)
+      then Right (Constraint name args)
+      else Left ("Constraint not exported: " ++ m ++ ":" ++ n)
+
 -- | Run a single CHR constraint against a compiled program.
---
--- Creates fresh logical variables for each distinct 'VarTerm' name in the
--- constraint's argument list, calls the corresponding @tell_*@ procedure,
--- and returns the procedure's result along with a map from every input
--- variable name to its fully-dereferenced value.  Unbound variables in the
--- result are represented as @VarTerm <original-name>@; unbound variables
--- that appear nested inside compound terms are represented as @VarTerm "_"@.
-runQueryDSL :: Program -> HostCallRegistry -> Constraint -> IO (RuntimeVal, Map String Term)
-runQueryDSL Program {progNumTypes, progProcedures} hostCalls (Constraint name args) = do
-  let procMap = Map.fromList [(procName p, p) | p <- progProcedures]
-      tellName = procNameFor "tell" name
+runQueryDSL :: CompiledProgram -> HostCallRegistry -> Constraint -> IO (RuntimeVal, Map String Term)
+runQueryDSL cp hostCalls constraint = do
+  resolved <- case resolveQueryConstraint cp constraint of
+    Left err -> fail err
+    Right c -> pure c
+  let Program {progNumTypes, progProcedures} = cpProgram cp
+      procMap = Map.fromList [(procName p, p) | p <- progProcedures]
+      tellName = procNameFor "tell" (conName resolved)
   unless (Map.member tellName procMap) $
     fail ("Constraint not found: " ++ unName tellName)
   runEff
@@ -77,25 +128,19 @@ runQueryDSL Program {progNumTypes, progProcedures} hostCalls (Constraint name ar
     . runReactQueue
     . evalState (Map.empty :: Map String Value)
     $ do
-      argVals <- traverse termToValue args
+      argVals <- traverse termToValue (conArgs resolved)
       result <- callProc procMap hostCalls tellName (map RVal argVals)
       varMap <- get
       bindings <- Map.traverseWithKey valueToTerm varMap
       pure (result, bindings)
 
 -- | Like 'runQueryDSL' but accepts a query as surface-language 'Text'.
---
--- The text is parsed as a single constraint (e.g. @"leq(X, Y)"@).
--- A parse failure is raised as an 'IOError' via 'fail'.
-runQuery :: Program -> HostCallRegistry -> Text -> IO (RuntimeVal, Map String Term)
-runQuery prog hostCalls src =
+runQuery :: CompiledProgram -> HostCallRegistry -> Text -> IO (RuntimeVal, Map String Term)
+runQuery cp hostCalls src =
   case parseConstraint "<query>" src of
     Left err -> fail (show err)
-    Right c -> runQueryDSL prog hostCalls c
+    Right c -> runQueryDSL cp hostCalls c
 
--- | Convert a 'Term' to a runtime 'Value', allocating fresh logical
--- variables for 'VarTerm' names.  The same name always maps to the same
--- variable (sharing enforced via 'State').
 termToValue :: (Unify :> es, State (Map String Value) :> es) => Term -> Eff es Value
 termToValue (VarTerm n) = do
   varMap <- get
@@ -111,9 +156,6 @@ termToValue Wildcard = pure VWildcard
 termToValue (CompoundTerm (T.Unqualified f) ts) = VTerm f <$> traverse termToValue ts
 termToValue (CompoundTerm (T.Qualified m f) ts) = VTerm (m ++ ":" ++ f) <$> traverse termToValue ts
 
--- | Convert a runtime 'Value' back to a 'Term' after dereferencing.
--- @varName@ is used as the name for a still-unbound variable (pass @"_"@
--- for anonymous nested variables).
 valueToTerm :: (Unify :> es) => String -> Value -> Eff es Term
 valueToTerm varName v = do
   v' <- deref v

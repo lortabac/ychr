@@ -1,4 +1,4 @@
-:- module(order, []).
+:- module(order, [leq/2]).
 :- chr_constraint leq/2.
 
 reflexivity @ leq(X, X) <=> true.

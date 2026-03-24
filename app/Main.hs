@@ -5,13 +5,14 @@ import Control.Monad.IO.Class (liftIO)
 import Data.List (intercalate)
 import Data.Text qualified as T
 import System.Console.Haskeline
+import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDirectory)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
-import YCHR.EndToEnd (compileFiles, runQuery)
+import System.FilePath (takeDirectory)
+import YCHR.EndToEnd (CompiledProgram, compileFiles, runQuery)
 import YCHR.Pretty (prettyBindings)
 import YCHR.Runtime.Interpreter (defaultHostCallRegistry)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
-import YCHR.VM (Program)
 
 main :: IO ()
 main = do
@@ -26,10 +27,13 @@ main = do
         Left err -> do
           print err
           exitFailure
-        Right prog ->
-          runInputT defaultSettings (repl prog)
+        Right prog -> do
+          histFile <- getXdgDirectory XdgData "ychr/history"
+          createDirectoryIfMissing True (takeDirectory histFile)
+          let settings = defaultSettings {historyFile = Just histFile}
+          runInputT settings (repl prog)
 
-repl :: Program -> InputT IO ()
+repl :: CompiledProgram -> InputT IO ()
 repl prog = loop
   where
     loop = do

@@ -19,7 +19,7 @@
 --
 -- This pass ensures that the subsequent Desugaring phase can treat the
 -- program as a flat, unambiguous collection of rules.
-module YCHR.Rename (renameProgram, RenameError (..)) where
+module YCHR.Rename (renameProgram, buildExportEnv, RenameError (..)) where
 
 import Data.Map qualified as Map
 import Data.Set qualified as Set

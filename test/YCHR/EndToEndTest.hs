@@ -10,14 +10,14 @@ import Effectful
 import Effectful.Writer.Static.Local (Writer, runWriter)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.EndToEnd (compileModules, runQuery)
+import YCHR.EndToEnd (CompiledProgram (..), compileModules, resolveQueryConstraint, runQuery)
 import YCHR.Runtime.History (PropHistory, runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallRegistry, callProc)
 import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, equal, newVar, runUnify)
-import YCHR.Types (Term (..))
+import YCHR.Types (Constraint (..), Name (..), Term (..))
 import YCHR.VM qualified as VM
 
 tests :: TestTree
@@ -25,32 +25,34 @@ tests =
   testGroup
     "YCHR.EndToEnd"
     [ leqTests,
-      fibTests
+      fibTests,
+      visibilityTests
     ]
 
 -- ---------------------------------------------------------------------------
 -- Shared helpers
 -- ---------------------------------------------------------------------------
 
-compileOrFail :: [(FilePath, Text)] -> IO VM.Program
+compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
 compileOrFail inputs = case compileModules inputs of
   Left err -> assertFailure $ show err
-  Right prog -> pure prog
+  Right cp -> pure cp
 
 isPrefixOfName :: String -> VM.Name -> Bool
 isPrefixOfName prefix (VM.Name n) = take (length prefix) n == prefix
 
-findTellOrFail :: VM.Program -> IO VM.Name
-findTellOrFail prog =
-  case [VM.procName p | p <- VM.progProcedures prog, "tell_" `isPrefixOfName` VM.procName p] of
-    (n : _) -> pure n
-    [] -> assertFailure "No tell procedure found"
+findTellOrFail :: CompiledProgram -> IO VM.Name
+findTellOrFail cp =
+  let prog = cpProgram cp
+   in case [VM.procName p | p <- VM.progProcedures prog, "tell_" `isPrefixOfName` VM.procName p] of
+        (n : _) -> pure n
+        [] -> assertFailure "No tell procedure found"
 
-buildProcMap :: VM.Program -> Map.Map VM.Name VM.Procedure
-buildProcMap prog = Map.fromList [(VM.procName p, p) | p <- VM.progProcedures prog]
+buildProcMap :: CompiledProgram -> Map.Map VM.Name VM.Procedure
+buildProcMap cp = Map.fromList [(VM.procName p, p) | p <- VM.progProcedures (cpProgram cp)]
 
 runStack ::
-  VM.Program ->
+  CompiledProgram ->
   Eff
     [ Writer [SuspensionId],
       ReactQueue,
@@ -61,10 +63,10 @@ runStack ::
     ]
     a ->
   IO a
-runStack prog m =
+runStack cp m =
   runEff
     . runUnify
-    . runCHRStore (VM.progNumTypes prog)
+    . runCHRStore (VM.progNumTypes (cpProgram cp))
     . runPropHistory
     . runReactQueue
     . fmap fst
@@ -83,7 +85,7 @@ countAlive cType = do
 
 leqSource :: Text
 leqSource =
-  ":- module(order, []).\n\
+  ":- module(order, [leq/2]).\n\
   \:- chr_constraint leq/2.\n\
   \\n\
   \reflexivity @ leq(X, X) <=> true.\n\
@@ -175,7 +177,7 @@ leqTests =
 
 fibSource :: Text
 fibSource =
-  ":- module(fib, []).\n\
+  ":- module(fib, [fib/2]).\n\
   \:- chr_constraint fib/2.\n\
   \\n\
   \base0 @ fib(0, R) <=> R = 0.\n\
@@ -201,4 +203,90 @@ fibTests =
         prog <- compileOrFail [("fib.chr", fibSource)]
         (_, bindings) <- runQuery prog fibHostCalls "fib:fib(10, R)"
         Map.lookup "R" bindings @?= Just (IntTerm 55)
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Query visibility
+-- ---------------------------------------------------------------------------
+
+hiddenSource :: Text
+hiddenSource =
+  ":- module(secret, []).\n\
+  \:- chr_constraint hidden/1.\n\
+  \\n\
+  \hidden(X) <=> true.\n"
+
+exportedSource :: Text
+exportedSource =
+  ":- module(pub, [visible/1]).\n\
+  \:- chr_constraint visible/1.\n\
+  \:- chr_constraint internal/1.\n\
+  \\n\
+  \visible(X) <=> true.\n\
+  \internal(X) <=> true.\n"
+
+ambiguousSourceA :: Text
+ambiguousSourceA =
+  ":- module(modA, [foo/1]).\n\
+  \:- chr_constraint foo/1.\n\
+  \\n\
+  \foo(X) <=> true.\n"
+
+ambiguousSourceB :: Text
+ambiguousSourceB =
+  ":- module(modB, [foo/1]).\n\
+  \:- chr_constraint foo/1.\n\
+  \\n\
+  \foo(X) <=> true.\n"
+
+isLeft :: Either a b -> Bool
+isLeft (Left _) = True
+isLeft _ = False
+
+visibilityTests :: TestTree
+visibilityTests =
+  testGroup
+    "Query visibility"
+    [ testCase "unqualified resolves to unique exported constraint" $ do
+        cp <- compileOrFail [("pub.chr", exportedSource)]
+        let q = Constraint (Unqualified "visible") [VarTerm "X"]
+        case resolveQueryConstraint cp q of
+          Right (Constraint (Qualified "pub" "visible") _) -> pure ()
+          other -> assertFailure $ "Expected Right (Qualified pub visible), got: " ++ show other,
+      testCase "unqualified hidden constraint fails" $ do
+        cp <- compileOrFail [("secret.chr", hiddenSource)]
+        let q = Constraint (Unqualified "hidden") [VarTerm "X"]
+        assertBool "Should fail for hidden constraint" (isLeft (resolveQueryConstraint cp q)),
+      testCase "qualified exported constraint succeeds" $ do
+        cp <- compileOrFail [("pub.chr", exportedSource)]
+        let q = Constraint (Qualified "pub" "visible") [VarTerm "X"]
+        case resolveQueryConstraint cp q of
+          Right _ -> pure ()
+          Left err -> assertFailure $ "Should succeed: " ++ err,
+      testCase "qualified hidden constraint fails" $ do
+        cp <- compileOrFail [("secret.chr", hiddenSource)]
+        let q = Constraint (Qualified "secret" "hidden") [VarTerm "X"]
+        assertBool "Should fail for hidden qualified constraint" (isLeft (resolveQueryConstraint cp q)),
+      testCase "qualified non-exported internal constraint fails" $ do
+        cp <- compileOrFail [("pub.chr", exportedSource)]
+        let q = Constraint (Qualified "pub" "internal") [VarTerm "X"]
+        assertBool "Should fail for non-exported constraint" (isLeft (resolveQueryConstraint cp q)),
+      testCase "ambiguous unqualified name fails" $ do
+        cp <-
+          compileOrFail
+            [ ("a.chr", ambiguousSourceA),
+              ("b.chr", ambiguousSourceB)
+            ]
+        let q = Constraint (Unqualified "foo") [VarTerm "X"]
+        assertBool "Should fail for ambiguous constraint" (isLeft (resolveQueryConstraint cp q)),
+      testCase "ambiguous name resolved with qualification" $ do
+        cp <-
+          compileOrFail
+            [ ("a.chr", ambiguousSourceA),
+              ("b.chr", ambiguousSourceB)
+            ]
+        let q = Constraint (Qualified "modA" "foo") [VarTerm "X"]
+        case resolveQueryConstraint cp q of
+          Right _ -> pure ()
+          Left err -> assertFailure $ "Should succeed with qualification: " ++ err
     ]

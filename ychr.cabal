@@ -70,6 +70,8 @@ executable ychr
     -- Other library packages from which modules are imported.
     build-depends:    base ^>=4.21.0.0
                     , ychr
+                    , directory
+                    , filepath
                     , haskeline
                     , text
 

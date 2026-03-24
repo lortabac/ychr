@@ -1,4 +1,4 @@
-:- module(fib, []).
+:- module(fib, [fib/2]).
 :- chr_constraint fib/2.
 
 base0 @ fib(0, R) <=> R = 0.
