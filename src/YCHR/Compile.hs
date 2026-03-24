@@ -9,6 +9,7 @@
 module YCHR.Compile
   ( CompileError (..),
     compile,
+    procNameFor,
   )
 where
 

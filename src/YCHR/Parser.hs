@@ -24,6 +24,7 @@
 -- @
 module YCHR.Parser
   ( parseModule,
+    parseConstraint,
   )
 where
 
@@ -49,6 +50,16 @@ parseModule ::
   Text ->
   Either (ParseErrorBundle Text Void) Module
 parseModule = parse (sc *> moduleP <* eof)
+
+-- | Parse a single constraint from surface-language 'Text'.
+--
+-- The source name (first argument) is used in error messages only.
+-- Example: @parseConstraint "\<query\>" "leq(X, Y)"@.
+parseConstraint ::
+  String ->
+  Text ->
+  Either (ParseErrorBundle Text Void) Constraint
+parseConstraint = parse (sc *> constraintP <* eof)
 
 -- ---------------------------------------------------------------------------
 -- Space consumer and lexeme helpers
@@ -233,12 +244,19 @@ atomOrCompoundP = do
 -- Constraints (as they appear in rule heads)
 -- ---------------------------------------------------------------------------
 
--- | Parse a constraint occurrence: @name@ or @name(arg, ...)@.
+-- | Parse a constraint occurrence: @name@, @name(arg, ...)@, or
+-- @module:name(arg, ...)@.
 constraintP :: Parser Constraint
 constraintP = do
-  name <- atomP
+  name <- try qualifiedNameP <|> (Unqualified <$> atomP)
   args <- option [] (parens (termP `sepBy` comma))
-  pure (Constraint (Unqualified name) args)
+  pure (Constraint name args)
+  where
+    qualifiedNameP = do
+      m <- atomP
+      _ <- symbol ":"
+      n <- atomP
+      pure (Qualified m n)
 
 -- ---------------------------------------------------------------------------
 -- Rule head

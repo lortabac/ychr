@@ -10,13 +10,14 @@ import Effectful
 import Effectful.Writer.Static.Local (Writer, runWriter)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.EndToEnd (compileModules)
+import YCHR.EndToEnd (compileModules, runQuery)
 import YCHR.Runtime.History (PropHistory, runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallRegistry, callProc)
 import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, equal, newVar, runUnify)
+import YCHR.Types (Term (..))
 import YCHR.VM qualified as VM
 
 tests :: TestTree
@@ -198,11 +199,6 @@ fibTests =
     "Fibonacci (from surface language)"
     [ testCase "fib 10 = 55" $ do
         prog <- compileOrFail [("fib.chr", fibSource)]
-        tellName <- findTellOrFail prog
-        let procMap = buildProcMap prog
-        result <- runStack prog $ do
-          r <- newVar
-          _ <- callProc procMap fibHostCalls tellName [RVal (VInt 10), RVal r]
-          equal r (VInt 55)
-        assertBool "fib 10 should equal 55" result
+        (_, bindings) <- runQuery prog fibHostCalls "fib:fib(10, R)"
+        Map.lookup "R" bindings @?= Just (IntTerm 55)
     ]

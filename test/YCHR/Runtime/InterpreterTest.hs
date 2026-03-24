@@ -456,8 +456,16 @@ leqTests =
 arithCalls :: HostCallRegistry
 arithCalls =
   Map.fromList
-    [ ("+", \[RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (a + b)))),
-      ("*", \[RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (a * b))))
+    [ ( "+",
+        \args -> case args of
+          [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (a + b)))
+          _ -> assertFailure "unexpected args to +"
+      ),
+      ( "*",
+        \args -> case args of
+          [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (a * b)))
+          _ -> assertFailure "unexpected args to *"
+      )
     ]
 
 makeCalcProc :: Expr -> Program
