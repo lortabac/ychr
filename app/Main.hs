@@ -50,8 +50,7 @@ repl prog = loop
                 runQuery prog defaultHostCallRegistry (T.pack line)
           case outcome of
             Left err -> outputStrLn ("Error: " ++ show err)
-            Right (val, bindings) -> do
-              outputStrLn (prettyRuntimeVal val)
+            Right (_, bindings) -> do
               outputStr (prettyBindings bindings)
           loop
 
