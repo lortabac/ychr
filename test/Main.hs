@@ -4,7 +4,9 @@ import Test.Tasty (defaultMain, testGroup)
 import YCHR.DSLTest qualified
 import YCHR.DesugarTest qualified
 import YCHR.EndToEndTest qualified
+import YCHR.GoldenTest qualified
 import YCHR.ParserTest qualified
+import YCHR.PrettyTest qualified
 import YCHR.RenameTest qualified
 import YCHR.Runtime.HistoryTest qualified
 import YCHR.Runtime.InterpreterTest qualified
@@ -13,11 +15,14 @@ import YCHR.Runtime.StoreTest qualified
 import YCHR.Runtime.VarTest qualified
 
 main :: IO ()
-main =
+main = do
+  golden <- YCHR.GoldenTest.tests
   defaultMain $
     testGroup
       "ychr"
-      [ YCHR.EndToEndTest.tests,
+      [ golden,
+        YCHR.PrettyTest.tests,
+        YCHR.EndToEndTest.tests,
         YCHR.DSLTest.tests,
         YCHR.DesugarTest.tests,
         YCHR.ParserTest.tests,

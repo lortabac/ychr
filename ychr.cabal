@@ -84,7 +84,9 @@ test-suite ychr-tests
     other-modules:    YCHR.EndToEndTest
                     , YCHR.DSLTest
                     , YCHR.DesugarTest
+                    , YCHR.GoldenTest
                     , YCHR.ParserTest
+                    , YCHR.PrettyTest
                     , YCHR.RenameTest
                     , YCHR.Runtime.VarTest
                     , YCHR.Runtime.StoreTest
@@ -95,7 +97,9 @@ test-suite ychr-tests
     build-depends:    base ^>=4.21.0.0
                     , ychr
                     , containers
+                    , directory
                     , effectful-core
+                    , filepath
                     , megaparsec ^>=9.6
                     , tasty
                     , tasty-hunit
@@ -113,6 +117,7 @@ library
                     , YCHR.DSL
                     , YCHR.Parser
                     , YCHR.Parsed
+                    , YCHR.Pretty
                     , YCHR.Rename
                     , YCHR.Types
                     , YCHR.VM
