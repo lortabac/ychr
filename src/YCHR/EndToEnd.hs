@@ -9,6 +9,7 @@ module YCHR.EndToEnd
   )
 where
 
+import Control.Monad (unless)
 import Data.Bifunctor (first)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -31,7 +32,7 @@ import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId, Value (..))
 import YCHR.Runtime.Var (Unify, deref, newVar, runUnify)
 import YCHR.Types (Constraint (..), Term (..))
 import YCHR.Types qualified as T
-import YCHR.VM (Program (..), procName)
+import YCHR.VM (Name (..), Program (..), procName)
 
 data Error
   = ParseError FilePath (ParseErrorBundle Text Void)
@@ -65,6 +66,8 @@ runQueryDSL :: Program -> HostCallRegistry -> Constraint -> IO (RuntimeVal, Map 
 runQueryDSL Program {progNumTypes, progProcedures} hostCalls (Constraint name args) = do
   let procMap = Map.fromList [(procName p, p) | p <- progProcedures]
       tellName = procNameFor "tell" name
+  unless (Map.member tellName procMap) $
+    fail ("Constraint not found: " ++ unName tellName)
   runEff
     . runUnify
     . fmap fst
