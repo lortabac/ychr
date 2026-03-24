@@ -1,11 +1,13 @@
 module YCHR.EndToEnd
   ( Error (..),
     compileModules,
+    compileFiles,
   )
 where
 
 import Data.Bifunctor (first)
 import Data.Text (Text)
+import Data.Text.IO qualified as TIO
 import Data.Void (Void)
 import Text.Megaparsec (ParseErrorBundle)
 import YCHR.Compile (CompileError, compile)
@@ -28,3 +30,8 @@ compileModules inputs = do
   desugared <- first DesugarErrors (desugarProgram renamed)
   let symTab = extractSymbolTable desugared
   first CompileErrors (compile desugared symTab)
+
+compileFiles :: [FilePath] -> IO (Either Error Program)
+compileFiles paths = do
+  contents <- mapM (\fp -> (fp,) <$> TIO.readFile fp) paths
+  pure (compileModules contents)
