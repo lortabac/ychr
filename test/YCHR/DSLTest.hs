@@ -48,24 +48,27 @@ moduleTests =
   testGroup
     "module"
     [ testCase "module' produces empty module" $
-        module' "Foo" @?= Module "Foo" [] [] [],
+        module' "Foo" @?= Module "Foo" [] [] [] Nothing,
       testCase "importing sets modImports" $
         module' "Foo" `importing` ["Bar", "Baz"]
-          @?= Module "Foo" ["Bar", "Baz"] [] [],
+          @?= Module "Foo" ["Bar", "Baz"] [] [] Nothing,
       testCase "declaring sets modDecls" $
         module' "Foo" `declaring` ["leq" // 2]
-          @?= Module "Foo" [] [ConstraintDecl "leq" 2] [],
+          @?= Module "Foo" [] [ConstraintDecl "leq" 2] [] Nothing,
       testCase "defining sets modRules" $
         let r = [con "leq" [var "X"]] <=> [atom "true"]
          in module' "Foo" `defining` [r]
-              @?= Module "Foo" [] [] [r],
+              @?= Module "Foo" [] [] [r] Nothing,
       testCase "chaining importing, declaring, defining" $
         let r = [con "c" []] <=> [atom "true"]
          in module' "M"
               `importing` ["A"]
               `declaring` ["c" // 0]
               `defining` [r]
-              @?= Module "M" ["A"] [ConstraintDecl "c" 0] [r]
+              @?= Module "M" ["A"] [ConstraintDecl "c" 0] [r] Nothing,
+      testCase "exporting sets modExports" $
+        module' "Foo" `exporting` ["leq" // 2]
+          @?= Module "Foo" [] [] [] (Just [ConstraintDecl "leq" 2])
     ]
 
 declarationTests :: TestTree
@@ -160,7 +163,8 @@ integrationTests =
                 (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]])
                 []
                 [AtomTerm "true"]
-            ],
+            ]
+            Nothing,
       testCase "logicModule structure" $
         logicModule
           @?= Module
@@ -177,4 +181,5 @@ integrationTests =
                 []
                 [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]]
             ]
+            Nothing
     ]

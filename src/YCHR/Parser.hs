@@ -9,9 +9,7 @@
 -- @
 -- % Line comments
 --
--- :- module(order, []).      -- Export list is parsed but ignored.
---                            -- Exports are not yet implemented;
---                            -- all constraints are implicitly public.
+-- :- module(order, [leq\/2]). -- Export list specifies visible constraints.
 -- :- use_module(stdlib).
 --
 -- :- chr_constraint leq\/2.
@@ -315,7 +313,7 @@ ruleP = do
 -- ---------------------------------------------------------------------------
 
 data Directive
-  = DirModule String
+  = DirModule String [Declaration]
   | DirImport String
   | DirConstraintDecl [Declaration]
   | DirOther
@@ -327,9 +325,9 @@ directiveP = do
   keyword <- atomP
   case keyword of
     "module" -> do
-      name <- parens moduleArgsP
+      (name, exports) <- parens moduleArgsP
       _ <- symbol "."
-      pure (DirModule name)
+      pure (DirModule name exports)
     "use_module" -> do
       name <- parens atomP
       _ <- symbol "."
@@ -345,14 +343,13 @@ directiveP = do
       pure DirOther
 
 -- | Parse the arguments of a @module@ directive.
--- The export list (second argument) is parsed and discarded; exports are not
--- yet implemented and all constraints are implicitly public.
-moduleArgsP :: Parser String
+-- Returns the module name and its export list.
+moduleArgsP :: Parser (String, [Declaration])
 moduleArgsP = do
   name <- atomP
   _ <- comma
-  _ <- brackets (many (satisfy (/= ']')))
-  pure name
+  exports <- brackets (constraintDeclP `sepBy` comma)
+  pure (name, exports)
 
 -- | Parse a single constraint declaration: @name\/arity@.
 constraintDeclP :: Parser Declaration
@@ -372,9 +369,9 @@ moduleP = do
   items <- many (choice [Left <$> try directiveP, Right <$> ruleP])
   let dirs = [d | Left d <- items]
       rules = [r | Right r <- items]
-      modName_ = case [n | DirModule n <- dirs] of
-        (n : _) -> n
-        [] -> ""
+      (modName_, modExports_) = case [(n, e) | DirModule n e <- dirs] of
+        ((n, e) : _) -> (n, Just e)
+        [] -> ("", Nothing)
       modImports_ = [n | DirImport n <- dirs]
       modDecls_ = concat [ds | DirConstraintDecl ds <- dirs]
-  pure (Module modName_ modImports_ modDecls_ rules)
+  pure (Module modName_ modImports_ modDecls_ rules modExports_)

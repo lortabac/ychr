@@ -9,7 +9,11 @@ import YCHR.Types
 
 -- | Create a new module definition
 module' :: String -> Module
-module' name = Module name [] [] []
+module' name = Module name [] [] [] Nothing
+
+-- | Set the export list of a module
+exporting :: Module -> [Declaration] -> Module
+exporting m decls = m {modExports = Just decls}
 
 -- | Add imports to a module
 importing :: Module -> [String] -> Module

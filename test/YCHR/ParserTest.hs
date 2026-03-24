@@ -42,6 +42,11 @@ directiveTests =
         modName <$> p ":- module(order, [])." @?= Right "order",
       testCase "module name with export list" $
         modName <$> p ":- module(order, [leq/2, foo/1])." @?= Right "order",
+      testCase "empty export list" $
+        modExports <$> p ":- module(order, [])." @?= Right (Just []),
+      testCase "export list parsed correctly" $
+        modExports <$> p ":- module(order, [leq/2, foo/1])."
+          @?= Right (Just [ConstraintDecl "leq" 2, ConstraintDecl "foo" 1]),
       testCase "use_module" $
         modImports <$> p ":- use_module(stdlib)." @?= Right ["stdlib"],
       testCase "multiple use_module" $
@@ -314,6 +319,7 @@ moduleTests =
                     []
                     [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]]
                 ]
+                (Just [])
             ),
       testCase "no module directive gives empty name" $
         modName <$> p ":- chr_constraint foo/1.\nfoo(X) <=> true."

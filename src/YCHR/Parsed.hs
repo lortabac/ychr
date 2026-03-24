@@ -36,7 +36,8 @@ data Module = Module
   { modName :: String,
     modImports :: [String],
     modDecls :: [Declaration],
-    modRules :: [Rule]
+    modRules :: [Rule],
+    modExports :: Maybe [Declaration]
   }
   deriving (Show, Eq)
 

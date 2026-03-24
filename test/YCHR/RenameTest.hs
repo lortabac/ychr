@@ -19,7 +19,8 @@ tests =
       goalClassificationTests,
       headTypeTests,
       multiModuleTests,
-      reservedSymbolTests
+      reservedSymbolTests,
+      exportTests
     ]
 
 -- | Rename a single-module program and return the single renamed rule.
@@ -353,7 +354,7 @@ multiModuleTests =
         renameProgram [] @?= Right [],
       testCase "module with no rules" $
         let m = module' "M" `declaring` ["leq" // 2]
-         in renameProgram [m] @?= Right [Module "M" [] [ConstraintDecl "leq" 2] []],
+         in renameProgram [m] @?= Right [Module "M" [] [ConstraintDecl "leq" 2] [] Nothing],
       testCase "rule name preserved" $ do
         let m =
               module' "M"
@@ -403,4 +404,83 @@ reservedSymbolTests =
         rule <- singleRule m
         ruleBody rule
           @?= [CompoundTerm (Unqualified "$") [CompoundTerm (Unqualified "print") [VarTerm "X"]]]
+    ]
+
+--------------------------------------------------------------------------------
+-- exports: export list controls visibility to importers
+--------------------------------------------------------------------------------
+
+exportTests :: TestTree
+exportTests =
+  testGroup
+    "exports"
+    [ testCase "exported constraint is visible to importer" $ do
+        -- A exports leq/2; B imports A and uses leq in head
+        let modA =
+              module' "A"
+                `declaring` ["leq" // 2]
+                `exporting` ["leq" // 2]
+            modB =
+              module' "B"
+                `importing` ["A"]
+                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+        (_, renamedB) <- case renameProgram [modA, modB] of
+          Right [a, b] -> return (a, b)
+          Right mods -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Left errs -> assertFailure $ "unexpected errors: " ++ show errs
+        rule <- case modRules renamedB of
+          [r] -> return r
+          rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
+        ruleHead rule
+          @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
+      testCase "non-exported constraint is hidden from importer" $ do
+        -- A declares leq/2 and gt/2 but only exports leq/2; B can't see gt/2
+        let modA =
+              module' "A"
+                `declaring` ["leq" // 2, "gt" // 2]
+                `exporting` ["leq" // 2]
+            modB =
+              module' "B"
+                `importing` ["A"]
+                `defining` [[con "gt" [var "X", var "Y"]] <=> [atom "true"]]
+        renameProgram [modA, modB]
+          @?= Left [UnknownName "gt" 2],
+      testCase "empty export list hides all constraints from importer" $ do
+        -- A exports nothing; B cannot see leq/2
+        let modA =
+              module' "A"
+                `declaring` ["leq" // 2]
+                `exporting` []
+            modB =
+              module' "B"
+                `importing` ["A"]
+                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+        renameProgram [modA, modB]
+          @?= Left [UnknownName "leq" 2],
+      testCase "export restriction does not affect own-module use" $ do
+        -- A exports only leq/2, but still uses gt/2 in its own rules
+        let modA =
+              module' "A"
+                `declaring` ["leq" // 2, "gt" // 2]
+                `exporting` ["leq" // 2]
+                `defining` [[con "gt" [var "X", var "Y"]] <=> [atom "true"]]
+        rule <- singleRule modA
+        ruleHead rule
+          @?= Simplification [Constraint (Qualified "A" "gt") [VarTerm "X", VarTerm "Y"]],
+      testCase "no module directive exports all constraints" $ do
+        -- A has modExports = Nothing (no directive); B can see all of A's constraints
+        let modA = module' "A" `declaring` ["leq" // 2]
+            modB =
+              module' "B"
+                `importing` ["A"]
+                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+        (_, renamedB) <- case renameProgram [modA, modB] of
+          Right [a, b] -> return (a, b)
+          Right mods -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Left errs -> assertFailure $ "unexpected errors: " ++ show errs
+        rule <- case modRules renamedB of
+          [r] -> return r
+          rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
+        ruleHead rule
+          @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]]
     ]
