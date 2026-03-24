@@ -305,6 +305,7 @@ The paper describes numerous optimizations. Each should be considered individual
 
 ## Already implemented
 
+- Frontend parser in `src/YCHR/Parser.hs`.
 - Surface AST types in `src/YCHR/Parsed.hs`.
 - Desugared AST types in `src/YCHR/Desugared.hs`.
 - Renaming (qualifying constraint names) in `src/YCHR/Rename.hs`.
@@ -323,7 +324,6 @@ The paper describes numerous optimizations. Each should be considered individual
 
 The following components have not yet been implemented:
 
-- **Frontend parser**: Parse standard CHR with Prolog-compatible syntax into a close-to-surface representation of handlers, constraints, and rules.
 - **Optimizations**: Implement the optimizations listed above, at the appropriate stage.
 - **JavaScript backend**: Translate VM programs to JavaScript code.
 - **JavaScript runtime**: Implement logical variables, compound terms, constraint store, propagation history, reactivation queue, and iterators in JavaScript.

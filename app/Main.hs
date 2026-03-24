@@ -18,7 +18,7 @@ main = do
   paths <- getArgs
   case paths of
     [] -> do
-      putStrLn "Usage: ychri <file.chr> [<file.chr> ...]"
+      putStrLn "Usage: ychr <file.chr> [<file.chr> ...]"
       exitFailure
     _ -> do
       result <- compileFiles paths

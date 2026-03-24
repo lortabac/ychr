@@ -54,7 +54,7 @@ extra-doc-files:    CHANGELOG.md
 common warnings
     ghc-options: -Wall
 
-executable ychri
+executable ychr
     -- Import common warning flags.
     import:           warnings
 
