@@ -50,6 +50,7 @@ import Effectful.Writer.Static.Local (Writer, listen, runWriter)
 import Text.Megaparsec (ParseErrorBundle)
 import YCHR.Compile (CompileError, compile, procNameFor)
 import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable)
+import YCHR.Meta (valueToTerm)
 import YCHR.Parser (parseConstraint, parseModule, parseQuery)
 import YCHR.Rename (RenameError, buildExportEnv, renameProgram)
 import YCHR.Runtime.History (PropHistory, runPropHistory)
@@ -273,18 +274,6 @@ termToValue Wildcard = pure VWildcard
 termToValue (CompoundTerm (T.Unqualified f) ts) = VTerm f <$> traverse termToValue ts
 termToValue (CompoundTerm (T.Qualified m f) ts) = VTerm (m ++ ":" ++ f) <$> traverse termToValue ts
 
-valueToTerm :: (Unify :> es) => String -> Value -> Eff es Term
-valueToTerm varName v = do
-  v' <- deref v
-  case v' of
-    VInt n -> pure (IntTerm n)
-    VAtom s -> pure (AtomTerm s)
-    VBool True -> pure (AtomTerm "true")
-    VBool False -> pure (AtomTerm "false")
-    VWildcard -> pure Wildcard
-    VTerm f ts -> CompoundTerm (T.Unqualified f) <$> traverse (valueToTerm "_") ts
-    VVar _ -> pure (VarTerm varName)
-
 -- ---------------------------------------------------------------------------
 -- Multi-goal query API
 -- ---------------------------------------------------------------------------
@@ -327,6 +316,10 @@ interpretGoal hc (CompoundTerm (T.Unqualified ":=") [VarTerm v, CompoundTerm (T.
   case result of
     RVal val -> modify (Map.insert v val)
     _ -> error $ ":= host call returned non-value"
+interpretGoal hc (CompoundTerm (T.Unqualified ":=") [T.Wildcard, CompoundTerm (T.Unqualified f) args]) = do
+  argVals <- traverse termToValue args
+  _ <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
+  pure ()
 interpretGoal hc (CompoundTerm (T.Unqualified "$") [CompoundTerm (T.Unqualified f) args]) = do
   argVals <- traverse termToValue args
   _ <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))

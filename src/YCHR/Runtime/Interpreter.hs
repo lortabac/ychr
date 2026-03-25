@@ -10,7 +10,7 @@ module YCHR.Runtime.Interpreter
   ( -- * Public API
     interpret,
     HostCallRegistry,
-    defaultHostCallRegistry,
+    baseHostCallRegistry,
 
     -- * Internal (for testing)
     callProc,
@@ -18,7 +18,6 @@ module YCHR.Runtime.Interpreter
 where
 
 import Data.Foldable (toList, traverse_)
-import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Effectful
@@ -72,9 +71,9 @@ instance Show ControlFlow where
   show (CFContinue l) = "CFContinue " ++ unLabel l
   show (CFBreak l) = "CFBreak " ++ unLabel l
 
--- | A default host call registry providing arithmetic, comparison, and IO operations.
-defaultHostCallRegistry :: HostCallRegistry
-defaultHostCallRegistry =
+-- | A base host call registry providing arithmetic and comparison operations.
+baseHostCallRegistry :: HostCallRegistry
+baseHostCallRegistry =
   Map.fromList
     [ (Name "+", arith2 (+)),
       (Name "-", arith2 (-)),
@@ -85,12 +84,7 @@ defaultHostCallRegistry =
       (Name ">", cmp (>)),
       (Name "=<", cmp (<=)),
       (Name ">=", cmp (>=)),
-      (Name "==", valEq),
-      ( Name "print",
-        \args -> do
-          mapM_ (putStrLn . showVal) args
-          pure (RVal (VBool True))
-      )
+      (Name "==", valEq)
     ]
   where
     arith2 op [RVal (VInt a), RVal (VInt b)] = pure (RVal (VInt (op a b)))
@@ -102,13 +96,6 @@ defaultHostCallRegistry =
     valEq [RVal (VBool a), RVal (VBool b)] = pure (RVal (VBool (a == b)))
     valEq [_, _] = pure (RVal (VBool False))
     valEq args = error $ "== host call: expected 2 arguments, got " ++ show (length args)
-    showVal (RVal (VInt n)) = show n
-    showVal (RVal (VAtom s)) = s
-    showVal (RVal (VBool b)) = show b
-    showVal (RVal (VTerm f xs)) = f ++ "(" ++ intercalate ", " (map (showVal . RVal) xs) ++ ")"
-    showVal (RVal VWildcard) = "_"
-    showVal (RVal (VVar _)) = "<var>"
-    showVal (RConstraint (SuspensionId n)) = "<constraint:" ++ show n ++ ">"
 
 -- ---------------------------------------------------------------------------
 -- Public API

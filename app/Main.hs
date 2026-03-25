@@ -10,7 +10,8 @@ import System.Exit (exitFailure)
 import System.FilePath (takeDirectory)
 import YCHR.EndToEnd (CompiledProgram, compileFiles, compileModules, runProgramWithQuery)
 import YCHR.Pretty (prettyQueryResult)
-import YCHR.Runtime.Interpreter (defaultHostCallRegistry)
+import YCHR.Meta (metaHostCallRegistry)
+import YCHR.Runtime.Interpreter (baseHostCallRegistry)
 
 main :: IO ()
 main = do
@@ -42,7 +43,7 @@ repl prog = loop
           outcome <-
             liftIO $
               try @IOException $
-                runProgramWithQuery prog defaultHostCallRegistry (T.pack line)
+                runProgramWithQuery prog (baseHostCallRegistry <> metaHostCallRegistry) (T.pack line)
           case outcome of
             Left err -> outputStrLn ("Error: " ++ show err)
             Right bindings -> do

@@ -119,6 +119,7 @@ library
 
     exposed-modules:  YCHR.Compile
                     , YCHR.EndToEnd
+                    , YCHR.Meta
                     , YCHR.Desugared
                     , YCHR.Desugar
                     , YCHR.DSL
