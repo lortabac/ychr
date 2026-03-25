@@ -6,17 +6,13 @@ module YCHR.EndToEndTest (tests) where
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
-import Effectful
-import Effectful.Writer.Static.Local (Writer, runWriter)
+import Effectful (Eff, (:>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.EndToEnd (CompiledProgram (..), compileModules, resolveQueryConstraint, runQuery)
-import YCHR.Runtime.History (PropHistory, runPropHistory)
-import YCHR.Runtime.Interpreter (HostCallRegistry, callProc)
-import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
-import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive, runCHRStore)
-import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (Unify, equal, newVar, runUnify)
+import YCHR.EndToEnd (CompiledProgram (..), Value (..), compileModules, equal, newVar, resolveQueryConstraint, runProgramWithGoal, tellConstraint, withCHR)
+import YCHR.Runtime.Interpreter (HostCallRegistry)
+import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive)
+import YCHR.Runtime.Types (RuntimeVal (..))
 import YCHR.Types (Constraint (..), Name (..), Term (..))
 import YCHR.VM qualified as VM
 
@@ -37,41 +33,6 @@ compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
 compileOrFail inputs = case compileModules inputs of
   Left err -> assertFailure $ show err
   Right cp -> pure cp
-
-isPrefixOfName :: String -> VM.Name -> Bool
-isPrefixOfName prefix (VM.Name n) = take (length prefix) n == prefix
-
-findTellOrFail :: CompiledProgram -> IO VM.Name
-findTellOrFail cp =
-  let prog = cpProgram cp
-   in case [VM.procName p | p <- VM.progProcedures prog, "tell_" `isPrefixOfName` VM.procName p] of
-        (n : _) -> pure n
-        [] -> assertFailure "No tell procedure found"
-
-buildProcMap :: CompiledProgram -> Map.Map VM.Name VM.Procedure
-buildProcMap cp = Map.fromList [(VM.procName p, p) | p <- VM.progProcedures (cpProgram cp)]
-
-runStack ::
-  CompiledProgram ->
-  Eff
-    [ Writer [SuspensionId],
-      ReactQueue,
-      PropHistory,
-      CHRStore,
-      Unify,
-      IOE
-    ]
-    a ->
-  IO a
-runStack cp m =
-  runEff
-    . runUnify
-    . runCHRStore (VM.progNumTypes (cpProgram cp))
-    . runPropHistory
-    . runReactQueue
-    . fmap fst
-    . runWriter @[SuspensionId]
-    $ m
 
 countAlive :: (CHRStore :> es) => VM.ConstraintType -> Eff es Int
 countAlive cType = do
@@ -105,29 +66,23 @@ leqTests =
     "LEQ handler (from surface language)"
     [ testCase "reflexivity: leq(3, 3) fires, store empty" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
-        tellName <- findTellOrFail prog
-        let procMap = buildProcMap prog
-        n <- runStack prog $ do
-          _ <- callProc procMap leqHostCalls tellName [RVal (VInt 3), RVal (VInt 3)]
+        n <- withCHR prog leqHostCalls $ do
+          tellConstraint (Unqualified "leq") [VInt 3, VInt 3]
           countAlive leqType
         n @?= 0,
       testCase "no rule fires: leq(1, 2) stays" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
-        tellName <- findTellOrFail prog
-        let procMap = buildProcMap prog
-        n <- runStack prog $ do
-          _ <- callProc procMap leqHostCalls tellName [RVal (VInt 1), RVal (VInt 2)]
+        n <- withCHR prog leqHostCalls $ do
+          tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           countAlive leqType
         n @?= 1,
       testCase "antisymmetry: leq(X, Y), leq(Y, X) unifies X=Y, store empty" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
-        tellName <- findTellOrFail prog
-        let procMap = buildProcMap prog
-        (n, areEqual) <- runStack prog $ do
+        (n, areEqual) <- withCHR prog leqHostCalls $ do
           x <- newVar
           y <- newVar
-          _ <- callProc procMap leqHostCalls tellName [RVal x, RVal y]
-          _ <- callProc procMap leqHostCalls tellName [RVal y, RVal x]
+          tellConstraint (Unqualified "leq") [x, y]
+          tellConstraint (Unqualified "leq") [y, x]
           n <- countAlive leqType
           eq <- equal x y
           pure (n, eq)
@@ -135,33 +90,27 @@ leqTests =
         assertBool "X and Y should be unified" areEqual,
       testCase "transitivity: leq(1,2), leq(2,3) produces leq(1,3)" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
-        tellName <- findTellOrFail prog
-        let procMap = buildProcMap prog
-        n <- runStack prog $ do
-          _ <- callProc procMap leqHostCalls tellName [RVal (VInt 1), RVal (VInt 2)]
-          _ <- callProc procMap leqHostCalls tellName [RVal (VInt 2), RVal (VInt 3)]
+        n <- withCHR prog leqHostCalls $ do
+          tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
+          tellConstraint (Unqualified "leq") [VInt 2, VInt 3]
           countAlive leqType
         n @?= 3,
       testCase "idempotence: leq(1,2), leq(1,2) removes duplicate" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
-        tellName <- findTellOrFail prog
-        let procMap = buildProcMap prog
-        n <- runStack prog $ do
-          _ <- callProc procMap leqHostCalls tellName [RVal (VInt 1), RVal (VInt 2)]
-          _ <- callProc procMap leqHostCalls tellName [RVal (VInt 1), RVal (VInt 2)]
+        n <- withCHR prog leqHostCalls $ do
+          tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
+          tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           countAlive leqType
         n @?= 1,
       testCase "full cycle: leq(a,b), leq(b,c), leq(c,a) — all removed, all unified" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
-        tellName <- findTellOrFail prog
-        let procMap = buildProcMap prog
-        (n, eqAB, eqBC) <- runStack prog $ do
+        (n, eqAB, eqBC) <- withCHR prog leqHostCalls $ do
           a <- newVar
           b <- newVar
           c <- newVar
-          _ <- callProc procMap leqHostCalls tellName [RVal a, RVal b]
-          _ <- callProc procMap leqHostCalls tellName [RVal b, RVal c]
-          _ <- callProc procMap leqHostCalls tellName [RVal c, RVal a]
+          tellConstraint (Unqualified "leq") [a, b]
+          tellConstraint (Unqualified "leq") [b, c]
+          tellConstraint (Unqualified "leq") [c, a]
           n <- countAlive leqType
           eqAB <- equal a b
           eqBC <- equal b c
@@ -201,7 +150,7 @@ fibTests =
     "Fibonacci (from surface language)"
     [ testCase "fib 10 = 55" $ do
         prog <- compileOrFail [("fib.chr", fibSource)]
-        (_, bindings) <- runQuery prog fibHostCalls "fib:fib(10, R)"
+        (_, bindings) <- runProgramWithGoal prog fibHostCalls "fib:fib(10, R)"
         Map.lookup "R" bindings @?= Just (IntTerm 55)
     ]
 

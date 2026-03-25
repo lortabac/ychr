@@ -1,14 +1,32 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module YCHR.EndToEnd
-  ( Error (..),
+  ( -- * Compilation
+    Error (..),
     CompiledProgram (..),
     ExportResolution (..),
     compileModules,
     compileFiles,
+
+    -- * CHR effect
+    CHR,
+    CHREffects,
+    runCHR,
+    withCHR,
+    tellConstraint,
+
+    -- * Re-exports for embedding
+    Value (..),
+    newVar,
+    deref,
+    equal,
+    unify,
+
+    -- * Single-goal API
     resolveQueryConstraint,
-    runQueryDSL,
-    runQuery,
+    runProgramWithGoalDSL,
+    runProgramWithGoal,
   )
 where
 
@@ -23,22 +41,23 @@ import Data.Text (Text)
 import Data.Text.IO qualified as TIO
 import Data.Void (Void)
 import Effectful
+import Effectful.Dispatch.Static
 import Effectful.State.Static.Local (State, evalState, get, modify)
-import Effectful.Writer.Static.Local (runWriter)
+import Effectful.Writer.Static.Local (Writer, runWriter)
 import Text.Megaparsec (ParseErrorBundle)
 import YCHR.Compile (CompileError, compile, procNameFor)
 import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable)
 import YCHR.Parser (parseConstraint, parseModule)
 import YCHR.Rename (RenameError, buildExportEnv, renameProgram)
-import YCHR.Runtime.History (runPropHistory)
+import YCHR.Runtime.History (PropHistory, runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallRegistry, callProc)
-import YCHR.Runtime.Reactivation (runReactQueue)
-import YCHR.Runtime.Store (runCHRStore)
+import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
+import YCHR.Runtime.Store (CHRStore, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId, Value (..))
-import YCHR.Runtime.Var (Unify, deref, newVar, runUnify)
+import YCHR.Runtime.Var (Unify, deref, equal, newVar, runUnify, unify)
 import YCHR.Types (Constraint (..), Term (..))
 import YCHR.Types qualified as T
-import YCHR.VM (Name (..), Program (..), procName)
+import YCHR.VM (Name (..), Procedure, Program (..), procName)
 
 data Error
   = ParseError FilePath (ParseErrorBundle Text Void)
@@ -85,6 +104,101 @@ compileFiles paths = do
   contents <- mapM (\fp -> (fp,) <$> TIO.readFile fp) paths
   pure (compileModules contents)
 
+-- ---------------------------------------------------------------------------
+-- CHR effect
+-- ---------------------------------------------------------------------------
+
+type ProcMap = Map Name Procedure
+
+-- | The CHR effect holds the program context needed to execute constraints.
+data CHR :: Effect
+
+type instance DispatchOf CHR = Static WithSideEffects
+
+data instance StaticRep CHR
+  = CHRRep ProcMap HostCallRegistry (Map (String, Int) ExportResolution) (Set T.Name)
+
+-- | Shorthand for the full set of effects available inside a CHR session.
+type CHREffects es =
+  ( CHR :> es,
+    Unify :> es,
+    CHRStore :> es,
+    PropHistory :> es,
+    ReactQueue :> es,
+    Writer [SuspensionId] :> es,
+    IOE :> es
+  )
+
+-- | Set up a CHR session for a compiled program. All runtime state (constraint
+-- store, propagation history, reactivation queue, unification variables) is
+-- initialised and persists for the duration of the computation.
+runCHR ::
+  (IOE :> es) =>
+  CompiledProgram ->
+  HostCallRegistry ->
+  Eff (CHR : Writer [SuspensionId] : ReactQueue : PropHistory : CHRStore : Unify : es) a ->
+  Eff es a
+runCHR cp hc =
+  runUnify
+    . runCHRStore (progNumTypes (cpProgram cp))
+    . runPropHistory
+    . runReactQueue
+    . fmap fst
+    . runWriter @[SuspensionId]
+    . evalStaticRep (CHRRep procMap hc (cpExportMap cp) (cpExportedSet cp))
+  where
+    procMap = Map.fromList [(procName p, p) | p <- progProcedures (cpProgram cp)]
+
+-- | Convenience wrapper that runs a CHR session in 'IO'.
+withCHR ::
+  CompiledProgram ->
+  HostCallRegistry ->
+  (forall es. (CHREffects es) => Eff es a) ->
+  IO a
+withCHR cp hc action = runEff (runCHR cp hc action)
+
+-- | Add a constraint to the store. The constraint name can be unqualified
+-- (resolved via the export map) or fully qualified.
+tellConstraint :: (CHREffects es) => T.Name -> [Value] -> Eff es ()
+tellConstraint name args = do
+  CHRRep procMap hc exportMap exportedSet <- getStaticRep
+  let arity = length args
+  resolved <- case resolveQueryConstraint' exportMap exportedSet name arity of
+    Left err -> error err
+    Right qname -> pure qname
+  let tellName = procNameFor "tell" resolved
+  unless (Map.member tellName procMap) $
+    error ("Constraint not found: " ++ unName tellName)
+  _ <- callProc procMap hc tellName (map RVal args)
+  pure ()
+
+-- | Name resolution extracted from 'resolveQueryConstraint' to work with
+-- just a name and arity.
+resolveQueryConstraint' ::
+  Map (String, Int) ExportResolution -> Set T.Name -> T.Name -> Int -> Either String T.Name
+resolveQueryConstraint' exportMap exportedSet name arity = case name of
+  T.Unqualified n ->
+    case Map.lookup (n, arity) exportMap of
+      Just (UniqueExport qname) -> Right qname
+      Just (AmbiguousExport ms) ->
+        Left
+          ( "Ambiguous constraint: "
+              ++ n
+              ++ "/"
+              ++ show arity
+              ++ ", exported by: "
+              ++ intercalate ", " ms
+          )
+      Nothing -> Left ("Unknown constraint: " ++ n ++ "/" ++ show arity)
+  T.Qualified m n ->
+    if Set.member (T.Qualified m n) exportedSet
+      then Right name
+      else Left ("Constraint not exported: " ++ m ++ ":" ++ n)
+
+-- ---------------------------------------------------------------------------
+-- Single-goal API
+-- ---------------------------------------------------------------------------
+
 -- | Resolve a query constraint against the export map.
 resolveQueryConstraint :: CompiledProgram -> Constraint -> Either String Constraint
 resolveQueryConstraint cp (Constraint name args) = case name of
@@ -109,8 +223,8 @@ resolveQueryConstraint cp (Constraint name args) = case name of
       else Left ("Constraint not exported: " ++ m ++ ":" ++ n)
 
 -- | Run a single CHR constraint against a compiled program.
-runQueryDSL :: CompiledProgram -> HostCallRegistry -> Constraint -> IO (RuntimeVal, Map String Term)
-runQueryDSL cp hostCalls constraint = do
+runProgramWithGoalDSL :: CompiledProgram -> HostCallRegistry -> Constraint -> IO (RuntimeVal, Map String Term)
+runProgramWithGoalDSL cp hostCalls constraint = do
   resolved <- case resolveQueryConstraint cp constraint of
     Left err -> fail err
     Right c -> pure c
@@ -134,12 +248,12 @@ runQueryDSL cp hostCalls constraint = do
       bindings <- Map.traverseWithKey valueToTerm varMap
       pure (result, bindings)
 
--- | Like 'runQueryDSL' but accepts a query as surface-language 'Text'.
-runQuery :: CompiledProgram -> HostCallRegistry -> Text -> IO (RuntimeVal, Map String Term)
-runQuery cp hostCalls src =
+-- | Like 'runProgramWithGoalDSL' but accepts a query as surface-language 'Text'.
+runProgramWithGoal :: CompiledProgram -> HostCallRegistry -> Text -> IO (RuntimeVal, Map String Term)
+runProgramWithGoal cp hostCalls src =
   case parseConstraint "<query>" src of
     Left err -> fail (show err)
-    Right c -> runQueryDSL cp hostCalls c
+    Right c -> runProgramWithGoalDSL cp hostCalls c
 
 termToValue :: (Unify :> es, State (Map String Value) :> es) => Term -> Eff es Value
 termToValue (VarTerm n) = do

@@ -9,7 +9,7 @@ import System.Directory (listDirectory)
 import System.FilePath (dropExtension, takeExtension, (<.>), (</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
-import YCHR.EndToEnd (compileFiles, runQuery)
+import YCHR.EndToEnd (compileFiles, runProgramWithGoal)
 import YCHR.Pretty (prettyBindings)
 import YCHR.Runtime.Interpreter (defaultHostCallRegistry)
 
@@ -31,5 +31,5 @@ makeGoldenTest base name = pure $ testCase name $ do
       >>= either (assertFailure . show) pure
   query <- TIO.readFile (base </> "queries" </> name <.> "txt")
   expected <- readFile (base </> "expected" </> name <.> "txt")
-  (_, bindings) <- runQuery prog defaultHostCallRegistry (T.strip query)
+  (_, bindings) <- runProgramWithGoal prog defaultHostCallRegistry (T.strip query)
   prettyBindings bindings @?= expected

@@ -9,7 +9,7 @@ import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDire
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath (takeDirectory)
-import YCHR.EndToEnd (CompiledProgram, compileFiles, runQuery)
+import YCHR.EndToEnd (CompiledProgram, compileFiles, runProgramWithGoal)
 import YCHR.Pretty (prettyBindings)
 import YCHR.Runtime.Interpreter (defaultHostCallRegistry)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
@@ -47,7 +47,7 @@ repl prog = loop
           outcome <-
             liftIO $
               try @IOException $
-                runQuery prog defaultHostCallRegistry (T.pack line)
+                runProgramWithGoal prog defaultHostCallRegistry (T.pack line)
           case outcome of
             Left err -> outputStrLn ("Error: " ++ show err)
             Right (_, bindings) -> do
