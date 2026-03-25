@@ -320,7 +320,7 @@ interpretGoal hc (CompoundTerm (T.Unqualified ":=") [T.Wildcard, CompoundTerm (T
   argVals <- traverse termToValue args
   _ <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
   pure ()
-interpretGoal hc (CompoundTerm (T.Unqualified "$") [CompoundTerm (T.Unqualified f) args]) = do
+interpretGoal hc (CompoundTerm (T.Unqualified "host") [CompoundTerm (T.Unqualified f) args]) = do
   argVals <- traverse termToValue args
   _ <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
   pure ()

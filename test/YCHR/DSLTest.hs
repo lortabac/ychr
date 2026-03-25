@@ -136,9 +136,9 @@ termTests =
       testCase "(.:=.) produces assignment term" $
         var "X" .:=. func "get_val" []
           @?= CompoundTerm (Unqualified ":=") [VarTerm "X", CompoundTerm (Unqualified "get_val") []],
-      testCase "hostStmt produces $ wrapper" $
+      testCase "hostStmt produces host wrapper" $
         hostStmt "print" [var "X"]
-          @?= CompoundTerm (Unqualified "$") [CompoundTerm (Unqualified "print") [VarTerm "X"]],
+          @?= CompoundTerm (Unqualified "host") [CompoundTerm (Unqualified "print") [VarTerm "X"]],
       testCase "wildcard produces Wildcard" $
         wildcard @?= Wildcard,
       testCase "`is` produces is term" $

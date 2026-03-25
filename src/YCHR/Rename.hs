@@ -60,7 +60,7 @@ buildExportEnv mods =
     ]
 
 reservedSymbols :: Set.Set String
-reservedSymbols = Set.fromList ["true", "fail", "=", "==", ":=", "$", "is"]
+reservedSymbols = Set.fromList ["true", "fail", "=", "==", ":=", "host", "is"]
 
 renameProgram :: [Module] -> Either [RenameError] [Module]
 renameProgram mods =

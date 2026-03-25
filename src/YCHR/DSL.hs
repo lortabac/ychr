@@ -108,7 +108,7 @@ infixr 3 `is`
 
 -- | Host statement: @hostStmt "print" [var "X"]@
 hostStmt :: String -> [Term] -> Term
-hostStmt f args = CompoundTerm (Unqualified "$") [CompoundTerm (Unqualified f) args]
+hostStmt f args = CompoundTerm (Unqualified "host") [CompoundTerm (Unqualified f) args]
 
 {-
 

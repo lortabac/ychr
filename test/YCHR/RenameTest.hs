@@ -169,7 +169,7 @@ unknownTests =
                 `defining` [[con "c" []] <=> [hostStmt "some_host_func" [var "X"]]]
         rule <- singleRule m
         ruleBody rule
-          @?= [CompoundTerm (Unqualified "$") [CompoundTerm (Unqualified "some_host_func") [VarTerm "X"]]]
+          @?= [CompoundTerm (Unqualified "host") [CompoundTerm (Unqualified "some_host_func") [VarTerm "X"]]]
     ]
 
 --------------------------------------------------------------------------------
@@ -403,7 +403,7 @@ reservedSymbolTests =
                 `defining` [[con "c" []] <=> [hostStmt "print" [var "X"]]]
         rule <- singleRule m
         ruleBody rule
-          @?= [CompoundTerm (Unqualified "$") [CompoundTerm (Unqualified "print") [VarTerm "X"]]]
+          @?= [CompoundTerm (Unqualified "host") [CompoundTerm (Unqualified "print") [VarTerm "X"]]]
     ]
 
 --------------------------------------------------------------------------------
