@@ -27,10 +27,13 @@ module YCHR.EndToEnd
     resolveQueryConstraint,
     runProgramWithGoalDSL,
     runProgramWithGoal,
+
+    -- * Multi-goal query API
+    runProgramWithQuery,
   )
 where
 
-import Control.Monad (unless)
+import Control.Monad (unless, void, when)
 import Data.Bifunctor (first)
 import Data.List (intercalate)
 import Data.Map.Strict (Map)
@@ -43,16 +46,16 @@ import Data.Void (Void)
 import Effectful
 import Effectful.Dispatch.Static
 import Effectful.State.Static.Local (State, evalState, get, modify)
-import Effectful.Writer.Static.Local (Writer, runWriter)
+import Effectful.Writer.Static.Local (Writer, listen, runWriter)
 import Text.Megaparsec (ParseErrorBundle)
 import YCHR.Compile (CompileError, compile, procNameFor)
 import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable)
-import YCHR.Parser (parseConstraint, parseModule)
+import YCHR.Parser (parseConstraint, parseModule, parseQuery)
 import YCHR.Rename (RenameError, buildExportEnv, renameProgram)
 import YCHR.Runtime.History (PropHistory, runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallRegistry, callProc)
-import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
-import YCHR.Runtime.Store (CHRStore, runCHRStore)
+import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue)
+import YCHR.Runtime.Store (CHRStore, aliveConstraint, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId, Value (..))
 import YCHR.Runtime.Var (Unify, deref, equal, newVar, runUnify, unify)
 import YCHR.Types (Constraint (..), Term (..))
@@ -281,3 +284,101 @@ valueToTerm varName v = do
     VWildcard -> pure Wildcard
     VTerm f ts -> CompoundTerm (T.Unqualified f) <$> traverse (valueToTerm "_") ts
     VVar _ -> pure (VarTerm varName)
+
+-- ---------------------------------------------------------------------------
+-- Multi-goal query API
+-- ---------------------------------------------------------------------------
+
+-- | Run a multi-goal query against a compiled program.
+--
+-- Parses the input as a comma-separated, dot-terminated list of goals
+-- and interprets each goal directly.
+runProgramWithQuery :: CompiledProgram -> HostCallRegistry -> Text -> IO (Map String Term)
+runProgramWithQuery cp hostCalls src =
+  case parseQuery "<query>" src of
+    Left err -> fail (show err)
+    Right goals ->
+      withCHR cp hostCalls $
+        evalState (Map.empty :: Map String Value) $ do
+          mapM_ (interpretGoal hostCalls) goals
+          varMap <- get
+          Map.traverseWithKey valueToTerm varMap
+
+-- | Interpret a single query goal.
+interpretGoal ::
+  (CHREffects es, State (Map String Value) :> es) =>
+  HostCallRegistry ->
+  Term ->
+  Eff es ()
+interpretGoal _ (AtomTerm "true") = pure ()
+interpretGoal _ (CompoundTerm (T.Unqualified "=") [l, r]) = do
+  v1 <- termToValue l
+  v2 <- termToValue r
+  CHRRep procMap hc' _ _ <- getStaticRep
+  (_, observers) <- listen (unify v1 v2)
+  enqueue observers
+  drainReactivation procMap hc'
+interpretGoal hc (CompoundTerm (T.Unqualified "is") [VarTerm v, expr]) = do
+  result <- evalTermArith hc expr
+  modify (Map.insert v result)
+interpretGoal hc (CompoundTerm (T.Unqualified ":=") [VarTerm v, CompoundTerm (T.Unqualified f) args]) = do
+  argVals <- traverse termToValue args
+  result <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
+  case result of
+    RVal val -> modify (Map.insert v val)
+    _ -> error $ ":= host call returned non-value"
+interpretGoal hc (CompoundTerm (T.Unqualified "$") [CompoundTerm (T.Unqualified f) args]) = do
+  argVals <- traverse termToValue args
+  _ <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
+  pure ()
+interpretGoal _ term = do
+  -- Treat as a constraint: extract name and args from the term.
+  let (name, args) = termToConstraint term
+  argVals <- traverse termToValue args
+  tellConstraint name argVals
+
+-- | Extract a constraint name and arguments from a term.
+termToConstraint :: Term -> (T.Name, [Term])
+termToConstraint (CompoundTerm name args) = (name, args)
+termToConstraint (AtomTerm s) = (T.Unqualified s, [])
+termToConstraint t = error $ "Not a valid goal: " ++ show t
+
+-- | Call a host function, failing with a clear message if not found.
+hostCall :: Maybe ([RuntimeVal] -> IO RuntimeVal) -> String -> [RuntimeVal] -> IO RuntimeVal
+hostCall (Just f) _ args = f args
+hostCall Nothing name _ = error $ "Unknown host function: " ++ name
+
+-- | Drain the reactivation queue, dispatching each constraint.
+drainReactivation ::
+  (CHREffects es) =>
+  ProcMap ->
+  HostCallRegistry ->
+  Eff es ()
+drainReactivation procMap hc =
+  drainQueue $ \sid -> do
+    alive <- aliveConstraint sid
+    when alive $
+      void $
+        callProc procMap hc (Name "reactivate_dispatch") [RConstraint sid]
+
+-- | Evaluate a term as an arithmetic expression.
+evalTermArith ::
+  (Unify :> es, State (Map String Value) :> es, IOE :> es) =>
+  HostCallRegistry ->
+  Term ->
+  Eff es Value
+evalTermArith _ (IntTerm n) = pure (VInt n)
+evalTermArith _ (AtomTerm s) = pure (VAtom s)
+evalTermArith _ (VarTerm v) = do
+  varMap <- get
+  case Map.lookup v varMap of
+    Just val -> deref val
+    Nothing -> error $ "Unbound variable in arithmetic expression: " ++ v
+evalTermArith hc (CompoundTerm (T.Unqualified op) [l, r]) = do
+  lv <- evalTermArith hc l
+  rv <- evalTermArith hc r
+  result <- liftIO (hostCall (Map.lookup (Name op) hc) op [RVal lv, RVal rv])
+  case result of
+    RVal val -> pure val
+    _ -> error "Arithmetic host call returned non-value"
+evalTermArith _ t = error $ "Unsupported arithmetic expression: " ++ show t

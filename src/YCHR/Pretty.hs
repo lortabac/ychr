@@ -2,13 +2,14 @@
 module YCHR.Pretty
   ( prettyTerm,
     prettyBindings,
+    prettyQueryResult,
     prettyTermSrc,
     prettyConstraintSrc,
   )
 where
 
 import Data.Char (isAlphaNum, isLower)
-import Data.List (intercalate)
+import Data.List (intercalate, isPrefixOf)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import YCHR.Types (Constraint (..), Name (..), Term (..))
@@ -99,3 +100,20 @@ prettyConstraintSrc (Constraint (Qualified m name) args) =
 prettyBindings :: Map String Term -> String
 prettyBindings m =
   unlines [k ++ " = " ++ prettyTerm v | (k, v) <- Map.toAscList m]
+
+-- | Render a variable binding map as a Prolog-style query result.
+--
+-- Variables starting with @_@ are filtered out (internal/wildcard).
+-- If no user-visible bindings remain, returns @true.@.
+-- Otherwise, comma-separated @K = V@ lines terminated with a dot.
+prettyQueryResult :: Map String Term -> String
+prettyQueryResult m =
+  let visible = [(k, v) | (k, v) <- Map.toAscList m, not ("_" `isPrefixOf` k)]
+   in case visible of
+        [] -> "true.\n"
+        _ -> formatBindings visible
+  where
+    formatBindings [] = ""
+    formatBindings [(k, v)] = k ++ " = " ++ prettyTerm v ++ ".\n"
+    formatBindings ((k, v) : rest) =
+      k ++ " = " ++ prettyTerm v ++ ",\n" ++ formatBindings rest

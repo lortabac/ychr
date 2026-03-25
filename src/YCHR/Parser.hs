@@ -23,6 +23,7 @@
 module YCHR.Parser
   ( parseModule,
     parseConstraint,
+    parseQuery,
     parseTerm,
   )
 where
@@ -69,6 +70,16 @@ parseTerm ::
   Text ->
   Either (ParseErrorBundle Text Void) Term
 parseTerm = parse (sc *> termP <* eof)
+
+-- | Parse a query: a comma-separated list of goals terminated by a dot.
+--
+-- The source name (first argument) is used in error messages only.
+-- Example: @parseQuery "\<query\>" "fib(10, X), Y is X + 1."@.
+parseQuery ::
+  String ->
+  Text ->
+  Either (ParseErrorBundle Text Void) [Term]
+parseQuery = parse (sc *> termP `sepBy1` comma <* symbol "." <* eof)
 
 -- ---------------------------------------------------------------------------
 -- Space consumer and lexeme helpers
