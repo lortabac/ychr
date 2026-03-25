@@ -135,7 +135,7 @@ hnfTests =
         rule <- singleRule [m]
         D.ruleGuard rule
           @?= [ D.GuardEqual (VarTerm "X") (VarTerm "_hnf_0"),
-                D.GuardHostCall "gt" [VarTerm "X", IntTerm 0]
+                D.GuardExpr (CompoundTerm (Unqualified "gt") [VarTerm "X", IntTerm 0])
               ],
       testCase "wildcard passes through HNF unchanged" $ do
         let m = simpleModule (Simplification ["M" .: con "foo" [wildcard]])
@@ -162,20 +162,20 @@ guardTests :: TestTree
 guardTests =
   testGroup
     "guard-classification"
-    [ testCase "== becomes GuardEqual" $ do
+    [ testCase "== becomes GuardExpr" $ do
         let m =
               module' "M"
                 `defining` [ (Rule Nothing (Simplification [leqQual]) [func "==" [var "X", var "Y"]] [atom "true"])
                            ]
         rule <- singleRule [m]
-        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "X") (VarTerm "Y")],
-      testCase "host call becomes GuardHostCall" $ do
+        D.ruleGuard rule @?= [D.GuardExpr (CompoundTerm (Unqualified "==") [VarTerm "X", VarTerm "Y"])],
+      testCase "host call becomes GuardExpr" $ do
         let m =
               module' "M"
                 `defining` [ Rule Nothing (Simplification [leqQual]) [func "gt" [var "X", IntTerm 0]] [atom "true"]
                            ]
         rule <- singleRule [m]
-        D.ruleGuard rule @?= [D.GuardHostCall "gt" [VarTerm "X", IntTerm 0]],
+        D.ruleGuard rule @?= [D.GuardExpr (CompoundTerm (Unqualified "gt") [VarTerm "X", IntTerm 0])],
       testCase "atom true becomes GuardCommon GoalTrue" $ do
         let m =
               module' "M"

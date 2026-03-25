@@ -138,9 +138,8 @@ normalizeArg st term =
       )
 
 desugarGuard :: Term -> D.Guard
-desugarGuard (CompoundTerm (Unqualified "==") [l, r]) = D.GuardEqual l r
-desugarGuard (CompoundTerm (Unqualified f) args) = D.GuardHostCall f args
 desugarGuard (AtomTerm "true") = D.GuardCommon D.GoalTrue
+desugarGuard t@(CompoundTerm _ _) = D.GuardExpr t
 desugarGuard _ = D.GuardCommon D.GoalTrue
 
 desugarBodyGoal :: Term -> Eff '[Writer [DesugarError]] D.BodyGoal

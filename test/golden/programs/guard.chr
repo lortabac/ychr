@@ -1,0 +1,5 @@
+:- module(guard, [clamp/3]).
+:- chr_constraint clamp/3.
+
+low @ clamp(X, Lo, R) <=> X < Lo + 1 - 1 | R = Lo.
+high @ clamp(X, Lo, R) <=> X >= Lo + 1 - 1 | R = X.

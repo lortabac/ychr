@@ -55,7 +55,7 @@ data CommonGoal = GoalTrue | GoalFail deriving (Show, Eq)
 data Guard
   = GuardCommon CommonGoal
   | GuardEqual Term Term
-  | GuardHostCall String [Term]
+  | GuardExpr Term
   deriving (Show, Eq)
 
 data BodyGoal

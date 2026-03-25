@@ -85,6 +85,7 @@ defaultHostCallRegistry =
       (Name ">", cmp (>)),
       (Name "=<", cmp (<=)),
       (Name ">=", cmp (>=)),
+      (Name "==", valEq),
       ( Name "print",
         \args -> do
           mapM_ (putStrLn . showVal) args
@@ -96,6 +97,11 @@ defaultHostCallRegistry =
     arith2 _ args = error $ "arithmetic host call: expected 2 Int arguments, got " ++ show (length args)
     cmp op [RVal (VInt a), RVal (VInt b)] = pure (RVal (VBool (op a b)))
     cmp _ args = error $ "comparison host call: expected 2 Int arguments, got " ++ show (length args)
+    valEq [RVal (VInt a), RVal (VInt b)] = pure (RVal (VBool (a == b)))
+    valEq [RVal (VAtom a), RVal (VAtom b)] = pure (RVal (VBool (a == b)))
+    valEq [RVal (VBool a), RVal (VBool b)] = pure (RVal (VBool (a == b)))
+    valEq [_, _] = pure (RVal (VBool False))
+    valEq args = error $ "== host call: expected 2 arguments, got " ++ show (length args)
     showVal (RVal (VInt n)) = show n
     showVal (RVal (VAtom s)) = s
     showVal (RVal (VBool b)) = show b

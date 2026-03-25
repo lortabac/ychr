@@ -361,7 +361,7 @@ compileGuard :: Map.Map String Expr -> D.Guard -> Eff '[Writer [CompileError]] E
 compileGuard _ (D.GuardCommon D.GoalTrue) = pure (Lit (BoolLit True))
 compileGuard _ (D.GuardCommon D.GoalFail) = pure (Lit (BoolLit False))
 compileGuard varMap (D.GuardEqual t1 t2) = Equal <$> compileTerm varMap t1 <*> compileTerm varMap t2
-compileGuard varMap (D.GuardHostCall f args) = HostCall (Name f) <$> traverse (compileTerm varMap) args
+compileGuard varMap (D.GuardExpr term) = HostEval <$> compileTerm varMap term
 
 -- ---------------------------------------------------------------------------
 -- Compile body goals
