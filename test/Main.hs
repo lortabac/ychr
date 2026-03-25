@@ -8,6 +8,7 @@ import YCHR.GoldenTest qualified
 import YCHR.ParserTest qualified
 import YCHR.PrettyTest qualified
 import YCHR.RenameTest qualified
+import YCHR.RoundtripTest qualified
 import YCHR.Runtime.HistoryTest qualified
 import YCHR.Runtime.InterpreterTest qualified
 import YCHR.Runtime.ReactivationTest qualified
@@ -26,6 +27,7 @@ main = do
         YCHR.DSLTest.tests,
         YCHR.DesugarTest.tests,
         YCHR.ParserTest.tests,
+        YCHR.RoundtripTest.tests,
         YCHR.RenameTest.tests,
         YCHR.Runtime.VarTest.tests,
         YCHR.Runtime.StoreTest.tests,

@@ -92,6 +92,7 @@ test-suite ychr-tests
                     , YCHR.ParserTest
                     , YCHR.PrettyTest
                     , YCHR.RenameTest
+                    , YCHR.RoundtripTest
                     , YCHR.Runtime.VarTest
                     , YCHR.Runtime.StoreTest
                     , YCHR.Runtime.HistoryTest
@@ -104,8 +105,10 @@ test-suite ychr-tests
                     , directory
                     , effectful-core
                     , filepath
+                    , hedgehog >=1.5 && <2
                     , megaparsec ^>=9.6
                     , tasty
+                    , tasty-hedgehog >=1.4 && <2
                     , tasty-hunit
                     , text
     default-language: GHC2021

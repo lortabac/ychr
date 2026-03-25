@@ -2,13 +2,16 @@
 module YCHR.Pretty
   ( prettyTerm,
     prettyBindings,
+    prettyTermSrc,
+    prettyConstraintSrc,
   )
 where
 
+import Data.Char (isAlphaNum, isLower)
 import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import YCHR.Types (Name (..), Term (..))
+import YCHR.Types (Constraint (..), Name (..), Term (..))
 
 -- | Render a 'Term' as a Prolog-compatible string.
 -- Unbound variables ('VarTerm' and 'Wildcard') are shown as @_@.
@@ -21,6 +24,73 @@ prettyTerm (CompoundTerm (Unqualified f) ts) =
   f ++ "(" ++ intercalate ", " (map prettyTerm ts) ++ ")"
 prettyTerm (CompoundTerm (Qualified m f) ts) =
   m ++ ":" ++ f ++ "(" ++ intercalate ", " (map prettyTerm ts) ++ ")"
+
+-- ---------------------------------------------------------------------------
+-- Surface pretty-printer (for roundtrip: parse . prettyTermSrc = id)
+-- ---------------------------------------------------------------------------
+
+reservedWordsSrc :: [String]
+reservedWordsSrc = ["is", "div", "mod"]
+
+-- | True if the atom string requires single-quote wrapping.
+needsQuoting :: String -> Bool
+needsQuoting [] = True
+needsQuoting (c : cs) =
+  not
+    ( isLower c
+        && all (\x -> isAlphaNum x || x == '_') cs
+        && (c : cs) `notElem` reservedWordsSrc
+    )
+
+-- | Render an atom, quoting with @\'...\'@ if necessary.
+-- Embedded single quotes are doubled per ISO Prolog convention.
+renderAtom :: String -> String
+renderAtom s
+  | needsQuoting s = "'" ++ concatMap esc s ++ "'"
+  | otherwise = s
+  where
+    esc '\'' = "''"
+    esc c = [c]
+
+infixOpsSrc :: [String]
+infixOpsSrc = ["*", "div", "mod", "+", "-", ":=", "is", "=", "==", "<", ">", "=<", ">="]
+
+-- | Render a 'Term' as valid surface-language source text.
+-- Unlike 'prettyTerm', variable names are preserved rather than collapsed to @_@.
+prettyTermSrc :: Term -> String
+prettyTermSrc (IntTerm n) = show n
+prettyTermSrc (AtomTerm s) = renderAtom s
+prettyTermSrc (VarTerm v) = v
+prettyTermSrc Wildcard = "_"
+prettyTermSrc (CompoundTerm (Unqualified op) [l, r])
+  | op `elem` infixOpsSrc =
+      "(" ++ prettyTermSrc l ++ " " ++ op ++ " " ++ prettyTermSrc r ++ ")"
+prettyTermSrc (CompoundTerm (Unqualified f) ts) =
+  renderAtom f ++ "(" ++ intercalate ", " (map prettyTermSrc ts) ++ ")"
+prettyTermSrc (CompoundTerm (Qualified m f) ts) =
+  renderAtom m
+    ++ ":"
+    ++ renderAtom f
+    ++ "("
+    ++ intercalate ", " (map prettyTermSrc ts)
+    ++ ")"
+
+-- | Render a 'Constraint' as valid surface-language source text.
+prettyConstraintSrc :: Constraint -> String
+prettyConstraintSrc (Constraint (Unqualified name) []) = renderAtom name
+prettyConstraintSrc (Constraint (Unqualified name) args) =
+  renderAtom name ++ "(" ++ intercalate ", " (map prettyTermSrc args) ++ ")"
+prettyConstraintSrc (Constraint (Qualified m name) args) =
+  renderAtom m
+    ++ ":"
+    ++ renderAtom name
+    ++ case args of
+      [] -> ""
+      _ -> "(" ++ intercalate ", " (map prettyTermSrc args) ++ ")"
+
+-- ---------------------------------------------------------------------------
+-- User-facing output (binding map)
+-- ---------------------------------------------------------------------------
 
 -- | Serialize a variable binding map to the golden file format.
 --

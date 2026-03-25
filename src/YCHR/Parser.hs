@@ -23,6 +23,7 @@
 module YCHR.Parser
   ( parseModule,
     parseConstraint,
+    parseTerm,
   )
 where
 
@@ -58,6 +59,16 @@ parseConstraint ::
   Text ->
   Either (ParseErrorBundle Text Void) Constraint
 parseConstraint = parse (sc *> constraintP <* eof)
+
+-- | Parse a single term from surface-language 'Text'.
+--
+-- The source name (first argument) is used in error messages only.
+-- Example: @parseTerm "\<query\>" "f(X, 42)"@.
+parseTerm ::
+  String ->
+  Text ->
+  Either (ParseErrorBundle Text Void) Term
+parseTerm = parse (sc *> termP <* eof)
 
 -- ---------------------------------------------------------------------------
 -- Space consumer and lexeme helpers
