@@ -19,6 +19,7 @@ tests =
     "YCHR.Parser"
     [ directiveTests,
       termTests,
+      negativeIntTests,
       operatorTests,
       ruleTests,
       moduleTests,
@@ -112,6 +113,36 @@ termTests =
       testCase "nested compound" $
         bodyOf "c <=> f(g(X))."
           >>= (@?= [CompoundTerm (Unqualified "f") [CompoundTerm (Unqualified "g") [VarTerm "X"]]])
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Negative integer literals
+-- ---------------------------------------------------------------------------
+
+negativeIntTests :: TestTree
+negativeIntTests =
+  testGroup
+    "negative integer literals"
+    [ testCase "negative literal as standalone term" $
+        bodyOf "c <=> f(-5)."
+          >>= (@?= [CompoundTerm (Unqualified "f") [IntTerm (-5)]]),
+      testCase "negative literal as constraint argument" $
+        headOf "c(-3, X) <=> true."
+          >>= (@?= Simplification [Constraint (Unqualified "c") [IntTerm (-3), VarTerm "X"]]),
+      testCase "negative literal in guard" $
+        guardOf "r @ c(X) <=> X >= -1 | true."
+          >>= (@?= [CompoundTerm (Unqualified ">=") [VarTerm "X", IntTerm (-1)]]),
+      testCase "binary minus with negative literal on right" $
+        bodyOf "c <=> 3 - -5."
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "-")
+                      [IntTerm 3, IntTerm (-5)]
+                  ]
+              ),
+      testCase "negative zero" $
+        bodyOf "c <=> f(-0)."
+          >>= (@?= [CompoundTerm (Unqualified "f") [IntTerm 0]])
     ]
 
 -- ---------------------------------------------------------------------------

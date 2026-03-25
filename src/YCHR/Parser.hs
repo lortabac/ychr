@@ -154,9 +154,13 @@ wildcardP = lexeme $ do
   notFollowedBy (alphaNumChar <|> char '_')
   pure Wildcard
 
--- | Parse a non-negative decimal integer as 'IntTerm'.
+-- | Parse a decimal integer (optionally negative, no space between sign and
+-- digits) as 'IntTerm'.
 intP :: Parser Term
-intP = lexeme (IntTerm <$> L.decimal)
+intP = lexeme $ do
+  sign <- optional (char '-')
+  n <- L.decimal
+  pure (IntTerm (maybe n (const (negate n)) sign))
 
 -- ---------------------------------------------------------------------------
 -- Operator tokens
