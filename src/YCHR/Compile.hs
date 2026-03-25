@@ -14,6 +14,8 @@ module YCHR.Compile
 where
 
 import Data.Map.Strict qualified as Map
+import Data.Text (Text)
+import Data.Text qualified as T'
 import Data.Traversable (for)
 import Effectful (Eff, runPureEff)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
@@ -23,7 +25,7 @@ import YCHR.VM
 
 data CompileError
   = UnknownConstraintType T.Name
-  | UnboundVariable String
+  | UnboundVariable Text
   deriving (Eq, Show)
 
 -- ---------------------------------------------------------------------------
@@ -110,14 +112,14 @@ ruleOccurrences symTab (ruleIdx, rule) = do
           ++ [(i, c, True) | (i, c) <- zip [length removed ..] (reverse kept)]
       ruleName' = case D.ruleName rule of
         Just n -> n
-        Nothing -> "rule_" ++ show ruleIdx
+        Nothing -> "rule_" <> T'.pack (show ruleIdx)
   for combined $ \(idx, con, isKept) ->
     mkOccurrence symTab rule ruleName' combined idx con isKept
 
 mkOccurrence ::
   SymbolTable ->
   D.Rule ->
-  String ->
+  Text ->
   [(Int, T.Constraint, Bool)] ->
   Int ->
   T.Constraint ->
@@ -211,7 +213,7 @@ genOccurrence symTab name arity occ = do
   body <- genOccurrenceBody symTab varMap occ
   pure (Procedure procName' params body)
 
-buildVarMap :: Occurrence -> Map.Map String Expr
+buildVarMap :: Occurrence -> Map.Map Text Expr
 buildVarMap occ =
   let activeBindings =
         [ (v, Var (argName i))
@@ -224,7 +226,7 @@ buildVarMap occ =
         ]
    in Map.fromList (activeBindings ++ partnerBindings)
 
-genOccurrenceBody :: SymbolTable -> Map.Map String Expr -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
+genOccurrenceBody :: SymbolTable -> Map.Map Text Expr -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
 genOccurrenceBody symTab varMap occ
   | null (occPartners occ) = genNoPartnerBody symTab varMap occ
   | otherwise = do
@@ -232,7 +234,7 @@ genOccurrenceBody symTab varMap occ
       pure (body ++ [Return (Lit (BoolLit False))])
 
 -- Single-head rule (no partners)
-genNoPartnerBody :: SymbolTable -> Map.Map String Expr -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
+genNoPartnerBody :: SymbolTable -> Map.Map Text Expr -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
 genNoPartnerBody symTab varMap occ = do
   let guards = D.ruleGuard (occRule occ)
   guardExpr <- compileGuards varMap guards
@@ -242,7 +244,7 @@ genNoPartnerBody symTab varMap occ = do
     Just gExpr -> [If gExpr fireStmts [], Return (Lit (BoolLit False))]
 
 -- Multi-head rule with partners
-genPartnerBody :: SymbolTable -> Map.Map String Expr -> Occurrence -> Int -> Eff '[Writer [CompileError]] [Stmt]
+genPartnerBody :: SymbolTable -> Map.Map Text Expr -> Occurrence -> Int -> Eff '[Writer [CompileError]] [Stmt]
 genPartnerBody symTab varMap occ k
   | k >= length (occPartners occ) = do
       let guards = D.ruleGuard (occRule occ)
@@ -253,7 +255,7 @@ genPartnerBody symTab varMap occ k
         Just gExpr -> [If gExpr fireStmts []]
   | otherwise = do
       let partner = occPartners occ !! k
-          label = Label ("L" ++ show (k + 1))
+          label = Label ("L" <> T'.pack (show (k + 1)))
           suspVar = partSuspName k
           partArity = length (T.conArgs (partConstraint partner))
           fieldExtracts =
@@ -278,7 +280,7 @@ genPartnerBody symTab varMap occ k
 -- Fire: history check + kill + body + early drop
 -- ---------------------------------------------------------------------------
 
-genFireStmts :: SymbolTable -> Map.Map String Expr -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
+genFireStmts :: SymbolTable -> Map.Map Text Expr -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
 genFireStmts symTab varMap occ = do
   let rule = occRule occ
       isPropagation = null (D.headRemoved (D.ruleHead rule))
@@ -330,7 +332,7 @@ genKillStmts occ =
 -- Compile terms
 -- ---------------------------------------------------------------------------
 
-compileTerm :: Map.Map String Expr -> T.Term -> Eff '[Writer [CompileError]] Expr
+compileTerm :: Map.Map Text Expr -> T.Term -> Eff '[Writer [CompileError]] Expr
 compileTerm varMap (T.VarTerm v) = case Map.lookup v varMap of
   Just expr -> pure expr
   Nothing -> do
@@ -347,7 +349,7 @@ compileTerm _ T.Wildcard = pure (Lit WildcardLit)
 -- Compile guards
 -- ---------------------------------------------------------------------------
 
-compileGuards :: Map.Map String Expr -> [D.Guard] -> Eff '[Writer [CompileError]] (Maybe Expr)
+compileGuards :: Map.Map Text Expr -> [D.Guard] -> Eff '[Writer [CompileError]] (Maybe Expr)
 compileGuards varMap guards = case nonTrivialGuards of
   [] -> pure Nothing
   [g] -> Just <$> compileGuard varMap g
@@ -357,7 +359,7 @@ compileGuards varMap guards = case nonTrivialGuards of
     isNonTrivial (D.GuardCommon D.GoalTrue) = False
     isNonTrivial _ = True
 
-compileGuard :: Map.Map String Expr -> D.Guard -> Eff '[Writer [CompileError]] Expr
+compileGuard :: Map.Map Text Expr -> D.Guard -> Eff '[Writer [CompileError]] Expr
 compileGuard _ (D.GuardCommon D.GoalTrue) = pure (Lit (BoolLit True))
 compileGuard _ (D.GuardCommon D.GoalFail) = pure (Lit (BoolLit False))
 compileGuard varMap (D.GuardEqual t1 t2) = Equal <$> compileTerm varMap t1 <*> compileTerm varMap t2
@@ -367,7 +369,7 @@ compileGuard varMap (D.GuardExpr term) = HostEval <$> compileTerm varMap term
 -- Compile body goals
 -- ---------------------------------------------------------------------------
 
-compileBodyGoals :: SymbolTable -> Map.Map String Expr -> [D.BodyGoal] -> Eff '[Writer [CompileError]] [Stmt]
+compileBodyGoals :: SymbolTable -> Map.Map Text Expr -> [D.BodyGoal] -> Eff '[Writer [CompileError]] [Stmt]
 compileBodyGoals _ _ [] = pure []
 compileBodyGoals symTab varMap (goal : rest) = case goal of
   D.BodyHostCall v f args -> do
@@ -395,7 +397,7 @@ compileBodyGoals symTab varMap (goal : rest) = case goal of
     rest' <- compileBodyGoals symTab varMap rest
     pure (goal' ++ rest')
 
-compileBodyGoal :: SymbolTable -> Map.Map String Expr -> D.BodyGoal -> Eff '[Writer [CompileError]] [Stmt]
+compileBodyGoal :: SymbolTable -> Map.Map Text Expr -> D.BodyGoal -> Eff '[Writer [CompileError]] [Stmt]
 compileBodyGoal _ _ (D.BodyCommon D.GoalTrue) = pure []
 compileBodyGoal _ _ (D.BodyCommon D.GoalFail) = pure []
 compileBodyGoal _ varMap (D.BodyConstraint con) = do
@@ -431,14 +433,14 @@ genReactivateDispatch symTab arityMap =
     genDispatchBranch (name, cType) =
       let arity = Map.findWithDefault 0 name arityMap
           argExtracts =
-            [ Let (Name ("rx_" ++ show i)) (FieldGet (Var "susp") (FieldArg (ArgIndex i)))
+            [ Let (Name ("rx_" <> T'.pack (show i))) (FieldGet (Var "susp") (FieldArg (ArgIndex i)))
             | i <- [0 .. arity - 1]
             ]
           activateCall =
             ExprStmt
               ( CallExpr
                   (procNameFor "activate" name)
-                  (Var "susp" : [Var (Name ("rx_" ++ show i)) | i <- [0 .. arity - 1]])
+                  (Var "susp" : [Var (Name ("rx_" <> T'.pack (show i))) | i <- [0 .. arity - 1]])
               )
        in If
             (IsConstraintType (Var "susp") cType)
@@ -449,30 +451,30 @@ genReactivateDispatch symTab arityMap =
 -- Naming helpers
 -- ---------------------------------------------------------------------------
 
-procNameFor :: String -> T.Name -> Name
-procNameFor prefix (T.Qualified m n) = Name (prefix ++ "_" ++ m ++ "_" ++ n)
-procNameFor prefix (T.Unqualified n) = Name (prefix ++ "_" ++ n)
+procNameFor :: Text -> T.Name -> Name
+procNameFor prefix (T.Qualified m n) = Name (prefix <> "_" <> m <> "_" <> n)
+procNameFor prefix (T.Unqualified n) = Name (prefix <> "_" <> n)
 
 occProcName :: T.Name -> Int -> Name
 occProcName name num =
   let Name base = procNameFor "occurrence" name
-   in Name (base ++ "_" ++ show num)
+   in Name (base <> "_" <> T'.pack (show num))
 
 vmName :: T.Name -> Name
 vmName (T.Unqualified n) = Name n
-vmName (T.Qualified m n) = Name (m ++ "_" ++ n)
+vmName (T.Qualified m n) = Name (m <> "_" <> n)
 
 argNames :: Int -> [Name]
 argNames arity = [argName i | i <- [0 .. arity - 1]]
 
 argName :: Int -> Name
-argName i = Name ("X_" ++ show i)
+argName i = Name ("X_" <> T'.pack (show i))
 
 partSuspName :: Int -> Name
-partSuspName k = Name ("susp_" ++ show k)
+partSuspName k = Name ("susp_" <> T'.pack (show k))
 
 partIdName :: Int -> Name
-partIdName k = Name ("pId_" ++ show k)
+partIdName k = Name ("pId_" <> T'.pack (show k))
 
 partArgName :: Int -> Int -> Name
-partArgName k j = Name ("pA" ++ show j ++ "_" ++ show k)
+partArgName k j = Name ("pA" <> T'.pack (show j) <> "_" <> T'.pack (show k))

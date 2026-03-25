@@ -37,6 +37,7 @@ module YCHR.Runtime.Var
 where
 
 import Data.IORef
+import Data.Text (Text)
 import Effectful
 import Effectful.Dispatch.Static
 import Effectful.Writer.Static.Local (Writer, tell)
@@ -210,12 +211,12 @@ allEqual (a : as) (b : bs) = do
 allEqual _ _ = pure False
 
 -- | Construct a compound term. Pure.
-makeTerm :: String -> [Value] -> Value
+makeTerm :: Text -> [Value] -> Value
 makeTerm = VTerm
 
 -- | Check whether a value is a compound term with the given functor and arity.
 -- Dereferences first.
-matchTerm :: (Unify :> es) => Value -> String -> Int -> Eff es Bool
+matchTerm :: (Unify :> es) => Value -> Text -> Int -> Eff es Bool
 matchTerm v functor arity = do
   d <- deref v
   case d of

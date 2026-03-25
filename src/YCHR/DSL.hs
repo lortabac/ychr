@@ -1,5 +1,8 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module YCHR.DSL where
 
+import Data.Text (Text)
 import YCHR.Parsed
 import YCHR.Types
 
@@ -8,7 +11,7 @@ import YCHR.Types
 --------------------------------------------------------------------------------
 
 -- | Create a new module definition
-module' :: String -> Module
+module' :: Text -> Module
 module' name = Module name [] [] [] Nothing
 
 -- | Set the export list of a module
@@ -16,7 +19,7 @@ exporting :: Module -> [Declaration] -> Module
 exporting m decls = m {modExports = Just decls}
 
 -- | Add imports to a module
-importing :: Module -> [String] -> Module
+importing :: Module -> [Text] -> Module
 importing m imps = m {modImports = imps}
 
 -- | Add declarations to a module: @declaring [ "leq" // 2 ]@
@@ -28,7 +31,7 @@ defining :: Module -> [Rule] -> Module
 defining m rules = m {modRules = rules}
 
 -- | Helper for arity: @"leq" // 2@
-(//) :: String -> Int -> Declaration
+(//) :: Text -> Int -> Declaration
 (//) = ConstraintDecl
 
 --------------------------------------------------------------------------------
@@ -36,7 +39,7 @@ defining m rules = m {modRules = rules}
 --------------------------------------------------------------------------------
 
 -- | Name a rule: @"my_rule" @: [con "a" []] <=> [con "b" []]@
-(@:) :: String -> Rule -> Rule
+(@:) :: Text -> Rule -> Rule
 name @: r = r {ruleName = Just name}
 
 -- | Simplification Rule: @[head] <=> [body]@
@@ -60,24 +63,24 @@ r |- g = r {ruleGuard = g}
 --------------------------------------------------------------------------------
 
 -- | Create a constraint (defaults to Unqualified)
-con :: String -> [Term] -> Constraint
+con :: Text -> [Term] -> Constraint
 con n args = Constraint (Unqualified n) args
 
 -- | Manual qualification operator: @"Mod" .: con "leq" [X, Y]@
-(.:) :: String -> Constraint -> Constraint
+(.:) :: Text -> Constraint -> Constraint
 m .: (Constraint (Unqualified n) args) = Constraint (Qualified m n) args
 _ .: c = c
 
 -- | Create a variable term
-var :: String -> Term
+var :: Text -> Term
 var = VarTerm
 
 -- | Create a compound term (data functor)
-func :: String -> [Term] -> Term
+func :: Text -> [Term] -> Term
 func n args = CompoundTerm (Unqualified n) args
 
 -- | Create an atom term
-atom :: String -> Term
+atom :: Text -> Term
 atom = AtomTerm
 
 -- | Integer literal term
@@ -107,7 +110,7 @@ is v e = CompoundTerm (Unqualified "is") [v, e]
 infixr 3 `is`
 
 -- | Host statement: @hostStmt "print" [var "X"]@
-hostStmt :: String -> [Term] -> Term
+hostStmt :: Text -> [Term] -> Term
 hostStmt f args = CompoundTerm (Unqualified "host") [CompoundTerm (Unqualified f) args]
 
 {-

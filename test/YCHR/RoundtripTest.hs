@@ -1,7 +1,10 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Roundtrip property tests: prettyTermSrc / prettyConstraintSrc are
 -- right-inverses of the parser.
 module YCHR.RoundtripTest (tests) where
 
+import Data.Text (Text)
 import Data.Text qualified as Text
 import Hedgehog (Gen, Property, annotate, failure, forAll, property, (===))
 import Hedgehog.Gen qualified as Gen
@@ -18,37 +21,37 @@ import YCHR.Types (Constraint (..), Name (..), Term (..))
 
 -- | Generate a safe unquoted atom: lowercase-starting alphanumeric,
 -- not a reserved word or infix operator name.
-genSafeAtom :: Gen String
+genSafeAtom :: Gen Text
 genSafeAtom = Gen.filter isOk $ do
   c <- Gen.lower
   rest <- Gen.list (Range.linear 0 5) Gen.alphaNum
-  pure (c : rest)
+  pure (Text.pack (c : rest))
   where
-    forbidden = ["is", "div", "mod", "true", "false"]
-    isOk s = s `notElem` forbidden && not (null s)
+    forbidden = ["is", "div", "mod", "true", "false"] :: [Text]
+    isOk s = s `notElem` forbidden && not (Text.null s)
 
 -- | Generate atoms for use as 'AtomTerm' values, including cases that
 -- require quoting (empty, uppercase-starting, embedded single quote).
-genAtom :: Gen String
+genAtom :: Gen Text
 genAtom =
   Gen.choice
     [ genSafeAtom,
       pure "",
       do
         s <- genSafeAtom
-        pure (s ++ "'s"),
+        pure (s <> "'s"),
       do
         c <- Gen.upper
         rest <- Gen.list (Range.linear 0 4) Gen.alphaNum
-        pure (c : rest)
+        pure (Text.pack (c : rest))
     ]
 
 -- | Generate a valid variable name (uppercase-starting).
-genVarName :: Gen String
+genVarName :: Gen Text
 genVarName = do
   c <- Gen.upper
   rest <- Gen.list (Range.linear 0 4) (Gen.choice [Gen.alphaNum, pure '_'])
-  pure (c : rest)
+  pure (Text.pack (c : rest))
 
 -- | Generate an arbitrary 'Term'. Compound terms use safe atom functors only
 -- (no infix operators, no qualified names) so that 'prettyTermSrc' produces

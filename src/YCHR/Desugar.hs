@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 -- |
 -- Module      : YCHR.Desugar
@@ -31,6 +32,8 @@ where
 import Data.List (mapAccumL)
 import Data.Map qualified as Map
 import Data.Set qualified as Set
+import Data.Text (Text)
+import Data.Text qualified as T
 import Effectful (Eff, runPureEff)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import YCHR.Desugared qualified as D
@@ -99,7 +102,7 @@ desugarHead h = case h of
 
 data HnfState = HnfState
   { hnfCounter :: !Int,
-    hnfSeen :: Map.Map String (),
+    hnfSeen :: Map.Map Text (),
     hnfGuards :: [D.Guard] -- accumulated in reverse
   }
 
@@ -118,7 +121,7 @@ normalizeConstraint st (Constraint name args) =
 normalizeArg :: HnfState -> Term -> (HnfState, Term)
 normalizeArg st (VarTerm v)
   | Map.member v (hnfSeen st) =
-      let fresh = "_hnf_" ++ show (hnfCounter st)
+      let fresh = "_hnf_" <> T.pack (show (hnfCounter st))
        in ( st
               { hnfCounter = hnfCounter st + 1,
                 hnfGuards = D.GuardEqual (VarTerm v) (VarTerm fresh) : hnfGuards st
@@ -129,7 +132,7 @@ normalizeArg st (VarTerm v)
       (st {hnfSeen = Map.insert v () (hnfSeen st)}, VarTerm v)
 normalizeArg st Wildcard = (st, Wildcard)
 normalizeArg st term =
-  let fresh = "_hnf_" ++ show (hnfCounter st)
+  let fresh = "_hnf_" <> T.pack (show (hnfCounter st))
    in ( st
           { hnfCounter = hnfCounter st + 1,
             hnfGuards = D.GuardEqual (VarTerm fresh) term : hnfGuards st

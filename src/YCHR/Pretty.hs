@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Pretty-printing utilities for CHR terms and binding maps.
 module YCHR.Pretty
   ( prettyTerm,
@@ -9,51 +11,54 @@ module YCHR.Pretty
 where
 
 import Data.Char (isAlphaNum, isLower)
-import Data.List (intercalate, isPrefixOf)
+import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Text (Text)
+import Data.Text qualified as T
 import YCHR.Types (Constraint (..), Name (..), Term (..))
 
 -- | Render a 'Term' as a Prolog-compatible string.
 -- Unbound variables ('VarTerm' and 'Wildcard') are shown as @_@.
 prettyTerm :: Term -> String
 prettyTerm (IntTerm n) = show n
-prettyTerm (AtomTerm s) = s
+prettyTerm (AtomTerm s) = T.unpack s
 prettyTerm (VarTerm _) = "_"
 prettyTerm Wildcard = "_"
 prettyTerm (CompoundTerm (Unqualified f) ts) =
-  f ++ "(" ++ intercalate ", " (map prettyTerm ts) ++ ")"
+  T.unpack f ++ "(" ++ intercalate ", " (map prettyTerm ts) ++ ")"
 prettyTerm (CompoundTerm (Qualified m f) ts) =
-  m ++ ":" ++ f ++ "(" ++ intercalate ", " (map prettyTerm ts) ++ ")"
+  T.unpack m ++ ":" ++ T.unpack f ++ "(" ++ intercalate ", " (map prettyTerm ts) ++ ")"
 
 -- ---------------------------------------------------------------------------
 -- Surface pretty-printer (for roundtrip: parse . prettyTermSrc = id)
 -- ---------------------------------------------------------------------------
 
-reservedWordsSrc :: [String]
+reservedWordsSrc :: [Text]
 reservedWordsSrc = ["is", "div", "mod"]
 
 -- | True if the atom string requires single-quote wrapping.
-needsQuoting :: String -> Bool
-needsQuoting [] = True
-needsQuoting (c : cs) =
-  not
-    ( isLower c
-        && all (\x -> isAlphaNum x || x == '_') cs
-        && (c : cs) `notElem` reservedWordsSrc
-    )
+needsQuoting :: Text -> Bool
+needsQuoting t = case T.uncons t of
+  Nothing -> True
+  Just (c, cs) ->
+    not
+      ( isLower c
+          && T.all (\x -> isAlphaNum x || x == '_') cs
+          && t `notElem` reservedWordsSrc
+      )
 
 -- | Render an atom, quoting with @\'...\'@ if necessary.
 -- Embedded single quotes are doubled per ISO Prolog convention.
-renderAtom :: String -> String
+renderAtom :: Text -> String
 renderAtom s
-  | needsQuoting s = "'" ++ concatMap esc s ++ "'"
-  | otherwise = s
+  | needsQuoting s = "'" ++ concatMap esc (T.unpack s) ++ "'"
+  | otherwise = T.unpack s
   where
     esc '\'' = "''"
     esc c = [c]
 
-infixOpsSrc :: [String]
+infixOpsSrc :: [Text]
 infixOpsSrc = ["*", "div", "mod", "+", "-", ":=", "is", "=", "==", "<", ">", "=<", ">="]
 
 -- | Render a 'Term' as valid surface-language source text.
@@ -61,11 +66,11 @@ infixOpsSrc = ["*", "div", "mod", "+", "-", ":=", "is", "=", "==", "<", ">", "=<
 prettyTermSrc :: Term -> String
 prettyTermSrc (IntTerm n) = show n
 prettyTermSrc (AtomTerm s) = renderAtom s
-prettyTermSrc (VarTerm v) = v
+prettyTermSrc (VarTerm v) = T.unpack v
 prettyTermSrc Wildcard = "_"
 prettyTermSrc (CompoundTerm (Unqualified op) [l, r])
   | op `elem` infixOpsSrc =
-      "(" ++ prettyTermSrc l ++ " " ++ op ++ " " ++ prettyTermSrc r ++ ")"
+      "(" ++ prettyTermSrc l ++ " " ++ T.unpack op ++ " " ++ prettyTermSrc r ++ ")"
 prettyTermSrc (CompoundTerm (Unqualified f) ts) =
   renderAtom f ++ "(" ++ intercalate ", " (map prettyTermSrc ts) ++ ")"
 prettyTermSrc (CompoundTerm (Qualified m f) ts) =
@@ -97,23 +102,23 @@ prettyConstraintSrc (Constraint (Qualified m name) args) =
 --
 -- Keys are sorted alphabetically for determinism. Each line has the form
 -- @K = V@ followed by a newline, matching the output of 'unlines'.
-prettyBindings :: Map String Term -> String
+prettyBindings :: Map Text Term -> String
 prettyBindings m =
-  unlines [k ++ " = " ++ prettyTerm v | (k, v) <- Map.toAscList m]
+  unlines [T.unpack k ++ " = " ++ prettyTerm v | (k, v) <- Map.toAscList m]
 
 -- | Render a variable binding map as a Prolog-style query result.
 --
 -- Variables starting with @_@ are filtered out (internal/wildcard).
 -- If no user-visible bindings remain, returns @true.@.
 -- Otherwise, comma-separated @K = V@ lines terminated with a dot.
-prettyQueryResult :: Map String Term -> String
+prettyQueryResult :: Map Text Term -> String
 prettyQueryResult m =
-  let visible = [(k, v) | (k, v) <- Map.toAscList m, not ("_" `isPrefixOf` k)]
+  let visible = [(k, v) | (k, v) <- Map.toAscList m, not ("_" `T.isPrefixOf` k)]
    in case visible of
         [] -> "true.\n"
         _ -> formatBindings visible
   where
     formatBindings [] = ""
-    formatBindings [(k, v)] = k ++ " = " ++ prettyTerm v ++ ".\n"
+    formatBindings [(k, v)] = T.unpack k ++ " = " ++ prettyTerm v ++ ".\n"
     formatBindings ((k, v) : rest) =
-      k ++ " = " ++ prettyTerm v ++ ",\n" ++ formatBindings rest
+      T.unpack k ++ " = " ++ prettyTerm v ++ ",\n" ++ formatBindings rest

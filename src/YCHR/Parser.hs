@@ -31,7 +31,7 @@ where
 import Control.Monad (void)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Text (Text)
-import Data.Text qualified as Text
+import Data.Text qualified as T
 import Data.Void (Void)
 import Text.Megaparsec
 import Text.Megaparsec.Char
@@ -114,7 +114,7 @@ comma = void (symbol ",")
 -- ---------------------------------------------------------------------------
 
 -- | Reserved words that cannot be used as unquoted atoms (they are operators).
-reservedWords :: [String]
+reservedWords :: [Text]
 reservedWords = ["is", "div", "mod"]
 
 -- | Parse an atom: a lowercase identifier or a single-quoted string.
@@ -127,15 +127,16 @@ reservedWords = ["is", "div", "mod"]
 -- * @\\n@, @\\t@ — newline and tab
 -- * @\\x@ — fallback: keep @x@ literally
 -- * Any other character — taken literally
-atomP :: Parser String
+atomP :: Parser Text
 atomP = lexeme (unquotedP <|> quotedP)
   where
     unquotedP = do
       name <- (:) <$> lowerChar <*> many (alphaNumChar <|> char '_')
-      if name `elem` reservedWords
+      let t = T.pack name
+      if t `elem` reservedWords
         then fail ("reserved word: " ++ name)
-        else pure name
-    quotedP = char '\'' *> go
+        else pure t
+    quotedP = T.pack <$> (char '\'' *> go)
       where
         go =
           choice
@@ -167,7 +168,7 @@ varP :: Parser Term
 varP = lexeme $ do
   c <- upperChar
   rest <- many (alphaNumChar <|> char '_')
-  pure (VarTerm (c : rest))
+  pure (VarTerm (T.pack (c : rest)))
 
 -- | Parse a wildcard: bare @_@ not followed by a word character.
 wildcardP :: Parser Term
@@ -190,18 +191,18 @@ intP = lexeme $ do
 
 -- | Parse a word operator (e.g. @is@, @div@, @mod@).
 -- Fails if the keyword is immediately followed by an alphanumeric character or @_@.
-wordOp :: String -> Parser String
+wordOp :: Text -> Parser Text
 wordOp w = lexeme $ try $ do
-  _ <- string (Text.pack w)
+  _ <- string w
   notFollowedBy (alphaNumChar <|> char '_')
   pure w
 
 -- | Parse a symbol operator (e.g. @=<@, @==@, @+@).
 -- Reads the longest run of symbol characters and checks for an exact match,
 -- backtracking if the run does not equal the expected operator.
-symbolOp :: String -> Parser String
+symbolOp :: Text -> Parser Text
 symbolOp op = lexeme $ try $ do
-  s <- some (oneOf (":=<>+-*/" :: String))
+  s <- T.pack <$> some (oneOf (":=<>+-*/" :: String))
   if s == op
     then pure s
     else fail ("expected operator " ++ show op)
@@ -339,8 +340,8 @@ ruleP = do
 -- ---------------------------------------------------------------------------
 
 data Directive
-  = DirModule String [Declaration]
-  | DirImport String
+  = DirModule Text [Declaration]
+  | DirImport Text
   | DirConstraintDecl [Declaration]
   | DirOther
 
@@ -370,7 +371,7 @@ directiveP = do
 
 -- | Parse the arguments of a @module@ directive.
 -- Returns the module name and its export list.
-moduleArgsP :: Parser (String, [Declaration])
+moduleArgsP :: Parser (Text, [Declaration])
 moduleArgsP = do
   name <- atomP
   _ <- comma
@@ -397,7 +398,7 @@ moduleP = do
       rules = [r | Right r <- items]
       (modName_, modExports_) = case [(n, e) | DirModule n e <- dirs] of
         ((n, e) : _) -> (n, Just e)
-        [] -> ("", Nothing)
+        [] -> (T.empty, Nothing)
       modImports_ = [n | DirImport n <- dirs]
       modDecls_ = concat [ds | DirConstraintDecl ds <- dirs]
   pure (Module modName_ modImports_ modDecls_ rules modExports_)

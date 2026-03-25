@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 
 -- | Meta-level host call registry.
@@ -14,6 +15,7 @@ module YCHR.Meta
 where
 
 import Data.Map.Strict qualified as Map
+import Data.Text (Text)
 import Effectful (Eff, runEff, type (:>))
 import YCHR.Pretty (prettyTerm)
 import YCHR.Runtime.Interpreter (HostCallRegistry)
@@ -25,7 +27,7 @@ import YCHR.VM (Name (..))
 
 -- | Convert a runtime 'Value' to a surface 'Term', dereferencing logical
 -- variables. Unbound variables are rendered as 'VarTerm varName'.
-valueToTerm :: (Unify :> es) => String -> Value -> Eff es Term
+valueToTerm :: (Unify :> es) => Text -> Value -> Eff es Term
 valueToTerm varName v = do
   v' <- deref v
   case v' of

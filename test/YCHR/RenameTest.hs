@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module YCHR.RenameTest (tests) where
 
 import Test.Tasty (TestTree, testGroup)

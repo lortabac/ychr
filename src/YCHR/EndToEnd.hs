@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
 module YCHR.EndToEnd
@@ -41,6 +42,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Void (Void)
 import Effectful
@@ -73,13 +75,13 @@ data Error
 -- | A compiled CHR program together with module visibility information.
 data CompiledProgram = CompiledProgram
   { cpProgram :: Program,
-    cpExportMap :: Map (String, Int) ExportResolution,
+    cpExportMap :: Map (Text, Int) ExportResolution,
     cpExportedSet :: Set T.Name
   }
 
 data ExportResolution
   = UniqueExport T.Name
-  | AmbiguousExport [String]
+  | AmbiguousExport [Text]
   deriving (Show, Eq)
 
 compileModules :: [(FilePath, Text)] -> Either Error CompiledProgram
@@ -120,7 +122,7 @@ data CHR :: Effect
 type instance DispatchOf CHR = Static WithSideEffects
 
 data instance StaticRep CHR
-  = CHRRep ProcMap HostCallRegistry (Map (String, Int) ExportResolution) (Set T.Name)
+  = CHRRep ProcMap HostCallRegistry (Map (Text, Int) ExportResolution) (Set T.Name)
 
 -- | Shorthand for the full set of effects available inside a CHR session.
 type CHREffects es =
@@ -172,14 +174,14 @@ tellConstraint name args = do
     Right qname -> pure qname
   let tellName = procNameFor "tell" resolved
   unless (Map.member tellName procMap) $
-    error ("Constraint not found: " ++ unName tellName)
+    error ("Constraint not found: " ++ T.unpack (unName tellName))
   _ <- callProc procMap hc tellName (map RVal args)
   pure ()
 
 -- | Name resolution extracted from 'resolveQueryConstraint' to work with
 -- just a name and arity.
 resolveQueryConstraint' ::
-  Map (String, Int) ExportResolution -> Set T.Name -> T.Name -> Int -> Either String T.Name
+  Map (Text, Int) ExportResolution -> Set T.Name -> T.Name -> Int -> Either String T.Name
 resolveQueryConstraint' exportMap exportedSet name arity = case name of
   T.Unqualified n ->
     case Map.lookup (n, arity) exportMap of
@@ -187,17 +189,17 @@ resolveQueryConstraint' exportMap exportedSet name arity = case name of
       Just (AmbiguousExport ms) ->
         Left
           ( "Ambiguous constraint: "
-              ++ n
+              ++ T.unpack n
               ++ "/"
               ++ show arity
               ++ ", exported by: "
-              ++ intercalate ", " ms
+              ++ intercalate ", " (map T.unpack ms)
           )
-      Nothing -> Left ("Unknown constraint: " ++ n ++ "/" ++ show arity)
+      Nothing -> Left ("Unknown constraint: " ++ T.unpack n ++ "/" ++ show arity)
   T.Qualified m n ->
     if Set.member (T.Qualified m n) exportedSet
       then Right name
-      else Left ("Constraint not exported: " ++ m ++ ":" ++ n)
+      else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n)
 
 -- ---------------------------------------------------------------------------
 -- Single-goal API
@@ -214,20 +216,20 @@ resolveQueryConstraint cp (Constraint name args) = case name of
           Just (AmbiguousExport ms) ->
             Left
               ( "Ambiguous constraint: "
-                  ++ n
+                  ++ T.unpack n
                   ++ "/"
                   ++ show arity
                   ++ ", exported by: "
-                  ++ intercalate ", " ms
+                  ++ intercalate ", " (map T.unpack ms)
               )
-          Nothing -> Left ("Unknown constraint: " ++ n ++ "/" ++ show arity)
+          Nothing -> Left ("Unknown constraint: " ++ T.unpack n ++ "/" ++ show arity)
   T.Qualified m n ->
     if Set.member (T.Qualified m n) (cpExportedSet cp)
       then Right (Constraint name args)
-      else Left ("Constraint not exported: " ++ m ++ ":" ++ n)
+      else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n)
 
 -- | Run a single CHR constraint against a compiled program.
-runProgramWithGoalDSL :: CompiledProgram -> HostCallRegistry -> Constraint -> IO (RuntimeVal, Map String Term)
+runProgramWithGoalDSL :: CompiledProgram -> HostCallRegistry -> Constraint -> IO (RuntimeVal, Map Text Term)
 runProgramWithGoalDSL cp hostCalls constraint = do
   resolved <- case resolveQueryConstraint cp constraint of
     Left err -> fail err
@@ -236,7 +238,7 @@ runProgramWithGoalDSL cp hostCalls constraint = do
       procMap = Map.fromList [(procName p, p) | p <- progProcedures]
       tellName = procNameFor "tell" (conName resolved)
   unless (Map.member tellName procMap) $
-    fail ("Constraint not found: " ++ unName tellName)
+    fail ("Constraint not found: " ++ T.unpack (unName tellName))
   runEff
     . runUnify
     . fmap fst
@@ -244,7 +246,7 @@ runProgramWithGoalDSL cp hostCalls constraint = do
     . runCHRStore progNumTypes
     . runPropHistory
     . runReactQueue
-    . evalState (Map.empty :: Map String Value)
+    . evalState (Map.empty :: Map Text Value)
     $ do
       argVals <- traverse termToValue (conArgs resolved)
       result <- callProc procMap hostCalls tellName (map RVal argVals)
@@ -253,13 +255,13 @@ runProgramWithGoalDSL cp hostCalls constraint = do
       pure (result, bindings)
 
 -- | Like 'runProgramWithGoalDSL' but accepts a query as surface-language 'Text'.
-runProgramWithGoal :: CompiledProgram -> HostCallRegistry -> Text -> IO (RuntimeVal, Map String Term)
+runProgramWithGoal :: CompiledProgram -> HostCallRegistry -> Text -> IO (RuntimeVal, Map Text Term)
 runProgramWithGoal cp hostCalls src =
   case parseConstraint "<query>" src of
     Left err -> fail (show err)
     Right c -> runProgramWithGoalDSL cp hostCalls c
 
-termToValue :: (Unify :> es, State (Map String Value) :> es) => Term -> Eff es Value
+termToValue :: (Unify :> es, State (Map Text Value) :> es) => Term -> Eff es Value
 termToValue (VarTerm n) = do
   varMap <- get
   case Map.lookup n varMap of
@@ -272,7 +274,7 @@ termToValue (IntTerm n) = pure (VInt n)
 termToValue (AtomTerm s) = pure (VAtom s)
 termToValue Wildcard = pure VWildcard
 termToValue (CompoundTerm (T.Unqualified f) ts) = VTerm f <$> traverse termToValue ts
-termToValue (CompoundTerm (T.Qualified m f) ts) = VTerm (m ++ ":" ++ f) <$> traverse termToValue ts
+termToValue (CompoundTerm (T.Qualified m f) ts) = VTerm (m <> ":" <> f) <$> traverse termToValue ts
 
 -- ---------------------------------------------------------------------------
 -- Multi-goal query API
@@ -282,20 +284,20 @@ termToValue (CompoundTerm (T.Qualified m f) ts) = VTerm (m ++ ":" ++ f) <$> trav
 --
 -- Parses the input as a comma-separated, dot-terminated list of goals
 -- and interprets each goal directly.
-runProgramWithQuery :: CompiledProgram -> HostCallRegistry -> Text -> IO (Map String Term)
+runProgramWithQuery :: CompiledProgram -> HostCallRegistry -> Text -> IO (Map Text Term)
 runProgramWithQuery cp hostCalls src =
   case parseQuery "<query>" src of
     Left err -> fail (show err)
     Right goals ->
       withCHR cp hostCalls $
-        evalState (Map.empty :: Map String Value) $ do
+        evalState (Map.empty :: Map Text Value) $ do
           mapM_ (interpretGoal hostCalls) goals
           varMap <- get
           Map.traverseWithKey valueToTerm varMap
 
 -- | Interpret a single query goal.
 interpretGoal ::
-  (CHREffects es, State (Map String Value) :> es) =>
+  (CHREffects es, State (Map Text Value) :> es) =>
   HostCallRegistry ->
   Term ->
   Eff es ()
@@ -337,9 +339,9 @@ termToConstraint (AtomTerm s) = (T.Unqualified s, [])
 termToConstraint t = error $ "Not a valid goal: " ++ show t
 
 -- | Call a host function, failing with a clear message if not found.
-hostCall :: Maybe ([RuntimeVal] -> IO RuntimeVal) -> String -> [RuntimeVal] -> IO RuntimeVal
+hostCall :: Maybe ([RuntimeVal] -> IO RuntimeVal) -> Text -> [RuntimeVal] -> IO RuntimeVal
 hostCall (Just f) _ args = f args
-hostCall Nothing name _ = error $ "Unknown host function: " ++ name
+hostCall Nothing name _ = error $ "Unknown host function: " ++ T.unpack name
 
 -- | Drain the reactivation queue, dispatching each constraint.
 drainReactivation ::
@@ -356,7 +358,7 @@ drainReactivation procMap hc =
 
 -- | Evaluate a term as an arithmetic expression.
 evalTermArith ::
-  (Unify :> es, State (Map String Value) :> es, IOE :> es) =>
+  (Unify :> es, State (Map Text Value) :> es, IOE :> es) =>
   HostCallRegistry ->
   Term ->
   Eff es Value
@@ -366,7 +368,7 @@ evalTermArith _ (VarTerm v) = do
   varMap <- get
   case Map.lookup v varMap of
     Just val -> deref val
-    Nothing -> error $ "Unbound variable in arithmetic expression: " ++ v
+    Nothing -> error $ "Unbound variable in arithmetic expression: " ++ T.unpack v
 evalTermArith hc (CompoundTerm (T.Unqualified op) [l, r]) = do
   lv <- evalTermArith hc l
   rv <- evalTermArith hc r

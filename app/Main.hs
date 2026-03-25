@@ -1,6 +1,6 @@
 module Main where
 
-import Control.Exception (IOException, try)
+import Control.Exception (SomeException, displayException, try)
 import Control.Monad.IO.Class (liftIO)
 import Data.Text qualified as T
 import System.Console.Haskeline
@@ -42,10 +42,10 @@ repl prog = loop
         Just line -> do
           outcome <-
             liftIO $
-              try @IOException $
+              try @SomeException $
                 runProgramWithQuery prog (baseHostCallRegistry <> metaHostCallRegistry) (T.pack line)
           case outcome of
-            Left err -> outputStrLn ("Error: " ++ show err)
+            Left err -> outputStrLn ("Error: " ++ displayException err)
             Right bindings -> do
               outputStr (prettyQueryResult bindings)
           loop

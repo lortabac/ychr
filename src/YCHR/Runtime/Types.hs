@@ -10,6 +10,7 @@ module YCHR.Runtime.Types
 where
 
 import Data.IORef
+import Data.Text (Text)
 
 -- | Unique identifier for a constraint suspension. Also serves as the
 -- observer key on variables for selective reactivation.
@@ -36,10 +37,10 @@ data Value
   = -- | A logical variable (possibly unbound, possibly bound).
     VVar !Var
   | VInt !Int
-  | VAtom !String
+  | VAtom !Text
   | VBool !Bool
   | -- | Compound term: functor and arguments.
-    VTerm !String ![Value]
+    VTerm !Text ![Value]
   | -- | Wildcard: unifies with anything without binding.
     VWildcard
 

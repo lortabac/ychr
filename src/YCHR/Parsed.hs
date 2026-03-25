@@ -30,11 +30,12 @@ module YCHR.Parsed
   )
 where
 
+import Data.Text (Text)
 import YCHR.Types (Constraint (..), Term (..))
 
 data Module = Module
-  { modName :: String,
-    modImports :: [String],
+  { modName :: Text,
+    modImports :: [Text],
     modDecls :: [Declaration],
     modRules :: [Rule],
     modExports :: Maybe [Declaration]
@@ -42,13 +43,13 @@ data Module = Module
   deriving (Show, Eq)
 
 data Declaration = ConstraintDecl
-  { declName :: String,
+  { declName :: Text,
     declArity :: Int
   }
   deriving (Show, Eq)
 
 data Rule = Rule
-  { ruleName :: Maybe String,
+  { ruleName :: Maybe Text,
     ruleHead :: Head,
     ruleGuard :: [Term],
     ruleBody :: [Term]

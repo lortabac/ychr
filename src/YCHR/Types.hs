@@ -13,6 +13,8 @@ module YCHR.Types
   )
 where
 
+import Data.Text (Text)
+
 -- | A numeric identifier for a constraint type, assigned by the symbol table.
 newtype ConstraintType = ConstraintType {unConstraintType :: Int}
   deriving (Show, Eq, Ord)
@@ -20,9 +22,9 @@ newtype ConstraintType = ConstraintType {unConstraintType :: Int}
 -- | Represents a name that can be either raw or module-qualified.
 data Name
   = -- | e.g., "leq"
-    Unqualified String
+    Unqualified Text
   | -- | e.g., "Order", "leq"
-    Qualified String String
+    Qualified Text Text
   deriving (Show, Eq, Ord)
 
 -- | A CHR constraint occurrence.
@@ -34,9 +36,9 @@ data Constraint = Constraint
 
 -- | Prolog-compatible terms.
 data Term
-  = VarTerm String
+  = VarTerm Text
   | IntTerm Int
-  | AtomTerm String
+  | AtomTerm Text
   | CompoundTerm Name [Term]
   | Wildcard
   deriving (Show, Eq)

@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 -- | Haskell interpreter for CHR VM programs.
 --
@@ -20,6 +21,7 @@ where
 import Data.Foldable (toList, traverse_)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Effectful
 import Effectful.Error.Static (Error, runError, throwError)
 import Effectful.State.Static.Local (State, evalState, get, modify)
@@ -68,8 +70,8 @@ data ControlFlow
 
 instance Show ControlFlow where
   show (CFReturn _) = "CFReturn <val>"
-  show (CFContinue l) = "CFContinue " ++ unLabel l
-  show (CFBreak l) = "CFBreak " ++ unLabel l
+  show (CFContinue l) = "CFContinue " ++ T.unpack (unLabel l)
+  show (CFBreak l) = "CFBreak " ++ T.unpack (unLabel l)
 
 -- | A base host call registry providing arithmetic and comparison operations.
 baseHostCallRegistry :: HostCallRegistry
@@ -145,7 +147,7 @@ callProc ::
   ProcMap -> HostCallRegistry -> Name -> [RuntimeVal] -> Eff es RuntimeVal
 callProc procMap hostCalls name args = do
   case Map.lookup name procMap of
-    Nothing -> error $ "callProc: unknown procedure " ++ unName name
+    Nothing -> error $ "callProc: unknown procedure " ++ T.unpack (unName name)
     Just proc -> do
       let env = Map.fromList (zip (procParams proc) args)
       result <-
@@ -155,8 +157,8 @@ callProc procMap hostCalls name args = do
       case result of
         Right () -> pure (RVal (VBool False))
         Left (_, CFReturn v) -> pure v
-        Left (_, CFContinue l) -> error $ "callProc: uncaught Continue " ++ unLabel l
-        Left (_, CFBreak l) -> error $ "callProc: uncaught Break " ++ unLabel l
+        Left (_, CFContinue l) -> error $ "callProc: uncaught Continue " ++ T.unpack (unLabel l)
+        Left (_, CFBreak l) -> error $ "callProc: uncaught Break " ++ T.unpack (unLabel l)
 
 -- | Execute a list of statements sequentially.
 execStmts ::
@@ -276,7 +278,7 @@ evalExpr _ _ (Var name) = do
   env <- get
   case Map.lookup name env of
     Just v -> pure v
-    Nothing -> error $ "evalExpr: unbound variable " ++ unName name
+    Nothing -> error $ "evalExpr: unbound variable " ++ T.unpack (unName name)
 evalExpr _ _ (Lit (IntLit n)) = pure (RVal (VInt n))
 evalExpr _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
 evalExpr _ _ (Lit (BoolLit b)) = pure (RVal (VBool b))
@@ -289,7 +291,7 @@ evalExpr pm hc (HostCall name args) = do
   derefedVals <- traverse derefRV argVals
   case Map.lookup name hc of
     Just f -> liftIO (f derefedVals)
-    Nothing -> error $ "evalExpr: unknown host call " ++ unName name
+    Nothing -> error $ "evalExpr: unknown host call " ++ T.unpack (unName name)
   where
     derefRV (RVal v) = RVal <$> deref v
     derefRV rc = pure rc
@@ -383,7 +385,7 @@ evalArith pm hc (MakeTerm name args) = do
   argVals <- traverse (evalArith pm hc) args
   case Map.lookup name hc of
     Just f -> liftIO (f argVals)
-    Nothing -> error $ "evalArith: unknown operator " ++ unName name
+    Nothing -> error $ "evalArith: unknown operator " ++ T.unpack (unName name)
 evalArith _ _ expr = error $ "evalArith: unsupported expression " ++ show expr
 
 -- ---------------------------------------------------------------------------

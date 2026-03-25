@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module YCHR.DesugarTest (tests) where
 
 import Data.Map qualified as Map

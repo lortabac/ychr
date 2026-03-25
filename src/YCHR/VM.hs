@@ -56,6 +56,8 @@ module YCHR.VM
 where
 
 import Data.String (IsString (..))
+import Data.Text (Text)
+import Data.Text qualified as T
 import YCHR.Types (ConstraintType (..))
 
 -- | A VM program is a collection of named procedures.
@@ -238,7 +240,7 @@ data Literal
   = -- | Integer literal.
     IntLit Int
   | -- | Atom literal (symbolic constant).
-    AtomLit String
+    AtomLit Text
   | -- | Boolean literal.
     BoolLit Bool
   | -- | Wildcard literal: evaluates to 'VWildcard'.
@@ -250,19 +252,19 @@ newtype ArgIndex = ArgIndex Int
   deriving (Show, Eq)
 
 -- | Variable or procedure name.
-newtype Name = Name {unName :: String}
+newtype Name = Name {unName :: Text}
   deriving (Show, Eq, Ord)
 
-instance IsString Name where fromString = Name
+instance IsString Name where fromString = Name . T.pack
 
 -- | Label for 'Foreach' loops, used with 'Continue' and 'Break'.
-newtype Label = Label {unLabel :: String}
+newtype Label = Label {unLabel :: Text}
   deriving (Show, Eq, Ord)
 
-instance IsString Label where fromString = Label
+instance IsString Label where fromString = Label . T.pack
 
 -- | Rule identifier, used for propagation history.
-newtype RuleName = RuleName {unRuleName :: String}
+newtype RuleName = RuleName {unRuleName :: Text}
   deriving (Show, Eq, Ord)
 
-instance IsString RuleName where fromString = RuleName
+instance IsString RuleName where fromString = RuleName . T.pack

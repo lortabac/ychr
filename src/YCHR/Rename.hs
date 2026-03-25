@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 -- |
 -- Module      : YCHR.Rename
@@ -23,18 +24,19 @@ module YCHR.Rename (renameProgram, buildExportEnv, RenameError (..)) where
 
 import Data.Map qualified as Map
 import Data.Set qualified as Set
+import Data.Text (Text)
 import Effectful (Eff, runPureEff)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import YCHR.Parsed
 import YCHR.Types
 
 data RenameError
-  = AmbiguousName String Int [String]
-  | UnknownName String Int
+  = AmbiguousName Text Int [Text]
+  | UnknownName Text Int
   deriving (Eq, Show)
 
 -- | Map of (Name, Arity) to the modules declaring/exporting it.
-type GlobalEnv = Map.Map (String, Int) [String]
+type GlobalEnv = Map.Map (Text, Int) [Text]
 
 -- | All declared constraints (for intra-module resolution).
 buildLocalEnv :: [Module] -> GlobalEnv
@@ -59,7 +61,7 @@ buildExportEnv mods =
         Just exports -> exports
     ]
 
-reservedSymbols :: Set.Set String
+reservedSymbols :: Set.Set Text
 reservedSymbols = Set.fromList ["true", "fail", "=", "==", ":=", "host", "is"]
 
 renameProgram :: [Module] -> Either [RenameError] [Module]

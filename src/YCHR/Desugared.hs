@@ -32,12 +32,13 @@ module YCHR.Desugared
   )
 where
 
+import Data.Text (Text)
 import YCHR.Types
 
 data Program = Program [Rule] deriving (Show, Eq)
 
 data Rule = Rule
-  { ruleName :: Maybe String,
+  { ruleName :: Maybe Text,
     ruleHead :: Head,
     ruleGuard :: [Guard],
     ruleBody :: [BodyGoal]
@@ -62,7 +63,7 @@ data BodyGoal
   = BodyCommon CommonGoal
   | BodyConstraint Constraint
   | BodyUnify Term Term
-  | BodyHostStmt String [Term]
-  | BodyHostCall String String [Term]
-  | BodyIs String Term
+  | BodyHostStmt Text [Term]
+  | BodyHostCall Text Text [Term]
+  | BodyIs Text Term
   deriving (Show, Eq)
