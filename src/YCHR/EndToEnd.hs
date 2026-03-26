@@ -57,6 +57,7 @@ import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable)
 import YCHR.Meta (valueToTerm)
 import YCHR.Parser (parseConstraint, parseModule, parseQuery)
 import YCHR.Rename (RenameError, buildExportEnv, renameProgram)
+import YCHR.Rename.Types (toListGlobal)
 import YCHR.Runtime.History (PropHistory, runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallRegistry, callProc)
 import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue)
@@ -97,11 +98,11 @@ compileModules inputs = do
       exportMap =
         Map.fromList
           [ ((n, a), toResolution n ms)
-          | ((n, a), ms) <- Map.toList exportEnv
+          | ((n, a), ms) <- toListGlobal exportEnv
           ]
       exportedSet =
         Set.fromList
-          [T.Qualified m n | ((n, _), ms) <- Map.toList exportEnv, m <- ms]
+          [T.Qualified m n | ((n, _), ms) <- toListGlobal exportEnv, m <- ms]
   renamed <- first RenameErrors (renameProgram collected)
   desugared <- first DesugarErrors (desugarProgram renamed)
   let symTab = extractSymbolTable desugared

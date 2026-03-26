@@ -129,6 +129,7 @@ library
                     , YCHR.Parsed
                     , YCHR.Pretty
                     , YCHR.Rename
+                    , YCHR.Rename.Types
                     , YCHR.StdLib
                     , YCHR.StdLib.TH
                     , YCHR.Types
