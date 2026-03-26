@@ -1,7 +1,5 @@
-:- module(builtins, [noop/0, identity/2, print/1]).
-:- chr_constraint noop/0, identity/2, print/1.
-
-noop <=> true.
+:- module(builtins, [identity/2, print/1]).
+:- chr_constraint identity/2, print/1.
 
 identity(X, Y) <=> X = Y.
 
