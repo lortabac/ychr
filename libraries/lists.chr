@@ -1,0 +1,6 @@
+:- module(lists, [length/2]).
+
+:- chr_constraint length/2.
+
+length([], R) <=> R = 0.
+length([_|Xs], R) <=> length(Xs, R1), R is R1 + 1.

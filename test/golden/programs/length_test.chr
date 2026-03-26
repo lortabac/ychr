@@ -1,0 +1,3 @@
+:- module(length_test, []).
+
+:- use_module(library(lists)).
