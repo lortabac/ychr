@@ -131,6 +131,11 @@ normalizeArg st (VarTerm v)
   | otherwise =
       (st {hnfSeen = Map.insert v () (hnfSeen st)}, VarTerm v)
 normalizeArg st Wildcard = (st, Wildcard)
+normalizeArg st (CompoundTerm name args) =
+  let fresh = "_hnf_" <> T.pack (show (hnfCounter st))
+      st' = st {hnfCounter = hnfCounter st + 1}
+      st'' = decomposeCompound st' fresh name args
+   in (st'', VarTerm fresh)
 normalizeArg st term =
   let fresh = "_hnf_" <> T.pack (show (hnfCounter st))
    in ( st
@@ -139,6 +144,53 @@ normalizeArg st term =
           },
         VarTerm fresh
       )
+
+-- | Decompose a compound term into match and extraction guards.
+decomposeCompound :: HnfState -> Text -> Name -> [Term] -> HnfState
+decomposeCompound st parentVar name args =
+  let matchGuard = D.GuardMatch (VarTerm parentVar) name (length args)
+      st' = st {hnfGuards = matchGuard : hnfGuards st}
+   in foldl' (\s (i, arg) -> decomposeArg s parentVar i arg) st' (zip [0 ..] args)
+
+-- | Decompose a single argument of a compound term.
+decomposeArg :: HnfState -> Text -> Int -> Term -> HnfState
+decomposeArg st parentVar i (VarTerm v)
+  | Map.member v (hnfSeen st) =
+      -- Duplicate variable: extract and check equality
+      let fresh = "_hnf_" <> T.pack (show (hnfCounter st))
+          getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
+          eqGuard = D.GuardEqual (VarTerm v) (VarTerm fresh)
+       in st
+            { hnfCounter = hnfCounter st + 1,
+              hnfGuards = eqGuard : getGuard : hnfGuards st
+            }
+  | otherwise =
+      -- First occurrence: extract and bind
+      let getGuard = D.GuardGetArg v (VarTerm parentVar) i
+       in st
+            { hnfGuards = getGuard : hnfGuards st,
+              hnfSeen = Map.insert v () (hnfSeen st)
+            }
+decomposeArg st _ _ Wildcard = st
+decomposeArg st parentVar i (CompoundTerm name args) =
+  -- Nested compound: extract then recursively decompose
+  let fresh = "_hnf_" <> T.pack (show (hnfCounter st))
+      getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
+      st' =
+        st
+          { hnfCounter = hnfCounter st + 1,
+            hnfGuards = getGuard : hnfGuards st
+          }
+   in decomposeCompound st' fresh name args
+decomposeArg st parentVar i term =
+  -- Ground term (atom, integer, string): extract and check equality
+  let fresh = "_hnf_" <> T.pack (show (hnfCounter st))
+      getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
+      eqGuard = D.GuardEqual (VarTerm fresh) term
+   in st
+        { hnfCounter = hnfCounter st + 1,
+          hnfGuards = eqGuard : getGuard : hnfGuards st
+        }
 
 desugarGuard :: Term -> D.Guard
 desugarGuard (AtomTerm "true") = D.GuardCommon D.GoalTrue

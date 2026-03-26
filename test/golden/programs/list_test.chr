@@ -1,0 +1,4 @@
+:- module(list_test, [head/2]).
+:- chr_constraint head/2.
+
+head([H|_], R) <=> R = H.

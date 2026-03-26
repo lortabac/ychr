@@ -13,6 +13,8 @@ module YCHR.Compile
   )
 where
 
+import Control.Monad (foldM)
+import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T'
@@ -237,22 +239,24 @@ genOccurrenceBody symTab varMap occ
 genNoPartnerBody :: SymbolTable -> Map.Map Text Expr -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
 genNoPartnerBody symTab varMap occ = do
   let guards = D.ruleGuard (occRule occ)
-  guardExpr <- compileGuards varMap guards
-  fireStmts <- genFireStmts symTab varMap occ
-  pure $ case guardExpr of
-    Nothing -> fireStmts ++ [Return (Lit (BoolLit False))]
-    Just gExpr -> [If gExpr fireStmts [], Return (Lit (BoolLit False))]
+  (wrapper, guardExpr, varMap') <- compileGuards varMap guards
+  fireStmts <- genFireStmts symTab varMap' occ
+  let inner = case guardExpr of
+        Nothing -> fireStmts
+        Just gExpr -> [If gExpr fireStmts []]
+  pure (wrapper inner ++ [Return (Lit (BoolLit False))])
 
 -- Multi-head rule with partners
 genPartnerBody :: SymbolTable -> Map.Map Text Expr -> Occurrence -> Int -> Eff '[Writer [CompileError]] [Stmt]
 genPartnerBody symTab varMap occ k
   | k >= length (occPartners occ) = do
       let guards = D.ruleGuard (occRule occ)
-      guardExpr <- compileGuards varMap guards
-      fireStmts <- genFireStmts symTab varMap occ
-      pure $ case guardExpr of
-        Nothing -> fireStmts
-        Just gExpr -> [If gExpr fireStmts []]
+      (wrapper, guardExpr, varMap') <- compileGuards varMap guards
+      fireStmts <- genFireStmts symTab varMap' occ
+      let inner = case guardExpr of
+            Nothing -> fireStmts
+            Just gExpr -> [If gExpr fireStmts []]
+      pure (wrapper inner)
   | otherwise = do
       let partner = occPartners occ !! k
           label = Label ("L" <> T'.pack (show (k + 1)))
@@ -350,20 +354,50 @@ compileTerm _ T.Wildcard = pure (Lit WildcardLit)
 -- Compile guards
 -- ---------------------------------------------------------------------------
 
-compileGuards :: Map.Map Text Expr -> [D.Guard] -> Eff '[Writer [CompileError]] (Maybe Expr)
-compileGuards varMap guards = case nonTrivialGuards of
+compileGuards ::
+  Map.Map Text Expr ->
+  [D.Guard] ->
+  Eff '[Writer [CompileError]] ([Stmt] -> [Stmt], Maybe Expr, Map.Map Text Expr)
+compileGuards varMap guards = do
+  let (matchGuards, checkGuards) = partition isMatchGuard guards
+  (wrapper, varMap') <- foldM compileMatchGuard (id, varMap) matchGuards
+  checkExpr <- compileCheckGuards varMap' checkGuards
+  pure (wrapper, checkExpr, varMap')
+  where
+    isMatchGuard (D.GuardMatch {}) = True
+    isMatchGuard (D.GuardGetArg {}) = True
+    isMatchGuard _ = False
+
+compileMatchGuard ::
+  ([Stmt] -> [Stmt], Map.Map Text Expr) ->
+  D.Guard ->
+  Eff '[Writer [CompileError]] ([Stmt] -> [Stmt], Map.Map Text Expr)
+compileMatchGuard (wrapper, varMap) (D.GuardMatch term name arity) = do
+  termExpr <- compileTerm varMap term
+  let check body = [If (MatchTerm termExpr (vmName name) arity) body []]
+  pure (wrapper . check, varMap)
+compileMatchGuard (wrapper, varMap) (D.GuardGetArg vname term idx) = do
+  termExpr <- compileTerm varMap term
+  let binding body = Let (Name vname) (GetArg termExpr idx) : body
+      varMap' = Map.insert vname (Var (Name vname)) varMap
+  pure (wrapper . binding, varMap')
+compileMatchGuard acc _ = pure acc
+
+compileCheckGuards :: Map.Map Text Expr -> [D.Guard] -> Eff '[Writer [CompileError]] (Maybe Expr)
+compileCheckGuards varMap guards = case nonTrivialGuards of
   [] -> pure Nothing
-  [g] -> Just <$> compileGuard varMap g
-  gs -> Just . foldl1 And <$> traverse (compileGuard varMap) gs
+  [g] -> Just <$> compileCheckGuard varMap g
+  gs -> Just . foldl1 And <$> traverse (compileCheckGuard varMap) gs
   where
     nonTrivialGuards = filter isNonTrivial guards
     isNonTrivial (D.GuardCommon D.GoalTrue) = False
     isNonTrivial _ = True
 
-compileGuard :: Map.Map Text Expr -> D.Guard -> Eff '[Writer [CompileError]] Expr
-compileGuard _ (D.GuardCommon D.GoalTrue) = pure (Lit (BoolLit True))
-compileGuard varMap (D.GuardEqual t1 t2) = Equal <$> compileTerm varMap t1 <*> compileTerm varMap t2
-compileGuard varMap (D.GuardExpr term) = HostEval <$> compileTerm varMap term
+compileCheckGuard :: Map.Map Text Expr -> D.Guard -> Eff '[Writer [CompileError]] Expr
+compileCheckGuard _ (D.GuardCommon D.GoalTrue) = pure (Lit (BoolLit True))
+compileCheckGuard varMap (D.GuardEqual t1 t2) = Equal <$> compileTerm varMap t1 <*> compileTerm varMap t2
+compileCheckGuard varMap (D.GuardExpr term) = HostEval <$> compileTerm varMap term
+compileCheckGuard _ _ = pure (Lit (BoolLit True))
 
 -- ---------------------------------------------------------------------------
 -- Compile body goals

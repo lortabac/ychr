@@ -56,6 +56,8 @@ data CommonGoal = GoalTrue deriving (Show, Eq)
 data Guard
   = GuardCommon CommonGoal
   | GuardEqual Term Term
+  | GuardMatch Term Name Int
+  | GuardGetArg Text Term Int
   | GuardExpr Term
   deriving (Show, Eq)
 

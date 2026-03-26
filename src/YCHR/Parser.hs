@@ -19,6 +19,9 @@
 -- leq(X, X) \<=> true.
 -- trans \@ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
 -- a \@ kept \\ removed \<=> guard | body.
+--
+-- [H|T]     -- list with head H and tail T
+-- [a, b, c] -- list literal (sugar for '.'(a,'.'(b,'.'(c,'[]'))))
 -- @
 module YCHR.Parser
   ( parseModule,
@@ -211,7 +214,6 @@ symbolOp op = lexeme $ try $ do
 -- Terms
 -- ---------------------------------------------------------------------------
 
--- | Parse an atomic (non-operator) term.
 -- | Parse a double-quoted string literal as 'TextTerm'.
 --
 -- Supports the same escape sequences as single-quoted atoms:
@@ -245,6 +247,22 @@ stringP = lexeme $ TextTerm . T.pack <$> (char '"' *> go)
           anySingle -- \x → x (fallback)
         ]
 
+-- | Parse a list term using Prolog list notation.
+-- Desugars to nested @'.'(H, T)@ terms, with @'[]'@ for the empty list.
+--
+-- * @[]@        → @'[]'@
+-- * @[a, b, c]@ → @'.'(a, '.'(b, '.'(c, '[]')))@
+-- * @[H|T]@     → @'.'(H, T)@
+-- * @[a, b|T]@  → @'.'(a, '.'(b, T))@
+listTermP :: Parser Term
+listTermP = between (symbol "[") (symbol "]") listBody
+  where
+    listBody = do
+      elems <- termP `sepBy` comma
+      tail_ <- option (AtomTerm "[]") (symbol "|" *> termP)
+      pure (foldr (\h t -> CompoundTerm (Unqualified ".") [h, t]) tail_ elems)
+
+-- | Parse an atomic (non-operator) term.
 atomicTermP :: Parser Term
 atomicTermP =
   choice
@@ -252,6 +270,7 @@ atomicTermP =
       varP,
       try intP,
       stringP,
+      listTermP,
       try (parens termP),
       atomOrCompoundP
     ]

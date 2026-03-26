@@ -26,6 +26,13 @@ prettyTerm (AtomTerm s) = T.unpack s
 prettyTerm (TextTerm s) = renderString s
 prettyTerm (VarTerm _) = "_"
 prettyTerm Wildcard = "_"
+prettyTerm (CompoundTerm (Unqualified ".") [h, t]) =
+  "[" ++ prettyTerm h ++ prettyListTail t ++ "]"
+  where
+    prettyListTail (AtomTerm "[]") = ""
+    prettyListTail (CompoundTerm (Unqualified ".") [h', t']) =
+      ", " ++ prettyTerm h' ++ prettyListTail t'
+    prettyListTail other = "|" ++ prettyTerm other
 prettyTerm (CompoundTerm (Unqualified f) ts) =
   T.unpack f ++ "(" ++ intercalate ", " (map prettyTerm ts) ++ ")"
 prettyTerm (CompoundTerm (Qualified m f) ts) =
@@ -80,6 +87,13 @@ prettyTermSrc (AtomTerm s) = renderAtom s
 prettyTermSrc (TextTerm s) = renderString s
 prettyTermSrc (VarTerm v) = T.unpack v
 prettyTermSrc Wildcard = "_"
+prettyTermSrc (CompoundTerm (Unqualified ".") [h, t]) =
+  "[" ++ prettyTermSrc h ++ prettyListTailSrc t ++ "]"
+  where
+    prettyListTailSrc (AtomTerm "[]") = ""
+    prettyListTailSrc (CompoundTerm (Unqualified ".") [h', t']) =
+      ", " ++ prettyTermSrc h' ++ prettyListTailSrc t'
+    prettyListTailSrc other = "|" ++ prettyTermSrc other
 prettyTermSrc (CompoundTerm (Unqualified op) [l, r])
   | op `elem` infixOpsSrc =
       "(" ++ prettyTermSrc l ++ " " ++ T.unpack op ++ " " ++ prettyTermSrc r ++ ")"
