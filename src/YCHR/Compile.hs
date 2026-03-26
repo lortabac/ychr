@@ -361,7 +361,6 @@ compileGuards varMap guards = case nonTrivialGuards of
 
 compileGuard :: Map.Map Text Expr -> D.Guard -> Eff '[Writer [CompileError]] Expr
 compileGuard _ (D.GuardCommon D.GoalTrue) = pure (Lit (BoolLit True))
-compileGuard _ (D.GuardCommon D.GoalFail) = pure (Lit (BoolLit False))
 compileGuard varMap (D.GuardEqual t1 t2) = Equal <$> compileTerm varMap t1 <*> compileTerm varMap t2
 compileGuard varMap (D.GuardExpr term) = HostEval <$> compileTerm varMap term
 
@@ -399,7 +398,6 @@ compileBodyGoals symTab varMap (goal : rest) = case goal of
 
 compileBodyGoal :: SymbolTable -> Map.Map Text Expr -> D.BodyGoal -> Eff '[Writer [CompileError]] [Stmt]
 compileBodyGoal _ _ (D.BodyCommon D.GoalTrue) = pure []
-compileBodyGoal _ _ (D.BodyCommon D.GoalFail) = pure []
 compileBodyGoal _ varMap (D.BodyConstraint con) = do
   args <- traverse (compileTerm varMap) (T.conArgs con)
   let tellName = procNameFor "tell" (T.conName con)

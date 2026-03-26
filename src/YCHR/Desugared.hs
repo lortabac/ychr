@@ -51,7 +51,7 @@ data Head = Head
   }
   deriving (Show, Eq)
 
-data CommonGoal = GoalTrue | GoalFail deriving (Show, Eq)
+data CommonGoal = GoalTrue deriving (Show, Eq)
 
 data Guard
   = GuardCommon CommonGoal
