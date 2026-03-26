@@ -8,17 +8,42 @@ module YCHR.Types
     ConstraintType (..),
     Name (..),
 
+    -- * Symbol table
+    SymbolTable,
+    mkSymbolTable,
+    lookupSymbol,
+    symbolTableToList,
+    symbolTableSize,
+
     -- * Terms
     Term (..),
   )
 where
 
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Language.Haskell.TH.Syntax (Lift)
 
 -- | A numeric identifier for a constraint type, assigned by the symbol table.
 newtype ConstraintType = ConstraintType {unConstraintType :: Int}
   deriving (Show, Eq, Ord)
+
+-- | Maps fully-qualified CHR names to unique 0-indexed numeric IDs.
+newtype SymbolTable = SymbolTable (Map Name ConstraintType)
+  deriving (Show, Eq)
+
+mkSymbolTable :: [(Name, ConstraintType)] -> SymbolTable
+mkSymbolTable = SymbolTable . Map.fromList
+
+lookupSymbol :: Name -> SymbolTable -> Maybe ConstraintType
+lookupSymbol n (SymbolTable m) = Map.lookup n m
+
+symbolTableToList :: SymbolTable -> [(Name, ConstraintType)]
+symbolTableToList (SymbolTable m) = Map.toList m
+
+symbolTableSize :: SymbolTable -> Int
+symbolTableSize (SymbolTable m) = Map.size m
 
 -- | Represents a name that can be either raw or module-qualified.
 data Name

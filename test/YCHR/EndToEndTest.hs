@@ -13,7 +13,7 @@ import YCHR.EndToEnd (CompiledProgram (..), ConstraintType, Value (..), compileM
 import YCHR.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive)
 import YCHR.Runtime.Types (RuntimeVal (..))
-import YCHR.Types (Constraint (..), Name (..), Term (..))
+import YCHR.Types (Constraint (..), Name (..), Term (..), lookupSymbol)
 import YCHR.VM qualified as VM
 
 tests :: TestTree
@@ -56,7 +56,7 @@ leqSource =
 
 lookupType :: CompiledProgram -> Name -> ConstraintType
 lookupType prog name =
-  case Map.lookup name (cpSymbolTable prog) of
+  case lookupSymbol name (cpSymbolTable prog) of
     Just ct -> ct
     Nothing -> error $ "constraint type not found: " ++ show name
 

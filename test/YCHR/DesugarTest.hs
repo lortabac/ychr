@@ -2,14 +2,13 @@
 
 module YCHR.DesugarTest (tests) where
 
-import Data.Map qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import YCHR.DSL
 import YCHR.Desugar (DesugarError (..), desugarProgram, extractSymbolTable)
 import YCHR.Desugared qualified as D
 import YCHR.Parsed
-import YCHR.Types (ConstraintType (..), Name (..))
+import YCHR.Types (ConstraintType (..), Name (..), lookupSymbol, mkSymbolTable, symbolTableSize)
 
 tests :: TestTree
 tests =
@@ -285,7 +284,7 @@ symbolTableTests =
   testGroup
     "symbol-table"
     [ testCase "empty program yields empty table" $
-        extractSymbolTable (D.Program []) @?= Map.empty,
+        extractSymbolTable (D.Program []) @?= mkSymbolTable [],
       testCase "one qualified constraint in head gets id 0" $ do
         let prog =
               D.Program
@@ -295,7 +294,7 @@ symbolTableTests =
                     []
                     []
                 ]
-        extractSymbolTable prog @?= Map.singleton (Qualified "M" "leq") (ConstraintType 0),
+        extractSymbolTable prog @?= mkSymbolTable [(Qualified "M" "leq", ConstraintType 0)],
       testCase "two distinct qualified constraints get sequential ids" $ do
         let prog =
               D.Program
@@ -306,7 +305,7 @@ symbolTableTests =
                     []
                 ]
         let table = extractSymbolTable prog
-        Map.size table @?= 2,
+        symbolTableSize table @?= 2,
       testCase "same constraint in head and body appears only once" $ do
         let prog =
               D.Program
@@ -316,7 +315,7 @@ symbolTableTests =
                     []
                     [D.BodyConstraint (Constraint (Qualified "M" "leq") [])]
                 ]
-        extractSymbolTable prog @?= Map.singleton (Qualified "M" "leq") (ConstraintType 0),
+        extractSymbolTable prog @?= mkSymbolTable [(Qualified "M" "leq", ConstraintType 0)],
       testCase "unqualified name in body not in table" $ do
         let prog =
               D.Program
@@ -327,7 +326,7 @@ symbolTableTests =
                     [D.BodyHostStmt "print" []]
                 ]
         let table = extractSymbolTable prog
-        Map.member (Unqualified "print") table @?= False,
+        lookupSymbol (Unqualified "print") table @?= Nothing,
       testCase "ids assigned in Set.toList order (module-first then name)" $ do
         -- Qualified "A" "z" < Qualified "B" "a" by derived Ord
         let prog =
@@ -344,6 +343,6 @@ symbolTableTests =
                     []
                 ]
         let table = extractSymbolTable prog
-        (Map.lookup (Qualified "A" "z") table, Map.lookup (Qualified "B" "a") table)
+        (lookupSymbol (Qualified "A" "z") table, lookupSymbol (Qualified "B" "a") table)
           @?= (Just (ConstraintType 0), Just (ConstraintType 1))
     ]

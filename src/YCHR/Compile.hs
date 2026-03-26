@@ -22,6 +22,7 @@ import Data.Traversable (for)
 import Effectful (Eff, runPureEff)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import YCHR.Desugared qualified as D
+import YCHR.Types (SymbolTable, lookupSymbol, symbolTableSize, symbolTableToList)
 import YCHR.Types qualified as T
 import YCHR.VM
 
@@ -51,8 +52,6 @@ data Partner = Partner
     partCType :: ConstraintType
   }
 
-type SymbolTable = Map.Map T.Name ConstraintType
-
 type ArityMap = Map.Map T.Name Int
 
 type OccurrenceMap = Map.Map T.Name [Occurrence]
@@ -66,14 +65,14 @@ compile prog symTab =
   let arityMap = buildArityMap prog
       (occMap, occErrs) = runPureEff . runWriter $ collectOccurrences symTab prog
       (procs, procErrs) = runPureEff . runWriter $ do
-        fmap concat $ traverse (genConstraintProcs symTab arityMap occMap) (Map.toList symTab)
+        fmap concat $ traverse (genConstraintProcs symTab arityMap occMap) (symbolTableToList symTab)
       dispatch = genReactivateDispatch symTab arityMap
       allErrs = occErrs ++ procErrs
    in if null allErrs
         then
           Right
             Program
-              { progNumTypes = Map.size symTab,
+              { progNumTypes = symbolTableSize symTab,
                 progProcedures = procs ++ [dispatch]
               }
         else Left allErrs
@@ -150,7 +149,7 @@ mkOccurrence symTab rule _ruleName combined activeIdx activeCon activeIsKept = d
       }
 
 lookupCType :: SymbolTable -> T.Name -> Eff '[Writer [CompileError]] ConstraintType
-lookupCType symTab name = case Map.lookup name symTab of
+lookupCType symTab name = case lookupSymbol name symTab of
   Just ct -> pure ct
   Nothing -> do
     tell [UnknownConstraintType name]
@@ -490,7 +489,7 @@ compileBodyGoal _ varMap (D.BodyIs v expr) = do
 
 genReactivateDispatch :: SymbolTable -> ArityMap -> Procedure
 genReactivateDispatch symTab arityMap =
-  let body = map genDispatchBranch (Map.toList symTab)
+  let body = map genDispatchBranch (symbolTableToList symTab)
    in Procedure "reactivate_dispatch" ["susp"] body
   where
     genDispatchBranch (name, cType) =

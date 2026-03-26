@@ -65,7 +65,7 @@ import YCHR.Runtime.Store (CHRStore, aliveConstraint, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId, Value (..))
 import YCHR.Runtime.Var (Unify, deref, equal, newVar, runUnify, unify)
 import YCHR.StdLib (stdlib)
-import YCHR.Types (Constraint (..), ConstraintType, Term (..))
+import YCHR.Types (Constraint (..), ConstraintType, SymbolTable, Term (..))
 import YCHR.Types qualified as T
 import YCHR.VM (Name (..), Procedure, Program (..), procName)
 
@@ -82,7 +82,7 @@ data CompiledProgram = CompiledProgram
   { cpProgram :: Program,
     cpExportMap :: Map (Text, Int) ExportResolution,
     cpExportedSet :: Set T.Name,
-    cpSymbolTable :: Map T.Name ConstraintType
+    cpSymbolTable :: SymbolTable
   }
 
 data ExportResolution
