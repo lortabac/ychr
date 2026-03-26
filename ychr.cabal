@@ -120,6 +120,7 @@ library
 
     exposed-modules:  YCHR.Collect
                     , YCHR.Compile
+                    , YCHR.Compile.Types
                     , YCHR.EndToEnd
                     , YCHR.Meta
                     , YCHR.Desugared
