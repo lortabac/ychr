@@ -7,6 +7,7 @@ module YCHR.EndToEnd
     Error (..),
     CompiledProgram (..),
     ExportResolution (..),
+    ConstraintType,
     compileModules,
     compileFiles,
 
@@ -50,6 +51,7 @@ import Effectful.Dispatch.Static
 import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.Writer.Static.Local (Writer, listen, runWriter)
 import Text.Megaparsec (ParseErrorBundle)
+import YCHR.Collect (CollectError, collectLibraries)
 import YCHR.Compile (CompileError, compile, procNameFor)
 import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable)
 import YCHR.Meta (valueToTerm)
@@ -61,12 +63,14 @@ import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue
 import YCHR.Runtime.Store (CHRStore, aliveConstraint, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId, Value (..))
 import YCHR.Runtime.Var (Unify, deref, equal, newVar, runUnify, unify)
-import YCHR.Types (Constraint (..), Term (..))
+import YCHR.StdLib (stdlib)
+import YCHR.Types (Constraint (..), ConstraintType, Term (..))
 import YCHR.Types qualified as T
 import YCHR.VM (Name (..), Procedure, Program (..), procName)
 
 data Error
   = ParseError FilePath (ParseErrorBundle Text Void)
+  | CollectErrors [CollectError]
   | RenameErrors [RenameError]
   | DesugarErrors [DesugarError]
   | CompileErrors [CompileError]
@@ -76,7 +80,8 @@ data Error
 data CompiledProgram = CompiledProgram
   { cpProgram :: Program,
     cpExportMap :: Map (Text, Int) ExportResolution,
-    cpExportedSet :: Set T.Name
+    cpExportedSet :: Set T.Name,
+    cpSymbolTable :: Map T.Name ConstraintType
   }
 
 data ExportResolution
@@ -87,7 +92,8 @@ data ExportResolution
 compileModules :: [(FilePath, Text)] -> Either Error CompiledProgram
 compileModules inputs = do
   parsed <- mapM (\(fp, txt) -> first (ParseError fp) (parseModule fp txt)) inputs
-  let exportEnv = buildExportEnv parsed
+  collected <- first CollectErrors (collectLibraries stdlib parsed)
+  let exportEnv = buildExportEnv collected
       exportMap =
         Map.fromList
           [ ((n, a), toResolution n ms)
@@ -96,11 +102,11 @@ compileModules inputs = do
       exportedSet =
         Set.fromList
           [T.Qualified m n | ((n, _), ms) <- Map.toList exportEnv, m <- ms]
-  renamed <- first RenameErrors (renameProgram parsed)
+  renamed <- first RenameErrors (renameProgram collected)
   desugared <- first DesugarErrors (desugarProgram renamed)
   let symTab = extractSymbolTable desugared
   prog <- first CompileErrors (compile desugared symTab)
-  pure (CompiledProgram prog exportMap exportedSet)
+  pure (CompiledProgram prog exportMap exportedSet symTab)
   where
     toResolution n [m] = UniqueExport (T.Qualified m n)
     toResolution _ ms = AmbiguousExport ms

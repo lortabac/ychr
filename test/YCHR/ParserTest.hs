@@ -49,11 +49,13 @@ directiveTests =
         modExports <$> p ":- module(order, [leq/2, foo/1])."
           @?= Right (Just [ConstraintDecl "leq" 2, ConstraintDecl "foo" 1]),
       testCase "use_module" $
-        modImports <$> p ":- use_module(stdlib)." @?= Right ["stdlib"],
+        modImports <$> p ":- use_module(stdlib)." @?= Right [ModuleImport "stdlib"],
       testCase "multiple use_module" $
         modImports
           <$> p ":- use_module(stdlib).\n:- use_module(lists)."
-          @?= Right ["stdlib", "lists"],
+          @?= Right [ModuleImport "stdlib", ModuleImport "lists"],
+      testCase "use_module library" $
+        modImports <$> p ":- use_module(library(mylib))." @?= Right [LibraryImport "mylib"],
       testCase "chr_constraint single" $
         modDecls <$> p ":- chr_constraint leq/2."
           @?= Right [ConstraintDecl "leq" 2],

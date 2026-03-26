@@ -9,7 +9,7 @@ import Data.Text (Text)
 import Effectful (Eff, (:>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.EndToEnd (CompiledProgram (..), Value (..), compileModules, equal, newVar, resolveQueryConstraint, runProgramWithGoal, tellConstraint, withCHR)
+import YCHR.EndToEnd (CompiledProgram (..), ConstraintType, Value (..), compileModules, equal, newVar, resolveQueryConstraint, runProgramWithGoal, tellConstraint, withCHR)
 import YCHR.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive)
 import YCHR.Runtime.Types (RuntimeVal (..))
@@ -54,8 +54,11 @@ leqSource =
   \idempotence @ leq(X, Y) \\ leq(X, Y) <=> true.\n\
   \transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).\n"
 
-leqType :: VM.ConstraintType
-leqType = VM.ConstraintType 0
+lookupType :: CompiledProgram -> Name -> ConstraintType
+lookupType prog name =
+  case Map.lookup name (cpSymbolTable prog) of
+    Just ct -> ct
+    Nothing -> error $ "constraint type not found: " ++ show name
 
 leqHostCalls :: HostCallRegistry
 leqHostCalls = Map.empty
@@ -66,18 +69,21 @@ leqTests =
     "LEQ handler (from surface language)"
     [ testCase "reflexivity: leq(3, 3) fires, store empty" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
+        let leqType = lookupType prog (Qualified "order" "leq")
         n <- withCHR prog leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 3, VInt 3]
           countAlive leqType
         n @?= 0,
       testCase "no rule fires: leq(1, 2) stays" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
+        let leqType = lookupType prog (Qualified "order" "leq")
         n <- withCHR prog leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           countAlive leqType
         n @?= 1,
       testCase "antisymmetry: leq(X, Y), leq(Y, X) unifies X=Y, store empty" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
+        let leqType = lookupType prog (Qualified "order" "leq")
         (n, areEqual) <- withCHR prog leqHostCalls $ do
           x <- newVar
           y <- newVar
@@ -90,6 +96,7 @@ leqTests =
         assertBool "X and Y should be unified" areEqual,
       testCase "transitivity: leq(1,2), leq(2,3) produces leq(1,3)" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
+        let leqType = lookupType prog (Qualified "order" "leq")
         n <- withCHR prog leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           tellConstraint (Unqualified "leq") [VInt 2, VInt 3]
@@ -97,6 +104,7 @@ leqTests =
         n @?= 3,
       testCase "idempotence: leq(1,2), leq(1,2) removes duplicate" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
+        let leqType = lookupType prog (Qualified "order" "leq")
         n <- withCHR prog leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
@@ -104,6 +112,7 @@ leqTests =
         n @?= 1,
       testCase "full cycle: leq(a,b), leq(b,c), leq(c,a) — all removed, all unified" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
+        let leqType = lookupType prog (Qualified "order" "leq")
         (n, eqAB, eqBC) <- withCHR prog leqHostCalls $ do
           a <- newVar
           b <- newVar

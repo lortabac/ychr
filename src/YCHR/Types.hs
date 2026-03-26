@@ -14,6 +14,7 @@ module YCHR.Types
 where
 
 import Data.Text (Text)
+import Language.Haskell.TH.Syntax (Lift)
 
 -- | A numeric identifier for a constraint type, assigned by the symbol table.
 newtype ConstraintType = ConstraintType {unConstraintType :: Int}
@@ -25,14 +26,14 @@ data Name
     Unqualified Text
   | -- | e.g., "Order", "leq"
     Qualified Text Text
-  deriving (Show, Eq, Ord)
+  deriving (Show, Eq, Ord, Lift)
 
 -- | A CHR constraint occurrence.
 data Constraint = Constraint
   { conName :: Name,
     conArgs :: [Term]
   }
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 -- | Prolog-compatible terms.
 data Term
@@ -41,4 +42,4 @@ data Term
   | AtomTerm Text
   | CompoundTerm Name [Term]
   | Wildcard
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)

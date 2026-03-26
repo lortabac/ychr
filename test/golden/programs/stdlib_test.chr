@@ -1,0 +1,5 @@
+:- module(stdlib_test, [go/2]).
+:- use_module(library(test)).
+:- chr_constraint go/2.
+
+go(X, Y) <=> dup(X, Y).

@@ -20,6 +20,7 @@
 module YCHR.Parsed
   ( -- * Program structure
     Module (..),
+    Import (..),
     Declaration (..),
     Rule (..),
     Head (..),
@@ -31,22 +32,28 @@ module YCHR.Parsed
 where
 
 import Data.Text (Text)
+import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Types (Constraint (..), Term (..))
+
+data Import
+  = ModuleImport Text
+  | LibraryImport Text
+  deriving (Show, Eq, Lift)
 
 data Module = Module
   { modName :: Text,
-    modImports :: [Text],
+    modImports :: [Import],
     modDecls :: [Declaration],
     modRules :: [Rule],
     modExports :: Maybe [Declaration]
   }
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 data Declaration = ConstraintDecl
   { declName :: Text,
     declArity :: Int
   }
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 data Rule = Rule
   { ruleName :: Maybe Text,
@@ -54,10 +61,10 @@ data Rule = Rule
     ruleGuard :: [Term],
     ruleBody :: [Term]
   }
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 data Head
   = Simplification [Constraint]
   | Propagation [Constraint]
   | Simpagation [Constraint] [Constraint]
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)

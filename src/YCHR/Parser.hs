@@ -341,7 +341,7 @@ ruleP = do
 
 data Directive
   = DirModule Text [Declaration]
-  | DirImport Text
+  | DirImport Import
   | DirConstraintDecl [Declaration]
   | DirOther
 
@@ -356,9 +356,9 @@ directiveP = do
       _ <- symbol "."
       pure (DirModule name exports)
     "use_module" -> do
-      name <- parens atomP
+      imp <- parens importP
       _ <- symbol "."
-      pure (DirImport name)
+      pure (DirImport imp)
     "chr_constraint" -> do
       decls <- constraintDeclP `sepBy1` comma
       _ <- symbol "."
@@ -385,6 +385,14 @@ constraintDeclP = do
   _ <- symbol "/"
   arity <- lexeme L.decimal
   pure (ConstraintDecl name arity)
+
+-- | Parse an import specifier: either @library(name)@ or a plain module name.
+importP :: Parser Import
+importP = try libraryP <|> (ModuleImport <$> atomP)
+  where
+    libraryP = do
+      _ <- symbol "library"
+      LibraryImport <$> parens atomP
 
 -- ---------------------------------------------------------------------------
 -- Module

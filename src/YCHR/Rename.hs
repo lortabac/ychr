@@ -108,7 +108,8 @@ resolveName localEnv exportEnv currentMod (Unqualified n) arity
   | Set.member n reservedSymbols = pure (Unqualified n)
   | otherwise =
       let ownProviders = filter (== modName currentMod) (Map.findWithDefault [] (n, arity) localEnv)
-          importProviders = filter (`elem` modImports currentMod) (Map.findWithDefault [] (n, arity) exportEnv)
+          importNames = [mn | ModuleImport mn <- modImports currentMod]
+          importProviders = filter (`elem` importNames) (Map.findWithDefault [] (n, arity) exportEnv)
           matches = ownProviders ++ importProviders
        in case matches of
             [m] -> pure (Qualified m n)

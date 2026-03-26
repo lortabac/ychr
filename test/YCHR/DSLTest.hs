@@ -53,7 +53,7 @@ moduleTests =
         module' "Foo" @?= Module "Foo" [] [] [] Nothing,
       testCase "importing sets modImports" $
         module' "Foo" `importing` ["Bar", "Baz"]
-          @?= Module "Foo" ["Bar", "Baz"] [] [] Nothing,
+          @?= Module "Foo" [ModuleImport "Bar", ModuleImport "Baz"] [] [] Nothing,
       testCase "declaring sets modDecls" $
         module' "Foo" `declaring` ["leq" // 2]
           @?= Module "Foo" [] [ConstraintDecl "leq" 2] [] Nothing,
@@ -67,7 +67,7 @@ moduleTests =
               `importing` ["A"]
               `declaring` ["c" // 0]
               `defining` [r]
-              @?= Module "M" ["A"] [ConstraintDecl "c" 0] [r] Nothing,
+              @?= Module "M" [ModuleImport "A"] [ConstraintDecl "c" 0] [r] Nothing,
       testCase "exporting sets modExports" $
         module' "Foo" `exporting` ["leq" // 2]
           @?= Module "Foo" [] [] [] (Just [ConstraintDecl "leq" 2])
@@ -171,7 +171,7 @@ integrationTests =
         logicModule
           @?= Module
             "Logic"
-            ["Order"]
+            [ModuleImport "Order"]
             []
             [ Rule
                 (Just "trans")

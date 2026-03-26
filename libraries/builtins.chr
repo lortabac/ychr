@@ -1,0 +1,8 @@
+:- module(builtins, [noop/0, identity/2, print/1]).
+:- chr_constraint noop/0, identity/2, print/1.
+
+noop <=> true.
+
+identity(X, Y) <=> X = Y.
+
+print(X) <=> host(print(X)).

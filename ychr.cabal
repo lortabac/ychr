@@ -49,7 +49,7 @@ build-type:         Simple
 extra-doc-files:    CHANGELOG.md
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
--- extra-source-files:
+extra-source-files:   libraries/*.chr
 
 common warnings
     ghc-options: -Wall
@@ -85,7 +85,8 @@ test-suite ychr-tests
     import:           warnings
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
-    other-modules:    YCHR.EndToEndTest
+    other-modules:    YCHR.CollectTest
+                    , YCHR.EndToEndTest
                     , YCHR.DSLTest
                     , YCHR.DesugarTest
                     , YCHR.GoldenTest
@@ -117,7 +118,8 @@ library
     -- Import common warning flags.
     import:           warnings
 
-    exposed-modules:  YCHR.Compile
+    exposed-modules:  YCHR.Collect
+                    , YCHR.Compile
                     , YCHR.EndToEnd
                     , YCHR.Meta
                     , YCHR.Desugared
@@ -127,6 +129,8 @@ library
                     , YCHR.Parsed
                     , YCHR.Pretty
                     , YCHR.Rename
+                    , YCHR.StdLib
+                    , YCHR.StdLib.TH
                     , YCHR.Types
                     , YCHR.VM
                     , YCHR.Runtime.Interpreter
@@ -142,9 +146,12 @@ library
     -- Other library packages from which modules are imported.
     build-depends:    base ^>=4.21.0.0
                     , containers
+                    , directory
                     , effectful-core
+                    , filepath
                     , megaparsec ^>=9.6
                     , parser-combinators
+                    , template-haskell
                     , text
                     , vector
 

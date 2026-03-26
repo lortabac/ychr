@@ -20,7 +20,7 @@ exporting m decls = m {modExports = Just decls}
 
 -- | Add imports to a module
 importing :: Module -> [Text] -> Module
-importing m imps = m {modImports = imps}
+importing m imps = m {modImports = map ModuleImport imps}
 
 -- | Add declarations to a module: @declaring [ "leq" // 2 ]@
 declaring :: Module -> [Declaration] -> Module
