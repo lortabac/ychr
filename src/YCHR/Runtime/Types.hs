@@ -38,6 +38,7 @@ data Value
     VVar !Var
   | VInt !Int
   | VAtom !Text
+  | VText !Text
   | VBool !Bool
   | -- | Compound term: functor and arguments.
     VTerm !Text ![Value]

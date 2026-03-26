@@ -340,6 +340,7 @@ compileTerm varMap (T.VarTerm v) = case Map.lookup v varMap of
     pure (Lit WildcardLit)
 compileTerm _ (T.IntTerm n) = pure (Lit (IntLit n))
 compileTerm _ (T.AtomTerm s) = pure (Lit (AtomLit s))
+compileTerm _ (T.TextTerm s) = pure (Lit (TextLit s))
 compileTerm varMap (T.CompoundTerm name args) = do
   args' <- traverse (compileTerm varMap) args
   pure (MakeTerm (vmName name) args')
@@ -373,16 +374,34 @@ compileBodyGoals _ _ [] = pure []
 compileBodyGoals symTab varMap (goal : rest) = case goal of
   D.BodyHostCall v f args -> do
     args' <- traverse (compileTerm varMap) args
-    let stmt = Let (Name v) (HostCall (Name f) args')
-        varMap' = Map.insert v (Var (Name v)) varMap
-    rest' <- compileBodyGoals symTab varMap' rest
-    pure (stmt : rest')
+    case Map.lookup v varMap of
+      Just existing -> do
+        let stmts =
+              [ ExprStmt (Unify existing (HostCall (Name f) args')),
+                DrainReactivationQueue "rs" [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])]
+              ]
+        rest' <- compileBodyGoals symTab varMap rest
+        pure (stmts ++ rest')
+      Nothing -> do
+        let stmt = Let (Name v) (HostCall (Name f) args')
+            varMap' = Map.insert v (Var (Name v)) varMap
+        rest' <- compileBodyGoals symTab varMap' rest
+        pure (stmt : rest')
   D.BodyIs v expr -> do
     expr' <- compileTerm varMap expr
-    let stmt = Let (Name v) (HostEval expr')
-        varMap' = Map.insert v (Var (Name v)) varMap
-    rest' <- compileBodyGoals symTab varMap' rest
-    pure (stmt : rest')
+    case Map.lookup v varMap of
+      Just existing -> do
+        let stmts =
+              [ ExprStmt (Unify existing (HostEval expr')),
+                DrainReactivationQueue "rs" [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])]
+              ]
+        rest' <- compileBodyGoals symTab varMap rest
+        pure (stmts ++ rest')
+      Nothing -> do
+        let stmt = Let (Name v) (HostEval expr')
+            varMap' = Map.insert v (Var (Name v)) varMap
+        rest' <- compileBodyGoals symTab varMap' rest
+        pure (stmt : rest')
   D.BodyConstraint con -> do
     let argVars = [v | T.VarTerm v <- T.conArgs con, Map.notMember v varMap]
         newStmts = [Let (Name v) NewVar | v <- argVars]
@@ -414,10 +433,22 @@ compileBodyGoal _ varMap (D.BodyHostStmt f args) = do
   pure [ExprStmt (HostCall (Name f) args')]
 compileBodyGoal _ varMap (D.BodyHostCall v f args) = do
   args' <- traverse (compileTerm varMap) args
-  pure [Let (Name v) (HostCall (Name f) args')]
+  case Map.lookup v varMap of
+    Just existing ->
+      pure
+        [ ExprStmt (Unify existing (HostCall (Name f) args')),
+          DrainReactivationQueue "rs" [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])]
+        ]
+    Nothing -> pure [Let (Name v) (HostCall (Name f) args')]
 compileBodyGoal _ varMap (D.BodyIs v expr) = do
   expr' <- compileTerm varMap expr
-  pure [Let (Name v) (HostEval expr')]
+  case Map.lookup v varMap of
+    Just existing ->
+      pure
+        [ ExprStmt (Unify existing (HostEval expr')),
+          DrainReactivationQueue "rs" [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])]
+        ]
+    Nothing -> pure [Let (Name v) (HostEval expr')]
 
 -- ---------------------------------------------------------------------------
 -- reactivate_dispatch

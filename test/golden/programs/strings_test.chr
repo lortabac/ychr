@@ -1,0 +1,3 @@
+:- module(strings_test, []).
+
+:- use_module(library(strings)).

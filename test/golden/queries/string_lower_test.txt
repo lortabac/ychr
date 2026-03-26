@@ -1,0 +1,1 @@
+strings:string_lower("HELLO", R)

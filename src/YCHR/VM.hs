@@ -241,6 +241,8 @@ data Literal
     IntLit Int
   | -- | Atom literal (symbolic constant).
     AtomLit Text
+  | -- | Text (string) literal.
+    TextLit Text
   | -- | Boolean literal.
     BoolLit Bool
   | -- | Wildcard literal: evaluates to 'VWildcard'.

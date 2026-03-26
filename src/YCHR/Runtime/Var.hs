@@ -158,6 +158,8 @@ unify' v (VVar vr) = unify' (VVar vr) v
 unify' (VInt a) (VInt b) = pure (a == b)
 -- Atom-Atom
 unify' (VAtom a) (VAtom b) = pure (a == b)
+-- Text-Text
+unify' (VText a) (VText b) = pure (a == b)
 -- Bool-Bool
 unify' (VBool a) (VBool b) = pure (a == b)
 -- Term-Term: same functor and arity, unify args pairwise
@@ -196,6 +198,7 @@ equal' _ (VVar _) = pure False
 -- Ground-Ground
 equal' (VInt a) (VInt b) = pure (a == b)
 equal' (VAtom a) (VAtom b) = pure (a == b)
+equal' (VText a) (VText b) = pure (a == b)
 equal' (VBool a) (VBool b) = pure (a == b)
 -- Term-Term: same functor, same arity, all args recursively equal
 equal' (VTerm f1 args1) (VTerm f2 args2)

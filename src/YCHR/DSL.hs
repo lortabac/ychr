@@ -87,6 +87,10 @@ atom = AtomTerm
 int :: Int -> Term
 int = IntTerm
 
+-- | Text (string) literal term
+text :: Text -> Term
+text = TextTerm
+
 -- | Wildcard term: matches anything without binding
 wildcard :: Term
 wildcard = Wildcard

@@ -33,6 +33,7 @@ valueToTerm varName v = do
   case v' of
     VInt n -> pure (IntTerm n)
     VAtom s -> pure (AtomTerm s)
+    VText s -> pure (TextTerm s)
     VBool True -> pure (AtomTerm "true")
     VBool False -> pure (AtomTerm "false")
     VWildcard -> pure Wildcard

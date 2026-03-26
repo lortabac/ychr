@@ -46,6 +46,19 @@ genAtom =
         pure (Text.pack (c : rest))
     ]
 
+-- | Generate content for a 'TextTerm' (double-quoted string).
+-- Includes plain text, embedded double quotes, backslashes, and escape chars.
+genStringContent :: Gen Text
+genStringContent =
+  Text.pack
+    <$> Gen.list
+      (Range.linear 0 10)
+      ( Gen.choice
+          [ Gen.alphaNum,
+            Gen.element [' ', '"', '\\', '\n', '\t']
+          ]
+      )
+
 -- | Generate a valid variable name (uppercase-starting).
 genVarName :: Gen Text
 genVarName = do
@@ -64,6 +77,7 @@ genTerm =
     [ VarTerm <$> genVarName,
       IntTerm <$> Gen.int (Range.linear (-1000) 1000),
       AtomTerm <$> genAtom,
+      TextTerm <$> genStringContent,
       pure Wildcard
     ]
     -- Recursive cases (arity 1 and 2)

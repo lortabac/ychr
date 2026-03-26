@@ -278,6 +278,7 @@ termToValue (VarTerm n) = do
       pure v
 termToValue (IntTerm n) = pure (VInt n)
 termToValue (AtomTerm s) = pure (VAtom s)
+termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard
 termToValue (CompoundTerm (T.Unqualified f) ts) = VTerm f <$> traverse termToValue ts
 termToValue (CompoundTerm (T.Qualified m f) ts) = VTerm (m <> ":" <> f) <$> traverse termToValue ts

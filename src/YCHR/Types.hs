@@ -40,6 +40,7 @@ data Term
   = VarTerm Text
   | IntTerm Int
   | AtomTerm Text
+  | TextTerm Text
   | CompoundTerm Name [Term]
   | Wildcard
   deriving (Show, Eq, Lift)

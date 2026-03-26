@@ -212,12 +212,46 @@ symbolOp op = lexeme $ try $ do
 -- ---------------------------------------------------------------------------
 
 -- | Parse an atomic (non-operator) term.
+-- | Parse a double-quoted string literal as 'TextTerm'.
+--
+-- Supports the same escape sequences as single-quoted atoms:
+--
+-- * @\\\"@ — embedded double quote
+-- * @\\\\@ — backslash
+-- * @\\n@, @\\t@ — newline and tab
+-- * @\\x@ — fallback: keep @x@ literally
+stringP :: Parser Term
+stringP = lexeme $ TextTerm . T.pack <$> (char '"' *> go)
+  where
+    go =
+      choice
+        [ do
+            _ <- char '"'
+            pure [], -- closing quote
+          do
+            _ <- char '\\'
+            c <- escapeCharDQ
+            (c :) <$> go,
+          do
+            c <- satisfy (\c -> c /= '"' && c /= '\\')
+            (c :) <$> go
+        ]
+    escapeCharDQ =
+      choice
+        [ '"' <$ char '"', -- \" → "
+          '\\' <$ char '\\', -- \\ → \
+          '\n' <$ char 'n', -- \n → newline
+          '\t' <$ char 't', -- \t → tab
+          anySingle -- \x → x (fallback)
+        ]
+
 atomicTermP :: Parser Term
 atomicTermP =
   choice
     [ wildcardP,
       varP,
       try intP,
+      stringP,
       try (parens termP),
       atomOrCompoundP
     ]

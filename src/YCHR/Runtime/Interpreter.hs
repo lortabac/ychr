@@ -86,7 +86,11 @@ baseHostCallRegistry =
       (Name ">", cmp (>)),
       (Name "=<", cmp (<=)),
       (Name ">=", cmp (>=)),
-      (Name "==", valEq)
+      (Name "==", valEq),
+      (Name "string_concat", stringConcat),
+      (Name "string_length", stringLength),
+      (Name "string_upper", stringUpper),
+      (Name "string_lower", stringLower)
     ]
   where
     arith2 op [RVal (VInt a), RVal (VInt b)] = pure (RVal (VInt (op a b)))
@@ -95,9 +99,18 @@ baseHostCallRegistry =
     cmp _ args = error $ "comparison host call: expected 2 Int arguments, got " ++ show (length args)
     valEq [RVal (VInt a), RVal (VInt b)] = pure (RVal (VBool (a == b)))
     valEq [RVal (VAtom a), RVal (VAtom b)] = pure (RVal (VBool (a == b)))
+    valEq [RVal (VText a), RVal (VText b)] = pure (RVal (VBool (a == b)))
     valEq [RVal (VBool a), RVal (VBool b)] = pure (RVal (VBool (a == b)))
     valEq [_, _] = pure (RVal (VBool False))
     valEq args = error $ "== host call: expected 2 arguments, got " ++ show (length args)
+    stringConcat [RVal (VText a), RVal (VText b)] = pure (RVal (VText (a <> b)))
+    stringConcat _ = error "string_concat: expected 2 Text arguments"
+    stringLength [RVal (VText s)] = pure (RVal (VInt (T.length s)))
+    stringLength _ = error "string_length: expected 1 Text argument"
+    stringUpper [RVal (VText s)] = pure (RVal (VText (T.toUpper s)))
+    stringUpper _ = error "string_upper: expected 1 Text argument"
+    stringLower [RVal (VText s)] = pure (RVal (VText (T.toLower s)))
+    stringLower _ = error "string_lower: expected 1 Text argument"
 
 -- ---------------------------------------------------------------------------
 -- Public API
@@ -281,6 +294,7 @@ evalExpr _ _ (Var name) = do
     Nothing -> error $ "evalExpr: unbound variable " ++ T.unpack (unName name)
 evalExpr _ _ (Lit (IntLit n)) = pure (RVal (VInt n))
 evalExpr _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
+evalExpr _ _ (Lit (TextLit s)) = pure (RVal (VText s))
 evalExpr _ _ (Lit (BoolLit b)) = pure (RVal (VBool b))
 evalExpr _ _ (Lit WildcardLit) = pure (RVal VWildcard)
 evalExpr pm hc (CallExpr name args) = do
@@ -375,6 +389,7 @@ evalArith ::
   ProcMap -> HostCallRegistry -> Expr -> Eff es RuntimeVal
 evalArith _ _ (Lit (IntLit n)) = pure (RVal (VInt n))
 evalArith _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
+evalArith _ _ (Lit (TextLit s)) = pure (RVal (VText s))
 evalArith _ _ (Lit (BoolLit b)) = pure (RVal (VBool b))
 evalArith pm hc (Var name) = do
   v <- evalExpr pm hc (Var name)

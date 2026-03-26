@@ -23,6 +23,7 @@ import YCHR.Types (Constraint (..), Name (..), Term (..))
 prettyTerm :: Term -> String
 prettyTerm (IntTerm n) = show n
 prettyTerm (AtomTerm s) = T.unpack s
+prettyTerm (TextTerm s) = renderString s
 prettyTerm (VarTerm _) = "_"
 prettyTerm Wildcard = "_"
 prettyTerm (CompoundTerm (Unqualified f) ts) =
@@ -58,6 +59,16 @@ renderAtom s
     esc '\'' = "''"
     esc c = [c]
 
+-- | Render a string literal with double quotes and escape sequences.
+renderString :: Text -> String
+renderString s = "\"" ++ concatMap esc (T.unpack s) ++ "\""
+  where
+    esc '"' = "\\\""
+    esc '\\' = "\\\\"
+    esc '\n' = "\\n"
+    esc '\t' = "\\t"
+    esc c = [c]
+
 infixOpsSrc :: [Text]
 infixOpsSrc = ["*", "div", "mod", "+", "-", ":=", "is", "=", "==", "<", ">", "=<", ">="]
 
@@ -66,6 +77,7 @@ infixOpsSrc = ["*", "div", "mod", "+", "-", ":=", "is", "=", "==", "<", ">", "=<
 prettyTermSrc :: Term -> String
 prettyTermSrc (IntTerm n) = show n
 prettyTermSrc (AtomTerm s) = renderAtom s
+prettyTermSrc (TextTerm s) = renderString s
 prettyTermSrc (VarTerm v) = T.unpack v
 prettyTermSrc Wildcard = "_"
 prettyTermSrc (CompoundTerm (Unqualified op) [l, r])
