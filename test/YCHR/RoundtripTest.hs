@@ -11,8 +11,9 @@ import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Hedgehog (testProperty)
-import YCHR.Parser (parseConstraint, parseTerm)
-import YCHR.Pretty (prettyConstraintSrc, prettyTermSrc)
+import YCHR.Parsed qualified as P
+import YCHR.Parser (parseConstraint, parseRule, parseTerm)
+import YCHR.Pretty (prettyConstraintSrc, prettyRuleSrc, prettyTermSrc)
 import YCHR.Types (Constraint (..), Name (..), Term (..))
 
 -- ---------------------------------------------------------------------------
@@ -104,6 +105,43 @@ genConstraint = do
   args <- Gen.list (Range.linear 0 3) genTerm
   pure (Constraint name args)
 
+-- | Generate a parsed 'P.Head'.
+genHead :: Gen P.Head
+genHead =
+  Gen.choice
+    [ P.Simplification <$> Gen.list (Range.linear 1 3) genConstraint,
+      P.Propagation <$> Gen.list (Range.linear 1 3) genConstraint,
+      P.Simpagation
+        <$> Gen.list (Range.linear 1 2) genConstraint
+        <*> Gen.list (Range.linear 1 2) genConstraint
+    ]
+
+-- | Generate a parsed 'P.Rule'.
+genRule :: Gen P.Rule
+genRule = do
+  name <- Gen.maybe (P.noAnn <$> genSafeAtom)
+  hd <- genHead
+  guard_ <- Gen.list (Range.linear 0 2) genTerm
+  body_ <- Gen.list (Range.linear 1 3) genTerm
+  pure
+    P.Rule
+      { name = name,
+        head = P.noAnn hd,
+        guard = P.noAnn guard_,
+        body = P.noAnn body_
+      }
+
+-- | Strip source locations from a parsed 'P.Rule' so we can compare
+-- structurally (the parser produces real locations, generators use 'noAnn').
+stripRuleAnn :: P.Rule -> P.Rule
+stripRuleAnn r =
+  P.Rule
+    { name = P.noAnn . (.node) <$> r.name,
+      head = P.noAnn r.head.node,
+      guard = P.noAnn r.guard.node,
+      body = P.noAnn r.body.node
+    }
+
 -- ---------------------------------------------------------------------------
 -- Properties
 -- ---------------------------------------------------------------------------
@@ -124,6 +162,15 @@ prop_constraintRoundtrip = property $ do
     Left err -> annotate (show err) >> failure
     Right c' -> c' === c
 
+prop_ruleRoundtrip :: Property
+prop_ruleRoundtrip = property $ do
+  r <- forAll genRule
+  let src = prettyRuleSrc r
+  annotate src
+  case parseRule "<roundtrip>" (Text.pack src) of
+    Left err -> annotate (show err) >> failure
+    Right r' -> stripRuleAnn r' === r
+
 -- ---------------------------------------------------------------------------
 -- Test tree
 -- ---------------------------------------------------------------------------
@@ -133,5 +180,6 @@ tests =
   testGroup
     "YCHR.Roundtrip"
     [ testProperty "term roundtrip (parse . prettyTermSrc = id)" prop_termRoundtrip,
-      testProperty "constraint roundtrip (parse . prettyConstraintSrc = id)" prop_constraintRoundtrip
+      testProperty "constraint roundtrip (parse . prettyConstraintSrc = id)" prop_constraintRoundtrip,
+      testProperty "rule roundtrip (parse . prettyRuleSrc = id)" prop_ruleRoundtrip
     ]

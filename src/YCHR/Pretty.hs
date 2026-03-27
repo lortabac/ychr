@@ -2,11 +2,17 @@
 
 -- | Pretty-printing utilities for CHR terms and binding maps.
 module YCHR.Pretty
-  ( prettyTerm,
+  ( -- * Pretty class
+    Pretty (..),
+
+    -- * Pretty-printing functions
+    prettyTerm,
     prettyBindings,
     prettyQueryResult,
     prettyTermSrc,
     prettyConstraintSrc,
+    prettyHeadSrc,
+    prettyRuleSrc,
   )
 where
 
@@ -16,6 +22,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
+import YCHR.Parsed qualified as P
 import YCHR.Types (Constraint (..), Name (..), Term (..))
 
 -- | Render a 'Term' as a Prolog-compatible string.
@@ -148,3 +155,49 @@ prettyQueryResult m =
     formatBindings [(k, v)] = T.unpack k ++ " = " ++ prettyTerm v ++ ".\n"
     formatBindings ((k, v) : rest) =
       T.unpack k ++ " = " ++ prettyTerm v ++ ",\n" ++ formatBindings rest
+
+-- ---------------------------------------------------------------------------
+-- Parsed AST pretty-printers
+-- ---------------------------------------------------------------------------
+
+-- | Render a parsed 'P.Head' as valid surface-language source text.
+--
+-- Only the constraint list(s) are rendered, not the arrow.
+prettyHeadSrc :: P.Head -> String
+prettyHeadSrc (P.Simplification cs) = constraintList cs
+prettyHeadSrc (P.Propagation cs) = constraintList cs
+prettyHeadSrc (P.Simpagation ks rs) = constraintList ks ++ " \\ " ++ constraintList rs
+
+constraintList :: [Constraint] -> String
+constraintList = intercalate ", " . map prettyConstraintSrc
+
+-- | Render a parsed 'P.Rule' as valid surface-language source text.
+prettyRuleSrc :: P.Rule -> String
+prettyRuleSrc r =
+  namePrefix ++ prettyHeadSrc (r.head.node) ++ " " ++ arrow ++ " " ++ guardPrefix ++ bodyStr ++ "."
+  where
+    namePrefix = case r.name of
+      Nothing -> ""
+      Just ann -> renderAtom ann.node ++ " @ "
+    arrow = case r.head.node of
+      P.Propagation {} -> "==>"
+      _ -> "<=>"
+    guardPrefix = case r.guard.node of
+      [] -> ""
+      gs -> intercalate ", " (map prettyTermSrc gs) ++ " | "
+    bodyStr = intercalate ", " (map prettyTermSrc r.body.node)
+
+-- ---------------------------------------------------------------------------
+-- Pretty class
+-- ---------------------------------------------------------------------------
+
+class Pretty a where
+  prettySrc :: a -> String
+
+instance Pretty Term where prettySrc = prettyTermSrc
+
+instance Pretty Constraint where prettySrc = prettyConstraintSrc
+
+instance Pretty P.Head where prettySrc = prettyHeadSrc
+
+instance Pretty P.Rule where prettySrc = prettyRuleSrc

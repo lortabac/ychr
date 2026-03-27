@@ -28,6 +28,7 @@ module YCHR.Parser
     parseConstraint,
     parseQuery,
     parseTerm,
+    parseRule,
   )
 where
 
@@ -99,6 +100,15 @@ parseQuery ::
   Text ->
   Either (ParseErrorBundle Text Void) [Term]
 parseQuery = parse (sc *> termP `sepBy1` comma <* symbol "." <* eof)
+
+-- | Parse a single CHR rule from surface-language 'Text'.
+--
+-- The source name (first argument) is used in error messages only.
+parseRule ::
+  String ->
+  Text ->
+  Either (ParseErrorBundle Text Void) Rule
+parseRule = parse (sc *> ruleP <* eof)
 
 -- ---------------------------------------------------------------------------
 -- Space consumer and lexeme helpers
