@@ -14,17 +14,17 @@ tests =
   testGroup
     "Collect"
     [ testCase "no library imports passes through" $
-        collectLibraries Map.empty [userMod []] @?= Right [userMod []],
+        collectLibraries False Map.empty [userMod []] @?= Right [userMod []],
       testCase "resolves a single library import" $
         let libs = Map.fromList [("foo", libMod "foo")]
             user = userMod [noAnn (LibraryImport "foo")]
-         in case collectLibraries libs [user] of
+         in case collectLibraries False libs [user] of
               Right mods -> length mods @?= 2
               Left errs -> fail (show errs),
       testCase "library imports rewritten to module imports" $
         let libs = Map.fromList [("foo", libMod "foo")]
             user = userMod [noAnn (LibraryImport "foo")]
-         in case collectLibraries libs [user] of
+         in case collectLibraries False libs [user] of
               Right mods ->
                 all (all (isModuleImport . (.node)) . (.imports)) mods @?= True
               Left errs -> fail (show errs),
@@ -33,26 +33,26 @@ tests =
             libB = libMod "b"
             libs = Map.fromList [("a", libA), ("b", libB)]
             user = userMod [noAnn (LibraryImport "a")]
-         in case collectLibraries libs [user] of
+         in case collectLibraries False libs [user] of
               Right mods -> length mods @?= 3
               Left errs -> fail (show errs),
       testCase "unknown library reports error" $
-        collectLibraries Map.empty [userMod [noAnn (LibraryImport "missing")]]
+        collectLibraries False Map.empty [userMod [noAnn (LibraryImport "missing")]]
           @?= Left [UnknownLibrary "missing"],
       testCase "builtins auto-included when present in stdlib" $
         let libs = Map.fromList [("builtins", libMod "builtins")]
             user = userMod []
-         in case collectLibraries libs [user] of
+         in case collectLibraries False libs [user] of
               Right mods -> length mods @?= 2
               Left errs -> fail (show errs),
       testCase "builtins not included when absent from stdlib" $
-        collectLibraries Map.empty [userMod []] @?= Right [userMod []],
+        collectLibraries False Map.empty [userMod []] @?= Right [userMod []],
       testCase "circular import reports error" $
         let libA = (libMod "a") {imports = [noAnn (LibraryImport "b")]}
             libB = (libMod "b") {imports = [noAnn (LibraryImport "a")]}
             libs = Map.fromList [("a", libA), ("b", libB)]
             user = userMod [noAnn (LibraryImport "a")]
-         in case collectLibraries libs [user] of
+         in case collectLibraries False libs [user] of
               Left errs ->
                 any isCircularError errs @?= True
               Right _ -> fail "expected circular import error"
