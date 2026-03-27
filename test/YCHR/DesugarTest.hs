@@ -43,7 +43,7 @@ leqQual2 :: Constraint
 leqQual2 = "M" .: con "leq" [var "A", var "B"]
 
 mod1rule :: Head -> Rule
-mod1rule h = Rule Nothing h [] [atom "true"]
+mod1rule h = Rule Nothing (noAnn h) (noAnn []) (noAnn [atom "true"])
 
 simpleModule :: Head -> Module
 simpleModule h = module' "M" `defining` [mod1rule h]
@@ -129,9 +129,9 @@ hnfTests =
               module' "M"
                 `defining` [ Rule
                                Nothing
-                               (Simplification ["M" .: con "leq" [var "X", var "X"]])
-                               [func "gt" [var "X", IntTerm 0]]
-                               [atom "true"]
+                               (noAnn (Simplification ["M" .: con "leq" [var "X", var "X"]]))
+                               (noAnn [func "gt" [var "X", IntTerm 0]])
+                               (noAnn [atom "true"])
                            ]
         rule <- singleRule [m]
         D.ruleGuard rule
@@ -166,21 +166,21 @@ guardTests =
     [ testCase "== becomes GuardExpr" $ do
         let m =
               module' "M"
-                `defining` [ (Rule Nothing (Simplification [leqQual]) [func "==" [var "X", var "Y"]] [atom "true"])
+                `defining` [ Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [func "==" [var "X", var "Y"]]) (noAnn [atom "true"])
                            ]
         rule <- singleRule [m]
         D.ruleGuard rule @?= [D.GuardExpr (CompoundTerm (Unqualified "==") [VarTerm "X", VarTerm "Y"])],
       testCase "host call becomes GuardExpr" $ do
         let m =
               module' "M"
-                `defining` [ Rule Nothing (Simplification [leqQual]) [func "gt" [var "X", IntTerm 0]] [atom "true"]
+                `defining` [ Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [func "gt" [var "X", IntTerm 0]]) (noAnn [atom "true"])
                            ]
         rule <- singleRule [m]
         D.ruleGuard rule @?= [D.GuardExpr (CompoundTerm (Unqualified "gt") [VarTerm "X", IntTerm 0])],
       testCase "atom true becomes GuardCommon GoalTrue" $ do
         let m =
               module' "M"
-                `defining` [ Rule Nothing (Simplification [leqQual]) [atom "true"] [atom "true"]
+                `defining` [ Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [atom "true"]) (noAnn [atom "true"])
                            ]
         rule <- singleRule [m]
         D.ruleGuard rule @?= [D.GuardCommon D.GoalTrue]
@@ -215,7 +215,7 @@ bodyTests =
         D.ruleBody rule @?= [D.BodyCommon D.GoalTrue]
     ]
   where
-    simpleModule' h body = module' "M" `defining` [Rule Nothing h [] body]
+    simpleModule' h body = module' "M" `defining` [Rule Nothing (noAnn h) (noAnn []) (noAnn body)]
 
 --------------------------------------------------------------------------------
 -- Error handling
@@ -227,12 +227,12 @@ errorTests =
     "error-handling"
     [ testCase "unqualified compound in body produces UnexpectedBodyTerm" $ do
         let badTerm = func "foo" [var "X"]
-            m = module' "M" `defining` [Rule Nothing (Simplification [leqQual]) [] [badTerm]]
+            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn []) (noAnn [badTerm])]
         desugarProgram [m] @?= Left [UnexpectedBodyTerm badTerm],
       testCase "two unqualified compounds collect both errors" $ do
         let bad1 = func "foo" [var "X"]
             bad2 = func "bar" [var "Y"]
-            m = module' "M" `defining` [Rule Nothing (Simplification [leqQual]) [] [bad1, bad2]]
+            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn []) (noAnn [bad1, bad2])]
         desugarProgram [m] @?= Left [UnexpectedBodyTerm bad1, UnexpectedBodyTerm bad2]
     ]
 

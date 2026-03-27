@@ -40,7 +40,7 @@ buildLocalEnv mods =
   makeLocalEnv
     [ ((declName d, declArity d), [modName m])
     | m <- mods,
-      d <- modDecls m
+      Ann d _ <- modDecls m
     ]
 
 -- | Only exported constraints (for cross-module resolution).
@@ -51,7 +51,7 @@ buildExportEnv mods =
     [ ((declName d, declArity d), [modName m])
     | m <- mods,
       d <- case modExports m of
-        Nothing -> modDecls m
+        Nothing -> map node (modDecls m)
         Just exports -> exports
     ]
 
@@ -69,9 +69,9 @@ renameModule localEnv exportEnv m = do
 
 renameRule :: LocalEnv -> GlobalEnv -> Module -> Rule -> Eff '[Writer [RenameError]] Rule
 renameRule localEnv exportEnv m r = do
-  h <- renameHead localEnv exportEnv m (ruleHead r)
-  g <- traverse (renameTerm localEnv exportEnv m False) (ruleGuard r)
-  b <- traverse (renameTerm localEnv exportEnv m True) (ruleBody r)
+  h <- traverse (renameHead localEnv exportEnv m) (ruleHead r)
+  g <- traverse (traverse (renameTerm localEnv exportEnv m False)) (ruleGuard r)
+  b <- traverse (traverse (renameTerm localEnv exportEnv m True)) (ruleBody r)
   pure r {ruleHead = h, ruleGuard = g, ruleBody = b}
 
 renameHead :: LocalEnv -> GlobalEnv -> Module -> Head -> Eff '[Writer [RenameError]] Head
@@ -99,7 +99,7 @@ resolveName localEnv exportEnv currentMod (Unqualified n) arity
   | isReserved n reservedSymbols = pure (Unqualified n)
   | otherwise =
       let ownProviders = filter (== modName currentMod) (lookupLocal (n, arity) localEnv)
-          importNames = [mn | ModuleImport mn <- modImports currentMod]
+          importNames = [mn | Ann (ModuleImport mn) _ <- modImports currentMod]
           importProviders = filter (`elem` importNames) (lookupGlobal (n, arity) exportEnv)
           matches = ownProviders ++ importProviders
        in case matches of

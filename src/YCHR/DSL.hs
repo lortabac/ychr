@@ -20,11 +20,11 @@ exporting m decls = m {modExports = Just decls}
 
 -- | Add imports to a module
 importing :: Module -> [Text] -> Module
-importing m imps = m {modImports = map ModuleImport imps}
+importing m imps = m {modImports = map (noAnn . ModuleImport) imps}
 
 -- | Add declarations to a module: @declaring [ "leq" // 2 ]@
 declaring :: Module -> [Declaration] -> Module
-declaring m decls = m {modDecls = decls}
+declaring m decls = m {modDecls = map noAnn decls}
 
 -- | Add rules to a module
 defining :: Module -> [Rule] -> Module
@@ -40,23 +40,23 @@ defining m rules = m {modRules = rules}
 
 -- | Name a rule: @"my_rule" @: [con "a" []] <=> [con "b" []]@
 (@:) :: Text -> Rule -> Rule
-name @: r = r {ruleName = Just name}
+name @: r = r {ruleName = Just (noAnn name)}
 
 -- | Simplification Rule: @[head] <=> [body]@
 (<=>) :: [Constraint] -> [Term] -> Rule
-lhs <=> rhs = Rule Nothing (Simplification lhs) [] rhs
+lhs <=> rhs = Rule Nothing (noAnn (Simplification lhs)) (noAnn []) (noAnn rhs)
 
 -- | Propagation Rule: @[head] ==> [body]@
 (==>) :: [Constraint] -> [Term] -> Rule
-lhs ==> rhs = Rule Nothing (Propagation lhs) [] rhs
+lhs ==> rhs = Rule Nothing (noAnn (Propagation lhs)) (noAnn []) (noAnn rhs)
 
 -- | Simpagation Rule: @[kept] \ [removed] <=> [body]@
 (\\) :: [Constraint] -> [Constraint] -> [Term] -> Rule
-(k \\ r) body = Rule Nothing (Simpagation k r) [] body
+(k \\ r) body = Rule Nothing (noAnn (Simpagation k r)) (noAnn []) (noAnn body)
 
 -- | Add a guard to an existing rule (infix)
 (|-) :: Rule -> [Term] -> Rule
-r |- g = r {ruleGuard = g}
+r |- g = r {ruleGuard = noAnn g}
 
 --------------------------------------------------------------------------------
 -- Constraint & Term Helpers

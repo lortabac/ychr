@@ -18,7 +18,13 @@
 --     as @CompoundTerm "leq" [VarTerm "X", VarTerm "Z"]@.
 --     The atom @true@ is represented as @AtomTerm "true"@.
 module YCHR.Parsed
-  ( -- * Program structure
+  ( -- * Source locations
+    SourceLoc (..),
+    Ann (..),
+    noAnn,
+    dummyLoc,
+
+    -- * Program structure
     Module (..),
     Import (..),
     Declaration (..),
@@ -35,6 +41,29 @@ import Data.Text (Text)
 import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Types (Constraint (..), Term (..))
 
+-- | A source file location (file, line, column).
+data SourceLoc = SourceLoc
+  { locFile :: String,
+    locLine :: Int,
+    locCol :: Int
+  }
+  deriving (Show, Eq, Lift)
+
+-- | A value annotated with a source location.
+data Ann a = Ann
+  { node :: a,
+    sourceLoc :: SourceLoc
+  }
+  deriving (Show, Eq, Lift, Functor, Foldable, Traversable)
+
+-- | A dummy source location for programmatically-constructed nodes.
+dummyLoc :: SourceLoc
+dummyLoc = SourceLoc "<generated>" 1 1
+
+-- | Wrap a value with a dummy source location.
+noAnn :: a -> Ann a
+noAnn x = Ann x dummyLoc
+
 data Import
   = ModuleImport Text
   | LibraryImport Text
@@ -42,8 +71,8 @@ data Import
 
 data Module = Module
   { modName :: Text,
-    modImports :: [Import],
-    modDecls :: [Declaration],
+    modImports :: [Ann Import],
+    modDecls :: [Ann Declaration],
     modRules :: [Rule],
     modExports :: Maybe [Declaration]
   }
@@ -56,10 +85,10 @@ data Declaration = ConstraintDecl
   deriving (Show, Eq, Lift)
 
 data Rule = Rule
-  { ruleName :: Maybe Text,
-    ruleHead :: Head,
-    ruleGuard :: [Term],
-    ruleBody :: [Term]
+  { ruleName :: Maybe (Ann Text),
+    ruleHead :: Ann Head,
+    ruleGuard :: Ann [Term],
+    ruleBody :: Ann [Term]
   }
   deriving (Show, Eq, Lift)
 

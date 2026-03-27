@@ -73,13 +73,13 @@ getRuleConstraints r =
 
 desugarRule :: P.Rule -> Eff '[Writer [DesugarError]] D.Rule
 desugarRule r = do
-  body <- traverse desugarBodyGoal (P.ruleBody r)
-  let rawHead = desugarHead (P.ruleHead r)
+  body <- traverse desugarBodyGoal (P.node (P.ruleBody r))
+  let rawHead = desugarHead (P.node (P.ruleHead r))
       (hnfGuards, normalizedHead) = normalizeHead rawHead
-      userGuards = map desugarGuard (P.ruleGuard r)
+      userGuards = map desugarGuard (P.node (P.ruleGuard r))
   pure
     D.Rule
-      { D.ruleName = P.ruleName r,
+      { D.ruleName = fmap P.node (P.ruleName r),
         D.ruleHead = normalizedHead,
         D.ruleGuard = hnfGuards ++ userGuards,
         D.ruleBody = body

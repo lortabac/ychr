@@ -2,6 +2,7 @@
 
 module YCHR.RenameTest (tests) where
 
+import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import YCHR.DSL
@@ -24,6 +25,19 @@ tests =
       reservedSymbolTests,
       exportTests
     ]
+
+-- | Unwrapping helpers for annotated rule fields.
+ruleHead' :: Rule -> Head
+ruleHead' = node . ruleHead
+
+ruleBody' :: Rule -> [Term]
+ruleBody' = node . ruleBody
+
+ruleGuard' :: Rule -> [Term]
+ruleGuard' = node . ruleGuard
+
+ruleName' :: Rule -> Maybe Text
+ruleName' = fmap node . ruleName
 
 -- | Rename a single-module program and return the single renamed rule.
 singleRule :: Module -> IO Rule
@@ -50,7 +64,7 @@ sameModuleTests =
                 `declaring` ["leq" // 2]
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         rule <- singleRule m
-        ruleHead rule
+        ruleHead' rule
           @?= Simplification [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]],
       testCase "zero-arity constraint" $ do
         let m =
@@ -58,7 +72,7 @@ sameModuleTests =
                 `declaring` ["done" // 0]
                 `defining` [[con "done" []] <=> [atom "true"]]
         rule <- singleRule m
-        ruleHead rule
+        ruleHead' rule
           @?= Simplification [Constraint (Qualified "M" "done") []],
       testCase "body goal in own module" $ do
         let m =
@@ -66,7 +80,7 @@ sameModuleTests =
                 `declaring` ["leq" // 2]
                 `defining` [[con "leq" [var "X", var "Y"]] ==> [func "leq" [var "X", var "Z"]]]
         rule <- singleRule m
-        ruleBody rule
+        ruleBody' rule
           @?= [CompoundTerm (Qualified "M" "leq") [VarTerm "X", VarTerm "Z"]]
     ]
 
@@ -93,7 +107,7 @@ importedTests =
         rule <- case modRules renamedLogic of
           [r] -> return r
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
-        (ruleHead rule, ruleBody rule)
+        (ruleHead' rule, ruleBody' rule)
           @?= ( Propagation
                   [ Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"],
                     Constraint (Qualified "Order" "leq") [VarTerm "Y", VarTerm "Z"]
@@ -170,7 +184,7 @@ unknownTests =
                 `declaring` ["c" // 0]
                 `defining` [[con "c" []] <=> [hostStmt "some_host_func" [var "X"]]]
         rule <- singleRule m
-        ruleBody rule
+        ruleBody' rule
           @?= [CompoundTerm (Unqualified "host") [CompoundTerm (Unqualified "some_host_func") [VarTerm "X"]]]
     ]
 
@@ -188,7 +202,7 @@ alreadyQualifiedTests =
               module' "M"
                 `defining` [["Order" .: con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         rule <- singleRule m
-        ruleHead rule
+        ruleHead' rule
           @?= Simplification [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"]],
       testCase "pre-qualified survives ambiguity" $ do
         -- Two visible providers, but the constraint is already Qualified
@@ -205,7 +219,7 @@ alreadyQualifiedTests =
         rule <- case modRules renamedC of
           [r] -> return r
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
-        ruleHead rule
+        ruleHead' rule
           @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]]
     ]
 
@@ -226,7 +240,7 @@ goalClassificationTests =
                                |- [func "leq" [var "X", var "Y"]]
                            ]
         rule <- singleRule m
-        ruleGuard rule
+        ruleGuard' rule
           @?= [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Y"]],
       testCase "body functor IS resolved" $ do
         -- Body uses isGoal = True, so compound terms are looked up
@@ -235,7 +249,7 @@ goalClassificationTests =
                 `declaring` ["leq" // 2]
                 `defining` [[con "leq" [var "X", var "Y"]] ==> [func "leq" [var "X", var "Z"]]]
         rule <- singleRule m
-        ruleBody rule
+        ruleBody' rule
           @?= [CompoundTerm (Qualified "M" "leq") [VarTerm "X", VarTerm "Z"]],
       testCase "nested arg of head NOT resolved" $ do
         -- Head args use isGoal = False: inner functor stays Unqualified
@@ -244,7 +258,7 @@ goalClassificationTests =
                 `declaring` ["wrap" // 1, "inner" // 1]
                 `defining` [[con "wrap" [func "inner" [var "X"]]] <=> [atom "true"]]
         rule <- singleRule m
-        ruleHead rule
+        ruleHead' rule
           @?= Simplification
             [ Constraint
                 (Qualified "M" "wrap")
@@ -257,7 +271,7 @@ goalClassificationTests =
                 `declaring` ["c" // 0, "leq" // 1, "pair" // 1]
                 `defining` [[con "c" []] ==> [func "leq" [func "pair" [var "X"]]]]
         rule <- singleRule m
-        ruleBody rule
+        ruleBody' rule
           @?= [CompoundTerm (Qualified "M" "leq") [CompoundTerm (Unqualified "pair") [VarTerm "X"]]],
       testCase "non-compound terms in guard untouched" $ do
         let m =
@@ -267,7 +281,7 @@ goalClassificationTests =
                                |- [var "X", atom "zero", IntTerm 42]
                            ]
         rule <- singleRule m
-        ruleGuard rule
+        ruleGuard' rule
           @?= [VarTerm "X", AtomTerm "zero", IntTerm 42],
       testCase "non-compound terms in body untouched" $ do
         let m =
@@ -275,7 +289,7 @@ goalClassificationTests =
                 `declaring` ["c" // 1]
                 `defining` [[con "c" [var "X"]] <=> [var "X", atom "zero", IntTerm 42]]
         rule <- singleRule m
-        ruleBody rule
+        ruleBody' rule
           @?= [VarTerm "X", AtomTerm "zero", IntTerm 42]
     ]
 
@@ -293,7 +307,7 @@ headTypeTests =
                 `declaring` ["leq" // 2]
                 `defining` [[con "leq" [var "X", var "Y"]] ==> [atom "true"]]
         rule <- singleRule m
-        ruleHead rule
+        ruleHead' rule
           @?= Propagation [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]],
       testCase "Simpagation kept and removed both renamed" $ do
         let m =
@@ -303,7 +317,7 @@ headTypeTests =
                                [atom "true"]
                            ]
         rule <- singleRule m
-        ruleHead rule
+        ruleHead' rule
           @?= Simpagation
             [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]]
             [Constraint (Qualified "M" "gt") [VarTerm "X", VarTerm "Y"]]
@@ -336,34 +350,36 @@ multiModuleTests =
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         (modRules renamedOrder, modRules renamedLogic)
           @?= ( [ Rule
-                    (Just "refl")
-                    (Simplification [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "X"]])
-                    []
-                    [AtomTerm "true"]
+                    (Just (noAnn "refl"))
+                    (noAnn (Simplification [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "X"]]))
+                    (noAnn [])
+                    (noAnn [AtomTerm "true"])
                 ],
                 [ Rule
-                    (Just "trans")
-                    ( Propagation
-                        [ Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"],
-                          Constraint (Qualified "Order" "leq") [VarTerm "Y", VarTerm "Z"]
-                        ]
+                    (Just (noAnn "trans"))
+                    ( noAnn
+                        ( Propagation
+                            [ Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"],
+                              Constraint (Qualified "Order" "leq") [VarTerm "Y", VarTerm "Z"]
+                            ]
+                        )
                     )
-                    []
-                    [CompoundTerm (Qualified "Order" "leq") [VarTerm "X", VarTerm "Z"]]
+                    (noAnn [])
+                    (noAnn [CompoundTerm (Qualified "Order" "leq") [VarTerm "X", VarTerm "Z"]])
                 ]
               ),
       testCase "empty program" $
         renameProgram [] @?= Right [],
       testCase "module with no rules" $
         let m = module' "M" `declaring` ["leq" // 2]
-         in renameProgram [m] @?= Right [Module "M" [] [ConstraintDecl "leq" 2] [] Nothing],
+         in renameProgram [m] @?= Right [Module "M" [] [noAnn (ConstraintDecl "leq" 2)] [] Nothing],
       testCase "rule name preserved" $ do
         let m =
               module' "M"
                 `declaring` ["c" // 0]
                 `defining` ["my_rule" @: ([con "c" []] <=> [atom "true"])]
         rule <- singleRule m
-        ruleName rule @?= Just "my_rule"
+        ruleName' rule @?= Just "my_rule"
     ]
 
 --------------------------------------------------------------------------------
@@ -380,7 +396,7 @@ reservedSymbolTests =
                 `declaring` ["c" // 0]
                 `defining` [[con "c" []] <=> [func "=" [var "X", var "Y"]]]
         rule <- singleRule m
-        ruleBody rule
+        ruleBody' rule
           @?= [CompoundTerm (Unqualified "=") [VarTerm "X", VarTerm "Y"]],
       testCase "== in body stays Unqualified" $ do
         let m =
@@ -388,7 +404,7 @@ reservedSymbolTests =
                 `declaring` ["c" // 0]
                 `defining` [[con "c" []] <=> [func "==" [var "X", var "Y"]]]
         rule <- singleRule m
-        ruleBody rule
+        ruleBody' rule
           @?= [CompoundTerm (Unqualified "==") [VarTerm "X", VarTerm "Y"]],
       testCase ":= in body stays Unqualified" $ do
         let m =
@@ -396,7 +412,7 @@ reservedSymbolTests =
                 `declaring` ["c" // 0]
                 `defining` [[con "c" []] <=> [func ":=" [var "X", var "Y"]]]
         rule <- singleRule m
-        ruleBody rule
+        ruleBody' rule
           @?= [CompoundTerm (Unqualified ":=") [VarTerm "X", VarTerm "Y"]],
       testCase "$ in body stays Unqualified" $ do
         let m =
@@ -404,7 +420,7 @@ reservedSymbolTests =
                 `declaring` ["c" // 0]
                 `defining` [[con "c" []] <=> [hostStmt "print" [var "X"]]]
         rule <- singleRule m
-        ruleBody rule
+        ruleBody' rule
           @?= [CompoundTerm (Unqualified "host") [CompoundTerm (Unqualified "print") [VarTerm "X"]]]
     ]
 
@@ -433,7 +449,7 @@ exportTests =
         rule <- case modRules renamedB of
           [r] -> return r
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
-        ruleHead rule
+        ruleHead' rule
           @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
       testCase "non-exported constraint is hidden from importer" $ do
         -- A declares leq/2 and gt/2 but only exports leq/2; B can't see gt/2
@@ -467,7 +483,7 @@ exportTests =
                 `exporting` ["leq" // 2]
                 `defining` [[con "gt" [var "X", var "Y"]] <=> [atom "true"]]
         rule <- singleRule modA
-        ruleHead rule
+        ruleHead' rule
           @?= Simplification [Constraint (Qualified "A" "gt") [VarTerm "X", VarTerm "Y"]],
       testCase "no module directive exports all constraints" $ do
         -- A has modExports = Nothing (no directive); B can see all of A's constraints
@@ -483,6 +499,6 @@ exportTests =
         rule <- case modRules renamedB of
           [r] -> return r
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
-        ruleHead rule
+        ruleHead' rule
           @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]]
     ]

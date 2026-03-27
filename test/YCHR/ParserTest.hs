@@ -31,6 +31,25 @@ tests =
 p :: Text -> Either (ParseErrorBundle Text Void) Module
 p = parseModule ""
 
+-- | Strip source locations from a Rule for structural comparison.
+stripRuleLoc :: Rule -> Rule
+stripRuleLoc r =
+  r
+    { ruleName = fmap (noAnn . node) (ruleName r),
+      ruleHead = noAnn (node (ruleHead r)),
+      ruleGuard = noAnn (node (ruleGuard r)),
+      ruleBody = noAnn (node (ruleBody r))
+    }
+
+-- | Strip source locations from a Module for structural comparison.
+stripModLoc :: Module -> Module
+stripModLoc m =
+  m
+    { modImports = map (noAnn . node) (modImports m),
+      modDecls = map (noAnn . node) (modDecls m),
+      modRules = map stripRuleLoc (modRules m)
+    }
+
 -- ---------------------------------------------------------------------------
 -- Directives
 -- ---------------------------------------------------------------------------
@@ -49,24 +68,24 @@ directiveTests =
         modExports <$> p ":- module(order, [leq/2, foo/1])."
           @?= Right (Just [ConstraintDecl "leq" 2, ConstraintDecl "foo" 1]),
       testCase "use_module" $
-        modImports <$> p ":- use_module(stdlib)." @?= Right [ModuleImport "stdlib"],
+        (map node . modImports) <$> p ":- use_module(stdlib)." @?= Right [ModuleImport "stdlib"],
       testCase "multiple use_module" $
-        modImports
+        (map node . modImports)
           <$> p ":- use_module(stdlib).\n:- use_module(lists)."
           @?= Right [ModuleImport "stdlib", ModuleImport "lists"],
       testCase "use_module library" $
-        modImports <$> p ":- use_module(library(mylib))." @?= Right [LibraryImport "mylib"],
+        (map node . modImports) <$> p ":- use_module(library(mylib))." @?= Right [LibraryImport "mylib"],
       testCase "chr_constraint single" $
-        modDecls <$> p ":- chr_constraint leq/2."
+        (map node . modDecls) <$> p ":- chr_constraint leq/2."
           @?= Right [ConstraintDecl "leq" 2],
       testCase "chr_constraint multiple in one directive" $
-        modDecls <$> p ":- chr_constraint fib/2, upto/1."
+        (map node . modDecls) <$> p ":- chr_constraint fib/2, upto/1."
           @?= Right [ConstraintDecl "fib" 2, ConstraintDecl "upto" 1],
       testCase "chr_constraint zero arity" $
-        modDecls <$> p ":- chr_constraint fire/0."
+        (map node . modDecls) <$> p ":- chr_constraint fire/0."
           @?= Right [ConstraintDecl "fire" 0],
       testCase "unknown directive is skipped" $
-        modDecls <$> p ":- dynamic foo/1.\n:- chr_constraint leq/2."
+        (map node . modDecls) <$> p ":- dynamic foo/1.\n:- chr_constraint leq/2."
           @?= Right [ConstraintDecl "leq" 2]
     ]
 
@@ -254,56 +273,60 @@ ruleTests =
   testGroup
     "rules"
     [ testCase "named simplification" $
-        modRules <$> p "refl @ leq(X, X) <=> true."
+        (map stripRuleLoc . modRules) <$> p "refl @ leq(X, X) <=> true."
           @?= Right
             [ Rule
-                (Just "refl")
-                (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]])
-                []
-                [AtomTerm "true"]
+                (Just (noAnn "refl"))
+                (noAnn (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
+                (noAnn [])
+                (noAnn [AtomTerm "true"])
             ],
       testCase "unnamed simplification" $
-        modRules <$> p "leq(X, X) <=> true."
+        (map stripRuleLoc . modRules) <$> p "leq(X, X) <=> true."
           @?= Right
             [ Rule
                 Nothing
-                (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]])
-                []
-                [AtomTerm "true"]
+                (noAnn (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
+                (noAnn [])
+                (noAnn [AtomTerm "true"])
             ],
       testCase "propagation" $
-        modRules <$> p "trans @ leq(X, Y), leq(Y, Z) ==> leq(X, Z)."
+        (map stripRuleLoc . modRules) <$> p "trans @ leq(X, Y), leq(Y, Z) ==> leq(X, Z)."
           @?= Right
             [ Rule
-                (Just "trans")
-                ( Propagation
-                    [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
-                      Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "Z"]
-                    ]
+                (Just (noAnn "trans"))
+                ( noAnn
+                    ( Propagation
+                        [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
+                          Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "Z"]
+                        ]
+                    )
                 )
-                []
-                [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]]
+                (noAnn [])
+                (noAnn [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
             ],
       testCase "simpagation" $
-        modRules <$> p "s @ kept \\ removed <=> body."
+        (map stripRuleLoc . modRules) <$> p "s @ kept \\ removed <=> body."
           @?= Right
             [ Rule
-                (Just "s")
-                ( Simpagation
-                    [Constraint (Unqualified "kept") []]
-                    [Constraint (Unqualified "removed") []]
+                (Just (noAnn "s"))
+                ( noAnn
+                    ( Simpagation
+                        [Constraint (Unqualified "kept") []]
+                        [Constraint (Unqualified "removed") []]
+                    )
                 )
-                []
-                [AtomTerm "body"]
+                (noAnn [])
+                (noAnn [AtomTerm "body"])
             ],
       testCase "rule with guard" $
-        modRules <$> p "r @ c(X, Y) <=> g(X) | b(Y)."
+        (map stripRuleLoc . modRules) <$> p "r @ c(X, Y) <=> g(X) | b(Y)."
           @?= Right
             [ Rule
-                (Just "r")
-                (Simplification [Constraint (Unqualified "c") [VarTerm "X", VarTerm "Y"]])
-                [CompoundTerm (Unqualified "g") [VarTerm "X"]]
-                [CompoundTerm (Unqualified "b") [VarTerm "Y"]]
+                (Just (noAnn "r"))
+                (noAnn (Simplification [Constraint (Unqualified "c") [VarTerm "X", VarTerm "Y"]]))
+                (noAnn [CompoundTerm (Unqualified "g") [VarTerm "X"]])
+                (noAnn [CompoundTerm (Unqualified "b") [VarTerm "Y"]])
             ],
       testCase "multiple body goals" $
         bodyOf "c <=> a, b, c2."
@@ -322,35 +345,39 @@ moduleTests =
   testGroup
     "full module"
     [ testCase "leq module" $
-        p leqSource
+        stripModLoc <$> p leqSource
           @?= Right
             ( Module
                 "order"
                 []
-                [ConstraintDecl "leq" 2]
+                [noAnn (ConstraintDecl "leq" 2)]
                 [ Rule
-                    (Just "refl")
-                    (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]])
-                    []
-                    [AtomTerm "true"],
+                    (Just (noAnn "refl"))
+                    (noAnn (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
+                    (noAnn [])
+                    (noAnn [AtomTerm "true"]),
                   Rule
-                    (Just "antisymmetry")
-                    ( Simplification
-                        [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
-                          Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "X"]
-                        ]
+                    (Just (noAnn "antisymmetry"))
+                    ( noAnn
+                        ( Simplification
+                            [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
+                              Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "X"]
+                            ]
+                        )
                     )
-                    []
-                    [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Y"]],
+                    (noAnn [])
+                    (noAnn [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Y"]]),
                   Rule
-                    (Just "trans")
-                    ( Propagation
-                        [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
-                          Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "Z"]
-                        ]
+                    (Just (noAnn "trans"))
+                    ( noAnn
+                        ( Propagation
+                            [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
+                              Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "Z"]
+                            ]
+                        )
                     )
-                    []
-                    [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]]
+                    (noAnn [])
+                    (noAnn [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
                 ]
                 (Just [])
             ),
@@ -379,11 +406,11 @@ commentTests =
   testGroup
     "comments"
     [ testCase "line comment before rule" $
-        modRules <$> p "% a comment\nfoo <=> bar."
-          @?= Right [Rule Nothing (Simplification [Constraint (Unqualified "foo") []]) [] [AtomTerm "bar"]],
+        (map stripRuleLoc . modRules) <$> p "% a comment\nfoo <=> bar."
+          @?= Right [Rule Nothing (noAnn (Simplification [Constraint (Unqualified "foo") []])) (noAnn []) (noAnn [AtomTerm "bar"])],
       testCase "inline comment after rule" $
-        modRules <$> p "foo <=> bar. % comment"
-          @?= Right [Rule Nothing (Simplification [Constraint (Unqualified "foo") []]) [] [AtomTerm "bar"]],
+        (map stripRuleLoc . modRules) <$> p "foo <=> bar. % comment"
+          @?= Right [Rule Nothing (noAnn (Simplification [Constraint (Unqualified "foo") []])) (noAnn []) (noAnn [AtomTerm "bar"])],
       testCase "only comments parses to empty module" $
         modRules <$> p "% just a comment\n% another"
           @?= Right []
@@ -412,18 +439,18 @@ bodyOf src = case p src of
   Left err -> assertFailure (show err)
   Right m -> case modRules m of
     [] -> assertFailure "expected at least one rule, got none"
-    (r : _) -> pure (ruleBody r)
+    (r : _) -> pure (node (ruleBody r))
 
 headOf :: Text -> IO Head
 headOf src = case p src of
   Left err -> assertFailure (show err)
   Right m -> case modRules m of
     [] -> assertFailure "expected at least one rule, got none"
-    (r : _) -> pure (ruleHead r)
+    (r : _) -> pure (node (ruleHead r))
 
 guardOf :: Text -> IO [Term]
 guardOf src = case p src of
   Left err -> assertFailure (show err)
   Right m -> case modRules m of
     [] -> assertFailure "expected at least one rule, got none"
-    (r : _) -> pure (ruleGuard r)
+    (r : _) -> pure (node (ruleGuard r))

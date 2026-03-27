@@ -42,6 +42,22 @@ import Text.Megaparsec.Char.Lexer qualified as L
 import YCHR.Parsed
 import YCHR.Types
 
+-- | Convert a megaparsec 'SourcePos' to a 'SourceLoc'.
+sourceLocFromPos :: SourcePos -> SourceLoc
+sourceLocFromPos sp =
+  SourceLoc
+    { locFile = sourceName sp,
+      locLine = unPos (sourceLine sp),
+      locCol = unPos (sourceColumn sp)
+    }
+
+-- | Wrap a parser's result with the source location of its first character.
+withLoc :: Parser a -> Parser (Ann a)
+withLoc p = do
+  sp <- getSourcePos
+  x <- p
+  pure (Ann x (sourceLocFromPos sp))
+
 -- | Parser type: 'Text' input, no custom error components.
 type Parser = Parsec Void Text
 
@@ -364,15 +380,17 @@ headP = do
 -- If @|@ is present, the terms before it form the guard and the terms after
 -- form the body. If @|@ is absent, the guard is empty and all terms are the
 -- body.
-guardBodyP :: Parser ([Term], [Term])
+guardBodyP :: Parser (Ann [Term], Ann [Term])
 guardBodyP = do
+  startPos <- getSourcePos
   ts <- termP `sepBy1` comma
   choice
     [ do
         _ <- symbol "|"
+        bodyPos <- getSourcePos
         body <- termP `sepBy1` comma
-        pure (ts, body),
-      pure ([], ts)
+        pure (Ann ts (sourceLocFromPos startPos), Ann body (sourceLocFromPos bodyPos)),
+      pure (Ann [] (sourceLocFromPos startPos), Ann ts (sourceLocFromPos startPos))
     ]
 
 -- ---------------------------------------------------------------------------
@@ -382,8 +400,8 @@ guardBodyP = do
 -- | Parse a single CHR rule.
 ruleP :: Parser Rule
 ruleP = do
-  name <- optional (try (atomP <* symbol "@"))
-  head_ <- headP
+  name <- optional (try (withLoc (atomP <* symbol "@")))
+  head_ <- withLoc headP
   (guard_, body) <- guardBodyP
   _ <- symbol "."
   pure (Rule name head_ guard_ body)
@@ -394,8 +412,8 @@ ruleP = do
 
 data Directive
   = DirModule Text [Declaration]
-  | DirImport Import
-  | DirConstraintDecl [Declaration]
+  | DirImport (Ann Import)
+  | DirConstraintDecl [Ann Declaration]
   | DirOther
 
 -- | Parse a Prolog-style directive (@:- ...@).
@@ -423,25 +441,25 @@ directiveP = do
       pure DirOther
 
 -- | Parse the arguments of a @module@ directive.
--- Returns the module name and its export list.
+-- Returns the module name and its export list (unannotated).
 moduleArgsP :: Parser (Text, [Declaration])
 moduleArgsP = do
   name <- atomP
   _ <- comma
-  exports <- brackets (constraintDeclP `sepBy` comma)
+  exports <- brackets (map node <$> constraintDeclP `sepBy` comma)
   pure (name, exports)
 
 -- | Parse a single constraint declaration: @name\/arity@.
-constraintDeclP :: Parser Declaration
-constraintDeclP = do
+constraintDeclP :: Parser (Ann Declaration)
+constraintDeclP = withLoc $ do
   name <- atomP
   _ <- symbol "/"
   arity <- lexeme L.decimal
   pure (ConstraintDecl name arity)
 
 -- | Parse an import specifier: either @library(name)@ or a plain module name.
-importP :: Parser Import
-importP = try libraryP <|> (ModuleImport <$> atomP)
+importP :: Parser (Ann Import)
+importP = withLoc (try libraryP <|> (ModuleImport <$> atomP))
   where
     libraryP = do
       _ <- symbol "library"
