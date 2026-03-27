@@ -66,7 +66,7 @@ import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId, Value (..))
 import YCHR.Runtime.Var (Unify, deref, equal, newVar, runUnify, unify)
 import YCHR.StdLib (stdlib)
 import YCHR.Types (Constraint (..), ConstraintType, SymbolTable, Term (..))
-import YCHR.Types qualified as T
+import YCHR.Types qualified as Types
 import YCHR.VM (Name (..), Procedure (..), Program (..))
 
 data Error
@@ -81,12 +81,12 @@ data Error
 data CompiledProgram = CompiledProgram
   { program :: Program,
     exportMap :: Map (Text, Int) ExportResolution,
-    exportedSet :: Set T.Name,
+    exportedSet :: Set Types.Name,
     symbolTable :: SymbolTable
   }
 
 data ExportResolution
-  = UniqueExport T.Name
+  = UniqueExport Types.Name
   | AmbiguousExport [Text]
   deriving (Show, Eq)
 
@@ -102,14 +102,14 @@ compileModules inputs = do
           ]
       exportedSet =
         Set.fromList
-          [T.Qualified m n | ((n, _), ms) <- toListGlobal exportEnv, m <- ms]
+          [Types.Qualified m n | ((n, _), ms) <- toListGlobal exportEnv, m <- ms]
   renamed <- first RenameErrors (renameProgram collected)
   desugared <- first DesugarErrors (desugarProgram renamed)
   let symTab = extractSymbolTable desugared
   prog <- first CompileErrors (compile desugared symTab)
   pure (CompiledProgram prog exportMap exportedSet symTab)
   where
-    toResolution n [m] = UniqueExport (T.Qualified m n)
+    toResolution n [m] = UniqueExport (Types.Qualified m n)
     toResolution _ ms = AmbiguousExport ms
 
 compileFiles :: [FilePath] -> IO (Either Error CompiledProgram)
@@ -129,7 +129,7 @@ data CHR :: Effect
 type instance DispatchOf CHR = Static WithSideEffects
 
 data instance StaticRep CHR
-  = CHRRep ProcMap HostCallRegistry (Map (Text, Int) ExportResolution) (Set T.Name)
+  = CHRRep ProcMap HostCallRegistry (Map (Text, Int) ExportResolution) (Set Types.Name)
 
 -- | Shorthand for the full set of effects available inside a CHR session.
 type CHREffects es =
@@ -172,7 +172,7 @@ withCHR cp hc action = runEff (runCHR cp hc action)
 
 -- | Add a constraint to the store. The constraint name can be unqualified
 -- (resolved via the export map) or fully qualified.
-tellConstraint :: (CHREffects es) => T.Name -> [Value] -> Eff es ()
+tellConstraint :: (CHREffects es) => Types.Name -> [Value] -> Eff es ()
 tellConstraint name args = do
   CHRRep procMap hc exportMap exportedSet <- getStaticRep
   let arity = length args
@@ -188,9 +188,9 @@ tellConstraint name args = do
 -- | Name resolution extracted from 'resolveQueryConstraint' to work with
 -- just a name and arity.
 resolveQueryConstraint' ::
-  Map (Text, Int) ExportResolution -> Set T.Name -> T.Name -> Int -> Either String T.Name
+  Map (Text, Int) ExportResolution -> Set Types.Name -> Types.Name -> Int -> Either String Types.Name
 resolveQueryConstraint' expMap expSet name arity = case name of
-  T.Unqualified n ->
+  Types.Unqualified n ->
     case Map.lookup (n, arity) expMap of
       Just (UniqueExport qname) -> Right qname
       Just (AmbiguousExport ms) ->
@@ -203,8 +203,8 @@ resolveQueryConstraint' expMap expSet name arity = case name of
               ++ intercalate ", " (map T.unpack ms)
           )
       Nothing -> Left ("Unknown constraint: " ++ T.unpack n ++ "/" ++ show arity)
-  T.Qualified m n ->
-    if Set.member (T.Qualified m n) expSet
+  Types.Qualified m n ->
+    if Set.member (Types.Qualified m n) expSet
       then Right name
       else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n)
 
@@ -215,7 +215,7 @@ resolveQueryConstraint' expMap expSet name arity = case name of
 -- | Resolve a query constraint against the export map.
 resolveQueryConstraint :: CompiledProgram -> Constraint -> Either String Constraint
 resolveQueryConstraint cp (Constraint cname cargs) = case cname of
-  T.Unqualified n ->
+  Types.Unqualified n ->
     let arity = length cargs
      in case Map.lookup (n, arity) cp.exportMap of
           Just (UniqueExport qname) ->
@@ -230,8 +230,8 @@ resolveQueryConstraint cp (Constraint cname cargs) = case cname of
                   ++ intercalate ", " (map T.unpack ms)
               )
           Nothing -> Left ("Unknown constraint: " ++ T.unpack n ++ "/" ++ show arity)
-  T.Qualified m n ->
-    if Set.member (T.Qualified m n) cp.exportedSet
+  Types.Qualified m n ->
+    if Set.member (Types.Qualified m n) cp.exportedSet
       then Right (Constraint cname cargs)
       else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n)
 
@@ -281,8 +281,8 @@ termToValue (IntTerm n) = pure (VInt n)
 termToValue (AtomTerm s) = pure (VAtom s)
 termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard
-termToValue (CompoundTerm (T.Unqualified f) ts) = VTerm f <$> traverse termToValue ts
-termToValue (CompoundTerm (T.Qualified m f) ts) = VTerm (m <> ":" <> f) <$> traverse termToValue ts
+termToValue (CompoundTerm (Types.Unqualified f) ts) = VTerm f <$> traverse termToValue ts
+termToValue (CompoundTerm (Types.Qualified m f) ts) = VTerm (m <> ":" <> f) <$> traverse termToValue ts
 
 -- ---------------------------------------------------------------------------
 -- Multi-goal query API
@@ -310,27 +310,27 @@ interpretGoal ::
   Term ->
   Eff es ()
 interpretGoal _ (AtomTerm "true") = pure ()
-interpretGoal _ (CompoundTerm (T.Unqualified "=") [l, r]) = do
+interpretGoal _ (CompoundTerm (Types.Unqualified "=") [l, r]) = do
   v1 <- termToValue l
   v2 <- termToValue r
   CHRRep procMap hc' _ _ <- getStaticRep
   (_, observers) <- listen (unify v1 v2)
   enqueue observers
   drainReactivation procMap hc'
-interpretGoal hc (CompoundTerm (T.Unqualified "is") [VarTerm v, expr]) = do
+interpretGoal hc (CompoundTerm (Types.Unqualified "is") [VarTerm v, expr]) = do
   result <- evalTermArith hc expr
   modify (Map.insert v result)
-interpretGoal hc (CompoundTerm (T.Unqualified ":=") [VarTerm v, CompoundTerm (T.Unqualified f) args]) = do
+interpretGoal hc (CompoundTerm (Types.Unqualified ":=") [VarTerm v, CompoundTerm (Types.Unqualified f) args]) = do
   argVals <- traverse termToValue args
   result <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
   case result of
     RVal val -> modify (Map.insert v val)
     _ -> error $ ":= host call returned non-value"
-interpretGoal hc (CompoundTerm (T.Unqualified ":=") [T.Wildcard, CompoundTerm (T.Unqualified f) args]) = do
+interpretGoal hc (CompoundTerm (Types.Unqualified ":=") [Wildcard, CompoundTerm (Types.Unqualified f) args]) = do
   argVals <- traverse termToValue args
   _ <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
   pure ()
-interpretGoal hc (CompoundTerm (T.Unqualified "host") [CompoundTerm (T.Unqualified f) args]) = do
+interpretGoal hc (CompoundTerm (Types.Unqualified "host") [CompoundTerm (Types.Unqualified f) args]) = do
   argVals <- traverse termToValue args
   _ <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
   pure ()
@@ -341,9 +341,9 @@ interpretGoal _ term = do
   tellConstraint name argVals
 
 -- | Extract a constraint name and arguments from a term.
-termToConstraint :: Term -> (T.Name, [Term])
+termToConstraint :: Term -> (Types.Name, [Term])
 termToConstraint (CompoundTerm name args) = (name, args)
-termToConstraint (AtomTerm s) = (T.Unqualified s, [])
+termToConstraint (AtomTerm s) = (Types.Unqualified s, [])
 termToConstraint t = error $ "Not a valid goal: " ++ show t
 
 -- | Call a host function, failing with a clear message if not found.
@@ -377,7 +377,7 @@ evalTermArith _ (VarTerm v) = do
   case Map.lookup v varMap of
     Just val -> deref val
     Nothing -> error $ "Unbound variable in arithmetic expression: " ++ T.unpack v
-evalTermArith hc (CompoundTerm (T.Unqualified op) [l, r]) = do
+evalTermArith hc (CompoundTerm (Types.Unqualified op) [l, r]) = do
   lv <- evalTermArith hc l
   rv <- evalTermArith hc r
   result <- liftIO (hostCall (Map.lookup (Name op) hc) op [RVal lv, RVal rv])

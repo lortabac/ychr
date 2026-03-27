@@ -36,7 +36,7 @@ where
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import YCHR.Desugared qualified as D
-import YCHR.Types qualified as T
+import YCHR.Types (Constraint, Name, Term)
 import YCHR.VM (ConstraintType, Expr)
 
 -- | 1-based occurrence number within a constraint type's occurrence list.
@@ -56,42 +56,42 @@ newtype PartnerIndex = PartnerIndex {unPartnerIndex :: Int}
   deriving (Show, Eq, Ord, Num, Enum)
 
 data Occurrence = Occurrence
-  { conName :: T.Name,
+  { conName :: Name,
     number :: OccurrenceNumber,
     rule :: D.Rule,
     activeIdx :: HeadPosition,
     isKept :: Bool,
-    activeArgs :: [T.Term],
+    activeArgs :: [Term],
     partners :: [Partner]
   }
 
 data Partner = Partner
   { idx :: HeadPosition,
-    constraint :: T.Constraint,
+    constraint :: Constraint,
     isKept :: Bool,
     cType :: ConstraintType
   }
 
-newtype ArityMap = ArityMap (Map.Map T.Name Arity)
+newtype ArityMap = ArityMap (Map.Map Name Arity)
 
-arityMapFromList :: [(T.Name, Arity)] -> ArityMap
+arityMapFromList :: [(Name, Arity)] -> ArityMap
 arityMapFromList = ArityMap . Map.fromList
 
-lookupArity :: T.Name -> ArityMap -> Arity
+lookupArity :: Name -> ArityMap -> Arity
 lookupArity k (ArityMap m) = Map.findWithDefault (Arity 0) k m
 
-newtype OccurrenceMap = OccurrenceMap (Map.Map T.Name [Occurrence])
+newtype OccurrenceMap = OccurrenceMap (Map.Map Name [Occurrence])
 
 occMapEmpty :: OccurrenceMap
 occMapEmpty = OccurrenceMap Map.empty
 
-occMapAppend :: T.Name -> Occurrence -> OccurrenceMap -> OccurrenceMap
+occMapAppend :: Name -> Occurrence -> OccurrenceMap -> OccurrenceMap
 occMapAppend k occ (OccurrenceMap m) = OccurrenceMap (Map.insertWith (++) k [occ] m)
 
 occMapMap :: ([Occurrence] -> [Occurrence]) -> OccurrenceMap -> OccurrenceMap
 occMapMap f (OccurrenceMap m) = OccurrenceMap (Map.map f m)
 
-lookupOccurrences :: T.Name -> OccurrenceMap -> [Occurrence]
+lookupOccurrences :: Name -> OccurrenceMap -> [Occurrence]
 lookupOccurrences k (OccurrenceMap m) = Map.findWithDefault [] k m
 
 newtype VarMap = VarMap (Map.Map Text Expr)

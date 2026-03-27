@@ -22,7 +22,7 @@ import YCHR.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, deref, runUnify)
 import YCHR.Types (Term (..))
-import YCHR.Types qualified as T
+import YCHR.Types qualified as Types
 import YCHR.VM (Name (..))
 
 -- | Convert a runtime 'Value' to a surface 'Term', dereferencing logical
@@ -37,7 +37,7 @@ valueToTerm varName v = do
     VBool True -> pure (AtomTerm "true")
     VBool False -> pure (AtomTerm "false")
     VWildcard -> pure Wildcard
-    VTerm f ts -> CompoundTerm (T.Unqualified f) <$> traverse (valueToTerm "_") ts
+    VTerm f ts -> CompoundTerm (Types.Unqualified f) <$> traverse (valueToTerm "_") ts
     VVar _ -> pure (VarTerm varName)
 
 -- | Pretty-print a 'RuntimeVal' using the surface pretty-printer.

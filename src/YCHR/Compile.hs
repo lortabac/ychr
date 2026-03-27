@@ -17,18 +17,18 @@ import Control.Monad (foldM)
 import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
-import Data.Text qualified as T'
+import Data.Text qualified as T
 import Data.Traversable (for)
 import Effectful (Eff, runPureEff)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import YCHR.Compile.Types
 import YCHR.Desugared qualified as D
-import YCHR.Types (SymbolTable, lookupSymbol, symbolTableSize, symbolTableToList)
-import YCHR.Types qualified as T
+import YCHR.Types (Constraint, SymbolTable, Term (..), lookupSymbol, symbolTableSize, symbolTableToList)
+import YCHR.Types qualified as Types
 import YCHR.VM
 
 data CompileError
-  = UnknownConstraintType T.Name
+  = UnknownConstraintType Types.Name
   | UnboundVariable Text
   deriving (Eq, Show)
 
@@ -89,7 +89,7 @@ ruleOccurrences symTab (ruleIdx, rule) = do
           ++ [(i, c, True) | (i, c) <- zip [HeadPosition (length removed) ..] (reverse kept)]
       ruleName' = case rule.name of
         Just n -> n
-        Nothing -> "rule_" <> T'.pack (show ruleIdx)
+        Nothing -> "rule_" <> T.pack (show ruleIdx)
   for combined $ \(idx, con, isKept) ->
     mkOccurrence symTab rule ruleName' combined idx con isKept
 
@@ -97,9 +97,9 @@ mkOccurrence ::
   SymbolTable ->
   D.Rule ->
   Text ->
-  [(HeadPosition, T.Constraint, Bool)] ->
+  [(HeadPosition, Constraint, Bool)] ->
   HeadPosition ->
-  T.Constraint ->
+  Constraint ->
   Bool ->
   Eff '[Writer [CompileError]] Occurrence
 mkOccurrence symTab rule _ruleName combined activeIdx activeCon activeIsKept = do
@@ -124,7 +124,7 @@ mkOccurrence symTab rule _ruleName combined activeIdx activeCon activeIsKept = d
         partners = partners
       }
 
-lookupCType :: SymbolTable -> T.Name -> Eff '[Writer [CompileError]] ConstraintType
+lookupCType :: SymbolTable -> Types.Name -> Eff '[Writer [CompileError]] ConstraintType
 lookupCType symTab name = case lookupSymbol name symTab of
   Just ct -> pure ct
   Nothing -> do
@@ -135,7 +135,7 @@ lookupCType symTab name = case lookupSymbol name symTab of
 -- Procedure generation for each constraint type
 -- ---------------------------------------------------------------------------
 
-genConstraintProcs :: SymbolTable -> ArityMap -> OccurrenceMap -> (T.Name, ConstraintType) -> Eff '[Writer [CompileError]] [Procedure]
+genConstraintProcs :: SymbolTable -> ArityMap -> OccurrenceMap -> (Types.Name, ConstraintType) -> Eff '[Writer [CompileError]] [Procedure]
 genConstraintProcs symTab arityMap occMap (name, cType) = do
   let arity = lookupArity name arityMap
       occs = lookupOccurrences name occMap
@@ -148,7 +148,7 @@ genConstraintProcs symTab arityMap occMap (name, cType) = do
 -- tell_c
 -- ---------------------------------------------------------------------------
 
-genTell :: T.Name -> ConstraintType -> Arity -> Procedure
+genTell :: Types.Name -> ConstraintType -> Arity -> Procedure
 genTell name cType arity =
   let params = argNames arity
       tellName = procNameFor "tell" name
@@ -165,7 +165,7 @@ genTell name cType arity =
 -- activate_c
 -- ---------------------------------------------------------------------------
 
-genActivate :: T.Name -> Arity -> [Occurrence] -> Procedure
+genActivate :: Types.Name -> Arity -> [Occurrence] -> Procedure
 genActivate name arity occs =
   let params = Name "id" : argNames arity
       activateName = procNameFor "activate" name
@@ -182,7 +182,7 @@ genActivate name arity occs =
 -- occurrence_c_j
 -- ---------------------------------------------------------------------------
 
-genOccurrence :: SymbolTable -> T.Name -> Arity -> Occurrence -> Eff '[Writer [CompileError]] Procedure
+genOccurrence :: SymbolTable -> Types.Name -> Arity -> Occurrence -> Eff '[Writer [CompileError]] Procedure
 genOccurrence symTab name arity occ = do
   let params = Name "id" : argNames arity
       procName' = occProcName name occ.number
@@ -194,12 +194,12 @@ buildVarMap :: Occurrence -> VarMap
 buildVarMap occ =
   let activeBindings =
         [ (v, Var (argName i))
-        | (i, T.VarTerm v) <- zip [0 ..] occ.activeArgs
+        | (i, VarTerm v) <- zip [0 ..] occ.activeArgs
         ]
       partnerBindings =
         [ (v, Var (partArgName k j))
         | (k, partner) <- zip [PartnerIndex 0 ..] occ.partners,
-          (j, T.VarTerm v) <- zip [0 ..] partner.constraint.args
+          (j, VarTerm v) <- zip [0 ..] partner.constraint.args
         ]
    in varMapFromList (activeBindings ++ partnerBindings)
 
@@ -234,7 +234,7 @@ genPartnerBody symTab varMap occ k
       pure (wrapper inner)
   | otherwise = do
       let partner = occ.partners !! k.unPartnerIndex
-          label = Label ("L" <> T'.pack (show (k.unPartnerIndex + 1)))
+          label = Label ("L" <> T.pack (show (k.unPartnerIndex + 1)))
           suspVar = partSuspName k
           partArity = length partner.constraint.args
           fieldExtracts =
@@ -311,19 +311,19 @@ genKillStmts occ =
 -- Compile terms
 -- ---------------------------------------------------------------------------
 
-compileTerm :: VarMap -> T.Term -> Eff '[Writer [CompileError]] Expr
-compileTerm varMap (T.VarTerm v) = case lookupVar v varMap of
+compileTerm :: VarMap -> Term -> Eff '[Writer [CompileError]] Expr
+compileTerm varMap (VarTerm v) = case lookupVar v varMap of
   Just expr -> pure expr
   Nothing -> do
     tell [UnboundVariable v]
     pure (Lit WildcardLit)
-compileTerm _ (T.IntTerm n) = pure (Lit (IntLit n))
-compileTerm _ (T.AtomTerm s) = pure (Lit (AtomLit s))
-compileTerm _ (T.TextTerm s) = pure (Lit (TextLit s))
-compileTerm varMap (T.CompoundTerm name args) = do
+compileTerm _ (IntTerm n) = pure (Lit (IntLit n))
+compileTerm _ (AtomTerm s) = pure (Lit (AtomLit s))
+compileTerm _ (TextTerm s) = pure (Lit (TextLit s))
+compileTerm varMap (CompoundTerm name args) = do
   args' <- traverse (compileTerm varMap) args
   pure (MakeTerm (vmName name) args')
-compileTerm _ T.Wildcard = pure (Lit WildcardLit)
+compileTerm _ Wildcard = pure (Lit WildcardLit)
 
 -- ---------------------------------------------------------------------------
 -- Compile guards
@@ -412,7 +412,7 @@ compileBodyGoals symTab varMap (goal : rest) = case goal of
         rest' <- compileBodyGoals symTab varMap' rest
         pure (stmt : rest')
   D.BodyConstraint con -> do
-    let argVars = [v | T.VarTerm v <- con.args, notMemberVar v varMap]
+    let argVars = [v | VarTerm v <- con.args, notMemberVar v varMap]
         newStmts = [Let (Name v) NewVar | v <- argVars]
         varMap' = foldl' (\m v -> insertVar v (Var (Name v)) m) varMap argVars
     callArgs <- traverse (compileTerm varMap') con.args
@@ -471,14 +471,14 @@ genReactivateDispatch symTab arityMap =
     genDispatchBranch (name, cType) =
       let arity = lookupArity name arityMap
           argExtracts =
-            [ Let (Name ("rx_" <> T'.pack (show i))) (FieldGet (Var "susp") (FieldArg (ArgIndex i)))
+            [ Let (Name ("rx_" <> T.pack (show i))) (FieldGet (Var "susp") (FieldArg (ArgIndex i)))
             | i <- [0 .. arity.unArity - 1]
             ]
           activateCall =
             ExprStmt
               ( CallExpr
                   (procNameFor "activate" name)
-                  (Var "susp" : [Var (Name ("rx_" <> T'.pack (show i))) | i <- [0 .. arity.unArity - 1]])
+                  (Var "susp" : [Var (Name ("rx_" <> T.pack (show i))) | i <- [0 .. arity.unArity - 1]])
               )
        in If
             (IsConstraintType (Var "susp") cType)
@@ -489,30 +489,30 @@ genReactivateDispatch symTab arityMap =
 -- Naming helpers
 -- ---------------------------------------------------------------------------
 
-procNameFor :: Text -> T.Name -> Name
-procNameFor prefix (T.Qualified m n) = Name (prefix <> "_" <> m <> "_" <> n)
-procNameFor prefix (T.Unqualified n) = Name (prefix <> "_" <> n)
+procNameFor :: Text -> Types.Name -> Name
+procNameFor prefix (Types.Qualified m n) = Name (prefix <> "_" <> m <> "_" <> n)
+procNameFor prefix (Types.Unqualified n) = Name (prefix <> "_" <> n)
 
-occProcName :: T.Name -> OccurrenceNumber -> Name
+occProcName :: Types.Name -> OccurrenceNumber -> Name
 occProcName name num =
   let Name base = procNameFor "occurrence" name
-   in Name (base <> "_" <> T'.pack (show num.unOccurrenceNumber))
+   in Name (base <> "_" <> T.pack (show num.unOccurrenceNumber))
 
-vmName :: T.Name -> Name
-vmName (T.Unqualified n) = Name n
-vmName (T.Qualified m n) = Name (m <> "_" <> n)
+vmName :: Types.Name -> Name
+vmName (Types.Unqualified n) = Name n
+vmName (Types.Qualified m n) = Name (m <> "_" <> n)
 
 argNames :: Arity -> [Name]
 argNames arity = [argName i | i <- [0 .. arity.unArity - 1]]
 
 argName :: Int -> Name
-argName i = Name ("X_" <> T'.pack (show i))
+argName i = Name ("X_" <> T.pack (show i))
 
 partSuspName :: PartnerIndex -> Name
-partSuspName k = Name ("susp_" <> T'.pack (show k.unPartnerIndex))
+partSuspName k = Name ("susp_" <> T.pack (show k.unPartnerIndex))
 
 partIdName :: PartnerIndex -> Name
-partIdName k = Name ("pId_" <> T'.pack (show k.unPartnerIndex))
+partIdName k = Name ("pId_" <> T.pack (show k.unPartnerIndex))
 
 partArgName :: PartnerIndex -> Int -> Name
-partArgName k j = Name ("pA" <> T'.pack (show j) <> "_" <> T'.pack (show k.unPartnerIndex))
+partArgName k j = Name ("pA" <> T.pack (show j) <> "_" <> T.pack (show k.unPartnerIndex))
