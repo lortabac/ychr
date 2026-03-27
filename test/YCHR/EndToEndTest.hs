@@ -30,7 +30,7 @@ tests =
 -- ---------------------------------------------------------------------------
 
 compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
-compileOrFail inputs = case compileModules inputs of
+compileOrFail inputs = case compileModules False inputs of
   Left err -> assertFailure $ show err
   Right cp -> pure cp
 

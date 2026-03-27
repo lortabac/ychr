@@ -29,10 +29,11 @@ data CollectError
 -- 4. Detects circular imports.
 -- 5. Prepends library modules in topological order (dependencies first).
 -- 6. Rewrites all 'LibraryImport' to 'ModuleImport' in every module.
-collectLibraries :: Map Text Module -> [Module] -> Either [CollectError] [Module]
-collectLibraries stdlibMap userMods =
+collectLibraries :: Bool -> Map Text Module -> [Module] -> Either [CollectError] [Module]
+collectLibraries autoload stdlibMap userMods =
   let builtinSeeds = ["builtins" | Map.member "builtins" stdlibMap]
-      seeds = builtinSeeds ++ concatMap libraryImports userMods
+      autoloadSeeds = if autoload then Map.keys stdlibMap else []
+      seeds = builtinSeeds ++ autoloadSeeds ++ concatMap libraryImports userMods
    in case resolveAll stdlibMap Set.empty Set.empty seeds of
         (_, libs, []) ->
           let rewritten = map rewriteImports (libs ++ userMods)

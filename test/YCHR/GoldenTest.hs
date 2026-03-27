@@ -28,7 +28,7 @@ tests = do
 makeGoldenTest :: FilePath -> String -> IO TestTree
 makeGoldenTest base name = pure $ testCase name $ do
   prog <-
-    compileFiles [base </> "programs" </> name <.> "chr"]
+    compileFiles False [base </> "programs" </> name <.> "chr"]
       >>= either (assertFailure . show) pure
   query <- TIO.readFile (base </> "queries" </> name <.> "txt")
   expected <- readFile (base </> "expected" </> name <.> "txt")

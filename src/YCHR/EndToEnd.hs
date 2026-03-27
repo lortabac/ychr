@@ -90,10 +90,10 @@ data ExportResolution
   | AmbiguousExport [Text]
   deriving (Show, Eq)
 
-compileModules :: [(FilePath, Text)] -> Either Error CompiledProgram
-compileModules inputs = do
+compileModules :: Bool -> [(FilePath, Text)] -> Either Error CompiledProgram
+compileModules autoload inputs = do
   parsed <- mapM (\(fp, txt) -> first (ParseError fp) (parseModule fp txt)) inputs
-  collected <- first CollectErrors (collectLibraries stdlib parsed)
+  collected <- first CollectErrors (collectLibraries autoload stdlib parsed)
   let exportEnv = buildExportEnv collected
       exportMap =
         Map.fromList
@@ -112,10 +112,10 @@ compileModules inputs = do
     toResolution n [m] = UniqueExport (Types.Qualified m n)
     toResolution _ ms = AmbiguousExport ms
 
-compileFiles :: [FilePath] -> IO (Either Error CompiledProgram)
-compileFiles paths = do
+compileFiles :: Bool -> [FilePath] -> IO (Either Error CompiledProgram)
+compileFiles autoload paths = do
   contents <- mapM (\fp -> (fp,) <$> TIO.readFile fp) paths
-  pure (compileModules contents)
+  pure (compileModules autoload contents)
 
 -- ---------------------------------------------------------------------------
 -- CHR effect
