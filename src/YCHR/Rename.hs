@@ -30,8 +30,8 @@ import YCHR.Rename.Types
 import YCHR.Types
 
 data RenameError
-  = AmbiguousName Text Int [Text]
-  | UnknownName Text Int
+  = AmbiguousName SourceLoc Text Int [Text]
+  | UnknownName SourceLoc Text Int
   deriving (Eq, Show)
 
 -- | All declared constraints (for intra-module resolution).
@@ -69,33 +69,33 @@ renameModule localEnv exportEnv m = do
 
 renameRule :: LocalEnv -> GlobalEnv -> Module -> Rule -> Eff '[Writer [RenameError]] Rule
 renameRule localEnv exportEnv m r = do
-  h <- traverse (renameHead localEnv exportEnv m) r.head
-  g <- traverse (traverse (renameTerm localEnv exportEnv m False)) r.guard
-  b <- traverse (traverse (renameTerm localEnv exportEnv m True)) r.body
+  h <- traverse (renameHead localEnv exportEnv m r.head.sourceLoc) r.head
+  g <- traverse (traverse (renameTerm localEnv exportEnv m r.guard.sourceLoc False)) r.guard
+  b <- traverse (traverse (renameTerm localEnv exportEnv m r.body.sourceLoc True)) r.body
   pure r {head = h, guard = g, body = b}
 
-renameHead :: LocalEnv -> GlobalEnv -> Module -> Head -> Eff '[Writer [RenameError]] Head
-renameHead localEnv exportEnv m h = case h of
-  Simplification cs -> Simplification <$> traverse (renameCon localEnv exportEnv m) cs
-  Propagation cs -> Propagation <$> traverse (renameCon localEnv exportEnv m) cs
-  Simpagation k r -> Simpagation <$> traverse (renameCon localEnv exportEnv m) k <*> traverse (renameCon localEnv exportEnv m) r
+renameHead :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Head -> Eff '[Writer [RenameError]] Head
+renameHead localEnv exportEnv m loc h = case h of
+  Simplification cs -> Simplification <$> traverse (renameCon localEnv exportEnv m loc) cs
+  Propagation cs -> Propagation <$> traverse (renameCon localEnv exportEnv m loc) cs
+  Simpagation k r -> Simpagation <$> traverse (renameCon localEnv exportEnv m loc) k <*> traverse (renameCon localEnv exportEnv m loc) r
 
-renameCon :: LocalEnv -> GlobalEnv -> Module -> Constraint -> Eff '[Writer [RenameError]] Constraint
-renameCon localEnv exportEnv m (Constraint cname cargs) = do
-  renamedName <- resolveName localEnv exportEnv m cname (length cargs)
-  renamedArgs <- traverse (renameTerm localEnv exportEnv m False) cargs
+renameCon :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Constraint -> Eff '[Writer [RenameError]] Constraint
+renameCon localEnv exportEnv m loc (Constraint cname cargs) = do
+  renamedName <- resolveName localEnv exportEnv m loc cname (length cargs)
+  renamedArgs <- traverse (renameTerm localEnv exportEnv m loc False) cargs
   pure (Constraint renamedName renamedArgs)
 
-renameTerm :: LocalEnv -> GlobalEnv -> Module -> Bool -> Term -> Eff '[Writer [RenameError]] Term
-renameTerm localEnv exportEnv m isGoal t = case t of
+renameTerm :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Bool -> Term -> Eff '[Writer [RenameError]] Term
+renameTerm localEnv exportEnv m loc isGoal t = case t of
   CompoundTerm name args -> do
-    renamedArgs <- traverse (renameTerm localEnv exportEnv m False) args
-    newName <- if isGoal then resolveName localEnv exportEnv m name (length args) else pure name
+    renamedArgs <- traverse (renameTerm localEnv exportEnv m loc False) args
+    newName <- if isGoal then resolveName localEnv exportEnv m loc name (length args) else pure name
     pure (CompoundTerm newName renamedArgs)
   other -> pure other
 
-resolveName :: LocalEnv -> GlobalEnv -> Module -> Name -> Int -> Eff '[Writer [RenameError]] Name
-resolveName localEnv exportEnv currentMod (Unqualified n) arity
+resolveName :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Name -> Int -> Eff '[Writer [RenameError]] Name
+resolveName localEnv exportEnv currentMod loc (Unqualified n) arity
   | isReserved n reservedSymbols = pure (Unqualified n)
   | otherwise =
       let ownProviders = filter (== currentMod.name) (lookupLocal (n, arity) localEnv)
@@ -105,9 +105,9 @@ resolveName localEnv exportEnv currentMod (Unqualified n) arity
        in case matches of
             [m] -> pure (Qualified m n)
             [] -> do
-              tell [UnknownName n arity]
+              tell [UnknownName loc n arity]
               pure (Unqualified n)
             ms -> do
-              tell [AmbiguousName n arity ms]
+              tell [AmbiguousName loc n arity ms]
               pure (Unqualified n)
-resolveName _ _ _ (Qualified m n) _ = pure (Qualified m n)
+resolveName _ _ _ _ (Qualified m n) _ = pure (Qualified m n)

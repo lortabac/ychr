@@ -110,7 +110,7 @@ importedTests =
                 `importing` ["B"]
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB, modC]
-          @?= Left [UnknownName "leq" 2]
+          @?= Left [UnknownName dummyLoc "leq" 2]
     ]
 
 --------------------------------------------------------------------------------
@@ -129,7 +129,7 @@ ambiguousTests =
                 `declaring` ["leq" // 2]
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
-          @?= Left [AmbiguousName "leq" 2 ["B", "A"]],
+          @?= Left [AmbiguousName dummyLoc "leq" 2 ["B", "A"]],
       testCase "two imports declare same name" $ do
         let modA = module' "A" `declaring` ["leq" // 2]
             modB = module' "B" `declaring` ["leq" // 2]
@@ -138,7 +138,7 @@ ambiguousTests =
                 `importing` ["A", "B"]
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         case renameProgram [modA, modB, modC] of
-          Left [AmbiguousName "leq" 2 _] -> pure ()
+          Left [AmbiguousName _ "leq" 2 _] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other
     ]
 
@@ -155,7 +155,7 @@ unknownTests =
               module' "M"
                 `defining` [[con "foo" [var "X"]] <=> [atom "true"]]
         renameProgram [m]
-          @?= Left [UnknownName "foo" 1],
+          @?= Left [UnknownName dummyLoc "foo" 1],
       testCase "wrong arity" $ do
         -- leq/3 is declared but leq/2 is used: key ("leq",2) absent in env
         let m =
@@ -163,7 +163,7 @@ unknownTests =
                 `declaring` ["leq" // 3]
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [m]
-          @?= Left [UnknownName "leq" 2],
+          @?= Left [UnknownName dummyLoc "leq" 2],
       testCase "host call in body" $ do
         let m =
               module' "M"
@@ -448,7 +448,7 @@ exportTests =
                 `importing` ["A"]
                 `defining` [[con "gt" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
-          @?= Left [UnknownName "gt" 2],
+          @?= Left [UnknownName dummyLoc "gt" 2],
       testCase "empty export list hides all constraints from importer" $ do
         -- A exports nothing; B cannot see leq/2
         let modA =
@@ -460,7 +460,7 @@ exportTests =
                 `importing` ["A"]
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
-          @?= Left [UnknownName "leq" 2],
+          @?= Left [UnknownName dummyLoc "leq" 2],
       testCase "export restriction does not affect own-module use" $ do
         -- A exports only leq/2, but still uses gt/2 in its own rules
         let modA =

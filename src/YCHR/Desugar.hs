@@ -42,7 +42,7 @@ import YCHR.Pretty (AnnP (..), PrettyE (..))
 import YCHR.Types
 
 data DesugarError
-  = UnexpectedBodyTerm Term
+  = UnexpectedBodyTerm P.SourceLoc Term
   deriving (Eq, Show)
 
 -- | The primary entry point: converts parsed modules to a desugared program.
@@ -76,7 +76,7 @@ getRuleConstraints r =
 
 desugarRule :: P.Rule -> Eff '[Writer [DesugarError]] D.Rule
 desugarRule r = do
-  ruleBody <- traverse desugarBodyGoal r.body.node
+  ruleBody <- traverse (desugarBodyGoal r.body.sourceLoc) r.body.node
   let rawHead = desugarHead r.head.node
       (hnfGuards, normalizedHead) = normalizeHead rawHead
       userGuards = map desugarGuard r.guard.node
@@ -196,8 +196,8 @@ desugarGuard (AtomTerm "true") = D.GuardCommon D.GoalTrue
 desugarGuard t@(CompoundTerm _ _) = D.GuardExpr t
 desugarGuard _ = D.GuardCommon D.GoalTrue
 
-desugarBodyGoal :: Term -> Eff '[Writer [DesugarError]] D.BodyGoal
-desugarBodyGoal t = case t of
+desugarBodyGoal :: P.SourceLoc -> Term -> Eff '[Writer [DesugarError]] D.BodyGoal
+desugarBodyGoal loc t = case t of
   CompoundTerm (Unqualified "=") [l, r] -> pure $ D.BodyUnify l r
   CompoundTerm (Unqualified ":=") [VarTerm v, CompoundTerm (Unqualified f) args] ->
     pure $ D.BodyHostCall v f args
@@ -211,6 +211,6 @@ desugarBodyGoal t = case t of
     pure $ D.BodyHostStmt f args
   AtomTerm "true" -> pure $ D.BodyCommon D.GoalTrue
   CompoundTerm (Unqualified _) _ -> do
-    tell [UnexpectedBodyTerm t]
+    tell [UnexpectedBodyTerm loc t]
     pure $ D.BodyCommon D.GoalTrue
   _ -> pure $ D.BodyCommon D.GoalTrue

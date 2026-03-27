@@ -233,14 +233,14 @@ errorTests =
         let badTerm = func "foo" [var "X"]
             m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn []) (noAnn [badTerm])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedBodyTerm badTerm]
+          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc badTerm]
           Right _ -> assertFailure "expected Left",
       testCase "two unqualified compounds collect both errors" $ do
         let bad1 = func "foo" [var "X"]
             bad2 = func "bar" [var "Y"]
             m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn []) (noAnn [bad1, bad2])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedBodyTerm bad1, UnexpectedBodyTerm bad2]
+          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc bad1, UnexpectedBodyTerm dummyLoc bad2]
           Right _ -> assertFailure "expected Left"
     ]
 
