@@ -58,13 +58,13 @@ headTests =
     "head-normalization"
     [ testCase "Simplification maps to kept=[], removed=constraints" $ do
         rule <- singleRule [simpleModule (Simplification [leqQual])]
-        D.ruleHead rule @?= D.Head {D.headKept = [], D.headRemoved = [leqQual]},
+        rule.head @?= D.Head {kept = [], removed = [leqQual]},
       testCase "Propagation maps to kept=constraints, removed=[]" $ do
         rule <- singleRule [simpleModule (Propagation [leqQual])]
-        D.ruleHead rule @?= D.Head {D.headKept = [leqQual], D.headRemoved = []},
+        rule.head @?= D.Head {kept = [leqQual], removed = []},
       testCase "Simpagation maps kept and removed correctly" $ do
         rule <- singleRule [simpleModule (Simpagation [leqQual] [leqQual2])]
-        D.ruleHead rule @?= D.Head {D.headKept = [leqQual], D.headRemoved = [leqQual2]}
+        rule.head @?= D.Head {kept = [leqQual], removed = [leqQual2]}
     ]
 
 --------------------------------------------------------------------------------
@@ -78,23 +78,23 @@ hnfTests =
     [ testCase "distinct variables: no change" $ do
         let m = simpleModule (Simplification ["M" .: con "leq" [var "X", var "Y"]])
         rule <- singleRule [m]
-        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]]
-        D.ruleGuard rule @?= [],
+        rule.head @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]]
+        rule.guard @?= [],
       testCase "duplicate variable generates equality guard" $ do
         let m = simpleModule (Simplification ["M" .: con "leq" [var "X", var "X"]])
         rule <- singleRule [m]
-        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "_hnf_0"]]
-        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "X") (VarTerm "_hnf_0")],
+        rule.head @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "_hnf_0"]]
+        rule.guard @?= [D.GuardEqual (VarTerm "X") (VarTerm "_hnf_0")],
       testCase "non-variable argument (integer) generates equality guard" $ do
         let m = simpleModule (Simplification ["M" .: con "leq" [var "X", IntTerm 5]])
         rule <- singleRule [m]
-        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "_hnf_0"]]
-        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "_hnf_0") (IntTerm 5)],
+        rule.head @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "_hnf_0"]]
+        rule.guard @?= [D.GuardEqual (VarTerm "_hnf_0") (IntTerm 5)],
       testCase "non-variable argument (atom) generates equality guard" $ do
         let m = simpleModule (Simplification ["M" .: con "leq" [var "X", atom "foo"]])
         rule <- singleRule [m]
-        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "_hnf_0"]]
-        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "_hnf_0") (AtomTerm "foo")],
+        rule.head @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "_hnf_0"]]
+        rule.guard @?= [D.GuardEqual (VarTerm "_hnf_0") (AtomTerm "foo")],
       testCase "cross-constraint duplicate variable" $ do
         let m =
               simpleModule
@@ -104,13 +104,13 @@ hnfTests =
                     ]
                 )
         rule <- singleRule [m]
-        D.ruleHead rule
+        rule.head
           @?= D.Head
             []
             [ Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"],
               Constraint (Qualified "M" "leq") [VarTerm "_hnf_0", VarTerm "Z"]
             ]
-        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "Y") (VarTerm "_hnf_0")],
+        rule.guard @?= [D.GuardEqual (VarTerm "Y") (VarTerm "_hnf_0")],
       testCase "simpagation: kept processed before removed" $ do
         let m =
               simpleModule
@@ -119,11 +119,11 @@ hnfTests =
                     ["M" .: con "leq" [var "Y", var "Z"]]
                 )
         rule <- singleRule [m]
-        D.ruleHead rule
+        rule.head
           @?= D.Head
             [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]]
             [Constraint (Qualified "M" "leq") [VarTerm "_hnf_0", VarTerm "Z"]]
-        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "Y") (VarTerm "_hnf_0")],
+        rule.guard @?= [D.GuardEqual (VarTerm "Y") (VarTerm "_hnf_0")],
       testCase "hnf guards prepended before user guards" $ do
         let m =
               module' "M"
@@ -134,25 +134,25 @@ hnfTests =
                                (noAnn [atom "true"])
                            ]
         rule <- singleRule [m]
-        D.ruleGuard rule
+        rule.guard
           @?= [ D.GuardEqual (VarTerm "X") (VarTerm "_hnf_0"),
                 D.GuardExpr (CompoundTerm (Unqualified "gt") [VarTerm "X", IntTerm 0])
               ],
       testCase "wildcard passes through HNF unchanged" $ do
         let m = simpleModule (Simplification ["M" .: con "foo" [wildcard]])
         rule <- singleRule [m]
-        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "foo") [Wildcard]]
-        D.ruleGuard rule @?= [],
+        rule.head @?= D.Head [] [Constraint (Qualified "M" "foo") [Wildcard]]
+        rule.guard @?= [],
       testCase "two wildcards stay as wildcards without guards" $ do
         let m = simpleModule (Simplification ["M" .: con "foo" [wildcard, wildcard]])
         rule <- singleRule [m]
-        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "foo") [Wildcard, Wildcard]]
-        D.ruleGuard rule @?= [],
+        rule.head @?= D.Head [] [Constraint (Qualified "M" "foo") [Wildcard, Wildcard]]
+        rule.guard @?= [],
       testCase "wildcard and non-variable: only non-variable gets guard" $ do
         let m = simpleModule (Simplification ["M" .: con "foo" [wildcard, IntTerm 1]])
         rule <- singleRule [m]
-        D.ruleHead rule @?= D.Head [] [Constraint (Qualified "M" "foo") [Wildcard, VarTerm "_hnf_0"]]
-        D.ruleGuard rule @?= [D.GuardEqual (VarTerm "_hnf_0") (IntTerm 1)]
+        rule.head @?= D.Head [] [Constraint (Qualified "M" "foo") [Wildcard, VarTerm "_hnf_0"]]
+        rule.guard @?= [D.GuardEqual (VarTerm "_hnf_0") (IntTerm 1)]
     ]
 
 --------------------------------------------------------------------------------
@@ -169,21 +169,21 @@ guardTests =
                 `defining` [ Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [func "==" [var "X", var "Y"]]) (noAnn [atom "true"])
                            ]
         rule <- singleRule [m]
-        D.ruleGuard rule @?= [D.GuardExpr (CompoundTerm (Unqualified "==") [VarTerm "X", VarTerm "Y"])],
+        rule.guard @?= [D.GuardExpr (CompoundTerm (Unqualified "==") [VarTerm "X", VarTerm "Y"])],
       testCase "host call becomes GuardExpr" $ do
         let m =
               module' "M"
                 `defining` [ Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [func "gt" [var "X", IntTerm 0]]) (noAnn [atom "true"])
                            ]
         rule <- singleRule [m]
-        D.ruleGuard rule @?= [D.GuardExpr (CompoundTerm (Unqualified "gt") [VarTerm "X", IntTerm 0])],
+        rule.guard @?= [D.GuardExpr (CompoundTerm (Unqualified "gt") [VarTerm "X", IntTerm 0])],
       testCase "atom true becomes GuardCommon GoalTrue" $ do
         let m =
               module' "M"
                 `defining` [ Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [atom "true"]) (noAnn [atom "true"])
                            ]
         rule <- singleRule [m]
-        D.ruleGuard rule @?= [D.GuardCommon D.GoalTrue]
+        rule.guard @?= [D.GuardCommon D.GoalTrue]
     ]
 
 --------------------------------------------------------------------------------
@@ -196,23 +196,23 @@ bodyTests =
     "body-classification"
     [ testCase "= becomes BodyUnify" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" .=. var "Y"]]
-        D.ruleBody rule @?= [D.BodyUnify (VarTerm "X") (VarTerm "Y")],
+        rule.body @?= [D.BodyUnify (VarTerm "X") (VarTerm "Y")],
       testCase ":= becomes BodyHostCall" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" .:=. func "readInt" []]]
-        D.ruleBody rule @?= [D.BodyHostCall "X" "readInt" []],
+        rule.body @?= [D.BodyHostCall "X" "readInt" []],
       testCase "is becomes BodyIs" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" `is` func "+" [int 1, int 2]]]
-        D.ruleBody rule @?= [D.BodyIs "X" (CompoundTerm (Unqualified "+") [IntTerm 1, IntTerm 2])],
+        rule.body @?= [D.BodyIs "X" (CompoundTerm (Unqualified "+") [IntTerm 1, IntTerm 2])],
       testCase "Qualified compound becomes BodyConstraint" $ do
         let body = [CompoundTerm (Qualified "M" "leq") [var "X"]]
         rule <- singleRule [simpleModule' (Simplification [leqQual]) body]
-        D.ruleBody rule @?= [D.BodyConstraint (Constraint (Qualified "M" "leq") [VarTerm "X"])],
+        rule.body @?= [D.BodyConstraint (Constraint (Qualified "M" "leq") [VarTerm "X"])],
       testCase "hostStmt becomes BodyHostStmt" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [hostStmt "print" [var "X"]]]
-        D.ruleBody rule @?= [D.BodyHostStmt "print" [VarTerm "X"]],
+        rule.body @?= [D.BodyHostStmt "print" [VarTerm "X"]],
       testCase "atom true becomes BodyCommon GoalTrue" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [atom "true"]]
-        D.ruleBody rule @?= [D.BodyCommon D.GoalTrue]
+        rule.body @?= [D.BodyCommon D.GoalTrue]
     ]
   where
     simpleModule' h body = module' "M" `defining` [Rule Nothing (noAnn h) (noAnn []) (noAnn body)]
@@ -269,10 +269,10 @@ ruleNameTests =
     [ testCase "named rule preserves name" $ do
         let m = module' "M" `defining` ["my_rule" @: ([leqQual] <=> [atom "true"])]
         rule <- singleRule [m]
-        D.ruleName rule @?= Just "my_rule",
+        rule.name @?= Just "my_rule",
       testCase "anonymous rule has Nothing name" $ do
         rule <- singleRule [simpleModule (Simplification [leqQual])]
-        D.ruleName rule @?= Nothing
+        rule.name @?= Nothing
     ]
 
 --------------------------------------------------------------------------------

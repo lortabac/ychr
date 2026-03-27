@@ -48,7 +48,7 @@ data DesugarError
 desugarProgram :: [P.Module] -> Either [DesugarError] D.Program
 desugarProgram mods =
   let (result, errs) = runPureEff . runWriter $ do
-        rules <- traverse desugarRule [r | m <- mods, r <- P.modRules m]
+        rules <- traverse desugarRule [r | m <- mods, r <- m.rules]
         pure (D.Program rules)
    in if null errs then Right result else Left errs
 
@@ -57,7 +57,7 @@ desugarProgram mods =
 extractSymbolTable :: D.Program -> SymbolTable
 extractSymbolTable (D.Program rules) =
   let -- 1. Collect every name used in a CHR constraint position
-      allNames = Set.fromList [conName c | r <- rules, c <- getRuleConstraints r]
+      allNames = Set.fromList [c.name | r <- rules, c <- getRuleConstraints r]
 
       -- 2. Only include 'Qualified' names in the table.
       -- Unqualified names (host calls) do not get integer IDs.
@@ -67,22 +67,22 @@ extractSymbolTable (D.Program rules) =
 -- | Helper to find every constraint instance in a desugared rule.
 getRuleConstraints :: D.Rule -> [Constraint]
 getRuleConstraints r =
-  D.headKept (D.ruleHead r)
-    ++ D.headRemoved (D.ruleHead r)
-    ++ [c | D.BodyConstraint c <- D.ruleBody r]
+  r.head.kept
+    ++ r.head.removed
+    ++ [c | D.BodyConstraint c <- r.body]
 
 desugarRule :: P.Rule -> Eff '[Writer [DesugarError]] D.Rule
 desugarRule r = do
-  body <- traverse desugarBodyGoal (P.node (P.ruleBody r))
-  let rawHead = desugarHead (P.node (P.ruleHead r))
+  ruleBody <- traverse desugarBodyGoal r.body.node
+  let rawHead = desugarHead r.head.node
       (hnfGuards, normalizedHead) = normalizeHead rawHead
-      userGuards = map desugarGuard (P.node (P.ruleGuard r))
+      userGuards = map desugarGuard r.guard.node
   pure
     D.Rule
-      { D.ruleName = fmap P.node (P.ruleName r),
-        D.ruleHead = normalizedHead,
-        D.ruleGuard = hnfGuards ++ userGuards,
-        D.ruleBody = body
+      { name = fmap (.node) r.name,
+        head = normalizedHead,
+        guard = hnfGuards ++ userGuards,
+        body = ruleBody
       }
 
 desugarHead :: P.Head -> D.Head
@@ -103,89 +103,89 @@ data HnfState = HnfState
   }
 
 normalizeHead :: D.Head -> ([D.Guard], D.Head)
-normalizeHead (D.Head kept removed) =
+normalizeHead h =
   let initState = HnfState 0 Map.empty []
-      (st1, kept') = mapAccumL normalizeConstraint initState kept
-      (st2, removed') = mapAccumL normalizeConstraint st1 removed
-   in (reverse (hnfGuards st2), D.Head kept' removed')
+      (st1, kept') = mapAccumL normalizeConstraint initState h.kept
+      (st2, removed') = mapAccumL normalizeConstraint st1 h.removed
+   in (reverse st2.hnfGuards, D.Head kept' removed')
 
 normalizeConstraint :: HnfState -> Constraint -> (HnfState, Constraint)
-normalizeConstraint st (Constraint name args) =
-  let (st', args') = mapAccumL normalizeArg st args
-   in (st', Constraint name args')
+normalizeConstraint st (Constraint cname cargs) =
+  let (st', args') = mapAccumL normalizeArg st cargs
+   in (st', Constraint cname args')
 
 normalizeArg :: HnfState -> Term -> (HnfState, Term)
 normalizeArg st (VarTerm v)
-  | Map.member v (hnfSeen st) =
-      let fresh = "_hnf_" <> T.pack (show (hnfCounter st))
+  | Map.member v st.hnfSeen =
+      let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
        in ( st
-              { hnfCounter = hnfCounter st + 1,
-                hnfGuards = D.GuardEqual (VarTerm v) (VarTerm fresh) : hnfGuards st
+              { hnfCounter = st.hnfCounter + 1,
+                hnfGuards = D.GuardEqual (VarTerm v) (VarTerm fresh) : st.hnfGuards
               },
             VarTerm fresh
           )
   | otherwise =
-      (st {hnfSeen = Map.insert v () (hnfSeen st)}, VarTerm v)
+      (st {hnfSeen = Map.insert v () st.hnfSeen}, VarTerm v)
 normalizeArg st Wildcard = (st, Wildcard)
-normalizeArg st (CompoundTerm name args) =
-  let fresh = "_hnf_" <> T.pack (show (hnfCounter st))
-      st' = st {hnfCounter = hnfCounter st + 1}
-      st'' = decomposeCompound st' fresh name args
+normalizeArg st (CompoundTerm cname cargs) =
+  let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
+      st' = st {hnfCounter = st.hnfCounter + 1}
+      st'' = decomposeCompound st' fresh cname cargs
    in (st'', VarTerm fresh)
 normalizeArg st term =
-  let fresh = "_hnf_" <> T.pack (show (hnfCounter st))
+  let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
    in ( st
-          { hnfCounter = hnfCounter st + 1,
-            hnfGuards = D.GuardEqual (VarTerm fresh) term : hnfGuards st
+          { hnfCounter = st.hnfCounter + 1,
+            hnfGuards = D.GuardEqual (VarTerm fresh) term : st.hnfGuards
           },
         VarTerm fresh
       )
 
 -- | Decompose a compound term into match and extraction guards.
 decomposeCompound :: HnfState -> Text -> Name -> [Term] -> HnfState
-decomposeCompound st parentVar name args =
-  let matchGuard = D.GuardMatch (VarTerm parentVar) name (length args)
-      st' = st {hnfGuards = matchGuard : hnfGuards st}
-   in foldl' (\s (i, arg) -> decomposeArg s parentVar i arg) st' (zip [0 ..] args)
+decomposeCompound st parentVar cname cargs =
+  let matchGuard = D.GuardMatch (VarTerm parentVar) cname (length cargs)
+      st' = st {hnfGuards = matchGuard : st.hnfGuards}
+   in foldl' (\s (i, arg) -> decomposeArg s parentVar i arg) st' (zip [0 ..] cargs)
 
 -- | Decompose a single argument of a compound term.
 decomposeArg :: HnfState -> Text -> Int -> Term -> HnfState
 decomposeArg st parentVar i (VarTerm v)
-  | Map.member v (hnfSeen st) =
+  | Map.member v st.hnfSeen =
       -- Duplicate variable: extract and check equality
-      let fresh = "_hnf_" <> T.pack (show (hnfCounter st))
+      let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
           getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
           eqGuard = D.GuardEqual (VarTerm v) (VarTerm fresh)
        in st
-            { hnfCounter = hnfCounter st + 1,
-              hnfGuards = eqGuard : getGuard : hnfGuards st
+            { hnfCounter = st.hnfCounter + 1,
+              hnfGuards = eqGuard : getGuard : st.hnfGuards
             }
   | otherwise =
       -- First occurrence: extract and bind
       let getGuard = D.GuardGetArg v (VarTerm parentVar) i
        in st
-            { hnfGuards = getGuard : hnfGuards st,
-              hnfSeen = Map.insert v () (hnfSeen st)
+            { hnfGuards = getGuard : st.hnfGuards,
+              hnfSeen = Map.insert v () st.hnfSeen
             }
 decomposeArg st _ _ Wildcard = st
-decomposeArg st parentVar i (CompoundTerm name args) =
+decomposeArg st parentVar i (CompoundTerm cname cargs) =
   -- Nested compound: extract then recursively decompose
-  let fresh = "_hnf_" <> T.pack (show (hnfCounter st))
+  let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
       getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
       st' =
         st
-          { hnfCounter = hnfCounter st + 1,
-            hnfGuards = getGuard : hnfGuards st
+          { hnfCounter = st.hnfCounter + 1,
+            hnfGuards = getGuard : st.hnfGuards
           }
-   in decomposeCompound st' fresh name args
+   in decomposeCompound st' fresh cname cargs
 decomposeArg st parentVar i term =
   -- Ground term (atom, integer, string): extract and check equality
-  let fresh = "_hnf_" <> T.pack (show (hnfCounter st))
+  let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
       getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
       eqGuard = D.GuardEqual (VarTerm fresh) term
    in st
-        { hnfCounter = hnfCounter st + 1,
-          hnfGuards = eqGuard : getGuard : hnfGuards st
+        { hnfCounter = st.hnfCounter + 1,
+          hnfGuards = eqGuard : getGuard : st.hnfGuards
         }
 
 desugarGuard :: Term -> D.Guard

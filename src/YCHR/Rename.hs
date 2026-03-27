@@ -38,9 +38,9 @@ data RenameError
 buildLocalEnv :: [Module] -> LocalEnv
 buildLocalEnv mods =
   makeLocalEnv
-    [ ((declName d, declArity d), [modName m])
+    [ ((d.name, d.arity), [m.name])
     | m <- mods,
-      Ann d _ <- modDecls m
+      Ann d _ <- m.decls
     ]
 
 -- | Only exported constraints (for cross-module resolution).
@@ -48,10 +48,10 @@ buildLocalEnv mods =
 buildExportEnv :: [Module] -> GlobalEnv
 buildExportEnv mods =
   makeGlobalEnv
-    [ ((declName d, declArity d), [modName m])
+    [ ((d.name, d.arity), [m.name])
     | m <- mods,
-      d <- case modExports m of
-        Nothing -> map node (modDecls m)
+      d <- case m.exports of
+        Nothing -> map (.node) m.decls
         Just exports -> exports
     ]
 
@@ -64,15 +64,15 @@ renameProgram mods =
 
 renameModule :: LocalEnv -> GlobalEnv -> Module -> Eff '[Writer [RenameError]] Module
 renameModule localEnv exportEnv m = do
-  rules <- traverse (renameRule localEnv exportEnv m) (modRules m)
-  pure m {modRules = rules}
+  renamedRules <- traverse (renameRule localEnv exportEnv m) m.rules
+  pure m {rules = renamedRules}
 
 renameRule :: LocalEnv -> GlobalEnv -> Module -> Rule -> Eff '[Writer [RenameError]] Rule
 renameRule localEnv exportEnv m r = do
-  h <- traverse (renameHead localEnv exportEnv m) (ruleHead r)
-  g <- traverse (traverse (renameTerm localEnv exportEnv m False)) (ruleGuard r)
-  b <- traverse (traverse (renameTerm localEnv exportEnv m True)) (ruleBody r)
-  pure r {ruleHead = h, ruleGuard = g, ruleBody = b}
+  h <- traverse (renameHead localEnv exportEnv m) r.head
+  g <- traverse (traverse (renameTerm localEnv exportEnv m False)) r.guard
+  b <- traverse (traverse (renameTerm localEnv exportEnv m True)) r.body
+  pure r {head = h, guard = g, body = b}
 
 renameHead :: LocalEnv -> GlobalEnv -> Module -> Head -> Eff '[Writer [RenameError]] Head
 renameHead localEnv exportEnv m h = case h of
@@ -81,9 +81,9 @@ renameHead localEnv exportEnv m h = case h of
   Simpagation k r -> Simpagation <$> traverse (renameCon localEnv exportEnv m) k <*> traverse (renameCon localEnv exportEnv m) r
 
 renameCon :: LocalEnv -> GlobalEnv -> Module -> Constraint -> Eff '[Writer [RenameError]] Constraint
-renameCon localEnv exportEnv m (Constraint name args) = do
-  renamedName <- resolveName localEnv exportEnv m name (length args)
-  renamedArgs <- traverse (renameTerm localEnv exportEnv m False) args
+renameCon localEnv exportEnv m (Constraint cname cargs) = do
+  renamedName <- resolveName localEnv exportEnv m cname (length cargs)
+  renamedArgs <- traverse (renameTerm localEnv exportEnv m False) cargs
   pure (Constraint renamedName renamedArgs)
 
 renameTerm :: LocalEnv -> GlobalEnv -> Module -> Bool -> Term -> Eff '[Writer [RenameError]] Term
@@ -98,8 +98,8 @@ resolveName :: LocalEnv -> GlobalEnv -> Module -> Name -> Int -> Eff '[Writer [R
 resolveName localEnv exportEnv currentMod (Unqualified n) arity
   | isReserved n reservedSymbols = pure (Unqualified n)
   | otherwise =
-      let ownProviders = filter (== modName currentMod) (lookupLocal (n, arity) localEnv)
-          importNames = [mn | Ann (ModuleImport mn) _ <- modImports currentMod]
+      let ownProviders = filter (== currentMod.name) (lookupLocal (n, arity) localEnv)
+          importNames = [mn | Ann (ModuleImport mn) _ <- currentMod.imports]
           importProviders = filter (`elem` importNames) (lookupGlobal (n, arity) exportEnv)
           matches = ownProviders ++ importProviders
        in case matches of

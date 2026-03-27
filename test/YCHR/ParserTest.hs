@@ -35,19 +35,19 @@ p = parseModule ""
 stripRuleLoc :: Rule -> Rule
 stripRuleLoc r =
   r
-    { ruleName = fmap (noAnn . node) (ruleName r),
-      ruleHead = noAnn (node (ruleHead r)),
-      ruleGuard = noAnn (node (ruleGuard r)),
-      ruleBody = noAnn (node (ruleBody r))
+    { name = fmap (noAnn . (.node)) r.name,
+      head = noAnn r.head.node,
+      guard = noAnn r.guard.node,
+      body = noAnn r.body.node
     }
 
 -- | Strip source locations from a Module for structural comparison.
 stripModLoc :: Module -> Module
 stripModLoc m =
   m
-    { modImports = map (noAnn . node) (modImports m),
-      modDecls = map (noAnn . node) (modDecls m),
-      modRules = map stripRuleLoc (modRules m)
+    { imports = map (noAnn . (.node)) m.imports,
+      decls = map (noAnn . (.node)) m.decls,
+      rules = map stripRuleLoc m.rules
     }
 
 -- ---------------------------------------------------------------------------
@@ -59,33 +59,33 @@ directiveTests =
   testGroup
     "directives"
     [ testCase "module name" $
-        modName <$> p ":- module(order, [])." @?= Right "order",
+        (.name) <$> p ":- module(order, [])." @?= Right "order",
       testCase "module name with export list" $
-        modName <$> p ":- module(order, [leq/2, foo/1])." @?= Right "order",
+        (.name) <$> p ":- module(order, [leq/2, foo/1])." @?= Right "order",
       testCase "empty export list" $
-        modExports <$> p ":- module(order, [])." @?= Right (Just []),
+        (.exports) <$> p ":- module(order, [])." @?= Right (Just []),
       testCase "export list parsed correctly" $
-        modExports <$> p ":- module(order, [leq/2, foo/1])."
+        (.exports) <$> p ":- module(order, [leq/2, foo/1])."
           @?= Right (Just [ConstraintDecl "leq" 2, ConstraintDecl "foo" 1]),
       testCase "use_module" $
-        (map node . modImports) <$> p ":- use_module(stdlib)." @?= Right [ModuleImport "stdlib"],
+        (map (.node) . (.imports)) <$> p ":- use_module(stdlib)." @?= Right [ModuleImport "stdlib"],
       testCase "multiple use_module" $
-        (map node . modImports)
+        (map (.node) . (.imports))
           <$> p ":- use_module(stdlib).\n:- use_module(lists)."
           @?= Right [ModuleImport "stdlib", ModuleImport "lists"],
       testCase "use_module library" $
-        (map node . modImports) <$> p ":- use_module(library(mylib))." @?= Right [LibraryImport "mylib"],
+        (map (.node) . (.imports)) <$> p ":- use_module(library(mylib))." @?= Right [LibraryImport "mylib"],
       testCase "chr_constraint single" $
-        (map node . modDecls) <$> p ":- chr_constraint leq/2."
+        (map (.node) . (.decls)) <$> p ":- chr_constraint leq/2."
           @?= Right [ConstraintDecl "leq" 2],
       testCase "chr_constraint multiple in one directive" $
-        (map node . modDecls) <$> p ":- chr_constraint fib/2, upto/1."
+        (map (.node) . (.decls)) <$> p ":- chr_constraint fib/2, upto/1."
           @?= Right [ConstraintDecl "fib" 2, ConstraintDecl "upto" 1],
       testCase "chr_constraint zero arity" $
-        (map node . modDecls) <$> p ":- chr_constraint fire/0."
+        (map (.node) . (.decls)) <$> p ":- chr_constraint fire/0."
           @?= Right [ConstraintDecl "fire" 0],
       testCase "unknown directive is skipped" $
-        (map node . modDecls) <$> p ":- dynamic foo/1.\n:- chr_constraint leq/2."
+        (map (.node) . (.decls)) <$> p ":- dynamic foo/1.\n:- chr_constraint leq/2."
           @?= Right [ConstraintDecl "leq" 2]
     ]
 
@@ -273,7 +273,7 @@ ruleTests =
   testGroup
     "rules"
     [ testCase "named simplification" $
-        (map stripRuleLoc . modRules) <$> p "refl @ leq(X, X) <=> true."
+        (map stripRuleLoc . (.rules)) <$> p "refl @ leq(X, X) <=> true."
           @?= Right
             [ Rule
                 (Just (noAnn "refl"))
@@ -282,7 +282,7 @@ ruleTests =
                 (noAnn [AtomTerm "true"])
             ],
       testCase "unnamed simplification" $
-        (map stripRuleLoc . modRules) <$> p "leq(X, X) <=> true."
+        (map stripRuleLoc . (.rules)) <$> p "leq(X, X) <=> true."
           @?= Right
             [ Rule
                 Nothing
@@ -291,7 +291,7 @@ ruleTests =
                 (noAnn [AtomTerm "true"])
             ],
       testCase "propagation" $
-        (map stripRuleLoc . modRules) <$> p "trans @ leq(X, Y), leq(Y, Z) ==> leq(X, Z)."
+        (map stripRuleLoc . (.rules)) <$> p "trans @ leq(X, Y), leq(Y, Z) ==> leq(X, Z)."
           @?= Right
             [ Rule
                 (Just (noAnn "trans"))
@@ -306,7 +306,7 @@ ruleTests =
                 (noAnn [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
             ],
       testCase "simpagation" $
-        (map stripRuleLoc . modRules) <$> p "s @ kept \\ removed <=> body."
+        (map stripRuleLoc . (.rules)) <$> p "s @ kept \\ removed <=> body."
           @?= Right
             [ Rule
                 (Just (noAnn "s"))
@@ -320,7 +320,7 @@ ruleTests =
                 (noAnn [AtomTerm "body"])
             ],
       testCase "rule with guard" $
-        (map stripRuleLoc . modRules) <$> p "r @ c(X, Y) <=> g(X) | b(Y)."
+        (map stripRuleLoc . (.rules)) <$> p "r @ c(X, Y) <=> g(X) | b(Y)."
           @?= Right
             [ Rule
                 (Just (noAnn "r"))
@@ -382,7 +382,7 @@ moduleTests =
                 (Just [])
             ),
       testCase "no module directive gives empty name" $
-        modName <$> p ":- chr_constraint foo/1.\nfoo(X) <=> true."
+        (.name) <$> p ":- chr_constraint foo/1.\nfoo(X) <=> true."
           @?= Right ""
     ]
 
@@ -406,13 +406,13 @@ commentTests =
   testGroup
     "comments"
     [ testCase "line comment before rule" $
-        (map stripRuleLoc . modRules) <$> p "% a comment\nfoo <=> bar."
+        (map stripRuleLoc . (.rules)) <$> p "% a comment\nfoo <=> bar."
           @?= Right [Rule Nothing (noAnn (Simplification [Constraint (Unqualified "foo") []])) (noAnn []) (noAnn [AtomTerm "bar"])],
       testCase "inline comment after rule" $
-        (map stripRuleLoc . modRules) <$> p "foo <=> bar. % comment"
+        (map stripRuleLoc . (.rules)) <$> p "foo <=> bar. % comment"
           @?= Right [Rule Nothing (noAnn (Simplification [Constraint (Unqualified "foo") []])) (noAnn []) (noAnn [AtomTerm "bar"])],
       testCase "only comments parses to empty module" $
-        modRules <$> p "% just a comment\n% another"
+        (.rules) <$> p "% just a comment\n% another"
           @?= Right []
     ]
 
@@ -437,20 +437,20 @@ errorTests =
 bodyOf :: Text -> IO [Term]
 bodyOf src = case p src of
   Left err -> assertFailure (show err)
-  Right m -> case modRules m of
+  Right m -> case m.rules of
     [] -> assertFailure "expected at least one rule, got none"
-    (r : _) -> pure (node (ruleBody r))
+    (r : _) -> pure r.body.node
 
 headOf :: Text -> IO Head
 headOf src = case p src of
   Left err -> assertFailure (show err)
-  Right m -> case modRules m of
+  Right m -> case m.rules of
     [] -> assertFailure "expected at least one rule, got none"
-    (r : _) -> pure (node (ruleHead r))
+    (r : _) -> pure r.head.node
 
 guardOf :: Text -> IO [Term]
 guardOf src = case p src of
   Left err -> assertFailure (show err)
-  Right m -> case modRules m of
+  Right m -> case m.rules of
     [] -> assertFailure "expected at least one rule, got none"
-    (r : _) -> pure (node (ruleGuard r))
+    (r : _) -> pure r.guard.node

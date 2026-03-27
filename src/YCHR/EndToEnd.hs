@@ -67,7 +67,7 @@ import YCHR.Runtime.Var (Unify, deref, equal, newVar, runUnify, unify)
 import YCHR.StdLib (stdlib)
 import YCHR.Types (Constraint (..), ConstraintType, SymbolTable, Term (..))
 import YCHR.Types qualified as T
-import YCHR.VM (Name (..), Procedure, Program (..), procName)
+import YCHR.VM (Name (..), Procedure (..), Program (..))
 
 data Error
   = ParseError FilePath (ParseErrorBundle Text Void)
@@ -79,10 +79,10 @@ data Error
 
 -- | A compiled CHR program together with module visibility information.
 data CompiledProgram = CompiledProgram
-  { cpProgram :: Program,
-    cpExportMap :: Map (Text, Int) ExportResolution,
-    cpExportedSet :: Set T.Name,
-    cpSymbolTable :: SymbolTable
+  { program :: Program,
+    exportMap :: Map (Text, Int) ExportResolution,
+    exportedSet :: Set T.Name,
+    symbolTable :: SymbolTable
   }
 
 data ExportResolution
@@ -153,14 +153,14 @@ runCHR ::
   Eff es a
 runCHR cp hc =
   runUnify
-    . runCHRStore (progNumTypes (cpProgram cp))
+    . runCHRStore cp.program.numTypes
     . runPropHistory
     . runReactQueue
     . fmap fst
     . runWriter @[SuspensionId]
-    . evalStaticRep (CHRRep procMap hc (cpExportMap cp) (cpExportedSet cp))
+    . evalStaticRep (CHRRep procMap hc cp.exportMap cp.exportedSet)
   where
-    procMap = Map.fromList [(procName p, p) | p <- progProcedures (cpProgram cp)]
+    procMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- cp.program.procedures]
 
 -- | Convenience wrapper that runs a CHR session in 'IO'.
 withCHR ::
@@ -181,7 +181,7 @@ tellConstraint name args = do
     Right qname -> pure qname
   let tellName = procNameFor "tell" resolved
   unless (Map.member tellName procMap) $
-    error ("Constraint not found: " ++ T.unpack (unName tellName))
+    error ("Constraint not found: " ++ T.unpack tellName.unName)
   _ <- callProc procMap hc tellName (map RVal args)
   pure ()
 
@@ -189,9 +189,9 @@ tellConstraint name args = do
 -- just a name and arity.
 resolveQueryConstraint' ::
   Map (Text, Int) ExportResolution -> Set T.Name -> T.Name -> Int -> Either String T.Name
-resolveQueryConstraint' exportMap exportedSet name arity = case name of
+resolveQueryConstraint' expMap expSet name arity = case name of
   T.Unqualified n ->
-    case Map.lookup (n, arity) exportMap of
+    case Map.lookup (n, arity) expMap of
       Just (UniqueExport qname) -> Right qname
       Just (AmbiguousExport ms) ->
         Left
@@ -204,7 +204,7 @@ resolveQueryConstraint' exportMap exportedSet name arity = case name of
           )
       Nothing -> Left ("Unknown constraint: " ++ T.unpack n ++ "/" ++ show arity)
   T.Qualified m n ->
-    if Set.member (T.Qualified m n) exportedSet
+    if Set.member (T.Qualified m n) expSet
       then Right name
       else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n)
 
@@ -214,12 +214,12 @@ resolveQueryConstraint' exportMap exportedSet name arity = case name of
 
 -- | Resolve a query constraint against the export map.
 resolveQueryConstraint :: CompiledProgram -> Constraint -> Either String Constraint
-resolveQueryConstraint cp (Constraint name args) = case name of
+resolveQueryConstraint cp (Constraint cname cargs) = case cname of
   T.Unqualified n ->
-    let arity = length args
-     in case Map.lookup (n, arity) (cpExportMap cp) of
+    let arity = length cargs
+     in case Map.lookup (n, arity) cp.exportMap of
           Just (UniqueExport qname) ->
-            Right (Constraint qname args)
+            Right (Constraint qname cargs)
           Just (AmbiguousExport ms) ->
             Left
               ( "Ambiguous constraint: "
@@ -231,8 +231,8 @@ resolveQueryConstraint cp (Constraint name args) = case name of
               )
           Nothing -> Left ("Unknown constraint: " ++ T.unpack n ++ "/" ++ show arity)
   T.Qualified m n ->
-    if Set.member (T.Qualified m n) (cpExportedSet cp)
-      then Right (Constraint name args)
+    if Set.member (T.Qualified m n) cp.exportedSet
+      then Right (Constraint cname cargs)
       else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n)
 
 -- | Run a single CHR constraint against a compiled program.
@@ -241,21 +241,21 @@ runProgramWithGoalDSL cp hostCalls constraint = do
   resolved <- case resolveQueryConstraint cp constraint of
     Left err -> fail err
     Right c -> pure c
-  let Program {progNumTypes, progProcedures} = cpProgram cp
-      procMap = Map.fromList [(procName p, p) | p <- progProcedures]
-      tellName = procNameFor "tell" (conName resolved)
+  let prog = cp.program
+      procMap = Map.fromList [(p.name, p) | p <- prog.procedures]
+      tellName = procNameFor "tell" resolved.name
   unless (Map.member tellName procMap) $
-    fail ("Constraint not found: " ++ T.unpack (unName tellName))
+    fail ("Constraint not found: " ++ T.unpack tellName.unName)
   runEff
     . runUnify
     . fmap fst
     . runWriter @[SuspensionId]
-    . runCHRStore progNumTypes
+    . runCHRStore prog.numTypes
     . runPropHistory
     . runReactQueue
     . evalState (Map.empty :: Map Text Value)
     $ do
-      argVals <- traverse termToValue (conArgs resolved)
+      argVals <- traverse termToValue resolved.args
       result <- callProc procMap hostCalls tellName (map RVal argVals)
       varMap <- get
       bindings <- Map.traverseWithKey valueToTerm varMap

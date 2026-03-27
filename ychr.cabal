@@ -53,6 +53,10 @@ extra-source-files:   libraries/*.chr
 
 common warnings
     ghc-options: -Wall
+    default-extensions:
+        DuplicateRecordFields
+        NoFieldSelectors
+        OverloadedRecordDot
 
 executable ychr
     -- Import common warning flags.

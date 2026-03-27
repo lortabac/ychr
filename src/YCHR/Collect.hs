@@ -41,7 +41,7 @@ collectLibraries stdlibMap userMods =
 
 -- | Extract library import names from a module.
 libraryImports :: Module -> [Text]
-libraryImports m = [n | Ann (LibraryImport n) _ <- modImports m]
+libraryImports m = [n | Ann (LibraryImport n) _ <- m.imports]
 
 -- | DFS resolution of library dependencies.
 --
@@ -81,7 +81,7 @@ resolveAll stdlibMap visited path (name : rest)
 
 -- | Rewrite all 'LibraryImport' entries to 'ModuleImport'.
 rewriteImports :: Module -> Module
-rewriteImports m = m {modImports = map rewrite (modImports m)}
+rewriteImports m = m {imports = map rewrite m.imports}
   where
     rewrite (Ann (LibraryImport n) loc) = Ann (ModuleImport n) loc
     rewrite imp = imp

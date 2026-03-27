@@ -16,19 +16,19 @@ module' name = Module name [] [] [] Nothing
 
 -- | Set the export list of a module
 exporting :: Module -> [Declaration] -> Module
-exporting m decls = m {modExports = Just decls}
+exporting m ds = m {exports = Just ds}
 
 -- | Add imports to a module
 importing :: Module -> [Text] -> Module
-importing m imps = m {modImports = map (noAnn . ModuleImport) imps}
+importing m imps = m {imports = map (noAnn . ModuleImport) imps}
 
 -- | Add declarations to a module: @declaring [ "leq" // 2 ]@
 declaring :: Module -> [Declaration] -> Module
-declaring m decls = m {modDecls = map noAnn decls}
+declaring m ds = m {decls = map noAnn ds}
 
 -- | Add rules to a module
 defining :: Module -> [Rule] -> Module
-defining m rules = m {modRules = rules}
+defining m rls = m {rules = rls}
 
 -- | Helper for arity: @"leq" // 2@
 (//) :: Text -> Int -> Declaration
@@ -40,7 +40,7 @@ defining m rules = m {modRules = rules}
 
 -- | Name a rule: @"my_rule" @: [con "a" []] <=> [con "b" []]@
 (@:) :: Text -> Rule -> Rule
-name @: r = r {ruleName = Just (noAnn name)}
+n @: r = r {name = Just (noAnn n)}
 
 -- | Simplification Rule: @[head] <=> [body]@
 (<=>) :: [Constraint] -> [Term] -> Rule
@@ -56,7 +56,7 @@ lhs ==> rhs = Rule Nothing (noAnn (Propagation lhs)) (noAnn []) (noAnn rhs)
 
 -- | Add a guard to an existing rule (infix)
 (|-) :: Rule -> [Term] -> Rule
-r |- g = r {ruleGuard = noAnn g}
+r |- g = r {guard = noAnn g}
 
 --------------------------------------------------------------------------------
 -- Constraint & Term Helpers

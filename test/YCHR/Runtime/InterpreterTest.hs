@@ -35,8 +35,8 @@ leqType = ConstraintType 0
 leqProgram :: Program
 leqProgram =
   Program
-    { progNumTypes = 1,
-      progProcedures =
+    { numTypes = 1,
+      procedures =
         [ tellLeq,
           activateLeq,
           occurrenceLeq1,
@@ -52,8 +52,7 @@ leqProgram =
 
 leqProcMap :: Map.Map Name Procedure
 leqProcMap =
-  let Program {progProcedures} = leqProgram
-   in Map.fromList [(procName p, p) | p <- progProcedures]
+  Map.fromList [(p.name, p) | p <- leqProgram.procedures]
 
 tellLeq :: Procedure
 tellLeq =
@@ -471,8 +470,8 @@ arithCalls =
 makeCalcProc :: Expr -> Program
 makeCalcProc body =
   Program
-    { progNumTypes = 0,
-      progProcedures =
+    { numTypes = 0,
+      procedures =
         [ Procedure
             "calc"
             ["x"]

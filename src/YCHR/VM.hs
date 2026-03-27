@@ -63,9 +63,9 @@ import YCHR.Types (ConstraintType (..))
 -- | A VM program is a collection of named procedures.
 data Program = Program
   { -- | Number of distinct constraint types (for pre-allocating the store).
-    progNumTypes :: !Int,
+    numTypes :: !Int,
     -- | The procedures that make up the program.
-    progProcedures :: [Procedure]
+    procedures :: [Procedure]
   }
   deriving (Show, Eq)
 
@@ -79,11 +79,11 @@ data Program = Program
 --   * @reactivate_all@: reactivating all constraints in the store
 data Procedure = Procedure
   { -- | Procedure name
-    procName :: Name,
+    name :: Name,
     -- | Parameter names
-    procParams :: [Name],
+    params :: [Name],
     -- | Body statements
-    procBody :: [Stmt]
+    body :: [Stmt]
   }
   deriving (Show, Eq)
 

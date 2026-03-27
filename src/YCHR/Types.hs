@@ -55,8 +55,8 @@ data Name
 
 -- | A CHR constraint occurrence.
 data Constraint = Constraint
-  { conName :: Name,
-    conArgs :: [Term]
+  { name :: Name,
+    args :: [Term]
   }
   deriving (Show, Eq, Lift)
 

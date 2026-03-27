@@ -30,7 +30,7 @@ import YCHR.Runtime.History (PropHistory, addHistory, notInHistory, runPropHisto
 import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue)
 import YCHR.Runtime.Store
   ( CHRStore,
-    Suspension,
+    Suspension (..),
     aliveConstraint,
     createConstraint,
     getConstraintArg,
@@ -43,7 +43,6 @@ import YCHR.Runtime.Store
     runCHRStore,
     storeConstraint,
     suspArg,
-    suspId,
   )
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, deref, equal, getArg, makeTerm, matchTerm, newVar, runUnify, unify)
@@ -70,8 +69,8 @@ data ControlFlow
 
 instance Show ControlFlow where
   show (CFReturn _) = "CFReturn <val>"
-  show (CFContinue l) = "CFContinue " ++ T.unpack (unLabel l)
-  show (CFBreak l) = "CFBreak " ++ T.unpack (unLabel l)
+  show (CFContinue l) = "CFContinue " ++ T.unpack l.unLabel
+  show (CFBreak l) = "CFBreak " ++ T.unpack l.unLabel
 
 -- | A base host call registry providing arithmetic and comparison operations.
 baseHostCallRegistry :: HostCallRegistry
@@ -118,8 +117,8 @@ baseHostCallRegistry =
 
 -- | Interpret a VM program by calling a named procedure with the given arguments.
 interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO RuntimeVal
-interpret Program {progNumTypes, progProcedures} hostCalls entryName args = do
-  let procMap = Map.fromList [(procName p, p) | p <- progProcedures]
+interpret prog hostCalls entryName args = do
+  let procMap = Map.fromList [(p.name, p) | p <- prog.procedures]
       argVals = map RVal args
   runEff
     . runUnifyWithWriter
@@ -135,7 +134,7 @@ interpret Program {progNumTypes, progProcedures} hostCalls entryName args = do
         . fmap fst
         . runWriter @[SuspensionId]
         $ m
-    runCHRStoreEff = YCHR.Runtime.Store.runCHRStore progNumTypes
+    runCHRStoreEff = YCHR.Runtime.Store.runCHRStore prog.numTypes
     runPropHistoryEff = YCHR.Runtime.History.runPropHistory
     runReactQueueEff = YCHR.Runtime.Reactivation.runReactQueue
 
@@ -160,18 +159,18 @@ callProc ::
   ProcMap -> HostCallRegistry -> Name -> [RuntimeVal] -> Eff es RuntimeVal
 callProc procMap hostCalls name args = do
   case Map.lookup name procMap of
-    Nothing -> error $ "callProc: unknown procedure " ++ T.unpack (unName name)
+    Nothing -> error $ "callProc: unknown procedure " ++ T.unpack name.unName
     Just proc -> do
-      let env = Map.fromList (zip (procParams proc) args)
+      let env = Map.fromList (zip proc.params args)
       result <-
         evalState env
           . runError @ControlFlow
-          $ execStmts procMap hostCalls (procBody proc)
+          $ execStmts procMap hostCalls proc.body
       case result of
         Right () -> pure (RVal (VBool False))
         Left (_, CFReturn v) -> pure v
-        Left (_, CFContinue l) -> error $ "callProc: uncaught Continue " ++ T.unpack (unLabel l)
-        Left (_, CFBreak l) -> error $ "callProc: uncaught Break " ++ T.unpack (unLabel l)
+        Left (_, CFContinue l) -> error $ "callProc: uncaught Continue " ++ T.unpack l.unLabel
+        Left (_, CFBreak l) -> error $ "callProc: uncaught Break " ++ T.unpack l.unLabel
 
 -- | Execute a list of statements sequentially.
 execStmts ::
@@ -255,7 +254,8 @@ execForeach pm hc lbl suspVar conditions body (susp : rest) = do
       if not ok
         then execForeach pm hc lbl suspVar conditions body rest
         else do
-          modify (Map.insert suspVar (RConstraint (suspId susp)))
+          let Suspension {suspId = sid} = susp
+          modify (Map.insert suspVar (RConstraint sid))
           result <- runError @ControlFlow $ execStmts pm hc body
           case result of
             Right () ->
@@ -291,7 +291,7 @@ evalExpr _ _ (Var name) = do
   env <- get
   case Map.lookup name env of
     Just v -> pure v
-    Nothing -> error $ "evalExpr: unbound variable " ++ T.unpack (unName name)
+    Nothing -> error $ "evalExpr: unbound variable " ++ T.unpack name.unName
 evalExpr _ _ (Lit (IntLit n)) = pure (RVal (VInt n))
 evalExpr _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
 evalExpr _ _ (Lit (TextLit s)) = pure (RVal (VText s))
@@ -305,7 +305,7 @@ evalExpr pm hc (HostCall name args) = do
   derefedVals <- traverse derefRV argVals
   case Map.lookup name hc of
     Just f -> liftIO (f derefedVals)
-    Nothing -> error $ "evalExpr: unknown host call " ++ T.unpack (unName name)
+    Nothing -> error $ "evalExpr: unknown host call " ++ T.unpack name.unName
   where
     derefRV (RVal v) = RVal <$> deref v
     derefRV rc = pure rc
@@ -329,10 +329,10 @@ evalExpr pm hc (Or e1 e2) = do
 evalExpr _ _ NewVar = RVal <$> newVar
 evalExpr pm hc (MakeTerm functor args) = do
   argVals <- traverse (evalExpr pm hc) args
-  pure $ RVal $ makeTerm (unName functor) (map toValue argVals)
+  pure $ RVal $ makeTerm functor.unName (map toValue argVals)
 evalExpr pm hc (MatchTerm expr functor arity) = do
   v <- evalExpr pm hc expr
-  RVal . VBool <$> matchTerm (toValue v) (unName functor) arity
+  RVal . VBool <$> matchTerm (toValue v) functor.unName arity
 evalExpr pm hc (GetArg expr idx) = do
   v <- evalExpr pm hc expr
   RVal <$> getArg (toValue v) idx
@@ -376,7 +376,7 @@ evalExpr pm hc (FieldGet expr field) = do
     RConstraint sid -> case field of
       FieldId -> pure (RConstraint sid)
       FieldArg (ArgIndex i) -> RVal <$> getConstraintArg sid i
-      FieldType -> RVal . VInt . unConstraintType <$> getConstraintType sid
+      FieldType -> (\ct -> RVal (VInt ct.unConstraintType)) <$> getConstraintType sid
     _ -> error "FieldGet: expected constraint identifier"
 evalExpr pm hc (HostEval expr) = evalArith pm hc expr
 
@@ -400,7 +400,7 @@ evalArith pm hc (MakeTerm name args) = do
   argVals <- traverse (evalArith pm hc) args
   case Map.lookup name hc of
     Just f -> liftIO (f argVals)
-    Nothing -> error $ "evalArith: unknown operator " ++ T.unpack (unName name)
+    Nothing -> error $ "evalArith: unknown operator " ++ T.unpack name.unName
 evalArith _ _ expr = error $ "evalArith: unsupported expression " ++ show expr
 
 -- ---------------------------------------------------------------------------

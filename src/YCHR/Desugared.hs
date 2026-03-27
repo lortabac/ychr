@@ -1,3 +1,5 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+
 -- | CHR Abstract Syntax Tree
 --
 -- This module defines the internal AST for CHR programs. This is not
@@ -38,16 +40,16 @@ import YCHR.Types
 data Program = Program [Rule] deriving (Show, Eq)
 
 data Rule = Rule
-  { ruleName :: Maybe Text,
-    ruleHead :: Head,
-    ruleGuard :: [Guard],
-    ruleBody :: [BodyGoal]
+  { name :: Maybe Text,
+    head :: Head,
+    guard :: [Guard],
+    body :: [BodyGoal]
   }
   deriving (Show, Eq)
 
 data Head = Head
-  { headKept :: [Constraint],
-    headRemoved :: [Constraint]
+  { kept :: [Constraint],
+    removed :: [Constraint]
   }
   deriving (Show, Eq)
 

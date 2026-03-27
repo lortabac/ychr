@@ -46,9 +46,9 @@ import YCHR.Types
 sourceLocFromPos :: SourcePos -> SourceLoc
 sourceLocFromPos sp =
   SourceLoc
-    { locFile = sourceName sp,
-      locLine = unPos (sourceLine sp),
-      locCol = unPos (sourceColumn sp)
+    { file = sourceName sp,
+      line = unPos (sourceLine sp),
+      col = unPos (sourceColumn sp)
     }
 
 -- | Wrap a parser's result with the source location of its first character.
@@ -446,7 +446,7 @@ moduleArgsP :: Parser (Text, [Declaration])
 moduleArgsP = do
   name <- atomP
   _ <- comma
-  exports <- brackets (map node <$> constraintDeclP `sepBy` comma)
+  exports <- brackets (map (.node) <$> constraintDeclP `sepBy` comma)
   pure (name, exports)
 
 -- | Parse a single constraint declaration: @name\/arity@.

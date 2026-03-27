@@ -1,3 +1,5 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+
 -- | Surface Language AST
 --
 -- This module defines the AST that is the direct output of the parser.
@@ -43,9 +45,9 @@ import YCHR.Types (Constraint (..), Term (..))
 
 -- | A source file location (file, line, column).
 data SourceLoc = SourceLoc
-  { locFile :: String,
-    locLine :: Int,
-    locCol :: Int
+  { file :: String,
+    line :: Int,
+    col :: Int
   }
   deriving (Show, Eq, Lift)
 
@@ -70,25 +72,25 @@ data Import
   deriving (Show, Eq, Lift)
 
 data Module = Module
-  { modName :: Text,
-    modImports :: [Ann Import],
-    modDecls :: [Ann Declaration],
-    modRules :: [Rule],
-    modExports :: Maybe [Declaration]
+  { name :: Text,
+    imports :: [Ann Import],
+    decls :: [Ann Declaration],
+    rules :: [Rule],
+    exports :: Maybe [Declaration]
   }
   deriving (Show, Eq, Lift)
 
 data Declaration = ConstraintDecl
-  { declName :: Text,
-    declArity :: Int
+  { name :: Text,
+    arity :: Int
   }
   deriving (Show, Eq, Lift)
 
 data Rule = Rule
-  { ruleName :: Maybe (Ann Text),
-    ruleHead :: Ann Head,
-    ruleGuard :: Ann [Term],
-    ruleBody :: Ann [Term]
+  { name :: Maybe (Ann Text),
+    head :: Ann Head,
+    guard :: Ann [Term],
+    body :: Ann [Term]
   }
   deriving (Show, Eq, Lift)
 

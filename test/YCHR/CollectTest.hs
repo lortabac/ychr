@@ -26,10 +26,10 @@ tests =
             user = userMod [noAnn (LibraryImport "foo")]
          in case collectLibraries libs [user] of
               Right mods ->
-                all (all (isModuleImport . node) . modImports) mods @?= True
+                all (all (isModuleImport . (.node)) . (.imports)) mods @?= True
               Left errs -> fail (show errs),
       testCase "transitive library imports resolved" $
-        let libA = (libMod "a") {modImports = [noAnn (LibraryImport "b")]}
+        let libA = (libMod "a") {imports = [noAnn (LibraryImport "b")]}
             libB = libMod "b"
             libs = Map.fromList [("a", libA), ("b", libB)]
             user = userMod [noAnn (LibraryImport "a")]
@@ -48,8 +48,8 @@ tests =
       testCase "builtins not included when absent from stdlib" $
         collectLibraries Map.empty [userMod []] @?= Right [userMod []],
       testCase "circular import reports error" $
-        let libA = (libMod "a") {modImports = [noAnn (LibraryImport "b")]}
-            libB = (libMod "b") {modImports = [noAnn (LibraryImport "a")]}
+        let libA = (libMod "a") {imports = [noAnn (LibraryImport "b")]}
+            libB = (libMod "b") {imports = [noAnn (LibraryImport "a")]}
             libs = Map.fromList [("a", libA), ("b", libB)]
             user = userMod [noAnn (LibraryImport "a")]
          in case collectLibraries libs [user] of

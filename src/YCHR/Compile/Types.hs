@@ -1,3 +1,5 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+
 -- | Internal types for the CHR-to-VM compiler.
 module YCHR.Compile.Types
   ( -- * Semantic newtypes
@@ -54,20 +56,20 @@ newtype PartnerIndex = PartnerIndex {unPartnerIndex :: Int}
   deriving (Show, Eq, Ord, Num, Enum)
 
 data Occurrence = Occurrence
-  { occConName :: T.Name,
-    occNumber :: OccurrenceNumber,
-    occRule :: D.Rule,
-    occActiveIdx :: HeadPosition,
-    occIsKept :: Bool,
-    occActiveArgs :: [T.Term],
-    occPartners :: [Partner]
+  { conName :: T.Name,
+    number :: OccurrenceNumber,
+    rule :: D.Rule,
+    activeIdx :: HeadPosition,
+    isKept :: Bool,
+    activeArgs :: [T.Term],
+    partners :: [Partner]
   }
 
 data Partner = Partner
-  { partIdx :: HeadPosition,
-    partConstraint :: T.Constraint,
-    partIsKept :: Bool,
-    partCType :: ConstraintType
+  { idx :: HeadPosition,
+    constraint :: T.Constraint,
+    isKept :: Bool,
+    cType :: ConstraintType
   }
 
 newtype ArityMap = ArityMap (Map.Map T.Name Arity)

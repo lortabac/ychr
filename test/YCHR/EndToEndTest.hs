@@ -56,7 +56,7 @@ leqSource =
 
 lookupType :: CompiledProgram -> Name -> ConstraintType
 lookupType prog name =
-  case lookupSymbol name (cpSymbolTable prog) of
+  case lookupSymbol name prog.symbolTable of
     Just ct -> ct
     Nothing -> error $ "constraint type not found: " ++ show name
 

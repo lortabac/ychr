@@ -53,15 +53,15 @@ import YCHR.Types (ConstraintType (..))
 data Suspension = Suspension
   { suspId :: !SuspensionId,
     suspType :: !ConstraintType,
-    suspArgs :: ![Value],
-    suspAlive :: !(IORef Bool)
+    args :: ![Value],
+    alive :: !(IORef Bool)
   }
 
 -- | Internal state of the constraint store.
 data StoreState = StoreState
-  { storeByType :: !(IOVector (Seq Suspension)),
-    storeById :: !(IORef (IntMap Suspension)),
-    storeNextId :: !(IORef Int)
+  { byType :: !(IOVector (Seq Suspension)),
+    byId :: !(IORef (IntMap Suspension)),
+    nextId :: !(IORef Int)
   }
 
 -- ---------------------------------------------------------------------------
@@ -96,8 +96,8 @@ getStoreState = do
 lookupSusp :: (CHRStore :> es) => SuspensionId -> Eff es Suspension
 lookupSusp (SuspensionId sid) = do
   st <- getStoreState
-  byId <- unsafeEff_ $ readIORef (storeById st)
-  case IntMap.lookup sid byId of
+  m <- unsafeEff_ $ readIORef st.byId
+  case IntMap.lookup sid m of
     Just s -> pure s
     Nothing -> error $ "lookupSusp: unknown SuspensionId " ++ show sid
 
@@ -111,12 +111,12 @@ createConstraint :: (CHRStore :> es) => ConstraintType -> [Value] -> Eff es Susp
 createConstraint cType args = do
   st <- getStoreState
   sid <- unsafeEff_ $ do
-    n <- readIORef (storeNextId st)
-    writeIORef (storeNextId st) (n + 1)
+    n <- readIORef st.nextId
+    writeIORef st.nextId (n + 1)
     pure (SuspensionId n)
   aliveRef <- unsafeEff_ $ newIORef True
   let susp = Suspension sid cType args aliveRef
-  unsafeEff_ $ modifyIORef' (storeById st) (IntMap.insert (let SuspensionId n = sid in n) susp)
+  unsafeEff_ $ modifyIORef' st.byId (IntMap.insert (let SuspensionId n = sid in n) susp)
   pure sid
 
 -- | Add a constraint to the type-indexed store and register it as an
@@ -125,10 +125,10 @@ storeConstraint :: (CHRStore :> es, Unify :> es) => SuspensionId -> Eff es ()
 storeConstraint sid = do
   susp <- lookupSusp sid
   st <- getStoreState
-  let ConstraintType idx = suspType susp
-  unsafeEff_ $ MV.modify (storeByType st) (Seq.|> susp) idx
+  let ConstraintType idx = susp.suspType
+  unsafeEff_ $ MV.modify st.byType (Seq.|> susp) idx
   -- Register as observer on each variable argument
-  mapM_ (registerObserver sid) (suspArgs susp)
+  mapM_ (registerObserver sid) susp.args
 
 -- | Register a suspension as an observer on a value, if it's an unbound variable.
 registerObserver :: (CHRStore :> es, Unify :> es) => SuspensionId -> Value -> Eff es ()
@@ -142,26 +142,25 @@ registerObserver sid val = do
 killConstraint :: (CHRStore :> es) => SuspensionId -> Eff es ()
 killConstraint sid = do
   susp <- lookupSusp sid
-  unsafeEff_ $ writeIORef (suspAlive susp) False
+  unsafeEff_ $ writeIORef susp.alive False
 
 -- | Check if a constraint is still alive.
 aliveConstraint :: (CHRStore :> es) => SuspensionId -> Eff es Bool
 aliveConstraint sid = do
   susp <- lookupSusp sid
-  unsafeEff_ $ readIORef (suspAlive susp)
+  unsafeEff_ $ readIORef susp.alive
 
 -- | Get a constraint argument by 0-based index.
 getConstraintArg :: (CHRStore :> es) => SuspensionId -> Int -> Eff es Value
 getConstraintArg sid idx = do
   susp <- lookupSusp sid
-  let args = suspArgs susp
-  if idx >= 0 && idx < length args
-    then pure (args !! idx)
+  if idx >= 0 && idx < length susp.args
+    then pure (susp.args !! idx)
     else error $ "getConstraintArg: index " ++ show idx ++ " out of bounds"
 
 -- | Get the constraint type of a suspension.
 getConstraintType :: (CHRStore :> es) => SuspensionId -> Eff es ConstraintType
-getConstraintType sid = suspType <$> lookupSusp sid
+getConstraintType sid = (.suspType) <$> lookupSusp sid
 
 -- | Compare two suspension IDs for equality. Pure.
 idEqual :: SuspensionId -> SuspensionId -> Bool
@@ -179,15 +178,14 @@ isConstraintType sid cType = do
 getStoreSnapshot :: (CHRStore :> es) => ConstraintType -> Eff es (Seq Suspension)
 getStoreSnapshot (ConstraintType idx) = do
   st <- getStoreState
-  let vec = storeByType st
-  if idx >= 0 && idx < MV.length vec
-    then unsafeEff_ $ MV.read vec idx
+  if idx >= 0 && idx < MV.length st.byType
+    then unsafeEff_ $ MV.read st.byType idx
     else pure Seq.empty
 
 -- | Check if a suspension is alive by reading its IORef.
 isSuspAlive :: (CHRStore :> es) => Suspension -> Eff es Bool
-isSuspAlive susp = unsafeEff_ $ readIORef (suspAlive susp)
+isSuspAlive susp = unsafeEff_ $ readIORef susp.alive
 
 -- | Get a suspension argument by 0-based index. Pure.
 suspArg :: Suspension -> Int -> Value
-suspArg susp idx = suspArgs susp !! idx
+suspArg susp idx = susp.args !! idx
