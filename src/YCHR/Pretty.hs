@@ -1,9 +1,17 @@
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Pretty-printing utilities for CHR terms and binding maps.
 module YCHR.Pretty
   ( -- * Pretty class
     Pretty (..),
+
+    -- * Existential wrapper
+    PrettyE (..),
+
+    -- * Annotated node
+    AnnP (..),
+    noAnnP,
 
     -- * Pretty-printing functions
     prettyTerm,
@@ -201,3 +209,28 @@ instance Pretty Constraint where prettySrc = prettyConstraintSrc
 instance Pretty P.Head where prettySrc = prettyHeadSrc
 
 instance Pretty P.Rule where prettySrc = prettyRuleSrc
+
+-- ---------------------------------------------------------------------------
+-- Existential wrapper and annotated node
+-- ---------------------------------------------------------------------------
+
+-- | An existential wrapper for any value that can be pretty-printed.
+data PrettyE where
+  PrettyE :: (Pretty a) => a -> PrettyE
+
+instance Show PrettyE where
+  show (PrettyE a) = prettySrc a
+
+-- | A desugared node annotated with a source location and the original
+-- parsed AST node that produced it.
+data AnnP a = AnnP
+  { node :: a,
+    sourceLoc :: P.SourceLoc,
+    parsed :: PrettyE
+  }
+  deriving (Show)
+
+-- | Wrap a node with a dummy source location and a dummy pretty-printed origin.
+-- Useful for constructing values in tests where provenance is irrelevant.
+noAnnP :: (Pretty b) => b -> a -> AnnP a
+noAnnP origin x = AnnP x P.dummyLoc (PrettyE origin)
