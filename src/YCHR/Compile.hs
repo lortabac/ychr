@@ -23,6 +23,7 @@ import Effectful (Eff, runPureEff)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import YCHR.Compile.Types
 import YCHR.Desugared qualified as D
+import YCHR.Pretty (AnnP (..))
 import YCHR.Types (Constraint, SymbolTable, Term (..), lookupSymbol, symbolTableSize, symbolTableToList)
 import YCHR.Types qualified as Types
 import YCHR.VM
@@ -62,10 +63,12 @@ buildArityMap (D.Program rules) =
   arityMapFromList
     [ (c.name, Arity (length c.args))
     | r <- rules,
+      let AnnP {node = rHead} = r.head
+          AnnP {node = rBody} = r.body,
       c <-
-        r.head.kept
-          ++ r.head.removed
-          ++ [c' | D.BodyConstraint c' <- r.body]
+        rHead.kept
+          ++ rHead.removed
+          ++ [c' | D.BodyConstraint c' <- rBody]
     ]
 
 -- ---------------------------------------------------------------------------
@@ -82,8 +85,9 @@ collectOccurrences symTab (D.Program rules) = do
 
 ruleOccurrences :: SymbolTable -> (Int, D.Rule) -> Eff '[Writer [CompileError]] [Occurrence]
 ruleOccurrences symTab (ruleIdx, rule) = do
-  let kept = rule.head.kept
-      removed = rule.head.removed
+  let AnnP {node = ruleHead} = rule.head
+      kept = ruleHead.kept
+      removed = ruleHead.removed
       combined =
         [(i, c, False) | (i, c) <- zip [HeadPosition 0 ..] removed]
           ++ [(i, c, True) | (i, c) <- zip [HeadPosition (length removed) ..] (reverse kept)]
@@ -213,7 +217,7 @@ genOccurrenceBody symTab varMap occ
 -- Single-head rule (no partners)
 genNoPartnerBody :: SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
 genNoPartnerBody symTab varMap occ = do
-  let guards = occ.rule.guard
+  let AnnP {node = guards} = occ.rule.guard
   (wrapper, guardExpr, varMap') <- compileGuards varMap guards
   fireStmts <- genFireStmts symTab varMap' occ
   let inner = case guardExpr of
@@ -225,7 +229,7 @@ genNoPartnerBody symTab varMap occ = do
 genPartnerBody :: SymbolTable -> VarMap -> Occurrence -> PartnerIndex -> Eff '[Writer [CompileError]] [Stmt]
 genPartnerBody symTab varMap occ k
   | k >= PartnerIndex (length occ.partners) = do
-      let guards = occ.rule.guard
+      let AnnP {node = guards} = occ.rule.guard
       (wrapper, guardExpr, varMap') <- compileGuards varMap guards
       fireStmts <- genFireStmts symTab varMap' occ
       let inner = case guardExpr of
@@ -262,14 +266,16 @@ genPartnerBody symTab varMap occ k
 genFireStmts :: SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
 genFireStmts symTab varMap occ = do
   let rule = occ.rule
-      isPropagation = null rule.head.removed
+      AnnP {node = ruleHead} = rule.head
+      isPropagation = null ruleHead.removed
       activeIsRemoved = not occ.isKept
       ruleName' = case rule.name of
         Just n -> RuleName n
         Nothing -> RuleName "rule_anon"
       historyIds = buildHistoryIds occ
       killStmts = genKillStmts occ
-  bodyStmts <- compileBodyGoals symTab varMap rule.body
+  let AnnP {node = ruleBody} = rule.body
+  bodyStmts <- compileBodyGoals symTab varMap ruleBody
   let earlyDropStmts
         | activeIsRemoved = [Return (Lit (BoolLit True))]
         | otherwise = [If (Not (Alive (Var "id"))) [Return (Lit (BoolLit True))] []]

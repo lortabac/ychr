@@ -35,17 +35,18 @@ module YCHR.Desugared
 where
 
 import Data.Text (Text)
+import YCHR.Pretty (AnnP)
 import YCHR.Types
 
-data Program = Program [Rule] deriving (Show, Eq)
+data Program = Program [Rule] deriving (Show)
 
 data Rule = Rule
   { name :: Maybe Text,
-    head :: Head,
-    guard :: [Guard],
-    body :: [BodyGoal]
+    head :: AnnP Head,
+    guard :: AnnP [Guard],
+    body :: AnnP [BodyGoal]
   }
-  deriving (Show, Eq)
+  deriving (Show)
 
 data Head = Head
   { kept :: [Constraint],

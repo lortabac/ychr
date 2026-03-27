@@ -1,4 +1,4 @@
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Pretty-printing utilities for CHR terms and binding maps.
@@ -204,6 +204,9 @@ class Pretty a where
 
 instance Pretty Term where prettySrc = prettyTermSrc
 
+instance Pretty [Term] where
+  prettySrc ts = intercalate ", " (map prettyTermSrc ts)
+
 instance Pretty Constraint where prettySrc = prettyConstraintSrc
 
 instance Pretty P.Head where prettySrc = prettyHeadSrc
@@ -215,8 +218,7 @@ instance Pretty P.Rule where prettySrc = prettyRuleSrc
 -- ---------------------------------------------------------------------------
 
 -- | An existential wrapper for any value that can be pretty-printed.
-data PrettyE where
-  PrettyE :: (Pretty a) => a -> PrettyE
+data PrettyE = forall a. (Pretty a) => PrettyE a
 
 instance Show PrettyE where
   show (PrettyE a) = prettySrc a

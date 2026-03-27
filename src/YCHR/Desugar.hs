@@ -38,6 +38,7 @@ import Effectful (Eff, runPureEff)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import YCHR.Desugared qualified as D
 import YCHR.Parsed qualified as P
+import YCHR.Pretty (AnnP (..), PrettyE (..))
 import YCHR.Types
 
 data DesugarError
@@ -67,9 +68,11 @@ extractSymbolTable (D.Program rules) =
 -- | Helper to find every constraint instance in a desugared rule.
 getRuleConstraints :: D.Rule -> [Constraint]
 getRuleConstraints r =
-  r.head.kept
-    ++ r.head.removed
-    ++ [c | D.BodyConstraint c <- r.body]
+  let AnnP {node = rHead} = r.head
+      AnnP {node = rBody} = r.body
+   in rHead.kept
+        ++ rHead.removed
+        ++ [c | D.BodyConstraint c <- rBody]
 
 desugarRule :: P.Rule -> Eff '[Writer [DesugarError]] D.Rule
 desugarRule r = do
@@ -80,9 +83,9 @@ desugarRule r = do
   pure
     D.Rule
       { name = fmap (.node) r.name,
-        head = normalizedHead,
-        guard = hnfGuards ++ userGuards,
-        body = ruleBody
+        head = AnnP normalizedHead r.head.sourceLoc (PrettyE r.head.node),
+        guard = AnnP (hnfGuards ++ userGuards) r.guard.sourceLoc (PrettyE r.guard.node),
+        body = AnnP ruleBody r.body.sourceLoc (PrettyE r.body.node)
       }
 
 desugarHead :: P.Head -> D.Head
