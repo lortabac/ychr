@@ -8,6 +8,7 @@ import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDire
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath (takeDirectory)
+import YCHR.Display (displayMsg)
 import YCHR.EndToEnd (CompiledProgram, compileFiles, compileModules, runProgramWithQuery)
 import YCHR.Pretty (prettyQueryResult)
 import YCHR.Meta (metaHostCallRegistry)
@@ -21,7 +22,7 @@ main = do
     _ -> compileFiles paths
   case result of
     Left err -> do
-      print err
+      putStr (displayMsg err)
       exitFailure
     Right prog -> do
       histFile <- getXdgDirectory XdgData "ychr/history"
