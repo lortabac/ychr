@@ -19,11 +19,9 @@ import YCHR.Runtime.Interpreter (baseHostCallRegistry)
 main :: IO ()
 main = do
   rawArgs <- getArgs
-  let autoload = "--autoload" `elem` rawArgs
-      paths = filter (/= "--autoload") rawArgs
-  result <- case paths of
-    [] -> pure (compileModules autoload [])
-    _ -> compileFiles autoload paths
+  result <- case rawArgs of
+    [] -> pure (compileModules True [])
+    _ -> compileFiles True rawArgs
   case result of
     Left err -> do
       putStr (displayMsg err)

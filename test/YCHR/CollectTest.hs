@@ -39,14 +39,16 @@ tests =
       testCase "unknown library reports error" $
         collectLibraries False Map.empty [userMod [noAnn (LibraryImport "missing")]]
           @?= Left [UnknownLibrary "missing"],
-      testCase "builtins auto-included when present in stdlib" $
+      testCase "builtins not auto-included when includeStdlib is False" $
         let libs = Map.fromList [("builtins", libMod "builtins")]
             user = userMod []
-         in case collectLibraries False libs [user] of
+         in collectLibraries False libs [user] @?= Right [user],
+      testCase "builtins included when includeStdlib is True" $
+        let libs = Map.fromList [("builtins", libMod "builtins")]
+            user = userMod []
+         in case collectLibraries True libs [user] of
               Right mods -> length mods @?= 2
               Left errs -> fail (show errs),
-      testCase "builtins not included when absent from stdlib" $
-        collectLibraries False Map.empty [userMod []] @?= Right [userMod []],
       testCase "circular import reports error" $
         let libA = (libMod "a") {imports = [noAnn (LibraryImport "b")]}
             libB = (libMod "b") {imports = [noAnn (LibraryImport "a")]}

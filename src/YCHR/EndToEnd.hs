@@ -55,6 +55,7 @@ import YCHR.Collect (CollectError, collectLibraries)
 import YCHR.Compile (CompileError, compile, procNameFor)
 import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable)
 import YCHR.Meta (valueToTerm)
+import YCHR.Parsed (Import (..), Module (..), noAnn)
 import YCHR.Parser (parseConstraint, parseModule, parseQuery)
 import YCHR.Rename (RenameError, buildExportEnv, renameProgram)
 import YCHR.Rename.Types (toListGlobal)
@@ -91,9 +92,10 @@ data ExportResolution
   deriving (Show, Eq)
 
 compileModules :: Bool -> [(FilePath, Text)] -> Either Error CompiledProgram
-compileModules autoload inputs = do
+compileModules includeStdlib inputs = do
   parsed <- mapM (\(fp, txt) -> first (ParseError fp) (parseModule fp txt)) inputs
-  collected <- first CollectErrors (collectLibraries autoload stdlib parsed)
+  let withBuiltins = map addBuiltinsImport parsed
+  collected <- first CollectErrors (collectLibraries includeStdlib stdlib withBuiltins)
   let exportEnv = buildExportEnv collected
       exportMap =
         Map.fromList
@@ -112,10 +114,13 @@ compileModules autoload inputs = do
     toResolution n [m] = UniqueExport (Types.Qualified m n)
     toResolution _ ms = AmbiguousExport ms
 
+addBuiltinsImport :: Module -> Module
+addBuiltinsImport m = m {imports = noAnn (LibraryImport "builtins") : m.imports}
+
 compileFiles :: Bool -> [FilePath] -> IO (Either Error CompiledProgram)
-compileFiles autoload paths = do
+compileFiles includeStdlib paths = do
   contents <- mapM (\fp -> (fp,) <$> TIO.readFile fp) paths
-  pure (compileModules autoload contents)
+  pure (compileModules includeStdlib contents)
 
 -- ---------------------------------------------------------------------------
 -- CHR effect

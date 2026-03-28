@@ -30,10 +30,10 @@ data CollectError
 -- 5. Prepends library modules in topological order (dependencies first).
 -- 6. Rewrites all 'LibraryImport' to 'ModuleImport' in every module.
 collectLibraries :: Bool -> Map Text Module -> [Module] -> Either [CollectError] [Module]
-collectLibraries autoload stdlibMap userMods =
-  let builtinSeeds = ["builtins" | Map.member "builtins" stdlibMap]
-      autoloadSeeds = if autoload then Map.keys stdlibMap else []
-      seeds = builtinSeeds ++ autoloadSeeds ++ concatMap libraryImports userMods
+collectLibraries includeStdlib stdlibMap userMods =
+  let seeds =
+        (if includeStdlib then Map.keys stdlibMap else [])
+          ++ concatMap libraryImports userMods
    in case resolveAll stdlibMap Set.empty Set.empty seeds of
         (_, libs, []) ->
           let rewritten = map rewriteImports (libs ++ userMods)
