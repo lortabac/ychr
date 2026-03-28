@@ -20,7 +20,7 @@ tests = do
   names <-
     sort
       . map dropExtension
-      . filter ((== ".txt") . takeExtension)
+      . filter ((== ".query") . takeExtension)
       <$> listDirectory queryDir
   trees <- mapM (makeGoldenTest "test/golden") names
   pure (testGroup "Golden" trees)
@@ -30,7 +30,7 @@ makeGoldenTest base name = pure $ testCase name $ do
   prog <-
     compileFiles False [base </> "programs" </> name <.> "chr"]
       >>= either (assertFailure . show) pure
-  query <- TIO.readFile (base </> "queries" </> name <.> "txt")
-  expected <- readFile (base </> "expected" </> name <.> "txt")
+  query <- TIO.readFile (base </> "queries" </> name <.> "query")
+  expected <- readFile (base </> "expected" </> name <.> "expected")
   (_, bindings) <- runProgramWithGoal prog (baseHostCallRegistry <> metaHostCallRegistry) (T.strip query)
   prettyBindings bindings @?= expected
