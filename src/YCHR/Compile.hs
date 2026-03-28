@@ -339,6 +339,14 @@ compileTerm varMap si (CompoundTerm name args) = do
   pure (MakeTerm (vmName name) args')
 compileTerm _ _ Wildcard = pure (Lit WildcardLit)
 
+-- | Like 'compileTerm', but recognises @Qualified "host" f@ at any nesting
+-- level and emits 'HostCall' instead of 'MakeTerm'.
+compileHostExpr :: VarMap -> SrcInfo -> Term -> Eff '[Writer [CompileError]] Expr
+compileHostExpr varMap si (CompoundTerm (Types.Qualified "host" f) args) = do
+  args' <- traverse (compileHostExpr varMap si) args
+  pure (HostCall (Name f) args')
+compileHostExpr varMap si t = compileTerm varMap si t
+
 -- ---------------------------------------------------------------------------
 -- Compile guards
 -- ---------------------------------------------------------------------------
@@ -387,7 +395,7 @@ compileCheckGuards varMap si guards = case nonTrivialGuards of
 compileCheckGuard :: VarMap -> SrcInfo -> D.Guard -> Eff '[Writer [CompileError]] Expr
 compileCheckGuard _ _ (D.GuardCommon D.GoalTrue) = pure (Lit (BoolLit True))
 compileCheckGuard varMap si (D.GuardEqual t1 t2) = Equal <$> compileTerm varMap si t1 <*> compileTerm varMap si t2
-compileCheckGuard varMap si (D.GuardExpr term) = HostEval <$> compileTerm varMap si term
+compileCheckGuard varMap si (D.GuardExpr term) = HostEval <$> compileHostExpr varMap si term
 compileCheckGuard _ _ _ = pure (Lit (BoolLit True))
 
 -- ---------------------------------------------------------------------------
@@ -397,23 +405,8 @@ compileCheckGuard _ _ _ = pure (Lit (BoolLit True))
 compileBodyGoals :: SymbolTable -> VarMap -> SrcInfo -> [D.BodyGoal] -> Eff '[Writer [CompileError]] [Stmt]
 compileBodyGoals _ _ _ [] = pure []
 compileBodyGoals symTab varMap si (goal : rest) = case goal of
-  D.BodyHostCall v f args -> do
-    args' <- traverse (compileTerm varMap si) args
-    case lookupVar v varMap of
-      Just existing -> do
-        let stmts =
-              [ ExprStmt (Unify existing (HostCall (Name f) args')),
-                DrainReactivationQueue "rs" [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])]
-              ]
-        rest' <- compileBodyGoals symTab varMap si rest
-        pure (stmts ++ rest')
-      Nothing -> do
-        let stmt = Let (Name v) (HostCall (Name f) args')
-            varMap' = insertVar v (Var (Name v)) varMap
-        rest' <- compileBodyGoals symTab varMap' si rest
-        pure (stmt : rest')
   D.BodyIs v expr -> do
-    expr' <- compileTerm varMap si expr
+    expr' <- compileHostExpr varMap si expr
     case lookupVar v varMap of
       Just existing -> do
         let stmts =
@@ -456,17 +449,8 @@ compileBodyGoal _ varMap si (D.BodyUnify t1 t2) = do
 compileBodyGoal _ varMap si (D.BodyHostStmt f args) = do
   args' <- traverse (compileTerm varMap si) args
   pure [ExprStmt (HostCall (Name f) args')]
-compileBodyGoal _ varMap si (D.BodyHostCall v f args) = do
-  args' <- traverse (compileTerm varMap si) args
-  case lookupVar v varMap of
-    Just existing ->
-      pure
-        [ ExprStmt (Unify existing (HostCall (Name f) args')),
-          DrainReactivationQueue "rs" [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])]
-        ]
-    Nothing -> pure [Let (Name v) (HostCall (Name f) args')]
 compileBodyGoal _ varMap si (D.BodyIs v expr) = do
-  expr' <- compileTerm varMap si expr
+  expr' <- compileHostExpr varMap si expr
   case lookupVar v varMap of
     Just existing ->
       pure

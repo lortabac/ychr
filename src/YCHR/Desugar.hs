@@ -199,16 +199,12 @@ desugarGuard _ = D.GuardCommon D.GoalTrue
 desugarBodyGoal :: P.SourceLoc -> Term -> Eff '[Writer [DesugarError]] D.BodyGoal
 desugarBodyGoal loc t = case t of
   CompoundTerm (Unqualified "=") [l, r] -> pure $ D.BodyUnify l r
-  CompoundTerm (Unqualified ":=") [VarTerm v, CompoundTerm (Unqualified f) args] ->
-    pure $ D.BodyHostCall v f args
-  CompoundTerm (Unqualified ":=") [Wildcard, CompoundTerm (Unqualified f) args] ->
-    pure $ D.BodyHostStmt f args
   CompoundTerm (Unqualified "is") [VarTerm v, expr] ->
     pure $ D.BodyIs v expr
+  CompoundTerm (Qualified "host" f) args ->
+    pure $ D.BodyHostStmt f args
   CompoundTerm (Qualified m n) args ->
     pure $ D.BodyConstraint (Constraint (Qualified m n) args)
-  CompoundTerm (Unqualified "host") [CompoundTerm (Unqualified f) args] ->
-    pure $ D.BodyHostStmt f args
   AtomTerm "true" -> pure $ D.BodyCommon D.GoalTrue
   CompoundTerm (Unqualified _) _ -> do
     tell [UnexpectedBodyTerm loc t]

@@ -67,11 +67,21 @@ renameModule localEnv exportEnv m = do
   renamedRules <- traverse (renameRule localEnv exportEnv m) m.rules
   pure m {rules = renamedRules}
 
+-- | Controls how deeply name resolution is applied.
+data ResolveMode
+  = -- | Don't resolve (head args, nested data terms).
+    NoResolve
+  | -- | Resolve this level only, children get 'NoResolve' (body goals).
+    ResolveTop
+  | -- | Resolve at every nesting level (guards, @is@ RHS).
+    ResolveAll
+  deriving (Eq)
+
 renameRule :: LocalEnv -> GlobalEnv -> Module -> Rule -> Eff '[Writer [RenameError]] Rule
 renameRule localEnv exportEnv m r = do
   h <- traverse (renameHead localEnv exportEnv m r.head.sourceLoc) r.head
-  g <- traverse (traverse (renameTerm localEnv exportEnv m r.guard.sourceLoc False)) r.guard
-  b <- traverse (traverse (renameTerm localEnv exportEnv m r.body.sourceLoc True)) r.body
+  g <- traverse (traverse (renameTerm localEnv exportEnv m r.guard.sourceLoc ResolveAll)) r.guard
+  b <- traverse (traverse (renameTerm localEnv exportEnv m r.body.sourceLoc ResolveTop)) r.body
   pure r {head = h, guard = g, body = b}
 
 renameHead :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Head -> Eff '[Writer [RenameError]] Head
@@ -83,14 +93,23 @@ renameHead localEnv exportEnv m loc h = case h of
 renameCon :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Constraint -> Eff '[Writer [RenameError]] Constraint
 renameCon localEnv exportEnv m loc (Constraint cname cargs) = do
   renamedName <- resolveName localEnv exportEnv m loc cname (length cargs)
-  renamedArgs <- traverse (renameTerm localEnv exportEnv m loc False) cargs
+  renamedArgs <- traverse (renameTerm localEnv exportEnv m loc NoResolve) cargs
   pure (Constraint renamedName renamedArgs)
 
-renameTerm :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Bool -> Term -> Eff '[Writer [RenameError]] Term
-renameTerm localEnv exportEnv m loc isGoal t = case t of
+renameTerm :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> ResolveMode -> Term -> Eff '[Writer [RenameError]] Term
+renameTerm localEnv exportEnv m loc mode t = case t of
+  -- Special case: @is@ passes 'ResolveAll' to its RHS expression.
+  CompoundTerm (Unqualified "is") [lhs, rhs] | mode /= NoResolve -> do
+    renamedLhs <- renameTerm localEnv exportEnv m loc NoResolve lhs
+    renamedRhs <- renameTerm localEnv exportEnv m loc ResolveAll rhs
+    pure (CompoundTerm (Unqualified "is") [renamedLhs, renamedRhs])
   CompoundTerm name args -> do
-    renamedArgs <- traverse (renameTerm localEnv exportEnv m loc False) args
-    newName <- if isGoal then resolveName localEnv exportEnv m loc name (length args) else pure name
+    let childMode = case mode of
+          NoResolve -> NoResolve
+          ResolveTop -> NoResolve
+          ResolveAll -> ResolveAll
+    renamedArgs <- traverse (renameTerm localEnv exportEnv m loc childMode) args
+    newName <- if mode /= NoResolve then resolveName localEnv exportEnv m loc name (length args) else pure name
     pure (CompoundTerm newName renamedArgs)
   other -> pure other
 

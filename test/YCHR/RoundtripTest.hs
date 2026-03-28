@@ -28,7 +28,7 @@ genSafeAtom = Gen.filter isOk $ do
   rest <- Gen.list (Range.linear 0 5) Gen.alphaNum
   pure (Text.pack (c : rest))
   where
-    forbidden = ["is", "div", "mod", "true", "false"] :: [Text]
+    forbidden = ["is", "true", "false"] :: [Text]
     isOk s = s `notElem` forbidden && not (Text.null s)
 
 -- | Generate atoms for use as 'AtomTerm' values, including cases that

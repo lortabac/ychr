@@ -168,10 +168,10 @@ unknownTests =
         let m =
               module' "M"
                 `declaring` ["c" // 0]
-                `defining` [[con "c" []] <=> [hostStmt "some_host_func" [var "X"]]]
+                `defining` [[con "c" []] <=> [hostCall "some_host_func" [var "X"]]]
         rule <- singleRule m
         rule.body.node
-          @?= [CompoundTerm (Unqualified "host") [CompoundTerm (Unqualified "some_host_func") [VarTerm "X"]]]
+          @?= [CompoundTerm (Qualified "host" "some_host_func") [VarTerm "X"]]
     ]
 
 --------------------------------------------------------------------------------
@@ -217,8 +217,8 @@ goalClassificationTests :: TestTree
 goalClassificationTests =
   testGroup
     "goal-classification"
-    [ testCase "guard functor NOT resolved" $ do
-        -- Guards use isGoal = False, so compound terms are not looked up
+    [ testCase "guard functor IS resolved" $ do
+        -- Guards use ResolveAll, so compound terms are looked up
         let m =
               module' "M"
                 `declaring` ["leq" // 2]
@@ -227,7 +227,7 @@ goalClassificationTests =
                            ]
         rule <- singleRule m
         rule.guard.node
-          @?= [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Y"]],
+          @?= [CompoundTerm (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]],
       testCase "body functor IS resolved" $ do
         -- Body uses isGoal = True, so compound terms are looked up
         let m =
@@ -384,30 +384,14 @@ reservedSymbolTests =
         rule <- singleRule m
         rule.body.node
           @?= [CompoundTerm (Unqualified "=") [VarTerm "X", VarTerm "Y"]],
-      testCase "== in body stays Unqualified" $ do
+      testCase "host:f in body stays Qualified host" $ do
         let m =
               module' "M"
                 `declaring` ["c" // 0]
-                `defining` [[con "c" []] <=> [func "==" [var "X", var "Y"]]]
+                `defining` [[con "c" []] <=> [hostCall "print" [var "X"]]]
         rule <- singleRule m
         rule.body.node
-          @?= [CompoundTerm (Unqualified "==") [VarTerm "X", VarTerm "Y"]],
-      testCase ":= in body stays Unqualified" $ do
-        let m =
-              module' "M"
-                `declaring` ["c" // 0]
-                `defining` [[con "c" []] <=> [func ":=" [var "X", var "Y"]]]
-        rule <- singleRule m
-        rule.body.node
-          @?= [CompoundTerm (Unqualified ":=") [VarTerm "X", VarTerm "Y"]],
-      testCase "$ in body stays Unqualified" $ do
-        let m =
-              module' "M"
-                `declaring` ["c" // 0]
-                `defining` [[con "c" []] <=> [hostStmt "print" [var "X"]]]
-        rule <- singleRule m
-        rule.body.node
-          @?= [CompoundTerm (Unqualified "host") [CompoundTerm (Unqualified "print") [VarTerm "X"]]]
+          @?= [CompoundTerm (Qualified "host" "print") [VarTerm "X"]]
     ]
 
 --------------------------------------------------------------------------------

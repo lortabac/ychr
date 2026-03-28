@@ -40,7 +40,7 @@ defining m rls = m {rules = rls}
 
 -- | Name a rule: @"my_rule" @: [con "a" []] <=> [con "b" []]@
 (@:) :: Text -> Rule -> Rule
-n @: r = r {name = Just (noAnn n)}
+n @: (Rule _ h g b) = Rule (Just (noAnn n)) h g b
 
 -- | Simplification Rule: @[head] <=> [body]@
 (<=>) :: [Constraint] -> [Term] -> Rule
@@ -103,19 +103,15 @@ wildcard = Wildcard
 (.=.) :: Term -> Term -> Term
 l .=. r = CompoundTerm (Unqualified "=") [l, r]
 
--- | Host assignment: @var "X" .:=. func "get_val" []@
-(.:=.) :: Term -> Term -> Term
-v .:=. f = CompoundTerm (Unqualified ":=") [v, f]
-
 -- | Arithmetic evaluation: @var "X" \`is\` func "+" [int 2, var "Y"]@
 is :: Term -> Term -> Term
 is v e = CompoundTerm (Unqualified "is") [v, e]
 
 infixr 3 `is`
 
--- | Host statement: @hostStmt "print" [var "X"]@
-hostStmt :: Text -> [Term] -> Term
-hostStmt f args = CompoundTerm (Unqualified "host") [CompoundTerm (Unqualified f) args]
+-- | Host call: @hostCall "print" [var "X"]@ produces @host:print(X)@.
+hostCall :: Text -> [Term] -> Term
+hostCall f args = CompoundTerm (Qualified "host" f) args
 
 {-
 

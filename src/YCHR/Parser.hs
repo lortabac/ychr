@@ -144,7 +144,7 @@ comma = void (symbol ",")
 
 -- | Reserved words that cannot be used as unquoted atoms (they are operators).
 reservedWords :: [Text]
-reservedWords = ["is", "div", "mod"]
+reservedWords = ["is"]
 
 -- | Parse an atom: a lowercase identifier or a single-quoted string.
 --
@@ -304,24 +304,8 @@ atomicTermP =
 -- | Operator table from lowest to highest precedence.
 operatorTable :: [[Operator Parser Term]]
 operatorTable =
-  [ -- Fixity 400: left-associative (yfx) — tightest binding (listed first)
-    [ InfixL (binOp "*" <$ symbolOp "*"),
-      InfixL (binOp "div" <$ wordOp "div"),
-      InfixL (binOp "mod" <$ wordOp "mod")
-    ],
-    -- Fixity 500: left-associative (yfx)
-    [ InfixL (binOp "+" <$ symbolOp "+"),
-      InfixL (binOp "-" <$ symbolOp "-")
-    ],
-    -- Fixity 700: non-associative (xfx) — loosest binding (listed last)
-    [ InfixN (binOp ":=" <$ symbolOp ":="),
-      InfixN (binOp "is" <$ wordOp "is"),
-      InfixN (binOp "=" <$ symbolOp "="),
-      InfixN (binOp "==" <$ symbolOp "=="),
-      InfixN (binOp "<" <$ symbolOp "<"),
-      InfixN (binOp ">" <$ symbolOp ">"),
-      InfixN (binOp "=<" <$ symbolOp "=<"),
-      InfixN (binOp ">=" <$ symbolOp ">=")
+  [ [ InfixN (binOp "is" <$ wordOp "is"),
+      InfixN (binOp "=" <$ symbolOp "=")
     ]
   ]
   where
@@ -333,16 +317,25 @@ termP = makeExprParser atomicTermP operatorTable
 
 -- | Parse an atom optionally followed by a parenthesised argument list.
 -- Produces 'CompoundTerm' if arguments are present, 'AtomTerm' otherwise.
+-- Supports qualified names: @module:name(args)@.
 atomOrCompoundP :: Parser Term
 atomOrCompoundP = do
-  name <- atomP
+  name <- try qualifiedNameP <|> (Unqualified <$> atomP)
   maybeOpen <- optional (symbol "(")
   case maybeOpen of
-    Nothing -> pure (AtomTerm name)
+    Nothing -> case name of
+      Unqualified n -> pure (AtomTerm n)
+      Qualified _ _ -> pure (CompoundTerm name [])
     Just _ -> do
       args <- termP `sepBy` comma
       _ <- symbol ")"
-      pure (CompoundTerm (Unqualified name) args)
+      pure (CompoundTerm name args)
+  where
+    qualifiedNameP = do
+      m <- atomP
+      _ <- symbol ":"
+      n <- atomP
+      pure (Qualified m n)
 
 -- ---------------------------------------------------------------------------
 -- Constraints (as they appear in rule heads)

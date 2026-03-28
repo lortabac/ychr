@@ -69,6 +69,5 @@ data BodyGoal
   | BodyConstraint Constraint
   | BodyUnify Term Term
   | BodyHostStmt Text [Term]
-  | BodyHostCall Text Text [Term]
   | BodyIs Text Term
   deriving (Show, Eq)

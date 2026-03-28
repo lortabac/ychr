@@ -493,13 +493,13 @@ hostEvalTests =
   testGroup
     "HostEval"
     [ testCase "flat: +(2, 3) = 5" $ do
-        result <- runCalc (MakeTerm "+" [Lit (IntLit 2), Lit (IntLit 3)]) (VInt 0)
+        result <- runCalc (HostCall "+" [Lit (IntLit 2), Lit (IntLit 3)]) (VInt 0)
         expectInt result >>= (@?= 5),
       testCase "variable: x + 1, x=5 = 6" $ do
-        result <- runCalc (MakeTerm "+" [Var "x", Lit (IntLit 1)]) (VInt 5)
+        result <- runCalc (HostCall "+" [Var "x", Lit (IntLit 1)]) (VInt 5)
         expectInt result >>= (@?= 6),
       testCase "nested: 2 * (x + 3), x=4 = 14" $ do
-        result <- runCalc (MakeTerm "*" [Lit (IntLit 2), MakeTerm "+" [Var "x", Lit (IntLit 3)]]) (VInt 4)
+        result <- runCalc (HostCall "*" [Lit (IntLit 2), HostCall "+" [Var "x", Lit (IntLit 3)]]) (VInt 4)
         expectInt result >>= (@?= 14),
       testCase "literal passthrough: 42 = 42" $ do
         result <- runCalc (Lit (IntLit 42)) (VInt 0)

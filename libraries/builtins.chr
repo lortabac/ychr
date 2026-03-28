@@ -3,4 +3,4 @@
 
 identity(X, Y) <=> X = Y.
 
-print(X) <=> host(print(X)).
+print(X) <=> host:print(X).

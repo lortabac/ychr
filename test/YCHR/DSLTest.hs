@@ -135,12 +135,9 @@ termTests =
       testCase "(.=.) produces unification term" $
         var "X" .=. var "Y"
           @?= CompoundTerm (Unqualified "=") [VarTerm "X", VarTerm "Y"],
-      testCase "(.:=.) produces assignment term" $
-        var "X" .:=. func "get_val" []
-          @?= CompoundTerm (Unqualified ":=") [VarTerm "X", CompoundTerm (Unqualified "get_val") []],
-      testCase "hostStmt produces host wrapper" $
-        hostStmt "print" [var "X"]
-          @?= CompoundTerm (Unqualified "host") [CompoundTerm (Unqualified "print") [VarTerm "X"]],
+      testCase "hostCall produces host wrapper" $
+        hostCall "print" [var "X"]
+          @?= CompoundTerm (Qualified "host" "print") [VarTerm "X"],
       testCase "wildcard produces Wildcard" $
         wildcard @?= Wildcard,
       testCase "`is` produces is term" $

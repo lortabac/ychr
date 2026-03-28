@@ -396,11 +396,11 @@ evalArith pm hc (Var name) = do
   case v of
     RVal val -> RVal <$> deref val
     rv -> pure rv
-evalArith pm hc (MakeTerm name args) = do
+evalArith pm hc (HostCall name args) = do
   argVals <- traverse (evalArith pm hc) args
   case Map.lookup name hc of
     Just f -> liftIO (f argVals)
-    Nothing -> error $ "evalArith: unknown operator " ++ T.unpack name.unName
+    Nothing -> error $ "evalArith: unknown host call " ++ T.unpack name.unName
 evalArith _ _ expr = error $ "evalArith: unsupported expression " ++ show expr
 
 -- ---------------------------------------------------------------------------

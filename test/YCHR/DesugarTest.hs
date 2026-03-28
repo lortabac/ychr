@@ -201,9 +201,6 @@ bodyTests =
     [ testCase "= becomes BodyUnify" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" .=. var "Y"]]
         getNode rule.body @?= [D.BodyUnify (VarTerm "X") (VarTerm "Y")],
-      testCase ":= becomes BodyHostCall" $ do
-        rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" .:=. func "readInt" []]]
-        getNode rule.body @?= [D.BodyHostCall "X" "readInt" []],
       testCase "is becomes BodyIs" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" `is` func "+" [int 1, int 2]]]
         getNode rule.body @?= [D.BodyIs "X" (CompoundTerm (Unqualified "+") [IntTerm 1, IntTerm 2])],
@@ -211,8 +208,8 @@ bodyTests =
         let body = [CompoundTerm (Qualified "M" "leq") [var "X"]]
         rule <- singleRule [simpleModule' (Simplification [leqQual]) body]
         getNode rule.body @?= [D.BodyConstraint (Constraint (Qualified "M" "leq") [VarTerm "X"])],
-      testCase "hostStmt becomes BodyHostStmt" $ do
-        rule <- singleRule [simpleModule' (Simplification [leqQual]) [hostStmt "print" [var "X"]]]
+      testCase "hostCall becomes BodyHostStmt" $ do
+        rule <- singleRule [simpleModule' (Simplification [leqQual]) [hostCall "print" [var "X"]]]
         getNode rule.body @?= [D.BodyHostStmt "print" [VarTerm "X"]],
       testCase "atom true becomes BodyCommon GoalTrue" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [atom "true"]]
