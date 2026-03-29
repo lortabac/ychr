@@ -89,7 +89,8 @@ baseHostCallRegistry =
       (Name "string_concat", stringConcat),
       (Name "string_length", stringLength),
       (Name "string_upper", stringUpper),
-      (Name "string_lower", stringLower)
+      (Name "string_lower", stringLower),
+      (Name "__chr_error", chrError)
     ]
   where
     arith2 op [RVal (VInt a), RVal (VInt b)] = pure (RVal (VInt (op a b)))
@@ -110,6 +111,8 @@ baseHostCallRegistry =
     stringUpper _ = error "string_upper: expected 1 Text argument"
     stringLower [RVal (VText s)] = pure (RVal (VText (T.toLower s)))
     stringLower _ = error "string_lower: expected 1 Text argument"
+    chrError :: [RuntimeVal] -> IO RuntimeVal
+    chrError _ = error "CHR runtime error: no matching equation"
 
 -- ---------------------------------------------------------------------------
 -- Public API
@@ -401,6 +404,12 @@ evalArith pm hc (HostCall name args) = do
   case Map.lookup name hc of
     Just f -> liftIO (f argVals)
     Nothing -> error $ "evalArith: unknown host call " ++ T.unpack name.unName
+evalArith pm hc (CallExpr name args) = do
+  argVals <- traverse (evalArith pm hc) args
+  callProc pm hc name argVals
+evalArith pm hc (MakeTerm functor args) = do
+  argVals <- traverse (evalArith pm hc) args
+  pure $ RVal $ makeTerm functor.unName (map toValue argVals)
 evalArith _ _ expr = error $ "evalArith: unsupported expression " ++ show expr
 
 -- ---------------------------------------------------------------------------

@@ -1,0 +1,8 @@
+:- module(function_recursive, [compute_fact/2]).
+:- chr_constraint compute_fact/2.
+:- function factorial/1.
+
+factorial(0) -> 1.
+factorial(N) | host:'>'(N, 0) -> host:'*'(N, factorial(host:'-'(N, 1))).
+
+compute_fact(N, R) <=> R is factorial(N).

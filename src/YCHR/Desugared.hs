@@ -22,6 +22,8 @@ module YCHR.Desugared
     Program (..),
     Rule (..),
     Head (..),
+    Function (..),
+    Equation (..),
 
     -- * Goals
     CommonGoal (..),
@@ -38,7 +40,11 @@ import Data.Text (Text)
 import YCHR.Pretty (AnnP)
 import YCHR.Types
 
-data Program = Program [Rule] deriving (Show)
+data Program = Program
+  { rules :: [Rule],
+    functions :: [Function]
+  }
+  deriving (Show)
 
 data Rule = Rule
   { name :: Maybe Text,
@@ -70,4 +76,19 @@ data BodyGoal
   | BodyUnify Term Term
   | BodyHostStmt Text [Term]
   | BodyIs Text Term
+  | BodyFunctionCall Name [Term]
   deriving (Show, Eq)
+
+data Function = Function
+  { name :: Name,
+    arity :: Int,
+    equations :: [Equation]
+  }
+  deriving (Show)
+
+data Equation = Equation
+  { params :: [Term],
+    guards :: [Guard],
+    rhs :: Term
+  }
+  deriving (Show)

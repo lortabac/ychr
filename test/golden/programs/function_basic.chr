@@ -1,0 +1,8 @@
+:- module(function_basic, [check/2]).
+:- chr_constraint check/2.
+:- function is_one/1.
+
+is_one(1) -> true.
+is_one(_) -> false.
+
+check(X, R) <=> R is is_one(X).

@@ -417,6 +417,7 @@ data Directive
   = DirModule Text [Declaration]
   | DirImport (Ann Import)
   | DirConstraintDecl [Ann Declaration]
+  | DirFunctionDecl [Ann Declaration]
   | DirOther
 
 -- | Parse a Prolog-style directive (@:- ...@).
@@ -437,6 +438,10 @@ directiveP = do
       decls <- constraintDeclP `sepBy1` comma
       _ <- symbol "."
       pure (DirConstraintDecl decls)
+    "function" -> do
+      decls <- functionDeclP `sepBy1` comma
+      _ <- symbol "."
+      pure (DirFunctionDecl decls)
     _ -> do
       -- Unknown directive: skip until the terminating dot.
       _ <- manyTill anySingle (char '.')
@@ -460,6 +465,40 @@ constraintDeclP = withLoc $ do
   arity <- lexeme L.decimal
   pure (ConstraintDecl name arity)
 
+-- | Parse a single function declaration: @name\/arity@.
+functionDeclP :: Parser (Ann Declaration)
+functionDeclP = withLoc $ do
+  name <- atomP
+  _ <- symbol "/"
+  arity <- lexeme L.decimal
+  pure (FunctionDecl name arity)
+
+-- | Parse a function equation: @name(pats) -> rhs.@ or @name(pats) | guard -> rhs.@
+functionEquationP :: Parser (Ann FunctionEquation)
+functionEquationP = withLoc $ do
+  name <- atomP
+  args <- parens (termP `sepBy` comma)
+  (guard_, rhs) <- guardRhsP
+  _ <- symbol "."
+  pure (FunctionEquation name args guard_ rhs)
+  where
+    guardRhsP = do
+      startPos <- getSourcePos
+      choice
+        [ do
+            _ <- symbol "|"
+            gs <- termP `sepBy1` comma
+            _ <- symbol "->"
+            rhsPos <- getSourcePos
+            rhs <- termP
+            pure (Ann gs (sourceLocFromPos startPos), Ann rhs (sourceLocFromPos rhsPos)),
+          do
+            _ <- symbol "->"
+            rhsPos <- getSourcePos
+            rhs <- termP
+            pure (Ann [] (sourceLocFromPos startPos), Ann rhs (sourceLocFromPos rhsPos))
+        ]
+
 -- | Parse an import specifier: either @library(name)@ or a plain module name.
 importP :: Parser (Ann Import)
 importP = withLoc (try libraryP <|> (ModuleImport <$> atomP))
@@ -472,15 +511,30 @@ importP = withLoc (try libraryP <|> (ModuleImport <$> atomP))
 -- Module
 -- ---------------------------------------------------------------------------
 
+data ModuleItem
+  = ItemDirective Directive
+  | ItemRule Rule
+  | ItemEquation (Ann FunctionEquation)
+
 -- | Parse a complete CHR module.
 moduleP :: Parser Module
 moduleP = do
-  items <- many (choice [Left <$> try directiveP, Right <$> ruleP])
-  let dirs = [d | Left d <- items]
-      rules = [r | Right r <- items]
+  items <-
+    many
+      ( choice
+          [ ItemDirective <$> try directiveP,
+            ItemEquation <$> try functionEquationP,
+            ItemRule <$> ruleP
+          ]
+      )
+  let dirs = [d | ItemDirective d <- items]
+      rules = [r | ItemRule r <- items]
+      eqs = [e | ItemEquation e <- items]
       (modName_, modExports_) = case [(n, e) | DirModule n e <- dirs] of
         ((n, e) : _) -> (n, Just e)
         [] -> (T.empty, Nothing)
       modImports_ = [n | DirImport n <- dirs]
-      modDecls_ = concat [ds | DirConstraintDecl ds <- dirs]
-  pure (Module modName_ modImports_ modDecls_ rules modExports_)
+      modDecls_ =
+        concat [ds | DirConstraintDecl ds <- dirs]
+          ++ concat [ds | DirFunctionDecl ds <- dirs]
+  pure (Module modName_ modImports_ modDecls_ rules eqs modExports_)

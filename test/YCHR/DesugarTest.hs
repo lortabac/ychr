@@ -35,7 +35,8 @@ desugar mods = case desugarProgram mods of
 
 singleRule :: [Module] -> IO D.Rule
 singleRule mods = do
-  D.Program rules <- desugar mods
+  prog <- desugar mods
+  let rules = prog.rules
   case rules of
     [r] -> return r
     rs -> assertFailure $ "expected 1 rule, got " ++ show (length rs)
@@ -252,16 +253,16 @@ flatteningTests =
     [ testCase "two modules with one rule each yield two rules" $ do
         let m1 = module' "A" `defining` [[("A" .: con "c" [])] <=> [atom "true"]]
             m2 = module' "B" `defining` [[("B" .: con "d" [])] <=> [atom "true"]]
-        D.Program rules <- desugar [m1, m2]
-        length rules @?= 2,
+        prog <- desugar [m1, m2]
+        length prog.rules @?= 2,
       testCase "empty module list yields empty program" $ do
-        D.Program rules <- desugar []
-        length rules @?= 0,
+        prog <- desugar []
+        length prog.rules @?= 0,
       testCase "module with no rules contributes no rules" $ do
         let empty = module' "Empty"
             m = module' "M" `defining` [[("M" .: con "c" [])] <=> [atom "true"]]
-        D.Program rules <- desugar [empty, m]
-        length rules @?= 1
+        prog <- desugar [empty, m]
+        length prog.rules @?= 1
     ]
 
 --------------------------------------------------------------------------------
@@ -290,7 +291,7 @@ symbolTableTests =
   testGroup
     "symbol-table"
     [ testCase "empty program yields empty table" $
-        extractSymbolTable (D.Program []) @?= mkSymbolTable [],
+        extractSymbolTable (D.Program [] []) @?= mkSymbolTable [],
       testCase "one qualified constraint in head gets id 0" $ do
         let prog =
               D.Program
@@ -300,6 +301,7 @@ symbolTableTests =
                     (noAnnP ([] :: [Term]) [])
                     (noAnnP ([] :: [Term]) [])
                 ]
+                []
         extractSymbolTable prog @?= mkSymbolTable [(Qualified "M" "leq", ConstraintType 0)],
       testCase "two distinct qualified constraints get sequential ids" $ do
         let prog =
@@ -310,6 +312,7 @@ symbolTableTests =
                     (noAnnP ([] :: [Term]) [])
                     (noAnnP ([] :: [Term]) [])
                 ]
+                []
         let table = extractSymbolTable prog
         symbolTableSize table @?= 2,
       testCase "same constraint in head and body appears only once" $ do
@@ -321,6 +324,7 @@ symbolTableTests =
                     (noAnnP ([] :: [Term]) [])
                     (noAnnP ([] :: [Term]) [D.BodyConstraint (Constraint (Qualified "M" "leq") [])])
                 ]
+                []
         extractSymbolTable prog @?= mkSymbolTable [(Qualified "M" "leq", ConstraintType 0)],
       testCase "unqualified name in body not in table" $ do
         let prog =
@@ -331,6 +335,7 @@ symbolTableTests =
                     (noAnnP ([] :: [Term]) [])
                     (noAnnP ([] :: [Term]) [D.BodyHostStmt "print" []])
                 ]
+                []
         let table = extractSymbolTable prog
         lookupSymbol (Unqualified "print") table @?= Nothing,
       testCase "ids assigned in Set.toList order (module-first then name)" $ do
@@ -351,6 +356,7 @@ symbolTableTests =
                     (noAnnP ([] :: [Term]) [])
                     (noAnnP ([] :: [Term]) [])
                 ]
+                []
         let table = extractSymbolTable prog
         (lookupSymbol (Qualified "A" "z") table, lookupSymbol (Qualified "B" "a") table)
           @?= (Just (ConstraintType 0), Just (ConstraintType 1))

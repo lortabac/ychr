@@ -65,7 +65,8 @@ renameProgram mods =
 renameModule :: LocalEnv -> GlobalEnv -> Module -> Eff '[Writer [RenameError]] Module
 renameModule localEnv exportEnv m = do
   renamedRules <- traverse (renameRule localEnv exportEnv m) m.rules
-  pure m {rules = renamedRules}
+  renamedEquations <- traverse (traverse (renameEquation localEnv exportEnv m)) m.equations
+  pure m {rules = renamedRules, equations = renamedEquations}
 
 -- | Controls how deeply name resolution is applied.
 data ResolveMode
@@ -83,6 +84,14 @@ renameRule localEnv exportEnv m r = do
   g <- traverse (traverse (renameTerm localEnv exportEnv m r.guard.sourceLoc ResolveAll)) r.guard
   b <- traverse (traverse (renameTerm localEnv exportEnv m r.body.sourceLoc ResolveTop)) r.body
   pure r {head = h, guard = g, body = b}
+
+renameEquation :: LocalEnv -> GlobalEnv -> Module -> FunctionEquation -> Eff '[Writer [RenameError]] FunctionEquation
+renameEquation localEnv exportEnv m eq = do
+  let loc = eq.guard.sourceLoc
+  renamedArgs <- traverse (renameTerm localEnv exportEnv m loc NoResolve) eq.args
+  renamedGuard <- traverse (traverse (renameTerm localEnv exportEnv m loc ResolveAll)) eq.guard
+  renamedRhs <- traverse (renameTerm localEnv exportEnv m eq.rhs.sourceLoc ResolveAll) eq.rhs
+  pure eq {args = renamedArgs, guard = renamedGuard, rhs = renamedRhs}
 
 renameHead :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Head -> Eff '[Writer [RenameError]] Head
 renameHead localEnv exportEnv m loc h = case h of

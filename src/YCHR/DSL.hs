@@ -12,7 +12,7 @@ import YCHR.Types
 
 -- | Create a new module definition
 module' :: Text -> Module
-module' name = Module name [] [] [] Nothing
+module' name = Module name [] [] [] [] Nothing
 
 -- | Set the export list of a module
 exporting :: Module -> [Declaration] -> Module

@@ -47,7 +47,8 @@ stripModLoc m =
   m
     { imports = map (noAnn . (.node)) m.imports,
       decls = map (noAnn . (.node)) m.decls,
-      rules = map stripRuleLoc m.rules
+      rules = map stripRuleLoc m.rules,
+      equations = map (noAnn . (.node)) m.equations
     }
 
 -- ---------------------------------------------------------------------------
@@ -300,6 +301,7 @@ moduleTests =
                     (noAnn [])
                     (noAnn [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
                 ]
+                []
                 (Just [])
             ),
       testCase "no module directive gives empty name" $

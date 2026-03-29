@@ -303,6 +303,23 @@ The paper describes numerous optimizations. Each should be considered individual
 | Recursion Optimizations | Trampoline, explicit stack. | Backend |
 
 
+## User-Defined Functions
+
+The language supports user-defined functions: pattern-matching, top-to-bottom evaluated equations with optional guard clauses. Functions are declared with `:- function` directives and defined with Erlang-style equations using `->`:
+
+```
+:- function factorial/1.
+factorial(0) -> 1.
+factorial(N) | N > 0 -> N * factorial(N - 1).
+```
+
+Functions are callable in guards, `is` RHS expressions, and rule body position (discarding the result). They compile to ordinary VM procedures via `CallExpr` — no new VM instructions are needed.
+
+Equation patterns are normalized using the same Head Normal Form (HNF) machinery as rule heads: non-variable patterns become fresh variables with explicit guard conditions. Equations are tried top-to-bottom; if no equation matches, a runtime error is raised.
+
+Function names are qualified like constraint names and cannot collide with constraint declarations in the same module.
+
+
 ## Already implemented
 
 - Frontend parser in `src/YCHR/Parser.hs`.
@@ -318,6 +335,7 @@ The paper describes numerous optimizations. Each should be considered individual
 - Propagation history for the Haskell runtime in `src/YCHR/Runtime/History.hs`.
 - Reactivation queue in `src/YCHR/Runtime/Reactivation.hs`.
 - Haskell interpreter in `src/YCHR/Runtime/Interpreter.hs`.
+- User-defined functions: parsing, renaming, desugaring, compilation, and interpretation.
 
 
 ## Work Remaining

@@ -45,23 +45,35 @@ data DesugarError
   = UnexpectedBodyTerm P.SourceLoc Term
   deriving (Eq, Show)
 
+-- | Collect all declared function names from a set of modules.
+buildFunctionSet :: [P.Module] -> Set.Set (Text, Int)
+buildFunctionSet mods =
+  Set.fromList
+    [ (d.name, d.arity)
+    | m <- mods,
+      P.Ann d _ <- m.decls,
+      isFunctionDecl d
+    ]
+  where
+    isFunctionDecl (P.FunctionDecl _ _) = True
+    isFunctionDecl _ = False
+
 -- | The primary entry point: converts parsed modules to a desugared program.
 desugarProgram :: [P.Module] -> Either [DesugarError] D.Program
 desugarProgram mods =
-  let (result, errs) = runPureEff . runWriter $ do
-        rules <- traverse desugarRule [r | m <- mods, r <- m.rules]
-        pure (D.Program rules)
+  let funSet = buildFunctionSet mods
+      (result, errs) = runPureEff . runWriter $ do
+        rules <- traverse (desugarRule funSet) [r | m <- mods, r <- m.rules]
+        let functions = desugarFunctions mods
+        pure (D.Program rules functions)
    in if null errs then Right result else Left errs
 
 -- | Scans a desugared program and builds the optimization map.
 -- It ensures that all Qualified names get a sequential ID starting from 0.
 extractSymbolTable :: D.Program -> SymbolTable
-extractSymbolTable (D.Program rules) =
-  let -- 1. Collect every name used in a CHR constraint position
+extractSymbolTable prog =
+  let rules = prog.rules
       allNames = Set.fromList [c.name | r <- rules, c <- getRuleConstraints r]
-
-      -- 2. Only include 'Qualified' names in the table.
-      -- Unqualified names (host calls) do not get integer IDs.
       qualifiedNames = [n | n@(Qualified _ _) <- Set.toList allNames]
    in mkSymbolTable (zip qualifiedNames (map ConstraintType [0 ..]))
 
@@ -74,9 +86,9 @@ getRuleConstraints r =
         ++ rHead.removed
         ++ [c | D.BodyConstraint c <- rBody]
 
-desugarRule :: P.Rule -> Eff '[Writer [DesugarError]] D.Rule
-desugarRule r = do
-  ruleBody <- traverse (desugarBodyGoal r.body.sourceLoc) r.body.node
+desugarRule :: Set.Set (Text, Int) -> P.Rule -> Eff '[Writer [DesugarError]] D.Rule
+desugarRule funSet r = do
+  ruleBody <- traverse (desugarBodyGoal funSet r.body.sourceLoc) r.body.node
   let rawHead = desugarHead r.head.node
       (hnfGuards, normalizedHead) = normalizeHead rawHead
       userGuards = map desugarGuard r.guard.node
@@ -191,18 +203,54 @@ decomposeArg st parentVar i term =
           hnfGuards = eqGuard : getGuard : st.hnfGuards
         }
 
+-- | Desugar function equations: group by name, normalize patterns via HNF.
+desugarFunctions :: [P.Module] -> [D.Function]
+desugarFunctions mods =
+  [ desugarFunction m.name d.name d.arity eqs
+  | m <- mods,
+    P.Ann d _ <- m.decls,
+    isFunctionDecl d,
+    let eqs = [eq | P.Ann eq _ <- m.equations, eq.funName == d.name]
+  ]
+  where
+    isFunctionDecl (P.FunctionDecl _ _) = True
+    isFunctionDecl _ = False
+
+desugarFunction :: Text -> Text -> Int -> [P.FunctionEquation] -> D.Function
+desugarFunction modName funName arity eqs =
+  D.Function
+    { name = Qualified modName funName,
+      arity = arity,
+      equations = map desugarEquation eqs
+    }
+
+desugarEquation :: P.FunctionEquation -> D.Equation
+desugarEquation eq =
+  let initState = HnfState 0 Map.empty []
+      (st, normalizedArgs) = mapAccumL normalizeArg initState eq.args
+      hnfGuards = reverse st.hnfGuards
+      userGuards = map desugarGuard eq.guard.node
+   in D.Equation
+        { params = normalizedArgs,
+          guards = hnfGuards ++ userGuards,
+          rhs = eq.rhs.node
+        }
+
 desugarGuard :: Term -> D.Guard
 desugarGuard (AtomTerm "true") = D.GuardCommon D.GoalTrue
 desugarGuard t@(CompoundTerm _ _) = D.GuardExpr t
 desugarGuard _ = D.GuardCommon D.GoalTrue
 
-desugarBodyGoal :: P.SourceLoc -> Term -> Eff '[Writer [DesugarError]] D.BodyGoal
-desugarBodyGoal loc t = case t of
+desugarBodyGoal :: Set.Set (Text, Int) -> P.SourceLoc -> Term -> Eff '[Writer [DesugarError]] D.BodyGoal
+desugarBodyGoal funSet loc t = case t of
   CompoundTerm (Unqualified "=") [l, r] -> pure $ D.BodyUnify l r
   CompoundTerm (Unqualified "is") [VarTerm v, expr] ->
     pure $ D.BodyIs v expr
   CompoundTerm (Qualified "host" f) args ->
     pure $ D.BodyHostStmt f args
+  CompoundTerm name@(Qualified _ n) args
+    | Set.member (n, length args) funSet ->
+        pure $ D.BodyFunctionCall name args
   CompoundTerm (Qualified m n) args ->
     pure $ D.BodyConstraint (Constraint (Qualified m n) args)
   AtomTerm "true" -> pure $ D.BodyCommon D.GoalTrue

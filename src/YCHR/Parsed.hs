@@ -32,6 +32,7 @@ module YCHR.Parsed
     Declaration (..),
     Rule (..),
     Head (..),
+    FunctionEquation (..),
 
     -- * Re-exports from YCHR.Types
     Constraint (..),
@@ -76,13 +77,21 @@ data Module = Module
     imports :: [Ann Import],
     decls :: [Ann Declaration],
     rules :: [Rule],
+    equations :: [Ann FunctionEquation],
     exports :: Maybe [Declaration]
   }
   deriving (Show, Eq, Lift)
 
-data Declaration = ConstraintDecl
-  { name :: Text,
-    arity :: Int
+data Declaration
+  = ConstraintDecl {name :: Text, arity :: Int}
+  | FunctionDecl {name :: Text, arity :: Int}
+  deriving (Show, Eq, Lift)
+
+data FunctionEquation = FunctionEquation
+  { funName :: Text,
+    args :: [Term],
+    guard :: Ann [Term],
+    rhs :: Ann Term
   }
   deriving (Show, Eq, Lift)
 
