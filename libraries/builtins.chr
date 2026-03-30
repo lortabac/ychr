@@ -1,6 +1,15 @@
-:- module(builtins, [identity/2, print/1]).
+:- module(builtins, [
+  identity/2,
+  print/1,
+  '+'/2,
+  op(500, yfx, '+')
+]).
 :- chr_constraint identity/2, print/1.
 
 identity(X, Y) <=> X = Y.
 
 print(X) <=> host:print(X).
+
+:- function '+'/2.
+
+X + Y -> host:'+'(X, Y).

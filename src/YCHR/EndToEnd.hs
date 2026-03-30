@@ -57,7 +57,7 @@ import YCHR.Desugar (DesugarError, desugarProgram, desugarQueryGoals, extractSym
 import YCHR.Desugared qualified as D
 import YCHR.Meta (valueToTerm)
 import YCHR.Parsed (Import (..), Module (..), noAnn)
-import YCHR.Parser (parseConstraint, parseModule, parseQuery)
+import YCHR.Parser (OpTable, builtinOps, collectOperatorDecls, extractOpDecls, mergeOps, parseConstraint, parseModuleWith, parseQueryWith)
 import YCHR.Rename (RenameError, buildExportEnv, renameProgram, renameQueryGoals)
 import YCHR.Rename.Types (toListGlobal)
 import YCHR.Runtime.History (PropHistory, runPropHistory)
@@ -85,7 +85,8 @@ data CompiledProgram = CompiledProgram
     exportMap :: Map (Text, Int) ExportResolution,
     exportedSet :: Set Types.Name,
     symbolTable :: SymbolTable,
-    allModules :: [Module]
+    allModules :: [Module],
+    opTable :: OpTable
   }
 
 data ExportResolution
@@ -95,7 +96,29 @@ data ExportResolution
 
 compileModules :: Bool -> [(FilePath, Text)] -> Either Error CompiledProgram
 compileModules includeStdlib inputs = do
-  parsed <- mapM (\(fp, txt) -> first (ParseError fp) (parseModule fp txt)) inputs
+  -- Collect operators from user sources (lightweight first pass)
+  userOps <-
+    first (\(fp, e) -> ParseError fp e) $
+      fmap concat $
+        traverse (\(fp, src) -> first' (fp,) (collectOperatorDecls fp src)) inputs
+  -- Collect operators from all stdlib modules (already parsed by TH).
+  -- Always include these since builtins are auto-imported regardless of
+  -- includeStdlib, and extra syntactic operators don't affect correctness.
+  let stdlibOps = concatMap extractOpDecls (Map.elems stdlib)
+  -- Merge all operators into one table
+  table <- case mergeOps builtinOps (userOps ++ stdlibOps) of
+    Left conflict ->
+      Left
+        ( ParseError
+            "<operators>"
+            (error ("Operator naming conflict: " ++ T.unpack conflict))
+        )
+    Right t -> Right t
+  -- Full parse user modules with the merged operator table
+  parsed <-
+    traverse
+      (\(fp, src) -> first (ParseError fp) (parseModuleWith table fp src))
+      inputs
   let withBuiltins = map addBuiltinsImport parsed
   collected <- first CollectErrors (collectLibraries includeStdlib stdlib withBuiltins)
   let exportEnv = buildExportEnv collected
@@ -111,8 +134,10 @@ compileModules includeStdlib inputs = do
   desugared <- first DesugarErrors (desugarProgram renamed)
   let symTab = extractSymbolTable desugared
   prog <- first CompileErrors (compile desugared symTab)
-  pure (CompiledProgram prog exportMap exportedSet symTab collected)
+  pure (CompiledProgram prog exportMap exportedSet symTab collected table)
   where
+    first' f (Left e) = Left (f e)
+    first' _ (Right x) = Right x
     toResolution n [m] = UniqueExport (Types.Qualified m n)
     toResolution _ ms = AmbiguousExport ms
 
@@ -301,7 +326,7 @@ termToValue (CompoundTerm (Types.Qualified m f) ts) = VTerm (m <> ":" <> f) <$> 
 -- renames and desugars them like rule bodies, then executes each goal.
 runProgramWithQuery :: CompiledProgram -> HostCallRegistry -> Text -> IO (Map Text Term)
 runProgramWithQuery cp hostCalls src =
-  case parseQuery "<query>" src of
+  case parseQueryWith cp.opTable "<query>" src of
     Left err -> fail (show err)
     Right goals -> do
       renamed <- either (fail . show) pure (renameQueryGoals cp.allModules goals)

@@ -45,6 +45,7 @@ buildLocalEnv mods =
 
 -- | Only exported constraints (for cross-module resolution).
 -- Modules without a @module@ directive (modExports = Nothing) export everything.
+-- Operator declarations are filtered out since they are not named entities.
 buildExportEnv :: [Module] -> GlobalEnv
 buildExportEnv mods =
   makeGlobalEnv
@@ -52,8 +53,12 @@ buildExportEnv mods =
     | m <- mods,
       d <- case m.exports of
         Nothing -> map (.node) m.decls
-        Just exports -> exports
+        Just exports -> filter (not . isOperatorDecl) exports
     ]
+
+isOperatorDecl :: Declaration -> Bool
+isOperatorDecl (OperatorDecl _) = True
+isOperatorDecl _ = False
 
 renameProgram :: [Module] -> Either [RenameError] [Module]
 renameProgram mods =

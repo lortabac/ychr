@@ -161,6 +161,7 @@ library
                     , parser-combinators
                     , template-haskell
                     , text
+                    , transformers
                     , vector
 
     -- Directories containing source files.

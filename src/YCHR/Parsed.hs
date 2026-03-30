@@ -30,6 +30,8 @@ module YCHR.Parsed
     Module (..),
     Import (..),
     Declaration (..),
+    OpType (..),
+    OpDecl (..),
     Rule (..),
     Head (..),
     FunctionEquation (..),
@@ -85,6 +87,22 @@ data Module = Module
 data Declaration
   = ConstraintDecl {name :: Text, arity :: Int}
   | FunctionDecl {name :: Text, arity :: Int}
+  | OperatorDecl OpDecl
+  deriving (Show, Eq, Lift)
+
+data OpType
+  = InfixL_
+  | InfixR_
+  | InfixN_
+  | Prefix_
+  | Postfix_
+  deriving (Show, Eq, Lift)
+
+data OpDecl = OpDecl
+  { fixity :: Int,
+    opType :: OpType,
+    opName :: Text
+  }
   deriving (Show, Eq, Lift)
 
 data FunctionEquation = FunctionEquation

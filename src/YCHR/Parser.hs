@@ -25,15 +25,29 @@
 -- @
 module YCHR.Parser
   ( parseModule,
+    parseModuleWith,
+    parseModules,
     parseConstraint,
     parseQuery,
+    parseQueryWith,
     parseTerm,
+    parseTermWith,
     parseRule,
+    OpTable,
+    builtinOps,
+    mergeOps,
+    collectOperatorDecls,
+    extractOpDecls,
   )
 where
 
-import Control.Monad (void)
+import Control.Monad (void, when)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
+import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
+import Data.IntMap.Strict (IntMap)
+import Data.IntMap.Strict qualified as IntMap
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void)
@@ -42,6 +56,130 @@ import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
 import YCHR.Parsed
 import YCHR.Types
+
+-- ---------------------------------------------------------------------------
+-- Operator table
+-- ---------------------------------------------------------------------------
+
+-- | Operator table: maps fixity level to a list of operators at that level.
+data OpTable = OpTable
+  { opsByFixity :: IntMap [(OpType, Text)],
+    -- | Precomputed set of word (non-symbolic) operator names, for reserving
+    -- them in 'atomP'.
+    wordOpSet :: Set Text
+  }
+  deriving (Show)
+
+-- | Built-in operators at their standard Prolog fixity levels.
+builtinOps :: OpTable
+builtinOps = mkOpTable [(700, [(InfixN_, "is"), (InfixN_, "=")])]
+
+-- | Build an 'OpTable' from a list of (fixity, operators) pairs.
+mkOpTable :: [(Int, [(OpType, Text)])] -> OpTable
+mkOpTable entries =
+  OpTable
+    { opsByFixity = IntMap.fromListWith (++) entries,
+      wordOpSet =
+        Set.fromList
+          [ name
+          | (_, ops) <- entries,
+            (_, name) <- ops,
+            not (isSymbolic name)
+          ]
+    }
+
+-- | Merge user-defined operators into an existing table.
+-- Returns 'Left' with the conflicting operator name if a naming conflict is
+-- found (same operator name at a different fixity or type).
+mergeOps :: OpTable -> [OpDecl] -> Either Text OpTable
+mergeOps base decls = do
+  -- Check for conflicts: same name with different fixity or type
+  let existing =
+        [ (name, (fix, ty))
+        | (fix, ops) <- IntMap.toList base.opsByFixity,
+          (ty, name) <- ops
+        ]
+      newOps = [(d.opName, (d.fixity, d.opType)) | d <- decls]
+      allOps = existing ++ newOps
+      -- Group by name, check all entries for a name are identical
+      grouped = foldr (\(n, ft) acc -> IntMap.alter (addToGroup n ft) (hashName n) acc) IntMap.empty allOps
+  checkConflicts (IntMap.elems grouped)
+  let userEntries =
+        [ (d.fixity, [(d.opType, d.opName)])
+        | d <- decls
+        ]
+  pure
+    OpTable
+      { opsByFixity = IntMap.unionWith (++) base.opsByFixity (IntMap.fromListWith (++) userEntries),
+        wordOpSet =
+          Set.union
+            base.wordOpSet
+            (Set.fromList [d.opName | d <- decls, not (isSymbolic d.opName)])
+      }
+  where
+    hashName :: Text -> Int
+    hashName = T.foldl' (\acc c -> acc * 31 + fromEnum c) 0
+
+    addToGroup :: Text -> (Int, OpType) -> Maybe [(Text, (Int, OpType))] -> Maybe [(Text, (Int, OpType))]
+    addToGroup n ft Nothing = Just [(n, ft)]
+    addToGroup n ft (Just xs) = Just ((n, ft) : xs)
+
+    checkConflicts :: [[(Text, (Int, OpType))]] -> Either Text ()
+    checkConflicts [] = pure ()
+    checkConflicts (group : rest) = do
+      -- Within each hash bucket, check names that match
+      let byName = foldr (\(n, ft) acc -> insertWith n ft acc) [] group
+      mapM_ checkNameGroup byName
+      checkConflicts rest
+
+    insertWith :: Text -> (Int, OpType) -> [(Text, [(Int, OpType)])] -> [(Text, [(Int, OpType)])]
+    insertWith n ft [] = [(n, [ft])]
+    insertWith n ft ((n', fts) : rest)
+      | n == n' = (n', ft : fts) : rest
+      | otherwise = (n', fts) : insertWith n ft rest
+
+    checkNameGroup :: (Text, [(Int, OpType)]) -> Either Text ()
+    checkNameGroup (_, []) = pure ()
+    checkNameGroup (_, [_]) = pure ()
+    checkNameGroup (name, (ft : fts))
+      | all (== ft) fts = pure ()
+      | otherwise = Left name
+
+-- | Check whether a name consists entirely of symbol characters.
+isSymbolic :: Text -> Bool
+isSymbolic = T.all (`elem` symbolChars)
+
+-- | Characters that can appear in symbol operators.
+symbolChars :: [Char]
+symbolChars = ":=<>+-*/#@^~!&?"
+
+-- | Convert an 'OpTable' to the format expected by 'makeExprParser'.
+-- @makeExprParser@ expects groups in descending precedence (tightest first).
+-- In Prolog, lower fixity number = higher precedence (tighter binding),
+-- so we sort fixity keys in ascending order.
+buildExprOpTable :: OpTable -> [[Operator Parser Term]]
+buildExprOpTable table =
+  [ concatMap toMegaparsecOp ops
+  | (_, ops) <- IntMap.toAscList table.opsByFixity
+  ]
+  where
+    toMegaparsecOp :: (OpType, Text) -> [Operator Parser Term]
+    toMegaparsecOp (InfixL_, name) = [InfixL (binOp name <$ opParser name)]
+    toMegaparsecOp (InfixR_, name) = [InfixR (binOp name <$ opParser name)]
+    toMegaparsecOp (InfixN_, name) = [InfixN (binOp name <$ opParser name)]
+    toMegaparsecOp (Prefix_, name) = [Prefix (unOp name <$ opParser name)]
+    toMegaparsecOp (Postfix_, name) = [Postfix (unOp name <$ opParser name)]
+
+    binOp op l r = CompoundTerm (Unqualified op) [l, r]
+    unOp op x = CompoundTerm (Unqualified op) [x]
+
+    opParser name
+      | isSymbolic name = symbolOp name
+      | otherwise = wordOp name
+
+-- ---------------------------------------------------------------------------
+-- Parser type and runners
+-- ---------------------------------------------------------------------------
 
 -- | Convert a megaparsec 'SourcePos' to a 'SourceLoc'.
 sourceLocFromPos :: SourcePos -> SourceLoc
@@ -59,17 +197,64 @@ withLoc p = do
   x <- p
   pure (Ann x (sourceLocFromPos sp))
 
--- | Parser type: 'Text' input, no custom error components.
-type Parser = Parsec Void Text
+-- | Parser type: 'Text' input with an 'OpTable' reader environment.
+type Parser = ReaderT OpTable (Parsec Void Text)
 
--- | Parse a CHR module from source text.
+-- | Run a 'Parser' with a given 'OpTable'.
+runP :: OpTable -> Parser a -> String -> Text -> Either (ParseErrorBundle Text Void) a
+runP table p = parse (runReaderT p table)
+
+-- | Parse a CHR module from source text using the built-in operator table.
 --
 -- The first argument is the source file name (used in error messages only).
 parseModule ::
   String ->
   Text ->
   Either (ParseErrorBundle Text Void) Module
-parseModule = parse (sc *> moduleP <* eof)
+parseModule = parseModuleWith builtinOps
+
+-- | Parse a CHR module from source text using a custom operator table.
+parseModuleWith ::
+  OpTable ->
+  String ->
+  Text ->
+  Either (ParseErrorBundle Text Void) Module
+parseModuleWith table = runP table (sc *> moduleP <* eof)
+
+-- | Parse multiple modules using a two-pass approach:
+--
+-- 1. Collect operator declarations from all module directives.
+-- 2. Merge with built-in operators (error on naming conflicts).
+-- 3. Full-parse all modules with the merged operator table.
+parseModules ::
+  [(String, Text)] ->
+  Either (String, ParseErrorBundle Text Void) (OpTable, [Module])
+parseModules inputs = do
+  -- Pass 1: collect operator declarations from all modules
+  allOps <-
+    concat
+      <$> traverse
+        (\(fp, src) -> first' (fp,) (collectOperatorDecls fp src))
+        inputs
+  -- Merge with builtins
+  table <- case mergeOps builtinOps allOps of
+    Left conflict ->
+      Left
+        ( "<operators>",
+          -- Produce a dummy ParseErrorBundle — the caller should handle this
+          -- differently, but we keep the type uniform for now.
+          error ("Operator naming conflict: " ++ T.unpack conflict)
+        )
+    Right t -> Right t
+  -- Pass 2: full parse with merged table
+  mods <-
+    traverse
+      (\(fp, src) -> first' (fp,) (parseModuleWith table fp src))
+      inputs
+  pure (table, mods)
+  where
+    first' f (Left e) = Left (f e)
+    first' _ (Right x) = Right x
 
 -- | Parse a single constraint from surface-language 'Text'.
 --
@@ -79,7 +264,7 @@ parseConstraint ::
   String ->
   Text ->
   Either (ParseErrorBundle Text Void) Constraint
-parseConstraint = parse (sc *> constraintP <* eof)
+parseConstraint = runP builtinOps (sc *> constraintP <* eof)
 
 -- | Parse a single term from surface-language 'Text'.
 --
@@ -89,7 +274,15 @@ parseTerm ::
   String ->
   Text ->
   Either (ParseErrorBundle Text Void) Term
-parseTerm = parse (sc *> termP <* eof)
+parseTerm = parseTermWith builtinOps
+
+-- | Parse a single term with a custom operator table.
+parseTermWith ::
+  OpTable ->
+  String ->
+  Text ->
+  Either (ParseErrorBundle Text Void) Term
+parseTermWith table = runP table (sc *> termP <* eof)
 
 -- | Parse a query: a comma-separated list of goals terminated by a dot.
 --
@@ -99,7 +292,15 @@ parseQuery ::
   String ->
   Text ->
   Either (ParseErrorBundle Text Void) [Term]
-parseQuery = parse (sc *> termP `sepBy1` comma <* symbol "." <* eof)
+parseQuery = parseQueryWith builtinOps
+
+-- | Parse a query with a custom operator table.
+parseQueryWith ::
+  OpTable ->
+  String ->
+  Text ->
+  Either (ParseErrorBundle Text Void) [Term]
+parseQueryWith table = runP table (sc *> termP `sepBy1` comma <* symbol "." <* eof)
 
 -- | Parse a single CHR rule from surface-language 'Text'.
 --
@@ -108,14 +309,14 @@ parseRule ::
   String ->
   Text ->
   Either (ParseErrorBundle Text Void) Rule
-parseRule = parse (sc *> ruleP <* eof)
+parseRule = runP builtinOps (sc *> ruleP <* eof)
 
 -- ---------------------------------------------------------------------------
 -- Space consumer and lexeme helpers
 -- ---------------------------------------------------------------------------
 
 -- | Consume whitespace and @%@ line comments.
-sc :: Parser ()
+sc :: (MonadParsec Void Text m) => m ()
 sc = L.space space1 (L.skipLineComment "%") empty
 
 -- | Wrap a parser to consume trailing whitespace.
@@ -162,7 +363,8 @@ atomP = lexeme (unquotedP <|> quotedP)
     unquotedP = do
       name <- (:) <$> lowerChar <*> many (alphaNumChar <|> char '_')
       let t = T.pack name
-      if t `elem` reservedWords
+      wordOps <- (.wordOpSet) <$> ask
+      if t `elem` reservedWords || Set.member t wordOps
         then fail ("reserved word: " ++ name)
         else pure t
     quotedP = T.pack <$> (char '\'' *> go)
@@ -231,10 +433,15 @@ wordOp w = lexeme $ try $ do
 -- backtracking if the run does not equal the expected operator.
 symbolOp :: Text -> Parser Text
 symbolOp op = lexeme $ try $ do
-  s <- T.pack <$> some (oneOf (":=<>+-*/" :: String))
+  s <- T.pack <$> some (oneOf symbolChars)
   if s == op
     then pure s
     else fail ("expected operator " ++ show op)
+
+-- | Parse a sequence of symbol characters as an atom name (for operator names
+-- like @\<\>@ or @\<\<\>\>@).
+symbolAtomP :: Parser Text
+symbolAtomP = lexeme $ T.pack <$> some (oneOf symbolChars)
 
 -- ---------------------------------------------------------------------------
 -- Terms
@@ -301,19 +508,11 @@ atomicTermP =
       atomOrCompoundP
     ]
 
--- | Operator table from lowest to highest precedence.
-operatorTable :: [[Operator Parser Term]]
-operatorTable =
-  [ [ InfixN (binOp "is" <$ wordOp "is"),
-      InfixN (binOp "=" <$ symbolOp "=")
-    ]
-  ]
-  where
-    binOp op l r = CompoundTerm (Unqualified op) [l, r]
-
 -- | Parse a term, including infix operator expressions.
 termP :: Parser Term
-termP = makeExprParser atomicTermP operatorTable
+termP = do
+  table <- ask
+  makeExprParser atomicTermP (buildExprOpTable table)
 
 -- | Parse an atom optionally followed by a parenthesised argument list.
 -- Produces 'CompoundTerm' if arguments are present, 'AtomTerm' otherwise.
@@ -454,8 +653,39 @@ moduleArgsP :: Parser (Text, [Declaration])
 moduleArgsP = do
   name <- atomP
   _ <- comma
-  exports <- brackets (map (.node) <$> constraintDeclP `sepBy` comma)
+  exports <- brackets (exportItemP `sepBy` comma)
   pure (name, exports)
+
+-- | Parse a single export item: either @name\/arity@ or @op(fixity, type, name)@.
+exportItemP :: Parser Declaration
+exportItemP = try opDeclP <|> ((.node) <$> constraintDeclP)
+
+-- | Parse an operator declaration: @op(fixity, type, name)@.
+opDeclP :: Parser Declaration
+opDeclP = do
+  _ <- symbol "op"
+  _ <- symbol "("
+  fix <- lexeme L.decimal
+  when (fix < 1 || fix > 1199) $
+    fail ("operator fixity must be between 1 and 1199, got: " ++ show fix)
+  _ <- comma
+  ty <- opTypeP
+  _ <- comma
+  name <- atomP <|> symbolAtomP
+  _ <- symbol ")"
+  pure (OperatorDecl (OpDecl fix ty name))
+
+-- | Parse an operator type specifier.
+opTypeP :: Parser OpType
+opTypeP =
+  lexeme $
+    choice
+      [ InfixL_ <$ try (string "yfx" <* notFollowedBy alphaNumChar),
+        InfixR_ <$ try (string "xfy" <* notFollowedBy alphaNumChar),
+        InfixN_ <$ try (string "xfx" <* notFollowedBy alphaNumChar),
+        Prefix_ <$ try (string "fx" <* notFollowedBy alphaNumChar),
+        Postfix_ <$ try (string "xf" <* notFollowedBy alphaNumChar)
+      ]
 
 -- | Parse a single constraint declaration: @name\/arity@.
 constraintDeclP :: Parser (Ann Declaration)
@@ -473,15 +703,30 @@ functionDeclP = withLoc $ do
   arity <- lexeme L.decimal
   pure (FunctionDecl name arity)
 
--- | Parse a function equation: @name(pats) -> rhs.@ or @name(pats) | guard -> rhs.@
+-- | Parse a function equation.
+--
+-- Supports both prefix and infix notation:
+--
+-- * Prefix: @name(pats) -> rhs.@ or @name(pats) | guard -> rhs.@
+-- * Infix:  @X + Y -> rhs.@ or @X + Y | guard -> rhs.@
+-- * Prefix op: @- X -> rhs.@
 functionEquationP :: Parser (Ann FunctionEquation)
-functionEquationP = withLoc $ do
-  name <- atomP
-  args <- parens (termP `sepBy` comma)
-  (guard_, rhs) <- guardRhsP
-  _ <- symbol "."
-  pure (FunctionEquation name args guard_ rhs)
+functionEquationP = withLoc (try prefixEq <|> operatorEq)
   where
+    prefixEq = do
+      name <- atomP
+      args <- parens (termP `sepBy` comma)
+      (guard_, rhs) <- guardRhsP
+      _ <- symbol "."
+      pure (FunctionEquation name args guard_ rhs)
+    operatorEq = do
+      lhs <- termP
+      case lhs of
+        CompoundTerm (Unqualified name) args -> do
+          (guard_, rhs) <- guardRhsP
+          _ <- symbol "."
+          pure (FunctionEquation name args guard_ rhs)
+        _ -> fail "expected function equation"
     guardRhsP = do
       startPos <- getSourcePos
       choice
@@ -538,3 +783,113 @@ moduleP = do
         concat [ds | DirConstraintDecl ds <- dirs]
           ++ concat [ds | DirFunctionDecl ds <- dirs]
   pure (Module modName_ modImports_ modDecls_ rules eqs modExports_)
+
+-- ---------------------------------------------------------------------------
+-- First-pass operator collector
+-- ---------------------------------------------------------------------------
+
+-- | Plain parser type for the first-pass collector (no ReaderT needed).
+type Parser' = Parsec Void Text
+
+-- | Collect operator declarations from a module's @:- module(...)@ directive.
+--
+-- Since the module directive is always at the top of the file, this parser
+-- consumes leading whitespace, attempts to parse a @:- module(Name, [...]).@
+-- directive, extracts any @op(...)@ entries from the export list, and returns
+-- them. If no module directive is found, returns @[]@.
+collectOperatorDecls :: String -> Text -> Either (ParseErrorBundle Text Void) [OpDecl]
+collectOperatorDecls = parse (sc' *> collectP)
+  where
+    sc' :: Parser' ()
+    sc' = L.space space1 (L.skipLineComment "%") empty
+
+    lexeme' :: Parser' a -> Parser' a
+    lexeme' = L.lexeme sc'
+
+    symbol' :: Text -> Parser' Text
+    symbol' = L.symbol sc'
+
+    atomP' :: Parser' Text
+    atomP' = lexeme' (unquotedP <|> quotedP)
+      where
+        unquotedP = do
+          name <- (:) <$> lowerChar <*> many (alphaNumChar <|> char '_')
+          pure (T.pack name)
+        quotedP = T.pack <$> (char '\'' *> go)
+          where
+            go =
+              choice
+                [ do
+                    _ <- char '\''
+                    choice
+                      [ char '\'' *> (('\'' :) <$> go),
+                        pure []
+                      ],
+                  do
+                    _ <- char '\\'
+                    c <- anySingle
+                    (c :) <$> go,
+                  do
+                    c <- satisfy (\c -> c /= '\'' && c /= '\\')
+                    (c :) <$> go
+                ]
+
+    symbolAtomP' :: Parser' Text
+    symbolAtomP' = lexeme' $ T.pack <$> some (oneOf symbolChars)
+
+    commaP :: Parser' ()
+    commaP = void (symbol' ",")
+
+    opTypeP' :: Parser' OpType
+    opTypeP' =
+      lexeme' $
+        choice
+          [ InfixL_ <$ try (string "yfx" <* notFollowedBy alphaNumChar),
+            InfixR_ <$ try (string "xfy" <* notFollowedBy alphaNumChar),
+            InfixN_ <$ try (string "xfx" <* notFollowedBy alphaNumChar),
+            Prefix_ <$ try (string "fx" <* notFollowedBy alphaNumChar),
+            Postfix_ <$ try (string "xf" <* notFollowedBy alphaNumChar)
+          ]
+
+    -- Parse a single export item: either op(...) returning Just, or name/arity returning Nothing.
+    exportItemP' :: Parser' (Maybe OpDecl)
+    exportItemP' = try opDeclP' <|> (Nothing <$ declP')
+      where
+        opDeclP' = do
+          _ <- symbol' "op"
+          _ <- symbol' "("
+          fix <- lexeme' L.decimal
+          when (fix < 1 || fix > 1199) $
+            fail ("operator fixity must be between 1 and 1199, got: " ++ show fix)
+          _ <- commaP
+          ty <- opTypeP'
+          _ <- commaP
+          name <- atomP' <|> symbolAtomP'
+          _ <- symbol' ")"
+          pure (Just (OpDecl fix ty name))
+        declP' = do
+          _ <- atomP'
+          _ <- symbol' "/"
+          _ <- lexeme' (L.decimal :: Parser' Int)
+          pure ()
+
+    collectP :: Parser' [OpDecl]
+    collectP =
+      option [] $ try $ do
+        _ <- symbol' ":-"
+        _ <- symbol' "module"
+        _ <- symbol' "("
+        _ <- atomP' -- module name
+        _ <- commaP
+        _ <- symbol' "["
+        items <- exportItemP' `sepBy` commaP
+        _ <- symbol' "]"
+        _ <- symbol' ")"
+        _ <- symbol' "."
+        pure [op | Just op <- items]
+
+-- | Extract operator declarations from an already-parsed module's export list.
+extractOpDecls :: Module -> [OpDecl]
+extractOpDecls m = case m.exports of
+  Nothing -> []
+  Just exports -> [op | OperatorDecl op <- exports]
