@@ -36,7 +36,8 @@ collectLibraries includeStdlib stdlibMap userMods =
           ++ concatMap libraryImports userMods
    in case resolveAll stdlibMap Set.empty Set.empty seeds of
         (_, libs, []) ->
-          let rewritten = map rewriteImports (libs ++ userMods)
+          let withBuiltins = map addBuiltinsImport libs
+              rewritten = map rewriteImports (withBuiltins ++ userMods)
            in Right rewritten
         (_, _, errs) -> Left errs
 
@@ -79,6 +80,12 @@ resolveAll stdlibMap visited path (name : rest)
               visited2 = Set.insert name visited1
               (visited3, restMods, restErrs) = resolveAll stdlibMap visited2 path rest
            in (visited3, depMods ++ [m] ++ restMods, depErrs ++ restErrs)
+
+-- | Add a builtins import to a library module (unless it is builtins itself).
+addBuiltinsImport :: Module -> Module
+addBuiltinsImport m
+  | m.name == "builtins" = m
+  | otherwise = m {imports = noAnn (LibraryImport "builtins") : m.imports}
 
 -- | Rewrite all 'LibraryImport' entries to 'ModuleImport'.
 rewriteImports :: Module -> Module

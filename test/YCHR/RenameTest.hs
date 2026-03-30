@@ -259,6 +259,29 @@ goalClassificationTests =
         rule <- singleRule m
         rule.body.node
           @?= [CompoundTerm (Qualified "M" "leq") [CompoundTerm (Unqualified "pair") [VarTerm "X"]]],
+      testCase "unknown functor in guard stays Unqualified (data constructor)" $ do
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [ ([con "c" [var "X"]] <=> [atom "true"])
+                               |- [func "." [var "H", var "T"]]
+                           ]
+        rule <- singleRule m
+        rule.guard.node
+          @?= [CompoundTerm (Unqualified ".") [VarTerm "H", VarTerm "T"]],
+      testCase "unknown functor in is RHS stays Unqualified (data constructor)" $ do
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [ [con "c" [var "X"]]
+                               <=> [var "R" `is` func "pair" [var "X", int 1]]
+                           ]
+        rule <- singleRule m
+        rule.body.node
+          @?= [ CompoundTerm
+                  (Unqualified "is")
+                  [VarTerm "R", CompoundTerm (Unqualified "pair") [VarTerm "X", IntTerm 1]]
+              ],
       testCase "non-compound terms in guard untouched" $ do
         let m =
               module' "M"

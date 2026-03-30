@@ -83,6 +83,13 @@ data ResolveMode
     ResolveAll
   deriving (Eq)
 
+-- | Controls whether an unresolved name is an error or silently kept.
+data UnknownNamePolicy
+  = -- | Emit 'UnknownName' (constraints, body goals — must be declared).
+    ErrorOnUnknownName
+  | -- | Leave 'Unqualified' without error (expression context — may be a data constructor).
+    AcceptUnknownName
+
 renameRule :: LocalEnv -> GlobalEnv -> Module -> Rule -> Eff '[Writer [RenameError]] Rule
 renameRule localEnv exportEnv m r = do
   h <- traverse (renameHead localEnv exportEnv m r.head.sourceLoc) r.head
@@ -106,7 +113,7 @@ renameHead localEnv exportEnv m loc h = case h of
 
 renameCon :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Constraint -> Eff '[Writer [RenameError]] Constraint
 renameCon localEnv exportEnv m loc (Constraint cname cargs) = do
-  renamedName <- resolveName localEnv exportEnv m loc cname (length cargs)
+  renamedName <- resolveName ErrorOnUnknownName localEnv exportEnv m loc cname (length cargs)
   renamedArgs <- traverse (renameTerm localEnv exportEnv m loc NoResolve) cargs
   pure (Constraint renamedName renamedArgs)
 
@@ -123,12 +130,16 @@ renameTerm localEnv exportEnv m loc mode t = case t of
           ResolveTop -> NoResolve
           ResolveAll -> ResolveAll
     renamedArgs <- traverse (renameTerm localEnv exportEnv m loc childMode) args
-    newName <- if mode /= NoResolve then resolveName localEnv exportEnv m loc name (length args) else pure name
+    let policy = case mode of
+          ResolveTop -> ErrorOnUnknownName
+          ResolveAll -> AcceptUnknownName
+          NoResolve -> ErrorOnUnknownName -- unreachable, guarded below
+    newName <- if mode /= NoResolve then resolveName policy localEnv exportEnv m loc name (length args) else pure name
     pure (CompoundTerm newName renamedArgs)
   other -> pure other
 
-resolveName :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Name -> Int -> Eff '[Writer [RenameError]] Name
-resolveName localEnv exportEnv currentMod loc (Unqualified n) arity
+resolveName :: UnknownNamePolicy -> LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Name -> Int -> Eff '[Writer [RenameError]] Name
+resolveName policy localEnv exportEnv currentMod loc (Unqualified n) arity
   | isReserved n reservedSymbols = pure (Unqualified n)
   | otherwise =
       let ownProviders = filter (== currentMod.name) (lookupLocal (n, arity) localEnv)
@@ -137,13 +148,15 @@ resolveName localEnv exportEnv currentMod loc (Unqualified n) arity
           matches = ownProviders ++ importProviders
        in case matches of
             [m] -> pure (Qualified m n)
-            [] -> do
-              tell [UnknownName loc n arity]
-              pure (Unqualified n)
+            [] -> case policy of
+              ErrorOnUnknownName -> do
+                tell [UnknownName loc n arity]
+                pure (Unqualified n)
+              AcceptUnknownName -> pure (Unqualified n)
             ms -> do
               tell [AmbiguousName loc n arity ms]
               pure (Unqualified n)
-resolveName _ _ _ _ (Qualified m n) _ = pure (Qualified m n)
+resolveName _ _ _ _ _ (Qualified m n) _ = pure (Qualified m n)
 
 -- | Rename a list of query goal terms using all modules as the visible scope.
 -- Each term is renamed at 'ResolveTop' level (same as rule bodies).
