@@ -780,7 +780,7 @@ moduleP = do
       eqs = [e | ItemEquation e <- items]
       (modName_, modExports_) = case [(n, e) | DirModule n e <- dirs] of
         ((n, e) : _) -> (n, Just e)
-        [] -> (T.empty, Nothing)
+        [] -> ("<no_module>", Nothing)
       modImports_ = [n | DirImport n <- dirs]
       modDecls_ =
         concat [ds | DirConstraintDecl ds <- dirs]

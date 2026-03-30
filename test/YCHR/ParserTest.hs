@@ -304,9 +304,9 @@ moduleTests =
                 []
                 (Just [])
             ),
-      testCase "no module directive gives empty name" $
+      testCase "no module directive gives default name" $
         (.name) <$> p ":- chr_constraint foo/1.\nfoo(X) <=> true."
-          @?= Right ""
+          @?= Right "<no_module>"
     ]
 
 leqSource :: Text
