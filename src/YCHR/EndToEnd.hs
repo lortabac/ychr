@@ -52,12 +52,13 @@ import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.Writer.Static.Local (Writer, listen, runWriter)
 import Text.Megaparsec (ParseErrorBundle)
 import YCHR.Collect (CollectError, collectLibraries)
-import YCHR.Compile (CompileError, compile, procNameFor)
-import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable)
+import YCHR.Compile (CompileError, compile, funcProcName, procNameFor)
+import YCHR.Desugar (DesugarError, desugarProgram, desugarQueryGoals, extractSymbolTable)
+import YCHR.Desugared qualified as D
 import YCHR.Meta (valueToTerm)
 import YCHR.Parsed (Import (..), Module (..), noAnn)
 import YCHR.Parser (parseConstraint, parseModule, parseQuery)
-import YCHR.Rename (RenameError, buildExportEnv, renameProgram)
+import YCHR.Rename (RenameError, buildExportEnv, renameProgram, renameQueryGoals)
 import YCHR.Rename.Types (toListGlobal)
 import YCHR.Runtime.History (PropHistory, runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallRegistry, callProc)
@@ -83,7 +84,8 @@ data CompiledProgram = CompiledProgram
   { program :: Program,
     exportMap :: Map (Text, Int) ExportResolution,
     exportedSet :: Set Types.Name,
-    symbolTable :: SymbolTable
+    symbolTable :: SymbolTable,
+    allModules :: [Module]
   }
 
 data ExportResolution
@@ -109,7 +111,7 @@ compileModules includeStdlib inputs = do
   desugared <- first DesugarErrors (desugarProgram renamed)
   let symTab = extractSymbolTable desugared
   prog <- first CompileErrors (compile desugared symTab)
-  pure (CompiledProgram prog exportMap exportedSet symTab)
+  pure (CompiledProgram prog exportMap exportedSet symTab collected)
   where
     toResolution n [m] = UniqueExport (Types.Qualified m n)
     toResolution _ ms = AmbiguousExport ms
@@ -295,61 +297,57 @@ termToValue (CompoundTerm (Types.Qualified m f) ts) = VTerm (m <> ":" <> f) <$> 
 
 -- | Run a multi-goal query against a compiled program.
 --
--- Parses the input as a comma-separated, dot-terminated list of goals
--- and interprets each goal directly.
+-- Parses the input as a comma-separated, dot-terminated list of goals,
+-- renames and desugars them like rule bodies, then executes each goal.
 runProgramWithQuery :: CompiledProgram -> HostCallRegistry -> Text -> IO (Map Text Term)
 runProgramWithQuery cp hostCalls src =
   case parseQuery "<query>" src of
     Left err -> fail (show err)
-    Right goals ->
+    Right goals -> do
+      renamed <- either (fail . show) pure (renameQueryGoals cp.allModules goals)
+      bodyGoals <- either (fail . show) pure (desugarQueryGoals cp.allModules renamed)
       withCHR cp hostCalls $
         evalState (Map.empty :: Map Text Value) $ do
-          mapM_ (interpretGoal hostCalls) goals
+          mapM_ (executeBodyGoal hostCalls) bodyGoals
           varMap <- get
           Map.traverseWithKey valueToTerm varMap
 
--- | Interpret a single query goal.
-interpretGoal ::
+-- | Execute a single desugared body goal in the query context.
+executeBodyGoal ::
   (CHREffects es, State (Map Text Value) :> es) =>
   HostCallRegistry ->
-  Term ->
+  D.BodyGoal ->
   Eff es ()
-interpretGoal _ (AtomTerm "true") = pure ()
-interpretGoal _ (CompoundTerm (Types.Unqualified "=") [l, r]) = do
+executeBodyGoal _ (D.BodyCommon D.GoalTrue) = pure ()
+executeBodyGoal _ (D.BodyUnify l r) = do
   v1 <- termToValue l
   v2 <- termToValue r
   CHRRep procMap hc' _ _ <- getStaticRep
   (_, observers) <- listen (unify v1 v2)
   enqueue observers
   drainReactivation procMap hc'
-interpretGoal hc (CompoundTerm (Types.Unqualified "is") [VarTerm v, expr]) = do
+executeBodyGoal hc (D.BodyHostStmt f args) = do
+  argVals <- traverse termToValue args
+  _ <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
+  pure ()
+executeBodyGoal hc (D.BodyIs v expr) = do
   result <- evalTermArith hc expr
-  modify (Map.insert v result)
-interpretGoal hc (CompoundTerm (Types.Unqualified ":=") [VarTerm v, CompoundTerm (Types.Unqualified f) args]) = do
+  varMap <- get
+  case Map.lookup v varMap of
+    Just existing -> do
+      CHRRep procMap hc' _ _ <- getStaticRep
+      (_, observers) <- listen (unify existing result)
+      enqueue observers
+      drainReactivation procMap hc'
+    Nothing -> modify (Map.insert v result)
+executeBodyGoal _ (D.BodyConstraint c) = do
+  argVals <- traverse termToValue c.args
+  tellConstraint c.name argVals
+executeBodyGoal hc (D.BodyFunctionCall name args) = do
+  CHRRep procMap _ _ _ <- getStaticRep
   argVals <- traverse termToValue args
-  result <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
-  case result of
-    RVal val -> modify (Map.insert v val)
-    _ -> error $ ":= host call returned non-value"
-interpretGoal hc (CompoundTerm (Types.Unqualified ":=") [Wildcard, CompoundTerm (Types.Unqualified f) args]) = do
-  argVals <- traverse termToValue args
-  _ <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
+  _ <- callProc procMap hc (funcProcName name) (map RVal argVals)
   pure ()
-interpretGoal hc (CompoundTerm (Types.Unqualified "host") [CompoundTerm (Types.Unqualified f) args]) = do
-  argVals <- traverse termToValue args
-  _ <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
-  pure ()
-interpretGoal _ term = do
-  -- Treat as a constraint: extract name and args from the term.
-  let (name, args) = termToConstraint term
-  argVals <- traverse termToValue args
-  tellConstraint name argVals
-
--- | Extract a constraint name and arguments from a term.
-termToConstraint :: Term -> (Types.Name, [Term])
-termToConstraint (CompoundTerm name args) = (name, args)
-termToConstraint (AtomTerm s) = (Types.Unqualified s, [])
-termToConstraint t = error $ "Not a valid goal: " ++ show t
 
 -- | Call a host function, failing with a clear message if not found.
 hostCall :: Maybe ([RuntimeVal] -> IO RuntimeVal) -> Text -> [RuntimeVal] -> IO RuntimeVal
@@ -369,24 +367,39 @@ drainReactivation procMap hc =
       void $
         callProc procMap hc (Name "reactivate_dispatch") [RConstraint sid]
 
--- | Evaluate a term as an arithmetic expression.
+-- | Evaluate a term as an arithmetic expression (used for @is@ RHS).
+-- Handles host calls (@host:f(args)@), user-defined function calls, and data terms.
 evalTermArith ::
-  (Unify :> es, State (Map Text Value) :> es, IOE :> es) =>
+  (CHREffects es, State (Map Text Value) :> es) =>
   HostCallRegistry ->
   Term ->
   Eff es Value
 evalTermArith _ (IntTerm n) = pure (VInt n)
 evalTermArith _ (AtomTerm s) = pure (VAtom s)
+evalTermArith _ (TextTerm s) = pure (VText s)
 evalTermArith _ (VarTerm v) = do
   varMap <- get
   case Map.lookup v varMap of
     Just val -> deref val
     Nothing -> error $ "Unbound variable in arithmetic expression: " ++ T.unpack v
-evalTermArith hc (CompoundTerm (Types.Unqualified op) [l, r]) = do
-  lv <- evalTermArith hc l
-  rv <- evalTermArith hc r
-  result <- liftIO (hostCall (Map.lookup (Name op) hc) op [RVal lv, RVal rv])
+evalTermArith hc (CompoundTerm (Types.Qualified "host" f) args) = do
+  argVals <- traverse (evalTermArith hc) args
+  result <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
   case result of
     RVal val -> pure val
-    _ -> error "Arithmetic host call returned non-value"
+    _ -> error "host call returned non-value in arithmetic position"
+evalTermArith hc (CompoundTerm name args) = do
+  CHRRep procMap _ _ _ <- getStaticRep
+  argVals <- traverse (evalTermArith hc) args
+  let fnName = funcProcName name
+  if Map.member fnName procMap
+    then do
+      result <- callProc procMap hc fnName (map RVal argVals)
+      case result of
+        RVal val -> pure val
+        _ -> error "function call returned non-value in arithmetic position"
+    else pure $ VTerm (termFunctor name) argVals
+  where
+    termFunctor (Types.Qualified m n) = m <> ":" <> n
+    termFunctor (Types.Unqualified n) = n
 evalTermArith _ t = error $ "Unsupported arithmetic expression: " ++ show t

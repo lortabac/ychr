@@ -20,7 +20,7 @@
 --
 -- This pass ensures that the subsequent Desugaring phase can treat the
 -- program as a flat, unambiguous collection of rules.
-module YCHR.Rename (renameProgram, buildExportEnv, RenameError (..)) where
+module YCHR.Rename (renameProgram, buildExportEnv, renameQueryGoals, RenameError (..)) where
 
 import Data.Text (Text)
 import Effectful (Eff, runPureEff)
@@ -139,3 +139,24 @@ resolveName localEnv exportEnv currentMod loc (Unqualified n) arity
               tell [AmbiguousName loc n arity ms]
               pure (Unqualified n)
 resolveName _ _ _ _ (Qualified m n) _ = pure (Qualified m n)
+
+-- | Rename a list of query goal terms using all modules as the visible scope.
+-- Each term is renamed at 'ResolveTop' level (same as rule bodies).
+-- Returns 'Left' if any rename errors occur.
+renameQueryGoals :: [Module] -> [Term] -> Either [RenameError] [Term]
+renameQueryGoals mods goals =
+  let localEnv = buildLocalEnv mods
+      exportEnv = buildExportEnv mods
+      queryMod =
+        Module
+          { name = "<query>",
+            imports = [noAnn (ModuleImport m.name) | m <- mods],
+            decls = [],
+            rules = [],
+            equations = [],
+            exports = Nothing
+          }
+      (renamed, errs) =
+        runPureEff . runWriter $
+          traverse (renameTerm localEnv exportEnv queryMod dummyLoc ResolveTop) goals
+   in if null errs then Right renamed else Left errs

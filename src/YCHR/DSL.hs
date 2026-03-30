@@ -56,7 +56,7 @@ lhs ==> rhs = Rule Nothing (noAnn (Propagation lhs)) (noAnn []) (noAnn rhs)
 
 -- | Add a guard to an existing rule (infix)
 (|-) :: Rule -> [Term] -> Rule
-r |- g = r {guard = noAnn g}
+r |- g = let Rule n h _ b = r in Rule n h (noAnn g) b
 
 --------------------------------------------------------------------------------
 -- Constraint & Term Helpers

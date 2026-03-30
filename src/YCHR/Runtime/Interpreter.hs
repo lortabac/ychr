@@ -186,13 +186,13 @@ execStmt ::
   (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
   ProcMap -> HostCallRegistry -> Stmt -> Eff es ()
 execStmt pm hc (Let name expr) = do
-  v <- evalExpr pm hc expr
+  v <- evalVmExpr pm hc expr
   modify (Map.insert name v)
 execStmt pm hc (Assign name expr) = do
-  v <- evalExpr pm hc expr
+  v <- evalVmExpr pm hc expr
   modify (Map.insert name v)
 execStmt pm hc (If cond thenBranch elseBranch) = do
-  c <- evalExpr pm hc cond
+  c <- evalVmExpr pm hc cond
   case c of
     RVal (VBool True) -> execStmts pm hc thenBranch
     RVal (VBool False) -> execStmts pm hc elseBranch
@@ -204,23 +204,23 @@ execStmt pm hc (Foreach lbl cType suspVar conditions body) = do
 execStmt _ _ (Continue lbl) = throwError (CFContinue lbl)
 execStmt _ _ (Break lbl) = throwError (CFBreak lbl)
 execStmt pm hc (Return expr) = do
-  v <- evalExpr pm hc expr
+  v <- evalVmExpr pm hc expr
   throwError (CFReturn v)
 execStmt pm hc (ExprStmt expr) = do
-  _ <- evalExpr pm hc expr
+  _ <- evalVmExpr pm hc expr
   pure ()
 execStmt pm hc (Store expr) = do
-  v <- evalExpr pm hc expr
+  v <- evalVmExpr pm hc expr
   case v of
     RConstraint sid -> storeConstraint sid
     _ -> error "Store: expected constraint identifier"
 execStmt pm hc (Kill expr) = do
-  v <- evalExpr pm hc expr
+  v <- evalVmExpr pm hc expr
   case v of
     RConstraint sid -> killConstraint sid
     _ -> error "Kill: expected constraint identifier"
 execStmt pm hc (AddHistory ruleName exprs) = do
-  ids <- traverse (evalExpr pm hc) exprs
+  ids <- traverse (evalVmExpr pm hc) exprs
   let sids = map (\case RConstraint s -> s; _ -> error "AddHistory: expected constraint id") ids
   addHistory ruleName sids
 execStmt pm hc (DrainReactivationQueue suspVar body) = do
@@ -276,7 +276,7 @@ checkConditions ::
   ProcMap -> HostCallRegistry -> Suspension -> [(ArgIndex, Expr)] -> Eff es Bool
 checkConditions _ _ _ [] = pure True
 checkConditions pm hc susp ((ArgIndex i, expr) : rest) = do
-  v <- evalExpr pm hc expr
+  v <- evalVmExpr pm hc expr
   let argVal = suspArg susp i
   eq <- equal (toValue v) argVal
   if eq
@@ -287,130 +287,130 @@ checkConditions pm hc susp ((ArgIndex i, expr) : rest) = do
 -- Expression evaluator
 -- ---------------------------------------------------------------------------
 
-evalExpr ::
+evalVmExpr ::
   (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
   ProcMap -> HostCallRegistry -> Expr -> Eff es RuntimeVal
-evalExpr _ _ (Var name) = do
+evalVmExpr _ _ (Var name) = do
   env <- get
   case Map.lookup name env of
     Just v -> pure v
-    Nothing -> error $ "evalExpr: unbound variable " ++ T.unpack name.unName
-evalExpr _ _ (Lit (IntLit n)) = pure (RVal (VInt n))
-evalExpr _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
-evalExpr _ _ (Lit (TextLit s)) = pure (RVal (VText s))
-evalExpr _ _ (Lit (BoolLit b)) = pure (RVal (VBool b))
-evalExpr _ _ (Lit WildcardLit) = pure (RVal VWildcard)
-evalExpr pm hc (CallExpr name args) = do
-  argVals <- traverse (evalExpr pm hc) args
+    Nothing -> error $ "evalVmExpr: unbound variable " ++ T.unpack name.unName
+evalVmExpr _ _ (Lit (IntLit n)) = pure (RVal (VInt n))
+evalVmExpr _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
+evalVmExpr _ _ (Lit (TextLit s)) = pure (RVal (VText s))
+evalVmExpr _ _ (Lit (BoolLit b)) = pure (RVal (VBool b))
+evalVmExpr _ _ (Lit WildcardLit) = pure (RVal VWildcard)
+evalVmExpr pm hc (CallExpr name args) = do
+  argVals <- traverse (evalVmExpr pm hc) args
   callProc pm hc name argVals
-evalExpr pm hc (HostCall name args) = do
-  argVals <- traverse (evalExpr pm hc) args
+evalVmExpr pm hc (HostCall name args) = do
+  argVals <- traverse (evalVmExpr pm hc) args
   derefedVals <- traverse derefRV argVals
   case Map.lookup name hc of
     Just f -> liftIO (f derefedVals)
-    Nothing -> error $ "evalExpr: unknown host call " ++ T.unpack name.unName
+    Nothing -> error $ "evalVmExpr: unknown host call " ++ T.unpack name.unName
   where
     derefRV (RVal v) = RVal <$> deref v
     derefRV rc = pure rc
-evalExpr pm hc (Not expr) = do
-  v <- evalExpr pm hc expr
+evalVmExpr pm hc (Not expr) = do
+  v <- evalVmExpr pm hc expr
   case v of
     RVal (VBool b) -> pure (RVal (VBool (not b)))
     _ -> error "Not: expected boolean"
-evalExpr pm hc (And e1 e2) = do
-  v1 <- evalExpr pm hc e1
+evalVmExpr pm hc (And e1 e2) = do
+  v1 <- evalVmExpr pm hc e1
   case v1 of
     RVal (VBool False) -> pure (RVal (VBool False))
-    RVal (VBool True) -> evalExpr pm hc e2
+    RVal (VBool True) -> evalVmExpr pm hc e2
     _ -> error "And: expected boolean"
-evalExpr pm hc (Or e1 e2) = do
-  v1 <- evalExpr pm hc e1
+evalVmExpr pm hc (Or e1 e2) = do
+  v1 <- evalVmExpr pm hc e1
   case v1 of
     RVal (VBool True) -> pure (RVal (VBool True))
-    RVal (VBool False) -> evalExpr pm hc e2
+    RVal (VBool False) -> evalVmExpr pm hc e2
     _ -> error "Or: expected boolean"
-evalExpr _ _ NewVar = RVal <$> newVar
-evalExpr pm hc (MakeTerm functor args) = do
-  argVals <- traverse (evalExpr pm hc) args
+evalVmExpr _ _ NewVar = RVal <$> newVar
+evalVmExpr pm hc (MakeTerm functor args) = do
+  argVals <- traverse (evalVmExpr pm hc) args
   pure $ RVal $ makeTerm functor.unName (map toValue argVals)
-evalExpr pm hc (MatchTerm expr functor arity) = do
-  v <- evalExpr pm hc expr
+evalVmExpr pm hc (MatchTerm expr functor arity) = do
+  v <- evalVmExpr pm hc expr
   RVal . VBool <$> matchTerm (toValue v) functor.unName arity
-evalExpr pm hc (GetArg expr idx) = do
-  v <- evalExpr pm hc expr
+evalVmExpr pm hc (GetArg expr idx) = do
+  v <- evalVmExpr pm hc expr
   RVal <$> getArg (toValue v) idx
-evalExpr pm hc (CreateConstraint cType args) = do
-  argVals <- traverse (evalExpr pm hc) args
+evalVmExpr pm hc (CreateConstraint cType args) = do
+  argVals <- traverse (evalVmExpr pm hc) args
   sid <- createConstraint cType (map toValue argVals)
   pure (RConstraint sid)
-evalExpr pm hc (Alive expr) = do
-  v <- evalExpr pm hc expr
+evalVmExpr pm hc (Alive expr) = do
+  v <- evalVmExpr pm hc expr
   case v of
     RConstraint sid -> RVal . VBool <$> aliveConstraint sid
     _ -> error "Alive: expected constraint identifier"
-evalExpr pm hc (IdEqual e1 e2) = do
-  v1 <- evalExpr pm hc e1
-  v2 <- evalExpr pm hc e2
+evalVmExpr pm hc (IdEqual e1 e2) = do
+  v1 <- evalVmExpr pm hc e1
+  v2 <- evalVmExpr pm hc e2
   case (v1, v2) of
     (RConstraint s1, RConstraint s2) -> pure (RVal (VBool (idEqual s1 s2)))
     _ -> error "IdEqual: expected constraint identifiers"
-evalExpr pm hc (IsConstraintType expr cType) = do
-  v <- evalExpr pm hc expr
+evalVmExpr pm hc (IsConstraintType expr cType) = do
+  v <- evalVmExpr pm hc expr
   case v of
     RConstraint sid -> RVal . VBool <$> isConstraintType sid cType
     _ -> error "IsConstraintType: expected constraint identifier"
-evalExpr pm hc (NotInHistory ruleName args) = do
-  argVals <- traverse (evalExpr pm hc) args
+evalVmExpr pm hc (NotInHistory ruleName args) = do
+  argVals <- traverse (evalVmExpr pm hc) args
   let sids = map (\case RConstraint s -> s; _ -> error "NotInHistory: expected constraint id") argVals
   RVal . VBool <$> notInHistory ruleName sids
-evalExpr pm hc (Unify e1 e2) = do
-  v1 <- evalExpr pm hc e1
-  v2 <- evalExpr pm hc e2
+evalVmExpr pm hc (Unify e1 e2) = do
+  v1 <- evalVmExpr pm hc e1
+  v2 <- evalVmExpr pm hc e2
   (ok, observers) <- listen (unify (toValue v1) (toValue v2))
   enqueue observers
   pure (RVal (VBool ok))
-evalExpr pm hc (Equal e1 e2) = do
-  v1 <- evalExpr pm hc e1
-  v2 <- evalExpr pm hc e2
+evalVmExpr pm hc (Equal e1 e2) = do
+  v1 <- evalVmExpr pm hc e1
+  v2 <- evalVmExpr pm hc e2
   RVal . VBool <$> equal (toValue v1) (toValue v2)
-evalExpr pm hc (FieldGet expr field) = do
-  v <- evalExpr pm hc expr
+evalVmExpr pm hc (FieldGet expr field) = do
+  v <- evalVmExpr pm hc expr
   case v of
     RConstraint sid -> case field of
       FieldId -> pure (RConstraint sid)
       FieldArg (ArgIndex i) -> RVal <$> getConstraintArg sid i
       FieldType -> (\ct -> RVal (VInt ct.unConstraintType)) <$> getConstraintType sid
     _ -> error "FieldGet: expected constraint identifier"
-evalExpr pm hc (HostEval expr) = evalArith pm hc expr
+evalVmExpr pm hc (HostEval expr) = evalExpr pm hc expr
 
 -- ---------------------------------------------------------------------------
--- evalArith
+-- evalExpr
 -- ---------------------------------------------------------------------------
 
-evalArith ::
+evalExpr ::
   (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
   ProcMap -> HostCallRegistry -> Expr -> Eff es RuntimeVal
-evalArith _ _ (Lit (IntLit n)) = pure (RVal (VInt n))
-evalArith _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
-evalArith _ _ (Lit (TextLit s)) = pure (RVal (VText s))
-evalArith _ _ (Lit (BoolLit b)) = pure (RVal (VBool b))
-evalArith pm hc (Var name) = do
-  v <- evalExpr pm hc (Var name)
+evalExpr _ _ (Lit (IntLit n)) = pure (RVal (VInt n))
+evalExpr _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
+evalExpr _ _ (Lit (TextLit s)) = pure (RVal (VText s))
+evalExpr _ _ (Lit (BoolLit b)) = pure (RVal (VBool b))
+evalExpr pm hc (Var name) = do
+  v <- evalVmExpr pm hc (Var name)
   case v of
     RVal val -> RVal <$> deref val
     rv -> pure rv
-evalArith pm hc (HostCall name args) = do
-  argVals <- traverse (evalArith pm hc) args
+evalExpr pm hc (HostCall name args) = do
+  argVals <- traverse (evalExpr pm hc) args
   case Map.lookup name hc of
     Just f -> liftIO (f argVals)
-    Nothing -> error $ "evalArith: unknown host call " ++ T.unpack name.unName
-evalArith pm hc (CallExpr name args) = do
-  argVals <- traverse (evalArith pm hc) args
+    Nothing -> error $ "evalExpr: unknown host call " ++ T.unpack name.unName
+evalExpr pm hc (CallExpr name args) = do
+  argVals <- traverse (evalExpr pm hc) args
   callProc pm hc name argVals
-evalArith pm hc (MakeTerm functor args) = do
-  argVals <- traverse (evalArith pm hc) args
+evalExpr pm hc (MakeTerm functor args) = do
+  argVals <- traverse (evalExpr pm hc) args
   pure $ RVal $ makeTerm functor.unName (map toValue argVals)
-evalArith _ _ expr = error $ "evalArith: unsupported expression " ++ show expr
+evalExpr _ _ expr = error $ "evalExpr: unsupported expression: " ++ show expr
 
 -- ---------------------------------------------------------------------------
 -- Helpers

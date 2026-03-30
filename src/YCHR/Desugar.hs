@@ -24,6 +24,7 @@
 module YCHR.Desugar
   ( DesugarError (..),
     desugarProgram,
+    desugarQueryGoals,
     SymbolTable,
     extractSymbolTable,
   )
@@ -240,6 +241,16 @@ desugarGuard :: Term -> D.Guard
 desugarGuard (AtomTerm "true") = D.GuardCommon D.GoalTrue
 desugarGuard t@(CompoundTerm _ _) = D.GuardExpr t
 desugarGuard _ = D.GuardCommon D.GoalTrue
+
+-- | Desugar a list of query goal terms into 'BodyGoal's.
+-- Returns 'Left' if any desugaring errors occur.
+desugarQueryGoals :: [P.Module] -> [Term] -> Either [DesugarError] [D.BodyGoal]
+desugarQueryGoals mods goals =
+  let funSet = buildFunctionSet mods
+      (results, errs) =
+        runPureEff . runWriter $
+          traverse (desugarBodyGoal funSet P.dummyLoc) goals
+   in if null errs then Right results else Left errs
 
 desugarBodyGoal :: Set.Set (Text, Int) -> P.SourceLoc -> Term -> Eff '[Writer [DesugarError]] D.BodyGoal
 desugarBodyGoal funSet loc t = case t of
