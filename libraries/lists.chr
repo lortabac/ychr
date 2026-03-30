@@ -3,14 +3,16 @@
   tail/2,
   length/2,
   member/2,
-  append/3
+  append/3,
+  sum_list/2
 ]).
 
 :- chr_constraint
   head/2,
   tail/2,
   length/2,
-  append/3.
+  append/3,
+  sum_list/2.
 
 :- function member/2.
 
@@ -27,3 +29,6 @@ member(X, [_|Xs]) -> member(X, Xs).
 
 append([], Ys, R) <=> R = Ys.
 append([X|Xs], Ys, R) <=> append(Xs, Ys, R1), R = [X|R1].
+
+sum_list([], R) <=> R = 0.
+sum_list([X|Xs], R) <=> sum_list(Xs, R1), R is R1 + X.
