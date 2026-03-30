@@ -1,8 +1,22 @@
-:- module(lists, [length/2, member/2]).
+:- module(lists, [
+  head/2,
+  tail/2,
+  length/2,
+  member/2,
+  append/3
+]).
 
-:- chr_constraint length/2.
+:- chr_constraint
+  head/2,
+  tail/2,
+  length/2,
+  append/3.
 
 :- function member/2.
+
+head([X|_], R) <=> R = X.
+
+tail([_|Xs], R) <=> R = Xs.
 
 length([], R) <=> R = 0.
 length([_|Xs], R) <=> length(Xs, R1), R is R1 + 1.
@@ -10,3 +24,6 @@ length([_|Xs], R) <=> length(Xs, R1), R is R1 + 1.
 member(_, []) -> false.
 member(X, [X|_]) -> true.
 member(X, [_|Xs]) -> member(X, Xs).
+
+append([], Ys, R) <=> R = Ys.
+append([X|Xs], Ys, R) <=> append(Xs, Ys, R1), R = [X|R1].
