@@ -79,7 +79,7 @@ repl :: CompiledProgram -> InputT IO ()
 repl prog = loop
   where
     loop = do
-      minput <- getInputLine "?- "
+      minput <- getInputLine "ychr> "
       case minput of
         Nothing -> return ()
         Just ":quit" -> return ()
