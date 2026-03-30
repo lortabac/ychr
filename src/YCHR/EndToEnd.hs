@@ -409,13 +409,13 @@ evalTermArith _ (VarTerm v) = do
   varMap <- get
   case Map.lookup v varMap of
     Just val -> deref val
-    Nothing -> error $ "Unbound variable in arithmetic expression: " ++ T.unpack v
+    Nothing -> error $ "Unbound variable in expression: " ++ T.unpack v
 evalTermArith hc (CompoundTerm (Types.Qualified "host" f) args) = do
   argVals <- traverse (evalTermArith hc) args
   result <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
   case result of
     RVal val -> pure val
-    _ -> error "host call returned non-value in arithmetic position"
+    _ -> error "host call returned non-value in expression position"
 evalTermArith hc (CompoundTerm name args) = do
   CHRRep procMap _ _ _ <- getStaticRep
   argVals <- traverse (evalTermArith hc) args
@@ -425,9 +425,9 @@ evalTermArith hc (CompoundTerm name args) = do
       result <- callProc procMap hc fnName (map RVal argVals)
       case result of
         RVal val -> pure val
-        _ -> error "function call returned non-value in arithmetic position"
+        _ -> error "function call returned non-value in expression position"
     else pure $ VTerm (termFunctor name) argVals
   where
     termFunctor (Types.Qualified m n) = m <> ":" <> n
     termFunctor (Types.Unqualified n) = n
-evalTermArith _ t = error $ "Unsupported arithmetic expression: " ++ show t
+evalTermArith _ t = error $ "Unsupported expression: " ++ show t
