@@ -4,4 +4,4 @@
 
 base0 @ fib(0, R) <=> R = 0.
 base1 @ fib(1, R) <=> R = 1.
-rec @ fib(N, R) <=> N1 is host:'-'(N, 1), N2 is host:'-'(N, 2), fib(N1, R1), fib(N2, R2), Tmp is R1 + R2, R = Tmp.
+rec @ fib(N, R) <=> N1 is N - 1, N2 is N - 2, fib(N1, R1), fib(N2, R2), R is R1 + R2.

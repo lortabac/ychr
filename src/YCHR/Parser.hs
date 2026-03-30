@@ -671,9 +671,12 @@ opDeclP = do
   _ <- comma
   ty <- opTypeP
   _ <- comma
-  name <- atomP <|> symbolAtomP
+  name <- try atomP <|> identP <|> symbolAtomP
   _ <- symbol ")"
   pure (OperatorDecl (OpDecl fix ty name))
+  where
+    -- \| Parse any lowercase identifier without rejecting word operators.
+    identP = lexeme $ T.pack <$> ((:) <$> lowerChar <*> many (alphaNumChar <|> char '_'))
 
 -- | Parse an operator type specifier.
 opTypeP :: Parser OpType
