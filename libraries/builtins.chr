@@ -7,12 +7,22 @@
   'div'/2,
   'mod'/2,
   'rem'/2,
+  '<'/2,
+  '>'/2,
+  '>='/2,
+  '=<'/2,
+  '=='/2,
   op(500, yfx, '+'),
   op(500, yfx, '-'),
   op(400, yfx, '*'),
   op(400, yfx, div),
   op(400, yfx, mod),
-  op(400, yfx, rem)
+  op(400, yfx, rem),
+  op(700, xfx, '<'),
+  op(700, xfx, '>'),
+  op(700, xfx, '>='),
+  op(700, xfx, '=<'),
+  op(700, xfx, '==')
 ]).
 :- chr_constraint identity/2, print/1.
 
@@ -20,7 +30,7 @@ identity(X, Y) <=> X = Y.
 
 print(X) <=> host:print(X).
 
-:- function '+'/2, '-'/2, '*'/2, 'div'/2, 'mod'/2, 'rem'/2.
+:- function '+'/2, '-'/2, '*'/2, 'div'/2, 'mod'/2, 'rem'/2, '<'/2, '>'/2, '>='/2, '=<'/2, '=='/2.
 
 X + Y -> host:'+'(X, Y).
 
@@ -33,3 +43,13 @@ X div Y -> host:'div'(X, Y).
 X mod Y -> host:'mod'(X, Y).
 
 X rem Y -> host:'rem'(X, Y).
+
+X < Y -> host:'<'(X, Y).
+
+X > Y -> host:'>'(X, Y).
+
+X >= Y -> host:'>='(X, Y).
+
+X =< Y -> host:'=<'(X, Y).
+
+X == Y -> host:'=='(X, Y).

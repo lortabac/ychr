@@ -2,7 +2,7 @@
 :- chr_constraint classify/2.
 :- function sign/1.
 
-sign(N) | host:'>='(N, 1) -> positive.
+sign(N) | N >= 1 -> positive.
 sign(0) -> zero.
 sign(_) -> negative.
 
