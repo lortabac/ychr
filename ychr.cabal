@@ -78,6 +78,7 @@ executable ychr
                     , directory
                     , filepath
                     , haskeline
+                    , optparse-applicative
                     , text
 
     -- Directories containing source files.

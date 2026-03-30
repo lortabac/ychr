@@ -35,6 +35,7 @@ module YCHR.EndToEnd
   )
 where
 
+import Control.Exception (Exception, throwIO)
 import Control.Monad (unless, void, when)
 import Data.Bifunctor (first)
 import Data.List (intercalate)
@@ -78,6 +79,8 @@ data Error
   | DesugarErrors [DesugarError]
   | CompileErrors [CompileError]
   deriving (Show)
+
+instance Exception Error
 
 -- | A compiled CHR program together with module visibility information.
 data CompiledProgram = CompiledProgram
@@ -297,7 +300,7 @@ runProgramWithGoalDSL cp hostCalls constraint = do
 runProgramWithGoal :: CompiledProgram -> HostCallRegistry -> Text -> IO (RuntimeVal, Map Text Term)
 runProgramWithGoal cp hostCalls src =
   case parseConstraint "<query>" src of
-    Left err -> fail (show err)
+    Left err -> throwIO (ParseError "<query>" err)
     Right c -> runProgramWithGoalDSL cp hostCalls c
 
 termToValue :: (Unify :> es, State (Map Text Value) :> es) => Term -> Eff es Value
@@ -327,10 +330,10 @@ termToValue (CompoundTerm (Types.Qualified m f) ts) = VTerm (m <> ":" <> f) <$> 
 runProgramWithQuery :: CompiledProgram -> HostCallRegistry -> Text -> IO (Map Text Term)
 runProgramWithQuery cp hostCalls src =
   case parseQueryWith cp.opTable "<query>" src of
-    Left err -> fail (show err)
+    Left err -> throwIO (ParseError "<query>" err)
     Right goals -> do
-      renamed <- either (fail . show) pure (renameQueryGoals cp.allModules goals)
-      bodyGoals <- either (fail . show) pure (desugarQueryGoals cp.allModules renamed)
+      renamed <- either (throwIO . RenameErrors) pure (renameQueryGoals cp.allModules goals)
+      bodyGoals <- either (throwIO . DesugarErrors) pure (desugarQueryGoals cp.allModules renamed)
       withCHR cp hostCalls $
         evalState (Map.empty :: Map Text Value) $ do
           mapM_ (executeBodyGoal hostCalls) bodyGoals
