@@ -18,7 +18,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Effectful (Eff, runEff, type (:>))
 import YCHR.Pretty (prettyTerm)
-import YCHR.Runtime.Interpreter (HostCallRegistry)
+import YCHR.Runtime.Interpreter (HostCallRegistry, unit)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, deref, runUnify)
 import YCHR.Types (Term (..))
@@ -55,6 +55,6 @@ metaHostCallRegistry =
         \args -> do
           strs <- mapM prettyRuntimeVal args
           mapM_ putStrLn strs
-          pure (RVal (VBool True))
+          pure unit
       )
     ]

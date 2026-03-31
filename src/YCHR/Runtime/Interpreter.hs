@@ -15,6 +15,7 @@ module YCHR.Runtime.Interpreter
 
     -- * Internal (for testing)
     callProc,
+    unit,
   )
 where
 
@@ -90,7 +91,8 @@ baseHostCallRegistry =
       (Name "string_length", stringLength),
       (Name "string_upper", stringUpper),
       (Name "string_lower", stringLower),
-      (Name "__chr_error", chrError)
+      (Name "__chr_error", chrError),
+      (Name "write", writeStr)
     ]
   where
     arith2 op [RVal (VInt a), RVal (VInt b)] = pure (RVal (VInt (op a b)))
@@ -113,6 +115,12 @@ baseHostCallRegistry =
     stringLower _ = error "string_lower: expected 1 Text argument"
     chrError :: [RuntimeVal] -> IO RuntimeVal
     chrError _ = error "CHR runtime error: no matching equation"
+    writeStr [RVal (VText s)] = unit <$ putStr (T.unpack s)
+    writeStr _ = error "write: expected 1 Text argument"
+
+-- | The unit return value for host calls that are only used for side effects.
+unit :: RuntimeVal
+unit = RVal (VAtom "()")
 
 -- ---------------------------------------------------------------------------
 -- Public API

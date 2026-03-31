@@ -72,7 +72,13 @@ data OpTable = OpTable
 
 -- | Built-in operators at their standard Prolog fixity levels.
 builtinOps :: OpTable
-builtinOps = mkOpTable [(700, [(InfixN_, "is"), (InfixN_, "=")])]
+builtinOps =
+  mkOpTable
+    [ (700, [(InfixN_, "is"), (InfixN_, "=")]),
+      (1100, [(InfixN_, "\\")]),
+      (1180, [(InfixN_, "<=>"), (InfixN_, "==>")]),
+      (1200, [(Prefix_, ":-")])
+    ]
 
 -- | Build an 'OpTable' from a list of (fixity, operators) pairs.
 mkOpTable :: [(Int, [(OpType, Text)])] -> OpTable
