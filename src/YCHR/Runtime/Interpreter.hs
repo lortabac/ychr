@@ -98,7 +98,13 @@ baseHostCallRegistry =
       (Name "string_upper", stringUpper),
       (Name "string_lower", stringLower),
       (Name "__chr_error", chrError),
-      (Name "write", writeStr)
+      (Name "write", writeStr),
+      (Name "integer", typePred isInteger),
+      (Name "atom", typePred isAtom),
+      (Name "boolean", typePred isBoolean),
+      (Name "string", typePred isString),
+      (Name "var", typePred isVar),
+      (Name "nonvar", typePred isNonvar)
     ]
   where
     arith2 op = HostCallFn $ \case
@@ -130,6 +136,23 @@ baseHostCallRegistry =
     writeStr = HostCallFn $ \case
       [RVal (VText s)] -> unit <$ liftIO (putStr (T.unpack s))
       _ -> error "write: expected 1 Text argument"
+    typePred p = HostCallFn $ \case
+      [RVal v] -> do
+        v' <- deref v
+        pure (RVal (VBool (p v')))
+      _ -> error "type predicate: expected 1 argument"
+    isInteger (VInt _) = True
+    isInteger _ = False
+    isAtom (VAtom _) = True
+    isAtom _ = False
+    isBoolean (VBool _) = True
+    isBoolean _ = False
+    isString (VText _) = True
+    isString _ = False
+    isVar (VVar _) = True
+    isVar VWildcard = True
+    isVar _ = False
+    isNonvar = not . isVar
 
 -- | The unit return value for host calls that are only used for side effects.
 unit :: RuntimeVal

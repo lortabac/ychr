@@ -1,26 +1,28 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 
 -- | Meta-level host call registry.
 --
 -- Provides host functions that require access to modules outside the
--- interpreter, such as the pretty-printer. In the future this module
--- will contain meta-programming primitives like @read_term@,
--- @write_term@, and @call@.
+-- interpreter, such as the pretty-printer and @read_term_from_string@.
 module YCHR.Meta
   ( metaHostCallRegistry,
     valueToTerm,
   )
 where
 
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.State.Strict (StateT, evalStateT, gets, modify')
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Effectful (Eff, liftIO, runEff, type (:>))
+import YCHR.Parser (builtinOps, parseTermWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, unit)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (Unify, deref, runUnify)
+import YCHR.Runtime.Var (Unify, deref, newVar, runUnify)
 import YCHR.Types (Term (..))
 import YCHR.Types qualified as Types
 import YCHR.VM (Name (..))
@@ -46,6 +48,30 @@ prettyRuntimeVal :: RuntimeVal -> IO String
 prettyRuntimeVal (RVal v) = runEff . runUnify $ prettyTerm <$> valueToTerm "_" v
 prettyRuntimeVal (RConstraint (SuspensionId n)) = pure ("<constraint:" ++ show n ++ ">")
 
+-- | Convert a parsed 'Term' to a runtime 'Value', creating fresh logical
+-- variables. The same variable name within a term maps to the same fresh
+-- variable (tracked via 'StateT').
+termToValue :: (Unify :> es) => Term -> StateT (Map.Map Text Value) (Eff es) Value
+termToValue (VarTerm name) = do
+  existing <- gets (Map.lookup name)
+  case existing of
+    Just v -> pure v
+    Nothing -> do
+      v <- lift newVar
+      modify' (Map.insert name v)
+      pure v
+termToValue (IntTerm n) = pure (VInt n)
+termToValue (AtomTerm s) = pure (VAtom s)
+termToValue (TextTerm s) = pure (VText s)
+termToValue Wildcard = pure VWildcard
+termToValue (CompoundTerm name args) = do
+  args' <- traverse termToValue args
+  pure (VTerm (nameToText name) args')
+
+nameToText :: Types.Name -> Text
+nameToText (Types.Unqualified t) = t
+nameToText (Types.Qualified m t) = m <> ":" <> t
+
 -- | Host call registry providing meta-level operations that depend on
 -- modules outside the interpreter (e.g. the pretty-printer).
 metaHostCallRegistry :: HostCallRegistry
@@ -56,5 +82,13 @@ metaHostCallRegistry =
           strs <- liftIO (mapM prettyRuntimeVal args)
           liftIO (mapM_ putStrLn strs)
           pure unit
+      ),
+      ( Name "read_term_from_string",
+        HostCallFn $ \case
+          [RVal (VText s)] ->
+            case parseTermWith builtinOps "<read_term_from_string>" s of
+              Left err -> error $ "read_term_from_string: " ++ show err
+              Right term -> RVal <$> evalStateT (termToValue term) Map.empty
+          _ -> error "read_term_from_string: expected 1 Text argument"
       )
     ]

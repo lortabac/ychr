@@ -96,6 +96,7 @@ test-suite ychr-tests
                     , YCHR.DSLTest
                     , YCHR.DesugarTest
                     , YCHR.GoldenTest
+                    , YCHR.MetaTest
                     , YCHR.ParserTest
                     , YCHR.PrettyTest
                     , YCHR.RenameTest

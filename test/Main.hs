@@ -6,6 +6,7 @@ import YCHR.DSLTest qualified
 import YCHR.DesugarTest qualified
 import YCHR.EndToEndTest qualified
 import YCHR.GoldenTest qualified
+import YCHR.MetaTest qualified
 import YCHR.ParserTest qualified
 import YCHR.PrettyTest qualified
 import YCHR.RenameTest qualified
@@ -26,6 +27,7 @@ main = do
         YCHR.CollectTest.tests,
         YCHR.PrettyTest.tests,
         YCHR.EndToEndTest.tests,
+        YCHR.MetaTest.tests,
         YCHR.DSLTest.tests,
         YCHR.DesugarTest.tests,
         YCHR.ParserTest.tests,

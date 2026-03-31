@@ -10,11 +10,11 @@ import Effectful.Writer.Static.Local (Writer, runWriter)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Runtime.History (PropHistory, runPropHistory)
-import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc, interpret)
+import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, baseHostCallRegistry, callProc, interpret)
 import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (Unify, equal, newVar, runUnify)
+import YCHR.Runtime.Var (Unify, equal, newVar, runUnify, unify)
 import YCHR.VM
 
 tests :: TestTree
@@ -22,7 +22,8 @@ tests =
   testGroup
     "YCHR.Runtime.Interpreter"
     [ leqTests,
-      hostEvalTests
+      hostEvalTests,
+      typePredicateTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -504,4 +505,100 @@ hostEvalTests =
       testCase "literal passthrough: 42 = 42" $ do
         result <- runCalc (Lit (IntLit 42)) (VInt 0)
         expectInt result >>= (@?= 42)
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Type predicate tests
+-- ---------------------------------------------------------------------------
+
+-- | Call a type predicate from baseHostCallRegistry and return the Bool result.
+callTypePred :: Name -> Value -> IO Bool
+callTypePred name v = case Map.lookup name baseHostCallRegistry of
+  Nothing -> assertFailure $ "host call not found: " ++ show name
+  Just (HostCallFn f) -> do
+    result <- runEff . runUnify $ f [RVal v]
+    case result of
+      RVal (VBool b) -> pure b
+      _ -> assertFailure $ show name ++ ": expected Bool result"
+
+typePredicateTests :: TestTree
+typePredicateTests =
+  testGroup
+    "Type predicates"
+    [ testCase "integer: true for VInt" $ do
+        b <- callTypePred "integer" (VInt 42)
+        assertBool "expected true" b,
+      testCase "integer: false for VAtom" $ do
+        b <- callTypePred "integer" (VAtom "hello")
+        assertBool "expected false" (not b),
+      testCase "atom: true for VAtom" $ do
+        b <- callTypePred "atom" (VAtom "hello")
+        assertBool "expected true" b,
+      testCase "atom: false for VInt" $ do
+        b <- callTypePred "atom" (VInt 1)
+        assertBool "expected false" (not b),
+      testCase "boolean: true for VBool" $ do
+        b <- callTypePred "boolean" (VBool True)
+        assertBool "expected true" b,
+      testCase "boolean: false for VAtom" $ do
+        b <- callTypePred "boolean" (VAtom "true")
+        assertBool "expected false" (not b),
+      testCase "string: true for VText" $ do
+        b <- callTypePred "string" (VText "hello")
+        assertBool "expected true" b,
+      testCase "string: false for VAtom" $ do
+        b <- callTypePred "string" (VAtom "hello")
+        assertBool "expected false" (not b),
+      testCase "var: true for unbound variable" $ do
+        b <- runEff . runUnify $ do
+          v <- newVar
+          let HostCallFn f = case Map.lookup (Name "var") baseHostCallRegistry of
+                Just hc -> hc
+                Nothing -> error "var not found"
+          result <- f [RVal v]
+          case result of
+            RVal (VBool b') -> pure b'
+            _ -> pure False
+        assertBool "expected true" b,
+      testCase "var: false for bound variable" $ do
+        (b, _) <- runEff . runUnify . runWriter @[SuspensionId] $ do
+          v <- newVar
+          _ <- unify v (VInt 42)
+          let HostCallFn f = case Map.lookup (Name "var") baseHostCallRegistry of
+                Just hc -> hc
+                Nothing -> error "var not found"
+          result <- f [RVal v]
+          case result of
+            RVal (VBool b') -> pure b'
+            _ -> pure False
+        assertBool "expected false" (not b),
+      testCase "var: false for ground value" $ do
+        b <- callTypePred "var" (VInt 42)
+        assertBool "expected false" (not b),
+      testCase "nonvar: false for unbound variable" $ do
+        b <- runEff . runUnify $ do
+          v <- newVar
+          let HostCallFn f = case Map.lookup (Name "nonvar") baseHostCallRegistry of
+                Just hc -> hc
+                Nothing -> error "nonvar not found"
+          result <- f [RVal v]
+          case result of
+            RVal (VBool b') -> pure b'
+            _ -> pure False
+        assertBool "expected false" (not b),
+      testCase "nonvar: true for bound variable" $ do
+        (b, _) <- runEff . runUnify . runWriter @[SuspensionId] $ do
+          v <- newVar
+          _ <- unify v (VInt 42)
+          let HostCallFn f = case Map.lookup (Name "nonvar") baseHostCallRegistry of
+                Just hc -> hc
+                Nothing -> error "nonvar not found"
+          result <- f [RVal v]
+          case result of
+            RVal (VBool b') -> pure b'
+            _ -> pure False
+        assertBool "expected true" b,
+      testCase "nonvar: true for ground value" $ do
+        b <- callTypePred "nonvar" (VInt 42)
+        assertBool "expected true" b
     ]

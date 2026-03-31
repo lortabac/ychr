@@ -1,18 +1,18 @@
 :- module(lists, [
-  head/2,
-  tail/2,
-  length/2,
-  member/2,
-  append/3,
-  sum_list/2
+    head/2,
+    tail/2,
+    length/2,
+    member/2,
+    append/3,
+    sum_list/2
 ]).
 
 :- chr_constraint
-  head/2,
-  tail/2,
-  length/2,
-  append/3,
-  sum_list/2.
+    head/2,
+    tail/2,
+    length/2,
+    append/3,
+    sum_list/2.
 
 :- function member/2.
 

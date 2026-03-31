@@ -3,6 +3,9 @@
 :- chr_constraint string_concat/3, string_length/2, string_upper/2, string_lower/2.
 
 string_concat(X, Y, R) <=> R is host:string_concat(X, Y).
+
 string_length(S, R) <=> R is host:string_length(S).
+
 string_upper(S, R) <=> R is host:string_upper(S).
+
 string_lower(S, R) <=> R is host:string_lower(S).

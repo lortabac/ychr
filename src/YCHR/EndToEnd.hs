@@ -403,11 +403,15 @@ evalTermArith ::
 evalTermArith _ (IntTerm n) = pure (VInt n)
 evalTermArith _ (AtomTerm s) = pure (VAtom s)
 evalTermArith _ (TextTerm s) = pure (VText s)
+evalTermArith _ Wildcard = pure VWildcard
 evalTermArith _ (VarTerm v) = do
   varMap <- get
   case Map.lookup v varMap of
     Just val -> deref val
-    Nothing -> error $ "Unbound variable in expression: " ++ T.unpack v
+    Nothing -> do
+      fresh <- newVar
+      modify (Map.insert v fresh)
+      pure fresh
 evalTermArith hc (CompoundTerm (Types.Qualified "host" f) args) = do
   argVals <- traverse (evalTermArith hc) args
   result <- hostCall (Map.lookup (Name f) hc) f (map RVal argVals)
@@ -428,4 +432,3 @@ evalTermArith hc (CompoundTerm name args) = do
   where
     termFunctor (Types.Qualified m n) = m <> ":" <> n
     termFunctor (Types.Unqualified n) = n
-evalTermArith _ t = error $ "Unsupported expression: " ++ show t

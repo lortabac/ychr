@@ -1,4 +1,5 @@
 :- module(test, [dup/2]).
+
 :- chr_constraint dup/2.
 
 dup(X, Y) <=> X = Y.
