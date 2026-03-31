@@ -22,6 +22,7 @@
 -- program as a flat, unambiguous collection of rules.
 module YCHR.Rename (renameProgram, buildExportEnv, renameQueryGoals, RenameError (..)) where
 
+import Data.Foldable (traverse_)
 import Data.Text (Text)
 import Effectful (Eff, runPureEff)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
@@ -32,6 +33,7 @@ import YCHR.Types
 data RenameError
   = AmbiguousName SourceLoc Text Int [Text]
   | UnknownName SourceLoc Text Int
+  | UnknownExport Text Text Int
   deriving (Eq, Show)
 
 -- | All declared constraints and functions across all modules.
@@ -68,8 +70,28 @@ renameProgram :: [Module] -> Either [RenameError] [Module]
 renameProgram mods =
   let declEnv = buildDeclEnv mods
       exportEnv = buildExportEnv mods
-      (result, errs) = runPureEff . runWriter $ traverse (renameModule declEnv exportEnv) mods
+      (result, errs) = runPureEff . runWriter $ do
+        validateExports mods
+        traverse (renameModule declEnv exportEnv) mods
    in if null errs then Right result else Left errs
+
+-- | Check that every name in a module's export list is actually declared.
+validateExports :: [Module] -> Eff '[Writer [RenameError]] ()
+validateExports mods =
+  let declaredIn m = [(d.name, d.arity) | Ann d _ <- m.decls]
+   in traverse_
+        ( \m -> case m.exports of
+            Nothing -> pure ()
+            Just exports ->
+              traverse_
+                ( \d ->
+                    if not (isOperatorDecl d) && (d.name, d.arity) `notElem` declaredIn m
+                      then tell [UnknownExport m.name d.name d.arity]
+                      else pure ()
+                )
+                exports
+        )
+        mods
 
 renameModule :: DeclEnv -> ExportEnv -> Module -> Eff '[Writer [RenameError]] Module
 renameModule declEnv exportEnv m = do
@@ -150,17 +172,26 @@ renameTerm declEnv exportEnv m loc mode t = case t of
       ResolveTop -> resolveName ErrorOnUnknownName declEnv exportEnv m loc name (length args)
       ResolveAll -> resolveName AcceptUnknownName declEnv exportEnv m loc name (length args)
     pure (CompoundTerm newName renamedArgs)
+  -- Zero-arity atom promotion: if a bare atom matches a declared
+  -- constraint or function with arity 0, promote it to CompoundTerm.
+  AtomTerm n | mode /= NoResolve -> do
+    resolved <- resolveName AcceptUnknownName declEnv exportEnv m loc (Unqualified n) 0
+    case resolved of
+      Qualified _ _ -> pure (CompoundTerm resolved [])
+      Unqualified _ -> pure (AtomTerm n)
   other -> pure other
 
--- | Resolve an 'Unqualified' name to a 'Qualified' one.
+-- | Resolve a name to a 'Qualified' one and verify its existence.
 --
--- Resolution order: the current module's own declarations (via 'DeclEnv')
--- are checked first, then declarations exported by imported modules (via
--- 'ExportEnv'). Exactly one match is required; zero matches are handled
--- according to 'UnknownNamePolicy', and multiple matches produce an
--- 'AmbiguousName' error.
+-- For 'Unqualified' names: the current module's own declarations (via
+-- 'DeclEnv') are checked first, then declarations exported by imported
+-- modules (via 'ExportEnv'). Exactly one match is required; zero matches
+-- are handled according to 'UnknownNamePolicy', and multiple matches
+-- produce an 'AmbiguousName' error.
 --
--- Already-'Qualified' names pass through unchanged.
+-- For already-'Qualified' names: verifies the name exists in either
+-- 'DeclEnv' or 'ExportEnv' with the stated module. Names qualified with
+-- @\"host\"@ are external calls and bypass validation.
 resolveName :: UnknownNamePolicy -> DeclEnv -> ExportEnv -> Module -> SourceLoc -> Name -> Int -> Eff '[Writer [RenameError]] Name
 resolveName policy declEnv exportEnv currentMod loc (Unqualified n) arity
   | isReserved n reservedSymbols = pure (Unqualified n)
@@ -179,7 +210,15 @@ resolveName policy declEnv exportEnv currentMod loc (Unqualified n) arity
             ms -> do
               tell [AmbiguousName loc n arity ms]
               pure (Unqualified n)
-resolveName _ _ _ _ _ (Qualified m n) _ = pure (Qualified m n)
+-- "host"-qualified names are external calls; skip validation.
+resolveName _ _ _ _ _ (Qualified "host" n) _ = pure (Qualified "host" n)
+resolveName policy declEnv _ _ loc (Qualified m n) arity
+  | m `elem` lookupDecl (n, arity) declEnv = pure (Qualified m n)
+  | otherwise = case policy of
+      ErrorOnUnknownName -> do
+        tell [UnknownName loc n arity]
+        pure (Qualified m n)
+      AcceptUnknownName -> pure (Qualified m n)
 
 -- | Rename a list of query goal terms using all modules as the visible scope.
 -- Each term is renamed at 'ResolveTop' level (same as rule bodies).

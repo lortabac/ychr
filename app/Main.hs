@@ -63,7 +63,7 @@ runRepl files = do
     _ -> compileFiles True files
   case result of
     Left err -> do
-      putStr (displayMsg err)
+      putStrLn (displayMsg err)
       exitFailure
     Right prog -> do
       histFile <- getXdgDirectory XdgData "ychr/history"
@@ -141,7 +141,7 @@ runGoal opts files = do
     _ -> compileFiles True files
   case result of
     Left err -> do
-      putStr (displayMsg err)
+      putStrLn (displayMsg err)
       exitFailure
     Right prog -> do
       outcome <- try @SomeException $ runProgramWithGoal prog hostCalls opts.goal

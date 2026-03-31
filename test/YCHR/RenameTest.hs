@@ -183,13 +183,26 @@ alreadyQualifiedTests =
   testGroup
     "already-qualified"
     [ testCase "pre-qualified head constraint passes through unchanged" $ do
-        -- No declarations at all, but the constraint is pre-qualified
+        let modOrder = module' "Order" `declaring` ["leq" // 2]
+            modM =
+              module' "M"
+                `importing` ["Order"]
+                `defining` [["Order" .: con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+        (_, renamedM) <- case renameProgram [modOrder, modM] of
+          Right [a, b] -> return (a, b)
+          Right mods -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Left errs -> assertFailure $ "unexpected errors: " ++ show errs
+        rule <- case renamedM.rules of
+          [r] -> return r
+          rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
+        rule.head.node
+          @?= Simplification [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"]],
+      testCase "pre-qualified undeclared constraint produces error" $ do
         let m =
               module' "M"
                 `defining` [["Order" .: con "leq" [var "X", var "Y"]] <=> [atom "true"]]
-        rule <- singleRule m
-        rule.head.node
-          @?= Simplification [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"]],
+        renameProgram [m]
+          @?= Left [UnknownName dummyLoc "leq" 2],
       testCase "pre-qualified survives ambiguity" $ do
         -- Two visible providers, but the constraint is already Qualified
         let modA = module' "A" `declaring` ["leq" // 2]
@@ -299,7 +312,51 @@ goalClassificationTests =
                 `defining` [[con "c" [var "X"]] <=> [var "X", atom "zero", IntTerm 42]]
         rule <- singleRule m
         rule.body.node
-          @?= [VarTerm "X", AtomTerm "zero", IntTerm 42]
+          @?= [VarTerm "X", AtomTerm "zero", IntTerm 42],
+      testCase "zero-arity atom in body promoted to constraint" $ do
+        let m =
+              module' "M"
+                `declaring` ["c" // 1, "done" // 0]
+                `defining` [[con "c" [var "X"]] <=> [atom "done"]]
+        rule <- singleRule m
+        rule.body.node
+          @?= [CompoundTerm (Qualified "M" "done") []],
+      testCase "zero-arity atom in guard promoted to constraint" $ do
+        let m =
+              module' "M"
+                `declaring` ["c" // 1, "ready" // 0]
+                `defining` [ ([con "c" [var "X"]] <=> [atom "true"])
+                               |- [atom "ready"]
+                           ]
+        rule <- singleRule m
+        rule.guard.node
+          @?= [CompoundTerm (Qualified "M" "ready") []],
+      testCase "undeclared atom in body stays as AtomTerm" $ do
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [[con "c" [var "X"]] <=> [atom "hello"]]
+        rule <- singleRule m
+        rule.body.node
+          @?= [AtomTerm "hello"],
+      testCase "undeclared atom in guard stays as AtomTerm" $ do
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [ ([con "c" [var "X"]] <=> [atom "true"])
+                               |- [atom "hello"]
+                           ]
+        rule <- singleRule m
+        rule.guard.node
+          @?= [AtomTerm "hello"],
+      testCase "zero-arity atom in head arg stays as AtomTerm (NoResolve)" $ do
+        let m =
+              module' "M"
+                `declaring` ["c" // 1, "done" // 0]
+                `defining` [[con "c" [atom "done"]] <=> [atom "true"]]
+        rule <- singleRule m
+        rule.head.node
+          @?= Simplification [Constraint (Qualified "M" "c") [AtomTerm "done"]]
     ]
 
 --------------------------------------------------------------------------------
@@ -493,5 +550,16 @@ exportTests =
           [r] -> return r
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
         rule.head.node
-          @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]]
+          @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
+      testCase "exporting undeclared name produces error" $ do
+        let m = module' "M" `exporting` ["foo" // 1]
+        renameProgram [m] @?= Left [UnknownExport "M" "foo" 1],
+      testCase "exporting declared constraint is fine" $ do
+        let m =
+              module' "M"
+                `declaring` ["foo" // 1]
+                `exporting` ["foo" // 1]
+        case renameProgram [m] of
+          Right _ -> pure ()
+          Left errs -> assertFailure $ "unexpected errors: " ++ show errs
     ]

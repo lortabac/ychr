@@ -239,6 +239,49 @@ errorTests =
             m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn []) (noAnn [bad1, bad2])]
         case desugarProgram [m] of
           Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc bad1, UnexpectedBodyTerm dummyLoc bad2]
+          Right _ -> assertFailure "expected Left",
+      testCase "bare variable in body produces UnexpectedBodyTerm" $ do
+        let badTerm = var "X"
+            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn []) (noAnn [badTerm])]
+        case desugarProgram [m] of
+          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc badTerm]
+          Right _ -> assertFailure "expected Left",
+      testCase "bare integer in body produces UnexpectedBodyTerm" $ do
+        let badTerm = int 42
+            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn []) (noAnn [badTerm])]
+        case desugarProgram [m] of
+          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc badTerm]
+          Right _ -> assertFailure "expected Left",
+      testCase "non-true atom in body produces UnexpectedBodyTerm" $ do
+        let badTerm = atom "foo"
+            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn []) (noAnn [badTerm])]
+        case desugarProgram [m] of
+          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc badTerm]
+          Right _ -> assertFailure "expected Left",
+      testCase "bare variable in guard produces UnexpectedGuardTerm" $ do
+        let badTerm = var "X"
+            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [badTerm]) (noAnn [atom "true"])]
+        case desugarProgram [m] of
+          Left errs -> errs @?= [UnexpectedGuardTerm dummyLoc badTerm]
+          Right _ -> assertFailure "expected Left",
+      testCase "bare integer in guard produces UnexpectedGuardTerm" $ do
+        let badTerm = int 42
+            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [badTerm]) (noAnn [atom "true"])]
+        case desugarProgram [m] of
+          Left errs -> errs @?= [UnexpectedGuardTerm dummyLoc badTerm]
+          Right _ -> assertFailure "expected Left",
+      testCase "non-true atom in guard produces UnexpectedGuardTerm" $ do
+        let badTerm = atom "foo"
+            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [badTerm]) (noAnn [atom "true"])]
+        case desugarProgram [m] of
+          Left errs -> errs @?= [UnexpectedGuardTerm dummyLoc badTerm]
+          Right _ -> assertFailure "expected Left",
+      testCase "multiple bad guard terms collect all errors" $ do
+        let bad1 = var "X"
+            bad2 = int 7
+            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [bad1, bad2]) (noAnn [atom "true"])]
+        case desugarProgram [m] of
+          Left errs -> errs @?= [UnexpectedGuardTerm dummyLoc bad1, UnexpectedGuardTerm dummyLoc bad2]
           Right _ -> assertFailure "expected Left"
     ]
 

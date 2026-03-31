@@ -31,7 +31,6 @@ module YCHR.Desugar
 where
 
 import Data.List (mapAccumL)
-import Data.Map qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -44,20 +43,22 @@ import YCHR.Types
 
 data DesugarError
   = UnexpectedBodyTerm P.SourceLoc Term
+  | UnexpectedGuardTerm P.SourceLoc Term
   deriving (Eq, Show)
 
--- | Collect all declared function names from a set of modules.
-buildFunctionSet :: [P.Module] -> Set.Set (Text, Int)
+isFunctionDecl :: P.Declaration -> Bool
+isFunctionDecl (P.FunctionDecl _ _) = True
+isFunctionDecl _ = False
+
+-- | Collect all declared function names (fully qualified) from a set of modules.
+buildFunctionSet :: [P.Module] -> Set.Set Name
 buildFunctionSet mods =
   Set.fromList
-    [ (d.name, d.arity)
+    [ Qualified m.name d.name
     | m <- mods,
       P.Ann d _ <- m.decls,
       isFunctionDecl d
     ]
-  where
-    isFunctionDecl (P.FunctionDecl _ _) = True
-    isFunctionDecl _ = False
 
 -- | The primary entry point: converts parsed modules to a desugared program.
 desugarProgram :: [P.Module] -> Either [DesugarError] D.Program
@@ -65,7 +66,7 @@ desugarProgram mods =
   let funSet = buildFunctionSet mods
       (result, errs) = runPureEff . runWriter $ do
         rules <- traverse (desugarRule funSet) [r | m <- mods, r <- m.rules]
-        let functions = desugarFunctions mods
+        functions <- desugarFunctions mods
         pure (D.Program rules functions)
    in if null errs then Right result else Left errs
 
@@ -87,12 +88,12 @@ getRuleConstraints r =
         ++ rHead.removed
         ++ [c | D.BodyConstraint c <- rBody]
 
-desugarRule :: Set.Set (Text, Int) -> P.Rule -> Eff '[Writer [DesugarError]] D.Rule
+desugarRule :: Set.Set Name -> P.Rule -> Eff '[Writer [DesugarError]] D.Rule
 desugarRule funSet r = do
   ruleBody <- traverse (desugarBodyGoal funSet r.body.sourceLoc) r.body.node
+  userGuards <- traverse (desugarGuard r.guard.sourceLoc) r.guard.node
   let rawHead = desugarHead r.head.node
       (hnfGuards, normalizedHead) = normalizeHead rawHead
-      userGuards = map desugarGuard r.guard.node
   pure
     D.Rule
       { name = fmap (.node) r.name,
@@ -114,13 +115,13 @@ desugarHead h = case h of
 
 data HnfState = HnfState
   { hnfCounter :: !Int,
-    hnfSeen :: Map.Map Text (),
+    hnfSeen :: Set.Set Text,
     hnfGuards :: [D.Guard] -- accumulated in reverse
   }
 
 normalizeHead :: D.Head -> ([D.Guard], D.Head)
 normalizeHead h =
-  let initState = HnfState 0 Map.empty []
+  let initState = HnfState 0 Set.empty []
       (st1, kept') = mapAccumL normalizeConstraint initState h.kept
       (st2, removed') = mapAccumL normalizeConstraint st1 h.removed
    in (reverse st2.hnfGuards, D.Head kept' removed')
@@ -132,7 +133,7 @@ normalizeConstraint st (Constraint cname cargs) =
 
 normalizeArg :: HnfState -> Term -> (HnfState, Term)
 normalizeArg st (VarTerm v)
-  | Map.member v st.hnfSeen =
+  | Set.member v st.hnfSeen =
       let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
        in ( st
               { hnfCounter = st.hnfCounter + 1,
@@ -141,7 +142,9 @@ normalizeArg st (VarTerm v)
             VarTerm fresh
           )
   | otherwise =
-      (st {hnfSeen = Map.insert v () st.hnfSeen}, VarTerm v)
+      (st {hnfSeen = Set.insert v st.hnfSeen}, VarTerm v)
+-- Wildcards pass through unchanged: they match anything, are never referenced,
+-- and cannot duplicate, so no fresh variable or guard is needed.
 normalizeArg st Wildcard = (st, Wildcard)
 normalizeArg st (CompoundTerm cname cargs) =
   let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
@@ -167,7 +170,7 @@ decomposeCompound st parentVar cname cargs =
 -- | Decompose a single argument of a compound term.
 decomposeArg :: HnfState -> Text -> Int -> Term -> HnfState
 decomposeArg st parentVar i (VarTerm v)
-  | Map.member v st.hnfSeen =
+  | Set.member v st.hnfSeen =
       -- Duplicate variable: extract and check equality
       let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
           getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
@@ -181,7 +184,7 @@ decomposeArg st parentVar i (VarTerm v)
       let getGuard = D.GuardGetArg v (VarTerm parentVar) i
        in st
             { hnfGuards = getGuard : st.hnfGuards,
-              hnfSeen = Map.insert v () st.hnfSeen
+              hnfSeen = Set.insert v st.hnfSeen
             }
 decomposeArg st _ _ Wildcard = st
 decomposeArg st parentVar i (CompoundTerm cname cargs) =
@@ -205,42 +208,46 @@ decomposeArg st parentVar i term =
         }
 
 -- | Desugar function equations: group by name, normalize patterns via HNF.
-desugarFunctions :: [P.Module] -> [D.Function]
+desugarFunctions :: [P.Module] -> Eff '[Writer [DesugarError]] [D.Function]
 desugarFunctions mods =
-  [ desugarFunction m.name d.name d.arity eqs
-  | m <- mods,
-    P.Ann d _ <- m.decls,
-    isFunctionDecl d,
-    let eqs = [eq | P.Ann eq _ <- m.equations, eq.funName == d.name]
-  ]
-  where
-    isFunctionDecl (P.FunctionDecl _ _) = True
-    isFunctionDecl _ = False
+  traverse
+    (\(m, d) -> desugarFunction m.name d.name d.arity [eq | P.Ann eq _ <- m.equations, eq.funName == d.name])
+    [(m, d) | m <- mods, P.Ann d _ <- m.decls, isFunctionDecl d]
 
-desugarFunction :: Text -> Text -> Int -> [P.FunctionEquation] -> D.Function
-desugarFunction modName funName arity eqs =
-  D.Function
-    { name = Qualified modName funName,
-      arity = arity,
-      equations = map desugarEquation eqs
-    }
+desugarFunction :: Text -> Text -> Int -> [P.FunctionEquation] -> Eff '[Writer [DesugarError]] D.Function
+desugarFunction modName funName arity eqs = do
+  desugaredEqs <- traverse desugarEquation eqs
+  pure
+    D.Function
+      { name = Qualified modName funName,
+        arity = arity,
+        equations = desugaredEqs
+      }
 
-desugarEquation :: P.FunctionEquation -> D.Equation
-desugarEquation eq =
-  let initState = HnfState 0 Map.empty []
+desugarEquation :: P.FunctionEquation -> Eff '[Writer [DesugarError]] D.Equation
+desugarEquation eq = do
+  let initState = HnfState 0 Set.empty []
       (st, normalizedArgs) = mapAccumL normalizeArg initState eq.args
       hnfGuards = reverse st.hnfGuards
-      userGuards = map desugarGuard eq.guard.node
-   in D.Equation
-        { params = normalizedArgs,
-          guards = hnfGuards ++ userGuards,
-          rhs = eq.rhs.node
-        }
+  userGuards <- traverse (desugarGuard eq.guard.sourceLoc) eq.guard.node
+  pure
+    D.Equation
+      { params = normalizedArgs,
+        guards = hnfGuards ++ userGuards,
+        rhs = eq.rhs.node
+      }
 
-desugarGuard :: Term -> D.Guard
-desugarGuard (AtomTerm "true") = D.GuardCommon D.GoalTrue
-desugarGuard t@(CompoundTerm _ _) = D.GuardExpr t
-desugarGuard _ = D.GuardCommon D.GoalTrue
+-- | Classify a parsed guard term into a 'D.Guard'.
+--
+-- * @true@ -> 'D.GoalTrue'
+-- * Compound terms -> 'D.GuardExpr' (equality checks, host calls, etc.)
+-- * Anything else (bare variable, integer, atom, …) -> error
+desugarGuard :: P.SourceLoc -> Term -> Eff '[Writer [DesugarError]] D.Guard
+desugarGuard _ (AtomTerm "true") = pure $ D.GuardCommon D.GoalTrue
+desugarGuard _ t@(CompoundTerm _ _) = pure $ D.GuardExpr t
+desugarGuard loc t = do
+  tell [UnexpectedGuardTerm loc t]
+  pure $ D.GuardCommon D.GoalTrue
 
 -- | Desugar a list of query goal terms into 'BodyGoal's.
 -- Returns 'Left' if any desugaring errors occur.
@@ -252,20 +259,34 @@ desugarQueryGoals mods goals =
           traverse (desugarBodyGoal funSet P.dummyLoc) goals
    in if null errs then Right results else Left errs
 
-desugarBodyGoal :: Set.Set (Text, Int) -> P.SourceLoc -> Term -> Eff '[Writer [DesugarError]] D.BodyGoal
+-- | Classify a parsed body term into a 'D.BodyGoal'.
+--
+-- Pattern priority (order matters):
+--
+-- 1. @X = Y@ -> 'D.BodyUnify'
+-- 2. @X is Expr@ -> 'D.BodyIs'
+-- 3. @host:f(…)@ -> 'D.BodyHostStmt'
+-- 4. Qualified name in function set -> 'D.BodyFunctionCall'
+-- 5. Other qualified name -> 'D.BodyConstraint'
+-- 6. @true@ -> 'D.GoalTrue'
+-- 7. Unqualified compound (renamer should have caught this) -> error
+-- 8. Anything else (bare variable, integer, atom, …) -> error
+desugarBodyGoal :: Set.Set Name -> P.SourceLoc -> Term -> Eff '[Writer [DesugarError]] D.BodyGoal
 desugarBodyGoal funSet loc t = case t of
   CompoundTerm (Unqualified "=") [l, r] -> pure $ D.BodyUnify l r
   CompoundTerm (Unqualified "is") [VarTerm v, expr] ->
     pure $ D.BodyIs v expr
   CompoundTerm (Qualified "host" f) args ->
     pure $ D.BodyHostStmt f args
-  CompoundTerm name@(Qualified _ n) args
-    | Set.member (n, length args) funSet ->
+  CompoundTerm name@(Qualified _ _) args
+    | Set.member name funSet ->
         pure $ D.BodyFunctionCall name args
-  CompoundTerm (Qualified m n) args ->
-    pure $ D.BodyConstraint (Constraint (Qualified m n) args)
+  CompoundTerm name@(Qualified _ _) args ->
+    pure $ D.BodyConstraint (Constraint name args)
   AtomTerm "true" -> pure $ D.BodyCommon D.GoalTrue
   CompoundTerm (Unqualified _) _ -> do
     tell [UnexpectedBodyTerm loc t]
     pure $ D.BodyCommon D.GoalTrue
-  _ -> pure $ D.BodyCommon D.GoalTrue
+  _ -> do
+    tell [UnexpectedBodyTerm loc t]
+    pure $ D.BodyCommon D.GoalTrue

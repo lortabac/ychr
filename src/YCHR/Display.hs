@@ -39,7 +39,7 @@ displaySrcLoc loc = loc.file ++ ":" ++ show loc.line ++ ":" ++ show loc.col
 -- @
 displayMsgWithSrcLoc :: String -> P.SourceLoc -> Maybe String -> String
 displayMsgWithSrcLoc msg loc maybeNode =
-  displaySrcLoc loc ++ "\n" ++ msg ++ maybe "" ("\n" ++) maybeNode ++ "\n"
+  displaySrcLoc loc ++ "\n" ++ msg ++ maybe "" ("\n" ++) maybeNode
 
 -- | Join multiple error messages separated by two blank lines.
 displayErrors :: [String] -> String
@@ -77,11 +77,24 @@ instance Display RenameError where
       ("Unknown constraint " ++ T.unpack name ++ "/" ++ show arity)
       loc
       Nothing
+  displayMsg (UnknownExport modName name arity) =
+    "Module "
+      ++ T.unpack modName
+      ++ " exports "
+      ++ T.unpack name
+      ++ "/"
+      ++ show arity
+      ++ " but does not declare it"
 
 instance Display DesugarError where
   displayMsg (UnexpectedBodyTerm loc term) =
     displayMsgWithSrcLoc
       "Unexpected term in rule body"
+      loc
+      (Just (prettyTermSrc term))
+  displayMsg (UnexpectedGuardTerm loc term) =
+    displayMsgWithSrcLoc
+      "Unexpected term in guard"
       loc
       (Just (prettyTermSrc term))
 
