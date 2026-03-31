@@ -4,6 +4,7 @@
 module YCHR.Display
   ( Display (..),
     displaySrcLoc,
+    displayMsgWithSrcLoc,
   )
 where
 
@@ -29,6 +30,21 @@ class Display a where
 displaySrcLoc :: P.SourceLoc -> String
 displaySrcLoc loc = loc.file ++ ":" ++ show loc.line ++ ":" ++ show loc.col
 
+-- | Format an error message with source location and optional AST context.
+--
+-- @
+-- file:line:col
+-- message
+-- ast_node
+-- @
+displayMsgWithSrcLoc :: String -> P.SourceLoc -> Maybe String -> String
+displayMsgWithSrcLoc msg loc maybeNode =
+  displaySrcLoc loc ++ "\n" ++ msg ++ maybe "" ("\n" ++) maybeNode ++ "\n"
+
+-- | Join multiple error messages separated by two blank lines.
+displayErrors :: [String] -> String
+displayErrors = intercalate "\n\n"
+
 -- | Convert a megaparsec 'SourcePos' to a 'P.SourceLoc'.
 sourceLocFromPos :: SourcePos -> P.SourceLoc
 sourceLocFromPos sp =
@@ -40,45 +56,46 @@ sourceLocFromPos sp =
 
 instance Display CollectError where
   displayMsg (UnknownLibrary name) =
-    "unknown library: " ++ T.unpack name
+    "Unknown library: " ++ T.unpack name
   displayMsg (CircularLibraryImport names) =
-    "circular library import: " ++ intercalate " -> " (map T.unpack names)
+    "Circular library import: " ++ intercalate " -> " (map T.unpack names)
 
 instance Display RenameError where
   displayMsg (AmbiguousName loc name arity candidates) =
-    displaySrcLoc loc
-      ++ ": ambiguous name "
-      ++ T.unpack name
-      ++ "/"
-      ++ show arity
-      ++ ", could be: "
-      ++ intercalate ", " (map T.unpack candidates)
+    displayMsgWithSrcLoc
+      ( "Ambiguous name "
+          ++ T.unpack name
+          ++ "/"
+          ++ show arity
+          ++ ", could be: "
+          ++ intercalate ", " (map T.unpack candidates)
+      )
+      loc
+      Nothing
   displayMsg (UnknownName loc name arity) =
-    displaySrcLoc loc
-      ++ ": unknown constraint "
-      ++ T.unpack name
-      ++ "/"
-      ++ show arity
+    displayMsgWithSrcLoc
+      ("Unknown constraint " ++ T.unpack name ++ "/" ++ show arity)
+      loc
+      Nothing
 
 instance Display DesugarError where
   displayMsg (UnexpectedBodyTerm loc term) =
-    displaySrcLoc loc
-      ++ ": unexpected term in rule body: "
-      ++ prettyTermSrc term
+    displayMsgWithSrcLoc
+      "Unexpected term in rule body"
+      loc
+      (Just (prettyTermSrc term))
 
 instance Display CompileError where
   displayMsg (UnknownConstraintType loc origin name) =
-    displaySrcLoc loc
-      ++ ": unknown constraint type '"
-      ++ displayName name
-      ++ "' in: "
-      ++ show origin
+    displayMsgWithSrcLoc
+      ("Unknown constraint type '" ++ displayName name ++ "'")
+      loc
+      (Just (show origin))
   displayMsg (UnboundVariable loc origin var) =
-    displaySrcLoc loc
-      ++ ": unbound variable '"
-      ++ T.unpack var
-      ++ "' in: "
-      ++ show origin
+    displayMsgWithSrcLoc
+      ("Unbound variable '" ++ T.unpack var ++ "'")
+      loc
+      (Just (show origin))
 
 displayName :: Types.Name -> String
 displayName (Types.Unqualified n) = T.unpack n
@@ -95,15 +112,14 @@ instance Display Error where
   displayMsg (ParseError _ bundle) =
     let posState = bundlePosState bundle
         errs = bundleErrors bundle
-     in unlines (map (displayParseError posState) (toList errs))
-  displayMsg (CollectErrors errs) = unlines (map displayMsg errs)
-  displayMsg (RenameErrors errs) = unlines (map displayMsg errs)
-  displayMsg (DesugarErrors errs) = unlines (map displayMsg errs)
-  displayMsg (CompileErrors errs) = unlines (map displayMsg errs)
+     in displayErrors (map (displayParseError posState) (toList errs))
+  displayMsg (CollectErrors errs) = displayErrors (map displayMsg errs)
+  displayMsg (RenameErrors errs) = displayErrors (map displayMsg errs)
+  displayMsg (DesugarErrors errs) = displayErrors (map displayMsg errs)
+  displayMsg (CompileErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (OperatorConflict sources name) =
-    "operator naming conflict: "
+    "Operator naming conflict: "
       ++ T.unpack name
       ++ case sources of
         [] -> ""
         _ -> " (declared in " ++ intercalate ", " sources ++ ")"
-      ++ "\n"
