@@ -150,13 +150,13 @@ prettyBindings m =
 -- | Render a variable binding map as a Prolog-style query result.
 --
 -- Variables starting with @_@ are filtered out (internal/wildcard).
--- If no user-visible bindings remain, returns @true.@.
+-- If no user-visible bindings remain, returns an empty string.
 -- Otherwise, comma-separated @K = V@ lines terminated with a dot.
 prettyQueryResult :: Map Text Term -> String
 prettyQueryResult m =
   let visible = [(k, v) | (k, v) <- Map.toAscList m, not ("_" `T.isPrefixOf` k)]
    in case visible of
-        [] -> "true.\n"
+        [] -> ""
         _ -> formatBindings visible
   where
     formatBindings [] = ""
