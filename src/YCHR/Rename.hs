@@ -34,21 +34,25 @@ data RenameError
   | UnknownName SourceLoc Text Int
   deriving (Eq, Show)
 
--- | All declared constraints (for intra-module resolution).
-buildLocalEnv :: [Module] -> LocalEnv
-buildLocalEnv mods =
-  makeLocalEnv
+-- | All declared constraints and functions across all modules.
+-- Resolution to the current module is done later in 'resolveName'.
+-- Functions and constraints share a namespace, so both 'ConstraintDecl'
+-- and 'FunctionDecl' entries are included.
+buildDeclEnv :: [Module] -> DeclEnv
+buildDeclEnv mods =
+  makeDeclEnv
     [ ((d.name, d.arity), [m.name])
     | m <- mods,
       Ann d _ <- m.decls
     ]
 
--- | Only exported constraints (for cross-module resolution).
+-- | Only exported constraints and functions (for cross-module resolution).
 -- Modules without a @module@ directive (modExports = Nothing) export everything.
 -- Operator declarations are filtered out since they are not named entities.
-buildExportEnv :: [Module] -> GlobalEnv
+-- Functions and constraints share a namespace, so both kinds are included.
+buildExportEnv :: [Module] -> ExportEnv
 buildExportEnv mods =
-  makeGlobalEnv
+  makeExportEnv
     [ ((d.name, d.arity), [m.name])
     | m <- mods,
       d <- case m.exports of
@@ -62,25 +66,35 @@ isOperatorDecl _ = False
 
 renameProgram :: [Module] -> Either [RenameError] [Module]
 renameProgram mods =
-  let localEnv = buildLocalEnv mods
+  let declEnv = buildDeclEnv mods
       exportEnv = buildExportEnv mods
-      (result, errs) = runPureEff . runWriter $ traverse (renameModule localEnv exportEnv) mods
+      (result, errs) = runPureEff . runWriter $ traverse (renameModule declEnv exportEnv) mods
    in if null errs then Right result else Left errs
 
-renameModule :: LocalEnv -> GlobalEnv -> Module -> Eff '[Writer [RenameError]] Module
-renameModule localEnv exportEnv m = do
-  renamedRules <- traverse (renameRule localEnv exportEnv m) m.rules
-  renamedEquations <- traverse (traverse (renameEquation localEnv exportEnv m)) m.equations
+renameModule :: DeclEnv -> ExportEnv -> Module -> Eff '[Writer [RenameError]] Module
+renameModule declEnv exportEnv m = do
+  renamedRules <- traverse (renameRule declEnv exportEnv m) m.rules
+  renamedEquations <- traverse (traverse (renameEquation declEnv exportEnv m)) m.equations
   pure m {rules = renamedRules, equations = renamedEquations}
 
 -- | Controls how deeply name resolution is applied.
+--
+-- The mode determines both the recursion depth and the 'UnknownNamePolicy':
+--
+-- * 'NoResolve': head arguments and nested data terms — names are never
+--   looked up because they represent data constructors, not callable entities.
+--
+-- * 'ResolveTop': rule bodies — the outermost functor must be a declared
+--   constraint ('ErrorOnUnknownName'), but its arguments are data terms
+--   (children get 'NoResolve').
+--
+-- * 'ResolveAll': guards and @is@ RHS — every nesting level is resolved,
+--   but unknown names are tolerated ('AcceptUnknownName') because they may
+--   be data constructors (e.g., @.@ for lists).
 data ResolveMode
-  = -- | Don't resolve (head args, nested data terms).
-    NoResolve
-  | -- | Resolve this level only, children get 'NoResolve' (body goals).
-    ResolveTop
-  | -- | Resolve at every nesting level (guards, @is@ RHS).
-    ResolveAll
+  = NoResolve
+  | ResolveTop
+  | ResolveAll
   deriving (Eq)
 
 -- | Controls whether an unresolved name is an error or silently kept.
@@ -90,61 +104,70 @@ data UnknownNamePolicy
   | -- | Leave 'Unqualified' without error (expression context — may be a data constructor).
     AcceptUnknownName
 
-renameRule :: LocalEnv -> GlobalEnv -> Module -> Rule -> Eff '[Writer [RenameError]] Rule
-renameRule localEnv exportEnv m r = do
-  h <- traverse (renameHead localEnv exportEnv m r.head.sourceLoc) r.head
-  g <- traverse (traverse (renameTerm localEnv exportEnv m r.guard.sourceLoc ResolveAll)) r.guard
-  b <- traverse (traverse (renameTerm localEnv exportEnv m r.body.sourceLoc ResolveTop)) r.body
+renameRule :: DeclEnv -> ExportEnv -> Module -> Rule -> Eff '[Writer [RenameError]] Rule
+renameRule declEnv exportEnv m r = do
+  h <- traverse (renameHead declEnv exportEnv m r.head.sourceLoc) r.head
+  g <- traverse (traverse (renameTerm declEnv exportEnv m r.guard.sourceLoc ResolveAll)) r.guard
+  b <- traverse (traverse (renameTerm declEnv exportEnv m r.body.sourceLoc ResolveTop)) r.body
   pure r {head = h, guard = g, body = b}
 
-renameEquation :: LocalEnv -> GlobalEnv -> Module -> FunctionEquation -> Eff '[Writer [RenameError]] FunctionEquation
-renameEquation localEnv exportEnv m eq = do
+renameEquation :: DeclEnv -> ExportEnv -> Module -> FunctionEquation -> Eff '[Writer [RenameError]] FunctionEquation
+renameEquation declEnv exportEnv m eq = do
+  -- Equation args don't carry their own SourceLoc; use the guard's as a proxy.
   let loc = eq.guard.sourceLoc
-  renamedArgs <- traverse (renameTerm localEnv exportEnv m loc NoResolve) eq.args
-  renamedGuard <- traverse (traverse (renameTerm localEnv exportEnv m loc ResolveAll)) eq.guard
-  renamedRhs <- traverse (renameTerm localEnv exportEnv m eq.rhs.sourceLoc ResolveAll) eq.rhs
+  renamedArgs <- traverse (renameTerm declEnv exportEnv m loc NoResolve) eq.args
+  renamedGuard <- traverse (traverse (renameTerm declEnv exportEnv m loc ResolveAll)) eq.guard
+  renamedRhs <- traverse (renameTerm declEnv exportEnv m eq.rhs.sourceLoc ResolveAll) eq.rhs
   pure eq {args = renamedArgs, guard = renamedGuard, rhs = renamedRhs}
 
-renameHead :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Head -> Eff '[Writer [RenameError]] Head
-renameHead localEnv exportEnv m loc h = case h of
-  Simplification cs -> Simplification <$> traverse (renameCon localEnv exportEnv m loc) cs
-  Propagation cs -> Propagation <$> traverse (renameCon localEnv exportEnv m loc) cs
-  Simpagation k r -> Simpagation <$> traverse (renameCon localEnv exportEnv m loc) k <*> traverse (renameCon localEnv exportEnv m loc) r
+renameHead :: DeclEnv -> ExportEnv -> Module -> SourceLoc -> Head -> Eff '[Writer [RenameError]] Head
+renameHead declEnv exportEnv m loc h = case h of
+  Simplification cs -> Simplification <$> traverse (renameCon declEnv exportEnv m loc) cs
+  Propagation cs -> Propagation <$> traverse (renameCon declEnv exportEnv m loc) cs
+  Simpagation k r -> Simpagation <$> traverse (renameCon declEnv exportEnv m loc) k <*> traverse (renameCon declEnv exportEnv m loc) r
 
-renameCon :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Constraint -> Eff '[Writer [RenameError]] Constraint
-renameCon localEnv exportEnv m loc (Constraint cname cargs) = do
-  renamedName <- resolveName ErrorOnUnknownName localEnv exportEnv m loc cname (length cargs)
-  renamedArgs <- traverse (renameTerm localEnv exportEnv m loc NoResolve) cargs
+renameCon :: DeclEnv -> ExportEnv -> Module -> SourceLoc -> Constraint -> Eff '[Writer [RenameError]] Constraint
+renameCon declEnv exportEnv m loc (Constraint cname cargs) = do
+  renamedName <- resolveName ErrorOnUnknownName declEnv exportEnv m loc cname (length cargs)
+  renamedArgs <- traverse (renameTerm declEnv exportEnv m loc NoResolve) cargs
   pure (Constraint renamedName renamedArgs)
 
-renameTerm :: LocalEnv -> GlobalEnv -> Module -> SourceLoc -> ResolveMode -> Term -> Eff '[Writer [RenameError]] Term
-renameTerm localEnv exportEnv m loc mode t = case t of
+renameTerm :: DeclEnv -> ExportEnv -> Module -> SourceLoc -> ResolveMode -> Term -> Eff '[Writer [RenameError]] Term
+renameTerm declEnv exportEnv m loc mode t = case t of
   -- Special case: @is@ passes 'ResolveAll' to its RHS expression.
   CompoundTerm (Unqualified "is") [lhs, rhs] | mode /= NoResolve -> do
-    renamedLhs <- renameTerm localEnv exportEnv m loc NoResolve lhs
-    renamedRhs <- renameTerm localEnv exportEnv m loc ResolveAll rhs
+    renamedLhs <- renameTerm declEnv exportEnv m loc NoResolve lhs
+    renamedRhs <- renameTerm declEnv exportEnv m loc ResolveAll rhs
     pure (CompoundTerm (Unqualified "is") [renamedLhs, renamedRhs])
   CompoundTerm name args -> do
     let childMode = case mode of
           NoResolve -> NoResolve
           ResolveTop -> NoResolve
           ResolveAll -> ResolveAll
-    renamedArgs <- traverse (renameTerm localEnv exportEnv m loc childMode) args
-    let policy = case mode of
-          ResolveTop -> ErrorOnUnknownName
-          ResolveAll -> AcceptUnknownName
-          NoResolve -> ErrorOnUnknownName -- unreachable, guarded below
-    newName <- if mode /= NoResolve then resolveName policy localEnv exportEnv m loc name (length args) else pure name
+    renamedArgs <- traverse (renameTerm declEnv exportEnv m loc childMode) args
+    newName <- case mode of
+      NoResolve -> pure name
+      ResolveTop -> resolveName ErrorOnUnknownName declEnv exportEnv m loc name (length args)
+      ResolveAll -> resolveName AcceptUnknownName declEnv exportEnv m loc name (length args)
     pure (CompoundTerm newName renamedArgs)
   other -> pure other
 
-resolveName :: UnknownNamePolicy -> LocalEnv -> GlobalEnv -> Module -> SourceLoc -> Name -> Int -> Eff '[Writer [RenameError]] Name
-resolveName policy localEnv exportEnv currentMod loc (Unqualified n) arity
+-- | Resolve an 'Unqualified' name to a 'Qualified' one.
+--
+-- Resolution order: the current module's own declarations (via 'DeclEnv')
+-- are checked first, then declarations exported by imported modules (via
+-- 'ExportEnv'). Exactly one match is required; zero matches are handled
+-- according to 'UnknownNamePolicy', and multiple matches produce an
+-- 'AmbiguousName' error.
+--
+-- Already-'Qualified' names pass through unchanged.
+resolveName :: UnknownNamePolicy -> DeclEnv -> ExportEnv -> Module -> SourceLoc -> Name -> Int -> Eff '[Writer [RenameError]] Name
+resolveName policy declEnv exportEnv currentMod loc (Unqualified n) arity
   | isReserved n reservedSymbols = pure (Unqualified n)
   | otherwise =
-      let ownProviders = filter (== currentMod.name) (lookupLocal (n, arity) localEnv)
+      let ownProviders = filter (== currentMod.name) (lookupDecl (n, arity) declEnv)
           importNames = [mn | Ann (ModuleImport mn) _ <- currentMod.imports]
-          importProviders = filter (`elem` importNames) (lookupGlobal (n, arity) exportEnv)
+          importProviders = filter (`elem` importNames) (lookupExport (n, arity) exportEnv)
           matches = ownProviders ++ importProviders
        in case matches of
             [m] -> pure (Qualified m n)
@@ -163,7 +186,7 @@ resolveName _ _ _ _ _ (Qualified m n) _ = pure (Qualified m n)
 -- Returns 'Left' if any rename errors occur.
 renameQueryGoals :: [Module] -> [Term] -> Either [RenameError] [Term]
 renameQueryGoals mods goals =
-  let localEnv = buildLocalEnv mods
+  let declEnv = buildDeclEnv mods
       exportEnv = buildExportEnv mods
       queryMod =
         Module
@@ -176,5 +199,5 @@ renameQueryGoals mods goals =
           }
       (renamed, errs) =
         runPureEff . runWriter $
-          traverse (renameTerm localEnv exportEnv queryMod dummyLoc ResolveTop) goals
+          traverse (renameTerm declEnv exportEnv queryMod dummyLoc ResolveTop) goals
    in if null errs then Right renamed else Left errs

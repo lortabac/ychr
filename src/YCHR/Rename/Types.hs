@@ -1,13 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module YCHR.Rename.Types
-  ( GlobalEnv,
-    makeGlobalEnv,
-    lookupGlobal,
-    toListGlobal,
-    LocalEnv,
-    makeLocalEnv,
-    lookupLocal,
+  ( ExportEnv,
+    makeExportEnv,
+    lookupExport,
+    toListExport,
+    DeclEnv,
+    makeDeclEnv,
+    lookupDecl,
     ReservedSymbols,
     isReserved,
     reservedSymbols,
@@ -18,24 +18,24 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 
-newtype GlobalEnv = GlobalEnv (Map.Map (Text, Int) [Text])
+newtype ExportEnv = ExportEnv (Map.Map (Text, Int) [Text])
 
-makeGlobalEnv :: [((Text, Int), [Text])] -> GlobalEnv
-makeGlobalEnv = GlobalEnv . Map.fromListWith (++)
+makeExportEnv :: [((Text, Int), [Text])] -> ExportEnv
+makeExportEnv = ExportEnv . Map.fromListWith (++)
 
-lookupGlobal :: (Text, Int) -> GlobalEnv -> [Text]
-lookupGlobal k (GlobalEnv m) = Map.findWithDefault [] k m
+lookupExport :: (Text, Int) -> ExportEnv -> [Text]
+lookupExport k (ExportEnv m) = Map.findWithDefault [] k m
 
-toListGlobal :: GlobalEnv -> [((Text, Int), [Text])]
-toListGlobal (GlobalEnv m) = Map.toList m
+toListExport :: ExportEnv -> [((Text, Int), [Text])]
+toListExport (ExportEnv m) = Map.toList m
 
-newtype LocalEnv = LocalEnv (Map.Map (Text, Int) [Text])
+newtype DeclEnv = DeclEnv (Map.Map (Text, Int) [Text])
 
-makeLocalEnv :: [((Text, Int), [Text])] -> LocalEnv
-makeLocalEnv = LocalEnv . Map.fromListWith (++)
+makeDeclEnv :: [((Text, Int), [Text])] -> DeclEnv
+makeDeclEnv = DeclEnv . Map.fromListWith (++)
 
-lookupLocal :: (Text, Int) -> LocalEnv -> [Text]
-lookupLocal k (LocalEnv m) = Map.findWithDefault [] k m
+lookupDecl :: (Text, Int) -> DeclEnv -> [Text]
+lookupDecl k (DeclEnv m) = Map.findWithDefault [] k m
 
 newtype ReservedSymbols = ReservedSymbols (Set.Set Text)
 
