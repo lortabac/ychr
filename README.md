@@ -1,7 +1,13 @@
 # YCHR
 
-A production-grade, extensible Constraint Handling Rules (CHR) compiler targeting
-dynamically-typed procedural languages.
+## Status
+
+Work in progress. Check the roadmap for updates.
+
+## Goal
+
+A production-grade, extensible Constraint Handling Rules (CHR)
+compiler targeting dynamically-typed procedural languages.
 The surface language is standard CHR with Prolog-compatible syntax.
 The compiler is implemented in Haskell and produces code for an internal abstract VM,
 which can be interpreted directly or compiled to Scheme or JavaScript.
@@ -67,13 +73,28 @@ member(X, [_|Xs]) -> member(X, Xs).
 - [x] Constraint store
 - [x] Propagation history
 - [x] Reactivation queue
+- [ ] Introspection capabilities
+- [ ] Meta-programming capabilities
+
+### REPL
+
+- [x] Prolog-style queries
+- [ ] Store inpection
+- [ ] Live debugging sessions
 
 ### Testing
 
 - [x] Unit tests (parser, renamer, desugarer, runtime components)
 - [x] Golden tests
 - [x] End-to-end tests
-- [ ] Comprehensive test suite (standard CHR benchmarks: leq, Fibonacci, Dijkstra, etc.)
+- [ ] Comprehensive test suite
+
+### Benchmarking
+
+- [ ] Interpreter benchmarks
+- [ ] Scheme runtime benchmarks
+- [ ] JavaScript runtime benchmarks
+- [ ] Compiler benchmarks
 
 ## Installation
 
