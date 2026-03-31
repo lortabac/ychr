@@ -41,11 +41,12 @@ module YCHR.Parser
   )
 where
 
-import Control.Monad (void, when)
+import Control.Monad (foldM, void, when)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
+import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -65,7 +66,7 @@ import YCHR.Types
 data OpTable = OpTable
   { opsByFixity :: IntMap [(OpType, Text)],
     -- | Precomputed set of word (non-symbolic) operator names, for reserving
-    -- them in 'atomP'.
+    -- them in 'atomP'.  See Note [Two atom rejection mechanisms].
     wordOpSet :: Set Text
   }
   deriving (Show)
@@ -93,17 +94,7 @@ mkOpTable entries =
 -- found (same operator name at a different fixity or type).
 mergeOps :: OpTable -> [OpDecl] -> Either Text OpTable
 mergeOps base decls = do
-  -- Check for conflicts: same name with different fixity or type
-  let existing =
-        [ (name, (fix, ty))
-        | (fix, ops) <- IntMap.toList base.opsByFixity,
-          (ty, name) <- ops
-        ]
-      newOps = [(d.opName, (d.fixity, d.opType)) | d <- decls]
-      allOps = existing ++ newOps
-      -- Group by name, check all entries for a name are identical
-      grouped = foldr (\(n, ft) acc -> IntMap.alter (addToGroup n ft) (hashName n) acc) IntMap.empty allOps
-  checkConflicts (IntMap.elems grouped)
+  checkConflicts
   let userEntries =
         [ (d.fixity, [(d.opType, d.opName)])
         | d <- decls
@@ -117,33 +108,21 @@ mergeOps base decls = do
             (Set.fromList [d.opName | d <- decls, not (isSymbolic d.opName)])
       }
   where
-    hashName :: Text -> Int
-    hashName = T.foldl' (\acc c -> acc * 31 + fromEnum c) 0
-
-    addToGroup :: Text -> (Int, OpType) -> Maybe [(Text, (Int, OpType))] -> Maybe [(Text, (Int, OpType))]
-    addToGroup n ft Nothing = Just [(n, ft)]
-    addToGroup n ft (Just xs) = Just ((n, ft) : xs)
-
-    checkConflicts :: [[(Text, (Int, OpType))]] -> Either Text ()
-    checkConflicts [] = pure ()
-    checkConflicts (group : rest) = do
-      -- Within each hash bucket, check names that match
-      let byName = foldr (\(n, ft) acc -> insertWith n ft acc) [] group
-      mapM_ checkNameGroup byName
-      checkConflicts rest
-
-    insertWith :: Text -> (Int, OpType) -> [(Text, [(Int, OpType)])] -> [(Text, [(Int, OpType)])]
-    insertWith n ft [] = [(n, [ft])]
-    insertWith n ft ((n', fts) : rest)
-      | n == n' = (n', ft : fts) : rest
-      | otherwise = (n', fts) : insertWith n ft rest
-
-    checkNameGroup :: (Text, [(Int, OpType)]) -> Either Text ()
-    checkNameGroup (_, []) = pure ()
-    checkNameGroup (_, [_]) = pure ()
-    checkNameGroup (name, (ft : fts))
-      | all (== ft) fts = pure ()
-      | otherwise = Left name
+    checkConflicts :: Either Text ()
+    checkConflicts =
+      let existing =
+            [ (name, (fix, ty))
+            | (fix, ops) <- IntMap.toList base.opsByFixity,
+              (ty, name) <- ops
+            ]
+          newOps = [(d.opName, (d.fixity, d.opType)) | d <- decls]
+          -- Build a map from operator name to its (fixity, type).  If two
+          -- entries for the same name disagree, report a conflict.
+          insert (n, ft) acc = case Map.lookup n acc of
+            Nothing -> Right (Map.insert n ft acc)
+            Just ft' | ft == ft' -> Right acc
+            Just _ -> Left n
+       in foldM (flip insert) Map.empty (existing ++ newOps) *> pure ()
 
 -- | Check whether a name consists entirely of symbol characters.
 isSymbolic :: Text -> Bool
@@ -154,9 +133,7 @@ symbolChars :: [Char]
 symbolChars = ":=<>+-*/#@^~!&?"
 
 -- | Convert an 'OpTable' to the format expected by 'makeExprParser'.
--- @makeExprParser@ expects groups in descending precedence (tightest first).
--- In Prolog, lower fixity number = higher precedence (tighter binding),
--- so we sort fixity keys in ascending order.
+-- See Note [Prolog fixity vs makeExprParser precedence].
 buildExprOpTable :: OpTable -> [[Operator Parser Term]]
 buildExprOpTable table =
   [ concatMap toMegaparsecOp ops
@@ -236,13 +213,15 @@ parseModules inputs = do
       <$> traverse
         (\(fp, src) -> first' (fp,) (collectOperatorDecls fp src))
         inputs
-  -- Merge with builtins
+  -- Merge with builtins.
+  -- TODO: operator conflicts should use a dedicated error type rather than
+  -- a bottom-valued ParseErrorBundle.  Currently, forcing the bundle will
+  -- crash at runtime.  This is acceptable because callers pattern-match on
+  -- the file name ("<operators>") to detect this case, but it is fragile.
   table <- case mergeOps builtinOps allOps of
     Left conflict ->
       Left
         ( "<operators>",
-          -- Produce a dummy ParseErrorBundle — the caller should handle this
-          -- differently, but we keep the type uniform for now.
           error ("Operator naming conflict: " ++ T.unpack conflict)
         )
     Right t -> Right t
@@ -344,6 +323,7 @@ comma = void (symbol ",")
 -- ---------------------------------------------------------------------------
 
 -- | Reserved words that cannot be used as unquoted atoms (they are operators).
+-- See Note [Two atom rejection mechanisms].
 reservedWords :: [Text]
 reservedWords = ["is"]
 
@@ -429,8 +409,7 @@ wordOp w = lexeme $ try $ do
   pure w
 
 -- | Parse a symbol operator (e.g. @=<@, @==@, @+@).
--- Reads the longest run of symbol characters and checks for an exact match,
--- backtracking if the run does not equal the expected operator.
+-- See Note [Longest-match symbol operators].
 symbolOp :: Text -> Parser Text
 symbolOp op = lexeme $ try $ do
   s <- T.pack <$> some (oneOf symbolChars)
@@ -517,6 +496,10 @@ termP = do
 -- | Parse an atom optionally followed by a parenthesised argument list.
 -- Produces 'CompoundTerm' if arguments are present, 'AtomTerm' otherwise.
 -- Supports qualified names: @module:name(args)@.
+--
+-- A qualified name without arguments (e.g. @order:leq@) still produces a
+-- @'CompoundTerm' (Qualified ...) []@ rather than an 'AtomTerm', because
+-- 'AtomTerm' does not carry a 'Name' — only a plain 'Text'.
 atomOrCompoundP :: Parser Term
 atomOrCompoundP = do
   name <- try qualifiedNameP <|> (Unqualified <$> atomP)
@@ -765,6 +748,9 @@ data ModuleItem
   | ItemEquation (Ann FunctionEquation)
 
 -- | Parse a complete CHR module.
+--
+-- If multiple @:- module(...)@ directives appear, only the first is used.
+-- Unknown directives are silently skipped.
 moduleP :: Parser Module
 moduleP = do
   items <-
@@ -791,7 +777,8 @@ moduleP = do
 -- First-pass operator collector
 -- ---------------------------------------------------------------------------
 
--- | Plain parser type for the first-pass collector (no ReaderT needed).
+-- | Plain parser type for the first-pass collector.
+-- See Note [First-pass operator collector].
 type Parser' = Parsec Void Text
 
 -- | Collect operator declarations from a module's @:- module(...)@ directive.
@@ -896,3 +883,55 @@ extractOpDecls :: Module -> [OpDecl]
 extractOpDecls m = case m.exports of
   Nothing -> []
   Just exports -> [op | OperatorDecl op <- exports]
+
+-- ---------------------------------------------------------------------------
+-- Notes
+-- ---------------------------------------------------------------------------
+
+-- Note [Two atom rejection mechanisms]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- 'atomP' rejects unquoted atoms via two mechanisms:
+--
+-- 1. 'reservedWords': a static list of words that are always reserved (e.g.
+--    "is").  These are built-in operators whose keywords must never parse as
+--    atoms regardless of the operator table.
+--
+-- 2. 'wordOpSet': the set of non-symbolic operator names from the current
+--    'OpTable'.  This is dynamically populated from user-defined operator
+--    declarations.  For example, if the user declares @op(700, xfx, div)@,
+--    then "div" will be rejected as an atom.
+--
+-- The two mechanisms are complementary: 'reservedWords' covers the built-in
+-- operators that must be rejected even when the 'OpTable' is empty (e.g.
+-- during first-pass collection), and 'wordOpSet' covers user-defined word
+-- operators that only exist after the operator table is populated.
+
+-- Note [Longest-match symbol operators]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- 'symbolOp' parses symbol operators by reading the longest run of symbol
+-- characters and then checking whether the result matches the expected
+-- operator.  This avoids prefix ambiguity: without longest-match, parsing
+-- @=<@ could succeed on just @=@ and leave @<@ unconsumed.  By reading
+-- greedily and comparing, we ensure that @=@ only matches when not followed
+-- by more symbol characters (e.g. it won't match the @=@ in @=<@).
+
+-- Note [Prolog fixity vs makeExprParser precedence]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- In Prolog, a /lower/ fixity number means /higher/ precedence (tighter
+-- binding).  For example, @*@ at fixity 400 binds tighter than @+@ at 500.
+-- 'makeExprParser' from @parser-combinators@ expects operator groups in
+-- /descending/ precedence order (tightest first).  Since 'IntMap.toAscList'
+-- returns keys in ascending numeric order, and ascending fixity numbers
+-- correspond to descending precedence, the two conventions align without
+-- any reversal.
+
+-- Note [First-pass operator collector]
+-- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-- 'collectOperatorDecls' duplicates several lexer/parser primitives (atom
+-- parsing, operator type parsing, etc.) using the plain 'Parser'' type
+-- instead of the 'ReaderT OpTable' 'Parser' type.  This is intentional:
+-- the first pass runs /before/ the operator table is known, so it cannot
+-- use 'Parser' (which requires an 'OpTable' in its reader environment).
+-- It only needs to extract @op(...)@ entries from the module directive's
+-- export list, so the duplicated parsers are simpler (e.g. 'atomP'' does
+-- not reject word operators, since the operator table doesn't exist yet).
