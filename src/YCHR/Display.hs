@@ -100,3 +100,10 @@ instance Display Error where
   displayMsg (RenameErrors errs) = unlines (map displayMsg errs)
   displayMsg (DesugarErrors errs) = unlines (map displayMsg errs)
   displayMsg (CompileErrors errs) = unlines (map displayMsg errs)
+  displayMsg (OperatorConflict sources name) =
+    "operator naming conflict: "
+      ++ T.unpack name
+      ++ case sources of
+        [] -> ""
+        _ -> " (declared in " ++ intercalate ", " sources ++ ")"
+      ++ "\n"

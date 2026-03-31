@@ -57,7 +57,7 @@ import YCHR.Compile (CompileError, compile, funcProcName, procNameFor)
 import YCHR.Desugar (DesugarError, desugarProgram, desugarQueryGoals, extractSymbolTable)
 import YCHR.Desugared qualified as D
 import YCHR.Meta (valueToTerm)
-import YCHR.Parsed (Import (..), Module (..), noAnn)
+import YCHR.Parsed (Import (..), Module (..), OpDecl (..), noAnn)
 import YCHR.Parser (OpTable, builtinOps, collectOperatorDecls, extractOpDecls, mergeOps, parseConstraint, parseModuleWith, parseQueryWith)
 import YCHR.Rename (RenameError, buildExportEnv, renameProgram, renameQueryGoals)
 import YCHR.Rename.Types (toListGlobal)
@@ -78,6 +78,7 @@ data Error
   | RenameErrors [RenameError]
   | DesugarErrors [DesugarError]
   | CompileErrors [CompileError]
+  | OperatorConflict [FilePath] Text
   deriving (Show)
 
 instance Exception Error
@@ -100,10 +101,10 @@ data ExportResolution
 compileModules :: Bool -> [(FilePath, Text)] -> Either Error CompiledProgram
 compileModules includeStdlib inputs = do
   -- Collect operators from user sources (lightweight first pass)
-  userOps <-
+  userOpsByFile <-
     first (\(fp, e) -> ParseError fp e) $
-      fmap concat $
-        traverse (\(fp, src) -> first' (fp,) (collectOperatorDecls fp src)) inputs
+      traverse (\(fp, src) -> (fp,) <$> first' (fp,) (collectOperatorDecls fp src)) inputs
+  let userOps = concatMap snd userOpsByFile
   -- Collect operators from all stdlib modules (already parsed by TH).
   -- Always include these since builtins are auto-imported regardless of
   -- includeStdlib, and extra syntactic operators don't affect correctness.
@@ -111,11 +112,8 @@ compileModules includeStdlib inputs = do
   -- Merge all operators into one table
   table <- case mergeOps builtinOps (userOps ++ stdlibOps) of
     Left conflict ->
-      Left
-        ( ParseError
-            "<operators>"
-            (error ("Operator naming conflict: " ++ T.unpack conflict))
-        )
+      let sources = [fp | (fp, ops) <- userOpsByFile, any (\(OpDecl {opName}) -> opName == conflict) ops]
+       in Left (OperatorConflict sources conflict)
     Right t -> Right t
   -- Full parse user modules with the merged operator table
   parsed <-

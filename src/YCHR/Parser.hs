@@ -26,7 +26,6 @@
 module YCHR.Parser
   ( parseModule,
     parseModuleWith,
-    parseModules,
     parseConstraint,
     parseQuery,
     parseQueryWith,
@@ -197,43 +196,6 @@ parseModuleWith ::
   Text ->
   Either (ParseErrorBundle Text Void) Module
 parseModuleWith table = runP table (sc *> moduleP <* eof)
-
--- | Parse multiple modules using a two-pass approach:
---
--- 1. Collect operator declarations from all module directives.
--- 2. Merge with built-in operators (error on naming conflicts).
--- 3. Full-parse all modules with the merged operator table.
-parseModules ::
-  [(String, Text)] ->
-  Either (String, ParseErrorBundle Text Void) (OpTable, [Module])
-parseModules inputs = do
-  -- Pass 1: collect operator declarations from all modules
-  allOps <-
-    concat
-      <$> traverse
-        (\(fp, src) -> first' (fp,) (collectOperatorDecls fp src))
-        inputs
-  -- Merge with builtins.
-  -- TODO: operator conflicts should use a dedicated error type rather than
-  -- a bottom-valued ParseErrorBundle.  Currently, forcing the bundle will
-  -- crash at runtime.  This is acceptable because callers pattern-match on
-  -- the file name ("<operators>") to detect this case, but it is fragile.
-  table <- case mergeOps builtinOps allOps of
-    Left conflict ->
-      Left
-        ( "<operators>",
-          error ("Operator naming conflict: " ++ T.unpack conflict)
-        )
-    Right t -> Right t
-  -- Pass 2: full parse with merged table
-  mods <-
-    traverse
-      (\(fp, src) -> first' (fp,) (parseModuleWith table fp src))
-      inputs
-  pure (table, mods)
-  where
-    first' f (Left e) = Left (f e)
-    first' _ (Right x) = Right x
 
 -- | Parse a single constraint from surface-language 'Text'.
 --
