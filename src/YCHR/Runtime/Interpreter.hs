@@ -24,6 +24,7 @@ where
 import Data.Foldable (toList, traverse_)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Effectful
 import Effectful.Error.Static (Error, runError, throwError)
@@ -48,7 +49,7 @@ import YCHR.Runtime.Store
     suspArg,
   )
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (Unify, deref, equal, getArg, makeTerm, matchTerm, newVar, runUnify, unify)
+import YCHR.Runtime.Var (Unify, deref, equal, getArg, getVarId, makeTerm, matchTerm, newVar, runUnify, unify)
 import YCHR.VM
 
 -- ---------------------------------------------------------------------------
@@ -104,7 +105,9 @@ baseHostCallRegistry =
       (Name "boolean", typePred isBoolean),
       (Name "string", typePred isString),
       (Name "var", typePred isVar),
-      (Name "nonvar", typePred isNonvar)
+      (Name "nonvar", typePred isNonvar),
+      (Name "ground", groundPred),
+      (Name "term_variables", termVariablesPred)
     ]
   where
     arith2 op = HostCallFn $ \case
@@ -153,6 +156,47 @@ baseHostCallRegistry =
     isVar VWildcard = True
     isVar _ = False
     isNonvar = not . isVar
+    groundPred = HostCallFn $ \case
+      [RVal v] -> RVal . VBool <$> isGround v
+      _ -> error "ground: expected 1 argument"
+    isGround v = do
+      v' <- deref v
+      case v' of
+        VVar _ -> pure False
+        VWildcard -> pure False
+        VTerm _ args -> allM isGround args
+        _ -> pure True
+    allM _ [] = pure True
+    allM p (x : xs) = do
+      b <- p x
+      if b then allM p xs else pure False
+    termVariablesPred = HostCallFn $ \case
+      [RVal v] -> do
+        (vars, _) <- collectVars Set.empty v
+        pure (RVal (valueList vars))
+      _ -> error "term_variables: expected 1 argument"
+    collectVars seen v = do
+      v' <- deref v
+      case v' of
+        VVar _ -> do
+          mid <- getVarId v'
+          case mid of
+            Just vid
+              | Set.member vid seen -> pure ([], seen)
+              | otherwise -> pure ([v'], Set.insert vid seen)
+            Nothing -> pure ([], seen)
+        VWildcard -> do
+          fresh <- newVar
+          pure ([fresh], seen)
+        VTerm _ args -> collectVarsMany seen args
+        _ -> pure ([], seen)
+    collectVarsMany seen [] = pure ([], seen)
+    collectVarsMany seen (x : xs) = do
+      (vars, seen') <- collectVars seen x
+      (rest, seen'') <- collectVarsMany seen' xs
+      pure (vars ++ rest, seen'')
+    valueList [] = VAtom "[]"
+    valueList (x : xs) = VTerm "." [x, valueList xs]
 
 -- | The unit return value for host calls that are only used for side effects.
 unit :: RuntimeVal

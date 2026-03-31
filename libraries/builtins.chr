@@ -18,6 +18,8 @@
     atom/1,
     boolean/1,
     string/1,
+    ground/1,
+    term_variables/2,
     op(500, yfx, '+'),
     op(500, yfx, '-'),
     op(400, yfx, '*'),
@@ -30,7 +32,7 @@
     op(700, xfx, '=<'),
     op(700, xfx, '==')
 ]).
-:- chr_constraint identity/2, print/1.
+:- chr_constraint identity/2, print/1, term_variables/2.
 
 identity(X, Y) <=> X = Y.
 
@@ -53,7 +55,8 @@ print(X) <=> host:print(X).
     integer/1,
     atom/1,
     boolean/1,
-    string/1.
+    string/1,
+    ground/1.
 
 X + Y -> host:'+'(X, Y).
 
@@ -88,3 +91,7 @@ atom(X) -> host:atom(X).
 boolean(X) -> host:boolean(X).
 
 string(X) -> host:string(X).
+
+ground(X) -> host:ground(X).
+
+term_variables(T, Vars) <=> Vars is host:term_variables(T).

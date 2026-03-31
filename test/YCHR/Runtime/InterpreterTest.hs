@@ -521,6 +521,26 @@ callTypePred name v = case Map.lookup name baseHostCallRegistry of
       RVal (VBool b) -> pure b
       _ -> assertFailure $ show name ++ ": expected Bool result"
 
+-- | Call term_variables directly, returning the resulting Value.
+callTermVars :: Value -> IO Value
+callTermVars v = case Map.lookup (Name "term_variables") baseHostCallRegistry of
+  Nothing -> assertFailure "term_variables not found in registry"
+  Just (HostCallFn f) -> do
+    result <- runEff . runUnify $ f [RVal v]
+    case result of
+      RVal val -> pure val
+      _ -> assertFailure "term_variables returned non-RVal"
+
+-- | Call term_variables within an existing Eff context.
+callTermVarsEff :: (Unify :> es, IOE :> es) => Value -> Eff es Value
+callTermVarsEff v = case Map.lookup (Name "term_variables") baseHostCallRegistry of
+  Nothing -> error "term_variables not found in registry"
+  Just (HostCallFn f) -> do
+    result <- f [RVal v]
+    case result of
+      RVal val -> pure val
+      _ -> error "term_variables returned non-RVal"
+
 typePredicateTests :: TestTree
 typePredicateTests =
   testGroup
@@ -600,5 +620,117 @@ typePredicateTests =
         assertBool "expected true" b,
       testCase "nonvar: true for ground value" $ do
         b <- callTypePred "nonvar" (VInt 42)
-        assertBool "expected true" b
+        assertBool "expected true" b,
+      testCase "ground: true for integer" $ do
+        b <- callTypePred "ground" (VInt 42)
+        assertBool "expected true" b,
+      testCase "ground: true for atom" $ do
+        b <- callTypePred "ground" (VAtom "hello")
+        assertBool "expected true" b,
+      testCase "ground: true for ground compound" $ do
+        b <- callTypePred "ground" (VTerm "f" [VInt 1, VAtom "hello"])
+        assertBool "expected true" b,
+      testCase "ground: false for unbound variable" $ do
+        b <- runEff . runUnify $ do
+          v <- newVar
+          let HostCallFn f = case Map.lookup (Name "ground") baseHostCallRegistry of
+                Just hc -> hc
+                Nothing -> error "ground not found"
+          result <- f [RVal v]
+          case result of
+            RVal (VBool b') -> pure b'
+            _ -> pure True
+        assertBool "expected false" (not b),
+      testCase "ground: false for compound with unbound var" $ do
+        b <- runEff . runUnify $ do
+          v <- newVar
+          let HostCallFn f = case Map.lookup (Name "ground") baseHostCallRegistry of
+                Just hc -> hc
+                Nothing -> error "ground not found"
+          result <- f [RVal (VTerm "f" [VInt 1, v])]
+          case result of
+            RVal (VBool b') -> pure b'
+            _ -> pure True
+        assertBool "expected false" (not b),
+      testCase "ground: true for compound with bound var" $ do
+        (b, _) <- runEff . runUnify . runWriter @[SuspensionId] $ do
+          v <- newVar
+          _ <- unify v (VInt 2)
+          let HostCallFn f = case Map.lookup (Name "ground") baseHostCallRegistry of
+                Just hc -> hc
+                Nothing -> error "ground not found"
+          result <- f [RVal (VTerm "f" [VInt 1, v])]
+          case result of
+            RVal (VBool b') -> pure b'
+            _ -> pure True
+        assertBool "expected true" b,
+      testCase "ground: false for wildcard" $ do
+        b <- callTypePred "ground" VWildcard
+        assertBool "expected false" (not b),
+      testCase "term_variables: ground term yields empty list" $ do
+        result <- callTermVars (VTerm "f" [VInt 1, VAtom "hello"])
+        case result of
+          VAtom "[]" -> pure ()
+          _ -> assertFailure "expected empty list",
+      testCase "term_variables: integer yields empty list" $ do
+        result <- callTermVars (VInt 42)
+        case result of
+          VAtom "[]" -> pure ()
+          _ -> assertFailure "expected empty list",
+      testCase "term_variables: unbound var yields singleton list" $ do
+        (isSingleton, sameVar) <- runEff . runUnify $ do
+          v <- newVar
+          result <- callTermVarsEff v
+          case result of
+            VTerm "." [x, VAtom "[]"] -> do
+              eq <- equal x v
+              pure (True, eq)
+            _ -> pure (False, False)
+        assertBool "expected singleton list" isSingleton
+        assertBool "list element should be same variable" sameVar,
+      testCase "term_variables: duplicate var appears once" $ do
+        (len, sameVar) <- runEff . runUnify $ do
+          v <- newVar
+          result <- callTermVarsEff (VTerm "f" [v, v])
+          case result of
+            VTerm "." [x, VAtom "[]"] -> do
+              eq <- equal x v
+              pure (1 :: Int, eq)
+            _ -> pure (0, False)
+        len @?= 1
+        assertBool "list element should be same variable" sameVar,
+      testCase "term_variables: two distinct vars in order" $ do
+        (len, eq1, eq2) <- runEff . runUnify $ do
+          x <- newVar
+          y <- newVar
+          result <- callTermVarsEff (VTerm "f" [x, y])
+          case result of
+            VTerm "." [a, VTerm "." [b, VAtom "[]"]] -> do
+              e1 <- equal a x
+              e2 <- equal b y
+              pure (2 :: Int, e1, e2)
+            _ -> pure (0, False, False)
+        len @?= 2
+        assertBool "first element should be X" eq1
+        assertBool "second element should be Y" eq2,
+      testCase "term_variables: wildcard produces fresh var" $ do
+        result <- runEff . runUnify $ do
+          callTermVarsEff VWildcard
+        case result of
+          VTerm "." [_, VAtom "[]"] -> pure ()
+          _ -> assertFailure "expected singleton list",
+      testCase "term_variables: nested compound" $ do
+        (len, eq1, eq2) <- runEff . runUnify $ do
+          x <- newVar
+          y <- newVar
+          result <- callTermVarsEff (VTerm "f" [VTerm "g" [x, VInt 1], y])
+          case result of
+            VTerm "." [a, VTerm "." [b, VAtom "[]"]] -> do
+              e1 <- equal a x
+              e2 <- equal b y
+              pure (2 :: Int, e1, e2)
+            _ -> pure (0, False, False)
+        len @?= 2
+        assertBool "first element should be X" eq1
+        assertBool "second element should be Y" eq2
     ]
