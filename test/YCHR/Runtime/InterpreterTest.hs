@@ -10,7 +10,7 @@ import Effectful.Writer.Static.Local (Writer, runWriter)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Runtime.History (PropHistory, runPropHistory)
-import YCHR.Runtime.Interpreter (HostCallRegistry, callProc, interpret)
+import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc, interpret)
 import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
@@ -456,14 +456,14 @@ arithCalls :: HostCallRegistry
 arithCalls =
   Map.fromList
     [ ( "+",
-        \args -> case args of
+        HostCallFn $ \args -> case args of
           [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (a + b)))
-          _ -> assertFailure "unexpected args to +"
+          _ -> liftIO (assertFailure "unexpected args to +")
       ),
       ( "*",
-        \args -> case args of
+        HostCallFn $ \args -> case args of
           [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (a * b)))
-          _ -> assertFailure "unexpected args to *"
+          _ -> liftIO (assertFailure "unexpected args to *")
       )
     ]
 

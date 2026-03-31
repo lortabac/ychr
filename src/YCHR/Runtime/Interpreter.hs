@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
 
 -- | Haskell interpreter for CHR VM programs.
 --
@@ -10,6 +11,7 @@
 module YCHR.Runtime.Interpreter
   ( -- * Public API
     interpret,
+    HostCallFn (..),
     HostCallRegistry,
     baseHostCallRegistry,
 
@@ -53,8 +55,12 @@ import YCHR.VM
 -- Types
 -- ---------------------------------------------------------------------------
 
+-- | A host call function that can use logical variables and IO.
+newtype HostCallFn = HostCallFn
+  {runHostCall :: forall es. (Unify :> es, IOE :> es) => [RuntimeVal] -> Eff es RuntimeVal}
+
 -- | Registry of host language functions.
-type HostCallRegistry = Map Name ([RuntimeVal] -> IO RuntimeVal)
+type HostCallRegistry = Map Name HostCallFn
 
 -- | Map from procedure name to procedure definition.
 type ProcMap = Map Name Procedure
@@ -95,28 +101,35 @@ baseHostCallRegistry =
       (Name "write", writeStr)
     ]
   where
-    arith2 op [RVal (VInt a), RVal (VInt b)] = pure (RVal (VInt (op a b)))
-    arith2 _ args = error $ "arithmetic host call: expected 2 Int arguments, got " ++ show (length args)
-    cmp op [RVal (VInt a), RVal (VInt b)] = pure (RVal (VBool (op a b)))
-    cmp _ args = error $ "comparison host call: expected 2 Int arguments, got " ++ show (length args)
-    valEq [RVal (VInt a), RVal (VInt b)] = pure (RVal (VBool (a == b)))
-    valEq [RVal (VAtom a), RVal (VAtom b)] = pure (RVal (VBool (a == b)))
-    valEq [RVal (VText a), RVal (VText b)] = pure (RVal (VBool (a == b)))
-    valEq [RVal (VBool a), RVal (VBool b)] = pure (RVal (VBool (a == b)))
-    valEq [_, _] = pure (RVal (VBool False))
-    valEq args = error $ "== host call: expected 2 arguments, got " ++ show (length args)
-    stringConcat [RVal (VText a), RVal (VText b)] = pure (RVal (VText (a <> b)))
-    stringConcat _ = error "string_concat: expected 2 Text arguments"
-    stringLength [RVal (VText s)] = pure (RVal (VInt (T.length s)))
-    stringLength _ = error "string_length: expected 1 Text argument"
-    stringUpper [RVal (VText s)] = pure (RVal (VText (T.toUpper s)))
-    stringUpper _ = error "string_upper: expected 1 Text argument"
-    stringLower [RVal (VText s)] = pure (RVal (VText (T.toLower s)))
-    stringLower _ = error "string_lower: expected 1 Text argument"
-    chrError :: [RuntimeVal] -> IO RuntimeVal
-    chrError _ = error "CHR runtime error: no matching equation"
-    writeStr [RVal (VText s)] = unit <$ putStr (T.unpack s)
-    writeStr _ = error "write: expected 1 Text argument"
+    arith2 op = HostCallFn $ \case
+      [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (op a b)))
+      args -> error $ "arithmetic host call: expected 2 Int arguments, got " ++ show (length args)
+    cmp op = HostCallFn $ \case
+      [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VBool (op a b)))
+      args -> error $ "comparison host call: expected 2 Int arguments, got " ++ show (length args)
+    valEq = HostCallFn $ \case
+      [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VBool (a == b)))
+      [RVal (VAtom a), RVal (VAtom b)] -> pure (RVal (VBool (a == b)))
+      [RVal (VText a), RVal (VText b)] -> pure (RVal (VBool (a == b)))
+      [RVal (VBool a), RVal (VBool b)] -> pure (RVal (VBool (a == b)))
+      [_, _] -> pure (RVal (VBool False))
+      args -> error $ "== host call: expected 2 arguments, got " ++ show (length args)
+    stringConcat = HostCallFn $ \case
+      [RVal (VText a), RVal (VText b)] -> pure (RVal (VText (a <> b)))
+      _ -> error "string_concat: expected 2 Text arguments"
+    stringLength = HostCallFn $ \case
+      [RVal (VText s)] -> pure (RVal (VInt (T.length s)))
+      _ -> error "string_length: expected 1 Text argument"
+    stringUpper = HostCallFn $ \case
+      [RVal (VText s)] -> pure (RVal (VText (T.toUpper s)))
+      _ -> error "string_upper: expected 1 Text argument"
+    stringLower = HostCallFn $ \case
+      [RVal (VText s)] -> pure (RVal (VText (T.toLower s)))
+      _ -> error "string_lower: expected 1 Text argument"
+    chrError = HostCallFn $ \_ -> error "CHR runtime error: no matching equation"
+    writeStr = HostCallFn $ \case
+      [RVal (VText s)] -> unit <$ liftIO (putStr (T.unpack s))
+      _ -> error "write: expected 1 Text argument"
 
 -- | The unit return value for host calls that are only used for side effects.
 unit :: RuntimeVal
@@ -315,7 +328,7 @@ evalVmExpr pm hc (HostCall name args) = do
   argVals <- traverse (evalVmExpr pm hc) args
   derefedVals <- traverse derefRV argVals
   case Map.lookup name hc of
-    Just f -> liftIO (f derefedVals)
+    Just (HostCallFn f) -> f derefedVals
     Nothing -> error $ "evalVmExpr: unknown host call " ++ T.unpack name.unName
   where
     derefRV (RVal v) = RVal <$> deref v
@@ -410,7 +423,7 @@ evalExpr pm hc (Var name) = do
 evalExpr pm hc (HostCall name args) = do
   argVals <- traverse (evalExpr pm hc) args
   case Map.lookup name hc of
-    Just f -> liftIO (f argVals)
+    Just (HostCallFn f) -> f argVals
     Nothing -> error $ "evalExpr: unknown host call " ++ T.unpack name.unName
 evalExpr pm hc (CallExpr name args) = do
   argVals <- traverse (evalExpr pm hc) args

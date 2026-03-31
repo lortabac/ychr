@@ -16,9 +16,9 @@ where
 
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
-import Effectful (Eff, runEff, type (:>))
+import Effectful (Eff, liftIO, runEff, type (:>))
 import YCHR.Pretty (prettyTerm)
-import YCHR.Runtime.Interpreter (HostCallRegistry, unit)
+import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, unit)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, deref, runUnify)
 import YCHR.Types (Term (..))
@@ -52,9 +52,9 @@ metaHostCallRegistry :: HostCallRegistry
 metaHostCallRegistry =
   Map.fromList
     [ ( Name "print",
-        \args -> do
-          strs <- mapM prettyRuntimeVal args
-          mapM_ putStrLn strs
+        HostCallFn $ \args -> do
+          strs <- liftIO (mapM prettyRuntimeVal args)
+          liftIO (mapM_ putStrLn strs)
           pure unit
       )
     ]

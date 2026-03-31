@@ -10,7 +10,7 @@ import Effectful (Eff, (:>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.EndToEnd (CompiledProgram (..), ConstraintType, Value (..), compileModules, equal, newVar, resolveQueryConstraint, runProgramWithGoal, tellConstraint, withCHR)
-import YCHR.Runtime.Interpreter (HostCallRegistry)
+import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive)
 import YCHR.Runtime.Types (RuntimeVal (..))
 import YCHR.Types (Constraint (..), Name (..), Term (..), lookupSymbol)
@@ -149,8 +149,8 @@ extractIntArgs context vals = error $ context ++ ": expected 2 Int arguments, go
 fibHostCalls :: HostCallRegistry
 fibHostCalls =
   Map.fromList
-    [ (VM.Name "+", \args -> let (a, b) = extractIntArgs "+" args in pure (RVal (VInt (a + b)))),
-      (VM.Name "-", \args -> let (a, b) = extractIntArgs "-" args in pure (RVal (VInt (a - b))))
+    [ (VM.Name "+", HostCallFn $ \args -> let (a, b) = extractIntArgs "+" args in pure (RVal (VInt (a + b)))),
+      (VM.Name "-", HostCallFn $ \args -> let (a, b) = extractIntArgs "-" args in pure (RVal (VInt (a - b))))
     ]
 
 fibTests :: TestTree

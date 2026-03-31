@@ -62,7 +62,7 @@ import YCHR.Parser (OpTable, builtinOps, collectOperatorDecls, extractOpDecls, m
 import YCHR.Rename (RenameError, buildExportEnv, renameProgram, renameQueryGoals)
 import YCHR.Rename.Types (toListExport)
 import YCHR.Runtime.History (PropHistory, runPropHistory)
-import YCHR.Runtime.Interpreter (HostCallRegistry, callProc)
+import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc)
 import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue)
 import YCHR.Runtime.Store (CHRStore, aliveConstraint, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId, Value (..))
@@ -354,7 +354,7 @@ executeBodyGoal _ (D.BodyUnify l r) = do
   drainReactivation procMap hc'
 executeBodyGoal hc (D.BodyHostStmt f args) = do
   argVals <- traverse termToValue args
-  _ <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
+  _ <- hostCall (Map.lookup (Name f) hc) f (map RVal argVals)
   pure ()
 executeBodyGoal hc (D.BodyIs v expr) = do
   result <- evalTermArith hc expr
@@ -376,8 +376,8 @@ executeBodyGoal hc (D.BodyFunctionCall name args) = do
   pure ()
 
 -- | Call a host function, failing with a clear message if not found.
-hostCall :: Maybe ([RuntimeVal] -> IO RuntimeVal) -> Text -> [RuntimeVal] -> IO RuntimeVal
-hostCall (Just f) _ args = f args
+hostCall :: (Unify :> es, IOE :> es) => Maybe HostCallFn -> Text -> [RuntimeVal] -> Eff es RuntimeVal
+hostCall (Just (HostCallFn f)) _ args = f args
 hostCall Nothing name _ = error $ "Unknown host function: " ++ T.unpack name
 
 -- | Drain the reactivation queue, dispatching each constraint.
@@ -410,7 +410,7 @@ evalTermArith _ (VarTerm v) = do
     Nothing -> error $ "Unbound variable in expression: " ++ T.unpack v
 evalTermArith hc (CompoundTerm (Types.Qualified "host" f) args) = do
   argVals <- traverse (evalTermArith hc) args
-  result <- liftIO (hostCall (Map.lookup (Name f) hc) f (map RVal argVals))
+  result <- hostCall (Map.lookup (Name f) hc) f (map RVal argVals)
   case result of
     RVal val -> pure val
     _ -> error "host call returned non-value in expression position"
