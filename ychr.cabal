@@ -106,6 +106,7 @@ test-suite ychr-tests
                     , YCHR.Runtime.HistoryTest
                     , YCHR.Runtime.ReactivationTest
                     , YCHR.Runtime.InterpreterTest
+                    , YCHR.VM.SExprTest
     hs-source-dirs:   test
     build-depends:    base ^>=4.21.0.0
                     , ychr
@@ -143,6 +144,9 @@ library
                     , YCHR.StdLib.TH
                     , YCHR.Types
                     , YCHR.VM
+                    , YCHR.VM.Types
+                    , YCHR.VM.SExpr
+                    , YCHR.SExpr
                     , YCHR.Runtime.Interpreter
                     , YCHR.Runtime.Registry
                     , YCHR.Runtime.Types

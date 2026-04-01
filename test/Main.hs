@@ -16,6 +16,7 @@ import YCHR.Runtime.InterpreterTest qualified
 import YCHR.Runtime.ReactivationTest qualified
 import YCHR.Runtime.StoreTest qualified
 import YCHR.Runtime.VarTest qualified
+import YCHR.VM.SExprTest qualified
 
 main :: IO ()
 main = do
@@ -37,5 +38,6 @@ main = do
         YCHR.Runtime.StoreTest.tests,
         YCHR.Runtime.HistoryTest.tests,
         YCHR.Runtime.ReactivationTest.tests,
-        YCHR.Runtime.InterpreterTest.tests
+        YCHR.Runtime.InterpreterTest.tests,
+        YCHR.VM.SExprTest.tests
       ]
