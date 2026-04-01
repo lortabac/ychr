@@ -56,7 +56,7 @@ compile prog symTab =
         fmap concat $ traverse (genConstraintProcs funSet symTab arityMap occMap) (symbolTableToList symTab)
       (funProcs, funErrs) = runPureEff . runWriter $ do
         traverse (compileFunctionDef funSet) prog.functions
-      dispatch = genReactivateDispatch symTab arityMap
+      dispatch = genReactivateDispatch symTab
       allErrs = occErrs ++ procErrs ++ funErrs
    in if null allErrs
         then
@@ -192,23 +192,34 @@ genTell name cType arity =
         params
         [ Let "id" (CreateConstraint cType (map Var params)),
           Store (Var "id"),
-          ExprStmt (CallExpr activateName (Var "id" : map Var params))
+          ExprStmt (CallExpr activateName [Var "id"])
         ]
 
 -- ---------------------------------------------------------------------------
 -- activate_c
 -- ---------------------------------------------------------------------------
 
+-- | Generate the @activate_c@ procedure.  Takes a single suspension
+-- parameter, extracts the constraint arguments into local variables,
+-- and tries each occurrence procedure in order (paper §5.2, Listing 2
+-- with Early Drop from Listing 8).
 genActivate :: Types.Name -> Arity -> [Occurrence] -> Procedure
 genActivate name arity occs =
-  let params = Name "id" : argNames arity
-      activateName = activateProcName name
-      body = concatMap (genActivateCall params) occs ++ [Return (Lit (BoolLit False))]
-   in Procedure activateName params body
+  let activateName = activateProcName name
+      occParams = Name "id" : argNames arity
+      argExtracts =
+        [ Let (argName i) (FieldGet (Var "susp") (FieldArg (ArgIndex i)))
+        | i <- [0 .. arity.unArity - 1]
+        ]
+      body =
+        argExtracts
+          ++ concatMap (genActivateCall occParams) occs
+          ++ [Return (Lit (BoolLit False))]
+   in Procedure activateName ["susp"] (Let "id" (Var "susp") : body)
   where
-    genActivateCall params' occ =
+    genActivateCall occParams' occ =
       let occName = occProcName name occ.number
-       in [ Let "d" (CallExpr occName (map Var params')),
+       in [ Let "d" (CallExpr occName (map Var occParams')),
             If (Var "d") [Return (Lit (BoolLit True))] []
           ]
 
@@ -576,30 +587,23 @@ compileEquation funSet params si eq = do
 -- ---------------------------------------------------------------------------
 
 -- | Dispatch reactivation by constraint type.  Generates a linear
--- if-chain over all constraint types.  This is inherent to the VM's
--- instruction set (no switch\/dispatch instruction); backends may
--- optimize this to a table dispatch or similar.
-genReactivateDispatch :: SymbolTable -> ArityMap -> Procedure
-genReactivateDispatch symTab arityMap =
+-- if-chain over all constraint types.  Each branch simply calls the
+-- appropriate @activate_c@ with the suspension; argument extraction
+-- is handled inside @activate_c@ itself.
+--
+-- The if-chain is inherent to the VM's instruction set (no
+-- switch\/dispatch instruction); backends may optimize this to a
+-- table dispatch or similar.
+genReactivateDispatch :: SymbolTable -> Procedure
+genReactivateDispatch symTab =
   let body = map genDispatchBranch (symbolTableToList symTab)
    in Procedure "reactivate_dispatch" ["susp"] body
   where
     genDispatchBranch (name, cType) =
-      let arity = lookupArity name arityMap
-          argExtracts =
-            [ Let (Name ("rx_" <> T.pack (show i))) (FieldGet (Var "susp") (FieldArg (ArgIndex i)))
-            | i <- [0 .. arity.unArity - 1]
-            ]
-          activateCall =
-            ExprStmt
-              ( CallExpr
-                  (activateProcName name)
-                  (Var "susp" : [Var (Name ("rx_" <> T.pack (show i))) | i <- [0 .. arity.unArity - 1]])
-              )
-       in If
-            (IsConstraintType (Var "susp") cType)
-            (argExtracts ++ [activateCall])
-            []
+      If
+        (IsConstraintType (Var "susp") cType)
+        [ExprStmt (CallExpr (activateProcName name) [Var "susp"])]
+        []
 
 -- ---------------------------------------------------------------------------
 -- Naming helpers

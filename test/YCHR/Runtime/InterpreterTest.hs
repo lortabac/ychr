@@ -63,15 +63,18 @@ tellLeq =
     ["X", "Y"]
     [ Let "id" (CreateConstraint leqType [Var "X", Var "Y"]),
       Store (Var "id"),
-      ExprStmt (CallExpr "activate_leq" [Var "id", Var "X", Var "Y"])
+      ExprStmt (CallExpr "activate_leq" [Var "id"])
     ]
 
 activateLeq :: Procedure
 activateLeq =
   Procedure
     "activate_leq"
-    ["id", "X", "Y"]
-    [ Let "d" (CallExpr "occurrence_leq_1" [Var "id", Var "X", Var "Y"]),
+    ["susp"]
+    [ Let "id" (Var "susp"),
+      Let "X" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))),
+      Let "Y" (FieldGet (Var "susp") (FieldArg (ArgIndex 1))),
+      Let "d" (CallExpr "occurrence_leq_1" [Var "id", Var "X", Var "Y"]),
       If (Var "d") [Return (Lit (BoolLit True))] [],
       Let "d" (CallExpr "occurrence_leq_2" [Var "id", Var "X", Var "Y"]),
       If (Var "d") [Return (Lit (BoolLit True))] [],
@@ -331,10 +334,7 @@ reactivateDispatch =
     ["susp"]
     [ If
         (IsConstraintType (Var "susp") leqType)
-        [ Let "rx" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))),
-          Let "ry" (FieldGet (Var "susp") (FieldArg (ArgIndex 1))),
-          ExprStmt (CallExpr "activate_leq" [Var "susp", Var "rx", Var "ry"])
-        ]
+        [ExprStmt (CallExpr "activate_leq" [Var "susp"])]
         []
     ]
 
