@@ -14,7 +14,13 @@ which can be interpreted directly or compiled to Scheme or JavaScript.
 The VM instructions can also be serialized and fed to another executable to
 target different backends.
 
+The compilation algorithm is based on
+Peter Van Weert, Pieter Wuille, Tom Schrijvers, Bart Demoen, 2008.
+"_CHR for Imperative Host Languages_."
+
 ## Differences from K.U.Leuven CHR
+
+### Functions
 
 When CHR is embedded in Prolog, guards can rely on predicate success or failure.
 
@@ -31,6 +37,18 @@ Example:
 member(_, []) -> false.
 member(X, [X|_]) -> true.
 member(X, [_|Xs]) -> member(X, Xs).
+```
+
+### is
+
+The `is` operator is generalized to accept any expression on the RHS,
+including CHR functions and host language function calls.
+
+Example:
+
+```
+ychr> R is member(1, [0, 1, 2]).
+R = true.
 ```
 
 ## Roadmap
@@ -58,6 +76,11 @@ member(X, [_|Xs]) -> member(X, Xs).
 - [ ] Propagation history elimination
 - [ ] Delay avoidance
 - [ ] Memory reuse
+
+### Type checker
+
+- [ ] Gradual type system
+- [ ] Simple type refinements via type predicates
 
 ### Backends
 
