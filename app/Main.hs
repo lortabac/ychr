@@ -12,12 +12,12 @@ import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDire
 import System.Exit (exitFailure)
 import System.FilePath (takeDirectory)
 import YCHR.Display (displayMsg)
-import YCHR.Parsed qualified as Parsed
 import YCHR.EndToEnd (CompiledProgram (..), Error, compileFiles, compileModules, runProgramWithGoal, runProgramWithQuery)
-import YCHR.VM.SExpr (serialize)
 import YCHR.Meta (metaHostCallRegistry)
+import YCHR.Parsed qualified as Parsed
 import YCHR.Pretty (prettyBindings, prettyQueryResult)
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
+import YCHR.VM.SExpr (VMProgram (..), serialize)
 
 data RunOpts = RunOpts
   { goal :: T.Text,
@@ -193,7 +193,9 @@ runCompile opts files = do
       exitFailure
     Right prog ->
       case opts.target of
-        TargetVM -> TIO.writeFile opts.output (serialize prog.program)
+        TargetVM ->
+          let vmp = VMProgram {program = prog.program, exportedSet = prog.exportedSet, symbolTable = prog.symbolTable}
+           in TIO.writeFile opts.output (serialize vmp)
 
 hostCalls :: HostCallRegistry
 hostCalls = baseHostCallRegistry <> metaHostCallRegistry

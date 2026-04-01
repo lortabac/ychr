@@ -17,7 +17,10 @@
 --     (expr-stmt (call-expr "activate_leq" (var "id")))))
 -- @
 module YCHR.VM.SExpr
-  ( -- * High-level API
+  ( -- * VMProgram
+    VMProgram (..),
+
+    -- * High-level API
     serialize,
     deserialize,
 
@@ -27,28 +30,62 @@ module YCHR.VM.SExpr
   )
 where
 
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.SExpr (SExpr (..), parseSExpr, printSExpr)
+import YCHR.Types qualified as Types
 import YCHR.VM.Types
+
+-- ---------------------------------------------------------------------------
+-- VMProgram
+-- ---------------------------------------------------------------------------
+
+-- | A VM program bundled with metadata needed by external backends.
+data VMProgram = VMProgram
+  { program :: Program,
+    exportedSet :: Set Types.Name,
+    symbolTable :: Types.SymbolTable
+  }
+  deriving (Show, Eq)
 
 -- ---------------------------------------------------------------------------
 -- High-level API
 -- ---------------------------------------------------------------------------
 
 -- | Serialize a VM program to s-expression text.
-serialize :: Program -> Text
-serialize = printSExpr . programToSExpr
+serialize :: VMProgram -> Text
+serialize = printSExpr . vmProgramToSExpr
 
 -- | Deserialize a VM program from s-expression text.
-deserialize :: Text -> Either Text Program
+deserialize :: Text -> Either Text VMProgram
 deserialize input = case parseSExpr input of
   Left e -> Left (T.pack e)
-  Right sexpr -> programFromSExpr sexpr
+  Right sexpr -> vmProgramFromSExpr sexpr
 
 -- ---------------------------------------------------------------------------
 -- Serialization (VM → SExpr)
 -- ---------------------------------------------------------------------------
+
+vmProgramToSExpr :: VMProgram -> SExpr
+vmProgramToSExpr vmp =
+  SList
+    [ SAtom "vm-program",
+      programToSExpr vmp.program,
+      SList (SAtom "exports" : map chrNameToSExpr (Set.toAscList vmp.exportedSet)),
+      symbolTableToSExpr vmp.symbolTable
+    ]
+
+symbolTableToSExpr :: Types.SymbolTable -> SExpr
+symbolTableToSExpr st =
+  SList (SAtom "symbol-table" : map entryToSExpr (Types.symbolTableToList st))
+  where
+    entryToSExpr (n, Types.ConstraintType ct) = SList [chrNameToSExpr n, SInt ct]
+
+chrNameToSExpr :: Types.Name -> SExpr
+chrNameToSExpr (Types.Unqualified t) = SString t
+chrNameToSExpr (Types.Qualified m t) = SList [SAtom "qualified", SString m, SString t]
 
 programToSExpr :: Program -> SExpr
 programToSExpr prog =
@@ -146,6 +183,30 @@ type Err a = Either Text a
 
 err :: Text -> Err a
 err = Left
+
+vmProgramFromSExpr :: SExpr -> Err VMProgram
+vmProgramFromSExpr (SList [SAtom "vm-program", progS, SList (SAtom "exports" : exportSexprs), stS]) = do
+  prog <- programFromSExpr progS
+  exports <- traverse chrNameFromSExpr exportSexprs
+  st <- symbolTableFromSExpr stS
+  pure VMProgram {program = prog, exportedSet = Set.fromList exports, symbolTable = st}
+vmProgramFromSExpr s = err ("expected (vm-program ...), got: " <> printSExpr s)
+
+symbolTableFromSExpr :: SExpr -> Err Types.SymbolTable
+symbolTableFromSExpr (SList (SAtom "symbol-table" : entries)) = do
+  pairs <- traverse entryFromSExpr entries
+  pure (Types.mkSymbolTable pairs)
+  where
+    entryFromSExpr (SList [n, SInt ct]) = do
+      name <- chrNameFromSExpr n
+      pure (name, Types.ConstraintType ct)
+    entryFromSExpr s = err ("expected (name int), got: " <> printSExpr s)
+symbolTableFromSExpr s = err ("expected (symbol-table ...), got: " <> printSExpr s)
+
+chrNameFromSExpr :: SExpr -> Err Types.Name
+chrNameFromSExpr (SString t) = pure (Types.Unqualified t)
+chrNameFromSExpr (SList [SAtom "qualified", SString m, SString t]) = pure (Types.Qualified m t)
+chrNameFromSExpr s = err ("expected name, got: " <> printSExpr s)
 
 programFromSExpr :: SExpr -> Err Program
 programFromSExpr (SList (SAtom "program" : SInt n : procs)) = do

@@ -2,12 +2,14 @@
 
 module YCHR.VM.SExprTest (tests) where
 
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
+import YCHR.Types qualified as Types
 import YCHR.VM
-import YCHR.VM.SExpr (deserialize, serialize)
+import YCHR.VM.SExpr (VMProgram (..), deserialize, serialize)
 
 tests :: TestTree
 tests =
@@ -124,10 +126,11 @@ roundtripTests =
 -- | Assert that serializing then deserializing produces the original value.
 roundtrip :: Program -> IO ()
 roundtrip prog = do
-  let text = serialize prog
+  let vmp = mkVMProg prog
+      text = serialize vmp
   case deserialize text of
     Left e -> assertBool ("deserialization failed: " <> T.unpack e <> "\n\nserialized:\n" <> T.unpack text) False
-    Right prog' -> prog' @?= prog
+    Right vmp' -> vmp' @?= vmp
 
 -- ---------------------------------------------------------------------------
 -- Format: check that serialized output looks right
@@ -136,17 +139,30 @@ roundtrip prog = do
 formatTests :: [TestTree]
 formatTests =
   [ testCase "var serialization" $
-      serialize (mkProg [ExprStmt (Var "x")])
-        @?= "(program 0 (procedure \"p\" () (expr-stmt (var \"x\"))))",
+      assertContains (serializeProg (mkProg [ExprStmt (Var "x")])) "(program 0 (procedure \"p\" () (expr-stmt (var \"x\"))))",
     testCase "literals inline without wrapper" $ do
-      assertContains (serialize (mkProg [Let "x" (Lit (BoolLit True))])) "true"
-      assertContains (serialize (mkProg [Let "x" (Lit (BoolLit False))])) "false"
-      assertContains (serialize (mkProg [Let "x" (Lit WildcardLit)])) "wildcard"
-      assertContains (serialize (mkProg [Let "x" (Lit (IntLit 7))])) "(int 7)"
-      assertContains (serialize (mkProg [Let "x" (Lit (AtomLit "foo"))])) "(atom \"foo\")",
+      assertContains (serializeProg (mkProg [Let "x" (Lit (BoolLit True))])) "true"
+      assertContains (serializeProg (mkProg [Let "x" (Lit (BoolLit False))])) "false"
+      assertContains (serializeProg (mkProg [Let "x" (Lit WildcardLit)])) "wildcard"
+      assertContains (serializeProg (mkProg [Let "x" (Lit (IntLit 7))])) "(int 7)"
+      assertContains (serializeProg (mkProg [Let "x" (Lit (AtomLit "foo"))])) "(atom \"foo\")",
     testCase "new-var is a bare atom" $
-      assertContains (serialize (mkProg [Let "x" NewVar])) "new-var"
+      assertContains (serializeProg (mkProg [Let "x" NewVar])) "new-var",
+    testCase "exports and symbol table roundtrip" $
+      let vmp =
+            VMProgram
+              { program = Program 2 [],
+                exportedSet = Set.fromList [Types.Qualified "M" "leq", Types.Unqualified "gcd"],
+                symbolTable = Types.mkSymbolTable [(Types.Qualified "M" "leq", Types.ConstraintType 0), (Types.Unqualified "gcd", Types.ConstraintType 1)]
+              }
+          text = serialize vmp
+       in case deserialize text of
+            Left e -> assertBool ("deserialization failed: " <> T.unpack e) False
+            Right vmp' -> vmp' @?= vmp
   ]
+
+serializeProg :: Program -> Text
+serializeProg = serialize . mkVMProg
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -155,6 +171,10 @@ formatTests =
 -- | Build a minimal program with one procedure containing the given body.
 mkProg :: [Stmt] -> Program
 mkProg body = Program 0 [Procedure "p" [] body]
+
+-- | Wrap a Program into a VMProgram with empty metadata.
+mkVMProg :: Program -> VMProgram
+mkVMProg prog = VMProgram {program = prog, exportedSet = Set.empty, symbolTable = Types.mkSymbolTable []}
 
 assertContains :: Text -> Text -> IO ()
 assertContains haystack needle =

@@ -52,7 +52,37 @@ Line comments start with `;` and extend to end of line.
   conditions and body) are wrapped in `(...)`.
 
 
-## Program Structure
+## Top-Level Structure
+
+A serialized compilation unit is a `vm-program` containing the VM
+program, the exported names, and the symbol table:
+
+```scheme
+(vm-program
+  <program>
+  (exports <name> ...)
+  (symbol-table (<name> <type-id>) ...))
+```
+
+- **`<program>`** -- the VM program (see below).
+- **`exports`** -- the set of CHR names (constraints and functions)
+  visible to external callers. Backends should generate public entry
+  points (e.g. `tell_c` wrappers) for each exported name.
+- **`symbol-table`** -- maps each CHR name to its 0-based constraint
+  type integer. This is the authoritative mapping between symbolic
+  names and the numeric type IDs used throughout the VM program.
+
+### Names
+
+CHR names appear in the exports list and symbol table. They come in
+two forms:
+
+- **Unqualified**: a bare string, e.g. `"gcd"`.
+- **Qualified**: `(qualified "<module>" "<name>")`, e.g.
+  `(qualified "order" "leq")`.
+
+
+## Program
 
 ```scheme
 (program <num-types>
@@ -389,34 +419,40 @@ The `leq` (less-than-or-equal) handler with a single `reflexivity`
 rule, serialized:
 
 ```scheme
-(program 1
+(vm-program
+  (program 1
 
-  ; tell_leq(X, Y): create, store, activate
-  (procedure "tell_leq" ("X" "Y")
-    (let "id" (create-constraint 0 (var "X") (var "Y")))
-    (store (var "id"))
-    (expr-stmt (call-expr "activate_leq" (var "id"))))
+    ; tell_leq(X, Y): create, store, activate
+    (procedure "tell_leq" ("X" "Y")
+      (let "id" (create-constraint 0 (var "X") (var "Y")))
+      (store (var "id"))
+      (expr-stmt (call-expr "activate_leq" (var "id"))))
 
-  ; activate_leq(susp): extract args, try each occurrence
-  (procedure "activate_leq" ("susp")
-    (let "id" (var "susp"))
-    (let "X_0" (field-get (var "susp") (field-arg 0)))
-    (let "X_1" (field-get (var "susp") (field-arg 1)))
-    (let "d" (call-expr "occurrence_leq_1" (var "id") (var "X_0") (var "X_1")))
-    (if (var "d") ((return true)) ())
-    (return false))
+    ; activate_leq(susp): extract args, try each occurrence
+    (procedure "activate_leq" ("susp")
+      (let "id" (var "susp"))
+      (let "X_0" (field-get (var "susp") (field-arg 0)))
+      (let "X_1" (field-get (var "susp") (field-arg 1)))
+      (let "d" (call-expr "occurrence_leq_1" (var "id") (var "X_0") (var "X_1")))
+      (if (var "d") ((return true)) ())
+      (return false))
 
-  ; occurrence_leq_1: reflexivity @ leq(X, X1) <=> X == X1 | true.
-  (procedure "occurrence_leq_1" ("id" "X_0" "X_1")
-    (if (equal (var "X_0") (var "X_1"))
-      ((kill (var "id"))
-       (return true))
-      ())
-    (return false))
+    ; occurrence_leq_1: reflexivity @ leq(X, X1) <=> X == X1 | true.
+    (procedure "occurrence_leq_1" ("id" "X_0" "X_1")
+      (if (equal (var "X_0") (var "X_1"))
+        ((kill (var "id"))
+         (return true))
+        ())
+      (return false))
 
-  ; reactivate_dispatch(susp): type-based dispatch
-  (procedure "reactivate_dispatch" ("susp")
-    (if (is-constraint-type (var "susp") 0)
-      ((expr-stmt (call-expr "activate_leq" (var "susp"))))
-      ())))
+    ; reactivate_dispatch(susp): type-based dispatch
+    (procedure "reactivate_dispatch" ("susp")
+      (if (is-constraint-type (var "susp") 0)
+        ((expr-stmt (call-expr "activate_leq" (var "susp"))))
+        ())))
+
+  (exports (qualified "mymodule" "leq"))
+
+  (symbol-table
+    ((qualified "mymodule" "leq") 0)))
 ```
