@@ -144,6 +144,7 @@ library
                     , YCHR.Types
                     , YCHR.VM
                     , YCHR.Runtime.Interpreter
+                    , YCHR.Runtime.Registry
                     , YCHR.Runtime.Types
                     , YCHR.Runtime.Var
                     , YCHR.Runtime.Store

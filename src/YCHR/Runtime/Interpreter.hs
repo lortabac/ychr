@@ -24,7 +24,6 @@ where
 import Data.Foldable (toList, traverse_)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text qualified as T
 import Effectful
 import Effectful.Error.Static (Error, runError, throwError)
@@ -32,6 +31,7 @@ import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.Writer.Static.Local (Writer, listen, runWriter)
 import YCHR.Runtime.History (PropHistory, addHistory, notInHistory, runPropHistory)
 import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue)
+import YCHR.Runtime.Registry (HostCallFn (..), HostCallRegistry, baseHostCallRegistry, toValue, unit)
 import YCHR.Runtime.Store
   ( CHRStore,
     Suspension (..),
@@ -49,19 +49,12 @@ import YCHR.Runtime.Store
     suspArg,
   )
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (Unify, deref, equal, getArg, getVarId, makeTerm, matchTerm, newVar, runUnify, unify)
+import YCHR.Runtime.Var (Unify, deref, equal, getArg, makeTerm, matchTerm, newVar, runUnify, unify)
 import YCHR.VM
 
 -- ---------------------------------------------------------------------------
 -- Types
 -- ---------------------------------------------------------------------------
-
--- | A host call function that can use logical variables and IO.
-newtype HostCallFn = HostCallFn
-  {runHostCall :: forall es. (Unify :> es, IOE :> es) => [RuntimeVal] -> Eff es RuntimeVal}
-
--- | Registry of host language functions.
-type HostCallRegistry = Map Name HostCallFn
 
 -- | Map from procedure name to procedure definition.
 type ProcMap = Map Name Procedure
@@ -79,128 +72,6 @@ instance Show ControlFlow where
   show (CFReturn _) = "CFReturn <val>"
   show (CFContinue l) = "CFContinue " ++ T.unpack l.unLabel
   show (CFBreak l) = "CFBreak " ++ T.unpack l.unLabel
-
--- | A base host call registry providing arithmetic and comparison operations.
-baseHostCallRegistry :: HostCallRegistry
-baseHostCallRegistry =
-  Map.fromList
-    [ (Name "+", arith2 (+)),
-      (Name "-", arith2 (-)),
-      (Name "*", arith2 (*)),
-      (Name "div", arith2 div),
-      (Name "mod", arith2 mod),
-      (Name "<", cmp (<)),
-      (Name ">", cmp (>)),
-      (Name "=<", cmp (<=)),
-      (Name ">=", cmp (>=)),
-      (Name "==", valEq),
-      (Name "string_concat", stringConcat),
-      (Name "string_length", stringLength),
-      (Name "string_upper", stringUpper),
-      (Name "string_lower", stringLower),
-      (Name "__chr_error", chrError),
-      (Name "write", writeStr),
-      (Name "integer", typePred isInteger),
-      (Name "atom", typePred isAtom),
-      (Name "boolean", typePred isBoolean),
-      (Name "string", typePred isString),
-      (Name "var", typePred isVar),
-      (Name "nonvar", typePred isNonvar),
-      (Name "ground", groundPred),
-      (Name "term_variables", termVariablesPred)
-    ]
-  where
-    arith2 op = HostCallFn $ \case
-      [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (op a b)))
-      args -> error $ "arithmetic host call: expected 2 Int arguments, got " ++ show (length args)
-    cmp op = HostCallFn $ \case
-      [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VBool (op a b)))
-      args -> error $ "comparison host call: expected 2 Int arguments, got " ++ show (length args)
-    valEq = HostCallFn $ \case
-      [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VBool (a == b)))
-      [RVal (VAtom a), RVal (VAtom b)] -> pure (RVal (VBool (a == b)))
-      [RVal (VText a), RVal (VText b)] -> pure (RVal (VBool (a == b)))
-      [RVal (VBool a), RVal (VBool b)] -> pure (RVal (VBool (a == b)))
-      [_, _] -> pure (RVal (VBool False))
-      args -> error $ "== host call: expected 2 arguments, got " ++ show (length args)
-    stringConcat = HostCallFn $ \case
-      [RVal (VText a), RVal (VText b)] -> pure (RVal (VText (a <> b)))
-      _ -> error "string_concat: expected 2 Text arguments"
-    stringLength = HostCallFn $ \case
-      [RVal (VText s)] -> pure (RVal (VInt (T.length s)))
-      _ -> error "string_length: expected 1 Text argument"
-    stringUpper = HostCallFn $ \case
-      [RVal (VText s)] -> pure (RVal (VText (T.toUpper s)))
-      _ -> error "string_upper: expected 1 Text argument"
-    stringLower = HostCallFn $ \case
-      [RVal (VText s)] -> pure (RVal (VText (T.toLower s)))
-      _ -> error "string_lower: expected 1 Text argument"
-    chrError = HostCallFn $ \_ -> error "CHR runtime error: no matching equation"
-    writeStr = HostCallFn $ \case
-      [RVal (VText s)] -> unit <$ liftIO (putStr (T.unpack s))
-      _ -> error "write: expected 1 Text argument"
-    typePred p = HostCallFn $ \case
-      [RVal v] -> do
-        v' <- deref v
-        pure (RVal (VBool (p v')))
-      _ -> error "type predicate: expected 1 argument"
-    isInteger (VInt _) = True
-    isInteger _ = False
-    isAtom (VAtom _) = True
-    isAtom _ = False
-    isBoolean (VBool _) = True
-    isBoolean _ = False
-    isString (VText _) = True
-    isString _ = False
-    isVar (VVar _) = True
-    isVar VWildcard = True
-    isVar _ = False
-    isNonvar = not . isVar
-    groundPred = HostCallFn $ \case
-      [RVal v] -> RVal . VBool <$> isGround v
-      _ -> error "ground: expected 1 argument"
-    isGround v = do
-      v' <- deref v
-      case v' of
-        VVar _ -> pure False
-        VWildcard -> pure False
-        VTerm _ args -> allM isGround args
-        _ -> pure True
-    allM _ [] = pure True
-    allM p (x : xs) = do
-      b <- p x
-      if b then allM p xs else pure False
-    termVariablesPred = HostCallFn $ \case
-      [RVal v] -> do
-        (vars, _) <- collectVars Set.empty v
-        pure (RVal (valueList vars))
-      _ -> error "term_variables: expected 1 argument"
-    collectVars seen v = do
-      v' <- deref v
-      case v' of
-        VVar _ -> do
-          mid <- getVarId v'
-          case mid of
-            Just vid
-              | Set.member vid seen -> pure ([], seen)
-              | otherwise -> pure ([v'], Set.insert vid seen)
-            Nothing -> pure ([], seen)
-        VWildcard -> do
-          fresh <- newVar
-          pure ([fresh], seen)
-        VTerm _ args -> collectVarsMany seen args
-        _ -> pure ([], seen)
-    collectVarsMany seen [] = pure ([], seen)
-    collectVarsMany seen (x : xs) = do
-      (vars, seen') <- collectVars seen x
-      (rest, seen'') <- collectVarsMany seen' xs
-      pure (vars ++ rest, seen'')
-    valueList [] = VAtom "[]"
-    valueList (x : xs) = VTerm "." [x, valueList xs]
-
--- | The unit return value for host calls that are only used for side effects.
-unit :: RuntimeVal
-unit = RVal (VAtom "()")
 
 -- ---------------------------------------------------------------------------
 -- Public API
@@ -499,12 +370,3 @@ evalExpr pm hc (MakeTerm functor args) = do
   argVals <- traverse (evalExpr pm hc) args
   pure $ RVal $ makeTerm functor.unName (map toValue argVals)
 evalExpr _ _ expr = error $ "evalExpr: unsupported expression: " ++ show expr
-
--- ---------------------------------------------------------------------------
--- Helpers
--- ---------------------------------------------------------------------------
-
--- | Extract a Value from a RuntimeVal. Constraint IDs cannot be converted.
-toValue :: RuntimeVal -> Value
-toValue (RVal v) = v
-toValue (RConstraint _) = error "toValue: cannot convert constraint ID to Value"

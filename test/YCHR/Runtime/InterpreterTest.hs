@@ -23,7 +23,8 @@ tests =
     "YCHR.Runtime.Interpreter"
     [ leqTests,
       hostEvalTests,
-      typePredicateTests
+      typePredicateTests,
+      univTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -733,4 +734,62 @@ typePredicateTests =
         len @?= 2
         assertBool "first element should be X" eq1
         assertBool "second element should be Y" eq2
+    ]
+
+-- ---------------------------------------------------------------------------
+-- =.. (univ) tests
+-- ---------------------------------------------------------------------------
+
+-- | Call a host call by name, passing a single Value argument.
+callHostCall1 :: Name -> Value -> IO Value
+callHostCall1 name v = case Map.lookup name baseHostCallRegistry of
+  Nothing -> assertFailure $ "host call not found: " ++ show name
+  Just (HostCallFn f) -> do
+    result <- runEff . runUnify $ f [RVal v]
+    case result of
+      RVal val -> pure val
+      _ -> assertFailure "expected RVal result"
+
+univTests :: TestTree
+univTests =
+  testGroup
+    "compound_to_list / list_to_compound"
+    [ testCase "compound_to_list: f(1, 2) -> [f, 1, 2]" $ do
+        result <- callHostCall1 "compound_to_list" (VTerm "f" [VInt 1, VInt 2])
+        case result of
+          VTerm "." [VAtom "f", VTerm "." [VInt 1, VTerm "." [VInt 2, VAtom "[]"]]] -> pure ()
+          _ -> assertFailure "unexpected result",
+      testCase "compound_to_list: g(hello) -> [g, hello]" $ do
+        result <- callHostCall1 "compound_to_list" (VTerm "g" [VAtom "hello"])
+        case result of
+          VTerm "." [VAtom "g", VTerm "." [VAtom "hello", VAtom "[]"]] -> pure ()
+          _ -> assertFailure "unexpected result",
+      testCase "compound_to_list: foo() -> [foo]" $ do
+        result <- callHostCall1 "compound_to_list" (VTerm "foo" [])
+        case result of
+          VTerm "." [VAtom "foo", VAtom "[]"] -> pure ()
+          _ -> assertFailure "unexpected result",
+      testCase "compound_to_list: f(g(1), 2) -> [f, g(1), 2]" $ do
+        result <- callHostCall1 "compound_to_list" (VTerm "f" [VTerm "g" [VInt 1], VInt 2])
+        case result of
+          VTerm "." [VAtom "f", VTerm "." [VTerm "g" [VInt 1], VTerm "." [VInt 2, VAtom "[]"]]] -> pure ()
+          _ -> assertFailure "unexpected result",
+      testCase "list_to_compound: [f, 1, 2] -> f(1, 2)" $ do
+        let list = VTerm "." [VAtom "f", VTerm "." [VInt 1, VTerm "." [VInt 2, VAtom "[]"]]]
+        result <- callHostCall1 "list_to_compound" list
+        case result of
+          VTerm "f" [VInt 1, VInt 2] -> pure ()
+          _ -> assertFailure "unexpected result",
+      testCase "list_to_compound: [foo] -> foo()" $ do
+        let list = VTerm "." [VAtom "foo", VAtom "[]"]
+        result <- callHostCall1 "list_to_compound" list
+        case result of
+          VTerm "foo" [] -> pure ()
+          _ -> assertFailure "unexpected result",
+      testCase "list_to_compound: [g, hello] -> g(hello)" $ do
+        let list = VTerm "." [VAtom "g", VTerm "." [VAtom "hello", VAtom "[]"]]
+        result <- callHostCall1 "list_to_compound" list
+        case result of
+          VTerm "g" [VAtom "hello"] -> pure ()
+          _ -> assertFailure "unexpected result"
     ]

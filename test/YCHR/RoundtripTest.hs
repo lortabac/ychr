@@ -4,9 +4,12 @@
 -- right-inverses of the parser.
 module YCHR.RoundtripTest (tests) where
 
+import Data.List (intercalate)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Hedgehog (Gen, Property, annotate, failure, forAll, property, (===))
+import Effectful (runEff)
+import Hedgehog (Gen, Property, annotate, assert, evalIO, failure, forAll, forAllWith, property, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
@@ -14,7 +17,11 @@ import Test.Tasty.Hedgehog (testProperty)
 import YCHR.Parsed qualified as P
 import YCHR.Parser (parseConstraint, parseRule, parseTerm)
 import YCHR.Pretty (prettyConstraintSrc, prettyRuleSrc, prettyTermSrc)
+import YCHR.Runtime.Registry (HostCallFn (..), baseHostCallRegistry, valueList)
+import YCHR.Runtime.Types (RuntimeVal (..), Value (..))
+import YCHR.Runtime.Var (runUnify)
 import YCHR.Types (Constraint (..), Name (..), Term (..))
+import YCHR.VM qualified as VM
 
 -- ---------------------------------------------------------------------------
 -- Generators
@@ -172,6 +179,107 @@ prop_ruleRoundtrip = property $ do
     Right r' -> stripRuleAnn r' === r
 
 -- ---------------------------------------------------------------------------
+-- =.. roundtrip
+-- ---------------------------------------------------------------------------
+
+-- | Generate a runtime 'Value' compound term (including arity 0).
+genCompoundValue :: Gen Value
+genCompoundValue =
+  Gen.recursive
+    Gen.choice
+    -- Base: arity-0 compound terms
+    [ do
+        f <- genSafeAtom
+        pure (VTerm f [])
+    ]
+    -- Recursive: arity 1–3
+    [ Gen.subtermM genLeafOrCompound $ \t -> do
+        f <- genSafeAtom
+        pure (VTerm f [t]),
+      Gen.subtermM2 genLeafOrCompound genLeafOrCompound $ \t1 t2 -> do
+        f <- genSafeAtom
+        pure (VTerm f [t1, t2]),
+      do
+        f <- genSafeAtom
+        args <- Gen.list (Range.linear 1 3) genLeafOrCompound
+        pure (VTerm f args)
+    ]
+  where
+    genLeafOrCompound =
+      Gen.recursive
+        Gen.choice
+        [ VInt <$> Gen.int (Range.linear (-100) 100),
+          VAtom <$> genSafeAtom,
+          VBool <$> Gen.bool
+        ]
+        [ genCompoundValue
+        ]
+
+-- | Structural equality for ground 'Value's (no 'VVar').
+groundEq :: Value -> Value -> Bool
+groundEq (VInt a) (VInt b) = a == b
+groundEq (VAtom a) (VAtom b) = a == b
+groundEq (VText a) (VText b) = a == b
+groundEq (VBool a) (VBool b) = a == b
+groundEq VWildcard VWildcard = True
+groundEq (VTerm f1 as1) (VTerm f2 as2) =
+  f1 == f2 && length as1 == length as2 && and (zipWith groundEq as1 as2)
+groundEq _ _ = False
+
+-- | Show a ground 'Value' for test diagnostics.
+showGroundValue :: Value -> String
+showGroundValue (VInt n) = "VInt " ++ show n
+showGroundValue (VAtom a) = "VAtom " ++ show a
+showGroundValue (VText t) = "VText " ++ show t
+showGroundValue (VBool b) = "VBool " ++ show b
+showGroundValue VWildcard = "VWildcard"
+showGroundValue (VTerm f args) =
+  "VTerm " ++ show f ++ " [" ++ intercalate ", " (map showGroundValue args) ++ "]"
+showGroundValue (VVar _) = "VVar <opaque>"
+
+-- | Look up a host call by name, failing if not found.
+lookupHostCall :: VM.Name -> HostCallFn
+lookupHostCall name = case Map.lookup name baseHostCallRegistry of
+  Just hc -> hc
+  Nothing -> error $ "host call not found: " ++ show name
+
+prop_compoundToListRoundtrip :: Property
+prop_compoundToListRoundtrip = property $ do
+  term <- forAllWith showGroundValue genCompoundValue
+  let HostCallFn toList = lookupHostCall "compound_to_list"
+      HostCallFn fromList = lookupHostCall "list_to_compound"
+  listResult <- evalIO $ runEff . runUnify $ toList [RVal term]
+  case listResult of
+    RVal list -> do
+      compoundResult <- evalIO $ runEff . runUnify $ fromList [RVal list]
+      case compoundResult of
+        RVal term' -> do
+          annotate (showGroundValue term)
+          annotate (showGroundValue term')
+          assert (groundEq term term')
+        _ -> annotate "list_to_compound returned non-RVal" >> failure
+    _ -> annotate "compound_to_list returned non-RVal" >> failure
+
+prop_listToCompoundRoundtrip :: Property
+prop_listToCompoundRoundtrip = property $ do
+  f <- forAll genSafeAtom
+  args <- forAllWith (show . map showGroundValue) $ Gen.list (Range.linear 0 3) $ Gen.choice [VInt <$> Gen.int (Range.linear 0 100), VAtom <$> genSafeAtom]
+  let list = valueList (VAtom f : args)
+  let HostCallFn fromList = lookupHostCall "list_to_compound"
+      HostCallFn toList = lookupHostCall "compound_to_list"
+  compoundResult <- evalIO $ runEff . runUnify $ fromList [RVal list]
+  case compoundResult of
+    RVal compound -> do
+      listResult <- evalIO $ runEff . runUnify $ toList [RVal compound]
+      case listResult of
+        RVal list' -> do
+          annotate (showGroundValue list)
+          annotate (showGroundValue list')
+          assert (groundEq list list')
+        _ -> annotate "compound_to_list returned non-RVal" >> failure
+    _ -> annotate "list_to_compound returned non-RVal" >> failure
+
+-- ---------------------------------------------------------------------------
 -- Test tree
 -- ---------------------------------------------------------------------------
 
@@ -181,5 +289,7 @@ tests =
     "YCHR.Roundtrip"
     [ testProperty "term roundtrip (parse . prettyTermSrc = id)" prop_termRoundtrip,
       testProperty "constraint roundtrip (parse . prettyConstraintSrc = id)" prop_constraintRoundtrip,
-      testProperty "rule roundtrip (parse . prettyRuleSrc = id)" prop_ruleRoundtrip
+      testProperty "rule roundtrip (parse . prettyRuleSrc = id)" prop_ruleRoundtrip,
+      testProperty "compound_to_list roundtrip (list_to_compound . compound_to_list = id)" prop_compoundToListRoundtrip,
+      testProperty "list_to_compound roundtrip (compound_to_list . list_to_compound = id)" prop_listToCompoundRoundtrip
     ]

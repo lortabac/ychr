@@ -20,6 +20,8 @@
     string/1,
     ground/1,
     term_variables/2,
+    compound_to_list/2,
+    list_to_compound/2,
     op(500, yfx, '+'),
     op(500, yfx, '-'),
     op(400, yfx, '*'),
@@ -32,7 +34,12 @@
     op(700, xfx, '=<'),
     op(700, xfx, '==')
 ]).
-:- chr_constraint identity/2, print/1, term_variables/2.
+:- chr_constraint
+    identity/2,
+    print/1,
+    term_variables/2,
+    compound_to_list/2,
+    list_to_compound/2.
 
 identity(X, Y) <=> X = Y.
 
@@ -95,3 +102,7 @@ string(X) -> host:string(X).
 ground(X) -> host:ground(X).
 
 term_variables(T, Vars) <=> Vars is host:term_variables(T).
+
+compound_to_list(C, R) <=> R is host:compound_to_list(C).
+
+list_to_compound(Xs, R) <=> R is host:list_to_compound(Xs).
