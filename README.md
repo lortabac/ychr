@@ -65,7 +65,7 @@ R = true.
 - [x] Head Normal Form transformation
 - [x] Occurrence numbering
 - [x] CHR-to-VM compilation (refined operational semantics)
-- [ ] VM serialization
+- [x] VM serialization
 - [ ] Loop-invariant code motion
 - [ ] Join ordering
 - [ ] Late storage
