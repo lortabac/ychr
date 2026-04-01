@@ -5,6 +5,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.List (isPrefixOf, nub)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
 import Options.Applicative
 import System.Console.Haskeline
 import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDirectory)
@@ -13,6 +14,7 @@ import System.FilePath (takeDirectory)
 import YCHR.Display (displayMsg)
 import YCHR.Parsed qualified as Parsed
 import YCHR.EndToEnd (CompiledProgram (..), Error, compileFiles, compileModules, runProgramWithGoal, runProgramWithQuery)
+import YCHR.VM.SExpr (serialize)
 import YCHR.Meta (metaHostCallRegistry)
 import YCHR.Pretty (prettyBindings, prettyQueryResult)
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
@@ -22,9 +24,17 @@ data RunOpts = RunOpts
     showBindings :: Bool
   }
 
+data Target = TargetVM
+
+data CompileOpts = CompileOpts
+  { output :: FilePath,
+    target :: Target
+  }
+
 data Command
   = Repl [FilePath]
   | Run RunOpts [FilePath]
+  | Compile CompileOpts [FilePath]
 
 filesArg :: Parser [FilePath]
 filesArg = many (argument str (metavar "FILES..."))
@@ -41,11 +51,26 @@ runParser =
         )
     <*> filesArg
 
+targetReader :: ReadM Target
+targetReader = eitherReader $ \t -> case t of
+  "vm" -> Right TargetVM
+  _ -> Left ("Unknown target: " ++ t)
+
+compileParser :: Parser Command
+compileParser =
+  Compile
+    <$> ( CompileOpts
+            <$> strOption (short 'o' <> metavar "OUTPUT" <> help "Output file")
+            <*> option targetReader (short 't' <> metavar "TARGET" <> help "Target (vm)" <> value TargetVM)
+        )
+    <*> filesArg
+
 commandParser :: Parser Command
 commandParser =
   subparser
     ( command "repl" (info (replParser <**> helper) (progDesc "Start the interactive REPL (default)"))
         <> command "run" (info (runParser <**> helper) (progDesc "Compile and run a goal"))
+        <> command "compile" (info (compileParser <**> helper) (progDesc "Compile to a target format"))
     )
     <|> replParser
 
@@ -55,6 +80,7 @@ main = do
   case cmd of
     Repl files -> runRepl files
     Run opts files -> runGoal opts files
+    Compile opts files -> runCompile opts files
 
 runRepl :: [FilePath] -> IO ()
 runRepl files = do
@@ -155,6 +181,19 @@ runGoal opts files = do
           if opts.showBindings
             then putStr (prettyBindings bindings)
             else return ()
+
+runCompile :: CompileOpts -> [FilePath] -> IO ()
+runCompile opts files = do
+  result <- case files of
+    [] -> pure (compileModules True [])
+    _ -> compileFiles True files
+  case result of
+    Left err -> do
+      putStrLn (displayMsg err)
+      exitFailure
+    Right prog ->
+      case opts.target of
+        TargetVM -> TIO.writeFile opts.output (serialize prog.program)
 
 hostCalls :: HostCallRegistry
 hostCalls = baseHostCallRegistry <> metaHostCallRegistry
