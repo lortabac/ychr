@@ -76,7 +76,13 @@ data Program = Program
 --   * @activate_c@: trying all occurrences for a constraint
 --   * @occurrence_c_j@: checking one occurrence of a constraint
 --   * @reactivate_dispatch@: dispatching reactivation by constraint type
---   * @reactivate_all@: reactivating all constraints in the store
+--
+-- Note: @reactivate_all@ (paper §5.1–5.2) is not generated.  YCHR
+-- implements the /Selective Constraint Reactivation/ optimization
+-- (paper §5.3, observer pattern): 'Store' registers constraints as
+-- observers of their arguments, 'Unify' populates the reactivation
+-- queue for affected constraints, and 'DrainReactivationQueue'
+-- processes only those constraints.
 data Procedure = Procedure
   { -- | Procedure name
     name :: Name,

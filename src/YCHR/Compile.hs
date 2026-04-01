@@ -5,12 +5,15 @@
 --
 -- Transforms a desugared CHR program into a VM program following the
 -- basic compilation scheme from the paper (Section 5.2) with the
--- Early Drop optimization (Section 5.3, Listing 8).
+-- Early Drop and Backjumping optimizations (Section 5.3, Listing 8).
 module YCHR.Compile
   ( CompileError (..),
     compile,
     funcProcName,
     procNameFor,
+    tellProcName,
+    activateProcName,
+    occProcName,
   )
 where
 
@@ -109,14 +112,19 @@ ruleOccurrences symTab (ruleIdx, rule) = do
   let AnnP {node = ruleHead} = rule.head
       kept = ruleHead.kept
       removed = ruleHead.removed
-      combined =
-        [(i, c, False) | (i, c) <- zip [HeadPosition 0 ..] removed]
+      -- Occurrences are ordered removed-first, right-to-left within each
+      -- group, following the ωr refined operational semantics (paper §2.2,
+      -- Fig. 2).  This ensures removed occurrences are tried before kept
+      -- ones, and within each group the rightmost head constraint gets the
+      -- lowest (earliest) occurrence number.
+      orderedOccurrences =
+        [(i, c, False) | (i, c) <- zip [HeadPosition 0 ..] (reverse removed)]
           ++ [(i, c, True) | (i, c) <- zip [HeadPosition (length removed) ..] (reverse kept)]
       ruleName' = case rule.name of
         Just n -> n
         Nothing -> "rule_" <> T.pack (show ruleIdx)
-  for combined $ \(idx, con, isKept) ->
-    mkOccurrence symTab rule ruleName' combined idx con isKept
+  for orderedOccurrences $ \(idx, con, isKept) ->
+    mkOccurrence symTab rule ruleName' orderedOccurrences idx con isKept
 
 mkOccurrence ::
   SymbolTable ->
@@ -177,8 +185,8 @@ genConstraintProcs funSet symTab arityMap occMap (name, cType) = do
 genTell :: Types.Name -> ConstraintType -> Arity -> Procedure
 genTell name cType arity =
   let params = argNames arity
-      tellName = procNameFor "tell" name
-      activateName = procNameFor "activate" name
+      tellName = tellProcName name
+      activateName = activateProcName name
    in Procedure
         tellName
         params
@@ -194,7 +202,7 @@ genTell name cType arity =
 genActivate :: Types.Name -> Arity -> [Occurrence] -> Procedure
 genActivate name arity occs =
   let params = Name "id" : argNames arity
-      activateName = procNameFor "activate" name
+      activateName = activateProcName name
       body = concatMap (genActivateCall params) occs ++ [Return (Lit (BoolLit False))]
    in Procedure activateName params body
   where
@@ -241,26 +249,42 @@ genNoPartnerBody :: Set Types.Name -> SymbolTable -> VarMap -> Occurrence -> Eff
 genNoPartnerBody funSet symTab varMap occ = do
   let AnnP {node = guards, sourceLoc = guardLoc, parsed = guardP} = occ.rule.guard
       guardSi = (guardLoc, guardP)
-  (wrapper, guardExpr, varMap') <- compileGuards funSet varMap guardSi guards
+  (matchWrapper, guardExpr, varMap') <- compileGuards funSet varMap guardSi guards
   fireStmts <- genFireStmts funSet symTab varMap' occ
   let inner = case guardExpr of
         Nothing -> fireStmts
         Just gExpr -> [If gExpr fireStmts []]
-  pure (wrapper inner ++ [Return (Lit (BoolLit False))])
+  pure (matchWrapper inner ++ [Return (Lit (BoolLit False))])
 
--- Multi-head rule with partners
+-- | Generate the nested partner iteration for a multi-head rule
+-- (paper §5.2, Listing 1).  For each partner @k@ this produces:
+--
+-- @
+-- Foreach Lk cType susp_k [] [
+--   let pId_k  = susp_k.id
+--   let pArg_… = susp_k.arg(…)
+--   if pId_k ≠ id ∧ pId_k ≠ pId_0 ∧ … then
+--     ‹recurse for partner k+1›
+-- ]
+-- @
+--
+-- When all partners have been bound (base case), the guard is checked
+-- and 'genFireStmts' emits the rule firing code including early drop
+-- and backjumping (paper §5.3).
 genPartnerBody :: Set Types.Name -> SymbolTable -> VarMap -> Occurrence -> PartnerIndex -> Eff '[Writer [CompileError]] [Stmt]
 genPartnerBody funSet symTab varMap occ k
   | k >= PartnerIndex (length occ.partners) = do
       let AnnP {node = guards, sourceLoc = guardLoc, parsed = guardP} = occ.rule.guard
           guardSi = (guardLoc, guardP)
-      (wrapper, guardExpr, varMap') <- compileGuards funSet varMap guardSi guards
+      (matchWrapper, guardExpr, varMap') <- compileGuards funSet varMap guardSi guards
       fireStmts <- genFireStmts funSet symTab varMap' occ
       let inner = case guardExpr of
             Nothing -> fireStmts
             Just gExpr -> [If gExpr fireStmts []]
-      pure (wrapper inner)
+      pure (matchWrapper inner)
   | otherwise = do
+      -- O(k) indexing; acceptable because partner lists are small
+      -- (typically 1–3 elements for most CHR rules).
       let partner = occ.partners !! k.unPartnerIndex
           label = Label ("L" <> T.pack (show (k.unPartnerIndex + 1)))
           suspVar = partSuspName k
@@ -270,7 +294,10 @@ genPartnerBody funSet symTab varMap occ k
               : [ Let (partArgName k j) (FieldGet (Var suspVar) (FieldArg (ArgIndex j)))
                 | j <- [0 .. partArity - 1]
                 ]
-          aliveCheck = And (Alive (Var "id")) (Alive (Var (partIdName k)))
+          -- No alive checks here: the Foreach iterator guarantees that
+          -- yielded partners are alive, and the active constraint's
+          -- liveness is verified after body execution (early drop /
+          -- backjumping in genFireStmts).
           distinctActive = Not (IdEqual (Var (partIdName k)) (Var "id"))
           distinctEarlier =
             [ Not (IdEqual (Var (partIdName k)) (Var (partIdName j)))
@@ -279,12 +306,11 @@ genPartnerBody funSet symTab varMap occ k
           distinctAll = foldl' And distinctActive distinctEarlier
       innerBody <- genPartnerBody funSet symTab varMap occ (k + 1)
       let innerWithDistinct = [If distinctAll innerBody []]
-          innerWithAlive = [If aliveCheck innerWithDistinct []]
-          foreachBody = fieldExtracts ++ innerWithAlive
+          foreachBody = fieldExtracts ++ innerWithDistinct
       pure [Foreach label partner.cType suspVar [] foreachBody]
 
 -- ---------------------------------------------------------------------------
--- Fire: history check + kill + body + early drop
+-- Fire: history check + kill + body + early drop + backjumping
 -- ---------------------------------------------------------------------------
 
 genFireStmts :: Set Types.Name -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
@@ -304,7 +330,30 @@ genFireStmts funSet symTab varMap occ = do
   let earlyDropStmts
         | activeIsRemoved = [Return (Lit (BoolLit True))]
         | otherwise = [If (Not (Alive (Var "id"))) [Return (Lit (BoolLit True))] []]
-      coreFireStmts = killStmts ++ bodyStmts ++ earlyDropStmts
+      -- Backjumping (paper §5.3): after body execution, check each
+      -- partner's liveness outermost-first.  If a partner died (e.g.
+      -- killed by a rule fired during body execution), Continue to its
+      -- Foreach loop to skip useless inner iterations.
+      --
+      -- Removed partners are omitted: they were explicitly killed by
+      -- killStmts above, so they are guaranteed dead and the check
+      -- would always succeed.  The outermost removed partner's Continue
+      -- would be unconditional, making all subsequent checks unreachable
+      -- (paper §5.3, "all following alive tests thus becomes redundant").
+      --
+      -- When activeIsRemoved the early drop is an unconditional Return,
+      -- so backjumps are unreachable.
+      backjumpStmts
+        | activeIsRemoved = []
+        | otherwise =
+            [ If
+                (Not (Alive (Var (partIdName k))))
+                [Continue (Label ("L" <> T.pack (show (k.unPartnerIndex + 1))))]
+                []
+            | (k, p) <- zip [PartnerIndex 0 ..] occ.partners,
+              p.isKept
+            ]
+      coreFireStmts = killStmts ++ bodyStmts ++ earlyDropStmts ++ backjumpStmts
   pure $
     if isPropagation
       then
@@ -315,10 +364,13 @@ genFireStmts funSet symTab varMap occ = do
         ]
       else coreFireStmts
 
+-- | Collect constraint identifiers for the propagation history tuple.
+-- IDs are sorted by head position so that the same rule with the same
+-- partner combination always produces an identical tuple regardless of
+-- which occurrence is active (paper §5.2, Listing 1, line 14).
 buildHistoryIds :: Occurrence -> [Expr]
 buildHistoryIds occ =
-  let -- All head positions: active + partners, sorted by position index
-      allPositions =
+  let allPositions =
         (occ.activeIdx, Var "id")
           : [ (p.idx, Var (partIdName k))
             | (k, p) <- zip [PartnerIndex 0 ..] occ.partners
@@ -372,6 +424,17 @@ compileExpr _ varMap si t = compileTerm varMap si t
 -- Compile guards
 -- ---------------------------------------------------------------------------
 
+-- | Compile a guard conjunction.  Guards are split into two groups:
+--
+--   * __Match guards__ ('GuardMatch', 'GuardGetArg') introduce new
+--     variable bindings and structural checks.  They are compiled into
+--     a wrapper @[Stmt] -> [Stmt]@ that nests the inner code inside
+--     conditionals and let-bindings.  Match guards must be processed
+--     first so that the variables they bind are in scope for check
+--     guards.
+--
+--   * __Check guards__ ('GuardEqual', 'GuardExpr') are pure boolean
+--     tests.  They are compiled into a single 'And'-chained expression.
 compileGuards ::
   Set Types.Name ->
   VarMap ->
@@ -380,9 +443,9 @@ compileGuards ::
   Eff '[Writer [CompileError]] ([Stmt] -> [Stmt], Maybe Expr, VarMap)
 compileGuards funSet varMap si guards = do
   let (matchGuards, checkGuards) = partition isMatchGuard guards
-  (wrapper, varMap') <- foldM (compileMatchGuard si) (id, varMap) matchGuards
+  (matchWrapper, varMap') <- foldM (compileMatchGuard si) (id, varMap) matchGuards
   checkExpr <- compileCheckGuards funSet varMap' si checkGuards
-  pure (wrapper, checkExpr, varMap')
+  pure (matchWrapper, checkExpr, varMap')
   where
     isMatchGuard (D.GuardMatch {}) = True
     isMatchGuard (D.GuardGetArg {}) = True
@@ -393,15 +456,15 @@ compileMatchGuard ::
   ([Stmt] -> [Stmt], VarMap) ->
   D.Guard ->
   Eff '[Writer [CompileError]] ([Stmt] -> [Stmt], VarMap)
-compileMatchGuard si (wrapper, varMap) (D.GuardMatch term name arity) = do
+compileMatchGuard si (matchWrapper, varMap) (D.GuardMatch term name arity) = do
   termExpr <- compileTerm varMap si term
   let check body = [If (MatchTerm termExpr (vmName name) arity) body []]
-  pure (wrapper . check, varMap)
-compileMatchGuard si (wrapper, varMap) (D.GuardGetArg vname term idx) = do
+  pure (matchWrapper . check, varMap)
+compileMatchGuard si (matchWrapper, varMap) (D.GuardGetArg vname term idx) = do
   termExpr <- compileTerm varMap si term
   let binding body = Let (Name vname) (GetArg termExpr idx) : body
       varMap' = insertVar vname (Var (Name vname)) varMap
-  pure (wrapper . binding, varMap')
+  pure (matchWrapper . binding, varMap')
 compileMatchGuard _ acc _ = pure acc
 
 compileCheckGuards :: Set Types.Name -> VarMap -> SrcInfo -> [D.Guard] -> Eff '[Writer [CompileError]] (Maybe Expr)
@@ -425,64 +488,55 @@ compileCheckGuard _ _ _ _ = pure (Lit (BoolLit True))
 -- ---------------------------------------------------------------------------
 
 compileBodyGoals :: Set Types.Name -> SymbolTable -> VarMap -> SrcInfo -> [D.BodyGoal] -> Eff '[Writer [CompileError]] [Stmt]
-compileBodyGoals _ _ _ _ [] = pure []
-compileBodyGoals funSet symTab varMap si (goal : rest) = case goal of
-  D.BodyIs v expr -> do
-    expr' <- compileExpr funSet varMap si expr
-    case lookupVar v varMap of
-      Just existing -> do
-        let stmts =
-              [ ExprStmt (Unify existing (HostEval expr')),
-                DrainReactivationQueue "rs" [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])]
-              ]
-        rest' <- compileBodyGoals funSet symTab varMap si rest
-        pure (stmts ++ rest')
-      Nothing -> do
-        let stmt = Let (Name v) (HostEval expr')
-            varMap' = insertVar v (Var (Name v)) varMap
-        rest' <- compileBodyGoals funSet symTab varMap' si rest
-        pure (stmt : rest')
-  D.BodyConstraint con -> do
-    let argVars = [v | VarTerm v <- con.args, notMemberVar v varMap]
-        newStmts = [Let (Name v) NewVar | v <- argVars]
-        varMap' = foldl' (\m v -> insertVar v (Var (Name v)) m) varMap argVars
-    callArgs <- traverse (compileTerm varMap' si) con.args
-    let tellName = procNameFor "tell" con.name
-    rest' <- compileBodyGoals funSet symTab varMap' si rest
-    pure (newStmts ++ [ExprStmt (CallExpr tellName callArgs)] ++ rest')
-  _ -> do
-    goal' <- compileBodyGoal funSet symTab varMap si goal
-    rest' <- compileBodyGoals funSet symTab varMap si rest
-    pure (goal' ++ rest')
+compileBodyGoals funSet symTab varMap si goals = do
+  (stmts, _) <- foldM step ([], varMap) goals
+  pure stmts
+  where
+    step (acc, vm) goal = do
+      (stmts, vm') <- compileBodyGoal funSet symTab vm si goal
+      pure (acc ++ stmts, vm')
 
-compileBodyGoal :: Set Types.Name -> SymbolTable -> VarMap -> SrcInfo -> D.BodyGoal -> Eff '[Writer [CompileError]] [Stmt]
-compileBodyGoal _ _ _ _ (D.BodyCommon D.GoalTrue) = pure []
+-- | Compile a single body goal, returning the generated statements and
+-- an updated 'VarMap'. The VarMap may grow when a goal introduces new
+-- variables (e.g. @is@ binding a fresh variable, or a constraint whose
+-- arguments reference not-yet-seen variables that need 'NewVar').
+compileBodyGoal :: Set Types.Name -> SymbolTable -> VarMap -> SrcInfo -> D.BodyGoal -> Eff '[Writer [CompileError]] ([Stmt], VarMap)
+compileBodyGoal _ _ varMap _ (D.BodyCommon D.GoalTrue) = pure ([], varMap)
 compileBodyGoal _ _ varMap si (D.BodyConstraint con) = do
-  conArgs' <- traverse (compileTerm varMap si) con.args
-  let tellName = procNameFor "tell" con.name
-  pure [ExprStmt (CallExpr tellName conArgs')]
+  let argVars = [v | VarTerm v <- con.args, notMemberVar v varMap]
+      newStmts = [Let (Name v) NewVar | v <- argVars]
+      varMap' = foldl' (\m v -> insertVar v (Var (Name v)) m) varMap argVars
+  callArgs <- traverse (compileTerm varMap' si) con.args
+  let tellName = tellProcName con.name
+  pure (newStmts ++ [ExprStmt (CallExpr tellName callArgs)], varMap')
 compileBodyGoal _ _ varMap si (D.BodyUnify t1 t2) = do
   t1' <- compileTerm varMap si t1
   t2' <- compileTerm varMap si t2
   pure
-    [ ExprStmt (Unify t1' t2'),
-      DrainReactivationQueue "rs" [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])]
-    ]
+    ( [ ExprStmt (Unify t1' t2'),
+        DrainReactivationQueue "rs" [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])]
+      ],
+      varMap
+    )
 compileBodyGoal _ _ varMap si (D.BodyHostStmt f args) = do
   args' <- traverse (compileTerm varMap si) args
-  pure [ExprStmt (HostCall (Name f) args')]
+  pure ([ExprStmt (HostCall (Name f) args')], varMap)
 compileBodyGoal funSet _ varMap si (D.BodyIs v expr) = do
   expr' <- compileExpr funSet varMap si expr
   case lookupVar v varMap of
     Just existing ->
       pure
-        [ ExprStmt (Unify existing (HostEval expr')),
-          DrainReactivationQueue "rs" [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])]
-        ]
-    Nothing -> pure [Let (Name v) (HostEval expr')]
+        ( [ ExprStmt (Unify existing (HostEval expr')),
+            DrainReactivationQueue "rs" [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])]
+          ],
+          varMap
+        )
+    Nothing ->
+      let varMap' = insertVar v (Var (Name v)) varMap
+       in pure ([Let (Name v) (HostEval expr')], varMap')
 compileBodyGoal funSet _ varMap si (D.BodyFunctionCall name args) = do
   args' <- traverse (compileExpr funSet varMap si) args
-  pure [ExprStmt (CallExpr (funcProcName name) args')]
+  pure ([ExprStmt (CallExpr (funcProcName name) args')], varMap)
 
 -- ---------------------------------------------------------------------------
 -- Compile function definitions
@@ -509,18 +563,22 @@ buildEquationVarMap procParams normalizedArgs =
 compileEquation :: Set Types.Name -> [Name] -> SrcInfo -> D.Equation -> Eff '[Writer [CompileError]] [Stmt]
 compileEquation funSet params si eq = do
   let varMap = buildEquationVarMap params eq.params
-  (wrapper, guardExpr, varMap') <- compileGuards funSet varMap si eq.guards
+  (matchWrapper, guardExpr, varMap') <- compileGuards funSet varMap si eq.guards
   rhsExpr <- compileExpr funSet varMap' si eq.rhs
   let returnStmt = [Return rhsExpr]
       inner = case guardExpr of
         Nothing -> returnStmt
         Just gExpr -> [If gExpr returnStmt []]
-  pure (wrapper inner)
+  pure (matchWrapper inner)
 
 -- ---------------------------------------------------------------------------
 -- reactivate_dispatch
 -- ---------------------------------------------------------------------------
 
+-- | Dispatch reactivation by constraint type.  Generates a linear
+-- if-chain over all constraint types.  This is inherent to the VM's
+-- instruction set (no switch\/dispatch instruction); backends may
+-- optimize this to a table dispatch or similar.
 genReactivateDispatch :: SymbolTable -> ArityMap -> Procedure
 genReactivateDispatch symTab arityMap =
   let body = map genDispatchBranch (symbolTableToList symTab)
@@ -535,7 +593,7 @@ genReactivateDispatch symTab arityMap =
           activateCall =
             ExprStmt
               ( CallExpr
-                  (procNameFor "activate" name)
+                  (activateProcName name)
                   (Var "susp" : [Var (Name ("rx_" <> T.pack (show i))) | i <- [0 .. arity.unArity - 1]])
               )
        in If
@@ -550,6 +608,12 @@ genReactivateDispatch symTab arityMap =
 procNameFor :: Text -> Types.Name -> Name
 procNameFor prefix (Types.Qualified m n) = Name (prefix <> "_" <> m <> "_" <> n)
 procNameFor prefix (Types.Unqualified n) = Name (prefix <> "_" <> n)
+
+tellProcName :: Types.Name -> Name
+tellProcName = procNameFor "tell"
+
+activateProcName :: Types.Name -> Name
+activateProcName = procNameFor "activate"
 
 occProcName :: Types.Name -> OccurrenceNumber -> Name
 occProcName name num =
@@ -572,5 +636,6 @@ partSuspName k = Name ("susp_" <> T.pack (show k.unPartnerIndex))
 partIdName :: PartnerIndex -> Name
 partIdName k = Name ("pId_" <> T.pack (show k.unPartnerIndex))
 
+-- | VM variable name for the @j@-th argument of partner @k@: @pArg_k_j@.
 partArgName :: PartnerIndex -> Int -> Name
-partArgName k j = Name ("pA" <> T.pack (show j) <> "_" <> T.pack (show k.unPartnerIndex))
+partArgName k j = Name ("pArg_" <> T.pack (show k.unPartnerIndex) <> "_" <> T.pack (show j))

@@ -53,7 +53,7 @@ import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.Writer.Static.Local (Writer, listen, runWriter)
 import Text.Megaparsec (ParseErrorBundle)
 import YCHR.Collect (CollectError, collectLibraries)
-import YCHR.Compile (CompileError, compile, funcProcName, procNameFor)
+import YCHR.Compile (CompileError, compile, funcProcName, tellProcName)
 import YCHR.Desugar (DesugarError, desugarProgram, desugarQueryGoals, extractSymbolTable)
 import YCHR.Desugared qualified as D
 import YCHR.Meta (valueToTerm)
@@ -212,7 +212,7 @@ tellConstraint name args = do
   resolved <- case resolveQueryConstraint' exportMap exportedSet name arity of
     Left err -> error err
     Right qname -> pure qname
-  let tellName = procNameFor "tell" resolved
+  let tellName = tellProcName resolved
   unless (Map.member tellName procMap) $
     error ("Constraint not found: " ++ T.unpack tellName.unName)
   _ <- callProc procMap hc tellName (map RVal args)
@@ -276,7 +276,7 @@ runProgramWithGoalDSL cp hostCalls constraint = do
     Right c -> pure c
   let prog = cp.program
       procMap = Map.fromList [(p.name, p) | p <- prog.procedures]
-      tellName = procNameFor "tell" resolved.name
+      tellName = tellProcName resolved.name
   unless (Map.member tellName procMap) $
     fail ("Constraint not found: " ++ T.unpack tellName.unName)
   runEff
