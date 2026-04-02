@@ -56,7 +56,7 @@ moduleTests =
           @?= Module "Foo" [noAnn (ModuleImport "Bar"), noAnn (ModuleImport "Baz")] [] [] [] [] Nothing,
       testCase "declaring sets modDecls" $
         module' "Foo" `declaring` ["leq" // 2]
-          @?= Module "Foo" [] [noAnn (ConstraintDecl "leq" 2)] [] [] [] Nothing,
+          @?= Module "Foo" [] [noAnn (ConstraintDecl "leq" 2 Nothing)] [] [] [] Nothing,
       testCase "defining sets modRules" $
         let r = [con "leq" [var "X"]] <=> [atom "true"]
          in module' "Foo" `defining` [r]
@@ -67,10 +67,10 @@ moduleTests =
               `importing` ["A"]
               `declaring` ["c" // 0]
               `defining` [r]
-              @?= Module "M" [noAnn (ModuleImport "A")] [noAnn (ConstraintDecl "c" 0)] [] [r] [] Nothing,
+              @?= Module "M" [noAnn (ModuleImport "A")] [noAnn (ConstraintDecl "c" 0 Nothing)] [] [r] [] Nothing,
       testCase "exporting sets modExports" $
         module' "Foo" `exporting` ["leq" // 2]
-          @?= Module "Foo" [] [] [] [] [] (Just [ConstraintDecl "leq" 2])
+          @?= Module "Foo" [] [] [] [] [] (Just [ConstraintDecl "leq" 2 Nothing])
     ]
 
 declarationTests :: TestTree
@@ -78,9 +78,9 @@ declarationTests =
   testGroup
     "declaration"
     [ testCase "\"leq\" // 2 produces ConstraintDecl" $
-        "leq" // 2 @?= ConstraintDecl "leq" 2,
+        "leq" // 2 @?= ConstraintDecl "leq" 2 Nothing,
       testCase "\"foo\" // 0 produces ConstraintDecl with arity 0" $
-        "foo" // 0 @?= ConstraintDecl "foo" 0
+        "foo" // 0 @?= ConstraintDecl "foo" 0 Nothing
     ]
 
 ruleTests :: TestTree
@@ -156,7 +156,7 @@ integrationTests =
           @?= Module
             "Order"
             []
-            [noAnn (ConstraintDecl "leq" 2)]
+            [noAnn (ConstraintDecl "leq" 2 Nothing)]
             []
             [ Rule
                 (Just (noAnn "refl"))

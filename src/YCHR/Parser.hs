@@ -664,21 +664,35 @@ opTypeP =
         Postfix_ <$ try (string "xf" <* notFollowedBy alphaNumChar)
       ]
 
--- | Parse a single constraint declaration: @name\/arity@.
+-- | Parse a single constraint declaration: @name\/arity@ or @name(type, ...)@.
 constraintDeclP :: Parser (Ann Declaration)
 constraintDeclP = withLoc $ do
   name <- atomP
-  _ <- symbol "/"
-  arity <- lexeme L.decimal
-  pure (ConstraintDecl name arity)
+  try (typedConstraint name) <|> untypedConstraint name
+  where
+    typedConstraint name = do
+      args <- parens (typeExprP `sepBy` comma)
+      pure (ConstraintDecl name (length args) (Just args))
+    untypedConstraint name = do
+      _ <- symbol "/"
+      arity <- lexeme L.decimal
+      pure (ConstraintDecl name arity Nothing)
 
--- | Parse a single function declaration: @name\/arity@.
+-- | Parse a single function declaration: @name\/arity@ or @name(type, ...) -> type@.
 functionDeclP :: Parser (Ann Declaration)
 functionDeclP = withLoc $ do
   name <- atomP
-  _ <- symbol "/"
-  arity <- lexeme L.decimal
-  pure (FunctionDecl name arity)
+  try (typedFunction name) <|> untypedFunction name
+  where
+    typedFunction name = do
+      args <- parens (typeExprP `sepBy` comma)
+      _ <- symbol "->"
+      ret <- typeExprP
+      pure (FunctionDecl name (length args) (Just args) (Just ret))
+    untypedFunction name = do
+      _ <- symbol "/"
+      arity <- lexeme L.decimal
+      pure (FunctionDecl name arity Nothing Nothing)
 
 -- | Parse a function equation.
 --

@@ -2,6 +2,7 @@
 
 module YCHR.DesugarTest (tests) where
 
+import Data.Map.Strict qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import YCHR.DSL
@@ -334,7 +335,7 @@ symbolTableTests =
   testGroup
     "symbol-table"
     [ testCase "empty program yields empty table" $
-        extractSymbolTable (D.Program [] []) @?= mkSymbolTable [],
+        extractSymbolTable (D.Program [] [] Map.empty []) @?= mkSymbolTable [],
       testCase "one qualified constraint in head gets id 0" $ do
         let prog =
               D.Program
@@ -344,6 +345,8 @@ symbolTableTests =
                     (noAnnP ([] :: [Term]) [])
                     (noAnnP ([] :: [Term]) [])
                 ]
+                []
+                Map.empty
                 []
         extractSymbolTable prog @?= mkSymbolTable [(Identifier (Qualified "M" "leq") 0, ConstraintType 0)],
       testCase "two distinct qualified constraints get sequential ids" $ do
@@ -355,6 +358,8 @@ symbolTableTests =
                     (noAnnP ([] :: [Term]) [])
                     (noAnnP ([] :: [Term]) [])
                 ]
+                []
+                Map.empty
                 []
         let table = extractSymbolTable prog
         symbolTableSize table @?= 2,
@@ -368,6 +373,8 @@ symbolTableTests =
                     (noAnnP ([] :: [Term]) [D.BodyConstraint (Constraint (Qualified "M" "leq") [])])
                 ]
                 []
+                Map.empty
+                []
         extractSymbolTable prog @?= mkSymbolTable [(Identifier (Qualified "M" "leq") 0, ConstraintType 0)],
       testCase "unqualified name in body not in table" $ do
         let prog =
@@ -378,6 +385,8 @@ symbolTableTests =
                     (noAnnP ([] :: [Term]) [])
                     (noAnnP ([] :: [Term]) [D.BodyHostStmt "print" []])
                 ]
+                []
+                Map.empty
                 []
         let table = extractSymbolTable prog
         lookupSymbol (Identifier (Unqualified "print") 0) table @?= Nothing,
@@ -400,6 +409,8 @@ symbolTableTests =
                     (noAnnP ([] :: [Term]) [])
                 ]
                 []
+                Map.empty
+                []
         let table = extractSymbolTable prog
         (lookupSymbol (Identifier (Qualified "A" "z") 0) table, lookupSymbol (Identifier (Qualified "B" "a") 0) table)
           @?= (Just (ConstraintType 0), Just (ConstraintType 1)),
@@ -412,6 +423,8 @@ symbolTableTests =
                     (noAnnP ([] :: [Term]) [])
                     (noAnnP ([] :: [Term]) [D.BodyConstraint (Constraint (Qualified "M" "foo") [VarTerm "X", VarTerm "Y"])])
                 ]
+                []
+                Map.empty
                 []
         let table = extractSymbolTable prog
         symbolTableSize table @?= 2

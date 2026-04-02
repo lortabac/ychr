@@ -89,8 +89,8 @@ data Module = Module
   deriving (Show, Eq, Lift)
 
 data Declaration
-  = ConstraintDecl {name :: Text, arity :: Int}
-  | FunctionDecl {name :: Text, arity :: Int}
+  = ConstraintDecl {name :: Text, arity :: Int, argTypes :: Maybe [TypeExpr]}
+  | FunctionDecl {name :: Text, arity :: Int, argTypes :: Maybe [TypeExpr], returnType :: Maybe TypeExpr}
   | OperatorDecl OpDecl
   | TypeExportDecl {name :: Text, arity :: Int}
   deriving (Show, Eq, Lift)

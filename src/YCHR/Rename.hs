@@ -112,8 +112,8 @@ buildTypeExportEnv mods =
     ]
 
 isConstraintOrFunctionDecl :: Declaration -> Bool
-isConstraintOrFunctionDecl (ConstraintDecl _ _) = True
-isConstraintOrFunctionDecl (FunctionDecl _ _) = True
+isConstraintOrFunctionDecl ConstraintDecl {} = True
+isConstraintOrFunctionDecl FunctionDecl {} = True
 isConstraintOrFunctionDecl _ = False
 
 isTypeExportDecl :: Declaration -> Bool
@@ -147,10 +147,10 @@ validateExports mods =
             Just exports ->
               traverse_
                 ( \d -> case d of
-                    ConstraintDecl n a
+                    ConstraintDecl {name = n, arity = a}
                       | (n, a) `notElem` constraintsDeclaredIn m ->
                           tell @[RenameError] [UnknownExport m.name n a]
-                    FunctionDecl n a
+                    FunctionDecl {name = n, arity = a}
                       | (n, a) `notElem` constraintsDeclaredIn m ->
                           tell @[RenameError] [UnknownExport m.name n a]
                     TypeExportDecl n a

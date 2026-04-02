@@ -32,7 +32,7 @@ defining m rls = m {rules = rls}
 
 -- | Helper for arity: @"leq" // 2@
 (//) :: Text -> Int -> Declaration
-(//) = ConstraintDecl
+(//) name arity = ConstraintDecl name arity Nothing
 
 --------------------------------------------------------------------------------
 -- Rule Construction Operators

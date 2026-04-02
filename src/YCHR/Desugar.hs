@@ -31,6 +31,7 @@ module YCHR.Desugar
 where
 
 import Data.List (mapAccumL)
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -47,7 +48,7 @@ data DesugarError
   deriving (Eq, Show)
 
 isFunctionDecl :: P.Declaration -> Bool
-isFunctionDecl (P.FunctionDecl _ _) = True
+isFunctionDecl P.FunctionDecl {} = True
 isFunctionDecl _ = False
 
 -- | Collect all declared function names (fully qualified) from a set of modules.
@@ -64,11 +65,24 @@ buildFunctionSet mods =
 desugarProgram :: [P.Module] -> Either [DesugarError] D.Program
 desugarProgram mods =
   let funSet = buildFunctionSet mods
+      conTypes = collectConstraintTypes mods
+      typeDefs = [td.node | m <- mods, td <- m.typeDecls]
       (result, errs) = runPureEff . runWriter $ do
         rules <- traverse (desugarRule funSet) [r | m <- mods, r <- m.rules]
         functions <- desugarFunctions mods
-        pure (D.Program rules functions)
+        pure (D.Program rules functions conTypes typeDefs)
    in if null errs then Right result else Left errs
+
+-- | Collect typed constraint declarations into a map from qualified name to arg types.
+collectConstraintTypes :: [P.Module] -> Map.Map Name [TypeExpr]
+collectConstraintTypes mods =
+  Map.fromList
+    [ (Qualified m.name d.name, ts)
+    | m <- mods,
+      P.Ann d _ <- m.decls,
+      P.ConstraintDecl {} <- [d],
+      Just ts <- [d.argTypes]
+    ]
 
 -- | Scans a desugared program and builds the optimization map.
 -- It ensures that all Qualified names get a sequential ID starting from 0.
@@ -211,16 +225,18 @@ decomposeArg st parentVar i term =
 desugarFunctions :: [P.Module] -> Eff '[Writer [DesugarError]] [D.Function]
 desugarFunctions mods =
   traverse
-    (\(m, d) -> desugarFunction m.name d.name d.arity [eq | P.Ann eq _ <- m.equations, eq.funName == d.name])
+    (\(m, d) -> desugarFunction m.name d.name d.arity d.argTypes d.returnType [eq | P.Ann eq _ <- m.equations, eq.funName == d.name])
     [(m, d) | m <- mods, P.Ann d _ <- m.decls, isFunctionDecl d]
 
-desugarFunction :: Text -> Text -> Int -> [P.FunctionEquation] -> Eff '[Writer [DesugarError]] D.Function
-desugarFunction modName funName arity eqs = do
+desugarFunction :: Text -> Text -> Int -> Maybe [TypeExpr] -> Maybe TypeExpr -> [P.FunctionEquation] -> Eff '[Writer [DesugarError]] D.Function
+desugarFunction modName funName arity argTys retTy eqs = do
   desugaredEqs <- traverse desugarEquation eqs
   pure
     D.Function
       { name = Qualified modName funName,
         arity = arity,
+        argTypes = argTys,
+        returnType = retTy,
         equations = desugaredEqs
       }
 

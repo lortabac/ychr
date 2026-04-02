@@ -33,16 +33,21 @@ module YCHR.Desugared
     -- * Re-exports from CHR.Types
     Constraint (..),
     Term (..),
+    TypeExpr (..),
+    TypeDefinition (..),
   )
 where
 
+import Data.Map.Strict (Map)
 import Data.Text (Text)
 import YCHR.Pretty (AnnP)
 import YCHR.Types
 
 data Program = Program
   { rules :: [Rule],
-    functions :: [Function]
+    functions :: [Function],
+    constraintTypes :: Map Name [TypeExpr],
+    typeDefinitions :: [TypeDefinition]
   }
   deriving (Show)
 
@@ -82,6 +87,8 @@ data BodyGoal
 data Function = Function
   { name :: Name,
     arity :: Int,
+    argTypes :: Maybe [TypeExpr],
+    returnType :: Maybe TypeExpr,
     equations :: [Equation]
   }
   deriving (Show)
