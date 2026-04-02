@@ -59,34 +59,34 @@ leqProcMap =
 tellLeq :: Procedure
 tellLeq =
   Procedure
-    "tell_leq"
+    "tell_leq2"
     ["X", "Y"]
     [ Let "id" (CreateConstraint leqType [Var "X", Var "Y"]),
       Store (Var "id"),
-      ExprStmt (CallExpr "activate_leq" [Var "id"])
+      ExprStmt (CallExpr "activate_leq2" [Var "id"])
     ]
 
 activateLeq :: Procedure
 activateLeq =
   Procedure
-    "activate_leq"
+    "activate_leq2"
     ["susp"]
     [ Let "id" (Var "susp"),
       Let "X" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))),
       Let "Y" (FieldGet (Var "susp") (FieldArg (ArgIndex 1))),
-      Let "d" (CallExpr "occurrence_leq_1" [Var "id", Var "X", Var "Y"]),
+      Let "d" (CallExpr "occurrence_leq2_1" [Var "id", Var "X", Var "Y"]),
       If (Var "d") [Return (Lit (BoolLit True))] [],
-      Let "d" (CallExpr "occurrence_leq_2" [Var "id", Var "X", Var "Y"]),
+      Let "d" (CallExpr "occurrence_leq2_2" [Var "id", Var "X", Var "Y"]),
       If (Var "d") [Return (Lit (BoolLit True))] [],
-      Let "d" (CallExpr "occurrence_leq_3" [Var "id", Var "X", Var "Y"]),
+      Let "d" (CallExpr "occurrence_leq2_3" [Var "id", Var "X", Var "Y"]),
       If (Var "d") [Return (Lit (BoolLit True))] [],
-      Let "d" (CallExpr "occurrence_leq_4" [Var "id", Var "X", Var "Y"]),
+      Let "d" (CallExpr "occurrence_leq2_4" [Var "id", Var "X", Var "Y"]),
       If (Var "d") [Return (Lit (BoolLit True))] [],
-      Let "d" (CallExpr "occurrence_leq_5" [Var "id", Var "X", Var "Y"]),
+      Let "d" (CallExpr "occurrence_leq2_5" [Var "id", Var "X", Var "Y"]),
       If (Var "d") [Return (Lit (BoolLit True))] [],
-      Let "d" (CallExpr "occurrence_leq_6" [Var "id", Var "X", Var "Y"]),
+      Let "d" (CallExpr "occurrence_leq2_6" [Var "id", Var "X", Var "Y"]),
       If (Var "d") [Return (Lit (BoolLit True))] [],
-      Let "d" (CallExpr "occurrence_leq_7" [Var "id", Var "X", Var "Y"]),
+      Let "d" (CallExpr "occurrence_leq2_7" [Var "id", Var "X", Var "Y"]),
       If (Var "d") [Return (Lit (BoolLit True))] [],
       Return (Lit (BoolLit False))
     ]
@@ -94,7 +94,7 @@ activateLeq =
 occurrenceLeq1 :: Procedure
 occurrenceLeq1 =
   Procedure
-    "occurrence_leq_1"
+    "occurrence_leq2_1"
     ["id", "X", "Y"]
     [ If
         (Equal (Var "X") (Var "Y"))
@@ -108,7 +108,7 @@ occurrenceLeq1 =
 occurrenceLeq2 :: Procedure
 occurrenceLeq2 =
   Procedure
-    "occurrence_leq_2"
+    "occurrence_leq2_2"
     ["id", "X", "Y"]
     [ Foreach
         "L1"
@@ -147,7 +147,7 @@ occurrenceLeq2 =
 occurrenceLeq3 :: Procedure
 occurrenceLeq3 =
   Procedure
-    "occurrence_leq_3"
+    "occurrence_leq2_3"
     ["id", "X", "Y"]
     [ Foreach
         "L1"
@@ -186,7 +186,7 @@ occurrenceLeq3 =
 occurrenceLeq4 :: Procedure
 occurrenceLeq4 =
   Procedure
-    "occurrence_leq_4"
+    "occurrence_leq2_4"
     ["id", "X", "Y"]
     [ Foreach
         "L1"
@@ -220,7 +220,7 @@ occurrenceLeq4 =
 occurrenceLeq5 :: Procedure
 occurrenceLeq5 =
   Procedure
-    "occurrence_leq_5"
+    "occurrence_leq2_5"
     ["id", "X", "Y"]
     [ Foreach
         "L1"
@@ -252,7 +252,7 @@ occurrenceLeq5 =
 occurrenceLeq6 :: Procedure
 occurrenceLeq6 =
   Procedure
-    "occurrence_leq_6"
+    "occurrence_leq2_6"
     ["id", "X", "Y"]
     [ Foreach
         "L1"
@@ -271,7 +271,7 @@ occurrenceLeq6 =
                     [ If
                         (NotInHistory "transitivity" [Var "pId", Var "id"])
                         [ AddHistory "transitivity" [Var "pId", Var "id"],
-                          ExprStmt (CallExpr "tell_leq" [Var "pA0", Var "Y"]),
+                          ExprStmt (CallExpr "tell_leq2" [Var "pA0", Var "Y"]),
                           If
                             (Not (Alive (Var "id")))
                             [Return (Lit (BoolLit True))]
@@ -291,7 +291,7 @@ occurrenceLeq6 =
 occurrenceLeq7 :: Procedure
 occurrenceLeq7 =
   Procedure
-    "occurrence_leq_7"
+    "occurrence_leq2_7"
     ["id", "X", "Y"]
     [ Foreach
         "L1"
@@ -310,7 +310,7 @@ occurrenceLeq7 =
                     [ If
                         (NotInHistory "transitivity" [Var "id", Var "pId"])
                         [ AddHistory "transitivity" [Var "id", Var "pId"],
-                          ExprStmt (CallExpr "tell_leq" [Var "X", Var "pA1"]),
+                          ExprStmt (CallExpr "tell_leq2" [Var "X", Var "pA1"]),
                           If
                             (Not (Alive (Var "id")))
                             [Return (Lit (BoolLit True))]
@@ -334,7 +334,7 @@ reactivateDispatch =
     ["susp"]
     [ If
         (IsConstraintType (Var "susp") leqType)
-        [ExprStmt (CallExpr "activate_leq" [Var "susp"])]
+        [ExprStmt (CallExpr "activate_leq2" [Var "susp"])]
         []
     ]
 
@@ -389,7 +389,7 @@ callTellLeq ::
   ) =>
   Value -> Value -> Eff es RuntimeVal
 callTellLeq x y =
-  callProc leqProcMap leqHostCalls "tell_leq" [RVal x, RVal y]
+  callProc leqProcMap leqHostCalls "tell_leq2" [RVal x, RVal y]
 
 -- ---------------------------------------------------------------------------
 -- Tests

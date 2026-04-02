@@ -75,9 +75,9 @@ desugarProgram mods =
 extractSymbolTable :: D.Program -> SymbolTable
 extractSymbolTable prog =
   let rules = prog.rules
-      allNames = Set.fromList [c.name | r <- rules, c <- getRuleConstraints r]
-      qualifiedNames = [n | n@(Qualified _ _) <- Set.toList allNames]
-   in mkSymbolTable (zip qualifiedNames (map ConstraintType [0 ..]))
+      allIds = Set.fromList [Identifier c.name (length c.args) | r <- rules, c <- getRuleConstraints r]
+      qualifiedIds = [i | i@(Identifier (Qualified _ _) _) <- Set.toList allIds]
+   in mkSymbolTable (zip qualifiedIds (map ConstraintType [0 ..]))
 
 -- | Helper to find every constraint instance in a desugared rule.
 getRuleConstraints :: D.Rule -> [Constraint]

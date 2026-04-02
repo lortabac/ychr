@@ -1,0 +1,4 @@
+:- module(unicode_test, ['café'/2]).
+:- chr_constraint 'café'/2.
+
+'café'(X, R) <=> R = X.

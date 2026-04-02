@@ -18,6 +18,7 @@ module YCHR.Compile
 where
 
 import Control.Monad (foldM)
+import Data.Char (isAscii, ord)
 import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -27,11 +28,12 @@ import Data.Text qualified as T
 import Data.Traversable (for)
 import Effectful (Eff, runPureEff)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
+import Numeric (showHex)
 import YCHR.Compile.Types
 import YCHR.Desugared qualified as D
 import YCHR.Parsed qualified as P
 import YCHR.Pretty (AnnP (..), PrettyE (..))
-import YCHR.Types (Constraint, SymbolTable, Term (..), lookupSymbol, symbolTableSize, symbolTableToList)
+import YCHR.Types (Constraint, Identifier (..), SymbolTable, Term (..), lookupSymbol, symbolTableSize, symbolTableToList)
 import YCHR.Types qualified as Types
 import YCHR.VM
 
@@ -50,10 +52,9 @@ type SrcInfo = (P.SourceLoc, PrettyE)
 compile :: D.Program -> SymbolTable -> Either [CompileError] Program
 compile prog symTab =
   let funSet = buildFunctionSet prog
-      arityMap = buildArityMap prog
       (occMap, occErrs) = runPureEff . runWriter $ collectOccurrences symTab prog
       (procs, procErrs) = runPureEff . runWriter $ do
-        fmap concat $ traverse (genConstraintProcs funSet symTab arityMap occMap) (symbolTableToList symTab)
+        fmap concat $ traverse (genConstraintProcs funSet symTab occMap) (symbolTableToList symTab)
       (funProcs, funErrs) = runPureEff . runWriter $ do
         traverse (compileFunctionDef funSet) prog.functions
       dispatch = genReactivateDispatch symTab
@@ -67,32 +68,9 @@ compile prog symTab =
               }
         else Left allErrs
 
--- | Build the set of qualified function names from the program.
-buildFunctionSet :: D.Program -> Set Types.Name
-buildFunctionSet prog = Set.fromList [f.name | f <- prog.functions]
-
--- | Compute the VM procedure name for a function.
-funcProcName :: Types.Name -> Name
-funcProcName (Types.Qualified m n) = Name ("func_" <> m <> "_" <> n)
-funcProcName (Types.Unqualified n) = Name ("func_" <> n)
-
--- ---------------------------------------------------------------------------
--- Arity map
--- ---------------------------------------------------------------------------
-
-buildArityMap :: D.Program -> ArityMap
-buildArityMap prog =
-  let rules = prog.rules
-   in arityMapFromList
-        [ (c.name, Arity (length c.args))
-        | r <- rules,
-          let AnnP {node = rHead} = r.head
-              AnnP {node = rBody} = r.body,
-          c <-
-            rHead.kept
-              ++ rHead.removed
-              ++ [c' | D.BodyConstraint c' <- rBody]
-        ]
+-- | Build the set of qualified function identifiers from the program.
+buildFunctionSet :: D.Program -> Set Identifier
+buildFunctionSet prog = Set.fromList [Identifier f.name f.arity | f <- prog.functions]
 
 -- ---------------------------------------------------------------------------
 -- Occurrence collection
@@ -102,7 +80,7 @@ collectOccurrences :: SymbolTable -> D.Program -> Eff '[Writer [CompileError]] O
 collectOccurrences symTab prog = do
   let rules = prog.rules
   allOccs <- fmap concat (traverse (ruleOccurrences symTab) (zip [0 ..] rules))
-  let grouped = foldl' (\m occ -> occMapAppend occ.conName occ m) occMapEmpty allOccs
+  let grouped = foldl' (\m occ -> occMapAppend (Identifier occ.conName occ.conArity) occ m) occMapEmpty allOccs
   pure (occMapMap (assignNumbers . reverse) grouped)
   where
     assignNumbers occs = zipWith (\n o -> o {number = n}) [OccurrenceNumber 1 ..] occs
@@ -139,7 +117,7 @@ mkOccurrence symTab rule _ruleName combined activeIdx activeCon activeIsKept = d
   let partners' = [(idx, con, isKept) | (idx, con, isKept) <- combined, idx /= activeIdx]
       headSi = (rule.head.sourceLoc, rule.head.parsed)
   partners <- for partners' $ \(idx, con, isKept) -> do
-    ct <- lookupCType symTab headSi con.name
+    ct <- lookupCType symTab headSi (Identifier con.name (length con.args))
     pure
       Partner
         { idx = idx,
@@ -150,6 +128,7 @@ mkOccurrence symTab rule _ruleName combined activeIdx activeCon activeIsKept = d
   pure
     Occurrence
       { conName = activeCon.name,
+        conArity = length activeCon.args,
         number = OccurrenceNumber 0,
         rule = rule,
         activeIdx = activeIdx,
@@ -158,35 +137,34 @@ mkOccurrence symTab rule _ruleName combined activeIdx activeCon activeIsKept = d
         partners = partners
       }
 
-lookupCType :: SymbolTable -> SrcInfo -> Types.Name -> Eff '[Writer [CompileError]] ConstraintType
-lookupCType symTab (loc, p) name = case lookupSymbol name symTab of
+lookupCType :: SymbolTable -> SrcInfo -> Identifier -> Eff '[Writer [CompileError]] ConstraintType
+lookupCType symTab (loc, p) ident = case lookupSymbol ident symTab of
   Just ct -> pure ct
   Nothing -> do
-    tell [UnknownConstraintType loc p name]
+    tell [UnknownConstraintType loc p ident.name]
     pure (ConstraintType (-1))
 
 -- ---------------------------------------------------------------------------
 -- Procedure generation for each constraint type
 -- ---------------------------------------------------------------------------
 
-genConstraintProcs :: Set Types.Name -> SymbolTable -> ArityMap -> OccurrenceMap -> (Types.Name, ConstraintType) -> Eff '[Writer [CompileError]] [Procedure]
-genConstraintProcs funSet symTab arityMap occMap (name, cType) = do
-  let arity = lookupArity name arityMap
-      occs = lookupOccurrences name occMap
-      tellProc = genTell name cType arity
-      activate = genActivate name arity occs
-  occProcs <- traverse (genOccurrence funSet symTab name arity) occs
+genConstraintProcs :: Set Identifier -> SymbolTable -> OccurrenceMap -> (Identifier, ConstraintType) -> Eff '[Writer [CompileError]] [Procedure]
+genConstraintProcs funSet symTab occMap (ident, cType) = do
+  let occs = lookupOccurrences ident occMap
+      tellProc = genTell ident.name cType ident.arity
+      activate = genActivate ident.name ident.arity occs
+  occProcs <- traverse (genOccurrence funSet symTab ident.name ident.arity) occs
   pure (tellProc : activate : occProcs)
 
 -- ---------------------------------------------------------------------------
 -- tell_c
 -- ---------------------------------------------------------------------------
 
-genTell :: Types.Name -> ConstraintType -> Arity -> Procedure
+genTell :: Types.Name -> ConstraintType -> Int -> Procedure
 genTell name cType arity =
   let params = argNames arity
-      tellName = tellProcName name
-      activateName = activateProcName name
+      tellName = tellProcName name arity
+      activateName = activateProcName name arity
    in Procedure
         tellName
         params
@@ -203,13 +181,13 @@ genTell name cType arity =
 -- parameter, extracts the constraint arguments into local variables,
 -- and tries each occurrence procedure in order (paper §5.2, Listing 2
 -- with Early Drop from Listing 8).
-genActivate :: Types.Name -> Arity -> [Occurrence] -> Procedure
+genActivate :: Types.Name -> Int -> [Occurrence] -> Procedure
 genActivate name arity occs =
-  let activateName = activateProcName name
+  let activateName = activateProcName name arity
       occParams = Name "id" : argNames arity
       argExtracts =
         [ Let (argName i) (FieldGet (Var "susp") (FieldArg (ArgIndex i)))
-        | i <- [0 .. arity.unArity - 1]
+        | i <- [0 .. arity - 1]
         ]
       body =
         argExtracts
@@ -218,7 +196,7 @@ genActivate name arity occs =
    in Procedure activateName ["susp"] (Let "id" (Var "susp") : body)
   where
     genActivateCall occParams' occ =
-      let occName = occProcName name occ.number
+      let occName = occProcName name arity occ.number
        in [ Let "d" (CallExpr occName (map Var occParams')),
             If (Var "d") [Return (Lit (BoolLit True))] []
           ]
@@ -227,10 +205,10 @@ genActivate name arity occs =
 -- occurrence_c_j
 -- ---------------------------------------------------------------------------
 
-genOccurrence :: Set Types.Name -> SymbolTable -> Types.Name -> Arity -> Occurrence -> Eff '[Writer [CompileError]] Procedure
+genOccurrence :: Set Identifier -> SymbolTable -> Types.Name -> Int -> Occurrence -> Eff '[Writer [CompileError]] Procedure
 genOccurrence funSet symTab name arity occ = do
   let params = Name "id" : argNames arity
-      procName' = occProcName name occ.number
+      procName' = occProcName name arity occ.number
       varMap = buildVarMap occ
   body <- genOccurrenceBody funSet symTab varMap occ
   pure (Procedure procName' params body)
@@ -248,7 +226,7 @@ buildVarMap occ =
         ]
    in varMapFromList (activeBindings ++ partnerBindings)
 
-genOccurrenceBody :: Set Types.Name -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
+genOccurrenceBody :: Set Identifier -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
 genOccurrenceBody funSet symTab varMap occ
   | null occ.partners = genNoPartnerBody funSet symTab varMap occ
   | otherwise = do
@@ -256,7 +234,7 @@ genOccurrenceBody funSet symTab varMap occ
       pure (body ++ [Return (Lit (BoolLit False))])
 
 -- Single-head rule (no partners)
-genNoPartnerBody :: Set Types.Name -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
+genNoPartnerBody :: Set Identifier -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
 genNoPartnerBody funSet symTab varMap occ = do
   let AnnP {node = guards, sourceLoc = guardLoc, parsed = guardP} = occ.rule.guard
       guardSi = (guardLoc, guardP)
@@ -282,7 +260,7 @@ genNoPartnerBody funSet symTab varMap occ = do
 -- When all partners have been bound (base case), the guard is checked
 -- and 'genFireStmts' emits the rule firing code including early drop
 -- and backjumping (paper §5.3).
-genPartnerBody :: Set Types.Name -> SymbolTable -> VarMap -> Occurrence -> PartnerIndex -> Eff '[Writer [CompileError]] [Stmt]
+genPartnerBody :: Set Identifier -> SymbolTable -> VarMap -> Occurrence -> PartnerIndex -> Eff '[Writer [CompileError]] [Stmt]
 genPartnerBody funSet symTab varMap occ k
   | k >= PartnerIndex (length occ.partners) = do
       let AnnP {node = guards, sourceLoc = guardLoc, parsed = guardP} = occ.rule.guard
@@ -324,7 +302,7 @@ genPartnerBody funSet symTab varMap occ k
 -- Fire: history check + kill + body + early drop + backjumping
 -- ---------------------------------------------------------------------------
 
-genFireStmts :: Set Types.Name -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
+genFireStmts :: Set Identifier -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
 genFireStmts funSet symTab varMap occ = do
   let rule = occ.rule
       AnnP {node = ruleHead} = rule.head
@@ -421,11 +399,11 @@ compileTerm _ _ Wildcard = pure (Lit WildcardLit)
 
 -- | Like 'compileTerm', but also recognises function calls and emits
 -- 'CallExpr' for them.
-compileExpr :: Set Types.Name -> VarMap -> SrcInfo -> Term -> Eff '[Writer [CompileError]] Expr
+compileExpr :: Set Identifier -> VarMap -> SrcInfo -> Term -> Eff '[Writer [CompileError]] Expr
 compileExpr funSet varMap si (CompoundTerm name args)
-  | Set.member name funSet = do
+  | Set.member (Identifier name (length args)) funSet = do
       args' <- traverse (compileExpr funSet varMap si) args
-      pure (CallExpr (funcProcName name) args')
+      pure (CallExpr (funcProcName name (length args')) args')
   | Types.Qualified "host" f <- name = do
       args' <- traverse (compileExpr funSet varMap si) args
       pure (HostCall (Name f) args')
@@ -447,7 +425,7 @@ compileExpr _ varMap si t = compileTerm varMap si t
 --   * __Check guards__ ('GuardEqual', 'GuardExpr') are pure boolean
 --     tests.  They are compiled into a single 'And'-chained expression.
 compileGuards ::
-  Set Types.Name ->
+  Set Identifier ->
   VarMap ->
   SrcInfo ->
   [D.Guard] ->
@@ -478,7 +456,7 @@ compileMatchGuard si (matchWrapper, varMap) (D.GuardGetArg vname term idx) = do
   pure (matchWrapper . binding, varMap')
 compileMatchGuard _ acc _ = pure acc
 
-compileCheckGuards :: Set Types.Name -> VarMap -> SrcInfo -> [D.Guard] -> Eff '[Writer [CompileError]] (Maybe Expr)
+compileCheckGuards :: Set Identifier -> VarMap -> SrcInfo -> [D.Guard] -> Eff '[Writer [CompileError]] (Maybe Expr)
 compileCheckGuards funSet varMap si guards = case nonTrivialGuards of
   [] -> pure Nothing
   [g] -> Just <$> compileCheckGuard funSet varMap si g
@@ -488,7 +466,7 @@ compileCheckGuards funSet varMap si guards = case nonTrivialGuards of
     isNonTrivial (D.GuardCommon D.GoalTrue) = False
     isNonTrivial _ = True
 
-compileCheckGuard :: Set Types.Name -> VarMap -> SrcInfo -> D.Guard -> Eff '[Writer [CompileError]] Expr
+compileCheckGuard :: Set Identifier -> VarMap -> SrcInfo -> D.Guard -> Eff '[Writer [CompileError]] Expr
 compileCheckGuard _ _ _ (D.GuardCommon D.GoalTrue) = pure (Lit (BoolLit True))
 compileCheckGuard _ varMap si (D.GuardEqual t1 t2) = Equal <$> compileTerm varMap si t1 <*> compileTerm varMap si t2
 compileCheckGuard funSet varMap si (D.GuardExpr term) = HostEval <$> compileExpr funSet varMap si term
@@ -498,7 +476,7 @@ compileCheckGuard _ _ _ _ = pure (Lit (BoolLit True))
 -- Compile body goals
 -- ---------------------------------------------------------------------------
 
-compileBodyGoals :: Set Types.Name -> SymbolTable -> VarMap -> SrcInfo -> [D.BodyGoal] -> Eff '[Writer [CompileError]] [Stmt]
+compileBodyGoals :: Set Identifier -> SymbolTable -> VarMap -> SrcInfo -> [D.BodyGoal] -> Eff '[Writer [CompileError]] [Stmt]
 compileBodyGoals funSet symTab varMap si goals = do
   (stmts, _) <- foldM step ([], varMap) goals
   pure stmts
@@ -511,14 +489,14 @@ compileBodyGoals funSet symTab varMap si goals = do
 -- an updated 'VarMap'. The VarMap may grow when a goal introduces new
 -- variables (e.g. @is@ binding a fresh variable, or a constraint whose
 -- arguments reference not-yet-seen variables that need 'NewVar').
-compileBodyGoal :: Set Types.Name -> SymbolTable -> VarMap -> SrcInfo -> D.BodyGoal -> Eff '[Writer [CompileError]] ([Stmt], VarMap)
+compileBodyGoal :: Set Identifier -> SymbolTable -> VarMap -> SrcInfo -> D.BodyGoal -> Eff '[Writer [CompileError]] ([Stmt], VarMap)
 compileBodyGoal _ _ varMap _ (D.BodyCommon D.GoalTrue) = pure ([], varMap)
 compileBodyGoal _ _ varMap si (D.BodyConstraint con) = do
   let argVars = [v | VarTerm v <- con.args, notMemberVar v varMap]
       newStmts = [Let (Name v) NewVar | v <- argVars]
       varMap' = foldl' (\m v -> insertVar v (Var (Name v)) m) varMap argVars
   callArgs <- traverse (compileTerm varMap' si) con.args
-  let tellName = tellProcName con.name
+  let tellName = tellProcName con.name (length callArgs)
   pure (newStmts ++ [ExprStmt (CallExpr tellName callArgs)], varMap')
 compileBodyGoal _ _ varMap si (D.BodyUnify t1 t2) = do
   t1' <- compileTerm varMap si t1
@@ -547,15 +525,15 @@ compileBodyGoal funSet _ varMap si (D.BodyIs v expr) = do
        in pure ([Let (Name v) (HostEval expr')], varMap')
 compileBodyGoal funSet _ varMap si (D.BodyFunctionCall name args) = do
   args' <- traverse (compileExpr funSet varMap si) args
-  pure ([ExprStmt (CallExpr (funcProcName name) args')], varMap)
+  pure ([ExprStmt (CallExpr (funcProcName name (length args')) args')], varMap)
 
 -- ---------------------------------------------------------------------------
 -- Compile function definitions
 -- ---------------------------------------------------------------------------
 
-compileFunctionDef :: Set Types.Name -> D.Function -> Eff '[Writer [CompileError]] Procedure
+compileFunctionDef :: Set Identifier -> D.Function -> Eff '[Writer [CompileError]] Procedure
 compileFunctionDef funSet func = do
-  let procName' = funcProcName func.name
+  let procName' = funcProcName func.name func.arity
       params = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. func.arity - 1]]
       dummySi = (P.dummyLoc, PrettyE (AtomTerm "function"))
   eqStmts <- traverse (compileEquation funSet params dummySi) func.equations
@@ -571,7 +549,7 @@ buildEquationVarMap procParams normalizedArgs =
     | (p, VarTerm v) <- zip procParams normalizedArgs
     ]
 
-compileEquation :: Set Types.Name -> [Name] -> SrcInfo -> D.Equation -> Eff '[Writer [CompileError]] [Stmt]
+compileEquation :: Set Identifier -> [Name] -> SrcInfo -> D.Equation -> Eff '[Writer [CompileError]] [Stmt]
 compileEquation funSet params si eq = do
   let varMap = buildEquationVarMap params eq.params
   (matchWrapper, guardExpr, varMap') <- compileGuards funSet varMap si eq.guards
@@ -599,37 +577,52 @@ genReactivateDispatch symTab =
   let body = map genDispatchBranch (symbolTableToList symTab)
    in Procedure "reactivate_dispatch" ["susp"] body
   where
-    genDispatchBranch (name, cType) =
+    genDispatchBranch (ident, cType) =
       If
         (IsConstraintType (Var "susp") cType)
-        [ExprStmt (CallExpr (activateProcName name) [Var "susp"])]
+        [ExprStmt (CallExpr (activateProcName ident.name ident.arity) [Var "susp"])]
         []
 
 -- ---------------------------------------------------------------------------
 -- Naming helpers
 -- ---------------------------------------------------------------------------
 
-procNameFor :: Text -> Types.Name -> Name
-procNameFor prefix (Types.Qualified m n) = Name (prefix <> "_" <> m <> "_" <> n)
-procNameFor prefix (Types.Unqualified n) = Name (prefix <> "_" <> n)
+-- | Encode a text component for use in generated names.
+-- ASCII characters pass through unchanged.
+-- Non-ASCII characters are encoded as @__u{hex codepoint}__@.
+encodeText :: Text -> Text
+encodeText = T.concatMap encodeChar
+  where
+    encodeChar c
+      | isAscii c = T.singleton c
+      | otherwise = "__u" <> T.pack (showHex (ord c) "") <> "__"
 
-tellProcName :: Types.Name -> Name
+procNameFor :: Text -> Types.Name -> Int -> Name
+procNameFor prefix (Types.Qualified m n) arity =
+  Name (prefix <> "_" <> encodeText m <> "__" <> encodeText n <> T.pack (show arity))
+procNameFor prefix (Types.Unqualified n) arity =
+  Name (prefix <> "_" <> encodeText n <> T.pack (show arity))
+
+tellProcName :: Types.Name -> Int -> Name
 tellProcName = procNameFor "tell"
 
-activateProcName :: Types.Name -> Name
+activateProcName :: Types.Name -> Int -> Name
 activateProcName = procNameFor "activate"
 
-occProcName :: Types.Name -> OccurrenceNumber -> Name
-occProcName name num =
-  let Name base = procNameFor "occurrence" name
+occProcName :: Types.Name -> Int -> OccurrenceNumber -> Name
+occProcName name arity num =
+  let Name base = procNameFor "occurrence" name arity
    in Name (base <> "_" <> T.pack (show num.unOccurrenceNumber))
 
-vmName :: Types.Name -> Name
-vmName (Types.Unqualified n) = Name n
-vmName (Types.Qualified m n) = Name (m <> "_" <> n)
+funcProcName :: Types.Name -> Int -> Name
+funcProcName = procNameFor "func"
 
-argNames :: Arity -> [Name]
-argNames arity = [argName i | i <- [0 .. arity.unArity - 1]]
+vmName :: Types.Name -> Name
+vmName (Types.Unqualified n) = Name (encodeText n)
+vmName (Types.Qualified m n) = Name (encodeText m <> "__" <> encodeText n)
+
+argNames :: Int -> [Name]
+argNames arity = [argName i | i <- [0 .. arity - 1]]
 
 argName :: Int -> Name
 argName i = Name ("X_" <> T.pack (show i))

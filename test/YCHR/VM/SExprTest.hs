@@ -29,7 +29,7 @@ roundtripTests =
     testCase "single empty procedure" $
       roundtrip (Program 1 [Procedure "foo" [] []]),
     testCase "procedure with params" $
-      roundtrip (Program 1 [Procedure "tell_leq" ["X", "Y"] []]),
+      roundtrip (Program 1 [Procedure "tell_leq2" ["X", "Y"] []]),
     testCase "let statement" $
       roundtrip (mkProg [Let "x" (Lit (IntLit 42))]),
     testCase "assign statement" $
@@ -116,9 +116,9 @@ roundtripTests =
       roundtrip
         ( Program
             2
-            [ Procedure "tell_a" ["X"] [Let "id" (CreateConstraint (ConstraintType 0) [Var "X"]), Store (Var "id"), ExprStmt (CallExpr "activate_a" [Var "id"])],
-              Procedure "activate_a" ["susp"] [Let "id" (Var "susp"), Let "X" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))), Return (Lit (BoolLit False))],
-              Procedure "reactivate_dispatch" ["susp"] [If (IsConstraintType (Var "susp") (ConstraintType 0)) [ExprStmt (CallExpr "activate_a" [Var "susp"])] []]
+            [ Procedure "tell_a1" ["X"] [Let "id" (CreateConstraint (ConstraintType 0) [Var "X"]), Store (Var "id"), ExprStmt (CallExpr "activate_a1" [Var "id"])],
+              Procedure "activate_a1" ["susp"] [Let "id" (Var "susp"), Let "X" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))), Return (Lit (BoolLit False))],
+              Procedure "reactivate_dispatch" ["susp"] [If (IsConstraintType (Var "susp") (ConstraintType 0)) [ExprStmt (CallExpr "activate_a1" [Var "susp"])] []]
             ]
         )
   ]
@@ -152,8 +152,8 @@ formatTests =
       let vmp =
             VMProgram
               { program = Program 2 [],
-                exportedSet = Set.fromList [Types.Qualified "M" "leq", Types.Unqualified "gcd"],
-                symbolTable = Types.mkSymbolTable [(Types.Qualified "M" "leq", Types.ConstraintType 0), (Types.Unqualified "gcd", Types.ConstraintType 1)]
+                exportedSet = Set.fromList [Types.Identifier (Types.Qualified "M" "leq") 2, Types.Identifier (Types.Unqualified "gcd") 1],
+                symbolTable = Types.mkSymbolTable [(Types.Identifier (Types.Qualified "M" "leq") 2, Types.ConstraintType 0), (Types.Identifier (Types.Unqualified "gcd") 1, Types.ConstraintType 1)]
               }
           text = serialize vmp
        in case deserialize text of

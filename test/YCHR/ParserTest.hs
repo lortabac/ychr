@@ -350,7 +350,15 @@ errorTests =
     [ testCase "missing dot returns Left" $
         assertBool "expected parse failure" (isLeft (p "foo <=> bar")),
       testCase "invalid character returns Left" $
-        assertBool "expected parse failure" (isLeft (p "!foo <=> bar."))
+        assertBool "expected parse failure" (isLeft (p "!foo <=> bar.")),
+      testCase "double underscore in unquoted atom is rejected" $
+        assertBool "expected parse failure" (isLeft (p "foo__bar <=> true.")),
+      testCase "double underscore in quoted atom is rejected" $
+        assertBool "expected parse failure" (isLeft (p "'foo__bar' <=> true.")),
+      testCase "double underscore in module name is rejected" $
+        assertBool "expected parse failure" (isLeft (p ":- module(my__mod, []).")),
+      testCase "single underscore in atom is allowed" $
+        assertBool "expected parse success" (not (isLeft (p "foo_bar <=> true.")))
     ]
 
 -- ---------------------------------------------------------------------------

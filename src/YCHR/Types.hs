@@ -6,6 +6,7 @@ module YCHR.Types
   ( -- * Constraints
     Constraint (..),
     ConstraintType (..),
+    Identifier (..),
     Name (..),
 
     -- * Symbol table
@@ -29,17 +30,21 @@ import Language.Haskell.TH.Syntax (Lift)
 newtype ConstraintType = ConstraintType {unConstraintType :: Int}
   deriving (Show, Eq, Ord)
 
--- | Maps fully-qualified CHR names to unique 0-indexed numeric IDs.
-newtype SymbolTable = SymbolTable (Map Name ConstraintType)
+-- | A name together with its arity, identifying a constraint or function.
+data Identifier = Identifier {name :: Name, arity :: Int}
+  deriving (Show, Eq, Ord)
+
+-- | Maps identifiers (name + arity) to unique 0-indexed numeric IDs.
+newtype SymbolTable = SymbolTable (Map Identifier ConstraintType)
   deriving (Show, Eq)
 
-mkSymbolTable :: [(Name, ConstraintType)] -> SymbolTable
+mkSymbolTable :: [(Identifier, ConstraintType)] -> SymbolTable
 mkSymbolTable = SymbolTable . Map.fromList
 
-lookupSymbol :: Name -> SymbolTable -> Maybe ConstraintType
+lookupSymbol :: Identifier -> SymbolTable -> Maybe ConstraintType
 lookupSymbol n (SymbolTable m) = Map.lookup n m
 
-symbolTableToList :: SymbolTable -> [(Name, ConstraintType)]
+symbolTableToList :: SymbolTable -> [(Identifier, ConstraintType)]
 symbolTableToList (SymbolTable m) = Map.toList m
 
 symbolTableSize :: SymbolTable -> Int

@@ -87,7 +87,7 @@ instance Exception Error
 data CompiledProgram = CompiledProgram
   { program :: Program,
     exportMap :: Map (Text, Int) ExportResolution,
-    exportedSet :: Set Types.Name,
+    exportedSet :: Set Types.Identifier,
     symbolTable :: SymbolTable,
     allModules :: [Module],
     opTable :: OpTable
@@ -130,7 +130,7 @@ compileModules includeStdlib inputs = do
           ]
       exportedSet =
         Set.fromList
-          [Types.Qualified m n | ((n, _), ms) <- toListExport exportEnv, m <- ms]
+          [Types.Identifier (Types.Qualified m n) a | ((n, a), ms) <- toListExport exportEnv, m <- ms]
   renamed <- first RenameErrors (renameProgram collected)
   desugared <- first DesugarErrors (desugarProgram renamed)
   let symTab = extractSymbolTable desugared
@@ -162,7 +162,7 @@ data CHR :: Effect
 type instance DispatchOf CHR = Static WithSideEffects
 
 data instance StaticRep CHR
-  = CHRRep ProcMap HostCallRegistry (Map (Text, Int) ExportResolution) (Set Types.Name)
+  = CHRRep ProcMap HostCallRegistry (Map (Text, Int) ExportResolution) (Set Types.Identifier)
 
 -- | Shorthand for the full set of effects available inside a CHR session.
 type CHREffects es =
@@ -212,7 +212,7 @@ tellConstraint name args = do
   resolved <- case resolveQueryConstraint' exportMap exportedSet name arity of
     Left err -> error err
     Right qname -> pure qname
-  let tellName = tellProcName resolved
+  let tellName = tellProcName resolved arity
   unless (Map.member tellName procMap) $
     error ("Constraint not found: " ++ T.unpack tellName.unName)
   _ <- callProc procMap hc tellName (map RVal args)
@@ -221,7 +221,7 @@ tellConstraint name args = do
 -- | Name resolution extracted from 'resolveQueryConstraint' to work with
 -- just a name and arity.
 resolveQueryConstraint' ::
-  Map (Text, Int) ExportResolution -> Set Types.Name -> Types.Name -> Int -> Either String Types.Name
+  Map (Text, Int) ExportResolution -> Set Types.Identifier -> Types.Name -> Int -> Either String Types.Name
 resolveQueryConstraint' expMap expSet name arity = case name of
   Types.Unqualified n ->
     case Map.lookup (n, arity) expMap of
@@ -237,9 +237,9 @@ resolveQueryConstraint' expMap expSet name arity = case name of
           )
       Nothing -> Left ("Unknown constraint: " ++ T.unpack n ++ "/" ++ show arity)
   Types.Qualified m n ->
-    if Set.member (Types.Qualified m n) expSet
+    if Set.member (Types.Identifier (Types.Qualified m n) arity) expSet
       then Right name
-      else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n)
+      else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n ++ "/" ++ show arity)
 
 -- ---------------------------------------------------------------------------
 -- Single-goal API
@@ -264,9 +264,10 @@ resolveQueryConstraint cp (Constraint cname cargs) = case cname of
               )
           Nothing -> Left ("Unknown constraint: " ++ T.unpack n ++ "/" ++ show arity)
   Types.Qualified m n ->
-    if Set.member (Types.Qualified m n) cp.exportedSet
-      then Right (Constraint cname cargs)
-      else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n)
+    let arity = length cargs
+     in if Set.member (Types.Identifier (Types.Qualified m n) arity) cp.exportedSet
+          then Right (Constraint cname cargs)
+          else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n ++ "/" ++ show arity)
 
 -- | Run a single CHR constraint against a compiled program.
 runProgramWithGoalDSL :: CompiledProgram -> HostCallRegistry -> Constraint -> IO (RuntimeVal, Map Text Term)
@@ -276,7 +277,7 @@ runProgramWithGoalDSL cp hostCalls constraint = do
     Right c -> pure c
   let prog = cp.program
       procMap = Map.fromList [(p.name, p) | p <- prog.procedures]
-      tellName = tellProcName resolved.name
+      tellName = tellProcName resolved.name (length resolved.args)
   unless (Map.member tellName procMap) $
     fail ("Constraint not found: " ++ T.unpack tellName.unName)
   runEff
@@ -372,7 +373,7 @@ executeBodyGoal _ (D.BodyConstraint c) = do
 executeBodyGoal hc (D.BodyFunctionCall name args) = do
   CHRRep procMap _ _ _ <- getStaticRep
   argVals <- traverse termToValue args
-  _ <- callProc procMap hc (funcProcName name) (map RVal argVals)
+  _ <- callProc procMap hc (funcProcName name (length argVals)) (map RVal argVals)
   pure ()
 
 -- | Call a host function, failing with a clear message if not found.
@@ -421,7 +422,7 @@ evalTermArith hc (CompoundTerm (Types.Qualified "host" f) args) = do
 evalTermArith hc (CompoundTerm name args) = do
   CHRRep procMap _ _ _ <- getStaticRep
   argVals <- traverse (evalTermArith hc) args
-  let fnName = funcProcName name
+  let fnName = funcProcName name (length argVals)
   if Map.member fnName procMap
     then do
       result <- callProc procMap hc fnName (map RVal argVals)

@@ -45,7 +45,7 @@ import YCHR.VM.Types
 -- | A VM program bundled with metadata needed by external backends.
 data VMProgram = VMProgram
   { program :: Program,
-    exportedSet :: Set Types.Name,
+    exportedSet :: Set Types.Identifier,
     symbolTable :: Types.SymbolTable
   }
   deriving (Show, Eq)
@@ -73,7 +73,7 @@ vmProgramToSExpr vmp =
   SList
     [ SAtom "vm-program",
       programToSExpr vmp.program,
-      SList (SAtom "exports" : map chrNameToSExpr (Set.toAscList vmp.exportedSet)),
+      SList (SAtom "exports" : map identToSExpr (Set.toAscList vmp.exportedSet)),
       symbolTableToSExpr vmp.symbolTable
     ]
 
@@ -81,7 +81,10 @@ symbolTableToSExpr :: Types.SymbolTable -> SExpr
 symbolTableToSExpr st =
   SList (SAtom "symbol-table" : map entryToSExpr (Types.symbolTableToList st))
   where
-    entryToSExpr (n, Types.ConstraintType ct) = SList [chrNameToSExpr n, SInt ct]
+    entryToSExpr (Types.Identifier n arity, Types.ConstraintType ct) = SList [chrNameToSExpr n, SInt arity, SInt ct]
+
+identToSExpr :: Types.Identifier -> SExpr
+identToSExpr (Types.Identifier n arity) = SList [chrNameToSExpr n, SInt arity]
 
 chrNameToSExpr :: Types.Name -> SExpr
 chrNameToSExpr (Types.Unqualified t) = SString t
@@ -187,7 +190,7 @@ err = Left
 vmProgramFromSExpr :: SExpr -> Err VMProgram
 vmProgramFromSExpr (SList [SAtom "vm-program", progS, SList (SAtom "exports" : exportSexprs), stS]) = do
   prog <- programFromSExpr progS
-  exports <- traverse chrNameFromSExpr exportSexprs
+  exports <- traverse identFromSExpr exportSexprs
   st <- symbolTableFromSExpr stS
   pure VMProgram {program = prog, exportedSet = Set.fromList exports, symbolTable = st}
 vmProgramFromSExpr s = err ("expected (vm-program ...), got: " <> printSExpr s)
@@ -197,11 +200,17 @@ symbolTableFromSExpr (SList (SAtom "symbol-table" : entries)) = do
   pairs <- traverse entryFromSExpr entries
   pure (Types.mkSymbolTable pairs)
   where
-    entryFromSExpr (SList [n, SInt ct]) = do
+    entryFromSExpr (SList [n, SInt arity, SInt ct]) = do
       name <- chrNameFromSExpr n
-      pure (name, Types.ConstraintType ct)
-    entryFromSExpr s = err ("expected (name int), got: " <> printSExpr s)
+      pure (Types.Identifier name arity, Types.ConstraintType ct)
+    entryFromSExpr s = err ("expected (name arity int), got: " <> printSExpr s)
 symbolTableFromSExpr s = err ("expected (symbol-table ...), got: " <> printSExpr s)
+
+identFromSExpr :: SExpr -> Err Types.Identifier
+identFromSExpr (SList [n, SInt arity]) = do
+  name <- chrNameFromSExpr n
+  pure (Types.Identifier name arity)
+identFromSExpr s = err ("expected (name arity), got: " <> printSExpr s)
 
 chrNameFromSExpr :: SExpr -> Err Types.Name
 chrNameFromSExpr (SString t) = pure (Types.Unqualified t)

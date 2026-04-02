@@ -13,7 +13,7 @@ import YCHR.EndToEnd (CompiledProgram (..), ConstraintType, Value (..), compileM
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive)
 import YCHR.Runtime.Types (RuntimeVal (..))
-import YCHR.Types (Constraint (..), Name (..), Term (..), lookupSymbol)
+import YCHR.Types (Constraint (..), Identifier (..), Name (..), Term (..), lookupSymbol)
 import YCHR.VM qualified as VM
 
 tests :: TestTree
@@ -22,7 +22,9 @@ tests =
     "YCHR.EndToEnd"
     [ leqTests,
       fibTests,
-      visibilityTests
+      visibilityTests,
+      unicodeTests,
+      arityOverloadTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -54,11 +56,11 @@ leqSource =
   \idempotence @ leq(X, Y) \\ leq(X, Y) <=> true.\n\
   \transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).\n"
 
-lookupType :: CompiledProgram -> Name -> ConstraintType
-lookupType prog name =
-  case lookupSymbol name prog.symbolTable of
+lookupType :: CompiledProgram -> Identifier -> ConstraintType
+lookupType prog ident =
+  case lookupSymbol ident prog.symbolTable of
     Just ct -> ct
-    Nothing -> error $ "constraint type not found: " ++ show name
+    Nothing -> error $ "constraint type not found: " ++ show ident
 
 leqHostCalls :: HostCallRegistry
 leqHostCalls = Map.empty
@@ -69,21 +71,21 @@ leqTests =
     "LEQ handler (from surface language)"
     [ testCase "reflexivity: leq(3, 3) fires, store empty" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
-        let leqType = lookupType prog (Qualified "order" "leq")
+        let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
         n <- withCHR prog leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 3, VInt 3]
           countAlive leqType
         n @?= 0,
       testCase "no rule fires: leq(1, 2) stays" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
-        let leqType = lookupType prog (Qualified "order" "leq")
+        let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
         n <- withCHR prog leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           countAlive leqType
         n @?= 1,
       testCase "antisymmetry: leq(X, Y), leq(Y, X) unifies X=Y, store empty" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
-        let leqType = lookupType prog (Qualified "order" "leq")
+        let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
         (n, areEqual) <- withCHR prog leqHostCalls $ do
           x <- newVar
           y <- newVar
@@ -96,7 +98,7 @@ leqTests =
         assertBool "X and Y should be unified" areEqual,
       testCase "transitivity: leq(1,2), leq(2,3) produces leq(1,3)" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
-        let leqType = lookupType prog (Qualified "order" "leq")
+        let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
         n <- withCHR prog leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           tellConstraint (Unqualified "leq") [VInt 2, VInt 3]
@@ -104,7 +106,7 @@ leqTests =
         n @?= 3,
       testCase "idempotence: leq(1,2), leq(1,2) removes duplicate" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
-        let leqType = lookupType prog (Qualified "order" "leq")
+        let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
         n <- withCHR prog leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
@@ -112,7 +114,7 @@ leqTests =
         n @?= 1,
       testCase "full cycle: leq(a,b), leq(b,c), leq(c,a) — all removed, all unified" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
-        let leqType = lookupType prog (Qualified "order" "leq")
+        let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
         (n, eqAB, eqBC) <- withCHR prog leqHostCalls $ do
           a <- newVar
           b <- newVar
@@ -247,4 +249,52 @@ visibilityTests =
         case resolveQueryConstraint cp q of
           Right _ -> pure ()
           Left err -> assertFailure $ "Should succeed with qualification: " ++ err
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Non-ASCII constraint names
+-- ---------------------------------------------------------------------------
+
+unicodeSource :: Text
+unicodeSource =
+  ":- module(uni, ['\xe9cho'/1]).\n\
+  \:- chr_constraint '\xe9cho'/1.\n\
+  \\n\
+  \'\xe9cho'(X) <=> X = done.\n"
+
+unicodeTests :: TestTree
+unicodeTests =
+  testGroup
+    "Non-ASCII constraint names"
+    [ testCase "constraint with non-ASCII name compiles and runs" $ do
+        prog <- compileOrFail [("uni.chr", unicodeSource)]
+        (_, bindings) <- runProgramWithGoal prog Map.empty "uni:'\xe9cho'(R)"
+        Map.lookup "R" bindings @?= Just (AtomTerm "done")
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Arity overloading
+-- ---------------------------------------------------------------------------
+
+arityOverloadSource :: Text
+arityOverloadSource =
+  ":- module(m, [foo/1, foo/2]).\n\
+  \:- chr_constraint foo/1, foo/2.\n\
+  \\n\
+  \foo(X) <=> X = one.\n\
+  \foo(X, Y) <=> X = two, Y = args.\n"
+
+arityOverloadTests :: TestTree
+arityOverloadTests =
+  testGroup
+    "Arity overloading"
+    [ testCase "foo/1 and foo/2 are distinct constraints" $ do
+        prog <- compileOrFail [("m.chr", arityOverloadSource)]
+        (_, bindings1) <- runProgramWithGoal prog Map.empty "m:foo(R)"
+        Map.lookup "R" bindings1 @?= Just (AtomTerm "one"),
+      testCase "foo/2 fires its own rule" $ do
+        prog <- compileOrFail [("m.chr", arityOverloadSource)]
+        (_, bindings2) <- runProgramWithGoal prog Map.empty "m:foo(R1, R2)"
+        Map.lookup "R1" bindings2 @?= Just (AtomTerm "two")
+        Map.lookup "R2" bindings2 @?= Just (AtomTerm "args")
     ]

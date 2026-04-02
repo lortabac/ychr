@@ -42,7 +42,7 @@ Line comments start with `;` and extend to end of line.
 ### Conventions
 
 - **Names** (variable names, procedure names, labels, rule names) are
-  always double-quoted strings: `"x"`, `"tell_leq"`, `"L1"`.
+  always double-quoted strings: `"x"`, `"tell_mymodule__leq2"`, `"L1"`.
 - **Constraint types** are bare integers (0-based indices): `0`, `1`.
 - **Argument indices** are bare integers (0-based): `0`, `1`.
 - **Booleans** are bare atoms: `true`, `false`.
@@ -60,26 +60,33 @@ program, the exported names, and the symbol table:
 ```scheme
 (vm-program
   <program>
-  (exports <name> ...)
-  (symbol-table (<name> <type-id>) ...))
+  (exports (<name> <arity>) ...)
+  (symbol-table (<name> <arity> <type-id>) ...))
 ```
 
 - **`<program>`** -- the VM program (see below).
-- **`exports`** -- the set of CHR names (constraints and functions)
-  visible to external callers. Backends should generate public entry
-  points (e.g. `tell_c` wrappers) for each exported name.
-- **`symbol-table`** -- maps each CHR name to its 0-based constraint
-  type integer. This is the authoritative mapping between symbolic
-  names and the numeric type IDs used throughout the VM program.
+- **`exports`** -- the set of CHR identifiers (name + arity) visible
+  to external callers. Backends should generate public entry points
+  (e.g. `tell_c` wrappers) for each exported identifier.
+- **`symbol-table`** -- maps each CHR identifier (name + arity) to
+  its 0-based constraint type integer. This is the authoritative
+  mapping between symbolic names and the numeric type IDs used
+  throughout the VM program. The same name with different arities
+  gets distinct type IDs (e.g. `foo/1` and `foo/2` are separate
+  constraint types).
 
 ### Names
 
-CHR names appear in the exports list and symbol table. They come in
-two forms:
+CHR names appear in the exports list and symbol table. The
+serialization format supports two forms:
 
-- **Unqualified**: a bare string, e.g. `"gcd"`.
 - **Qualified**: `(qualified "<module>" "<name>")`, e.g.
   `(qualified "order" "leq")`.
+- **Unqualified**: a bare string, e.g. `"gcd"`.
+
+In practice, all names in the symbol table and exports are qualified,
+since the renaming pass resolves every constraint and function to its
+defining module before compilation.
 
 
 ## Program
@@ -109,6 +116,67 @@ The compiler generates these procedure kinds:
 | `activate_c(susp)` | Extracts arguments from the suspension, tries each occurrence in order. Returns `false` if the constraint survives all occurrences. |
 | `occurrence_c_j(id, X_0, ..., X_n)` | Handles the j-th occurrence of constraint c. Iterates over partner constraints, checks guards, fires rules. Returns `true` (early drop) or `false`. |
 | `reactivate_dispatch(susp)` | Checks the suspension's constraint type and calls the appropriate `activate_c`. |
+| `func_f(arg_0, ..., arg_n)` | Evaluates a user-defined function. |
+
+
+### Procedure Naming
+
+Procedure names are generated deterministically from the constraint or
+function name, module qualifier, and arity. The scheme guarantees
+injectivity: distinct identifiers always produce distinct procedure
+names.
+
+All constraints and functions are fully qualified by the renaming
+pass, so procedure names always include a module component.
+
+**Format:**
+
+```
+<prefix>_<module>__<name><arity>
+```
+
+Where `<prefix>` is one of `tell`, `activate`, `occurrence`, or
+`func`. The double underscore (`__`) separates the module from the
+name. Arity is appended as a plain decimal integer with no separator.
+
+Occurrence procedures append the 1-based occurrence number after an
+additional underscore:
+
+```
+occurrence_<module>__<name><arity>_<occ-number>
+```
+
+**Examples** for a constraint `order:leq/2`:
+
+| Procedure | Name |
+|-----------|------|
+| tell | `tell_order__leq2` |
+| activate | `activate_order__leq2` |
+| occurrence 1 | `occurrence_order__leq2_1` |
+| occurrence 3 | `occurrence_order__leq2_3` |
+
+For a function `math:factorial/1`:
+
+| Procedure | Name |
+|-----------|------|
+| func | `func_math__factorial1` |
+
+The `reactivate_dispatch` procedure is unique and not parameterized by
+constraint name.
+
+**Non-ASCII encoding.** Characters outside the ASCII range are encoded
+as `__u<hex>__` where `<hex>` is the Unicode code point in
+hexadecimal. For example, a constraint named `café` produces the
+encoded component `caf__u00e9__`. ASCII characters (including
+punctuation and underscores) pass through unchanged.
+
+**Restrictions.** Double underscores (`__`) are forbidden in atom
+names (both quoted and unquoted) at the source level. This ensures the
+`__` separator is unambiguous.
+
+**Term functor names** (used in `make-term` and `match-term`) follow
+the same encoding and module separator rules but do **not** include
+arity, since the arity is already explicit in those instructions.
 
 
 ## Statements
@@ -416,29 +484,32 @@ entirely the backend's responsibility.
 ## Complete Example
 
 The `leq` (less-than-or-equal) handler with a single `reflexivity`
-rule, serialized:
+rule, serialized. The constraint is `mymodule:leq/2`, so procedure
+names use the pattern `<prefix>_mymodule__leq2`:
 
 ```scheme
 (vm-program
   (program 1
 
-    ; tell_leq(X, Y): create, store, activate
-    (procedure "tell_leq" ("X" "Y")
-      (let "id" (create-constraint 0 (var "X") (var "Y")))
+    ; tell_mymodule__leq2(X, Y): create, store, activate
+    (procedure "tell_mymodule__leq2" ("X_0" "X_1")
+      (let "id" (create-constraint 0 (var "X_0") (var "X_1")))
       (store (var "id"))
-      (expr-stmt (call-expr "activate_leq" (var "id"))))
+      (expr-stmt (call-expr "activate_mymodule__leq2" (var "id"))))
 
-    ; activate_leq(susp): extract args, try each occurrence
-    (procedure "activate_leq" ("susp")
+    ; activate_mymodule__leq2(susp): extract args, try each occurrence
+    (procedure "activate_mymodule__leq2" ("susp")
       (let "id" (var "susp"))
       (let "X_0" (field-get (var "susp") (field-arg 0)))
       (let "X_1" (field-get (var "susp") (field-arg 1)))
-      (let "d" (call-expr "occurrence_leq_1" (var "id") (var "X_0") (var "X_1")))
+      (let "d" (call-expr "occurrence_mymodule__leq2_1"
+                  (var "id") (var "X_0") (var "X_1")))
       (if (var "d") ((return true)) ())
       (return false))
 
-    ; occurrence_leq_1: reflexivity @ leq(X, X1) <=> X == X1 | true.
-    (procedure "occurrence_leq_1" ("id" "X_0" "X_1")
+    ; occurrence_mymodule__leq2_1:
+    ;   reflexivity @ leq(X, X1) <=> X == X1 | true.
+    (procedure "occurrence_mymodule__leq2_1" ("id" "X_0" "X_1")
       (if (equal (var "X_0") (var "X_1"))
         ((kill (var "id"))
          (return true))
@@ -448,11 +519,11 @@ rule, serialized:
     ; reactivate_dispatch(susp): type-based dispatch
     (procedure "reactivate_dispatch" ("susp")
       (if (is-constraint-type (var "susp") 0)
-        ((expr-stmt (call-expr "activate_leq" (var "susp"))))
+        ((expr-stmt (call-expr "activate_mymodule__leq2" (var "susp"))))
         ())))
 
-  (exports (qualified "mymodule" "leq"))
+  (exports ((qualified "mymodule" "leq") 2))
 
   (symbol-table
-    ((qualified "mymodule" "leq") 0)))
+    ((qualified "mymodule" "leq") 2 0)))
 ```

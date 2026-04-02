@@ -9,7 +9,7 @@ import YCHR.Desugar (DesugarError (..), desugarProgram, extractSymbolTable)
 import YCHR.Desugared qualified as D
 import YCHR.Parsed
 import YCHR.Pretty (AnnP (..), noAnnP)
-import YCHR.Types (ConstraintType (..), Name (..), lookupSymbol, mkSymbolTable, symbolTableSize)
+import YCHR.Types (ConstraintType (..), Identifier (..), Name (..), lookupSymbol, mkSymbolTable, symbolTableSize)
 
 getNode :: AnnP a -> a
 getNode (AnnP n _ _) = n
@@ -345,7 +345,7 @@ symbolTableTests =
                     (noAnnP ([] :: [Term]) [])
                 ]
                 []
-        extractSymbolTable prog @?= mkSymbolTable [(Qualified "M" "leq", ConstraintType 0)],
+        extractSymbolTable prog @?= mkSymbolTable [(Identifier (Qualified "M" "leq") 0, ConstraintType 0)],
       testCase "two distinct qualified constraints get sequential ids" $ do
         let prog =
               D.Program
@@ -368,7 +368,7 @@ symbolTableTests =
                     (noAnnP ([] :: [Term]) [D.BodyConstraint (Constraint (Qualified "M" "leq") [])])
                 ]
                 []
-        extractSymbolTable prog @?= mkSymbolTable [(Qualified "M" "leq", ConstraintType 0)],
+        extractSymbolTable prog @?= mkSymbolTable [(Identifier (Qualified "M" "leq") 0, ConstraintType 0)],
       testCase "unqualified name in body not in table" $ do
         let prog =
               D.Program
@@ -380,7 +380,7 @@ symbolTableTests =
                 ]
                 []
         let table = extractSymbolTable prog
-        lookupSymbol (Unqualified "print") table @?= Nothing,
+        lookupSymbol (Identifier (Unqualified "print") 0) table @?= Nothing,
       testCase "ids assigned in Set.toList order (module-first then name)" $ do
         -- Qualified "A" "z" < Qualified "B" "a" by derived Ord
         let prog =
@@ -401,6 +401,18 @@ symbolTableTests =
                 ]
                 []
         let table = extractSymbolTable prog
-        (lookupSymbol (Qualified "A" "z") table, lookupSymbol (Qualified "B" "a") table)
-          @?= (Just (ConstraintType 0), Just (ConstraintType 1))
+        (lookupSymbol (Identifier (Qualified "A" "z") 0) table, lookupSymbol (Identifier (Qualified "B" "a") 0) table)
+          @?= (Just (ConstraintType 0), Just (ConstraintType 1)),
+      testCase "same name different arities get distinct ids" $ do
+        let prog =
+              D.Program
+                [ D.Rule
+                    Nothing
+                    (noAnnP (Simplification [] :: Head) (D.Head [] [Constraint (Qualified "M" "foo") [VarTerm "X"]]))
+                    (noAnnP ([] :: [Term]) [])
+                    (noAnnP ([] :: [Term]) [D.BodyConstraint (Constraint (Qualified "M" "foo") [VarTerm "X", VarTerm "Y"])])
+                ]
+                []
+        let table = extractSymbolTable prog
+        symbolTableSize table @?= 2
     ]

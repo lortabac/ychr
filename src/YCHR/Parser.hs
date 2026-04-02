@@ -314,8 +314,15 @@ atomP = lexeme (unquotedP <|> quotedP)
       wordOps <- (.wordOpSet) <$> ask
       if t `elem` reservedWords || Set.member t wordOps
         then fail ("reserved word: " ++ name)
+        else
+          if "__" `T.isInfixOf` t
+            then fail "double underscore (__) is not allowed in atoms"
+            else pure t
+    quotedP = do
+      t <- T.pack <$> (char '\'' *> go)
+      if "__" `T.isInfixOf` t
+        then fail "double underscore (__) is not allowed in atoms"
         else pure t
-    quotedP = T.pack <$> (char '\'' *> go)
       where
         go =
           choice
