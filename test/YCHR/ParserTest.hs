@@ -10,7 +10,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import Text.Megaparsec (ParseErrorBundle)
 import YCHR.Parsed
-import YCHR.Parser (parseModule)
+import YCHR.Parser (collectOperatorDecls, parseModule)
 import YCHR.Types
 
 tests :: TestTree
@@ -25,7 +25,8 @@ tests =
       typeTests,
       moduleTests,
       commentTests,
-      errorTests
+      errorTests,
+      firstPassTests
     ]
 
 -- | Parse a source string with no filename.
@@ -87,6 +88,12 @@ directiveTests =
       testCase "chr_constraint zero arity" $
         (map (.node) . (.decls)) <$> p ":- chr_constraint fire/0."
           @?= Right [ConstraintDecl "fire" 0],
+      testCase "type export in export list" $
+        (.exports) <$> p ":- module(m, [type(tree/0), leq/2])."
+          @?= Right (Just [TypeExportDecl "tree" 0, ConstraintDecl "leq" 2]),
+      testCase "parameterized type export" $
+        (.exports) <$> p ":- module(m, [type(list/1)])."
+          @?= Right (Just [TypeExportDecl "list" 1]),
       testCase "unknown directive is skipped" $
         (map (.node) . (.decls)) <$> p ":- dynamic foo/1.\n:- chr_constraint leq/2."
           @?= Right [ConstraintDecl "leq" 2]
@@ -431,6 +438,32 @@ errorTests =
         assertBool "expected parse failure" (isLeft (p ":- module(my__mod, []).")),
       testCase "single underscore in atom is allowed" $
         assertBool "expected parse success" (not (isLeft (p "foo_bar <=> true.")))
+    ]
+
+-- ---------------------------------------------------------------------------
+-- First-pass operator collector
+-- ---------------------------------------------------------------------------
+
+-- | Helper: collect operators from source text.
+ops :: Text -> Either (ParseErrorBundle Text Void) [OpDecl]
+ops = collectOperatorDecls ""
+
+firstPassTests :: TestTree
+firstPassTests =
+  testGroup
+    "first-pass operator collector"
+    [ testCase "extracts operators from export list" $
+        ops ":- module(m, [op(500, yfx, '+')]).\"" @?= Right [OpDecl 500 InfixL_ "+"],
+      testCase "skips name/arity entries" $
+        ops ":- module(m, [leq/2, op(700, xfx, '<')]).\"" @?= Right [OpDecl 700 InfixN_ "<"],
+      testCase "skips type exports" $
+        ops ":- module(m, [type(bool/0), op(500, yfx, '+')]).\"" @?= Right [OpDecl 500 InfixL_ "+"],
+      testCase "type export among many entries" $
+        ops ":- module(m, [leq/2, type(tree/0), op(400, yfx, '*'), type(list/1)]).\"" @?= Right [OpDecl 400 InfixL_ "*"],
+      testCase "no module directive returns empty" $
+        ops ":- chr_constraint leq/2." @?= Right [],
+      testCase "empty export list returns empty" $
+        ops ":- module(m, [])." @?= Right []
     ]
 
 -- ---------------------------------------------------------------------------

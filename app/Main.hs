@@ -11,8 +11,9 @@ import System.Console.Haskeline
 import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDirectory)
 import System.Exit (exitFailure)
 import System.FilePath (takeDirectory)
-import YCHR.Display (displayMsg)
-import YCHR.EndToEnd (CompiledProgram (..), Error, compileFiles, compileModules, runProgramWithGoal, runProgramWithQuery)
+import System.IO (hPutStr, stderr)
+import YCHR.Display (Display (..), displayMsg)
+import YCHR.EndToEnd (CompiledProgram (..), Error, Warning, compileFiles, compileModules, runProgramWithGoal, runProgramWithQuery)
 import YCHR.Meta (metaHostCallRegistry)
 import YCHR.Parsed qualified as Parsed
 import YCHR.Pretty (prettyBindings, prettyQueryResult)
@@ -82,6 +83,9 @@ main = do
     Run opts files -> runGoal opts files
     Compile opts files -> runCompile opts files
 
+printWarnings :: [Warning] -> IO ()
+printWarnings = mapM_ (\w -> hPutStr stderr (displayMsg w ++ "\n"))
+
 runRepl :: [FilePath] -> IO ()
 runRepl files = do
   result <- case files of
@@ -91,7 +95,8 @@ runRepl files = do
     Left err -> do
       putStrLn (displayMsg err)
       exitFailure
-    Right prog -> do
+    Right (prog, warnings) -> do
+      printWarnings warnings
       histFile <- getXdgDirectory XdgData "ychr/history"
       createDirectoryIfMissing True (takeDirectory histFile)
       let CompiledProgram {exportMap = em} = prog
@@ -132,7 +137,9 @@ repl files prog = loop
         Left err -> do
           outputStr (displayMsg err)
           loop
-        Right prog' -> repl files prog'
+        Right (prog', warnings) -> do
+          liftIO (printWarnings warnings)
+          repl files prog'
     loop = do
       minput <- getInputLine "ychr> "
       case minput of
@@ -169,7 +176,8 @@ runGoal opts files = do
     Left err -> do
       putStrLn (displayMsg err)
       exitFailure
-    Right prog -> do
+    Right (prog, warnings) -> do
+      printWarnings warnings
       outcome <- try @SomeException $ runProgramWithGoal prog hostCalls opts.goal
       case outcome of
         Left exc -> do
@@ -191,7 +199,8 @@ runCompile opts files = do
     Left err -> do
       putStrLn (displayMsg err)
       exitFailure
-    Right prog ->
+    Right (prog, warnings) -> do
+      printWarnings warnings
       case opts.target of
         TargetVM ->
           let vmp = VMProgram {program = prog.program, exportedSet = prog.exportedSet, symbolTable = prog.symbolTable}

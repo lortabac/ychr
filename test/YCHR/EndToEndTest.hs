@@ -34,7 +34,7 @@ tests =
 compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
 compileOrFail inputs = case compileModules False inputs of
   Left err -> assertFailure $ show err
-  Right cp -> pure cp
+  Right (cp, _) -> pure cp
 
 countAlive :: (CHRStore :> es) => VM.ConstraintType -> Eff es Int
 countAlive cType = do

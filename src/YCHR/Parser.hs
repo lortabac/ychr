@@ -619,9 +619,20 @@ moduleArgsP = do
   exports <- brackets (exportItemP `sepBy` comma)
   pure (name, exports)
 
--- | Parse a single export item: either @name\/arity@ or @op(fixity, type, name)@.
+-- | Parse a single export item: @name\/arity@, @op(fixity, type, name)@, or @type(name\/arity)@.
 exportItemP :: Parser Declaration
-exportItemP = try opDeclP <|> ((.node) <$> constraintDeclP)
+exportItemP = try opDeclP <|> try typeExportP <|> ((.node) <$> constraintDeclP)
+
+-- | Parse a type export declaration: @type(name\/arity)@.
+typeExportP :: Parser Declaration
+typeExportP = do
+  _ <- symbol "type"
+  _ <- symbol "("
+  name <- atomP
+  _ <- symbol "/"
+  a <- lexeme L.decimal
+  _ <- symbol ")"
+  pure (TypeExportDecl name a)
 
 -- | Parse an operator declaration: @op(fixity, type, name)@.
 opDeclP :: Parser Declaration
@@ -896,7 +907,7 @@ collectOperatorDecls = parse (sc' *> collectP)
 
     -- Parse a single export item: either op(...) returning Just, or name/arity returning Nothing.
     exportItemP' :: Parser' (Maybe OpDecl)
-    exportItemP' = try opDeclP' <|> (Nothing <$ declP')
+    exportItemP' = try opDeclP' <|> try (Nothing <$ typeExportP') <|> (Nothing <$ declP')
       where
         opDeclP' = do
           _ <- symbol' "op"
@@ -910,6 +921,13 @@ collectOperatorDecls = parse (sc' *> collectP)
           name <- atomP' <|> symbolAtomP'
           _ <- symbol' ")"
           pure (Just (OpDecl fix ty name))
+        typeExportP' = do
+          _ <- symbol' "type"
+          _ <- symbol' "("
+          _ <- atomP'
+          _ <- symbol' "/"
+          _ <- lexeme' (L.decimal :: Parser' Int)
+          symbol' ")"
         declP' = do
           _ <- atomP'
           _ <- symbol' "/"

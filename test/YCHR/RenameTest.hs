@@ -6,7 +6,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import YCHR.DSL
 import YCHR.Parsed
-import YCHR.Rename (RenameError (..), renameProgram)
+import YCHR.Rename (RenameError (..), RenameWarning (..), renameProgram)
 import YCHR.Types
 
 tests :: TestTree
@@ -22,15 +22,16 @@ tests =
       headTypeTests,
       multiModuleTests,
       reservedSymbolTests,
-      exportTests
+      exportTests,
+      warningTests
     ]
 
 -- | Rename a single-module program and return the single renamed rule.
 singleRule :: Module -> IO Rule
 singleRule m = do
   renamed <- case renameProgram [m] of
-    Right [r] -> return r
-    Right mods -> assertFailure $ "expected 1 renamed module, got " ++ show (length mods)
+    Right ([r], _) -> return r
+    Right (mods, _) -> assertFailure $ "expected 1 renamed module, got " ++ show (length mods)
     Left errs -> assertFailure $ "unexpected errors: " ++ show errs
   case renamed.rules of
     [rule] -> return rule
@@ -87,8 +88,8 @@ importedTests =
                                ==> [func "leq" [var "X", var "Z"]]
                            ]
         (_, renamedLogic) <- case renameProgram [modOrder, modLogic] of
-          Right [a, b] -> return (a, b)
-          Right mods -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Right ([a, b], _) -> return (a, b)
+          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedLogic.rules of
           [r] -> return r
@@ -189,8 +190,8 @@ alreadyQualifiedTests =
                 `importing` ["Order"]
                 `defining` [["Order" .: con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedM) <- case renameProgram [modOrder, modM] of
-          Right [a, b] -> return (a, b)
-          Right mods -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Right ([a, b], _) -> return (a, b)
+          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedM.rules of
           [r] -> return r
@@ -212,8 +213,8 @@ alreadyQualifiedTests =
                 `importing` ["A", "B"]
                 `defining` [["A" .: con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renamedC <- case renameProgram [modA, modB, modC] of
-          Right [_, _, c] -> return c
-          Right mods -> assertFailure $ "expected 3 modules, got " ++ show (length mods)
+          Right ([_, _, c], _) -> return c
+          Right (mods, _) -> assertFailure $ "expected 3 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedC.rules of
           [r] -> return r
@@ -411,8 +412,8 @@ multiModuleTests =
                                   )
                            ]
         (renamedOrder, renamedLogic) <- case renameProgram [modOrder, modLogic] of
-          Right [a, b] -> return (a, b)
-          Right mods -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Right ([a, b], _) -> return (a, b)
+          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         (renamedOrder.rules, renamedLogic.rules)
           @?= ( [ Rule
@@ -435,10 +436,10 @@ multiModuleTests =
                 ]
               ),
       testCase "empty program" $
-        renameProgram [] @?= Right [],
+        renameProgram [] @?= Right ([], []),
       testCase "module with no rules" $
         let m = module' "M" `declaring` ["leq" // 2]
-         in renameProgram [m] @?= Right [Module "M" [] [noAnn (ConstraintDecl "leq" 2)] [] [] [] Nothing],
+         in renameProgram [m] @?= Right ([Module "M" [] [noAnn (ConstraintDecl "leq" 2)] [] [] [] Nothing], []),
       testCase "rule name preserved" $ do
         let m =
               module' "M"
@@ -493,8 +494,8 @@ exportTests =
                 `importing` ["A"]
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedB) <- case renameProgram [modA, modB] of
-          Right [a, b] -> return (a, b)
-          Right mods -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Right ([a, b], _) -> return (a, b)
+          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedB.rules of
           [r] -> return r
@@ -543,8 +544,8 @@ exportTests =
                 `importing` ["A"]
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedB) <- case renameProgram [modA, modB] of
-          Right [a, b] -> return (a, b)
-          Right mods -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Right ([a, b], _) -> return (a, b)
+          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedB.rules of
           [r] -> return r
@@ -561,5 +562,102 @@ exportTests =
                 `exporting` ["foo" // 1]
         case renameProgram [m] of
           Right _ -> pure ()
+          Left errs -> assertFailure $ "unexpected errors: " ++ show errs
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Warnings
+-- ---------------------------------------------------------------------------
+
+-- | Rename a program and return the warnings (failing on errors).
+warningsOf :: [Module] -> IO [RenameWarning]
+warningsOf mods = case renameProgram mods of
+  Right (_, ws) -> pure ws
+  Left errs -> assertFailure $ "unexpected errors: " ++ show errs
+
+warningTests :: TestTree
+warningTests =
+  testGroup
+    "warnings"
+    [ testCase "undeclared data constructor in guard" $ do
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [[con "c" [var "X"]] <=> [atom "true"] |- [func "foo" [var "X"]]]
+        ws <- warningsOf [m]
+        ws @?= [UndeclaredDataConstructor dummyLoc "foo"],
+      testCase "declared data constructor produces no warning" $ do
+        let m =
+              (module' "M" `declaring` ["c" // 1] `defining` [[con "c" [var "X"]] <=> [atom "true"] |- [func "foo" [var "X"]]])
+                { typeDecls = [noAnn (TypeDefinition (Unqualified "t") [] [DataConstructor (Unqualified "foo") [TypeCon (Unqualified "int") []]])]
+                }
+        ws <- warningsOf [m]
+        ws @?= [],
+      testCase "data constructor arity mismatch" $ do
+        let m =
+              (module' "M" `declaring` ["c" // 1] `defining` [[con "c" [var "X"]] <=> [atom "true"] |- [func "foo" [var "X", var "X"]]])
+                { typeDecls = [noAnn (TypeDefinition (Unqualified "t") [] [DataConstructor (Unqualified "foo") [TypeCon (Unqualified "int") []]])]
+                }
+        ws <- warningsOf [m]
+        ws @?= [DataConstructorArityMismatch dummyLoc "foo" 2],
+      testCase "no warning for reserved symbols" $ do
+        let m =
+              module' "M"
+                `declaring` ["c" // 2]
+                `defining` [[con "c" [var "X", var "Y"]] <=> [var "X" .=. var "Y"]]
+        ws <- warningsOf [m]
+        ws @?= [],
+      testCase "no warning in NoResolve mode (head arguments)" $ do
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [[con "c" [func "unknown" [var "X"]]] <=> [atom "true"]]
+        ws <- warningsOf [m]
+        ws @?= [],
+      testCase "exporting undeclared type produces error" $ do
+        let m = (module' "M") {exports = Just [TypeExportDecl "tree" 0]}
+        renameProgram [m] @?= Left [UnknownExport "M" "tree" 0],
+      testCase "exporting declared type is fine" $ do
+        let m =
+              (module' "M")
+                { typeDecls = [noAnn (TypeDefinition (Unqualified "tree") [] [DataConstructor (Unqualified "empty") []])],
+                  exports = Just [TypeExportDecl "tree" 0]
+                }
+        case renameProgram [m] of
+          Right _ -> pure ()
+          Left errs -> assertFailure $ "unexpected errors: " ++ show errs,
+      testCase "type definition names are qualified after renaming" $ do
+        let m =
+              (module' "M")
+                { typeDecls = [noAnn (TypeDefinition (Unqualified "tree") [] [DataConstructor (Unqualified "leaf") [TypeCon (Unqualified "int") []]])]
+                }
+        case renameProgram [m] of
+          Right ([renamed], _) -> case renamed.typeDecls of
+            [Ann td _] -> do
+              td.name @?= Qualified "M" "tree"
+              case td.constructors of
+                [dc] -> dc.conName @?= Qualified "M" "leaf"
+                dcs -> assertFailure $ "expected 1 constructor, got " ++ show (length dcs)
+            tds -> assertFailure $ "expected 1 type decl, got " ++ show (length tds)
+          Right (mods, _) -> assertFailure $ "expected 1 module, got " ++ show (length mods)
+          Left errs -> assertFailure $ "unexpected errors: " ++ show errs,
+      testCase "type references resolved across modules" $ do
+        let modA =
+              (module' "A")
+                { typeDecls = [noAnn (TypeDefinition (Unqualified "color") [] [DataConstructor (Unqualified "red") []])]
+                }
+            modB =
+              (module' "B" `importing` ["A"])
+                { typeDecls = [noAnn (TypeDefinition (Unqualified "widget") [] [DataConstructor (Unqualified "w") [TypeCon (Unqualified "color") []]])]
+                }
+        case renameProgram [modA, modB] of
+          Right ([_, renamedB], _) -> case renamedB.typeDecls of
+            [Ann td _] -> case td.constructors of
+              [dc] -> case dc.conArgs of
+                [TypeCon colorName []] -> colorName @?= Qualified "A" "color"
+                args -> assertFailure $ "unexpected constructor args: " ++ show args
+              dcs -> assertFailure $ "expected 1 constructor, got " ++ show (length dcs)
+            tds -> assertFailure $ "expected 1 type decl, got " ++ show (length tds)
+          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
     ]

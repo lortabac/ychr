@@ -44,7 +44,7 @@ readTerm s = case Map.lookup (Name "read_term_from_string") metaHostCallRegistry
 compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
 compileOrFail inputs = case compileModules False inputs of
   Left err -> assertFailure $ show err
-  Right cp -> pure cp
+  Right (cp, _) -> pure cp
 
 -- ---------------------------------------------------------------------------
 -- read_term_from_string tests

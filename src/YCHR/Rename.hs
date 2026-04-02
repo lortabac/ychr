@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
 
 -- |
 -- Module      : YCHR.Rename
@@ -20,9 +21,11 @@
 --
 -- This pass ensures that the subsequent Desugaring phase can treat the
 -- program as a flat, unambiguous collection of rules.
-module YCHR.Rename (renameProgram, buildExportEnv, renameQueryGoals, RenameError (..)) where
+module YCHR.Rename (renameProgram, buildExportEnv, renameQueryGoals, RenameError (..), RenameWarning (..)) where
 
 import Data.Foldable (traverse_)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Effectful (Eff, runPureEff)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
@@ -35,6 +38,31 @@ data RenameError
   | UnknownName SourceLoc Text Int
   | UnknownExport Text Text Int
   deriving (Eq, Show)
+
+data RenameWarning
+  = UndeclaredDataConstructor SourceLoc Text
+  | DataConstructorArityMismatch SourceLoc Text Int
+  deriving (Eq, Show)
+
+-- | Maps data constructor names to their declared arities (from type declarations).
+type DataConEnv = Map Text [Int]
+
+-- | Build a global map of data constructor names to arities from all type declarations.
+buildDataConEnv :: [Module] -> DataConEnv
+buildDataConEnv mods =
+  Map.fromListWith
+    (++)
+    [ (n, [length dc.conArgs])
+    | m <- mods,
+      Ann td _ <- m.typeDecls,
+      dc <- td.constructors,
+      n <- nameText dc.conName
+    ]
+  where
+    nameText (Unqualified t) = [t]
+    nameText (Qualified _ _) = []
+
+type RenameEffs = '[Writer [RenameWarning], Writer [RenameError]]
 
 -- | All declared constraints and functions across all modules.
 -- Resolution to the current module is done later in 'resolveName'.
@@ -50,7 +78,7 @@ buildDeclEnv mods =
 
 -- | Only exported constraints and functions (for cross-module resolution).
 -- Modules without a @module@ directive (modExports = Nothing) export everything.
--- Operator declarations are filtered out since they are not named entities.
+-- Operator and type export declarations are filtered out (separate namespaces).
 -- Functions and constraints share a namespace, so both kinds are included.
 buildExportEnv :: [Module] -> ExportEnv
 buildExportEnv mods =
@@ -59,45 +87,87 @@ buildExportEnv mods =
     | m <- mods,
       d <- case m.exports of
         Nothing -> map (.node) m.decls
-        Just exports -> filter (not . isOperatorDecl) exports
+        Just exports -> filter isConstraintOrFunctionDecl exports
     ]
 
-isOperatorDecl :: Declaration -> Bool
-isOperatorDecl (OperatorDecl _) = True
-isOperatorDecl _ = False
+-- | All type declarations across all modules.
+buildTypeDeclEnv :: [Module] -> DeclEnv
+buildTypeDeclEnv mods =
+  makeDeclEnv
+    [ ((nameToText td.name, length td.typeVars), [m.name])
+    | m <- mods,
+      Ann td _ <- m.typeDecls
+    ]
 
-renameProgram :: [Module] -> Either [RenameError] [Module]
+-- | Only exported types (for cross-module resolution).
+-- Modules without an export list export all their types.
+buildTypeExportEnv :: [Module] -> ExportEnv
+buildTypeExportEnv mods =
+  makeExportEnv
+    [ ((d.name, d.arity), [m.name])
+    | m <- mods,
+      d <- case m.exports of
+        Nothing -> [TypeExportDecl (nameToText td.name) (length td.typeVars) | Ann td _ <- m.typeDecls]
+        Just exports -> filter isTypeExportDecl exports
+    ]
+
+isConstraintOrFunctionDecl :: Declaration -> Bool
+isConstraintOrFunctionDecl (ConstraintDecl _ _) = True
+isConstraintOrFunctionDecl (FunctionDecl _ _) = True
+isConstraintOrFunctionDecl _ = False
+
+isTypeExportDecl :: Declaration -> Bool
+isTypeExportDecl (TypeExportDecl _ _) = True
+isTypeExportDecl _ = False
+
+nameToText :: Name -> Text
+nameToText (Unqualified t) = t
+nameToText (Qualified _ t) = t
+
+renameProgram :: [Module] -> Either [RenameError] ([Module], [RenameWarning])
 renameProgram mods =
   let declEnv = buildDeclEnv mods
       exportEnv = buildExportEnv mods
-      (result, errs) = runPureEff . runWriter $ do
+      dataConEnv = buildDataConEnv mods
+      typeDeclEnv = buildTypeDeclEnv mods
+      typeExportEnv = buildTypeExportEnv mods
+      ((result, warnings), errs) = runPureEff . runWriter @[RenameError] . runWriter @[RenameWarning] $ do
         validateExports mods
-        traverse (renameModule declEnv exportEnv) mods
-   in if null errs then Right result else Left errs
+        traverse (renameModule declEnv exportEnv dataConEnv typeDeclEnv typeExportEnv) mods
+   in if null errs then Right (result, warnings) else Left errs
 
 -- | Check that every name in a module's export list is actually declared.
-validateExports :: [Module] -> Eff '[Writer [RenameError]] ()
+validateExports :: [Module] -> Eff RenameEffs ()
 validateExports mods =
-  let declaredIn m = [(d.name, d.arity) | Ann d _ <- m.decls]
+  let constraintsDeclaredIn m = [(d.name, d.arity) | Ann d _ <- m.decls]
+      typesDeclaredIn m = [(nameToText td.name, length td.typeVars) | Ann td _ <- m.typeDecls]
    in traverse_
         ( \m -> case m.exports of
             Nothing -> pure ()
             Just exports ->
               traverse_
-                ( \d ->
-                    if not (isOperatorDecl d) && (d.name, d.arity) `notElem` declaredIn m
-                      then tell [UnknownExport m.name d.name d.arity]
-                      else pure ()
+                ( \d -> case d of
+                    ConstraintDecl n a
+                      | (n, a) `notElem` constraintsDeclaredIn m ->
+                          tell @[RenameError] [UnknownExport m.name n a]
+                    FunctionDecl n a
+                      | (n, a) `notElem` constraintsDeclaredIn m ->
+                          tell @[RenameError] [UnknownExport m.name n a]
+                    TypeExportDecl n a
+                      | (n, a) `notElem` typesDeclaredIn m ->
+                          tell @[RenameError] [UnknownExport m.name n a]
+                    _ -> pure ()
                 )
                 exports
         )
         mods
 
-renameModule :: DeclEnv -> ExportEnv -> Module -> Eff '[Writer [RenameError]] Module
-renameModule declEnv exportEnv m = do
-  renamedRules <- traverse (renameRule declEnv exportEnv m) m.rules
-  renamedEquations <- traverse (traverse (renameEquation declEnv exportEnv m)) m.equations
-  pure m {rules = renamedRules, equations = renamedEquations}
+renameModule :: DeclEnv -> ExportEnv -> DataConEnv -> DeclEnv -> ExportEnv -> Module -> Eff RenameEffs Module
+renameModule declEnv exportEnv dcEnv typeDeclEnv typeExportEnv m = do
+  renamedRules <- traverse (renameRule declEnv exportEnv dcEnv m) m.rules
+  renamedEquations <- traverse (traverse (renameEquation declEnv exportEnv dcEnv m)) m.equations
+  let renamedTypeDecls = map (fmap (renameTypeDefinition typeDeclEnv typeExportEnv m)) m.typeDecls
+  pure m {rules = renamedRules, equations = renamedEquations, typeDecls = renamedTypeDecls}
 
 -- | Controls how deeply name resolution is applied.
 --
@@ -126,56 +196,56 @@ data UnknownNamePolicy
   | -- | Leave 'Unqualified' without error (expression context — may be a data constructor).
     AcceptUnknownName
 
-renameRule :: DeclEnv -> ExportEnv -> Module -> Rule -> Eff '[Writer [RenameError]] Rule
-renameRule declEnv exportEnv m r = do
-  h <- traverse (renameHead declEnv exportEnv m r.head.sourceLoc) r.head
-  g <- traverse (traverse (renameTerm declEnv exportEnv m r.guard.sourceLoc ResolveAll)) r.guard
-  b <- traverse (traverse (renameTerm declEnv exportEnv m r.body.sourceLoc ResolveTop)) r.body
+renameRule :: DeclEnv -> ExportEnv -> DataConEnv -> Module -> Rule -> Eff RenameEffs Rule
+renameRule declEnv exportEnv dcEnv m r = do
+  h <- traverse (renameHead declEnv exportEnv dcEnv m r.head.sourceLoc) r.head
+  g <- traverse (traverse (renameTerm declEnv exportEnv dcEnv m r.guard.sourceLoc ResolveAll)) r.guard
+  b <- traverse (traverse (renameTerm declEnv exportEnv dcEnv m r.body.sourceLoc ResolveTop)) r.body
   pure r {head = h, guard = g, body = b}
 
-renameEquation :: DeclEnv -> ExportEnv -> Module -> FunctionEquation -> Eff '[Writer [RenameError]] FunctionEquation
-renameEquation declEnv exportEnv m eq = do
+renameEquation :: DeclEnv -> ExportEnv -> DataConEnv -> Module -> FunctionEquation -> Eff RenameEffs FunctionEquation
+renameEquation declEnv exportEnv dcEnv m eq = do
   -- Equation args don't carry their own SourceLoc; use the guard's as a proxy.
   let loc = eq.guard.sourceLoc
-  renamedArgs <- traverse (renameTerm declEnv exportEnv m loc NoResolve) eq.args
-  renamedGuard <- traverse (traverse (renameTerm declEnv exportEnv m loc ResolveAll)) eq.guard
-  renamedRhs <- traverse (renameTerm declEnv exportEnv m eq.rhs.sourceLoc ResolveAll) eq.rhs
+  renamedArgs <- traverse (renameTerm declEnv exportEnv dcEnv m loc NoResolve) eq.args
+  renamedGuard <- traverse (traverse (renameTerm declEnv exportEnv dcEnv m loc ResolveAll)) eq.guard
+  renamedRhs <- traverse (renameTerm declEnv exportEnv dcEnv m eq.rhs.sourceLoc ResolveAll) eq.rhs
   pure eq {args = renamedArgs, guard = renamedGuard, rhs = renamedRhs}
 
-renameHead :: DeclEnv -> ExportEnv -> Module -> SourceLoc -> Head -> Eff '[Writer [RenameError]] Head
-renameHead declEnv exportEnv m loc h = case h of
-  Simplification cs -> Simplification <$> traverse (renameCon declEnv exportEnv m loc) cs
-  Propagation cs -> Propagation <$> traverse (renameCon declEnv exportEnv m loc) cs
-  Simpagation k r -> Simpagation <$> traverse (renameCon declEnv exportEnv m loc) k <*> traverse (renameCon declEnv exportEnv m loc) r
+renameHead :: DeclEnv -> ExportEnv -> DataConEnv -> Module -> SourceLoc -> Head -> Eff RenameEffs Head
+renameHead declEnv exportEnv dcEnv m loc h = case h of
+  Simplification cs -> Simplification <$> traverse (renameCon declEnv exportEnv dcEnv m loc) cs
+  Propagation cs -> Propagation <$> traverse (renameCon declEnv exportEnv dcEnv m loc) cs
+  Simpagation k r -> Simpagation <$> traverse (renameCon declEnv exportEnv dcEnv m loc) k <*> traverse (renameCon declEnv exportEnv dcEnv m loc) r
 
-renameCon :: DeclEnv -> ExportEnv -> Module -> SourceLoc -> Constraint -> Eff '[Writer [RenameError]] Constraint
-renameCon declEnv exportEnv m loc (Constraint cname cargs) = do
-  renamedName <- resolveName ErrorOnUnknownName declEnv exportEnv m loc cname (length cargs)
-  renamedArgs <- traverse (renameTerm declEnv exportEnv m loc NoResolve) cargs
+renameCon :: DeclEnv -> ExportEnv -> DataConEnv -> Module -> SourceLoc -> Constraint -> Eff RenameEffs Constraint
+renameCon declEnv exportEnv dcEnv m loc (Constraint cname cargs) = do
+  renamedName <- resolveName ErrorOnUnknownName declEnv exportEnv dcEnv m loc cname (length cargs)
+  renamedArgs <- traverse (renameTerm declEnv exportEnv dcEnv m loc NoResolve) cargs
   pure (Constraint renamedName renamedArgs)
 
-renameTerm :: DeclEnv -> ExportEnv -> Module -> SourceLoc -> ResolveMode -> Term -> Eff '[Writer [RenameError]] Term
-renameTerm declEnv exportEnv m loc mode t = case t of
+renameTerm :: DeclEnv -> ExportEnv -> DataConEnv -> Module -> SourceLoc -> ResolveMode -> Term -> Eff RenameEffs Term
+renameTerm declEnv exportEnv dcEnv m loc mode t = case t of
   -- Special case: @is@ passes 'ResolveAll' to its RHS expression.
   CompoundTerm (Unqualified "is") [lhs, rhs] | mode /= NoResolve -> do
-    renamedLhs <- renameTerm declEnv exportEnv m loc NoResolve lhs
-    renamedRhs <- renameTerm declEnv exportEnv m loc ResolveAll rhs
+    renamedLhs <- renameTerm declEnv exportEnv dcEnv m loc NoResolve lhs
+    renamedRhs <- renameTerm declEnv exportEnv dcEnv m loc ResolveAll rhs
     pure (CompoundTerm (Unqualified "is") [renamedLhs, renamedRhs])
   CompoundTerm name args -> do
     let childMode = case mode of
           NoResolve -> NoResolve
           ResolveTop -> NoResolve
           ResolveAll -> ResolveAll
-    renamedArgs <- traverse (renameTerm declEnv exportEnv m loc childMode) args
+    renamedArgs <- traverse (renameTerm declEnv exportEnv dcEnv m loc childMode) args
     newName <- case mode of
       NoResolve -> pure name
-      ResolveTop -> resolveName ErrorOnUnknownName declEnv exportEnv m loc name (length args)
-      ResolveAll -> resolveName AcceptUnknownName declEnv exportEnv m loc name (length args)
+      ResolveTop -> resolveName ErrorOnUnknownName declEnv exportEnv dcEnv m loc name (length args)
+      ResolveAll -> resolveName AcceptUnknownName declEnv exportEnv dcEnv m loc name (length args)
     pure (CompoundTerm newName renamedArgs)
   -- Zero-arity atom promotion: if a bare atom matches a declared
   -- constraint or function with arity 0, promote it to CompoundTerm.
   AtomTerm n | mode /= NoResolve -> do
-    resolved <- resolveName AcceptUnknownName declEnv exportEnv m loc (Unqualified n) 0
+    resolved <- resolveName AcceptUnknownName declEnv exportEnv dcEnv m loc (Unqualified n) 0
     case resolved of
       Qualified _ _ -> pure (CompoundTerm resolved [])
       Unqualified _ -> pure (AtomTerm n)
@@ -192,8 +262,8 @@ renameTerm declEnv exportEnv m loc mode t = case t of
 -- For already-'Qualified' names: verifies the name exists in either
 -- 'DeclEnv' or 'ExportEnv' with the stated module. Names qualified with
 -- @\"host\"@ are external calls and bypass validation.
-resolveName :: UnknownNamePolicy -> DeclEnv -> ExportEnv -> Module -> SourceLoc -> Name -> Int -> Eff '[Writer [RenameError]] Name
-resolveName policy declEnv exportEnv currentMod loc (Unqualified n) arity
+resolveName :: UnknownNamePolicy -> DeclEnv -> ExportEnv -> DataConEnv -> Module -> SourceLoc -> Name -> Int -> Eff RenameEffs Name
+resolveName policy declEnv exportEnv dcEnv currentMod loc (Unqualified n) arity
   | isReserved n reservedSymbols = pure (Unqualified n)
   | otherwise =
       let ownProviders = filter (== currentMod.name) (lookupDecl (n, arity) declEnv)
@@ -204,29 +274,87 @@ resolveName policy declEnv exportEnv currentMod loc (Unqualified n) arity
             [m] -> pure (Qualified m n)
             [] -> case policy of
               ErrorOnUnknownName -> do
-                tell [UnknownName loc n arity]
+                tell @[RenameError] [UnknownName loc n arity]
                 pure (Unqualified n)
-              AcceptUnknownName -> pure (Unqualified n)
+              AcceptUnknownName -> do
+                warnUnknownDataCon dcEnv loc n arity
+                pure (Unqualified n)
             ms -> do
-              tell [AmbiguousName loc n arity ms]
+              tell @[RenameError] [AmbiguousName loc n arity ms]
               pure (Unqualified n)
 -- "host"-qualified names are external calls; skip validation.
-resolveName _ _ _ _ _ (Qualified "host" n) _ = pure (Qualified "host" n)
-resolveName policy declEnv _ _ loc (Qualified m n) arity
+resolveName _ _ _ _ _ _ (Qualified "host" n) _ = pure (Qualified "host" n)
+resolveName policy declEnv _ _ _ loc (Qualified m n) arity
   | m `elem` lookupDecl (n, arity) declEnv = pure (Qualified m n)
   | otherwise = case policy of
       ErrorOnUnknownName -> do
-        tell [UnknownName loc n arity]
+        tell @[RenameError] [UnknownName loc n arity]
         pure (Qualified m n)
       AcceptUnknownName -> pure (Qualified m n)
+
+-- | Check an unresolved name against data constructor declarations.
+-- If found with matching arity: silent. If found with wrong arity: warning.
+-- If not found at all: warning.
+warnUnknownDataCon :: DataConEnv -> SourceLoc -> Text -> Int -> Eff RenameEffs ()
+warnUnknownDataCon dcEnv loc n arity =
+  case Map.lookup n dcEnv of
+    Just arities
+      | arity `elem` arities -> pure ()
+      | otherwise -> tell @[RenameWarning] [DataConstructorArityMismatch loc n arity]
+    Nothing -> tell @[RenameWarning] [UndeclaredDataConstructor loc n]
+
+-- ---------------------------------------------------------------------------
+-- Type definition renaming
+-- ---------------------------------------------------------------------------
+
+-- | Rename a type definition: qualify the type name and constructor names
+-- with the declaring module, and resolve type references in constructor args.
+renameTypeDefinition :: DeclEnv -> ExportEnv -> Module -> TypeDefinition -> TypeDefinition
+renameTypeDefinition typeDeclEnv typeExportEnv m td =
+  TypeDefinition
+    { name = Qualified m.name (nameToText td.name),
+      typeVars = td.typeVars,
+      constructors = map (renameDataConstructor typeDeclEnv typeExportEnv m) td.constructors
+    }
+
+renameDataConstructor :: DeclEnv -> ExportEnv -> Module -> DataConstructor -> DataConstructor
+renameDataConstructor typeDeclEnv typeExportEnv m dc =
+  DataConstructor
+    { conName = Qualified m.name (nameToText dc.conName),
+      conArgs = map (renameTypeExpr typeDeclEnv typeExportEnv m) dc.conArgs
+    }
+
+renameTypeExpr :: DeclEnv -> ExportEnv -> Module -> TypeExpr -> TypeExpr
+renameTypeExpr _ _ _ (TypeVar v) = TypeVar v
+renameTypeExpr typeDeclEnv typeExportEnv m (TypeCon n args) =
+  TypeCon
+    (resolveTypeName typeDeclEnv typeExportEnv m (nameToText n) (length args))
+    (map (renameTypeExpr typeDeclEnv typeExportEnv m) args)
+
+-- | Resolve a type name against the type declaration and export environments.
+-- Unknown types (e.g., built-in @int@) are kept 'Unqualified'.
+resolveTypeName :: DeclEnv -> ExportEnv -> Module -> Text -> Int -> Name
+resolveTypeName typeDeclEnv typeExportEnv currentMod n arity =
+  let ownProviders = filter (== currentMod.name) (lookupDecl (n, arity) typeDeclEnv)
+      importNames = [mn | Ann (ModuleImport mn) _ <- currentMod.imports]
+      importProviders = filter (`elem` importNames) (lookupExport (n, arity) typeExportEnv)
+      matches = ownProviders ++ importProviders
+   in case matches of
+        [m] -> Qualified m n
+        _ -> Unqualified n
+
+-- ---------------------------------------------------------------------------
+-- Query renaming
+-- ---------------------------------------------------------------------------
 
 -- | Rename a list of query goal terms using all modules as the visible scope.
 -- Each term is renamed at 'ResolveTop' level (same as rule bodies).
 -- Returns 'Left' if any rename errors occur.
-renameQueryGoals :: [Module] -> [Term] -> Either [RenameError] [Term]
+renameQueryGoals :: [Module] -> [Term] -> Either [RenameError] ([Term], [RenameWarning])
 renameQueryGoals mods goals =
   let declEnv = buildDeclEnv mods
       exportEnv = buildExportEnv mods
+      dataConEnv = buildDataConEnv mods
       queryMod =
         Module
           { name = "<query>",
@@ -237,7 +365,7 @@ renameQueryGoals mods goals =
             equations = [],
             exports = Nothing
           }
-      (renamed, errs) =
-        runPureEff . runWriter $
-          traverse (renameTerm declEnv exportEnv queryMod dummyLoc ResolveTop) goals
-   in if null errs then Right renamed else Left errs
+      ((renamed, warnings), errs) =
+        runPureEff . runWriter @[RenameError] . runWriter @[RenameWarning] $
+          traverse (renameTerm declEnv exportEnv dataConEnv queryMod dummyLoc ResolveTop) goals
+   in if null errs then Right (renamed, warnings) else Left errs

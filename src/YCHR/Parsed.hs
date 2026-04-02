@@ -92,6 +92,7 @@ data Declaration
   = ConstraintDecl {name :: Text, arity :: Int}
   | FunctionDecl {name :: Text, arity :: Int}
   | OperatorDecl OpDecl
+  | TypeExportDecl {name :: Text, arity :: Int}
   deriving (Show, Eq, Lift)
 
 data OpType

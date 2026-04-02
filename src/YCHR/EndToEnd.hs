@@ -5,6 +5,7 @@
 module YCHR.EndToEnd
   ( -- * Compilation
     Error (..),
+    Warning (..),
     CompiledProgram (..),
     ExportResolution (..),
     ConstraintType,
@@ -59,7 +60,7 @@ import YCHR.Desugared qualified as D
 import YCHR.Meta (valueToTerm)
 import YCHR.Parsed (Import (..), Module (..), OpDecl (..), noAnn)
 import YCHR.Parser (OpTable, builtinOps, collectOperatorDecls, extractOpDecls, mergeOps, parseConstraint, parseModuleWith, parseQueryWith)
-import YCHR.Rename (RenameError, buildExportEnv, renameProgram, renameQueryGoals)
+import YCHR.Rename (RenameError, RenameWarning, buildExportEnv, renameProgram, renameQueryGoals)
 import YCHR.Rename.Types (toListExport)
 import YCHR.Runtime.History (PropHistory, runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc)
@@ -83,6 +84,10 @@ data Error
 
 instance Exception Error
 
+data Warning
+  = RenameWarnings [RenameWarning]
+  deriving (Show)
+
 -- | A compiled CHR program together with module visibility information.
 data CompiledProgram = CompiledProgram
   { program :: Program,
@@ -98,7 +103,7 @@ data ExportResolution
   | AmbiguousExport [Text]
   deriving (Show, Eq)
 
-compileModules :: Bool -> [(FilePath, Text)] -> Either Error CompiledProgram
+compileModules :: Bool -> [(FilePath, Text)] -> Either Error (CompiledProgram, [Warning])
 compileModules includeStdlib inputs = do
   -- Collect operators from user sources (lightweight first pass)
   userOpsByFile <-
@@ -131,11 +136,12 @@ compileModules includeStdlib inputs = do
       exportedSet =
         Set.fromList
           [Types.Identifier (Types.Qualified m n) a | ((n, a), ms) <- toListExport exportEnv, m <- ms]
-  renamed <- first RenameErrors (renameProgram collected)
+  (renamed, renameWarnings) <- first RenameErrors (renameProgram collected)
   desugared <- first DesugarErrors (desugarProgram renamed)
   let symTab = extractSymbolTable desugared
+      warnings = [RenameWarnings renameWarnings | not (null renameWarnings)]
   prog <- first CompileErrors (compile desugared symTab)
-  pure (CompiledProgram prog exportMap exportedSet symTab collected table)
+  pure (CompiledProgram prog exportMap exportedSet symTab collected table, warnings)
   where
     first' f (Left e) = Left (f e)
     first' _ (Right x) = Right x
@@ -145,7 +151,7 @@ compileModules includeStdlib inputs = do
 addBuiltinsImport :: Module -> Module
 addBuiltinsImport m = m {imports = noAnn (LibraryImport "builtins") : m.imports}
 
-compileFiles :: Bool -> [FilePath] -> IO (Either Error CompiledProgram)
+compileFiles :: Bool -> [FilePath] -> IO (Either Error (CompiledProgram, [Warning]))
 compileFiles includeStdlib paths = do
   contents <- mapM (\fp -> (fp,) <$> TIO.readFile fp) paths
   pure (compileModules includeStdlib contents)
@@ -331,7 +337,7 @@ runProgramWithQuery cp hostCalls src =
   case parseQueryWith cp.opTable "<query>" src of
     Left err -> throwIO (ParseError "<query>" err)
     Right goals -> do
-      renamed <- either (throwIO . RenameErrors) pure (renameQueryGoals cp.allModules goals)
+      (renamed, _renameWarnings) <- either (throwIO . RenameErrors) pure (renameQueryGoals cp.allModules goals)
       bodyGoals <- either (throwIO . DesugarErrors) pure (desugarQueryGoals cp.allModules renamed)
       withCHR cp hostCalls $
         evalState (Map.empty :: Map Text Value) $ do
