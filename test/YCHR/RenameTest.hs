@@ -438,7 +438,7 @@ multiModuleTests =
         renameProgram [] @?= Right [],
       testCase "module with no rules" $
         let m = module' "M" `declaring` ["leq" // 2]
-         in renameProgram [m] @?= Right [Module "M" [] [noAnn (ConstraintDecl "leq" 2)] [] [] Nothing],
+         in renameProgram [m] @?= Right [Module "M" [] [noAnn (ConstraintDecl "leq" 2)] [] [] [] Nothing],
       testCase "rule name preserved" $ do
         let m =
               module' "M"

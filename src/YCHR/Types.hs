@@ -18,6 +18,11 @@ module YCHR.Types
 
     -- * Terms
     Term (..),
+
+    -- * Type declarations
+    TypeDefinition (..),
+    DataConstructor (..),
+    TypeExpr (..),
   )
 where
 
@@ -63,6 +68,27 @@ data Constraint = Constraint
   { name :: Name,
     args :: [Term]
   }
+  deriving (Show, Eq, Lift)
+
+-- | A CHR type declaration.
+data TypeDefinition = TypeDefinition
+  { name :: Name,
+    typeVars :: [Text],
+    constructors :: [DataConstructor]
+  }
+  deriving (Show, Eq, Lift)
+
+-- | A data constructor within a type declaration.
+data DataConstructor = DataConstructor
+  { conName :: Name,
+    conArgs :: [TypeExpr]
+  }
+  deriving (Show, Eq, Lift)
+
+-- | A type expression (argument of a data constructor).
+data TypeExpr
+  = TypeVar Text
+  | TypeCon Name [TypeExpr]
   deriving (Show, Eq, Lift)
 
 -- | Prolog-compatible terms.

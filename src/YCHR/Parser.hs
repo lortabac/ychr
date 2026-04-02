@@ -575,6 +575,7 @@ data Directive
   | DirImport (Ann Import)
   | DirConstraintDecl [Ann Declaration]
   | DirFunctionDecl [Ann Declaration]
+  | DirTypeDecl [Ann TypeDefinition]
   | DirOther
 
 -- | Parse a Prolog-style directive (@:- ...@).
@@ -599,6 +600,10 @@ directiveP = do
       decls <- functionDeclP `sepBy1` comma
       _ <- symbol "."
       pure (DirFunctionDecl decls)
+    "chr_type" -> do
+      td <- typeDefinitionP
+      _ <- symbol "."
+      pure (DirTypeDecl [td])
     _ -> do
       -- Unknown directive: skip until the terminating dot.
       _ <- manyTill anySingle (char '.')
@@ -705,6 +710,78 @@ functionEquationP = withLoc (try prefixEq <|> operatorEq)
             pure (Ann [] (sourceLocFromPos startPos), Ann rhs (sourceLocFromPos rhsPos))
         ]
 
+-- ---------------------------------------------------------------------------
+-- Type declarations
+-- ---------------------------------------------------------------------------
+
+-- | Parse a type definition: @name(Vars) ---> con1 ; con2 ; ...@
+typeDefinitionP :: Parser (Ann TypeDefinition)
+typeDefinitionP = withLoc $ do
+  tname <- atomP
+  tvars <- option [] (parens (typeVarNameP `sepBy1` comma))
+  _ <- symbol "--->"
+  cons <- dataConstructorP `sepBy1` symbol ";"
+  pure (TypeDefinition (Unqualified tname) tvars cons)
+
+-- | Parse an uppercase type variable name (just the text, not a TypeExpr).
+typeVarNameP :: Parser Text
+typeVarNameP = lexeme $ do
+  c <- upperChar
+  rest <- many (alphaNumChar <|> char '_')
+  pure (T.pack (c : rest))
+
+-- | Parse a data constructor: bare atom, @name(args)@, @[]@, or @[H|T]@.
+dataConstructorP :: Parser DataConstructor
+dataConstructorP =
+  choice
+    [ try listConsP,
+      emptyListConsP,
+      namedConsP
+    ]
+  where
+    namedConsP = do
+      cname <- atomP
+      args <- option [] (parens (typeExprP `sepBy1` comma))
+      pure (DataConstructor (Unqualified cname) args)
+    emptyListConsP = do
+      _ <- symbol "["
+      _ <- symbol "]"
+      pure (DataConstructor (Unqualified "[]") [])
+    listConsP = do
+      _ <- symbol "["
+      elems <- typeExprP `sepBy1` comma
+      _ <- symbol "|"
+      tl <- typeExprP
+      _ <- symbol "]"
+      pure (DataConstructor (Unqualified ".") (elems ++ [tl]))
+
+-- | Parse a type expression: variable, type constructor, or list sugar.
+typeExprP :: Parser TypeExpr
+typeExprP =
+  choice
+    [ try listTypeConsP,
+      emptyListTypeP,
+      typeVarP,
+      typeConP
+    ]
+  where
+    typeVarP = TypeVar <$> typeVarNameP
+    typeConP = do
+      tname <- atomP
+      args <- option [] (parens (typeExprP `sepBy1` comma))
+      pure (TypeCon (Unqualified tname) args)
+    emptyListTypeP = do
+      _ <- symbol "["
+      _ <- symbol "]"
+      pure (TypeCon (Unqualified "[]") [])
+    listTypeConsP = do
+      _ <- symbol "["
+      elems <- typeExprP `sepBy1` comma
+      _ <- symbol "|"
+      tl <- typeExprP
+      _ <- symbol "]"
+      pure (TypeCon (Unqualified ".") (elems ++ [tl]))
+
 -- | Parse an import specifier: either @library(name)@ or a plain module name.
 importP :: Parser (Ann Import)
 importP = withLoc (try libraryP <|> (ModuleImport <$> atomP))
@@ -746,7 +823,8 @@ moduleP = do
       modDecls_ =
         concat [ds | DirConstraintDecl ds <- dirs]
           ++ concat [ds | DirFunctionDecl ds <- dirs]
-  pure (Module modName_ modImports_ modDecls_ rules eqs modExports_)
+      modTypeDecls_ = concat [ds | DirTypeDecl ds <- dirs]
+  pure (Module modName_ modImports_ modDecls_ modTypeDecls_ rules eqs modExports_)
 
 -- ---------------------------------------------------------------------------
 -- First-pass operator collector

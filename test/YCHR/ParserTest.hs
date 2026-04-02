@@ -22,6 +22,7 @@ tests =
       negativeIntTests,
       operatorTests,
       ruleTests,
+      typeTests,
       moduleTests,
       commentTests,
       errorTests
@@ -47,6 +48,7 @@ stripModLoc m =
   m
     { imports = map (noAnn . (.node)) m.imports,
       decls = map (noAnn . (.node)) m.decls,
+      typeDecls = map (noAnn . (.node)) m.typeDecls,
       rules = map stripRuleLoc m.rules,
       equations = map (noAnn . (.node)) m.equations
     }
@@ -259,6 +261,75 @@ ruleTests =
     ]
 
 -- ---------------------------------------------------------------------------
+-- Type declarations
+-- ---------------------------------------------------------------------------
+
+typeTests :: TestTree
+typeTests =
+  testGroup
+    "type declarations"
+    [ testCase "simple enum type" $
+        typeDefsOf ":- chr_type color ---> red ; green ; blue."
+          >>= ( @?=
+                  [ TypeDefinition (Unqualified "color") [] $
+                      [ DataConstructor (Unqualified "red") [],
+                        DataConstructor (Unqualified "green") [],
+                        DataConstructor (Unqualified "blue") []
+                      ]
+                  ]
+              ),
+      testCase "type with constructor args" $
+        typeDefsOf ":- chr_type tree ---> empty ; leaf(int) ; branch(tree, tree)."
+          >>= ( @?=
+                  [ TypeDefinition (Unqualified "tree") [] $
+                      [ DataConstructor (Unqualified "empty") [],
+                        DataConstructor (Unqualified "leaf") [TypeCon (Unqualified "int") []],
+                        DataConstructor (Unqualified "branch") [TypeCon (Unqualified "tree") [], TypeCon (Unqualified "tree") []]
+                      ]
+                  ]
+              ),
+      testCase "parameterized type" $
+        typeDefsOf ":- chr_type pair(A, B) ---> pair(A, B)."
+          >>= ( @?=
+                  [ TypeDefinition (Unqualified "pair") ["A", "B"] $
+                      [ DataConstructor (Unqualified "pair") [TypeVar "A", TypeVar "B"]
+                      ]
+                  ]
+              ),
+      testCase "list type with list sugar" $
+        typeDefsOf ":- chr_type list(T) ---> [] ; [T | list(T)]."
+          >>= ( @?=
+                  [ TypeDefinition (Unqualified "list") ["T"] $
+                      [ DataConstructor (Unqualified "[]") [],
+                        DataConstructor (Unqualified ".") [TypeVar "T", TypeCon (Unqualified "list") [TypeVar "T"]]
+                      ]
+                  ]
+              ),
+      testCase "type with nested type args" $
+        typeDefsOf ":- chr_type nested ---> wrap(pair(int, int))."
+          >>= ( @?=
+                  [ TypeDefinition (Unqualified "nested") [] $
+                      [ DataConstructor (Unqualified "wrap") [TypeCon (Unqualified "pair") [TypeCon (Unqualified "int") [], TypeCon (Unqualified "int") []]]
+                      ]
+                  ]
+              ),
+      testCase "type decl doesn't affect constraint decls" $
+        case p ":- chr_type t ---> a.\n:- chr_constraint c/1." of
+          Left err -> assertFailure (show err)
+          Right m -> do
+            map (.node) m.decls @?= [ConstraintDecl "c" 1]
+            map (.node) m.typeDecls
+              @?= [TypeDefinition (Unqualified "t") [] [DataConstructor (Unqualified "a") []]],
+      testCase "multiple type decls" $
+        typeDefsOf ":- chr_type a ---> x.\n:- chr_type b ---> y."
+          >>= ( @?=
+                  [ TypeDefinition (Unqualified "a") [] [DataConstructor (Unqualified "x") []],
+                    TypeDefinition (Unqualified "b") [] [DataConstructor (Unqualified "y") []]
+                  ]
+              )
+    ]
+
+-- ---------------------------------------------------------------------------
 -- Full module
 -- ---------------------------------------------------------------------------
 
@@ -273,6 +344,7 @@ moduleTests =
                 "order"
                 []
                 [noAnn (ConstraintDecl "leq" 2)]
+                []
                 [ Rule
                     (Just (noAnn "refl"))
                     (noAnn (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
@@ -364,6 +436,11 @@ errorTests =
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
+
+typeDefsOf :: Text -> IO [TypeDefinition]
+typeDefsOf src = case p src of
+  Left err -> assertFailure (show err)
+  Right m -> pure (map (.node) m.typeDecls)
 
 bodyOf :: Text -> IO [Term]
 bodyOf src = case p src of

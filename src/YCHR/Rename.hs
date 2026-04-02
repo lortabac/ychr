@@ -232,6 +232,7 @@ renameQueryGoals mods goals =
           { name = "<query>",
             imports = [noAnn (ModuleImport m.name) | m <- mods],
             decls = [],
+            typeDecls = [],
             rules = [],
             equations = [],
             exports = Nothing

@@ -50,27 +50,27 @@ moduleTests =
   testGroup
     "module"
     [ testCase "module' produces empty module" $
-        module' "Foo" @?= Module "Foo" [] [] [] [] Nothing,
+        module' "Foo" @?= Module "Foo" [] [] [] [] [] Nothing,
       testCase "importing sets modImports" $
         module' "Foo" `importing` ["Bar", "Baz"]
-          @?= Module "Foo" [noAnn (ModuleImport "Bar"), noAnn (ModuleImport "Baz")] [] [] [] Nothing,
+          @?= Module "Foo" [noAnn (ModuleImport "Bar"), noAnn (ModuleImport "Baz")] [] [] [] [] Nothing,
       testCase "declaring sets modDecls" $
         module' "Foo" `declaring` ["leq" // 2]
-          @?= Module "Foo" [] [noAnn (ConstraintDecl "leq" 2)] [] [] Nothing,
+          @?= Module "Foo" [] [noAnn (ConstraintDecl "leq" 2)] [] [] [] Nothing,
       testCase "defining sets modRules" $
         let r = [con "leq" [var "X"]] <=> [atom "true"]
          in module' "Foo" `defining` [r]
-              @?= Module "Foo" [] [] [r] [] Nothing,
+              @?= Module "Foo" [] [] [] [r] [] Nothing,
       testCase "chaining importing, declaring, defining" $
         let r = [con "c" []] <=> [atom "true"]
          in module' "M"
               `importing` ["A"]
               `declaring` ["c" // 0]
               `defining` [r]
-              @?= Module "M" [noAnn (ModuleImport "A")] [noAnn (ConstraintDecl "c" 0)] [r] [] Nothing,
+              @?= Module "M" [noAnn (ModuleImport "A")] [noAnn (ConstraintDecl "c" 0)] [] [r] [] Nothing,
       testCase "exporting sets modExports" $
         module' "Foo" `exporting` ["leq" // 2]
-          @?= Module "Foo" [] [] [] [] (Just [ConstraintDecl "leq" 2])
+          @?= Module "Foo" [] [] [] [] [] (Just [ConstraintDecl "leq" 2])
     ]
 
 declarationTests :: TestTree
@@ -157,6 +157,7 @@ integrationTests =
             "Order"
             []
             [noAnn (ConstraintDecl "leq" 2)]
+            []
             [ Rule
                 (Just (noAnn "refl"))
                 (noAnn (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
@@ -170,6 +171,7 @@ integrationTests =
           @?= Module
             "Logic"
             [noAnn (ModuleImport "Order")]
+            []
             []
             [ Rule
                 (Just (noAnn "trans"))

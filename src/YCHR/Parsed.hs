@@ -39,12 +39,15 @@ module YCHR.Parsed
     -- * Re-exports from YCHR.Types
     Constraint (..),
     Term (..),
+    TypeDefinition (..),
+    DataConstructor (..),
+    TypeExpr (..),
   )
 where
 
 import Data.Text (Text)
 import Language.Haskell.TH.Syntax (Lift)
-import YCHR.Types (Constraint (..), Term (..))
+import YCHR.Types (Constraint (..), DataConstructor (..), Term (..), TypeDefinition (..), TypeExpr (..))
 
 -- | A source file location (file, line, column).
 data SourceLoc = SourceLoc
@@ -78,6 +81,7 @@ data Module = Module
   { name :: Text,
     imports :: [Ann Import],
     decls :: [Ann Declaration],
+    typeDecls :: [Ann TypeDefinition],
     rules :: [Rule],
     equations :: [Ann FunctionEquation],
     exports :: Maybe [Declaration]

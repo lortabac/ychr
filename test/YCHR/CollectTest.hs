@@ -61,10 +61,10 @@ tests =
     ]
 
 userMod :: [Ann Import] -> Module
-userMod imps = Module "user" imps [] [] [] Nothing
+userMod imps = Module "user" imps [] [] [] [] Nothing
 
 libMod :: Text -> Module
-libMod name = Module name [] [] [] [] Nothing
+libMod name = Module name [] [] [] [] [] Nothing
 
 isModuleImport :: Import -> Bool
 isModuleImport (ModuleImport _) = True
