@@ -64,7 +64,7 @@ compileParser :: Parser Command
 compileParser =
   Compile
     <$> ( CompileOpts
-            <$> strOption (long "output-dir" <> long "odir" <> metavar "DIR" <> help "Output directory" <> value ".")
+            <$> strOption (long "output-dir" <> short 'd' <> metavar "DIR" <> help "Output directory" <> value ".")
             <*> optional (strOption (short 'n' <> long "base-name" <> metavar "NAME" <> help "Base name for generated files (default: derived from module name)"))
             <*> option targetReader (short 't' <> metavar "TARGET" <> help "Target (vm, scheme)" <> value TargetVM)
         )
