@@ -89,14 +89,15 @@
 ;; observer on each of its variable arguments.
 (define (store-constraint susp)
   (let ((g (vector-ref *store-by-type* (suspension-type susp)))
-        (a (suspension-args susp))
-        (sid (suspension-id susp)))
+        (a (suspension-args susp)))
     (growable-push! g susp)
-    ;; Register as observer on variable arguments
+    ;; Register the suspension itself as observer on variable arguments.
+    ;; The reactivation queue will receive these suspension records directly,
+    ;; so no byId lookup is needed.
     (let ((len (vector-length a)))
       (let loop ((i 0))
         (when (< i len)
-          (add-observer! sid (vector-ref a i))
+          (add-observer! susp (vector-ref a i))
           (loop (+ i 1)))))))
 
 ;; Kill a constraint (set alive to #f).

@@ -126,7 +126,8 @@ library
     -- Import common warning flags.
     import:           warnings
 
-    exposed-modules:  YCHR.Collect
+    exposed-modules:  YCHR.Backend.Scheme
+                    , YCHR.Collect
                     , YCHR.Compile
                     , YCHR.Compile.Types
                     , YCHR.Display

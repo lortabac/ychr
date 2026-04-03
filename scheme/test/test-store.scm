@@ -142,16 +142,16 @@
           (y (make-var)))
       (let ((s (create-constraint 0 (vector x 42 y))))
         (store-constraint s)
-        ;; Binding x should emit observer for s
+        ;; Binding x should emit observer for s (as a suspension record)
         (let-values (((ok obs) (unify x 1)))
           (test-assert "unify succeeds" ok)
           (test-assert "observer emitted for x"
-            (memv (suspension-id s) obs)))
+            (memq s obs)))
         ;; Binding y should emit observer for s
         (let-values (((ok obs) (unify y 2)))
           (test-assert "unify succeeds" ok)
           (test-assert "observer emitted for y"
-            (memv (suspension-id s) obs))))))
+            (memq s obs))))))
 
   (test-group "ground args do not register observers"
     (let ((s (create-constraint 0 (vector 1 'a #t))))
