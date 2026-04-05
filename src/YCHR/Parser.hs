@@ -35,6 +35,7 @@ module YCHR.Parser
     OpTable,
     builtinOps,
     mergeOps,
+    opTableEntries,
     collectOperatorDecls,
     extractOpDecls,
   )
@@ -136,6 +137,15 @@ isSymbolic = T.all (`elem` symbolChars)
 -- | Characters that can appear in symbol operators.
 symbolChars :: [Char]
 symbolChars = ":=<>+-*/#@^~!&?"
+
+-- | List all operator entries in an 'OpTable' as @(fixity, type, name)@
+-- triples. The order is unspecified.
+opTableEntries :: OpTable -> [(Int, OpType, Text)]
+opTableEntries table =
+  [ (fix, ty, name)
+  | (fix, ops) <- IntMap.toList table.opsByFixity,
+    (ty, name) <- ops
+  ]
 
 -- | Convert an 'OpTable' to the format expected by 'makeExprParser'.
 -- See Note [Prolog fixity vs makeExprParser precedence].

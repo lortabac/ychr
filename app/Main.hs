@@ -3,6 +3,7 @@ module Main where
 import Control.Exception (SomeException, displayException, fromException, try)
 import Control.Monad.IO.Class (liftIO)
 import Data.List (isPrefixOf, nub)
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -12,13 +13,14 @@ import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDire
 import System.Exit (exitFailure)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hPutStr, stderr)
+import YCHR.Backend.Scheme (generateScheme)
 import YCHR.Display (Display (..), displayMsg)
 import YCHR.EndToEnd (CompiledProgram (..), Error, Warning, compileFiles, compileModules, runProgramWithGoal, runProgramWithQuery)
 import YCHR.Meta (metaHostCallRegistry)
 import YCHR.Parsed qualified as Parsed
-import YCHR.Pretty (prettyBindings, prettyQueryResult)
+import YCHR.Parser (opTableEntries)
+import YCHR.Pretty (prettyBindings, prettyQueryResult, renderAtom)
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
-import YCHR.Backend.Scheme (generateScheme)
 import YCHR.VM.SExpr (VMProgram (..), serialize)
 
 data RunOpts = RunOpts
@@ -105,7 +107,7 @@ runRepl files = do
       createDirectoryIfMissing True (takeDirectory histFile)
       let CompiledProgram {exportMap = em} = prog
           constraintNames = nub [T.unpack n | (n, _) <- Map.keys em]
-          completions = [":quit", ":recompile", ":help", ":list_files", ":list_modules", ":list_declarations"] ++ constraintNames
+          completions = [":quit", ":recompile", ":help", ":list_files", ":list_modules", ":list_declarations", ":list_operators"] ++ constraintNames
           completeFunc = completeWord Nothing " ," $ \prefix ->
             return $ map (\n -> (simpleCompletion n) {isFinished = False}) $ filter (isPrefixOf prefix) completions
           settings = (defaultSettings :: Settings IO) {historyFile = Just histFile, complete = completeFunc}
@@ -121,14 +123,36 @@ repl files prog = loop
       outputStrLn "  :list_files            List the compiled files"
       outputStrLn "  :list_modules          List the compiled modules"
       outputStrLn "  :list_declarations     List visible declarations"
+      outputStrLn "  :list_operators        List defined operators"
       outputStrLn "  :quit, :q              Exit the REPL"
       loop
     showFiles = do
       mapM_ outputStrLn files
       loop
     showDeclarations = do
-      let decls = nub [(n, a) | (n, a) <- Map.keys prog.exportMap]
-      mapM_ (\(n, a) -> outputStrLn (T.unpack n ++ "/" ++ show a)) decls
+      let renderDecl kw modName name arity =
+            ":- " ++ kw ++ " " ++ renderAtom modName ++ ":" ++ renderAtom name ++ "/" ++ show arity ++ "."
+          declLines =
+            [ renderDecl kw m.name n a
+            | m <- prog.allModules,
+              Parsed.Ann d _ <- m.decls,
+              (kw, n, a) <- case d of
+                Parsed.ConstraintDecl {name = n, arity = a} -> [("chr_constraint", n, a)]
+                Parsed.FunctionDecl {name = n, arity = a} -> [("function", n, a)]
+                _ -> []
+            ]
+      mapM_ outputStrLn declLines
+      loop
+    showOperators = do
+      let opTypeStr Parsed.InfixL_ = "yfx"
+          opTypeStr Parsed.InfixR_ = "xfy"
+          opTypeStr Parsed.InfixN_ = "xfx"
+          opTypeStr Parsed.Prefix_ = "fx"
+          opTypeStr Parsed.Postfix_ = "xf"
+          entries = List.sort [(fix, opTypeStr ty, name) | (fix, ty, name) <- opTableEntries prog.opTable]
+          renderOp (fix, ty, name) =
+            "op(" ++ show fix ++ ", " ++ ty ++ ", " ++ renderAtom name ++ ")"
+      mapM_ (outputStrLn . renderOp) entries
       loop
     showModules = do
       mapM_ (\(Parsed.Module {name = n}) -> outputStrLn (T.unpack n)) prog.allModules
@@ -157,6 +181,7 @@ repl files prog = loop
         Just ":list_files" -> showFiles
         Just ":list_modules" -> showModules
         Just ":list_declarations" -> showDeclarations
+        Just ":list_operators" -> showOperators
         Just "" -> loop
         Just line -> do
           outcome <-

@@ -21,6 +21,7 @@ module YCHR.Pretty
     prettyConstraintSrc,
     prettyHeadSrc,
     prettyRuleSrc,
+    renderAtom,
   )
 where
 
@@ -58,7 +59,7 @@ prettyTerm (CompoundTerm (Qualified m f) ts) =
 -- ---------------------------------------------------------------------------
 
 reservedWordsSrc :: [Text]
-reservedWordsSrc = ["is", "div", "mod"]
+reservedWordsSrc = ["is"]
 
 -- | True if the atom string requires single-quote wrapping.
 needsQuoting :: Text -> Bool
