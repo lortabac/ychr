@@ -192,7 +192,7 @@ runCHR ::
   Eff es a
 runCHR cp hc =
   runUnify
-    . runCHRStore cp.program.numTypes
+    . runCHRStore cp.program.typeNames
     . runPropHistory
     . runReactQueue
     . fmap fst
@@ -290,7 +290,7 @@ runProgramWithGoalDSL cp hostCalls constraint = do
     . runUnify
     . fmap fst
     . runWriter @[SuspensionId]
-    . runCHRStore prog.numTypes
+    . runCHRStore prog.typeNames
     . runPropHistory
     . runReactQueue
     . evalState (Map.empty :: Map Text Value)
@@ -383,7 +383,7 @@ executeBodyGoal hc (D.BodyFunctionCall name args) = do
   pure ()
 
 -- | Call a host function, failing with a clear message if not found.
-hostCall :: (Unify :> es, IOE :> es) => Maybe HostCallFn -> Text -> [RuntimeVal] -> Eff es RuntimeVal
+hostCall :: (Unify :> es, CHRStore :> es, IOE :> es) => Maybe HostCallFn -> Text -> [RuntimeVal] -> Eff es RuntimeVal
 hostCall (Just (HostCallFn f)) _ args = f args
 hostCall Nothing name _ = error $ "Unknown host function: " ++ T.unpack name
 

@@ -15,15 +15,17 @@ where
 
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, gets, modify')
+import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Effectful (Eff, liftIO, runEff, type (:>))
 import YCHR.Parser (builtinOps, parseTermWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, unit)
+import YCHR.Runtime.Store (Suspension (..), getAllStoredConstraints, isSuspAlive)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, deref, newVar, runUnify)
-import YCHR.Types (Term (..))
+import YCHR.Types (Term (..), flattenName)
 import YCHR.Types qualified as Types
 import YCHR.VM (Name (..))
 
@@ -66,11 +68,7 @@ termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard
 termToValue (CompoundTerm name args) = do
   args' <- traverse termToValue args
-  pure (VTerm (nameToText name) args')
-
-nameToText :: Types.Name -> Text
-nameToText (Types.Unqualified t) = t
-nameToText (Types.Qualified m t) = m <> ":" <> t
+  pure (VTerm (flattenName name) args')
 
 -- | Host call registry providing meta-level operations that depend on
 -- modules outside the interpreter (e.g. the pretty-printer).
@@ -90,5 +88,22 @@ metaHostCallRegistry =
               Left err -> error $ "read_term_from_string: " ++ show err
               Right term -> RVal <$> evalStateT (termToValue term) Map.empty
           _ -> error "read_term_from_string: expected 1 Text argument"
+      ),
+      ( Name "print_store",
+        HostCallFn $ \_ -> do
+          groups <- getAllStoredConstraints
+          lines_ <- concat <$> traverse renderGroup groups
+          liftIO (mapM_ putStrLn lines_)
+          pure unit
       )
     ]
+  where
+    renderGroup (tyName, susps) =
+      fmap concat . traverse (renderSusp tyName) . toList $ susps
+    renderSusp tyName susp = do
+      alive <- isSuspAlive susp
+      if not alive
+        then pure []
+        else do
+          argTerms <- traverse (valueToTerm "_") susp.args
+          pure [prettyTerm (CompoundTerm (Types.Unqualified tyName) argTerms)]

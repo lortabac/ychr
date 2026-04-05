@@ -25,11 +25,11 @@ tests =
 
 roundtripTests :: [TestTree]
 roundtripTests =
-  [ testCase "empty program" $ roundtrip (Program 0 []),
+  [ testCase "empty program" $ roundtrip (Program 0 [] []),
     testCase "single empty procedure" $
-      roundtrip (Program 1 [Procedure "foo" [] []]),
+      roundtrip (Program 1 ["foo"] [Procedure "foo" [] []]),
     testCase "procedure with params" $
-      roundtrip (Program 1 [Procedure "tell_leq2" ["X", "Y"] []]),
+      roundtrip (Program 1 ["leq"] [Procedure "tell_leq2" ["X", "Y"] []]),
     testCase "let statement" $
       roundtrip (mkProg [Let "x" (Lit (IntLit 42))]),
     testCase "assign statement" $
@@ -116,6 +116,7 @@ roundtripTests =
       roundtrip
         ( Program
             2
+            ["a", "b"]
             [ Procedure "tell_a1" ["X"] [Let "id" (CreateConstraint (ConstraintType 0) [Var "X"]), Store (Var "id"), ExprStmt (CallExpr "activate_a1" [Var "id"])],
               Procedure "activate_a1" ["susp"] [Let "id" (Var "susp"), Let "X" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))), Return (Lit (BoolLit False))],
               Procedure "reactivate_dispatch" ["susp"] [If (IsConstraintType (Var "susp") (ConstraintType 0)) [ExprStmt (CallExpr "activate_a1" [Var "susp"])] []]
@@ -139,7 +140,7 @@ roundtrip prog = do
 formatTests :: [TestTree]
 formatTests =
   [ testCase "var serialization" $
-      assertContains (serializeProg (mkProg [ExprStmt (Var "x")])) "(program 0 (procedure \"p\" () (expr-stmt (var \"x\"))))",
+      assertContains (serializeProg (mkProg [ExprStmt (Var "x")])) "(program 0 (type-names) (procedure \"p\" () (expr-stmt (var \"x\"))))",
     testCase "literals inline without wrapper" $ do
       assertContains (serializeProg (mkProg [Let "x" (Lit (BoolLit True))])) "true"
       assertContains (serializeProg (mkProg [Let "x" (Lit (BoolLit False))])) "false"
@@ -151,7 +152,7 @@ formatTests =
     testCase "exports and symbol table roundtrip" $
       let vmp =
             VMProgram
-              { program = Program 2 [],
+              { program = Program 2 ["M:leq", "gcd"] [],
                 exportedSet = Set.fromList [Types.Identifier (Types.Qualified "M" "leq") 2, Types.Identifier (Types.Unqualified "gcd") 1],
                 symbolTable = Types.mkSymbolTable [(Types.Identifier (Types.Qualified "M" "leq") 2, Types.ConstraintType 0), (Types.Identifier (Types.Unqualified "gcd") 1, Types.ConstraintType 1)]
               }
@@ -170,7 +171,7 @@ serializeProg = serialize . mkVMProg
 
 -- | Build a minimal program with one procedure containing the given body.
 mkProg :: [Stmt] -> Program
-mkProg body = Program 0 [Procedure "p" [] body]
+mkProg body = Program 0 [] [Procedure "p" [] body]
 
 -- | Wrap a Program into a VMProgram with empty metadata.
 mkVMProg :: Program -> VMProgram

@@ -92,7 +92,12 @@ chrNameToSExpr (Types.Qualified m t) = SList [SAtom "qualified", SString m, SStr
 
 programToSExpr :: Program -> SExpr
 programToSExpr prog =
-  SList (SAtom "program" : SInt prog.numTypes : map procedureToSExpr prog.procedures)
+  SList
+    ( SAtom "program"
+        : SInt prog.numTypes
+        : SList (SAtom "type-names" : map SString prog.typeNames)
+        : map procedureToSExpr prog.procedures
+    )
 
 procedureToSExpr :: Procedure -> SExpr
 procedureToSExpr proc =
@@ -218,10 +223,15 @@ chrNameFromSExpr (SList [SAtom "qualified", SString m, SString t]) = pure (Types
 chrNameFromSExpr s = err ("expected name, got: " <> printSExpr s)
 
 programFromSExpr :: SExpr -> Err Program
-programFromSExpr (SList (SAtom "program" : SInt n : procs)) = do
+programFromSExpr (SList (SAtom "program" : SInt n : SList (SAtom "type-names" : nameSexprs) : procs)) = do
+  tns <- traverse typeNameFromSExpr nameSexprs
   ps <- traverse procedureFromSExpr procs
-  pure Program {numTypes = n, procedures = ps}
+  pure Program {numTypes = n, typeNames = tns, procedures = ps}
 programFromSExpr s = err ("expected (program ...), got: " <> printSExpr s)
+
+typeNameFromSExpr :: SExpr -> Err Text
+typeNameFromSExpr (SString t) = pure t
+typeNameFromSExpr s = err ("expected type name string, got: " <> printSExpr s)
 
 procedureFromSExpr :: SExpr -> Err Procedure
 procedureFromSExpr (SList (SAtom "procedure" : SString nm : SList paramSexprs : bodyExprs)) = do

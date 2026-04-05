@@ -19,7 +19,7 @@ where
 
 import Control.Monad (foldM)
 import Data.Char (isAscii, ord)
-import Data.List (partition)
+import Data.List (partition, sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -33,7 +33,7 @@ import YCHR.Compile.Types
 import YCHR.Desugared qualified as D
 import YCHR.Parsed qualified as P
 import YCHR.Pretty (AnnP (..), PrettyE (..))
-import YCHR.Types (Constraint, Identifier (..), SymbolTable, Term (..), lookupSymbol, symbolTableSize, symbolTableToList)
+import YCHR.Types (Constraint, Identifier (..), SymbolTable, Term (..), flattenName, lookupSymbol, symbolTableSize, symbolTableToList)
 import YCHR.Types qualified as Types
 import YCHR.VM
 
@@ -64,6 +64,7 @@ compile prog symTab =
           Right
             Program
               { numTypes = symbolTableSize symTab,
+                typeNames = buildTypeNames symTab,
                 procedures = procs ++ funProcs ++ [dispatch]
               }
         else Left allErrs
@@ -71,6 +72,18 @@ compile prog symTab =
 -- | Build the set of qualified function identifiers from the program.
 buildFunctionSet :: D.Program -> Set Identifier
 buildFunctionSet prog = Set.fromList [Identifier f.name f.arity | f <- prog.functions]
+
+-- | Build the list of constraint type source names, indexed by
+-- 'Types.ConstraintType'. The list is ordered by the constraint type's
+-- integer index, so @typeNames !! i@ is the name of the type with index @i@.
+-- Qualified names are flattened via 'flattenName'.
+buildTypeNames :: SymbolTable -> [Text]
+buildTypeNames symTab =
+  [ flattenName ident.name
+  | (ident, _) <- sortOn (ctIndex . snd) (symbolTableToList symTab)
+  ]
+  where
+    ctIndex (Types.ConstraintType i) = i
 
 -- ---------------------------------------------------------------------------
 -- Occurrence collection

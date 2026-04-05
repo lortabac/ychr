@@ -31,7 +31,7 @@ tests =
 
 -- | Run an Eff computation with CHRStore, Unify, Writer, and IOE.
 runStoreEnv :: Eff [Writer [SuspensionId], CHRStore, Unify, IOE] a -> IO (a, [SuspensionId])
-runStoreEnv = runEff . runUnify . runCHRStore 100 . runWriter @[SuspensionId]
+runStoreEnv = runEff . runUnify . runCHRStore (replicate 100 "") . runWriter @[SuspensionId]
 
 runStoreEnv_ :: Eff [Writer [SuspensionId], CHRStore, Unify, IOE] a -> IO a
 runStoreEnv_ m = fst <$> runStoreEnv m

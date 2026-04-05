@@ -18,6 +18,7 @@ import YCHR.Parsed qualified as P
 import YCHR.Parser (parseConstraint, parseRule, parseTerm)
 import YCHR.Pretty (prettyConstraintSrc, prettyRuleSrc, prettyTermSrc)
 import YCHR.Runtime.Registry (HostCallFn (..), baseHostCallRegistry, valueList)
+import YCHR.Runtime.Store (runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), Value (..))
 import YCHR.Runtime.Var (runUnify)
 import YCHR.Types (Constraint (..), Name (..), Term (..))
@@ -248,10 +249,10 @@ prop_compoundToListRoundtrip = property $ do
   term <- forAllWith showGroundValue genCompoundValue
   let HostCallFn toList = lookupHostCall "compound_to_list"
       HostCallFn fromList = lookupHostCall "list_to_compound"
-  listResult <- evalIO $ runEff . runUnify $ toList [RVal term]
+  listResult <- evalIO $ runEff . runUnify . runCHRStore [] $ toList [RVal term]
   case listResult of
     RVal list -> do
-      compoundResult <- evalIO $ runEff . runUnify $ fromList [RVal list]
+      compoundResult <- evalIO $ runEff . runUnify . runCHRStore [] $ fromList [RVal list]
       case compoundResult of
         RVal term' -> do
           annotate (showGroundValue term)
@@ -267,10 +268,10 @@ prop_listToCompoundRoundtrip = property $ do
   let list = valueList (VAtom f : args)
   let HostCallFn fromList = lookupHostCall "list_to_compound"
       HostCallFn toList = lookupHostCall "compound_to_list"
-  compoundResult <- evalIO $ runEff . runUnify $ fromList [RVal list]
+  compoundResult <- evalIO $ runEff . runUnify . runCHRStore [] $ fromList [RVal list]
   case compoundResult of
     RVal compound -> do
-      listResult <- evalIO $ runEff . runUnify $ toList [RVal compound]
+      listResult <- evalIO $ runEff . runUnify . runCHRStore [] $ toList [RVal compound]
       case listResult of
         RVal list' -> do
           annotate (showGroundValue list)

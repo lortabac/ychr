@@ -64,6 +64,12 @@ import YCHR.Types (ConstraintType (..))
 data Program = Program
   { -- | Number of distinct constraint types (for pre-allocating the store).
     numTypes :: !Int,
+    -- | Source names of constraint types, indexed by the 'ConstraintType'
+    -- integer. @typeNames !! i@ is the flattened source name (e.g.
+    -- @"Module:foo"@) of the type with index @i@. Used by runtime
+    -- introspection (e.g. @print_store@) and preserved across VM
+    -- serialization.
+    typeNames :: ![Text],
     -- | The procedures that make up the program.
     procedures :: [Procedure]
   }

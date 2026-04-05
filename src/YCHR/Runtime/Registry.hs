@@ -41,6 +41,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Effectful
+import YCHR.Runtime.Store (CHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), Value (..), VarId)
 import YCHR.Runtime.Var (Unify, deref, getVarId, newVar)
 import YCHR.VM (Name (..))
@@ -49,9 +50,10 @@ import YCHR.VM (Name (..))
 -- Types
 -- ---------------------------------------------------------------------------
 
--- | A host call function that can use logical variables and IO.
+-- | A host call function that can use logical variables, the constraint
+-- store, and IO.
 newtype HostCallFn = HostCallFn
-  {runHostCall :: forall es. (Unify :> es, IOE :> es) => [RuntimeVal] -> Eff es RuntimeVal}
+  {runHostCall :: forall es. (Unify :> es, CHRStore :> es, IOE :> es) => [RuntimeVal] -> Eff es RuntimeVal}
 
 -- | Registry of host language functions.
 type HostCallRegistry = Map Name HostCallFn

@@ -27,6 +27,7 @@ module YCHR.Runtime.Store
     idEqual,
     isConstraintType,
     getStoreSnapshot,
+    getAllStoredConstraints,
     isSuspAlive,
     suspArg,
   )
@@ -37,6 +38,9 @@ import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
+import Data.Text (Text)
+import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Data.Vector.Mutable (IOVector)
 import Data.Vector.Mutable qualified as MV
 import Effectful
@@ -60,6 +64,9 @@ data Suspension = Suspension
 -- | Internal state of the constraint store.
 data StoreState = StoreState
   { byType :: !(IOVector (Seq Suspension)),
+    -- | Source name of each constraint type, indexed by 'ConstraintType'.
+    -- Parallel to 'byType'. Used by introspection (e.g. @print_store@).
+    typeNames :: !(Vector Text),
     byId :: !(IORef (IntMap Suspension)),
     nextId :: !(IORef Int)
   }
@@ -74,15 +81,17 @@ type instance DispatchOf CHRStore = Static WithSideEffects
 
 newtype instance StaticRep CHRStore = CHRStoreRep StoreState
 
--- | Run a computation that uses 'CHRStore'. The @numTypes@ argument is the
--- number of distinct constraint types; the store pre-allocates a vector of
--- that size.
-runCHRStore :: (IOE :> es) => Int -> Eff (CHRStore : es) a -> Eff es a
-runCHRStore numTypes m = do
+-- | Run a computation that uses 'CHRStore'. The argument is the list of
+-- constraint type source names, indexed by 'ConstraintType'; its length
+-- determines the number of distinct types and the store pre-allocates a
+-- vector of that size.
+runCHRStore :: (IOE :> es) => [Text] -> Eff (CHRStore : es) a -> Eff es a
+runCHRStore typeNameList m = do
+  let numTypes = length typeNameList
   byType <- liftIO $ MV.replicate numTypes Seq.empty
   byId <- liftIO $ newIORef IntMap.empty
   nextId <- liftIO $ newIORef 0
-  evalStaticRep (CHRStoreRep (StoreState byType byId nextId)) m
+  evalStaticRep (CHRStoreRep (StoreState byType (V.fromList typeNameList) byId nextId)) m
 
 -- ---------------------------------------------------------------------------
 -- Internal helpers
@@ -181,6 +190,24 @@ getStoreSnapshot (ConstraintType idx) = do
   if idx >= 0 && idx < MV.length st.byType
     then unsafeEff_ $ MV.read st.byType idx
     else pure Seq.empty
+
+-- | Return a snapshot of every constraint type in the store, paired with
+-- its source name (from the 'runCHRStore' argument) and the sequence of
+-- stored suspensions. Types are returned in 'ConstraintType' index order.
+-- The returned 'Seq's are immutable snapshots; callers still need to
+-- filter out dead suspensions via 'isSuspAlive'.
+getAllStoredConstraints :: (CHRStore :> es) => Eff es [(Text, Seq Suspension)]
+getAllStoredConstraints = do
+  st <- getStoreState
+  let n = MV.length st.byType
+  unsafeEff_ $
+    traverse
+      ( \i -> do
+          susps <- MV.read st.byType i
+          let name = st.typeNames V.! i
+          pure (name, susps)
+      )
+      [0 .. n - 1]
 
 -- | Check if a suspension is alive by reading its IORef.
 isSuspAlive :: (CHRStore :> es) => Suspension -> Eff es Bool

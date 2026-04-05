@@ -96,7 +96,7 @@ interpret prog hostCalls entryName args = do
         . fmap fst
         . runWriter @[SuspensionId]
         $ m
-    runCHRStoreEff = YCHR.Runtime.Store.runCHRStore prog.numTypes
+    runCHRStoreEff = YCHR.Runtime.Store.runCHRStore prog.typeNames
     runPropHistoryEff = YCHR.Runtime.History.runPropHistory
     runReactQueueEff = YCHR.Runtime.Reactivation.runReactQueue
 

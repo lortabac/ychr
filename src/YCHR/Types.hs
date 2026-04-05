@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 -- | Shared types for CHR representations.
 --
 -- This module contains types that are identical across the surface
@@ -15,6 +17,9 @@ module YCHR.Types
     lookupSymbol,
     symbolTableToList,
     symbolTableSize,
+
+    -- * Name helpers
+    flattenName,
 
     -- * Terms
     Term (..),
@@ -62,6 +67,12 @@ data Name
   | -- | e.g., "Order", "leq"
     Qualified Text Text
   deriving (Show, Eq, Ord, Lift)
+
+-- | Flatten a 'Name' to its surface 'Text' form. Qualified names are
+-- rendered as @"Module:name"@.
+flattenName :: Name -> Text
+flattenName (Unqualified t) = t
+flattenName (Qualified m t) = m <> ":" <> t
 
 -- | A CHR constraint occurrence.
 data Constraint = Constraint
