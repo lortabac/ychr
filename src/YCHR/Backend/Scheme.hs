@@ -379,21 +379,17 @@ compileHostCall (Name n) args =
       derefedArgs = map (\a -> SList [SAtom "deref", compileExpr a]) args
    in SList (SAtom fn : derefedArgs)
 
--- | Compile a HostEval expression.  MakeTerm is interpreted as function
--- application; Var references are dereferenced.
+-- | Compile a HostEval expression.  Like the standard expression
+-- compiler, but Var references are dereferenced (following binding
+-- chains) and the transformation propagates recursively into
+-- sub-expressions.
 compileHostEval :: Expr -> SExpr
 compileHostEval (Lit l) = compileLiteral l
 compileHostEval (Var n) = SList [SAtom "deref", SAtom (mangleName n)]
-compileHostEval (MakeTerm (Name f) args)
-  | Map.member f hostCallMap =
-      let fn = hostCallMap Map.! f
-       in SList (SAtom fn : map compileHostEval args)
-  | otherwise =
-      compileExpr (MakeTerm (Name f) args)
 compileHostEval (HostCall n args) = compileHostCall n args
 compileHostEval (CallExpr n args) =
   SList (SAtom (mangleName n) : SAtom "%s" : map compileHostEval args)
-compileHostEval e = compileExpr e -- fallback
+compileHostEval e = compileExpr e -- MakeTerm, And, Or, etc.
 
 -- ---------------------------------------------------------------------------
 -- Unknown host call stubs
