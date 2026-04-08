@@ -384,9 +384,12 @@ compileHostCall (Name n) args =
 compileHostEval :: Expr -> SExpr
 compileHostEval (Lit l) = compileLiteral l
 compileHostEval (Var n) = SList [SAtom "deref", SAtom (mangleName n)]
-compileHostEval (MakeTerm (Name f) args) =
-  let fn = Map.findWithDefault f f hostCallMap
-   in SList (SAtom fn : map compileHostEval args)
+compileHostEval (MakeTerm (Name f) args)
+  | Map.member f hostCallMap =
+      let fn = hostCallMap Map.! f
+       in SList (SAtom fn : map compileHostEval args)
+  | otherwise =
+      compileExpr (MakeTerm (Name f) args)
 compileHostEval (HostCall n args) = compileHostCall n args
 compileHostEval (CallExpr n args) =
   SList (SAtom (mangleName n) : SAtom "%s" : map compileHostEval args)
