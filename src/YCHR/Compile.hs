@@ -9,7 +9,11 @@
 module YCHR.Compile
   ( CompileError (..),
     compile,
+    compileFunctionDef,
+    genCallFunDispatches,
+    buildFunctionSet,
     funcProcName,
+    vmName,
     procNameFor,
     tellProcName,
     activateProcName,
@@ -58,6 +62,7 @@ compile prog symTab =
       (funProcs, funErrs) = runPureEff . runWriter $ do
         traverse (compileFunctionDef funSet) prog.functions
       dispatch = genReactivateDispatch symTab
+      callFunDispatches = genCallFunDispatches prog.functions
       allErrs = occErrs ++ procErrs ++ funErrs
    in if null allErrs
         then
@@ -65,7 +70,7 @@ compile prog symTab =
             Program
               { numTypes = symbolTableSize symTab,
                 typeNames = buildTypeNames symTab,
-                procedures = procs ++ funProcs ++ [dispatch]
+                procedures = procs ++ funProcs ++ [dispatch] ++ callFunDispatches
               }
         else Left allErrs
 
@@ -413,6 +418,11 @@ compileTerm _ _ Wildcard = pure (Lit WildcardLit)
 -- | Like 'compileTerm', but also recognises function calls and emits
 -- 'CallExpr' for them.
 compileExpr :: Set Identifier -> VarMap -> SrcInfo -> Term -> Eff '[Writer [CompileError]] Expr
+compileExpr funSet varMap si (CompoundTerm (Types.Unqualified "call_fun") args)
+  | length args >= 2 = do
+      args' <- traverse (compileExpr funSet varMap si) args
+      let n = length args - 1
+      pure (CallExpr (Name ("call_fun_" <> T.pack (show n))) args')
 compileExpr funSet varMap si (CompoundTerm name args)
   | Set.member (Identifier name (length args)) funSet = do
       args' <- traverse (compileExpr funSet varMap si) args
@@ -536,6 +546,10 @@ compileBodyGoal funSet _ varMap si (D.BodyIs v expr) = do
     Nothing ->
       let varMap' = insertVar v (Var (Name v)) varMap
        in pure ([Let (Name v) (HostEval expr')], varMap')
+compileBodyGoal funSet _ varMap si (D.BodyFunctionCall (Types.Unqualified "call_fun") args) = do
+  args' <- traverse (compileExpr funSet varMap si) args
+  let n = length args - 1
+  pure ([ExprStmt (CallExpr (Name ("call_fun_" <> T.pack (show n))) args')], varMap)
 compileBodyGoal funSet _ varMap si (D.BodyFunctionCall name args) = do
   args' <- traverse (compileExpr funSet varMap si) args
   pure ([ExprStmt (CallExpr (funcProcName name (length args')) args')], varMap)
@@ -595,6 +609,70 @@ genReactivateDispatch symTab =
         (IsConstraintType (Var "susp") cType)
         [ExprStmt (CallExpr (activateProcName ident.name ident.arity) [Var "susp"])]
         []
+
+-- ---------------------------------------------------------------------------
+-- call_fun dispatch
+-- ---------------------------------------------------------------------------
+
+-- | Generate @call_fun_1@ and @call_fun_2@ dispatch procedures.
+-- Each procedure pattern-matches on the closure/function-reference term
+-- and dispatches to the appropriate compiled function.
+genCallFunDispatches :: [D.Function] -> [Procedure]
+genCallFunDispatches functions =
+  [genCallFunDispatch functions callArity | callArity <- [1, 2]]
+
+genCallFunDispatch :: [D.Function] -> Int -> Procedure
+genCallFunDispatch functions callArity =
+  let closureParam = Name "closure"
+      argParams = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. callArity - 1]]
+      procName = Name ("call_fun_" <> T.pack (show callArity))
+      funRefBranches = concatMap (genFunRefBranch callArity argParams) functions
+      lambdaBranches = concatMap (genLambdaBranch callArity argParams) functions
+      errorStmt = ExprStmt (HostCall "__chr_error" [Lit (AtomLit "call_fun: no matching closure")])
+   in Procedure procName (closureParam : argParams) (funRefBranches ++ lambdaBranches ++ [errorStmt])
+
+-- | Generate a dispatch branch for a function reference (@name/arity@).
+-- Only emits a branch when the function's arity matches @callArity@.
+genFunRefBranch :: Int -> [Name] -> D.Function -> [Stmt]
+genFunRefBranch callArity argParams func
+  | func.arity /= callArity = []
+  | otherwise =
+      let flatName = flattenName func.name
+          pName = funcProcName func.name func.arity
+          condition =
+            And
+              (MatchTerm (Var (Name "closure")) (Name "/") 2)
+              ( And
+                  (Equal (GetArg (Var (Name "closure")) 0) (Lit (AtomLit flatName)))
+                  (Equal (GetArg (Var (Name "closure")) 1) (Lit (IntLit func.arity)))
+              )
+       in [If condition [Return (CallExpr pName (map Var argParams))] []]
+
+-- | Generate a dispatch branch for a lifted lambda closure.
+-- Only emits a branch for functions whose name starts with @__lambda_@.
+genLambdaBranch :: Int -> [Name] -> D.Function -> [Stmt]
+genLambdaBranch callArity argParams func
+  | not (isLambdaFunc func) = []
+  | numCaptures < 0 = []
+  | otherwise =
+      let lambdaVmName = vmName func.name
+          pName = funcProcName func.name func.arity
+          condition = MatchTerm (Var (Name "closure")) lambdaVmName numCaptures
+          captureBinds =
+            [ Let (Name ("cap_" <> T.pack (show i))) (GetArg (Var (Name "closure")) i)
+            | i <- [0 .. numCaptures - 1]
+            ]
+          captureVars = [Var (Name ("cap_" <> T.pack (show i))) | i <- [0 .. numCaptures - 1]]
+          allArgs = captureVars ++ map Var argParams
+       in [If condition (captureBinds ++ [Return (CallExpr pName allArgs)]) []]
+  where
+    numCaptures = func.arity - callArity
+
+-- | Check if a function was generated by lambda lifting.
+isLambdaFunc :: D.Function -> Bool
+isLambdaFunc func = case func.name of
+  Types.Qualified _ n -> T.isPrefixOf "__lambda_" n
+  Types.Unqualified n -> T.isPrefixOf "__lambda_" n
 
 -- ---------------------------------------------------------------------------
 -- Naming helpers

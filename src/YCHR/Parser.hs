@@ -75,7 +75,9 @@ data OpTable = OpTable
 builtinOps :: OpTable
 builtinOps =
   mkOpTable
-    [ (700, [(InfixN_, "is"), (InfixN_, "=")]),
+    [ (200, [(InfixR_, "^")]),
+      (400, [(InfixN_, "/")]),
+      (700, [(InfixN_, "is"), (InfixN_, "=")]),
       (1100, [(InfixN_, "\\")]),
       (1180, [(InfixN_, "<=>"), (InfixN_, "==>")]),
       (1200, [(Prefix_, ":-")])

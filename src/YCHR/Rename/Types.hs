@@ -43,4 +43,4 @@ isReserved :: Text -> ReservedSymbols -> Bool
 isReserved t (ReservedSymbols s) = Set.member t s
 
 reservedSymbols :: ReservedSymbols
-reservedSymbols = ReservedSymbols $ Set.fromList ["true", "=", "is"]
+reservedSymbols = ReservedSymbols $ Set.fromList ["true", "=", "is", "^", "/", "call_fun"]

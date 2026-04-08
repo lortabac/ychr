@@ -1,0 +1,32 @@
+:- module(lambda_test, [result/2, double/1, apply/2, apply2/3, make_adder/1]).
+:- chr_constraint result/2.
+:- function double/1.
+:- function apply/2.
+:- function apply2/3.
+:- function make_adder/1.
+
+double(X) -> X + X.
+
+apply(F, X) -> call_fun(F, X).
+apply2(F, X, Y) -> call_fun(F, X, Y).
+
+% Returns a 1-arg lambda that adds N.
+make_adder(N) -> X^(X + N).
+
+% Test 1: function reference
+result(test1, R) <=> R is apply(double/1, 5).
+
+% Test 2: lambda
+result(test2, R) <=> R is apply(X^(X + 1), 5).
+
+% Test 3: lambda with free variable
+result(test3, R) <=> Offset is 10, R is apply(X^(X + Offset), 5).
+
+% Test 4: 2-arg lambda
+result(test4, R) <=> R is apply2(X^Y^(X + Y), 3, 4).
+
+% Test 5: function returning a lambda (closure)
+result(test5, R) <=> F is make_adder(10), R is call_fun(F, 20).
+
+% Test 6: direct call_fun in body
+result(test6, R) <=> R is call_fun(X^(X + 100), 1).

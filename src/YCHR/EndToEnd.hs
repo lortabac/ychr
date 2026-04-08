@@ -54,8 +54,8 @@ import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.Writer.Static.Local (Writer, listen, runWriter)
 import Text.Megaparsec (ParseErrorBundle)
 import YCHR.Collect (CollectError, collectLibraries)
-import YCHR.Compile (CompileError, compile, funcProcName, tellProcName)
-import YCHR.Desugar (DesugarError, desugarProgram, desugarQueryGoals, extractSymbolTable)
+import YCHR.Compile (CompileError, buildFunctionSet, compile, compileFunctionDef, funcProcName, genCallFunDispatches, tellProcName, vmName)
+import YCHR.Desugar (DesugarError, desugarProgram, desugarQueryGoals, extractSymbolTable, liftAllLambdas, liftQueryLambdas)
 import YCHR.Desugared qualified as D
 import YCHR.Meta (valueToTerm)
 import YCHR.Parsed (Import (..), Module (..), OpDecl (..), noAnn)
@@ -95,7 +95,11 @@ data CompiledProgram = CompiledProgram
     exportedSet :: Set Types.Identifier,
     symbolTable :: SymbolTable,
     allModules :: [Module],
-    opTable :: OpTable
+    opTable :: OpTable,
+    -- | All functions in the desugared program (for call_fun dispatch in queries).
+    allFunctions :: [D.Function],
+    -- | Counter for the next lambda index (to avoid collisions in queries).
+    nextLambdaIndex :: Int
   }
 
 data ExportResolution
@@ -138,10 +142,12 @@ compileModules includeStdlib inputs = do
           [Types.Identifier (Types.Qualified m n) a | ((n, a), ms) <- toListExport exportEnv, m <- ms]
   (renamed, renameWarnings) <- first RenameErrors (renameProgram collected)
   desugared <- first DesugarErrors (desugarProgram renamed)
-  let symTab = extractSymbolTable desugared
+  let desugared' = liftAllLambdas desugared
+      symTab = extractSymbolTable desugared'
       warnings = [RenameWarnings renameWarnings | not (null renameWarnings)]
-  prog <- first CompileErrors (compile desugared symTab)
-  pure (CompiledProgram prog exportMap exportedSet symTab collected table, warnings)
+  prog <- first CompileErrors (compile desugared' symTab)
+  let lambdaCount = length [() | f <- desugared'.functions, isLambdaName f.name]
+  pure (CompiledProgram prog exportMap exportedSet symTab collected table desugared'.functions lambdaCount, warnings)
   where
     first' f (Left e) = Left (f e)
     first' _ (Right x) = Right x
@@ -208,6 +214,29 @@ withCHR ::
   (forall es. (CHREffects es) => Eff es a) ->
   IO a
 withCHR cp hc action = runEff (runCHR cp hc action)
+
+-- | Like 'withCHR' but merges extra procedures (e.g. query-time lambda
+-- compilations and updated call_fun dispatches) into the ProcMap.
+withCHRExtra ::
+  CompiledProgram ->
+  HostCallRegistry ->
+  [Procedure] ->
+  (forall es. (CHREffects es) => Eff es a) ->
+  IO a
+withCHRExtra cp hc extraProcs action =
+  runEff
+    . runUnify
+    . runCHRStore cp.program.typeNames
+    . runPropHistory
+    . runReactQueue
+    . fmap fst
+    . runWriter @[SuspensionId]
+    . evalStaticRep (CHRRep procMap hc cp.exportMap cp.exportedSet)
+    $ action
+  where
+    baseProcMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- cp.program.procedures]
+    extraProcMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- extraProcs]
+    procMap = extraProcMap `Map.union` baseProcMap
 
 -- | Add a constraint to the store. The constraint name can be unqualified
 -- (resolved via the export map) or fully qualified.
@@ -321,8 +350,7 @@ termToValue (IntTerm n) = pure (VInt n)
 termToValue (AtomTerm s) = pure (VAtom s)
 termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard
-termToValue (CompoundTerm (Types.Unqualified f) ts) = VTerm f <$> traverse termToValue ts
-termToValue (CompoundTerm (Types.Qualified m f) ts) = VTerm (m <> ":" <> f) <$> traverse termToValue ts
+termToValue (CompoundTerm name ts) = VTerm (vmName name).unName <$> traverse termToValue ts
 
 -- ---------------------------------------------------------------------------
 -- Multi-goal query API
@@ -339,9 +367,16 @@ runProgramWithQuery cp hostCalls src =
     Right goals -> do
       (renamed, _renameWarnings) <- either (throwIO . RenameErrors) pure (renameQueryGoals cp.allModules goals)
       bodyGoals <- either (throwIO . DesugarErrors) pure (desugarQueryGoals cp.allModules renamed)
-      withCHR cp hostCalls $
+      -- Lambda-lift query body goals and compile the generated functions
+      let (liftedGoals, queryLambdas) = liftQueryLambdas cp.nextLambdaIndex bodyGoals
+          allFuns = cp.allFunctions ++ queryLambdas
+          funSet = buildFunctionSet (D.Program [] allFuns Map.empty [])
+          queryProcs = compileQueryLambdas funSet queryLambdas
+          queryDispatches = genCallFunDispatches allFuns
+          extraProcs = queryProcs ++ queryDispatches
+      withCHRExtra cp hostCalls extraProcs $
         evalState (Map.empty :: Map Text Value) $ do
-          mapM_ (executeBodyGoal hostCalls) bodyGoals
+          mapM_ (executeBodyGoal hostCalls) liftedGoals
           varMap <- get
           Map.traverseWithKey valueToTerm varMap
 
@@ -376,6 +411,13 @@ executeBodyGoal hc (D.BodyIs v expr) = do
 executeBodyGoal _ (D.BodyConstraint c) = do
   argVals <- traverse termToValue c.args
   tellConstraint c.name argVals
+executeBodyGoal hc (D.BodyFunctionCall (Types.Unqualified "call_fun") args) = do
+  CHRRep procMap _ _ _ <- getStaticRep
+  argVals <- traverse termToValue args
+  let n = length args - 1
+      dispatchName = Name ("call_fun_" <> T.pack (show n))
+  _ <- callProc procMap hc dispatchName (map RVal argVals)
+  pure ()
 executeBodyGoal hc (D.BodyFunctionCall name args) = do
   CHRRep procMap _ _ _ <- getStaticRep
   argVals <- traverse termToValue args
@@ -419,6 +461,16 @@ evalTermArith _ (VarTerm v) = do
       fresh <- newVar
       modify (Map.insert v fresh)
       pure fresh
+evalTermArith hc (CompoundTerm (Types.Unqualified "call_fun") args)
+  | length args >= 2 = do
+      CHRRep procMap _ _ _ <- getStaticRep
+      argVals <- traverse (evalTermArith hc) args
+      let n = length args - 1
+          dispatchName = Name ("call_fun_" <> T.pack (show n))
+      result <- callProc procMap hc dispatchName (map RVal argVals)
+      case result of
+        RVal val -> pure val
+        _ -> error "call_fun returned non-value"
 evalTermArith hc (CompoundTerm (Types.Qualified "host" f) args) = do
   argVals <- traverse (evalTermArith hc) args
   result <- hostCall (Map.lookup (Name f) hc) f (map RVal argVals)
@@ -435,7 +487,15 @@ evalTermArith hc (CompoundTerm name args) = do
       case result of
         RVal val -> pure val
         _ -> error "function call returned non-value in expression position"
-    else pure $ VTerm (termFunctor name) argVals
-  where
-    termFunctor (Types.Qualified m n) = m <> ":" <> n
-    termFunctor (Types.Unqualified n) = n
+    else pure $ VTerm (vmName name).unName argVals
+
+-- | Check if a name is a lambda (generated by lambda lifting).
+isLambdaName :: Types.Name -> Bool
+isLambdaName (Types.Qualified _ n) = T.isPrefixOf "__lambda_" n
+isLambdaName (Types.Unqualified n) = T.isPrefixOf "__lambda_" n
+
+-- | Compile lifted lambda functions for use in queries.
+compileQueryLambdas :: Set Types.Identifier -> [D.Function] -> [Procedure]
+compileQueryLambdas funSet lambdas =
+  let (procs, _errs) = runPureEff . runWriter $ traverse (compileFunctionDef funSet) lambdas
+   in procs

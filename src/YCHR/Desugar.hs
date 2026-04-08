@@ -25,6 +25,8 @@ module YCHR.Desugar
   ( DesugarError (..),
     desugarProgram,
     desugarQueryGoals,
+    liftAllLambdas,
+    liftQueryLambdas,
     SymbolTable,
     extractSymbolTable,
   )
@@ -299,6 +301,9 @@ desugarBodyGoal funSet loc t = case t of
         pure $ D.BodyFunctionCall name args
   CompoundTerm name@(Qualified _ _) args ->
     pure $ D.BodyConstraint (Constraint name args)
+  CompoundTerm (Unqualified "call_fun") args
+    | length args >= 2 ->
+        pure $ D.BodyFunctionCall (Unqualified "call_fun") args
   AtomTerm "true" -> pure $ D.BodyCommon D.GoalTrue
   CompoundTerm (Unqualified _) _ -> do
     tell [UnexpectedBodyTerm loc t]
@@ -306,3 +311,184 @@ desugarBodyGoal funSet loc t = case t of
   _ -> do
     tell [UnexpectedBodyTerm loc t]
     pure $ D.BodyCommon D.GoalTrue
+
+-- ---------------------------------------------------------------------------
+-- Lambda lifting
+-- ---------------------------------------------------------------------------
+
+data LiftState = LiftState
+  { liftCounter :: !Int,
+    liftedFunctions :: [D.Function]
+  }
+
+-- | Collect all variable names from a term.
+termVars :: Term -> Set.Set Text
+termVars (VarTerm v) = Set.singleton v
+termVars (CompoundTerm _ args) = Set.unions (map termVars args)
+termVars _ = Set.empty
+
+-- | Extract the parameter chain from a right-nested @^@ term.
+-- @X^Y^body@ yields @(["X","Y"], body)@.
+extractLambdaParams :: Term -> ([Text], Term)
+extractLambdaParams (CompoundTerm (Unqualified "^") [VarTerm v, body]) =
+  let (params, innerBody) = extractLambdaParams body
+   in (v : params, innerBody)
+extractLambdaParams t = ([], t)
+
+-- | Lift lambdas in a single term.  Returns the updated state and the
+-- rewritten term (with @^@ replaced by closure compound terms).
+liftTerm :: Text -> Set.Set Text -> LiftState -> Term -> (LiftState, Term)
+liftTerm modName scope st term = case term of
+  CompoundTerm (Unqualified "^") _ ->
+    let (params, body) = extractLambdaParams term
+        paramSet = Set.fromList params
+        bodyVars = termVars body
+        freeVars = Set.toAscList (bodyVars `Set.intersection` scope `Set.difference` paramSet)
+        innerScope = scope `Set.union` paramSet
+        (st', liftedBody) = liftTerm modName innerScope st body
+        idx = st'.liftCounter
+        lambdaName = "__lambda_" <> T.pack (show idx)
+        qualName = Qualified modName lambdaName
+        allParams = map VarTerm freeVars ++ map VarTerm params
+        func =
+          D.Function
+            { name = qualName,
+              arity = length allParams,
+              argTypes = Nothing,
+              returnType = Nothing,
+              equations =
+                [ D.Equation
+                    { params = allParams,
+                      guards = [],
+                      rhs = liftedBody
+                    }
+                ]
+            }
+        st'' = st' {liftCounter = idx + 1, liftedFunctions = func : st'.liftedFunctions}
+     in (st'', CompoundTerm (Qualified modName lambdaName) (map VarTerm freeVars))
+  CompoundTerm name args ->
+    let (st', args') = mapAccumL (liftTerm modName scope) st args
+     in (st', CompoundTerm name args')
+  _ -> (st, term)
+
+-- | Lift lambdas in a body goal.
+liftBodyGoal :: Text -> Set.Set Text -> LiftState -> D.BodyGoal -> (LiftState, D.BodyGoal)
+liftBodyGoal modName scope st goal = case goal of
+  D.BodyIs v expr ->
+    let (st', expr') = liftTerm modName scope st expr
+     in (st', D.BodyIs v expr')
+  D.BodyFunctionCall name args ->
+    let (st', args') = mapAccumL (liftTerm modName scope) st args
+     in (st', D.BodyFunctionCall name args')
+  D.BodyConstraint (Constraint cname cargs) ->
+    let (st', cargs') = mapAccumL (liftTerm modName scope) st cargs
+     in (st', D.BodyConstraint (Constraint cname cargs'))
+  D.BodyUnify t1 t2 ->
+    let (st', t1') = liftTerm modName scope st t1
+        (st'', t2') = liftTerm modName scope st' t2
+     in (st'', D.BodyUnify t1' t2')
+  D.BodyHostStmt f args ->
+    let (st', args') = mapAccumL (liftTerm modName scope) st args
+     in (st', D.BodyHostStmt f args')
+  D.BodyCommon g -> (st, D.BodyCommon g)
+
+-- | Lift lambdas in a guard.
+liftGuard :: Text -> Set.Set Text -> LiftState -> D.Guard -> (LiftState, D.Guard)
+liftGuard modName scope st (D.GuardExpr term) =
+  let (st', term') = liftTerm modName scope st term
+   in (st', D.GuardExpr term')
+liftGuard _ _ st g = (st, g)
+
+-- | Lift lambdas in a function equation.
+liftEquation :: Text -> LiftState -> D.Equation -> (LiftState, D.Equation)
+liftEquation modName st eq =
+  let scope = Set.unions (map termVars eq.params)
+      (st', guards') = mapAccumL (liftGuard modName scope) st eq.guards
+      (st'', rhs') = liftTerm modName scope st' eq.rhs
+   in (st'', eq {D.guards = guards', D.rhs = rhs'})
+
+-- | Lift lambdas in a function definition.
+liftFunction :: LiftState -> D.Function -> (LiftState, D.Function)
+liftFunction st func =
+  let modName = case func.name of
+        Qualified m _ -> m
+        Unqualified _ -> ""
+      (st', eqs') = mapAccumL (liftEquation modName) st func.equations
+   in (st', func {D.equations = eqs'})
+
+-- | Extract all variables from a rule head (kept + removed constraints).
+ruleHeadVars :: D.Head -> Set.Set Text
+ruleHeadVars h =
+  Set.unions
+    [ termVars arg
+    | c <- h.kept ++ h.removed,
+      arg <- c.args
+    ]
+
+-- | Extract the module name from a rule's head constraints.
+ruleModName :: D.Head -> Text
+ruleModName h = case h.kept ++ h.removed of
+  (Constraint (Qualified m _) _ : _) -> m
+  _ -> ""
+
+-- | Collect all variables from a list of body goals.
+bodyGoalVars :: [D.BodyGoal] -> Set.Set Text
+bodyGoalVars = Set.unions . map goalVars
+  where
+    goalVars (D.BodyIs v expr) = Set.insert v (termVars expr)
+    goalVars (D.BodyFunctionCall _ args) = Set.unions (map termVars args)
+    goalVars (D.BodyConstraint (Constraint _ args)) = Set.unions (map termVars args)
+    goalVars (D.BodyUnify t1 t2) = termVars t1 `Set.union` termVars t2
+    goalVars (D.BodyHostStmt _ args) = Set.unions (map termVars args)
+    goalVars (D.BodyCommon _) = Set.empty
+
+-- | Collect all variables from a list of guards.
+guardVars :: [D.Guard] -> Set.Set Text
+guardVars = Set.unions . map gVars
+  where
+    gVars (D.GuardExpr t) = termVars t
+    gVars (D.GuardEqual t1 t2) = termVars t1 `Set.union` termVars t2
+    gVars (D.GuardGetArg v t _) = Set.insert v (termVars t)
+    gVars (D.GuardMatch t _ _) = termVars t
+    gVars (D.GuardCommon _) = Set.empty
+
+-- | Lift lambdas in a rule. The scope includes all variables from the
+-- entire rule (head, guard, and body).
+liftRule :: LiftState -> D.Rule -> (LiftState, D.Rule)
+liftRule st rule =
+  let headNode = rule.head.node
+      scope =
+        ruleHeadVars headNode
+          `Set.union` guardVars rule.guard.node
+          `Set.union` bodyGoalVars rule.body.node
+      modName = ruleModName headNode
+      (st', guards') = mapAccumL (liftGuard modName scope) st rule.guard.node
+      (st'', body') = mapAccumL (liftBodyGoal modName scope) st' rule.body.node
+   in ( st'',
+        rule
+          { D.guard = rule.guard {node = guards'},
+            D.body = rule.body {node = body'}
+          }
+      )
+
+-- | Post-desugaring pass: lift all lambda expressions into top-level functions.
+liftAllLambdas :: D.Program -> D.Program
+liftAllLambdas prog =
+  let initState = LiftState 0 []
+      (st1, functions') = mapAccumL liftFunction initState prog.functions
+      (st2, rules') = mapAccumL liftRule st1 prog.rules
+   in prog
+        { D.functions = functions' ++ st2.liftedFunctions,
+          D.rules = rules'
+        }
+
+-- | Lift lambdas from query body goals. Returns the rewritten goals
+-- and any generated function definitions (to be compiled on the fly).
+-- Uses @\"__query\"@ as the module name for lifted lambdas, and starts
+-- the counter high enough to avoid collisions with program lambdas.
+liftQueryLambdas :: Int -> [D.BodyGoal] -> ([D.BodyGoal], [D.Function])
+liftQueryLambdas startCounter goals =
+  let scope = bodyGoalVars goals
+      initState = LiftState startCounter []
+      (st, goals') = mapAccumL (liftBodyGoal "__query" scope) initState goals
+   in (goals', st.liftedFunctions)
