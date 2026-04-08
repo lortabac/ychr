@@ -14,11 +14,12 @@ import System.Exit (exitFailure)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hPutStr, stderr)
 import YCHR.Backend.Scheme (generateScheme)
+import YCHR.Backend.SchemeDriver (generateDriver)
 import YCHR.Display (Display (..), displayMsg)
-import YCHR.EndToEnd (CompiledProgram (..), Error, Warning, compileFiles, compileModules, runProgramWithGoal, runProgramWithQuery)
+import YCHR.EndToEnd (CompiledProgram (..), Error, Warning, compileFiles, compileModules, resolveQueryConstraint, runProgramWithGoal, runProgramWithQuery)
 import YCHR.Meta (metaHostCallRegistry)
 import YCHR.Parsed qualified as Parsed
-import YCHR.Parser (opTableEntries)
+import YCHR.Parser (opTableEntries, parseConstraint)
 import YCHR.Pretty (prettyBindings, prettyQueryResult, renderAtom)
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
 import YCHR.VM.SExpr (VMProgram (..), serialize)
@@ -36,10 +37,15 @@ data CompileOpts = CompileOpts
     target :: Target
   }
 
+data GenDriverOpts = GenDriverOpts
+  { gdGoal :: T.Text
+  }
+
 data Command
   = Repl [FilePath]
   | Run RunOpts [FilePath]
   | Compile CompileOpts [FilePath]
+  | GenDriver GenDriverOpts [FilePath]
 
 filesArg :: Parser [FilePath]
 filesArg = many (argument str (metavar "FILES..."))
@@ -72,12 +78,21 @@ compileParser =
         )
     <*> filesArg
 
+genDriverParser :: Parser Command
+genDriverParser =
+  GenDriver
+    <$> ( GenDriverOpts
+            <$> fmap T.pack (strOption (short 'g' <> metavar "GOAL" <> help "Goal to execute"))
+        )
+    <*> filesArg
+
 commandParser :: Parser Command
 commandParser =
   subparser
     ( command "repl" (info (replParser <**> helper) (progDesc "Start the interactive REPL (default)"))
         <> command "run" (info (runParser <**> helper) (progDesc "Compile and run a goal"))
         <> command "compile" (info (compileParser <**> helper) (progDesc "Compile to a target format"))
+        <> command "gen-driver" (info (genDriverParser <**> helper) (progDesc "Generate a Scheme driver script for a goal"))
     )
     <|> replParser
 
@@ -88,6 +103,7 @@ main = do
     Repl files -> runRepl files
     Run opts files -> runGoal opts files
     Compile opts files -> runCompile opts files
+    GenDriver opts files -> runGenDriver opts files
 
 printWarnings :: [Warning] -> IO ()
 printWarnings = mapM_ (\w -> hPutStr stderr (displayMsg w ++ "\n"))
@@ -253,6 +269,34 @@ runCompile opts files = do
           createDirectoryIfMissing True (takeDirectory outPath)
           TIO.writeFile outPath (generateScheme libName vmp)
           putStrLn outPath
+
+runGenDriver :: GenDriverOpts -> [FilePath] -> IO ()
+runGenDriver opts files = do
+  result <- case files of
+    [] -> pure (compileModules False [])
+    _ -> compileFiles False files
+  case result of
+    Left err -> do
+      putStrLn (displayMsg err)
+      exitFailure
+    Right (prog, warnings) -> do
+      printWarnings warnings
+      constraint <- case parseConstraint "<query>" opts.gdGoal of
+        Left err -> do
+          putStrLn (show err)
+          exitFailure
+        Right c -> pure c
+      resolved <- case resolveQueryConstraint prog constraint of
+        Left err -> do
+          putStrLn err
+          exitFailure
+        Right c -> pure c
+      let stdlibNames = map T.pack ["builtins", "lists", "strings", "meta", "test"]
+          userModules = [n | Parsed.Module {name = n} <- prog.allModules, n `notElem` stdlibNames]
+          name = case userModules of
+            (n : _) -> n
+            [] -> T.pack "program"
+      TIO.putStr (generateDriver name resolved)
 
 hostCalls :: HostCallRegistry
 hostCalls = baseHostCallRegistry <> metaHostCallRegistry

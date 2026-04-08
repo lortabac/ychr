@@ -127,6 +127,7 @@ library
     import:           warnings
 
     exposed-modules:  YCHR.Backend.Scheme
+                    , YCHR.Backend.SchemeDriver
                     , YCHR.Collect
                     , YCHR.Compile
                     , YCHR.Compile.Types

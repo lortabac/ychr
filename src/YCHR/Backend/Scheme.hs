@@ -11,6 +11,8 @@
 -- to avoid collisions with user-defined identifiers.
 module YCHR.Backend.Scheme
   ( generateScheme,
+    compileSymbol,
+    isValidSchemeIdentifier,
   )
 where
 
