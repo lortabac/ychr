@@ -59,6 +59,7 @@ R = true.
 - [x] Renaming (module-qualified constraint names)
 - [x] Desugaring
 - [x] User-defined functions (pattern-matching equations with guards)
+- [x] Lambdas and function references
 
 ### Compiler
 
