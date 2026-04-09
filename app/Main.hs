@@ -1,6 +1,7 @@
 module Main where
 
 import Control.Exception (SomeException, displayException, fromException, try)
+import Control.Monad (unless)
 import Control.Monad.IO.Class (liftIO)
 import Data.List (isPrefixOf, nub)
 import Data.List qualified as List
@@ -41,8 +42,12 @@ data GenDriverOpts = GenDriverOpts
   { gdGoal :: T.Text
   }
 
+data ReplOpts = ReplOpts
+  { quiet :: Bool
+  }
+
 data Command
-  = Repl [FilePath]
+  = Repl ReplOpts [FilePath]
   | Run RunOpts [FilePath]
   | Compile CompileOpts [FilePath]
   | GenDriver GenDriverOpts [FilePath]
@@ -51,7 +56,10 @@ filesArg :: Parser [FilePath]
 filesArg = many (argument str (metavar "FILES..."))
 
 replParser :: Parser Command
-replParser = Repl <$> filesArg
+replParser =
+  Repl
+    <$> (ReplOpts <$> switch (long "quiet" <> help "Suppress prompt and warnings"))
+    <*> filesArg
 
 runParser :: Parser Command
 runParser =
@@ -100,7 +108,7 @@ main :: IO ()
 main = do
   cmd <- execParser (info (commandParser <**> helper) (fullDesc <> progDesc "CHR compiler"))
   case cmd of
-    Repl files -> runRepl files
+    Repl opts files -> runRepl opts files
     Run opts files -> runGoal opts files
     Compile opts files -> runCompile opts files
     GenDriver opts files -> runGenDriver opts files
@@ -108,8 +116,8 @@ main = do
 printWarnings :: [Warning] -> IO ()
 printWarnings = mapM_ (\w -> hPutStr stderr (displayMsg w ++ "\n"))
 
-runRepl :: [FilePath] -> IO ()
-runRepl files = do
+runRepl :: ReplOpts -> [FilePath] -> IO ()
+runRepl opts files = do
   result <- case files of
     [] -> pure (compileModules True [])
     _ -> compileFiles True files
@@ -118,19 +126,19 @@ runRepl files = do
       putStrLn (displayMsg err)
       exitFailure
     Right (prog, warnings) -> do
-      printWarnings warnings
+      unless opts.quiet $ printWarnings warnings
       histFile <- getXdgDirectory XdgData "ychr/history"
       createDirectoryIfMissing True (takeDirectory histFile)
       let CompiledProgram {exportMap = em} = prog
           constraintNames = nub [T.unpack n | (n, _) <- Map.keys em]
-          completions = [":quit", ":recompile", ":help", ":list_files", ":list_modules", ":list_declarations", ":list_operators"] ++ constraintNames
+          completions = [":quit", ":recompile", ":help", ":list_files", ":list_modules", ":list_declarations", ":list_operators", "call_fun"] ++ constraintNames
           completeFunc = completeWord Nothing " ," $ \prefix ->
             return $ map (\n -> (simpleCompletion n) {isFinished = False}) $ filter (isPrefixOf prefix) completions
           settings = (defaultSettings :: Settings IO) {historyFile = Just histFile, complete = completeFunc}
-      runInputT settings (repl files prog)
+      runInputT settings (repl opts.quiet files prog)
 
-repl :: [FilePath] -> CompiledProgram -> InputT IO ()
-repl files prog = loop
+repl :: Bool -> [FilePath] -> CompiledProgram -> InputT IO ()
+repl quietMode files prog = loop
   where
     showHelp = do
       outputStrLn "Commands:"
@@ -183,9 +191,9 @@ repl files prog = loop
           loop
         Right (prog', warnings) -> do
           liftIO (printWarnings warnings)
-          repl files prog'
+          repl quietMode files prog'
     loop = do
-      minput <- getInputLine "ychr> "
+      minput <- getInputLine (if quietMode then "" else "ychr> ")
       case minput of
         Nothing -> return ()
         Just ":quit" -> return ()

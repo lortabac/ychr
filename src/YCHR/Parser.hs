@@ -466,7 +466,7 @@ listTermP = between (symbol "[") (symbol "]") listBody
 lambdaP :: Parser Term
 lambdaP = do
   _ <- wordOp "fun"
-  params <- parens (varP `sepBy1` comma)
+  params <- parens ((varP <|> wildcardP) `sepBy1` comma)
   _ <- symbol "->"
   body <- termP
   pure (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body])

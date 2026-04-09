@@ -11,3 +11,4 @@ CLAUDE.local.md
 .env
 .envrc.local
 *.log
+*.pyc

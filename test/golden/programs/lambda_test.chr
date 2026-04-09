@@ -30,3 +30,6 @@ result(test5, R) <=> F is make_adder(10), R is call_fun(F, 20).
 
 % Test 6: direct call_fun in body
 result(test6, R) <=> R is call_fun(fun(X) -> X + 100, 1).
+
+% Test 7: wildcards in lambdas
+result(test7, R) <=> R is call_fun(fun(X, _) -> X, 1, 2).

@@ -328,9 +328,10 @@ termVars (CompoundTerm _ args) = Set.unions (map termVars args)
 termVars _ = Set.empty
 
 -- | Extract parameters and body from a @fun(X, Y) -> body@ lambda term.
-extractLambdaParams :: Term -> ([Text], Term)
+-- Parameters are kept as 'Term' values ('VarTerm' or 'Wildcard').
+extractLambdaParams :: Term -> ([Term], Term)
 extractLambdaParams (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body]) =
-  ([v | VarTerm v <- params], body)
+  (params, body)
 extractLambdaParams t = ([], t)
 
 -- | Lift lambdas in a single term.  Returns the updated state and the
@@ -339,15 +340,15 @@ liftTerm :: Text -> Set.Set Text -> LiftState -> Term -> (LiftState, Term)
 liftTerm modName scope st term = case term of
   CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") _, _] ->
     let (params, body) = extractLambdaParams term
-        paramSet = Set.fromList params
+        paramVarNames = Set.fromList [v | VarTerm v <- params]
         bodyVars = termVars body
-        freeVars = Set.toAscList (bodyVars `Set.intersection` scope `Set.difference` paramSet)
-        innerScope = scope `Set.union` paramSet
+        freeVars = Set.toAscList (bodyVars `Set.intersection` scope `Set.difference` paramVarNames)
+        innerScope = scope `Set.union` paramVarNames
         (st', liftedBody) = liftTerm modName innerScope st body
         idx = st'.liftCounter
         lambdaName = "__lambda_" <> T.pack (show idx)
         qualName = Qualified modName lambdaName
-        allParams = map VarTerm freeVars ++ map VarTerm params
+        allParams = map VarTerm freeVars ++ params
         func =
           D.Function
             { name = qualName,
