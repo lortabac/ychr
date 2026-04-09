@@ -75,8 +75,7 @@ data OpTable = OpTable
 builtinOps :: OpTable
 builtinOps =
   mkOpTable
-    [ (200, [(InfixR_, "^")]),
-      (400, [(InfixN_, "/")]),
+    [ (400, [(InfixN_, "/")]),
       (700, [(InfixN_, "is"), (InfixN_, "=")]),
       (1100, [(InfixN_, "\\")]),
       (1180, [(InfixN_, "<=>"), (InfixN_, "==>")]),
@@ -305,7 +304,7 @@ comma = void (symbol ",")
 -- | Reserved words that cannot be used as unquoted atoms (they are operators).
 -- See Note [Two atom rejection mechanisms].
 reservedWords :: [Text]
-reservedWords = ["is"]
+reservedWords = ["is", "fun"]
 
 -- | Parse an atom: a lowercase identifier or a single-quoted string.
 --
@@ -461,11 +460,23 @@ listTermP = between (symbol "[") (symbol "]") listBody
       tail_ <- option (AtomTerm "[]") (symbol "|" *> termP)
       pure (foldr (\h t -> CompoundTerm (Unqualified ".") [h, t]) tail_ elems)
 
+-- | Parse a lambda expression: @fun(X, Y) -> body@.
+--
+-- Produces @CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body]@.
+lambdaP :: Parser Term
+lambdaP = do
+  _ <- wordOp "fun"
+  params <- parens (varP `sepBy1` comma)
+  _ <- symbol "->"
+  body <- termP
+  pure (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body])
+
 -- | Parse an atomic (non-operator) term.
 atomicTermP :: Parser Term
 atomicTermP =
   choice
-    [ wildcardP,
+    [ try lambdaP,
+      wildcardP,
       varP,
       try intP,
       stringP,

@@ -59,7 +59,7 @@ prettyTerm (CompoundTerm (Qualified m f) ts) =
 -- ---------------------------------------------------------------------------
 
 reservedWordsSrc :: [Text]
-reservedWordsSrc = ["is"]
+reservedWordsSrc = ["is", "fun"]
 
 -- | True if the atom string requires single-quote wrapping.
 needsQuoting :: Text -> Bool
@@ -110,6 +110,8 @@ prettyTermSrc (CompoundTerm (Unqualified ".") [h, t]) =
     prettyListTailSrc (CompoundTerm (Unqualified ".") [h', t']) =
       ", " ++ prettyTermSrc h' ++ prettyListTailSrc t'
     prettyListTailSrc other = "|" ++ prettyTermSrc other
+prettyTermSrc (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body]) =
+  "fun(" ++ intercalate ", " (map prettyTermSrc params) ++ ") -> " ++ prettyTermSrc body
 prettyTermSrc (CompoundTerm (Unqualified op) [l, r])
   | op `elem` infixOpsSrc =
       "(" ++ prettyTermSrc l ++ " " ++ T.unpack op ++ " " ++ prettyTermSrc r ++ ")"

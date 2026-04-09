@@ -231,10 +231,10 @@ renameTerm declEnv exportEnv dcEnv m loc mode t = case t of
     renamedLhs <- renameTerm declEnv exportEnv dcEnv m loc NoResolve lhs
     renamedRhs <- renameTerm declEnv exportEnv dcEnv m loc ResolveAll rhs
     pure (CompoundTerm (Unqualified "is") [renamedLhs, renamedRhs])
-  -- Lambda: left child is a variable pattern (don't resolve), right is the body.
-  CompoundTerm (Unqualified "^") [param, body] | mode /= NoResolve -> do
+  -- Lambda: fun(params) -> body.  Params are variable patterns (don't resolve).
+  CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body] | mode /= NoResolve -> do
     renamedBody <- renameTerm declEnv exportEnv dcEnv m loc ResolveAll body
-    pure (CompoundTerm (Unqualified "^") [param, renamedBody])
+    pure (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, renamedBody])
   -- Function reference: resolve the function name.
   CompoundTerm (Unqualified "/") [AtomTerm fname, IntTerm farity] | mode /= NoResolve -> do
     resolved <- resolveName AcceptUnknownName declEnv exportEnv dcEnv m loc (Unqualified fname) farity

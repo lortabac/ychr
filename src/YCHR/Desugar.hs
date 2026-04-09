@@ -327,19 +327,17 @@ termVars (VarTerm v) = Set.singleton v
 termVars (CompoundTerm _ args) = Set.unions (map termVars args)
 termVars _ = Set.empty
 
--- | Extract the parameter chain from a right-nested @^@ term.
--- @X^Y^body@ yields @(["X","Y"], body)@.
+-- | Extract parameters and body from a @fun(X, Y) -> body@ lambda term.
 extractLambdaParams :: Term -> ([Text], Term)
-extractLambdaParams (CompoundTerm (Unqualified "^") [VarTerm v, body]) =
-  let (params, innerBody) = extractLambdaParams body
-   in (v : params, innerBody)
+extractLambdaParams (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body]) =
+  ([v | VarTerm v <- params], body)
 extractLambdaParams t = ([], t)
 
 -- | Lift lambdas in a single term.  Returns the updated state and the
 -- rewritten term (with @^@ replaced by closure compound terms).
 liftTerm :: Text -> Set.Set Text -> LiftState -> Term -> (LiftState, Term)
 liftTerm modName scope st term = case term of
-  CompoundTerm (Unqualified "^") _ ->
+  CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") _, _] ->
     let (params, body) = extractLambdaParams term
         paramSet = Set.fromList params
         bodyVars = termVars body
