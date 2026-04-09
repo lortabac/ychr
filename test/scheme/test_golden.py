@@ -14,17 +14,17 @@ GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden")
 
 
 def discover_tests():
-    """Scan test/golden/queries/*.query and return sorted test names."""
-    queries = glob.glob(os.path.join(GOLDEN_DIR, "queries", "*.query"))
+    """Scan test/golden/goals/*.goal and return sorted test names."""
+    goals = glob.glob(os.path.join(GOLDEN_DIR, "goals", "*.goal"))
     return sorted(
-        os.path.splitext(os.path.basename(q))[0] for q in queries
+        os.path.splitext(os.path.basename(g))[0] for g in goals
     )
 
 
 @pytest.mark.parametrize("test_name", discover_tests())
 def test_scheme_golden(test_name, ychr_bin, guile_bin, scheme_lib_dir, project_root, tmp_path):
     program = os.path.join(GOLDEN_DIR, "programs", f"{test_name}.chr")
-    query_file = os.path.join(GOLDEN_DIR, "queries", f"{test_name}.query")
+    query_file = os.path.join(GOLDEN_DIR, "goals", f"{test_name}.goal")
     expected_file = os.path.join(GOLDEN_DIR, "expected", f"{test_name}.expected")
 
     with open(query_file) as f:

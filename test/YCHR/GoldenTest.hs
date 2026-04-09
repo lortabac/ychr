@@ -16,12 +16,12 @@ import YCHR.Runtime.Interpreter (baseHostCallRegistry)
 
 tests :: IO TestTree
 tests = do
-  let queryDir = "test/golden/queries"
+  let goalDir = "test/golden/goals"
   names <-
     sort
       . map dropExtension
-      . filter ((== ".query") . takeExtension)
-      <$> listDirectory queryDir
+      . filter ((== ".goal") . takeExtension)
+      <$> listDirectory goalDir
   trees <- mapM (makeGoldenTest "test/golden") names
   pure (testGroup "Golden" trees)
 
@@ -30,7 +30,7 @@ makeGoldenTest base name = pure $ testCase name $ do
   (prog, _) <-
     compileFiles False [base </> "programs" </> name <.> "chr"]
       >>= either (assertFailure . show) pure
-  query <- TIO.readFile (base </> "queries" </> name <.> "query")
+  query <- TIO.readFile (base </> "goals" </> name <.> "goal")
   expected <- readFile (base </> "expected" </> name <.> "expected")
   (_, bindings) <- runProgramWithGoal prog (baseHostCallRegistry <> metaHostCallRegistry) (T.strip query)
   prettyBindings bindings @?= expected
