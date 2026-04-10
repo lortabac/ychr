@@ -27,6 +27,7 @@ module YCHR.Runtime.Var
     newVar,
     deref,
     unify,
+    unifiable,
     equal,
     makeTerm,
     matchTerm,
@@ -178,6 +179,68 @@ unifyArgs (a : as) (b : bs) = do
     then unifyArgs as bs
     else pure False
 unifyArgs _ _ = pure False -- arity mismatch (shouldn't happen)
+
+-- | Check whether two values can be unified, without committing any
+-- bindings. Returns 'True' iff 'unify' would succeed.
+--
+-- Mutations made to variable cells during the check are recorded on a
+-- local trail and rolled back before returning, so the operation is
+-- observably pure with respect to variable bindings. Path compression
+-- performed by 'deref' is preserved (it is semantically invisible).
+-- Observer lists are never modified. No 'Writer' effect is needed.
+unifiable :: (Unify :> es) => Value -> Value -> Eff es Bool
+unifiable a b = do
+  trailRef <- unsafeEff_ $ newIORef []
+  result <- uni trailRef a b
+  unsafeEff_ $ do
+    entries <- readIORef trailRef
+    -- Entries are prepended newest-first, so walking front-to-back
+    -- restores each cell to its oldest captured state.
+    mapM_ (\(Var ref, st) -> writeIORef ref st) entries
+  pure result
+  where
+    trailWrite trailRef var@(Var ref) newSt = unsafeEff_ $ do
+      cur <- readIORef ref
+      modifyIORef' trailRef ((var, cur) :)
+      writeIORef ref newSt
+
+    uni trailRef v1 v2 = do
+      d1 <- deref v1
+      d2 <- deref v2
+      uni' trailRef d1 d2
+
+    uni' _ VWildcard _ = pure True
+    uni' _ _ VWildcard = pure True
+    uni' _ (VVar (Var ref1)) (VVar (Var ref2))
+      | ref1 == ref2 = pure True
+    uni' trailRef (VVar var1) v2@(VVar _) = do
+      st1 <- readVarState var1
+      case st1 of
+        Bound {} -> error "unifiable: unexpected Bound after deref"
+        Unbound _ _ -> do
+          trailWrite trailRef var1 (Bound v2)
+          pure True
+    uni' trailRef (VVar var) v = do
+      st <- readVarState var
+      case st of
+        Bound {} -> error "unifiable: unexpected Bound after deref"
+        Unbound _ _ -> do
+          trailWrite trailRef var (Bound v)
+          pure True
+    uni' trailRef v (VVar vr) = uni' trailRef (VVar vr) v
+    uni' _ (VInt x) (VInt y) = pure (x == y)
+    uni' _ (VAtom x) (VAtom y) = pure (x == y)
+    uni' _ (VText x) (VText y) = pure (x == y)
+    uni' _ (VBool x) (VBool y) = pure (x == y)
+    uni' trailRef (VTerm f1 args1) (VTerm f2 args2)
+      | f1 == f2 && length args1 == length args2 = uniArgs trailRef args1 args2
+    uni' _ _ _ = pure False
+
+    uniArgs _ [] [] = pure True
+    uniArgs trailRef (x : xs) (y : ys) = do
+      ok <- uni trailRef x y
+      if ok then uniArgs trailRef xs ys else pure False
+    uniArgs _ _ _ = pure False
 
 -- | Check equality of two values (ask semantics, Prolog @==@).
 --

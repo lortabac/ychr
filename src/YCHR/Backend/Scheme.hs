@@ -367,6 +367,7 @@ hostCallMap =
       ("string", "string?"),
       ("var", "var?"),
       ("nonvar", "%nonvar?"),
+      ("unifiable", "%unifiable?"),
       ("ground", "%ground?"),
       ("term_variables", "%term-variables"),
       ("compound_to_list", "%compound-to-list"),

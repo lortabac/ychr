@@ -4,7 +4,7 @@
     ;; Session
     make-session session?
     ;; From (ychr var)
-    make-var var? var-id deref unify equal?/chr
+    make-var var? var-id deref unify unifiable? equal?/chr
     make-term term? term-functor term-args
     match-term get-arg add-observer! get-var-id
     *wildcard* wildcard?
@@ -21,7 +21,7 @@
     ;; From (ychr reactivation)
     enqueue! drain-queue!
     ;; Helpers for generated code
-    %unify %nonvar? %chr-error %print %ground?
+    %unify %unifiable? %nonvar? %chr-error %print %ground?
     %term-variables %compound-to-list %list-to-compound
     %read-term-from-string
     %nil %cons
@@ -57,6 +57,9 @@
                               " with "
                               (pretty-term v2))))
       ok))
+
+  ;;; Non-mutating unifiability check
+  (define (%unifiable? v1 v2) (unifiable? v1 v2))
 
   ;;; Type predicates
   (define (%nonvar? v) (not (var? v)))

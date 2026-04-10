@@ -43,7 +43,7 @@ import Data.Text qualified as T
 import Effectful
 import YCHR.Runtime.Store (CHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), Value (..), VarId)
-import YCHR.Runtime.Var (Unify, deref, getVarId, newVar)
+import YCHR.Runtime.Var (Unify, deref, getVarId, newVar, unifiable)
 import YCHR.VM (Name (..))
 
 -- ---------------------------------------------------------------------------
@@ -77,6 +77,7 @@ baseHostCallRegistry =
       (Name "=<", cmp (<=)),
       (Name ">=", cmp (>=)),
       (Name "==", valEq),
+      (Name "unifiable", unifiableHost),
       (Name "string_concat", stringConcat),
       (Name "string_length", stringLength),
       (Name "string_upper", stringUpper),
@@ -101,6 +102,9 @@ baseHostCallRegistry =
     cmp op = HostCallFn $ \case
       [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VBool (op a b)))
       args -> error $ "comparison host call: expected 2 Int arguments, got " ++ show (length args)
+    unifiableHost = HostCallFn $ \case
+      [RVal a, RVal b] -> RVal . VBool <$> unifiable a b
+      args -> error $ "unifiable host call: expected 2 arguments, got " ++ show (length args)
     valEq = HostCallFn $ \case
       [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VBool (a == b)))
       [RVal (VAtom a), RVal (VAtom b)] -> pure (RVal (VBool (a == b)))

@@ -5,6 +5,7 @@
           var-id
           deref
           unify
+          unifiable?
           equal?/chr
           make-term
           term?
@@ -105,6 +106,54 @@
           (if ok
               (unify-args v1 v2 (+ i 1) emit!)
               #f))))
+
+  ;;; Unifiability check: does unify succeed, without mutating any
+  ;;; bindings? Mirrors unify*/unify-args but uses a trail list to roll
+  ;;; back every mutation before returning. Observers are never touched.
+  (define (unifiable? v1 v2)
+    (let ((trail '()))
+      (define (trail! v)
+        ;; Record the current var-value so it can be restored later.
+        (set! trail (cons (cons v (var-value v)) trail)))
+      (define (uni a b)
+        (uni* (deref a) (deref b)))
+      (define (uni* d1 d2)
+        (cond
+          ((wildcard? d1) #t)
+          ((wildcard? d2) #t)
+          ((and (var? d1) (var? d2) (eq? d1 d2)) #t)
+          ((var? d1)
+           (trail! d1)
+           (var-value-set! d1 d2)
+           #t)
+          ((var? d2)
+           (trail! d2)
+           (var-value-set! d2 d1)
+           #t)
+          ((and (integer? d1) (integer? d2)) (eqv? d1 d2))
+          ((and (symbol? d1) (symbol? d2)) (eq? d1 d2))
+          ((and (boolean? d1) (boolean? d2)) (eq? d1 d2))
+          ((and (string? d1) (string? d2)) (string=? d1 d2))
+          ((and (term? d1) (term? d2)
+                (eq? (term-functor d1) (term-functor d2))
+                (= (vector-length (term-args d1))
+                   (vector-length (term-args d2))))
+           (uni-args (term-args d1) (term-args d2) 0))
+          (else #f)))
+      (define (uni-args v1 v2 i)
+        (if (>= i (vector-length v1))
+            #t
+            (if (uni (vector-ref v1 i) (vector-ref v2 i))
+                (uni-args v1 v2 (+ i 1))
+                #f)))
+      (let ((result (uni v1 v2)))
+        ;; Restore every trailed var to its original value. Entries are
+        ;; prepended newest-first, so walking front-to-back restores each
+        ;; cell to its oldest captured state.
+        (for-each (lambda (entry)
+                    (var-value-set! (car entry) (cdr entry)))
+                  trail)
+        result)))
 
   ;;; Equality (ask semantics, Prolog ==)
   (define (equal?/chr v1 v2)

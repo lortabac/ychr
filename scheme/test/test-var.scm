@@ -338,4 +338,90 @@
     (test-eq "bound var returns #f" #f (get-var-id x))
     (test-eq "non-var returns #f" #f (get-var-id 99))))
 
+;;; --------------------------------------------------------------------------
+;;; unifiable?
+;;; --------------------------------------------------------------------------
+
+(test-group "unifiable?"
+  (test-group "ground vs ground"
+    (test-eq "same int"      #t (unifiable? 1 1))
+    (test-eq "distinct ints" #f (unifiable? 1 2))
+    (test-eq "same atom"     #t (unifiable? 'a 'a))
+    (test-eq "distinct atom" #f (unifiable? 'a 'b))
+    (test-eq "type mismatch" #f (unifiable? 1 'a)))
+
+  (test-group "wildcard"
+    (test-eq "wildcard vs int" #t (unifiable? *wildcard* 42))
+    (test-eq "int vs wildcard" #t (unifiable? 42 *wildcard*)))
+
+  (test-group "unbound var vs ground leaves var unbound"
+    (let* ((s (fresh)) (x (make-var s)))
+      (test-eq "returns true" #t (unifiable? x 42))
+      (test-eq "var still unbound" x (deref x))
+      (test-eqv "var id preserved" 0 (get-var-id x))))
+
+  (test-group "ground vs unbound var leaves var unbound"
+    (let* ((s (fresh)) (x (make-var s)))
+      (test-eq "returns true" #t (unifiable? 42 x))
+      (test-eq "var still unbound" x (deref x))))
+
+  (test-group "two distinct unbound vars"
+    (let* ((s (fresh)) (x (make-var s)) (y (make-var s)))
+      (test-eq "returns true" #t (unifiable? x y))
+      (test-eq "x still unbound" x (deref x))
+      (test-eq "y still unbound" y (deref y))))
+
+  (test-group "same unbound var with itself"
+    (let* ((s (fresh)) (x (make-var s)))
+      (test-eq "returns true" #t (unifiable? x x))
+      (test-eq "still unbound" x (deref x))))
+
+  (test-group "compound: matching args"
+    (let* ((s (fresh)) (x (make-var s)))
+      (let ((t1 (make-term 'f (vector x 1)))
+            (t2 (make-term 'f (vector 2 1))))
+        (test-eq "returns true" #t (unifiable? t1 t2))
+        (test-eq "x still unbound" x (deref x)))))
+
+  (test-group "compound: mismatched functor"
+    (test-eq #f (unifiable? (make-term 'f (vector 1))
+                            (make-term 'g (vector 1)))))
+
+  (test-group "compound: mismatched arity"
+    (test-eq #f (unifiable? (make-term 'f (vector 1))
+                            (make-term 'f (vector 1 2)))))
+
+  (test-group "compound: nested failure rolls back"
+    ;; f(X, 1) vs f(2, 3) — walk binds X to 2, then fails on 1 vs 3.
+    ;; X must still be unbound after the call.
+    (let* ((s (fresh)) (x (make-var s)))
+      (let ((t1 (make-term 'f (vector x 1)))
+            (t2 (make-term 'f (vector 2 3))))
+        (test-eq "returns false" #f (unifiable? t1 t2))
+        (test-eq "x still unbound" x (deref x))
+        (test-eqv "var id preserved" 0 (get-var-id x)))))
+
+  (test-group "compound: double-bind failure rolls back"
+    ;; f(X, X) vs f(1, 2) — X bound to 1, then fails on X=2.
+    (let* ((s (fresh)) (x (make-var s)))
+      (let ((t1 (make-term 'f (vector x x)))
+            (t2 (make-term 'f (vector 1 2))))
+        (test-eq "returns false" #f (unifiable? t1 t2))
+        (test-eq "x still unbound" x (deref x)))))
+
+  (test-group "transitively unifiable: f(X, X) vs f(1, 1)"
+    (let* ((s (fresh)) (x (make-var s)))
+      (let ((t1 (make-term 'f (vector x x)))
+            (t2 (make-term 'f (vector 1 1))))
+        (test-eq "returns true" #t (unifiable? t1 t2))
+        (test-eq "x still unbound" x (deref x)))))
+
+  (test-group "pre-bound var stays bound"
+    ;; Bind X to 7, then check that a failing unifiable? does not
+    ;; disturb the existing binding.
+    (let* ((s (fresh)) (x (make-var s)))
+      (unify x 7)
+      (test-eq "returns false" #f (unifiable? x 8))
+      (test-eqv "still bound to 7" 7 (deref x)))))
+
 (test-end "var")

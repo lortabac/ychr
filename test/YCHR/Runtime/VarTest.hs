@@ -8,13 +8,15 @@ import Effectful.Writer.Static.Local (Writer, runWriter)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import YCHR.Runtime.Types (SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (Unify, addObserver, deref, equal, getArg, makeTerm, matchTerm, newVar, runUnify, unify)
+import YCHR.Runtime.Var (Unify, addObserver, deref, equal, getArg, getVarId, makeTerm, matchTerm, newVar, runUnify, unifiable, unify)
 
 tests :: TestTree
 tests =
   testGroup
     "YCHR.Runtime.Var"
     [ unifyTests,
+      unifiableTests,
+      unifiableRollbackTests,
       equalTests,
       observerTests,
       derefTests,
@@ -141,6 +143,156 @@ unifyTests =
           x <- newVar
           assertUnifySuccess x (VInt 1)
           assertUnifyFailure x (VInt 2)
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Unifiable tests: return-value agreement with unify
+-- ---------------------------------------------------------------------------
+
+-- | Run a 'unifiable'-based test without needing a Writer layer.
+runUnifiableEnv :: Eff '[Unify, IOE] a -> IO a
+runUnifiableEnv = runEff . runUnify
+
+-- | Assert that 'unifiable' on two values returns the expected boolean.
+assertUnifiable :: (Unify :> es, IOE :> es) => Value -> Value -> Bool -> Eff es ()
+assertUnifiable a b expected = do
+  r <- unifiable a b
+  liftIO $ r @?= expected
+
+unifiableTests :: TestTree
+unifiableTests =
+  testGroup
+    "unifiable"
+    [ testCase "Int = Int (same)" $ runUnifiableEnv $ assertUnifiable (VInt 1) (VInt 1) True,
+      testCase "Int = Int (different)" $ runUnifiableEnv $ assertUnifiable (VInt 1) (VInt 2) False,
+      testCase "Atom = Atom (same)" $ runUnifiableEnv $ assertUnifiable (VAtom "a") (VAtom "a") True,
+      testCase "Atom = Atom (different)" $ runUnifiableEnv $ assertUnifiable (VAtom "a") (VAtom "b") False,
+      testCase "Bool = Bool (same)" $ runUnifiableEnv $ assertUnifiable (VBool True) (VBool True) True,
+      testCase "Bool = Bool (different)" $ runUnifiableEnv $ assertUnifiable (VBool True) (VBool False) False,
+      testCase "Text = Text (same)" $ runUnifiableEnv $ assertUnifiable (VText "x") (VText "x") True,
+      testCase "Text = Text (different)" $ runUnifiableEnv $ assertUnifiable (VText "x") (VText "y") False,
+      testCase "Same unbound var" $ runUnifiableEnv $ do
+        x <- newVar
+        assertUnifiable x x True,
+      testCase "Two distinct unbound vars" $ runUnifiableEnv $ do
+        x <- newVar
+        y <- newVar
+        assertUnifiable x y True,
+      testCase "Unbound var vs ground" $ runUnifiableEnv $ do
+        x <- newVar
+        assertUnifiable x (VInt 42) True,
+      testCase "Ground vs unbound var" $ runUnifiableEnv $ do
+        x <- newVar
+        assertUnifiable (VInt 42) x True,
+      testCase "Wildcard vs ground" $ runUnifiableEnv $ assertUnifiable VWildcard (VInt 7) True,
+      testCase "Wildcard vs unbound var" $ runUnifiableEnv $ do
+        x <- newVar
+        assertUnifiable VWildcard x True,
+      testCase "Wildcard vs compound" $
+        runUnifiableEnv $
+          assertUnifiable VWildcard (makeTerm "f" [VInt 1, VInt 2]) True,
+      testCase "Compound: matching ground args" $
+        runUnifiableEnv $
+          assertUnifiable (makeTerm "f" [VInt 1, VInt 2]) (makeTerm "f" [VInt 1, VInt 2]) True,
+      testCase "Compound: mismatched functor" $
+        runUnifiableEnv $
+          assertUnifiable (makeTerm "f" [VInt 1]) (makeTerm "g" [VInt 1]) False,
+      testCase "Compound: mismatched arity" $
+        runUnifiableEnv $
+          assertUnifiable (makeTerm "f" [VInt 1]) (makeTerm "f" [VInt 1, VInt 2]) False,
+      testCase "Compound with var arg: f(1, X) = f(1, 2)" $ runUnifiableEnv $ do
+        x <- newVar
+        assertUnifiable (makeTerm "f" [VInt 1, x]) (makeTerm "f" [VInt 1, VInt 2]) True,
+      testCase "Compound nested failure: f(X, 1) = f(2, 3)" $ runUnifiableEnv $ do
+        x <- newVar
+        assertUnifiable (makeTerm "f" [x, VInt 1]) (makeTerm "f" [VInt 2, VInt 3]) False,
+      testCase "Transitively unifiable: f(X, X) = f(1, 1)" $ runUnifiableEnv $ do
+        x <- newVar
+        assertUnifiable (makeTerm "f" [x, x]) (makeTerm "f" [VInt 1, VInt 1]) True,
+      testCase "Transitively non-unifiable: f(X, X) = f(1, 2)" $ runUnifiableEnv $ do
+        x <- newVar
+        assertUnifiable (makeTerm "f" [x, x]) (makeTerm "f" [VInt 1, VInt 2]) False,
+      testCase "Type mismatch: Int vs Atom" $
+        runUnifiableEnv $
+          assertUnifiable (VInt 1) (VAtom "a") False,
+      testCase "Chained bind then unifiable ground" $ runTestEnv_ $ do
+        x <- newVar
+        y <- newVar
+        _ <- unify x y
+        r <- unifiable x (VInt 1)
+        liftIO $ r @?= True
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Unifiable rollback tests: bindings must not leak
+-- ---------------------------------------------------------------------------
+
+-- | Assert that calling 'unifiable' on two terms returns the expected
+-- boolean and leaves the given list of variables with unchanged state
+-- (i.e. still unbound with the same 'VarId').
+assertUnifiableNoMutation ::
+  (Unify :> es, IOE :> es) => [Value] -> Value -> Value -> Bool -> Eff es ()
+assertUnifiableNoMutation vars a b expected = do
+  before <- traverse getVarId vars
+  r <- unifiable a b
+  liftIO $ r @?= expected
+  after <- traverse getVarId vars
+  liftIO $ before @?= after
+
+unifiableRollbackTests :: TestTree
+unifiableRollbackTests =
+  testGroup
+    "unifiable rollback"
+    [ testCase "Var-Var success: both stay unbound" $ runUnifiableEnv $ do
+        x <- newVar
+        y <- newVar
+        assertUnifiableNoMutation [x, y] x y True,
+      testCase "Var-NonVar success: var stays unbound" $ runUnifiableEnv $ do
+        x <- newVar
+        assertUnifiableNoMutation [x] x (VInt 42) True,
+      testCase "NonVar-Var success (symmetric): var stays unbound" $ runUnifiableEnv $ do
+        x <- newVar
+        assertUnifiableNoMutation [x] (VInt 42) x True,
+      testCase "Bind then fail inside compound: var rolls back" $ runUnifiableEnv $ do
+        x <- newVar
+        assertUnifiableNoMutation
+          [x]
+          (makeTerm "f" [x, VInt 1])
+          (makeTerm "f" [VInt 2, VInt 3])
+          False,
+      testCase "Double-bind failure: f(X,X) vs f(1,2) rolls X back" $ runUnifiableEnv $ do
+        x <- newVar
+        assertUnifiableNoMutation
+          [x]
+          (makeTerm "f" [x, x])
+          (makeTerm "f" [VInt 1, VInt 2])
+          False,
+      testCase "Success inside deeper compound: all vars stay unbound" $ runUnifiableEnv $ do
+        x <- newVar
+        y <- newVar
+        assertUnifiableNoMutation
+          [x, y]
+          (makeTerm "f" [x, y])
+          (makeTerm "f" [VInt 1, VInt 2])
+          True,
+      testCase "Failure with multiple rolled-back bindings" $ runUnifiableEnv $ do
+        x <- newVar
+        y <- newVar
+        assertUnifiableNoMutation
+          [x, y]
+          (makeTerm "f" [x, y, VInt 1])
+          (makeTerm "f" [VInt 1, VInt 2, VInt 9])
+          False,
+      testCase "Pre-bound var stays bound after failing unifiable" $ runTestEnv_ $ do
+        x <- newVar
+        _ <- unify x (VInt 7)
+        r <- unifiable x (VInt 8)
+        liftIO $ r @?= False
+        -- X must still be bound to 7, not unbound.
+        mid <- getVarId x
+        liftIO $ mid @?= Nothing
+        eq <- equal x (VInt 7)
+        liftIO $ eq @?= True
     ]
 
 -- ---------------------------------------------------------------------------

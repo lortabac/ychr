@@ -735,8 +735,22 @@ typePredicateTests =
             _ -> pure (0, False, False)
         len @?= 2
         assertBool "first element should be X" eq1
-        assertBool "second element should be Y" eq2
+        assertBool "second element should be Y" eq2,
+      testCase "unifiable: true for two equal integers" $ do
+        b <- callUnifiable (VInt 1) (VInt 1)
+        assertBool "expected true" b,
+      testCase "unifiable: false for distinct integers" $ do
+        b <- callUnifiable (VInt 1) (VInt 2)
+        assertBool "expected false" (not b)
     ]
+  where
+    callUnifiable a b = case Map.lookup (Name "unifiable") baseHostCallRegistry of
+      Nothing -> assertFailure "unifiable not found in registry"
+      Just (HostCallFn f) -> do
+        result <- runEff . runUnify . runCHRStore [] $ f [RVal a, RVal b]
+        case result of
+          RVal (VBool b') -> pure b'
+          _ -> assertFailure "unifiable: expected Bool result"
 
 -- ---------------------------------------------------------------------------
 -- =.. (univ) tests
