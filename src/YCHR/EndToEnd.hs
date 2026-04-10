@@ -401,7 +401,7 @@ executeBodyGoal hc (D.BodyHostStmt f args) = do
   _ <- hostCall (Map.lookup (Name f) hc) f (map RVal argVals)
   pure ()
 executeBodyGoal hc (D.BodyIs v expr) = do
-  result <- evalTermArith hc expr
+  result <- evalNestedExpr hc expr
   varMap <- get
   case Map.lookup v varMap of
     Just existing -> do
@@ -456,18 +456,19 @@ drainReactivation procMap hc =
       void $
         callProc procMap hc (Name "reactivate_dispatch") [RConstraint sid]
 
--- | Evaluate a term as an arithmetic expression (used for @is@ RHS).
--- Handles host calls (@host:f(args)@), user-defined function calls, and data terms.
-evalTermArith ::
+-- | Evaluate a term as a nested expression (used for @is@ RHS and guard
+-- expressions). Handles host calls (@host:f(args)@), user-defined function
+-- calls, and data terms.
+evalNestedExpr ::
   (CHREffects es, State (Map Text Value) :> es) =>
   HostCallRegistry ->
   Term ->
   Eff es Value
-evalTermArith _ (IntTerm n) = pure (VInt n)
-evalTermArith _ (AtomTerm s) = pure (VAtom s)
-evalTermArith _ (TextTerm s) = pure (VText s)
-evalTermArith _ Wildcard = pure VWildcard
-evalTermArith _ (VarTerm v) = do
+evalNestedExpr _ (IntTerm n) = pure (VInt n)
+evalNestedExpr _ (AtomTerm s) = pure (VAtom s)
+evalNestedExpr _ (TextTerm s) = pure (VText s)
+evalNestedExpr _ Wildcard = pure VWildcard
+evalNestedExpr _ (VarTerm v) = do
   varMap <- get
   case Map.lookup v varMap of
     Just val -> deref val
@@ -475,25 +476,25 @@ evalTermArith _ (VarTerm v) = do
       fresh <- newVar
       modify (Map.insert v fresh)
       pure fresh
-evalTermArith hc (CompoundTerm (Types.Unqualified "call_fun") args)
+evalNestedExpr hc (CompoundTerm (Types.Unqualified "call_fun") args)
   | length args >= 2 = do
       CHRRep procMap _ _ _ <- getStaticRep
-      argVals <- traverse (evalTermArith hc) args
+      argVals <- traverse (evalNestedExpr hc) args
       let n = length args - 1
           dispatchName = Name ("call_fun_" <> T.pack (show n))
       result <- callProc procMap hc dispatchName (map RVal argVals)
       case result of
         RVal val -> pure val
         _ -> error "call_fun returned non-value"
-evalTermArith hc (CompoundTerm (Types.Qualified "host" f) args) = do
-  argVals <- traverse (evalTermArith hc) args
+evalNestedExpr hc (CompoundTerm (Types.Qualified "host" f) args) = do
+  argVals <- traverse (evalNestedExpr hc) args
   result <- hostCall (Map.lookup (Name f) hc) f (map RVal argVals)
   case result of
     RVal val -> pure val
     _ -> error "host call returned non-value in expression position"
-evalTermArith hc (CompoundTerm name args) = do
+evalNestedExpr hc (CompoundTerm name args) = do
   CHRRep procMap _ _ _ <- getStaticRep
-  argVals <- traverse (evalTermArith hc) args
+  argVals <- traverse (evalNestedExpr hc) args
   let fnName = funcProcName name (length argVals)
   if Map.member fnName procMap
     then do

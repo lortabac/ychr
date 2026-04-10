@@ -174,11 +174,12 @@ data Expr
   | -- | Call a host language function. Used for arithmetic operators,
     -- comparisons, and user-written expressions in guards and bodies.
     HostCall Name [Expr]
-  | -- | Evaluate a nested term as a host arithmetic expression.
-    -- Compound terms inside are interpreted as function applications:
-    -- @MakeTerm "+" [a, b]@ calls the host @+@ function with @a@ and @b@.
-    -- Used for the @is@ operator.
-    HostEval Expr
+  | -- | Switch evaluation into deep deref-aware mode for the nested
+    -- expression: 'Var' references are dereferenced (following binding
+    -- chains) before use, and this mode propagates recursively into
+    -- sub-expressions ('CallExpr', 'MakeTerm', etc.). Used for guard
+    -- expressions and the right-hand side of @is@.
+    EvalDeep Expr
   | -- Boolean operations
 
     -- | Logical negation.

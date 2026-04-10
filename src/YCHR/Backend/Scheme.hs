@@ -271,8 +271,8 @@ compileExpr (CallExpr n args) =
   SList (SAtom (mangleName n) : SAtom "%s" : map compileExpr args)
 compileExpr (HostCall n args) =
   compileHostCall n args
-compileExpr (HostEval e) =
-  compileHostEval e
+compileExpr (EvalDeep e) =
+  compileEvalDeep e
 compileExpr (Not e) =
   SList [SAtom "not", compileExpr e]
 compileExpr (And a b) =
@@ -381,17 +381,17 @@ compileHostCall (Name n) args =
       derefedArgs = map (\a -> SList [SAtom "deref", compileExpr a]) args
    in SList (SAtom fn : derefedArgs)
 
--- | Compile a HostEval expression.  Like the standard expression
+-- | Compile an EvalDeep expression.  Like the standard expression
 -- compiler, but Var references are dereferenced (following binding
 -- chains) and the transformation propagates recursively into
 -- sub-expressions.
-compileHostEval :: Expr -> SExpr
-compileHostEval (Lit l) = compileLiteral l
-compileHostEval (Var n) = SList [SAtom "deref", SAtom (mangleName n)]
-compileHostEval (HostCall n args) = compileHostCall n args
-compileHostEval (CallExpr n args) =
-  SList (SAtom (mangleName n) : SAtom "%s" : map compileHostEval args)
-compileHostEval e = compileExpr e -- MakeTerm, And, Or, etc.
+compileEvalDeep :: Expr -> SExpr
+compileEvalDeep (Lit l) = compileLiteral l
+compileEvalDeep (Var n) = SList [SAtom "deref", SAtom (mangleName n)]
+compileEvalDeep (HostCall n args) = compileHostCall n args
+compileEvalDeep (CallExpr n args) =
+  SList (SAtom (mangleName n) : SAtom "%s" : map compileEvalDeep args)
+compileEvalDeep e = compileExpr e -- MakeTerm, And, Or, etc.
 
 -- ---------------------------------------------------------------------------
 -- Unknown host call stubs
@@ -427,7 +427,7 @@ collectStmtHC _ = Set.empty
 -- | Collect host call names from an expression.
 collectExprHC :: Expr -> Set Text
 collectExprHC (HostCall (Name n) args) = Set.singleton n <> foldMap collectExprHC args
-collectExprHC (HostEval e) = collectExprHC e
+collectExprHC (EvalDeep e) = collectExprHC e
 collectExprHC (CallExpr _ args) = foldMap collectExprHC args
 collectExprHC (Not e) = collectExprHC e
 collectExprHC (And a b) = collectExprHC a <> collectExprHC b

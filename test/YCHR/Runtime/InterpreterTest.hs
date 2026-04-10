@@ -22,7 +22,7 @@ tests =
   testGroup
     "YCHR.Runtime.Interpreter"
     [ leqTests,
-      hostEvalTests,
+      evalDeepTests,
       typePredicateTests,
       univTests
     ]
@@ -452,7 +452,7 @@ leqTests =
     ]
 
 -- ---------------------------------------------------------------------------
--- HostEval tests
+-- EvalDeep tests
 -- ---------------------------------------------------------------------------
 
 arithCalls :: HostCallRegistry
@@ -479,7 +479,7 @@ makeCalcProc body =
         [ Procedure
             "calc"
             ["x"]
-            [ Let "y" (HostEval body),
+            [ Let "y" (EvalDeep body),
               Return (Var "y")
             ]
         ]
@@ -492,10 +492,10 @@ expectInt :: RuntimeVal -> IO Int
 expectInt (RVal (VInt n)) = pure n
 expectInt _ = assertFailure "expected RVal (VInt _)"
 
-hostEvalTests :: TestTree
-hostEvalTests =
+evalDeepTests :: TestTree
+evalDeepTests =
   testGroup
-    "HostEval"
+    "EvalDeep"
     [ testCase "flat: +(2, 3) = 5" $ do
         result <- runCalc (HostCall "+" [Lit (IntLit 2), Lit (IntLit 3)]) (VInt 0)
         expectInt result >>= (@?= 5),

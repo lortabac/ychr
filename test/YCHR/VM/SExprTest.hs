@@ -84,7 +84,7 @@ roundtripTests =
               Let "g" (Lit WildcardLit),
               Let "h" (CallExpr "proc" [Var "a", Var "b"]),
               Let "i" (HostCall "+" [Var "a", Var "b"]),
-              Let "j" (HostEval (Var "expr")),
+              Let "j" (EvalDeep (Var "expr")),
               Let "k" (Not (Var "a")),
               Let "l" (And (Var "a") (Var "b")),
               Let "m" (Or (Var "a") (Var "b")),

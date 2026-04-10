@@ -492,7 +492,7 @@ compileCheckGuards funSet varMap si guards = case nonTrivialGuards of
 compileCheckGuard :: Set Identifier -> VarMap -> SrcInfo -> D.Guard -> Eff '[Writer [CompileError]] Expr
 compileCheckGuard _ _ _ (D.GuardCommon D.GoalTrue) = pure (Lit (BoolLit True))
 compileCheckGuard _ varMap si (D.GuardEqual t1 t2) = Equal <$> compileTerm varMap si t1 <*> compileTerm varMap si t2
-compileCheckGuard funSet varMap si (D.GuardExpr term) = HostEval <$> compileExpr funSet varMap si term
+compileCheckGuard funSet varMap si (D.GuardExpr term) = EvalDeep <$> compileExpr funSet varMap si term
 compileCheckGuard _ _ _ _ = pure (Lit (BoolLit True))
 
 -- ---------------------------------------------------------------------------
@@ -538,14 +538,14 @@ compileBodyGoal funSet _ varMap si (D.BodyIs v expr) = do
   case lookupVar v varMap of
     Just existing ->
       pure
-        ( [ ExprStmt (Unify existing (HostEval expr')),
+        ( [ ExprStmt (Unify existing (EvalDeep expr')),
             DrainReactivationQueue "rs" [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])]
           ],
           varMap
         )
     Nothing ->
       let varMap' = insertVar v (Var (Name v)) varMap
-       in pure ([Let (Name v) (HostEval expr')], varMap')
+       in pure ([Let (Name v) (EvalDeep expr')], varMap')
 compileBodyGoal funSet _ varMap si (D.BodyFunctionCall (Types.Unqualified "call_fun") args) = do
   args' <- traverse (compileExpr funSet varMap si) args
   let n = length args - 1

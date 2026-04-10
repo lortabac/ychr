@@ -353,7 +353,7 @@ evalVmExpr pm hc (FieldGet expr field) = do
       FieldArg (ArgIndex i) -> RVal <$> getConstraintArg sid i
       FieldType -> (\ct -> RVal (VInt ct.unConstraintType)) <$> getConstraintType sid
     _ -> error "FieldGet: expected constraint identifier"
-evalVmExpr pm hc (HostEval expr) = evalExpr pm hc expr
+evalVmExpr pm hc (EvalDeep expr) = evalExpr pm hc expr
 
 -- ---------------------------------------------------------------------------
 -- evalExpr

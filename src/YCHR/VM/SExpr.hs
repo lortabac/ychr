@@ -138,7 +138,7 @@ exprToSExpr (Var n) = SList [SAtom "var", nameToSExpr n]
 exprToSExpr (Lit l) = literalToSExpr l
 exprToSExpr (CallExpr n es) = SList (SAtom "call-expr" : nameToSExpr n : map exprToSExpr es)
 exprToSExpr (HostCall n es) = SList (SAtom "host-call" : nameToSExpr n : map exprToSExpr es)
-exprToSExpr (HostEval e) = SList [SAtom "host-eval", exprToSExpr e]
+exprToSExpr (EvalDeep e) = SList [SAtom "eval-deep", exprToSExpr e]
 exprToSExpr (Not e) = SList [SAtom "not", exprToSExpr e]
 exprToSExpr (And a b) = SList [SAtom "and", exprToSExpr a, exprToSExpr b]
 exprToSExpr (Or a b) = SList [SAtom "or", exprToSExpr a, exprToSExpr b]
@@ -276,7 +276,7 @@ exprFromSExpr (SList (SAtom "call-expr" : n : es)) =
   CallExpr <$> nameFromSExpr n <*> traverse exprFromSExpr es
 exprFromSExpr (SList (SAtom "host-call" : n : es)) =
   HostCall <$> nameFromSExpr n <*> traverse exprFromSExpr es
-exprFromSExpr (SList [SAtom "host-eval", e]) = HostEval <$> exprFromSExpr e
+exprFromSExpr (SList [SAtom "eval-deep", e]) = EvalDeep <$> exprFromSExpr e
 exprFromSExpr (SList [SAtom "not", e]) = Not <$> exprFromSExpr e
 exprFromSExpr (SList [SAtom "and", a, b]) = And <$> exprFromSExpr a <*> exprFromSExpr b
 exprFromSExpr (SList [SAtom "or", a, b]) = Or <$> exprFromSExpr a <*> exprFromSExpr b

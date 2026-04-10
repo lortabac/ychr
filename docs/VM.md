@@ -332,14 +332,22 @@ Literals are serialized directly without a `lit` wrapper.
 ```scheme
 (call-expr "<proc-name>" <arg> ...)
 (host-call "<func-name>" <arg> ...)
-(host-eval <expr>)
 ```
 
 - `call-expr` calls a compiler-generated procedure.
 - `host-call` calls a host language function.
-- `host-eval` evaluates a nested term as a host arithmetic expression.
-  Compound terms inside (e.g. `(make-term "+" a b)`) are interpreted
-  as function applications.
+
+### Deep deref-aware evaluation
+
+```scheme
+(eval-deep <expr>)
+```
+
+- `eval-deep` switches the nested expression into deep deref-aware
+  evaluation: variable references are dereferenced (following binding
+  chains) before use, and this mode propagates recursively into
+  sub-expressions (`call-expr`, `make-term`, etc.). Used for guard
+  expressions and the right-hand side of `is`.
 
 ### Boolean operations
 
