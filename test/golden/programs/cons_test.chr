@@ -1,0 +1,7 @@
+:- module(cons_test, [go/3]).
+
+:- use_module(library(lists)).
+
+:- chr_constraint go/3.
+
+go(X, Xs, R) <=> R is cons(X, Xs).

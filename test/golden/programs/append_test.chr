@@ -1,0 +1,7 @@
+:- module(append_test, [go/3]).
+
+:- use_module(library(lists)).
+
+:- chr_constraint go/3.
+
+go(Xs, Ys, R) <=> R is append(Xs, Ys).

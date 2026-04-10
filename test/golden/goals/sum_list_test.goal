@@ -1,0 +1,1 @@
+sum_list_test:go([10, 20, 3, 4], R)

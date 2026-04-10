@@ -20,9 +20,9 @@
     boolean/1,
     string/1,
     ground/1,
-    term_variables/2,
-    compound_to_list/2,
-    list_to_compound/2,
+    term_variables/1,
+    compound_to_list/1,
+    list_to_compound/1,
     op(500, yfx, '+'),
     op(500, yfx, '-'),
     op(400, yfx, '*'),
@@ -40,10 +40,7 @@
 
 :- chr_constraint
     identity/2,
-    print/1,
-    term_variables/2,
-    compound_to_list/2,
-    list_to_compound/2.
+    print/1.
 
 identity(X, Y) <=> X = Y.
 
@@ -67,7 +64,10 @@ print(X) <=> host:print(X).
     atom/1,
     boolean/1,
     string/1,
-    ground/1.
+    ground/1,
+    term_variables/1,
+    compound_to_list/1,
+    list_to_compound/1.
 
 X + Y -> host:'+'(X, Y).
 
@@ -105,8 +105,8 @@ string(X) -> host:string(X).
 
 ground(X) -> host:ground(X).
 
-term_variables(T, Vars) <=> Vars is host:term_variables(T).
+term_variables(T) -> host:term_variables(T).
 
-compound_to_list(C, R) <=> R is host:compound_to_list(C).
+compound_to_list(C) -> host:compound_to_list(C).
 
-list_to_compound(Xs, R) <=> R is host:list_to_compound(Xs).
+list_to_compound(Xs) -> host:list_to_compound(Xs).

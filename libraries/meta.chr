@@ -1,7 +1,9 @@
-:- module(meta, [read_term_from_string/2, print_store/0]).
+:- module(meta, [read_term_from_string/1, print_store/0]).
 
-:- chr_constraint read_term_from_string/2, print_store/0.
+:- chr_constraint print_store/0.
 
-read_term_from_string(S, R) <=> R is host:read_term_from_string(S).
+:- function read_term_from_string/1.
+
+read_term_from_string(S) -> host:read_term_from_string(S).
 
 print_store <=> host:print_store.

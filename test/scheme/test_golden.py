@@ -12,6 +12,13 @@ import pytest
 
 GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden")
 
+# Golden tests that exercise Haskell-only meta-programming primitives and
+# therefore cannot run on the Scheme backend. The Haskell interpreter will
+# accumulate more such primitives over time.
+HASKELL_ONLY = {
+    "read_term_test",
+}
+
 
 def discover_tests():
     """Scan test/golden/goals/*.goal and return sorted test names."""
@@ -23,6 +30,9 @@ def discover_tests():
 
 @pytest.mark.parametrize("test_name", discover_tests())
 def test_scheme_golden(test_name, ychr_bin, guile_bin, scheme_lib_dir, project_root, tmp_path):
+    if test_name in HASKELL_ONLY:
+        pytest.skip(f"{test_name} uses Haskell-only meta primitives")
+
     program = os.path.join(GOLDEN_DIR, "programs", f"{test_name}.chr")
     query_file = os.path.join(GOLDEN_DIR, "goals", f"{test_name}.goal")
     expected_file = os.path.join(GOLDEN_DIR, "expected", f"{test_name}.expected")

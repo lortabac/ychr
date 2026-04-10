@@ -1,0 +1,7 @@
+:- module(sum_list_test, [go/2]).
+
+:- use_module(library(lists)).
+
+:- chr_constraint go/2.
+
+go(Xs, R) <=> R is sum_list(Xs).

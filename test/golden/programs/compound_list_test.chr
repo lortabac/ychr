@@ -1,0 +1,7 @@
+:- module(compound_list_test, [roundtrip/2]).
+
+:- chr_constraint roundtrip/2.
+
+roundtrip(T, R) <=>
+    L is compound_to_list(T),
+    R is list_to_compound(L).

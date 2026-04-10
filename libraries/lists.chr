@@ -1,34 +1,37 @@
 :- module(lists, [
-    head/2,
-    tail/2,
-    length/2,
+    cons/2,
+    head/1,
+    tail/1,
+    length/1,
     member/2,
-    append/3,
-    sum_list/2
+    append/2,
+    sum_list/1
 ]).
 
-:- chr_constraint
-    head/2,
-    tail/2,
-    length/2,
-    append/3,
-    sum_list/2.
+:- function
+    cons/2,
+    head/1,
+    tail/1,
+    length/1,
+    member/2,
+    append/2,
+    sum_list/1.
 
-:- function member/2.
+cons(X, Xs) -> [X|Xs].
 
-head([X|_], R) <=> R = X.
+head([X|_]) -> X.
 
-tail([_|Xs], R) <=> R = Xs.
+tail([_|Xs]) -> Xs.
 
-length([], R) <=> R = 0.
-length([_|Xs], R) <=> length(Xs, R1), R is R1 + 1.
+length([]) -> 0.
+length([_|Xs]) -> length(Xs) + 1.
 
 member(_, []) -> false.
 member(X, [X|_]) -> true.
 member(X, [_|Xs]) -> member(X, Xs).
 
-append([], Ys, R) <=> R = Ys.
-append([X|Xs], Ys, R) <=> append(Xs, Ys, R1), R = [X|R1].
+append([], Ys) -> Ys.
+append([X|Xs], Ys) -> cons(X, append(Xs, Ys)).
 
-sum_list([], R) <=> R = 0.
-sum_list([X|Xs], R) <=> sum_list(Xs, R1), R is R1 + X.
+sum_list([]) -> 0.
+sum_list([X|Xs]) -> X + sum_list(Xs).

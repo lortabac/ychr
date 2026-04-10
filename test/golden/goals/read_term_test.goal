@@ -1,0 +1,1 @@
+read_term_test:go("foo(1, bar(2, 3))", R)

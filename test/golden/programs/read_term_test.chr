@@ -1,0 +1,7 @@
+:- module(read_term_test, [go/2]).
+
+:- use_module(library(meta)).
+
+:- chr_constraint go/2.
+
+go(S, R) <=> R is read_term_from_string(S).

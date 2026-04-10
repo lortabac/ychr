@@ -20,7 +20,7 @@ REPL_TESTS = [
     ('R is ground("hello").', "R = true.\n"),
     ("R is ground(foo(1, _)).", "R = false.\n"),
     (
-        'read_term_from_string("foo(X, Y)", T), term_variables(T, [X, Y]), X = 1, Y = 2.',
+        'T is read_term_from_string("foo(X, Y)"), [X, Y] is term_variables(T), X = 1, Y = 2.',
         "T = foo(1, 2),\nX = 1,\nY = 2.\n",
     ),
     ("R is member(1, []).", "R = false.\n"),
