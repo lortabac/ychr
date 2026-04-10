@@ -37,7 +37,8 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Effectful (Eff, runPureEff)
+import Effectful (Eff, runPureEff, (:>))
+import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import YCHR.Desugared qualified as D
 import YCHR.Parsed qualified as P
@@ -106,7 +107,7 @@ getRuleConstraints r =
 
 desugarRule :: Set.Set Name -> P.Rule -> Eff '[Writer [DesugarError]] D.Rule
 desugarRule funSet r = do
-  ruleBody <- traverse (desugarBodyGoal funSet r.body.sourceLoc) r.body.node
+  ruleBody <- desugarBodyGoals funSet r.body.sourceLoc r.body.node
   userGuards <- traverse (desugarGuard r.guard.sourceLoc) r.guard.node
   let rawHead = desugarHead r.head.node
       (hnfGuards, normalizedHead) = normalizeHead rawHead
@@ -274,43 +275,76 @@ desugarQueryGoals mods goals =
   let funSet = buildFunctionSet mods
       (results, errs) =
         runPureEff . runWriter $
-          traverse (desugarBodyGoal funSet P.dummyLoc) goals
+          desugarBodyGoals funSet P.dummyLoc goals
    in if null errs then Right results else Left errs
 
--- | Classify a parsed body term into a 'D.BodyGoal'.
+-- ---------------------------------------------------------------------------
+-- VarNameSupply: fresh variable generation for desugaring
+-- ---------------------------------------------------------------------------
+
+freshVarName :: (State Int :> es) => Eff es Text
+freshVarName = do
+  n <- get @Int
+  modify @Int (+ 1)
+  pure ("__is_" <> T.pack (show n))
+
+runVarNameSupply :: Eff (State Int : es) a -> Eff es a
+runVarNameSupply = evalState (0 :: Int)
+
+-- | Desugar a list of body terms, flattening any multi-goal expansions
+-- (e.g. non-variable @is@ LHS).
+desugarBodyGoals ::
+  (Writer [DesugarError] :> es) =>
+  Set.Set Name ->
+  P.SourceLoc ->
+  [Term] ->
+  Eff es [D.BodyGoal]
+desugarBodyGoals funSet loc terms =
+  runVarNameSupply $ concat <$> traverse (desugarBodyGoal funSet loc) terms
+
+-- | Classify a parsed body term into 'D.BodyGoal's.
 --
 -- Pattern priority (order matters):
 --
 -- 1. @X = Y@ -> 'D.BodyUnify'
--- 2. @X is Expr@ -> 'D.BodyIs'
--- 3. @host:f(…)@ -> 'D.BodyHostStmt'
--- 4. Qualified name in function set -> 'D.BodyFunctionCall'
--- 5. Other qualified name -> 'D.BodyConstraint'
--- 6. @true@ -> 'D.GoalTrue'
--- 7. Unqualified compound (renamer should have caught this) -> error
--- 8. Anything else (bare variable, integer, atom, …) -> error
-desugarBodyGoal :: Set.Set Name -> P.SourceLoc -> Term -> Eff '[Writer [DesugarError]] D.BodyGoal
+-- 2. @X is Expr@ (variable LHS) -> 'D.BodyIs'
+-- 3. @T is Expr@ (non-variable LHS) -> @R is Expr, R = T@ with fresh @R@
+-- 4. @host:f(…)@ -> 'D.BodyHostStmt'
+-- 5. Qualified name in function set -> 'D.BodyFunctionCall'
+-- 6. Other qualified name -> 'D.BodyConstraint'
+-- 7. @true@ -> 'D.GoalTrue'
+-- 8. Unqualified compound (renamer should have caught this) -> error
+-- 9. Anything else (bare variable, integer, atom, …) -> error
+desugarBodyGoal ::
+  (State Int :> es, Writer [DesugarError] :> es) =>
+  Set.Set Name ->
+  P.SourceLoc ->
+  Term ->
+  Eff es [D.BodyGoal]
 desugarBodyGoal funSet loc t = case t of
-  CompoundTerm (Unqualified "=") [l, r] -> pure $ D.BodyUnify l r
+  CompoundTerm (Unqualified "=") [l, r] -> pure [D.BodyUnify l r]
   CompoundTerm (Unqualified "is") [VarTerm v, expr] ->
-    pure $ D.BodyIs v expr
+    pure [D.BodyIs v expr]
+  CompoundTerm (Unqualified "is") [lhs, expr] -> do
+    v <- freshVarName
+    pure [D.BodyIs v expr, D.BodyUnify (VarTerm v) lhs]
   CompoundTerm (Qualified "host" f) args ->
-    pure $ D.BodyHostStmt f args
+    pure [D.BodyHostStmt f args]
   CompoundTerm name@(Qualified _ _) args
     | Set.member name funSet ->
-        pure $ D.BodyFunctionCall name args
+        pure [D.BodyFunctionCall name args]
   CompoundTerm name@(Qualified _ _) args ->
-    pure $ D.BodyConstraint (Constraint name args)
+    pure [D.BodyConstraint (Constraint name args)]
   CompoundTerm (Unqualified "call_fun") args
     | length args >= 2 ->
-        pure $ D.BodyFunctionCall (Unqualified "call_fun") args
-  AtomTerm "true" -> pure $ D.BodyCommon D.GoalTrue
+        pure [D.BodyFunctionCall (Unqualified "call_fun") args]
+  AtomTerm "true" -> pure [D.BodyCommon D.GoalTrue]
   CompoundTerm (Unqualified _) _ -> do
     tell [UnexpectedBodyTerm loc t]
-    pure $ D.BodyCommon D.GoalTrue
+    pure [D.BodyCommon D.GoalTrue]
   _ -> do
     tell [UnexpectedBodyTerm loc t]
-    pure $ D.BodyCommon D.GoalTrue
+    pure [D.BodyCommon D.GoalTrue]
 
 -- ---------------------------------------------------------------------------
 -- Lambda lifting

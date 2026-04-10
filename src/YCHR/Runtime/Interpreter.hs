@@ -29,6 +29,8 @@ import Effectful
 import Effectful.Error.Static (Error, runError, throwError)
 import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.Writer.Static.Local (Writer, listen, runWriter)
+import YCHR.Meta (valueToTerm)
+import YCHR.Pretty (prettyTerm)
 import YCHR.Runtime.History (PropHistory, addHistory, notInHistory, runPropHistory)
 import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue)
 import YCHR.Runtime.Registry (HostCallFn (..), HostCallRegistry, baseHostCallRegistry, toValue, unit)
@@ -325,9 +327,20 @@ evalVmExpr pm hc (NotInHistory ruleName args) = do
 evalVmExpr pm hc (Unify e1 e2) = do
   v1 <- evalVmExpr pm hc e1
   v2 <- evalVmExpr pm hc e2
-  (ok, observers) <- listen (unify (toValue v1) (toValue v2))
+  let val1 = toValue v1
+      val2 = toValue v2
+  (ok, observers) <- listen (unify val1 val2)
   enqueue observers
-  pure (RVal (VBool ok))
+  if ok
+    then pure (RVal (VBool True))
+    else do
+      t1 <- valueToTerm "_" val1
+      t2 <- valueToTerm "_" val2
+      error $
+        "unification failure: cannot unify "
+          ++ prettyTerm t1
+          ++ " with "
+          ++ prettyTerm t2
 evalVmExpr pm hc (Equal e1 e2) = do
   v1 <- evalVmExpr pm hc e1
   v2 <- evalVmExpr pm hc e2

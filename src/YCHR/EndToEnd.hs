@@ -60,6 +60,7 @@ import YCHR.Desugared qualified as D
 import YCHR.Meta (valueToTerm)
 import YCHR.Parsed (Import (..), Module (..), OpDecl (..), noAnn)
 import YCHR.Parser (OpTable, builtinOps, collectOperatorDecls, extractOpDecls, mergeOps, parseConstraint, parseModuleWith, parseQueryWith)
+import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (RenameError, RenameWarning, buildExportEnv, renameProgram, renameQueryGoals)
 import YCHR.Rename.Types (toListExport)
 import YCHR.Runtime.History (PropHistory, runPropHistory)
@@ -391,8 +392,9 @@ executeBodyGoal _ (D.BodyUnify l r) = do
   v1 <- termToValue l
   v2 <- termToValue r
   CHRRep procMap hc' _ _ <- getStaticRep
-  (_, observers) <- listen (unify v1 v2)
+  (ok, observers) <- listen (unify v1 v2)
   enqueue observers
+  unless ok (raiseUnifyFailure v1 v2)
   drainReactivation procMap hc'
 executeBodyGoal hc (D.BodyHostStmt f args) = do
   argVals <- traverse termToValue args
@@ -404,8 +406,9 @@ executeBodyGoal hc (D.BodyIs v expr) = do
   case Map.lookup v varMap of
     Just existing -> do
       CHRRep procMap hc' _ _ <- getStaticRep
-      (_, observers) <- listen (unify existing result)
+      (ok, observers) <- listen (unify existing result)
       enqueue observers
+      unless ok (raiseUnifyFailure existing result)
       drainReactivation procMap hc'
     Nothing -> modify (Map.insert v result)
 executeBodyGoal _ (D.BodyConstraint c) = do
@@ -423,6 +426,17 @@ executeBodyGoal hc (D.BodyFunctionCall name args) = do
   argVals <- traverse termToValue args
   _ <- callProc procMap hc (funcProcName name (length argVals)) (map RVal argVals)
   pure ()
+
+-- | Raise a runtime error describing a failed unification.
+raiseUnifyFailure :: (Unify :> es) => Value -> Value -> Eff es ()
+raiseUnifyFailure v1 v2 = do
+  t1 <- valueToTerm "_" v1
+  t2 <- valueToTerm "_" v2
+  error $
+    "unification failure: cannot unify "
+      ++ prettyTerm t1
+      ++ " with "
+      ++ prettyTerm t2
 
 -- | Call a host function, failing with a clear message if not found.
 hostCall :: (Unify :> es, CHRStore :> es, IOE :> es) => Maybe HostCallFn -> Text -> [RuntimeVal] -> Eff es RuntimeVal

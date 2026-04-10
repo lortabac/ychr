@@ -32,7 +32,8 @@
           (ychr var)
           (ychr store)
           (ychr history)
-          (ychr reactivation))
+          (ychr reactivation)
+          (ychr pretty))
 
   ;;; Session initialization: creates a fully initialized session
   (define (%make-session num-types)
@@ -43,10 +44,18 @@
                   '()
                   '()))
 
-  ;;; Unify wrapper: unifies and enqueues observers
+  ;;; Unify wrapper: unifies and enqueues observers. Raises a runtime
+  ;;; error on failure — YCHR has no backtracking, so a failed
+  ;;; unification must abort execution.
   (define (%unify s v1 v2)
     (let-values (((ok observers) (unify v1 v2)))
       (enqueue! s observers)
+      (unless ok
+        (error '%unify
+               (string-append "unification failure: cannot unify "
+                              (pretty-term v1)
+                              " with "
+                              (pretty-term v2))))
       ok))
 
   ;;; Type predicates

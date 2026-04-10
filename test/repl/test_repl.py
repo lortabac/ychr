@@ -28,6 +28,11 @@ REPL_TESTS = [
     ("R is member(1, [1, 2]).", "R = true.\n"),
     ("R is member(1, [0, 1, 2]).", "R = true.\n"),
     ("R is member(1, [0, 2]).", "R = false.\n"),
+    ("1 = 2.", "Error: unification failure: cannot unify 1 with 2\n"),
+    (
+        "[X, Y] = [1, 2, 3].",
+        "Error: unification failure: cannot unify [1, 2] with [1, 2, 3]\n",
+    ),
 ]
 
 
