@@ -1,5 +1,6 @@
 :- module(builtins, [
     type(bool/0),
+    type(list/1),
     identity/2,
     print/1,
     '+'/2,
@@ -13,6 +14,8 @@
     '>='/2,
     '=<'/2,
     '=='/2,
+    max/2,
+    min/2,
     var/1,
     nonvar/1,
     integer/1,
@@ -39,6 +42,8 @@
 
 :- chr_type bool ---> true ; false.
 
+:- chr_type list(T) ---> [] ; [T|list(T)].
+
 :- chr_constraint
     identity/2,
     print/1.
@@ -59,6 +64,8 @@ print(X) <=> host:print(X).
     '>='/2,
     '=<'/2,
     '=='/2,
+    max/2,
+    min/2,
     var/1,
     nonvar/1,
     integer/1,
@@ -92,6 +99,12 @@ X >= Y -> host:'>='(X, Y).
 X =< Y -> host:'=<'(X, Y).
 
 X == Y -> host:'=='(X, Y).
+
+max(X, Y) | X >= Y -> X.
+max(_, Y) -> Y.
+
+min(X, Y) | X =< Y -> X.
+min(_, Y) -> Y.
 
 var(X) -> host:var(X).
 

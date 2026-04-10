@@ -5,7 +5,10 @@
     length/1,
     member/2,
     append/2,
-    sum_list/1
+    maplist/2,
+    foldl/3,
+    sum_list/1,
+    product_list/1
 ]).
 
 :- function
@@ -15,7 +18,11 @@
     length/1,
     member/2,
     append/2,
-    sum_list/1.
+    maplist/2,
+    foldl/3,
+    foldl_/3,
+    sum_list/1,
+    product_list/1.
 
 cons(X, Xs) -> [X|Xs].
 
@@ -33,5 +40,14 @@ member(X, [_|Xs]) -> member(X, Xs).
 append([], Ys) -> Ys.
 append([X|Xs], Ys) -> cons(X, append(Xs, Ys)).
 
-sum_list([]) -> 0.
-sum_list([X|Xs]) -> X + sum_list(Xs).
+maplist(_, []) -> [].
+maplist(F, [X|Xs]) -> cons(call_fun(F, X), maplist(F, Xs)).
+
+foldl(F, Init, Xs) -> foldl_(F, Xs, Init).
+
+foldl_(F, [], Acc) -> Acc.
+foldl_(F, [X|Xs], Acc) -> foldl_(F, Xs, call_fun(F, Acc, X)).
+
+sum_list(Xs) -> foldl('+'/2, 0, Xs).
+
+product_list(Xs) -> foldl('*'/2, 1, Xs).
