@@ -2,6 +2,7 @@ module Main (main) where
 
 import Test.Tasty (defaultMain, testGroup)
 import YCHR.CollectTest qualified
+import YCHR.CompileTest qualified
 import YCHR.DSLTest qualified
 import YCHR.DesugarTest qualified
 import YCHR.EndToEndTest qualified
@@ -26,6 +27,7 @@ main = do
       "ychr"
       [ golden,
         YCHR.CollectTest.tests,
+        YCHR.CompileTest.tests,
         YCHR.PrettyTest.tests,
         YCHR.EndToEndTest.tests,
         YCHR.MetaTest.tests,
