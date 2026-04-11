@@ -1,0 +1,19 @@
+:- module(graph_test, [run/3]).
+
+:- chr_constraint edge/2, path/3, get_path/3, run/3.
+
+base    @ edge(X, Y) ==> path(X, Y, 1).
+step    @ path(X, Y, N), edge(Y, Z) ==> N1 is N + 1, path(X, Z, N1).
+shorter @ path(X, Y, N) \ path(X, Y, M) <=> M >= N | true.
+
+found    @ path(X, Y, N) \ get_path(X, Y, R) <=> R = found(N).
+notfound @ get_path(_, _, R) <=> R = none.
+
+run(R1, R2, R3) <=>
+    edge(a, b),
+    edge(b, c),
+    edge(a, c),
+    edge(c, d),
+    get_path(a, c, R1),
+    get_path(a, d, R2),
+    get_path(d, a, R3).
