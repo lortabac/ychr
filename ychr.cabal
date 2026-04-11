@@ -92,6 +92,7 @@ test-suite ychr-tests
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
     other-modules:    YCHR.CollectTest
+                    , YCHR.CompileTest
                     , YCHR.EndToEndTest
                     , YCHR.DSLTest
                     , YCHR.DesugarTest

@@ -58,6 +58,8 @@ where
 
 import Control.Monad (foldM)
 import Data.List (partition, sortOn)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -216,31 +218,37 @@ buildVarMap occ =
 -- then append the trailing @Return false@ that signals "no early drop".
 genOccurrenceBody :: Set Identifier -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
 genOccurrenceBody funSet symTab varMap occ = do
-  inner <- genGuardedFire funSet symTab varMap occ
-  let body = wrapInPartnerLoops occ inner
+  (inner, condMap) <- genGuardedFire funSet symTab varMap occ
+  let body = wrapInPartnerLoops occ condMap inner
   pure (body ++ [Return (Lit (BoolLit False))])
 
 -- | Compile the guards followed by the rule-firing block. Returns the
--- statements that go at the innermost partner-loop position: any HNF
+-- statements that go at the innermost partner-loop position — any HNF
 -- match-guard wrappers (lets and structural @if@s introduced by
 -- 'D.GuardMatch' / 'D.GuardGetArg') wrapped around the conditional
--- 'genFireStmts' result.
-genGuardedFire :: Set Identifier -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
+-- 'genFireStmts' result — together with the per-partner index
+-- conditions lifted out of equality check guards by 'compileCheckGuards'.
+genGuardedFire ::
+  Set Identifier ->
+  SymbolTable ->
+  VarMap ->
+  Occurrence ->
+  Eff '[Writer [CompileError]] ([Stmt], PartnerCondMap)
 genGuardedFire funSet symTab varMap occ = do
   let AnnP {node = guards, sourceLoc = guardLoc, parsed = guardP} = occ.rule.guard
       guardSi = (guardLoc, guardP)
-  (matchWrapper, guardExpr, varMap') <- compileGuards funSet varMap guardSi guards
+  (matchWrapper, condMap, guardExpr, varMap') <- compileGuards funSet (Just occ) varMap guardSi guards
   fireStmts <- genFireStmts funSet symTab varMap' occ
   let guarded = case guardExpr of
         Nothing -> fireStmts
         Just gExpr -> [If gExpr fireStmts []]
-  pure (matchWrapper guarded)
+  pure (matchWrapper guarded, condMap)
 
 -- | Wrap a pre-built inner block in one nested 'Foreach' per partner
 -- (paper §5.2, Listing 1). For each partner @k@ this produces:
 --
 -- @
--- Foreach Lk cType susp_k [] [
+-- Foreach Lk cType susp_k condsK [
 --   let pId_k  = susp_k.id
 --   let pArg_… = susp_k.arg(…)
 --   if pId_k ≠ id ∧ pId_k ≠ pId_0 ∧ … then
@@ -248,9 +256,14 @@ genGuardedFire funSet symTab varMap occ = do
 -- ]
 -- @
 --
+-- @condsK@ is the index-condition list lifted out of equality check
+-- guards by 'compileCheckGuards' (paper §5.3, "Indexing"): the iterator
+-- skips candidates whose argument values do not match without ever
+-- entering the loop body.
+--
 -- When @occ@ has no partners the inner block is returned unchanged.
-wrapInPartnerLoops :: Occurrence -> [Stmt] -> [Stmt]
-wrapInPartnerLoops occ inner =
+wrapInPartnerLoops :: Occurrence -> PartnerCondMap -> [Stmt] -> [Stmt]
+wrapInPartnerLoops occ condMap inner =
   -- Loops are built innermost-first by folding from the right, so the
   -- partner with the highest index ends up as the innermost loop and
   -- partner 0 as the outermost — matching the source order of the head.
@@ -261,6 +274,7 @@ wrapInPartnerLoops occ inner =
       let label = partLabel k
           suspVar = partSuspName k
           partArity = length partner.constraint.args
+          conds = Map.findWithDefault [] k condMap
           -- Bind the partner's id and arguments as ordinary locals so
           -- the rest of the body can reference them by name.
           fieldExtracts =
@@ -281,7 +295,7 @@ wrapInPartnerLoops occ inner =
             ]
           distinctAll = foldl' And distinctActive distinctEarlier
           guarded = [If distinctAll inside []]
-       in [Foreach label partner.cType suspVar [] (fieldExtracts ++ guarded)]
+       in [Foreach label partner.cType suspVar conds (fieldExtracts ++ guarded)]
 
 -- ---------------------------------------------------------------------------
 -- Fire: history check + kill + body + early drop + backjumping
@@ -403,6 +417,91 @@ compileExpr _ varMap si t = compileTerm varMap si t
 -- Compile guards
 -- ---------------------------------------------------------------------------
 
+-- | Per-partner index conditions lifted out of check guards by the
+-- 'Foreach' index-condition pushdown optimization. Each entry maps a
+-- partner index @k@ to the @[(ArgIndex, Expr)]@ list that becomes
+-- 'YCHR.VM.Foreach' @k@'s index-conditions argument.
+type PartnerCondMap = Map PartnerIndex [(ArgIndex, Expr)]
+
+-- | Free 'Var' names occurring in an 'Expr'. Used by the index-condition
+-- pushdown classifier to decide whether the non-partner-arg side of an
+-- equality is referenceable at a partner loop's evaluation point.
+freeVars :: Expr -> Set Name
+freeVars = go
+  where
+    go (Var n) = Set.singleton n
+    go (Lit _) = Set.empty
+    go NewVar = Set.empty
+    go (CallExpr _ es) = Set.unions (map go es)
+    go (HostCall _ es) = Set.unions (map go es)
+    go (EvalDeep e) = go e
+    go (Not e) = go e
+    go (And a b) = go a `Set.union` go b
+    go (Or a b) = go a `Set.union` go b
+    go (MakeTerm _ es) = Set.unions (map go es)
+    go (MatchTerm e _ _) = go e
+    go (GetArg e _) = go e
+    go (CreateConstraint _ es) = Set.unions (map go es)
+    go (Alive e) = go e
+    go (IdEqual a b) = go a `Set.union` go b
+    go (IsConstraintType e _) = go e
+    go (NotInHistory _ es) = Set.unions (map go es)
+    go (Unify a b) = go a `Set.union` go b
+    go (Equal a b) = go a `Set.union` go b
+    go (FieldGet e _) = go e
+
+-- | Set of variable names visible at the moment partner @k@'s
+-- 'YCHR.VM.Foreach' evaluates its index-condition expressions: the
+-- active constraint's argument names, plus every earlier partner's
+-- argument names. Match-guard 'Let' bindings are deliberately /not/
+-- included — they live inside the innermost guard wrapper and are not
+-- in scope at any 'Foreach' evaluation point.
+inScopeBeforeLoop :: Occurrence -> PartnerIndex -> Set Name
+inScopeBeforeLoop occ k =
+  let activeNames = Set.fromList (argNames occ.conArity)
+      earlierPartnerNames =
+        Set.fromList
+          [ partArgName k' j
+          | (k', p) <- zip [PartnerIndex 0 ..] occ.partners,
+            k' < k,
+            j <- [0 .. length p.constraint.args - 1]
+          ]
+   in activeNames `Set.union` earlierPartnerNames
+
+-- | Recognise an 'Expr' that is a reference to a partner argument
+-- variable. The inverse of 'partArgName' for the partner indices and
+-- arities present in @occ@.
+asPartnerArg :: Occurrence -> Expr -> Maybe (PartnerIndex, ArgIndex)
+asPartnerArg occ (Var n) = Map.lookup n partArgs
+  where
+    partArgs =
+      Map.fromList
+        [ (partArgName k j, (k, ArgIndex j))
+        | (k, p) <- zip [PartnerIndex 0 ..] occ.partners,
+          j <- [0 .. length p.constraint.args - 1]
+        ]
+asPartnerArg _ _ = Nothing
+
+-- | Try to lift an @Equal a b@ check to an index condition on a partner
+-- 'YCHR.VM.Foreach'. Returns @Just (k, j, other)@ when exactly one side
+-- is partner @k@'s @j@-th argument and the other side's free variables
+-- are all in scope at loop @k@'s evaluation point. Returns @Nothing@ if
+-- neither side qualifies — in which case the equality stays in the
+-- residual check expression.
+classifyEqual ::
+  Occurrence ->
+  Expr ->
+  Expr ->
+  Maybe (PartnerIndex, ArgIndex, Expr)
+classifyEqual occ a b
+  | Just (k, j) <- asPartnerArg occ a,
+    freeVars b `Set.isSubsetOf` inScopeBeforeLoop occ k =
+      Just (k, j, b)
+  | Just (k, j) <- asPartnerArg occ b,
+    freeVars a `Set.isSubsetOf` inScopeBeforeLoop occ k =
+      Just (k, j, a)
+  | otherwise = Nothing
+
 -- | Compile a guard conjunction.  Guards are split into two groups:
 --
 --   * __Match guards__ ('GuardMatch', 'GuardGetArg') introduce new
@@ -413,18 +512,26 @@ compileExpr _ varMap si t = compileTerm varMap si t
 --     guards.
 --
 --   * __Check guards__ ('GuardEqual', 'GuardExpr') are pure boolean
---     tests.  They are compiled into a single 'And'-chained expression.
+--     tests.  Equalities whose shape matches 'classifyEqual' are lifted
+--     into per-partner index conditions ('PartnerCondMap'); the rest
+--     are compiled into a single 'And'-chained residual expression.
+-- | Compile a guard conjunction. The 'Maybe' 'Occurrence' parameter
+-- enables the index-condition pushdown classifier when an occurrence
+-- context is available; pass 'Nothing' (e.g. when compiling user-defined
+-- function equations) to bypass classification — no partners exist so
+-- nothing is liftable.
 compileGuards ::
   Set Identifier ->
+  Maybe Occurrence ->
   VarMap ->
   SrcInfo ->
   [D.Guard] ->
-  Eff '[Writer [CompileError]] ([Stmt] -> [Stmt], Maybe Expr, VarMap)
-compileGuards funSet varMap si guards = do
+  Eff '[Writer [CompileError]] ([Stmt] -> [Stmt], PartnerCondMap, Maybe Expr, VarMap)
+compileGuards funSet mOcc varMap si guards = do
   let (matchGuards, checkGuards) = partition isMatchGuard guards
   (matchWrapper, varMap') <- foldM (compileMatchGuard si) (id, varMap) matchGuards
-  checkExpr <- compileCheckGuards funSet varMap' si checkGuards
-  pure (matchWrapper, checkExpr, varMap')
+  (condMap, checkExpr) <- compileCheckGuards funSet mOcc varMap' si checkGuards
+  pure (matchWrapper, condMap, checkExpr, varMap')
   where
     isMatchGuard (D.GuardMatch {}) = True
     isMatchGuard (D.GuardGetArg {}) = True
@@ -446,20 +553,44 @@ compileMatchGuard si (matchWrapper, varMap) (D.GuardGetArg vname term idx) = do
   pure (matchWrapper . binding, varMap')
 compileMatchGuard _ acc _ = pure acc
 
-compileCheckGuards :: Set Identifier -> VarMap -> SrcInfo -> [D.Guard] -> Eff '[Writer [CompileError]] (Maybe Expr)
-compileCheckGuards funSet varMap si guards =
-  case filter isNonTrivial guards of
-    [] -> pure Nothing
-    gs -> Just . foldl1 And <$> traverse (compileCheckGuard funSet varMap si) gs
+-- | Compile the check guards of an occurrence, classifying each one as
+-- either a liftable index condition for a partner 'YCHR.VM.Foreach' or
+-- a residual boolean check that stays at the innermost guard position.
+--
+-- The classification (paper §5.3, "Indexing" / Loop-Invariant Code
+-- Motion in spirit) inspects each compiled equality with
+-- 'classifyEqual'. Liftable equalities are routed to a per-partner map;
+-- the rest are 'And'-folded in source order into the residual check.
+compileCheckGuards ::
+  Set Identifier ->
+  Maybe Occurrence ->
+  VarMap ->
+  SrcInfo ->
+  [D.Guard] ->
+  Eff '[Writer [CompileError]] (PartnerCondMap, Maybe Expr)
+compileCheckGuards funSet mOcc varMap si guards = do
+  (condMap, residuals) <- foldM step (Map.empty, []) guards
+  let residual = case residuals of
+        [] -> Nothing
+        rs -> Just (foldl1 And rs)
+  pure (condMap, residual)
   where
-    isNonTrivial (D.GuardCommon D.GoalTrue) = False
-    isNonTrivial _ = True
-
-compileCheckGuard :: Set Identifier -> VarMap -> SrcInfo -> D.Guard -> Eff '[Writer [CompileError]] Expr
-compileCheckGuard _ _ _ (D.GuardCommon D.GoalTrue) = pure (Lit (BoolLit True))
-compileCheckGuard _ varMap si (D.GuardEqual t1 t2) = Equal <$> compileTerm varMap si t1 <*> compileTerm varMap si t2
-compileCheckGuard funSet varMap si (D.GuardExpr term) = EvalDeep <$> compileExpr funSet varMap si term
-compileCheckGuard _ _ _ _ = pure (Lit (BoolLit True))
+    classify e1 e2 = case mOcc of
+      Just occ -> classifyEqual occ e1 e2
+      Nothing -> Nothing
+    step acc (D.GuardCommon D.GoalTrue) = pure acc
+    step (cm, rs) (D.GuardEqual t1 t2) = do
+      e1 <- compileTerm varMap si t1
+      e2 <- compileTerm varMap si t2
+      case classify e1 e2 of
+        Just (k, j, other) ->
+          pure (Map.insertWith (flip (++)) k [(j, other)] cm, rs)
+        Nothing ->
+          pure (cm, rs ++ [Equal e1 e2])
+    step (cm, rs) (D.GuardExpr term) = do
+      e <- EvalDeep <$> compileExpr funSet varMap si term
+      pure (cm, rs ++ [e])
+    step acc _ = pure acc
 
 -- ---------------------------------------------------------------------------
 -- Compile body goals
@@ -549,7 +680,9 @@ buildEquationVarMap procParams normalizedArgs =
 compileEquation :: Set Identifier -> [Name] -> SrcInfo -> D.Equation -> Eff '[Writer [CompileError]] [Stmt]
 compileEquation funSet params si eq = do
   let varMap = buildEquationVarMap params eq.params
-  (matchWrapper, guardExpr, varMap') <- compileGuards funSet varMap si eq.guards
+  -- Equations have no partners, so the index-condition pushdown
+  -- classifier never fires; pass 'Nothing' to short-circuit it.
+  (matchWrapper, _condMap, guardExpr, varMap') <- compileGuards funSet Nothing varMap si eq.guards
   rhsExpr <- compileExpr funSet varMap' si eq.rhs
   let returnStmt = [Return rhsExpr]
       inner = case guardExpr of
