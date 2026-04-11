@@ -1,0 +1,9 @@
+:- module(function_fib, [compute_fib/2]).
+:- chr_constraint compute_fib/2.
+:- function fib/1.
+
+fib(0) -> 0.
+fib(1) -> 1.
+fib(N) | N > 1 -> fib(N - 1) + fib(N - 2).
+
+compute_fib(N, R) <=> R is fib(N).
