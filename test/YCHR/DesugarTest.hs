@@ -6,7 +6,7 @@ import Data.Map.Strict qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import YCHR.DSL
-import YCHR.Desugar (DesugarError (..), desugarProgram, extractSymbolTable)
+import YCHR.Desugar (DesugarError (..), desugarProgram, extractSymbolTable, liftAllLambdas)
 import YCHR.Desugared qualified as D
 import YCHR.Parsed
 import YCHR.Pretty (AnnP (..), noAnnP)
@@ -26,7 +26,8 @@ tests =
       errorTests,
       flatteningTests,
       ruleNameTests,
-      symbolTableTests
+      symbolTableTests,
+      lambdaLiftTests
     ]
 
 desugar :: [Module] -> IO D.Program
@@ -428,4 +429,60 @@ symbolTableTests =
                 []
         let table = extractSymbolTable prog
         symbolTableSize table @?= 2
+    ]
+
+--------------------------------------------------------------------------------
+-- Lambda lifting
+--------------------------------------------------------------------------------
+
+lambdaLiftTests :: TestTree
+lambdaLiftTests =
+  testGroup
+    "lambda-lift"
+    [ testCase "lambda captures HNF-bound pattern variable" $ do
+        -- f([X|Xs]) -> fun(Y) -> Y + X
+        --
+        -- HNF decomposes the compound pattern so that X is bound by a
+        -- GuardGetArg, not by the surface parameter list. The
+        -- lambda-lifter must therefore treat HNF-introduced bindings as
+        -- in scope; otherwise the fun(Y) lambda would be lifted without
+        -- capturing X and the reference inside the body would dangle.
+        let lambdaBody = func "+" [var "Y", var "X"]
+            lambdaTerm =
+              CompoundTerm
+                (Unqualified "->")
+                [CompoundTerm (Unqualified "fun") [var "Y"], lambdaBody]
+            listPattern = func "." [var "X", var "Xs"]
+            funDecl =
+              noAnn
+                FunctionDecl
+                  { name = "f",
+                    arity = 1,
+                    argTypes = Nothing,
+                    returnType = Nothing
+                  }
+            funEq =
+              noAnn
+                FunctionEquation
+                  { funName = "f",
+                    args = [listPattern],
+                    guard = noAnn [],
+                    rhs = noAnn lambdaTerm
+                  }
+            m = (module' "M") {decls = [funDecl], equations = [funEq]}
+        prog <- desugar [m]
+        let lifted = liftAllLambdas prog
+            isLambda f = case f.name of
+              Qualified _ n -> n == "__lambda_0"
+              _ -> False
+        case filter isLambda lifted.functions of
+          [lam] -> do
+            lam.arity @?= 2
+            case lam.equations of
+              [eq] -> do
+                eq.params @?= [var "X", var "Y"]
+                eq.guards @?= []
+                eq.rhs @?= lambdaBody
+              eqs -> assertFailure $ "expected 1 equation, got " ++ show (length eqs)
+          fs -> assertFailure $ "expected exactly one __lambda_0, got " ++ show (length fs)
     ]

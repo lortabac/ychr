@@ -220,7 +220,29 @@ alreadyQualifiedTests =
           [r] -> return r
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
         rule.head.node
-          @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]]
+          @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
+      testCase "pre-qualified reference to non-imported module is rejected" $ do
+        -- A declares leq/2 but B does not import A; the qualification
+        -- must not silently bypass the visibility rules.
+        let modA = module' "A" `declaring` ["leq" // 2]
+            modB =
+              module' "B"
+                `defining` [["A" .: con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+        renameProgram [modA, modB]
+          @?= Left [UnknownName dummyLoc "leq" 2],
+      testCase "pre-qualified reference to non-exported name is rejected" $ do
+        -- A declares leq/2 and gt/2 but only exports leq/2. B imports A
+        -- and tries to reach gt/2 via qualification; still hidden.
+        let modA =
+              module' "A"
+                `declaring` ["leq" // 2, "gt" // 2]
+                `exporting` ["leq" // 2]
+            modB =
+              module' "B"
+                `importing` ["A"]
+                `defining` [["A" .: con "gt" [var "X", var "Y"]] <=> [atom "true"]]
+        renameProgram [modA, modB]
+          @?= Left [UnknownName dummyLoc "gt" 2]
     ]
 
 --------------------------------------------------------------------------------
