@@ -1,0 +1,13 @@
+:- module(lambda_hnf_capture, [result/2, adder_from_pair/1]).
+:- chr_constraint result/2.
+:- function adder_from_pair/1.
+
+% adder_from_pair(pair(A, _)) takes a compound argument whose first
+% field is extracted into A by an HNF-generated GuardGetArg guard. The
+% RHS is a closure that captures A. This exercises the liftEquation
+% scope fix: before the fix, A was not visible to the lambda-lifter
+% (eq.params only contained the top-level _hnf_0), so the closure was
+% lifted without capturing A and the reference dangled at runtime.
+adder_from_pair(pair(A, _)) -> fun(X) -> X + A.
+
+result(test1, R) <=> F is adder_from_pair(pair(10, 99)), R is call_fun(F, 5).

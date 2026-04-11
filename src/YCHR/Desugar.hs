@@ -3,24 +3,43 @@
 
 -- |
 -- Module      : YCHR.Desugar
--- Description : Erases module boundaries and flattens CHR rules into an internal AST.
+-- Description : Transforms the renamed surface AST into the compiler's internal AST.
 --
--- The Desugarer is the final transformation pass before code generation. Its
--- responsibilities include:
+-- The Desugarer is the transformation pass between the renamed
+-- 'YCHR.Parsed' AST and the internal 'YCHR.Desugared.Program' consumed by
+-- the compiler. It performs, in order:
 --
--- 1. Module Erasure: Flattens a collection of 'YCHR.Parsed.Module' objects into
---    a single 'YCHR.Desugared.Program'.
--- 2. Goal Classification: Uses the 'Name' sum-type (populated by the Renamer)
---    to partition rule bodies into CHR Constraints, Host Statements,
---    Unifications, or Host Calls.
--- 3. Head Normalization: Maps the various surface rule types (Simplification,
---    Propagation, Simpagation) into a uniform 'Kept/Removed' head structure.
--- 4. Symbol Table Generation: Performs a whole-program scan to assign
---    unique, sequential 0-indexed integers to every 'Qualified' CHR constraint,
---    enabling efficient array-based dispatch in the VM.
+-- 1. /Module erasure/: flatten @[P.Module]@ into one 'D.Program'.
 --
--- By the end of this pass, the program is no longer a set of human-readable
--- files, but a structured list of instructions and a numeric symbol map.
+-- 2. /Head-kind flattening/: map the three surface head kinds
+--    ('P.Simplification', 'P.Propagation', 'P.Simpagation') to the
+--    uniform @Kept\/Removed@ shape of 'D.Head'.
+--
+-- 3. /Head Normal Form (HNF)/: in every head constraint, replace
+--    non-variable and duplicated-variable arguments with fresh variables,
+--    emitting explicit 'D.GuardEqual' / 'D.GuardMatch' / 'D.GuardGetArg'
+--    guards.
+--
+-- 4. /Goal classification/: partition each body into structured 'D.BodyGoal'
+--    values ('D.BodyUnify', 'D.BodyIs', 'D.BodyHostStmt',
+--    'D.BodyFunctionCall', 'D.BodyConstraint', or 'D.BodyCommon
+--    D.GoalTrue').
+--
+-- 5. /Guard classification/: map each surface guard term to a 'D.Guard'.
+--
+-- 6. /Function-equation desugaring/: group equations by function,
+--    HNF-normalize their patterns, and produce 'D.Function' values.
+--
+-- 7. /Lambda lifting/: replace @fun(...) -> ...@ closures with top-level
+--    @__lambda_N@ functions plus closure compound terms carrying the
+--    captured free variables.
+--
+-- 'extractSymbolTable' is a separate utility that assigns sequential IDs
+-- to every 'Qualified' rule-head constraint in the desugared program; it
+-- is not part of the main pipeline.
+--
+-- Non-obvious design choices are documented in the \"Notes\" block at the
+-- bottom of this file.
 module YCHR.Desugar
   ( DesugarError (..),
     desugarProgram,
@@ -49,6 +68,21 @@ data DesugarError
   = UnexpectedBodyTerm P.SourceLoc Term
   | UnexpectedGuardTerm P.SourceLoc Term
   deriving (Eq, Show)
+
+-- | Prefix for fresh variables introduced by the Head Normal Form
+-- transformation (see 'normalizeHead').
+hnfPrefix :: Text
+hnfPrefix = "_hnf_"
+
+-- | Prefix for fresh variables introduced when rewriting a non-variable
+-- @T is E@ form into @R is E, R = T@ (see 'desugarBodyGoal').
+isPrefix :: Text
+isPrefix = "__is_"
+
+-- | Prefix for top-level function names produced by the lambda-lifter
+-- (see 'liftAllLambdas' and 'liftQueryLambdas').
+lambdaPrefix :: Text
+lambdaPrefix = "__lambda_"
 
 isFunctionDecl :: P.Declaration -> Bool
 isFunctionDecl P.FunctionDecl {} = True
@@ -105,11 +139,14 @@ getRuleConstraints r =
         ++ rHead.removed
         ++ [c | D.BodyConstraint c <- rBody]
 
+-- | Desugar one parsed rule: classify its body goals, desugar its user
+-- guards, flatten the head kind, and run HNF on the head. HNF-emitted
+-- guards are prepended to the user guards so they run first.
 desugarRule :: Set.Set Name -> P.Rule -> Eff '[Writer [DesugarError]] D.Rule
 desugarRule funSet r = do
   ruleBody <- desugarBodyGoals funSet r.body.sourceLoc r.body.node
   userGuards <- traverse (desugarGuard r.guard.sourceLoc) r.guard.node
-  let rawHead = desugarHead r.head.node
+  let rawHead = flattenHeadKind r.head.node
       (hnfGuards, normalizedHead) = normalizeHead rawHead
   pure
     D.Rule
@@ -119,23 +156,38 @@ desugarRule funSet r = do
         body = AnnP ruleBody r.body.sourceLoc (PrettyE r.body.node)
       }
 
-desugarHead :: P.Head -> D.Head
-desugarHead h = case h of
+-- | Map the three surface head kinds to the uniform @Kept \/ Removed@
+-- shape used by the desugared AST. Propagation rules keep every
+-- constraint; simplification rules remove every constraint; simpagation
+-- rules carry both lists explicitly.
+flattenHeadKind :: P.Head -> D.Head
+flattenHeadKind h = case h of
   P.Simplification rs -> D.Head [] rs
   P.Propagation ks -> D.Head ks []
   P.Simpagation ks rs -> D.Head ks rs
 
--- Head Normal Form (HNF) transformation
--- All head arguments become distinct variables; duplicate variables and
--- non-variable terms are replaced with fresh variables and explicit
--- GuardEqual guards are generated.
+-- ---------------------------------------------------------------------------
+-- Head Normal Form (HNF)
+-- ---------------------------------------------------------------------------
 
+-- | In every head constraint, replace non-variable and duplicated-variable
+-- arguments with fresh variables and emit explicit 'D.GuardEqual',
+-- 'D.GuardMatch', and 'D.GuardGetArg' guards that recover the original
+-- semantics.
+
+-- | Threaded state for HNF: a fresh-variable counter, the set of
+-- variable names already seen in the head so far (so that duplicates
+-- can be detected), and the list of guards accumulated in reverse order.
 data HnfState = HnfState
   { hnfCounter :: !Int,
     hnfSeen :: Set.Set Text,
     hnfGuards :: [D.Guard] -- accumulated in reverse
   }
 
+-- | Normalize the kept and removed constraints of a head. Kept is
+-- processed before removed so that variables first appearing in kept
+-- constraints become the canonical binding (see the note at the bottom
+-- of this module).
 normalizeHead :: D.Head -> ([D.Guard], D.Head)
 normalizeHead h =
   let initState = HnfState 0 Set.empty []
@@ -143,15 +195,19 @@ normalizeHead h =
       (st2, removed') = mapAccumL normalizeConstraint st1 h.removed
    in (reverse st2.hnfGuards, D.Head kept' removed')
 
+-- | Normalize the arguments of one head constraint.
 normalizeConstraint :: HnfState -> Constraint -> (HnfState, Constraint)
 normalizeConstraint st (Constraint cname cargs) =
   let (st', args') = mapAccumL normalizeArg st cargs
    in (st', Constraint cname args')
 
+-- | Normalize one argument of a head constraint. Fresh variables are
+-- only introduced for duplicates and non-variables; first-use variables
+-- and wildcards pass through.
 normalizeArg :: HnfState -> Term -> (HnfState, Term)
 normalizeArg st (VarTerm v)
   | Set.member v st.hnfSeen =
-      let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
+      let fresh = hnfPrefix <> T.pack (show st.hnfCounter)
        in ( st
               { hnfCounter = st.hnfCounter + 1,
                 hnfGuards = D.GuardEqual (VarTerm v) (VarTerm fresh) : st.hnfGuards
@@ -164,12 +220,12 @@ normalizeArg st (VarTerm v)
 -- and cannot duplicate, so no fresh variable or guard is needed.
 normalizeArg st Wildcard = (st, Wildcard)
 normalizeArg st (CompoundTerm cname cargs) =
-  let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
+  let fresh = hnfPrefix <> T.pack (show st.hnfCounter)
       st' = st {hnfCounter = st.hnfCounter + 1}
       st'' = decomposeCompound st' fresh cname cargs
    in (st'', VarTerm fresh)
 normalizeArg st term =
-  let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
+  let fresh = hnfPrefix <> T.pack (show st.hnfCounter)
    in ( st
           { hnfCounter = st.hnfCounter + 1,
             hnfGuards = D.GuardEqual (VarTerm fresh) term : st.hnfGuards
@@ -189,7 +245,7 @@ decomposeArg :: HnfState -> Text -> Int -> Term -> HnfState
 decomposeArg st parentVar i (VarTerm v)
   | Set.member v st.hnfSeen =
       -- Duplicate variable: extract and check equality
-      let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
+      let fresh = hnfPrefix <> T.pack (show st.hnfCounter)
           getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
           eqGuard = D.GuardEqual (VarTerm v) (VarTerm fresh)
        in st
@@ -206,7 +262,7 @@ decomposeArg st parentVar i (VarTerm v)
 decomposeArg st _ _ Wildcard = st
 decomposeArg st parentVar i (CompoundTerm cname cargs) =
   -- Nested compound: extract then recursively decompose
-  let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
+  let fresh = hnfPrefix <> T.pack (show st.hnfCounter)
       getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
       st' =
         st
@@ -216,7 +272,7 @@ decomposeArg st parentVar i (CompoundTerm cname cargs) =
    in decomposeCompound st' fresh cname cargs
 decomposeArg st parentVar i term =
   -- Ground term (atom, integer, string): extract and check equality
-  let fresh = "_hnf_" <> T.pack (show st.hnfCounter)
+  let fresh = hnfPrefix <> T.pack (show st.hnfCounter)
       getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
       eqGuard = D.GuardEqual (VarTerm fresh) term
    in st
@@ -224,24 +280,40 @@ decomposeArg st parentVar i term =
           hnfGuards = eqGuard : getGuard : st.hnfGuards
         }
 
--- | Desugar function equations: group by name, normalize patterns via HNF.
+-- | Desugar every function in every module: find each @:- function@
+-- declaration, gather its equations by name, and produce a 'D.Function'
+-- per declaration.
 desugarFunctions :: [P.Module] -> Eff '[Writer [DesugarError]] [D.Function]
 desugarFunctions mods =
   traverse
-    (\(m, d) -> desugarFunction m.name d.name d.arity d.argTypes d.returnType [eq | P.Ann eq _ <- m.equations, eq.funName == d.name])
+    ( \(m, d) ->
+        desugarFunction
+          m.name
+          d
+          [eq | P.Ann eq _ <- m.equations, eq.funName == d.name]
+    )
     [(m, d) | m <- mods, P.Ann d _ <- m.decls, isFunctionDecl d]
 
-desugarFunction :: Text -> Text -> Int -> Maybe [TypeExpr] -> Maybe TypeExpr -> [P.FunctionEquation] -> Eff '[Writer [DesugarError]] D.Function
-desugarFunction modName funName arity argTys retTy eqs = do
+-- | Build a single 'D.Function' from its declaring module name, its
+-- parsed 'P.FunctionDecl' (used for the name, arity, and type
+-- annotations), and the matching list of equations.
+desugarFunction ::
+  Text ->
+  P.Declaration ->
+  [P.FunctionEquation] ->
+  Eff '[Writer [DesugarError]] D.Function
+desugarFunction modName (P.FunctionDecl {name, arity, argTypes, returnType}) eqs = do
   desugaredEqs <- traverse desugarEquation eqs
   pure
     D.Function
-      { name = Qualified modName funName,
-        arity = arity,
-        argTypes = argTys,
-        returnType = retTy,
+      { name = Qualified modName name,
+        arity,
+        argTypes,
+        returnType,
         equations = desugaredEqs
       }
+desugarFunction _ d _ =
+  error $ "Desugar.desugarFunction: expected a FunctionDecl, got " ++ show d
 
 desugarEquation :: P.FunctionEquation -> Eff '[Writer [DesugarError]] D.Equation
 desugarEquation eq = do
@@ -286,7 +358,7 @@ freshVarName :: (State Int :> es) => Eff es Text
 freshVarName = do
   n <- get @Int
   modify @Int (+ 1)
-  pure ("__is_" <> T.pack (show n))
+  pure (isPrefix <> T.pack (show n))
 
 runVarNameSupply :: Eff (State Int : es) a -> Eff es a
 runVarNameSupply = evalState (0 :: Int)
@@ -312,9 +384,12 @@ desugarBodyGoals funSet loc terms =
 -- 4. @host:f(…)@ -> 'D.BodyHostStmt'
 -- 5. Qualified name in function set -> 'D.BodyFunctionCall'
 -- 6. Other qualified name -> 'D.BodyConstraint'
--- 7. @true@ -> 'D.GoalTrue'
--- 8. Unqualified compound (renamer should have caught this) -> error
--- 9. Anything else (bare variable, integer, atom, …) -> error
+-- 7. @call_fun(F, …)@ -> 'D.BodyFunctionCall' — @call_fun@ stays
+--    'Unqualified' (it is reserved by the renamer), so it would
+--    otherwise fall into the unqualified-compound error case below.
+-- 8. @true@ -> 'D.GoalTrue'
+-- 9. Unqualified compound (renamer should have caught this) -> error
+-- 10. Anything else (bare variable, integer, atom, …) -> error
 desugarBodyGoal ::
   (State Int :> es, Writer [DesugarError] :> es) =>
   Set.Set Name ->
@@ -350,6 +425,9 @@ desugarBodyGoal funSet loc t = case t of
 -- Lambda lifting
 -- ---------------------------------------------------------------------------
 
+-- | Threaded state for the lambda-lifter: a counter that supplies fresh
+-- @__lambda_N@ names, and the list of top-level functions that have
+-- already been lifted out (in reverse discovery order).
 data LiftState = LiftState
   { liftCounter :: !Int,
     liftedFunctions :: [D.Function]
@@ -368,8 +446,11 @@ extractLambdaParams (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified 
   (params, body)
 extractLambdaParams t = ([], t)
 
--- | Lift lambdas in a single term.  Returns the updated state and the
--- rewritten term (with @^@ replaced by closure compound terms).
+-- | Lift lambdas in a single term. Each @fun(...) -> ...@ is replaced
+-- by a /closure compound term/ of the form @Module:__lambda_N(F1, …,
+-- Fn)@, where @F1 .. Fn@ are the captured free variables; the lambda
+-- body itself is lifted into a fresh top-level 'D.Function'. Returns
+-- the updated state and the rewritten term.
 liftTerm :: Text -> Set.Set Text -> LiftState -> Term -> (LiftState, Term)
 liftTerm modName scope st term = case term of
   CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") _, _] ->
@@ -380,7 +461,7 @@ liftTerm modName scope st term = case term of
         innerScope = scope `Set.union` paramVarNames
         (st', liftedBody) = liftTerm modName innerScope st body
         idx = st'.liftCounter
-        lambdaName = "__lambda_" <> T.pack (show idx)
+        lambdaName = lambdaPrefix <> T.pack (show idx)
         qualName = Qualified modName lambdaName
         allParams = map VarTerm freeVars ++ params
         func =
@@ -432,10 +513,16 @@ liftGuard modName scope st (D.GuardExpr term) =
    in (st', D.GuardExpr term')
 liftGuard _ _ st g = (st, g)
 
--- | Lift lambdas in a function equation.
+-- | Lift lambdas in a function equation. The scope visible to the RHS
+-- (and therefore to any lambda captured inside it) includes the pattern
+-- parameters /and/ the variables introduced by HNF guards — most
+-- importantly 'D.GuardGetArg', which binds the user-written components
+-- of a compound pattern like @maplist(F, [X|Xs]) -> ...@.
 liftEquation :: Text -> LiftState -> D.Equation -> (LiftState, D.Equation)
 liftEquation modName st eq =
-  let scope = Set.unions (map termVars eq.params)
+  let scope =
+        Set.unions (map termVars eq.params)
+          `Set.union` guardVars eq.guards
       (st', guards') = mapAccumL (liftGuard modName scope) st eq.guards
       (st'', rhs') = liftTerm modName scope st' eq.rhs
    in (st'', eq {D.guards = guards', D.rhs = rhs'})
@@ -445,7 +532,10 @@ liftFunction :: LiftState -> D.Function -> (LiftState, D.Function)
 liftFunction st func =
   let modName = case func.name of
         Qualified m _ -> m
-        Unqualified _ -> ""
+        Unqualified _ ->
+          error
+            "Desugar.liftFunction: function has an unqualified name \
+            \(renamer should have caught this)"
       (st', eqs') = mapAccumL (liftEquation modName) st func.equations
    in (st', func {D.equations = eqs'})
 
@@ -458,11 +548,16 @@ ruleHeadVars h =
       arg <- c.args
     ]
 
--- | Extract the module name from a rule's head constraints.
+-- | Extract the module name from a rule's head constraints. Rules
+-- always have at least one head constraint and the renamer always
+-- qualifies it, so the fallback is unreachable in practice.
 ruleModName :: D.Head -> Text
 ruleModName h = case h.kept ++ h.removed of
   (Constraint (Qualified m _) _ : _) -> m
-  _ -> ""
+  _ ->
+    error
+      "Desugar.ruleModName: rule head has no qualified constraint \
+      \(renamer should have caught this)"
 
 -- | Collect all variables from a list of body goals.
 bodyGoalVars :: [D.BodyGoal] -> Set.Set Text
@@ -525,3 +620,56 @@ liftQueryLambdas startCounter goals =
       initState = LiftState startCounter []
       (st, goals') = mapAccumL (liftBodyGoal "__query" scope) initState goals
    in (goals', st.liftedFunctions)
+
+{- ---------------------------------------------------------------------------
+Notes
+-----------------------------------------------------------------------------
+
+Why HNF processes 'kept' constraints before 'removed' ones: variables
+that appear for the first time in a kept constraint become the canonical
+binding for that name. A variable that then recurs in a removed
+constraint is renamed to a fresh @_hnf_N@ and equated to the canonical
+one via a 'D.GuardEqual'. Reversing the order would work just as well
+mathematically but would mean the canonical binding "moves" whenever a
+rule is rewritten from simpagation to simplification/propagation, which
+the paper's scheme avoids.
+
+Why there are three different fresh-variable prefixes:
+
+  * @_hnf_N@   — HNF-introduced variables for duplicated or non-variable
+                head arguments ('normalizeHead', 'decomposeCompound').
+  * @__is_N@   — fresh LHS variables for the non-variable @is@ form
+                (@T is E@ becomes @R is E, R = T@). Double-underscore so
+                they cannot collide with the HNF prefix or with any
+                user-written name.
+  * @__lambda_N@ — names of top-level functions created by the
+                lambda-lifter. Double-underscore again to stay clear of
+                user names.
+
+Each prefix is owned by a different phase and they cannot collide with
+each other or with user variables.
+
+Why 'extractSymbolTable' only scans rules and not functions: the symbol
+table is used by the VM for CHR constraint dispatch (array-indexed
+activation of rule-head occurrences). Functions are invoked by name
+through 'D.BodyFunctionCall', not through the constraint dispatch table,
+so they do not need numeric IDs.
+
+Why 'liftQueryLambdas' uses @\"__query\"@ as the module name: query
+goals don't belong to any user module, but lifted lambdas still need a
+'Qualified' name. @__query@ is a synthetic qualifier that cannot clash
+with a real module (module names in the surface language don't start
+with an underscore). The caller ('EndToEnd.runProgramWithQuery') passes
+a @startCounter@ greater than the number of program lambdas so query
+@__lambda_N@ indices do not overlap with ones already baked into the
+compiled program.
+
+Why 'liftEquation's scope includes 'guardVars': HNF may decompose a
+compound pattern like @[X|Xs]@ into a 'D.GuardGetArg' that binds @X@ and
+@Xs@. Those names are no longer visible from @eq.params@ (which only
+contains the top-level @_hnf_N@), but they are valid references from
+the RHS — including from inside a lambda. The lambda-lifter therefore
+has to see them too, otherwise the lambda would be lifted without
+capturing them and the reference would dangle at runtime. Test:
+@"Desugar.lambda-lift.lambda captures HNF-bound pattern variable"@.
+--------------------------------------------------------------------------- -}
