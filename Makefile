@@ -1,7 +1,7 @@
 PYTEST ?= python3 -m pytest
 GUILE ?= guile3.0
 
-.PHONY: test test-haskell test-scheme test-scheme-runtime test-repl build install format clean
+.PHONY: test test-haskell test-scheme test-scheme-runtime test-repl bench build install format clean
 
 build:
 	cabal build
@@ -22,6 +22,9 @@ test-scheme-runtime:
 
 test-repl: build
 	$(PYTEST) test/repl/ -v
+
+bench: build
+	cabal bench
 
 format:
 	ormolu -i $$(find src app -name '*.hs')

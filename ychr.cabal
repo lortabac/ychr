@@ -122,6 +122,19 @@ test-suite ychr-tests
                     , text
     default-language: GHC2021
 
+benchmark ychr-bench
+    import:           warnings
+    type:             exitcode-stdio-1.0
+    main-is:          Main.hs
+    hs-source-dirs:   bench
+    build-depends:    base ^>=4.21.0.0
+                    , ychr
+                    , criterion >=1.6 && <1.7
+                    , filepath
+                    , text
+    ghc-options:      -O2
+    default-language: GHC2021
+
 library
     -- Import common warning flags.
     import:           warnings
