@@ -6,6 +6,17 @@ on:
   pull_request:
 
 jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: haskell-actions/run-ormolu@v17
+        with:
+          pattern: |
+            src/**/*.hs
+            app/**/*.hs
+
   test:
     runs-on: ubuntu-latest
     strategy:
