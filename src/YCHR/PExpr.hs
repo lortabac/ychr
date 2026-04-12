@@ -19,14 +19,22 @@ module YCHR.PExpr
     PExpr (..),
 
     -- * Operator table
-    OpTable,
+    OpTable (..),
     OpType (..),
     mkOpTable,
     mergeOps,
     opTableEntries,
+    isInfix,
+    isPrefix,
+    isPostfix,
+
+    -- * Precedence constants
+    maxPrec,
+    maxArgPrec,
 
     -- * Parsing
     parseTerms,
+    parseTerm,
 
     -- * Pretty-printing
     prettyPExpr,
@@ -34,11 +42,11 @@ module YCHR.PExpr
 where
 
 import Control.Monad (foldM, void)
-import Control.Monad.Combinators.Expr qualified as Expr
 import Data.Char (isAlphaNum, isLower)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (intercalate)
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -76,24 +84,61 @@ data PExpr
 -- Operator table
 -- ---------------------------------------------------------------------------
 
--- | Operator associativity and fixity kind.
+-- | Operator associativity and fixity kind, using Prolog specifier notation.
+--
+-- Infix operators: @xfx@ (non-associative), @xfy@ (right-associative),
+-- @yfx@ (left-associative).
+-- Prefix operators: @fx@ (non-chaining), @fy@ (chaining).
+-- Postfix operators: @xf@ (non-chaining), @yf@ (chaining).
+--
+-- An @x@ position requires the argument to have strictly lower fixity
+-- (tighter binding) than the operator.  A @y@ position allows equal fixity.
 data OpType
-  = InfixL
-  | InfixR
-  | InfixN
-  | Prefix
-  | Postfix
+  = Xfx
+  | Xfy
+  | Yfx
+  | Fx
+  | Fy
+  | Xf
+  | Yf
   deriving (Show, Eq)
+
+-- | Is the operator an infix operator?
+isInfix :: OpType -> Bool
+isInfix Xfx = True
+isInfix Xfy = True
+isInfix Yfx = True
+isInfix _ = False
+
+-- | Is the operator a prefix operator?
+isPrefix :: OpType -> Bool
+isPrefix Fx = True
+isPrefix Fy = True
+isPrefix _ = False
+
+-- | Is the operator a postfix operator?
+isPostfix :: OpType -> Bool
+isPostfix Xf = True
+isPostfix Yf = True
+isPostfix _ = False
 
 -- | Operator table: maps fixity level to a list of operators at that level.
 --
 -- Lower fixity number means higher precedence (tighter binding), following
 -- the Prolog convention.
+--
+-- Dual-role operators (e.g. @-@ as both @fy 200@ and @yfx 500@) are
+-- supported: the prefix entry goes in 'prefixByName' and the infix entry
+-- in 'infixByName'.
 data OpTable = OpTable
   { opsByFixity :: IntMap [(OpType, Text)],
     -- | Precomputed set of non-symbolic operator names, used to reject
     -- them as atoms.
-    wordOpSet :: Set Text
+    wordOpSet :: Set Text,
+    -- | Prefix operators indexed by name.
+    prefixByName :: Map Text (Int, OpType),
+    -- | Infix and postfix operators indexed by name.
+    infixByName :: Map Text (Int, OpType)
   }
   deriving (Show)
 
@@ -108,12 +153,27 @@ mkOpTable entries =
           | (_, ops) <- entries,
             (_, name) <- ops,
             not (isSymbolic name)
+          ],
+      prefixByName =
+        Map.fromList
+          [ (name, (fix, ty))
+          | (fix, ops) <- entries,
+            (ty, name) <- ops,
+            isPrefix ty
+          ],
+      infixByName =
+        Map.fromList
+          [ (name, (fix, ty))
+          | (fix, ops) <- entries,
+            (ty, name) <- ops,
+            isInfix ty || isPostfix ty
           ]
     }
 
 -- | Merge additional operators into an existing table.
--- Returns @Left name@ if an operator conflicts (same name, different
--- fixity or type).
+-- Returns @Left name@ if an operator conflicts (same name, same category
+-- but different fixity or type).  Dual-role operators (prefix + infix)
+-- are allowed.
 mergeOps :: OpTable -> [(Int, OpType, Text)] -> Either Text OpTable
 mergeOps base decls = do
   checkConflicts
@@ -128,22 +188,35 @@ mergeOps base decls = do
         wordOpSet =
           Set.union
             base.wordOpSet
-            (Set.fromList [name | (_, _, name) <- decls, not (isSymbolic name)])
+            (Set.fromList [name | (_, _, name) <- decls, not (isSymbolic name)]),
+        prefixByName =
+          Map.union
+            base.prefixByName
+            (Map.fromList [(name, (fix, ty)) | (fix, ty, name) <- decls, isPrefix ty]),
+        infixByName =
+          Map.union
+            base.infixByName
+            ( Map.fromList
+                [(name, (fix, ty)) | (fix, ty, name) <- decls, isInfix ty || isPostfix ty]
+            )
       }
   where
     checkConflicts :: Either Text ()
     checkConflicts =
-      let existing =
-            [ (name, (fix, ty))
-            | (fix, ops) <- IntMap.toList base.opsByFixity,
-              (ty, name) <- ops
-            ]
-          newOps = [(name, (fix, ty)) | (fix, ty, name) <- decls]
+      let -- Check prefix ops for conflicts
+          existingPrefix = Map.toList base.prefixByName
+          newPrefix = [(name, (fix, ty)) | (fix, ty, name) <- decls, isPrefix ty]
+          -- Check infix/postfix ops for conflicts
+          existingInfix = Map.toList base.infixByName
+          newInfix =
+            [(name, (fix, ty)) | (fix, ty, name) <- decls, isInfix ty || isPostfix ty]
           insert (n, ft) acc = case Map.lookup n acc of
             Nothing -> Right (Map.insert n ft acc)
             Just ft' | ft == ft' -> Right acc
             Just _ -> Left n
-       in foldM (flip insert) Map.empty (existing ++ newOps) *> pure ()
+       in foldM (flip insert) Map.empty (existingPrefix ++ newPrefix)
+            *> foldM (flip insert) Map.empty (existingInfix ++ newInfix)
+            *> pure ()
 
 -- | List all operator entries as @(fixity, type, name)@ triples.
 opTableEntries :: OpTable -> [(Int, OpType, Text)]
@@ -152,6 +225,20 @@ opTableEntries table =
   | (fix, ops) <- IntMap.toList table.opsByFixity,
     (ty, name) <- ops
   ]
+
+-- ---------------------------------------------------------------------------
+-- Precedence constants
+-- ---------------------------------------------------------------------------
+
+-- | Maximum operator precedence (Prolog standard: 1200).
+maxPrec :: Int
+maxPrec = 1200
+
+-- | Maximum precedence for compound-term arguments (999).
+-- Operators at fixity 1000 or above (like @,@) act as separators inside
+-- @f(...)@ and @[...]@ because they exceed this limit.
+maxArgPrec :: Int
+maxArgPrec = 999
 
 -- ---------------------------------------------------------------------------
 -- Internal helpers
@@ -291,20 +378,28 @@ intP = lexeme $ do
 -- Operator tokens
 -- ---------------------------------------------------------------------------
 
--- | Parse a word operator.
-wordOp :: Text -> Parser Text
-wordOp w = lexeme $ try $ do
-  _ <- string w
-  notFollowedBy (alphaNumChar <|> char '_')
-  pure w
-
--- | Parse a symbol operator using longest-match.
-symbolOp :: Text -> Parser Text
-symbolOp op = lexeme $ try $ do
-  s <- T.pack <$> some (oneOf symbolChars)
-  if s == op
-    then pure s
-    else fail ("expected operator " ++ show op)
+-- | Try to parse any operator token.  Tries symbol operators (greedy
+-- longest-match), then single-character operators (@,@ and @|@), then
+-- word operators.
+anyOpToken :: OpTable -> Parser Text
+anyOpToken table = lexeme (trySymbol <|> trySingleChar <|> tryWord)
+  where
+    trySymbol = try $ do
+      s <- T.pack <$> some (oneOf symbolChars)
+      if Map.member s table.prefixByName || Map.member s table.infixByName
+        then pure s
+        else fail ("unknown operator: " ++ T.unpack s)
+    trySingleChar = try $ do
+      c <- oneOf (",|" :: [Char])
+      let name = T.singleton c
+      if Map.member name table.prefixByName || Map.member name table.infixByName
+        then pure name
+        else fail ("not an operator: " ++ [c])
+    tryWord = try $ do
+      w <- T.pack <$> ((:) <$> lowerChar <*> many (alphaNumChar <|> char '_'))
+      if Set.member w table.wordOpSet
+        then w <$ notFollowedBy (alphaNumChar <|> char '_')
+        else fail ("not a word operator: " ++ T.unpack w)
 
 -- ---------------------------------------------------------------------------
 -- Terms
@@ -343,8 +438,8 @@ listTermP :: OpTable -> Parser PExpr
 listTermP table = between (symbol "[") (symbol "]") listBody
   where
     listBody = do
-      elems <- withLoc (termP table) `sepBy` comma
-      tail_ <- option (noAnn (Atom "[]")) (symbol "|" *> withLoc (termP table))
+      elems <- withLoc (termP table maxArgPrec) `sepBy` comma
+      tail_ <- option (noAnn (Atom "[]")) (symbol "|" *> withLoc (termP table maxArgPrec))
       pure (foldr (\h t -> Compound "." [h, noAnn t]) (tail_.node) elems)
 
 -- | Parse an atomic (non-operator) term.
@@ -357,14 +452,78 @@ atomicTermP table =
         try intP,
         stringP,
         listTermP table,
-        try (parens (termP table)),
+        try (parens (termP table maxPrec)),
         atomOrCompoundP table
       ]
 
--- | Parse a term, including infix operator expressions.
-termP :: OpTable -> Parser PExpr
-termP table =
-  (.node) <$> Expr.makeExprParser (atomicTermP table) (buildExprOpTable table)
+-- | Parse a term with a maximum allowed fixity.
+--
+-- Only operators with fixity @<= maxFix@ are consumed.  This is the
+-- mechanism that makes @,@ (fixity 1000) act as a separator inside
+-- compound-term arguments (parsed at 'maxArgPrec' = 999) while being
+-- a real operator at the top level (parsed at 'maxPrec' = 1200).
+termP :: OpTable -> Int -> Parser PExpr
+termP table maxFix = do
+  (lhs, lhsFix) <- nudP table maxFix
+  (.node) <$> ledLoop table maxFix lhs lhsFix
+
+-- | Parse a prefix expression or atomic term.
+-- Returns @(term, effectiveFixity)@; atomic terms have fixity 0.
+nudP :: OpTable -> Int -> Parser (Ann PExpr, Int)
+nudP table maxFix = atomicTerm <|> prefixOp
+  where
+    atomicTerm = (,0) <$> atomicTermP table
+    prefixOp = try $ do
+      sp <- getSourcePos
+      name <- anyOpToken table
+      case Map.lookup name table.prefixByName of
+        Just (fix, ty) | fix <= maxFix -> do
+          let operandMax = case ty of
+                Fy -> fix -- y position: operand may have equal fixity
+                _ -> fix - 1 -- x position (Fx): strictly lower
+          operand <- withLoc (termP table operandMax)
+          pure (Ann (Compound name [operand]) (sourceLocFromPos sp), fix)
+        _ -> fail ("not a prefix operator in this context: " ++ T.unpack name)
+
+-- | Infix\/postfix loop for the Pratt parser.
+--
+-- Repeatedly tries to consume an infix or postfix operator whose fixity
+-- is within the allowed range and whose left-position constraint is
+-- satisfied by the current left-hand side.
+ledLoop :: OpTable -> Int -> Ann PExpr -> Int -> Parser (Ann PExpr)
+ledLoop table maxFix lhs lhsFix = do
+  mOp <- optional (lookAhead (try (anyOpToken table)))
+  case mOp of
+    Just name
+      | Just (fix, ty) <- Map.lookup name table.infixByName,
+        fix <= maxFix,
+        lhsFix <= leftMax ty fix -> do
+          _ <- anyOpToken table -- consume
+          case ty of
+            _ | isPostfix ty -> do
+              let result = Ann (Compound name [lhs]) lhs.sourceLoc
+              ledLoop table maxFix result fix
+            Yfx -> do
+              rhs <- withLoc (termP table (fix - 1))
+              let result = Ann (Compound name [lhs, rhs]) lhs.sourceLoc
+              ledLoop table maxFix result fix
+            Xfy -> do
+              rhs <- withLoc (termP table fix)
+              let result = Ann (Compound name [lhs, rhs]) lhs.sourceLoc
+              ledLoop table maxFix result fix
+            _ -> do
+              -- Xfx (non-associative)
+              rhs <- withLoc (termP table (fix - 1))
+              let result = Ann (Compound name [lhs, rhs]) lhs.sourceLoc
+              ledLoop table maxFix result fix
+    _ -> pure lhs
+
+-- | Maximum allowed fixity for the left argument of an operator.
+-- @y@ positions allow equal fixity; @x@ positions require strictly lower.
+leftMax :: OpType -> Int -> Int
+leftMax Yfx fix = fix
+leftMax Yf fix = fix
+leftMax _ fix = fix - 1
 
 -- | Parse an atom optionally followed by a parenthesised argument list.
 atomOrCompoundP :: OpTable -> Parser PExpr
@@ -374,37 +533,9 @@ atomOrCompoundP table = do
   case maybeOpen of
     Nothing -> pure (Atom name)
     Just _ -> do
-      args <- withLoc (termP table) `sepBy` comma
+      args <- withLoc (termP table maxArgPrec) `sepBy` comma
       _ <- symbol ")"
       pure (Compound name args)
-
--- ---------------------------------------------------------------------------
--- Operator table for makeExprParser
--- ---------------------------------------------------------------------------
-
--- | Convert an 'OpTable' to the format expected by 'makeExprParser'.
---
--- Ascending fixity numbers correspond to descending precedence (tighter
--- binding first), which is what 'makeExprParser' expects.
-buildExprOpTable :: OpTable -> [[Expr.Operator Parser (Ann PExpr)]]
-buildExprOpTable table =
-  [ concatMap toMegaparsecOp ops
-  | (_, ops) <- IntMap.toAscList table.opsByFixity
-  ]
-  where
-    toMegaparsecOp :: (OpType, Text) -> [Expr.Operator Parser (Ann PExpr)]
-    toMegaparsecOp (InfixL, name) = [Expr.InfixL (binOp name <$ opParser name)]
-    toMegaparsecOp (InfixR, name) = [Expr.InfixR (binOp name <$ opParser name)]
-    toMegaparsecOp (InfixN, name) = [Expr.InfixN (binOp name <$ opParser name)]
-    toMegaparsecOp (Prefix, name) = [Expr.Prefix (unOp name <$ opParser name)]
-    toMegaparsecOp (Postfix, name) = [Expr.Postfix (unOp name <$ opParser name)]
-
-    binOp op l r = noAnn (Compound op [l, r])
-    unOp op x = noAnn (Compound op [x])
-
-    opParser name
-      | isSymbolic name = symbolOp name
-      | otherwise = wordOp name
 
 -- ---------------------------------------------------------------------------
 -- Public API
@@ -418,7 +549,11 @@ buildExprOpTable table =
 -- The first argument is the operator table. The second is the source file
 -- name (used in error messages only).
 parseTerms :: OpTable -> String -> Text -> Either (ParseErrorBundle Text Void) [Ann PExpr]
-parseTerms table = parse (sc *> many (withLoc (termP table) <* symbol ".") <* eof)
+parseTerms table = parse (sc *> many (withLoc (termP table maxPrec) <* symbol ".") <* eof)
+
+-- | Parse a single dot-terminated term from source text.
+parseTerm :: OpTable -> String -> Text -> Either (ParseErrorBundle Text Void) (Ann PExpr)
+parseTerm table = parse (sc *> withLoc (termP table maxPrec) <* symbol "." <* eof)
 
 -- ---------------------------------------------------------------------------
 -- Pretty-printing
@@ -430,18 +565,7 @@ parseTerms table = parse (sc *> many (withLoc (termP table) <* symbol ".") <* eo
 -- prefix, or postfix operators, with minimal parenthesisation based on
 -- precedence.
 prettyPExpr :: OpTable -> PExpr -> String
-prettyPExpr table = prettyPrec opMap table.wordOpSet maxFixity
-  where
-    opMap :: Map.Map Text (Int, OpType)
-    opMap =
-      Map.fromList
-        [ (name, (fix, ty))
-        | (fix, ops) <- IntMap.toList table.opsByFixity,
-          (ty, name) <- ops
-        ]
-    -- Larger than any valid fixity (1–1199), so nothing is parenthesised
-    -- at top level.
-    maxFixity = 1200
+prettyPExpr table = prettyPrec table.infixByName table.prefixByName table.wordOpSet maxPrec
 
 -- | Render a PExpr within a precedence context.
 --
@@ -453,30 +577,30 @@ prettyPExpr table = prettyPrec opMap table.wordOpSet maxFixity
 --   * @y@ — argument may have equal or lower fixity (same or tighter binding)
 --   * @x@ — argument must have strictly lower fixity (strictly tighter)
 --
--- So for @yfx@ (InfixL) at fixity F: left gets F, right gets F−1.
--- For @xfy@ (InfixR): left gets F−1, right gets F. Etc.
-prettyPrec :: Map.Map Text (Int, OpType) -> Set Text -> Int -> PExpr -> String
-prettyPrec _ _ _ (Var v) = T.unpack v
-prettyPrec _ _ _ (Int n)
+-- So for @yfx@ at fixity F: left gets F, right gets F−1.
+-- For @xfy@: left gets F−1, right gets F. Etc.
+prettyPrec :: Map Text (Int, OpType) -> Map Text (Int, OpType) -> Set Text -> Int -> PExpr -> String
+prettyPrec _ _ _ _ (Var v) = T.unpack v
+prettyPrec _ _ _ _ (Int n)
   | n < 0 = "(" ++ show n ++ ")"
   | otherwise = show n
-prettyPrec _ _ _ (Atom "[]") = "[]"
-prettyPrec _ wops _ (Atom a) = renderAtom wops a
-prettyPrec _ _ _ (Str s) = renderString s
-prettyPrec _ _ _ Wildcard = "_"
+prettyPrec _ _ _ _ (Atom "[]") = "[]"
+prettyPrec _ _ wops _ (Atom a) = renderAtom wops a
+prettyPrec _ _ _ _ (Str s) = renderString s
+prettyPrec _ _ _ _ Wildcard = "_"
 -- List syntax
-prettyPrec ops wops _ (Compound "." [h, t]) =
-  "[" ++ rec 1200 h.node ++ prettyListTail ops wops t.node ++ "]"
+prettyPrec iops pops wops _ (Compound "." [h, t]) =
+  "[" ++ rec maxArgPrec h.node ++ prettyListTail iops pops wops t.node ++ "]"
   where
-    rec = prettyPrec ops wops
+    rec = prettyPrec iops pops wops
 -- Infix operators
-prettyPrec ops wops ctx (Compound f [l, r])
-  | Just (fix, ty) <- Map.lookup f ops,
+prettyPrec iops pops wops ctx (Compound f [l, r])
+  | Just (fix, ty) <- Map.lookup f iops,
     isInfix ty =
       let (lCtx, rCtx) = case ty of
-            InfixL -> (fix, fix - 1)
-            InfixR -> (fix - 1, fix)
-            _ -> (fix - 1, fix - 1)
+            Yfx -> (fix, fix - 1)
+            Xfy -> (fix - 1, fix)
+            _ -> (fix - 1, fix - 1) -- Xfx
           rendered =
             rec lCtx l.node
               ++ " "
@@ -485,39 +609,43 @@ prettyPrec ops wops ctx (Compound f [l, r])
               ++ rec rCtx r.node
        in if fix > ctx then "(" ++ rendered ++ ")" else rendered
   where
-    rec = prettyPrec ops wops
-    isInfix InfixL = True
-    isInfix InfixR = True
-    isInfix InfixN = True
-    isInfix _ = False
+    rec = prettyPrec iops pops wops
 -- Prefix operators
-prettyPrec ops wops ctx (Compound f [x])
-  | Just (fix, Prefix) <- Map.lookup f ops =
-      let rendered = T.unpack f ++ " " ++ rec (fix - 1) x.node
+prettyPrec iops pops wops ctx (Compound f [x])
+  | Just (fix, ty) <- Map.lookup f pops,
+    isPrefix ty =
+      let argCtx = case ty of
+            Fy -> fix
+            _ -> fix - 1 -- Fx
+          rendered = T.unpack f ++ " " ++ rec argCtx x.node
        in if fix > ctx then "(" ++ rendered ++ ")" else rendered
   where
-    rec = prettyPrec ops wops
+    rec = prettyPrec iops pops wops
 -- Postfix operators
-prettyPrec ops wops ctx (Compound f [x])
-  | Just (fix, Postfix) <- Map.lookup f ops =
-      let rendered = rec (fix - 1) x.node ++ " " ++ T.unpack f
+prettyPrec iops pops wops ctx (Compound f [x])
+  | Just (fix, ty) <- Map.lookup f iops,
+    isPostfix ty =
+      let argCtx = case ty of
+            Yf -> fix
+            _ -> fix - 1 -- Xf
+          rendered = rec argCtx x.node ++ " " ++ T.unpack f
        in if fix > ctx then "(" ++ rendered ++ ")" else rendered
   where
-    rec = prettyPrec ops wops
+    rec = prettyPrec iops pops wops
 -- Regular compounds
-prettyPrec ops wops _ (Compound f args) =
+prettyPrec iops pops wops _ (Compound f args) =
   renderAtom wops f
     ++ "("
-    ++ intercalate ", " [prettyPrec ops wops 1200 a.node | a <- args]
+    ++ intercalate ", " [prettyPrec iops pops wops maxArgPrec a.node | a <- args]
     ++ ")"
 
-prettyListTail :: Map.Map Text (Int, OpType) -> Set Text -> PExpr -> String
-prettyListTail _ _ (Atom "[]") = ""
-prettyListTail ops wops (Compound "." [h, t]) =
-  ", " ++ rec h.node ++ prettyListTail ops wops t.node
+prettyListTail :: Map Text (Int, OpType) -> Map Text (Int, OpType) -> Set Text -> PExpr -> String
+prettyListTail _ _ _ (Atom "[]") = ""
+prettyListTail iops pops wops (Compound "." [h, t]) =
+  ", " ++ rec h.node ++ prettyListTail iops pops wops t.node
   where
-    rec = prettyPrec ops wops 1200
-prettyListTail ops wops other = " | " ++ prettyPrec ops wops 1200 other
+    rec = prettyPrec iops pops wops maxArgPrec
+prettyListTail iops pops wops other = " | " ++ prettyPrec iops pops wops maxArgPrec other
 
 -- | True if the atom needs single-quote wrapping.
 needsQuoting :: Set Text -> Text -> Bool

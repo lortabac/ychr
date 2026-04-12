@@ -24,6 +24,8 @@ tests =
       compoundTests,
       listTests,
       operatorTests,
+      maxPrecTests,
+      dualRoleTests,
       dotTerminationTests,
       commentTests,
       errorTests,
@@ -47,10 +49,10 @@ emptyOps = mkOpTable []
 testOps :: OpTable
 testOps =
   mkOpTable
-    [ (200, [(InfixL, "*")]),
-      (300, [(InfixL, "+"), (InfixL, "-")]),
-      (700, [(InfixN, "is")]),
-      (500, [(Prefix, "~")])
+    [ (200, [(Yfx, "*")]),
+      (300, [(Yfx, "+"), (Yfx, "-")]),
+      (700, [(Xfx, "is")]),
+      (500, [(Fx, "~")])
     ]
 
 -- | Strip source locations from a term for structural comparison.
@@ -235,6 +237,131 @@ operatorTests =
           @?= Right [Compound "is" [noAnn (Var "X"), noAnn (Var "Y")]],
       testCase "word operator rejected as atom" $
         assertBool "should fail" (isLeft (pOps "is."))
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Max-precedence tests (comma and pipe as operators)
+-- ---------------------------------------------------------------------------
+
+-- | Operator table with comma and pipe as operators.
+commaOps :: OpTable
+commaOps =
+  mkOpTable
+    [ (200, [(Yfx, "*")]),
+      (300, [(Yfx, "+")]),
+      (700, [(Xfx, "=")]),
+      (1000, [(Xfy, ",")]),
+      (1100, [(Xfy, "|")])
+    ]
+
+-- | Parse with comma/pipe operators.
+pComma :: Text -> Either (ParseErrorBundle Text Void) [Ann PExpr]
+pComma = parseTerms commaOps ""
+
+maxPrecTests :: TestTree
+maxPrecTests =
+  testGroup
+    "max-precedence"
+    [ testCase "comma as operator at top level" $
+        stripAll (pComma "a, b.")
+          @?= Right [Compound "," [noAnn (Atom "a"), noAnn (Atom "b")]],
+      testCase "comma suppressed in compound args" $
+        stripAll (pComma "f(a, b).")
+          @?= Right [Compound "f" [noAnn (Atom "a"), noAnn (Atom "b")]],
+      testCase "pipe as operator at top level" $
+        stripAll (pComma "a | b.")
+          @?= Right [Compound "|" [noAnn (Atom "a"), noAnn (Atom "b")]],
+      testCase "pipe suppressed in list tail" $
+        stripAll (pComma "[a | T].")
+          @?= Right [Compound "." [noAnn (Atom "a"), noAnn (Var "T")]],
+      testCase "comma suppressed in list elements" $
+        stripAll (pComma "[a, b].")
+          @?= Right
+            [ Compound
+                "."
+                [ noAnn (Atom "a"),
+                  noAnn (Compound "." [noAnn (Atom "b"), noAnn (Atom "[]")])
+                ]
+            ],
+      testCase "precedence: + binds tighter than comma" $
+        stripAll (pComma "a + b, c.")
+          @?= Right
+            [ Compound
+                ","
+                [ noAnn (Compound "+" [noAnn (Atom "a"), noAnn (Atom "b")]),
+                  noAnn (Atom "c")
+                ]
+            ],
+      testCase "comma is right-associative" $
+        stripAll (pComma "a, b, c.")
+          @?= Right
+            [ Compound
+                ","
+                [ noAnn (Atom "a"),
+                  noAnn (Compound "," [noAnn (Atom "b"), noAnn (Atom "c")])
+                ]
+            ],
+      testCase "pipe binds looser than comma" $
+        stripAll (pComma "a, b | c.")
+          @?= Right
+            [ Compound
+                "|"
+                [ noAnn (Compound "," [noAnn (Atom "a"), noAnn (Atom "b")]),
+                  noAnn (Atom "c")
+                ]
+            ],
+      testCase "non-associative operator rejects chaining" $
+        assertBool "should fail" (isLeft (pComma "a = b = c.")),
+      testCase "parenthesized comma in compound arg" $
+        stripAll (pComma "f((a, b)).")
+          @?= Right [Compound "f" [noAnn (Compound "," [noAnn (Atom "a"), noAnn (Atom "b")])]],
+      testCase "comma roundtrip" $
+        roundtrip commaOps "comma" (Compound "," [noAnn (Atom "a"), noAnn (Atom "b")]),
+      testCase "comma in compound arg roundtrip" $
+        roundtrip commaOps "comma in arg" $
+          Compound "f" [noAnn (Compound "," [noAnn (Atom "a"), noAnn (Atom "b")])]
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Dual-role operator tests
+-- ---------------------------------------------------------------------------
+
+-- | Operator table with - as both prefix (fy 200) and infix (yfx 500).
+dualOps :: OpTable
+dualOps =
+  mkOpTable
+    [ (200, [(Fy, "-")]),
+      (500, [(Yfx, "-")]),
+      (300, [(Yfx, "+")]),
+      (200, [(Yfx, "*")])
+    ]
+
+-- | Parse with dual-role operators.
+pDual :: Text -> Either (ParseErrorBundle Text Void) [Ann PExpr]
+pDual = parseTerms dualOps ""
+
+dualRoleTests :: TestTree
+dualRoleTests =
+  testGroup
+    "dual-role operators"
+    [ testCase "prefix minus" $
+        stripAll (pDual "- X.")
+          @?= Right [Compound "-" [noAnn (Var "X")]],
+      testCase "infix minus" $
+        stripAll (pDual "X - Y.")
+          @?= Right [Compound "-" [noAnn (Var "X"), noAnn (Var "Y")]],
+      testCase "prefix and infix combined" $
+        stripAll (pDual "X - - Y.")
+          @?= Right
+            [ Compound
+                "-"
+                [ noAnn (Var "X"),
+                  noAnn (Compound "-" [noAnn (Var "Y")])
+                ]
+            ],
+      testCase "negative integer literal preserved" $
+        stripAll (pDual "-7.")
+          @?= Right [Int (-7)]
     ]
 
 -- ---------------------------------------------------------------------------

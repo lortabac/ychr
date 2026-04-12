@@ -20,10 +20,10 @@ import YCHR.PExpr
 testOps :: OpTable
 testOps =
   mkOpTable
-    [ (200, [(InfixL, "*"), (InfixL, "/")]),
-      (300, [(InfixL, "+"), (InfixL, "-")]),
-      (500, [(Prefix, "~")]),
-      (700, [(InfixN, "is")])
+    [ (200, [(Yfx, "*"), (Yfx, "/")]),
+      (300, [(Yfx, "+"), (Yfx, "-")]),
+      (500, [(Fx, "~")]),
+      (700, [(Xfx, "is")])
     ]
 
 -- ---------------------------------------------------------------------------
@@ -42,9 +42,9 @@ genSafeAtom = Gen.filter isOk $ do
       s `notElem` wordOps
         && not ("__" `Text.isInfixOf` s)
     wordOps = [name | (_, ty, name) <- opTableEntries testOps, not (isSymOp ty name)]
-    isSymOp Prefix _ = True
-    isSymOp Postfix _ = True
-    isSymOp _ name = Text.all (`elem` (":=<>+-*/#@^~!&?" :: [Char])) name
+    isSymOp ty name
+      | isPrefix ty || isPostfix ty = True
+      | otherwise = Text.all (`elem` (":=<>+-*/#@^~!&?" :: [Char])) name
 
 -- | Generate atoms including cases that require quoting.
 genAtom :: Gen Text
