@@ -8,6 +8,8 @@ import YCHR.DesugarTest qualified
 import YCHR.EndToEndTest qualified
 import YCHR.GoldenTest qualified
 import YCHR.MetaTest qualified
+import YCHR.PExprRoundtripTest qualified
+import YCHR.PExprTest qualified
 import YCHR.ParserTest qualified
 import YCHR.PrettyTest qualified
 import YCHR.RenameTest qualified
@@ -34,6 +36,8 @@ main = do
         YCHR.DSLTest.tests,
         YCHR.DesugarTest.tests,
         YCHR.ParserTest.tests,
+        YCHR.PExprTest.tests,
+        YCHR.PExprRoundtripTest.tests,
         YCHR.RoundtripTest.tests,
         YCHR.RenameTest.tests,
         YCHR.Runtime.VarTest.tests,
