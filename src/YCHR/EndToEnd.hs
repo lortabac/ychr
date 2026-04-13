@@ -58,7 +58,7 @@ import YCHR.Compile (CompileError, buildFunctionSet, compile, compileFunctionDef
 import YCHR.Desugar (DesugarError, desugarProgram, desugarQueryGoals, extractSymbolTable, liftAllLambdas, liftQueryLambdas)
 import YCHR.Desugared qualified as D
 import YCHR.Meta (valueToTerm)
-import YCHR.Parsed (Import (..), Module (..), OpDecl (..), noAnn)
+import YCHR.Parsed (Import (..), Module (..), OpDecl (..), SourceLoc (..), noAnn)
 import YCHR.Parser (OpTable, builtinOps, collectOperatorDecls, extractOpDecls, mergeOps, parseConstraint, parseModuleWith, parseQueryWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (RenameError, RenameWarning, buildExportEnv, renameProgram, renameQueryGoals)
@@ -143,8 +143,8 @@ compileModules includeStdlib inputs = do
           [Types.Identifier (Types.Qualified m n) a | ((n, a), ms) <- toListExport exportEnv, m <- ms]
   (renamed, renameWarnings) <- first RenameErrors (renameProgram collected)
   desugared <- first DesugarErrors (desugarProgram renamed)
-  let desugared' = liftAllLambdas desugared
-      symTab = extractSymbolTable desugared'
+  desugared' <- first DesugarErrors (liftAllLambdas desugared)
+  let symTab = extractSymbolTable desugared'
       warnings = [RenameWarnings renameWarnings | not (null renameWarnings)]
   prog <- first CompileErrors (compile desugared' symTab)
   let lambdaCount = length [() | f <- desugared'.functions, isLambdaName f.name]
@@ -369,8 +369,9 @@ runProgramWithQuery cp hostCalls src =
       (renamed, _renameWarnings) <- either (throwIO . RenameErrors) pure (renameQueryGoals cp.allModules goals)
       bodyGoals <- either (throwIO . DesugarErrors) pure (desugarQueryGoals cp.allModules renamed)
       -- Lambda-lift query body goals and compile the generated functions
-      let (liftedGoals, queryLambdas) = liftQueryLambdas cp.nextLambdaIndex bodyGoals
-          allFuns = cp.allFunctions ++ queryLambdas
+      let queryLoc = SourceLoc "<query>" 1 1
+      (liftedGoals, queryLambdas) <- either (throwIO . DesugarErrors) pure (liftQueryLambdas cp.nextLambdaIndex queryLoc bodyGoals)
+      let allFuns = cp.allFunctions ++ queryLambdas
           funSet = buildFunctionSet (D.Program [] allFuns Map.empty [])
           queryProcs = compileQueryLambdas funSet queryLambdas
           queryDispatches = genCallFunDispatches allFuns

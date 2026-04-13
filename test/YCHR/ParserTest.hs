@@ -227,7 +227,13 @@ operatorTests =
           >>= (@?= [CompoundTerm (Qualified "host" "print") [VarTerm "X"]]),
       testCase "zero-arity qualified name" $
         bodyOf "c <=> host:done."
-          >>= (@?= [CompoundTerm (Qualified "host" "done") []])
+          >>= (@?= [CompoundTerm (Qualified "host" "done") []]),
+      testCase "is operator used as functor" $
+        bodyOf "c <=> is(X, Y)."
+          >>= (@?= [CompoundTerm (Unqualified "is") [VarTerm "X", VarTerm "Y"]]),
+      testCase "= operator used as functor" $
+        bodyOf "c <=> '='(X, Y)."
+          >>= (@?= [CompoundTerm (Unqualified "=") [VarTerm "X", VarTerm "Y"]])
     ]
 
 -- ---------------------------------------------------------------------------
@@ -488,13 +494,13 @@ firstPassTests =
   testGroup
     "first-pass operator collector"
     [ testCase "extracts operators from export list" $
-        ops ":- module(m, [op(500, yfx, '+')]).\"" @?= Right [OpDecl 500 InfixL_ "+"],
+        ops ":- module(m, [op(500, yfx, '+')]).\"" @?= Right [OpDecl 500 Yfx "+"],
       testCase "skips name/arity entries" $
-        ops ":- module(m, [leq/2, op(700, xfx, '<')]).\"" @?= Right [OpDecl 700 InfixN_ "<"],
+        ops ":- module(m, [leq/2, op(700, xfx, '<')]).\"" @?= Right [OpDecl 700 Xfx "<"],
       testCase "skips type exports" $
-        ops ":- module(m, [type(bool/0), op(500, yfx, '+')]).\"" @?= Right [OpDecl 500 InfixL_ "+"],
+        ops ":- module(m, [type(bool/0), op(500, yfx, '+')]).\"" @?= Right [OpDecl 500 Yfx "+"],
       testCase "type export among many entries" $
-        ops ":- module(m, [leq/2, type(tree/0), op(400, yfx, '*'), type(list/1)]).\"" @?= Right [OpDecl 400 InfixL_ "*"],
+        ops ":- module(m, [leq/2, type(tree/0), op(400, yfx, '*'), type(list/1)]).\"" @?= Right [OpDecl 400 Yfx "*"],
       testCase "no module directive returns empty" $
         ops ":- chr_constraint leq/2." @?= Right [],
       testCase "empty export list returns empty" $

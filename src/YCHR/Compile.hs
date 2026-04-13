@@ -664,7 +664,7 @@ compileFunctionDef funSet func = do
   let procName' = funcProcName func.name func.arity
       params = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. func.arity - 1]]
       dummySi = (P.dummyLoc, PrettyE (AtomTerm "function"))
-  eqStmts <- traverse (compileEquation funSet params dummySi) func.equations
+  eqStmts <- traverse (compileEquation funSet params dummySi) func.equations.node
   let errorStmt = ExprStmt (HostCall chrErrorName [Lit (AtomLit "no_matching_equation")])
   pure (Procedure procName' params (concat eqStmts ++ [errorStmt]))
 
@@ -755,16 +755,31 @@ genFunRefBranch callArity argParams func
 
 -- | Generate a dispatch branch for a lifted lambda closure.
 -- Only emits a branch for functions whose name starts with @__lambda_@.
+--
+-- Closures are self-describing terms of the form
+-- @__closure(LambdaId, SourceForm, Cap1, …, CapN)@.
+-- The first two arguments are the lambda identifier and the quoted
+-- source form (for pretty-printing); captured variables start at
+-- index 2, hence the @+ 2@ offset in 'captureBinds' below.
 genLambdaBranch :: Int -> [Name] -> D.Function -> [Stmt]
 genLambdaBranch callArity argParams func
   | not (isLambdaFunc func) = []
   | numCaptures < 0 = []
   | otherwise =
-      let lambdaVmName = vmName func.name
+      let Name lambdaVmText = vmName func.name
           pName = funcProcName func.name func.arity
-          condition = MatchTerm (Var (Name "closure")) lambdaVmName numCaptures
+          -- The closure has 2 header fields (lambdaId, sourceForm) followed
+          -- by the captured free variables, so its total arity is
+          -- numCaptures + 2.
+          condition =
+            And
+              (MatchTerm (Var (Name "closure")) (Name "__closure") (numCaptures + 2))
+              (Equal (GetArg (Var (Name "closure")) 0) (Lit (AtomLit lambdaVmText)))
+          -- Captures are stored after the 2 header fields (lambdaId at
+          -- index 0, sourceForm at index 1), so capture i lives at
+          -- index i + 2.
           captureBinds =
-            [ Let (Name ("cap_" <> T.pack (show i))) (GetArg (Var (Name "closure")) i)
+            [ Let (Name ("cap_" <> T.pack (show i))) (GetArg (Var (Name "closure")) (i + 2))
             | i <- [0 .. numCaptures - 1]
             ]
           captureVars = [Var (Name ("cap_" <> T.pack (show i))) | i <- [0 .. numCaptures - 1]]

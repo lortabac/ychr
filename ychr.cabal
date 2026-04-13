@@ -99,6 +99,8 @@ test-suite ychr-tests
                     , YCHR.GoldenTest
                     , YCHR.MetaTest
                     , YCHR.ParserTest
+                    , YCHR.PExprRoundtripTest
+                    , YCHR.PExprTest
                     , YCHR.PrettyTest
                     , YCHR.RenameTest
                     , YCHR.RoundtripTest
@@ -144,6 +146,7 @@ library
                     , YCHR.Backend.SchemeDriver
                     , YCHR.Collect
                     , YCHR.Compile
+                    , YCHR.Loc
                     , YCHR.Compile.Names
                     , YCHR.Compile.Occurrences
                     , YCHR.Compile.Types
@@ -155,6 +158,7 @@ library
                     , YCHR.DSL
                     , YCHR.Parser
                     , YCHR.Parsed
+                    , YCHR.PExpr
                     , YCHR.Pretty
                     , YCHR.Rename
                     , YCHR.Rename.Types

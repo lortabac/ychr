@@ -19,6 +19,7 @@ import YCHR.Backend.SchemeDriver (generateDriver)
 import YCHR.Display (Display (..), displayMsg)
 import YCHR.EndToEnd (CompiledProgram (..), Error, Warning, compileFiles, compileModules, resolveQueryConstraint, runProgramWithGoal, runProgramWithQuery)
 import YCHR.Meta (metaHostCallRegistry)
+import YCHR.PExpr qualified as P
 import YCHR.Parsed qualified as Parsed
 import YCHR.Parser (opTableEntries, parseConstraint)
 import YCHR.Pretty (prettyBindings, prettyQueryResult, renderAtom)
@@ -168,11 +169,13 @@ repl quietMode files prog = loop
       mapM_ outputStrLn declLines
       loop
     showOperators = do
-      let opTypeStr Parsed.InfixL_ = "yfx"
-          opTypeStr Parsed.InfixR_ = "xfy"
-          opTypeStr Parsed.InfixN_ = "xfx"
-          opTypeStr Parsed.Prefix_ = "fx"
-          opTypeStr Parsed.Postfix_ = "xf"
+      let opTypeStr P.Xfx = "xfx"
+          opTypeStr P.Xfy = "xfy"
+          opTypeStr P.Yfx = "yfx"
+          opTypeStr P.Fx = "fx"
+          opTypeStr P.Fy = "fy"
+          opTypeStr P.Xf = "xf"
+          opTypeStr P.Yf = "yf"
           entries = List.sort [(fix, opTypeStr ty, name) | (fix, ty, name) <- opTableEntries prog.opTable]
           renderOp (fix, ty, name) =
             "op(" ++ show fix ++ ", " ++ ty ++ ", " ++ renderAtom name ++ ")"

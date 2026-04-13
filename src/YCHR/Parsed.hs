@@ -47,30 +47,9 @@ where
 
 import Data.Text (Text)
 import Language.Haskell.TH.Syntax (Lift)
+import YCHR.Loc (Ann (..), SourceLoc (..), dummyLoc, noAnn)
+import YCHR.PExpr (OpType (..))
 import YCHR.Types (Constraint (..), DataConstructor (..), Term (..), TypeDefinition (..), TypeExpr (..))
-
--- | A source file location (file, line, column).
-data SourceLoc = SourceLoc
-  { file :: String,
-    line :: Int,
-    col :: Int
-  }
-  deriving (Show, Eq, Lift)
-
--- | A value annotated with a source location.
-data Ann a = Ann
-  { node :: a,
-    sourceLoc :: SourceLoc
-  }
-  deriving (Show, Eq, Lift, Functor, Foldable, Traversable)
-
--- | A dummy source location for programmatically-constructed nodes.
-dummyLoc :: SourceLoc
-dummyLoc = SourceLoc "<generated>" 1 1
-
--- | Wrap a value with a dummy source location.
-noAnn :: a -> Ann a
-noAnn x = Ann x dummyLoc
 
 data Import
   = ModuleImport Text
@@ -93,14 +72,6 @@ data Declaration
   | FunctionDecl {name :: Text, arity :: Int, argTypes :: Maybe [TypeExpr], returnType :: Maybe TypeExpr}
   | OperatorDecl OpDecl
   | TypeExportDecl {name :: Text, arity :: Int}
-  deriving (Show, Eq, Lift)
-
-data OpType
-  = InfixL_
-  | InfixR_
-  | InfixN_
-  | Prefix_
-  | Postfix_
   deriving (Show, Eq, Lift)
 
 data OpDecl = OpDecl

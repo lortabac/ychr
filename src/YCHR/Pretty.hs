@@ -25,23 +25,162 @@ module YCHR.Pretty
   )
 where
 
-import Data.Char (isAlphaNum, isLower)
 import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
+import YCHR.Loc (Ann (..), noAnn)
+import YCHR.PExpr qualified as PE
 import YCHR.Parsed qualified as P
+import YCHR.Parser (builtinOps)
 import YCHR.Types (Constraint (..), Name (..), Term (..))
+
+-- ---------------------------------------------------------------------------
+-- Operator table for source pretty-printing
+-- ---------------------------------------------------------------------------
+
+-- | Operator table for source pretty-printing.
+-- Extends 'builtinOps' with the standard arithmetic\/comparison operators
+-- from the builtins library.
+prettyOps :: PE.OpTable
+prettyOps = case PE.mergeOps builtinOps stdArithOps of
+  Right t -> t
+  Left _ -> builtinOps
+  where
+    stdArithOps =
+      [ (200, PE.Fy, "-"),
+        (500, PE.Yfx, "+"),
+        (500, PE.Yfx, "-"),
+        (400, PE.Yfx, "*"),
+        (400, PE.Yfx, "div"),
+        (400, PE.Yfx, "mod"),
+        (400, PE.Yfx, "rem"),
+        (700, PE.Xfx, "<"),
+        (700, PE.Xfx, ">"),
+        (700, PE.Xfx, ">="),
+        (700, PE.Xfx, "=<"),
+        (700, PE.Xfx, "==")
+      ]
+
+-- ---------------------------------------------------------------------------
+-- AST → PExpr conversion
+-- ---------------------------------------------------------------------------
+
+-- | Convert a 'Term' to a 'PE.PExpr'.
+-- This is the inverse of 'convertTerm' in "YCHR.Parser".
+termToPExpr :: Term -> PE.PExpr
+termToPExpr (VarTerm v) = PE.Var v
+termToPExpr (IntTerm n) = PE.Int n
+termToPExpr (AtomTerm s) = PE.Atom s
+termToPExpr (TextTerm s) = PE.Str s
+termToPExpr Wildcard = PE.Wildcard
+termToPExpr (CompoundTerm (Qualified m f) []) =
+  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom f)]
+termToPExpr (CompoundTerm (Qualified m f) args) =
+  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Compound f (map (noAnn . termToPExpr) args))]
+termToPExpr (CompoundTerm (Unqualified f) args) =
+  PE.Compound f (map (noAnn . termToPExpr) args)
+
+-- | Convert a 'Constraint' to a 'PE.PExpr'.
+-- This is the inverse of 'convertConstraint' in "YCHR.Parser".
+constraintToPExpr :: Constraint -> PE.PExpr
+constraintToPExpr (Constraint (Unqualified name) []) = PE.Atom name
+constraintToPExpr (Constraint (Unqualified name) args) =
+  PE.Compound name (map (noAnn . termToPExpr) args)
+constraintToPExpr (Constraint (Qualified m name) []) =
+  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom name)]
+constraintToPExpr (Constraint (Qualified m name) args) =
+  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Compound name (map (noAnn . termToPExpr) args))]
+
+-- | Convert a parsed 'P.Head' to a 'PE.PExpr'.
+headToPExpr :: P.Head -> PE.PExpr
+headToPExpr (P.Simplification cs) = commaSepPExpr (map constraintToPExpr cs)
+headToPExpr (P.Propagation cs) = commaSepPExpr (map constraintToPExpr cs)
+headToPExpr (P.Simpagation ks rs) =
+  PE.Compound
+    "\\"
+    [ noAnn (commaSepPExpr (map constraintToPExpr ks)),
+      noAnn (commaSepPExpr (map constraintToPExpr rs))
+    ]
+
+-- | Convert a parsed 'P.Rule' to a 'PE.PExpr'.
+ruleToPExpr :: P.Rule -> PE.PExpr
+ruleToPExpr r =
+  let headPE = headToPExpr r.head.node
+      arrow = case r.head.node of
+        P.Propagation {} -> "==>"
+        _ -> "<=>"
+      bodyPE = commaSepPExpr (map termToPExpr r.body.node)
+      guardAndBody = case r.guard.node of
+        [] -> bodyPE
+        gs -> PE.Compound "|" [noAnn (commaSepPExpr (map termToPExpr gs)), noAnn bodyPE]
+      arrowExpr = PE.Compound arrow [noAnn headPE, noAnn guardAndBody]
+   in case r.name of
+        Nothing -> arrowExpr
+        Just ann -> PE.Compound "@" [noAnn (PE.Atom ann.node), noAnn arrowExpr]
+
+-- | Convert a parsed 'P.FunctionEquation' to a 'PE.PExpr'.
+equationToPExpr :: P.FunctionEquation -> PE.PExpr
+equationToPExpr eq =
+  let headPE = PE.Compound eq.funName (map (noAnn . termToPExpr) eq.args)
+      rhsPE = termToPExpr eq.rhs.node
+      guardAndRhs = case eq.guard.node of
+        [] -> rhsPE
+        gs -> PE.Compound "|" [noAnn (commaSepPExpr (map termToPExpr gs)), noAnn rhsPE]
+   in PE.Compound "->" [noAnn headPE, noAnn guardAndRhs]
+
+-- | Right-fold a list of 'PE.PExpr' into a comma-operator chain.
+commaSepPExpr :: [PE.PExpr] -> PE.PExpr
+commaSepPExpr [] = PE.Atom "true"
+commaSepPExpr [x] = x
+commaSepPExpr (x : xs) = PE.Compound "," [noAnn x, noAnn (commaSepPExpr xs)]
+
+-- ---------------------------------------------------------------------------
+-- Surface pretty-printers (via PExpr)
+-- ---------------------------------------------------------------------------
+
+-- | Render a 'Term' as valid surface-language source text.
+-- Unlike 'prettyTerm', variable names are preserved rather than collapsed to @_@.
+prettyTermSrc :: Term -> String
+prettyTermSrc = PE.prettyPExpr prettyOps . termToPExpr
+
+-- | Render a 'Constraint' as valid surface-language source text.
+prettyConstraintSrc :: Constraint -> String
+prettyConstraintSrc = PE.prettyPExpr prettyOps . constraintToPExpr
+
+-- | Render a parsed 'P.Head' as valid surface-language source text.
+prettyHeadSrc :: P.Head -> String
+prettyHeadSrc = PE.prettyPExpr prettyOps . headToPExpr
+
+-- | Render a parsed 'P.Rule' as valid surface-language source text.
+prettyRuleSrc :: P.Rule -> String
+prettyRuleSrc r = PE.prettyPExpr prettyOps (ruleToPExpr r) ++ "."
+
+-- | Render a parsed 'P.FunctionEquation' as valid surface-language source text.
+prettyEquationSrc :: P.FunctionEquation -> String
+prettyEquationSrc eq = PE.prettyPExpr prettyOps (equationToPExpr eq) ++ "."
+
+-- | Render an atom, quoting with @\'...\'@ if necessary.
+renderAtom :: Text -> String
+renderAtom = PE.renderAtom prettyOps.wordOpSet
+
+-- ---------------------------------------------------------------------------
+-- Runtime pretty-printer (not via PExpr)
+-- ---------------------------------------------------------------------------
 
 -- | Render a 'Term' as a Prolog-compatible string.
 -- Unbound variables ('VarTerm' and 'Wildcard') are shown as @_@.
 prettyTerm :: Term -> String
 prettyTerm (IntTerm n) = show n
 prettyTerm (AtomTerm s) = T.unpack s
-prettyTerm (TextTerm s) = renderString s
+prettyTerm (TextTerm s) = renderStringRT s
 prettyTerm (VarTerm _) = "_"
 prettyTerm Wildcard = "_"
+prettyTerm (CompoundTerm (Unqualified "__closure") (_ : sourceForm : _)) =
+  prettyTerm sourceForm
+prettyTerm (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body]) =
+  "fun(" ++ intercalate ", " (map prettyTerm params) ++ ") -> " ++ prettyTerm body
 prettyTerm (CompoundTerm (Unqualified ".") [h, t]) =
   "[" ++ prettyTerm h ++ prettyListTail t ++ "]"
   where
@@ -54,89 +193,16 @@ prettyTerm (CompoundTerm (Unqualified f) ts) =
 prettyTerm (CompoundTerm (Qualified m f) ts) =
   T.unpack m ++ ":" ++ T.unpack f ++ "(" ++ intercalate ", " (map prettyTerm ts) ++ ")"
 
--- ---------------------------------------------------------------------------
--- Surface pretty-printer (for roundtrip: parse . prettyTermSrc = id)
--- ---------------------------------------------------------------------------
-
-reservedWordsSrc :: [Text]
-reservedWordsSrc = ["is", "fun"]
-
--- | True if the atom string requires single-quote wrapping.
-needsQuoting :: Text -> Bool
-needsQuoting t = case T.uncons t of
-  Nothing -> True
-  Just (c, cs) ->
-    not
-      ( isLower c
-          && T.all (\x -> isAlphaNum x || x == '_') cs
-          && t `notElem` reservedWordsSrc
-      )
-
--- | Render an atom, quoting with @\'...\'@ if necessary.
--- Embedded single quotes are doubled per ISO Prolog convention.
-renderAtom :: Text -> String
-renderAtom s
-  | needsQuoting s = "'" ++ concatMap esc (T.unpack s) ++ "'"
-  | otherwise = T.unpack s
-  where
-    esc '\'' = "''"
-    esc c = [c]
-
 -- | Render a string literal with double quotes and escape sequences.
-renderString :: Text -> String
-renderString s = "\"" ++ concatMap esc (T.unpack s) ++ "\""
+-- Used only by 'prettyTerm' for runtime output.
+renderStringRT :: Text -> String
+renderStringRT s = "\"" ++ concatMap esc (T.unpack s) ++ "\""
   where
     esc '"' = "\\\""
     esc '\\' = "\\\\"
     esc '\n' = "\\n"
     esc '\t' = "\\t"
     esc c = [c]
-
-infixOpsSrc :: [Text]
-infixOpsSrc = ["*", "div", "mod", "+", "-", ":=", "is", "=", "==", "<", ">", "=<", ">="]
-
--- | Render a 'Term' as valid surface-language source text.
--- Unlike 'prettyTerm', variable names are preserved rather than collapsed to @_@.
-prettyTermSrc :: Term -> String
-prettyTermSrc (IntTerm n) = show n
-prettyTermSrc (AtomTerm s) = renderAtom s
-prettyTermSrc (TextTerm s) = renderString s
-prettyTermSrc (VarTerm v) = T.unpack v
-prettyTermSrc Wildcard = "_"
-prettyTermSrc (CompoundTerm (Unqualified ".") [h, t]) =
-  "[" ++ prettyTermSrc h ++ prettyListTailSrc t ++ "]"
-  where
-    prettyListTailSrc (AtomTerm "[]") = ""
-    prettyListTailSrc (CompoundTerm (Unqualified ".") [h', t']) =
-      ", " ++ prettyTermSrc h' ++ prettyListTailSrc t'
-    prettyListTailSrc other = "|" ++ prettyTermSrc other
-prettyTermSrc (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body]) =
-  "fun(" ++ intercalate ", " (map prettyTermSrc params) ++ ") -> " ++ prettyTermSrc body
-prettyTermSrc (CompoundTerm (Unqualified op) [l, r])
-  | op `elem` infixOpsSrc =
-      "(" ++ prettyTermSrc l ++ " " ++ T.unpack op ++ " " ++ prettyTermSrc r ++ ")"
-prettyTermSrc (CompoundTerm (Unqualified f) ts) =
-  renderAtom f ++ "(" ++ intercalate ", " (map prettyTermSrc ts) ++ ")"
-prettyTermSrc (CompoundTerm (Qualified m f) ts) =
-  renderAtom m
-    ++ ":"
-    ++ renderAtom f
-    ++ "("
-    ++ intercalate ", " (map prettyTermSrc ts)
-    ++ ")"
-
--- | Render a 'Constraint' as valid surface-language source text.
-prettyConstraintSrc :: Constraint -> String
-prettyConstraintSrc (Constraint (Unqualified name) []) = renderAtom name
-prettyConstraintSrc (Constraint (Unqualified name) args) =
-  renderAtom name ++ "(" ++ intercalate ", " (map prettyTermSrc args) ++ ")"
-prettyConstraintSrc (Constraint (Qualified m name) args) =
-  renderAtom m
-    ++ ":"
-    ++ renderAtom name
-    ++ case args of
-      [] -> ""
-      _ -> "(" ++ intercalate ", " (map prettyTermSrc args) ++ ")"
 
 -- ---------------------------------------------------------------------------
 -- User-facing output (binding map)
@@ -168,37 +234,6 @@ prettyQueryResult m =
       T.unpack k ++ " = " ++ prettyTerm v ++ ",\n" ++ formatBindings rest
 
 -- ---------------------------------------------------------------------------
--- Parsed AST pretty-printers
--- ---------------------------------------------------------------------------
-
--- | Render a parsed 'P.Head' as valid surface-language source text.
---
--- Only the constraint list(s) are rendered, not the arrow.
-prettyHeadSrc :: P.Head -> String
-prettyHeadSrc (P.Simplification cs) = constraintList cs
-prettyHeadSrc (P.Propagation cs) = constraintList cs
-prettyHeadSrc (P.Simpagation ks rs) = constraintList ks ++ " \\ " ++ constraintList rs
-
-constraintList :: [Constraint] -> String
-constraintList = intercalate ", " . map prettyConstraintSrc
-
--- | Render a parsed 'P.Rule' as valid surface-language source text.
-prettyRuleSrc :: P.Rule -> String
-prettyRuleSrc r =
-  namePrefix ++ prettyHeadSrc (r.head.node) ++ " " ++ arrow ++ " " ++ guardPrefix ++ bodyStr ++ "."
-  where
-    namePrefix = case r.name of
-      Nothing -> ""
-      Just ann -> renderAtom ann.node ++ " @ "
-    arrow = case r.head.node of
-      P.Propagation {} -> "==>"
-      _ -> "<=>"
-    guardPrefix = case r.guard.node of
-      [] -> ""
-      gs -> intercalate ", " (map prettyTermSrc gs) ++ " | "
-    bodyStr = intercalate ", " (map prettyTermSrc r.body.node)
-
--- ---------------------------------------------------------------------------
 -- Pretty class
 -- ---------------------------------------------------------------------------
 
@@ -215,6 +250,8 @@ instance Pretty Constraint where prettySrc = prettyConstraintSrc
 instance Pretty P.Head where prettySrc = prettyHeadSrc
 
 instance Pretty P.Rule where prettySrc = prettyRuleSrc
+
+instance Pretty P.FunctionEquation where prettySrc = prettyEquationSrc
 
 -- ---------------------------------------------------------------------------
 -- Existential wrapper and annotated node

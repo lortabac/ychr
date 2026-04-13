@@ -471,18 +471,43 @@ lambdaLiftTests =
                   }
             m = (module' "M") {decls = [funDecl], equations = [funEq]}
         prog <- desugar [m]
-        let lifted = liftAllLambdas prog
-            isLambda f = case f.name of
+        lifted <- case liftAllLambdas prog of
+          Left errs -> assertFailure ("liftAllLambdas failed: " ++ show errs) >> error "unreachable"
+          Right p -> pure p
+        let isLambda f = case f.name of
               Qualified _ n -> n == "__lambda_0"
               _ -> False
         case filter isLambda lifted.functions of
           [lam] -> do
             lam.arity @?= 2
-            case lam.equations of
+            case lam.equations.node of
               [eq] -> do
                 eq.params @?= [var "X", var "Y"]
                 eq.guards @?= []
                 eq.rhs @?= lambdaBody
               eqs -> assertFailure $ "expected 1 equation, got " ++ show (length eqs)
-          fs -> assertFailure $ "expected exactly one __lambda_0, got " ++ show (length fs)
+          fs -> assertFailure $ "expected exactly one __lambda_0, got " ++ show (length fs),
+      testCase "rejects non-variable lambda parameter" $ do
+        -- fun("hello") -> "world" end should produce an InvalidLambdaParam error
+        let lambdaTerm =
+              CompoundTerm
+                (Unqualified "->")
+                [ CompoundTerm (Unqualified "fun") [TextTerm "hello"],
+                  TextTerm "world"
+                ]
+            funDecl = Ann (FunctionDecl "f" 1 Nothing Nothing) dummyLoc
+            funEq =
+              Ann
+                FunctionEquation
+                  { funName = "f",
+                    args = [var "X"],
+                    guard = noAnn [],
+                    rhs = noAnn lambdaTerm
+                  }
+                dummyLoc
+            m = (module' "M") {decls = [funDecl], equations = [funEq]}
+        prog <- desugar [m]
+        case liftAllLambdas prog of
+          Left errs -> errs @?= [InvalidLambdaParam dummyLoc (TextTerm "hello")]
+          Right _ -> assertFailure "expected InvalidLambdaParam error"
     ]
