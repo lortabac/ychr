@@ -89,7 +89,7 @@ type SrcInfo = (P.SourceLoc, PExpr)
 -- accumulated errors. Errors from every sub-pass are collected before
 -- the function decides to fail, so callers see as much detail as
 -- possible in one go.
-compile :: D.Program -> SymbolTable -> Either [CompileError] Program
+compile :: D.Program -> SymbolTable -> Either [AnnP CompileError] Program
 compile prog symTab =
   let funSet = buildFunctionSet prog
       (occMap, occErrs) = runPureEff . runWriter $ collectOccurrences symTab prog
@@ -130,7 +130,7 @@ buildTypeNames symTab =
 -- Procedure generation for each constraint type
 -- ---------------------------------------------------------------------------
 
-genConstraintProcs :: Set Identifier -> SymbolTable -> OccurrenceMap -> (Identifier, ConstraintType) -> Eff '[Writer [CompileError]] [Procedure]
+genConstraintProcs :: Set Identifier -> SymbolTable -> OccurrenceMap -> (Identifier, ConstraintType) -> Eff '[Writer [AnnP CompileError]] [Procedure]
 genConstraintProcs funSet symTab occMap (ident, cType) = do
   let occs = lookupOccurrences ident occMap
       tellProc = genTell ident.name cType ident.arity
@@ -187,7 +187,7 @@ genActivate name arity occs =
 -- occurrence_c_j
 -- ---------------------------------------------------------------------------
 
-genOccurrence :: Set Identifier -> SymbolTable -> Types.Name -> Int -> Occurrence -> Eff '[Writer [CompileError]] Procedure
+genOccurrence :: Set Identifier -> SymbolTable -> Types.Name -> Int -> Occurrence -> Eff '[Writer [AnnP CompileError]] Procedure
 genOccurrence funSet symTab name arity occ = do
   let params = activeName : argNames arity
       procName' = occProcName name arity occ.number
@@ -217,7 +217,7 @@ buildVarMap occ =
 -- | Compile the body of an occurrence procedure: build the innermost
 -- "guards-then-fire" block, wrap it in one nested 'Foreach' per partner,
 -- then append the trailing @Return false@ that signals "no early drop".
-genOccurrenceBody :: Set Identifier -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
+genOccurrenceBody :: Set Identifier -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [AnnP CompileError]] [Stmt]
 genOccurrenceBody funSet symTab varMap occ = do
   (inner, condMap) <- genGuardedFire funSet symTab varMap occ
   let body = wrapInPartnerLoops occ condMap inner
@@ -234,7 +234,7 @@ genGuardedFire ::
   SymbolTable ->
   VarMap ->
   Occurrence ->
-  Eff '[Writer [CompileError]] ([Stmt], PartnerCondMap)
+  Eff '[Writer [AnnP CompileError]] ([Stmt], PartnerCondMap)
 genGuardedFire funSet symTab varMap occ = do
   let AnnP {node = guards, sourceLoc = guardLoc, parsed = guardP} = occ.rule.guard
       guardSi = (guardLoc, guardP)
@@ -302,7 +302,7 @@ wrapInPartnerLoops occ condMap inner =
 -- Fire: history check + kill + body + early drop + backjumping
 -- ---------------------------------------------------------------------------
 
-genFireStmts :: Set Identifier -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [CompileError]] [Stmt]
+genFireStmts :: Set Identifier -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [AnnP CompileError]] [Stmt]
 genFireStmts funSet symTab varMap occ = do
   let rule = occ.rule
       AnnP {node = ruleHead} = rule.head
@@ -380,11 +380,11 @@ genKillStmts occ =
 -- Compile terms
 -- ---------------------------------------------------------------------------
 
-compileTerm :: VarMap -> SrcInfo -> Term -> Eff '[Writer [CompileError]] Expr
+compileTerm :: VarMap -> SrcInfo -> Term -> Eff '[Writer [AnnP CompileError]] Expr
 compileTerm varMap (loc, p) (VarTerm v) = case lookupVar v varMap of
   Just expr -> pure expr
   Nothing -> do
-    tell [UnboundVariable loc p v]
+    tell [AnnP (UnboundVariable v) loc p]
     pure (Lit WildcardLit)
 compileTerm _ _ (IntTerm n) = pure (Lit (IntLit n))
 compileTerm _ _ (AtomTerm "true") = pure (Lit (BoolLit True))
@@ -402,7 +402,7 @@ compileTerm _ _ Wildcard = pure (Lit WildcardLit)
 -- through these recognised forms; nested compound terms whose head is
 -- /not/ a function are compiled as opaque data via 'compileTerm'. See
 -- the \"Notes\" block at the bottom of this file.
-compileExpr :: Set Identifier -> VarMap -> SrcInfo -> Term -> Eff '[Writer [CompileError]] Expr
+compileExpr :: Set Identifier -> VarMap -> SrcInfo -> Term -> Eff '[Writer [AnnP CompileError]] Expr
 compileExpr funSet varMap si (CompoundTerm (Types.Unqualified "call_fun") args)
   | length args >= 2 = do
       args' <- traverse (compileExpr funSet varMap si) args
@@ -529,7 +529,7 @@ compileGuards ::
   VarMap ->
   SrcInfo ->
   [D.Guard] ->
-  Eff '[Writer [CompileError]] ([Stmt] -> [Stmt], PartnerCondMap, Maybe Expr, VarMap)
+  Eff '[Writer [AnnP CompileError]] ([Stmt] -> [Stmt], PartnerCondMap, Maybe Expr, VarMap)
 compileGuards funSet mOcc varMap si guards = do
   let (matchGuards, checkGuards) = partition isMatchGuard guards
   (matchWrapper, varMap') <- foldM (compileMatchGuard si) (id, varMap) matchGuards
@@ -544,7 +544,7 @@ compileMatchGuard ::
   SrcInfo ->
   ([Stmt] -> [Stmt], VarMap) ->
   D.Guard ->
-  Eff '[Writer [CompileError]] ([Stmt] -> [Stmt], VarMap)
+  Eff '[Writer [AnnP CompileError]] ([Stmt] -> [Stmt], VarMap)
 compileMatchGuard si (matchWrapper, varMap) (D.GuardMatch term name arity) = do
   termExpr <- compileTerm varMap si term
   let check body = [If (MatchTerm termExpr (vmName name) arity) body []]
@@ -570,7 +570,7 @@ compileCheckGuards ::
   VarMap ->
   SrcInfo ->
   [D.Guard] ->
-  Eff '[Writer [CompileError]] (PartnerCondMap, Maybe Expr)
+  Eff '[Writer [AnnP CompileError]] (PartnerCondMap, Maybe Expr)
 compileCheckGuards funSet mOcc varMap si guards = do
   (condMap, residuals) <- foldM step (Map.empty, []) guards
   let residual = case residuals of
@@ -598,7 +598,7 @@ compileCheckGuards funSet mOcc varMap si guards = do
 -- Compile body goals
 -- ---------------------------------------------------------------------------
 
-compileBodyGoals :: Set Identifier -> SymbolTable -> VarMap -> SrcInfo -> [D.BodyGoal] -> Eff '[Writer [CompileError]] [Stmt]
+compileBodyGoals :: Set Identifier -> SymbolTable -> VarMap -> SrcInfo -> [D.BodyGoal] -> Eff '[Writer [AnnP CompileError]] [Stmt]
 compileBodyGoals funSet symTab varMap si goals = do
   (stmts, _) <- foldM step ([], varMap) goals
   pure stmts
@@ -623,7 +623,7 @@ unifyAndReactivate l r =
 -- an updated 'VarMap'. The VarMap may grow when a goal introduces new
 -- variables (e.g. @is@ binding a fresh variable, or a constraint whose
 -- arguments reference not-yet-seen variables that need 'NewVar').
-compileBodyGoal :: Set Identifier -> SymbolTable -> VarMap -> SrcInfo -> D.BodyGoal -> Eff '[Writer [CompileError]] ([Stmt], VarMap)
+compileBodyGoal :: Set Identifier -> SymbolTable -> VarMap -> SrcInfo -> D.BodyGoal -> Eff '[Writer [AnnP CompileError]] ([Stmt], VarMap)
 compileBodyGoal _ _ varMap _ D.BodyTrue = pure ([], varMap)
 compileBodyGoal _ _ varMap si (D.BodyConstraint con) = do
   let argVars = [v | VarTerm v <- con.args, notMemberVar v varMap]
@@ -661,7 +661,7 @@ compileBodyGoal funSet _ varMap si (D.BodyFunctionCall name args) = do
 -- Compile function definitions
 -- ---------------------------------------------------------------------------
 
-compileFunctionDef :: Set Identifier -> D.Function -> Eff '[Writer [CompileError]] Procedure
+compileFunctionDef :: Set Identifier -> D.Function -> Eff '[Writer [AnnP CompileError]] Procedure
 compileFunctionDef funSet func = do
   let procName' = funcProcName func.name func.arity
       params = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. func.arity - 1]]
@@ -679,7 +679,7 @@ buildEquationVarMap procParams normalizedArgs =
     | (p, VarTerm v) <- zip procParams normalizedArgs
     ]
 
-compileEquation :: Set Identifier -> [Name] -> SrcInfo -> D.Equation -> Eff '[Writer [CompileError]] [Stmt]
+compileEquation :: Set Identifier -> [Name] -> SrcInfo -> D.Equation -> Eff '[Writer [AnnP CompileError]] [Stmt]
 compileEquation funSet params si eq = do
   let varMap = buildEquationVarMap params eq.params
   -- Equations have no partners, so the index-condition pushdown

@@ -28,6 +28,7 @@ import YCHR.Collect (CollectError (..))
 import YCHR.Compile (CompileError (..))
 import YCHR.Desugar (DesugarError (..))
 import YCHR.EndToEnd (Error (..), Warning (..))
+import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
 import YCHR.Pretty (prettyPExprSrc, prettyTermSrc)
 import YCHR.Rename (RenameError (..), RenameWarning (..))
@@ -104,9 +105,9 @@ desugarErrorCode (UnexpectedBodyTerm _ _) = ErrorCode 30001
 desugarErrorCode (InvalidLambdaParam _ _) = ErrorCode 30003
 
 -- | 4xxxx — compile phase
-compileErrorCode :: CompileError -> ErrorCode
-compileErrorCode (UnknownConstraintType _ _ _) = ErrorCode 40001
-compileErrorCode (UnboundVariable _ _ _) = ErrorCode 40002
+compileErrorCode :: AnnP CompileError -> ErrorCode
+compileErrorCode (AnnP (UnknownConstraintType _) _ _) = ErrorCode 40001
+compileErrorCode (AnnP (UnboundVariable _) _ _) = ErrorCode 40002
 
 -- | 5xxxx — top-level errors
 parseErrorCode :: ErrorCode
@@ -192,15 +193,15 @@ instance Display DesugarError where
       loc
       (Just (prettyTermSrc term))
 
-instance Display CompileError where
-  displayMsg e@(UnknownConstraintType loc origin name) =
+instance Display (AnnP CompileError) where
+  displayMsg e@(AnnP (UnknownConstraintType name) loc origin) =
     displayMsgWithSrcLoc
       (compileErrorCode e)
       SevError
       ("Unknown constraint type '" ++ displayName name ++ "'")
       loc
       (Just (prettyPExprSrc origin))
-  displayMsg e@(UnboundVariable loc origin var) =
+  displayMsg e@(AnnP (UnboundVariable var) loc origin) =
     displayMsgWithSrcLoc
       (compileErrorCode e)
       SevError

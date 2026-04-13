@@ -34,7 +34,7 @@ import YCHR.VM (ConstraintType (..), RuleName (..))
 -- 'OccurrenceMap'. Occurrences are numbered top-down within each
 -- constraint type so that occurrence number 1 is the textually first
 -- occurrence (paper §5.2, Listings 1 and 2).
-collectOccurrences :: SymbolTable -> D.Program -> Eff '[Writer [CompileError]] OccurrenceMap
+collectOccurrences :: SymbolTable -> D.Program -> Eff '[Writer [AnnP CompileError]] OccurrenceMap
 collectOccurrences symTab prog = do
   allOccs <- fmap concat (traverse (ruleOccurrences symTab) (zip [0 ..] prog.rules))
   let grouped = foldl' (\m occ -> occMapAppend (Identifier occ.conName occ.conArity) occ m) occMapEmpty allOccs
@@ -47,7 +47,7 @@ collectOccurrences symTab prog = do
 -- | Produce one 'Occurrence' record for every head constraint of a
 -- single rule. The active head varies; the other heads become the
 -- partner list of that occurrence.
-ruleOccurrences :: SymbolTable -> (Int, D.Rule) -> Eff '[Writer [CompileError]] [Occurrence]
+ruleOccurrences :: SymbolTable -> (Int, D.Rule) -> Eff '[Writer [AnnP CompileError]] [Occurrence]
 ruleOccurrences symTab (ruleIdx, rule) = do
   let AnnP {node = ruleHead} = rule.head
       kept = ruleHead.kept
@@ -80,7 +80,7 @@ mkOccurrence ::
   HeadPosition ->
   Constraint ->
   Bool ->
-  Eff '[Writer [CompileError]] Occurrence
+  Eff '[Writer [AnnP CompileError]] Occurrence
 mkOccurrence symTab rule ruleName' combined activeIdx activeCon activeIsKept = do
   let partners' = [(idx, con, isKept) | (idx, con, isKept) <- combined, idx /= activeIdx]
       headLoc = rule.head.sourceLoc
@@ -115,9 +115,9 @@ lookupCType ::
   P.SourceLoc ->
   PExpr ->
   Identifier ->
-  Eff '[Writer [CompileError]] ConstraintType
+  Eff '[Writer [AnnP CompileError]] ConstraintType
 lookupCType symTab loc p ident = case lookupSymbol ident symTab of
   Just ct -> pure ct
   Nothing -> do
-    tell [UnknownConstraintType loc p ident.name]
+    tell [AnnP (UnknownConstraintType ident.name) loc p]
     pure (ConstraintType (-1))

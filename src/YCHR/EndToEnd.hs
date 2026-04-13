@@ -58,7 +58,7 @@ import YCHR.Compile (CompileError, buildFunctionSet, compile, compileFunctionDef
 import YCHR.Desugar (DesugarError, desugarProgram, desugarQueryGoals, extractSymbolTable, liftAllLambdas, liftQueryLambdas)
 import YCHR.Desugared qualified as D
 import YCHR.Meta (valueToTerm)
-import YCHR.Parsed (Import (..), Module (..), OpDecl (..), SourceLoc (..), noAnn)
+import YCHR.Parsed (AnnP, Import (..), Module (..), OpDecl (..), SourceLoc (..), noAnn)
 import YCHR.Parser (OpTable, builtinOps, collectOperatorDecls, extractOpDecls, mergeOps, parseConstraint, parseModuleWith, parseQueryWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (RenameError, RenameWarning, buildExportEnv, renameProgram, renameQueryGoals)
@@ -79,7 +79,7 @@ data Error
   | CollectErrors [CollectError]
   | RenameErrors [RenameError]
   | DesugarErrors [DesugarError]
-  | CompileErrors [CompileError]
+  | CompileErrors [AnnP CompileError]
   | OperatorConflict [FilePath] Text
   deriving (Show)
 

@@ -33,24 +33,21 @@ where
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import YCHR.Desugared qualified as D
-import YCHR.PExpr (PExpr)
-import YCHR.Parsed qualified as P
 import YCHR.Types (Constraint, Identifier, Name, Term)
 import YCHR.Types qualified as Types
 import YCHR.VM (ConstraintType, Expr, RuleName)
 
--- | Errors raised by any pass in the CHR-to-VM compiler. Both
--- constructors carry the source location and the pretty-printed origin
--- of the offending fragment so that the diagnostic can quote the user's
--- own input.
+-- | Errors raised by any pass in the CHR-to-VM compiler. Wrapped in
+-- 'YCHR.Parsed.AnnP' at the use site to carry the source location and
+-- original parsed expression for diagnostics.
 data CompileError
   = -- | A head constraint references a constraint type that is not in
     -- the symbol table. Raised by 'YCHR.Compile.Occurrences'.
-    UnknownConstraintType P.SourceLoc PExpr Types.Name
+    UnknownConstraintType Types.Name
   | -- | A guard or body term references a variable that is not bound
     -- by the rule head. Raised by 'YCHR.Compile' while compiling
     -- terms.
-    UnboundVariable P.SourceLoc PExpr Text
+    UnboundVariable Text
   deriving (Show)
 
 -- | 1-based occurrence number within a constraint type's occurrence list.
