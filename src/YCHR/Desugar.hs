@@ -84,6 +84,20 @@ isPrefix = "__is_"
 lambdaPrefix :: Text
 lambdaPrefix = "__lambda_"
 
+-- | Functor name for self-describing closure terms.
+closureFunctor :: Text
+closureFunctor = "__closure"
+
+-- | Quote a term so it becomes ground: all 'VarTerm' names become
+-- 'AtomTerm' values, and 'Wildcard' becomes @AtomTerm "_"@. Used to
+-- embed the original lambda source form in the closure term without
+-- introducing variable references.
+quoteTerm :: Term -> Term
+quoteTerm (VarTerm v) = AtomTerm v
+quoteTerm Wildcard = AtomTerm "_"
+quoteTerm (CompoundTerm n args) = CompoundTerm n (map quoteTerm args)
+quoteTerm t = t -- IntTerm, AtomTerm, TextTerm are already ground
+
 isFunctionDecl :: P.Declaration -> Bool
 isFunctionDecl P.FunctionDecl {} = True
 isFunctionDecl _ = False
@@ -447,10 +461,13 @@ extractLambdaParams (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified 
 extractLambdaParams t = ([], t)
 
 -- | Lift lambdas in a single term. Each @fun(...) -> ...@ is replaced
--- by a /closure compound term/ of the form @Module:__lambda_N(F1, …,
--- Fn)@, where @F1 .. Fn@ are the captured free variables; the lambda
--- body itself is lifted into a fresh top-level 'D.Function'. Returns
--- the updated state and the rewritten term.
+-- by a /self-describing closure/ of the form
+-- @__closure(LambdaId, SourceForm, F1, …, Fn)@, where @LambdaId@ is
+-- an atom identifying the lifted function, @SourceForm@ is a quoted
+-- copy of the original lambda term (for pretty-printing), and
+-- @F1 .. Fn@ are the captured free variables; the lambda body itself
+-- is lifted into a fresh top-level 'D.Function'. Returns the updated
+-- state and the rewritten term.
 liftTerm :: Text -> Set.Set Text -> LiftState -> Term -> (LiftState, Term)
 liftTerm modName scope st term = case term of
   CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") _, _] ->
@@ -479,7 +496,9 @@ liftTerm modName scope st term = case term of
                 ]
             }
         st'' = st' {liftCounter = idx + 1, liftedFunctions = func : st'.liftedFunctions}
-     in (st'', CompoundTerm (Qualified modName lambdaName) (map VarTerm freeVars))
+        lambdaId = modName <> "__" <> lambdaName
+        closureArgs = [AtomTerm lambdaId, quoteTerm term] ++ map VarTerm freeVars
+     in (st'', CompoundTerm (Unqualified closureFunctor) closureArgs)
   CompoundTerm name args ->
     let (st', args') = mapAccumL (liftTerm modName scope) st args
      in (st', CompoundTerm name args')

@@ -163,6 +163,10 @@ prettyTerm (AtomTerm s) = T.unpack s
 prettyTerm (TextTerm s) = renderStringRT s
 prettyTerm (VarTerm _) = "_"
 prettyTerm Wildcard = "_"
+prettyTerm (CompoundTerm (Unqualified "__closure") (_ : sourceForm : _)) =
+  prettyTerm sourceForm
+prettyTerm (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body]) =
+  "fun(" ++ intercalate ", " (map prettyTerm params) ++ ") -> " ++ prettyTerm body
 prettyTerm (CompoundTerm (Unqualified ".") [h, t]) =
   "[" ++ prettyTerm h ++ prettyListTail t ++ "]"
   where
