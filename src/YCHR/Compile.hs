@@ -386,6 +386,8 @@ compileTerm varMap (loc, p) (VarTerm v) = case lookupVar v varMap of
     tell [UnboundVariable loc p v]
     pure (Lit WildcardLit)
 compileTerm _ _ (IntTerm n) = pure (Lit (IntLit n))
+compileTerm _ _ (AtomTerm "true") = pure (Lit (BoolLit True))
+compileTerm _ _ (AtomTerm "false") = pure (Lit (BoolLit False))
 compileTerm _ _ (AtomTerm s) = pure (Lit (AtomLit s))
 compileTerm _ _ (TextTerm s) = pure (Lit (TextLit s))
 compileTerm varMap si (CompoundTerm name args) = do

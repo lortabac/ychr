@@ -66,7 +66,6 @@ import YCHR.Types
 
 data DesugarError
   = UnexpectedBodyTerm P.SourceLoc Term
-  | UnexpectedGuardTerm P.SourceLoc Term
   | InvalidLambdaParam P.SourceLoc Term
   deriving (Eq, Show)
 
@@ -352,15 +351,10 @@ desugarEquation eq = do
 
 -- | Classify a parsed guard term into a 'D.Guard'.
 --
--- * @true@ -> 'D.GoalTrue'
--- * Compound terms -> 'D.GuardExpr' (equality checks, host calls, etc.)
--- * Anything else (bare variable, integer, atom, …) -> error
+-- Every term is accepted as a 'D.GuardExpr'. Type errors (e.g. a
+-- non-boolean guard) are deferred to a future typechecker.
 desugarGuard :: P.SourceLoc -> Term -> Eff '[Writer [DesugarError]] D.Guard
-desugarGuard _ (AtomTerm "true") = pure $ D.GuardCommon D.GoalTrue
-desugarGuard _ t@(CompoundTerm _ _) = pure $ D.GuardExpr t
-desugarGuard loc t = do
-  tell [UnexpectedGuardTerm loc t]
-  pure $ D.GuardCommon D.GoalTrue
+desugarGuard _ t = pure $ D.GuardExpr t
 
 -- | Desugar a list of query goal terms into 'BodyGoal's.
 -- Returns 'Left' if any desugaring errors occur.

@@ -1,0 +1,5 @@
+:- module(false_guard, [test/1]).
+:- chr_constraint test/1.
+
+blocked @ test(R) <=> false | R = blocked.
+fallback @ test(R) <=> R = ok.
