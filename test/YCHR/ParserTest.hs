@@ -227,7 +227,13 @@ operatorTests =
           >>= (@?= [CompoundTerm (Qualified "host" "print") [VarTerm "X"]]),
       testCase "zero-arity qualified name" $
         bodyOf "c <=> host:done."
-          >>= (@?= [CompoundTerm (Qualified "host" "done") []])
+          >>= (@?= [CompoundTerm (Qualified "host" "done") []]),
+      testCase "is operator used as functor" $
+        bodyOf "c <=> is(X, Y)."
+          >>= (@?= [CompoundTerm (Unqualified "is") [VarTerm "X", VarTerm "Y"]]),
+      testCase "= operator used as functor" $
+        bodyOf "c <=> '='(X, Y)."
+          >>= (@?= [CompoundTerm (Unqualified "=") [VarTerm "X", VarTerm "Y"]])
     ]
 
 -- ---------------------------------------------------------------------------

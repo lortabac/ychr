@@ -235,8 +235,18 @@ operatorTests =
       testCase "word operator" $
         stripAll (pOps "X is Y.")
           @?= Right [Compound "is" [noAnn (Var "X"), noAnn (Var "Y")]],
-      testCase "word operator rejected as atom" $
-        assertBool "should fail" (isLeft (pOps "is."))
+      testCase "infix word operator allowed as atom" $
+        stripAll (pOps "is.") @?= Right [Atom "is"],
+      testCase "infix word operator as functor" $
+        stripAll (pOps "is(X, Y).")
+          @?= Right [Compound "is" [noAnn (Var "X"), noAnn (Var "Y")]],
+      testCase "prefix word operator rejected as atom" $
+        let ops = mkOpTable [(500, [(Fx, "pre")])]
+         in assertBool "should fail" (isLeft (parseTerms ops "" "pre.")),
+      testCase "prefix word operator allowed as functor" $
+        let ops = mkOpTable [(500, [(Fx, "pre")])]
+         in stripAll (parseTerms ops "" "pre(X).")
+              @?= Right [Compound "pre" [noAnn (Var "X")]]
     ]
 
 -- ---------------------------------------------------------------------------

@@ -8,6 +8,6 @@
 % scope fix: before the fix, A was not visible to the lambda-lifter
 % (eq.params only contained the top-level _hnf_0), so the closure was
 % lifted without capturing A and the reference dangled at runtime.
-adder_from_pair(pair(A, _)) -> fun(X) -> X + A.
+adder_from_pair(pair(A, _)) -> fun(X) -> X + A end.
 
 result(test1, R) <=> F is adder_from_pair(pair(10, 99)), R is call_fun(F, 5).

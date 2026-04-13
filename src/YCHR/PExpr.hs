@@ -35,6 +35,8 @@ module YCHR.PExpr
     -- * Parsing
     parseTerms,
     parseTerm,
+    parseTermNoDot,
+    parseFirstTerm,
 
     -- * Pretty-printing
     prettyPExpr,
@@ -250,7 +252,7 @@ isSymbolic = T.all (`elem` symbolChars)
 
 -- | Characters that can appear in symbol operators.
 symbolChars :: [Char]
-symbolChars = ":=<>+-*/#@^~!&?"
+symbolChars = "\\:=<>+-*/#@^~!&?"
 
 -- ---------------------------------------------------------------------------
 -- Parser type
@@ -308,50 +310,63 @@ withLoc p = do
 
 -- | Parse an atom: a lowercase identifier or a single-quoted string.
 --
--- Rejects identifiers containing @__@ (double underscore) and identifiers
--- that are word operators.
-atomP :: Set Text -> Parser Text
-atomP wordOps = lexeme (unquotedP <|> quotedP)
+-- Rejects identifiers that are prefix word operators (e.g.
+-- @chr_constraint@, @dynamic@) so that the Pratt parser can handle
+-- them.  Infix-only word operators (e.g. @div@, @mod@, @is@) are
+-- allowed as atoms, following standard Prolog behaviour.
+atomP :: OpTable -> Parser Text
+atomP table = lexeme (unquotedP <|> quotedAtomP)
   where
     unquotedP = do
-      name <- (:) <$> lowerChar <*> many (alphaNumChar <|> char '_')
-      let t = T.pack name
-      if Set.member t wordOps
-        then fail ("word operator: " ++ name)
-        else
-          if "__" `T.isInfixOf` t
-            then fail "double underscore (__) is not allowed in atoms"
-            else pure t
-    quotedP = do
-      t <- T.pack <$> (char '\'' *> go)
-      if "__" `T.isInfixOf` t
-        then fail "double underscore (__) is not allowed in atoms"
+      t <- identifierP
+      -- Reject only word operators that are prefix operators.
+      -- Infix-only word operators (like div, mod) are valid atoms.
+      if Set.member t table.wordOpSet && Map.member t table.prefixByName
+        then fail ("reserved word: " ++ T.unpack t)
         else pure t
-      where
-        go =
-          choice
-            [ do
-                _ <- char '\''
-                choice
-                  [ char '\'' *> (('\'' :) <$> go),
-                    pure []
-                  ],
-              do
-                _ <- char '\\'
-                c <- escapeChar
-                (c :) <$> go,
-              do
-                c <- satisfy (\c -> c /= '\'' && c /= '\\')
-                (c :) <$> go
-            ]
-        escapeChar =
-          choice
-            [ '\'' <$ char '\'',
-              '\\' <$ char '\\',
-              '\n' <$ char 'n',
-              '\t' <$ char 't',
-              anySingle
-            ]
+
+-- | Parse an unquoted lowercase identifier.  Does not reject word operators
+-- or double underscores — callers are responsible for validation.
+identifierP :: Parser Text
+identifierP = do
+  name <- (:) <$> lowerChar <*> many (alphaNumChar <|> char '_')
+  let t = T.pack name
+  if "__" `T.isInfixOf` t
+    then fail "double underscore (__) is not allowed in atoms"
+    else pure t
+
+-- | Parse a single-quoted atom (e.g. @\'hello world\'@).
+quotedAtomP :: Parser Text
+quotedAtomP = do
+  t <- T.pack <$> (char '\'' *> go)
+  if "__" `T.isInfixOf` t
+    then fail "double underscore (__) is not allowed in atoms"
+    else pure t
+  where
+    go =
+      choice
+        [ do
+            _ <- char '\''
+            choice
+              [ char '\'' *> (('\'' :) <$> go),
+                pure []
+              ],
+          do
+            _ <- char '\\'
+            c <- escapeChar
+            (c :) <$> go,
+          do
+            c <- satisfy (\c -> c /= '\'' && c /= '\\')
+            (c :) <$> go
+        ]
+    escapeChar =
+      choice
+        [ '\'' <$ char '\'',
+          '\\' <$ char '\\',
+          '\n' <$ char 'n',
+          '\t' <$ char 't',
+          anySingle
+        ]
 
 -- | Parse a variable (uppercase identifier).
 varP :: Parser PExpr
@@ -390,7 +405,7 @@ anyOpToken table = lexeme (trySymbol <|> trySingleChar <|> tryWord)
         then pure s
         else fail ("unknown operator: " ++ T.unpack s)
     trySingleChar = try $ do
-      c <- oneOf (",|" :: [Char])
+      c <- oneOf (",|;" :: [Char])
       let name = T.singleton c
       if Map.member name table.prefixByName || Map.member name table.infixByName
         then pure name
@@ -442,6 +457,25 @@ listTermP table = between (symbol "[") (symbol "]") listBody
       tail_ <- option (noAnn (Atom "[]")) (symbol "|" *> withLoc (termP table maxArgPrec))
       pure (foldr (\h t -> Compound "." [h, noAnn t]) (tail_.node) elems)
 
+-- | Parse a lambda expression: @fun(X, Y) -> body end@.
+--
+-- Produces @Compound "->" [Compound "fun" [X, Y], body]@.
+-- The @end@ keyword delimits the body, making the entire lambda an
+-- atomic term that works inside compound-term arguments without
+-- parentheses.  The body is parsed at 'maxPrec', so any operators
+-- (including @,@ and @|@) may appear inside.
+--
+-- This is syntactic sugar: @fun(X) -> X + 1 end@ desugars to the
+-- same representation as @\'->'(fun(X), X + 1)@.
+lambdaP :: OpTable -> Parser PExpr
+lambdaP table = try $ do
+  _ <- lexeme (string "fun" <* notFollowedBy (alphaNumChar <|> char '_'))
+  params <- parens (withLoc (termP table maxArgPrec) `sepBy` comma)
+  _ <- symbol "->"
+  body <- withLoc (termP table maxPrec)
+  _ <- lexeme (string "end" <* notFollowedBy (alphaNumChar <|> char '_'))
+  pure (Compound "->" [noAnn (Compound "fun" params), body])
+
 -- | Parse an atomic (non-operator) term.
 atomicTermP :: OpTable -> Parser (Ann PExpr)
 atomicTermP table =
@@ -452,6 +486,7 @@ atomicTermP table =
         try intP,
         stringP,
         listTermP table,
+        lambdaP table,
         try (parens (termP table maxPrec)),
         atomOrCompoundP table
       ]
@@ -470,7 +505,7 @@ termP table maxFix = do
 -- | Parse a prefix expression or atomic term.
 -- Returns @(term, effectiveFixity)@; atomic terms have fixity 0.
 nudP :: OpTable -> Int -> Parser (Ann PExpr, Int)
-nudP table maxFix = atomicTerm <|> prefixOp
+nudP table maxFix = try atomicTerm <|> prefixOp
   where
     atomicTerm = (,0) <$> atomicTermP table
     prefixOp = try $ do
@@ -526,16 +561,36 @@ leftMax Yf fix = fix
 leftMax _ fix = fix - 1
 
 -- | Parse an atom optionally followed by a parenthesised argument list.
+--
+-- Word operators are allowed as atoms and functors following standard
+-- Prolog behaviour (e.g. @div@ is a valid atom and @div(X, Y)@ is a
+-- valid compound even though @div@ is an operator).  Only prefix word
+-- operators (e.g. @chr_constraint@) are rejected as bare atoms so that
+-- the Pratt parser can handle them — but they are still allowed as
+-- functors when followed by @(@.
 atomOrCompoundP :: OpTable -> Parser PExpr
-atomOrCompoundP table = do
-  name <- atomP table.wordOpSet
-  maybeOpen <- optional (symbol "(")
-  case maybeOpen of
-    Nothing -> pure (Atom name)
-    Just _ -> do
-      args <- withLoc (termP table maxArgPrec) `sepBy` comma
-      _ <- symbol ")"
-      pure (Compound name args)
+atomOrCompoundP table = prefixWordAsFunctor <|> regular
+  where
+    -- Prefix word operators are rejected by atomP, but we still allow
+    -- them as functors when followed by '('.
+    prefixWordAsFunctor = try $ do
+      name <- lexeme identifierP
+      if not (Set.member name table.wordOpSet && Map.member name table.prefixByName)
+        then fail "not a prefix word operator"
+        else do
+          _ <- symbol "("
+          args <- withLoc (termP table maxArgPrec) `sepBy` comma
+          _ <- symbol ")"
+          pure (Compound name args)
+    regular = do
+      name <- atomP table
+      maybeOpen <- optional (symbol "(")
+      case maybeOpen of
+        Nothing -> pure (Atom name)
+        Just _ -> do
+          args <- withLoc (termP table maxArgPrec) `sepBy` comma
+          _ <- symbol ")"
+          pure (Compound name args)
 
 -- ---------------------------------------------------------------------------
 -- Public API
@@ -554,6 +609,16 @@ parseTerms table = parse (sc *> many (withLoc (termP table maxPrec) <* symbol ".
 -- | Parse a single dot-terminated term from source text.
 parseTerm :: OpTable -> String -> Text -> Either (ParseErrorBundle Text Void) (Ann PExpr)
 parseTerm table = parse (sc *> withLoc (termP table maxPrec) <* symbol "." <* eof)
+
+-- | Parse a single term from source text (no dot terminator required).
+parseTermNoDot :: OpTable -> String -> Text -> Either (ParseErrorBundle Text Void) (Ann PExpr)
+parseTermNoDot table = parse (sc *> withLoc (termP table maxPrec) <* eof)
+
+-- | Parse the first dot-terminated term from source text, ignoring the rest.
+-- Returns 'Nothing' if the input is empty or starts with something that is
+-- not a valid term with the given operator table.
+parseFirstTerm :: OpTable -> String -> Text -> Either (ParseErrorBundle Text Void) (Maybe (Ann PExpr))
+parseFirstTerm table = parse (sc *> optional (try (withLoc (termP table maxPrec) <* symbol ".")) <* void takeRest)
 
 -- ---------------------------------------------------------------------------
 -- Pretty-printing
