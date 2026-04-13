@@ -33,6 +33,10 @@ def test_scheme_golden(test_name, ychr_bin, guile_bin, scheme_lib_dir, project_r
     if test_name in HASKELL_ONLY:
         pytest.skip(f"{test_name} uses Haskell-only meta primitives")
 
+    error_file = os.path.join(GOLDEN_DIR, "expected", f"{test_name}.error")
+    if os.path.exists(error_file):
+        pytest.skip(f"{test_name} is a negative (compile-error) test")
+
     program = os.path.join(GOLDEN_DIR, "programs", f"{test_name}.chr")
     query_file = os.path.join(GOLDEN_DIR, "goals", f"{test_name}.goal")
     expected_file = os.path.join(GOLDEN_DIR, "expected", f"{test_name}.expected")
