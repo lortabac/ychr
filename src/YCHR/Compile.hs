@@ -580,7 +580,6 @@ compileCheckGuards funSet mOcc varMap si guards = do
     classify e1 e2 = case mOcc of
       Just occ -> classifyEqual occ e1 e2
       Nothing -> Nothing
-    step acc (D.GuardCommon D.GoalTrue) = pure acc
     step (cm, rs) (D.GuardEqual t1 t2) = do
       e1 <- compileTerm varMap si t1
       e2 <- compileTerm varMap si t2
@@ -624,7 +623,7 @@ unifyAndReactivate l r =
 -- variables (e.g. @is@ binding a fresh variable, or a constraint whose
 -- arguments reference not-yet-seen variables that need 'NewVar').
 compileBodyGoal :: Set Identifier -> SymbolTable -> VarMap -> SrcInfo -> D.BodyGoal -> Eff '[Writer [CompileError]] ([Stmt], VarMap)
-compileBodyGoal _ _ varMap _ (D.BodyCommon D.GoalTrue) = pure ([], varMap)
+compileBodyGoal _ _ varMap _ D.BodyTrue = pure ([], varMap)
 compileBodyGoal _ _ varMap si (D.BodyConstraint con) = do
   let argVars = [v | VarTerm v <- con.args, notMemberVar v varMap]
       newStmts = [Let (Name v) NewVar | v <- argVars]

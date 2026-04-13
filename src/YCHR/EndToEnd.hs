@@ -388,7 +388,7 @@ executeBodyGoal ::
   HostCallRegistry ->
   D.BodyGoal ->
   Eff es ()
-executeBodyGoal _ (D.BodyCommon D.GoalTrue) = pure ()
+executeBodyGoal _ D.BodyTrue = pure ()
 executeBodyGoal _ (D.BodyUnify l r) = do
   v1 <- termToValue l
   v2 <- termToValue r

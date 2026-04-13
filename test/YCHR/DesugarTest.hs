@@ -214,9 +214,9 @@ bodyTests =
       testCase "hostCall becomes BodyHostStmt" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [hostCall "print" [var "X"]]]
         getNode rule.body @?= [D.BodyHostStmt "print" [VarTerm "X"]],
-      testCase "atom true becomes BodyCommon GoalTrue" $ do
+      testCase "atom true becomes BodyTrue" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [atom "true"]]
-        getNode rule.body @?= [D.BodyCommon D.GoalTrue]
+        getNode rule.body @?= [D.BodyTrue]
     ]
   where
     simpleModule' h body = module' "M" `defining` [Rule Nothing (noAnn h) (noAnn []) (noAnn body)]

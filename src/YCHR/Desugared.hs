@@ -26,7 +26,6 @@ module YCHR.Desugared
     Equation (..),
 
     -- * Goals
-    CommonGoal (..),
     Guard (..),
     BodyGoal (..),
 
@@ -65,18 +64,15 @@ data Head = Head
   }
   deriving (Show, Eq)
 
-data CommonGoal = GoalTrue deriving (Show, Eq)
-
 data Guard
-  = GuardCommon CommonGoal
-  | GuardEqual Term Term
+  = GuardEqual Term Term
   | GuardMatch Term Name Int
   | GuardGetArg Text Term Int
   | GuardExpr Term
   deriving (Show, Eq)
 
 data BodyGoal
-  = BodyCommon CommonGoal
+  = BodyTrue
   | BodyConstraint Constraint
   | BodyUnify Term Term
   | BodyHostStmt Text [Term]
