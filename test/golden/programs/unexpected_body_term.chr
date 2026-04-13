@@ -1,0 +1,2 @@
+:- chr_constraint foo/0.
+foo <=> 1.

@@ -1,0 +1,2 @@
+:- chr_constraint a/1.
+a(X) <=> unknown(X).
