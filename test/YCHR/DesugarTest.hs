@@ -184,13 +184,13 @@ guardTests =
                            ]
         rule <- singleRule [m]
         getNode rule.guard @?= [D.GuardExpr (CompoundTerm (Unqualified "gt") [VarTerm "X", IntTerm 0])],
-      testCase "atom true becomes GuardCommon GoalTrue" $ do
+      testCase "atom true becomes GuardExpr" $ do
         let m =
               module' "M"
                 `defining` [ Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [atom "true"]) (noAnn [atom "true"])
                            ]
         rule <- singleRule [m]
-        getNode rule.guard @?= [D.GuardCommon D.GoalTrue]
+        getNode rule.guard @?= [D.GuardExpr (AtomTerm "true")]
     ]
 
 --------------------------------------------------------------------------------
@@ -214,9 +214,9 @@ bodyTests =
       testCase "hostCall becomes BodyHostStmt" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [hostCall "print" [var "X"]]]
         getNode rule.body @?= [D.BodyHostStmt "print" [VarTerm "X"]],
-      testCase "atom true becomes BodyCommon GoalTrue" $ do
+      testCase "atom true becomes BodyTrue" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [atom "true"]]
-        getNode rule.body @?= [D.BodyCommon D.GoalTrue]
+        getNode rule.body @?= [D.BodyTrue]
     ]
   where
     simpleModule' h body = module' "M" `defining` [Rule Nothing (noAnn h) (noAnn []) (noAnn body)]
@@ -260,31 +260,30 @@ errorTests =
         case desugarProgram [m] of
           Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc badTerm]
           Right _ -> assertFailure "expected Left",
-      testCase "bare variable in guard produces UnexpectedGuardTerm" $ do
-        let badTerm = var "X"
-            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [badTerm]) (noAnn [atom "true"])]
+      testCase "bare variable in guard becomes GuardExpr" $ do
+        let term = var "X"
+            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [term]) (noAnn [atom "true"])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedGuardTerm dummyLoc badTerm]
-          Right _ -> assertFailure "expected Left",
-      testCase "bare integer in guard produces UnexpectedGuardTerm" $ do
-        let badTerm = int 42
-            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [badTerm]) (noAnn [atom "true"])]
+          Left errs -> assertFailure ("unexpected errors: " ++ show errs)
+          Right prog -> do
+            let rule = head prog.rules
+            getNode rule.guard @?= [D.GuardExpr (VarTerm "X")],
+      testCase "bare integer in guard becomes GuardExpr" $ do
+        let term = int 42
+            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [term]) (noAnn [atom "true"])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedGuardTerm dummyLoc badTerm]
-          Right _ -> assertFailure "expected Left",
-      testCase "non-true atom in guard produces UnexpectedGuardTerm" $ do
-        let badTerm = atom "foo"
-            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [badTerm]) (noAnn [atom "true"])]
+          Left errs -> assertFailure ("unexpected errors: " ++ show errs)
+          Right prog -> do
+            let rule = head prog.rules
+            getNode rule.guard @?= [D.GuardExpr (IntTerm 42)],
+      testCase "non-true atom in guard becomes GuardExpr" $ do
+        let term = atom "foo"
+            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [term]) (noAnn [atom "true"])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedGuardTerm dummyLoc badTerm]
-          Right _ -> assertFailure "expected Left",
-      testCase "multiple bad guard terms collect all errors" $ do
-        let bad1 = var "X"
-            bad2 = int 7
-            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [bad1, bad2]) (noAnn [atom "true"])]
-        case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedGuardTerm dummyLoc bad1, UnexpectedGuardTerm dummyLoc bad2]
-          Right _ -> assertFailure "expected Left"
+          Left errs -> assertFailure ("unexpected errors: " ++ show errs)
+          Right prog -> do
+            let rule = head prog.rules
+            getNode rule.guard @?= [D.GuardExpr (AtomTerm "foo")]
     ]
 
 --------------------------------------------------------------------------------

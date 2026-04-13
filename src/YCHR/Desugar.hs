@@ -22,8 +22,7 @@
 --
 -- 4. /Goal classification/: partition each body into structured 'D.BodyGoal'
 --    values ('D.BodyUnify', 'D.BodyIs', 'D.BodyHostStmt',
---    'D.BodyFunctionCall', 'D.BodyConstraint', or 'D.BodyCommon
---    D.GoalTrue').
+--    'D.BodyFunctionCall', 'D.BodyConstraint', or 'D.BodyTrue').
 --
 -- 5. /Guard classification/: map each surface guard term to a 'D.Guard'.
 --
@@ -66,7 +65,6 @@ import YCHR.Types
 
 data DesugarError
   = UnexpectedBodyTerm P.SourceLoc Term
-  | UnexpectedGuardTerm P.SourceLoc Term
   | InvalidLambdaParam P.SourceLoc Term
   deriving (Eq, Show)
 
@@ -352,15 +350,10 @@ desugarEquation eq = do
 
 -- | Classify a parsed guard term into a 'D.Guard'.
 --
--- * @true@ -> 'D.GoalTrue'
--- * Compound terms -> 'D.GuardExpr' (equality checks, host calls, etc.)
--- * Anything else (bare variable, integer, atom, …) -> error
+-- Every term is accepted as a 'D.GuardExpr'. Type errors (e.g. a
+-- non-boolean guard) are deferred to a future typechecker.
 desugarGuard :: P.SourceLoc -> Term -> Eff '[Writer [DesugarError]] D.Guard
-desugarGuard _ (AtomTerm "true") = pure $ D.GuardCommon D.GoalTrue
-desugarGuard _ t@(CompoundTerm _ _) = pure $ D.GuardExpr t
-desugarGuard loc t = do
-  tell [UnexpectedGuardTerm loc t]
-  pure $ D.GuardCommon D.GoalTrue
+desugarGuard _ t = pure $ D.GuardExpr t
 
 -- | Desugar a list of query goal terms into 'BodyGoal's.
 -- Returns 'Left' if any desugaring errors occur.
@@ -409,7 +402,7 @@ desugarBodyGoals funSet loc terms =
 -- 7. @call_fun(F, …)@ -> 'D.BodyFunctionCall' — @call_fun@ stays
 --    'Unqualified' (it is reserved by the renamer), so it would
 --    otherwise fall into the unqualified-compound error case below.
--- 8. @true@ -> 'D.GoalTrue'
+-- 8. @true@ -> 'D.BodyTrue'
 -- 9. Unqualified compound (renamer should have caught this) -> error
 -- 10. Anything else (bare variable, integer, atom, …) -> error
 desugarBodyGoal ::
@@ -435,13 +428,13 @@ desugarBodyGoal funSet loc t = case t of
   CompoundTerm (Unqualified "call_fun") args
     | length args >= 2 ->
         pure [D.BodyFunctionCall (Unqualified "call_fun") args]
-  AtomTerm "true" -> pure [D.BodyCommon D.GoalTrue]
+  AtomTerm "true" -> pure [D.BodyTrue]
   CompoundTerm (Unqualified _) _ -> do
     tell [UnexpectedBodyTerm loc t]
-    pure [D.BodyCommon D.GoalTrue]
+    pure [D.BodyTrue]
   _ -> do
     tell [UnexpectedBodyTerm loc t]
-    pure [D.BodyCommon D.GoalTrue]
+    pure [D.BodyTrue]
 
 -- ---------------------------------------------------------------------------
 -- Lambda lifting
@@ -542,7 +535,7 @@ liftBodyGoal modName loc scope st goal = case goal of
   D.BodyHostStmt f args ->
     let (st', args') = mapAccumL (liftTerm modName loc scope) st args
      in (st', D.BodyHostStmt f args')
-  D.BodyCommon g -> (st, D.BodyCommon g)
+  D.BodyTrue -> (st, D.BodyTrue)
 
 -- | Lift lambdas in a guard.
 liftGuard :: Text -> P.SourceLoc -> Set.Set Text -> LiftState -> D.Guard -> (LiftState, D.Guard)
@@ -607,7 +600,7 @@ bodyGoalVars = Set.unions . map goalVars
     goalVars (D.BodyConstraint (Constraint _ args)) = Set.unions (map termVars args)
     goalVars (D.BodyUnify t1 t2) = termVars t1 `Set.union` termVars t2
     goalVars (D.BodyHostStmt _ args) = Set.unions (map termVars args)
-    goalVars (D.BodyCommon _) = Set.empty
+    goalVars D.BodyTrue = Set.empty
 
 -- | Collect all variables from a list of guards.
 guardVars :: [D.Guard] -> Set.Set Text
@@ -617,7 +610,6 @@ guardVars = Set.unions . map gVars
     gVars (D.GuardEqual t1 t2) = termVars t1 `Set.union` termVars t2
     gVars (D.GuardGetArg v t _) = Set.insert v (termVars t)
     gVars (D.GuardMatch t _ _) = termVars t
-    gVars (D.GuardCommon _) = Set.empty
 
 -- | Lift lambdas in a rule. The scope includes all variables from the
 -- entire rule (head, guard, and body).

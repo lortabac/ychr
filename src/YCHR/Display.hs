@@ -101,7 +101,6 @@ renameWarningCode (DataConstructorArityMismatch _ _ _) = ErrorCode 20102
 -- | 3xxxx — desugar phase
 desugarErrorCode :: DesugarError -> ErrorCode
 desugarErrorCode (UnexpectedBodyTerm _ _) = ErrorCode 30001
-desugarErrorCode (UnexpectedGuardTerm _ _) = ErrorCode 30002
 desugarErrorCode (InvalidLambdaParam _ _) = ErrorCode 30003
 
 -- | 4xxxx — compile phase
@@ -183,13 +182,6 @@ instance Display DesugarError where
       (desugarErrorCode e)
       SevError
       "Unexpected term in rule body"
-      loc
-      (Just (prettyTermSrc term))
-  displayMsg e@(UnexpectedGuardTerm loc term) =
-    displayMsgWithSrcLoc
-      (desugarErrorCode e)
-      SevError
-      "Unexpected term in guard"
       loc
       (Just (prettyTermSrc term))
   displayMsg e@(InvalidLambdaParam loc term) =
