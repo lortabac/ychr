@@ -82,7 +82,7 @@ data Module = Module
     typeDecls :: [Ann TypeDefinition],
     rules :: [Rule],
     equations :: [AnnP FunctionEquation],
-    exports :: Maybe [Declaration]
+    exports :: Maybe (AnnP [Declaration])
   }
   deriving (Show, Eq, Lift)
 

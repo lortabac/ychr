@@ -16,7 +16,7 @@ module' name = Module name [] [] [] [] [] Nothing
 
 -- | Set the export list of a module
 exporting :: Module -> [Declaration] -> Module
-exporting m ds = m {exports = Just ds}
+exporting m ds = m {exports = Just (noAnnP ds)}
 
 -- | Add imports to a module
 importing :: Module -> [Text] -> Module

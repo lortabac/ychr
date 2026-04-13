@@ -51,7 +51,8 @@ stripModLoc m =
       decls = map (noAnn . (.node)) m.decls,
       typeDecls = map (noAnn . (.node)) m.typeDecls,
       rules = map stripRuleLoc m.rules,
-      equations = map (noAnnP . (.node)) m.equations
+      equations = map (noAnnP . (.node)) m.equations,
+      exports = fmap (noAnnP . (.node)) m.exports
     }
 
 -- ---------------------------------------------------------------------------
@@ -67,9 +68,9 @@ directiveTests =
       testCase "module name with export list" $
         (.name) <$> p ":- module(order, [leq/2, foo/1])." @?= Right "order",
       testCase "empty export list" $
-        (.exports) <$> p ":- module(order, [])." @?= Right (Just []),
+        fmap (.node) . (.exports) <$> p ":- module(order, [])." @?= Right (Just []),
       testCase "export list parsed correctly" $
-        (.exports) <$> p ":- module(order, [leq/2, foo/1])."
+        fmap (.node) . (.exports) <$> p ":- module(order, [leq/2, foo/1])."
           @?= Right (Just [ConstraintDecl "leq" 2 Nothing, ConstraintDecl "foo" 1 Nothing]),
       testCase "use_module" $
         (map (.node) . (.imports)) <$> p ":- use_module(stdlib)." @?= Right [ModuleImport "stdlib"],
@@ -89,10 +90,10 @@ directiveTests =
         (map (.node) . (.decls)) <$> p ":- chr_constraint fire/0."
           @?= Right [ConstraintDecl "fire" 0 Nothing],
       testCase "type export in export list" $
-        (.exports) <$> p ":- module(m, [type(tree/0), leq/2])."
+        fmap (.node) . (.exports) <$> p ":- module(m, [type(tree/0), leq/2])."
           @?= Right (Just [TypeExportDecl "tree" 0, ConstraintDecl "leq" 2 Nothing]),
       testCase "parameterized type export" $
-        (.exports) <$> p ":- module(m, [type(list/1)])."
+        fmap (.node) . (.exports) <$> p ":- module(m, [type(list/1)])."
           @?= Right (Just [TypeExportDecl "list" 1]),
       testCase "unknown directive is skipped" $
         (map (.node) . (.decls)) <$> p ":- dynamic foo/1.\n:- chr_constraint leq/2."
@@ -422,7 +423,7 @@ moduleTests =
                     (noAnnP [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
                 ]
                 []
-                (Just [])
+                (Just (noAnnP []))
             ),
       testCase "no module directive gives default name" $
         (.name) <$> p ":- chr_constraint foo/1.\nfoo(X) <=> true."

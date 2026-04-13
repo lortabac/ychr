@@ -248,7 +248,7 @@ parseOpTypeFromPExpr _ = Nothing
 extractOpDecls :: Module -> [OpDecl]
 extractOpDecls m = case m.exports of
   Nothing -> []
-  Just exports -> [op | OperatorDecl op <- exports]
+  Just annExports -> [op | OperatorDecl op <- annExports.node]
 
 -- ---------------------------------------------------------------------------
 -- PExpr → Term conversion
@@ -319,7 +319,7 @@ unfoldList _ = [] -- non-proper list tail: ignore
 
 -- | Internal directive type.
 data Directive
-  = DirModule Text [Declaration]
+  = DirModule Text SourceLoc PExpr [Declaration]
   | DirImport (Ann Import)
   | DirConstraintDecl [Ann Declaration]
   | DirFunctionDecl [Ann Declaration]
@@ -339,8 +339,8 @@ convertModule terms =
       dirs = [d | ItemDirective d <- items]
       rules = [r | ItemRule r <- items]
       eqs = [e | ItemEquation e <- items]
-      (modName_, modExports_) = case [(n, e) | DirModule n e <- dirs] of
-        ((n, e) : _) -> (n, Just e)
+      (modName_, modExports_) = case [(n, l, p, e) | DirModule n l p e <- dirs] of
+        ((n, l, p, e) : _) -> (n, Just (AnnP e l p))
         [] -> ("<no_module>", Nothing)
       modImports_ = [n | DirImport n <- dirs]
       modDecls_ =
@@ -371,10 +371,10 @@ convertModuleItem expr = case expr.node of
 
 -- | Convert a directive PExpr to a 'Directive'.
 convertDirective :: Ann PExpr -> Directive
-convertDirective (Ann (Compound ":-" [body]) _) = case body.node of
+convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- :- module(name, [exports]).
   Compound "module" [Ann (Atom name) _, exports] ->
-    DirModule name (map convertExportItem (unfoldList exports.node))
+    DirModule name loc body.node (map convertExportItem (unfoldList exports.node))
   -- :- use_module(name).  or  :- use_module(library(name)).
   Compound "use_module" [imp] ->
     DirImport (convertImport imp)

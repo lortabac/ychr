@@ -91,10 +91,10 @@ collectErrorCode (UnknownLibrary _) = ErrorCode 10001
 collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
 
 -- | 2xxxx — rename phase (errors)
-renameErrorCode :: RenameError -> ErrorCode
-renameErrorCode (AmbiguousName _ _ _ _) = ErrorCode 20001
-renameErrorCode (UnknownName _ _ _) = ErrorCode 20002
-renameErrorCode (UnknownExport _ _ _) = ErrorCode 20003
+renameErrorCode :: AnnP RenameError -> ErrorCode
+renameErrorCode (AnnP (AmbiguousName _ _ _) _ _) = ErrorCode 20001
+renameErrorCode (AnnP (UnknownName _ _) _ _) = ErrorCode 20002
+renameErrorCode (AnnP (UnknownExport _ _ _) _ _) = ErrorCode 20003
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
@@ -134,8 +134,8 @@ instance Display CollectError where
       ++ intercalate " -> " (map T.unpack names)
       ++ "\n"
 
-instance Display RenameError where
-  displayMsg e@(AmbiguousName loc name arity candidates) =
+instance Display (AnnP RenameError) where
+  displayMsg e@(AnnP (AmbiguousName name arity candidates) loc origin) =
     displayMsgWithSrcLoc
       (renameErrorCode e)
       SevError
@@ -147,23 +147,28 @@ instance Display RenameError where
           ++ intercalate ", " (map T.unpack candidates)
       )
       loc
-      Nothing
-  displayMsg e@(UnknownName loc name arity) =
+      (Just (prettyPExprSrc origin))
+  displayMsg e@(AnnP (UnknownName name arity) loc origin) =
     displayMsgWithSrcLoc
       (renameErrorCode e)
       SevError
       ("Unknown constraint " ++ T.unpack name ++ "/" ++ show arity)
       loc
-      Nothing
-  displayMsg e@(UnknownExport modName name arity) =
-    displayErrorCode (renameErrorCode e)
-      ++ "\nModule "
-      ++ T.unpack modName
-      ++ " exports "
-      ++ T.unpack name
-      ++ "/"
-      ++ show arity
-      ++ " but does not declare it\n"
+      (Just (prettyPExprSrc origin))
+  displayMsg e@(AnnP (UnknownExport modName name arity) loc origin) =
+    displayMsgWithSrcLoc
+      (renameErrorCode e)
+      SevError
+      ( "Module "
+          ++ T.unpack modName
+          ++ " exports "
+          ++ T.unpack name
+          ++ "/"
+          ++ show arity
+          ++ " but does not declare it"
+      )
+      loc
+      (Just (prettyPExprSrc origin))
 
 instance Display RenameWarning where
   displayMsg e@(UndeclaredDataConstructor loc name) =

@@ -70,7 +70,7 @@ moduleTests =
               @?= Module "M" [noAnn (ModuleImport "A")] [noAnn (ConstraintDecl "c" 0 Nothing)] [] [r] [] Nothing,
       testCase "exporting sets modExports" $
         module' "Foo" `exporting` ["leq" // 2]
-          @?= Module "Foo" [] [] [] [] [] (Just [ConstraintDecl "leq" 2 Nothing])
+          @?= Module "Foo" [] [] [] [] [] (Just (noAnnP [ConstraintDecl "leq" 2 Nothing]))
     ]
 
 declarationTests :: TestTree

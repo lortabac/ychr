@@ -78,7 +78,7 @@ import YCHR.VM (Name (..), Procedure (..), Program (..))
 data Error
   = ParseError FilePath (ParseErrorBundle Text Void)
   | CollectErrors [CollectError]
-  | RenameErrors [RenameError]
+  | RenameErrors [AnnP RenameError]
   | DesugarErrors [AnnP DesugarError]
   | CompileErrors [AnnP CompileError]
   | OperatorConflict [FilePath] Text
