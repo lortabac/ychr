@@ -4,8 +4,17 @@
 module YCHR.Display
   ( Display (..),
     Severity (..),
+    ErrorCode (..),
     displaySrcLoc,
     displayMsgWithSrcLoc,
+    displayErrorCode,
+    collectErrorCode,
+    renameErrorCode,
+    renameWarningCode,
+    desugarErrorCode,
+    compileErrorCode,
+    parseErrorCode,
+    operatorConflictCode,
   )
 where
 
@@ -29,6 +38,13 @@ class Display a where
 
 data Severity = SevError | SevWarning
 
+newtype ErrorCode = ErrorCode Int
+  deriving (Show, Eq, Ord)
+
+-- | Format an error code as @YCHR-NNNNN@.
+displayErrorCode :: ErrorCode -> String
+displayErrorCode (ErrorCode n) = "YCHR-" ++ show n
+
 -- | Display a source location as @file:line:col@.
 displaySrcLoc :: P.SourceLoc -> String
 displaySrcLoc loc = loc.file ++ ":" ++ show loc.line ++ ":" ++ show loc.col
@@ -37,15 +53,17 @@ displaySeverity :: Severity -> String
 displaySeverity SevError = "error"
 displaySeverity SevWarning = "warning"
 
--- | Format a diagnostic message with source location, severity, and optional AST context.
+-- | Format a diagnostic message with source location, severity, error code,
+-- and optional AST context.
 --
 -- @
--- file:line:col: severity: message
+-- file:line:col: severity: YCHR-NNNNN
+-- message
 -- ast_node
 -- @
-displayMsgWithSrcLoc :: Severity -> String -> P.SourceLoc -> Maybe String -> String
-displayMsgWithSrcLoc sev msg loc maybeNode =
-  displaySrcLoc loc ++ ": " ++ displaySeverity sev ++ ":\n" ++ msg ++ maybe "" ("\n" ++) maybeNode
+displayMsgWithSrcLoc :: ErrorCode -> Severity -> String -> P.SourceLoc -> Maybe String -> String
+displayMsgWithSrcLoc code sev msg loc maybeNode =
+  displaySrcLoc loc ++ ": " ++ displaySeverity sev ++ ": " ++ displayErrorCode code ++ "\n" ++ msg ++ maybe "" ("\n" ++) maybeNode
 
 -- | Join multiple error messages separated by two blank lines.
 displayErrors :: [String] -> String
@@ -60,15 +78,62 @@ sourceLocFromPos sp =
       P.col = unPos (sourceColumn sp)
     }
 
+-- ---------------------------------------------------------------------------
+-- Error codes by phase
+-- ---------------------------------------------------------------------------
+
+-- | 1xxxx — collect phase
+collectErrorCode :: CollectError -> ErrorCode
+collectErrorCode (UnknownLibrary _) = ErrorCode 10001
+collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
+
+-- | 2xxxx — rename phase (errors)
+renameErrorCode :: RenameError -> ErrorCode
+renameErrorCode (AmbiguousName _ _ _ _) = ErrorCode 20001
+renameErrorCode (UnknownName _ _ _) = ErrorCode 20002
+renameErrorCode (UnknownExport _ _ _) = ErrorCode 20003
+
+-- | 2x1xx — rename phase (warnings)
+renameWarningCode :: RenameWarning -> ErrorCode
+renameWarningCode (UndeclaredDataConstructor _ _) = ErrorCode 20101
+renameWarningCode (DataConstructorArityMismatch _ _ _) = ErrorCode 20102
+
+-- | 3xxxx — desugar phase
+desugarErrorCode :: DesugarError -> ErrorCode
+desugarErrorCode (UnexpectedBodyTerm _ _) = ErrorCode 30001
+desugarErrorCode (UnexpectedGuardTerm _ _) = ErrorCode 30002
+desugarErrorCode (InvalidLambdaParam _ _) = ErrorCode 30003
+
+-- | 4xxxx — compile phase
+compileErrorCode :: CompileError -> ErrorCode
+compileErrorCode (UnknownConstraintType _ _ _) = ErrorCode 40001
+compileErrorCode (UnboundVariable _ _ _) = ErrorCode 40002
+
+-- | 5xxxx — top-level errors
+parseErrorCode :: ErrorCode
+parseErrorCode = ErrorCode 50001
+
+operatorConflictCode :: ErrorCode
+operatorConflictCode = ErrorCode 50002
+
+-- ---------------------------------------------------------------------------
+-- Display instances
+-- ---------------------------------------------------------------------------
+
 instance Display CollectError where
-  displayMsg (UnknownLibrary name) =
-    "Unknown library: " ++ T.unpack name
-  displayMsg (CircularLibraryImport names) =
-    "Circular library import: " ++ intercalate " -> " (map T.unpack names)
+  displayMsg e@(UnknownLibrary name) =
+    displayErrorCode (collectErrorCode e)
+      ++ "\nUnknown library: "
+      ++ T.unpack name
+  displayMsg e@(CircularLibraryImport names) =
+    displayErrorCode (collectErrorCode e)
+      ++ "\nCircular library import: "
+      ++ intercalate " -> " (map T.unpack names)
 
 instance Display RenameError where
-  displayMsg (AmbiguousName loc name arity candidates) =
+  displayMsg e@(AmbiguousName loc name arity candidates) =
     displayMsgWithSrcLoc
+      (renameErrorCode e)
       SevError
       ( "Ambiguous name "
           ++ T.unpack name
@@ -79,14 +144,16 @@ instance Display RenameError where
       )
       loc
       Nothing
-  displayMsg (UnknownName loc name arity) =
+  displayMsg e@(UnknownName loc name arity) =
     displayMsgWithSrcLoc
+      (renameErrorCode e)
       SevError
       ("Unknown constraint " ++ T.unpack name ++ "/" ++ show arity)
       loc
       Nothing
-  displayMsg (UnknownExport modName name arity) =
-    "Module "
+  displayMsg e@(UnknownExport modName name arity) =
+    displayErrorCode (renameErrorCode e)
+      ++ "\nModule "
       ++ T.unpack modName
       ++ " exports "
       ++ T.unpack name
@@ -95,48 +162,55 @@ instance Display RenameError where
       ++ " but does not declare it"
 
 instance Display RenameWarning where
-  displayMsg (UndeclaredDataConstructor loc name) =
+  displayMsg e@(UndeclaredDataConstructor loc name) =
     displayMsgWithSrcLoc
+      (renameWarningCode e)
       SevWarning
       ("Undeclared data constructor " ++ T.unpack name)
       loc
       Nothing
-  displayMsg (DataConstructorArityMismatch loc name arity) =
+  displayMsg e@(DataConstructorArityMismatch loc name arity) =
     displayMsgWithSrcLoc
+      (renameWarningCode e)
       SevWarning
       ("Data constructor " ++ T.unpack name ++ " used with arity " ++ show arity ++ " but declared with different arity")
       loc
       Nothing
 
 instance Display DesugarError where
-  displayMsg (UnexpectedBodyTerm loc term) =
+  displayMsg e@(UnexpectedBodyTerm loc term) =
     displayMsgWithSrcLoc
+      (desugarErrorCode e)
       SevError
       "Unexpected term in rule body"
       loc
       (Just (prettyTermSrc term))
-  displayMsg (UnexpectedGuardTerm loc term) =
+  displayMsg e@(UnexpectedGuardTerm loc term) =
     displayMsgWithSrcLoc
+      (desugarErrorCode e)
       SevError
       "Unexpected term in guard"
       loc
       (Just (prettyTermSrc term))
-  displayMsg (InvalidLambdaParam loc term) =
+  displayMsg e@(InvalidLambdaParam loc term) =
     displayMsgWithSrcLoc
+      (desugarErrorCode e)
       SevError
       "Invalid lambda parameter (expected variable or wildcard)"
       loc
       (Just (prettyTermSrc term))
 
 instance Display CompileError where
-  displayMsg (UnknownConstraintType loc origin name) =
+  displayMsg e@(UnknownConstraintType loc origin name) =
     displayMsgWithSrcLoc
+      (compileErrorCode e)
       SevError
       ("Unknown constraint type '" ++ displayName name ++ "'")
       loc
       (Just (show origin))
-  displayMsg (UnboundVariable loc origin var) =
+  displayMsg e@(UnboundVariable loc origin var) =
     displayMsgWithSrcLoc
+      (compileErrorCode e)
       SevError
       ("Unbound variable '" ++ T.unpack var ++ "'")
       loc
@@ -151,7 +225,7 @@ displayParseError :: PosState Text -> ParseError Text Void -> String
 displayParseError posState err =
   let (_, posState') = reachOffset (errorOffset err) posState
       loc = sourceLocFromPos (pstateSourcePos posState')
-   in displaySrcLoc loc ++ ": " ++ parseErrorTextPretty err
+   in displaySrcLoc loc ++ ": " ++ displayErrorCode parseErrorCode ++ ": " ++ parseErrorTextPretty err
 
 instance Display Warning where
   displayMsg (RenameWarnings ws) = displayErrors (map displayMsg ws)
@@ -166,7 +240,8 @@ instance Display Error where
   displayMsg (DesugarErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (CompileErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (OperatorConflict sources name) =
-    "Operator naming conflict: "
+    displayErrorCode operatorConflictCode
+      ++ "\nOperator naming conflict: "
       ++ T.unpack name
       ++ case sources of
         [] -> ""
