@@ -1,0 +1,12 @@
+:- module(bcd, [result/1]).
+
+:- chr_constraint a/0, b/0, c/0, d/0, bcd/1, result/1.
+
+a ==> b.
+a, b ==> c.
+a <=> true.
+a, b ==> d.
+
+bcd(R), b, c, d <=> R = "bcd".
+
+result(R) <=> a, bcd(R).
