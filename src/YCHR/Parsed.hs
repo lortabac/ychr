@@ -48,6 +48,7 @@ where
 import Data.Text (Text)
 import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Loc (Ann (..), SourceLoc (..), dummyLoc, noAnn)
+import YCHR.PExpr (OpType (..))
 import YCHR.Types (Constraint (..), DataConstructor (..), Term (..), TypeDefinition (..), TypeExpr (..))
 
 data Import
@@ -71,14 +72,6 @@ data Declaration
   | FunctionDecl {name :: Text, arity :: Int, argTypes :: Maybe [TypeExpr], returnType :: Maybe TypeExpr}
   | OperatorDecl OpDecl
   | TypeExportDecl {name :: Text, arity :: Int}
-  deriving (Show, Eq, Lift)
-
-data OpType
-  = InfixL_
-  | InfixR_
-  | InfixN_
-  | Prefix_
-  | Postfix_
   deriving (Show, Eq, Lift)
 
 data OpDecl = OpDecl

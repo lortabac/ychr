@@ -55,6 +55,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void)
+import Language.Haskell.TH.Syntax (Lift)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
@@ -103,7 +104,7 @@ data OpType
   | Fy
   | Xf
   | Yf
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 -- | Is the operator an infix operator?
 isInfix :: OpType -> Bool

@@ -45,7 +45,6 @@ module YCHR.Parser
 where
 
 import Data.Text (Text)
-import Data.Text qualified as Text
 import Data.Void (Void)
 import Text.Megaparsec (ParseErrorBundle)
 import YCHR.PExpr (PExpr (Atom, Compound, Str, Var))
@@ -97,31 +96,12 @@ builtinOps =
 -- found (same operator name at a different fixity or type).
 mergeOps :: OpTable -> [OpDecl] -> Either Text OpTable
 mergeOps base decls =
-  P.mergeOps base [(d.fixity, convertOpType d.opType, d.opName) | d <- decls]
-
--- | Convert a surface-language operator type to a PExpr operator type.
-convertOpType :: OpType -> P.OpType
-convertOpType InfixL_ = P.Yfx
-convertOpType InfixR_ = P.Xfy
-convertOpType InfixN_ = P.Xfx
-convertOpType Prefix_ = P.Fx
-convertOpType Postfix_ = P.Xf
+  P.mergeOps base [(d.fixity, d.opType, d.opName) | d <- decls]
 
 -- | List all operator entries in an 'OpTable' as @(fixity, type, name)@
 -- triples. The order is unspecified.
-opTableEntries :: OpTable -> [(Int, OpType, Text)]
-opTableEntries table =
-  [(fix, convertBackOpType ty, name) | (fix, ty, name) <- P.opTableEntries table]
-
--- | Convert a PExpr operator type back to the surface-language type.
-convertBackOpType :: P.OpType -> OpType
-convertBackOpType P.Yfx = InfixL_
-convertBackOpType P.Xfy = InfixR_
-convertBackOpType P.Xfx = InfixN_
-convertBackOpType P.Fx = Prefix_
-convertBackOpType P.Fy = Prefix_
-convertBackOpType P.Xf = Postfix_
-convertBackOpType P.Yf = Postfix_
+opTableEntries :: OpTable -> [(Int, P.OpType, Text)]
+opTableEntries = P.opTableEntries
 
 -- ---------------------------------------------------------------------------
 -- Public parsing functions
@@ -254,12 +234,14 @@ extractOpDeclsFromPExpr pexpr =
     extractAtomName _ = Nothing
 
 -- | Parse an operator type from a PExpr atom.
-parseOpTypeFromPExpr :: PExpr -> Maybe OpType
-parseOpTypeFromPExpr (Atom "yfx") = Just InfixL_
-parseOpTypeFromPExpr (Atom "xfy") = Just InfixR_
-parseOpTypeFromPExpr (Atom "xfx") = Just InfixN_
-parseOpTypeFromPExpr (Atom "fx") = Just Prefix_
-parseOpTypeFromPExpr (Atom "xf") = Just Postfix_
+parseOpTypeFromPExpr :: PExpr -> Maybe P.OpType
+parseOpTypeFromPExpr (Atom "xfx") = Just P.Xfx
+parseOpTypeFromPExpr (Atom "xfy") = Just P.Xfy
+parseOpTypeFromPExpr (Atom "yfx") = Just P.Yfx
+parseOpTypeFromPExpr (Atom "fx") = Just P.Fx
+parseOpTypeFromPExpr (Atom "fy") = Just P.Fy
+parseOpTypeFromPExpr (Atom "xf") = Just P.Xf
+parseOpTypeFromPExpr (Atom "yf") = Just P.Yf
 parseOpTypeFromPExpr _ = Nothing
 
 -- | Extract operator declarations from an already-parsed module's export list.
@@ -306,13 +288,15 @@ convertConstraint (Ann pexpr _) = case pexpr of
     Constraint (Unqualified name) (map convertTerm args)
   -- Bare variable / integer / etc. in constraint position — produce
   -- a best-effort result; downstream will report the error.
-  _ -> Constraint (Unqualified (Text.pack (show pexpr))) []
+  _ -> Constraint (Unqualified "<invalid>") []
 
 -- ---------------------------------------------------------------------------
 -- Flattening helpers
 -- ---------------------------------------------------------------------------
 
 -- | Flatten a right-nested comma operator into a list.
+-- Note: O(n) because @,@ is @xfy@ so the tree is right-heavy (left child
+-- is always a leaf).
 flattenComma :: Ann PExpr -> [Ann PExpr]
 flattenComma (Ann (Compound "," [l, r]) _) = flattenComma l ++ flattenComma r
 flattenComma e = [e]
