@@ -233,32 +233,32 @@ errorTests =
         let badTerm = func "foo" [var "X"]
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc badTerm]
+          Left errs -> errs @?= [AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom "")]
           Right _ -> assertFailure "expected Left",
       testCase "two unqualified compounds collect both errors" $ do
         let bad1 = func "foo" [var "X"]
             bad2 = func "bar" [var "Y"]
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [bad1, bad2])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc bad1, UnexpectedBodyTerm dummyLoc bad2]
+          Left errs -> errs @?= [AnnP (UnexpectedBodyTerm bad1) dummyLoc (Atom ""), AnnP (UnexpectedBodyTerm bad2) dummyLoc (Atom "")]
           Right _ -> assertFailure "expected Left",
       testCase "bare variable in body produces UnexpectedBodyTerm" $ do
         let badTerm = var "X"
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc badTerm]
+          Left errs -> errs @?= [AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom "")]
           Right _ -> assertFailure "expected Left",
       testCase "bare integer in body produces UnexpectedBodyTerm" $ do
         let badTerm = int 42
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc badTerm]
+          Left errs -> errs @?= [AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom "")]
           Right _ -> assertFailure "expected Left",
       testCase "non-true atom in body produces UnexpectedBodyTerm" $ do
         let badTerm = atom "foo"
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc badTerm]
+          Left errs -> errs @?= [AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom "")]
           Right _ -> assertFailure "expected Left",
       testCase "bare variable in guard becomes GuardExpr" $ do
         let term = var "X"
@@ -507,6 +507,6 @@ lambdaLiftTests =
             m = (module' "M") {decls = [funDecl], equations = [funEq]}
         prog <- desugar [m]
         case liftAllLambdas prog of
-          Left errs -> errs @?= [InvalidLambdaParam dummyLoc (TextTerm "hello")]
+          Left errs -> errs @?= [AnnP (InvalidLambdaParam (TextTerm "hello")) dummyLoc (Atom "")]
           Right _ -> assertFailure "expected InvalidLambdaParam error"
     ]

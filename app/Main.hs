@@ -115,7 +115,7 @@ main = do
     GenDriver opts files -> runGenDriver opts files
 
 printWarnings :: [Warning] -> IO ()
-printWarnings = mapM_ (\w -> hPutStr stderr (displayMsg w ++ "\n"))
+printWarnings = mapM_ (\w -> hPutStr stderr (displayMsg w))
 
 runRepl :: ReplOpts -> [FilePath] -> IO ()
 runRepl opts files = do
@@ -124,7 +124,7 @@ runRepl opts files = do
     _ -> compileFiles True files
   case result of
     Left err -> do
-      putStrLn (displayMsg err)
+      putStr (displayMsg err)
       exitFailure
     Right (prog, warnings) -> do
       unless opts.quiet $ printWarnings warnings
@@ -230,7 +230,7 @@ runGoal opts files = do
     _ -> compileFiles True files
   case result of
     Left err -> do
-      putStrLn (displayMsg err)
+      putStr (displayMsg err)
       exitFailure
     Right (prog, warnings) -> do
       printWarnings warnings
@@ -256,7 +256,7 @@ runCompile opts files = do
     _ -> compileFiles includeStdlib files
   case result of
     Left err -> do
-      putStrLn (displayMsg err)
+      putStr (displayMsg err)
       exitFailure
     Right (prog, warnings) -> do
       printWarnings warnings
@@ -288,7 +288,7 @@ runGenDriver opts files = do
     _ -> compileFiles False files
   case result of
     Left err -> do
-      putStrLn (displayMsg err)
+      putStr (displayMsg err)
       exitFailure
     Right (prog, warnings) -> do
       printWarnings warnings

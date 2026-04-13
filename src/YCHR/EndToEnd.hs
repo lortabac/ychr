@@ -58,6 +58,7 @@ import YCHR.Compile (CompileError, buildFunctionSet, compile, compileFunctionDef
 import YCHR.Desugar (DesugarError, desugarProgram, desugarQueryGoals, extractSymbolTable, liftAllLambdas, liftQueryLambdas)
 import YCHR.Desugared qualified as D
 import YCHR.Meta (valueToTerm)
+import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed (AnnP, Import (..), Module (..), OpDecl (..), SourceLoc (..), noAnn)
 import YCHR.Parser (OpTable, builtinOps, collectOperatorDecls, extractOpDecls, mergeOps, parseConstraint, parseModuleWith, parseQueryWith)
 import YCHR.Pretty (prettyTerm)
@@ -78,7 +79,7 @@ data Error
   = ParseError FilePath (ParseErrorBundle Text Void)
   | CollectErrors [CollectError]
   | RenameErrors [RenameError]
-  | DesugarErrors [DesugarError]
+  | DesugarErrors [AnnP DesugarError]
   | CompileErrors [AnnP CompileError]
   | OperatorConflict [FilePath] Text
   deriving (Show)
@@ -370,7 +371,7 @@ runProgramWithQuery cp hostCalls src =
       bodyGoals <- either (throwIO . DesugarErrors) pure (desugarQueryGoals cp.allModules renamed)
       -- Lambda-lift query body goals and compile the generated functions
       let queryLoc = SourceLoc "<query>" 1 1
-      (liftedGoals, queryLambdas) <- either (throwIO . DesugarErrors) pure (liftQueryLambdas cp.nextLambdaIndex queryLoc bodyGoals)
+      (liftedGoals, queryLambdas) <- either (throwIO . DesugarErrors) pure (liftQueryLambdas cp.nextLambdaIndex queryLoc (Atom "") bodyGoals)
       let allFuns = cp.allFunctions ++ queryLambdas
           funSet = buildFunctionSet (D.Program [] allFuns Map.empty [])
           queryProcs = compileQueryLambdas funSet queryLambdas

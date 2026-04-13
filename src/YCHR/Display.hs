@@ -64,11 +64,13 @@ displaySeverity SevWarning = "warning"
 -- @
 displayMsgWithSrcLoc :: ErrorCode -> Severity -> String -> P.SourceLoc -> Maybe String -> String
 displayMsgWithSrcLoc code sev msg loc maybeNode =
-  displaySrcLoc loc ++ ": " ++ displaySeverity sev ++ ": " ++ displayErrorCode code ++ "\n" ++ msg ++ maybe "" ("\n" ++) maybeNode
+  displaySrcLoc loc ++ ": " ++ displaySeverity sev ++ ": " ++ displayErrorCode code ++ "\n" ++ msg ++ maybe "" ("\n" ++) maybeNode ++ "\n"
 
--- | Join multiple error messages separated by two blank lines.
+-- | Join multiple error messages. Each message is expected to end with
+-- a newline, so a single @\"\\n\"@ separator produces a blank line between
+-- messages.
 displayErrors :: [String] -> String
-displayErrors = intercalate "\n\n"
+displayErrors = intercalate "\n"
 
 -- | Convert a megaparsec 'SourcePos' to a 'P.SourceLoc'.
 sourceLocFromPos :: SourcePos -> P.SourceLoc
@@ -100,9 +102,9 @@ renameWarningCode (UndeclaredDataConstructor _ _) = ErrorCode 20101
 renameWarningCode (DataConstructorArityMismatch _ _ _) = ErrorCode 20102
 
 -- | 3xxxx — desugar phase
-desugarErrorCode :: DesugarError -> ErrorCode
-desugarErrorCode (UnexpectedBodyTerm _ _) = ErrorCode 30001
-desugarErrorCode (InvalidLambdaParam _ _) = ErrorCode 30003
+desugarErrorCode :: AnnP DesugarError -> ErrorCode
+desugarErrorCode (AnnP (UnexpectedBodyTerm _) _ _) = ErrorCode 30001
+desugarErrorCode (AnnP (InvalidLambdaParam _) _ _) = ErrorCode 30003
 
 -- | 4xxxx — compile phase
 compileErrorCode :: AnnP CompileError -> ErrorCode
@@ -125,10 +127,12 @@ instance Display CollectError where
     displayErrorCode (collectErrorCode e)
       ++ "\nUnknown library: "
       ++ T.unpack name
+      ++ "\n"
   displayMsg e@(CircularLibraryImport names) =
     displayErrorCode (collectErrorCode e)
       ++ "\nCircular library import: "
       ++ intercalate " -> " (map T.unpack names)
+      ++ "\n"
 
 instance Display RenameError where
   displayMsg e@(AmbiguousName loc name arity candidates) =
@@ -159,7 +163,7 @@ instance Display RenameError where
       ++ T.unpack name
       ++ "/"
       ++ show arity
-      ++ " but does not declare it"
+      ++ " but does not declare it\n"
 
 instance Display RenameWarning where
   displayMsg e@(UndeclaredDataConstructor loc name) =
@@ -177,21 +181,21 @@ instance Display RenameWarning where
       loc
       Nothing
 
-instance Display DesugarError where
-  displayMsg e@(UnexpectedBodyTerm loc term) =
+instance Display (AnnP DesugarError) where
+  displayMsg e@(AnnP (UnexpectedBodyTerm term) loc origin) =
     displayMsgWithSrcLoc
       (desugarErrorCode e)
       SevError
-      "Unexpected term in rule body"
+      ("Unexpected term in rule body: " ++ prettyTermSrc term)
       loc
-      (Just (prettyTermSrc term))
-  displayMsg e@(InvalidLambdaParam loc term) =
+      (Just (prettyPExprSrc origin))
+  displayMsg e@(AnnP (InvalidLambdaParam term) loc origin) =
     displayMsgWithSrcLoc
       (desugarErrorCode e)
       SevError
-      "Invalid lambda parameter (expected variable or wildcard)"
+      ("Invalid lambda parameter (expected variable or wildcard): " ++ prettyTermSrc term)
       loc
-      (Just (prettyTermSrc term))
+      (Just (prettyPExprSrc origin))
 
 instance Display (AnnP CompileError) where
   displayMsg e@(AnnP (UnknownConstraintType name) loc origin) =
@@ -239,3 +243,4 @@ instance Display Error where
       ++ case sources of
         [] -> ""
         _ -> " (declared in " ++ intercalate ", " sources ++ ")"
+      ++ "\n"
