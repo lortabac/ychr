@@ -38,9 +38,9 @@ stripRuleLoc :: Rule -> Rule
 stripRuleLoc r =
   r
     { name = fmap (noAnn . (.node)) r.name,
-      head = noAnn r.head.node,
-      guard = noAnn r.guard.node,
-      body = noAnn r.body.node
+      head = noAnnP r.head.node,
+      guard = noAnnP r.guard.node,
+      body = noAnnP r.body.node
     }
 
 -- | Strip source locations from a Module for structural comparison.
@@ -51,7 +51,7 @@ stripModLoc m =
       decls = map (noAnn . (.node)) m.decls,
       typeDecls = map (noAnn . (.node)) m.typeDecls,
       rules = map stripRuleLoc m.rules,
-      equations = map (noAnn . (.node)) m.equations
+      equations = map (noAnnP . (.node)) m.equations
     }
 
 -- ---------------------------------------------------------------------------
@@ -249,56 +249,56 @@ ruleTests =
           @?= Right
             [ Rule
                 (Just (noAnn "refl"))
-                (noAnn (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
-                (noAnn [])
-                (noAnn [AtomTerm "true"])
+                (noAnnP (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
+                (noAnnP [])
+                (noAnnP [AtomTerm "true"])
             ],
       testCase "unnamed simplification" $
         (map stripRuleLoc . (.rules)) <$> p "leq(X, X) <=> true."
           @?= Right
             [ Rule
                 Nothing
-                (noAnn (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
-                (noAnn [])
-                (noAnn [AtomTerm "true"])
+                (noAnnP (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
+                (noAnnP [])
+                (noAnnP [AtomTerm "true"])
             ],
       testCase "propagation" $
         (map stripRuleLoc . (.rules)) <$> p "trans @ leq(X, Y), leq(Y, Z) ==> leq(X, Z)."
           @?= Right
             [ Rule
                 (Just (noAnn "trans"))
-                ( noAnn
+                ( noAnnP
                     ( Propagation
                         [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
                           Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "Z"]
                         ]
                     )
                 )
-                (noAnn [])
-                (noAnn [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
+                (noAnnP [])
+                (noAnnP [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
             ],
       testCase "simpagation" $
         (map stripRuleLoc . (.rules)) <$> p "s @ kept \\ removed <=> body."
           @?= Right
             [ Rule
                 (Just (noAnn "s"))
-                ( noAnn
+                ( noAnnP
                     ( Simpagation
                         [Constraint (Unqualified "kept") []]
                         [Constraint (Unqualified "removed") []]
                     )
                 )
-                (noAnn [])
-                (noAnn [AtomTerm "body"])
+                (noAnnP [])
+                (noAnnP [AtomTerm "body"])
             ],
       testCase "rule with guard" $
         (map stripRuleLoc . (.rules)) <$> p "r @ c(X, Y) <=> g(X) | b(Y)."
           @?= Right
             [ Rule
                 (Just (noAnn "r"))
-                (noAnn (Simplification [Constraint (Unqualified "c") [VarTerm "X", VarTerm "Y"]]))
-                (noAnn [CompoundTerm (Unqualified "g") [VarTerm "X"]])
-                (noAnn [CompoundTerm (Unqualified "b") [VarTerm "Y"]])
+                (noAnnP (Simplification [Constraint (Unqualified "c") [VarTerm "X", VarTerm "Y"]]))
+                (noAnnP [CompoundTerm (Unqualified "g") [VarTerm "X"]])
+                (noAnnP [CompoundTerm (Unqualified "b") [VarTerm "Y"]])
             ],
       testCase "multiple body goals" $
         bodyOf "c <=> a, b, c2."
@@ -395,31 +395,31 @@ moduleTests =
                 []
                 [ Rule
                     (Just (noAnn "refl"))
-                    (noAnn (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
-                    (noAnn [])
-                    (noAnn [AtomTerm "true"]),
+                    (noAnnP (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
+                    (noAnnP [])
+                    (noAnnP [AtomTerm "true"]),
                   Rule
                     (Just (noAnn "antisymmetry"))
-                    ( noAnn
+                    ( noAnnP
                         ( Simplification
                             [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
                               Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "X"]
                             ]
                         )
                     )
-                    (noAnn [])
-                    (noAnn [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Y"]]),
+                    (noAnnP [])
+                    (noAnnP [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Y"]]),
                   Rule
                     (Just (noAnn "trans"))
-                    ( noAnn
+                    ( noAnnP
                         ( Propagation
                             [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
                               Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "Z"]
                             ]
                         )
                     )
-                    (noAnn [])
-                    (noAnn [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
+                    (noAnnP [])
+                    (noAnnP [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
                 ]
                 []
                 (Just [])
@@ -450,10 +450,10 @@ commentTests =
     "comments"
     [ testCase "line comment before rule" $
         (map stripRuleLoc . (.rules)) <$> p "% a comment\nfoo <=> bar."
-          @?= Right [Rule Nothing (noAnn (Simplification [Constraint (Unqualified "foo") []])) (noAnn []) (noAnn [AtomTerm "bar"])],
+          @?= Right [Rule Nothing (noAnnP (Simplification [Constraint (Unqualified "foo") []])) (noAnnP []) (noAnnP [AtomTerm "bar"])],
       testCase "inline comment after rule" $
         (map stripRuleLoc . (.rules)) <$> p "foo <=> bar. % comment"
-          @?= Right [Rule Nothing (noAnn (Simplification [Constraint (Unqualified "foo") []])) (noAnn []) (noAnn [AtomTerm "bar"])],
+          @?= Right [Rule Nothing (noAnnP (Simplification [Constraint (Unqualified "foo") []])) (noAnnP []) (noAnnP [AtomTerm "bar"])],
       testCase "only comments parses to empty module" $
         (.rules) <$> p "% just a comment\n% another"
           @?= Right []

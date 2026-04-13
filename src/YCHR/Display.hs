@@ -29,7 +29,7 @@ import YCHR.Compile (CompileError (..))
 import YCHR.Desugar (DesugarError (..))
 import YCHR.EndToEnd (Error (..), Warning (..))
 import YCHR.Parsed qualified as P
-import YCHR.Pretty (prettyTermSrc)
+import YCHR.Pretty (prettyPExprSrc, prettyTermSrc)
 import YCHR.Rename (RenameError (..), RenameWarning (..))
 import YCHR.Types qualified as Types
 
@@ -199,14 +199,14 @@ instance Display CompileError where
       SevError
       ("Unknown constraint type '" ++ displayName name ++ "'")
       loc
-      (Just (show origin))
+      (Just (prettyPExprSrc origin))
   displayMsg e@(UnboundVariable loc origin var) =
     displayMsgWithSrcLoc
       (compileErrorCode e)
       SevError
       ("Unbound variable '" ++ T.unpack var ++ "'")
       loc
-      (Just (show origin))
+      (Just (prettyPExprSrc origin))
 
 displayName :: Types.Name -> String
 displayName (Types.Unqualified n) = T.unpack n

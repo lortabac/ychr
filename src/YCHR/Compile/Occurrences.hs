@@ -24,8 +24,9 @@ import Effectful (Eff)
 import Effectful.Writer.Static.Local (Writer, tell)
 import YCHR.Compile.Types
 import YCHR.Desugared qualified as D
+import YCHR.PExpr (PExpr)
+import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
-import YCHR.Pretty (AnnP (..), PrettyE)
 import YCHR.Types (Constraint, Identifier (..), SymbolTable, lookupSymbol)
 import YCHR.VM (ConstraintType (..), RuleName (..))
 
@@ -112,7 +113,7 @@ mkOccurrence symTab rule ruleName' combined activeIdx activeCon activeIsKept = d
 lookupCType ::
   SymbolTable ->
   P.SourceLoc ->
-  PrettyE ->
+  PExpr ->
   Identifier ->
   Eff '[Writer [CompileError]] ConstraintType
 lookupCType symTab loc p ident = case lookupSymbol ident symTab of

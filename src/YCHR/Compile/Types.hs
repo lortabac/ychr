@@ -33,8 +33,8 @@ where
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import YCHR.Desugared qualified as D
+import YCHR.PExpr (PExpr)
 import YCHR.Parsed qualified as P
-import YCHR.Pretty (PrettyE)
 import YCHR.Types (Constraint, Identifier, Name, Term)
 import YCHR.Types qualified as Types
 import YCHR.VM (ConstraintType, Expr, RuleName)
@@ -46,11 +46,11 @@ import YCHR.VM (ConstraintType, Expr, RuleName)
 data CompileError
   = -- | A head constraint references a constraint type that is not in
     -- the symbol table. Raised by 'YCHR.Compile.Occurrences'.
-    UnknownConstraintType P.SourceLoc PrettyE Types.Name
+    UnknownConstraintType P.SourceLoc PExpr Types.Name
   | -- | A guard or body term references a variable that is not bound
     -- by the rule head. Raised by 'YCHR.Compile' while compiling
     -- terms.
-    UnboundVariable P.SourceLoc PrettyE Text
+    UnboundVariable P.SourceLoc PExpr Text
   deriving (Show)
 
 -- | 1-based occurrence number within a constraint type's occurrence list.

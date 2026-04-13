@@ -44,19 +44,19 @@ n @: (Rule _ h g b) = Rule (Just (noAnn n)) h g b
 
 -- | Simplification Rule: @[head] <=> [body]@
 (<=>) :: [Constraint] -> [Term] -> Rule
-lhs <=> rhs = Rule Nothing (noAnn (Simplification lhs)) (noAnn []) (noAnn rhs)
+lhs <=> rhs = Rule Nothing (noAnnP (Simplification lhs)) (noAnnP []) (noAnnP rhs)
 
 -- | Propagation Rule: @[head] ==> [body]@
 (==>) :: [Constraint] -> [Term] -> Rule
-lhs ==> rhs = Rule Nothing (noAnn (Propagation lhs)) (noAnn []) (noAnn rhs)
+lhs ==> rhs = Rule Nothing (noAnnP (Propagation lhs)) (noAnnP []) (noAnnP rhs)
 
 -- | Simpagation Rule: @[kept] \ [removed] <=> [body]@
 (\\) :: [Constraint] -> [Constraint] -> [Term] -> Rule
-(k \\ r) body = Rule Nothing (noAnn (Simpagation k r)) (noAnn []) (noAnn body)
+(k \\ r) body = Rule Nothing (noAnnP (Simpagation k r)) (noAnnP []) (noAnnP body)
 
 -- | Add a guard to an existing rule (infix)
 (|-) :: Rule -> [Term] -> Rule
-r |- g = let Rule n h _ b = r in Rule n h (noAnn g) b
+r |- g = let Rule n h _ b = r in Rule n h (noAnnP g) b
 
 --------------------------------------------------------------------------------
 -- Constraint & Term Helpers

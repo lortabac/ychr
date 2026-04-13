@@ -39,7 +39,7 @@ where
 
 import Data.Map.Strict (Map)
 import Data.Text (Text)
-import YCHR.Pretty (AnnP)
+import YCHR.Parsed (AnnP)
 import YCHR.Types
 
 data Program = Program

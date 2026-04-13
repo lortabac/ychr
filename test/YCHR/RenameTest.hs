@@ -440,21 +440,21 @@ multiModuleTests =
         (renamedOrder.rules, renamedLogic.rules)
           @?= ( [ Rule
                     (Just (noAnn "refl"))
-                    (noAnn (Simplification [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "X"]]))
-                    (noAnn [])
-                    (noAnn [AtomTerm "true"])
+                    (noAnnP (Simplification [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "X"]]))
+                    (noAnnP [])
+                    (noAnnP [AtomTerm "true"])
                 ],
                 [ Rule
                     (Just (noAnn "trans"))
-                    ( noAnn
+                    ( noAnnP
                         ( Propagation
                             [ Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"],
                               Constraint (Qualified "Order" "leq") [VarTerm "Y", VarTerm "Z"]
                             ]
                         )
                     )
-                    (noAnn [])
-                    (noAnn [CompoundTerm (Qualified "Order" "leq") [VarTerm "X", VarTerm "Z"]])
+                    (noAnnP [])
+                    (noAnnP [CompoundTerm (Qualified "Order" "leq") [VarTerm "X", VarTerm "Z"]])
                 ]
               ),
       testCase "empty program" $

@@ -59,8 +59,9 @@ import Effectful (Eff, runPureEff, (:>))
 import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import YCHR.Desugared qualified as D
+import YCHR.PExpr (PExpr (Atom))
+import YCHR.Parsed (AnnP (..), noAnnP)
 import YCHR.Parsed qualified as P
-import YCHR.Pretty (AnnP (..), PrettyE (..), noAnnP)
 import YCHR.Types
 
 data DesugarError
@@ -164,9 +165,9 @@ desugarRule funSet r = do
   pure
     D.Rule
       { name = fmap (.node) r.name,
-        head = AnnP normalizedHead r.head.sourceLoc (PrettyE r.head.node),
-        guard = AnnP (hnfGuards ++ userGuards) r.guard.sourceLoc (PrettyE r.guard.node),
-        body = AnnP ruleBody r.body.sourceLoc (PrettyE r.body.node)
+        head = AnnP normalizedHead r.head.sourceLoc r.head.parsed,
+        guard = AnnP (hnfGuards ++ userGuards) r.guard.sourceLoc r.guard.parsed,
+        body = AnnP ruleBody r.body.sourceLoc r.body.parsed
       }
 
 -- | Map the three surface head kinds to the uniform @Kept \/ Removed@
@@ -303,7 +304,7 @@ desugarFunctions mods =
         desugarFunction
           m.name
           d
-          [P.Ann eq loc | P.Ann eq loc <- m.equations, eq.funName == d.name]
+          [annEq | annEq <- m.equations, annEq.node.funName == d.name]
     )
     [(m, d) | m <- mods, P.Ann d _ <- m.decls, isFunctionDecl d]
 
@@ -313,14 +314,14 @@ desugarFunctions mods =
 desugarFunction ::
   Text ->
   P.Declaration ->
-  [P.Ann P.FunctionEquation] ->
+  [P.AnnP P.FunctionEquation] ->
   Eff '[Writer [DesugarError]] D.Function
 desugarFunction modName (P.FunctionDecl {name, arity, argTypes, returnType}) eqs = do
   desugaredEqs <- traverse desugarAnnotatedEquation eqs
   -- Use the source location of the first equation (or dummyLoc if none)
   let (loc, parsed) = case eqs of
-        (P.Ann eq eqLoc : _) -> (eqLoc, PrettyE eq)
-        [] -> (P.dummyLoc, PrettyE (AtomTerm "function"))
+        (P.AnnP _eq eqLoc eqParsed : _) -> (eqLoc, eqParsed)
+        [] -> (P.dummyLoc, Atom "function")
   pure
     D.Function
       { name = Qualified modName name,
@@ -332,8 +333,8 @@ desugarFunction modName (P.FunctionDecl {name, arity, argTypes, returnType}) eqs
 desugarFunction _ d _ =
   error $ "Desugar.desugarFunction: expected a FunctionDecl, got " ++ show d
 
-desugarAnnotatedEquation :: P.Ann P.FunctionEquation -> Eff '[Writer [DesugarError]] D.Equation
-desugarAnnotatedEquation (P.Ann eq _loc) = desugarEquation eq
+desugarAnnotatedEquation :: P.AnnP P.FunctionEquation -> Eff '[Writer [DesugarError]] D.Equation
+desugarAnnotatedEquation eq = desugarEquation eq.node
 
 desugarEquation :: P.FunctionEquation -> Eff '[Writer [DesugarError]] D.Equation
 desugarEquation eq = do
@@ -498,7 +499,6 @@ liftTerm modName loc scope st term = case term of
               returnType = Nothing,
               equations =
                 noAnnP
-                  term
                   [ D.Equation
                       { params = allParams,
                         guards = [],

@@ -70,14 +70,15 @@ import YCHR.Compile.Names
 import YCHR.Compile.Occurrences (collectOccurrences)
 import YCHR.Compile.Types
 import YCHR.Desugared qualified as D
+import YCHR.PExpr (PExpr (Atom))
+import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
-import YCHR.Pretty (AnnP (..), PrettyE (..))
 import YCHR.Types (Identifier (..), SymbolTable, Term (..), flattenName, symbolTableSize, symbolTableToList)
 import YCHR.Types qualified as Types
 import YCHR.VM
 
--- | Source location and pretty-printable origin, extracted from an 'AnnP' wrapper.
-type SrcInfo = (P.SourceLoc, PrettyE)
+-- | Source location and original parsed expression, extracted from an 'AnnP' wrapper.
+type SrcInfo = (P.SourceLoc, PExpr)
 
 -- ---------------------------------------------------------------------------
 -- Public API
@@ -664,7 +665,7 @@ compileFunctionDef :: Set Identifier -> D.Function -> Eff '[Writer [CompileError
 compileFunctionDef funSet func = do
   let procName' = funcProcName func.name func.arity
       params = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. func.arity - 1]]
-      dummySi = (P.dummyLoc, PrettyE (AtomTerm "function"))
+      dummySi = (P.dummyLoc, Atom "function")
   eqStmts <- traverse (compileEquation funSet params dummySi) func.equations.node
   let errorStmt = ExprStmt (HostCall chrErrorName [Lit (AtomLit "no_matching_equation")])
   pure (Procedure procName' params (concat eqStmts ++ [errorStmt]))

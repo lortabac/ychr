@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 -- | Surface Language AST
 --
@@ -26,6 +27,10 @@ module YCHR.Parsed
     noAnn,
     dummyLoc,
 
+    -- * Annotated parsed node
+    AnnP (..),
+    noAnnP,
+
     -- * Program structure
     Module (..),
     Import (..),
@@ -48,8 +53,22 @@ where
 import Data.Text (Text)
 import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Loc (Ann (..), SourceLoc (..), dummyLoc, noAnn)
-import YCHR.PExpr (OpType (..))
+import YCHR.PExpr (OpType (..), PExpr (..))
 import YCHR.Types (Constraint (..), DataConstructor (..), Term (..), TypeDefinition (..), TypeExpr (..))
+
+-- | A node annotated with a source location and the original 'PExpr'
+-- that produced it.
+data AnnP a = AnnP
+  { node :: a,
+    sourceLoc :: SourceLoc,
+    parsed :: PExpr
+  }
+  deriving (Show, Eq, Lift, Functor, Foldable, Traversable)
+
+-- | Wrap a node with a dummy source location and a dummy parsed origin.
+-- Useful for constructing values in tests where provenance is irrelevant.
+noAnnP :: a -> AnnP a
+noAnnP x = AnnP x dummyLoc (Atom "")
 
 data Import
   = ModuleImport Text
@@ -62,7 +81,7 @@ data Module = Module
     decls :: [Ann Declaration],
     typeDecls :: [Ann TypeDefinition],
     rules :: [Rule],
-    equations :: [Ann FunctionEquation],
+    equations :: [AnnP FunctionEquation],
     exports :: Maybe [Declaration]
   }
   deriving (Show, Eq, Lift)
@@ -84,16 +103,16 @@ data OpDecl = OpDecl
 data FunctionEquation = FunctionEquation
   { funName :: Text,
     args :: [Term],
-    guard :: Ann [Term],
-    rhs :: Ann Term
+    guard :: AnnP [Term],
+    rhs :: AnnP Term
   }
   deriving (Show, Eq, Lift)
 
 data Rule = Rule
   { name :: Maybe (Ann Text),
-    head :: Ann Head,
-    guard :: Ann [Term],
-    body :: Ann [Term]
+    head :: AnnP Head,
+    guard :: AnnP [Term],
+    body :: AnnP [Term]
   }
   deriving (Show, Eq, Lift)
 
