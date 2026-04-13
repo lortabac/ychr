@@ -40,6 +40,7 @@ module YCHR.PExpr
 
     -- * Pretty-printing
     prettyPExpr,
+    renderAtom,
   )
 where
 
@@ -657,6 +658,15 @@ prettyPrec _ _ _ _ Wildcard = "_"
 -- List syntax
 prettyPrec iops pops wops _ (Compound "." [h, t]) =
   "[" ++ rec maxArgPrec h.node ++ prettyListTail iops pops wops t.node ++ "]"
+  where
+    rec = prettyPrec iops pops wops
+-- Lambda: fun(X, Y) -> body end
+prettyPrec iops pops wops _ (Compound "->" [Ann (Compound "fun" params) _, body]) =
+  "fun("
+    ++ intercalate ", " [rec maxArgPrec a.node | a <- params]
+    ++ ") -> "
+    ++ rec maxPrec body.node
+    ++ " end"
   where
     rec = prettyPrec iops pops wops
 -- Infix operators
