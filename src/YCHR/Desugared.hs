@@ -89,7 +89,7 @@ data Function = Function
     arity :: Int,
     argTypes :: Maybe [TypeExpr],
     returnType :: Maybe TypeExpr,
-    equations :: [Equation]
+    equations :: AnnP [Equation]
   }
   deriving (Show)
 

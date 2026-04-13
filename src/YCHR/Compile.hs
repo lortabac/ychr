@@ -664,7 +664,7 @@ compileFunctionDef funSet func = do
   let procName' = funcProcName func.name func.arity
       params = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. func.arity - 1]]
       dummySi = (P.dummyLoc, PrettyE (AtomTerm "function"))
-  eqStmts <- traverse (compileEquation funSet params dummySi) func.equations
+  eqStmts <- traverse (compileEquation funSet params dummySi) func.equations.node
   let errorStmt = ExprStmt (HostCall chrErrorName [Lit (AtomLit "no_matching_equation")])
   pure (Procedure procName' params (concat eqStmts ++ [errorStmt]))
 

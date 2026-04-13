@@ -45,7 +45,7 @@ displaySeverity SevWarning = "warning"
 -- @
 displayMsgWithSrcLoc :: Severity -> String -> P.SourceLoc -> Maybe String -> String
 displayMsgWithSrcLoc sev msg loc maybeNode =
-  displaySrcLoc loc ++ ": " ++ displaySeverity sev ++ ": " ++ msg ++ maybe "" ("\n" ++) maybeNode
+  displaySrcLoc loc ++ ": " ++ displaySeverity sev ++ ":\n" ++ msg ++ maybe "" ("\n" ++) maybeNode
 
 -- | Join multiple error messages separated by two blank lines.
 displayErrors :: [String] -> String
@@ -119,6 +119,12 @@ instance Display DesugarError where
     displayMsgWithSrcLoc
       SevError
       "Unexpected term in guard"
+      loc
+      (Just (prettyTermSrc term))
+  displayMsg (InvalidLambdaParam loc term) =
+    displayMsgWithSrcLoc
+      SevError
+      "Invalid lambda parameter (expected variable or wildcard)"
       loc
       (Just (prettyTermSrc term))
 

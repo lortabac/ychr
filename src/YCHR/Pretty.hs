@@ -120,6 +120,16 @@ ruleToPExpr r =
         Nothing -> arrowExpr
         Just ann -> PE.Compound "@" [noAnn (PE.Atom ann.node), noAnn arrowExpr]
 
+-- | Convert a parsed 'P.FunctionEquation' to a 'PE.PExpr'.
+equationToPExpr :: P.FunctionEquation -> PE.PExpr
+equationToPExpr eq =
+  let headPE = PE.Compound eq.funName (map (noAnn . termToPExpr) eq.args)
+      rhsPE = termToPExpr eq.rhs.node
+      guardAndRhs = case eq.guard.node of
+        [] -> rhsPE
+        gs -> PE.Compound "|" [noAnn (commaSepPExpr (map termToPExpr gs)), noAnn rhsPE]
+   in PE.Compound "->" [noAnn headPE, noAnn guardAndRhs]
+
 -- | Right-fold a list of 'PE.PExpr' into a comma-operator chain.
 commaSepPExpr :: [PE.PExpr] -> PE.PExpr
 commaSepPExpr [] = PE.Atom "true"
@@ -146,6 +156,10 @@ prettyHeadSrc = PE.prettyPExpr prettyOps . headToPExpr
 -- | Render a parsed 'P.Rule' as valid surface-language source text.
 prettyRuleSrc :: P.Rule -> String
 prettyRuleSrc r = PE.prettyPExpr prettyOps (ruleToPExpr r) ++ "."
+
+-- | Render a parsed 'P.FunctionEquation' as valid surface-language source text.
+prettyEquationSrc :: P.FunctionEquation -> String
+prettyEquationSrc eq = PE.prettyPExpr prettyOps (equationToPExpr eq) ++ "."
 
 -- | Render an atom, quoting with @\'...\'@ if necessary.
 renderAtom :: Text -> String
@@ -236,6 +250,8 @@ instance Pretty Constraint where prettySrc = prettyConstraintSrc
 instance Pretty P.Head where prettySrc = prettyHeadSrc
 
 instance Pretty P.Rule where prettySrc = prettyRuleSrc
+
+instance Pretty P.FunctionEquation where prettySrc = prettyEquationSrc
 
 -- ---------------------------------------------------------------------------
 -- Existential wrapper and annotated node
