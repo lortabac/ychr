@@ -13,7 +13,7 @@ import Criterion.Main
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import System.FilePath ((<.>), (</>))
-import YCHR.EndToEnd
+import YCHR.Run
   ( CompiledProgram,
     compileFiles,
     runProgramWithGoalDSL,

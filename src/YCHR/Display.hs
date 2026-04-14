@@ -28,11 +28,11 @@ import Text.Megaparsec
 import YCHR.Collect (CollectError (..))
 import YCHR.Compile (CompileError (..))
 import YCHR.Desugar (DesugarError (..))
-import YCHR.EndToEnd (Error (..), Warning (..))
 import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
 import YCHR.Pretty (prettyPExprSrc, prettyTermSrc)
 import YCHR.Rename (RenameError (..), RenameWarning (..))
+import YCHR.Run (Error (..), Warning (..))
 import YCHR.Types qualified as Types
 
 class Display a where

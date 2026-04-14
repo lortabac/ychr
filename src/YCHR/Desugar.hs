@@ -703,7 +703,7 @@ Why 'liftQueryLambdas' uses @\"__query\"@ as the module name: query
 goals don't belong to any user module, but lifted lambdas still need a
 'Qualified' name. @__query@ is a synthetic qualifier that cannot clash
 with a real module (module names in the surface language don't start
-with an underscore). The caller ('EndToEnd.runProgramWithQuery') passes
+with an underscore). The caller ('Run.runProgramWithQuery') passes
 a @startCounter@ greater than the number of program lambdas so query
 @__lambda_N@ indices do not overlap with ones already baked into the
 compiled program.

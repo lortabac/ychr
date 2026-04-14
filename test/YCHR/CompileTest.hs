@@ -9,7 +9,7 @@ module YCHR.CompileTest (tests) where
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.EndToEnd (CompiledProgram (..), compileModules)
+import YCHR.Run (CompiledProgram (..), compileModules)
 import YCHR.VM qualified as VM
 
 tests :: TestTree
@@ -70,7 +70,7 @@ assertForeachConditions prog procName expected =
       Just f -> foreachConditions f @?= expected
 
 -- ---------------------------------------------------------------------------
--- LEQ surface source (duplicated from EndToEndTest so this module is
+-- LEQ surface source (duplicated from RunTest so this module is
 -- self-contained — both files exercise leq.chr but for different reasons).
 -- ---------------------------------------------------------------------------
 

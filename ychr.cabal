@@ -93,7 +93,7 @@ test-suite ychr-tests
     main-is:          Main.hs
     other-modules:    YCHR.CollectTest
                     , YCHR.CompileTest
-                    , YCHR.EndToEndTest
+                    , YCHR.RunTest
                     , YCHR.DSLTest
                     , YCHR.DesugarTest
                     , YCHR.GoldenTest
@@ -151,7 +151,7 @@ library
                     , YCHR.Compile.Occurrences
                     , YCHR.Compile.Types
                     , YCHR.Display
-                    , YCHR.EndToEnd
+                    , YCHR.Run
                     , YCHR.Meta
                     , YCHR.Desugared
                     , YCHR.Desugar

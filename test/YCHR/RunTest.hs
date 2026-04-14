@@ -1,7 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module YCHR.EndToEndTest (tests) where
+module YCHR.RunTest (tests) where
 
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
@@ -9,7 +9,7 @@ import Data.Text (Text)
 import Effectful (Eff, (:>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.EndToEnd (CompiledProgram (..), ConstraintType, Value (..), compileModules, equal, newVar, resolveQueryConstraint, runProgramWithGoal, tellConstraint, withCHR)
+import YCHR.Run (CompiledProgram (..), ConstraintType, Value (..), compileModules, equal, newVar, resolveQueryConstraint, runProgramWithGoal, tellConstraint, withCHR)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive)
 import YCHR.Runtime.Types (RuntimeVal (..))
@@ -19,7 +19,7 @@ import YCHR.VM qualified as VM
 tests :: TestTree
 tests =
   testGroup
-    "YCHR.EndToEnd"
+    "YCHR.Run"
     [ leqTests,
       fibTests,
       visibilityTests,

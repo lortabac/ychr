@@ -5,7 +5,6 @@ import YCHR.CollectTest qualified
 import YCHR.CompileTest qualified
 import YCHR.DSLTest qualified
 import YCHR.DesugarTest qualified
-import YCHR.EndToEndTest qualified
 import YCHR.GoldenTest qualified
 import YCHR.MetaTest qualified
 import YCHR.PExprRoundtripTest qualified
@@ -14,6 +13,7 @@ import YCHR.ParserTest qualified
 import YCHR.PrettyTest qualified
 import YCHR.RenameTest qualified
 import YCHR.RoundtripTest qualified
+import YCHR.RunTest qualified
 import YCHR.Runtime.HistoryTest qualified
 import YCHR.Runtime.InterpreterTest qualified
 import YCHR.Runtime.ReactivationTest qualified
@@ -31,7 +31,7 @@ main = do
         YCHR.CollectTest.tests,
         YCHR.CompileTest.tests,
         YCHR.PrettyTest.tests,
-        YCHR.EndToEndTest.tests,
+        YCHR.RunTest.tests,
         YCHR.MetaTest.tests,
         YCHR.DSLTest.tests,
         YCHR.DesugarTest.tests,

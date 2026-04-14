@@ -11,9 +11,9 @@ import System.FilePath (dropExtension, takeExtension, (<.>), (</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Display (Display (..))
-import YCHR.EndToEnd (compileFiles, runProgramWithGoal)
 import YCHR.Meta (metaHostCallRegistry)
 import YCHR.Pretty (prettyBindings)
+import YCHR.Run (compileFiles, runProgramWithGoal)
 import YCHR.Runtime.Interpreter (baseHostCallRegistry)
 
 tests :: IO TestTree

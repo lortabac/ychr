@@ -17,7 +17,7 @@ import System.IO (hPutStr, stderr)
 import YCHR.Backend.Scheme (generateScheme)
 import YCHR.Backend.SchemeDriver (generateDriver)
 import YCHR.Display (Display (..), displayMsg)
-import YCHR.EndToEnd (CompiledProgram (..), Error, Warning, compileFiles, compileModules, resolveQueryConstraint, runProgramWithGoal, runProgramWithQuery)
+import YCHR.Run (CompiledProgram (..), Error, Warning, compileFiles, compileModules, resolveQueryConstraint, runProgramWithGoal, runProgramWithQuery)
 import YCHR.Meta (metaHostCallRegistry)
 import YCHR.PExpr qualified as P
 import YCHR.Parsed qualified as Parsed

@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module YCHR.EndToEnd
+module YCHR.Run
   ( -- * Compilation
     Error (..),
     Warning (..),
