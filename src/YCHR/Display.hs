@@ -23,6 +23,7 @@ import Data.List (dropWhileEnd, intercalate)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void)
+import System.Console.ANSI (Color (..), ColorIntensity (..), ConsoleIntensity (..), ConsoleLayer (..), SGR (..), setSGRCode)
 import Text.Megaparsec
 import YCHR.Collect (CollectError (..))
 import YCHR.Compile (CompileError (..))
@@ -51,8 +52,10 @@ displaySrcLoc :: P.SourceLoc -> String
 displaySrcLoc loc = loc.file ++ ":" ++ show loc.line ++ ":" ++ show loc.col
 
 displaySeverity :: Severity -> String
-displaySeverity SevError = "error"
-displaySeverity SevWarning = "warning"
+displaySeverity SevError =
+  setSGRCode [SetColor Foreground Vivid Red] ++ "error" ++ setSGRCode [SetColor Foreground Dull White]
+displaySeverity SevWarning =
+  setSGRCode [SetColor Foreground Vivid Yellow] ++ "warning" ++ setSGRCode [SetColor Foreground Dull White]
 
 -- | Format a diagnostic message with source location, severity, error code,
 -- and optional AST context.
@@ -64,7 +67,17 @@ displaySeverity SevWarning = "warning"
 -- @
 displayMsgWithSrcLoc :: ErrorCode -> Severity -> String -> P.SourceLoc -> Maybe String -> String
 displayMsgWithSrcLoc code sev msg loc maybeNode =
-  displaySrcLoc loc ++ ": " ++ displaySeverity sev ++ ": " ++ displayErrorCode code ++ "\n" ++ msg ++ maybe "" ("\n" ++) maybeNode ++ "\n"
+  setSGRCode [SetConsoleIntensity BoldIntensity]
+    ++ displaySrcLoc loc
+    ++ ": "
+    ++ displaySeverity sev
+    ++ ": "
+    ++ displayErrorCode code
+    ++ "\n"
+    ++ msg
+    ++ maybe "" (\n -> "\n" ++ setSGRCode [SetItalicized True] ++ n ++ setSGRCode [SetItalicized False]) maybeNode
+    ++ "\n"
+    ++ setSGRCode [Reset]
 
 -- | Join multiple error messages. Each message is expected to end with
 -- a newline, so a single @\"\\n\"@ separator produces a blank line between
