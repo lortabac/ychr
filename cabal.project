@@ -1,0 +1,4 @@
+packages: .
+
+package ychr
+  ghc-options: -Werror
