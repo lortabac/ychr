@@ -262,7 +262,7 @@ runCompile opts files = do
       printWarnings warnings
       let vmp = VMProgram {program = prog.program, exportedSet = prog.exportedSet, symbolTable = prog.symbolTable}
           -- Derive the base name from the first user module if not given
-          stdlibNames = map T.pack ["builtins", "lists", "strings", "meta", "test"]
+          stdlibNames = map T.pack ["prelude", "lists", "strings", "meta", "test"]
           userModules = [n | Parsed.Module {name = n} <- prog.allModules, n `notElem` stdlibNames]
           name = case opts.baseName of
             Just n -> T.pack n
@@ -302,7 +302,7 @@ runGenDriver opts files = do
           putStrLn err
           exitFailure
         Right c -> pure c
-      let stdlibNames = map T.pack ["builtins", "lists", "strings", "meta", "test"]
+      let stdlibNames = map T.pack ["prelude", "lists", "strings", "meta", "test"]
           userModules = [n | Parsed.Module {name = n} <- prog.allModules, n `notElem` stdlibNames]
           name = case userModules of
             (n : _) -> n

@@ -117,7 +117,7 @@ compileModules includeStdlib inputs = do
       traverse (\(fp, src) -> (fp,) <$> first' (fp,) (collectOperatorDecls fp src)) inputs
   let userOps = concatMap ((.node) . snd) userOpsByFile
   -- Collect operators from all stdlib modules (already parsed by TH).
-  -- Always include these since builtins are auto-imported regardless of
+  -- Always include these since the prelude is auto-imported regardless of
   -- includeStdlib, and extra syntactic operators don't affect correctness.
   let stdlibOps = concatMap extractOpDecls (Map.elems stdlib)
   -- Merge all operators into one table
@@ -133,8 +133,8 @@ compileModules includeStdlib inputs = do
     traverse
       (\(fp, src) -> first (ParseError fp) (parseModuleWith table fp src))
       inputs
-  let withBuiltins = map addBuiltinsImport parsed
-  collected <- first CollectErrors (collectLibraries includeStdlib stdlib withBuiltins)
+  let withPrelude = map addPreludeImport parsed
+  collected <- first CollectErrors (collectLibraries includeStdlib stdlib withPrelude)
   let exportEnv = buildExportEnv collected
       exportMap =
         Map.fromList
@@ -158,8 +158,8 @@ compileModules includeStdlib inputs = do
     toResolution n [m] = UniqueExport (Types.Qualified m n)
     toResolution _ ms = AmbiguousExport ms
 
-addBuiltinsImport :: Module -> Module
-addBuiltinsImport m = m {imports = noAnnP (LibraryImport "builtins") : m.imports}
+addPreludeImport :: Module -> Module
+addPreludeImport m = m {imports = noAnnP (LibraryImport "prelude") : m.imports}
 
 compileFiles :: Bool -> [FilePath] -> IO (Either Error (CompiledProgram, [Warning]))
 compileFiles includeStdlib paths = do

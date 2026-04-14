@@ -36,8 +36,8 @@ collectLibraries includeStdlib stdlibMap userMods =
           ++ concatMap libraryImports userMods
    in case resolveAll stdlibMap Set.empty Set.empty seeds of
         (_, libs, []) ->
-          let withBuiltins = map addBuiltinsImport libs
-              rewritten = map rewriteImports (withBuiltins ++ userMods)
+          let withPrelude = map addPreludeImport libs
+              rewritten = map rewriteImports (withPrelude ++ userMods)
            in Right rewritten
         (_, _, errs) -> Left errs
 
@@ -83,11 +83,11 @@ resolveAll stdlibMap visited path (ann : rest)
   where
     name = ann.node
 
--- | Add a builtins import to a library module (unless it is builtins itself).
-addBuiltinsImport :: Module -> Module
-addBuiltinsImport m
-  | m.name == "builtins" = m
-  | otherwise = m {imports = noAnnP (LibraryImport "builtins") : m.imports}
+-- | Add a prelude import to a library module (unless it is the prelude itself).
+addPreludeImport :: Module -> Module
+addPreludeImport m
+  | m.name == "prelude" = m
+  | otherwise = m {imports = noAnnP (LibraryImport "prelude") : m.imports}
 
 -- | Rewrite all 'LibraryImport' entries to 'ModuleImport'.
 rewriteImports :: Module -> Module

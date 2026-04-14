@@ -1,5 +1,5 @@
 :- module(guard, [clamp/3]).
-:- use_module(builtins).
+:- use_module(prelude).
 :- chr_constraint clamp/3.
 
 low @ clamp(X, Lo, R) <=> X < Lo + 1 - 1 | R = Lo.

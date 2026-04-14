@@ -1,4 +1,4 @@
-:- module(builtins, [
+:- module(prelude, [
     type(bool/0),
     type(list/1),
     identity/2,

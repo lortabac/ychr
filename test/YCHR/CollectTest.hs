@@ -40,12 +40,12 @@ tests =
       testCase "unknown library reports error" $
         collectLibraries False Map.empty [userMod [noAnnP (LibraryImport "missing")]]
           @?= Left [AnnP (UnknownLibrary "missing") dummyLoc (Atom "")],
-      testCase "builtins not auto-included when includeStdlib is False" $
-        let libs = Map.fromList [("builtins", libMod "builtins")]
+      testCase "prelude not auto-included when includeStdlib is False" $
+        let libs = Map.fromList [("prelude", libMod "prelude")]
             user = userMod []
          in collectLibraries False libs [user] @?= Right [user],
-      testCase "builtins included when includeStdlib is True" $
-        let libs = Map.fromList [("builtins", libMod "builtins")]
+      testCase "prelude included when includeStdlib is True" $
+        let libs = Map.fromList [("prelude", libMod "prelude")]
             user = userMod []
          in case collectLibraries True libs [user] of
               Right mods -> length mods @?= 2
