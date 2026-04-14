@@ -265,25 +265,25 @@ errorTests =
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [term]) (noAnnP [atom "true"])]
         case desugarProgram [m] of
           Left errs -> assertFailure ("unexpected errors: " ++ show errs)
-          Right prog -> do
-            let rule = head prog.rules
-            getNode rule.guard @?= [D.GuardExpr (VarTerm "X")],
+          Right prog -> case prog.rules of
+            (rule : _) -> getNode rule.guard @?= [D.GuardExpr (VarTerm "X")]
+            [] -> assertFailure "expected at least 1 rule",
       testCase "bare integer in guard becomes GuardExpr" $ do
         let term = int 42
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [term]) (noAnnP [atom "true"])]
         case desugarProgram [m] of
           Left errs -> assertFailure ("unexpected errors: " ++ show errs)
-          Right prog -> do
-            let rule = head prog.rules
-            getNode rule.guard @?= [D.GuardExpr (IntTerm 42)],
+          Right prog -> case prog.rules of
+            (rule : _) -> getNode rule.guard @?= [D.GuardExpr (IntTerm 42)]
+            [] -> assertFailure "expected at least 1 rule",
       testCase "non-true atom in guard becomes GuardExpr" $ do
         let term = atom "foo"
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [term]) (noAnnP [atom "true"])]
         case desugarProgram [m] of
           Left errs -> assertFailure ("unexpected errors: " ++ show errs)
-          Right prog -> do
-            let rule = head prog.rules
-            getNode rule.guard @?= [D.GuardExpr (AtomTerm "foo")]
+          Right prog -> case prog.rules of
+            (rule : _) -> getNode rule.guard @?= [D.GuardExpr (AtomTerm "foo")]
+            [] -> assertFailure "expected at least 1 rule"
     ]
 
 --------------------------------------------------------------------------------

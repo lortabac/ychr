@@ -1,0 +1,5 @@
+:- module(import_list, [go/2]).
+:- use_module(library(test), [dup/2]).
+:- chr_constraint go/2.
+
+go(X, Y) <=> dup(X, Y).

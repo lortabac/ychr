@@ -43,7 +43,7 @@ collectLibraries includeStdlib stdlibMap userMods =
 
 -- | Extract library import names from a module.
 libraryImports :: Module -> [AnnP Text]
-libraryImports m = [AnnP n loc p | AnnP (LibraryImport n) loc p <- m.imports]
+libraryImports m = [AnnP n loc p | AnnP (LibraryImport n _) loc p <- m.imports]
 
 -- | DFS resolution of library dependencies.
 --
@@ -87,11 +87,11 @@ resolveAll stdlibMap visited path (ann : rest)
 addPreludeImport :: Module -> Module
 addPreludeImport m
   | m.name == "prelude" = m
-  | otherwise = m {imports = noAnnP (LibraryImport "prelude") : m.imports}
+  | otherwise = m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
 
 -- | Rewrite all 'LibraryImport' entries to 'ModuleImport'.
 rewriteImports :: Module -> Module
 rewriteImports m = m {imports = map rewrite m.imports}
   where
-    rewrite (AnnP (LibraryImport n) loc p) = AnnP (ModuleImport n) loc p
+    rewrite (AnnP (LibraryImport n il) loc p) = AnnP (ModuleImport n il) loc p
     rewrite imp = imp

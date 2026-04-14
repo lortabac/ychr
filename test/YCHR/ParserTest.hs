@@ -73,13 +73,19 @@ directiveTests =
         fmap (.node) . (.exports) <$> p ":- module(order, [leq/2, foo/1])."
           @?= Right (Just [ConstraintDecl "leq" 2 Nothing, ConstraintDecl "foo" 1 Nothing]),
       testCase "use_module" $
-        (map (.node) . (.imports)) <$> p ":- use_module(stdlib)." @?= Right [ModuleImport "stdlib"],
+        (map (.node) . (.imports)) <$> p ":- use_module(stdlib)." @?= Right [ModuleImport "stdlib" Nothing],
       testCase "multiple use_module" $
         (map (.node) . (.imports))
           <$> p ":- use_module(stdlib).\n:- use_module(lists)."
-          @?= Right [ModuleImport "stdlib", ModuleImport "lists"],
+          @?= Right [ModuleImport "stdlib" Nothing, ModuleImport "lists" Nothing],
       testCase "use_module library" $
-        (map (.node) . (.imports)) <$> p ":- use_module(library(mylib))." @?= Right [LibraryImport "mylib"],
+        (map (.node) . (.imports)) <$> p ":- use_module(library(mylib))." @?= Right [LibraryImport "mylib" Nothing],
+      testCase "use_module with import list" $
+        (map (.node) . (.imports)) <$> p ":- use_module(order, [leq/2])."
+          @?= Right [ModuleImport "order" (Just [ConstraintDecl "leq" 2 Nothing])],
+      testCase "use_module library with import list" $
+        (map (.node) . (.imports)) <$> p ":- use_module(library(mylib), [foo/1, type(tree/0)])."
+          @?= Right [LibraryImport "mylib" (Just [ConstraintDecl "foo" 1 Nothing, TypeExportDecl "tree" 0])],
       testCase "chr_constraint single" $
         (map (.node) . (.decls)) <$> p ":- chr_constraint leq/2."
           @?= Right [ConstraintDecl "leq" 2 Nothing],

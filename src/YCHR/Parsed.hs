@@ -71,8 +71,8 @@ noAnnP :: a -> AnnP a
 noAnnP x = AnnP x dummyLoc (Atom "")
 
 data Import
-  = ModuleImport Text
-  | LibraryImport Text
+  = ModuleImport Text (Maybe [Declaration])
+  | LibraryImport Text (Maybe [Declaration])
   deriving (Show, Eq, Lift)
 
 data Module = Module

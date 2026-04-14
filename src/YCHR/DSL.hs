@@ -20,7 +20,7 @@ exporting m ds = m {exports = Just (noAnnP ds)}
 
 -- | Add imports to a module
 importing :: Module -> [Text] -> Module
-importing m imps = m {imports = map (noAnnP . ModuleImport) imps}
+importing m imps = m {imports = map (noAnnP . (`ModuleImport` Nothing)) imps}
 
 -- | Add declarations to a module: @declaring [ "leq" // 2 ]@
 declaring :: Module -> [Declaration] -> Module

@@ -108,6 +108,8 @@ renameErrorCode :: AnnP RenameError -> ErrorCode
 renameErrorCode (AnnP (AmbiguousName _ _ _) _ _) = ErrorCode 20001
 renameErrorCode (AnnP (UnknownName _ _) _ _) = ErrorCode 20002
 renameErrorCode (AnnP (UnknownExport _ _ _) _ _) = ErrorCode 20003
+renameErrorCode (AnnP (OperatorInImportList _) _ _) = ErrorCode 20004
+renameErrorCode (AnnP (UnknownImport _ _ _) _ _) = ErrorCode 20005
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: AnnP RenameWarning -> ErrorCode
@@ -183,6 +185,26 @@ instance Display (AnnP RenameError) where
           ++ "/"
           ++ show arity
           ++ " but does not declare it"
+      )
+      loc
+      (Just (prettyPExprSrc origin))
+  displayMsg e@(AnnP (OperatorInImportList name) loc origin) =
+    displayMsgWithSrcLoc
+      (renameErrorCode e)
+      SevError
+      ("Operator " ++ T.unpack name ++ " cannot appear in an import list (operators are always global)")
+      loc
+      (Just (prettyPExprSrc origin))
+  displayMsg e@(AnnP (UnknownImport modName name arity) loc origin) =
+    displayMsgWithSrcLoc
+      (renameErrorCode e)
+      SevError
+      ( "Module "
+          ++ T.unpack modName
+          ++ " does not export "
+          ++ T.unpack name
+          ++ "/"
+          ++ show arity
       )
       loc
       (Just (prettyPExprSrc origin))

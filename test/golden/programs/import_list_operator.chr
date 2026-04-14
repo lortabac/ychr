@@ -1,0 +1,2 @@
+:- module(import_list_operator, []).
+:- use_module(library(test), [op(700, xfx, '===')]).

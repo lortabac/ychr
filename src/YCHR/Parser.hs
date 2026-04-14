@@ -377,6 +377,8 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   Compound "module" [Ann (Atom name) _, exports] ->
     DirModule name loc body.node (map convertExportItem (unfoldList exports.node))
   -- :- use_module(name).  or  :- use_module(library(name)).
+  Compound "use_module" [imp, importList] ->
+    DirImport (convertImportWithList loc body.node imp importList)
   Compound "use_module" [imp] ->
     DirImport (convertImport loc body.node imp)
   -- :- chr_constraint leq/2, fib/2.
@@ -394,12 +396,21 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   _ -> DirOther
 convertDirective _ = DirOther
 
--- | Convert an import PExpr.
+-- | Convert an import PExpr (use_module/1, imports everything).
 convertImport :: SourceLoc -> PExpr -> Ann PExpr -> AnnP Import
 convertImport dirLoc dirPExpr (Ann pexpr _) = case pexpr of
-  Compound "library" [Ann (Atom name) _] -> AnnP (LibraryImport name) dirLoc dirPExpr
-  Atom name -> AnnP (ModuleImport name) dirLoc dirPExpr
-  _ -> AnnP (ModuleImport "<unknown>") dirLoc dirPExpr
+  Compound "library" [Ann (Atom name) _] -> AnnP (LibraryImport name Nothing) dirLoc dirPExpr
+  Atom name -> AnnP (ModuleImport name Nothing) dirLoc dirPExpr
+  _ -> AnnP (ModuleImport "<unknown>" Nothing) dirLoc dirPExpr
+
+-- | Convert an import PExpr with an explicit import list (use_module/2).
+convertImportWithList :: SourceLoc -> PExpr -> Ann PExpr -> Ann PExpr -> AnnP Import
+convertImportWithList dirLoc dirPExpr imp importList =
+  let items = map convertExportItem (unfoldList importList.node)
+   in case imp.node of
+        Compound "library" [Ann (Atom name) _] -> AnnP (LibraryImport name (Just items)) dirLoc dirPExpr
+        Atom name -> AnnP (ModuleImport name (Just items)) dirLoc dirPExpr
+        _ -> AnnP (ModuleImport "<unknown>" (Just items)) dirLoc dirPExpr
 
 -- | Convert an export item PExpr to a 'Declaration'.
 convertExportItem :: Ann PExpr -> Declaration

@@ -24,7 +24,8 @@ tests =
       multiModuleTests,
       reservedSymbolTests,
       exportTests,
-      warningTests
+      warningTests,
+      importListTests
     ]
 
 -- | Rename a single-module program and return the single renamed rule.
@@ -683,4 +684,66 @@ warningTests =
             tds -> assertFailure $ "expected 1 type decl, got " ++ show (length tds)
           Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
+    ]
+
+--------------------------------------------------------------------------------
+-- import lists: use_module/2 restricts visibility
+--------------------------------------------------------------------------------
+
+importListTests :: TestTree
+importListTests =
+  testGroup
+    "import lists"
+    [ testCase "name in import list is visible" $ do
+        let modOrder =
+              module' "Order"
+                `declaring` ["leq" // 2, "geq" // 2]
+                `exporting` ["leq" // 2, "geq" // 2]
+            modLogic =
+              (module' "Logic")
+                { imports = [noAnnP (ModuleImport "Order" (Just [ConstraintDecl "leq" 2 Nothing]))]
+                }
+                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+        case renameProgram [modOrder, modLogic] of
+          Right ([_, renamedLogic], _) -> case renamedLogic.rules of
+            [rule] ->
+              rule.head.node
+                @?= Simplification [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"]]
+            rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
+          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Left errs -> assertFailure $ "unexpected errors: " ++ show errs,
+      testCase "name NOT in import list is not resolved" $ do
+        let modOrder =
+              module' "Order"
+                `declaring` ["leq" // 2, "geq" // 2]
+                `exporting` ["leq" // 2, "geq" // 2]
+            modLogic =
+              (module' "Logic")
+                { imports = [noAnnP (ModuleImport "Order" (Just [ConstraintDecl "geq" 2 Nothing]))]
+                }
+                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+        renameProgram [modOrder, modLogic]
+          @?= Left [AnnP (UnknownName "leq" 2) dummyLoc (Atom "")],
+      testCase "error for import list item not exported" $ do
+        let modOrder =
+              module' "Order"
+                `declaring` ["leq" // 2]
+                `exporting` ["leq" // 2]
+            modLogic =
+              (module' "Logic")
+                { imports = [noAnnP (ModuleImport "Order" (Just [ConstraintDecl "nonexistent" 1 Nothing]))]
+                }
+        renameProgram [modOrder, modLogic]
+          @?= Left [AnnP (UnknownImport "Order" "nonexistent" 1) dummyLoc (Atom "")],
+      testCase "operator in import list is rejected" $ do
+        let modOrder =
+              module' "Order"
+                `declaring` ["leq" // 2]
+                `exporting` ["leq" // 2]
+            modLogic =
+              (module' "Logic")
+                { imports = [noAnnP (ModuleImport "Order" (Just [OperatorDecl (OpDecl 700 Xfx "===")]))]
+                }
+        renameProgram [modOrder, modLogic]
+          @?= Left [AnnP (OperatorInImportList "===") dummyLoc (Atom "")]
     ]

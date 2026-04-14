@@ -43,6 +43,7 @@
 -- program as a flat, unambiguous collection of rules.
 module YCHR.Rename (renameProgram, buildExportEnv, renameQueryGoals, RenameError (..), RenameWarning (..)) where
 
+import Control.Monad (when)
 import Data.Foldable (traverse_)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -58,6 +59,8 @@ data RenameError
   = AmbiguousName Text Int [Text]
   | UnknownName Text Int
   | UnknownExport Text Text Int
+  | OperatorInImportList Text
+  | UnknownImport Text Text Int
   deriving (Eq, Show)
 
 data RenameWarning
@@ -222,10 +225,33 @@ validateExports = traverse_ validateOne
 renameModule :: RenameCtx -> Eff RenameEffs Module
 renameModule ctx = do
   let m = ctx.currentModule
+  validateImportLists ctx
   renamedRules <- traverse (renameRule ctx) m.rules
   renamedEquations <- traverse (traverse (renameEquation ctx)) m.equations
   let renamedTypeDecls = map (fmap (renameTypeDefinition ctx)) m.typeDecls
   pure m {rules = renamedRules, equations = renamedEquations, typeDecls = renamedTypeDecls}
+
+-- | Validate import lists: reject @op(...)@ entries and check that each
+-- imported name is actually exported by the target module.
+validateImportLists :: RenameCtx -> Eff RenameEffs ()
+validateImportLists ctx =
+  traverse_ checkImport ctx.currentModule.imports
+  where
+    checkImport (AnnP (ModuleImport mn (Just decls)) loc origin) =
+      traverse_ (checkItem mn loc origin) decls
+    checkImport _ = pure ()
+
+    checkItem _ loc origin (OperatorDecl op) =
+      emitError (AnnP (OperatorInImportList op.opName) loc origin)
+    checkItem mn loc origin (ConstraintDecl n a _) =
+      when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
+        emitError (AnnP (UnknownImport mn n a) loc origin)
+    checkItem mn loc origin (FunctionDecl n a _ _) =
+      when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
+        emitError (AnnP (UnknownImport mn n a) loc origin)
+    checkItem mn loc origin (TypeExportDecl n a) =
+      when (mn `notElem` lookupExport (n, a) ctx.typeExportEnv) $
+        emitError (AnnP (UnknownImport mn n a) loc origin)
 
 renameRule :: RenameCtx -> Rule -> Eff RenameEffs Rule
 renameRule ctx r = do
@@ -373,9 +399,30 @@ resolveName mode ctx loc origin (Qualified m n) arity
 visibleProviders :: RenameCtx -> Text -> Int -> [Text]
 visibleProviders ctx n arity =
   let ownProviders = filter (== ctx.currentModule.name) (lookupDecl (n, arity) ctx.declEnv)
-      importNames = [mn | AnnP (ModuleImport mn) _ _ <- ctx.currentModule.imports]
-      importProviders = filter (`elem` importNames) (lookupExport (n, arity) ctx.exportEnv)
+      imports = [(mn, il) | AnnP (ModuleImport mn il) _ _ <- ctx.currentModule.imports]
+      importProviders =
+        filter
+          (\mn -> any (\(imn, il) -> imn == mn && importListPermits n arity il) imports)
+          (lookupExport (n, arity) ctx.exportEnv)
    in ownProviders ++ importProviders
+
+-- | Check whether a name/arity is permitted by an import list.
+-- 'Nothing' means import everything; 'Just' restricts to listed items.
+importListPermits :: Text -> Int -> Maybe [Declaration] -> Bool
+importListPermits _ _ Nothing = True
+importListPermits n arity (Just decls) = any match decls
+  where
+    match (ConstraintDecl dn da _) = dn == n && da == arity
+    match (FunctionDecl dn da _ _) = dn == n && da == arity
+    match _ = False
+
+-- | Check whether a type name/arity is permitted by an import list.
+importListPermitsType :: Text -> Int -> Maybe [Declaration] -> Bool
+importListPermitsType _ _ Nothing = True
+importListPermitsType n arity (Just decls) = any match decls
+  where
+    match (TypeExportDecl tn ta) = tn == n && ta == arity
+    match _ = False
 
 -- | Check an unresolved name against data-constructor declarations.
 -- If found with matching arity: silent. If found with wrong arity: warning.
@@ -428,8 +475,11 @@ renameTypeExpr ctx (TypeCon n args) =
 resolveTypeName :: RenameCtx -> Text -> Int -> Name
 resolveTypeName ctx n arity =
   let ownProviders = filter (== ctx.currentModule.name) (lookupDecl (n, arity) ctx.typeDeclEnv)
-      importNames = [mn | AnnP (ModuleImport mn) _ _ <- ctx.currentModule.imports]
-      importProviders = filter (`elem` importNames) (lookupExport (n, arity) ctx.typeExportEnv)
+      imports = [(mn, il) | AnnP (ModuleImport mn il) _ _ <- ctx.currentModule.imports]
+      importProviders =
+        filter
+          (\mn -> any (\(imn, il) -> imn == mn && importListPermitsType n arity il) imports)
+          (lookupExport (n, arity) ctx.typeExportEnv)
       matches = ownProviders ++ importProviders
    in case matches of
         [m] -> Qualified m n
@@ -447,7 +497,7 @@ renameQueryGoals mods goals =
   let queryMod =
         Module
           { name = "<query>",
-            imports = [noAnnP (ModuleImport m.name) | m <- mods],
+            imports = [noAnnP (ModuleImport m.name Nothing) | m <- mods],
             decls = [],
             typeDecls = [],
             rules = [],

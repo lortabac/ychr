@@ -159,7 +159,7 @@ compileModules includeStdlib inputs = do
     toResolution _ ms = AmbiguousExport ms
 
 addPreludeImport :: Module -> Module
-addPreludeImport m = m {imports = noAnnP (LibraryImport "prelude") : m.imports}
+addPreludeImport m = m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
 
 compileFiles :: Bool -> [FilePath] -> IO (Either Error (CompiledProgram, [Warning]))
 compileFiles includeStdlib paths = do
