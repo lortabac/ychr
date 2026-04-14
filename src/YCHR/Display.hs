@@ -19,7 +19,7 @@ module YCHR.Display
 where
 
 import Data.Foldable (toList)
-import Data.List (intercalate)
+import Data.List (dropWhileEnd, intercalate)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void)
@@ -226,12 +226,13 @@ displayName :: Types.Name -> String
 displayName (Types.Unqualified n) = T.unpack n
 displayName (Types.Qualified m n) = T.unpack m ++ ":" ++ T.unpack n
 
--- | Display a single parse error using our 'displaySrcLoc' format.
+-- | Display a single parse error using our 'displayMsgWithSrcLoc' format.
 displayParseError :: PosState Text -> ParseError Text Void -> String
 displayParseError posState err =
   let (_, posState') = reachOffset (errorOffset err) posState
       loc = sourceLocFromPos (pstateSourcePos posState')
-   in displaySrcLoc loc ++ ": " ++ displayErrorCode parseErrorCode ++ ": " ++ parseErrorTextPretty err
+      msg = dropWhileEnd (== '\n') (parseErrorTextPretty err)
+   in displayMsgWithSrcLoc parseErrorCode SevError msg loc Nothing
 
 instance Display Warning where
   displayMsg (RenameWarnings ws) = displayErrors (map displayMsg ws)
