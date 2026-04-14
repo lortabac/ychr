@@ -41,12 +41,12 @@ append([], Ys) -> Ys.
 append([X|Xs], Ys) -> cons(X, append(Xs, Ys)).
 
 maplist(_, []) -> [].
-maplist(F, [X|Xs]) -> cons(call_fun(F, X), maplist(F, Xs)).
+maplist(F, [X|Xs]) -> cons(call(F, X), maplist(F, Xs)).
 
 foldl(F, Init, Xs) -> foldl_(F, Xs, Init).
 
 foldl_(F, [], Acc) -> Acc.
-foldl_(F, [X|Xs], Acc) -> foldl_(F, Xs, call_fun(F, Acc, X)).
+foldl_(F, [X|Xs], Acc) -> foldl_(F, Xs, call(F, Acc, X)).
 
 sum_list(Xs) -> foldl('+'/2, 0, Xs).
 

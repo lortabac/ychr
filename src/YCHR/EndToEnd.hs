@@ -98,7 +98,7 @@ data CompiledProgram = CompiledProgram
     symbolTable :: SymbolTable,
     allModules :: [Module],
     opTable :: OpTable,
-    -- | All functions in the desugared program (for call_fun dispatch in queries).
+    -- | All functions in the desugared program (for call dispatch in queries).
     allFunctions :: [D.Function],
     -- | Counter for the next lambda index (to avoid collisions in queries).
     nextLambdaIndex :: Int
@@ -220,7 +220,7 @@ withCHR ::
 withCHR cp hc action = runEff (runCHR cp hc action)
 
 -- | Like 'withCHR' but merges extra procedures (e.g. query-time lambda
--- compilations and updated call_fun dispatches) into the ProcMap.
+-- compilations and updated call dispatches) into the ProcMap.
 withCHRExtra ::
   CompiledProgram ->
   HostCallRegistry ->
@@ -418,11 +418,11 @@ executeBodyGoal hc (D.BodyIs v expr) = do
 executeBodyGoal _ (D.BodyConstraint c) = do
   argVals <- traverse termToValue c.args
   tellConstraint c.name argVals
-executeBodyGoal hc (D.BodyFunctionCall (Types.Unqualified "call_fun") args) = do
+executeBodyGoal hc (D.BodyFunctionCall (Types.Unqualified "call") args) = do
   CHRRep procMap _ _ _ <- getStaticRep
   argVals <- traverse termToValue args
   let n = length args - 1
-      dispatchName = Name ("call_fun_" <> T.pack (show n))
+      dispatchName = Name ("call_" <> T.pack (show n))
   _ <- callProc procMap hc dispatchName (map RVal argVals)
   pure ()
 executeBodyGoal hc (D.BodyFunctionCall name args) = do
@@ -480,16 +480,16 @@ evalNestedExpr _ (VarTerm v) = do
       fresh <- newVar
       modify (Map.insert v fresh)
       pure fresh
-evalNestedExpr hc (CompoundTerm (Types.Unqualified "call_fun") args)
+evalNestedExpr hc (CompoundTerm (Types.Unqualified "call") args)
   | length args >= 2 = do
       CHRRep procMap _ _ _ <- getStaticRep
       argVals <- traverse (evalNestedExpr hc) args
       let n = length args - 1
-          dispatchName = Name ("call_fun_" <> T.pack (show n))
+          dispatchName = Name ("call_" <> T.pack (show n))
       result <- callProc procMap hc dispatchName (map RVal argVals)
       case result of
         RVal val -> pure val
-        _ -> error "call_fun returned non-value"
+        _ -> error "call returned non-value"
 evalNestedExpr hc (CompoundTerm (Types.Qualified "host" f) args) = do
   argVals <- traverse (evalNestedExpr hc) args
   result <- hostCall (Map.lookup (Name f) hc) f (map RVal argVals)

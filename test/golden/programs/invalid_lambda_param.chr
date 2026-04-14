@@ -1,2 +1,2 @@
 :- chr_constraint foo/1.
-foo(X) <=> X is call_fun(fun("hello") -> "world" end, 1).
+foo(X) <=> X is call(fun("hello") -> "world" end, 1).

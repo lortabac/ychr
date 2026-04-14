@@ -62,14 +62,14 @@ lookupDecl k (DeclEnv m) = Map.findWithDefault [] k m
 
 -- | Names that must stay 'YCHR.Types.Unqualified' even in resolving
 -- contexts. These are desugaring-level keywords (@true@, @=@, @is@, @->@,
--- @\/@, @call_fun@) that the desugarer matches by name; qualifying them
+-- @\/@, @call@) that the desugarer matches by name; qualifying them
 -- would break that dispatch.
 --
 -- Most of these forms are handled by dedicated shape-matching cases in
 -- 'YCHR.Rename.renameTerm'. This set is the fallback for shapes that don't
 -- match those cases (e.g. @is/3@, a bare @\/@ reference).
 reservedSymbolSet :: Set Text
-reservedSymbolSet = Set.fromList ["true", "=", "is", "->", "/", "call_fun"]
+reservedSymbolSet = Set.fromList ["true", "=", "is", "->", "/", "call"]
 
 isReserved :: Text -> Bool
 isReserved t = Set.member t reservedSymbolSet

@@ -401,7 +401,7 @@ desugarBodyGoals funSet loc origin terms =
 -- 4. @host:f(…)@ -> 'D.BodyHostStmt'
 -- 5. Qualified name in function set -> 'D.BodyFunctionCall'
 -- 6. Other qualified name -> 'D.BodyConstraint'
--- 7. @call_fun(F, …)@ -> 'D.BodyFunctionCall' — @call_fun@ stays
+-- 7. @call(F, …)@ -> 'D.BodyFunctionCall' — @call@ stays
 --    'Unqualified' (it is reserved by the renamer), so it would
 --    otherwise fall into the unqualified-compound error case below.
 -- 8. @true@ -> 'D.BodyTrue'
@@ -428,9 +428,9 @@ desugarBodyGoal funSet loc origin t = case t of
         pure [D.BodyFunctionCall name args]
   CompoundTerm name@(Qualified _ _) args ->
     pure [D.BodyConstraint (Constraint name args)]
-  CompoundTerm (Unqualified "call_fun") args
+  CompoundTerm (Unqualified "call") args
     | length args >= 2 ->
-        pure [D.BodyFunctionCall (Unqualified "call_fun") args]
+        pure [D.BodyFunctionCall (Unqualified "call") args]
   AtomTerm "true" -> pure [D.BodyTrue]
   CompoundTerm (Unqualified _) _ -> do
     tell [AnnP (UnexpectedBodyTerm t) loc origin]

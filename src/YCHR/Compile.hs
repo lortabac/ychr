@@ -27,8 +27,8 @@
 --    based on a suspension's constraint type (paper §5.3, "Selective
 --    Constraint Reactivation").
 --
--- 5. /@call_fun@ dispatch/: 'genCallFunDispatches' emits one
---    @call_fun_N@ procedure per supported call arity to dispatch first-class
+-- 5. /@call@ dispatch/: 'genCallFunDispatches' emits one
+--    @call_N@ procedure per supported call arity to dispatch first-class
 --    function values (function references and lifted lambda closures).
 --
 -- The basic compilation scheme is from paper §5.2; the Early Drop and
@@ -396,14 +396,14 @@ compileTerm varMap si (CompoundTerm name args) = do
   pure (MakeTerm (vmName name) args')
 compileTerm _ _ Wildcard = pure (Lit WildcardLit)
 
--- | Like 'compileTerm', but also recognises @call_fun@, user-defined
+-- | Like 'compileTerm', but also recognises @call@, user-defined
 -- function calls and @host:f(...)@ at the top level of the term and
 -- emits the appropriate 'CallExpr' \/ 'HostCall'. Recursion only happens
 -- through these recognised forms; nested compound terms whose head is
 -- /not/ a function are compiled as opaque data via 'compileTerm'. See
 -- the \"Notes\" block at the bottom of this file.
 compileExpr :: Set Identifier -> VarMap -> SrcInfo -> Term -> Eff '[Writer [AnnP CompileError]] Expr
-compileExpr funSet varMap si (CompoundTerm (Types.Unqualified "call_fun") args)
+compileExpr funSet varMap si (CompoundTerm (Types.Unqualified "call") args)
   | length args >= 2 = do
       args' <- traverse (compileExpr funSet varMap si) args
       pure (CallExpr (callFunProcName (length args - 1)) args')
@@ -650,7 +650,7 @@ compileBodyGoal funSet _ varMap si (D.BodyIs v expr) = do
     Nothing ->
       let varMap' = insertVar v (Var (Name v)) varMap
        in pure ([Let (Name v) (EvalDeep expr')], varMap')
-compileBodyGoal funSet _ varMap si (D.BodyFunctionCall (Types.Unqualified "call_fun") args) = do
+compileBodyGoal funSet _ varMap si (D.BodyFunctionCall (Types.Unqualified "call") args) = do
   args' <- traverse (compileExpr funSet varMap si) args
   pure ([ExprStmt (CallExpr (callFunProcName (length args - 1)) args')], varMap)
 compileBodyGoal funSet _ varMap si (D.BodyFunctionCall name args) = do
@@ -716,10 +716,10 @@ genReactivateDispatch symTab =
         []
 
 -- ---------------------------------------------------------------------------
--- call_fun dispatch
+-- call dispatch
 -- ---------------------------------------------------------------------------
 
--- | Generate @call_fun_1@ and @call_fun_2@ dispatch procedures.
+-- | Generate @call_1@ and @call_2@ dispatch procedures.
 -- Each procedure pattern-matches on the closure/function-reference term
 -- and dispatches to the appropriate compiled function.
 genCallFunDispatches :: [D.Function] -> [Procedure]
@@ -732,7 +732,7 @@ genCallFunDispatch functions callArity =
       argParams = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. callArity - 1]]
       funRefBranches = concatMap (genFunRefBranch callArity argParams) functions
       lambdaBranches = concatMap (genLambdaBranch callArity argParams) functions
-      errorStmt = ExprStmt (HostCall chrErrorName [Lit (AtomLit "call_fun: no matching closure")])
+      errorStmt = ExprStmt (HostCall chrErrorName [Lit (AtomLit "call: no matching closure")])
    in Procedure
         (callFunProcName callArity)
         (closureParam : argParams)

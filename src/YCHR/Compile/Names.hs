@@ -121,11 +121,11 @@ occProcName name arity num =
 funcProcName :: Types.Name -> Int -> Name
 funcProcName = procNameFor "func"
 
--- | Name of the @call_fun_N@ dispatch procedure for a call with @N@
--- arguments (i.e. an @N+1@-ary @call_fun(F, arg_1, …, arg_N)@). Each
+-- | Name of the @call_N@ dispatch procedure for a call with @N@
+-- arguments (i.e. an @N+1@-ary @call(F, arg_1, …, arg_N)@). Each
 -- supported call arity gets its own dispatch procedure.
 callFunProcName :: Int -> Name
-callFunProcName n = Name ("call_fun_" <> T.pack (show n))
+callFunProcName n = Name ("call_" <> T.pack (show n))
 
 -- ---------------------------------------------------------------------------
 -- Active-constraint argument variables
