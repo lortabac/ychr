@@ -26,6 +26,7 @@ module YCHR.Rename.Types
     DeclEnv,
     makeDeclEnv,
     lookupDecl,
+    toListDecl,
     isReserved,
   )
 where
@@ -59,6 +60,9 @@ makeDeclEnv = DeclEnv . Map.fromListWith (++)
 
 lookupDecl :: (Text, Int) -> DeclEnv -> [Text]
 lookupDecl k (DeclEnv m) = Map.findWithDefault [] k m
+
+toListDecl :: DeclEnv -> [((Text, Int), [Text])]
+toListDecl (DeclEnv m) = Map.toList m
 
 -- | Names that must stay 'YCHR.Types.Unqualified' even in resolving
 -- contexts. These are desugaring-level keywords (@true@, @=@, @is@, @->@,

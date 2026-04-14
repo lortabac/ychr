@@ -47,6 +47,7 @@ import Control.Monad (when)
 import Data.Foldable (traverse_)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Effectful (Eff, runPureEff)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
@@ -100,16 +101,18 @@ data RenameCtx = RenameCtx
 -- Environment building
 -- ---------------------------------------------------------------------------
 
--- | Build a global map of data-constructor names to their declared arities.
+-- | Build a map of data-constructor names to their declared arities,
+-- restricted to constructors from types in the given visible set.
 -- Constructors come from type declarations and are always 'Unqualified' at
 -- this point (the parser never produces qualified constructor names).
-buildDataConEnv :: [Module] -> DataConEnv
-buildDataConEnv mods =
+buildDataConEnv :: Set.Set (Text, Int) -> [Module] -> DataConEnv
+buildDataConEnv visibleTypeSet mods =
   Map.fromListWith
     (++)
     [ (t, [length dc.conArgs])
     | m <- mods,
       Ann td _ <- m.typeDecls,
+      (unqualifiedText td.name, length td.typeVars) `Set.member` visibleTypeSet,
       dc <- td.constructors,
       Unqualified t <- [dc.conName]
     ]
@@ -187,12 +190,14 @@ renameProgram mods =
         RenameCtx
           { declEnv = buildDeclEnv mods,
             exportEnv = buildExportEnv mods,
-            dataConEnv = buildDataConEnv mods,
+            dataConEnv = Map.empty,
             typeDeclEnv = buildTypeDeclEnv mods,
             typeExportEnv = buildTypeExportEnv mods,
             currentModule = error "currentModule: not yet set"
           }
-      ctxFor m = baseCtx {currentModule = m}
+      ctxFor m =
+        let ctx0 = baseCtx {currentModule = m}
+         in ctx0 {dataConEnv = buildDataConEnv (visibleTypes ctx0) mods}
       ((result, warnings), errs) = runPureEff . runWriter @[AnnP RenameError] . runWriter @[AnnP RenameWarning] $ do
         validateExports mods
         traverse (\m -> renameModule (ctxFor m)) mods
@@ -424,6 +429,25 @@ importListPermitsType n arity (Just decls) = any match decls
     match (TypeExportDecl tn ta) = tn == n && ta == arity
     match _ = False
 
+-- | All @(typeName, typeArity)@ pairs visible to the current module: types
+-- declared locally plus types exported by imported modules (filtered by the
+-- import list). Used to scope 'DataConEnv' so that only constructors from
+-- visible types suppress the 'UndeclaredDataConstructor' warning.
+visibleTypes :: RenameCtx -> Set.Set (Text, Int)
+visibleTypes ctx =
+  Set.fromList
+    [ key
+    | (key, ms) <- toListDecl ctx.typeDeclEnv,
+      not (null (ownProviders ms ++ importProviders key))
+    ]
+  where
+    ownProviders ms = filter (== ctx.currentModule.name) ms
+    imports = [(mn, il) | AnnP (ModuleImport mn il) _ _ <- ctx.currentModule.imports]
+    importProviders (n, arity) =
+      filter
+        (\mn -> any (\(imn, il) -> imn == mn && importListPermitsType n arity il) imports)
+        (lookupExport (n, arity) ctx.typeExportEnv)
+
 -- | Check an unresolved name against data-constructor declarations.
 -- If found with matching arity: silent. If found with wrong arity: warning.
 -- If not found at all: warning.
@@ -504,15 +528,16 @@ renameQueryGoals mods goals =
             equations = [],
             exports = Nothing
           }
-      ctx =
+      ctx0 =
         RenameCtx
           { declEnv = buildDeclEnv mods,
             exportEnv = buildExportEnv mods,
-            dataConEnv = buildDataConEnv mods,
+            dataConEnv = Map.empty,
             typeDeclEnv = buildTypeDeclEnv mods,
             typeExportEnv = buildTypeExportEnv mods,
             currentModule = queryMod
           }
+      ctx = ctx0 {dataConEnv = buildDataConEnv (visibleTypes ctx0) mods}
       ((renamed, warnings), errs) =
         runPureEff . runWriter @[AnnP RenameError] . runWriter @[AnnP RenameWarning] $
           traverse (renameTerm ctx dummyLoc (Atom "") ResolveTop) goals
