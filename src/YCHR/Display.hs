@@ -86,9 +86,9 @@ sourceLocFromPos sp =
 -- ---------------------------------------------------------------------------
 
 -- | 1xxxx — collect phase
-collectErrorCode :: CollectError -> ErrorCode
-collectErrorCode (UnknownLibrary _) = ErrorCode 10001
-collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
+collectErrorCode :: AnnP CollectError -> ErrorCode
+collectErrorCode (AnnP (UnknownLibrary _) _ _) = ErrorCode 10001
+collectErrorCode (AnnP (CircularLibraryImport _) _ _) = ErrorCode 10002
 
 -- | 2xxxx — rename phase (errors)
 renameErrorCode :: AnnP RenameError -> ErrorCode
@@ -97,9 +97,9 @@ renameErrorCode (AnnP (UnknownName _ _) _ _) = ErrorCode 20002
 renameErrorCode (AnnP (UnknownExport _ _ _) _ _) = ErrorCode 20003
 
 -- | 2x1xx — rename phase (warnings)
-renameWarningCode :: RenameWarning -> ErrorCode
-renameWarningCode (UndeclaredDataConstructor _ _) = ErrorCode 20101
-renameWarningCode (DataConstructorArityMismatch _ _ _) = ErrorCode 20102
+renameWarningCode :: AnnP RenameWarning -> ErrorCode
+renameWarningCode (AnnP (UndeclaredDataConstructor _) _ _) = ErrorCode 20101
+renameWarningCode (AnnP (DataConstructorArityMismatch _ _) _ _) = ErrorCode 20102
 
 -- | 3xxxx — desugar phase
 desugarErrorCode :: AnnP DesugarError -> ErrorCode
@@ -122,17 +122,21 @@ operatorConflictCode = ErrorCode 50002
 -- Display instances
 -- ---------------------------------------------------------------------------
 
-instance Display CollectError where
-  displayMsg e@(UnknownLibrary name) =
-    displayErrorCode (collectErrorCode e)
-      ++ "\nUnknown library: "
-      ++ T.unpack name
-      ++ "\n"
-  displayMsg e@(CircularLibraryImport names) =
-    displayErrorCode (collectErrorCode e)
-      ++ "\nCircular library import: "
-      ++ intercalate " -> " (map T.unpack names)
-      ++ "\n"
+instance Display (AnnP CollectError) where
+  displayMsg e@(AnnP (UnknownLibrary name) loc origin) =
+    displayMsgWithSrcLoc
+      (collectErrorCode e)
+      SevError
+      ("Unknown library: " ++ T.unpack name)
+      loc
+      (Just (prettyPExprSrc origin))
+  displayMsg e@(AnnP (CircularLibraryImport names) loc origin) =
+    displayMsgWithSrcLoc
+      (collectErrorCode e)
+      SevError
+      ("Circular library import: " ++ intercalate " -> " (map T.unpack names))
+      loc
+      (Just (prettyPExprSrc origin))
 
 instance Display (AnnP RenameError) where
   displayMsg e@(AnnP (AmbiguousName name arity candidates) loc origin) =
@@ -170,21 +174,21 @@ instance Display (AnnP RenameError) where
       loc
       (Just (prettyPExprSrc origin))
 
-instance Display RenameWarning where
-  displayMsg e@(UndeclaredDataConstructor loc name) =
+instance Display (AnnP RenameWarning) where
+  displayMsg e@(AnnP (UndeclaredDataConstructor name) loc origin) =
     displayMsgWithSrcLoc
       (renameWarningCode e)
       SevWarning
       ("Undeclared data constructor " ++ T.unpack name)
       loc
-      Nothing
-  displayMsg e@(DataConstructorArityMismatch loc name arity) =
+      (Just (prettyPExprSrc origin))
+  displayMsg e@(AnnP (DataConstructorArityMismatch name arity) loc origin) =
     displayMsgWithSrcLoc
       (renameWarningCode e)
       SevWarning
       ("Data constructor " ++ T.unpack name ++ " used with arity " ++ show arity ++ " but declared with different arity")
       loc
-      Nothing
+      (Just (prettyPExprSrc origin))
 
 instance Display (AnnP DesugarError) where
   displayMsg e@(AnnP (UnexpectedBodyTerm term) loc origin) =

@@ -29,10 +29,10 @@ data CollectError
 -- 4. Detects circular imports.
 -- 5. Prepends library modules in topological order (dependencies first).
 -- 6. Rewrites all 'LibraryImport' to 'ModuleImport' in every module.
-collectLibraries :: Bool -> Map Text Module -> [Module] -> Either [CollectError] [Module]
+collectLibraries :: Bool -> Map Text Module -> [Module] -> Either [AnnP CollectError] [Module]
 collectLibraries includeStdlib stdlibMap userMods =
   let seeds =
-        (if includeStdlib then Map.keys stdlibMap else [])
+        (if includeStdlib then map noAnnP (Map.keys stdlibMap) else [])
           ++ concatMap libraryImports userMods
    in case resolveAll stdlibMap Set.empty Set.empty seeds of
         (_, libs, []) ->
@@ -42,8 +42,8 @@ collectLibraries includeStdlib stdlibMap userMods =
         (_, _, errs) -> Left errs
 
 -- | Extract library import names from a module.
-libraryImports :: Module -> [Text]
-libraryImports m = [n | Ann (LibraryImport n) _ <- m.imports]
+libraryImports :: Module -> [AnnP Text]
+libraryImports m = [AnnP n loc p | AnnP (LibraryImport n) loc p <- m.imports]
 
 -- | DFS resolution of library dependencies.
 --
@@ -60,19 +60,19 @@ resolveAll ::
   Map Text Module ->
   Set Text ->
   Set Text ->
-  [Text] ->
-  (Set Text, [Module], [CollectError])
+  [AnnP Text] ->
+  (Set Text, [Module], [AnnP CollectError])
 resolveAll _ visited _ [] = (visited, [], [])
-resolveAll stdlibMap visited path (name : rest)
+resolveAll stdlibMap visited path (ann : rest)
   | Set.member name visited = resolveAll stdlibMap visited path rest
   | Set.member name path =
       let (visited', restMods, restErrs) = resolveAll stdlibMap visited path rest
-       in (visited', restMods, CircularLibraryImport (Set.toList path ++ [name]) : restErrs)
+       in (visited', restMods, AnnP (CircularLibraryImport (Set.toList path ++ [name])) ann.sourceLoc ann.parsed : restErrs)
   | otherwise =
       case Map.lookup name stdlibMap of
         Nothing ->
           let (visited', restMods, restErrs) = resolveAll stdlibMap visited path rest
-           in (visited', restMods, UnknownLibrary name : restErrs)
+           in (visited', restMods, AnnP (UnknownLibrary name) ann.sourceLoc ann.parsed : restErrs)
         Just m ->
           let deps = libraryImports m
               path' = Set.insert name path
@@ -80,16 +80,18 @@ resolveAll stdlibMap visited path (name : rest)
               visited2 = Set.insert name visited1
               (visited3, restMods, restErrs) = resolveAll stdlibMap visited2 path rest
            in (visited3, depMods ++ [m] ++ restMods, depErrs ++ restErrs)
+  where
+    name = ann.node
 
 -- | Add a builtins import to a library module (unless it is builtins itself).
 addBuiltinsImport :: Module -> Module
 addBuiltinsImport m
   | m.name == "builtins" = m
-  | otherwise = m {imports = noAnn (LibraryImport "builtins") : m.imports}
+  | otherwise = m {imports = noAnnP (LibraryImport "builtins") : m.imports}
 
 -- | Rewrite all 'LibraryImport' entries to 'ModuleImport'.
 rewriteImports :: Module -> Module
 rewriteImports m = m {imports = map rewrite m.imports}
   where
-    rewrite (Ann (LibraryImport n) loc) = Ann (ModuleImport n) loc
+    rewrite (AnnP (LibraryImport n) loc p) = AnnP (ModuleImport n) loc p
     rewrite imp = imp

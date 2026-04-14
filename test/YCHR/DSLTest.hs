@@ -53,7 +53,7 @@ moduleTests =
         module' "Foo" @?= Module "Foo" [] [] [] [] [] Nothing,
       testCase "importing sets modImports" $
         module' "Foo" `importing` ["Bar", "Baz"]
-          @?= Module "Foo" [noAnn (ModuleImport "Bar"), noAnn (ModuleImport "Baz")] [] [] [] [] Nothing,
+          @?= Module "Foo" [noAnnP (ModuleImport "Bar"), noAnnP (ModuleImport "Baz")] [] [] [] [] Nothing,
       testCase "declaring sets modDecls" $
         module' "Foo" `declaring` ["leq" // 2]
           @?= Module "Foo" [] [noAnn (ConstraintDecl "leq" 2 Nothing)] [] [] [] Nothing,
@@ -67,7 +67,7 @@ moduleTests =
               `importing` ["A"]
               `declaring` ["c" // 0]
               `defining` [r]
-              @?= Module "M" [noAnn (ModuleImport "A")] [noAnn (ConstraintDecl "c" 0 Nothing)] [] [r] [] Nothing,
+              @?= Module "M" [noAnnP (ModuleImport "A")] [noAnn (ConstraintDecl "c" 0 Nothing)] [] [r] [] Nothing,
       testCase "exporting sets modExports" $
         module' "Foo" `exporting` ["leq" // 2]
           @?= Module "Foo" [] [] [] [] [] (Just (noAnnP [ConstraintDecl "leq" 2 Nothing]))
@@ -170,7 +170,7 @@ integrationTests =
         logicModule
           @?= Module
             "Logic"
-            [noAnn (ModuleImport "Order")]
+            [noAnnP (ModuleImport "Order")]
             []
             []
             [ Rule

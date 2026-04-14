@@ -77,7 +77,7 @@ data Import
 
 data Module = Module
   { name :: Text,
-    imports :: [Ann Import],
+    imports :: [AnnP Import],
     decls :: [Ann Declaration],
     typeDecls :: [Ann TypeDefinition],
     rules :: [Rule],

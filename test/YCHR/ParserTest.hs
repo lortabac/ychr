@@ -47,7 +47,7 @@ stripRuleLoc r =
 stripModLoc :: Module -> Module
 stripModLoc m =
   m
-    { imports = map (noAnn . (.node)) m.imports,
+    { imports = map (noAnnP . (.node)) m.imports,
       decls = map (noAnn . (.node)) m.decls,
       typeDecls = map (noAnn . (.node)) m.typeDecls,
       rules = map stripRuleLoc m.rules,

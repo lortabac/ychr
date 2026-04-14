@@ -593,7 +593,7 @@ exportTests =
 -- ---------------------------------------------------------------------------
 
 -- | Rename a program and return the warnings (failing on errors).
-warningsOf :: [Module] -> IO [RenameWarning]
+warningsOf :: [Module] -> IO [AnnP RenameWarning]
 warningsOf mods = case renameProgram mods of
   Right (_, ws) -> pure ws
   Left errs -> assertFailure $ "unexpected errors: " ++ show errs
@@ -608,7 +608,7 @@ warningTests =
                 `declaring` ["c" // 1]
                 `defining` [[con "c" [var "X"]] <=> [atom "true"] |- [func "foo" [var "X"]]]
         ws <- warningsOf [m]
-        ws @?= [UndeclaredDataConstructor dummyLoc "foo"],
+        ws @?= [AnnP (UndeclaredDataConstructor "foo") dummyLoc (Atom "")],
       testCase "declared data constructor produces no warning" $ do
         let m =
               (module' "M" `declaring` ["c" // 1] `defining` [[con "c" [var "X"]] <=> [atom "true"] |- [func "foo" [var "X"]]])
@@ -622,7 +622,7 @@ warningTests =
                 { typeDecls = [noAnn (TypeDefinition (Unqualified "t") [] [DataConstructor (Unqualified "foo") [TypeCon (Unqualified "int") []]])]
                 }
         ws <- warningsOf [m]
-        ws @?= [DataConstructorArityMismatch dummyLoc "foo" 2],
+        ws @?= [AnnP (DataConstructorArityMismatch "foo" 2) dummyLoc (Atom "")],
       testCase "no warning for reserved symbols" $ do
         let m =
               module' "M"

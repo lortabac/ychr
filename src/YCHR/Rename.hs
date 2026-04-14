@@ -61,8 +61,8 @@ data RenameError
   deriving (Eq, Show)
 
 data RenameWarning
-  = UndeclaredDataConstructor SourceLoc Text
-  | DataConstructorArityMismatch SourceLoc Text Int
+  = UndeclaredDataConstructor Text
+  | DataConstructorArityMismatch Text Int
   deriving (Eq, Show)
 
 -- | Maps data constructor names to their declared arities (from type
@@ -70,13 +70,13 @@ data RenameWarning
 -- different types.
 type DataConEnv = Map Text [Int]
 
-type RenameEffs = '[Writer [RenameWarning], Writer [AnnP RenameError]]
+type RenameEffs = '[Writer [AnnP RenameWarning], Writer [AnnP RenameError]]
 
 emitError :: AnnP RenameError -> Eff RenameEffs ()
 emitError e = tell @[AnnP RenameError] [e]
 
-emitWarning :: RenameWarning -> Eff RenameEffs ()
-emitWarning w = tell @[RenameWarning] [w]
+emitWarning :: AnnP RenameWarning -> Eff RenameEffs ()
+emitWarning w = tell @[AnnP RenameWarning] [w]
 
 -- | Global environments consulted while renaming one module. Bundled
 -- into a record so recursive helpers don't have to thread six parameters.
@@ -178,7 +178,7 @@ unqualifiedText (Qualified _ t) = t
 -- Entry points
 -- ---------------------------------------------------------------------------
 
-renameProgram :: [Module] -> Either [AnnP RenameError] ([Module], [RenameWarning])
+renameProgram :: [Module] -> Either [AnnP RenameError] ([Module], [AnnP RenameWarning])
 renameProgram mods =
   let baseCtx =
         RenameCtx
@@ -190,7 +190,7 @@ renameProgram mods =
             currentModule = error "currentModule: not yet set"
           }
       ctxFor m = baseCtx {currentModule = m}
-      ((result, warnings), errs) = runPureEff . runWriter @[AnnP RenameError] . runWriter @[RenameWarning] $ do
+      ((result, warnings), errs) = runPureEff . runWriter @[AnnP RenameError] . runWriter @[AnnP RenameWarning] $ do
         validateExports mods
         traverse (\m -> renameModule (ctxFor m)) mods
    in if null errs then Right (result, warnings) else Left errs
@@ -351,7 +351,7 @@ resolveName mode ctx loc origin (Unqualified n) arity
               emitError (AnnP (UnknownName n arity) loc origin)
               pure (Unqualified n)
             else do
-              warnUnknownDataCon ctx.dataConEnv loc n arity
+              warnUnknownDataCon ctx.dataConEnv loc origin n arity
               pure (Unqualified n)
         ms -> do
           emitError (AnnP (AmbiguousName n arity ms) loc origin)
@@ -373,20 +373,20 @@ resolveName mode ctx loc origin (Qualified m n) arity
 visibleProviders :: RenameCtx -> Text -> Int -> [Text]
 visibleProviders ctx n arity =
   let ownProviders = filter (== ctx.currentModule.name) (lookupDecl (n, arity) ctx.declEnv)
-      importNames = [mn | Ann (ModuleImport mn) _ <- ctx.currentModule.imports]
+      importNames = [mn | AnnP (ModuleImport mn) _ _ <- ctx.currentModule.imports]
       importProviders = filter (`elem` importNames) (lookupExport (n, arity) ctx.exportEnv)
    in ownProviders ++ importProviders
 
 -- | Check an unresolved name against data-constructor declarations.
 -- If found with matching arity: silent. If found with wrong arity: warning.
 -- If not found at all: warning.
-warnUnknownDataCon :: DataConEnv -> SourceLoc -> Text -> Int -> Eff RenameEffs ()
-warnUnknownDataCon dataConEnv loc n arity =
+warnUnknownDataCon :: DataConEnv -> SourceLoc -> PExpr -> Text -> Int -> Eff RenameEffs ()
+warnUnknownDataCon dataConEnv loc origin n arity =
   case Map.lookup n dataConEnv of
     Just arities
       | arity `elem` arities -> pure ()
-      | otherwise -> emitWarning (DataConstructorArityMismatch loc n arity)
-    Nothing -> emitWarning (UndeclaredDataConstructor loc n)
+      | otherwise -> emitWarning (AnnP (DataConstructorArityMismatch n arity) loc origin)
+    Nothing -> emitWarning (AnnP (UndeclaredDataConstructor n) loc origin)
 
 -- ---------------------------------------------------------------------------
 -- Type definition renaming
@@ -428,7 +428,7 @@ renameTypeExpr ctx (TypeCon n args) =
 resolveTypeName :: RenameCtx -> Text -> Int -> Name
 resolveTypeName ctx n arity =
   let ownProviders = filter (== ctx.currentModule.name) (lookupDecl (n, arity) ctx.typeDeclEnv)
-      importNames = [mn | Ann (ModuleImport mn) _ <- ctx.currentModule.imports]
+      importNames = [mn | AnnP (ModuleImport mn) _ _ <- ctx.currentModule.imports]
       importProviders = filter (`elem` importNames) (lookupExport (n, arity) ctx.typeExportEnv)
       matches = ownProviders ++ importProviders
    in case matches of
@@ -442,12 +442,12 @@ resolveTypeName ctx n arity =
 -- | Rename a list of query goal terms using all modules as the visible
 -- scope. Each term is renamed at 'ResolveTop' level (same as rule bodies).
 -- Returns 'Left' if any rename errors occur.
-renameQueryGoals :: [Module] -> [Term] -> Either [AnnP RenameError] ([Term], [RenameWarning])
+renameQueryGoals :: [Module] -> [Term] -> Either [AnnP RenameError] ([Term], [AnnP RenameWarning])
 renameQueryGoals mods goals =
   let queryMod =
         Module
           { name = "<query>",
-            imports = [noAnn (ModuleImport m.name) | m <- mods],
+            imports = [noAnnP (ModuleImport m.name) | m <- mods],
             decls = [],
             typeDecls = [],
             rules = [],
@@ -464,7 +464,7 @@ renameQueryGoals mods goals =
             currentModule = queryMod
           }
       ((renamed, warnings), errs) =
-        runPureEff . runWriter @[AnnP RenameError] . runWriter @[RenameWarning] $
+        runPureEff . runWriter @[AnnP RenameError] . runWriter @[AnnP RenameWarning] $
           traverse (renameTerm ctx dummyLoc (Atom "") ResolveTop) goals
    in if null errs then Right (renamed, warnings) else Left errs
 

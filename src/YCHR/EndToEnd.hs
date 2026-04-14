@@ -59,7 +59,7 @@ import YCHR.Desugar (DesugarError, desugarProgram, desugarQueryGoals, extractSym
 import YCHR.Desugared qualified as D
 import YCHR.Meta (valueToTerm)
 import YCHR.PExpr (PExpr (Atom))
-import YCHR.Parsed (AnnP, Import (..), Module (..), OpDecl (..), SourceLoc (..), noAnn)
+import YCHR.Parsed (AnnP, Import (..), Module (..), OpDecl (..), SourceLoc (..), noAnnP)
 import YCHR.Parser (OpTable, builtinOps, collectOperatorDecls, extractOpDecls, mergeOps, parseConstraint, parseModuleWith, parseQueryWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (RenameError, RenameWarning, buildExportEnv, renameProgram, renameQueryGoals)
@@ -77,7 +77,7 @@ import YCHR.VM (Name (..), Procedure (..), Program (..))
 
 data Error
   = ParseError FilePath (ParseErrorBundle Text Void)
-  | CollectErrors [CollectError]
+  | CollectErrors [AnnP CollectError]
   | RenameErrors [AnnP RenameError]
   | DesugarErrors [AnnP DesugarError]
   | CompileErrors [AnnP CompileError]
@@ -87,7 +87,7 @@ data Error
 instance Exception Error
 
 data Warning
-  = RenameWarnings [RenameWarning]
+  = RenameWarnings [AnnP RenameWarning]
   deriving (Show)
 
 -- | A compiled CHR program together with module visibility information.
@@ -157,7 +157,7 @@ compileModules includeStdlib inputs = do
     toResolution _ ms = AmbiguousExport ms
 
 addBuiltinsImport :: Module -> Module
-addBuiltinsImport m = m {imports = noAnn (LibraryImport "builtins") : m.imports}
+addBuiltinsImport m = m {imports = noAnnP (LibraryImport "builtins") : m.imports}
 
 compileFiles :: Bool -> [FilePath] -> IO (Either Error (CompiledProgram, [Warning]))
 compileFiles includeStdlib paths = do
