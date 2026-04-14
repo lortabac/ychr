@@ -67,8 +67,8 @@ exportClause vmp =
   let procNames = Set.fromList [n.unName | p <- vmp.program.procedures, let n = p.name]
       tellNames =
         [ mangleName tn
-        | Types.Identifier n a <- Set.toList vmp.exportedSet,
-          let tn = tellProcName n a,
+        | Types.QualifiedIdentifier m n a <- Set.toList vmp.exportedSet,
+          let tn = tellProcName (Types.Qualified m n) a,
           Set.member tn.unName procNames
         ]
    in SList (SAtom "export" : SAtom "%init!" : map SAtom tellNames)

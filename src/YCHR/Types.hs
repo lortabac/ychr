@@ -9,6 +9,8 @@ module YCHR.Types
     Constraint (..),
     ConstraintType (..),
     Identifier (..),
+    QualifiedIdentifier (..),
+    UnqualifiedIdentifier (..),
     Name (..),
 
     -- * Symbol table
@@ -42,6 +44,23 @@ newtype ConstraintType = ConstraintType {unConstraintType :: Int}
 
 -- | A name together with its arity, identifying a constraint or function.
 data Identifier = Identifier {name :: Name, arity :: Int}
+  deriving (Show, Eq, Ord)
+
+-- | An unqualified name with its arity.  Used in 'exportMap' where
+-- names are looked up before qualification.
+data UnqualifiedIdentifier = UnqualifiedIdentifier
+  { localName :: Text,
+    arity :: Int
+  }
+  deriving (Show, Eq, Ord)
+
+-- | A fully-qualified name with its arity.  Used in 'exportedSet' where
+-- all names are guaranteed to be module-qualified.
+data QualifiedIdentifier = QualifiedIdentifier
+  { moduleName :: Text,
+    localName :: Text,
+    arity :: Int
+  }
   deriving (Show, Eq, Ord)
 
 -- | Maps identifiers (name + arity) to unique 0-indexed numeric IDs.

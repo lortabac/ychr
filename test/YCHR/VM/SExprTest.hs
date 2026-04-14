@@ -153,7 +153,7 @@ formatTests =
       let vmp =
             VMProgram
               { program = Program 2 ["M:leq", "gcd"] [],
-                exportedSet = Set.fromList [Types.Identifier (Types.Qualified "M" "leq") 2, Types.Identifier (Types.Unqualified "gcd") 1],
+                exportedSet = Set.fromList [Types.QualifiedIdentifier "M" "leq" 2, Types.QualifiedIdentifier "M" "gcd" 1],
                 symbolTable = Types.mkSymbolTable [(Types.Identifier (Types.Qualified "M" "leq") 2, Types.ConstraintType 0), (Types.Identifier (Types.Unqualified "gcd") 1, Types.ConstraintType 1)]
               }
           text = serialize vmp

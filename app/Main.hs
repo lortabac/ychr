@@ -24,6 +24,7 @@ import YCHR.Parser (opTableEntries, parseConstraint)
 import YCHR.Pretty (prettyBindings, prettyQueryResult, renderAtom)
 import YCHR.Run (CompiledProgram (..), Error, Warning, compileFiles, compileModules, resolveQueryConstraint, runProgramWithGoal, runProgramWithQuery)
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
+import YCHR.Types qualified as Types
 import YCHR.VM.SExpr (VMProgram (..), serialize)
 
 data RunOpts = RunOpts
@@ -131,7 +132,7 @@ runRepl opts files = do
       histFile <- getXdgDirectory XdgData "ychr/history"
       createDirectoryIfMissing True (takeDirectory histFile)
       let CompiledProgram {exportMap = em} = prog
-          constraintNames = nub [T.unpack n | (n, _) <- Map.keys em]
+          constraintNames = nub [T.unpack n | Types.UnqualifiedIdentifier n _ <- Map.keys em]
           completions = [":quit", ":recompile", ":help", ":list_files", ":list_modules", ":list_declarations", ":list_operators", "call"] ++ constraintNames
           completeFunc = completeWord Nothing " ," $ \prefix ->
             return $ map (\n -> (simpleCompletion n) {isFinished = False}) $ filter (isPrefixOf prefix) completions

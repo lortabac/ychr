@@ -45,7 +45,7 @@ import YCHR.VM.Types
 -- | A VM program bundled with metadata needed by external backends.
 data VMProgram = VMProgram
   { program :: Program,
-    exportedSet :: Set Types.Identifier,
+    exportedSet :: Set Types.QualifiedIdentifier,
     symbolTable :: Types.SymbolTable
   }
   deriving (Show, Eq)
@@ -83,8 +83,8 @@ symbolTableToSExpr st =
   where
     entryToSExpr (Types.Identifier n arity, Types.ConstraintType ct) = SList [chrNameToSExpr n, SInt arity, SInt ct]
 
-identToSExpr :: Types.Identifier -> SExpr
-identToSExpr (Types.Identifier n arity) = SList [chrNameToSExpr n, SInt arity]
+identToSExpr :: Types.QualifiedIdentifier -> SExpr
+identToSExpr (Types.QualifiedIdentifier m n arity) = SList [chrNameToSExpr (Types.Qualified m n), SInt arity]
 
 chrNameToSExpr :: Types.Name -> SExpr
 chrNameToSExpr (Types.Unqualified t) = SString t
@@ -211,10 +211,12 @@ symbolTableFromSExpr (SList (SAtom "symbol-table" : entries)) = do
     entryFromSExpr s = err ("expected (name arity int), got: " <> printSExpr s)
 symbolTableFromSExpr s = err ("expected (symbol-table ...), got: " <> printSExpr s)
 
-identFromSExpr :: SExpr -> Err Types.Identifier
+identFromSExpr :: SExpr -> Err Types.QualifiedIdentifier
 identFromSExpr (SList [n, SInt arity]) = do
   name <- chrNameFromSExpr n
-  pure (Types.Identifier name arity)
+  case name of
+    Types.Qualified m t -> pure (Types.QualifiedIdentifier m t arity)
+    Types.Unqualified t -> err ("expected qualified name in export, got: " <> t)
 identFromSExpr s = err ("expected (name arity), got: " <> printSExpr s)
 
 chrNameFromSExpr :: SExpr -> Err Types.Name

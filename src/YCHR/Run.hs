@@ -93,8 +93,8 @@ data Warning
 -- | A compiled CHR program together with module visibility information.
 data CompiledProgram = CompiledProgram
   { program :: Program,
-    exportMap :: Map (Text, Int) ExportResolution,
-    exportedSet :: Set Types.Identifier,
+    exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
+    exportedSet :: Set Types.QualifiedIdentifier,
     symbolTable :: SymbolTable,
     allModules :: [Module],
     opTable :: OpTable,
@@ -138,12 +138,12 @@ compileModules includeStdlib inputs = do
   let exportEnv = buildExportEnv collected
       exportMap =
         Map.fromList
-          [ ((n, a), toResolution n ms)
+          [ (Types.UnqualifiedIdentifier n a, toResolution n ms)
           | ((n, a), ms) <- toListExport exportEnv
           ]
       exportedSet =
         Set.fromList
-          [Types.Identifier (Types.Qualified m n) a | ((n, a), ms) <- toListExport exportEnv, m <- ms]
+          [Types.QualifiedIdentifier m n a | ((n, a), ms) <- toListExport exportEnv, m <- ms]
   (renamed, renameWarnings) <- first RenameErrors (renameProgram collected)
   desugared <- first DesugarErrors (desugarProgram renamed)
   desugared' <- first DesugarErrors (liftAllLambdas desugared)
@@ -178,7 +178,7 @@ data CHR :: Effect
 type instance DispatchOf CHR = Static WithSideEffects
 
 data instance StaticRep CHR
-  = CHRRep ProcMap HostCallRegistry (Map (Text, Int) ExportResolution) (Set Types.Identifier)
+  = CHRRep ProcMap HostCallRegistry (Map Types.UnqualifiedIdentifier ExportResolution) (Set Types.QualifiedIdentifier)
 
 -- | Shorthand for the full set of effects available inside a CHR session.
 type CHREffects es =
@@ -260,10 +260,10 @@ tellConstraint name args = do
 -- | Name resolution extracted from 'resolveQueryConstraint' to work with
 -- just a name and arity.
 resolveQueryConstraint' ::
-  Map (Text, Int) ExportResolution -> Set Types.Identifier -> Types.Name -> Int -> Either String Types.Name
+  Map Types.UnqualifiedIdentifier ExportResolution -> Set Types.QualifiedIdentifier -> Types.Name -> Int -> Either String Types.Name
 resolveQueryConstraint' expMap expSet name arity = case name of
   Types.Unqualified n ->
-    case Map.lookup (n, arity) expMap of
+    case Map.lookup (Types.UnqualifiedIdentifier n arity) expMap of
       Just (UniqueExport qname) -> Right qname
       Just (AmbiguousExport ms) ->
         Left
@@ -276,7 +276,7 @@ resolveQueryConstraint' expMap expSet name arity = case name of
           )
       Nothing -> Left ("Unknown constraint: " ++ T.unpack n ++ "/" ++ show arity)
   Types.Qualified m n ->
-    if Set.member (Types.Identifier (Types.Qualified m n) arity) expSet
+    if Set.member (Types.QualifiedIdentifier m n arity) expSet
       then Right name
       else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n ++ "/" ++ show arity)
 
@@ -289,7 +289,7 @@ resolveQueryConstraint :: CompiledProgram -> Constraint -> Either String Constra
 resolveQueryConstraint cp (Constraint cname cargs) = case cname of
   Types.Unqualified n ->
     let arity = length cargs
-     in case Map.lookup (n, arity) cp.exportMap of
+     in case Map.lookup (Types.UnqualifiedIdentifier n arity) cp.exportMap of
           Just (UniqueExport qname) ->
             Right (Constraint qname cargs)
           Just (AmbiguousExport ms) ->
@@ -304,7 +304,7 @@ resolveQueryConstraint cp (Constraint cname cargs) = case cname of
           Nothing -> Left ("Unknown constraint: " ++ T.unpack n ++ "/" ++ show arity)
   Types.Qualified m n ->
     let arity = length cargs
-     in if Set.member (Types.Identifier (Types.Qualified m n) arity) cp.exportedSet
+     in if Set.member (Types.QualifiedIdentifier m n arity) cp.exportedSet
           then Right (Constraint cname cargs)
           else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n ++ "/" ++ show arity)
 
