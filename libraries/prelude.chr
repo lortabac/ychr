@@ -1,8 +1,6 @@
 :- module(prelude, [
     type(bool/0),
     type(list/1),
-    identity/2,
-    print/1,
     '+'/2,
     '-'/2,
     '*'/2,
@@ -43,14 +41,6 @@
 :- chr_type bool ---> true ; false.
 
 :- chr_type list(T) ---> [] ; [T|list(T)].
-
-:- chr_constraint
-    identity/2,
-    print/1.
-
-identity(X, Y) <=> X = Y.
-
-print(X) <=> host:print(X).
 
 :- function
     '+'/2,
