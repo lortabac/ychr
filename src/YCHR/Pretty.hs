@@ -1,19 +1,8 @@
-{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Pretty-printing utilities for CHR terms and binding maps.
 module YCHR.Pretty
-  ( -- * Pretty class
-    Pretty (..),
-
-    -- * Existential wrapper
-    PrettyE (..),
-
-    -- * Annotated node
-    AnnP (..),
-    noAnnP,
-
-    -- * Pretty-printing functions
+  ( -- * Pretty-printing functions
     prettyTerm,
     prettyBindings,
     prettyQueryResult,
@@ -21,6 +10,7 @@ module YCHR.Pretty
     prettyConstraintSrc,
     prettyHeadSrc,
     prettyRuleSrc,
+    prettyPExprSrc,
     renderAtom,
   )
 where
@@ -120,16 +110,6 @@ ruleToPExpr r =
         Nothing -> arrowExpr
         Just ann -> PE.Compound "@" [noAnn (PE.Atom ann.node), noAnn arrowExpr]
 
--- | Convert a parsed 'P.FunctionEquation' to a 'PE.PExpr'.
-equationToPExpr :: P.FunctionEquation -> PE.PExpr
-equationToPExpr eq =
-  let headPE = PE.Compound eq.funName (map (noAnn . termToPExpr) eq.args)
-      rhsPE = termToPExpr eq.rhs.node
-      guardAndRhs = case eq.guard.node of
-        [] -> rhsPE
-        gs -> PE.Compound "|" [noAnn (commaSepPExpr (map termToPExpr gs)), noAnn rhsPE]
-   in PE.Compound "->" [noAnn headPE, noAnn guardAndRhs]
-
 -- | Right-fold a list of 'PE.PExpr' into a comma-operator chain.
 commaSepPExpr :: [PE.PExpr] -> PE.PExpr
 commaSepPExpr [] = PE.Atom "true"
@@ -156,10 +136,6 @@ prettyHeadSrc = PE.prettyPExpr prettyOps . headToPExpr
 -- | Render a parsed 'P.Rule' as valid surface-language source text.
 prettyRuleSrc :: P.Rule -> String
 prettyRuleSrc r = PE.prettyPExpr prettyOps (ruleToPExpr r) ++ "."
-
--- | Render a parsed 'P.FunctionEquation' as valid surface-language source text.
-prettyEquationSrc :: P.FunctionEquation -> String
-prettyEquationSrc eq = PE.prettyPExpr prettyOps (equationToPExpr eq) ++ "."
 
 -- | Render an atom, quoting with @\'...\'@ if necessary.
 renderAtom :: Text -> String
@@ -233,46 +209,6 @@ prettyQueryResult m =
     formatBindings ((k, v) : rest) =
       T.unpack k ++ " = " ++ prettyTerm v ++ ",\n" ++ formatBindings rest
 
--- ---------------------------------------------------------------------------
--- Pretty class
--- ---------------------------------------------------------------------------
-
-class Pretty a where
-  prettySrc :: a -> String
-
-instance Pretty Term where prettySrc = prettyTermSrc
-
-instance Pretty [Term] where
-  prettySrc ts = intercalate ", " (map prettyTermSrc ts)
-
-instance Pretty Constraint where prettySrc = prettyConstraintSrc
-
-instance Pretty P.Head where prettySrc = prettyHeadSrc
-
-instance Pretty P.Rule where prettySrc = prettyRuleSrc
-
-instance Pretty P.FunctionEquation where prettySrc = prettyEquationSrc
-
--- ---------------------------------------------------------------------------
--- Existential wrapper and annotated node
--- ---------------------------------------------------------------------------
-
--- | An existential wrapper for any value that can be pretty-printed.
-data PrettyE = forall a. (Pretty a) => PrettyE a
-
-instance Show PrettyE where
-  show (PrettyE a) = prettySrc a
-
--- | A desugared node annotated with a source location and the original
--- parsed AST node that produced it.
-data AnnP a = AnnP
-  { node :: a,
-    sourceLoc :: P.SourceLoc,
-    parsed :: PrettyE
-  }
-  deriving (Show)
-
--- | Wrap a node with a dummy source location and a dummy pretty-printed origin.
--- Useful for constructing values in tests where provenance is irrelevant.
-noAnnP :: (Pretty b) => b -> a -> AnnP a
-noAnnP origin x = AnnP x P.dummyLoc (PrettyE origin)
+-- | Render a 'PExpr' as valid surface-language source text.
+prettyPExprSrc :: PE.PExpr -> String
+prettyPExprSrc = PE.prettyPExpr prettyOps

@@ -11,7 +11,7 @@ import Language.Haskell.TH (Code, Q, runIO)
 import Language.Haskell.TH.Syntax (Lift (..), addDependentFile, unsafeCodeCoerce)
 import System.Directory (listDirectory)
 import System.FilePath (dropExtension, takeExtension, takeFileName, (</>))
-import YCHR.Parsed (Module)
+import YCHR.Parsed (AnnP (..), Module)
 import YCHR.Parser (OpTable, builtinOps, collectOperatorDecls, mergeOps, parseModuleWith)
 
 readLibraries :: Code Q (Map Text Module)
@@ -21,7 +21,7 @@ readLibraries = unsafeCodeCoerce $ do
   -- Read all library source files and register dependencies
   sources <- mapM (readSource dir) files
   -- Collect operator declarations from all library sources
-  allOps <- case concat <$> mapM (\(fp, src) -> collectOperatorDecls fp (T.pack src)) sources of
+  allOps <- case concatMap (\(AnnP ops _ _) -> ops) <$> mapM (\(fp, src) -> collectOperatorDecls fp (T.pack src)) sources of
     Left err -> fail ("Failed to collect operators from libraries: " ++ show err)
     Right ops -> pure ops
   -- Merge with builtins

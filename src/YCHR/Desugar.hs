@@ -59,13 +59,14 @@ import Effectful (Eff, runPureEff, (:>))
 import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import YCHR.Desugared qualified as D
+import YCHR.PExpr (PExpr (Atom))
+import YCHR.Parsed (AnnP (..), noAnnP)
 import YCHR.Parsed qualified as P
-import YCHR.Pretty (AnnP (..), PrettyE (..), noAnnP)
 import YCHR.Types
 
 data DesugarError
-  = UnexpectedBodyTerm P.SourceLoc Term
-  | InvalidLambdaParam P.SourceLoc Term
+  = UnexpectedBodyTerm Term
+  | InvalidLambdaParam Term
   deriving (Eq, Show)
 
 -- | Prefix for fresh variables introduced by the Head Normal Form
@@ -112,7 +113,7 @@ buildFunctionSet mods =
     ]
 
 -- | The primary entry point: converts parsed modules to a desugared program.
-desugarProgram :: [P.Module] -> Either [DesugarError] D.Program
+desugarProgram :: [P.Module] -> Either [AnnP DesugarError] D.Program
 desugarProgram mods =
   let funSet = buildFunctionSet mods
       conTypes = collectConstraintTypes mods
@@ -155,18 +156,18 @@ getRuleConstraints r =
 -- | Desugar one parsed rule: classify its body goals, desugar its user
 -- guards, flatten the head kind, and run HNF on the head. HNF-emitted
 -- guards are prepended to the user guards so they run first.
-desugarRule :: Set.Set Name -> P.Rule -> Eff '[Writer [DesugarError]] D.Rule
+desugarRule :: Set.Set Name -> P.Rule -> Eff '[Writer [AnnP DesugarError]] D.Rule
 desugarRule funSet r = do
-  ruleBody <- desugarBodyGoals funSet r.body.sourceLoc r.body.node
+  ruleBody <- desugarBodyGoals funSet r.body.sourceLoc r.body.parsed r.body.node
   userGuards <- traverse (desugarGuard r.guard.sourceLoc) r.guard.node
   let rawHead = flattenHeadKind r.head.node
       (hnfGuards, normalizedHead) = normalizeHead rawHead
   pure
     D.Rule
       { name = fmap (.node) r.name,
-        head = AnnP normalizedHead r.head.sourceLoc (PrettyE r.head.node),
-        guard = AnnP (hnfGuards ++ userGuards) r.guard.sourceLoc (PrettyE r.guard.node),
-        body = AnnP ruleBody r.body.sourceLoc (PrettyE r.body.node)
+        head = AnnP normalizedHead r.head.sourceLoc r.head.parsed,
+        guard = AnnP (hnfGuards ++ userGuards) r.guard.sourceLoc r.guard.parsed,
+        body = AnnP ruleBody r.body.sourceLoc r.body.parsed
       }
 
 -- | Map the three surface head kinds to the uniform @Kept \/ Removed@
@@ -296,14 +297,14 @@ decomposeArg st parentVar i term =
 -- | Desugar every function in every module: find each @:- function@
 -- declaration, gather its equations by name, and produce a 'D.Function'
 -- per declaration.
-desugarFunctions :: [P.Module] -> Eff '[Writer [DesugarError]] [D.Function]
+desugarFunctions :: [P.Module] -> Eff '[Writer [AnnP DesugarError]] [D.Function]
 desugarFunctions mods =
   traverse
     ( \(m, d) ->
         desugarFunction
           m.name
           d
-          [P.Ann eq loc | P.Ann eq loc <- m.equations, eq.funName == d.name]
+          [annEq | annEq <- m.equations, annEq.node.funName == d.name]
     )
     [(m, d) | m <- mods, P.Ann d _ <- m.decls, isFunctionDecl d]
 
@@ -313,14 +314,14 @@ desugarFunctions mods =
 desugarFunction ::
   Text ->
   P.Declaration ->
-  [P.Ann P.FunctionEquation] ->
-  Eff '[Writer [DesugarError]] D.Function
+  [P.AnnP P.FunctionEquation] ->
+  Eff '[Writer [AnnP DesugarError]] D.Function
 desugarFunction modName (P.FunctionDecl {name, arity, argTypes, returnType}) eqs = do
   desugaredEqs <- traverse desugarAnnotatedEquation eqs
   -- Use the source location of the first equation (or dummyLoc if none)
   let (loc, parsed) = case eqs of
-        (P.Ann eq eqLoc : _) -> (eqLoc, PrettyE eq)
-        [] -> (P.dummyLoc, PrettyE (AtomTerm "function"))
+        (P.AnnP _eq eqLoc eqParsed : _) -> (eqLoc, eqParsed)
+        [] -> (P.dummyLoc, Atom "function")
   pure
     D.Function
       { name = Qualified modName name,
@@ -332,10 +333,10 @@ desugarFunction modName (P.FunctionDecl {name, arity, argTypes, returnType}) eqs
 desugarFunction _ d _ =
   error $ "Desugar.desugarFunction: expected a FunctionDecl, got " ++ show d
 
-desugarAnnotatedEquation :: P.Ann P.FunctionEquation -> Eff '[Writer [DesugarError]] D.Equation
-desugarAnnotatedEquation (P.Ann eq _loc) = desugarEquation eq
+desugarAnnotatedEquation :: P.AnnP P.FunctionEquation -> Eff '[Writer [AnnP DesugarError]] D.Equation
+desugarAnnotatedEquation eq = desugarEquation eq.node
 
-desugarEquation :: P.FunctionEquation -> Eff '[Writer [DesugarError]] D.Equation
+desugarEquation :: P.FunctionEquation -> Eff '[Writer [AnnP DesugarError]] D.Equation
 desugarEquation eq = do
   let initState = HnfState 0 Set.empty []
       (st, normalizedArgs) = mapAccumL normalizeArg initState eq.args
@@ -352,17 +353,17 @@ desugarEquation eq = do
 --
 -- Every term is accepted as a 'D.GuardExpr'. Type errors (e.g. a
 -- non-boolean guard) are deferred to a future typechecker.
-desugarGuard :: P.SourceLoc -> Term -> Eff '[Writer [DesugarError]] D.Guard
+desugarGuard :: P.SourceLoc -> Term -> Eff '[Writer [AnnP DesugarError]] D.Guard
 desugarGuard _ t = pure $ D.GuardExpr t
 
 -- | Desugar a list of query goal terms into 'BodyGoal's.
 -- Returns 'Left' if any desugaring errors occur.
-desugarQueryGoals :: [P.Module] -> [Term] -> Either [DesugarError] [D.BodyGoal]
+desugarQueryGoals :: [P.Module] -> [Term] -> Either [AnnP DesugarError] [D.BodyGoal]
 desugarQueryGoals mods goals =
   let funSet = buildFunctionSet mods
       (results, errs) =
         runPureEff . runWriter $
-          desugarBodyGoals funSet P.dummyLoc goals
+          desugarBodyGoals funSet P.dummyLoc (Atom "") goals
    in if null errs then Right results else Left errs
 
 -- ---------------------------------------------------------------------------
@@ -381,13 +382,14 @@ runVarNameSupply = evalState (0 :: Int)
 -- | Desugar a list of body terms, flattening any multi-goal expansions
 -- (e.g. non-variable @is@ LHS).
 desugarBodyGoals ::
-  (Writer [DesugarError] :> es) =>
+  (Writer [AnnP DesugarError] :> es) =>
   Set.Set Name ->
   P.SourceLoc ->
+  PExpr ->
   [Term] ->
   Eff es [D.BodyGoal]
-desugarBodyGoals funSet loc terms =
-  runVarNameSupply $ concat <$> traverse (desugarBodyGoal funSet loc) terms
+desugarBodyGoals funSet loc origin terms =
+  runVarNameSupply $ concat <$> traverse (desugarBodyGoal funSet loc origin) terms
 
 -- | Classify a parsed body term into 'D.BodyGoal's.
 --
@@ -406,12 +408,13 @@ desugarBodyGoals funSet loc terms =
 -- 9. Unqualified compound (renamer should have caught this) -> error
 -- 10. Anything else (bare variable, integer, atom, …) -> error
 desugarBodyGoal ::
-  (State Int :> es, Writer [DesugarError] :> es) =>
+  (State Int :> es, Writer [AnnP DesugarError] :> es) =>
   Set.Set Name ->
   P.SourceLoc ->
+  PExpr ->
   Term ->
   Eff es [D.BodyGoal]
-desugarBodyGoal funSet loc t = case t of
+desugarBodyGoal funSet loc origin t = case t of
   CompoundTerm (Unqualified "=") [l, r] -> pure [D.BodyUnify l r]
   CompoundTerm (Unqualified "is") [VarTerm v, expr] ->
     pure [D.BodyIs v expr]
@@ -430,10 +433,10 @@ desugarBodyGoal funSet loc t = case t of
         pure [D.BodyFunctionCall (Unqualified "call_fun") args]
   AtomTerm "true" -> pure [D.BodyTrue]
   CompoundTerm (Unqualified _) _ -> do
-    tell [UnexpectedBodyTerm loc t]
+    tell [AnnP (UnexpectedBodyTerm t) loc origin]
     pure [D.BodyTrue]
   _ -> do
-    tell [UnexpectedBodyTerm loc t]
+    tell [AnnP (UnexpectedBodyTerm t) loc origin]
     pure [D.BodyTrue]
 
 -- ---------------------------------------------------------------------------
@@ -446,7 +449,7 @@ desugarBodyGoal funSet loc t = case t of
 data LiftState = LiftState
   { liftCounter :: !Int,
     liftedFunctions :: [D.Function],
-    liftErrors :: [DesugarError]
+    liftErrors :: [AnnP DesugarError]
   }
 
 -- | Check if a term is a variable or wildcard (the only valid lambda params).
@@ -476,8 +479,8 @@ extractLambdaParams t = ([], t)
 -- @F1 .. Fn@ are the captured free variables; the lambda body itself
 -- is lifted into a fresh top-level 'D.Function'. Returns the updated
 -- state and the rewritten term.
-liftTerm :: Text -> P.SourceLoc -> Set.Set Text -> LiftState -> Term -> (LiftState, Term)
-liftTerm modName loc scope st term = case term of
+liftTerm :: Text -> P.SourceLoc -> PExpr -> Set.Set Text -> LiftState -> Term -> (LiftState, Term)
+liftTerm modName loc origin scope st term = case term of
   CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") _, _] ->
     let (params, body) = extractLambdaParams term
         badParams = [p | p <- params, not (isVarOrWildcard p)]
@@ -485,7 +488,7 @@ liftTerm modName loc scope st term = case term of
         bodyVars = termVars body
         freeVars = Set.toAscList (bodyVars `Set.intersection` scope `Set.difference` paramVarNames)
         innerScope = scope `Set.union` paramVarNames
-        (st', liftedBody) = liftTerm modName loc innerScope st body
+        (st', liftedBody) = liftTerm modName loc origin innerScope st body
         idx = st'.liftCounter
         lambdaName = lambdaPrefix <> T.pack (show idx)
         qualName = Qualified modName lambdaName
@@ -498,7 +501,6 @@ liftTerm modName loc scope st term = case term of
               returnType = Nothing,
               equations =
                 noAnnP
-                  term
                   [ D.Equation
                       { params = allParams,
                         guards = [],
@@ -506,56 +508,56 @@ liftTerm modName loc scope st term = case term of
                       }
                   ]
             }
-        newErrors = map (InvalidLambdaParam loc) badParams
+        newErrors = map (\p -> AnnP (InvalidLambdaParam p) loc origin) badParams
         st'' = st' {liftCounter = idx + 1, liftedFunctions = func : st'.liftedFunctions, liftErrors = newErrors ++ st'.liftErrors}
         lambdaId = modName <> "__" <> lambdaName
         closureArgs = [AtomTerm lambdaId, quoteTerm term] ++ map VarTerm freeVars
      in (st'', CompoundTerm (Unqualified closureFunctor) closureArgs)
   CompoundTerm name args ->
-    let (st', args') = mapAccumL (liftTerm modName loc scope) st args
+    let (st', args') = mapAccumL (liftTerm modName loc origin scope) st args
      in (st', CompoundTerm name args')
   _ -> (st, term)
 
 -- | Lift lambdas in a body goal.
-liftBodyGoal :: Text -> P.SourceLoc -> Set.Set Text -> LiftState -> D.BodyGoal -> (LiftState, D.BodyGoal)
-liftBodyGoal modName loc scope st goal = case goal of
+liftBodyGoal :: Text -> P.SourceLoc -> PExpr -> Set.Set Text -> LiftState -> D.BodyGoal -> (LiftState, D.BodyGoal)
+liftBodyGoal modName loc origin scope st goal = case goal of
   D.BodyIs v expr ->
-    let (st', expr') = liftTerm modName loc scope st expr
+    let (st', expr') = liftTerm modName loc origin scope st expr
      in (st', D.BodyIs v expr')
   D.BodyFunctionCall name args ->
-    let (st', args') = mapAccumL (liftTerm modName loc scope) st args
+    let (st', args') = mapAccumL (liftTerm modName loc origin scope) st args
      in (st', D.BodyFunctionCall name args')
   D.BodyConstraint (Constraint cname cargs) ->
-    let (st', cargs') = mapAccumL (liftTerm modName loc scope) st cargs
+    let (st', cargs') = mapAccumL (liftTerm modName loc origin scope) st cargs
      in (st', D.BodyConstraint (Constraint cname cargs'))
   D.BodyUnify t1 t2 ->
-    let (st', t1') = liftTerm modName loc scope st t1
-        (st'', t2') = liftTerm modName loc scope st' t2
+    let (st', t1') = liftTerm modName loc origin scope st t1
+        (st'', t2') = liftTerm modName loc origin scope st' t2
      in (st'', D.BodyUnify t1' t2')
   D.BodyHostStmt f args ->
-    let (st', args') = mapAccumL (liftTerm modName loc scope) st args
+    let (st', args') = mapAccumL (liftTerm modName loc origin scope) st args
      in (st', D.BodyHostStmt f args')
   D.BodyTrue -> (st, D.BodyTrue)
 
 -- | Lift lambdas in a guard.
-liftGuard :: Text -> P.SourceLoc -> Set.Set Text -> LiftState -> D.Guard -> (LiftState, D.Guard)
-liftGuard modName loc scope st (D.GuardExpr term) =
-  let (st', term') = liftTerm modName loc scope st term
+liftGuard :: Text -> P.SourceLoc -> PExpr -> Set.Set Text -> LiftState -> D.Guard -> (LiftState, D.Guard)
+liftGuard modName loc origin scope st (D.GuardExpr term) =
+  let (st', term') = liftTerm modName loc origin scope st term
    in (st', D.GuardExpr term')
-liftGuard _ _ _ st g = (st, g)
+liftGuard _ _ _ _ st g = (st, g)
 
 -- | Lift lambdas in a function equation. The scope visible to the RHS
 -- (and therefore to any lambda captured inside it) includes the pattern
 -- parameters /and/ the variables introduced by HNF guards — most
 -- importantly 'D.GuardGetArg', which binds the user-written components
 -- of a compound pattern like @maplist(F, [X|Xs]) -> ...@.
-liftEquation :: Text -> P.SourceLoc -> LiftState -> D.Equation -> (LiftState, D.Equation)
-liftEquation modName loc st eq =
+liftEquation :: Text -> P.SourceLoc -> PExpr -> LiftState -> D.Equation -> (LiftState, D.Equation)
+liftEquation modName loc origin st eq =
   let scope =
         Set.unions (map termVars eq.params)
           `Set.union` guardVars eq.guards
-      (st', guards') = mapAccumL (liftGuard modName loc scope) st eq.guards
-      (st'', rhs') = liftTerm modName loc scope st' eq.rhs
+      (st', guards') = mapAccumL (liftGuard modName loc origin scope) st eq.guards
+      (st'', rhs') = liftTerm modName loc origin scope st' eq.rhs
    in (st'', eq {D.guards = guards', D.rhs = rhs'})
 
 -- | Lift lambdas in a function definition.
@@ -568,7 +570,8 @@ liftFunction st func =
             "Desugar.liftFunction: function has an unqualified name \
             \(renamer should have caught this)"
       loc = func.equations.sourceLoc
-      (st', eqs') = mapAccumL (liftEquation modName loc) st func.equations.node
+      origin = func.equations.parsed
+      (st', eqs') = mapAccumL (liftEquation modName loc origin) st func.equations.node
    in (st', func {D.equations = func.equations {node = eqs'}})
 
 -- | Extract all variables from a rule head (kept + removed constraints).
@@ -622,9 +625,11 @@ liftRule st rule =
           `Set.union` bodyGoalVars rule.body.node
       modName = ruleModName headNode
       guardLoc = rule.guard.sourceLoc
+      guardOrigin = rule.guard.parsed
       bodyLoc = rule.body.sourceLoc
-      (st', guards') = mapAccumL (liftGuard modName guardLoc scope) st rule.guard.node
-      (st'', body') = mapAccumL (liftBodyGoal modName bodyLoc scope) st' rule.body.node
+      bodyOrigin = rule.body.parsed
+      (st', guards') = mapAccumL (liftGuard modName guardLoc guardOrigin scope) st rule.guard.node
+      (st'', body') = mapAccumL (liftBodyGoal modName bodyLoc bodyOrigin scope) st' rule.body.node
    in ( st'',
         rule
           { D.guard = rule.guard {node = guards'},
@@ -633,7 +638,7 @@ liftRule st rule =
       )
 
 -- | Post-desugaring pass: lift all lambda expressions into top-level functions.
-liftAllLambdas :: D.Program -> Either [DesugarError] D.Program
+liftAllLambdas :: D.Program -> Either [AnnP DesugarError] D.Program
 liftAllLambdas prog =
   let initState = LiftState 0 [] []
       (st1, functions') = mapAccumL liftFunction initState prog.functions
@@ -651,11 +656,11 @@ liftAllLambdas prog =
 -- and any generated function definitions (to be compiled on the fly).
 -- Uses @\"__query\"@ as the module name for lifted lambdas, and starts
 -- the counter high enough to avoid collisions with program lambdas.
-liftQueryLambdas :: Int -> P.SourceLoc -> [D.BodyGoal] -> Either [DesugarError] ([D.BodyGoal], [D.Function])
-liftQueryLambdas startCounter loc goals =
+liftQueryLambdas :: Int -> P.SourceLoc -> PExpr -> [D.BodyGoal] -> Either [AnnP DesugarError] ([D.BodyGoal], [D.Function])
+liftQueryLambdas startCounter loc origin goals =
   let scope = bodyGoalVars goals
       initState = LiftState startCounter [] []
-      (st, goals') = mapAccumL (liftBodyGoal "__query" loc scope) initState goals
+      (st, goals') = mapAccumL (liftBodyGoal "__query" loc origin scope) initState goals
    in if null st.liftErrors
         then Right (goals', st.liftedFunctions)
         else Left (reverse st.liftErrors)

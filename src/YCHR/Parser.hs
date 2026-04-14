@@ -211,13 +211,14 @@ firstPassTable =
 -- Since the module directive is always at the top of the file, this parser
 -- attempts to parse the first dot-terminated term and extract any @op(...)@
 -- entries from the export list. If no module directive is found, returns @[]@.
-collectOperatorDecls :: String -> Text -> Either (ParseErrorBundle Text Void) [OpDecl]
+collectOperatorDecls :: String -> Text -> Either (ParseErrorBundle Text Void) (AnnP [OpDecl])
 collectOperatorDecls sourceName src = do
   mTerm <- P.parseFirstTerm firstPassTable sourceName src
   pure $ case mTerm of
-    Just (Ann (Compound ":-" [Ann (Compound "module" [_, exports]) _]) _) ->
-      extractOpDeclsFromPExpr exports.node
-    _ -> []
+    Just (Ann (Compound ":-" [body]) loc)
+      | Compound "module" [_, exports] <- body.node ->
+          AnnP (extractOpDeclsFromPExpr exports.node) loc body.node
+    _ -> noAnnP []
 
 -- | Extract 'OpDecl' entries from a PExpr representing an export list.
 extractOpDeclsFromPExpr :: PExpr -> [OpDecl]
@@ -248,7 +249,7 @@ parseOpTypeFromPExpr _ = Nothing
 extractOpDecls :: Module -> [OpDecl]
 extractOpDecls m = case m.exports of
   Nothing -> []
-  Just exports -> [op | OperatorDecl op <- exports]
+  Just annExports -> [op | OperatorDecl op <- annExports.node]
 
 -- ---------------------------------------------------------------------------
 -- PExpr → Term conversion
@@ -319,8 +320,8 @@ unfoldList _ = [] -- non-proper list tail: ignore
 
 -- | Internal directive type.
 data Directive
-  = DirModule Text [Declaration]
-  | DirImport (Ann Import)
+  = DirModule Text SourceLoc PExpr [Declaration]
+  | DirImport (AnnP Import)
   | DirConstraintDecl [Ann Declaration]
   | DirFunctionDecl [Ann Declaration]
   | DirTypeDecl [Ann TypeDefinition]
@@ -330,7 +331,7 @@ data Directive
 data ModuleItem
   = ItemDirective Directive
   | ItemRule Rule
-  | ItemEquation (Ann FunctionEquation)
+  | ItemEquation (AnnP FunctionEquation)
 
 -- | Convert a list of top-level PExpr terms to a 'Module'.
 convertModule :: [Ann PExpr] -> Module
@@ -339,8 +340,8 @@ convertModule terms =
       dirs = [d | ItemDirective d <- items]
       rules = [r | ItemRule r <- items]
       eqs = [e | ItemEquation e <- items]
-      (modName_, modExports_) = case [(n, e) | DirModule n e <- dirs] of
-        ((n, e) : _) -> (n, Just e)
+      (modName_, modExports_) = case [(n, l, p, e) | DirModule n l p e <- dirs] of
+        ((n, l, p, e) : _) -> (n, Just (AnnP e l p))
         [] -> ("<no_module>", Nothing)
       modImports_ = [n | DirImport n <- dirs]
       modDecls_ =
@@ -371,13 +372,13 @@ convertModuleItem expr = case expr.node of
 
 -- | Convert a directive PExpr to a 'Directive'.
 convertDirective :: Ann PExpr -> Directive
-convertDirective (Ann (Compound ":-" [body]) _) = case body.node of
+convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- :- module(name, [exports]).
   Compound "module" [Ann (Atom name) _, exports] ->
-    DirModule name (map convertExportItem (unfoldList exports.node))
+    DirModule name loc body.node (map convertExportItem (unfoldList exports.node))
   -- :- use_module(name).  or  :- use_module(library(name)).
   Compound "use_module" [imp] ->
-    DirImport (convertImport imp)
+    DirImport (convertImport loc body.node imp)
   -- :- chr_constraint leq/2, fib/2.
   -- Parsed as prefix op: Compound "chr_constraint" [body]
   Compound "chr_constraint" [decls] ->
@@ -394,11 +395,11 @@ convertDirective (Ann (Compound ":-" [body]) _) = case body.node of
 convertDirective _ = DirOther
 
 -- | Convert an import PExpr.
-convertImport :: Ann PExpr -> Ann Import
-convertImport (Ann pexpr loc) = case pexpr of
-  Compound "library" [Ann (Atom name) _] -> Ann (LibraryImport name) loc
-  Atom name -> Ann (ModuleImport name) loc
-  _ -> Ann (ModuleImport "<unknown>") loc
+convertImport :: SourceLoc -> PExpr -> Ann PExpr -> AnnP Import
+convertImport dirLoc dirPExpr (Ann pexpr _) = case pexpr of
+  Compound "library" [Ann (Atom name) _] -> AnnP (LibraryImport name) dirLoc dirPExpr
+  Atom name -> AnnP (ModuleImport name) dirLoc dirPExpr
+  _ -> AnnP (ModuleImport "<unknown>") dirLoc dirPExpr
 
 -- | Convert an export item PExpr to a 'Declaration'.
 convertExportItem :: Ann PExpr -> Declaration
@@ -497,38 +498,39 @@ convertRule expr =
       (head_, guardBody) = case ruleExpr.node of
         Compound "<=>" [h, gb] -> (convertHead h, gb)
         Compound "==>" [h, gb] -> (convertPropagationHead h, gb)
-        _ -> (noAnn (Simplification []), ruleExpr) -- fallback
+        _ -> (noAnnP (Simplification []), ruleExpr) -- fallback
       (guard_, body_) = splitGuardBody guardBody
    in Rule mName head_ guard_ body_
 
 -- | Convert the head of a simplification or simpagation rule.
-convertHead :: Ann PExpr -> Ann Head
-convertHead expr@(Ann pexpr loc) = case pexpr of
+convertHead :: Ann PExpr -> AnnP Head
+convertHead (Ann pexpr loc) = case pexpr of
   Compound "\\" [kept, removed] ->
-    Ann
+    AnnP
       ( Simpagation
           (map convertConstraint (flattenComma kept))
           (map convertConstraint (flattenComma removed))
       )
       loc
+      pexpr
   _ ->
-    Ann (Simplification (map convertConstraint (flattenComma expr))) loc
+    AnnP (Simplification (map convertConstraint (flattenComma (Ann pexpr loc)))) loc pexpr
 
 -- | Convert the head of a propagation rule.
-convertPropagationHead :: Ann PExpr -> Ann Head
-convertPropagationHead expr =
-  Ann (Propagation (map convertConstraint (flattenComma expr))) expr.sourceLoc
+convertPropagationHead :: Ann PExpr -> AnnP Head
+convertPropagationHead (Ann pexpr loc) =
+  AnnP (Propagation (map convertConstraint (flattenComma (Ann pexpr loc)))) loc pexpr
 
 -- | Split a guard|body PExpr into guard and body term lists.
-splitGuardBody :: Ann PExpr -> (Ann [Term], Ann [Term])
+splitGuardBody :: Ann PExpr -> (AnnP [Term], AnnP [Term])
 splitGuardBody expr = case expr.node of
   Compound "|" [guard_, body_] ->
-    ( Ann (map convertTerm (flattenComma guard_)) guard_.sourceLoc,
-      Ann (map convertTerm (flattenComma body_)) body_.sourceLoc
+    ( AnnP (map convertTerm (flattenComma guard_)) guard_.sourceLoc guard_.node,
+      AnnP (map convertTerm (flattenComma body_)) body_.sourceLoc body_.node
     )
   _ ->
-    ( Ann [] expr.sourceLoc,
-      Ann (map convertTerm (flattenComma expr)) expr.sourceLoc
+    ( AnnP [] expr.sourceLoc (Atom ""),
+      AnnP (map convertTerm (flattenComma expr)) expr.sourceLoc expr.node
     )
 
 -- ---------------------------------------------------------------------------
@@ -536,34 +538,36 @@ splitGuardBody expr = case expr.node of
 -- ---------------------------------------------------------------------------
 
 -- | Convert a top-level PExpr to a 'FunctionEquation'.
-convertFunctionEquation :: Ann PExpr -> Ann FunctionEquation
-convertFunctionEquation expr@(Ann pexpr loc) = case pexpr of
+convertFunctionEquation :: Ann PExpr -> AnnP FunctionEquation
+convertFunctionEquation (Ann pexpr loc) = case pexpr of
   Compound "->" [lhs, rhs] ->
     case lhs.node of
       -- Guarded: lhs_pattern | guard -> rhs
       Compound "|" [pat, guard_] ->
         let (name, args) = extractFunNameArgs pat
-         in Ann
+         in AnnP
               ( FunctionEquation
                   name
                   args
-                  (Ann (map convertTerm (flattenComma guard_)) guard_.sourceLoc)
-                  (Ann (convertTerm rhs) rhs.sourceLoc)
+                  (AnnP (map convertTerm (flattenComma guard_)) guard_.sourceLoc guard_.node)
+                  (AnnP (convertTerm rhs) rhs.sourceLoc rhs.node)
               )
               loc
+              pexpr
       -- Unguarded: lhs_pattern -> rhs
       _ ->
         let (name, args) = extractFunNameArgs lhs
-         in Ann
+         in AnnP
               ( FunctionEquation
                   name
                   args
-                  (Ann [] lhs.sourceLoc)
-                  (Ann (convertTerm rhs) rhs.sourceLoc)
+                  (AnnP [] lhs.sourceLoc (Atom ""))
+                  (AnnP (convertTerm rhs) rhs.sourceLoc rhs.node)
               )
               loc
+              pexpr
   _ ->
-    Ann (FunctionEquation "<unknown>" [] (Ann [] loc) (Ann (convertTerm expr) loc)) loc
+    AnnP (FunctionEquation "<unknown>" [] (AnnP [] loc (Atom "")) (AnnP (convertTerm (Ann pexpr loc)) loc pexpr)) loc pexpr
 
 -- | Extract the function name and argument list from an equation LHS.
 --

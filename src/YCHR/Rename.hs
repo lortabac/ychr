@@ -49,19 +49,20 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Effectful (Eff, runPureEff)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
+import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
 import YCHR.Rename.Types
 import YCHR.Types
 
 data RenameError
-  = AmbiguousName SourceLoc Text Int [Text]
-  | UnknownName SourceLoc Text Int
+  = AmbiguousName Text Int [Text]
+  | UnknownName Text Int
   | UnknownExport Text Text Int
   deriving (Eq, Show)
 
 data RenameWarning
-  = UndeclaredDataConstructor SourceLoc Text
-  | DataConstructorArityMismatch SourceLoc Text Int
+  = UndeclaredDataConstructor Text
+  | DataConstructorArityMismatch Text Int
   deriving (Eq, Show)
 
 -- | Maps data constructor names to their declared arities (from type
@@ -69,13 +70,13 @@ data RenameWarning
 -- different types.
 type DataConEnv = Map Text [Int]
 
-type RenameEffs = '[Writer [RenameWarning], Writer [RenameError]]
+type RenameEffs = '[Writer [AnnP RenameWarning], Writer [AnnP RenameError]]
 
-emitError :: RenameError -> Eff RenameEffs ()
-emitError e = tell @[RenameError] [e]
+emitError :: AnnP RenameError -> Eff RenameEffs ()
+emitError e = tell @[AnnP RenameError] [e]
 
-emitWarning :: RenameWarning -> Eff RenameEffs ()
-emitWarning w = tell @[RenameWarning] [w]
+emitWarning :: AnnP RenameWarning -> Eff RenameEffs ()
+emitWarning w = tell @[AnnP RenameWarning] [w]
 
 -- | Global environments consulted while renaming one module. Bundled
 -- into a record so recursive helpers don't have to thread six parameters.
@@ -132,7 +133,7 @@ buildExportEnv mods =
     | m <- mods,
       d <- case m.exports of
         Nothing -> map (.node) m.decls
-        Just exports -> filter isConstraintOrFunctionDecl exports
+        Just annExports -> filter isConstraintOrFunctionDecl annExports.node
     ]
 
 -- | All type declarations across all modules.
@@ -153,7 +154,7 @@ buildTypeExportEnv mods =
     | m <- mods,
       d <- case m.exports of
         Nothing -> [TypeExportDecl (unqualifiedText td.name) (length td.typeVars) | Ann td _ <- m.typeDecls]
-        Just exports -> filter isTypeExportDecl exports
+        Just annExports -> filter isTypeExportDecl annExports.node
     ]
 
 isConstraintOrFunctionDecl :: Declaration -> Bool
@@ -177,7 +178,7 @@ unqualifiedText (Qualified _ t) = t
 -- Entry points
 -- ---------------------------------------------------------------------------
 
-renameProgram :: [Module] -> Either [RenameError] ([Module], [RenameWarning])
+renameProgram :: [Module] -> Either [AnnP RenameError] ([Module], [AnnP RenameWarning])
 renameProgram mods =
   let baseCtx =
         RenameCtx
@@ -189,7 +190,7 @@ renameProgram mods =
             currentModule = error "currentModule: not yet set"
           }
       ctxFor m = baseCtx {currentModule = m}
-      ((result, warnings), errs) = runPureEff . runWriter @[RenameError] . runWriter @[RenameWarning] $ do
+      ((result, warnings), errs) = runPureEff . runWriter @[AnnP RenameError] . runWriter @[AnnP RenameWarning] $ do
         validateExports mods
         traverse (\m -> renameModule (ctxFor m)) mods
    in if null errs then Right (result, warnings) else Left errs
@@ -200,15 +201,15 @@ validateExports = traverse_ validateOne
   where
     validateOne m = case m.exports of
       Nothing -> pure ()
-      Just exports -> traverse_ (checkExport m) exports
+      Just (AnnP exports loc origin) -> traverse_ (checkExport m loc origin) exports
 
-    checkExport m d = case d of
+    checkExport m loc origin d = case d of
       ConstraintDecl {name, arity}
-        | not (isDeclared m name arity) -> emitError (UnknownExport m.name name arity)
+        | not (isDeclared m name arity) -> emitError (AnnP (UnknownExport m.name name arity) loc origin)
       FunctionDecl {name, arity}
-        | not (isDeclared m name arity) -> emitError (UnknownExport m.name name arity)
+        | not (isDeclared m name arity) -> emitError (AnnP (UnknownExport m.name name arity) loc origin)
       TypeExportDecl name arity
-        | not (isTypeDeclared m name arity) -> emitError (UnknownExport m.name name arity)
+        | not (isTypeDeclared m name arity) -> emitError (AnnP (UnknownExport m.name name arity) loc origin)
       _ -> pure ()
 
     isDeclared m n a = (n, a) `elem` [(d.name, d.arity) | Ann d _ <- m.decls]
@@ -228,30 +229,31 @@ renameModule ctx = do
 
 renameRule :: RenameCtx -> Rule -> Eff RenameEffs Rule
 renameRule ctx r = do
-  h <- traverse (renameHead ctx r.head.sourceLoc) r.head
-  g <- traverse (traverse (renameTerm ctx r.guard.sourceLoc ResolveAll)) r.guard
-  b <- traverse (traverse (renameTerm ctx r.body.sourceLoc ResolveTop)) r.body
+  h <- traverse (renameHead ctx r.head.sourceLoc r.head.parsed) r.head
+  g <- traverse (traverse (renameTerm ctx r.guard.sourceLoc r.guard.parsed ResolveAll)) r.guard
+  b <- traverse (traverse (renameTerm ctx r.body.sourceLoc r.body.parsed ResolveTop)) r.body
   pure r {head = h, guard = g, body = b}
 
 renameEquation :: RenameCtx -> FunctionEquation -> Eff RenameEffs FunctionEquation
 renameEquation ctx eq = do
   -- Equation args don't carry their own SourceLoc; use the guard's as a proxy.
   let loc = eq.guard.sourceLoc
-  renamedArgs <- traverse (renameTerm ctx loc NoResolve) eq.args
-  renamedGuard <- traverse (traverse (renameTerm ctx loc ResolveAll)) eq.guard
-  renamedRhs <- traverse (renameTerm ctx eq.rhs.sourceLoc ResolveAll) eq.rhs
+      origin = eq.guard.parsed
+  renamedArgs <- traverse (renameTerm ctx loc origin NoResolve) eq.args
+  renamedGuard <- traverse (traverse (renameTerm ctx loc origin ResolveAll)) eq.guard
+  renamedRhs <- traverse (renameTerm ctx eq.rhs.sourceLoc eq.rhs.parsed ResolveAll) eq.rhs
   pure eq {args = renamedArgs, guard = renamedGuard, rhs = renamedRhs}
 
-renameHead :: RenameCtx -> SourceLoc -> Head -> Eff RenameEffs Head
-renameHead ctx loc h = case h of
-  Simplification cs -> Simplification <$> traverse (renameCon ctx loc) cs
-  Propagation cs -> Propagation <$> traverse (renameCon ctx loc) cs
-  Simpagation k r -> Simpagation <$> traverse (renameCon ctx loc) k <*> traverse (renameCon ctx loc) r
+renameHead :: RenameCtx -> SourceLoc -> PExpr -> Head -> Eff RenameEffs Head
+renameHead ctx loc origin h = case h of
+  Simplification cs -> Simplification <$> traverse (renameCon ctx loc origin) cs
+  Propagation cs -> Propagation <$> traverse (renameCon ctx loc origin) cs
+  Simpagation k r -> Simpagation <$> traverse (renameCon ctx loc origin) k <*> traverse (renameCon ctx loc origin) r
 
-renameCon :: RenameCtx -> SourceLoc -> Constraint -> Eff RenameEffs Constraint
-renameCon ctx loc (Constraint cname cargs) = do
-  renamedName <- resolveName ResolveTop ctx loc cname (length cargs)
-  renamedArgs <- traverse (renameTerm ctx loc NoResolve) cargs
+renameCon :: RenameCtx -> SourceLoc -> PExpr -> Constraint -> Eff RenameEffs Constraint
+renameCon ctx loc origin (Constraint cname cargs) = do
+  renamedName <- resolveName ResolveTop ctx loc origin cname (length cargs)
+  renamedArgs <- traverse (renameTerm ctx loc origin NoResolve) cargs
   pure (Constraint renamedName renamedArgs)
 
 -- ---------------------------------------------------------------------------
@@ -286,36 +288,36 @@ errorOnUnknown :: ResolveMode -> Bool
 errorOnUnknown ResolveTop = True
 errorOnUnknown _ = False
 
-renameTerm :: RenameCtx -> SourceLoc -> ResolveMode -> Term -> Eff RenameEffs Term
-renameTerm ctx loc mode t = case t of
+renameTerm :: RenameCtx -> SourceLoc -> PExpr -> ResolveMode -> Term -> Eff RenameEffs Term
+renameTerm ctx loc origin mode t = case t of
   -- Special case: @is@ LHS is a pattern (no resolution), RHS is an expression.
   CompoundTerm (Unqualified "is") [lhs, rhs] | mode /= NoResolve -> do
-    renamedLhs <- renameTerm ctx loc NoResolve lhs
-    renamedRhs <- renameTerm ctx loc ResolveAll rhs
+    renamedLhs <- renameTerm ctx loc origin NoResolve lhs
+    renamedRhs <- renameTerm ctx loc origin ResolveAll rhs
     pure (CompoundTerm (Unqualified "is") [renamedLhs, renamedRhs])
   -- Lambda: @fun(params) -> body@. Params are variable patterns (don't resolve),
   -- the body is always an expression.
   CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body] | mode /= NoResolve -> do
-    renamedBody <- renameTerm ctx loc ResolveAll body
+    renamedBody <- renameTerm ctx loc origin ResolveAll body
     pure (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, renamedBody])
   -- Function reference: @name/arity@. Resolve the function name.
   CompoundTerm (Unqualified "/") [AtomTerm fname, IntTerm farity] | mode /= NoResolve -> do
-    resolved <- resolveName ResolveAll ctx loc (Unqualified fname) farity
+    resolved <- resolveName ResolveAll ctx loc origin (Unqualified fname) farity
     pure (CompoundTerm (Unqualified "/") [AtomTerm (flattenName resolved), IntTerm farity])
   CompoundTerm name args -> do
     let childMode = case mode of
           NoResolve -> NoResolve
           ResolveTop -> NoResolve
           ResolveAll -> ResolveAll
-    renamedArgs <- traverse (renameTerm ctx loc childMode) args
+    renamedArgs <- traverse (renameTerm ctx loc origin childMode) args
     newName <- case mode of
       NoResolve -> pure name
-      _ -> resolveName mode ctx loc name (length args)
+      _ -> resolveName mode ctx loc origin name (length args)
     pure (CompoundTerm newName renamedArgs)
   -- Zero-arity atom promotion: if a bare atom matches a declared
   -- constraint or function with arity 0, promote it to a 'CompoundTerm'.
   AtomTerm n | mode /= NoResolve -> do
-    resolved <- resolveName ResolveAll ctx loc (Unqualified n) 0
+    resolved <- resolveName ResolveAll ctx loc origin (Unqualified n) 0
     case resolved of
       Qualified _ _ -> pure (CompoundTerm resolved [])
       Unqualified _ -> pure (AtomTerm n)
@@ -337,8 +339,8 @@ renameTerm ctx loc mode t = case t of
 -- reference @M:n@ is accepted only if @M@ is the current module (via
 -- 'DeclEnv') or if @M@ is imported and exports @n@ (via 'ExportEnv').
 -- Names qualified with @\"host\"@ are external calls and bypass validation.
-resolveName :: ResolveMode -> RenameCtx -> SourceLoc -> Name -> Int -> Eff RenameEffs Name
-resolveName mode ctx loc (Unqualified n) arity
+resolveName :: ResolveMode -> RenameCtx -> SourceLoc -> PExpr -> Name -> Int -> Eff RenameEffs Name
+resolveName mode ctx loc origin (Unqualified n) arity
   | isReserved n = pure (Unqualified n)
   | otherwise =
       case visibleProviders ctx n arity of
@@ -346,22 +348,22 @@ resolveName mode ctx loc (Unqualified n) arity
         [] ->
           if errorOnUnknown mode
             then do
-              emitError (UnknownName loc n arity)
+              emitError (AnnP (UnknownName n arity) loc origin)
               pure (Unqualified n)
             else do
-              warnUnknownDataCon ctx.dataConEnv loc n arity
+              warnUnknownDataCon ctx.dataConEnv loc origin n arity
               pure (Unqualified n)
         ms -> do
-          emitError (AmbiguousName loc n arity ms)
+          emitError (AnnP (AmbiguousName n arity ms) loc origin)
           pure (Unqualified n)
 -- "host"-qualified names are external calls; skip validation.
-resolveName _ _ _ (Qualified "host" n) _ = pure (Qualified "host" n)
-resolveName mode ctx loc (Qualified m n) arity
+resolveName _ _ _ _ (Qualified "host" n) _ = pure (Qualified "host" n)
+resolveName mode ctx loc origin (Qualified m n) arity
   | m `elem` visibleProviders ctx n arity = pure (Qualified m n)
   | otherwise =
       if errorOnUnknown mode
         then do
-          emitError (UnknownName loc n arity)
+          emitError (AnnP (UnknownName n arity) loc origin)
           pure (Qualified m n)
         else pure (Qualified m n)
 
@@ -371,20 +373,20 @@ resolveName mode ctx loc (Qualified m n) arity
 visibleProviders :: RenameCtx -> Text -> Int -> [Text]
 visibleProviders ctx n arity =
   let ownProviders = filter (== ctx.currentModule.name) (lookupDecl (n, arity) ctx.declEnv)
-      importNames = [mn | Ann (ModuleImport mn) _ <- ctx.currentModule.imports]
+      importNames = [mn | AnnP (ModuleImport mn) _ _ <- ctx.currentModule.imports]
       importProviders = filter (`elem` importNames) (lookupExport (n, arity) ctx.exportEnv)
    in ownProviders ++ importProviders
 
 -- | Check an unresolved name against data-constructor declarations.
 -- If found with matching arity: silent. If found with wrong arity: warning.
 -- If not found at all: warning.
-warnUnknownDataCon :: DataConEnv -> SourceLoc -> Text -> Int -> Eff RenameEffs ()
-warnUnknownDataCon dataConEnv loc n arity =
+warnUnknownDataCon :: DataConEnv -> SourceLoc -> PExpr -> Text -> Int -> Eff RenameEffs ()
+warnUnknownDataCon dataConEnv loc origin n arity =
   case Map.lookup n dataConEnv of
     Just arities
       | arity `elem` arities -> pure ()
-      | otherwise -> emitWarning (DataConstructorArityMismatch loc n arity)
-    Nothing -> emitWarning (UndeclaredDataConstructor loc n)
+      | otherwise -> emitWarning (AnnP (DataConstructorArityMismatch n arity) loc origin)
+    Nothing -> emitWarning (AnnP (UndeclaredDataConstructor n) loc origin)
 
 -- ---------------------------------------------------------------------------
 -- Type definition renaming
@@ -426,7 +428,7 @@ renameTypeExpr ctx (TypeCon n args) =
 resolveTypeName :: RenameCtx -> Text -> Int -> Name
 resolveTypeName ctx n arity =
   let ownProviders = filter (== ctx.currentModule.name) (lookupDecl (n, arity) ctx.typeDeclEnv)
-      importNames = [mn | Ann (ModuleImport mn) _ <- ctx.currentModule.imports]
+      importNames = [mn | AnnP (ModuleImport mn) _ _ <- ctx.currentModule.imports]
       importProviders = filter (`elem` importNames) (lookupExport (n, arity) ctx.typeExportEnv)
       matches = ownProviders ++ importProviders
    in case matches of
@@ -440,12 +442,12 @@ resolveTypeName ctx n arity =
 -- | Rename a list of query goal terms using all modules as the visible
 -- scope. Each term is renamed at 'ResolveTop' level (same as rule bodies).
 -- Returns 'Left' if any rename errors occur.
-renameQueryGoals :: [Module] -> [Term] -> Either [RenameError] ([Term], [RenameWarning])
+renameQueryGoals :: [Module] -> [Term] -> Either [AnnP RenameError] ([Term], [AnnP RenameWarning])
 renameQueryGoals mods goals =
   let queryMod =
         Module
           { name = "<query>",
-            imports = [noAnn (ModuleImport m.name) | m <- mods],
+            imports = [noAnnP (ModuleImport m.name) | m <- mods],
             decls = [],
             typeDecls = [],
             rules = [],
@@ -462,8 +464,8 @@ renameQueryGoals mods goals =
             currentModule = queryMod
           }
       ((renamed, warnings), errs) =
-        runPureEff . runWriter @[RenameError] . runWriter @[RenameWarning] $
-          traverse (renameTerm ctx dummyLoc ResolveTop) goals
+        runPureEff . runWriter @[AnnP RenameError] . runWriter @[AnnP RenameWarning] $
+          traverse (renameTerm ctx dummyLoc (Atom "") ResolveTop) goals
    in if null errs then Right (renamed, warnings) else Left errs
 
 {- ---------------------------------------------------------------------------

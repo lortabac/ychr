@@ -53,7 +53,7 @@ moduleTests =
         module' "Foo" @?= Module "Foo" [] [] [] [] [] Nothing,
       testCase "importing sets modImports" $
         module' "Foo" `importing` ["Bar", "Baz"]
-          @?= Module "Foo" [noAnn (ModuleImport "Bar"), noAnn (ModuleImport "Baz")] [] [] [] [] Nothing,
+          @?= Module "Foo" [noAnnP (ModuleImport "Bar"), noAnnP (ModuleImport "Baz")] [] [] [] [] Nothing,
       testCase "declaring sets modDecls" $
         module' "Foo" `declaring` ["leq" // 2]
           @?= Module "Foo" [] [noAnn (ConstraintDecl "leq" 2 Nothing)] [] [] [] Nothing,
@@ -67,10 +67,10 @@ moduleTests =
               `importing` ["A"]
               `declaring` ["c" // 0]
               `defining` [r]
-              @?= Module "M" [noAnn (ModuleImport "A")] [noAnn (ConstraintDecl "c" 0 Nothing)] [] [r] [] Nothing,
+              @?= Module "M" [noAnnP (ModuleImport "A")] [noAnn (ConstraintDecl "c" 0 Nothing)] [] [r] [] Nothing,
       testCase "exporting sets modExports" $
         module' "Foo" `exporting` ["leq" // 2]
-          @?= Module "Foo" [] [] [] [] [] (Just [ConstraintDecl "leq" 2 Nothing])
+          @?= Module "Foo" [] [] [] [] [] (Just (noAnnP [ConstraintDecl "leq" 2 Nothing]))
     ]
 
 declarationTests :: TestTree
@@ -89,23 +89,23 @@ ruleTests =
     "rule"
     [ testCase "(<=>): simplification rule" $
         [con "a" []] <=> [atom "true"]
-          @?= Rule Nothing (noAnn (Simplification [con "a" []])) (noAnn []) (noAnn [atom "true"]),
+          @?= Rule Nothing (noAnnP (Simplification [con "a" []])) (noAnnP []) (noAnnP [atom "true"]),
       testCase "(==>): propagation rule" $
         [con "a" []] ==> [func "b" []]
-          @?= Rule Nothing (noAnn (Propagation [con "a" []])) (noAnn []) (noAnn [func "b" []]),
+          @?= Rule Nothing (noAnnP (Propagation [con "a" []])) (noAnnP []) (noAnnP [func "b" []]),
       testCase "(\\): simpagation rule" $
         ([con "k" []] \\ [con "r" []]) [atom "true"]
-          @?= Rule Nothing (noAnn (Simpagation [con "k" []] [con "r" []])) (noAnn []) (noAnn [atom "true"]),
+          @?= Rule Nothing (noAnnP (Simpagation [con "k" []] [con "r" []])) (noAnnP []) (noAnnP [atom "true"]),
       testCase "(@:): sets rule name" $
         "my_rule" @: ([con "a" []] <=> [atom "true"])
-          @?= Rule (Just (noAnn "my_rule")) (noAnn (Simplification [con "a" []])) (noAnn []) (noAnn [atom "true"]),
+          @?= Rule (Just (noAnn "my_rule")) (noAnnP (Simplification [con "a" []])) (noAnnP []) (noAnnP [atom "true"]),
       testCase "(|-): sets rule guard" $
         ([con "a" [var "X"]] <=> [atom "true"]) |- [var "X" .=. atom "zero"]
           @?= Rule
             Nothing
-            (noAnn (Simplification [con "a" [var "X"]]))
-            (noAnn [var "X" .=. atom "zero"])
-            (noAnn [atom "true"])
+            (noAnnP (Simplification [con "a" [var "X"]]))
+            (noAnnP [var "X" .=. atom "zero"])
+            (noAnnP [atom "true"])
     ]
 
 constraintTests :: TestTree
@@ -160,9 +160,9 @@ integrationTests =
             []
             [ Rule
                 (Just (noAnn "refl"))
-                (noAnn (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
-                (noAnn [])
-                (noAnn [AtomTerm "true"])
+                (noAnnP (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
+                (noAnnP [])
+                (noAnnP [AtomTerm "true"])
             ]
             []
             Nothing,
@@ -170,20 +170,20 @@ integrationTests =
         logicModule
           @?= Module
             "Logic"
-            [noAnn (ModuleImport "Order")]
+            [noAnnP (ModuleImport "Order")]
             []
             []
             [ Rule
                 (Just (noAnn "trans"))
-                ( noAnn
+                ( noAnnP
                     ( Propagation
                         [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
                           Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "Z"]
                         ]
                     )
                 )
-                (noAnn [])
-                (noAnn [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
+                (noAnnP [])
+                (noAnnP [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
             ]
             []
             Nothing

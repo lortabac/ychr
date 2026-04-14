@@ -182,6 +182,7 @@ library
 
     -- Other library packages from which modules are imported.
     build-depends:    base ^>=4.21.0.0
+                    , ansi-terminal
                     , containers
                     , directory
                     , effectful-core

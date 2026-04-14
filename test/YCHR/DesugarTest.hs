@@ -8,8 +8,8 @@ import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import YCHR.DSL
 import YCHR.Desugar (DesugarError (..), desugarProgram, extractSymbolTable, liftAllLambdas)
 import YCHR.Desugared qualified as D
+import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
-import YCHR.Pretty (AnnP (..), noAnnP)
 import YCHR.Types (ConstraintType (..), Identifier (..), Name (..), lookupSymbol, mkSymbolTable, symbolTableSize)
 
 getNode :: AnnP a -> a
@@ -50,7 +50,7 @@ leqQual2 :: Constraint
 leqQual2 = "M" .: con "leq" [var "A", var "B"]
 
 mod1rule :: Head -> Rule
-mod1rule h = Rule Nothing (noAnn h) (noAnn []) (noAnn [atom "true"])
+mod1rule h = Rule Nothing (noAnnP h) (noAnnP []) (noAnnP [atom "true"])
 
 simpleModule :: Head -> Module
 simpleModule h = module' "M" `defining` [mod1rule h]
@@ -136,9 +136,9 @@ hnfTests =
               module' "M"
                 `defining` [ Rule
                                Nothing
-                               (noAnn (Simplification ["M" .: con "leq" [var "X", var "X"]]))
-                               (noAnn [func "gt" [var "X", IntTerm 0]])
-                               (noAnn [atom "true"])
+                               (noAnnP (Simplification ["M" .: con "leq" [var "X", var "X"]]))
+                               (noAnnP [func "gt" [var "X", IntTerm 0]])
+                               (noAnnP [atom "true"])
                            ]
         rule <- singleRule [m]
         getNode rule.guard
@@ -173,21 +173,21 @@ guardTests =
     [ testCase "== becomes GuardExpr" $ do
         let m =
               module' "M"
-                `defining` [ Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [func "==" [var "X", var "Y"]]) (noAnn [atom "true"])
+                `defining` [ Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [func "==" [var "X", var "Y"]]) (noAnnP [atom "true"])
                            ]
         rule <- singleRule [m]
         getNode rule.guard @?= [D.GuardExpr (CompoundTerm (Unqualified "==") [VarTerm "X", VarTerm "Y"])],
       testCase "host call becomes GuardExpr" $ do
         let m =
               module' "M"
-                `defining` [ Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [func "gt" [var "X", IntTerm 0]]) (noAnn [atom "true"])
+                `defining` [ Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [func "gt" [var "X", IntTerm 0]]) (noAnnP [atom "true"])
                            ]
         rule <- singleRule [m]
         getNode rule.guard @?= [D.GuardExpr (CompoundTerm (Unqualified "gt") [VarTerm "X", IntTerm 0])],
       testCase "atom true becomes GuardExpr" $ do
         let m =
               module' "M"
-                `defining` [ Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [atom "true"]) (noAnn [atom "true"])
+                `defining` [ Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [atom "true"]) (noAnnP [atom "true"])
                            ]
         rule <- singleRule [m]
         getNode rule.guard @?= [D.GuardExpr (AtomTerm "true")]
@@ -219,7 +219,7 @@ bodyTests =
         getNode rule.body @?= [D.BodyTrue]
     ]
   where
-    simpleModule' h body = module' "M" `defining` [Rule Nothing (noAnn h) (noAnn []) (noAnn body)]
+    simpleModule' h body = module' "M" `defining` [Rule Nothing (noAnnP h) (noAnnP []) (noAnnP body)]
 
 --------------------------------------------------------------------------------
 -- Error handling
@@ -231,38 +231,38 @@ errorTests =
     "error-handling"
     [ testCase "unqualified compound in body produces UnexpectedBodyTerm" $ do
         let badTerm = func "foo" [var "X"]
-            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn []) (noAnn [badTerm])]
+            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc badTerm]
+          Left errs -> errs @?= [AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom "")]
           Right _ -> assertFailure "expected Left",
       testCase "two unqualified compounds collect both errors" $ do
         let bad1 = func "foo" [var "X"]
             bad2 = func "bar" [var "Y"]
-            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn []) (noAnn [bad1, bad2])]
+            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [bad1, bad2])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc bad1, UnexpectedBodyTerm dummyLoc bad2]
+          Left errs -> errs @?= [AnnP (UnexpectedBodyTerm bad1) dummyLoc (Atom ""), AnnP (UnexpectedBodyTerm bad2) dummyLoc (Atom "")]
           Right _ -> assertFailure "expected Left",
       testCase "bare variable in body produces UnexpectedBodyTerm" $ do
         let badTerm = var "X"
-            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn []) (noAnn [badTerm])]
+            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc badTerm]
+          Left errs -> errs @?= [AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom "")]
           Right _ -> assertFailure "expected Left",
       testCase "bare integer in body produces UnexpectedBodyTerm" $ do
         let badTerm = int 42
-            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn []) (noAnn [badTerm])]
+            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc badTerm]
+          Left errs -> errs @?= [AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom "")]
           Right _ -> assertFailure "expected Left",
       testCase "non-true atom in body produces UnexpectedBodyTerm" $ do
         let badTerm = atom "foo"
-            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn []) (noAnn [badTerm])]
+            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
         case desugarProgram [m] of
-          Left errs -> errs @?= [UnexpectedBodyTerm dummyLoc badTerm]
+          Left errs -> errs @?= [AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom "")]
           Right _ -> assertFailure "expected Left",
       testCase "bare variable in guard becomes GuardExpr" $ do
         let term = var "X"
-            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [term]) (noAnn [atom "true"])]
+            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [term]) (noAnnP [atom "true"])]
         case desugarProgram [m] of
           Left errs -> assertFailure ("unexpected errors: " ++ show errs)
           Right prog -> do
@@ -270,7 +270,7 @@ errorTests =
             getNode rule.guard @?= [D.GuardExpr (VarTerm "X")],
       testCase "bare integer in guard becomes GuardExpr" $ do
         let term = int 42
-            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [term]) (noAnn [atom "true"])]
+            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [term]) (noAnnP [atom "true"])]
         case desugarProgram [m] of
           Left errs -> assertFailure ("unexpected errors: " ++ show errs)
           Right prog -> do
@@ -278,7 +278,7 @@ errorTests =
             getNode rule.guard @?= [D.GuardExpr (IntTerm 42)],
       testCase "non-true atom in guard becomes GuardExpr" $ do
         let term = atom "foo"
-            m = module' "M" `defining` [Rule Nothing (noAnn (Simplification [leqQual])) (noAnn [term]) (noAnn [atom "true"])]
+            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [term]) (noAnnP [atom "true"])]
         case desugarProgram [m] of
           Left errs -> assertFailure ("unexpected errors: " ++ show errs)
           Right prog -> do
@@ -341,9 +341,9 @@ symbolTableTests =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (Simplification [] :: Head) (D.Head [] [Constraint (Qualified "M" "leq") []]))
-                    (noAnnP ([] :: [Term]) [])
-                    (noAnnP ([] :: [Term]) [])
+                    (noAnnP (D.Head [] [Constraint (Qualified "M" "leq") []]))
+                    (noAnnP [])
+                    (noAnnP [])
                 ]
                 []
                 Map.empty
@@ -354,9 +354,9 @@ symbolTableTests =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (Simplification [] :: Head) (D.Head [] [Constraint (Qualified "A" "c") [], Constraint (Qualified "B" "d") []]))
-                    (noAnnP ([] :: [Term]) [])
-                    (noAnnP ([] :: [Term]) [])
+                    (noAnnP (D.Head [] [Constraint (Qualified "A" "c") [], Constraint (Qualified "B" "d") []]))
+                    (noAnnP [])
+                    (noAnnP [])
                 ]
                 []
                 Map.empty
@@ -368,9 +368,9 @@ symbolTableTests =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (Simplification [] :: Head) (D.Head [] [Constraint (Qualified "M" "leq") []]))
-                    (noAnnP ([] :: [Term]) [])
-                    (noAnnP ([] :: [Term]) [D.BodyConstraint (Constraint (Qualified "M" "leq") [])])
+                    (noAnnP (D.Head [] [Constraint (Qualified "M" "leq") []]))
+                    (noAnnP [])
+                    (noAnnP [D.BodyConstraint (Constraint (Qualified "M" "leq") [])])
                 ]
                 []
                 Map.empty
@@ -381,9 +381,9 @@ symbolTableTests =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (Simplification [] :: Head) (D.Head [] [Constraint (Qualified "M" "leq") []]))
-                    (noAnnP ([] :: [Term]) [])
-                    (noAnnP ([] :: [Term]) [D.BodyHostStmt "print" []])
+                    (noAnnP (D.Head [] [Constraint (Qualified "M" "leq") []]))
+                    (noAnnP [])
+                    (noAnnP [D.BodyHostStmt "print" []])
                 ]
                 []
                 Map.empty
@@ -397,7 +397,6 @@ symbolTableTests =
                 [ D.Rule
                     Nothing
                     ( noAnnP
-                        (Simplification [] :: Head)
                         ( D.Head
                             []
                             [ Constraint (Qualified "A" "z") [],
@@ -405,8 +404,8 @@ symbolTableTests =
                             ]
                         )
                     )
-                    (noAnnP ([] :: [Term]) [])
-                    (noAnnP ([] :: [Term]) [])
+                    (noAnnP [])
+                    (noAnnP [])
                 ]
                 []
                 Map.empty
@@ -419,9 +418,9 @@ symbolTableTests =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (Simplification [] :: Head) (D.Head [] [Constraint (Qualified "M" "foo") [VarTerm "X"]]))
-                    (noAnnP ([] :: [Term]) [])
-                    (noAnnP ([] :: [Term]) [D.BodyConstraint (Constraint (Qualified "M" "foo") [VarTerm "X", VarTerm "Y"])])
+                    (noAnnP (D.Head [] [Constraint (Qualified "M" "foo") [VarTerm "X"]]))
+                    (noAnnP [])
+                    (noAnnP [D.BodyConstraint (Constraint (Qualified "M" "foo") [VarTerm "X", VarTerm "Y"])])
                 ]
                 []
                 Map.empty
@@ -461,12 +460,12 @@ lambdaLiftTests =
                     returnType = Nothing
                   }
             funEq =
-              noAnn
+              noAnnP
                 FunctionEquation
                   { funName = "f",
                     args = [listPattern],
-                    guard = noAnn [],
-                    rhs = noAnn lambdaTerm
+                    guard = noAnnP [],
+                    rhs = noAnnP lambdaTerm
                   }
             m = (module' "M") {decls = [funDecl], equations = [funEq]}
         prog <- desugar [m]
@@ -496,17 +495,18 @@ lambdaLiftTests =
                 ]
             funDecl = Ann (FunctionDecl "f" 1 Nothing Nothing) dummyLoc
             funEq =
-              Ann
+              AnnP
                 FunctionEquation
                   { funName = "f",
                     args = [var "X"],
-                    guard = noAnn [],
-                    rhs = noAnn lambdaTerm
+                    guard = noAnnP [],
+                    rhs = noAnnP lambdaTerm
                   }
                 dummyLoc
+                (Atom "")
             m = (module' "M") {decls = [funDecl], equations = [funEq]}
         prog <- desugar [m]
         case liftAllLambdas prog of
-          Left errs -> errs @?= [InvalidLambdaParam dummyLoc (TextTerm "hello")]
+          Left errs -> errs @?= [AnnP (InvalidLambdaParam (TextTerm "hello")) dummyLoc (Atom "")]
           Right _ -> assertFailure "expected InvalidLambdaParam error"
     ]

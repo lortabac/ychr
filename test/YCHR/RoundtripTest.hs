@@ -134,9 +134,9 @@ genRule = do
   pure
     P.Rule
       { name = name,
-        head = P.noAnn hd,
-        guard = P.noAnn guard_,
-        body = P.noAnn body_
+        head = P.noAnnP hd,
+        guard = P.noAnnP guard_,
+        body = P.noAnnP body_
       }
 
 -- | Strip source locations from a parsed 'P.Rule' so we can compare
@@ -145,9 +145,9 @@ stripRuleAnn :: P.Rule -> P.Rule
 stripRuleAnn r =
   P.Rule
     { name = P.noAnn . (.node) <$> r.name,
-      head = P.noAnn r.head.node,
-      guard = P.noAnn r.guard.node,
-      body = P.noAnn r.body.node
+      head = P.noAnnP r.head.node,
+      guard = P.noAnnP r.guard.node,
+      body = P.noAnnP r.body.node
     }
 
 -- ---------------------------------------------------------------------------

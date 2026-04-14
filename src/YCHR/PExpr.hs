@@ -82,7 +82,7 @@ data PExpr
     Compound Text [Ann PExpr]
   | -- | Anonymous variable (@_@).
     Wildcard
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 -- ---------------------------------------------------------------------------
 -- Operator table
