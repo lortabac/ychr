@@ -17,12 +17,12 @@ import System.IO (hPutStr, stderr)
 import YCHR.Backend.Scheme (generateScheme)
 import YCHR.Backend.SchemeDriver (generateDriver)
 import YCHR.Display (Display (..), displayMsg)
-import YCHR.Run (CompiledProgram (..), Error, Warning, compileFiles, compileModules, resolveQueryConstraint, runProgramWithGoal, runProgramWithQuery)
 import YCHR.Meta (metaHostCallRegistry)
 import YCHR.PExpr qualified as P
 import YCHR.Parsed qualified as Parsed
 import YCHR.Parser (opTableEntries, parseConstraint)
 import YCHR.Pretty (prettyBindings, prettyQueryResult, renderAtom)
+import YCHR.Run (CompiledProgram (..), Error, Warning, compileFiles, compileModules, resolveQueryConstraint, runProgramWithGoal, runProgramWithQuery)
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
 import YCHR.VM.SExpr (VMProgram (..), serialize)
 
@@ -82,7 +82,7 @@ compileParser =
   Compile
     <$> ( CompileOpts
             <$> strOption (long "output-dir" <> short 'd' <> metavar "DIR" <> help "Output directory" <> value ".")
-            <*> optional (strOption (short 'n' <> long "base-name" <> metavar "NAME" <> help "Base name for generated files (default: derived from module name)"))
+            <*> optional (strOption (short 'n' <> long "base-name" <> metavar "NAME" <> help "Base name for generated files (default: program)"))
             <*> option targetReader (short 't' <> metavar "TARGET" <> help "Target (vm, scheme)" <> value TargetVM)
         )
     <*> filesArg
@@ -261,14 +261,7 @@ runCompile opts files = do
     Right (prog, warnings) -> do
       printWarnings warnings
       let vmp = VMProgram {program = prog.program, exportedSet = prog.exportedSet, symbolTable = prog.symbolTable}
-          -- Derive the base name from the first user module if not given
-          stdlibNames = map T.pack ["prelude", "lists", "strings", "meta", "test"]
-          userModules = [n | Parsed.Module {name = n} <- prog.allModules, n `notElem` stdlibNames]
-          name = case opts.baseName of
-            Just n -> T.pack n
-            Nothing -> case userModules of
-              (n : _) -> n
-              [] -> T.pack "program"
+          name = maybe (T.pack "program") T.pack opts.baseName
       case opts.target of
         TargetVM -> do
           let outPath = opts.outputDir </> T.unpack name ++ ".vm"
@@ -302,11 +295,7 @@ runGenDriver opts files = do
           putStrLn err
           exitFailure
         Right c -> pure c
-      let stdlibNames = map T.pack ["prelude", "lists", "strings", "meta", "test"]
-          userModules = [n | Parsed.Module {name = n} <- prog.allModules, n `notElem` stdlibNames]
-          name = case userModules of
-            (n : _) -> n
-            [] -> T.pack "program"
+      let name = T.pack "program"
       TIO.putStr (generateDriver name resolved)
 
 hostCalls :: HostCallRegistry
