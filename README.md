@@ -86,8 +86,8 @@ R = true.
 ### Backends
 
 - [x] Haskell interpreter
-- [ ] Scheme backend
-- [ ] Scheme runtime
+- [x] Scheme backend
+- [x] Scheme runtime
 - [ ] JavaScript backend
 - [ ] JavaScript runtime
 
@@ -104,6 +104,7 @@ R = true.
 
 - [x] Prolog-style queries
 - [ ] Store inpection
+- [ ] Tracing
 - [ ] Live debugging sessions
 
 ### Testing
@@ -115,10 +116,15 @@ R = true.
 
 ### Benchmarking
 
-- [ ] Interpreter benchmarks
-- [ ] Scheme runtime benchmarks
+- [x] Interpreter benchmarks
+- [x] Scheme runtime benchmarks
 - [ ] JavaScript runtime benchmarks
 - [ ] Compiler benchmarks
+
+### Extensions
+
+- [ ] Aggregates, as described in Sneyers, Van Weert, Schrijvers, Demoen, 2007. "_Aggregates in CHR_".
+- [ ] Rule priorities
 
 ## Installation
 
