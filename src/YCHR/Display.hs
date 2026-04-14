@@ -246,11 +246,10 @@ instance Display Error where
   displayMsg (RenameErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (DesugarErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (CompileErrors errs) = displayErrors (map displayMsg errs)
-  displayMsg (OperatorConflict sources name) =
-    displayErrorCode operatorConflictCode
-      ++ "\nOperator naming conflict: "
-      ++ T.unpack name
-      ++ case sources of
-        [] -> ""
-        _ -> " (declared in " ++ intercalate ", " sources ++ ")"
-      ++ "\n"
+  displayMsg (OperatorConflict (AnnP name loc origin)) =
+    displayMsgWithSrcLoc
+      operatorConflictCode
+      SevError
+      ("Operator naming conflict: " ++ T.unpack name)
+      loc
+      (Just (prettyPExprSrc origin))

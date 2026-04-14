@@ -211,13 +211,14 @@ firstPassTable =
 -- Since the module directive is always at the top of the file, this parser
 -- attempts to parse the first dot-terminated term and extract any @op(...)@
 -- entries from the export list. If no module directive is found, returns @[]@.
-collectOperatorDecls :: String -> Text -> Either (ParseErrorBundle Text Void) [OpDecl]
+collectOperatorDecls :: String -> Text -> Either (ParseErrorBundle Text Void) (AnnP [OpDecl])
 collectOperatorDecls sourceName src = do
   mTerm <- P.parseFirstTerm firstPassTable sourceName src
   pure $ case mTerm of
-    Just (Ann (Compound ":-" [Ann (Compound "module" [_, exports]) _]) _) ->
-      extractOpDeclsFromPExpr exports.node
-    _ -> []
+    Just (Ann (Compound ":-" [body]) loc)
+      | Compound "module" [_, exports] <- body.node ->
+          AnnP (extractOpDeclsFromPExpr exports.node) loc body.node
+    _ -> noAnnP []
 
 -- | Extract 'OpDecl' entries from a PExpr representing an export list.
 extractOpDeclsFromPExpr :: PExpr -> [OpDecl]

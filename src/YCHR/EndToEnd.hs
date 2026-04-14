@@ -59,7 +59,7 @@ import YCHR.Desugar (DesugarError, desugarProgram, desugarQueryGoals, extractSym
 import YCHR.Desugared qualified as D
 import YCHR.Meta (valueToTerm)
 import YCHR.PExpr (PExpr (Atom))
-import YCHR.Parsed (AnnP, Import (..), Module (..), OpDecl (..), SourceLoc (..), noAnnP)
+import YCHR.Parsed (AnnP (..), Import (..), Module (..), OpDecl (..), SourceLoc (..), noAnnP)
 import YCHR.Parser (OpTable, builtinOps, collectOperatorDecls, extractOpDecls, mergeOps, parseConstraint, parseModuleWith, parseQueryWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (RenameError, RenameWarning, buildExportEnv, renameProgram, renameQueryGoals)
@@ -81,7 +81,7 @@ data Error
   | RenameErrors [AnnP RenameError]
   | DesugarErrors [AnnP DesugarError]
   | CompileErrors [AnnP CompileError]
-  | OperatorConflict [FilePath] Text
+  | OperatorConflict (AnnP Text)
   deriving (Show)
 
 instance Exception Error
@@ -115,7 +115,7 @@ compileModules includeStdlib inputs = do
   userOpsByFile <-
     first (\(fp, e) -> ParseError fp e) $
       traverse (\(fp, src) -> (fp,) <$> first' (fp,) (collectOperatorDecls fp src)) inputs
-  let userOps = concatMap snd userOpsByFile
+  let userOps = concatMap ((.node) . snd) userOpsByFile
   -- Collect operators from all stdlib modules (already parsed by TH).
   -- Always include these since builtins are auto-imported regardless of
   -- includeStdlib, and extra syntactic operators don't affect correctness.
@@ -123,8 +123,10 @@ compileModules includeStdlib inputs = do
   -- Merge all operators into one table
   table <- case mergeOps builtinOps (userOps ++ stdlibOps) of
     Left conflict ->
-      let sources = [fp | (fp, ops) <- userOpsByFile, any (\(OpDecl {opName}) -> opName == conflict) ops]
-       in Left (OperatorConflict sources conflict)
+      let culprit = case [ann | (_, ann) <- userOpsByFile, any (\(OpDecl {opName}) -> opName == conflict) ann.node] of
+            (ann : _) -> AnnP conflict ann.sourceLoc ann.parsed
+            [] -> noAnnP conflict
+       in Left (OperatorConflict culprit)
     Right t -> Right t
   -- Full parse user modules with the merged operator table
   parsed <-

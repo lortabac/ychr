@@ -488,7 +488,7 @@ errorTests =
 
 -- | Helper: collect operators from source text.
 ops :: Text -> Either (ParseErrorBundle Text Void) [OpDecl]
-ops = collectOperatorDecls ""
+ops src = (.node) <$> collectOperatorDecls "" src
 
 firstPassTests :: TestTree
 firstPassTests =
