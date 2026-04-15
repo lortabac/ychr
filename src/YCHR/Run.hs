@@ -57,6 +57,7 @@ import YCHR.Collect (CollectError, collectLibraries)
 import YCHR.Compile (CompileError, buildFunctionSet, compile, compileFunctionDef, funcProcName, genCallFunDispatches, tellProcName, vmName)
 import YCHR.Desugar (DesugarError, desugarProgram, desugarQueryGoals, extractSymbolTable, liftAllLambdas, liftQueryLambdas)
 import YCHR.Desugared qualified as D
+import YCHR.Diagnostic (Diagnostic)
 import YCHR.Meta (valueToTerm)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed (AnnP (..), Import (..), Module (..), OpDecl (..), SourceLoc (..), noAnnP)
@@ -77,17 +78,17 @@ import YCHR.VM (Name (..), Procedure (..), Program (..), SourceAnnotation)
 
 data Error
   = ParseError FilePath (ParseErrorBundle Text Void)
-  | CollectErrors [AnnP CollectError]
-  | RenameErrors [AnnP RenameError]
-  | DesugarErrors [AnnP DesugarError]
-  | CompileErrors [AnnP CompileError]
+  | CollectErrors [Diagnostic CollectError]
+  | RenameErrors [Diagnostic RenameError]
+  | DesugarErrors [Diagnostic DesugarError]
+  | CompileErrors [Diagnostic CompileError]
   | OperatorConflict (AnnP Text)
   deriving (Show)
 
 instance Exception Error
 
 data Warning
-  = RenameWarnings [AnnP RenameWarning]
+  = RenameWarnings [Diagnostic RenameWarning]
   deriving (Show)
 
 -- | A compiled CHR program together with module visibility information.

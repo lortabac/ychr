@@ -14,6 +14,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import YCHR.Diagnostic (Diagnostic, noDiag)
 import YCHR.Parsed
 
 data CollectError
@@ -29,7 +30,7 @@ data CollectError
 -- 4. Detects circular imports.
 -- 5. Prepends library modules in topological order (dependencies first).
 -- 6. Rewrites all 'LibraryImport' to 'ModuleImport' in every module.
-collectLibraries :: Bool -> Map Text Module -> [Module] -> Either [AnnP CollectError] [Module]
+collectLibraries :: Bool -> Map Text Module -> [Module] -> Either [Diagnostic CollectError] [Module]
 collectLibraries includeStdlib stdlibMap userMods =
   let seeds =
         (if includeStdlib then map noAnnP (Map.keys stdlibMap) else [])
@@ -61,18 +62,18 @@ resolveAll ::
   Set Text ->
   Set Text ->
   [AnnP Text] ->
-  (Set Text, [Module], [AnnP CollectError])
+  (Set Text, [Module], [Diagnostic CollectError])
 resolveAll _ visited _ [] = (visited, [], [])
 resolveAll stdlibMap visited path (ann : rest)
   | Set.member name visited = resolveAll stdlibMap visited path rest
   | Set.member name path =
       let (visited', restMods, restErrs) = resolveAll stdlibMap visited path rest
-       in (visited', restMods, AnnP (CircularLibraryImport (Set.toList path ++ [name])) ann.sourceLoc ann.parsed : restErrs)
+       in (visited', restMods, noDiag (AnnP (CircularLibraryImport (Set.toList path ++ [name])) ann.sourceLoc ann.parsed) : restErrs)
   | otherwise =
       case Map.lookup name stdlibMap of
         Nothing ->
           let (visited', restMods, restErrs) = resolveAll stdlibMap visited path rest
-           in (visited', restMods, AnnP (UnknownLibrary name) ann.sourceLoc ann.parsed : restErrs)
+           in (visited', restMods, noDiag (AnnP (UnknownLibrary name) ann.sourceLoc ann.parsed) : restErrs)
         Just m ->
           let deps = libraryImports m
               path' = Set.insert name path

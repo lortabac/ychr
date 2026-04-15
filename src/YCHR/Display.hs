@@ -28,6 +28,7 @@ import Text.Megaparsec
 import YCHR.Collect (CollectError (..))
 import YCHR.Compile (CompileError (..))
 import YCHR.Desugar (DesugarError (..))
+import YCHR.Diagnostic (Diagnostic (..))
 import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
 import YCHR.Pretty (prettyPExprSrc, prettyTermSrc)
@@ -58,15 +59,16 @@ displaySeverity SevWarning =
   setSGRCode [SetColor Foreground Vivid Yellow] ++ "warning" ++ setSGRCode [SetColor Foreground Dull White]
 
 -- | Format a diagnostic message with source location, severity, error code,
--- and optional AST context.
+-- optional location label, and optional AST context.
 --
 -- @
 -- file:line:col: severity: YCHR-NNNNN
+-- location_label
 -- message
 -- ast_node
 -- @
-displayMsgWithSrcLoc :: ErrorCode -> Severity -> String -> P.SourceLoc -> Maybe String -> String
-displayMsgWithSrcLoc code sev msg loc maybeNode =
+displayMsgWithSrcLoc :: ErrorCode -> Severity -> String -> P.SourceLoc -> Maybe String -> Maybe String -> String
+displayMsgWithSrcLoc code sev msg loc maybeLabel maybeNode =
   setSGRCode [SetConsoleIntensity BoldIntensity]
     ++ displaySrcLoc loc
     ++ ": "
@@ -74,6 +76,7 @@ displayMsgWithSrcLoc code sev msg loc maybeNode =
     ++ ": "
     ++ displayErrorCode code
     ++ "\n"
+    ++ maybe "" (\l -> setSGRCode [SetConsoleIntensity BoldIntensity] ++ l ++ setSGRCode [Reset] ++ "\n") maybeLabel
     ++ msg
     ++ maybe "" (\n -> "\n" ++ setSGRCode [SetItalicized True] ++ n ++ setSGRCode [SetItalicized False]) maybeNode
     ++ "\n"
@@ -99,32 +102,32 @@ sourceLocFromPos sp =
 -- ---------------------------------------------------------------------------
 
 -- | 1xxxx — collect phase
-collectErrorCode :: AnnP CollectError -> ErrorCode
-collectErrorCode (AnnP (UnknownLibrary _) _ _) = ErrorCode 10001
-collectErrorCode (AnnP (CircularLibraryImport _) _ _) = ErrorCode 10002
+collectErrorCode :: CollectError -> ErrorCode
+collectErrorCode (UnknownLibrary _) = ErrorCode 10001
+collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
 
 -- | 2xxxx — rename phase (errors)
-renameErrorCode :: AnnP RenameError -> ErrorCode
-renameErrorCode (AnnP (AmbiguousName _ _ _) _ _) = ErrorCode 20001
-renameErrorCode (AnnP (UnknownName _ _) _ _) = ErrorCode 20002
-renameErrorCode (AnnP (UnknownExport _ _ _) _ _) = ErrorCode 20003
-renameErrorCode (AnnP (OperatorInImportList _) _ _) = ErrorCode 20004
-renameErrorCode (AnnP (UnknownImport _ _ _) _ _) = ErrorCode 20005
+renameErrorCode :: RenameError -> ErrorCode
+renameErrorCode (AmbiguousName _ _ _) = ErrorCode 20001
+renameErrorCode (UnknownName _ _) = ErrorCode 20002
+renameErrorCode (UnknownExport _ _ _) = ErrorCode 20003
+renameErrorCode (OperatorInImportList _) = ErrorCode 20004
+renameErrorCode (UnknownImport _ _ _) = ErrorCode 20005
 
 -- | 2x1xx — rename phase (warnings)
-renameWarningCode :: AnnP RenameWarning -> ErrorCode
-renameWarningCode (AnnP (UndeclaredDataConstructor _) _ _) = ErrorCode 20101
-renameWarningCode (AnnP (DataConstructorArityMismatch _ _) _ _) = ErrorCode 20102
+renameWarningCode :: RenameWarning -> ErrorCode
+renameWarningCode (UndeclaredDataConstructor _) = ErrorCode 20101
+renameWarningCode (DataConstructorArityMismatch _ _) = ErrorCode 20102
 
 -- | 3xxxx — desugar phase
-desugarErrorCode :: AnnP DesugarError -> ErrorCode
-desugarErrorCode (AnnP (UnexpectedBodyTerm _) _ _) = ErrorCode 30001
-desugarErrorCode (AnnP (InvalidLambdaParam _) _ _) = ErrorCode 30003
+desugarErrorCode :: DesugarError -> ErrorCode
+desugarErrorCode (UnexpectedBodyTerm _) = ErrorCode 30001
+desugarErrorCode (InvalidLambdaParam _) = ErrorCode 30003
 
 -- | 4xxxx — compile phase
-compileErrorCode :: AnnP CompileError -> ErrorCode
-compileErrorCode (AnnP (UnknownConstraintType _) _ _) = ErrorCode 40001
-compileErrorCode (AnnP (UnboundVariable _) _ _) = ErrorCode 40002
+compileErrorCode :: CompileError -> ErrorCode
+compileErrorCode (UnknownConstraintType _) = ErrorCode 40001
+compileErrorCode (UnboundVariable _) = ErrorCode 40002
 
 -- | 5xxxx — top-level errors
 parseErrorCode :: ErrorCode
@@ -137,125 +140,101 @@ operatorConflictCode = ErrorCode 50002
 -- Display instances
 -- ---------------------------------------------------------------------------
 
-instance Display (AnnP CollectError) where
-  displayMsg e@(AnnP (UnknownLibrary name) loc origin) =
+instance Display (Diagnostic CollectError) where
+  displayMsg (Diagnostic lbl (AnnP err loc origin)) =
     displayMsgWithSrcLoc
-      (collectErrorCode e)
+      (collectErrorCode err)
       SevError
-      ("Unknown library: " ++ T.unpack name)
+      (collectErrorMsg err)
       loc
-      (Just (prettyPExprSrc origin))
-  displayMsg e@(AnnP (CircularLibraryImport names) loc origin) =
-    displayMsgWithSrcLoc
-      (collectErrorCode e)
-      SevError
-      ("Circular library import: " ++ intercalate " -> " (map T.unpack names))
-      loc
+      (fmap T.unpack lbl)
       (Just (prettyPExprSrc origin))
 
-instance Display (AnnP RenameError) where
-  displayMsg e@(AnnP (AmbiguousName name arity candidates) loc origin) =
+collectErrorMsg :: CollectError -> String
+collectErrorMsg (UnknownLibrary name) = "Unknown library: " ++ T.unpack name
+collectErrorMsg (CircularLibraryImport names) = "Circular library import: " ++ intercalate " -> " (map T.unpack names)
+
+instance Display (Diagnostic RenameError) where
+  displayMsg (Diagnostic lbl (AnnP err loc origin)) =
     displayMsgWithSrcLoc
-      (renameErrorCode e)
+      (renameErrorCode err)
       SevError
-      ( "Ambiguous name "
-          ++ T.unpack name
-          ++ "/"
-          ++ show arity
-          ++ ", could be: "
-          ++ intercalate ", " (map T.unpack candidates)
-      )
+      (renameErrorMsg err)
       loc
-      (Just (prettyPExprSrc origin))
-  displayMsg e@(AnnP (UnknownName name arity) loc origin) =
-    displayMsgWithSrcLoc
-      (renameErrorCode e)
-      SevError
-      ("Unknown constraint " ++ T.unpack name ++ "/" ++ show arity)
-      loc
-      (Just (prettyPExprSrc origin))
-  displayMsg e@(AnnP (UnknownExport modName name arity) loc origin) =
-    displayMsgWithSrcLoc
-      (renameErrorCode e)
-      SevError
-      ( "Module "
-          ++ T.unpack modName
-          ++ " exports "
-          ++ T.unpack name
-          ++ "/"
-          ++ show arity
-          ++ " but does not declare it"
-      )
-      loc
-      (Just (prettyPExprSrc origin))
-  displayMsg e@(AnnP (OperatorInImportList name) loc origin) =
-    displayMsgWithSrcLoc
-      (renameErrorCode e)
-      SevError
-      ("Operator " ++ T.unpack name ++ " cannot appear in an import list (operators are always global)")
-      loc
-      (Just (prettyPExprSrc origin))
-  displayMsg e@(AnnP (UnknownImport modName name arity) loc origin) =
-    displayMsgWithSrcLoc
-      (renameErrorCode e)
-      SevError
-      ( "Module "
-          ++ T.unpack modName
-          ++ " does not export "
-          ++ T.unpack name
-          ++ "/"
-          ++ show arity
-      )
-      loc
+      (fmap T.unpack lbl)
       (Just (prettyPExprSrc origin))
 
-instance Display (AnnP RenameWarning) where
-  displayMsg e@(AnnP (UndeclaredDataConstructor name) loc origin) =
+renameErrorMsg :: RenameError -> String
+renameErrorMsg (AmbiguousName name arity candidates) =
+  "Ambiguous name "
+    ++ T.unpack name
+    ++ "/"
+    ++ show arity
+    ++ ", could be: "
+    ++ intercalate ", " (map T.unpack candidates)
+renameErrorMsg (UnknownName name arity) =
+  "Unknown constraint " ++ T.unpack name ++ "/" ++ show arity
+renameErrorMsg (UnknownExport modName name arity) =
+  "Module "
+    ++ T.unpack modName
+    ++ " exports "
+    ++ T.unpack name
+    ++ "/"
+    ++ show arity
+    ++ " but does not declare it"
+renameErrorMsg (OperatorInImportList name) =
+  "Operator " ++ T.unpack name ++ " cannot appear in an import list (operators are always global)"
+renameErrorMsg (UnknownImport modName name arity) =
+  "Module "
+    ++ T.unpack modName
+    ++ " does not export "
+    ++ T.unpack name
+    ++ "/"
+    ++ show arity
+
+instance Display (Diagnostic RenameWarning) where
+  displayMsg (Diagnostic lbl (AnnP err loc origin)) =
     displayMsgWithSrcLoc
-      (renameWarningCode e)
+      (renameWarningCode err)
       SevWarning
-      ("Undeclared data constructor " ++ T.unpack name)
+      (renameWarningMsg err)
       loc
-      (Just (prettyPExprSrc origin))
-  displayMsg e@(AnnP (DataConstructorArityMismatch name arity) loc origin) =
-    displayMsgWithSrcLoc
-      (renameWarningCode e)
-      SevWarning
-      ("Data constructor " ++ T.unpack name ++ " used with arity " ++ show arity ++ " but declared with different arity")
-      loc
+      (fmap T.unpack lbl)
       (Just (prettyPExprSrc origin))
 
-instance Display (AnnP DesugarError) where
-  displayMsg e@(AnnP (UnexpectedBodyTerm term) loc origin) =
+renameWarningMsg :: RenameWarning -> String
+renameWarningMsg (UndeclaredDataConstructor name) =
+  "Undeclared data constructor " ++ T.unpack name
+renameWarningMsg (DataConstructorArityMismatch name arity) =
+  "Data constructor " ++ T.unpack name ++ " used with arity " ++ show arity ++ " but declared with different arity"
+
+instance Display (Diagnostic DesugarError) where
+  displayMsg (Diagnostic lbl (AnnP err loc origin)) =
     displayMsgWithSrcLoc
-      (desugarErrorCode e)
+      (desugarErrorCode err)
       SevError
-      ("Unexpected term in rule body: " ++ prettyTermSrc term)
+      (desugarErrorMsg err)
       loc
-      (Just (prettyPExprSrc origin))
-  displayMsg e@(AnnP (InvalidLambdaParam term) loc origin) =
-    displayMsgWithSrcLoc
-      (desugarErrorCode e)
-      SevError
-      ("Invalid lambda parameter (expected variable or wildcard): " ++ prettyTermSrc term)
-      loc
+      (fmap T.unpack lbl)
       (Just (prettyPExprSrc origin))
 
-instance Display (AnnP CompileError) where
-  displayMsg e@(AnnP (UnknownConstraintType name) loc origin) =
+desugarErrorMsg :: DesugarError -> String
+desugarErrorMsg (UnexpectedBodyTerm term) = "Unexpected term in rule body: " ++ prettyTermSrc term
+desugarErrorMsg (InvalidLambdaParam term) = "Invalid lambda parameter (expected variable or wildcard): " ++ prettyTermSrc term
+
+instance Display (Diagnostic CompileError) where
+  displayMsg (Diagnostic lbl (AnnP err loc origin)) =
     displayMsgWithSrcLoc
-      (compileErrorCode e)
+      (compileErrorCode err)
       SevError
-      ("Unknown constraint type '" ++ displayName name ++ "'")
+      (compileErrorMsg err)
       loc
+      (fmap T.unpack lbl)
       (Just (prettyPExprSrc origin))
-  displayMsg e@(AnnP (UnboundVariable var) loc origin) =
-    displayMsgWithSrcLoc
-      (compileErrorCode e)
-      SevError
-      ("Unbound variable '" ++ T.unpack var ++ "'")
-      loc
-      (Just (prettyPExprSrc origin))
+
+compileErrorMsg :: CompileError -> String
+compileErrorMsg (UnknownConstraintType name) = "Unknown constraint type '" ++ displayName name ++ "'"
+compileErrorMsg (UnboundVariable var) = "Unbound variable '" ++ T.unpack var ++ "'"
 
 displayName :: Types.Name -> String
 displayName (Types.Unqualified n) = T.unpack n
@@ -267,7 +246,7 @@ displayParseError posState err =
   let (_, posState') = reachOffset (errorOffset err) posState
       loc = sourceLocFromPos (pstateSourcePos posState')
       msg = dropWhileEnd (== '\n') (parseErrorTextPretty err)
-   in displayMsgWithSrcLoc parseErrorCode SevError msg loc Nothing
+   in displayMsgWithSrcLoc parseErrorCode SevError msg loc Nothing Nothing
 
 instance Display Warning where
   displayMsg (RenameWarnings ws) = displayErrors (map displayMsg ws)
@@ -287,4 +266,5 @@ instance Display Error where
       SevError
       ("Operator naming conflict: " ++ T.unpack name)
       loc
+      Nothing
       (Just (prettyPExprSrc origin))

@@ -5,6 +5,7 @@ module YCHR.RenameTest (tests) where
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import YCHR.DSL
+import YCHR.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
 import YCHR.Rename (RenameError (..), RenameWarning (..), renameProgram)
@@ -113,7 +114,7 @@ importedTests =
                 `importing` ["B"]
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB, modC]
-          @?= Left [AnnP (UnknownName "leq" 2) dummyLoc (Atom "")]
+          @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))]
     ]
 
 --------------------------------------------------------------------------------
@@ -132,7 +133,7 @@ ambiguousTests =
                 `declaring` ["leq" // 2]
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
-          @?= Left [AnnP (AmbiguousName "leq" 2 ["B", "A"]) dummyLoc (Atom "")],
+          @?= Left [noDiag (AnnP (AmbiguousName "leq" 2 ["B", "A"]) dummyLoc (Atom ""))],
       testCase "two imports declare same name" $ do
         let modA = module' "A" `declaring` ["leq" // 2]
             modB = module' "B" `declaring` ["leq" // 2]
@@ -141,7 +142,7 @@ ambiguousTests =
                 `importing` ["A", "B"]
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         case renameProgram [modA, modB, modC] of
-          Left [AnnP (AmbiguousName "leq" 2 _) _ _] -> pure ()
+          Left [Diagnostic _ (AnnP (AmbiguousName "leq" 2 _) _ _)] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other
     ]
 
@@ -158,7 +159,7 @@ unknownTests =
               module' "M"
                 `defining` [[con "foo" [var "X"]] <=> [atom "true"]]
         renameProgram [m]
-          @?= Left [AnnP (UnknownName "foo" 1) dummyLoc (Atom "")],
+          @?= Left [noDiag (AnnP (UnknownName "foo" 1) dummyLoc (Atom ""))],
       testCase "wrong arity" $ do
         -- leq/3 is declared but leq/2 is used: key ("leq",2) absent in env
         let m =
@@ -166,7 +167,7 @@ unknownTests =
                 `declaring` ["leq" // 3]
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [m]
-          @?= Left [AnnP (UnknownName "leq" 2) dummyLoc (Atom "")],
+          @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
       testCase "host call in body" $ do
         let m =
               module' "M"
@@ -205,7 +206,7 @@ alreadyQualifiedTests =
               module' "M"
                 `defining` [["Order" .: con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [m]
-          @?= Left [AnnP (UnknownName "leq" 2) dummyLoc (Atom "")],
+          @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
       testCase "pre-qualified survives ambiguity" $ do
         -- Two visible providers, but the constraint is already Qualified
         let modA = module' "A" `declaring` ["leq" // 2]
@@ -231,7 +232,7 @@ alreadyQualifiedTests =
               module' "B"
                 `defining` [["A" .: con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
-          @?= Left [AnnP (UnknownName "leq" 2) dummyLoc (Atom "")],
+          @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
       testCase "pre-qualified reference to non-exported name is rejected" $ do
         -- A declares leq/2 and gt/2 but only exports leq/2. B imports A
         -- and tries to reach gt/2 via qualification; still hidden.
@@ -244,7 +245,7 @@ alreadyQualifiedTests =
                 `importing` ["A"]
                 `defining` [["A" .: con "gt" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
-          @?= Left [AnnP (UnknownName "gt" 2) dummyLoc (Atom "")]
+          @?= Left [noDiag (AnnP (UnknownName "gt" 2) dummyLoc (Atom ""))]
     ]
 
 --------------------------------------------------------------------------------
@@ -537,7 +538,7 @@ exportTests =
                 `importing` ["A"]
                 `defining` [[con "gt" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
-          @?= Left [AnnP (UnknownName "gt" 2) dummyLoc (Atom "")],
+          @?= Left [noDiag (AnnP (UnknownName "gt" 2) dummyLoc (Atom ""))],
       testCase "empty export list hides all constraints from importer" $ do
         -- A exports nothing; B cannot see leq/2
         let modA =
@@ -549,7 +550,7 @@ exportTests =
                 `importing` ["A"]
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
-          @?= Left [AnnP (UnknownName "leq" 2) dummyLoc (Atom "")],
+          @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
       testCase "export restriction does not affect own-module use" $ do
         -- A exports only leq/2, but still uses gt/2 in its own rules
         let modA =
@@ -578,7 +579,7 @@ exportTests =
           @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
       testCase "exporting undeclared name produces error" $ do
         let m = module' "M" `exporting` ["foo" // 1]
-        renameProgram [m] @?= Left [AnnP (UnknownExport "M" "foo" 1) dummyLoc (Atom "")],
+        renameProgram [m] @?= Left [noDiag (AnnP (UnknownExport "M" "foo" 1) dummyLoc (Atom ""))],
       testCase "exporting declared constraint is fine" $ do
         let m =
               module' "M"
@@ -594,7 +595,7 @@ exportTests =
 -- ---------------------------------------------------------------------------
 
 -- | Rename a program and return the warnings (failing on errors).
-warningsOf :: [Module] -> IO [AnnP RenameWarning]
+warningsOf :: [Module] -> IO [Diagnostic RenameWarning]
 warningsOf mods = case renameProgram mods of
   Right (_, ws) -> pure ws
   Left errs -> assertFailure $ "unexpected errors: " ++ show errs
@@ -609,7 +610,7 @@ warningTests =
                 `declaring` ["c" // 1]
                 `defining` [[con "c" [var "X"]] <=> [atom "true"] |- [func "foo" [var "X"]]]
         ws <- warningsOf [m]
-        ws @?= [AnnP (UndeclaredDataConstructor "foo") dummyLoc (Atom "")],
+        ws @?= [noDiag (AnnP (UndeclaredDataConstructor "foo") dummyLoc (Atom ""))],
       testCase "declared data constructor produces no warning" $ do
         let m =
               (module' "M" `declaring` ["c" // 1] `defining` [[con "c" [var "X"]] <=> [atom "true"] |- [func "foo" [var "X"]]])
@@ -623,7 +624,7 @@ warningTests =
                 { typeDecls = [noAnn (TypeDefinition (Unqualified "t") [] [DataConstructor (Unqualified "foo") [TypeCon (Unqualified "int") []]])]
                 }
         ws <- warningsOf [m]
-        ws @?= [AnnP (DataConstructorArityMismatch "foo" 2) dummyLoc (Atom "")],
+        ws @?= [noDiag (AnnP (DataConstructorArityMismatch "foo" 2) dummyLoc (Atom ""))],
       testCase "no warning for reserved symbols" $ do
         let m =
               module' "M"
@@ -640,7 +641,7 @@ warningTests =
         ws @?= [],
       testCase "exporting undeclared type produces error" $ do
         let m = (module' "M") {exports = Just (noAnnP [TypeExportDecl "tree" 0])}
-        renameProgram [m] @?= Left [AnnP (UnknownExport "M" "tree" 0) dummyLoc (Atom "")],
+        renameProgram [m] @?= Left [noDiag (AnnP (UnknownExport "M" "tree" 0) dummyLoc (Atom ""))],
       testCase "exporting declared type is fine" $ do
         let m =
               (module' "M")
@@ -723,7 +724,7 @@ importListTests =
                 }
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modOrder, modLogic]
-          @?= Left [AnnP (UnknownName "leq" 2) dummyLoc (Atom "")],
+          @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
       testCase "error for import list item not exported" $ do
         let modOrder =
               module' "Order"
@@ -734,7 +735,7 @@ importListTests =
                 { imports = [noAnnP (ModuleImport "Order" (Just [ConstraintDecl "nonexistent" 1 Nothing]))]
                 }
         renameProgram [modOrder, modLogic]
-          @?= Left [AnnP (UnknownImport "Order" "nonexistent" 1) dummyLoc (Atom "")],
+          @?= Left [noDiag (AnnP (UnknownImport "Order" "nonexistent" 1) dummyLoc (Atom ""))],
       testCase "operator in import list is rejected" $ do
         let modOrder =
               module' "Order"
@@ -745,5 +746,5 @@ importListTests =
                 { imports = [noAnnP (ModuleImport "Order" (Just [OperatorDecl (OpDecl 700 Xfx "===")]))]
                 }
         renameProgram [modOrder, modLogic]
-          @?= Left [AnnP (OperatorInImportList "===") dummyLoc (Atom "")]
+          @?= Left [noDiag (AnnP (OperatorInImportList "===") dummyLoc (Atom ""))]
     ]

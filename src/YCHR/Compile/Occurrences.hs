@@ -18,12 +18,14 @@ module YCHR.Compile.Occurrences
   )
 where
 
+import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Traversable (for)
 import Effectful (Eff)
 import Effectful.Writer.Static.Local (Writer, tell)
 import YCHR.Compile.Types
 import YCHR.Desugared qualified as D
+import YCHR.Diagnostic (Diagnostic (..))
 import YCHR.PExpr (PExpr)
 import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
@@ -34,7 +36,7 @@ import YCHR.VM (ConstraintType (..), RuleName (..))
 -- 'OccurrenceMap'. Occurrences are numbered top-down within each
 -- constraint type so that occurrence number 1 is the textually first
 -- occurrence (paper §5.2, Listings 1 and 2).
-collectOccurrences :: SymbolTable -> D.Program -> Eff '[Writer [AnnP CompileError]] OccurrenceMap
+collectOccurrences :: SymbolTable -> D.Program -> Eff '[Writer [Diagnostic CompileError]] OccurrenceMap
 collectOccurrences symTab prog = do
   allOccs <- fmap concat (traverse (ruleOccurrences symTab) (zip [0 ..] prog.rules))
   let grouped = foldl' (\m occ -> occMapAppend (Identifier occ.conName occ.conArity) occ m) occMapEmpty allOccs
@@ -47,7 +49,7 @@ collectOccurrences symTab prog = do
 -- | Produce one 'Occurrence' record for every head constraint of a
 -- single rule. The active head varies; the other heads become the
 -- partner list of that occurrence.
-ruleOccurrences :: SymbolTable -> (Int, D.Rule) -> Eff '[Writer [AnnP CompileError]] [Occurrence]
+ruleOccurrences :: SymbolTable -> (Int, D.Rule) -> Eff '[Writer [Diagnostic CompileError]] [Occurrence]
 ruleOccurrences symTab (ruleIdx, rule) = do
   let AnnP {node = ruleHead} = rule.head
       kept = ruleHead.kept
@@ -80,13 +82,14 @@ mkOccurrence ::
   HeadPosition ->
   Constraint ->
   Bool ->
-  Eff '[Writer [AnnP CompileError]] Occurrence
+  Eff '[Writer [Diagnostic CompileError]] Occurrence
 mkOccurrence symTab rule ruleName' combined activeIdx activeCon activeIsKept = do
   let partners' = [(idx, con, isKept) | (idx, con, isKept) <- combined, idx /= activeIdx]
       headLoc = rule.head.sourceLoc
       headPretty = rule.head.parsed
+  let ruleLabel = Just ("rule " <> ruleName'.unRuleName)
   partners <- for partners' $ \(idx, con, isKept) -> do
-    ct <- lookupCType symTab headLoc headPretty (Identifier con.name (length con.args))
+    ct <- lookupCType symTab headLoc headPretty ruleLabel (Identifier con.name (length con.args))
     pure
       Partner
         { idx = idx,
@@ -114,10 +117,11 @@ lookupCType ::
   SymbolTable ->
   P.SourceLoc ->
   PExpr ->
+  Maybe Text ->
   Identifier ->
-  Eff '[Writer [AnnP CompileError]] ConstraintType
-lookupCType symTab loc p ident = case lookupSymbol ident symTab of
+  Eff '[Writer [Diagnostic CompileError]] ConstraintType
+lookupCType symTab loc p label ident = case lookupSymbol ident symTab of
   Just ct -> pure ct
   Nothing -> do
-    tell [AnnP (UnknownConstraintType ident.name) loc p]
+    tell [Diagnostic label (AnnP (UnknownConstraintType ident.name) loc p)]
     pure (ConstraintType (-1))

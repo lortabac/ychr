@@ -7,6 +7,7 @@ import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 import YCHR.Collect
+import YCHR.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
 
@@ -39,7 +40,7 @@ tests =
               Left errs -> fail (show errs),
       testCase "unknown library reports error" $
         collectLibraries False Map.empty [userMod [noAnnP (LibraryImport "missing" Nothing)]]
-          @?= Left [AnnP (UnknownLibrary "missing") dummyLoc (Atom "")],
+          @?= Left [noDiag (AnnP (UnknownLibrary "missing") dummyLoc (Atom ""))],
       testCase "prelude not auto-included when includeStdlib is False" $
         let libs = Map.fromList [("prelude", libMod "prelude")]
             user = userMod []
@@ -71,6 +72,6 @@ isModuleImport :: Import -> Bool
 isModuleImport (ModuleImport _ _) = True
 isModuleImport _ = False
 
-isCircularError :: AnnP CollectError -> Bool
-isCircularError (AnnP (CircularLibraryImport _) _ _) = True
+isCircularError :: Diagnostic CollectError -> Bool
+isCircularError (Diagnostic _ (AnnP (CircularLibraryImport _) _ _)) = True
 isCircularError _ = False

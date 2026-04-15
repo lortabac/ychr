@@ -150,6 +150,7 @@ library
                     , YCHR.Compile.Names
                     , YCHR.Compile.Occurrences
                     , YCHR.Compile.Types
+                    , YCHR.Diagnostic
                     , YCHR.Display
                     , YCHR.Run
                     , YCHR.Meta

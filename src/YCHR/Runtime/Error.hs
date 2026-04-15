@@ -30,18 +30,18 @@ runtimeErrorCode = "YCHR-60001"
 -- (same convention as 'YCHR.Display.displayErrors').
 displayRuntimeError :: String -> [SourceAnnotation] -> String
 displayRuntimeError msg [] =
-  formatFrame "error" Red msg dummyLoc Nothing
+  formatFrame "error" Red msg dummyLoc Nothing Nothing
 displayRuntimeError msg (top : rest) =
   intercalate
     "\n"
-    ( formatFrame "error" Red msg top.annSourceLoc (Just (T.unpack top.annSourceCode))
-        : map (\ann -> formatFrame "note" Cyan "stack trace:" ann.annSourceLoc (Just (T.unpack ann.annSourceCode))) rest
+    ( formatFrame "error" Red msg top.annSourceLoc (Just (T.unpack top.annLabel)) (Just (T.unpack top.annSourceCode))
+        : map (\ann -> formatFrame "stack trace" Cyan "" ann.annSourceLoc (Just (T.unpack ann.annLabel)) (Just (T.unpack ann.annSourceCode))) rest
     )
 
 -- | Format a single diagnostic frame.  Mirrors the layout of
 -- 'YCHR.Display.displayMsgWithSrcLoc'.
-formatFrame :: String -> Color -> String -> SourceLoc -> Maybe String -> String
-formatFrame sev color msg loc maybeNode =
+formatFrame :: String -> Color -> String -> SourceLoc -> Maybe String -> Maybe String -> String
+formatFrame sev color msg loc maybeLabel maybeNode =
   setSGRCode [SetConsoleIntensity BoldIntensity]
     ++ displaySrcLoc loc
     ++ ": "
@@ -51,8 +51,9 @@ formatFrame sev color msg loc maybeNode =
     ++ ": "
     ++ runtimeErrorCode
     ++ "\n"
-    ++ msg
-    ++ maybe "" (\n -> "\n" ++ setSGRCode [SetItalicized True] ++ n ++ setSGRCode [SetItalicized False]) maybeNode
+    ++ maybe "" (\l -> setSGRCode [SetConsoleIntensity BoldIntensity] ++ l ++ setSGRCode [Reset] ++ "\n") maybeLabel
+    ++ (if null msg then "" else msg)
+    ++ maybe "" (\n -> (if null msg then "" else "\n") ++ setSGRCode [SetItalicized True] ++ n ++ setSGRCode [SetItalicized False]) maybeNode
     ++ "\n"
     ++ setSGRCode [Reset]
 

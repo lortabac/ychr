@@ -51,6 +51,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Effectful (Eff, runPureEff)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
+import YCHR.Diagnostic (Diagnostic, noDiag)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
 import YCHR.Rename.Types
@@ -74,13 +75,13 @@ data RenameWarning
 -- different types.
 type DataConEnv = Map Text [Int]
 
-type RenameEffs = '[Writer [AnnP RenameWarning], Writer [AnnP RenameError]]
+type RenameEffs = '[Writer [Diagnostic RenameWarning], Writer [Diagnostic RenameError]]
 
 emitError :: AnnP RenameError -> Eff RenameEffs ()
-emitError e = tell @[AnnP RenameError] [e]
+emitError e = tell @[Diagnostic RenameError] [noDiag e]
 
 emitWarning :: AnnP RenameWarning -> Eff RenameEffs ()
-emitWarning w = tell @[AnnP RenameWarning] [w]
+emitWarning w = tell @[Diagnostic RenameWarning] [noDiag w]
 
 -- | Global environments consulted while renaming one module. Bundled
 -- into a record so recursive helpers don't have to thread six parameters.
@@ -184,7 +185,7 @@ unqualifiedText (Qualified _ t) = t
 -- Entry points
 -- ---------------------------------------------------------------------------
 
-renameProgram :: [Module] -> Either [AnnP RenameError] ([Module], [AnnP RenameWarning])
+renameProgram :: [Module] -> Either [Diagnostic RenameError] ([Module], [Diagnostic RenameWarning])
 renameProgram mods =
   let baseCtx =
         RenameCtx
@@ -198,7 +199,7 @@ renameProgram mods =
       ctxFor m =
         let ctx0 = baseCtx {currentModule = m}
          in ctx0 {dataConEnv = buildDataConEnv (visibleTypes ctx0) mods}
-      ((result, warnings), errs) = runPureEff . runWriter @[AnnP RenameError] . runWriter @[AnnP RenameWarning] $ do
+      ((result, warnings), errs) = runPureEff . runWriter @[Diagnostic RenameError] . runWriter @[Diagnostic RenameWarning] $ do
         validateExports mods
         traverse (\m -> renameModule (ctxFor m)) mods
    in if null errs then Right (result, warnings) else Left errs
@@ -516,7 +517,7 @@ resolveTypeName ctx n arity =
 -- | Rename a list of query goal terms using all modules as the visible
 -- scope. Each term is renamed at 'ResolveTop' level (same as rule bodies).
 -- Returns 'Left' if any rename errors occur.
-renameQueryGoals :: [Module] -> [Term] -> Either [AnnP RenameError] ([Term], [AnnP RenameWarning])
+renameQueryGoals :: [Module] -> [Term] -> Either [Diagnostic RenameError] ([Term], [Diagnostic RenameWarning])
 renameQueryGoals mods goals =
   let queryMod =
         Module
@@ -539,7 +540,7 @@ renameQueryGoals mods goals =
           }
       ctx = ctx0 {dataConEnv = buildDataConEnv (visibleTypes ctx0) mods}
       ((renamed, warnings), errs) =
-        runPureEff . runWriter @[AnnP RenameError] . runWriter @[AnnP RenameWarning] $
+        runPureEff . runWriter @[Diagnostic RenameError] . runWriter @[Diagnostic RenameWarning] $
           traverse (renameTerm ctx dummyLoc (Atom "") ResolveTop) goals
    in if null errs then Right (renamed, warnings) else Left errs
 
