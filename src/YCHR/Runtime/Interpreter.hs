@@ -21,12 +21,14 @@ module YCHR.Runtime.Interpreter
   )
 where
 
+import Control.Exception (SomeException, displayException)
 import Data.Foldable (toList, traverse_)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Effectful
 import Effectful.Error.Static (Error, runError, throwError)
+import Effectful.Exception qualified as Eff
 import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import Effectful.Writer.Static.Local (Writer, listen, runWriter)
 import System.Exit (exitFailure)
@@ -320,7 +322,11 @@ evalVmExpr pm hc (HostCall name args) = do
   argVals <- traverse (evalVmExpr pm hc) args
   derefedVals <- traverse derefRV argVals
   case Map.lookup name hc of
-    Just (HostCallFn f) -> f derefedVals
+    Just (HostCallFn f) -> do
+      result <- Eff.try @SomeException (f derefedVals)
+      case result of
+        Right v -> pure v
+        Left exc -> runtimeErrorS $ "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc
     Nothing -> runtimeError' "evalVmExpr: unknown host call " name.unName
   where
     derefRV (RVal v) = RVal <$> deref v
@@ -425,7 +431,11 @@ evalExpr pm hc (Var name) = do
 evalExpr pm hc (HostCall name args) = do
   argVals <- traverse (evalExpr pm hc) args
   case Map.lookup name hc of
-    Just (HostCallFn f) -> f argVals
+    Just (HostCallFn f) -> do
+      result <- Eff.try @SomeException (f argVals)
+      case result of
+        Right v -> pure v
+        Left exc -> runtimeErrorS $ "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc
     Nothing -> runtimeError' "evalExpr: unknown host call " name.unName
 evalExpr pm hc (CallExpr name args) = do
   argVals <- traverse (evalExpr pm hc) args
