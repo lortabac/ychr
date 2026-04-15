@@ -77,7 +77,7 @@ data Occurrence = Occurrence
     rule :: D.Rule,
     -- | Resolved name of the rule for propagation-history bookkeeping.
     -- Equals @rule.name@ if the rule was explicitly named, otherwise a
-    -- synthetic @rule_N@ name unique within the program (assigned by
+    -- synthetic @__rule_N@ name unique within the program (assigned by
     -- 'YCHR.Compile.collectOccurrences' from the rule's source position).
     ruleName :: RuleName,
     -- | Position of the active head constraint inside the rule's

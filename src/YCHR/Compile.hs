@@ -887,7 +887,7 @@ resulting unconditional 'Continue' would make every later check
 unreachable (paper §5.3, "all following alive tests thus becomes
 redundant"). Backjumping is only useful for kept partners.
 
-Why anonymous rules get a synthetic @rule_N@ name in 'ruleOccurrences':
+Why anonymous rules get a synthetic @__rule_N@ name in 'ruleOccurrences':
 the propagation history is keyed on (rule name, constraint id tuple).
 If two anonymous propagation rules shared a single placeholder name,
 they would collide in the history and prevent each other from firing.

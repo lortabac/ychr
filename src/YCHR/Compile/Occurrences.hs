@@ -64,10 +64,11 @@ ruleOccurrences symTab (ruleIdx, rule) = do
           ++ [(i, c, True) | (i, c) <- zip [HeadPosition (length removed) ..] (reverse kept)]
       -- Anonymous rules need a unique fallback name so the propagation
       -- history can distinguish them. We use the rule's program-wide
-      -- index, which is stable as long as the source order is.
+      -- index, which is stable as long as the source order is. The
+      -- double-underscore prefix avoids clashes with user-defined names.
       ruleName' = case rule.name of
         Just n -> RuleName n
-        Nothing -> RuleName ("rule_" <> T.pack (show ruleIdx))
+        Nothing -> RuleName ("__rule_" <> T.pack (show ruleIdx))
   for orderedOccurrences $ \(idx, con, isKept) ->
     mkOccurrence symTab rule ruleName' orderedOccurrences idx con isKept
 
