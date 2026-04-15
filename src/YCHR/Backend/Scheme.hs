@@ -179,6 +179,8 @@ compileStmt (AddHistory (RuleName rn) es) =
       SList [SAtom "quote", SAtom rn],
       SList (SAtom "list" : map (\e -> SList [SAtom "constraint-id", compileExpr e]) es)
     ]
+compileStmt (PushAnnotation _) =
+  SList [SAtom "values"]
 compileStmt (DrainReactivationQueue (Name sv) body) =
   SList
     [ SAtom "drain-queue!",

@@ -70,9 +70,11 @@ import YCHR.Compile.Names
 import YCHR.Compile.Occurrences (collectOccurrences)
 import YCHR.Compile.Types
 import YCHR.Desugared qualified as D
-import YCHR.PExpr (PExpr (Atom))
+import YCHR.Loc (SourceLoc)
+import YCHR.PExpr (PExpr)
 import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
+import YCHR.Pretty (prettyPExprSrc)
 import YCHR.Types (Identifier (..), SymbolTable, Term (..), flattenName, symbolTableSize, symbolTableToList)
 import YCHR.Types qualified as Types
 import YCHR.VM
@@ -340,7 +342,8 @@ genFireStmts funSet symTab varMap occ = do
             | (k, p) <- zip [PartnerIndex 0 ..] occ.partners,
               p.isKept
             ]
-      coreFireStmts = killStmts ++ bodyStmts ++ earlyDropStmts ++ backjumpStmts
+      annotation = mkRuleAnnotation occ
+      coreFireStmts = PushAnnotation annotation : killStmts ++ bodyStmts ++ earlyDropStmts ++ backjumpStmts
   pure $
     if isPropagation
       then
@@ -363,6 +366,21 @@ buildHistoryIds occ =
             | (k, p) <- zip [PartnerIndex 0 ..] occ.partners
             ]
    in map snd (sortOn fst positions)
+
+-- | Build a 'SourceAnnotation' for a rule firing.
+mkRuleAnnotation :: Occurrence -> SourceAnnotation
+mkRuleAnnotation occ =
+  let label = "rule " <> occ.ruleName.unRuleName
+   in mkAnnotation label occ.rule.head.sourceLoc occ.rule.head.parsed
+
+-- | Build a 'SourceAnnotation' from a label, source location, and parsed expression.
+mkAnnotation :: Text -> SourceLoc -> PExpr -> SourceAnnotation
+mkAnnotation label loc pexpr =
+  SourceAnnotation
+    { annLabel = label,
+      annSourceLoc = loc,
+      annSourceCode = T.pack (prettyPExprSrc pexpr)
+    }
 
 genKillStmts :: Occurrence -> [Stmt]
 genKillStmts occ =
@@ -665,10 +683,15 @@ compileFunctionDef :: Set Identifier -> D.Function -> Eff '[Writer [AnnP Compile
 compileFunctionDef funSet func = do
   let procName' = funcProcName func.name func.arity
       params = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. func.arity - 1]]
-      dummySi = (P.dummyLoc, Atom "function")
-  eqStmts <- traverse (compileEquation funSet params dummySi) func.equations.node
+      funcSi = (func.equations.sourceLoc, func.equations.parsed)
+      annotation =
+        mkAnnotation
+          ("function " <> flattenName func.name <> "/" <> T.pack (show func.arity))
+          func.equations.sourceLoc
+          func.equations.parsed
+  eqStmts <- traverse (compileEquation funSet params funcSi) func.equations.node
   let errorStmt = ExprStmt (HostCall chrErrorName [Lit (AtomLit "no_matching_equation")])
-  pure (Procedure procName' params (concat eqStmts ++ [errorStmt]))
+  pure (Procedure procName' params (PushAnnotation annotation : concat eqStmts ++ [errorStmt]))
 
 -- | Build a VarMap for a function equation: maps each normalized parameter
 -- variable to the corresponding procedure parameter name.

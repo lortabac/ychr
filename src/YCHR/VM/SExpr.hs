@@ -34,6 +34,8 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Text.Read (readMaybe)
+import YCHR.Loc (SourceLoc (..))
 import YCHR.SExpr (SExpr (..), parseSExpr, printSExpr)
 import YCHR.Types qualified as Types
 import YCHR.VM.Types
@@ -132,6 +134,15 @@ stmtToSExpr (AddHistory rn es) =
   SList (SAtom "add-history" : ruleNameToSExpr rn : map exprToSExpr es)
 stmtToSExpr (DrainReactivationQueue sv body) =
   SList (SAtom "drain-reactivation-queue" : nameToSExpr sv : map stmtToSExpr body)
+stmtToSExpr (PushAnnotation ann) =
+  SList
+    [ SAtom "push-annotation",
+      SAtom ann.annLabel,
+      SAtom (T.pack (show ann.annSourceLoc.line)),
+      SAtom (T.pack (show ann.annSourceLoc.col)),
+      SAtom (T.pack ann.annSourceLoc.file),
+      SAtom ann.annSourceCode
+    ]
 
 exprToSExpr :: Expr -> SExpr
 exprToSExpr (Var n) = SList [SAtom "var", nameToSExpr n]
@@ -264,6 +275,11 @@ stmtFromSExpr (SList (SAtom "add-history" : rn : es)) =
   AddHistory <$> ruleNameFromSExpr rn <*> traverse exprFromSExpr es
 stmtFromSExpr (SList (SAtom "drain-reactivation-queue" : sv : body)) =
   DrainReactivationQueue <$> nameFromSExpr sv <*> traverse stmtFromSExpr body
+stmtFromSExpr (SList [SAtom "push-annotation", SAtom label, SAtom lineStr, SAtom colStr, SAtom file, SAtom src]) =
+  case (readMaybe (T.unpack lineStr), readMaybe (T.unpack colStr)) of
+    (Just l, Just c) ->
+      pure $ PushAnnotation $ SourceAnnotation label (SourceLoc (T.unpack file) l c) src
+    _ -> err "push-annotation: invalid line/col"
 stmtFromSExpr s = err ("expected statement, got: " <> printSExpr s)
 
 exprFromSExpr :: SExpr -> Err Expr

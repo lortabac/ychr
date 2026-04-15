@@ -44,6 +44,9 @@ module YCHR.VM.Types
     -- * Expressions
     Expr (..),
 
+    -- * Source annotations
+    SourceAnnotation (..),
+
     -- * Supporting types
     ConstraintType (..),
     Field (..),
@@ -58,7 +61,22 @@ where
 import Data.String (IsString (..))
 import Data.Text (Text)
 import Data.Text qualified as T
+import YCHR.Loc (SourceLoc)
 import YCHR.Types (ConstraintType (..))
+
+-- | Source annotation for runtime call stack tracking.
+--
+-- Emitted by the compiler at rule fire and function entry points.
+-- The interpreter maintains a stack of these for error reporting.
+data SourceAnnotation = SourceAnnotation
+  { -- | Human-readable label (e.g. @"rule transitivity"@ or @"function factorial\/1"@).
+    annLabel :: Text,
+    -- | Source file location.
+    annSourceLoc :: SourceLoc,
+    -- | Pretty-printed source code (from the parsed expression).
+    annSourceCode :: Text
+  }
+  deriving (Show, Eq)
 
 -- | A VM program is a collection of named procedures.
 data Program = Program
@@ -159,6 +177,13 @@ data Stmt
     -- to @suspVar@ and executing @body@. The body typically dispatches
     -- to the appropriate @activate_c@ procedure based on constraint type.
     DrainReactivationQueue Name [Stmt]
+  | -- Source annotations
+
+    -- | Push a source annotation onto the runtime call stack.
+    -- Emitted by the compiler at rule fire and function entry points.
+    -- The interpreter automatically pops annotations when a procedure
+    -- returns (save\/restore around 'callProc').
+    PushAnnotation SourceAnnotation
   deriving (Show, Eq)
 
 -- | Expressions (side-effect-free, except for 'Unify' and 'HostCall').

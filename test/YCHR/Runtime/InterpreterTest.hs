@@ -6,6 +6,7 @@ module YCHR.Runtime.InterpreterTest (tests) where
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
 import Effectful
+import Effectful.State.Static.Local (State, evalState)
 import Effectful.Writer.Static.Local (Writer, runWriter)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
@@ -360,7 +361,8 @@ countAlive cType = do
 -- | Run within the full effect stack, returning a result.
 runFullStack ::
   Eff
-    [ Writer [SuspensionId],
+    [ State [SourceAnnotation],
+      Writer [SuspensionId],
       ReactQueue,
       PropHistory,
       CHRStore,
@@ -377,6 +379,7 @@ runFullStack m =
     . runReactQueue
     . fmap fst
     . runWriter @[SuspensionId]
+    . evalState @[SourceAnnotation] []
     $ m
 
 -- | Call tell_leq within the full effect stack.
@@ -386,7 +389,8 @@ callTellLeq ::
     Unify :> es,
     CHRStore :> es,
     PropHistory :> es,
-    ReactQueue :> es
+    ReactQueue :> es,
+    State [SourceAnnotation] :> es
   ) =>
   Value -> Value -> Eff es RuntimeVal
 callTellLeq x y =

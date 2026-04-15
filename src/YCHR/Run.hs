@@ -73,7 +73,7 @@ import YCHR.Runtime.Var (Unify, deref, equal, newVar, runUnify, unify)
 import YCHR.StdLib (stdlib)
 import YCHR.Types (Constraint (..), ConstraintType, SymbolTable, Term (..))
 import YCHR.Types qualified as Types
-import YCHR.VM (Name (..), Procedure (..), Program (..))
+import YCHR.VM (Name (..), Procedure (..), Program (..), SourceAnnotation)
 
 data Error
   = ParseError FilePath (ParseErrorBundle Text Void)
@@ -173,6 +173,9 @@ compileFiles includeStdlib paths = do
 type ProcMap = Map Name Procedure
 
 -- | The CHR effect holds the program context needed to execute constraints.
+-- | Runtime annotation stack for error reporting (newest first).
+type AnnotationStack = [SourceAnnotation]
+
 data CHR :: Effect
 
 type instance DispatchOf CHR = Static WithSideEffects
@@ -188,6 +191,7 @@ type CHREffects es =
     PropHistory :> es,
     ReactQueue :> es,
     Writer [SuspensionId] :> es,
+    State AnnotationStack :> es,
     IOE :> es
   )
 
@@ -198,7 +202,7 @@ runCHR ::
   (IOE :> es) =>
   CompiledProgram ->
   HostCallRegistry ->
-  Eff (CHR : Writer [SuspensionId] : ReactQueue : PropHistory : CHRStore : Unify : es) a ->
+  Eff (CHR : State AnnotationStack : Writer [SuspensionId] : ReactQueue : PropHistory : CHRStore : Unify : es) a ->
   Eff es a
 runCHR cp hc =
   runUnify
@@ -207,6 +211,7 @@ runCHR cp hc =
     . runReactQueue
     . fmap fst
     . runWriter @[SuspensionId]
+    . evalState @AnnotationStack []
     . evalStaticRep (CHRRep procMap hc cp.exportMap cp.exportedSet)
   where
     procMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- cp.program.procedures]
@@ -235,6 +240,7 @@ withCHRExtra cp hc extraProcs action =
     . runReactQueue
     . fmap fst
     . runWriter @[SuspensionId]
+    . evalState @AnnotationStack []
     . evalStaticRep (CHRRep procMap hc cp.exportMap cp.exportedSet)
     $ action
   where
@@ -326,6 +332,7 @@ runProgramWithGoalDSL cp hostCalls constraint = do
     . runCHRStore prog.typeNames
     . runPropHistory
     . runReactQueue
+    . evalState @AnnotationStack []
     . evalState (Map.empty :: Map Text Value)
     $ do
       argVals <- traverse termToValue resolved.args

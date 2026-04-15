@@ -10,6 +10,9 @@ module YCHR.VM
     -- * Expressions
     Expr (..),
 
+    -- * Source annotations
+    SourceAnnotation (..),
+
     -- * Supporting types
     ConstraintType (..),
     Field (..),

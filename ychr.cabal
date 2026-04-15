@@ -176,6 +176,7 @@ library
                     , YCHR.Runtime.Store
                     , YCHR.Runtime.History
                     , YCHR.Runtime.Reactivation
+                    , YCHR.Runtime.Error
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
