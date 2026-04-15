@@ -46,7 +46,7 @@ import Data.Vector.Mutable qualified as MV
 import Effectful
 import Effectful.Dispatch.Static
 import YCHR.Runtime.Types (SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (Unify, addObserver, deref)
+import YCHR.Runtime.Var (Unify, addObserver)
 import YCHR.Types (ConstraintType (..))
 
 -- ---------------------------------------------------------------------------
@@ -141,11 +141,7 @@ storeConstraint sid = do
 
 -- | Register a suspension as an observer on a value, if it's an unbound variable.
 registerObserver :: (CHRStore :> es, Unify :> es) => SuspensionId -> Value -> Eff es ()
-registerObserver sid val = do
-  d <- deref val
-  case d of
-    VVar _ -> addObserver sid d
-    _ -> pure ()
+registerObserver sid val = addObserver sid val
 
 -- | Kill a constraint (set alive to False).
 killConstraint :: (CHRStore :> es) => SuspensionId -> Eff es ()

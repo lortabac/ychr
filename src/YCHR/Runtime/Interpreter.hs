@@ -64,7 +64,9 @@ type ProcMap = Map Name Procedure
 -- | Local variable environment for a procedure call.
 type Env = Map Name RuntimeVal
 
--- | Control flow signals, handled via the Error effect.
+-- | Non-local control flow signals. We use 'Effectful.Error.Static.Error'
+-- as an exception mechanism: 'Return' exits a procedure, 'Continue' and
+-- 'Break' target labeled 'Foreach' loops.
 data ControlFlow
   = CFReturn RuntimeVal
   | CFContinue Label
@@ -359,13 +361,12 @@ evalVmExpr pm hc (EvalDeep expr) = evalExpr pm hc expr
 -- evalExpr
 -- ---------------------------------------------------------------------------
 
+-- | Evaluate an expression with automatic dereferencing: variable
+-- references follow binding chains before use, and this mode propagates
+-- into sub-expressions. Used to implement 'EvalDeep' (guards and @is@ RHS).
 evalExpr ::
   (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
   ProcMap -> HostCallRegistry -> Expr -> Eff es RuntimeVal
-evalExpr _ _ (Lit (IntLit n)) = pure (RVal (VInt n))
-evalExpr _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
-evalExpr _ _ (Lit (TextLit s)) = pure (RVal (VText s))
-evalExpr _ _ (Lit (BoolLit b)) = pure (RVal (VBool b))
 evalExpr pm hc (Var name) = do
   v <- evalVmExpr pm hc (Var name)
   case v of
@@ -382,4 +383,4 @@ evalExpr pm hc (CallExpr name args) = do
 evalExpr pm hc (MakeTerm functor args) = do
   argVals <- traverse (evalExpr pm hc) args
   pure $ RVal $ makeTerm functor.unName (map toValue argVals)
-evalExpr _ _ expr = error $ "evalExpr: unsupported expression: " ++ show expr
+evalExpr pm hc expr = evalVmExpr pm hc expr
