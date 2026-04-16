@@ -52,11 +52,13 @@ displayErrorCode (ErrorCode n) = "YCHR-" ++ show n
 displaySrcLoc :: P.SourceLoc -> String
 displaySrcLoc loc = loc.file ++ ":" ++ show loc.line ++ ":" ++ show loc.col
 
-displaySeverity :: Severity -> String
-displaySeverity SevError =
-  setSGRCode [SetColor Foreground Vivid Red] ++ "error" ++ setSGRCode [SetColor Foreground Dull White]
-displaySeverity SevWarning =
-  setSGRCode [SetColor Foreground Vivid Yellow] ++ "warning" ++ setSGRCode [SetColor Foreground Dull White]
+severityLabel :: Severity -> String
+severityLabel SevError = "error"
+severityLabel SevWarning = "warning"
+
+severityColor :: Severity -> Color
+severityColor SevError = Red
+severityColor SevWarning = Yellow
 
 -- | Format a diagnostic message with source location, severity, error code,
 -- optional location label, and optional AST context.
@@ -69,18 +71,26 @@ displaySeverity SevWarning =
 -- @
 displayMsgWithSrcLoc :: ErrorCode -> Severity -> String -> P.SourceLoc -> Maybe String -> Maybe String -> String
 displayMsgWithSrcLoc code sev msg loc maybeLabel maybeNode =
-  setSGRCode [SetConsoleIntensity BoldIntensity]
-    ++ displaySrcLoc loc
-    ++ ": "
-    ++ displaySeverity sev
-    ++ ": "
-    ++ displayErrorCode code
-    ++ "\n"
-    ++ maybe "" (\l -> setSGRCode [SetConsoleIntensity BoldIntensity] ++ l ++ setSGRCode [Reset] ++ "\n") maybeLabel
-    ++ msg
-    ++ maybe "" (\n -> "\n" ++ setSGRCode [SetItalicized True] ++ n ++ setSGRCode [SetItalicized False]) maybeNode
-    ++ "\n"
-    ++ setSGRCode [Reset]
+  let col = severityColor sev
+      lbl = severityLabel sev
+      c = setSGRCode [SetColor Foreground Vivid col]
+      r = setSGRCode [Reset]
+   in c
+        ++ "=== "
+        ++ lbl
+        ++ " ==="
+        ++ r
+        ++ "\n"
+        ++ setSGRCode [SetConsoleIntensity BoldIntensity]
+        ++ displaySrcLoc loc
+        ++ ": "
+        ++ displayErrorCode code
+        ++ "\n"
+        ++ maybe "" (\l -> setSGRCode [SetConsoleIntensity BoldIntensity] ++ "<<" ++ l ++ ">>" ++ r ++ "\n") maybeLabel
+        ++ msg
+        ++ maybe "" (\n -> "\n" ++ setSGRCode [SetItalicized True] ++ n ++ setSGRCode [SetItalicized False]) maybeNode
+        ++ "\n"
+        ++ r
 
 -- | Join multiple error messages. Each message is expected to end with
 -- a newline, so a single @\"\\n\"@ separator produces a blank line between

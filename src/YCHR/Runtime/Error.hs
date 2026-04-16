@@ -30,11 +30,11 @@ runtimeErrorCode = "YCHR-60001"
 -- (same convention as 'YCHR.Display.displayErrors').
 displayRuntimeError :: String -> [SourceAnnotation] -> String
 displayRuntimeError msg [] =
-  formatFrame "error" Red msg dummyLoc Nothing Nothing
+  formatFrame "runtime error" Magenta msg dummyLoc Nothing Nothing
 displayRuntimeError msg (top : rest) =
   intercalate
     "\n"
-    ( formatFrame "error" Red msg top.annSourceLoc (Just (T.unpack top.annLabel)) (Just (T.unpack top.annSourceCode))
+    ( formatFrame "runtime error" Magenta msg top.annSourceLoc (Just (T.unpack top.annLabel)) (Just (T.unpack top.annSourceCode))
         : map (\ann -> formatFrame "stack trace" Cyan "" ann.annSourceLoc (Just (T.unpack ann.annLabel)) (Just (T.unpack ann.annSourceCode))) rest
     )
 
@@ -42,20 +42,24 @@ displayRuntimeError msg (top : rest) =
 -- 'YCHR.Display.displayMsgWithSrcLoc'.
 formatFrame :: String -> Color -> String -> SourceLoc -> Maybe String -> Maybe String -> String
 formatFrame sev color msg loc maybeLabel maybeNode =
-  setSGRCode [SetConsoleIntensity BoldIntensity]
-    ++ displaySrcLoc loc
-    ++ ": "
-    ++ setSGRCode [SetColor Foreground Vivid color]
-    ++ sev
-    ++ setSGRCode [SetColor Foreground Dull White]
-    ++ ": "
-    ++ runtimeErrorCode
-    ++ "\n"
-    ++ maybe "" (\l -> setSGRCode [SetConsoleIntensity BoldIntensity] ++ l ++ setSGRCode [Reset] ++ "\n") maybeLabel
-    ++ (if null msg then "" else msg)
-    ++ maybe "" (\n -> (if null msg then "" else "\n") ++ setSGRCode [SetItalicized True] ++ n ++ setSGRCode [SetItalicized False]) maybeNode
-    ++ "\n"
-    ++ setSGRCode [Reset]
+  let c = setSGRCode [SetColor Foreground Vivid color]
+      r = setSGRCode [Reset]
+   in c
+        ++ "=== "
+        ++ sev
+        ++ " ==="
+        ++ r
+        ++ "\n"
+        ++ setSGRCode [SetConsoleIntensity BoldIntensity]
+        ++ displaySrcLoc loc
+        ++ ": "
+        ++ runtimeErrorCode
+        ++ "\n"
+        ++ maybe "" (\l -> setSGRCode [SetConsoleIntensity BoldIntensity] ++ "<<" ++ l ++ ">>" ++ r ++ "\n") maybeLabel
+        ++ (if null msg then "" else msg)
+        ++ maybe "" (\n -> (if null msg then "" else "\n") ++ setSGRCode [SetItalicized True] ++ n ++ setSGRCode [SetItalicized False]) maybeNode
+        ++ "\n"
+        ++ r
 
 -- | Display a source location as @file:line:col@.
 displaySrcLoc :: SourceLoc -> String
