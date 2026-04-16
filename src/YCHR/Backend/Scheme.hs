@@ -179,7 +179,7 @@ compileStmt (AddHistory (RuleId rid) es) =
       SInt rid,
       SList (SAtom "list" : map (\e -> SList [SAtom "constraint-id", compileExpr e]) es)
     ]
-compileStmt (PushAnnotation _) =
+compileStmt (PushFrame _) =
   SList [SAtom "values"]
 compileStmt (DrainReactivationQueue (Name sv) body) =
   SList

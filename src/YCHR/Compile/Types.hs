@@ -80,7 +80,7 @@ data Occurrence = Occurrence
     -- from the rule's program-wide source position.
     ruleId :: RuleId,
     -- | Display name of the rule, used for diagnostics and
-    -- 'YCHR.VM.SourceAnnotation' labels. Equals @rule.name@ when
+    -- 'YCHR.VM.StackFrame' labels. Equals @rule.name@ when
     -- the rule was explicitly named, otherwise a synthetic
     -- @__rule_N@ fallback.
     ruleDisplay :: Text,

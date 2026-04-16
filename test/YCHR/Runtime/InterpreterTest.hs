@@ -363,7 +363,7 @@ countAlive cType = do
 -- | Run within the full effect stack, returning a result.
 runFullStack ::
   Eff
-    [ State [SourceAnnotation],
+    [ State [StackFrame],
       Writer [SuspensionId],
       ReactQueue,
       PropHistory,
@@ -381,7 +381,7 @@ runFullStack m =
     . runReactQueue
     . fmap fst
     . runWriter @[SuspensionId]
-    . evalState @[SourceAnnotation] []
+    . evalState @[StackFrame] []
     $ m
 
 -- | Call tell_leq within the full effect stack.
@@ -392,7 +392,7 @@ callTellLeq ::
     CHRStore :> es,
     PropHistory :> es,
     ReactQueue :> es,
-    State [SourceAnnotation] :> es
+    State [StackFrame] :> es
   ) =>
   Value -> Value -> Eff es RuntimeVal
 callTellLeq x y =

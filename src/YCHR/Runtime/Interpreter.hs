@@ -69,12 +69,12 @@ type ProcMap = Map Name Procedure
 -- | Local variable environment for a procedure call.
 type Env = Map Name RuntimeVal
 
--- | Maximum number of annotation stack frames to keep.
-maxAnnotationStack :: Int
-maxAnnotationStack = 10
+-- | Maximum number of call stack frames to keep.
+maxCallStackDepth :: Int
+maxCallStackDepth = 10
 
--- | Runtime annotation stack for error reporting (newest first).
-type AnnotationStack = [SourceAnnotation]
+-- | Runtime call stack for error reporting (newest first).
+type CallStack = [StackFrame]
 
 -- | Non-local control flow signals. We use 'Effectful.Error.Static.Error'
 -- as an exception mechanism: 'Return' exits a procedure, 'Continue' and
@@ -103,7 +103,7 @@ interpret prog hostCalls entryName args = do
     . runCHRStoreEff
     . runPropHistoryEff
     . runReactQueueEff
-    . evalState @AnnotationStack []
+    . evalState @CallStack []
     $ callProc procMap hostCalls entryName argVals
   where
     -- Run Unify with a Writer layer for observer collection.
@@ -129,7 +129,7 @@ type InterpEffects es =
     CHRStore :> es,
     PropHistory :> es,
     ReactQueue :> es,
-    State AnnotationStack :> es
+    State CallStack :> es
   )
 
 -- | Call a procedure. Creates a fresh environment with parameter bindings,
@@ -142,12 +142,12 @@ callProc procMap hostCalls name args = do
     Nothing -> runtimeError' "callProc: unknown procedure " name.unName
     Just proc -> do
       let env = Map.fromList (zip proc.params args)
-      savedStack <- get @AnnotationStack
+      savedStack <- get @CallStack
       result <-
         evalState env
           . runError @ControlFlow
           $ execStmts procMap hostCalls proc.body
-      put @AnnotationStack savedStack
+      put @CallStack savedStack
       case result of
         Right () -> pure (RVal (VBool False))
         Left (_, CFReturn v) -> pure v
@@ -210,39 +210,39 @@ execStmt pm hc (DrainReactivationQueue suspVar body) = do
         modify (Map.insert suspVar (RConstraint sid))
         execStmts pm hc body
       else pure ()
-execStmt _ _ (PushAnnotation ann) = do
-  modify @AnnotationStack $ \stack ->
-    take maxAnnotationStack (ann : stack)
+execStmt _ _ (PushFrame frame) = do
+  modify @CallStack $ \stack ->
+    take maxCallStackDepth (frame : stack)
 
 -- ---------------------------------------------------------------------------
 -- Runtime errors
 -- ---------------------------------------------------------------------------
 
--- | Raise a runtime error with the current annotation stack.
+-- | Raise a runtime error with the current call stack.
 -- Prints the formatted error to stderr and exits.
 runtimeError' ::
-  (IOE :> es, State AnnotationStack :> es) =>
+  (IOE :> es, State CallStack :> es) =>
   String -> T.Text -> Eff es a
 runtimeError' prefix detail = do
-  stack <- get @AnnotationStack
+  stack <- get @CallStack
   liftIO $ do
     hPutStr stderr $ displayRuntimeError (prefix ++ T.unpack detail) stack
     exitFailure
 
--- | Raise a runtime error with the current annotation stack (String-only variant).
+-- | Raise a runtime error with the current call stack (String-only variant).
 -- Prints the formatted error to stderr and exits.
 runtimeErrorS ::
-  (IOE :> es, State AnnotationStack :> es) =>
+  (IOE :> es, State CallStack :> es) =>
   String -> Eff es a
 runtimeErrorS msg = do
-  stack <- get @AnnotationStack
+  stack <- get @CallStack
   liftIO $ do
     hPutStr stderr $ displayRuntimeError msg stack
     exitFailure
 
 -- | Extract a constraint identifier from a runtime value, or raise a runtime error.
 expectConstraintId ::
-  (IOE :> es, State AnnotationStack :> es) =>
+  (IOE :> es, State CallStack :> es) =>
   RuntimeVal -> Eff es SuspensionId
 expectConstraintId (RConstraint s) = pure s
 expectConstraintId _ = runtimeErrorS "expected constraint identifier"

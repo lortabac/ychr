@@ -352,8 +352,8 @@ genFireStmts funSet symTab varMap occ = do
             | (k, p) <- zip [PartnerIndex 0 ..] occ.partners,
               p.isKept
             ]
-      annotation = mkRuleAnnotation occ
-      coreFireStmts = PushAnnotation annotation : killStmts ++ bodyStmts ++ earlyDropStmts ++ backjumpStmts
+      frame = mkRuleFrame occ
+      coreFireStmts = PushFrame frame : killStmts ++ bodyStmts ++ earlyDropStmts ++ backjumpStmts
   pure $
     if isPropagation
       then
@@ -377,19 +377,19 @@ buildHistoryIds occ =
             ]
    in map snd (sortOn fst positions)
 
--- | Build a 'SourceAnnotation' for a rule firing.
-mkRuleAnnotation :: Occurrence -> SourceAnnotation
-mkRuleAnnotation occ =
+-- | Build a 'StackFrame' for a rule firing.
+mkRuleFrame :: Occurrence -> StackFrame
+mkRuleFrame occ =
   let label = "rule " <> occ.ruleDisplay
-   in mkAnnotation label occ.rule.head.sourceLoc occ.rule.head.parsed
+   in mkFrame label occ.rule.head.sourceLoc occ.rule.head.parsed
 
--- | Build a 'SourceAnnotation' from a label, source location, and parsed expression.
-mkAnnotation :: Text -> SourceLoc -> PExpr -> SourceAnnotation
-mkAnnotation label loc pexpr =
-  SourceAnnotation
-    { annLabel = label,
-      annSourceLoc = loc,
-      annSourceCode = T.pack (prettyPExprSrc pexpr)
+-- | Build a 'StackFrame' from a label, source location, and parsed expression.
+mkFrame :: Text -> SourceLoc -> PExpr -> StackFrame
+mkFrame label loc pexpr =
+  StackFrame
+    { frameLabel = label,
+      frameSourceLoc = loc,
+      frameSourceCode = T.pack (prettyPExprSrc pexpr)
     }
 
 genKillStmts :: Occurrence -> [Stmt]
@@ -695,14 +695,14 @@ compileFunctionDef funSet func = do
       params = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. func.arity - 1]]
       funcLabel = Just ("function " <> flattenName func.name <> "/" <> T.pack (show func.arity))
       funcSi = SrcInfo func.equations.sourceLoc func.equations.parsed funcLabel
-      annotation =
-        mkAnnotation
+      frame =
+        mkFrame
           ("function " <> flattenName func.name <> "/" <> T.pack (show func.arity))
           func.equations.sourceLoc
           func.equations.parsed
   eqStmts <- traverse (compileEquation funSet params funcSi) func.equations.node
   let errorStmt = ExprStmt (HostCall chrErrorName [Lit (AtomLit "no_matching_equation")])
-  pure (Procedure procName' params (PushAnnotation annotation : concat eqStmts ++ [errorStmt]))
+  pure (Procedure procName' params (PushFrame frame : concat eqStmts ++ [errorStmt]))
 
 -- | Build a VarMap for a function equation: maps each normalized parameter
 -- variable to the corresponding procedure parameter name.

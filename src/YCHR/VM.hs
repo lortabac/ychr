@@ -10,8 +10,8 @@ module YCHR.VM
     -- * Expressions
     Expr (..),
 
-    -- * Source annotations
-    SourceAnnotation (..),
+    -- * Runtime call stack frames
+    StackFrame (..),
 
     -- * Supporting types
     ConstraintType (..),

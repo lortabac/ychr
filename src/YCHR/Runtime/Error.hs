@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Runtime error formatting with annotation stack traces.
+-- | Runtime error formatting with call stack traces.
 module YCHR.Runtime.Error
   ( displayRuntimeError,
     runtimeErrorCode,
@@ -12,13 +12,13 @@ import Data.List (intercalate)
 import Data.Text qualified as T
 import System.Console.ANSI (Color (..), ColorIntensity (..), ConsoleIntensity (..), ConsoleLayer (..), SGR (..), setSGRCode)
 import YCHR.Loc (SourceLoc (..), dummyLoc)
-import YCHR.VM (SourceAnnotation (..))
+import YCHR.VM (StackFrame (..))
 
 -- | Runtime error code.
 runtimeErrorCode :: String
 runtimeErrorCode = "YCHR-60001"
 
--- | Format a runtime error with an annotation stack trace.
+-- | Format a runtime error with a call stack trace.
 --
 -- The top stack frame (most recent) is displayed as the error location.
 -- Subsequent frames are displayed as notes showing the call context.
@@ -28,14 +28,14 @@ runtimeErrorCode = "YCHR-60001"
 -- every message ends with a newline followed by a reset escape.
 -- Messages are joined with @\"\\n\"@ so a blank line appears between them
 -- (same convention as 'YCHR.Display.displayErrors').
-displayRuntimeError :: String -> [SourceAnnotation] -> String
+displayRuntimeError :: String -> [StackFrame] -> String
 displayRuntimeError msg [] =
   formatFrame "runtime error" Magenta msg dummyLoc Nothing Nothing
 displayRuntimeError msg (top : rest) =
   intercalate
     "\n"
-    ( formatFrame "runtime error" Magenta msg top.annSourceLoc (Just (T.unpack top.annLabel)) (Just (T.unpack top.annSourceCode))
-        : map (\ann -> formatFrame "stack trace" Cyan "" ann.annSourceLoc (Just (T.unpack ann.annLabel)) (Just (T.unpack ann.annSourceCode))) rest
+    ( formatFrame "runtime error" Magenta msg top.frameSourceLoc (Just (T.unpack top.frameLabel)) (Just (T.unpack top.frameSourceCode))
+        : map (\frame -> formatFrame "stack trace" Cyan "" frame.frameSourceLoc (Just (T.unpack frame.frameLabel)) (Just (T.unpack frame.frameSourceCode))) rest
     )
 
 -- | Format a single diagnostic frame.  Mirrors the layout of

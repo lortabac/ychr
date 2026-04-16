@@ -44,8 +44,8 @@ module YCHR.VM.Types
     -- * Expressions
     Expr (..),
 
-    -- * Source annotations
-    SourceAnnotation (..),
+    -- * Runtime call stack frames
+    StackFrame (..),
 
     -- * Supporting types
     ConstraintType (..),
@@ -64,17 +64,17 @@ import Data.Text qualified as T
 import YCHR.Loc (SourceLoc)
 import YCHR.Types (ConstraintType (..), RuleId (..))
 
--- | Source annotation for runtime call stack tracking.
+-- | A runtime call stack frame.
 --
 -- Emitted by the compiler at rule fire and function entry points.
 -- The interpreter maintains a stack of these for error reporting.
-data SourceAnnotation = SourceAnnotation
+data StackFrame = StackFrame
   { -- | Human-readable label (e.g. @"rule transitivity"@ or @"function factorial\/1"@).
-    annLabel :: Text,
+    frameLabel :: Text,
     -- | Source file location.
-    annSourceLoc :: SourceLoc,
+    frameSourceLoc :: SourceLoc,
     -- | Pretty-printed source code (from the parsed expression).
-    annSourceCode :: Text
+    frameSourceCode :: Text
   }
   deriving (Show, Eq)
 
@@ -184,13 +184,13 @@ data Stmt
     -- to @suspVar@ and executing @body@. The body typically dispatches
     -- to the appropriate @activate_c@ procedure based on constraint type.
     DrainReactivationQueue Name [Stmt]
-  | -- Source annotations
+  | -- Call stack frames
 
-    -- | Push a source annotation onto the runtime call stack.
+    -- | Push a frame onto the runtime call stack.
     -- Emitted by the compiler at rule fire and function entry points.
-    -- The interpreter automatically pops annotations when a procedure
+    -- The interpreter automatically pops frames when a procedure
     -- returns (save\/restore around 'callProc').
-    PushAnnotation SourceAnnotation
+    PushFrame StackFrame
   deriving (Show, Eq)
 
 -- | Expressions (side-effect-free, except for 'Unify' and 'HostCall').

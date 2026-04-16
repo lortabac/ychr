@@ -136,14 +136,14 @@ stmtToSExpr (AddHistory rid es) =
   SList (SAtom "add-history" : ruleIdToSExpr rid : map exprToSExpr es)
 stmtToSExpr (DrainReactivationQueue sv body) =
   SList (SAtom "drain-reactivation-queue" : nameToSExpr sv : map stmtToSExpr body)
-stmtToSExpr (PushAnnotation ann) =
+stmtToSExpr (PushFrame frame) =
   SList
-    [ SAtom "push-annotation",
-      SAtom ann.annLabel,
-      SAtom (T.pack (show ann.annSourceLoc.line)),
-      SAtom (T.pack (show ann.annSourceLoc.col)),
-      SAtom (T.pack ann.annSourceLoc.file),
-      SAtom ann.annSourceCode
+    [ SAtom "push-frame",
+      SAtom frame.frameLabel,
+      SAtom (T.pack (show frame.frameSourceLoc.line)),
+      SAtom (T.pack (show frame.frameSourceLoc.col)),
+      SAtom (T.pack frame.frameSourceLoc.file),
+      SAtom frame.frameSourceCode
     ]
 
 exprToSExpr :: Expr -> SExpr
@@ -287,11 +287,11 @@ stmtFromSExpr (SList (SAtom "add-history" : rid : es)) =
   AddHistory <$> ruleIdFromSExpr rid <*> traverse exprFromSExpr es
 stmtFromSExpr (SList (SAtom "drain-reactivation-queue" : sv : body)) =
   DrainReactivationQueue <$> nameFromSExpr sv <*> traverse stmtFromSExpr body
-stmtFromSExpr (SList [SAtom "push-annotation", SAtom label, SAtom lineStr, SAtom colStr, SAtom file, SAtom src]) =
+stmtFromSExpr (SList [SAtom "push-frame", SAtom label, SAtom lineStr, SAtom colStr, SAtom file, SAtom src]) =
   case (readMaybe (T.unpack lineStr), readMaybe (T.unpack colStr)) of
     (Just l, Just c) ->
-      pure $ PushAnnotation $ SourceAnnotation label (SourceLoc (T.unpack file) l c) src
-    _ -> err "push-annotation: invalid line/col"
+      pure $ PushFrame $ StackFrame label (SourceLoc (T.unpack file) l c) src
+    _ -> err "push-frame: invalid line/col"
 stmtFromSExpr s = err ("expected statement, got: " <> printSExpr s)
 
 exprFromSExpr :: SExpr -> Err Expr
