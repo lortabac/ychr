@@ -198,10 +198,10 @@ execStmt pm hc (Kill expr) = do
   case v of
     RConstraint sid -> killConstraint sid
     _ -> runtimeErrorS "Kill: expected constraint identifier"
-execStmt pm hc (AddHistory ruleName exprs) = do
+execStmt pm hc (AddHistory ruleId exprs) = do
   ids <- traverse (evalVmExpr pm hc) exprs
   sids <- traverse expectConstraintId ids
-  addHistory ruleName sids
+  addHistory ruleId sids
 execStmt pm hc (DrainReactivationQueue suspVar body) = do
   drainQueue $ \sid -> do
     alive <- aliveConstraint sid
@@ -378,10 +378,10 @@ evalVmExpr pm hc (IsConstraintType expr cType) = do
   case v of
     RConstraint sid -> RVal . VBool <$> isConstraintType sid cType
     _ -> runtimeErrorS "IsConstraintType: expected constraint identifier"
-evalVmExpr pm hc (NotInHistory ruleName args) = do
+evalVmExpr pm hc (NotInHistory ruleId args) = do
   argVals <- traverse (evalVmExpr pm hc) args
   sids <- traverse expectConstraintId argVals
-  RVal . VBool <$> notInHistory ruleName sids
+  RVal . VBool <$> notInHistory ruleId sids
 evalVmExpr pm hc (Unify e1 e2) = do
   v1 <- evalVmExpr pm hc e1
   v2 <- evalVmExpr pm hc e2

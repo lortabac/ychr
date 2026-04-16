@@ -15,12 +15,12 @@ module YCHR.VM
 
     -- * Supporting types
     ConstraintType (..),
+    RuleId (..),
     Field (..),
     Literal (..),
     ArgIndex (..),
     Name (..),
     Label (..),
-    RuleName (..),
   )
 where
 

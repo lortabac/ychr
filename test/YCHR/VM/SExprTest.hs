@@ -25,11 +25,11 @@ tests =
 
 roundtripTests :: [TestTree]
 roundtripTests =
-  [ testCase "empty program" $ roundtrip (Program 0 [] []),
+  [ testCase "empty program" $ roundtrip (Program 0 [] 0 [] []),
     testCase "single empty procedure" $
-      roundtrip (Program 1 ["foo"] [Procedure "foo" [] []]),
+      roundtrip (Program 1 ["foo"] 0 [] [Procedure "foo" [] []]),
     testCase "procedure with params" $
-      roundtrip (Program 1 ["leq"] [Procedure "tell_leq2" ["X", "Y"] []]),
+      roundtrip (Program 1 ["leq"] 0 [] [Procedure "tell_leq2" ["X", "Y"] []]),
     testCase "let statement" $
       roundtrip (mkProg [Let "x" (Lit (IntLit 42))]),
     testCase "assign statement" $
@@ -63,7 +63,7 @@ roundtripTests =
     testCase "store and kill" $
       roundtrip (mkProg [Store (Var "id"), Kill (Var "id")]),
     testCase "add-history" $
-      roundtrip (mkProg [AddHistory "rule1" [Var "id1", Var "id2"]]),
+      roundtrip (mkProg [AddHistory (RuleId 0) [Var "id1", Var "id2"]]),
     testCase "drain-reactivation-queue" $
       roundtrip
         ( mkProg
@@ -96,7 +96,7 @@ roundtripTests =
               Let "s" (Alive (Var "id")),
               Let "t" (IdEqual (Var "id1") (Var "id2")),
               Let "u" (IsConstraintType (Var "s") (ConstraintType 1)),
-              Let "v" (NotInHistory "rule" [Var "id1", Var "id2"]),
+              Let "v" (NotInHistory (RuleId 0) [Var "id1", Var "id2"]),
               Let "w" (Unify (Var "a") (Var "b")),
               Let "x2" (Equal (Var "a") (Var "b")),
               Let "y" (FieldGet (Var "s") FieldId),
@@ -117,6 +117,8 @@ roundtripTests =
         ( Program
             2
             ["a", "b"]
+            0
+            []
             [ Procedure "tell_a1" ["X"] [Let "id" (CreateConstraint (ConstraintType 0) [Var "X"]), Store (Var "id"), ExprStmt (CallExpr "activate_a1" [Var "id"])],
               Procedure "activate_a1" ["susp"] [Let "id" (Var "susp"), Let "X" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))), Return (Lit (BoolLit False))],
               Procedure "reactivate_dispatch" ["susp"] [If (IsConstraintType (Var "susp") (ConstraintType 0)) [ExprStmt (CallExpr "activate_a1" [Var "susp"])] []]
@@ -140,7 +142,7 @@ roundtrip prog = do
 formatTests :: [TestTree]
 formatTests =
   [ testCase "var serialization" $
-      assertContains (serializeProg (mkProg [ExprStmt (Var "x")])) "(program 0 (type-names) (procedure \"p\" () (expr-stmt (var \"x\"))))",
+      assertContains (serializeProg (mkProg [ExprStmt (Var "x")])) "(program 0 (type-names) 0 (rule-names) (procedure \"p\" () (expr-stmt (var \"x\"))))",
     testCase "literals inline without wrapper" $ do
       assertContains (serializeProg (mkProg [Let "x" (Lit (BoolLit True))])) "true"
       assertContains (serializeProg (mkProg [Let "x" (Lit (BoolLit False))])) "false"
@@ -152,7 +154,7 @@ formatTests =
     testCase "exports and symbol table roundtrip" $
       let vmp =
             VMProgram
-              { program = Program 2 ["M:leq", "gcd"] [],
+              { program = Program 2 ["M:leq", "gcd"] 0 [] [],
                 exportedSet = Set.fromList [Types.QualifiedIdentifier "M" "leq" 2, Types.QualifiedIdentifier "M" "gcd" 1],
                 symbolTable = Types.mkSymbolTable [(Types.Identifier (Types.Qualified "M" "leq") 2, Types.ConstraintType 0), (Types.Identifier (Types.Unqualified "gcd") 1, Types.ConstraintType 1)]
               }
@@ -171,7 +173,7 @@ serializeProg = serialize . mkVMProg
 
 -- | Build a minimal program with one procedure containing the given body.
 mkProg :: [Stmt] -> Program
-mkProg body = Program 0 [] [Procedure "p" [] body]
+mkProg body = Program 0 [] 0 [] [Procedure "p" [] body]
 
 -- | Wrap a Program into a VMProgram with empty metadata.
 mkVMProg :: Program -> VMProgram

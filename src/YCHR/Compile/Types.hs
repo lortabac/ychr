@@ -33,9 +33,9 @@ where
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import YCHR.Desugared qualified as D
-import YCHR.Types (Constraint, Identifier, Name, Term)
+import YCHR.Types (Constraint, Identifier, Name, RuleId, Term)
 import YCHR.Types qualified as Types
-import YCHR.VM (ConstraintType, Expr, RuleName)
+import YCHR.VM (ConstraintType, Expr)
 
 -- | Errors raised by any pass in the CHR-to-VM compiler. Wrapped in
 -- 'YCHR.Parsed.AnnP' at the use site to carry the source location and
@@ -75,11 +75,15 @@ data Occurrence = Occurrence
     -- | The full rule this occurrence belongs to. Carried so that
     -- 'genFireStmts' can read its guard, body, and head shape.
     rule :: D.Rule,
-    -- | Resolved name of the rule for propagation-history bookkeeping.
-    -- Equals @rule.name@ if the rule was explicitly named, otherwise a
-    -- synthetic @__rule_N@ name unique within the program (assigned by
-    -- 'YCHR.Compile.collectOccurrences' from the rule's source position).
-    ruleName :: RuleName,
+    -- | Numeric identifier of the rule, used as the propagation
+    -- history key. Assigned by 'YCHR.Compile.collectOccurrences'
+    -- from the rule's program-wide source position.
+    ruleId :: RuleId,
+    -- | Display name of the rule, used for diagnostics and
+    -- 'YCHR.VM.SourceAnnotation' labels. Equals @rule.name@ when
+    -- the rule was explicitly named, otherwise a synthetic
+    -- @__rule_N@ fallback.
+    ruleDisplay :: Text,
     -- | Position of the active head constraint inside the rule's
     -- combined (removed ++ kept) head list.
     activeIdx :: HeadPosition,

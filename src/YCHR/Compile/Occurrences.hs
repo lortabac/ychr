@@ -29,22 +29,36 @@ import YCHR.Diagnostic (Diagnostic (..))
 import YCHR.PExpr (PExpr)
 import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
-import YCHR.Types (Constraint, Identifier (..), SymbolTable, lookupSymbol)
-import YCHR.VM (ConstraintType (..), RuleName (..))
+import YCHR.Types (Constraint, Identifier (..), RuleId (..), SymbolTable, lookupSymbol)
+import YCHR.VM (ConstraintType (..))
 
 -- | Walk every rule in the program and assemble the per-constraint
 -- 'OccurrenceMap'. Occurrences are numbered top-down within each
 -- constraint type so that occurrence number 1 is the textually first
 -- occurrence (paper §5.2, Listings 1 and 2).
-collectOccurrences :: SymbolTable -> D.Program -> Eff '[Writer [Diagnostic CompileError]] OccurrenceMap
+--
+-- Also returns the list of per-rule display names, indexed by the
+-- rule's 'RuleId' (which mirrors its program-wide source index).
+collectOccurrences :: SymbolTable -> D.Program -> Eff '[Writer [Diagnostic CompileError]] (OccurrenceMap, [Text])
 collectOccurrences symTab prog = do
-  allOccs <- fmap concat (traverse (ruleOccurrences symTab) (zip [0 ..] prog.rules))
+  let indexed = zip [0 ..] prog.rules
+      displayNames = map (uncurry ruleDisplayName) indexed
+  allOccs <- fmap concat (traverse (ruleOccurrences symTab) indexed)
   let grouped = foldl' (\m occ -> occMapAppend (Identifier occ.conName occ.conArity) occ m) occMapEmpty allOccs
-  pure (occMapMap (assignNumbers . reverse) grouped)
+  pure (occMapMap (assignNumbers . reverse) grouped, displayNames)
   where
     -- Reverse before numbering to undo the prepend-on-insert in
     -- 'occMapAppend' and restore top-down rule order.
     assignNumbers = zipWith (\n o -> o {number = n}) [OccurrenceNumber 1 ..]
+
+-- | Compute the display name of a rule. Anonymous rules get a
+-- synthetic @__rule_N@ name whose index matches the rule's
+-- program-wide source position. The double-underscore prefix avoids
+-- clashes with user-defined names.
+ruleDisplayName :: Int -> D.Rule -> Text
+ruleDisplayName ruleIdx rule = case rule.name of
+  Just n -> n
+  Nothing -> "__rule_" <> T.pack (show ruleIdx)
 
 -- | Produce one 'Occurrence' record for every head constraint of a
 -- single rule. The active head varies; the other heads become the
@@ -62,15 +76,10 @@ ruleOccurrences symTab (ruleIdx, rule) = do
       orderedOccurrences =
         [(i, c, False) | (i, c) <- zip [HeadPosition 0 ..] (reverse removed)]
           ++ [(i, c, True) | (i, c) <- zip [HeadPosition (length removed) ..] (reverse kept)]
-      -- Anonymous rules need a unique fallback name so the propagation
-      -- history can distinguish them. We use the rule's program-wide
-      -- index, which is stable as long as the source order is. The
-      -- double-underscore prefix avoids clashes with user-defined names.
-      ruleName' = case rule.name of
-        Just n -> RuleName n
-        Nothing -> RuleName ("__rule_" <> T.pack (show ruleIdx))
+      ruleId' = RuleId ruleIdx
+      display = ruleDisplayName ruleIdx rule
   for orderedOccurrences $ \(idx, con, isKept) ->
-    mkOccurrence symTab rule ruleName' orderedOccurrences idx con isKept
+    mkOccurrence symTab rule ruleId' display orderedOccurrences idx con isKept
 
 -- | Build a single 'Occurrence' record for the active head constraint
 -- at @activeIdx@. The other entries in @combined@ become the partner
@@ -78,17 +87,18 @@ ruleOccurrences symTab (ruleIdx, rule) = do
 mkOccurrence ::
   SymbolTable ->
   D.Rule ->
-  RuleName ->
+  RuleId ->
+  Text ->
   [(HeadPosition, Constraint, Bool)] ->
   HeadPosition ->
   Constraint ->
   Bool ->
   Eff '[Writer [Diagnostic CompileError]] Occurrence
-mkOccurrence symTab rule ruleName' combined activeIdx activeCon activeIsKept = do
+mkOccurrence symTab rule ruleId' display combined activeIdx activeCon activeIsKept = do
   let partners' = [(idx, con, isKept) | (idx, con, isKept) <- combined, idx /= activeIdx]
       headLoc = rule.head.sourceLoc
       headPretty = rule.head.parsed
-  let ruleLabel = Just ("rule " <> ruleName'.unRuleName)
+  let ruleLabel = Just ("rule " <> display)
   partners <- for partners' $ \(idx, con, isKept) -> do
     ct <- lookupCType symTab headLoc headPretty ruleLabel (Identifier con.name (length con.args))
     pure
@@ -104,7 +114,8 @@ mkOccurrence symTab rule ruleName' combined activeIdx activeCon activeIsKept = d
         conArity = length activeCon.args,
         number = OccurrenceNumber 0,
         rule = rule,
-        ruleName = ruleName',
+        ruleId = ruleId',
+        ruleDisplay = display,
         activeIdx = activeIdx,
         isKept = activeIsKept,
         activeArgs = activeCon.args,

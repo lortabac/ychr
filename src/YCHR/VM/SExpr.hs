@@ -98,6 +98,8 @@ programToSExpr prog =
     ( SAtom "program"
         : SInt prog.numTypes
         : SList (SAtom "type-names" : map SString prog.typeNames)
+        : SInt prog.numRules
+        : SList (SAtom "rule-names" : map SString prog.ruleNames)
         : map procedureToSExpr prog.procedures
     )
 
@@ -130,8 +132,8 @@ stmtToSExpr (Return e) = SList [SAtom "return", exprToSExpr e]
 stmtToSExpr (ExprStmt e) = SList [SAtom "expr-stmt", exprToSExpr e]
 stmtToSExpr (Store e) = SList [SAtom "store", exprToSExpr e]
 stmtToSExpr (Kill e) = SList [SAtom "kill", exprToSExpr e]
-stmtToSExpr (AddHistory rn es) =
-  SList (SAtom "add-history" : ruleNameToSExpr rn : map exprToSExpr es)
+stmtToSExpr (AddHistory rid es) =
+  SList (SAtom "add-history" : ruleIdToSExpr rid : map exprToSExpr es)
 stmtToSExpr (DrainReactivationQueue sv body) =
   SList (SAtom "drain-reactivation-queue" : nameToSExpr sv : map stmtToSExpr body)
 stmtToSExpr (PushAnnotation ann) =
@@ -163,8 +165,8 @@ exprToSExpr (Alive e) = SList [SAtom "alive", exprToSExpr e]
 exprToSExpr (IdEqual a b) = SList [SAtom "id-equal", exprToSExpr a, exprToSExpr b]
 exprToSExpr (IsConstraintType e ct) =
   SList [SAtom "is-constraint-type", exprToSExpr e, constraintTypeToSExpr ct]
-exprToSExpr (NotInHistory rn es) =
-  SList (SAtom "not-in-history" : ruleNameToSExpr rn : map exprToSExpr es)
+exprToSExpr (NotInHistory rid es) =
+  SList (SAtom "not-in-history" : ruleIdToSExpr rid : map exprToSExpr es)
 exprToSExpr (Unify a b) = SList [SAtom "unify", exprToSExpr a, exprToSExpr b]
 exprToSExpr (Equal a b) = SList [SAtom "equal", exprToSExpr a, exprToSExpr b]
 exprToSExpr (FieldGet e f) = SList [SAtom "field-get", exprToSExpr e, fieldToSExpr f]
@@ -188,8 +190,8 @@ nameToSExpr (Name t) = SString t
 labelToSExpr :: Label -> SExpr
 labelToSExpr (Label t) = SString t
 
-ruleNameToSExpr :: RuleName -> SExpr
-ruleNameToSExpr (RuleName t) = SString t
+ruleIdToSExpr :: RuleId -> SExpr
+ruleIdToSExpr (RuleId n) = SInt n
 
 constraintTypeToSExpr :: ConstraintType -> SExpr
 constraintTypeToSExpr (ConstraintType n) = SInt n
@@ -236,15 +238,25 @@ chrNameFromSExpr (SList [SAtom "qualified", SString m, SString t]) = pure (Types
 chrNameFromSExpr s = err ("expected name, got: " <> printSExpr s)
 
 programFromSExpr :: SExpr -> Err Program
-programFromSExpr (SList (SAtom "program" : SInt n : SList (SAtom "type-names" : nameSexprs) : procs)) = do
-  tns <- traverse typeNameFromSExpr nameSexprs
-  ps <- traverse procedureFromSExpr procs
-  pure Program {numTypes = n, typeNames = tns, procedures = ps}
+programFromSExpr
+  ( SList
+      ( SAtom "program"
+          : SInt n
+          : SList (SAtom "type-names" : tnSexprs)
+          : SInt nr
+          : SList (SAtom "rule-names" : rnSexprs)
+          : procs
+        )
+    ) = do
+    tns <- traverse textFromSExpr tnSexprs
+    rns <- traverse textFromSExpr rnSexprs
+    ps <- traverse procedureFromSExpr procs
+    pure Program {numTypes = n, typeNames = tns, numRules = nr, ruleNames = rns, procedures = ps}
 programFromSExpr s = err ("expected (program ...), got: " <> printSExpr s)
 
-typeNameFromSExpr :: SExpr -> Err Text
-typeNameFromSExpr (SString t) = pure t
-typeNameFromSExpr s = err ("expected type name string, got: " <> printSExpr s)
+textFromSExpr :: SExpr -> Err Text
+textFromSExpr (SString t) = pure t
+textFromSExpr s = err ("expected name string, got: " <> printSExpr s)
 
 procedureFromSExpr :: SExpr -> Err Procedure
 procedureFromSExpr (SList (SAtom "procedure" : SString nm : SList paramSexprs : bodyExprs)) = do
@@ -271,8 +283,8 @@ stmtFromSExpr (SList [SAtom "return", e]) = Return <$> exprFromSExpr e
 stmtFromSExpr (SList [SAtom "expr-stmt", e]) = ExprStmt <$> exprFromSExpr e
 stmtFromSExpr (SList [SAtom "store", e]) = Store <$> exprFromSExpr e
 stmtFromSExpr (SList [SAtom "kill", e]) = Kill <$> exprFromSExpr e
-stmtFromSExpr (SList (SAtom "add-history" : rn : es)) =
-  AddHistory <$> ruleNameFromSExpr rn <*> traverse exprFromSExpr es
+stmtFromSExpr (SList (SAtom "add-history" : rid : es)) =
+  AddHistory <$> ruleIdFromSExpr rid <*> traverse exprFromSExpr es
 stmtFromSExpr (SList (SAtom "drain-reactivation-queue" : sv : body)) =
   DrainReactivationQueue <$> nameFromSExpr sv <*> traverse stmtFromSExpr body
 stmtFromSExpr (SList [SAtom "push-annotation", SAtom label, SAtom lineStr, SAtom colStr, SAtom file, SAtom src]) =
@@ -312,8 +324,8 @@ exprFromSExpr (SList [SAtom "id-equal", a, b]) =
   IdEqual <$> exprFromSExpr a <*> exprFromSExpr b
 exprFromSExpr (SList [SAtom "is-constraint-type", e, ct]) =
   IsConstraintType <$> exprFromSExpr e <*> constraintTypeFromSExpr ct
-exprFromSExpr (SList (SAtom "not-in-history" : rn : es)) =
-  NotInHistory <$> ruleNameFromSExpr rn <*> traverse exprFromSExpr es
+exprFromSExpr (SList (SAtom "not-in-history" : rid : es)) =
+  NotInHistory <$> ruleIdFromSExpr rid <*> traverse exprFromSExpr es
 exprFromSExpr (SList [SAtom "unify", a, b]) = Unify <$> exprFromSExpr a <*> exprFromSExpr b
 exprFromSExpr (SList [SAtom "equal", a, b]) = Equal <$> exprFromSExpr a <*> exprFromSExpr b
 exprFromSExpr (SList [SAtom "field-get", e, f]) = FieldGet <$> exprFromSExpr e <*> fieldFromSExpr f
@@ -337,9 +349,9 @@ labelFromSExpr :: SExpr -> Err Label
 labelFromSExpr (SString t) = pure (Label t)
 labelFromSExpr s = err ("expected string (label), got: " <> printSExpr s)
 
-ruleNameFromSExpr :: SExpr -> Err RuleName
-ruleNameFromSExpr (SString t) = pure (RuleName t)
-ruleNameFromSExpr s = err ("expected string (rule name), got: " <> printSExpr s)
+ruleIdFromSExpr :: SExpr -> Err RuleId
+ruleIdFromSExpr (SInt n) = pure (RuleId n)
+ruleIdFromSExpr s = err ("expected int (rule id), got: " <> printSExpr s)
 
 constraintTypeFromSExpr :: SExpr -> Err ConstraintType
 constraintTypeFromSExpr (SInt n) = pure (ConstraintType n)

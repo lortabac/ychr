@@ -40,6 +40,8 @@ leqProgram =
   Program
     { numTypes = 1,
       typeNames = ["leq"],
+      numRules = 1,
+      ruleNames = ["transitivity"],
       procedures =
         [ tellLeq,
           activateLeq,
@@ -271,8 +273,8 @@ occurrenceLeq6 =
                 [ If
                     (Equal (Var "pA1") (Var "X"))
                     [ If
-                        (NotInHistory "transitivity" [Var "pId", Var "id"])
-                        [ AddHistory "transitivity" [Var "pId", Var "id"],
+                        (NotInHistory (RuleId 0) [Var "pId", Var "id"])
+                        [ AddHistory (RuleId 0) [Var "pId", Var "id"],
                           ExprStmt (CallExpr "tell_leq2" [Var "pA0", Var "Y"]),
                           If
                             (Not (Alive (Var "id")))
@@ -310,8 +312,8 @@ occurrenceLeq7 =
                 [ If
                     (Equal (Var "pA0") (Var "Y"))
                     [ If
-                        (NotInHistory "transitivity" [Var "id", Var "pId"])
-                        [ AddHistory "transitivity" [Var "id", Var "pId"],
+                        (NotInHistory (RuleId 0) [Var "id", Var "pId"])
+                        [ AddHistory (RuleId 0) [Var "id", Var "pId"],
                           ExprStmt (CallExpr "tell_leq2" [Var "X", Var "pA1"]),
                           If
                             (Not (Alive (Var "id")))
@@ -479,6 +481,8 @@ makeCalcProc body =
   Program
     { numTypes = 0,
       typeNames = [],
+      numRules = 0,
+      ruleNames = [],
       procedures =
         [ Procedure
             "calc"

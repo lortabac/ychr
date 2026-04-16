@@ -41,9 +41,10 @@ Line comments start with `;` and extend to end of line.
 
 ### Conventions
 
-- **Names** (variable names, procedure names, labels, rule names) are
-  always double-quoted strings: `"x"`, `"tell_mymodule__leq2"`, `"L1"`.
+- **Names** (variable names, procedure names, labels) are always
+  double-quoted strings: `"x"`, `"tell_mymodule__leq2"`, `"L1"`.
 - **Constraint types** are bare integers (0-based indices): `0`, `1`.
+- **Rule identifiers** are bare integers (0-based indices): `0`, `1`.
 - **Argument indices** are bare integers (0-based): `0`, `1`.
 - **Booleans** are bare atoms: `true`, `false`.
 - **Variable-length argument lists** are trailing children within the
@@ -93,11 +94,23 @@ defining module before compilation.
 
 ```scheme
 (program <num-types>
+  (type-names "<type-name>" ...)
+  <num-rules>
+  (rule-names "<rule-name>" ...)
   <procedure>
   ...)
 ```
 
 - `<num-types>` -- integer, number of distinct constraint types.
+- `type-names` -- list of strings indexed by constraint type integer.
+  `type-names[i]` is the flattened source name (e.g.
+  `"mymodule:leq"`) of the constraint type with index `i`. Used by
+  runtime introspection.
+- `<num-rules>` -- integer, number of rules in the compilation unit.
+- `rule-names` -- list of strings indexed by rule identifier integer.
+  `rule-names[i]` is the source name of the rule with id `i`, or a
+  synthetic `"__rule_N"` fallback for anonymous rules. Used by
+  runtime introspection.
 - Zero or more procedure definitions follow.
 
 ### Procedure
@@ -292,11 +305,13 @@ Remove a constraint from the store and mark it as no longer alive.
 ### add-history
 
 ```scheme
-(add-history "<rule-name>" <id-expr> ...)
+(add-history <rule-id> <id-expr> ...)
 ```
 
 Record that a rule has fired with the given combination of constraint
 identifiers. Used to prevent redundant re-firing of propagation rules.
+`<rule-id>` is the rule's integer identifier (see the program's
+`rule-names` table for the corresponding source name).
 
 ### drain-reactivation-queue
 
@@ -399,11 +414,13 @@ Creates a fresh unbound logical variable. Serialized as a bare atom
 ### Propagation history
 
 ```scheme
-(not-in-history "<rule-name>" <id-expr> ...)
+(not-in-history <rule-id> <id-expr> ...)
 ```
 
 Returns `true` if the rule has not previously fired with the given
-combination of constraint identifiers.
+combination of constraint identifiers. `<rule-id>` is the rule's
+integer identifier (see the program's `rule-names` table for the
+corresponding source name).
 
 ### Unification and equality
 
@@ -471,7 +488,9 @@ the requirements on iteration under modification.
 
 ### Propagation history
 
-A set of tuples `(rule-name, id_1, ..., id_n)`. Must support:
+A set of tuples `(rule-id, id_1, ..., id_n)`, where `rule-id` is the
+integer identifier assigned to the rule at compile time. Must
+support:
 
 - `add-history`: insert a tuple.
 - `not-in-history`: membership test.
@@ -498,6 +517,9 @@ names use the pattern `<prefix>_mymodule__leq2`:
 ```scheme
 (vm-program
   (program 1
+    (type-names "mymodule:leq")
+    1
+    (rule-names "reflexivity")
 
     ; tell_mymodule__leq2(X, Y): create, store, activate
     (procedure "tell_mymodule__leq2" ("X_0" "X_1")

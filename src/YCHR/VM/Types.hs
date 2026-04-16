@@ -49,12 +49,12 @@ module YCHR.VM.Types
 
     -- * Supporting types
     ConstraintType (..),
+    RuleId (..),
     Field (..),
     Literal (..),
     ArgIndex (..),
     Name (..),
     Label (..),
-    RuleName (..),
   )
 where
 
@@ -62,7 +62,7 @@ import Data.String (IsString (..))
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Loc (SourceLoc)
-import YCHR.Types (ConstraintType (..))
+import YCHR.Types (ConstraintType (..), RuleId (..))
 
 -- | Source annotation for runtime call stack tracking.
 --
@@ -88,6 +88,13 @@ data Program = Program
     -- introspection (e.g. @print_store@) and preserved across VM
     -- serialization.
     typeNames :: ![Text],
+    -- | Number of rules in the program.
+    numRules :: !Int,
+    -- | Display names of rules, indexed by the 'RuleId' integer.
+    -- @ruleNames !! i@ is the source name (or synthetic @__rule_N@
+    -- fallback for anonymous rules) of the rule with id @i@. Used
+    -- by runtime introspection and preserved across VM serialization.
+    ruleNames :: ![Text],
     -- | The procedures that make up the program.
     procedures :: [Procedure]
   }
@@ -165,7 +172,7 @@ data Stmt
     -- | Record that a rule has fired with the given combination
     -- of constraint identifiers, to prevent redundant re-firing
     -- of propagation rules.
-    AddHistory RuleName [Expr]
+    AddHistory RuleId [Expr]
   | -- Reactivation
 
     -- | Process all constraints pending reactivation.
@@ -245,7 +252,7 @@ data Expr
 
     -- | Check that a rule has not previously fired with the given
     -- combination of constraint identifiers. Returns a boolean.
-    NotInHistory RuleName [Expr]
+    NotInHistory RuleId [Expr]
   | -- Unification and equality
 
     -- | Unify two terms (tell semantics). Returns a boolean indicating
@@ -302,9 +309,3 @@ newtype Label = Label {unLabel :: Text}
   deriving (Show, Eq, Ord)
 
 instance IsString Label where fromString = Label . T.pack
-
--- | Rule identifier, used for propagation history.
-newtype RuleName = RuleName {unRuleName :: Text}
-  deriving (Show, Eq, Ord)
-
-instance IsString RuleName where fromString = RuleName . T.pack

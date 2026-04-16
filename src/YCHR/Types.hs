@@ -13,6 +13,9 @@ module YCHR.Types
     UnqualifiedIdentifier (..),
     Name (..),
 
+    -- * Rules
+    RuleId (..),
+
     -- * Symbol table
     SymbolTable,
     mkSymbolTable,
@@ -40,6 +43,13 @@ import Language.Haskell.TH.Syntax (Lift)
 
 -- | A numeric identifier for a constraint type, assigned by the symbol table.
 newtype ConstraintType = ConstraintType {unConstraintType :: Int}
+  deriving (Show, Eq, Ord)
+
+-- | A numeric identifier for a rule, assigned in source order during
+-- occurrence collection. Used as the propagation history key. Keeping
+-- identity numeric (rather than textual) ensures two rules named
+-- @trans@ in different modules cannot collide in the history.
+newtype RuleId = RuleId {unRuleId :: Int}
   deriving (Show, Eq, Ord)
 
 -- | A name together with its arity, identifying a constraint or function.

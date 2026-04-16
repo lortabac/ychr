@@ -172,11 +172,11 @@ compileStmt (Store e) =
   SList [SAtom "store-constraint", SAtom "%s", compileExpr e]
 compileStmt (Kill e) =
   SList [SAtom "kill-constraint", compileExpr e]
-compileStmt (AddHistory (RuleName rn) es) =
+compileStmt (AddHistory (RuleId rid) es) =
   SList
     [ SAtom "add-history!",
       SAtom "%s",
-      SList [SAtom "quote", SAtom rn],
+      SInt rid,
       SList (SAtom "list" : map (\e -> SList [SAtom "constraint-id", compileExpr e]) es)
     ]
 compileStmt (PushAnnotation _) =
@@ -306,11 +306,11 @@ compileExpr (IdEqual a b) =
   SList [SAtom "id-equal?", compileExpr a, compileExpr b]
 compileExpr (IsConstraintType e (ConstraintType ct)) =
   SList [SAtom "is-constraint-type?", compileExpr e, SInt ct]
-compileExpr (NotInHistory (RuleName rn) es) =
+compileExpr (NotInHistory (RuleId rid) es) =
   SList
     [ SAtom "not-in-history?",
       SAtom "%s",
-      SList [SAtom "quote", SAtom rn],
+      SInt rid,
       SList (SAtom "list" : map (\e -> SList [SAtom "constraint-id", compileExpr e]) es)
     ]
 compileExpr (Unify a b) =

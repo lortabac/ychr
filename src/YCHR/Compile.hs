@@ -100,7 +100,7 @@ data SrcInfo = SrcInfo
 compile :: D.Program -> SymbolTable -> Either [Diagnostic CompileError] Program
 compile prog symTab =
   let funSet = buildFunctionSet prog
-      (occMap, occErrs) = runPureEff . runWriter $ collectOccurrences symTab prog
+      ((occMap, ruleDisplayNames), occErrs) = runPureEff . runWriter $ collectOccurrences symTab prog
       (procs, procErrs) = runPureEff . runWriter $ do
         fmap concat $ traverse (genConstraintProcs funSet symTab occMap) (symbolTableToList symTab)
       (funProcs, funErrs) = runPureEff . runWriter $ do
@@ -114,6 +114,8 @@ compile prog symTab =
             Program
               { numTypes = symbolTableSize symTab,
                 typeNames = buildTypeNames symTab,
+                numRules = length ruleDisplayNames,
+                ruleNames = ruleDisplayNames,
                 procedures = procs ++ funProcs ++ [dispatch] ++ callFunDispatches
               }
         else Left allErrs
@@ -245,7 +247,7 @@ genGuardedFire ::
   Eff '[Writer [Diagnostic CompileError]] ([Stmt], PartnerCondMap)
 genGuardedFire funSet symTab varMap occ = do
   let AnnP {node = guards, sourceLoc = guardLoc, parsed = guardP} = occ.rule.guard
-      ruleLabel = Just ("rule " <> occ.ruleName.unRuleName)
+      ruleLabel = Just ("rule " <> occ.ruleDisplay)
       guardSi = SrcInfo guardLoc guardP ruleLabel
   (matchWrapper, condMap, guardExpr, varMap') <- compileGuards funSet (Just occ) varMap guardSi guards
   fireStmts <- genFireStmts funSet symTab varMap' occ
@@ -317,11 +319,11 @@ genFireStmts funSet symTab varMap occ = do
       AnnP {node = ruleHead} = rule.head
       isPropagation = null ruleHead.removed
       activeIsRemoved = not occ.isKept
-      ruleName' = occ.ruleName
+      ruleId' = occ.ruleId
       historyIds = buildHistoryIds occ
       killStmts = genKillStmts occ
   let AnnP {node = ruleBody, sourceLoc = bodyLoc, parsed = bodyP} = rule.body
-      ruleLabel = Just ("rule " <> occ.ruleName.unRuleName)
+      ruleLabel = Just ("rule " <> occ.ruleDisplay)
       bodySi = SrcInfo bodyLoc bodyP ruleLabel
   bodyStmts <- compileBodyGoals funSet symTab varMap bodySi ruleBody
   let earlyDropStmts
@@ -356,8 +358,8 @@ genFireStmts funSet symTab varMap occ = do
     if isPropagation
       then
         [ If
-            (NotInHistory ruleName' historyIds)
-            (AddHistory ruleName' historyIds : coreFireStmts)
+            (NotInHistory ruleId' historyIds)
+            (AddHistory ruleId' historyIds : coreFireStmts)
             []
         ]
       else coreFireStmts
@@ -378,7 +380,7 @@ buildHistoryIds occ =
 -- | Build a 'SourceAnnotation' for a rule firing.
 mkRuleAnnotation :: Occurrence -> SourceAnnotation
 mkRuleAnnotation occ =
-  let label = "rule " <> occ.ruleName.unRuleName
+  let label = "rule " <> occ.ruleDisplay
    in mkAnnotation label occ.rule.head.sourceLoc occ.rule.head.parsed
 
 -- | Build a 'SourceAnnotation' from a label, source location, and parsed expression.

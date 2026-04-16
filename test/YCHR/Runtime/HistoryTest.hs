@@ -8,6 +8,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 import YCHR.Runtime.History
 import YCHR.Runtime.Types (SuspensionId (..))
+import YCHR.VM (RuleId (..))
 
 tests :: TestTree
 tests =
@@ -35,7 +36,7 @@ emptyTests =
   testGroup
     "empty history"
     [ testCase "notInHistory returns True" $ do
-        r <- runHistoryEnv $ notInHistory "rule1" [SuspensionId 0]
+        r <- runHistoryEnv $ notInHistory (RuleId 1) [SuspensionId 0]
         r @?= True
     ]
 
@@ -49,14 +50,14 @@ addTests =
     "addHistory"
     [ testCase "same entry -> notInHistory returns False" $ do
         r <- runHistoryEnv $ do
-          addHistory "rule1" [SuspensionId 0, SuspensionId 1]
-          notInHistory "rule1" [SuspensionId 0, SuspensionId 1]
+          addHistory (RuleId 1) [SuspensionId 0, SuspensionId 1]
+          notInHistory (RuleId 1) [SuspensionId 0, SuspensionId 1]
         r @?= False,
       testCase "duplicate addHistory is idempotent" $ do
         r <- runHistoryEnv $ do
-          addHistory "rule1" [SuspensionId 0]
-          addHistory "rule1" [SuspensionId 0]
-          notInHistory "rule1" [SuspensionId 0]
+          addHistory (RuleId 1) [SuspensionId 0]
+          addHistory (RuleId 1) [SuspensionId 0]
+          notInHistory (RuleId 1) [SuspensionId 0]
         r @?= False
     ]
 
@@ -70,18 +71,18 @@ distinctionTests =
     "distinctness"
     [ testCase "different rule name -> True" $ do
         r <- runHistoryEnv $ do
-          addHistory "rule1" [SuspensionId 0]
-          notInHistory "rule2" [SuspensionId 0]
+          addHistory (RuleId 1) [SuspensionId 0]
+          notInHistory (RuleId 2) [SuspensionId 0]
         r @?= True,
       testCase "different IDs -> True" $ do
         r <- runHistoryEnv $ do
-          addHistory "rule1" [SuspensionId 0]
-          notInHistory "rule1" [SuspensionId 1]
+          addHistory (RuleId 1) [SuspensionId 0]
+          notInHistory (RuleId 1) [SuspensionId 1]
         r @?= True,
       testCase "different ID order -> True" $ do
         r <- runHistoryEnv $ do
-          addHistory "rule1" [SuspensionId 0, SuspensionId 1]
-          notInHistory "rule1" [SuspensionId 1, SuspensionId 0]
+          addHistory (RuleId 1) [SuspensionId 0, SuspensionId 1]
+          notInHistory (RuleId 1) [SuspensionId 1, SuspensionId 0]
         r @?= True
     ]
 
@@ -95,19 +96,19 @@ miscTests =
     "misc"
     [ testCase "multiple independent entries" $ do
         runHistoryEnv $ do
-          addHistory "r1" [SuspensionId 0]
-          addHistory "r2" [SuspensionId 1]
-          r1 <- notInHistory "r1" [SuspensionId 0]
-          r2 <- notInHistory "r2" [SuspensionId 1]
-          r3 <- notInHistory "r1" [SuspensionId 1]
+          addHistory (RuleId 1) [SuspensionId 0]
+          addHistory (RuleId 2) [SuspensionId 1]
+          r1 <- notInHistory (RuleId 1) [SuspensionId 0]
+          r2 <- notInHistory (RuleId 2) [SuspensionId 1]
+          r3 <- notInHistory (RuleId 1) [SuspensionId 1]
           liftIO $ r1 @?= False
           liftIO $ r2 @?= False
           liftIO $ r3 @?= True,
       testCase "empty ID list works" $ do
         runHistoryEnv $ do
-          r1 <- notInHistory "rule1" []
+          r1 <- notInHistory (RuleId 1) []
           liftIO $ r1 @?= True
-          addHistory "rule1" []
-          r2 <- notInHistory "rule1" []
+          addHistory (RuleId 1) []
+          r2 <- notInHistory (RuleId 1) []
           liftIO $ r2 @?= False
     ]
