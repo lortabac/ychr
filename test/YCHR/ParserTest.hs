@@ -10,7 +10,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import Text.Megaparsec (ParseErrorBundle)
 import YCHR.Parsed
-import YCHR.Parser (collectOperatorDecls, parseModule)
+import YCHR.Parser (ModuleHeader (..), collectModuleHeader, parseModule)
 import YCHR.Types
 
 tests :: TestTree
@@ -489,29 +489,42 @@ errorTests =
     ]
 
 -- ---------------------------------------------------------------------------
--- First-pass operator collector
+-- First-pass module-header collector
 -- ---------------------------------------------------------------------------
 
--- | Helper: collect operators from source text.
+-- | Helper: collect operators from a module header.
 ops :: Text -> Either (ParseErrorBundle Text Void) [OpDecl]
-ops src = (.node) <$> collectOperatorDecls "" src
+ops src = (.exportOps) <$> collectModuleHeader "" src
+
+-- | Helper: collect imports from a module header.
+hdrImports :: Text -> Either (ParseErrorBundle Text Void) [Import]
+hdrImports src = map (.node) . (.headerImports) <$> collectModuleHeader "" src
 
 firstPassTests :: TestTree
 firstPassTests =
   testGroup
-    "first-pass operator collector"
+    "first-pass module-header collector"
     [ testCase "extracts operators from export list" $
-        ops ":- module(m, [op(500, yfx, '+')]).\"" @?= Right [OpDecl 500 Yfx "+"],
+        ops ":- module(m, [op(500, yfx, '+')])." @?= Right [OpDecl 500 Yfx "+"],
       testCase "skips name/arity entries" $
-        ops ":- module(m, [leq/2, op(700, xfx, '<')]).\"" @?= Right [OpDecl 700 Xfx "<"],
+        ops ":- module(m, [leq/2, op(700, xfx, '<')])." @?= Right [OpDecl 700 Xfx "<"],
       testCase "skips type exports" $
-        ops ":- module(m, [type(bool/0), op(500, yfx, '+')]).\"" @?= Right [OpDecl 500 Yfx "+"],
+        ops ":- module(m, [type(bool/0), op(500, yfx, '+')])." @?= Right [OpDecl 500 Yfx "+"],
       testCase "type export among many entries" $
-        ops ":- module(m, [leq/2, type(tree/0), op(400, yfx, '*'), type(list/1)]).\"" @?= Right [OpDecl 400 Yfx "*"],
-      testCase "no module directive returns empty" $
+        ops ":- module(m, [leq/2, type(tree/0), op(400, yfx, '*'), type(list/1)])." @?= Right [OpDecl 400 Yfx "*"],
+      testCase "no module directive returns empty exports" $
         ops ":- chr_constraint leq/2." @?= Right [],
       testCase "empty export list returns empty" $
-        ops ":- module(m, [])." @?= Right []
+        ops ":- module(m, [])." @?= Right [],
+      testCase "collects use_module imports right after the module directive" $
+        hdrImports ":- module(m, []). :- use_module(foo). :- use_module(library(bar))."
+          @?= Right [ModuleImport "foo" Nothing, LibraryImport "bar" Nothing],
+      testCase "stops collecting imports at the first non-import directive" $
+        hdrImports ":- module(m, []). :- use_module(foo). :- chr_constraint c/1. :- use_module(bar)."
+          @?= Right [ModuleImport "foo" Nothing],
+      testCase "import lists with op() entries parse" $
+        hdrImports ":- module(m, []). :- use_module(foo, [op(700, xfx, '<-')])."
+          @?= Right [ModuleImport "foo" (Just [OperatorDecl (OpDecl 700 Xfx "<-")])]
     ]
 
 -- ---------------------------------------------------------------------------

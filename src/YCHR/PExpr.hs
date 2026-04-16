@@ -37,6 +37,7 @@ module YCHR.PExpr
     parseTerm,
     parseTermNoDot,
     parseFirstTerm,
+    parseLeadingTerms,
 
     -- * Pretty-printing
     prettyPExpr,
@@ -621,6 +622,28 @@ parseTermNoDot table = parse (sc *> withLoc (termP table maxPrec) <* eof)
 -- not a valid term with the given operator table.
 parseFirstTerm :: OpTable -> String -> Text -> Either (ParseErrorBundle Text Void) (Maybe (Ann PExpr))
 parseFirstTerm table = parse (sc *> optional (try (withLoc (termP table maxPrec) <* symbol ".")) <* void takeRest)
+
+-- | Parse leading dot-terminated terms while they parse with the given
+-- operator table; stop at the first term that fails to parse.
+--
+-- Returns the successfully parsed terms plus, if there is unparseable
+-- content remaining, the source location at which parsing stopped.
+-- Returns 'Nothing' for the location if the entire input was consumed.
+parseLeadingTerms :: OpTable -> String -> Text -> Either (ParseErrorBundle Text Void) ([Ann PExpr], Maybe SourceLoc)
+parseLeadingTerms table = parse (sc *> loop [])
+  where
+    loop acc = do
+      mTerm <- optional (try (withLoc (termP table maxPrec) <* symbol "."))
+      case mTerm of
+        Just t -> loop (t : acc)
+        Nothing -> do
+          done <- atEnd
+          if done
+            then pure (reverse acc, Nothing)
+            else do
+              sp <- getSourcePos
+              _ <- takeRest
+              pure (reverse acc, Just (sourceLocFromPos sp))
 
 -- ---------------------------------------------------------------------------
 -- Pretty-printing

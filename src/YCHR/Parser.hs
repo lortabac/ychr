@@ -39,11 +39,15 @@ module YCHR.Parser
     builtinOps,
     mergeOps,
     opTableEntries,
-    collectOperatorDecls,
+    ModuleHeader (..),
+    collectModuleHeader,
+    buildModuleOpTable,
     extractOpDecls,
   )
 where
 
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Void (Void)
 import Text.Megaparsec (ParseErrorBundle)
@@ -194,11 +198,11 @@ parseRule sourceName src = do
   pure (convertRule term)
 
 -- ---------------------------------------------------------------------------
--- First-pass operator collector
+-- First-pass module-header collector
 -- ---------------------------------------------------------------------------
 
 -- | Minimal operator table for the first pass: only enough to parse
--- the @:- module(name, [exports]).@ directive.
+-- @:- module(...)@ and @:- use_module(...)@ directives.
 firstPassTable :: OpTable
 firstPassTable =
   P.mkOpTable
@@ -206,19 +210,118 @@ firstPassTable =
       (1200, [(P.Fx, ":-")])
     ]
 
--- | Collect operator declarations from a module's @:- module(...)@ directive.
+-- | Header information collected from a module's leading directives during
+-- the lightweight first parsing pass.
 --
--- Since the module directive is always at the top of the file, this parser
--- attempts to parse the first dot-terminated term and extract any @op(...)@
--- entries from the export list. If no module directive is found, returns @[]@.
-collectOperatorDecls :: String -> Text -> Either (ParseErrorBundle Text Void) (AnnP [OpDecl])
-collectOperatorDecls sourceName src = do
-  mTerm <- P.parseFirstTerm firstPassTable sourceName src
-  pure $ case mTerm of
-    Just (Ann (Compound ":-" [body]) loc)
-      | Compound "module" [_, exports] <- body.node ->
-          AnnP (extractOpDeclsFromPExpr exports.node) loc body.node
-    _ -> noAnnP []
+-- The header captures everything needed to compute per-module operator
+-- visibility before the full parse: the module's name, the operators it
+-- exports, the @use_module@ directives that immediately follow the
+-- @module@ directive, and the source location at which header parsing
+-- stopped (used to detect misplaced @use_module@ directives later in the
+-- file).
+data ModuleHeader = ModuleHeader
+  { modName :: Text,
+    -- | Source location of the @:- module(...)@ directive. 'dummyLoc' if
+    -- the file does not declare a module.
+    modLoc :: SourceLoc,
+    -- | The original PExpr of the @module(...)@ body, for diagnostics.
+    modOrigin :: PExpr,
+    -- | Operators declared in the module's export list.
+    exportOps :: [OpDecl],
+    -- | @use_module@ imports immediately following the @module@ directive
+    -- (or, when there is no module directive, immediately at the start of
+    -- the file).
+    headerImports :: [AnnP Import],
+    -- | Source location of the first content that is not a header
+    -- directive, or 'Nothing' if the file ends after the header.
+    -- Imports appearing at or beyond this location are misplaced.
+    trailingLoc :: Maybe SourceLoc
+  }
+  deriving (Show, Eq)
+
+-- | Collect a 'ModuleHeader' from a source file using the minimal first-pass
+-- operator table.
+--
+-- Stops at the first directive or rule that cannot be parsed by the
+-- first-pass table — which in practice means anything other than
+-- @:- module(...)@ or @:- use_module(...)@.
+collectModuleHeader :: String -> Text -> Either (ParseErrorBundle Text Void) ModuleHeader
+collectModuleHeader sourceName src = do
+  (terms, tloc) <- P.parseLeadingTerms firstPassTable sourceName src
+  let (modPart, rest1) = case terms of
+        (t : ts) | Just info <- asModuleDirective t -> (Just info, ts)
+        _ -> (Nothing, terms)
+      (imps, leftover) = takeImports rest1
+      finalLoc = case leftover of
+        [] -> tloc
+        (Ann _ loc : _) -> Just loc
+      (mn, ml, mo, ops) = case modPart of
+        Just info -> info
+        Nothing -> ("<no_module>", dummyLoc, Atom "", [])
+  pure
+    ModuleHeader
+      { modName = mn,
+        modLoc = ml,
+        modOrigin = mo,
+        exportOps = ops,
+        headerImports = imps,
+        trailingLoc = finalLoc
+      }
+  where
+    asModuleDirective (Ann (Compound ":-" [body]) loc)
+      | Compound "module" [Ann (Atom name) _, exports] <- body.node =
+          Just (name, loc, body.node, extractOpDeclsFromPExpr exports.node)
+    asModuleDirective _ = Nothing
+
+    takeImports [] = ([], [])
+    takeImports all_@(Ann (Compound ":-" [body]) loc : rest) = case body.node of
+      Compound "use_module" [imp] ->
+        let (more, leftover) = takeImports rest
+         in (convertImport loc body.node imp : more, leftover)
+      Compound "use_module" [imp, importList] ->
+        let (more, leftover) = takeImports rest
+         in (convertImportWithList loc body.node imp importList : more, leftover)
+      _ -> ([], all_)
+    takeImports rest = ([], rest)
+
+-- | Build the per-module operator table for a user module.
+--
+-- Combines the built-in operators, the always-visible prelude operators,
+-- the module's own exported operators, and the operators reachable through
+-- its @use_module@ imports. Returns @Left name@ if two operator declarations
+-- with the same name disagree on fixity or type.
+--
+-- For each import:
+--
+--   * @use_module(M)@ (no item list) brings in every operator @M@ exports.
+--   * @use_module(M, [items])@ brings in only the operators listed via
+--     @op(...)@ entries inside the item list.
+--
+-- Operators of unknown source modules (e.g. @use_module(missing_lib)@)
+-- contribute nothing here; the resulting unknown-library or unknown-import
+-- error is reported elsewhere.
+buildModuleOpTable ::
+  -- | Built-in operators
+  OpTable ->
+  -- | Prelude's exported operators (always visible)
+  [OpDecl] ->
+  -- | Map from module name to that module's exported operators
+  Map Text [OpDecl] ->
+  -- | The user module's header
+  ModuleHeader ->
+  Either Text OpTable
+buildModuleOpTable base preludeOps exportsByModule header =
+  mergeOps base (preludeOps ++ header.exportOps ++ importedOps)
+  where
+    importedOps = concatMap importedFrom header.headerImports
+    importedFrom (AnnP imp _ _) = case imp of
+      ModuleImport m Nothing -> Map.findWithDefault [] m exportsByModule
+      LibraryImport m Nothing -> Map.findWithDefault [] m exportsByModule
+      ModuleImport m (Just items) -> selectOps m items
+      LibraryImport m (Just items) -> selectOps m items
+    selectOps m items =
+      let exported = Map.findWithDefault [] m exportsByModule
+       in [op | OperatorDecl op <- items, op `elem` exported]
 
 -- | Extract 'OpDecl' entries from a PExpr representing an export list.
 extractOpDeclsFromPExpr :: PExpr -> [OpDecl]

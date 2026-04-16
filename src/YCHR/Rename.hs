@@ -41,7 +41,7 @@
 --
 -- This pass guarantees that the subsequent Desugaring phase can treat the
 -- program as a flat, unambiguous collection of rules.
-module YCHR.Rename (renameProgram, buildExportEnv, renameQueryGoals, RenameError (..), RenameWarning (..)) where
+module YCHR.Rename (renameProgram, buildExportEnv, renameQueryGoals, RenameError (..), RenameWarning (..), RenameInputs (..), defaultRenameInputs) where
 
 import Control.Monad (when)
 import Data.Foldable (traverse_)
@@ -61,8 +61,14 @@ data RenameError
   = AmbiguousName Text Int [Text]
   | UnknownName Text Int
   | UnknownExport Text Text Int
-  | OperatorInImportList Text
   | UnknownImport Text Text Int
+  | -- | An @op(...)@ entry inside an import list refers to an operator
+    -- that the source module does not export. Carries the source module
+    -- name and the operator name.
+    UnknownOperatorImport Text Text
+  | -- | A @use_module(...)@ directive appears after a non-import directive
+    -- (or any rule). Carries the imported module name.
+    UseModuleOutOfOrder Text
   deriving (Eq, Show)
 
 data RenameWarning
@@ -95,8 +101,38 @@ data RenameCtx = RenameCtx
     dataConEnv :: DataConEnv,
     typeDeclEnv :: DeclEnv,
     typeExportEnv :: ExportEnv,
+    -- | Operators exported by each module, keyed by module name. Used to
+    -- validate that an @op(...)@ entry in an import list names a real
+    -- exported operator.
+    operatorExports :: Map Text [OpDecl],
+    -- | Source location at which header parsing stopped for the current
+    -- module — i.e. the location of the first non-import directive.
+    -- Imports beyond this location are out of order.
+    currentTrailingLoc :: Maybe SourceLoc,
     currentModule :: Module
   }
+
+-- | Inputs to 'renameProgram' beyond the module list itself. Lets the
+-- caller supply per-module operator export tables and trailing-location
+-- information without hard-coding additional parameters.
+data RenameInputs = RenameInputs
+  { -- | Map from module name to its exported operators (used to validate
+    -- @op(...)@ entries inside import lists).
+    riOperatorExports :: Map Text [OpDecl],
+    -- | Map from module name to the source location where its header
+    -- parsing stopped. Used to detect @use_module@ directives that
+    -- appear after non-import content.
+    riTrailingLoc :: Map Text (Maybe SourceLoc)
+  }
+
+-- | An empty 'RenameInputs' suitable for callers that do not have header
+-- information (e.g. test fixtures, query renaming).
+defaultRenameInputs :: RenameInputs
+defaultRenameInputs =
+  RenameInputs
+    { riOperatorExports = Map.empty,
+      riTrailingLoc = Map.empty
+    }
 
 -- ---------------------------------------------------------------------------
 -- Environment building
@@ -185,8 +221,8 @@ unqualifiedText (Qualified _ t) = t
 -- Entry points
 -- ---------------------------------------------------------------------------
 
-renameProgram :: [Module] -> Either [Diagnostic RenameError] ([Module], [Diagnostic RenameWarning])
-renameProgram mods =
+renameProgram :: RenameInputs -> [Module] -> Either [Diagnostic RenameError] ([Module], [Diagnostic RenameWarning])
+renameProgram inputs mods =
   let baseCtx =
         RenameCtx
           { declEnv = buildDeclEnv mods,
@@ -194,10 +230,16 @@ renameProgram mods =
             dataConEnv = Map.empty,
             typeDeclEnv = buildTypeDeclEnv mods,
             typeExportEnv = buildTypeExportEnv mods,
+            operatorExports = inputs.riOperatorExports,
+            currentTrailingLoc = Nothing,
             currentModule = error "currentModule: not yet set"
           }
       ctxFor m =
-        let ctx0 = baseCtx {currentModule = m}
+        let ctx0 =
+              baseCtx
+                { currentModule = m,
+                  currentTrailingLoc = Map.findWithDefault Nothing m.name inputs.riTrailingLoc
+                }
          in ctx0 {dataConEnv = buildDataConEnv (visibleTypes ctx0) mods}
       ((result, warnings), errs) = runPureEff . runWriter @[Diagnostic RenameError] . runWriter @[Diagnostic RenameWarning] $ do
         validateExports mods
@@ -237,18 +279,38 @@ renameModule ctx = do
   let renamedTypeDecls = map (fmap (renameTypeDefinition ctx)) m.typeDecls
   pure m {rules = renamedRules, equations = renamedEquations, typeDecls = renamedTypeDecls}
 
--- | Validate import lists: reject @op(...)@ entries and check that each
--- imported name is actually exported by the target module.
+-- | Validate import lists. Three checks:
+--
+--   * @op(...)@ entries must name an operator that the source module
+--     actually exports ('UnknownOperatorImport').
+--   * Constraint, function, and type imports must name something the
+--     source module exports ('UnknownImport').
+--   * Each @use_module@ directive must appear before the first non-import
+--     directive in the file ('UseModuleOutOfOrder').
 validateImportLists :: RenameCtx -> Eff RenameEffs ()
 validateImportLists ctx =
   traverse_ checkImport ctx.currentModule.imports
   where
-    checkImport (AnnP (ModuleImport mn (Just decls)) loc origin) =
-      traverse_ (checkItem mn loc origin) decls
-    checkImport _ = pure ()
+    checkImport (AnnP imp loc origin) = do
+      checkPlacement imp loc origin
+      case imp of
+        ModuleImport mn (Just decls) -> traverse_ (checkItem mn loc origin) decls
+        LibraryImport mn (Just decls) -> traverse_ (checkItem mn loc origin) decls
+        _ -> pure ()
 
-    checkItem _ loc origin (OperatorDecl op) =
-      emitError (AnnP (OperatorInImportList op.opName) loc origin)
+    checkPlacement imp loc origin = case ctx.currentTrailingLoc of
+      Just tloc
+        | loc.file == tloc.file,
+          locAtOrAfter loc tloc ->
+            emitError (AnnP (UseModuleOutOfOrder (importedModuleName imp)) loc origin)
+      _ -> pure ()
+
+    importedModuleName (ModuleImport n _) = n
+    importedModuleName (LibraryImport n _) = n
+
+    checkItem mn loc origin (OperatorDecl op) =
+      when (op `notElem` Map.findWithDefault [] mn ctx.operatorExports) $
+        emitError (AnnP (UnknownOperatorImport mn op.opName) loc origin)
     checkItem mn loc origin (ConstraintDecl n a _) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
@@ -258,6 +320,11 @@ validateImportLists ctx =
     checkItem mn loc origin (TypeExportDecl n a) =
       when (mn `notElem` lookupExport (n, a) ctx.typeExportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
+
+-- | True when @a@ is at or after @b@ in source order. Both locations
+-- must come from the same file (caller's responsibility).
+locAtOrAfter :: SourceLoc -> SourceLoc -> Bool
+locAtOrAfter a b = (a.line, a.col) >= (b.line, b.col)
 
 renameRule :: RenameCtx -> Rule -> Eff RenameEffs Rule
 renameRule ctx r = do
@@ -536,6 +603,8 @@ renameQueryGoals mods goals =
             dataConEnv = Map.empty,
             typeDeclEnv = buildTypeDeclEnv mods,
             typeExportEnv = buildTypeExportEnv mods,
+            operatorExports = Map.empty,
+            currentTrailingLoc = Nothing,
             currentModule = queryMod
           }
       ctx = ctx0 {dataConEnv = buildDataConEnv (visibleTypes ctx0) mods}

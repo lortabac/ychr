@@ -2,14 +2,22 @@
 
 module YCHR.RenameTest (tests) where
 
+import Data.Map.Strict qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import YCHR.DSL
 import YCHR.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
-import YCHR.Rename (RenameError (..), RenameWarning (..), renameProgram)
+import YCHR.Rename (RenameError (..), RenameInputs (..), RenameWarning (..), defaultRenameInputs)
+import YCHR.Rename qualified as Rn
 import YCHR.Types
+
+-- | Test-local wrapper that forwards to 'Rn.renameProgram' with empty
+-- rename inputs (no operator-export map and no trailing-loc map). The
+-- module-list-only signature keeps existing tests concise.
+renameProgram :: [Module] -> Either [Diagnostic RenameError] ([Module], [Diagnostic RenameWarning])
+renameProgram = Rn.renameProgram defaultRenameInputs
 
 tests :: TestTree
 tests =
@@ -736,7 +744,23 @@ importListTests =
                 }
         renameProgram [modOrder, modLogic]
           @?= Left [noDiag (AnnP (UnknownImport "Order" "nonexistent" 1) dummyLoc (Atom ""))],
-      testCase "operator in import list is rejected" $ do
+      testCase "operator in import list is accepted when source module exports it" $ do
+        let modOrder =
+              module' "Order"
+                `declaring` ["leq" // 2]
+                `exporting` ["leq" // 2]
+            modLogic =
+              (module' "Logic")
+                { imports = [noAnnP (ModuleImport "Order" (Just [OperatorDecl (OpDecl 700 Xfx "===")]))]
+                }
+            inputs =
+              defaultRenameInputs
+                { riOperatorExports = Map.fromList [("Order", [OpDecl 700 Xfx "==="])]
+                }
+        case Rn.renameProgram inputs [modOrder, modLogic] of
+          Right _ -> pure ()
+          Left errs -> assertFailure $ "unexpected errors: " ++ show errs,
+      testCase "operator in import list is rejected when source module does not export it" $ do
         let modOrder =
               module' "Order"
                 `declaring` ["leq" // 2]
@@ -746,5 +770,30 @@ importListTests =
                 { imports = [noAnnP (ModuleImport "Order" (Just [OperatorDecl (OpDecl 700 Xfx "===")]))]
                 }
         renameProgram [modOrder, modLogic]
-          @?= Left [noDiag (AnnP (OperatorInImportList "===") dummyLoc (Atom ""))]
+          @?= Left [noDiag (AnnP (UnknownOperatorImport "Order" "===") dummyLoc (Atom ""))],
+      testCase "use_module after non-import directive is reported as out-of-order" $ do
+        let modOrder =
+              module' "Order"
+                `declaring` ["leq" // 2]
+                `exporting` ["leq" // 2]
+            -- Synthesise an import located after the recorded trailingLoc.
+            misplacedLoc = SourceLoc "test.chr" 10 1
+            modLogic =
+              (module' "Logic")
+                { imports = [AnnP (ModuleImport "Order" Nothing) misplacedLoc (Atom "")]
+                }
+            inputs =
+              defaultRenameInputs
+                { riTrailingLoc = Map.fromList [("Logic", Just (SourceLoc "test.chr" 5 1))]
+                }
+        case Rn.renameProgram inputs [modOrder, modLogic] of
+          Left errs ->
+            any
+              ( \(Diagnostic _ (AnnP e _ _)) -> case e of
+                  UseModuleOutOfOrder "Order" -> True
+                  _ -> False
+              )
+              errs
+              @?= True
+          Right _ -> assertFailure "expected UseModuleOutOfOrder error"
     ]

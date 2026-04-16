@@ -2,12 +2,27 @@
 
 -- | Library import collector.
 --
--- Runs after parsing and before renaming. Resolves @use_module(library(name))@
--- imports by looking up library modules in the standard library, collecting
--- transitive dependencies, and prepending them to the module list. All
--- 'LibraryImport' entries are rewritten to 'ModuleImport' so the renamer
--- sees only regular imports.
-module YCHR.Collect (collectLibraries, CollectError (..)) where
+-- Resolves @use_module(library(name))@ imports against the standard
+-- library map. The two responsibilities are now exposed as separate
+-- functions so the pipeline can build per-module operator tables before
+-- the full parse:
+--
+--   * 'resolveLibraryClosure' walks the dependency graph from a set of
+--     seed library names, returns the reachable libraries in topological
+--     order, and reports unknown or circularly-imported libraries.
+--
+--   * 'rewriteImports' rewrites every 'LibraryImport' to a 'ModuleImport'
+--     so the renamer sees only one kind of import.
+--
+--   * 'addLibraryPrelude' prepends a @prelude@ import to each library
+--     module (except the prelude itself).
+module YCHR.Collect
+  ( CollectError (..),
+    resolveLibraryClosure,
+    rewriteImports,
+    addLibraryPrelude,
+  )
+where
 
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -22,29 +37,29 @@ data CollectError
   | CircularLibraryImport [Text]
   deriving (Show, Eq)
 
--- | Resolve library imports and prepend library modules.
+-- | Walk the transitive closure of library imports.
 --
--- 1. Scans all modules for 'LibraryImport' entries.
--- 2. Looks up each in the stdlib map (reporting 'UnknownLibrary' if missing).
--- 3. Recursively collects transitive library dependencies via DFS.
--- 4. Detects circular imports.
--- 5. Prepends library modules in topological order (dependencies first).
--- 6. Rewrites all 'LibraryImport' to 'ModuleImport' in every module.
-collectLibraries :: Bool -> Map Text Module -> [Module] -> Either [Diagnostic CollectError] [Module]
-collectLibraries includeStdlib stdlibMap userMods =
+-- Seeds are the user-supplied library import names (typically extracted
+-- from each user module's header). When @includeStdlib@ is 'True', every
+-- library in the standard library map is also seeded so the full standard
+-- library is available regardless of which libraries the user imports
+-- explicitly.
+--
+-- Returns the reachable libraries in topological order (dependencies
+-- first), or a list of 'CollectError' diagnostics if any seed names an
+-- unknown library or a cycle is detected.
+resolveLibraryClosure ::
+  Bool ->
+  Map Text Module ->
+  [AnnP Text] ->
+  Either [Diagnostic CollectError] [Module]
+resolveLibraryClosure includeStdlib stdlibMap userSeeds =
   let seeds =
         (if includeStdlib then map noAnnP (Map.keys stdlibMap) else [])
-          ++ concatMap libraryImports userMods
+          ++ userSeeds
    in case resolveAll stdlibMap Set.empty Set.empty seeds of
-        (_, libs, []) ->
-          let withPrelude = map addPreludeImport libs
-              rewritten = map rewriteImports (withPrelude ++ userMods)
-           in Right rewritten
+        (_, libs, []) -> Right libs
         (_, _, errs) -> Left errs
-
--- | Extract library import names from a module.
-libraryImports :: Module -> [AnnP Text]
-libraryImports m = [AnnP n loc p | AnnP (LibraryImport n _) loc p <- m.imports]
 
 -- | DFS resolution of library dependencies.
 --
@@ -84,15 +99,23 @@ resolveAll stdlibMap visited path (ann : rest)
   where
     name = ann.node
 
--- | Add a prelude import to a library module (unless it is the prelude itself).
-addPreludeImport :: Module -> Module
-addPreludeImport m
-  | m.name == "prelude" = m
-  | otherwise = m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
+-- | Extract library import names from a module.
+libraryImports :: Module -> [AnnP Text]
+libraryImports m = [AnnP n loc p | AnnP (LibraryImport n _) loc p <- m.imports]
 
--- | Rewrite all 'LibraryImport' entries to 'ModuleImport'.
-rewriteImports :: Module -> Module
-rewriteImports m = m {imports = map rewrite m.imports}
+-- | Add a prelude import to every library module that does not already
+-- declare itself to be the prelude.
+addLibraryPrelude :: [Module] -> [Module]
+addLibraryPrelude = map go
   where
+    go m
+      | m.name == "prelude" = m
+      | otherwise = m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
+
+-- | Rewrite every 'LibraryImport' to a 'ModuleImport'.
+rewriteImports :: [Module] -> [Module]
+rewriteImports = map rewriteOne
+  where
+    rewriteOne m = m {imports = map rewrite m.imports}
     rewrite (AnnP (LibraryImport n il) loc p) = AnnP (ModuleImport n il) loc p
     rewrite imp = imp

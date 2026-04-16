@@ -11,8 +11,8 @@ import Language.Haskell.TH (Code, Q, runIO)
 import Language.Haskell.TH.Syntax (Lift (..), addDependentFile, unsafeCodeCoerce)
 import System.Directory (listDirectory)
 import System.FilePath (dropExtension, takeExtension, takeFileName, (</>))
-import YCHR.Parsed (AnnP (..), Module)
-import YCHR.Parser (OpTable, builtinOps, collectOperatorDecls, mergeOps, parseModuleWith)
+import YCHR.Parsed (Module)
+import YCHR.Parser (ModuleHeader (..), OpTable, builtinOps, collectModuleHeader, mergeOps, parseModuleWith)
 
 readLibraries :: Code Q (Map Text Module)
 readLibraries = unsafeCodeCoerce $ do
@@ -20,10 +20,12 @@ readLibraries = unsafeCodeCoerce $ do
   files <- runIO $ filter ((== ".chr") . takeExtension) <$> listDirectory dir
   -- Read all library source files and register dependencies
   sources <- mapM (readSource dir) files
-  -- Collect operator declarations from all library sources
-  allOps <- case concatMap (\(AnnP ops _ _) -> ops) <$> mapM (\(fp, src) -> collectOperatorDecls fp (T.pack src)) sources of
+  -- Collect operator declarations from all library sources via the
+  -- lightweight first-pass header parser. Stdlib libraries are mutually
+  -- trusted, so we merge every operator into one table for parsing them.
+  allOps <- case mapM (\(fp, src) -> collectModuleHeader fp (T.pack src)) sources of
     Left err -> fail ("Failed to collect operators from libraries: " ++ show err)
-    Right ops -> pure ops
+    Right hdrs -> pure (concatMap (.exportOps) hdrs)
   -- Merge with builtins
   table <- case mergeOps builtinOps allOps of
     Left conflict -> fail ("Operator naming conflict in libraries: " ++ T.unpack conflict)

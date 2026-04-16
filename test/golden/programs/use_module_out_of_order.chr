@@ -1,0 +1,4 @@
+:- module(use_module_out_of_order, []).
+:- chr_constraint foo/1.
+:- use_module(library(test)).
+foo(X) <=> dup(X, X).

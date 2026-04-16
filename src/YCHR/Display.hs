@@ -116,13 +116,16 @@ collectErrorCode :: CollectError -> ErrorCode
 collectErrorCode (UnknownLibrary _) = ErrorCode 10001
 collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
 
--- | 2xxxx — rename phase (errors)
+-- | 2xxxx — rename phase (errors).
+-- Code 20004 was previously used for OperatorInImportList; now reserved
+-- because operators are permitted in import lists (see UnknownOperatorImport).
 renameErrorCode :: RenameError -> ErrorCode
 renameErrorCode (AmbiguousName _ _ _) = ErrorCode 20001
 renameErrorCode (UnknownName _ _) = ErrorCode 20002
 renameErrorCode (UnknownExport _ _ _) = ErrorCode 20003
-renameErrorCode (OperatorInImportList _) = ErrorCode 20004
 renameErrorCode (UnknownImport _ _ _) = ErrorCode 20005
+renameErrorCode (UnknownOperatorImport _ _) = ErrorCode 20006
+renameErrorCode (UseModuleOutOfOrder _) = ErrorCode 20007
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
@@ -192,8 +195,6 @@ renameErrorMsg (UnknownExport modName name arity) =
     ++ "/"
     ++ show arity
     ++ " but does not declare it"
-renameErrorMsg (OperatorInImportList name) =
-  "Operator " ++ T.unpack name ++ " cannot appear in an import list (operators are always global)"
 renameErrorMsg (UnknownImport modName name arity) =
   "Module "
     ++ T.unpack modName
@@ -201,6 +202,15 @@ renameErrorMsg (UnknownImport modName name arity) =
     ++ T.unpack name
     ++ "/"
     ++ show arity
+renameErrorMsg (UnknownOperatorImport modName opName) =
+  "Module "
+    ++ T.unpack modName
+    ++ " does not export operator "
+    ++ T.unpack opName
+renameErrorMsg (UseModuleOutOfOrder modName) =
+  "use_module("
+    ++ T.unpack modName
+    ++ ") must appear immediately after the module directive, before any other directive or rule"
 
 instance Display (Diagnostic RenameWarning) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
