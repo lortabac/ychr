@@ -314,7 +314,7 @@ validateImportLists ctx =
     checkItem mn loc origin (ConstraintDecl n a _) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
-    checkItem mn loc origin (FunctionDecl n a _ _) =
+    checkItem mn loc origin (FunctionDecl n a _ _ _) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
     checkItem mn loc origin (TypeExportDecl n a) =
@@ -338,10 +338,11 @@ renameEquation ctx eq = do
   -- Equation args don't carry their own SourceLoc; use the guard's as a proxy.
   let loc = eq.guard.sourceLoc
       origin = eq.guard.parsed
+  resolvedFunName <- resolveName ResolveTop ctx loc origin eq.funName (length eq.args)
   renamedArgs <- traverse (renameTerm ctx loc origin NoResolve) eq.args
   renamedGuard <- traverse (traverse (renameTerm ctx loc origin ResolveAll)) eq.guard
   renamedRhs <- traverse (renameTerm ctx eq.rhs.sourceLoc eq.rhs.parsed ResolveAll) eq.rhs
-  pure eq {args = renamedArgs, guard = renamedGuard, rhs = renamedRhs}
+  pure eq {funName = resolvedFunName, args = renamedArgs, guard = renamedGuard, rhs = renamedRhs}
 
 renameHead :: RenameCtx -> SourceLoc -> PExpr -> Head -> Eff RenameEffs Head
 renameHead ctx loc origin h = case h of
@@ -486,7 +487,7 @@ importListPermits _ _ Nothing = True
 importListPermits n arity (Just decls) = any match decls
   where
     match (ConstraintDecl dn da _) = dn == n && da == arity
-    match (FunctionDecl dn da _ _) = dn == n && da == arity
+    match (FunctionDecl dn da _ _ _) = dn == n && da == arity
     match _ = False
 
 -- | Check whether a type name/arity is permitted by an import list.

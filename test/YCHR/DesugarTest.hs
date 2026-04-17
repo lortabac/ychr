@@ -11,7 +11,7 @@ import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (noDiag)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
-import YCHR.Types (ConstraintType (..), Identifier (..), Name (..), lookupSymbol, mkSymbolTable, symbolTableSize)
+import YCHR.Types (ConstraintType (..), Identifier (..), lookupSymbol, mkSymbolTable, symbolTableSize)
 
 getNode :: AnnP a -> a
 getNode (AnnP n _ _) = n
@@ -458,12 +458,13 @@ lambdaLiftTests =
                   { name = "f",
                     arity = 1,
                     argTypes = Nothing,
-                    returnType = Nothing
+                    returnType = Nothing,
+                    isOpen = False
                   }
             funEq =
               noAnnP
                 FunctionEquation
-                  { funName = "f",
+                  { funName = Qualified "M" "f",
                     args = [listPattern],
                     guard = noAnnP [],
                     rhs = noAnnP lambdaTerm
@@ -494,11 +495,11 @@ lambdaLiftTests =
                 [ CompoundTerm (Unqualified "fun") [TextTerm "hello"],
                   TextTerm "world"
                 ]
-            funDecl = Ann (FunctionDecl "f" 1 Nothing Nothing) dummyLoc
+            funDecl = Ann (FunctionDecl "f" 1 Nothing Nothing False) dummyLoc
             funEq =
               AnnP
                 FunctionEquation
-                  { funName = "f",
+                  { funName = Qualified "M" "f",
                     args = [var "X"],
                     guard = noAnnP [],
                     rhs = noAnnP lambdaTerm

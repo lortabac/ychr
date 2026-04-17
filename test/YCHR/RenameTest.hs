@@ -11,7 +11,6 @@ import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
 import YCHR.Rename (RenameError (..), RenameInputs (..), RenameWarning (..), defaultRenameInputs)
 import YCHR.Rename qualified as Rn
-import YCHR.Types
 
 -- | Test-local wrapper that forwards to 'Rn.renameProgram' with empty
 -- rename inputs (no operator-export map and no trailing-loc map). The

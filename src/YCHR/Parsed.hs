@@ -42,6 +42,7 @@ module YCHR.Parsed
     FunctionEquation (..),
 
     -- * Re-exports from YCHR.Types
+    Name (..),
     Constraint (..),
     Term (..),
     TypeDefinition (..),
@@ -54,7 +55,7 @@ import Data.Text (Text)
 import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Loc (Ann (..), SourceLoc (..), dummyLoc, noAnn)
 import YCHR.PExpr (OpType (..), PExpr (..))
-import YCHR.Types (Constraint (..), DataConstructor (..), Term (..), TypeDefinition (..), TypeExpr (..))
+import YCHR.Types (Constraint (..), DataConstructor (..), Name (..), Term (..), TypeDefinition (..), TypeExpr (..))
 
 -- | A node annotated with a source location and the original 'PExpr'
 -- that produced it.
@@ -88,7 +89,7 @@ data Module = Module
 
 data Declaration
   = ConstraintDecl {name :: Text, arity :: Int, argTypes :: Maybe [TypeExpr]}
-  | FunctionDecl {name :: Text, arity :: Int, argTypes :: Maybe [TypeExpr], returnType :: Maybe TypeExpr}
+  | FunctionDecl {name :: Text, arity :: Int, argTypes :: Maybe [TypeExpr], returnType :: Maybe TypeExpr, isOpen :: Bool}
   | OperatorDecl OpDecl
   | TypeExportDecl {name :: Text, arity :: Int}
   deriving (Show, Eq, Lift)
@@ -101,7 +102,7 @@ data OpDecl = OpDecl
   deriving (Show, Eq, Lift)
 
 data FunctionEquation = FunctionEquation
-  { funName :: Text,
+  { funName :: Name,
     args :: [Term],
     guard :: AnnP [Term],
     rhs :: AnnP Term

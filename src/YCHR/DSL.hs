@@ -4,7 +4,6 @@ module YCHR.DSL where
 
 import Data.Text (Text)
 import YCHR.Parsed
-import YCHR.Types
 
 --------------------------------------------------------------------------------
 -- Module & Declaration Helpers

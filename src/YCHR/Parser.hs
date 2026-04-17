@@ -43,18 +43,19 @@ module YCHR.Parser
     collectModuleHeader,
     buildModuleOpTable,
     extractOpDecls,
+    ParseValidationError (..),
   )
 where
 
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Void (Void)
 import Text.Megaparsec (ParseErrorBundle)
 import YCHR.PExpr (PExpr (Atom, Compound, Str, Var))
 import YCHR.PExpr qualified as P
 import YCHR.Parsed
-import YCHR.Types (Name (..))
 
 -- ---------------------------------------------------------------------------
 -- Operator table (re-exported from PExpr)
@@ -85,7 +86,7 @@ builtinOps =
       (1100, [(P.Xfy, ";"), (P.Xfx, "\\")]),
       (1150, [(P.Xfx, "--->"), (P.Fx, "dynamic")]),
       (1180, [(P.Xfx, "<=>"), (P.Xfx, "==>")]),
-      (1180, [(P.Fx, "chr_constraint"), (P.Fx, "chr_type"), (P.Fx, "function")]),
+      (1180, [(P.Fx, "chr_constraint"), (P.Fx, "chr_type"), (P.Fx, "function"), (P.Fx, "open_function")]),
       (1190, [(P.Xfx, "@")]),
       (1200, [(P.Fx, ":-")]),
       -- Reserve @end@ as a keyword (for @fun(...) -> ... end@) without
@@ -117,7 +118,7 @@ opTableEntries = P.opTableEntries
 parseModule ::
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) Module
+  Either (ParseErrorBundle Text Void) (Module, [AnnP ParseValidationError])
 parseModule = parseModuleWith builtinOps
 
 -- | Parse a CHR module from source text using a custom operator table.
@@ -125,7 +126,7 @@ parseModuleWith ::
   OpTable ->
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) Module
+  Either (ParseErrorBundle Text Void) (Module, [AnnP ParseValidationError])
 parseModuleWith table sourceName src = do
   terms <- P.parseTerms table sourceName src
   pure (convertModule terms)
@@ -427,6 +428,7 @@ data Directive
   | DirImport (AnnP Import)
   | DirConstraintDecl [Ann Declaration]
   | DirFunctionDecl [Ann Declaration]
+  | DirOpenFunctionDecl [Ann Declaration]
   | DirTypeDecl [Ann TypeDefinition]
   | DirOther
 
@@ -436,8 +438,15 @@ data ModuleItem
   | ItemRule Rule
   | ItemEquation (AnnP FunctionEquation)
 
--- | Convert a list of top-level PExpr terms to a 'Module'.
-convertModule :: [Ann PExpr] -> Module
+-- | Validation error detected during module conversion.
+data ParseValidationError
+  = -- | Equations for a non-open function are not contiguous.
+    DiscontiguousEquations Text
+  deriving (Eq, Show)
+
+-- | Convert a list of top-level PExpr terms to a 'Module', along with
+-- any validation errors (e.g. discontiguous equations).
+convertModule :: [Ann PExpr] -> (Module, [AnnP ParseValidationError])
 convertModule terms =
   let items = map convertModuleItem terms
       dirs = [d | ItemDirective d <- items]
@@ -450,8 +459,42 @@ convertModule terms =
       modDecls_ =
         concat [ds | DirConstraintDecl ds <- dirs]
           ++ concat [ds | DirFunctionDecl ds <- dirs]
+          ++ concat [ds | DirOpenFunctionDecl ds <- dirs]
       modTypeDecls_ = concat [ds | DirTypeDecl ds <- dirs]
-   in Module modName_ modImports_ modDecls_ modTypeDecls_ rules eqs modExports_
+      openNames =
+        Set.fromList
+          [d.name | DirOpenFunctionDecl ds <- dirs, Ann d _ <- ds]
+      contiguityErrors = checkContiguity openNames items
+      mod_ = Module modName_ modImports_ modDecls_ modTypeDecls_ rules eqs modExports_
+   in (mod_, contiguityErrors)
+
+-- | Check that equations for non-open functions are contiguous.
+-- Returns an error for each function whose equations are separated by
+-- other items.
+checkContiguity :: Set.Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
+checkContiguity openNames = go Set.empty Nothing
+  where
+    -- closed: function names whose equation block has ended.
+    -- prev: the function name of the immediately preceding equation (if any).
+    go _closed _prev [] = []
+    go closed prev (ItemEquation annEq : rest) =
+      let n = eqName annEq.node.funName
+       in if n `Set.member` openNames
+            then go closed prev rest
+            else case prev of
+              Just p | p == n -> go closed prev rest -- still contiguous
+              _ ->
+                let closed' = maybe closed (`Set.insert` closed) prev
+                 in if n `Set.member` closed'
+                      then
+                        AnnP (DiscontiguousEquations n) annEq.sourceLoc annEq.parsed
+                          : go closed' (Just n) rest
+                      else go closed' (Just n) rest
+    go closed prev (_ : rest) =
+      go (maybe closed (`Set.insert` closed) prev) Nothing rest
+
+    eqName (Unqualified n) = n
+    eqName (Qualified _ n) = n
 
 -- | Classify and convert a single top-level PExpr.
 convertModuleItem :: Ann PExpr -> ModuleItem
@@ -491,6 +534,9 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- :- function foo/2.  or  :- function factorial(int) -> int.
   Compound "function" [decls] ->
     DirFunctionDecl (map convertFunctionDecl (flattenComma decls))
+  -- :- open_function foo/2.
+  Compound "open_function" [decls] ->
+    DirOpenFunctionDecl (map convertOpenFunctionDecl (flattenComma decls))
   -- :- chr_type name ---> con1 ; con2 ; ...
   -- Parsed as prefix op: Compound "chr_type" [Compound "--->" [head, alts]]
   Compound "chr_type" [typeBody] ->
@@ -547,10 +593,16 @@ convertConstraintDecl (Ann pexpr loc) = case pexpr of
 
 -- | Convert a PExpr to a function declaration.
 convertFunctionDecl :: Ann PExpr -> Ann Declaration
-convertFunctionDecl (Ann pexpr loc) = case pexpr of
+convertFunctionDecl = convertFunctionDeclWith False
+
+convertOpenFunctionDecl :: Ann PExpr -> Ann Declaration
+convertOpenFunctionDecl = convertFunctionDeclWith True
+
+convertFunctionDeclWith :: Bool -> Ann PExpr -> Ann Declaration
+convertFunctionDeclWith open (Ann pexpr loc) = case pexpr of
   -- Untyped: name/arity
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    Ann (FunctionDecl name arity Nothing Nothing) loc
+    Ann (FunctionDecl name arity Nothing Nothing open) loc
   -- Typed: name(type, ...) -> type
   Compound "->" [Ann (Compound name args) _, ret] ->
     Ann
@@ -559,9 +611,10 @@ convertFunctionDecl (Ann pexpr loc) = case pexpr of
           (length args)
           (Just (map convertTypeExpr args))
           (Just (convertTypeExpr ret))
+          open
       )
       loc
-  _ -> Ann (FunctionDecl "<unknown>" 0 Nothing Nothing) loc
+  _ -> Ann (FunctionDecl "<unknown>" 0 Nothing Nothing open) loc
 
 -- | Convert a PExpr to a 'TypeExpr'.
 convertTypeExpr :: Ann PExpr -> TypeExpr
@@ -661,7 +714,7 @@ convertFunctionEquation (Ann pexpr loc) = case pexpr of
         let (name, args) = extractFunNameArgs pat
          in AnnP
               ( FunctionEquation
-                  name
+                  (Unqualified name)
                   args
                   (AnnP (map convertTerm (flattenComma guard_)) guard_.sourceLoc guard_.node)
                   (AnnP (convertTerm rhs) rhs.sourceLoc rhs.node)
@@ -673,7 +726,7 @@ convertFunctionEquation (Ann pexpr loc) = case pexpr of
         let (name, args) = extractFunNameArgs lhs
          in AnnP
               ( FunctionEquation
-                  name
+                  (Unqualified name)
                   args
                   (AnnP [] lhs.sourceLoc (Atom ""))
                   (AnnP (convertTerm rhs) rhs.sourceLoc rhs.node)
@@ -681,7 +734,7 @@ convertFunctionEquation (Ann pexpr loc) = case pexpr of
               loc
               pexpr
   _ ->
-    AnnP (FunctionEquation "<unknown>" [] (AnnP [] loc (Atom "")) (AnnP (convertTerm (Ann pexpr loc)) loc pexpr)) loc pexpr
+    AnnP (FunctionEquation (Unqualified "<unknown>") [] (AnnP [] loc (Atom "")) (AnnP (convertTerm (Ann pexpr loc)) loc pexpr)) loc pexpr
 
 -- | Extract the function name and argument list from an equation LHS.
 --

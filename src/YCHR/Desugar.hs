@@ -297,16 +297,23 @@ decomposeArg st parentVar i term =
         }
 
 -- | Desugar every function in every module: find each @:- function@
--- declaration, gather its equations by name, and produce a 'D.Function'
--- per declaration.
+-- (or @:- open_function@) declaration, gather its equations by name,
+-- and produce a 'D.Function' per declaration.
+--
+-- For regular functions, equations are collected from the declaring
+-- module only. For open functions, equations are collected from all
+-- modules where the qualified name matches.
 desugarFunctions :: [P.Module] -> Eff '[Writer [Diagnostic DesugarError]] [D.Function]
 desugarFunctions mods =
   traverse
     ( \(m, d) ->
-        desugarFunction
-          m.name
-          d
-          [annEq | annEq <- m.equations, annEq.node.funName == d.name]
+        let qualName = Qualified m.name d.name
+            eqs
+              | d.isOpen =
+                  [annEq | mod_ <- mods, annEq <- mod_.equations, annEq.node.funName == qualName]
+              | otherwise =
+                  [annEq | annEq <- m.equations, annEq.node.funName == qualName]
+         in desugarFunction m.name d eqs
     )
     [(m, d) | m <- mods, P.Ann d _ <- m.decls, isFunctionDecl d]
 

@@ -11,7 +11,6 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import Text.Megaparsec (ParseErrorBundle)
 import YCHR.Parsed
 import YCHR.Parser (ModuleHeader (..), collectModuleHeader, parseModule)
-import YCHR.Types
 
 tests :: TestTree
 tests =
@@ -31,7 +30,7 @@ tests =
 
 -- | Parse a source string with no filename.
 p :: Text -> Either (ParseErrorBundle Text Void) Module
-p = parseModule ""
+p src = fst <$> parseModule "" src
 
 -- | Strip source locations from a Rule for structural comparison.
 stripRuleLoc :: Rule -> Rule
@@ -126,6 +125,7 @@ directiveTests =
                 1
                 (Just [TypeCon (Unqualified "int") []])
                 (Just (TypeCon (Unqualified "int") []))
+                False
             ],
       testCase "function typed multiple args" $
         (map (.node) . (.decls)) <$> p ":- function add(int, int) -> int."
@@ -135,10 +135,11 @@ directiveTests =
                 2
                 (Just [TypeCon (Unqualified "int") [], TypeCon (Unqualified "int") []])
                 (Just (TypeCon (Unqualified "int") []))
+                False
             ],
       testCase "function untyped" $
         (map (.node) . (.decls)) <$> p ":- function foo/2."
-          @?= Right [FunctionDecl "foo" 2 Nothing Nothing]
+          @?= Right [FunctionDecl "foo" 2 Nothing Nothing False]
     ]
 
 -- ---------------------------------------------------------------------------

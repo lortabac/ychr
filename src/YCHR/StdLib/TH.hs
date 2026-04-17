@@ -46,4 +46,6 @@ parseLib table (path, contents) =
   let name = T.pack (dropExtension (takeFileName path))
    in case parseModuleWith table path (T.pack contents) of
         Left err -> fail ("Failed to parse library " ++ path ++ ": " ++ show err)
-        Right m -> pure (name, m)
+        Right (m, errs)
+          | not (null errs) -> fail ("Validation errors in library " ++ path ++ ": " ++ show errs)
+          | otherwise -> pure (name, m)

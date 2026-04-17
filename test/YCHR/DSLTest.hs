@@ -6,7 +6,6 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 import YCHR.DSL
 import YCHR.Parsed
-import YCHR.Types
 
 tests :: TestTree
 tests =

@@ -164,7 +164,7 @@ repl quietMode files prog = loop
               Parsed.Ann d _ <- m.decls,
               (kw, n, a) <- case d of
                 Parsed.ConstraintDecl {name = n, arity = a} -> [("chr_constraint", n, a)]
-                Parsed.FunctionDecl {name = n, arity = a} -> [("function", n, a)]
+                Parsed.FunctionDecl {name = n, arity = a, isOpen = o} -> [(if o then "open_function" else "function", n, a)]
                 _ -> []
             ]
       mapM_ outputStrLn declLines

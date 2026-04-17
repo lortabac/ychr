@@ -61,7 +61,7 @@ import YCHR.Diagnostic (Diagnostic)
 import YCHR.Meta (valueToTerm)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed (AnnP (..), Import (..), Module (..), SourceLoc (..), noAnnP)
-import YCHR.Parser (ModuleHeader (..), OpTable, buildModuleOpTable, builtinOps, collectModuleHeader, extractOpDecls, mergeOps, parseConstraint, parseModuleWith, parseQueryWith)
+import YCHR.Parser (ModuleHeader (..), OpTable, ParseValidationError (..), buildModuleOpTable, builtinOps, collectModuleHeader, extractOpDecls, mergeOps, parseConstraint, parseModuleWith, parseQueryWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (RenameError, RenameInputs (..), RenameWarning, buildExportEnv, renameProgram, renameQueryGoals)
 import YCHR.Rename.Types (toListExport)
@@ -78,6 +78,7 @@ import YCHR.VM (Name (..), Procedure (..), Program (..), StackFrame)
 
 data Error
   = ParseError FilePath (ParseErrorBundle Text Void)
+  | ParseValidationErrors [AnnP ParseValidationError]
   | CollectErrors [Diagnostic CollectError]
   | RenameErrors [Diagnostic RenameError]
   | DesugarErrors [Diagnostic DesugarError]
@@ -134,7 +135,7 @@ compileModules includeStdlib inputs = do
   -- Build per-module operator tables and full-parse each user file with
   -- its specific table. A first conflict in any table aborts the whole
   -- compilation with OperatorConflict.
-  parsed <-
+  parsedWithErrors <-
     traverse
       ( \((fp, src), (_, hdr)) -> do
           table <- case buildModuleOpTable builtinOps preludeOps opExports hdr of
@@ -143,6 +144,11 @@ compileModules includeStdlib inputs = do
           first (ParseError fp) (parseModuleWith table fp src)
       )
       (zip inputs userHeaders)
+  let parsed = map fst parsedWithErrors
+      validationErrors = concatMap snd parsedWithErrors
+  case validationErrors of
+    [] -> pure ()
+    errs -> Left (ParseValidationErrors errs)
   -- Auto-import prelude into every user module and into every library
   -- module (except prelude itself), then rewrite all LibraryImports to
   -- ModuleImports for the renamer.

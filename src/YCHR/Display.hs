@@ -9,6 +9,7 @@ module YCHR.Display
     displayMsgWithSrcLoc,
     displayErrorCode,
     collectErrorCode,
+    parseValidationErrorCode,
     renameErrorCode,
     renameWarningCode,
     desugarErrorCode,
@@ -31,6 +32,7 @@ import YCHR.Desugar (DesugarError (..))
 import YCHR.Diagnostic (Diagnostic (..))
 import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
+import YCHR.Parser (ParseValidationError (..))
 import YCHR.Pretty (prettyPExprSrc, prettyTermSrc)
 import YCHR.Rename (RenameError (..), RenameWarning (..))
 import YCHR.Run (Error (..), Warning (..))
@@ -116,6 +118,10 @@ collectErrorCode :: CollectError -> ErrorCode
 collectErrorCode (UnknownLibrary _) = ErrorCode 10001
 collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
 
+-- | 15xxx — parse validation phase
+parseValidationErrorCode :: ParseValidationError -> ErrorCode
+parseValidationErrorCode (DiscontiguousEquations _) = ErrorCode 15001
+
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 was previously used for OperatorInImportList; now reserved
 -- because operators are permitted in import lists (see UnknownOperatorImport).
@@ -152,6 +158,22 @@ operatorConflictCode = ErrorCode 50002
 -- ---------------------------------------------------------------------------
 -- Display instances
 -- ---------------------------------------------------------------------------
+
+instance Display (P.AnnP ParseValidationError) where
+  displayMsg (AnnP err loc origin) =
+    displayMsgWithSrcLoc
+      (parseValidationErrorCode err)
+      SevError
+      (parseValidationErrorMsg err)
+      loc
+      Nothing
+      (Just (prettyPExprSrc origin))
+
+parseValidationErrorMsg :: ParseValidationError -> String
+parseValidationErrorMsg (DiscontiguousEquations name) =
+  "Equations for function "
+    ++ T.unpack name
+    ++ " must be contiguous (or declare it with :- open_function)"
 
 instance Display (Diagnostic CollectError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -276,6 +298,7 @@ instance Display Error where
     let posState = bundlePosState bundle
         errs = bundleErrors bundle
      in displayErrors (map (displayParseError posState) (toList errs))
+  displayMsg (ParseValidationErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (CollectErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (RenameErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (DesugarErrors errs) = displayErrors (map displayMsg errs)

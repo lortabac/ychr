@@ -1,0 +1,5 @@
+:- open_function f/1.
+f(0) -> 1.
+:- chr_constraint result/1.
+result(R) <=> R is f(0) + f(1).
+f(N) -> N.
