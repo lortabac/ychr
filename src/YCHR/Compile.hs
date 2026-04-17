@@ -419,6 +419,13 @@ compileTerm _ _ (AtomTerm "true") = pure (Lit (BoolLit True))
 compileTerm _ _ (AtomTerm "false") = pure (Lit (BoolLit False))
 compileTerm _ _ (AtomTerm s) = pure (Lit (AtomLit s))
 compileTerm _ _ (TextTerm s) = pure (Lit (TextLit s))
+-- Qualified names are expanded to their @':'@ compound-term representation
+-- so that the runtime preserves the structure instead of mangling it.
+compileTerm _ _ (CompoundTerm (Types.Qualified m n) []) =
+  pure (MakeTerm (Name ":") [Lit (AtomLit m), Lit (AtomLit n)])
+compileTerm varMap si (CompoundTerm (Types.Qualified m n) args) = do
+  args' <- traverse (compileTerm varMap si) args
+  pure (MakeTerm (Name ":") [Lit (AtomLit m), MakeTerm (Name n) args'])
 compileTerm varMap si (CompoundTerm name args) = do
   args' <- traverse (compileTerm varMap si) args
   pure (MakeTerm (vmName name) args')

@@ -15,7 +15,7 @@ module YCHR.Pretty
   )
 where
 
-import Data.List (intercalate)
+import Data.Char (isUpper)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -142,43 +142,47 @@ renderAtom :: Text -> String
 renderAtom = PE.renderAtom prettyOps.wordOpSet
 
 -- ---------------------------------------------------------------------------
--- Runtime pretty-printer (not via PExpr)
+-- Runtime pretty-printer (via PExpr)
 -- ---------------------------------------------------------------------------
 
 -- | Render a 'Term' as a Prolog-compatible string.
 -- Unbound variables ('VarTerm' and 'Wildcard') are shown as @_@.
+-- Operators are displayed using their declared fixity and precedence.
 prettyTerm :: Term -> String
-prettyTerm (IntTerm n) = show n
-prettyTerm (AtomTerm s) = T.unpack s
-prettyTerm (TextTerm s) = renderStringRT s
-prettyTerm (VarTerm _) = "_"
-prettyTerm Wildcard = "_"
-prettyTerm (CompoundTerm (Unqualified "__closure") (_ : sourceForm : _)) =
-  prettyTerm sourceForm
-prettyTerm (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body]) =
-  "fun(" ++ intercalate ", " (map prettyTerm params) ++ ") -> " ++ prettyTerm body
-prettyTerm (CompoundTerm (Unqualified ".") [h, t]) =
-  "[" ++ prettyTerm h ++ prettyListTail t ++ "]"
-  where
-    prettyListTail (AtomTerm "[]") = ""
-    prettyListTail (CompoundTerm (Unqualified ".") [h', t']) =
-      ", " ++ prettyTerm h' ++ prettyListTail t'
-    prettyListTail other = "|" ++ prettyTerm other
-prettyTerm (CompoundTerm (Unqualified f) ts) =
-  T.unpack f ++ "(" ++ intercalate ", " (map prettyTerm ts) ++ ")"
-prettyTerm (CompoundTerm (Qualified m f) ts) =
-  T.unpack m ++ ":" ++ T.unpack f ++ "(" ++ intercalate ", " (map prettyTerm ts) ++ ")"
+prettyTerm = PE.prettyPExpr prettyOps . runtimeToPExpr
 
--- | Render a string literal with double quotes and escape sequences.
--- Used only by 'prettyTerm' for runtime output.
-renderStringRT :: Text -> String
-renderStringRT s = "\"" ++ concatMap esc (T.unpack s) ++ "\""
-  where
-    esc '"' = "\\\""
-    esc '\\' = "\\\\"
-    esc '\n' = "\\n"
-    esc '\t' = "\\t"
-    esc c = [c]
+-- | Convert a runtime 'Term' to a 'PE.PExpr' for pretty-printing.
+-- Like 'termToPExpr' but collapses unbound variables to @_@ and
+-- unwraps closure terms to show their source form.
+runtimeToPExpr :: Term -> PE.PExpr
+runtimeToPExpr (VarTerm _) = PE.Wildcard
+runtimeToPExpr Wildcard = PE.Wildcard
+runtimeToPExpr (CompoundTerm (Unqualified "__closure") (_ : sourceForm : _)) =
+  unquoteToPExpr sourceForm
+runtimeToPExpr (CompoundTerm (Qualified m f) []) =
+  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom f)]
+runtimeToPExpr (CompoundTerm (Qualified m f) args) =
+  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Compound f (map (noAnn . runtimeToPExpr) args))]
+runtimeToPExpr (CompoundTerm (Unqualified f) args) =
+  PE.Compound f (map (noAnn . runtimeToPExpr) args)
+runtimeToPExpr (IntTerm n) = PE.Int n
+runtimeToPExpr (AtomTerm s) = PE.Atom s
+runtimeToPExpr (TextTerm s) = PE.Str s
+
+-- | Like 'runtimeToPExpr' but reverses the 'quoteTerm' transformation:
+-- atoms that look like variable names (start with uppercase or @_@) are
+-- rendered as variables. Used for closure source forms where 'quoteTerm'
+-- has turned @VarTerm v@ into @AtomTerm v@.
+unquoteToPExpr :: Term -> PE.PExpr
+unquoteToPExpr (AtomTerm s)
+  | Just (c, _) <- T.uncons s, isUpper c || c == '_' = PE.Var s
+unquoteToPExpr (CompoundTerm (Unqualified f) args) =
+  PE.Compound f (map (noAnn . unquoteToPExpr) args)
+unquoteToPExpr (CompoundTerm (Qualified m f) []) =
+  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom f)]
+unquoteToPExpr (CompoundTerm (Qualified m f) args) =
+  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Compound f (map (noAnn . unquoteToPExpr) args))]
+unquoteToPExpr t = runtimeToPExpr t
 
 -- ---------------------------------------------------------------------------
 -- User-facing output (binding map)

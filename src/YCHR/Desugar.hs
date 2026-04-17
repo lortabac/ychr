@@ -251,6 +251,13 @@ normalizeArg st term =
 
 -- | Decompose a compound term into match and extraction guards.
 decomposeCompound :: HnfState -> Text -> Name -> [Term] -> HnfState
+-- Qualified names are expanded to their @':'@ compound-term representation
+-- so that the VM sees them as ordinary binary terms, not mangled identifiers.
+decomposeCompound st parentVar (Qualified m n) cargs =
+  let inner = case cargs of
+        [] -> AtomTerm n
+        _ -> CompoundTerm (Unqualified n) cargs
+   in decomposeCompound st parentVar (Unqualified ":") [AtomTerm m, inner]
 decomposeCompound st parentVar cname cargs =
   let matchGuard = D.GuardMatch (VarTerm parentVar) cname (length cargs)
       st' = st {hnfGuards = matchGuard : st.hnfGuards}

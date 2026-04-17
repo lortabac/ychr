@@ -700,11 +700,15 @@ prettyPrec iops pops wops ctx (Compound f [l, r])
             Yfx -> (fix, fix - 1)
             Xfy -> (fix - 1, fix)
             _ -> (fix - 1, fix - 1) -- Xfx
+          (lSpace, rSpace)
+            | f == ":" = ("", "")
+            | f == "," || f == ";" = ("", " ")
+            | otherwise = (" ", " ")
           rendered =
             rec lCtx l.node
-              ++ " "
+              ++ lSpace
               ++ T.unpack f
-              ++ " "
+              ++ rSpace
               ++ rec rCtx r.node
        in if fix > ctx then "(" ++ rendered ++ ")" else rendered
   where

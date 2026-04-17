@@ -392,6 +392,11 @@ termToValue (IntTerm n) = pure (VInt n)
 termToValue (AtomTerm s) = pure (VAtom s)
 termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard
+termToValue (CompoundTerm (Types.Qualified m n) []) = do
+  pure (VTerm ":" [VAtom m, VAtom n])
+termToValue (CompoundTerm (Types.Qualified m n) ts) = do
+  ts' <- traverse termToValue ts
+  pure (VTerm ":" [VAtom m, VTerm n ts'])
 termToValue (CompoundTerm name ts) = VTerm (vmName name).unName <$> traverse termToValue ts
 
 -- ---------------------------------------------------------------------------
