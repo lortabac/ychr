@@ -17,7 +17,7 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, gets, modify')
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
-import Data.Text (Text)
+import Data.Text (Text, pack)
 import Effectful (Eff, liftIO, runEff, type (:>))
 import YCHR.Parser (builtinOps, parseTermWith)
 import YCHR.Pretty (prettyTerm)
@@ -80,6 +80,13 @@ metaHostCallRegistry =
           strs <- liftIO (mapM prettyRuntimeVal args)
           liftIO (mapM_ putStrLn strs)
           pure unit
+      ),
+      ( Name "write_term_to_string",
+        HostCallFn $ \case
+          [arg] -> do
+            s <- liftIO (prettyRuntimeVal arg)
+            pure (RVal (VText (pack s)))
+          _ -> error "write_term_to_string: expected 1 argument"
       ),
       ( Name "read_term_from_string",
         HostCallFn $ \case
