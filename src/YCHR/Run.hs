@@ -75,6 +75,7 @@ import YCHR.StdLib (stdlib)
 import YCHR.Types (Constraint (..), ConstraintType, SymbolTable, Term (..))
 import YCHR.Types qualified as Types
 import YCHR.VM (Name (..), Procedure (..), Program (..), StackFrame)
+import YCHR.Validate (ValidationError, validateDeclKinds)
 
 data Error
   = ParseError FilePath (ParseErrorBundle Text Void)
@@ -82,6 +83,7 @@ data Error
   | CollectErrors [Diagnostic CollectError]
   | RenameErrors [Diagnostic RenameError]
   | DesugarErrors [Diagnostic DesugarError]
+  | ValidationErrors [Diagnostic ValidationError]
   | CompileErrors [Diagnostic CompileError]
   | OperatorConflict (AnnP Text)
   deriving (Show)
@@ -168,6 +170,9 @@ compileModules includeStdlib inputs = do
             riTrailingLoc = Map.fromList [(h.modName, h.trailingLoc) | (_, h) <- userHeaders]
           }
   (renamed, renameWarnings) <- first RenameErrors (renameProgram renameInputs allMods)
+  case validateDeclKinds renamed of
+    [] -> pure ()
+    errs -> Left (ValidationErrors errs)
   desugared <- first DesugarErrors (desugarProgram renamed)
   desugared' <- first DesugarErrors (liftAllLambdas desugared)
   let symTab = extractSymbolTable desugared'

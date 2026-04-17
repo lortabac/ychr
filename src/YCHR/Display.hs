@@ -10,6 +10,7 @@ module YCHR.Display
     displayErrorCode,
     collectErrorCode,
     parseValidationErrorCode,
+    validationErrorCode,
     renameErrorCode,
     renameWarningCode,
     desugarErrorCode,
@@ -37,6 +38,7 @@ import YCHR.Pretty (prettyPExprSrc, prettyTermSrc)
 import YCHR.Rename (RenameError (..), RenameWarning (..))
 import YCHR.Run (Error (..), Warning (..))
 import YCHR.Types qualified as Types
+import YCHR.Validate (ValidationError (..))
 
 class Display a where
   displayMsg :: a -> String
@@ -122,6 +124,11 @@ collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
 parseValidationErrorCode :: ParseValidationError -> ErrorCode
 parseValidationErrorCode (DiscontiguousEquations _) = ErrorCode 15001
 
+-- | 16xxx — validation phase (post-rename, pre-desugar)
+validationErrorCode :: ValidationError -> ErrorCode
+validationErrorCode (ConstraintHasEquations _) = ErrorCode 16001
+validationErrorCode (FunctionInRuleHead _) = ErrorCode 16002
+
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 was previously used for OperatorInImportList; now reserved
 -- because operators are permitted in import lists (see UnknownOperatorImport).
@@ -174,6 +181,24 @@ parseValidationErrorMsg (DiscontiguousEquations name) =
   "Equations for function "
     ++ T.unpack name
     ++ " must be contiguous (or declare it with :- open_function)"
+
+instance Display (Diagnostic ValidationError) where
+  displayMsg (Diagnostic lbl (AnnP err loc origin)) =
+    displayMsgWithSrcLoc
+      (validationErrorCode err)
+      SevError
+      (validationErrorMsg err)
+      loc
+      (fmap T.unpack lbl)
+      (Just (prettyPExprSrc origin))
+
+validationErrorMsg :: ValidationError -> String
+validationErrorMsg (ConstraintHasEquations name) =
+  displayName name
+    ++ " is declared as a constraint but has function equations (->)"
+validationErrorMsg (FunctionInRuleHead name) =
+  displayName name
+    ++ " is declared as a function but appears in a rule head"
 
 instance Display (Diagnostic CollectError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -301,6 +326,7 @@ instance Display Error where
   displayMsg (ParseValidationErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (CollectErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (RenameErrors errs) = displayErrors (map displayMsg errs)
+  displayMsg (ValidationErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (DesugarErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (CompileErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (OperatorConflict (AnnP name loc origin)) =
