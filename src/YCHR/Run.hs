@@ -65,6 +65,8 @@ import YCHR.Parser (ModuleHeader (..), OpTable, ParseValidationError (..), build
 import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (RenameError, RenameInputs (..), RenameWarning, buildExportEnv, renameProgram, renameQueryGoals)
 import YCHR.Rename.Types (toListExport)
+import YCHR.Resolve (ResolveError, resolveProgram)
+import YCHR.Resolved qualified as R
 import YCHR.Runtime.History (PropHistory, runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc)
 import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue)
@@ -75,7 +77,6 @@ import YCHR.StdLib (stdlib)
 import YCHR.Types (Constraint (..), ConstraintType, SymbolTable, Term (..))
 import YCHR.Types qualified as Types
 import YCHR.VM (Name (..), Procedure (..), Program (..), StackFrame)
-import YCHR.Validate (ValidationError, validateDeclKinds)
 
 data Error
   = ParseError FilePath (ParseErrorBundle Text Void)
@@ -83,7 +84,7 @@ data Error
   | CollectErrors [Diagnostic CollectError]
   | RenameErrors [Diagnostic RenameError]
   | DesugarErrors [Diagnostic DesugarError]
-  | ValidationErrors [Diagnostic ValidationError]
+  | ResolveErrors [Diagnostic ResolveError]
   | CompileErrors [Diagnostic CompileError]
   | OperatorConflict (AnnP Text)
   deriving (Show)
@@ -105,7 +106,9 @@ data CompiledProgram = CompiledProgram
     -- | All functions in the desugared program (for call dispatch in queries).
     allFunctions :: [D.Function],
     -- | Counter for the next lambda index (to avoid collisions in queries).
-    nextLambdaIndex :: Int
+    nextLambdaIndex :: Int,
+    -- | Set of declared function names (for query goal classification).
+    functionNameSet :: Set Types.Name
   }
 
 data ExportResolution
@@ -170,10 +173,8 @@ compileModules includeStdlib inputs = do
             riTrailingLoc = Map.fromList [(h.modName, h.trailingLoc) | (_, h) <- userHeaders]
           }
   (renamed, renameWarnings) <- first RenameErrors (renameProgram renameInputs allMods)
-  case validateDeclKinds renamed of
-    [] -> pure ()
-    errs -> Left (ValidationErrors errs)
-  desugared <- first DesugarErrors (desugarProgram renamed)
+  resolved <- first ResolveErrors (resolveProgram renamed)
+  desugared <- first DesugarErrors (desugarProgram resolved)
   desugared' <- first DesugarErrors (liftAllLambdas desugared)
   let symTab = extractSymbolTable desugared'
       warnings = [RenameWarnings renameWarnings | not (null renameWarnings)]
@@ -185,7 +186,7 @@ compileModules includeStdlib inputs = do
     Left conflict -> Left (OperatorConflict (noAnnP conflict))
     Right t -> Right t
   let lambdaCount = length [() | f <- desugared'.functions, isLambdaName f.name]
-  pure (CompiledProgram prog exportMap exportedSet symTab allMods queryTable desugared'.functions lambdaCount, warnings)
+  pure (CompiledProgram prog exportMap exportedSet symTab allMods queryTable desugared'.functions lambdaCount resolved.functionNames, warnings)
   where
     first' f (Left e) = Left (f e)
     first' _ (Right x) = Right x
@@ -418,7 +419,7 @@ runProgramWithQuery cp hostCalls src =
     Left err -> throwIO (ParseError "<query>" err)
     Right goals -> do
       (renamed, _renameWarnings) <- either (throwIO . RenameErrors) pure (renameQueryGoals cp.allModules goals)
-      bodyGoals <- either (throwIO . DesugarErrors) pure (desugarQueryGoals cp.allModules renamed)
+      bodyGoals <- either (throwIO . DesugarErrors) pure (desugarQueryGoals cp.functionNameSet renamed)
       -- Lambda-lift query body goals and compile the generated functions
       let queryLoc = SourceLoc "<query>" 1 1
       (liftedGoals, queryLambdas) <- either (throwIO . DesugarErrors) pure (liftQueryLambdas cp.nextLambdaIndex queryLoc (Atom "") bodyGoals)

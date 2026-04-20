@@ -10,7 +10,7 @@ module YCHR.Display
     displayErrorCode,
     collectErrorCode,
     parseValidationErrorCode,
-    validationErrorCode,
+    resolveErrorCode,
     renameErrorCode,
     renameWarningCode,
     desugarErrorCode,
@@ -36,9 +36,9 @@ import YCHR.Parsed qualified as P
 import YCHR.Parser (ParseValidationError (..))
 import YCHR.Pretty (prettyPExprSrc, prettyTermSrc)
 import YCHR.Rename (RenameError (..), RenameWarning (..))
+import YCHR.Resolve (ResolveError (..))
 import YCHR.Run (Error (..), Warning (..))
 import YCHR.Types qualified as Types
-import YCHR.Validate (ValidationError (..))
 
 class Display a where
   displayMsg :: a -> String
@@ -124,10 +124,10 @@ collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
 parseValidationErrorCode :: ParseValidationError -> ErrorCode
 parseValidationErrorCode (DiscontiguousEquations _) = ErrorCode 15001
 
--- | 16xxx — validation phase (post-rename, pre-desugar)
-validationErrorCode :: ValidationError -> ErrorCode
-validationErrorCode (ConstraintHasEquations _) = ErrorCode 16001
-validationErrorCode (FunctionInRuleHead _) = ErrorCode 16002
+-- | 16xxx — resolve phase (post-rename, pre-desugar)
+resolveErrorCode :: ResolveError -> ErrorCode
+resolveErrorCode (ConstraintHasEquations _) = ErrorCode 16001
+resolveErrorCode (FunctionInRuleHead _) = ErrorCode 16002
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 was previously used for OperatorInImportList; now reserved
@@ -182,21 +182,21 @@ parseValidationErrorMsg (DiscontiguousEquations name) =
     ++ T.unpack name
     ++ " must be contiguous (or declare it with :- open_function)"
 
-instance Display (Diagnostic ValidationError) where
+instance Display (Diagnostic ResolveError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
     displayMsgWithSrcLoc
-      (validationErrorCode err)
+      (resolveErrorCode err)
       SevError
-      (validationErrorMsg err)
+      (resolveErrorMsg err)
       loc
       (fmap T.unpack lbl)
       (Just (prettyPExprSrc origin))
 
-validationErrorMsg :: ValidationError -> String
-validationErrorMsg (ConstraintHasEquations name) =
+resolveErrorMsg :: ResolveError -> String
+resolveErrorMsg (ConstraintHasEquations name) =
   displayName name
     ++ " is declared as a constraint but has function equations (->)"
-validationErrorMsg (FunctionInRuleHead name) =
+resolveErrorMsg (FunctionInRuleHead name) =
   displayName name
     ++ " is declared as a function but appears in a rule head"
 
@@ -326,7 +326,7 @@ instance Display Error where
   displayMsg (ParseValidationErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (CollectErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (RenameErrors errs) = displayErrors (map displayMsg errs)
-  displayMsg (ValidationErrors errs) = displayErrors (map displayMsg errs)
+  displayMsg (ResolveErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (DesugarErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (CompileErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (OperatorConflict (AnnP name loc origin)) =

@@ -166,7 +166,8 @@ library
                     , YCHR.StdLib
                     , YCHR.StdLib.TH
                     , YCHR.Types
-                    , YCHR.Validate
+                    , YCHR.Resolve
+                    , YCHR.Resolved
                     , YCHR.VM
                     , YCHR.VM.Types
                     , YCHR.VM.SExpr
