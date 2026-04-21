@@ -319,12 +319,18 @@ con_sig(ConName, Sig) \
     copy_term(Sig, sig(FreshParent, _)),
     tc_unify(TermType, FreshParent, Ctx).
 
+%% Unknown constructor in guard match → no type info (any)
+check_guard_match(_, _, _) <=> true.
+
 con_sig(ConName, Sig) \
     check_guard_getarg(ResultType, TermType, ConName, FieldIndex, Ctx) <=>
     copy_term(Sig, sig(FreshParent, FreshFields)),
     tc_unify(TermType, FreshParent, Ctx),
     FieldType is nth(FieldIndex, FreshFields),
     tc_unify(ResultType, FieldType, Ctx).
+
+%% Unknown constructor in guard getarg → result is any
+check_guard_getarg(ResultType, _, _, _, _) <=> ResultType = any.
 ```
 
 ### tc_unify (type propagation and consistency)
@@ -336,10 +342,11 @@ The core operation. Performs two roles:
 2. **Consistency**: when two concrete types meet, verifies they are
    compatible.
 
-The `any` type is special: it binds variables that meet it (making
-them `any` too), but it does not bind declared type parameters.
-This requires careful rule ordering — see the rationale section
-below.
+The `any` type is special: it binds unknown (unbound) variables that
+meet it, making them `any`. However, it does not overwrite variables
+that already have a concrete type, and it does not bind declared
+type parameters. This requires careful rule ordering — see the
+rationale section below.
 
 ```prolog
 %% --- any handling (must come first) ---
@@ -497,12 +504,14 @@ checkRule(prog, rule):
         tell check_unify(typeOfTerm(varTypes, prog, t1),
                          typeOfTerm(varTypes, prog, t2), ctx)
       GuardMatch term conName arity ->
+        lastConName = conName  -- remember for subsequent GuardGetArg
         tell check_guard_match(
             typeOfTerm(varTypes, prog, term), conName, ctx)
       GuardGetArg varName term index ->
+        -- uses lastConName from the preceding GuardMatch on this term
         tell check_guard_getarg(varTypes[varName],
             typeOfTerm(varTypes, prog, term),
-            conName, index, ctx)
+            lastConName, index, ctx)
       GuardExpr term ->
         tell check_guard_bool(
             typeOfTerm(varTypes, prog, term), ctx)
@@ -523,7 +532,10 @@ checkRule(prog, rule):
         argTypeVars = [typeOfTerm(varTypes, prog, a) | a <- args]
         retTypeVar = newVar()
         tell check_function_use(name, argTypeVars, retTypeVar, ctx)
-      BodyHostStmt _ _ -> skip  -- all any
+      BodyHostStmt _ args ->
+        -- Process arguments for side effects (nested typed terms
+        -- still get checked) but don't constrain them.
+        mapM_ (typeOfTerm varTypes prog) args
       BodyTrue -> skip
 ```
 
@@ -582,10 +594,11 @@ typeOfCompound(varTypes, prog, name, args):
     resultType = newVar()
     tell check_function_use(name, argTypes, resultType, ctx)
     return resultType
-  if name is Qualified "host" _:
-    return VAtom "any"
-  else:
-    return VAtom "any"
+  -- Unknown constructor or host call: process arguments for side effects
+  -- (nested constructors / function calls still get type-checked) but
+  -- don't constrain them — each argument position is effectively `any`.
+  mapM_ (typeOfTerm varTypes prog) args
+  return VAtom "any"
 ```
 
 
