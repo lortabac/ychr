@@ -29,6 +29,7 @@
     nl/0,
     writeln/1,
     call/2,
+    call/3,
     op(500, yfx, '+'),
     op(500, yfx, '-'),
     op(400, yfx, '*'),
@@ -76,7 +77,8 @@
     term_variables/1,
     compound_to_list/1,
     list_to_compound/1,
-    call/2.
+    call/2,
+    call/3.
 
 X + Y -> host:'+'(X, Y).
 
@@ -135,3 +137,5 @@ nl <=> host:write("\n").
 writeln(S) <=> write(S), nl.
 
 call(F, X) -> '$call'(F, X).
+
+call(F, X, Y) -> '$call'(F, X, Y).

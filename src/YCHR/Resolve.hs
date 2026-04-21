@@ -171,9 +171,9 @@ gatherEquations mods m d =
   let qualName = Qualified m.name d.name
       matchingEqs
         | d.isOpen =
-            [annEq | mod_ <- mods, annEq <- mod_.equations, annEq.node.funName == qualName]
+            [annEq | mod_ <- mods, annEq <- mod_.equations, annEq.node.funName == qualName, length annEq.node.args == d.arity]
         | otherwise =
-            [annEq | annEq <- m.equations, annEq.node.funName == qualName]
+            [annEq | annEq <- m.equations, annEq.node.funName == qualName, length annEq.node.args == d.arity]
    in map stripFunName matchingEqs
 
 stripFunName :: P.AnnP P.FunctionEquation -> P.AnnP R.FunctionEquation
