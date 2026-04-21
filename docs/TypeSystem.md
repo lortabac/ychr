@@ -144,41 +144,86 @@ function types. For example, `int ~ bool`, `option(int) ~ list(int)`,
 and `int ~ fun(int) -> int` are all errors.
 
 
-## Join (Least Restrictive Type)
+## Type Propagation and Consistency
 
-When two types meet through unification or other bidirectional flow,
-the *join* determines the resulting type. The join selects the least
-restrictive (most general) type:
+The type checker infers types for source variables by propagating
+type information through constraints. Each source variable starts
+with an unknown type. As the checker processes the rule, types flow
+into variables from declarations (head constraints, function
+signatures) and between variables through unification and `is`
+expressions.
 
+When two types meet, the checker performs a *consistency check*:
+
+- `τ ~ τ` succeeds for identical types.
+- `C(τ⃗) ~ C(σ⃗)` succeeds if all arguments are pairwise consistent.
+- `C(...) ~ D(...)` where C ≠ D is an error.
+- `any ~ τ` always succeeds, for any `τ` (see below).
+
+When a variable with an unknown type meets a concrete type, the
+variable acquires that type. When two variables with known concrete
+types meet, the checker verifies they are consistent.
+
+### The role of `any`
+
+The `any` type is the escape hatch for gradual typing. It is
+consistent with every other type. However, `any` does **not**
+propagate through variables the way concrete types do:
+
+- When a variable meets `any`, the variable becomes `any`. Further
+  consistency checks involving that variable always succeed.
+- When `any` meets a declared type parameter (from a polymorphic
+  declaration), the type parameter is **not** bound to `any`. This
+  prevents `any` from leaking through shared type parameters and
+  masking real inconsistencies. (See the Type Variables section.)
+
+The key consequence: `any` stops type propagation. A variable typed
+as `any` will not carry type information from one position to
+another.
+
+### Example: propagation through `=`
+
+```prolog
+:- chr_constraint foo(int), bar/1.
+rule @ foo(X) <=> bar(X).
 ```
-  join(any, τ)       = any
-  join(τ, any)       = any
-  join(B, B)         = B
-  join(C(τ⃗), C(σ⃗)) = C(join(τ₁,σ₁), ..., join(τₙ,σₙ))
-  join(C(...), D(...)) = any + error    (C ≠ D, neither any)
-```
 
-When two distinct non-`any` type constructors meet, the join reports a
-type error and returns `any` as a fallback. This allows the checker to
-continue collecting errors for the rest of the rule without cascading
-false positives from the failed position.
+- `X : int` (from `foo(int)` in the head).
+- Body `bar(X)`: `X` is `int`, so `bar` is called with an `int`
+  argument. The type propagated from the head to the body through
+  the shared variable `X`.
 
-The key property is that `any` absorbs: once a type position is `any`,
-it remains `any` and does not propagate concrete types through it.
-
-### Example
+### Example: `any` stops propagation
 
 ```prolog
 :- chr_constraint foo(any), bar(int), baz(bool).
 foo(X), bar(Y), baz(Z) <=> X = Y, X = Z.
 ```
 
-- `X = Y`: `join(any, int) = any`. `X` remains `any`.
-- `X = Z`: `join(any, bool) = any`. No error.
+- `X : any` (from `foo`), `Y : int` (from `bar`), `Z : bool`
+  (from `baz`).
+- `X = Y`: `any ~ int` → succeeds. `Y` remains `int`.
+- `X = Z`: `any ~ bool` → succeeds. `Z` remains `bool`.
 
-The `any` in `foo` breaks the type propagation chain between `bar`
-and `baz`. This is intentional: the user explicitly opted out of
-typing for that argument.
+No error. The `any` in `foo` makes both checks involving `X`
+succeed. Note that `Y` and `Z` retain their declared types -- the
+`any` from `X` does not propagate to them. If the rule also
+contained `Y = Z`, the checker would report an error for
+`int ~ bool`.
+
+### Example: inference through `is`
+
+```prolog
+:- chr_constraint result/1.
+:- function double(int) -> int.
+rule @ result(R) <=> R is double(1).
+```
+
+- `double(1)`: argument `1` has type `int`, consistent with the
+  declared parameter type. Return type is `int`.
+- `R is double(1)`: `R` acquires type `int` from the return type.
+- `result(R)`: `R` is `int`, which constrains the argument of
+  `result`.
 
 
 ## Type Checking Procedure
@@ -250,9 +295,11 @@ of the LHS variable.
 
 ### 5. Unification (bidirectional)
 
-In `X = Y` (body unification), the types of `X` and `Y` are combined
-via the join. The resulting type (the least restrictive of the two) is
-assigned to both variables. See the Join section.
+In `X = Y` (body unification), type information flows
+bidirectionally. If `X` has a known type and `Y` does not, `Y`
+acquires `X`'s type (and vice versa). If both have known types,
+the checker verifies they are consistent. If either side is `any`,
+the check succeeds but `any` does not propagate to the other side.
 
 ### 6. Body constraint calls
 
@@ -283,7 +330,7 @@ Head Normal Form desugaring introduces synthetic guards:
 - **`GuardGetArg var term index`**: the extracted variable gets the
   type of the constructor's field at the given index.
 - **`GuardEqual term1 term2`**: both terms must be consistent (like
-  body unification, via the join).
+  body unification, via consistency check).
 
 These guards carry the same type information as the original pattern
 the user wrote.
@@ -447,8 +494,7 @@ key ingredients are:
 
 - The consistency relation is reflexive and symmetric (but not
   transitive -- this is expected for gradual typing).
-- The join is commutative, associative, and absorbing with respect
-  to `any`.
+- Consistency with `any` is absorbing: `any ~ τ` always succeeds.
 - Constraint gathering is confluent (order-independent).
 - The fully-typed fragment reduces to standard HM with algebraic
   data types.
@@ -467,7 +513,7 @@ key ingredients are:
 | Polymorphism | Parametric, implicitly quantified, no rank-n |
 | Defaults | Missing annotations default to `any` |
 | Core relation | Consistency (gradual typing) |
-| Type merging | Join with `any` as absorber |
+| Type merging | Consistency check, `any` absorbs |
 | Solving | Constraint gathering, order-independent |
 | Inline annotations | Not supported; types only in declarations |
 | Host calls | All `any`; operators typed via library signatures |
