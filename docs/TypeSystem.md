@@ -377,13 +377,13 @@ A reference `name/arity` has the function type derived from the
 function's declared signature. If `double(int) -> int` is declared,
 then `double/1` has type `fun(int) -> int`.
 
-### `call_fun`
+### `$call`
 
-The `call_fun` operation is typed as `any` at the host level. Its CHR
+The `$call` operation is typed as `any` at the host level. Its CHR
 wrapper provides the typed interface:
 
 ```prolog
-:- function call_fun(fun(A) -> B, A) -> B.
+:- function call(fun(A) -> B, A) -> B.
 ```
 
 
