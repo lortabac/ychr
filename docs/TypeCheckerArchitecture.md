@@ -444,13 +444,16 @@ or unbound vars), so the asymmetry does not cause issues.
 
 ### Pipeline integration
 
-Type checking runs after desugaring, before compilation:
+Type checking runs after desugaring, before lambda lifting:
 
 ```
-parse → rename → resolve → desugar → lambda-lift → TYPE CHECK → compile
+parse → rename → resolve → desugar → TYPE CHECK → lambda-lift → compile
 ```
 
-Controlled by a flag. When disabled, the phase is skipped entirely.
+This ordering is important: the type checker must see lambdas and
+function references in their source form (before lambda lifting
+replaces them with closure terms). Controlled by a flag. When
+disabled, the phase is skipped entirely.
 
 ### Top-level algorithm
 
@@ -526,8 +529,8 @@ checkRule(prog, rule):
         tell check_unify(typeOfTerm(varTypes, prog, t1),
                          typeOfTerm(varTypes, prog, t2), ctx)
       BodyIs var term ->
-        tell tc_unify(varTypes[var],
-                      typeOfTerm(varTypes, prog, term), ctx)
+        tell check_unify(varTypes[var],
+                         typeOfTerm(varTypes, prog, term), ctx)
       BodyFunctionCall name args ->
         argTypeVars = [typeOfTerm(varTypes, prog, a) | a <- args]
         retTypeVar = newVar()
@@ -584,6 +587,27 @@ typeOfAtom(prog, s):
     return VAtom "any"
 
 typeOfCompound(varTypes, prog, name, args):
+  -- Lambda: fun(Params) -> Body (before lambda lifting)
+  if name is "->" and args = [fun(params...), body]:
+    resultType = newVar()  -- fun(P1,...,Pn) -> R
+    paramTypeVars = [varTypes[p] | p <- params]
+    bodyType = typeOfTerm(varTypes, prog, body)
+    tell check_unify(resultType,
+        encodeFunType(paramTypeVars, bodyType), ctx)
+    return resultType
+
+  -- Function reference: name/arity (before lambda lifting)
+  if name is "/" and args = [AtomTerm funcName, IntTerm arity]:
+    if funcName/arity is a known function:
+      -- Look up declared signature, build function type
+      sig = lookupFunctionSig(prog, funcName, arity)
+      freshTVars = freshTypeVarsForSig(sig)
+      argTypes = [encodeTypeExpr(freshTVars, t) | t <- sig.argTypes]
+      retType = encodeTypeExpr(freshTVars, sig.returnType)
+      return encodeFunType(argTypes, retType)
+    else:
+      return VAtom "any"
+
   if name is a known constructor:
     argTypes = [typeOfTerm(varTypes, prog, a) | a <- args]
     resultType = newVar()
