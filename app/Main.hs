@@ -133,7 +133,7 @@ runRepl opts files = do
       createDirectoryIfMissing True (takeDirectory histFile)
       let CompiledProgram {exportMap = em} = prog
           constraintNames = nub [T.unpack n | Types.UnqualifiedIdentifier n _ <- Map.keys em]
-          completions = [":quit", ":recompile", ":help", ":list_files", ":list_modules", ":list_declarations", ":list_operators", "call"] ++ constraintNames
+          completions = [":quit", ":recompile", ":help", ":list_files", ":list_modules", ":list_declarations", ":list_operators"] ++ constraintNames
           completeFunc = completeWord Nothing " ," $ \prefix ->
             return $ map (\n -> (simpleCompletion n) {isFinished = False}) $ filter (isPrefixOf prefix) completions
           settings = (defaultSettings :: Settings IO) {historyFile = Just histFile, complete = completeFunc}

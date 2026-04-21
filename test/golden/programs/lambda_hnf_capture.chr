@@ -10,4 +10,4 @@
 % lifted without capturing A and the reference dangled at runtime.
 adder_from_pair(pair(A, _)) -> fun(X) -> X + A end.
 
-result(test1, R) <=> F is adder_from_pair(pair(10, 99)), R is call(F, 5).
+result(test1, R) <=> F is adder_from_pair(pair(10, 99)), R is '$call'(F, 5).

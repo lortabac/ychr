@@ -467,7 +467,7 @@ executeBodyGoal hc (D.BodyIs v expr) = do
 executeBodyGoal _ (D.BodyConstraint c) = do
   argVals <- traverse termToValue c.args
   tellConstraint c.name argVals
-executeBodyGoal hc (D.BodyFunctionCall (Types.Unqualified "call") args) = do
+executeBodyGoal hc (D.BodyFunctionCall (Types.Unqualified "$call") args) = do
   CHRRep procMap _ _ _ <- getStaticRep
   argVals <- traverse termToValue args
   let n = length args - 1
@@ -529,7 +529,7 @@ evalNestedExpr _ (VarTerm v) = do
       fresh <- newVar
       modify (Map.insert v fresh)
       pure fresh
-evalNestedExpr hc (CompoundTerm (Types.Unqualified "call") args)
+evalNestedExpr hc (CompoundTerm (Types.Unqualified "$call") args)
   | length args >= 2 = do
       CHRRep procMap _ _ _ <- getStaticRep
       argVals <- traverse (evalNestedExpr hc) args

@@ -10,9 +10,9 @@ import pytest
 
 REPL_TESTS = [
     ("R is 1 + 1.", "R = 2.\n"),
-    ("R is call(fun(X) -> X end, 1).", "R = 1.\n"),
-    ("R is call(fun(X) -> X + 1 end, 1).", "R = 2.\n"),
-    ("R is call(fun(X, _) -> X end, 1, _).", "R = 1.\n"),
+    ("R is '$call'(fun(X) -> X end, 1).", "R = 1.\n"),
+    ("R is '$call'(fun(X) -> X + 1 end, 1).", "R = 2.\n"),
+    ("R is '$call'(fun(X, _) -> X end, 1, _).", "R = 1.\n"),
     ("R is var(_).", "R = true.\n"),
     ("R is var(1).", "R = false.\n"),
     ("R is integer(1).", "R = true.\n"),
