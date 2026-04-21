@@ -170,8 +170,13 @@ The `any` type is the escape hatch for gradual typing. It is
 consistent with every other type. However, `any` does **not**
 propagate through variables the way concrete types do:
 
-- When a variable meets `any`, the variable becomes `any`. Further
-  consistency checks involving that variable always succeed.
+- When a variable's type is determined solely by a declaration that
+  uses `any` (e.g., a constraint declared as `foo(any)`), the
+  variable acquires type `any`.
+- When a variable with a known concrete type meets `any` through
+  unification or a consistency check, the variable **retains** its
+  concrete type. The check succeeds but the concrete type is not
+  replaced by `any`.
 - When `any` meets a declared type parameter (from a polymorphic
   declaration), the type parameter is **not** bound to `any`. This
   prevents `any` from leaking through shared type parameters and
@@ -179,7 +184,8 @@ propagate through variables the way concrete types do:
 
 The key consequence: `any` stops type propagation. A variable typed
 as `any` will not carry type information from one position to
-another.
+another, and `any` does not overwrite concrete types already
+established on other variables.
 
 ### Example: propagation through `=`
 
@@ -296,10 +302,12 @@ of the LHS variable.
 ### 5. Unification (bidirectional)
 
 In `X = Y` (body unification), type information flows
-bidirectionally. If `X` has a known type and `Y` does not, `Y`
-acquires `X`'s type (and vice versa). If both have known types,
-the checker verifies they are consistent. If either side is `any`,
-the check succeeds but `any` does not propagate to the other side.
+bidirectionally. If `X` has a known concrete type and `Y` does not,
+`Y` acquires `X`'s type (and vice versa). If both have known
+concrete types, the checker verifies they are consistent. If one
+side is `any` and the other has a concrete type, the check succeeds
+and the concrete side retains its type. If one side is `any` and
+the other is unknown, the unknown side becomes `any`.
 
 ### 6. Body constraint calls
 
@@ -314,26 +322,29 @@ expressions and produces a result type. If `sign(int) -> result` and
 the body contains `R is sign(X)`, then `X` must be consistent with
 `int` and `R` gets type `result`.
 
-### 8. Guard return type
-
-All guard expressions must have a type consistent with `prelude:bool`.
-For example, `X > 0` in guard position requires that `>` returns
-something consistent with `prelude:bool`.
-
-### 9. Desugared guards (HNF synthetic guards)
+### 8. Desugared guards (HNF synthetic guards)
 
 Head Normal Form desugaring introduces synthetic guards:
 
 - **`GuardMatch term functor arity`**: constrains `term` to be
   consistent with the algebraic type containing the given constructor
-  (looked up via constructor typing, see above).
+  (looked up via constructor typing, see below).
 - **`GuardGetArg var term index`**: the extracted variable gets the
-  type of the constructor's field at the given index.
+  type of the constructor's field at the given index. A `GuardGetArg`
+  always follows a `GuardMatch` on the same term; the preceding match
+  establishes which constructor (and therefore which field types) to
+  use.
 - **`GuardEqual term1 term2`**: both terms must be consistent (like
   body unification, via consistency check).
+- **`GuardExpr term`**: a general boolean guard expression (e.g.,
+  `N > 0`). The type of `term` must be consistent with
+  `prelude:bool`.
 
 These guards carry the same type information as the original pattern
 the user wrote.
+
+Body goals not listed above (such as `true`) generate no type
+constraints.
 
 
 ## Expression Typing
@@ -342,7 +353,8 @@ The type of a compound expression is determined by its outermost form:
 
 - **Literal**: `3` has type `int`, `"hi"` has type `string`.
 - **Known constructor**: looked up via constructor typing (see below).
-- **Unknown constructor**: type `any`.
+- **Unknown constructor**: type `any`. All argument expressions are
+  also typed as `any`.
 - **Variable**: determined by the constraints on that variable.
 - **Function call `f(e₁, ..., eₙ)`**: the declared type variables are
   instantiated with fresh unification variables. Each argument `eᵢ`
@@ -424,14 +436,19 @@ A reference `name/arity` has the function type derived from the
 function's declared signature. If `double(int) -> int` is declared,
 then `double/1` has type `fun(int) -> int`.
 
-### `$call`
+### `call`
 
-The `$call` operation is typed as `any` at the host level. Its CHR
-wrapper provides the typed interface:
+The prelude provides a typed wrapper for first-class function
+application:
 
 ```prolog
 :- function call(fun(A) -> B, A) -> B.
+call(F, X) -> '$call'(F, X).
 ```
+
+The internal `$call` primitive is a host-level operation typed as
+`any`. Type checking occurs at the `call` boundary, not at the
+`$call` level.
 
 
 ## Type Definition Validation
