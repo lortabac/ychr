@@ -407,8 +407,9 @@ renameTerm ctx loc origin mode t = case t of
   CompoundTerm (Unqualified "term") [arg] | mode /= NoResolve -> do
     renamedArg <- renameTerm ctx loc origin NoResolve arg
     pure (CompoundTerm (Unqualified "term") [renamedArg])
-  -- Function reference: @name/arity@. Resolve the function name.
-  CompoundTerm (Unqualified "/") [AtomTerm fname, IntTerm farity] | mode /= NoResolve -> do
+  -- Function reference: @fun name/arity@. Resolve the function name,
+  -- then strip the @fun@ wrapper so downstream passes see bare @name/arity@.
+  CompoundTerm (Unqualified "fun") [CompoundTerm (Unqualified "/") [AtomTerm fname, IntTerm farity]] | mode /= NoResolve -> do
     resolved <- resolveName ResolveAll ctx loc origin (Unqualified fname) farity
     pure (CompoundTerm (Unqualified "/") [AtomTerm (flattenName resolved), IntTerm farity])
   CompoundTerm name args -> do

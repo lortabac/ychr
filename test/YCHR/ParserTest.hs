@@ -525,7 +525,11 @@ firstPassTests =
           @?= Right [ModuleImport "foo" Nothing],
       testCase "import lists with op() entries parse" $
         hdrImports ":- module(m, []). :- use_module(foo, [op(700, xfx, '<-')])."
-          @?= Right [ModuleImport "foo" (Just [OperatorDecl (OpDecl 700 Xfx "<-")])]
+          @?= Right [ModuleImport "foo" (Just [OperatorDecl (OpDecl 700 Xfx "<-")])],
+      testCase "skips fun name/arity entries" $
+        ops ":- module(m, [fun double/1, op(500, yfx, '+')])." @?= Right [OpDecl 500 Yfx "+"],
+      testCase "fun name/arity and name/arity coexist in export list" $
+        ops ":- module(m, [leq/2, fun double/1, op(700, xfx, '<')])." @?= Right [OpDecl 700 Xfx "<"]
     ]
 
 -- ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-:- module(lambda_hnf_capture, [result/2, adder_from_pair/1]).
+:- module(lambda_hnf_capture, [result/2, fun adder_from_pair/1]).
 :- chr_constraint result/2.
 :- function adder_from_pair/1.
 

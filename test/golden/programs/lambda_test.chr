@@ -1,4 +1,4 @@
-:- module(lambda_test, [result/2, double/1, apply/2, apply2/3, make_adder/1]).
+:- module(lambda_test, [result/2, fun double/1, fun apply/2, fun apply2/3, fun make_adder/1]).
 :- chr_constraint result/2.
 :- function double/1.
 :- function apply/2.
@@ -14,7 +14,7 @@ apply2(F, X, Y) -> '$call'(F, X, Y).
 make_adder(N) -> fun(X) -> X + N end.
 
 % Test 1: function reference
-result(test1, R) <=> R is apply(double/1, 5).
+result(test1, R) <=> R is apply(fun double/1, 5).
 
 % Test 2: lambda
 result(test2, R) <=> R is apply(fun(X) -> X + 1 end, 5).

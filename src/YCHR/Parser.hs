@@ -79,6 +79,7 @@ builtinOps =
   P.mkOpTable
     [ (100, [(P.Yfx, ":")]),
       (400, [(P.Yfx, "/")]),
+      (500, [(P.Fx, "fun")]),
       (700, [(P.Xfx, "is"), (P.Xfx, "=")]),
       (1000, [(P.Xfy, ",")]),
       (1105, [(P.Xfy, "|")]),
@@ -208,6 +209,7 @@ firstPassTable :: OpTable
 firstPassTable =
   P.mkOpTable
     [ (400, [(P.Yfx, "/")]),
+      (500, [(P.Fx, "fun")]),
       (1200, [(P.Fx, ":-")])
     ]
 
@@ -564,6 +566,8 @@ convertImportWithList dirLoc dirPExpr imp importList =
 -- | Convert an export item PExpr to a 'Declaration'.
 convertExportItem :: Ann PExpr -> Declaration
 convertExportItem (Ann pexpr _) = case pexpr of
+  Compound "fun" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
+    FunctionDecl name arity Nothing Nothing False
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
     ConstraintDecl name arity Nothing
   Compound "op" [Ann (P.Int fix) _, Ann tyExpr _, Ann nameExpr _]
