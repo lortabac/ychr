@@ -400,6 +400,13 @@ renameTerm ctx loc origin mode t = case t of
   CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body] | mode /= NoResolve -> do
     renamedBody <- renameTerm ctx loc origin ResolveAll body
     pure (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, renamedBody])
+  -- Quoting: @term(X)@ suppresses resolution of functor names inside the
+  -- argument so the surface-level term structure is preserved.  Variables
+  -- are still renamed (they need runtime resolution), but compound-term
+  -- heads stay unqualified.
+  CompoundTerm (Unqualified "term") [arg] | mode /= NoResolve -> do
+    renamedArg <- renameTerm ctx loc origin NoResolve arg
+    pure (CompoundTerm (Unqualified "term") [renamedArg])
   -- Function reference: @name/arity@. Resolve the function name.
   CompoundTerm (Unqualified "/") [AtomTerm fname, IntTerm farity] | mode /= NoResolve -> do
     resolved <- resolveName ResolveAll ctx loc origin (Unqualified fname) farity

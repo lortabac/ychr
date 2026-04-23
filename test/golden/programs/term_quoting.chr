@@ -1,0 +1,9 @@
+:- module(term_quoting, [test/1]).
+
+:- chr_constraint test/1.
+
+:- function identity/1.
+identity(X) -> X.
+
+test(R) <=>
+    R is identity(term(f(1, 2))).

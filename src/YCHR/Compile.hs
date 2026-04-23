@@ -442,6 +442,8 @@ compileExpr funSet varMap si (CompoundTerm (Types.Unqualified "$call") args)
   | length args >= 2 = do
       args' <- traverse (compileExpr funSet varMap si) args
       pure (CallExpr (callFunProcName (length args - 1)) args')
+compileExpr _ varMap si (CompoundTerm (Types.Unqualified "term") [arg]) =
+  compileTerm varMap si arg
 compileExpr funSet varMap si (CompoundTerm name args)
   | Set.member (Identifier name (length args)) funSet = do
       args' <- traverse (compileExpr funSet varMap si) args

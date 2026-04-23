@@ -15,7 +15,9 @@ where
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
+import Data.Text (Text)
 import YCHR.Diagnostic (Diagnostic, noDiag)
+import YCHR.PExpr qualified as PExpr
 import YCHR.Parsed qualified as P
 import YCHR.Resolved qualified as R
 import YCHR.Types (Name (..), QualifiedIdentifier (..), TypeExpr)
@@ -25,6 +27,8 @@ data ResolveError
     ConstraintHasEquations Name
   | -- | A name declared as a function appears in a rule head.
     FunctionInRuleHead Name
+  | -- | A name collides with a reserved built-in.
+    ReservedName Name
   deriving (Eq, Show)
 
 -- | Flatten modules into a single resolved program.
@@ -41,7 +45,8 @@ resolveProgram mods =
       typeDefs = [td.node | m <- mods, td <- m.typeDecls]
       eqErrors = checkEquations constraintNames mods
       headErrors = checkRuleHeads functionNames mods
-      errs = eqErrors ++ headErrors
+      reservedErrors = checkReservedNames mods
+      errs = eqErrors ++ headErrors ++ reservedErrors
    in if null errs
         then
           Right
@@ -122,6 +127,24 @@ checkRuleHeads fNames mods = snd $ foldl go (Set.empty, []) allRules
               c.name `Set.notMember` seen
             ]
        in (foldl (\s (n, _) -> Set.insert n s) seen new, errs ++ map snd new)
+
+-- | Reserved names that cannot be used as constraint or function declarations.
+reservedDeclNames :: Set Text
+reservedDeclNames = Set.fromList ["term"]
+
+-- | Check that no declaration uses a reserved name.
+checkReservedNames :: [P.Module] -> [Diagnostic ResolveError]
+checkReservedNames mods =
+  [ noDiag (P.AnnP (ReservedName (Qualified m.name d.name)) loc (PExpr.Atom ""))
+  | m <- mods,
+    P.Ann d loc <- m.decls,
+    isDeclNamed d,
+    d.name `Set.member` reservedDeclNames
+  ]
+  where
+    isDeclNamed P.ConstraintDecl {} = True
+    isDeclNamed P.FunctionDecl {} = True
+    isDeclNamed _ = False
 
 headConstraints :: P.Head -> [P.Constraint]
 headConstraints (P.Simplification cs) = cs

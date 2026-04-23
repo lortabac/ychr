@@ -16,6 +16,7 @@ GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden")
 # therefore cannot run on the Scheme backend. The Haskell interpreter will
 # accumulate more such primitives over time.
 HASKELL_ONLY = {
+    "copy_term_fn",
     "read_term_test",
 }
 

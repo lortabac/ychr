@@ -1,0 +1,3 @@
+:- module(reserved_term_constraint, [term/1]).
+:- chr_constraint term/1.
+term(X) <=> true.

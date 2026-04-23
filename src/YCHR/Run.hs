@@ -539,6 +539,8 @@ evalNestedExpr hc (CompoundTerm (Types.Unqualified "$call") args)
       case result of
         RVal val -> pure val
         _ -> error "call returned non-value"
+evalNestedExpr _ (CompoundTerm (Types.Unqualified "term") [arg]) =
+  termToValue arg
 evalNestedExpr hc (CompoundTerm (Types.Qualified "host" f) args) = do
   argVals <- traverse (evalNestedExpr hc) args
   result <- hostCall (Map.lookup (Name f) hc) f (map RVal argVals)

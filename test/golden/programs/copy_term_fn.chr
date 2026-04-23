@@ -1,0 +1,6 @@
+:- module(copy_term_fn, [test/2]).
+
+:- chr_constraint test/2.
+
+test(X, R) <=>
+    R is copy_term(term(foo(1, X))).
