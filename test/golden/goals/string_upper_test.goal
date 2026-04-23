@@ -1,1 +1,1 @@
-strings:string_upper("hello", R)
+string_upper_test:go("hello", R)

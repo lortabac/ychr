@@ -1,11 +1,20 @@
-:- module(strings, [string_concat/3, string_length/2, string_upper/2, string_lower/2]).
+:- module(strings, [
+    fun string_concat/2,
+    fun string_length/1,
+    fun string_upper/1,
+    fun string_lower/1
+]).
 
-:- chr_constraint string_concat/3, string_length/2, string_upper/2, string_lower/2.
+:- function
+    (string_concat(string, string) -> string),
+    (string_length(string) -> int),
+    (string_upper(string) -> string),
+    (string_lower(string) -> string).
 
-string_concat(X, Y, R) <=> R is host:string_concat(X, Y).
+string_concat(X, Y) -> host:string_concat(X, Y).
 
-string_length(S, R) <=> R is host:string_length(S).
+string_length(S) -> host:string_length(S).
 
-string_upper(S, R) <=> R is host:string_upper(S).
+string_upper(S) -> host:string_upper(S).
 
-string_lower(S, R) <=> R is host:string_lower(S).
+string_lower(S) -> host:string_lower(S).

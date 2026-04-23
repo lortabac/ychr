@@ -54,8 +54,8 @@
     writeln/1.
 
 :- function
-    '+'/2,
-    '-'/2,
+    ('+'(int, int) -> int),
+    ('-'(int, int) -> int),
     '*'/2,
     'div'/2,
     'mod'/2,
@@ -67,20 +67,20 @@
     '=='/2,
     max/2,
     min/2,
-    var/1,
-    nonvar/1,
-    integer/1,
-    atom/1,
-    boolean/1,
-    string/1,
-    ground/1,
-    copy_term/1,
-    unifiable/2,
+    (var(any) -> bool),
+    (nonvar(any) -> bool),
+    (integer(any) -> bool),
+    (atom(any) -> bool),
+    (boolean(any) -> bool),
+    (string(any) -> bool),
+    (ground(any) -> bool),
+    (copy_term(A) -> A),
+    (unifiable(any, any) -> bool),
     term_variables/1,
-    compound_to_list/1,
-    list_to_compound/1,
-    call/2,
-    call/3.
+    (compound_to_list(any) -> list(any)),
+    (list_to_compound(list(any)) -> any),
+    (call(fun(A) -> B end, A) -> B),
+    (call(fun(A, B) -> C end, A, B) -> C).
 
 X + Y -> host:'+'(X, Y).
 

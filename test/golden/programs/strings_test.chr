@@ -1,3 +1,7 @@
-:- module(strings_test, []).
+:- module(strings_test, [go/3]).
 
 :- use_module(library(strings)).
+
+:- chr_constraint go/3.
+
+go(X, Y, R) <=> R is string_concat(X, Y).
