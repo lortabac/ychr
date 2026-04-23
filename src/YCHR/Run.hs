@@ -511,7 +511,8 @@ drainReactivation procMap hc =
 
 -- | Evaluate a term as a nested expression (used for @is@ RHS and guard
 -- expressions). Handles host calls (@host:f(args)@), user-defined function
--- calls, and data terms.
+-- calls, @term(X)@ (quoting — delegates to 'termToValue' to suppress
+-- evaluation; see the Notes in "YCHR.Compile"), and data terms.
 evalNestedExpr ::
   (CHREffects es, State (Map Text Value) :> es) =>
   HostCallRegistry ->

@@ -431,12 +431,14 @@ compileTerm varMap si (CompoundTerm name args) = do
   pure (MakeTerm (vmName name) args')
 compileTerm _ _ Wildcard = pure (Lit WildcardLit)
 
--- | Like 'compileTerm', but also recognises @$call@, user-defined
--- function calls and @host:f(...)@ at the top level of the term and
--- emits the appropriate 'CallExpr' \/ 'HostCall'. Recursion only happens
--- through these recognised forms; nested compound terms whose head is
--- /not/ a function are compiled as opaque data via 'compileTerm'. See
--- the \"Notes\" block at the bottom of this file.
+-- | Like 'compileTerm', but also recognises @$call@, @term(...)@,
+-- user-defined function calls and @host:f(...)@ at the top level of the
+-- term and emits the appropriate 'CallExpr' \/ 'HostCall'. Recursion
+-- only happens through these recognised forms; nested compound terms
+-- whose head is /not/ a function are compiled as opaque data via
+-- 'compileTerm'. The @term\/1@ clause short-circuits directly to
+-- 'compileTerm', suppressing evaluation of the argument. See the
+-- \"Notes\" block at the bottom of this file.
 compileExpr :: Set Identifier -> VarMap -> SrcInfo -> Term -> Eff '[Writer [Diagnostic CompileError]] Expr
 compileExpr funSet varMap si (CompoundTerm (Types.Unqualified "$call") args)
   | length args >= 2 = do
@@ -904,6 +906,37 @@ If two anonymous propagation rules shared a single placeholder name,
 they would collide in the history and prevent each other from firing.
 The synthetic name uses the rule's program-wide source position, which
 is stable as long as the source order is.
+
+Semantics of @term(X)@ — the quoting operator:
+
+@term@ is a reserved keyword that prevents evaluation of its argument in
+expression contexts (@is@ RHS, guard expressions, function arguments).
+Normally, 'compileExpr' recursively evaluates recognised function calls
+and host calls inside an expression; @term(E)@ instead compiles @E@ via
+'compileTerm', producing an opaque data term ('MakeTerm' \/ 'Lit' \/
+'Var') regardless of whether @E@ contains function or operator names.
+
+The effect is visible in three places:
+
+  1. /Renamer/ ('YCHR.Rename.renameTerm'): inside @term(...)@, the
+     argument is renamed in 'NoResolve' mode, so functor names stay
+     unqualified.  This means @term(1 + 1)@ preserves the surface-level
+     @+(1, 1)@ rather than producing the internal @prelude:+(1, 1)@
+     representation.  Variables are still tracked (they need runtime
+     bindings) but are not resolved against the module's declarations.
+
+  2. /Compiler/ ('compileExpr'): the @term\/1@ clause delegates to
+     'compileTerm', which never emits 'CallExpr' or 'HostCall'.
+
+  3. /REPL evaluator/ ('YCHR.Run.evalNestedExpr'): a parallel clause
+     delegates to 'termToValue' instead of recursively evaluating.
+
+@term@ is forbidden as a user-defined constraint or function name
+('YCHR.Resolve.checkReservedNames', error code YCHR-16003).
+
+Example: @R is compound_to_list(term(1 + 1))@ yields @R = [\'+\', 1, 1]@
+because @1 + 1@ is compiled as the compound term @+(1, 1)@ instead of
+being evaluated to @2@.
 
 Why 'extractSymbolTable' lives in 'YCHR.Desugar' rather than here: the
 constraint-type indices it produces are needed both by this module and
