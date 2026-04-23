@@ -15,6 +15,7 @@ module YCHR.Display
     renameWarningCode,
     desugarErrorCode,
     compileErrorCode,
+    typeCheckErrorCode,
     parseErrorCode,
     operatorConflictCode,
   )
@@ -38,6 +39,7 @@ import YCHR.Pretty (prettyPExprSrc, prettyTermSrc)
 import YCHR.Rename (RenameError (..), RenameWarning (..))
 import YCHR.Resolve (ResolveError (..))
 import YCHR.Run (Error (..), Warning (..))
+import YCHR.TypeCheck (TypeCheckError (..))
 import YCHR.Types qualified as Types
 
 class Display a where
@@ -155,6 +157,14 @@ desugarErrorCode (InvalidLambdaParam _) = ErrorCode 30003
 compileErrorCode :: CompileError -> ErrorCode
 compileErrorCode (UnknownConstraintType _) = ErrorCode 40001
 compileErrorCode (UnboundVariable _) = ErrorCode 40002
+
+-- | 6xxxx — type-check phase
+typeCheckErrorCode :: TypeCheckError -> ErrorCode
+typeCheckErrorCode (InconsistentTypes _ _) = ErrorCode 60001
+typeCheckErrorCode (UnknownConstraint _) = ErrorCode 60002
+typeCheckErrorCode (UnknownFunction _) = ErrorCode 60003
+typeCheckErrorCode (UnboundTypeVar _ _ _) = ErrorCode 60004
+typeCheckErrorCode (UndefinedType _ _ _) = ErrorCode 60005
 
 -- | 5xxxx — top-level errors
 parseErrorCode :: ErrorCode
@@ -306,6 +316,40 @@ instance Display (Diagnostic CompileError) where
 compileErrorMsg :: CompileError -> String
 compileErrorMsg (UnknownConstraintType name) = "Unknown constraint type '" ++ displayName name ++ "'"
 compileErrorMsg (UnboundVariable var) = "Unbound variable '" ++ T.unpack var ++ "'"
+
+instance Display (Diagnostic TypeCheckError) where
+  displayMsg (Diagnostic lbl (AnnP err loc origin)) =
+    displayMsgWithSrcLoc
+      (typeCheckErrorCode err)
+      SevError
+      (typeCheckErrorMsg err)
+      loc
+      (fmap T.unpack lbl)
+      (Just (prettyPExprSrc origin))
+
+typeCheckErrorMsg :: TypeCheckError -> String
+typeCheckErrorMsg (InconsistentTypes t1 t2) =
+  "Type mismatch: " ++ T.unpack t1 ++ " is inconsistent with " ++ T.unpack t2
+typeCheckErrorMsg (UnknownConstraint name) =
+  "Unknown constraint: " ++ T.unpack name
+typeCheckErrorMsg (UnknownFunction name) =
+  "Unknown function: " ++ T.unpack name
+typeCheckErrorMsg (UnboundTypeVar typeName conName varName) =
+  "In type "
+    ++ T.unpack typeName
+    ++ ", constructor "
+    ++ T.unpack conName
+    ++ ": type variable "
+    ++ T.unpack varName
+    ++ " is not bound by the type header"
+typeCheckErrorMsg (UndefinedType typeName conName refName) =
+  "In type "
+    ++ T.unpack typeName
+    ++ ", constructor "
+    ++ T.unpack conName
+    ++ ": type "
+    ++ T.unpack refName
+    ++ " is not defined"
 
 displayName :: Types.Name -> String
 displayName (Types.Unqualified n) = T.unpack n

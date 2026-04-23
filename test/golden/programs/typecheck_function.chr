@@ -1,0 +1,5 @@
+:- module(tc, [result/1]).
+:- chr_constraint result/1.
+:- function double(int) -> int.
+double(N) -> N + N.
+go @ result(R) <=> R is double(5).

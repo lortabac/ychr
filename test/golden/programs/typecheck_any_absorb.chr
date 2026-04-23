@@ -1,0 +1,4 @@
+:- module(tc, [foo/1, bar/1, baz/1]).
+:- chr_constraint foo(any), bar(int), baz(int).
+% any stops propagation: X is any, so X=Y and X=Z both succeed
+mix @ foo(X), bar(Y), baz(Z) <=> X = Y, X = Z.

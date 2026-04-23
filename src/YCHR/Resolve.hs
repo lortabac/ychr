@@ -20,7 +20,7 @@ import YCHR.Diagnostic (Diagnostic, noDiag)
 import YCHR.PExpr qualified as PExpr
 import YCHR.Parsed qualified as P
 import YCHR.Resolved qualified as R
-import YCHR.Types (Name (..), QualifiedIdentifier (..), TypeExpr)
+import YCHR.Types (Name (..), QualifiedIdentifier (..), TypeExpr (..))
 
 data ResolveError
   = -- | A name declared as a constraint has function equations.
@@ -88,7 +88,9 @@ collectConstraintTypes mods =
     | m <- mods,
       P.Ann d _ <- m.decls,
       P.ConstraintDecl {} <- [d],
-      Just ts <- [d.argTypes]
+      let ts = case d.argTypes of
+            Just types -> types
+            Nothing -> replicate d.arity (TypeCon (Unqualified "any") [])
     ]
 
 -- ---------------------------------------------------------------------------

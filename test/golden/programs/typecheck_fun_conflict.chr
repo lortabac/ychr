@@ -1,0 +1,6 @@
+:- module(tc, [foo/1]).
+:- chr_constraint foo(string).
+:- function add_one(int) -> int.
+add_one(N) -> N + 1.
+% foo(X) gives X : string, but add_one expects int
+bad @ foo(X) <=> R is add_one(X).

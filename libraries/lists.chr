@@ -8,7 +8,8 @@
     fun maplist/2,
     fun foldl/3,
     fun sum_list/1,
-    fun product_list/1
+    fun product_list/1,
+    fun nth/2
 ]).
 
 :- function
@@ -22,7 +23,8 @@
     foldl/3,
     foldl_/3,
     sum_list/1,
-    product_list/1.
+    product_list/1,
+    nth/2.
 
 cons(X, Xs) -> [X|Xs].
 
@@ -51,3 +53,6 @@ foldl_(F, [X|Xs], Acc) -> foldl_(F, Xs, '$call'(F, Acc, X)).
 sum_list(Xs) -> foldl(fun '+'/2, 0, Xs).
 
 product_list(Xs) -> foldl(fun '*'/2, 1, Xs).
+
+nth(0, [X|_]) -> X.
+nth(N, [_|Xs]) | N > 0 -> nth(N - 1, Xs).
