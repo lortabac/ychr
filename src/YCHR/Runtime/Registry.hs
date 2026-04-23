@@ -31,6 +31,7 @@ module YCHR.Runtime.Registry
     -- * Generic helpers
     allM,
     collectVars,
+    copyTerm,
     fromValueList,
     valueList,
   )
@@ -93,7 +94,8 @@ baseHostCallRegistry =
       (Name "ground", groundPred),
       (Name "term_variables", termVariablesPred),
       (Name "compound_to_list", compoundToList),
-      (Name "list_to_compound", listToCompound)
+      (Name "list_to_compound", listToCompound),
+      (Name "copy_term", copyTermHost)
     ]
   where
     arith2 op = HostCallFn $ \case
@@ -156,6 +158,9 @@ baseHostCallRegistry =
         Just (VAtom f : args) -> pure (RVal (VTerm f args))
         _ -> error "list_to_compound: expected a non-empty list with an atom head"
       _ -> error "list_to_compound: expected 1 list argument"
+    copyTermHost = HostCallFn $ \case
+      [RVal v] -> RVal <$> copyTerm v
+      _ -> error "copy_term: expected 1 argument"
 
 -- ---------------------------------------------------------------------------
 -- Utilities
@@ -207,6 +212,38 @@ isNonvar = not . isVar
 -- ---------------------------------------------------------------------------
 -- Generic helpers
 -- ---------------------------------------------------------------------------
+
+-- | Deep-copy a term, replacing all unbound variables with fresh ones.
+-- Preserves sharing: the same original variable always maps to the same
+-- fresh variable across the entire copied term.
+copyTerm :: (Unify :> es, IOE :> es) => Value -> Eff es Value
+copyTerm val = fst <$> go Map.empty val
+  where
+    go cache v = do
+      v' <- deref v
+      case v' of
+        VVar _ -> do
+          mid <- getVarId v'
+          case mid of
+            Just vid -> case Map.lookup vid cache of
+              Just fresh -> pure (fresh, cache)
+              Nothing -> do
+                fresh <- newVar
+                pure (fresh, Map.insert vid fresh cache)
+            Nothing -> pure (v', cache)
+        VWildcard -> do
+          fresh <- newVar
+          pure (fresh, cache)
+        VTerm f args -> do
+          (args', cache') <- goMany cache args
+          pure (VTerm f args', cache')
+        other -> pure (other, cache)
+
+    goMany cache [] = pure ([], cache)
+    goMany cache (x : xs) = do
+      (x', cache') <- go cache x
+      (xs', cache'') <- goMany cache' xs
+      pure (x' : xs', cache'')
 
 -- | Collect all unique unbound variables in a term, traversing into
 -- compound term arguments. Wildcards are replaced with fresh variables.

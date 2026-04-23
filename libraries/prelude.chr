@@ -25,6 +25,7 @@
     term_variables/1,
     compound_to_list/1,
     list_to_compound/1,
+    copy_term/2,
     write/1,
     nl/0,
     writeln/1,
@@ -50,7 +51,8 @@
 :- chr_constraint
     write/1,
     nl/0,
-    writeln/1.
+    writeln/1,
+    copy_term/2.
 
 :- function
     '+'/2,
@@ -135,6 +137,8 @@ write(S) <=> host:write(S).
 nl <=> host:write("\n").
 
 writeln(S) <=> write(S), nl.
+
+copy_term(T, S) <=> S is host:copy_term(T).
 
 call(F, X) -> '$call'(F, X).
 
