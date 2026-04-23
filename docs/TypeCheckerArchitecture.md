@@ -24,7 +24,7 @@ Desugared.Program
   CHR Session (typechecker.chr)
        ��
        │  matches usages against stored declarations
-       │  instantiates fresh type copies via copy_term
+       │  instantiates fresh type copies via copy_term function
        │  runs tc_unify (any-aware consistency)
        │  accumulates errors in ordinary list
        ▼
@@ -53,8 +53,8 @@ Desugared.Program
 ## Type Representation
 
 Types are represented as runtime `Value` terms. Type parameters in
-declarations are logical variables; `copy_term` creates fresh copies
-at each use site.
+declarations are logical variables; the `copy_term` function creates
+fresh copies at each use site.
 
 | Type | Value encoding |
 |---|---|
@@ -144,7 +144,7 @@ function_sig(Name, sig(ArgTypes, RetType))
 
 - **Name**: qualified atom
 - **sig(ArgTypes, RetType)**: compound term wrapping argument types
-  and return type (so `copy_term` preserves sharing between them)
+  and return type (so `copy_term` via `term` preserves sharing between them)
 
 Example: `:- function sign(int) -> result` ��
 `function_sig(m:sign, sig([int], tcon(m:result, [])))`.
@@ -167,8 +167,8 @@ con_sig(m:some, sig(tcon(m:option, [α₂]), [α₂]))
 ```
 
 Each constructor's `con_sig` has its own fresh variables. The
-sharing within `sig(...)` ensures `copy_term` produces consistent
-instantiations.
+sharing within `sig(...)` ensures `copy_term` via `term` produces
+consistent instantiations.
 
 ### Checking constraints
 
@@ -267,7 +267,7 @@ Told at the end. `E` is a fresh logical variable. A CHR rule binds
 %% Constraint usage: copy_term the declaration, check args pairwise
 constraint_sig(Name, DeclTypes) \
     check_constraint_use(Name, ArgTypes, Ctx) <=>
-    copy_term(DeclTypes, FreshTypes),
+    FreshTypes is copy_term(term(DeclTypes)),
     check_arg_list(FreshTypes, ArgTypes, Ctx).
 
 %% Unknown constraint
@@ -277,7 +277,7 @@ check_constraint_use(Name, _, Ctx) <=>
 %% Function usage: copy_term preserves arg/ret sharing
 function_sig(Name, Sig) \
     check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
-    copy_term(Sig, sig(FreshArgTypes, FreshRetType)),
+    sig(FreshArgTypes, FreshRetType) is copy_term(term(Sig)),
     check_arg_list(FreshArgTypes, ArgTypes, Ctx),
     tc_unify(RetTypeVar, FreshRetType, Ctx).
 
@@ -288,7 +288,7 @@ check_function_use(Name, _, _, Ctx) <=>
 %% Constructor usage: copy_term preserves parent/field sharing
 con_sig(ConName, Sig) \
     check_constructor_use(ConName, ArgTypes, ResultTypeVar, Ctx) <=>
-    copy_term(Sig, sig(FreshParent, FreshFields)),
+    sig(FreshParent, FreshFields) is copy_term(term(Sig)),
     check_arg_list(FreshFields, ArgTypes, Ctx),
     tc_unify(ResultTypeVar, FreshParent, Ctx).
 
@@ -316,7 +316,7 @@ check_guard_bool(T, Ctx) <=>
 
 con_sig(ConName, Sig) \
     check_guard_match(TermType, ConName, Ctx) <=>
-    copy_term(Sig, sig(FreshParent, _)),
+    sig(FreshParent, _) is copy_term(term(Sig)),
     tc_unify(TermType, FreshParent, Ctx).
 
 %% Unknown constructor in guard match → no type info (any)
@@ -324,7 +324,7 @@ check_guard_match(_, _, _) <=> true.
 
 con_sig(ConName, Sig) \
     check_guard_getarg(ResultType, TermType, ConName, FieldIndex, Ctx) <=>
-    copy_term(Sig, sig(FreshParent, FreshFields)),
+    sig(FreshParent, FreshFields) is copy_term(term(Sig)),
     tc_unify(TermType, FreshParent, Ctx),
     FieldType is nth(FieldIndex, FreshFields),
     tc_unify(ResultType, FieldType, Ctx).
@@ -420,7 +420,7 @@ is correct: the declaration says this position is untyped.
 
 **Case B — pre-bound `any` meets type parameter from declaration:**
 The driver tells `tc_unify(any, α', ctx)` where `α'` is a fresh
-type parameter from `copy_term`. Rule (1) fires: `nonvar(any)` true,
+type parameter from `copy_term(term(...))`. Rule (1) fires: `nonvar(any)` true,
 `any == any` true → succeed. `α'` is NOT bound. This is correct:
 the type parameter should remain open so that other argument
 positions can still constrain it.
@@ -676,52 +676,13 @@ Haskell-side validation errors (not CHR):
 | List syntax `[H\|T]`, `[]` | Arg lists, error lists |
 | Guards: `var/1`, `nonvar/1` | Testing type variable state |
 | Guards: `==` | Testing `T == any` without binding |
-| User-defined functions | `nth` |
-| `is` for function results | `FieldType is nth(...)` |
+| User-defined functions | `nth`, `copy_term` |
+| `is` for function results | `FT is copy_term(term(...))`, `FieldType is nth(...)` |
+| `term` keyword | Prevents evaluation of argument to `copy_term` |
 | Rule ordering | `any` rules before `var` rules |
 | Arithmetic | `nth` indexing |
 
 ### New features required
-
-#### `copy_term/2`
-
-New built-in constraint. `copy_term(Original, Copy)` deep-copies a
-term, replacing each unbound logical variable with a fresh one while
-preserving sharing (same original variable → same fresh copy).
-`Copy` is unified with the result.
-
-Implemented as a constraint (not a function) because functions
-evaluate their arguments, which would force the input term before
-copying -- defeating the purpose.
-
-```prolog
-:- chr_constraint copy_term/2.
-```
-
-The implementation is a host-level built-in (like `store` or
-`kill`), not a user-level CHR rule. The runtime handles it directly.
-
-Haskell implementation sketch:
-
-```haskell
-copyTerm :: (Unify :> es, IOE :> es) => Value -> Eff es Value
-copyTerm val = evalState Map.empty (go val)
-  where
-    go v = do
-      v' <- deref v
-      case v' of
-        VVar _ -> do
-          vid <- getVarId v'
-          cache <- get
-          case Map.lookup vid cache of
-            Just fresh -> pure fresh
-            Nothing -> do
-              fresh <- newVar
-              modify (Map.insert vid fresh)
-              pure fresh
-        VTerm f args -> VTerm f <$> traverse go args
-        other -> pure other
-```
 
 #### `nth/2`
 
@@ -763,7 +724,6 @@ recursion.
 |---|---|
 | `src/YCHR/Run.hs` | `TypeCheckErrors` in `Error`; pipeline wiring |
 | `src/YCHR/Display.hs` | Error codes and display |
-| `src/YCHR/Runtime/Registry.hs` | `copy_term` built-in constraint |
 | `ychr.cabal` | New modules, data file |
 
 
@@ -779,13 +739,13 @@ transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
 Environment: `constraint_sig(leq, [int, int])`.
 
 1. Fresh vars: TX, TY, TZ.
-2. Head `leq(X, Y)`: `copy_term([int, int], FT)` → FT = `[int, int]`.
+2. Head `leq(X, Y)`: `FT is copy_term(term([int, int]))` → FT = `[int, int]`.
    `tc_unify(TX, int, ctx)` → TX = int.
    `tc_unify(TY, int, ctx)` → TY = int.
-3. Head `leq(Y, Z)`: `copy_term([int, int], FT)` → FT = `[int, int]`.
+3. Head `leq(Y, Z)`: `FT is copy_term(term([int, int]))` → FT = `[int, int]`.
    `tc_unify(TY, int, ctx)` → TY is int, match → succeed.
    `tc_unify(TZ, int, ctx)` → TZ = int.
-4. Body `leq(X, Z)`: `copy_term([int, int], FT)` → FT = `[int, int]`.
+4. Body `leq(X, Z)`: `FT is copy_term(term([int, int]))` → FT = `[int, int]`.
    `tc_unify(TX, int, ctx)` → succeed.
    `tc_unify(TZ, int, ctx)` → succeed.
 5. **Result: no errors. ✓**
@@ -832,13 +792,13 @@ rule @ qux(X), foo(X, Y), bar(Y) <=> true.
 ```
 
 1. Fresh vars: TX, TY.
-2. Head `qux(X)`: `copy_term([any], FT)` → FT = `[any]`.
+2. Head `qux(X)`: `FT is copy_term(term([any]))` → FT = `[any]`.
    `tc_unify(TX, any, ctx)` → rule (3) → TX = any.
-3. Head `foo(X, Y)`: `copy_term([α, α], FT)` → FT = `[α', α']`.
+3. Head `foo(X, Y)`: `FT is copy_term(term([α, α]))` → FT = `[α', α']`.
    `tc_unify(TX, α', ctx)` = `tc_unify(any, α', ctx)`.
    Rule (1): `nonvar(any)` true → succeed. **α' NOT bound.** ✓
    `tc_unify(TY, α', ctx)`: both vars → TY = α'.
-4. Head `bar(Y)`: `copy_term([int], FT)` → FT = `[int]`.
+4. Head `bar(Y)`: `FT is copy_term(term([int]))` → FT = `[int]`.
    `tc_unify(TY, int, ctx)`: TY bound to α', deref → α' (var).
    Var rule → α' = int → TY = int.
 5. **Result: no errors. Y is int, X is any. The type parameter α'
