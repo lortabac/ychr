@@ -200,10 +200,17 @@ tellConSigs prog =
     )
     prog.typeDefinitions
 
+-- | Encode a 'Name' as a runtime 'Value', matching CHR runtime
+-- representation: unqualified names become atoms, qualified names
+-- become @':'(module, name)@ compound terms.
+encodeName :: Name -> Value
+encodeName (Unqualified n) = VAtom n
+encodeName (Qualified m n) = VTerm ":" [VAtom m, VAtom n]
+
 -- | Encode a type constructor application: tcon(name, [arg1, arg2, ...])
 encodeTCon :: Map Text Value -> Name -> [Text] -> Value
 encodeTCon tvars name vars =
-  VTerm "tcon" [VAtom (flattenName name), valueList (map (\v -> Map.findWithDefault (VAtom "any") v tvars) vars)]
+  VTerm "tcon" [encodeName name, valueList (map (\v -> Map.findWithDefault (VAtom "any") v tvars) vars)]
 
 -- ---------------------------------------------------------------------------
 -- Type encoding
@@ -235,7 +242,7 @@ encodeTypeExpr _ (TypeCon (Unqualified "string") []) = pure (VAtom "string")
 encodeTypeExpr _ (TypeCon (Unqualified "any") []) = pure (VAtom "any")
 encodeTypeExpr tvars (TypeCon name args) = do
   encodedArgs <- traverse (encodeTypeExpr tvars) args
-  pure (VTerm "tcon" [VAtom (flattenName name), valueList encodedArgs])
+  pure (VTerm "tcon" [encodeName name, valueList encodedArgs])
 
 -- ---------------------------------------------------------------------------
 -- Per-rule checking
@@ -312,12 +319,12 @@ checkGuard ::
   Maybe Name ->
   D.Guard ->
   Eff es (Maybe Name)
-checkGuard conMap funSet prog varTypes label loc origin _ (D.GuardEqual t1 t2) = do
+checkGuard conMap funSet prog varTypes label loc origin lastConName (D.GuardEqual t1 t2) = do
   tv1 <- typeOfTerm conMap funSet prog varTypes label loc origin t1
   tv2 <- typeOfTerm conMap funSet prog varTypes label loc origin t2
   ctx <- freshCtx label loc origin
   tellConstraint (Qualified "typechecker" "check_unify") [tv1, tv2, ctx]
-  pure Nothing
+  pure lastConName
 checkGuard _ _ _ _ _ _ _ _ (D.GuardMatch _term conName _arity) = do
   -- GuardMatch constrains the term type; we handle it in GuardGetArg
   -- since GuardGetArg always follows GuardMatch on the same term.
@@ -615,11 +622,12 @@ decodeError _ _ = pure []
 
 showType :: Value -> Text
 showType (VAtom a) = a
-showType (VTerm "tcon" [VAtom name, args]) =
-  case fromValueList args of
-    Just [] -> name
-    Just as -> name <> "(" <> T.intercalate ", " (map showType as) <> ")"
-    Nothing -> name <> "(?)"
+showType (VTerm "tcon" [nameVal, args]) =
+  let name = showTypeName nameVal
+   in case fromValueList args of
+        Just [] -> name
+        Just as -> name <> "(" <> T.intercalate ", " (map showType as) <> ")"
+        Nothing -> name <> "(?)"
 showType (VTerm "fun" [args, ret]) =
   case fromValueList args of
     Just as -> "fun(" <> T.intercalate ", " (map showType as) <> ") -> " <> showType ret
@@ -627,6 +635,11 @@ showType (VTerm "fun" [args, ret]) =
 showType (VVar _) = "_"
 showType (VInt n) = T.pack (show n)
 showType _ = "?"
+
+showTypeName :: Value -> Text
+showTypeName (VAtom a) = a
+showTypeName (VTerm ":" [VAtom m, VAtom n]) = m <> ":" <> n
+showTypeName _ = "?"
 
 showValue :: (Unify :> es) => Value -> Eff es Text
 showValue v = do

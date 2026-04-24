@@ -277,7 +277,8 @@ renameModule ctx = do
   renamedRules <- traverse (renameRule ctx) m.rules
   renamedEquations <- traverse (traverse (renameEquation ctx)) m.equations
   let renamedTypeDecls = map (fmap (renameTypeDefinition ctx)) m.typeDecls
-  pure m {rules = renamedRules, equations = renamedEquations, typeDecls = renamedTypeDecls}
+      renamedDecls = map (fmap (renameDeclaration ctx)) m.decls
+  pure m {rules = renamedRules, equations = renamedEquations, typeDecls = renamedTypeDecls, decls = renamedDecls}
 
 -- | Validate import lists. Three checks:
 --
@@ -562,6 +563,13 @@ renameDataConstructor ctx dc =
     { conName = Qualified ctx.currentModule.name (unqualifiedText dc.conName),
       conArgs = map (renameTypeExpr ctx) dc.conArgs
     }
+
+renameDeclaration :: RenameCtx -> Declaration -> Declaration
+renameDeclaration ctx d@ConstraintDecl {argTypes} =
+  d {argTypes = fmap (map (renameTypeExpr ctx)) argTypes}
+renameDeclaration ctx d@FunctionDecl {argTypes, returnType} =
+  d {argTypes = fmap (map (renameTypeExpr ctx)) argTypes, returnType = fmap (renameTypeExpr ctx) returnType}
+renameDeclaration _ d = d
 
 renameTypeExpr :: RenameCtx -> TypeExpr -> TypeExpr
 renameTypeExpr _ (TypeVar v) = TypeVar v
