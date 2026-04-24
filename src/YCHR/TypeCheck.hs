@@ -1,3 +1,4 @@
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Haskell driver for the YCHR type checker.
@@ -6,6 +7,18 @@
 -- running the pre-compiled type-checker program. The type checker
 -- catches type inconsistencies statically, while remaining optional:
 -- programs without type annotations are accepted without errors.
+--
+-- == @tc_unify@ argument order invariant
+--
+-- The CHR-side @tc_unify(T1, T2, Ctx)@ rules are asymmetric in how
+-- they handle @any@: when @any@ appears on the left, it succeeds
+-- without binding the right side (which may be a type parameter that
+-- should stay open). When @any@ appears on the right and the left is
+-- a var, the var is bound to @any@. This means the Haskell driver
+-- __must__ always place the source variable's type on the LEFT and
+-- the declared type on the RIGHT. Body unifications (@X = Y@) are
+-- symmetric (both sides are source variable types) so the asymmetry
+-- does not cause issues there.
 module YCHR.TypeCheck
   ( TypeCheckError (..),
     typeCheckProgram,
@@ -19,6 +32,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
+import Effectful.Reader.Static (Reader, ask, runReader)
 import Effectful.State.Static.Local (State, evalState, get, modify)
 import YCHR.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Desugared qualified as D
@@ -55,16 +69,31 @@ data TypeCheckError
   deriving (Show, Eq)
 
 -- ---------------------------------------------------------------------------
--- Lookup maps
+-- Type-check environment and context
 -- ---------------------------------------------------------------------------
 
--- | Map from constructor name to its parent type definition and constructor info.
-type ConMap = Map Name (TypeDefinition, DataConstructor)
+-- | Program-wide immutable environment, shared via 'Reader'.
+data TypeCheckEnv = TypeCheckEnv
+  { -- | Map from constructor name to its parent type definition and constructor info.
+    conMap :: Map Name (TypeDefinition, DataConstructor),
+    -- | Set of known function identifiers (name, arity).
+    funSet :: Set (Name, Int)
+  }
 
--- | Set of known function identifiers (name, arity).
-type FunSet = Set (Name, Int)
+-- | Per-rule or per-equation checking context, passed explicitly
+-- because it changes at each scope boundary.
+data CheckCtx = CheckCtx
+  { -- | Maps source variable names to fresh type variables (Values).
+    varTypes :: Map Text Value,
+    -- | Human-readable label for error messages (e.g., "rule trans").
+    label :: Maybe Text,
+    -- | Source location of the current AST section.
+    loc :: SourceLoc,
+    -- | Original PExpr for the current AST section.
+    origin :: PExpr
+  }
 
-buildConMap :: [TypeDefinition] -> ConMap
+buildConMap :: [TypeDefinition] -> Map Name (TypeDefinition, DataConstructor)
 buildConMap tds =
   Map.fromList
     [ (dc.conName, (td, dc))
@@ -72,26 +101,28 @@ buildConMap tds =
       dc <- td.constructors
     ]
 
-buildFunSet :: [D.Function] -> FunSet
+buildFunSet :: [D.Function] -> Set (Name, Int)
 buildFunSet fns = Set.fromList [(f.name, f.arity) | f <- fns]
-
--- ---------------------------------------------------------------------------
--- Context tracking
--- ---------------------------------------------------------------------------
 
 -- | Context for error reporting. Maps integer IDs to source information.
 type CtxMap = Map Int (Maybe Text, SourceLoc, PExpr)
 
--- | Per-rule/equation variable type map. Maps source variable names to
--- fresh type variables (Values).
-type VarTypes = Map Text Value
+-- | Effect constraint shared by all internal checking functions.
+type CheckEffects es = (CHREffects es, Reader TypeCheckEnv :> es, State CtxMap :> es, State Int :> es)
 
 -- ---------------------------------------------------------------------------
 -- Main entry point
 -- ---------------------------------------------------------------------------
 
--- | Type-check a desugared program. Returns a list of type errors.
--- An empty list means the program is well-typed.
+-- | Type-check a desugared program.
+--
+-- Returns a list of diagnostics for every type inconsistency found.
+-- An empty list means the program is well-typed (or has no type
+-- annotations — unannotated programs are accepted without errors
+-- because missing types default to @any@).
+--
+-- Type errors prevent compilation from proceeding; the caller is
+-- responsible for aborting when the list is non-empty.
 typeCheckProgram :: D.Program -> IO [Diagnostic TypeCheckError]
 typeCheckProgram prog = do
   let conMap = buildConMap prog.typeDefinitions
@@ -113,23 +144,25 @@ typeCheckProgram prog = do
             functionNameSet = Set.empty,
             desugaredProgram = D.Program [] [] Map.empty []
           }
+  let env = TypeCheckEnv {conMap, funSet}
   chrErrors <- withCHR cp baseHostCallRegistry $ do
-    evalState (Map.empty :: CtxMap) $
-      evalState (0 :: Int) $ do
-        -- Initialize error accumulator
-        tellConstraint (Qualified "typechecker" "errors") [valueList []]
-        -- Tell environment: constraint signatures
-        tellConstraintSigs prog
-        -- Tell environment: function signatures
-        tellFunctionSigs prog
-        -- Tell environment: constructor signatures
-        tellConSigs prog
-        -- Check each rule
-        mapM_ (checkRule conMap funSet prog) prog.rules
-        -- Check each function equation
-        mapM_ (checkFunction conMap funSet prog) prog.functions
-        -- Collect errors
-        collectErrors
+    runReader env $
+      evalState (Map.empty :: CtxMap) $
+        evalState (0 :: Int) $ do
+          -- Initialize error accumulator
+          tellConstraint (Qualified "typechecker" "errors") [valueList []]
+          -- Tell environment: constraint signatures
+          tellConstraintSigs prog
+          -- Tell environment: function signatures
+          tellFunctionSigs prog
+          -- Tell environment: constructor signatures
+          tellConSigs prog
+          -- Check each rule
+          mapM_ checkRule prog.rules
+          -- Check each function equation
+          mapM_ checkFunction prog.functions
+          -- Collect errors
+          collectErrors
   pure (hsErrors ++ chrErrors)
 
 -- ---------------------------------------------------------------------------
@@ -138,14 +171,12 @@ typeCheckProgram prog = do
 
 freshCtx ::
   (State CtxMap :> es, State Int :> es) =>
-  Maybe Text ->
-  SourceLoc ->
-  PExpr ->
+  CheckCtx ->
   Eff es Value
-freshCtx label loc origin = do
+freshCtx cctx = do
   n <- get @Int
   modify @Int (+ 1)
-  modify @CtxMap (Map.insert n (label, loc, origin))
+  modify @CtxMap (Map.insert n (cctx.label, cctx.loc, cctx.origin))
   pure (VInt n)
 
 -- ---------------------------------------------------------------------------
@@ -248,100 +279,73 @@ encodeTypeExpr tvars (TypeCon name args) = do
 -- Per-rule checking
 -- ---------------------------------------------------------------------------
 
-checkRule ::
-  (CHREffects es, State CtxMap :> es, State Int :> es) =>
-  ConMap ->
-  FunSet ->
-  D.Program ->
-  D.Rule ->
-  Eff es ()
-checkRule conMap funSet prog rule = do
+checkRule :: (CheckEffects es) => D.Rule -> Eff es ()
+checkRule rule = do
   let allVarNames = collectVarsInRule rule
   varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> newVar) (Set.toList allVarNames)
   let ruleLabel = fmap (\n -> "rule " <> n) rule.name
       AnnP hd headLoc headOrigin = rule.head
       AnnP guards guardLoc guardOrigin = rule.guard
       AnnP body bodyLoc bodyOrigin = rule.body
+      headCtx = CheckCtx {varTypes, label = ruleLabel, loc = headLoc, origin = headOrigin}
+      guardCtx = CheckCtx {varTypes, label = ruleLabel, loc = guardLoc, origin = guardOrigin}
+      bodyCtx = CheckCtx {varTypes, label = ruleLabel, loc = bodyLoc, origin = bodyOrigin}
   -- Head constraints (kept and removed)
-  mapM_ (checkConstraintUse conMap funSet prog varTypes ruleLabel headLoc headOrigin) (hd.kept ++ hd.removed)
+  mapM_ (checkConstraintUse headCtx) (hd.kept ++ hd.removed)
   -- Guards
-  checkGuards conMap funSet prog varTypes ruleLabel guardLoc guardOrigin guards
+  checkGuards guardCtx guards
   -- Body goals
-  mapM_ (checkBodyGoal conMap funSet prog varTypes ruleLabel bodyLoc bodyOrigin) body
+  mapM_ (checkBodyGoal bodyCtx) body
 
-checkConstraintUse ::
-  (CHREffects es, State CtxMap :> es, State Int :> es) =>
-  ConMap ->
-  FunSet ->
-  D.Program ->
-  VarTypes ->
-  Maybe Text ->
-  SourceLoc ->
-  PExpr ->
-  Types.Constraint ->
-  Eff es ()
-checkConstraintUse conMap funSet prog varTypes label loc origin c = do
-  argTypeVars <- traverse (typeOfTerm conMap funSet prog varTypes label loc origin) c.args
-  ctx <- freshCtx label loc origin
+checkConstraintUse :: (CheckEffects es) => CheckCtx -> Types.Constraint -> Eff es ()
+checkConstraintUse cctx c = do
+  argTypeVars <- traverse (typeOfTerm cctx) c.args
+  ctx <- freshCtx cctx
   tellConstraint (Qualified "typechecker" "check_constraint_use") [VAtom (flattenName c.name), valueList argTypeVars, ctx]
 
 -- ---------------------------------------------------------------------------
 -- Guard checking
 -- ---------------------------------------------------------------------------
 
-checkGuards ::
-  (CHREffects es, State CtxMap :> es, State Int :> es) =>
-  ConMap ->
-  FunSet ->
-  D.Program ->
-  VarTypes ->
-  Maybe Text ->
-  SourceLoc ->
-  PExpr ->
-  [D.Guard] ->
-  Eff es ()
-checkGuards conMap funSet prog varTypes label loc origin = go Nothing
+checkGuards :: (CheckEffects es) => CheckCtx -> [D.Guard] -> Eff es ()
+checkGuards cctx = go Nothing
   where
     go _ [] = pure ()
     go lastConName (g : gs) = do
-      newLastCon <- checkGuard conMap funSet prog varTypes label loc origin lastConName g
+      newLastCon <- checkGuard cctx lastConName g
       go newLastCon gs
 
-checkGuard ::
-  (CHREffects es, State CtxMap :> es, State Int :> es) =>
-  ConMap ->
-  FunSet ->
-  D.Program ->
-  VarTypes ->
-  Maybe Text ->
-  SourceLoc ->
-  PExpr ->
-  Maybe Name ->
-  D.Guard ->
-  Eff es (Maybe Name)
-checkGuard conMap funSet prog varTypes label loc origin lastConName (D.GuardEqual t1 t2) = do
-  tv1 <- typeOfTerm conMap funSet prog varTypes label loc origin t1
-  tv2 <- typeOfTerm conMap funSet prog varTypes label loc origin t2
-  ctx <- freshCtx label loc origin
+checkGuard :: (CheckEffects es) => CheckCtx -> Maybe Name -> D.Guard -> Eff es (Maybe Name)
+checkGuard cctx lastConName (D.GuardEqual t1 t2) = do
+  tv1 <- typeOfTerm cctx t1
+  tv2 <- typeOfTerm cctx t2
+  ctx <- freshCtx cctx
   tellConstraint (Qualified "typechecker" "check_unify") [tv1, tv2, ctx]
   pure lastConName
-checkGuard _ _ _ _ _ _ _ _ (D.GuardMatch _term conName _arity) = do
-  -- GuardMatch constrains the term type; we handle it in GuardGetArg
-  -- since GuardGetArg always follows GuardMatch on the same term.
-  -- Just remember the constructor name.
+checkGuard _ _ (D.GuardMatch _term conName _arity) = do
+  -- GuardMatch is not emitted as a CHR constraint. Its type information
+  -- is covered by other paths:
+  --   * Non-nullary constructors: the subsequent GuardGetArg(s) emit
+  --     check_guard_getarg, which unifies the term type with the
+  --     constructor's parent type.
+  --   * Nullary constructors: the desugarer produces GuardEqual instead,
+  --     and typeOfAtom looks up the constructor's type.
+  -- We just remember the constructor name for the following GuardGetArg.
   pure (Just conName)
-checkGuard conMap funSet prog varTypes label loc origin lastConName (D.GuardGetArg varName term idx) = do
-  let resultTypeVar = Map.findWithDefault (error "checkGuard: unbound var") varName varTypes
-      conName = case lastConName of
-        Just cn -> cn
-        Nothing -> error "checkGuard: GuardGetArg without preceding GuardMatch"
-  termType <- typeOfTerm conMap funSet prog varTypes label loc origin term
-  ctx <- freshCtx label loc origin
+checkGuard cctx lastConName (D.GuardGetArg varName term idx) = do
+  resultTypeVar <- case Map.lookup varName cctx.varTypes of
+    Just v -> pure v
+    Nothing -> newVar -- defensive: should not happen for well-formed AST
+  conName <- case lastConName of
+    Just cn -> pure cn
+    Nothing -> pure (Unqualified varName) -- defensive: GuardGetArg without GuardMatch
+  termType <- typeOfTerm cctx term
+  ctx <- freshCtx cctx
   tellConstraint (Qualified "typechecker" "check_guard_getarg") [resultTypeVar, termType, VAtom (flattenName conName), VInt idx, ctx]
   pure lastConName
-checkGuard conMap funSet prog varTypes label loc origin _ (D.GuardExpr term) = do
-  tv <- typeOfTerm conMap funSet prog varTypes label loc origin term
-  ctx <- freshCtx label loc origin
+checkGuard cctx _ (D.GuardExpr term) = do
+  tv <- typeOfTerm cctx term
+  ctx <- freshCtx cctx
   tellConstraint (Qualified "typechecker" "check_guard_bool") [tv, ctx]
   pure Nothing
 
@@ -349,68 +353,49 @@ checkGuard conMap funSet prog varTypes label loc origin _ (D.GuardExpr term) = d
 -- Body goal checking
 -- ---------------------------------------------------------------------------
 
-checkBodyGoal ::
-  (CHREffects es, State CtxMap :> es, State Int :> es) =>
-  ConMap ->
-  FunSet ->
-  D.Program ->
-  VarTypes ->
-  Maybe Text ->
-  SourceLoc ->
-  PExpr ->
-  D.BodyGoal ->
-  Eff es ()
-checkBodyGoal _ _ _ _ _ _ _ D.BodyTrue = pure ()
-checkBodyGoal conMap funSet prog varTypes label loc origin (D.BodyConstraint c) =
-  checkConstraintUse conMap funSet prog varTypes label loc origin c
-checkBodyGoal conMap funSet prog varTypes label loc origin (D.BodyUnify t1 t2) = do
-  tv1 <- typeOfTerm conMap funSet prog varTypes label loc origin t1
-  tv2 <- typeOfTerm conMap funSet prog varTypes label loc origin t2
-  ctx <- freshCtx label loc origin
+checkBodyGoal :: (CheckEffects es) => CheckCtx -> D.BodyGoal -> Eff es ()
+checkBodyGoal _ D.BodyTrue = pure ()
+checkBodyGoal cctx (D.BodyConstraint c) =
+  checkConstraintUse cctx c
+checkBodyGoal cctx (D.BodyUnify t1 t2) = do
+  tv1 <- typeOfTerm cctx t1
+  tv2 <- typeOfTerm cctx t2
+  ctx <- freshCtx cctx
   tellConstraint (Qualified "typechecker" "check_unify") [tv1, tv2, ctx]
-checkBodyGoal conMap funSet prog varTypes label loc origin (D.BodyIs v term) = do
-  let varType = Map.findWithDefault (error "checkBodyGoal: unbound var") v varTypes
-  termType <- typeOfTerm conMap funSet prog varTypes label loc origin term
-  ctx <- freshCtx label loc origin
+-- The spec says `is` is a directed assignment (RHS type flows to LHS).
+-- We use bidirectional check_unify here, which is equivalent: if the
+-- LHS var is unbound, unify binds it to the RHS type; if already bound,
+-- it checks consistency. Both match the spec's semantics.
+checkBodyGoal cctx (D.BodyIs v term) = do
+  varType <- case Map.lookup v cctx.varTypes of
+    Just val -> pure val
+    Nothing -> newVar -- defensive: should not happen for well-formed AST
+  termType <- typeOfTerm cctx term
+  ctx <- freshCtx cctx
   tellConstraint (Qualified "typechecker" "check_unify") [varType, termType, ctx]
-checkBodyGoal conMap funSet prog varTypes label loc origin (D.BodyFunctionCall name args) = do
-  argTypeVars <- traverse (typeOfTerm conMap funSet prog varTypes label loc origin) args
+checkBodyGoal cctx (D.BodyFunctionCall name args) = do
+  argTypeVars <- traverse (typeOfTerm cctx) args
   retTypeVar <- newVar
-  ctx <- freshCtx label loc origin
+  ctx <- freshCtx cctx
   tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (flattenName name), valueList argTypeVars, retTypeVar, ctx]
-checkBodyGoal conMap funSet prog varTypes label loc origin (D.BodyHostStmt _ args) = do
+checkBodyGoal cctx (D.BodyHostStmt _ args) = do
   -- Process arguments for side effects (nested constructors/functions still get checked)
-  mapM_ (typeOfTerm conMap funSet prog varTypes label loc origin) args
+  mapM_ (typeOfTerm cctx) args
 
 -- ---------------------------------------------------------------------------
 -- Per-equation checking
 -- ---------------------------------------------------------------------------
 
-checkFunction ::
-  (CHREffects es, State CtxMap :> es, State Int :> es) =>
-  ConMap ->
-  FunSet ->
-  D.Program ->
-  D.Function ->
-  Eff es ()
-checkFunction conMap funSet prog func = do
+checkFunction :: (CheckEffects es) => D.Function -> Eff es ()
+checkFunction func = do
   let AnnP eqs eqLoc eqOrigin = func.equations
-  mapM_ (checkEquation conMap funSet prog func eqLoc eqOrigin) eqs
+  mapM_ (checkEquation func eqLoc eqOrigin) eqs
 
-checkEquation ::
-  (CHREffects es, State CtxMap :> es, State Int :> es) =>
-  ConMap ->
-  FunSet ->
-  D.Program ->
-  D.Function ->
-  SourceLoc ->
-  PExpr ->
-  D.Equation ->
-  Eff es ()
-checkEquation conMap funSet prog func loc origin eq = do
+checkEquation :: (CheckEffects es) => D.Function -> SourceLoc -> PExpr -> D.Equation -> Eff es ()
+checkEquation func loc origin eq = do
   let allVarNames = collectVarsInEq eq
   varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> newVar) (Set.toList allVarNames)
-  let label = Just ("function " <> flattenName func.name)
+  let cctx = CheckCtx {varTypes, label = Just ("function " <> flattenName func.name), loc, origin}
   -- Declared types for parameters
   _ <- case (func.argTypes, func.returnType) of
     (Just argTys, Just retTy) -> do
@@ -419,21 +404,21 @@ checkEquation conMap funSet prog func loc origin eq = do
       -- Check each parameter against declared type
       mapM_
         ( \(param, declTyExpr) -> do
-            paramType <- typeOfTerm conMap funSet prog varTypes label loc origin param
+            paramType <- typeOfTerm cctx param
             declType <- encodeTypeExpr tvars declTyExpr
-            ctx <- freshCtx label loc origin
+            ctx <- freshCtx cctx
             tellConstraint (Qualified "typechecker" "check_unify") [paramType, declType, ctx]
         )
         (zip eq.params argTys)
       -- Check RHS against declared return type
-      rhsType <- typeOfTerm conMap funSet prog varTypes label loc origin eq.rhs
+      rhsType <- typeOfTerm cctx eq.rhs
       retType <- encodeTypeExpr tvars retTy
-      ctx <- freshCtx label loc origin
+      ctx <- freshCtx cctx
       tellConstraint (Qualified "typechecker" "check_unify") [rhsType, retType, ctx]
       pure tvars
     _ -> pure Map.empty
   -- Guards
-  checkGuards conMap funSet prog varTypes label loc origin eq.guards
+  checkGuards cctx eq.guards
   -- Note: RHS already checked above for typed functions; for untyped functions,
   -- the RHS is processed via typeOfTerm in the guard/param checking which
   -- still checks nested expressions.
@@ -443,90 +428,67 @@ checkEquation conMap funSet prog func loc origin eq = do
 -- Term typing
 -- ---------------------------------------------------------------------------
 
-typeOfTerm ::
-  (CHREffects es, State CtxMap :> es, State Int :> es) =>
-  ConMap ->
-  FunSet ->
-  D.Program ->
-  VarTypes ->
-  Maybe Text ->
-  SourceLoc ->
-  PExpr ->
-  Term ->
-  Eff es Value
-typeOfTerm _ _ _ varTypes _ _ _ (VarTerm v) =
-  case Map.lookup v varTypes of
+typeOfTerm :: (CheckEffects es) => CheckCtx -> Term -> Eff es Value
+typeOfTerm cctx (VarTerm v) =
+  case Map.lookup v cctx.varTypes of
     Just val -> pure val
     Nothing -> newVar -- shouldn't happen for well-formed AST
-typeOfTerm _ _ _ _ _ _ _ (IntTerm _) = pure (VAtom "int")
-typeOfTerm _ _ _ _ _ _ _ (TextTerm _) = pure (VAtom "string")
-typeOfTerm _ _ _ _ _ _ _ Wildcard = newVar
-typeOfTerm conMap _ _ _ label loc origin (AtomTerm s) =
-  typeOfAtom conMap label loc origin (Unqualified s)
-typeOfTerm conMap funSet prog varTypes label loc origin (CompoundTerm name args) =
-  typeOfCompound conMap funSet prog varTypes label loc origin name args
+typeOfTerm _ (IntTerm _) = pure (VAtom "int")
+typeOfTerm _ (TextTerm _) = pure (VAtom "string")
+typeOfTerm _ Wildcard = newVar
+typeOfTerm cctx (AtomTerm s) =
+  typeOfAtom cctx (Unqualified s)
+typeOfTerm cctx (CompoundTerm name args) =
+  typeOfCompound cctx name args
 
-typeOfAtom ::
-  (CHREffects es, State CtxMap :> es, State Int :> es) =>
-  ConMap ->
-  Maybe Text ->
-  SourceLoc ->
-  PExpr ->
-  Name ->
-  Eff es Value
-typeOfAtom conMap label loc origin name =
-  case Map.lookup name conMap of
+typeOfAtom :: (CheckEffects es) => CheckCtx -> Name -> Eff es Value
+typeOfAtom cctx name = do
+  env <- ask @TypeCheckEnv
+  case Map.lookup name env.conMap of
     Just _ -> do
       resultType <- newVar
-      ctx <- freshCtx label loc origin
+      ctx <- freshCtx cctx
       tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (flattenName name), valueList [], resultType, ctx]
       pure resultType
     Nothing -> pure (VAtom "any")
 
-typeOfCompound ::
-  (CHREffects es, State CtxMap :> es, State Int :> es) =>
-  ConMap ->
-  FunSet ->
-  D.Program ->
-  VarTypes ->
-  Maybe Text ->
-  SourceLoc ->
-  PExpr ->
-  Name ->
-  [Term] ->
-  Eff es Value
+typeOfCompound :: (CheckEffects es) => CheckCtx -> Name -> [Term] -> Eff es Value
 -- List cons: [H|T] is CompoundTerm "." [H, T]
-typeOfCompound conMap funSet prog varTypes label loc origin (Unqualified ".") [h, t] = do
-  -- "." is the list cons constructor
-  case Map.lookup (Unqualified ".") conMap of
+typeOfCompound cctx (Unqualified ".") [h, t] = do
+  env <- ask @TypeCheckEnv
+  case Map.lookup (Unqualified ".") env.conMap of
     Just _ -> do
-      argTypes <- traverse (typeOfTerm conMap funSet prog varTypes label loc origin) [h, t]
+      argTypes <- traverse (typeOfTerm cctx) [h, t]
       resultType <- newVar
-      ctx <- freshCtx label loc origin
+      ctx <- freshCtx cctx
       tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom ".", valueList argTypes, resultType, ctx]
       pure resultType
     Nothing -> do
       -- Process args for side effects
-      mapM_ (typeOfTerm conMap funSet prog varTypes label loc origin) [h, t]
+      mapM_ (typeOfTerm cctx) [h, t]
       pure (VAtom "any")
--- Qualified constructor or function
-typeOfCompound conMap funSet prog varTypes label loc origin name args
-  | Map.member name conMap = do
-      argTypes <- traverse (typeOfTerm conMap funSet prog varTypes label loc origin) args
+-- Constructor or function
+typeOfCompound cctx name args = do
+  env <- ask @TypeCheckEnv
+  if Map.member name env.conMap
+    then do
+      argTypes <- traverse (typeOfTerm cctx) args
       resultType <- newVar
-      ctx <- freshCtx label loc origin
+      ctx <- freshCtx cctx
       tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (flattenName name), valueList argTypes, resultType, ctx]
       pure resultType
-  | Set.member (name, length args) funSet = do
-      argTypes <- traverse (typeOfTerm conMap funSet prog varTypes label loc origin) args
-      resultType <- newVar
-      ctx <- freshCtx label loc origin
-      tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (flattenName name), valueList argTypes, resultType, ctx]
-      pure resultType
-  | otherwise = do
-      -- Unknown: process args for side effects, return any
-      mapM_ (typeOfTerm conMap funSet prog varTypes label loc origin) args
-      pure (VAtom "any")
+    else
+      if Set.member (name, length args) env.funSet
+        then do
+          argTypes <- traverse (typeOfTerm cctx) args
+          resultType <- newVar
+          ctx <- freshCtx cctx
+          tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (flattenName name), valueList argTypes, resultType, ctx]
+          pure resultType
+        else do
+          -- Unknown: process args for side effects, return any
+          mapM_ (typeOfTerm cctx) args
+          pure (VAtom "any")
 
 -- ---------------------------------------------------------------------------
 -- Variable collection
@@ -578,7 +540,7 @@ collectVarsInTerm _ = Set.empty
 -- ---------------------------------------------------------------------------
 
 collectErrors ::
-  (CHREffects es, State CtxMap :> es, State Int :> es) =>
+  (CheckEffects es) =>
   Eff es [Diagnostic TypeCheckError]
 collectErrors = do
   errVar <- newVar

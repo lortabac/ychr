@@ -7,7 +7,6 @@
     check_constructor_use/4,
     check_unify/3,
     check_guard_bool/2,
-    check_guard_match/3,
     check_guard_getarg/5,
     errors/1,
     collect/1
@@ -25,7 +24,6 @@
     check_constructor_use/4,
     check_unify/3,
     check_guard_bool/2,
-    check_guard_match/3,
     check_guard_getarg/5,
     check_arg_list/3,
     tc_unify/3,
@@ -96,6 +94,14 @@ check_arg_cons @
 check_arg_nil @
     check_arg_list([], [], _) <=> true.
 
+% Note: mismatched list lengths (one side exhausted before the other)
+% are left unsolved rather than reported as errors. This can happen
+% legitimately when a constraint or function is overloaded by arity:
+% the declaration-matching rules match by name only, so a wrong-arity
+% declaration may be tried first, leaving a residual check_arg_list
+% that simply stays inert. The correct-arity declaration will match
+% separately.
+
 % ==========================================================================
 % Delegation rules
 % ==========================================================================
@@ -106,17 +112,6 @@ delegate_unify @
 delegate_guard_bool @
     check_guard_bool(T, Ctx) <=>
     tc_unify(T, tcon(prelude:bool, []), Ctx).
-
-delegate_guard_match @
-    con_sig(ConName, Sig) \
-        check_guard_match(TermType, ConName, Ctx) <=>
-    Fresh is copy_term(term(Sig)),
-    FreshParent is sig_fst(Fresh),
-    tc_unify(TermType, FreshParent, Ctx).
-
-% Unknown constructor in guard match -> no type info (any)
-unknown_guard_match @
-    check_guard_match(_, _, _) <=> true.
 
 delegate_guard_getarg @
     con_sig(ConName, Sig) \
