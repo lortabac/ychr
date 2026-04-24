@@ -1,0 +1,9 @@
+:- module(tc, [foo/1]).
+:- chr_constraint foo(int).
+% call(fun(A) -> B, A) -> B from prelude gives the lambda type fun(int) -> B.
+% The lambda body returns a string, so B = string.
+% foo(X) gives X : int, which is consistent with A = int.
+% R gets type string from B.
+% No conflict so far -- but the lambda body uses X + "hello" which is
+% int + string: the + operator expects (int, int) -> int.
+bad @ foo(X) <=> R is call(fun(Y) -> Y + "hello" end, X).

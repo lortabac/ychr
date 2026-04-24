@@ -25,6 +25,7 @@ module YCHR.TypeCheck
   )
 where
 
+import Control.Monad (replicateM)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -271,6 +272,11 @@ encodeTypeExpr tvars (TypeVar v) =
 encodeTypeExpr _ (TypeCon (Unqualified "int") []) = pure (VAtom "int")
 encodeTypeExpr _ (TypeCon (Unqualified "string") []) = pure (VAtom "string")
 encodeTypeExpr _ (TypeCon (Unqualified "any") []) = pure (VAtom "any")
+-- Function type: fun(A, B) -> C is parsed as TypeCon "->" [TypeCon "fun" [A, B], C]
+encodeTypeExpr tvars (TypeCon (Unqualified "->") [TypeCon (Unqualified "fun") argTys, retTy]) = do
+  encodedArgs <- traverse (encodeTypeExpr tvars) argTys
+  encodedRet <- encodeTypeExpr tvars retTy
+  pure (VTerm "fun" [valueList encodedArgs, encodedRet])
 encodeTypeExpr tvars (TypeCon name args) = do
   encodedArgs <- traverse (encodeTypeExpr tvars) args
   pure (VTerm "tcon" [encodeName name, valueList encodedArgs])
@@ -467,6 +473,20 @@ typeOfCompound cctx (Unqualified ".") [h, t] = do
       -- Process args for side effects
       mapM_ (typeOfTerm cctx) [h, t]
       pure (VAtom "any")
+-- Lambda: fun(X, Y) -> Expr end
+-- Represented as CompoundTerm "->" [CompoundTerm "fun" params, body]
+typeOfCompound cctx (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body] = do
+  paramTypeVars <- traverse (typeOfTerm cctx) params
+  bodyType <- typeOfTerm cctx body
+  pure (VTerm "fun" [valueList paramTypeVars, bodyType])
+-- Function reference: fun name/arity
+-- After renaming the outer "fun" is stripped, leaving CompoundTerm "/" [AtomTerm name, IntTerm arity]
+typeOfCompound cctx (Unqualified "/") [AtomTerm fname, IntTerm arity] = do
+  argTypeVars <- replicateM arity newVar
+  retTypeVar <- newVar
+  ctx <- freshCtx cctx
+  tellConstraint (Qualified "typechecker" "check_function_use") [VAtom fname, valueList argTypeVars, retTypeVar, ctx]
+  pure (VTerm "fun" [valueList argTypeVars, retTypeVar])
 -- Constructor or function
 typeOfCompound cctx name args = do
   env <- ask @TypeCheckEnv

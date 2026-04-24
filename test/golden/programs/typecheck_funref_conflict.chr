@@ -1,0 +1,8 @@
+:- module(tc, [foo/1, fun double/1]).
+:- chr_constraint foo(string).
+:- function double(int) -> int.
+double(X) -> X + X.
+% double/1 has type fun(int) -> int.
+% call(fun(A) -> B, A) -> B gives A = int, B = int.
+% foo(X) gives X : string, but call's second arg expects A = int.
+bad @ foo(X) <=> R is call(fun double/1, X).
