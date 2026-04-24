@@ -24,6 +24,7 @@ import YCHR.Parser (opTableEntries, parseConstraint)
 import YCHR.Pretty (prettyBindings, prettyQueryResult, renderAtom)
 import YCHR.Run (CompiledProgram (..), Error, Warning, compileFiles, compileModules, resolveQueryConstraint, runProgramWithGoal, runProgramWithQuery)
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
+import YCHR.TypeCheck (typeCheckProgram)
 import YCHR.Types qualified as Types
 import YCHR.VM.SExpr (VMProgram (..), serialize)
 
@@ -53,6 +54,7 @@ data Command
   | Run RunOpts [FilePath]
   | Compile CompileOpts [FilePath]
   | GenDriver GenDriverOpts [FilePath]
+  | Check [FilePath]
 
 filesArg :: Parser [FilePath]
 filesArg = many (argument str (metavar "FILES..."))
@@ -96,6 +98,9 @@ genDriverParser =
         )
     <*> filesArg
 
+checkParser :: Parser Command
+checkParser = Check <$> filesArg
+
 commandParser :: Parser Command
 commandParser =
   subparser
@@ -103,6 +108,7 @@ commandParser =
         <> command "run" (info (runParser <**> helper) (progDesc "Compile and run a goal"))
         <> command "compile" (info (compileParser <**> helper) (progDesc "Compile to a target format"))
         <> command "gen-driver" (info (genDriverParser <**> helper) (progDesc "Generate a Scheme driver script for a goal"))
+        <> command "check" (info (checkParser <**> helper) (progDesc "Type-check the program"))
     )
     <|> replParser
 
@@ -114,9 +120,22 @@ main = do
     Run opts files -> runGoal opts files
     Compile opts files -> runCompile opts files
     GenDriver opts files -> runGenDriver opts files
+    Check files -> runCheck files
 
 printWarnings :: [Warning] -> IO ()
 printWarnings = mapM_ (\w -> hPutStr stderr (displayMsg w))
+
+runTypeCheck :: CompiledProgram -> IO ()
+runTypeCheck prog = do
+  errs <- typeCheckProgram prog.desugaredProgram
+  unless (null errs) $ do
+    mapM_ (hPutStr stderr . displayMsg) errs
+    exitFailure
+
+printTypeErrors :: CompiledProgram -> IO ()
+printTypeErrors prog = do
+  errs <- typeCheckProgram prog.desugaredProgram
+  mapM_ (hPutStr stderr . displayMsg) errs
 
 runRepl :: ReplOpts -> [FilePath] -> IO ()
 runRepl opts files = do
@@ -129,6 +148,7 @@ runRepl opts files = do
       exitFailure
     Right (prog, warnings) -> do
       unless opts.quiet $ printWarnings warnings
+      unless opts.quiet $ printTypeErrors prog
       histFile <- getXdgDirectory XdgData "ychr/history"
       createDirectoryIfMissing True (takeDirectory histFile)
       let CompiledProgram {exportMap = em} = prog
@@ -195,6 +215,7 @@ repl quietMode files prog = loop
           loop
         Right (prog', warnings) -> do
           liftIO (printWarnings warnings)
+          liftIO (printTypeErrors prog')
           repl quietMode files prog'
     loop = do
       minput <- getInputLine (if quietMode then "" else "ychr> ")
@@ -235,6 +256,7 @@ runGoal opts files = do
       exitFailure
     Right (prog, warnings) -> do
       printWarnings warnings
+      runTypeCheck prog
       outcome <- try @SomeException $ runProgramWithGoal prog hostCalls opts.goal
       case outcome of
         Left exc -> do
@@ -261,6 +283,7 @@ runCompile opts files = do
       exitFailure
     Right (prog, warnings) -> do
       printWarnings warnings
+      runTypeCheck prog
       let vmp = VMProgram {program = prog.program, exportedSet = prog.exportedSet, symbolTable = prog.symbolTable}
           name = maybe (T.pack "program") T.pack opts.baseName
       case opts.target of
@@ -286,6 +309,7 @@ runGenDriver opts files = do
       exitFailure
     Right (prog, warnings) -> do
       printWarnings warnings
+      runTypeCheck prog
       constraint <- case parseConstraint "<query>" opts.gdGoal of
         Left err -> do
           putStrLn (show err)
@@ -298,6 +322,19 @@ runGenDriver opts files = do
         Right c -> pure c
       let name = T.pack "program"
       TIO.putStr (generateDriver name resolved)
+
+runCheck :: [FilePath] -> IO ()
+runCheck files = do
+  result <- case files of
+    [] -> pure (compileModules True [])
+    _ -> compileFiles True files
+  case result of
+    Left err -> do
+      putStr (displayMsg err)
+      exitFailure
+    Right (prog, warnings) -> do
+      printWarnings warnings
+      runTypeCheck prog
 
 hostCalls :: HostCallRegistry
 hostCalls = baseHostCallRegistry <> metaHostCallRegistry
