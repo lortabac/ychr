@@ -1,6 +1,7 @@
 :- module(typechecker, [
     constraint_sig/2,
     function_sig/2,
+    function_sigs/2,
     con_sig/2,
     check_constraint_use/3,
     check_function_use/4,
@@ -18,6 +19,7 @@
 :- chr_constraint
     constraint_sig/2,
     function_sig/2,
+    function_sigs/2,
     con_sig/2,
     check_constraint_use/3,
     check_function_use/4,
@@ -28,6 +30,7 @@
     check_arg_list/3,
     tc_unify/3,
     tc_unify_list/3,
+    resolve_overload/4,
     report_error/3,
     errors/1,
     collect/1.
@@ -35,6 +38,31 @@
 :- function sig_fst/1, sig_snd/1.
 sig_fst(sig(X, _)) -> X.
 sig_snd(sig(_, Y)) -> Y.
+
+:- function
+    all_nonvar_list/1,
+    filter_consistent/2,
+    sig_args_consistent/2,
+    (type_consistent(any, any) -> bool).
+
+all_nonvar_list([]) -> true.
+all_nonvar_list([X|Xs]) | nonvar(X) -> all_nonvar_list(Xs).
+all_nonvar_list([X|_]) | var(X) -> false.
+
+filter_consistent([], _) -> [].
+filter_consistent([Sig|Rest], ArgTypes) | sig_args_consistent(sig_fst(Sig), ArgTypes) ->
+    [Sig | filter_consistent(Rest, ArgTypes)].
+filter_consistent([_|Rest], ArgTypes) -> filter_consistent(Rest, ArgTypes).
+
+sig_args_consistent([], []) -> true.
+sig_args_consistent([D|Ds], [A|As]) | type_consistent(D, A) -> sig_args_consistent(Ds, As).
+sig_args_consistent(_, _) -> false.
+
+type_consistent(_, A) | var(A) -> true.
+type_consistent(any, _) -> true.
+type_consistent(_, any) -> true.
+type_consistent(X, X) -> true.
+type_consistent(_, _) -> false.
 
 % ==========================================================================
 % Declaration matching
@@ -61,6 +89,19 @@ function_match @
     FreshRetType is sig_snd(Fresh),
     check_arg_list(FreshArgTypes, ArgTypes, Ctx),
     tc_unify(RetTypeVar, FreshRetType, Ctx).
+
+% Overloaded function: filter matching sigs and resolve
+overloaded_function_match @
+    function_sigs(Name, Sigs) \
+        check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
+    all_nonvar_list(ArgTypes) |
+    Matching is filter_consistent(Sigs, ArgTypes),
+    resolve_overload(Matching, ArgTypes, RetTypeVar, Ctx).
+
+% Overloaded function fallback: args not ground, succeed silently
+overloaded_function_fallback @
+    function_sigs(Name, _) \
+        check_function_use(Name, _, _, _) <=> true.
 
 % Unknown function
 unknown_function @
@@ -194,6 +235,27 @@ tc_unify_list_cons @
     tc_unify_list([H1|T1], [H2|T2], Ctx) <=>
     tc_unify(H1, H2, Ctx),
     tc_unify_list(T1, T2, Ctx).
+
+% ==========================================================================
+% Overload resolution
+% ==========================================================================
+
+% Exactly one matching signature: apply it
+resolve_one @
+    resolve_overload([Sig], ArgTypes, RetTypeVar, Ctx) <=>
+    FreshArgs is sig_fst(Sig),
+    FreshRet is sig_snd(Sig),
+    check_arg_list(FreshArgs, ArgTypes, Ctx),
+    tc_unify(RetTypeVar, FreshRet, Ctx).
+
+% No matching signature: error
+resolve_none @
+    resolve_overload([], _, _, Ctx) <=>
+    report_error(Ctx, no_matching_overload, overloaded).
+
+% Multiple matching signatures: ambiguous, succeed silently
+resolve_ambiguous @
+    resolve_overload([_, _ | _], _, _, _) <=> true.
 
 % ==========================================================================
 % Error accumulation

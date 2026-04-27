@@ -1,0 +1,8 @@
+:- module(eq_polymorphic, [result/2]).
+:- use_module(library(prelude)).
+
+:- chr_constraint result(any, any).
+
+% == should work on any pair of same-type values
+result(test1, R) <=> R is (1 == 2).
+result(test2, R) <=> R is ("a" == "a").

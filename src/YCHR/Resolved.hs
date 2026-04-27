@@ -54,8 +54,7 @@ data Rule = Rule
 data FunctionDef = FunctionDef
   { name :: Name,
     arity :: Int,
-    argTypes :: Maybe [TypeExpr],
-    returnType :: Maybe TypeExpr,
+    signatures :: [([TypeExpr], TypeExpr)],
     isOpen :: Bool,
     equations :: [AnnP FunctionEquation]
   }

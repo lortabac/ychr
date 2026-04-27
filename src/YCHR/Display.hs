@@ -165,6 +165,7 @@ typeCheckErrorCode (UnknownConstraint _) = ErrorCode 60002
 typeCheckErrorCode (UnknownFunction _) = ErrorCode 60003
 typeCheckErrorCode (UnboundTypeVar _ _ _) = ErrorCode 60004
 typeCheckErrorCode (UndefinedType _ _ _) = ErrorCode 60005
+typeCheckErrorCode (NoMatchingOverload _) = ErrorCode 60006
 
 -- | 5xxxx — top-level errors
 parseErrorCode :: ErrorCode
@@ -342,6 +343,8 @@ typeCheckErrorMsg (UnboundTypeVar typeName conName varName) =
     ++ ": type variable "
     ++ T.unpack varName
     ++ " is not bound by the type header"
+typeCheckErrorMsg (NoMatchingOverload name) =
+  "No matching overload for: " ++ T.unpack name
 typeCheckErrorMsg (UndefinedType typeName conName refName) =
   "In type "
     ++ T.unpack typeName

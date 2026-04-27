@@ -65,6 +65,7 @@ data TypeCheckError
   = InconsistentTypes Text Text
   | UnknownConstraint Text
   | UnknownFunction Text
+  | NoMatchingOverload Text
   | UnboundTypeVar Text Text Text
   | UndefinedType Text Text Text
   deriving (Show, Eq)
@@ -199,21 +200,33 @@ tellConstraintSigs prog =
 tellFunctionSigs :: (CHREffects es, State CtxMap :> es, State Int :> es) => D.Program -> Eff es ()
 tellFunctionSigs prog =
   mapM_
-    ( \f -> case (f.argTypes, f.returnType) of
-        (Just argTys, Just retTy) -> do
+    ( \f -> case f.signatures of
+        [] -> do
+          -- No type annotations: default all to any
+          let anyArgs = replicate f.arity (VAtom "any")
+              sig = VTerm "sig" [valueList anyArgs, VAtom "any"]
+          tellConstraint (Qualified "typechecker" "function_sig") [VAtom (flattenName f.name), sig]
+        [(argTys, retTy)] -> do
+          -- Single signature: use non-overloaded path
           let allVars = collectTypeVars argTys ++ collectTypeVarsExpr retTy
           tvars <- freshTypeVarsForDecl allVars
           encodedArgs <- traverse (encodeTypeExpr tvars) argTys
           encodedRet <- encodeTypeExpr tvars retTy
           let sig = VTerm "sig" [valueList encodedArgs, encodedRet]
           tellConstraint (Qualified "typechecker" "function_sig") [VAtom (flattenName f.name), sig]
-        _ -> do
-          -- No type annotations: default all to any
-          let anyArgs = replicate f.arity (VAtom "any")
-              sig = VTerm "sig" [valueList anyArgs, VAtom "any"]
-          tellConstraint (Qualified "typechecker" "function_sig") [VAtom (flattenName f.name), sig]
+        sigs -> do
+          -- Multiple signatures: overloaded path
+          encodedSigs <- mapM (encodeSig f.name) sigs
+          tellConstraint (Qualified "typechecker" "function_sigs") [VAtom (flattenName f.name), valueList encodedSigs]
     )
     prog.functions
+  where
+    encodeSig _name (argTys, retTy) = do
+      let allVars = collectTypeVars argTys ++ collectTypeVarsExpr retTy
+      tvars <- freshTypeVarsForDecl allVars
+      encodedArgs <- traverse (encodeTypeExpr tvars) argTys
+      encodedRet <- encodeTypeExpr tvars retTy
+      pure (VTerm "sig" [valueList encodedArgs, encodedRet])
 
 tellConSigs :: (CHREffects es, State CtxMap :> es, State Int :> es) => D.Program -> Eff es ()
 tellConSigs prog =
@@ -403,8 +416,9 @@ checkEquation func loc origin eq = do
   varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> newVar) (Set.toList allVarNames)
   let cctx = CheckCtx {varTypes, label = Just ("function " <> flattenName func.name), loc, origin}
   -- Declared types for parameters
-  _ <- case (func.argTypes, func.returnType) of
-    (Just argTys, Just retTy) -> do
+  _ <- case func.signatures of
+    [(argTys, retTy)] -> do
+      -- Single signature: check equation against it directly
       let allVars = collectTypeVars argTys ++ collectTypeVarsExpr retTy
       tvars <- freshTypeVarsForDecl allVars
       -- Check each parameter against declared type
@@ -422,7 +436,17 @@ checkEquation func loc origin eq = do
       ctx <- freshCtx cctx
       tellConstraint (Qualified "typechecker" "check_unify") [rhsType, retType, ctx]
       pure tvars
-    _ -> pure Map.empty
+    [] ->
+      -- Untyped: no type checking for params/RHS
+      pure Map.empty
+    _sigs -> do
+      -- Overloaded: check equation against all signatures via
+      -- check_function_use, which leverages overload resolution
+      argTypeVars <- traverse (typeOfTerm cctx) eq.params
+      retTypeVar <- typeOfTerm cctx eq.rhs
+      ctx <- freshCtx cctx
+      tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (flattenName func.name), valueList argTypeVars, retTypeVar, ctx]
+      pure Map.empty
   -- Guards
   checkGuards cctx eq.guards
   -- Note: RHS already checked above for typed functions; for untyped functions,
@@ -599,6 +623,9 @@ decodeError ctxMap (VTerm "error" [ctxVal, codeVal, detailVal]) = do
     VAtom "unknown_function" -> do
       nameText <- showValue detail
       pure [Diagnostic label (AnnP (UnknownFunction nameText) loc origin)]
+    VAtom "no_matching_overload" -> do
+      nameText <- showValue detail
+      pure [Diagnostic label (AnnP (NoMatchingOverload nameText) loc origin)]
     _ -> pure []
 decodeError _ _ = pure []
 

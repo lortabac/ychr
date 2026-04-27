@@ -1,0 +1,15 @@
+:- module(overload_basic, [result/2]).
+:- use_module(library(prelude)).
+
+:- chr_constraint result(any, any).
+
+% Overloaded function: works on both int and string
+:- function
+    (size(int) -> int),
+    (size(string) -> int).
+
+size(N) | integer(N) -> N.
+size(S) | string(S) -> string_length(S).
+
+result(test1, R) <=> R is size(42).
+result(test2, R) <=> R is size("hello").

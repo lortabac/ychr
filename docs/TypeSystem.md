@@ -467,6 +467,72 @@ The checker validates type definitions themselves:
    error.
 
 
+## Signature Overloading
+
+A function may be declared with multiple type signatures. Each
+signature specifies a distinct set of argument types and a return
+type. The function has a single implementation; only the type
+checking is overloaded.
+
+### Declaration syntax
+
+```prolog
+:- function
+    ('+'(int, int) -> int),
+    ('+'(float, float) -> float).
+```
+
+Multiple comma-separated typed declarations with the same name and
+arity are grouped into a single overloaded function definition.
+
+### Resolution
+
+When the checker encounters a call to an overloaded function, it
+filters the declared signatures by consistency with the known
+argument types:
+
+- If **exactly one** signature is consistent: the checker applies it,
+  unifying argument types and propagating the return type. This is the
+  "narrow when unambiguous" behavior.
+- If **no** signature is consistent: the checker reports a
+  `no_matching_overload` error.
+- If **multiple** signatures are consistent (ambiguous): the checker
+  succeeds silently without propagating type information.
+
+Filtering uses consistency (not equality): an argument typed as `any`
+or an unbound type variable is consistent with any declared type.
+
+### When arguments are not yet resolved
+
+If argument types are not yet ground (still unbound type variables
+with no concrete type), all signatures are trivially consistent, and
+the check succeeds silently. This preserves the gradual guarantee:
+unannotated code produces no errors.
+
+### Equation checking
+
+For overloaded functions, each equation is checked via the same
+overload resolution mechanism. The equation's parameter types and
+return type are matched against the set of declared signatures.
+
+### Example
+
+```prolog
+:- chr_type color ---> red ; green ; blue.
+
+:- function
+    (size(int) -> int),
+    (size(string) -> int).
+
+size(N) | integer(N) -> N.
+size(S) | string(S) -> string_length(S).
+
+:- chr_constraint foo(color).
+foo(X) <=> R is size(X).   %% Error: no matching overload
+                            %% (color is not int or string)
+```
+
+
 ## Extensibility
 
 The type system is designed to accommodate future extensions:
@@ -478,9 +544,9 @@ The type system is designed to accommodate future extensions:
   constraint-gathering approach can be extended with subtyping or
   predicate constraints without changing the overall architecture.
 
-- **Float support and polymorphic arithmetic**: a mechanism for typing
-  operators like `+` polymorphically over numeric types is needed.
-  The design is deferred.
+- **Float support**: once float is added as a built-in type, the
+  existing signature overloading mechanism (see below) enables typing
+  arithmetic operators over both int and float.
 
 
 ## Soundness
@@ -528,6 +594,7 @@ key ingredients are:
 | User-defined types | Algebraic types via `:- chr_type` |
 | Function types | `fun(τ₁,...,τₙ) -> τᵣ` |
 | Polymorphism | Parametric, implicitly quantified, no rank-n |
+| Overloading | Signature overloading (multiple sigs per function) |
 | Defaults | Missing annotations default to `any` |
 | Core relation | Consistency (gradual typing) |
 | Type merging | Consistency check, `any` absorbs |

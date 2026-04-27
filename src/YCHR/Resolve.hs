@@ -175,17 +175,32 @@ resolveRules mods =
 
 resolveFunctions :: [P.Module] -> [R.FunctionDef]
 resolveFunctions mods =
-  [ R.FunctionDef
-      { name = Qualified m.name d.name,
-        arity = d.arity,
-        argTypes = d.argTypes,
-        returnType = d.returnType,
-        isOpen = d.isOpen,
-        equations = gatherEquations mods m d
-      }
-  | m <- mods,
-    P.Ann d _ <- m.decls,
-    P.FunctionDecl {} <- [d]
+  let -- Collect all function declarations with their module context
+      allDecls =
+        [ (Qualified m.name d.name, d.arity, d, m)
+        | m <- mods,
+          P.Ann d _ <- m.decls,
+          P.FunctionDecl {} <- [d]
+        ]
+      -- Group by (qualifiedName, arity)
+      grouped = Map.toList $ Map.fromListWith (++) [((qn, ar), [(d, m)]) | (qn, ar, d, m) <- allDecls]
+   in [ R.FunctionDef
+          { name = qn,
+            arity = ar,
+            signatures = collectSignatures decls,
+            isOpen = any (\(d, _) -> d.isOpen) decls,
+            equations = concatMap (\(d, m) -> gatherEquations mods m d) decls
+          }
+      | ((qn, ar), decls) <- grouped
+      ]
+
+-- | Collect type signatures from a group of declarations for the same function.
+collectSignatures :: [(P.Declaration, P.Module)] -> [([TypeExpr], TypeExpr)]
+collectSignatures decls =
+  [ (argTys, retTy)
+  | (d, _) <- decls,
+    Just argTys <- [d.argTypes],
+    Just retTy <- [d.returnType]
   ]
 
 -- | Gather equations for a function declaration, stripping the funName.

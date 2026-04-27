@@ -290,8 +290,7 @@ desugarFunctionDef fdef = do
     D.Function
       { name = fdef.name,
         arity = fdef.arity,
-        argTypes = fdef.argTypes,
-        returnType = fdef.returnType,
+        signatures = fdef.signatures,
         equations = AnnP desugaredEqs loc parsed
       }
 
@@ -460,8 +459,7 @@ liftTerm modName loc origin scope st term = case term of
           D.Function
             { name = qualName,
               arity = length allParams,
-              argTypes = Nothing,
-              returnType = Nothing,
+              signatures = [],
               equations =
                 noAnnP
                   [ D.Equation

@@ -45,6 +45,7 @@ module YCHR.Rename (renameProgram, buildExportEnv, renameQueryGoals, RenameError
 
 import Control.Monad (when)
 import Data.Foldable (traverse_)
+import Data.List (nub)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -487,7 +488,9 @@ visibleProviders ctx n arity =
         filter
           (\mn -> any (\(imn, il) -> imn == mn && importListPermits n arity il) imports)
           (lookupExport (n, arity) ctx.exportEnv)
-   in ownProviders ++ importProviders
+   in -- Deduplicate: multiple declarations with the same name/arity in
+      -- one module (e.g., overloaded function signatures) are not ambiguous.
+      nub (ownProviders ++ importProviders)
 
 -- | Check whether a name/arity is permitted by an import list.
 -- 'Nothing' means import everything; 'Just' restricts to listed items.
