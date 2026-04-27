@@ -90,23 +90,21 @@ function_match @
     check_arg_list(FreshArgTypes, ArgTypes, Ctx),
     tc_unify(RetTypeVar, FreshRetType, Ctx).
 
-% Overloaded function: filter matching sigs and resolve
+% Overloaded function: filter matching sigs and resolve.
+% filter_consistent treats var args as consistent with any declared type.
+% If all args are vars, all sigs match → ambiguous → succeed silently.
+% If some args are nonvar and narrow to one sig, that sig is applied.
 overloaded_function_match @
     function_sigs(Name, Sigs) \
         check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
-    all_nonvar_list(ArgTypes) |
     Matching is filter_consistent(Sigs, ArgTypes),
     resolve_overload(Matching, ArgTypes, RetTypeVar, Ctx).
 
-% Overloaded function fallback: args not ground, succeed silently
-overloaded_function_fallback @
-    function_sigs(Name, _) \
-        check_function_use(Name, _, _, _) <=> true.
-
-% Unknown function
-unknown_function @
-    check_function_use(Name, _, _, Ctx) <=>
-    report_error(Ctx, unknown_function, Name).
+% Note: unknown_function detection is handled by the Haskell driver
+% (typeOfCompound checks funSet before emitting check_function_use).
+% Residual check_function_use constraints (from overloaded functions
+% whose args never resolve) are harmless — they represent genuinely
+% polymorphic/ambiguous usage in gradual typing.
 
 % Constructor usage: copy_term preserves parent/field sharing
 constructor_match @
@@ -190,6 +188,9 @@ tc_unify_var_any @
 
 tc_unify_int @
     tc_unify(int, int, _) <=> true.
+
+tc_unify_float @
+    tc_unify(float, float, _) <=> true.
 
 tc_unify_string @
     tc_unify(string, string, _) <=> true.

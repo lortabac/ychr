@@ -285,6 +285,8 @@ data Field
 data Literal
   = -- | Integer literal.
     IntLit Int
+  | -- | Floating-point literal.
+    FloatLit Double
   | -- | Atom literal (symbolic constant).
     AtomLit Text
   | -- | Text (string) literal.

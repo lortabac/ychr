@@ -1,0 +1,8 @@
+:- module(float_type_error, [result/2]).
+:- use_module(library(prelude)).
+
+:- chr_constraint result(any, any).
+
+% Type error: cannot mix int + float
+:- chr_constraint foo(int, float).
+foo(X, Y) <=> R is X + Y.

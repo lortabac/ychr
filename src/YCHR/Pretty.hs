@@ -62,6 +62,7 @@ prettyOps = case PE.mergeOps builtinOps stdArithOps of
 termToPExpr :: Term -> PE.PExpr
 termToPExpr (VarTerm v) = PE.Var v
 termToPExpr (IntTerm n) = PE.Int n
+termToPExpr (FloatTerm n) = PE.Float n
 termToPExpr (AtomTerm s) = PE.Atom s
 termToPExpr (TextTerm s) = PE.Str s
 termToPExpr Wildcard = PE.Wildcard
@@ -166,6 +167,7 @@ runtimeToPExpr (CompoundTerm (Qualified m f) args) =
 runtimeToPExpr (CompoundTerm (Unqualified f) args) =
   PE.Compound f (map (noAnn . runtimeToPExpr) args)
 runtimeToPExpr (IntTerm n) = PE.Int n
+runtimeToPExpr (FloatTerm n) = PE.Float n
 runtimeToPExpr (AtomTerm s) = PE.Atom s
 runtimeToPExpr (TextTerm s) = PE.Str s
 

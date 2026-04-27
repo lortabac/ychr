@@ -311,6 +311,7 @@ evalVmExpr _ _ (Var name) = do
     Just v -> pure v
     Nothing -> runtimeError' "evalVmExpr: unbound variable " name.unName
 evalVmExpr _ _ (Lit (IntLit n)) = pure (RVal (VInt n))
+evalVmExpr _ _ (Lit (FloatLit n)) = pure (RVal (VFloat n))
 evalVmExpr _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
 evalVmExpr _ _ (Lit (TextLit s)) = pure (RVal (VText s))
 evalVmExpr _ _ (Lit (BoolLit b)) = pure (RVal (VBool b))

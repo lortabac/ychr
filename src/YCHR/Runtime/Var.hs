@@ -157,6 +157,8 @@ unify' (VVar var) v = do
 unify' v (VVar vr) = unify' (VVar vr) v
 -- Int-Int
 unify' (VInt a) (VInt b) = pure (a == b)
+-- Float-Float
+unify' (VFloat a) (VFloat b) = pure (a == b)
 -- Atom-Atom
 unify' (VAtom a) (VAtom b) = pure (a == b)
 -- Text-Text
@@ -229,6 +231,7 @@ unifiable a b = do
           pure True
     uni' trailRef v (VVar vr) = uni' trailRef (VVar vr) v
     uni' _ (VInt x) (VInt y) = pure (x == y)
+    uni' _ (VFloat x) (VFloat y) = pure (x == y)
     uni' _ (VAtom x) (VAtom y) = pure (x == y)
     uni' _ (VText x) (VText y) = pure (x == y)
     uni' _ (VBool x) (VBool y) = pure (x == y)
@@ -260,6 +263,7 @@ equal' (VVar _) _ = pure False
 equal' _ (VVar _) = pure False
 -- Ground-Ground
 equal' (VInt a) (VInt b) = pure (a == b)
+equal' (VFloat a) (VFloat b) = pure (a == b)
 equal' (VAtom a) (VAtom b) = pure (a == b)
 equal' (VText a) (VText b) = pure (a == b)
 equal' (VBool a) (VBool b) = pure (a == b)

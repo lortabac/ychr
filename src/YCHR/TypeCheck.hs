@@ -283,6 +283,7 @@ encodeTypeExpr tvars (TypeVar v) =
     Just val -> pure val
     Nothing -> pure (VAtom "any")
 encodeTypeExpr _ (TypeCon (Unqualified "int") []) = pure (VAtom "int")
+encodeTypeExpr _ (TypeCon (Unqualified "float") []) = pure (VAtom "float")
 encodeTypeExpr _ (TypeCon (Unqualified "string") []) = pure (VAtom "string")
 encodeTypeExpr _ (TypeCon (Unqualified "any") []) = pure (VAtom "any")
 -- Function type: fun(A, B) -> C is parsed as TypeCon "->" [TypeCon "fun" [A, B], C]
@@ -464,6 +465,7 @@ typeOfTerm cctx (VarTerm v) =
     Just val -> pure val
     Nothing -> newVar -- shouldn't happen for well-formed AST
 typeOfTerm _ (IntTerm _) = pure (VAtom "int")
+typeOfTerm _ (FloatTerm _) = pure (VAtom "float")
 typeOfTerm _ (TextTerm _) = pure (VAtom "string")
 typeOfTerm _ Wildcard = newVar
 typeOfTerm cctx (AtomTerm s) =

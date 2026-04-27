@@ -34,6 +34,8 @@ data SExpr
     SAtom Text
   | -- | Integer literal.
     SInt Int
+  | -- | Floating-point literal.
+    SFloat Double
   | -- | Double-quoted string literal.
     SString Text
   | -- | Parenthesised list of sub-expressions.
@@ -49,6 +51,9 @@ data SExpr
 printSExpr :: SExpr -> Text
 printSExpr (SAtom t) = t
 printSExpr (SInt n) = T.pack (show n)
+printSExpr (SFloat n) =
+  let s = show n
+   in T.pack (if '.' `elem` s then s else s ++ ".0")
 printSExpr (SString t) = "\"" <> escapeString t <> "\""
 printSExpr (SList xs) = "(" <> T.intercalate " " (map printSExpr xs) <> ")"
 

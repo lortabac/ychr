@@ -260,6 +260,7 @@ termToValue (VarTerm n) = do
       modify (Map.insert n v)
       pure v
 termToValue (IntTerm n) = pure (VInt n)
+termToValue (FloatTerm n) = pure (VFloat n)
 termToValue (AtomTerm s) = pure (VAtom s)
 termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard
@@ -384,6 +385,7 @@ evalNestedExpr ::
   Term ->
   Eff es Value
 evalNestedExpr _ (IntTerm n) = pure (VInt n)
+evalNestedExpr _ (FloatTerm n) = pure (VFloat n)
 evalNestedExpr _ (AtomTerm s) = pure (VAtom s)
 evalNestedExpr _ (TextTerm s) = pure (VText s)
 evalNestedExpr _ Wildcard = pure VWildcard

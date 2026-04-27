@@ -73,6 +73,8 @@ data PExpr
     Var Text
   | -- | Integer literal.
     Int Int
+  | -- | Floating-point literal.
+    Float Double
   | -- | Atom (lowercase identifier or single-quoted string).
     Atom Text
   | -- | Double-quoted string literal.
@@ -385,12 +387,29 @@ wildcardP = lexeme $ do
   notFollowedBy (alphaNumChar <|> char '_')
   pure Wildcard
 
+-- | Parse a number: try float first (requires decimal point), then integer.
+numberP :: Parser PExpr
+numberP = lexeme $ do
+  sign <- optional (char '-')
+  let applySign :: (Num a) => a -> Maybe Char -> a
+      applySign x Nothing = x
+      applySign x (Just _) = negate x
+  try
+    ( do
+        whole <- L.decimal
+        _ <- char '.'
+        fracStr <- some digitChar
+        let str = show (whole :: Int) ++ "." ++ fracStr
+            val = read str :: Double
+        pure (Float (applySign val sign))
+    )
+    <|> do
+      n <- L.decimal
+      pure (Int (applySign n sign))
+
 -- | Parse a decimal integer (optionally negative).
 intP :: Parser PExpr
-intP = lexeme $ do
-  sign <- optional (char '-')
-  n <- L.decimal
-  pure (Int (maybe n (const (negate n)) sign))
+intP = numberP
 
 -- ---------------------------------------------------------------------------
 -- Operator tokens
@@ -674,6 +693,13 @@ prettyPrec _ _ _ _ (Var v) = T.unpack v
 prettyPrec _ _ _ _ (Int n)
   | n < 0 = "(" ++ show n ++ ")"
   | otherwise = show n
+prettyPrec _ _ _ _ (Float n)
+  | n < 0 = "(" ++ showFloat n ++ ")"
+  | otherwise = showFloat n
+  where
+    showFloat x =
+      let s = show x
+       in if '.' `elem` s then s else s ++ ".0"
 prettyPrec _ _ _ _ (Atom "[]") = "[]"
 prettyPrec _ _ wops _ (Atom a) = renderAtom wops a
 prettyPrec _ _ _ _ (Str s) = renderString s

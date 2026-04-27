@@ -135,6 +135,7 @@ data TypeExpr
 data Term
   = VarTerm Text
   | IntTerm Int
+  | FloatTerm Double
   | AtomTerm Text
   | TextTerm Text
   | CompoundTerm Name [Term]

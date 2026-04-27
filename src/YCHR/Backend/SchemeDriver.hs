@@ -57,6 +57,7 @@ generateDriver moduleName constraint =
 -- | Convert a 'Term' to a Scheme expression.
 termToScheme :: Term -> Text
 termToScheme (IntTerm n) = T.pack (show n)
+termToScheme (FloatTerm n) = printSExpr (SFloat n)
 termToScheme (AtomTerm s) = printSExpr (compileSymbol s)
 termToScheme (TextTerm s) = printSExpr (SString s)
 termToScheme (VarTerm n) = n

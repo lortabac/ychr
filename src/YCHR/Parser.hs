@@ -366,6 +366,7 @@ convertTerm :: Ann PExpr -> Term
 convertTerm (Ann pexpr _) = case pexpr of
   Var t -> VarTerm t
   P.Int n -> IntTerm n
+  P.Float n -> FloatTerm n
   Atom t -> AtomTerm t
   Str t -> TextTerm t
   P.Wildcard -> Wildcard

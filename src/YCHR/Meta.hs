@@ -36,6 +36,7 @@ valueToTerm varName v = do
   v' <- deref v
   case v' of
     VInt n -> pure (IntTerm n)
+    VFloat n -> pure (FloatTerm n)
     VAtom s -> pure (AtomTerm s)
     VText s -> pure (TextTerm s)
     VBool True -> pure (AtomTerm "true")
@@ -63,6 +64,7 @@ termToValue (VarTerm name) = do
       modify' (Map.insert name v)
       pure v
 termToValue (IntTerm n) = pure (VInt n)
+termToValue (FloatTerm n) = pure (VFloat n)
 termToValue (AtomTerm s) = pure (VAtom s)
 termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard

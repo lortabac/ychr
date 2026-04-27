@@ -415,6 +415,7 @@ compileTerm varMap si (VarTerm v) = case lookupVar v varMap of
     tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed)]
     pure (Lit WildcardLit)
 compileTerm _ _ (IntTerm n) = pure (Lit (IntLit n))
+compileTerm _ _ (FloatTerm n) = pure (Lit (FloatLit n))
 compileTerm _ _ (AtomTerm "true") = pure (Lit (BoolLit True))
 compileTerm _ _ (AtomTerm "false") = pure (Lit (BoolLit False))
 compileTerm _ _ (AtomTerm s) = pure (Lit (AtomLit s))
