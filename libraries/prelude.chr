@@ -1,36 +1,44 @@
 :- module(prelude, [
     type(bool/0),
     type(list/1),
-    '+'/2,
-    '-'/2,
-    '*'/2,
-    'div'/2,
-    'mod'/2,
-    'rem'/2,
-    '<'/2,
-    '>'/2,
-    '>='/2,
-    '=<'/2,
-    '=='/2,
-    max/2,
-    min/2,
-    var/1,
-    nonvar/1,
-    integer/1,
-    atom/1,
-    boolean/1,
-    string/1,
-    ground/1,
-    unifiable/2,
-    term_variables/1,
-    compound_to_list/1,
-    list_to_compound/1,
+    fun '+'/2,
+    fun '-'/2,
+    fun '*'/2,
+    fun '//'/2,
+    fun 'div'/2,
+    fun 'mod'/2,
+    fun 'rem'/2,
+    fun '<'/2,
+    fun '>'/2,
+    fun '>='/2,
+    fun '=<'/2,
+    fun '=='/2,
+    fun max/2,
+    fun min/2,
+    fun var/1,
+    fun nonvar/1,
+    fun integer/1,
+    fun float/1,
+    fun atom/1,
+    fun boolean/1,
+    fun string/1,
+    fun ground/1,
+    fun int_to_float/1,
+    fun float_to_int/1,
+    fun unifiable/2,
+    fun term_variables/1,
+    fun compound_to_list/1,
+    fun list_to_compound/1,
+    fun copy_term/1,
     write/1,
     nl/0,
     writeln/1,
+    fun call/2,
+    fun call/3,
     op(500, yfx, '+'),
     op(500, yfx, '-'),
     op(400, yfx, '*'),
+    op(400, yfx, '//'),
     op(400, yfx, div),
     op(400, yfx, mod),
     op(400, yfx, rem),
@@ -51,36 +59,52 @@
     writeln/1.
 
 :- function
-    '+'/2,
-    '-'/2,
-    '*'/2,
-    'div'/2,
-    'mod'/2,
+    ('+'(int, int) -> int),
+    ('+'(float, float) -> float),
+    ('-'(int, int) -> int),
+    ('-'(float, float) -> float),
+    ('*'(int, int) -> int),
+    ('*'(float, float) -> float),
+    ('//'(float, float) -> float),
+    ('div'(int, int) -> int),
+    ('mod'(int, int) -> int),
     'rem'/2,
-    '<'/2,
-    '>'/2,
-    '>='/2,
-    '=<'/2,
-    '=='/2,
+    ('<'(int, int) -> bool),
+    ('<'(float, float) -> bool),
+    ('>'(int, int) -> bool),
+    ('>'(float, float) -> bool),
+    ('>='(int, int) -> bool),
+    ('>='(float, float) -> bool),
+    ('=<'(int, int) -> bool),
+    ('=<'(float, float) -> bool),
+    ('=='(A, A) -> bool),
     max/2,
     min/2,
-    var/1,
-    nonvar/1,
-    integer/1,
-    atom/1,
-    boolean/1,
-    string/1,
-    ground/1,
-    unifiable/2,
+    (var(any) -> bool),
+    (nonvar(any) -> bool),
+    (integer(any) -> bool),
+    (float(any) -> bool),
+    (atom(any) -> bool),
+    (boolean(any) -> bool),
+    (string(any) -> bool),
+    (ground(any) -> bool),
+    (int_to_float(int) -> float),
+    (float_to_int(float) -> int),
+    (copy_term(A) -> A),
+    (unifiable(any, any) -> bool),
     term_variables/1,
-    compound_to_list/1,
-    list_to_compound/1.
+    (compound_to_list(any) -> list(any)),
+    (list_to_compound(list(any)) -> any),
+    (call(fun(A) -> B end, A) -> B),
+    (call(fun(A, B) -> C end, A, B) -> C).
 
 X + Y -> host:'+'(X, Y).
 
 X - Y -> host:'-'(X, Y).
 
 X * Y -> host:'*'(X, Y).
+
+X // Y -> host:'//'(X, Y).
 
 X div Y -> host:'div'(X, Y).
 
@@ -110,6 +134,12 @@ nonvar(X) -> host:nonvar(X).
 
 integer(X) -> host:integer(X).
 
+float(X) -> host:float(X).
+
+int_to_float(X) -> host:int_to_float(X).
+
+float_to_int(X) -> host:float_to_int(X).
+
 atom(X) -> host:atom(X).
 
 boolean(X) -> host:boolean(X).
@@ -131,3 +161,9 @@ write(S) <=> host:write(S).
 nl <=> host:write("\n").
 
 writeln(S) <=> write(S), nl.
+
+copy_term(T) -> host:copy_term(T).
+
+call(F, X) -> '$call'(F, X).
+
+call(F, X, Y) -> '$call'(F, X, Y).

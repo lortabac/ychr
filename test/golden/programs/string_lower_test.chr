@@ -1,3 +1,7 @@
-:- module(string_lower_test, []).
+:- module(string_lower_test, [go/2]).
 
 :- use_module(library(strings)).
+
+:- chr_constraint go/2.
+
+go(S, R) <=> R is string_lower(S).

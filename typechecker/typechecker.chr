@@ -1,0 +1,270 @@
+:- module(typechecker, [
+    constraint_sig/2,
+    function_sig/2,
+    function_sigs/2,
+    con_sig/2,
+    check_constraint_use/3,
+    check_function_use/4,
+    check_constructor_use/4,
+    check_unify/3,
+    check_guard_bool/2,
+    check_guard_getarg/5,
+    errors/1,
+    collect/1
+]).
+
+:- use_module(library(prelude)).
+:- use_module(library(lists)).
+
+:- chr_constraint
+    constraint_sig/2,
+    function_sig/2,
+    function_sigs/2,
+    con_sig/2,
+    check_constraint_use/3,
+    check_function_use/4,
+    check_constructor_use/4,
+    check_unify/3,
+    check_guard_bool/2,
+    check_guard_getarg/5,
+    check_arg_list/3,
+    tc_unify/3,
+    tc_unify_list/3,
+    resolve_overload/4,
+    report_error/3,
+    errors/1,
+    collect/1.
+
+:- function sig_fst/1, sig_snd/1.
+sig_fst(sig(X, _)) -> X.
+sig_snd(sig(_, Y)) -> Y.
+
+:- function
+    all_nonvar_list/1,
+    filter_consistent/2,
+    sig_args_consistent/2,
+    (type_consistent(any, any) -> bool).
+
+all_nonvar_list([]) -> true.
+all_nonvar_list([X|Xs]) | nonvar(X) -> all_nonvar_list(Xs).
+all_nonvar_list([X|_]) | var(X) -> false.
+
+filter_consistent([], _) -> [].
+filter_consistent([Sig|Rest], ArgTypes) | sig_args_consistent(sig_fst(Sig), ArgTypes) ->
+    [Sig | filter_consistent(Rest, ArgTypes)].
+filter_consistent([_|Rest], ArgTypes) -> filter_consistent(Rest, ArgTypes).
+
+sig_args_consistent([], []) -> true.
+sig_args_consistent([D|Ds], [A|As]) | type_consistent(D, A) -> sig_args_consistent(Ds, As).
+sig_args_consistent(_, _) -> false.
+
+type_consistent(_, A) | var(A) -> true.
+type_consistent(any, _) -> true.
+type_consistent(_, any) -> true.
+type_consistent(X, X) -> true.
+type_consistent(_, _) -> false.
+
+% ==========================================================================
+% Declaration matching
+% ==========================================================================
+
+% Constraint usage: copy_term the declaration, check args pairwise
+constraint_match @
+    constraint_sig(Name, DeclTypes) \
+        check_constraint_use(Name, ArgTypes, Ctx) <=>
+    FreshTypes is copy_term(term(DeclTypes)),
+    check_arg_list(FreshTypes, ArgTypes, Ctx).
+
+% Unknown constraint
+unknown_constraint @
+    check_constraint_use(Name, _, Ctx) <=>
+    report_error(Ctx, unknown_constraint, Name).
+
+% Function usage: copy_term preserves arg/ret sharing
+function_match @
+    function_sig(Name, Sig) \
+        check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
+    Fresh is copy_term(term(Sig)),
+    FreshArgTypes is sig_fst(Fresh),
+    FreshRetType is sig_snd(Fresh),
+    check_arg_list(FreshArgTypes, ArgTypes, Ctx),
+    tc_unify(RetTypeVar, FreshRetType, Ctx).
+
+% Overloaded function: filter matching sigs and resolve.
+% filter_consistent treats var args as consistent with any declared type.
+% If all args are vars, all sigs match → ambiguous → succeed silently.
+% If some args are nonvar and narrow to one sig, that sig is applied.
+overloaded_function_match @
+    function_sigs(Name, Sigs) \
+        check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
+    Matching is filter_consistent(Sigs, ArgTypes),
+    resolve_overload(Matching, ArgTypes, RetTypeVar, Ctx).
+
+% Note: unknown_function detection is handled by the Haskell driver
+% (typeOfCompound checks funSet before emitting check_function_use).
+% Residual check_function_use constraints (from overloaded functions
+% whose args never resolve) are harmless — they represent genuinely
+% polymorphic/ambiguous usage in gradual typing.
+
+% Constructor usage: copy_term preserves parent/field sharing
+constructor_match @
+    con_sig(ConName, Sig) \
+        check_constructor_use(ConName, ArgTypes, ResultTypeVar, Ctx) <=>
+    Fresh is copy_term(term(Sig)),
+    FreshParent is sig_fst(Fresh),
+    FreshFields is sig_snd(Fresh),
+    check_arg_list(FreshFields, ArgTypes, Ctx),
+    tc_unify(ResultTypeVar, FreshParent, Ctx).
+
+% Unknown constructor -> any (not an error)
+unknown_constructor @
+    check_constructor_use(_, _, ResultTypeVar, _) <=>
+    ResultTypeVar = any.
+
+% ==========================================================================
+% Argument list checking
+% ==========================================================================
+
+check_arg_cons @
+    check_arg_list([D|Ds], [A|As], Ctx) <=>
+    tc_unify(A, D, Ctx),
+    check_arg_list(Ds, As, Ctx).
+
+check_arg_nil @
+    check_arg_list([], [], _) <=> true.
+
+% Note: mismatched list lengths (one side exhausted before the other)
+% are left unsolved rather than reported as errors. This can happen
+% legitimately when a constraint or function is overloaded by arity:
+% the declaration-matching rules match by name only, so a wrong-arity
+% declaration may be tried first, leaving a residual check_arg_list
+% that simply stays inert. The correct-arity declaration will match
+% separately.
+
+% ==========================================================================
+% Delegation rules
+% ==========================================================================
+
+delegate_unify @
+    check_unify(T1, T2, Ctx) <=> tc_unify(T1, T2, Ctx).
+
+delegate_guard_bool @
+    check_guard_bool(T, Ctx) <=>
+    tc_unify(T, tcon(prelude:bool, []), Ctx).
+
+delegate_guard_getarg @
+    con_sig(ConName, Sig) \
+        check_guard_getarg(ResultType, TermType, ConName, FieldIndex, Ctx) <=>
+    Fresh is copy_term(term(Sig)),
+    FreshParent is sig_fst(Fresh),
+    FreshFields is sig_snd(Fresh),
+    tc_unify(TermType, FreshParent, Ctx),
+    FieldType is nth(FieldIndex, FreshFields),
+    tc_unify(ResultType, FieldType, Ctx).
+
+% Unknown constructor in guard getarg -> result is any
+unknown_guard_getarg @
+    check_guard_getarg(ResultType, _, _, _, _) <=> ResultType = any.
+
+% ==========================================================================
+% tc_unify (type propagation and consistency)
+% ==========================================================================
+
+% --- any handling (must come first) ---
+
+% (1) Nonvar any on left -> succeed, don't touch right side
+tc_unify_any_left @
+    tc_unify(T1, _, _) <=> nonvar(T1), T1 == any | true.
+
+% (2) Both nonvar, any on right -> succeed
+tc_unify_any_right @
+    tc_unify(T1, T2, _) <=> nonvar(T1), nonvar(T2), T2 == any | true.
+
+% (3) Var on left, any on right -> bind var to any
+tc_unify_var_any @
+    tc_unify(T1, T2, _) <=> var(T1), nonvar(T2), T2 == any | T1 = any.
+
+% --- base types ---
+
+tc_unify_int @
+    tc_unify(int, int, _) <=> true.
+
+tc_unify_float @
+    tc_unify(float, float, _) <=> true.
+
+tc_unify_string @
+    tc_unify(string, string, _) <=> true.
+
+% --- type constructors: same name, check args ---
+
+tc_unify_tcon @
+    tc_unify(tcon(C, Args1), tcon(C, Args2), Ctx) <=>
+    tc_unify_list(Args1, Args2, Ctx).
+
+% --- function types ---
+
+tc_unify_fun @
+    tc_unify(fun(A1, R1), fun(A2, R2), Ctx) <=>
+    tc_unify_list(A1, A2, Ctx),
+    tc_unify(R1, R2, Ctx).
+
+% --- var rules ---
+
+tc_unify_var_nonvar @
+    tc_unify(T1, T2, _) <=> var(T1), nonvar(T2) | T1 = T2.
+
+tc_unify_nonvar_var @
+    tc_unify(T1, T2, _) <=> nonvar(T1), var(T2) | T2 = T1.
+
+tc_unify_var_var @
+    tc_unify(T1, T2, _) <=> var(T1), var(T2) | T1 = T2.
+
+% --- fallback: inconsistency ---
+
+tc_unify_error @
+    tc_unify(T1, T2, Ctx) <=> nonvar(T1), nonvar(T2) |
+    report_error(Ctx, inconsistent, pair(T1, T2)).
+
+% ==========================================================================
+% tc_unify_list
+% ==========================================================================
+
+tc_unify_list_nil @
+    tc_unify_list([], [], _) <=> true.
+
+tc_unify_list_cons @
+    tc_unify_list([H1|T1], [H2|T2], Ctx) <=>
+    tc_unify(H1, H2, Ctx),
+    tc_unify_list(T1, T2, Ctx).
+
+% ==========================================================================
+% Overload resolution
+% ==========================================================================
+
+% Exactly one matching signature: apply it
+resolve_one @
+    resolve_overload([Sig], ArgTypes, RetTypeVar, Ctx) <=>
+    FreshArgs is sig_fst(Sig),
+    FreshRet is sig_snd(Sig),
+    check_arg_list(FreshArgs, ArgTypes, Ctx),
+    tc_unify(RetTypeVar, FreshRet, Ctx).
+
+% No matching signature: error
+resolve_none @
+    resolve_overload([], _, _, Ctx) <=>
+    report_error(Ctx, no_matching_overload, overloaded).
+
+% Multiple matching signatures: ambiguous, succeed silently
+resolve_ambiguous @
+    resolve_overload([_, _ | _], _, _, _) <=> true.
+
+% ==========================================================================
+% Error accumulation
+% ==========================================================================
+
+accumulate_error @
+    report_error(Ctx, Code, Detail), errors(Es) <=>
+    errors([error(Ctx, Code, Detail) | Es]).
+
+collect_errors @
+    collect(E), errors(Es) <=> E = Es.

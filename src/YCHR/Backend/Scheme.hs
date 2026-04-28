@@ -330,6 +330,7 @@ compileExpr (FieldGet e FieldType) =
 
 compileLiteral :: Literal -> SExpr
 compileLiteral (IntLit n) = SInt n
+compileLiteral (FloatLit n) = SFloat n
 compileLiteral (AtomLit s) = compileSymbol s
 compileLiteral (TextLit s) = SString s
 compileLiteral (BoolLit True) = SAtom "#t"
@@ -351,11 +352,15 @@ compileSymbol s
 hostCallMap :: Map.Map Text Text
 hostCallMap =
   Map.fromList
-    [ ("div", "div"),
-      ("mod", "mod"),
+    [ ("div", "quotient"),
+      ("mod", "modulo"),
+      ("//", "/"),
       ("rem", "mod0"),
       ("=<", "<="),
       ("==", "eqv?"),
+      ("float", "flonum?"),
+      ("int_to_float", "exact->inexact"),
+      ("float_to_int", "exact-truncate"),
       ("write", "display"),
       ("print", "%print"),
       ("string_concat", "string-append"),

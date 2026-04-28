@@ -1,0 +1,7 @@
+:- module(tc, [paint/1]).
+:- chr_type color ---> red ; green ; blue.
+:- chr_constraint paint(color).
+:- function is_red(color) -> int.
+is_red(red) -> 1.
+is_red(_) -> 0.
+go @ paint(C) <=> true.

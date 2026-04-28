@@ -22,6 +22,7 @@ module YCHR.Runtime.Registry
 
     -- * Value predicates
     isInteger,
+    isFloat,
     isAtom,
     isBoolean,
     isString,
@@ -31,6 +32,7 @@ module YCHR.Runtime.Registry
     -- * Generic helpers
     allM,
     collectVars,
+    copyTerm,
     fromValueList,
     valueList,
   )
@@ -67,16 +69,20 @@ type HostCallRegistry = Map Name HostCallFn
 baseHostCallRegistry :: HostCallRegistry
 baseHostCallRegistry =
   Map.fromList
-    [ (Name "+", arith2 (+)),
-      (Name "-", arith2 (-)),
-      (Name "*", arith2 (*)),
-      (Name "div", arith2 div),
-      (Name "mod", arith2 mod),
-      (Name "<", cmp (<)),
-      (Name ">", cmp (>)),
-      (Name "=<", cmp (<=)),
-      (Name ">=", cmp (>=)),
+    [ (Name "+", numArith2 (+) (+)),
+      (Name "-", numArith2 (-) (-)),
+      (Name "*", numArith2 (*) (*)),
+      (Name "div", intArith2 div),
+      (Name "mod", intArith2 mod),
+      (Name "//", floatArith2 (/)),
+      (Name "<", numCmp (<) (<)),
+      (Name ">", numCmp (>) (>)),
+      (Name "=<", numCmp (<=) (<=)),
+      (Name ">=", numCmp (>=) (>=)),
       (Name "==", valEq),
+      (Name "float", typePred isFloat),
+      (Name "int_to_float", toFloatFn),
+      (Name "float_to_int", toIntFn),
       (Name "unifiable", unifiableHost),
       (Name "string_concat", stringConcat),
       (Name "string_length", stringLength),
@@ -93,20 +99,38 @@ baseHostCallRegistry =
       (Name "ground", groundPred),
       (Name "term_variables", termVariablesPred),
       (Name "compound_to_list", compoundToList),
-      (Name "list_to_compound", listToCompound)
+      (Name "list_to_compound", listToCompound),
+      (Name "copy_term", copyTermHost)
     ]
   where
-    arith2 op = HostCallFn $ \case
+    numArith2 intOp floatOp = HostCallFn $ \case
+      [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (intOp a b)))
+      [RVal (VFloat a), RVal (VFloat b)] -> pure (RVal (VFloat (floatOp a b)))
+      args -> error $ "arithmetic host call: expected 2 numeric arguments of same type, got " ++ show (length args)
+    intArith2 op = HostCallFn $ \case
       [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (op a b)))
-      args -> error $ "arithmetic host call: expected 2 Int arguments, got " ++ show (length args)
-    cmp op = HostCallFn $ \case
-      [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VBool (op a b)))
-      args -> error $ "comparison host call: expected 2 Int arguments, got " ++ show (length args)
+      args -> error $ "integer arithmetic host call: expected 2 Int arguments, got " ++ show (length args)
+    floatArith2 op = HostCallFn $ \case
+      [RVal (VFloat a), RVal (VFloat b)] -> pure (RVal (VFloat (op a b)))
+      args -> error $ "float arithmetic host call: expected 2 Float arguments, got " ++ show (length args)
+    numCmp intOp floatOp = HostCallFn $ \case
+      [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VBool (intOp a b)))
+      [RVal (VFloat a), RVal (VFloat b)] -> pure (RVal (VBool (floatOp a b)))
+      args -> error $ "comparison host call: expected 2 numeric arguments of same type, got " ++ show (length args)
+    toFloatFn = HostCallFn $ \case
+      [RVal (VInt n)] -> pure (RVal (VFloat (fromIntegral n)))
+      [RVal (VFloat n)] -> pure (RVal (VFloat n))
+      _ -> error "int_to_float: expected 1 numeric argument"
+    toIntFn = HostCallFn $ \case
+      [RVal (VFloat n)] -> pure (RVal (VInt (truncate n)))
+      [RVal (VInt n)] -> pure (RVal (VInt n))
+      _ -> error "float_to_int: expected 1 numeric argument"
     unifiableHost = HostCallFn $ \case
       [RVal a, RVal b] -> RVal . VBool <$> unifiable a b
       args -> error $ "unifiable host call: expected 2 arguments, got " ++ show (length args)
     valEq = HostCallFn $ \case
       [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VBool (a == b)))
+      [RVal (VFloat a), RVal (VFloat b)] -> pure (RVal (VBool (a == b)))
       [RVal (VAtom a), RVal (VAtom b)] -> pure (RVal (VBool (a == b)))
       [RVal (VText a), RVal (VText b)] -> pure (RVal (VBool (a == b)))
       [RVal (VBool a), RVal (VBool b)] -> pure (RVal (VBool (a == b)))
@@ -156,6 +180,9 @@ baseHostCallRegistry =
         Just (VAtom f : args) -> pure (RVal (VTerm f args))
         _ -> error "list_to_compound: expected a non-empty list with an atom head"
       _ -> error "list_to_compound: expected 1 list argument"
+    copyTermHost = HostCallFn $ \case
+      [RVal v] -> RVal <$> copyTerm v
+      _ -> error "copy_term: expected 1 argument"
 
 -- ---------------------------------------------------------------------------
 -- Utilities
@@ -178,6 +205,11 @@ toValue (RConstraint _) = error "toValue: cannot convert constraint ID to Value"
 isInteger :: Value -> Bool
 isInteger (VInt _) = True
 isInteger _ = False
+
+-- | Check whether a 'Value' is a float.
+isFloat :: Value -> Bool
+isFloat (VFloat _) = True
+isFloat _ = False
 
 -- | Check whether a 'Value' is an atom.
 isAtom :: Value -> Bool
@@ -207,6 +239,38 @@ isNonvar = not . isVar
 -- ---------------------------------------------------------------------------
 -- Generic helpers
 -- ---------------------------------------------------------------------------
+
+-- | Deep-copy a term, replacing all unbound variables with fresh ones.
+-- Preserves sharing: the same original variable always maps to the same
+-- fresh variable across the entire copied term.
+copyTerm :: (Unify :> es, IOE :> es) => Value -> Eff es Value
+copyTerm val = fst <$> go Map.empty val
+  where
+    go cache v = do
+      v' <- deref v
+      case v' of
+        VVar _ -> do
+          mid <- getVarId v'
+          case mid of
+            Just vid -> case Map.lookup vid cache of
+              Just fresh -> pure (fresh, cache)
+              Nothing -> do
+                fresh <- newVar
+                pure (fresh, Map.insert vid fresh cache)
+            Nothing -> pure (v', cache)
+        VWildcard -> do
+          fresh <- newVar
+          pure (fresh, cache)
+        VTerm f args -> do
+          (args', cache') <- goMany cache args
+          pure (VTerm f args', cache')
+        other -> pure (other, cache)
+
+    goMany cache [] = pure ([], cache)
+    goMany cache (x : xs) = do
+      (x', cache') <- go cache x
+      (xs', cache'') <- goMany cache' xs
+      pure (x' : xs', cache'')
 
 -- | Collect all unique unbound variables in a term, traversing into
 -- compound term arguments. Wildcards are replaced with fresh variables.

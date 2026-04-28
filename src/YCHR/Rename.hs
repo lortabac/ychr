@@ -45,6 +45,7 @@ module YCHR.Rename (renameProgram, buildExportEnv, renameQueryGoals, RenameError
 
 import Control.Monad (when)
 import Data.Foldable (traverse_)
+import Data.List (nub)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -277,7 +278,8 @@ renameModule ctx = do
   renamedRules <- traverse (renameRule ctx) m.rules
   renamedEquations <- traverse (traverse (renameEquation ctx)) m.equations
   let renamedTypeDecls = map (fmap (renameTypeDefinition ctx)) m.typeDecls
-  pure m {rules = renamedRules, equations = renamedEquations, typeDecls = renamedTypeDecls}
+      renamedDecls = map (fmap (renameDeclaration ctx)) m.decls
+  pure m {rules = renamedRules, equations = renamedEquations, typeDecls = renamedTypeDecls, decls = renamedDecls}
 
 -- | Validate import lists. Three checks:
 --
@@ -400,8 +402,16 @@ renameTerm ctx loc origin mode t = case t of
   CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body] | mode /= NoResolve -> do
     renamedBody <- renameTerm ctx loc origin ResolveAll body
     pure (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, renamedBody])
-  -- Function reference: @name/arity@. Resolve the function name.
-  CompoundTerm (Unqualified "/") [AtomTerm fname, IntTerm farity] | mode /= NoResolve -> do
+  -- Quoting: @term(X)@ suppresses resolution of functor names inside the
+  -- argument so the surface-level term structure is preserved.  Variables
+  -- are still renamed (they need runtime resolution), but compound-term
+  -- heads stay unqualified.
+  CompoundTerm (Unqualified "term") [arg] | mode /= NoResolve -> do
+    renamedArg <- renameTerm ctx loc origin NoResolve arg
+    pure (CompoundTerm (Unqualified "term") [renamedArg])
+  -- Function reference: @fun name/arity@. Resolve the function name,
+  -- then strip the @fun@ wrapper so downstream passes see bare @name/arity@.
+  CompoundTerm (Unqualified "fun") [CompoundTerm (Unqualified "/") [AtomTerm fname, IntTerm farity]] | mode /= NoResolve -> do
     resolved <- resolveName ResolveAll ctx loc origin (Unqualified fname) farity
     pure (CompoundTerm (Unqualified "/") [AtomTerm (flattenName resolved), IntTerm farity])
   CompoundTerm name args -> do
@@ -478,7 +488,9 @@ visibleProviders ctx n arity =
         filter
           (\mn -> any (\(imn, il) -> imn == mn && importListPermits n arity il) imports)
           (lookupExport (n, arity) ctx.exportEnv)
-   in ownProviders ++ importProviders
+   in -- Deduplicate: multiple declarations with the same name/arity in
+      -- one module (e.g., overloaded function signatures) are not ambiguous.
+      nub (ownProviders ++ importProviders)
 
 -- | Check whether a name/arity is permitted by an import list.
 -- 'Nothing' means import everything; 'Just' restricts to listed items.
@@ -554,6 +566,13 @@ renameDataConstructor ctx dc =
     { conName = Qualified ctx.currentModule.name (unqualifiedText dc.conName),
       conArgs = map (renameTypeExpr ctx) dc.conArgs
     }
+
+renameDeclaration :: RenameCtx -> Declaration -> Declaration
+renameDeclaration ctx d@ConstraintDecl {argTypes} =
+  d {argTypes = fmap (map (renameTypeExpr ctx)) argTypes}
+renameDeclaration ctx d@FunctionDecl {argTypes, returnType} =
+  d {argTypes = fmap (map (renameTypeExpr ctx)) argTypes, returnType = fmap (renameTypeExpr ctx) returnType}
+renameDeclaration _ d = d
 
 renameTypeExpr :: RenameCtx -> TypeExpr -> TypeExpr
 renameTypeExpr _ (TypeVar v) = TypeVar v

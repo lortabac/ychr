@@ -1,0 +1,4 @@
+:- module(tc, [foo/1]).
+:- chr_type wrapper ---> wrap(nonexistent).
+:- chr_constraint foo/1.
+foo(X) <=> true.

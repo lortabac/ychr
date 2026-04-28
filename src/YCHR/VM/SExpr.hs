@@ -173,6 +173,7 @@ exprToSExpr (FieldGet e f) = SList [SAtom "field-get", exprToSExpr e, fieldToSEx
 
 literalToSExpr :: Literal -> SExpr
 literalToSExpr (IntLit n) = SList [SAtom "int", SInt n]
+literalToSExpr (FloatLit n) = SList [SAtom "float", SFloat n]
 literalToSExpr (AtomLit s) = SList [SAtom "atom", SString s]
 literalToSExpr (TextLit s) = SList [SAtom "text", SString s]
 literalToSExpr (BoolLit True) = SAtom "true"

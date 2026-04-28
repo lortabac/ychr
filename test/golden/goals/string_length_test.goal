@@ -1,1 +1,1 @@
-strings:string_length("hello", R)
+string_length_test:go("hello", R)

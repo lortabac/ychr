@@ -1,0 +1,18 @@
+:- module(overload_mismatch, [result/2]).
+:- use_module(library(prelude)).
+
+:- chr_constraint result(any, any).
+
+:- chr_type color ---> red ; green ; blue.
+
+% Overloaded function: works on int and string only
+:- function
+    (size(int) -> int),
+    (size(string) -> int).
+
+size(N) | integer(N) -> N.
+size(S) | string(S) -> string_length(S).
+
+% Type error: color is not a valid argument for size
+:- chr_constraint foo(color).
+foo(X) <=> R is size(X).

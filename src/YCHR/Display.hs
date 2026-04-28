@@ -10,11 +10,12 @@ module YCHR.Display
     displayErrorCode,
     collectErrorCode,
     parseValidationErrorCode,
-    validationErrorCode,
+    resolveErrorCode,
     renameErrorCode,
     renameWarningCode,
     desugarErrorCode,
     compileErrorCode,
+    typeCheckErrorCode,
     parseErrorCode,
     operatorConflictCode,
   )
@@ -36,9 +37,10 @@ import YCHR.Parsed qualified as P
 import YCHR.Parser (ParseValidationError (..))
 import YCHR.Pretty (prettyPExprSrc, prettyTermSrc)
 import YCHR.Rename (RenameError (..), RenameWarning (..))
+import YCHR.Resolve (ResolveError (..))
 import YCHR.Run (Error (..), Warning (..))
+import YCHR.TypeCheck (TypeCheckError (..))
 import YCHR.Types qualified as Types
-import YCHR.Validate (ValidationError (..))
 
 class Display a where
   displayMsg :: a -> String
@@ -124,10 +126,11 @@ collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
 parseValidationErrorCode :: ParseValidationError -> ErrorCode
 parseValidationErrorCode (DiscontiguousEquations _) = ErrorCode 15001
 
--- | 16xxx — validation phase (post-rename, pre-desugar)
-validationErrorCode :: ValidationError -> ErrorCode
-validationErrorCode (ConstraintHasEquations _) = ErrorCode 16001
-validationErrorCode (FunctionInRuleHead _) = ErrorCode 16002
+-- | 16xxx — resolve phase (post-rename, pre-desugar)
+resolveErrorCode :: ResolveError -> ErrorCode
+resolveErrorCode (ConstraintHasEquations _) = ErrorCode 16001
+resolveErrorCode (FunctionInRuleHead _) = ErrorCode 16002
+resolveErrorCode (ReservedName _) = ErrorCode 16003
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 was previously used for OperatorInImportList; now reserved
@@ -154,6 +157,15 @@ desugarErrorCode (InvalidLambdaParam _) = ErrorCode 30003
 compileErrorCode :: CompileError -> ErrorCode
 compileErrorCode (UnknownConstraintType _) = ErrorCode 40001
 compileErrorCode (UnboundVariable _) = ErrorCode 40002
+
+-- | 6xxxx — type-check phase
+typeCheckErrorCode :: TypeCheckError -> ErrorCode
+typeCheckErrorCode (InconsistentTypes _ _) = ErrorCode 60001
+typeCheckErrorCode (UnknownConstraint _) = ErrorCode 60002
+typeCheckErrorCode (UnknownFunction _) = ErrorCode 60003
+typeCheckErrorCode (UnboundTypeVar _ _ _) = ErrorCode 60004
+typeCheckErrorCode (UndefinedType _ _ _) = ErrorCode 60005
+typeCheckErrorCode (NoMatchingOverload _) = ErrorCode 60006
 
 -- | 5xxxx — top-level errors
 parseErrorCode :: ErrorCode
@@ -182,23 +194,26 @@ parseValidationErrorMsg (DiscontiguousEquations name) =
     ++ T.unpack name
     ++ " must be contiguous (or declare it with :- open_function)"
 
-instance Display (Diagnostic ValidationError) where
+instance Display (Diagnostic ResolveError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
     displayMsgWithSrcLoc
-      (validationErrorCode err)
+      (resolveErrorCode err)
       SevError
-      (validationErrorMsg err)
+      (resolveErrorMsg err)
       loc
       (fmap T.unpack lbl)
       (Just (prettyPExprSrc origin))
 
-validationErrorMsg :: ValidationError -> String
-validationErrorMsg (ConstraintHasEquations name) =
+resolveErrorMsg :: ResolveError -> String
+resolveErrorMsg (ConstraintHasEquations name) =
   displayName name
     ++ " is declared as a constraint but has function equations (->)"
-validationErrorMsg (FunctionInRuleHead name) =
+resolveErrorMsg (FunctionInRuleHead name) =
   displayName name
     ++ " is declared as a function but appears in a rule head"
+resolveErrorMsg (ReservedName name) =
+  displayName name
+    ++ " is a reserved name and cannot be used as a constraint or function"
 
 instance Display (Diagnostic CollectError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -303,6 +318,42 @@ compileErrorMsg :: CompileError -> String
 compileErrorMsg (UnknownConstraintType name) = "Unknown constraint type '" ++ displayName name ++ "'"
 compileErrorMsg (UnboundVariable var) = "Unbound variable '" ++ T.unpack var ++ "'"
 
+instance Display (Diagnostic TypeCheckError) where
+  displayMsg (Diagnostic lbl (AnnP err loc origin)) =
+    displayMsgWithSrcLoc
+      (typeCheckErrorCode err)
+      SevError
+      (typeCheckErrorMsg err)
+      loc
+      (fmap T.unpack lbl)
+      (Just (prettyPExprSrc origin))
+
+typeCheckErrorMsg :: TypeCheckError -> String
+typeCheckErrorMsg (InconsistentTypes t1 t2) =
+  "Type mismatch: " ++ T.unpack t1 ++ " is inconsistent with " ++ T.unpack t2
+typeCheckErrorMsg (UnknownConstraint name) =
+  "Unknown constraint: " ++ T.unpack name
+typeCheckErrorMsg (UnknownFunction name) =
+  "Unknown function: " ++ T.unpack name
+typeCheckErrorMsg (UnboundTypeVar typeName conName varName) =
+  "In type "
+    ++ T.unpack typeName
+    ++ ", constructor "
+    ++ T.unpack conName
+    ++ ": type variable "
+    ++ T.unpack varName
+    ++ " is not bound by the type header"
+typeCheckErrorMsg (NoMatchingOverload name) =
+  "No matching overload for: " ++ T.unpack name
+typeCheckErrorMsg (UndefinedType typeName conName refName) =
+  "In type "
+    ++ T.unpack typeName
+    ++ ", constructor "
+    ++ T.unpack conName
+    ++ ": type "
+    ++ T.unpack refName
+    ++ " is not defined"
+
 displayName :: Types.Name -> String
 displayName (Types.Unqualified n) = T.unpack n
 displayName (Types.Qualified m n) = T.unpack m ++ ":" ++ T.unpack n
@@ -326,7 +377,7 @@ instance Display Error where
   displayMsg (ParseValidationErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (CollectErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (RenameErrors errs) = displayErrors (map displayMsg errs)
-  displayMsg (ValidationErrors errs) = displayErrors (map displayMsg errs)
+  displayMsg (ResolveErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (DesugarErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (CompileErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (OperatorConflict (AnnP name loc origin)) =

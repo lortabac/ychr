@@ -230,6 +230,7 @@ groundEq _ _ = False
 -- | Show a ground 'Value' for test diagnostics.
 showGroundValue :: Value -> String
 showGroundValue (VInt n) = "VInt " ++ show n
+showGroundValue (VFloat n) = "VFloat " ++ show n
 showGroundValue (VAtom a) = "VAtom " ++ show a
 showGroundValue (VText t) = "VText " ++ show t
 showGroundValue (VBool b) = "VBool " ++ show b

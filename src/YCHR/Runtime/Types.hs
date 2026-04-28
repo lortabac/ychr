@@ -37,6 +37,7 @@ data Value
   = -- | A logical variable (possibly unbound, possibly bound).
     VVar !Var
   | VInt !Int
+  | VFloat !Double
   | VAtom !Text
   | VText !Text
   | VBool !Bool

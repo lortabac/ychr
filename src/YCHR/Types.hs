@@ -43,18 +43,18 @@ import Language.Haskell.TH.Syntax (Lift)
 
 -- | A numeric identifier for a constraint type, assigned by the symbol table.
 newtype ConstraintType = ConstraintType {unConstraintType :: Int}
-  deriving (Show, Eq, Ord)
+  deriving (Show, Eq, Ord, Lift)
 
 -- | A numeric identifier for a rule, assigned in source order during
 -- occurrence collection. Used as the propagation history key. Keeping
 -- identity numeric (rather than textual) ensures two rules named
 -- @trans@ in different modules cannot collide in the history.
 newtype RuleId = RuleId {unRuleId :: Int}
-  deriving (Show, Eq, Ord)
+  deriving (Show, Eq, Ord, Lift)
 
 -- | A name together with its arity, identifying a constraint or function.
 data Identifier = Identifier {name :: Name, arity :: Int}
-  deriving (Show, Eq, Ord)
+  deriving (Show, Eq, Ord, Lift)
 
 -- | An unqualified name with its arity.  Used in 'exportMap' where
 -- names are looked up before qualification.
@@ -62,7 +62,7 @@ data UnqualifiedIdentifier = UnqualifiedIdentifier
   { localName :: Text,
     arity :: Int
   }
-  deriving (Show, Eq, Ord)
+  deriving (Show, Eq, Ord, Lift)
 
 -- | A fully-qualified name with its arity.  Used in 'exportedSet' where
 -- all names are guaranteed to be module-qualified.
@@ -71,11 +71,11 @@ data QualifiedIdentifier = QualifiedIdentifier
     localName :: Text,
     arity :: Int
   }
-  deriving (Show, Eq, Ord)
+  deriving (Show, Eq, Ord, Lift)
 
 -- | Maps identifiers (name + arity) to unique 0-indexed numeric IDs.
 newtype SymbolTable = SymbolTable (Map Identifier ConstraintType)
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 mkSymbolTable :: [(Identifier, ConstraintType)] -> SymbolTable
 mkSymbolTable = SymbolTable . Map.fromList
@@ -135,6 +135,7 @@ data TypeExpr
 data Term
   = VarTerm Text
   | IntTerm Int
+  | FloatTerm Double
   | AtomTerm Text
   | TextTerm Text
   | CompoundTerm Name [Term]

@@ -83,8 +83,7 @@ data BodyGoal
 data Function = Function
   { name :: Name,
     arity :: Int,
-    argTypes :: Maybe [TypeExpr],
-    returnType :: Maybe TypeExpr,
+    signatures :: [([TypeExpr], TypeExpr)],
     equations :: AnnP [Equation]
   }
   deriving (Show)

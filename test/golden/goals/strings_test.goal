@@ -1,1 +1,1 @@
-strings:string_concat("hello ", "world", R)
+strings_test:go("hello ", "world", R)

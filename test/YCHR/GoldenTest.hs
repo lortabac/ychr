@@ -13,8 +13,9 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Display (Display (..))
 import YCHR.Meta (metaHostCallRegistry)
 import YCHR.Pretty (prettyBindings)
-import YCHR.Run (compileFiles, runProgramWithGoal)
+import YCHR.Run (CompiledProgram (..), compileFiles, runProgramWithGoal)
 import YCHR.Runtime.Interpreter (baseHostCallRegistry)
+import YCHR.TypeCheck (typeCheckProgram)
 
 tests :: IO TestTree
 tests = do
@@ -48,6 +49,11 @@ makePositiveTest base name = testCase name $ do
   (prog, _) <-
     compileFiles False [base </> "programs" </> name <.> "chr"]
       >>= either (assertFailure . show) pure
+  -- Type-check the program
+  typeErrors <- typeCheckProgram prog.desugaredProgram
+  case typeErrors of
+    [] -> pure ()
+    errs -> assertFailure ("Type errors in " ++ name ++ ":\n" ++ unlines (map displayMsg errs))
   query <- TIO.readFile (base </> "goals" </> name <.> "goal")
   expected <- readFile (base </> "expected" </> name <.> "expected")
   (_, bindings) <- runProgramWithGoal prog (baseHostCallRegistry <> metaHostCallRegistry) (T.strip query)
@@ -63,7 +69,15 @@ makeNegativeTest base name = testCase name $ do
       assertBool
         ("Expected error code " ++ expectedCode ++ " in:\n" ++ msg)
         (expectedCode `isInfixOf` msg)
-    Right _ ->
-      assertFailure "Expected compilation to fail, but it succeeded"
+    Right (prog, _) -> do
+      -- Compilation succeeded; try type checking
+      typeErrors <- typeCheckProgram prog.desugaredProgram
+      case typeErrors of
+        [] -> assertFailure "Expected compilation or type checking to fail, but it succeeded"
+        errs -> do
+          let msg = unlines (map displayMsg errs)
+          assertBool
+            ("Expected error code " ++ expectedCode ++ " in:\n" ++ msg)
+            (expectedCode `isInfixOf` msg)
   where
     trim = reverse . dropWhile isSpace . reverse . dropWhile isSpace

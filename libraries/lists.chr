@@ -1,14 +1,15 @@
 :- module(lists, [
-    cons/2,
-    head/1,
-    tail/1,
-    length/1,
-    member/2,
-    append/2,
-    maplist/2,
-    foldl/3,
-    sum_list/1,
-    product_list/1
+    fun cons/2,
+    fun head/1,
+    fun tail/1,
+    fun length/1,
+    fun member/2,
+    fun append/2,
+    fun maplist/2,
+    fun foldl/3,
+    fun sum_list/1,
+    fun product_list/1,
+    fun nth/2
 ]).
 
 :- function
@@ -22,7 +23,8 @@
     foldl/3,
     foldl_/3,
     sum_list/1,
-    product_list/1.
+    product_list/1,
+    nth/2.
 
 cons(X, Xs) -> [X|Xs].
 
@@ -41,13 +43,16 @@ append([], Ys) -> Ys.
 append([X|Xs], Ys) -> cons(X, append(Xs, Ys)).
 
 maplist(_, []) -> [].
-maplist(F, [X|Xs]) -> cons(call(F, X), maplist(F, Xs)).
+maplist(F, [X|Xs]) -> cons('$call'(F, X), maplist(F, Xs)).
 
 foldl(F, Init, Xs) -> foldl_(F, Xs, Init).
 
 foldl_(F, [], Acc) -> Acc.
-foldl_(F, [X|Xs], Acc) -> foldl_(F, Xs, call(F, Acc, X)).
+foldl_(F, [X|Xs], Acc) -> foldl_(F, Xs, '$call'(F, Acc, X)).
 
-sum_list(Xs) -> foldl('+'/2, 0, Xs).
+sum_list(Xs) -> foldl(fun '+'/2, 0, Xs).
 
-product_list(Xs) -> foldl('*'/2, 1, Xs).
+product_list(Xs) -> foldl(fun '*'/2, 1, Xs).
+
+nth(0, [X|_]) -> X.
+nth(N, [_|Xs]) | N > 0 -> nth(N - 1, Xs).

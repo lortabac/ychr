@@ -61,6 +61,7 @@ where
 import Data.String (IsString (..))
 import Data.Text (Text)
 import Data.Text qualified as T
+import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Loc (SourceLoc)
 import YCHR.Types (ConstraintType (..), RuleId (..))
 
@@ -76,7 +77,7 @@ data StackFrame = StackFrame
     -- | Pretty-printed source code (from the parsed expression).
     frameSourceCode :: Text
   }
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 -- | A VM program is a collection of named procedures.
 data Program = Program
@@ -98,7 +99,7 @@ data Program = Program
     -- | The procedures that make up the program.
     procedures :: [Procedure]
   }
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 -- | A named procedure with parameters and a body.
 --
@@ -122,7 +123,7 @@ data Procedure = Procedure
     -- | Body statements
     body :: [Stmt]
   }
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 -- | Statements (imperative, side-effecting).
 data Stmt
@@ -191,7 +192,7 @@ data Stmt
     -- The interpreter automatically pops frames when a procedure
     -- returns (save\/restore around 'callProc').
     PushFrame StackFrame
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 -- | Expressions (side-effect-free, except for 'Unify' and 'HostCall').
 data Expr
@@ -268,7 +269,7 @@ data Expr
 
     -- | Access a field of a constraint suspension.
     FieldGet Expr Field
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 -- | Fields of a constraint suspension.
 data Field
@@ -278,12 +279,14 @@ data Field
     FieldArg ArgIndex
   | -- | The constraint type (for dispatch in reactivation).
     FieldType
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 -- | Literal values.
 data Literal
   = -- | Integer literal.
     IntLit Int
+  | -- | Floating-point literal.
+    FloatLit Double
   | -- | Atom literal (symbolic constant).
     AtomLit Text
   | -- | Text (string) literal.
@@ -292,20 +295,20 @@ data Literal
     BoolLit Bool
   | -- | Wildcard literal: evaluates to 'VWildcard'.
     WildcardLit
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 -- | Zero-based index into a constraint's argument list.
 newtype ArgIndex = ArgIndex Int
-  deriving (Show, Eq)
+  deriving (Show, Eq, Lift)
 
 -- | Variable or procedure name.
 newtype Name = Name {unName :: Text}
-  deriving (Show, Eq, Ord)
+  deriving (Show, Eq, Ord, Lift)
 
 instance IsString Name where fromString = Name . T.pack
 
 -- | Label for 'Foreach' loops, used with 'Continue' and 'Break'.
 newtype Label = Label {unLabel :: Text}
-  deriving (Show, Eq, Ord)
+  deriving (Show, Eq, Ord, Lift)
 
 instance IsString Label where fromString = Label . T.pack

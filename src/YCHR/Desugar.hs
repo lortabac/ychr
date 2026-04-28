@@ -3,35 +3,36 @@
 
 -- |
 -- Module      : YCHR.Desugar
--- Description : Transforms the renamed surface AST into the compiler's internal AST.
+-- Description : Transforms the resolved AST into the compiler's internal AST.
 --
--- The Desugarer is the transformation pass between the renamed
--- 'YCHR.Parsed' AST and the internal 'YCHR.Desugared.Program' consumed by
--- the compiler. It performs, in order:
+-- The Desugarer is the transformation pass between the resolved
+-- 'YCHR.Resolved.Program' and the internal 'YCHR.Desugared.Program'
+-- consumed by the compiler. It performs, in order:
 --
--- 1. /Module erasure/: flatten @[P.Module]@ into one 'D.Program'.
---
--- 2. /Head-kind flattening/: map the three surface head kinds
+-- 1. /Head-kind flattening/: map the three surface head kinds
 --    ('P.Simplification', 'P.Propagation', 'P.Simpagation') to the
 --    uniform @Kept\/Removed@ shape of 'D.Head'.
 --
--- 3. /Head Normal Form (HNF)/: in every head constraint, replace
+-- 2. /Head Normal Form (HNF)/: in every head constraint, replace
 --    non-variable and duplicated-variable arguments with fresh variables,
 --    emitting explicit 'D.GuardEqual' / 'D.GuardMatch' / 'D.GuardGetArg'
 --    guards.
 --
--- 4. /Goal classification/: partition each body into structured 'D.BodyGoal'
+-- 3. /Goal classification/: partition each body into structured 'D.BodyGoal'
 --    values ('D.BodyUnify', 'D.BodyIs', 'D.BodyHostStmt',
 --    'D.BodyFunctionCall', 'D.BodyConstraint', or 'D.BodyTrue').
 --
--- 5. /Guard classification/: map each surface guard term to a 'D.Guard'.
+-- 4. /Guard classification/: map each surface guard term to a 'D.Guard'.
 --
--- 6. /Function-equation desugaring/: group equations by function,
---    HNF-normalize their patterns, and produce 'D.Function' values.
+-- 5. /Function-equation desugaring/: HNF-normalize function-equation
+--    patterns and produce 'D.Function' values.
 --
--- 7. /Lambda lifting/: replace @fun(...) -> ...@ closures with top-level
+-- 6. /Lambda lifting/: replace @fun(...) -> ...@ closures with top-level
 --    @__lambda_N@ functions plus closure compound terms carrying the
 --    captured free variables.
+--
+-- Module erasure and equation grouping are handled upstream by the
+-- resolve phase ('YCHR.Resolve').
 --
 -- 'extractSymbolTable' is a separate utility that assigns sequential IDs
 -- to every 'Qualified' rule-head constraint in the desugared program; it
@@ -51,7 +52,7 @@ module YCHR.Desugar
 where
 
 import Data.List (mapAccumL)
-import Data.Map.Strict qualified as Map
+import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -63,6 +64,7 @@ import YCHR.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed (AnnP (..), noAnnP)
 import YCHR.Parsed qualified as P
+import YCHR.Resolved qualified as R
 import YCHR.Types
 
 data DesugarError
@@ -99,42 +101,15 @@ quoteTerm Wildcard = AtomTerm "_"
 quoteTerm (CompoundTerm n args) = CompoundTerm n (map quoteTerm args)
 quoteTerm t = t -- IntTerm, AtomTerm, TextTerm are already ground
 
-isFunctionDecl :: P.Declaration -> Bool
-isFunctionDecl P.FunctionDecl {} = True
-isFunctionDecl _ = False
-
--- | Collect all declared function names (fully qualified) from a set of modules.
-buildFunctionSet :: [P.Module] -> Set.Set Name
-buildFunctionSet mods =
-  Set.fromList
-    [ Qualified m.name d.name
-    | m <- mods,
-      P.Ann d _ <- m.decls,
-      isFunctionDecl d
-    ]
-
--- | The primary entry point: converts parsed modules to a desugared program.
-desugarProgram :: [P.Module] -> Either [Diagnostic DesugarError] D.Program
-desugarProgram mods =
-  let funSet = buildFunctionSet mods
-      conTypes = collectConstraintTypes mods
-      typeDefs = [td.node | m <- mods, td <- m.typeDecls]
+-- | The primary entry point: converts a resolved program to a desugared program.
+desugarProgram :: R.Program -> Either [Diagnostic DesugarError] D.Program
+desugarProgram rprog =
+  let funSet = rprog.functionNames
       (result, errs) = runPureEff . runWriter $ do
-        rules <- traverse (desugarRule funSet) [r | m <- mods, r <- m.rules]
-        functions <- desugarFunctions mods
-        pure (D.Program rules functions conTypes typeDefs)
+        rules <- traverse (desugarRule funSet) rprog.rules
+        functions <- traverse desugarFunctionDef rprog.functions
+        pure (D.Program rules functions rprog.constraintTypes rprog.typeDefinitions)
    in if null errs then Right result else Left errs
-
--- | Collect typed constraint declarations into a map from qualified name to arg types.
-collectConstraintTypes :: [P.Module] -> Map.Map Name [TypeExpr]
-collectConstraintTypes mods =
-  Map.fromList
-    [ (Qualified m.name d.name, ts)
-    | m <- mods,
-      P.Ann d _ <- m.decls,
-      P.ConstraintDecl {} <- [d],
-      Just ts <- [d.argTypes]
-    ]
 
 -- | Scans a desugared program and builds the optimization map.
 -- It ensures that all Qualified names get a sequential ID starting from 0.
@@ -154,10 +129,10 @@ getRuleConstraints r =
         ++ rHead.removed
         ++ [c | D.BodyConstraint c <- rBody]
 
--- | Desugar one parsed rule: classify its body goals, desugar its user
+-- | Desugar one resolved rule: classify its body goals, desugar its user
 -- guards, flatten the head kind, and run HNF on the head. HNF-emitted
 -- guards are prepended to the user guards so they run first.
-desugarRule :: Set.Set Name -> P.Rule -> Eff '[Writer [Diagnostic DesugarError]] D.Rule
+desugarRule :: Set Name -> R.Rule -> Eff '[Writer [Diagnostic DesugarError]] D.Rule
 desugarRule funSet r = do
   let ruleLabel = fmap (\ann -> "rule " <> ann.node) r.name
   ruleBody <- desugarBodyGoals funSet ruleLabel r.body.sourceLoc r.body.parsed r.body.node
@@ -303,57 +278,27 @@ decomposeArg st parentVar i term =
           hnfGuards = eqGuard : getGuard : st.hnfGuards
         }
 
--- | Desugar every function in every module: find each @:- function@
--- (or @:- open_function@) declaration, gather its equations by name,
--- and produce a 'D.Function' per declaration.
---
--- For regular functions, equations are collected from the declaring
--- module only. For open functions, equations are collected from all
--- modules where the qualified name matches.
-desugarFunctions :: [P.Module] -> Eff '[Writer [Diagnostic DesugarError]] [D.Function]
-desugarFunctions mods =
-  traverse
-    ( \(m, d) ->
-        let qualName = Qualified m.name d.name
-            eqs
-              | d.isOpen =
-                  [annEq | mod_ <- mods, annEq <- mod_.equations, annEq.node.funName == qualName]
-              | otherwise =
-                  [annEq | annEq <- m.equations, annEq.node.funName == qualName]
-         in desugarFunction m.name d eqs
-    )
-    [(m, d) | m <- mods, P.Ann d _ <- m.decls, isFunctionDecl d]
-
--- | Build a single 'D.Function' from its declaring module name, its
--- parsed 'P.FunctionDecl' (used for the name, arity, and type
--- annotations), and the matching list of equations.
-desugarFunction ::
-  Text ->
-  P.Declaration ->
-  [P.AnnP P.FunctionEquation] ->
-  Eff '[Writer [Diagnostic DesugarError]] D.Function
-desugarFunction modName (P.FunctionDecl {name, arity, argTypes, returnType}) eqs = do
-  desugaredEqs <- traverse desugarAnnotatedEquation eqs
-  -- Use the source location of the first equation (or dummyLoc if none)
-  let (loc, parsed) = case eqs of
-        (P.AnnP _eq eqLoc eqParsed : _) -> (eqLoc, eqParsed)
+-- | Desugar a resolved function definition: HNF-normalize its equation
+-- patterns and produce a 'D.Function'.
+desugarFunctionDef :: R.FunctionDef -> Eff '[Writer [Diagnostic DesugarError]] D.Function
+desugarFunctionDef fdef = do
+  desugaredEqs <- traverse desugarResolvedEquation fdef.equations
+  let (loc, parsed) = case fdef.equations of
+        (AnnP _eq eqLoc eqParsed : _) -> (eqLoc, eqParsed)
         [] -> (P.dummyLoc, Atom "function")
   pure
     D.Function
-      { name = Qualified modName name,
-        arity,
-        argTypes,
-        returnType,
+      { name = fdef.name,
+        arity = fdef.arity,
+        signatures = fdef.signatures,
         equations = AnnP desugaredEqs loc parsed
       }
-desugarFunction _ d _ =
-  error $ "Desugar.desugarFunction: expected a FunctionDecl, got " ++ show d
 
-desugarAnnotatedEquation :: P.AnnP P.FunctionEquation -> Eff '[Writer [Diagnostic DesugarError]] D.Equation
-desugarAnnotatedEquation eq = desugarEquation eq.node
+desugarResolvedEquation :: AnnP R.FunctionEquation -> Eff '[Writer [Diagnostic DesugarError]] D.Equation
+desugarResolvedEquation annEq = desugarEquation' annEq.node
 
-desugarEquation :: P.FunctionEquation -> Eff '[Writer [Diagnostic DesugarError]] D.Equation
-desugarEquation eq = do
+desugarEquation' :: R.FunctionEquation -> Eff '[Writer [Diagnostic DesugarError]] D.Equation
+desugarEquation' eq = do
   let initState = HnfState 0 Set.empty []
       (st, normalizedArgs) = mapAccumL normalizeArg initState eq.args
       hnfGuards = reverse st.hnfGuards
@@ -374,10 +319,9 @@ desugarGuard _ t = pure $ D.GuardExpr t
 
 -- | Desugar a list of query goal terms into 'BodyGoal's.
 -- Returns 'Left' if any desugaring errors occur.
-desugarQueryGoals :: [P.Module] -> [Term] -> Either [Diagnostic DesugarError] [D.BodyGoal]
-desugarQueryGoals mods goals =
-  let funSet = buildFunctionSet mods
-      (results, errs) =
+desugarQueryGoals :: Set Name -> [Term] -> Either [Diagnostic DesugarError] [D.BodyGoal]
+desugarQueryGoals funSet goals =
+  let (results, errs) =
         runPureEff . runWriter $
           desugarBodyGoals funSet Nothing P.dummyLoc (Atom "") goals
    in if null errs then Right results else Left errs
@@ -399,7 +343,7 @@ runVarNameSupply = evalState (0 :: Int)
 -- (e.g. non-variable @is@ LHS).
 desugarBodyGoals ::
   (Writer [Diagnostic DesugarError] :> es) =>
-  Set.Set Name ->
+  Set Name ->
   Maybe Text ->
   P.SourceLoc ->
   PExpr ->
@@ -418,7 +362,7 @@ desugarBodyGoals funSet label loc origin terms =
 -- 4. @host:f(…)@ -> 'D.BodyHostStmt'
 -- 5. Qualified name in function set -> 'D.BodyFunctionCall'
 -- 6. Other qualified name -> 'D.BodyConstraint'
--- 7. @call(F, …)@ -> 'D.BodyFunctionCall' — @call@ stays
+-- 7. @'$call'(F, …)@ -> 'D.BodyFunctionCall' — @$call@ stays
 --    'Unqualified' (it is reserved by the renamer), so it would
 --    otherwise fall into the unqualified-compound error case below.
 -- 8. @true@ -> 'D.BodyTrue'
@@ -426,7 +370,7 @@ desugarBodyGoals funSet label loc origin terms =
 -- 10. Anything else (bare variable, integer, atom, …) -> error
 desugarBodyGoal ::
   (State Int :> es, Writer [Diagnostic DesugarError] :> es) =>
-  Set.Set Name ->
+  Set Name ->
   Maybe Text ->
   P.SourceLoc ->
   PExpr ->
@@ -446,9 +390,9 @@ desugarBodyGoal funSet label loc origin t = case t of
         pure [D.BodyFunctionCall name args]
   CompoundTerm name@(Qualified _ _) args ->
     pure [D.BodyConstraint (Constraint name args)]
-  CompoundTerm (Unqualified "call") args
+  CompoundTerm (Unqualified "$call") args
     | length args >= 2 ->
-        pure [D.BodyFunctionCall (Unqualified "call") args]
+        pure [D.BodyFunctionCall (Unqualified "$call") args]
   AtomTerm "true" -> pure [D.BodyTrue]
   CompoundTerm (Unqualified _) _ -> do
     tell [Diagnostic label (AnnP (UnexpectedBodyTerm t) loc origin)]
@@ -515,8 +459,7 @@ liftTerm modName loc origin scope st term = case term of
           D.Function
             { name = qualName,
               arity = length allParams,
-              argTypes = Nothing,
-              returnType = Nothing,
+              signatures = [],
               equations =
                 noAnnP
                   [ D.Equation

@@ -50,6 +50,7 @@ extra-doc-files:    CHANGELOG.md
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 extra-source-files:   libraries/*.chr
+                    , typechecker/*.chr
 
 common warnings
     ghc-options: -Wall
@@ -147,6 +148,7 @@ library
                     , YCHR.Collect
                     , YCHR.Compile
                     , YCHR.Loc
+                    , YCHR.Compile.Pipeline
                     , YCHR.Compile.Names
                     , YCHR.Compile.Occurrences
                     , YCHR.Compile.Types
@@ -165,8 +167,12 @@ library
                     , YCHR.Rename.Types
                     , YCHR.StdLib
                     , YCHR.StdLib.TH
+                    , YCHR.TypeCheck
+                    , YCHR.TypeCheck.TH
+                    , YCHR.TypeCheck.Compiled
                     , YCHR.Types
-                    , YCHR.Validate
+                    , YCHR.Resolve
+                    , YCHR.Resolved
                     , YCHR.VM
                     , YCHR.VM.Types
                     , YCHR.VM.SExpr

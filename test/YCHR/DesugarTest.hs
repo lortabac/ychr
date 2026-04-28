@@ -11,6 +11,8 @@ import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (noDiag)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
+import YCHR.Resolve (resolveProgram)
+import YCHR.Resolved qualified as R
 import YCHR.Types (ConstraintType (..), Identifier (..), lookupSymbol, mkSymbolTable, symbolTableSize)
 
 getNode :: AnnP a -> a
@@ -31,10 +33,17 @@ tests =
       lambdaLiftTests
     ]
 
-desugar :: [Module] -> IO D.Program
-desugar mods = case desugarProgram mods of
+resolve :: [Module] -> IO R.Program
+resolve mods = case resolveProgram mods of
   Right p -> return p
-  Left errs -> assertFailure $ "unexpected errors: " ++ show errs
+  Left errs -> assertFailure $ "unexpected resolve errors: " ++ show errs
+
+desugar :: [Module] -> IO D.Program
+desugar mods = do
+  rprog <- resolve mods
+  case desugarProgram rprog of
+    Right p -> return p
+    Left errs -> assertFailure $ "unexpected errors: " ++ show errs
 
 singleRule :: [Module] -> IO D.Rule
 singleRule mods = do
@@ -233,38 +242,44 @@ errorTests =
     [ testCase "unqualified compound in body produces UnexpectedBodyTerm" $ do
         let badTerm = func "foo" [var "X"]
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
-        case desugarProgram [m] of
+        rprog <- resolve [m]
+        case desugarProgram rprog of
           Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "two unqualified compounds collect both errors" $ do
         let bad1 = func "foo" [var "X"]
             bad2 = func "bar" [var "Y"]
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [bad1, bad2])]
-        case desugarProgram [m] of
+        rprog <- resolve [m]
+        case desugarProgram rprog of
           Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyTerm bad1) dummyLoc (Atom "")), noDiag (AnnP (UnexpectedBodyTerm bad2) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "bare variable in body produces UnexpectedBodyTerm" $ do
         let badTerm = var "X"
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
-        case desugarProgram [m] of
+        rprog <- resolve [m]
+        case desugarProgram rprog of
           Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "bare integer in body produces UnexpectedBodyTerm" $ do
         let badTerm = int 42
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
-        case desugarProgram [m] of
+        rprog <- resolve [m]
+        case desugarProgram rprog of
           Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "non-true atom in body produces UnexpectedBodyTerm" $ do
         let badTerm = atom "foo"
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
-        case desugarProgram [m] of
+        rprog <- resolve [m]
+        case desugarProgram rprog of
           Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "bare variable in guard becomes GuardExpr" $ do
         let term = var "X"
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [term]) (noAnnP [atom "true"])]
-        case desugarProgram [m] of
+        rprog <- resolve [m]
+        case desugarProgram rprog of
           Left errs -> assertFailure ("unexpected errors: " ++ show errs)
           Right prog -> case prog.rules of
             (rule : _) -> getNode rule.guard @?= [D.GuardExpr (VarTerm "X")]
@@ -272,7 +287,8 @@ errorTests =
       testCase "bare integer in guard becomes GuardExpr" $ do
         let term = int 42
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [term]) (noAnnP [atom "true"])]
-        case desugarProgram [m] of
+        rprog <- resolve [m]
+        case desugarProgram rprog of
           Left errs -> assertFailure ("unexpected errors: " ++ show errs)
           Right prog -> case prog.rules of
             (rule : _) -> getNode rule.guard @?= [D.GuardExpr (IntTerm 42)]
@@ -280,7 +296,8 @@ errorTests =
       testCase "non-true atom in guard becomes GuardExpr" $ do
         let term = atom "foo"
             m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [term]) (noAnnP [atom "true"])]
-        case desugarProgram [m] of
+        rprog <- resolve [m]
+        case desugarProgram rprog of
           Left errs -> assertFailure ("unexpected errors: " ++ show errs)
           Right prog -> case prog.rules of
             (rule : _) -> getNode rule.guard @?= [D.GuardExpr (AtomTerm "foo")]
