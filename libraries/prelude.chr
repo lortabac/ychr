@@ -4,7 +4,7 @@
     fun '+'/2,
     fun '-'/2,
     fun '*'/2,
-    fun '//'/2,
+    fun '/'/2,
     fun 'div'/2,
     fun 'mod'/2,
     fun 'rem'/2,
@@ -38,7 +38,7 @@
     op(500, yfx, '+'),
     op(500, yfx, '-'),
     op(400, yfx, '*'),
-    op(400, yfx, '//'),
+    op(400, yfx, '/'),
     op(400, yfx, div),
     op(400, yfx, mod),
     op(400, yfx, rem),
@@ -65,7 +65,7 @@
     ('-'(float, float) -> float),
     ('*'(int, int) -> int),
     ('*'(float, float) -> float),
-    ('//'(float, float) -> float),
+    ('/'(float, float) -> float),
     ('div'(int, int) -> int),
     ('mod'(int, int) -> int),
     'rem'/2,
@@ -104,7 +104,7 @@ X - Y -> host:'-'(X, Y).
 
 X * Y -> host:'*'(X, Y).
 
-X // Y -> host:'//'(X, Y).
+X / Y -> host:'/'(X, Y).
 
 X div Y -> host:'div'(X, Y).
 

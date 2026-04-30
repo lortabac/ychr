@@ -90,8 +90,8 @@ retains the captured values:
 make_adder(N) -> fun(X) -> X + N end.
 ```
 
-Named functions are referenced by `name/arity` (e.g. `member/2`) and
-also called via `'$call'`.
+Named functions are referenced by `fun name/arity` (e.g. `fun member/2`)
+and called via `'$call'`.
 
 ## Optional static type checking
 

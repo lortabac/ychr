@@ -74,7 +74,7 @@ baseHostCallRegistry =
       (Name "*", numArith2 (*) (*)),
       (Name "div", intArith2 div),
       (Name "mod", intArith2 mod),
-      (Name "//", floatArith2 (/)),
+      (Name "/", floatArith2 (/)),
       (Name "<", numCmp (<) (<)),
       (Name ">", numCmp (>) (>)),
       (Name "=<", numCmp (<=) (<=)),

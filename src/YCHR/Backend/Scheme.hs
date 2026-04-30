@@ -354,7 +354,6 @@ hostCallMap =
   Map.fromList
     [ ("div", "quotient"),
       ("mod", "modulo"),
-      ("//", "/"),
       ("rem", "mod0"),
       ("=<", "<="),
       ("==", "eqv?"),

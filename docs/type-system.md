@@ -432,9 +432,9 @@ with `bool`.
 
 ### Function references
 
-A reference `name/arity` has the function type derived from the
+A reference `fun name/arity` has the function type derived from the
 function's declared signature. If `double(int) -> int` is declared,
-then `double/1` has type `fun(int) -> int`.
+then `fun double/1` has type `fun(int) -> int`.
 
 ### `call`
 

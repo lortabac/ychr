@@ -289,7 +289,7 @@ Lambdas capture free variables from their enclosing scope (closures). A function
 make_adder(N) -> fun(X) -> X + N end.
 ```
 
-Named functions can be referenced by name and arity using `name/arity` syntax (e.g., `double/1`) and called with `'$call'`.
+Named functions can be referenced by name and arity using `fun name/arity` syntax (e.g., `fun double/1`) and called with `'$call'`.
 
 Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound term `'->'(fun(X, Y), Expr)`. The `end` keyword is purely a parsing convenience and does not appear in the AST. During desugaring, lambdas are lifted to top-level functions named `__lambda_N`, with free variables passed as additional parameters. The lambda value becomes a closure: a compound term carrying the captured variable values, which `'$call'` unpacks at the call site.
 
