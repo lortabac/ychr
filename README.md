@@ -1,169 +1,71 @@
 # YCHR
 
+A Constraint Handling Rules (CHR) compiler with multiple backends. The
+surface language is standard CHR with Prolog-compatible syntax,
+extended with Erlang-style user-defined functions. The compiler is
+written in Haskell and lowers programs to a small abstract VM, which
+can be interpreted directly or translated to Scheme or JavaScript.
+
+The compilation algorithm follows Van Weert, Wuille, Schrijvers, and
+Demoen (2008), *CHR for Imperative Host Languages*.
+
+## Example
+
+```prolog
+:- module(order, [leq/2]).
+:- chr_constraint leq/2.
+
+reflexivity   @ leq(X, X) <=> true.
+antisymmetry  @ leq(X, Y), leq(Y, X) <=> X = Y.
+idempotence   @ leq(X, Y) \ leq(X, Y) <=> true.
+transitivity  @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
+```
+
+```sh
+$ ychr run -g 'leq(1, X), leq(X, 1)' leq.chr
+```
+
 ## Status
 
-Work in progress. Check the roadmap for updates.
+Work in progress. The Haskell interpreter and Scheme backend are
+working; the JavaScript backend and most of the optimization catalogue
+from the paper are not yet implemented. See
+[docs/roadmap.md](docs/roadmap.md) for the full status.
 
-## Goal
-
-A production-grade, extensible Constraint Handling Rules (CHR)
-compiler targeting dynamically-typed procedural languages.
-The surface language is standard CHR with Prolog-compatible syntax.
-The compiler is implemented in Haskell and produces code for an internal abstract VM,
-which can be interpreted directly or compiled to Scheme or JavaScript.
-The VM instructions can also be serialized and fed to another executable to
-target different backends.
-
-The compilation algorithm is based on
-Peter Van Weert, Pieter Wuille, Tom Schrijvers, Bart Demoen, 2008.
-"_CHR for Imperative Host Languages_."
-
-## Differences from K.U.Leuven CHR
-
-### Functions
-
-When CHR is embedded in Prolog, guards can rely on predicate success or failure.
-
-In YCHR, instead, guards are functional expressions that return a boolean value.
-They can be calls to procedures in the host language or user-defined *functions*.
-*Functions* are a simple extension to CHR. They have Erlang-like syntax
-and work by top-to-bottom pattern-matching.
-
-Example:
-
-```
-:- function member/2.
-
-member(_, []) -> false.
-member(X, [X|_]) -> true.
-member(X, [_|Xs]) -> member(X, Xs).
-```
-
-### is
-
-The `is` operator is generalized to accept any expression on the RHS,
-including CHR functions and host language function calls.
-
-Example:
-
-```
-ychr> R is member(1, [0, 1, 2]).
-R = true.
-```
-
-## Roadmap
-
-### Frontend
-
-- [x] Parser (Prolog-compatible CHR syntax)
-- [x] Renaming (module-qualified constraint names)
-- [x] Desugaring
-- [x] User-defined functions (pattern-matching equations with guards)
-- [x] Lambdas and function references
-
-### Compiler
-
-- [x] Head Normal Form transformation
-- [x] Occurrence numbering
-- [x] CHR-to-VM compilation (refined operational semantics)
-- [x] VM serialization
-- [ ] Loop-invariant code motion
-- [ ] Join ordering
-- [ ] Late storage
-- [ ] Late allocation
-- [ ] Guard simplification
-- [ ] Set semantics
-- [ ] Passive occurrences
-- [ ] Propagation history elimination
-- [ ] Delay avoidance
-- [ ] Memory reuse
-
-### Type checker
-
-- [ ] Gradual type system
-- [ ] Simple type refinements via type predicates
-
-### Backends
-
-- [x] Haskell interpreter
-- [x] Scheme backend
-- [x] Scheme runtime
-- [ ] JavaScript backend
-- [ ] JavaScript runtime
-
-### Runtime (Haskell)
-
-- [x] Logical variables with unification
-- [x] Constraint store
-- [x] Propagation history
-- [x] Reactivation queue
-- [ ] Introspection capabilities
-- [ ] Meta-programming capabilities
-
-### REPL
-
-- [x] Prolog-style queries
-- [ ] Store inpection
-- [ ] Tracing
-- [ ] Live debugging sessions
-
-### Testing
-
-- [x] Unit tests (parser, renamer, desugarer, runtime components)
-- [x] Golden tests
-- [x] End-to-end tests
-- [ ] Comprehensive test suite
-
-### Benchmarking
-
-- [x] Interpreter benchmarks
-- [x] Scheme runtime benchmarks
-- [ ] JavaScript runtime benchmarks
-- [ ] Compiler benchmarks
-
-### Extensions
-
-- [ ] Aggregates, as described in Sneyers, Van Weert, Schrijvers, Demoen, 2007. "_Aggregates in CHR_".
-- [ ] Rule priorities
-
-## Installation
+## Install
 
 Requires GHC 9.12+ and Cabal 3.4+.
 
 ```sh
-cabal build
-cabal install
+make build
+make install
 ```
 
-## Usage
-
-### REPL
+## Quick start
 
 ```sh
-ychr repl file.chr
+ychr repl file.chr           # interactive REPL (Prolog-style queries)
+ychr run -g 'goal(...)' file # run a single goal
+ychr check file.chr          # type-check only
+ychr compile --target=scheme -o out file.chr
 ```
 
-Inside the REPL, enter a Prolog-style query and press Enter. For example:
+`make test` runs the full test suite (Haskell interpreter, Scheme
+backend, REPL, and type-checker tests).
 
-```
-ychr> factorial(10, X), Y is X + 1.
-```
+## Documentation
 
-Type `:help` for available commands.
+- [docs/language.md](docs/language.md) — language reference
+  (modules, functions, `is`, lambdas)
+- [docs/type-system.md](docs/type-system.md) — optional gradual type
+  system
+- [docs/vm.md](docs/vm.md) — abstract VM specification and
+  s-expression serialization format (for backend implementors)
+- [docs/roadmap.md](docs/roadmap.md) — implementation status
 
-### Run a goal
-
-Run a single goal non-interactively:
-
-```sh
-ychr run -g 'leq(1, 2)' file.chr
-```
-
-### Run tests
-
-```sh
-cabal test
-```
+Contributor and design documentation lives in [`dev-docs/`](dev-docs/),
+including [PROJECT.md](dev-docs/PROJECT.md) (architecture and
+compilation scheme) and the reference paper.
 
 ## License
 
