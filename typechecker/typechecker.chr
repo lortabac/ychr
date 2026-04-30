@@ -16,34 +16,63 @@
 :- use_module(library(prelude)).
 :- use_module(library(lists)).
 
-:- chr_constraint
-    constraint_sig/2,
-    function_sig/2,
-    function_sigs/2,
-    con_sig/2,
-    check_constraint_use/3,
-    check_function_use/4,
-    check_constructor_use/4,
-    check_unify/3,
-    check_guard_bool/2,
-    check_guard_getarg/5,
-    check_arg_list/3,
-    tc_unify/3,
-    tc_unify_list/3,
-    resolve_overload/4,
-    report_error/3,
-    errors/1,
-    collect/1.
+% Type-representation algebraic type. Mirrors the value-level encoding
+% emitted by src/YCHR/TypeCheck.hs (encodeTypeExpr): base types are
+% 0-arity constructors, type constructors and function types are
+% compound terms. The first field of `tcon` is `any` because a type
+% constructor name may be either an atom (`bool`) or a `:(M, N)`
+% qualified-name compound (`prelude:bool`).
+:- chr_type ty ---> int
+                  ; float
+                  ; string
+                  ; any
+                  ; tcon(any, list(ty))
+                  ; fun(list(ty), ty).
 
-:- function sig_fst/1, sig_snd/1.
+% Polymorphic two-field record reused for both function signatures
+% (sig_t(list(ty), ty)) and constructor signatures
+% (sig_t(ty, list(ty))).
+:- chr_type sig_t(A, B) ---> sig(A, B).
+
+% Accumulated diagnostics. Ctx is the integer source-location handle
+% emitted by the Haskell driver; Code is an atom; Detail is
+% heterogeneous (`pair(T1, T2)`, atoms, names).
+:- chr_type error ---> error(int, any, any).
+
+:- chr_constraint
+    constraint_sig(any, list(ty)),
+    function_sig(any, sig_t(list(ty), ty)),
+    function_sigs(any, list(sig_t(list(ty), ty))),
+    con_sig(any, sig_t(ty, list(ty))),
+    check_constraint_use(any, list(ty), int),
+    check_function_use(any, list(ty), ty, int),
+    check_constructor_use(any, list(ty), ty, int),
+    check_unify(ty, ty, int),
+    check_guard_bool(ty, int),
+    check_guard_getarg(ty, ty, any, int, int),
+    check_arg_list(list(ty), list(ty), int),
+    tc_unify(ty, ty, int),
+    tc_unify_list(list(ty), list(ty), int),
+    resolve_overload(list(sig_t(list(ty), ty)), list(ty), ty, int),
+    report_error(int, any, any),
+    errors(list(error)),
+    collect(list(error)).
+
+:- function (sig_fst(sig_t(A, B)) -> A), (sig_snd(sig_t(A, B)) -> B).
 sig_fst(sig(X, _)) -> X.
 sig_snd(sig(_, Y)) -> Y.
 
+% These three are intentionally left arity-only. Adding a
+% `list(...)` parameter type triggers a self-check failure: the cons
+% pattern in the equations elicits a `check_guard_getarg` whose
+% `delegate_guard_getarg` rule never fires (a separate latent issue),
+% so `unknown_guard_getarg` runs `R = any` strict-unification on a
+% `R` already bound to `list(...)` from the recursive body call.
 :- function
     all_nonvar_list/1,
     filter_consistent/2,
     sig_args_consistent/2,
-    (type_consistent(any, any) -> bool).
+    (type_consistent(ty, ty) -> bool).
 
 all_nonvar_list([]) -> true.
 all_nonvar_list([X|Xs]) | nonvar(X) -> all_nonvar_list(Xs).
