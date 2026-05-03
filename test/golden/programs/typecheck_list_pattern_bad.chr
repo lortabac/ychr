@@ -1,0 +1,12 @@
+:- module(typecheck_list_pattern_bad, [foo/1]).
+
+:- use_module(library(prelude)).
+
+% foo's first arg is declared int, but the head pattern matches it as
+% a list cons. The type checker must catch this once Problem A is
+% fixed: the cons pattern emits check_guard_getarg with the
+% canonicalized prelude:. constructor name, which delegates through
+% con_sig and unifies the arg type with tcon(prelude:list, [_]).
+% Unifying that with int yields InconsistentTypes (YCHR-60001).
+:- chr_constraint foo(int).
+foo([H|_]) <=> H = H.

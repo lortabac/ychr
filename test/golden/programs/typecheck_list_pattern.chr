@@ -1,0 +1,10 @@
+:- module(typecheck_list_pattern, [go/2]).
+
+:- use_module(library(prelude)).
+
+:- function (sum_list(list(int)) -> int).
+sum_list([]) -> 0.
+sum_list([H|T]) -> H + sum_list(T).
+
+:- chr_constraint go(list(int), int).
+go(Xs, R) <=> R is sum_list(Xs).

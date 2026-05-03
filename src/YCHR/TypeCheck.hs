@@ -78,6 +78,11 @@ data TypeCheckError
 data TypeCheckEnv = TypeCheckEnv
   { -- | Map from constructor name to its parent type definition and constructor info.
     conMap :: Map Name (TypeDefinition, DataConstructor),
+    -- | Resolves a use-site (unqualified name, arity) to its declaration's
+    -- qualified name when exactly one constructor matches. Ambiguous pairs
+    -- are omitted so the canonicalization falls through and the lookup
+    -- behaves as if the name were unknown.
+    conAlias :: Map (Text, Int) Name,
     -- | Set of known function identifiers (name, arity).
     funSet :: Set (Name, Int)
   }
@@ -102,6 +107,35 @@ buildConMap tds =
     | td <- tds,
       dc <- td.constructors
     ]
+
+-- | Build the use-site → declaration alias map. A @(text, arity)@ key is
+-- included only when exactly one declared constructor matches; ambiguous
+-- pairs (same unqualified name and arity declared in different modules)
+-- are dropped so 'canonicalizeConName' falls through to the unqualified
+-- name and the type checker treats them as unknown rather than guessing.
+buildConAlias :: [TypeDefinition] -> Map (Text, Int) Name
+buildConAlias tds =
+  Map.mapMaybe single $
+    Map.fromListWith
+      (++)
+      [ ((unqualifiedText dc.conName, length dc.conArgs), [dc.conName])
+      | td <- tds,
+        dc <- td.constructors
+      ]
+  where
+    single [n] = Just n
+    single _ = Nothing
+    unqualifiedText (Unqualified t) = t
+    unqualifiedText (Qualified _ t) = t
+
+-- | Map a use-site constructor name to its declared, qualified form when a
+-- unique match exists. 'Qualified' names pass through unchanged;
+-- 'Unqualified' names are resolved through 'conAlias'. When no unique
+-- match exists the name is returned as-is.
+canonicalizeConName :: TypeCheckEnv -> Name -> Int -> Name
+canonicalizeConName _ name@(Qualified _ _) _ = name
+canonicalizeConName env (Unqualified n) arity =
+  Map.findWithDefault (Unqualified n) (n, arity) env.conAlias
 
 buildFunSet :: [D.Function] -> Set (Name, Int)
 buildFunSet fns = Set.fromList [(f.name, f.arity) | f <- fns]
@@ -128,6 +162,7 @@ type CheckEffects es = (CHREffects es, Reader TypeCheckEnv :> es, State CtxMap :
 typeCheckProgram :: D.Program -> IO [Diagnostic TypeCheckError]
 typeCheckProgram prog = do
   let conMap = buildConMap prog.typeDefinitions
+      conAlias = buildConAlias prog.typeDefinitions
       funSet = buildFunSet prog.functions
       -- Haskell-side validation
       hsErrors = validateTypeDefinitions prog.typeDefinitions (Map.fromList [(td.name, td) | td <- prog.typeDefinitions])
@@ -146,7 +181,7 @@ typeCheckProgram prog = do
             functionNameSet = Set.empty,
             desugaredProgram = D.Program [] [] Map.empty []
           }
-  let env = TypeCheckEnv {conMap, funSet}
+  let env = TypeCheckEnv {conMap, conAlias, funSet}
   chrErrors <- withCHR cp baseHostCallRegistry $ do
     runReader env $
       evalState (Map.empty :: CtxMap) $
@@ -342,7 +377,7 @@ checkGuard cctx lastConName (D.GuardEqual t1 t2) = do
   ctx <- freshCtx cctx
   tellConstraint (Qualified "typechecker" "check_unify") [tv1, tv2, ctx]
   pure lastConName
-checkGuard _ _ (D.GuardMatch _term conName _arity) = do
+checkGuard _ _ (D.GuardMatch _term conName arity) = do
   -- GuardMatch is not emitted as a CHR constraint. Its type information
   -- is covered by other paths:
   --   * Non-nullary constructors: the subsequent GuardGetArg(s) emit
@@ -350,8 +385,10 @@ checkGuard _ _ (D.GuardMatch _term conName _arity) = do
   --     constructor's parent type.
   --   * Nullary constructors: the desugarer produces GuardEqual instead,
   --     and typeOfAtom looks up the constructor's type.
-  -- We just remember the constructor name for the following GuardGetArg.
-  pure (Just conName)
+  -- We canonicalize the name here so subsequent GuardGetArgs use the
+  -- declaration-side qualified form, which is what con_sig is keyed on.
+  env <- ask @TypeCheckEnv
+  pure (Just (canonicalizeConName env conName arity))
 checkGuard cctx lastConName (D.GuardGetArg varName term idx) = do
   resultTypeVar <- case Map.lookup varName cctx.varTypes of
     Just v -> pure v
@@ -476,29 +513,16 @@ typeOfTerm cctx (CompoundTerm name args) =
 typeOfAtom :: (CheckEffects es) => CheckCtx -> Name -> Eff es Value
 typeOfAtom cctx name = do
   env <- ask @TypeCheckEnv
-  case Map.lookup name env.conMap of
+  let canonical = canonicalizeConName env name 0
+  case Map.lookup canonical env.conMap of
     Just _ -> do
       resultType <- newVar
       ctx <- freshCtx cctx
-      tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (flattenName name), valueList [], resultType, ctx]
+      tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (flattenName canonical), valueList [], resultType, ctx]
       pure resultType
     Nothing -> pure (VAtom "any")
 
 typeOfCompound :: (CheckEffects es) => CheckCtx -> Name -> [Term] -> Eff es Value
--- List cons: [H|T] is CompoundTerm "." [H, T]
-typeOfCompound cctx (Unqualified ".") [h, t] = do
-  env <- ask @TypeCheckEnv
-  case Map.lookup (Unqualified ".") env.conMap of
-    Just _ -> do
-      argTypes <- traverse (typeOfTerm cctx) [h, t]
-      resultType <- newVar
-      ctx <- freshCtx cctx
-      tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom ".", valueList argTypes, resultType, ctx]
-      pure resultType
-    Nothing -> do
-      -- Process args for side effects
-      mapM_ (typeOfTerm cctx) [h, t]
-      pure (VAtom "any")
 -- Lambda: fun(X, Y) -> Expr end
 -- Represented as CompoundTerm "->" [CompoundTerm "fun" params, body]
 typeOfCompound cctx (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body] = do
@@ -513,15 +537,18 @@ typeOfCompound cctx (Unqualified "/") [AtomTerm fname, IntTerm arity] = do
   ctx <- freshCtx cctx
   tellConstraint (Qualified "typechecker" "check_function_use") [VAtom fname, valueList argTypeVars, retTypeVar, ctx]
   pure (VTerm "fun" [valueList argTypeVars, retTypeVar])
--- Constructor or function
+-- Constructor or function. Constructors are canonicalized so that bare
+-- functor names (e.g. cons "." or own-module names) resolve to their
+-- declaration-side qualified form.
 typeOfCompound cctx name args = do
   env <- ask @TypeCheckEnv
-  if Map.member name env.conMap
+  let canonical = canonicalizeConName env name (length args)
+  if Map.member canonical env.conMap
     then do
       argTypes <- traverse (typeOfTerm cctx) args
       resultType <- newVar
       ctx <- freshCtx cctx
-      tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (flattenName name), valueList argTypes, resultType, ctx]
+      tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (flattenName canonical), valueList argTypes, resultType, ctx]
       pure resultType
     else
       if Set.member (name, length args) env.funSet

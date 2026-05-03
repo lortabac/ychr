@@ -1,0 +1,1 @@
+typecheck_list_pattern:go([1, 2, 3, 4], R)

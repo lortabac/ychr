@@ -62,16 +62,10 @@
 sig_fst(sig(X, _)) -> X.
 sig_snd(sig(_, Y)) -> Y.
 
-% These three are intentionally left arity-only. Adding a
-% `list(...)` parameter type triggers a self-check failure: the cons
-% pattern in the equations elicits a `check_guard_getarg` whose
-% `delegate_guard_getarg` rule never fires (a separate latent issue),
-% so `unknown_guard_getarg` runs `R = any` strict-unification on a
-% `R` already bound to `list(...)` from the recursive body call.
 :- function
-    all_nonvar_list/1,
-    filter_consistent/2,
-    sig_args_consistent/2,
+    (all_nonvar_list(list(any)) -> bool),
+    (filter_consistent(list(sig_t(list(ty), ty)), list(ty)) -> list(sig_t(list(ty), ty))),
+    (sig_args_consistent(list(ty), list(ty)) -> bool),
     (type_consistent(ty, ty) -> bool).
 
 all_nonvar_list([]) -> true.
@@ -191,9 +185,12 @@ delegate_guard_getarg @
     FieldType is nth(FieldIndex, FreshFields),
     tc_unify(ResultType, FieldType, Ctx).
 
-% Unknown constructor in guard getarg -> result is any
+% Unknown constructor in guard getarg -> result is any. Routed through
+% tc_unify so the rule is sound when ResultType is already bound to a
+% non-`any` type from an earlier constraint (strict `=` would crash).
 unknown_guard_getarg @
-    check_guard_getarg(ResultType, _, _, _, _) <=> ResultType = any.
+    check_guard_getarg(ResultType, _, _, _, _) <=>
+    tc_unify(ResultType, any, 0).
 
 % ==========================================================================
 % tc_unify (type propagation and consistency)
