@@ -26,6 +26,7 @@ module YCHR.TypeCheck
 where
 
 import Control.Monad (replicateM)
+import Data.List qualified as List
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -68,6 +69,10 @@ data TypeCheckError
   | NoMatchingOverload Text
   | UnboundTypeVar Text Text Text
   | UndefinedType Text Text Text
+  | -- | A constructor name is declared by more than one type.
+    -- Carries the flattened constructor name and the
+    -- @(typeName, arity)@ pairs of every declaration.
+    DuplicateConstructor Text [(Text, Int)]
   deriving (Show, Eq)
 
 -- ---------------------------------------------------------------------------
@@ -107,6 +112,28 @@ buildConMap tds =
     | td <- tds,
       dc <- td.constructors
     ]
+
+-- | Detect data constructors declared in more than one type definition.
+-- Two constructors collide when they share a 'Qualified m n' after
+-- renaming, regardless of arity (the type checker keys constructor
+-- lookups on name only — see 'buildConMap' and the CHR-side
+-- @delegate_guard_getarg@ / @constructor_match@ rules in
+-- @typechecker/typechecker.chr@). Without this check, 'Map.fromList'
+-- in 'buildConMap' would silently drop the earlier declaration.
+detectDuplicateConstructors :: [TypeDefinition] -> [Diagnostic TypeCheckError]
+detectDuplicateConstructors tds =
+  [ Diagnostic Nothing (AnnP (DuplicateConstructor (flattenName name) (List.sort decls)) dummyLoc (Atom ""))
+  | (name, decls) <- Map.toList grouped,
+    length decls > 1
+  ]
+  where
+    grouped =
+      Map.fromListWith
+        (++)
+        [ (dc.conName, [(flattenName td.name, length dc.conArgs)])
+        | td <- tds,
+          dc <- td.constructors
+        ]
 
 -- | Build the use-site → declaration alias map. A @(text, arity)@ key is
 -- included only when exactly one declared constructor matches; ambiguous
@@ -165,7 +192,9 @@ typeCheckProgram prog = do
       conAlias = buildConAlias prog.typeDefinitions
       funSet = buildFunSet prog.functions
       -- Haskell-side validation
-      hsErrors = validateTypeDefinitions prog.typeDefinitions (Map.fromList [(td.name, td) | td <- prog.typeDefinitions])
+      hsErrors =
+        validateTypeDefinitions prog.typeDefinitions (Map.fromList [(td.name, td) | td <- prog.typeDefinitions])
+          ++ detectDuplicateConstructors prog.typeDefinitions
   -- Convert TypeCheckerProgram to a minimal CompiledProgram for withCHR
   let tcp = typeCheckerProgram
       cp =

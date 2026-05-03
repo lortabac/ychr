@@ -166,6 +166,7 @@ typeCheckErrorCode (UnknownFunction _) = ErrorCode 60003
 typeCheckErrorCode (UnboundTypeVar _ _ _) = ErrorCode 60004
 typeCheckErrorCode (UndefinedType _ _ _) = ErrorCode 60005
 typeCheckErrorCode (NoMatchingOverload _) = ErrorCode 60006
+typeCheckErrorCode (DuplicateConstructor _ _) = ErrorCode 60007
 
 -- | 5xxxx — top-level errors
 parseErrorCode :: ErrorCode
@@ -353,6 +354,11 @@ typeCheckErrorMsg (UndefinedType typeName conName refName) =
     ++ ": type "
     ++ T.unpack refName
     ++ " is not defined"
+typeCheckErrorMsg (DuplicateConstructor conName decls) =
+  "Constructor '"
+    ++ T.unpack conName
+    ++ "' is declared multiple times: "
+    ++ intercalate ", " [T.unpack t ++ "/" ++ show a | (t, a) <- decls]
 
 displayName :: Types.Name -> String
 displayName (Types.Unqualified n) = T.unpack n
