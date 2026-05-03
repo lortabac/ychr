@@ -232,7 +232,12 @@ decomposeCompound st parentVar (Qualified m n) cargs =
   let inner = case cargs of
         [] -> AtomTerm n
         _ -> CompoundTerm (Unqualified n) cargs
-   in decomposeCompound st parentVar (Unqualified ":") [AtomTerm m, inner]
+      -- Carry the user-written qualified name forward as a typing
+      -- guard so the type checker can refine the parent variable's
+      -- type. The runtime ':'-match below enforces the structure.
+      parentTypeGuard = D.GuardParentType (VarTerm parentVar) (Qualified m n)
+      st' = st {hnfGuards = parentTypeGuard : st.hnfGuards}
+   in decomposeCompound st' parentVar (Unqualified ":") [AtomTerm m, inner]
 decomposeCompound st parentVar cname cargs =
   let matchGuard = D.GuardMatch (VarTerm parentVar) cname (length cargs)
       st' = st {hnfGuards = matchGuard : st.hnfGuards}
@@ -574,6 +579,7 @@ guardVars = Set.unions . map gVars
     gVars (D.GuardEqual t1 t2) = termVars t1 `Set.union` termVars t2
     gVars (D.GuardGetArg v t _) = Set.insert v (termVars t)
     gVars (D.GuardMatch t _ _) = termVars t
+    gVars (D.GuardParentType t _) = termVars t
 
 -- | Lift lambdas in a rule. The scope includes all variables from the
 -- entire rule (head, guard, and body).

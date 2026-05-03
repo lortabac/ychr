@@ -627,6 +627,14 @@ convertTypeExpr (Ann pexpr _) = case pexpr of
   Var t -> TypeVar t
   Atom "[]" -> TypeCon (Unqualified "[]") []
   Atom name -> TypeCon (Unqualified name) []
+  -- Qualified type name: @module:name@ or @module:name(args)@.
+  -- Mirrors the value-level handling at @Parser.hs:373-377@; without
+  -- this case the renamer would treat the whole thing as a 2-ary
+  -- @':'@ type constructor with two unrelated argument types.
+  Compound ":" [Ann (Atom m) _, Ann (Atom n) _] ->
+    TypeCon (Qualified m n) []
+  Compound ":" [Ann (Atom m) _, Ann (Compound n args) _] ->
+    TypeCon (Qualified m n) (map convertTypeExpr args)
   Compound "." args -> TypeCon (Unqualified ".") (map convertTypeExpr args)
   Compound name args -> TypeCon (Unqualified name) (map convertTypeExpr args)
   _ -> TypeCon (Unqualified "<unknown>") []

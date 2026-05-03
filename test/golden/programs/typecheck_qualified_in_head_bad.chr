@@ -1,0 +1,13 @@
+:- module(typecheck_qualified_in_head_bad, [foo/1]).
+
+:- use_module(library(prelude)).
+
+% foo's parameter is declared int, but the equation pattern matches a
+% qualified-in-head constructor (prelude:true) that has type
+% prelude:bool. With Section 7's fix, the desugarer emits a
+% GuardParentType alongside the ':'-rewrite, the type checker
+% translates it to check_parent_type, and delegate_parent_type
+% unifies the parameter's type (int) with tcon(prelude:bool, []).
+% Inconsistent → YCHR-60001.
+:- function (foo(int) -> int).
+foo(prelude:true) -> 0.

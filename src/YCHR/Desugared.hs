@@ -68,6 +68,11 @@ data Guard
   = GuardEqual Term Term
   | GuardMatch Term Name Int
   | GuardGetArg Text Term Int
+  | -- | Asserts that @term@ has the parent type of the named
+    -- (qualified) constructor. Emitted by the desugarer next to
+    -- the @':'@-rewrite for @Qualified m n@ head patterns; carries
+    -- no runtime semantics (the @':'@-match enforces structure).
+    GuardParentType Term Name
   | GuardExpr Term
   deriving (Show, Eq)
 

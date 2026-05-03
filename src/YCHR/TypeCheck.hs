@@ -429,6 +429,17 @@ checkGuard cctx lastConName (D.GuardGetArg varName term idx) = do
   ctx <- freshCtx cctx
   tellConstraint (Qualified "typechecker" "check_guard_getarg") [resultTypeVar, termType, VAtom (flattenName conName), VInt idx, ctx]
   pure lastConName
+checkGuard cctx lastConName (D.GuardParentType term conName) = do
+  -- Asserts that @term@ has the parent type of the named (qualified)
+  -- constructor. Emitted by the desugarer next to the ':'-rewrite for
+  -- @Qualified m n@ head patterns; refines the user-visible parent
+  -- variable's type that the ':'-match alone cannot express.
+  termType <- typeOfTerm cctx term
+  ctx <- freshCtx cctx
+  tellConstraint
+    (Qualified "typechecker" "check_parent_type")
+    [termType, VAtom (flattenName conName), ctx]
+  pure lastConName
 checkGuard cctx _ (D.GuardExpr term) = do
   tv <- typeOfTerm cctx term
   ctx <- freshCtx cctx
@@ -622,6 +633,7 @@ collectVarsInGuard :: D.Guard -> Set Text
 collectVarsInGuard (D.GuardEqual t1 t2) = collectVarsInTerm t1 <> collectVarsInTerm t2
 collectVarsInGuard (D.GuardMatch t _ _) = collectVarsInTerm t
 collectVarsInGuard (D.GuardGetArg v t _) = Set.singleton v <> collectVarsInTerm t
+collectVarsInGuard (D.GuardParentType t _) = collectVarsInTerm t
 collectVarsInGuard (D.GuardExpr t) = collectVarsInTerm t
 
 collectVarsInBodyGoal :: D.BodyGoal -> Set Text

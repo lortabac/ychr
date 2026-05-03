@@ -578,6 +578,10 @@ compileGuards funSet mOcc varMap si guards = do
   where
     isMatchGuard (D.GuardMatch {}) = True
     isMatchGuard (D.GuardGetArg {}) = True
+    -- GuardParentType carries no runtime semantics — the adjacent
+    -- ':'-rewrite enforces structure. Routed to the check bucket
+    -- where the catch-all swallows it without emitting code.
+    isMatchGuard (D.GuardParentType {}) = False
     isMatchGuard _ = False
 
 compileMatchGuard ::

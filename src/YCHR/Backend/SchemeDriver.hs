@@ -64,11 +64,27 @@ termToScheme (VarTerm n) = n
 termToScheme Wildcard = "*wildcard*"
 termToScheme (CompoundTerm (Types.Unqualified ".") [h, t]) =
   "(%cons " <> termToScheme h <> " " <> termToScheme t <> ")"
-termToScheme (CompoundTerm name ts) =
-  let f = case name of
-        Types.Unqualified n -> n
-        Types.Qualified m n -> m <> ":" <> n
-      symExpr = compileSymbol f
+-- Qualified names are encoded as @':'@-compounds, mirroring
+-- 'compileTerm' in @Compile.hs@. Without this, gen-driver would emit a
+-- flat @m:n@ symbol and head patterns (which compile to the
+-- @':'@-pair) would never match the goal's value.
+termToScheme (CompoundTerm (Types.Qualified m n) []) =
+  "(make-term (quote :) (vector "
+    <> printSExpr (compileSymbol m)
+    <> " "
+    <> printSExpr (compileSymbol n)
+    <> "))"
+termToScheme (CompoundTerm (Types.Qualified m n) ts) =
+  let argExprs = map termToScheme ts
+      inner =
+        "(make-term "
+          <> printSExpr (compileSymbol n)
+          <> " (vector "
+          <> T.intercalate " " argExprs
+          <> "))"
+   in "(make-term (quote :) (vector " <> printSExpr (compileSymbol m) <> " " <> inner <> "))"
+termToScheme (CompoundTerm (Types.Unqualified n) ts) =
+  let symExpr = compileSymbol n
       argExprs = map termToScheme ts
    in "(make-term " <> printSExpr symExpr <> " (vector " <> T.intercalate " " argExprs <> "))"
 

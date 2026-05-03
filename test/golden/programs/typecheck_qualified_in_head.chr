@@ -1,0 +1,11 @@
+:- module(typecheck_qualified_in_head, [c/2]).
+
+% Positive end-to-end test for Section 7's fix: a constraint declared
+% with a parameter typed using a qualified type name, matched by a
+% qualified-in-head constructor pattern. The type checker must accept
+% the program and the rule must fire at runtime.
+:- chr_type col ---> red ; green ; blue.
+
+:- chr_constraint c(typecheck_qualified_in_head:col, any).
+
+c(typecheck_qualified_in_head:red, R) <=> R = ok.
