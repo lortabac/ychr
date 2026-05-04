@@ -58,6 +58,10 @@ data Error
     -- execution. The compiled program itself was well-typed; the
     -- diagnostics here pertain only to the user-submitted goal.
     TypeErrors [Diagnostic TypeCheckError]
+  | -- | A live REPL session received a query that introduces anonymous
+    -- lambdas. Live sessions cannot grow the procedure map after the
+    -- effect stack has started, so such queries are rejected.
+    LambdasInLiveQuery
   deriving (Show)
 
 instance Exception Error

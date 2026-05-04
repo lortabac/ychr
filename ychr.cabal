@@ -198,6 +198,7 @@ library
                     , directory
                     , effectful-core
                     , filepath
+                    , haskeline
                     , megaparsec ^>=9.6
                     , parser-combinators
                     , template-haskell

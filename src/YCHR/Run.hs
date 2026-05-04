@@ -33,10 +33,13 @@ module YCHR.Run
 
     -- * Multi-goal query API
     runProgramWithQuery,
+
+    -- * Live REPL session
+    runLiveSession,
   )
 where
 
-import Control.Exception (throwIO)
+import Control.Exception (SomeException, displayException, fromException, throwIO, try)
 import Control.Monad (unless, void, when)
 import Data.List (intercalate)
 import Data.Map.Strict (Map)
@@ -47,17 +50,21 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Dispatch.Static
+import Effectful.Exception qualified as Eff
 import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.Writer.Static.Local (listen, runWriter)
+import System.Console.Haskeline (Settings, getInputLine, runInputT)
+import System.IO (hPutStr, hPutStrLn, stderr)
 import YCHR.Compile (buildFunctionSet, compileFunctionDef, funcProcName, genCallFunDispatches, tellProcName, vmName)
 import YCHR.Compile.Pipeline (CompiledProgram (..), Error (..), ExportResolution (..), Warning (..), compileFiles, compileModules)
 import YCHR.Desugar (desugarQueryGoals, liftQueryLambdas)
 import YCHR.Desugared qualified as D
+import YCHR.Display (Display (..))
 import YCHR.Meta (valueToTerm)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed (SourceLoc (..))
 import YCHR.Parser (parseConstraint, parseQueryWith)
-import YCHR.Pretty (prettyTerm)
+import YCHR.Pretty (prettyQueryResult, prettyTerm)
 import YCHR.Rename (renameQueryArgs, renameQueryGoals)
 import YCHR.Runtime.History (runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc)
@@ -187,42 +194,156 @@ termToValue (CompoundTerm name ts) = VTerm (vmName name).unName <$> traverse ter
 -- Multi-goal query API
 -- ---------------------------------------------------------------------------
 
+-- | Result of parsing, desugaring, lambda-lifting, and type-checking
+-- a query — everything that can be done before entering the CHR effect
+-- stack. 'queryLambdas' is non-empty iff the query introduced anonymous
+-- @fun(...) -> ... end@ expressions; 'extraProcs' must be added to the
+-- 'ProcMap' before executing the query.
+data PreparedQuery = PreparedQuery
+  { liftedGoals :: [D.BodyGoal],
+    queryLambdas :: [D.Function],
+    extraProcs :: [Procedure]
+  }
+
+-- | Parse, rename, desugar, lambda-lift, and type-check a query. Throws
+-- the appropriate 'Error' constructor on failure.
+prepareQuery :: CompiledProgram -> Text -> IO PreparedQuery
+prepareQuery cp src = do
+  goals <- either (throwIO . ParseError "<query>") pure (parseQueryWith cp.opTable "<query>" src)
+  (renamed, _renameWarnings) <- either (throwIO . RenameErrors) pure (renameQueryGoals cp.allModules goals)
+  bodyGoals <- either (throwIO . DesugarErrors) pure (desugarQueryGoals cp.functionNameSet renamed)
+  -- Lambda-lift query body goals and compile the generated functions
+  let queryLoc = SourceLoc "<query>" 1 1
+  (lifted, lambdas) <- either (throwIO . DesugarErrors) pure (liftQueryLambdas cp.nextLambdaIndex queryLoc (Atom "") bodyGoals)
+  -- Type-check the goals (after lambda lifting so lifted lambdas are
+  -- visible as untyped functions defaulting to all-@any@). Goal-time
+  -- type errors abort execution and surface as 'TypeErrors'.
+  let cdp = cp.desugaredProgram
+      progForCheck =
+        D.Program
+          cdp.rules
+          (cdp.functions ++ lambdas)
+          cdp.constraintTypes
+          cdp.typeDefinitions
+  tcErrs <- typeCheckGoals progForCheck queryLoc (Just "query") lifted
+  unless (null tcErrs) (throwIO (TypeErrors tcErrs))
+  let allFuns = cp.allFunctions ++ lambdas
+      funSet = buildFunctionSet (D.Program [] allFuns Map.empty [])
+      queryProcs = compileQueryLambdas funSet lambdas
+      queryDispatches = genCallFunDispatches allFuns
+  pure
+    PreparedQuery
+      { liftedGoals = lifted,
+        queryLambdas = lambdas,
+        extraProcs = queryProcs ++ queryDispatches
+      }
+
+-- | Execute the lifted goals of a 'PreparedQuery' inside an existing CHR
+-- session. Opens its own per-query variable scope and returns the
+-- resulting bindings.
+executePreparedQuery ::
+  (CHREffects es) =>
+  HostCallRegistry ->
+  [D.BodyGoal] ->
+  Eff es (Map Text Term)
+executePreparedQuery hostCalls lifted =
+  evalState (Map.empty :: Map Text Value) $ do
+    mapM_ (executeBodyGoal hostCalls) lifted
+    varMap <- get
+    Map.traverseWithKey valueToTerm varMap
+
 -- | Run a multi-goal query against a compiled program.
 --
 -- Parses the input as a comma-separated, dot-terminated list of goals,
 -- renames and desugars them like rule bodies, then executes each goal.
 runProgramWithQuery :: CompiledProgram -> HostCallRegistry -> Text -> IO (Map Text Term)
-runProgramWithQuery cp hostCalls src =
-  case parseQueryWith cp.opTable "<query>" src of
-    Left err -> throwIO (ParseError "<query>" err)
-    Right goals -> do
-      (renamed, _renameWarnings) <- either (throwIO . RenameErrors) pure (renameQueryGoals cp.allModules goals)
-      bodyGoals <- either (throwIO . DesugarErrors) pure (desugarQueryGoals cp.functionNameSet renamed)
-      -- Lambda-lift query body goals and compile the generated functions
-      let queryLoc = SourceLoc "<query>" 1 1
-      (liftedGoals, queryLambdas) <- either (throwIO . DesugarErrors) pure (liftQueryLambdas cp.nextLambdaIndex queryLoc (Atom "") bodyGoals)
-      -- Type-check the goals (after lambda lifting so lifted lambdas are
-      -- visible as untyped functions defaulting to all-@any@). Goal-time
-      -- type errors abort execution and surface as 'TypeErrors'.
-      let cdp = cp.desugaredProgram
-          progForCheck =
-            D.Program
-              cdp.rules
-              (cdp.functions ++ queryLambdas)
-              cdp.constraintTypes
-              cdp.typeDefinitions
-      tcErrs <- typeCheckGoals progForCheck queryLoc (Just "query") liftedGoals
-      unless (null tcErrs) (throwIO (TypeErrors tcErrs))
-      let allFuns = cp.allFunctions ++ queryLambdas
-          funSet = buildFunctionSet (D.Program [] allFuns Map.empty [])
-          queryProcs = compileQueryLambdas funSet queryLambdas
-          queryDispatches = genCallFunDispatches allFuns
-          extraProcs = queryProcs ++ queryDispatches
-      withCHRExtra cp hostCalls extraProcs $
-        evalState (Map.empty :: Map Text Value) $ do
-          mapM_ (executeBodyGoal hostCalls) liftedGoals
-          varMap <- get
-          Map.traverseWithKey valueToTerm varMap
+runProgramWithQuery cp hostCalls src = do
+  prep <- prepareQuery cp src
+  withCHRExtra cp hostCalls prep.extraProcs $
+    executePreparedQuery hostCalls prep.liftedGoals
+
+-- ---------------------------------------------------------------------------
+-- Live REPL session
+-- ---------------------------------------------------------------------------
+
+-- | Outcome of executing a single live-session query.
+data QueryOutcome
+  = -- | Query ran to completion. Carries the resulting bindings.
+    QueryOk (Map Text Term)
+  | -- | A pre-execution problem (parse, type, lambdas-rejected) that
+    -- left the constraint store untouched. The session can continue.
+    QueryRecoverable String
+  | -- | A runtime exception thrown during goal execution. The store
+    -- and bindings may be inconsistent; the live session must abort.
+    QueryFatal String
+
+-- | Run an interactive live session against a compiled program. A single
+-- 'withCHR' call wraps the whole session, so the constraint store,
+-- propagation history, and reactivation queue persist across queries
+-- entered at the @ychr live>@ prompt. The session ends when the user
+-- types @:end@, hits EOF, or a runtime error aborts execution.
+runLiveSession ::
+  CompiledProgram ->
+  HostCallRegistry ->
+  Settings IO ->
+  -- | Quiet mode (suppress prompt rendering).
+  Bool ->
+  IO ()
+runLiveSession cp hostCalls settings quiet = withCHR cp hostCalls liveLoop
+  where
+    prompt = if quiet then "" else "ychr live> "
+    liveLoop :: (CHREffects es) => Eff es ()
+    liveLoop = do
+      mline <- liftIO (runInputT settings (getInputLine prompt))
+      case mline of
+        Nothing -> pure ()
+        Just line -> dispatchLine line
+    dispatchLine :: (CHREffects es) => String -> Eff es ()
+    dispatchLine line
+      | stripped == ":end" = pure ()
+      | T.null stripped = liveLoop
+      | otherwise = do
+          outcome <- handleLiveQuery cp hostCalls (T.pack line)
+          case outcome of
+            QueryOk bindings -> do
+              liftIO (putStr (prettyQueryResult bindings))
+              liveLoop
+            QueryRecoverable msg -> do
+              liftIO (hPutStr stderr msg)
+              liveLoop
+            QueryFatal msg -> liftIO $ do
+              hPutStr stderr msg
+              hPutStrLn stderr "live session aborted due to runtime error."
+      where
+        stripped = T.strip (T.pack line)
+
+-- | Handle one query inside an existing live session: parse / typecheck
+-- in 'IO' (catching 'Error'), reject lifted lambdas (live sessions
+-- cannot grow the procedure map), then execute and catch any runtime
+-- exception as a fatal outcome.
+handleLiveQuery ::
+  (CHREffects es) =>
+  CompiledProgram ->
+  HostCallRegistry ->
+  Text ->
+  Eff es QueryOutcome
+handleLiveQuery cp hostCalls src = do
+  prepResult <- liftIO (try @SomeException (prepareQuery cp src))
+  case prepResult of
+    Left exc -> pure (classifyAsRecoverable exc)
+    Right prep
+      | not (null prep.queryLambdas) ->
+          pure (QueryRecoverable (displayMsg LambdasInLiveQuery))
+      | otherwise -> do
+          execResult <- Eff.try @SomeException (executePreparedQuery hostCalls prep.liftedGoals)
+          case execResult of
+            Left exc -> pure (QueryFatal (renderFatal exc))
+            Right bindings -> pure (QueryOk bindings)
+  where
+    classifyAsRecoverable exc = case fromException exc :: Maybe Error of
+      Just err -> QueryRecoverable (displayMsg err)
+      Nothing -> QueryFatal (renderFatal exc)
+    renderFatal exc = displayException exc ++ "\n"
 
 -- | Execute a single desugared body goal in the query context.
 executeBodyGoal ::

@@ -18,6 +18,7 @@ module YCHR.Display
     typeCheckErrorCode,
     parseErrorCode,
     operatorConflictCode,
+    lambdasInLiveQueryCode,
   )
 where
 
@@ -30,6 +31,7 @@ import System.Console.ANSI (Color (..), ColorIntensity (..), ConsoleIntensity (.
 import Text.Megaparsec
 import YCHR.Collect (CollectError (..))
 import YCHR.Compile (CompileError (..))
+import YCHR.Compile.Pipeline (Error (..), Warning (..))
 import YCHR.Desugar (DesugarError (..))
 import YCHR.Diagnostic (Diagnostic (..))
 import YCHR.Parsed (AnnP (..))
@@ -38,7 +40,6 @@ import YCHR.Parser (ParseValidationError (..))
 import YCHR.Pretty (prettyPExprSrc, prettyTermSrc)
 import YCHR.Rename (RenameError (..), RenameWarning (..))
 import YCHR.Resolve (ResolveError (..))
-import YCHR.Run (Error (..), Warning (..))
 import YCHR.TypeCheck (TypeCheckError (..))
 import YCHR.Types qualified as Types
 
@@ -175,6 +176,9 @@ parseErrorCode = ErrorCode 50001
 
 operatorConflictCode :: ErrorCode
 operatorConflictCode = ErrorCode 50002
+
+lambdasInLiveQueryCode :: ErrorCode
+lambdasInLiveQueryCode = ErrorCode 50003
 
 -- ---------------------------------------------------------------------------
 -- Display instances
@@ -403,3 +407,11 @@ instance Display Error where
       loc
       Nothing
       (Just (prettyPExprSrc origin))
+  displayMsg LambdasInLiveQuery =
+    displayMsgWithSrcLoc
+      lambdasInLiveQueryCode
+      SevError
+      "Anonymous lambdas (fun(...) -> ... end) are not supported in live REPL sessions. Use a named :- function declaration instead."
+      (P.SourceLoc "<query>" 1 1)
+      (Just "live session")
+      Nothing

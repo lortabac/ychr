@@ -21,12 +21,12 @@ import YCHR.Meta (metaHostCallRegistry)
 import YCHR.PExpr qualified as P
 import YCHR.Parsed qualified as Parsed
 import YCHR.Parser (opTableEntries, parseConstraint)
-import YCHR.Rename (renameQueryArgs)
-import YCHR.Types (Constraint (..))
 import YCHR.Pretty (prettyBindings, prettyQueryResult, renderAtom)
-import YCHR.Run (CompiledProgram (..), Error, Warning, compileFiles, compileModules, resolveQueryConstraint, runProgramWithGoal, runProgramWithQuery)
+import YCHR.Rename (renameQueryArgs)
+import YCHR.Run (CompiledProgram (..), Error, Warning, compileFiles, compileModules, resolveQueryConstraint, runLiveSession, runProgramWithGoal, runProgramWithQuery)
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
 import YCHR.TypeCheck (typeCheckProgram)
+import YCHR.Types (Constraint (..))
 import YCHR.Types qualified as Types
 import YCHR.VM.SExpr (VMProgram (..), serialize)
 
@@ -154,15 +154,18 @@ runRepl opts files = do
       histFile <- getXdgDirectory XdgData "ychr/history"
       createDirectoryIfMissing True (takeDirectory histFile)
       let CompiledProgram {exportMap = em} = prog
-          constraintNames = nub [T.unpack n | Types.UnqualifiedIdentifier n _ <- Map.keys em]
-          completions = [":quit", ":recompile", ":help", ":list_files", ":list_modules", ":list_declarations", ":list_operators"] ++ constraintNames
-          completeFunc = completeWord Nothing " ," $ \prefix ->
-            return $ map (\n -> (simpleCompletion n) {isFinished = False}) $ filter (isPrefixOf prefix) completions
-          settings = (defaultSettings :: Settings IO) {historyFile = Just histFile, complete = completeFunc}
-      runInputT settings (repl opts.quiet files prog)
+          exportedNames = nub [T.unpack n | Types.UnqualifiedIdentifier n _ <- Map.keys em]
+          outerCompletions = [":begin", ":quit", ":recompile", ":help", ":list_files", ":list_modules", ":list_declarations", ":list_operators"] ++ exportedNames
+          liveCompletions = ":end" : exportedNames
+          mkCompleteFunc cs = completeWord Nothing " ," $ \prefix ->
+            return $ map (\n -> (simpleCompletion n) {isFinished = False}) $ filter (isPrefixOf prefix) cs
+          baseSettings = (defaultSettings :: Settings IO) {historyFile = Just histFile}
+          outerSettings = baseSettings {complete = mkCompleteFunc outerCompletions}
+          liveSettings = baseSettings {complete = mkCompleteFunc liveCompletions}
+      runInputT outerSettings (repl opts.quiet files liveSettings prog)
 
-repl :: Bool -> [FilePath] -> CompiledProgram -> InputT IO ()
-repl quietMode files prog = loop
+repl :: Bool -> [FilePath] -> Settings IO -> CompiledProgram -> InputT IO ()
+repl quietMode files liveSettings prog = loop
   where
     showHelp = do
       outputStrLn "Commands:"
@@ -172,6 +175,7 @@ repl quietMode files prog = loop
       outputStrLn "  :list_modules          List the compiled modules"
       outputStrLn "  :list_declarations     List visible declarations"
       outputStrLn "  :list_operators        List defined operators"
+      outputStrLn "  :begin                 Start a live CHR session (end with :end)"
       outputStrLn "  :quit, :q              Exit the REPL"
       loop
     showFiles = do
@@ -218,7 +222,7 @@ repl quietMode files prog = loop
         Right (prog', warnings) -> do
           liftIO (printWarnings warnings)
           liftIO (printTypeErrors prog')
-          repl quietMode files prog'
+          repl quietMode files liveSettings prog'
     loop = do
       minput <- getInputLine (if quietMode then "" else "ychr> ")
       case minput of
@@ -233,6 +237,9 @@ repl quietMode files prog = loop
         Just ":list_modules" -> showModules
         Just ":list_declarations" -> showDeclarations
         Just ":list_operators" -> showOperators
+        Just ":begin" -> do
+          liftIO (runLiveSession prog hostCalls liveSettings quietMode)
+          loop
         Just "" -> loop
         Just line -> do
           outcome <-
