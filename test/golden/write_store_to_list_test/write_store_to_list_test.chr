@@ -1,0 +1,9 @@
+:- module(write_store_to_list_test, [go/1]).
+
+:- use_module(library(meta)).
+
+:- chr_constraint go/1.
+:- chr_constraint c/1.
+:- chr_constraint d/2.
+
+go(R) <=> c(1), d(2, 3), c(4), R is write_store_to_list().

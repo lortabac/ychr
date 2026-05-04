@@ -29,6 +29,9 @@ HASKELL_ONLY = {
     "copy_term_sharing",
     "int_float_conversion",
     "typecheck_constructor_in_lambda_body",
+    # write_store_to_list is a Haskell-only meta host call; no Scheme
+    # implementation exists yet (parallels print_store).
+    "write_store_to_list_test",
 }
 
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only

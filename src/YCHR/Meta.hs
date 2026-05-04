@@ -22,7 +22,7 @@ import Data.Text qualified as T
 import Effectful (Eff, liftIO, runEff, type (:>))
 import YCHR.Parser (builtinOps, parseTermWith)
 import YCHR.Pretty (prettyTerm)
-import YCHR.Runtime.Registry (HostCallFn (..), HostCallRegistry, unit)
+import YCHR.Runtime.Registry (HostCallFn (..), HostCallRegistry, unit, valueList)
 import YCHR.Runtime.Store (Suspension (..), getAllStoredConstraints, isSuspAlive)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, deref, newVar, runUnify)
@@ -118,6 +118,12 @@ metaHostCallRegistry =
           lines_ <- concat <$> traverse renderGroup groups
           liftIO (mapM_ putStrLn lines_)
           pure unit
+      ),
+      ( Name "write_store_to_list",
+        HostCallFn $ \_ -> do
+          groups <- getAllStoredConstraints
+          susps <- concat <$> traverse suspsOfGroup groups
+          pure (RVal (valueList susps))
       )
     ]
   where
@@ -130,3 +136,17 @@ metaHostCallRegistry =
         else do
           argTerms <- traverse (valueToTerm "_") susp.args
           pure [prettyTerm (CompoundTerm (Types.Unqualified tyName) argTerms)]
+    suspsOfGroup (tyName, susps) =
+      fmap concat . traverse (suspAsValue tyName) . toList $ susps
+    suspAsValue tyName susp = do
+      alive <- isSuspAlive susp
+      if not alive
+        then pure []
+        else do
+          args' <- traverse deepDeref susp.args
+          pure [VTerm tyName args']
+    deepDeref v = do
+      v' <- deref v
+      case v' of
+        VTerm f xs -> VTerm f <$> traverse deepDeref xs
+        _ -> pure v'

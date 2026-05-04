@@ -1,5 +1,7 @@
-:- module(test, [dup/2]).
+:- module(test, [dup/2, persist/1]).
 
-:- chr_constraint dup/2.
+:- chr_constraint dup/2, persist/1.
 
 dup(X, Y) <=> X = Y.
+
+persist(X) ==> true.
