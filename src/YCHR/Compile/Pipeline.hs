@@ -40,6 +40,7 @@ import YCHR.Rename.Types (toListExport)
 import YCHR.Resolve (ResolveError, resolveProgram)
 import YCHR.Resolved qualified as R
 import YCHR.StdLib (stdlib)
+import YCHR.TypeCheck.Error (TypeCheckError)
 import YCHR.Types (SymbolTable)
 import YCHR.Types qualified as Types
 import YCHR.VM (Program)
@@ -53,6 +54,10 @@ data Error
   | ResolveErrors [Diagnostic ResolveError]
   | CompileErrors [Diagnostic CompileError]
   | OperatorConflict (AnnP Text)
+  | -- | Type errors detected when checking a goal or query before
+    -- execution. The compiled program itself was well-typed; the
+    -- diagnostics here pertain only to the user-submitted goal.
+    TypeErrors [Diagnostic TypeCheckError]
   deriving (Show)
 
 instance Exception Error

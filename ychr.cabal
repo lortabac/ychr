@@ -168,6 +168,7 @@ library
                     , YCHR.StdLib
                     , YCHR.StdLib.TH
                     , YCHR.TypeCheck
+                    , YCHR.TypeCheck.Error
                     , YCHR.TypeCheck.TH
                     , YCHR.TypeCheck.Compiled
                     , YCHR.Types
@@ -179,6 +180,7 @@ library
                     , YCHR.SExpr
                     , YCHR.Runtime.Interpreter
                     , YCHR.Runtime.Registry
+                    , YCHR.Runtime.Session
                     , YCHR.Runtime.Types
                     , YCHR.Runtime.Var
                     , YCHR.Runtime.Store

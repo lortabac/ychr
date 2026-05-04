@@ -1,0 +1,4 @@
+:- module(tg, [paint/1]).
+:- chr_type color ---> red ; green ; blue.
+:- chr_constraint paint(color).
+go @ paint(_) <=> true.

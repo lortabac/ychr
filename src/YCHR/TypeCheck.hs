@@ -27,6 +27,7 @@
 module YCHR.TypeCheck
   ( TypeCheckError (..),
     typeCheckProgram,
+    typeCheckGoals,
   )
 where
 
@@ -47,12 +48,13 @@ import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic (..))
 import YCHR.PExpr (PExpr (Atom), mkOpTable)
 import YCHR.Parsed (AnnP (..), SourceLoc (..))
-import YCHR.Run (CHREffects, tellConstraint, withCHR)
 import YCHR.Runtime.Interpreter (baseHostCallRegistry)
 import YCHR.Runtime.Registry (fromValueList, valueList)
+import YCHR.Runtime.Session (CHREffects, tellConstraint, withCHR)
 import YCHR.Runtime.Types (Value (..))
 import YCHR.Runtime.Var (Unify, deref, newVar)
 import YCHR.TypeCheck.Compiled (typeCheckerProgram)
+import YCHR.TypeCheck.Error (TypeCheckError (..))
 import YCHR.TypeCheck.TH (TypeCheckerProgram (..))
 import YCHR.Types
   ( DataConstructor (..),
@@ -99,30 +101,6 @@ tcAtom n = "typechecker__" <> n
 -- compiled head patterns produce.
 tcCon0 :: Text -> Value
 tcCon0 n = VTerm (tcAtom n) []
-
--- ---------------------------------------------------------------------------
--- Error types
--- ---------------------------------------------------------------------------
-
-data TypeCheckError
-  = InconsistentTypes Text Text
-  | UnknownConstraint Text
-  | UnknownFunction Text
-  | NoMatchingOverload Text
-  | UnboundTypeVar Text Text Text
-  | UndefinedType Text Text Text
-  | -- | A constructor name is declared by more than one type.
-    -- Carries the flattened constructor name and the
-    -- @(typeName, arity)@ pairs of every declaration.
-    DuplicateConstructor Text [(Text, Int)]
-  | -- | A known data constructor used with the wrong number of
-    -- arguments. Carries the flattened constructor name, the
-    -- use-site arity, and the declared arity. Constructors are
-    -- name-only in YCHR's type system, so the declared arity is
-    -- part of a constructor's identity and any mismatch is an
-    -- error rather than a fall-through to @any@.
-    ConstructorArityMismatch Text Int Int
-  deriving (Show, Eq)
 
 -- ---------------------------------------------------------------------------
 -- Type-check environment and context
@@ -307,6 +285,57 @@ typeCheckProgram prog = do
         -- Collect errors from the CHR session
         collectErrors
   pure (hsErrors ++ chrErrors)
+
+-- | Type-check a list of body goals (a query or single goal) against
+-- the signatures of an already-compiled program.
+--
+-- Mirrors 'typeCheckProgram' but skips Haskell-side validations that
+-- only make sense on a whole program (no new type definitions or
+-- constructors are introduced by a goal). Variables are gathered once
+-- across the whole goal list so a name shared between goals refers to
+-- the same type slot — matching how rule bodies are checked.
+--
+-- Pass the desugared program whose signatures should be in scope. For
+-- queries that introduce lifted lambdas, extend @prog.functions@ with
+-- those lambdas before calling so their (default-@any@) signatures are
+-- visible to @check_function_use@.
+typeCheckGoals ::
+  D.Program ->
+  SourceLoc ->
+  Maybe Text ->
+  [D.BodyGoal] ->
+  IO [Diagnostic TypeCheckError]
+typeCheckGoals prog loc lbl goals = do
+  let conMap = buildConMap prog.typeDefinitions
+      conAlias = buildConAlias prog.typeDefinitions
+      funSet = buildFunSet prog.functions
+      env = TypeCheckEnv {conMap, conAlias, funSet}
+  let tcp = typeCheckerProgram
+      cp =
+        CompiledProgram
+          { program = tcp.program,
+            exportMap = tcp.exportMap,
+            exportedSet = tcp.exportedSet,
+            symbolTable = tcp.symbolTable,
+            allModules = [],
+            opTable = mkOpTable [],
+            allFunctions = [],
+            nextLambdaIndex = 0,
+            functionNameSet = Set.empty,
+            desugaredProgram = D.Program [] [] Map.empty []
+          }
+  withCHR cp baseHostCallRegistry $ do
+    runReader env $
+      evalState emptyCtxStore $ do
+        tellConstraint (Qualified "typechecker" "errors") [valueList []]
+        tellConstraintSigs prog
+        tellFunctionSigs prog
+        tellConSigs prog
+        let allVarNames = foldMap collectVarsInBodyGoal goals
+        varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> newVar) (Set.toList allVarNames)
+        let cctx = CheckCtx {varTypes, label = lbl, loc, origin = Atom ""}
+        mapM_ (checkBodyGoal cctx) goals
+        collectErrors
 
 -- ---------------------------------------------------------------------------
 -- Context helpers

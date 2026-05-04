@@ -394,6 +394,7 @@ instance Display Error where
   displayMsg (ResolveErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (DesugarErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (CompileErrors errs) = displayErrors (map displayMsg errs)
+  displayMsg (TypeErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (OperatorConflict (AnnP name loc origin)) =
     displayMsgWithSrcLoc
       operatorConflictCode

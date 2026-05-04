@@ -48,7 +48,7 @@ import Data.Text qualified as T
 import Effectful
 import Effectful.Dispatch.Static
 import Effectful.State.Static.Local (State, evalState, get, modify)
-import Effectful.Writer.Static.Local (Writer, listen, runWriter)
+import Effectful.Writer.Static.Local (listen, runWriter)
 import YCHR.Compile (buildFunctionSet, compileFunctionDef, funcProcName, genCallFunDispatches, tellProcName, vmName)
 import YCHR.Compile.Pipeline (CompiledProgram (..), Error (..), ExportResolution (..), Warning (..), compileFiles, compileModules)
 import YCHR.Desugar (desugarQueryGoals, liftQueryLambdas)
@@ -59,134 +59,30 @@ import YCHR.Parsed (SourceLoc (..))
 import YCHR.Parser (parseConstraint, parseQueryWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (renameQueryArgs, renameQueryGoals)
-import YCHR.Runtime.History (PropHistory, runPropHistory)
+import YCHR.Runtime.History (runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc)
-import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue)
+import YCHR.Runtime.Reactivation (drainQueue, enqueue, runReactQueue)
+import YCHR.Runtime.Session
+  ( CHR,
+    CHREffects,
+    ProcMap,
+    StaticRep (CHRRep),
+    runCHR,
+    tellConstraint,
+    withCHR,
+    withCHRExtra,
+  )
 import YCHR.Runtime.Store (CHRStore, aliveConstraint, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId, Value (..))
 import YCHR.Runtime.Var (Unify, deref, equal, newVar, runUnify, unify)
+import YCHR.TypeCheck (typeCheckGoals)
 import YCHR.Types (Constraint (..), ConstraintType, Term (..))
 import YCHR.Types qualified as Types
 import YCHR.VM (Name (..), Procedure (..), Program (..), StackFrame)
 
--- ---------------------------------------------------------------------------
--- CHR effect
--- ---------------------------------------------------------------------------
-
-type ProcMap = Map Name Procedure
-
 -- | Runtime call stack for error reporting (newest first).
+-- Re-exported here for use in this module's existing helpers.
 type CallStack = [StackFrame]
-
-data CHR :: Effect
-
-type instance DispatchOf CHR = Static WithSideEffects
-
-data instance StaticRep CHR
-  = CHRRep ProcMap HostCallRegistry (Map Types.UnqualifiedIdentifier ExportResolution) (Set Types.QualifiedIdentifier)
-
--- | Shorthand for the full set of effects available inside a CHR session.
-type CHREffects es =
-  ( CHR :> es,
-    Unify :> es,
-    CHRStore :> es,
-    PropHistory :> es,
-    ReactQueue :> es,
-    Writer [SuspensionId] :> es,
-    State CallStack :> es,
-    IOE :> es
-  )
-
--- | Set up a CHR session for a compiled program. All runtime state (constraint
--- store, propagation history, reactivation queue, unification variables) is
--- initialised and persists for the duration of the computation.
-runCHR ::
-  (IOE :> es) =>
-  CompiledProgram ->
-  HostCallRegistry ->
-  Eff (CHR : State CallStack : Writer [SuspensionId] : ReactQueue : PropHistory : CHRStore : Unify : es) a ->
-  Eff es a
-runCHR cp hc =
-  runUnify
-    . runCHRStore cp.program.typeNames
-    . runPropHistory
-    . runReactQueue
-    . fmap fst
-    . runWriter @[SuspensionId]
-    . evalState @CallStack []
-    . evalStaticRep (CHRRep procMap hc cp.exportMap cp.exportedSet)
-  where
-    procMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- cp.program.procedures]
-
--- | Convenience wrapper that runs a CHR session in 'IO'.
-withCHR ::
-  CompiledProgram ->
-  HostCallRegistry ->
-  (forall es. (CHREffects es) => Eff es a) ->
-  IO a
-withCHR cp hc action = runEff (runCHR cp hc action)
-
--- | Like 'withCHR' but merges extra procedures (e.g. query-time lambda
--- compilations and updated call dispatches) into the ProcMap.
-withCHRExtra ::
-  CompiledProgram ->
-  HostCallRegistry ->
-  [Procedure] ->
-  (forall es. (CHREffects es) => Eff es a) ->
-  IO a
-withCHRExtra cp hc extraProcs action =
-  runEff
-    . runUnify
-    . runCHRStore cp.program.typeNames
-    . runPropHistory
-    . runReactQueue
-    . fmap fst
-    . runWriter @[SuspensionId]
-    . evalState @CallStack []
-    . evalStaticRep (CHRRep procMap hc cp.exportMap cp.exportedSet)
-    $ action
-  where
-    baseProcMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- cp.program.procedures]
-    extraProcMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- extraProcs]
-    procMap = extraProcMap `Map.union` baseProcMap
-
--- | Add a constraint to the store. The constraint name can be unqualified
--- (resolved via the export map) or fully qualified.
-tellConstraint :: (CHREffects es) => Types.Name -> [Value] -> Eff es ()
-tellConstraint name args = do
-  CHRRep procMap hc exportMap exportedSet <- getStaticRep
-  let arity = length args
-  resolved <- case resolveQueryConstraint' exportMap exportedSet name arity of
-    Left err -> error err
-    Right qname -> pure qname
-  let tellName = tellProcName resolved arity
-  unless (Map.member tellName procMap) $
-    error ("Constraint not found: " ++ T.unpack tellName.unName)
-  _ <- callProc procMap hc tellName (map RVal args)
-  pure ()
-
--- | Name resolution extracted from 'resolveQueryConstraint' to work with
--- just a name and arity.
-resolveQueryConstraint' ::
-  Map Types.UnqualifiedIdentifier ExportResolution -> Set Types.QualifiedIdentifier -> Types.Name -> Int -> Either String Types.Name
-resolveQueryConstraint' expMap expSet name arity = case name of
-  Types.Unqualified n ->
-    case Map.lookup (Types.UnqualifiedIdentifier n arity) expMap of
-      Just (UniqueExport qname) -> Right qname
-      Just (AmbiguousExport ms) ->
-        Left
-          ( "Ambiguous constraint: "
-              ++ T.unpack n
-              ++ "/"
-              ++ show arity
-              ++ ", exported by: "
-              ++ intercalate ", " (map T.unpack ms)
-          )
-      Nothing -> Left ("Unknown constraint: " ++ T.unpack n ++ "/" ++ show arity)
-  Types.Qualified m n ->
-    if Set.member (Types.QualifiedIdentifier m n arity) expSet
-      then Right name
-      else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n ++ "/" ++ show arity)
 
 -- ---------------------------------------------------------------------------
 -- Single-goal API
@@ -253,7 +149,16 @@ runProgramWithGoal cp hostCalls src =
     -- the same flat-functor form the compiled head patterns expect.
     Right (Constraint cname cargs) -> do
       (renamedArgs, _warnings) <- either (throwIO . RenameErrors) pure (renameQueryArgs cp.allModules cargs)
-      runProgramWithGoalDSL cp hostCalls (Constraint cname renamedArgs)
+      -- Canonicalize the constraint name via the export map so the
+      -- type-check sees the same qualified name 'tellConstraintSigs'
+      -- registers. Defer name-resolution failures to 'runProgramWithGoalDSL'
+      -- (which produces a clearer "constraint not found" error).
+      let renamed = case resolveQueryConstraint cp (Constraint cname renamedArgs) of
+            Right c -> c
+            Left _ -> Constraint cname renamedArgs
+      tcErrs <- typeCheckGoals cp.desugaredProgram (SourceLoc "<query>" 1 1) (Just "query") [D.BodyConstraint renamed]
+      unless (null tcErrs) (throwIO (TypeErrors tcErrs))
+      runProgramWithGoalDSL cp hostCalls renamed
 
 termToValue :: (Unify :> es, State (Map Text Value) :> es) => Term -> Eff es Value
 termToValue (VarTerm n) = do
@@ -296,6 +201,18 @@ runProgramWithQuery cp hostCalls src =
       -- Lambda-lift query body goals and compile the generated functions
       let queryLoc = SourceLoc "<query>" 1 1
       (liftedGoals, queryLambdas) <- either (throwIO . DesugarErrors) pure (liftQueryLambdas cp.nextLambdaIndex queryLoc (Atom "") bodyGoals)
+      -- Type-check the goals (after lambda lifting so lifted lambdas are
+      -- visible as untyped functions defaulting to all-@any@). Goal-time
+      -- type errors abort execution and surface as 'TypeErrors'.
+      let cdp = cp.desugaredProgram
+          progForCheck =
+            D.Program
+              cdp.rules
+              (cdp.functions ++ queryLambdas)
+              cdp.constraintTypes
+              cdp.typeDefinitions
+      tcErrs <- typeCheckGoals progForCheck queryLoc (Just "query") liftedGoals
+      unless (null tcErrs) (throwIO (TypeErrors tcErrs))
       let allFuns = cp.allFunctions ++ queryLambdas
           funSet = buildFunctionSet (D.Program [] allFuns Map.empty [])
           queryProcs = compileQueryLambdas funSet queryLambdas
