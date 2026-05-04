@@ -1,0 +1,5 @@
+:- module(arith_int_float_mismatch, [t/1]).
+:- use_module(prelude).
+:- chr_constraint t/1.
+
+t(R) <=> R is 1 + 1.0.

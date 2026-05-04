@@ -1,0 +1,47 @@
+:- module(comparisons, [t/2]).
+:- use_module(prelude).
+:- chr_constraint t/2.
+
+% Integer comparisons. Each rule is dispatched on the tag and a numeric
+% comparison guard; the binding tells us which clause matched.
+t(int_lt, R)     <=> 3 < 5  | R = lt.
+t(int_lt, R)     <=> R = ge.
+
+t(int_gt, R)     <=> 5 > 3  | R = gt.
+t(int_gt, R)     <=> R = le.
+
+t(int_le_eq, R)  <=> 4 =< 4 | R = le.
+t(int_le_eq, R)  <=> R = gt.
+
+t(int_le_lt, R)  <=> 3 =< 4 | R = le.
+t(int_le_lt, R)  <=> R = gt.
+
+t(int_ge_eq, R)  <=> 4 >= 4 | R = ge.
+t(int_ge_eq, R)  <=> R = lt.
+
+t(int_eq_yes, R) <=> 7 == 7 | R = yes.
+t(int_eq_yes, R) <=> R = no.
+
+t(int_eq_no, R)  <=> 7 == 8 | R = yes.
+t(int_eq_no, R)  <=> R = no.
+
+% Float comparisons.
+t(flt_lt, R)     <=> 1.5 < 2.5 | R = lt.
+t(flt_lt, R)     <=> R = ge.
+
+t(flt_eq, R)     <=> 1.5 == 1.5 | R = yes.
+t(flt_eq, R)     <=> R = no.
+
+% Atom equality (==).
+t(atom_eq, R)    <=> foo == foo | R = yes.
+t(atom_eq, R)    <=> R = no.
+
+t(atom_neq, R)   <=> foo == bar | R = yes.
+t(atom_neq, R)   <=> R = no.
+
+% Term equality (==): structural.
+t(term_eq, R)    <=> p(1,2) == p(1,2) | R = yes.
+t(term_eq, R)    <=> R = no.
+
+t(term_neq, R)   <=> p(1,2) == p(1,3) | R = yes.
+t(term_neq, R)   <=> R = no.

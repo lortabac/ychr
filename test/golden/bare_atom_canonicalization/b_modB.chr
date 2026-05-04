@@ -1,0 +1,3 @@
+:- module(modB, [type(shape/0)]).
+
+:- chr_type shape ---> only_in_b ; box.

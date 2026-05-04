@@ -1,0 +1,6 @@
+:- module(tc, [pair/2]).
+:- chr_constraint pair(T, T).
+
+% A polymorphic constraint requires both arguments to share type T.
+% Using one int arg and one string arg should fail unification.
+bad @ pair(X, Y) <=> X = 1, Y = "hello".

@@ -1,0 +1,8 @@
+:- module(opslib, [
+    fun '<>>'/2,
+    op(500, yfx, '<>>')
+]).
+:- use_module(prelude).
+
+:- function ('<>>'(int, int) -> int).
+'<>>'(X, Y) -> host:'+'(host:'*'(X, 10), Y).

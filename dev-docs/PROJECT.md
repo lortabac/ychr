@@ -352,6 +352,15 @@ Golden tests run on both the Haskell interpreter (`cabal test`) and the Scheme b
 
 To add a new golden test, create a directory under `test/golden/`, drop the `.chr`, `.goal`, and `.expected` files into it, and the test is picked up automatically.
 
+### Scheme backend skip lists
+
+Some tests pin Haskell-runtime behavior that the Scheme runtime does not (yet) match — typically because the Scheme runtime lacks a primitive (e.g. Guile's r6rs subset has no `quotient`, so integer `div`/`mod` is unimplemented), pretty-prints values differently (e.g. negative numbers as `-2` vs Haskell's `(-2)`, unicode-quoted atoms), or doesn't implement a meta primitive (e.g. `copy_term`). The Scheme harness in `test/scheme/test_golden.py` provides two skip mechanisms so a divergent case does not block `make test`:
+
+- `HASKELL_ONLY` — a set of test-directory names. Every case in those directories is skipped on the Scheme backend.
+- `HASKELL_ONLY_CASES` — a set of `(test_dir, case_name)` pairs for finer control when only some cases in a directory diverge.
+
+Both sets are intended as a compatibility bridge, not a permanent exclusion: an entry should be removed once the Scheme runtime is updated to match. Adding to either set requires a comment explaining why the case diverges.
+
 
 ## References
 

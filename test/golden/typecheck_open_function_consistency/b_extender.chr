@@ -1,0 +1,6 @@
+:- module(ext, []).
+:- use_module(owner, [classify/1]).
+
+% This equation is type-inconsistent: classify is declared to take int
+% but here we match a string.
+classify("oops") -> 1.

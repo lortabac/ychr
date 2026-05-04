@@ -1,0 +1,12 @@
+:- module(bacmain, [tag/2]).
+:- use_module(modA).
+:- use_module(modB).
+:- chr_constraint tag/2.
+
+% Atoms unique to a single module canonicalize to that module's
+% qualified form. Atoms shared between modules stay unqualified
+% (since the renamer can't pick a unique source).
+tag(only_in_a, R) <=> R = a.
+tag(only_in_b, R) <=> R = b.
+tag(box, R)       <=> R = b.
+tag(_, R)         <=> R = other.

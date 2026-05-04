@@ -1,0 +1,32 @@
+:- module(term_variables, [empty/1, one/2, repeated/2, multi/4, nested/2]).
+:- use_module(prelude).
+:- use_module(library(lists)).
+:- chr_constraint empty/1, one/2, repeated/2, multi/4, nested/2.
+
+% Ground term: result is empty list.
+empty(R) <=>
+    R is term_variables(p(1, foo, [a, b])).
+
+% One variable: result has length 1, head is the variable.
+one(X, R) <=>
+    Vs is term_variables(p(1, X, foo)),
+    L is length(Vs),
+    R = result(L, Vs).
+
+% Repeated variable in term: deduplicated to one.
+repeated(X, R) <=>
+    Vs is term_variables(p(X, X, X)),
+    L is length(Vs),
+    R = L.
+
+% Three distinct variables: length 3 (atoms in the term are excluded).
+multi(X, Y, Z, R) <=>
+    Vs is term_variables(p(X, Y, Z, foo)),
+    L is length(Vs),
+    R = L.
+
+% Nested compound containing a variable.
+nested(X, R) <=>
+    Vs is term_variables(p(q(r(X, X)))),
+    L is length(Vs),
+    R = L.

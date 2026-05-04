@@ -1,0 +1,9 @@
+:- module(opmain, [run/3]).
+:- use_module(prelude).
+:- use_module(opslib, [fun '<>>'/2, op(500, yfx, '<>>')]).
+:- chr_constraint run/3.
+
+% The custom '<>>' infix from opslib (X <>> Y = X*10 + Y) is only visible
+% because of the import. Without it, '<>>' would not be a known operator.
+run(X, Y, R) <=>
+    R is X <>> Y.

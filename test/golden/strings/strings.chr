@@ -1,0 +1,23 @@
+:- module(strings, [t/2]).
+:- use_module(prelude).
+:- use_module(library(strings)).
+:- chr_constraint t/2.
+
+t(concat_basic, R)    <=> R is string_concat("foo", "bar").
+t(concat_empty_l, R)  <=> R is string_concat("", "abc").
+t(concat_empty_r, R)  <=> R is string_concat("abc", "").
+t(concat_both, R)     <=> R is string_concat("", "").
+
+t(len_zero, R)        <=> R is string_length("").
+t(len_short, R)       <=> R is string_length("a").
+t(len_basic, R)       <=> R is string_length("hello").
+t(len_unicode, R)     <=> R is string_length("café").
+
+t(upper_basic, R)     <=> R is string_upper("Hello").
+t(upper_already, R)   <=> R is string_upper("ABC").
+t(upper_empty, R)     <=> R is string_upper("").
+t(upper_unicode, R)   <=> R is string_upper("café").
+
+t(lower_basic, R)     <=> R is string_lower("HELLO").
+t(lower_mixed, R)     <=> R is string_lower("HelloWorld").
+t(lower_empty, R)     <=> R is string_lower("").

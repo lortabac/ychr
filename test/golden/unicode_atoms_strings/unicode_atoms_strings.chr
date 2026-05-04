@@ -1,0 +1,13 @@
+:- module(uas, [t/2]).
+:- chr_constraint t/2.
+
+t(quoted_atom, R)     <=> R = 'café'.
+t(quoted_with_space, R) <=> R = 'hello world'.
+t(quoted_unicode, R)  <=> R = 'naïve résumé'.
+t(quoted_chinese, R)  <=> R = '你好'.
+t(string_unicode, R)  <=> R = "café".
+t(string_emoji, R)    <=> R = "hi 👋".
+t(string_escape_n, R) <=> R = "line1\nline2".
+t(string_escape_t, R) <=> R = "col1\tcol2".
+t(string_escape_q, R) <=> R = "She said \"hi\"".
+t(string_backslash, R) <=> R = "back\\slash".

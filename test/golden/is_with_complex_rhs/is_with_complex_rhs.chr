@@ -1,0 +1,30 @@
+:- module(icr, [t/2]).
+:- use_module(prelude).
+:- chr_constraint t/2.
+
+:- function double/1, square/1, plus/2.
+double(X) -> X + X.
+square(X) -> X * X.
+plus(X, Y) -> X + Y.
+
+% Parenthesized arithmetic expression.
+t(parens, R)        <=> R is (2 + 3) * (4 - 1).
+
+% Nested function calls.
+t(nested_fns, R)    <=> R is double(square(3)).
+
+% Three-deep function nesting.
+t(three_deep, R)    <=> R is double(double(double(1))).
+
+% Arithmetic mixed with function calls.
+t(mixed, R)         <=> R is plus(double(2), square(3)).
+
+% Lambda applied via $call inside is.
+t(lambda_call, R)   <=> R is '$call'(fun(X) -> X * 10 end, 7).
+
+% Lambda body containing arithmetic.
+t(lambda_arith, R)  <=> R is '$call'(fun(X) -> (X + 1) * (X - 1) end, 5).
+
+% Conditional-style: max/2 returns one branch.
+t(max_basic, R)     <=> R is max(7, 3).
+t(min_basic, R)     <=> R is min(7, 3).

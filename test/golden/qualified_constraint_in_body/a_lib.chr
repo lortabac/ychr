@@ -1,0 +1,5 @@
+:- module(qclib, [compute/2]).
+:- use_module(prelude).
+:- chr_constraint compute/2.
+
+compute(X, R) <=> R is X * 3.

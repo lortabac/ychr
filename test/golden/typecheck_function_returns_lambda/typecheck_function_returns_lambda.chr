@@ -1,0 +1,13 @@
+:- module(tc, [run/2]).
+:- use_module(prelude).
+:- chr_constraint run/2.
+
+:- function (make_adder(int) -> fun(int) -> int end).
+:- function (apply(fun(int) -> int end, int) -> int).
+
+make_adder(N) -> fun(X) -> X + N end.
+apply(F, X)   -> '$call'(F, X).
+
+run(N, R) <=>
+    F is make_adder(N),
+    R is apply(F, 10).

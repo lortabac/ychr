@@ -1,0 +1,17 @@
+:- module(int_float_conversion, [t/2]).
+:- use_module(prelude).
+:- chr_constraint t/2.
+
+t(i2f_zero, R)    <=> R is int_to_float(0).
+t(i2f_pos, R)     <=> R is int_to_float(42).
+t(i2f_neg, R)     <=> R is int_to_float(-7).
+t(i2f_big, R)     <=> R is int_to_float(1000000).
+
+t(f2i_pos, R)     <=> R is float_to_int(3.7).
+t(f2i_neg, R)     <=> R is float_to_int(-3.7).
+t(f2i_pos_zero, R)<=> R is float_to_int(0.0).
+t(f2i_whole, R)   <=> R is float_to_int(5.0).
+
+% Round-trip identity for whole-valued ints.
+t(rt_int, R)      <=> R is float_to_int(int_to_float(123)).
+t(rt_float, R)    <=> R is int_to_float(float_to_int(7.0)).

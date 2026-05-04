@@ -1,0 +1,16 @@
+:- module(tc, [run/2, type(maybe/1)]).
+:- use_module(prelude).
+:- chr_constraint run/2.
+
+:- chr_type maybe(T) ---> just(T) ; nothing.
+
+% A function returning a lambda whose body uses a typed constructor.
+:- function (wrap_maker(int) -> fun(int) -> maybe(int) end).
+:- function (apply(fun(int) -> maybe(int) end, int) -> maybe(int)).
+
+wrap_maker(_) -> fun(X) -> just(X) end.
+apply(F, X)   -> '$call'(F, X).
+
+run(N, R) <=>
+    F is wrap_maker(0),
+    R is apply(F, N).

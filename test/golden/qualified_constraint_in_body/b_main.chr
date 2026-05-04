@@ -1,0 +1,10 @@
+:- module(qcmain, [run/2, run_via_unqualified/2]).
+:- use_module(prelude).
+:- use_module(qclib).
+:- chr_constraint run/2, run_via_unqualified/2.
+
+% Body uses the qualified form qclib:compute/2 explicitly.
+run(X, R) <=> qclib:compute(X, R).
+
+% Body uses the unqualified form (resolved via implicit import).
+run_via_unqualified(X, R) <=> compute(X, R).

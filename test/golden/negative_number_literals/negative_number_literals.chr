@@ -1,0 +1,17 @@
+:- module(nnl, [t/2, neg/2]).
+:- use_module(prelude).
+:- chr_constraint t/2, neg/2.
+
+% Negative literals as direct values.
+t(neg_int, R)    <=> R = -42.
+t(neg_float, R)  <=> R = -3.14.
+
+% Negative literal in arithmetic (via host '-' delegation).
+t(arith_int, R)  <=> R is host:'-'(-5, 3).
+t(arith_flt, R)  <=> R is host:'-'(-1.5, 2.0).
+
+% Subtraction with a negative literal RHS.
+t(diff, R)       <=> R is 1 - 2.
+
+% Prefix negation applied to a goal-supplied variable, via host '-'.
+neg(X, R) <=> R is host:'-'(0, X).

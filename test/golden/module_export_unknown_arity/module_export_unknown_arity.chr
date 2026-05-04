@@ -1,0 +1,4 @@
+:- module(meua, [c/2]).
+:- chr_constraint c/1.
+
+c(X) <=> R = X, R = R.

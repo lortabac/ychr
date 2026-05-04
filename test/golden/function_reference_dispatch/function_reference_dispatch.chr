@@ -1,0 +1,35 @@
+:- module(function_reference_dispatch, [t/2]).
+:- use_module(prelude).
+:- chr_constraint t/2.
+
+:- function double/1, plus/2, identity/1, apply/2, apply2/3.
+
+double(X)   -> X * 2.
+plus(X, Y)  -> X + Y.
+identity(X) -> X.
+
+apply(F, X)     -> '$call'(F, X).
+apply2(F, X, Y) -> '$call'(F, X, Y).
+
+% Reference to unary function passed via fun name/1.
+t(unary, R) <=>
+    R is apply(fun double/1, 21).
+
+% Reference to binary function via fun name/2.
+t(binary, R) <=>
+    R is apply2(fun plus/2, 3, 4).
+
+% identity/1 — first-class function reference returns input.
+t(identity, R) <=>
+    R is apply(fun identity/1, foo).
+
+% Reference threaded through a local variable.
+t(via_var, R) <=>
+    F is fun double/1,
+    R is apply(F, 50).
+
+% Reference vs lambda interchangeable: both work as first-class fns.
+t(mixed, R) <=>
+    R1 is apply(fun double/1, 5),
+    R2 is apply(fun(X) -> X * 3 end, 5),
+    R = pair(R1, R2).

@@ -1,0 +1,19 @@
+:- module(hnf_list_head, [first/2, rest/2, kind/2, fixed/2]).
+:- chr_constraint first/2, rest/2, kind/2, fixed/2.
+
+% Head matches cons cell, extracts head.
+first([H|_], R) <=> R = H.
+first([], R)    <=> R = empty.
+
+% Head matches cons cell, extracts tail.
+rest([_|T], R) <=> R = T.
+rest([], R)    <=> R = empty.
+
+% Tag the input as empty / cons / other.
+kind([], R)     <=> R = empty.
+kind([_|_], R)  <=> R = cons.
+kind(_, R)      <=> R = other.
+
+% Fixed-length pattern: matches exactly [a, b, c].
+fixed([a, b, c], R) <=> R = abc.
+fixed(_, R)         <=> R = no_match.

@@ -1,0 +1,4 @@
+:- module(owner, [classify/1]).
+:- open_function (classify(int) -> int).
+
+classify(0) -> 100.

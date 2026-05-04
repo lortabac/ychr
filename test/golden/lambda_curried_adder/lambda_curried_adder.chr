@@ -1,0 +1,31 @@
+:- module(lambda_curried_adder, [t/2]).
+:- use_module(prelude).
+:- chr_constraint t/2.
+
+:- function make_adder/1, twice/1.
+
+make_adder(N) -> fun(X) -> X + N end.
+twice(N)      -> fun(X) -> X + X + N end.
+
+% Two captures coexist; both retain independent N.
+t(both, R) <=>
+    F1 is make_adder(10),
+    F2 is make_adder(20),
+    R1 is '$call'(F1, 5),
+    R2 is '$call'(F2, 5),
+    R = pair(R1, R2).
+
+% Same lambda used twice; result is sum of two applications.
+t(reuse, R) <=>
+    F is make_adder(7),
+    R1 is '$call'(F, 1),
+    R2 is '$call'(F, 100),
+    R = pair(R1, R2).
+
+% Two distinct closures from different recipes.
+t(twice_then_add, R) <=>
+    F1 is twice(3),
+    F2 is make_adder(100),
+    R1 is '$call'(F1, 4),
+    R2 is '$call'(F2, R1),
+    R = R2.

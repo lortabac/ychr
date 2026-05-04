@@ -1,0 +1,21 @@
+:- module(hnf_repeated_var_across_partners, [run/2, run/3]).
+:- chr_constraint entry/2, lookup/2, run/2, run/3.
+
+% Repeated K in head: lookup(K, V) joins entry(K, V2) on K — partner index condition.
+lookup(K, V), entry(K, V2) <=> V = V2.
+
+% Driver: stage entries, then look up; result threaded through V.
+run(K, V) <=>
+    entry(a, 100),
+    entry(b, 200),
+    entry(c, 300),
+    lookup(K, V).
+
+% Two-stage driver: stage two entries, look up two keys.
+run(K1, K2, R) <=>
+    entry(a, 1),
+    entry(b, 2),
+    entry(c, 3),
+    lookup(K1, V1),
+    lookup(K2, V2),
+    R = pair(V1, V2).

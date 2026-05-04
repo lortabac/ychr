@@ -1,0 +1,13 @@
+:- module(hnf_literal_in_head, [tag/2]).
+:- chr_constraint tag/2.
+
+% Literal head args of every kind: int, float, atom, string, empty list, compound.
+tag(0, R)         <=> R = zero.
+tag(42, R)        <=> R = answer.
+tag(1.5, R)       <=> R = one_half.
+tag(0.0, R)       <=> R = float_zero.
+tag(foo, R)       <=> R = foo_atom.
+tag("hi", R)      <=> R = hi_string.
+tag([], R)        <=> R = empty_list.
+tag(p(a, b), R)   <=> R = pair_ab.
+tag(_, R)         <=> R = catchall.

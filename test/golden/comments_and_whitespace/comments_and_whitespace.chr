@@ -1,0 +1,32 @@
+% Top-level comment before module declaration.
+:- module(cw, [t/2]).
+:- use_module(prelude). % Trailing comment after directive.
+
+% Comment between directives.
+
+:- chr_constraint t/2.
+
+% Comment between rules.
+t(simple, R) <=> R = ok.   % Mid-line trailing comment.
+
+t(after_blank,
+  R) <=>          % Comment in mid-rule.
+    R = wrapped.  % Comment between body items.
+
+% Multi-paragraph block.
+%
+% Each line starts with %.
+%
+
+t(many_blanks, R) <=>
+
+
+    R = blanks_ok.
+
+t(deep_calc, R) <=>
+    % Comment inside a body.
+    A is 2,
+    % Another inside.
+    B is 3,
+    R is A + B.
+% Trailing comment at EOF; no newline before it intentionally absent.

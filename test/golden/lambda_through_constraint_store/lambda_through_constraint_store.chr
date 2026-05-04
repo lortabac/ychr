@@ -1,0 +1,15 @@
+:- module(lambda_through_constraint_store, [run/2]).
+:- use_module(prelude).
+:- chr_constraint stash/1, take_first/1, run/2.
+
+% Dispatch rule: when stash and take_first both exist, apply the lambda
+% from stash. The closure has survived a round trip through the store.
+stash(F), take_first(R) <=>
+    R is '$call'(F, 10).
+
+% Driver: bind the lambda to a local first (so 'is' constructs a real
+% closure value), stash it, then trigger the dispatch.
+run(N, R) <=>
+    F is fun(X) -> X + N end,
+    stash(F),
+    take_first(R).

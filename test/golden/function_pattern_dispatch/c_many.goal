@@ -1,0 +1,1 @@
+function_pattern_dispatch:t(c, [a, b, c, d, e], R)

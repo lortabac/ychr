@@ -1,0 +1,11 @@
+:- module(hnf_wildcard_in_head, [peek/3, two/3, mid/4]).
+:- chr_constraint peek/3, two/3, mid/4.
+
+% Wildcards in head positions; the named X is what gets returned.
+peek(_, X, R)    <=> R = X.
+
+% Multiple wildcards at different positions.
+two(_, _, R)     <=> R = matched.
+
+% Wildcard between two named arguments — the named ones must still bind.
+mid(A, _, B, R)  <=> R = pair(A, B).
