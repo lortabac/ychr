@@ -14,11 +14,16 @@
 -- they handle @any@: when @any@ appears on the left, it succeeds
 -- without binding the right side (which may be a type parameter that
 -- should stay open). When @any@ appears on the right and the left is
--- a var, the var is bound to @any@. This means the Haskell driver
--- __must__ always place the source variable's type on the LEFT and
--- the declared type on the RIGHT. Body unifications (@X = Y@) are
--- symmetric (both sides are source variable types) so the asymmetry
--- does not cause issues there.
+-- a var, the var is bound to @any@. The discipline is therefore:
+-- source-variable type on the LEFT, declared type on the RIGHT.
+--
+-- The driver enforces this indirectly: every source-vs-declared
+-- meeting is routed through @check_constraint_use@,
+-- @check_function_use@, or @check_constructor_use@, and the CHR rules
+-- for those constraints produce @tc_unify@ calls in the correct
+-- order. Direct @check_unify@ calls from the driver only happen
+-- between two source-variable types (body @X = Y@, body @X is e@,
+-- guard @X = Y@), where the ordering is irrelevant.
 module YCHR.TypeCheck
   ( TypeCheckError (..),
     typeCheckProgram,
@@ -35,7 +40,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Reader.Static (Reader, ask, runReader)
-import Effectful.State.Static.Local (State, evalState, get, modify)
+import Effectful.State.Static.Local (State, evalState, get, put)
 import YCHR.Compile.Names (vmName)
 import YCHR.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Desugared qualified as D
@@ -67,11 +72,23 @@ import YCHR.VM qualified as VM
 runtimeName :: Name -> Text
 runtimeName name = let VM.Name t = vmName name in t
 
--- | Runtime form of a typechecker-module-declared constructor (e.g.
--- @int@, @sig@, @tcon@). The renamer canonicalizes such names to
--- @typechecker:<n>@; the runtime functor symbol is the flattened
--- form @typechecker__<n>@. Used as the functor for 'VTerm' values
--- this Haskell driver builds.
+-- | Parse a 'flattenName'-encoded text back into a 'Name'. The renamer
+-- emits qualified names as @\"module:local\"@ and unqualified names as
+-- @\"local\"@; this is the inverse of 'flattenName'. Used for AST nodes
+-- that store the flattened text (e.g. function-reference @AtomTerm@s)
+-- so we can route the name through 'runtimeName' rather than hand-edit
+-- the encoding.
+parseFlattenedName :: Text -> Name
+parseFlattenedName t = case T.splitOn ":" t of
+  [m, n] -> Qualified m n
+  _ -> Unqualified t
+
+-- | Runtime functor name of a constructor declared in the @typechecker@
+-- module — base types (@int@), record/tag constructors (@sig@), and
+-- compound shapes (@tcon@, @fun@) alike. The renamer canonicalizes
+-- such names to @typechecker:<n>@; the runtime functor symbol is the
+-- flattened form @typechecker__<n>@. Used as the functor argument of
+-- 'VTerm' values this Haskell driver builds, of any arity.
 tcAtom :: Text -> Text
 tcAtom n = "typechecker__" <> n
 
@@ -98,6 +115,13 @@ data TypeCheckError
     -- Carries the flattened constructor name and the
     -- @(typeName, arity)@ pairs of every declaration.
     DuplicateConstructor Text [(Text, Int)]
+  | -- | A known data constructor used with the wrong number of
+    -- arguments. Carries the flattened constructor name, the
+    -- use-site arity, and the declared arity. Constructors are
+    -- name-only in YCHR's type system, so the declared arity is
+    -- part of a constructor's identity and any mismatch is an
+    -- error rather than a fall-through to @any@.
+    ConstructorArityMismatch Text Int Int
   deriving (Show, Eq)
 
 -- ---------------------------------------------------------------------------
@@ -108,11 +132,14 @@ data TypeCheckError
 data TypeCheckEnv = TypeCheckEnv
   { -- | Map from constructor name to its parent type definition and constructor info.
     conMap :: Map Name (TypeDefinition, DataConstructor),
-    -- | Resolves a use-site (unqualified name, arity) to its declaration's
-    -- qualified name when exactly one constructor matches. Ambiguous pairs
-    -- are omitted so the canonicalization falls through and the lookup
-    -- behaves as if the name were unknown.
-    conAlias :: Map (Text, Int) Name,
+    -- | Resolves a use-site unqualified name to its declaration's qualified
+    -- name when exactly one constructor matches. Constructors are name-only
+    -- in YCHR's type system (arity is not part of their identity), so this
+    -- is keyed by name alone — wrong-arity uses are diagnosed separately by
+    -- 'validateConstructorArities'. Ambiguous names (declared in more than
+    -- one module) are omitted so the canonicalization falls through and the
+    -- lookup behaves as if the name were unknown.
+    conAlias :: Map Text Name,
     -- | Set of known function identifiers (name, arity).
     funSet :: Set (Name, Int)
   }
@@ -160,17 +187,17 @@ detectDuplicateConstructors tds =
           dc <- td.constructors
         ]
 
--- | Build the use-site → declaration alias map. A @(text, arity)@ key is
--- included only when exactly one declared constructor matches; ambiguous
--- pairs (same unqualified name and arity declared in different modules)
--- are dropped so 'canonicalizeConName' falls through to the unqualified
--- name and the type checker treats them as unknown rather than guessing.
-buildConAlias :: [TypeDefinition] -> Map (Text, Int) Name
+-- | Build the use-site → declaration alias map, keyed by unqualified name.
+-- A name is included only when exactly one declared constructor uses it;
+-- ambiguous names (same unqualified name declared in more than one module)
+-- are dropped so 'canonicalizeConName' falls through and the type checker
+-- treats the use site as unknown rather than guessing.
+buildConAlias :: [TypeDefinition] -> Map Text Name
 buildConAlias tds =
   Map.mapMaybe single $
     Map.fromListWith
       (++)
-      [ ((unqualifiedText dc.conName, length dc.conArgs), [dc.conName])
+      [ (unqualifiedText dc.conName, [dc.conName])
       | td <- tds,
         dc <- td.constructors
       ]
@@ -184,19 +211,44 @@ buildConAlias tds =
 -- unique match exists. 'Qualified' names pass through unchanged;
 -- 'Unqualified' names are resolved through 'conAlias'. When no unique
 -- match exists the name is returned as-is.
-canonicalizeConName :: TypeCheckEnv -> Name -> Int -> Name
-canonicalizeConName _ name@(Qualified _ _) _ = name
-canonicalizeConName env (Unqualified n) arity =
-  Map.findWithDefault (Unqualified n) (n, arity) env.conAlias
+canonicalizeConName :: TypeCheckEnv -> Name -> Name
+canonicalizeConName _ name@(Qualified _ _) = name
+canonicalizeConName env (Unqualified n) =
+  Map.findWithDefault (Unqualified n) n env.conAlias
+
+-- | True when @name@ is a known data constructor and its declared arity
+-- matches @useArity@. Wrong-arity uses are diagnosed by
+-- 'validateConstructorArities'; this predicate gates the @check_constructor_use@
+-- emissions so we don't pile a spurious tcon mismatch on top of the
+-- arity-mismatch error.
+knownConstructorWithArity :: TypeCheckEnv -> Name -> Int -> Bool
+knownConstructorWithArity env name useArity =
+  case Map.lookup name env.conMap of
+    Just (_, dc) -> length dc.conArgs == useArity
+    Nothing -> False
 
 buildFunSet :: [D.Function] -> Set (Name, Int)
 buildFunSet fns = Set.fromList [(f.name, f.arity) | f <- fns]
 
--- | Context for error reporting. Maps integer IDs to source information.
-type CtxMap = Map Int (Maybe Text, SourceLoc, PExpr)
+-- | Source-location info recovered from a CHR-side @Ctx@ handle.
+type CtxInfo = (Maybe Text, SourceLoc, PExpr)
+
+-- | Map from @Ctx@ handle (an 'Int') to the originating source location.
+type CtxMap = Map Int CtxInfo
+
+-- | Holds the source-location info for every CHR-side @Ctx@ handle the
+-- driver has allocated. Threaded as a single 'State' effect so the
+-- counter and the map stay in step.
+data CtxStore = CtxStore
+  { nextId :: !Int,
+    ctxMap :: !CtxMap
+  }
+
+emptyCtxStore :: CtxStore
+emptyCtxStore = CtxStore {nextId = 0, ctxMap = Map.empty}
 
 -- | Effect constraint shared by all internal checking functions.
-type CheckEffects es = (CHREffects es, Reader TypeCheckEnv :> es, State CtxMap :> es, State Int :> es)
+type CheckEffects es = (CHREffects es, Reader TypeCheckEnv :> es, State CtxStore :> es)
 
 -- ---------------------------------------------------------------------------
 -- Main entry point
@@ -217,10 +269,15 @@ typeCheckProgram prog = do
       conAlias = buildConAlias prog.typeDefinitions
       funSet = buildFunSet prog.functions
       -- Haskell-side validation
+      env = TypeCheckEnv {conMap, conAlias, funSet}
       hsErrors =
         validateTypeDefinitions prog.typeDefinitions (Map.fromList [(td.name, td) | td <- prog.typeDefinitions])
           ++ detectDuplicateConstructors prog.typeDefinitions
-  -- Convert TypeCheckerProgram to a minimal CompiledProgram for withCHR
+          ++ validateConstructorArities env prog
+  -- 'withCHR' wants a full 'CompiledProgram', but only reads the four
+  -- fields that 'TypeCheckerProgram' carries (program, exportMap,
+  -- exportedSet, symbolTable). The remaining fields are stubbed out;
+  -- they would be unused even if populated.
   let tcp = typeCheckerProgram
       cp =
         CompiledProgram
@@ -235,46 +292,50 @@ typeCheckProgram prog = do
             functionNameSet = Set.empty,
             desugaredProgram = D.Program [] [] Map.empty []
           }
-  let env = TypeCheckEnv {conMap, conAlias, funSet}
   chrErrors <- withCHR cp baseHostCallRegistry $ do
     runReader env $
-      evalState (Map.empty :: CtxMap) $
-        evalState (0 :: Int) $ do
-          -- Initialize error accumulator
-          tellConstraint (Qualified "typechecker" "errors") [valueList []]
-          -- Tell environment: constraint signatures
-          tellConstraintSigs prog
-          -- Tell environment: function signatures
-          tellFunctionSigs prog
-          -- Tell environment: constructor signatures
-          tellConSigs prog
-          -- Check each rule
-          mapM_ checkRule prog.rules
-          -- Check each function equation
-          mapM_ checkFunction prog.functions
-          -- Collect errors
-          collectErrors
+      evalState emptyCtxStore $ do
+        -- Initialize error accumulator
+        tellConstraint (Qualified "typechecker" "errors") [valueList []]
+        -- Tell environment: constraint, function, and constructor signatures
+        tellConstraintSigs prog
+        tellFunctionSigs prog
+        tellConSigs prog
+        -- Check each rule and function equation
+        mapM_ checkRule prog.rules
+        mapM_ checkFunction prog.functions
+        -- Collect errors from the CHR session
+        collectErrors
   pure (hsErrors ++ chrErrors)
 
 -- ---------------------------------------------------------------------------
 -- Context helpers
 -- ---------------------------------------------------------------------------
 
-freshCtx ::
-  (State CtxMap :> es, State Int :> es) =>
+-- | Allocate a fresh integer handle and store the current
+-- 'CheckCtx''s source-location info in 'CtxMap' under that handle.
+-- The returned 'VInt' is what the CHR rules carry around as the
+-- @Ctx@ argument; on error decoding we look the handle back up to
+-- recover the source location for the diagnostic.
+freshCtxHandle ::
+  (State CtxStore :> es) =>
   CheckCtx ->
   Eff es Value
-freshCtx cctx = do
-  n <- get @Int
-  modify @Int (+ 1)
-  modify @CtxMap (Map.insert n (cctx.label, cctx.loc, cctx.origin))
+freshCtxHandle cctx = do
+  store <- get @CtxStore
+  let n = store.nextId
+  put
+    CtxStore
+      { nextId = n + 1,
+        ctxMap = Map.insert n (cctx.label, cctx.loc, cctx.origin) store.ctxMap
+      }
   pure (VInt n)
 
 -- ---------------------------------------------------------------------------
 -- Environment setup
 -- ---------------------------------------------------------------------------
 
-tellConstraintSigs :: (CHREffects es, State CtxMap :> es, State Int :> es) => D.Program -> Eff es ()
+tellConstraintSigs :: (CHREffects es, State CtxStore :> es) => D.Program -> Eff es ()
 tellConstraintSigs prog =
   Map.foldlWithKey'
     ( \m name argTypes ->
@@ -286,38 +347,33 @@ tellConstraintSigs prog =
     (pure ())
     prog.constraintTypes
 
-tellFunctionSigs :: (CHREffects es, State CtxMap :> es, State Int :> es) => D.Program -> Eff es ()
-tellFunctionSigs prog =
-  mapM_
-    ( \f -> case f.signatures of
-        [] -> do
-          -- No type annotations: default all to any
-          let anyArgs = replicate f.arity (tcCon0 "any")
-              sig = VTerm (tcAtom "sig") [valueList anyArgs, tcCon0 "any"]
-          tellConstraint (Qualified "typechecker" "function_sig") [VAtom (runtimeName f.name), sig]
-        [(argTys, retTy)] -> do
-          -- Single signature: use non-overloaded path
-          let allVars = collectTypeVars argTys ++ collectTypeVarsExpr retTy
-          tvars <- freshTypeVarsForDecl allVars
-          encodedArgs <- traverse (encodeTypeExpr tvars) argTys
-          encodedRet <- encodeTypeExpr tvars retTy
-          let sig = VTerm (tcAtom "sig") [valueList encodedArgs, encodedRet]
-          tellConstraint (Qualified "typechecker" "function_sig") [VAtom (runtimeName f.name), sig]
-        sigs -> do
-          -- Multiple signatures: overloaded path
-          encodedSigs <- mapM (encodeSig f.name) sigs
-          tellConstraint (Qualified "typechecker" "function_sigs") [VAtom (runtimeName f.name), valueList encodedSigs]
-    )
-    prog.functions
+tellFunctionSigs :: (CHREffects es, State CtxStore :> es) => D.Program -> Eff es ()
+tellFunctionSigs prog = mapM_ tellOne prog.functions
   where
-    encodeSig _name (argTys, retTy) = do
-      let allVars = collectTypeVars argTys ++ collectTypeVarsExpr retTy
-      tvars <- freshTypeVarsForDecl allVars
-      encodedArgs <- traverse (encodeTypeExpr tvars) argTys
-      encodedRet <- encodeTypeExpr tvars retTy
-      pure (VTerm (tcAtom "sig") [valueList encodedArgs, encodedRet])
+    tellOne f = case f.signatures of
+      [] -> do
+        -- No annotations: default to all-any.
+        let anyArgs = replicate f.arity (tcCon0 "any")
+            sig = VTerm (tcAtom "sig") [valueList anyArgs, tcCon0 "any"]
+        tellConstraint (Qualified "typechecker" "function_sig") [VAtom (runtimeName f.name), sig]
+      [s] -> do
+        sig <- encodeFunctionSig s
+        tellConstraint (Qualified "typechecker" "function_sig") [VAtom (runtimeName f.name), sig]
+      ss -> do
+        sigs <- traverse encodeFunctionSig ss
+        tellConstraint (Qualified "typechecker" "function_sigs") [VAtom (runtimeName f.name), valueList sigs]
 
-tellConSigs :: (CHREffects es, State CtxMap :> es, State Int :> es) => D.Program -> Eff es ()
+-- | Encode one declared @(arg-types, return-type)@ pair as a runtime
+-- @sig(args, ret)@ value, allocating fresh logical variables for the
+-- type variables shared between the args and the return.
+encodeFunctionSig :: (Unify :> es) => ([TypeExpr], TypeExpr) -> Eff es Value
+encodeFunctionSig (argTys, retTy) = do
+  tvars <- freshTypeVarsForDecl (collectTypeVars argTys ++ collectTypeVarsExpr retTy)
+  encodedArgs <- traverse (encodeTypeExpr tvars) argTys
+  encodedRet <- encodeTypeExpr tvars retTy
+  pure (VTerm (tcAtom "sig") [valueList encodedArgs, encodedRet])
+
+tellConSigs :: (CHREffects es, State CtxStore :> es) => D.Program -> Eff es ()
 tellConSigs prog =
   mapM_
     ( \td ->
@@ -412,13 +468,20 @@ checkRule rule = do
 checkConstraintUse :: (CheckEffects es) => CheckCtx -> Types.Constraint -> Eff es ()
 checkConstraintUse cctx c = do
   argTypeVars <- traverse (typeOfTerm cctx) c.args
-  ctx <- freshCtx cctx
+  ctx <- freshCtxHandle cctx
   tellConstraint (Qualified "typechecker" "check_constraint_use") [VAtom (runtimeName c.name), valueList argTypeVars, ctx]
 
 -- ---------------------------------------------------------------------------
 -- Guard checking
 -- ---------------------------------------------------------------------------
 
+-- | Process a guard list left-to-right, threading the canonicalized
+-- constructor name from each 'D.GuardMatch' into any 'D.GuardGetArg's
+-- that follow on the same term. Per 'docs/type-system.md' (Desugared
+-- guards / HNF synthetic guards), a @GuardGetArg@ always follows a
+-- @GuardMatch@ on the same term — the match establishes which
+-- constructor's field types to use, which the get-arg then needs to
+-- resolve a field index.
 checkGuards :: (CheckEffects es) => CheckCtx -> [D.Guard] -> Eff es ()
 checkGuards cctx = go Nothing
   where
@@ -431,7 +494,7 @@ checkGuard :: (CheckEffects es) => CheckCtx -> Maybe Name -> D.Guard -> Eff es (
 checkGuard cctx lastConName (D.GuardEqual t1 t2) = do
   tv1 <- typeOfTerm cctx t1
   tv2 <- typeOfTerm cctx t2
-  ctx <- freshCtx cctx
+  ctx <- freshCtxHandle cctx
   tellConstraint (Qualified "typechecker" "check_unify") [tv1, tv2, ctx]
   pure lastConName
 checkGuard cctx _ (D.GuardMatch term conName arity) = do
@@ -439,34 +502,45 @@ checkGuard cctx _ (D.GuardMatch term conName arity) = do
   -- check_constructor_use we emit below) all reference the same
   -- declaration-side qualified form.
   env <- ask @TypeCheckEnv
-  let canonical = canonicalizeConName env conName arity
-  -- When the constructor is known, emit a check_constructor_use so
-  -- the type checker can refine the parent term's type to the
-  -- constructor's declared parent type. This handles both nullary
-  -- and non-nullary constructors uniformly — for non-nullary, the
-  -- subsequent GuardGetArg also fires and unifies field types.
-  when (Map.member canonical env.conMap) $ do
+  let canonical = canonicalizeConName env conName
+  -- Emit check_constructor_use only when the constructor is known
+  -- \*and* the use-site arity matches the declaration. Wrong-arity
+  -- uses are reported by 'validateConstructorArities' as a
+  -- ConstructorArityMismatch; here we silently fall through so we
+  -- don't pile a spurious tcon mismatch on top of the real error.
+  when (knownConstructorWithArity env canonical arity) $ do
     termType <- typeOfTerm cctx term
     argTypeVars <- replicateM arity newVar
-    ctx <- freshCtx cctx
+    ctx <- freshCtxHandle cctx
     tellConstraint
       (Qualified "typechecker" "check_constructor_use")
       [VAtom (runtimeName canonical), valueList argTypeVars, termType, ctx]
   pure (Just canonical)
 checkGuard cctx lastConName (D.GuardGetArg varName term idx) = do
-  resultTypeVar <- case Map.lookup varName cctx.varTypes of
-    Just v -> pure v
-    Nothing -> newVar -- defensive: should not happen for well-formed AST
+  resultTypeVar <- varType cctx varName
+  -- The lastConName fallback covers a (defensively impossible)
+  -- GuardGetArg with no preceding GuardMatch on the same term.
   conName <- case lastConName of
     Just cn -> pure cn
-    Nothing -> pure (Unqualified varName) -- defensive: GuardGetArg without GuardMatch
-  termType <- typeOfTerm cctx term
-  ctx <- freshCtx cctx
-  tellConstraint (Qualified "typechecker" "check_guard_getarg") [resultTypeVar, termType, VAtom (runtimeName conName), VInt idx, ctx]
+    Nothing -> pure (Unqualified varName)
+  -- Skip emission when the preceding pattern was a known constructor
+  -- but the field index is outside its declared arity. The
+  -- ConstructorArityMismatch from 'validateConstructorArities' has
+  -- already covered the user-facing error; emitting here would let the
+  -- @delegate_guard_getarg@ rule call @nth@ out of bounds.
+  env <- ask @TypeCheckEnv
+  let withinArity =
+        case Map.lookup conName env.conMap of
+          Just (_, dc) -> idx < length dc.conArgs
+          Nothing -> True -- unknown constructor → unknown_guard_getarg handles it
+  when withinArity $ do
+    termType <- typeOfTerm cctx term
+    ctx <- freshCtxHandle cctx
+    tellConstraint (Qualified "typechecker" "check_guard_getarg") [resultTypeVar, termType, VAtom (runtimeName conName), VInt idx, ctx]
   pure lastConName
 checkGuard cctx _ (D.GuardExpr term) = do
   tv <- typeOfTerm cctx term
-  ctx <- freshCtx cctx
+  ctx <- freshCtxHandle cctx
   tellConstraint (Qualified "typechecker" "check_guard_bool") [tv, ctx]
   pure Nothing
 
@@ -481,23 +555,21 @@ checkBodyGoal cctx (D.BodyConstraint c) =
 checkBodyGoal cctx (D.BodyUnify t1 t2) = do
   tv1 <- typeOfTerm cctx t1
   tv2 <- typeOfTerm cctx t2
-  ctx <- freshCtx cctx
+  ctx <- freshCtxHandle cctx
   tellConstraint (Qualified "typechecker" "check_unify") [tv1, tv2, ctx]
 -- The spec says `is` is a directed assignment (RHS type flows to LHS).
 -- We use bidirectional check_unify here, which is equivalent: if the
 -- LHS var is unbound, unify binds it to the RHS type; if already bound,
 -- it checks consistency. Both match the spec's semantics.
 checkBodyGoal cctx (D.BodyIs v term) = do
-  varType <- case Map.lookup v cctx.varTypes of
-    Just val -> pure val
-    Nothing -> newVar -- defensive: should not happen for well-formed AST
+  vType <- varType cctx v
   termType <- typeOfTerm cctx term
-  ctx <- freshCtx cctx
-  tellConstraint (Qualified "typechecker" "check_unify") [varType, termType, ctx]
+  ctx <- freshCtxHandle cctx
+  tellConstraint (Qualified "typechecker" "check_unify") [vType, termType, ctx]
 checkBodyGoal cctx (D.BodyFunctionCall name args) = do
   argTypeVars <- traverse (typeOfTerm cctx) args
   retTypeVar <- newVar
-  ctx <- freshCtx cctx
+  ctx <- freshCtxHandle cctx
   tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (runtimeName name), valueList argTypeVars, retTypeVar, ctx]
 checkBodyGoal cctx (D.BodyHostStmt _ args) = do
   -- Process arguments for side effects (nested constructors/functions still get checked)
@@ -517,54 +589,41 @@ checkEquation func loc origin eq = do
   let allVarNames = collectVarsInEq eq
   varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> newVar) (Set.toList allVarNames)
   let cctx = CheckCtx {varTypes, label = Just ("function " <> flattenName func.name), loc, origin}
-  -- Declared types for parameters
-  _ <- case func.signatures of
-    [(argTys, retTy)] -> do
-      -- Single signature: check equation against it directly
-      let allVars = collectTypeVars argTys ++ collectTypeVarsExpr retTy
-      tvars <- freshTypeVarsForDecl allVars
-      -- Check each parameter against declared type
-      mapM_
-        ( \(param, declTyExpr) -> do
-            paramType <- typeOfTerm cctx param
-            declType <- encodeTypeExpr tvars declTyExpr
-            ctx <- freshCtx cctx
-            tellConstraint (Qualified "typechecker" "check_unify") [paramType, declType, ctx]
-        )
-        (zip eq.params argTys)
-      -- Check RHS against declared return type
-      rhsType <- typeOfTerm cctx eq.rhs
-      retType <- encodeTypeExpr tvars retTy
-      ctx <- freshCtx cctx
-      tellConstraint (Qualified "typechecker" "check_unify") [rhsType, retType, ctx]
-      pure tvars
-    [] ->
-      -- Untyped: no type checking for params/RHS
-      pure Map.empty
-    _sigs -> do
-      -- Overloaded: check equation against all signatures via
-      -- check_function_use, which leverages overload resolution
+  -- Untyped functions skip equation checking entirely; typed (single or
+  -- overloaded) ones go through check_function_use, which dispatches on
+  -- whether function_sig (single) or function_sigs (overloaded) is
+  -- registered for this name. The CHR rule does the same copy_term-and-
+  -- unify work that we'd otherwise do here, so a single emission point
+  -- handles both cases.
+  case func.signatures of
+    [] -> pure ()
+    _ -> do
       argTypeVars <- traverse (typeOfTerm cctx) eq.params
       retTypeVar <- typeOfTerm cctx eq.rhs
-      ctx <- freshCtx cctx
-      tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (runtimeName func.name), valueList argTypeVars, retTypeVar, ctx]
-      pure Map.empty
-  -- Guards
+      ctx <- freshCtxHandle cctx
+      tellConstraint
+        (Qualified "typechecker" "check_function_use")
+        [VAtom (runtimeName func.name), valueList argTypeVars, retTypeVar, ctx]
   checkGuards cctx eq.guards
-  -- Note: RHS already checked above for typed functions; for untyped functions,
-  -- the RHS is processed via typeOfTerm in the guard/param checking which
-  -- still checks nested expressions.
-  pure ()
 
 -- ---------------------------------------------------------------------------
 -- Term typing
 -- ---------------------------------------------------------------------------
 
+-- | Look up a source variable's pre-allocated type slot, or fall back to
+-- a fresh logical variable. The fallback is unreachable for a
+-- well-formed desugared AST: 'collectVarsInRule' / 'collectVarsInEq' walk
+-- the same nodes that 'typeOfTerm' / @checkGuard@ / @checkBodyGoal@
+-- visit, so every variable has an entry in 'CheckCtx.varTypes' before
+-- type checking begins. The fallback exists only to keep us from
+-- crashing if the desugarer ever emits a variable we missed.
+varType :: (Unify :> es) => CheckCtx -> Text -> Eff es Value
+varType cctx v = case Map.lookup v cctx.varTypes of
+  Just val -> pure val
+  Nothing -> newVar
+
 typeOfTerm :: (CheckEffects es) => CheckCtx -> Term -> Eff es Value
-typeOfTerm cctx (VarTerm v) =
-  case Map.lookup v cctx.varTypes of
-    Just val -> pure val
-    Nothing -> newVar -- shouldn't happen for well-formed AST
+typeOfTerm cctx (VarTerm v) = varType cctx v
 typeOfTerm _ (IntTerm _) = pure (tcCon0 "int")
 typeOfTerm _ (FloatTerm _) = pure (tcCon0 "float")
 typeOfTerm _ (TextTerm _) = pure (tcCon0 "string")
@@ -577,14 +636,17 @@ typeOfTerm cctx (CompoundTerm name args) =
 typeOfAtom :: (CheckEffects es) => CheckCtx -> Name -> Eff es Value
 typeOfAtom cctx name = do
   env <- ask @TypeCheckEnv
-  let canonical = canonicalizeConName env name 0
-  case Map.lookup canonical env.conMap of
-    Just _ -> do
+  let canonical = canonicalizeConName env name
+  if knownConstructorWithArity env canonical 0
+    then do
       resultType <- newVar
-      ctx <- freshCtx cctx
+      ctx <- freshCtxHandle cctx
       tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (runtimeName canonical), valueList [], resultType, ctx]
       pure resultType
-    Nothing -> pure (tcCon0 "any")
+    else
+      -- Either unknown or a known constructor of nonzero arity (in
+      -- which case 'validateConstructorArities' already reported it).
+      pure (tcCon0 "any")
 
 typeOfCompound :: (CheckEffects es) => CheckCtx -> Name -> [Term] -> Eff es Value
 -- Lambda: fun(X, Y) -> Expr end
@@ -596,38 +658,43 @@ typeOfCompound cctx (Unqualified "->") [CompoundTerm (Unqualified "fun") params,
 -- Function reference: fun name/arity
 -- After renaming the outer "fun" is stripped, leaving CompoundTerm "/" [AtomTerm name, IntTerm arity].
 -- The renamer flattens the resolved name with @flattenName@ (@:@-separator);
--- convert to the runtime separator (@__@) so the emitted check_function_use
--- joins with the function_sig that 'tellFunctionSigs' tells.
+-- 'parseFlattenedName' . 'runtimeName' converts it to the runtime form
+-- (@__@-separator) so the emitted @check_function_use@ joins with the
+-- @function_sig@ that 'tellFunctionSigs' tells.
 typeOfCompound cctx (Unqualified "/") [AtomTerm fname, IntTerm arity] = do
   argTypeVars <- replicateM arity newVar
   retTypeVar <- newVar
-  ctx <- freshCtx cctx
-  let runtimeFname = T.replace ":" "__" fname
+  ctx <- freshCtxHandle cctx
+  let runtimeFname = runtimeName (parseFlattenedName fname)
   tellConstraint (Qualified "typechecker" "check_function_use") [VAtom runtimeFname, valueList argTypeVars, retTypeVar, ctx]
   pure (VTerm (tcAtom "fun") [valueList argTypeVars, retTypeVar])
 -- Constructor or function. Constructors are canonicalized so that bare
 -- functor names (e.g. cons "." or own-module names) resolve to their
--- declaration-side qualified form.
+-- declaration-side qualified form. Wrong-arity constructor uses fall
+-- through to the function/unknown path here; 'validateConstructorArities'
+-- reports them as ConstructorArityMismatch.
 typeOfCompound cctx name args = do
   env <- ask @TypeCheckEnv
-  let canonical = canonicalizeConName env name (length args)
-  if Map.member canonical env.conMap
+  let arity = length args
+      canonical = canonicalizeConName env name
+  if knownConstructorWithArity env canonical arity
     then do
       argTypes <- traverse (typeOfTerm cctx) args
       resultType <- newVar
-      ctx <- freshCtx cctx
+      ctx <- freshCtxHandle cctx
       tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (runtimeName canonical), valueList argTypes, resultType, ctx]
       pure resultType
     else
-      if Set.member (name, length args) env.funSet
+      if Set.member (name, arity) env.funSet
         then do
           argTypes <- traverse (typeOfTerm cctx) args
           resultType <- newVar
-          ctx <- freshCtx cctx
+          ctx <- freshCtxHandle cctx
           tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (runtimeName name), valueList argTypes, resultType, ctx]
           pure resultType
         else do
-          -- Unknown: process args for side effects, return any
+          -- Unknown (or wrong-arity constructor — error pre-reported).
+          -- Process args for side effects, return any.
           mapM_ (typeOfTerm cctx) args
           pure (tcCon0 "any")
 
@@ -687,8 +754,8 @@ collectErrors = do
   errVar <- newVar
   tellConstraint (Qualified "typechecker" "collect") [errVar]
   errVal <- deref errVar
-  ctxMap <- get @CtxMap
-  decodeErrorList ctxMap errVal
+  store <- get @CtxStore
+  decodeErrorList store.ctxMap errVal
 
 decodeErrorList :: (Unify :> es) => CtxMap -> Value -> Eff es [Diagnostic TypeCheckError]
 decodeErrorList ctxMap val = do
@@ -764,6 +831,7 @@ showValue v = do
 -- | Convert a runtime-flattened qualified atom (@m__n@) back to the
 -- source-level display form (@m:n@). No-op when the atom doesn't
 -- contain @__@. Used in error messages so users see familiar syntax.
+-- Inverse of 'runtimeName'.
 displayQualifiedAtom :: Text -> Text
 displayQualifiedAtom = T.replace "__" ":"
 
@@ -801,7 +869,7 @@ validateFieldType _ td dc (TypeVar v)
 validateFieldType typeMap td dc (TypeCon name args) =
   let nameErrors = case name of
         Unqualified n
-          | n `elem` ["int", "string", "any"] -> []
+          | n `elem` ["int", "float", "string", "any"] -> []
         _ ->
           if Map.member name typeMap
             then []
@@ -816,3 +884,80 @@ validateFieldType typeMap td dc (TypeCon name args) =
               ]
       argErrors = concatMap (validateFieldType typeMap td dc) args
    in nameErrors ++ argErrors
+
+-- ---------------------------------------------------------------------------
+-- Constructor arity validation (pure, Haskell-side)
+-- ---------------------------------------------------------------------------
+
+-- | Walk every term in every rule and equation, and report each use of a
+-- known data constructor whose arity differs from its declaration. Done as
+-- a pre-pass — separately from the CHR session — so the diagnostic is a
+-- direct ConstructorArityMismatch rather than a downstream tcon
+-- inconsistency. The check phase silently skips wrong-arity sites
+-- (treating them as @any@) so this error is the only one reported for
+-- such uses.
+validateConstructorArities :: TypeCheckEnv -> D.Program -> [Diagnostic TypeCheckError]
+validateConstructorArities env prog =
+  concatMap validateRule prog.rules
+    ++ concatMap validateFunction prog.functions
+  where
+    validateRule rule =
+      let AnnP hd headLoc headOrigin = rule.head
+          AnnP guards guardLoc guardOrigin = rule.guard
+          AnnP body bodyLoc bodyOrigin = rule.body
+          ruleLabel = fmap (\n -> "rule " <> n) rule.name
+          inHead = foldMap termArity (concatMap (.args) (hd.kept ++ hd.removed))
+          inGuards = foldMap guardArity guards
+          inBody = foldMap bodyArity body
+       in mkDiags ruleLabel headLoc headOrigin inHead
+            ++ mkDiags ruleLabel guardLoc guardOrigin inGuards
+            ++ mkDiags ruleLabel bodyLoc bodyOrigin inBody
+    validateFunction func =
+      let AnnP eqs loc origin = func.equations
+          funLabel = Just ("function " <> flattenName func.name)
+          inEqs = foldMap eqArity eqs
+       in mkDiags funLabel loc origin inEqs
+    eqArity eq =
+      foldMap termArity eq.params
+        <> foldMap guardArity eq.guards
+        <> termArity eq.rhs
+    guardArity (D.GuardEqual t1 t2) = termArity t1 <> termArity t2
+    guardArity (D.GuardMatch t conName arity) = checkArity conName arity <> termArity t
+    guardArity (D.GuardGetArg _ t _) = termArity t
+    guardArity (D.GuardExpr t) = termArity t
+    bodyArity D.BodyTrue = mempty
+    bodyArity (D.BodyConstraint c) = foldMap termArity c.args
+    bodyArity (D.BodyUnify t1 t2) = termArity t1 <> termArity t2
+    bodyArity (D.BodyIs _ t) = termArity t
+    bodyArity (D.BodyFunctionCall _ args) = foldMap termArity args
+    bodyArity (D.BodyHostStmt _ args) = foldMap termArity args
+    -- An atom is a 0-arity constructor use; a compound is an n-arity use.
+    -- Function-reference @name/arity@ and lambdas @fun(...) -> body end@
+    -- are compound terms whose subterms (the bare function name, the
+    -- lambda parameter list) must NOT be treated as constructor uses,
+    -- so we skip walking into them.
+    termArity (AtomTerm s) = checkArity (Unqualified s) 0
+    termArity (CompoundTerm (Unqualified "/") [AtomTerm _, IntTerm _]) = mempty
+    termArity (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") _, body]) =
+      termArity body
+    termArity (CompoundTerm name args) =
+      checkArity name (length args) <> foldMap termArity args
+    termArity _ = mempty
+    checkArity name useArity =
+      let canonical = canonicalizeConName env name
+       in case Map.lookup canonical env.conMap of
+            Just (_, dc)
+              | length dc.conArgs /= useArity ->
+                  [(canonical, useArity, length dc.conArgs)]
+            _ -> []
+    mkDiags lbl loc origin =
+      map
+        ( \(name, useArity, declaredArity) ->
+            Diagnostic
+              lbl
+              ( AnnP
+                  (ConstructorArityMismatch (flattenName name) useArity declaredArity)
+                  loc
+                  origin
+              )
+        )

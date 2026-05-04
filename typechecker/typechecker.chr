@@ -139,10 +139,16 @@ constructor_match @
     check_arg_list(FreshFields, ArgTypes, Ctx),
     tc_unify(ResultTypeVar, FreshParent, Ctx).
 
-% Unknown constructor -> any (not an error)
+% Defensive fallback: unknown constructor -> any. The Haskell driver
+% (typeOfCompound, typeOfAtom, checkGuard's GuardMatch) gates
+% check_constructor_use on the constructor being a known declaration,
+% so this rule is unreachable in practice. It is kept (and routed
+% through tc_unify rather than raw `=`) so a future driver path that
+% emits check_constructor_use for an unknown constructor is sound when
+% ResultTypeVar is already bound to a concrete type.
 unknown_constructor @
-    check_constructor_use(_, _, ResultTypeVar, _) <=>
-    ResultTypeVar = any.
+    check_constructor_use(_, _, ResultTypeVar, Ctx) <=>
+    tc_unify(ResultTypeVar, any, Ctx).
 
 % ==========================================================================
 % Argument list checking
@@ -162,7 +168,10 @@ check_arg_nil @
 % the declaration-matching rules match by name only, so a wrong-arity
 % declaration may be tried first, leaving a residual check_arg_list
 % that simply stays inert. The correct-arity declaration will match
-% separately.
+% separately. Constructors, which cannot be overloaded by arity, have
+% their arity checked driver-side by validateConstructorArities before
+% the CHR session runs; wrong-arity constructor uses never reach
+% check_constructor_use.
 
 % ==========================================================================
 % Delegation rules

@@ -28,6 +28,7 @@ The type language is defined by the following grammar:
 
 ```
 τ  ::=  int                          -- integers
+     |  float                        -- floating-point numbers
      |  string                       -- strings
      |  any                          -- the dynamic type
      |  α                            -- type variable
@@ -38,6 +39,7 @@ The type language is defined by the following grammar:
 ### Built-in types
 
 - **`int`** -- integer values.
+- **`float`** -- floating-point values.
 - **`string`** -- string values.
 - **`any`** -- the dynamic type. Consistent with every other type.
   Serves as the escape hatch for gradually typed code.
@@ -378,6 +380,11 @@ If `some` is a constructor of `option(A)` with field type `A`, then
 `some(X)` has type `option(A)` (with `A` fresh), and `X` gets type
 `A`.
 
+A constructor's arity is part of its identity: `some/1` and `some/2`
+are not two arity-overloaded constructors, they are a duplicate
+declaration. Consequently, using a known constructor with the wrong
+number of arguments is a type error, not a fall-through to `any`.
+
 ### Unknown constructors
 
 If a constructor is not found in any visible type definition, it is
@@ -544,10 +551,6 @@ The type system is designed to accommodate future extensions:
   constraint-gathering approach can be extended with subtyping or
   predicate constraints without changing the overall architecture.
 
-- **Float support**: once float is added as a built-in type, the
-  existing signature overloading mechanism (see below) enables typing
-  arithmetic operators over both int and float.
-
 
 ## Soundness
 
@@ -590,7 +593,7 @@ key ingredients are:
 | Nature | Static, types erased at runtime |
 | Pipeline position | After desugaring, before compilation |
 | Effect on AST | None -- errors only, prevents compilation |
-| Built-in types | `int`, `string`, `any` |
+| Built-in types | `int`, `float`, `string`, `any` |
 | User-defined types | Algebraic types via `:- chr_type` |
 | Function types | `fun(τ₁,...,τₙ) -> τᵣ` |
 | Polymorphism | Parametric, implicitly quantified, no rank-n |

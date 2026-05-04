@@ -167,6 +167,7 @@ typeCheckErrorCode (UnboundTypeVar _ _ _) = ErrorCode 60004
 typeCheckErrorCode (UndefinedType _ _ _) = ErrorCode 60005
 typeCheckErrorCode (NoMatchingOverload _) = ErrorCode 60006
 typeCheckErrorCode (DuplicateConstructor _ _) = ErrorCode 60007
+typeCheckErrorCode (ConstructorArityMismatch _ _ _) = ErrorCode 60008
 
 -- | 5xxxx — top-level errors
 parseErrorCode :: ErrorCode
@@ -359,6 +360,13 @@ typeCheckErrorMsg (DuplicateConstructor conName decls) =
     ++ T.unpack conName
     ++ "' is declared multiple times: "
     ++ intercalate ", " [T.unpack t ++ "/" ++ show a | (t, a) <- decls]
+typeCheckErrorMsg (ConstructorArityMismatch conName usedArity declaredArity) =
+  "Constructor '"
+    ++ T.unpack conName
+    ++ "' is used with "
+    ++ show usedArity
+    ++ " argument(s) but declared with "
+    ++ show declaredArity
 
 displayName :: Types.Name -> String
 displayName (Types.Unqualified n) = T.unpack n

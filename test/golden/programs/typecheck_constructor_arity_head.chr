@@ -1,0 +1,11 @@
+:- module(typecheck_constructor_arity_head, [c/1]).
+
+:- use_module(library(prelude)).
+
+% Same wrong-arity error but in a head pattern position. Patterns are
+% desugared into GuardMatch + GuardGetArg, so this exercises the
+% pattern path of validateConstructorArities. Expect YCHR-60008.
+:- chr_type opt(A) ---> none ; some(A).
+
+:- chr_constraint c(opt(int)).
+c(some(X, Y)) <=> X = Y.

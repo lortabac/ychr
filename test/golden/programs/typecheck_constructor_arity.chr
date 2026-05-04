@@ -1,0 +1,12 @@
+:- module(typecheck_constructor_arity, [c/1]).
+
+:- use_module(library(prelude)).
+
+% `some` is declared with arity 1, but the use site below applies it
+% with arity 2. Constructors are name-only in the type system, so
+% wrong-arity uses are an error (YCHR-60008) rather than a fall-through
+% to `any`.
+:- chr_type opt(A) ---> none ; some(A).
+
+:- chr_constraint c(opt(int)).
+c(X) <=> X = some(1, 2).
