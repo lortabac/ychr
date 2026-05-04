@@ -25,7 +25,7 @@ module YCHR.TypeCheck
   )
 where
 
-import Control.Monad (replicateM)
+import Control.Monad (replicateM, when)
 import Data.List qualified as List
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -36,6 +36,7 @@ import Data.Text qualified as T
 import Effectful
 import Effectful.Reader.Static (Reader, ask, runReader)
 import Effectful.State.Static.Local (State, evalState, get, modify)
+import YCHR.Compile.Names (vmName)
 import YCHR.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic (..))
@@ -57,6 +58,30 @@ import YCHR.Types
     flattenName,
   )
 import YCHR.Types qualified as Types
+import YCHR.VM qualified as VM
+
+-- | Flatten a 'Name' to the same single-atom form used by the runtime
+-- (see 'YCHR.Compile.Names.vmName'). Required so CHR-side constraints
+-- emitted from this Haskell driver match what compiled CHR rules
+-- produce after the renamer canonicalizes data-constructor names.
+runtimeName :: Name -> Text
+runtimeName name = let VM.Name t = vmName name in t
+
+-- | Runtime form of a typechecker-module-declared constructor (e.g.
+-- @int@, @sig@, @tcon@). The renamer canonicalizes such names to
+-- @typechecker:<n>@; the runtime functor symbol is the flattened
+-- form @typechecker__<n>@. Used as the functor for 'VTerm' values
+-- this Haskell driver builds.
+tcAtom :: Text -> Text
+tcAtom n = "typechecker__" <> n
+
+-- | A 0-arity declared constructor of the @typechecker@ module
+-- (@int@, @float@, @string@, @any@) as a runtime 'Value'. Built as
+-- @VTerm name []@ rather than @VAtom name@ so 'matchTerm' (which
+-- only recognises 'VTerm') can dispatch on the same shape that
+-- compiled head patterns produce.
+tcCon0 :: Text -> Value
+tcCon0 n = VTerm (tcAtom n) []
 
 -- ---------------------------------------------------------------------------
 -- Error types
@@ -256,7 +281,7 @@ tellConstraintSigs prog =
         m >> do
           tvars <- freshTypeVarsForDecl (collectTypeVars argTypes)
           encodedArgs <- traverse (encodeTypeExpr tvars) argTypes
-          tellConstraint (Qualified "typechecker" "constraint_sig") [VAtom (flattenName name), valueList encodedArgs]
+          tellConstraint (Qualified "typechecker" "constraint_sig") [VAtom (runtimeName name), valueList encodedArgs]
     )
     (pure ())
     prog.constraintTypes
@@ -267,21 +292,21 @@ tellFunctionSigs prog =
     ( \f -> case f.signatures of
         [] -> do
           -- No type annotations: default all to any
-          let anyArgs = replicate f.arity (VAtom "any")
-              sig = VTerm "sig" [valueList anyArgs, VAtom "any"]
-          tellConstraint (Qualified "typechecker" "function_sig") [VAtom (flattenName f.name), sig]
+          let anyArgs = replicate f.arity (tcCon0 "any")
+              sig = VTerm (tcAtom "sig") [valueList anyArgs, tcCon0 "any"]
+          tellConstraint (Qualified "typechecker" "function_sig") [VAtom (runtimeName f.name), sig]
         [(argTys, retTy)] -> do
           -- Single signature: use non-overloaded path
           let allVars = collectTypeVars argTys ++ collectTypeVarsExpr retTy
           tvars <- freshTypeVarsForDecl allVars
           encodedArgs <- traverse (encodeTypeExpr tvars) argTys
           encodedRet <- encodeTypeExpr tvars retTy
-          let sig = VTerm "sig" [valueList encodedArgs, encodedRet]
-          tellConstraint (Qualified "typechecker" "function_sig") [VAtom (flattenName f.name), sig]
+          let sig = VTerm (tcAtom "sig") [valueList encodedArgs, encodedRet]
+          tellConstraint (Qualified "typechecker" "function_sig") [VAtom (runtimeName f.name), sig]
         sigs -> do
           -- Multiple signatures: overloaded path
           encodedSigs <- mapM (encodeSig f.name) sigs
-          tellConstraint (Qualified "typechecker" "function_sigs") [VAtom (flattenName f.name), valueList encodedSigs]
+          tellConstraint (Qualified "typechecker" "function_sigs") [VAtom (runtimeName f.name), valueList encodedSigs]
     )
     prog.functions
   where
@@ -290,7 +315,7 @@ tellFunctionSigs prog =
       tvars <- freshTypeVarsForDecl allVars
       encodedArgs <- traverse (encodeTypeExpr tvars) argTys
       encodedRet <- encodeTypeExpr tvars retTy
-      pure (VTerm "sig" [valueList encodedArgs, encodedRet])
+      pure (VTerm (tcAtom "sig") [valueList encodedArgs, encodedRet])
 
 tellConSigs :: (CHREffects es, State CtxMap :> es, State Int :> es) => D.Program -> Eff es ()
 tellConSigs prog =
@@ -302,24 +327,27 @@ tellConSigs prog =
               tvars <- freshTypeVarsForDecl allVars
               let parentType = encodeTCon tvars td.name td.typeVars
               encodedFields <- traverse (encodeTypeExpr tvars) dc.conArgs
-              let sig = VTerm "sig" [parentType, valueList encodedFields]
-              tellConstraint (Qualified "typechecker" "con_sig") [VAtom (flattenName dc.conName), sig]
+              let sig = VTerm (tcAtom "sig") [parentType, valueList encodedFields]
+              tellConstraint (Qualified "typechecker" "con_sig") [VAtom (runtimeName dc.conName), sig]
           )
           td.constructors
     )
     prog.typeDefinitions
 
--- | Encode a 'Name' as a runtime 'Value', matching CHR runtime
--- representation: unqualified names become atoms, qualified names
--- become @':'(module, name)@ compound terms.
+-- | Encode a 'Name' as a runtime 'Value', matching the runtime
+-- representation produced by 'YCHR.Compile.compileTerm' for declared
+-- constructors: every qualified name becomes a 0-arity 'VTerm' with
+-- the @vmName@ encoding (@m__n@). Using 'VTerm' (rather than 'VAtom')
+-- lets 'matchTerm' dispatch on the same shape that compiled head
+-- patterns produce. Unqualified names stay bare 'VAtom's.
 encodeName :: Name -> Value
 encodeName (Unqualified n) = VAtom n
-encodeName (Qualified m n) = VTerm ":" [VAtom m, VAtom n]
+encodeName name@(Qualified _ _) = VTerm (runtimeName name) []
 
 -- | Encode a type constructor application: tcon(name, [arg1, arg2, ...])
 encodeTCon :: Map Text Value -> Name -> [Text] -> Value
 encodeTCon tvars name vars =
-  VTerm "tcon" [encodeName name, valueList (map (\v -> Map.findWithDefault (VAtom "any") v tvars) vars)]
+  VTerm (tcAtom "tcon") [encodeName name, valueList (map (\v -> Map.findWithDefault (tcCon0 "any") v tvars) vars)]
 
 -- ---------------------------------------------------------------------------
 -- Type encoding
@@ -345,19 +373,19 @@ encodeTypeExpr :: (Unify :> es) => Map Text Value -> TypeExpr -> Eff es Value
 encodeTypeExpr tvars (TypeVar v) =
   case Map.lookup v tvars of
     Just val -> pure val
-    Nothing -> pure (VAtom "any")
-encodeTypeExpr _ (TypeCon (Unqualified "int") []) = pure (VAtom "int")
-encodeTypeExpr _ (TypeCon (Unqualified "float") []) = pure (VAtom "float")
-encodeTypeExpr _ (TypeCon (Unqualified "string") []) = pure (VAtom "string")
-encodeTypeExpr _ (TypeCon (Unqualified "any") []) = pure (VAtom "any")
+    Nothing -> pure (tcCon0 "any")
+encodeTypeExpr _ (TypeCon (Unqualified "int") []) = pure (tcCon0 "int")
+encodeTypeExpr _ (TypeCon (Unqualified "float") []) = pure (tcCon0 "float")
+encodeTypeExpr _ (TypeCon (Unqualified "string") []) = pure (tcCon0 "string")
+encodeTypeExpr _ (TypeCon (Unqualified "any") []) = pure (tcCon0 "any")
 -- Function type: fun(A, B) -> C is parsed as TypeCon "->" [TypeCon "fun" [A, B], C]
 encodeTypeExpr tvars (TypeCon (Unqualified "->") [TypeCon (Unqualified "fun") argTys, retTy]) = do
   encodedArgs <- traverse (encodeTypeExpr tvars) argTys
   encodedRet <- encodeTypeExpr tvars retTy
-  pure (VTerm "fun" [valueList encodedArgs, encodedRet])
+  pure (VTerm (tcAtom "fun") [valueList encodedArgs, encodedRet])
 encodeTypeExpr tvars (TypeCon name args) = do
   encodedArgs <- traverse (encodeTypeExpr tvars) args
-  pure (VTerm "tcon" [encodeName name, valueList encodedArgs])
+  pure (VTerm (tcAtom "tcon") [encodeName name, valueList encodedArgs])
 
 -- ---------------------------------------------------------------------------
 -- Per-rule checking
@@ -385,7 +413,7 @@ checkConstraintUse :: (CheckEffects es) => CheckCtx -> Types.Constraint -> Eff e
 checkConstraintUse cctx c = do
   argTypeVars <- traverse (typeOfTerm cctx) c.args
   ctx <- freshCtx cctx
-  tellConstraint (Qualified "typechecker" "check_constraint_use") [VAtom (flattenName c.name), valueList argTypeVars, ctx]
+  tellConstraint (Qualified "typechecker" "check_constraint_use") [VAtom (runtimeName c.name), valueList argTypeVars, ctx]
 
 -- ---------------------------------------------------------------------------
 -- Guard checking
@@ -406,18 +434,25 @@ checkGuard cctx lastConName (D.GuardEqual t1 t2) = do
   ctx <- freshCtx cctx
   tellConstraint (Qualified "typechecker" "check_unify") [tv1, tv2, ctx]
   pure lastConName
-checkGuard _ _ (D.GuardMatch _term conName arity) = do
-  -- GuardMatch is not emitted as a CHR constraint. Its type information
-  -- is covered by other paths:
-  --   * Non-nullary constructors: the subsequent GuardGetArg(s) emit
-  --     check_guard_getarg, which unifies the term type with the
-  --     constructor's parent type.
-  --   * Nullary constructors: the desugarer produces GuardEqual instead,
-  --     and typeOfAtom looks up the constructor's type.
-  -- We canonicalize the name here so subsequent GuardGetArgs use the
-  -- declaration-side qualified form, which is what con_sig is keyed on.
+checkGuard cctx _ (D.GuardMatch term conName arity) = do
+  -- Canonicalize the name so subsequent GuardGetArgs (and the
+  -- check_constructor_use we emit below) all reference the same
+  -- declaration-side qualified form.
   env <- ask @TypeCheckEnv
-  pure (Just (canonicalizeConName env conName arity))
+  let canonical = canonicalizeConName env conName arity
+  -- When the constructor is known, emit a check_constructor_use so
+  -- the type checker can refine the parent term's type to the
+  -- constructor's declared parent type. This handles both nullary
+  -- and non-nullary constructors uniformly — for non-nullary, the
+  -- subsequent GuardGetArg also fires and unifies field types.
+  when (Map.member canonical env.conMap) $ do
+    termType <- typeOfTerm cctx term
+    argTypeVars <- replicateM arity newVar
+    ctx <- freshCtx cctx
+    tellConstraint
+      (Qualified "typechecker" "check_constructor_use")
+      [VAtom (runtimeName canonical), valueList argTypeVars, termType, ctx]
+  pure (Just canonical)
 checkGuard cctx lastConName (D.GuardGetArg varName term idx) = do
   resultTypeVar <- case Map.lookup varName cctx.varTypes of
     Just v -> pure v
@@ -427,18 +462,7 @@ checkGuard cctx lastConName (D.GuardGetArg varName term idx) = do
     Nothing -> pure (Unqualified varName) -- defensive: GuardGetArg without GuardMatch
   termType <- typeOfTerm cctx term
   ctx <- freshCtx cctx
-  tellConstraint (Qualified "typechecker" "check_guard_getarg") [resultTypeVar, termType, VAtom (flattenName conName), VInt idx, ctx]
-  pure lastConName
-checkGuard cctx lastConName (D.GuardParentType term conName) = do
-  -- Asserts that @term@ has the parent type of the named (qualified)
-  -- constructor. Emitted by the desugarer next to the ':'-rewrite for
-  -- @Qualified m n@ head patterns; refines the user-visible parent
-  -- variable's type that the ':'-match alone cannot express.
-  termType <- typeOfTerm cctx term
-  ctx <- freshCtx cctx
-  tellConstraint
-    (Qualified "typechecker" "check_parent_type")
-    [termType, VAtom (flattenName conName), ctx]
+  tellConstraint (Qualified "typechecker" "check_guard_getarg") [resultTypeVar, termType, VAtom (runtimeName conName), VInt idx, ctx]
   pure lastConName
 checkGuard cctx _ (D.GuardExpr term) = do
   tv <- typeOfTerm cctx term
@@ -474,7 +498,7 @@ checkBodyGoal cctx (D.BodyFunctionCall name args) = do
   argTypeVars <- traverse (typeOfTerm cctx) args
   retTypeVar <- newVar
   ctx <- freshCtx cctx
-  tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (flattenName name), valueList argTypeVars, retTypeVar, ctx]
+  tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (runtimeName name), valueList argTypeVars, retTypeVar, ctx]
 checkBodyGoal cctx (D.BodyHostStmt _ args) = do
   -- Process arguments for side effects (nested constructors/functions still get checked)
   mapM_ (typeOfTerm cctx) args
@@ -523,7 +547,7 @@ checkEquation func loc origin eq = do
       argTypeVars <- traverse (typeOfTerm cctx) eq.params
       retTypeVar <- typeOfTerm cctx eq.rhs
       ctx <- freshCtx cctx
-      tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (flattenName func.name), valueList argTypeVars, retTypeVar, ctx]
+      tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (runtimeName func.name), valueList argTypeVars, retTypeVar, ctx]
       pure Map.empty
   -- Guards
   checkGuards cctx eq.guards
@@ -541,9 +565,9 @@ typeOfTerm cctx (VarTerm v) =
   case Map.lookup v cctx.varTypes of
     Just val -> pure val
     Nothing -> newVar -- shouldn't happen for well-formed AST
-typeOfTerm _ (IntTerm _) = pure (VAtom "int")
-typeOfTerm _ (FloatTerm _) = pure (VAtom "float")
-typeOfTerm _ (TextTerm _) = pure (VAtom "string")
+typeOfTerm _ (IntTerm _) = pure (tcCon0 "int")
+typeOfTerm _ (FloatTerm _) = pure (tcCon0 "float")
+typeOfTerm _ (TextTerm _) = pure (tcCon0 "string")
 typeOfTerm _ Wildcard = newVar
 typeOfTerm cctx (AtomTerm s) =
   typeOfAtom cctx (Unqualified s)
@@ -558,9 +582,9 @@ typeOfAtom cctx name = do
     Just _ -> do
       resultType <- newVar
       ctx <- freshCtx cctx
-      tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (flattenName canonical), valueList [], resultType, ctx]
+      tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (runtimeName canonical), valueList [], resultType, ctx]
       pure resultType
-    Nothing -> pure (VAtom "any")
+    Nothing -> pure (tcCon0 "any")
 
 typeOfCompound :: (CheckEffects es) => CheckCtx -> Name -> [Term] -> Eff es Value
 -- Lambda: fun(X, Y) -> Expr end
@@ -568,15 +592,19 @@ typeOfCompound :: (CheckEffects es) => CheckCtx -> Name -> [Term] -> Eff es Valu
 typeOfCompound cctx (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body] = do
   paramTypeVars <- traverse (typeOfTerm cctx) params
   bodyType <- typeOfTerm cctx body
-  pure (VTerm "fun" [valueList paramTypeVars, bodyType])
+  pure (VTerm (tcAtom "fun") [valueList paramTypeVars, bodyType])
 -- Function reference: fun name/arity
--- After renaming the outer "fun" is stripped, leaving CompoundTerm "/" [AtomTerm name, IntTerm arity]
+-- After renaming the outer "fun" is stripped, leaving CompoundTerm "/" [AtomTerm name, IntTerm arity].
+-- The renamer flattens the resolved name with @flattenName@ (@:@-separator);
+-- convert to the runtime separator (@__@) so the emitted check_function_use
+-- joins with the function_sig that 'tellFunctionSigs' tells.
 typeOfCompound cctx (Unqualified "/") [AtomTerm fname, IntTerm arity] = do
   argTypeVars <- replicateM arity newVar
   retTypeVar <- newVar
   ctx <- freshCtx cctx
-  tellConstraint (Qualified "typechecker" "check_function_use") [VAtom fname, valueList argTypeVars, retTypeVar, ctx]
-  pure (VTerm "fun" [valueList argTypeVars, retTypeVar])
+  let runtimeFname = T.replace ":" "__" fname
+  tellConstraint (Qualified "typechecker" "check_function_use") [VAtom runtimeFname, valueList argTypeVars, retTypeVar, ctx]
+  pure (VTerm (tcAtom "fun") [valueList argTypeVars, retTypeVar])
 -- Constructor or function. Constructors are canonicalized so that bare
 -- functor names (e.g. cons "." or own-module names) resolve to their
 -- declaration-side qualified form.
@@ -588,7 +616,7 @@ typeOfCompound cctx name args = do
       argTypes <- traverse (typeOfTerm cctx) args
       resultType <- newVar
       ctx <- freshCtx cctx
-      tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (flattenName canonical), valueList argTypes, resultType, ctx]
+      tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (runtimeName canonical), valueList argTypes, resultType, ctx]
       pure resultType
     else
       if Set.member (name, length args) env.funSet
@@ -596,12 +624,12 @@ typeOfCompound cctx name args = do
           argTypes <- traverse (typeOfTerm cctx) args
           resultType <- newVar
           ctx <- freshCtx cctx
-          tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (flattenName name), valueList argTypes, resultType, ctx]
+          tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (runtimeName name), valueList argTypes, resultType, ctx]
           pure resultType
         else do
           -- Unknown: process args for side effects, return any
           mapM_ (typeOfTerm cctx) args
-          pure (VAtom "any")
+          pure (tcCon0 "any")
 
 -- ---------------------------------------------------------------------------
 -- Variable collection
@@ -633,7 +661,6 @@ collectVarsInGuard :: D.Guard -> Set Text
 collectVarsInGuard (D.GuardEqual t1 t2) = collectVarsInTerm t1 <> collectVarsInTerm t2
 collectVarsInGuard (D.GuardMatch t _ _) = collectVarsInTerm t
 collectVarsInGuard (D.GuardGetArg v t _) = Set.singleton v <> collectVarsInTerm t
-collectVarsInGuard (D.GuardParentType t _) = collectVarsInTerm t
 collectVarsInGuard (D.GuardExpr t) = collectVarsInTerm t
 
 collectVarsInBodyGoal :: D.BodyGoal -> Set Text
@@ -670,63 +697,75 @@ decodeErrorList ctxMap val = do
     Nothing -> pure []
 
 decodeError :: (Unify :> es) => CtxMap -> Value -> Eff es [Diagnostic TypeCheckError]
-decodeError ctxMap (VTerm "error" [ctxVal, codeVal, detailVal]) = do
-  let (label, loc, origin) = case ctxVal of
-        VInt n -> case Map.lookup n ctxMap of
-          Just info -> info
-          Nothing -> (Nothing, dummyLoc, Atom "")
-        _ -> (Nothing, dummyLoc, Atom "")
-  code <- deref codeVal
-  detail <- deref detailVal
-  case code of
-    VAtom "inconsistent" -> do
-      (t1text, t2text) <- case detail of
-        VTerm "pair" [t1, t2] -> do
-          t1' <- deref t1
-          t2' <- deref t2
-          pure (showType t1', showType t2')
-        _ -> pure ("?", "?")
-      pure [Diagnostic label (AnnP (InconsistentTypes t1text t2text) loc origin)]
-    VAtom "unknown_constraint" -> do
-      nameText <- showValue detail
-      pure [Diagnostic label (AnnP (UnknownConstraint nameText) loc origin)]
-    VAtom "unknown_function" -> do
-      nameText <- showValue detail
-      pure [Diagnostic label (AnnP (UnknownFunction nameText) loc origin)]
-    VAtom "no_matching_overload" -> do
-      nameText <- showValue detail
-      pure [Diagnostic label (AnnP (NoMatchingOverload nameText) loc origin)]
-    _ -> pure []
+decodeError ctxMap (VTerm errorFunctor [ctxVal, codeVal, detailVal])
+  | errorFunctor == tcAtom "error" = do
+      let (label, loc, origin) = case ctxVal of
+            VInt n -> case Map.lookup n ctxMap of
+              Just info -> info
+              Nothing -> (Nothing, dummyLoc, Atom "")
+            _ -> (Nothing, dummyLoc, Atom "")
+      code <- deref codeVal
+      detail <- deref detailVal
+      case code of
+        VAtom "inconsistent" -> do
+          (t1text, t2text) <- case detail of
+            VTerm "pair" [t1, t2] -> do
+              t1' <- deref t1
+              t2' <- deref t2
+              pure (showType t1', showType t2')
+            _ -> pure ("?", "?")
+          pure [Diagnostic label (AnnP (InconsistentTypes t1text t2text) loc origin)]
+        VAtom "unknown_constraint" -> do
+          nameText <- showValue detail
+          pure [Diagnostic label (AnnP (UnknownConstraint nameText) loc origin)]
+        VAtom "unknown_function" -> do
+          nameText <- showValue detail
+          pure [Diagnostic label (AnnP (UnknownFunction nameText) loc origin)]
+        VAtom "no_matching_overload" -> do
+          nameText <- showValue detail
+          pure [Diagnostic label (AnnP (NoMatchingOverload nameText) loc origin)]
+        _ -> pure []
 decodeError _ _ = pure []
 
 showType :: Value -> Text
-showType (VAtom a) = a
-showType (VTerm "tcon" [nameVal, args]) =
-  let name = showTypeName nameVal
-   in case fromValueList args of
-        Just [] -> name
-        Just as -> name <> "(" <> T.intercalate ", " (map showType as) <> ")"
-        Nothing -> name <> "(?)"
-showType (VTerm "fun" [args, ret]) =
-  case fromValueList args of
-    Just as -> "fun(" <> T.intercalate ", " (map showType as) <> ") -> " <> showType ret
-    Nothing -> "fun(?) -> " <> showType ret
+showType (VAtom a) = displayQualifiedAtom a
+-- 0-arity declared constructor (e.g. @VTerm "typechecker__int" []@):
+-- the runtime form 'compileTerm' produces for any qualified data
+-- constructor with no fields, including the four base types
+-- @int@/@float@/@string@/@any@.
+showType (VTerm functor []) = displayQualifiedAtom functor
+showType (VTerm functor [a, b])
+  | functor == tcAtom "tcon" =
+      let name = showTypeName a
+       in case fromValueList b of
+            Just [] -> name
+            Just as -> name <> "(" <> T.intercalate ", " (map showType as) <> ")"
+            Nothing -> name <> "(?)"
+  | functor == tcAtom "fun" =
+      case fromValueList a of
+        Just as -> "fun(" <> T.intercalate ", " (map showType as) <> ") -> " <> showType b
+        Nothing -> "fun(?) -> " <> showType b
 showType (VVar _) = "_"
 showType (VInt n) = T.pack (show n)
 showType _ = "?"
 
 showTypeName :: Value -> Text
-showTypeName (VAtom a) = a
-showTypeName (VTerm ":" [VAtom m, VAtom n]) = m <> ":" <> n
+showTypeName (VAtom a) = displayQualifiedAtom a
+showTypeName (VTerm functor []) = displayQualifiedAtom functor
 showTypeName _ = "?"
 
 showValue :: (Unify :> es) => Value -> Eff es Text
 showValue v = do
   v' <- deref v
   case v' of
-    VAtom a -> pure a
-    VTerm ":" [VAtom m, VAtom n] -> pure (m <> ":" <> n)
+    VAtom a -> pure (displayQualifiedAtom a)
     _ -> pure "?"
+
+-- | Convert a runtime-flattened qualified atom (@m__n@) back to the
+-- source-level display form (@m:n@). No-op when the atom doesn't
+-- contain @__@. Used in error messages so users see familiar syntax.
+displayQualifiedAtom :: Text -> Text
+displayQualifiedAtom = T.replace "__" ":"
 
 dummyLoc :: SourceLoc
 dummyLoc = SourceLoc "<typechecker>" 0 0

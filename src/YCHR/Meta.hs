@@ -18,6 +18,7 @@ import Control.Monad.Trans.State.Strict (StateT, evalStateT, gets, modify')
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text, pack)
+import Data.Text qualified as T
 import Effectful (Eff, liftIO, runEff, type (:>))
 import YCHR.Parser (builtinOps, parseTermWith)
 import YCHR.Pretty (prettyTerm)
@@ -37,11 +38,24 @@ valueToTerm varName v = do
   case v' of
     VInt n -> pure (IntTerm n)
     VFloat n -> pure (FloatTerm n)
+    -- Convert canonicalized cons/nil back to the bare surface form so
+    -- the pretty-printer renders @[1, 2, 3]@ instead of the
+    -- runtime-flattened functor @prelude__.@.
     VAtom s -> pure (AtomTerm s)
     VText s -> pure (TextTerm s)
     VBool True -> pure (AtomTerm "true")
     VBool False -> pure (AtomTerm "false")
     VWildcard -> pure Wildcard
+    VTerm "prelude__[]" [] -> pure (AtomTerm "[]")
+    VTerm "prelude__." ts ->
+      CompoundTerm (Types.Unqualified ".") <$> traverse (valueToTerm "_") ts
+    -- A 0-arity term whose functor contains @__@ is the runtime form
+    -- of a qualified atom (see 'YCHR.Compile.compileTerm'). Split on
+    -- the first @__@ so the pretty-printer renders it as @m:n@.
+    VTerm f []
+      | (m, rest) <- T.breakOn "__" f,
+        not (T.null rest) ->
+          pure (CompoundTerm (Types.Qualified m (T.drop 2 rest)) [])
     VTerm f ts -> CompoundTerm (Types.Unqualified f) <$> traverse (valueToTerm "_") ts
     VVar _ -> pure (VarTerm varName)
 

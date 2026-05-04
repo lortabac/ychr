@@ -416,17 +416,26 @@ compileTerm varMap si (VarTerm v) = case lookupVar v varMap of
     pure (Lit WildcardLit)
 compileTerm _ _ (IntTerm n) = pure (Lit (IntLit n))
 compileTerm _ _ (FloatTerm n) = pure (Lit (FloatLit n))
-compileTerm _ _ (AtomTerm "true") = pure (Lit (BoolLit True))
-compileTerm _ _ (AtomTerm "false") = pure (Lit (BoolLit False))
 compileTerm _ _ (AtomTerm s) = pure (Lit (AtomLit s))
 compileTerm _ _ (TextTerm s) = pure (Lit (TextLit s))
--- Qualified names are expanded to their @':'@ compound-term representation
--- so that the runtime preserves the structure instead of mangling it.
-compileTerm _ _ (CompoundTerm (Types.Qualified m n) []) =
-  pure (MakeTerm (Name ":") [Lit (AtomLit m), Lit (AtomLit n)])
-compileTerm varMap si (CompoundTerm (Types.Qualified m n) args) = do
+-- Native-bool fast path: source @true@/@false@ reach @compileTerm@ only
+-- as the renamer-canonicalized @prelude:true@ / @prelude:false@ form
+-- (see 'YCHR.Rename.canonicalizeDataCon'). Match the canonical compound
+-- shape so the @If@ instruction can dispatch on @VBool@ without boxing.
+compileTerm _ _ (CompoundTerm (Types.Qualified "prelude" "true") []) =
+  pure (Lit (BoolLit True))
+compileTerm _ _ (CompoundTerm (Types.Qualified "prelude" "false") []) =
+  pure (Lit (BoolLit False))
+-- All other declared constructors compile to compounds with
+-- @vmName@-flattened functor (@m__n@). 0-arity uses get an empty
+-- args vector — staying as @VTerm name []@ rather than @VAtom name@
+-- so 'matchTerm' (which only recognises 'VTerm') sees a uniform shape
+-- regardless of whether the constructor was written bare or qualified.
+compileTerm _ _ (CompoundTerm name@(Types.Qualified _ _) []) =
+  pure (MakeTerm (vmName name) [])
+compileTerm varMap si (CompoundTerm name@(Types.Qualified _ _) args) = do
   args' <- traverse (compileTerm varMap si) args
-  pure (MakeTerm (Name ":") [Lit (AtomLit m), MakeTerm (Name n) args'])
+  pure (MakeTerm (vmName name) args')
 compileTerm varMap si (CompoundTerm name args) = do
   args' <- traverse (compileTerm varMap si) args
   pure (MakeTerm (vmName name) args')
@@ -578,10 +587,6 @@ compileGuards funSet mOcc varMap si guards = do
   where
     isMatchGuard (D.GuardMatch {}) = True
     isMatchGuard (D.GuardGetArg {}) = True
-    -- GuardParentType carries no runtime semantics — the adjacent
-    -- ':'-rewrite enforces structure. Routed to the check bucket
-    -- where the catch-all swallows it without emitting code.
-    isMatchGuard (D.GuardParentType {}) = False
     isMatchGuard _ = False
 
 compileMatchGuard ::

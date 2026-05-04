@@ -639,13 +639,16 @@ warningTests =
                 `defining` [[con "c" [var "X", var "Y"]] <=> [var "X" .=. var "Y"]]
         ws <- warningsOf [m]
         ws @?= [],
-      testCase "no warning in NoResolve mode (head arguments)" $ do
+      testCase "warns on unknown data constructor in NoResolve mode (head arguments)" $ do
+        -- Per the user's "warn everywhere" choice, the renamer now emits
+        -- 'UndeclaredDataConstructor' for unknown atoms/compounds in head
+        -- pattern position too (previously only resolving contexts warned).
         let m =
               module' "M"
                 `declaring` ["c" // 1]
                 `defining` [[con "c" [func "unknown" [var "X"]]] <=> [atom "true"]]
         ws <- warningsOf [m]
-        ws @?= [],
+        ws @?= [noDiag (AnnP (UndeclaredDataConstructor "unknown") dummyLoc (Atom ""))],
       testCase "exporting undeclared type produces error" $ do
         let m = (module' "M") {exports = Just (noAnnP [TypeExportDecl "tree" 0])}
         renameProgram [m] @?= Left [noDiag (AnnP (UnknownExport "M" "tree" 0) dummyLoc (Atom ""))],

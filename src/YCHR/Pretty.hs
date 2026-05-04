@@ -160,6 +160,14 @@ runtimeToPExpr (VarTerm _) = PE.Wildcard
 runtimeToPExpr Wildcard = PE.Wildcard
 runtimeToPExpr (CompoundTerm (Unqualified "__closure") (_ : sourceForm : _)) =
   unquoteToPExpr sourceForm
+-- Canonicalized cons/nil: render as the surface list syntax. This
+-- mirrors the analogous case in 'YCHR.Meta.valueToTerm', kept here too
+-- because Term values constructed without going through 'valueToTerm'
+-- (e.g. round-trips of already-rendered runtime values) still hit
+-- this path.
+runtimeToPExpr (CompoundTerm (Unqualified "prelude__[]") []) = PE.Atom "[]"
+runtimeToPExpr (CompoundTerm (Unqualified "prelude__.") args) =
+  PE.Compound "." (map (noAnn . runtimeToPExpr) args)
 runtimeToPExpr (CompoundTerm (Qualified m f) []) =
   PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom f)]
 runtimeToPExpr (CompoundTerm (Qualified m f) args) =

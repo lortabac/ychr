@@ -82,13 +82,22 @@
                           (loop (+ i 1)))))))
             (else #t))))
 
-  ;;; Prolog-style list helpers
-  (define (%nil) (string->symbol "[]"))
-  (define (%cons h t) (make-term (string->symbol ".") (vector h t)))
-  (define (%nil? v) (and (symbol? v) (eq? v (string->symbol "[]"))))
+  ;;; Prolog-style list helpers. After the renamer-driven flattening,
+  ;;; @[]@ and @.@ are canonicalized to the @prelude__[]@ /
+  ;;; @prelude__.@ runtime functors. %nil/%cons construct the canonical
+  ;;; form; %nil?/%cons? recognise both the canonical form and the
+  ;;; legacy bare form (so values built before renaming still work).
+  (define (%nil) (make-term (string->symbol "prelude__[]") (vector)))
+  (define (%cons h t) (make-term (string->symbol "prelude__.") (vector h t)))
+  (define (%nil? v)
+    (or (and (symbol? v) (eq? v (string->symbol "[]")))
+        (and (term? v)
+             (eq? (term-functor v) (string->symbol "prelude__[]"))
+             (= (vector-length (term-args v)) 0))))
   (define (%cons? v)
     (and (term? v)
-         (eq? (term-functor v) (string->symbol "."))
+         (or (eq? (term-functor v) (string->symbol "prelude__."))
+             (eq? (term-functor v) (string->symbol ".")))
          (= (vector-length (term-args v)) 2)))
 
   ;;; term_variables

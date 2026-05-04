@@ -9,7 +9,6 @@
     check_unify/3,
     check_guard_bool/2,
     check_guard_getarg/5,
-    check_parent_type/3,
     errors/1,
     collect/1
 ]).
@@ -51,7 +50,6 @@
     check_unify(ty, ty, int),
     check_guard_bool(ty, int),
     check_guard_getarg(ty, ty, any, int, int),
-    check_parent_type(ty, any, int),
     check_arg_list(list(ty), list(ty), int),
     tc_unify(ty, ty, int),
     tc_unify_list(list(ty), list(ty), int),
@@ -193,25 +191,6 @@ delegate_guard_getarg @
 unknown_guard_getarg @
     check_guard_getarg(ResultType, _, _, _, _) <=>
     tc_unify(ResultType, any, 0).
-
-% Parent-type assertion for a (qualified) constructor written in
-% head/equation pattern position. Emitted by the desugarer alongside
-% the ':'-rewrite that handles runtime structural matching: this
-% guard refines the user-visible parent variable's type that the
-% ':'-match cannot express on its own.
-delegate_parent_type @
-    con_sig(ConName, Sig) \
-        check_parent_type(TermType, ConName, Ctx) <=>
-    Fresh is copy_term(term(Sig)),
-    FreshParent is sig_fst(Fresh),
-    tc_unify(TermType, FreshParent, Ctx).
-
-% Unknown constructor: leave the term type unconstrained (any).
-% Routed through tc_unify for the same soundness reason as
-% unknown_guard_getarg.
-unknown_parent_type @
-    check_parent_type(TermType, _, Ctx) <=>
-    tc_unify(TermType, any, Ctx).
 
 % ==========================================================================
 % tc_unify (type propagation and consistency)

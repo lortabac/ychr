@@ -18,15 +18,31 @@
        s)
       (extract)))
 
+  ;; Recognise both the canonicalized cons functor (@prelude__.@,
+  ;; emitted by the renamer-driven pipeline) and the bare @.@ form
+  ;; (left in code paths that don't go through the renamer).
+  (define (cons-functor? f)
+    (or (eq? f (string->symbol "prelude__."))
+        (eq? f (string->symbol "."))))
+
+  (define (nil-functor? f)
+    (or (eq? f (string->symbol "prelude__[]"))
+        (eq? f (string->symbol "[]"))))
+
   ;; Pretty-print the tail of a Prolog-style list.
   (define (pretty-list-tail v)
     (let ((d (deref v)))
       (cond
-        ;; nil: []
-        ((and (symbol? d) (string=? (symbol->string d) "[]")) "")
+        ;; nil: [] (legacy bare-symbol form)
+        ((and (symbol? d) (nil-functor? d)) "")
+        ;; nil: [] (canonicalized 0-arity term form)
+        ((and (term? d)
+              (nil-functor? (term-functor d))
+              (= (vector-length (term-args d)) 0))
+         "")
         ;; cons cell: , head <tail>
         ((and (term? d)
-              (eq? (term-functor d) (string->symbol "."))
+              (cons-functor? (term-functor d))
               (= (vector-length (term-args d)) 2))
          (string-append ", " (pretty-term (get-arg d 0))
                         (pretty-list-tail (get-arg d 1))))
@@ -56,9 +72,14 @@
         ((string? d) (string-append "\"" (escape-string d) "\""))
         ;; Symbol (atom)
         ((symbol? d) (symbol->string d))
-        ;; Prolog-style list (functor "." arity 2)
+        ;; Empty list (canonicalized 0-arity term form)
         ((and (term? d)
-              (eq? (term-functor d) (string->symbol "."))
+              (nil-functor? (term-functor d))
+              (= (vector-length (term-args d)) 0))
+         "[]")
+        ;; Prolog-style list (cons functor arity 2)
+        ((and (term? d)
+              (cons-functor? (term-functor d))
               (= (vector-length (term-args d)) 2))
          (string-append "[" (pretty-term (get-arg d 0))
                         (pretty-list-tail (get-arg d 1)) "]"))

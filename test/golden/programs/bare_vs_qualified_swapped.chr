@@ -1,0 +1,9 @@
+:- module(bare_vs_qualified_swapped, [c/2, type(col/0)]).
+
+% Mirror of bare_vs_qualified: the head uses the qualified form, the
+% goal uses the bare form. Same canonicalization, same runtime atom.
+:- chr_type col ---> red ; green.
+
+:- chr_constraint c(col, any).
+
+c(bare_vs_qualified_swapped:red, R) <=> R = ok.

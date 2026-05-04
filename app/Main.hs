@@ -21,6 +21,8 @@ import YCHR.Meta (metaHostCallRegistry)
 import YCHR.PExpr qualified as P
 import YCHR.Parsed qualified as Parsed
 import YCHR.Parser (opTableEntries, parseConstraint)
+import YCHR.Rename (renameQueryArgs)
+import YCHR.Types (Constraint (..))
 import YCHR.Pretty (prettyBindings, prettyQueryResult, renderAtom)
 import YCHR.Run (CompiledProgram (..), Error, Warning, compileFiles, compileModules, resolveQueryConstraint, runProgramWithGoal, runProgramWithQuery)
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
@@ -315,7 +317,16 @@ runGenDriver opts files = do
           putStrLn (show err)
           exitFailure
         Right c -> pure c
-      resolved <- case resolveQueryConstraint prog constraint of
+      -- Canonicalize bare data-constructor references in the goal's
+      -- arguments so they reach the runtime in the same flat-functor
+      -- form the compiled head patterns expect.
+      Constraint cname cargs <- pure constraint
+      renamedArgs <- case renameQueryArgs prog.allModules cargs of
+        Left errs -> do
+          mapM_ (putStrLn . show) errs
+          exitFailure
+        Right (rs, _) -> pure rs
+      resolved <- case resolveQueryConstraint prog (Constraint cname renamedArgs) of
         Left err -> do
           putStrLn err
           exitFailure

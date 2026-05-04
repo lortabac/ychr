@@ -224,20 +224,13 @@ normalizeArg st term =
         VarTerm fresh
       )
 
--- | Decompose a compound term into match and extraction guards.
+-- | Decompose a compound term into match and extraction guards. Both
+-- 'Qualified' and 'Unqualified' constructor functors are handled
+-- uniformly: the renamer canonicalizes data constructors to their
+-- 'Qualified' form, and the compiler emits both as a single flat-atom
+-- compound (see 'YCHR.Compile.compileTerm') — so HNF can just emit one
+-- 'GuardMatch' per compound regardless of where the name originated.
 decomposeCompound :: HnfState -> Text -> Name -> [Term] -> HnfState
--- Qualified names are expanded to their @':'@ compound-term representation
--- so that the VM sees them as ordinary binary terms, not mangled identifiers.
-decomposeCompound st parentVar (Qualified m n) cargs =
-  let inner = case cargs of
-        [] -> AtomTerm n
-        _ -> CompoundTerm (Unqualified n) cargs
-      -- Carry the user-written qualified name forward as a typing
-      -- guard so the type checker can refine the parent variable's
-      -- type. The runtime ':'-match below enforces the structure.
-      parentTypeGuard = D.GuardParentType (VarTerm parentVar) (Qualified m n)
-      st' = st {hnfGuards = parentTypeGuard : st.hnfGuards}
-   in decomposeCompound st' parentVar (Unqualified ":") [AtomTerm m, inner]
 decomposeCompound st parentVar cname cargs =
   let matchGuard = D.GuardMatch (VarTerm parentVar) cname (length cargs)
       st' = st {hnfGuards = matchGuard : st.hnfGuards}
@@ -390,6 +383,10 @@ desugarBodyGoal funSet label loc origin t = case t of
     pure [D.BodyIs v expr, D.BodyUnify (VarTerm v) lhs]
   CompoundTerm (Qualified "host" f) args ->
     pure [D.BodyHostStmt f args]
+  -- Canonicalized prelude:true reaching body position is a no-op
+  -- (renamer rewrites bare `true` to its qualified form; the body's
+  -- "do nothing" sentinel must still resolve to BodyTrue).
+  CompoundTerm (Qualified "prelude" "true") [] -> pure [D.BodyTrue]
   CompoundTerm name@(Qualified _ _) args
     | Set.member name funSet ->
         pure [D.BodyFunctionCall name args]
@@ -579,7 +576,6 @@ guardVars = Set.unions . map gVars
     gVars (D.GuardEqual t1 t2) = termVars t1 `Set.union` termVars t2
     gVars (D.GuardGetArg v t _) = Set.insert v (termVars t)
     gVars (D.GuardMatch t _ _) = termVars t
-    gVars (D.GuardParentType t _) = termVars t
 
 -- | Lift lambdas in a rule. The scope includes all variables from the
 -- entire rule (head, guard, and body).

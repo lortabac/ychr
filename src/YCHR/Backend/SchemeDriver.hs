@@ -64,25 +64,14 @@ termToScheme (VarTerm n) = n
 termToScheme Wildcard = "*wildcard*"
 termToScheme (CompoundTerm (Types.Unqualified ".") [h, t]) =
   "(%cons " <> termToScheme h <> " " <> termToScheme t <> ")"
--- Qualified names are encoded as @':'@-compounds, mirroring
--- 'compileTerm' in @Compile.hs@. Without this, gen-driver would emit a
--- flat @m:n@ symbol and head patterns (which compile to the
--- @':'@-pair) would never match the goal's value.
-termToScheme (CompoundTerm (Types.Qualified m n) []) =
-  "(make-term (quote :) (vector "
-    <> printSExpr (compileSymbol m)
-    <> " "
-    <> printSExpr (compileSymbol n)
-    <> "))"
+-- Qualified names flatten to a single @m__n@ functor symbol,
+-- mirroring 'compileTerm' in @Compile.hs@. 0-arity uses become
+-- 'make-term' with an empty arg vector so @match-term@ can dispatch
+-- on the same shape that compiled head patterns produce.
 termToScheme (CompoundTerm (Types.Qualified m n) ts) =
-  let argExprs = map termToScheme ts
-      inner =
-        "(make-term "
-          <> printSExpr (compileSymbol n)
-          <> " (vector "
-          <> T.intercalate " " argExprs
-          <> "))"
-   in "(make-term (quote :) (vector " <> printSExpr (compileSymbol m) <> " " <> inner <> "))"
+  let flat = m <> "__" <> n
+      argExprs = map termToScheme ts
+   in "(make-term " <> printSExpr (compileSymbol flat) <> " (vector " <> T.intercalate " " argExprs <> "))"
 termToScheme (CompoundTerm (Types.Unqualified n) ts) =
   let symExpr = compileSymbol n
       argExprs = map termToScheme ts

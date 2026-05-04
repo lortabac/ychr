@@ -58,7 +58,7 @@ import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed (SourceLoc (..))
 import YCHR.Parser (parseConstraint, parseQueryWith)
 import YCHR.Pretty (prettyTerm)
-import YCHR.Rename (renameQueryGoals)
+import YCHR.Rename (renameQueryArgs, renameQueryGoals)
 import YCHR.Runtime.History (PropHistory, runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc)
 import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue)
@@ -248,7 +248,12 @@ runProgramWithGoal :: CompiledProgram -> HostCallRegistry -> Text -> IO (Runtime
 runProgramWithGoal cp hostCalls src =
   case parseConstraint "<query>" src of
     Left err -> throwIO (ParseError "<query>" err)
-    Right c -> runProgramWithGoalDSL cp hostCalls c
+    -- Rename the constraint's arguments so that bare data-constructor
+    -- references (e.g. @[H|T]@, declared atoms) get canonicalized to
+    -- the same flat-functor form the compiled head patterns expect.
+    Right (Constraint cname cargs) -> do
+      (renamedArgs, _warnings) <- either (throwIO . RenameErrors) pure (renameQueryArgs cp.allModules cargs)
+      runProgramWithGoalDSL cp hostCalls (Constraint cname renamedArgs)
 
 termToValue :: (Unify :> es, State (Map Text Value) :> es) => Term -> Eff es Value
 termToValue (VarTerm n) = do
@@ -264,11 +269,13 @@ termToValue (FloatTerm n) = pure (VFloat n)
 termToValue (AtomTerm s) = pure (VAtom s)
 termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard
-termToValue (CompoundTerm (Types.Qualified m n) []) = do
-  pure (VTerm ":" [VAtom m, VAtom n])
-termToValue (CompoundTerm (Types.Qualified m n) ts) = do
+-- 'Qualified' constructors flatten to a single @vmName@-encoded
+-- functor (@m__n@), matching what 'YCHR.Compile.compileTerm' emits.
+-- 0-arity uses keep an empty arg vector so 'matchTerm' (which only
+-- looks at 'VTerm') can dispatch on them.
+termToValue (CompoundTerm name@(Types.Qualified _ _) ts) = do
   ts' <- traverse termToValue ts
-  pure (VTerm ":" [VAtom m, VTerm n ts'])
+  pure (VTerm (vmName name).unName ts')
 termToValue (CompoundTerm name ts) = VTerm (vmName name).unName <$> traverse termToValue ts
 
 -- ---------------------------------------------------------------------------

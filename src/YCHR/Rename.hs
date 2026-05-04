@@ -41,7 +41,7 @@
 --
 -- This pass guarantees that the subsequent Desugaring phase can treat the
 -- program as a flat, unambiguous collection of rules.
-module YCHR.Rename (renameProgram, buildExportEnv, renameQueryGoals, RenameError (..), RenameWarning (..), RenameInputs (..), defaultRenameInputs) where
+module YCHR.Rename (renameProgram, buildExportEnv, renameQueryGoals, renameQueryArgs, RenameError (..), RenameWarning (..), RenameInputs (..), defaultRenameInputs) where
 
 import Control.Monad (when)
 import Data.Foldable (traverse_)
@@ -82,6 +82,12 @@ data RenameWarning
 -- different types.
 type DataConEnv = Map Text [Int]
 
+-- | Maps @(constructorName, arity)@ to the list of modules that declare it.
+-- Built from the same declarations as 'DataConEnv' but indexed and valued
+-- so the renamer can canonicalize bare uses of declared constructors to
+-- their qualified form (the runtime then sees one canonical flat atom).
+type DataConProviders = Map (Text, Int) [Text]
+
 type RenameEffs = '[Writer [Diagnostic RenameWarning], Writer [Diagnostic RenameError]]
 
 emitError :: AnnP RenameError -> Eff RenameEffs ()
@@ -100,6 +106,7 @@ data RenameCtx = RenameCtx
   { declEnv :: DeclEnv,
     exportEnv :: ExportEnv,
     dataConEnv :: DataConEnv,
+    dataConProviders :: DataConProviders,
     typeDeclEnv :: DeclEnv,
     typeExportEnv :: ExportEnv,
     -- | Operators exported by each module, keyed by module name. Used to
@@ -154,6 +161,42 @@ buildDataConEnv visibleTypeSet mods =
       dc <- td.constructors,
       Unqualified t <- [dc.conName]
     ]
+
+-- | Build the @(constructorName, arity) -> [declaringModule]@ index used
+-- by the renamer's data-constructor canonicalization. Same scope as
+-- 'buildDataConEnv': only constructors whose declaring type is visible
+-- to the current module.
+buildDataConProviders :: Set.Set (Text, Int) -> [Module] -> DataConProviders
+buildDataConProviders visibleTypeSet mods =
+  Map.fromListWith
+    (++)
+    [ ((t, length dc.conArgs), [m.name])
+    | m <- mods,
+      Ann td _ <- m.typeDecls,
+      (unqualifiedText td.name, length td.typeVars) `Set.member` visibleTypeSet,
+      dc <- td.constructors,
+      Unqualified t <- [dc.conName]
+    ]
+
+-- | Canonicalize a use-site data-constructor reference to its declared
+-- 'Qualified' form when exactly one declaration matches @(name, arity)@.
+-- Returns 'Nothing' for unknown or ambiguous names — callers fall back to
+-- their existing handling (typically: leave the name 'Unqualified' and
+-- emit an undeclared-data-constructor warning).
+canonicalizeDataCon :: RenameCtx -> Text -> Int -> Maybe Name
+canonicalizeDataCon ctx n arity = case Map.lookup (n, arity) ctx.dataConProviders of
+  Just [m] -> Just (Qualified m n)
+  _ -> Nothing
+
+-- | Variant that takes a 'Name' (so compound-functor sites can call it
+-- without unwrapping). 'Qualified' names pass through unchanged;
+-- 'Unqualified' names are canonicalized via 'canonicalizeDataCon'.
+canonicalizeData :: RenameCtx -> Name -> Int -> Name
+canonicalizeData _ name@(Qualified _ _) _ = name
+canonicalizeData ctx (Unqualified n) arity =
+  case canonicalizeDataCon ctx n arity of
+    Just qn -> qn
+    Nothing -> Unqualified n
 
 -- | All declared constraints and functions across all modules, indexed by
 -- @(name, arity)@. Functions and constraints share a namespace, so both
@@ -229,6 +272,7 @@ renameProgram inputs mods =
           { declEnv = buildDeclEnv mods,
             exportEnv = buildExportEnv mods,
             dataConEnv = Map.empty,
+            dataConProviders = Map.empty,
             typeDeclEnv = buildTypeDeclEnv mods,
             typeExportEnv = buildTypeExportEnv mods,
             operatorExports = inputs.riOperatorExports,
@@ -241,7 +285,11 @@ renameProgram inputs mods =
                 { currentModule = m,
                   currentTrailingLoc = Map.findWithDefault Nothing m.name inputs.riTrailingLoc
                 }
-         in ctx0 {dataConEnv = buildDataConEnv (visibleTypes ctx0) mods}
+            visibleTypeSet = visibleTypes ctx0
+         in ctx0
+              { dataConEnv = buildDataConEnv visibleTypeSet mods,
+                dataConProviders = buildDataConProviders visibleTypeSet mods
+              }
       ((result, warnings), errs) = runPureEff . runWriter @[Diagnostic RenameError] . runWriter @[Diagnostic RenameWarning] $ do
         validateExports mods
         traverse (\m -> renameModule (ctxFor m)) mods
@@ -421,16 +469,33 @@ renameTerm ctx loc origin mode t = case t of
           ResolveAll -> ResolveAll
     renamedArgs <- traverse (renameTerm ctx loc origin childMode) args
     newName <- case mode of
-      NoResolve -> pure name
-      _ -> resolveName mode ctx loc origin name (length args)
+      NoResolve -> do
+        case name of
+          Unqualified n -> warnUnknownDataCon ctx.dataConEnv loc origin n (length args)
+          _ -> pure ()
+        pure (canonicalizeData ctx name (length args))
+      _ -> do
+        resolved <- resolveName mode ctx loc origin name (length args)
+        pure $ case resolved of
+          Unqualified _ -> canonicalizeData ctx resolved (length args)
+          Qualified _ _ -> resolved
     pure (CompoundTerm newName renamedArgs)
   -- Zero-arity atom promotion: if a bare atom matches a declared
-  -- constraint or function with arity 0, promote it to a 'CompoundTerm'.
-  AtomTerm n | mode /= NoResolve -> do
-    resolved <- resolveName ResolveAll ctx loc origin (Unqualified n) 0
+  -- constraint, function, or data constructor with arity 0, promote
+  -- it to a qualified 'CompoundTerm'. Data-constructor canonicalization
+  -- applies in @NoResolve@ mode too (head patterns) so that bare and
+  -- qualified uses end up at the same runtime atom.
+  AtomTerm n -> do
+    resolved <- case mode of
+      NoResolve -> do
+        warnUnknownDataCon ctx.dataConEnv loc origin n 0
+        pure (Unqualified n)
+      _ -> resolveName ResolveAll ctx loc origin (Unqualified n) 0
     case resolved of
       Qualified _ _ -> pure (CompoundTerm resolved [])
-      Unqualified _ -> pure (AtomTerm n)
+      Unqualified _ -> case canonicalizeDataCon ctx n 0 of
+        Just qn -> pure (CompoundTerm qn [])
+        Nothing -> pure (AtomTerm n)
   other -> pure other
 
 -- ---------------------------------------------------------------------------
@@ -604,8 +669,19 @@ resolveTypeName ctx n arity =
 -- | Rename a list of query goal terms using all modules as the visible
 -- scope. Each term is renamed at 'ResolveTop' level (same as rule bodies).
 -- Returns 'Left' if any rename errors occur.
+-- | Like 'renameQueryGoals' but uses 'NoResolve' mode — appropriate
+-- for the argument terms of a single goal constraint, where each
+-- term is data (constructors / atoms / variables) rather than a
+-- callable. Canonicalizes bare data-constructor references the same
+-- way the renamer does for head-pattern arguments.
+renameQueryArgs :: [Module] -> [Term] -> Either [Diagnostic RenameError] ([Term], [Diagnostic RenameWarning])
+renameQueryArgs mods args = renameQueryTerms mods NoResolve args
+
 renameQueryGoals :: [Module] -> [Term] -> Either [Diagnostic RenameError] ([Term], [Diagnostic RenameWarning])
-renameQueryGoals mods goals =
+renameQueryGoals mods goals = renameQueryTerms mods ResolveTop goals
+
+renameQueryTerms :: [Module] -> ResolveMode -> [Term] -> Either [Diagnostic RenameError] ([Term], [Diagnostic RenameWarning])
+renameQueryTerms mods mode terms =
   let queryMod =
         Module
           { name = "<query>",
@@ -621,16 +697,22 @@ renameQueryGoals mods goals =
           { declEnv = buildDeclEnv mods,
             exportEnv = buildExportEnv mods,
             dataConEnv = Map.empty,
+            dataConProviders = Map.empty,
             typeDeclEnv = buildTypeDeclEnv mods,
             typeExportEnv = buildTypeExportEnv mods,
             operatorExports = Map.empty,
             currentTrailingLoc = Nothing,
             currentModule = queryMod
           }
-      ctx = ctx0 {dataConEnv = buildDataConEnv (visibleTypes ctx0) mods}
+      visibleTypeSet = visibleTypes ctx0
+      ctx =
+        ctx0
+          { dataConEnv = buildDataConEnv visibleTypeSet mods,
+            dataConProviders = buildDataConProviders visibleTypeSet mods
+          }
       ((renamed, warnings), errs) =
         runPureEff . runWriter @[Diagnostic RenameError] . runWriter @[Diagnostic RenameWarning] $
-          traverse (renameTerm ctx dummyLoc (Atom "") ResolveTop) goals
+          traverse (renameTerm ctx dummyLoc (Atom "") mode) terms
    in if null errs then Right (renamed, warnings) else Left errs
 
 {- ---------------------------------------------------------------------------

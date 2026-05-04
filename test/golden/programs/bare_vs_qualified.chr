@@ -1,0 +1,11 @@
+:- module(bare_vs_qualified, [c/2, type(col/0)]).
+
+% Verifies that a head pattern using the bare form of a declared
+% constructor matches a goal that uses the qualified form (and vice
+% versa). Both must produce the same runtime atom under the
+% canonicalization implemented by the renamer.
+:- chr_type col ---> red ; green.
+
+:- chr_constraint c(col, any).
+
+c(red, R) <=> R = ok.

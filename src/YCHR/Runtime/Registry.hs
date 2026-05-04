@@ -45,7 +45,7 @@ import Data.Text qualified as T
 import Effectful
 import YCHR.Runtime.Store (CHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), Value (..), VarId)
-import YCHR.Runtime.Var (Unify, deref, getVarId, newVar, unifiable)
+import YCHR.Runtime.Var (Unify, deref, equal, getVarId, newVar, unifiable)
 import YCHR.VM (Name (..))
 
 -- ---------------------------------------------------------------------------
@@ -129,12 +129,7 @@ baseHostCallRegistry =
       [RVal a, RVal b] -> RVal . VBool <$> unifiable a b
       args -> error $ "unifiable host call: expected 2 arguments, got " ++ show (length args)
     valEq = HostCallFn $ \case
-      [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VBool (a == b)))
-      [RVal (VFloat a), RVal (VFloat b)] -> pure (RVal (VBool (a == b)))
-      [RVal (VAtom a), RVal (VAtom b)] -> pure (RVal (VBool (a == b)))
-      [RVal (VText a), RVal (VText b)] -> pure (RVal (VBool (a == b)))
-      [RVal (VBool a), RVal (VBool b)] -> pure (RVal (VBool (a == b)))
-      [_, _] -> pure (RVal (VBool False))
+      [RVal a, RVal b] -> RVal . VBool <$> equal a b
       args -> error $ "== host call: expected 2 arguments, got " ++ show (length args)
     stringConcat = HostCallFn $ \case
       [RVal (VText a), RVal (VText b)] -> pure (RVal (VText (a <> b)))
@@ -310,12 +305,19 @@ allM p (x : xs) = do
 -- The empty list is represented as the atom @[]@, and cons cells as
 -- @.(H, T)@ compound terms.
 valueList :: [Value] -> Value
-valueList [] = VAtom "[]"
-valueList (x : xs) = VTerm "." [x, valueList xs]
+valueList [] = VTerm "prelude__[]" []
+valueList (x : xs) = VTerm "prelude__." [x, valueList xs]
 
--- | Decompose a Prolog-style list back into a Haskell list.
+-- | Decompose a Prolog-style list back into a Haskell list. Recognizes
+-- both the canonicalized cons form (@prelude__.@/@prelude__[]@,
+-- emitted by the renamer-driven pipeline) and the legacy bare form
+-- (@.@/@[]@, used by Haskell-side code that constructs values without
+-- going through the renamer — e.g. test fixtures, the DSL).
 -- Returns 'Nothing' if the value is not a well-formed list.
 fromValueList :: Value -> Maybe [Value]
+fromValueList (VTerm "prelude__[]" []) = Just []
+fromValueList (VAtom "prelude__[]") = Just []
 fromValueList (VAtom "[]") = Just []
+fromValueList (VTerm "prelude__." [x, rest]) = (x :) <$> fromValueList rest
 fromValueList (VTerm "." [x, rest]) = (x :) <$> fromValueList rest
 fromValueList _ = Nothing
