@@ -2,11 +2,12 @@
 
 module YCHR.GoldenTest (tests) where
 
+import Control.Monad (filterM)
 import Data.Char (isSpace)
-import Data.List (isInfixOf, sort)
+import Data.List (isInfixOf, partition, sort)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import System.Directory (doesFileExist, listDirectory)
+import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath (dropExtension, takeExtension, (<.>), (</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
@@ -17,52 +18,105 @@ import YCHR.Run (CompiledProgram (..), compileFiles, runProgramWithGoal)
 import YCHR.Runtime.Interpreter (baseHostCallRegistry)
 import YCHR.TypeCheck (typeCheckProgram)
 
+data Case
+  = Positive String FilePath FilePath
+  | Negative String FilePath
+
+data TestSpec = TestSpec
+  { testName :: String,
+    chrFiles :: [FilePath],
+    cases :: [Case]
+  }
+
 tests :: IO TestTree
 tests = do
-  let goalDir = "test/golden/goals"
-  names <-
-    sort
-      . map dropExtension
-      . filter ((== ".goal") . takeExtension)
-      <$> listDirectory goalDir
-  trees <- mapM (makeGoldenTest "test/golden") names
+  let root = "test/golden"
+  entries <- sort <$> listDirectory root
+  dirs <- filterM (doesDirectoryExist . (root </>)) entries
+  trees <- mapM (makeGoldenTest root) dirs
   pure (testGroup "Golden" trees)
 
 makeGoldenTest :: FilePath -> String -> IO TestTree
-makeGoldenTest base name = do
-  let errorFile = base </> "expected" </> name <.> "error"
-      expectedFile = base </> "expected" </> name <.> "expected"
-  isNeg <- doesFileExist errorFile
-  isPos <- doesFileExist expectedFile
-  pure $ case (isPos, isNeg) of
-    (True, False) -> makePositiveTest base name
-    (False, True) -> makeNegativeTest base name
-    (True, True) ->
-      testCase name $
-        assertFailure "Both .expected and .error files exist"
-    (False, False) ->
-      testCase name $
-        assertFailure "Neither .expected nor .error file found"
+makeGoldenTest root name = do
+  let dir = root </> name
+  files <- sort <$> listDirectory dir
+  let chrs = [dir </> f | f <- files, takeExtension f == ".chr"]
+      goals = [f | f <- files, takeExtension f == ".goal"]
+      expecteds = [f | f <- files, takeExtension f == ".expected"]
+      errors = [f | f <- files, takeExtension f == ".error"]
+  pure $ case validate dir name chrs goals expecteds errors of
+    Left msg -> testCase name (assertFailure msg)
+    Right spec -> testGroup spec.testName (map (makeCase spec) spec.cases)
 
-makePositiveTest :: FilePath -> String -> TestTree
-makePositiveTest base name = testCase name $ do
+validate ::
+  FilePath ->
+  String ->
+  [FilePath] ->
+  [FilePath] ->
+  [FilePath] ->
+  [FilePath] ->
+  Either String TestSpec
+validate dir name chrs goals expecteds errors
+  | null chrs =
+      Left ("No .chr files in " ++ dir)
+  | null goals && null errors =
+      Left ("No .goal or .error files in " ++ dir)
+  | not (null goals) && not (null errors) =
+      Left ("Test directory " ++ dir ++ " mixes .goal and .error files")
+  | not (null errors) =
+      let ecases =
+            [ Negative (dropExtension e) (dir </> e)
+            | e <- sort errors
+            ]
+       in Right (TestSpec name chrs ecases)
+  | otherwise = do
+      let goalNames = sort (map dropExtension goals)
+          expectedNames = sort (map dropExtension expecteds)
+          (matched, orphanGoals) =
+            partition (`elem` expectedNames) goalNames
+          orphanExpecteds = filter (`notElem` goalNames) expectedNames
+      case (orphanGoals, orphanExpecteds) of
+        ([], []) ->
+          let pcases =
+                [ Positive c (dir </> c <.> "goal") (dir </> c <.> "expected")
+                | c <- matched
+                ]
+           in Right (TestSpec name chrs pcases)
+        (gs, es) ->
+          Left
+            ( "Orphan files in "
+                ++ dir
+                ++ ":"
+                ++ concatMap (("\n  missing .expected for " ++) . (<.> "goal")) gs
+                ++ concatMap (("\n  missing .goal for " ++) . (<.> "expected")) es
+            )
+
+makeCase :: TestSpec -> Case -> TestTree
+makeCase spec c = case c of
+  Positive cname gf ef -> testCase cname (runPositive spec gf ef)
+  Negative cname ef -> testCase cname (runNegative spec ef)
+
+runPositive :: TestSpec -> FilePath -> FilePath -> IO ()
+runPositive spec goalFile expectedFile = do
   (prog, _) <-
-    compileFiles False [base </> "programs" </> name <.> "chr"]
+    compileFiles False spec.chrFiles
       >>= either (assertFailure . show) pure
-  -- Type-check the program
   typeErrors <- typeCheckProgram prog.desugaredProgram
   case typeErrors of
     [] -> pure ()
-    errs -> assertFailure ("Type errors in " ++ name ++ ":\n" ++ unlines (map displayMsg errs))
-  query <- TIO.readFile (base </> "goals" </> name <.> "goal")
-  expected <- readFile (base </> "expected" </> name <.> "expected")
-  (_, bindings) <- runProgramWithGoal prog (baseHostCallRegistry <> metaHostCallRegistry) (T.strip query)
+    errs ->
+      assertFailure
+        ("Type errors in " ++ spec.testName ++ ":\n" ++ unlines (map displayMsg errs))
+  query <- TIO.readFile goalFile
+  expected <- readFile expectedFile
+  (_, bindings) <-
+    runProgramWithGoal prog (baseHostCallRegistry <> metaHostCallRegistry) (T.strip query)
   prettyBindings bindings @?= expected
 
-makeNegativeTest :: FilePath -> String -> TestTree
-makeNegativeTest base name = testCase name $ do
-  result <- compileFiles False [base </> "programs" </> name <.> "chr"]
-  expectedCode <- trim <$> readFile (base </> "expected" </> name <.> "error")
+runNegative :: TestSpec -> FilePath -> IO ()
+runNegative spec errorFile = do
+  result <- compileFiles False spec.chrFiles
+  expectedCode <- trim <$> readFile errorFile
   case result of
     Left err -> do
       let msg = displayMsg err
@@ -70,7 +124,6 @@ makeNegativeTest base name = testCase name $ do
         ("Expected error code " ++ expectedCode ++ " in:\n" ++ msg)
         (expectedCode `isInfixOf` msg)
     Right (prog, _) -> do
-      -- Compilation succeeded; try type checking
       typeErrors <- typeCheckProgram prog.desugaredProgram
       case typeErrors of
         [] -> assertFailure "Expected compilation or type checking to fail, but it succeeded"

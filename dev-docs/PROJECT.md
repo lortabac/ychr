@@ -327,29 +327,30 @@ The following components have not yet been implemented:
 
 ## Golden Tests
 
-Golden tests verify end-to-end correctness by compiling a CHR program, running a goal, and comparing the result against an expected output file. There are two kinds:
+Golden tests verify end-to-end correctness by compiling a CHR program, running one or more goals, and comparing the results against expected output files. Each test lives in its own directory under `test/golden/<name>/`.
 
-**Positive tests** (expected success) consist of three files:
+A test directory contains:
 
-- `test/golden/programs/<name>.chr` — the CHR source program.
-- `test/golden/goals/<name>.goal` — a single goal (e.g., `result(test2, R)`).
-- `test/golden/expected/<name>.expected` — the expected output in `K = V` format (one binding per line, sorted alphabetically).
+- One or more `.chr` files. All `.chr` files in the directory are compiled together via `compileFiles`, so a test can exercise multi-file programs (imports, exports, cross-module visibility). Goals are module-qualified, so the harness does not need to designate a "main" file.
+- Either positive cases or negative cases, but not both.
 
-The harness compiles the program, runs the goal via `runProgramWithGoal`, formats the resulting bindings with `prettyBindings`, and asserts equality with the expected file.
+**Positive cases** are pairs of `<case>.goal` and `<case>.expected` files. For each pair, the harness runs the goal via `runProgramWithGoal`, formats the resulting bindings with `prettyBindings`, and asserts equality with the `.expected` file (which uses `K = V` format, one binding per line, sorted alphabetically). A directory may contain any number of pairs.
 
-**Negative tests** (expected compilation failure) consist of three files:
+**Negative cases** are `<case>.error` files containing a YCHR error code (e.g., `YCHR-20002`). For each one, the harness asserts that compilation (or type-checking) fails with a message containing that code. A negative-test directory has no `.goal` files.
 
-- `test/golden/programs/<name>.chr` — the CHR source program (containing an error).
-- `test/golden/goals/<name>.goal` — a goal file (required for test discovery; content is unused).
-- `test/golden/expected/<name>.error` — a single error code (e.g., `YCHR-20002`).
+Files with extensions outside `{.chr, .goal, .expected, .error}` are ignored, so per-test READMEs are fine. Subdirectories inside a test directory are ignored.
 
-The harness compiles the program and asserts that compilation fails with an error message containing the expected error code.
+Discovery rules (enforced by `test/YCHR/GoldenTest.hs`):
 
-The test harness (`test/YCHR/GoldenTest.hs`) discovers tests by scanning the `goals/` directory. A test is positive if a `.expected` file exists, negative if a `.error` file exists. Having both or neither is an error.
+- A directory must contain at least one `.chr` file.
+- Mixing `.goal` and `.error` files in the same directory is an error.
+- An orphan `.goal` (no matching `.expected`) or orphan `.expected` (no matching `.goal`) is an error.
 
-Golden tests run on both the Haskell interpreter (`cabal test`) and the Scheme backend (`python3 -m pytest test/scheme/`). The Scheme test harness compiles the program to Scheme, generates a driver script, and checks that its output matches the same expected file. Run both with `make test`.
+Test IDs are nested: a test directory `fib/` with cases `fib.goal` and `fib_small.goal` produces `Golden.fib.fib` and `Golden.fib.fib_small` in tasty (and `test_scheme_golden[fib-fib]`, `test_scheme_golden[fib-fib_small]` in pytest).
 
-To add a new golden test, create the files above. The test will be picked up automatically.
+Golden tests run on both the Haskell interpreter (`cabal test`) and the Scheme backend (`python3 -m pytest test/scheme/`). The Scheme harness only runs positive cases. Run both with `make test`.
+
+To add a new golden test, create a directory under `test/golden/`, drop the `.chr`, `.goal`, and `.expected` files into it, and the test is picked up automatically.
 
 
 ## References

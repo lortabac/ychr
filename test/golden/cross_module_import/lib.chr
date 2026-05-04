@@ -1,0 +1,5 @@
+:- module(cross_lib, [double/2]).
+
+:- chr_constraint double/2.
+
+double(X, R) <=> R is X * 2.

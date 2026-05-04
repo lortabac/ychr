@@ -1,7 +1,13 @@
 """Golden tests for the Scheme backend.
 
-Each test compiles a CHR program to Scheme, generates a driver script,
-runs it with guile3.0, and compares the output against the expected file.
+Each test directory under test/golden/ contains one or more .chr files
+(compiled together) plus one or more <case>.goal/<case>.expected pairs.
+For each case, this harness compiles the program to Scheme, generates a
+driver script for the case's goal, runs it with guile3.0, and compares
+the output against <case>.expected.
+
+Negative tests (directories containing .error files) are skipped — the
+Scheme harness only validates positive output.
 """
 
 import glob
@@ -12,44 +18,49 @@ import pytest
 
 GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden")
 
-# Golden tests that exercise Haskell-only meta-programming primitives and
-# therefore cannot run on the Scheme backend. The Haskell interpreter will
-# accumulate more such primitives over time.
+# Test directories whose tests exercise Haskell-only meta-programming
+# primitives and therefore cannot run on the Scheme backend.
 HASKELL_ONLY = {
     "copy_term_fn",
     "read_term_test",
 }
 
 
-def discover_tests():
-    """Scan test/golden/goals/*.goal and return sorted test names."""
-    goals = glob.glob(os.path.join(GOLDEN_DIR, "goals", "*.goal"))
-    return sorted(
-        os.path.splitext(os.path.basename(g))[0] for g in goals
-    )
+def discover_cases():
+    """Return sorted list of (test_dir, case_name) for all positive cases."""
+    cases = []
+    for entry in sorted(os.listdir(GOLDEN_DIR)):
+        dir_path = os.path.join(GOLDEN_DIR, entry)
+        if not os.path.isdir(dir_path):
+            continue
+        # Skip negative-test directories.
+        if glob.glob(os.path.join(dir_path, "*.error")):
+            continue
+        for goal in sorted(glob.glob(os.path.join(dir_path, "*.goal"))):
+            case_name = os.path.splitext(os.path.basename(goal))[0]
+            cases.append((entry, case_name))
+    return cases
 
 
-@pytest.mark.parametrize("test_name", discover_tests())
-def test_scheme_golden(test_name, ychr_bin, guile_bin, scheme_lib_dir, project_root, tmp_path):
-    if test_name in HASKELL_ONLY:
-        pytest.skip(f"{test_name} uses Haskell-only meta primitives")
+@pytest.mark.parametrize("test_dir,case_name", discover_cases())
+def test_scheme_golden(test_dir, case_name, ychr_bin, guile_bin, scheme_lib_dir, project_root, tmp_path):
+    if test_dir in HASKELL_ONLY:
+        pytest.skip(f"{test_dir} uses Haskell-only meta primitives")
 
-    error_file = os.path.join(GOLDEN_DIR, "expected", f"{test_name}.error")
-    if os.path.exists(error_file):
-        pytest.skip(f"{test_name} is a negative (compile-error) test")
+    dir_path = os.path.join(GOLDEN_DIR, test_dir)
+    chr_files = sorted(glob.glob(os.path.join(dir_path, "*.chr")))
+    assert chr_files, f"No .chr files in {dir_path}"
+    goal_file = os.path.join(dir_path, f"{case_name}.goal")
+    expected_file = os.path.join(dir_path, f"{case_name}.expected")
 
-    program = os.path.join(GOLDEN_DIR, "programs", f"{test_name}.chr")
-    query_file = os.path.join(GOLDEN_DIR, "goals", f"{test_name}.goal")
-    expected_file = os.path.join(GOLDEN_DIR, "expected", f"{test_name}.expected")
-
-    with open(query_file) as f:
+    with open(goal_file) as f:
         query = f.read().strip()
     with open(expected_file) as f:
         expected = f.read()
 
     # 1. Compile to Scheme
     result = subprocess.run(
-        [ychr_bin, "compile", "-t", "scheme", "-d", str(tmp_path), program],
+        [ychr_bin, "compile", "-t", "scheme", "-d", str(tmp_path), *chr_files],
         capture_output=True,
         text=True,
         cwd=project_root,
@@ -58,7 +69,7 @@ def test_scheme_golden(test_name, ychr_bin, guile_bin, scheme_lib_dir, project_r
 
     # 2. Generate driver
     result = subprocess.run(
-        [ychr_bin, "gen-driver", "-g", query, program],
+        [ychr_bin, "gen-driver", "-g", query, *chr_files],
         capture_output=True,
         text=True,
         cwd=project_root,

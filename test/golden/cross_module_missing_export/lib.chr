@@ -1,0 +1,5 @@
+:- module(cross_lib_partial, [keep/1]).
+
+:- chr_constraint keep/1.
+
+keep(_) <=> true.
