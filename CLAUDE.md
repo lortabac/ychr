@@ -14,7 +14,10 @@ See @dev-docs/PROJECT.md
   reference, VM specification, type system specification,
   and roadmap.
 
-## Formatting
+## Reminders
 
-After a task is completed, format the whole code base with
-`ormolu -i $(find src test -name '*.hs')`.
+After a task is completed:
+
+- Format the Haskell code base with `ormolu -i $(find src test -name '*.hs')`.
+- Run the test suites with `make test`.
+- Run the benchmarks with `make bench`.
