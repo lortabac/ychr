@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- |
@@ -41,13 +42,20 @@
 -- Non-obvious design choices are documented in the \"Notes\" block at the
 -- bottom of this file.
 module YCHR.Desugar
-  ( DesugarError (..),
+  ( -- * Pipeline
     desugarProgram,
     desugarQueryGoals,
+
+    -- * Lambda lifting
     liftAllLambdas,
     liftQueryLambdas,
+
+    -- * Symbol table
     SymbolTable,
     extractSymbolTable,
+
+    -- * Errors
+    DesugarError (..),
   )
 where
 
@@ -138,12 +146,12 @@ desugarRule funSet r = do
   ruleBody <- desugarBodyGoals funSet ruleLabel r.body.sourceLoc r.body.parsed r.body.node
   userGuards <- traverse (desugarGuard r.guard.sourceLoc) r.guard.node
   let rawHead = flattenHeadKind r.head.node
-      (hnfGuards, normalizedHead) = normalizeHead rawHead
+      (guards, normalizedHead) = normalizeHead rawHead
   pure
     D.Rule
       { name = fmap (.node) r.name,
         head = AnnP normalizedHead r.head.sourceLoc r.head.parsed,
-        guard = AnnP (hnfGuards ++ userGuards) r.guard.sourceLoc r.guard.parsed,
+        guard = AnnP (guards ++ userGuards) r.guard.sourceLoc r.guard.parsed,
         body = AnnP ruleBody r.body.sourceLoc r.body.parsed
       }
 
@@ -170,9 +178,9 @@ flattenHeadKind h = case h of
 -- variable names already seen in the head so far (so that duplicates
 -- can be detected), and the list of guards accumulated in reverse order.
 data HnfState = HnfState
-  { hnfCounter :: !Int,
-    hnfSeen :: Set.Set Text,
-    hnfGuards :: [D.Guard] -- accumulated in reverse
+  { counter :: !Int,
+    seen :: Set.Set Text,
+    guards :: [D.Guard] -- accumulated in reverse
   }
 
 -- | Normalize the kept and removed constraints of a head. Kept is
@@ -184,7 +192,7 @@ normalizeHead h =
   let initState = HnfState 0 Set.empty []
       (st1, kept') = mapAccumL normalizeConstraint initState h.kept
       (st2, removed') = mapAccumL normalizeConstraint st1 h.removed
-   in (reverse st2.hnfGuards, D.Head kept' removed')
+   in (reverse st2.guards, D.Head kept' removed')
 
 -- | Normalize the arguments of one head constraint.
 normalizeConstraint :: HnfState -> Constraint -> (HnfState, Constraint)
@@ -196,30 +204,34 @@ normalizeConstraint st (Constraint cname cargs) =
 -- only introduced for duplicates and non-variables; first-use variables
 -- and wildcards pass through.
 normalizeArg :: HnfState -> Term -> (HnfState, Term)
-normalizeArg st (VarTerm v)
-  | Set.member v st.hnfSeen =
-      let fresh = hnfPrefix <> T.pack (show st.hnfCounter)
-       in ( st
-              { hnfCounter = st.hnfCounter + 1,
-                hnfGuards = D.GuardEqual (VarTerm v) (VarTerm fresh) : st.hnfGuards
+normalizeArg HnfState {counter, seen, guards} (VarTerm v)
+  | Set.member v seen =
+      let fresh = hnfPrefix <> T.pack (show counter)
+       in ( HnfState
+              { counter = counter + 1,
+                seen,
+                guards = D.GuardEqual (VarTerm v) (VarTerm fresh) : guards
               },
             VarTerm fresh
           )
   | otherwise =
-      (st {hnfSeen = Set.insert v st.hnfSeen}, VarTerm v)
+      ( HnfState {counter, seen = Set.insert v seen, guards},
+        VarTerm v
+      )
 -- Wildcards pass through unchanged: they match anything, are never referenced,
 -- and cannot duplicate, so no fresh variable or guard is needed.
 normalizeArg st Wildcard = (st, Wildcard)
-normalizeArg st (CompoundTerm cname cargs) =
-  let fresh = hnfPrefix <> T.pack (show st.hnfCounter)
-      st' = st {hnfCounter = st.hnfCounter + 1}
+normalizeArg HnfState {counter, seen, guards} (CompoundTerm cname cargs) =
+  let fresh = hnfPrefix <> T.pack (show counter)
+      st' = HnfState {counter = counter + 1, seen, guards}
       st'' = decomposeCompound st' fresh cname cargs
    in (st'', VarTerm fresh)
-normalizeArg st term =
-  let fresh = hnfPrefix <> T.pack (show st.hnfCounter)
-   in ( st
-          { hnfCounter = st.hnfCounter + 1,
-            hnfGuards = D.GuardEqual (VarTerm fresh) term : st.hnfGuards
+normalizeArg HnfState {counter, seen, guards} term =
+  let fresh = hnfPrefix <> T.pack (show counter)
+   in ( HnfState
+          { counter = counter + 1,
+            seen,
+            guards = D.GuardEqual (VarTerm fresh) term : guards
           },
         VarTerm fresh
       )
@@ -231,49 +243,53 @@ normalizeArg st term =
 -- compound (see 'YCHR.Compile.compileTerm') — so HNF can just emit one
 -- 'GuardMatch' per compound regardless of where the name originated.
 decomposeCompound :: HnfState -> Text -> Name -> [Term] -> HnfState
-decomposeCompound st parentVar cname cargs =
+decomposeCompound HnfState {counter, seen, guards} parentVar cname cargs =
   let matchGuard = D.GuardMatch (VarTerm parentVar) cname (length cargs)
-      st' = st {hnfGuards = matchGuard : st.hnfGuards}
+      st' = HnfState {counter, seen, guards = matchGuard : guards}
    in foldl' (\s (i, arg) -> decomposeArg s parentVar i arg) st' (zip [0 ..] cargs)
 
 -- | Decompose a single argument of a compound term.
 decomposeArg :: HnfState -> Text -> Int -> Term -> HnfState
-decomposeArg st parentVar i (VarTerm v)
-  | Set.member v st.hnfSeen =
+decomposeArg HnfState {counter, seen, guards} parentVar i (VarTerm v)
+  | Set.member v seen =
       -- Duplicate variable: extract and check equality
-      let fresh = hnfPrefix <> T.pack (show st.hnfCounter)
+      let fresh = hnfPrefix <> T.pack (show counter)
           getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
           eqGuard = D.GuardEqual (VarTerm v) (VarTerm fresh)
-       in st
-            { hnfCounter = st.hnfCounter + 1,
-              hnfGuards = eqGuard : getGuard : st.hnfGuards
+       in HnfState
+            { counter = counter + 1,
+              seen,
+              guards = eqGuard : getGuard : guards
             }
   | otherwise =
       -- First occurrence: extract and bind
       let getGuard = D.GuardGetArg v (VarTerm parentVar) i
-       in st
-            { hnfGuards = getGuard : st.hnfGuards,
-              hnfSeen = Set.insert v st.hnfSeen
+       in HnfState
+            { counter,
+              seen = Set.insert v seen,
+              guards = getGuard : guards
             }
 decomposeArg st _ _ Wildcard = st
-decomposeArg st parentVar i (CompoundTerm cname cargs) =
+decomposeArg HnfState {counter, seen, guards} parentVar i (CompoundTerm cname cargs) =
   -- Nested compound: extract then recursively decompose
-  let fresh = hnfPrefix <> T.pack (show st.hnfCounter)
+  let fresh = hnfPrefix <> T.pack (show counter)
       getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
       st' =
-        st
-          { hnfCounter = st.hnfCounter + 1,
-            hnfGuards = getGuard : st.hnfGuards
+        HnfState
+          { counter = counter + 1,
+            seen,
+            guards = getGuard : guards
           }
    in decomposeCompound st' fresh cname cargs
-decomposeArg st parentVar i term =
+decomposeArg HnfState {counter, seen, guards} parentVar i term =
   -- Ground term (atom, integer, string): extract and check equality
-  let fresh = hnfPrefix <> T.pack (show st.hnfCounter)
+  let fresh = hnfPrefix <> T.pack (show counter)
       getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
       eqGuard = D.GuardEqual (VarTerm fresh) term
-   in st
-        { hnfCounter = st.hnfCounter + 1,
-          hnfGuards = eqGuard : getGuard : st.hnfGuards
+   in HnfState
+        { counter = counter + 1,
+          seen,
+          guards = eqGuard : getGuard : guards
         }
 
 -- | Desugar a resolved function definition: HNF-normalize its equation
@@ -299,12 +315,12 @@ desugarEquation' :: R.FunctionEquation -> Eff '[Writer [Diagnostic DesugarError]
 desugarEquation' eq = do
   let initState = HnfState 0 Set.empty []
       (st, normalizedArgs) = mapAccumL normalizeArg initState eq.args
-      hnfGuards = reverse st.hnfGuards
+      guards = reverse st.guards
   userGuards <- traverse (desugarGuard eq.guard.sourceLoc) eq.guard.node
   pure
     D.Equation
       { params = normalizedArgs,
-        guards = hnfGuards ++ userGuards,
+        guards = guards ++ userGuards,
         rhs = eq.rhs.node
       }
 
@@ -411,9 +427,9 @@ desugarBodyGoal funSet label loc origin t = case t of
 -- @__lambda_N@ names, and the list of top-level functions that have
 -- already been lifted out (in reverse discovery order).
 data LiftState = LiftState
-  { liftCounter :: !Int,
+  { counter :: !Int,
     liftedFunctions :: [D.Function],
-    liftErrors :: [Diagnostic DesugarError]
+    errors :: [Diagnostic DesugarError]
   }
 
 -- | Check if a term is a variable or wildcard (the only valid lambda params).
@@ -453,7 +469,7 @@ liftTerm modName loc origin scope st term = case term of
         freeVars = Set.toAscList (bodyVars `Set.intersection` scope `Set.difference` paramVarNames)
         innerScope = scope `Set.union` paramVarNames
         (st', liftedBody) = liftTerm modName loc origin innerScope st body
-        idx = st'.liftCounter
+        idx = st'.counter
         lambdaName = lambdaPrefix <> T.pack (show idx)
         qualName = Qualified modName lambdaName
         allParams = map VarTerm freeVars ++ params
@@ -472,7 +488,7 @@ liftTerm modName loc origin scope st term = case term of
                   ]
             }
         newErrors = map (\p -> noDiag (AnnP (InvalidLambdaParam p) loc origin)) badParams
-        st'' = st' {liftCounter = idx + 1, liftedFunctions = func : st'.liftedFunctions, liftErrors = newErrors ++ st'.liftErrors}
+        st'' = st' {counter = idx + 1, liftedFunctions = func : st'.liftedFunctions, errors = newErrors ++ st'.errors}
         lambdaId = modName <> "__" <> lambdaName
         closureArgs = [AtomTerm lambdaId, quoteTerm term] ++ map VarTerm freeVars
      in (st'', CompoundTerm (Unqualified closureFunctor) closureArgs)
@@ -606,14 +622,14 @@ liftAllLambdas prog =
   let initState = LiftState 0 [] []
       (st1, functions') = mapAccumL liftFunction initState prog.functions
       (st2, rules') = mapAccumL liftRule st1 prog.rules
-   in if null st2.liftErrors
+   in if null st2.errors
         then
           Right
             prog
               { D.functions = functions' ++ st2.liftedFunctions,
                 D.rules = rules'
               }
-        else Left (reverse st2.liftErrors)
+        else Left (reverse st2.errors)
 
 -- | Lift lambdas from query body goals. Returns the rewritten goals
 -- and any generated function definitions (to be compiled on the fly).
@@ -624,9 +640,9 @@ liftQueryLambdas startCounter loc origin goals =
   let scope = bodyGoalVars goals
       initState = LiftState startCounter [] []
       (st, goals') = mapAccumL (liftBodyGoal "__query" loc origin scope) initState goals
-   in if null st.liftErrors
+   in if null st.errors
         then Right (goals', st.liftedFunctions)
-        else Left (reverse st.liftErrors)
+        else Left (reverse st.errors)
 
 {- ---------------------------------------------------------------------------
 Notes
