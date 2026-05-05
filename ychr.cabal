@@ -154,6 +154,7 @@ library
                     , YCHR.Compile.Types
                     , YCHR.Diagnostic
                     , YCHR.Display
+                    , YCHR.Repl
                     , YCHR.Run
                     , YCHR.Meta
                     , YCHR.Desugared

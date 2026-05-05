@@ -1,34 +1,31 @@
 module Main where
 
 import Control.Exception (SomeException, displayException, fromException, try)
-import Control.Monad (unless)
-import Control.Monad.IO.Class (liftIO)
-import Data.List (isPrefixOf, nub)
-import Data.List qualified as List
-import Data.Map.Strict qualified as Map
+import Control.Monad (unless, when)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Options.Applicative
-import System.Console.Haskeline
-import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDirectory)
+import System.Directory (createDirectoryIfMissing)
 import System.Exit (exitFailure)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hPutStr, stderr)
 import YCHR.Backend.Scheme (generateScheme)
 import YCHR.Backend.SchemeDriver (generateDriver)
-import YCHR.Display (Display (..), displayMsg)
+import YCHR.Display (displayMsg)
 import YCHR.Meta (metaHostCallRegistry)
-import YCHR.PExpr qualified as P
-import YCHR.Parsed qualified as Parsed
-import YCHR.Parser (opTableEntries, parseConstraint)
-import YCHR.Pretty (prettyBindings, prettyQueryResult, renderAtom)
+import YCHR.Parser (parseConstraint)
+import YCHR.Pretty (prettyBindings)
 import YCHR.Rename (renameQueryArgs)
-import YCHR.Run (CompiledProgram (..), Error, Warning, compileFiles, compileModules, resolveQueryConstraint, runLiveSession, runProgramWithGoal, runProgramWithQuery)
+import YCHR.Repl qualified as Repl
+import YCHR.Run (CompiledProgram (..), Error (..), Warning, compileFiles, resolveQueryConstraint, runProgramWithGoal)
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
 import YCHR.TypeCheck (typeCheckProgram)
 import YCHR.Types (Constraint (..))
-import YCHR.Types qualified as Types
 import YCHR.VM.SExpr (VMProgram (..), serialize)
+
+-- ---------------------------------------------------------------------------
+-- Command-line options
+-- ---------------------------------------------------------------------------
 
 data RunOpts = RunOpts
   { goal :: T.Text,
@@ -118,241 +115,109 @@ main :: IO ()
 main = do
   cmd <- execParser (info (commandParser <**> helper) (fullDesc <> progDesc "CHR compiler"))
   case cmd of
-    Repl opts files -> runRepl opts files
+    Repl opts files -> Repl.runRepl hostCalls opts.quiet files
     Run opts files -> runGoal opts files
     Compile opts files -> runCompile opts files
     GenDriver opts files -> runGenDriver opts files
     Check files -> runCheck files
 
-printWarnings :: [Warning] -> IO ()
-printWarnings = mapM_ (\w -> hPutStr stderr (displayMsg w))
+-- ---------------------------------------------------------------------------
+-- Subcommands
+-- ---------------------------------------------------------------------------
 
-runTypeCheck :: CompiledProgram -> IO ()
-runTypeCheck prog = do
+runGoal :: RunOpts -> [FilePath] -> IO ()
+runGoal opts files = withCompiled True files $ \prog warnings -> do
+  printWarnings warnings
+  typeCheckOrExit prog
+  outcome <- try @SomeException (runProgramWithGoal prog hostCalls opts.goal)
+  case outcome of
+    Left exc -> do
+      case fromException exc of
+        Just err -> putStr (displayMsg (err :: Error))
+        Nothing -> putStrLn ("Error: " ++ displayException exc)
+      exitFailure
+    Right (_, bindings) ->
+      when opts.showBindings (putStr (prettyBindings bindings))
+
+runCompile :: CompileOpts -> [FilePath] -> IO ()
+runCompile opts files = withCompiled includeStdlib files $ \prog warnings -> do
+  printWarnings warnings
+  typeCheckOrExit prog
+  let vmp = VMProgram {program = prog.program, exportedSet = prog.exportedSet, symbolTable = prog.symbolTable}
+      name = maybe (T.pack "program") T.pack opts.baseName
+  case opts.target of
+    TargetVM -> do
+      let outPath = opts.outputDir </> T.unpack name ++ ".vm"
+      TIO.writeFile outPath (serialize vmp)
+      putStrLn outPath
+    TargetScheme -> do
+      let libName = [T.pack "ychr", T.pack "generated", name]
+          outPath = opts.outputDir </> "ychr" </> "generated" </> T.unpack name ++ ".sls"
+      createDirectoryIfMissing True (takeDirectory outPath)
+      TIO.writeFile outPath (generateScheme libName vmp)
+      putStrLn outPath
+  where
+    includeStdlib = case opts.target of
+      TargetVM -> True
+      TargetScheme -> False
+
+runGenDriver :: GenDriverOpts -> [FilePath] -> IO ()
+runGenDriver opts files = withCompiled False files $ \prog warnings -> do
+  printWarnings warnings
+  typeCheckOrExit prog
+  Constraint cname cargs <- case parseConstraint "<query>" opts.gdGoal of
+    Left err -> do
+      putStr (displayMsg (ParseError "<query>" err))
+      exitFailure
+    Right c -> pure c
+  -- Canonicalize bare data-constructor references in the goal's
+  -- arguments so they reach the runtime in the same flat-functor
+  -- form the compiled head patterns expect.
+  renamedArgs <- case renameQueryArgs prog.allModules cargs of
+    Left errs -> do
+      putStr (displayMsg (RenameErrors errs))
+      exitFailure
+    Right (rs, _) -> pure rs
+  resolved <- case resolveQueryConstraint prog (Constraint cname renamedArgs) of
+    Left err -> do
+      putStrLn err
+      exitFailure
+    Right c -> pure c
+  TIO.putStr (generateDriver (T.pack "program") resolved)
+
+runCheck :: [FilePath] -> IO ()
+runCheck files = withCompiled True files $ \prog warnings -> do
+  printWarnings warnings
+  typeCheckOrExit prog
+
+-- ---------------------------------------------------------------------------
+-- Helpers
+-- ---------------------------------------------------------------------------
+
+-- | Compile @files@ (or an empty program if @files@ is empty) and
+-- pass the resulting 'CompiledProgram' and warnings to the
+-- continuation. On compilation failure, print the diagnostic to
+-- stdout and exit non-zero — the continuation does not run.
+withCompiled :: Bool -> [FilePath] -> (CompiledProgram -> [Warning] -> IO ()) -> IO ()
+withCompiled stdlib files k = do
+  result <- compileFiles stdlib files
+  case result of
+    Left err -> do
+      putStr (displayMsg err)
+      exitFailure
+    Right (prog, warnings) -> k prog warnings
+
+-- | Type-check the compiled program. If errors are found, print them
+-- to stderr and exit non-zero; otherwise return cleanly.
+typeCheckOrExit :: CompiledProgram -> IO ()
+typeCheckOrExit prog = do
   errs <- typeCheckProgram prog.desugaredProgram
   unless (null errs) $ do
     mapM_ (hPutStr stderr . displayMsg) errs
     exitFailure
 
-printTypeErrors :: CompiledProgram -> IO ()
-printTypeErrors prog = do
-  errs <- typeCheckProgram prog.desugaredProgram
-  mapM_ (hPutStr stderr . displayMsg) errs
-
-runRepl :: ReplOpts -> [FilePath] -> IO ()
-runRepl opts files = do
-  result <- case files of
-    [] -> pure (compileModules True [])
-    _ -> compileFiles True files
-  case result of
-    Left err -> do
-      putStr (displayMsg err)
-      exitFailure
-    Right (prog, warnings) -> do
-      unless opts.quiet $ printWarnings warnings
-      unless opts.quiet $ printTypeErrors prog
-      histFile <- getXdgDirectory XdgData "ychr/history"
-      createDirectoryIfMissing True (takeDirectory histFile)
-      let CompiledProgram {exportMap = em} = prog
-          exportedNames = nub [T.unpack n | Types.UnqualifiedIdentifier n _ <- Map.keys em]
-          outerCompletions = [":begin", ":quit", ":recompile", ":help", ":list_files", ":list_modules", ":list_declarations", ":list_operators"] ++ exportedNames
-          liveCompletions = ":end" : exportedNames
-          mkCompleteFunc cs = completeWord Nothing " ," $ \prefix ->
-            return $ map (\n -> (simpleCompletion n) {isFinished = False}) $ filter (isPrefixOf prefix) cs
-          baseSettings = (defaultSettings :: Settings IO) {historyFile = Just histFile}
-          outerSettings = baseSettings {complete = mkCompleteFunc outerCompletions}
-          liveSettings = baseSettings {complete = mkCompleteFunc liveCompletions}
-      runInputT outerSettings (repl opts.quiet files liveSettings prog)
-
-repl :: Bool -> [FilePath] -> Settings IO -> CompiledProgram -> InputT IO ()
-repl quietMode files liveSettings prog = loop
-  where
-    showHelp = do
-      outputStrLn "Commands:"
-      outputStrLn "  :help, :h              Show this help message"
-      outputStrLn "  :recompile, :r         Recompile the loaded files"
-      outputStrLn "  :list_files            List the compiled files"
-      outputStrLn "  :list_modules          List the compiled modules"
-      outputStrLn "  :list_declarations     List visible declarations"
-      outputStrLn "  :list_operators        List defined operators"
-      outputStrLn "  :begin                 Start a live CHR session (end with :end)"
-      outputStrLn "  :quit, :q              Exit the REPL"
-      loop
-    showFiles = do
-      mapM_ outputStrLn files
-      loop
-    showDeclarations = do
-      let renderDecl kw modName name arity =
-            ":- " ++ kw ++ " " ++ renderAtom modName ++ ":" ++ renderAtom name ++ "/" ++ show arity ++ "."
-          declLines =
-            [ renderDecl kw m.name n a
-            | m <- prog.allModules,
-              Parsed.Ann d _ <- m.decls,
-              (kw, n, a) <- case d of
-                Parsed.ConstraintDecl {name = n, arity = a} -> [("chr_constraint", n, a)]
-                Parsed.FunctionDecl {name = n, arity = a, isOpen = o} -> [(if o then "open_function" else "function", n, a)]
-                _ -> []
-            ]
-      mapM_ outputStrLn declLines
-      loop
-    showOperators = do
-      let opTypeStr P.Xfx = "xfx"
-          opTypeStr P.Xfy = "xfy"
-          opTypeStr P.Yfx = "yfx"
-          opTypeStr P.Fx = "fx"
-          opTypeStr P.Fy = "fy"
-          opTypeStr P.Xf = "xf"
-          opTypeStr P.Yf = "yf"
-          entries = List.sort [(fix, opTypeStr ty, name) | (fix, ty, name) <- opTableEntries prog.opTable]
-          renderOp (fix, ty, name) =
-            "op(" ++ show fix ++ ", " ++ ty ++ ", " ++ renderAtom name ++ ")"
-      mapM_ (outputStrLn . renderOp) entries
-      loop
-    showModules = do
-      mapM_ (\(Parsed.Module {name = n}) -> outputStrLn (T.unpack n)) prog.allModules
-      loop
-    recompile = do
-      result <- liftIO $ case files of
-        [] -> pure (compileModules True [])
-        _ -> compileFiles True files
-      case result of
-        Left err -> do
-          outputStr (displayMsg err)
-          loop
-        Right (prog', warnings) -> do
-          liftIO (printWarnings warnings)
-          liftIO (printTypeErrors prog')
-          repl quietMode files liveSettings prog'
-    loop = do
-      minput <- getInputLine (if quietMode then "" else "ychr> ")
-      case minput of
-        Nothing -> return ()
-        Just ":quit" -> return ()
-        Just ":q" -> return ()
-        Just ":recompile" -> recompile
-        Just ":r" -> recompile
-        Just ":help" -> showHelp
-        Just ":h" -> showHelp
-        Just ":list_files" -> showFiles
-        Just ":list_modules" -> showModules
-        Just ":list_declarations" -> showDeclarations
-        Just ":list_operators" -> showOperators
-        Just ":begin" -> do
-          liftIO (runLiveSession prog hostCalls liveSettings quietMode)
-          loop
-        Just "" -> loop
-        Just line -> do
-          outcome <-
-            liftIO $
-              try @SomeException $
-                runProgramWithQuery prog hostCalls (T.pack line)
-          case outcome of
-            Left exc -> case fromException exc of
-              Just err -> outputStr (displayMsg (err :: Error))
-              Nothing -> outputStrLn ("Error: " ++ displayException exc)
-            Right bindings -> do
-              outputStr (prettyQueryResult bindings)
-          loop
-
-runGoal :: RunOpts -> [FilePath] -> IO ()
-runGoal opts files = do
-  result <- case files of
-    [] -> pure (compileModules True [])
-    _ -> compileFiles True files
-  case result of
-    Left err -> do
-      putStr (displayMsg err)
-      exitFailure
-    Right (prog, warnings) -> do
-      printWarnings warnings
-      runTypeCheck prog
-      outcome <- try @SomeException $ runProgramWithGoal prog hostCalls opts.goal
-      case outcome of
-        Left exc -> do
-          case fromException exc of
-            Just err -> putStr (displayMsg (err :: Error))
-            Nothing -> putStrLn ("Error: " ++ displayException exc)
-          exitFailure
-        Right (_, bindings) ->
-          if opts.showBindings
-            then putStr (prettyBindings bindings)
-            else return ()
-
-runCompile :: CompileOpts -> [FilePath] -> IO ()
-runCompile opts files = do
-  let includeStdlib = case opts.target of
-        TargetVM -> True
-        TargetScheme -> False
-  result <- case files of
-    [] -> pure (compileModules includeStdlib [])
-    _ -> compileFiles includeStdlib files
-  case result of
-    Left err -> do
-      putStr (displayMsg err)
-      exitFailure
-    Right (prog, warnings) -> do
-      printWarnings warnings
-      runTypeCheck prog
-      let vmp = VMProgram {program = prog.program, exportedSet = prog.exportedSet, symbolTable = prog.symbolTable}
-          name = maybe (T.pack "program") T.pack opts.baseName
-      case opts.target of
-        TargetVM -> do
-          let outPath = opts.outputDir </> T.unpack name ++ ".vm"
-          TIO.writeFile outPath (serialize vmp)
-          putStrLn outPath
-        TargetScheme -> do
-          let libName = [T.pack "ychr", T.pack "generated", name]
-              outPath = opts.outputDir </> "ychr" </> "generated" </> T.unpack name ++ ".sls"
-          createDirectoryIfMissing True (takeDirectory outPath)
-          TIO.writeFile outPath (generateScheme libName vmp)
-          putStrLn outPath
-
-runGenDriver :: GenDriverOpts -> [FilePath] -> IO ()
-runGenDriver opts files = do
-  result <- case files of
-    [] -> pure (compileModules False [])
-    _ -> compileFiles False files
-  case result of
-    Left err -> do
-      putStr (displayMsg err)
-      exitFailure
-    Right (prog, warnings) -> do
-      printWarnings warnings
-      runTypeCheck prog
-      constraint <- case parseConstraint "<query>" opts.gdGoal of
-        Left err -> do
-          putStrLn (show err)
-          exitFailure
-        Right c -> pure c
-      -- Canonicalize bare data-constructor references in the goal's
-      -- arguments so they reach the runtime in the same flat-functor
-      -- form the compiled head patterns expect.
-      Constraint cname cargs <- pure constraint
-      renamedArgs <- case renameQueryArgs prog.allModules cargs of
-        Left errs -> do
-          mapM_ (putStrLn . show) errs
-          exitFailure
-        Right (rs, _) -> pure rs
-      resolved <- case resolveQueryConstraint prog (Constraint cname renamedArgs) of
-        Left err -> do
-          putStrLn err
-          exitFailure
-        Right c -> pure c
-      let name = T.pack "program"
-      TIO.putStr (generateDriver name resolved)
-
-runCheck :: [FilePath] -> IO ()
-runCheck files = do
-  result <- case files of
-    [] -> pure (compileModules True [])
-    _ -> compileFiles True files
-  case result of
-    Left err -> do
-      putStr (displayMsg err)
-      exitFailure
-    Right (prog, warnings) -> do
-      printWarnings warnings
-      runTypeCheck prog
+printWarnings :: [Warning] -> IO ()
+printWarnings = mapM_ (hPutStr stderr . displayMsg)
 
 hostCalls :: HostCallRegistry
 hostCalls = baseHostCallRegistry <> metaHostCallRegistry

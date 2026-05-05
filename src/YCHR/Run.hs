@@ -2,6 +2,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
+-- | Top-level orchestration: compile a program, then run goals or
+-- multi-goal queries against it. The CHR session machinery lives in
+-- "YCHR.Runtime.Session"; the compilation pipeline lives in
+-- "YCHR.Compile.Pipeline". This module ties the two together and
+-- adds the query-time goal evaluator used by 'runProgramWithQuery'
+-- and the live REPL session in "YCHR.Repl".
 module YCHR.Run
   ( -- * Compilation (re-exported from "YCHR.Compile.Pipeline")
     Error (..),
@@ -12,7 +18,7 @@ module YCHR.Run
     compileModules,
     compileFiles,
 
-    -- * CHR effect
+    -- * CHR effect (re-exported from "YCHR.Runtime.Session")
     CHR,
     CHREffects,
     runCHR,
@@ -32,14 +38,14 @@ module YCHR.Run
     runProgramWithGoal,
 
     -- * Multi-goal query API
+    PreparedQuery (..),
+    prepareQuery,
+    executePreparedQuery,
     runProgramWithQuery,
-
-    -- * Live REPL session
-    runLiveSession,
   )
 where
 
-import Control.Exception (SomeException, displayException, fromException, throwIO, try)
+import Control.Exception (throwIO)
 import Control.Monad (unless, void, when)
 import Data.List (intercalate)
 import Data.Map.Strict (Map)
@@ -50,25 +56,20 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Dispatch.Static
-import Effectful.Exception qualified as Eff
 import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.Writer.Static.Local (listen, runWriter)
-import System.Console.Haskeline (Settings, getInputLine, runInputT)
-import System.IO (hPutStr, hPutStrLn, stderr)
 import YCHR.Compile (buildFunctionSet, compileFunctionDef, funcProcName, genCallFunDispatches, tellProcName, vmName)
 import YCHR.Compile.Pipeline (CompiledProgram (..), Error (..), ExportResolution (..), Warning (..), compileFiles, compileModules)
 import YCHR.Desugar (desugarQueryGoals, liftQueryLambdas)
 import YCHR.Desugared qualified as D
-import YCHR.Display (Display (..))
 import YCHR.Meta (valueToTerm)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed (SourceLoc (..))
 import YCHR.Parser (parseConstraint, parseQueryWith)
-import YCHR.Pretty (prettyQueryResult, prettyTerm)
+import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (renameQueryArgs, renameQueryGoals)
-import YCHR.Runtime.History (runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc)
-import YCHR.Runtime.Reactivation (drainQueue, enqueue, runReactQueue)
+import YCHR.Runtime.Reactivation (drainQueue, enqueue)
 import YCHR.Runtime.Session
   ( CHR,
     CHREffects,
@@ -79,17 +80,13 @@ import YCHR.Runtime.Session
     withCHR,
     withCHRExtra,
   )
-import YCHR.Runtime.Store (CHRStore, aliveConstraint, runCHRStore)
-import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId, Value (..))
-import YCHR.Runtime.Var (Unify, deref, equal, newVar, runUnify, unify)
+import YCHR.Runtime.Store (CHRStore, aliveConstraint)
+import YCHR.Runtime.Types (RuntimeVal (..), Value (..))
+import YCHR.Runtime.Var (Unify, deref, equal, newVar, unify)
 import YCHR.TypeCheck (typeCheckGoals)
 import YCHR.Types (Constraint (..), ConstraintType, Term (..))
 import YCHR.Types qualified as Types
-import YCHR.VM (Name (..), Procedure (..), Program (..), StackFrame)
-
--- | Runtime call stack for error reporting (newest first).
--- Re-exported here for use in this module's existing helpers.
-type CallStack = [StackFrame]
+import YCHR.VM (Name (..), Procedure (..), Program (..))
 
 -- ---------------------------------------------------------------------------
 -- Single-goal API
@@ -120,30 +117,24 @@ resolveQueryConstraint cp (Constraint cname cargs) = case cname of
           else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n ++ "/" ++ show arity)
 
 -- | Run a single CHR constraint against a compiled program.
+--
+-- Reuses 'withCHR' for session setup so that the runtime effect stack
+-- lives in one place ("YCHR.Runtime.Session"). The query-scope
+-- variable map is layered on top via 'evalState'.
 runProgramWithGoalDSL :: CompiledProgram -> HostCallRegistry -> Constraint -> IO (RuntimeVal, Map Text Term)
 runProgramWithGoalDSL cp hostCalls constraint = do
   resolved <- case resolveQueryConstraint cp constraint of
     Left err -> fail err
     Right c -> pure c
-  let prog = cp.program
-      procMap = Map.fromList [(p.name, p) | p <- prog.procedures]
+  let procMap = Map.fromList [(p.name, p) | p <- cp.program.procedures]
       tellName = tellProcName resolved.name (length resolved.args)
   unless (Map.member tellName procMap) $
     fail ("Constraint not found: " ++ T.unpack tellName.unName)
-  runEff
-    . runUnify
-    . fmap fst
-    . runWriter @[SuspensionId]
-    . runCHRStore prog.typeNames
-    . runPropHistory
-    . runReactQueue
-    . evalState @CallStack []
-    . evalState (Map.empty :: Map Text Value)
-    $ do
+  withCHR cp hostCalls $
+    evalState (Map.empty :: Map Text Value) $ do
       argVals <- traverse termToValue resolved.args
       result <- callProc procMap hostCalls tellName (map RVal argVals)
-      varMap <- get
-      bindings <- Map.traverseWithKey valueToTerm varMap
+      bindings <- get >>= Map.traverseWithKey valueToTerm
       pure (result, bindings)
 
 -- | Like 'runProgramWithGoalDSL' but accepts a query as surface-language 'Text'.
@@ -166,29 +157,6 @@ runProgramWithGoal cp hostCalls src =
       tcErrs <- typeCheckGoals cp.desugaredProgram (SourceLoc "<query>" 1 1) (Just "query") [D.BodyConstraint renamed]
       unless (null tcErrs) (throwIO (TypeErrors tcErrs))
       runProgramWithGoalDSL cp hostCalls renamed
-
-termToValue :: (Unify :> es, State (Map Text Value) :> es) => Term -> Eff es Value
-termToValue (VarTerm n) = do
-  varMap <- get
-  case Map.lookup n varMap of
-    Just v -> pure v
-    Nothing -> do
-      v <- newVar
-      modify (Map.insert n v)
-      pure v
-termToValue (IntTerm n) = pure (VInt n)
-termToValue (FloatTerm n) = pure (VFloat n)
-termToValue (AtomTerm s) = pure (VAtom s)
-termToValue (TextTerm s) = pure (VText s)
-termToValue Wildcard = pure VWildcard
--- 'Qualified' constructors flatten to a single @vmName@-encoded
--- functor (@m__n@), matching what 'YCHR.Compile.compileTerm' emits.
--- 0-arity uses keep an empty arg vector so 'matchTerm' (which only
--- looks at 'VTerm') can dispatch on them.
-termToValue (CompoundTerm name@(Types.Qualified _ _) ts) = do
-  ts' <- traverse termToValue ts
-  pure (VTerm (vmName name).unName ts')
-termToValue (CompoundTerm name ts) = VTerm (vmName name).unName <$> traverse termToValue ts
 
 -- ---------------------------------------------------------------------------
 -- Multi-goal query API
@@ -263,87 +231,34 @@ runProgramWithQuery cp hostCalls src = do
     executePreparedQuery hostCalls prep.liftedGoals
 
 -- ---------------------------------------------------------------------------
--- Live REPL session
+-- Query goal evaluator (internal)
 -- ---------------------------------------------------------------------------
 
--- | Outcome of executing a single live-session query.
-data QueryOutcome
-  = -- | Query ran to completion. Carries the resulting bindings.
-    QueryOk (Map Text Term)
-  | -- | A pre-execution problem (parse, type, lambdas-rejected) that
-    -- left the constraint store untouched. The session can continue.
-    QueryRecoverable String
-  | -- | A runtime exception thrown during goal execution. The store
-    -- and bindings may be inconsistent; the live session must abort.
-    QueryFatal String
-
--- | Run an interactive live session against a compiled program. A single
--- 'withCHR' call wraps the whole session, so the constraint store,
--- propagation history, and reactivation queue persist across queries
--- entered at the @ychr live>@ prompt. The session ends when the user
--- types @:end@, hits EOF, or a runtime error aborts execution.
-runLiveSession ::
-  CompiledProgram ->
-  HostCallRegistry ->
-  Settings IO ->
-  -- | Quiet mode (suppress prompt rendering).
-  Bool ->
-  IO ()
-runLiveSession cp hostCalls settings quiet = withCHR cp hostCalls liveLoop
-  where
-    prompt = if quiet then "" else "ychr live> "
-    liveLoop :: (CHREffects es) => Eff es ()
-    liveLoop = do
-      mline <- liftIO (runInputT settings (getInputLine prompt))
-      case mline of
-        Nothing -> pure ()
-        Just line -> dispatchLine line
-    dispatchLine :: (CHREffects es) => String -> Eff es ()
-    dispatchLine line
-      | stripped == ":end" = pure ()
-      | T.null stripped = liveLoop
-      | otherwise = do
-          outcome <- handleLiveQuery cp hostCalls (T.pack line)
-          case outcome of
-            QueryOk bindings -> do
-              liftIO (putStr (prettyQueryResult bindings))
-              liveLoop
-            QueryRecoverable msg -> do
-              liftIO (hPutStr stderr msg)
-              liveLoop
-            QueryFatal msg -> liftIO $ do
-              hPutStr stderr msg
-              hPutStrLn stderr "live session aborted due to runtime error."
-      where
-        stripped = T.strip (T.pack line)
-
--- | Handle one query inside an existing live session: parse / typecheck
--- in 'IO' (catching 'Error'), reject lifted lambdas (live sessions
--- cannot grow the procedure map), then execute and catch any runtime
--- exception as a fatal outcome.
-handleLiveQuery ::
-  (CHREffects es) =>
-  CompiledProgram ->
-  HostCallRegistry ->
-  Text ->
-  Eff es QueryOutcome
-handleLiveQuery cp hostCalls src = do
-  prepResult <- liftIO (try @SomeException (prepareQuery cp src))
-  case prepResult of
-    Left exc -> pure (classifyAsRecoverable exc)
-    Right prep
-      | not (null prep.queryLambdas) ->
-          pure (QueryRecoverable (displayMsg LambdasInLiveQuery))
-      | otherwise -> do
-          execResult <- Eff.try @SomeException (executePreparedQuery hostCalls prep.liftedGoals)
-          case execResult of
-            Left exc -> pure (QueryFatal (renderFatal exc))
-            Right bindings -> pure (QueryOk bindings)
-  where
-    classifyAsRecoverable exc = case fromException exc :: Maybe Error of
-      Just err -> QueryRecoverable (displayMsg err)
-      Nothing -> QueryFatal (renderFatal exc)
-    renderFatal exc = displayException exc ++ "\n"
+-- | Resolve a surface 'Term' to a 'Value' inside the per-query
+-- variable scope, allocating a fresh logical variable for each new
+-- 'VarTerm' the query introduces.
+termToValue :: (Unify :> es, State (Map Text Value) :> es) => Term -> Eff es Value
+termToValue (VarTerm n) = do
+  varMap <- get
+  case Map.lookup n varMap of
+    Just v -> pure v
+    Nothing -> do
+      v <- newVar
+      modify (Map.insert n v)
+      pure v
+termToValue (IntTerm n) = pure (VInt n)
+termToValue (FloatTerm n) = pure (VFloat n)
+termToValue (AtomTerm s) = pure (VAtom s)
+termToValue (TextTerm s) = pure (VText s)
+termToValue Wildcard = pure VWildcard
+-- 'Qualified' constructors flatten to a single @vmName@-encoded
+-- functor (@m__n@), matching what 'YCHR.Compile.compileTerm' emits.
+-- 0-arity uses keep an empty arg vector so 'matchTerm' (which only
+-- looks at 'VTerm') can dispatch on them.
+termToValue (CompoundTerm name@(Types.Qualified _ _) ts) = do
+  ts' <- traverse termToValue ts
+  pure (VTerm (vmName name).unName ts')
+termToValue (CompoundTerm name ts) = VTerm (vmName name).unName <$> traverse termToValue ts
 
 -- | Execute a single desugared body goal in the query context.
 executeBodyGoal ::
@@ -472,7 +387,11 @@ evalNestedExpr hc (CompoundTerm name args) = do
         _ -> error "function call returned non-value in expression position"
     else VTerm (vmName name).unName <$> traverse termToValue args
 
--- | Compile lifted lambda functions for use in queries.
+-- | Compile lifted query lambdas into VM procedures. Discards the
+-- 'Writer' error channel: by the time this runs, 'prepareQuery' has
+-- already lifted these lambdas from a desugared program that
+-- compiled cleanly and has type-checked them, so any error here
+-- would indicate a compiler bug rather than a user problem.
 compileQueryLambdas :: Set Types.Identifier -> [D.Function] -> [Procedure]
 compileQueryLambdas funSet lambdas =
   let (procs, _errs) = runPureEff . runWriter $ traverse (compileFunctionDef funSet) lambdas
