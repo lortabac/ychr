@@ -19,14 +19,19 @@
 -- kept as distinct newtypes so that callers can't accidentally use a
 -- declaration map in place of an export map.
 module YCHR.Rename.Types
-  ( ExportEnv,
+  ( -- * Export environment
+    ExportEnv,
     makeExportEnv,
     lookupExport,
     toListExport,
+
+    -- * Declaration environment
     DeclEnv,
     makeDeclEnv,
     lookupDecl,
     toListDecl,
+
+    -- * Reserved names
     isReserved,
   )
 where

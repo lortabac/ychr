@@ -757,7 +757,7 @@ importListTests =
                 }
             inputs =
               defaultRenameInputs
-                { riOperatorExports = Map.fromList [("Order", [OpDecl 700 Xfx "==="])]
+                { operatorExports = Map.fromList [("Order", [OpDecl 700 Xfx "==="])]
                 }
         case Rn.renameProgram inputs [modOrder, modLogic] of
           Right _ -> pure ()
@@ -786,7 +786,7 @@ importListTests =
                 }
             inputs =
               defaultRenameInputs
-                { riTrailingLoc = Map.fromList [("Logic", Just (SourceLoc "test.chr" 5 1))]
+                { trailingLoc = Map.fromList [("Logic", Just (SourceLoc "test.chr" 5 1))]
                 }
         case Rn.renameProgram inputs [modOrder, modLogic] of
           Left errs ->

@@ -41,7 +41,22 @@
 --
 -- This pass guarantees that the subsequent Desugaring phase can treat the
 -- program as a flat, unambiguous collection of rules.
-module YCHR.Rename (renameProgram, buildExportEnv, renameQueryGoals, renameQueryArgs, RenameError (..), RenameWarning (..), RenameInputs (..), defaultRenameInputs) where
+module YCHR.Rename
+  ( -- * Entry points
+    renameProgram,
+    renameQueryGoals,
+    renameQueryArgs,
+    buildExportEnv,
+
+    -- * Errors and warnings
+    RenameError (..),
+    RenameWarning (..),
+
+    -- * Configuration
+    RenameInputs (..),
+    defaultRenameInputs,
+  )
+where
 
 import Control.Monad (when)
 import Data.Foldable (traverse_)
@@ -126,11 +141,11 @@ data RenameCtx = RenameCtx
 data RenameInputs = RenameInputs
   { -- | Map from module name to its exported operators (used to validate
     -- @op(...)@ entries inside import lists).
-    riOperatorExports :: Map Text [OpDecl],
+    operatorExports :: Map Text [OpDecl],
     -- | Map from module name to the source location where its header
     -- parsing stopped. Used to detect @use_module@ directives that
     -- appear after non-import content.
-    riTrailingLoc :: Map Text (Maybe SourceLoc)
+    trailingLoc :: Map Text (Maybe SourceLoc)
   }
 
 -- | An empty 'RenameInputs' suitable for callers that do not have header
@@ -138,8 +153,8 @@ data RenameInputs = RenameInputs
 defaultRenameInputs :: RenameInputs
 defaultRenameInputs =
   RenameInputs
-    { riOperatorExports = Map.empty,
-      riTrailingLoc = Map.empty
+    { operatorExports = Map.empty,
+      trailingLoc = Map.empty
     }
 
 -- ---------------------------------------------------------------------------
@@ -267,23 +282,22 @@ unqualifiedText (Qualified _ t) = t
 
 renameProgram :: RenameInputs -> [Module] -> Either [Diagnostic RenameError] ([Module], [Diagnostic RenameWarning])
 renameProgram inputs mods =
-  let baseCtx =
-        RenameCtx
-          { declEnv = buildDeclEnv mods,
-            exportEnv = buildExportEnv mods,
-            dataConEnv = Map.empty,
-            dataConProviders = Map.empty,
-            typeDeclEnv = buildTypeDeclEnv mods,
-            typeExportEnv = buildTypeExportEnv mods,
-            operatorExports = inputs.riOperatorExports,
-            currentTrailingLoc = Nothing,
-            currentModule = error "currentModule: not yet set"
-          }
+  let declEnv0 = buildDeclEnv mods
+      exportEnv0 = buildExportEnv mods
+      typeDeclEnv0 = buildTypeDeclEnv mods
+      typeExportEnv0 = buildTypeExportEnv mods
       ctxFor m =
         let ctx0 =
-              baseCtx
-                { currentModule = m,
-                  currentTrailingLoc = Map.findWithDefault Nothing m.name inputs.riTrailingLoc
+              RenameCtx
+                { declEnv = declEnv0,
+                  exportEnv = exportEnv0,
+                  dataConEnv = Map.empty,
+                  dataConProviders = Map.empty,
+                  typeDeclEnv = typeDeclEnv0,
+                  typeExportEnv = typeExportEnv0,
+                  operatorExports = inputs.operatorExports,
+                  currentTrailingLoc = Map.findWithDefault Nothing m.name inputs.trailingLoc,
+                  currentModule = m
                 }
             visibleTypeSet = visibleTypes ctx0
          in ctx0

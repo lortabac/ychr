@@ -146,8 +146,8 @@ compileModules includeStdlib inputs = do
           [Types.QualifiedIdentifier m n a | ((n, a), ms) <- toListExport exportEnv, m <- ms]
       renameInputs =
         RenameInputs
-          { riOperatorExports = opExports,
-            riTrailingLoc = Map.fromList [(h.modName, h.trailingLoc) | (_, h) <- userHeaders]
+          { operatorExports = opExports,
+            trailingLoc = Map.fromList [(h.modName, h.trailingLoc) | (_, h) <- userHeaders]
           }
   (renamed, renameWarnings) <- first RenameErrors (renameProgram renameInputs allMods)
   resolved <- first ResolveErrors (resolveProgram renamed)
