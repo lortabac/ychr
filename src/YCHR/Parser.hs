@@ -27,7 +27,8 @@
 -- [a, b, c] -- list literal (sugar for '.'(a,'.'(b,'.'(c,'[]'))))
 -- @
 module YCHR.Parser
-  ( parseModule,
+  ( -- * Public parsing functions
+    parseModule,
     parseModuleWith,
     parseConstraint,
     parseQuery,
@@ -35,14 +36,20 @@ module YCHR.Parser
     parseTerm,
     parseTermWith,
     parseRule,
+
+    -- * Operator tables
     OpTable,
     builtinOps,
     mergeOps,
     opTableEntries,
+
+    -- * Module headers
     ModuleHeader (..),
     collectModuleHeader,
     buildModuleOpTable,
     extractOpDecls,
+
+    -- * Validation errors
     ParseValidationError (..),
   )
 where
@@ -57,9 +64,7 @@ import YCHR.PExpr (PExpr (Atom, Compound, Str, Var))
 import YCHR.PExpr qualified as P
 import YCHR.Parsed
 
--- ---------------------------------------------------------------------------
--- Operator table (re-exported from PExpr)
--- ---------------------------------------------------------------------------
+-- * Operator tables
 
 -- | Operator table: maps fixity levels to operators.
 -- Re-exported from 'YCHR.PExpr'.
@@ -109,9 +114,7 @@ mergeOps base decls =
 opTableEntries :: OpTable -> [(Int, P.OpType, Text)]
 opTableEntries = P.opTableEntries
 
--- ---------------------------------------------------------------------------
--- Public parsing functions
--- ---------------------------------------------------------------------------
+-- * Public parsing functions
 
 -- | Parse a CHR module from source text using the built-in operator table.
 --
@@ -199,9 +202,7 @@ parseRule sourceName src = do
   term <- P.parseTerm builtinOps sourceName src
   pure (convertRule term)
 
--- ---------------------------------------------------------------------------
--- First-pass module-header collector
--- ---------------------------------------------------------------------------
+-- * Module headers
 
 -- | Minimal operator table for the first pass: only enough to parse
 -- @:- module(...)@ and @:- use_module(...)@ directives.
@@ -242,6 +243,15 @@ data ModuleHeader = ModuleHeader
   }
   deriving (Show, Eq)
 
+-- | Information extracted from a leading @:- module(...)@ directive.
+-- Private to 'collectModuleHeader'.
+data ModuleDirectiveInfo = ModuleDirectiveInfo
+  { name :: Text,
+    loc :: SourceLoc,
+    origin :: PExpr,
+    exportOps :: [OpDecl]
+  }
+
 -- | Collect a 'ModuleHeader' from a source file using the minimal first-pass
 -- operator table.
 --
@@ -252,30 +262,48 @@ collectModuleHeader :: String -> Text -> Either (ParseErrorBundle Text Void) Mod
 collectModuleHeader sourceName src = do
   (terms, tloc) <- P.parseLeadingTerms firstPassTable sourceName src
   let (modPart, rest1) = case terms of
-        (t : ts) | Just info <- asModuleDirective t -> (Just info, ts)
+        (t : ts) | Just i <- asModuleDirective t -> (Just i, ts)
         _ -> (Nothing, terms)
       (imps, leftover) = takeImports rest1
       finalLoc = case leftover of
         [] -> tloc
         (Ann _ loc : _) -> Just loc
-      (mn, ml, mo, ops) = case modPart of
-        Just info -> info
-        Nothing -> ("<no_module>", dummyLoc, Atom "", [])
+      info = case modPart of
+        Just i -> i
+        Nothing ->
+          ModuleDirectiveInfo
+            { name = "<no_module>",
+              loc = dummyLoc,
+              origin = Atom "",
+              exportOps = []
+            }
   pure
     ModuleHeader
-      { modName = mn,
-        modLoc = ml,
-        modOrigin = mo,
-        exportOps = ops,
+      { modName = info.name,
+        modLoc = info.loc,
+        modOrigin = info.origin,
+        exportOps = info.exportOps,
         headerImports = imps,
         trailingLoc = finalLoc
       }
   where
     asModuleDirective (Ann (Compound ":-" [body]) loc)
       | Compound "module" [Ann (Atom name) _, exports] <- body.node =
-          Just (name, loc, body.node, extractOpDeclsFromPExpr exports.node)
+          Just
+            ModuleDirectiveInfo
+              { name,
+                loc,
+                origin = body.node,
+                exportOps = extractOpDeclsFromPExpr exports.node
+              }
       | Compound "module" [Ann (Atom name) _] <- body.node =
-          Just (name, loc, body.node, [])
+          Just
+            ModuleDirectiveInfo
+              { name,
+                loc,
+                origin = body.node,
+                exportOps = []
+              }
     asModuleDirective _ = Nothing
 
     takeImports [] = ([], [])
@@ -335,12 +363,14 @@ extractOpDeclsFromPExpr pexpr =
   where
     toOpDecl (Compound "op" [Ann (P.Int fix) _, Ann tyExpr _, Ann nameExpr _])
       | Just ty <- parseOpTypeFromPExpr tyExpr,
-        Just name <- extractAtomName nameExpr =
+        Just name <- atomName nameExpr =
           Just (OpDecl fix ty name)
     toOpDecl _ = Nothing
 
-    extractAtomName (Atom a) = Just a
-    extractAtomName _ = Nothing
+-- | If the expression is an atom, return its text; otherwise 'Nothing'.
+atomName :: PExpr -> Maybe Text
+atomName (Atom a) = Just a
+atomName _ = Nothing
 
 -- | Parse an operator type from a PExpr atom.
 parseOpTypeFromPExpr :: PExpr -> Maybe P.OpType
@@ -359,11 +389,20 @@ extractOpDecls m = case m.exports of
   Nothing -> []
   Just annExports -> [op | OperatorDecl op <- annExports.node]
 
--- ---------------------------------------------------------------------------
--- PExpr → Term conversion
--- ---------------------------------------------------------------------------
+-- * Internal: PExpr conversions
+
+{- Note [Qualified name handling]
+
+The qualified-name forms @module:name@ and @module:name(args)@ are
+intercepted before the generic 'Compound' fallback. Without this, the parser
+would emit a 2-ary @':'@ constructor with two unrelated children, and the
+renamer would have to undo that downstream. The same handling is mirrored in
+'convertConstraint' and 'convertTypeExpr'.
+-}
 
 -- | Convert a 'PExpr' to a 'Term'.
+--
+-- See Note [Qualified name handling].
 convertTerm :: Ann PExpr -> Term
 convertTerm (Ann pexpr _) = case pexpr of
   Var t -> VarTerm t
@@ -372,20 +411,16 @@ convertTerm (Ann pexpr _) = case pexpr of
   Atom t -> AtomTerm t
   Str t -> TextTerm t
   P.Wildcard -> Wildcard
-  -- Qualified name: module:name or module:name(args)
   Compound ":" [Ann (Atom m) _, Ann (Atom n) _] ->
     CompoundTerm (Qualified m n) []
   Compound ":" [Ann (Atom m) _, Ann (Compound n args) _] ->
     CompoundTerm (Qualified m n) (map convertTerm args)
-  -- Regular compound
   Compound f args ->
     CompoundTerm (Unqualified f) (map convertTerm args)
 
--- ---------------------------------------------------------------------------
--- PExpr → Constraint conversion
--- ---------------------------------------------------------------------------
-
 -- | Convert a 'PExpr' to a 'Constraint'.
+--
+-- See Note [Qualified name handling].
 convertConstraint :: Ann PExpr -> Constraint
 convertConstraint (Ann pexpr _) = case pexpr of
   Atom name ->
@@ -400,9 +435,7 @@ convertConstraint (Ann pexpr _) = case pexpr of
   -- a best-effort result; downstream will report the error.
   _ -> Constraint (Unqualified "<invalid>") []
 
--- ---------------------------------------------------------------------------
--- Flattening helpers
--- ---------------------------------------------------------------------------
+-- ** Flattening helpers
 
 -- | Flatten a right-nested comma operator into a list.
 -- Note: O(n) because @,@ is @xfy@ so the tree is right-heavy (left child
@@ -423,9 +456,7 @@ unfoldList (Atom "[]") = []
 unfoldList (Compound "." [h, t]) = h : unfoldList t.node
 unfoldList _ = [] -- non-proper list tail: ignore
 
--- ---------------------------------------------------------------------------
--- Module conversion
--- ---------------------------------------------------------------------------
+-- ** Module conversion
 
 -- | Internal directive type.
 data Directive
@@ -518,9 +549,7 @@ convertModuleItem expr = case expr.node of
   -- Fallback: try as rule
   _ -> ItemRule (convertRule expr)
 
--- ---------------------------------------------------------------------------
--- Directive conversion
--- ---------------------------------------------------------------------------
+-- ** Directive conversion
 
 -- | Convert a directive PExpr to a 'Directive'.
 convertDirective :: Ann PExpr -> Directive
@@ -579,14 +608,11 @@ convertExportItem (Ann pexpr _) = case pexpr of
     ConstraintDecl name arity Nothing
   Compound "op" [Ann (P.Int fix) _, Ann tyExpr _, Ann nameExpr _]
     | Just ty <- parseOpTypeFromPExpr tyExpr,
-      Just name <- extractName nameExpr ->
+      Just name <- atomName nameExpr ->
         OperatorDecl (OpDecl fix ty name)
   Compound "type" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
     TypeExportDecl name arity
   _ -> ConstraintDecl "<unknown>" 0 Nothing
-  where
-    extractName (Atom a) = Just a
-    extractName _ = Nothing
 
 -- | Convert a PExpr to a constraint declaration.
 convertConstraintDecl :: Ann PExpr -> Ann Declaration
@@ -602,13 +628,17 @@ convertConstraintDecl (Ann pexpr loc) = case pexpr of
     Ann (ConstraintDecl name 0 Nothing) loc
   _ -> Ann (ConstraintDecl "<unknown>" 0 Nothing) loc
 
--- | Convert a PExpr to a function declaration.
+-- | Convert a PExpr to a closed-function declaration.
 convertFunctionDecl :: Ann PExpr -> Ann Declaration
 convertFunctionDecl = convertFunctionDeclWith False
 
+-- | Convert a PExpr to an open-function declaration.
 convertOpenFunctionDecl :: Ann PExpr -> Ann Declaration
 convertOpenFunctionDecl = convertFunctionDeclWith True
 
+-- | Shared implementation of 'convertFunctionDecl' and
+-- 'convertOpenFunctionDecl'. The 'Bool' argument is the @open@ flag stored
+-- on the resulting 'FunctionDecl'.
 convertFunctionDeclWith :: Bool -> Ann PExpr -> Ann Declaration
 convertFunctionDeclWith open (Ann pexpr loc) = case pexpr of
   -- Untyped: name/arity
@@ -633,10 +663,7 @@ convertTypeExpr (Ann pexpr _) = case pexpr of
   Var t -> TypeVar t
   Atom "[]" -> TypeCon (Unqualified "[]") []
   Atom name -> TypeCon (Unqualified name) []
-  -- Qualified type name: @module:name@ or @module:name(args)@.
-  -- Mirrors the value-level handling at @Parser.hs:373-377@; without
-  -- this case the renamer would treat the whole thing as a 2-ary
-  -- @':'@ type constructor with two unrelated argument types.
+  -- See Note [Qualified name handling].
   Compound ":" [Ann (Atom m) _, Ann (Atom n) _] ->
     TypeCon (Qualified m n) []
   Compound ":" [Ann (Atom m) _, Ann (Compound n args) _] ->
@@ -670,9 +697,7 @@ convertDataConstructor (Ann pexpr _) = case pexpr of
     DataConstructor (Unqualified name) (map convertTypeExpr args)
   _ -> DataConstructor (Unqualified "<unknown>") []
 
--- ---------------------------------------------------------------------------
--- Rule conversion
--- ---------------------------------------------------------------------------
+-- ** Rule conversion
 
 -- | Convert a top-level PExpr to a 'Rule'.
 convertRule :: Ann PExpr -> Rule
@@ -719,9 +744,7 @@ splitGuardBody expr = case expr.node of
       AnnP (map convertTerm (flattenComma expr)) expr.sourceLoc expr.node
     )
 
--- ---------------------------------------------------------------------------
--- Function equation conversion
--- ---------------------------------------------------------------------------
+-- ** Function equation conversion
 
 -- | Convert a top-level PExpr to a 'FunctionEquation'.
 convertFunctionEquation :: Ann PExpr -> AnnP FunctionEquation
