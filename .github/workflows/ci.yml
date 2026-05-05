@@ -58,3 +58,6 @@ jobs:
 
       - name: make test
         run: make test GUILE=guile-3.0
+
+      - name: make bench
+        run: make bench
