@@ -7,10 +7,7 @@
 % Used by docs/tutorials/01-getting-started.md and
 % docs/tutorials/03-your-first-program.md.
 
-:- module(bakery, [
-    egg/0, glass_of_milk/0, glass_of_flour/0, glass_of_sugar/0,
-    bake/0, cake/0
-]).
+:- module(bakery).
 
 :- chr_constraint
     egg/0, glass_of_milk/0, glass_of_flour/0, glass_of_sugar/0,

@@ -28,7 +28,8 @@ This page is a stub. The eventual reference will cover:
 
 | Directive | Purpose |
 |-----------|---------|
-| `:- module(Name, Exports).` | Module header. |
+| `:- module(Name, Exports).` | Module header with explicit export list. |
+| `:- module(Name).` | Module header that exports every declared identifier. |
 | `:- use_module(M)` / `:- use_module(M, Imports).` | Import another module. |
 | `:- chr_constraint Decls.` | Declare CHR constraints. |
 | `:- chr_type T ---> Cs.` | Declare an algebraic type. |

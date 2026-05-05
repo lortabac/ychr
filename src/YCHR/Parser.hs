@@ -274,6 +274,8 @@ collectModuleHeader sourceName src = do
     asModuleDirective (Ann (Compound ":-" [body]) loc)
       | Compound "module" [Ann (Atom name) _, exports] <- body.node =
           Just (name, loc, body.node, extractOpDeclsFromPExpr exports.node)
+      | Compound "module" [Ann (Atom name) _] <- body.node =
+          Just (name, loc, body.node, [])
     asModuleDirective _ = Nothing
 
     takeImports [] = ([], [])
@@ -427,7 +429,7 @@ unfoldList _ = [] -- non-proper list tail: ignore
 
 -- | Internal directive type.
 data Directive
-  = DirModule Text SourceLoc PExpr [Declaration]
+  = DirModule Text SourceLoc PExpr (Maybe [Declaration])
   | DirImport (AnnP Import)
   | DirConstraintDecl [Ann Declaration]
   | DirFunctionDecl [Ann Declaration]
@@ -456,7 +458,8 @@ convertModule terms =
       rules = [r | ItemRule r <- items]
       eqs = [e | ItemEquation e <- items]
       (modName_, modExports_) = case [(n, l, p, e) | DirModule n l p e <- dirs] of
-        ((n, l, p, e) : _) -> (n, Just (AnnP e l p))
+        ((n, l, p, Just decls) : _) -> (n, Just (AnnP decls l p))
+        ((n, _, _, Nothing) : _) -> (n, Nothing)
         [] -> ("<no_module>", Nothing)
       modImports_ = [n | DirImport n <- dirs]
       modDecls_ =
@@ -524,7 +527,10 @@ convertDirective :: Ann PExpr -> Directive
 convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- :- module(name, [exports]).
   Compound "module" [Ann (Atom name) _, exports] ->
-    DirModule name loc body.node (map convertExportItem (unfoldList exports.node))
+    DirModule name loc body.node (Just (map convertExportItem (unfoldList exports.node)))
+  -- :- module(name).  (no export list — exports everything)
+  Compound "module" [Ann (Atom name) _] ->
+    DirModule name loc body.node Nothing
   -- :- use_module(name).  or  :- use_module(library(name)).
   Compound "use_module" [imp, importList] ->
     DirImport (convertImportWithList loc body.node imp importList)

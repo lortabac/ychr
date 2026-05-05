@@ -42,10 +42,7 @@ We'll use a toy CHR program from this repo: a cake recipe.
 
 ```chr
 % examples/bakery.chr
-:- module(bakery, [
-    egg/0, glass_of_milk/0, glass_of_flour/0, glass_of_sugar/0,
-    bake/0, cake/0
-]).
+:- module(bakery).
 
 :- chr_constraint
     egg/0, glass_of_milk/0, glass_of_flour/0, glass_of_sugar/0,

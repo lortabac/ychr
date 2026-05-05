@@ -1,0 +1,8 @@
+:- module(short_lib).
+
+:- chr_constraint double/2.
+:- function triple/1.
+
+triple(N) -> N * 3.
+
+double(X, R) <=> R is X * 2.

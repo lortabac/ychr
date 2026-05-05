@@ -18,10 +18,7 @@ Create a new file `recipes.chr` next to where you'll run YCHR.
 Open `recipes.chr` and write:
 
 ```chr
-:- module(recipes, [
-    egg/0, glass_of_milk/0, glass_of_flour/0, glass_of_sugar/0,
-    bake/0, cake/0
-]).
+:- module(recipes).
 
 :- chr_constraint
     egg/0, glass_of_milk/0, glass_of_flour/0, glass_of_sugar/0,

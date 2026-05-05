@@ -22,6 +22,15 @@ idempotence   @ leq(X, Y) \ leq(X, Y) <=> true.
 transitivity  @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
 ```
 
+A module may also be declared without an export list:
+
+```
+:- module(order).
+```
+
+This form exports every constraint, function, type, and operator
+declared in the module.
+
 Constraint and function names are qualified with their defining module;
 unqualified references in source are resolved against the module's
 imports.

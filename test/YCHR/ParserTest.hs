@@ -434,7 +434,13 @@ moduleTests =
             ),
       testCase "no module directive gives default name" $
         (.name) <$> p ":- chr_constraint foo/1.\nfoo(X) <=> true."
-          @?= Right "<no_module>"
+          @?= Right "<no_module>",
+      testCase "module/1 sets name and leaves exports unset" $
+        case p ":- module(foo).\n:- chr_constraint c/1.\nc(X) <=> true." of
+          Right m -> do
+            m.name @?= "foo"
+            m.exports @?= Nothing
+          Left e -> assertFailure (show e)
     ]
 
 leqSource :: Text

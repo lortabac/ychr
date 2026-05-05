@@ -1,0 +1,6 @@
+:- module(short_main, [run/2]).
+:- use_module(short_lib).
+
+:- chr_constraint run/2.
+
+run(X, R) <=> double(X, Y), R is triple(Y).
