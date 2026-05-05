@@ -31,7 +31,7 @@ what is planned.
 
 ## Type checker
 
-- [x] Gradual type system core (see [type-system.md](type-system.md))
+- [x] Gradual type system core (see [type-system.md](reference/type-system.md))
 - [ ] Simple type refinements via type predicates
 
 ## Backends

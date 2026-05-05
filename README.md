@@ -29,8 +29,8 @@ $ ychr run -g 'leq(1, X), leq(X, 1)' leq.chr
 
 Work in progress. The Haskell interpreter and Scheme backend are
 working; the JavaScript backend and most of the optimization catalogue
-from the paper are not yet implemented. See
-[docs/roadmap.md](docs/roadmap.md) for the full status.
+from the paper are not yet implemented. See the
+[roadmap](docs/roadmap.md) for the full status.
 
 ## Install
 
@@ -55,13 +55,20 @@ backend, REPL, and type-checker tests).
 
 ## Documentation
 
-- [docs/language.md](docs/language.md) — language reference
-  (modules, functions, `is`, lambdas)
-- [docs/type-system.md](docs/type-system.md) — optional gradual type
-  system
-- [docs/vm.md](docs/vm.md) — abstract VM specification and
-  s-expression serialization format (for backend implementors)
-- [docs/roadmap.md](docs/roadmap.md) — implementation status
+User-facing documentation lives in [`docs/`](docs/) and follows the
+[Diátaxis](https://diataxis.fr/) structure:
+
+- [Tutorials](docs/tutorials/) — getting started, CHR primer, your first
+  program.
+- [How-to guides](docs/how-to/) — REPL, types, host calls, modules.
+- [Reference](docs/reference/) — language, syntax, type system, prelude,
+  CLI, REPL, errors, abstract VM.
+- [Explanation](docs/explanation/) — what CHR is, operational semantics,
+  design rationale.
+
+See [`docs/README.md`](docs/README.md) for a full index with reading
+paths for newcomers and existing CHR/Prolog users, and
+[`docs/roadmap.md`](docs/roadmap.md) for implementation status.
 
 Contributor and design documentation lives in [`dev-docs/`](dev-docs/),
 including [PROJECT.md](dev-docs/PROJECT.md) (architecture and

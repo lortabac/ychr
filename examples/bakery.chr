@@ -1,0 +1,23 @@
+% A toy CHR program: a cake recipe.
+%
+% The rule head requires three eggs and one each of milk, flour, and
+% sugar in the constraint store, plus a `bake` trigger. When all are
+% present, the rule fires and replaces them with a single `cake`.
+%
+% Used by docs/tutorials/01-getting-started.md and
+% docs/tutorials/03-your-first-program.md.
+
+:- module(bakery, [
+    egg/0, glass_of_milk/0, glass_of_flour/0, glass_of_sugar/0,
+    bake/0, cake/0
+]).
+
+:- chr_constraint
+    egg/0, glass_of_milk/0, glass_of_flour/0, glass_of_sugar/0,
+    bake/0, cake/0.
+
+cake_recipe @
+    egg, egg, egg,
+    glass_of_milk, glass_of_flour, glass_of_sugar,
+    bake
+  <=> cake.

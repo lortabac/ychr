@@ -506,7 +506,7 @@ checkConstraintUse cctx c = do
 
 -- | Process a guard list left-to-right, threading the canonicalized
 -- constructor name from each 'D.GuardMatch' into any 'D.GuardGetArg's
--- that follow on the same term. Per 'docs/type-system.md' (Desugared
+-- that follow on the same term. Per 'docs/reference/type-system.md' (Desugared
 -- guards / HNF synthetic guards), a @GuardGetArg@ always follows a
 -- @GuardMatch@ on the same term — the match establishes which
 -- constructor's field types to use, which the get-arg then needs to
