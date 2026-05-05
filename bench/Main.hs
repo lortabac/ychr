@@ -62,7 +62,8 @@ loadCase name = do
   goalText <- TIO.readFile goalPath
   Constraint cname cargs <- case parseConstraint "<bench>" (T.strip goalText) of
     Left err -> fail ("goal parse failed for " ++ name ++ ": " ++ show err)
-    Right c -> pure c
+    Right (Left validErr) -> fail ("goal parse failed for " ++ name ++ ": " ++ show validErr)
+    Right (Right c) -> pure c
   -- Mirror the query-side canonicalization that runProgramWithGoal does
   -- (rename bare data-constructor references, resolve qualified names),
   -- so the goal's term shapes match the compiled head patterns.

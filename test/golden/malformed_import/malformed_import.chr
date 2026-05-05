@@ -1,0 +1,4 @@
+:- use_module(123).
+:- chr_constraint c/1.
+
+c(X) <=> true.

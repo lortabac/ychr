@@ -54,6 +54,7 @@ module YCHR.Parser
   )
 where
 
+import Data.Either (partitionEithers)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -137,12 +138,16 @@ parseModuleWith table sourceName src = do
 
 -- | Parse a single constraint from surface-language 'Text'.
 --
+-- The outer 'Left' is a megaparsec parse error; the inner 'Left' is a
+-- 'ParseValidationError' (the input parsed but did not denote a
+-- constraint, e.g. a bare variable or integer).
+--
 -- The source name (first argument) is used in error messages only.
 -- Example: @parseConstraint "\<query\>" "leq(X, Y)"@.
 parseConstraint ::
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) Constraint
+  Either (ParseErrorBundle Text Void) (Either (AnnP ParseValidationError) Constraint)
 parseConstraint sourceName src = do
   term <- P.parseTermNoDot builtinOps sourceName src
   pure (convertConstraint term)
@@ -193,11 +198,16 @@ parseQueryWith table sourceName src =
 
 -- | Parse a single CHR rule from surface-language 'Text'.
 --
+-- The outer 'Left' is a megaparsec parse error; the second component of
+-- the 'Right' is a list of 'ParseValidationError's collected while
+-- converting the rule (currently only 'MalformedConstraint' from rule
+-- heads).
+--
 -- The source name (first argument) is used in error messages only.
 parseRule ::
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) Rule
+  Either (ParseErrorBundle Text Void) (Rule, [AnnP ParseValidationError])
 parseRule sourceName src = do
   term <- P.parseTerm builtinOps sourceName src
   pure (convertRule term)
@@ -307,13 +317,19 @@ collectModuleHeader sourceName src = do
     asModuleDirective _ = Nothing
 
     takeImports [] = ([], [])
+    -- Malformed @use_module@ directives are silently skipped here; the full
+    -- parse path emits 'MalformedImport' for them via 'convertDirective'.
     takeImports all_@(Ann (Compound ":-" [body]) loc : rest) = case body.node of
       Compound "use_module" [imp] ->
         let (more, leftover) = takeImports rest
-         in (convertImport loc body.node imp : more, leftover)
+         in case convertImport loc body.node imp of
+              Right ann -> (ann : more, leftover)
+              Left _ -> (more, leftover)
       Compound "use_module" [imp, importList] ->
         let (more, leftover) = takeImports rest
-         in (convertImportWithList loc body.node imp importList : more, leftover)
+         in case convertImportWithList loc body.node imp importList of
+              Right ann -> (ann : more, leftover)
+              Left _ -> (more, leftover)
       _ -> ([], all_)
     takeImports rest = ([], rest)
 
@@ -420,20 +436,21 @@ convertTerm (Ann pexpr _) = case pexpr of
 
 -- | Convert a 'PExpr' to a 'Constraint'.
 --
+-- Returns 'Left' with a 'MalformedConstraint' error when the input is not
+-- an atom or compound term (e.g. a bare variable, integer, or string).
+--
 -- See Note [Qualified name handling].
-convertConstraint :: Ann PExpr -> Constraint
-convertConstraint (Ann pexpr _) = case pexpr of
+convertConstraint :: Ann PExpr -> Either (AnnP ParseValidationError) Constraint
+convertConstraint (Ann pexpr loc) = case pexpr of
   Atom name ->
-    Constraint (Unqualified name) []
+    Right (Constraint (Unqualified name) [])
   Compound ":" [Ann (Atom m) _, Ann (Atom n) _] ->
-    Constraint (Qualified m n) []
+    Right (Constraint (Qualified m n) [])
   Compound ":" [Ann (Atom m) _, Ann (Compound n args) _] ->
-    Constraint (Qualified m n) (map convertTerm args)
+    Right (Constraint (Qualified m n) (map convertTerm args))
   Compound name args ->
-    Constraint (Unqualified name) (map convertTerm args)
-  -- Bare variable / integer / etc. in constraint position — produce
-  -- a best-effort result; downstream will report the error.
-  _ -> Constraint (Unqualified "<invalid>") []
+    Right (Constraint (Unqualified name) (map convertTerm args))
+  _ -> Left (AnnP MalformedConstraint loc pexpr)
 
 -- ** Flattening helpers
 
@@ -478,13 +495,22 @@ data ModuleItem
 data ParseValidationError
   = -- | Equations for a non-open function are not contiguous.
     DiscontiguousEquations Text
+  | -- | A @use_module@ directive's argument was not a module name or
+    -- @library(name)@.
+    MalformedImport
+  | -- | A constraint position contained something that is not an atom or
+    -- compound term (e.g. a bare variable, integer, or string).
+    MalformedConstraint
   deriving (Eq, Show)
 
 -- | Convert a list of top-level PExpr terms to a 'Module', along with
--- any validation errors (e.g. discontiguous equations).
+-- any validation errors (discontiguous equations, malformed imports,
+-- malformed constraints).
 convertModule :: [Ann PExpr] -> (Module, [AnnP ParseValidationError])
 convertModule terms =
-  let items = map convertModuleItem terms
+  let itemResults = map convertModuleItem terms
+      items = map fst itemResults
+      itemErrors = concatMap snd itemResults
       dirs = [d | ItemDirective d <- items]
       rules = [r | ItemRule r <- items]
       eqs = [e | ItemEquation e <- items]
@@ -503,7 +529,7 @@ convertModule terms =
           [d.name | DirOpenFunctionDecl ds <- dirs, Ann d _ <- ds]
       contiguityErrors = checkContiguity openNames items
       mod_ = Module modName_ modImports_ modDecls_ modTypeDecls_ rules eqs modExports_
-   in (mod_, contiguityErrors)
+   in (mod_, itemErrors ++ contiguityErrors)
 
 -- | Check that equations for non-open functions are contiguous.
 -- Returns an error for each function whose equations are separated by
@@ -533,71 +559,85 @@ checkContiguity openNames = go Set.empty Nothing
     eqName (Unqualified n) = n
     eqName (Qualified _ n) = n
 
--- | Classify and convert a single top-level PExpr.
-convertModuleItem :: Ann PExpr -> ModuleItem
+-- | Classify and convert a single top-level PExpr, collecting any errors
+-- raised during conversion.
+convertModuleItem :: Ann PExpr -> (ModuleItem, [AnnP ParseValidationError])
 convertModuleItem expr = case expr.node of
   -- Directive: :- body
-  Compound ":-" [_] -> ItemDirective (convertDirective expr)
+  Compound ":-" [_] ->
+    let (d, errs) = convertDirective expr in (ItemDirective d, errs)
   -- Named rule: name @ ...
-  Compound "@" [_, Ann (Compound "<=>" _) _] -> ItemRule (convertRule expr)
-  Compound "@" [_, Ann (Compound "==>" _) _] -> ItemRule (convertRule expr)
+  Compound "@" [_, Ann (Compound "<=>" _) _] -> ruleItem
+  Compound "@" [_, Ann (Compound "==>" _) _] -> ruleItem
   -- Unnamed rule
-  Compound "<=>" _ -> ItemRule (convertRule expr)
-  Compound "==>" _ -> ItemRule (convertRule expr)
+  Compound "<=>" _ -> ruleItem
+  Compound "==>" _ -> ruleItem
   -- Function equation (contains -> at top level)
-  Compound "->" _ -> ItemEquation (convertFunctionEquation expr)
+  Compound "->" _ -> (ItemEquation (convertFunctionEquation expr), [])
   -- Fallback: try as rule
-  _ -> ItemRule (convertRule expr)
+  _ -> ruleItem
+  where
+    ruleItem = let (r, errs) = convertRule expr in (ItemRule r, errs)
 
 -- ** Directive conversion
 
--- | Convert a directive PExpr to a 'Directive'.
-convertDirective :: Ann PExpr -> Directive
+-- | Convert a directive PExpr to a 'Directive', collecting any errors
+-- raised during conversion (currently only from malformed @use_module@
+-- arguments).
+convertDirective :: Ann PExpr -> (Directive, [AnnP ParseValidationError])
 convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- :- module(name, [exports]).
   Compound "module" [Ann (Atom name) _, exports] ->
-    DirModule name loc body.node (Just (map convertExportItem (unfoldList exports.node)))
+    (DirModule name loc body.node (Just (map convertExportItem (unfoldList exports.node))), [])
   -- :- module(name).  (no export list — exports everything)
   Compound "module" [Ann (Atom name) _] ->
-    DirModule name loc body.node Nothing
+    (DirModule name loc body.node Nothing, [])
   -- :- use_module(name).  or  :- use_module(library(name)).
   Compound "use_module" [imp, importList] ->
-    DirImport (convertImportWithList loc body.node imp importList)
+    case convertImportWithList loc body.node imp importList of
+      Right ann -> (DirImport ann, [])
+      Left err -> (DirOther, [err])
   Compound "use_module" [imp] ->
-    DirImport (convertImport loc body.node imp)
+    case convertImport loc body.node imp of
+      Right ann -> (DirImport ann, [])
+      Left err -> (DirOther, [err])
   -- :- chr_constraint leq/2, fib/2.
   -- Parsed as prefix op: Compound "chr_constraint" [body]
   Compound "chr_constraint" [decls] ->
-    DirConstraintDecl (map convertConstraintDecl (flattenComma decls))
+    (DirConstraintDecl (map convertConstraintDecl (flattenComma decls)), [])
   -- :- function foo/2.  or  :- function factorial(int) -> int.
   Compound "function" [decls] ->
-    DirFunctionDecl (map convertFunctionDecl (flattenComma decls))
+    (DirFunctionDecl (map convertFunctionDecl (flattenComma decls)), [])
   -- :- open_function foo/2.
   Compound "open_function" [decls] ->
-    DirOpenFunctionDecl (map convertOpenFunctionDecl (flattenComma decls))
+    (DirOpenFunctionDecl (map convertOpenFunctionDecl (flattenComma decls)), [])
   -- :- chr_type name ---> con1 ; con2 ; ...
   -- Parsed as prefix op: Compound "chr_type" [Compound "--->" [head, alts]]
   Compound "chr_type" [typeBody] ->
-    DirTypeDecl [convertTypeDefinition typeBody]
+    (DirTypeDecl [convertTypeDefinition typeBody], [])
   -- Unknown directives (e.g. :- dynamic foo/1.)
-  _ -> DirOther
-convertDirective _ = DirOther
+  _ -> (DirOther, [])
+convertDirective _ = (DirOther, [])
 
 -- | Convert an import PExpr (use_module/1, imports everything).
-convertImport :: SourceLoc -> PExpr -> Ann PExpr -> AnnP Import
-convertImport dirLoc dirPExpr (Ann pexpr _) = case pexpr of
-  Compound "library" [Ann (Atom name) _] -> AnnP (LibraryImport name Nothing) dirLoc dirPExpr
-  Atom name -> AnnP (ModuleImport name Nothing) dirLoc dirPExpr
-  _ -> AnnP (ModuleImport "<unknown>" Nothing) dirLoc dirPExpr
+-- Returns 'Left' with a 'MalformedImport' error if the argument is not a
+-- module name or @library(name)@.
+convertImport :: SourceLoc -> PExpr -> Ann PExpr -> Either (AnnP ParseValidationError) (AnnP Import)
+convertImport dirLoc dirPExpr (Ann pexpr loc) = case pexpr of
+  Compound "library" [Ann (Atom name) _] -> Right (AnnP (LibraryImport name Nothing) dirLoc dirPExpr)
+  Atom name -> Right (AnnP (ModuleImport name Nothing) dirLoc dirPExpr)
+  _ -> Left (AnnP MalformedImport loc pexpr)
 
 -- | Convert an import PExpr with an explicit import list (use_module/2).
-convertImportWithList :: SourceLoc -> PExpr -> Ann PExpr -> Ann PExpr -> AnnP Import
+-- Returns 'Left' with a 'MalformedImport' error if the import target is not
+-- a module name or @library(name)@.
+convertImportWithList :: SourceLoc -> PExpr -> Ann PExpr -> Ann PExpr -> Either (AnnP ParseValidationError) (AnnP Import)
 convertImportWithList dirLoc dirPExpr imp importList =
   let items = map convertExportItem (unfoldList importList.node)
    in case imp.node of
-        Compound "library" [Ann (Atom name) _] -> AnnP (LibraryImport name (Just items)) dirLoc dirPExpr
-        Atom name -> AnnP (ModuleImport name (Just items)) dirLoc dirPExpr
-        _ -> AnnP (ModuleImport "<unknown>" (Just items)) dirLoc dirPExpr
+        Compound "library" [Ann (Atom name) _] -> Right (AnnP (LibraryImport name (Just items)) dirLoc dirPExpr)
+        Atom name -> Right (AnnP (ModuleImport name (Just items)) dirLoc dirPExpr)
+        _ -> Left (AnnP MalformedImport imp.sourceLoc imp.node)
 
 -- | Convert an export item PExpr to a 'Declaration'.
 convertExportItem :: Ann PExpr -> Declaration
@@ -699,38 +739,39 @@ convertDataConstructor (Ann pexpr _) = case pexpr of
 
 -- ** Rule conversion
 
--- | Convert a top-level PExpr to a 'Rule'.
-convertRule :: Ann PExpr -> Rule
+-- | Convert a top-level PExpr to a 'Rule', collecting any
+-- 'MalformedConstraint' errors found in its head.
+convertRule :: Ann PExpr -> (Rule, [AnnP ParseValidationError])
 convertRule expr =
   let (mName, ruleExpr) = case expr.node of
         Compound "@" [Ann (Atom name) nameLoc, body] ->
           (Just (Ann name nameLoc), body)
         _ -> (Nothing, expr)
-      (head_, guardBody) = case ruleExpr.node of
+      ((head_, headErrs), guardBody) = case ruleExpr.node of
         Compound "<=>" [h, gb] -> (convertHead h, gb)
         Compound "==>" [h, gb] -> (convertPropagationHead h, gb)
-        _ -> (noAnnP (Simplification []), ruleExpr) -- fallback
+        _ -> ((noAnnP (Simplification []), []), ruleExpr) -- fallback
       (guard_, body_) = splitGuardBody guardBody
-   in Rule mName head_ guard_ body_
+   in (Rule mName head_ guard_ body_, headErrs)
 
--- | Convert the head of a simplification or simpagation rule.
-convertHead :: Ann PExpr -> AnnP Head
+-- | Convert the head of a simplification or simpagation rule. Malformed
+-- constraints are dropped from the resulting head and reported as errors.
+convertHead :: Ann PExpr -> (AnnP Head, [AnnP ParseValidationError])
 convertHead (Ann pexpr loc) = case pexpr of
   Compound "\\" [kept, removed] ->
-    AnnP
-      ( Simpagation
-          (map convertConstraint (flattenComma kept))
-          (map convertConstraint (flattenComma removed))
-      )
-      loc
-      pexpr
+    let (keptErrs, keptOk) = partitionEithers (map convertConstraint (flattenComma kept))
+        (removedErrs, removedOk) = partitionEithers (map convertConstraint (flattenComma removed))
+     in (AnnP (Simpagation keptOk removedOk) loc pexpr, keptErrs ++ removedErrs)
   _ ->
-    AnnP (Simplification (map convertConstraint (flattenComma (Ann pexpr loc)))) loc pexpr
+    let (errs, ok) = partitionEithers (map convertConstraint (flattenComma (Ann pexpr loc)))
+     in (AnnP (Simplification ok) loc pexpr, errs)
 
--- | Convert the head of a propagation rule.
-convertPropagationHead :: Ann PExpr -> AnnP Head
+-- | Convert the head of a propagation rule. Malformed constraints are
+-- dropped from the resulting head and reported as errors.
+convertPropagationHead :: Ann PExpr -> (AnnP Head, [AnnP ParseValidationError])
 convertPropagationHead (Ann pexpr loc) =
-  AnnP (Propagation (map convertConstraint (flattenComma (Ann pexpr loc)))) loc pexpr
+  let (errs, ok) = partitionEithers (map convertConstraint (flattenComma (Ann pexpr loc)))
+   in (AnnP (Propagation ok) loc pexpr, errs)
 
 -- | Split a guard|body PExpr into guard and body term lists.
 splitGuardBody :: Ann PExpr -> (AnnP [Term], AnnP [Term])

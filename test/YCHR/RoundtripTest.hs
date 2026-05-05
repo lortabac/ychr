@@ -168,7 +168,8 @@ prop_constraintRoundtrip = property $ do
   let src = prettyConstraintSrc c
   case parseConstraint "<roundtrip>" (Text.pack src) of
     Left err -> annotate (show err) >> failure
-    Right c' -> c' === c
+    Right (Left validErr) -> annotate (show validErr) >> failure
+    Right (Right c') -> c' === c
 
 prop_ruleRoundtrip :: Property
 prop_ruleRoundtrip = property $ do
@@ -177,7 +178,8 @@ prop_ruleRoundtrip = property $ do
   annotate src
   case parseRule "<roundtrip>" (Text.pack src) of
     Left err -> annotate (show err) >> failure
-    Right r' -> stripRuleAnn r' === r
+    Right (_, validErrs@(_ : _)) -> annotate (show validErrs) >> failure
+    Right (r', []) -> stripRuleAnn r' === r
 
 -- ---------------------------------------------------------------------------
 -- =.. roundtrip

@@ -126,6 +126,8 @@ collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
 -- | 15xxx — parse validation phase
 parseValidationErrorCode :: ParseValidationError -> ErrorCode
 parseValidationErrorCode (DiscontiguousEquations _) = ErrorCode 15001
+parseValidationErrorCode MalformedImport = ErrorCode 15002
+parseValidationErrorCode MalformedConstraint = ErrorCode 15003
 
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
@@ -199,6 +201,10 @@ parseValidationErrorMsg (DiscontiguousEquations name) =
   "Equations for function "
     ++ T.unpack name
     ++ " must be contiguous (or declare it with :- open_function)"
+parseValidationErrorMsg MalformedImport =
+  "Invalid import: expected a module name or library(name)"
+parseValidationErrorMsg MalformedConstraint =
+  "Invalid constraint: expected an atom or compound term"
 
 instance Display (Diagnostic ResolveError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =

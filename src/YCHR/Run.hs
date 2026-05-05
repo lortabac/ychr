@@ -142,10 +142,11 @@ runProgramWithGoal :: CompiledProgram -> HostCallRegistry -> Text -> IO (Runtime
 runProgramWithGoal cp hostCalls src =
   case parseConstraint "<query>" src of
     Left err -> throwIO (ParseError "<query>" err)
+    Right (Left validErr) -> throwIO (ParseValidationErrors [validErr])
     -- Rename the constraint's arguments so that bare data-constructor
     -- references (e.g. @[H|T]@, declared atoms) get canonicalized to
     -- the same flat-functor form the compiled head patterns expect.
-    Right (Constraint cname cargs) -> do
+    Right (Right (Constraint cname cargs)) -> do
       (renamedArgs, _warnings) <- either (throwIO . RenameErrors) pure (renameQueryArgs cp.allModules cargs)
       -- Canonicalize the constraint name via the export map so the
       -- type-check sees the same qualified name 'tellConstraintSigs'

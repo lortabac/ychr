@@ -169,7 +169,10 @@ runGenDriver opts files = withCompiled False files $ \prog warnings -> do
     Left err -> do
       putStr (displayMsg (ParseError "<query>" err))
       exitFailure
-    Right c -> pure c
+    Right (Left validErr) -> do
+      putStr (displayMsg (ParseValidationErrors [validErr]))
+      exitFailure
+    Right (Right c) -> pure c
   -- Canonicalize bare data-constructor references in the goal's
   -- arguments so they reach the runtime in the same flat-functor
   -- form the compiled head patterns expect.
