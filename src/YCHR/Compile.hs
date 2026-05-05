@@ -40,11 +40,18 @@
 -- Non-obvious design choices are documented in the \"Notes\" block at the
 -- bottom of this file.
 module YCHR.Compile
-  ( CompileError (..),
+  ( -- * Errors
+    CompileError (..),
+
+    -- * Compilation
     compile,
+
+    -- * Function compilation
     compileFunctionDef,
-    genCallFunDispatches,
     buildFunctionSet,
+
+    -- * Call dispatch
+    genCallFunDispatches,
 
     -- * Re-exported name builders (see "YCHR.Compile.Names")
     funcProcName,
@@ -58,7 +65,6 @@ where
 
 import Control.Monad (foldM)
 import Data.List (partition, sortOn)
-import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -83,8 +89,12 @@ import YCHR.VM
 -- | Source location, original parsed expression, and optional context
 -- label, extracted from an 'AnnP' wrapper.
 data SrcInfo = SrcInfo
-  { srcLoc :: P.SourceLoc,
+  { -- | Source location attached to the originating 'AnnP'.
+    srcLoc :: P.SourceLoc,
+    -- | Pretty-printable parsed form, used to render diagnostics.
     srcParsed :: PExpr,
+    -- | Optional context label (e.g. @"rule foo"@ or
+    -- @"function bar/2"@) prefixed onto diagnostic messages.
     srcLabel :: Maybe Text
   }
 
@@ -249,12 +259,12 @@ genGuardedFire funSet symTab varMap occ = do
   let AnnP {node = guards, sourceLoc = guardLoc, parsed = guardP} = occ.rule.guard
       ruleLabel = Just ("rule " <> occ.ruleDisplay)
       guardSi = SrcInfo guardLoc guardP ruleLabel
-  (matchWrapper, condMap, guardExpr, varMap') <- compileGuards funSet (Just occ) varMap guardSi guards
-  fireStmts <- genFireStmts funSet symTab varMap' occ
-  let guarded = case guardExpr of
+  compiled <- compileGuards funSet (Just occ) varMap guardSi guards
+  fireStmts <- genFireStmts funSet symTab compiled.extendedVarMap occ
+  let guarded = case compiled.residualCheck of
         Nothing -> fireStmts
         Just gExpr -> [If gExpr fireStmts []]
-  pure (matchWrapper guarded, condMap)
+  pure (compiled.matchWrapper guarded, compiled.indexConditions)
 
 -- | Wrap a pre-built inner block in one nested 'Foreach' per partner
 -- (paper §5.2, Listing 1). For each partner @k@ this produces:
@@ -286,7 +296,7 @@ wrapInPartnerLoops occ condMap inner =
       let label = partLabel k
           suspVar = partSuspName k
           partArity = length partner.constraint.args
-          conds = Map.findWithDefault [] k condMap
+          conds = [(c.argIndex, c.expectedValue) | c <- Map.findWithDefault [] k condMap]
           -- Bind the partner's id and arguments as ordinary locals so
           -- the rest of the body can reference them by name.
           fieldExtracts =
@@ -469,12 +479,6 @@ compileExpr _ varMap si t = compileTerm varMap si t
 -- Compile guards
 -- ---------------------------------------------------------------------------
 
--- | Per-partner index conditions lifted out of check guards by the
--- 'Foreach' index-condition pushdown optimization. Each entry maps a
--- partner index @k@ to the @[(ArgIndex, Expr)]@ list that becomes
--- 'YCHR.VM.Foreach' @k@'s index-conditions argument.
-type PartnerCondMap = Map PartnerIndex [(ArgIndex, Expr)]
-
 -- | Free 'Var' names occurring in an 'Expr'. Used by the index-condition
 -- pushdown classifier to decide whether the non-partner-arg side of an
 -- equality is referenceable at a partner loop's evaluation point.
@@ -554,36 +558,42 @@ classifyEqual occ a b
       Just (k, j, a)
   | otherwise = Nothing
 
--- | Compile a guard conjunction.  Guards are split into two groups:
+-- | Compile a guard conjunction. Guards are split into two groups:
 --
---   * __Match guards__ ('GuardMatch', 'GuardGetArg') introduce new
---     variable bindings and structural checks.  They are compiled into
+--   * __Match guards__ ('D.GuardMatch', 'D.GuardGetArg') introduce new
+--     variable bindings and structural checks. They are compiled into
 --     a wrapper @[Stmt] -> [Stmt]@ that nests the inner code inside
---     conditionals and let-bindings.  Match guards must be processed
+--     conditionals and let-bindings. Match guards must be processed
 --     first so that the variables they bind are in scope for check
 --     guards.
 --
---   * __Check guards__ ('GuardEqual', 'GuardExpr') are pure boolean
---     tests.  Equalities whose shape matches 'classifyEqual' are lifted
+--   * __Check guards__ ('D.GuardEqual', 'D.GuardExpr') are pure boolean
+--     tests. Equalities whose shape matches 'classifyEqual' are lifted
 --     into per-partner index conditions ('PartnerCondMap'); the rest
 --     are compiled into a single 'And'-chained residual expression.
--- | Compile a guard conjunction. The 'Maybe' 'Occurrence' parameter
--- enables the index-condition pushdown classifier when an occurrence
--- context is available; pass 'Nothing' (e.g. when compiling user-defined
--- function equations) to bypass classification — no partners exist so
--- nothing is liftable.
+--
+-- The 'Maybe' 'Occurrence' parameter enables the index-condition
+-- pushdown classifier when an occurrence context is available; pass
+-- 'Nothing' (e.g. when compiling user-defined function equations) to
+-- bypass classification — no partners exist so nothing is liftable.
 compileGuards ::
   Set Identifier ->
   Maybe Occurrence ->
   VarMap ->
   SrcInfo ->
   [D.Guard] ->
-  Eff '[Writer [Diagnostic CompileError]] ([Stmt] -> [Stmt], PartnerCondMap, Maybe Expr, VarMap)
+  Eff '[Writer [Diagnostic CompileError]] CompiledGuards
 compileGuards funSet mOcc varMap si guards = do
   let (matchGuards, checkGuards) = partition isMatchGuard guards
-  (matchWrapper, varMap') <- foldM (compileMatchGuard si) (id, varMap) matchGuards
+  (wrapper, varMap') <- foldM (compileMatchGuard si) (id, varMap) matchGuards
   (condMap, checkExpr) <- compileCheckGuards funSet mOcc varMap' si checkGuards
-  pure (matchWrapper, condMap, checkExpr, varMap')
+  pure
+    CompiledGuards
+      { matchWrapper = wrapper,
+        indexConditions = condMap,
+        residualCheck = checkExpr,
+        extendedVarMap = varMap'
+      }
   where
     isMatchGuard (D.GuardMatch {}) = True
     isMatchGuard (D.GuardGetArg {}) = True
@@ -624,7 +634,7 @@ compileCheckGuards funSet mOcc varMap si guards = do
   (condMap, residuals) <- foldM step (Map.empty, []) guards
   let residual = case residuals of
         [] -> Nothing
-        rs -> Just (foldl1 And rs)
+        r : rest -> Just (foldl And r rest)
   pure (condMap, residual)
   where
     classify e1 e2 = case mOcc of
@@ -635,7 +645,8 @@ compileCheckGuards funSet mOcc varMap si guards = do
       e2 <- compileTerm varMap si t2
       case classify e1 e2 of
         Just (k, j, other) ->
-          pure (Map.insertWith (flip (++)) k [(j, other)] cm, rs)
+          let cond = IndexCondition {argIndex = j, expectedValue = other}
+           in pure (Map.insertWith (flip (++)) k [cond] cm, rs)
         Nothing ->
           pure (cm, rs ++ [Equal e1 e2])
     step (cm, rs) (D.GuardExpr term) = do
@@ -739,13 +750,13 @@ compileEquation funSet params si eq = do
   let varMap = buildEquationVarMap params eq.params
   -- Equations have no partners, so the index-condition pushdown
   -- classifier never fires; pass 'Nothing' to short-circuit it.
-  (matchWrapper, _condMap, guardExpr, varMap') <- compileGuards funSet Nothing varMap si eq.guards
-  rhsExpr <- compileExpr funSet varMap' si eq.rhs
+  compiled <- compileGuards funSet Nothing varMap si eq.guards
+  rhsExpr <- compileExpr funSet compiled.extendedVarMap si eq.rhs
   let returnStmt = [Return rhsExpr]
-      inner = case guardExpr of
+      inner = case compiled.residualCheck of
         Nothing -> returnStmt
         Just gExpr -> [If gExpr returnStmt []]
-  pure (matchWrapper inner)
+  pure (compiled.matchWrapper inner)
 
 -- ---------------------------------------------------------------------------
 -- reactivate_dispatch

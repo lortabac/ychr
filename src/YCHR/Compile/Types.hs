@@ -13,6 +13,11 @@ module YCHR.Compile.Types
     -- * Data types
     Occurrence (..),
     Partner (..),
+    IndexCondition (..),
+    CompiledGuards (..),
+
+    -- * Partner index conditions
+    PartnerCondMap,
 
     -- * Occurrence map
     OccurrenceMap,
@@ -30,12 +35,13 @@ module YCHR.Compile.Types
   )
 where
 
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import YCHR.Desugared qualified as D
 import YCHR.Types (Constraint, Identifier, Name, RuleId, Term)
 import YCHR.Types qualified as Types
-import YCHR.VM (ConstraintType, Expr)
+import YCHR.VM (ArgIndex, ConstraintType, Expr, Stmt)
 
 -- | Errors raised by any pass in the CHR-to-VM compiler. Wrapped in
 -- 'YCHR.Parsed.AnnP' at the use site to carry the source location and
@@ -112,6 +118,44 @@ data Partner = Partner
     -- | Constraint-type index used by 'YCHR.VM.Foreach' to look the
     -- partner up in the constraint store.
     cType :: ConstraintType
+  }
+
+-- | A single index condition lifted out of an equality check guard onto
+-- a partner 'YCHR.VM.Foreach' loop: argument @argIndex@ of the partner
+-- must be 'YCHR.VM.Equal' to @expectedValue@. Produced by
+-- 'YCHR.Compile.classifyEqual' and consumed by
+-- 'YCHR.Compile.wrapInPartnerLoops', which projects it back to the
+-- @(ArgIndex, Expr)@ pair the VM 'YCHR.VM.Foreach' instruction expects.
+data IndexCondition = IndexCondition
+  { argIndex :: ArgIndex,
+    expectedValue :: Expr
+  }
+
+-- | Per-partner index conditions lifted out of check guards by the
+-- 'YCHR.VM.Foreach' index-condition pushdown optimization. Each entry
+-- maps a partner index @k@ to the list of conditions that becomes
+-- 'YCHR.VM.Foreach' @k@'s index-conditions argument.
+type PartnerCondMap = Map PartnerIndex [IndexCondition]
+
+-- | Result of compiling a guard conjunction. Threaded out of
+-- 'YCHR.Compile.compileGuards' to its two callers (occurrence bodies
+-- and function equations).
+data CompiledGuards = CompiledGuards
+  { -- | Wrapper that nests an inner statement block inside the
+    -- structural @if@s and let-bindings introduced by match guards
+    -- ('YCHR.Desugared.GuardMatch', 'YCHR.Desugared.GuardGetArg').
+    matchWrapper :: [Stmt] -> [Stmt],
+    -- | Index conditions lifted onto the surrounding partner
+    -- 'YCHR.VM.Foreach' loops by 'YCHR.Compile.classifyEqual'. Empty
+    -- when no occurrence context is available (function equations).
+    indexConditions :: PartnerCondMap,
+    -- | Residual boolean check that did not lift into the index map.
+    -- 'Nothing' when every check guard lifted or when there were no
+    -- check guards.
+    residualCheck :: Maybe Expr,
+    -- | 'VarMap' extended with the bindings introduced by match
+    -- guards.
+    extendedVarMap :: VarMap
   }
 
 newtype OccurrenceMap = OccurrenceMap (Map.Map Identifier [Occurrence])
