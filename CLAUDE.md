@@ -8,8 +8,9 @@ See @dev-docs/PROJECT.md
 ## Resources
 
 - `dev-docs/` contains contributor-oriented documentation:
-  `PROJECT.md` (architecture and design) and the paper
-  this compiler is based on.
+  `PROJECT.md` (architecture and design), `STYLE.md`
+  (Haskell style conventions), and the paper this compiler
+  is based on.
 - `docs/` contains user-facing documentation: language
   reference, VM specification, type system specification,
   and roadmap.
