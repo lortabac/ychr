@@ -209,7 +209,11 @@ buildFunSet :: [D.Function] -> Set (Name, Int)
 buildFunSet fns = Set.fromList [(f.name, f.arity) | f <- fns]
 
 -- | Source-location info recovered from a CHR-side @Ctx@ handle.
-type CtxInfo = (Maybe Text, SourceLoc, PExpr)
+data CtxInfo = CtxInfo
+  { label :: Maybe Text,
+    loc :: SourceLoc,
+    origin :: PExpr
+  }
 
 -- | Map from @Ctx@ handle (an 'Int') to the originating source location.
 type CtxMap = Map Int CtxInfo
@@ -218,12 +222,35 @@ type CtxMap = Map Int CtxInfo
 -- driver has allocated. Threaded as a single 'State' effect so the
 -- counter and the map stay in step.
 data CtxStore = CtxStore
-  { nextId :: !Int,
+  { -- | Next handle to allocate.
+    nextId :: !Int,
+    -- | Source-location info for every handle allocated so far.
     ctxMap :: !CtxMap
   }
 
 emptyCtxStore :: CtxStore
 emptyCtxStore = CtxStore {nextId = 0, ctxMap = Map.empty}
+
+-- | Inflate the trimmed-down 'TypeCheckerProgram' into the
+-- 'CompiledProgram' shape that 'withCHR' expects. Only the four
+-- fields 'TypeCheckerProgram' carries are read by the runtime; the
+-- remaining fields are stubbed out because populating them would
+-- require @Lift@ instances we do not need.
+typeCheckerCompiledProgram :: CompiledProgram
+typeCheckerCompiledProgram =
+  let tcp = typeCheckerProgram
+   in CompiledProgram
+        { program = tcp.program,
+          exportMap = tcp.exportMap,
+          exportedSet = tcp.exportedSet,
+          symbolTable = tcp.symbolTable,
+          allModules = [],
+          opTable = mkOpTable [],
+          allFunctions = [],
+          nextLambdaIndex = 0,
+          functionNameSet = Set.empty,
+          desugaredProgram = D.Program [] [] Map.empty []
+        }
 
 -- | Effect constraint shared by all internal checking functions.
 type CheckEffects es = (CHREffects es, Reader TypeCheckEnv :> es, State CtxStore :> es)
@@ -252,25 +279,7 @@ typeCheckProgram prog = do
         validateTypeDefinitions prog.typeDefinitions (Map.fromList [(td.name, td) | td <- prog.typeDefinitions])
           ++ detectDuplicateConstructors prog.typeDefinitions
           ++ validateConstructorArities env prog
-  -- 'withCHR' wants a full 'CompiledProgram', but only reads the four
-  -- fields that 'TypeCheckerProgram' carries (program, exportMap,
-  -- exportedSet, symbolTable). The remaining fields are stubbed out;
-  -- they would be unused even if populated.
-  let tcp = typeCheckerProgram
-      cp =
-        CompiledProgram
-          { program = tcp.program,
-            exportMap = tcp.exportMap,
-            exportedSet = tcp.exportedSet,
-            symbolTable = tcp.symbolTable,
-            allModules = [],
-            opTable = mkOpTable [],
-            allFunctions = [],
-            nextLambdaIndex = 0,
-            functionNameSet = Set.empty,
-            desugaredProgram = D.Program [] [] Map.empty []
-          }
-  chrErrors <- withCHR cp baseHostCallRegistry $ do
+  chrErrors <- withCHR typeCheckerCompiledProgram baseHostCallRegistry $ do
     runReader env $
       evalState emptyCtxStore $ do
         -- Initialize error accumulator
@@ -310,21 +319,7 @@ typeCheckGoals prog loc lbl goals = do
       conAlias = buildConAlias prog.typeDefinitions
       funSet = buildFunSet prog.functions
       env = TypeCheckEnv {conMap, conAlias, funSet}
-  let tcp = typeCheckerProgram
-      cp =
-        CompiledProgram
-          { program = tcp.program,
-            exportMap = tcp.exportMap,
-            exportedSet = tcp.exportedSet,
-            symbolTable = tcp.symbolTable,
-            allModules = [],
-            opTable = mkOpTable [],
-            allFunctions = [],
-            nextLambdaIndex = 0,
-            functionNameSet = Set.empty,
-            desugaredProgram = D.Program [] [] Map.empty []
-          }
-  withCHR cp baseHostCallRegistry $ do
+  withCHR typeCheckerCompiledProgram baseHostCallRegistry $ do
     runReader env $
       evalState emptyCtxStore $ do
         tellConstraint (Qualified "typechecker" "errors") [valueList []]
@@ -353,10 +348,11 @@ freshCtxHandle ::
 freshCtxHandle cctx = do
   store <- get @CtxStore
   let n = store.nextId
+      info = CtxInfo {label = cctx.label, loc = cctx.loc, origin = cctx.origin}
   put
     CtxStore
       { nextId = n + 1,
-        ctxMap = Map.insert n (cctx.label, cctx.loc, cctx.origin) store.ctxMap
+        ctxMap = Map.insert n info store.ctxMap
       }
   pure (VInt n)
 
@@ -795,11 +791,9 @@ decodeErrorList ctxMap val = do
 decodeError :: (Unify :> es) => CtxMap -> Value -> Eff es [Diagnostic TypeCheckError]
 decodeError ctxMap (VTerm errorFunctor [ctxVal, codeVal, detailVal])
   | errorFunctor == tcAtom "error" = do
-      let (label, loc, origin) = case ctxVal of
-            VInt n -> case Map.lookup n ctxMap of
-              Just info -> info
-              Nothing -> (Nothing, dummyLoc, Atom "")
-            _ -> (Nothing, dummyLoc, Atom "")
+      let info = case ctxVal of
+            VInt n -> Map.findWithDefault dummyCtxInfo n ctxMap
+            _ -> dummyCtxInfo
       code <- deref codeVal
       detail <- deref detailVal
       case code of
@@ -810,16 +804,16 @@ decodeError ctxMap (VTerm errorFunctor [ctxVal, codeVal, detailVal])
               t2' <- deref t2
               pure (showType t1', showType t2')
             _ -> pure ("?", "?")
-          pure [Diagnostic label (AnnP (InconsistentTypes t1text t2text) loc origin)]
+          pure [Diagnostic info.label (AnnP (InconsistentTypes t1text t2text) info.loc info.origin)]
         VAtom "unknown_constraint" -> do
           nameText <- showValue detail
-          pure [Diagnostic label (AnnP (UnknownConstraint nameText) loc origin)]
+          pure [Diagnostic info.label (AnnP (UnknownConstraint nameText) info.loc info.origin)]
         VAtom "unknown_function" -> do
           nameText <- showValue detail
-          pure [Diagnostic label (AnnP (UnknownFunction nameText) loc origin)]
+          pure [Diagnostic info.label (AnnP (UnknownFunction nameText) info.loc info.origin)]
         VAtom "no_matching_overload" -> do
           nameText <- showValue detail
-          pure [Diagnostic label (AnnP (NoMatchingOverload nameText) loc origin)]
+          pure [Diagnostic info.label (AnnP (NoMatchingOverload nameText) info.loc info.origin)]
         _ -> pure []
 decodeError _ _ = pure []
 
@@ -866,6 +860,9 @@ displayQualifiedAtom = T.replace "__" ":"
 
 dummyLoc :: SourceLoc
 dummyLoc = SourceLoc "<typechecker>" 0 0
+
+dummyCtxInfo :: CtxInfo
+dummyCtxInfo = CtxInfo {label = Nothing, loc = dummyLoc, origin = Atom ""}
 
 -- ---------------------------------------------------------------------------
 -- Type definition validation (pure, Haskell-side)

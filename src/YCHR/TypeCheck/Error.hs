@@ -9,6 +9,7 @@ where
 
 import Data.Text (Text)
 
+-- | Errors reported by the type-checker pass.
 data TypeCheckError
   = InconsistentTypes Text Text
   | UnknownConstraint Text

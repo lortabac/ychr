@@ -26,9 +26,13 @@ import YCHR.VM (Program)
 -- CHR session needs at runtime. This avoids requiring @Lift@ instances
 -- for 'OpTable', @[D.Function]@, @[Module]@, etc.
 data TypeCheckerProgram = TypeCheckerProgram
-  { program :: Program,
+  { -- | The compiled VM program.
+    program :: Program,
+    -- | Resolves a use-site unqualified name to the module that exports it.
     exportMap :: Map UnqualifiedIdentifier ExportResolution,
+    -- | Every fully-qualified identifier exported by the program.
     exportedSet :: Set QualifiedIdentifier,
+    -- | Maps each @(name, arity)@ identifier to its numeric constraint type.
     symbolTable :: SymbolTable
   }
   deriving (Lift)
