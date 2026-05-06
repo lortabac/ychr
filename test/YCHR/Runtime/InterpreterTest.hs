@@ -10,6 +10,7 @@ import Effectful.State.Static.Local (State, evalState)
 import Effectful.Writer.Static.Local (Writer, runWriter)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import YCHR.Runtime.Error (CallStack)
 import YCHR.Runtime.History (PropHistory, runPropHistory)
 import YCHR.Runtime.Interpreter
   ( HostCallFn (..),
@@ -545,7 +546,7 @@ callTypePred :: Name -> Value -> IO Bool
 callTypePred name v = case Map.lookup name baseHostCallRegistry of
   Nothing -> assertFailure $ "host call not found: " ++ show name
   Just (HostCallFn f) -> do
-    result <- runEff . runUnify . runCHRStore [] $ f [RVal v]
+    result <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [RVal v]
     case result of
       RVal (VBool b) -> pure b
       _ -> assertFailure $ show name ++ ": expected Bool result"
@@ -555,13 +556,16 @@ callTermVars :: Value -> IO Value
 callTermVars v = case Map.lookup (Name "term_variables") baseHostCallRegistry of
   Nothing -> assertFailure "term_variables not found in registry"
   Just (HostCallFn f) -> do
-    result <- runEff . runUnify . runCHRStore [] $ f [RVal v]
+    result <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [RVal v]
     case result of
       RVal val -> pure val
       _ -> assertFailure "term_variables returned non-RVal"
 
 -- | Call term_variables within an existing Eff context.
-callTermVarsEff :: (Unify :> es, CHRStore :> es, IOE :> es) => Value -> Eff es Value
+callTermVarsEff ::
+  (Unify :> es, CHRStore :> es, IOE :> es, State CallStack :> es) =>
+  Value ->
+  Eff es Value
 callTermVarsEff v = case Map.lookup (Name "term_variables") baseHostCallRegistry of
   Nothing -> error "term_variables not found in registry"
   Just (HostCallFn f) -> do
@@ -599,7 +603,7 @@ typePredicateTests =
         b <- callTypePred "string" (VAtom "hello")
         assertBool "expected false" (not b),
       testCase "var: true for unbound variable" $ do
-        b <- runEff . runUnify . runCHRStore [] $ do
+        b <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
           v <- newVar
           let HostCallFn f = case Map.lookup (Name "var") baseHostCallRegistry of
                 Just hc -> hc
@@ -610,22 +614,27 @@ typePredicateTests =
             _ -> pure False
         assertBool "expected true" b,
       testCase "var: false for bound variable" $ do
-        (b, _) <- runEff . runUnify . runCHRStore [] . runWriter @[SuspensionId] $ do
-          v <- newVar
-          _ <- unify v (VInt 42)
-          let HostCallFn f = case Map.lookup (Name "var") baseHostCallRegistry of
-                Just hc -> hc
-                Nothing -> error "var not found"
-          result <- f [RVal v]
-          case result of
-            RVal (VBool b') -> pure b'
-            _ -> pure False
+        (b, _) <- runEff
+          . runUnify
+          . runCHRStore []
+          . evalState @CallStack []
+          . runWriter @[SuspensionId]
+          $ do
+            v <- newVar
+            _ <- unify v (VInt 42)
+            let HostCallFn f = case Map.lookup (Name "var") baseHostCallRegistry of
+                  Just hc -> hc
+                  Nothing -> error "var not found"
+            result <- f [RVal v]
+            case result of
+              RVal (VBool b') -> pure b'
+              _ -> pure False
         assertBool "expected false" (not b),
       testCase "var: false for ground value" $ do
         b <- callTypePred "var" (VInt 42)
         assertBool "expected false" (not b),
       testCase "nonvar: false for unbound variable" $ do
-        b <- runEff . runUnify . runCHRStore [] $ do
+        b <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
           v <- newVar
           let HostCallFn f = case Map.lookup (Name "nonvar") baseHostCallRegistry of
                 Just hc -> hc
@@ -636,16 +645,21 @@ typePredicateTests =
             _ -> pure False
         assertBool "expected false" (not b),
       testCase "nonvar: true for bound variable" $ do
-        (b, _) <- runEff . runUnify . runCHRStore [] . runWriter @[SuspensionId] $ do
-          v <- newVar
-          _ <- unify v (VInt 42)
-          let HostCallFn f = case Map.lookup (Name "nonvar") baseHostCallRegistry of
-                Just hc -> hc
-                Nothing -> error "nonvar not found"
-          result <- f [RVal v]
-          case result of
-            RVal (VBool b') -> pure b'
-            _ -> pure False
+        (b, _) <- runEff
+          . runUnify
+          . runCHRStore []
+          . evalState @CallStack []
+          . runWriter @[SuspensionId]
+          $ do
+            v <- newVar
+            _ <- unify v (VInt 42)
+            let HostCallFn f = case Map.lookup (Name "nonvar") baseHostCallRegistry of
+                  Just hc -> hc
+                  Nothing -> error "nonvar not found"
+            result <- f [RVal v]
+            case result of
+              RVal (VBool b') -> pure b'
+              _ -> pure False
         assertBool "expected true" b,
       testCase "nonvar: true for ground value" $ do
         b <- callTypePred "nonvar" (VInt 42)
@@ -660,7 +674,7 @@ typePredicateTests =
         b <- callTypePred "ground" (VTerm "f" [VInt 1, VAtom "hello"])
         assertBool "expected true" b,
       testCase "ground: false for unbound variable" $ do
-        b <- runEff . runUnify . runCHRStore [] $ do
+        b <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
           v <- newVar
           let HostCallFn f = case Map.lookup (Name "ground") baseHostCallRegistry of
                 Just hc -> hc
@@ -671,7 +685,7 @@ typePredicateTests =
             _ -> pure True
         assertBool "expected false" (not b),
       testCase "ground: false for compound with unbound var" $ do
-        b <- runEff . runUnify . runCHRStore [] $ do
+        b <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
           v <- newVar
           let HostCallFn f = case Map.lookup (Name "ground") baseHostCallRegistry of
                 Just hc -> hc
@@ -682,16 +696,21 @@ typePredicateTests =
             _ -> pure True
         assertBool "expected false" (not b),
       testCase "ground: true for compound with bound var" $ do
-        (b, _) <- runEff . runUnify . runCHRStore [] . runWriter @[SuspensionId] $ do
-          v <- newVar
-          _ <- unify v (VInt 2)
-          let HostCallFn f = case Map.lookup (Name "ground") baseHostCallRegistry of
-                Just hc -> hc
-                Nothing -> error "ground not found"
-          result <- f [RVal (VTerm "f" [VInt 1, v])]
-          case result of
-            RVal (VBool b') -> pure b'
-            _ -> pure True
+        (b, _) <- runEff
+          . runUnify
+          . runCHRStore []
+          . evalState @CallStack []
+          . runWriter @[SuspensionId]
+          $ do
+            v <- newVar
+            _ <- unify v (VInt 2)
+            let HostCallFn f = case Map.lookup (Name "ground") baseHostCallRegistry of
+                  Just hc -> hc
+                  Nothing -> error "ground not found"
+            result <- f [RVal (VTerm "f" [VInt 1, v])]
+            case result of
+              RVal (VBool b') -> pure b'
+              _ -> pure True
         assertBool "expected true" b,
       testCase "ground: false for wildcard" $ do
         b <- callTypePred "ground" VWildcard
@@ -707,18 +726,19 @@ typePredicateTests =
           VTerm "prelude__[]" [] -> pure ()
           _ -> assertFailure "expected empty list",
       testCase "term_variables: unbound var yields singleton list" $ do
-        (isSingleton, sameVar) <- runEff . runUnify . runCHRStore [] $ do
-          v <- newVar
-          result <- callTermVarsEff v
-          case result of
-            VTerm "prelude__." [x, VTerm "prelude__[]" []] -> do
-              eq <- equal x v
-              pure (True, eq)
-            _ -> pure (False, False)
+        (isSingleton, sameVar) <-
+          runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
+            v <- newVar
+            result <- callTermVarsEff v
+            case result of
+              VTerm "prelude__." [x, VTerm "prelude__[]" []] -> do
+                eq <- equal x v
+                pure (True, eq)
+              _ -> pure (False, False)
         assertBool "expected singleton list" isSingleton
         assertBool "list element should be same variable" sameVar,
       testCase "term_variables: duplicate var appears once" $ do
-        (len, sameVar) <- runEff . runUnify . runCHRStore [] $ do
+        (len, sameVar) <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
           v <- newVar
           result <- callTermVarsEff (VTerm "f" [v, v])
           case result of
@@ -729,7 +749,7 @@ typePredicateTests =
         len @?= 1
         assertBool "list element should be same variable" sameVar,
       testCase "term_variables: two distinct vars in order" $ do
-        (len, eq1, eq2) <- runEff . runUnify . runCHRStore [] $ do
+        (len, eq1, eq2) <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
           x <- newVar
           y <- newVar
           result <- callTermVarsEff (VTerm "f" [x, y])
@@ -743,13 +763,13 @@ typePredicateTests =
         assertBool "first element should be X" eq1
         assertBool "second element should be Y" eq2,
       testCase "term_variables: wildcard produces fresh var" $ do
-        result <- runEff . runUnify . runCHRStore [] $ do
+        result <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
           callTermVarsEff VWildcard
         case result of
           VTerm "prelude__." [_, VTerm "prelude__[]" []] -> pure ()
           _ -> assertFailure "expected singleton list",
       testCase "term_variables: nested compound" $ do
-        (len, eq1, eq2) <- runEff . runUnify . runCHRStore [] $ do
+        (len, eq1, eq2) <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
           x <- newVar
           y <- newVar
           result <- callTermVarsEff (VTerm "f" [VTerm "g" [x, VInt 1], y])
@@ -773,7 +793,9 @@ typePredicateTests =
     callUnifiable a b = case Map.lookup (Name "unifiable") baseHostCallRegistry of
       Nothing -> assertFailure "unifiable not found in registry"
       Just (HostCallFn f) -> do
-        result <- runEff . runUnify . runCHRStore [] $ f [RVal a, RVal b]
+        result <-
+          runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
+            f [RVal a, RVal b]
         case result of
           RVal (VBool b') -> pure b'
           _ -> assertFailure "unifiable: expected Bool result"
@@ -787,7 +809,9 @@ callHostCall1 :: Name -> Value -> IO Value
 callHostCall1 name v = case Map.lookup name baseHostCallRegistry of
   Nothing -> assertFailure $ "host call not found: " ++ show name
   Just (HostCallFn f) -> do
-    result <- runEff . runUnify . runCHRStore [] $ f [RVal v]
+    result <-
+      runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
+        f [RVal v]
     case result of
       RVal val -> pure val
       _ -> assertFailure "expected RVal result"

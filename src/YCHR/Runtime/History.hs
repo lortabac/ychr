@@ -32,7 +32,8 @@ data PropHistory :: Effect
 
 type instance DispatchOf PropHistory = Static WithSideEffects
 
-newtype instance StaticRep PropHistory = PropHistoryRep (IORef (Set (RuleId, [SuspensionId])))
+newtype instance StaticRep PropHistory
+  = PropHistoryRep (IORef (Set (RuleId, [SuspensionId])))
 
 -- | Run a computation that uses 'PropHistory', starting with an empty history.
 runPropHistory :: (IOE :> es) => Eff (PropHistory : es) a -> Eff es a
@@ -44,6 +45,7 @@ runPropHistory m = do
 -- Operations
 -- ---------------------------------------------------------------------------
 
+-- | Read the underlying mutable history reference from the effect environment.
 getRef :: (PropHistory :> es) => Eff es (IORef (Set (RuleId, [SuspensionId])))
 getRef = do
   PropHistoryRep ref <- getStaticRep

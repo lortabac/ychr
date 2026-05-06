@@ -42,7 +42,13 @@ import Data.Text (Text)
 import Effectful
 import Effectful.Dispatch.Static
 import Effectful.Writer.Static.Local (Writer, tell)
-import YCHR.Runtime.Types (SuspensionId (..), Value (..), Var (..), VarId (..), VarState (..))
+import YCHR.Runtime.Types
+  ( SuspensionId (..),
+    Value (..),
+    Var (..),
+    VarId (..),
+    VarState (..),
+  )
 
 -- ---------------------------------------------------------------------------
 -- Unify effect
@@ -173,7 +179,11 @@ unify' _ _ = pure False
 
 -- | Unify argument lists pairwise.
 -- Short-circuits on the first failure.
-unifyArgs :: (Writer [SuspensionId] :> es, Unify :> es) => [Value] -> [Value] -> Eff es Bool
+unifyArgs ::
+  (Writer [SuspensionId] :> es, Unify :> es) =>
+  [Value] ->
+  [Value] ->
+  Eff es Bool
 unifyArgs [] [] = pure True
 unifyArgs (a : as) (b : bs) = do
   ok <- unify a b

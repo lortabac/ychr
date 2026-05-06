@@ -16,7 +16,6 @@ module YCHR.Runtime.Session
     CHREffects,
     StaticRep (CHRRep),
     ProcMap,
-    CallStack,
 
     -- * Session input
     SessionInput (..),
@@ -46,6 +45,7 @@ import Effectful.Writer.Static.Local (Writer, runWriter)
 import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Compile (tellProcName)
 import YCHR.Compile.Pipeline (CompiledProgram (..), ExportResolution (..))
+import YCHR.Runtime.Error (CallStack, runtimeErrorS)
 import YCHR.Runtime.History (PropHistory, runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallRegistry, callProc)
 import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
@@ -53,12 +53,9 @@ import YCHR.Runtime.Store (CHRStore, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId, Value (..))
 import YCHR.Runtime.Var (Unify, runUnify)
 import YCHR.Types qualified as Types
-import YCHR.VM (Name (..), Procedure (..), Program (..), StackFrame)
+import YCHR.VM (Name (..), Procedure (..), Program (..))
 
 type ProcMap = Map Name Procedure
-
--- | Runtime call stack for error reporting (newest first).
-type CallStack = [StackFrame]
 
 -- | The narrow slice of a compiled program that 'runCHR' / 'withCHR'
 -- need: the VM 'Program' and the export-resolution maps used by
@@ -136,7 +133,9 @@ runCHR si hc =
     . evalState @CallStack []
     . evalStaticRep (CHRRep procMap hc si.exportMap si.exportedSet)
   where
-    procMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- si.program.procedures]
+    procMap =
+      Map.fromList
+        [(pname, p) | p@Procedure {name = pname} <- si.program.procedures]
 
 -- | Convenience wrapper that runs a CHR session in 'IO'.
 withCHR ::
@@ -183,11 +182,11 @@ tellConstraint name args = do
   CHRRep procMap hc exportMap exportedSet <- getStaticRep
   let arity = length args
   resolved <- case resolveByExport exportMap exportedSet name arity of
-    Left err -> error err
+    Left err -> runtimeErrorS err
     Right qname -> pure qname
   let tellName = tellProcName resolved arity
   unless (Map.member tellName procMap) $
-    error ("Constraint not found: " ++ T.unpack tellName.unName)
+    runtimeErrorS ("Constraint not found: " ++ T.unpack tellName.unName)
   _ <- callProc procMap hc tellName (map RVal args)
   pure ()
 

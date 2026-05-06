@@ -6,10 +6,12 @@ module YCHR.MetaTest (tests) where
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Effectful (runEff)
+import Effectful.State.Static.Local (evalState)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase)
 import YCHR.Meta (metaHostCallRegistry)
 import YCHR.Run (CompiledProgram (..), compileModules, runProgramWithQuery)
+import YCHR.Runtime.Error (CallStack)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, baseHostCallRegistry)
 import YCHR.Runtime.Store (runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), Value (..))
@@ -37,7 +39,7 @@ readTerm :: Text -> IO Value
 readTerm s = case Map.lookup (Name "read_term_from_string") metaHostCallRegistry of
   Nothing -> assertFailure "read_term_from_string not found in registry"
   Just (HostCallFn f) -> do
-    result <- runEff . runUnify . runCHRStore [] $ f [RVal (VText s)]
+    result <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [RVal (VText s)]
     case result of
       RVal v -> pure v
       _ -> assertFailure "read_term_from_string returned non-RVal"

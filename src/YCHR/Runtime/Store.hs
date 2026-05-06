@@ -97,11 +97,15 @@ runCHRStore typeNameList m = do
 -- Internal helpers
 -- ---------------------------------------------------------------------------
 
+-- | Read the underlying mutable store state from the effect environment.
 getStoreState :: (CHRStore :> es) => Eff es StoreState
 getStoreState = do
   CHRStoreRep st <- getStaticRep
   pure st
 
+-- | Look up a suspension by id. Calls 'error' on miss because every id
+-- in circulation must have been allocated via 'createConstraint'; a miss
+-- is a runtime invariant violation, not a user-facing failure.
 lookupSusp :: (CHRStore :> es) => SuspensionId -> Eff es Suspension
 lookupSusp (SuspensionId sid) = do
   st <- getStoreState

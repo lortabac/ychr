@@ -31,11 +31,9 @@ import Effectful.Error.Static (Error, runError, throwError)
 import Effectful.Exception qualified as Eff
 import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import Effectful.Writer.Static.Local (Writer, listen, runWriter)
-import System.Exit (exitFailure)
-import System.IO (hPutStr, stderr)
 import YCHR.Meta (valueToTerm)
 import YCHR.Pretty (prettyTerm)
-import YCHR.Runtime.Error (displayRuntimeError)
+import YCHR.Runtime.Error (CallStack, runtimeError', runtimeErrorS)
 import YCHR.Runtime.History (PropHistory, addHistory, notInHistory, runPropHistory)
 import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue)
 import YCHR.Runtime.Registry
@@ -88,9 +86,6 @@ type Env = Map Name RuntimeVal
 -- | Maximum number of call stack frames to keep.
 maxCallStackDepth :: Int
 maxCallStackDepth = 10
-
--- | Runtime call stack for error reporting (newest first).
-type CallStack = [StackFrame]
 
 -- | Non-local control flow signals. We use 'Effectful.Error.Static.Error'
 -- as an exception mechanism: 'Return' exits a procedure, 'Continue' and
@@ -233,28 +228,6 @@ execStmt _ _ (PushFrame frame) = do
 -- ---------------------------------------------------------------------------
 -- Runtime errors
 -- ---------------------------------------------------------------------------
-
--- | Raise a runtime error with the current call stack.
--- Prints the formatted error to stderr and exits.
-runtimeError' ::
-  (IOE :> es, State CallStack :> es) =>
-  String -> T.Text -> Eff es a
-runtimeError' prefix detail = do
-  stack <- get @CallStack
-  liftIO $ do
-    hPutStr stderr $ displayRuntimeError (prefix ++ T.unpack detail) stack
-    exitFailure
-
--- | Raise a runtime error with the current call stack (String-only variant).
--- Prints the formatted error to stderr and exits.
-runtimeErrorS ::
-  (IOE :> es, State CallStack :> es) =>
-  String -> Eff es a
-runtimeErrorS msg = do
-  stack <- get @CallStack
-  liftIO $ do
-    hPutStr stderr $ displayRuntimeError msg stack
-    exitFailure
 
 -- | Extract a constraint identifier from a runtime value, or raise a runtime error.
 expectConstraintId ::

@@ -36,22 +36,10 @@ local zip), not for domain values.
 
 `OverloadedRecordDot`, `NoFieldSelectors`, and `DuplicateRecordFields` are
 enabled globally in `ychr.cabal`. Field names are bare and unprefixed; access
-is via `x.field`:
+is via `x.field`. Two records in the same module can share a field name;
+that's the whole point of the extension trio.
 
-```haskell
-data Suspension = Suspension
-  { id :: SuspensionId
-  , type_ :: ConstraintType
-  , args :: [Value]
-  , alive :: Bool
-  }
-
-isMatching s = s.alive && s.type_ == wanted
-```
-
-Do not prefix field names (no `suspId`, `suspType`, `cArgs`). Two records in
-the same module can share a field name; that's the whole point of the
-extension trio.
+Do not prefix field names with an abbreviation of the type (e.g. `cArgs`).
 
 ## Track effects with `effectful`
 

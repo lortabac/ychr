@@ -83,6 +83,7 @@ import YCHR.Parsed (SourceLoc (..))
 import YCHR.Parser (parseConstraint, parseQueryWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (renameQueryArgs, renameQueryGoals)
+import YCHR.Runtime.Error (CallStack)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc)
 import YCHR.Runtime.Reactivation (drainQueue, enqueue)
 import YCHR.Runtime.Session
@@ -403,7 +404,8 @@ raiseUnifyFailure v1 v2 = do
 hostCall ::
   ( Unify :> es,
     CHRStore :> es,
-    IOE :> es
+    IOE :> es,
+    State CallStack :> es
   ) =>
   Maybe HostCallFn -> Text -> [RuntimeVal] -> Eff es RuntimeVal
 hostCall (Just (HostCallFn f)) _ args = f args

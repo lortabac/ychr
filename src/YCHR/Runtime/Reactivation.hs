@@ -47,6 +47,7 @@ runReactQueue m = do
 -- Operations
 -- ---------------------------------------------------------------------------
 
+-- | Read the underlying mutable queue reference from the effect environment.
 getRef :: (ReactQueue :> es) => Eff es (IORef (Seq SuspensionId))
 getRef = do
   ReactQueueRep ref <- getStaticRep

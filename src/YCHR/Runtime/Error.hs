@@ -1,15 +1,30 @@
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Runtime error formatting with call stack traces.
+--
+-- Also owns the small set of helpers that raise runtime errors from any
+-- runtime module ('runtimeError'', 'runtimeErrorS') and the shared
+-- 'CallStack' type alias they thread through. Living here keeps
+-- "YCHR.Runtime.Registry" and "YCHR.Runtime.Session" free of import
+-- cycles with "YCHR.Runtime.Interpreter".
 module YCHR.Runtime.Error
-  ( displayRuntimeError,
+  ( -- * Display
+    displayRuntimeError,
     runtimeErrorCode,
+
+    -- * Call stack
+    CallStack,
+
+    -- * Raising runtime errors
+    runtimeError',
+    runtimeErrorS,
   )
 where
 
 import Data.List (intercalate)
 import Data.Text qualified as T
+import Effectful
+import Effectful.State.Static.Local (State, get)
 import System.Console.ANSI
   ( Color (..),
     ColorIntensity (..),
@@ -18,8 +33,13 @@ import System.Console.ANSI
     SGR (..),
     setSGRCode,
   )
+import System.Exit (exitFailure)
+import System.IO (hPutStr, stderr)
 import YCHR.Loc (SourceLoc (..), dummyLoc)
 import YCHR.VM (StackFrame (..))
+
+-- | Runtime call stack for error reporting (newest first).
+type CallStack = [StackFrame]
 
 -- | Runtime error code.
 runtimeErrorCode :: String
@@ -71,7 +91,14 @@ displayRuntimeError msg (top : rest) =
 
 -- | Format a single diagnostic frame.  Mirrors the layout of
 -- 'YCHR.Display.displayMsgWithSrcLoc'.
-formatFrame :: String -> Color -> String -> SourceLoc -> Maybe String -> Maybe String -> String
+formatFrame ::
+  String ->
+  Color ->
+  String ->
+  SourceLoc ->
+  Maybe String ->
+  Maybe String ->
+  String
 formatFrame sev color msg loc maybeLabel maybeNode =
   let c = setSGRCode [SetColor Foreground Vivid color]
       r = setSGRCode [Reset]
@@ -113,3 +140,28 @@ formatFrame sev color msg loc maybeLabel maybeNode =
 -- | Display a source location as @file:line:col@.
 displaySrcLoc :: SourceLoc -> String
 displaySrcLoc loc = loc.file ++ ":" ++ show loc.line ++ ":" ++ show loc.col
+
+-- | Raise a runtime error with the current call stack.
+-- Prints the formatted error to stderr and exits.
+runtimeError' ::
+  (IOE :> es, State CallStack :> es) =>
+  String ->
+  T.Text ->
+  Eff es a
+runtimeError' prefix detail = do
+  stack <- get @CallStack
+  liftIO $ do
+    hPutStr stderr $ displayRuntimeError (prefix ++ T.unpack detail) stack
+    exitFailure
+
+-- | Raise a runtime error with the current call stack (String-only variant).
+-- Prints the formatted error to stderr and exits.
+runtimeErrorS ::
+  (IOE :> es, State CallStack :> es) =>
+  String ->
+  Eff es a
+runtimeErrorS msg = do
+  stack <- get @CallStack
+  liftIO $ do
+    hPutStr stderr $ displayRuntimeError msg stack
+    exitFailure
