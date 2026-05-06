@@ -150,7 +150,13 @@ buildConMap tds =
 -- in 'buildConMap' would silently drop the earlier declaration.
 detectDuplicateConstructors :: [TypeDefinition] -> [Diagnostic TypeCheckError]
 detectDuplicateConstructors tds =
-  [ Diagnostic Nothing (AnnP (DuplicateConstructor (flattenName name) (List.sort decls)) dummyLoc (Atom ""))
+  [ Diagnostic
+      Nothing
+      ( AnnP
+          (DuplicateConstructor (flattenName name) (List.sort decls))
+          dummyLoc
+          (Atom "")
+      )
   | (name, decls) <- Map.toList grouped,
     length decls > 1
   ]
@@ -253,7 +259,15 @@ typeCheckProgram prog = do
       -- Haskell-side validation
       env = TypeCheckEnv {conMap, conAlias, funSet}
       hsErrors =
-        validateTypeDefinitions prog.typeDefinitions (Map.fromList [(td.name, td) | td <- prog.typeDefinitions])
+        validateTypeDefinitions
+          prog.typeDefinitions
+          ( Map.fromList
+              [ ( td.name,
+                  td
+                )
+              | td <- prog.typeDefinitions
+              ]
+          )
           ++ detectDuplicateConstructors prog.typeDefinitions
           ++ validateConstructorArities env prog
   chrErrors <- withCHR typeCheckerProgram baseHostCallRegistry $ do
@@ -344,7 +358,11 @@ tellConstraintSigs prog =
         m >> do
           tvars <- freshTypeVarsForDecl (collectTypeVars argTypes)
           encodedArgs <- traverse (encodeTypeExpr tvars) argTypes
-          tellConstraint (Qualified "typechecker" "constraint_sig") [VAtom (runtimeName name), valueList encodedArgs]
+          tellConstraint
+            (Qualified "typechecker" "constraint_sig")
+            [ VAtom (runtimeName name),
+              valueList encodedArgs
+            ]
     )
     (pure ())
     prog.constraintTypes
@@ -357,13 +375,25 @@ tellFunctionSigs prog = mapM_ tellOne prog.functions
         -- No annotations: default to all-any.
         let anyArgs = replicate f.arity (tcCon0 "any")
             sig = VTerm (tcAtom "sig") [valueList anyArgs, tcCon0 "any"]
-        tellConstraint (Qualified "typechecker" "function_sig") [VAtom (runtimeName f.name), sig]
+        tellConstraint
+          (Qualified "typechecker" "function_sig")
+          [ VAtom (runtimeName f.name),
+            sig
+          ]
       [s] -> do
         sig <- encodeFunctionSig s
-        tellConstraint (Qualified "typechecker" "function_sig") [VAtom (runtimeName f.name), sig]
+        tellConstraint
+          (Qualified "typechecker" "function_sig")
+          [ VAtom (runtimeName f.name),
+            sig
+          ]
       ss -> do
         sigs <- traverse encodeFunctionSig ss
-        tellConstraint (Qualified "typechecker" "function_sigs") [VAtom (runtimeName f.name), valueList sigs]
+        tellConstraint
+          (Qualified "typechecker" "function_sigs")
+          [ VAtom (runtimeName f.name),
+            valueList sigs
+          ]
 
 -- | Encode one declared @(arg-types, return-type)@ pair as a runtime
 -- @sig(args, ret)@ value, allocating fresh logical variables for the
@@ -386,7 +416,14 @@ tellConSigs prog =
               let parentType = encodeTCon tvars td.name td.typeVars
               encodedFields <- traverse (encodeTypeExpr tvars) dc.conArgs
               let sig = VTerm (tcAtom "sig") [parentType, valueList encodedFields]
-              tellConstraint (Qualified "typechecker" "con_sig") [VAtom (runtimeName dc.conName), sig]
+              tellConstraint
+                (Qualified "typechecker" "con_sig")
+                [ VAtom
+                    ( runtimeName
+                        dc.conName
+                    ),
+                  sig
+                ]
           )
           td.constructors
     )
@@ -405,7 +442,11 @@ encodeName name@(Qualified _ _) = VTerm (runtimeName name) []
 -- | Encode a type constructor application: tcon(name, [arg1, arg2, ...])
 encodeTCon :: Map Text Value -> Name -> [Text] -> Value
 encodeTCon tvars name vars =
-  VTerm (tcAtom "tcon") [encodeName name, valueList (map (\v -> Map.findWithDefault (tcCon0 "any") v tvars) vars)]
+  VTerm
+    (tcAtom "tcon")
+    [ encodeName name,
+      valueList (map (\v -> Map.findWithDefault (tcCon0 "any") v tvars) vars)
+    ]
 
 -- ---------------------------------------------------------------------------
 -- Type encoding
@@ -437,10 +478,17 @@ encodeTypeExpr _ (TypeCon (Unqualified "float") []) = pure (tcCon0 "float")
 encodeTypeExpr _ (TypeCon (Unqualified "string") []) = pure (tcCon0 "string")
 encodeTypeExpr _ (TypeCon (Unqualified "any") []) = pure (tcCon0 "any")
 -- Function type: fun(A, B) -> C is parsed as TypeCon "->" [TypeCon "fun" [A, B], C]
-encodeTypeExpr tvars (TypeCon (Unqualified "->") [TypeCon (Unqualified "fun") argTys, retTy]) = do
-  encodedArgs <- traverse (encodeTypeExpr tvars) argTys
-  encodedRet <- encodeTypeExpr tvars retTy
-  pure (VTerm (tcAtom "fun") [valueList encodedArgs, encodedRet])
+encodeTypeExpr
+  tvars
+  ( TypeCon
+      (Unqualified "->")
+      [ TypeCon (Unqualified "fun") argTys,
+        retTy
+        ]
+    ) = do
+    encodedArgs <- traverse (encodeTypeExpr tvars) argTys
+    encodedRet <- encodeTypeExpr tvars retTy
+    pure (VTerm (tcAtom "fun") [valueList encodedArgs, encodedRet])
 encodeTypeExpr tvars (TypeCon name args) = do
   encodedArgs <- traverse (encodeTypeExpr tvars) args
   pure (VTerm (tcAtom "tcon") [encodeName name, valueList encodedArgs])
@@ -471,7 +519,12 @@ checkConstraintUse :: (CheckEffects es) => CheckCtx -> Types.Constraint -> Eff e
 checkConstraintUse cctx c = do
   argTypeVars <- traverse (typeOfTerm cctx) c.args
   ctx <- freshCtxHandle cctx
-  tellConstraint (Qualified "typechecker" "check_constraint_use") [VAtom (runtimeName c.name), valueList argTypeVars, ctx]
+  tellConstraint
+    (Qualified "typechecker" "check_constraint_use")
+    [ VAtom (runtimeName c.name),
+      valueList argTypeVars,
+      ctx
+    ]
 
 -- ---------------------------------------------------------------------------
 -- Guard checking
@@ -538,7 +591,14 @@ checkGuard cctx lastConName (D.GuardGetArg varName term idx) = do
   when withinArity $ do
     termType <- typeOfTerm cctx term
     ctx <- freshCtxHandle cctx
-    tellConstraint (Qualified "typechecker" "check_guard_getarg") [resultTypeVar, termType, VAtom (runtimeName conName), VInt idx, ctx]
+    tellConstraint
+      (Qualified "typechecker" "check_guard_getarg")
+      [ resultTypeVar,
+        termType,
+        VAtom (runtimeName conName),
+        VInt idx,
+        ctx
+      ]
   pure lastConName
 checkGuard cctx _ (D.GuardExpr term) = do
   tv <- typeOfTerm cctx term
@@ -572,7 +632,13 @@ checkBodyGoal cctx (D.BodyFunctionCall name args) = do
   argTypeVars <- traverse (typeOfTerm cctx) args
   retTypeVar <- newVar
   ctx <- freshCtxHandle cctx
-  tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (runtimeName name), valueList argTypeVars, retTypeVar, ctx]
+  tellConstraint
+    (Qualified "typechecker" "check_function_use")
+    [ VAtom (runtimeName name),
+      valueList argTypeVars,
+      retTypeVar,
+      ctx
+    ]
 checkBodyGoal cctx (D.BodyHostStmt _ args) = do
   -- Process arguments for side effects (nested constructors/functions still get checked)
   mapM_ (typeOfTerm cctx) args
@@ -586,11 +652,23 @@ checkFunction func = do
   let AnnP eqs eqLoc eqOrigin = func.equations
   mapM_ (checkEquation func eqLoc eqOrigin) eqs
 
-checkEquation :: (CheckEffects es) => D.Function -> SourceLoc -> PExpr -> D.Equation -> Eff es ()
+checkEquation ::
+  (CheckEffects es) =>
+  D.Function ->
+  SourceLoc ->
+  PExpr ->
+  D.Equation ->
+  Eff es ()
 checkEquation func loc origin eq = do
   let allVarNames = collectVarsInEq eq
   varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> newVar) (Set.toList allVarNames)
-  let cctx = CheckCtx {varTypes, label = Just ("function " <> flattenName func.name), loc, origin}
+  let cctx =
+        CheckCtx
+          { varTypes,
+            label = Just ("function " <> flattenName func.name),
+            loc,
+            origin
+          }
   -- Untyped functions skip equation checking entirely; typed (single or
   -- overloaded) ones go through check_function_use, which dispatches on
   -- whether function_sig (single) or function_sigs (overloaded) is
@@ -643,7 +721,16 @@ typeOfAtom cctx name = do
     then do
       resultType <- newVar
       ctx <- freshCtxHandle cctx
-      tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (runtimeName canonical), valueList [], resultType, ctx]
+      tellConstraint
+        (Qualified "typechecker" "check_constructor_use")
+        [ VAtom
+            ( runtimeName
+                canonical
+            ),
+          valueList [],
+          resultType,
+          ctx
+        ]
       pure resultType
     else
       -- Either unknown or a known constructor of nonzero arity (in
@@ -658,7 +745,8 @@ typeOfCompound cctx (Unqualified "->") [CompoundTerm (Unqualified "fun") params,
   bodyType <- typeOfTerm cctx body
   pure (VTerm (tcAtom "fun") [valueList paramTypeVars, bodyType])
 -- Function reference: fun name/arity
--- After renaming the outer "fun" is stripped, leaving CompoundTerm "/" [AtomTerm name, IntTerm arity].
+-- After renaming the outer "fun" is stripped, leaving
+-- CompoundTerm "/" [AtomTerm name, IntTerm arity].
 -- The renamer flattens the resolved name with @flattenName@ (@:@-separator);
 -- 'parseFlattenedName' . 'runtimeName' converts it to the runtime form
 -- (@__@-separator) so the emitted @check_function_use@ joins with the
@@ -668,7 +756,13 @@ typeOfCompound cctx (Unqualified "/") [AtomTerm fname, IntTerm arity] = do
   retTypeVar <- newVar
   ctx <- freshCtxHandle cctx
   let runtimeFname = runtimeName (parseFlattenedName fname)
-  tellConstraint (Qualified "typechecker" "check_function_use") [VAtom runtimeFname, valueList argTypeVars, retTypeVar, ctx]
+  tellConstraint
+    (Qualified "typechecker" "check_function_use")
+    [ VAtom runtimeFname,
+      valueList argTypeVars,
+      retTypeVar,
+      ctx
+    ]
   pure (VTerm (tcAtom "fun") [valueList argTypeVars, retTypeVar])
 -- Constructor or function. Constructors are canonicalized so that bare
 -- functor names (e.g. cons "." or own-module names) resolve to their
@@ -684,7 +778,16 @@ typeOfCompound cctx name args = do
       argTypes <- traverse (typeOfTerm cctx) args
       resultType <- newVar
       ctx <- freshCtxHandle cctx
-      tellConstraint (Qualified "typechecker" "check_constructor_use") [VAtom (runtimeName canonical), valueList argTypes, resultType, ctx]
+      tellConstraint
+        (Qualified "typechecker" "check_constructor_use")
+        [ VAtom
+            ( runtimeName
+                canonical
+            ),
+          valueList argTypes,
+          resultType,
+          ctx
+        ]
       pure resultType
     else
       if Set.member (name, arity) env.funSet
@@ -692,7 +795,16 @@ typeOfCompound cctx name args = do
           argTypes <- traverse (typeOfTerm cctx) args
           resultType <- newVar
           ctx <- freshCtxHandle cctx
-          tellConstraint (Qualified "typechecker" "check_function_use") [VAtom (runtimeName name), valueList argTypes, resultType, ctx]
+          tellConstraint
+            (Qualified "typechecker" "check_function_use")
+            [ VAtom
+                ( runtimeName
+                    name
+                ),
+              valueList argTypes,
+              resultType,
+              ctx
+            ]
           pure resultType
         else do
           -- Unknown (or wrong-arity constructor — error pre-reported).
@@ -781,7 +893,15 @@ decodeError ctxMap (VTerm errorFunctor [ctxVal, codeVal, detailVal])
               t2' <- deref t2
               pure (showType t1', showType t2')
             _ -> pure ("?", "?")
-          pure [Diagnostic info.label (AnnP (InconsistentTypes t1text t2text) info.loc info.origin)]
+          pure
+            [ Diagnostic
+                info.label
+                ( AnnP
+                    (InconsistentTypes t1text t2text)
+                    info.loc
+                    info.origin
+                )
+            ]
         VAtom "unknown_constraint" -> do
           nameText <- showValue detail
           pure [Diagnostic info.label (AnnP (UnknownConstraint nameText) info.loc info.origin)]
@@ -790,7 +910,15 @@ decodeError ctxMap (VTerm errorFunctor [ctxVal, codeVal, detailVal])
           pure [Diagnostic info.label (AnnP (UnknownFunction nameText) info.loc info.origin)]
         VAtom "no_matching_overload" -> do
           nameText <- showValue detail
-          pure [Diagnostic info.label (AnnP (NoMatchingOverload nameText) info.loc info.origin)]
+          pure
+            [ Diagnostic
+                info.label
+                ( AnnP
+                    (NoMatchingOverload nameText)
+                    info.loc
+                    info.origin
+                )
+            ]
         _ -> pure []
 decodeError _ _ = pure []
 
@@ -845,7 +973,10 @@ dummyCtxInfo = CtxInfo {label = Nothing, loc = dummyLoc, origin = Atom ""}
 -- Type definition validation (pure, Haskell-side)
 -- ---------------------------------------------------------------------------
 
-validateTypeDefinitions :: [TypeDefinition] -> Map Name TypeDefinition -> [Diagnostic TypeCheckError]
+validateTypeDefinitions ::
+  [TypeDefinition] ->
+  Map Name TypeDefinition ->
+  [Diagnostic TypeCheckError]
 validateTypeDefinitions tds typeMap =
   concatMap (validateTypeDef typeMap) tds
 
@@ -853,11 +984,20 @@ validateTypeDef :: Map Name TypeDefinition -> TypeDefinition -> [Diagnostic Type
 validateTypeDef typeMap td =
   concatMap (validateConstructor typeMap td) td.constructors
 
-validateConstructor :: Map Name TypeDefinition -> TypeDefinition -> DataConstructor -> [Diagnostic TypeCheckError]
+validateConstructor ::
+  Map Name TypeDefinition ->
+  TypeDefinition ->
+  DataConstructor ->
+  [Diagnostic TypeCheckError]
 validateConstructor typeMap td dc =
   concatMap (validateFieldType typeMap td dc) dc.conArgs
 
-validateFieldType :: Map Name TypeDefinition -> TypeDefinition -> DataConstructor -> TypeExpr -> [Diagnostic TypeCheckError]
+validateFieldType ::
+  Map Name TypeDefinition ->
+  TypeDefinition ->
+  DataConstructor ->
+  TypeExpr ->
+  [Diagnostic TypeCheckError]
 validateFieldType _ td dc (TypeVar v)
   | v `elem` td.typeVars = []
   | otherwise =
@@ -880,7 +1020,11 @@ validateFieldType typeMap td dc (TypeCon name args) =
               [ Diagnostic
                   Nothing
                   ( AnnP
-                      (UndefinedType (flattenName td.name) (flattenName dc.conName) (flattenName name))
+                      ( UndefinedType
+                          (flattenName td.name)
+                          (flattenName dc.conName)
+                          (flattenName name)
+                      )
                       dummyLoc
                       (Atom "")
                   )

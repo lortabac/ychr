@@ -35,7 +35,20 @@ roundtripTests =
     testCase "assign statement" $
       roundtrip (mkProg [Assign "x" (Lit (BoolLit True))]),
     testCase "if statement" $
-      roundtrip (mkProg [If (Var "x") [Return (Lit (BoolLit True))] [Return (Lit (BoolLit False))]]),
+      roundtrip
+        ( mkProg
+            [ If
+                (Var "x")
+                [Return (Lit (BoolLit True))]
+                [ Return
+                    ( Lit
+                        ( BoolLit
+                            False
+                        )
+                    )
+                ]
+            ]
+        ),
     testCase "foreach statement" $
       roundtrip
         ( mkProg
@@ -119,9 +132,38 @@ roundtripTests =
             ["a", "b"]
             0
             []
-            [ Procedure "tell_a1" ["X"] [Let "id" (CreateConstraint (ConstraintType 0) [Var "X"]), Store (Var "id"), ExprStmt (CallExpr "activate_a1" [Var "id"])],
-              Procedure "activate_a1" ["susp"] [Let "id" (Var "susp"), Let "X" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))), Return (Lit (BoolLit False))],
-              Procedure "reactivate_dispatch" ["susp"] [If (IsConstraintType (Var "susp") (ConstraintType 0)) [ExprStmt (CallExpr "activate_a1" [Var "susp"])] []]
+            [ Procedure
+                "tell_a1"
+                ["X"]
+                [ Let
+                    "id"
+                    ( CreateConstraint
+                        (ConstraintType 0)
+                        [ Var
+                            "X"
+                        ]
+                    ),
+                  Store (Var "id"),
+                  ExprStmt (CallExpr "activate_a1" [Var "id"])
+                ],
+              Procedure
+                "activate_a1"
+                ["susp"]
+                [ Let "id" (Var "susp"),
+                  Let "X" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))),
+                  Return (Lit (BoolLit False))
+                ],
+              Procedure
+                "reactivate_dispatch"
+                ["susp"]
+                [ If
+                    ( IsConstraintType
+                        (Var "susp")
+                        (ConstraintType 0)
+                    )
+                    [ExprStmt (CallExpr "activate_a1" [Var "susp"])]
+                    []
+                ]
             ]
         )
   ]
@@ -132,7 +174,14 @@ roundtrip prog = do
   let vmp = mkVMProg prog
       text = serialize vmp
   case deserialize text of
-    Left e -> assertBool ("deserialization failed: " <> T.unpack e <> "\n\nserialized:\n" <> T.unpack text) False
+    Left e ->
+      assertBool
+        ( "deserialization failed: "
+            <> T.unpack e
+            <> "\n\nserialized:\n"
+            <> T.unpack text
+        )
+        False
     Right vmp' -> vmp' @?= vmp
 
 -- ---------------------------------------------------------------------------
@@ -142,7 +191,9 @@ roundtrip prog = do
 formatTests :: [TestTree]
 formatTests =
   [ testCase "var serialization" $
-      assertContains (serializeProg (mkProg [ExprStmt (Var "x")])) "(program 0 (type-names) 0 (rule-names) (procedure \"p\" () (expr-stmt (var \"x\"))))",
+      assertContains
+        (serializeProg (mkProg [ExprStmt (Var "x")]))
+        "(program 0 (type-names) 0 (rule-names) (procedure \"p\" () (expr-stmt (var \"x\"))))",
     testCase "literals inline without wrapper" $ do
       assertContains (serializeProg (mkProg [Let "x" (Lit (BoolLit True))])) "true"
       assertContains (serializeProg (mkProg [Let "x" (Lit (BoolLit False))])) "false"
@@ -155,8 +206,23 @@ formatTests =
       let vmp =
             VMProgram
               { program = Program 2 ["M:leq", "gcd"] 0 [] [],
-                exportedSet = Set.fromList [Types.QualifiedIdentifier "M" "leq" 2, Types.QualifiedIdentifier "M" "gcd" 1],
-                symbolTable = Types.mkSymbolTable [(Types.Identifier (Types.Qualified "M" "leq") 2, Types.ConstraintType 0), (Types.Identifier (Types.Unqualified "gcd") 1, Types.ConstraintType 1)]
+                exportedSet =
+                  Set.fromList
+                    [ Types.QualifiedIdentifier "M" "leq" 2,
+                      Types.QualifiedIdentifier "M" "gcd" 1
+                    ],
+                symbolTable =
+                  Types.mkSymbolTable
+                    [ ( Types.Identifier
+                          ( Types.Qualified
+                              "M"
+                              "leq"
+                          )
+                          2,
+                        Types.ConstraintType 0
+                      ),
+                      (Types.Identifier (Types.Unqualified "gcd") 1, Types.ConstraintType 1)
+                    ]
               }
           text = serialize vmp
        in case deserialize text of
@@ -177,7 +243,12 @@ mkProg body = Program 0 [] 0 [] [Procedure "p" [] body]
 
 -- | Wrap a Program into a VMProgram with empty metadata.
 mkVMProg :: Program -> VMProgram
-mkVMProg prog = VMProgram {program = prog, exportedSet = Set.empty, symbolTable = Types.mkSymbolTable []}
+mkVMProg prog =
+  VMProgram
+    { program = prog,
+      exportedSet = Set.empty,
+      symbolTable = Types.mkSymbolTable []
+    }
 
 assertContains :: Text -> Text -> IO ()
 assertContains haystack needle =

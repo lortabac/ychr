@@ -100,7 +100,11 @@ validate dir name chrs goals expecteds errors
                 ++ ":"
                 ++ concatMap (("\n  missing .expected or .error for " ++) . (<.> "goal")) gs
                 ++ concatMap (("\n  missing .goal for " ++) . (<.> "expected")) es
-                ++ concatMap (("\n  bare .error not paired with a .goal in mixed dir for " ++) . (<.> "error")) ers
+                ++ concatMap
+                  ( ("\n  bare .error not paired with a .goal in mixed dir for " ++)
+                      . (<.> "error")
+                  )
+                  ers
             )
   | not (null errors) =
       let ecases =
@@ -177,7 +181,14 @@ runGoalNegative spec goalFile errorFile = do
         ("Type errors in " ++ spec.testName ++ ":\n" ++ unlines (map displayMsg errs))
   query <- TIO.readFile goalFile
   expectedCode <- trim <$> readFile errorFile
-  outcome <- try @SomeException $ runProgramWithGoal prog (baseHostCallRegistry <> metaHostCallRegistry) (T.strip query)
+  outcome <-
+    try @SomeException $
+      runProgramWithGoal
+        prog
+        ( baseHostCallRegistry
+            <> metaHostCallRegistry
+        )
+        (T.strip query)
   case outcome of
     Right _ ->
       assertFailure

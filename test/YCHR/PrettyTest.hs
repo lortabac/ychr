@@ -27,7 +27,16 @@ tests =
         prettyTerm (CompoundTerm (Qualified "m" "f") [IntTerm 1])
           @?= "m:f(1)",
       testCase "prettyTerm nested compound" $
-        prettyTerm (CompoundTerm (Unqualified "f") [CompoundTerm (Unqualified "g") [IntTerm 0]])
+        prettyTerm
+          ( CompoundTerm
+              (Unqualified "f")
+              [ CompoundTerm
+                  (Unqualified "g")
+                  [ IntTerm
+                      0
+                  ]
+              ]
+          )
           @?= "f(g(0))",
       testCase "prettyBindings sorted with trailing newline" $
         prettyBindings (Map.fromList [("R", IntTerm 55), ("X", VarTerm "X")])

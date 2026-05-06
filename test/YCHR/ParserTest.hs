@@ -72,19 +72,32 @@ directiveTests =
         fmap (.node) . (.exports) <$> p ":- module(order, [leq/2, foo/1])."
           @?= Right (Just [ConstraintDecl "leq" 2 Nothing, ConstraintDecl "foo" 1 Nothing]),
       testCase "use_module" $
-        (map (.node) . (.imports)) <$> p ":- use_module(stdlib)." @?= Right [ModuleImport "stdlib" Nothing],
+        (map (.node) . (.imports))
+          <$> p ":- use_module(stdlib)."
+          @?= Right [ModuleImport "stdlib" Nothing],
       testCase "multiple use_module" $
         (map (.node) . (.imports))
           <$> p ":- use_module(stdlib).\n:- use_module(lists)."
           @?= Right [ModuleImport "stdlib" Nothing, ModuleImport "lists" Nothing],
       testCase "use_module library" $
-        (map (.node) . (.imports)) <$> p ":- use_module(library(mylib))." @?= Right [LibraryImport "mylib" Nothing],
+        (map (.node) . (.imports))
+          <$> p ":- use_module(library(mylib))."
+          @?= Right [LibraryImport "mylib" Nothing],
       testCase "use_module with import list" $
         (map (.node) . (.imports)) <$> p ":- use_module(order, [leq/2])."
           @?= Right [ModuleImport "order" (Just [ConstraintDecl "leq" 2 Nothing])],
       testCase "use_module library with import list" $
-        (map (.node) . (.imports)) <$> p ":- use_module(library(mylib), [foo/1, type(tree/0)])."
-          @?= Right [LibraryImport "mylib" (Just [ConstraintDecl "foo" 1 Nothing, TypeExportDecl "tree" 0])],
+        (map (.node) . (.imports))
+          <$> p ":- use_module(library(mylib), [foo/1, type(tree/0)])."
+          @?= Right
+            [ LibraryImport
+                "mylib"
+                ( Just
+                    [ ConstraintDecl "foo" 1 Nothing,
+                      TypeExportDecl "tree" 0
+                    ]
+                )
+            ],
       testCase "chr_constraint single" $
         (map (.node) . (.decls)) <$> p ":- chr_constraint leq/2."
           @?= Right [ConstraintDecl "leq" 2 Nothing],
@@ -105,7 +118,16 @@ directiveTests =
           @?= Right [ConstraintDecl "leq" 2 Nothing],
       testCase "chr_constraint typed" $
         (map (.node) . (.decls)) <$> p ":- chr_constraint leq(int, int)."
-          @?= Right [ConstraintDecl "leq" 2 (Just [TypeCon (Unqualified "int") [], TypeCon (Unqualified "int") []])],
+          @?= Right
+            [ ConstraintDecl
+                "leq"
+                2
+                ( Just
+                    [ TypeCon (Unqualified "int") [],
+                      TypeCon (Unqualified "int") []
+                    ]
+                )
+            ],
       testCase "chr_constraint typed with type variables" $
         (map (.node) . (.decls)) <$> p ":- chr_constraint foo(list(T), T)."
           @?= Right
@@ -186,7 +208,17 @@ termTests =
           >>= (@?= [CompoundTerm (Unqualified "foo") [VarTerm "X", IntTerm 1]]),
       testCase "nested compound" $
         bodyOf "c <=> f(g(X))."
-          >>= (@?= [CompoundTerm (Unqualified "f") [CompoundTerm (Unqualified "g") [VarTerm "X"]]])
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "f")
+                      [ CompoundTerm
+                          (Unqualified "g")
+                          [ VarTerm
+                              "X"
+                          ]
+                      ]
+                  ]
+              )
     ]
 
 -- ---------------------------------------------------------------------------
@@ -227,7 +259,13 @@ operatorTests =
           >>= ( @?=
                   [ CompoundTerm
                       (Unqualified "is")
-                      [VarTerm "N", CompoundTerm (Qualified "host" "+") [VarTerm "X", IntTerm 1]]
+                      [ VarTerm "N",
+                        CompoundTerm
+                          (Qualified "host" "+")
+                          [ VarTerm "X",
+                            IntTerm 1
+                          ]
+                      ]
                   ]
               ),
       testCase "qualified name in term" $
@@ -257,7 +295,16 @@ ruleTests =
           @?= Right
             [ Rule
                 (Just (noAnn "refl"))
-                (noAnnP (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
+                ( noAnnP
+                    ( Simplification
+                        [ Constraint
+                            (Unqualified "leq")
+                            [ VarTerm "X",
+                              VarTerm "X"
+                            ]
+                        ]
+                    )
+                )
                 (noAnnP [])
                 (noAnnP [AtomTerm "true"])
             ],
@@ -266,7 +313,16 @@ ruleTests =
           @?= Right
             [ Rule
                 Nothing
-                (noAnnP (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
+                ( noAnnP
+                    ( Simplification
+                        [ Constraint
+                            (Unqualified "leq")
+                            [ VarTerm "X",
+                              VarTerm "X"
+                            ]
+                        ]
+                    )
+                )
                 (noAnnP [])
                 (noAnnP [AtomTerm "true"])
             ],
@@ -304,7 +360,16 @@ ruleTests =
           @?= Right
             [ Rule
                 (Just (noAnn "r"))
-                (noAnnP (Simplification [Constraint (Unqualified "c") [VarTerm "X", VarTerm "Y"]]))
+                ( noAnnP
+                    ( Simplification
+                        [ Constraint
+                            (Unqualified "c")
+                            [ VarTerm "X",
+                              VarTerm "Y"
+                            ]
+                        ]
+                    )
+                )
                 (noAnnP [CompoundTerm (Unqualified "g") [VarTerm "X"]])
                 (noAnnP [CompoundTerm (Unqualified "b") [VarTerm "Y"]])
             ],
@@ -340,7 +405,13 @@ typeTests =
                   [ TypeDefinition (Unqualified "tree") [] $
                       [ DataConstructor (Unqualified "empty") [],
                         DataConstructor (Unqualified "leaf") [TypeCon (Unqualified "int") []],
-                        DataConstructor (Unqualified "branch") [TypeCon (Unqualified "tree") [], TypeCon (Unqualified "tree") []]
+                        DataConstructor
+                          (Unqualified "branch")
+                          [ TypeCon
+                              (Unqualified "tree")
+                              [],
+                            TypeCon (Unqualified "tree") []
+                          ]
                       ]
                   ]
               ),
@@ -357,7 +428,11 @@ typeTests =
           >>= ( @?=
                   [ TypeDefinition (Unqualified "list") ["T"] $
                       [ DataConstructor (Unqualified "[]") [],
-                        DataConstructor (Unqualified ".") [TypeVar "T", TypeCon (Unqualified "list") [TypeVar "T"]]
+                        DataConstructor
+                          (Unqualified ".")
+                          [ TypeVar "T",
+                            TypeCon (Unqualified "list") [TypeVar "T"]
+                          ]
                       ]
                   ]
               ),
@@ -365,7 +440,12 @@ typeTests =
         typeDefsOf ":- chr_type nested ---> wrap(pair(int, int))."
           >>= ( @?=
                   [ TypeDefinition (Unqualified "nested") [] $
-                      [ DataConstructor (Unqualified "wrap") [TypeCon (Unqualified "pair") [TypeCon (Unqualified "int") [], TypeCon (Unqualified "int") []]]
+                      [ DataConstructor
+                          (Unqualified "wrap")
+                          [ TypeCon
+                              (Unqualified "pair")
+                              [TypeCon (Unqualified "int") [], TypeCon (Unqualified "int") []]
+                          ]
                       ]
                   ]
               ),
@@ -403,7 +483,16 @@ moduleTests =
                 []
                 [ Rule
                     (Just (noAnn "refl"))
-                    (noAnnP (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
+                    ( noAnnP
+                        ( Simplification
+                            [ Constraint
+                                (Unqualified "leq")
+                                [ VarTerm "X",
+                                  VarTerm "X"
+                                ]
+                            ]
+                        )
+                    )
                     (noAnnP [])
                     (noAnnP [AtomTerm "true"]),
                   Rule
@@ -464,10 +553,36 @@ commentTests =
     "comments"
     [ testCase "line comment before rule" $
         (map stripRuleLoc . (.rules)) <$> p "% a comment\nfoo <=> bar."
-          @?= Right [Rule Nothing (noAnnP (Simplification [Constraint (Unqualified "foo") []])) (noAnnP []) (noAnnP [AtomTerm "bar"])],
+          @?= Right
+            [ Rule
+                Nothing
+                ( noAnnP
+                    ( Simplification
+                        [ Constraint
+                            (Unqualified "foo")
+                            []
+                        ]
+                    )
+                )
+                (noAnnP [])
+                (noAnnP [AtomTerm "bar"])
+            ],
       testCase "inline comment after rule" $
         (map stripRuleLoc . (.rules)) <$> p "foo <=> bar. % comment"
-          @?= Right [Rule Nothing (noAnnP (Simplification [Constraint (Unqualified "foo") []])) (noAnnP []) (noAnnP [AtomTerm "bar"])],
+          @?= Right
+            [ Rule
+                Nothing
+                ( noAnnP
+                    ( Simplification
+                        [ Constraint
+                            (Unqualified "foo")
+                            []
+                        ]
+                    )
+                )
+                (noAnnP [])
+                (noAnnP [AtomTerm "bar"])
+            ],
       testCase "only comments parses to empty module" $
         (.rules) <$> p "% just a comment\n% another"
           @?= Right []
@@ -518,7 +633,9 @@ firstPassTests =
       testCase "skips type exports" $
         ops ":- module(m, [type(bool/0), op(500, yfx, '+')])." @?= Right [OpDecl 500 Yfx "+"],
       testCase "type export among many entries" $
-        ops ":- module(m, [leq/2, type(tree/0), op(400, yfx, '*'), type(list/1)])." @?= Right [OpDecl 400 Yfx "*"],
+        ops ":- module(m, [leq/2, type(tree/0), op(400, yfx, '*'), type(list/1)])."
+          @?= Right
+            [OpDecl 400 Yfx "*"],
       testCase "no module directive returns empty exports" $
         ops ":- chr_constraint leq/2." @?= Right [],
       testCase "empty export list returns empty" $
@@ -527,7 +644,10 @@ firstPassTests =
         hdrImports ":- module(m, []). :- use_module(foo). :- use_module(library(bar))."
           @?= Right [ModuleImport "foo" Nothing, LibraryImport "bar" Nothing],
       testCase "stops collecting imports at the first non-import directive" $
-        hdrImports ":- module(m, []). :- use_module(foo). :- chr_constraint c/1. :- use_module(bar)."
+        hdrImports
+          ( ":- module(m, []). :- use_module(foo). "
+              <> ":- chr_constraint c/1. :- use_module(bar)."
+          )
           @?= Right [ModuleImport "foo" Nothing],
       testCase "import lists with op() entries parse" $
         hdrImports ":- module(m, []). :- use_module(foo, [op(700, xfx, '<-')])."
@@ -535,7 +655,13 @@ firstPassTests =
       testCase "skips fun name/arity entries" $
         ops ":- module(m, [fun double/1, op(500, yfx, '+')])." @?= Right [OpDecl 500 Yfx "+"],
       testCase "fun name/arity and name/arity coexist in export list" $
-        ops ":- module(m, [leq/2, fun double/1, op(700, xfx, '<')])." @?= Right [OpDecl 700 Xfx "<"]
+        ops ":- module(m, [leq/2, fun double/1, op(700, xfx, '<')])."
+          @?= Right
+            [ OpDecl
+                700
+                Xfx
+                "<"
+            ]
     ]
 
 -- ---------------------------------------------------------------------------

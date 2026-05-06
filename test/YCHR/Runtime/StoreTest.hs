@@ -251,7 +251,11 @@ iterationTests =
           liftIO $ case suspArg s 1 of VAtom "y" -> pure (); _ -> assertBool "arg 1" False
     ]
   where
-    filterByArg :: (CHRStore :> es, Unify :> es) => Int -> Value -> [Suspension] -> Eff es [Suspension]
+    filterByArg ::
+      ( CHRStore :> es,
+        Unify :> es
+      ) =>
+      Int -> Value -> [Suspension] -> Eff es [Suspension]
     filterByArg _ _ [] = pure []
     filterByArg idx val (s : ss) = do
       alive <- isSuspAlive s

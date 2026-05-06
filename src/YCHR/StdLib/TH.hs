@@ -12,7 +12,14 @@ import Language.Haskell.TH.Syntax (Lift (..), addDependentFile, unsafeCodeCoerce
 import System.Directory (listDirectory)
 import System.FilePath (dropExtension, takeExtension, takeFileName, (</>))
 import YCHR.Parsed (Module)
-import YCHR.Parser (ModuleHeader (..), OpTable, builtinOps, collectModuleHeader, mergeOps, parseModuleWith)
+import YCHR.Parser
+  ( ModuleHeader (..),
+    OpTable,
+    builtinOps,
+    collectModuleHeader,
+    mergeOps,
+    parseModuleWith,
+  )
 
 readLibraries :: Code Q (Map Text Module)
 readLibraries = unsafeCodeCoerce $ do
@@ -47,5 +54,6 @@ parseLib table (path, contents) =
    in case parseModuleWith table path (T.pack contents) of
         Left err -> fail ("Failed to parse library " ++ path ++ ": " ++ show err)
         Right (m, errs)
-          | not (null errs) -> fail ("Validation errors in library " ++ path ++ ": " ++ show errs)
+          | not (null errs) ->
+              fail ("Validation errors in library " ++ path ++ ": " ++ show errs)
           | otherwise -> pure (name, m)

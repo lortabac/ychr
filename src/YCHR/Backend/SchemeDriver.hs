@@ -49,7 +49,15 @@ generateDriver moduleName constraint =
                 ++ [")"]
             _ ->
               [ "(let ((%s (%init!)))",
-                "  (let* (" <> T.intercalate "\n         " ["(" <> v <> " (make-var %s))" | v <- varNames] <> ")"
+                "  (let* ("
+                  <> T.intercalate
+                    "\n         "
+                    [ "("
+                        <> v
+                        <> " (make-var %s))"
+                    | v <- varNames
+                    ]
+                  <> ")"
               ]
                 ++ body
                 ++ ["))"]
@@ -71,7 +79,11 @@ termToScheme (CompoundTerm (Types.Unqualified ".") [h, t]) =
 termToScheme (CompoundTerm (Types.Qualified m n) ts) =
   let flat = m <> "__" <> n
       argExprs = map termToScheme ts
-   in "(make-term " <> printSExpr (compileSymbol flat) <> " (vector " <> T.intercalate " " argExprs <> "))"
+   in "(make-term "
+        <> printSExpr (compileSymbol flat)
+        <> " (vector "
+        <> T.intercalate " " argExprs
+        <> "))"
 termToScheme (CompoundTerm (Types.Unqualified n) ts) =
   let symExpr = compileSymbol n
       argExprs = map termToScheme ts

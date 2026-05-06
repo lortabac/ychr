@@ -82,7 +82,11 @@ constraintToPExpr (Constraint (Unqualified name) args) =
 constraintToPExpr (Constraint (Qualified m name) []) =
   PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom name)]
 constraintToPExpr (Constraint (Qualified m name) args) =
-  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Compound name (map (noAnn . termToPExpr) args))]
+  PE.Compound
+    ":"
+    [ noAnn (PE.Atom m),
+      noAnn (PE.Compound name (map (noAnn . termToPExpr) args))
+    ]
 
 -- | Convert a parsed 'P.Head' to a 'PE.PExpr'.
 headToPExpr :: P.Head -> PE.PExpr
@@ -171,7 +175,11 @@ runtimeToPExpr (CompoundTerm (Unqualified "prelude__.") args) =
 runtimeToPExpr (CompoundTerm (Qualified m f) []) =
   PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom f)]
 runtimeToPExpr (CompoundTerm (Qualified m f) args) =
-  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Compound f (map (noAnn . runtimeToPExpr) args))]
+  PE.Compound
+    ":"
+    [ noAnn (PE.Atom m),
+      noAnn (PE.Compound f (map (noAnn . runtimeToPExpr) args))
+    ]
 runtimeToPExpr (CompoundTerm (Unqualified f) args) =
   PE.Compound f (map (noAnn . runtimeToPExpr) args)
 runtimeToPExpr (IntTerm n) = PE.Int n
@@ -191,7 +199,11 @@ unquoteToPExpr (CompoundTerm (Unqualified f) args) =
 unquoteToPExpr (CompoundTerm (Qualified m f) []) =
   PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom f)]
 unquoteToPExpr (CompoundTerm (Qualified m f) args) =
-  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Compound f (map (noAnn . unquoteToPExpr) args))]
+  PE.Compound
+    ":"
+    [ noAnn (PE.Atom m),
+      noAnn (PE.Compound f (map (noAnn . unquoteToPExpr) args))
+    ]
 unquoteToPExpr t = runtimeToPExpr t
 
 -- ---------------------------------------------------------------------------

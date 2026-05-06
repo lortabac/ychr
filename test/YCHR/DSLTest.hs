@@ -52,7 +52,16 @@ moduleTests =
         module' "Foo" @?= Module "Foo" [] [] [] [] [] Nothing,
       testCase "importing sets modImports" $
         module' "Foo" `importing` ["Bar", "Baz"]
-          @?= Module "Foo" [noAnnP (ModuleImport "Bar" Nothing), noAnnP (ModuleImport "Baz" Nothing)] [] [] [] [] Nothing,
+          @?= Module
+            "Foo"
+            [ noAnnP (ModuleImport "Bar" Nothing),
+              noAnnP (ModuleImport "Baz" Nothing)
+            ]
+            []
+            []
+            []
+            []
+            Nothing,
       testCase "declaring sets modDecls" $
         module' "Foo" `declaring` ["leq" // 2]
           @?= Module "Foo" [] [noAnn (ConstraintDecl "leq" 2 Nothing)] [] [] [] Nothing,
@@ -66,7 +75,20 @@ moduleTests =
               `importing` ["A"]
               `declaring` ["c" // 0]
               `defining` [r]
-              @?= Module "M" [noAnnP (ModuleImport "A" Nothing)] [noAnn (ConstraintDecl "c" 0 Nothing)] [] [r] [] Nothing,
+              @?= Module
+                "M"
+                [noAnnP (ModuleImport "A" Nothing)]
+                [ noAnn
+                    ( ConstraintDecl
+                        "c"
+                        0
+                        Nothing
+                    )
+                ]
+                []
+                [r]
+                []
+                Nothing,
       testCase "exporting sets modExports" $
         module' "Foo" `exporting` ["leq" // 2]
           @?= Module "Foo" [] [] [] [] [] (Just (noAnnP [ConstraintDecl "leq" 2 Nothing]))
@@ -88,16 +110,41 @@ ruleTests =
     "rule"
     [ testCase "(<=>): simplification rule" $
         [con "a" []] <=> [atom "true"]
-          @?= Rule Nothing (noAnnP (Simplification [con "a" []])) (noAnnP []) (noAnnP [atom "true"]),
+          @?= Rule
+            Nothing
+            (noAnnP (Simplification [con "a" []]))
+            (noAnnP [])
+            ( noAnnP
+                [ atom
+                    "true"
+                ]
+            ),
       testCase "(==>): propagation rule" $
         [con "a" []] ==> [func "b" []]
-          @?= Rule Nothing (noAnnP (Propagation [con "a" []])) (noAnnP []) (noAnnP [func "b" []]),
+          @?= Rule
+            Nothing
+            (noAnnP (Propagation [con "a" []]))
+            (noAnnP [])
+            ( noAnnP
+                [ func
+                    "b"
+                    []
+                ]
+            ),
       testCase "(\\): simpagation rule" $
         ([con "k" []] \\ [con "r" []]) [atom "true"]
-          @?= Rule Nothing (noAnnP (Simpagation [con "k" []] [con "r" []])) (noAnnP []) (noAnnP [atom "true"]),
+          @?= Rule
+            Nothing
+            (noAnnP (Simpagation [con "k" []] [con "r" []]))
+            (noAnnP [])
+            (noAnnP [atom "true"]),
       testCase "(@:): sets rule name" $
         "my_rule" @: ([con "a" []] <=> [atom "true"])
-          @?= Rule (Just (noAnn "my_rule")) (noAnnP (Simplification [con "a" []])) (noAnnP []) (noAnnP [atom "true"]),
+          @?= Rule
+            (Just (noAnn "my_rule"))
+            (noAnnP (Simplification [con "a" []]))
+            (noAnnP [])
+            (noAnnP [atom "true"]),
       testCase "(|-): sets rule guard" $
         ([con "a" [var "X"]] <=> [atom "true"]) |- [var "X" .=. atom "zero"]
           @?= Rule
@@ -159,7 +206,16 @@ integrationTests =
             []
             [ Rule
                 (Just (noAnn "refl"))
-                (noAnnP (Simplification [Constraint (Unqualified "leq") [VarTerm "X", VarTerm "X"]]))
+                ( noAnnP
+                    ( Simplification
+                        [ Constraint
+                            (Unqualified "leq")
+                            [ VarTerm "X",
+                              VarTerm "X"
+                            ]
+                        ]
+                    )
+                )
                 (noAnnP [])
                 (noAnnP [AtomTerm "true"])
             ]

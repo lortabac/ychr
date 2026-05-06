@@ -17,7 +17,14 @@ import YCHR.Parser (parseConstraint)
 import YCHR.Pretty (prettyBindings)
 import YCHR.Rename (renameQueryArgs)
 import YCHR.Repl qualified as Repl
-import YCHR.Run (CompiledProgram (..), Error (..), Warning, compileFiles, resolveQueryConstraint, runProgramWithGoal)
+import YCHR.Run
+  ( CompiledProgram (..),
+    Error (..),
+    Warning,
+    compileFiles,
+    resolveQueryConstraint,
+    runProgramWithGoal,
+  )
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
 import YCHR.TypeCheck (typeCheckProgram)
 import YCHR.Types (Constraint (..))
@@ -83,9 +90,28 @@ compileParser :: Parser Command
 compileParser =
   Compile
     <$> ( CompileOpts
-            <$> strOption (long "output-dir" <> short 'd' <> metavar "DIR" <> help "Output directory" <> value ".")
-            <*> optional (strOption (short 'n' <> long "base-name" <> metavar "NAME" <> help "Base name for generated files (default: program)"))
-            <*> option targetReader (short 't' <> metavar "TARGET" <> help "Target (vm, scheme)" <> value TargetVM)
+            <$> strOption
+              ( long "output-dir"
+                  <> short 'd'
+                  <> metavar "DIR"
+                  <> help "Output directory"
+                  <> value "."
+              )
+            <*> optional
+              ( strOption
+                  ( short 'n'
+                      <> long "base-name"
+                      <> metavar "NAME"
+                      <> help "Base name for generated files (default: program)"
+                  )
+              )
+            <*> option
+              targetReader
+              ( short 't'
+                  <> metavar "TARGET"
+                  <> help "Target (vm, scheme)"
+                  <> value TargetVM
+              )
         )
     <*> filesArg
 
@@ -103,10 +129,31 @@ checkParser = Check <$> filesArg
 commandParser :: Parser Command
 commandParser =
   subparser
-    ( command "repl" (info (replParser <**> helper) (progDesc "Start the interactive REPL (default)"))
+    ( command
+        "repl"
+        ( info
+            (replParser <**> helper)
+            ( progDesc
+                "Start the interactive REPL (default)"
+            )
+        )
         <> command "run" (info (runParser <**> helper) (progDesc "Compile and run a goal"))
-        <> command "compile" (info (compileParser <**> helper) (progDesc "Compile to a target format"))
-        <> command "gen-driver" (info (genDriverParser <**> helper) (progDesc "Generate a Scheme driver script for a goal"))
+        <> command
+          "compile"
+          ( info
+              (compileParser <**> helper)
+              ( progDesc
+                  "Compile to a target format"
+              )
+          )
+        <> command
+          "gen-driver"
+          ( info
+              (genDriverParser <**> helper)
+              ( progDesc
+                  "Generate a Scheme driver script for a goal"
+              )
+          )
         <> command "check" (info (checkParser <**> helper) (progDesc "Type-check the program"))
     )
     <|> replParser
@@ -143,7 +190,12 @@ runCompile :: CompileOpts -> [FilePath] -> IO ()
 runCompile opts files = withCompiled includeStdlib files $ \prog warnings -> do
   printWarnings warnings
   typeCheckOrExit prog
-  let vmp = VMProgram {program = prog.program, exportedSet = prog.exportedSet, symbolTable = prog.symbolTable}
+  let vmp =
+        VMProgram
+          { program = prog.program,
+            exportedSet = prog.exportedSet,
+            symbolTable = prog.symbolTable
+          }
       name = maybe (T.pack "program") T.pack opts.baseName
   case opts.target of
     TargetVM -> do

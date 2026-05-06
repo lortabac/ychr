@@ -9,7 +9,19 @@ import Data.Text (Text)
 import Effectful (Eff, (:>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Run (CompiledProgram (..), ConstraintType, Value (..), compileModules, equal, newVar, resolveQueryConstraint, runProgramWithGoal, tellConstraint, toSessionInput, withCHR)
+import YCHR.Run
+  ( CompiledProgram (..),
+    ConstraintType,
+    Value (..),
+    compileModules,
+    equal,
+    newVar,
+    resolveQueryConstraint,
+    runProgramWithGoal,
+    tellConstraint,
+    toSessionInput,
+    withCHR,
+  )
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive)
 import YCHR.Runtime.Types (RuntimeVal (..))
@@ -142,17 +154,26 @@ fibSource =
   \\n\
   \base0 @ fib(0, R) <=> R = 0.\n\
   \base1 @ fib(1, R) <=> R = 1.\n\
-  \rec @ fib(N, R) <=> N1 is host:'-'(N, 1), N2 is host:'-'(N, 2), fib(N1, R1), fib(N2, R2), Tmp is host:'+'(R1, R2), R = Tmp.\n"
+  \rec @ fib(N, R) <=> N1 is host:'-'(N, 1), N2 is host:'-'(N, 2), \
+  \fib(N1, R1), fib(N2, R2), Tmp is host:'+'(R1, R2), R = Tmp.\n"
 
 extractIntArgs :: String -> [RuntimeVal] -> (Int, Int)
 extractIntArgs _ [RVal (VInt a), RVal (VInt b)] = (a, b)
-extractIntArgs context vals = error $ context ++ ": expected 2 Int arguments, got " ++ show (length vals)
+extractIntArgs context vals =
+  error $
+    context ++ ": expected 2 Int arguments, got " ++ show (length vals)
 
 fibHostCalls :: HostCallRegistry
 fibHostCalls =
   Map.fromList
-    [ (VM.Name "+", HostCallFn $ \args -> let (a, b) = extractIntArgs "+" args in pure (RVal (VInt (a + b)))),
-      (VM.Name "-", HostCallFn $ \args -> let (a, b) = extractIntArgs "-" args in pure (RVal (VInt (a - b))))
+    [ ( VM.Name "+",
+        HostCallFn $ \args ->
+          let (a, b) = extractIntArgs "+" args in pure (RVal (VInt (a + b)))
+      ),
+      ( VM.Name "-",
+        HostCallFn $ \args ->
+          let (a, b) = extractIntArgs "-" args in pure (RVal (VInt (a - b)))
+      )
     ]
 
 fibTests :: TestTree
@@ -212,7 +233,9 @@ visibilityTests =
         let q = Constraint (Unqualified "visible") [VarTerm "X"]
         case resolveQueryConstraint cp q of
           Right (Constraint (Qualified "pub" "visible") _) -> pure ()
-          other -> assertFailure $ "Expected Right (Qualified pub visible), got: " ++ show other,
+          other ->
+            assertFailure $
+              "Expected Right (Qualified pub visible), got: " ++ show other,
       testCase "unqualified hidden constraint fails" $ do
         cp <- compileOrFail [("secret.chr", hiddenSource)]
         let q = Constraint (Unqualified "hidden") [VarTerm "X"]
@@ -226,11 +249,22 @@ visibilityTests =
       testCase "qualified hidden constraint fails" $ do
         cp <- compileOrFail [("secret.chr", hiddenSource)]
         let q = Constraint (Qualified "secret" "hidden") [VarTerm "X"]
-        assertBool "Should fail for hidden qualified constraint" (isLeft (resolveQueryConstraint cp q)),
+        assertBool
+          "Should fail for hidden qualified constraint"
+          ( isLeft
+              (resolveQueryConstraint cp q)
+          ),
       testCase "qualified non-exported internal constraint fails" $ do
         cp <- compileOrFail [("pub.chr", exportedSource)]
         let q = Constraint (Qualified "pub" "internal") [VarTerm "X"]
-        assertBool "Should fail for non-exported constraint" (isLeft (resolveQueryConstraint cp q)),
+        assertBool
+          "Should fail for non-exported constraint"
+          ( isLeft
+              ( resolveQueryConstraint
+                  cp
+                  q
+              )
+          ),
       testCase "ambiguous unqualified name fails" $ do
         cp <-
           compileOrFail
@@ -238,7 +272,14 @@ visibilityTests =
               ("b.chr", ambiguousSourceB)
             ]
         let q = Constraint (Unqualified "foo") [VarTerm "X"]
-        assertBool "Should fail for ambiguous constraint" (isLeft (resolveQueryConstraint cp q)),
+        assertBool
+          "Should fail for ambiguous constraint"
+          ( isLeft
+              ( resolveQueryConstraint
+                  cp
+                  q
+              )
+          ),
       testCase "ambiguous name resolved with qualification" $ do
         cp <-
           compileOrFail

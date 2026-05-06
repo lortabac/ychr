@@ -110,7 +110,13 @@ checkEquations cNames mods = snd $ foldl go (Set.empty, []) allEqs
             qid `Set.notMember` seen ->
               ( Set.insert qid seen,
                 errs
-                  ++ [noDiag (P.AnnP (ConstraintHasEquations annEq.node.funName) annEq.sourceLoc annEq.parsed)]
+                  ++ [ noDiag
+                         ( P.AnnP
+                             (ConstraintHasEquations annEq.node.funName)
+                             annEq.sourceLoc
+                             annEq.parsed
+                         )
+                     ]
               )
         _ -> (seen, errs)
 
@@ -123,7 +129,9 @@ checkRuleHeads fNames mods = snd $ foldl go (Set.empty, []) allRules
     go (seen, errs) (r, _m) =
       let cs = headConstraints r.head.node
           new =
-            [ (c.name, noDiag (P.AnnP (FunctionInRuleHead c.name) r.head.sourceLoc r.head.parsed))
+            [ ( c.name,
+                noDiag (P.AnnP (FunctionInRuleHead c.name) r.head.sourceLoc r.head.parsed)
+              )
             | c <- cs,
               c.name `Set.member` fNames,
               c.name `Set.notMember` seen
@@ -183,7 +191,18 @@ resolveFunctions mods =
           P.FunctionDecl {} <- [d]
         ]
       -- Group by (qualifiedName, arity)
-      grouped = Map.toList $ Map.fromListWith (++) [((qn, ar), [(d, m)]) | (qn, ar, d, m) <- allDecls]
+      grouped =
+        Map.toList $
+          Map.fromListWith
+            (++)
+            [ ((qn, ar), [(d, m)])
+            | ( qn,
+                ar,
+                d,
+                m
+                ) <-
+                allDecls
+            ]
    in [ R.FunctionDef
           { name = qn,
             arity = ar,
@@ -211,9 +230,18 @@ gatherEquations mods m d =
   let qualName = Qualified m.name d.name
       matchingEqs
         | d.isOpen =
-            [annEq | mod_ <- mods, annEq <- mod_.equations, annEq.node.funName == qualName, length annEq.node.args == d.arity]
+            [ annEq
+            | mod_ <- mods,
+              annEq <- mod_.equations,
+              annEq.node.funName == qualName,
+              length annEq.node.args == d.arity
+            ]
         | otherwise =
-            [annEq | annEq <- m.equations, annEq.node.funName == qualName, length annEq.node.args == d.arity]
+            [ annEq
+            | annEq <- m.equations,
+              annEq.node.funName == qualName,
+              length annEq.node.args == d.arity
+            ]
    in map stripFunName matchingEqs
 
 stripFunName :: P.AnnP P.FunctionEquation -> P.AnnP R.FunctionEquation

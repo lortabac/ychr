@@ -10,7 +10,14 @@ where
 
 import Data.List (intercalate)
 import Data.Text qualified as T
-import System.Console.ANSI (Color (..), ColorIntensity (..), ConsoleIntensity (..), ConsoleLayer (..), SGR (..), setSGRCode)
+import System.Console.ANSI
+  ( Color (..),
+    ColorIntensity (..),
+    ConsoleIntensity (..),
+    ConsoleLayer (..),
+    SGR (..),
+    setSGRCode,
+  )
 import YCHR.Loc (SourceLoc (..), dummyLoc)
 import YCHR.VM (StackFrame (..))
 
@@ -34,8 +41,32 @@ displayRuntimeError msg [] =
 displayRuntimeError msg (top : rest) =
   intercalate
     "\n"
-    ( formatFrame "runtime error" Magenta msg top.frameSourceLoc (Just (T.unpack top.frameLabel)) (Just (T.unpack top.frameSourceCode))
-        : map (\frame -> formatFrame "stack trace" Cyan "" frame.frameSourceLoc (Just (T.unpack frame.frameLabel)) (Just (T.unpack frame.frameSourceCode))) rest
+    ( formatFrame
+        "runtime error"
+        Magenta
+        msg
+        top.frameSourceLoc
+        ( Just
+            ( T.unpack
+                top.frameLabel
+            )
+        )
+        (Just (T.unpack top.frameSourceCode))
+        : map
+          ( \frame ->
+              formatFrame
+                "stack trace"
+                Cyan
+                ""
+                frame.frameSourceLoc
+                ( Just
+                    ( T.unpack
+                        frame.frameLabel
+                    )
+                )
+                (Just (T.unpack frame.frameSourceCode))
+          )
+          rest
     )
 
 -- | Format a single diagnostic frame.  Mirrors the layout of
@@ -55,9 +86,27 @@ formatFrame sev color msg loc maybeLabel maybeNode =
         ++ ": "
         ++ runtimeErrorCode
         ++ "\n"
-        ++ maybe "" (\l -> setSGRCode [SetConsoleIntensity BoldIntensity] ++ "<<" ++ l ++ ">>" ++ r ++ "\n") maybeLabel
+        ++ maybe
+          ""
+          ( \l ->
+              setSGRCode [SetConsoleIntensity BoldIntensity]
+                ++ "<<"
+                ++ l
+                ++ ">>"
+                ++ r
+                ++ "\n"
+          )
+          maybeLabel
         ++ (if null msg then "" else msg)
-        ++ maybe "" (\n -> (if null msg then "" else "\n") ++ setSGRCode [SetItalicized True] ++ n ++ setSGRCode [SetItalicized False]) maybeNode
+        ++ maybe
+          ""
+          ( \n ->
+              (if null msg then "" else "\n")
+                ++ setSGRCode [SetItalicized True]
+                ++ n
+                ++ setSGRCode [SetItalicized False]
+          )
+          maybeNode
         ++ "\n"
         ++ r
 

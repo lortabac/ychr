@@ -8,7 +8,20 @@ import Effectful.Writer.Static.Local (Writer, runWriter)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import YCHR.Runtime.Types (SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (Unify, addObserver, deref, equal, getArg, getVarId, makeTerm, matchTerm, newVar, runUnify, unifiable, unify)
+import YCHR.Runtime.Var
+  ( Unify,
+    addObserver,
+    deref,
+    equal,
+    getArg,
+    getVarId,
+    makeTerm,
+    matchTerm,
+    newVar,
+    runUnify,
+    unifiable,
+    unify,
+  )
 
 tests :: TestTree
 tests =
@@ -37,13 +50,23 @@ runTestEnv_ :: Eff [Writer [SuspensionId], Unify, IOE] a -> IO a
 runTestEnv_ m = fst <$> runTestEnv m
 
 -- | Assert that unification succeeds.
-assertUnifySuccess :: (Writer [SuspensionId] :> es, Unify :> es, IOE :> es) => Value -> Value -> Eff es ()
+assertUnifySuccess ::
+  ( Writer [SuspensionId] :> es,
+    Unify :> es,
+    IOE :> es
+  ) =>
+  Value -> Value -> Eff es ()
 assertUnifySuccess a b = do
   ok <- unify a b
   liftIO $ assertBool "unify should succeed" ok
 
 -- | Assert that unification fails.
-assertUnifyFailure :: (Writer [SuspensionId] :> es, Unify :> es, IOE :> es) => Value -> Value -> Eff es ()
+assertUnifyFailure ::
+  ( Writer [SuspensionId] :> es,
+    Unify :> es,
+    IOE :> es
+  ) =>
+  Value -> Value -> Eff es ()
 assertUnifyFailure a b = do
   ok <- unify a b
   liftIO $ assertBool "unify should fail" (not ok)
@@ -111,7 +134,15 @@ unifyTests =
       testCase "Term = Term (different functor)" $ do
         runTestEnv_ $ assertUnifyFailure (makeTerm "f" [VInt 1]) (makeTerm "g" [VInt 1]),
       testCase "Term = Term (different arity)" $ do
-        runTestEnv_ $ assertUnifyFailure (makeTerm "f" [VInt 1]) (makeTerm "f" [VInt 1, VInt 2]),
+        runTestEnv_ $
+          assertUnifyFailure
+            (makeTerm "f" [VInt 1])
+            ( makeTerm
+                "f"
+                [ VInt 1,
+                  VInt 2
+                ]
+            ),
       testCase "Nested terms: f(X, g(1)) = f(2, g(Y))" $ do
         runTestEnv_ $ do
           x <- newVar
@@ -164,13 +195,27 @@ unifiableTests =
   testGroup
     "unifiable"
     [ testCase "Int = Int (same)" $ runUnifiableEnv $ assertUnifiable (VInt 1) (VInt 1) True,
-      testCase "Int = Int (different)" $ runUnifiableEnv $ assertUnifiable (VInt 1) (VInt 2) False,
-      testCase "Atom = Atom (same)" $ runUnifiableEnv $ assertUnifiable (VAtom "a") (VAtom "a") True,
-      testCase "Atom = Atom (different)" $ runUnifiableEnv $ assertUnifiable (VAtom "a") (VAtom "b") False,
-      testCase "Bool = Bool (same)" $ runUnifiableEnv $ assertUnifiable (VBool True) (VBool True) True,
-      testCase "Bool = Bool (different)" $ runUnifiableEnv $ assertUnifiable (VBool True) (VBool False) False,
-      testCase "Text = Text (same)" $ runUnifiableEnv $ assertUnifiable (VText "x") (VText "x") True,
-      testCase "Text = Text (different)" $ runUnifiableEnv $ assertUnifiable (VText "x") (VText "y") False,
+      testCase "Int = Int (different)" $
+        runUnifiableEnv $
+          assertUnifiable (VInt 1) (VInt 2) False,
+      testCase "Atom = Atom (same)" $
+        runUnifiableEnv $
+          assertUnifiable (VAtom "a") (VAtom "a") True,
+      testCase "Atom = Atom (different)" $
+        runUnifiableEnv $
+          assertUnifiable (VAtom "a") (VAtom "b") False,
+      testCase "Bool = Bool (same)" $
+        runUnifiableEnv $
+          assertUnifiable (VBool True) (VBool True) True,
+      testCase "Bool = Bool (different)" $
+        runUnifiableEnv $
+          assertUnifiable (VBool True) (VBool False) False,
+      testCase "Text = Text (same)" $
+        runUnifiableEnv $
+          assertUnifiable (VText "x") (VText "x") True,
+      testCase "Text = Text (different)" $
+        runUnifiableEnv $
+          assertUnifiable (VText "x") (VText "y") False,
       testCase "Same unbound var" $ runUnifiableEnv $ do
         x <- newVar
         assertUnifiable x x True,
@@ -184,7 +229,9 @@ unifiableTests =
       testCase "Ground vs unbound var" $ runUnifiableEnv $ do
         x <- newVar
         assertUnifiable (VInt 42) x True,
-      testCase "Wildcard vs ground" $ runUnifiableEnv $ assertUnifiable VWildcard (VInt 7) True,
+      testCase "Wildcard vs ground" $
+        runUnifiableEnv $
+          assertUnifiable VWildcard (VInt 7) True,
       testCase "Wildcard vs unbound var" $ runUnifiableEnv $ do
         x <- newVar
         assertUnifiable VWildcard x True,
@@ -334,7 +381,16 @@ equalTests =
         r <- runTestEnv_ $ equal (VAtom "x") (VAtom "x")
         r @?= True,
       testCase "Same term structure" $ do
-        r <- runTestEnv_ $ equal (makeTerm "f" [VInt 1, VAtom "a"]) (makeTerm "f" [VInt 1, VAtom "a"])
+        r <-
+          runTestEnv_ $
+            equal
+              (makeTerm "f" [VInt 1, VAtom "a"])
+              ( makeTerm
+                  "f"
+                  [ VInt 1,
+                    VAtom "a"
+                  ]
+              )
         r @?= True,
       testCase "Different term structure" $ do
         r <- runTestEnv_ $ equal (makeTerm "f" [VInt 1]) (makeTerm "f" [VInt 2])

@@ -13,7 +13,13 @@ import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
 import YCHR.Resolve (resolveProgram)
 import YCHR.Resolved qualified as R
-import YCHR.Types (ConstraintType (..), Identifier (..), lookupSymbol, mkSymbolTable, symbolTableSize)
+import YCHR.Types
+  ( ConstraintType (..),
+    Identifier (..),
+    lookupSymbol,
+    mkSymbolTable,
+    symbolTableSize,
+  )
 
 getNode :: AnnP a -> a
 getNode (AnnP n _ _) = n
@@ -95,22 +101,54 @@ hnfTests =
     [ testCase "distinct variables: no change" $ do
         let m = simpleModule (Simplification ["M" .: con "leq" [var "X", var "Y"]])
         rule <- singleRule [m]
-        getNode rule.head @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]]
+        getNode rule.head
+          @?= D.Head
+            []
+            [ Constraint
+                (Qualified "M" "leq")
+                [ VarTerm "X",
+                  VarTerm "Y"
+                ]
+            ]
         getNode rule.guard @?= [],
       testCase "duplicate variable generates equality guard" $ do
         let m = simpleModule (Simplification ["M" .: con "leq" [var "X", var "X"]])
         rule <- singleRule [m]
-        getNode rule.head @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "_hnf_0"]]
+        getNode rule.head
+          @?= D.Head
+            []
+            [ Constraint
+                (Qualified "M" "leq")
+                [ VarTerm "X",
+                  VarTerm "_hnf_0"
+                ]
+            ]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "X") (VarTerm "_hnf_0")],
       testCase "non-variable argument (integer) generates equality guard" $ do
         let m = simpleModule (Simplification ["M" .: con "leq" [var "X", IntTerm 5]])
         rule <- singleRule [m]
-        getNode rule.head @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "_hnf_0"]]
+        getNode rule.head
+          @?= D.Head
+            []
+            [ Constraint
+                (Qualified "M" "leq")
+                [ VarTerm "X",
+                  VarTerm "_hnf_0"
+                ]
+            ]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "_hnf_0") (IntTerm 5)],
       testCase "non-variable argument (atom) generates equality guard" $ do
         let m = simpleModule (Simplification ["M" .: con "leq" [var "X", atom "foo"]])
         rule <- singleRule [m]
-        getNode rule.head @?= D.Head [] [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "_hnf_0"]]
+        getNode rule.head
+          @?= D.Head
+            []
+            [ Constraint
+                (Qualified "M" "leq")
+                [ VarTerm "X",
+                  VarTerm "_hnf_0"
+                ]
+            ]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "_hnf_0") (AtomTerm "foo")],
       testCase "cross-constraint duplicate variable" $ do
         let m =
@@ -168,7 +206,15 @@ hnfTests =
       testCase "wildcard and non-variable: only non-variable gets guard" $ do
         let m = simpleModule (Simplification ["M" .: con "foo" [wildcard, IntTerm 1]])
         rule <- singleRule [m]
-        getNode rule.head @?= D.Head [] [Constraint (Qualified "M" "foo") [Wildcard, VarTerm "_hnf_0"]]
+        getNode rule.head
+          @?= D.Head
+            []
+            [ Constraint
+                (Qualified "M" "foo")
+                [ Wildcard,
+                  VarTerm "_hnf_0"
+                ]
+            ]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "_hnf_0") (IntTerm 1)]
     ]
 
@@ -183,21 +229,63 @@ guardTests =
     [ testCase "== becomes GuardExpr" $ do
         let m =
               module' "M"
-                `defining` [ Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [func "==" [var "X", var "Y"]]) (noAnnP [atom "true"])
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               ( noAnnP
+                                   [ func
+                                       "=="
+                                       [var "X", var "Y"]
+                                   ]
+                               )
+                               (noAnnP [atom "true"])
                            ]
         rule <- singleRule [m]
-        getNode rule.guard @?= [D.GuardExpr (CompoundTerm (Unqualified "==") [VarTerm "X", VarTerm "Y"])],
+        getNode rule.guard
+          @?= [ D.GuardExpr
+                  ( CompoundTerm
+                      (Unqualified "==")
+                      [ VarTerm "X",
+                        VarTerm "Y"
+                      ]
+                  )
+              ],
       testCase "host call becomes GuardExpr" $ do
         let m =
               module' "M"
-                `defining` [ Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [func "gt" [var "X", IntTerm 0]]) (noAnnP [atom "true"])
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               ( noAnnP
+                                   [ func
+                                       "gt"
+                                       [var "X", IntTerm 0]
+                                   ]
+                               )
+                               (noAnnP [atom "true"])
                            ]
         rule <- singleRule [m]
-        getNode rule.guard @?= [D.GuardExpr (CompoundTerm (Unqualified "gt") [VarTerm "X", IntTerm 0])],
+        getNode rule.guard
+          @?= [ D.GuardExpr
+                  ( CompoundTerm
+                      (Unqualified "gt")
+                      [ VarTerm "X",
+                        IntTerm 0
+                      ]
+                  )
+              ],
       testCase "atom true becomes GuardExpr" $ do
         let m =
               module' "M"
-                `defining` [ Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [atom "true"]) (noAnnP [atom "true"])
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               ( noAnnP
+                                   [ atom
+                                       "true"
+                                   ]
+                               )
+                               (noAnnP [atom "true"])
                            ]
         rule <- singleRule [m]
         getNode rule.guard @?= [D.GuardExpr (AtomTerm "true")]
@@ -215,21 +303,66 @@ bodyTests =
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" .=. var "Y"]]
         getNode rule.body @?= [D.BodyUnify (VarTerm "X") (VarTerm "Y")],
       testCase "is becomes BodyIs" $ do
-        rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" `is` func "+" [int 1, int 2]]]
-        getNode rule.body @?= [D.BodyIs "X" (CompoundTerm (Unqualified "+") [IntTerm 1, IntTerm 2])],
+        rule <-
+          singleRule
+            [ simpleModule'
+                (Simplification [leqQual])
+                [ var "X"
+                    `is` func
+                      "+"
+                      [int 1, int 2]
+                ]
+            ]
+        getNode rule.body
+          @?= [ D.BodyIs
+                  "X"
+                  ( CompoundTerm
+                      (Unqualified "+")
+                      [ IntTerm 1,
+                        IntTerm 2
+                      ]
+                  )
+              ],
       testCase "Qualified compound becomes BodyConstraint" $ do
         let body = [CompoundTerm (Qualified "M" "leq") [var "X"]]
         rule <- singleRule [simpleModule' (Simplification [leqQual]) body]
-        getNode rule.body @?= [D.BodyConstraint (Constraint (Qualified "M" "leq") [VarTerm "X"])],
+        getNode rule.body
+          @?= [ D.BodyConstraint
+                  ( Constraint
+                      (Qualified "M" "leq")
+                      [ VarTerm
+                          "X"
+                      ]
+                  )
+              ],
       testCase "hostCall becomes BodyHostStmt" $ do
-        rule <- singleRule [simpleModule' (Simplification [leqQual]) [hostCall "print" [var "X"]]]
+        rule <-
+          singleRule
+            [ simpleModule'
+                (Simplification [leqQual])
+                [ hostCall
+                    "print"
+                    [ var
+                        "X"
+                    ]
+                ]
+            ]
         getNode rule.body @?= [D.BodyHostStmt "print" [VarTerm "X"]],
       testCase "atom true becomes BodyTrue" $ do
         rule <- singleRule [simpleModule' (Simplification [leqQual]) [atom "true"]]
         getNode rule.body @?= [D.BodyTrue]
     ]
   where
-    simpleModule' h body = module' "M" `defining` [Rule Nothing (noAnnP h) (noAnnP []) (noAnnP body)]
+    simpleModule' h body =
+      module' "M"
+        `defining` [ Rule
+                       Nothing
+                       (noAnnP h)
+                       (noAnnP [])
+                       ( noAnnP
+                           body
+                       )
+                   ]
 
 --------------------------------------------------------------------------------
 -- Error handling
@@ -241,7 +374,14 @@ errorTests =
     "error-handling"
     [ testCase "unqualified compound in body produces UnexpectedBodyTerm" $ do
         let badTerm = func "foo" [var "X"]
-            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
+            m =
+              module' "M"
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP [])
+                               (noAnnP [badTerm])
+                           ]
         rprog <- resolve [m]
         case desugarProgram rprog of
           Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom ""))]
@@ -249,35 +389,74 @@ errorTests =
       testCase "two unqualified compounds collect both errors" $ do
         let bad1 = func "foo" [var "X"]
             bad2 = func "bar" [var "Y"]
-            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [bad1, bad2])]
+            m =
+              module' "M"
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP [])
+                               (noAnnP [bad1, bad2])
+                           ]
         rprog <- resolve [m]
         case desugarProgram rprog of
-          Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyTerm bad1) dummyLoc (Atom "")), noDiag (AnnP (UnexpectedBodyTerm bad2) dummyLoc (Atom ""))]
+          Left errs ->
+            errs
+              @?= [ noDiag (AnnP (UnexpectedBodyTerm bad1) dummyLoc (Atom "")),
+                    noDiag (AnnP (UnexpectedBodyTerm bad2) dummyLoc (Atom ""))
+                  ]
           Right _ -> assertFailure "expected Left",
       testCase "bare variable in body produces UnexpectedBodyTerm" $ do
         let badTerm = var "X"
-            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
+            m =
+              module' "M"
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP [])
+                               (noAnnP [badTerm])
+                           ]
         rprog <- resolve [m]
         case desugarProgram rprog of
           Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "bare integer in body produces UnexpectedBodyTerm" $ do
         let badTerm = int 42
-            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
+            m =
+              module' "M"
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP [])
+                               (noAnnP [badTerm])
+                           ]
         rprog <- resolve [m]
         case desugarProgram rprog of
           Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "non-true atom in body produces UnexpectedBodyTerm" $ do
         let badTerm = atom "foo"
-            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP []) (noAnnP [badTerm])]
+            m =
+              module' "M"
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP [])
+                               (noAnnP [badTerm])
+                           ]
         rprog <- resolve [m]
         case desugarProgram rprog of
           Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "bare variable in guard becomes GuardExpr" $ do
         let term = var "X"
-            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [term]) (noAnnP [atom "true"])]
+            m =
+              module' "M"
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP [term])
+                               (noAnnP [atom "true"])
+                           ]
         rprog <- resolve [m]
         case desugarProgram rprog of
           Left errs -> assertFailure ("unexpected errors: " ++ show errs)
@@ -286,7 +465,14 @@ errorTests =
             [] -> assertFailure "expected at least 1 rule",
       testCase "bare integer in guard becomes GuardExpr" $ do
         let term = int 42
-            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [term]) (noAnnP [atom "true"])]
+            m =
+              module' "M"
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP [term])
+                               (noAnnP [atom "true"])
+                           ]
         rprog <- resolve [m]
         case desugarProgram rprog of
           Left errs -> assertFailure ("unexpected errors: " ++ show errs)
@@ -295,7 +481,14 @@ errorTests =
             [] -> assertFailure "expected at least 1 rule",
       testCase "non-true atom in guard becomes GuardExpr" $ do
         let term = atom "foo"
-            m = module' "M" `defining` [Rule Nothing (noAnnP (Simplification [leqQual])) (noAnnP [term]) (noAnnP [atom "true"])]
+            m =
+              module' "M"
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP [term])
+                               (noAnnP [atom "true"])
+                           ]
         rprog <- resolve [m]
         case desugarProgram rprog of
           Left errs -> assertFailure ("unexpected errors: " ++ show errs)
@@ -366,13 +559,25 @@ symbolTableTests =
                 []
                 Map.empty
                 []
-        extractSymbolTable prog @?= mkSymbolTable [(Identifier (Qualified "M" "leq") 0, ConstraintType 0)],
+        extractSymbolTable prog
+          @?= mkSymbolTable
+            [ ( Identifier (Qualified "M" "leq") 0,
+                ConstraintType 0
+              )
+            ],
       testCase "two distinct qualified constraints get sequential ids" $ do
         let prog =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (D.Head [] [Constraint (Qualified "A" "c") [], Constraint (Qualified "B" "d") []]))
+                    ( noAnnP
+                        ( D.Head
+                            []
+                            [ Constraint (Qualified "A" "c") [],
+                              Constraint (Qualified "B" "d") []
+                            ]
+                        )
+                    )
                     (noAnnP [])
                     (noAnnP [])
                 ]
@@ -393,7 +598,12 @@ symbolTableTests =
                 []
                 Map.empty
                 []
-        extractSymbolTable prog @?= mkSymbolTable [(Identifier (Qualified "M" "leq") 0, ConstraintType 0)],
+        extractSymbolTable prog
+          @?= mkSymbolTable
+            [ ( Identifier (Qualified "M" "leq") 0,
+                ConstraintType 0
+              )
+            ],
       testCase "unqualified name in body not in table" $ do
         let prog =
               D.Program
@@ -429,7 +639,9 @@ symbolTableTests =
                 Map.empty
                 []
         let table = extractSymbolTable prog
-        (lookupSymbol (Identifier (Qualified "A" "z") 0) table, lookupSymbol (Identifier (Qualified "B" "a") 0) table)
+        ( lookupSymbol (Identifier (Qualified "A" "z") 0) table,
+          lookupSymbol (Identifier (Qualified "B" "a") 0) table
+          )
           @?= (Just (ConstraintType 0), Just (ConstraintType 1)),
       testCase "same name different arities get distinct ids" $ do
         let prog =
@@ -438,7 +650,16 @@ symbolTableTests =
                     Nothing
                     (noAnnP (D.Head [] [Constraint (Qualified "M" "foo") [VarTerm "X"]]))
                     (noAnnP [])
-                    (noAnnP [D.BodyConstraint (Constraint (Qualified "M" "foo") [VarTerm "X", VarTerm "Y"])])
+                    ( noAnnP
+                        [ D.BodyConstraint
+                            ( Constraint
+                                (Qualified "M" "foo")
+                                [ VarTerm "X",
+                                  VarTerm "Y"
+                                ]
+                            )
+                        ]
+                    )
                 ]
                 []
                 Map.empty
@@ -489,7 +710,8 @@ lambdaLiftTests =
             m = (module' "M") {decls = [funDecl], equations = [funEq]}
         prog <- desugar [m]
         lifted <- case liftAllLambdas prog of
-          Left errs -> assertFailure ("liftAllLambdas failed: " ++ show errs) >> error "unreachable"
+          Left errs ->
+            assertFailure ("liftAllLambdas failed: " ++ show errs) >> error "unreachable"
           Right p -> pure p
         let isLambda f = case f.name of
               Qualified _ n -> n == "__lambda_0"
@@ -526,6 +748,14 @@ lambdaLiftTests =
             m = (module' "M") {decls = [funDecl], equations = [funEq]}
         prog <- desugar [m]
         case liftAllLambdas prog of
-          Left errs -> errs @?= [noDiag (AnnP (InvalidLambdaParam (TextTerm "hello")) dummyLoc (Atom ""))]
+          Left errs ->
+            errs
+              @?= [ noDiag
+                      ( AnnP
+                          (InvalidLambdaParam (TextTerm "hello"))
+                          dummyLoc
+                          (Atom "")
+                      )
+                  ]
           Right _ -> assertFailure "expected InvalidLambdaParam error"
     ]

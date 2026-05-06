@@ -55,7 +55,14 @@ import YCHR.VM (Name (..))
 -- | A host call function that can use logical variables, the constraint
 -- store, and IO.
 newtype HostCallFn = HostCallFn
-  {runHostCall :: forall es. (Unify :> es, CHRStore :> es, IOE :> es) => [RuntimeVal] -> Eff es RuntimeVal}
+  { runHostCall ::
+      forall es.
+      ( Unify :> es,
+        CHRStore :> es,
+        IOE :> es
+      ) =>
+      [RuntimeVal] -> Eff es RuntimeVal
+  }
 
 -- | Registry of host language functions.
 type HostCallRegistry = Map Name HostCallFn
@@ -106,17 +113,29 @@ baseHostCallRegistry =
     numArith2 intOp floatOp = HostCallFn $ \case
       [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (intOp a b)))
       [RVal (VFloat a), RVal (VFloat b)] -> pure (RVal (VFloat (floatOp a b)))
-      args -> error $ "arithmetic host call: expected 2 numeric arguments of same type, got " ++ show (length args)
+      args ->
+        error $
+          "arithmetic host call: expected 2 numeric arguments of same type, got "
+            ++ show (length args)
     intArith2 op = HostCallFn $ \case
       [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (op a b)))
-      args -> error $ "integer arithmetic host call: expected 2 Int arguments, got " ++ show (length args)
+      args ->
+        error $
+          "integer arithmetic host call: expected 2 Int arguments, got "
+            ++ show (length args)
     floatArith2 op = HostCallFn $ \case
       [RVal (VFloat a), RVal (VFloat b)] -> pure (RVal (VFloat (op a b)))
-      args -> error $ "float arithmetic host call: expected 2 Float arguments, got " ++ show (length args)
+      args ->
+        error $
+          "float arithmetic host call: expected 2 Float arguments, got "
+            ++ show (length args)
     numCmp intOp floatOp = HostCallFn $ \case
       [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VBool (intOp a b)))
       [RVal (VFloat a), RVal (VFloat b)] -> pure (RVal (VBool (floatOp a b)))
-      args -> error $ "comparison host call: expected 2 numeric arguments of same type, got " ++ show (length args)
+      args ->
+        error $
+          "comparison host call: expected 2 numeric arguments of same type, got "
+            ++ show (length args)
     toFloatFn = HostCallFn $ \case
       [RVal (VInt n)] -> pure (RVal (VFloat (fromIntegral n)))
       [RVal (VFloat n)] -> pure (RVal (VFloat n))
@@ -270,7 +289,15 @@ copyTerm val = fst <$> go Map.empty val
 -- | Collect all unique unbound variables in a term, traversing into
 -- compound term arguments. Wildcards are replaced with fresh variables.
 -- Returns the collected variables and the updated set of seen 'VarId's.
-collectVars :: (Unify :> es, IOE :> es) => Set.Set VarId -> Value -> Eff es ([Value], Set.Set VarId)
+collectVars ::
+  (Unify :> es, IOE :> es) =>
+  Set.Set VarId ->
+  Value ->
+  Eff
+    es
+    ( [Value],
+      Set.Set VarId
+    )
 collectVars seen v = do
   v' <- deref v
   case v' of

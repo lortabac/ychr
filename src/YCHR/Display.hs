@@ -27,7 +27,14 @@ import Data.List (dropWhileEnd, intercalate)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void)
-import System.Console.ANSI (Color (..), ColorIntensity (..), ConsoleIntensity (..), ConsoleLayer (..), SGR (..), setSGRCode)
+import System.Console.ANSI
+  ( Color (..),
+    ColorIntensity (..),
+    ConsoleIntensity (..),
+    ConsoleLayer (..),
+    SGR (..),
+    setSGRCode,
+  )
 import Text.Megaparsec
 import YCHR.Collect (CollectError (..))
 import YCHR.Compile (CompileError (..))
@@ -76,7 +83,14 @@ severityColor SevWarning = Yellow
 -- message
 -- ast_node
 -- @
-displayMsgWithSrcLoc :: ErrorCode -> Severity -> String -> P.SourceLoc -> Maybe String -> Maybe String -> String
+displayMsgWithSrcLoc ::
+  ErrorCode ->
+  Severity ->
+  String ->
+  P.SourceLoc ->
+  Maybe String ->
+  Maybe String ->
+  String
 displayMsgWithSrcLoc code sev msg loc maybeLabel maybeNode =
   let col = severityColor sev
       lbl = severityLabel sev
@@ -93,9 +107,27 @@ displayMsgWithSrcLoc code sev msg loc maybeLabel maybeNode =
         ++ ": "
         ++ displayErrorCode code
         ++ "\n"
-        ++ maybe "" (\l -> setSGRCode [SetConsoleIntensity BoldIntensity] ++ "<<" ++ l ++ ">>" ++ r ++ "\n") maybeLabel
+        ++ maybe
+          ""
+          ( \l ->
+              setSGRCode [SetConsoleIntensity BoldIntensity]
+                ++ "<<"
+                ++ l
+                ++ ">>"
+                ++ r
+                ++ "\n"
+          )
+          maybeLabel
         ++ msg
-        ++ maybe "" (\n -> "\n" ++ setSGRCode [SetItalicized True] ++ n ++ setSGRCode [SetItalicized False]) maybeNode
+        ++ maybe
+          ""
+          ( \n ->
+              "\n"
+                ++ setSGRCode [SetItalicized True]
+                ++ n
+                ++ setSGRCode [SetItalicized False]
+          )
+          maybeNode
         ++ "\n"
         ++ r
 
@@ -239,7 +271,9 @@ instance Display (Diagnostic CollectError) where
 
 collectErrorMsg :: CollectError -> String
 collectErrorMsg (UnknownLibrary name) = "Unknown library: " ++ T.unpack name
-collectErrorMsg (CircularLibraryImport names) = "Circular library import: " ++ intercalate " -> " (map T.unpack names)
+collectErrorMsg (CircularLibraryImport names) =
+  "Circular library import: "
+    ++ intercalate " -> " (map T.unpack names)
 
 instance Display (Diagnostic RenameError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -284,7 +318,8 @@ renameErrorMsg (UnknownOperatorImport modName opName) =
 renameErrorMsg (UseModuleOutOfOrder modName) =
   "use_module("
     ++ T.unpack modName
-    ++ ") must appear immediately after the module directive, before any other directive or rule"
+    ++ ") must appear immediately after the module directive,"
+    ++ " before any other directive or rule"
 
 instance Display (Diagnostic RenameWarning) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -300,7 +335,11 @@ renameWarningMsg :: RenameWarning -> String
 renameWarningMsg (UndeclaredDataConstructor name) =
   "Undeclared data constructor " ++ T.unpack name
 renameWarningMsg (DataConstructorArityMismatch name arity) =
-  "Data constructor " ++ T.unpack name ++ " used with arity " ++ show arity ++ " but declared with different arity"
+  "Data constructor "
+    ++ T.unpack name
+    ++ " used with arity "
+    ++ show arity
+    ++ " but declared with different arity"
 
 instance Display (Diagnostic DesugarError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -313,8 +352,11 @@ instance Display (Diagnostic DesugarError) where
       (Just (prettyPExprSrc origin))
 
 desugarErrorMsg :: DesugarError -> String
-desugarErrorMsg (UnexpectedBodyTerm term) = "Unexpected term in rule body: " ++ prettyTermSrc term
-desugarErrorMsg (InvalidLambdaParam term) = "Invalid lambda parameter (expected variable or wildcard): " ++ prettyTermSrc term
+desugarErrorMsg (UnexpectedBodyTerm term) =
+  "Unexpected term in rule body: "
+    ++ prettyTermSrc term
+desugarErrorMsg (InvalidLambdaParam term) =
+  "Invalid lambda parameter (expected variable or wildcard): " ++ prettyTermSrc term
 
 instance Display (Diagnostic CompileError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -327,7 +369,10 @@ instance Display (Diagnostic CompileError) where
       (Just (prettyPExprSrc origin))
 
 compileErrorMsg :: CompileError -> String
-compileErrorMsg (UnknownConstraintType name) = "Unknown constraint type '" ++ displayName name ++ "'"
+compileErrorMsg (UnknownConstraintType name) =
+  "Unknown constraint type '"
+    ++ displayName name
+    ++ "'"
 compileErrorMsg (UnboundVariable var) = "Unbound variable '" ++ T.unpack var ++ "'"
 
 instance Display (Diagnostic TypeCheckError) where
@@ -417,7 +462,9 @@ instance Display Error where
     displayMsgWithSrcLoc
       lambdasInLiveQueryCode
       SevError
-      "Anonymous lambdas (fun(...) -> ... end) are not supported in live REPL sessions. Use a named :- function declaration instead."
+      ( "Anonymous lambdas (fun(...) -> ... end) are not supported in live REPL"
+          ++ " sessions. Use a named :- function declaration instead."
+      )
       (P.SourceLoc "<query>" 1 1)
       (Just "live session")
       Nothing

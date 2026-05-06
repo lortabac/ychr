@@ -219,7 +219,12 @@ handleLiveQuery cp hostCalls src = do
       | not (null prep.queryLambdas) ->
           pure (QueryRecoverable (displayMsg LambdasInLiveQuery))
       | otherwise -> do
-          execResult <- Eff.try @SomeException (executePreparedQuery hostCalls prep.liftedGoals)
+          execResult <-
+            Eff.try @SomeException
+              ( executePreparedQuery
+                  hostCalls
+                  prep.liftedGoals
+              )
           case execResult of
             Left exc -> pure (QueryFatal (renderFatal exc))
             Right bindings -> pure (QueryOk bindings)
@@ -292,7 +297,15 @@ showDeclarations prog = mapM_ outputStrLn declLines
           _ -> []
       ]
     renderDecl kw modName name arity =
-      ":- " ++ kw ++ " " ++ renderAtom modName ++ ":" ++ renderAtom name ++ "/" ++ show arity ++ "."
+      ":- "
+        ++ kw
+        ++ " "
+        ++ renderAtom modName
+        ++ ":"
+        ++ renderAtom name
+        ++ "/"
+        ++ show arity
+        ++ "."
 
 showOperators :: CompiledProgram -> InputT IO ()
 showOperators prog = mapM_ (outputStrLn . renderOp) entries

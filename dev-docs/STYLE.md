@@ -150,3 +150,9 @@ ormolu -i $(find src test -name '*.hs')
 ```
 
 This is also listed in `CLAUDE.md` alongside the test and benchmark commands.
+
+Keep lines to roughly 90 characters or fewer. `ormolu` does not enforce a hard
+limit, so this is on the author: break long expressions, signatures, and
+comments before they wrap. The only acceptable exception is an unusually long
+literal (a URL, a fixture string, a generated identifier) that cannot be split
+without harming readability.

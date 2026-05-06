@@ -1,7 +1,7 @@
 PYTEST ?= python3 -m pytest
 GUILE ?= guile3.0
 
-.PHONY: test test-haskell test-scheme test-scheme-runtime test-repl test-typecheck test-docs bench build install format clean
+.PHONY: test test-haskell test-scheme test-scheme-runtime test-repl test-typecheck test-docs test-style bench build install format clean
 
 build:
 	cabal build
@@ -9,7 +9,7 @@ build:
 install:
 	cabal install --overwrite-policy=always
 
-test: test-haskell test-scheme-runtime test-scheme test-repl test-typecheck test-docs
+test: test-haskell test-scheme-runtime test-scheme test-repl test-typecheck test-docs test-style
 
 test-haskell: build
 	cabal test
@@ -28,6 +28,9 @@ test-typecheck: build
 
 test-docs:
 	$(PYTEST) test/docs/ -v
+
+test-style:
+	$(PYTEST) test/style/ -v
 
 bench: build
 	cabal bench

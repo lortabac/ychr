@@ -83,12 +83,28 @@ resolveAll stdlibMap visited path (ann : rest)
   | Set.member name visited = resolveAll stdlibMap visited path rest
   | Set.member name path =
       let (visited', restMods, restErrs) = resolveAll stdlibMap visited path rest
-       in (visited', restMods, noDiag (AnnP (CircularLibraryImport (Set.toList path ++ [name])) ann.sourceLoc ann.parsed) : restErrs)
+       in ( visited',
+            restMods,
+            noDiag
+              ( AnnP
+                  ( CircularLibraryImport
+                      ( Set.toList path
+                          ++ [name]
+                      )
+                  )
+                  ann.sourceLoc
+                  ann.parsed
+              )
+              : restErrs
+          )
   | otherwise =
       case Map.lookup name stdlibMap of
         Nothing ->
           let (visited', restMods, restErrs) = resolveAll stdlibMap visited path rest
-           in (visited', restMods, noDiag (AnnP (UnknownLibrary name) ann.sourceLoc ann.parsed) : restErrs)
+           in ( visited',
+                restMods,
+                noDiag (AnnP (UnknownLibrary name) ann.sourceLoc ann.parsed) : restErrs
+              )
         Just m ->
           let deps = libraryImports m
               path' = Set.insert name path

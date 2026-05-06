@@ -55,7 +55,14 @@ import Data.Text (Text)
 import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Loc (Ann (..), SourceLoc (..), dummyLoc, noAnn)
 import YCHR.PExpr (OpType (..), PExpr (..))
-import YCHR.Types (Constraint (..), DataConstructor (..), Name (..), Term (..), TypeDefinition (..), TypeExpr (..))
+import YCHR.Types
+  ( Constraint (..),
+    DataConstructor (..),
+    Name (..),
+    Term (..),
+    TypeDefinition (..),
+    TypeExpr (..),
+  )
 
 -- | A node annotated with a source location and the original 'PExpr'
 -- that produced it.
@@ -89,7 +96,13 @@ data Module = Module
 
 data Declaration
   = ConstraintDecl {name :: Text, arity :: Int, argTypes :: Maybe [TypeExpr]}
-  | FunctionDecl {name :: Text, arity :: Int, argTypes :: Maybe [TypeExpr], returnType :: Maybe TypeExpr, isOpen :: Bool}
+  | FunctionDecl
+      { name :: Text,
+        arity :: Int,
+        argTypes :: Maybe [TypeExpr],
+        returnType :: Maybe TypeExpr,
+        isOpen :: Bool
+      }
   | OperatorDecl OpDecl
   | TypeExportDecl {name :: Text, arity :: Int}
   deriving (Show, Eq, Lift)

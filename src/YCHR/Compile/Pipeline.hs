@@ -34,8 +34,24 @@ import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable, liftAllLa
 import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic)
 import YCHR.Parsed (AnnP (..), Import (..), Module (..), noAnnP)
-import YCHR.Parser (ModuleHeader (..), OpTable, ParseValidationError (..), buildModuleOpTable, builtinOps, collectModuleHeader, extractOpDecls, mergeOps, parseModuleWith)
-import YCHR.Rename (RenameError, RenameInputs (..), RenameWarning, buildExportEnv, renameProgram)
+import YCHR.Parser
+  ( ModuleHeader (..),
+    OpTable,
+    ParseValidationError (..),
+    buildModuleOpTable,
+    builtinOps,
+    collectModuleHeader,
+    extractOpDecls,
+    mergeOps,
+    parseModuleWith,
+  )
+import YCHR.Rename
+  ( RenameError,
+    RenameInputs (..),
+    RenameWarning,
+    buildExportEnv,
+    renameProgram,
+  )
 import YCHR.Rename.Types (toListExport)
 import YCHR.Resolve (ResolveError, resolveProgram)
 import YCHR.Resolved qualified as R
@@ -106,8 +122,18 @@ compileModules includeStdlib inputs = do
   -- seed, and every stdlib library if includeStdlib is True).
   let userLibrarySeeds =
         noAnnP "prelude"
-          : [AnnP n loc p | (_, h) <- userHeaders, AnnP (LibraryImport n _) loc p <- h.headerImports]
-  libraryMods <- first CollectErrors (resolveLibraryClosure includeStdlib stdlib userLibrarySeeds)
+          : [ AnnP n loc p
+            | (_, h) <- userHeaders,
+              AnnP (LibraryImport n _) loc p <- h.headerImports
+            ]
+  libraryMods <-
+    first
+      CollectErrors
+      ( resolveLibraryClosure
+          includeStdlib
+          stdlib
+          userLibrarySeeds
+      )
   -- Build the module-name → exported-operators map used by per-module op
   -- table construction and by the renamer's UnknownOperatorImport check.
   let stdlibOpExports = Map.fromList [(m.name, extractOpDecls m) | m <- libraryMods]
@@ -163,7 +189,20 @@ compileModules includeStdlib inputs = do
     Left conflict -> Left (OperatorConflict (noAnnP conflict))
     Right t -> Right t
   let lambdaCount = length [() | f <- desugared'.functions, isLambdaName f.name]
-  pure (CompiledProgram prog exportMap exportedSet symTab allMods queryTable desugared'.functions lambdaCount resolved.functionNames desugared, warnings)
+  pure
+    ( CompiledProgram
+        prog
+        exportMap
+        exportedSet
+        symTab
+        allMods
+        queryTable
+        desugared'.functions
+        lambdaCount
+        resolved.functionNames
+        desugared,
+      warnings
+    )
   where
     first' f (Left e) = Left (f e)
     first' _ (Right x) = Right x

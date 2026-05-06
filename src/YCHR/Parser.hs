@@ -93,7 +93,15 @@ builtinOps =
       (1100, [(P.Xfy, ";"), (P.Xfx, "\\")]),
       (1150, [(P.Xfx, "--->"), (P.Fx, "dynamic")]),
       (1180, [(P.Xfx, "<=>"), (P.Xfx, "==>")]),
-      (1180, [(P.Fx, "chr_constraint"), (P.Fx, "chr_type"), (P.Fx, "function"), (P.Fx, "open_function")]),
+      ( 1180,
+        [ (P.Fx, "chr_constraint"),
+          (P.Fx, "chr_type"),
+          (P.Fx, "function"),
+          ( P.Fx,
+            "open_function"
+          )
+        ]
+      ),
       (1190, [(P.Xfx, "@")]),
       (1200, [(P.Fx, ":-")]),
       -- Reserve @end@ as a keyword (for @fun(...) -> ... end@) without
@@ -622,20 +630,31 @@ convertDirective _ = (DirOther, [])
 -- | Convert an import PExpr (use_module/1, imports everything).
 -- Returns 'Left' with a 'MalformedImport' error if the argument is not a
 -- module name or @library(name)@.
-convertImport :: SourceLoc -> PExpr -> Ann PExpr -> Either (AnnP ParseValidationError) (AnnP Import)
+convertImport ::
+  SourceLoc ->
+  PExpr ->
+  Ann PExpr ->
+  Either (AnnP ParseValidationError) (AnnP Import)
 convertImport dirLoc dirPExpr (Ann pexpr loc) = case pexpr of
-  Compound "library" [Ann (Atom name) _] -> Right (AnnP (LibraryImport name Nothing) dirLoc dirPExpr)
+  Compound "library" [Ann (Atom name) _] ->
+    Right (AnnP (LibraryImport name Nothing) dirLoc dirPExpr)
   Atom name -> Right (AnnP (ModuleImport name Nothing) dirLoc dirPExpr)
   _ -> Left (AnnP MalformedImport loc pexpr)
 
 -- | Convert an import PExpr with an explicit import list (use_module/2).
 -- Returns 'Left' with a 'MalformedImport' error if the import target is not
 -- a module name or @library(name)@.
-convertImportWithList :: SourceLoc -> PExpr -> Ann PExpr -> Ann PExpr -> Either (AnnP ParseValidationError) (AnnP Import)
+convertImportWithList ::
+  SourceLoc ->
+  PExpr ->
+  Ann PExpr ->
+  Ann PExpr ->
+  Either (AnnP ParseValidationError) (AnnP Import)
 convertImportWithList dirLoc dirPExpr imp importList =
   let items = map convertExportItem (unfoldList importList.node)
    in case imp.node of
-        Compound "library" [Ann (Atom name) _] -> Right (AnnP (LibraryImport name (Just items)) dirLoc dirPExpr)
+        Compound "library" [Ann (Atom name) _] ->
+          Right (AnnP (LibraryImport name (Just items)) dirLoc dirPExpr)
         Atom name -> Right (AnnP (ModuleImport name (Just items)) dirLoc dirPExpr)
         _ -> Left (AnnP MalformedImport imp.sourceLoc imp.node)
 
@@ -760,7 +779,9 @@ convertHead :: Ann PExpr -> (AnnP Head, [AnnP ParseValidationError])
 convertHead (Ann pexpr loc) = case pexpr of
   Compound "\\" [kept, removed] ->
     let (keptErrs, keptOk) = partitionEithers (map convertConstraint (flattenComma kept))
-        (removedErrs, removedOk) = partitionEithers (map convertConstraint (flattenComma removed))
+        ( removedErrs,
+          removedOk
+          ) = partitionEithers (map convertConstraint (flattenComma removed))
      in (AnnP (Simpagation keptOk removedOk) loc pexpr, keptErrs ++ removedErrs)
   _ ->
     let (errs, ok) = partitionEithers (map convertConstraint (flattenComma (Ann pexpr loc)))
@@ -817,7 +838,19 @@ convertFunctionEquation (Ann pexpr loc) = case pexpr of
               loc
               pexpr
   _ ->
-    AnnP (FunctionEquation (Unqualified "<unknown>") [] (AnnP [] loc (Atom "")) (AnnP (convertTerm (Ann pexpr loc)) loc pexpr)) loc pexpr
+    AnnP
+      ( FunctionEquation
+          (Unqualified "<unknown>")
+          []
+          (AnnP [] loc (Atom ""))
+          ( AnnP
+              (convertTerm (Ann pexpr loc))
+              loc
+              pexpr
+          )
+      )
+      loc
+      pexpr
 
 -- | Extract the function name and argument list from an equation LHS.
 --

@@ -59,8 +59,22 @@ import Effectful
 import Effectful.Dispatch.Static
 import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.Writer.Static.Local (listen, runWriter)
-import YCHR.Compile (buildFunctionSet, compileFunctionDef, funcProcName, genCallFunDispatches, tellProcName, vmName)
-import YCHR.Compile.Pipeline (CompiledProgram (..), Error (..), ExportResolution (..), Warning (..), compileFiles, compileModules)
+import YCHR.Compile
+  ( buildFunctionSet,
+    compileFunctionDef,
+    funcProcName,
+    genCallFunDispatches,
+    tellProcName,
+    vmName,
+  )
+import YCHR.Compile.Pipeline
+  ( CompiledProgram (..),
+    Error (..),
+    ExportResolution (..),
+    Warning (..),
+    compileFiles,
+    compileModules,
+  )
 import YCHR.Desugar (desugarQueryGoals, liftQueryLambdas)
 import YCHR.Desugared qualified as D
 import YCHR.Meta (valueToTerm)
@@ -116,14 +130,29 @@ resolveQueryConstraint cp (Constraint cname cargs) = case cname of
     let arity = length cargs
      in if Set.member (Types.QualifiedIdentifier m n arity) cp.exportedSet
           then Right (Constraint cname cargs)
-          else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n ++ "/" ++ show arity)
+          else
+            Left
+              ( "Constraint not exported: "
+                  ++ T.unpack m
+                  ++ ":"
+                  ++ T.unpack n
+                  ++ "/"
+                  ++ show arity
+              )
 
 -- | Run a single CHR constraint against a compiled program.
 --
 -- Reuses 'withCHR' for session setup so that the runtime effect stack
 -- lives in one place ("YCHR.Runtime.Session"). The query-scope
 -- variable map is layered on top via 'evalState'.
-runProgramWithGoalDSL :: CompiledProgram -> HostCallRegistry -> Constraint -> IO (RuntimeVal, Map Text Term)
+runProgramWithGoalDSL ::
+  CompiledProgram ->
+  HostCallRegistry ->
+  Constraint ->
+  IO
+    ( RuntimeVal,
+      Map Text Term
+    )
 runProgramWithGoalDSL cp hostCalls constraint = do
   resolved <- case resolveQueryConstraint cp constraint of
     Left err -> fail err
@@ -140,7 +169,14 @@ runProgramWithGoalDSL cp hostCalls constraint = do
       pure (result, bindings)
 
 -- | Like 'runProgramWithGoalDSL' but accepts a query as surface-language 'Text'.
-runProgramWithGoal :: CompiledProgram -> HostCallRegistry -> Text -> IO (RuntimeVal, Map Text Term)
+runProgramWithGoal ::
+  CompiledProgram ->
+  HostCallRegistry ->
+  Text ->
+  IO
+    ( RuntimeVal,
+      Map Text Term
+    )
 runProgramWithGoal cp hostCalls src =
   case parseConstraint "<query>" src of
     Left err -> throwIO (ParseError "<query>" err)
@@ -149,7 +185,14 @@ runProgramWithGoal cp hostCalls src =
     -- references (e.g. @[H|T]@, declared atoms) get canonicalized to
     -- the same flat-functor form the compiled head patterns expect.
     Right (Right (Constraint cname cargs)) -> do
-      (renamedArgs, _warnings) <- either (throwIO . RenameErrors) pure (renameQueryArgs cp.allModules cargs)
+      (renamedArgs, _warnings) <-
+        either
+          (throwIO . RenameErrors)
+          pure
+          ( renameQueryArgs
+              cp.allModules
+              cargs
+          )
       -- Canonicalize the constraint name via the export map so the
       -- type-check sees the same qualified name 'tellConstraintSigs'
       -- registers. Defer name-resolution failures to 'runProgramWithGoalDSL'
@@ -157,7 +200,12 @@ runProgramWithGoal cp hostCalls src =
       let renamed = case resolveQueryConstraint cp (Constraint cname renamedArgs) of
             Right c -> c
             Left _ -> Constraint cname renamedArgs
-      tcErrs <- typeCheckGoals cp.desugaredProgram (SourceLoc "<query>" 1 1) (Just "query") [D.BodyConstraint renamed]
+      tcErrs <-
+        typeCheckGoals
+          cp.desugaredProgram
+          (SourceLoc "<query>" 1 1)
+          (Just "query")
+          [D.BodyConstraint renamed]
       unless (null tcErrs) (throwIO (TypeErrors tcErrs))
       runProgramWithGoalDSL cp hostCalls renamed
 
@@ -180,12 +228,43 @@ data PreparedQuery = PreparedQuery
 -- the appropriate 'Error' constructor on failure.
 prepareQuery :: CompiledProgram -> Text -> IO PreparedQuery
 prepareQuery cp src = do
-  goals <- either (throwIO . ParseError "<query>") pure (parseQueryWith cp.opTable "<query>" src)
-  (renamed, _renameWarnings) <- either (throwIO . RenameErrors) pure (renameQueryGoals cp.allModules goals)
-  bodyGoals <- either (throwIO . DesugarErrors) pure (desugarQueryGoals cp.functionNameSet renamed)
+  goals <-
+    either
+      (throwIO . ParseError "<query>")
+      pure
+      ( parseQueryWith
+          cp.opTable
+          "<query>"
+          src
+      )
+  (renamed, _renameWarnings) <-
+    either
+      (throwIO . RenameErrors)
+      pure
+      ( renameQueryGoals
+          cp.allModules
+          goals
+      )
+  bodyGoals <-
+    either
+      (throwIO . DesugarErrors)
+      pure
+      ( desugarQueryGoals
+          cp.functionNameSet
+          renamed
+      )
   -- Lambda-lift query body goals and compile the generated functions
   let queryLoc = SourceLoc "<query>" 1 1
-  (lifted, lambdas) <- either (throwIO . DesugarErrors) pure (liftQueryLambdas cp.nextLambdaIndex queryLoc (Atom "") bodyGoals)
+  (lifted, lambdas) <-
+    either
+      (throwIO . DesugarErrors)
+      pure
+      ( liftQueryLambdas
+          cp.nextLambdaIndex
+          queryLoc
+          (Atom "")
+          bodyGoals
+      )
   -- Type-check the goals (after lambda lifting so lifted lambdas are
   -- visible as untyped functions defaulting to all-@any@). Goal-time
   -- type errors abort execution and surface as 'TypeErrors'.
@@ -321,7 +400,12 @@ raiseUnifyFailure v1 v2 = do
       ++ prettyTerm t2
 
 -- | Call a host function, failing with a clear message if not found.
-hostCall :: (Unify :> es, CHRStore :> es, IOE :> es) => Maybe HostCallFn -> Text -> [RuntimeVal] -> Eff es RuntimeVal
+hostCall ::
+  ( Unify :> es,
+    CHRStore :> es,
+    IOE :> es
+  ) =>
+  Maybe HostCallFn -> Text -> [RuntimeVal] -> Eff es RuntimeVal
 hostCall (Just (HostCallFn f)) _ args = f args
 hostCall Nothing name _ = error $ "Unknown host function: " ++ T.unpack name
 

@@ -124,7 +124,12 @@ desugarProgram rprog =
 extractSymbolTable :: D.Program -> SymbolTable
 extractSymbolTable prog =
   let rules = prog.rules
-      allIds = Set.fromList [Identifier c.name (length c.args) | r <- rules, c <- getRuleConstraints r]
+      allIds =
+        Set.fromList
+          [ Identifier c.name (length c.args)
+          | r <- rules,
+            c <- getRuleConstraints r
+          ]
       qualifiedIds = [i | i@(Identifier (Qualified _ _) _) <- Set.toList allIds]
    in mkSymbolTable (zip qualifiedIds (map ConstraintType [0 ..]))
 
@@ -308,7 +313,9 @@ desugarFunctionDef fdef = do
         equations = AnnP desugaredEqs loc parsed
       }
 
-desugarResolvedEquation :: AnnP R.FunctionEquation -> Eff '[Writer [Diagnostic DesugarError]] D.Equation
+desugarResolvedEquation ::
+  AnnP R.FunctionEquation ->
+  Eff '[Writer [Diagnostic DesugarError]] D.Equation
 desugarResolvedEquation annEq = desugarEquation' annEq.node
 
 desugarEquation' :: R.FunctionEquation -> Eff '[Writer [Diagnostic DesugarError]] D.Equation
@@ -447,8 +454,14 @@ termVars _ = Set.empty
 -- | Extract parameters and body from a @fun(X, Y) -> body@ lambda term.
 -- Parameters are kept as 'Term' values ('VarTerm' or 'Wildcard').
 extractLambdaParams :: Term -> ([Term], Term)
-extractLambdaParams (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body]) =
-  (params, body)
+extractLambdaParams
+  ( CompoundTerm
+      (Unqualified "->")
+      [ CompoundTerm (Unqualified "fun") params,
+        body
+        ]
+    ) =
+    (params, body)
 extractLambdaParams t = ([], t)
 
 -- | Lift lambdas in a single term. Each @fun(...) -> ...@ is replaced
@@ -459,14 +472,28 @@ extractLambdaParams t = ([], t)
 -- @F1 .. Fn@ are the captured free variables; the lambda body itself
 -- is lifted into a fresh top-level 'D.Function'. Returns the updated
 -- state and the rewritten term.
-liftTerm :: Text -> P.SourceLoc -> PExpr -> Set.Set Text -> LiftState -> Term -> (LiftState, Term)
+liftTerm ::
+  Text ->
+  P.SourceLoc ->
+  PExpr ->
+  Set.Set Text ->
+  LiftState ->
+  Term ->
+  ( LiftState,
+    Term
+  )
 liftTerm modName loc origin scope st term = case term of
   CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") _, _] ->
     let (params, body) = extractLambdaParams term
         badParams = [p | p <- params, not (isVarOrWildcard p)]
         paramVarNames = Set.fromList [v | VarTerm v <- params]
         bodyVars = termVars body
-        freeVars = Set.toAscList (bodyVars `Set.intersection` scope `Set.difference` paramVarNames)
+        freeVars =
+          Set.toAscList
+            ( bodyVars
+                `Set.intersection` scope
+                `Set.difference` paramVarNames
+            )
         innerScope = scope `Set.union` paramVarNames
         (st', liftedBody) = liftTerm modName loc origin innerScope st body
         idx = st'.counter
@@ -488,7 +515,12 @@ liftTerm modName loc origin scope st term = case term of
                   ]
             }
         newErrors = map (\p -> noDiag (AnnP (InvalidLambdaParam p) loc origin)) badParams
-        st'' = st' {counter = idx + 1, liftedFunctions = func : st'.liftedFunctions, errors = newErrors ++ st'.errors}
+        st'' =
+          st'
+            { counter = idx + 1,
+              liftedFunctions = func : st'.liftedFunctions,
+              errors = newErrors ++ st'.errors
+            }
         lambdaId = modName <> "__" <> lambdaName
         closureArgs = [AtomTerm lambdaId, quoteTerm term] ++ map VarTerm freeVars
      in (st'', CompoundTerm (Unqualified closureFunctor) closureArgs)
@@ -498,7 +530,14 @@ liftTerm modName loc origin scope st term = case term of
   _ -> (st, term)
 
 -- | Lift lambdas in a body goal.
-liftBodyGoal :: Text -> P.SourceLoc -> PExpr -> Set.Set Text -> LiftState -> D.BodyGoal -> (LiftState, D.BodyGoal)
+liftBodyGoal ::
+  Text ->
+  P.SourceLoc ->
+  PExpr ->
+  Set.Set Text ->
+  LiftState ->
+  D.BodyGoal ->
+  (LiftState, D.BodyGoal)
 liftBodyGoal modName loc origin scope st goal = case goal of
   D.BodyIs v expr ->
     let (st', expr') = liftTerm modName loc origin scope st expr
@@ -519,7 +558,14 @@ liftBodyGoal modName loc origin scope st goal = case goal of
   D.BodyTrue -> (st, D.BodyTrue)
 
 -- | Lift lambdas in a guard.
-liftGuard :: Text -> P.SourceLoc -> PExpr -> Set.Set Text -> LiftState -> D.Guard -> (LiftState, D.Guard)
+liftGuard ::
+  Text ->
+  P.SourceLoc ->
+  PExpr ->
+  Set.Set Text ->
+  LiftState ->
+  D.Guard ->
+  (LiftState, D.Guard)
 liftGuard modName loc origin scope st (D.GuardExpr term) =
   let (st', term') = liftTerm modName loc origin scope st term
    in (st', D.GuardExpr term')
@@ -530,7 +576,15 @@ liftGuard _ _ _ _ st g = (st, g)
 -- parameters /and/ the variables introduced by HNF guards — most
 -- importantly 'D.GuardGetArg', which binds the user-written components
 -- of a compound pattern like @maplist(F, [X|Xs]) -> ...@.
-liftEquation :: Text -> P.SourceLoc -> PExpr -> LiftState -> D.Equation -> (LiftState, D.Equation)
+liftEquation ::
+  Text ->
+  P.SourceLoc ->
+  PExpr ->
+  LiftState ->
+  D.Equation ->
+  ( LiftState,
+    D.Equation
+  )
 liftEquation modName loc origin st eq =
   let scope =
         Set.unions (map termVars eq.params)
@@ -607,8 +661,16 @@ liftRule st rule =
       guardOrigin = rule.guard.parsed
       bodyLoc = rule.body.sourceLoc
       bodyOrigin = rule.body.parsed
-      (st', guards') = mapAccumL (liftGuard modName guardLoc guardOrigin scope) st rule.guard.node
-      (st'', body') = mapAccumL (liftBodyGoal modName bodyLoc bodyOrigin scope) st' rule.body.node
+      (st', guards') =
+        mapAccumL
+          (liftGuard modName guardLoc guardOrigin scope)
+          st
+          rule.guard.node
+      (st'', body') =
+        mapAccumL
+          (liftBodyGoal modName bodyLoc bodyOrigin scope)
+          st'
+          rule.body.node
    in ( st'',
         rule
           { D.guard = rule.guard {node = guards'},
@@ -635,7 +697,12 @@ liftAllLambdas prog =
 -- and any generated function definitions (to be compiled on the fly).
 -- Uses @\"__query\"@ as the module name for lifted lambdas, and starts
 -- the counter high enough to avoid collisions with program lambdas.
-liftQueryLambdas :: Int -> P.SourceLoc -> PExpr -> [D.BodyGoal] -> Either [Diagnostic DesugarError] ([D.BodyGoal], [D.Function])
+liftQueryLambdas ::
+  Int ->
+  P.SourceLoc ->
+  PExpr ->
+  [D.BodyGoal] ->
+  Either [Diagnostic DesugarError] ([D.BodyGoal], [D.Function])
 liftQueryLambdas startCounter loc origin goals =
   let scope = bodyGoalVars goals
       initState = LiftState startCounter [] []

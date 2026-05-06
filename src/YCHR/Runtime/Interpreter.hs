@@ -38,7 +38,13 @@ import YCHR.Pretty (prettyTerm)
 import YCHR.Runtime.Error (displayRuntimeError)
 import YCHR.Runtime.History (PropHistory, addHistory, notInHistory, runPropHistory)
 import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue)
-import YCHR.Runtime.Registry (HostCallFn (..), HostCallRegistry, baseHostCallRegistry, toValue, unit)
+import YCHR.Runtime.Registry
+  ( HostCallFn (..),
+    HostCallRegistry,
+    baseHostCallRegistry,
+    toValue,
+    unit,
+  )
 import YCHR.Runtime.Store
   ( CHRStore,
     Suspension (..),
@@ -56,7 +62,17 @@ import YCHR.Runtime.Store
     suspArg,
   )
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (Unify, deref, equal, getArg, makeTerm, matchTerm, newVar, runUnify, unify)
+import YCHR.Runtime.Var
+  ( Unify,
+    deref,
+    equal,
+    getArg,
+    makeTerm,
+    matchTerm,
+    newVar,
+    runUnify,
+    unify,
+  )
 import YCHR.VM
 
 -- ---------------------------------------------------------------------------
@@ -327,7 +343,9 @@ evalVmExpr pm hc (HostCall name args) = do
       result <- Eff.try @SomeException (f derefedVals)
       case result of
         Right v -> pure v
-        Left exc -> runtimeErrorS $ "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc
+        Left exc ->
+          runtimeErrorS $
+            "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc
     Nothing -> runtimeError' "evalVmExpr: unknown host call " name.unName
   where
     derefRV (RVal v) = RVal <$> deref v
@@ -436,7 +454,9 @@ evalExpr pm hc (HostCall name args) = do
       result <- Eff.try @SomeException (f argVals)
       case result of
         Right v -> pure v
-        Left exc -> runtimeErrorS $ "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc
+        Left exc ->
+          runtimeErrorS $
+            "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc
     Nothing -> runtimeError' "evalExpr: unknown host call " name.unName
 evalExpr pm hc (CallExpr name args) = do
   argVals <- traverse (evalExpr pm hc) args

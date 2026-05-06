@@ -9,7 +9,18 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Effectful (runEff)
-import Hedgehog (Gen, Property, annotate, assert, evalIO, failure, forAll, forAllWith, property, (===))
+import Hedgehog
+  ( Gen,
+    Property,
+    annotate,
+    assert,
+    evalIO,
+    failure,
+    forAll,
+    forAllWith,
+    property,
+    (===),
+  )
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
@@ -267,7 +278,10 @@ prop_compoundToListRoundtrip = property $ do
 prop_listToCompoundRoundtrip :: Property
 prop_listToCompoundRoundtrip = property $ do
   f <- forAll genSafeAtom
-  args <- forAllWith (show . map showGroundValue) $ Gen.list (Range.linear 0 3) $ Gen.choice [VInt <$> Gen.int (Range.linear 0 100), VAtom <$> genSafeAtom]
+  args <-
+    forAllWith (show . map showGroundValue) $
+      Gen.list (Range.linear 0 3) $
+        Gen.choice [VInt <$> Gen.int (Range.linear 0 100), VAtom <$> genSafeAtom]
   let list = valueList (VAtom f : args)
   let HostCallFn fromList = lookupHostCall "list_to_compound"
       HostCallFn toList = lookupHostCall "compound_to_list"
@@ -292,8 +306,14 @@ tests =
   testGroup
     "YCHR.Roundtrip"
     [ testProperty "term roundtrip (parse . prettyTermSrc = id)" prop_termRoundtrip,
-      testProperty "constraint roundtrip (parse . prettyConstraintSrc = id)" prop_constraintRoundtrip,
+      testProperty
+        "constraint roundtrip (parse . prettyConstraintSrc = id)"
+        prop_constraintRoundtrip,
       testProperty "rule roundtrip (parse . prettyRuleSrc = id)" prop_ruleRoundtrip,
-      testProperty "compound_to_list roundtrip (list_to_compound . compound_to_list = id)" prop_compoundToListRoundtrip,
-      testProperty "list_to_compound roundtrip (compound_to_list . list_to_compound = id)" prop_listToCompoundRoundtrip
+      testProperty
+        "compound_to_list roundtrip (list_to_compound . compound_to_list = id)"
+        prop_compoundToListRoundtrip,
+      testProperty
+        "list_to_compound roundtrip (compound_to_list . list_to_compound = id)"
+        prop_listToCompoundRoundtrip
     ]

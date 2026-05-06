@@ -639,8 +639,23 @@ parseTermNoDot table = parse (sc *> withLoc (termP table maxPrec) <* eof)
 -- | Parse the first dot-terminated term from source text, ignoring the rest.
 -- Returns 'Nothing' if the input is empty or starts with something that is
 -- not a valid term with the given operator table.
-parseFirstTerm :: OpTable -> String -> Text -> Either (ParseErrorBundle Text Void) (Maybe (Ann PExpr))
-parseFirstTerm table = parse (sc *> optional (try (withLoc (termP table maxPrec) <* symbol ".")) <* void takeRest)
+parseFirstTerm ::
+  OpTable ->
+  String ->
+  Text ->
+  Either (ParseErrorBundle Text Void) (Maybe (Ann PExpr))
+parseFirstTerm table =
+  parse
+    ( sc
+        *> optional
+          ( try
+              ( withLoc (termP table maxPrec)
+                  <* symbol
+                    "."
+              )
+          )
+        <* void takeRest
+    )
 
 -- | Parse leading dot-terminated terms while they parse with the given
 -- operator table; stop at the first term that fails to parse.
@@ -648,7 +663,11 @@ parseFirstTerm table = parse (sc *> optional (try (withLoc (termP table maxPrec)
 -- Returns the successfully parsed terms plus, if there is unparseable
 -- content remaining, the source location at which parsing stopped.
 -- Returns 'Nothing' for the location if the entire input was consumed.
-parseLeadingTerms :: OpTable -> String -> Text -> Either (ParseErrorBundle Text Void) ([Ann PExpr], Maybe SourceLoc)
+parseLeadingTerms ::
+  OpTable ->
+  String ->
+  Text ->
+  Either (ParseErrorBundle Text Void) ([Ann PExpr], Maybe SourceLoc)
 parseLeadingTerms table = parse (sc *> loop [])
   where
     loop acc = do
@@ -688,7 +707,17 @@ prettyPExpr table = prettyPrec table.infixByName table.prefixByName table.wordOp
 --
 -- So for @yfx@ at fixity F: left gets F, right gets F−1.
 -- For @xfy@: left gets F−1, right gets F. Etc.
-prettyPrec :: Map Text (Int, OpType) -> Map Text (Int, OpType) -> Set Text -> Int -> PExpr -> String
+prettyPrec ::
+  Map Text (Int, OpType) ->
+  Map
+    Text
+    ( Int,
+      OpType
+    ) ->
+  Set Text ->
+  Int ->
+  PExpr ->
+  String
 prettyPrec _ _ _ _ (Var v) = T.unpack v
 prettyPrec _ _ _ _ (Int n)
   | n < 0 = "(" ++ show n ++ ")"
@@ -768,7 +797,16 @@ prettyPrec iops pops wops _ (Compound f args) =
     ++ intercalate ", " [prettyPrec iops pops wops maxArgPrec a.node | a <- args]
     ++ ")"
 
-prettyListTail :: Map Text (Int, OpType) -> Map Text (Int, OpType) -> Set Text -> PExpr -> String
+prettyListTail ::
+  Map Text (Int, OpType) ->
+  Map
+    Text
+    ( Int,
+      OpType
+    ) ->
+  Set Text ->
+  PExpr ->
+  String
 prettyListTail _ _ _ (Atom "[]") = ""
 prettyListTail iops pops wops (Compound "." [h, t]) =
   ", " ++ rec h.node ++ prettyListTail iops pops wops t.node

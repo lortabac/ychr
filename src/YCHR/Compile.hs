@@ -82,7 +82,14 @@ import YCHR.PExpr (PExpr)
 import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
 import YCHR.Pretty (prettyPExprSrc)
-import YCHR.Types (Identifier (..), SymbolTable, Term (..), flattenName, symbolTableSize, symbolTableToList)
+import YCHR.Types
+  ( Identifier (..),
+    SymbolTable,
+    Term (..),
+    flattenName,
+    symbolTableSize,
+    symbolTableToList,
+  )
 import YCHR.Types qualified as Types
 import YCHR.VM
 
@@ -110,9 +117,12 @@ data SrcInfo = SrcInfo
 compile :: D.Program -> SymbolTable -> Either [Diagnostic CompileError] Program
 compile prog symTab =
   let funSet = buildFunctionSet prog
-      ((occMap, ruleDisplayNames), occErrs) = runPureEff . runWriter $ collectOccurrences symTab prog
+      ( (occMap, ruleDisplayNames),
+        occErrs
+        ) = runPureEff . runWriter $ collectOccurrences symTab prog
       (procs, procErrs) = runPureEff . runWriter $ do
-        fmap concat $ traverse (genConstraintProcs funSet symTab occMap) (symbolTableToList symTab)
+        fmap concat $
+          traverse (genConstraintProcs funSet symTab occMap) (symbolTableToList symTab)
       (funProcs, funErrs) = runPureEff . runWriter $ do
         traverse (compileFunctionDef funSet) prog.functions
       dispatch = genReactivateDispatch symTab
@@ -150,7 +160,14 @@ buildTypeNames symTab =
 -- Procedure generation for each constraint type
 -- ---------------------------------------------------------------------------
 
-genConstraintProcs :: Set Identifier -> SymbolTable -> OccurrenceMap -> (Identifier, ConstraintType) -> Eff '[Writer [Diagnostic CompileError]] [Procedure]
+genConstraintProcs ::
+  Set Identifier ->
+  SymbolTable ->
+  OccurrenceMap ->
+  ( Identifier,
+    ConstraintType
+  ) ->
+  Eff '[Writer [Diagnostic CompileError]] [Procedure]
 genConstraintProcs funSet symTab occMap (ident, cType) = do
   let occs = lookupOccurrences ident occMap
       tellProc = genTell ident.name cType ident.arity
@@ -207,7 +224,13 @@ genActivate name arity occs =
 -- occurrence_c_j
 -- ---------------------------------------------------------------------------
 
-genOccurrence :: Set Identifier -> SymbolTable -> Types.Name -> Int -> Occurrence -> Eff '[Writer [Diagnostic CompileError]] Procedure
+genOccurrence ::
+  Set Identifier ->
+  SymbolTable ->
+  Types.Name ->
+  Int ->
+  Occurrence ->
+  Eff '[Writer [Diagnostic CompileError]] Procedure
 genOccurrence funSet symTab name arity occ = do
   let params = activeName : argNames arity
       procName' = occProcName name arity occ.number
@@ -237,7 +260,12 @@ buildVarMap occ =
 -- | Compile the body of an occurrence procedure: build the innermost
 -- "guards-then-fire" block, wrap it in one nested 'Foreach' per partner,
 -- then append the trailing @Return false@ that signals "no early drop".
-genOccurrenceBody :: Set Identifier -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [Diagnostic CompileError]] [Stmt]
+genOccurrenceBody ::
+  Set Identifier ->
+  SymbolTable ->
+  VarMap ->
+  Occurrence ->
+  Eff '[Writer [Diagnostic CompileError]] [Stmt]
 genOccurrenceBody funSet symTab varMap occ = do
   (inner, condMap) <- genGuardedFire funSet symTab varMap occ
   let body = wrapInPartnerLoops occ condMap inner
@@ -323,7 +351,12 @@ wrapInPartnerLoops occ condMap inner =
 -- Fire: history check + kill + body + early drop + backjumping
 -- ---------------------------------------------------------------------------
 
-genFireStmts :: Set Identifier -> SymbolTable -> VarMap -> Occurrence -> Eff '[Writer [Diagnostic CompileError]] [Stmt]
+genFireStmts ::
+  Set Identifier ->
+  SymbolTable ->
+  VarMap ->
+  Occurrence ->
+  Eff '[Writer [Diagnostic CompileError]] [Stmt]
 genFireStmts funSet symTab varMap occ = do
   let rule = occ.rule
       AnnP {node = ruleHead} = rule.head
@@ -363,7 +396,12 @@ genFireStmts funSet symTab varMap occ = do
               p.isKept
             ]
       frame = mkRuleFrame occ
-      coreFireStmts = PushFrame frame : killStmts ++ bodyStmts ++ earlyDropStmts ++ backjumpStmts
+      coreFireStmts =
+        PushFrame frame
+          : killStmts
+          ++ bodyStmts
+          ++ earlyDropStmts
+          ++ backjumpStmts
   pure $
     if isPropagation
       then
@@ -459,7 +497,12 @@ compileTerm _ _ Wildcard = pure (Lit WildcardLit)
 -- 'compileTerm'. The @term\/1@ clause short-circuits directly to
 -- 'compileTerm', suppressing evaluation of the argument. See the
 -- \"Notes\" block at the bottom of this file.
-compileExpr :: Set Identifier -> VarMap -> SrcInfo -> Term -> Eff '[Writer [Diagnostic CompileError]] Expr
+compileExpr ::
+  Set Identifier ->
+  VarMap ->
+  SrcInfo ->
+  Term ->
+  Eff '[Writer [Diagnostic CompileError]] Expr
 compileExpr funSet varMap si (CompoundTerm (Types.Unqualified "$call") args)
   | length args >= 2 = do
       args' <- traverse (compileExpr funSet varMap si) args
@@ -658,7 +701,13 @@ compileCheckGuards funSet mOcc varMap si guards = do
 -- Compile body goals
 -- ---------------------------------------------------------------------------
 
-compileBodyGoals :: Set Identifier -> SymbolTable -> VarMap -> SrcInfo -> [D.BodyGoal] -> Eff '[Writer [Diagnostic CompileError]] [Stmt]
+compileBodyGoals ::
+  Set Identifier ->
+  SymbolTable ->
+  VarMap ->
+  SrcInfo ->
+  [D.BodyGoal] ->
+  Eff '[Writer [Diagnostic CompileError]] [Stmt]
 compileBodyGoals funSet symTab varMap si goals = do
   (stmts, _) <- foldM step ([], varMap) goals
   pure stmts
@@ -683,7 +732,13 @@ unifyAndReactivate l r =
 -- an updated 'VarMap'. The VarMap may grow when a goal introduces new
 -- variables (e.g. @is@ binding a fresh variable, or a constraint whose
 -- arguments reference not-yet-seen variables that need 'NewVar').
-compileBodyGoal :: Set Identifier -> SymbolTable -> VarMap -> SrcInfo -> D.BodyGoal -> Eff '[Writer [Diagnostic CompileError]] ([Stmt], VarMap)
+compileBodyGoal ::
+  Set Identifier ->
+  SymbolTable ->
+  VarMap ->
+  SrcInfo ->
+  D.BodyGoal ->
+  Eff '[Writer [Diagnostic CompileError]] ([Stmt], VarMap)
 compileBodyGoal _ _ varMap _ D.BodyTrue = pure ([], varMap)
 compileBodyGoal _ _ varMap si (D.BodyConstraint con) = do
   let argVars = [v | VarTerm v <- con.args, notMemberVar v varMap]
@@ -721,11 +776,20 @@ compileBodyGoal funSet _ varMap si (D.BodyFunctionCall name args) = do
 -- Compile function definitions
 -- ---------------------------------------------------------------------------
 
-compileFunctionDef :: Set Identifier -> D.Function -> Eff '[Writer [Diagnostic CompileError]] Procedure
+compileFunctionDef ::
+  Set Identifier ->
+  D.Function ->
+  Eff '[Writer [Diagnostic CompileError]] Procedure
 compileFunctionDef funSet func = do
   let procName' = funcProcName func.name func.arity
       params = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. func.arity - 1]]
-      funcLabel = Just ("function " <> flattenName func.name <> "/" <> T.pack (show func.arity))
+      funcLabel =
+        Just
+          ( "function "
+              <> flattenName func.name
+              <> "/"
+              <> T.pack (show func.arity)
+          )
       funcSi = SrcInfo func.equations.sourceLoc func.equations.parsed funcLabel
       frame =
         mkFrame
@@ -745,7 +809,12 @@ buildEquationVarMap procParams normalizedArgs =
     | (p, VarTerm v) <- zip procParams normalizedArgs
     ]
 
-compileEquation :: Set Identifier -> [Name] -> SrcInfo -> D.Equation -> Eff '[Writer [Diagnostic CompileError]] [Stmt]
+compileEquation ::
+  Set Identifier ->
+  [Name] ->
+  SrcInfo ->
+  D.Equation ->
+  Eff '[Writer [Diagnostic CompileError]] [Stmt]
 compileEquation funSet params si eq = do
   let varMap = buildEquationVarMap params eq.params
   -- Equations have no partners, so the index-condition pushdown

@@ -11,7 +11,13 @@ import Effectful.Writer.Static.Local (Writer, runWriter)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Runtime.History (PropHistory, runPropHistory)
-import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, baseHostCallRegistry, callProc, interpret)
+import YCHR.Runtime.Interpreter
+  ( HostCallFn (..),
+    HostCallRegistry,
+    baseHostCallRegistry,
+    callProc,
+    interpret,
+  )
 import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
@@ -511,7 +517,19 @@ evalDeepTests =
         result <- runCalc (HostCall "+" [Var "x", Lit (IntLit 1)]) (VInt 5)
         expectInt result >>= (@?= 6),
       testCase "nested: 2 * (x + 3), x=4 = 14" $ do
-        result <- runCalc (HostCall "*" [Lit (IntLit 2), HostCall "+" [Var "x", Lit (IntLit 3)]]) (VInt 4)
+        result <-
+          runCalc
+            ( HostCall
+                "*"
+                [ Lit (IntLit 2),
+                  HostCall
+                    "+"
+                    [ Var "x",
+                      Lit (IntLit 3)
+                    ]
+                ]
+            )
+            (VInt 4)
         expectInt result >>= (@?= 14),
       testCase "literal passthrough: 42 = 42" $ do
         result <- runCalc (Lit (IntLit 42)) (VInt 0)
@@ -781,12 +799,28 @@ univTests =
     [ testCase "compound_to_list: f(1, 2) -> [f, 1, 2]" $ do
         result <- callHostCall1 "compound_to_list" (VTerm "f" [VInt 1, VInt 2])
         case result of
-          VTerm "prelude__." [VAtom "f", VTerm "prelude__." [VInt 1, VTerm "prelude__." [VInt 2, VTerm "prelude__[]" []]]] -> pure ()
+          VTerm
+            "prelude__."
+            [ VAtom "f",
+              VTerm
+                "prelude__."
+                [ VInt 1,
+                  VTerm "prelude__." [VInt 2, VTerm "prelude__[]" []]
+                  ]
+              ] -> pure ()
           _ -> assertFailure "unexpected result",
       testCase "compound_to_list: g(hello) -> [g, hello]" $ do
         result <- callHostCall1 "compound_to_list" (VTerm "g" [VAtom "hello"])
         case result of
-          VTerm "prelude__." [VAtom "g", VTerm "prelude__." [VAtom "hello", VTerm "prelude__[]" []]] -> pure ()
+          VTerm
+            "prelude__."
+            [ VAtom "g",
+              VTerm
+                "prelude__."
+                [ VAtom "hello",
+                  VTerm "prelude__[]" []
+                  ]
+              ] -> pure ()
           _ -> assertFailure "unexpected result",
       testCase "compound_to_list: foo() -> [foo]" $ do
         result <- callHostCall1 "compound_to_list" (VTerm "foo" [])
@@ -796,10 +830,27 @@ univTests =
       testCase "compound_to_list: f(g(1), 2) -> [f, g(1), 2]" $ do
         result <- callHostCall1 "compound_to_list" (VTerm "f" [VTerm "g" [VInt 1], VInt 2])
         case result of
-          VTerm "prelude__." [VAtom "f", VTerm "prelude__." [VTerm "g" [VInt 1], VTerm "prelude__." [VInt 2, VTerm "prelude__[]" []]]] -> pure ()
+          VTerm
+            "prelude__."
+            [ VAtom "f",
+              VTerm
+                "prelude__."
+                [ VTerm "g" [VInt 1],
+                  VTerm "prelude__." [VInt 2, VTerm "prelude__[]" []]
+                  ]
+              ] -> pure ()
           _ -> assertFailure "unexpected result",
       testCase "list_to_compound: [f, 1, 2] -> f(1, 2)" $ do
-        let list = VTerm "prelude__." [VAtom "f", VTerm "prelude__." [VInt 1, VTerm "prelude__." [VInt 2, VTerm "prelude__[]" []]]]
+        let list =
+              VTerm
+                "prelude__."
+                [ VAtom "f",
+                  VTerm
+                    "prelude__."
+                    [ VInt 1,
+                      VTerm "prelude__." [VInt 2, VTerm "prelude__[]" []]
+                    ]
+                ]
         result <- callHostCall1 "list_to_compound" list
         case result of
           VTerm "f" [VInt 1, VInt 2] -> pure ()
@@ -811,7 +862,16 @@ univTests =
           VTerm "foo" [] -> pure ()
           _ -> assertFailure "unexpected result",
       testCase "list_to_compound: [g, hello] -> g(hello)" $ do
-        let list = VTerm "prelude__." [VAtom "g", VTerm "prelude__." [VAtom "hello", VTerm "prelude__[]" []]]
+        let list =
+              VTerm
+                "prelude__."
+                [ VAtom "g",
+                  VTerm
+                    "prelude__."
+                    [ VAtom "hello",
+                      VTerm "prelude__[]" []
+                    ]
+                ]
         result <- callHostCall1 "list_to_compound" list
         case result of
           VTerm "g" [VAtom "hello"] -> pure ()

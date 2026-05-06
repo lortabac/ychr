@@ -469,7 +469,19 @@ prettyTests =
       testCase "empty list" $
         pp (Atom "[]") @?= "[]",
       testCase "list" $
-        pp (Compound "." [noAnn (Atom "a"), noAnn (Compound "." [noAnn (Atom "b"), noAnn (Atom "[]")])])
+        pp
+          ( Compound
+              "."
+              [ noAnn (Atom "a"),
+                noAnn
+                  ( Compound
+                      "."
+                      [ noAnn (Atom "b"),
+                        noAnn (Atom "[]")
+                      ]
+                  )
+              ]
+          )
           @?= "[a, b]",
       testCase "list with tail" $
         pp (Compound "." [noAnn (Atom "a"), noAnn (Var "T")])
@@ -478,16 +490,52 @@ prettyTests =
         ppOps (Compound "+" [noAnn (Var "X"), noAnn (Var "Y")])
           @?= "X + Y",
       testCase "operator precedence (no parens needed)" $
-        ppOps (Compound "+" [noAnn (Var "X"), noAnn (Compound "*" [noAnn (Var "Y"), noAnn (Var "Z")])])
+        ppOps
+          ( Compound
+              "+"
+              [ noAnn (Var "X"),
+                noAnn
+                  ( Compound
+                      "*"
+                      [ noAnn (Var "Y"),
+                        noAnn (Var "Z")
+                      ]
+                  )
+              ]
+          )
           @?= "X + Y * Z",
       testCase "operator precedence (parens needed)" $
-        ppOps (Compound "*" [noAnn (Compound "+" [noAnn (Var "X"), noAnn (Var "Y")]), noAnn (Var "Z")])
+        ppOps
+          ( Compound
+              "*"
+              [ noAnn (Compound "+" [noAnn (Var "X"), noAnn (Var "Y")]),
+                noAnn (Var "Z")
+              ]
+          )
           @?= "(X + Y) * Z",
       testCase "left associativity (no parens)" $
-        ppOps (Compound "+" [noAnn (Compound "+" [noAnn (Var "X"), noAnn (Var "Y")]), noAnn (Var "Z")])
+        ppOps
+          ( Compound
+              "+"
+              [ noAnn (Compound "+" [noAnn (Var "X"), noAnn (Var "Y")]),
+                noAnn (Var "Z")
+              ]
+          )
           @?= "X + Y + Z",
       testCase "left associativity (parens on right)" $
-        ppOps (Compound "+" [noAnn (Var "X"), noAnn (Compound "+" [noAnn (Var "Y"), noAnn (Var "Z")])])
+        ppOps
+          ( Compound
+              "+"
+              [ noAnn (Var "X"),
+                noAnn
+                  ( Compound
+                      "+"
+                      [ noAnn (Var "Y"),
+                        noAnn (Var "Z")
+                      ]
+                  )
+              ]
+          )
           @?= "X + (Y + Z)",
       testCase "prefix operator" $
         ppOps (Compound "~" [noAnn (Var "X")])
@@ -526,7 +574,8 @@ roundtripTests =
       testCase "negative int" $ roundtrip emptyOps "negative int" (Int (-7)),
       testCase "zero" $ roundtrip emptyOps "zero" (Int 0),
       testCase "string" $ roundtrip emptyOps "string" (Str "hello"),
-      testCase "string with escapes" $ roundtrip emptyOps "string escapes" (Str "say \"hi\"\n\\"),
+      testCase "string with escapes" $
+        roundtrip emptyOps "string escapes" (Str "say \"hi\"\n\\"),
       testCase "compound" $
         roundtrip emptyOps "compound" (Compound "f" [noAnn (Var "X"), noAnn (Atom "a")]),
       testCase "nested compound" $
@@ -535,7 +584,17 @@ roundtripTests =
         roundtrip emptyOps "zero-arg" (Compound "f" []),
       testCase "list" $
         roundtrip emptyOps "list" $
-          Compound "." [noAnn (Atom "a"), noAnn (Compound "." [noAnn (Atom "b"), noAnn (Atom "[]")])],
+          Compound
+            "."
+            [ noAnn (Atom "a"),
+              noAnn
+                ( Compound
+                    "."
+                    [ noAnn (Atom "b"),
+                      noAnn (Atom "[]")
+                    ]
+                )
+            ],
       testCase "list with tail" $
         roundtrip emptyOps "list with tail" $
           Compound "." [noAnn (Atom "a"), noAnn (Var "T")],
@@ -543,16 +602,44 @@ roundtripTests =
         roundtrip testOps "infix" (Compound "+" [noAnn (Var "X"), noAnn (Var "Y")]),
       testCase "nested operators" $
         roundtrip testOps "nested ops" $
-          Compound "+" [noAnn (Var "X"), noAnn (Compound "*" [noAnn (Var "Y"), noAnn (Var "Z")])],
+          Compound
+            "+"
+            [ noAnn (Var "X"),
+              noAnn
+                ( Compound
+                    "*"
+                    [ noAnn (Var "Y"),
+                      noAnn (Var "Z")
+                    ]
+                )
+            ],
       testCase "parens needed" $
         roundtrip testOps "parens" $
-          Compound "*" [noAnn (Compound "+" [noAnn (Var "X"), noAnn (Var "Y")]), noAnn (Var "Z")],
+          Compound
+            "*"
+            [ noAnn (Compound "+" [noAnn (Var "X"), noAnn (Var "Y")]),
+              noAnn (Var "Z")
+            ],
       testCase "left assoc" $
         roundtrip testOps "left assoc" $
-          Compound "+" [noAnn (Compound "+" [noAnn (Var "X"), noAnn (Var "Y")]), noAnn (Var "Z")],
+          Compound
+            "+"
+            [ noAnn (Compound "+" [noAnn (Var "X"), noAnn (Var "Y")]),
+              noAnn (Var "Z")
+            ],
       testCase "right grouping" $
         roundtrip testOps "right grouping" $
-          Compound "+" [noAnn (Var "X"), noAnn (Compound "+" [noAnn (Var "Y"), noAnn (Var "Z")])],
+          Compound
+            "+"
+            [ noAnn (Var "X"),
+              noAnn
+                ( Compound
+                    "+"
+                    [ noAnn (Var "Y"),
+                      noAnn (Var "Z")
+                    ]
+                )
+            ],
       testCase "prefix operator" $
         roundtrip testOps "prefix" (Compound "~" [noAnn (Var "X")]),
       testCase "word operator" $
@@ -560,7 +647,16 @@ roundtripTests =
       testCase "quoted functor" $
         roundtrip emptyOps "quoted functor" (Compound "Hello" [noAnn (Var "X")]),
       testCase "word op as 3-arg functor" $
-        roundtrip testOps "word op 3-arg" (Compound "is" [noAnn (Var "X"), noAnn (Var "Y"), noAnn (Var "Z")]),
+        roundtrip
+          testOps
+          "word op 3-arg"
+          ( Compound
+              "is"
+              [ noAnn (Var "X"),
+                noAnn (Var "Y"),
+                noAnn (Var "Z")
+              ]
+          ),
       testCase "empty list" $
         roundtrip emptyOps "empty list" (Atom "[]")
     ]

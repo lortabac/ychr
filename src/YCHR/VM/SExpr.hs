@@ -83,10 +83,23 @@ symbolTableToSExpr :: Types.SymbolTable -> SExpr
 symbolTableToSExpr st =
   SList (SAtom "symbol-table" : map entryToSExpr (Types.symbolTableToList st))
   where
-    entryToSExpr (Types.Identifier n arity, Types.ConstraintType ct) = SList [chrNameToSExpr n, SInt arity, SInt ct]
+    entryToSExpr (Types.Identifier n arity, Types.ConstraintType ct) =
+      SList
+        [ chrNameToSExpr n,
+          SInt arity,
+          SInt ct
+        ]
 
 identToSExpr :: Types.QualifiedIdentifier -> SExpr
-identToSExpr (Types.QualifiedIdentifier m n arity) = SList [chrNameToSExpr (Types.Qualified m n), SInt arity]
+identToSExpr (Types.QualifiedIdentifier m n arity) =
+  SList
+    [ chrNameToSExpr
+        ( Types.Qualified
+            m
+            n
+        ),
+      SInt arity
+    ]
 
 chrNameToSExpr :: Types.Name -> SExpr
 chrNameToSExpr (Types.Unqualified t) = SString t
@@ -157,7 +170,13 @@ exprToSExpr (And a b) = SList [SAtom "and", exprToSExpr a, exprToSExpr b]
 exprToSExpr (Or a b) = SList [SAtom "or", exprToSExpr a, exprToSExpr b]
 exprToSExpr NewVar = SAtom "new-var"
 exprToSExpr (MakeTerm n es) = SList (SAtom "make-term" : nameToSExpr n : map exprToSExpr es)
-exprToSExpr (MatchTerm e n a) = SList [SAtom "match-term", exprToSExpr e, nameToSExpr n, SInt a]
+exprToSExpr (MatchTerm e n a) =
+  SList
+    [ SAtom "match-term",
+      exprToSExpr e,
+      nameToSExpr n,
+      SInt a
+    ]
 exprToSExpr (GetArg e i) = SList [SAtom "get-arg", exprToSExpr e, SInt i]
 exprToSExpr (CreateConstraint ct es) =
   SList (SAtom "create-constraint" : constraintTypeToSExpr ct : map exprToSExpr es)
@@ -207,11 +226,18 @@ err :: Text -> Err a
 err = Left
 
 vmProgramFromSExpr :: SExpr -> Err VMProgram
-vmProgramFromSExpr (SList [SAtom "vm-program", progS, SList (SAtom "exports" : exportSexprs), stS]) = do
-  prog <- programFromSExpr progS
-  exports <- traverse identFromSExpr exportSexprs
-  st <- symbolTableFromSExpr stS
-  pure VMProgram {program = prog, exportedSet = Set.fromList exports, symbolTable = st}
+vmProgramFromSExpr
+  ( SList
+      [ SAtom "vm-program",
+        progS,
+        SList (SAtom "exports" : exportSexprs),
+        stS
+        ]
+    ) = do
+    prog <- programFromSExpr progS
+    exports <- traverse identFromSExpr exportSexprs
+    st <- symbolTableFromSExpr stS
+    pure VMProgram {program = prog, exportedSet = Set.fromList exports, symbolTable = st}
 vmProgramFromSExpr s = err ("expected (vm-program ...), got: " <> printSExpr s)
 
 symbolTableFromSExpr :: SExpr -> Err Types.SymbolTable
@@ -252,7 +278,14 @@ programFromSExpr
     tns <- traverse textFromSExpr tnSexprs
     rns <- traverse textFromSExpr rnSexprs
     ps <- traverse procedureFromSExpr procs
-    pure Program {numTypes = n, typeNames = tns, numRules = nr, ruleNames = rns, procedures = ps}
+    pure
+      Program
+        { numTypes = n,
+          typeNames = tns,
+          numRules = nr,
+          ruleNames = rns,
+          procedures = ps
+        }
 programFromSExpr s = err ("expected (program ...), got: " <> printSExpr s)
 
 textFromSExpr :: SExpr -> Err Text
@@ -260,10 +293,11 @@ textFromSExpr (SString t) = pure t
 textFromSExpr s = err ("expected name string, got: " <> printSExpr s)
 
 procedureFromSExpr :: SExpr -> Err Procedure
-procedureFromSExpr (SList (SAtom "procedure" : SString nm : SList paramSexprs : bodyExprs)) = do
-  params' <- traverse nameFromSExpr paramSexprs
-  body' <- traverse stmtFromSExpr bodyExprs
-  pure Procedure {name = Name nm, params = params', body = body'}
+procedureFromSExpr (SList (SAtom "procedure" : SString nm : SList paramSexprs : bodyExprs)) =
+  do
+    params' <- traverse nameFromSExpr paramSexprs
+    body' <- traverse stmtFromSExpr bodyExprs
+    pure Procedure {name = Name nm, params = params', body = body'}
 procedureFromSExpr s = err ("expected (procedure ...), got: " <> printSExpr s)
 
 stmtFromSExpr :: SExpr -> Err Stmt
@@ -288,11 +322,20 @@ stmtFromSExpr (SList (SAtom "add-history" : rid : es)) =
   AddHistory <$> ruleIdFromSExpr rid <*> traverse exprFromSExpr es
 stmtFromSExpr (SList (SAtom "drain-reactivation-queue" : sv : body)) =
   DrainReactivationQueue <$> nameFromSExpr sv <*> traverse stmtFromSExpr body
-stmtFromSExpr (SList [SAtom "push-frame", SAtom label, SAtom lineStr, SAtom colStr, SAtom file, SAtom src]) =
-  case (readMaybe (T.unpack lineStr), readMaybe (T.unpack colStr)) of
-    (Just l, Just c) ->
-      pure $ PushFrame $ StackFrame label (SourceLoc (T.unpack file) l c) src
-    _ -> err "push-frame: invalid line/col"
+stmtFromSExpr
+  ( SList
+      [ SAtom "push-frame",
+        SAtom label,
+        SAtom lineStr,
+        SAtom colStr,
+        SAtom file,
+        SAtom src
+        ]
+    ) =
+    case (readMaybe (T.unpack lineStr), readMaybe (T.unpack colStr)) of
+      (Just l, Just c) ->
+        pure $ PushFrame $ StackFrame label (SourceLoc (T.unpack file) l c) src
+      _ -> err "push-frame: invalid line/col"
 stmtFromSExpr s = err ("expected statement, got: " <> printSExpr s)
 
 exprFromSExpr :: SExpr -> Err Expr
@@ -329,7 +372,13 @@ exprFromSExpr (SList (SAtom "not-in-history" : rid : es)) =
   NotInHistory <$> ruleIdFromSExpr rid <*> traverse exprFromSExpr es
 exprFromSExpr (SList [SAtom "unify", a, b]) = Unify <$> exprFromSExpr a <*> exprFromSExpr b
 exprFromSExpr (SList [SAtom "equal", a, b]) = Equal <$> exprFromSExpr a <*> exprFromSExpr b
-exprFromSExpr (SList [SAtom "field-get", e, f]) = FieldGet <$> exprFromSExpr e <*> fieldFromSExpr f
+exprFromSExpr
+  ( SList
+      [ SAtom "field-get",
+        e,
+        f
+        ]
+    ) = FieldGet <$> exprFromSExpr e <*> fieldFromSExpr f
 exprFromSExpr s = err ("expected expression, got: " <> printSExpr s)
 
 fieldFromSExpr :: SExpr -> Err Field

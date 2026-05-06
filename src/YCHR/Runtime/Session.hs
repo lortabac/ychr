@@ -87,7 +87,13 @@ data CHR :: Effect
 type instance DispatchOf CHR = Static WithSideEffects
 
 data instance StaticRep CHR
-  = CHRRep ProcMap HostCallRegistry (Map Types.UnqualifiedIdentifier ExportResolution) (Set Types.QualifiedIdentifier)
+  = CHRRep
+      ProcMap
+      HostCallRegistry
+      (Map Types.UnqualifiedIdentifier ExportResolution)
+      ( Set
+          Types.QualifiedIdentifier
+      )
 
 -- | Shorthand for the full set of effects available inside a CHR session.
 type CHREffects es =
@@ -108,7 +114,17 @@ runCHR ::
   (IOE :> es) =>
   SessionInput ->
   HostCallRegistry ->
-  Eff (CHR : State CallStack : Writer [SuspensionId] : ReactQueue : PropHistory : CHRStore : Unify : es) a ->
+  Eff
+    ( CHR
+        : State CallStack
+        : Writer [SuspensionId]
+        : ReactQueue
+        : PropHistory
+        : CHRStore
+        : Unify
+        : es
+    )
+    a ->
   Eff es a
 runCHR si hc =
   runUnify
@@ -150,7 +166,13 @@ withCHRExtra si hc extraProcs action =
     . evalStaticRep (CHRRep procMap hc si.exportMap si.exportedSet)
     $ action
   where
-    baseProcMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- si.program.procedures]
+    baseProcMap =
+      Map.fromList
+        [ ( pname,
+            p
+          )
+        | p@Procedure {name = pname} <- si.program.procedures
+        ]
     extraProcMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- extraProcs]
     procMap = extraProcMap `Map.union` baseProcMap
 
@@ -195,4 +217,12 @@ resolveByExport expMap expSet name arity = case name of
   Types.Qualified m n ->
     if Set.member (Types.QualifiedIdentifier m n arity) expSet
       then Right name
-      else Left ("Constraint not exported: " ++ T.unpack m ++ ":" ++ T.unpack n ++ "/" ++ show arity)
+      else
+        Left
+          ( "Constraint not exported: "
+              ++ T.unpack m
+              ++ ":"
+              ++ T.unpack n
+              ++ "/"
+              ++ show arity
+          )

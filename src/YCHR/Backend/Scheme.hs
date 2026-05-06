@@ -106,7 +106,13 @@ compileProcedure :: Procedure -> [SExpr]
 compileProcedure proc =
   [ SList
       ( SAtom "define"
-          : SList (SAtom (mangleName proc.name) : SAtom "%s" : map (SAtom . mangleName) proc.params)
+          : SList
+            ( SAtom (mangleName proc.name)
+                : SAtom "%s"
+                : map
+                  (SAtom . mangleName)
+                  proc.params
+            )
           : [wrapReturn (compileStmts proc.body)]
       )
   ]
@@ -230,7 +236,16 @@ compileForeach (Label lbl) ct (Name sv) conds body =
                       SList [SAtom "<", SAtom "%i", SAtom "%count"],
                       SList
                         [ SAtom "let",
-                          SList [SList [SAtom sv, SList [SAtom "vector-ref", SAtom "%vec", SAtom "%i"]]],
+                          SList
+                            [ SList
+                                [ SAtom sv,
+                                  SList
+                                    [ SAtom "vector-ref",
+                                      SAtom "%vec",
+                                      SAtom "%i"
+                                    ]
+                                ]
+                            ],
                           foreachInner lbl sv conds body
                         ],
                       SList [SAtom (foreachName lbl), SList [SAtom "+", SAtom "%i", SInt 1]]
@@ -260,7 +275,11 @@ foreachInner lbl sv conds body =
    in SList [SAtom "when", guard, innerBody]
   where
     compileCondition (ArgIndex i, e) =
-      SList [SAtom "equal?/chr", SList [SAtom "constraint-arg", SAtom sv, SInt i], compileExpr e]
+      SList
+        [ SAtom "equal?/chr",
+          SList [SAtom "constraint-arg", SAtom sv, SInt i],
+          compileExpr e
+        ]
 
 -- ---------------------------------------------------------------------------
 -- Expression compilation
@@ -415,14 +434,43 @@ collectUnknownHostCalls procs =
 
 -- | Scheme builtins that don't need stubs.
 schemeBuiltins :: [Text]
-schemeBuiltins = ["+", "-", "*", "div", "mod", "mod0", "<", ">", ">=", "<=", "eqv?", "equal?", "display", "newline", "string-append", "string-length", "string-upcase", "string-downcase", "integer?", "symbol?", "boolean?", "string?", "not"]
+schemeBuiltins =
+  [ "+",
+    "-",
+    "*",
+    "div",
+    "mod",
+    "mod0",
+    "<",
+    ">",
+    ">=",
+    "<=",
+    "eqv?",
+    "equal?",
+    "display",
+    "newline",
+    "string-append",
+    "string-length",
+    "string-upcase",
+    "string-downcase",
+    "integer?",
+    "symbol?",
+    "boolean?",
+    "string?",
+    "not"
+  ]
 
 -- | Collect host call names from a statement.
 collectStmtHC :: Stmt -> Set Text
 collectStmtHC (Let _ e) = collectExprHC e
 collectStmtHC (Assign _ e) = collectExprHC e
-collectStmtHC (If c ts es) = collectExprHC c <> foldMap collectStmtHC ts <> foldMap collectStmtHC es
-collectStmtHC (Foreach _ _ _ conds body) = foldMap (collectExprHC . snd) conds <> foldMap collectStmtHC body
+collectStmtHC (If c ts es) =
+  collectExprHC c
+    <> foldMap collectStmtHC ts
+    <> foldMap collectStmtHC es
+collectStmtHC (Foreach _ _ _ conds body) =
+  foldMap (collectExprHC . snd) conds
+    <> foldMap collectStmtHC body
 collectStmtHC (Return e) = collectExprHC e
 collectStmtHC (ExprStmt e) = collectExprHC e
 collectStmtHC (Store e) = collectExprHC e

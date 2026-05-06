@@ -39,12 +39,21 @@ import YCHR.VM (ConstraintType (..))
 --
 -- Also returns the list of per-rule display names, indexed by the
 -- rule's 'RuleId' (which mirrors its program-wide source index).
-collectOccurrences :: SymbolTable -> D.Program -> Eff '[Writer [Diagnostic CompileError]] (OccurrenceMap, [Text])
+collectOccurrences ::
+  SymbolTable ->
+  D.Program ->
+  Eff '[Writer [Diagnostic CompileError]] (OccurrenceMap, [Text])
 collectOccurrences symTab prog = do
   let indexed = zip [0 ..] prog.rules
       displayNames = map (uncurry ruleDisplayName) indexed
   allOccs <- fmap concat (traverse (ruleOccurrences symTab) indexed)
-  let grouped = foldl' (\m occ -> occMapAppend (Identifier occ.conName occ.conArity) occ m) occMapEmpty allOccs
+  let grouped =
+        foldl'
+          ( \m occ ->
+              occMapAppend (Identifier occ.conName occ.conArity) occ m
+          )
+          occMapEmpty
+          allOccs
   pure (occMapMap (assignNumbers . reverse) grouped, displayNames)
   where
     -- Reverse before numbering to undo the prepend-on-insert in
@@ -63,7 +72,12 @@ ruleDisplayName ruleIdx rule = case rule.name of
 -- | Produce one 'Occurrence' record for every head constraint of a
 -- single rule. The active head varies; the other heads become the
 -- partner list of that occurrence.
-ruleOccurrences :: SymbolTable -> (Int, D.Rule) -> Eff '[Writer [Diagnostic CompileError]] [Occurrence]
+ruleOccurrences ::
+  SymbolTable ->
+  ( Int,
+    D.Rule
+  ) ->
+  Eff '[Writer [Diagnostic CompileError]] [Occurrence]
 ruleOccurrences symTab (ruleIdx, rule) = do
   let AnnP {node = ruleHead} = rule.head
       kept = ruleHead.kept
@@ -100,7 +114,18 @@ mkOccurrence symTab rule ruleId' display combined activeIdx activeCon activeIsKe
       headPretty = rule.head.parsed
   let ruleLabel = Just ("rule " <> display)
   partners <- for partners' $ \(idx, con, isKept) -> do
-    ct <- lookupCType symTab headLoc headPretty ruleLabel (Identifier con.name (length con.args))
+    ct <-
+      lookupCType
+        symTab
+        headLoc
+        headPretty
+        ruleLabel
+        ( Identifier
+            con.name
+            ( length
+                con.args
+            )
+        )
     pure
       Partner
         { idx = idx,

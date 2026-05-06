@@ -9,13 +9,24 @@ import YCHR.DSL
 import YCHR.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
-import YCHR.Rename (RenameError (..), RenameInputs (..), RenameWarning (..), defaultRenameInputs)
+import YCHR.Rename
+  ( RenameError (..),
+    RenameInputs (..),
+    RenameWarning (..),
+    defaultRenameInputs,
+  )
 import YCHR.Rename qualified as Rn
 
 -- | Test-local wrapper that forwards to 'Rn.renameProgram' with empty
 -- rename inputs (no operator-export map and no trailing-loc map). The
 -- module-list-only signature keeps existing tests concise.
-renameProgram :: [Module] -> Either [Diagnostic RenameError] ([Module], [Diagnostic RenameWarning])
+renameProgram ::
+  [Module] ->
+  Either
+    [Diagnostic RenameError]
+    ( [Module],
+      [Diagnostic RenameWarning]
+    )
 renameProgram = Rn.renameProgram defaultRenameInputs
 
 tests :: TestTree
@@ -304,7 +315,15 @@ goalClassificationTests =
                 `defining` [[con "c" []] ==> [func "leq" [func "pair" [var "X"]]]]
         rule <- singleRule m
         rule.body.node
-          @?= [CompoundTerm (Qualified "M" "leq") [CompoundTerm (Unqualified "pair") [VarTerm "X"]]],
+          @?= [ CompoundTerm
+                  (Qualified "M" "leq")
+                  [ CompoundTerm
+                      (Unqualified "pair")
+                      [ VarTerm
+                          "X"
+                      ]
+                  ]
+              ],
       testCase "unknown functor in guard stays Unqualified (data constructor)" $ do
         let m =
               module' "M"
@@ -439,7 +458,13 @@ multiModuleTests =
               module' "Logic"
                 `importing` ["Order"]
                 `defining` [ "trans"
-                               @: ( [con "leq" [var "X", var "Y"], con "leq" [var "Y", var "Z"]]
+                               @: ( [ con "leq" [var "X", var "Y"],
+                                      con
+                                        "leq"
+                                        [ var "Y",
+                                          var "Z"
+                                        ]
+                                    ]
                                       ==> [func "leq" [var "X", var "Z"]]
                                   )
                            ]
@@ -450,7 +475,16 @@ multiModuleTests =
         (renamedOrder.rules, renamedLogic.rules)
           @?= ( [ Rule
                     (Just (noAnn "refl"))
-                    (noAnnP (Simplification [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "X"]]))
+                    ( noAnnP
+                        ( Simplification
+                            [ Constraint
+                                (Qualified "Order" "leq")
+                                [ VarTerm "X",
+                                  VarTerm "X"
+                                ]
+                            ]
+                        )
+                    )
                     (noAnnP [])
                     (noAnnP [AtomTerm "true"])
                 ],
@@ -464,14 +498,39 @@ multiModuleTests =
                         )
                     )
                     (noAnnP [])
-                    (noAnnP [CompoundTerm (Qualified "Order" "leq") [VarTerm "X", VarTerm "Z"]])
+                    ( noAnnP
+                        [ CompoundTerm
+                            (Qualified "Order" "leq")
+                            [ VarTerm "X",
+                              VarTerm "Z"
+                            ]
+                        ]
+                    )
                 ]
               ),
       testCase "empty program" $
         renameProgram [] @?= Right ([], []),
       testCase "module with no rules" $
         let m = module' "M" `declaring` ["leq" // 2]
-         in renameProgram [m] @?= Right ([Module "M" [] [noAnn (ConstraintDecl "leq" 2 Nothing)] [] [] [] Nothing], []),
+         in renameProgram [m]
+              @?= Right
+                ( [ Module
+                      "M"
+                      []
+                      [ noAnn
+                          ( ConstraintDecl
+                              "leq"
+                              2
+                              Nothing
+                          )
+                      ]
+                      []
+                      []
+                      []
+                      Nothing
+                  ],
+                  []
+                ),
       testCase "rule name preserved" $ do
         let m =
               module' "M"
@@ -586,7 +645,17 @@ exportTests =
           @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
       testCase "exporting undeclared name produces error" $ do
         let m = module' "M" `exporting` ["foo" // 1]
-        renameProgram [m] @?= Left [noDiag (AnnP (UnknownExport "M" "foo" 1) dummyLoc (Atom ""))],
+        renameProgram [m]
+          @?= Left
+            [ noDiag
+                ( AnnP
+                    (UnknownExport "M" "foo" 1)
+                    dummyLoc
+                    ( Atom
+                        ""
+                    )
+                )
+            ],
       testCase "exporting declared constraint is fine" $ do
         let m =
               module' "M"
@@ -620,15 +689,51 @@ warningTests =
         ws @?= [noDiag (AnnP (UndeclaredDataConstructor "foo") dummyLoc (Atom ""))],
       testCase "declared data constructor produces no warning" $ do
         let m =
-              (module' "M" `declaring` ["c" // 1] `defining` [[con "c" [var "X"]] <=> [atom "true"] |- [func "foo" [var "X"]]])
-                { typeDecls = [noAnn (TypeDefinition (Unqualified "t") [] [DataConstructor (Unqualified "foo") [TypeCon (Unqualified "int") []]])]
+              ( module' "M"
+                  `declaring` ["c" // 1]
+                  `defining` [ [con "c" [var "X"]]
+                                 <=> [ atom
+                                         "true"
+                                     ]
+                                 |- [func "foo" [var "X"]]
+                             ]
+              )
+                { typeDecls =
+                    [ noAnn
+                        ( TypeDefinition
+                            (Unqualified "t")
+                            []
+                            [ DataConstructor
+                                (Unqualified "foo")
+                                [TypeCon (Unqualified "int") []]
+                            ]
+                        )
+                    ]
                 }
         ws <- warningsOf [m]
         ws @?= [],
       testCase "data constructor arity mismatch" $ do
         let m =
-              (module' "M" `declaring` ["c" // 1] `defining` [[con "c" [var "X"]] <=> [atom "true"] |- [func "foo" [var "X", var "X"]]])
-                { typeDecls = [noAnn (TypeDefinition (Unqualified "t") [] [DataConstructor (Unqualified "foo") [TypeCon (Unqualified "int") []]])]
+              ( module' "M"
+                  `declaring` ["c" // 1]
+                  `defining` [ [con "c" [var "X"]]
+                                 <=> [ atom
+                                         "true"
+                                     ]
+                                 |- [func "foo" [var "X", var "X"]]
+                             ]
+              )
+                { typeDecls =
+                    [ noAnn
+                        ( TypeDefinition
+                            (Unqualified "t")
+                            []
+                            [ DataConstructor
+                                (Unqualified "foo")
+                                [TypeCon (Unqualified "int") []]
+                            ]
+                        )
+                    ]
                 }
         ws <- warningsOf [m]
         ws @?= [noDiag (AnnP (DataConstructorArityMismatch "foo" 2) dummyLoc (Atom ""))],
@@ -651,11 +756,31 @@ warningTests =
         ws @?= [noDiag (AnnP (UndeclaredDataConstructor "unknown") dummyLoc (Atom ""))],
       testCase "exporting undeclared type produces error" $ do
         let m = (module' "M") {exports = Just (noAnnP [TypeExportDecl "tree" 0])}
-        renameProgram [m] @?= Left [noDiag (AnnP (UnknownExport "M" "tree" 0) dummyLoc (Atom ""))],
+        renameProgram [m]
+          @?= Left
+            [ noDiag
+                ( AnnP
+                    (UnknownExport "M" "tree" 0)
+                    dummyLoc
+                    ( Atom
+                        ""
+                    )
+                )
+            ],
       testCase "exporting declared type is fine" $ do
         let m =
               (module' "M")
-                { typeDecls = [noAnn (TypeDefinition (Unqualified "tree") [] [DataConstructor (Unqualified "empty") []])],
+                { typeDecls =
+                    [ noAnn
+                        ( TypeDefinition
+                            (Unqualified "tree")
+                            []
+                            [ DataConstructor
+                                (Unqualified "empty")
+                                []
+                            ]
+                        )
+                    ],
                   exports = Just (noAnnP [TypeExportDecl "tree" 0])
                 }
         case renameProgram [m] of
@@ -664,7 +789,17 @@ warningTests =
       testCase "type definition names are qualified after renaming" $ do
         let m =
               (module' "M")
-                { typeDecls = [noAnn (TypeDefinition (Unqualified "tree") [] [DataConstructor (Unqualified "leaf") [TypeCon (Unqualified "int") []]])]
+                { typeDecls =
+                    [ noAnn
+                        ( TypeDefinition
+                            (Unqualified "tree")
+                            []
+                            [ DataConstructor
+                                (Unqualified "leaf")
+                                [TypeCon (Unqualified "int") []]
+                            ]
+                        )
+                    ]
                 }
         case renameProgram [m] of
           Right ([renamed], _) -> case renamed.typeDecls of
@@ -679,11 +814,34 @@ warningTests =
       testCase "type references resolved across modules" $ do
         let modA =
               (module' "A")
-                { typeDecls = [noAnn (TypeDefinition (Unqualified "color") [] [DataConstructor (Unqualified "red") []])]
+                { typeDecls =
+                    [ noAnn
+                        ( TypeDefinition
+                            (Unqualified "color")
+                            []
+                            [ DataConstructor
+                                (Unqualified "red")
+                                []
+                            ]
+                        )
+                    ]
                 }
             modB =
               (module' "B" `importing` ["A"])
-                { typeDecls = [noAnn (TypeDefinition (Unqualified "widget") [] [DataConstructor (Unqualified "w") [TypeCon (Unqualified "color") []]])]
+                { typeDecls =
+                    [ noAnn
+                        ( TypeDefinition
+                            (Unqualified "widget")
+                            []
+                            [ DataConstructor
+                                (Unqualified "w")
+                                [ TypeCon
+                                    (Unqualified "color")
+                                    []
+                                ]
+                            ]
+                        )
+                    ]
                 }
         case renameProgram [modA, modB] of
           Right ([_, renamedB], _) -> case renamedB.typeDecls of
@@ -712,14 +870,32 @@ importListTests =
                 `exporting` ["leq" // 2, "geq" // 2]
             modLogic =
               (module' "Logic")
-                { imports = [noAnnP (ModuleImport "Order" (Just [ConstraintDecl "leq" 2 Nothing]))]
+                { imports =
+                    [ noAnnP
+                        ( ModuleImport
+                            "Order"
+                            ( Just
+                                [ ConstraintDecl
+                                    "leq"
+                                    2
+                                    Nothing
+                                ]
+                            )
+                        )
+                    ]
                 }
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         case renameProgram [modOrder, modLogic] of
           Right ([_, renamedLogic], _) -> case renamedLogic.rules of
             [rule] ->
               rule.head.node
-                @?= Simplification [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"]]
+                @?= Simplification
+                  [ Constraint
+                      (Qualified "Order" "leq")
+                      [ VarTerm "X",
+                        VarTerm "Y"
+                      ]
+                  ]
             rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
           Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs,
@@ -730,7 +906,19 @@ importListTests =
                 `exporting` ["leq" // 2, "geq" // 2]
             modLogic =
               (module' "Logic")
-                { imports = [noAnnP (ModuleImport "Order" (Just [ConstraintDecl "geq" 2 Nothing]))]
+                { imports =
+                    [ noAnnP
+                        ( ModuleImport
+                            "Order"
+                            ( Just
+                                [ ConstraintDecl
+                                    "geq"
+                                    2
+                                    Nothing
+                                ]
+                            )
+                        )
+                    ]
                 }
                 `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modOrder, modLogic]
@@ -742,7 +930,19 @@ importListTests =
                 `exporting` ["leq" // 2]
             modLogic =
               (module' "Logic")
-                { imports = [noAnnP (ModuleImport "Order" (Just [ConstraintDecl "nonexistent" 1 Nothing]))]
+                { imports =
+                    [ noAnnP
+                        ( ModuleImport
+                            "Order"
+                            ( Just
+                                [ ConstraintDecl
+                                    "nonexistent"
+                                    1
+                                    Nothing
+                                ]
+                            )
+                        )
+                    ]
                 }
         renameProgram [modOrder, modLogic]
           @?= Left [noDiag (AnnP (UnknownImport "Order" "nonexistent" 1) dummyLoc (Atom ""))],
@@ -753,7 +953,21 @@ importListTests =
                 `exporting` ["leq" // 2]
             modLogic =
               (module' "Logic")
-                { imports = [noAnnP (ModuleImport "Order" (Just [OperatorDecl (OpDecl 700 Xfx "===")]))]
+                { imports =
+                    [ noAnnP
+                        ( ModuleImport
+                            "Order"
+                            ( Just
+                                [ OperatorDecl
+                                    ( OpDecl
+                                        700
+                                        Xfx
+                                        "==="
+                                    )
+                                ]
+                            )
+                        )
+                    ]
                 }
             inputs =
               defaultRenameInputs
@@ -769,7 +983,21 @@ importListTests =
                 `exporting` ["leq" // 2]
             modLogic =
               (module' "Logic")
-                { imports = [noAnnP (ModuleImport "Order" (Just [OperatorDecl (OpDecl 700 Xfx "===")]))]
+                { imports =
+                    [ noAnnP
+                        ( ModuleImport
+                            "Order"
+                            ( Just
+                                [ OperatorDecl
+                                    ( OpDecl
+                                        700
+                                        Xfx
+                                        "==="
+                                    )
+                                ]
+                            )
+                        )
+                    ]
                 }
         renameProgram [modOrder, modLogic]
           @?= Left [noDiag (AnnP (UnknownOperatorImport "Order" "===") dummyLoc (Atom ""))],
