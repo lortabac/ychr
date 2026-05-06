@@ -24,6 +24,9 @@
     %unify %unifiable? %nonvar? %chr-error %print %ground?
     %term-variables %compound-to-list %list-to-compound
     %read-term-from-string
+    %int-to-float %float-to-int
+    %idiv %imod
+    %copy-term
     %nil %cons
     ;; Session initialization
     %make-session)
@@ -69,6 +72,19 @@
 
   ;;; Print
   (define (%print v) (display v) (newline))
+
+  ;;; Numeric conversions. `inexact` is the r6rs replacement for
+  ;;; `exact->inexact`; `(exact (truncate x))` truncates toward zero,
+  ;;; matching Haskell `truncate :: Double -> Int`.
+  (define (%int-to-float n) (inexact n))
+  (define (%float-to-int x) (exact (truncate x)))
+
+  ;;; Floor integer division, matching Haskell `div`. r6rs `div` is
+  ;;; Euclidean (remainder always non-negative), which disagrees on
+  ;;; cases like `20 div -3` where the result must round toward
+  ;;; negative infinity.
+  (define (%idiv n d) (exact (floor (/ n d))))
+  (define (%imod n d) (- n (* (%idiv n d) d)))
 
   ;;; Groundness check
   (define (%ground? v)
@@ -135,4 +151,30 @@
   ;;; read_term_from_string: stub
   (define (%read-term-from-string s)
     (error "%read-term-from-string" "not implemented"))
+
+  ;;; copy_term: deep-copy a term, replacing each unbound variable with
+  ;;; a fresh one. Sharing is preserved via an id->fresh-var hashtable,
+  ;;; so a term like `f(X, X)` copies to `f(Y, Y)` with the two slots
+  ;;; aliased. Mirrors copyTerm in src/YCHR/Runtime/Registry.hs.
+  (define (%copy-term s v)
+    (let ((cache (make-eqv-hashtable)))
+      (let loop ((v v))
+        (let ((d (deref v)))
+          (cond
+            ((var? d)
+             (let* ((id (var-id d))
+                    (cached (hashtable-ref cache id #f)))
+               (or cached
+                   (let ((fresh (make-var s)))
+                     (hashtable-set! cache id fresh)
+                     fresh))))
+            ((wildcard? d) (make-var s))
+            ((term? d)
+             (let* ((args (term-args d))
+                    (n (vector-length args))
+                    (new-args (make-vector n)))
+               (do ((i 0 (+ i 1))) ((= i n))
+                 (vector-set! new-args i (loop (vector-ref args i))))
+               (make-term (term-functor d) new-args)))
+            (else d))))))
 )

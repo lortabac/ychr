@@ -66,8 +66,18 @@
         ((wildcard? d) "_")
         ;; Boolean (Scheme #t/#f → "true"/"false")
         ((boolean? d) (if d "true" "false"))
-        ;; Integer
-        ((integer? d) (number->string d))
+        ;; Exact integer. Negative literals are parenthesized to match
+        ;; Haskell prettyTerm.
+        ((and (integer? d) (exact? d))
+         (if (negative? d)
+             (string-append "(" (number->string d) ")")
+             (number->string d)))
+        ;; Inexact number (covers integer-valued floats like 0.0).
+        ((and (number? d) (inexact? d))
+         (let ((s (number->string d)))
+           (if (negative? d)
+               (string-append "(" s ")")
+               s)))
         ;; String
         ((string? d) (string-append "\"" (escape-string d) "\""))
         ;; Symbol (atom)

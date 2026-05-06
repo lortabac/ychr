@@ -163,7 +163,11 @@
     (cond
       ((and (var? d1) (var? d2)) (eq? d1 d2))
       ((or (var? d1) (var? d2)) #f)
-      ((and (integer? d1) (integer? d2)) (eqv? d1 d2))
+      ;; Numeric equality. eqv? distinguishes exact and inexact, so an
+      ;; integer is never equal to a flonum even when their values
+      ;; coincide — matching the Haskell side which keeps VInt and
+      ;; VFloat separate.
+      ((and (number? d1) (number? d2)) (eqv? d1 d2))
       ((and (symbol? d1) (symbol? d2)) (eq? d1 d2))
       ((and (boolean? d1) (boolean? d2)) (eq? d1 d2))
       ((and (string? d1) (string? d2)) (string=? d1 d2))

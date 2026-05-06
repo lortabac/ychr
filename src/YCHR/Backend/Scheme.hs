@@ -371,14 +371,14 @@ compileSymbol s
 hostCallMap :: Map.Map Text Text
 hostCallMap =
   Map.fromList
-    [ ("div", "quotient"),
-      ("mod", "modulo"),
+    [ ("div", "%idiv"),
+      ("mod", "%imod"),
       ("rem", "mod0"),
       ("=<", "<="),
-      ("==", "eqv?"),
+      ("==", "equal?/chr"),
       ("float", "flonum?"),
-      ("int_to_float", "exact->inexact"),
-      ("float_to_int", "exact-truncate"),
+      ("int_to_float", "%int-to-float"),
+      ("float_to_int", "%float-to-int"),
       ("write", "display"),
       ("print", "%print"),
       ("string_concat", "string-append"),
@@ -397,15 +397,25 @@ hostCallMap =
       ("term_variables", "%term-variables"),
       ("compound_to_list", "%compound-to-list"),
       ("list_to_compound", "%list-to-compound"),
-      ("read_term_from_string", "%read-term-from-string")
+      ("read_term_from_string", "%read-term-from-string"),
+      ("copy_term", "%copy-term")
     ]
 
+-- | Host calls that need the session threaded as their first argument.
+sessionHostCalls :: Set.Set Text
+sessionHostCalls = Set.fromList ["copy_term"]
+
 -- | Compile a host call.  Arguments are dereferenced before calling.
+-- Calls listed in 'sessionHostCalls' get the session @%s@ threaded as
+-- their first argument (before the user-visible arguments).
 compileHostCall :: Name -> [Expr] -> SExpr
 compileHostCall (Name n) args =
   let fn = Map.findWithDefault n n hostCallMap
       derefedArgs = map (\a -> SList [SAtom "deref", compileExpr a]) args
-   in SList (SAtom fn : derefedArgs)
+      allArgs
+        | Set.member n sessionHostCalls = SAtom "%s" : derefedArgs
+        | otherwise = derefedArgs
+   in SList (SAtom fn : allArgs)
 
 -- | Compile an EvalDeep expression.  Like the standard expression
 -- compiler, but Var references are dereferenced (following binding
@@ -438,6 +448,7 @@ schemeBuiltins =
   [ "+",
     "-",
     "*",
+    "/",
     "div",
     "mod",
     "mod0",

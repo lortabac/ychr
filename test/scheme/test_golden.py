@@ -21,13 +21,9 @@ GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden")
 # Test directories whose tests exercise Haskell-only meta-programming
 # primitives and therefore cannot run on the Scheme backend.
 HASKELL_ONLY = {
-    "copy_term_fn",
+    # read_term_from_string is a stub on the Scheme runtime.
     "read_term_test",
-    # Whole directories below pin Haskell runtime semantics that the
-    # Scheme runtime does not yet match: copy_term sharing, int-float
-    # conversion functions, and the typed-constructor display path.
-    "copy_term_sharing",
-    "int_float_conversion",
+    # Mangled constructor pretty-printing differs.
     "typecheck_constructor_in_lambda_body",
     # write_store_to_list is a Haskell-only meta host call; no Scheme
     # implementation exists yet (parallels print_store).
@@ -35,43 +31,8 @@ HASKELL_ONLY = {
 }
 
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only
-# some cases in a directory diverge — typically those that pretty-print
-# negative numbers, exercise integer div/mod (Guile r6rs lacks
-# `quotient`), or rely on Haskell-side handling of unicode-quoted atoms.
+# some cases in a directory diverge.
 HASKELL_ONLY_CASES = {
-    # Haskell wraps negative numbers in parens; Scheme prints them bare.
-    ("arith_int", "add_neg"),
-    ("arith_int", "sub_neg"),
-    ("arith_int", "mul_neg"),
-    ("arith_float", "add_neg"),
-    ("arith_float", "sub_neg"),
-    ("arith_float", "mul_neg"),
-    ("arith_float", "div_neg"),
-    ("negative_number_literals", "neg_int"),
-    ("negative_number_literals", "neg_float"),
-    ("negative_number_literals", "arith_int"),
-    ("negative_number_literals", "arith_flt"),
-    ("negative_number_literals", "diff"),
-    ("negative_number_literals", "neg_pos"),
-    # Float pretty-printing differs (e.g. `1.0e-6` vs `0.000001`).
-    ("arith_float", "div_basic"),
-    ("arith_float", "div_whole"),
-    ("arith_float", "small"),
-    # Scheme float matching diverges on literal `1.5` HNF compares.
-    ("hnf_literal_in_head", "float_15"),
-    # Guile's r6rs subset has no `quotient`; div/mod are unimplemented
-    # in the Scheme backend's emitted code.
-    ("arith_int", "div_pos"),
-    ("arith_int", "div_neg_num"),
-    ("arith_int", "div_neg_den"),
-    ("arith_int", "div_both_neg"),
-    ("arith_int", "div_exact"),
-    ("arith_int", "mod_pos"),
-    ("arith_int", "mod_zero"),
-    ("arith_int", "mod_neg_num"),
-    ("arith_int", "mod_neg_den"),
-    # Term-level `==` semantics differ between backends.
-    ("comparisons", "term_eq"),
     # `ground/1` reports a different answer for a partially-unbound
     # term in the Scheme backend.
     ("type_predicates", "grd_no"),
