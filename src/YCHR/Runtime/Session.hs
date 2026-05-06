@@ -18,6 +18,10 @@ module YCHR.Runtime.Session
     ProcMap,
     CallStack,
 
+    -- * Session input
+    SessionInput (..),
+    toSessionInput,
+
     -- * Session setup
     runCHR,
     withCHR,
@@ -39,6 +43,7 @@ import Effectful
 import Effectful.Dispatch.Static
 import Effectful.State.Static.Local (State, evalState)
 import Effectful.Writer.Static.Local (Writer, runWriter)
+import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Compile (tellProcName)
 import YCHR.Compile.Pipeline (CompiledProgram (..), ExportResolution (..))
 import YCHR.Runtime.History (PropHistory, runPropHistory)
@@ -54,6 +59,28 @@ type ProcMap = Map Name Procedure
 
 -- | Runtime call stack for error reporting (newest first).
 type CallStack = [StackFrame]
+
+-- | The narrow slice of a compiled program that 'runCHR' / 'withCHR'
+-- need: the VM 'Program' and the export-resolution maps used by
+-- 'tellConstraint' to canonicalize unqualified constraint names. A
+-- 'CompiledProgram' projects to one via 'toSessionInput'; the
+-- pre-compiled type-checker bundle is a 'SessionInput' directly.
+data SessionInput = SessionInput
+  { program :: Program,
+    exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
+    exportedSet :: Set Types.QualifiedIdentifier
+  }
+  deriving (Lift)
+
+-- | Project a 'CompiledProgram' down to the slice 'runCHR' / 'withCHR'
+-- actually read.
+toSessionInput :: CompiledProgram -> SessionInput
+toSessionInput cp =
+  SessionInput
+    { program = cp.program,
+      exportMap = cp.exportMap,
+      exportedSet = cp.exportedSet
+    }
 
 data CHR :: Effect
 
@@ -79,51 +106,51 @@ type CHREffects es =
 -- initialised and persists for the duration of the computation.
 runCHR ::
   (IOE :> es) =>
-  CompiledProgram ->
+  SessionInput ->
   HostCallRegistry ->
   Eff (CHR : State CallStack : Writer [SuspensionId] : ReactQueue : PropHistory : CHRStore : Unify : es) a ->
   Eff es a
-runCHR cp hc =
+runCHR si hc =
   runUnify
-    . runCHRStore cp.program.typeNames
+    . runCHRStore si.program.typeNames
     . runPropHistory
     . runReactQueue
     . fmap fst
     . runWriter @[SuspensionId]
     . evalState @CallStack []
-    . evalStaticRep (CHRRep procMap hc cp.exportMap cp.exportedSet)
+    . evalStaticRep (CHRRep procMap hc si.exportMap si.exportedSet)
   where
-    procMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- cp.program.procedures]
+    procMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- si.program.procedures]
 
 -- | Convenience wrapper that runs a CHR session in 'IO'.
 withCHR ::
-  CompiledProgram ->
+  SessionInput ->
   HostCallRegistry ->
   (forall es. (CHREffects es) => Eff es a) ->
   IO a
-withCHR cp hc action = runEff (runCHR cp hc action)
+withCHR si hc action = runEff (runCHR si hc action)
 
 -- | Like 'withCHR' but merges extra procedures (e.g. query-time lambda
 -- compilations and updated call dispatches) into the ProcMap.
 withCHRExtra ::
-  CompiledProgram ->
+  SessionInput ->
   HostCallRegistry ->
   [Procedure] ->
   (forall es. (CHREffects es) => Eff es a) ->
   IO a
-withCHRExtra cp hc extraProcs action =
+withCHRExtra si hc extraProcs action =
   runEff
     . runUnify
-    . runCHRStore cp.program.typeNames
+    . runCHRStore si.program.typeNames
     . runPropHistory
     . runReactQueue
     . fmap fst
     . runWriter @[SuspensionId]
     . evalState @CallStack []
-    . evalStaticRep (CHRRep procMap hc cp.exportMap cp.exportedSet)
+    . evalStaticRep (CHRRep procMap hc si.exportMap si.exportedSet)
     $ action
   where
-    baseProcMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- cp.program.procedures]
+    baseProcMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- si.program.procedures]
     extraProcMap = Map.fromList [(pname, p) | p@Procedure {name = pname} <- extraProcs]
     procMap = extraProcMap `Map.union` baseProcMap
 

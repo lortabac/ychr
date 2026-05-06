@@ -43,10 +43,9 @@ import Effectful
 import Effectful.Reader.Static (Reader, ask, runReader)
 import Effectful.State.Static.Local (State, evalState, get, put)
 import YCHR.Compile.Names (vmName)
-import YCHR.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic (..))
-import YCHR.PExpr (PExpr (Atom), mkOpTable)
+import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed (AnnP (..), SourceLoc (..))
 import YCHR.Runtime.Interpreter (baseHostCallRegistry)
 import YCHR.Runtime.Registry (fromValueList, valueList)
@@ -55,7 +54,6 @@ import YCHR.Runtime.Types (Value (..))
 import YCHR.Runtime.Var (Unify, deref, newVar)
 import YCHR.TypeCheck.Compiled (typeCheckerProgram)
 import YCHR.TypeCheck.Error (TypeCheckError (..))
-import YCHR.TypeCheck.TH (TypeCheckerProgram (..))
 import YCHR.Types
   ( DataConstructor (..),
     Name (..),
@@ -231,27 +229,6 @@ data CtxStore = CtxStore
 emptyCtxStore :: CtxStore
 emptyCtxStore = CtxStore {nextId = 0, ctxMap = Map.empty}
 
--- | Inflate the trimmed-down 'TypeCheckerProgram' into the
--- 'CompiledProgram' shape that 'withCHR' expects. Only the four
--- fields 'TypeCheckerProgram' carries are read by the runtime; the
--- remaining fields are stubbed out because populating them would
--- require @Lift@ instances we do not need.
-typeCheckerCompiledProgram :: CompiledProgram
-typeCheckerCompiledProgram =
-  let tcp = typeCheckerProgram
-   in CompiledProgram
-        { program = tcp.program,
-          exportMap = tcp.exportMap,
-          exportedSet = tcp.exportedSet,
-          symbolTable = tcp.symbolTable,
-          allModules = [],
-          opTable = mkOpTable [],
-          allFunctions = [],
-          nextLambdaIndex = 0,
-          functionNameSet = Set.empty,
-          desugaredProgram = D.Program [] [] Map.empty []
-        }
-
 -- | Effect constraint shared by all internal checking functions.
 type CheckEffects es = (CHREffects es, Reader TypeCheckEnv :> es, State CtxStore :> es)
 
@@ -279,7 +256,7 @@ typeCheckProgram prog = do
         validateTypeDefinitions prog.typeDefinitions (Map.fromList [(td.name, td) | td <- prog.typeDefinitions])
           ++ detectDuplicateConstructors prog.typeDefinitions
           ++ validateConstructorArities env prog
-  chrErrors <- withCHR typeCheckerCompiledProgram baseHostCallRegistry $ do
+  chrErrors <- withCHR typeCheckerProgram baseHostCallRegistry $ do
     runReader env $
       evalState emptyCtxStore $ do
         -- Initialize error accumulator
@@ -319,7 +296,7 @@ typeCheckGoals prog loc lbl goals = do
       conAlias = buildConAlias prog.typeDefinitions
       funSet = buildFunSet prog.functions
       env = TypeCheckEnv {conMap, conAlias, funSet}
-  withCHR typeCheckerCompiledProgram baseHostCallRegistry $ do
+  withCHR typeCheckerProgram baseHostCallRegistry $ do
     runReader env $
       evalState emptyCtxStore $ do
         tellConstraint (Qualified "typechecker" "errors") [valueList []]

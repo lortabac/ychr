@@ -23,6 +23,7 @@ module YCHR.Run
     CHREffects,
     runCHR,
     withCHR,
+    toSessionInput,
     tellConstraint,
 
     -- * Re-exports for embedding
@@ -77,6 +78,7 @@ import YCHR.Runtime.Session
     StaticRep (CHRRep),
     runCHR,
     tellConstraint,
+    toSessionInput,
     withCHR,
     withCHRExtra,
   )
@@ -130,7 +132,7 @@ runProgramWithGoalDSL cp hostCalls constraint = do
       tellName = tellProcName resolved.name (length resolved.args)
   unless (Map.member tellName procMap) $
     fail ("Constraint not found: " ++ T.unpack tellName.unName)
-  withCHR cp hostCalls $
+  withCHR (toSessionInput cp) hostCalls $
     evalState (Map.empty :: Map Text Value) $ do
       argVals <- traverse termToValue resolved.args
       result <- callProc procMap hostCalls tellName (map RVal argVals)
@@ -228,7 +230,7 @@ executePreparedQuery hostCalls lifted =
 runProgramWithQuery :: CompiledProgram -> HostCallRegistry -> Text -> IO (Map Text Term)
 runProgramWithQuery cp hostCalls src = do
   prep <- prepareQuery cp src
-  withCHRExtra cp hostCalls prep.extraProcs $
+  withCHRExtra (toSessionInput cp) hostCalls prep.extraProcs $
     executePreparedQuery hostCalls prep.liftedGoals
 
 -- ---------------------------------------------------------------------------

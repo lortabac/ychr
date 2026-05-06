@@ -56,7 +56,7 @@ import YCHR.Run
     runProgramWithQuery,
   )
 import YCHR.Runtime.Interpreter (HostCallRegistry)
-import YCHR.Runtime.Session (CHREffects, withCHR)
+import YCHR.Runtime.Session (CHREffects, toSessionInput, withCHR)
 import YCHR.TypeCheck (typeCheckProgram)
 import YCHR.Types (Term)
 import YCHR.Types qualified as Types
@@ -163,7 +163,7 @@ runLiveSession ::
   CompiledProgram ->
   IO ()
 runLiveSession hostCalls settings quietMode cp =
-  withCHR cp hostCalls liveLoop
+  withCHR (toSessionInput cp) hostCalls liveLoop
   where
     prompt = if quietMode then "" else "ychr live> "
     liveLoop :: (CHREffects es) => Eff es ()

@@ -3,7 +3,8 @@
 -- | Embeds the pre-compiled type-checker CHR program.
 module YCHR.TypeCheck.Compiled (typeCheckerProgram) where
 
-import YCHR.TypeCheck.TH (TypeCheckerProgram, compileTypeChecker)
+import YCHR.Runtime.Session (SessionInput)
+import YCHR.TypeCheck.TH (compileTypeChecker)
 
-typeCheckerProgram :: TypeCheckerProgram
+typeCheckerProgram :: SessionInput
 typeCheckerProgram = $$(compileTypeChecker)

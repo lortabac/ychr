@@ -11,45 +11,22 @@
 -- issue (type-checking the type-checker) does not arise. When type
 -- checking is enabled in the pipeline, the compilation here must use
 -- a flag to disable it.
-module YCHR.TypeCheck.TH (TypeCheckerProgram (..), compileTypeChecker) where
+module YCHR.TypeCheck.TH (compileTypeChecker) where
 
-import Data.Map.Strict (Map)
-import Data.Set (Set)
 import Data.Text qualified as T
 import Language.Haskell.TH (Code, Q, runIO)
 import Language.Haskell.TH.Syntax (Lift (..), addDependentFile, unsafeCodeCoerce)
-import YCHR.Compile.Pipeline (CompiledProgram (..), ExportResolution (..), compileModules)
-import YCHR.Types (QualifiedIdentifier, SymbolTable, UnqualifiedIdentifier)
-import YCHR.VM (Program)
+import YCHR.Compile.Pipeline (compileModules)
+import YCHR.Runtime.Session (SessionInput, toSessionInput)
 
--- | A stripped-down compilation result holding only what the type-checker
--- CHR session needs at runtime. This avoids requiring @Lift@ instances
--- for 'OpTable', @[D.Function]@, @[Module]@, etc.
-data TypeCheckerProgram = TypeCheckerProgram
-  { -- | The compiled VM program.
-    program :: Program,
-    -- | Resolves a use-site unqualified name to the module that exports it.
-    exportMap :: Map UnqualifiedIdentifier ExportResolution,
-    -- | Every fully-qualified identifier exported by the program.
-    exportedSet :: Set QualifiedIdentifier,
-    -- | Maps each @(name, arity)@ identifier to its numeric constraint type.
-    symbolTable :: SymbolTable
-  }
-  deriving (Lift)
-
--- | Compile @typechecker\/typechecker.chr@ at Template Haskell time.
-compileTypeChecker :: Code Q TypeCheckerProgram
+-- | Compile @typechecker\/typechecker.chr@ at Template Haskell time. The
+-- resulting 'SessionInput' is what 'YCHR.Runtime.Session.withCHR' needs
+-- to start a CHR session running the type-checker.
+compileTypeChecker :: Code Q SessionInput
 compileTypeChecker = unsafeCodeCoerce $ do
   let path = "typechecker/typechecker.chr"
   addDependentFile path
   contents <- runIO (readFile path)
   case compileModules True [(path, T.pack contents)] of
     Left err -> fail ("Failed to compile type-checker CHR: " ++ show err)
-    Right (cp, _warnings) ->
-      lift
-        TypeCheckerProgram
-          { program = cp.program,
-            exportMap = cp.exportMap,
-            exportedSet = cp.exportedSet,
-            symbolTable = cp.symbolTable
-          }
+    Right (cp, _warnings) -> lift (toSessionInput cp)

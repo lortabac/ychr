@@ -9,7 +9,7 @@ import Data.Text (Text)
 import Effectful (Eff, (:>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Run (CompiledProgram (..), ConstraintType, Value (..), compileModules, equal, newVar, resolveQueryConstraint, runProgramWithGoal, tellConstraint, withCHR)
+import YCHR.Run (CompiledProgram (..), ConstraintType, Value (..), compileModules, equal, newVar, resolveQueryConstraint, runProgramWithGoal, tellConstraint, toSessionInput, withCHR)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive)
 import YCHR.Runtime.Types (RuntimeVal (..))
@@ -72,21 +72,21 @@ leqTests =
     [ testCase "reflexivity: leq(3, 3) fires, store empty" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
         let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
-        n <- withCHR prog leqHostCalls $ do
+        n <- withCHR (toSessionInput prog) leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 3, VInt 3]
           countAlive leqType
         n @?= 0,
       testCase "no rule fires: leq(1, 2) stays" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
         let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
-        n <- withCHR prog leqHostCalls $ do
+        n <- withCHR (toSessionInput prog) leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           countAlive leqType
         n @?= 1,
       testCase "antisymmetry: leq(X, Y), leq(Y, X) unifies X=Y, store empty" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
         let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
-        (n, areEqual) <- withCHR prog leqHostCalls $ do
+        (n, areEqual) <- withCHR (toSessionInput prog) leqHostCalls $ do
           x <- newVar
           y <- newVar
           tellConstraint (Unqualified "leq") [x, y]
@@ -99,7 +99,7 @@ leqTests =
       testCase "transitivity: leq(1,2), leq(2,3) produces leq(1,3)" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
         let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
-        n <- withCHR prog leqHostCalls $ do
+        n <- withCHR (toSessionInput prog) leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           tellConstraint (Unqualified "leq") [VInt 2, VInt 3]
           countAlive leqType
@@ -107,7 +107,7 @@ leqTests =
       testCase "idempotence: leq(1,2), leq(1,2) removes duplicate" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
         let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
-        n <- withCHR prog leqHostCalls $ do
+        n <- withCHR (toSessionInput prog) leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           countAlive leqType
@@ -115,7 +115,7 @@ leqTests =
       testCase "full cycle: leq(a,b), leq(b,c), leq(c,a) — all removed, all unified" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
         let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
-        (n, eqAB, eqBC) <- withCHR prog leqHostCalls $ do
+        (n, eqAB, eqBC) <- withCHR (toSessionInput prog) leqHostCalls $ do
           a <- newVar
           b <- newVar
           c <- newVar
