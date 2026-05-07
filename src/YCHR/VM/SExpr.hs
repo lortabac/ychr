@@ -110,7 +110,7 @@ programToSExpr prog =
   SList
     ( SAtom "program"
         : SInt prog.numTypes
-        : SList (SAtom "type-names" : map SString prog.typeNames)
+        : SList (SAtom "type-names" : map chrNameToSExpr prog.typeNames)
         : SInt prog.numRules
         : SList (SAtom "rule-names" : map SString prog.ruleNames)
         : map procedureToSExpr prog.procedures
@@ -275,7 +275,7 @@ programFromSExpr
           : procs
         )
     ) = do
-    tns <- traverse textFromSExpr tnSexprs
+    tns <- traverse chrNameFromSExpr tnSexprs
     rns <- traverse textFromSExpr rnSexprs
     ps <- traverse procedureFromSExpr procs
     pure

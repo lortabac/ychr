@@ -86,22 +86,22 @@ ychr> :begin
 ychr live> egg.
 ychr live> egg.
 ychr live> print_store.
-'bakery:egg'()
-'bakery:egg'()
+bakery:egg
+bakery:egg
 ychr live> egg.
 ychr live> glass_of_milk.
 ychr live> glass_of_flour.
 ychr live> glass_of_sugar.
 ychr live> print_store.
-'bakery:egg'()
-'bakery:egg'()
-'bakery:egg'()
-'bakery:glass_of_flour'()
-'bakery:glass_of_milk'()
-'bakery:glass_of_sugar'()
+bakery:egg
+bakery:egg
+bakery:egg
+bakery:glass_of_flour
+bakery:glass_of_milk
+bakery:glass_of_sugar
 ychr live> bake.
 ychr live> print_store.
-'bakery:cake'()
+bakery:cake
 ychr live> :end
 ychr>
 ```

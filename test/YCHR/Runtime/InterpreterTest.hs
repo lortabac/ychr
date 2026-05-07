@@ -23,6 +23,7 @@ import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive, runCHRStore)
 import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, equal, newVar, runUnify, unify)
+import YCHR.Types qualified as Types
 import YCHR.VM
 
 tests :: TestTree
@@ -46,7 +47,7 @@ leqProgram :: Program
 leqProgram =
   Program
     { numTypes = 1,
-      typeNames = ["leq"],
+      typeNames = [Types.Unqualified "leq"],
       numRules = 1,
       ruleNames = ["transitivity"],
       procedures =
@@ -383,7 +384,7 @@ runFullStack ::
 runFullStack m =
   runEff
     . runUnify
-    . runCHRStore ["leq"]
+    . runCHRStore [Types.Unqualified "leq"]
     . runPropHistory
     . runReactQueue
     . fmap fst

@@ -11,7 +11,7 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Runtime.Store
 import YCHR.Runtime.Types (SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, equal, newVar, runUnify, unify)
-import YCHR.Types (ConstraintType (..))
+import YCHR.Types (ConstraintType (..), Name (..))
 
 tests :: TestTree
 tests =
@@ -31,7 +31,11 @@ tests =
 
 -- | Run an Eff computation with CHRStore, Unify, Writer, and IOE.
 runStoreEnv :: Eff [Writer [SuspensionId], CHRStore, Unify, IOE] a -> IO (a, [SuspensionId])
-runStoreEnv = runEff . runUnify . runCHRStore (replicate 100 "") . runWriter @[SuspensionId]
+runStoreEnv =
+  runEff
+    . runUnify
+    . runCHRStore (replicate 100 (Unqualified ""))
+    . runWriter @[SuspensionId]
 
 runStoreEnv_ :: Eff [Writer [SuspensionId], CHRStore, Unify, IOE] a -> IO a
 runStoreEnv_ m = fst <$> runStoreEnv m

@@ -27,9 +27,10 @@ roundtripTests :: [TestTree]
 roundtripTests =
   [ testCase "empty program" $ roundtrip (Program 0 [] 0 [] []),
     testCase "single empty procedure" $
-      roundtrip (Program 1 ["foo"] 0 [] [Procedure "foo" [] []]),
+      roundtrip (Program 1 [Types.Unqualified "foo"] 0 [] [Procedure "foo" [] []]),
     testCase "procedure with params" $
-      roundtrip (Program 1 ["leq"] 0 [] [Procedure "tell_leq2" ["X", "Y"] []]),
+      roundtrip
+        (Program 1 [Types.Unqualified "leq"] 0 [] [Procedure "tell_leq2" ["X", "Y"] []]),
     testCase "let statement" $
       roundtrip (mkProg [Let "x" (Lit (IntLit 42))]),
     testCase "assign statement" $
@@ -129,7 +130,7 @@ roundtripTests =
       roundtrip
         ( Program
             2
-            ["a", "b"]
+            [Types.Unqualified "a", Types.Unqualified "b"]
             0
             []
             [ Procedure
@@ -205,7 +206,13 @@ formatTests =
     testCase "exports and symbol table roundtrip" $
       let vmp =
             VMProgram
-              { program = Program 2 ["M:leq", "gcd"] 0 [] [],
+              { program =
+                  Program
+                    2
+                    [Types.Qualified "M" "leq", Types.Unqualified "gcd"]
+                    0
+                    []
+                    [],
                 exportedSet =
                   Set.fromList
                     [ Types.QualifiedIdentifier "M" "leq" 2,

@@ -38,7 +38,6 @@ import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
-import Data.Text (Text)
 import Data.Vector (Vector)
 import Data.Vector qualified as V
 import Data.Vector.Mutable (IOVector)
@@ -47,7 +46,7 @@ import Effectful
 import Effectful.Dispatch.Static
 import YCHR.Runtime.Types (SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, addObserver)
-import YCHR.Types (ConstraintType (..))
+import YCHR.Types (ConstraintType (..), Name)
 
 -- ---------------------------------------------------------------------------
 -- Types
@@ -66,7 +65,7 @@ data StoreState = StoreState
   { byType :: !(IOVector (Seq Suspension)),
     -- | Source name of each constraint type, indexed by 'ConstraintType'.
     -- Parallel to 'byType'. Used by introspection (e.g. @print_store@).
-    typeNames :: !(Vector Text),
+    typeNames :: !(Vector Name),
     byId :: !(IORef (IntMap Suspension)),
     nextId :: !(IORef Int)
   }
@@ -85,7 +84,7 @@ newtype instance StaticRep CHRStore = CHRStoreRep StoreState
 -- constraint type source names, indexed by 'ConstraintType'; its length
 -- determines the number of distinct types and the store pre-allocates a
 -- vector of that size.
-runCHRStore :: (IOE :> es) => [Text] -> Eff (CHRStore : es) a -> Eff es a
+runCHRStore :: (IOE :> es) => [Name] -> Eff (CHRStore : es) a -> Eff es a
 runCHRStore typeNameList m = do
   let numTypes = length typeNameList
   byType <- liftIO $ MV.replicate numTypes Seq.empty
@@ -196,7 +195,7 @@ getStoreSnapshot (ConstraintType idx) = do
 -- stored suspensions. Types are returned in 'ConstraintType' index order.
 -- The returned 'Seq's are immutable snapshots; callers still need to
 -- filter out dead suspensions via 'isSuspAlive'.
-getAllStoredConstraints :: (CHRStore :> es) => Eff es [(Text, Seq Suspension)]
+getAllStoredConstraints :: (CHRStore :> es) => Eff es [(Name, Seq Suspension)]
 getAllStoredConstraints = do
   st <- getStoreState
   let n = MV.length st.byType

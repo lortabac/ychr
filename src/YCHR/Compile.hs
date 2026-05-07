@@ -147,10 +147,9 @@ buildFunctionSet prog = Set.fromList [Identifier f.name f.arity | f <- prog.func
 -- | Build the list of constraint type source names, indexed by
 -- 'Types.ConstraintType'. The list is ordered by the constraint type's
 -- integer index, so @typeNames !! i@ is the name of the type with index @i@.
--- Qualified names are flattened via 'flattenName'.
-buildTypeNames :: SymbolTable -> [Text]
+buildTypeNames :: SymbolTable -> [Types.Name]
 buildTypeNames symTab =
-  [ flattenName ident.name
+  [ ident.name
   | (ident, _) <- sortOn (ctIndex . snd) (symbolTableToList symTab)
   ]
   where

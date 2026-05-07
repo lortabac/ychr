@@ -34,8 +34,8 @@ ychr> :begin
 ychr live> egg.
 ychr live> egg.
 ychr live> print_store.
-'bakery:egg'()
-'bakery:egg'()
+bakery:egg
+bakery:egg
 ychr live> :end
 ychr>
 ```

@@ -52,7 +52,7 @@ ychr live> glass_of_flour.
 ychr live> glass_of_sugar.
 ychr live> bake.
 ychr live> print_store.
-'recipes:cake'()
+recipes:cake
 ychr live> :end
 ychr>
 ```
@@ -92,7 +92,7 @@ ychr live> glass_of_flour.
 ychr live> glass_of_sugar.
 ychr live> bake.
 ychr live> print_store.
-'recipes:cookies'()
+recipes:cookies
 ychr live> :end
 ychr>
 ```
@@ -111,8 +111,8 @@ ychr live> glass_of_flour.
 ychr live> glass_of_sugar.
 ychr live> bake.
 ychr live> print_store.
-'recipes:butter'()
-'recipes:cake'()
+recipes:butter
+recipes:cake
 ychr live> :end
 ychr>
 ```
@@ -154,8 +154,8 @@ ychr live> glass_of_flour.
 ychr live> glass_of_sugar.
 ychr live> bake.
 ychr live> print_store.
-'recipes:cake'()
-'recipes:serving_ready'()
+recipes:cake
+recipes:serving_ready
 ychr live> :end
 ychr>
 ```
@@ -187,10 +187,10 @@ ychr live> glass_of_flour.
 ychr live> glass_of_sugar.
 ychr live> bake.
 ychr live> print_store.
-'recipes:cake'()
-'recipes:cake'()
-'recipes:serving_ready'()
-'recipes:serving_ready'()
+recipes:cake
+recipes:cake
+recipes:serving_ready
+recipes:serving_ready
 ychr live> :end
 ychr>
 ```

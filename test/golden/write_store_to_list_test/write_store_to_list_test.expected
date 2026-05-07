@@ -1,1 +1,1 @@
-R = ['write_store_to_list_test:c'(1), 'write_store_to_list_test:c'(4), 'write_store_to_list_test:d'(2, 3)]
+R = [write_store_to_list_test:c(1), write_store_to_list_test:c(4), write_store_to_list_test:d(2, 3)]

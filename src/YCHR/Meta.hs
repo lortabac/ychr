@@ -135,7 +135,7 @@ metaHostCallRegistry =
         then pure []
         else do
           argTerms <- traverse (valueToTerm "_") susp.args
-          pure [prettyTerm (CompoundTerm (Types.Unqualified tyName) argTerms)]
+          pure [prettyTerm (CompoundTerm tyName argTerms)]
     suspsOfGroup (tyName, susps) =
       fmap concat . traverse (suspAsValue tyName) . toList $ susps
     suspAsValue tyName susp = do
@@ -144,7 +144,10 @@ metaHostCallRegistry =
         then pure []
         else do
           args' <- traverse deepDeref susp.args
-          pure [VTerm tyName args']
+          pure [constraintAsValue tyName args']
+    constraintAsValue (Types.Unqualified t) args' = VTerm t args'
+    constraintAsValue (Types.Qualified m f) args' =
+      VTerm ":" [VAtom m, VTerm f args']
     deepDeref v = do
       v' <- deref v
       case v' of
