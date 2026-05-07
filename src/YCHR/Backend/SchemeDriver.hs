@@ -18,7 +18,7 @@ import Data.Text qualified as T
 import YCHR.Backend.Scheme (compileSymbol)
 import YCHR.Compile (tellProcName)
 import YCHR.SExpr (SExpr (..), printSExpr)
-import YCHR.Types (Constraint (..), Term (..))
+import YCHR.Types (QualifiedConstraint (..), Term (..))
 import YCHR.Types qualified as Types
 import YCHR.VM.Types (Name (..))
 
@@ -27,10 +27,10 @@ import YCHR.VM.Types (Name (..))
 -- The script imports the generated library, creates fresh logical
 -- variables for each 'VarTerm' in the query, calls the tell procedure,
 -- and prints each variable binding sorted alphabetically.
-generateDriver :: Text -> Constraint -> Text
+generateDriver :: Text -> QualifiedConstraint -> Text
 generateDriver moduleName constraint =
   let arity = length constraint.args
-      tellName = tellProcName constraint.name arity
+      tellName = tellProcName (Types.qualifiedToName constraint.name) arity
       varNames = nub [n | VarTerm n <- constraint.args]
       sortedVars = sort varNames
       argExprs = map termToScheme constraint.args

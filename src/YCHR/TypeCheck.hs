@@ -210,7 +210,7 @@ knownConstructorWithArity env name useArity =
     Nothing -> False
 
 buildFunSet :: [D.Function] -> Set (Name, Int)
-buildFunSet fns = Set.fromList [(f.name, f.arity) | f <- fns]
+buildFunSet fns = Set.fromList [(Types.qualifiedToName f.name, f.arity) | f <- fns]
 
 -- | Source-location info recovered from a CHR-side @Ctx@ handle.
 data CtxInfo = CtxInfo
@@ -360,7 +360,7 @@ tellConstraintSigs prog =
           encodedArgs <- traverse (encodeTypeExpr tvars) argTypes
           tellConstraint
             (Qualified "typechecker" "constraint_sig")
-            [ VAtom (runtimeName name),
+            [ VAtom (runtimeName (Types.qualifiedToName name)),
               valueList encodedArgs
             ]
     )
@@ -370,30 +370,32 @@ tellConstraintSigs prog =
 tellFunctionSigs :: (CHREffects es, State CtxStore :> es) => D.Program -> Eff es ()
 tellFunctionSigs prog = mapM_ tellOne prog.functions
   where
-    tellOne f = case f.signatures of
-      [] -> do
-        -- No annotations: default to all-any.
-        let anyArgs = replicate f.arity (tcCon0 "any")
-            sig = VTerm (tcAtom "sig") [valueList anyArgs, tcCon0 "any"]
-        tellConstraint
-          (Qualified "typechecker" "function_sig")
-          [ VAtom (runtimeName f.name),
-            sig
-          ]
-      [s] -> do
-        sig <- encodeFunctionSig s
-        tellConstraint
-          (Qualified "typechecker" "function_sig")
-          [ VAtom (runtimeName f.name),
-            sig
-          ]
-      ss -> do
-        sigs <- traverse encodeFunctionSig ss
-        tellConstraint
-          (Qualified "typechecker" "function_sigs")
-          [ VAtom (runtimeName f.name),
-            valueList sigs
-          ]
+    tellOne f =
+      let fName = Types.qualifiedToName f.name
+       in case f.signatures of
+            [] -> do
+              -- No annotations: default to all-any.
+              let anyArgs = replicate f.arity (tcCon0 "any")
+                  sig = VTerm (tcAtom "sig") [valueList anyArgs, tcCon0 "any"]
+              tellConstraint
+                (Qualified "typechecker" "function_sig")
+                [ VAtom (runtimeName fName),
+                  sig
+                ]
+            [s] -> do
+              sig <- encodeFunctionSig s
+              tellConstraint
+                (Qualified "typechecker" "function_sig")
+                [ VAtom (runtimeName fName),
+                  sig
+                ]
+            ss -> do
+              sigs <- traverse encodeFunctionSig ss
+              tellConstraint
+                (Qualified "typechecker" "function_sigs")
+                [ VAtom (runtimeName fName),
+                  valueList sigs
+                ]
 
 -- | Encode one declared @(arg-types, return-type)@ pair as a runtime
 -- @sig(args, ret)@ value, allocating fresh logical variables for the
@@ -515,13 +517,13 @@ checkRule rule = do
   -- Body goals
   mapM_ (checkBodyGoal bodyCtx) body
 
-checkConstraintUse :: (CheckEffects es) => CheckCtx -> Types.Constraint -> Eff es ()
+checkConstraintUse :: (CheckEffects es) => CheckCtx -> Types.QualifiedConstraint -> Eff es ()
 checkConstraintUse cctx c = do
   argTypeVars <- traverse (typeOfTerm cctx) c.args
   ctx <- freshCtxHandle cctx
   tellConstraint
     (Qualified "typechecker" "check_constraint_use")
-    [ VAtom (runtimeName c.name),
+    [ VAtom (runtimeName (Types.qualifiedToName c.name)),
       valueList argTypeVars,
       ctx
     ]
@@ -665,7 +667,7 @@ checkEquation func loc origin eq = do
   let cctx =
         CheckCtx
           { varTypes,
-            label = Just ("function " <> flattenName func.name),
+            label = Just ("function " <> flattenName (Types.qualifiedToName func.name)),
             loc,
             origin
           }
@@ -683,7 +685,11 @@ checkEquation func loc origin eq = do
       ctx <- freshCtxHandle cctx
       tellConstraint
         (Qualified "typechecker" "check_function_use")
-        [VAtom (runtimeName func.name), valueList argTypeVars, retTypeVar, ctx]
+        [ VAtom (runtimeName (Types.qualifiedToName func.name)),
+          valueList argTypeVars,
+          retTypeVar,
+          ctx
+        ]
   checkGuards cctx eq.guards
 
 -- ---------------------------------------------------------------------------
@@ -835,7 +841,7 @@ collectVarsInEq eq =
       collectVarsInTerm eq.rhs
     ]
 
-collectVarsInConstraint :: Types.Constraint -> Set Text
+collectVarsInConstraint :: Types.QualifiedConstraint -> Set Text
 collectVarsInConstraint c = foldMap collectVarsInTerm c.args
 
 collectVarsInGuard :: D.Guard -> Set Text
@@ -1061,7 +1067,8 @@ validateConstructorArities env prog =
             ++ mkDiags ruleLabel bodyLoc bodyOrigin inBody
     validateFunction func =
       let AnnP eqs loc origin = func.equations
-          funLabel = Just ("function " <> flattenName func.name)
+          funLabel =
+            Just ("function " <> flattenName (Types.qualifiedToName func.name))
           inEqs = foldMap eqArity eqs
        in mkDiags funLabel loc origin inEqs
     eqArity eq =

@@ -112,7 +112,7 @@ quoteTerm t = t -- IntTerm, AtomTerm, TextTerm are already ground
 -- | The primary entry point: converts a resolved program to a desugared program.
 desugarProgram :: R.Program -> Either [Diagnostic DesugarError] D.Program
 desugarProgram rprog =
-  let funSet = rprog.functionNames
+  let funSet = Set.map qualifiedToName rprog.functionNames
       (result, errs) = runPureEff . runWriter $ do
         rules <- traverse (desugarRule funSet) rprog.rules
         functions <- traverse desugarFunctionDef rprog.functions
@@ -120,21 +120,20 @@ desugarProgram rprog =
    in if null errs then Right result else Left errs
 
 -- | Scans a desugared program and builds the optimization map.
--- It ensures that all Qualified names get a sequential ID starting from 0.
+-- It ensures that all qualified names get a sequential ID starting from 0.
 extractSymbolTable :: D.Program -> SymbolTable
 extractSymbolTable prog =
   let rules = prog.rules
       allIds =
         Set.fromList
-          [ Identifier c.name (length c.args)
+          [ qualifiedNameToIdentifier c.name (length c.args)
           | r <- rules,
             c <- getRuleConstraints r
           ]
-      qualifiedIds = [i | i@(Identifier (Qualified _ _) _) <- Set.toList allIds]
-   in mkSymbolTable (zip qualifiedIds (map ConstraintType [0 ..]))
+   in mkSymbolTable (zip (Set.toList allIds) (map ConstraintType [0 ..]))
 
 -- | Helper to find every constraint instance in a desugared rule.
-getRuleConstraints :: D.Rule -> [Constraint]
+getRuleConstraints :: D.Rule -> [QualifiedConstraint]
 getRuleConstraints r =
   let AnnP {node = rHead} = r.head
       AnnP {node = rBody} = r.body
@@ -160,15 +159,15 @@ desugarRule funSet r = do
         body = AnnP ruleBody r.body.sourceLoc r.body.parsed
       }
 
--- | Map the three surface head kinds to the uniform @Kept \/ Removed@
+-- | Map the three resolved head kinds to the uniform @Kept \/ Removed@
 -- shape used by the desugared AST. Propagation rules keep every
 -- constraint; simplification rules remove every constraint; simpagation
 -- rules carry both lists explicitly.
-flattenHeadKind :: P.Head -> D.Head
+flattenHeadKind :: R.Head -> D.Head
 flattenHeadKind h = case h of
-  P.Simplification rs -> D.Head [] rs
-  P.Propagation ks -> D.Head ks []
-  P.Simpagation ks rs -> D.Head ks rs
+  R.Simplification rs -> D.Head [] rs
+  R.Propagation ks -> D.Head ks []
+  R.Simpagation ks rs -> D.Head ks rs
 
 -- ---------------------------------------------------------------------------
 -- Head Normal Form (HNF)
@@ -200,10 +199,10 @@ normalizeHead h =
    in (reverse st2.guards, D.Head kept' removed')
 
 -- | Normalize the arguments of one head constraint.
-normalizeConstraint :: HnfState -> Constraint -> (HnfState, Constraint)
-normalizeConstraint st (Constraint cname cargs) =
+normalizeConstraint :: HnfState -> QualifiedConstraint -> (HnfState, QualifiedConstraint)
+normalizeConstraint st (QualifiedConstraint cname cargs) =
   let (st', args') = mapAccumL normalizeArg st cargs
-   in (st', Constraint cname args')
+   in (st', QualifiedConstraint cname args')
 
 -- | Normalize one argument of a head constraint. Fresh variables are
 -- only introduced for duplicates and non-variables; first-use variables
@@ -413,8 +412,8 @@ desugarBodyGoal funSet label loc origin t = case t of
   CompoundTerm name@(Qualified _ _) args
     | Set.member name funSet ->
         pure [D.BodyFunctionCall name args]
-  CompoundTerm name@(Qualified _ _) args ->
-    pure [D.BodyConstraint (Constraint name args)]
+  CompoundTerm (Qualified m b) args ->
+    pure [D.BodyConstraint (QualifiedConstraint (QualifiedName m b) args)]
   CompoundTerm (Unqualified "$call") args
     | length args >= 2 ->
         pure [D.BodyFunctionCall (Unqualified "$call") args]
@@ -498,7 +497,7 @@ liftTerm modName loc origin scope st term = case term of
         (st', liftedBody) = liftTerm modName loc origin innerScope st body
         idx = st'.counter
         lambdaName = lambdaPrefix <> T.pack (show idx)
-        qualName = Qualified modName lambdaName
+        qualName = QualifiedName modName lambdaName
         allParams = map VarTerm freeVars ++ params
         func =
           D.Function
@@ -545,9 +544,9 @@ liftBodyGoal modName loc origin scope st goal = case goal of
   D.BodyFunctionCall name args ->
     let (st', args') = mapAccumL (liftTerm modName loc origin scope) st args
      in (st', D.BodyFunctionCall name args')
-  D.BodyConstraint (Constraint cname cargs) ->
+  D.BodyConstraint (QualifiedConstraint cname cargs) ->
     let (st', cargs') = mapAccumL (liftTerm modName loc origin scope) st cargs
-     in (st', D.BodyConstraint (Constraint cname cargs'))
+     in (st', D.BodyConstraint (QualifiedConstraint cname cargs'))
   D.BodyUnify t1 t2 ->
     let (st', t1') = liftTerm modName loc origin scope st t1
         (st'', t2') = liftTerm modName loc origin scope st' t2
@@ -596,12 +595,7 @@ liftEquation modName loc origin st eq =
 -- | Lift lambdas in a function definition.
 liftFunction :: LiftState -> D.Function -> (LiftState, D.Function)
 liftFunction st func =
-  let modName = case func.name of
-        Qualified m _ -> m
-        Unqualified _ ->
-          error
-            "Desugar.liftFunction: function has an unqualified name \
-            \(renamer should have caught this)"
+  let modName = func.name.moduleName
       loc = func.equations.sourceLoc
       origin = func.equations.parsed
       (st', eqs') = mapAccumL (liftEquation modName loc origin) st func.equations.node
@@ -616,16 +610,14 @@ ruleHeadVars h =
       arg <- c.args
     ]
 
--- | Extract the module name from a rule's head constraints. Rules
--- always have at least one head constraint and the renamer always
--- qualifies it, so the fallback is unreachable in practice.
+-- | Extract the module name from a rule's head constraints. The
+-- qualification invariant is enforced by 'QualifiedConstraint'; the
+-- only way this can fail is an empty head, which the parser does not
+-- produce for well-formed rules.
 ruleModName :: D.Head -> Text
 ruleModName h = case h.kept ++ h.removed of
-  (Constraint (Qualified m _) _ : _) -> m
-  _ ->
-    error
-      "Desugar.ruleModName: rule head has no qualified constraint \
-      \(renamer should have caught this)"
+  (c : _) -> c.name.moduleName
+  [] -> error "Desugar.ruleModName: empty rule head"
 
 -- | Collect all variables from a list of body goals.
 bodyGoalVars :: [D.BodyGoal] -> Set.Set Text
@@ -633,7 +625,7 @@ bodyGoalVars = Set.unions . map goalVars
   where
     goalVars (D.BodyIs v expr) = Set.insert v (termVars expr)
     goalVars (D.BodyFunctionCall _ args) = Set.unions (map termVars args)
-    goalVars (D.BodyConstraint (Constraint _ args)) = Set.unions (map termVars args)
+    goalVars (D.BodyConstraint (QualifiedConstraint _ args)) = Set.unions (map termVars args)
     goalVars (D.BodyUnify t1 t2) = termVars t1 `Set.union` termVars t2
     goalVars (D.BodyHostStmt _ args) = Set.unions (map termVars args)
     goalVars D.BodyTrue = Set.empty

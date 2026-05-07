@@ -188,7 +188,8 @@ compileModules includeStdlib inputs = do
   queryTable <- case mergeOps builtinOps (concat (Map.elems opExports)) of
     Left conflict -> Left (OperatorConflict (noAnnP conflict))
     Right t -> Right t
-  let lambdaCount = length [() | f <- desugared'.functions, isLambdaName f.name]
+  let lambdaCount =
+        length [() | f <- desugared'.functions, isLambdaName (Types.qualifiedToName f.name)]
   pure
     ( CompiledProgram
         prog
@@ -199,7 +200,7 @@ compileModules includeStdlib inputs = do
         queryTable
         desugared'.functions
         lambdaCount
-        resolved.functionNames
+        (Set.map Types.qualifiedToName resolved.functionNames)
         desugared,
       warnings
     )

@@ -17,6 +17,10 @@
 --   * Guards and body goals are represented with distinct types
 --     ('Guard' and 'BodyGoal') to enforce that only semantically
 --     appropriate goals appear in each position.
+--
+--   * Constraint head names and function names are 'QualifiedName',
+--     so the qualification invariant established by the renamer and
+--     committed by the resolver is reflected in the type system.
 module YCHR.Desugared
   ( -- * Program structure
     Program (..),
@@ -30,7 +34,8 @@ module YCHR.Desugared
     BodyGoal (..),
 
     -- * Re-exports from CHR.Types
-    Constraint (..),
+    QualifiedConstraint (..),
+    QualifiedName (..),
     Term (..),
     TypeExpr (..),
     TypeDefinition (..),
@@ -45,7 +50,7 @@ import YCHR.Types
 data Program = Program
   { rules :: [Rule],
     functions :: [Function],
-    constraintTypes :: Map Name [TypeExpr],
+    constraintTypes :: Map QualifiedName [TypeExpr],
     typeDefinitions :: [TypeDefinition]
   }
   deriving (Show)
@@ -59,8 +64,8 @@ data Rule = Rule
   deriving (Show)
 
 data Head = Head
-  { kept :: [Constraint],
-    removed :: [Constraint]
+  { kept :: [QualifiedConstraint],
+    removed :: [QualifiedConstraint]
   }
   deriving (Show, Eq)
 
@@ -73,7 +78,7 @@ data Guard
 
 data BodyGoal
   = BodyTrue
-  | BodyConstraint Constraint
+  | BodyConstraint QualifiedConstraint
   | BodyUnify Term Term
   | BodyHostStmt Text [Term]
   | BodyIs Text Term
@@ -81,7 +86,7 @@ data BodyGoal
   deriving (Show, Eq)
 
 data Function = Function
-  { name :: Name,
+  { name :: QualifiedName,
     arity :: Int,
     signatures :: [([TypeExpr], TypeExpr)],
     equations :: AnnP [Equation]

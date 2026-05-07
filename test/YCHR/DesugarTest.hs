@@ -65,6 +65,14 @@ leqQual = "M" .: con "leq" [var "X", var "Y"]
 leqQual2 :: Constraint
 leqQual2 = "M" .: con "leq" [var "A", var "B"]
 
+-- | Convert a fully-qualified parsed 'Constraint' to a
+-- 'D.QualifiedConstraint' for comparison against post-desugar values.
+-- Only valid on constraints whose name is 'Qualified'; the test
+-- fixtures here always pass that.
+qc :: Constraint -> D.QualifiedConstraint
+qc (Constraint (Qualified m n) args) = D.QualifiedConstraint (D.QualifiedName m n) args
+qc c = error ("qc: expected Qualified constraint, got " ++ show c)
+
 mod1rule :: Head -> Rule
 mod1rule h = Rule Nothing (noAnnP h) (noAnnP []) (noAnnP [atom "true"])
 
@@ -81,13 +89,13 @@ headTests =
     "head-normalization"
     [ testCase "Simplification maps to kept=[], removed=constraints" $ do
         rule <- singleRule [simpleModule (Simplification [leqQual])]
-        getNode rule.head @?= D.Head {kept = [], removed = [leqQual]},
+        getNode rule.head @?= D.Head {kept = [], removed = [qc leqQual]},
       testCase "Propagation maps to kept=constraints, removed=[]" $ do
         rule <- singleRule [simpleModule (Propagation [leqQual])]
-        getNode rule.head @?= D.Head {kept = [leqQual], removed = []},
+        getNode rule.head @?= D.Head {kept = [qc leqQual], removed = []},
       testCase "Simpagation maps kept and removed correctly" $ do
         rule <- singleRule [simpleModule (Simpagation [leqQual] [leqQual2])]
-        getNode rule.head @?= D.Head {kept = [leqQual], removed = [leqQual2]}
+        getNode rule.head @?= D.Head {kept = [qc leqQual], removed = [qc leqQual2]}
     ]
 
 --------------------------------------------------------------------------------
@@ -104,8 +112,8 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [ Constraint
-                (Qualified "M" "leq")
+            [ D.QualifiedConstraint
+                (D.QualifiedName "M" "leq")
                 [ VarTerm "X",
                   VarTerm "Y"
                 ]
@@ -117,8 +125,8 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [ Constraint
-                (Qualified "M" "leq")
+            [ D.QualifiedConstraint
+                (D.QualifiedName "M" "leq")
                 [ VarTerm "X",
                   VarTerm "_hnf_0"
                 ]
@@ -130,8 +138,8 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [ Constraint
-                (Qualified "M" "leq")
+            [ D.QualifiedConstraint
+                (D.QualifiedName "M" "leq")
                 [ VarTerm "X",
                   VarTerm "_hnf_0"
                 ]
@@ -143,8 +151,8 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [ Constraint
-                (Qualified "M" "leq")
+            [ D.QualifiedConstraint
+                (D.QualifiedName "M" "leq")
                 [ VarTerm "X",
                   VarTerm "_hnf_0"
                 ]
@@ -162,8 +170,8 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [ Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"],
-              Constraint (Qualified "M" "leq") [VarTerm "_hnf_0", VarTerm "Z"]
+            [ D.QualifiedConstraint (D.QualifiedName "M" "leq") [VarTerm "X", VarTerm "Y"],
+              D.QualifiedConstraint (D.QualifiedName "M" "leq") [VarTerm "_hnf_0", VarTerm "Z"]
             ]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "Y") (VarTerm "_hnf_0")],
       testCase "simpagation: kept processed before removed" $ do
@@ -176,8 +184,8 @@ hnfTests =
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
-            [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]]
-            [Constraint (Qualified "M" "leq") [VarTerm "_hnf_0", VarTerm "Z"]]
+            [D.QualifiedConstraint (D.QualifiedName "M" "leq") [VarTerm "X", VarTerm "Y"]]
+            [D.QualifiedConstraint (D.QualifiedName "M" "leq") [VarTerm "_hnf_0", VarTerm "Z"]]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "Y") (VarTerm "_hnf_0")],
       testCase "hnf guards prepended before user guards" $ do
         let m =
@@ -196,12 +204,16 @@ hnfTests =
       testCase "wildcard passes through HNF unchanged" $ do
         let m = simpleModule (Simplification ["M" .: con "foo" [wildcard]])
         rule <- singleRule [m]
-        getNode rule.head @?= D.Head [] [Constraint (Qualified "M" "foo") [Wildcard]]
+        getNode rule.head
+          @?= D.Head [] [D.QualifiedConstraint (D.QualifiedName "M" "foo") [Wildcard]]
         getNode rule.guard @?= [],
       testCase "two wildcards stay as wildcards without guards" $ do
         let m = simpleModule (Simplification ["M" .: con "foo" [wildcard, wildcard]])
         rule <- singleRule [m]
-        getNode rule.head @?= D.Head [] [Constraint (Qualified "M" "foo") [Wildcard, Wildcard]]
+        getNode rule.head
+          @?= D.Head
+            []
+            [D.QualifiedConstraint (D.QualifiedName "M" "foo") [Wildcard, Wildcard]]
         getNode rule.guard @?= [],
       testCase "wildcard and non-variable: only non-variable gets guard" $ do
         let m = simpleModule (Simplification ["M" .: con "foo" [wildcard, IntTerm 1]])
@@ -209,8 +221,8 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [ Constraint
-                (Qualified "M" "foo")
+            [ D.QualifiedConstraint
+                (D.QualifiedName "M" "foo")
                 [ Wildcard,
                   VarTerm "_hnf_0"
                 ]
@@ -328,8 +340,8 @@ bodyTests =
         rule <- singleRule [simpleModule' (Simplification [leqQual]) body]
         getNode rule.body
           @?= [ D.BodyConstraint
-                  ( Constraint
-                      (Qualified "M" "leq")
+                  ( D.QualifiedConstraint
+                      (D.QualifiedName "M" "leq")
                       [ VarTerm
                           "X"
                       ]
@@ -552,7 +564,7 @@ symbolTableTests =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (D.Head [] [Constraint (Qualified "M" "leq") []]))
+                    (noAnnP (D.Head [] [D.QualifiedConstraint (D.QualifiedName "M" "leq") []]))
                     (noAnnP [])
                     (noAnnP [])
                 ]
@@ -573,8 +585,8 @@ symbolTableTests =
                     ( noAnnP
                         ( D.Head
                             []
-                            [ Constraint (Qualified "A" "c") [],
-                              Constraint (Qualified "B" "d") []
+                            [ D.QualifiedConstraint (D.QualifiedName "A" "c") [],
+                              D.QualifiedConstraint (D.QualifiedName "B" "d") []
                             ]
                         )
                     )
@@ -591,9 +603,15 @@ symbolTableTests =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (D.Head [] [Constraint (Qualified "M" "leq") []]))
+                    ( noAnnP
+                        (D.Head [] [D.QualifiedConstraint (D.QualifiedName "M" "leq") []])
+                    )
                     (noAnnP [])
-                    (noAnnP [D.BodyConstraint (Constraint (Qualified "M" "leq") [])])
+                    ( noAnnP
+                        [ D.BodyConstraint
+                            (D.QualifiedConstraint (D.QualifiedName "M" "leq") [])
+                        ]
+                    )
                 ]
                 []
                 Map.empty
@@ -609,7 +627,7 @@ symbolTableTests =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (D.Head [] [Constraint (Qualified "M" "leq") []]))
+                    (noAnnP (D.Head [] [D.QualifiedConstraint (D.QualifiedName "M" "leq") []]))
                     (noAnnP [])
                     (noAnnP [D.BodyHostStmt "print" []])
                 ]
@@ -627,8 +645,8 @@ symbolTableTests =
                     ( noAnnP
                         ( D.Head
                             []
-                            [ Constraint (Qualified "A" "z") [],
-                              Constraint (Qualified "B" "a") []
+                            [ D.QualifiedConstraint (D.QualifiedName "A" "z") [],
+                              D.QualifiedConstraint (D.QualifiedName "B" "a") []
                             ]
                         )
                     )
@@ -648,12 +666,20 @@ symbolTableTests =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (D.Head [] [Constraint (Qualified "M" "foo") [VarTerm "X"]]))
+                    ( noAnnP
+                        ( D.Head
+                            []
+                            [ D.QualifiedConstraint
+                                (D.QualifiedName "M" "foo")
+                                [VarTerm "X"]
+                            ]
+                        )
+                    )
                     (noAnnP [])
                     ( noAnnP
                         [ D.BodyConstraint
-                            ( Constraint
-                                (Qualified "M" "foo")
+                            ( D.QualifiedConstraint
+                                (D.QualifiedName "M" "foo")
                                 [ VarTerm "X",
                                   VarTerm "Y"
                                 ]
@@ -713,9 +739,7 @@ lambdaLiftTests =
           Left errs ->
             assertFailure ("liftAllLambdas failed: " ++ show errs) >> error "unreachable"
           Right p -> pure p
-        let isLambda f = case f.name of
-              Qualified _ n -> n == "__lambda_0"
-              _ -> False
+        let isLambda f = f.name.baseName == "__lambda_0"
         case filter isLambda lifted.functions of
           [lam] -> do
             lam.arity @?= 2

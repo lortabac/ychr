@@ -39,7 +39,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import YCHR.Desugared qualified as D
-import YCHR.Types (Constraint, Identifier, Name, RuleId, Term)
+import YCHR.Types (Identifier, Name, QualifiedConstraint, RuleId, Term)
 import YCHR.Types qualified as Types
 import YCHR.VM (ArgIndex, ConstraintType, Expr, Stmt)
 
@@ -110,7 +110,7 @@ data Partner = Partner
   { -- | Position in the rule's combined (removed ++ kept) head list.
     idx :: HeadPosition,
     -- | The original constraint as it appears in the head.
-    constraint :: Constraint,
+    constraint :: QualifiedConstraint,
     -- | Whether the partner is kept (@True@) or removed (@False@) when
     -- the rule fires. Removed partners are killed before the body runs
     -- and skipped during backjumping (they are guaranteed dead).

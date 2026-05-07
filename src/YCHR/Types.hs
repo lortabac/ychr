@@ -7,11 +7,13 @@
 module YCHR.Types
   ( -- * Constraints
     Constraint (..),
+    QualifiedConstraint (..),
     ConstraintType (..),
     Identifier (..),
     QualifiedIdentifier (..),
     UnqualifiedIdentifier (..),
     Name (..),
+    QualifiedName (..),
 
     -- * Rules
     RuleId (..),
@@ -25,6 +27,8 @@ module YCHR.Types
 
     -- * Name helpers
     flattenName,
+    qualifiedToName,
+    qualifiedNameToIdentifier,
 
     -- * Terms
     Term (..),
@@ -97,15 +101,45 @@ data Name
     Qualified Text Text
   deriving (Show, Eq, Ord, Lift)
 
+-- | A name guaranteed to be module-qualified. Established by the
+-- resolve phase and propagated through 'YCHR.Resolved' and
+-- 'YCHR.Desugared'. Compare with 'Name', which admits an
+-- 'Unqualified' constructor used in the parser and renamer.
+data QualifiedName = QualifiedName
+  { moduleName :: !Text,
+    baseName :: !Text
+  }
+  deriving (Show, Eq, Ord, Lift)
+
 -- | Flatten a 'Name' to its surface 'Text' form. Qualified names are
 -- rendered as @"Module:name"@.
 flattenName :: Name -> Text
 flattenName (Unqualified t) = t
 flattenName (Qualified m t) = m <> ":" <> t
 
+-- | Lift a 'QualifiedName' back to the loose 'Name' for display,
+-- diagnostics, or compatibility with code that has not yet been
+-- tightened.
+qualifiedToName :: QualifiedName -> Name
+qualifiedToName (QualifiedName m b) = Qualified m b
+
+-- | Build an 'Identifier' from a 'QualifiedName' and arity.
+qualifiedNameToIdentifier :: QualifiedName -> Int -> Identifier
+qualifiedNameToIdentifier qn a = Identifier (qualifiedToName qn) a
+
 -- | A CHR constraint occurrence.
 data Constraint = Constraint
   { name :: Name,
+    args :: [Term]
+  }
+  deriving (Show, Eq, Lift)
+
+-- | A CHR constraint occurrence with a qualified head name. Used in
+-- 'YCHR.Resolved' and 'YCHR.Desugared' rule heads and bodies, where
+-- the resolve phase has guaranteed every constraint name is
+-- module-qualified.
+data QualifiedConstraint = QualifiedConstraint
+  { name :: QualifiedName,
     args :: [Term]
   }
   deriving (Show, Eq, Lift)

@@ -25,7 +25,15 @@ import YCHR.Run
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive)
 import YCHR.Runtime.Types (RuntimeVal (..))
-import YCHR.Types (Constraint (..), Identifier (..), Name (..), Term (..), lookupSymbol)
+import YCHR.Types
+  ( Constraint (..),
+    Identifier (..),
+    Name (..),
+    QualifiedConstraint (..),
+    QualifiedName (..),
+    Term (..),
+    lookupSymbol,
+  )
 import YCHR.VM qualified as VM
 
 tests :: TestTree
@@ -232,7 +240,7 @@ visibilityTests =
         cp <- compileOrFail [("pub.chr", exportedSource)]
         let q = Constraint (Unqualified "visible") [VarTerm "X"]
         case resolveQueryConstraint cp q of
-          Right (Constraint (Qualified "pub" "visible") _) -> pure ()
+          Right (QualifiedConstraint (QualifiedName "pub" "visible") _) -> pure ()
           other ->
             assertFailure $
               "Expected Right (Qualified pub visible), got: " ++ show other,

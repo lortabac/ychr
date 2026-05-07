@@ -14,9 +14,14 @@
 --
 --   * Rule heads are verified during resolution: no function-declared
 --     name can appear in a rule head.
+--
+--   * Constraint head names and function names are 'QualifiedName',
+--     so the qualification invariant established by the renamer is
+--     reflected in the type system.
 module YCHR.Resolved
   ( Program (..),
     Rule (..),
+    Head (..),
     FunctionDef (..),
     FunctionEquation (..),
   )
@@ -26,16 +31,16 @@ import Data.Map.Strict (Map)
 import Data.Set (Set)
 import Data.Text (Text)
 import YCHR.Loc (Ann)
-import YCHR.Parsed (AnnP, Head)
-import YCHR.Types (Name, Term, TypeDefinition, TypeExpr)
+import YCHR.Parsed (AnnP)
+import YCHR.Types (QualifiedConstraint, QualifiedName, Term, TypeDefinition, TypeExpr)
 
 -- | A resolved program: all modules flattened, equations grouped under
 -- their function declarations.
 data Program = Program
   { rules :: [Rule],
     functions :: [FunctionDef],
-    constraintTypes :: Map Name [TypeExpr],
-    functionNames :: Set Name,
+    constraintTypes :: Map QualifiedName [TypeExpr],
+    functionNames :: Set QualifiedName,
     typeDefinitions :: [TypeDefinition]
   }
   deriving (Show)
@@ -50,9 +55,19 @@ data Rule = Rule
   }
   deriving (Show)
 
+-- | Resolved rule head. Mirrors 'YCHR.Parsed.Head' but with
+-- 'QualifiedConstraint' so the constraint-name qualification invariant
+-- is reflected in the type. Desugaring flattens the three kinds into
+-- the uniform @kept \/ removed@ shape of 'YCHR.Desugared.Head'.
+data Head
+  = Simplification [QualifiedConstraint]
+  | Propagation [QualifiedConstraint]
+  | Simpagation [QualifiedConstraint] [QualifiedConstraint]
+  deriving (Show, Eq)
+
 -- | A function definition with its equations grouped together.
 data FunctionDef = FunctionDef
-  { name :: Name,
+  { name :: QualifiedName,
     arity :: Int,
     signatures :: [([TypeExpr], TypeExpr)],
     isOpen :: Bool,

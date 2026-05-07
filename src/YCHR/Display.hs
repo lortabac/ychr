@@ -166,6 +166,7 @@ resolveErrorCode :: ResolveError -> ErrorCode
 resolveErrorCode (ConstraintHasEquations _) = ErrorCode 16001
 resolveErrorCode (FunctionInRuleHead _) = ErrorCode 16002
 resolveErrorCode (ReservedName _) = ErrorCode 16003
+resolveErrorCode (UnqualifiedConstraintName _) = ErrorCode 16004
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 was previously used for OperatorInImportList; now reserved
@@ -258,6 +259,9 @@ resolveErrorMsg (FunctionInRuleHead name) =
 resolveErrorMsg (ReservedName name) =
   displayName name
     ++ " is a reserved name and cannot be used as a constraint or function"
+resolveErrorMsg (UnqualifiedConstraintName name) =
+  "Unqualified constraint name reached the resolve phase (renamer bug): "
+    ++ displayName name
 
 instance Display (Diagnostic CollectError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =

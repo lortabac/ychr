@@ -20,7 +20,14 @@ import YCHR.Diagnostic (Diagnostic, noDiag)
 import YCHR.PExpr qualified as PExpr
 import YCHR.Parsed qualified as P
 import YCHR.Resolved qualified as R
-import YCHR.Types (Name (..), QualifiedIdentifier (..), TypeExpr (..))
+import YCHR.Types
+  ( Constraint (..),
+    Name (..),
+    QualifiedConstraint (..),
+    QualifiedIdentifier (..),
+    QualifiedName (..),
+    TypeExpr (..),
+  )
 
 data ResolveError
   = -- | A name declared as a constraint has function equations.
@@ -29,6 +36,10 @@ data ResolveError
     FunctionInRuleHead Name
   | -- | A name collides with a reserved built-in.
     ReservedName Name
+  | -- | A constraint name reached the resolve phase without being
+    -- module-qualified by the renamer. Indicates a renamer bug rather
+    -- than user error.
+    UnqualifiedConstraintName Name
   deriving (Eq, Show)
 
 -- | Flatten modules into a single resolved program.
@@ -44,20 +55,24 @@ resolveProgram mods =
       conTypes = collectConstraintTypes mods
       typeDefs = [td.node | m <- mods, td <- m.typeDecls]
       eqErrors = checkEquations constraintNames mods
-      headErrors = checkRuleHeads functionNames mods
+      headErrors = checkRuleHeads (Set.map qualifiedNameToLooseName functionNames) mods
       reservedErrors = checkReservedNames mods
-      errs = eqErrors ++ headErrors ++ reservedErrors
+      (resolvedRules, ruleErrs) = resolveRules mods
+      errs = eqErrors ++ headErrors ++ reservedErrors ++ ruleErrs
    in if null errs
         then
           Right
             R.Program
-              { rules = resolveRules mods,
+              { rules = resolvedRules,
                 functions = resolveFunctions mods,
                 constraintTypes = conTypes,
                 functionNames = functionNames,
                 typeDefinitions = typeDefs
               }
         else Left errs
+
+qualifiedNameToLooseName :: QualifiedName -> Name
+qualifiedNameToLooseName (QualifiedName m b) = Qualified m b
 
 -- ---------------------------------------------------------------------------
 -- Declaration collection
@@ -72,19 +87,19 @@ buildConstraintNames mods =
       P.ConstraintDecl {} <- [d]
     ]
 
-buildFunctionNames :: [P.Module] -> Set Name
+buildFunctionNames :: [P.Module] -> Set QualifiedName
 buildFunctionNames mods =
   Set.fromList
-    [ Qualified m.name d.name
+    [ QualifiedName m.name d.name
     | m <- mods,
       P.Ann d _ <- m.decls,
       P.FunctionDecl {} <- [d]
     ]
 
-collectConstraintTypes :: [P.Module] -> Map.Map Name [TypeExpr]
+collectConstraintTypes :: [P.Module] -> Map.Map QualifiedName [TypeExpr]
 collectConstraintTypes mods =
   Map.fromList
-    [ (Qualified m.name d.name, ts)
+    [ (QualifiedName m.name d.name, ts)
     | m <- mods,
       P.Ann d _ <- m.decls,
       P.ConstraintDecl {} <- [d],
@@ -169,23 +184,53 @@ toQualId (Unqualified _) _ = Nothing
 -- Module flattening
 -- ---------------------------------------------------------------------------
 
-resolveRules :: [P.Module] -> [R.Rule]
+resolveRules :: [P.Module] -> ([R.Rule], [Diagnostic ResolveError])
 resolveRules mods =
-  [ R.Rule
-      { name = r.name,
-        head = r.head,
-        guard = r.guard,
-        body = r.body
-      }
-  | m <- mods,
-    r <- m.rules
-  ]
+  let raws = [(r, m) | m <- mods, r <- m.rules]
+      go (acc, errs) (r, _m) =
+        case resolveHead r.head.sourceLoc r.head.parsed r.head.node of
+          Right rh ->
+            ( acc
+                ++ [ R.Rule
+                       { name = r.name,
+                         head = P.AnnP rh r.head.sourceLoc r.head.parsed,
+                         guard = r.guard,
+                         body = r.body
+                       }
+                   ],
+              errs
+            )
+          Left newErrs -> (acc, errs ++ newErrs)
+   in foldl go ([], []) raws
+
+resolveHead ::
+  P.SourceLoc ->
+  PExpr.PExpr ->
+  P.Head ->
+  Either [Diagnostic ResolveError] R.Head
+resolveHead loc origin h = case h of
+  P.Simplification cs -> R.Simplification <$> traverse (qualifyConstraint loc origin) cs
+  P.Propagation cs -> R.Propagation <$> traverse (qualifyConstraint loc origin) cs
+  P.Simpagation ks rs ->
+    R.Simpagation
+      <$> traverse (qualifyConstraint loc origin) ks
+      <*> traverse (qualifyConstraint loc origin) rs
+
+qualifyConstraint ::
+  P.SourceLoc ->
+  PExpr.PExpr ->
+  Constraint ->
+  Either [Diagnostic ResolveError] QualifiedConstraint
+qualifyConstraint loc origin (Constraint n args) = case n of
+  Qualified m b -> Right (QualifiedConstraint (QualifiedName m b) args)
+  Unqualified _ ->
+    Left [noDiag (P.AnnP (UnqualifiedConstraintName n) loc origin)]
 
 resolveFunctions :: [P.Module] -> [R.FunctionDef]
 resolveFunctions mods =
   let -- Collect all function declarations with their module context
       allDecls =
-        [ (Qualified m.name d.name, d.arity, d, m)
+        [ (QualifiedName m.name d.name, d.arity, d, m)
         | m <- mods,
           P.Ann d _ <- m.decls,
           P.FunctionDecl {} <- [d]

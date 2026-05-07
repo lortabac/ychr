@@ -109,14 +109,21 @@ import YCHR.VM (Name (..), Procedure (..), Program (..))
 -- Single-goal API
 -- ---------------------------------------------------------------------------
 
--- | Resolve a query constraint against the export map.
-resolveQueryConstraint :: CompiledProgram -> Constraint -> Either String Constraint
+-- | Resolve a query constraint against the export map. The resolved
+-- form is a 'Types.QualifiedConstraint' since name resolution always
+-- produces a fully-qualified name.
+resolveQueryConstraint ::
+  CompiledProgram ->
+  Constraint ->
+  Either String Types.QualifiedConstraint
 resolveQueryConstraint cp (Constraint cname cargs) = case cname of
   Types.Unqualified n ->
     let arity = length cargs
      in case Map.lookup (Types.UnqualifiedIdentifier n arity) cp.exportMap of
-          Just (UniqueExport qname) ->
-            Right (Constraint qname cargs)
+          Just (UniqueExport (Types.Qualified m b)) ->
+            Right (Types.QualifiedConstraint (Types.QualifiedName m b) cargs)
+          Just (UniqueExport (Types.Unqualified _)) ->
+            Left ("Unqualified export resolution for " ++ T.unpack n)
           Just (AmbiguousExport ms) ->
             Left
               ( "Ambiguous constraint: "
@@ -130,7 +137,7 @@ resolveQueryConstraint cp (Constraint cname cargs) = case cname of
   Types.Qualified m n ->
     let arity = length cargs
      in if Set.member (Types.QualifiedIdentifier m n arity) cp.exportedSet
-          then Right (Constraint cname cargs)
+          then Right (Types.QualifiedConstraint (Types.QualifiedName m n) cargs)
           else
             Left
               ( "Constraint not exported: "
@@ -159,7 +166,7 @@ runProgramWithGoalDSL cp hostCalls constraint = do
     Left err -> fail err
     Right c -> pure c
   let procMap = Map.fromList [(p.name, p) | p <- cp.program.procedures]
-      tellName = tellProcName resolved.name (length resolved.args)
+      tellName = tellProcName (Types.qualifiedToName resolved.name) (length resolved.args)
   unless (Map.member tellName procMap) $
     fail ("Constraint not found: " ++ T.unpack tellName.unName)
   withCHR (toSessionInput cp) hostCalls $
@@ -198,17 +205,17 @@ runProgramWithGoal cp hostCalls src =
       -- type-check sees the same qualified name 'tellConstraintSigs'
       -- registers. Defer name-resolution failures to 'runProgramWithGoalDSL'
       -- (which produces a clearer "constraint not found" error).
-      let renamed = case resolveQueryConstraint cp (Constraint cname renamedArgs) of
-            Right c -> c
-            Left _ -> Constraint cname renamedArgs
-      tcErrs <-
-        typeCheckGoals
-          cp.desugaredProgram
-          (SourceLoc "<query>" 1 1)
-          (Just "query")
-          [D.BodyConstraint renamed]
+      let original = Constraint cname renamedArgs
+      tcErrs <- case resolveQueryConstraint cp original of
+        Right qc ->
+          typeCheckGoals
+            cp.desugaredProgram
+            (SourceLoc "<query>" 1 1)
+            (Just "query")
+            [D.BodyConstraint qc]
+        Left _ -> pure []
       unless (null tcErrs) (throwIO (TypeErrors tcErrs))
-      runProgramWithGoalDSL cp hostCalls renamed
+      runProgramWithGoalDSL cp hostCalls original
 
 -- ---------------------------------------------------------------------------
 -- Multi-goal query API
@@ -375,7 +382,7 @@ executeBodyGoal hc (D.BodyIs v expr) = do
     Nothing -> modify (Map.insert v result)
 executeBodyGoal _ (D.BodyConstraint c) = do
   argVals <- traverse termToValue c.args
-  tellConstraint c.name argVals
+  tellConstraint (Types.qualifiedToName c.name) argVals
 executeBodyGoal hc (D.BodyFunctionCall (Types.Unqualified "$call") args) = do
   CHRRep procMap _ _ _ <- getStaticRep
   argVals <- traverse termToValue args

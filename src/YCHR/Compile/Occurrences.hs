@@ -29,7 +29,14 @@ import YCHR.Diagnostic (Diagnostic (..))
 import YCHR.PExpr (PExpr)
 import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
-import YCHR.Types (Constraint, Identifier (..), RuleId (..), SymbolTable, lookupSymbol)
+import YCHR.Types
+  ( Identifier (..),
+    QualifiedConstraint,
+    RuleId (..),
+    SymbolTable,
+    lookupSymbol,
+    qualifiedToName,
+  )
 import YCHR.VM (ConstraintType (..))
 
 -- | Walk every rule in the program and assemble the per-constraint
@@ -103,9 +110,9 @@ mkOccurrence ::
   D.Rule ->
   RuleId ->
   Text ->
-  [(HeadPosition, Constraint, Bool)] ->
+  [(HeadPosition, QualifiedConstraint, Bool)] ->
   HeadPosition ->
-  Constraint ->
+  QualifiedConstraint ->
   Bool ->
   Eff '[Writer [Diagnostic CompileError]] Occurrence
 mkOccurrence symTab rule ruleId' display combined activeIdx activeCon activeIsKept = do
@@ -121,7 +128,7 @@ mkOccurrence symTab rule ruleId' display combined activeIdx activeCon activeIsKe
         headPretty
         ruleLabel
         ( Identifier
-            con.name
+            (qualifiedToName con.name)
             ( length
                 con.args
             )
@@ -135,7 +142,7 @@ mkOccurrence symTab rule ruleId' display combined activeIdx activeCon activeIsKe
         }
   pure
     Occurrence
-      { conName = activeCon.name,
+      { conName = qualifiedToName activeCon.name,
         conArity = length activeCon.args,
         number = OccurrenceNumber 0,
         rule = rule,
