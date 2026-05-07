@@ -66,8 +66,6 @@ termToPExpr (FloatTerm n) = PE.Float n
 termToPExpr (AtomTerm s) = PE.Atom s
 termToPExpr (TextTerm s) = PE.Str s
 termToPExpr Wildcard = PE.Wildcard
-termToPExpr (CompoundTerm (Qualified m f) []) =
-  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom f)]
 termToPExpr (CompoundTerm (Qualified m f) args) =
   PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Compound f (map (noAnn . termToPExpr) args))]
 termToPExpr (CompoundTerm (Unqualified f) args) =
@@ -76,11 +74,8 @@ termToPExpr (CompoundTerm (Unqualified f) args) =
 -- | Convert a 'Constraint' to a 'PE.PExpr'.
 -- This is the inverse of 'convertConstraint' in "YCHR.Parser".
 constraintToPExpr :: Constraint -> PE.PExpr
-constraintToPExpr (Constraint (Unqualified name) []) = PE.Atom name
 constraintToPExpr (Constraint (Unqualified name) args) =
   PE.Compound name (map (noAnn . termToPExpr) args)
-constraintToPExpr (Constraint (Qualified m name) []) =
-  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom name)]
 constraintToPExpr (Constraint (Qualified m name) args) =
   PE.Compound
     ":"
@@ -172,8 +167,6 @@ runtimeToPExpr (CompoundTerm (Unqualified "__closure") (_ : sourceForm : _)) =
 runtimeToPExpr (CompoundTerm (Unqualified "prelude__[]") []) = PE.Atom "[]"
 runtimeToPExpr (CompoundTerm (Unqualified "prelude__.") args) =
   PE.Compound "." (map (noAnn . runtimeToPExpr) args)
-runtimeToPExpr (CompoundTerm (Qualified m f) []) =
-  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom f)]
 runtimeToPExpr (CompoundTerm (Qualified m f) args) =
   PE.Compound
     ":"
