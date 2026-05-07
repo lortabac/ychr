@@ -4,6 +4,13 @@
 > **You will:** install YCHR, load a small program, and watch a CHR
 > rule fire as you add constraints to the store.
 
+YCHR is a compiler for **Constraint Handling Rules (CHR)** — a small
+rule-based language whose programs rewrite a *multiset* of facts (the
+*constraint store*). A rule matches when its left-hand side is present
+in the store, and replaces those facts with its right-hand side. The
+example below has one rule; you'll add facts one at a time and watch
+the rule fire.
+
 ## 1. Prerequisites
 
 YCHR needs a recent GHC and Cabal. Check what you have:
@@ -105,6 +112,11 @@ bakery:cake()
 ychr live> :end
 ychr>
 ```
+
+**The line that matters is `bake.`** Posting it completed the rule's
+left-hand side, so all seven head constraints were rewritten to
+`cake` immediately. The `print_store.` that follows shows the store
+*after* the firing.
 
 What just happened?
 
