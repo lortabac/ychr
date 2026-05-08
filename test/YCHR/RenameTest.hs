@@ -70,7 +70,7 @@ sameModuleTests =
         let m =
               module' "M"
                 `declaring` ["leq" // 2]
-                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         rule <- singleRule m
         rule.head.node
           @?= Simplification [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]],
@@ -78,7 +78,7 @@ sameModuleTests =
         let m =
               module' "M"
                 `declaring` ["done" // 0]
-                `defining` [[con "done" []] <=> [atom "true"]]
+                `defining` [[term "done" []] <=> [atom "true"]]
         rule <- singleRule m
         rule.head.node
           @?= Simplification [Constraint (Qualified "M" "done") []],
@@ -86,7 +86,9 @@ sameModuleTests =
         let m =
               module' "M"
                 `declaring` ["leq" // 2]
-                `defining` [[con "leq" [var "X", var "Y"]] ==> [func "leq" [var "X", var "Z"]]]
+                `defining` [ [term "leq" [var "X", var "Y"]]
+                               ==> [term "leq" [var "X", var "Z"]]
+                           ]
         rule <- singleRule m
         rule.body.node
           @?= [CompoundTerm (Qualified "M" "leq") [VarTerm "X", VarTerm "Z"]]
@@ -105,8 +107,8 @@ importedTests =
             modLogic =
               module' "Logic"
                 `importing` ["Order"]
-                `defining` [ [con "leq" [var "X", var "Y"], con "leq" [var "Y", var "Z"]]
-                               ==> [func "leq" [var "X", var "Z"]]
+                `defining` [ [term "leq" [var "X", var "Y"], term "leq" [var "Y", var "Z"]]
+                               ==> [term "leq" [var "X", var "Z"]]
                            ]
         (_, renamedLogic) <- case renameProgram [modOrder, modLogic] of
           Right ([a, b], _) -> return (a, b)
@@ -130,7 +132,7 @@ importedTests =
             modC =
               module' "C"
                 `importing` ["B"]
-                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB, modC]
           @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))]
     ]
@@ -149,7 +151,7 @@ ambiguousTests =
               module' "B"
                 `importing` ["A"]
                 `declaring` ["leq" // 2]
-                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
           @?= Left [noDiag (AnnP (AmbiguousName "leq" 2 ["B", "A"]) dummyLoc (Atom ""))],
       testCase "two imports declare same name" $ do
@@ -158,7 +160,7 @@ ambiguousTests =
             modC =
               module' "C"
                 `importing` ["A", "B"]
-                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         case renameProgram [modA, modB, modC] of
           Left [Diagnostic _ (AnnP (AmbiguousName "leq" 2 _) _ _)] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other
@@ -175,7 +177,7 @@ unknownTests =
     [ testCase "undeclared constraint" $ do
         let m =
               module' "M"
-                `defining` [[con "foo" [var "X"]] <=> [atom "true"]]
+                `defining` [[term "foo" [var "X"]] <=> [atom "true"]]
         renameProgram [m]
           @?= Left [noDiag (AnnP (UnknownName "foo" 1) dummyLoc (Atom ""))],
       testCase "wrong arity" $ do
@@ -183,14 +185,14 @@ unknownTests =
         let m =
               module' "M"
                 `declaring` ["leq" // 3]
-                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [m]
           @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
       testCase "host call in body" $ do
         let m =
               module' "M"
                 `declaring` ["c" // 0]
-                `defining` [[con "c" []] <=> [hostCall "some_host_func" [var "X"]]]
+                `defining` [[term "c" []] <=> [hostCall "some_host_func" [var "X"]]]
         rule <- singleRule m
         rule.body.node
           @?= [CompoundTerm (Qualified "host" "some_host_func") [VarTerm "X"]]
@@ -209,7 +211,7 @@ alreadyQualifiedTests =
             modM =
               module' "M"
                 `importing` ["Order"]
-                `defining` [["Order" .: con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[qterm "Order" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedM) <- case renameProgram [modOrder, modM] of
           Right ([a, b], _) -> return (a, b)
           Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
@@ -222,7 +224,7 @@ alreadyQualifiedTests =
       testCase "pre-qualified undeclared constraint produces error" $ do
         let m =
               module' "M"
-                `defining` [["Order" .: con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[qterm "Order" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [m]
           @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
       testCase "pre-qualified survives ambiguity" $ do
@@ -232,7 +234,7 @@ alreadyQualifiedTests =
             modC =
               module' "C"
                 `importing` ["A", "B"]
-                `defining` [["A" .: con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[qterm "A" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renamedC <- case renameProgram [modA, modB, modC] of
           Right ([_, _, c], _) -> return c
           Right (mods, _) -> assertFailure $ "expected 3 modules, got " ++ show (length mods)
@@ -248,7 +250,7 @@ alreadyQualifiedTests =
         let modA = module' "A" `declaring` ["leq" // 2]
             modB =
               module' "B"
-                `defining` [["A" .: con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[qterm "A" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
           @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
       testCase "pre-qualified reference to non-exported name is rejected" $ do
@@ -261,7 +263,7 @@ alreadyQualifiedTests =
             modB =
               module' "B"
                 `importing` ["A"]
-                `defining` [["A" .: con "gt" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[qterm "A" "gt" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
           @?= Left [noDiag (AnnP (UnknownName "gt" 2) dummyLoc (Atom ""))]
     ]
@@ -279,8 +281,8 @@ goalClassificationTests =
         let m =
               module' "M"
                 `declaring` ["leq" // 2]
-                `defining` [ ([con "leq" [var "X", var "Y"]] <=> [atom "true"])
-                               |- [func "leq" [var "X", var "Y"]]
+                `defining` [ ([term "leq" [var "X", var "Y"]] <=> [atom "true"])
+                               |- [term "leq" [var "X", var "Y"]]
                            ]
         rule <- singleRule m
         rule.guard.node
@@ -290,7 +292,9 @@ goalClassificationTests =
         let m =
               module' "M"
                 `declaring` ["leq" // 2]
-                `defining` [[con "leq" [var "X", var "Y"]] ==> [func "leq" [var "X", var "Z"]]]
+                `defining` [ [term "leq" [var "X", var "Y"]]
+                               ==> [term "leq" [var "X", var "Z"]]
+                           ]
         rule <- singleRule m
         rule.body.node
           @?= [CompoundTerm (Qualified "M" "leq") [VarTerm "X", VarTerm "Z"]],
@@ -299,7 +303,7 @@ goalClassificationTests =
         let m =
               module' "M"
                 `declaring` ["wrap" // 1, "inner" // 1]
-                `defining` [[con "wrap" [func "inner" [var "X"]]] <=> [atom "true"]]
+                `defining` [[term "wrap" [term "inner" [var "X"]]] <=> [atom "true"]]
         rule <- singleRule m
         rule.head.node
           @?= Simplification
@@ -312,7 +316,7 @@ goalClassificationTests =
         let m =
               module' "M"
                 `declaring` ["c" // 0, "leq" // 1, "pair" // 1]
-                `defining` [[con "c" []] ==> [func "leq" [func "pair" [var "X"]]]]
+                `defining` [[term "c" []] ==> [term "leq" [term "pair" [var "X"]]]]
         rule <- singleRule m
         rule.body.node
           @?= [ CompoundTerm
@@ -328,8 +332,8 @@ goalClassificationTests =
         let m =
               module' "M"
                 `declaring` ["c" // 1]
-                `defining` [ ([con "c" [var "X"]] <=> [atom "true"])
-                               |- [func "." [var "H", var "T"]]
+                `defining` [ ([term "c" [var "X"]] <=> [atom "true"])
+                               |- [term "." [var "H", var "T"]]
                            ]
         rule <- singleRule m
         rule.guard.node
@@ -338,8 +342,8 @@ goalClassificationTests =
         let m =
               module' "M"
                 `declaring` ["c" // 1]
-                `defining` [ [con "c" [var "X"]]
-                               <=> [var "R" `is` func "pair" [var "X", int 1]]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [var "R" `is` term "pair" [var "X", int 1]]
                            ]
         rule <- singleRule m
         rule.body.node
@@ -351,7 +355,7 @@ goalClassificationTests =
         let m =
               module' "M"
                 `declaring` ["c" // 1]
-                `defining` [ ([con "c" [var "X"]] <=> [atom "true"])
+                `defining` [ ([term "c" [var "X"]] <=> [atom "true"])
                                |- [var "X", atom "zero", IntTerm 42]
                            ]
         rule <- singleRule m
@@ -361,7 +365,7 @@ goalClassificationTests =
         let m =
               module' "M"
                 `declaring` ["c" // 1]
-                `defining` [[con "c" [var "X"]] <=> [var "X", atom "zero", IntTerm 42]]
+                `defining` [[term "c" [var "X"]] <=> [var "X", atom "zero", IntTerm 42]]
         rule <- singleRule m
         rule.body.node
           @?= [VarTerm "X", AtomTerm "zero", IntTerm 42],
@@ -369,7 +373,7 @@ goalClassificationTests =
         let m =
               module' "M"
                 `declaring` ["c" // 1, "done" // 0]
-                `defining` [[con "c" [var "X"]] <=> [atom "done"]]
+                `defining` [[term "c" [var "X"]] <=> [atom "done"]]
         rule <- singleRule m
         rule.body.node
           @?= [CompoundTerm (Qualified "M" "done") []],
@@ -377,7 +381,7 @@ goalClassificationTests =
         let m =
               module' "M"
                 `declaring` ["c" // 1, "ready" // 0]
-                `defining` [ ([con "c" [var "X"]] <=> [atom "true"])
+                `defining` [ ([term "c" [var "X"]] <=> [atom "true"])
                                |- [atom "ready"]
                            ]
         rule <- singleRule m
@@ -387,7 +391,7 @@ goalClassificationTests =
         let m =
               module' "M"
                 `declaring` ["c" // 1]
-                `defining` [[con "c" [var "X"]] <=> [atom "hello"]]
+                `defining` [[term "c" [var "X"]] <=> [atom "hello"]]
         rule <- singleRule m
         rule.body.node
           @?= [AtomTerm "hello"],
@@ -395,7 +399,7 @@ goalClassificationTests =
         let m =
               module' "M"
                 `declaring` ["c" // 1]
-                `defining` [ ([con "c" [var "X"]] <=> [atom "true"])
+                `defining` [ ([term "c" [var "X"]] <=> [atom "true"])
                                |- [atom "hello"]
                            ]
         rule <- singleRule m
@@ -405,7 +409,7 @@ goalClassificationTests =
         let m =
               module' "M"
                 `declaring` ["c" // 1, "done" // 0]
-                `defining` [[con "c" [atom "done"]] <=> [atom "true"]]
+                `defining` [[term "c" [atom "done"]] <=> [atom "true"]]
         rule <- singleRule m
         rule.head.node
           @?= Simplification [Constraint (Qualified "M" "c") [AtomTerm "done"]]
@@ -423,7 +427,7 @@ headTypeTests =
         let m =
               module' "M"
                 `declaring` ["leq" // 2]
-                `defining` [[con "leq" [var "X", var "Y"]] ==> [atom "true"]]
+                `defining` [[term "leq" [var "X", var "Y"]] ==> [atom "true"]]
         rule <- singleRule m
         rule.head.node
           @?= Propagation [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]],
@@ -431,8 +435,9 @@ headTypeTests =
         let m =
               module' "M"
                 `declaring` ["leq" // 2, "gt" // 2]
-                `defining` [ ([con "leq" [var "X", var "Y"]] \\ [con "gt" [var "X", var "Y"]])
-                               [atom "true"]
+                `defining` [ [term "leq" [var "X", var "Y"]]
+                               \\ [term "gt" [var "X", var "Y"]]
+                               <=> [atom "true"]
                            ]
         rule <- singleRule m
         rule.head.node
@@ -453,19 +458,15 @@ multiModuleTests =
         let modOrder =
               module' "Order"
                 `declaring` ["leq" // 2]
-                `defining` ["refl" @: ([con "leq" [var "X", var "X"]] <=> [atom "true"])]
+                `defining` ["refl" @: ([term "leq" [var "X", var "X"]] <=> [atom "true"])]
             modLogic =
               module' "Logic"
                 `importing` ["Order"]
                 `defining` [ "trans"
-                               @: ( [ con "leq" [var "X", var "Y"],
-                                      con
-                                        "leq"
-                                        [ var "Y",
-                                          var "Z"
-                                        ]
+                               @: ( [ term "leq" [var "X", var "Y"],
+                                      term "leq" [var "Y", var "Z"]
                                     ]
-                                      ==> [func "leq" [var "X", var "Z"]]
+                                      ==> [term "leq" [var "X", var "Z"]]
                                   )
                            ]
         (renamedOrder, renamedLogic) <- case renameProgram [modOrder, modLogic] of
@@ -535,7 +536,7 @@ multiModuleTests =
         let m =
               module' "M"
                 `declaring` ["c" // 0]
-                `defining` ["my_rule" @: ([con "c" []] <=> [atom "true"])]
+                `defining` ["my_rule" @: ([term "c" []] <=> [atom "true"])]
         rule <- singleRule m
         fmap (.node) rule.name @?= Just "my_rule"
     ]
@@ -552,7 +553,7 @@ reservedSymbolTests =
         let m =
               module' "M"
                 `declaring` ["c" // 0]
-                `defining` [[con "c" []] <=> [func "=" [var "X", var "Y"]]]
+                `defining` [[term "c" []] <=> [term "=" [var "X", var "Y"]]]
         rule <- singleRule m
         rule.body.node
           @?= [CompoundTerm (Unqualified "=") [VarTerm "X", VarTerm "Y"]],
@@ -560,7 +561,7 @@ reservedSymbolTests =
         let m =
               module' "M"
                 `declaring` ["c" // 0]
-                `defining` [[con "c" []] <=> [hostCall "print" [var "X"]]]
+                `defining` [[term "c" []] <=> [hostCall "print" [var "X"]]]
         rule <- singleRule m
         rule.body.node
           @?= [CompoundTerm (Qualified "host" "print") [VarTerm "X"]]
@@ -583,7 +584,7 @@ exportTests =
             modB =
               module' "B"
                 `importing` ["A"]
-                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedB) <- case renameProgram [modA, modB] of
           Right ([a, b], _) -> return (a, b)
           Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
@@ -602,7 +603,7 @@ exportTests =
             modB =
               module' "B"
                 `importing` ["A"]
-                `defining` [[con "gt" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[term "gt" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
           @?= Left [noDiag (AnnP (UnknownName "gt" 2) dummyLoc (Atom ""))],
       testCase "empty export list hides all constraints from importer" $ do
@@ -614,7 +615,7 @@ exportTests =
             modB =
               module' "B"
                 `importing` ["A"]
-                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
           @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
       testCase "export restriction does not affect own-module use" $ do
@@ -623,7 +624,7 @@ exportTests =
               module' "A"
                 `declaring` ["leq" // 2, "gt" // 2]
                 `exporting` ["leq" // 2]
-                `defining` [[con "gt" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[term "gt" [var "X", var "Y"]] <=> [atom "true"]]
         rule <- singleRule modA
         rule.head.node
           @?= Simplification [Constraint (Qualified "A" "gt") [VarTerm "X", VarTerm "Y"]],
@@ -633,7 +634,7 @@ exportTests =
             modB =
               module' "B"
                 `importing` ["A"]
-                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedB) <- case renameProgram [modA, modB] of
           Right ([a, b], _) -> return (a, b)
           Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
@@ -684,18 +685,18 @@ warningTests =
         let m =
               module' "M"
                 `declaring` ["c" // 1]
-                `defining` [[con "c" [var "X"]] <=> [atom "true"] |- [func "foo" [var "X"]]]
+                `defining` [[term "c" [var "X"]] <=> [atom "true"] |- [term "foo" [var "X"]]]
         ws <- warningsOf [m]
         ws @?= [noDiag (AnnP (UndeclaredDataConstructor "foo") dummyLoc (Atom ""))],
       testCase "declared data constructor produces no warning" $ do
         let m =
               ( module' "M"
                   `declaring` ["c" // 1]
-                  `defining` [ [con "c" [var "X"]]
+                  `defining` [ [term "c" [var "X"]]
                                  <=> [ atom
                                          "true"
                                      ]
-                                 |- [func "foo" [var "X"]]
+                                 |- [term "foo" [var "X"]]
                              ]
               )
                 { typeDecls =
@@ -716,11 +717,11 @@ warningTests =
         let m =
               ( module' "M"
                   `declaring` ["c" // 1]
-                  `defining` [ [con "c" [var "X"]]
+                  `defining` [ [term "c" [var "X"]]
                                  <=> [ atom
                                          "true"
                                      ]
-                                 |- [func "foo" [var "X", var "X"]]
+                                 |- [term "foo" [var "X", var "X"]]
                              ]
               )
                 { typeDecls =
@@ -741,7 +742,7 @@ warningTests =
         let m =
               module' "M"
                 `declaring` ["c" // 2]
-                `defining` [[con "c" [var "X", var "Y"]] <=> [var "X" .=. var "Y"]]
+                `defining` [[term "c" [var "X", var "Y"]] <=> [var "X" .=. var "Y"]]
         ws <- warningsOf [m]
         ws @?= [],
       testCase "warns on unknown data constructor in NoResolve mode (head arguments)" $ do
@@ -751,7 +752,7 @@ warningTests =
         let m =
               module' "M"
                 `declaring` ["c" // 1]
-                `defining` [[con "c" [func "unknown" [var "X"]]] <=> [atom "true"]]
+                `defining` [[term "c" [term "unknown" [var "X"]]] <=> [atom "true"]]
         ws <- warningsOf [m]
         ws @?= [noDiag (AnnP (UndeclaredDataConstructor "unknown") dummyLoc (Atom ""))],
       testCase "exporting undeclared type produces error" $ do
@@ -884,7 +885,7 @@ importListTests =
                         )
                     ]
                 }
-                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         case renameProgram [modOrder, modLogic] of
           Right ([_, renamedLogic], _) -> case renamedLogic.rules of
             [rule] ->
@@ -920,7 +921,7 @@ importListTests =
                         )
                     ]
                 }
-                `defining` [[con "leq" [var "X", var "Y"]] <=> [atom "true"]]
+                `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modOrder, modLogic]
           @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
       testCase "error for import list item not exported" $ do

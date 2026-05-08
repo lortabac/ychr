@@ -3,6 +3,7 @@
 module YCHR.DesugarTest (tests) where
 
 import Data.Map.Strict qualified as Map
+import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import YCHR.DSL
@@ -59,11 +60,18 @@ singleRule mods = do
     [r] -> return r
     rs -> assertFailure $ "expected 1 rule, got " ++ show (length rs)
 
+-- | Test-local helper: build a fully-qualified 'Constraint' value to
+-- populate raw 'Simplification' / 'Propagation' / 'Simpagation' heads.
+-- The DSL itself only exposes the 'Term' constructors 'term' / 'qterm';
+-- this helper is the AST-level escape hatch the desugar tests need.
+qcon :: Text -> Text -> [Term] -> Constraint
+qcon m n args = Constraint (Qualified m n) args
+
 leqQual :: Constraint
-leqQual = "M" .: con "leq" [var "X", var "Y"]
+leqQual = qcon "M" "leq" [var "X", var "Y"]
 
 leqQual2 :: Constraint
-leqQual2 = "M" .: con "leq" [var "A", var "B"]
+leqQual2 = qcon "M" "leq" [var "A", var "B"]
 
 -- | Convert a fully-qualified parsed 'Constraint' to a
 -- 'D.HeadConstraint' for comparison against post-desugar values.
@@ -113,7 +121,7 @@ hnfTests =
   testGroup
     "hnf"
     [ testCase "distinct variables: no change" $ do
-        let m = simpleModule (Simplification ["M" .: con "leq" [var "X", var "Y"]])
+        let m = simpleModule (Simplification [qcon "M" "leq" [var "X", var "Y"]])
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
@@ -126,7 +134,7 @@ hnfTests =
             ]
         getNode rule.guard @?= [],
       testCase "duplicate variable generates equality guard" $ do
-        let m = simpleModule (Simplification ["M" .: con "leq" [var "X", var "X"]])
+        let m = simpleModule (Simplification [qcon "M" "leq" [var "X", var "X"]])
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
@@ -139,7 +147,7 @@ hnfTests =
             ]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "X") (VarTerm "_hnf_0")],
       testCase "non-variable argument (integer) generates equality guard" $ do
-        let m = simpleModule (Simplification ["M" .: con "leq" [var "X", IntTerm 5]])
+        let m = simpleModule (Simplification [qcon "M" "leq" [var "X", IntTerm 5]])
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
@@ -152,7 +160,7 @@ hnfTests =
             ]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "_hnf_0") (IntTerm 5)],
       testCase "non-variable argument (atom) generates equality guard" $ do
-        let m = simpleModule (Simplification ["M" .: con "leq" [var "X", atom "foo"]])
+        let m = simpleModule (Simplification [qcon "M" "leq" [var "X", atom "foo"]])
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
@@ -168,8 +176,8 @@ hnfTests =
         let m =
               simpleModule
                 ( Simplification
-                    [ "M" .: con "leq" [var "X", var "Y"],
-                      "M" .: con "leq" [var "Y", var "Z"]
+                    [ qcon "M" "leq" [var "X", var "Y"],
+                      qcon "M" "leq" [var "Y", var "Z"]
                     ]
                 )
         rule <- singleRule [m]
@@ -184,8 +192,8 @@ hnfTests =
         let m =
               simpleModule
                 ( Simpagation
-                    ["M" .: con "leq" [var "X", var "Y"]]
-                    ["M" .: con "leq" [var "Y", var "Z"]]
+                    [qcon "M" "leq" [var "X", var "Y"]]
+                    [qcon "M" "leq" [var "Y", var "Z"]]
                 )
         rule <- singleRule [m]
         getNode rule.head
@@ -198,8 +206,8 @@ hnfTests =
               module' "M"
                 `defining` [ Rule
                                Nothing
-                               (noAnnP (Simplification ["M" .: con "leq" [var "X", var "X"]]))
-                               (noAnnP [func "gt" [var "X", IntTerm 0]])
+                               (noAnnP (Simplification [qcon "M" "leq" [var "X", var "X"]]))
+                               (noAnnP [term "gt" [var "X", IntTerm 0]])
                                (noAnnP [atom "true"])
                            ]
         rule <- singleRule [m]
@@ -208,13 +216,13 @@ hnfTests =
                 D.GuardExpr (CompoundTerm (Unqualified "gt") [VarTerm "X", IntTerm 0])
               ],
       testCase "wildcard passes through HNF unchanged" $ do
-        let m = simpleModule (Simplification ["M" .: con "foo" [wildcard]])
+        let m = simpleModule (Simplification [qcon "M" "foo" [wildcard]])
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head [] [D.HeadConstraint (D.QualifiedName "M" "foo") [D.HeadWildcard]]
         getNode rule.guard @?= [],
       testCase "two wildcards stay as wildcards without guards" $ do
-        let m = simpleModule (Simplification ["M" .: con "foo" [wildcard, wildcard]])
+        let m = simpleModule (Simplification [qcon "M" "foo" [wildcard, wildcard]])
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
@@ -222,7 +230,7 @@ hnfTests =
             [D.HeadConstraint (D.QualifiedName "M" "foo") [D.HeadWildcard, D.HeadWildcard]]
         getNode rule.guard @?= [],
       testCase "wildcard and non-variable: only non-variable gets guard" $ do
-        let m = simpleModule (Simplification ["M" .: con "foo" [wildcard, IntTerm 1]])
+        let m = simpleModule (Simplification [qcon "M" "foo" [wildcard, IntTerm 1]])
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
@@ -251,9 +259,7 @@ guardTests =
                                Nothing
                                (noAnnP (Simplification [leqQual]))
                                ( noAnnP
-                                   [ func
-                                       "=="
-                                       [var "X", var "Y"]
+                                   [ term "==" [var "X", var "Y"]
                                    ]
                                )
                                (noAnnP [atom "true"])
@@ -275,9 +281,7 @@ guardTests =
                                Nothing
                                (noAnnP (Simplification [leqQual]))
                                ( noAnnP
-                                   [ func
-                                       "gt"
-                                       [var "X", IntTerm 0]
+                                   [ term "gt" [var "X", IntTerm 0]
                                    ]
                                )
                                (noAnnP [atom "true"])
@@ -325,10 +329,7 @@ bodyTests =
           singleRule
             [ simpleModule'
                 (Simplification [leqQual])
-                [ var "X"
-                    `is` func
-                      "+"
-                      [int 1, int 2]
+                [ var "X" `is` term "+" [int 1, int 2]
                 ]
             ]
         getNode rule.body
@@ -391,7 +392,7 @@ errorTests =
   testGroup
     "error-handling"
     [ testCase "unqualified compound in body produces UnexpectedBodyTerm" $ do
-        let badTerm = func "foo" [var "X"]
+        let badTerm = term "foo" [var "X"]
             m =
               module' "M"
                 `defining` [ Rule
@@ -405,8 +406,8 @@ errorTests =
           Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "two unqualified compounds collect both errors" $ do
-        let bad1 = func "foo" [var "X"]
-            bad2 = func "bar" [var "Y"]
+        let bad1 = term "foo" [var "X"]
+            bad2 = term "bar" [var "Y"]
             m =
               module' "M"
                 `defining` [ Rule
@@ -466,13 +467,13 @@ errorTests =
           Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyTerm badTerm) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "bare variable in guard becomes GuardExpr" $ do
-        let term = var "X"
+        let goal = var "X"
             m =
               module' "M"
                 `defining` [ Rule
                                Nothing
                                (noAnnP (Simplification [leqQual]))
-                               (noAnnP [term])
+                               (noAnnP [goal])
                                (noAnnP [atom "true"])
                            ]
         rprog <- resolve [m]
@@ -482,13 +483,13 @@ errorTests =
             (rule : _) -> getNode rule.guard @?= [D.GuardExpr (VarTerm "X")]
             [] -> assertFailure "expected at least 1 rule",
       testCase "bare integer in guard becomes GuardExpr" $ do
-        let term = int 42
+        let goal = int 42
             m =
               module' "M"
                 `defining` [ Rule
                                Nothing
                                (noAnnP (Simplification [leqQual]))
-                               (noAnnP [term])
+                               (noAnnP [goal])
                                (noAnnP [atom "true"])
                            ]
         rprog <- resolve [m]
@@ -498,13 +499,13 @@ errorTests =
             (rule : _) -> getNode rule.guard @?= [D.GuardExpr (IntTerm 42)]
             [] -> assertFailure "expected at least 1 rule",
       testCase "non-true atom in guard becomes GuardExpr" $ do
-        let term = atom "foo"
+        let goal = atom "foo"
             m =
               module' "M"
                 `defining` [ Rule
                                Nothing
                                (noAnnP (Simplification [leqQual]))
-                               (noAnnP [term])
+                               (noAnnP [goal])
                                (noAnnP [atom "true"])
                            ]
         rprog <- resolve [m]
@@ -524,8 +525,8 @@ flatteningTests =
   testGroup
     "flattening"
     [ testCase "two modules with one rule each yield two rules" $ do
-        let m1 = module' "A" `defining` [[("A" .: con "c" [])] <=> [atom "true"]]
-            m2 = module' "B" `defining` [[("B" .: con "d" [])] <=> [atom "true"]]
+        let m1 = module' "A" `defining` [[qterm "A" "c" []] <=> [atom "true"]]
+            m2 = module' "B" `defining` [[qterm "B" "d" []] <=> [atom "true"]]
         prog <- desugar [m1, m2]
         length prog.rules @?= 2,
       testCase "empty module list yields empty program" $ do
@@ -533,7 +534,7 @@ flatteningTests =
         length prog.rules @?= 0,
       testCase "module with no rules contributes no rules" $ do
         let empty = module' "Empty"
-            m = module' "M" `defining` [[("M" .: con "c" [])] <=> [atom "true"]]
+            m = module' "M" `defining` [[qterm "M" "c" []] <=> [atom "true"]]
         prog <- desugar [empty, m]
         length prog.rules @?= 1
     ]
@@ -547,7 +548,12 @@ ruleNameTests =
   testGroup
     "rule-name"
     [ testCase "named rule preserves name" $ do
-        let m = module' "M" `defining` ["my_rule" @: ([leqQual] <=> [atom "true"])]
+        let m =
+              module' "M"
+                `defining` [ "my_rule"
+                               @: [qterm "M" "leq" [var "X", var "Y"]]
+                               <=> [atom "true"]
+                           ]
         rule <- singleRule [m]
         rule.name @?= Just "my_rule",
       testCase "anonymous rule has Nothing name" $ do
@@ -716,12 +722,12 @@ lambdaLiftTests =
         -- lambda-lifter must therefore treat HNF-introduced bindings as
         -- in scope; otherwise the fun(Y) lambda would be lifted without
         -- capturing X and the reference inside the body would dangle.
-        let lambdaBody = func "+" [var "Y", var "X"]
+        let lambdaBody = term "+" [var "Y", var "X"]
             lambdaTerm =
               CompoundTerm
                 (Unqualified "->")
                 [CompoundTerm (Unqualified "fun") [var "Y"], lambdaBody]
-            listPattern = func "." [var "X", var "Xs"]
+            listPattern = term "." [var "X", var "Xs"]
             funDecl =
               noAnn
                 FunctionDecl

@@ -13,6 +13,7 @@ module YCHR.Compile.Pipeline
     ExportResolution (..),
     compileModules,
     compileFiles,
+    compileParsedModules,
   )
 where
 
@@ -33,7 +34,7 @@ import YCHR.Compile (CompileError, compile)
 import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable, liftAllLambdas)
 import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic)
-import YCHR.Parsed (AnnP (..), Import (..), Module (..), noAnnP)
+import YCHR.Parsed (AnnP (..), Import (..), Module (..), OpDecl, SourceLoc, noAnnP)
 import YCHR.Parser
   ( ModuleHeader (..),
     OpTable,
@@ -157,11 +158,69 @@ compileModules includeStdlib inputs = do
   case validationErrors of
     [] -> pure ()
     errs -> Left (ParseValidationErrors errs)
+  let trailingLoc =
+        Map.fromList [(h.modName, h.trailingLoc) | (_, h) <- userHeaders]
+  finalizeCompilation libraryMods opExports trailingLoc parsed
+  where
+    first' f (Left e) = Left (f e)
+    first' _ (Right x) = Right x
+
+-- | Compile already-parsed modules. This is the entry point used by
+-- "YCHR.DSL" callers that build 'Module' values in Haskell rather than
+-- parsing @.chr@ text.
+--
+-- The library closure (prelude plus every @use_module(library(_))@ in
+-- the input modules' import lists, plus all stdlib libraries when
+-- @includeStdlib@ is 'True') is resolved internally; operator
+-- declarations come from each module's own export list via
+-- 'extractOpDecls'. There is no per-module @trailingLoc@ since the
+-- input was not parsed from text — the renamer's
+-- "use_module-after-non-import" check is therefore a no-op for these
+-- modules, which is the right behaviour for programmatically built
+-- input.
+compileParsedModules ::
+  Bool -> [Module] -> Either Error (CompiledProgram, [Warning])
+compileParsedModules includeStdlib parsed = do
+  let userLibrarySeeds =
+        noAnnP "prelude"
+          : [ AnnP n loc p
+            | m <- parsed,
+              AnnP (LibraryImport n _) loc p <- m.imports
+            ]
+  libraryMods <-
+    first
+      CollectErrors
+      ( resolveLibraryClosure
+          includeStdlib
+          stdlib
+          userLibrarySeeds
+      )
+  let stdlibOpExports = Map.fromList [(m.name, extractOpDecls m) | m <- libraryMods]
+      userOpExports = Map.fromList [(m.name, extractOpDecls m) | m <- parsed]
+      opExports = stdlibOpExports `Map.union` userOpExports
+  finalizeCompilation libraryMods opExports Map.empty parsed
+
+-- | Shared post-parse, post-library-resolution pipeline: rename, resolve,
+-- desugar, lambda-lift, compile, and assemble the resulting
+-- 'CompiledProgram'. Both 'compileModules' (after parsing user files)
+-- and 'compileParsedModules' (with no parse step) call this.
+finalizeCompilation ::
+  -- | Library modules (already-resolved closure).
+  [Module] ->
+  -- | Per-module operator exports (stdlib + user).
+  Map Text [OpDecl] ->
+  -- | Trailing-location map for the renamer's
+  -- "use_module after non-import" check. Empty for DSL-built input.
+  Map Text (Maybe SourceLoc) ->
+  -- | User modules (parsed).
+  [Module] ->
+  Either Error (CompiledProgram, [Warning])
+finalizeCompilation libraryMods opExports trailingLocMap parsed = do
   -- Auto-import prelude into every user module and into every library
   -- module (except prelude itself), then rewrite all LibraryImports to
   -- ModuleImports for the renamer.
   let allMods = rewriteImports (addLibraryPrelude libraryMods ++ map addPreludeImport parsed)
-  let exportEnv = buildExportEnv allMods
+      exportEnv = buildExportEnv allMods
       exportMap =
         Map.fromList
           [ (Types.UnqualifiedIdentifier n a, toResolution n ms)
@@ -173,7 +232,7 @@ compileModules includeStdlib inputs = do
       renameInputs =
         RenameInputs
           { operatorExports = opExports,
-            trailingLoc = Map.fromList [(h.modName, h.trailingLoc) | (_, h) <- userHeaders]
+            trailingLoc = trailingLocMap
           }
   (renamed, renameWarnings) <- first RenameErrors (renameProgram renameInputs allMods)
   resolved <- first ResolveErrors (resolveProgram renamed)
@@ -205,8 +264,6 @@ compileModules includeStdlib inputs = do
       warnings
     )
   where
-    first' f (Left e) = Left (f e)
-    first' _ (Right x) = Right x
     toResolution n [m] = UniqueExport (Types.Qualified m n)
     toResolution _ ms = AmbiguousExport ms
 

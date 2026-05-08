@@ -17,6 +17,7 @@ module YCHR.Run
     ConstraintType,
     compileModules,
     compileFiles,
+    compileParsedModules,
 
     -- * CHR effect (re-exported from "YCHR.Runtime.Session")
     CHR,
@@ -74,6 +75,7 @@ import YCHR.Compile.Pipeline
     Warning (..),
     compileFiles,
     compileModules,
+    compileParsedModules,
   )
 import YCHR.Desugar (desugarQueryGoals, liftQueryLambdas)
 import YCHR.Desugared qualified as D

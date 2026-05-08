@@ -2,6 +2,7 @@
 
 module YCHR.DSLTest (tests) where
 
+import Data.Map.Strict qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 import YCHR.DSL
@@ -14,9 +15,9 @@ tests =
     [ moduleTests,
       declarationTests,
       ruleTests,
-      constraintTests,
       termTests,
-      integrationTests
+      integrationTests,
+      endToEndTests
     ]
 
 --------------------------------------------------------------------------------
@@ -27,7 +28,7 @@ orderModule :: Module
 orderModule =
   module' "Order"
     `declaring` ["leq" // 2]
-    `defining` [ "refl" @: ([con "leq" [var "X", var "X"]] <=> [atom "true"])
+    `defining` [ "refl" @: ([term "leq" [var "X", var "X"]] <=> [atom "true"])
                ]
 
 logicModule :: Module
@@ -35,8 +36,8 @@ logicModule =
   module' "Logic"
     `importing` ["Order"]
     `defining` [ "trans"
-                   @: ( [con "leq" [var "X", var "Y"], con "leq" [var "Y", var "Z"]]
-                          ==> [func "leq" [var "X", var "Z"]]
+                   @: ( [term "leq" [var "X", var "Y"], term "leq" [var "Y", var "Z"]]
+                          ==> [term "leq" [var "X", var "Z"]]
                       )
                ]
 
@@ -66,11 +67,11 @@ moduleTests =
         module' "Foo" `declaring` ["leq" // 2]
           @?= Module "Foo" [] [noAnn (ConstraintDecl "leq" 2 Nothing)] [] [] [] Nothing,
       testCase "defining sets modRules" $
-        let r = [con "leq" [var "X"]] <=> [atom "true"]
+        let r = [term "leq" [var "X"]] <=> [atom "true"]
          in module' "Foo" `defining` [r]
               @?= Module "Foo" [] [] [] [r] [] Nothing,
       testCase "chaining importing, declaring, defining" $
-        let r = [con "c" []] <=> [atom "true"]
+        let r = [term "c" []] <=> [atom "true"]
          in module' "M"
               `importing` ["A"]
               `declaring` ["c" // 0]
@@ -109,64 +110,48 @@ ruleTests =
   testGroup
     "rule"
     [ testCase "(<=>): simplification rule" $
-        [con "a" []] <=> [atom "true"]
+        [term "a" []] <=> [atom "true"]
           @?= Rule
             Nothing
-            (noAnnP (Simplification [con "a" []]))
+            (noAnnP (Simplification [a0]))
             (noAnnP [])
-            ( noAnnP
-                [ atom
-                    "true"
-                ]
-            ),
+            (noAnnP [atom "true"]),
       testCase "(==>): propagation rule" $
-        [con "a" []] ==> [func "b" []]
+        [term "a" []] ==> [term "b" []]
           @?= Rule
             Nothing
-            (noAnnP (Propagation [con "a" []]))
+            (noAnnP (Propagation [a0]))
             (noAnnP [])
-            ( noAnnP
-                [ func
-                    "b"
-                    []
-                ]
-            ),
+            (noAnnP [term "b" []]),
       testCase "(\\): simpagation rule" $
-        ([con "k" []] \\ [con "r" []]) [atom "true"]
+        [term "k" []] \\ [term "r" []] <=> [atom "true"]
           @?= Rule
             Nothing
-            (noAnnP (Simpagation [con "k" []] [con "r" []]))
+            ( noAnnP
+                ( Simpagation
+                    [Constraint (Unqualified "k") []]
+                    [Constraint (Unqualified "r") []]
+                )
+            )
             (noAnnP [])
             (noAnnP [atom "true"]),
       testCase "(@:): sets rule name" $
-        "my_rule" @: ([con "a" []] <=> [atom "true"])
+        ("my_rule" @: ([term "a" []] <=> [atom "true"]))
           @?= Rule
             (Just (noAnn "my_rule"))
-            (noAnnP (Simplification [con "a" []]))
+            (noAnnP (Simplification [a0]))
             (noAnnP [])
             (noAnnP [atom "true"]),
       testCase "(|-): sets rule guard" $
-        ([con "a" [var "X"]] <=> [atom "true"]) |- [var "X" .=. atom "zero"]
+        (([term "a" [var "X"]] <=> [atom "true"]) |- [var "X" .=. atom "zero"])
           @?= Rule
             Nothing
-            (noAnnP (Simplification [con "a" [var "X"]]))
+            (noAnnP (Simplification [Constraint (Unqualified "a") [var "X"]]))
             (noAnnP [var "X" .=. atom "zero"])
             (noAnnP [atom "true"])
     ]
-
-constraintTests :: TestTree
-constraintTests =
-  testGroup
-    "constraint"
-    [ testCase "con produces Unqualified constraint" $
-        con "leq" [var "X"] @?= Constraint (Unqualified "leq") [var "X"],
-      testCase "(.:) qualifies an unqualified constraint" $
-        "Mod" .: con "leq" [var "X"]
-          @?= Constraint (Qualified "Mod" "leq") [var "X"],
-      testCase "(.:) on already-qualified constraint is a no-op" $
-        "Other" .: Constraint (Qualified "Mod" "leq") [var "X"]
-          @?= Constraint (Qualified "Mod" "leq") [var "X"]
-    ]
+  where
+    a0 = Constraint (Unqualified "a") []
 
 termTests :: TestTree
 termTests =
@@ -176,8 +161,8 @@ termTests =
         var "X" @?= VarTerm "X",
       testCase "atom produces AtomTerm" $
         atom "true" @?= AtomTerm "true",
-      testCase "func produces CompoundTerm" $
-        func "f" [var "X"] @?= CompoundTerm (Unqualified "f") [var "X"],
+      testCase "term produces CompoundTerm" $
+        term "f" [var "X"] @?= CompoundTerm (Unqualified "f") [var "X"],
       testCase "(.=.) produces unification term" $
         var "X" .=. var "Y"
           @?= CompoundTerm (Unqualified "=") [VarTerm "X", VarTerm "Y"],
@@ -187,7 +172,7 @@ termTests =
       testCase "wildcard produces Wildcard" $
         wildcard @?= Wildcard,
       testCase "`is` produces is term" $
-        var "X" `is` func "+" [int 1, int 2]
+        var "X" `is` term "+" [int 1, int 2]
           @?= CompoundTerm
             (Unqualified "is")
             [VarTerm "X", CompoundTerm (Unqualified "+") [IntTerm 1, IntTerm 2]]
@@ -243,3 +228,136 @@ integrationTests =
             []
             Nothing
     ]
+
+--------------------------------------------------------------------------------
+-- End-to-end: build with the DSL, compile, and run
+--------------------------------------------------------------------------------
+
+endToEndTests :: TestTree
+endToEndTests =
+  testGroup
+    "endToEnd"
+    [ leqEndToEnd,
+      crossModuleEndToEnd,
+      factorialEndToEnd,
+      chrTypeEndToEnd,
+      guardEndToEnd
+    ]
+
+-- | A full @leq@ handler exercising simplification, simpagation, and
+-- propagation. Querying the reflexive case @leq(X, X)@ leaves @X@ unbound
+-- (matches @test/golden/leq@).
+leqEndToEnd :: TestTree
+leqEndToEnd =
+  testCase "leq: reflexivity collapses leq(X, X)" $ do
+    let m =
+          module' "order"
+            `exporting` ["leq" // 2]
+            `declaring` ["leq" // 2]
+            `defining` [ "refl" @: [term "leq" [var "X", var "X"]] <=> [bool True],
+                         "antisymm"
+                           @: [term "leq" [var "X", var "Y"], term "leq" [var "Y", var "X"]]
+                           <=> [var "X" .=. var "Y"],
+                         "idemp"
+                           @: [term "leq" [var "X", var "Y"]]
+                           \\ [term "leq" [var "X", var "Y"]]
+                           <=> [bool True],
+                         "trans"
+                           @: [term "leq" [var "X", var "Y"], term "leq" [var "Y", var "Z"]]
+                           ==> [term "leq" [var "X", var "Z"]]
+                       ]
+    bindings <- runDSL [m] (term "leq" [var "X", var "X"])
+    Map.keys bindings @?= ["X"]
+
+-- | Two-module program. The library module @cross_lib@ exports a @double@
+-- constraint; the main module @cross_main@ uses it to define @quadruple@.
+-- Mirrors the @cross_module_import@ golden test.
+crossModuleEndToEnd :: TestTree
+crossModuleEndToEnd =
+  testCase "cross-module: quadruple via cross_lib:double" $ do
+    let lib =
+          module' "cross_lib"
+            `exporting` ["double" // 2]
+            `declaring` ["double" // 2]
+            `defining` [ [term "double" [var "X", var "R"]]
+                           <=> [var "R" `is` (var "X" .* int 2)]
+                       ]
+        main_ =
+          module' "cross_main"
+            `importing` ["cross_lib"]
+            `exporting` ["quadruple" // 2]
+            `declaring` ["quadruple" // 2]
+            `defining` [ [term "quadruple" [var "X", var "R"]]
+                           <=> [ term "double" [var "X", var "Y"],
+                                 term "double" [var "Y", var "R"]
+                               ]
+                       ]
+    bindings <- runDSL [lib, main_] (term "quadruple" [int 7, var "R"])
+    Map.lookup "R" bindings @?= Just (IntTerm 28)
+
+-- | Function definition with multiple equations and recursion. Driven via a
+-- @compute(R)@ constraint that calls @factorial(5)@ in its body.
+factorialEndToEnd :: TestTree
+factorialEndToEnd =
+  testCase "factorial: function equations and recursion" $ do
+    let m =
+          module' "fact"
+            `exporting` ["compute" // 1]
+            `declaring` [ "compute" // 1,
+                          function "factorial" 1
+                        ]
+            `withEquations` [ equation "factorial" [int 0] [] (int 1),
+                              equation
+                                "factorial"
+                                [var "N"]
+                                [var "N" .> int 0]
+                                (var "N" .* call_ (funRef "factorial" 1) [var "N" .- int 1])
+                            ]
+            `defining` [ [term "compute" [var "R"]]
+                           <=> [var "R" `is` call_ (funRef "factorial" 1) [int 5]]
+                       ]
+    bindings <- runDSL [m] (term "compute" [var "R"])
+    Map.lookup "R" bindings @?= Just (IntTerm 120)
+
+-- | Algebraic-type definition (@:- chr_type color ---> red ; green ; blue@).
+-- The constraint @paint/1@ is declared with a typed argument; the rule simply
+-- removes any @paint@ to verify the typed program compiles and runs.
+chrTypeEndToEnd :: TestTree
+chrTypeEndToEnd =
+  testCase "chr_type color: typed constraint compiles and runs" $ do
+    let m =
+          module' "tc"
+            `exporting` ["paint" // 1]
+            `declaring` ["paint" // 1]
+            `chrType` tyDef
+              "color"
+              []
+              [ dataCtor "red" [],
+                dataCtor "green" [],
+                dataCtor "blue" []
+              ]
+            `defining` [[term "paint" [var "C"]] <=> [bool True]]
+    bindings <- runDSL [m] (term "paint" [atom "red"])
+    Map.keys bindings @?= []
+
+-- | Simplification with a guard built from @is@ and @(.<)@. Mirrors the
+-- @clamp@ shape of @test/golden/guard@: the low branch fires when @X < Lo@,
+-- so @clamp(3, 5, R)@ binds @R = 5@.
+guardEndToEnd :: TestTree
+guardEndToEnd =
+  testCase "guard: clamp(3, 5, R) → R = 5" $ do
+    let m =
+          module' "g"
+            `exporting` ["clamp" // 3]
+            `declaring` ["clamp" // 3]
+            `defining` [ "low"
+                           @: [term "clamp" [var "X", var "Lo", var "R"]]
+                           <=> [var "R" .=. var "Lo"]
+                           |- [var "X" .< var "Lo"],
+                         "high"
+                           @: [term "clamp" [var "X", var "Lo", var "R"]]
+                           <=> [var "R" .=. var "X"]
+                           |- [var "X" .>= var "Lo"]
+                       ]
+    bindings <- runDSL [m] (term "clamp" [int 3, int 5, var "R"])
+    Map.lookup "R" bindings @?= Just (IntTerm 5)

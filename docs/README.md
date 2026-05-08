@@ -91,6 +91,7 @@ not regression tests — for edge cases see `test/golden/`.
 
 - [Language](reference/language.md) — feature-level reference
 - [Syntax](reference/syntax.md) — lexical and grammatical rules
+- [Haskell DSL](reference/dsl.md) — embedded `YCHR.DSL` for library use
 - [Type system](reference/type-system.md) — gradual type-system spec
 - [Prelude / standard library](reference/prelude.md)
 - [CLI](reference/cli.md) — `ychr` command

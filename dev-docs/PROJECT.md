@@ -331,7 +331,7 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
 - Renaming (qualifying constraint names) in `src/YCHR/Rename.hs`.
 - Resolution (flattens modules into a single program, validates declaration kinds) in `src/YCHR/Resolve.hs` and `src/YCHR/Resolved.hs`.
 - Desugaring in `src/YCHR/Desugar.hs`.
-- A user-friendly DSL to construct a CHR program in Haskell in `src/YCHR/DSL.hs`.
+- A user-friendly DSL to construct a CHR program in Haskell in `src/YCHR/DSL.hs`. See [`docs/reference/dsl.md`](../docs/reference/dsl.md) for the user-facing reference.
 - VM types in `src/YCHR/VM/Types.hs` (re-exported from `src/YCHR/VM.hs`).
 - CHR-to-VM compiler in `src/YCHR/Compile.hs`.
 - Optional static type checker in `src/YCHR/TypeCheck.hs` (driver) and `src/YCHR/TypeCheck/{Compiled,TH}.hs`. Implemented as a CHR program; programs without type annotations are accepted unchanged.
