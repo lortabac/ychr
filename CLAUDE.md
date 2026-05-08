@@ -21,4 +21,6 @@ After a task is completed:
 
 - Format the Haskell code base with `ormolu -i $(find src test -name '*.hs')`.
 - Run the test suites with `make test`.
+- Ask a reviewer agent to review the changes.
+- Make sure the documentation and the implementation are in sync.
 - Run the benchmarks with `make bench`.
