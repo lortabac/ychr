@@ -39,7 +39,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import YCHR.Desugared qualified as D
-import YCHR.Types (Identifier, Name, QualifiedConstraint, RuleId, Term)
+import YCHR.Types (HeadArg, HeadConstraint, Identifier, Name, RuleId)
 import YCHR.Types qualified as Types
 import YCHR.VM (ArgIndex, ConstraintType, Expr, Stmt)
 
@@ -96,9 +96,10 @@ data Occurrence = Occurrence
     -- | Whether the active constraint is kept (@True@) or removed
     -- (@False@) when the rule fires.
     isKept :: Bool,
-    -- | Argument terms of the active head constraint, in source order.
-    -- Always 'VarTerm' or 'Wildcard' thanks to HNF.
-    activeArgs :: [Term],
+    -- | Arguments of the active head constraint, in source order.
+    -- Narrowed to 'HeadArg' so the HNF invariant ("head args are
+    -- variables or wildcards") is enforced by the type.
+    activeArgs :: [HeadArg],
     -- | The other head constraints, in the order they will be iterated
     -- by nested 'YCHR.VM.Foreach' loops.
     partners :: [Partner]
@@ -109,8 +110,9 @@ data Occurrence = Occurrence
 data Partner = Partner
   { -- | Position in the rule's combined (removed ++ kept) head list.
     idx :: HeadPosition,
-    -- | The original constraint as it appears in the head.
-    constraint :: QualifiedConstraint,
+    -- | The original constraint as it appears in the head, narrowed
+    -- to 'HeadConstraint' (post-HNF).
+    constraint :: HeadConstraint,
     -- | Whether the partner is kept (@True@) or removed (@False@) when
     -- the rule fires. Removed partners are killed before the body runs
     -- and skipped during backjumping (they are guaranteed dead).

@@ -29,6 +29,20 @@ removable when closed.
   rare paths still use `Types.qualifiedToName` to feed legacy helpers
   that operate on `Name`; those helpers can be migrated incrementally.)
 
+- **Head Normal Form: post-HNF head args are variables or wildcards.**
+  Encoded by introducing `Types.HeadArg = HeadVar Text | HeadWildcard`
+  and `Types.HeadConstraint`, narrowing `Desugared.Head`'s `kept`/
+  `removed`, `Desugared.Equation.params`,
+  `Compile.Types.Occurrence.activeArgs`, and
+  `Compile.Types.Partner.constraint` to the new types.
+  `Desugar.normalizeArg` is the producer; the boundary helpers
+  `headArgToTerm` and `headConstraintToConstraint` (in
+  `YCHR.Types`) are used at the few sites in `TypeCheck.hs` that walk
+  desugared heads through generic `Term` machinery. The list-
+  comprehension drops in `Compile.buildVarMap` /
+  `buildEquationVarMap` are now exhaustive matches on
+  `HeadVar`/`HeadWildcard` instead of silent wide-`Term` filters.
+
 
 ## 1. `error` / `runtimeErrorS` for "can't happen" cases
 
@@ -200,19 +214,6 @@ specialized non-negative newtype) is mechanical.
 
 ## 3. Documented invariants worth promoting into types
 
-### Head Normal Form: head args are `VarTerm` or `Wildcard`
-
-Stated in `src/YCHR/Compile.hs:243` (and ~`:960`):
-
-> HNF guarantees that every head argument is either a 'VarTerm' or
-> 'Wildcard', and wildcards are never referenced from guards or bodies.
-
-The whole `buildVarMap` is correct only under this assumption. A
-post-HNF `HeadArg = HVar Text | HWildcard` (instead of the wider
-`Term`) would let the compiler pattern-match exhaustively. Already
-partly anticipated by `Resolved.Head` / `Desugared.Head`'s shapes;
-the args list is the last loose part.
-
 ### Occurrence numbering is 1-based — `src/YCHR/Compile/Occurrences.hs:61`
 
 ```haskell
@@ -380,12 +381,10 @@ If you want a roughly-ordered list of the most actionable wins:
 
 1. **`RuntimeVal` split** (§2). Single change, removes ~12 interpreter
    `runtimeErrorS` sites and the `toValue` panic.
-2. **HNF head arg type** (§3). One newtype, removes the leakage of
-   `Term` into post-HNF positions.
-3. **`ArgIndex` / `MatchTerm` arity to `Word`** (§2). Cheap, removes
+2. **`ArgIndex` / `MatchTerm` arity to `Word`** (§2). Cheap, removes
    a class of bounds-related bugs.
-4. **`ConstraintType` as `Word`** plus `Maybe ConstraintType` for
+3. **`ConstraintType` as `Word`** plus `Maybe ConstraintType` for
    lookup (§1). Removes the `(-1)` sentinel.
-5. **Procedure-name closure check** (§5). A post-compile pass that
+4. **Procedure-name closure check** (§5). A post-compile pass that
    verifies every `CallExpr` resolves in the program's procedure map.
    Catches a whole class of compiler bugs at compile time.

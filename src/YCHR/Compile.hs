@@ -83,7 +83,8 @@ import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
 import YCHR.Pretty (prettyPExprSrc)
 import YCHR.Types
-  ( Identifier (..),
+  ( HeadArg (..),
+    Identifier (..),
     SymbolTable,
     Term (..),
     flattenName,
@@ -240,20 +241,19 @@ genOccurrence funSet symTab name arity occ = do
 
 -- | Map every user-written head variable in an 'Occurrence' to the
 -- generated VM variable that holds its value (an @X_i@ for the active
--- constraint, a @pArg_k_j@ for partner @k@). Non-variable arguments are
--- ignored: HNF guarantees that head arguments are either 'VarTerm' or
--- 'Wildcard', and wildcards are never referenced from guards or bodies.
--- See the \"Notes\" block at the bottom of this file.
+-- constraint, a @pArg_k_j@ for partner @k@). 'HeadWildcard' arguments
+-- contribute no binding: wildcards are never referenced from guards
+-- or bodies. See the \"Notes\" block at the bottom of this file.
 buildVarMap :: Occurrence -> VarMap
 buildVarMap occ =
   let activeBindings =
         [ (v, Var (argName i))
-        | (i, VarTerm v) <- zip [0 ..] occ.activeArgs
+        | (i, HeadVar v) <- zip [0 ..] occ.activeArgs
         ]
       partnerBindings =
         [ (v, Var (partArgName k j))
         | (k, partner) <- zip [PartnerIndex 0 ..] occ.partners,
-          (j, VarTerm v) <- zip [0 ..] partner.constraint.args
+          (j, HeadVar v) <- zip [0 ..] partner.constraint.args
         ]
    in varMapFromList (activeBindings ++ partnerBindings)
 
@@ -803,11 +803,11 @@ compileFunctionDef funSet func = do
 
 -- | Build a VarMap for a function equation: maps each normalized parameter
 -- variable to the corresponding procedure parameter name.
-buildEquationVarMap :: [Name] -> [Term] -> VarMap
+buildEquationVarMap :: [Name] -> [HeadArg] -> VarMap
 buildEquationVarMap procParams normalizedArgs =
   varMapFromList
     [ (v, Var p)
-    | (p, VarTerm v) <- zip procParams normalizedArgs
+    | (p, HeadVar v) <- zip procParams normalizedArgs
     ]
 
 compileEquation ::
@@ -952,14 +952,13 @@ each group the rightmost head constraint gets the lowest occurrence
 number so that join order matches a left-to-right scan of the body when
 the rule is read as a Horn clause.
 
-Why 'buildVarMap' only inspects 'VarTerm' arguments: HNF
-('YCHR.Desugar.normalizeHead') guarantees that every head argument is
-either a 'VarTerm' or a 'Wildcard'. Non-variable patterns have been
-lifted into 'D.GuardMatch' and 'D.GuardGetArg' guards by the desugarer
-and replaced with fresh variables in the head. The list-comprehension
-patterns silently drop wildcards (which are never referenced from
-guards or bodies anyway) and would silently drop other shapes too — the
-HNF invariant is what makes that safe.
+Why 'buildVarMap' only inspects 'HeadVar' arguments: occurrence head
+arguments are 'HeadArg', so the only two cases are 'HeadVar' (binds a
+name) and 'HeadWildcard' (contributes nothing). Non-variable patterns
+have been lifted into 'D.GuardMatch' and 'D.GuardGetArg' guards by the
+desugarer ('YCHR.Desugar.normalizeHead') and replaced with fresh
+'HeadVar's in the head — the type-level narrowing makes that
+invariant explicit instead of trusted by discipline.
 
 Why the active constraint is called @active@ everywhere: at runtime
 "constraint identifier" and "constraint suspension" are the same value

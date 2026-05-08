@@ -15,6 +15,12 @@ module YCHR.Types
     Name (..),
     QualifiedName (..),
 
+    -- * Post-HNF head constraints
+    HeadConstraint (..),
+    HeadArg (..),
+    headArgToTerm,
+    headConstraintToConstraint,
+
     -- * Rules
     RuleId (..),
 
@@ -143,6 +149,38 @@ data QualifiedConstraint = QualifiedConstraint
     args :: [Term]
   }
   deriving (Show, Eq, Lift)
+
+-- | A head argument after Head Normal Form. The desugarer guarantees
+-- that every head argument is either a variable or a wildcard;
+-- non-variable patterns are lifted into 'YCHR.Desugared.GuardMatch',
+-- 'YCHR.Desugared.GuardGetArg', and 'YCHR.Desugared.GuardEqual' guards
+-- and replaced with fresh variables in the head. This narrower type
+-- enforces that invariant.
+data HeadArg
+  = HeadVar Text
+  | HeadWildcard
+  deriving (Show, Eq, Lift)
+
+-- | A constraint occurrence in a post-HNF rule head. Mirrors
+-- 'QualifiedConstraint' but with the narrower 'HeadArg' for arguments.
+data HeadConstraint = HeadConstraint
+  { name :: QualifiedName,
+    args :: [HeadArg]
+  }
+  deriving (Show, Eq, Lift)
+
+-- | Lossless conversion from a 'HeadArg' to a 'Term'. Used at the
+-- boundary with code that operates uniformly on terms (the
+-- typechecker, pretty-printers).
+headArgToTerm :: HeadArg -> Term
+headArgToTerm (HeadVar v) = VarTerm v
+headArgToTerm HeadWildcard = Wildcard
+
+-- | Lossless conversion from a 'HeadConstraint' to a
+-- 'QualifiedConstraint'.
+headConstraintToConstraint :: HeadConstraint -> QualifiedConstraint
+headConstraintToConstraint hc =
+  QualifiedConstraint hc.name (map headArgToTerm hc.args)
 
 -- | A CHR type declaration.
 data TypeDefinition = TypeDefinition

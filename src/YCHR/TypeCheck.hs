@@ -56,11 +56,14 @@ import YCHR.TypeCheck.Compiled (typeCheckerProgram)
 import YCHR.TypeCheck.Error (TypeCheckError (..))
 import YCHR.Types
   ( DataConstructor (..),
+    HeadArg (..),
     Name (..),
     Term (..),
     TypeDefinition (..),
     TypeExpr (..),
     flattenName,
+    headArgToTerm,
+    headConstraintToConstraint,
   )
 import YCHR.Types qualified as Types
 import YCHR.VM qualified as VM
@@ -511,7 +514,7 @@ checkRule rule = do
       guardCtx = CheckCtx {varTypes, label = ruleLabel, loc = guardLoc, origin = guardOrigin}
       bodyCtx = CheckCtx {varTypes, label = ruleLabel, loc = bodyLoc, origin = bodyOrigin}
   -- Head constraints (kept and removed)
-  mapM_ (checkConstraintUse headCtx) (hd.kept ++ hd.removed)
+  mapM_ (checkConstraintUse headCtx . headConstraintToConstraint) (hd.kept ++ hd.removed)
   -- Guards
   checkGuards guardCtx guards
   -- Body goals
@@ -680,7 +683,7 @@ checkEquation func loc origin eq = do
   case func.signatures of
     [] -> pure ()
     _ -> do
-      argTypeVars <- traverse (typeOfTerm cctx) eq.params
+      argTypeVars <- traverse (typeOfTerm cctx . headArgToTerm) eq.params
       retTypeVar <- typeOfTerm cctx eq.rhs
       ctx <- freshCtxHandle cctx
       tellConstraint
@@ -827,8 +830,9 @@ collectVarsInRule rule =
   let AnnP hd _ _ = rule.head
       AnnP guards _ _ = rule.guard
       AnnP body _ _ = rule.body
+      headCs = map headConstraintToConstraint (hd.kept ++ hd.removed)
    in mconcat
-        [ foldMap collectVarsInConstraint (hd.kept ++ hd.removed),
+        [ foldMap collectVarsInConstraint headCs,
           foldMap collectVarsInGuard guards,
           foldMap collectVarsInBodyGoal body
         ]
@@ -836,13 +840,17 @@ collectVarsInRule rule =
 collectVarsInEq :: D.Equation -> Set Text
 collectVarsInEq eq =
   mconcat
-    [ foldMap collectVarsInTerm eq.params,
+    [ foldMap collectVarsInHeadArg eq.params,
       foldMap collectVarsInGuard eq.guards,
       collectVarsInTerm eq.rhs
     ]
 
 collectVarsInConstraint :: Types.QualifiedConstraint -> Set Text
 collectVarsInConstraint c = foldMap collectVarsInTerm c.args
+
+collectVarsInHeadArg :: HeadArg -> Set Text
+collectVarsInHeadArg (HeadVar v) = Set.singleton v
+collectVarsInHeadArg HeadWildcard = Set.empty
 
 collectVarsInGuard :: D.Guard -> Set Text
 collectVarsInGuard (D.GuardEqual t1 t2) = collectVarsInTerm t1 <> collectVarsInTerm t2
@@ -1059,7 +1067,8 @@ validateConstructorArities env prog =
           AnnP guards guardLoc guardOrigin = rule.guard
           AnnP body bodyLoc bodyOrigin = rule.body
           ruleLabel = fmap (\n -> "rule " <> n) rule.name
-          inHead = foldMap termArity (concatMap (.args) (hd.kept ++ hd.removed))
+          headArgs = concatMap (map headArgToTerm . (.args)) (hd.kept ++ hd.removed)
+          inHead = foldMap termArity headArgs
           inGuards = foldMap guardArity guards
           inBody = foldMap bodyArity body
        in mkDiags ruleLabel headLoc headOrigin inHead
@@ -1072,7 +1081,7 @@ validateConstructorArities env prog =
           inEqs = foldMap eqArity eqs
        in mkDiags funLabel loc origin inEqs
     eqArity eq =
-      foldMap termArity eq.params
+      foldMap (termArity . headArgToTerm) eq.params
         <> foldMap guardArity eq.guards
         <> termArity eq.rhs
     guardArity (D.GuardEqual t1 t2) = termArity t1 <> termArity t2

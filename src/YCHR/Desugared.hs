@@ -36,6 +36,8 @@ module YCHR.Desugared
     -- * Re-exports from CHR.Types
     QualifiedConstraint (..),
     QualifiedName (..),
+    HeadConstraint (..),
+    HeadArg (..),
     Term (..),
     TypeExpr (..),
     TypeDefinition (..),
@@ -64,8 +66,8 @@ data Rule = Rule
   deriving (Show)
 
 data Head = Head
-  { kept :: [QualifiedConstraint],
-    removed :: [QualifiedConstraint]
+  { kept :: [HeadConstraint],
+    removed :: [HeadConstraint]
   }
   deriving (Show, Eq)
 
@@ -94,7 +96,7 @@ data Function = Function
   deriving (Show)
 
 data Equation = Equation
-  { params :: [Term],
+  { params :: [HeadArg],
     guards :: [Guard],
     rhs :: Term
   }

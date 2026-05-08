@@ -137,8 +137,8 @@ getRuleConstraints :: D.Rule -> [QualifiedConstraint]
 getRuleConstraints r =
   let AnnP {node = rHead} = r.head
       AnnP {node = rBody} = r.body
-   in rHead.kept
-        ++ rHead.removed
+   in map headConstraintToConstraint rHead.kept
+        ++ map headConstraintToConstraint rHead.removed
         ++ [c | D.BodyConstraint c <- rBody]
 
 -- | Desugar one resolved rule: classify its body goals, desugar its user
@@ -149,8 +149,8 @@ desugarRule funSet r = do
   let ruleLabel = fmap (\ann -> "rule " <> ann.node) r.name
   ruleBody <- desugarBodyGoals funSet ruleLabel r.body.sourceLoc r.body.parsed r.body.node
   userGuards <- traverse (desugarGuard r.guard.sourceLoc) r.guard.node
-  let rawHead = flattenHeadKind r.head.node
-      (guards, normalizedHead) = normalizeHead rawHead
+  let (rawKept, rawRemoved) = flattenHeadKind r.head.node
+      (guards, normalizedHead) = normalizeHead rawKept rawRemoved
   pure
     D.Rule
       { name = fmap (.node) r.name,
@@ -159,15 +159,17 @@ desugarRule funSet r = do
         body = AnnP ruleBody r.body.sourceLoc r.body.parsed
       }
 
--- | Map the three resolved head kinds to the uniform @Kept \/ Removed@
--- shape used by the desugared AST. Propagation rules keep every
+-- | Map the three resolved head kinds to a uniform @(kept, removed)@
+-- pair of raw 'QualifiedConstraint' lists. Propagation rules keep every
 -- constraint; simplification rules remove every constraint; simpagation
--- rules carry both lists explicitly.
-flattenHeadKind :: R.Head -> D.Head
+-- rules carry both lists explicitly. The result is fed to
+-- 'normalizeHead', which produces the 'D.Head' with HNF-narrowed
+-- 'HeadConstraint' arguments.
+flattenHeadKind :: R.Head -> ([QualifiedConstraint], [QualifiedConstraint])
 flattenHeadKind h = case h of
-  R.Simplification rs -> D.Head [] rs
-  R.Propagation ks -> D.Head ks []
-  R.Simpagation ks rs -> D.Head ks rs
+  R.Simplification rs -> ([], rs)
+  R.Propagation ks -> (ks, [])
+  R.Simpagation ks rs -> (ks, rs)
 
 -- ---------------------------------------------------------------------------
 -- Head Normal Form (HNF)
@@ -191,23 +193,24 @@ data HnfState = HnfState
 -- processed before removed so that variables first appearing in kept
 -- constraints become the canonical binding (see the note at the bottom
 -- of this module).
-normalizeHead :: D.Head -> ([D.Guard], D.Head)
-normalizeHead h =
+normalizeHead :: [QualifiedConstraint] -> [QualifiedConstraint] -> ([D.Guard], D.Head)
+normalizeHead kept removed =
   let initState = HnfState 0 Set.empty []
-      (st1, kept') = mapAccumL normalizeConstraint initState h.kept
-      (st2, removed') = mapAccumL normalizeConstraint st1 h.removed
+      (st1, kept') = mapAccumL normalizeConstraint initState kept
+      (st2, removed') = mapAccumL normalizeConstraint st1 removed
    in (reverse st2.guards, D.Head kept' removed')
 
--- | Normalize the arguments of one head constraint.
-normalizeConstraint :: HnfState -> QualifiedConstraint -> (HnfState, QualifiedConstraint)
+-- | Normalize the arguments of one head constraint, narrowing them
+-- from raw 'Term's to 'HeadArg's.
+normalizeConstraint :: HnfState -> QualifiedConstraint -> (HnfState, HeadConstraint)
 normalizeConstraint st (QualifiedConstraint cname cargs) =
   let (st', args') = mapAccumL normalizeArg st cargs
-   in (st', QualifiedConstraint cname args')
+   in (st', HeadConstraint cname args')
 
 -- | Normalize one argument of a head constraint. Fresh variables are
 -- only introduced for duplicates and non-variables; first-use variables
 -- and wildcards pass through.
-normalizeArg :: HnfState -> Term -> (HnfState, Term)
+normalizeArg :: HnfState -> Term -> (HnfState, HeadArg)
 normalizeArg HnfState {counter, seen, guards} (VarTerm v)
   | Set.member v seen =
       let fresh = hnfPrefix <> T.pack (show counter)
@@ -216,20 +219,20 @@ normalizeArg HnfState {counter, seen, guards} (VarTerm v)
                 seen,
                 guards = D.GuardEqual (VarTerm v) (VarTerm fresh) : guards
               },
-            VarTerm fresh
+            HeadVar fresh
           )
   | otherwise =
       ( HnfState {counter, seen = Set.insert v seen, guards},
-        VarTerm v
+        HeadVar v
       )
 -- Wildcards pass through unchanged: they match anything, are never referenced,
 -- and cannot duplicate, so no fresh variable or guard is needed.
-normalizeArg st Wildcard = (st, Wildcard)
+normalizeArg st Wildcard = (st, HeadWildcard)
 normalizeArg HnfState {counter, seen, guards} (CompoundTerm cname cargs) =
   let fresh = hnfPrefix <> T.pack (show counter)
       st' = HnfState {counter = counter + 1, seen, guards}
       st'' = decomposeCompound st' fresh cname cargs
-   in (st'', VarTerm fresh)
+   in (st'', HeadVar fresh)
 normalizeArg HnfState {counter, seen, guards} term =
   let fresh = hnfPrefix <> T.pack (show counter)
    in ( HnfState
@@ -237,7 +240,7 @@ normalizeArg HnfState {counter, seen, guards} term =
             seen,
             guards = D.GuardEqual (VarTerm fresh) term : guards
           },
-        VarTerm fresh
+        HeadVar fresh
       )
 
 -- | Decompose a compound term into match and extraction guards. Both
@@ -438,11 +441,13 @@ data LiftState = LiftState
     errors :: [Diagnostic DesugarError]
   }
 
--- | Check if a term is a variable or wildcard (the only valid lambda params).
-isVarOrWildcard :: Term -> Bool
-isVarOrWildcard (VarTerm _) = True
-isVarOrWildcard Wildcard = True
-isVarOrWildcard _ = False
+-- | Convert a parsed lambda parameter to a 'HeadArg'. Returns
+-- 'Nothing' when the term is neither a variable nor a wildcard;
+-- those are reported as 'InvalidLambdaParam'.
+termToHeadArg :: Term -> Maybe HeadArg
+termToHeadArg (VarTerm v) = Just (HeadVar v)
+termToHeadArg Wildcard = Just HeadWildcard
+termToHeadArg _ = Nothing
 
 -- | Collect all variable names from a term.
 termVars :: Term -> Set.Set Text
@@ -484,8 +489,16 @@ liftTerm ::
 liftTerm modName loc origin scope st term = case term of
   CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") _, _] ->
     let (params, body) = extractLambdaParams term
-        badParams = [p | p <- params, not (isVarOrWildcard p)]
-        paramVarNames = Set.fromList [v | VarTerm v <- params]
+        badParams = [p | p <- params, termToHeadArg p == Nothing]
+        -- Convert valid params; invalid ones get a 'HeadWildcard'
+        -- placeholder so the rest of this branch can still build a
+        -- (discarded) function value. The 'InvalidLambdaParam'
+        -- diagnostic recorded below causes 'liftAllLambdas' to return
+        -- 'Left', so the placeholder is never seen by downstream
+        -- passes.
+        paramHeadArgs =
+          map (\p -> maybe HeadWildcard id (termToHeadArg p)) params
+        paramVarNames = Set.fromList [v | HeadVar v <- paramHeadArgs]
         bodyVars = termVars body
         freeVars =
           Set.toAscList
@@ -498,7 +511,7 @@ liftTerm modName loc origin scope st term = case term of
         idx = st'.counter
         lambdaName = lambdaPrefix <> T.pack (show idx)
         qualName = QualifiedName modName lambdaName
-        allParams = map VarTerm freeVars ++ params
+        allParams = map HeadVar freeVars ++ paramHeadArgs
         func =
           D.Function
             { name = qualName,
@@ -586,7 +599,7 @@ liftEquation ::
   )
 liftEquation modName loc origin st eq =
   let scope =
-        Set.unions (map termVars eq.params)
+        Set.unions (map headArgVars eq.params)
           `Set.union` guardVars eq.guards
       (st', guards') = mapAccumL (liftGuard modName loc origin scope) st eq.guards
       (st'', rhs') = liftTerm modName loc origin scope st' eq.rhs
@@ -601,11 +614,17 @@ liftFunction st func =
       (st', eqs') = mapAccumL (liftEquation modName loc origin) st func.equations.node
    in (st', func {D.equations = func.equations {node = eqs'}})
 
+-- | Variables introduced by a single 'HeadArg'. Wildcards contribute
+-- nothing.
+headArgVars :: HeadArg -> Set.Set Text
+headArgVars (HeadVar v) = Set.singleton v
+headArgVars HeadWildcard = Set.empty
+
 -- | Extract all variables from a rule head (kept + removed constraints).
 ruleHeadVars :: D.Head -> Set.Set Text
 ruleHeadVars h =
   Set.unions
-    [ termVars arg
+    [ headArgVars arg
     | c <- h.kept ++ h.removed,
       arg <- c.args
     ]

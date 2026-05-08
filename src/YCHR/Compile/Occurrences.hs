@@ -30,8 +30,8 @@ import YCHR.PExpr (PExpr)
 import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
 import YCHR.Types
-  ( Identifier (..),
-    QualifiedConstraint,
+  ( HeadConstraint,
+    Identifier (..),
     RuleId (..),
     SymbolTable,
     lookupSymbol,
@@ -110,9 +110,9 @@ mkOccurrence ::
   D.Rule ->
   RuleId ->
   Text ->
-  [(HeadPosition, QualifiedConstraint, Bool)] ->
+  [(HeadPosition, HeadConstraint, Bool)] ->
   HeadPosition ->
-  QualifiedConstraint ->
+  HeadConstraint ->
   Bool ->
   Eff '[Writer [Diagnostic CompileError]] Occurrence
 mkOccurrence symTab rule ruleId' display combined activeIdx activeCon activeIsKept = do

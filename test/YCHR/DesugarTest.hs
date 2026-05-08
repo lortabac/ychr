@@ -66,12 +66,18 @@ leqQual2 :: Constraint
 leqQual2 = "M" .: con "leq" [var "A", var "B"]
 
 -- | Convert a fully-qualified parsed 'Constraint' to a
--- 'D.QualifiedConstraint' for comparison against post-desugar values.
--- Only valid on constraints whose name is 'Qualified'; the test
+-- 'D.HeadConstraint' for comparison against post-desugar values.
+-- Only valid on constraints whose name is 'Qualified' and whose
+-- arguments are HNF-shape ('VarTerm' or 'Wildcard'); the test
 -- fixtures here always pass that.
-qc :: Constraint -> D.QualifiedConstraint
-qc (Constraint (Qualified m n) args) = D.QualifiedConstraint (D.QualifiedName m n) args
-qc c = error ("qc: expected Qualified constraint, got " ++ show c)
+hc :: Constraint -> D.HeadConstraint
+hc (Constraint (Qualified m n) args) =
+  D.HeadConstraint (D.QualifiedName m n) (map toHeadArg args)
+  where
+    toHeadArg (VarTerm v) = D.HeadVar v
+    toHeadArg Wildcard = D.HeadWildcard
+    toHeadArg t = error ("hc: non-head-arg in test fixture: " ++ show t)
+hc c = error ("hc: expected Qualified constraint, got " ++ show c)
 
 mod1rule :: Head -> Rule
 mod1rule h = Rule Nothing (noAnnP h) (noAnnP []) (noAnnP [atom "true"])
@@ -89,13 +95,13 @@ headTests =
     "head-normalization"
     [ testCase "Simplification maps to kept=[], removed=constraints" $ do
         rule <- singleRule [simpleModule (Simplification [leqQual])]
-        getNode rule.head @?= D.Head {kept = [], removed = [qc leqQual]},
+        getNode rule.head @?= D.Head {kept = [], removed = [hc leqQual]},
       testCase "Propagation maps to kept=constraints, removed=[]" $ do
         rule <- singleRule [simpleModule (Propagation [leqQual])]
-        getNode rule.head @?= D.Head {kept = [qc leqQual], removed = []},
+        getNode rule.head @?= D.Head {kept = [hc leqQual], removed = []},
       testCase "Simpagation maps kept and removed correctly" $ do
         rule <- singleRule [simpleModule (Simpagation [leqQual] [leqQual2])]
-        getNode rule.head @?= D.Head {kept = [qc leqQual], removed = [qc leqQual2]}
+        getNode rule.head @?= D.Head {kept = [hc leqQual], removed = [hc leqQual2]}
     ]
 
 --------------------------------------------------------------------------------
@@ -112,10 +118,10 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [ D.QualifiedConstraint
+            [ D.HeadConstraint
                 (D.QualifiedName "M" "leq")
-                [ VarTerm "X",
-                  VarTerm "Y"
+                [ D.HeadVar "X",
+                  D.HeadVar "Y"
                 ]
             ]
         getNode rule.guard @?= [],
@@ -125,10 +131,10 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [ D.QualifiedConstraint
+            [ D.HeadConstraint
                 (D.QualifiedName "M" "leq")
-                [ VarTerm "X",
-                  VarTerm "_hnf_0"
+                [ D.HeadVar "X",
+                  D.HeadVar "_hnf_0"
                 ]
             ]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "X") (VarTerm "_hnf_0")],
@@ -138,10 +144,10 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [ D.QualifiedConstraint
+            [ D.HeadConstraint
                 (D.QualifiedName "M" "leq")
-                [ VarTerm "X",
-                  VarTerm "_hnf_0"
+                [ D.HeadVar "X",
+                  D.HeadVar "_hnf_0"
                 ]
             ]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "_hnf_0") (IntTerm 5)],
@@ -151,10 +157,10 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [ D.QualifiedConstraint
+            [ D.HeadConstraint
                 (D.QualifiedName "M" "leq")
-                [ VarTerm "X",
-                  VarTerm "_hnf_0"
+                [ D.HeadVar "X",
+                  D.HeadVar "_hnf_0"
                 ]
             ]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "_hnf_0") (AtomTerm "foo")],
@@ -170,8 +176,8 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [ D.QualifiedConstraint (D.QualifiedName "M" "leq") [VarTerm "X", VarTerm "Y"],
-              D.QualifiedConstraint (D.QualifiedName "M" "leq") [VarTerm "_hnf_0", VarTerm "Z"]
+            [ D.HeadConstraint (D.QualifiedName "M" "leq") [D.HeadVar "X", D.HeadVar "Y"],
+              D.HeadConstraint (D.QualifiedName "M" "leq") [D.HeadVar "_hnf_0", D.HeadVar "Z"]
             ]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "Y") (VarTerm "_hnf_0")],
       testCase "simpagation: kept processed before removed" $ do
@@ -184,8 +190,8 @@ hnfTests =
         rule <- singleRule [m]
         getNode rule.head
           @?= D.Head
-            [D.QualifiedConstraint (D.QualifiedName "M" "leq") [VarTerm "X", VarTerm "Y"]]
-            [D.QualifiedConstraint (D.QualifiedName "M" "leq") [VarTerm "_hnf_0", VarTerm "Z"]]
+            [D.HeadConstraint (D.QualifiedName "M" "leq") [D.HeadVar "X", D.HeadVar "Y"]]
+            [D.HeadConstraint (D.QualifiedName "M" "leq") [D.HeadVar "_hnf_0", D.HeadVar "Z"]]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "Y") (VarTerm "_hnf_0")],
       testCase "hnf guards prepended before user guards" $ do
         let m =
@@ -205,7 +211,7 @@ hnfTests =
         let m = simpleModule (Simplification ["M" .: con "foo" [wildcard]])
         rule <- singleRule [m]
         getNode rule.head
-          @?= D.Head [] [D.QualifiedConstraint (D.QualifiedName "M" "foo") [Wildcard]]
+          @?= D.Head [] [D.HeadConstraint (D.QualifiedName "M" "foo") [D.HeadWildcard]]
         getNode rule.guard @?= [],
       testCase "two wildcards stay as wildcards without guards" $ do
         let m = simpleModule (Simplification ["M" .: con "foo" [wildcard, wildcard]])
@@ -213,7 +219,7 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [D.QualifiedConstraint (D.QualifiedName "M" "foo") [Wildcard, Wildcard]]
+            [D.HeadConstraint (D.QualifiedName "M" "foo") [D.HeadWildcard, D.HeadWildcard]]
         getNode rule.guard @?= [],
       testCase "wildcard and non-variable: only non-variable gets guard" $ do
         let m = simpleModule (Simplification ["M" .: con "foo" [wildcard, IntTerm 1]])
@@ -221,10 +227,10 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [ D.QualifiedConstraint
+            [ D.HeadConstraint
                 (D.QualifiedName "M" "foo")
-                [ Wildcard,
-                  VarTerm "_hnf_0"
+                [ D.HeadWildcard,
+                  D.HeadVar "_hnf_0"
                 ]
             ]
         getNode rule.guard @?= [D.GuardEqual (VarTerm "_hnf_0") (IntTerm 1)]
@@ -564,7 +570,7 @@ symbolTableTests =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (D.Head [] [D.QualifiedConstraint (D.QualifiedName "M" "leq") []]))
+                    (noAnnP (D.Head [] [D.HeadConstraint (D.QualifiedName "M" "leq") []]))
                     (noAnnP [])
                     (noAnnP [])
                 ]
@@ -585,8 +591,8 @@ symbolTableTests =
                     ( noAnnP
                         ( D.Head
                             []
-                            [ D.QualifiedConstraint (D.QualifiedName "A" "c") [],
-                              D.QualifiedConstraint (D.QualifiedName "B" "d") []
+                            [ D.HeadConstraint (D.QualifiedName "A" "c") [],
+                              D.HeadConstraint (D.QualifiedName "B" "d") []
                             ]
                         )
                     )
@@ -604,7 +610,7 @@ symbolTableTests =
                 [ D.Rule
                     Nothing
                     ( noAnnP
-                        (D.Head [] [D.QualifiedConstraint (D.QualifiedName "M" "leq") []])
+                        (D.Head [] [D.HeadConstraint (D.QualifiedName "M" "leq") []])
                     )
                     (noAnnP [])
                     ( noAnnP
@@ -627,7 +633,7 @@ symbolTableTests =
               D.Program
                 [ D.Rule
                     Nothing
-                    (noAnnP (D.Head [] [D.QualifiedConstraint (D.QualifiedName "M" "leq") []]))
+                    (noAnnP (D.Head [] [D.HeadConstraint (D.QualifiedName "M" "leq") []]))
                     (noAnnP [])
                     (noAnnP [D.BodyHostStmt "print" []])
                 ]
@@ -645,8 +651,8 @@ symbolTableTests =
                     ( noAnnP
                         ( D.Head
                             []
-                            [ D.QualifiedConstraint (D.QualifiedName "A" "z") [],
-                              D.QualifiedConstraint (D.QualifiedName "B" "a") []
+                            [ D.HeadConstraint (D.QualifiedName "A" "z") [],
+                              D.HeadConstraint (D.QualifiedName "B" "a") []
                             ]
                         )
                     )
@@ -669,9 +675,9 @@ symbolTableTests =
                     ( noAnnP
                         ( D.Head
                             []
-                            [ D.QualifiedConstraint
+                            [ D.HeadConstraint
                                 (D.QualifiedName "M" "foo")
-                                [VarTerm "X"]
+                                [D.HeadVar "X"]
                             ]
                         )
                     )
@@ -745,7 +751,7 @@ lambdaLiftTests =
             lam.arity @?= 2
             case lam.equations.node of
               [eq] -> do
-                eq.params @?= [var "X", var "Y"]
+                eq.params @?= [D.HeadVar "X", D.HeadVar "Y"]
                 eq.guards @?= []
                 eq.rhs @?= lambdaBody
               eqs -> assertFailure $ "expected 1 equation, got " ++ show (length eqs)
