@@ -8,7 +8,7 @@ def test_typecheck_typechecker(ychr_bin, project_root):
 
     program = os.path.join(project_root, "typechecker", "typechecker.chr")
     result = subprocess.run(
-        [ychr_bin, "check", program],
+        [ychr_bin, "check", "--Werror", program],
         capture_output=True,
         text=True,
         cwd=project_root,

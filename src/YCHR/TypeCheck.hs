@@ -900,9 +900,9 @@ decodeError ctxMap (VTerm errorFunctor [ctxVal, codeVal, detailVal])
       code <- deref codeVal
       detail <- deref detailVal
       case code of
-        VAtom "inconsistent" -> do
+        VTerm c [] | c == tcAtom "inconsistent" -> do
           (t1text, t2text) <- case detail of
-            VTerm "pair" [t1, t2] -> do
+            VTerm pf [t1, t2] | pf == tcAtom "pair" -> do
               t1' <- deref t1
               t2' <- deref t2
               pure (showType t1', showType t2')
@@ -916,13 +916,13 @@ decodeError ctxMap (VTerm errorFunctor [ctxVal, codeVal, detailVal])
                     info.origin
                 )
             ]
-        VAtom "unknown_constraint" -> do
+        VTerm c [] | c == tcAtom "unknown_constraint" -> do
           nameText <- showValue detail
           pure [Diagnostic info.label (AnnP (UnknownConstraint nameText) info.loc info.origin)]
-        VAtom "unknown_function" -> do
+        VTerm c [] | c == tcAtom "unknown_function" -> do
           nameText <- showValue detail
           pure [Diagnostic info.label (AnnP (UnknownFunction nameText) info.loc info.origin)]
-        VAtom "no_matching_overload" -> do
+        VTerm c [] | c == tcAtom "no_matching_overload" -> do
           nameText <- showValue detail
           pure
             [ Diagnostic
@@ -968,6 +968,7 @@ showValue v = do
   v' <- deref v
   case v' of
     VAtom a -> pure (displayQualifiedAtom a)
+    VTerm functor [] -> pure (displayQualifiedAtom functor)
     _ -> pure "?"
 
 -- | Convert a runtime-flattened qualified atom (@m__n@) back to the

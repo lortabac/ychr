@@ -39,6 +39,18 @@
 % heterogeneous (`pair(T1, T2)`, atoms, names).
 :- chr_type error ---> error(int, any, any).
 
+% Atoms used as the Code field of `error/3`. Declared so the renamer
+% recognizes them as data constructors; the value-level type stays `any`.
+:- chr_type error_code ---> unknown_constraint
+                          ; inconsistent
+                          ; no_matching_overload.
+
+% Literal values used as the Detail field of `error/3`. Detail is
+% heterogeneous (atoms, pairs, constraint-name variables); only the
+% literal constructors appearing in `report_error` calls need entries.
+:- chr_type error_detail ---> pair(any, any)
+                            ; overloaded.
+
 :- chr_constraint
     constraint_sig(any, list(ty)),
     function_sig(any, sig_t(list(ty), ty)),
