@@ -73,43 +73,72 @@ A VM program is a list of named procedures. Each procedure has a name, a paramet
 
 | Statement | Description |
 |-----------|-------------|
-| `Let name expr` | Bind a local variable to the result of an expression. |
-| `Assign name expr` | Mutate an existing variable. |
-| `If expr thenStmts elseStmts` | Conditional execution. |
-| `Foreach label cType suspVar conditions body` | Labeled loop over the constraint store. Iterates over all stored constraints of type `cType` satisfying the index conditions. Each condition `(argIndex, expr)` requires that the argument at `argIndex` is `Equal` to `expr`. Binds the current suspension to `suspVar`. Index conditions use `Equal` (ask) semantics. |
+| `LetVal name valExpr` / `LetId name idExpr` | Bind a local variable to the result of a value or id expression. |
+| `AssignVal name valExpr` / `AssignId name idExpr` | Mutate an existing value- or id-bound variable. |
+| `If boolExpr thenStmts elseStmts` | Conditional execution. The condition is statically a `BoolExpr`. |
+| `Foreach label cType suspVar conditions body` | Labeled loop over the constraint store. Iterates over all stored constraints of type `cType` satisfying the index conditions. Each condition `(argIndex, valExpr)` requires that the argument at `argIndex` is `BEqual` to `valExpr`. Binds the current suspension to `suspVar`. Index conditions use `BEqual` (ask) semantics. |
 | `Continue label` / `Break label` | Resume the next iteration of, or exit, the named `Foreach`. Enables backjumping when a partner dies and early drop when the active constraint is killed. |
-| `Return expr` | Return a value from the current procedure. |
-| `ExprStmt expr` | Evaluate an expression for its side effects, discard the result. Used for procedure calls and host language calls in statement position. |
-| `Store expr` | Add a constraint suspension to the constraint store. Also registers the constraint as an observer of its arguments for reactivation. |
-| `Kill expr` | Remove a constraint from the store, mark as not alive. |
-| `AddHistory ruleName [expr]` | Record a rule firing in the propagation history. |
-| `DrainReactivationQueue suspVar body` | Iterate over all constraints pending reactivation (populated by `Unify`), binding each to `suspVar` and executing `body`. The body dispatches to the appropriate activate procedure. |
+| `Return valExpr` | Return a value from the current procedure. |
+| `ExprStmt valExpr` / `BoolExprStmt boolExpr` | Evaluate a value or boolean expression for its side effects, discarding the result. Used for procedure calls, host calls, and tell-side `BUnify` in statement position. |
+| `Store idExpr` | Add a constraint suspension to the constraint store. Also registers the constraint as an observer of its arguments for reactivation. |
+| `Kill idExpr` | Remove a constraint from the store, mark as not alive. |
+| `AddHistory ruleName [idExpr]` | Record a rule firing in the propagation history. |
+| `DrainReactivationQueue suspVar body` | Iterate over all constraints pending reactivation (populated by `BUnify`), binding each to `suspVar` and executing `body`. The body dispatches to the appropriate activate procedure. |
 | `PushFrame frame` | Push a runtime call-stack frame (source location + pretty-printed source). Emitted at rule fires and function entries; used for stack traces. |
 
 ### Expressions
 
+VM expressions are split by the kind of value they produce: `ValExpr`
+produces an ordinary `Value`, `IdExpr` produces a constraint
+identifier, and `BoolExpr` produces a boolean. The split is enforced
+by the type system; `BFromVal` is the explicit bridge from `ValExpr`
+to `BoolExpr` for user-written value expressions used in boolean
+position.
+
+#### Value expressions (`ValExpr`)
+
 | Expression | Description |
 |------------|-------------|
-| `Var name` | Variable reference. |
+| `Var name` | Reference to a value-bound variable. |
 | `Lit literal` | Literal value (see Literals below). |
-| `CallExpr name [expr]` | Call a compiler-generated procedure, return result. |
-| `HostCall name [expr]` | Call a host language function. |
-| `EvalDeep expr` | Evaluate `expr` in deep-deref mode: variable references are dereferenced (following binding chains) before use, and the mode propagates into sub-expressions. Used for guard expressions and the RHS of `is`. |
-| `Not expr` | Logical negation. |
-| `And expr expr` | Logical conjunction (short-circuiting). |
-| `Or expr expr` | Logical disjunction (short-circuiting). |
+| `CallExpr name [callArg]` | Call a compiler-generated procedure, return result. |
+| `HostCall name [valExpr]` | Call a host language function. |
+| `EvalDeep valExpr` | Evaluate in deep-deref mode (variable references are dereferenced and the mode propagates). |
 | `NewVar` | Create a fresh unbound logical variable. |
-| `MakeTerm functor [expr]` | Construct a compound term. |
-| `MatchTerm expr functor arity` | Check if a value is a compound term with the given functor and arity. Returns boolean. |
-| `GetArg expr index` | Extract an argument from a compound term by 0-based index. |
-| `CreateConstraint cType [expr]` | Create a constraint suspension (not yet stored). Returns a constraint identifier. |
-| `Alive expr` | Check if a constraint is still alive. |
-| `IdEqual expr expr` | Compare two constraint identifiers for equality. |
-| `IsConstraintType expr name` | Check if a suspension has the given constraint type. Used for dispatch in reactivation. |
-| `NotInHistory ruleName [expr]` | Check that a rule has not fired with this combination of constraint identifiers. |
-| `Unify expr expr` | Unify two terms (tell semantics). Returns boolean. May mutate variables. Pushes affected constraints onto the reactivation queue. |
-| `Equal expr expr` | Check equality of two terms (ask semantics). No mutation. Uses Prolog `==` semantics: two distinct unbound variables are not equal. |
-| `FieldGet expr field` | Access a field of a constraint suspension. |
+| `MakeTerm functor [valExpr]` | Construct a compound term. |
+| `GetArg valExpr index` | Extract an argument from a compound term by 0-based index. |
+| `FieldArg idExpr argIndex` | Extract a constraint argument from a suspension by index. |
+| `FieldType idExpr` | Extract the constraint type tag from a suspension. |
+
+#### Constraint-id expressions (`IdExpr`)
+
+| Expression | Description |
+|------------|-------------|
+| `IdVar name` | Reference to an id-bound variable. |
+| `CreateConstraint cType [valExpr]` | Create a constraint suspension (not yet stored). Returns a constraint identifier. |
+
+#### Boolean expressions (`BoolExpr`)
+
+| Expression | Description |
+|------------|-------------|
+| `BLit Bool` | Boolean literal. |
+| `BNot boolExpr` | Logical negation. |
+| `BAnd boolExpr boolExpr` / `BOr boolExpr boolExpr` | Logical conjunction / disjunction (short-circuiting). |
+| `BMatchTerm valExpr functor arity` | Check if a value is a compound term with the given functor and arity. |
+| `BEqual valExpr valExpr` | Check structural equality (ask semantics). No mutation. Uses Prolog `==`: two distinct unbound variables are not equal. |
+| `BIdEqual idExpr idExpr` | Compare two constraint identifiers for equality. |
+| `BAlive idExpr` | Check if a constraint is still alive. |
+| `BIsConstraintType idExpr cType` | Check if a suspension has the given constraint type. Used for dispatch in reactivation. |
+| `BNotInHistory ruleName [idExpr]` | Check that a rule has not fired with this combination of constraint identifiers. |
+| `BUnify valExpr valExpr` | Unify two terms (tell semantics). Returns success. May mutate variables. Pushes affected constraints onto the reactivation queue. |
+| `BFromVal valExpr` | Bridge a value-producing expression into boolean position; runtime-checks that the wrapped `ValExpr` evaluates to `VBool`. Used at the early-drop check and for user expressions in guards. |
+| `BEvalDeep boolExpr` | Evaluate in deep-deref mode (mirrors `EvalDeep` for booleans). |
+
+#### Call arguments (`CallArg`)
+
+| Expression | Description |
+|------------|-------------|
+| `AVal valExpr` / `AId idExpr` | Procedure-call argument tagged by kind. |
 
 ### Fields
 

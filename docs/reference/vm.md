@@ -23,30 +23,45 @@ There are three kinds of callable entities:
 3. **`host-call`** -- calls to host language functions (arithmetic,
    comparisons, user-written guards and body expressions).
 
-### Expression kinds: values vs. constraint identifiers
+### Expression kinds: values, ids, and bools
 
-The VM has two disjoint kinds of expression:
+The VM has three disjoint kinds of expression:
 
 - **Value expressions** evaluate to ordinary runtime values: integers,
   floats, atoms, strings, booleans, logical variables, compound terms,
   wildcards. They populate every position where a unifiable value is
   expected (procedure arguments, term construction, host call
-  arguments, the right-hand side of `is`, guards).
+  arguments, the right-hand side of `is`).
 - **Id expressions** evaluate to constraint identifiers (suspension
   references). They populate every position that operates on a stored
-  constraint (`store`, `kill`, `add-history`, `alive`, `id-equal`,
-  `is-constraint-type`, `not-in-history`, `field-arg`, `field-type`).
+  constraint (`store`, `kill`, `add-history`, `balive`, `bid-equal`,
+  `bis-constraint-type`, `bnot-in-history`, `field-arg`, `field-type`).
+- **Bool expressions** evaluate to booleans. They populate every
+  boolean-position operand: the condition of `if`, the body of
+  `bool-expr-stmt`, and the operands of `bnot`/`band`/`bor`. The
+  syntactically-bool constructors (`bnot`, `band`, `bor`,
+  `bmatch-term`, `bequal`, `bid-equal`, `balive`,
+  `bis-constraint-type`, `bnot-in-history`, `bunify`) live here, plus
+  the explicit bridge `bfrom-val` for value expressions whose
+  boolean-ness is only known at runtime (e.g. user-defined function
+  calls in guards). The bridge carries a runtime shape check; every
+  other bool position is statically a boolean.
 
 Constraint identifiers cannot flow into unification or term
-construction; the two kinds are physically distinct in the IR. A
-backend can keep one runtime representation for both (the Haskell and
-Scheme runtimes do — a suspension reference *is* its identifier) but
-the IR statically distinguishes the positions.
+construction, and value expressions cannot directly satisfy a boolean
+position — they must be wrapped in `bfrom-val`. The three kinds are
+physically distinct in the IR. A backend can keep one runtime
+representation for ids and the suspension they refer to (the Haskell
+and Scheme runtimes do — a suspension reference *is* its identifier)
+but the IR statically distinguishes the positions.
 
 A handful of forms are explicitly heterogeneous: procedures that take
 a mix of value and id parameters use the `arg-val` / `arg-id` wrapper
 at the call boundary (see `call-expr`). Variable references split into
-`var` (value-bound) and `id-var` (id-bound).
+`var` (value-bound) and `id-var` (id-bound). There is no `bool-var`:
+the only place a boolean is bound to a name in compiler-generated code
+is the early-drop result, which is bound as a value (`let-val` /
+`var`) and bridged at the read site with `bfrom-val`.
 
 
 ## S-Expression Format
@@ -72,7 +87,11 @@ Line comments start with `;` and extend to end of line.
 - **Constraint types** are bare integers (0-based indices): `0`, `1`.
 - **Rule identifiers** are bare integers (0-based indices): `0`, `1`.
 - **Argument indices** are bare integers (0-based): `0`, `1`.
-- **Booleans** are bare atoms: `true`, `false`.
+- **Boolean value literals** are bare atoms: `true`, `false`. Boolean
+  expression literals (the bool-position counterpart) are bare atoms
+  `btrue` / `bfalse`. The two coexist because `Lit (BoolLit _)` in
+  value position and `BLit _` in boolean position are different IR
+  constructors at different positional types.
 - **Variable-length argument lists** are trailing children within the
   enclosing form -- the closing `)` marks the boundary.
 - **Fixed-length sub-lists** (e.g. then/else branches, foreach
@@ -221,7 +240,7 @@ punctuation and underscores) pass through unchanged.
 names (both quoted and unquoted) at the source level. This ensures the
 `__` separator is unambiguous.
 
-**Term functor names** (used in `make-term` and `match-term`) follow
+**Term functor names** (used in `make-term` and `bmatch-term`) follow
 the same encoding and module separator rules but do **not** include
 arity, since the arity is already explicit in those instructions.
 
@@ -231,7 +250,10 @@ arity, since the arity is already explicit in those instructions.
 Each `let`/`assign` form comes in two variants: one for binding values,
 one for binding constraint identifiers. Statements that operate on
 stored constraints (`store`, `kill`, `add-history`) take an
-*id-expression*. All other statements take a *value-expression*.
+*id-expression*. The condition of `if` and the operand of
+`bool-expr-stmt` take a *bool-expression*. Other statements
+(`return`, `expr-stmt`, `foreach` index conditions) take a
+*value-expression*.
 
 ### let-val / let-id
 
@@ -257,12 +279,13 @@ Mutate an existing variable. Same kind discipline as `let-val` /
 ### if
 
 ```scheme
-(if <val-expr> (<then-stmt> ...) (<else-stmt> ...))
+(if <bool-expr> (<then-stmt> ...) (<else-stmt> ...))
 ```
 
-Conditional execution. The condition is a value expression that must
-evaluate to a boolean. Both branches are always present (the else
-branch may be an empty list `()`).
+Conditional execution. The condition is a boolean expression. To
+condition on a value expression whose boolean-ness is only known at
+runtime, wrap it with `bfrom-val`. Both branches are always present
+(the else branch may be an empty list `()`).
 
 ### foreach
 
@@ -276,8 +299,9 @@ Labeled loop over the constraint store. Iterates over all **alive**
 stored constraints of the given type that satisfy the index conditions.
 
 Each condition is `(<arg-index> <val-expr>)` and requires that the
-constraint's argument at the given position is `equal` to the
-expression (using ask semantics).
+constraint's argument at the given position is structurally equal to
+the value expression (Prolog `==` ask semantics, identical to
+`bequal`).
 
 The current constraint suspension is bound to `<susp-var>` on each
 iteration. Inside the body, reference it as `(id-var "<susp-var>")` —
@@ -322,13 +346,17 @@ Exit the named `foreach` loop.
 Return a value from the current procedure. Procedures always return a
 value (never a constraint identifier).
 
-### expr-stmt
+### expr-stmt / bool-expr-stmt
 
 ```scheme
-(expr-stmt <val-expr>)
+(expr-stmt      <val-expr>)
+(bool-expr-stmt <bool-expr>)
 ```
 
-Evaluate a value expression for its side effects; discard the result.
+Evaluate an expression for its side effects; discard the result. The
+two variants differ only by the kind of expression they wrap. Tell-side
+unification (`bunify`) in body position uses `bool-expr-stmt`; ordinary
+discarded procedure or host calls use `expr-stmt`.
 
 ### store
 
@@ -368,7 +396,7 @@ identifiers. Used to prevent redundant re-firing of propagation rules.
 ```
 
 Iterate over all constraints pending reactivation (populated as a side
-effect of `unify`). Each pending suspension is bound to `<susp-var>`
+effect of `bunify`). Each pending suspension is bound to `<susp-var>`
 as an id-bound name; the body statements are executed and reference it
 via `(id-var "<susp-var>")`. The body typically dispatches to
 `reactivate_dispatch`.
@@ -438,19 +466,9 @@ Switches the nested value expression into deep deref-aware evaluation:
 variable references are dereferenced (following binding chains) before
 use, and this mode propagates recursively into sub-expressions
 (`call-expr` arguments wrapped in `arg-val`, `make-term`, etc.). Used
-for guard expressions and the right-hand side of `is`. Constraint
-identifiers do not deref; the mode is a no-op for `arg-id` arguments.
-
-### Boolean operations
-
-```scheme
-(not <val-expr>)
-(and <val-expr> <val-expr>)
-(or  <val-expr> <val-expr>)
-```
-
-`and` and `or` are short-circuiting. Each operand must evaluate to a
-boolean.
+for the right-hand side of `is`. Constraint identifiers do not deref;
+the mode is a no-op for `arg-id` arguments. The bool-position
+counterpart is `beval-deep` (see Bool Expressions).
 
 ### Logical variables
 
@@ -465,51 +483,14 @@ Creates a fresh unbound logical variable. Serialized as a bare atom
 
 ```scheme
 (make-term "<functor>" <val-expr> ...)
-(match-term <val-expr> "<functor>" <arity>)
 (get-arg <val-expr> <index>)
 ```
 
 - `make-term` constructs a compound term.
-- `match-term` checks whether a value is a compound term with the
-  given functor and arity. Returns a boolean.
 - `get-arg` extracts an argument by 0-based index.
 
-### Constraint observation
-
-```scheme
-(alive <id-expr>)
-(id-equal <id-expr> <id-expr>)
-(is-constraint-type <id-expr> <type>)
-```
-
-- `alive` checks the alive flag of a suspension. Returns a boolean.
-- `id-equal` compares two constraint identifiers for equality.
-- `is-constraint-type` checks whether a suspension has the given type.
-
-### Propagation history
-
-```scheme
-(not-in-history <rule-id> <id-expr> ...)
-```
-
-Returns `true` if the rule has not previously fired with the given
-combination of constraint identifiers. `<rule-id>` is the rule's
-integer identifier (see the program's `rule-names` table for the
-corresponding source name).
-
-### Unification and equality
-
-```scheme
-(unify <val-expr> <val-expr>)
-(equal <val-expr> <val-expr>)
-```
-
-- **`unify`** (tell semantics, Prolog `=`): binds variables, returns
-  boolean. As a side effect, pushes affected constraints onto the
-  reactivation queue. Used in rule bodies.
-- **`equal`** (ask semantics, Prolog `==`): structural equality with no
-  mutation. Two distinct unbound variables return `false`. Used in
-  guards (guards must not leave half-done bindings on failure).
+The structural-match predicate `bmatch-term` is a bool expression; see
+Bool Expressions.
 
 ### Suspension field access
 
@@ -553,6 +534,111 @@ that. The arguments are values that become the constraint's stored
 arguments.
 
 
+## Bool Expressions
+
+Expressions in this section evaluate to booleans. They populate the
+condition of `if`, the operand of `bool-expr-stmt`, and the operands
+of `bnot` / `band` / `bor`. The serialization uses a `b` prefix on
+each constructor to distinguish it from any value-side counterpart.
+
+### Literals
+
+```scheme
+btrue
+bfalse
+```
+
+Boolean literals in bool position. Bare atoms, no parentheses.
+Distinct from the value-side `true` / `false` literals.
+
+### Logical operations
+
+```scheme
+(bnot <bool-expr>)
+(band <bool-expr> <bool-expr>)
+(bor  <bool-expr> <bool-expr>)
+```
+
+`band` and `bor` are short-circuiting.
+
+### Term match
+
+```scheme
+(bmatch-term <val-expr> "<functor>" <arity>)
+```
+
+Checks whether the value evaluates to a compound term with the given
+functor and arity.
+
+### Equality
+
+```scheme
+(bequal    <val-expr> <val-expr>)
+(bid-equal <id-expr>  <id-expr>)
+```
+
+- **`bequal`** (ask semantics, Prolog `==`): structural equality with
+  no mutation. Two distinct unbound variables return `false`. Used in
+  guards (guards must not leave half-done bindings on failure).
+- **`bid-equal`** compares two constraint identifiers for equality.
+
+### Constraint observation
+
+```scheme
+(balive              <id-expr>)
+(bis-constraint-type <id-expr> <type>)
+```
+
+- `balive` checks the alive flag of a suspension.
+- `bis-constraint-type` checks whether a suspension has the given type.
+
+### Propagation history
+
+```scheme
+(bnot-in-history <rule-id> <id-expr> ...)
+```
+
+Returns `true` if the rule has not previously fired with the given
+combination of constraint identifiers. `<rule-id>` is the rule's
+integer identifier (see the program's `rule-names` table for the
+corresponding source name).
+
+### Unification
+
+```scheme
+(bunify <val-expr> <val-expr>)
+```
+
+Tell-side unification (Prolog `=`): binds variables, returns boolean.
+As a side effect, pushes affected constraints onto the reactivation
+queue. Used in rule bodies, typically wrapped in `bool-expr-stmt`
+because the result is discarded.
+
+### Value-to-bool bridge
+
+```scheme
+(bfrom-val <val-expr>)
+```
+
+Promotes a value expression into bool position. The wrapped expression
+must evaluate to a boolean value (`VBool`); the runtime checks this and
+errors otherwise. Used wherever the compiler cannot statically prove
+the operand is a boolean — typically user-defined function calls in
+guards, and the early-drop result variable read at the boundary.
+
+### Deep deref-aware evaluation
+
+```scheme
+(beval-deep <bool-expr>)
+```
+
+Switches the nested boolean expression into deep deref-aware
+evaluation. Mirrors `eval-deep` for booleans: any `<val-expr>` and
+`<id-expr>` payloads inside the nested expression are evaluated in
+deep-deref mode. Used for guard expressions wrapped via `bfrom-val .
+eval-deep`.
+
+
 ## Runtime Contract
 
 A backend must implement the following runtime capabilities.
@@ -560,15 +646,15 @@ A backend must implement the following runtime capabilities.
 ### Logical variables
 
 - Creation of fresh unbound variables (`new-var`).
-- Binding via unification (`unify`) with occurs-check optional.
+- Binding via unification (`bunify`) with occurs-check optional.
 - Dereferencing (following binding chains) -- handled transparently
-  inside `unify`, `equal`, and `foreach` lookups.
+  inside `bunify`, `bequal`, and `foreach` lookups.
 - Observer lists: when a variable is bound, all constraints observing
   it are pushed onto the reactivation queue.
 
 ### Compound terms
 
-- Construction (`make-term`), structural matching (`match-term`),
+- Construction (`make-term`), structural matching (`bmatch-term`),
   argument extraction (`get-arg`).
 - Representation is backend-specific (e.g. tagged arrays, objects,
   tuples).
@@ -595,12 +681,12 @@ integer identifier assigned to the rule at compile time. Must
 support:
 
 - `add-history`: insert a tuple.
-- `not-in-history`: membership test.
+- `bnot-in-history`: membership test.
 
 ### Reactivation queue
 
-A queue of constraint suspensions populated by `unify` when a variable
-is bound. Drained by `drain-reactivation-queue`.
+A queue of constraint suspensions populated by `bunify` when a
+variable is bound. Drained by `drain-reactivation-queue`.
 
 ### Recursion management
 
@@ -639,13 +725,13 @@ names use the pattern `<prefix>_mymodule__leq2`:
                      (arg-id (id-var "id"))
                      (arg-val (var "X_0"))
                      (arg-val (var "X_1"))))
-      (if (var "d") ((return true)) ())
+      (if (bfrom-val (var "d")) ((return true)) ())
       (return false))
 
     ; occurrence_mymodule__leq2_1:
     ;   reflexivity @ leq(X, X1) <=> X == X1 | true.
     (procedure "occurrence_mymodule__leq2_1" ("id" "X_0" "X_1")
-      (if (equal (var "X_0") (var "X_1"))
+      (if (bequal (var "X_0") (var "X_1"))
         ((kill (id-var "id"))
          (return true))
         ())
@@ -653,7 +739,7 @@ names use the pattern `<prefix>_mymodule__leq2`:
 
     ; reactivate_dispatch(susp): type-based dispatch
     (procedure "reactivate_dispatch" ("susp")
-      (if (is-constraint-type (id-var "susp") 0)
+      (if (bis-constraint-type (id-var "susp") 0)
         ((expr-stmt (call-expr "activate_mymodule__leq2"
                       (arg-id (id-var "susp")))))
         ())))

@@ -219,7 +219,7 @@ genActivate name arity occs =
     genActivateCall occ =
       let occName = occProcName name arity occ.number
        in [ LetVal dropResultName (CallExpr occName occCallArgs),
-            If (Var dropResultName) [Return (Lit (BoolLit True))] []
+            If (BFromVal (Var dropResultName)) [Return (Lit (BoolLit True))] []
           ]
 
 -- ---------------------------------------------------------------------------
@@ -341,12 +341,12 @@ wrapInPartnerLoops occ condMap inner =
           -- Foreach iterator guarantees yielded partners are alive, and
           -- the active constraint's liveness is verified after body
           -- execution (early drop / backjumping in 'genFireStmts').
-          distinctActive = Not (IdEqual (IdVar (partIdName k)) (IdVar activeName))
+          distinctActive = BNot (BIdEqual (IdVar (partIdName k)) (IdVar activeName))
           distinctEarlier =
-            [ Not (IdEqual (IdVar (partIdName k)) (IdVar (partIdName j)))
+            [ BNot (BIdEqual (IdVar (partIdName k)) (IdVar (partIdName j)))
             | j <- [PartnerIndex 0 .. k - 1]
             ]
-          distinctAll = foldl' And distinctActive distinctEarlier
+          distinctAll = foldl' BAnd distinctActive distinctEarlier
           guarded = [If distinctAll inside []]
        in [Foreach label partner.cType suspVar conds (fieldExtracts ++ guarded)]
 
@@ -374,7 +374,7 @@ genFireStmts funSet symTab varMap occ = do
   bodyStmts <- compileBodyGoals funSet symTab varMap bodySi ruleBody
   let earlyDropStmts
         | activeIsRemoved = [Return (Lit (BoolLit True))]
-        | otherwise = [If (Not (Alive (IdVar activeName))) [Return (Lit (BoolLit True))] []]
+        | otherwise = [If (BNot (BAlive (IdVar activeName))) [Return (Lit (BoolLit True))] []]
       -- Backjumping (paper §5.3): after body execution, check each
       -- partner's liveness outermost-first.  If a partner died (e.g.
       -- killed by a rule fired during body execution), Continue to its
@@ -392,7 +392,7 @@ genFireStmts funSet symTab varMap occ = do
         | activeIsRemoved = []
         | otherwise =
             [ If
-                (Not (Alive (IdVar (partIdName k))))
+                (BNot (BAlive (IdVar (partIdName k))))
                 [Continue (partLabel k)]
                 []
             | (k, p) <- zip [PartnerIndex 0 ..] occ.partners,
@@ -409,7 +409,7 @@ genFireStmts funSet symTab varMap occ = do
     if isPropagation
       then
         [ If
-            (NotInHistory ruleId' historyIds)
+            (BNotInHistory ruleId' historyIds)
             (AddHistory ruleId' historyIds : coreFireStmts)
             []
         ]
@@ -540,18 +540,8 @@ freeVars = goV
     goV (CallExpr _ args) = Set.unions (map goA args)
     goV (HostCall _ es) = Set.unions (map goV es)
     goV (EvalDeep e) = goV e
-    goV (Not e) = goV e
-    goV (And a b) = goV a `Set.union` goV b
-    goV (Or a b) = goV a `Set.union` goV b
     goV (MakeTerm _ es) = Set.unions (map goV es)
-    goV (MatchTerm e _ _) = goV e
     goV (GetArg e _) = goV e
-    goV (Alive e) = goI e
-    goV (IdEqual a b) = goI a `Set.union` goI b
-    goV (IsConstraintType e _) = goI e
-    goV (NotInHistory _ es) = Set.unions (map goI es)
-    goV (Unify a b) = goV a `Set.union` goV b
-    goV (Equal a b) = goV a `Set.union` goV b
     goV (FieldArg e _) = goI e
     goV (FieldType e) = goI e
 
@@ -661,7 +651,7 @@ compileMatchGuard ::
   Eff '[Writer [Diagnostic CompileError]] ([Stmt] -> [Stmt], VarMap)
 compileMatchGuard si (matchWrapper, varMap) (D.GuardMatch term name arity) = do
   termExpr <- compileTerm varMap si term
-  let check body = [If (MatchTerm termExpr (vmName name) arity) body []]
+  let check body = [If (BMatchTerm termExpr (vmName name) arity) body []]
   pure (matchWrapper . check, varMap)
 compileMatchGuard si (matchWrapper, varMap) (D.GuardGetArg vname term idx) = do
   termExpr <- compileTerm varMap si term
@@ -684,12 +674,12 @@ compileCheckGuards ::
   VarMap ->
   SrcInfo ->
   [D.Guard] ->
-  Eff '[Writer [Diagnostic CompileError]] (PartnerCondMap, Maybe ValExpr)
+  Eff '[Writer [Diagnostic CompileError]] (PartnerCondMap, Maybe BoolExpr)
 compileCheckGuards funSet mOcc varMap si guards = do
   (condMap, residuals) <- foldM step (Map.empty, []) guards
   let residual = case residuals of
         [] -> Nothing
-        r : rest -> Just (foldl And r rest)
+        r : rest -> Just (foldl BAnd r rest)
   pure (condMap, residual)
   where
     classify e1 e2 = case mOcc of
@@ -703,9 +693,9 @@ compileCheckGuards funSet mOcc varMap si guards = do
           let cond = IndexCondition {argIndex = j, expectedValue = other}
            in pure (Map.insertWith (flip (++)) k [cond] cm, rs)
         Nothing ->
-          pure (cm, rs ++ [Equal e1 e2])
+          pure (cm, rs ++ [BEqual e1 e2])
     step (cm, rs) (D.GuardExpr term) = do
-      e <- EvalDeep <$> compileExpr funSet varMap si term
+      e <- BFromVal . EvalDeep <$> compileExpr funSet varMap si term
       pure (cm, rs ++ [e])
     step acc _ = pure acc
 
@@ -734,7 +724,7 @@ compileBodyGoals funSet symTab varMap si goals = do
 -- something a casual reader should have to re-derive every time.
 unifyAndReactivate :: ValExpr -> ValExpr -> [Stmt]
 unifyAndReactivate l r =
-  [ ExprStmt (Unify l r),
+  [ BoolExprStmt (BUnify l r),
     DrainReactivationQueue
       pendingName
       [ExprStmt (CallExpr reactivateDispatchName [AId (IdVar pendingName)])]
@@ -859,7 +849,7 @@ genReactivateDispatch symTab =
   where
     genDispatchBranch (ident, cType) =
       If
-        (IsConstraintType (IdVar suspParamName) cType)
+        (BIsConstraintType (IdVar suspParamName) cType)
         [ ExprStmt
             ( CallExpr
                 (activateProcName ident.name ident.arity)
@@ -901,11 +891,11 @@ genFunRefBranch callArity argParams func
           flatName = flattenName funcName
           pName = funcProcName funcName func.arity
           condition =
-            And
-              (MatchTerm (Var (Name "closure")) (Name "/") 2)
-              ( And
-                  (Equal (GetArg (Var (Name "closure")) 0) (Lit (AtomLit flatName)))
-                  (Equal (GetArg (Var (Name "closure")) 1) (Lit (IntLit func.arity)))
+            BAnd
+              (BMatchTerm (Var (Name "closure")) (Name "/") 2)
+              ( BAnd
+                  (BEqual (GetArg (Var (Name "closure")) 0) (Lit (AtomLit flatName)))
+                  (BEqual (GetArg (Var (Name "closure")) 1) (Lit (IntLit func.arity)))
               )
        in [ If
               condition
@@ -933,9 +923,9 @@ genLambdaBranch callArity argParams func
           -- by the captured free variables, so its total arity is
           -- numCaptures + 2.
           condition =
-            And
-              (MatchTerm (Var (Name "closure")) (Name "__closure") (numCaptures + 2))
-              (Equal (GetArg (Var (Name "closure")) 0) (Lit (AtomLit lambdaVmText)))
+            BAnd
+              (BMatchTerm (Var (Name "closure")) (Name "__closure") (numCaptures + 2))
+              (BEqual (GetArg (Var (Name "closure")) 0) (Lit (AtomLit lambdaVmText)))
           -- Captures are stored after the 2 header fields (lambdaId at
           -- index 0, sourceForm at index 1), so capture i lives at
           -- index i + 2.

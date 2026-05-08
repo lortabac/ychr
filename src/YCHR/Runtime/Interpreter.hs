@@ -228,11 +228,8 @@ execStmt pm hc (AssignId name expr) = do
   s <- evalIdExpr pm hc expr
   modify (insertId name s)
 execStmt pm hc (If cond thenBranch elseBranch) = do
-  c <- evalValExpr pm hc cond
-  case c of
-    VBool True -> execStmts pm hc thenBranch
-    VBool False -> execStmts pm hc elseBranch
-    _ -> runtimeErrorS "If: condition is not a boolean"
+  b <- evalBoolExpr pm hc cond
+  if b then execStmts pm hc thenBranch else execStmts pm hc elseBranch
 execStmt pm hc (Foreach lbl cType suspVar conditions body) = do
   snapshot <- getStoreSnapshot cType
   let susps = toList snapshot
@@ -244,6 +241,9 @@ execStmt pm hc (Return expr) = do
   throwError (CFReturn v)
 execStmt pm hc (ExprStmt expr) = do
   _ <- evalValExpr pm hc expr
+  pure ()
+execStmt pm hc (BoolExprStmt expr) = do
+  _ <- evalBoolExpr pm hc expr
   pure ()
 execStmt pm hc (Store expr) = do
   sid <- evalIdExpr pm hc expr
@@ -341,53 +341,63 @@ evalValExpr pm hc (HostCall name args) = do
   argVals <- traverse (evalValExpr pm hc) args
   derefedVals <- traverse deref argVals
   invokeHostCall hc name derefedVals
-evalValExpr pm hc (Not expr) = do
-  v <- evalValExpr pm hc expr
-  case v of
-    VBool b -> pure (VBool (not b))
-    _ -> runtimeErrorS "Not: expected boolean"
-evalValExpr pm hc (And e1 e2) = do
-  v1 <- evalValExpr pm hc e1
-  case v1 of
-    VBool False -> pure (VBool False)
-    VBool True -> evalValExpr pm hc e2
-    _ -> runtimeErrorS "And: expected boolean"
-evalValExpr pm hc (Or e1 e2) = do
-  v1 <- evalValExpr pm hc e1
-  case v1 of
-    VBool True -> pure (VBool True)
-    VBool False -> evalValExpr pm hc e2
-    _ -> runtimeErrorS "Or: expected boolean"
 evalValExpr _ _ NewVar = newVar
 evalValExpr pm hc (MakeTerm functor args) = do
   argVals <- traverse (evalValExpr pm hc) args
   pure $ makeTerm functor.unName argVals
-evalValExpr pm hc (MatchTerm expr functor arity) = do
-  v <- evalValExpr pm hc expr
-  VBool <$> matchTerm v functor.unName arity
 evalValExpr pm hc (GetArg expr idx) = do
   v <- evalValExpr pm hc expr
   getArg v idx
-evalValExpr pm hc (Alive expr) = do
+evalValExpr pm hc (FieldArg expr (ArgIndex i)) = do
   sid <- evalIdExpr pm hc expr
-  VBool <$> aliveConstraint sid
-evalValExpr pm hc (IdEqual e1 e2) = do
+  getConstraintArg sid i
+evalValExpr pm hc (FieldType expr) = do
+  sid <- evalIdExpr pm hc expr
+  (\ct -> VInt ct.unConstraintType) <$> getConstraintType sid
+evalValExpr pm hc (EvalDeep expr) = evalValExprDeep pm hc expr
+
+-- ---------------------------------------------------------------------------
+-- Bool-expression evaluator (normal mode)
+-- ---------------------------------------------------------------------------
+
+evalBoolExpr ::
+  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
+  ProcMap -> HostCallRegistry -> BoolExpr -> Eff es Bool
+evalBoolExpr _ _ (BLit b) = pure b
+evalBoolExpr pm hc (BNot e) = not <$> evalBoolExpr pm hc e
+evalBoolExpr pm hc (BAnd e1 e2) = do
+  b1 <- evalBoolExpr pm hc e1
+  if b1 then evalBoolExpr pm hc e2 else pure False
+evalBoolExpr pm hc (BOr e1 e2) = do
+  b1 <- evalBoolExpr pm hc e1
+  if b1 then pure True else evalBoolExpr pm hc e2
+evalBoolExpr pm hc (BMatchTerm expr functor arity) = do
+  v <- evalValExpr pm hc expr
+  matchTerm v functor.unName arity
+evalBoolExpr pm hc (BEqual e1 e2) = do
+  v1 <- evalValExpr pm hc e1
+  v2 <- evalValExpr pm hc e2
+  equal v1 v2
+evalBoolExpr pm hc (BIdEqual e1 e2) = do
   s1 <- evalIdExpr pm hc e1
   s2 <- evalIdExpr pm hc e2
-  pure (VBool (idEqual s1 s2))
-evalValExpr pm hc (IsConstraintType expr cType) = do
+  pure (idEqual s1 s2)
+evalBoolExpr pm hc (BAlive expr) = do
   sid <- evalIdExpr pm hc expr
-  VBool <$> isConstraintType sid cType
-evalValExpr pm hc (NotInHistory ruleId args) = do
+  aliveConstraint sid
+evalBoolExpr pm hc (BIsConstraintType expr cType) = do
+  sid <- evalIdExpr pm hc expr
+  isConstraintType sid cType
+evalBoolExpr pm hc (BNotInHistory ruleId args) = do
   sids <- traverse (evalIdExpr pm hc) args
-  VBool <$> notInHistory ruleId sids
-evalValExpr pm hc (Unify e1 e2) = do
+  notInHistory ruleId sids
+evalBoolExpr pm hc (BUnify e1 e2) = do
   v1 <- evalValExpr pm hc e1
   v2 <- evalValExpr pm hc e2
   (ok, observers) <- listen (unify v1 v2)
   enqueue observers
   if ok
-    then pure (VBool True)
+    then pure True
     else do
       t1 <- valueToTerm "_" v1
       t2 <- valueToTerm "_" v2
@@ -396,17 +406,12 @@ evalValExpr pm hc (Unify e1 e2) = do
           ++ prettyTerm t1
           ++ " with "
           ++ prettyTerm t2
-evalValExpr pm hc (Equal e1 e2) = do
-  v1 <- evalValExpr pm hc e1
-  v2 <- evalValExpr pm hc e2
-  VBool <$> equal v1 v2
-evalValExpr pm hc (FieldArg expr (ArgIndex i)) = do
-  sid <- evalIdExpr pm hc expr
-  getConstraintArg sid i
-evalValExpr pm hc (FieldType expr) = do
-  sid <- evalIdExpr pm hc expr
-  (\ct -> VInt ct.unConstraintType) <$> getConstraintType sid
-evalValExpr pm hc (EvalDeep expr) = evalValExprDeep pm hc expr
+evalBoolExpr pm hc (BFromVal expr) = do
+  v <- evalValExpr pm hc expr
+  case v of
+    VBool b -> pure b
+    _ -> runtimeErrorS "BFromVal: expected boolean"
+evalBoolExpr pm hc (BEvalDeep expr) = evalBoolExprDeep pm hc expr
 
 -- ---------------------------------------------------------------------------
 -- Id-expression evaluator
@@ -481,3 +486,51 @@ evalCallArgDeep ::
   ProcMap -> HostCallRegistry -> CallArg -> Eff es CallVal
 evalCallArgDeep pm hc (AVal e) = CVal <$> evalValExprDeep pm hc e
 evalCallArgDeep pm hc (AId e) = CId <$> evalIdExpr pm hc e
+
+-- ---------------------------------------------------------------------------
+-- Bool-expression evaluator (deep deref mode)
+-- ---------------------------------------------------------------------------
+
+-- | Deep-deref evaluation for 'BoolExpr'. Mirrors 'evalValExprDeep':
+-- propagates deep mode into 'ValExpr' and 'IdExpr' payloads, while
+-- recursing through the boolean structure of 'BNot'/'BAnd'/'BOr' and
+-- 'BEvalDeep' itself.
+evalBoolExprDeep ::
+  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
+  ProcMap -> HostCallRegistry -> BoolExpr -> Eff es Bool
+evalBoolExprDeep pm hc (BNot e) = not <$> evalBoolExprDeep pm hc e
+evalBoolExprDeep pm hc (BAnd e1 e2) = do
+  b1 <- evalBoolExprDeep pm hc e1
+  if b1 then evalBoolExprDeep pm hc e2 else pure False
+evalBoolExprDeep pm hc (BOr e1 e2) = do
+  b1 <- evalBoolExprDeep pm hc e1
+  if b1 then pure True else evalBoolExprDeep pm hc e2
+evalBoolExprDeep pm hc (BMatchTerm expr functor arity) = do
+  v <- evalValExprDeep pm hc expr
+  matchTerm v functor.unName arity
+evalBoolExprDeep pm hc (BEqual e1 e2) = do
+  v1 <- evalValExprDeep pm hc e1
+  v2 <- evalValExprDeep pm hc e2
+  equal v1 v2
+evalBoolExprDeep pm hc (BUnify e1 e2) = do
+  v1 <- evalValExprDeep pm hc e1
+  v2 <- evalValExprDeep pm hc e2
+  (ok, observers) <- listen (unify v1 v2)
+  enqueue observers
+  if ok
+    then pure True
+    else do
+      t1 <- valueToTerm "_" v1
+      t2 <- valueToTerm "_" v2
+      runtimeErrorS $
+        "unification failure: cannot unify "
+          ++ prettyTerm t1
+          ++ " with "
+          ++ prettyTerm t2
+evalBoolExprDeep pm hc (BFromVal expr) = do
+  v <- evalValExprDeep pm hc expr
+  case v of
+    VBool b -> pure b
+    _ -> runtimeErrorS "BFromVal: expected boolean"
+evalBoolExprDeep pm hc (BEvalDeep expr) = evalBoolExprDeep pm hc expr
+evalBoolExprDeep pm hc expr = evalBoolExpr pm hc expr

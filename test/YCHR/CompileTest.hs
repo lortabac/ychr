@@ -144,7 +144,7 @@ indexConditionPushdownTests =
   where
     containsSelfEqual (VM.If e _ _) = exprHasSelfEqual e
     containsSelfEqual _ = False
-    exprHasSelfEqual (VM.Equal (VM.Var "X_0") (VM.Var "X_1")) = True
-    exprHasSelfEqual (VM.Equal (VM.Var "X_1") (VM.Var "X_0")) = True
-    exprHasSelfEqual (VM.And a b) = exprHasSelfEqual a || exprHasSelfEqual b
+    exprHasSelfEqual (VM.BEqual (VM.Var "X_0") (VM.Var "X_1")) = True
+    exprHasSelfEqual (VM.BEqual (VM.Var "X_1") (VM.Var "X_0")) = True
+    exprHasSelfEqual (VM.BAnd a b) = exprHasSelfEqual a || exprHasSelfEqual b
     exprHasSelfEqual _ = False

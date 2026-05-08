@@ -10,6 +10,7 @@ module YCHR.VM
     -- * Expressions
     ValExpr (..),
     IdExpr (..),
+    BoolExpr (..),
     CallArg (..),
 
     -- * Runtime call stack frames

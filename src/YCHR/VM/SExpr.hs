@@ -131,7 +131,7 @@ stmtToSExpr (LetId n e) = SList [SAtom "let-id", nameToSExpr n, idExprToSExpr e]
 stmtToSExpr (AssignVal n e) = SList [SAtom "assign-val", nameToSExpr n, valExprToSExpr e]
 stmtToSExpr (AssignId n e) = SList [SAtom "assign-id", nameToSExpr n, idExprToSExpr e]
 stmtToSExpr (If c ts es) =
-  SList [SAtom "if", valExprToSExpr c, SList (map stmtToSExpr ts), SList (map stmtToSExpr es)]
+  SList [SAtom "if", boolExprToSExpr c, SList (map stmtToSExpr ts), SList (map stmtToSExpr es)]
 stmtToSExpr (Foreach lbl ct sv conds body) =
   SList
     [ SAtom "foreach",
@@ -145,6 +145,7 @@ stmtToSExpr (Continue lbl) = SList [SAtom "continue", labelToSExpr lbl]
 stmtToSExpr (Break lbl) = SList [SAtom "break", labelToSExpr lbl]
 stmtToSExpr (Return e) = SList [SAtom "return", valExprToSExpr e]
 stmtToSExpr (ExprStmt e) = SList [SAtom "expr-stmt", valExprToSExpr e]
+stmtToSExpr (BoolExprStmt e) = SList [SAtom "bool-expr-stmt", boolExprToSExpr e]
 stmtToSExpr (Store e) = SList [SAtom "store", idExprToSExpr e]
 stmtToSExpr (Kill e) = SList [SAtom "kill", idExprToSExpr e]
 stmtToSExpr (AddHistory rid es) =
@@ -169,31 +170,37 @@ valExprToSExpr (CallExpr n es) =
 valExprToSExpr (HostCall n es) =
   SList (SAtom "host-call" : nameToSExpr n : map valExprToSExpr es)
 valExprToSExpr (EvalDeep e) = SList [SAtom "eval-deep", valExprToSExpr e]
-valExprToSExpr (Not e) = SList [SAtom "not", valExprToSExpr e]
-valExprToSExpr (And a b) = SList [SAtom "and", valExprToSExpr a, valExprToSExpr b]
-valExprToSExpr (Or a b) = SList [SAtom "or", valExprToSExpr a, valExprToSExpr b]
 valExprToSExpr NewVar = SAtom "new-var"
 valExprToSExpr (MakeTerm n es) =
   SList (SAtom "make-term" : nameToSExpr n : map valExprToSExpr es)
-valExprToSExpr (MatchTerm e n a) =
+valExprToSExpr (GetArg e i) = SList [SAtom "get-arg", valExprToSExpr e, SInt i]
+valExprToSExpr (FieldArg e (ArgIndex i)) =
+  SList [SAtom "field-arg", idExprToSExpr e, SInt i]
+valExprToSExpr (FieldType e) = SList [SAtom "field-type", idExprToSExpr e]
+
+boolExprToSExpr :: BoolExpr -> SExpr
+boolExprToSExpr (BLit True) = SAtom "btrue"
+boolExprToSExpr (BLit False) = SAtom "bfalse"
+boolExprToSExpr (BNot e) = SList [SAtom "bnot", boolExprToSExpr e]
+boolExprToSExpr (BAnd a b) = SList [SAtom "band", boolExprToSExpr a, boolExprToSExpr b]
+boolExprToSExpr (BOr a b) = SList [SAtom "bor", boolExprToSExpr a, boolExprToSExpr b]
+boolExprToSExpr (BMatchTerm e n a) =
   SList
-    [ SAtom "match-term",
+    [ SAtom "bmatch-term",
       valExprToSExpr e,
       nameToSExpr n,
       SInt a
     ]
-valExprToSExpr (GetArg e i) = SList [SAtom "get-arg", valExprToSExpr e, SInt i]
-valExprToSExpr (Alive e) = SList [SAtom "alive", idExprToSExpr e]
-valExprToSExpr (IdEqual a b) = SList [SAtom "id-equal", idExprToSExpr a, idExprToSExpr b]
-valExprToSExpr (IsConstraintType e ct) =
-  SList [SAtom "is-constraint-type", idExprToSExpr e, constraintTypeToSExpr ct]
-valExprToSExpr (NotInHistory rid es) =
-  SList (SAtom "not-in-history" : ruleIdToSExpr rid : map idExprToSExpr es)
-valExprToSExpr (Unify a b) = SList [SAtom "unify", valExprToSExpr a, valExprToSExpr b]
-valExprToSExpr (Equal a b) = SList [SAtom "equal", valExprToSExpr a, valExprToSExpr b]
-valExprToSExpr (FieldArg e (ArgIndex i)) =
-  SList [SAtom "field-arg", idExprToSExpr e, SInt i]
-valExprToSExpr (FieldType e) = SList [SAtom "field-type", idExprToSExpr e]
+boolExprToSExpr (BEqual a b) = SList [SAtom "bequal", valExprToSExpr a, valExprToSExpr b]
+boolExprToSExpr (BIdEqual a b) = SList [SAtom "bid-equal", idExprToSExpr a, idExprToSExpr b]
+boolExprToSExpr (BAlive e) = SList [SAtom "balive", idExprToSExpr e]
+boolExprToSExpr (BIsConstraintType e ct) =
+  SList [SAtom "bis-constraint-type", idExprToSExpr e, constraintTypeToSExpr ct]
+boolExprToSExpr (BNotInHistory rid es) =
+  SList (SAtom "bnot-in-history" : ruleIdToSExpr rid : map idExprToSExpr es)
+boolExprToSExpr (BUnify a b) = SList [SAtom "bunify", valExprToSExpr a, valExprToSExpr b]
+boolExprToSExpr (BFromVal e) = SList [SAtom "bfrom-val", valExprToSExpr e]
+boolExprToSExpr (BEvalDeep e) = SList [SAtom "beval-deep", boolExprToSExpr e]
 
 idExprToSExpr :: IdExpr -> SExpr
 idExprToSExpr (IdVar n) = SList [SAtom "id-var", nameToSExpr n]
@@ -319,7 +326,7 @@ stmtFromSExpr (SList [SAtom "assign-val", n, e]) =
 stmtFromSExpr (SList [SAtom "assign-id", n, e]) =
   AssignId <$> nameFromSExpr n <*> idExprFromSExpr e
 stmtFromSExpr (SList [SAtom "if", c, SList ts, SList es]) =
-  If <$> valExprFromSExpr c <*> traverse stmtFromSExpr ts <*> traverse stmtFromSExpr es
+  If <$> boolExprFromSExpr c <*> traverse stmtFromSExpr ts <*> traverse stmtFromSExpr es
 stmtFromSExpr (SList [SAtom "foreach", lbl, ct, sv, SList conds, SList body]) =
   Foreach
     <$> labelFromSExpr lbl
@@ -331,6 +338,7 @@ stmtFromSExpr (SList [SAtom "continue", lbl]) = Continue <$> labelFromSExpr lbl
 stmtFromSExpr (SList [SAtom "break", lbl]) = Break <$> labelFromSExpr lbl
 stmtFromSExpr (SList [SAtom "return", e]) = Return <$> valExprFromSExpr e
 stmtFromSExpr (SList [SAtom "expr-stmt", e]) = ExprStmt <$> valExprFromSExpr e
+stmtFromSExpr (SList [SAtom "bool-expr-stmt", e]) = BoolExprStmt <$> boolExprFromSExpr e
 stmtFromSExpr (SList [SAtom "store", e]) = Store <$> idExprFromSExpr e
 stmtFromSExpr (SList [SAtom "kill", e]) = Kill <$> idExprFromSExpr e
 stmtFromSExpr (SList (SAtom "add-history" : rid : es)) =
@@ -367,34 +375,41 @@ valExprFromSExpr (SList (SAtom "call-expr" : n : es)) =
 valExprFromSExpr (SList (SAtom "host-call" : n : es)) =
   HostCall <$> nameFromSExpr n <*> traverse valExprFromSExpr es
 valExprFromSExpr (SList [SAtom "eval-deep", e]) = EvalDeep <$> valExprFromSExpr e
-valExprFromSExpr (SList [SAtom "not", e]) = Not <$> valExprFromSExpr e
-valExprFromSExpr (SList [SAtom "and", a, b]) =
-  And <$> valExprFromSExpr a <*> valExprFromSExpr b
-valExprFromSExpr (SList [SAtom "or", a, b]) =
-  Or <$> valExprFromSExpr a <*> valExprFromSExpr b
 valExprFromSExpr (SAtom "new-var") = pure NewVar
 valExprFromSExpr (SList (SAtom "make-term" : n : es)) =
   MakeTerm <$> nameFromSExpr n <*> traverse valExprFromSExpr es
-valExprFromSExpr (SList [SAtom "match-term", e, n, SInt a]) =
-  MatchTerm <$> valExprFromSExpr e <*> nameFromSExpr n <*> pure a
 valExprFromSExpr (SList [SAtom "get-arg", e, SInt i]) =
   GetArg <$> valExprFromSExpr e <*> pure i
-valExprFromSExpr (SList [SAtom "alive", e]) = Alive <$> idExprFromSExpr e
-valExprFromSExpr (SList [SAtom "id-equal", a, b]) =
-  IdEqual <$> idExprFromSExpr a <*> idExprFromSExpr b
-valExprFromSExpr (SList [SAtom "is-constraint-type", e, ct]) =
-  IsConstraintType <$> idExprFromSExpr e <*> constraintTypeFromSExpr ct
-valExprFromSExpr (SList (SAtom "not-in-history" : rid : es)) =
-  NotInHistory <$> ruleIdFromSExpr rid <*> traverse idExprFromSExpr es
-valExprFromSExpr (SList [SAtom "unify", a, b]) =
-  Unify <$> valExprFromSExpr a <*> valExprFromSExpr b
-valExprFromSExpr (SList [SAtom "equal", a, b]) =
-  Equal <$> valExprFromSExpr a <*> valExprFromSExpr b
 valExprFromSExpr (SList [SAtom "field-arg", e, SInt i]) =
   FieldArg <$> idExprFromSExpr e <*> pure (ArgIndex i)
 valExprFromSExpr (SList [SAtom "field-type", e]) =
   FieldType <$> idExprFromSExpr e
 valExprFromSExpr s = err ("expected value expression, got: " <> printSExpr s)
+
+boolExprFromSExpr :: SExpr -> Err BoolExpr
+boolExprFromSExpr (SAtom "btrue") = pure (BLit True)
+boolExprFromSExpr (SAtom "bfalse") = pure (BLit False)
+boolExprFromSExpr (SList [SAtom "bnot", e]) = BNot <$> boolExprFromSExpr e
+boolExprFromSExpr (SList [SAtom "band", a, b]) =
+  BAnd <$> boolExprFromSExpr a <*> boolExprFromSExpr b
+boolExprFromSExpr (SList [SAtom "bor", a, b]) =
+  BOr <$> boolExprFromSExpr a <*> boolExprFromSExpr b
+boolExprFromSExpr (SList [SAtom "bmatch-term", e, n, SInt a]) =
+  BMatchTerm <$> valExprFromSExpr e <*> nameFromSExpr n <*> pure a
+boolExprFromSExpr (SList [SAtom "bequal", a, b]) =
+  BEqual <$> valExprFromSExpr a <*> valExprFromSExpr b
+boolExprFromSExpr (SList [SAtom "bid-equal", a, b]) =
+  BIdEqual <$> idExprFromSExpr a <*> idExprFromSExpr b
+boolExprFromSExpr (SList [SAtom "balive", e]) = BAlive <$> idExprFromSExpr e
+boolExprFromSExpr (SList [SAtom "bis-constraint-type", e, ct]) =
+  BIsConstraintType <$> idExprFromSExpr e <*> constraintTypeFromSExpr ct
+boolExprFromSExpr (SList (SAtom "bnot-in-history" : rid : es)) =
+  BNotInHistory <$> ruleIdFromSExpr rid <*> traverse idExprFromSExpr es
+boolExprFromSExpr (SList [SAtom "bunify", a, b]) =
+  BUnify <$> valExprFromSExpr a <*> valExprFromSExpr b
+boolExprFromSExpr (SList [SAtom "bfrom-val", e]) = BFromVal <$> valExprFromSExpr e
+boolExprFromSExpr (SList [SAtom "beval-deep", e]) = BEvalDeep <$> boolExprFromSExpr e
+boolExprFromSExpr s = err ("expected boolean expression, got: " <> printSExpr s)
 
 idExprFromSExpr :: SExpr -> Err IdExpr
 idExprFromSExpr (SList [SAtom "id-var", n]) = IdVar <$> nameFromSExpr n

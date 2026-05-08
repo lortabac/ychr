@@ -59,8 +59,25 @@ removable when closed.
   `[Value] -> Eff es Value`. Closes seven interpreter `runtimeErrorS`
   sites (Store, Kill, `expectConstraintId` for AddHistory/NotInHistory,
   Alive, IdEqual, IsConstraintType, FieldGet) plus the `toValue` panic
-  in `Registry.hs`. The four boolean-shape sites (If/Not/And/Or)
-  remain as a separate `BoolExpr` follow-up.
+  in `Registry.hs`.
+
+- **Boolean-position operands of `If`/`Not`/`And`/`Or` are statically
+  booleans.** Encoded by introducing a third positional IR kind,
+  `Types.BoolExpr`, that holds the syntactically-bool constructors
+  (`BLit`, `BNot`, `BAnd`, `BOr`, `BMatchTerm`, `BEqual`, `BIdEqual`,
+  `BAlive`, `BIsConstraintType`, `BNotInHistory`, `BUnify`,
+  `BFromVal`, `BEvalDeep`). `Stmt`'s `If` condition narrows to
+  `BoolExpr`, and a new `BoolExprStmt` carries discarded boolean
+  expressions (e.g. tell-side `BUnify`). The interpreter gains
+  `evalBoolExpr :: BoolExpr -> Eff es Bool` and `evalBoolExprDeep`,
+  with the `If` case now `b <- evalBoolExpr cond; if b then ... else
+  ...` — no shape check. `BFromVal !ValExpr` is the explicit bridge
+  for user-written value expressions used in bool position (e.g.
+  user-function calls in guards, the early-drop result variable);
+  it carries a single named runtime check, replacing the four
+  `evalValExpr` shape errors. This bridge is a permanent part of
+  the design: user-defined functions deliberately remain unannotated,
+  so the value-to-bool coercion stays explicit.
 
 
 ## 1. `error` / `runtimeErrorS` for "can't happen" cases
@@ -81,24 +98,6 @@ After `deref` returns a `VVar`, the variable must be `Unbound`. Today
 the `VarState` type permits `Bound` regardless. A `newtype DerefedVar`
 or a separate `UnboundVar` type returned from `deref` would let the
 caller pattern-match exhaustively.
-
-### Boolean-shape interpreter checks — `src/YCHR/Runtime/Interpreter.hs`
-
-Four sites in `evalValExpr` still fire `runtimeErrorS` when the operand
-of a boolean-expecting expression is not a `VBool`:
-
-| Line | Expression       | Required operand |
-|------|------------------|------------------|
-| 220  | `If` condition   | `VBool _`        |
-| 309  | `Not`            | `VBool _`        |
-| 314  | `And` (1st arg)  | `VBool _`        |
-| 320  | `Or` (1st arg)   | `VBool _`        |
-
-These are a separate invariant from the value-vs-constraint-id split
-above: booleans are values, but the interpreter cannot statically prove
-that a given `ValExpr` evaluates to a `VBool`. A third IR kind
-(`BoolExpr`) or a phantom-typed `ValExpr` would close them. This is the
-natural follow-up to the §2 `RuntimeVal` split.
 
 ### `getArg` operand and bounds — `src/YCHR/Runtime/Var.hs:315-316`
 
@@ -136,8 +135,8 @@ suspension) would push the check up.
 
 ### Remaining interpreter shape checks — `src/YCHR/Runtime/Interpreter.hs`
 
-After the value-vs-id split, three sites remain that are not closed by
-the boolean-shape entry above:
+After the value-vs-id and bool splits, three sites remain that are
+name-resolution invariants rather than shape invariants:
 
 | Site                          | Required precondition          |
 |-------------------------------|--------------------------------|
@@ -145,11 +144,10 @@ the boolean-shape entry above:
 | `evalValExpr (Var name)`      | name in `envValues`            |
 | `invokeHostCall` (unknown)    | name in registry               |
 
-These are name-resolution invariants (procedure / environment / host-
-call lookups). Closure checks at compile time (see §5 "Closed
-procedure-name set") would close the first; an opaque `IdExpr`/`ValExpr`
-constructor that can only be made by the binder would close the second;
-a typed `HostCallRef` issued by the registry would close the third.
+Closure checks at compile time (see §5 "Closed procedure-name set")
+would close the first; an opaque `IdExpr`/`ValExpr` constructor that
+can only be made by the binder would close the second; a typed
+`HostCallRef` issued by the registry would close the third.
 
 ### `ConstraintType (-1)` placeholder — `src/YCHR/Compile/Occurrences.hs:171`
 
@@ -380,14 +378,10 @@ host-language boundary.
 
 If you want a roughly-ordered list of the most actionable wins:
 
-1. **`BoolExpr` split** (§1, "Boolean-shape interpreter checks"). The
-   natural follow-up to the closed `RuntimeVal` split: a third IR kind
-   that statically guarantees boolean-position operands. Closes the
-   remaining four `If`/`Not`/`And`/`Or` shape errors.
-2. **`ArgIndex` / `MatchTerm` arity to `Word`** (§2). Cheap, removes
+1. **`ArgIndex` / `MatchTerm` arity to `Word`** (§2). Cheap, removes
    a class of bounds-related bugs.
-3. **`ConstraintType` as `Word`** plus `Maybe ConstraintType` for
+2. **`ConstraintType` as `Word`** plus `Maybe ConstraintType` for
    lookup (§1). Removes the `(-1)` sentinel.
-4. **Procedure-name closure check** (§5). A post-compile pass that
+3. **Procedure-name closure check** (§5). A post-compile pass that
    verifies every `CallExpr` resolves in the program's procedure map.
    Catches a whole class of compiler bugs at compile time.

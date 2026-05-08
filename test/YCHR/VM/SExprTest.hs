@@ -43,7 +43,7 @@ roundtripTests =
       roundtrip
         ( mkProg
             [ If
-                (Var "x")
+                (BFromVal (Var "x"))
                 [Return (Lit (BoolLit True))]
                 [ Return
                     ( Lit
@@ -104,23 +104,27 @@ roundtripTests =
               LetVal "h" (CallExpr "proc" [AVal (Var "a"), AVal (Var "b")]),
               LetVal "i" (HostCall "+" [Var "a", Var "b"]),
               LetVal "j" (EvalDeep (Var "expr")),
-              LetVal "k" (Not (Var "a")),
-              LetVal "l" (And (Var "a") (Var "b")),
-              LetVal "m" (Or (Var "a") (Var "b")),
               LetVal "n" NewVar,
               LetVal "o" (MakeTerm "f" [Var "a", Var "b"]),
-              LetVal "p" (MatchTerm (Var "x") "f" 2),
               LetVal "q" (GetArg (Var "x") 0),
               LetId "r" (CreateConstraint (ConstraintType 0) [Var "a"]),
-              LetVal "s" (Alive (IdVar "id")),
-              LetVal "t" (IdEqual (IdVar "id1") (IdVar "id2")),
-              LetVal "u" (IsConstraintType (IdVar "s") (ConstraintType 1)),
-              LetVal "v" (NotInHistory (RuleId 0) [IdVar "id1", IdVar "id2"]),
-              LetVal "w" (Unify (Var "a") (Var "b")),
-              LetVal "x2" (Equal (Var "a") (Var "b")),
               LetId "y" (IdVar "s"),
               LetVal "z" (FieldArg (IdVar "s") (ArgIndex 0)),
-              LetVal "z2" (FieldType (IdVar "s"))
+              LetVal "z2" (FieldType (IdVar "s")),
+              -- Boolean-position expressions exercised through If/BoolExprStmt.
+              If (BLit True) [] [],
+              If (BNot (BLit False)) [] [],
+              If (BAnd (BLit True) (BLit False)) [] [],
+              If (BOr (BLit True) (BLit False)) [] [],
+              If (BMatchTerm (Var "x") "f" 2) [] [],
+              If (BEqual (Var "a") (Var "b")) [] [],
+              If (BIdEqual (IdVar "id1") (IdVar "id2")) [] [],
+              If (BAlive (IdVar "id")) [] [],
+              If (BIsConstraintType (IdVar "s") (ConstraintType 1)) [] [],
+              If (BNotInHistory (RuleId 0) [IdVar "id1", IdVar "id2"]) [] [],
+              BoolExprStmt (BUnify (Var "a") (Var "b")),
+              If (BFromVal (Var "a")) [] [],
+              If (BEvalDeep (BLit True)) [] []
             ]
         ),
     testCase "call-expr with zero args" $
@@ -163,7 +167,7 @@ roundtripTests =
                 "reactivate_dispatch"
                 ["susp"]
                 [ If
-                    ( IsConstraintType
+                    ( BIsConstraintType
                         (IdVar "susp")
                         (ConstraintType 0)
                     )

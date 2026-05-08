@@ -36,9 +36,12 @@
 --
 --   6. Expressions are split by the kind of value they produce:
 --      'ValExpr' produces an ordinary 'Value' (the unification domain),
---      while 'IdExpr' produces a constraint identifier. Constraint
---      identifiers cannot flow into unification or term construction;
---      the type system enforces this.
+--      'IdExpr' produces a constraint identifier, and 'BoolExpr'
+--      produces a boolean. Constraint identifiers cannot flow into
+--      unification or term construction; the operands of conditionals
+--      and short-circuiting operators are statically booleans. The
+--      bridge from 'ValExpr' to 'BoolExpr' is the explicit 'BFromVal'
+--      constructor, which carries a runtime check at the boundary.
 module YCHR.VM.Types
   ( -- * Program structure
     Program (..),
@@ -50,6 +53,7 @@ module YCHR.VM.Types
     -- * Expressions
     ValExpr (..),
     IdExpr (..),
+    BoolExpr (..),
     CallArg (..),
 
     -- * Runtime call stack frames
@@ -145,7 +149,7 @@ data Stmt
   | -- | Mutate an existing id-bound variable.
     AssignId Name IdExpr
   | -- | Conditional: condition, then-branch, else-branch.
-    If ValExpr [Stmt] [Stmt]
+    If BoolExpr [Stmt] [Stmt]
   | -- | Labeled loop over constraint store.
     --
     -- @Foreach label constraintType suspVar indexConditions body@
@@ -170,6 +174,8 @@ data Stmt
     Return ValExpr
   | -- | Evaluate a value expression for its side effects, discard the result.
     ExprStmt ValExpr
+  | -- | Evaluate a boolean expression for its side effects, discard the result.
+    BoolExprStmt BoolExpr
   | -- Constraint store operations
 
     -- | Add a constraint suspension to the constraint store.
@@ -227,14 +233,6 @@ data ValExpr
     -- sub-expressions ('CallExpr', 'MakeTerm', etc.). Used for guard
     -- expressions and the right-hand side of @is@.
     EvalDeep ValExpr
-  | -- Boolean operations
-
-    -- | Logical negation.
-    Not ValExpr
-  | -- | Logical conjunction (short-circuiting).
-    And ValExpr ValExpr
-  | -- | Logical disjunction (short-circuiting).
-    Or ValExpr ValExpr
   | -- Logical variables
 
     -- | Create a fresh unbound logical variable.
@@ -243,44 +241,65 @@ data ValExpr
 
     -- | Construct a compound term: @MakeTerm functor args@.
     MakeTerm Name [ValExpr]
-  | -- | Check whether a value is a compound term with the given
-    -- functor and arity: @MatchTerm expr functor arity@.
-    -- Returns a boolean.
-    MatchTerm ValExpr Name Int
   | -- | Extract an argument from a compound term by index (0-based).
     GetArg ValExpr Int
-  | -- Constraint observation
-
-    -- | Check whether a constraint (identified by its constraint
-    -- identifier) is still alive in the constraint store.
-    Alive IdExpr
-  | -- | Compare two constraint identifiers for equality.
-    IdEqual IdExpr IdExpr
-  | -- | Check whether a constraint suspension has the given type.
-    -- Used for dispatching in the reactivation procedure.
-    IsConstraintType IdExpr ConstraintType
-  | -- Propagation history
-
-    -- | Check that a rule has not previously fired with the given
-    -- combination of constraint identifiers. Returns a boolean.
-    NotInHistory RuleId [IdExpr]
-  | -- Unification and equality
-
-    -- | Unify two terms (tell semantics). Returns a boolean indicating
-    -- success. May mutate logical variables as a side effect. On
-    -- success, also pushes affected constraints onto the reactivation
-    -- queue (see 'DrainReactivationQueue').
-    Unify ValExpr ValExpr
-  | -- | Check equality of two terms (ask semantics). Returns a boolean.
-    -- No mutation. Uses Prolog @==@ semantics: two distinct unbound
-    -- variables are not equal.
-    Equal ValExpr ValExpr
   | -- Suspension field access
 
     -- | Extract a constraint argument from a suspension by index.
     FieldArg IdExpr ArgIndex
   | -- | Extract the constraint type tag from a suspension.
     FieldType IdExpr
+  deriving (Show, Eq, Lift)
+
+-- | Boolean-producing expressions. Operands of 'If', 'BNot', 'BAnd',
+-- and 'BOr' are statically booleans, so the interpreter never has to
+-- runtime-check the shape of a boolean condition. The 'BFromVal'
+-- constructor is the explicit bridge for a 'ValExpr' (typically a
+-- user-defined function call or an arbitrary host call) used in
+-- boolean position; it carries a runtime shape check at evaluation.
+data BoolExpr
+  = -- | Boolean literal.
+    BLit Bool
+  | -- | Logical negation.
+    BNot BoolExpr
+  | -- | Logical conjunction (short-circuiting).
+    BAnd BoolExpr BoolExpr
+  | -- | Logical disjunction (short-circuiting).
+    BOr BoolExpr BoolExpr
+  | -- | Check whether a value is a compound term with the given
+    -- functor and arity: @BMatchTerm expr functor arity@.
+    BMatchTerm ValExpr Name Int
+  | -- | Check equality of two terms (ask semantics). No mutation.
+    -- Uses Prolog @==@ semantics: two distinct unbound variables
+    -- are not equal.
+    BEqual ValExpr ValExpr
+  | -- | Compare two constraint identifiers for equality.
+    BIdEqual IdExpr IdExpr
+  | -- | Check whether a constraint (identified by its constraint
+    -- identifier) is still alive in the constraint store.
+    BAlive IdExpr
+  | -- | Check whether a constraint suspension has the given type.
+    -- Used for dispatching in the reactivation procedure.
+    BIsConstraintType IdExpr ConstraintType
+  | -- | Check that a rule has not previously fired with the given
+    -- combination of constraint identifiers.
+    BNotInHistory RuleId [IdExpr]
+  | -- | Unify two terms (tell semantics). Returns a boolean indicating
+    -- success. May mutate logical variables as a side effect. On
+    -- success, also pushes affected constraints onto the reactivation
+    -- queue (see 'DrainReactivationQueue').
+    BUnify ValExpr ValExpr
+  | -- | Bridge from 'ValExpr' to 'BoolExpr'. Used for value expressions
+    -- whose result the compiler cannot statically prove is a boolean
+    -- (e.g. user-defined function calls in guards, host calls whose
+    -- return kind isn't recorded). Runtime-checks that the wrapped
+    -- value evaluates to 'VBool'.
+    BFromVal ValExpr
+  | -- | Switch evaluation into deep deref-aware mode for the nested
+    -- boolean expression. Mirrors 'EvalDeep' for 'BoolExpr': any
+    -- 'ValExpr' or 'IdExpr' payloads inside the nested expression
+    -- are evaluated in deep-deref mode.
+    BEvalDeep BoolExpr
   deriving (Show, Eq, Lift)
 
 -- | Constraint-identifier-producing expressions.

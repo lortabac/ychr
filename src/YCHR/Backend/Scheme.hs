@@ -169,7 +169,7 @@ compileStmt (AssignId n e) =
 compileStmt (If cond thenBranch elseBranch) =
   SList
     [ SAtom "if",
-      compileValExpr cond,
+      compileBoolExpr cond,
       compileBody thenBranch,
       compileBody elseBranch
     ]
@@ -183,6 +183,8 @@ compileStmt (Return e) =
   SList [SAtom "%return", compileValExpr e]
 compileStmt (ExprStmt e) =
   compileValExpr e
+compileStmt (BoolExprStmt e) =
+  compileBoolExpr e
 compileStmt (Store e) =
   SList [SAtom "store-constraint", SAtom "%s", compileIdExpr e]
 compileStmt (Kill e) =
@@ -306,12 +308,6 @@ compileValExpr (HostCall n args) =
   compileHostCall n args
 compileValExpr (EvalDeep e) =
   compileEvalDeep e
-compileValExpr (Not e) =
-  SList [SAtom "not", compileValExpr e]
-compileValExpr (And a b) =
-  SList [SAtom "and", compileValExpr a, compileValExpr b]
-compileValExpr (Or a b) =
-  SList [SAtom "or", compileValExpr a, compileValExpr b]
 compileValExpr NewVar =
   SList [SAtom "make-var", SAtom "%s"]
 compileValExpr (MakeTerm (Name f) args) =
@@ -320,17 +316,34 @@ compileValExpr (MakeTerm (Name f) args) =
       compileSymbol f,
       SList (SAtom "vector" : map compileValExpr args)
     ]
-compileValExpr (MatchTerm e (Name f) arity) =
-  SList [SAtom "match-term", compileValExpr e, compileSymbol f, SInt arity]
 compileValExpr (GetArg e i) =
   SList [SAtom "get-arg", compileValExpr e, SInt i]
-compileValExpr (Alive e) =
-  SList [SAtom "alive-constraint?", compileIdExpr e]
-compileValExpr (IdEqual a b) =
+compileValExpr (FieldArg e (ArgIndex i)) =
+  SList [SAtom "constraint-arg", compileIdExpr e, SInt i]
+compileValExpr (FieldType e) =
+  SList [SAtom "constraint-type", compileIdExpr e]
+
+-- | Compile a 'BoolExpr' to a Scheme boolean expression. Scheme is
+-- dynamically typed, so 'BFromVal' is identical to compiling the
+-- wrapped 'ValExpr' — the runtime accepts whatever truthy value the
+-- underlying value produces.
+compileBoolExpr :: BoolExpr -> SExpr
+compileBoolExpr (BLit True) = SAtom "#t"
+compileBoolExpr (BLit False) = SAtom "#f"
+compileBoolExpr (BNot e) = SList [SAtom "not", compileBoolExpr e]
+compileBoolExpr (BAnd a b) = SList [SAtom "and", compileBoolExpr a, compileBoolExpr b]
+compileBoolExpr (BOr a b) = SList [SAtom "or", compileBoolExpr a, compileBoolExpr b]
+compileBoolExpr (BMatchTerm e (Name f) arity) =
+  SList [SAtom "match-term", compileValExpr e, compileSymbol f, SInt arity]
+compileBoolExpr (BEqual a b) =
+  SList [SAtom "equal?/chr", compileValExpr a, compileValExpr b]
+compileBoolExpr (BIdEqual a b) =
   SList [SAtom "id-equal?", compileIdExpr a, compileIdExpr b]
-compileValExpr (IsConstraintType e (ConstraintType ct)) =
+compileBoolExpr (BAlive e) =
+  SList [SAtom "alive-constraint?", compileIdExpr e]
+compileBoolExpr (BIsConstraintType e (ConstraintType ct)) =
   SList [SAtom "is-constraint-type?", compileIdExpr e, SInt ct]
-compileValExpr (NotInHistory (RuleId rid) es) =
+compileBoolExpr (BNotInHistory (RuleId rid) es) =
   SList
     [ SAtom "not-in-history?",
       SAtom "%s",
@@ -340,14 +353,10 @@ compileValExpr (NotInHistory (RuleId rid) es) =
             : map (\e -> SList [SAtom "constraint-id", compileIdExpr e]) es
         )
     ]
-compileValExpr (Unify a b) =
+compileBoolExpr (BUnify a b) =
   SList [SAtom "%unify", SAtom "%s", compileValExpr a, compileValExpr b]
-compileValExpr (Equal a b) =
-  SList [SAtom "equal?/chr", compileValExpr a, compileValExpr b]
-compileValExpr (FieldArg e (ArgIndex i)) =
-  SList [SAtom "constraint-arg", compileIdExpr e, SInt i]
-compileValExpr (FieldType e) =
-  SList [SAtom "constraint-type", compileIdExpr e]
+compileBoolExpr (BFromVal e) = compileValExpr e
+compileBoolExpr (BEvalDeep e) = compileBoolEvalDeep e
 
 compileIdExpr :: IdExpr -> SExpr
 compileIdExpr (IdVar n) = SAtom (mangleName n)
@@ -447,11 +456,29 @@ compileEvalDeep (Var n) = SList [SAtom "deref", SAtom (mangleName n)]
 compileEvalDeep (HostCall n args) = compileHostCall n args
 compileEvalDeep (CallExpr n args) =
   SList (SAtom (mangleName n) : SAtom "%s" : map compileCallArgDeep args)
-compileEvalDeep e = compileValExpr e -- MakeTerm, And, Or, etc.
+compileEvalDeep e = compileValExpr e -- MakeTerm, GetArg, FieldArg, etc.
 
 compileCallArgDeep :: CallArg -> SExpr
 compileCallArgDeep (AVal e) = compileEvalDeep e
 compileCallArgDeep (AId e) = compileIdExpr e
+
+-- | Like 'compileBoolExpr', but propagates deep-deref into 'ValExpr'
+-- and 'IdExpr' payloads. Mirrors 'compileEvalDeep' for booleans.
+compileBoolEvalDeep :: BoolExpr -> SExpr
+compileBoolEvalDeep (BNot e) = SList [SAtom "not", compileBoolEvalDeep e]
+compileBoolEvalDeep (BAnd a b) =
+  SList [SAtom "and", compileBoolEvalDeep a, compileBoolEvalDeep b]
+compileBoolEvalDeep (BOr a b) =
+  SList [SAtom "or", compileBoolEvalDeep a, compileBoolEvalDeep b]
+compileBoolEvalDeep (BMatchTerm e (Name f) arity) =
+  SList [SAtom "match-term", compileEvalDeep e, compileSymbol f, SInt arity]
+compileBoolEvalDeep (BEqual a b) =
+  SList [SAtom "equal?/chr", compileEvalDeep a, compileEvalDeep b]
+compileBoolEvalDeep (BUnify a b) =
+  SList [SAtom "%unify", SAtom "%s", compileEvalDeep a, compileEvalDeep b]
+compileBoolEvalDeep (BFromVal e) = compileEvalDeep e
+compileBoolEvalDeep (BEvalDeep e) = compileBoolEvalDeep e
+compileBoolEvalDeep e = compileBoolExpr e
 
 -- ---------------------------------------------------------------------------
 -- Unknown host call stubs
@@ -502,7 +529,7 @@ collectStmtHC (LetId _ e) = collectIdHC e
 collectStmtHC (AssignVal _ e) = collectValHC e
 collectStmtHC (AssignId _ e) = collectIdHC e
 collectStmtHC (If c ts es) =
-  collectValHC c
+  collectBoolHC c
     <> foldMap collectStmtHC ts
     <> foldMap collectStmtHC es
 collectStmtHC (Foreach _ _ _ conds body) =
@@ -510,6 +537,7 @@ collectStmtHC (Foreach _ _ _ conds body) =
     <> foldMap collectStmtHC body
 collectStmtHC (Return e) = collectValHC e
 collectStmtHC (ExprStmt e) = collectValHC e
+collectStmtHC (BoolExprStmt e) = collectBoolHC e
 collectStmtHC (Store e) = collectIdHC e
 collectStmtHC (Kill e) = collectIdHC e
 collectStmtHC (AddHistory _ es) = foldMap collectIdHC es
@@ -521,21 +549,27 @@ collectValHC :: ValExpr -> Set Text
 collectValHC (HostCall (Name n) args) = Set.singleton n <> foldMap collectValHC args
 collectValHC (EvalDeep e) = collectValHC e
 collectValHC (CallExpr _ args) = foldMap collectArgHC args
-collectValHC (Not e) = collectValHC e
-collectValHC (And a b) = collectValHC a <> collectValHC b
-collectValHC (Or a b) = collectValHC a <> collectValHC b
 collectValHC (MakeTerm _ args) = foldMap collectValHC args
-collectValHC (MatchTerm e _ _) = collectValHC e
 collectValHC (GetArg e _) = collectValHC e
-collectValHC (Alive e) = collectIdHC e
-collectValHC (IdEqual a b) = collectIdHC a <> collectIdHC b
-collectValHC (IsConstraintType e _) = collectIdHC e
-collectValHC (NotInHistory _ es) = foldMap collectIdHC es
-collectValHC (Unify a b) = collectValHC a <> collectValHC b
-collectValHC (Equal a b) = collectValHC a <> collectValHC b
 collectValHC (FieldArg e _) = collectIdHC e
 collectValHC (FieldType e) = collectIdHC e
 collectValHC _ = Set.empty
+
+-- | Collect host call names from a boolean expression.
+collectBoolHC :: BoolExpr -> Set Text
+collectBoolHC (BNot e) = collectBoolHC e
+collectBoolHC (BAnd a b) = collectBoolHC a <> collectBoolHC b
+collectBoolHC (BOr a b) = collectBoolHC a <> collectBoolHC b
+collectBoolHC (BMatchTerm e _ _) = collectValHC e
+collectBoolHC (BEqual a b) = collectValHC a <> collectValHC b
+collectBoolHC (BIdEqual a b) = collectIdHC a <> collectIdHC b
+collectBoolHC (BAlive e) = collectIdHC e
+collectBoolHC (BIsConstraintType e _) = collectIdHC e
+collectBoolHC (BNotInHistory _ es) = foldMap collectIdHC es
+collectBoolHC (BUnify a b) = collectValHC a <> collectValHC b
+collectBoolHC (BFromVal e) = collectValHC e
+collectBoolHC (BEvalDeep e) = collectBoolHC e
+collectBoolHC (BLit _) = Set.empty
 
 collectIdHC :: IdExpr -> Set Text
 collectIdHC (IdVar _) = Set.empty

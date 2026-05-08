@@ -41,7 +41,7 @@ import Data.Text (Text)
 import YCHR.Desugared qualified as D
 import YCHR.Types (HeadArg, HeadConstraint, Identifier, Name, RuleId)
 import YCHR.Types qualified as Types
-import YCHR.VM (ArgIndex, ConstraintType, Stmt, ValExpr)
+import YCHR.VM (ArgIndex, BoolExpr, ConstraintType, Stmt, ValExpr)
 
 -- | Errors raised by any pass in the CHR-to-VM compiler. Wrapped in
 -- 'YCHR.Parsed.AnnP' at the use site to carry the source location and
@@ -154,7 +154,7 @@ data CompiledGuards = CompiledGuards
     -- | Residual boolean check that did not lift into the index map.
     -- 'Nothing' when every check guard lifted or when there were no
     -- check guards.
-    residualCheck :: Maybe ValExpr,
+    residualCheck :: Maybe BoolExpr,
     -- | 'VarMap' extended with the bindings introduced by match
     -- guards.
     extendedVarMap :: VarMap

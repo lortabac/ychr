@@ -124,19 +124,19 @@ activateLeq =
       LetVal "X" (FieldArg (IdVar "susp") (ArgIndex 0)),
       LetVal "Y" (FieldArg (IdVar "susp") (ArgIndex 1)),
       LetVal "d" (CallExpr "occurrence_leq2_1" occCallArgs),
-      If (Var "d") [Return (Lit (BoolLit True))] [],
+      If (BFromVal (Var "d")) [Return (Lit (BoolLit True))] [],
       LetVal "d" (CallExpr "occurrence_leq2_2" occCallArgs),
-      If (Var "d") [Return (Lit (BoolLit True))] [],
+      If (BFromVal (Var "d")) [Return (Lit (BoolLit True))] [],
       LetVal "d" (CallExpr "occurrence_leq2_3" occCallArgs),
-      If (Var "d") [Return (Lit (BoolLit True))] [],
+      If (BFromVal (Var "d")) [Return (Lit (BoolLit True))] [],
       LetVal "d" (CallExpr "occurrence_leq2_4" occCallArgs),
-      If (Var "d") [Return (Lit (BoolLit True))] [],
+      If (BFromVal (Var "d")) [Return (Lit (BoolLit True))] [],
       LetVal "d" (CallExpr "occurrence_leq2_5" occCallArgs),
-      If (Var "d") [Return (Lit (BoolLit True))] [],
+      If (BFromVal (Var "d")) [Return (Lit (BoolLit True))] [],
       LetVal "d" (CallExpr "occurrence_leq2_6" occCallArgs),
-      If (Var "d") [Return (Lit (BoolLit True))] [],
+      If (BFromVal (Var "d")) [Return (Lit (BoolLit True))] [],
       LetVal "d" (CallExpr "occurrence_leq2_7" occCallArgs),
-      If (Var "d") [Return (Lit (BoolLit True))] [],
+      If (BFromVal (Var "d")) [Return (Lit (BoolLit True))] [],
       Return (Lit (BoolLit False))
     ]
   where
@@ -148,7 +148,7 @@ occurrenceLeq1 =
     "occurrence_leq2_1"
     ["id", "X", "Y"]
     [ If
-        (Equal (Var "X") (Var "Y"))
+        (BEqual (Var "X") (Var "Y"))
         [ Kill (IdVar "id"),
           Return (Lit (BoolLit True))
         ]
@@ -170,17 +170,17 @@ occurrenceLeq2 =
           LetVal "pA0" (FieldArg (IdVar "susp") (ArgIndex 0)),
           LetVal "pA1" (FieldArg (IdVar "susp") (ArgIndex 1)),
           If
-            (And (Alive (IdVar "id")) (Alive (IdVar "pId")))
+            (BAnd (BAlive (IdVar "id")) (BAlive (IdVar "pId")))
             [ If
-                (Not (IdEqual (IdVar "pId") (IdVar "id")))
+                (BNot (BIdEqual (IdVar "pId") (IdVar "id")))
                 [ If
-                    ( And
-                        (Equal (Var "pA0") (Var "Y"))
-                        (Equal (Var "pA1") (Var "X"))
+                    ( BAnd
+                        (BEqual (Var "pA0") (Var "Y"))
+                        (BEqual (Var "pA1") (Var "X"))
                     )
                     [ Kill (IdVar "pId"),
                       Kill (IdVar "id"),
-                      ExprStmt (Unify (Var "pA0") (Var "pA1")),
+                      BoolExprStmt (BUnify (Var "pA0") (Var "pA1")),
                       DrainReactivationQueue
                         "rs"
                         [ExprStmt (CallExpr "reactivate_dispatch" [AId (IdVar "rs")])],
@@ -209,17 +209,17 @@ occurrenceLeq3 =
           LetVal "pA0" (FieldArg (IdVar "susp") (ArgIndex 0)),
           LetVal "pA1" (FieldArg (IdVar "susp") (ArgIndex 1)),
           If
-            (And (Alive (IdVar "id")) (Alive (IdVar "pId")))
+            (BAnd (BAlive (IdVar "id")) (BAlive (IdVar "pId")))
             [ If
-                (Not (IdEqual (IdVar "pId") (IdVar "id")))
+                (BNot (BIdEqual (IdVar "pId") (IdVar "id")))
                 [ If
-                    ( And
-                        (Equal (Var "X") (Var "pA1"))
-                        (Equal (Var "Y") (Var "pA0"))
+                    ( BAnd
+                        (BEqual (Var "X") (Var "pA1"))
+                        (BEqual (Var "Y") (Var "pA0"))
                     )
                     [ Kill (IdVar "pId"),
                       Kill (IdVar "id"),
-                      ExprStmt (Unify (Var "X") (Var "Y")),
+                      BoolExprStmt (BUnify (Var "X") (Var "Y")),
                       DrainReactivationQueue
                         "rs"
                         [ExprStmt (CallExpr "reactivate_dispatch" [AId (IdVar "rs")])],
@@ -248,13 +248,13 @@ occurrenceLeq4 =
           LetVal "pA0" (FieldArg (IdVar "susp") (ArgIndex 0)),
           LetVal "pA1" (FieldArg (IdVar "susp") (ArgIndex 1)),
           If
-            (And (Alive (IdVar "id")) (Alive (IdVar "pId")))
+            (BAnd (BAlive (IdVar "id")) (BAlive (IdVar "pId")))
             [ If
-                (Not (IdEqual (IdVar "pId") (IdVar "id")))
+                (BNot (BIdEqual (IdVar "pId") (IdVar "id")))
                 [ If
-                    ( And
-                        (Equal (Var "pA0") (Var "X"))
-                        (Equal (Var "pA1") (Var "Y"))
+                    ( BAnd
+                        (BEqual (Var "pA0") (Var "X"))
+                        (BEqual (Var "pA1") (Var "Y"))
                     )
                     [ Kill (IdVar "id"),
                       Return (Lit (BoolLit True))
@@ -282,13 +282,13 @@ occurrenceLeq5 =
           LetVal "pA0" (FieldArg (IdVar "susp") (ArgIndex 0)),
           LetVal "pA1" (FieldArg (IdVar "susp") (ArgIndex 1)),
           If
-            (And (Alive (IdVar "id")) (Alive (IdVar "pId")))
+            (BAnd (BAlive (IdVar "id")) (BAlive (IdVar "pId")))
             [ If
-                (Not (IdEqual (IdVar "pId") (IdVar "id")))
+                (BNot (BIdEqual (IdVar "pId") (IdVar "id")))
                 [ If
-                    ( And
-                        (Equal (Var "X") (Var "pA0"))
-                        (Equal (Var "Y") (Var "pA1"))
+                    ( BAnd
+                        (BEqual (Var "X") (Var "pA0"))
+                        (BEqual (Var "Y") (Var "pA1"))
                     )
                     [Kill (IdVar "pId")]
                     []
@@ -314,13 +314,13 @@ occurrenceLeq6 =
           LetVal "pA0" (FieldArg (IdVar "susp") (ArgIndex 0)),
           LetVal "pA1" (FieldArg (IdVar "susp") (ArgIndex 1)),
           If
-            (And (Alive (IdVar "id")) (Alive (IdVar "pId")))
+            (BAnd (BAlive (IdVar "id")) (BAlive (IdVar "pId")))
             [ If
-                (Not (IdEqual (IdVar "pId") (IdVar "id")))
+                (BNot (BIdEqual (IdVar "pId") (IdVar "id")))
                 [ If
-                    (Equal (Var "pA1") (Var "X"))
+                    (BEqual (Var "pA1") (Var "X"))
                     [ If
-                        (NotInHistory (RuleId 0) [IdVar "pId", IdVar "id"])
+                        (BNotInHistory (RuleId 0) [IdVar "pId", IdVar "id"])
                         [ AddHistory (RuleId 0) [IdVar "pId", IdVar "id"],
                           ExprStmt
                             ( CallExpr
@@ -328,7 +328,7 @@ occurrenceLeq6 =
                                 [AVal (Var "pA0"), AVal (Var "Y")]
                             ),
                           If
-                            (Not (Alive (IdVar "id")))
+                            (BNot (BAlive (IdVar "id")))
                             [Return (Lit (BoolLit True))]
                             []
                         ]
@@ -357,13 +357,13 @@ occurrenceLeq7 =
           LetVal "pA0" (FieldArg (IdVar "susp") (ArgIndex 0)),
           LetVal "pA1" (FieldArg (IdVar "susp") (ArgIndex 1)),
           If
-            (And (Alive (IdVar "id")) (Alive (IdVar "pId")))
+            (BAnd (BAlive (IdVar "id")) (BAlive (IdVar "pId")))
             [ If
-                (Not (IdEqual (IdVar "pId") (IdVar "id")))
+                (BNot (BIdEqual (IdVar "pId") (IdVar "id")))
                 [ If
-                    (Equal (Var "pA0") (Var "Y"))
+                    (BEqual (Var "pA0") (Var "Y"))
                     [ If
-                        (NotInHistory (RuleId 0) [IdVar "id", IdVar "pId"])
+                        (BNotInHistory (RuleId 0) [IdVar "id", IdVar "pId"])
                         [ AddHistory (RuleId 0) [IdVar "id", IdVar "pId"],
                           ExprStmt
                             ( CallExpr
@@ -371,7 +371,7 @@ occurrenceLeq7 =
                                 [AVal (Var "X"), AVal (Var "pA1")]
                             ),
                           If
-                            (Not (Alive (IdVar "id")))
+                            (BNot (BAlive (IdVar "id")))
                             [Return (Lit (BoolLit True))]
                             []
                         ]
@@ -392,7 +392,7 @@ reactivateDispatch =
     "reactivate_dispatch"
     ["susp"]
     [ If
-        (IsConstraintType (IdVar "susp") leqType)
+        (BIsConstraintType (IdVar "susp") leqType)
         [ExprStmt (CallExpr "activate_leq2" [AId (IdVar "susp")])]
         []
     ]
