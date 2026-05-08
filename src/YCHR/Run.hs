@@ -98,7 +98,7 @@ import YCHR.Runtime.Session
     withCHRExtra,
   )
 import YCHR.Runtime.Store (CHRStore, aliveConstraint)
-import YCHR.Runtime.Types (RuntimeVal (..), Value (..))
+import YCHR.Runtime.Types (CallVal (..), Value (..))
 import YCHR.Runtime.Var (Unify, deref, equal, newVar, unify)
 import YCHR.TypeCheck (typeCheckGoals)
 import YCHR.Types (Constraint (..), ConstraintType, Term (..))
@@ -158,7 +158,7 @@ runProgramWithGoalDSL ::
   HostCallRegistry ->
   Constraint ->
   IO
-    ( RuntimeVal,
+    ( Value,
       Map Text Term
     )
 runProgramWithGoalDSL cp hostCalls constraint = do
@@ -172,7 +172,7 @@ runProgramWithGoalDSL cp hostCalls constraint = do
   withCHR (toSessionInput cp) hostCalls $
     evalState (Map.empty :: Map Text Value) $ do
       argVals <- traverse termToValue resolved.args
-      result <- callProc procMap hostCalls tellName (map RVal argVals)
+      result <- callProc procMap hostCalls tellName (map CVal argVals)
       bindings <- get >>= Map.traverseWithKey valueToTerm
       pure (result, bindings)
 
@@ -182,7 +182,7 @@ runProgramWithGoal ::
   HostCallRegistry ->
   Text ->
   IO
-    ( RuntimeVal,
+    ( Value,
       Map Text Term
     )
 runProgramWithGoal cp hostCalls src =
@@ -367,7 +367,7 @@ executeBodyGoal _ (D.BodyUnify l r) = do
   drainReactivation procMap hc'
 executeBodyGoal hc (D.BodyHostStmt f args) = do
   argVals <- traverse termToValue args
-  _ <- hostCall (Map.lookup (Name f) hc) f (map RVal argVals)
+  _ <- hostCall (Map.lookup (Name f) hc) f argVals
   pure ()
 executeBodyGoal hc (D.BodyIs v expr) = do
   result <- evalNestedExpr hc expr
@@ -388,12 +388,12 @@ executeBodyGoal hc (D.BodyFunctionCall (Types.Unqualified "$call") args) = do
   argVals <- traverse termToValue args
   let n = length args - 1
       dispatchName = Name ("call_" <> T.pack (show n))
-  _ <- callProc procMap hc dispatchName (map RVal argVals)
+  _ <- callProc procMap hc dispatchName (map CVal argVals)
   pure ()
 executeBodyGoal hc (D.BodyFunctionCall name args) = do
   CHRRep procMap _ _ _ <- getStaticRep
   argVals <- traverse termToValue args
-  _ <- callProc procMap hc (funcProcName name (length argVals)) (map RVal argVals)
+  _ <- callProc procMap hc (funcProcName name (length argVals)) (map CVal argVals)
   pure ()
 
 -- | Raise a runtime error describing a failed unification.
@@ -414,7 +414,7 @@ hostCall ::
     IOE :> es,
     State CallStack :> es
   ) =>
-  Maybe HostCallFn -> Text -> [RuntimeVal] -> Eff es RuntimeVal
+  Maybe HostCallFn -> Text -> [Value] -> Eff es Value
 hostCall (Just (HostCallFn f)) _ args = f args
 hostCall Nothing name _ = error $ "Unknown host function: " ++ T.unpack name
 
@@ -429,7 +429,7 @@ drainReactivation procMap hc =
     alive <- aliveConstraint sid
     when alive $
       void $
-        callProc procMap hc (Name "reactivate_dispatch") [RConstraint sid]
+        callProc procMap hc (Name "reactivate_dispatch") [CId sid]
 
 -- | Evaluate a term as a nested expression (used for @is@ RHS and guard
 -- expressions). Handles host calls (@host:f(args)@), user-defined function
@@ -459,28 +459,19 @@ evalNestedExpr hc (CompoundTerm (Types.Unqualified "$call") args)
       argVals <- traverse (evalNestedExpr hc) args
       let n = length args - 1
           dispatchName = Name ("call_" <> T.pack (show n))
-      result <- callProc procMap hc dispatchName (map RVal argVals)
-      case result of
-        RVal val -> pure val
-        _ -> error "call returned non-value"
+      callProc procMap hc dispatchName (map CVal argVals)
 evalNestedExpr _ (CompoundTerm (Types.Unqualified "term") [arg]) =
   termToValue arg
 evalNestedExpr hc (CompoundTerm (Types.Qualified "host" f) args) = do
   argVals <- traverse (evalNestedExpr hc) args
-  result <- hostCall (Map.lookup (Name f) hc) f (map RVal argVals)
-  case result of
-    RVal val -> pure val
-    _ -> error "host call returned non-value in expression position"
+  hostCall (Map.lookup (Name f) hc) f argVals
 evalNestedExpr hc (CompoundTerm name args) = do
   CHRRep procMap _ _ _ <- getStaticRep
   let fnName = funcProcName name (length args)
   if Map.member fnName procMap
     then do
       argVals <- traverse (evalNestedExpr hc) args
-      result <- callProc procMap hc fnName (map RVal argVals)
-      case result of
-        RVal val -> pure val
-        _ -> error "function call returned non-value in expression position"
+      callProc procMap hc fnName (map CVal argVals)
     else VTerm (vmName name).unName <$> traverse termToValue args
 
 -- | Compile lifted query lambdas into VM procedures. Discards the

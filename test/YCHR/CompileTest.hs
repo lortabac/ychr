@@ -43,7 +43,7 @@ findForeach (s : rest) = case s of
       Nothing -> findForeach rest
   _ -> findForeach rest
 
-foreachConditions :: VM.Stmt -> [(VM.ArgIndex, VM.Expr)]
+foreachConditions :: VM.Stmt -> [(VM.ArgIndex, VM.ValExpr)]
 foreachConditions (VM.Foreach _ _ _ conds _) = conds
 foreachConditions _ = error "foreachConditions: not a Foreach"
 
@@ -60,7 +60,7 @@ findProcedure prog wanted =
 assertForeachConditions ::
   CompiledProgram ->
   Text ->
-  [(VM.ArgIndex, VM.Expr)] ->
+  [(VM.ArgIndex, VM.ValExpr)] ->
   IO ()
 assertForeachConditions prog procName expected =
   case findProcedure prog procName of

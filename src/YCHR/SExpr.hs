@@ -5,9 +5,10 @@
 -- The s-expression grammar:
 --
 -- @
--- sexpr  = atom | int | string | list
+-- sexpr  = atom | int | float | string | list
 -- atom   = [a-zA-Z_][a-zA-Z0-9_-]*
 -- int    = [-]?[0-9]+
+-- float  = [-]?[0-9]+\.[0-9]+([eE][-+]?[0-9]+)?
 -- string = '"' (escape | [^"\\])* '"'
 -- list   = '(' sexpr* ')'
 -- @
@@ -27,6 +28,7 @@ import Data.Void (Void)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
+import Text.Read (readMaybe)
 
 -- | A generic s-expression.
 data SExpr
@@ -90,10 +92,12 @@ pString = SString . T.pack <$> (char '"' *> manyTill L.charLiteral (char '"'))
 
 pAtomOrInt :: Parser SExpr
 pAtomOrInt = do
-  tok <- takeWhile1P (Just "atom or integer") isAtomChar
+  tok <- takeWhile1P (Just "atom, integer, or float") isAtomChar
   pure $ case readInt tok of
     Just n -> SInt n
-    Nothing -> SAtom tok
+    Nothing
+      | T.any (== '.') tok, Just f <- readMaybe (T.unpack tok) -> SFloat f
+      | otherwise -> SAtom tok
 
 readInt :: Text -> Maybe Int
 readInt t = case T.uncons t of
@@ -105,8 +109,10 @@ readInt t = case T.uncons t of
   where
     isDigit c = c >= '0' && c <= '9'
 
+-- | A token character. Includes @.@ to support float literals; tokens
+-- containing @.@ are dispatched to 'SFloat' if they parse as a Double.
 isAtomChar :: Char -> Bool
-isAtomChar c = isAlphaNum c || c == '_' || c == '-'
+isAtomChar c = isAlphaNum c || c == '_' || c == '-' || c == '.'
 
 -- | Whitespace consumer (spaces + line comments starting with @;@).
 sc :: Parser ()

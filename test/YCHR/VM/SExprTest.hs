@@ -31,10 +31,14 @@ roundtripTests =
     testCase "procedure with params" $
       roundtrip
         (Program 1 [Types.Unqualified "leq"] 0 [] [Procedure "tell_leq2" ["X", "Y"] []]),
-    testCase "let statement" $
-      roundtrip (mkProg [Let "x" (Lit (IntLit 42))]),
-    testCase "assign statement" $
-      roundtrip (mkProg [Assign "x" (Lit (BoolLit True))]),
+    testCase "let-val statement" $
+      roundtrip (mkProg [LetVal "x" (Lit (IntLit 42))]),
+    testCase "let-id statement" $
+      roundtrip (mkProg [LetId "id" (CreateConstraint (ConstraintType 0) [Lit (IntLit 1)])]),
+    testCase "assign-val statement" $
+      roundtrip (mkProg [AssignVal "x" (Lit (BoolLit True))]),
+    testCase "assign-id statement" $
+      roundtrip (mkProg [AssignId "id" (IdVar "other")]),
     testCase "if statement" $
       roundtrip
         ( mkProg
@@ -58,7 +62,7 @@ roundtripTests =
                 (ConstraintType 0)
                 "susp"
                 [(ArgIndex 0, Var "x"), (ArgIndex 1, Lit (IntLit 3))]
-                [ExprStmt (Var "susp")]
+                [ExprStmt (FieldType (IdVar "susp"))]
             ]
         ),
     testCase "foreach with empty conditions" $
@@ -69,63 +73,64 @@ roundtripTests =
                 (ConstraintType 1)
                 "s"
                 []
-                [ExprStmt (Var "s")]
+                [ExprStmt (FieldType (IdVar "s"))]
             ]
         ),
     testCase "continue and break" $
       roundtrip (mkProg [Continue "L1", Break "L2"]),
     testCase "store and kill" $
-      roundtrip (mkProg [Store (Var "id"), Kill (Var "id")]),
+      roundtrip (mkProg [Store (IdVar "id"), Kill (IdVar "id")]),
     testCase "add-history" $
-      roundtrip (mkProg [AddHistory (RuleId 0) [Var "id1", Var "id2"]]),
+      roundtrip (mkProg [AddHistory (RuleId 0) [IdVar "id1", IdVar "id2"]]),
     testCase "drain-reactivation-queue" $
       roundtrip
         ( mkProg
             [ DrainReactivationQueue
                 "rs"
-                [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])]
+                [ExprStmt (CallExpr "reactivate_dispatch" [AId (IdVar "rs")])]
             ]
         ),
     testCase "all expression types" $
       roundtrip
         ( mkProg
-            [ Let "a" (Var "x"),
-              Let "b" (Lit (IntLit 42)),
-              Let "c" (Lit (AtomLit "foo")),
-              Let "d" (Lit (TextLit "hello world")),
-              Let "e" (Lit (BoolLit True)),
-              Let "f" (Lit (BoolLit False)),
-              Let "g" (Lit WildcardLit),
-              Let "h" (CallExpr "proc" [Var "a", Var "b"]),
-              Let "i" (HostCall "+" [Var "a", Var "b"]),
-              Let "j" (EvalDeep (Var "expr")),
-              Let "k" (Not (Var "a")),
-              Let "l" (And (Var "a") (Var "b")),
-              Let "m" (Or (Var "a") (Var "b")),
-              Let "n" NewVar,
-              Let "o" (MakeTerm "f" [Var "a", Var "b"]),
-              Let "p" (MatchTerm (Var "x") "f" 2),
-              Let "q" (GetArg (Var "x") 0),
-              Let "r" (CreateConstraint (ConstraintType 0) [Var "a"]),
-              Let "s" (Alive (Var "id")),
-              Let "t" (IdEqual (Var "id1") (Var "id2")),
-              Let "u" (IsConstraintType (Var "s") (ConstraintType 1)),
-              Let "v" (NotInHistory (RuleId 0) [Var "id1", Var "id2"]),
-              Let "w" (Unify (Var "a") (Var "b")),
-              Let "x2" (Equal (Var "a") (Var "b")),
-              Let "y" (FieldGet (Var "s") FieldId),
-              Let "z" (FieldGet (Var "s") (FieldArg (ArgIndex 0))),
-              Let "z2" (FieldGet (Var "s") FieldType)
+            [ LetVal "a" (Var "x"),
+              LetVal "b" (Lit (IntLit 42)),
+              LetVal "b2" (Lit (FloatLit 3.14)),
+              LetVal "c" (Lit (AtomLit "foo")),
+              LetVal "d" (Lit (TextLit "hello world")),
+              LetVal "e" (Lit (BoolLit True)),
+              LetVal "f" (Lit (BoolLit False)),
+              LetVal "g" (Lit WildcardLit),
+              LetVal "h" (CallExpr "proc" [AVal (Var "a"), AVal (Var "b")]),
+              LetVal "i" (HostCall "+" [Var "a", Var "b"]),
+              LetVal "j" (EvalDeep (Var "expr")),
+              LetVal "k" (Not (Var "a")),
+              LetVal "l" (And (Var "a") (Var "b")),
+              LetVal "m" (Or (Var "a") (Var "b")),
+              LetVal "n" NewVar,
+              LetVal "o" (MakeTerm "f" [Var "a", Var "b"]),
+              LetVal "p" (MatchTerm (Var "x") "f" 2),
+              LetVal "q" (GetArg (Var "x") 0),
+              LetId "r" (CreateConstraint (ConstraintType 0) [Var "a"]),
+              LetVal "s" (Alive (IdVar "id")),
+              LetVal "t" (IdEqual (IdVar "id1") (IdVar "id2")),
+              LetVal "u" (IsConstraintType (IdVar "s") (ConstraintType 1)),
+              LetVal "v" (NotInHistory (RuleId 0) [IdVar "id1", IdVar "id2"]),
+              LetVal "w" (Unify (Var "a") (Var "b")),
+              LetVal "x2" (Equal (Var "a") (Var "b")),
+              LetId "y" (IdVar "s"),
+              LetVal "z" (FieldArg (IdVar "s") (ArgIndex 0)),
+              LetVal "z2" (FieldType (IdVar "s"))
             ]
         ),
     testCase "call-expr with zero args" $
       roundtrip (mkProg [ExprStmt (CallExpr "noop" [])]),
     testCase "make-term with zero args" $
-      roundtrip (mkProg [Let "x" (MakeTerm "nil" [])]),
+      roundtrip (mkProg [LetVal "x" (MakeTerm "nil" [])]),
     testCase "negative integer" $
-      roundtrip (mkProg [Let "x" (Lit (IntLit (-5)))]),
+      roundtrip (mkProg [LetVal "x" (Lit (IntLit (-5)))]),
     testCase "string with special characters" $
-      roundtrip (mkProg [Let "x" (Lit (TextLit "hello\nworld\t\"quoted\""))]),
+      roundtrip (mkProg [LetVal "x" (Lit (TextLit "hello\nworld\t\"quoted\""))]),
     testCase "multi-procedure program" $
       roundtrip
         ( Program
@@ -136,7 +141,7 @@ roundtripTests =
             [ Procedure
                 "tell_a1"
                 ["X"]
-                [ Let
+                [ LetId
                     "id"
                     ( CreateConstraint
                         (ConstraintType 0)
@@ -144,14 +149,14 @@ roundtripTests =
                             "X"
                         ]
                     ),
-                  Store (Var "id"),
-                  ExprStmt (CallExpr "activate_a1" [Var "id"])
+                  Store (IdVar "id"),
+                  ExprStmt (CallExpr "activate_a1" [AId (IdVar "id")])
                 ],
               Procedure
                 "activate_a1"
                 ["susp"]
-                [ Let "id" (Var "susp"),
-                  Let "X" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))),
+                [ LetId "id" (IdVar "susp"),
+                  LetVal "X" (FieldArg (IdVar "susp") (ArgIndex 0)),
                   Return (Lit (BoolLit False))
                 ],
               Procedure
@@ -159,10 +164,10 @@ roundtripTests =
                 ["susp"]
                 [ If
                     ( IsConstraintType
-                        (Var "susp")
+                        (IdVar "susp")
                         (ConstraintType 0)
                     )
-                    [ExprStmt (CallExpr "activate_a1" [Var "susp"])]
+                    [ExprStmt (CallExpr "activate_a1" [AId (IdVar "susp")])]
                     []
                 ]
             ]
@@ -196,13 +201,15 @@ formatTests =
         (serializeProg (mkProg [ExprStmt (Var "x")]))
         "(program 0 (type-names) 0 (rule-names) (procedure \"p\" () (expr-stmt (var \"x\"))))",
     testCase "literals inline without wrapper" $ do
-      assertContains (serializeProg (mkProg [Let "x" (Lit (BoolLit True))])) "true"
-      assertContains (serializeProg (mkProg [Let "x" (Lit (BoolLit False))])) "false"
-      assertContains (serializeProg (mkProg [Let "x" (Lit WildcardLit)])) "wildcard"
-      assertContains (serializeProg (mkProg [Let "x" (Lit (IntLit 7))])) "(int 7)"
-      assertContains (serializeProg (mkProg [Let "x" (Lit (AtomLit "foo"))])) "(atom \"foo\")",
+      assertContains (serializeProg (mkProg [LetVal "x" (Lit (BoolLit True))])) "true"
+      assertContains (serializeProg (mkProg [LetVal "x" (Lit (BoolLit False))])) "false"
+      assertContains (serializeProg (mkProg [LetVal "x" (Lit WildcardLit)])) "wildcard"
+      assertContains (serializeProg (mkProg [LetVal "x" (Lit (IntLit 7))])) "(int 7)"
+      assertContains
+        (serializeProg (mkProg [LetVal "x" (Lit (AtomLit "foo"))]))
+        "(atom \"foo\")",
     testCase "new-var is a bare atom" $
-      assertContains (serializeProg (mkProg [Let "x" NewVar])) "new-var",
+      assertContains (serializeProg (mkProg [LetVal "x" NewVar])) "new-var",
     testCase "exports and symbol table roundtrip" $
       let vmp =
             VMProgram

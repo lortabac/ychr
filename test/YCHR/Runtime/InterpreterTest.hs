@@ -4,6 +4,7 @@
 module YCHR.Runtime.InterpreterTest (tests) where
 
 import Data.Foldable (toList)
+import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
 import Effectful
 import Effectful.State.Static.Local (State, evalState)
@@ -16,12 +17,13 @@ import YCHR.Runtime.Interpreter
   ( HostCallFn (..),
     HostCallRegistry,
     baseHostCallRegistry,
+    bindParams,
     callProc,
     interpret,
   )
 import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
 import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive, runCHRStore)
-import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
+import YCHR.Runtime.Types (CallVal (..), SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (Unify, equal, newVar, runUnify, unify)
 import YCHR.Types qualified as Types
 import YCHR.VM
@@ -33,7 +35,42 @@ tests =
     [ leqTests,
       evalDeepTests,
       typePredicateTests,
-      univTests
+      univTests,
+      bindParamsTests
+    ]
+
+-- ---------------------------------------------------------------------------
+-- bindParams arity-mismatch tests
+-- ---------------------------------------------------------------------------
+
+bindParamsTests :: TestTree
+bindParamsTests =
+  testGroup
+    "bindParams"
+    [ testCase "matching arity returns Right" $
+        case bindParams "p" ["x", "y"] [CVal (VInt 1), CVal (VInt 2)] of
+          Right _ -> pure ()
+          Left msg -> assertFailure ("expected Right, got Left: " ++ msg),
+      testCase "too few args returns Left with proc name" $
+        case bindParams "myProc" ["x", "y"] [CVal (VInt 1)] of
+          Left msg -> do
+            assertBool ("missing arity-mismatch text in: " ++ msg) $
+              "arity mismatch" `isInfixOf` msg
+            assertBool ("missing proc name in: " ++ msg) $
+              "myProc" `isInfixOf` msg
+          Right _ -> assertFailure "expected Left",
+      testCase "too many args returns Left" $
+        case bindParams "p" ["x"] [CVal (VInt 1), CVal (VInt 2)] of
+          Left msg ->
+            assertBool ("missing arity-mismatch text in: " ++ msg) $
+              "arity mismatch" `isInfixOf` msg
+          Right _ -> assertFailure "expected Left",
+      testCase "mixed-kind args bind by tag" $
+        -- `bindParams` itself only checks length; kind tags are stored
+        -- in the env and surface at lookup time.
+        case bindParams "p" ["v", "i"] [CVal (VInt 7), CId (SuspensionId 3)] of
+          Right _ -> pure ()
+          Left msg -> assertFailure ("expected Right, got Left: " ++ msg)
     ]
 
 -- ---------------------------------------------------------------------------
@@ -73,9 +110,9 @@ tellLeq =
   Procedure
     "tell_leq2"
     ["X", "Y"]
-    [ Let "id" (CreateConstraint leqType [Var "X", Var "Y"]),
-      Store (Var "id"),
-      ExprStmt (CallExpr "activate_leq2" [Var "id"])
+    [ LetId "id" (CreateConstraint leqType [Var "X", Var "Y"]),
+      Store (IdVar "id"),
+      ExprStmt (CallExpr "activate_leq2" [AId (IdVar "id")])
     ]
 
 activateLeq :: Procedure
@@ -83,25 +120,27 @@ activateLeq =
   Procedure
     "activate_leq2"
     ["susp"]
-    [ Let "id" (Var "susp"),
-      Let "X" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))),
-      Let "Y" (FieldGet (Var "susp") (FieldArg (ArgIndex 1))),
-      Let "d" (CallExpr "occurrence_leq2_1" [Var "id", Var "X", Var "Y"]),
+    [ LetId "id" (IdVar "susp"),
+      LetVal "X" (FieldArg (IdVar "susp") (ArgIndex 0)),
+      LetVal "Y" (FieldArg (IdVar "susp") (ArgIndex 1)),
+      LetVal "d" (CallExpr "occurrence_leq2_1" occCallArgs),
       If (Var "d") [Return (Lit (BoolLit True))] [],
-      Let "d" (CallExpr "occurrence_leq2_2" [Var "id", Var "X", Var "Y"]),
+      LetVal "d" (CallExpr "occurrence_leq2_2" occCallArgs),
       If (Var "d") [Return (Lit (BoolLit True))] [],
-      Let "d" (CallExpr "occurrence_leq2_3" [Var "id", Var "X", Var "Y"]),
+      LetVal "d" (CallExpr "occurrence_leq2_3" occCallArgs),
       If (Var "d") [Return (Lit (BoolLit True))] [],
-      Let "d" (CallExpr "occurrence_leq2_4" [Var "id", Var "X", Var "Y"]),
+      LetVal "d" (CallExpr "occurrence_leq2_4" occCallArgs),
       If (Var "d") [Return (Lit (BoolLit True))] [],
-      Let "d" (CallExpr "occurrence_leq2_5" [Var "id", Var "X", Var "Y"]),
+      LetVal "d" (CallExpr "occurrence_leq2_5" occCallArgs),
       If (Var "d") [Return (Lit (BoolLit True))] [],
-      Let "d" (CallExpr "occurrence_leq2_6" [Var "id", Var "X", Var "Y"]),
+      LetVal "d" (CallExpr "occurrence_leq2_6" occCallArgs),
       If (Var "d") [Return (Lit (BoolLit True))] [],
-      Let "d" (CallExpr "occurrence_leq2_7" [Var "id", Var "X", Var "Y"]),
+      LetVal "d" (CallExpr "occurrence_leq2_7" occCallArgs),
       If (Var "d") [Return (Lit (BoolLit True))] [],
       Return (Lit (BoolLit False))
     ]
+  where
+    occCallArgs = [AId (IdVar "id"), AVal (Var "X"), AVal (Var "Y")]
 
 occurrenceLeq1 :: Procedure
 occurrenceLeq1 =
@@ -110,7 +149,7 @@ occurrenceLeq1 =
     ["id", "X", "Y"]
     [ If
         (Equal (Var "X") (Var "Y"))
-        [ Kill (Var "id"),
+        [ Kill (IdVar "id"),
           Return (Lit (BoolLit True))
         ]
         [],
@@ -127,24 +166,24 @@ occurrenceLeq2 =
         leqType
         "susp"
         []
-        [ Let "pId" (FieldGet (Var "susp") FieldId),
-          Let "pA0" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))),
-          Let "pA1" (FieldGet (Var "susp") (FieldArg (ArgIndex 1))),
+        [ LetId "pId" (IdVar "susp"),
+          LetVal "pA0" (FieldArg (IdVar "susp") (ArgIndex 0)),
+          LetVal "pA1" (FieldArg (IdVar "susp") (ArgIndex 1)),
           If
-            (And (Alive (Var "id")) (Alive (Var "pId")))
+            (And (Alive (IdVar "id")) (Alive (IdVar "pId")))
             [ If
-                (Not (IdEqual (Var "pId") (Var "id")))
+                (Not (IdEqual (IdVar "pId") (IdVar "id")))
                 [ If
                     ( And
                         (Equal (Var "pA0") (Var "Y"))
                         (Equal (Var "pA1") (Var "X"))
                     )
-                    [ Kill (Var "pId"),
-                      Kill (Var "id"),
+                    [ Kill (IdVar "pId"),
+                      Kill (IdVar "id"),
                       ExprStmt (Unify (Var "pA0") (Var "pA1")),
                       DrainReactivationQueue
                         "rs"
-                        [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])],
+                        [ExprStmt (CallExpr "reactivate_dispatch" [AId (IdVar "rs")])],
                       Return (Lit (BoolLit True))
                     ]
                     []
@@ -166,24 +205,24 @@ occurrenceLeq3 =
         leqType
         "susp"
         []
-        [ Let "pId" (FieldGet (Var "susp") FieldId),
-          Let "pA0" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))),
-          Let "pA1" (FieldGet (Var "susp") (FieldArg (ArgIndex 1))),
+        [ LetId "pId" (IdVar "susp"),
+          LetVal "pA0" (FieldArg (IdVar "susp") (ArgIndex 0)),
+          LetVal "pA1" (FieldArg (IdVar "susp") (ArgIndex 1)),
           If
-            (And (Alive (Var "id")) (Alive (Var "pId")))
+            (And (Alive (IdVar "id")) (Alive (IdVar "pId")))
             [ If
-                (Not (IdEqual (Var "pId") (Var "id")))
+                (Not (IdEqual (IdVar "pId") (IdVar "id")))
                 [ If
                     ( And
                         (Equal (Var "X") (Var "pA1"))
                         (Equal (Var "Y") (Var "pA0"))
                     )
-                    [ Kill (Var "pId"),
-                      Kill (Var "id"),
+                    [ Kill (IdVar "pId"),
+                      Kill (IdVar "id"),
                       ExprStmt (Unify (Var "X") (Var "Y")),
                       DrainReactivationQueue
                         "rs"
-                        [ExprStmt (CallExpr "reactivate_dispatch" [Var "rs"])],
+                        [ExprStmt (CallExpr "reactivate_dispatch" [AId (IdVar "rs")])],
                       Return (Lit (BoolLit True))
                     ]
                     []
@@ -205,19 +244,19 @@ occurrenceLeq4 =
         leqType
         "susp"
         []
-        [ Let "pId" (FieldGet (Var "susp") FieldId),
-          Let "pA0" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))),
-          Let "pA1" (FieldGet (Var "susp") (FieldArg (ArgIndex 1))),
+        [ LetId "pId" (IdVar "susp"),
+          LetVal "pA0" (FieldArg (IdVar "susp") (ArgIndex 0)),
+          LetVal "pA1" (FieldArg (IdVar "susp") (ArgIndex 1)),
           If
-            (And (Alive (Var "id")) (Alive (Var "pId")))
+            (And (Alive (IdVar "id")) (Alive (IdVar "pId")))
             [ If
-                (Not (IdEqual (Var "pId") (Var "id")))
+                (Not (IdEqual (IdVar "pId") (IdVar "id")))
                 [ If
                     ( And
                         (Equal (Var "pA0") (Var "X"))
                         (Equal (Var "pA1") (Var "Y"))
                     )
-                    [ Kill (Var "id"),
+                    [ Kill (IdVar "id"),
                       Return (Lit (BoolLit True))
                     ]
                     []
@@ -239,19 +278,19 @@ occurrenceLeq5 =
         leqType
         "susp"
         []
-        [ Let "pId" (FieldGet (Var "susp") FieldId),
-          Let "pA0" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))),
-          Let "pA1" (FieldGet (Var "susp") (FieldArg (ArgIndex 1))),
+        [ LetId "pId" (IdVar "susp"),
+          LetVal "pA0" (FieldArg (IdVar "susp") (ArgIndex 0)),
+          LetVal "pA1" (FieldArg (IdVar "susp") (ArgIndex 1)),
           If
-            (And (Alive (Var "id")) (Alive (Var "pId")))
+            (And (Alive (IdVar "id")) (Alive (IdVar "pId")))
             [ If
-                (Not (IdEqual (Var "pId") (Var "id")))
+                (Not (IdEqual (IdVar "pId") (IdVar "id")))
                 [ If
                     ( And
                         (Equal (Var "X") (Var "pA0"))
                         (Equal (Var "Y") (Var "pA1"))
                     )
-                    [Kill (Var "pId")]
+                    [Kill (IdVar "pId")]
                     []
                 ]
                 []
@@ -271,21 +310,25 @@ occurrenceLeq6 =
         leqType
         "susp"
         []
-        [ Let "pId" (FieldGet (Var "susp") FieldId),
-          Let "pA0" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))),
-          Let "pA1" (FieldGet (Var "susp") (FieldArg (ArgIndex 1))),
+        [ LetId "pId" (IdVar "susp"),
+          LetVal "pA0" (FieldArg (IdVar "susp") (ArgIndex 0)),
+          LetVal "pA1" (FieldArg (IdVar "susp") (ArgIndex 1)),
           If
-            (And (Alive (Var "id")) (Alive (Var "pId")))
+            (And (Alive (IdVar "id")) (Alive (IdVar "pId")))
             [ If
-                (Not (IdEqual (Var "pId") (Var "id")))
+                (Not (IdEqual (IdVar "pId") (IdVar "id")))
                 [ If
                     (Equal (Var "pA1") (Var "X"))
                     [ If
-                        (NotInHistory (RuleId 0) [Var "pId", Var "id"])
-                        [ AddHistory (RuleId 0) [Var "pId", Var "id"],
-                          ExprStmt (CallExpr "tell_leq2" [Var "pA0", Var "Y"]),
+                        (NotInHistory (RuleId 0) [IdVar "pId", IdVar "id"])
+                        [ AddHistory (RuleId 0) [IdVar "pId", IdVar "id"],
+                          ExprStmt
+                            ( CallExpr
+                                "tell_leq2"
+                                [AVal (Var "pA0"), AVal (Var "Y")]
+                            ),
                           If
-                            (Not (Alive (Var "id")))
+                            (Not (Alive (IdVar "id")))
                             [Return (Lit (BoolLit True))]
                             []
                         ]
@@ -310,21 +353,25 @@ occurrenceLeq7 =
         leqType
         "susp"
         []
-        [ Let "pId" (FieldGet (Var "susp") FieldId),
-          Let "pA0" (FieldGet (Var "susp") (FieldArg (ArgIndex 0))),
-          Let "pA1" (FieldGet (Var "susp") (FieldArg (ArgIndex 1))),
+        [ LetId "pId" (IdVar "susp"),
+          LetVal "pA0" (FieldArg (IdVar "susp") (ArgIndex 0)),
+          LetVal "pA1" (FieldArg (IdVar "susp") (ArgIndex 1)),
           If
-            (And (Alive (Var "id")) (Alive (Var "pId")))
+            (And (Alive (IdVar "id")) (Alive (IdVar "pId")))
             [ If
-                (Not (IdEqual (Var "pId") (Var "id")))
+                (Not (IdEqual (IdVar "pId") (IdVar "id")))
                 [ If
                     (Equal (Var "pA0") (Var "Y"))
                     [ If
-                        (NotInHistory (RuleId 0) [Var "id", Var "pId"])
-                        [ AddHistory (RuleId 0) [Var "id", Var "pId"],
-                          ExprStmt (CallExpr "tell_leq2" [Var "X", Var "pA1"]),
+                        (NotInHistory (RuleId 0) [IdVar "id", IdVar "pId"])
+                        [ AddHistory (RuleId 0) [IdVar "id", IdVar "pId"],
+                          ExprStmt
+                            ( CallExpr
+                                "tell_leq2"
+                                [AVal (Var "X"), AVal (Var "pA1")]
+                            ),
                           If
-                            (Not (Alive (Var "id")))
+                            (Not (Alive (IdVar "id")))
                             [Return (Lit (BoolLit True))]
                             []
                         ]
@@ -345,8 +392,8 @@ reactivateDispatch =
     "reactivate_dispatch"
     ["susp"]
     [ If
-        (IsConstraintType (Var "susp") leqType)
-        [ExprStmt (CallExpr "activate_leq2" [Var "susp"])]
+        (IsConstraintType (IdVar "susp") leqType)
+        [ExprStmt (CallExpr "activate_leq2" [AId (IdVar "susp")])]
         []
     ]
 
@@ -402,9 +449,9 @@ callTellLeq ::
     ReactQueue :> es,
     State [StackFrame] :> es
   ) =>
-  Value -> Value -> Eff es RuntimeVal
+  Value -> Value -> Eff es Value
 callTellLeq x y =
-  callProc leqProcMap leqHostCalls "tell_leq2" [RVal x, RVal y]
+  callProc leqProcMap leqHostCalls "tell_leq2" [CVal x, CVal y]
 
 -- ---------------------------------------------------------------------------
 -- Tests
@@ -474,17 +521,17 @@ arithCalls =
   Map.fromList
     [ ( "+",
         HostCallFn $ \args -> case args of
-          [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (a + b)))
+          [VInt a, VInt b] -> pure (VInt (a + b))
           _ -> liftIO (assertFailure "unexpected args to +")
       ),
       ( "*",
         HostCallFn $ \args -> case args of
-          [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (a * b)))
+          [VInt a, VInt b] -> pure (VInt (a * b))
           _ -> liftIO (assertFailure "unexpected args to *")
       )
     ]
 
-makeCalcProc :: Expr -> Program
+makeCalcProc :: ValExpr -> Program
 makeCalcProc body =
   Program
     { numTypes = 0,
@@ -495,18 +542,18 @@ makeCalcProc body =
         [ Procedure
             "calc"
             ["x"]
-            [ Let "y" (EvalDeep body),
+            [ LetVal "y" (EvalDeep body),
               Return (Var "y")
             ]
         ]
     }
 
-runCalc :: Expr -> Value -> IO RuntimeVal
+runCalc :: ValExpr -> Value -> IO Value
 runCalc body x = interpret (makeCalcProc body) arithCalls "calc" [x]
 
-expectInt :: RuntimeVal -> IO Int
-expectInt (RVal (VInt n)) = pure n
-expectInt _ = assertFailure "expected RVal (VInt _)"
+expectInt :: Value -> IO Int
+expectInt (VInt n) = pure n
+expectInt _ = assertFailure "expected VInt _"
 
 evalDeepTests :: TestTree
 evalDeepTests =
@@ -547,20 +594,17 @@ callTypePred :: Name -> Value -> IO Bool
 callTypePred name v = case Map.lookup name baseHostCallRegistry of
   Nothing -> assertFailure $ "host call not found: " ++ show name
   Just (HostCallFn f) -> do
-    result <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [RVal v]
+    result <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [v]
     case result of
-      RVal (VBool b) -> pure b
+      VBool b -> pure b
       _ -> assertFailure $ show name ++ ": expected Bool result"
 
 -- | Call term_variables directly, returning the resulting Value.
 callTermVars :: Value -> IO Value
 callTermVars v = case Map.lookup (Name "term_variables") baseHostCallRegistry of
   Nothing -> assertFailure "term_variables not found in registry"
-  Just (HostCallFn f) -> do
-    result <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [RVal v]
-    case result of
-      RVal val -> pure val
-      _ -> assertFailure "term_variables returned non-RVal"
+  Just (HostCallFn f) ->
+    runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [v]
 
 -- | Call term_variables within an existing Eff context.
 callTermVarsEff ::
@@ -569,11 +613,7 @@ callTermVarsEff ::
   Eff es Value
 callTermVarsEff v = case Map.lookup (Name "term_variables") baseHostCallRegistry of
   Nothing -> error "term_variables not found in registry"
-  Just (HostCallFn f) -> do
-    result <- f [RVal v]
-    case result of
-      RVal val -> pure val
-      _ -> error "term_variables returned non-RVal"
+  Just (HostCallFn f) -> f [v]
 
 typePredicateTests :: TestTree
 typePredicateTests =
@@ -609,9 +649,9 @@ typePredicateTests =
           let HostCallFn f = case Map.lookup (Name "var") baseHostCallRegistry of
                 Just hc -> hc
                 Nothing -> error "var not found"
-          result <- f [RVal v]
+          result <- f [v]
           case result of
-            RVal (VBool b') -> pure b'
+            VBool b' -> pure b'
             _ -> pure False
         assertBool "expected true" b,
       testCase "var: false for bound variable" $ do
@@ -626,9 +666,9 @@ typePredicateTests =
             let HostCallFn f = case Map.lookup (Name "var") baseHostCallRegistry of
                   Just hc -> hc
                   Nothing -> error "var not found"
-            result <- f [RVal v]
+            result <- f [v]
             case result of
-              RVal (VBool b') -> pure b'
+              VBool b' -> pure b'
               _ -> pure False
         assertBool "expected false" (not b),
       testCase "var: false for ground value" $ do
@@ -640,9 +680,9 @@ typePredicateTests =
           let HostCallFn f = case Map.lookup (Name "nonvar") baseHostCallRegistry of
                 Just hc -> hc
                 Nothing -> error "nonvar not found"
-          result <- f [RVal v]
+          result <- f [v]
           case result of
-            RVal (VBool b') -> pure b'
+            VBool b' -> pure b'
             _ -> pure False
         assertBool "expected false" (not b),
       testCase "nonvar: true for bound variable" $ do
@@ -657,9 +697,9 @@ typePredicateTests =
             let HostCallFn f = case Map.lookup (Name "nonvar") baseHostCallRegistry of
                   Just hc -> hc
                   Nothing -> error "nonvar not found"
-            result <- f [RVal v]
+            result <- f [v]
             case result of
-              RVal (VBool b') -> pure b'
+              VBool b' -> pure b'
               _ -> pure False
         assertBool "expected true" b,
       testCase "nonvar: true for ground value" $ do
@@ -680,9 +720,9 @@ typePredicateTests =
           let HostCallFn f = case Map.lookup (Name "ground") baseHostCallRegistry of
                 Just hc -> hc
                 Nothing -> error "ground not found"
-          result <- f [RVal v]
+          result <- f [v]
           case result of
-            RVal (VBool b') -> pure b'
+            VBool b' -> pure b'
             _ -> pure True
         assertBool "expected false" (not b),
       testCase "ground: false for compound with unbound var" $ do
@@ -691,9 +731,9 @@ typePredicateTests =
           let HostCallFn f = case Map.lookup (Name "ground") baseHostCallRegistry of
                 Just hc -> hc
                 Nothing -> error "ground not found"
-          result <- f [RVal (VTerm "f" [VInt 1, v])]
+          result <- f [VTerm "f" [VInt 1, v]]
           case result of
-            RVal (VBool b') -> pure b'
+            VBool b' -> pure b'
             _ -> pure True
         assertBool "expected false" (not b),
       testCase "ground: true for compound with bound var" $ do
@@ -708,9 +748,9 @@ typePredicateTests =
             let HostCallFn f = case Map.lookup (Name "ground") baseHostCallRegistry of
                   Just hc -> hc
                   Nothing -> error "ground not found"
-            result <- f [RVal (VTerm "f" [VInt 1, v])]
+            result <- f [VTerm "f" [VInt 1, v]]
             case result of
-              RVal (VBool b') -> pure b'
+              VBool b' -> pure b'
               _ -> pure True
         assertBool "expected true" b,
       testCase "ground: false for wildcard" $ do
@@ -796,9 +836,9 @@ typePredicateTests =
       Just (HostCallFn f) -> do
         result <-
           runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
-            f [RVal a, RVal b]
+            f [a, b]
         case result of
-          RVal (VBool b') -> pure b'
+          VBool b' -> pure b'
           _ -> assertFailure "unifiable: expected Bool result"
 
 -- ---------------------------------------------------------------------------
@@ -809,13 +849,8 @@ typePredicateTests =
 callHostCall1 :: Name -> Value -> IO Value
 callHostCall1 name v = case Map.lookup name baseHostCallRegistry of
   Nothing -> assertFailure $ "host call not found: " ++ show name
-  Just (HostCallFn f) -> do
-    result <-
-      runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
-        f [RVal v]
-    case result of
-      RVal val -> pure val
-      _ -> assertFailure "expected RVal result"
+  Just (HostCallFn f) ->
+    runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [v]
 
 univTests :: TestTree
 univTests =

@@ -23,6 +23,31 @@ There are three kinds of callable entities:
 3. **`host-call`** -- calls to host language functions (arithmetic,
    comparisons, user-written guards and body expressions).
 
+### Expression kinds: values vs. constraint identifiers
+
+The VM has two disjoint kinds of expression:
+
+- **Value expressions** evaluate to ordinary runtime values: integers,
+  floats, atoms, strings, booleans, logical variables, compound terms,
+  wildcards. They populate every position where a unifiable value is
+  expected (procedure arguments, term construction, host call
+  arguments, the right-hand side of `is`, guards).
+- **Id expressions** evaluate to constraint identifiers (suspension
+  references). They populate every position that operates on a stored
+  constraint (`store`, `kill`, `add-history`, `alive`, `id-equal`,
+  `is-constraint-type`, `not-in-history`, `field-arg`, `field-type`).
+
+Constraint identifiers cannot flow into unification or term
+construction; the two kinds are physically distinct in the IR. A
+backend can keep one runtime representation for both (the Haskell and
+Scheme runtimes do — a suspension reference *is* its identifier) but
+the IR statically distinguishes the positions.
+
+A handful of forms are explicitly heterogeneous: procedures that take
+a mix of value and id parameters use the `arg-val` / `arg-id` wrapper
+at the call boundary (see `call-expr`). Variable references split into
+`var` (value-bound) and `id-var` (id-bound).
+
 
 ## S-Expression Format
 
@@ -30,9 +55,10 @@ VM programs are serialized as s-expressions with kebab-case identifiers.
 The grammar:
 
 ```
-sexpr  = atom | int | string | list
+sexpr  = atom | int | float | string | list
 atom   = [a-zA-Z_][a-zA-Z0-9_-]*
 int    = [-]?[0-9]+
+float  = [-]?[0-9]+\.[0-9]+([eE][-+]?[0-9]+)?
 string = '"' (escape | [^"\\])* '"'
 list   = '(' sexpr* ')'
 ```
@@ -121,15 +147,22 @@ defining module before compilation.
   ...)
 ```
 
+Procedure parameters are positional. Each parameter's kind (value or
+constraint id) is determined by how the caller's `call-expr` tags the
+corresponding argument (`arg-val` or `arg-id`). Within the body,
+references use `var` for value-bound parameters and `id-var` for
+id-bound parameters.
+
 The compiler generates these procedure kinds:
 
-| Procedure | Purpose |
-|-----------|---------|
-| `tell_c(X_0, ..., X_n)` | Creates a constraint suspension, stores it, calls `activate_c`. |
-| `activate_c(susp)` | Extracts arguments from the suspension, tries each occurrence in order. Returns `false` if the constraint survives all occurrences. |
-| `occurrence_c_j(id, X_0, ..., X_n)` | Handles the j-th occurrence of constraint c. Iterates over partner constraints, checks guards, fires rules. Returns `true` (early drop) or `false`. |
-| `reactivate_dispatch(susp)` | Checks the suspension's constraint type and calls the appropriate `activate_c`. |
-| `func_f(arg_0, ..., arg_n)` | Evaluates a user-defined function. |
+| Procedure | Purpose | Parameter kinds |
+|-----------|---------|-----------------|
+| `tell_c(X_0, ..., X_n)` | Creates a constraint suspension, stores it, calls `activate_c`. | all values |
+| `activate_c(susp)` | Extracts arguments from the suspension, tries each occurrence in order. Returns `false` if the constraint survives all occurrences. | id |
+| `occurrence_c_j(id, X_0, ..., X_n)` | Handles the j-th occurrence of constraint c. Iterates over partner constraints, checks guards, fires rules. Returns `true` (early drop) or `false`. | id, then values |
+| `reactivate_dispatch(susp)` | Checks the suspension's constraint type and calls the appropriate `activate_c`. | id |
+| `func_f(arg_0, ..., arg_n)` | Evaluates a user-defined function. | all values |
+| `call_n(closure, arg_0, ..., arg_{n-1})` | Dispatches a first-class function value to its compiled procedure. | all values |
 
 
 ### Procedure Naming
@@ -175,7 +208,8 @@ For a function `math:factorial/1`:
 | func | `func_math__factorial1` |
 
 The `reactivate_dispatch` procedure is unique and not parameterized by
-constraint name.
+constraint name. The `call_n` dispatchers (`call_1`, `call_2`, ...)
+are likewise unique per call arity.
 
 **Non-ASCII encoding.** Characters outside the ASCII range are encoded
 as `__u<hex>__` where `<hex>` is the Unicode code point in
@@ -194,29 +228,40 @@ arity, since the arity is already explicit in those instructions.
 
 ## Statements
 
-### let
+Each `let`/`assign` form comes in two variants: one for binding values,
+one for binding constraint identifiers. Statements that operate on
+stored constraints (`store`, `kill`, `add-history`) take an
+*id-expression*. All other statements take a *value-expression*.
+
+### let-val / let-id
 
 ```scheme
-(let "<name>" <expr>)
+(let-val "<name>" <val-expr>)
+(let-id  "<name>" <id-expr>)
 ```
 
-Bind a local variable to the result of an expression.
+Bind a local variable to the result of an expression. The two variants
+differ only by the kind they bind. References to the bound name use
+`var` (after `let-val`) or `id-var` (after `let-id`).
 
-### assign
+### assign-val / assign-id
 
 ```scheme
-(assign "<name>" <expr>)
+(assign-val "<name>" <val-expr>)
+(assign-id  "<name>" <id-expr>)
 ```
 
-Mutate an existing variable.
+Mutate an existing variable. Same kind discipline as `let-val` /
+`let-id`.
 
 ### if
 
 ```scheme
-(if <condition> (<then-stmt> ...) (<else-stmt> ...))
+(if <val-expr> (<then-stmt> ...) (<else-stmt> ...))
 ```
 
-Conditional execution. Both branches are always present (the else
+Conditional execution. The condition is a value expression that must
+evaluate to a boolean. Both branches are always present (the else
 branch may be an empty list `()`).
 
 ### foreach
@@ -230,12 +275,13 @@ branch may be an empty list `()`).
 Labeled loop over the constraint store. Iterates over all **alive**
 stored constraints of the given type that satisfy the index conditions.
 
-Each condition is `(<arg-index> <expr>)` and requires that the
+Each condition is `(<arg-index> <val-expr>)` and requires that the
 constraint's argument at the given position is `equal` to the
 expression (using ask semantics).
 
 The current constraint suspension is bound to `<susp-var>` on each
-iteration.
+iteration. Inside the body, reference it as `(id-var "<susp-var>")` —
+the suspension is an id-bound name.
 
 #### Iterator properties
 
@@ -270,34 +316,35 @@ Exit the named `foreach` loop.
 ### return
 
 ```scheme
-(return <expr>)
+(return <val-expr>)
 ```
 
-Return a value from the current procedure.
+Return a value from the current procedure. Procedures always return a
+value (never a constraint identifier).
 
 ### expr-stmt
 
 ```scheme
-(expr-stmt <expr>)
+(expr-stmt <val-expr>)
 ```
 
-Evaluate an expression for its side effects; discard the result.
+Evaluate a value expression for its side effects; discard the result.
 
 ### store
 
 ```scheme
-(store <expr>)
+(store <id-expr>)
 ```
 
-Add a constraint suspension to the constraint store. The argument must
-be a constraint identifier (as returned by `create-constraint`). This
-also **registers the constraint as an observer** of its arguments for
-reactivation purposes.
+Add a constraint suspension to the constraint store. The argument is a
+constraint identifier (typically `(id-var "id")` after a `let-id` from
+`create-constraint`). This also **registers the constraint as an
+observer** of its arguments for reactivation purposes.
 
 ### kill
 
 ```scheme
-(kill <expr>)
+(kill <id-expr>)
 ```
 
 Remove a constraint from the store and mark it as no longer alive.
@@ -322,17 +369,29 @@ identifiers. Used to prevent redundant re-firing of propagation rules.
 
 Iterate over all constraints pending reactivation (populated as a side
 effect of `unify`). Each pending suspension is bound to `<susp-var>`
-and the body statements are executed. The body typically dispatches to
+as an id-bound name; the body statements are executed and reference it
+via `(id-var "<susp-var>")`. The body typically dispatches to
 `reactivate_dispatch`.
 
 
-## Expressions
+## Value Expressions
 
-### Variables and literals
+Expressions in this section evaluate to ordinary values.
+
+### Variable reference
 
 ```scheme
 (var "<name>")
+```
+
+Look up a value-bound variable (parameter or `let-val` / `assign-val`
+binding).
+
+### Literals
+
+```scheme
 (int <value>)
+(float <value>)
 (atom "<value>")
 (text "<value>")
 true
@@ -340,39 +399,58 @@ false
 wildcard
 ```
 
-Literals are serialized directly without a `lit` wrapper.
+Literals are serialized directly without a `lit` wrapper. `true`,
+`false`, and `wildcard` are bare atoms.
 
 ### Procedure and host calls
 
 ```scheme
-(call-expr "<proc-name>" <arg> ...)
-(host-call "<func-name>" <arg> ...)
+(call-expr "<proc-name>" <call-arg> ...)
+(host-call "<func-name>" <val-expr> ...)
 ```
 
-- `call-expr` calls a compiler-generated procedure.
-- `host-call` calls a host language function.
+- `call-expr` calls a compiler-generated procedure. Each argument is a
+  `<call-arg>` that explicitly tags the kind of value being passed
+  (see below).
+- `host-call` calls a host language function. Host functions take and
+  return values only — arguments are plain value expressions, with no
+  wrapper.
+
+### Call arguments
+
+```scheme
+(arg-val <val-expr>)
+(arg-id  <id-expr>)
+```
+
+A `<call-arg>` is one of these two forms. The wrapper is required at
+every `call-expr` argument position so the procedure boundary stays
+explicit about which arguments are values and which are constraint
+identifiers.
 
 ### Deep deref-aware evaluation
 
 ```scheme
-(eval-deep <expr>)
+(eval-deep <val-expr>)
 ```
 
-- `eval-deep` switches the nested expression into deep deref-aware
-  evaluation: variable references are dereferenced (following binding
-  chains) before use, and this mode propagates recursively into
-  sub-expressions (`call-expr`, `make-term`, etc.). Used for guard
-  expressions and the right-hand side of `is`.
+Switches the nested value expression into deep deref-aware evaluation:
+variable references are dereferenced (following binding chains) before
+use, and this mode propagates recursively into sub-expressions
+(`call-expr` arguments wrapped in `arg-val`, `make-term`, etc.). Used
+for guard expressions and the right-hand side of `is`. Constraint
+identifiers do not deref; the mode is a no-op for `arg-id` arguments.
 
 ### Boolean operations
 
 ```scheme
-(not <expr>)
-(and <expr> <expr>)
-(or <expr> <expr>)
+(not <val-expr>)
+(and <val-expr> <val-expr>)
+(or  <val-expr> <val-expr>)
 ```
 
-`and` and `or` are short-circuiting.
+`and` and `or` are short-circuiting. Each operand must evaluate to a
+boolean.
 
 ### Logical variables
 
@@ -386,9 +464,9 @@ Creates a fresh unbound logical variable. Serialized as a bare atom
 ### Term operations
 
 ```scheme
-(make-term "<functor>" <arg> ...)
-(match-term <expr> "<functor>" <arity>)
-(get-arg <expr> <index>)
+(make-term "<functor>" <val-expr> ...)
+(match-term <val-expr> "<functor>" <arity>)
+(get-arg <val-expr> <index>)
 ```
 
 - `make-term` constructs a compound term.
@@ -396,18 +474,15 @@ Creates a fresh unbound logical variable. Serialized as a bare atom
   given functor and arity. Returns a boolean.
 - `get-arg` extracts an argument by 0-based index.
 
-### Constraint operations
+### Constraint observation
 
 ```scheme
-(create-constraint <type> <arg> ...)
-(alive <expr>)
-(id-equal <expr> <expr>)
-(is-constraint-type <expr> <type>)
+(alive <id-expr>)
+(id-equal <id-expr> <id-expr>)
+(is-constraint-type <id-expr> <type>)
 ```
 
-- `create-constraint` allocates a new suspension with a fresh unique
-  identifier and `alive = true`. Does **not** add it to the store.
-- `alive` checks the alive flag.
+- `alive` checks the alive flag of a suspension. Returns a boolean.
 - `id-equal` compares two constraint identifiers for equality.
 - `is-constraint-type` checks whether a suspension has the given type.
 
@@ -425,8 +500,8 @@ corresponding source name).
 ### Unification and equality
 
 ```scheme
-(unify <expr> <expr>)
-(equal <expr> <expr>)
+(unify <val-expr> <val-expr>)
+(equal <val-expr> <val-expr>)
 ```
 
 - **`unify`** (tell semantics, Prolog `=`): binds variables, returns
@@ -439,16 +514,43 @@ corresponding source name).
 ### Suspension field access
 
 ```scheme
-(field-get <expr> <field>)
+(field-arg  <id-expr> <i>)
+(field-type <id-expr>)
 ```
 
-Where `<field>` is one of:
+- `field-arg` extracts the constraint argument at 0-based index `<i>`.
+  Returns a value (the suspension's stored argument).
+- `field-type` extracts the constraint type tag. Returns an integer.
+
+There is no separate `field-id` form: a suspension *is* its constraint
+identifier in the runtime, so the corresponding extraction is just a
+reference to the id-bound name itself (`(id-var "<susp>")`).
+
+
+## Id Expressions
+
+Expressions in this section evaluate to constraint identifiers.
+
+### Variable reference
 
 ```scheme
-field-id          ; the unique constraint identifier
-(field-arg <i>)   ; constraint argument at 0-based index i
-field-type        ; the constraint type (integer)
+(id-var "<name>")
 ```
+
+Look up an id-bound variable (parameter, `let-id` / `assign-id`
+binding, or the suspension binder of a `foreach` /
+`drain-reactivation-queue`).
+
+### Constraint creation
+
+```scheme
+(create-constraint <type> <val-expr> ...)
+```
+
+Allocates a new suspension with a fresh unique identifier and
+`alive = true`. Does **not** add it to the store; use `store` for
+that. The arguments are values that become the constraint's stored
+arguments.
 
 
 ## Runtime Contract
@@ -460,7 +562,7 @@ A backend must implement the following runtime capabilities.
 - Creation of fresh unbound variables (`new-var`).
 - Binding via unification (`unify`) with occurs-check optional.
 - Dereferencing (following binding chains) -- handled transparently
-  inside `unify`, `equal`, `field-get`, and `foreach` lookups.
+  inside `unify`, `equal`, and `foreach` lookups.
 - Observer lists: when a variable is bound, all constraints observing
   it are pushed onto the reactivation queue.
 
@@ -521,19 +623,22 @@ names use the pattern `<prefix>_mymodule__leq2`:
     1
     (rule-names "reflexivity")
 
-    ; tell_mymodule__leq2(X, Y): create, store, activate
+    ; tell_mymodule__leq2(X_0, X_1): create, store, activate
     (procedure "tell_mymodule__leq2" ("X_0" "X_1")
-      (let "id" (create-constraint 0 (var "X_0") (var "X_1")))
-      (store (var "id"))
-      (expr-stmt (call-expr "activate_mymodule__leq2" (var "id"))))
+      (let-id "id" (create-constraint 0 (var "X_0") (var "X_1")))
+      (store (id-var "id"))
+      (expr-stmt (call-expr "activate_mymodule__leq2"
+                   (arg-id (id-var "id")))))
 
     ; activate_mymodule__leq2(susp): extract args, try each occurrence
     (procedure "activate_mymodule__leq2" ("susp")
-      (let "id" (var "susp"))
-      (let "X_0" (field-get (var "susp") (field-arg 0)))
-      (let "X_1" (field-get (var "susp") (field-arg 1)))
-      (let "d" (call-expr "occurrence_mymodule__leq2_1"
-                  (var "id") (var "X_0") (var "X_1")))
+      (let-id "id" (id-var "susp"))
+      (let-val "X_0" (field-arg (id-var "susp") 0))
+      (let-val "X_1" (field-arg (id-var "susp") 1))
+      (let-val "d" (call-expr "occurrence_mymodule__leq2_1"
+                     (arg-id (id-var "id"))
+                     (arg-val (var "X_0"))
+                     (arg-val (var "X_1"))))
       (if (var "d") ((return true)) ())
       (return false))
 
@@ -541,15 +646,16 @@ names use the pattern `<prefix>_mymodule__leq2`:
     ;   reflexivity @ leq(X, X1) <=> X == X1 | true.
     (procedure "occurrence_mymodule__leq2_1" ("id" "X_0" "X_1")
       (if (equal (var "X_0") (var "X_1"))
-        ((kill (var "id"))
+        ((kill (id-var "id"))
          (return true))
         ())
       (return false))
 
     ; reactivate_dispatch(susp): type-based dispatch
     (procedure "reactivate_dispatch" ("susp")
-      (if (is-constraint-type (var "susp") 0)
-        ((expr-stmt (call-expr "activate_mymodule__leq2" (var "susp"))))
+      (if (is-constraint-type (id-var "susp") 0)
+        ((expr-stmt (call-expr "activate_mymodule__leq2"
+                      (arg-id (id-var "susp")))))
         ())))
 
   (exports ((qualified "mymodule" "leq") 2))

@@ -24,7 +24,7 @@ import YCHR.Parser (builtinOps, parseTermWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Runtime.Registry (HostCallFn (..), HostCallRegistry, unit, valueList)
 import YCHR.Runtime.Store (Suspension (..), getAllStoredConstraints, isSuspAlive)
-import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
+import YCHR.Runtime.Types (Value (..))
 import YCHR.Runtime.Var (Unify, deref, newVar, runUnify)
 import YCHR.Types (Term (..), flattenName)
 import YCHR.Types qualified as Types
@@ -59,11 +59,10 @@ valueToTerm varName v = do
     VTerm f ts -> CompoundTerm (Types.Unqualified f) <$> traverse (valueToTerm "_") ts
     VVar _ -> pure (VarTerm varName)
 
--- | Pretty-print a 'RuntimeVal' using the surface pretty-printer.
+-- | Pretty-print a 'Value' using the surface pretty-printer.
 -- Dereferences logical variables before rendering.
-prettyRuntimeVal :: RuntimeVal -> IO String
-prettyRuntimeVal (RVal v) = runEff . runUnify $ prettyTerm <$> valueToTerm "_" v
-prettyRuntimeVal (RConstraint (SuspensionId n)) = pure ("<constraint:" ++ show n ++ ">")
+prettyValue :: Value -> IO String
+prettyValue v = runEff . runUnify $ prettyTerm <$> valueToTerm "_" v
 
 -- | Convert a parsed 'Term' to a runtime 'Value', creating fresh logical
 -- variables. The same variable name within a term maps to the same fresh
@@ -93,23 +92,23 @@ metaHostCallRegistry =
   Map.fromList
     [ ( Name "print",
         HostCallFn $ \args -> do
-          strs <- liftIO (mapM prettyRuntimeVal args)
+          strs <- liftIO (mapM prettyValue args)
           liftIO (mapM_ putStrLn strs)
           pure unit
       ),
       ( Name "write_term_to_string",
         HostCallFn $ \case
           [arg] -> do
-            s <- liftIO (prettyRuntimeVal arg)
-            pure (RVal (VText (pack s)))
+            s <- liftIO (prettyValue arg)
+            pure (VText (pack s))
           _ -> error "write_term_to_string: expected 1 argument"
       ),
       ( Name "read_term_from_string",
         HostCallFn $ \case
-          [RVal (VText s)] ->
+          [VText s] ->
             case parseTermWith builtinOps "<read_term_from_string>" s of
               Left err -> error $ "read_term_from_string: " ++ show err
-              Right term -> RVal <$> evalStateT (termToValue term) Map.empty
+              Right term -> evalStateT (termToValue term) Map.empty
           _ -> error "read_term_from_string: expected 1 Text argument"
       ),
       ( Name "print_store",
@@ -123,7 +122,7 @@ metaHostCallRegistry =
         HostCallFn $ \_ -> do
           groups <- getAllStoredConstraints
           susps <- concat <$> traverse suspsOfGroup groups
-          pure (RVal (valueList susps))
+          pure (valueList susps)
       )
     ]
   where

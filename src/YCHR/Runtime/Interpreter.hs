@@ -17,6 +17,7 @@ module YCHR.Runtime.Interpreter
 
     -- * Internal (for testing)
     callProc,
+    bindParams,
     unit,
   )
 where
@@ -40,7 +41,6 @@ import YCHR.Runtime.Registry
   ( HostCallFn (..),
     HostCallRegistry,
     baseHostCallRegistry,
-    toValue,
     unit,
   )
 import YCHR.Runtime.Store
@@ -59,7 +59,7 @@ import YCHR.Runtime.Store
     storeConstraint,
     suspArg,
   )
-import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId (..), Value (..))
+import YCHR.Runtime.Types (CallVal (..), SuspensionId (..), Value (..))
 import YCHR.Runtime.Var
   ( Unify,
     deref,
@@ -80,8 +80,22 @@ import YCHR.VM
 -- | Map from procedure name to procedure definition.
 type ProcMap = Map Name Procedure
 
--- | Local variable environment for a procedure call.
-type Env = Map Name RuntimeVal
+-- | Local variable environment for a procedure call. Split by kind:
+-- value-bound names live in 'envValues', id-bound names in 'envIds'.
+-- The IR ensures each name appears in only one map.
+data Env = Env
+  { envValues :: !(Map Name Value),
+    envIds :: !(Map Name SuspensionId)
+  }
+
+emptyEnv :: Env
+emptyEnv = Env Map.empty Map.empty
+
+insertVal :: Name -> Value -> Env -> Env
+insertVal n v e = e {envValues = Map.insert n v e.envValues}
+
+insertId :: Name -> SuspensionId -> Env -> Env
+insertId n s e = e {envIds = Map.insert n s e.envIds}
 
 -- | Maximum number of call stack frames to keep.
 maxCallStackDepth :: Int
@@ -91,7 +105,7 @@ maxCallStackDepth = 10
 -- as an exception mechanism: 'Return' exits a procedure, 'Continue' and
 -- 'Break' target labeled 'Foreach' loops.
 data ControlFlow
-  = CFReturn RuntimeVal
+  = CFReturn Value
   | CFContinue Label
   | CFBreak Label
 
@@ -104,11 +118,14 @@ instance Show ControlFlow where
 -- Public API
 -- ---------------------------------------------------------------------------
 
--- | Interpret a VM program by calling a named procedure with the given arguments.
-interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO RuntimeVal
+-- | Interpret a VM program by calling a named procedure with the given
+-- value arguments. Entry-point arguments are always values; procedures
+-- that require a constraint id at this layer use a different entry
+-- point (e.g. @reactivate_dispatch@) called via 'callProc' directly.
+interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO Value
 interpret prog hostCalls entryName args = do
   let procMap = Map.fromList [(p.name, p) | p <- prog.procedures]
-      argVals = map RVal args
+      argVals = map CVal args
   runEff
     . runUnifyWithWriter
     . runCHRStoreEff
@@ -144,15 +161,17 @@ type InterpEffects es =
   )
 
 -- | Call a procedure. Creates a fresh environment with parameter bindings,
--- executes the body, and catches CFReturn. Default return: RVal (VBool False).
+-- executes the body, and catches CFReturn. Default return: VBool False.
 callProc ::
   (InterpEffects es) =>
-  ProcMap -> HostCallRegistry -> Name -> [RuntimeVal] -> Eff es RuntimeVal
+  ProcMap -> HostCallRegistry -> Name -> [CallVal] -> Eff es Value
 callProc procMap hostCalls name args = do
   case Map.lookup name procMap of
     Nothing -> runtimeError' "callProc: unknown procedure " name.unName
     Just proc -> do
-      let env = Map.fromList (zip proc.params args)
+      env <- case bindParams name proc.params args of
+        Right e -> pure e
+        Left msg -> runtimeErrorS msg
       savedStack <- get @CallStack
       result <-
         evalState env
@@ -160,10 +179,31 @@ callProc procMap hostCalls name args = do
           $ execStmts procMap hostCalls proc.body
       put @CallStack savedStack
       case result of
-        Right () -> pure (RVal (VBool False))
+        Right () -> pure (VBool False)
         Left (_, CFReturn v) -> pure v
         Left (_, CFContinue l) -> runtimeError' "callProc: uncaught Continue " l.unLabel
         Left (_, CFBreak l) -> runtimeError' "callProc: uncaught Break " l.unLabel
+
+-- | Bind procedure parameters into the appropriate environment slot
+-- based on the runtime tag of each argument. Returns 'Left' with a
+-- diagnostic message on arity mismatch, which is a compiler-invariant
+-- violation: every 'CallExpr' the compiler emits must match the called
+-- procedure's parameter list in length.
+bindParams :: Name -> [Name] -> [CallVal] -> Either String Env
+bindParams pname params args
+  | length params /= length args =
+      Left $
+        "bindParams: arity mismatch in "
+          ++ T.unpack pname.unName
+          ++ ": "
+          ++ show (length params)
+          ++ " params, "
+          ++ show (length args)
+          ++ " args"
+  | otherwise = Right (foldl' step emptyEnv (zip params args))
+  where
+    step e (p, CVal v) = insertVal p v e
+    step e (p, CId s) = insertId p s e
 
 -- | Execute a list of statements sequentially.
 execStmts ::
@@ -175,17 +215,23 @@ execStmts procMap hostCalls = traverse_ (execStmt procMap hostCalls)
 execStmt ::
   (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
   ProcMap -> HostCallRegistry -> Stmt -> Eff es ()
-execStmt pm hc (Let name expr) = do
-  v <- evalVmExpr pm hc expr
-  modify (Map.insert name v)
-execStmt pm hc (Assign name expr) = do
-  v <- evalVmExpr pm hc expr
-  modify (Map.insert name v)
+execStmt pm hc (LetVal name expr) = do
+  v <- evalValExpr pm hc expr
+  modify (insertVal name v)
+execStmt pm hc (LetId name expr) = do
+  s <- evalIdExpr pm hc expr
+  modify (insertId name s)
+execStmt pm hc (AssignVal name expr) = do
+  v <- evalValExpr pm hc expr
+  modify (insertVal name v)
+execStmt pm hc (AssignId name expr) = do
+  s <- evalIdExpr pm hc expr
+  modify (insertId name s)
 execStmt pm hc (If cond thenBranch elseBranch) = do
-  c <- evalVmExpr pm hc cond
+  c <- evalValExpr pm hc cond
   case c of
-    RVal (VBool True) -> execStmts pm hc thenBranch
-    RVal (VBool False) -> execStmts pm hc elseBranch
+    VBool True -> execStmts pm hc thenBranch
+    VBool False -> execStmts pm hc elseBranch
     _ -> runtimeErrorS "If: condition is not a boolean"
 execStmt pm hc (Foreach lbl cType suspVar conditions body) = do
   snapshot <- getStoreSnapshot cType
@@ -194,47 +240,31 @@ execStmt pm hc (Foreach lbl cType suspVar conditions body) = do
 execStmt _ _ (Continue lbl) = throwError (CFContinue lbl)
 execStmt _ _ (Break lbl) = throwError (CFBreak lbl)
 execStmt pm hc (Return expr) = do
-  v <- evalVmExpr pm hc expr
+  v <- evalValExpr pm hc expr
   throwError (CFReturn v)
 execStmt pm hc (ExprStmt expr) = do
-  _ <- evalVmExpr pm hc expr
+  _ <- evalValExpr pm hc expr
   pure ()
 execStmt pm hc (Store expr) = do
-  v <- evalVmExpr pm hc expr
-  case v of
-    RConstraint sid -> storeConstraint sid
-    _ -> runtimeErrorS "Store: expected constraint identifier"
+  sid <- evalIdExpr pm hc expr
+  storeConstraint sid
 execStmt pm hc (Kill expr) = do
-  v <- evalVmExpr pm hc expr
-  case v of
-    RConstraint sid -> killConstraint sid
-    _ -> runtimeErrorS "Kill: expected constraint identifier"
+  sid <- evalIdExpr pm hc expr
+  killConstraint sid
 execStmt pm hc (AddHistory ruleId exprs) = do
-  ids <- traverse (evalVmExpr pm hc) exprs
-  sids <- traverse expectConstraintId ids
+  sids <- traverse (evalIdExpr pm hc) exprs
   addHistory ruleId sids
 execStmt pm hc (DrainReactivationQueue suspVar body) = do
   drainQueue $ \sid -> do
     alive <- aliveConstraint sid
     if alive
       then do
-        modify (Map.insert suspVar (RConstraint sid))
+        modify (insertId suspVar sid)
         execStmts pm hc body
       else pure ()
 execStmt _ _ (PushFrame frame) = do
   modify @CallStack $ \stack ->
     take maxCallStackDepth (frame : stack)
-
--- ---------------------------------------------------------------------------
--- Runtime errors
--- ---------------------------------------------------------------------------
-
--- | Extract a constraint identifier from a runtime value, or raise a runtime error.
-expectConstraintId ::
-  (IOE :> es, State CallStack :> es) =>
-  RuntimeVal -> Eff es SuspensionId
-expectConstraintId (RConstraint s) = pure s
-expectConstraintId _ = runtimeErrorS "expected constraint identifier"
 
 -- ---------------------------------------------------------------------------
 -- Foreach implementation
@@ -246,7 +276,7 @@ execForeach ::
   HostCallRegistry ->
   Label ->
   Name ->
-  [(ArgIndex, Expr)] ->
+  [(ArgIndex, ValExpr)] ->
   [Stmt] ->
   [Suspension] ->
   Eff es ()
@@ -256,13 +286,12 @@ execForeach pm hc lbl suspVar conditions body (susp : rest) = do
   if not alive
     then execForeach pm hc lbl suspVar conditions body rest
     else do
-      -- Check index conditions
       ok <- checkConditions pm hc susp conditions
       if not ok
         then execForeach pm hc lbl suspVar conditions body rest
         else do
           let Suspension {suspId = sid} = susp
-          modify (Map.insert suspVar (RConstraint sid))
+          modify (insertId suspVar sid)
           result <- runError @ControlFlow $ execStmts pm hc body
           case result of
             Right () ->
@@ -271,157 +300,148 @@ execForeach pm hc lbl suspVar conditions body (susp : rest) = do
               | l == lbl -> execForeach pm hc lbl suspVar conditions body rest
               | otherwise -> throwError (CFContinue l)
             Left (_, CFBreak l)
-              | l == lbl -> pure () -- exit loop
+              | l == lbl -> pure ()
               | otherwise -> throwError (CFBreak l)
             Left (_, cf@(CFReturn _)) -> throwError cf
 
 checkConditions ::
   (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap -> HostCallRegistry -> Suspension -> [(ArgIndex, Expr)] -> Eff es Bool
+  ProcMap -> HostCallRegistry -> Suspension -> [(ArgIndex, ValExpr)] -> Eff es Bool
 checkConditions _ _ _ [] = pure True
 checkConditions pm hc susp ((ArgIndex i, expr) : rest) = do
-  v <- evalVmExpr pm hc expr
+  v <- evalValExpr pm hc expr
   let argVal = suspArg susp i
-  eq <- equal (toValue v) argVal
+  eq <- equal v argVal
   if eq
     then checkConditions pm hc susp rest
     else pure False
 
 -- ---------------------------------------------------------------------------
--- Expression evaluator
+-- Value-expression evaluator (normal mode)
 -- ---------------------------------------------------------------------------
 
-evalVmExpr ::
+evalValExpr ::
   (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap -> HostCallRegistry -> Expr -> Eff es RuntimeVal
-evalVmExpr _ _ (Var name) = do
-  env <- get
-  case Map.lookup name env of
+  ProcMap -> HostCallRegistry -> ValExpr -> Eff es Value
+evalValExpr _ _ (Var name) = do
+  env <- get @Env
+  case Map.lookup name env.envValues of
     Just v -> pure v
-    Nothing -> runtimeError' "evalVmExpr: unbound variable " name.unName
-evalVmExpr _ _ (Lit (IntLit n)) = pure (RVal (VInt n))
-evalVmExpr _ _ (Lit (FloatLit n)) = pure (RVal (VFloat n))
-evalVmExpr _ _ (Lit (AtomLit s)) = pure (RVal (VAtom s))
-evalVmExpr _ _ (Lit (TextLit s)) = pure (RVal (VText s))
-evalVmExpr _ _ (Lit (BoolLit b)) = pure (RVal (VBool b))
-evalVmExpr _ _ (Lit WildcardLit) = pure (RVal VWildcard)
-evalVmExpr pm hc (CallExpr name args) = do
-  argVals <- traverse (evalVmExpr pm hc) args
+    Nothing -> runtimeError' "evalValExpr: unbound variable " name.unName
+evalValExpr _ _ (Lit (IntLit n)) = pure (VInt n)
+evalValExpr _ _ (Lit (FloatLit n)) = pure (VFloat n)
+evalValExpr _ _ (Lit (AtomLit s)) = pure (VAtom s)
+evalValExpr _ _ (Lit (TextLit s)) = pure (VText s)
+evalValExpr _ _ (Lit (BoolLit b)) = pure (VBool b)
+evalValExpr _ _ (Lit WildcardLit) = pure VWildcard
+evalValExpr pm hc (CallExpr name args) = do
+  argVals <- traverse (evalCallArg pm hc) args
   callProc pm hc name argVals
-evalVmExpr pm hc (HostCall name args) = do
-  argVals <- traverse (evalVmExpr pm hc) args
-  derefedVals <- traverse derefRV argVals
-  case Map.lookup name hc of
-    Just (HostCallFn f) -> do
-      result <- Eff.try @SomeException (f derefedVals)
-      case result of
-        Right v -> pure v
-        Left exc ->
-          runtimeErrorS $
-            "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc
-    Nothing -> runtimeError' "evalVmExpr: unknown host call " name.unName
-  where
-    derefRV (RVal v) = RVal <$> deref v
-    derefRV rc = pure rc
-evalVmExpr pm hc (Not expr) = do
-  v <- evalVmExpr pm hc expr
+evalValExpr pm hc (HostCall name args) = do
+  argVals <- traverse (evalValExpr pm hc) args
+  derefedVals <- traverse deref argVals
+  invokeHostCall hc name derefedVals
+evalValExpr pm hc (Not expr) = do
+  v <- evalValExpr pm hc expr
   case v of
-    RVal (VBool b) -> pure (RVal (VBool (not b)))
+    VBool b -> pure (VBool (not b))
     _ -> runtimeErrorS "Not: expected boolean"
-evalVmExpr pm hc (And e1 e2) = do
-  v1 <- evalVmExpr pm hc e1
+evalValExpr pm hc (And e1 e2) = do
+  v1 <- evalValExpr pm hc e1
   case v1 of
-    RVal (VBool False) -> pure (RVal (VBool False))
-    RVal (VBool True) -> evalVmExpr pm hc e2
+    VBool False -> pure (VBool False)
+    VBool True -> evalValExpr pm hc e2
     _ -> runtimeErrorS "And: expected boolean"
-evalVmExpr pm hc (Or e1 e2) = do
-  v1 <- evalVmExpr pm hc e1
+evalValExpr pm hc (Or e1 e2) = do
+  v1 <- evalValExpr pm hc e1
   case v1 of
-    RVal (VBool True) -> pure (RVal (VBool True))
-    RVal (VBool False) -> evalVmExpr pm hc e2
+    VBool True -> pure (VBool True)
+    VBool False -> evalValExpr pm hc e2
     _ -> runtimeErrorS "Or: expected boolean"
-evalVmExpr _ _ NewVar = RVal <$> newVar
-evalVmExpr pm hc (MakeTerm functor args) = do
-  argVals <- traverse (evalVmExpr pm hc) args
-  pure $ RVal $ makeTerm functor.unName (map toValue argVals)
-evalVmExpr pm hc (MatchTerm expr functor arity) = do
-  v <- evalVmExpr pm hc expr
-  RVal . VBool <$> matchTerm (toValue v) functor.unName arity
-evalVmExpr pm hc (GetArg expr idx) = do
-  v <- evalVmExpr pm hc expr
-  RVal <$> getArg (toValue v) idx
-evalVmExpr pm hc (CreateConstraint cType args) = do
-  argVals <- traverse (evalVmExpr pm hc) args
-  sid <- createConstraint cType (map toValue argVals)
-  pure (RConstraint sid)
-evalVmExpr pm hc (Alive expr) = do
-  v <- evalVmExpr pm hc expr
-  case v of
-    RConstraint sid -> RVal . VBool <$> aliveConstraint sid
-    _ -> runtimeErrorS "Alive: expected constraint identifier"
-evalVmExpr pm hc (IdEqual e1 e2) = do
-  v1 <- evalVmExpr pm hc e1
-  v2 <- evalVmExpr pm hc e2
-  case (v1, v2) of
-    (RConstraint s1, RConstraint s2) -> pure (RVal (VBool (idEqual s1 s2)))
-    _ -> runtimeErrorS "IdEqual: expected constraint identifiers"
-evalVmExpr pm hc (IsConstraintType expr cType) = do
-  v <- evalVmExpr pm hc expr
-  case v of
-    RConstraint sid -> RVal . VBool <$> isConstraintType sid cType
-    _ -> runtimeErrorS "IsConstraintType: expected constraint identifier"
-evalVmExpr pm hc (NotInHistory ruleId args) = do
-  argVals <- traverse (evalVmExpr pm hc) args
-  sids <- traverse expectConstraintId argVals
-  RVal . VBool <$> notInHistory ruleId sids
-evalVmExpr pm hc (Unify e1 e2) = do
-  v1 <- evalVmExpr pm hc e1
-  v2 <- evalVmExpr pm hc e2
-  let val1 = toValue v1
-      val2 = toValue v2
-  (ok, observers) <- listen (unify val1 val2)
+evalValExpr _ _ NewVar = newVar
+evalValExpr pm hc (MakeTerm functor args) = do
+  argVals <- traverse (evalValExpr pm hc) args
+  pure $ makeTerm functor.unName argVals
+evalValExpr pm hc (MatchTerm expr functor arity) = do
+  v <- evalValExpr pm hc expr
+  VBool <$> matchTerm v functor.unName arity
+evalValExpr pm hc (GetArg expr idx) = do
+  v <- evalValExpr pm hc expr
+  getArg v idx
+evalValExpr pm hc (Alive expr) = do
+  sid <- evalIdExpr pm hc expr
+  VBool <$> aliveConstraint sid
+evalValExpr pm hc (IdEqual e1 e2) = do
+  s1 <- evalIdExpr pm hc e1
+  s2 <- evalIdExpr pm hc e2
+  pure (VBool (idEqual s1 s2))
+evalValExpr pm hc (IsConstraintType expr cType) = do
+  sid <- evalIdExpr pm hc expr
+  VBool <$> isConstraintType sid cType
+evalValExpr pm hc (NotInHistory ruleId args) = do
+  sids <- traverse (evalIdExpr pm hc) args
+  VBool <$> notInHistory ruleId sids
+evalValExpr pm hc (Unify e1 e2) = do
+  v1 <- evalValExpr pm hc e1
+  v2 <- evalValExpr pm hc e2
+  (ok, observers) <- listen (unify v1 v2)
   enqueue observers
   if ok
-    then pure (RVal (VBool True))
+    then pure (VBool True)
     else do
-      t1 <- valueToTerm "_" val1
-      t2 <- valueToTerm "_" val2
+      t1 <- valueToTerm "_" v1
+      t2 <- valueToTerm "_" v2
       runtimeErrorS $
         "unification failure: cannot unify "
           ++ prettyTerm t1
           ++ " with "
           ++ prettyTerm t2
-evalVmExpr pm hc (Equal e1 e2) = do
-  v1 <- evalVmExpr pm hc e1
-  v2 <- evalVmExpr pm hc e2
-  RVal . VBool <$> equal (toValue v1) (toValue v2)
-evalVmExpr pm hc (FieldGet expr field) = do
-  v <- evalVmExpr pm hc expr
-  case v of
-    RConstraint sid -> case field of
-      FieldId -> pure (RConstraint sid)
-      FieldArg (ArgIndex i) -> RVal <$> getConstraintArg sid i
-      FieldType -> (\ct -> RVal (VInt ct.unConstraintType)) <$> getConstraintType sid
-    _ -> runtimeErrorS "FieldGet: expected constraint identifier"
-evalVmExpr pm hc (EvalDeep expr) = evalExpr pm hc expr
+evalValExpr pm hc (Equal e1 e2) = do
+  v1 <- evalValExpr pm hc e1
+  v2 <- evalValExpr pm hc e2
+  VBool <$> equal v1 v2
+evalValExpr pm hc (FieldArg expr (ArgIndex i)) = do
+  sid <- evalIdExpr pm hc expr
+  getConstraintArg sid i
+evalValExpr pm hc (FieldType expr) = do
+  sid <- evalIdExpr pm hc expr
+  (\ct -> VInt ct.unConstraintType) <$> getConstraintType sid
+evalValExpr pm hc (EvalDeep expr) = evalValExprDeep pm hc expr
 
 -- ---------------------------------------------------------------------------
--- evalExpr
+-- Id-expression evaluator
 -- ---------------------------------------------------------------------------
 
--- | Evaluate an expression with automatic dereferencing: variable
--- references follow binding chains before use, and this mode propagates
--- into sub-expressions. Used to implement 'EvalDeep' (guards and @is@ RHS).
-evalExpr ::
+evalIdExpr ::
   (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap -> HostCallRegistry -> Expr -> Eff es RuntimeVal
-evalExpr pm hc (Var name) = do
-  v <- evalVmExpr pm hc (Var name)
-  case v of
-    RVal val -> RVal <$> deref val
-    rv -> pure rv
-evalExpr pm hc (HostCall name args) = do
-  argVals <- traverse (evalExpr pm hc) args
+  ProcMap -> HostCallRegistry -> IdExpr -> Eff es SuspensionId
+evalIdExpr _ _ (IdVar name) = do
+  env <- get @Env
+  case Map.lookup name env.envIds of
+    Just s -> pure s
+    Nothing -> runtimeError' "evalIdExpr: unbound id variable " name.unName
+evalIdExpr pm hc (CreateConstraint cType args) = do
+  argVals <- traverse (evalValExpr pm hc) args
+  createConstraint cType argVals
+
+-- ---------------------------------------------------------------------------
+-- Call-arg evaluator
+-- ---------------------------------------------------------------------------
+
+evalCallArg ::
+  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
+  ProcMap -> HostCallRegistry -> CallArg -> Eff es CallVal
+evalCallArg pm hc (AVal e) = CVal <$> evalValExpr pm hc e
+evalCallArg pm hc (AId e) = CId <$> evalIdExpr pm hc e
+
+-- ---------------------------------------------------------------------------
+-- Host call dispatch
+-- ---------------------------------------------------------------------------
+
+invokeHostCall ::
+  (InterpEffects es) =>
+  HostCallRegistry -> Name -> [Value] -> Eff es Value
+invokeHostCall hc name argVals =
   case Map.lookup name hc of
     Just (HostCallFn f) -> do
       result <- Eff.try @SomeException (f argVals)
@@ -430,11 +450,34 @@ evalExpr pm hc (HostCall name args) = do
         Left exc ->
           runtimeErrorS $
             "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc
-    Nothing -> runtimeError' "evalExpr: unknown host call " name.unName
-evalExpr pm hc (CallExpr name args) = do
-  argVals <- traverse (evalExpr pm hc) args
+    Nothing -> runtimeError' "evalValExpr: unknown host call " name.unName
+
+-- ---------------------------------------------------------------------------
+-- Value-expression evaluator (deep deref mode)
+-- ---------------------------------------------------------------------------
+
+-- | Evaluate a value expression with automatic dereferencing: variable
+-- references follow binding chains before use, and this mode propagates
+-- into sub-expressions. Used to implement 'EvalDeep' (guards and @is@ RHS).
+evalValExprDeep ::
+  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
+  ProcMap -> HostCallRegistry -> ValExpr -> Eff es Value
+evalValExprDeep pm hc (Var name) = do
+  v <- evalValExpr pm hc (Var name)
+  deref v
+evalValExprDeep pm hc (HostCall name args) = do
+  argVals <- traverse (evalValExprDeep pm hc) args
+  invokeHostCall hc name argVals
+evalValExprDeep pm hc (CallExpr name args) = do
+  argVals <- traverse (evalCallArgDeep pm hc) args
   callProc pm hc name argVals
-evalExpr pm hc (MakeTerm functor args) = do
-  argVals <- traverse (evalExpr pm hc) args
-  pure $ RVal $ makeTerm functor.unName (map toValue argVals)
-evalExpr pm hc expr = evalVmExpr pm hc expr
+evalValExprDeep pm hc (MakeTerm functor args) = do
+  argVals <- traverse (evalValExprDeep pm hc) args
+  pure $ makeTerm functor.unName argVals
+evalValExprDeep pm hc expr = evalValExpr pm hc expr
+
+evalCallArgDeep ::
+  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
+  ProcMap -> HostCallRegistry -> CallArg -> Eff es CallVal
+evalCallArgDeep pm hc (AVal e) = CVal <$> evalValExprDeep pm hc e
+evalCallArgDeep pm hc (AId e) = CId <$> evalIdExpr pm hc e

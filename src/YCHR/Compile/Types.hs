@@ -41,7 +41,7 @@ import Data.Text (Text)
 import YCHR.Desugared qualified as D
 import YCHR.Types (HeadArg, HeadConstraint, Identifier, Name, RuleId)
 import YCHR.Types qualified as Types
-import YCHR.VM (ArgIndex, ConstraintType, Expr, Stmt)
+import YCHR.VM (ArgIndex, ConstraintType, Stmt, ValExpr)
 
 -- | Errors raised by any pass in the CHR-to-VM compiler. Wrapped in
 -- 'YCHR.Parsed.AnnP' at the use site to carry the source location and
@@ -127,10 +127,10 @@ data Partner = Partner
 -- must be 'YCHR.VM.Equal' to @expectedValue@. Produced by
 -- 'YCHR.Compile.classifyEqual' and consumed by
 -- 'YCHR.Compile.wrapInPartnerLoops', which projects it back to the
--- @(ArgIndex, Expr)@ pair the VM 'YCHR.VM.Foreach' instruction expects.
+-- @(ArgIndex, ValExpr)@ pair the VM 'YCHR.VM.Foreach' instruction expects.
 data IndexCondition = IndexCondition
   { argIndex :: ArgIndex,
-    expectedValue :: Expr
+    expectedValue :: ValExpr
   }
 
 -- | Per-partner index conditions lifted out of check guards by the
@@ -154,7 +154,7 @@ data CompiledGuards = CompiledGuards
     -- | Residual boolean check that did not lift into the index map.
     -- 'Nothing' when every check guard lifted or when there were no
     -- check guards.
-    residualCheck :: Maybe Expr,
+    residualCheck :: Maybe ValExpr,
     -- | 'VarMap' extended with the bindings introduced by match
     -- guards.
     extendedVarMap :: VarMap
@@ -174,15 +174,19 @@ occMapMap f (OccurrenceMap m) = OccurrenceMap (Map.map f m)
 lookupOccurrences :: Identifier -> OccurrenceMap -> [Occurrence]
 lookupOccurrences k (OccurrenceMap m) = Map.findWithDefault [] k m
 
-newtype VarMap = VarMap (Map.Map Text Expr)
+-- | Map from source-level variable names to the 'ValExpr' that holds
+-- their value. The compiler stores only value bindings here; constraint
+-- identifiers (partner ids, the active id) are referenced by their
+-- generated names directly via 'YCHR.VM.IdVar' and never enter the map.
+newtype VarMap = VarMap (Map.Map Text ValExpr)
 
-varMapFromList :: [(Text, Expr)] -> VarMap
+varMapFromList :: [(Text, ValExpr)] -> VarMap
 varMapFromList = VarMap . Map.fromList
 
-lookupVar :: Text -> VarMap -> Maybe Expr
+lookupVar :: Text -> VarMap -> Maybe ValExpr
 lookupVar k (VarMap m) = Map.lookup k m
 
-insertVar :: Text -> Expr -> VarMap -> VarMap
+insertVar :: Text -> ValExpr -> VarMap -> VarMap
 insertVar k v (VarMap m) = VarMap (Map.insert k v m)
 
 notMemberVar :: Text -> VarMap -> Bool

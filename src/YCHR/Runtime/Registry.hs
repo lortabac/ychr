@@ -18,7 +18,6 @@ module YCHR.Runtime.Registry
 
     -- * Utilities
     unit,
-    toValue,
 
     -- * Value predicates
     isInteger,
@@ -46,7 +45,7 @@ import Effectful
 import Effectful.State.Static.Local (State)
 import YCHR.Runtime.Error (CallStack, runtimeErrorS)
 import YCHR.Runtime.Store (CHRStore)
-import YCHR.Runtime.Types (RuntimeVal (..), Value (..), VarId)
+import YCHR.Runtime.Types (Value (..), VarId)
 import YCHR.Runtime.Var (Unify, deref, equal, getVarId, newVar, unifiable)
 import YCHR.VM (Name (..))
 
@@ -57,6 +56,9 @@ import YCHR.VM (Name (..))
 -- | A host call function that can use logical variables, the constraint
 -- store, IO, and the runtime call stack (for raising runtime errors via
 -- 'runtimeErrorS' on bad arity or argument types).
+--
+-- Host functions take and return ordinary values; constraint identifiers
+-- never flow through this interface.
 newtype HostCallFn = HostCallFn
   { runHostCall ::
       forall es.
@@ -65,7 +67,7 @@ newtype HostCallFn = HostCallFn
         IOE :> es,
         State CallStack :> es
       ) =>
-      [RuntimeVal] -> Eff es RuntimeVal
+      [Value] -> Eff es Value
   }
 
 -- | Registry of host language functions.
@@ -115,72 +117,72 @@ baseHostCallRegistry =
     ]
   where
     numArith2 intOp floatOp = HostCallFn $ \case
-      [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (intOp a b)))
-      [RVal (VFloat a), RVal (VFloat b)] -> pure (RVal (VFloat (floatOp a b)))
+      [VInt a, VInt b] -> pure (VInt (intOp a b))
+      [VFloat a, VFloat b] -> pure (VFloat (floatOp a b))
       args ->
         runtimeErrorS $
           "arithmetic host call: expected 2 numeric arguments of same type, got "
             ++ show (length args)
     intArith2 op = HostCallFn $ \case
-      [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VInt (op a b)))
+      [VInt a, VInt b] -> pure (VInt (op a b))
       args ->
         runtimeErrorS $
           "integer arithmetic host call: expected 2 Int arguments, got "
             ++ show (length args)
     floatArith2 op = HostCallFn $ \case
-      [RVal (VFloat a), RVal (VFloat b)] -> pure (RVal (VFloat (op a b)))
+      [VFloat a, VFloat b] -> pure (VFloat (op a b))
       args ->
         runtimeErrorS $
           "float arithmetic host call: expected 2 Float arguments, got "
             ++ show (length args)
     numCmp intOp floatOp = HostCallFn $ \case
-      [RVal (VInt a), RVal (VInt b)] -> pure (RVal (VBool (intOp a b)))
-      [RVal (VFloat a), RVal (VFloat b)] -> pure (RVal (VBool (floatOp a b)))
+      [VInt a, VInt b] -> pure (VBool (intOp a b))
+      [VFloat a, VFloat b] -> pure (VBool (floatOp a b))
       args ->
         runtimeErrorS $
           "comparison host call: expected 2 numeric arguments of same type, got "
             ++ show (length args)
     toFloatFn = HostCallFn $ \case
-      [RVal (VInt n)] -> pure (RVal (VFloat (fromIntegral n)))
-      [RVal (VFloat n)] -> pure (RVal (VFloat n))
+      [VInt n] -> pure (VFloat (fromIntegral n))
+      [VFloat n] -> pure (VFloat n)
       _ -> runtimeErrorS "int_to_float: expected 1 numeric argument"
     toIntFn = HostCallFn $ \case
-      [RVal (VFloat n)] -> pure (RVal (VInt (truncate n)))
-      [RVal (VInt n)] -> pure (RVal (VInt n))
+      [VFloat n] -> pure (VInt (truncate n))
+      [VInt n] -> pure (VInt n)
       _ -> runtimeErrorS "float_to_int: expected 1 numeric argument"
     unifiableHost = HostCallFn $ \case
-      [RVal a, RVal b] -> RVal . VBool <$> unifiable a b
+      [a, b] -> VBool <$> unifiable a b
       args ->
         runtimeErrorS $
           "unifiable host call: expected 2 arguments, got " ++ show (length args)
     valEq = HostCallFn $ \case
-      [RVal a, RVal b] -> RVal . VBool <$> equal a b
+      [a, b] -> VBool <$> equal a b
       args ->
         runtimeErrorS $
           "== host call: expected 2 arguments, got " ++ show (length args)
     stringConcat = HostCallFn $ \case
-      [RVal (VText a), RVal (VText b)] -> pure (RVal (VText (a <> b)))
+      [VText a, VText b] -> pure (VText (a <> b))
       _ -> runtimeErrorS "string_concat: expected 2 Text arguments"
     stringLength = HostCallFn $ \case
-      [RVal (VText s)] -> pure (RVal (VInt (T.length s)))
+      [VText s] -> pure (VInt (T.length s))
       _ -> runtimeErrorS "string_length: expected 1 Text argument"
     stringUpper = HostCallFn $ \case
-      [RVal (VText s)] -> pure (RVal (VText (T.toUpper s)))
+      [VText s] -> pure (VText (T.toUpper s))
       _ -> runtimeErrorS "string_upper: expected 1 Text argument"
     stringLower = HostCallFn $ \case
-      [RVal (VText s)] -> pure (RVal (VText (T.toLower s)))
+      [VText s] -> pure (VText (T.toLower s))
       _ -> runtimeErrorS "string_lower: expected 1 Text argument"
     chrError = HostCallFn $ \_ -> runtimeErrorS "CHR runtime error: no matching equation"
     writeStr = HostCallFn $ \case
-      [RVal (VText s)] -> unit <$ liftIO (putStr (T.unpack s))
+      [VText s] -> unit <$ liftIO (putStr (T.unpack s))
       _ -> runtimeErrorS "write: expected 1 Text argument"
     typePred p = HostCallFn $ \case
-      [RVal v] -> do
+      [v] -> do
         v' <- deref v
-        pure (RVal (VBool (p v')))
+        pure (VBool (p v'))
       _ -> runtimeErrorS "type predicate: expected 1 argument"
     groundPred = HostCallFn $ \case
-      [RVal v] -> RVal . VBool <$> isGround v
+      [v] -> VBool <$> isGround v
       _ -> runtimeErrorS "ground: expected 1 argument"
     isGround v = do
       v' <- deref v
@@ -190,20 +192,20 @@ baseHostCallRegistry =
         VTerm _ args -> allM isGround args
         _ -> pure True
     termVariablesPred = HostCallFn $ \case
-      [RVal v] -> do
+      [v] -> do
         (vars, _) <- collectVars Set.empty v
-        pure (RVal (valueList vars))
+        pure (valueList vars)
       _ -> runtimeErrorS "term_variables: expected 1 argument"
     compoundToList = HostCallFn $ \case
-      [RVal (VTerm f args)] -> pure (RVal (valueList (VAtom f : args)))
+      [VTerm f args] -> pure (valueList (VAtom f : args))
       _ -> runtimeErrorS "compound_to_list: expected 1 compound term argument"
     listToCompound = HostCallFn $ \case
-      [RVal list] -> case fromValueList list of
-        Just (VAtom f : args) -> pure (RVal (VTerm f args))
+      [list] -> case fromValueList list of
+        Just (VAtom f : args) -> pure (VTerm f args)
         _ -> runtimeErrorS "list_to_compound: expected a non-empty list with an atom head"
       _ -> runtimeErrorS "list_to_compound: expected 1 list argument"
     copyTermHost = HostCallFn $ \case
-      [RVal v] -> RVal <$> copyTerm v
+      [v] -> copyTerm v
       _ -> runtimeErrorS "copy_term: expected 1 argument"
 
 -- ---------------------------------------------------------------------------
@@ -211,18 +213,8 @@ baseHostCallRegistry =
 -- ---------------------------------------------------------------------------
 
 -- | The unit return value for host calls that are only used for side effects.
-unit :: RuntimeVal
-unit = RVal (VAtom "()")
-
--- | Extract a 'Value' from a 'RuntimeVal'.
---
--- The 'RConstraint' branch is a compiler-invariant guard: constraint
--- identifiers are not valid 'Value's, and the compiler is expected never
--- to emit VM code that places one in a 'Value' position. Hitting it
--- indicates a bug in the compiler, not in user input.
-toValue :: RuntimeVal -> Value
-toValue (RVal v) = v
-toValue (RConstraint _) = error "toValue: cannot convert constraint ID to Value"
+unit :: Value
+unit = VAtom "()"
 
 -- ---------------------------------------------------------------------------
 -- Value predicates

@@ -188,9 +188,9 @@ genTell name cType arity =
    in Procedure
         tellName
         params
-        [ Let activeName (CreateConstraint cType (map Var params)),
-          Store (Var activeName),
-          ExprStmt (CallExpr activateName [Var activeName])
+        [ LetId activeName (CreateConstraint cType (map Var params)),
+          Store (IdVar activeName),
+          ExprStmt (CallExpr activateName [AId (IdVar activeName)])
         ]
 
 -- ---------------------------------------------------------------------------
@@ -204,20 +204,21 @@ genTell name cType arity =
 genActivate :: Types.Name -> Int -> [Occurrence] -> Procedure
 genActivate name arity occs =
   let activateName = activateProcName name arity
-      occParams = activeName : argNames arity
       argExtracts =
-        [ Let (argName i) (FieldGet (Var activeName) (FieldArg (ArgIndex i)))
+        [ LetVal (argName i) (FieldArg (IdVar activeName) (ArgIndex i))
         | i <- [0 .. arity - 1]
         ]
       body =
         argExtracts
-          ++ concatMap (genActivateCall occParams) occs
+          ++ concatMap genActivateCall occs
           ++ [Return (Lit (BoolLit False))]
    in Procedure activateName [activeName] body
   where
-    genActivateCall occParams' occ =
+    occCallArgs =
+      AId (IdVar activeName) : map (AVal . Var) (argNames arity)
+    genActivateCall occ =
       let occName = occProcName name arity occ.number
-       in [ Let dropResultName (CallExpr occName (map Var occParams')),
+       in [ LetVal dropResultName (CallExpr occName occCallArgs),
             If (Var dropResultName) [Return (Lit (BoolLit True))] []
           ]
 
@@ -326,10 +327,12 @@ wrapInPartnerLoops occ condMap inner =
           partArity = length partner.constraint.args
           conds = [(c.argIndex, c.expectedValue) | c <- Map.findWithDefault [] k condMap]
           -- Bind the partner's id and arguments as ordinary locals so
-          -- the rest of the body can reference them by name.
+          -- the rest of the body can reference them by name. The id is
+          -- the suspension itself: 'IdVar suspVar' is renamed to
+          -- 'IdVar (partIdName k)' for symmetry with subsequent uses.
           fieldExtracts =
-            Let (partIdName k) (FieldGet (Var suspVar) FieldId)
-              : [ Let (partArgName k j) (FieldGet (Var suspVar) (FieldArg (ArgIndex j)))
+            LetId (partIdName k) (IdVar suspVar)
+              : [ LetVal (partArgName k j) (FieldArg (IdVar suspVar) (ArgIndex j))
                 | j <- [0 .. partArity - 1]
                 ]
           -- The partner must be distinct from the active constraint and
@@ -338,9 +341,9 @@ wrapInPartnerLoops occ condMap inner =
           -- Foreach iterator guarantees yielded partners are alive, and
           -- the active constraint's liveness is verified after body
           -- execution (early drop / backjumping in 'genFireStmts').
-          distinctActive = Not (IdEqual (Var (partIdName k)) (Var activeName))
+          distinctActive = Not (IdEqual (IdVar (partIdName k)) (IdVar activeName))
           distinctEarlier =
-            [ Not (IdEqual (Var (partIdName k)) (Var (partIdName j)))
+            [ Not (IdEqual (IdVar (partIdName k)) (IdVar (partIdName j)))
             | j <- [PartnerIndex 0 .. k - 1]
             ]
           distinctAll = foldl' And distinctActive distinctEarlier
@@ -371,7 +374,7 @@ genFireStmts funSet symTab varMap occ = do
   bodyStmts <- compileBodyGoals funSet symTab varMap bodySi ruleBody
   let earlyDropStmts
         | activeIsRemoved = [Return (Lit (BoolLit True))]
-        | otherwise = [If (Not (Alive (Var activeName))) [Return (Lit (BoolLit True))] []]
+        | otherwise = [If (Not (Alive (IdVar activeName))) [Return (Lit (BoolLit True))] []]
       -- Backjumping (paper §5.3): after body execution, check each
       -- partner's liveness outermost-first.  If a partner died (e.g.
       -- killed by a rule fired during body execution), Continue to its
@@ -389,7 +392,7 @@ genFireStmts funSet symTab varMap occ = do
         | activeIsRemoved = []
         | otherwise =
             [ If
-                (Not (Alive (Var (partIdName k))))
+                (Not (Alive (IdVar (partIdName k))))
                 [Continue (partLabel k)]
                 []
             | (k, p) <- zip [PartnerIndex 0 ..] occ.partners,
@@ -416,11 +419,11 @@ genFireStmts funSet symTab varMap occ = do
 -- IDs are sorted by head position so that the same rule with the same
 -- partner combination always produces an identical tuple regardless of
 -- which occurrence is active (paper §5.2, Listing 1, line 14).
-buildHistoryIds :: Occurrence -> [Expr]
+buildHistoryIds :: Occurrence -> [IdExpr]
 buildHistoryIds occ =
   let positions =
-        (occ.activeIdx, Var activeName)
-          : [ (p.idx, Var (partIdName k))
+        (occ.activeIdx, IdVar activeName)
+          : [ (p.idx, IdVar (partIdName k))
             | (k, p) <- zip [PartnerIndex 0 ..] occ.partners
             ]
    in map snd (sortOn fst positions)
@@ -444,19 +447,19 @@ genKillStmts :: Occurrence -> [Stmt]
 genKillStmts occ =
   let -- Kill removed partners
       partnerKills =
-        [ Kill (Var (partIdName k))
+        [ Kill (IdVar (partIdName k))
         | (k, p) <- zip [PartnerIndex 0 ..] occ.partners,
           not p.isKept
         ]
       -- Kill active if removed
-      activeKill = [Kill (Var activeName) | not occ.isKept]
+      activeKill = [Kill (IdVar activeName) | not occ.isKept]
    in partnerKills ++ activeKill
 
 -- ---------------------------------------------------------------------------
 -- Compile terms
 -- ---------------------------------------------------------------------------
 
-compileTerm :: VarMap -> SrcInfo -> Term -> Eff '[Writer [Diagnostic CompileError]] Expr
+compileTerm :: VarMap -> SrcInfo -> Term -> Eff '[Writer [Diagnostic CompileError]] ValExpr
 compileTerm varMap si (VarTerm v) = case lookupVar v varMap of
   Just expr -> pure expr
   Nothing -> do
@@ -502,17 +505,17 @@ compileExpr ::
   VarMap ->
   SrcInfo ->
   Term ->
-  Eff '[Writer [Diagnostic CompileError]] Expr
+  Eff '[Writer [Diagnostic CompileError]] ValExpr
 compileExpr funSet varMap si (CompoundTerm (Types.Unqualified "$call") args)
   | length args >= 2 = do
       args' <- traverse (compileExpr funSet varMap si) args
-      pure (CallExpr (callFunProcName (length args - 1)) args')
+      pure (CallExpr (callFunProcName (length args - 1)) (map AVal args'))
 compileExpr _ varMap si (CompoundTerm (Types.Unqualified "term") [arg]) =
   compileTerm varMap si arg
 compileExpr funSet varMap si (CompoundTerm name args)
   | Set.member (Identifier name (length args)) funSet = do
       args' <- traverse (compileExpr funSet varMap si) args
-      pure (CallExpr (funcProcName name (length args')) args')
+      pure (CallExpr (funcProcName name (length args')) (map AVal args'))
   | Types.Qualified "host" f <- name = do
       args' <- traverse (compileExpr funSet varMap si) args
       pure (HostCall (Name f) args')
@@ -522,37 +525,46 @@ compileExpr _ varMap si t = compileTerm varMap si t
 -- Compile guards
 -- ---------------------------------------------------------------------------
 
--- | Free 'Var' names occurring in an 'Expr'. Used by the index-condition
--- pushdown classifier to decide whether the non-partner-arg side of an
--- equality is referenceable at a partner loop's evaluation point.
-freeVars :: Expr -> Set Name
-freeVars = go
+-- | Free 'Var' / 'IdVar' names occurring in a 'ValExpr'. Used by the
+-- index-condition pushdown classifier to decide whether the
+-- non-partner-arg side of an equality is referenceable at a partner
+-- loop's evaluation point. Walks through 'IdExpr' children too: even
+-- though their bindings live in a separate environment slot at
+-- runtime, scope-wise they share a single source-level namespace.
+freeVars :: ValExpr -> Set Name
+freeVars = goV
   where
-    go (Var n) = Set.singleton n
-    go (Lit _) = Set.empty
-    go NewVar = Set.empty
-    go (CallExpr _ es) = Set.unions (map go es)
-    go (HostCall _ es) = Set.unions (map go es)
-    go (EvalDeep e) = go e
-    go (Not e) = go e
-    go (And a b) = go a `Set.union` go b
-    go (Or a b) = go a `Set.union` go b
-    go (MakeTerm _ es) = Set.unions (map go es)
-    go (MatchTerm e _ _) = go e
-    go (GetArg e _) = go e
-    go (CreateConstraint _ es) = Set.unions (map go es)
-    go (Alive e) = go e
-    go (IdEqual a b) = go a `Set.union` go b
-    go (IsConstraintType e _) = go e
-    go (NotInHistory _ es) = Set.unions (map go es)
-    go (Unify a b) = go a `Set.union` go b
-    go (Equal a b) = go a `Set.union` go b
-    go (FieldGet e _) = go e
+    goV (Var n) = Set.singleton n
+    goV (Lit _) = Set.empty
+    goV NewVar = Set.empty
+    goV (CallExpr _ args) = Set.unions (map goA args)
+    goV (HostCall _ es) = Set.unions (map goV es)
+    goV (EvalDeep e) = goV e
+    goV (Not e) = goV e
+    goV (And a b) = goV a `Set.union` goV b
+    goV (Or a b) = goV a `Set.union` goV b
+    goV (MakeTerm _ es) = Set.unions (map goV es)
+    goV (MatchTerm e _ _) = goV e
+    goV (GetArg e _) = goV e
+    goV (Alive e) = goI e
+    goV (IdEqual a b) = goI a `Set.union` goI b
+    goV (IsConstraintType e _) = goI e
+    goV (NotInHistory _ es) = Set.unions (map goI es)
+    goV (Unify a b) = goV a `Set.union` goV b
+    goV (Equal a b) = goV a `Set.union` goV b
+    goV (FieldArg e _) = goI e
+    goV (FieldType e) = goI e
+
+    goI (IdVar n) = Set.singleton n
+    goI (CreateConstraint _ es) = Set.unions (map goV es)
+
+    goA (AVal e) = goV e
+    goA (AId e) = goI e
 
 -- | Set of variable names visible at the moment partner @k@'s
 -- 'YCHR.VM.Foreach' evaluates its index-condition expressions: the
 -- active constraint's argument names, plus every earlier partner's
--- argument names. Match-guard 'Let' bindings are deliberately /not/
+-- argument names. Match-guard 'LetVal' bindings are deliberately /not/
 -- included — they live inside the innermost guard wrapper and are not
 -- in scope at any 'Foreach' evaluation point.
 inScopeBeforeLoop :: Occurrence -> PartnerIndex -> Set Name
@@ -567,10 +579,10 @@ inScopeBeforeLoop occ k =
           ]
    in activeNames `Set.union` earlierPartnerNames
 
--- | Recognise an 'Expr' that is a reference to a partner argument
+-- | Recognise a 'ValExpr' that is a reference to a partner argument
 -- variable. The inverse of 'partArgName' for the partner indices and
 -- arities present in @occ@.
-asPartnerArg :: Occurrence -> Expr -> Maybe (PartnerIndex, ArgIndex)
+asPartnerArg :: Occurrence -> ValExpr -> Maybe (PartnerIndex, ArgIndex)
 asPartnerArg occ (Var n) = Map.lookup n partArgs
   where
     partArgs =
@@ -589,9 +601,9 @@ asPartnerArg _ _ = Nothing
 -- residual check expression.
 classifyEqual ::
   Occurrence ->
-  Expr ->
-  Expr ->
-  Maybe (PartnerIndex, ArgIndex, Expr)
+  ValExpr ->
+  ValExpr ->
+  Maybe (PartnerIndex, ArgIndex, ValExpr)
 classifyEqual occ a b
   | Just (k, j) <- asPartnerArg occ a,
     freeVars b `Set.isSubsetOf` inScopeBeforeLoop occ k =
@@ -653,7 +665,7 @@ compileMatchGuard si (matchWrapper, varMap) (D.GuardMatch term name arity) = do
   pure (matchWrapper . check, varMap)
 compileMatchGuard si (matchWrapper, varMap) (D.GuardGetArg vname term idx) = do
   termExpr <- compileTerm varMap si term
-  let binding body = Let (Name vname) (GetArg termExpr idx) : body
+  let binding body = LetVal (Name vname) (GetArg termExpr idx) : body
       varMap' = insertVar vname (Var (Name vname)) varMap
   pure (matchWrapper . binding, varMap')
 compileMatchGuard _ acc _ = pure acc
@@ -672,7 +684,7 @@ compileCheckGuards ::
   VarMap ->
   SrcInfo ->
   [D.Guard] ->
-  Eff '[Writer [Diagnostic CompileError]] (PartnerCondMap, Maybe Expr)
+  Eff '[Writer [Diagnostic CompileError]] (PartnerCondMap, Maybe ValExpr)
 compileCheckGuards funSet mOcc varMap si guards = do
   (condMap, residuals) <- foldM step (Map.empty, []) guards
   let residual = case residuals of
@@ -720,12 +732,12 @@ compileBodyGoals funSet symTab varMap si goals = do
 -- reactivation queue. Used by 'D.BodyUnify' and the re-binding case of
 -- 'D.BodyIs'. Wrapped in a helper because the dispatch shape is not
 -- something a casual reader should have to re-derive every time.
-unifyAndReactivate :: Expr -> Expr -> [Stmt]
+unifyAndReactivate :: ValExpr -> ValExpr -> [Stmt]
 unifyAndReactivate l r =
   [ ExprStmt (Unify l r),
     DrainReactivationQueue
       pendingName
-      [ExprStmt (CallExpr reactivateDispatchName [Var pendingName])]
+      [ExprStmt (CallExpr reactivateDispatchName [AId (IdVar pendingName)])]
   ]
 
 -- | Compile a single body goal, returning the generated statements and
@@ -742,11 +754,11 @@ compileBodyGoal ::
 compileBodyGoal _ _ varMap _ D.BodyTrue = pure ([], varMap)
 compileBodyGoal _ _ varMap si (D.BodyConstraint con) = do
   let argVars = [v | VarTerm v <- con.args, notMemberVar v varMap]
-      newStmts = [Let (Name v) NewVar | v <- argVars]
+      newStmts = [LetVal (Name v) NewVar | v <- argVars]
       varMap' = foldl' (\m v -> insertVar v (Var (Name v)) m) varMap argVars
   callArgs <- traverse (compileTerm varMap' si) con.args
   let tellName = tellProcName (Types.qualifiedToName con.name) (length callArgs)
-  pure (newStmts ++ [ExprStmt (CallExpr tellName callArgs)], varMap')
+  pure (newStmts ++ [ExprStmt (CallExpr tellName (map AVal callArgs))], varMap')
 compileBodyGoal _ _ varMap si (D.BodyUnify t1 t2) = do
   t1' <- compileTerm varMap si t1
   t2' <- compileTerm varMap si t2
@@ -760,17 +772,17 @@ compileBodyGoal funSet _ varMap si (D.BodyIs v expr) = do
     -- Re-binding a variable already bound by the head: tell-unify so any
     -- existing constraints observing it are reactivated.
     Just existing -> pure (unifyAndReactivate existing (EvalDeep expr'), varMap)
-    -- First binding of this variable: an ordinary 'Let' is enough; no
+    -- First binding of this variable: an ordinary 'LetVal' is enough; no
     -- observers can exist yet.
     Nothing ->
       let varMap' = insertVar v (Var (Name v)) varMap
-       in pure ([Let (Name v) (EvalDeep expr')], varMap')
+       in pure ([LetVal (Name v) (EvalDeep expr')], varMap')
 compileBodyGoal funSet _ varMap si (D.BodyFunctionCall (Types.Unqualified "$call") args) = do
   args' <- traverse (compileExpr funSet varMap si) args
-  pure ([ExprStmt (CallExpr (callFunProcName (length args - 1)) args')], varMap)
+  pure ([ExprStmt (CallExpr (callFunProcName (length args - 1)) (map AVal args'))], varMap)
 compileBodyGoal funSet _ varMap si (D.BodyFunctionCall name args) = do
   args' <- traverse (compileExpr funSet varMap si) args
-  pure ([ExprStmt (CallExpr (funcProcName name (length args')) args')], varMap)
+  pure ([ExprStmt (CallExpr (funcProcName name (length args')) (map AVal args'))], varMap)
 
 -- ---------------------------------------------------------------------------
 -- Compile function definitions
@@ -847,8 +859,13 @@ genReactivateDispatch symTab =
   where
     genDispatchBranch (ident, cType) =
       If
-        (IsConstraintType (Var suspParamName) cType)
-        [ExprStmt (CallExpr (activateProcName ident.name ident.arity) [Var suspParamName])]
+        (IsConstraintType (IdVar suspParamName) cType)
+        [ ExprStmt
+            ( CallExpr
+                (activateProcName ident.name ident.arity)
+                [AId (IdVar suspParamName)]
+            )
+        ]
         []
 
 -- ---------------------------------------------------------------------------
@@ -890,7 +907,11 @@ genFunRefBranch callArity argParams func
                   (Equal (GetArg (Var (Name "closure")) 0) (Lit (AtomLit flatName)))
                   (Equal (GetArg (Var (Name "closure")) 1) (Lit (IntLit func.arity)))
               )
-       in [If condition [Return (CallExpr pName (map Var argParams))] []]
+       in [ If
+              condition
+              [Return (CallExpr pName (map (AVal . Var) argParams))]
+              []
+          ]
 
 -- | Generate a dispatch branch for a lifted lambda closure.
 -- Only emits a branch for functions whose name starts with @__lambda_@.
@@ -919,12 +940,21 @@ genLambdaBranch callArity argParams func
           -- index 0, sourceForm at index 1), so capture i lives at
           -- index i + 2.
           captureBinds =
-            [ Let (Name ("cap_" <> T.pack (show i))) (GetArg (Var (Name "closure")) (i + 2))
+            [ LetVal
+                (Name ("cap_" <> T.pack (show i)))
+                (GetArg (Var (Name "closure")) (i + 2))
             | i <- [0 .. numCaptures - 1]
             ]
-          captureVars = [Var (Name ("cap_" <> T.pack (show i))) | i <- [0 .. numCaptures - 1]]
+          captureVars =
+            [Var (Name ("cap_" <> T.pack (show i))) | i <- [0 .. numCaptures - 1]]
           allArgs = captureVars ++ map Var argParams
-       in [If condition (captureBinds ++ [Return (CallExpr pName allArgs)]) []]
+       in [ If
+              condition
+              ( captureBinds
+                  ++ [Return (CallExpr pName (map AVal allArgs))]
+              )
+              []
+          ]
   where
     numCaptures = func.arity - callArity
 

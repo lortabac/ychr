@@ -140,10 +140,16 @@ compileStmts (s : rest) = compileStmtTail s rest
 -- Let creates a nested let wrapping the rest; other statements emit
 -- themselves followed by the rest in a begin.
 compileStmtTail :: Stmt -> [Stmt] -> SExpr
-compileStmtTail (Let n e) rest =
+compileStmtTail (LetVal n e) rest =
   SList
     [ SAtom "let",
-      SList [SList [SAtom (mangleName n), compileExpr e]],
+      SList [SList [SAtom (mangleName n), compileValExpr e]],
+      compileStmts rest
+    ]
+compileStmtTail (LetId n e) rest =
+  SList
+    [ SAtom "let",
+      SList [SList [SAtom (mangleName n), compileIdExpr e]],
       compileStmts rest
     ]
 compileStmtTail s [] = compileStmt s
@@ -152,15 +158,18 @@ compileStmtTail s rest =
 
 -- | Compile a single statement (no continuation context).
 compileStmt :: Stmt -> SExpr
-compileStmt (Let n e) =
-  -- Standalone let (no continuation) — bind to nothing useful
-  SList [SAtom "let", SList [SList [SAtom (mangleName n), compileExpr e]], SAtom "#f"]
-compileStmt (Assign n e) =
-  SList [SAtom "set!", SAtom (mangleName n), compileExpr e]
+compileStmt (LetVal n e) =
+  SList [SAtom "let", SList [SList [SAtom (mangleName n), compileValExpr e]], SAtom "#f"]
+compileStmt (LetId n e) =
+  SList [SAtom "let", SList [SList [SAtom (mangleName n), compileIdExpr e]], SAtom "#f"]
+compileStmt (AssignVal n e) =
+  SList [SAtom "set!", SAtom (mangleName n), compileValExpr e]
+compileStmt (AssignId n e) =
+  SList [SAtom "set!", SAtom (mangleName n), compileIdExpr e]
 compileStmt (If cond thenBranch elseBranch) =
   SList
     [ SAtom "if",
-      compileExpr cond,
+      compileValExpr cond,
       compileBody thenBranch,
       compileBody elseBranch
     ]
@@ -171,19 +180,22 @@ compileStmt (Continue (Label lbl)) =
 compileStmt (Break (Label lbl)) =
   SList [SAtom (breakName lbl), SAtom "#f"]
 compileStmt (Return e) =
-  SList [SAtom "%return", compileExpr e]
+  SList [SAtom "%return", compileValExpr e]
 compileStmt (ExprStmt e) =
-  compileExpr e
+  compileValExpr e
 compileStmt (Store e) =
-  SList [SAtom "store-constraint", SAtom "%s", compileExpr e]
+  SList [SAtom "store-constraint", SAtom "%s", compileIdExpr e]
 compileStmt (Kill e) =
-  SList [SAtom "kill-constraint", compileExpr e]
+  SList [SAtom "kill-constraint", compileIdExpr e]
 compileStmt (AddHistory (RuleId rid) es) =
   SList
     [ SAtom "add-history!",
       SAtom "%s",
       SInt rid,
-      SList (SAtom "list" : map (\e -> SList [SAtom "constraint-id", compileExpr e]) es)
+      SList
+        ( SAtom "list"
+            : map (\e -> SList [SAtom "constraint-id", compileIdExpr e]) es
+        )
     ]
 compileStmt (PushFrame _) =
   SList [SAtom "values"]
@@ -212,7 +224,7 @@ compileBody stmts = compileStmts stmts
 -- Foreach compilation
 -- ---------------------------------------------------------------------------
 
-compileForeach :: Label -> Int -> Name -> [(ArgIndex, Expr)] -> [Stmt] -> SExpr
+compileForeach :: Label -> Int -> Name -> [(ArgIndex, ValExpr)] -> [Stmt] -> SExpr
 compileForeach (Label lbl) ct (Name sv) conds body =
   SList
     [ SAtom "call/cc",
@@ -255,7 +267,7 @@ compileForeach (Label lbl) ct (Name sv) conds body =
         ]
     ]
 
-foreachInner :: Text -> Text -> [(ArgIndex, Expr)] -> [Stmt] -> SExpr
+foreachInner :: Text -> Text -> [(ArgIndex, ValExpr)] -> [Stmt] -> SExpr
 foreachInner lbl sv conds body =
   let aliveCheck = SList [SAtom "suspension-alive?", SAtom sv]
       condChecks = map compileCondition conds
@@ -278,70 +290,78 @@ foreachInner lbl sv conds body =
       SList
         [ SAtom "equal?/chr",
           SList [SAtom "constraint-arg", SAtom sv, SInt i],
-          compileExpr e
+          compileValExpr e
         ]
 
 -- ---------------------------------------------------------------------------
 -- Expression compilation
 -- ---------------------------------------------------------------------------
 
-compileExpr :: Expr -> SExpr
-compileExpr (Var n) = SAtom (mangleName n)
-compileExpr (Lit l) = compileLiteral l
-compileExpr (CallExpr n args) =
-  SList (SAtom (mangleName n) : SAtom "%s" : map compileExpr args)
-compileExpr (HostCall n args) =
+compileValExpr :: ValExpr -> SExpr
+compileValExpr (Var n) = SAtom (mangleName n)
+compileValExpr (Lit l) = compileLiteral l
+compileValExpr (CallExpr n args) =
+  SList (SAtom (mangleName n) : SAtom "%s" : map compileCallArg args)
+compileValExpr (HostCall n args) =
   compileHostCall n args
-compileExpr (EvalDeep e) =
+compileValExpr (EvalDeep e) =
   compileEvalDeep e
-compileExpr (Not e) =
-  SList [SAtom "not", compileExpr e]
-compileExpr (And a b) =
-  SList [SAtom "and", compileExpr a, compileExpr b]
-compileExpr (Or a b) =
-  SList [SAtom "or", compileExpr a, compileExpr b]
-compileExpr NewVar =
+compileValExpr (Not e) =
+  SList [SAtom "not", compileValExpr e]
+compileValExpr (And a b) =
+  SList [SAtom "and", compileValExpr a, compileValExpr b]
+compileValExpr (Or a b) =
+  SList [SAtom "or", compileValExpr a, compileValExpr b]
+compileValExpr NewVar =
   SList [SAtom "make-var", SAtom "%s"]
-compileExpr (MakeTerm (Name f) args) =
+compileValExpr (MakeTerm (Name f) args) =
   SList
     [ SAtom "make-term",
       compileSymbol f,
-      SList (SAtom "vector" : map compileExpr args)
+      SList (SAtom "vector" : map compileValExpr args)
     ]
-compileExpr (MatchTerm e (Name f) arity) =
-  SList [SAtom "match-term", compileExpr e, compileSymbol f, SInt arity]
-compileExpr (GetArg e i) =
-  SList [SAtom "get-arg", compileExpr e, SInt i]
-compileExpr (CreateConstraint (ConstraintType ct) args) =
-  SList
-    [ SAtom "create-constraint",
-      SAtom "%s",
-      SInt ct,
-      SList (SAtom "vector" : map compileExpr args)
-    ]
-compileExpr (Alive e) =
-  SList [SAtom "alive-constraint?", compileExpr e]
-compileExpr (IdEqual a b) =
-  SList [SAtom "id-equal?", compileExpr a, compileExpr b]
-compileExpr (IsConstraintType e (ConstraintType ct)) =
-  SList [SAtom "is-constraint-type?", compileExpr e, SInt ct]
-compileExpr (NotInHistory (RuleId rid) es) =
+compileValExpr (MatchTerm e (Name f) arity) =
+  SList [SAtom "match-term", compileValExpr e, compileSymbol f, SInt arity]
+compileValExpr (GetArg e i) =
+  SList [SAtom "get-arg", compileValExpr e, SInt i]
+compileValExpr (Alive e) =
+  SList [SAtom "alive-constraint?", compileIdExpr e]
+compileValExpr (IdEqual a b) =
+  SList [SAtom "id-equal?", compileIdExpr a, compileIdExpr b]
+compileValExpr (IsConstraintType e (ConstraintType ct)) =
+  SList [SAtom "is-constraint-type?", compileIdExpr e, SInt ct]
+compileValExpr (NotInHistory (RuleId rid) es) =
   SList
     [ SAtom "not-in-history?",
       SAtom "%s",
       SInt rid,
-      SList (SAtom "list" : map (\e -> SList [SAtom "constraint-id", compileExpr e]) es)
+      SList
+        ( SAtom "list"
+            : map (\e -> SList [SAtom "constraint-id", compileIdExpr e]) es
+        )
     ]
-compileExpr (Unify a b) =
-  SList [SAtom "%unify", SAtom "%s", compileExpr a, compileExpr b]
-compileExpr (Equal a b) =
-  SList [SAtom "equal?/chr", compileExpr a, compileExpr b]
-compileExpr (FieldGet e FieldId) =
-  compileExpr e -- suspension IS the identifier
-compileExpr (FieldGet e (FieldArg (ArgIndex i))) =
-  SList [SAtom "constraint-arg", compileExpr e, SInt i]
-compileExpr (FieldGet e FieldType) =
-  SList [SAtom "constraint-type", compileExpr e]
+compileValExpr (Unify a b) =
+  SList [SAtom "%unify", SAtom "%s", compileValExpr a, compileValExpr b]
+compileValExpr (Equal a b) =
+  SList [SAtom "equal?/chr", compileValExpr a, compileValExpr b]
+compileValExpr (FieldArg e (ArgIndex i)) =
+  SList [SAtom "constraint-arg", compileIdExpr e, SInt i]
+compileValExpr (FieldType e) =
+  SList [SAtom "constraint-type", compileIdExpr e]
+
+compileIdExpr :: IdExpr -> SExpr
+compileIdExpr (IdVar n) = SAtom (mangleName n)
+compileIdExpr (CreateConstraint (ConstraintType ct) args) =
+  SList
+    [ SAtom "create-constraint",
+      SAtom "%s",
+      SInt ct,
+      SList (SAtom "vector" : map compileValExpr args)
+    ]
+
+compileCallArg :: CallArg -> SExpr
+compileCallArg (AVal e) = compileValExpr e
+compileCallArg (AId e) = compileIdExpr e
 
 -- ---------------------------------------------------------------------------
 -- Literal compilation
@@ -408,10 +428,10 @@ sessionHostCalls = Set.fromList ["copy_term"]
 -- | Compile a host call.  Arguments are dereferenced before calling.
 -- Calls listed in 'sessionHostCalls' get the session @%s@ threaded as
 -- their first argument (before the user-visible arguments).
-compileHostCall :: Name -> [Expr] -> SExpr
+compileHostCall :: Name -> [ValExpr] -> SExpr
 compileHostCall (Name n) args =
   let fn = Map.findWithDefault n n hostCallMap
-      derefedArgs = map (\a -> SList [SAtom "deref", compileExpr a]) args
+      derefedArgs = map (\a -> SList [SAtom "deref", compileValExpr a]) args
       allArgs
         | Set.member n sessionHostCalls = SAtom "%s" : derefedArgs
         | otherwise = derefedArgs
@@ -421,13 +441,17 @@ compileHostCall (Name n) args =
 -- compiler, but Var references are dereferenced (following binding
 -- chains) and the transformation propagates recursively into
 -- sub-expressions.
-compileEvalDeep :: Expr -> SExpr
+compileEvalDeep :: ValExpr -> SExpr
 compileEvalDeep (Lit l) = compileLiteral l
 compileEvalDeep (Var n) = SList [SAtom "deref", SAtom (mangleName n)]
 compileEvalDeep (HostCall n args) = compileHostCall n args
 compileEvalDeep (CallExpr n args) =
-  SList (SAtom (mangleName n) : SAtom "%s" : map compileEvalDeep args)
-compileEvalDeep e = compileExpr e -- MakeTerm, And, Or, etc.
+  SList (SAtom (mangleName n) : SAtom "%s" : map compileCallArgDeep args)
+compileEvalDeep e = compileValExpr e -- MakeTerm, And, Or, etc.
+
+compileCallArgDeep :: CallArg -> SExpr
+compileCallArgDeep (AVal e) = compileEvalDeep e
+compileCallArgDeep (AId e) = compileIdExpr e
 
 -- ---------------------------------------------------------------------------
 -- Unknown host call stubs
@@ -473,43 +497,53 @@ schemeBuiltins =
 
 -- | Collect host call names from a statement.
 collectStmtHC :: Stmt -> Set Text
-collectStmtHC (Let _ e) = collectExprHC e
-collectStmtHC (Assign _ e) = collectExprHC e
+collectStmtHC (LetVal _ e) = collectValHC e
+collectStmtHC (LetId _ e) = collectIdHC e
+collectStmtHC (AssignVal _ e) = collectValHC e
+collectStmtHC (AssignId _ e) = collectIdHC e
 collectStmtHC (If c ts es) =
-  collectExprHC c
+  collectValHC c
     <> foldMap collectStmtHC ts
     <> foldMap collectStmtHC es
 collectStmtHC (Foreach _ _ _ conds body) =
-  foldMap (collectExprHC . snd) conds
+  foldMap (collectValHC . snd) conds
     <> foldMap collectStmtHC body
-collectStmtHC (Return e) = collectExprHC e
-collectStmtHC (ExprStmt e) = collectExprHC e
-collectStmtHC (Store e) = collectExprHC e
-collectStmtHC (Kill e) = collectExprHC e
-collectStmtHC (AddHistory _ es) = foldMap collectExprHC es
+collectStmtHC (Return e) = collectValHC e
+collectStmtHC (ExprStmt e) = collectValHC e
+collectStmtHC (Store e) = collectIdHC e
+collectStmtHC (Kill e) = collectIdHC e
+collectStmtHC (AddHistory _ es) = foldMap collectIdHC es
 collectStmtHC (DrainReactivationQueue _ body) = foldMap collectStmtHC body
 collectStmtHC _ = Set.empty
 
--- | Collect host call names from an expression.
-collectExprHC :: Expr -> Set Text
-collectExprHC (HostCall (Name n) args) = Set.singleton n <> foldMap collectExprHC args
-collectExprHC (EvalDeep e) = collectExprHC e
-collectExprHC (CallExpr _ args) = foldMap collectExprHC args
-collectExprHC (Not e) = collectExprHC e
-collectExprHC (And a b) = collectExprHC a <> collectExprHC b
-collectExprHC (Or a b) = collectExprHC a <> collectExprHC b
-collectExprHC (MakeTerm _ args) = foldMap collectExprHC args
-collectExprHC (MatchTerm e _ _) = collectExprHC e
-collectExprHC (GetArg e _) = collectExprHC e
-collectExprHC (CreateConstraint _ args) = foldMap collectExprHC args
-collectExprHC (Alive e) = collectExprHC e
-collectExprHC (IdEqual a b) = collectExprHC a <> collectExprHC b
-collectExprHC (IsConstraintType e _) = collectExprHC e
-collectExprHC (NotInHistory _ es) = foldMap collectExprHC es
-collectExprHC (Unify a b) = collectExprHC a <> collectExprHC b
-collectExprHC (Equal a b) = collectExprHC a <> collectExprHC b
-collectExprHC (FieldGet e _) = collectExprHC e
-collectExprHC _ = Set.empty
+-- | Collect host call names from a value expression.
+collectValHC :: ValExpr -> Set Text
+collectValHC (HostCall (Name n) args) = Set.singleton n <> foldMap collectValHC args
+collectValHC (EvalDeep e) = collectValHC e
+collectValHC (CallExpr _ args) = foldMap collectArgHC args
+collectValHC (Not e) = collectValHC e
+collectValHC (And a b) = collectValHC a <> collectValHC b
+collectValHC (Or a b) = collectValHC a <> collectValHC b
+collectValHC (MakeTerm _ args) = foldMap collectValHC args
+collectValHC (MatchTerm e _ _) = collectValHC e
+collectValHC (GetArg e _) = collectValHC e
+collectValHC (Alive e) = collectIdHC e
+collectValHC (IdEqual a b) = collectIdHC a <> collectIdHC b
+collectValHC (IsConstraintType e _) = collectIdHC e
+collectValHC (NotInHistory _ es) = foldMap collectIdHC es
+collectValHC (Unify a b) = collectValHC a <> collectValHC b
+collectValHC (Equal a b) = collectValHC a <> collectValHC b
+collectValHC (FieldArg e _) = collectIdHC e
+collectValHC (FieldType e) = collectIdHC e
+collectValHC _ = Set.empty
+
+collectIdHC :: IdExpr -> Set Text
+collectIdHC (IdVar _) = Set.empty
+collectIdHC (CreateConstraint _ args) = foldMap collectValHC args
+
+collectArgHC :: CallArg -> Set Text
+collectArgHC (AVal e) = collectValHC e
+collectArgHC (AId e) = collectIdHC e
 
 -- | Generate a stub for an unknown host call. The stub accepts any number
 -- of arguments and raises an error.

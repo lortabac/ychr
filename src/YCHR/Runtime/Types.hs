@@ -5,7 +5,7 @@ module YCHR.Runtime.Types
     Var (..),
     VarState (..),
     Value (..),
-    RuntimeVal (..),
+    CallVal (..),
   )
 where
 
@@ -32,7 +32,9 @@ data VarState
   | -- | Bound to a value (possibly another variable, forming a chain).
     Bound !Value
 
--- | Runtime values that flow through the VM.
+-- | Runtime values that flow through the VM. Constraint identifiers
+-- are a separate runtime kind ('SuspensionId'); they never inhabit
+-- this type.
 data Value
   = -- | A logical variable (possibly unbound, possibly bound).
     VVar !Var
@@ -46,8 +48,10 @@ data Value
   | -- | Wildcard: unifies with anything without binding.
     VWildcard
 
--- | Runtime values for the interpreter. Constraint IDs never flow into
--- unification or term construction.
-data RuntimeVal
-  = RVal !Value
-  | RConstraint !SuspensionId
+-- | Procedure-call argument at runtime. Procedures take a heterogeneous
+-- mix of value and id parameters; this wrapper carries the kind across
+-- the call boundary so the callee can bind each parameter into the right
+-- environment slot. Mirrors 'YCHR.VM.Types.CallArg' on the IR side.
+data CallVal
+  = CVal !Value
+  | CId !SuspensionId

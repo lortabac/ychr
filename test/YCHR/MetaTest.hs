@@ -14,7 +14,7 @@ import YCHR.Run (CompiledProgram (..), compileModules, runProgramWithQuery)
 import YCHR.Runtime.Error (CallStack)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, baseHostCallRegistry)
 import YCHR.Runtime.Store (runCHRStore)
-import YCHR.Runtime.Types (RuntimeVal (..), Value (..))
+import YCHR.Runtime.Types (Value (..))
 import YCHR.Runtime.Var (deref, equal, runUnify)
 import YCHR.Types (Term (..))
 import YCHR.Types qualified as Types
@@ -38,11 +38,8 @@ hostCalls = baseHostCallRegistry <> metaHostCallRegistry
 readTerm :: Text -> IO Value
 readTerm s = case Map.lookup (Name "read_term_from_string") metaHostCallRegistry of
   Nothing -> assertFailure "read_term_from_string not found in registry"
-  Just (HostCallFn f) -> do
-    result <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [RVal (VText s)]
-    case result of
-      RVal v -> pure v
-      _ -> assertFailure "read_term_from_string returned non-RVal"
+  Just (HostCallFn f) ->
+    runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [VText s]
 
 compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
 compileOrFail inputs = case compileModules False inputs of

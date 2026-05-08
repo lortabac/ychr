@@ -19,7 +19,6 @@ import YCHR.Rename (renameQueryArgs)
 import YCHR.Run
   ( CompiledProgram (..),
     compileFiles,
-    resolveQueryConstraint,
     runProgramWithGoalDSL,
   )
 import YCHR.Runtime.Interpreter (baseHostCallRegistry)
@@ -65,15 +64,13 @@ loadCase name = do
     Right (Left validErr) -> fail ("goal parse failed for " ++ name ++ ": " ++ show validErr)
     Right (Right c) -> pure c
   -- Mirror the query-side canonicalization that runProgramWithGoal does
-  -- (rename bare data-constructor references, resolve qualified names),
-  -- so the goal's term shapes match the compiled head patterns.
+  -- (rename bare data-constructor references) so the goal's term shapes
+  -- match the compiled head patterns. Name resolution to a qualified
+  -- form is handled inside 'runProgramWithGoalDSL'.
   renamedArgs <- case renameQueryArgs prog.allModules cargs of
     Left errs -> fail ("goal rename failed for " ++ name ++ ": " ++ show errs)
     Right (args, _warnings) -> pure args
-  let goal = case resolveQueryConstraint prog (Constraint cname renamedArgs) of
-        Right c -> c
-        Left _ -> Constraint cname renamedArgs
-  pure (BenchCase name prog goal)
+  pure (BenchCase name prog (Constraint cname renamedArgs))
 
 -- | The host call registry used by all benchmarks. Same combination as the
 -- golden test harness in @test/YCHR/GoldenTest.hs@.

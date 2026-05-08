@@ -43,6 +43,25 @@ removable when closed.
   `buildEquationVarMap` are now exhaustive matches on
   `HeadVar`/`HeadWildcard` instead of silent wide-`Term` filters.
 
+- **Constraint identifiers do not flow through unification or term
+  positions.** Encoded by splitting the VM IR into `ValExpr` (value-
+  producing) and `IdExpr` (constraint-id-producing) ADTs, with a
+  `CallArg = AVal ValExpr | AId IdExpr` wrapper at procedure-call
+  boundaries. `Stmt` operands narrow accordingly: `Store`/`Kill`/
+  `AddHistory` take `IdExpr`; `If`/`Foreach` conditions and `Return`/
+  `ExprStmt` take `ValExpr`; `Let`/`Assign` split into `LetVal`/`LetId`
+  and `AssignVal`/`AssignId`. The interpreter splits `evalExpr` into
+  `evalValExpr :: ValExpr -> Eff es Value` and `evalIdExpr :: IdExpr ->
+  Eff es SuspensionId`, and the local environment splits into
+  `envValues :: Map Name Value` and `envIds :: Map Name SuspensionId`.
+  `RuntimeVal` is removed; cross-procedure args use `Runtime.Types.CallVal`
+  (`CVal Value | CId SuspensionId`). `HostCallFn` narrows to
+  `[Value] -> Eff es Value`. Closes seven interpreter `runtimeErrorS`
+  sites (Store, Kill, `expectConstraintId` for AddHistory/NotInHistory,
+  Alive, IdEqual, IsConstraintType, FieldGet) plus the `toValue` panic
+  in `Registry.hs`. The four boolean-shape sites (If/Not/And/Or)
+  remain as a separate `BoolExpr` follow-up.
+
 
 ## 1. `error` / `runtimeErrorS` for "can't happen" cases
 
@@ -62,6 +81,24 @@ After `deref` returns a `VVar`, the variable must be `Unbound`. Today
 the `VarState` type permits `Bound` regardless. A `newtype DerefedVar`
 or a separate `UnboundVar` type returned from `deref` would let the
 caller pattern-match exhaustively.
+
+### Boolean-shape interpreter checks — `src/YCHR/Runtime/Interpreter.hs`
+
+Four sites in `evalValExpr` still fire `runtimeErrorS` when the operand
+of a boolean-expecting expression is not a `VBool`:
+
+| Line | Expression       | Required operand |
+|------|------------------|------------------|
+| 220  | `If` condition   | `VBool _`        |
+| 309  | `Not`            | `VBool _`        |
+| 314  | `And` (1st arg)  | `VBool _`        |
+| 320  | `Or` (1st arg)   | `VBool _`        |
+
+These are a separate invariant from the value-vs-constraint-id split
+above: booleans are values, but the interpreter cannot statically prove
+that a given `ValExpr` evaluates to a `VBool`. A third IR kind
+(`BoolExpr`) or a phantom-typed `ValExpr` would close them. This is the
+natural follow-up to the §2 `RuntimeVal` split.
 
 ### `getArg` operand and bounds — `src/YCHR/Runtime/Var.hs:315-316`
 
@@ -97,45 +134,22 @@ in-range `ArgIndex` values; a smart-constructor for `ArgIndex` keyed
 on the constraint type's arity (or a `Vector` of fixed length in the
 suspension) would push the check up.
 
-### Compiler-invariant guard on `RuntimeVal` — `src/YCHR/Runtime/Registry.hs:225`
+### Remaining interpreter shape checks — `src/YCHR/Runtime/Interpreter.hs`
 
-```haskell
-toValue (RConstraint _) = error "toValue: cannot convert constraint ID to Value"
-```
+After the value-vs-id split, three sites remain that are not closed by
+the boolean-shape entry above:
 
-The header comment marks this as the canonical compiler-invariant
-guard: an `RConstraint` must never reach a `Value` position. See
-§2 below — splitting the runtime into "values that can flow into
-unification" and "constraint identifiers" would remove this and the
-~12 sibling sites in the interpreter at once.
+| Site                          | Required precondition          |
+|-------------------------------|--------------------------------|
+| `callProc` (unknown name)     | name resolves in `procMap`     |
+| `evalValExpr (Var name)`      | name in `envValues`            |
+| `invokeHostCall` (unknown)    | name in registry               |
 
-### Interpreter shape checks — `src/YCHR/Runtime/Interpreter.hs`
-
-Twelve sites all phrase the same invariant: a particular VM instruction
-operand must have a particular runtime shape.
-
-| Line | Instruction              | Required operand              |
-|------|--------------------------|-------------------------------|
-| 153  | `CallExpr` dispatch      | name resolves in `procMap`    |
-| 189  | `If`                     | `RVal (VBool _)`              |
-| 206  | `Store`                  | `RConstraint _`               |
-| 211  | `Kill`                   | `RConstraint _`               |
-| 237  | `AddHistory` arg         | `RConstraint _`               |
-| 301  | `Var`                    | name in scope                 |
-| 322  | `HostCall`               | name in registry              |
-| 330  | `Not`                    | boolean                       |
-| 336  | `And` (1st arg)          | boolean                       |
-| 342  | `Or` (1st arg)           | boolean                       |
-| 361  | `Alive`                  | `RConstraint _`               |
-| 367  | `IdEqual`                | both `RConstraint _`          |
-| 372  | `IsConstraintType`       | `RConstraint _`               |
-| 405  | `FieldGet`               | `RConstraint _`               |
-
-All of these are compiler invariants — the compiler emits the right
-shape by construction, but the type of `Expr` doesn't say so. A typed
-VM IR (e.g. phantom-typed `Expr 'BoolKind` vs. `Expr 'ValueKind` vs.
-`Expr 'ConstraintIdKind`) would let the interpreter's `case` arms be
-total.
+These are name-resolution invariants (procedure / environment / host-
+call lookups). Closure checks at compile time (see §5 "Closed
+procedure-name set") would close the first; an opaque `IdExpr`/`ValExpr`
+constructor that can only be made by the binder would close the second;
+a typed `HostCallRef` issued by the registry would close the third.
 
 ### `ConstraintType (-1)` placeholder — `src/YCHR/Compile/Occurrences.hs:171`
 
@@ -157,19 +171,6 @@ because the store is defensive. Either:
 
 
 ## 2. Data types that admit invalid states
-
-### `RuntimeVal` is too wide for unification positions — `src/YCHR/Runtime/Types.hs`
-
-```haskell
-data RuntimeVal = RVal Value | RConstraint SuspensionId
-```
-
-Roughly half the interpreter's `runtimeErrorS` sites (Store, Kill,
-AddHistory, Alive, IdEqual, IsConstraintType, FieldGet) and the
-`toValue` panic in `Registry.hs` are all the same invariant: the
-operand must be `RConstraint` (or, dually, must be `RVal`). Splitting
-`RuntimeVal` into two distinct types passed through differently-typed
-VM operands would make every one of those `case` arms total.
 
 ### `VarState` admits orphan observers — `src/YCHR/Runtime/Types.hs:28-33`
 
@@ -379,8 +380,10 @@ host-language boundary.
 
 If you want a roughly-ordered list of the most actionable wins:
 
-1. **`RuntimeVal` split** (§2). Single change, removes ~12 interpreter
-   `runtimeErrorS` sites and the `toValue` panic.
+1. **`BoolExpr` split** (§1, "Boolean-shape interpreter checks"). The
+   natural follow-up to the closed `RuntimeVal` split: a third IR kind
+   that statically guarantees boolean-position operands. Closes the
+   remaining four `If`/`Not`/`And`/`Or` shape errors.
 2. **`ArgIndex` / `MatchTerm` arity to `Word`** (§2). Cheap, removes
    a class of bounds-related bugs.
 3. **`ConstraintType` as `Word`** plus `Maybe ConstraintType` for

@@ -32,7 +32,7 @@ import YCHR.Pretty (prettyConstraintSrc, prettyRuleSrc, prettyTermSrc)
 import YCHR.Runtime.Error (CallStack)
 import YCHR.Runtime.Registry (HostCallFn (..), baseHostCallRegistry, valueList)
 import YCHR.Runtime.Store (runCHRStore)
-import YCHR.Runtime.Types (RuntimeVal (..), Value (..))
+import YCHR.Runtime.Types (Value (..))
 import YCHR.Runtime.Var (runUnify)
 import YCHR.Types (Constraint (..), Name (..), Term (..))
 import YCHR.VM qualified as VM
@@ -265,23 +265,17 @@ prop_compoundToListRoundtrip = property $ do
   term <- forAllWith showGroundValue genCompoundValue
   let HostCallFn toList = lookupHostCall "compound_to_list"
       HostCallFn fromList = lookupHostCall "list_to_compound"
-  listResult <-
+  list <-
     evalIO $
       runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
-        toList [RVal term]
-  case listResult of
-    RVal list -> do
-      compoundResult <-
-        evalIO $
-          runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
-            fromList [RVal list]
-      case compoundResult of
-        RVal term' -> do
-          annotate (showGroundValue term)
-          annotate (showGroundValue term')
-          assert (groundEq term term')
-        _ -> annotate "list_to_compound returned non-RVal" >> failure
-    _ -> annotate "compound_to_list returned non-RVal" >> failure
+        toList [term]
+  term' <-
+    evalIO $
+      runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
+        fromList [list]
+  annotate (showGroundValue term)
+  annotate (showGroundValue term')
+  assert (groundEq term term')
 
 prop_listToCompoundRoundtrip :: Property
 prop_listToCompoundRoundtrip = property $ do
@@ -293,23 +287,17 @@ prop_listToCompoundRoundtrip = property $ do
   let list = valueList (VAtom f : args)
   let HostCallFn fromList = lookupHostCall "list_to_compound"
       HostCallFn toList = lookupHostCall "compound_to_list"
-  compoundResult <-
+  compound <-
     evalIO $
       runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
-        fromList [RVal list]
-  case compoundResult of
-    RVal compound -> do
-      listResult <-
-        evalIO $
-          runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
-            toList [RVal compound]
-      case listResult of
-        RVal list' -> do
-          annotate (showGroundValue list)
-          annotate (showGroundValue list')
-          assert (groundEq list list')
-        _ -> annotate "compound_to_list returned non-RVal" >> failure
-    _ -> annotate "list_to_compound returned non-RVal" >> failure
+        fromList [list]
+  list' <-
+    evalIO $
+      runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
+        toList [compound]
+  annotate (showGroundValue list)
+  annotate (showGroundValue list')
+  assert (groundEq list list')
 
 -- ---------------------------------------------------------------------------
 -- Test tree

@@ -33,6 +33,12 @@
 --
 --   5. Recursion optimizations (trampolining, explicit stack) are the
 --      responsibility of each backend, not the VM.
+--
+--   6. Expressions are split by the kind of value they produce:
+--      'ValExpr' produces an ordinary 'Value' (the unification domain),
+--      while 'IdExpr' produces a constraint identifier. Constraint
+--      identifiers cannot flow into unification or term construction;
+--      the type system enforces this.
 module YCHR.VM.Types
   ( -- * Program structure
     Program (..),
@@ -42,7 +48,9 @@ module YCHR.VM.Types
     Stmt (..),
 
     -- * Expressions
-    Expr (..),
+    ValExpr (..),
+    IdExpr (..),
+    CallArg (..),
 
     -- * Runtime call stack frames
     StackFrame (..),
@@ -50,7 +58,6 @@ module YCHR.VM.Types
     -- * Supporting types
     ConstraintType (..),
     RuleId (..),
-    Field (..),
     Literal (..),
     ArgIndex (..),
     Name (..),
@@ -129,12 +136,16 @@ data Procedure = Procedure
 data Stmt
   = -- General control flow
 
-    -- | Bind a local variable to the result of an expression.
-    Let Name Expr
-  | -- | Mutate an existing variable.
-    Assign Name Expr
+    -- | Bind a local variable to the result of a value expression.
+    LetVal Name ValExpr
+  | -- | Bind a local variable to the result of an id expression.
+    LetId Name IdExpr
+  | -- | Mutate an existing value-bound variable.
+    AssignVal Name ValExpr
+  | -- | Mutate an existing id-bound variable.
+    AssignId Name IdExpr
   | -- | Conditional: condition, then-branch, else-branch.
-    If Expr [Stmt] [Stmt]
+    If ValExpr [Stmt] [Stmt]
   | -- | Labeled loop over constraint store.
     --
     -- @Foreach label constraintType suspVar indexConditions body@
@@ -144,36 +155,37 @@ data Stmt
     -- that argument @i@ of the constraint is 'Equal' to @expr@.
     --
     -- The current constraint suspension is bound to @suspVar@ in each
-    -- iteration. Use 'FieldGet' to access its fields.
+    -- iteration; references it via 'IdVar' inside the body, and use
+    -- 'FieldArg'/'FieldType' to access its fields.
     --
     -- The iterator must satisfy the robustness, correctness,
     -- completeness, and weak termination properties as specified
     -- in the CHR compilation literature.
-    Foreach Label ConstraintType Name [(ArgIndex, Expr)] [Stmt]
+    Foreach Label ConstraintType Name [(ArgIndex, ValExpr)] [Stmt]
   | -- | Jump to the next iteration of the labeled 'Foreach' loop.
     Continue Label
   | -- | Exit the labeled 'Foreach' loop.
     Break Label
   | -- | Return a value from the current procedure.
-    Return Expr
-  | -- | Evaluate an expression for its side effects, discard the result.
-    ExprStmt Expr
+    Return ValExpr
+  | -- | Evaluate a value expression for its side effects, discard the result.
+    ExprStmt ValExpr
   | -- Constraint store operations
 
     -- | Add a constraint suspension to the constraint store.
-    -- The argument should be a constraint identifier (as returned
+    -- The argument is a constraint identifier (as returned
     -- by 'CreateConstraint'). This also registers the constraint
     -- as an observer of its arguments for reactivation purposes.
-    Store Expr
+    Store IdExpr
   | -- | Remove a constraint from the constraint store and mark it
-    -- as no longer alive. The argument is a constraint identifier.
-    Kill Expr
+    -- as no longer alive.
+    Kill IdExpr
   | -- Propagation history
 
     -- | Record that a rule has fired with the given combination
     -- of constraint identifiers, to prevent redundant re-firing
     -- of propagation rules.
-    AddHistory RuleId [Expr]
+    AddHistory RuleId [IdExpr]
   | -- Reactivation
 
     -- | Process all constraints pending reactivation.
@@ -182,8 +194,9 @@ data Stmt
     --
     -- Iterates over the reactivation queue (populated as a side
     -- effect of 'Unify'), binding each pending constraint suspension
-    -- to @suspVar@ and executing @body@. The body typically dispatches
-    -- to the appropriate @activate_c@ procedure based on constraint type.
+    -- to @suspVar@ (referenced via 'IdVar') and executing @body@.
+    -- The body typically dispatches to the appropriate @activate_c@
+    -- procedure based on constraint type.
     DrainReactivationQueue Name [Stmt]
   | -- Call stack frames
 
@@ -194,33 +207,34 @@ data Stmt
     PushFrame StackFrame
   deriving (Show, Eq, Lift)
 
--- | Expressions (side-effect-free, except for 'Unify' and 'HostCall').
-data Expr
-  = -- General
-
-    -- | Reference to a variable (local or parameter).
+-- | Value-producing expressions: everything that evaluates to an
+-- ordinary 'Value' from the unification domain.
+data ValExpr
+  = -- | Reference to a value-bound variable (local or parameter).
     Var Name
   | -- | A literal value.
     Lit Literal
   | -- | Call a compiler-generated procedure and return its result.
-    CallExpr Name [Expr]
+    CallExpr Name [CallArg]
   | -- | Call a host language function. Used for arithmetic operators,
     -- comparisons, and user-written expressions in guards and bodies.
-    HostCall Name [Expr]
+    -- Host functions return values; they cannot return constraint
+    -- identifiers.
+    HostCall Name [ValExpr]
   | -- | Switch evaluation into deep deref-aware mode for the nested
     -- expression: 'Var' references are dereferenced (following binding
     -- chains) before use, and this mode propagates recursively into
     -- sub-expressions ('CallExpr', 'MakeTerm', etc.). Used for guard
     -- expressions and the right-hand side of @is@.
-    EvalDeep Expr
+    EvalDeep ValExpr
   | -- Boolean operations
 
     -- | Logical negation.
-    Not Expr
+    Not ValExpr
   | -- | Logical conjunction (short-circuiting).
-    And Expr Expr
+    And ValExpr ValExpr
   | -- | Logical disjunction (short-circuiting).
-    Or Expr Expr
+    Or ValExpr ValExpr
   | -- Logical variables
 
     -- | Create a fresh unbound logical variable.
@@ -228,57 +242,70 @@ data Expr
   | -- Term operations
 
     -- | Construct a compound term: @MakeTerm functor args@.
-    MakeTerm Name [Expr]
+    MakeTerm Name [ValExpr]
   | -- | Check whether a value is a compound term with the given
     -- functor and arity: @MatchTerm expr functor arity@.
     -- Returns a boolean.
-    MatchTerm Expr Name Int
+    MatchTerm ValExpr Name Int
   | -- | Extract an argument from a compound term by index (0-based).
-    GetArg Expr Int
-  | -- Constraint operations
+    GetArg ValExpr Int
+  | -- Constraint observation
 
-    -- | Create a new constraint suspension with the given type and
-    -- arguments. Returns a constraint identifier. The constraint
-    -- is not yet stored; use 'Store' to add it to the constraint store.
-    CreateConstraint ConstraintType [Expr]
-  | -- | Check whether a constraint (identified by its constraint
+    -- | Check whether a constraint (identified by its constraint
     -- identifier) is still alive in the constraint store.
-    Alive Expr
+    Alive IdExpr
   | -- | Compare two constraint identifiers for equality.
-    IdEqual Expr Expr
+    IdEqual IdExpr IdExpr
   | -- | Check whether a constraint suspension has the given type.
     -- Used for dispatching in the reactivation procedure.
-    IsConstraintType Expr ConstraintType
+    IsConstraintType IdExpr ConstraintType
   | -- Propagation history
 
     -- | Check that a rule has not previously fired with the given
     -- combination of constraint identifiers. Returns a boolean.
-    NotInHistory RuleId [Expr]
+    NotInHistory RuleId [IdExpr]
   | -- Unification and equality
 
     -- | Unify two terms (tell semantics). Returns a boolean indicating
     -- success. May mutate logical variables as a side effect. On
     -- success, also pushes affected constraints onto the reactivation
     -- queue (see 'DrainReactivationQueue').
-    Unify Expr Expr
+    Unify ValExpr ValExpr
   | -- | Check equality of two terms (ask semantics). Returns a boolean.
     -- No mutation. Uses Prolog @==@ semantics: two distinct unbound
     -- variables are not equal.
-    Equal Expr Expr
+    Equal ValExpr ValExpr
   | -- Suspension field access
 
-    -- | Access a field of a constraint suspension.
-    FieldGet Expr Field
+    -- | Extract a constraint argument from a suspension by index.
+    FieldArg IdExpr ArgIndex
+  | -- | Extract the constraint type tag from a suspension.
+    FieldType IdExpr
   deriving (Show, Eq, Lift)
 
--- | Fields of a constraint suspension.
-data Field
-  = -- | The unique constraint identifier.
-    FieldId
-  | -- | A constraint argument by index.
-    FieldArg ArgIndex
-  | -- | The constraint type (for dispatch in reactivation).
-    FieldType
+-- | Constraint-identifier-producing expressions.
+--
+-- Constraint identifiers are produced in only three ways: by
+-- 'CreateConstraint', by referencing an id-bound variable
+-- ('IdVar' — populated by the parameter list, 'Foreach',
+-- 'DrainReactivationQueue', or a 'LetId' binding), or by
+-- a procedure that returns one (currently no such procedure
+-- is generated, but the constructor is reserved).
+data IdExpr
+  = -- | Reference to an id-bound variable (local or parameter).
+    IdVar Name
+  | -- | Create a new constraint suspension with the given type and
+    -- arguments. Returns a constraint identifier. The constraint
+    -- is not yet stored; use 'Store' to add it to the constraint store.
+    CreateConstraint ConstraintType [ValExpr]
+  deriving (Show, Eq, Lift)
+
+-- | Procedure-call argument. Procedures may take a heterogeneous
+-- mix of value and id parameters; this wrapper makes the kind
+-- explicit at every call site.
+data CallArg
+  = AVal ValExpr
+  | AId IdExpr
   deriving (Show, Eq, Lift)
 
 -- | Literal values.

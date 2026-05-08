@@ -50,7 +50,7 @@ import YCHR.Runtime.History (PropHistory, runPropHistory)
 import YCHR.Runtime.Interpreter (HostCallRegistry, callProc)
 import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
 import YCHR.Runtime.Store (CHRStore, runCHRStore)
-import YCHR.Runtime.Types (RuntimeVal (..), SuspensionId, Value (..))
+import YCHR.Runtime.Types (CallVal (..), SuspensionId, Value (..))
 import YCHR.Runtime.Var (Unify, runUnify)
 import YCHR.Types qualified as Types
 import YCHR.VM (Name (..), Procedure (..), Program (..))
@@ -187,7 +187,7 @@ tellConstraint name args = do
   let tellName = tellProcName resolved arity
   unless (Map.member tellName procMap) $
     runtimeErrorS ("Constraint not found: " ++ T.unpack tellName.unName)
-  _ <- callProc procMap hc tellName (map RVal args)
+  _ <- callProc procMap hc tellName (map CVal args)
   pure ()
 
 -- | Name resolution against the export map and qualified-name set. Used by

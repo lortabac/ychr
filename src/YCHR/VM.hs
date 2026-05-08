@@ -8,7 +8,9 @@ module YCHR.VM
     Stmt (..),
 
     -- * Expressions
-    Expr (..),
+    ValExpr (..),
+    IdExpr (..),
+    CallArg (..),
 
     -- * Runtime call stack frames
     StackFrame (..),
@@ -16,7 +18,6 @@ module YCHR.VM
     -- * Supporting types
     ConstraintType (..),
     RuleId (..),
-    Field (..),
     Literal (..),
     ArgIndex (..),
     Name (..),
