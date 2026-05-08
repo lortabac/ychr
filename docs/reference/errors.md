@@ -28,6 +28,10 @@ are stable across releases; user-facing messages may evolve.
 > page is filled in, search the source for `YCHR-` to find the
 > definitions.
 
+| Code | Phase | Meaning |
+|------|-------|---------|
+| `YCHR-20008` | Rename | A `type(t/n, [c, ...])` export or import entry names a constructor that the type does not declare (or, on the import side, that the source module does not export). Fix the typo, add the constructor to the type, or remove it from the list. |
+
 ## See also
 
 - [Language reference](language.md).

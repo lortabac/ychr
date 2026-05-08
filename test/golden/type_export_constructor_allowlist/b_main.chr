@@ -1,0 +1,9 @@
+:- module(allowlist_main, [tag/2]).
+:- use_module(allowlist_lib).
+:- chr_constraint tag/2.
+
+% Echoes its first argument. When the goal asks about a name the
+% renamer can resolve to a unique declaring module (here, the listed
+% constructor `red`), bare references canonicalize to the qualified
+% form. Names not exported (like `green`) stay unqualified.
+tag(X, R) <=> R = X.

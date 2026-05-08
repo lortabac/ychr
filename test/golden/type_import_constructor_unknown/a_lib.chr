@@ -1,0 +1,3 @@
+:- module(import_ctor_lib, [type(col/0, [red])]).
+
+:- chr_type col ---> red ; green.

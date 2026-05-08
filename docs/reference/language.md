@@ -35,6 +35,30 @@ Constraint and function names are qualified with their defining module;
 unqualified references in source are resolved against the module's
 imports.
 
+### Type and constructor exports
+
+A user-defined type is exported with `type(Name/Arity)`. By default this
+also exports every data constructor of the type. To export the type
+while restricting which constructors are visible to importing modules,
+use the two-argument form `type(Name/Arity, [Con1, Con2, ...])`:
+
+```
+:- module(palette, [type(col/0)]).         % all constructors of col
+:- module(palette, [type(col/0, [red])]).  % only `red`
+:- module(palette, [type(col/0, [])]).     % type but no constructors
+```
+
+The same form is accepted in `use_module` import lists, where it
+intersects with the exporter's allowlist:
+
+```
+:- use_module(palette, [type(col/0, [red])]).
+```
+
+If a constructor named in either list is not declared on the type (or,
+on the import side, is not in the exporter's allowlist), the program is
+rejected with `YCHR-20008`.
+
 ## Functions
 
 When CHR is embedded in Prolog, guards rely on predicate success or

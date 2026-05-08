@@ -670,7 +670,13 @@ convertExportItem (Ann pexpr _) = case pexpr of
       Just name <- atomName nameExpr ->
         OperatorDecl (OpDecl fix ty name)
   Compound "type" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
-    TypeExportDecl name arity
+    TypeExportDecl name arity Nothing
+  Compound
+    "type"
+    [ Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _,
+      Ann conList _
+      ] ->
+      TypeExportDecl name arity (Just [c | Ann (Atom c) _ <- unfoldList conList])
   _ -> ConstraintDecl "<unknown>" 0 Nothing
 
 -- | Convert a PExpr to a constraint declaration.

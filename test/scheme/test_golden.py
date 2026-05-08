@@ -40,6 +40,10 @@ HASKELL_ONLY_CASES = {
     ("unicode_atoms_strings", "quoted_with_space"),
     ("unicode_atoms_strings", "quoted_unicode"),
     ("unicode_atoms_strings", "quoted_chinese"),
+    # Scheme renders qualified atoms with a `__` separator instead of
+    # the Haskell runtime's `:` (e.g. `mod__name` vs `mod:name`).
+    ("type_export_constructor_allowlist", "red"),
+    ("type_import_constructor_narrowing", "red"),
 }
 
 

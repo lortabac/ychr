@@ -1,0 +1,10 @@
+:- module(narrow_main, [test/2]).
+:- use_module(narrow_lib, [type(col/0, [red])]).
+:- chr_constraint test/2.
+
+% In narrow_main's scope the importer narrows narrow_lib's constructors
+% to just `red`. Bare `red` here canonicalizes to `narrow_lib:red`;
+% bare `green` is undeclared (the importer's allowlist excludes it) and
+% stays unqualified.
+test(red_case, R)   <=> R = red.
+test(green_case, R) <=> R = green.

@@ -20,9 +20,26 @@ This page is a stub.
 
 ## Export forms
 
-> **TODO:** document the supported export forms — `name/arity`,
-> `fun name/arity`, `op(/3)`, `type(name/arity)` — and what each makes
-> visible to importers.
+Each entry in the export list is one of:
+
+| Form | Meaning |
+|------|---------|
+| `name/arity` | Export the constraint `name/arity`. |
+| `fun(name/arity)` | Export the function `name/arity`. |
+| `op(Pri, Type, Name)` | Export the operator declaration. |
+| `type(name/arity)` | Export the type and all of its data constructors. |
+| `type(name/arity, [c1, ...])` | Export the type and only the listed constructors. Pass `[]` to expose the type without any constructors. |
+
+The constructor allowlist is also accepted on the import side, where it
+intersects with the exporter's allowlist:
+
+```prolog
+:- use_module(palette, [type(col/0, [red])]).
+```
+
+If a constructor named in either list is not actually a constructor of
+the type (or, on the import side, is not in the source module's
+allowlist), the renamer rejects the program with `YCHR-20008`.
 
 ## Restricted imports
 

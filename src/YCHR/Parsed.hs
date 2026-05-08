@@ -104,7 +104,7 @@ data Declaration
         isOpen :: Bool
       }
   | OperatorDecl OpDecl
-  | TypeExportDecl {name :: Text, arity :: Int}
+  | TypeExportDecl {name :: Text, arity :: Int, conExports :: Maybe [Text]}
   deriving (Show, Eq, Lift)
 
 data OpDecl = OpDecl

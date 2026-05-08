@@ -1,0 +1,8 @@
+:- module(import_ctor_main, [go/0]).
+:- use_module(import_ctor_lib, [type(col/0, [green])]).
+:- chr_constraint go/0.
+
+% `green` exists as a constructor of `col` in import_ctor_lib, but
+% the library's export list restricts visible constructors to `red`.
+% Asking for `green` here must fail with YCHR-20008.
+go <=> true.

@@ -1,0 +1,4 @@
+:- module(narrow_lib, [type(col/0)]).
+
+% Library exports both constructors; the importer narrows further.
+:- chr_type col ---> red ; green.

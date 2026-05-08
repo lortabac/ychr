@@ -178,6 +178,7 @@ renameErrorCode (UnknownExport _ _ _) = ErrorCode 20003
 renameErrorCode (UnknownImport _ _ _) = ErrorCode 20005
 renameErrorCode (UnknownOperatorImport _ _) = ErrorCode 20006
 renameErrorCode (UseModuleOutOfOrder _) = ErrorCode 20007
+renameErrorCode (UnknownExportedConstructor _ _ _ _) = ErrorCode 20008
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
@@ -324,6 +325,16 @@ renameErrorMsg (UseModuleOutOfOrder modName) =
     ++ T.unpack modName
     ++ ") must appear immediately after the module directive,"
     ++ " before any other directive or rule"
+renameErrorMsg (UnknownExportedConstructor modName tyName tyArity conName) =
+  "Module "
+    ++ T.unpack modName
+    ++ " exports type "
+    ++ T.unpack tyName
+    ++ "/"
+    ++ show tyArity
+    ++ " with constructor "
+    ++ T.unpack conName
+    ++ " but does not declare that constructor on the type"
 
 instance Display (Diagnostic RenameWarning) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =

@@ -85,6 +85,10 @@ data RenameError
   | -- | A @use_module(...)@ directive appears after a non-import directive
     -- (or any rule). Carries the imported module name.
     UseModuleOutOfOrder Text
+  | -- | A @type(t/n, [c, ...])@ export or import entry names a constructor
+    -- that is not declared on type @t@. Carries the source module name,
+    -- the type name, the type arity, and the offending constructor name.
+    UnknownExportedConstructor Text Text Int Text
   deriving (Eq, Show)
 
 data RenameWarning
@@ -102,6 +106,17 @@ type DataConEnv = Map Text [Int]
 -- so the renamer can canonicalize bare uses of declared constructors to
 -- their qualified form (the runtime then sees one canonical flat atom).
 type DataConProviders = Map (Text, Int) [Text]
+
+-- | Identifier for a type declaration: declaring module + type name + arity.
+-- Used as the key of constructor-visibility maps so that two distinct
+-- types with the same unqualified name (in different modules) don't
+-- collide.
+data DeclaredType = DeclaredType
+  { declaringModule :: Text,
+    typeName :: Text,
+    typeArity :: Int
+  }
+  deriving (Eq, Ord, Show)
 
 type RenameEffs = '[Writer [Diagnostic RenameWarning], Writer [Diagnostic RenameError]]
 
@@ -162,35 +177,44 @@ defaultRenameInputs =
 -- ---------------------------------------------------------------------------
 
 -- | Build a map of data-constructor names to their declared arities,
--- restricted to constructors from types in the given visible set.
--- Constructors come from type declarations and are always 'Unqualified' at
--- this point (the parser never produces qualified constructor names).
-buildDataConEnv :: Set.Set (Text, Int) -> [Module] -> DataConEnv
-buildDataConEnv visibleTypeSet mods =
+-- restricted to constructors visible to the current module (per the
+-- supplied 'visibleDataCons' map). Constructors come from type
+-- declarations and are always 'Unqualified' at this point (the parser
+-- never produces qualified constructor names).
+buildDataConEnv :: Map DeclaredType (Set.Set Text) -> [Module] -> DataConEnv
+buildDataConEnv visible mods =
   Map.fromListWith
     (++)
     [ (t, [length dc.conArgs])
     | m <- mods,
       Ann td _ <- m.typeDecls,
-      (unqualifiedText td.name, length td.typeVars) `Set.member` visibleTypeSet,
+      let key =
+            DeclaredType m.name (unqualifiedText td.name) (length td.typeVars),
+      Just visibleCons <- [Map.lookup key visible],
       dc <- td.constructors,
-      Unqualified t <- [dc.conName]
+      Unqualified t <- [dc.conName],
+      t `Set.member` visibleCons
     ]
 
 -- | Build the @(constructorName, arity) -> [declaringModule]@ index used
 -- by the renamer's data-constructor canonicalization. Same scope as
 -- 'buildDataConEnv': only constructors whose declaring type is visible
--- to the current module.
-buildDataConProviders :: Set.Set (Text, Int) -> [Module] -> DataConProviders
-buildDataConProviders visibleTypeSet mods =
+-- to the current module, and only constructors permitted by the
+-- visibility map's value-side allowlist.
+buildDataConProviders ::
+  Map DeclaredType (Set.Set Text) -> [Module] -> DataConProviders
+buildDataConProviders visible mods =
   Map.fromListWith
     (++)
     [ ((t, length dc.conArgs), [m.name])
     | m <- mods,
       Ann td _ <- m.typeDecls,
-      (unqualifiedText td.name, length td.typeVars) `Set.member` visibleTypeSet,
+      let key =
+            DeclaredType m.name (unqualifiedText td.name) (length td.typeVars),
+      Just visibleCons <- [Map.lookup key visible],
       dc <- td.constructors,
-      Unqualified t <- [dc.conName]
+      Unqualified t <- [dc.conName],
+      t `Set.member` visibleCons
     ]
 
 -- | Canonicalize a use-site data-constructor reference to its declared
@@ -256,7 +280,7 @@ buildTypeExportEnv mods =
     | m <- mods,
       d <- case m.exports of
         Nothing ->
-          [ TypeExportDecl (unqualifiedText td.name) (length td.typeVars)
+          [ TypeExportDecl (unqualifiedText td.name) (length td.typeVars) Nothing
           | Ann td _ <-
               m.typeDecls
           ]
@@ -269,7 +293,7 @@ isConstraintOrFunctionDecl FunctionDecl {} = True
 isConstraintOrFunctionDecl _ = False
 
 isTypeExportDecl :: Declaration -> Bool
-isTypeExportDecl (TypeExportDecl _ _) = True
+isTypeExportDecl TypeExportDecl {} = True
 isTypeExportDecl _ = False
 
 -- | Extract the unqualified base text of a 'Name', dropping any module
@@ -310,10 +334,10 @@ renameProgram inputs mods =
                   currentTrailingLoc = Map.findWithDefault Nothing m.name inputs.trailingLoc,
                   currentModule = m
                 }
-            visibleTypeSet = visibleTypes ctx0
+            visible = visibleDataCons mods ctx0
          in ctx0
-              { dataConEnv = buildDataConEnv visibleTypeSet mods,
-                dataConProviders = buildDataConProviders visibleTypeSet mods
+              { dataConEnv = buildDataConEnv visible mods,
+                dataConProviders = buildDataConProviders visible mods
               }
       ( (result, warnings),
         errs
@@ -323,7 +347,7 @@ renameProgram inputs mods =
             @[Diagnostic RenameWarning]
           $ do
             validateExports mods
-            traverse (\m -> renameModule (ctxFor m)) mods
+            traverse (\m -> renameModule mods (ctxFor m)) mods
    in if null errs then Right (result, warnings) else Left errs
 
 -- | Check that every name in a module's export list is actually declared.
@@ -341,10 +365,27 @@ validateExports = traverse_ validateOne
       FunctionDecl {name, arity}
         | not (isDeclared m name arity) ->
             emitError (AnnP (UnknownExport m.name name arity) loc origin)
-      TypeExportDecl name arity
+      TypeExportDecl {name, arity, conExports}
         | not (isTypeDeclared m name arity) ->
             emitError (AnnP (UnknownExport m.name name arity) loc origin)
+        | otherwise ->
+            checkConList m loc origin name arity conExports
       _ -> pure ()
+
+    checkConList _ _ _ _ _ Nothing = pure ()
+    checkConList m loc origin tyName tyArity (Just cs) =
+      let declared = declaredConstructors m tyName tyArity
+       in traverse_
+            ( \c ->
+                when (c `notElem` declared) $
+                  emitError
+                    ( AnnP
+                        (UnknownExportedConstructor m.name tyName tyArity c)
+                        loc
+                        origin
+                    )
+            )
+            cs
 
     isDeclared m n a = (n, a) `elem` [(d.name, d.arity) | Ann d _ <- m.decls]
     isTypeDeclared m n a =
@@ -355,14 +396,22 @@ validateExports = traverse_ validateOne
                | Ann td _ <- m.typeDecls
                ]
 
+    declaredConstructors m n a =
+      [ unqualifiedText dc.conName
+      | Ann td _ <- m.typeDecls,
+        unqualifiedText td.name == n,
+        length td.typeVars == a,
+        dc <- td.constructors
+      ]
+
 -- ---------------------------------------------------------------------------
 -- Module, rule, equation, head renaming
 -- ---------------------------------------------------------------------------
 
-renameModule :: RenameCtx -> Eff RenameEffs Module
-renameModule ctx = do
+renameModule :: [Module] -> RenameCtx -> Eff RenameEffs Module
+renameModule mods ctx = do
   let m = ctx.currentModule
-  validateImportLists ctx
+  validateImportLists mods ctx
   renamedRules <- traverse (renameRule ctx) m.rules
   renamedEquations <- traverse (traverse (renameEquation ctx)) m.equations
   let renamedTypeDecls = map (fmap (renameTypeDefinition ctx)) m.typeDecls
@@ -375,16 +424,18 @@ renameModule ctx = do
         decls = renamedDecls
       }
 
--- | Validate import lists. Three checks:
+-- | Validate import lists. Four checks:
 --
 --   * @op(...)@ entries must name an operator that the source module
 --     actually exports ('UnknownOperatorImport').
 --   * Constraint, function, and type imports must name something the
 --     source module exports ('UnknownImport').
+--   * A @type(t/n, [c, ...])@ import must list constructors that the
+--     source module exports for that type ('UnknownExportedConstructor').
 --   * Each @use_module@ directive must appear before the first non-import
 --     directive in the file ('UseModuleOutOfOrder').
-validateImportLists :: RenameCtx -> Eff RenameEffs ()
-validateImportLists ctx =
+validateImportLists :: [Module] -> RenameCtx -> Eff RenameEffs ()
+validateImportLists mods ctx =
   traverse_ checkImport ctx.currentModule.imports
   where
     checkImport (AnnP imp loc origin) = do
@@ -413,9 +464,45 @@ validateImportLists ctx =
     checkItem mn loc origin (FunctionDecl n a _ _ _) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
-    checkItem mn loc origin (TypeExportDecl n a) =
-      when (mn `notElem` lookupExport (n, a) ctx.typeExportEnv) $
-        emitError (AnnP (UnknownImport mn n a) loc origin)
+    checkItem mn loc origin (TypeExportDecl n a cs) =
+      if mn `notElem` lookupExport (n, a) ctx.typeExportEnv
+        then emitError (AnnP (UnknownImport mn n a) loc origin)
+        else checkImportedCons mn loc origin n a cs
+
+    checkImportedCons _ _ _ _ _ Nothing = pure ()
+    checkImportedCons mn loc origin n a (Just xs) =
+      let exported = exportedConstructors mn n a
+       in traverse_
+            ( \c ->
+                when (c `notElem` exported) $
+                  emitError
+                    (AnnP (UnknownExportedConstructor mn n a c) loc origin)
+            )
+            xs
+
+    -- Constructors of type @n/a@ that module @mn@ exports. Combines the
+    -- type's declared constructors with the exporter's optional
+    -- @type(...)@ allowlist.
+    exportedConstructors mn n a =
+      case [m | m <- mods, m.name == mn] of
+        (m : _) ->
+          let declared =
+                [ unqualifiedText dc.conName
+                | Ann td _ <- m.typeDecls,
+                  unqualifiedText td.name == n,
+                  length td.typeVars == a,
+                  dc <- td.constructors
+                ]
+              allowed = case m.exports of
+                Nothing -> Nothing
+                Just (AnnP exports _ _) ->
+                  case [acs | TypeExportDecl tn ta acs <- exports, tn == n, ta == a] of
+                    (acs : _) -> acs
+                    [] -> Just []
+           in case allowed of
+                Nothing -> declared
+                Just xs -> filter (`elem` xs) declared
+        [] -> []
 
 -- | True when @a@ is at or after @b@ in source order. Both locations
 -- must come from the same file (caller's responsibility).
@@ -651,27 +738,74 @@ importListPermitsType :: Text -> Int -> Maybe [Declaration] -> Bool
 importListPermitsType _ _ Nothing = True
 importListPermitsType n arity (Just decls) = any match decls
   where
-    match (TypeExportDecl tn ta) = tn == n && ta == arity
+    match (TypeExportDecl tn ta _) = tn == n && ta == arity
     match _ = False
 
--- | All @(typeName, typeArity)@ pairs visible to the current module: types
--- declared locally plus types exported by imported modules (filtered by the
--- import list). Used to scope 'DataConEnv' so that only constructors from
--- visible types suppress the 'UndeclaredDataConstructor' warning.
-visibleTypes :: RenameCtx -> Set.Set (Text, Int)
-visibleTypes ctx =
-  Set.fromList
-    [ key
-    | (key, ms) <- toListDecl ctx.typeDeclEnv,
-      not (null (ownProviders ms ++ importProviders key))
+-- | The set of constructor names a single import-list entry permits for
+-- type @n/a@. The fallback is the supplied @allCons@ — used when no
+-- constructor clause is present (i.e. the import is @type(n/a)@ rather
+-- than @type(n/a, [...])@).
+importListPermitsCons ::
+  Text -> Int -> Set.Set Text -> Maybe [Declaration] -> Set.Set Text
+importListPermitsCons _ _ allCons Nothing = allCons
+importListPermitsCons n arity allCons (Just decls) =
+  case [cs | TypeExportDecl tn ta cs <- decls, tn == n, ta == arity] of
+    (Nothing : _) -> allCons
+    (Just xs : _) -> Set.fromList xs
+    [] -> Set.empty
+
+-- | For each type visible to the current module, the set of constructor
+-- names also visible. Locally declared types contribute every declared
+-- constructor; imported types contribute @exporterAllowlist ∩
+-- importerAllowlist@ where each side defaults to "all constructors" when
+-- its @type(...)@ clause has no constructor list. A type with an empty
+-- constructor set still appears in the map: the type itself remains
+-- visible (type-level visibility is governed independently by
+-- 'resolveTypeName'), only its constructors are hidden.
+visibleDataCons :: [Module] -> RenameCtx -> Map DeclaredType (Set.Set Text)
+visibleDataCons mods ctx =
+  Map.fromList
+    [ entry
+    | m <- mods,
+      Ann td _ <- m.typeDecls,
+      Just entry <- [entryFor m td]
     ]
   where
-    ownProviders ms = filter (== ctx.currentModule.name) ms
-    imports = [(mn, il) | AnnP (ModuleImport mn il) _ _ <- ctx.currentModule.imports]
-    importProviders (n, arity) =
-      filter
-        (\mn -> any (\(imn, il) -> imn == mn && importListPermitsType n arity il) imports)
-        (lookupExport (n, arity) ctx.typeExportEnv)
+    imports =
+      [(mn, il) | AnnP (ModuleImport mn il) _ _ <- ctx.currentModule.imports]
+
+    entryFor m td =
+      let n = unqualifiedText td.name
+          a = length td.typeVars
+          key = DeclaredType m.name n a
+          allCons =
+            Set.fromList [unqualifiedText dc.conName | dc <- td.constructors]
+       in if m.name == ctx.currentModule.name
+            then Just (key, allCons)
+            else case ( exporterAllowance m n a allCons,
+                        importerAllowance m.name n a allCons
+                      ) of
+              (Just expSet, Just impSet) ->
+                Just (key, Set.intersection expSet impSet)
+              _ -> Nothing
+
+    exporterAllowance m n a allCons = case m.exports of
+      Nothing -> Just allCons
+      Just (AnnP exports _ _) ->
+        case [cs | TypeExportDecl tn ta cs <- exports, tn == n, ta == a] of
+          (Nothing : _) -> Just allCons
+          (Just xs : _) -> Just (Set.fromList xs)
+          [] -> Nothing
+
+    importerAllowance mn n a allCons =
+      let relevant = [il | (imn, il) <- imports, imn == mn]
+       in if null relevant
+            then Nothing
+            else
+              Just
+                ( Set.unions
+                    [importListPermitsCons n a allCons il | il <- relevant]
+                )
 
 -- | Check an unresolved name against data-constructor declarations.
 -- If found with matching arity: silent. If found with wrong arity: warning.
@@ -804,11 +938,11 @@ renameQueryTerms mods mode terms =
             currentTrailingLoc = Nothing,
             currentModule = queryMod
           }
-      visibleTypeSet = visibleTypes ctx0
+      visible = visibleDataCons mods ctx0
       ctx =
         ctx0
-          { dataConEnv = buildDataConEnv visibleTypeSet mods,
-            dataConProviders = buildDataConProviders visibleTypeSet mods
+          { dataConEnv = buildDataConEnv visible mods,
+            dataConProviders = buildDataConProviders visible mods
           }
       ((renamed, warnings), errs) =
         runPureEff

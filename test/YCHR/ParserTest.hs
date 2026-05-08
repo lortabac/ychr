@@ -94,7 +94,7 @@ directiveTests =
                 "mylib"
                 ( Just
                     [ ConstraintDecl "foo" 1 Nothing,
-                      TypeExportDecl "tree" 0
+                      TypeExportDecl "tree" 0 Nothing
                     ]
                 )
             ],
@@ -109,10 +109,21 @@ directiveTests =
           @?= Right [ConstraintDecl "fire" 0 Nothing],
       testCase "type export in export list" $
         fmap (.node) . (.exports) <$> p ":- module(m, [type(tree/0), leq/2])."
-          @?= Right (Just [TypeExportDecl "tree" 0, ConstraintDecl "leq" 2 Nothing]),
+          @?= Right
+            ( Just
+                [TypeExportDecl "tree" 0 Nothing, ConstraintDecl "leq" 2 Nothing]
+            ),
       testCase "parameterized type export" $
         fmap (.node) . (.exports) <$> p ":- module(m, [type(list/1)])."
-          @?= Right (Just [TypeExportDecl "list" 1]),
+          @?= Right (Just [TypeExportDecl "list" 1 Nothing]),
+      testCase "type export with constructor allowlist" $
+        fmap (.node) . (.exports)
+          <$> p ":- module(m, [type(foo/0, [bar, baz])])."
+          @?= Right (Just [TypeExportDecl "foo" 0 (Just ["bar", "baz"])]),
+      testCase "type export with empty constructor list" $
+        fmap (.node) . (.exports)
+          <$> p ":- module(m, [type(foo/0, [])])."
+          @?= Right (Just [TypeExportDecl "foo" 0 (Just [])]),
       testCase "unknown directive is skipped" $
         (map (.node) . (.decls)) <$> p ":- dynamic foo/1.\n:- chr_constraint leq/2."
           @?= Right [ConstraintDecl "leq" 2 Nothing],

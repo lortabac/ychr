@@ -53,6 +53,7 @@ module YCHR.DSL
     function,
     openFunction,
     typeExport,
+    typeExportWith,
     op,
     OpType (..),
 
@@ -227,9 +228,17 @@ openFunction name arity =
       isOpen = True
     }
 
--- | Type-export declaration: @:- chr_type name/arity@.
+-- | Type-export declaration: @:- module(m, [type(name/arity)])@. Exports
+-- the type and all of its data constructors.
 typeExport :: Text -> Int -> Declaration
-typeExport = TypeExportDecl
+typeExport n a = TypeExportDecl n a Nothing
+
+-- | Type-export declaration with a constructor allowlist:
+-- @:- module(m, [type(name/arity, [c1, c2])])@. Exports the type and only
+-- the listed constructors. Pass @[]@ to export the type without any
+-- constructors.
+typeExportWith :: Text -> Int -> [Text] -> Declaration
+typeExportWith n a cs = TypeExportDecl n a (Just cs)
 
 -- | Operator declaration. Mirrors @:- op(Fixity, OpType, Name)@.
 --

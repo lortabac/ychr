@@ -756,7 +756,7 @@ warningTests =
         ws <- warningsOf [m]
         ws @?= [noDiag (AnnP (UndeclaredDataConstructor "unknown") dummyLoc (Atom ""))],
       testCase "exporting undeclared type produces error" $ do
-        let m = (module' "M") {exports = Just (noAnnP [TypeExportDecl "tree" 0])}
+        let m = (module' "M") {exports = Just (noAnnP [TypeExportDecl "tree" 0 Nothing])}
         renameProgram [m]
           @?= Left
             [ noDiag
@@ -782,7 +782,7 @@ warningTests =
                             ]
                         )
                     ],
-                  exports = Just (noAnnP [TypeExportDecl "tree" 0])
+                  exports = Just (noAnnP [TypeExportDecl "tree" 0 Nothing])
                 }
         case renameProgram [m] of
           Right _ -> pure ()
@@ -1026,5 +1026,26 @@ importListTests =
               )
               errs
               @?= True
-          Right _ -> assertFailure "expected UseModuleOutOfOrder error"
+          Right _ -> assertFailure "expected UseModuleOutOfOrder error",
+      testCase "import of unknown type with constructor list reports one UnknownImport" $ do
+        -- Regression: `type(missing/0, [c1, c2])` against a module that
+        -- doesn't declare `missing` used to fire one UnknownImport plus
+        -- one UnknownExportedConstructor per listed constructor.
+        let modLib =
+              module' "Lib"
+                `declaring` ["leq" // 2]
+                `exporting` ["leq" // 2]
+            modUser =
+              (module' "User")
+                { imports =
+                    [ noAnnP
+                        ( ModuleImport
+                            "Lib"
+                            (Just [TypeExportDecl "missing" 0 (Just ["c1", "c2"])])
+                        )
+                    ]
+                }
+        renameProgram [modLib, modUser]
+          @?= Left
+            [noDiag (AnnP (UnknownImport "Lib" "missing" 0) dummyLoc (Atom ""))]
     ]

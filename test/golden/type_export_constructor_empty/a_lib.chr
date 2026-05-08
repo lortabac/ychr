@@ -1,0 +1,6 @@
+:- module(empty_lib, [type(col/0, [])]).
+
+% Type is exported but no constructors are. Importing modules can refer
+% to `col` in type signatures but cannot canonicalize bare uses of
+% `red` or `green` to this module.
+:- chr_type col ---> red ; green.

@@ -28,9 +28,10 @@ This page is a stub. The eventual reference will cover:
 
 | Directive | Purpose |
 |-----------|---------|
-| `:- module(Name, Exports).` | Module header with explicit export list. |
+| `:- module(Name, Exports).` | Module header with explicit export list. Each entry is `name/arity`, `fun(name/arity)`, `op(Pri, Type, Name)`, `type(name/arity)`, or `type(name/arity, [Con, ...])`. |
 | `:- module(Name).` | Module header that exports every declared identifier. |
-| `:- use_module(M)` / `:- use_module(M, Imports).` | Import another module. |
+| `:- use_module(M)` / `:- use_module(M, Imports).` | Import another module. Import items use the same forms as export items. |
+| `type(name/arity, [Con1, ...])` | Two-argument type form. Exports (or imports) the type and only the listed data constructors; `type(name/arity)` covers all of them. |
 | `:- chr_constraint Decls.` | Declare CHR constraints. |
 | `:- chr_type T ---> Cs.` | Declare an algebraic type. |
 | `:- function Decls.` | Declare user-defined functions. |

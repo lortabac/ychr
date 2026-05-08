@@ -1,0 +1,6 @@
+:- module(unknown_ctor_lib, [type(col/0, [purple])]).
+
+% `purple` is not a constructor of `col`. The renamer must reject this
+% module because the export list mentions a constructor that the type
+% does not declare.
+:- chr_type col ---> red ; green.

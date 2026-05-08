@@ -1,0 +1,5 @@
+:- module(empty_main, [tag/2]).
+:- use_module(empty_lib).
+:- chr_constraint tag/2.
+
+tag(X, R) <=> R = X.

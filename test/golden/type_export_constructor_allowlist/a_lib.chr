@@ -1,0 +1,6 @@
+:- module(allowlist_lib, [type(col/0, [red])]).
+
+% Only `red` is exported. `green` is declared but excluded from the
+% module's export list, so importing modules cannot canonicalize
+% bare uses of `green` to this module.
+:- chr_type col ---> red ; green.
