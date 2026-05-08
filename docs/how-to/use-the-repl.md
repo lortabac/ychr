@@ -9,6 +9,7 @@ This page is a stub.
 ```sh
 ychr repl file.chr
 ychr repl --quiet file.chr   # no banner, no prompt
+ychr repl --Werror file.chr  # warnings abort startup
 ```
 
 ## Meta-commands

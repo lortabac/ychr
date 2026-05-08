@@ -13,7 +13,7 @@ module YCHR.Repl
 where
 
 import Control.Exception (SomeException, displayException, fromException, try)
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.List (intercalate, isPrefixOf, sort)
 import Data.Map.Strict (Map)
@@ -53,10 +53,9 @@ import YCHR.Run
     compileFiles,
     executePreparedQuery,
     prepareQuery,
-    runProgramWithQuery,
   )
 import YCHR.Runtime.Interpreter (HostCallRegistry)
-import YCHR.Runtime.Session (CHREffects, toSessionInput, withCHR)
+import YCHR.Runtime.Session (CHREffects, toSessionInput, withCHR, withCHRExtra)
 import YCHR.TypeCheck (typeCheckProgram)
 import YCHR.Types (Term)
 import YCHR.Types qualified as Types
@@ -68,16 +67,20 @@ import YCHR.Types qualified as Types
 -- | Run the interactive REPL on the given files. Compiles the inputs
 -- (or an empty program if @files@ is empty), prints any warnings and
 -- type errors to stderr, then enters the outer command loop. The
--- session continues until the user types @:quit@ or hits EOF.
-runRepl :: HostCallRegistry -> Bool -> [FilePath] -> IO ()
-runRepl hostCalls quietMode files = do
+-- session continues until the user types @:quit@ or hits EOF. When
+-- @werror@ is set, warnings during the initial load abort startup;
+-- during @:recompile@ they keep the previous program loaded.
+runRepl :: HostCallRegistry -> Bool -> Bool -> [FilePath] -> IO ()
+runRepl hostCalls quietMode werror files = do
   result <- compileFiles True files
   case result of
     Left err -> do
       putStr (displayMsg err)
       exitFailure
     Right (prog, warnings) -> do
-      unless quietMode (printWarnings warnings)
+      let warnsFatal = werror && not (null warnings)
+      when (warnsFatal || not quietMode) (printWarnings warnings)
+      when warnsFatal exitFailure
       unless quietMode (printTypeErrors prog)
       histFile <- getXdgDirectory XdgData "ychr/history"
       createDirectoryIfMissing True (takeDirectory histFile)
@@ -85,7 +88,7 @@ runRepl hostCalls quietMode files = do
           baseSettings = (defaultSettings :: Settings IO) {historyFile = Just histFile}
           outerSettings = baseSettings {complete = matchAgainst (commandNames ++ exported)}
           liveSettings = baseSettings {complete = matchAgainst (":end" : exported)}
-      runInputT outerSettings (outerLoop hostCalls quietMode files liveSettings prog)
+      runInputT outerSettings (outerLoop hostCalls quietMode werror files liveSettings prog)
 
 -- ---------------------------------------------------------------------------
 -- Outer REPL loop
@@ -94,11 +97,12 @@ runRepl hostCalls quietMode files = do
 outerLoop ::
   HostCallRegistry ->
   Bool ->
+  Bool ->
   [FilePath] ->
   Settings IO ->
   CompiledProgram ->
   InputT IO ()
-outerLoop hostCalls quietMode files liveSettings = go
+outerLoop hostCalls quietMode werror files liveSettings = go
   where
     prompt = if quietMode then "" else "ychr> "
     go prog = do
@@ -118,34 +122,56 @@ outerLoop hostCalls quietMode files liveSettings = go
       ":list_declarations" -> showDeclarations prog *> go prog
       ":list_operators" -> showOperators prog *> go prog
       ":begin" -> do
-        liftIO (runLiveSession hostCalls liveSettings quietMode prog)
+        liftIO (runLiveSession hostCalls liveSettings quietMode werror prog)
         go prog
       "" -> go prog
-      line -> runOuterQuery hostCalls prog line *> go prog
+      line -> runOuterQuery hostCalls werror prog line *> go prog
     recompile prog = do
       result <- liftIO (compileFiles True files)
       case result of
         Left err -> outputStr (displayMsg err) *> go prog
-        Right (prog', warnings) -> do
-          liftIO (printWarnings warnings)
-          liftIO (printTypeErrors prog')
-          go prog'
+        Right (prog', warnings)
+          | werror && not (null warnings) -> do
+              liftIO (printWarnings warnings)
+              -- Surface type errors of the rejected program too, so the
+              -- user sees the full diagnostic picture before deciding
+              -- what to fix; the previous program stays loaded.
+              liftIO (printTypeErrors prog')
+              go prog
+          | otherwise -> do
+              liftIO (printWarnings warnings)
+              liftIO (printTypeErrors prog')
+              go prog'
 
 -- | Run a one-off query in the outer REPL: parse, typecheck, execute
 -- in a fresh CHR session. Distinct exception classes are surfaced
 -- differently — 'Error' values via 'displayMsg', everything else as
--- @"Error: " ++ displayException@.
-runOuterQuery :: HostCallRegistry -> CompiledProgram -> String -> InputT IO ()
-runOuterQuery hostCalls prog line = do
-  outcome <-
+-- @"Error: " ++ displayException@. Under @--Werror@, query-rename
+-- warnings short-circuit before execution; the constraint store is
+-- untouched (one-shot queries get a fresh store anyway).
+runOuterQuery :: HostCallRegistry -> Bool -> CompiledProgram -> String -> InputT IO ()
+runOuterQuery hostCalls werror prog line = do
+  prepResult <-
     liftIO $
       try @SomeException $
-        runProgramWithQuery prog hostCalls (T.pack line)
-  case outcome of
-    Left exc -> case fromException exc of
+        prepareQuery prog (T.pack line)
+  case prepResult of
+    Left exc -> reportException exc
+    Right (prep, ws) -> do
+      liftIO (printWarnings ws)
+      unless (werror && not (null ws)) $ do
+        execResult <-
+          liftIO $
+            try @SomeException $
+              withCHRExtra (toSessionInput prog) hostCalls prep.extraProcs $
+                executePreparedQuery hostCalls prep.liftedGoals
+        case execResult of
+          Left exc -> reportException exc
+          Right bindings -> outputStr (prettyQueryResult bindings)
+  where
+    reportException exc = case fromException exc of
       Just err -> outputStr (displayMsg (err :: Error))
       Nothing -> outputStrLn ("Error: " ++ displayException exc)
-    Right bindings -> outputStr (prettyQueryResult bindings)
 
 -- ---------------------------------------------------------------------------
 -- Live REPL session
@@ -160,9 +186,10 @@ runLiveSession ::
   HostCallRegistry ->
   Settings IO ->
   Bool ->
+  Bool ->
   CompiledProgram ->
   IO ()
-runLiveSession hostCalls settings quietMode cp =
+runLiveSession hostCalls settings quietMode werror cp =
   withCHR (toSessionInput cp) hostCalls liveLoop
   where
     prompt = if quietMode then "" else "ychr live> "
@@ -176,7 +203,7 @@ runLiveSession hostCalls settings quietMode cp =
       | stripped == ":end" = pure ()
       | T.null stripped = liveLoop
       | otherwise = do
-          outcome <- handleLiveQuery cp hostCalls (T.pack line)
+          outcome <- handleLiveQuery cp hostCalls werror (T.pack line)
           case outcome of
             QueryOk bindings -> do
               liftIO (putStr (prettyQueryResult bindings))
@@ -204,30 +231,38 @@ data QueryOutcome
 -- | Handle one query inside an existing live session: parse / typecheck
 -- in 'IO' (catching 'Error'), reject lifted lambdas (live sessions
 -- cannot grow the procedure map), then execute and catch any runtime
--- exception as a fatal outcome.
+-- exception as a fatal outcome. Under @--Werror@, query-rename
+-- warnings short-circuit before execution: the warnings are printed
+-- to stderr and the query is treated as recoverable, leaving the
+-- session's constraint store untouched.
 handleLiveQuery ::
   (CHREffects es) =>
   CompiledProgram ->
   HostCallRegistry ->
+  Bool ->
   Text ->
   Eff es QueryOutcome
-handleLiveQuery cp hostCalls src = do
+handleLiveQuery cp hostCalls werror src = do
   prepResult <- liftIO (try @SomeException (prepareQuery cp src))
   case prepResult of
     Left exc -> pure (classifyAsRecoverable exc)
-    Right prep
-      | not (null prep.queryLambdas) ->
-          pure (QueryRecoverable (displayMsg LambdasInLiveQuery))
-      | otherwise -> do
-          execResult <-
-            Eff.try @SomeException
-              ( executePreparedQuery
-                  hostCalls
-                  prep.liftedGoals
-              )
-          case execResult of
-            Left exc -> pure (QueryFatal (renderFatal exc))
-            Right bindings -> pure (QueryOk bindings)
+    Right (prep, ws) -> do
+      liftIO (printWarnings ws)
+      if werror && not (null ws)
+        then pure (QueryRecoverable "")
+        else
+          if not (null prep.queryLambdas)
+            then pure (QueryRecoverable (displayMsg LambdasInLiveQuery))
+            else do
+              execResult <-
+                Eff.try @SomeException
+                  ( executePreparedQuery
+                      hostCalls
+                      prep.liftedGoals
+                  )
+              case execResult of
+                Left exc -> pure (QueryFatal (renderFatal exc))
+                Right bindings -> pure (QueryOk bindings)
   where
     classifyAsRecoverable exc = case fromException exc :: Maybe Error of
       Just err -> QueryRecoverable (displayMsg err)

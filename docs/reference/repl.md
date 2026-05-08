@@ -10,7 +10,7 @@ For a guided walk-through, see
 ## Starting the REPL
 
 ```sh
-ychr repl [--quiet] [FILES...]
+ychr repl [--quiet] [--Werror] [FILES...]
 ```
 
 The REPL loads the given files (or none, falling back to the bundled
@@ -21,6 +21,13 @@ identifiers.
 
 The `--quiet` flag suppresses the prompt and warnings — useful when
 piping input from a script or test harness.
+
+The `--Werror` flag treats warnings as errors. Warnings during the
+initial load abort startup with a non-zero exit; warnings encountered
+during `:recompile` keep the previously loaded program in place
+(matching the behavior on a compile error). Warnings are still printed
+to stderr under `--Werror` even if `--quiet` is also set, so the
+failure is never silent.
 
 ## Prompts
 

@@ -20,10 +20,11 @@ import YCHR.Repl qualified as Repl
 import YCHR.Run
   ( CompiledProgram (..),
     Error (..),
-    Warning,
+    Warning (..),
     compileFiles,
+    prepareGoal,
     resolveQueryConstraint,
-    runProgramWithGoal,
+    runPreparedGoal,
   )
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
 import YCHR.TypeCheck (typeCheckProgram)
@@ -36,7 +37,8 @@ import YCHR.VM.SExpr (VMProgram (..), serialize)
 
 data RunOpts = RunOpts
   { goal :: T.Text,
-    showBindings :: Bool
+    showBindings :: Bool,
+    werror :: Bool
   }
 
 data Target = TargetVM | TargetScheme
@@ -44,15 +46,22 @@ data Target = TargetVM | TargetScheme
 data CompileOpts = CompileOpts
   { outputDir :: FilePath,
     baseName :: Maybe String,
-    target :: Target
+    target :: Target,
+    werror :: Bool
   }
 
 data GenDriverOpts = GenDriverOpts
-  { gdGoal :: T.Text
+  { gdGoal :: T.Text,
+    werror :: Bool
   }
 
 data ReplOpts = ReplOpts
-  { quiet :: Bool
+  { quiet :: Bool,
+    werror :: Bool
+  }
+
+data CheckOpts = CheckOpts
+  { werror :: Bool
   }
 
 data Command
@@ -60,15 +69,21 @@ data Command
   | Run RunOpts [FilePath]
   | Compile CompileOpts [FilePath]
   | GenDriver GenDriverOpts [FilePath]
-  | Check [FilePath]
+  | Check CheckOpts [FilePath]
 
 filesArg :: Parser [FilePath]
 filesArg = many (argument str (metavar "FILES..."))
 
+werrorFlag :: Parser Bool
+werrorFlag = switch (long "Werror" <> help "Treat warnings as errors")
+
 replParser :: Parser Command
 replParser =
   Repl
-    <$> (ReplOpts <$> switch (long "quiet" <> help "Suppress prompt and warnings"))
+    <$> ( ReplOpts
+            <$> switch (long "quiet" <> help "Suppress prompt and warnings")
+            <*> werrorFlag
+        )
     <*> filesArg
 
 runParser :: Parser Command
@@ -77,6 +92,7 @@ runParser =
     <$> ( RunOpts
             <$> fmap T.pack (strOption (short 'g' <> metavar "GOAL" <> help "Goal to execute"))
             <*> switch (long "show-bindings" <> help "Print variable bindings")
+            <*> werrorFlag
         )
     <*> filesArg
 
@@ -112,6 +128,7 @@ compileParser =
                   <> help "Target (vm, scheme)"
                   <> value TargetVM
               )
+            <*> werrorFlag
         )
     <*> filesArg
 
@@ -120,11 +137,12 @@ genDriverParser =
   GenDriver
     <$> ( GenDriverOpts
             <$> fmap T.pack (strOption (short 'g' <> metavar "GOAL" <> help "Goal to execute"))
+            <*> werrorFlag
         )
     <*> filesArg
 
 checkParser :: Parser Command
-checkParser = Check <$> filesArg
+checkParser = Check <$> (CheckOpts <$> werrorFlag) <*> filesArg
 
 commandParser :: Parser Command
 commandParser =
@@ -162,11 +180,11 @@ main :: IO ()
 main = do
   cmd <- execParser (info (commandParser <**> helper) (fullDesc <> progDesc "CHR compiler"))
   case cmd of
-    Repl opts files -> Repl.runRepl hostCalls opts.quiet files
+    Repl opts files -> Repl.runRepl hostCalls opts.quiet opts.werror files
     Run opts files -> runGoal opts files
     Compile opts files -> runCompile opts files
     GenDriver opts files -> runGenDriver opts files
-    Check files -> runCheck files
+    Check opts files -> runCheck opts files
 
 -- ---------------------------------------------------------------------------
 -- Subcommands
@@ -176,20 +194,29 @@ runGoal :: RunOpts -> [FilePath] -> IO ()
 runGoal opts files = withCompiled True files $ \prog warnings -> do
   printWarnings warnings
   typeCheckOrExit prog
-  outcome <- try @SomeException (runProgramWithGoal prog hostCalls opts.goal)
-  case outcome of
-    Left exc -> do
+  prepResult <- try @SomeException (prepareGoal prog opts.goal)
+  case prepResult of
+    Left exc -> reportErrorAndExit exc
+    Right (constraint, goalWarnings) -> do
+      printWarnings goalWarnings
+      exitOnWerror opts.werror (warnings ++ goalWarnings)
+      outcome <- try @SomeException (runPreparedGoal prog hostCalls constraint)
+      case outcome of
+        Left exc -> reportErrorAndExit exc
+        Right (_, bindings) ->
+          when opts.showBindings (putStr (prettyBindings bindings))
+  where
+    reportErrorAndExit exc = do
       case fromException exc of
         Just err -> putStr (displayMsg (err :: Error))
         Nothing -> putStrLn ("Error: " ++ displayException exc)
       exitFailure
-    Right (_, bindings) ->
-      when opts.showBindings (putStr (prettyBindings bindings))
 
 runCompile :: CompileOpts -> [FilePath] -> IO ()
 runCompile opts files = withCompiled includeStdlib files $ \prog warnings -> do
   printWarnings warnings
   typeCheckOrExit prog
+  exitOnWerror opts.werror warnings
   let vmp =
         VMProgram
           { program = prog.program,
@@ -228,22 +255,29 @@ runGenDriver opts files = withCompiled False files $ \prog warnings -> do
   -- Canonicalize bare data-constructor references in the goal's
   -- arguments so they reach the runtime in the same flat-functor
   -- form the compiled head patterns expect.
-  renamedArgs <- case renameQueryArgs prog.allModules cargs of
+  (renamedArgs, goalWarnings) <- case renameQueryArgs prog.allModules cargs of
     Left errs -> do
       putStr (displayMsg (RenameErrors errs))
       exitFailure
-    Right (rs, _) -> pure rs
+    Right (rs, ws) -> do
+      let gws = [RenameWarnings ws | not (null ws)]
+      printWarnings gws
+      pure (rs, gws)
   resolved <- case resolveQueryConstraint prog (Constraint cname renamedArgs) of
     Left err -> do
       putStrLn err
       exitFailure
     Right c -> pure c
+  -- Combine file-level and goal-level warnings into a single Werror
+  -- decision so a single run reports every warning before exiting.
+  exitOnWerror opts.werror (warnings ++ goalWarnings)
   TIO.putStr (generateDriver (T.pack "program") resolved)
 
-runCheck :: [FilePath] -> IO ()
-runCheck files = withCompiled True files $ \prog warnings -> do
+runCheck :: CheckOpts -> [FilePath] -> IO ()
+runCheck opts files = withCompiled True files $ \prog warnings -> do
   printWarnings warnings
   typeCheckOrExit prog
+  exitOnWerror opts.werror warnings
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -273,6 +307,9 @@ typeCheckOrExit prog = do
 
 printWarnings :: [Warning] -> IO ()
 printWarnings = mapM_ (hPutStr stderr . displayMsg)
+
+exitOnWerror :: Bool -> [Warning] -> IO ()
+exitOnWerror enabled ws = when (enabled && not (null ws)) exitFailure
 
 hostCalls :: HostCallRegistry
 hostCalls = baseHostCallRegistry <> metaHostCallRegistry

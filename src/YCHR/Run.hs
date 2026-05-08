@@ -38,6 +38,8 @@ module YCHR.Run
     resolveQueryConstraint,
     runProgramWithGoalDSL,
     runProgramWithGoal,
+    prepareGoal,
+    runPreparedGoal,
 
     -- * Multi-goal query API
     PreparedQuery (..),
@@ -178,7 +180,51 @@ runProgramWithGoalDSL cp hostCalls constraint = do
       bindings <- get >>= Map.traverseWithKey valueToTerm
       pure (result, bindings)
 
+-- | Parse and rename a goal, returning the canonicalized 'Constraint'
+-- alongside any rename warnings. Throws on parse or rename errors.
+-- Splitting this out lets the CLI surface goal-argument warnings before
+-- the goal runs (notably for @--Werror@).
+prepareGoal :: CompiledProgram -> Text -> IO (Constraint, [Warning])
+prepareGoal cp src = case parseConstraint "<query>" src of
+  Left err -> throwIO (ParseError "<query>" err)
+  Right (Left validErr) -> throwIO (ParseValidationErrors [validErr])
+  -- Rename the constraint's arguments so that bare data-constructor
+  -- references (e.g. @[H|T]@, declared atoms) get canonicalized to
+  -- the same flat-functor form the compiled head patterns expect.
+  Right (Right (Constraint cname cargs)) -> do
+    (renamedArgs, ws) <-
+      either
+        (throwIO . RenameErrors)
+        pure
+        (renameQueryArgs cp.allModules cargs)
+    let warnings = [RenameWarnings ws | not (null ws)]
+    pure (Constraint cname renamedArgs, warnings)
+
+-- | Type-check and run a previously prepared single-goal constraint.
+-- Throws 'TypeErrors' on goal-time type errors.
+runPreparedGoal ::
+  CompiledProgram ->
+  HostCallRegistry ->
+  Constraint ->
+  IO (Value, Map Text Term)
+runPreparedGoal cp hostCalls original = do
+  -- Canonicalize the constraint name via the export map so the
+  -- type-check sees the same qualified name 'tellConstraintSigs'
+  -- registers. Defer name-resolution failures to 'runProgramWithGoalDSL'
+  -- (which produces a clearer "constraint not found" error).
+  tcErrs <- case resolveQueryConstraint cp original of
+    Right qc ->
+      typeCheckGoals
+        cp.desugaredProgram
+        (SourceLoc "<query>" 1 1)
+        (Just "query")
+        [D.BodyConstraint qc]
+    Left _ -> pure []
+  unless (null tcErrs) (throwIO (TypeErrors tcErrs))
+  runProgramWithGoalDSL cp hostCalls original
+
 -- | Like 'runProgramWithGoalDSL' but accepts a query as surface-language 'Text'.
+-- Convenience wrapper: 'prepareGoal' + 'runPreparedGoal', dropping warnings.
 runProgramWithGoal ::
   CompiledProgram ->
   HostCallRegistry ->
@@ -187,37 +233,9 @@ runProgramWithGoal ::
     ( Value,
       Map Text Term
     )
-runProgramWithGoal cp hostCalls src =
-  case parseConstraint "<query>" src of
-    Left err -> throwIO (ParseError "<query>" err)
-    Right (Left validErr) -> throwIO (ParseValidationErrors [validErr])
-    -- Rename the constraint's arguments so that bare data-constructor
-    -- references (e.g. @[H|T]@, declared atoms) get canonicalized to
-    -- the same flat-functor form the compiled head patterns expect.
-    Right (Right (Constraint cname cargs)) -> do
-      (renamedArgs, _warnings) <-
-        either
-          (throwIO . RenameErrors)
-          pure
-          ( renameQueryArgs
-              cp.allModules
-              cargs
-          )
-      -- Canonicalize the constraint name via the export map so the
-      -- type-check sees the same qualified name 'tellConstraintSigs'
-      -- registers. Defer name-resolution failures to 'runProgramWithGoalDSL'
-      -- (which produces a clearer "constraint not found" error).
-      let original = Constraint cname renamedArgs
-      tcErrs <- case resolveQueryConstraint cp original of
-        Right qc ->
-          typeCheckGoals
-            cp.desugaredProgram
-            (SourceLoc "<query>" 1 1)
-            (Just "query")
-            [D.BodyConstraint qc]
-        Left _ -> pure []
-      unless (null tcErrs) (throwIO (TypeErrors tcErrs))
-      runProgramWithGoalDSL cp hostCalls original
+runProgramWithGoal cp hostCalls src = do
+  (constraint, _ws) <- prepareGoal cp src
+  runPreparedGoal cp hostCalls constraint
 
 -- ---------------------------------------------------------------------------
 -- Multi-goal query API
@@ -234,9 +252,11 @@ data PreparedQuery = PreparedQuery
     extraProcs :: [Procedure]
   }
 
--- | Parse, rename, desugar, lambda-lift, and type-check a query. Throws
--- the appropriate 'Error' constructor on failure.
-prepareQuery :: CompiledProgram -> Text -> IO PreparedQuery
+-- | Parse, rename, desugar, lambda-lift, and type-check a query.
+-- Returns the prepared query alongside any rename warnings produced
+-- while canonicalizing the goals' terms. Throws the appropriate
+-- 'Error' constructor on failure.
+prepareQuery :: CompiledProgram -> Text -> IO (PreparedQuery, [Warning])
 prepareQuery cp src = do
   goals <-
     either
@@ -247,7 +267,7 @@ prepareQuery cp src = do
           "<query>"
           src
       )
-  (renamed, _renameWarnings) <-
+  (renamed, renameWs) <-
     either
       (throwIO . RenameErrors)
       pure
@@ -291,12 +311,15 @@ prepareQuery cp src = do
       funSet = buildFunctionSet (D.Program [] allFuns Map.empty [])
       queryProcs = compileQueryLambdas funSet lambdas
       queryDispatches = genCallFunDispatches allFuns
+      warnings = [RenameWarnings renameWs | not (null renameWs)]
   pure
-    PreparedQuery
-      { liftedGoals = lifted,
-        queryLambdas = lambdas,
-        extraProcs = queryProcs ++ queryDispatches
-      }
+    ( PreparedQuery
+        { liftedGoals = lifted,
+          queryLambdas = lambdas,
+          extraProcs = queryProcs ++ queryDispatches
+        },
+      warnings
+    )
 
 -- | Execute the lifted goals of a 'PreparedQuery' inside an existing CHR
 -- session. Opens its own per-query variable scope and returns the
@@ -316,9 +339,12 @@ executePreparedQuery hostCalls lifted =
 --
 -- Parses the input as a comma-separated, dot-terminated list of goals,
 -- renames and desugars them like rule bodies, then executes each goal.
+-- Convenience wrapper over 'prepareQuery' + 'executePreparedQuery';
+-- discards rename warnings (callers that need them — e.g. the REPL
+-- under @--Werror@ — should call 'prepareQuery' directly).
 runProgramWithQuery :: CompiledProgram -> HostCallRegistry -> Text -> IO (Map Text Term)
 runProgramWithQuery cp hostCalls src = do
-  prep <- prepareQuery cp src
+  (prep, _ws) <- prepareQuery cp src
   withCHRExtra (toSessionInput cp) hostCalls prep.extraProcs $
     executePreparedQuery hostCalls prep.liftedGoals
 
