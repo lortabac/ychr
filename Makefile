@@ -1,7 +1,7 @@
 PYTEST ?= python3 -m pytest
 GUILE ?= guile3.0
 
-.PHONY: test test-haskell test-scheme test-scheme-runtime test-repl test-typecheck test-docs test-style bench build install format clean
+.PHONY: test test-haskell test-scheme test-scheme-runtime test-repl test-typecheck test-docs test-style bench build install format clean coverage
 
 build:
 	cabal build
@@ -34,6 +34,12 @@ test-style:
 
 bench: build
 	cabal bench
+
+coverage:
+	cabal test --enable-coverage
+	@echo
+	@echo "Coverage HTML report:"
+	@find dist-newstyle -path '*/hpc/vanilla/html/hpc_index.html' -print -quit
 
 format:
 	ormolu -i $$(find src app -name '*.hs')
