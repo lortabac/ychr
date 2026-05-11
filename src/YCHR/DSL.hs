@@ -292,7 +292,8 @@ tyDef n vs cs =
   TypeDefinition
     { name = Unqualified n,
       typeVars = vs,
-      constructors = cs
+      constructors = cs,
+      loc = dummyLoc
     }
 
 -- | Build a data constructor: name and argument types.

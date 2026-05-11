@@ -705,6 +705,7 @@ warningTests =
                                 (Unqualified "foo")
                                 [TypeCon (Unqualified "int") []]
                             ]
+                            dummyLoc
                         )
                     ]
                 }
@@ -730,6 +731,7 @@ warningTests =
                                 (Unqualified "foo")
                                 [TypeCon (Unqualified "int") []]
                             ]
+                            dummyLoc
                         )
                     ]
                 }
@@ -777,6 +779,7 @@ warningTests =
                                 (Unqualified "empty")
                                 []
                             ]
+                            dummyLoc
                         )
                     ],
                   exports = Just (noAnnP [TypeExportDecl "tree" 0 Nothing])
@@ -796,6 +799,7 @@ warningTests =
                                 (Unqualified "leaf")
                                 [TypeCon (Unqualified "int") []]
                             ]
+                            dummyLoc
                         )
                     ]
                 }
@@ -821,6 +825,7 @@ warningTests =
                                 (Unqualified "red")
                                 []
                             ]
+                            dummyLoc
                         )
                     ]
                 }
@@ -838,6 +843,7 @@ warningTests =
                                     []
                                 ]
                             ]
+                            dummyLoc
                         )
                     ]
                 }

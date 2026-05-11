@@ -65,7 +65,7 @@
     check_arg_list(list(ty), list(ty), int),
     tc_unify(ty, ty, int),
     tc_unify_list(list(ty), list(ty), int),
-    resolve_overload(list(sig_t(list(ty), ty)), list(ty), ty, int),
+    resolve_overload(any, list(sig_t(list(ty), ty)), list(ty), ty, int),
     report_error(int, any, any),
     errors(list(error)),
     collect(list(error)).
@@ -133,7 +133,7 @@ overloaded_function_match @
     function_sigs(Name, Sigs) \
         check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
     Matching is filter_consistent(Sigs, ArgTypes),
-    resolve_overload(Matching, ArgTypes, RetTypeVar, Ctx).
+    resolve_overload(Name, Matching, ArgTypes, RetTypeVar, Ctx).
 
 % Note: unknown_function detection is handled by the Haskell driver
 % (typeOfCompound checks funSet before emitting check_function_use).
@@ -290,20 +290,22 @@ tc_unify_list_cons @
 
 % Exactly one matching signature: apply it
 resolve_one @
-    resolve_overload([Sig], ArgTypes, RetTypeVar, Ctx) <=>
+    resolve_overload(_, [Sig], ArgTypes, RetTypeVar, Ctx) <=>
     FreshArgs is sig_fst(Sig),
     FreshRet is sig_snd(Sig),
     check_arg_list(FreshArgs, ArgTypes, Ctx),
     tc_unify(RetTypeVar, FreshRet, Ctx).
 
-% No matching signature: error
+% No matching signature: error. The function name is reported so the
+% diagnostic can identify which call site failed; "no_matching_overload"
+% with the literal name on the detail side keeps the decoder simple.
 resolve_none @
-    resolve_overload([], _, _, Ctx) <=>
-    report_error(Ctx, no_matching_overload, overloaded).
+    resolve_overload(Name, [], _, _, Ctx) <=>
+    report_error(Ctx, no_matching_overload, Name).
 
 % Multiple matching signatures: ambiguous, succeed silently
 resolve_ambiguous @
-    resolve_overload([_, _ | _], _, _, _) <=> true.
+    resolve_overload(_, [_, _ | _], _, _, _) <=> true.
 
 % ==========================================================================
 % Error accumulation

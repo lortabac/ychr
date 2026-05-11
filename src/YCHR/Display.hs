@@ -137,6 +137,12 @@ displayMsgWithSrcLoc code sev msg loc maybeLabel maybeNode =
 displayErrors :: [String] -> String
 displayErrors = intercalate "\n"
 
+-- | Append a hint line to a diagnostic message. Hints are rendered as
+-- a second sentence, indented two spaces, so they stand apart from the
+-- headline inside the 'displayMsgWithSrcLoc' block.
+withHint :: String -> String -> String
+withHint msg hint = msg ++ "\n  Hint: " ++ hint
+
 -- | Convert a megaparsec 'SourcePos' to a 'P.SourceLoc'.
 sourceLocFromPos :: SourcePos -> P.SourceLoc
 sourceLocFromPos sp =
@@ -235,18 +241,21 @@ instance Display (P.AnnP ParseValidationError) where
 
 parseValidationErrorMsg :: ParseValidationError -> String
 parseValidationErrorMsg (DiscontiguousEquations name) =
-  "Equations for function "
-    ++ T.unpack name
-    ++ " must be contiguous (or declare it with :- open_function)"
+  withHint
+    ("Equations for function '" ++ T.unpack name ++ "' must be contiguous")
+    "declare the function with :- open_function to allow equations from other modules"
 parseValidationErrorMsg (DiscontiguousFunctionDecls name) =
-  "Declarations for function "
-    ++ T.unpack name
-    ++ " must be contiguous within the module (or use :- extend_function_type\
-       \ from another module to extend an open function)"
+  withHint
+    ("Declarations for function '" ++ T.unpack name ++ "' must be contiguous")
+    "use :- extend_function_type from another module to extend an open function"
 parseValidationErrorMsg MalformedImport =
-  "Invalid import: expected a module name or library(name)"
+  withHint
+    "Invalid import"
+    "expected a module name or library(name)"
 parseValidationErrorMsg MalformedConstraint =
-  "Invalid constraint: expected an atom or compound term"
+  withHint
+    "Invalid constraint"
+    "expected an atom or compound term"
 
 instance Display (Diagnostic ResolveError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -260,30 +269,46 @@ instance Display (Diagnostic ResolveError) where
 
 resolveErrorMsg :: ResolveError -> String
 resolveErrorMsg (ConstraintHasEquations name) =
-  displayName name
-    ++ " is declared as a constraint but has function equations (->)"
+  withHint
+    ( "'"
+        ++ displayName name
+        ++ "' is declared as a constraint but has function equations (->)"
+    )
+    "either declare it with :- function or remove the equations"
 resolveErrorMsg (FunctionInRuleHead name) =
-  displayName name
-    ++ " is declared as a function but appears in a rule head"
+  withHint
+    ( "'"
+        ++ displayName name
+        ++ "' is declared as a function but appears in a rule head"
+    )
+    "rule heads must be constraints; call the function from the body or a guard instead"
 resolveErrorMsg (ReservedName name) =
-  displayName name
-    ++ " is a reserved name and cannot be used as a constraint or function"
+  "'"
+    ++ displayName name
+    ++ "' is a reserved name and cannot be used as a constraint or function"
 resolveErrorMsg (UnqualifiedConstraintName name) =
-  "Unqualified constraint name reached the resolve phase (renamer bug): "
-    ++ displayName name
+  withHint
+    ( "Internal error: unqualified constraint name reached the resolve phase ('"
+        ++ displayName name
+        ++ "')"
+    )
+    "this is a YCHR bug; please report it with the .chr file that triggered it"
 resolveErrorMsg (ExtendsClosedFunction name) =
-  "Cannot extend "
-    ++ displayName name
-    ++ " because it is declared as a closed function. Declare it with\
-       \ :- open_function to allow cross-module signatures and equations."
+  withHint
+    ( "Cannot extend '"
+        ++ displayName name
+        ++ "' because it is declared as a closed function"
+    )
+    "declare it with :- open_function to allow cross-module signatures and equations"
 resolveErrorMsg (OrphanFunctionEquation name modName) =
-  "Equation for "
-    ++ displayName name
-    ++ " appears in module "
-    ++ T.unpack modName
-    ++ " but the function is declared elsewhere. Use\
-       \ :- extend_function to add equations to an open function from\
-       \ another module."
+  withHint
+    ( "Function '"
+        ++ displayName name
+        ++ "' is declared elsewhere but has an equation in module '"
+        ++ T.unpack modName
+        ++ "'"
+    )
+    "use :- extend_function to add equations to an open function from another module"
 
 instance Display (Diagnostic CollectError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -296,7 +321,10 @@ instance Display (Diagnostic CollectError) where
       (Just (prettyPExprSrc origin))
 
 collectErrorMsg :: CollectError -> String
-collectErrorMsg (UnknownLibrary name) = "Unknown library: " ++ T.unpack name
+collectErrorMsg (UnknownLibrary name) =
+  withHint
+    ("Unknown library '" ++ T.unpack name ++ "'")
+    "check the library name; the built-in libraries are bundled with the compiler"
 collectErrorMsg (CircularLibraryImport names) =
   "Circular library import: "
     ++ intercalate " -> " (map T.unpack names)
@@ -313,49 +341,62 @@ instance Display (Diagnostic RenameError) where
 
 renameErrorMsg :: RenameError -> String
 renameErrorMsg (AmbiguousName name arity candidates) =
-  "Ambiguous name "
-    ++ T.unpack name
-    ++ "/"
-    ++ show arity
-    ++ ", could be: "
-    ++ intercalate ", " (map T.unpack candidates)
+  withHint
+    ( "Ambiguous name '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "'"
+    )
+    ( "could be: "
+        ++ intercalate ", " (map T.unpack candidates)
+        ++ "; qualify the name explicitly to disambiguate"
+    )
 renameErrorMsg (UnknownName name arity) =
-  "Unknown constraint " ++ T.unpack name ++ "/" ++ show arity
+  withHint
+    ("Unknown name '" ++ T.unpack name ++ "/" ++ show arity ++ "'")
+    "declare it with :- chr_constraint or :- function, or import it from another module"
 renameErrorMsg (UnknownExport modName name arity) =
-  "Module "
+  "Module '"
     ++ T.unpack modName
-    ++ " exports "
+    ++ "' exports '"
     ++ T.unpack name
     ++ "/"
     ++ show arity
-    ++ " but does not declare it"
+    ++ "' but does not declare it"
 renameErrorMsg (UnknownImport modName name arity) =
-  "Module "
+  "Module '"
     ++ T.unpack modName
-    ++ " does not export "
+    ++ "' does not export '"
     ++ T.unpack name
     ++ "/"
     ++ show arity
+    ++ "'"
 renameErrorMsg (UnknownOperatorImport modName opName) =
-  "Module "
+  "Module '"
     ++ T.unpack modName
-    ++ " does not export operator "
+    ++ "' does not export operator '"
     ++ T.unpack opName
+    ++ "'"
 renameErrorMsg (UseModuleOutOfOrder modName) =
-  "use_module("
-    ++ T.unpack modName
-    ++ ") must appear immediately after the module directive,"
-    ++ " before any other directive or rule"
+  withHint
+    ( "use_module("
+        ++ T.unpack modName
+        ++ ") appears out of order"
+    )
+    ( "use_module directives must come immediately after the :- module"
+        ++ " directive, before any other directive or rule"
+    )
 renameErrorMsg (UnknownExportedConstructor modName tyName tyArity conName) =
-  "Module "
+  "Module '"
     ++ T.unpack modName
-    ++ " exports type "
+    ++ "' exports type '"
     ++ T.unpack tyName
     ++ "/"
     ++ show tyArity
-    ++ " with constructor "
+    ++ "' listing constructor '"
     ++ T.unpack conName
-    ++ " but does not declare that constructor on the type"
+    ++ "', but that constructor is not declared on the type"
 
 instance Display (Diagnostic RenameWarning) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -369,13 +410,15 @@ instance Display (Diagnostic RenameWarning) where
 
 renameWarningMsg :: RenameWarning -> String
 renameWarningMsg (UndeclaredDataConstructor name) =
-  "Undeclared data constructor " ++ T.unpack name
+  withHint
+    ("Undeclared data constructor '" ++ T.unpack name ++ "'")
+    "declare it with :- chr_type, or check the spelling"
 renameWarningMsg (DataConstructorArityMismatch name arity) =
-  "Data constructor "
+  "Data constructor '"
     ++ T.unpack name
-    ++ " used with arity "
+    ++ "' used with "
     ++ show arity
-    ++ " but declared with different arity"
+    ++ " argument(s) but declared with a different arity"
 
 instance Display (Diagnostic DesugarError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -389,10 +432,15 @@ instance Display (Diagnostic DesugarError) where
 
 desugarErrorMsg :: DesugarError -> String
 desugarErrorMsg (UnexpectedBodyTerm term) =
-  "Unexpected term in rule body: "
-    ++ prettyTermSrc term
+  withHint
+    ("This term is not valid in a rule body: " ++ prettyTermSrc term)
+    ( "rule bodies may contain constraints, function calls,"
+        ++ " unifications (=), 'is' expressions, and 'true'"
+    )
 desugarErrorMsg (InvalidLambdaParam term) =
-  "Invalid lambda parameter (expected variable or wildcard): " ++ prettyTermSrc term
+  withHint
+    ("Invalid lambda parameter: " ++ prettyTermSrc term)
+    "lambda parameters must be variables or the anonymous variable (_)"
 
 instance Display (Diagnostic CompileError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -406,10 +454,13 @@ instance Display (Diagnostic CompileError) where
 
 compileErrorMsg :: CompileError -> String
 compileErrorMsg (UnknownConstraintType name) =
-  "Unknown constraint type '"
-    ++ displayName name
-    ++ "'"
-compileErrorMsg (UnboundVariable var) = "Unbound variable '" ++ T.unpack var ++ "'"
+  withHint
+    ("Unknown constraint type '" ++ displayName name ++ "'")
+    "declare it with :- chr_constraint name/arity"
+compileErrorMsg (UnboundVariable var) =
+  withHint
+    ("Unbound variable '" ++ T.unpack var ++ "'")
+    "variables used in a guard or body must also appear in the rule head"
 
 instance Display (Diagnostic TypeCheckError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -423,36 +474,51 @@ instance Display (Diagnostic TypeCheckError) where
 
 typeCheckErrorMsg :: TypeCheckError -> String
 typeCheckErrorMsg (InconsistentTypes t1 t2) =
-  "Type mismatch: " ++ T.unpack t1 ++ " is inconsistent with " ++ T.unpack t2
+  "Type mismatch: '" ++ T.unpack t1 ++ "' does not match '" ++ T.unpack t2 ++ "'"
 typeCheckErrorMsg (UnknownConstraint name) =
-  "Unknown constraint: " ++ T.unpack name
+  withHint
+    ("Unknown constraint '" ++ T.unpack name ++ "'")
+    "declare it with :- chr_constraint, or import it from another module"
 typeCheckErrorMsg (UnknownFunction name) =
-  "Unknown function: " ++ T.unpack name
+  withHint
+    ("Unknown function '" ++ T.unpack name ++ "'")
+    "declare it with :- function or :- open_function, or import it from another module"
 typeCheckErrorMsg (UnboundTypeVar typeName conName varName) =
-  "In type "
-    ++ T.unpack typeName
-    ++ ", constructor "
-    ++ T.unpack conName
-    ++ ": type variable "
-    ++ T.unpack varName
-    ++ " is not bound by the type header"
+  withHint
+    ( "Type variable '"
+        ++ T.unpack varName
+        ++ "' used in constructor '"
+        ++ T.unpack conName
+        ++ "' is not in scope"
+    )
+    ( "add '"
+        ++ T.unpack varName
+        ++ "' to the parameter list of type '"
+        ++ T.unpack typeName
+        ++ "'"
+    )
 typeCheckErrorMsg (NoMatchingOverload name) =
-  "No matching overload for: " ++ T.unpack name
+  withHint
+    ("No matching type declaration for '" ++ T.unpack name ++ "'")
+    "check that the argument types match one of the declared signatures"
 typeCheckErrorMsg (UndefinedType typeName conName refName) =
-  "In type "
-    ++ T.unpack typeName
-    ++ ", constructor "
-    ++ T.unpack conName
-    ++ ": type "
-    ++ T.unpack refName
-    ++ " is not defined"
+  withHint
+    ( "Undefined type '"
+        ++ T.unpack refName
+        ++ "' referenced in constructor '"
+        ++ T.unpack conName
+        ++ "' of type '"
+        ++ T.unpack typeName
+        ++ "'"
+    )
+    "declare it with :- chr_type, or check the spelling"
 typeCheckErrorMsg (DuplicateConstructor conName decls) =
-  "Constructor '"
+  "Data constructor '"
     ++ T.unpack conName
-    ++ "' is declared multiple times: "
+    ++ "' is declared in multiple types: "
     ++ intercalate ", " [T.unpack t ++ "/" ++ show a | (t, a) <- decls]
 typeCheckErrorMsg (ConstructorArityMismatch conName usedArity declaredArity) =
-  "Constructor '"
+  "Data constructor '"
     ++ T.unpack conName
     ++ "' is used with "
     ++ show usedArity
@@ -490,17 +556,31 @@ instance Display Error where
     displayMsgWithSrcLoc
       operatorConflictCode
       SevError
-      ("Operator naming conflict: " ++ T.unpack name)
+      ( withHint
+          ( "Operator conflict: '"
+              ++ T.unpack name
+              ++ "' is declared with a different fixity or associativity"
+              ++ " than an existing operator"
+          )
+          ( "re-export the existing declaration instead of redeclaring it,"
+              ++ " or rename this one"
+          )
+      )
       loc
       Nothing
       (Just (prettyPExprSrc origin))
-  displayMsg LambdasInLiveQuery =
+  displayMsg (LambdasInLiveQuery loc origin) =
     displayMsgWithSrcLoc
       lambdasInLiveQueryCode
       SevError
-      ( "Anonymous lambdas (fun(...) -> ... end) are not supported in live REPL"
-          ++ " sessions. Use a named :- function declaration instead."
+      ( withHint
+          ( "Anonymous lambdas (fun(...) -> ... end) are not supported"
+              ++ " in live REPL sessions"
+          )
+          ( "lift the lambda into a named :- function declaration in a file"
+              ++ " and reload the session"
+          )
       )
-      (P.SourceLoc "<query>" 1 1)
+      loc
       (Just "live session")
-      Nothing
+      (Just (prettyPExprSrc origin))

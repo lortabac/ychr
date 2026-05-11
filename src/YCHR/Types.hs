@@ -50,6 +50,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Language.Haskell.TH.Syntax (Lift)
+import YCHR.Loc (SourceLoc)
 
 -- | A numeric identifier for a constraint type, assigned by the symbol table.
 newtype ConstraintType = ConstraintType {unConstraintType :: Int}
@@ -186,7 +187,8 @@ headConstraintToConstraint hc =
 data TypeDefinition = TypeDefinition
   { name :: Name,
     typeVars :: [Text],
-    constructors :: [DataConstructor]
+    constructors :: [DataConstructor],
+    loc :: SourceLoc
   }
   deriving (Show, Eq, Lift)
 

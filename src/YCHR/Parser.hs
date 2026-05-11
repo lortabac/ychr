@@ -829,8 +829,8 @@ convertTypeDefinition (Ann pexpr loc) = case pexpr of
           Compound n vars -> (n, [v | Ann (Var v) _ <- vars])
           _ -> ("<unknown>", [])
         cons = map convertDataConstructor (flattenSemicolon alts)
-     in Ann (TypeDefinition (Unqualified tname) tvars cons) loc
-  _ -> Ann (TypeDefinition (Unqualified "<unknown>") [] []) loc
+     in Ann (TypeDefinition (Unqualified tname) tvars cons loc) loc
+  _ -> Ann (TypeDefinition (Unqualified "<unknown>") [] [] loc) loc
 
 -- | Convert a PExpr to a 'DataConstructor'.
 convertDataConstructor :: Ann PExpr -> DataConstructor

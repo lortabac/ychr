@@ -156,18 +156,21 @@ detectDuplicateConstructors tds =
   [ Diagnostic
       Nothing
       ( AnnP
-          (DuplicateConstructor (flattenName name) (List.sort decls))
-          dummyLoc
-          (Atom "")
+          (DuplicateConstructor (flattenName name) (map dropLoc sortedByLoc))
+          firstLoc
+          (Atom firstTypeName)
       )
   | (name, decls) <- Map.toList grouped,
-    length decls > 1
+    length decls > 1,
+    let sortedByLoc = List.sortOn (\(_, _, l) -> (l.file, l.line, l.col)) decls,
+    (firstTypeName, _, firstLoc) : _ <- [sortedByLoc]
   ]
   where
+    dropLoc (tn, ar, _) = (tn, ar)
     grouped =
       Map.fromListWith
         (++)
-        [ (dc.conName, [(flattenName td.name, length dc.conArgs)])
+        [ (dc.conName, [(flattenName td.name, length dc.conArgs, td.loc)])
         | td <- tds,
           dc <- td.constructors
         ]
@@ -1020,8 +1023,8 @@ validateFieldType _ td dc (TypeVar v)
           Nothing
           ( AnnP
               (UnboundTypeVar (flattenName td.name) (flattenName dc.conName) v)
-              dummyLoc
-              (Atom "")
+              td.loc
+              (Atom (flattenName td.name))
           )
       ]
 validateFieldType typeMap td dc (TypeCon name args) =
@@ -1040,8 +1043,8 @@ validateFieldType typeMap td dc (TypeCon name args) =
                           (flattenName dc.conName)
                           (flattenName name)
                       )
-                      dummyLoc
-                      (Atom "")
+                      td.loc
+                      (Atom (flattenName td.name))
                   )
               ]
       argErrors = concatMap (validateFieldType typeMap td dc) args

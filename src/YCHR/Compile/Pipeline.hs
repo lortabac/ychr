@@ -34,6 +34,7 @@ import YCHR.Compile (CompileError, compile)
 import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable, liftAllLambdas)
 import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic)
+import YCHR.PExpr (PExpr)
 import YCHR.Parsed (AnnP (..), Import (..), Module (..), OpDecl, SourceLoc, noAnnP)
 import YCHR.Parser
   ( ModuleHeader (..),
@@ -77,8 +78,10 @@ data Error
     TypeErrors [Diagnostic TypeCheckError]
   | -- | A live REPL session received a query that introduces anonymous
     -- lambdas. Live sessions cannot grow the procedure map after the
-    -- effect stack has started, so such queries are rejected.
-    LambdasInLiveQuery
+    -- effect stack has started, so such queries are rejected. Carries
+    -- the source location and originating expression of the first
+    -- offending lambda so the diagnostic can point at it directly.
+    LambdasInLiveQuery SourceLoc PExpr
   deriving (Show)
 
 instance Exception Error

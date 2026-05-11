@@ -403,17 +403,22 @@ typeTests =
     [ testCase "simple enum type" $
         typeDefsOf ":- chr_type color ---> red ; green ; blue."
           >>= ( @?=
-                  [ TypeDefinition (Unqualified "color") [] $
+                  [ TypeDefinition
+                      (Unqualified "color")
+                      []
                       [ DataConstructor (Unqualified "red") [],
                         DataConstructor (Unqualified "green") [],
                         DataConstructor (Unqualified "blue") []
                       ]
+                      dummyLoc
                   ]
               ),
       testCase "type with constructor args" $
         typeDefsOf ":- chr_type tree ---> empty ; leaf(int) ; branch(tree, tree)."
           >>= ( @?=
-                  [ TypeDefinition (Unqualified "tree") [] $
+                  [ TypeDefinition
+                      (Unqualified "tree")
+                      []
                       [ DataConstructor (Unqualified "empty") [],
                         DataConstructor (Unqualified "leaf") [TypeCon (Unqualified "int") []],
                         DataConstructor
@@ -424,20 +429,26 @@ typeTests =
                             TypeCon (Unqualified "tree") []
                           ]
                       ]
+                      dummyLoc
                   ]
               ),
       testCase "parameterized type" $
         typeDefsOf ":- chr_type pair(A, B) ---> pair(A, B)."
           >>= ( @?=
-                  [ TypeDefinition (Unqualified "pair") ["A", "B"] $
+                  [ TypeDefinition
+                      (Unqualified "pair")
+                      ["A", "B"]
                       [ DataConstructor (Unqualified "pair") [TypeVar "A", TypeVar "B"]
                       ]
+                      dummyLoc
                   ]
               ),
       testCase "list type with list sugar" $
         typeDefsOf ":- chr_type list(T) ---> [] ; [T | list(T)]."
           >>= ( @?=
-                  [ TypeDefinition (Unqualified "list") ["T"] $
+                  [ TypeDefinition
+                      (Unqualified "list")
+                      ["T"]
                       [ DataConstructor (Unqualified "[]") [],
                         DataConstructor
                           (Unqualified ".")
@@ -445,12 +456,15 @@ typeTests =
                             TypeCon (Unqualified "list") [TypeVar "T"]
                           ]
                       ]
+                      dummyLoc
                   ]
               ),
       testCase "type with nested type args" $
         typeDefsOf ":- chr_type nested ---> wrap(pair(int, int))."
           >>= ( @?=
-                  [ TypeDefinition (Unqualified "nested") [] $
+                  [ TypeDefinition
+                      (Unqualified "nested")
+                      []
                       [ DataConstructor
                           (Unqualified "wrap")
                           [ TypeCon
@@ -458,6 +472,7 @@ typeTests =
                               [TypeCon (Unqualified "int") [], TypeCon (Unqualified "int") []]
                           ]
                       ]
+                      dummyLoc
                   ]
               ),
       testCase "type decl doesn't affect constraint decls" $
@@ -465,13 +480,26 @@ typeTests =
           Left err -> assertFailure (show err)
           Right m -> do
             map (.node) m.decls @?= [ConstraintDecl "c" 1 Nothing]
-            map (.node) m.typeDecls
-              @?= [TypeDefinition (Unqualified "t") [] [DataConstructor (Unqualified "a") []]],
+            map (normalizeTypeDefLoc . (.node)) m.typeDecls
+              @?= [ TypeDefinition
+                      (Unqualified "t")
+                      []
+                      [DataConstructor (Unqualified "a") []]
+                      dummyLoc
+                  ],
       testCase "multiple type decls" $
         typeDefsOf ":- chr_type a ---> x.\n:- chr_type b ---> y."
           >>= ( @?=
-                  [ TypeDefinition (Unqualified "a") [] [DataConstructor (Unqualified "x") []],
-                    TypeDefinition (Unqualified "b") [] [DataConstructor (Unqualified "y") []]
+                  [ TypeDefinition
+                      (Unqualified "a")
+                      []
+                      [DataConstructor (Unqualified "x") []]
+                      dummyLoc,
+                    TypeDefinition
+                      (Unqualified "b")
+                      []
+                      [DataConstructor (Unqualified "y") []]
+                      dummyLoc
                   ]
               )
     ]
@@ -702,7 +730,12 @@ firstPassTests =
 typeDefsOf :: Text -> IO [TypeDefinition]
 typeDefsOf src = case p src of
   Left err -> assertFailure (show err)
-  Right m -> pure (map (.node) m.typeDecls)
+  Right m -> pure (map (normalizeTypeDefLoc . (.node)) m.typeDecls)
+
+-- | Strip the source location from a parsed 'TypeDefinition' so test
+-- expected values can omit line/column numbers.
+normalizeTypeDefLoc :: TypeDefinition -> TypeDefinition
+normalizeTypeDefLoc td = td {loc = dummyLoc}
 
 bodyOf :: Text -> IO [Term]
 bodyOf src = case p src of

@@ -40,6 +40,7 @@ import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDire
 import System.Exit (exitFailure)
 import System.FilePath (takeDirectory)
 import System.IO (hPutStr, hPutStrLn, stderr)
+import YCHR.Desugared qualified as D
 import YCHR.Display (Display (..), displayMsg)
 import YCHR.PExpr qualified as P
 import YCHR.Parsed qualified as Parsed
@@ -250,19 +251,21 @@ handleLiveQuery cp hostCalls werror src = do
       liftIO (printWarnings ws)
       if werror && not (null ws)
         then pure (QueryRecoverable "")
-        else
-          if not (null prep.queryLambdas)
-            then pure (QueryRecoverable (displayMsg LambdasInLiveQuery))
-            else do
-              execResult <-
-                Eff.try @SomeException
-                  ( executePreparedQuery
-                      hostCalls
-                      prep.liftedGoals
-                  )
-              case execResult of
-                Left exc -> pure (QueryFatal (renderFatal exc))
-                Right bindings -> pure (QueryOk bindings)
+        else case prep.queryLambdas of
+          (lam : _) ->
+            let lamEqs = lam.equations :: Parsed.AnnP [D.Equation]
+                Parsed.AnnP _ loc origin = lamEqs
+             in pure (QueryRecoverable (displayMsg (LambdasInLiveQuery loc origin)))
+          [] -> do
+            execResult <-
+              Eff.try @SomeException
+                ( executePreparedQuery
+                    hostCalls
+                    prep.liftedGoals
+                )
+            case execResult of
+              Left exc -> pure (QueryFatal (renderFatal exc))
+              Right bindings -> pure (QueryOk bindings)
   where
     classifyAsRecoverable exc = case fromException exc :: Maybe Error of
       Just err -> QueryRecoverable (displayMsg err)

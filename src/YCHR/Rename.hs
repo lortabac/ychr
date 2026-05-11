@@ -840,7 +840,8 @@ renameTypeDefinition ctx td =
   TypeDefinition
     { name = Qualified ctx.currentModule.name (unqualifiedText td.name),
       typeVars = td.typeVars,
-      constructors = map (renameDataConstructor ctx) td.constructors
+      constructors = map (renameDataConstructor ctx) td.constructors,
+      loc = td.loc
     }
 
 renameDataConstructor :: RenameCtx -> DataConstructor -> DataConstructor
