@@ -140,7 +140,18 @@ import YCHR.Runtime.Registry (HostCallRegistry, baseHostCallRegistry)
 
 -- | An empty module with the given name.
 module' :: Text -> Module
-module' name = Module name [] [] [] [] [] [] [] Nothing
+module' name =
+  Module
+    { name = name,
+      imports = [],
+      decls = [],
+      extensionTypes = [],
+      typeDecls = [],
+      rules = [],
+      equations = [],
+      extensions = [],
+      exports = Nothing
+    }
 
 -- | Append plain @use_module(M)@ imports to a module.
 --

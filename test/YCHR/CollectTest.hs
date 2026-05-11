@@ -61,10 +61,32 @@ tests =
     ]
 
 userMod :: [AnnP Import] -> Module
-userMod imps = Module "user" imps [] [] [] [] [] [] Nothing
+userMod imps =
+  Module
+    { name = "user",
+      imports = imps,
+      decls = [],
+      extensionTypes = [],
+      typeDecls = [],
+      rules = [],
+      equations = [],
+      extensions = [],
+      exports = Nothing
+    }
 
 libMod :: Text -> Module
-libMod name = Module name [] [] [] [] [] [] [] Nothing
+libMod name =
+  Module
+    { name = name,
+      imports = [],
+      decls = [],
+      extensionTypes = [],
+      typeDecls = [],
+      rules = [],
+      equations = [],
+      extensions = [],
+      exports = Nothing
+    }
 
 isModuleImport :: Import -> Bool
 isModuleImport (ModuleImport _ _) = True

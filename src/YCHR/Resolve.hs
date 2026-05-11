@@ -189,7 +189,7 @@ checkExtendsClosed ::
 checkExtendsClosed funcOpenness mods =
   let declErrs =
         [ noDiag
-            (P.AnnP (ExtendsClosedFunction target) loc (PExpr.Atom ""))
+            (P.AnnP (ExtendsClosedFunction target) loc (PExpr.Atom d.name))
         | m <- mods,
           P.Ann d loc <- m.extensionTypes,
           Just target <- [d.target],

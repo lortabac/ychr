@@ -50,63 +50,54 @@ moduleTests =
   testGroup
     "module"
     [ testCase "module' produces empty module" $
-        module' "Foo" @?= Module "Foo" [] [] [] [] [] [] [] Nothing,
+        module' "Foo" @?= emptyModule "Foo",
       testCase "importing sets modImports" $
         module' "Foo" `importing` ["Bar", "Baz"]
-          @?= Module
-            "Foo"
-            [ noAnnP (ModuleImport "Bar" Nothing),
-              noAnnP (ModuleImport "Baz" Nothing)
-            ]
-            []
-            []
-            []
-            []
-            []
-            []
-            Nothing,
+          @?= (emptyModule "Foo")
+            { imports =
+                [ noAnnP (ModuleImport "Bar" Nothing),
+                  noAnnP (ModuleImport "Baz" Nothing)
+                ]
+            },
       testCase "declaring sets modDecls" $
         module' "Foo" `declaring` ["leq" // 2]
-          @?= Module "Foo" [] [noAnn (ConstraintDecl "leq" 2 Nothing)] [] [] [] [] [] Nothing,
+          @?= (emptyModule "Foo")
+            { decls = [noAnn (ConstraintDecl "leq" 2 Nothing)]
+            },
       testCase "defining sets modRules" $
         let r = [term "leq" [var "X"]] <=> [atom "true"]
          in module' "Foo" `defining` [r]
-              @?= Module "Foo" [] [] [] [] [r] [] [] Nothing,
+              @?= (emptyModule "Foo") {rules = [r]},
       testCase "chaining importing, declaring, defining" $
         let r = [term "c" []] <=> [atom "true"]
          in module' "M"
               `importing` ["A"]
               `declaring` ["c" // 0]
               `defining` [r]
-              @?= Module
-                "M"
-                [noAnnP (ModuleImport "A" Nothing)]
-                [ noAnn
-                    ( ConstraintDecl
-                        "c"
-                        0
-                        Nothing
-                    )
-                ]
-                []
-                []
-                [r]
-                []
-                []
-                Nothing,
+              @?= (emptyModule "M")
+                { imports = [noAnnP (ModuleImport "A" Nothing)],
+                  decls = [noAnn (ConstraintDecl "c" 0 Nothing)],
+                  rules = [r]
+                },
       testCase "exporting sets modExports" $
         module' "Foo" `exporting` ["leq" // 2]
-          @?= Module
-            "Foo"
-            []
-            []
-            []
-            []
-            []
-            []
-            []
-            (Just (noAnnP [ConstraintDecl "leq" 2 Nothing]))
+          @?= (emptyModule "Foo")
+            { exports = Just (noAnnP [ConstraintDecl "leq" 2 Nothing])
+            }
     ]
+  where
+    emptyModule n =
+      Module
+        { name = n,
+          imports = [],
+          decls = [],
+          extensionTypes = [],
+          typeDecls = [],
+          rules = [],
+          equations = [],
+          extensions = [],
+          exports = Nothing
+        }
 
 declarationTests :: TestTree
 declarationTests =
@@ -115,7 +106,23 @@ declarationTests =
     [ testCase "\"leq\" // 2 produces ConstraintDecl" $
         "leq" // 2 @?= ConstraintDecl "leq" 2 Nothing,
       testCase "\"foo\" // 0 produces ConstraintDecl with arity 0" $
-        "foo" // 0 @?= ConstraintDecl "foo" 0 Nothing
+        "foo" // 0 @?= ConstraintDecl "foo" 0 Nothing,
+      testCase "extendFunctionType produces ExtendFunctionTypeDecl" $
+        extendFunctionType
+          "classify"
+          [TypeCon (Unqualified "int") []]
+          (TypeCon (Unqualified "int") [])
+          @?= ExtendFunctionTypeDecl
+            { name = "classify",
+              arity = 1,
+              argTypes = Just [TypeCon (Unqualified "int") []],
+              returnType = Just (TypeCon (Unqualified "int") []),
+              target = Nothing
+            },
+      testCase "withExtensions appends to module.extensions" $
+        let eq = equation "classify" [atom "dog"] [] (atom "animal")
+            m = module' "ext" `withExtensions` [eq]
+         in m.extensions @?= [noAnnP eq]
     ]
 
 ruleTests :: TestTree
@@ -198,52 +205,56 @@ integrationTests =
     [ testCase "orderModule structure" $
         orderModule
           @?= Module
-            "Order"
-            []
-            [noAnn (ConstraintDecl "leq" 2 Nothing)]
-            []
-            []
-            [ Rule
-                (Just (noAnn "refl"))
-                ( noAnnP
-                    ( Simplification
-                        [ Constraint
-                            (Unqualified "leq")
-                            [ VarTerm "X",
-                              VarTerm "X"
+            { name = "Order",
+              imports = [],
+              decls = [noAnn (ConstraintDecl "leq" 2 Nothing)],
+              extensionTypes = [],
+              typeDecls = [],
+              rules =
+                [ Rule
+                    (Just (noAnn "refl"))
+                    ( noAnnP
+                        ( Simplification
+                            [ Constraint
+                                (Unqualified "leq")
+                                [VarTerm "X", VarTerm "X"]
                             ]
-                        ]
+                        )
                     )
-                )
-                (noAnnP [])
-                (noAnnP [AtomTerm "true"])
-            ]
-            []
-            []
-            Nothing,
+                    (noAnnP [])
+                    (noAnnP [AtomTerm "true"])
+                ],
+              equations = [],
+              extensions = [],
+              exports = Nothing
+            },
       testCase "logicModule structure" $
         logicModule
           @?= Module
-            "Logic"
-            [noAnnP (ModuleImport "Order" Nothing)]
-            []
-            []
-            []
-            [ Rule
-                (Just (noAnn "trans"))
-                ( noAnnP
-                    ( Propagation
-                        [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
-                          Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "Z"]
-                        ]
+            { name = "Logic",
+              imports = [noAnnP (ModuleImport "Order" Nothing)],
+              decls = [],
+              extensionTypes = [],
+              typeDecls = [],
+              rules =
+                [ Rule
+                    (Just (noAnn "trans"))
+                    ( noAnnP
+                        ( Propagation
+                            [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
+                              Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "Z"]
+                            ]
+                        )
                     )
-                )
-                (noAnnP [])
-                (noAnnP [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
-            ]
-            []
-            []
-            Nothing
+                    (noAnnP [])
+                    ( noAnnP
+                        [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]]
+                    )
+                ],
+              equations = [],
+              extensions = [],
+              exports = Nothing
+            }
     ]
 
 --------------------------------------------------------------------------------

@@ -1,0 +1,6 @@
+:- module(strings, []).
+:- use_module(owner, [classify/1]).
+
+% First extender adds a string overload.
+:- extend_function_type (classify(string) -> string).
+:- extend_function classify("a") -> "alpha".

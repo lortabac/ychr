@@ -488,51 +488,69 @@ moduleTests =
         stripModLoc <$> p leqSource
           @?= Right
             ( Module
-                "order"
-                []
-                [noAnn (ConstraintDecl "leq" 2 Nothing)]
-                []
-                []
-                [ Rule
-                    (Just (noAnn "refl"))
-                    ( noAnnP
-                        ( Simplification
-                            [ Constraint
-                                (Unqualified "leq")
-                                [ VarTerm "X",
-                                  VarTerm "X"
+                { name = "order",
+                  imports = [],
+                  decls = [noAnn (ConstraintDecl "leq" 2 Nothing)],
+                  extensionTypes = [],
+                  typeDecls = [],
+                  rules =
+                    [ Rule
+                        (Just (noAnn "refl"))
+                        ( noAnnP
+                            ( Simplification
+                                [ Constraint
+                                    (Unqualified "leq")
+                                    [VarTerm "X", VarTerm "X"]
                                 ]
+                            )
+                        )
+                        (noAnnP [])
+                        (noAnnP [AtomTerm "true"]),
+                      Rule
+                        (Just (noAnn "antisymmetry"))
+                        ( noAnnP
+                            ( Simplification
+                                [ Constraint
+                                    (Unqualified "leq")
+                                    [VarTerm "X", VarTerm "Y"],
+                                  Constraint
+                                    (Unqualified "leq")
+                                    [VarTerm "Y", VarTerm "X"]
+                                ]
+                            )
+                        )
+                        (noAnnP [])
+                        ( noAnnP
+                            [ CompoundTerm
+                                (Unqualified "leq")
+                                [VarTerm "X", VarTerm "Y"]
+                            ]
+                        ),
+                      Rule
+                        (Just (noAnn "trans"))
+                        ( noAnnP
+                            ( Propagation
+                                [ Constraint
+                                    (Unqualified "leq")
+                                    [VarTerm "X", VarTerm "Y"],
+                                  Constraint
+                                    (Unqualified "leq")
+                                    [VarTerm "Y", VarTerm "Z"]
+                                ]
+                            )
+                        )
+                        (noAnnP [])
+                        ( noAnnP
+                            [ CompoundTerm
+                                (Unqualified "leq")
+                                [VarTerm "X", VarTerm "Z"]
                             ]
                         )
-                    )
-                    (noAnnP [])
-                    (noAnnP [AtomTerm "true"]),
-                  Rule
-                    (Just (noAnn "antisymmetry"))
-                    ( noAnnP
-                        ( Simplification
-                            [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
-                              Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "X"]
-                            ]
-                        )
-                    )
-                    (noAnnP [])
-                    (noAnnP [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Y"]]),
-                  Rule
-                    (Just (noAnn "trans"))
-                    ( noAnnP
-                        ( Propagation
-                            [ Constraint (Unqualified "leq") [VarTerm "X", VarTerm "Y"],
-                              Constraint (Unqualified "leq") [VarTerm "Y", VarTerm "Z"]
-                            ]
-                        )
-                    )
-                    (noAnnP [])
-                    (noAnnP [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
-                ]
-                []
-                []
-                (Just (noAnnP []))
+                    ],
+                  equations = [],
+                  extensions = [],
+                  exports = Just (noAnnP [])
+                }
             ),
       testCase "no module directive gives default name" $
         (.name) <$> p ":- chr_constraint foo/1.\nfoo(X) <=> true."

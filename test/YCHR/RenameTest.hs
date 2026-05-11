@@ -516,21 +516,16 @@ multiModuleTests =
          in renameProgram [m]
               @?= Right
                 ( [ Module
-                      "M"
-                      []
-                      [ noAnn
-                          ( ConstraintDecl
-                              "leq"
-                              2
-                              Nothing
-                          )
-                      ]
-                      []
-                      []
-                      []
-                      []
-                      []
-                      Nothing
+                      { name = "M",
+                        imports = [],
+                        decls = [noAnn (ConstraintDecl "leq" 2 Nothing)],
+                        extensionTypes = [],
+                        typeDecls = [],
+                        rules = [],
+                        equations = [],
+                        extensions = [],
+                        exports = Nothing
+                      }
                   ],
                   []
                 ),

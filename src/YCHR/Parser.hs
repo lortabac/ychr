@@ -545,15 +545,16 @@ convertModule terms =
       contiguityErrors = checkContiguity openNames items
       mod_ =
         Module
-          modName_
-          modImports_
-          modDecls_
-          modExtensionTypes_
-          modTypeDecls_
-          rules
-          eqs
-          modExtensions_
-          modExports_
+          { name = modName_,
+            imports = modImports_,
+            decls = modDecls_,
+            extensionTypes = modExtensionTypes_,
+            typeDecls = modTypeDecls_,
+            rules = rules,
+            equations = eqs,
+            extensions = modExtensions_,
+            exports = modExports_
+          }
    in (mod_, itemErrors ++ contiguityErrors)
 
 -- | Check that equations for non-open functions are contiguous.
