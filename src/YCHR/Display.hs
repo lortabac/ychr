@@ -188,6 +188,7 @@ renameErrorCode (UnknownImport _ _ _) = ErrorCode 20005
 renameErrorCode (UnknownOperatorImport _ _) = ErrorCode 20006
 renameErrorCode (UseModuleOutOfOrder _) = ErrorCode 20007
 renameErrorCode (UnknownExportedConstructor _ _ _ _) = ErrorCode 20008
+renameErrorCode (NotExportedByModule _ _ _) = ErrorCode 20009
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
@@ -372,6 +373,24 @@ renameErrorMsg (UnknownImport modName name arity) =
     ++ "/"
     ++ show arity
     ++ "'"
+renameErrorMsg (NotExportedByModule modName name arity) =
+  withHint
+    ( "Module '"
+        ++ T.unpack modName
+        ++ "' does not export '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "'"
+    )
+    ( "ensure '"
+        ++ T.unpack modName
+        ++ "' is imported and exports '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "'"
+    )
 renameErrorMsg (UnknownOperatorImport modName opName) =
   "Module '"
     ++ T.unpack modName

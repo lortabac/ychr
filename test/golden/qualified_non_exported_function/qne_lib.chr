@@ -1,0 +1,5 @@
+:- module(qne_lib, []).
+
+:- function hidden_fn/1.
+
+hidden_fn(X) -> X * 2.

@@ -78,6 +78,11 @@ data RenameError
   | UnknownName Text Int
   | UnknownExport Text Text Int
   | UnknownImport Text Text Int
+  | -- | A qualified reference @M:n/a@ that is not in scope: either the
+    -- module is not imported, the name is not exported by it, or the
+    -- name is excluded by the import list. Carries the source module
+    -- name, the name, and the arity.
+    NotExportedByModule Text Text Int
   | -- | An @op(...)@ entry inside an import list refers to an operator
     -- that the source module does not export. Carries the source module
     -- name and the operator name.
@@ -704,14 +709,13 @@ resolveName mode ctx loc origin (Unqualified n) arity
           pure (Unqualified n)
 -- "host"-qualified names are external calls; skip validation.
 resolveName _ _ _ _ (Qualified "host" n) _ = pure (Qualified "host" n)
-resolveName mode ctx loc origin (Qualified m n) arity
+resolveName _ ctx loc origin (Qualified m n) arity
   | m `elem` visibleProviders ctx n arity = pure (Qualified m n)
-  | otherwise =
-      if errorOnUnknown mode
-        then do
-          emitError (AnnP (UnknownName n arity) loc origin)
-          pure (Qualified m n)
-        else pure (Qualified m n)
+  | otherwise = do
+      -- Qualified references have no data-constructor fallback, so the
+      -- visibility failure is always an error regardless of 'ResolveMode'.
+      emitError (AnnP (NotExportedByModule m n arity) loc origin)
+      pure (Qualified m n)
 
 -- | All modules that can provide @(name, arity)@ to the current module:
 -- the current module itself if it declares the name, plus every imported

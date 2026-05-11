@@ -226,7 +226,7 @@ alreadyQualifiedTests =
               module' "M"
                 `defining` [[qterm "Order" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [m]
-          @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
+          @?= Left [noDiag (AnnP (NotExportedByModule "Order" "leq" 2) dummyLoc (Atom ""))],
       testCase "pre-qualified survives ambiguity" $ do
         -- Two visible providers, but the constraint is already Qualified
         let modA = module' "A" `declaring` ["leq" // 2]
@@ -252,7 +252,7 @@ alreadyQualifiedTests =
               module' "B"
                 `defining` [[qterm "A" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
-          @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
+          @?= Left [noDiag (AnnP (NotExportedByModule "A" "leq" 2) dummyLoc (Atom ""))],
       testCase "pre-qualified reference to non-exported name is rejected" $ do
         -- A declares leq/2 and gt/2 but only exports leq/2. B imports A
         -- and tries to reach gt/2 via qualification; still hidden.
@@ -265,7 +265,7 @@ alreadyQualifiedTests =
                 `importing` ["A"]
                 `defining` [[qterm "A" "gt" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
-          @?= Left [noDiag (AnnP (UnknownName "gt" 2) dummyLoc (Atom ""))]
+          @?= Left [noDiag (AnnP (NotExportedByModule "A" "gt" 2) dummyLoc (Atom ""))]
     ]
 
 --------------------------------------------------------------------------------

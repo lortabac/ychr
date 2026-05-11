@@ -1,0 +1,5 @@
+:- module(qne_main, [go/1]).
+:- use_module(qne_lib).
+:- chr_constraint go/1.
+
+go(R) <=> R is qne_lib:hidden_fn(5).
