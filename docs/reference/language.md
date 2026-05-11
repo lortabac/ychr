@@ -100,6 +100,16 @@ ychr> R is member(1, [0, 1, 2]).
 R = true.
 ```
 
+Unlike standard Prolog (where `is` shares priority 700 with the
+comparison operators), YCHR's `is` and `=` sit at priority 750 (still
+`xfx`). This places them just above the comparisons, so a comparison
+on the RHS no longer needs parentheses:
+
+```
+ychr> B is 1 < 2.
+B = true.
+```
+
 ## Lambdas and function references
 
 Anonymous functions use Erlang-style syntax with `end` delimiting the

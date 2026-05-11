@@ -38,9 +38,6 @@ Two patterns are worth understanding before reading the tables:
   `write/1`, `nl/0`, `writeln/1` — are *constraints* (declared with
   `:- chr_constraint`) that perform I/O when added to the store.
 
-A small precedence note: `is/2` binds tighter than the comparison
-operators, so `B is 1 < 2` is a parse error. Use `B is (1 < 2)`.
-
 ## Arithmetic
 
 Operators on numbers. Each is overloaded for `int` and `float`.
@@ -84,9 +81,9 @@ Each comparison is overloaded for `int` and `float` and returns `bool`.
 All comparison operators have priority `700`, type `xfx`.
 
 ```ychr-repl
-ychr> B is (1 < 2).
+ychr> B is 1 < 2.
 B = true.
-ychr> B is (5 == 5).
+ychr> B is 5 == 5.
 B = true.
 ```
 

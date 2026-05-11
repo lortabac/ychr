@@ -10,7 +10,14 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import Text.Megaparsec (ParseErrorBundle)
 import YCHR.Parsed
-import YCHR.Parser (ModuleHeader (..), collectModuleHeader, parseModule)
+import YCHR.Parser
+  ( ModuleHeader (..),
+    builtinOps,
+    collectModuleHeader,
+    mergeOps,
+    parseModule,
+    parseModuleWith,
+  )
 
 tests :: TestTree
 tests =
@@ -290,7 +297,31 @@ operatorTests =
           >>= (@?= [CompoundTerm (Unqualified "is") [VarTerm "X", VarTerm "Y"]]),
       testCase "= operator used as functor" $
         bodyOf "c <=> '='(X, Y)."
-          >>= (@?= [CompoundTerm (Unqualified "=") [VarTerm "X", VarTerm "Y"]])
+          >>= (@?= [CompoundTerm (Unqualified "=") [VarTerm "X", VarTerm "Y"]]),
+      testCase "is with comparison RHS (no parens needed)" $
+        bodyOfWithLt "c <=> B is 1 < 2."
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "is")
+                      [ VarTerm "B",
+                        CompoundTerm
+                          (Unqualified "<")
+                          [IntTerm 1, IntTerm 2]
+                      ]
+                  ]
+              ),
+      testCase "= with comparison RHS (no parens needed)" $
+        bodyOfWithLt "c <=> T = X < Y."
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "=")
+                      [ VarTerm "T",
+                        CompoundTerm
+                          (Unqualified "<")
+                          [VarTerm "X", VarTerm "Y"]
+                      ]
+                  ]
+              )
     ]
 
 -- ---------------------------------------------------------------------------
@@ -743,6 +774,18 @@ bodyOf src = case p src of
   Right m -> case m.rules of
     [] -> assertFailure "expected at least one rule, got none"
     (r : _) -> pure r.body.node
+
+-- | Like 'bodyOf', but parses with @<@ added as a 700 xfx operator so
+-- precedence interactions between @is@\/@=@ and a comparison can be tested
+-- without pulling in the whole prelude.
+bodyOfWithLt :: Text -> IO [Term]
+bodyOfWithLt src = case mergeOps builtinOps [OpDecl 700 Xfx "<"] of
+  Left e -> assertFailure ("mergeOps failed: " <> Text.unpack e)
+  Right table -> case fst <$> parseModuleWith table "" src of
+    Left err -> assertFailure (show err)
+    Right m -> case m.rules of
+      [] -> assertFailure "expected at least one rule, got none"
+      (r : _) -> pure r.body.node
 
 headOf :: Text -> IO Head
 headOf src = case p src of
