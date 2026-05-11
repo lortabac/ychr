@@ -191,7 +191,7 @@ main = do
 -- ---------------------------------------------------------------------------
 
 runGoal :: RunOpts -> [FilePath] -> IO ()
-runGoal opts files = withCompiled True files $ \prog warnings -> do
+runGoal opts files = withCompiled False files $ \prog warnings -> do
   printWarnings warnings
   typeCheckOrExit prog
   prepResult <- try @SomeException (prepareGoal prog opts.goal)
@@ -213,7 +213,7 @@ runGoal opts files = withCompiled True files $ \prog warnings -> do
       exitFailure
 
 runCompile :: CompileOpts -> [FilePath] -> IO ()
-runCompile opts files = withCompiled includeStdlib files $ \prog warnings -> do
+runCompile opts files = withCompiled False files $ \prog warnings -> do
   printWarnings warnings
   typeCheckOrExit prog
   exitOnWerror opts.werror warnings
@@ -235,10 +235,6 @@ runCompile opts files = withCompiled includeStdlib files $ \prog warnings -> do
       createDirectoryIfMissing True (takeDirectory outPath)
       TIO.writeFile outPath (generateScheme libName vmp)
       putStrLn outPath
-  where
-    includeStdlib = case opts.target of
-      TargetVM -> True
-      TargetScheme -> False
 
 runGenDriver :: GenDriverOpts -> [FilePath] -> IO ()
 runGenDriver opts files = withCompiled False files $ \prog warnings -> do
@@ -274,7 +270,7 @@ runGenDriver opts files = withCompiled False files $ \prog warnings -> do
   TIO.putStr (generateDriver (T.pack "program") resolved)
 
 runCheck :: CheckOpts -> [FilePath] -> IO ()
-runCheck opts files = withCompiled True files $ \prog warnings -> do
+runCheck opts files = withCompiled False files $ \prog warnings -> do
   printWarnings warnings
   typeCheckOrExit prog
   exitOnWerror opts.werror warnings
