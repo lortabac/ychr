@@ -1,0 +1,6 @@
+:- module(alias_print, [alias2/2, alias3/3]).
+:- chr_constraint alias2/2.
+:- chr_constraint alias3/3.
+
+unify2 @ alias2(X, Y) <=> X = Y.
+unify3 @ alias3(X, Y, Z) <=> X = Y, Y = Z.

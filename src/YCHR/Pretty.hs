@@ -146,16 +146,19 @@ renderAtom = PE.renderAtom prettyOps.wordOpSet
 -- ---------------------------------------------------------------------------
 
 -- | Render a 'Term' as a Prolog-compatible string.
--- Unbound variables ('VarTerm' and 'Wildcard') are shown as @_@.
+-- 'Wildcard' is shown as @_@; 'VarTerm' is shown by its name (it
+-- appears here only when 'YCHR.Meta.valueToTerm' decided to surface
+-- an alias for an unbound variable).
 -- Operators are displayed using their declared fixity and precedence.
 prettyTerm :: Term -> String
 prettyTerm = PE.prettyPExpr prettyOps . runtimeToPExpr
 
 -- | Convert a runtime 'Term' to a 'PE.PExpr' for pretty-printing.
--- Like 'termToPExpr' but collapses unbound variables to @_@ and
+-- Like 'termToPExpr' but renders 'Wildcard' as @_@ (the form
+-- 'YCHR.Meta.valueToTerm' uses for unaliased free variables) and
 -- unwraps closure terms to show their source form.
 runtimeToPExpr :: Term -> PE.PExpr
-runtimeToPExpr (VarTerm _) = PE.Wildcard
+runtimeToPExpr (VarTerm v) = PE.Var v
 runtimeToPExpr Wildcard = PE.Wildcard
 runtimeToPExpr (CompoundTerm (Unqualified "__closure") (_ : sourceForm : _)) =
   unquoteToPExpr sourceForm

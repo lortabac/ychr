@@ -28,6 +28,10 @@ HASKELL_ONLY = {
     # write_store_to_list is a Haskell-only meta host call; no Scheme
     # implementation exists yet (parallels print_store).
     "write_store_to_list_test",
+    # Variable-alias printing (A = B, B = A) is implemented in the
+    # Haskell runtime only; the Scheme runtime still renders aliased
+    # logical variables as `_`.
+    "alias_print",
 }
 
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only

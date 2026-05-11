@@ -16,8 +16,8 @@ tests =
         prettyTerm (IntTerm 42) @?= "42",
       testCase "prettyTerm AtomTerm" $
         prettyTerm (AtomTerm "foo") @?= "foo",
-      testCase "prettyTerm VarTerm" $
-        prettyTerm (VarTerm "X") @?= "_",
+      testCase "prettyTerm VarTerm renders its name" $
+        prettyTerm (VarTerm "X") @?= "X",
       testCase "prettyTerm Wildcard" $
         prettyTerm Wildcard @?= "_",
       testCase "prettyTerm CompoundTerm unqualified" $
@@ -39,7 +39,7 @@ tests =
           )
           @?= "f(g(0))",
       testCase "prettyBindings sorted with trailing newline" $
-        prettyBindings (Map.fromList [("R", IntTerm 55), ("X", VarTerm "X")])
+        prettyBindings (Map.fromList [("R", IntTerm 55), ("X", Wildcard)])
           @?= "R = 55\nX = _\n",
       testCase "prettyBindings empty" $
         prettyBindings Map.empty @?= ""

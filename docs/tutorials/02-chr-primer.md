@@ -171,8 +171,8 @@ variable:
 ```ychr-repl
 ychr> :begin
 ychr live> leq(X, Y), leq(Y, X).
-X = _,
-Y = _.
+X = Y,
+Y = X.
 ychr live> print_store.
 ychr live> :end
 ychr>
@@ -180,9 +180,9 @@ ychr>
 
 The store is empty. Antisymmetry fired, removed both `leq` constraints,
 and executed the body `X = Y` — a unification, not a stored constraint,
-so nothing is added to the store. The `X = _, Y = _` lines are the
-REPL reporting the two variables: they are now bound to *each other*,
-but neither has a ground value, so both print as the anonymous `_`.
+so nothing is added to the store. The `X = Y, Y = X` lines are the
+REPL reporting that the two variables now share an equivalence class:
+neither has a ground value, but each is bound to the other.
 
 > **Each input is its own goal.** In a live session every input line is
 > a separate top-level goal with its own variable scope — the same rule

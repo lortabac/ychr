@@ -399,8 +399,8 @@ evalBoolExpr pm hc (BUnify e1 e2) = do
   if ok
     then pure True
     else do
-      t1 <- valueToTerm "_" v1
-      t2 <- valueToTerm "_" v2
+      t1 <- valueToTerm Map.empty v1
+      t2 <- valueToTerm Map.empty v2
       runtimeErrorS $
         "unification failure: cannot unify "
           ++ prettyTerm t1
@@ -520,8 +520,8 @@ evalBoolExprDeep pm hc (BUnify e1 e2) = do
   if ok
     then pure True
     else do
-      t1 <- valueToTerm "_" v1
-      t2 <- valueToTerm "_" v2
+      t1 <- valueToTerm Map.empty v1
+      t2 <- valueToTerm Map.empty v2
       runtimeErrorS $
         "unification failure: cannot unify "
           ++ prettyTerm t1

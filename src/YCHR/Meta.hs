@@ -24,16 +24,18 @@ import YCHR.Parser (builtinOps, parseTermWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Runtime.Registry (HostCallFn (..), HostCallRegistry, unit, valueList)
 import YCHR.Runtime.Store (Suspension (..), getAllStoredConstraints, isSuspAlive)
-import YCHR.Runtime.Types (Value (..))
-import YCHR.Runtime.Var (Unify, deref, newVar, runUnify)
+import YCHR.Runtime.Types (Value (..), VarId)
+import YCHR.Runtime.Var (Unify, deref, getVarId, newVar, runUnify)
 import YCHR.Types (Term (..), flattenName)
 import YCHR.Types qualified as Types
 import YCHR.VM (Name (..))
 
 -- | Convert a runtime 'Value' to a surface 'Term', dereferencing logical
--- variables. Unbound variables are rendered as 'VarTerm varName'.
-valueToTerm :: (Unify :> es) => Text -> Value -> Eff es Term
-valueToTerm varName v = do
+-- variables. An unbound variable is rendered as 'VarTerm' carrying the
+-- alias name from the supplied map (looked up by 'VarId'), or as
+-- 'Wildcard' when the variable has no alias.
+valueToTerm :: (Unify :> es) => Map.Map VarId Text -> Value -> Eff es Term
+valueToTerm aliases v = do
   v' <- deref v
   case v' of
     VInt n -> pure (IntTerm n)
@@ -48,7 +50,7 @@ valueToTerm varName v = do
     VWildcard -> pure Wildcard
     VTerm "prelude__[]" [] -> pure (AtomTerm "[]")
     VTerm "prelude__." ts ->
-      CompoundTerm (Types.Unqualified ".") <$> traverse (valueToTerm "_") ts
+      CompoundTerm (Types.Unqualified ".") <$> traverse (valueToTerm aliases) ts
     -- A 0-arity term whose functor contains @__@ is the runtime form
     -- of a qualified atom (see 'YCHR.Compile.compileTerm'). Split on
     -- the first @__@ so the pretty-printer renders it as @m:n@.
@@ -56,13 +58,17 @@ valueToTerm varName v = do
       | (m, rest) <- T.breakOn "__" f,
         not (T.null rest) ->
           pure (CompoundTerm (Types.Qualified m (T.drop 2 rest)) [])
-    VTerm f ts -> CompoundTerm (Types.Unqualified f) <$> traverse (valueToTerm "_") ts
-    VVar _ -> pure (VarTerm varName)
+    VTerm f ts -> CompoundTerm (Types.Unqualified f) <$> traverse (valueToTerm aliases) ts
+    VVar _ -> do
+      mvid <- getVarId v'
+      case mvid >>= (`Map.lookup` aliases) of
+        Just name -> pure (VarTerm name)
+        Nothing -> pure Wildcard
 
 -- | Pretty-print a 'Value' using the surface pretty-printer.
 -- Dereferences logical variables before rendering.
 prettyValue :: Value -> IO String
-prettyValue v = runEff . runUnify $ prettyTerm <$> valueToTerm "_" v
+prettyValue v = runEff . runUnify $ prettyTerm <$> valueToTerm Map.empty v
 
 -- | Convert a parsed 'Term' to a runtime 'Value', creating fresh logical
 -- variables. The same variable name within a term maps to the same fresh
@@ -133,7 +139,7 @@ metaHostCallRegistry =
       if not alive
         then pure []
         else do
-          argTerms <- traverse (valueToTerm "_") susp.args
+          argTerms <- traverse (valueToTerm Map.empty) susp.args
           pure [prettyTerm (CompoundTerm tyName argTerms)]
     suspsOfGroup (tyName, susps) =
       fmap concat . traverse (suspAsValue tyName) . toList $ susps

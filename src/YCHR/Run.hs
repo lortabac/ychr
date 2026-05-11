@@ -102,8 +102,8 @@ import YCHR.Runtime.Session
     withCHRExtra,
   )
 import YCHR.Runtime.Store (CHRStore, aliveConstraint)
-import YCHR.Runtime.Types (CallVal (..), Value (..))
-import YCHR.Runtime.Var (Unify, deref, equal, newVar, unify)
+import YCHR.Runtime.Types (CallVal (..), Value (..), VarId)
+import YCHR.Runtime.Var (Unify, deref, equal, getVarId, newVar, unify)
 import YCHR.TypeCheck (typeCheckGoals)
 import YCHR.Types (Constraint (..), ConstraintType, Term (..))
 import YCHR.Types qualified as Types
@@ -177,7 +177,12 @@ runProgramWithGoalDSL cp hostCalls constraint = do
     evalState (Map.empty :: Map Text Value) $ do
       argVals <- traverse termToValue resolved.args
       result <- callProc procMap hostCalls tellName (map CVal argVals)
-      bindings <- get >>= Map.traverseWithKey valueToTerm
+      varMap <- get
+      classes <- buildAliasClasses varMap
+      bindings <-
+        Map.traverseWithKey
+          (\k v -> valueToTerm (perKeyAliases classes k) v)
+          varMap
       pure (result, bindings)
 
 -- | Parse and rename a goal, returning the canonicalized 'Constraint'
@@ -333,7 +338,62 @@ executePreparedQuery hostCalls lifted =
   evalState (Map.empty :: Map Text Value) $ do
     mapM_ (executeBodyGoal hostCalls) lifted
     varMap <- get
-    Map.traverseWithKey valueToTerm varMap
+    classes <- buildAliasClasses varMap
+    Map.traverseWithKey
+      (\k v -> valueToTerm (perKeyAliases classes k) v)
+      varMap
+
+-- | Group the user-visible query variables by their underlying
+-- 'VarId'. Two query variables that unified into the same equivalence
+-- class dereference to the same unbound 'Var', and the REPL renders
+-- that via 'perKeyAliases' — e.g. @A = B@ shows up as
+-- @A = B, B = A.@ rather than @A = _, B = _.@.
+--
+-- Each class is a list of surface names sorted alphabetically.
+-- Variables that have been bound to non-variable values are excluded
+-- (they don't need an alias). Names starting with @_@ are filtered
+-- out so internal/wildcard variables never appear as aliases for
+-- user-visible bindings.
+buildAliasClasses ::
+  (Unify :> es) =>
+  Map Text Value ->
+  Eff es (Map VarId [Text])
+buildAliasClasses varMap = do
+  pairs <- traverse vidOf (Map.toAscList varMap)
+  -- ascending input ⇒ each appended list is already ascending; the
+  -- 'flip (++)' keeps that invariant under 'fromListWith'.
+  pure $ Map.fromListWith (flip (++)) [(vid, [k]) | (k, Just vid) <- pairs]
+  where
+    vidOf (k, v)
+      | "_" `T.isPrefixOf` k = pure (k, Nothing)
+      | otherwise = do
+          mvid <- getVarId v
+          pure (k, mvid)
+
+-- | Build the 'VarId' → display name map that 'valueToTerm' should
+-- use when printing the binding for surface variable @k@.
+--
+-- For every equivalence class:
+--
+-- * If @k@ is /in/ the class, the entry maps the class's 'VarId' to
+--   the /next/ name after @k@ (wrapping to the first). This is what
+--   gives @A = B, B = C, C = A.@ for the class @{A, B, C}@.
+-- * Otherwise the entry maps the class's 'VarId' to the canonical
+--   (alphabetically first) name in the class — so inner occurrences
+--   of an alias inside a compound (e.g. the @A@ in @X = foo(A)@ when
+--   @A = B@) render with a stable, non-self-referential name.
+--
+-- Singleton classes contribute no entry; their variables stay
+-- unaliased and 'valueToTerm' renders them as 'Wildcard'.
+perKeyAliases :: Map VarId [Text] -> Text -> Map VarId Text
+perKeyAliases classes k = Map.mapMaybe pick classes
+  where
+    pick [] = Nothing
+    pick [_] = Nothing
+    pick names@(canonical : _) = Just $ case break (== k) names of
+      (_, _ : next : _) -> next
+      (_, [_]) -> canonical
+      (_, []) -> canonical
 
 -- | Run a multi-goal query against a compiled program.
 --
@@ -427,8 +487,8 @@ executeBodyGoal hc (D.BodyFunctionCall name args) = do
 -- | Raise a runtime error describing a failed unification.
 raiseUnifyFailure :: (Unify :> es) => Value -> Value -> Eff es ()
 raiseUnifyFailure v1 v2 = do
-  t1 <- valueToTerm "_" v1
-  t2 <- valueToTerm "_" v2
+  t1 <- valueToTerm Map.empty v1
+  t2 <- valueToTerm Map.empty v2
   error $
     "unification failure: cannot unify "
       ++ prettyTerm t1
