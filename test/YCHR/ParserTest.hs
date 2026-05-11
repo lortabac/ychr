@@ -492,6 +492,7 @@ moduleTests =
                 []
                 [noAnn (ConstraintDecl "leq" 2 Nothing)]
                 []
+                []
                 [ Rule
                     (Just (noAnn "refl"))
                     ( noAnnP
@@ -529,6 +530,7 @@ moduleTests =
                     (noAnnP [])
                     (noAnnP [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
                 ]
+                []
                 []
                 (Just (noAnnP []))
             ),

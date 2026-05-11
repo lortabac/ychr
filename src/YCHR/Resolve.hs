@@ -40,6 +40,13 @@ data ResolveError
     -- module-qualified by the renamer. Indicates a renamer bug rather
     -- than user error.
     UnqualifiedConstraintName Name
+  | -- | An @:- extend_function_type@ or @:- extend_function@ directive
+    -- targets a function that was declared as closed (not @open_function@).
+    ExtendsClosedFunction Name
+  | -- | A free-floating function equation appears in a module that is
+    -- not the declaring module of the function. Carries the qualified
+    -- function name and the module in which the equation was found.
+    OrphanFunctionEquation Name Text
   deriving (Eq, Show)
 
 -- | Flatten modules into a single resolved program.
@@ -54,11 +61,20 @@ resolveProgram mods =
       functionNames = buildFunctionNames mods
       conTypes = collectConstraintTypes mods
       typeDefs = [td.node | m <- mods, td <- m.typeDecls]
+      funcOpenness = buildFunctionOpenness mods
       eqErrors = checkEquations constraintNames mods
       headErrors = checkRuleHeads (Set.map qualifiedNameToLooseName functionNames) mods
       reservedErrors = checkReservedNames mods
+      orphanEqErrors = checkOrphanEquations functionNames mods
+      extendsClosedErrors = checkExtendsClosed funcOpenness mods
       (resolvedRules, ruleErrs) = resolveRules mods
-      errs = eqErrors ++ headErrors ++ reservedErrors ++ ruleErrs
+      errs =
+        eqErrors
+          ++ headErrors
+          ++ reservedErrors
+          ++ orphanEqErrors
+          ++ extendsClosedErrors
+          ++ ruleErrs
    in if null errs
         then
           Right
@@ -91,6 +107,16 @@ buildFunctionNames :: [P.Module] -> Set QualifiedName
 buildFunctionNames mods =
   Set.fromList
     [ QualifiedName m.name d.name
+    | m <- mods,
+      P.Ann d _ <- m.decls,
+      P.FunctionDecl {} <- [d]
+    ]
+
+-- | Map each declared function to whether its declaration is open.
+buildFunctionOpenness :: [P.Module] -> Map.Map QualifiedName Bool
+buildFunctionOpenness mods =
+  Map.fromList
+    [ (QualifiedName m.name d.name, d.isOpen)
     | m <- mods,
       P.Ann d _ <- m.decls,
       P.FunctionDecl {} <- [d]
@@ -134,6 +160,59 @@ checkEquations cNames mods = snd $ foldl go (Set.empty, []) allEqs
                      ]
               )
         _ -> (seen, errs)
+
+-- | Check that no free-floating equation lives in a module that is not
+-- the declaring module of the function. Equations contributed from
+-- other modules must be wrapped in @:- extend_function ...@ directives.
+-- Unknown function names are skipped here; they are reported by the
+-- renamer as YCHR-20002.
+checkOrphanEquations :: Set QualifiedName -> [P.Module] -> [Diagnostic ResolveError]
+checkOrphanEquations functionNames mods =
+  [ noDiag
+      ( P.AnnP
+          (OrphanFunctionEquation annEq.node.funName m.name)
+          annEq.sourceLoc
+          annEq.parsed
+      )
+  | m <- mods,
+    annEq <- m.equations,
+    Qualified targetMod baseName <- [annEq.node.funName],
+    targetMod /= m.name,
+    QualifiedName targetMod baseName `Set.member` functionNames
+  ]
+
+-- | Check that @:- extend_function_type@ and @:- extend_function@
+-- directives only target open functions. Targets unknown to the
+-- compiler are already reported by the renamer.
+checkExtendsClosed ::
+  Map.Map QualifiedName Bool -> [P.Module] -> [Diagnostic ResolveError]
+checkExtendsClosed funcOpenness mods =
+  let declErrs =
+        [ noDiag
+            (P.AnnP (ExtendsClosedFunction target) loc (PExpr.Atom ""))
+        | m <- mods,
+          P.Ann d loc <- m.extensionTypes,
+          Just target <- [d.target],
+          isKnownClosed funcOpenness target
+        ]
+      eqnErrs =
+        [ noDiag
+            ( P.AnnP
+                (ExtendsClosedFunction annEq.node.funName)
+                annEq.sourceLoc
+                annEq.parsed
+            )
+        | m <- mods,
+          annEq <- m.extensions,
+          isKnownClosed funcOpenness annEq.node.funName
+        ]
+   in declErrs ++ eqnErrs
+  where
+    isKnownClosed openness (Qualified mn n) =
+      case Map.lookup (QualifiedName mn n) openness of
+        Just False -> True
+        _ -> False
+    isKnownClosed _ _ = False
 
 -- | Check that no rule head constraint is a function-declared name.
 -- Reports only the first rule per name.
@@ -241,17 +320,14 @@ resolveFunctions mods =
           Map.fromListWith
             (++)
             [ ((qn, ar), [(d, m)])
-            | ( qn,
-                ar,
-                d,
-                m
-                ) <-
-                allDecls
+            | (qn, ar, d, m) <- allDecls
             ]
    in [ R.FunctionDef
           { name = qn,
             arity = ar,
-            signatures = collectSignatures decls,
+            signatures =
+              collectSignatures decls
+                ++ collectExtensionSignatures mods qn ar,
             isOpen = any (\(d, _) -> d.isOpen) decls,
             equations = concatMap (\(d, m) -> gatherEquations mods m d) decls
           }
@@ -267,27 +343,44 @@ collectSignatures decls =
     Just retTy <- [d.returnType]
   ]
 
+-- | Collect signatures contributed by @:- extend_function_type@
+-- directives in any module. Only signatures whose resolved target
+-- matches the given qualified name and arity are included.
+collectExtensionSignatures ::
+  [P.Module] -> QualifiedName -> Int -> [([TypeExpr], TypeExpr)]
+collectExtensionSignatures mods qn ar =
+  [ (argTys, retTy)
+  | m <- mods,
+    P.Ann d _ <- m.extensionTypes,
+    d.arity == ar,
+    Just (Qualified tm tn) <- [d.target],
+    QualifiedName tm tn == qn,
+    Just argTys <- [d.argTypes],
+    Just retTy <- [d.returnType]
+  ]
+
 -- | Gather equations for a function declaration, stripping the funName.
--- Open functions collect equations from all modules; closed functions
--- only from the declaring module.
+-- Free-floating equations only come from the declaring module
+-- (orphans are rejected by 'checkOrphanEquations'). Extension equations
+-- contributed via @:- extend_function@ are pulled from every module's
+-- @extensions@ list.
 gatherEquations :: [P.Module] -> P.Module -> P.Declaration -> [P.AnnP R.FunctionEquation]
 gatherEquations mods m d =
   let qualName = Qualified m.name d.name
-      matchingEqs
-        | d.isOpen =
-            [ annEq
-            | mod_ <- mods,
-              annEq <- mod_.equations,
-              annEq.node.funName == qualName,
-              length annEq.node.args == d.arity
-            ]
-        | otherwise =
-            [ annEq
-            | annEq <- m.equations,
-              annEq.node.funName == qualName,
-              length annEq.node.args == d.arity
-            ]
-   in map stripFunName matchingEqs
+      primaryEqs =
+        [ annEq
+        | annEq <- m.equations,
+          annEq.node.funName == qualName,
+          length annEq.node.args == d.arity
+        ]
+      extensionEqs =
+        [ annEq
+        | mod_ <- mods,
+          annEq <- mod_.extensions,
+          annEq.node.funName == qualName,
+          length annEq.node.args == d.arity
+        ]
+   in map stripFunName (primaryEqs ++ extensionEqs)
 
 stripFunName :: P.AnnP P.FunctionEquation -> P.AnnP R.FunctionEquation
 stripFunName (P.AnnP eq loc parsed) =

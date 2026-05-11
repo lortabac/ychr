@@ -1,0 +1,6 @@
+:- module(ext, []).
+:- use_module(owner, [classify/1]).
+
+% Free-floating equation in an importing module is rejected; the user
+% must wrap it in `:- extend_function ...`.
+classify(blue) -> color.

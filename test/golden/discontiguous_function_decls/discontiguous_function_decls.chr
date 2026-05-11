@@ -1,0 +1,6 @@
+:- function f/1.
+:- chr_constraint foo/1.
+:- function (f(int) -> int).
+
+f(N) -> N.
+foo(X) <=> true.

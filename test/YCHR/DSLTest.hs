@@ -50,7 +50,7 @@ moduleTests =
   testGroup
     "module"
     [ testCase "module' produces empty module" $
-        module' "Foo" @?= Module "Foo" [] [] [] [] [] Nothing,
+        module' "Foo" @?= Module "Foo" [] [] [] [] [] [] [] Nothing,
       testCase "importing sets modImports" $
         module' "Foo" `importing` ["Bar", "Baz"]
           @?= Module
@@ -62,14 +62,16 @@ moduleTests =
             []
             []
             []
+            []
+            []
             Nothing,
       testCase "declaring sets modDecls" $
         module' "Foo" `declaring` ["leq" // 2]
-          @?= Module "Foo" [] [noAnn (ConstraintDecl "leq" 2 Nothing)] [] [] [] Nothing,
+          @?= Module "Foo" [] [noAnn (ConstraintDecl "leq" 2 Nothing)] [] [] [] [] [] Nothing,
       testCase "defining sets modRules" $
         let r = [term "leq" [var "X"]] <=> [atom "true"]
          in module' "Foo" `defining` [r]
-              @?= Module "Foo" [] [] [] [r] [] Nothing,
+              @?= Module "Foo" [] [] [] [] [r] [] [] Nothing,
       testCase "chaining importing, declaring, defining" $
         let r = [term "c" []] <=> [atom "true"]
          in module' "M"
@@ -87,12 +89,23 @@ moduleTests =
                     )
                 ]
                 []
+                []
                 [r]
+                []
                 []
                 Nothing,
       testCase "exporting sets modExports" $
         module' "Foo" `exporting` ["leq" // 2]
-          @?= Module "Foo" [] [] [] [] [] (Just (noAnnP [ConstraintDecl "leq" 2 Nothing]))
+          @?= Module
+            "Foo"
+            []
+            []
+            []
+            []
+            []
+            []
+            []
+            (Just (noAnnP [ConstraintDecl "leq" 2 Nothing]))
     ]
 
 declarationTests :: TestTree
@@ -189,6 +202,7 @@ integrationTests =
             []
             [noAnn (ConstraintDecl "leq" 2 Nothing)]
             []
+            []
             [ Rule
                 (Just (noAnn "refl"))
                 ( noAnnP
@@ -205,12 +219,14 @@ integrationTests =
                 (noAnnP [AtomTerm "true"])
             ]
             []
+            []
             Nothing,
       testCase "logicModule structure" $
         logicModule
           @?= Module
             "Logic"
             [noAnnP (ModuleImport "Order" Nothing)]
+            []
             []
             []
             [ Rule
@@ -225,6 +241,7 @@ integrationTests =
                 (noAnnP [])
                 (noAnnP [CompoundTerm (Unqualified "leq") [VarTerm "X", VarTerm "Z"]])
             ]
+            []
             []
             Nothing
     ]

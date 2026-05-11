@@ -528,6 +528,8 @@ multiModuleTests =
                       []
                       []
                       []
+                      []
+                      []
                       Nothing
                   ],
                   []

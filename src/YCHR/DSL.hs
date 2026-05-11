@@ -44,6 +44,7 @@ module YCHR.DSL
     declaring,
     defining,
     withEquations,
+    withExtensions,
     chrType,
     exporting,
 
@@ -52,6 +53,7 @@ module YCHR.DSL
     (//),
     function,
     openFunction,
+    extendFunctionType,
     typeExport,
     typeExportWith,
     op,
@@ -138,7 +140,7 @@ import YCHR.Runtime.Registry (HostCallRegistry, baseHostCallRegistry)
 
 -- | An empty module with the given name.
 module' :: Text -> Module
-module' name = Module name [] [] [] [] [] Nothing
+module' name = Module name [] [] [] [] [] [] [] Nothing
 
 -- | Append plain @use_module(M)@ imports to a module.
 --
@@ -178,6 +180,13 @@ defining m rls = m {rules = m.rules ++ rls}
 -- >     ]
 withEquations :: Module -> [FunctionEquation] -> Module
 withEquations m eqs = m {equations = m.equations ++ map noAnnP eqs}
+
+-- | Append function-equation /extensions/ to a module. Mirrors
+-- @:- extend_function name(args) -> body@ directives in source
+-- form: the equations contribute to an open function declared in
+-- another module (resolved through this module's imports).
+withExtensions :: Module -> [FunctionEquation] -> Module
+withExtensions m eqs = m {extensions = m.extensions ++ map noAnnP eqs}
 
 -- | Append a CHR-type definition (@:- chr_type ...@).
 chrType :: Module -> TypeDefinition -> Module
@@ -226,6 +235,20 @@ openFunction name arity =
       argTypes = Nothing,
       returnType = Nothing,
       isOpen = True
+    }
+
+-- | Extension type declaration: @:- extend_function_type (name(args) -> ret)@.
+-- Adds an overloaded signature to an open function declared in another
+-- module. The renamer resolves the function name through the importing
+-- module's imports.
+extendFunctionType :: Text -> [TypeExpr] -> TypeExpr -> Declaration
+extendFunctionType name argTypes returnType =
+  ExtendFunctionTypeDecl
+    { name = name,
+      arity = length argTypes,
+      argTypes = Just argTypes,
+      returnType = Just returnType,
+      target = Nothing
     }
 
 -- | Type-export declaration: @:- module(m, [type(name/arity)])@. Exports

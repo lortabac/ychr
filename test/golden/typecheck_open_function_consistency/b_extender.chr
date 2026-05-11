@@ -3,4 +3,4 @@
 
 % This equation is type-inconsistent: classify is declared to take int
 % but here we match a string.
-classify("oops") -> 1.
+:- extend_function classify("oops") -> 1.

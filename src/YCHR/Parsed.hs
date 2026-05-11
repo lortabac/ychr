@@ -87,9 +87,11 @@ data Module = Module
   { name :: Text,
     imports :: [AnnP Import],
     decls :: [Ann Declaration],
+    extensionTypes :: [Ann Declaration],
     typeDecls :: [Ann TypeDefinition],
     rules :: [Rule],
     equations :: [AnnP FunctionEquation],
+    extensions :: [AnnP FunctionEquation],
     exports :: Maybe (AnnP [Declaration])
   }
   deriving (Show, Eq, Lift)
@@ -102,6 +104,18 @@ data Declaration
         argTypes :: Maybe [TypeExpr],
         returnType :: Maybe TypeExpr,
         isOpen :: Bool
+      }
+  | -- | Adds an overloaded type signature to an open function declared
+    -- in another module. The renamer fills in @target@ with the
+    -- function's resolved qualified name. After the rename phase,
+    -- @target@ is always @Just (Qualified _ _)@; @Nothing@ only appears
+    -- in the freshly-parsed AST, before the renamer has run.
+    ExtendFunctionTypeDecl
+      { name :: Text,
+        arity :: Int,
+        argTypes :: Maybe [TypeExpr],
+        returnType :: Maybe TypeExpr,
+        target :: Maybe Name
       }
   | OperatorDecl OpDecl
   | TypeExportDecl {name :: Text, arity :: Int, conExports :: Maybe [Text]}

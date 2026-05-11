@@ -97,9 +97,9 @@ builtinOps =
         [ (P.Fx, "chr_constraint"),
           (P.Fx, "chr_type"),
           (P.Fx, "function"),
-          ( P.Fx,
-            "open_function"
-          )
+          (P.Fx, "open_function"),
+          (P.Fx, "extend_function_type"),
+          (P.Fx, "extend_function")
         ]
       ),
       (1190, [(P.Xfx, "@")]),
@@ -490,6 +490,8 @@ data Directive
   | DirConstraintDecl [Ann Declaration]
   | DirFunctionDecl [Ann Declaration]
   | DirOpenFunctionDecl [Ann Declaration]
+  | DirExtendFunctionTypeDecl [Ann Declaration]
+  | DirExtendFunctionEqn (AnnP FunctionEquation)
   | DirTypeDecl [Ann TypeDefinition]
   | DirOther
 
@@ -503,6 +505,9 @@ data ModuleItem
 data ParseValidationError
   = -- | Equations for a non-open function are not contiguous.
     DiscontiguousEquations Text
+  | -- | @:- function@ declarations for a non-open function are not
+    -- contiguous within the module.
+    DiscontiguousFunctionDecls Text
   | -- | A @use_module@ directive's argument was not a module name or
     -- @library(name)@.
     MalformedImport
@@ -531,19 +536,39 @@ convertModule terms =
         concat [ds | DirConstraintDecl ds <- dirs]
           ++ concat [ds | DirFunctionDecl ds <- dirs]
           ++ concat [ds | DirOpenFunctionDecl ds <- dirs]
+      modExtensionTypes_ = concat [ds | DirExtendFunctionTypeDecl ds <- dirs]
       modTypeDecls_ = concat [ds | DirTypeDecl ds <- dirs]
+      modExtensions_ = [e | ItemDirective (DirExtendFunctionEqn e) <- items]
       openNames =
         Set.fromList
           [d.name | DirOpenFunctionDecl ds <- dirs, Ann d _ <- ds]
       contiguityErrors = checkContiguity openNames items
-      mod_ = Module modName_ modImports_ modDecls_ modTypeDecls_ rules eqs modExports_
+      mod_ =
+        Module
+          modName_
+          modImports_
+          modDecls_
+          modExtensionTypes_
+          modTypeDecls_
+          rules
+          eqs
+          modExtensions_
+          modExports_
    in (mod_, itemErrors ++ contiguityErrors)
 
 -- | Check that equations for non-open functions are contiguous.
 -- Returns an error for each function whose equations are separated by
 -- other items.
 checkContiguity :: Set.Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
-checkContiguity openNames = go Set.empty Nothing
+checkContiguity openNames items =
+  checkEquationContiguity openNames items
+    ++ checkDeclContiguity openNames items
+
+-- | Equation contiguity: equations for the same non-open function name
+-- must be a contiguous block of module items.
+checkEquationContiguity ::
+  Set.Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
+checkEquationContiguity openNames = go Set.empty Nothing
   where
     -- closed: function names whose equation block has ended.
     -- prev: the function name of the immediately preceding equation (if any).
@@ -566,6 +591,39 @@ checkContiguity openNames = go Set.empty Nothing
 
     eqName (Unqualified n) = n
     eqName (Qualified _ n) = n
+
+-- | Declaration contiguity: @:- function@ (and @:- open_function@)
+-- directives for the same non-open function name must be a contiguous
+-- block of module items. Decls inside a single directive (e.g.
+-- @:- function f\/1, g\/1.@) count as one block per function and do
+-- not close each other.
+checkDeclContiguity ::
+  Set.Set Text -> [ModuleItem] -> [AnnP ParseValidationError]
+checkDeclContiguity openNames = go Set.empty Set.empty
+  where
+    -- closed: function names whose decl block has ended.
+    -- active: function names declared by the immediately preceding decl
+    -- directive (still contiguous).
+    go _closed _active [] = []
+    go closed active (ItemDirective dir : rest)
+      | Just ds <- declListOf dir =
+          let names = [(d.name, loc) | Ann d loc <- ds]
+              nonOpenNames = [n | n <- map fst names, n `Set.notMember` openNames]
+              reopened =
+                [ AnnP (DiscontiguousFunctionDecls n) loc (Atom "")
+                | (n, loc) <- names,
+                  n `Set.notMember` openNames,
+                  n `Set.member` closed,
+                  n `Set.notMember` active
+                ]
+              active' = Set.fromList nonOpenNames `Set.union` active
+           in reopened ++ go closed active' rest
+    go closed active (_ : rest) =
+      go (active `Set.union` closed) Set.empty rest
+
+    declListOf (DirFunctionDecl ds) = Just ds
+    declListOf (DirOpenFunctionDecl ds) = Just ds
+    declListOf _ = Nothing
 
 -- | Classify and convert a single top-level PExpr, collecting any errors
 -- raised during conversion.
@@ -619,6 +677,12 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- :- open_function foo/2.
   Compound "open_function" [decls] ->
     (DirOpenFunctionDecl (map convertOpenFunctionDecl (flattenComma decls)), [])
+  -- :- extend_function_type (foo(int) -> int).
+  Compound "extend_function_type" [decls] ->
+    (DirExtendFunctionTypeDecl (map convertExtendFunctionTypeDecl (flattenComma decls)), [])
+  -- :- extend_function name(args) [| guards] -> body.
+  Compound "extend_function" [eqn] ->
+    (DirExtendFunctionEqn (convertFunctionEquation eqn), [])
   -- :- chr_type name ---> con1 ; con2 ; ...
   -- Parsed as prefix op: Compound "chr_type" [Compound "--->" [head, alts]]
   Compound "chr_type" [typeBody] ->
@@ -700,6 +764,23 @@ convertFunctionDecl = convertFunctionDeclWith False
 -- | Convert a PExpr to an open-function declaration.
 convertOpenFunctionDecl :: Ann PExpr -> Ann Declaration
 convertOpenFunctionDecl = convertFunctionDeclWith True
+
+-- | Convert a PExpr to an extension type declaration.
+-- Only the typed form @name(types) -> type@ is supported: an extension
+-- declaration that does not carry a signature has nothing to contribute.
+convertExtendFunctionTypeDecl :: Ann PExpr -> Ann Declaration
+convertExtendFunctionTypeDecl (Ann pexpr loc) = case pexpr of
+  Compound "->" [Ann (Compound name args) _, ret] ->
+    Ann
+      ( ExtendFunctionTypeDecl
+          name
+          (length args)
+          (Just (map convertTypeExpr args))
+          (Just (convertTypeExpr ret))
+          Nothing
+      )
+      loc
+  _ -> Ann (ExtendFunctionTypeDecl "<unknown>" 0 Nothing Nothing Nothing) loc
 
 -- | Shared implementation of 'convertFunctionDecl' and
 -- 'convertOpenFunctionDecl'. The 'Bool' argument is the @open@ flag stored

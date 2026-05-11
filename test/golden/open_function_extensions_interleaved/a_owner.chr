@@ -1,0 +1,18 @@
+:- module(owner, [classify/1, run/2]).
+
+% Open function: extension directives are allowed to appear interleaved
+% with the original decls and equations.
+:- open_function (classify(int) -> int).
+
+% An extend_function_type directive between the open_function decl and
+% the first equation is permitted (extensions are not subject to the
+% decl-contiguity rule).
+:- extend_function_type (classify(int) -> int).
+
+classify(0) -> 100.
+
+% An extend_function directive between equations is also permitted.
+:- extend_function classify(1) -> 101.
+
+:- chr_constraint run/2.
+run(X, R) <=> R is classify(X).

@@ -1,0 +1,3 @@
+:- module(owner, [classify/1]).
+:- open_function classify/1.
+classify(red) -> color.

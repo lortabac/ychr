@@ -2,6 +2,6 @@
 :- use_module(main, [classify/1]).
 
 % Equations contributed from this module to the open function declared in main.
-classify(dog)  -> animal.
-classify(cat)  -> animal.
-classify(_)    -> unknown.
+:- extend_function classify(dog) -> animal.
+:- extend_function classify(cat) -> animal.
+:- extend_function classify(_)   -> unknown.

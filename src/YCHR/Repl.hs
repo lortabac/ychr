@@ -329,6 +329,8 @@ showDeclarations prog = mapM_ outputStrLn declLines
           Parsed.ConstraintDecl {name = n, arity = a} -> [("chr_constraint", n, a)]
           Parsed.FunctionDecl {name = n, arity = a, isOpen = o} ->
             [(if o then "open_function" else "function", n, a)]
+          Parsed.ExtendFunctionTypeDecl {name = n, arity = a} ->
+            [("extend_function_type", n, a)]
           _ -> []
       ]
     renderDecl kw modName name arity =

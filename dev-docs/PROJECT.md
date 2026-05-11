@@ -300,6 +300,27 @@ Equation patterns are normalized using the same Head Normal Form (HNF) machinery
 
 Function names are qualified like constraint names and cannot collide with constraint declarations in the same module.
 
+### Closed and Open Functions
+
+Functions come in two flavors. A function declared with `:- function ...`
+is *closed*: all of its declarations (typed or untyped) and all of its
+equations must live in one module — the declaring module — and the
+declarations must form a contiguous block of module items. A function
+declared with `:- open_function ...` is *open*: the same constraints
+apply to its primary declarations, but other modules may extend it via
+dedicated directives:
+
+- `:- extend_function_type (name(T1, ..., Tn) -> Tret).` adds an
+  overloaded signature to an open function declared elsewhere.
+- `:- extend_function name(P1, ..., Pn) [| Guards] -> Body.` adds an
+  equation to an open function declared elsewhere.
+
+Both forms resolve the function name through the importing module's
+imports. Targeting a closed function is rejected (YCHR-16005). Writing
+a free-floating equation `name(args) -> body.` outside the declaring
+module is also rejected (YCHR-16006); the importer must use
+`:- extend_function` instead.
+
 ### Lambdas and Function References
 
 Anonymous functions use Erlang-style syntax: `fun(X, Y) -> Expr end`. The `end` keyword delimits the lambda body, allowing lambdas to appear inside compound-term arguments without parentheses. Lambdas are first-class values that can be passed as arguments, returned from functions, and called with `'$call'`:

@@ -1,0 +1,2 @@
+:- module(ext, []).
+:- extend_function_type (nonexistent(int) -> int).

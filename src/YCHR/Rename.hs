@@ -414,14 +414,18 @@ renameModule mods ctx = do
   validateImportLists mods ctx
   renamedRules <- traverse (renameRule ctx) m.rules
   renamedEquations <- traverse (traverse (renameEquation ctx)) m.equations
+  renamedExtensions <- traverse (traverse (renameEquation ctx)) m.extensions
   let renamedTypeDecls = map (fmap (renameTypeDefinition ctx)) m.typeDecls
-      renamedDecls = map (fmap (renameDeclaration ctx)) m.decls
+  renamedDecls <- traverse (renameAnnDecl ctx) m.decls
+  renamedExtensionTypes <- traverse (renameAnnDecl ctx) m.extensionTypes
   pure
     m
       { rules = renamedRules,
         equations = renamedEquations,
+        extensions = renamedExtensions,
         typeDecls = renamedTypeDecls,
-        decls = renamedDecls
+        decls = renamedDecls,
+        extensionTypes = renamedExtensionTypes
       }
 
 -- | Validate import lists. Four checks:
@@ -464,6 +468,7 @@ validateImportLists mods ctx =
     checkItem mn loc origin (FunctionDecl n a _ _ _) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
+    checkItem _ _ _ ExtendFunctionTypeDecl {} = pure ()
     checkItem mn loc origin (TypeExportDecl n a cs) =
       if mn `notElem` lookupExport (n, a) ctx.typeExportEnv
         then emitError (AnnP (UnknownImport mn n a) loc origin)
@@ -845,15 +850,30 @@ renameDataConstructor ctx dc =
       conArgs = map (renameTypeExpr ctx) dc.conArgs
     }
 
-renameDeclaration :: RenameCtx -> Declaration -> Declaration
-renameDeclaration ctx d@ConstraintDecl {argTypes} =
-  d {argTypes = fmap (map (renameTypeExpr ctx)) argTypes}
-renameDeclaration ctx d@FunctionDecl {argTypes, returnType} =
-  d
-    { argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
-      returnType = fmap (renameTypeExpr ctx) returnType
-    }
-renameDeclaration _ d = d
+renameAnnDecl :: RenameCtx -> Ann Declaration -> Eff RenameEffs (Ann Declaration)
+renameAnnDecl ctx (Ann d loc) = do
+  d' <- renameDeclaration ctx loc d
+  pure (Ann d' loc)
+
+renameDeclaration ::
+  RenameCtx -> SourceLoc -> Declaration -> Eff RenameEffs Declaration
+renameDeclaration ctx _ d@ConstraintDecl {argTypes} =
+  pure d {argTypes = fmap (map (renameTypeExpr ctx)) argTypes}
+renameDeclaration ctx _ d@FunctionDecl {argTypes, returnType} =
+  pure
+    d
+      { argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
+        returnType = fmap (renameTypeExpr ctx) returnType
+      }
+renameDeclaration ctx loc d@ExtendFunctionTypeDecl {name, arity, argTypes, returnType} = do
+  resolved <- resolveName ResolveTop ctx loc (Atom name) (Unqualified name) arity
+  pure
+    d
+      { argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
+        returnType = fmap (renameTypeExpr ctx) returnType,
+        target = Just resolved
+      }
+renameDeclaration _ _ d = pure d
 
 renameTypeExpr :: RenameCtx -> TypeExpr -> TypeExpr
 renameTypeExpr _ (TypeVar v) = TypeVar v
@@ -921,9 +941,11 @@ renameQueryTerms mods mode terms =
           { name = "<query>",
             imports = [noAnnP (ModuleImport m.name Nothing) | m <- mods],
             decls = [],
+            extensionTypes = [],
             typeDecls = [],
             rules = [],
             equations = [],
+            extensions = [],
             exports = Nothing
           }
       ctx0 =

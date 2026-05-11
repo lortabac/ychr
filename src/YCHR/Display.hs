@@ -160,6 +160,7 @@ parseValidationErrorCode :: ParseValidationError -> ErrorCode
 parseValidationErrorCode (DiscontiguousEquations _) = ErrorCode 15001
 parseValidationErrorCode MalformedImport = ErrorCode 15002
 parseValidationErrorCode MalformedConstraint = ErrorCode 15003
+parseValidationErrorCode (DiscontiguousFunctionDecls _) = ErrorCode 15004
 
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
@@ -167,6 +168,8 @@ resolveErrorCode (ConstraintHasEquations _) = ErrorCode 16001
 resolveErrorCode (FunctionInRuleHead _) = ErrorCode 16002
 resolveErrorCode (ReservedName _) = ErrorCode 16003
 resolveErrorCode (UnqualifiedConstraintName _) = ErrorCode 16004
+resolveErrorCode (ExtendsClosedFunction _) = ErrorCode 16005
+resolveErrorCode (OrphanFunctionEquation _ _) = ErrorCode 16006
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 was previously used for OperatorInImportList; now reserved
@@ -235,6 +238,11 @@ parseValidationErrorMsg (DiscontiguousEquations name) =
   "Equations for function "
     ++ T.unpack name
     ++ " must be contiguous (or declare it with :- open_function)"
+parseValidationErrorMsg (DiscontiguousFunctionDecls name) =
+  "Declarations for function "
+    ++ T.unpack name
+    ++ " must be contiguous within the module (or use :- extend_function_type\
+       \ from another module to extend an open function)"
 parseValidationErrorMsg MalformedImport =
   "Invalid import: expected a module name or library(name)"
 parseValidationErrorMsg MalformedConstraint =
@@ -263,6 +271,19 @@ resolveErrorMsg (ReservedName name) =
 resolveErrorMsg (UnqualifiedConstraintName name) =
   "Unqualified constraint name reached the resolve phase (renamer bug): "
     ++ displayName name
+resolveErrorMsg (ExtendsClosedFunction name) =
+  "Cannot extend "
+    ++ displayName name
+    ++ " because it is declared as a closed function. Declare it with\
+       \ :- open_function to allow cross-module signatures and equations."
+resolveErrorMsg (OrphanFunctionEquation name modName) =
+  "Equation for "
+    ++ displayName name
+    ++ " appears in module "
+    ++ T.unpack modName
+    ++ " but the function is declared elsewhere. Use\
+       \ :- extend_function to add equations to an open function from\
+       \ another module."
 
 instance Display (Diagnostic CollectError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
