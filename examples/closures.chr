@@ -1,0 +1,29 @@
+% Anonymous lambdas, function references, and closures.
+%
+% `double/1` is an ordinary function. `make_adder/1` returns a
+% *closure*: a lambda that captures the argument N from its enclosing
+% scope. Both are invoked via the prelude's `call/2`, which applies
+% any callable value to its argument.
+%
+% Three constraints each demonstrate one form of callable:
+%   - by_ref(R):  pass an existing function by reference.
+%   - lambda(R):  pass an anonymous lambda.
+%   - closure(R): build a closure with make_adder, then call it.
+%
+% Used by docs/tutorials/04-functions-and-types.md §4.
+
+:- module(callables,
+          [by_ref/1, lambda/1, closure/1,
+           fun double/1, fun make_adder/1]).
+:- use_module(prelude).
+:- chr_constraint by_ref/1, lambda/1, closure/1.
+:- function double/1.
+:- function make_adder/1.
+
+double(X) -> X + X.
+
+make_adder(N) -> fun(X) -> X + N end.
+
+by_ref(R)  <=> R is call(fun double/1, 21).
+lambda(R)  <=> R is call(fun(X) -> X * X end, 7).
+closure(R) <=> Add10 is make_adder(10), R is call(Add10, 5).

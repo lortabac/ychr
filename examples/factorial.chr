@@ -1,0 +1,17 @@
+% A user-defined function: factorial.
+%
+% Two equations, tried top-to-bottom. The first matches only when the
+% argument is the integer 0. The second matches any N and uses a guard
+% N > 0 to exclude negatives.
+%
+% Used by docs/tutorials/04-functions-and-types.md §1 and §3.
+
+:- module(factorial, [compute/2, fun factorial/1]).
+:- use_module(prelude).
+:- chr_constraint compute(int, int).
+:- function factorial(int) -> int.
+
+factorial(0)         -> 1.
+factorial(N) | N > 0 -> N * factorial(N - 1).
+
+compute(N, R) <=> R is factorial(N).

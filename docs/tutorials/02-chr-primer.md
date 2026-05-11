@@ -212,7 +212,7 @@ high @ clamp(X, Lo, R) <=> X >= Lo | R = X.
 Run it once below the floor and once above:
 
 ```sh
-ychr run -g 'clamp:clamp(3, 5, R)' --show-bindings examples/clamp.chr
+ychr run -g 'clamp(3, 5, R)' --show-bindings examples/clamp.chr
 ```
 
 ```
@@ -220,7 +220,7 @@ R = 5
 ```
 
 ```sh
-ychr run -g 'clamp:clamp(7, 5, R)' --show-bindings examples/clamp.chr
+ychr run -g 'clamp(7, 5, R)' --show-bindings examples/clamp.chr
 ```
 
 ```

@@ -1,0 +1,18 @@
+% An algebraic type with three constructors, plus a typed function
+% that pattern-matches on them.
+%
+% The `intensity_of/2` constraint computes the intensity associated
+% with each color and binds it to its second argument.
+%
+% Used by docs/tutorials/04-functions-and-types.md §3.
+
+:- module(traffic, [intensity_of/2, type(color/0, [red, green, yellow])]).
+:- chr_type color ---> red ; green ; yellow.
+:- chr_constraint intensity_of(color, int).
+:- function intensity(color) -> int.
+
+intensity(red)    -> 100.
+intensity(yellow) -> 60.
+intensity(green)  -> 20.
+
+intensity_of(C, R) <=> R is intensity(C).

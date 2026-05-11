@@ -1,0 +1,18 @@
+% Fibonacci as a function, called from a constraint's rule body.
+%
+% Three equations: two base cases and one recursive case guarded by
+% N > 1. The constraint `compute(N, R)` binds R to fib(N) using the
+% `is` operator, which evaluates its right-hand side as an expression.
+%
+% Used by docs/tutorials/04-functions-and-types.md §2.
+
+:- module(fib, [compute/2, fun fib/1]).
+:- use_module(prelude).
+:- chr_constraint compute(int, int).
+:- function fib(int) -> int.
+
+fib(0) -> 0.
+fib(1) -> 1.
+fib(N) | N > 1 -> fib(N - 1) + fib(N - 2).
+
+compute(N, R) <=> R is fib(N).
