@@ -1,0 +1,13 @@
+% A two-rule example demonstrating guards.
+%
+% Both rules have the same head shape; their guards decide which one
+% fires. clamp(X, Lo, R) binds R to Lo if X < Lo, otherwise to X.
+%
+% Used by docs/tutorials/02-chr-primer.md §4.
+
+:- module(clamp, [clamp/3]).
+:- use_module(prelude).
+:- chr_constraint clamp/3.
+
+low  @ clamp(X, Lo, R) <=> X < Lo  | R = Lo.
+high @ clamp(X, Lo, R) <=> X >= Lo | R = X.
