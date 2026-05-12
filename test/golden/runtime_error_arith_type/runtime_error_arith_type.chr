@@ -1,0 +1,5 @@
+:- module(runtime_error_arith_type, [boom/1]).
+:- use_module(prelude).
+:- chr_constraint boom/1.
+
+go @ boom(R) <=> R is foo + 1.

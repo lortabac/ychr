@@ -1,148 +1,46 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Runtime error formatting with call stack traces.
+-- | Helpers that raise runtime errors from any runtime module
+-- ('runtimeError'', 'runtimeErrorS'), the 'CallStack' alias they thread
+-- through, and the 'RuntimeErrorThrown' exception they throw. Living
+-- here keeps "YCHR.Runtime.Registry" and "YCHR.Runtime.Session" free of
+-- import cycles with "YCHR.Runtime.Interpreter".
 --
--- Also owns the small set of helpers that raise runtime errors from any
--- runtime module ('runtimeError'', 'runtimeErrorS') and the shared
--- 'CallStack' type alias they thread through. Living here keeps
--- "YCHR.Runtime.Registry" and "YCHR.Runtime.Session" free of import
--- cycles with "YCHR.Runtime.Interpreter".
+-- Rendering lives in "YCHR.Display": the top-level driver catches
+-- 'RuntimeErrorThrown', lifts it into 'YCHR.Run.RuntimeError', and
+-- displays it via the same 'displayMsgWithSrcLoc' machinery used by
+-- every other diagnostic.
 module YCHR.Runtime.Error
-  ( -- * Display
-    displayRuntimeError,
-    runtimeErrorCode,
-
-    -- * Call stack
+  ( -- * Call stack
     CallStack,
 
     -- * Raising runtime errors
+    RuntimeErrorThrown (..),
     runtimeError',
     runtimeErrorS,
   )
 where
 
-import Data.List (intercalate)
+import Control.Exception (Exception, throwIO)
 import Data.Text qualified as T
 import Effectful
 import Effectful.State.Static.Local (State, get)
-import System.Console.ANSI
-  ( Color (..),
-    ColorIntensity (..),
-    ConsoleIntensity (..),
-    ConsoleLayer (..),
-    SGR (..),
-    setSGRCode,
-  )
-import System.Exit (exitFailure)
-import System.IO (hPutStr, stderr)
-import YCHR.Loc (SourceLoc (..), dummyLoc)
-import YCHR.VM (StackFrame (..))
+import YCHR.VM (StackFrame)
 
 -- | Runtime call stack for error reporting (newest first).
 type CallStack = [StackFrame]
 
--- | Runtime error code.
-runtimeErrorCode :: String
-runtimeErrorCode = "YCHR-60001"
+-- | Exception thrown by 'runtimeError'' and 'runtimeErrorS'. Carries
+-- the message and the call stack captured at the throw site (newest
+-- frame first). The top-level driver catches this and lifts it into
+-- 'YCHR.Run.RuntimeError' for rendering.
+data RuntimeErrorThrown = RuntimeErrorThrown String [StackFrame]
+  deriving (Show)
 
--- | Format a runtime error with a call stack trace.
---
--- The top stack frame (most recent) is displayed as the error location.
--- Subsequent frames are displayed as notes showing the call context.
--- The stack is expected newest-first (head = most recent).
---
--- Each frame follows the same format as 'YCHR.Display.displayMsgWithSrcLoc':
--- every message ends with a newline followed by a reset escape.
--- Messages are joined with @\"\\n\"@ so a blank line appears between them
--- (same convention as 'YCHR.Display.displayErrors').
-displayRuntimeError :: String -> [StackFrame] -> String
-displayRuntimeError msg [] =
-  formatFrame "runtime error" Magenta msg dummyLoc Nothing Nothing
-displayRuntimeError msg (top : rest) =
-  intercalate
-    "\n"
-    ( formatFrame
-        "runtime error"
-        Magenta
-        msg
-        top.frameSourceLoc
-        ( Just
-            ( T.unpack
-                top.frameLabel
-            )
-        )
-        (Just (T.unpack top.frameSourceCode))
-        : map
-          ( \frame ->
-              formatFrame
-                "stack trace"
-                Cyan
-                ""
-                frame.frameSourceLoc
-                ( Just
-                    ( T.unpack
-                        frame.frameLabel
-                    )
-                )
-                (Just (T.unpack frame.frameSourceCode))
-          )
-          rest
-    )
-
--- | Format a single diagnostic frame.  Mirrors the layout of
--- 'YCHR.Display.displayMsgWithSrcLoc'.
-formatFrame ::
-  String ->
-  Color ->
-  String ->
-  SourceLoc ->
-  Maybe String ->
-  Maybe String ->
-  String
-formatFrame sev color msg loc maybeLabel maybeNode =
-  let c = setSGRCode [SetColor Foreground Vivid color]
-      r = setSGRCode [Reset]
-   in c
-        ++ "=== "
-        ++ sev
-        ++ " ==="
-        ++ r
-        ++ "\n"
-        ++ setSGRCode [SetConsoleIntensity BoldIntensity]
-        ++ displaySrcLoc loc
-        ++ ": "
-        ++ runtimeErrorCode
-        ++ "\n"
-        ++ maybe
-          ""
-          ( \l ->
-              setSGRCode [SetConsoleIntensity BoldIntensity]
-                ++ "<<"
-                ++ l
-                ++ ">>"
-                ++ r
-                ++ "\n"
-          )
-          maybeLabel
-        ++ (if null msg then "" else msg)
-        ++ maybe
-          ""
-          ( \n ->
-              (if null msg then "" else "\n")
-                ++ setSGRCode [SetItalicized True]
-                ++ n
-                ++ setSGRCode [SetItalicized False]
-          )
-          maybeNode
-        ++ "\n"
-        ++ r
-
--- | Display a source location as @file:line:col@.
-displaySrcLoc :: SourceLoc -> String
-displaySrcLoc loc = loc.file ++ ":" ++ show loc.line ++ ":" ++ show loc.col
+instance Exception RuntimeErrorThrown
 
 -- | Raise a runtime error with the current call stack.
--- Prints the formatted error to stderr and exits.
+-- Throws 'RuntimeErrorThrown' so the driver can catch and display it.
 runtimeError' ::
   (IOE :> es, State CallStack :> es) =>
   String ->
@@ -150,18 +48,14 @@ runtimeError' ::
   Eff es a
 runtimeError' prefix detail = do
   stack <- get @CallStack
-  liftIO $ do
-    hPutStr stderr $ displayRuntimeError (prefix ++ T.unpack detail) stack
-    exitFailure
+  liftIO $ throwIO (RuntimeErrorThrown (prefix ++ T.unpack detail) stack)
 
 -- | Raise a runtime error with the current call stack (String-only variant).
--- Prints the formatted error to stderr and exits.
+-- Throws 'RuntimeErrorThrown' so the driver can catch and display it.
 runtimeErrorS ::
   (IOE :> es, State CallStack :> es) =>
   String ->
   Eff es a
 runtimeErrorS msg = do
   stack <- get @CallStack
-  liftIO $ do
-    hPutStr stderr $ displayRuntimeError msg stack
-    exitFailure
+  liftIO $ throwIO (RuntimeErrorThrown msg stack)

@@ -22,7 +22,7 @@ module YCHR.Runtime.Interpreter
   )
 where
 
-import Control.Exception (SomeException, displayException)
+import Control.Exception (SomeException, displayException, fromException)
 import Data.Foldable (toList, traverse_)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -34,7 +34,7 @@ import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import Effectful.Writer.Static.Local (Writer, listen, runWriter)
 import YCHR.Meta (valueToTerm)
 import YCHR.Pretty (prettyTerm)
-import YCHR.Runtime.Error (CallStack, runtimeError', runtimeErrorS)
+import YCHR.Runtime.Error (CallStack, RuntimeErrorThrown, runtimeError', runtimeErrorS)
 import YCHR.Runtime.History (PropHistory, addHistory, notInHistory, runPropHistory)
 import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue)
 import YCHR.Runtime.Registry
@@ -452,9 +452,16 @@ invokeHostCall hc name argVals =
       result <- Eff.try @SomeException (f argVals)
       case result of
         Right v -> pure v
-        Left exc ->
-          runtimeErrorS $
-            "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc
+        Left exc -> case fromException exc :: Maybe RuntimeErrorThrown of
+          -- A 'RuntimeErrorThrown' from a nested host call already carries
+          -- a fully-formatted message and the call stack at its throw site;
+          -- re-throwing it preserves both. Wrapping with 'runtimeErrorS'
+          -- would 'show'-encode the inner exception into the outer message
+          -- and discard the inner stack.
+          Just rte -> Eff.throwIO rte
+          Nothing ->
+            runtimeErrorS $
+              "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc
     Nothing -> runtimeError' "evalValExpr: unknown host call " name.unName
 
 -- ---------------------------------------------------------------------------

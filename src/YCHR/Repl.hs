@@ -270,7 +270,13 @@ handleLiveQuery cp hostCalls werror src = do
     classifyAsRecoverable exc = case fromException exc :: Maybe Error of
       Just err -> QueryRecoverable (displayMsg err)
       Nothing -> QueryFatal (renderFatal exc)
-    renderFatal exc = displayException exc ++ "\n"
+    -- A fatal exception is most often an 'Error' (e.g. a runtime error
+    -- escaping 'executePreparedQuery'); rendering through 'displayMsg'
+    -- gives the same nicely-formatted output the outer REPL produces.
+    -- Anything else falls back to 'displayException'.
+    renderFatal exc = case fromException exc :: Maybe Error of
+      Just err -> displayMsg err
+      Nothing -> displayException exc ++ "\n"
 
 -- ---------------------------------------------------------------------------
 -- Commands

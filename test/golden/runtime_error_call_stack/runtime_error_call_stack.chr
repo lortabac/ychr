@@ -1,0 +1,12 @@
+:- module(runtime_error_call_stack, [boom/1]).
+:- use_module(prelude).
+
+:- function helper/1.
+helper(X) -> X + foo.
+
+:- function deep/1.
+deep(X) -> helper(X).
+
+:- chr_constraint boom/1.
+
+go @ boom(R) <=> R is deep(1).

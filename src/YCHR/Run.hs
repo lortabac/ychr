@@ -49,7 +49,7 @@ module YCHR.Run
   )
 where
 
-import Control.Exception (throwIO)
+import Control.Exception (handle, throwIO)
 import Control.Monad (unless, void, when)
 import Data.List (intercalate)
 import Data.Map.Strict (Map)
@@ -60,6 +60,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Dispatch.Static
+import Effectful.Exception qualified as Eff
 import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.Writer.Static.Local (listen, runWriter)
 import YCHR.Compile
@@ -87,7 +88,7 @@ import YCHR.Parsed (SourceLoc (..))
 import YCHR.Parser (parseConstraint, parseQueryWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (renameQueryArgs, renameQueryGoals)
-import YCHR.Runtime.Error (CallStack)
+import YCHR.Runtime.Error (CallStack, RuntimeErrorThrown (..))
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc)
 import YCHR.Runtime.Reactivation (drainQueue, enqueue)
 import YCHR.Runtime.Session
@@ -165,7 +166,7 @@ runProgramWithGoalDSL ::
     ( Value,
       Map Text Term
     )
-runProgramWithGoalDSL cp hostCalls constraint = do
+runProgramWithGoalDSL cp hostCalls constraint = convertRuntimeError $ do
   resolved <- case resolveQueryConstraint cp constraint of
     Left err -> fail err
     Right c -> pure c
@@ -184,6 +185,22 @@ runProgramWithGoalDSL cp hostCalls constraint = do
           (\k v -> valueToTerm (perKeyAliases classes k) v)
           varMap
       pure (result, bindings)
+
+-- | Re-throw 'RuntimeErrorThrown' (from the runtime layer) as the
+-- user-facing 'RuntimeError' constructor of 'Error'. Applied at the
+-- top-level IO entry points so callers can pattern-match a single
+-- exception type ('Error') without depending on the runtime's
+-- internal exception.
+convertRuntimeError :: IO a -> IO a
+convertRuntimeError = handle $ \(RuntimeErrorThrown msg stack) ->
+  throwIO (RuntimeError msg stack)
+
+-- | 'Eff'-flavored version of 'convertRuntimeError', applied at the
+-- 'executePreparedQuery' boundary so the REPL's catch helpers see a
+-- uniform 'Error' value regardless of which path raised it.
+convertRuntimeErrorEff :: (IOE :> es) => Eff es a -> Eff es a
+convertRuntimeErrorEff = Eff.handle $ \(RuntimeErrorThrown msg stack) ->
+  liftIO (throwIO (RuntimeError msg stack))
 
 -- | Parse and rename a goal, returning the canonicalized 'Constraint'
 -- alongside any rename warnings. Throws on parse or rename errors.
@@ -335,13 +352,14 @@ executePreparedQuery ::
   [D.BodyGoal] ->
   Eff es (Map Text Term)
 executePreparedQuery hostCalls lifted =
-  evalState (Map.empty :: Map Text Value) $ do
-    mapM_ (executeBodyGoal hostCalls) lifted
-    varMap <- get
-    classes <- buildAliasClasses varMap
-    Map.traverseWithKey
-      (\k v -> valueToTerm (perKeyAliases classes k) v)
-      varMap
+  convertRuntimeErrorEff $
+    evalState (Map.empty :: Map Text Value) $ do
+      mapM_ (executeBodyGoal hostCalls) lifted
+      varMap <- get
+      classes <- buildAliasClasses varMap
+      Map.traverseWithKey
+        (\k v -> valueToTerm (perKeyAliases classes k) v)
+        varMap
 
 -- | Group the user-visible query variables by their underlying
 -- 'VarId'. Two query variables that unified into the same equivalence

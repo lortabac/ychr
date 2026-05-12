@@ -61,7 +61,7 @@ import YCHR.StdLib (stdlib)
 import YCHR.TypeCheck.Error (TypeCheckError)
 import YCHR.Types (SymbolTable)
 import YCHR.Types qualified as Types
-import YCHR.VM (Program)
+import YCHR.VM (Program, StackFrame)
 
 data Error
   = ParseError FilePath (ParseErrorBundle Text Void)
@@ -82,6 +82,14 @@ data Error
     -- the source location and originating expression of the first
     -- offending lambda so the diagnostic can point at it directly.
     LambdasInLiveQuery SourceLoc PExpr
+  | -- | A runtime error raised by 'YCHR.Runtime.Error.runtimeError'' /
+    -- 'YCHR.Runtime.Error.runtimeErrorS'. Carries the detail message and
+    -- the call stack at the throw site (newest frame first), which the
+    -- 'Display' instance renders frame-by-frame through
+    -- 'YCHR.Display.displayMsgWithSrcLoc'. Thrown from runtime helpers
+    -- so the test harness (and the REPL) can catch and display it
+    -- instead of the process exiting unconditionally.
+    RuntimeError String [StackFrame]
   deriving (Show)
 
 instance Exception Error

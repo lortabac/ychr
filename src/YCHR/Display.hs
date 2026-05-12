@@ -19,6 +19,7 @@ module YCHR.Display
     parseErrorCode,
     operatorConflictCode,
     lambdasInLiveQueryCode,
+    runtimeErrorCode,
   )
 where
 
@@ -49,11 +50,23 @@ import YCHR.Rename (RenameError (..), RenameWarning (..))
 import YCHR.Resolve (ResolveError (..))
 import YCHR.TypeCheck (TypeCheckError (..))
 import YCHR.Types qualified as Types
+import YCHR.VM (StackFrame (..))
 
 class Display a where
   displayMsg :: a -> String
 
-data Severity = SevError | SevWarning
+-- | Diagnostic severity. Drives both the header label (e.g. @=== error
+-- ===@) and the foreground color of 'displayMsgWithSrcLoc'.
+--
+-- 'SevRuntimeError' is the top frame of a runtime-error stack (magenta),
+-- and 'SevStackTrace' is each subsequent frame (cyan). Keeping them
+-- distinct lets readers locate the actual error site at a glance even
+-- when the stack is deep.
+data Severity
+  = SevError
+  | SevWarning
+  | SevRuntimeError
+  | SevStackTrace
 
 newtype ErrorCode = ErrorCode Int
   deriving (Show, Eq, Ord)
@@ -69,10 +82,14 @@ displaySrcLoc loc = loc.file ++ ":" ++ show loc.line ++ ":" ++ show loc.col
 severityLabel :: Severity -> String
 severityLabel SevError = "error"
 severityLabel SevWarning = "warning"
+severityLabel SevRuntimeError = "runtime error"
+severityLabel SevStackTrace = "stack trace"
 
 severityColor :: Severity -> Color
 severityColor SevError = Red
 severityColor SevWarning = Yellow
+severityColor SevRuntimeError = Magenta
+severityColor SevStackTrace = Cyan
 
 -- | Format a diagnostic message with source location, severity, error code,
 -- optional location label, and optional AST context.
@@ -122,7 +139,11 @@ displayMsgWithSrcLoc code sev msg loc maybeLabel maybeNode =
         ++ maybe
           ""
           ( \n ->
-              "\n"
+              -- Skip the message/node separator when msg is empty so a
+              -- stack-trace frame (which carries no message of its own)
+              -- doesn't render a phantom blank line between '<<label>>'
+              -- and the italicized source snippet.
+              (if null msg then "" else "\n")
                 ++ setSGRCode [SetItalicized True]
                 ++ n
                 ++ setSGRCode [SetItalicized False]
@@ -225,6 +246,11 @@ operatorConflictCode = ErrorCode 50002
 
 lambdasInLiveQueryCode :: ErrorCode
 lambdasInLiveQueryCode = ErrorCode 50003
+
+-- | 6xxxx — shared with type-check; 60001 is also used for runtime errors
+-- raised by 'YCHR.Runtime.Error.runtimeError''/'runtimeErrorS'.
+runtimeErrorCode :: ErrorCode
+runtimeErrorCode = ErrorCode 60001
 
 -- ---------------------------------------------------------------------------
 -- Display instances
@@ -603,3 +629,26 @@ instance Display Error where
       loc
       (Just "live session")
       (Just (prettyPExprSrc origin))
+  displayMsg (RuntimeError msg stack) = displayErrors (renderFrames msg stack)
+    where
+      -- An empty stack means the error fired before any 'PushFrame'; we
+      -- still produce a runtime-error block, just anchored at 'dummyLoc'.
+      renderFrames m [] =
+        [displayMsgWithSrcLoc runtimeErrorCode SevRuntimeError m P.dummyLoc Nothing Nothing]
+      renderFrames m (top : rest) = renderTop top m : map renderRest rest
+      renderTop frame m =
+        displayMsgWithSrcLoc
+          runtimeErrorCode
+          SevRuntimeError
+          m
+          frame.frameSourceLoc
+          (Just (T.unpack frame.frameLabel))
+          (Just (T.unpack frame.frameSourceCode))
+      renderRest frame =
+        displayMsgWithSrcLoc
+          runtimeErrorCode
+          SevStackTrace
+          ""
+          frame.frameSourceLoc
+          (Just (T.unpack frame.frameLabel))
+          (Just (T.unpack frame.frameSourceCode))

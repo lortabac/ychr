@@ -208,8 +208,8 @@ runGoal opts files = withCompiled False files $ \prog warnings -> do
   where
     reportErrorAndExit exc = do
       case fromException exc of
-        Just err -> putStr (displayMsg (err :: Error))
-        Nothing -> putStrLn ("Error: " ++ displayException exc)
+        Just err -> hPutStr stderr (displayMsg (err :: Error))
+        Nothing -> hPutStr stderr ("Error: " ++ displayException exc ++ "\n")
       exitFailure
 
 runCompile :: CompileOpts -> [FilePath] -> IO ()
