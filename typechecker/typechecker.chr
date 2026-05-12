@@ -41,8 +41,7 @@
 
 % Atoms used as the Code field of `error/3`. Declared so the renamer
 % recognizes them as data constructors; the value-level type stays `any`.
-:- chr_type error_code ---> unknown_constraint
-                          ; inconsistent
+:- chr_type error_code ---> inconsistent
                           ; no_matching_overload.
 
 % Literal values used as the Detail field of `error/3`. Detail is
@@ -103,17 +102,17 @@ type_consistent(_, _) -> false.
 % Declaration matching
 % ==========================================================================
 
-% Constraint usage: copy_term the declaration, check args pairwise
+% Constraint usage: copy_term the declaration, check args pairwise.
+% The Haskell driver registers a constraint_sig for every constraint
+% declared in the program (including untyped ones, which default to
+% all-any), and the renamer rejects any rule referencing an undeclared
+% constraint — so every check_constraint_use always has a matching
+% constraint_sig.
 constraint_match @
     constraint_sig(Name, DeclTypes) \
         check_constraint_use(Name, ArgTypes, Ctx) <=>
     FreshTypes is copy_term(term(DeclTypes)),
     check_arg_list(FreshTypes, ArgTypes, Ctx).
-
-% Unknown constraint
-unknown_constraint @
-    check_constraint_use(Name, _, Ctx) <=>
-    report_error(Ctx, unknown_constraint, Name).
 
 % Function usage: copy_term preserves arg/ret sharing
 function_match @
@@ -129,17 +128,17 @@ function_match @
 % filter_consistent treats var args as consistent with any declared type.
 % If all args are vars, all sigs match → ambiguous → succeed silently.
 % If some args are nonvar and narrow to one sig, that sig is applied.
+% Unknown-function detection is short-circuited by the Haskell driver:
+% 'typeOfCompound' checks the function-name set before emitting
+% 'check_function_use', so this rule (and 'function_match') only fires
+% for declared functions. Residual 'check_function_use' constraints
+% from overloaded functions whose args never resolve are harmless —
+% they represent genuinely polymorphic/ambiguous usage in gradual typing.
 overloaded_function_match @
     function_sigs(Name, Sigs) \
         check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
     Matching is filter_consistent(Sigs, ArgTypes),
     resolve_overload(Name, Matching, ArgTypes, RetTypeVar, Ctx).
-
-% Note: unknown_function detection is handled by the Haskell driver
-% (typeOfCompound checks funSet before emitting check_function_use).
-% Residual check_function_use constraints (from overloaded functions
-% whose args never resolve) are harmless — they represent genuinely
-% polymorphic/ambiguous usage in gradual typing.
 
 % Constructor usage: copy_term preserves parent/field sharing
 constructor_match @

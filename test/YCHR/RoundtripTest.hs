@@ -25,6 +25,7 @@ import Hedgehog
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import Test.Tasty.Hedgehog (testProperty)
 import YCHR.Parsed qualified as P
 import YCHR.Parser (parseConstraint, parseRule, parseTerm)
@@ -300,6 +301,64 @@ prop_listToCompoundRoundtrip = property $ do
   assert (groundEq list list')
 
 -- ---------------------------------------------------------------------------
+-- Fixed-case roundtrips
+-- ---------------------------------------------------------------------------
+--
+-- The Hedgehog rule generator above avoids infix operators in functors
+-- and emits only safe-atom heads (see 'genTerm' / 'genHead'), so it
+-- never produces a named simpagation, never threads a guard through a
+-- propagation rule, etc. The fixed cases below exercise those
+-- structural shapes head-on.
+--
+-- Arithmetic and comparison operators come from @library(prelude)@,
+-- not 'builtinOps', so 'parseRule' can't re-ingest @+@/@<@/@==@ in
+-- isolation. Pretty-printing of those is covered indirectly by the
+-- ~120 golden tests that print arithmetic and comparison results.
+--
+-- The check is: parse → pretty → parse, and assert (a) both parses
+-- succeed without parse-validation errors and (b) the pretty output
+-- is a fixed point (rule1 and rule2 print to the same source). That
+-- pins both the pretty-printer being a valid inverse of the parser
+-- and the rendering being canonical for these shapes.
+
+assertRuleRoundtrips :: Text -> IO ()
+assertRuleRoundtrips src = case parseRule "<roundtrip>" src of
+  Left err -> assertFailure ("parse failed on input:\n" ++ Text.unpack src ++ "\n" ++ show err)
+  Right (_, validErrs@(_ : _)) ->
+    assertFailure ("parse validation errors on input:\n" ++ show validErrs)
+  Right (rule1, []) -> do
+    let pretty1 = prettyRuleSrc rule1
+    case parseRule "<roundtrip>" (Text.pack pretty1) of
+      Left err ->
+        assertFailure ("re-parse failed on pretty output:\n" ++ pretty1 ++ "\n" ++ show err)
+      Right (_, validErrs@(_ : _)) ->
+        assertFailure ("re-parse validation errors on pretty output:\n" ++ show validErrs)
+      Right (rule2, []) -> prettyRuleSrc rule2 @?= pretty1
+
+fixedRuleCases :: TestTree
+fixedRuleCases =
+  testGroup
+    "rule fixed cases"
+    [ testCase "named simpagation" $
+        assertRuleRoundtrips "subsumes @ leq(X, Y) \\ leq(X, Y) <=> true.",
+      testCase "named simpagation with guard (unification ask)" $
+        assertRuleRoundtrips "subsumes @ leq(X, Y) \\ leq(X, Z) <=> Y = Z | true.",
+      testCase "named propagation" $
+        assertRuleRoundtrips "trans @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).",
+      testCase "named propagation with multi-atom body" $
+        assertRuleRoundtrips
+          "mul @ pair(X, Y), pair(Y, Z) ==> pair(X, Z), seen(Y).",
+      testCase "simplification with multi-atom guard and body" $
+        assertRuleRoundtrips
+          "merge(X, Y, Z) <=> X = a, Y = b | step(X), step(Y), step(Z).",
+      -- Multi-arg constraints with mixed argument kinds are syntactically
+      -- distinctive: head separator, comma-arg lists, and the propagation
+      -- arrow all interact.
+      testCase "propagation with zero-arity head and body atoms" $
+        assertRuleRoundtrips "go @ start, go ==> done."
+    ]
+
+-- ---------------------------------------------------------------------------
 -- Test tree
 -- ---------------------------------------------------------------------------
 
@@ -312,6 +371,7 @@ tests =
         "constraint roundtrip (parse . prettyConstraintSrc = id)"
         prop_constraintRoundtrip,
       testProperty "rule roundtrip (parse . prettyRuleSrc = id)" prop_ruleRoundtrip,
+      fixedRuleCases,
       testProperty
         "compound_to_list roundtrip (list_to_compound . compound_to_list = id)"
         prop_compoundToListRoundtrip,

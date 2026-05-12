@@ -229,8 +229,6 @@ compileErrorCode (UnboundVariable _) = ErrorCode 40002
 -- | 6xxxx — type-check phase
 typeCheckErrorCode :: TypeCheckError -> ErrorCode
 typeCheckErrorCode (InconsistentTypes _ _) = ErrorCode 60001
-typeCheckErrorCode (UnknownConstraint _) = ErrorCode 60002
-typeCheckErrorCode (UnknownFunction _) = ErrorCode 60003
 typeCheckErrorCode (UnboundTypeVar _ _ _) = ErrorCode 60004
 typeCheckErrorCode (UndefinedType _ _ _) = ErrorCode 60005
 typeCheckErrorCode (NoMatchingOverload _) = ErrorCode 60006
@@ -520,14 +518,6 @@ instance Display (Diagnostic TypeCheckError) where
 typeCheckErrorMsg :: TypeCheckError -> String
 typeCheckErrorMsg (InconsistentTypes t1 t2) =
   "Type mismatch: '" ++ T.unpack t1 ++ "' does not match '" ++ T.unpack t2 ++ "'"
-typeCheckErrorMsg (UnknownConstraint name) =
-  withHint
-    ("Unknown constraint '" ++ T.unpack name ++ "'")
-    "declare it with :- chr_constraint, or import it from another module"
-typeCheckErrorMsg (UnknownFunction name) =
-  withHint
-    ("Unknown function '" ++ T.unpack name ++ "'")
-    "declare it with :- function or :- open_function, or import it from another module"
 typeCheckErrorMsg (UnboundTypeVar typeName conName varName) =
   withHint
     ( "Type variable '"

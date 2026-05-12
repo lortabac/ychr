@@ -919,12 +919,6 @@ decodeError ctxMap (VTerm errorFunctor [ctxVal, codeVal, detailVal])
                     info.origin
                 )
             ]
-        VTerm c [] | c == tcAtom "unknown_constraint" -> do
-          nameText <- showValue detail
-          pure [Diagnostic info.label (AnnP (UnknownConstraint nameText) info.loc info.origin)]
-        VTerm c [] | c == tcAtom "unknown_function" -> do
-          nameText <- showValue detail
-          pure [Diagnostic info.label (AnnP (UnknownFunction nameText) info.loc info.origin)]
         VTerm c [] | c == tcAtom "no_matching_overload" -> do
           nameText <- showValue detail
           pure
