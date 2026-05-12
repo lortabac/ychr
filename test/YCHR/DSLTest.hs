@@ -14,8 +14,14 @@ tests =
     "DSL"
     [ moduleTests,
       declarationTests,
+      functionDeclarationTests,
+      typeDeclarationTests,
+      operatorDeclarationTests,
       ruleTests,
+      guardTests,
       termTests,
+      lambdaTests,
+      numericInstanceTests,
       integrationTests,
       endToEndTests
     ]
@@ -83,7 +89,30 @@ moduleTests =
         module' "Foo" `exporting` ["leq" // 2]
           @?= (emptyModule "Foo")
             { exports = Just (noAnnP [ConstraintDecl "leq" 2 Nothing])
-            }
+            },
+      testCase "library appends a LibraryImport" $
+        module' "Foo" `library` "lists" `library` "math"
+          @?= (emptyModule "Foo")
+            { imports =
+                [ noAnnP (LibraryImport "lists" Nothing),
+                  noAnnP (LibraryImport "math" Nothing)
+                ]
+            },
+      testCase "exporting appends to an existing export list" $
+        -- Two calls should accumulate, not replace — pinning the
+        -- documented append-semantics in DSL.hs.
+        module' "Foo" `exporting` ["a" // 1] `exporting` ["b" // 2]
+          @?= (emptyModule "Foo")
+            { exports =
+                Just
+                  ( noAnnP
+                      [ConstraintDecl "a" 1 Nothing, ConstraintDecl "b" 2 Nothing]
+                  )
+            },
+      testCase "withEquations appends to module.equations" $
+        let eq = equation "f" [int 0] [] (int 1)
+            m = module' "M" `withEquations` [eq]
+         in m.equations @?= [noAnnP eq]
     ]
   where
     emptyModule n =
@@ -123,6 +152,120 @@ declarationTests =
         let eq = equation "classify" [atom "dog"] [] (atom "animal")
             m = module' "ext" `withExtensions` [eq]
          in m.extensions @?= [noAnnP eq]
+    ]
+
+functionDeclarationTests :: TestTree
+functionDeclarationTests =
+  testGroup
+    "function declaration"
+    [ testCase "function produces FunctionDecl with isOpen = False" $
+        function "factorial" 1
+          @?= FunctionDecl
+            { name = "factorial",
+              arity = 1,
+              argTypes = Nothing,
+              returnType = Nothing,
+              isOpen = False
+            },
+      testCase "openFunction produces FunctionDecl with isOpen = True" $
+        openFunction "show" 1
+          @?= FunctionDecl
+            { name = "show",
+              arity = 1,
+              argTypes = Nothing,
+              returnType = Nothing,
+              isOpen = True
+            },
+      testCase "extendFunctionType arity matches argTypes length" $
+        let intCon = TypeCon (Unqualified "int") []
+         in extendFunctionType "add" [intCon, intCon] intCon
+              @?= ExtendFunctionTypeDecl
+                { name = "add",
+                  arity = 2,
+                  argTypes = Just [intCon, intCon],
+                  returnType = Just intCon,
+                  target = Nothing
+                },
+      testCase "extendFunctionType with zero args is allowed" $
+        let intCon = TypeCon (Unqualified "int") []
+         in extendFunctionType "zero" [] intCon
+              @?= ExtendFunctionTypeDecl
+                { name = "zero",
+                  arity = 0,
+                  argTypes = Just [],
+                  returnType = Just intCon,
+                  target = Nothing
+                }
+    ]
+
+typeDeclarationTests :: TestTree
+typeDeclarationTests =
+  testGroup
+    "type declaration"
+    [ testCase "typeExport with no allowlist" $
+        typeExport "color" 0 @?= TypeExportDecl "color" 0 Nothing,
+      testCase "typeExportWith carries the allowlist" $
+        typeExportWith "color" 0 ["red", "green", "blue"]
+          @?= TypeExportDecl "color" 0 (Just ["red", "green", "blue"]),
+      testCase "typeExportWith with empty allowlist exports type only" $
+        -- Empty list is distinct from Nothing: exports the type tag
+        -- without any of its constructors.
+        typeExportWith "opaque" 0 []
+          @?= TypeExportDecl "opaque" 0 (Just []),
+      testCase "tyDef with no type variables (mono-type)" $
+        tyDef "color" [] [dataCtor "red" [], dataCtor "green" []]
+          @?= TypeDefinition
+            { name = Unqualified "color",
+              typeVars = [],
+              constructors =
+                [ DataConstructor (Unqualified "red") [],
+                  DataConstructor (Unqualified "green") []
+                ],
+              loc = dummyLoc
+            },
+      testCase "tyDef with type variables (parametric)" $
+        -- The recursive 'list(a)' shape exercises both TypeVar (in cons
+        -- field 0) and TypeCon-with-args (in cons field 1: list(a)).
+        let listCon = TypeCon (Unqualified "list") [TypeVar "a"]
+         in tyDef
+              "list"
+              ["a"]
+              [ dataCtor "nil" [],
+                dataCtor "cons" [TypeVar "a", listCon]
+              ]
+              @?= TypeDefinition
+                { name = Unqualified "list",
+                  typeVars = ["a"],
+                  constructors =
+                    [ DataConstructor (Unqualified "nil") [],
+                      DataConstructor (Unqualified "cons") [TypeVar "a", listCon]
+                    ],
+                  loc = dummyLoc
+                }
+    ]
+
+operatorDeclarationTests :: TestTree
+operatorDeclarationTests =
+  testGroup
+    "operator declaration"
+    [ testCase "op produces OperatorDecl with the given fixity and type" $
+        op 700 Xfx "is"
+          @?= OperatorDecl
+            OpDecl {fixity = 700, opType = Xfx, opName = "is"},
+      testCase "op accepts each fixity variant we expose" $
+        -- Spot-check the four OpType variants that don't appear in
+        -- existing tests; if one of them were ever removed, this would
+        -- catch it.
+        [ op 200 Fy "-",
+          op 500 Yfx "+",
+          op 400 Xfy ":-",
+          op 700 Xfx "<"
+        ]
+          @?= [ OperatorDecl (OpDecl 200 Fy "-"),
+                OperatorDecl (OpDecl 500 Yfx "+"),
+                OperatorDecl (OpDecl 400 Xfy ":-"),
+                OperatorDecl (OpDecl 700 Xfx "<")
+              ]
     ]
 
 ruleTests :: TestTree
@@ -173,6 +316,45 @@ ruleTests =
   where
     a0 = Constraint (Unqualified "a") []
 
+guardTests :: TestTree
+guardTests =
+  testGroup
+    "rule guard"
+    [ testCase "(|-) attaches a single-conjunct guard" $
+        (([term "p" [var "X"]] <=> [bool True]) |- [var "X" .> int 0])
+          @?= Rule
+            Nothing
+            (noAnnP (Simplification [Constraint (Unqualified "p") [var "X"]]))
+            (noAnnP [var "X" .> int 0])
+            (noAnnP [bool True]),
+      testCase "(|-) attaches a multi-conjunct guard" $
+        -- The guard slot in 'Rule' is a list, so a list with multiple
+        -- conjuncts is the surface form for @g1, g2, g3@. Pin that
+        -- shape directly.
+        ( ([term "p" [var "X"]] <=> [bool True])
+            |- [var "X" .> int 0, var "X" .< int 100, var "X" .=. var "Y"]
+        )
+          @?= Rule
+            Nothing
+            (noAnnP (Simplification [Constraint (Unqualified "p") [var "X"]]))
+            ( noAnnP
+                [ var "X" .> int 0,
+                  var "X" .< int 100,
+                  var "X" .=. var "Y"
+                ]
+            )
+            (noAnnP [bool True]),
+      testCase "(|-) attaches a guard to a propagation rule" $
+        ( ([term "p" [var "X"]] ==> [term "q" [var "X"]])
+            |- [var "X" .> int 0]
+        )
+          @?= Rule
+            Nothing
+            (noAnnP (Propagation [Constraint (Unqualified "p") [var "X"]]))
+            (noAnnP [var "X" .> int 0])
+            (noAnnP [term "q" [var "X"]])
+    ]
+
 termTests :: TestTree
 termTests =
   testGroup
@@ -181,8 +363,14 @@ termTests =
         var "X" @?= VarTerm "X",
       testCase "atom produces AtomTerm" $
         atom "true" @?= AtomTerm "true",
-      testCase "term produces CompoundTerm" $
+      testCase "term produces unqualified CompoundTerm" $
         term "f" [var "X"] @?= CompoundTerm (Unqualified "f") [var "X"],
+      testCase "qterm produces qualified CompoundTerm" $
+        qterm "Order" "leq" [var "X", var "Y"]
+          @?= CompoundTerm (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"],
+      testCase "qterm with zero arguments" $
+        qterm "M" "marker" []
+          @?= CompoundTerm (Qualified "M" "marker") [],
       testCase "(.=.) produces unification term" $
         var "X" .=. var "Y"
           @?= CompoundTerm (Unqualified "=") [VarTerm "X", VarTerm "Y"],
@@ -195,7 +383,134 @@ termTests =
         var "X" `is` term "+" [int 1, int 2]
           @?= CompoundTerm
             (Unqualified "is")
-            [VarTerm "X", CompoundTerm (Unqualified "+") [IntTerm 1, IntTerm 2]]
+            [VarTerm "X", CompoundTerm (Unqualified "+") [IntTerm 1, IntTerm 2]],
+      -- Literal builders not yet exercised in their own test.
+      testCase "int produces IntTerm" $
+        int 42 @?= IntTerm 42,
+      testCase "float produces FloatTerm" $
+        float 1.5 @?= FloatTerm 1.5,
+      testCase "text produces TextTerm" $
+        text "hello" @?= TextTerm "hello",
+      testCase "bool True maps to AtomTerm \"true\"" $
+        bool True @?= AtomTerm "true",
+      testCase "bool False maps to AtomTerm \"false\"" $
+        bool False @?= AtomTerm "false"
+    ]
+
+lambdaTests :: TestTree
+lambdaTests =
+  testGroup
+    "lambda and funRef"
+    [ testCase "lambda builds the '->' compound shape" $
+        -- A lambda is sugar for ->(fun(args), body); the AST shows
+        -- both the params block and the body as siblings of '->'.
+        lambda [var "X"] (var "X" .+ int 1)
+          @?= CompoundTerm
+            (Unqualified "->")
+            [ CompoundTerm (Unqualified "fun") [VarTerm "X"],
+              CompoundTerm (Unqualified "+") [VarTerm "X", IntTerm 1]
+            ],
+      testCase "lambda with multiple params" $
+        lambda [var "X", var "Y"] (var "X" .+ var "Y")
+          @?= CompoundTerm
+            (Unqualified "->")
+            [ CompoundTerm
+                (Unqualified "fun")
+                [VarTerm "X", VarTerm "Y"],
+              CompoundTerm (Unqualified "+") [VarTerm "X", VarTerm "Y"]
+            ],
+      testCase "higher-order lambda: returning a lambda" $
+        -- 'fun(X) -> fun(Y) -> X + Y end end' — a curried add. The
+        -- outer body is itself a '->' compound.
+        lambda [var "X"] (lambda [var "Y"] (var "X" .+ var "Y"))
+          @?= CompoundTerm
+            (Unqualified "->")
+            [ CompoundTerm (Unqualified "fun") [VarTerm "X"],
+              CompoundTerm
+                (Unqualified "->")
+                [ CompoundTerm (Unqualified "fun") [VarTerm "Y"],
+                  CompoundTerm (Unqualified "+") [VarTerm "X", VarTerm "Y"]
+                ]
+            ],
+      testCase "lambda with zero params" $
+        lambda [] (int 42)
+          @?= CompoundTerm
+            (Unqualified "->")
+            [ CompoundTerm (Unqualified "fun") [],
+              IntTerm 42
+            ],
+      testCase "funRef builds fun(name/arity)" $
+        funRef "factorial" 1
+          @?= CompoundTerm
+            (Unqualified "fun")
+            [ CompoundTerm
+                (Unqualified "/")
+                [AtomTerm "factorial", IntTerm 1]
+            ],
+      testCase "call_ wraps args after the callable" $
+        call_ (funRef "f" 2) [int 1, int 2]
+          @?= CompoundTerm
+            (Unqualified "$call")
+            [ funRef "f" 2,
+              IntTerm 1,
+              IntTerm 2
+            ],
+      testCase "call_ on a lambda value" $
+        call_ (lambda [var "X"] (var "X" .+ int 1)) [int 5]
+          @?= CompoundTerm
+            (Unqualified "$call")
+            [ lambda [var "X"] (var "X" .+ int 1),
+              IntTerm 5
+            ]
+    ]
+
+numericInstanceTests :: TestTree
+numericInstanceTests =
+  testGroup
+    "Num instance and comparison sugar"
+    [ -- The 'Num' instance for 'Term' lets users write @1 + 2@ instead
+      -- of @int 1 .+ int 2@; fromInteger and +/-/* must compile to the
+      -- corresponding compound terms.
+      testCase "fromInteger: literal 7 produces IntTerm 7" $
+        (7 :: Term) @?= IntTerm 7,
+      testCase "Num (+) builds '+' compound" $
+        ((var "X" + int 1) :: Term)
+          @?= CompoundTerm (Unqualified "+") [VarTerm "X", IntTerm 1],
+      testCase "Num (-) builds '-' compound" $
+        ((var "X" - int 1) :: Term)
+          @?= CompoundTerm (Unqualified "-") [VarTerm "X", IntTerm 1],
+      testCase "Num (*) builds '*' compound" $
+        ((var "X" * int 2) :: Term)
+          @?= CompoundTerm (Unqualified "*") [VarTerm "X", IntTerm 2],
+      testCase "negate builds unary '-' compound" $
+        negate (var "X") @?= CompoundTerm (Unqualified "-") [VarTerm "X"],
+      testCase "abs builds 'abs' compound" $
+        abs (var "X") @?= CompoundTerm (Unqualified "abs") [VarTerm "X"],
+      testCase "signum builds 'sign' compound" $
+        signum (var "X") @?= CompoundTerm (Unqualified "sign") [VarTerm "X"],
+      -- Prefixed operators that bypass the Num machinery.
+      testCase "(.+) (.-) (.*) (./) build the expected compounds" $
+        [var "X" .+ int 1, var "X" .- int 1, var "X" .* int 2, var "X" ./ int 2]
+          @?= [ CompoundTerm (Unqualified "+") [VarTerm "X", IntTerm 1],
+                CompoundTerm (Unqualified "-") [VarTerm "X", IntTerm 1],
+                CompoundTerm (Unqualified "*") [VarTerm "X", IntTerm 2],
+                CompoundTerm (Unqualified "/") [VarTerm "X", IntTerm 2]
+              ],
+      -- Comparison sugar: each produces the surface operator name
+      -- (note '.<=' renders as '=<', matching Prolog convention).
+      testCase "comparison sugar builds correct compound names" $
+        [ var "X" .< var "Y",
+          var "X" .<= var "Y",
+          var "X" .> var "Y",
+          var "X" .>= var "Y",
+          var "X" .== var "Y"
+        ]
+          @?= [ CompoundTerm (Unqualified "<") [VarTerm "X", VarTerm "Y"],
+                CompoundTerm (Unqualified "=<") [VarTerm "X", VarTerm "Y"],
+                CompoundTerm (Unqualified ">") [VarTerm "X", VarTerm "Y"],
+                CompoundTerm (Unqualified ">=") [VarTerm "X", VarTerm "Y"],
+                CompoundTerm (Unqualified "==") [VarTerm "X", VarTerm "Y"]
+              ]
     ]
 
 integrationTests :: TestTree
