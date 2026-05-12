@@ -32,6 +32,7 @@ what is planned.
 ## Type checker
 
 - [x] Gradual type system core (see [type-system.md](reference/type-system.md))
+- [ ] Bounded polymorphism
 - [ ] Simple type refinements via type predicates
 - [ ] More advanced type refinements
 
@@ -56,6 +57,7 @@ what is planned.
 
 - [x] Prolog-style queries
 - [x] Live sessions
+- [ ] Type and info queries
 - [ ] Tracing
 
 ## Testing
@@ -77,3 +79,8 @@ what is planned.
 - [ ] Aggregates, as described in Sneyers, Van Weert, Schrijvers,
       Demoen, 2007. *Aggregates in CHR*.
 - [ ] Rule priorities
+
+## Tooling
+
+- [ ] Formatter
+- [ ] LSP server
