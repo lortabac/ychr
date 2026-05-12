@@ -582,11 +582,15 @@ foo(X) <=> R is size(X).   %% Error: no matching overload
 
 ## Bounded Polymorphism
 
-A function declaration may carry a `requiring` clause that constrains its
-type variables by *required signatures* on other functions. A use of
-the bounded function is well-typed only at substitutions of those
-type variables for which every required signature is satisfied by an
-existing declaration.
+A function or constraint declaration may carry a `requiring` clause
+that constrains its type variables by *required signatures* on other
+functions. A use of the bounded declaration is well-typed only at
+substitutions of those type variables for which every required
+signature is satisfied by an existing declaration.
+
+The text below describes the mechanism in terms of functions.
+§Bounded constraints collects the adaptations needed for
+`:- chr_constraint` declarations.
 
 Bounded polymorphism gives YCHR a form of ad-hoc polymorphism without
 elaboration. The checker verifies that the required operations exist
@@ -638,13 +642,22 @@ ambient in the extension's checking context exactly as they are in
 the original module's checking context. No additional declaration is
 needed in the extending module.
 
+A `:- chr_constraint` declaration may also carry a `requiring`
+clause. The clause shape is identical:
+
+```prolog
+:- chr_constraint sorted(list(T)) requiring '<'(T, T) -> bool.
+```
+
+Bounds always name *functions*, never constraints.
+
 ### Type-variable scoping
 
-Type variables in a `requiring` clause refer to the same variables as in
-the enclosing function signature, with the same implicit
-quantification. Every variable mentioned in the clause must also
-appear in the function's primary signature. A variable that appears
-only on the clause side is rejected as
+Type variables in a `requiring` clause refer to the same variables as
+in the enclosing declaration's signature (function or constraint),
+with the same implicit quantification. Every variable mentioned in
+the clause must also appear in the declaration's primary signature.
+A variable that appears only on the clause side is rejected as
 `unbound_bound_variable`.
 
 The bound clause does not introduce its own quantifier; the bound
@@ -660,15 +673,16 @@ lookup per bound.
 ### Bound graph
 
 The *bound graph* of a program has one vertex per declared function
-and an edge from `f` to `g` whenever `g` appears in `f`'s
-`requiring` clause. The bound graph must be acyclic. A cycle is
-rejected at declaration time as `bound_cycle`.
+and constraint, and an edge from `f` to `g` whenever `g` appears in
+`f`'s `requiring` clause. Edges always point at functions. The
+bound graph must be acyclic. A cycle is rejected at declaration time
+as `bound_cycle`.
 
 ### Instances
 
-A *substitution* σ for a bounded function is a mapping from each
-type variable of the declaration to a (possibly polymorphic) type. σ
-is **admissible** when, for every bound signature
+A *substitution* σ for a bounded declaration is a mapping from each
+of its type variables to a (possibly polymorphic) type. σ is
+**admissible** when, for every bound signature
 `gᵢ(σᵢ₁, ..., σᵢₖᵢ) -> ρᵢ` in the clause, the substituted form
 `gᵢ(σ(σᵢ₁), ..., σ(σᵢₖᵢ)) -> σ(ρᵢ)` is consistent with at least one
 declared signature of `gᵢ` (after fresh-renaming that signature's
@@ -739,6 +753,10 @@ the information to fail is not a failure.
 
 ### Equation checking
 
+This subsection describes the rule for function equations. The
+analogous rule for constraints — head-only ambient signatures during
+rule type-checking — is described in §Bounded constraints.
+
 Equations of a bounded function are checked under an extended
 declaration context: each bound signature `gᵢ(...) -> ρᵢ` is treated
 as if it were an additional declared signature of `gᵢ`, available
@@ -788,7 +806,124 @@ emit. The bound's "evidence" is purely a checker-time enlargement of
 the available signatures; nothing flows from the bound into the
 emitted code.
 
+### Bounded constraints
+
+A bounded `:- chr_constraint` declaration uses the same syntax,
+§Type-variable scoping rules, §Bound graph membership, and §Instances
+semantics as a bounded function. The differences are confined to two
+places: where use-site checking discharges, and what replaces
+§Equation checking.
+
+#### Use sites
+
+A bounded constraint emits a bound check at every position in which
+it occurs: **body tell** and **rule head occurrence**. Each
+occurrence allocates its own fresh substitution σ for the
+constraint's declared type variables (per §Use-site checking step 2)
+and discharges the bound as a residual constraint over that σ. There
+is no return type, so step 5 of §Use-site checking is dropped.
+
+- **Body tell** `... <=> ..., sorted(L).` — σ is refined by unifying
+  the tell's argument expressions against the constraint's declared
+  argument types (§Use-site checking step 3). The bound discharges
+  whenever σ becomes ground enough to identify (or rule out) a
+  consistent declared signature.
+- **Head occurrence** `sorted(L) <=> ...` — σ is refined by unifying
+  the head pattern against the constraint's declared argument types,
+  which establishes the types of the head's variables (§Sources of
+  Type Information §1). Whether σ later becomes ground enough to
+  discharge the bound depends on what other heads, guards, and body
+  goals in the same rule contribute through those variables.
+
+Each occurrence — including multiple occurrences of the same bounded
+constraint in one rule — gets its own fresh type variables.
+Order-independence and the silent-success-on-partial-σ behavior carry
+over verbatim.
+
+#### Rule-level ambient signatures (replacing §Equation checking)
+
+Constraints have no equations. The analogous "implementation site"
+is the set of rules whose **head** mentions the bounded constraint.
+While type-checking such a rule, every bound carried by a bounded
+constraint in the rule's head contributes its required signatures to
+the ambient declaration context for the duration of that rule's
+checking. Body tells of the same bounded constraint do **not**
+contribute — body tells are use sites that discharge the bound, not
+implementations that assume it. The asymmetry mirrors §Equation
+checking. For functions: equation body sees the bound as ambient,
+call site discharges it. For constraints: rule head sees the bound
+as ambient, body tell discharges it.
+
+Type checking operates on the desugared AST, where every rule has
+the uniform shape `kept + removed + guards + body`. "Head" here
+means the constraints in `kept ∪ removed`; both kept and removed
+head constraints contribute their bounds as ambient. Guards and body
+goals do not.
+
+Without this rule, a sensible rule like
+
+```prolog
+sorted([X, Y | Rest]) <=> X < Y | sorted([Y | Rest]).
+```
+
+would force `T` to a concrete instance at the `X < Y` guard call,
+defeating the polymorphic declaration of `sorted`. With the rule,
+`X < Y` resolves against the ambient bound `<(T, T) -> bool` and
+remains polymorphic in `T`.
+
+When the bounded constraint occurs in both head and body of the same
+rule (as in the recursive `sorted` case above), the body occurrence
+is still a use site and discharges its own bound. The discharge is
+trivially satisfied because the head occurrence has contributed the
+same bound's signatures as ambient.
+
+When multiple bounded constraints appear in the same rule's head, all
+their bound signatures are ambient; the ambient set is the union.
+Each head occurrence's type variables are freshly allocated (see
+§Use sites), so two occurrences of the same bounded constraint
+contribute structurally identical bounds at distinct variable
+identities and cannot collide.
+
+#### Worked example — polymorphic `sorted`
+
+```prolog
+:- function ('<'(int, int) -> bool), ('<'(float, float) -> bool).
+:- chr_constraint sorted(list(T)) requiring '<'(T, T) -> bool.
+
+sorted([]) <=> true.
+sorted([_]) <=> true.
+sorted([X, Y | Rest]) <=> X < Y | sorted([Y | Rest]).
+```
+
+Rule checking: each rule's head mentions `sorted`, so the bound's
+ambient signature `<(T, T) -> bool` is in scope. The third rule's
+guard `X < Y` resolves through the ambient bound and types as `bool`;
+the body tell `sorted([Y | Rest])` is a use site of `sorted` and
+discharges the bound at the same σ — trivially consistent because the
+bound's signatures are ambient.
+
+Use site `sorted([1, 2, 3])` (in another rule's body, or as a
+top-level goal): σ = (T := int); the substituted bound
+`<(int, int) -> bool` is consistent with the declared signature.
+
+Use site `sorted(["a", "b"])`: σ = (T := string); no consistent
+declared signature; error `bound_unsatisfied`.
+
+Use site `sorted(L)` where `L : list(any)` or `L : list(α)` with `α`
+free: σ leaves `T` partial; the bound succeeds silently per the
+gradual guarantee.
+
+A later module that declares `<(string, string) -> bool` automatically
+extends the admissible instance set of `sorted` — no edit to
+`sorted`'s declaration required. This is the open-set property of
+bounded polymorphism at the constraint level.
+
 ### Coexistence with multi-signature overloading
+
+Multi-signature overloading is currently only available for
+functions; the coexistence rules below apply to function declarations
+only. If multi-signature constraint declarations are added in the
+future, the same one-form-or-the-other rule will apply.
 
 Bounded signatures and the existing multi-signature form (see
 §Signature Overloading) coexist. A given declaration uses one form
@@ -820,10 +955,12 @@ by the addition of bounded polymorphism.
 ### Errors
 
 Bounded polymorphism introduces five new error codes (final numbers
-assigned in the type-system error range during implementation):
+assigned in the type-system error range during implementation). The
+first four apply uniformly to functions and constraints; the fifth
+concerns `:- extend_function_type`, which has no constraint analog:
 
 - **`unbound_bound_variable`** — a type variable appears in a `requiring`
-  clause but not in the function's primary signature.
+  clause but not in the enclosing declaration's primary signature.
 - **`unknown_bound_function`** — a `requiring` clause references a
   function that has not been declared. Function identity is
   name-plus-arity, so `requiring foo(int, int) -> bool` when only
@@ -843,7 +980,10 @@ assigned in the type-system error range during implementation):
 
 No new error code is introduced for the equation-checking path;
 equations either type-check under the enlarged context or fail with
-existing error codes.
+existing error codes. Likewise, no new error code is introduced for
+the constraint case: the existence check, cycle detection, and
+unbound-variable check are structurally identical to the function
+case and share their error codes.
 
 ### Worked examples
 
@@ -959,6 +1099,15 @@ The semi-formal paper-proof methodology described in §Soundness
 extends straightforwardly: bound checking is itself expressed as
 ordinary use-site overload resolution, and inherits those rules'
 confluence and gradual properties.
+
+The same properties hold for bounded constraints. No new soundness
+argument is required: rule-level ambient signatures are a structural
+mirror of equation-level ambient signatures, and the use-site
+mechanism is shared. The union of multiple bounded constraints'
+ambient signatures within a single rule is sound because each
+occurrence's type variables are freshly allocated per rule
+(§Use sites), so contributed signatures cannot collide on shared
+variable identities.
 
 
 ## Extensibility
