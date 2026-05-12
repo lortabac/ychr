@@ -3,21 +3,26 @@
 
 module YCHR.RunTest (tests) where
 
+import Control.Exception (SomeException, fromException, try)
 import Data.Foldable (toList)
+import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Effectful (Eff, (:>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import YCHR.Display (displayMsg)
 import YCHR.Run
   ( CompiledProgram (..),
     ConstraintType,
+    Error (..),
     Value (..),
     compileModules,
     equal,
     newVar,
     resolveQueryConstraint,
     runProgramWithGoal,
+    runProgramWithQuery,
     tellConstraint,
     toSessionInput,
     withCHR,
@@ -42,6 +47,7 @@ tests =
     [ leqTests,
       fibTests,
       visibilityTests,
+      queryErrorTests,
       unicodeTests,
       arityOverloadTests
     ]
@@ -297,6 +303,97 @@ visibilityTests =
         case resolveQueryConstraint cp q of
           Right _ -> pure ()
           Left err -> assertFailure $ "Should succeed with qualification: " ++ err
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Query-time error paths
+-- ---------------------------------------------------------------------------
+--
+-- 'visibilityTests' above already covers the @Left@/@Right@ split for
+-- 'resolveQueryConstraint'. The cases below pin the /message format/ of
+-- each error variant — useful because the strings are user-visible
+-- when goal resolution fails, and they're built by hand-rolled
+-- 'intercalate'/concat logic that doesn't have its own tests.
+
+leftMsg :: Either String b -> IO String
+leftMsg (Left msg) = pure msg
+leftMsg (Right _) = assertFailure "expected Left, got Right"
+
+queryErrorTests :: TestTree
+queryErrorTests =
+  testGroup
+    "Query errors"
+    [ testCase "unknown unqualified constraint message" $ do
+        cp <- compileOrFail [("pub.chr", exportedSource)]
+        let q = Constraint (Unqualified "nope") [VarTerm "X"]
+        msg <- leftMsg (resolveQueryConstraint cp q)
+        -- "Unknown constraint: name/arity"
+        assertBool ("expected 'Unknown constraint' in: " ++ msg) $
+          "Unknown constraint" `isInfixOf` msg
+        assertBool ("expected 'nope/1' in: " ++ msg) $
+          "nope/1" `isInfixOf` msg,
+      testCase "unknown qualified constraint message names the module:name" $ do
+        cp <- compileOrFail [("pub.chr", exportedSource)]
+        let q = Constraint (Qualified "pub" "internal") [VarTerm "X"]
+        msg <- leftMsg (resolveQueryConstraint cp q)
+        -- "Constraint not exported: pub:internal/1"
+        assertBool ("expected 'not exported' in: " ++ msg) $
+          "not exported" `isInfixOf` msg
+        assertBool ("expected 'pub:internal/1' in: " ++ msg) $
+          "pub:internal/1" `isInfixOf` msg,
+      testCase "ambiguous unqualified message lists every exporting module" $ do
+        cp <-
+          compileOrFail
+            [ ("a.chr", ambiguousSourceA),
+              ("b.chr", ambiguousSourceB)
+            ]
+        let q = Constraint (Unqualified "foo") [VarTerm "X"]
+        msg <- leftMsg (resolveQueryConstraint cp q)
+        assertBool ("expected 'Ambiguous' in: " ++ msg) $
+          "Ambiguous" `isInfixOf` msg
+        assertBool ("expected 'modA' in: " ++ msg) $ "modA" `isInfixOf` msg
+        assertBool ("expected 'modB' in: " ++ msg) $ "modB" `isInfixOf` msg,
+      testCase "runProgramWithGoal: malformed goal throws ParseError" $ do
+        cp <- compileOrFail [("pub.chr", exportedSource)]
+        outcome <-
+          try @SomeException
+            (runProgramWithGoal cp Map.empty "this is not a valid goal")
+        case outcome of
+          Left exc -> case fromException exc :: Maybe Error of
+            Just (ParseError _ _) -> pure ()
+            Just other ->
+              assertFailure $
+                "expected ParseError, got Error:\n" ++ displayMsg other
+            Nothing ->
+              assertFailure $
+                "expected ParseError, got non-Error exception: " ++ show exc
+          Right _ -> assertFailure "expected exception, got success",
+      testCase "runProgramWithGoal: undeclared constraint surfaces" $ do
+        -- The goal compiles syntactically but its head isn't in the
+        -- export map; 'runProgramWithGoalDSL' calls 'fail' on the
+        -- resolution error, which surfaces as an IOError.
+        cp <- compileOrFail [("pub.chr", exportedSource)]
+        outcome <-
+          try @SomeException (runProgramWithGoal cp Map.empty "nope(X)")
+        case outcome of
+          Left _ -> pure ()
+          Right _ ->
+            assertFailure "expected an exception for unknown constraint",
+      testCase "runProgramWithQuery: parse error in one goal aborts the whole query" $ do
+        cp <- compileOrFail [("pub.chr", exportedSource)]
+        outcome <-
+          try @SomeException
+            (runProgramWithQuery cp Map.empty "visible(X), !!bogus!!.")
+        case outcome of
+          Left exc -> case fromException exc :: Maybe Error of
+            Just (ParseError _ _) -> pure ()
+            Just other ->
+              assertFailure $
+                "expected ParseError, got Error:\n" ++ displayMsg other
+            Nothing ->
+              assertFailure $
+                "expected ParseError, got non-Error exception: " ++ show exc
+          Right _ -> assertFailure "expected exception, got success"
     ]
 
 -- ---------------------------------------------------------------------------

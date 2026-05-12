@@ -3,6 +3,7 @@
 
 module YCHR.Runtime.InterpreterTest (tests) where
 
+import Control.Exception (try)
 import Data.Foldable (toList)
 import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
@@ -11,7 +12,7 @@ import Effectful.State.Static.Local (State, evalState)
 import Effectful.Writer.Static.Local (Writer, runWriter)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Runtime.Error (CallStack)
+import YCHR.Runtime.Error (CallStack, RuntimeErrorThrown (..))
 import YCHR.Runtime.History (PropHistory, runPropHistory)
 import YCHR.Runtime.Interpreter
   ( HostCallFn (..),
@@ -36,7 +37,124 @@ tests =
       evalDeepTests,
       typePredicateTests,
       univTests,
-      bindParamsTests
+      bindParamsTests,
+      errorPathTests
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Runtime-error trigger tests
+-- ---------------------------------------------------------------------------
+
+-- | Run a single-procedure VM program and expect a 'RuntimeErrorThrown'.
+-- Fails the test if the program completes normally or throws a different
+-- exception type. Returns the message field for further assertion.
+expectRuntimeError :: Program -> Name -> [Value] -> IO String
+expectRuntimeError prog entry args = do
+  outcome <- try @RuntimeErrorThrown (interpret prog Map.empty entry args)
+  case outcome of
+    Left (RuntimeErrorThrown msg _stack) -> pure msg
+    Right _ -> assertFailure "expected RuntimeErrorThrown, got a value"
+
+singleProc :: Name -> [Name] -> [Stmt] -> Program
+singleProc procName params body =
+  Program
+    { numTypes = 0,
+      typeNames = [],
+      numRules = 0,
+      ruleNames = [],
+      procedures = [Procedure procName params body]
+    }
+
+errorPathTests :: TestTree
+errorPathTests =
+  testGroup
+    "runtime error paths"
+    [ testCase "BFromVal on a non-bool value reports a type mismatch" $ do
+        -- @BFromVal (Lit (IntLit 42))@ wraps an int in boolean position; the
+        -- runtime check at 'evalBoolExpr (BFromVal _)' must catch it. See
+        -- Interpreter.hs:413,534.
+        let prog =
+              singleProc
+                "p"
+                []
+                [ BoolExprStmt (BFromVal (Lit (IntLit 42))),
+                  Return (Lit (BoolLit False))
+                ]
+        msg <- expectRuntimeError prog "p" []
+        assertBool ("expected 'expected boolean' in: " ++ msg) $
+          "expected boolean" `isInfixOf` msg,
+      testCase "Break with a label no enclosing Foreach catches escapes" $ do
+        -- A top-level @Break "missing"@ propagates up to 'callProc',
+        -- which reports it as 'callProc: uncaught Break missing'. See
+        -- Interpreter.hs:184-185.
+        let prog =
+              singleProc
+                "p"
+                []
+                [Break (Label "missing"), Return (Lit (BoolLit False))]
+        msg <- expectRuntimeError prog "p" []
+        assertBool ("expected 'uncaught Break' in: " ++ msg) $
+          "uncaught Break" `isInfixOf` msg
+        assertBool ("expected label 'missing' in: " ++ msg) $
+          "missing" `isInfixOf` msg,
+      testCase "Continue with a label no enclosing Foreach catches escapes" $ do
+        let prog =
+              singleProc
+                "p"
+                []
+                [Continue (Label "nope"), Return (Lit (BoolLit False))]
+        msg <- expectRuntimeError prog "p" []
+        assertBool ("expected 'uncaught Continue' in: " ++ msg) $
+          "uncaught Continue" `isInfixOf` msg
+        assertBool ("expected label 'nope' in: " ++ msg) $
+          "nope" `isInfixOf` msg,
+      testCase "CallExpr targeting an unknown procedure errors with its name" $ do
+        -- 'callProc' raises 'callProc: unknown procedure <name>' when the
+        -- procedure map has no entry for the requested name; see
+        -- Interpreter.hs:170. The compiler is supposed to make this
+        -- unreachable, but the runtime guard is what catches a regression.
+        let prog =
+              singleProc
+                "p"
+                []
+                [ ExprStmt (CallExpr "no_such_proc" []),
+                  Return (Lit (BoolLit False))
+                ]
+        msg <- expectRuntimeError prog "p" []
+        assertBool ("expected 'unknown procedure' in: " ++ msg) $
+          "unknown procedure" `isInfixOf` msg
+        assertBool ("expected the missing name in: " ++ msg) $
+          "no_such_proc" `isInfixOf` msg,
+      testCase "evaluating an unbound named variable errors with its name" $ do
+        -- 'evalValExpr' on @Var "missing"@ when the env has no binding
+        -- raises 'evalValExpr: unbound variable missing'. See
+        -- Interpreter.hs:330.
+        let prog =
+              singleProc
+                "p"
+                []
+                [Return (Var "missing")]
+        msg <- expectRuntimeError prog "p" []
+        assertBool ("expected 'unbound variable' in: " ++ msg) $
+          "unbound variable" `isInfixOf` msg
+        assertBool ("expected the missing name in: " ++ msg) $
+          "missing" `isInfixOf` msg,
+      testCase "EvalDeep of an unbound fresh variable returns the variable itself" $ do
+        -- Pinning a non-error: deep-dereferencing a fresh logical variable
+        -- doesn't fail; it returns the unbound 'VVar'. The behavior matters
+        -- because it's how query bindings surface free variables; an
+        -- accidental change to 'error on unbound' would be a regression.
+        let prog =
+              singleProc
+                "p"
+                []
+                [ LetVal "v" NewVar,
+                  Return (EvalDeep (Var "v"))
+                ]
+        result <- interpret prog Map.empty "p" []
+        case result of
+          VVar _ -> pure ()
+          _ -> assertFailure "expected VVar, got something else"
     ]
 
 -- ---------------------------------------------------------------------------
