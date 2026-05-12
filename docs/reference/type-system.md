@@ -437,11 +437,51 @@ its context. If the lambda appears where a `fun(int, int) -> bool` is
 expected, then `X : int`, `Y : int`, and `expr` must be consistent
 with `bool`.
 
+A lambda cannot carry a `requiring` clause: `requiring` attaches only
+to `:- function` and `:- open_function` declarations. A lambda whose
+body uses bounded operations is type-checked against its expected
+function type, and any unresolved bounds discharge through the same
+residual-constraint mechanism that handles function references
+(§Function references).
+
 ### Function references
 
-A reference `fun name/arity` has the function type derived from the
-function's declared signature. If `double(int) -> int` is declared,
-then `fun double/1` has type `fun(int) -> int`.
+A reference `fun name/arity` is type-checked against the expected
+function type at its use site. The checker instantiates the
+referenced function's declared signature with fresh unification
+variables, unifies it with the expected type, and — if the
+referenced function carries a `requiring` clause — emits a bound
+check at the resulting substitution (§Bounded Polymorphism, §Use-site
+checking). The bound check is a residual constraint: it is solved
+together with the surrounding equation's other type constraints.
+
+If `double(int) -> int` is declared (no bound), then `fun double/1`
+has type `fun(int) -> int` at every use site.
+
+If `:- function max(T, T) -> T requiring '>'(T, T) -> bool.` is
+declared, `fun max/2` is well-typed wherever the surrounding context
+allows the bound to discharge:
+
+- In `apply2(fun max/2, 1, 2)`, the args constrain the substitution
+  to `T := int`; the residual bound `'>'(int, int) -> bool` resolves
+  against the declared signature.
+- In `apply2(fun max/2, "a", "b")`, the same mechanism produces
+  `'>'(string, string) -> bool`, which has no consistent declared
+  signature; error `bound_unsatisfied`.
+- In `apply2(fun max/2, X, Y)` where `X` and `Y` carry no concrete
+  type information, the substitution leaves `T` free; the bound
+  succeeds silently per the gradual guarantee, exactly as ordinary
+  overload resolution does under unresolved arguments.
+
+To export a polymorphic value that refers to a bounded function and
+propagates the bound to its callers, the enclosing declaration must
+hoist the bound onto its own signature with a `requiring` clause of
+its own (mirroring how a Haskell signature must include the
+constraint when partially applying an overloaded operator). Without
+the hoisted bound, the enclosing declaration's type-checking
+discharges the bound silently, and the bound is not visible to
+callers — the same gradual-typing tradeoff that applies elsewhere in
+this system.
 
 ### `call`
 
@@ -538,6 +578,387 @@ size(S) | string(S) -> string_length(S).
 foo(X) <=> R is size(X).   %% Error: no matching overload
                             %% (color is not int or string)
 ```
+
+
+## Bounded Polymorphism
+
+A function declaration may carry a `requiring` clause that constrains its
+type variables by *required signatures* on other functions. A use of
+the bounded function is well-typed only at substitutions of those
+type variables for which every required signature is satisfied by an
+existing declaration.
+
+Bounded polymorphism gives YCHR a form of ad-hoc polymorphism without
+elaboration. The checker verifies that the required operations exist
+at the inferred type, but never modifies the program or threads any
+runtime evidence. Dispatch remains dynamic: the runtime selects a
+matching equation by pattern matching, exactly as it does for
+unbounded functions.
+
+The "class" abstracted over is implicit. There is no `:- class`
+declaration and no `:- instance` declaration. The class name is the
+required-function name itself: `requiring '>'(T, T) -> bool` plays the
+role that `Ord T` plays in classical type-class systems, and the
+declared signatures of `>` play the role that `Ord` instances play.
+
+### Declaration syntax
+
+A function declaration may carry an optional `requiring` clause whose body
+is a comma-separated list of *bound signatures* of the form
+`name(τ₁, ..., τₙ) -> τᵣ`:
+
+```prolog
+:- function max(T, T) -> T requiring '>'(T, T) -> bool.
+
+:- function clamp(T, T, T) -> T requiring
+    '>'(T, T) -> bool,
+    '<'(T, T) -> bool.
+
+:- function lookup(K, list(pair(K, V))) -> option(V) requiring
+    '=='(K, K) -> bool.
+```
+
+The `requiring` clause is allowed on `:- function` declarations carrying a
+single signature, and on `:- open_function` declarations. It is *not*
+allowed on the comma-separated multi-signature form (see Coexistence
+below) and *not* allowed on `:- extend_function_type`.
+
+A bounded `:- open_function` already has an extensibility story:
+its instance set is determined by what its bound-named functions are
+declared for. To extend the set of types at which a bounded open
+function works, declare new instances of its bound-named functions —
+not new ground signatures of the bounded function itself.
+Consequently `:- extend_function_type` cannot target a bounded open
+function: doing so is rejected as `extend_type_on_bounded_function`.
+
+Equation extensions via `:- extend_function` *are* allowed on bounded
+open functions. The new equation is type-checked under the same bound
+as the original equations: the bound's required signatures are
+ambient in the extension's checking context exactly as they are in
+the original module's checking context. No additional declaration is
+needed in the extending module.
+
+### Type-variable scoping
+
+Type variables in a `requiring` clause refer to the same variables as in
+the enclosing function signature, with the same implicit
+quantification. Every variable mentioned in the clause must also
+appear in the function's primary signature. A variable that appears
+only on the clause side is rejected as
+`unbound_bound_variable`.
+
+The bound clause does not introduce its own quantifier; the bound
+signatures are not first-class types and cannot be referenced
+elsewhere.
+
+A `requiring` clause containing no type variables at all is
+permitted. Use-site checking runs with `σ` as the identity, so the
+bound is effectively a one-shot check that the named declarations
+exist; it adds no per-call cost beyond a single overload-resolution
+lookup per bound.
+
+### Bound graph
+
+The *bound graph* of a program has one vertex per declared function
+and an edge from `f` to `g` whenever `g` appears in `f`'s
+`requiring` clause. The bound graph must be acyclic. A cycle is
+rejected at declaration time as `bound_cycle`.
+
+### Instances
+
+A *substitution* σ for a bounded function is a mapping from each
+type variable of the declaration to a (possibly polymorphic) type. σ
+is **admissible** when, for every bound signature
+`gᵢ(σᵢ₁, ..., σᵢₖᵢ) -> ρᵢ` in the clause, the substituted form
+`gᵢ(σ(σᵢ₁), ..., σ(σᵢₖᵢ)) -> σ(ρᵢ)` is consistent with at least one
+declared signature of `gᵢ` (after fresh-renaming that signature's
+own type variables).
+
+The relevant notion of "consistent with" is the one defined in
+§Consistency, extended with the type-variable rules of §Type
+variables and instantiation: structural consistency on type
+constructors, the absorbing rules for `any`, and unification of
+type variables under the standard "concrete types bind, `any` does
+not" discipline. Both the substituted bound and the (fresh-renamed)
+candidate signature may contain free variables; consistency between
+them is unification under those rules. As consequences:
+
+- A declared signature of `gᵢ` that uses `any` is consistent with
+  every shape, so it admits every substitution. Declaring
+  `g(any, ..., any) -> any` opts every caller bounded by `g` out of
+  bound discipline for `g`.
+- Type variables in declared signatures of `gᵢ` are quantified per
+  signature and freshly renamed at each consistency check.
+- The instance set is *not* materialized by the checker. It is a
+  conceptual set used to define when a use site is well-typed.
+
+### Use-site checking
+
+When the checker encounters a call `f(e₁, ..., eₙ)` to a bounded
+function with parametric signature `f(τ₁, ..., τₙ) -> τᵣ` and bound
+clause `g₁(...) -> ρ₁, ..., gₘ(...) -> ρₘ`:
+
+1. Compute argument types `A₁, ..., Aₙ` from the call's expressions.
+2. Instantiate `f`'s declared type variables with fresh unification
+   variables, yielding a substitution σ.
+3. For each `i`, check `Aᵢ ~ σ(τᵢ)` and propagate.
+4. For each bound `gⱼ(σⱼ₁, ..., σⱼₖⱼ) -> ρⱼ`, check whether at
+   least one declared signature of `gⱼ` is consistent with the
+   substituted bound `gⱼ(σ(σⱼ₁), ..., σ(σⱼₖⱼ)) -> σ(ρⱼ)`. This is an
+   *existence check*, not a propagating overload resolution: it
+   asks "does there exist a substitution under which the candidate
+   declared signature and the substituted bound are consistent (per
+   §Consistency, extended with the rules of §Type variables and
+   instantiation)?" Any unifier that the check produces is
+   discarded; σ is not modified by a successful bound check, even
+   when exactly one candidate matches. If no declared signature of
+   `gⱼ` is consistent with the substituted bound, the checker
+   reports `bound_unsatisfied`.
+
+   When this check happens during the equation checking of an
+   enclosing bounded function, "declared signature" includes the
+   ambient signatures contributed by the enclosing function's bound
+   (see §Equation checking).
+5. The call's result type is `σ(τᵣ)`.
+
+Bound checks are emitted as residual type constraints, not resolved
+inline with the surrounding statements. They are solved together with
+the equation's other type constraints by the order-independent solver
+(§Type Checking Procedure), so each bound discharges as soon as σ
+becomes ground enough to identify (or rule out) a consistent declared
+signature. Because a bound check does not modify σ on success
+(step 4), the discharge order of bounds relative to other constraints
+cannot affect the final type assignment — the order-independence
+claim holds without auxiliary argument.
+
+If a bound's substitution is still partial at end of solving — that
+is, the bound contains free type variables that no other constraint
+pinned down — the bound succeeds silently per the gradual guarantee.
+This matches the rest of the gradual-typing story: a check that lacks
+the information to fail is not a failure.
+
+### Equation checking
+
+Equations of a bounded function are checked under an extended
+declaration context: each bound signature `gᵢ(...) -> ρᵢ` is treated
+as if it were an additional declared signature of `gᵢ`, available
+*only while checking the equations of this function*. The checker
+then runs the standard equation-checking procedure described in
+§Type Checking Procedure.
+
+Concretely, for each equation:
+
+1. Fresh unification variables are allocated for each declared type
+   variable of the function.
+2. The equation's parameters are typed under the substituted parameter
+   types and the equation's RHS under the substituted return type.
+3. Calls to bound-named functions inside the equation see the bound's
+   signatures as available declarations and resolve against them
+   (alongside any other declared signatures of those functions).
+   The ambient signature's type variables are *not* fresh-renamed
+   at each call: they share identity with the enclosing function's
+   declared type variables (the same fresh variables allocated in
+   step 1). Fresh renaming applies only to the *other* declared
+   signatures of `gᵢ` participating in resolution.
+4. Calls to non-bound functions resolve through their ordinary
+   declared signatures.
+
+The ambient signatures introduced by the bound are visible to *every*
+overload-resolution and bound-check performed while checking this
+function's equations — including the use-site bound checks triggered
+by calls to other bounded functions in the body. In other words,
+"declared signature" in §Use-site checking is to be read as "declared
+signature, plus any ambient signature contributed by the enclosing
+equation's bound." This ensures that a bounded function whose body
+calls another bounded function at its own type variables remains
+polymorphic: the inner bound check sees the ambient sig and does not
+force the outer type variables to a concrete instance.
+
+If an equation fails to type-check under this extended context, the
+failure is reported with the same error code that the ordinary
+checker would have produced (typically a constructor mismatch or
+`no_matching_overload`). No new error code is introduced for
+equation-level failures; the bound's contribution to the equation
+context simply enlarges the set of valid programs.
+
+This mirrors how a type-class method body is checked under its class
+constraints in classical formulations, but without producing the
+dictionary-passing translation that classical formulations would
+emit. The bound's "evidence" is purely a checker-time enlargement of
+the available signatures; nothing flows from the bound into the
+emitted code.
+
+### Coexistence with multi-signature overloading
+
+Bounded signatures and the existing multi-signature form (see
+§Signature Overloading) coexist. A given declaration uses one form
+or the other, never both:
+
+- The multi-signature form `(f(int) -> int), (f(float) -> float)`
+  enumerates instances explicitly. It is the right tool when the
+  instance set is small, fixed, and unrelated, or when the
+  implementation differs perceptibly per instance.
+- The bounded form `f(T) -> T requiring ...` describes an open instance
+  set implicitly. It is the right tool when the instance set is
+  large, growing (e.g., users may declare new instances of `>` after
+  importing `max`), or naturally captured by an operation.
+
+The two forms have overlapping expressive power for finite,
+enumerated instance sets, but their checker behavior differs:
+
+- Multi-signature: each declared signature is checked independently
+  at use sites; any equation that types under any one signature is
+  accepted.
+- Bounded: the function has a single parametric signature; equations
+  are checked once, parametrically, with the bound enlarging the
+  available context; use sites verify the bound at the inferred
+  substitution.
+
+The semantics of existing multi-signature declarations is unchanged
+by the addition of bounded polymorphism.
+
+### Errors
+
+Bounded polymorphism introduces five new error codes (final numbers
+assigned in the type-system error range during implementation):
+
+- **`unbound_bound_variable`** — a type variable appears in a `requiring`
+  clause but not in the function's primary signature.
+- **`unknown_bound_function`** — a `requiring` clause references a
+  function that has not been declared. Function identity is
+  name-plus-arity, so `requiring foo(int, int) -> bool` when only
+  `foo/3` is declared (or no `foo` at all) raises this error.
+- **`bound_cycle`** — the bound graph (see Bound graph) contains a
+  cycle of any length: a function that requires itself directly, or
+  any longer chain of `requiring`-clause edges that returns to its
+  starting function.
+- **`bound_unsatisfied`** — a use site of a bounded function infers
+  argument types whose substitution does not satisfy the bound:
+  for some `gⱼ`, no declared signature of `gⱼ` is consistent with
+  the substituted bound.
+- **`extend_type_on_bounded_function`** — `:- extend_function_type`
+  targets a bounded `:- open_function`. The instance set of a
+  bounded open function is determined by its bound's named
+  functions, not by enumerated extensions.
+
+No new error code is introduced for the equation-checking path;
+equations either type-check under the enlarged context or fail with
+existing error codes.
+
+### Worked examples
+
+**Example 1 — Polymorphic `max`.**
+
+```prolog
+:- function ('>'(int, int) -> bool), ('>'(float, float) -> bool).
+:- function max(T, T) -> T requiring '>'(T, T) -> bool.
+
+max(X, Y) | X > Y -> X.
+max(_, Y)         -> Y.
+```
+
+Equation checking: `T` is fresh; `X : T`, `Y : T`. The guard `X > Y`
+calls `>`; the bound provides `>(T, T) -> bool` as an ambient
+signature; the call types as `bool`. The RHS `X : T` matches the
+return type `T`. Both equations check.
+
+Use site `R is max(3, 4)`: σ = (T := int); the substituted bound
+`>(int, int) -> bool` is consistent with the declared signature;
+result type `int`; `R : int`.
+
+Use site `R is max("a", "b")`: σ = (T := string); the substituted
+bound `>(string, string) -> bool` has no consistent declared
+signature; error `bound_unsatisfied`.
+
+**Example 2 — Multi-variable bound.**
+
+```prolog
+:- function ('=='(int, int) -> bool).
+:- function lookup(K, list(pair(K, V))) -> option(V) requiring
+    '=='(K, K) -> bool.
+
+lookup(_, [])                            -> none.
+lookup(K, [pair(K2, V) | _]) | K == K2  -> some(V).
+lookup(K, [_ | Rest])                    -> lookup(K, Rest).
+```
+
+Equations are checked parametrically over `K` and `V`. The recursive
+call `lookup(K, Rest)` is itself a use site; the recursion's σ is
+the same as the outer equation's, so the inner bound is the bound
+under that σ — trivially consistent during equation checking because
+the bound's signatures are ambient.
+
+Use site `R is lookup(3, L)` where `L : list(pair(int, string))`:
+σ = (K := int, V := string); substituted bound
+`==(int, int) -> bool` is consistent with the declared signature;
+result type `option(string)`.
+
+Use site `R is lookup(0.5, M)` where `M : list(pair(float, int))`
+and no `==(float, float) -> bool` has been declared: error
+`bound_unsatisfied` for the substituted bound at K := float.
+
+**Example 3 — Bounded function as a single point of truth.**
+
+```prolog
+:- function ('+'(int, int) -> int).
+:- function double(T) -> T requiring '+'(T, T) -> T.
+
+double(X) -> X + X.
+```
+
+Equation checks parametrically: `X : T`; `X + X` resolves through
+the ambient bound `+(T, T) -> T` to `T`; RHS type `T` matches return
+`T`.
+
+`double(3)` succeeds at σ = (T := int); declared `+(int, int) -> int`
+satisfies the bound. `double("hi")` fails as `bound_unsatisfied`
+because no `+(string, string) -> string` has been declared.
+
+A later module that declares `+(float, float) -> float` automatically
+extends the admissible instance set of `double` — no edit to
+`double`'s declaration is needed. This is the open-set property of
+bounded polymorphism.
+
+### Interaction with `any`
+
+`any` interacts with bounds the same way it interacts with ordinary
+overloading:
+
+- A use site whose argument types are `any` makes σ partial; the
+  bound check succeeds silently and the call's result type
+  substitutes through to `any` or to a fresh variable, exactly as in
+  ordinary overload resolution under unresolved arguments.
+- A bound that names a function with an all-`any` declared signature
+  is satisfied by every substitution: declaring `g(any, ..., any) ->
+  any` opts every caller bounded by `g` out of bound discipline for
+  that specific `g`.
+- A type variable that meets `any` does not bind (per §Type variables
+  and instantiation). A bound depending on such a variable remains
+  unresolved until concrete information arrives, at which point the
+  bound is checked.
+
+### Soundness
+
+Bounded polymorphism preserves the gradual guarantee of §Soundness:
+
+- **Conservativity over signature overloading.** Replacing a bounded
+  declaration with an enumerated multi-signature declaration over
+  the same instance set produces a program with the same set of
+  accepted use sites at those instances.
+- **Conservativity over `any`.** Replacing every type variable in a
+  bounded declaration with `any` (and consequently every bound with
+  the all-`any` form of its named function) produces a program that
+  type-checks unchanged. This is the standard "more `any` never adds
+  errors" property.
+- **No elaboration.** The checker does not modify the AST. The
+  bound is verified at each use site; once verified, no residual
+  evidence is required at runtime, because dispatch is dynamic
+  (pattern matching across equations).
+
+The semi-formal paper-proof methodology described in §Soundness
+extends straightforwardly: bound checking is itself expressed as
+ordinary use-site overload resolution, and inherits those rules'
+confluence and gradual properties.
 
 
 ## Extensibility
