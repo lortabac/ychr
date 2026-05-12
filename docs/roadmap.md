@@ -33,6 +33,7 @@ what is planned.
 
 - [x] Gradual type system core (see [type-system.md](reference/type-system.md))
 - [ ] Simple type refinements via type predicates
+- [ ] More advanced type refinements
 
 ## Backends
 
@@ -48,15 +49,14 @@ what is planned.
 - [x] Constraint store
 - [x] Propagation history
 - [x] Reactivation queue
-- [ ] Introspection capabilities
+- [x] Store introspection capabilities
 - [ ] Meta-programming capabilities
 
 ## REPL
 
 - [x] Prolog-style queries
-- [ ] Store inspection
+- [x] Live sessions
 - [ ] Tracing
-- [ ] Live debugging sessions
 
 ## Testing
 
