@@ -127,6 +127,7 @@ moduleTests =
           rules = [],
           equations = [],
           extensions = [],
+          classExtensions = [],
           exports = Nothing
         }
 
@@ -138,12 +139,12 @@ declarationTests =
         "leq" // 2 @?= ConstraintDecl "leq" 2 Nothing Nothing,
       testCase "\"foo\" // 0 produces ConstraintDecl with arity 0" $
         "foo" // 0 @?= ConstraintDecl "foo" 0 Nothing Nothing,
-      testCase "extendFunctionType produces ExtendFunctionTypeDecl" $
-        extendFunctionType
+      testCase "extendClassType produces ExtendClassTypeDecl" $
+        extendClassType
           "classify"
           [TypeCon (Unqualified "int") []]
           (TypeCon (Unqualified "int") [])
-          @?= ExtendFunctionTypeDecl
+          @?= ExtendClassTypeDecl
             { name = "classify",
               arity = 1,
               argTypes = Just [TypeCon (Unqualified "int") []],
@@ -153,7 +154,11 @@ declarationTests =
       testCase "withExtensions appends to module.extensions" $
         let eq = equation "classify" [atom "dog"] [] (atom "animal")
             m = module' "ext" `withExtensions` [eq]
-         in m.extensions @?= [noAnnP eq]
+         in m.extensions @?= [noAnnP eq],
+      testCase "withClassExtensions appends to module.classExtensions" $
+        let eq = equation "classify" [atom "dog"] [] (atom "animal")
+            m = module' "ext" `withClassExtensions` [eq]
+         in m.classExtensions @?= [noAnnP eq]
     ]
 
 functionDeclarationTests :: TestTree
@@ -168,6 +173,7 @@ functionDeclarationTests =
               argTypes = Nothing,
               returnType = Nothing,
               isOpen = False,
+              kind = DKFunction,
               requiring = Nothing
             },
       testCase "openFunction produces FunctionDecl with isOpen = True" $
@@ -178,22 +184,45 @@ functionDeclarationTests =
               argTypes = Nothing,
               returnType = Nothing,
               isOpen = True,
+              kind = DKFunction,
               requiring = Nothing
             },
-      testCase "extendFunctionType arity matches argTypes length" $
+      testCase "class_ produces FunctionDecl with kind = DKClass" $
+        class_ "size" 1
+          @?= FunctionDecl
+            { name = "size",
+              arity = 1,
+              argTypes = Nothing,
+              returnType = Nothing,
+              isOpen = False,
+              kind = DKClass,
+              requiring = Nothing
+            },
+      testCase "openClass produces FunctionDecl with kind = DKClass and isOpen = True" $
+        openClass "show" 1
+          @?= FunctionDecl
+            { name = "show",
+              arity = 1,
+              argTypes = Nothing,
+              returnType = Nothing,
+              isOpen = True,
+              kind = DKClass,
+              requiring = Nothing
+            },
+      testCase "extendClassType arity matches argTypes length" $
         let intCon = TypeCon (Unqualified "int") []
-         in extendFunctionType "add" [intCon, intCon] intCon
-              @?= ExtendFunctionTypeDecl
+         in extendClassType "add" [intCon, intCon] intCon
+              @?= ExtendClassTypeDecl
                 { name = "add",
                   arity = 2,
                   argTypes = Just [intCon, intCon],
                   returnType = Just intCon,
                   target = Nothing
                 },
-      testCase "extendFunctionType with zero args is allowed" $
+      testCase "extendClassType with zero args is allowed" $
         let intCon = TypeCon (Unqualified "int") []
-         in extendFunctionType "zero" [] intCon
-              @?= ExtendFunctionTypeDecl
+         in extendClassType "zero" [] intCon
+              @?= ExtendClassTypeDecl
                 { name = "zero",
                   arity = 0,
                   argTypes = Just [],
@@ -545,6 +574,7 @@ integrationTests =
                 ],
               equations = [],
               extensions = [],
+              classExtensions = [],
               exports = Nothing
             },
       testCase "logicModule structure" $
@@ -572,6 +602,7 @@ integrationTests =
                 ],
               equations = [],
               extensions = [],
+              classExtensions = [],
               exports = Nothing
             }
     ]

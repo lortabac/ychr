@@ -20,10 +20,10 @@ without qualification — `+` resolves to `prelude:'+'`, `integer/1` to
 Two patterns are worth understanding before reading the tables:
 
 - **Operator overloading by signature.** Arithmetic and comparison
-  operators are declared with one signature per concrete combination
-  of types, e.g.
+  operators are declared as `:- class` with one signature per
+  concrete combination of types, e.g.
   ```
-  :- function
+  :- class
       ('+'(int, int) -> int),
       ('+'(float, float) -> float).
   ```
@@ -33,10 +33,11 @@ Two patterns are worth understanding before reading the tables:
   [type-system.md](type-system.md) for the resolution rules.
 
 - **Functions are evaluated, constraints are stored.** Most prelude
-  exports are *functions* (declared with `:- function`) and are
-  callable in guards and on the right of `is`. A few exports —
-  `write/1`, `nl/0`, `writeln/1` — are *constraints* (declared with
-  `:- chr_constraint`) that perform I/O when added to the store.
+  exports are *functions* or *classes* (declared with `:- function`
+  / `:- class`) and are callable in guards and on the right of `is`.
+  A few exports — `write/1`, `nl/0`, `writeln/1` — are *constraints*
+  (declared with `:- chr_constraint`) that perform I/O when added to
+  the store.
 
 ## Arithmetic
 

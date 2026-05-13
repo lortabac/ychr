@@ -18,6 +18,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import YCHR.Diagnostic (Diagnostic, noDiag)
 import YCHR.PExpr qualified as PExpr
+import YCHR.Parsed (FunctionDeclKind (..))
 import YCHR.Parsed qualified as P
 import YCHR.Resolved qualified as R
 import YCHR.Types
@@ -42,16 +43,17 @@ data ResolveError
     -- module-qualified by the renamer. Indicates a renamer bug rather
     -- than user error.
     UnqualifiedConstraintName Name
-  | -- | An @:- extend_function_type@ or @:- extend_function@ directive
-    -- targets a function that was declared as closed (not @open_function@).
+  | -- | An @:- extend_class_type@, @:- extend_function@, or
+    -- @:- extend_class@ directive targets a declaration that is not
+    -- open (no @open_function@ / @open_class@ keyword).
     ExtendsClosedFunction Name
   | -- | A free-floating function equation appears in a module that is
     -- not the declaring module of the function. Carries the qualified
     -- function name and the module in which the equation was found.
     OrphanFunctionEquation Name Text
-  | -- | An @:- extend_function_type@ directive targets an open function
+  | -- | An @:- extend_class_type@ directive targets an open class
     -- that itself carries a @requiring@ clause. The instance set of a
-    -- bounded open function is determined by its bounds, not by
+    -- bounded open class is determined by its bounds, not by
     -- enumerated extensions.
     ExtendTypeOnBoundedFunction Name
   | -- | A @requiring@ clause references a type variable that does not
@@ -67,6 +69,26 @@ data ResolveError
   | -- | The bound graph contains a cycle. Carries the flattened names
     -- of the declarations on the cycle in source order.
     BoundCycle [Text]
+  | -- | A @:- function@ or @:- open_function@ declaration carries
+    -- more than one signature for the same name and arity. Multiple
+    -- signatures require the @:- class@ / @:- open_class@ form.
+    MultiSigOnFunction Name
+  | -- | The same name and arity is declared with both @:- function@
+    -- / @:- open_function@ and @:- class@ / @:- open_class@. The two
+    -- forms are mutually exclusive.
+    MixedDeclKinds Name
+  | -- | An @:- extend_class_type@ directive targets a declaration
+    -- declared with @:- function@ / @:- open_function@. The type
+    -- extension only makes sense against an @:- open_class@.
+    ExtendClassTypeOnFunction Name
+  | -- | An @:- extend_class@ directive targets a declaration
+    -- declared with @:- function@ / @:- open_function@; use
+    -- @:- extend_function@ instead.
+    ExtendClassOnFunction Name
+  | -- | An @:- extend_function@ directive targets a declaration
+    -- declared with @:- class@ / @:- open_class@; use
+    -- @:- extend_class@ instead.
+    ExtendFunctionOnClass Name
   deriving (Eq, Show)
 
 -- | Flatten modules into a single resolved program.
@@ -83,6 +105,7 @@ resolveProgram mods =
       conBounds = collectConstraintBounds mods
       typeDefs = [td.node | m <- mods, td <- m.typeDecls]
       funcOpenness = buildFunctionOpenness mods
+      funcKinds = buildFunctionKinds mods
       funcRequiring = buildFunctionRequiring mods
       eqErrors = checkEquations constraintNames mods
       headErrors = checkRuleHeads (Set.map qualifiedNameToLooseName functionNames) mods
@@ -91,6 +114,9 @@ resolveProgram mods =
       extendsClosedErrors = checkExtendsClosed funcOpenness mods
       extendsBoundedErrors = checkExtendsBounded funcRequiring mods
       boundedDeclErrors = checkBoundedDeclarations functionNames mods
+      multiSigErrors = checkMultiSigOnFunction mods
+      mixedKindErrors = checkMixedDeclKinds mods
+      extensionKindErrors = checkExtensionKinds funcKinds mods
       (resolvedRules, ruleErrs) = resolveRules mods
       errs =
         eqErrors
@@ -100,6 +126,9 @@ resolveProgram mods =
           ++ extendsClosedErrors
           ++ extendsBoundedErrors
           ++ boundedDeclErrors
+          ++ multiSigErrors
+          ++ mixedKindErrors
+          ++ extensionKindErrors
           ++ ruleErrs
    in if null errs
         then
@@ -144,6 +173,19 @@ buildFunctionOpenness :: [P.Module] -> Map.Map QualifiedName Bool
 buildFunctionOpenness mods =
   Map.fromList
     [ (QualifiedName m.name d.name, d.isOpen)
+    | m <- mods,
+      P.Ann d _ <- m.decls,
+      P.FunctionDecl {} <- [d]
+    ]
+
+-- | Map each declared function to the kind of its primary declaration.
+-- When the same name is declared with both kinds, an arbitrary winner
+-- is recorded here; the conflict is reported separately by
+-- 'checkMixedDeclKinds'.
+buildFunctionKinds :: [P.Module] -> Map.Map QualifiedName FunctionDeclKind
+buildFunctionKinds mods =
+  Map.fromList
+    [ (QualifiedName m.name d.name, d.kind)
     | m <- mods,
       P.Ann d _ <- m.decls,
       P.FunctionDecl {} <- [d]
@@ -230,9 +272,9 @@ checkOrphanEquations functionNames mods =
     QualifiedName targetMod baseName `Set.member` functionNames
   ]
 
--- | Check that @:- extend_function_type@ and @:- extend_function@
--- directives only target open functions. Targets unknown to the
--- compiler are already reported by the renamer.
+-- | Check that @:- extend_class_type@, @:- extend_function@, and
+-- @:- extend_class@ directives only target open declarations.
+-- Targets unknown to the compiler are already reported by the renamer.
 checkExtendsClosed ::
   Map.Map QualifiedName Bool -> [P.Module] -> [Diagnostic ResolveError]
 checkExtendsClosed funcOpenness mods =
@@ -252,7 +294,7 @@ checkExtendsClosed funcOpenness mods =
                 annEq.parsed
             )
         | m <- mods,
-          annEq <- m.extensions,
+          annEq <- m.extensions ++ m.classExtensions,
           isKnownClosed funcOpenness annEq.node.funName
         ]
    in declErrs ++ eqnErrs
@@ -263,12 +305,124 @@ checkExtendsClosed funcOpenness mods =
         _ -> False
     isKnownClosed _ _ = False
 
--- | Reject @:- extend_function_type@ directives that target a bounded
+-- | Reject @:- function@ / @:- open_function@ groups that carry more
+-- than one typed signature for the same name and arity.
+-- Multi-signature overloading requires @:- class@ / @:- open_class@.
+-- Untyped declarations contribute no signature, so they are not
+-- counted. One diagnostic is emitted per group, pointing at the
+-- second offending declaration.
+checkMultiSigOnFunction :: [P.Module] -> [Diagnostic ResolveError]
+checkMultiSigOnFunction mods =
+  [ noDiag (P.AnnP (MultiSigOnFunction (Qualified m.name d.name)) loc (PExpr.Atom d.name))
+  | (_, decls) <- groupedFunctionDecls mods,
+    let typedFunDecls =
+          [ entry
+          | entry@(d, _, _, _) <- decls,
+            P.FunctionDecl
+              { kind = DKFunction,
+                argTypes = Just _,
+                returnType = Just _
+              } <-
+              [d]
+          ],
+    (d, m, loc, _) : _ <- [drop 1 typedFunDecls]
+  ]
+
+-- | Reject groups where the same name+arity is declared with both
+-- @:- function@-style and @:- class@-style keywords. One diagnostic
+-- is emitted per group, pointing at the first declaration whose kind
+-- differs from the group's first declaration.
+checkMixedDeclKinds :: [P.Module] -> [Diagnostic ResolveError]
+checkMixedDeclKinds mods =
+  [ noDiag (P.AnnP (MixedDeclKinds (Qualified m.name d.name)) loc (PExpr.Atom d.name))
+  | (_, decls@((P.FunctionDecl {kind = k0}, _, _, _) : _)) <- groupedFunctionDecls mods,
+    let kinds = [k | (P.FunctionDecl {kind = k}, _, _, _) <- decls],
+    any (/= k0) kinds,
+    (d, m, loc, _) : _ <-
+      [[entry | entry@(P.FunctionDecl {kind = k}, _, _, _) <- decls, k /= k0]]
+  ]
+
+-- | Reject extension directives whose declaration kind disagrees with
+-- the target's kind:
+--
+--   * @:- extend_class_type@ on a @DKFunction@ target
+--   * @:- extend_class@ on a @DKFunction@ target
+--   * @:- extend_function@ on a @DKClass@ target
+--
+-- Targets unknown to the compiler are already reported by the renamer.
+checkExtensionKinds ::
+  Map.Map QualifiedName FunctionDeclKind ->
+  [P.Module] ->
+  [Diagnostic ResolveError]
+checkExtensionKinds funcKinds mods =
+  classTypeErrs ++ extendFunErrs ++ extendClassErrs
+  where
+    classTypeErrs =
+      [ noDiag
+          (P.AnnP (ExtendClassTypeOnFunction target) loc (PExpr.Atom d.name))
+      | m <- mods,
+        P.Ann d loc <- m.extensionTypes,
+        Just target <- [d.target],
+        targetKind target == Just DKFunction
+      ]
+    extendFunErrs =
+      [ noDiag
+          ( P.AnnP
+              (ExtendFunctionOnClass annEq.node.funName)
+              annEq.sourceLoc
+              annEq.parsed
+          )
+      | m <- mods,
+        annEq <- m.extensions,
+        targetKind annEq.node.funName == Just DKClass
+      ]
+    extendClassErrs =
+      [ noDiag
+          ( P.AnnP
+              (ExtendClassOnFunction annEq.node.funName)
+              annEq.sourceLoc
+              annEq.parsed
+          )
+      | m <- mods,
+        annEq <- m.classExtensions,
+        targetKind annEq.node.funName == Just DKFunction
+      ]
+    targetKind (Qualified mn n) = Map.lookup (QualifiedName mn n) funcKinds
+    targetKind _ = Nothing
+
+-- | Group every @FunctionDecl@ in the program by qualified name and
+-- arity, returning the declarations along with their owning module,
+-- source location, and a small origin atom for diagnostics. Used by
+-- the kind / cardinality checks above. Per-group entries appear in
+-- source order (left-to-right across modules, then top-to-bottom
+-- within each module), so callers that want "the first/second
+-- offending declaration" can rely on list position.
+groupedFunctionDecls ::
+  [P.Module] ->
+  [((Text, Text, Int), [(P.Declaration, P.Module, P.SourceLoc, PExpr.PExpr)])]
+groupedFunctionDecls mods =
+  -- 'Map.fromListWith (++)' would build groups in *reverse* source
+  -- order (right-associative accumulation). We want source order, so
+  -- we accumulate a difference list (left-to-right append) and
+  -- materialize each group at the end.
+  [(k, vs []) | (k, vs) <- Map.toList grouped]
+  where
+    grouped =
+      Map.fromListWith
+        (\new old -> old . new)
+        [ ((m.name, d.name, d.arity), ([(d, m, loc, PExpr.Atom d.name)] ++))
+        | m <- mods,
+          P.Ann d loc <- m.decls,
+          P.FunctionDecl {} <- [d]
+        ]
+
+-- | Reject @:- extend_class_type@ directives that target a bounded
 -- open function. The instance set of a bounded open function is
 -- determined by its bound-named functions, not by enumerated extensions.
--- @:- extend_function@ (equation extension) is /not/ rejected here —
--- new equations of a bounded open function are valid and are checked
--- under the same ambient bound as the original equations.
+-- @:- extend_function@ / @:- extend_class@ (equation extension) are
+-- /not/ rejected here — new equations of a bounded open function are
+-- valid and are checked under the same ambient bound as the original
+-- equations.
 checkExtendsBounded ::
   Map.Map QualifiedName [BoundSig] -> [P.Module] -> [Diagnostic ResolveError]
 checkExtendsBounded funcRequiring mods =
@@ -560,7 +714,7 @@ collectSignatures decls =
     Just retTy <- [d.returnType]
   ]
 
--- | Collect signatures contributed by @:- extend_function_type@
+-- | Collect signatures contributed by @:- extend_class_type@
 -- directives in any module. Only signatures whose resolved target
 -- matches the given qualified name and arity are included.
 collectExtensionSignatures ::
@@ -579,8 +733,11 @@ collectExtensionSignatures mods qn ar =
 -- | Gather equations for a function declaration, stripping the funName.
 -- Free-floating equations only come from the declaring module
 -- (orphans are rejected by 'checkOrphanEquations'). Extension equations
--- contributed via @:- extend_function@ are pulled from every module's
--- @extensions@ list.
+-- contributed via @:- extend_function@ or @:- extend_class@ are pulled
+-- from every module's @extensions@ and @classExtensions@ lists; the
+-- @checkExtensionKinds@ pass rejects mismatches between the directive
+-- and the target's kind, so by the time we get here either list is a
+-- legitimate source for this declaration.
 gatherEquations :: [P.Module] -> P.Module -> P.Declaration -> [P.AnnP R.FunctionEquation]
 gatherEquations mods m d =
   let qualName = Qualified m.name d.name
@@ -593,7 +750,7 @@ gatherEquations mods m d =
       extensionEqs =
         [ annEq
         | mod_ <- mods,
-          annEq <- mod_.extensions,
+          annEq <- mod_.extensions ++ mod_.classExtensions,
           annEq.node.funName == qualName,
           length annEq.node.args == d.arity
         ]

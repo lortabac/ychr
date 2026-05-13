@@ -1,0 +1,6 @@
+:- module(ext, []).
+:- use_module(owner, [f/1]).
+
+% Forbidden: extend_class_type targets an :- open_function. Type
+% extensions are only meaningful against :- open_class.
+:- extend_class_type (f(string) -> string).

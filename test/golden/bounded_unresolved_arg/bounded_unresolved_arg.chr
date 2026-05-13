@@ -3,7 +3,7 @@
 
 :- chr_constraint result(any, any).
 
-:- function (gt(int, int) -> bool), (gt(float, float) -> bool).
+:- class (gt(int, int) -> bool), (gt(float, float) -> bool).
 gt(X, Y) -> X > Y.
 
 :- function pick(T, T) -> T requiring gt(T, T) -> bool.

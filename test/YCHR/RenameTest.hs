@@ -524,6 +524,7 @@ multiModuleTests =
                         rules = [],
                         equations = [],
                         extensions = [],
+                        classExtensions = [],
                         exports = Nothing
                       }
                   ],

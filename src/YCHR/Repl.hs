@@ -336,10 +336,15 @@ showDeclarations prog = mapM_ outputStrLn declLines
         Parsed.Ann d _ <- m.decls,
         (kw, n, a) <- case d of
           Parsed.ConstraintDecl {name = n, arity = a} -> [("chr_constraint", n, a)]
-          Parsed.FunctionDecl {name = n, arity = a, isOpen = o} ->
-            [(if o then "open_function" else "function", n, a)]
-          Parsed.ExtendFunctionTypeDecl {name = n, arity = a} ->
-            [("extend_function_type", n, a)]
+          Parsed.FunctionDecl {name = n, arity = a, isOpen = o, kind = k} ->
+            let kw = case (o, k) of
+                  (False, Parsed.DKFunction) -> "function"
+                  (True, Parsed.DKFunction) -> "open_function"
+                  (False, Parsed.DKClass) -> "class"
+                  (True, Parsed.DKClass) -> "open_class"
+             in [(kw, n, a)]
+          Parsed.ExtendClassTypeDecl {name = n, arity = a} ->
+            [("extend_class_type", n, a)]
           _ -> []
       ]
     renderDecl kw modName name arity =

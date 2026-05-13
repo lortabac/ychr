@@ -516,25 +516,48 @@ The checker validates type definitions themselves:
 
 ## Signature Overloading
 
-A function may be declared with multiple type signatures. Each
+A *class* may be declared with multiple type signatures. Each
 signature specifies a distinct set of argument types and a return
-type. The function has a single implementation; only the type
-checking is overloaded.
+type. The class has a single implementation; only the type checking
+is overloaded.
+
+Signature overloading is enabled explicitly by the `:- class` /
+`:- open_class` directives. A `:- function` / `:- open_function`
+declaration with more than one typed signature is rejected
+(`MultiSigOnFunction`, YCHR-16011) — the two forms are intentionally
+distinct: `:- function` advertises a single signature (and may carry
+a `requiring` clause for bounded polymorphism), while `:- class`
+advertises an overload set. Mixing the two forms for the same
+name+arity is `MixedDeclKinds` (YCHR-16012).
+
+A `:- class` with a single signature is permitted — verbose but
+legal. Idiomatic single-signature code uses `:- function`.
 
 ### Declaration syntax
 
 ```prolog
-:- function
+:- class
     ('+'(int, int) -> int),
     ('+'(float, float) -> float).
 ```
 
 Multiple comma-separated typed declarations with the same name and
-arity are grouped into a single overloaded function definition.
+arity are grouped into a single overloaded class definition. An
+`:- open_class` extends across modules: other modules may add
+signatures via `:- extend_class_type` and equations via
+`:- extend_class`.
+
+Untyped declarations (e.g. `:- function size/1.`) contribute no
+signature and so do not count toward the "more than one signature"
+rule that distinguishes `:- function` from `:- class`. A program
+may mix an untyped `:- function f/1.` with a typed
+`:- function f(int) -> int.` for the same name and arity without
+triggering `MultiSigOnFunction`; only two or more *typed*
+declarations would.
 
 ### Resolution
 
-When the checker encounters a call to an overloaded function, it
+When the checker encounters a call to an overloaded class, it
 filters the declared signatures by consistency with the known
 argument types:
 
@@ -558,7 +581,7 @@ unannotated code produces no errors.
 
 ### Equation checking
 
-For overloaded functions, each equation is checked via the same
+For overloaded classes, each equation is checked via the same
 overload resolution mechanism. The equation's parameter types and
 return type are matched against the set of declared signatures.
 
@@ -567,7 +590,7 @@ return type are matched against the set of declared signatures.
 ```prolog
 :- chr_type color ---> red ; green ; blue.
 
-:- function
+:- class
     (size(int) -> int),
     (size(string) -> int).
 
@@ -599,11 +622,15 @@ runtime evidence. Dispatch remains dynamic: the runtime selects a
 matching equation by pattern matching, exactly as it does for
 unbounded functions.
 
-The "class" abstracted over is implicit. There is no `:- class`
-declaration and no `:- instance` declaration. The class name is the
-required-function name itself: `requiring '>'(T, T) -> bool` plays the
-role that `Ord T` plays in classical type-class systems, and the
-declared signatures of `>` play the role that `Ord` instances play.
+The "type-class" abstracted over by `requiring` is implicit. (YCHR
+*does* have a `:- class` keyword, but it serves a different purpose
+— explicit multi-signature overloading; see §Signature Overloading.
+The `:- class` keyword is unrelated to bounded polymorphism and
+there is no `:- instance` declaration.) The implicit class name is
+the required-function name itself: `requiring '>'(T, T) -> bool`
+plays the role that `Ord T` plays in classical type-class systems,
+and the declared signatures of `>` play the role that `Ord`
+instances play.
 
 ### Declaration syntax
 
@@ -622,18 +649,26 @@ is a comma-separated list of *bound signatures* of the form
     '=='(K, K) -> bool.
 ```
 
-The `requiring` clause is allowed on `:- function` declarations carrying a
-single signature, and on `:- open_function` declarations. It is *not*
-allowed on the comma-separated multi-signature form (see Coexistence
-below) and *not* allowed on `:- extend_function_type`.
+The `requiring` clause is allowed on `:- function` and
+`:- open_function` declarations only. It is *not* allowed on
+`:- class` / `:- open_class` (rejected as `RequiringOnClass`,
+YCHR-15005) and *not* allowed on `:- extend_class_type` (rejected
+as `RequiringOnExtendClassType`, YCHR-15006). The two features are
+intentionally orthogonal: `:- function` for bounded single-signature
+declarations, `:- class` for explicit multi-signature overloading.
 
 A bounded `:- open_function` already has an extensibility story:
 its instance set is determined by what its bound-named functions are
 declared for. To extend the set of types at which a bounded open
 function works, declare new instances of its bound-named functions —
-not new ground signatures of the bounded function itself.
-Consequently `:- extend_function_type` cannot target a bounded open
-function: doing so is rejected as `extend_type_on_bounded_function`.
+not new ground signatures of the bounded function itself. A user
+who attempts a type extension on a bounded open function will see
+*two* diagnostics co-fire on the offending `:- extend_class_type`:
+`ExtendClassTypeOnFunction` (YCHR-16013, because type extensions
+must target an `:- open_class`) and `ExtendTypeOnBoundedFunction`
+(YCHR-16007, because the target's instance set is determined by
+its bound). Both messages are accurate; the redundancy is
+intentional so each individual rule fails loudly on its own terms.
 
 Equation extensions via `:- extend_function` *are* allowed on bounded
 open functions. The new equation is type-checked under the same bound
@@ -920,44 +955,43 @@ bounded polymorphism at the constraint level.
 
 ### Coexistence with multi-signature overloading
 
-Multi-signature overloading is currently only available for
-functions; the coexistence rules below apply to function declarations
-only. If multi-signature constraint declarations are added in the
-future, the same one-form-or-the-other rule will apply.
+Multi-signature overloading lives behind the `:- class` /
+`:- open_class` keywords (see §Signature Overloading) and is
+enforced as exclusive with bounded polymorphism: `:- class` cannot
+carry a `requiring` clause (rejected as `RequiringOnClass`,
+YCHR-15005). The two forms occupy disjoint syntactic slots:
 
-Bounded signatures and the existing multi-signature form (see
-§Signature Overloading) coexist. A given declaration uses one form
-or the other, never both:
-
-- The multi-signature form `(f(int) -> int), (f(float) -> float)`
+- `:- class` (multi-signature) `(f(int) -> int), (f(float) -> float)`
   enumerates instances explicitly. It is the right tool when the
   instance set is small, fixed, and unrelated, or when the
   implementation differs perceptibly per instance.
-- The bounded form `f(T) -> T requiring ...` describes an open instance
-  set implicitly. It is the right tool when the instance set is
-  large, growing (e.g., users may declare new instances of `>` after
-  importing `max`), or naturally captured by an operation.
+- `:- function ... requiring ...` (bounded single-signature)
+  `f(T) -> T requiring ...` describes an open instance set implicitly.
+  It is the right tool when the instance set is large, growing (e.g.,
+  users may declare new instances of `>` after importing `max`), or
+  naturally captured by an operation.
 
 The two forms have overlapping expressive power for finite,
 enumerated instance sets, but their checker behavior differs:
 
-- Multi-signature: each declared signature is checked independently
+- `:- class`: each declared signature is checked independently
   at use sites; any equation that types under any one signature is
   accepted.
-- Bounded: the function has a single parametric signature; equations
-  are checked once, parametrically, with the bound enlarging the
-  available context; use sites verify the bound at the inferred
-  substitution.
+- Bounded `:- function`: the function has a single parametric
+  signature; equations are checked once, parametrically, with the
+  bound enlarging the available context; use sites verify the bound
+  at the inferred substitution.
 
-The semantics of existing multi-signature declarations is unchanged
-by the addition of bounded polymorphism.
+The same rule applies to constraints: a `:- chr_constraint`
+declaration may carry `requiring`, but no comma-separated
+multi-signature form for constraints exists in the surface today.
 
 ### Errors
 
 Bounded polymorphism introduces five new error codes (final numbers
 assigned in the type-system error range during implementation). The
 first four apply uniformly to functions and constraints; the fifth
-concerns `:- extend_function_type`, which has no constraint analog:
+concerns `:- extend_class_type`, which has no constraint analog:
 
 - **`unbound_bound_variable`** — a type variable appears in a `requiring`
   clause but not in the enclosing declaration's primary signature.
@@ -973,10 +1007,13 @@ concerns `:- extend_function_type`, which has no constraint analog:
   argument types whose substitution does not satisfy the bound:
   for some `gⱼ`, no declared signature of `gⱼ` is consistent with
   the substituted bound.
-- **`extend_type_on_bounded_function`** — `:- extend_function_type`
+- **`extend_type_on_bounded_function`** — `:- extend_class_type`
   targets a bounded `:- open_function`. The instance set of a
   bounded open function is determined by its bound's named
-  functions, not by enumerated extensions.
+  functions, not by enumerated extensions. Note that the
+  kind-mismatch check (`ExtendClassTypeOnFunction`, YCHR-16013)
+  also fires on this combination, since a `:- extend_class_type`
+  must target an `:- open_class`.
 
 No new error code is introduced for the equation-checking path;
 equations either type-check under the enlarged context or fail with
@@ -1167,7 +1204,7 @@ key ingredients are:
 | User-defined types | Algebraic types via `:- chr_type` |
 | Function types | `fun(τ₁,...,τₙ) -> τᵣ` |
 | Polymorphism | Parametric, implicitly quantified, no rank-n |
-| Overloading | Signature overloading (multiple sigs per function) |
+| Overloading | Multi-signature overloading via `:- class` / `:- open_class` |
 | Defaults | Missing annotations default to `any` |
 | Core relation | Consistency (gradual typing) |
 | Type merging | Consistency check, `any` absorbs |

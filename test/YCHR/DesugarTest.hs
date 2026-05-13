@@ -742,6 +742,7 @@ lambdaLiftTests =
                     argTypes = Nothing,
                     returnType = Nothing,
                     isOpen = False,
+                    kind = DKFunction,
                     requiring = Nothing
                   }
             funEq =
@@ -777,7 +778,8 @@ lambdaLiftTests =
                 [ CompoundTerm (Unqualified "fun") [TextTerm "hello"],
                   TextTerm "world"
                 ]
-            funDecl = Ann (FunctionDecl "f" 1 Nothing Nothing False Nothing) dummyLoc
+            funDecl =
+              Ann (FunctionDecl "f" 1 Nothing Nothing False DKFunction Nothing) dummyLoc
             funEq =
               AnnP
                 FunctionEquation

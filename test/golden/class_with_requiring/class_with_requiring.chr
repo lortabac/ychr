@@ -1,0 +1,16 @@
+:- module(class_with_requiring, [result/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint result(int).
+
+:- class (gt(int, int) -> bool).
+gt(X, Y) -> X > Y.
+
+% Forbidden: requiring is reserved for :- function / :- open_function.
+% Producing a :- class with a requiring clause is rejected as
+% RequiringOnClass (YCHR-15005).
+:- class pick(T, T) -> T requiring gt(T, T) -> bool.
+
+pick(X, _) -> X.
+
+result(R) <=> R is pick(1, 2).

@@ -4,7 +4,7 @@
 :- chr_constraint result(any, any).
 
 % Overloaded function: works on both int and string
-:- function
+:- class
     (size(int) -> int),
     (size(string) -> int).
 

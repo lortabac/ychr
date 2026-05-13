@@ -34,10 +34,13 @@ This page is a stub. The eventual reference will cover:
 | `type(name/arity, [Con1, ...])` | Two-argument type form. Exports (or imports) the type and only the listed data constructors; `type(name/arity)` covers all of them. |
 | `:- chr_constraint Decls.` | Declare CHR constraints. |
 | `:- chr_type T ---> Cs.` | Declare an algebraic type. |
-| `:- function Decls.` | Declare a closed user-defined function. All decls (typed or untyped) and all equations must live in the declaring module; the decls must form a contiguous block of module items. |
-| `:- open_function Decls.` | Declare an open user-defined function. Decls must still be in one module and contiguous, but other modules may contribute extension signatures via `:- extend_function_type` and extension equations via `:- extend_function`. |
-| `:- extend_function_type (Name(Ts) -> T).` | Add an overloaded type signature to an open function declared elsewhere. The function name resolves through the importing module's imports. Targeting a closed function is an error (YCHR-16005). |
-| `:- extend_function Name(Args) [\| Guards] -> Body.` | Add an equation to an open function declared elsewhere. Same scoping rules as `extend_function_type`. Free-floating equation syntax (`name(args) -> body.`) is only allowed in the declaring module of the function; appearing elsewhere is an error (YCHR-16006). |
+| `:- function Decls.` | Declare a closed user-defined function. Single signature only — multi-signature requires `:- class` (YCHR-16011). All decls (typed or untyped) and all equations must live in the declaring module; the decls must form a contiguous block of module items. May carry a `requiring` clause (bounded polymorphism). |
+| `:- open_function Decls.` | Declare an open user-defined function. Single signature only. Decls must still be in one module and contiguous, but other modules may contribute extension equations via `:- extend_function`. Type-signature extension is not available (see `:- open_class`). |
+| `:- class Decls.` | Declare a closed user-defined class. Like `:- function`, but enables multi-signature overloading: two or more typed signatures for the same name and arity. `requiring` is forbidden on `:- class` (YCHR-15005); bounded polymorphism is reserved for `:- function` / `:- open_function`. |
+| `:- open_class Decls.` | Declare an open user-defined class. Other modules may contribute extension signatures via `:- extend_class_type` and extension equations via `:- extend_class`. |
+| `:- extend_class_type (Name(Ts) -> T).` | Add an overloaded type signature to an `:- open_class` declared elsewhere. The class name resolves through the importing module's imports. Targeting a closed declaration is an error (YCHR-16005); targeting an `:- open_function` is `ExtendClassTypeOnFunction` (YCHR-16013). |
+| `:- extend_function Name(Args) [\| Guards] -> Body.` | Add an equation to an `:- open_function` declared elsewhere. Targeting an `:- open_class` is `ExtendFunctionOnClass` (YCHR-16015). Free-floating equation syntax (`name(args) -> body.`) is only allowed in the declaring module; appearing elsewhere is an error (YCHR-16006). |
+| `:- extend_class Name(Args) [\| Guards] -> Body.` | Add an equation to an `:- open_class` declared elsewhere. Targeting an `:- open_function` is `ExtendClassOnFunction` (YCHR-16014). |
 | `:- discontiguous Names.` | Allow equations of the same function to be split. |
 | `:- op(Pri, Type, Name).` | Declare an operator. |
 

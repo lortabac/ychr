@@ -1,0 +1,18 @@
+:- module(bounded_requiring_on_class, [result/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint result(int).
+
+:- class (gt(int, int) -> bool), (gt(float, float) -> bool).
+gt(X, Y) -> X > Y.
+
+% Forbidden: requiring on :- class. Bounded polymorphism is reserved
+% for :- function / :- open_function. The parser rejects this as
+% RequiringOnClass (YCHR-15005).
+:- class
+    (pick(int, int) -> int requiring gt(int, int) -> bool),
+    (pick(float, float) -> float).
+
+pick(X, _) -> X.
+
+result(R) <=> R is pick(1, 2).

@@ -45,6 +45,7 @@ module YCHR.DSL
     defining,
     withEquations,
     withExtensions,
+    withClassExtensions,
     chrType,
     exporting,
 
@@ -53,7 +54,9 @@ module YCHR.DSL
     (//),
     function,
     openFunction,
-    extendFunctionType,
+    class_,
+    openClass,
+    extendClassType,
     typeExport,
     typeExportWith,
     op,
@@ -150,6 +153,7 @@ module' name =
       rules = [],
       equations = [],
       extensions = [],
+      classExtensions = [],
       exports = Nothing
     }
 
@@ -199,6 +203,14 @@ withEquations m eqs = m {equations = m.equations ++ map noAnnP eqs}
 withExtensions :: Module -> [FunctionEquation] -> Module
 withExtensions m eqs = m {extensions = m.extensions ++ map noAnnP eqs}
 
+-- | Append class-equation /extensions/ to a module. Mirrors
+-- @:- extend_class name(args) -> body@ directives in source form:
+-- the equations contribute to an open class declared in another
+-- module (resolved through this module's imports).
+withClassExtensions :: Module -> [FunctionEquation] -> Module
+withClassExtensions m eqs =
+  m {classExtensions = m.classExtensions ++ map noAnnP eqs}
+
 -- | Append a CHR-type definition (@:- chr_type ...@).
 chrType :: Module -> TypeDefinition -> Module
 chrType m ty = m {typeDecls = m.typeDecls ++ [noAnn ty]}
@@ -234,6 +246,7 @@ function name arity =
       argTypes = Nothing,
       returnType = Nothing,
       isOpen = False,
+      kind = DKFunction,
       requiring = Nothing
     }
 
@@ -247,16 +260,45 @@ openFunction name arity =
       argTypes = Nothing,
       returnType = Nothing,
       isOpen = True,
+      kind = DKFunction,
       requiring = Nothing
     }
 
--- | Extension type declaration: @:- extend_function_type (name(args) -> ret)@.
--- Adds an overloaded signature to an open function declared in another
--- module. The renamer resolves the function name through the importing
+-- | Class declaration: @:- class name/arity@. A class enables
+-- multi-signature overloading.
+class_ :: Text -> Int -> Declaration
+class_ name arity =
+  FunctionDecl
+    { name = name,
+      arity = arity,
+      argTypes = Nothing,
+      returnType = Nothing,
+      isOpen = False,
+      kind = DKClass,
+      requiring = Nothing
+    }
+
+-- | Open-class declaration: @:- open_class name/arity@. Open classes
+-- can be extended with new signatures and equations from other modules.
+openClass :: Text -> Int -> Declaration
+openClass name arity =
+  FunctionDecl
+    { name = name,
+      arity = arity,
+      argTypes = Nothing,
+      returnType = Nothing,
+      isOpen = True,
+      kind = DKClass,
+      requiring = Nothing
+    }
+
+-- | Extension type declaration: @:- extend_class_type (name(args) -> ret)@.
+-- Adds an overloaded signature to an open class declared in another
+-- module. The renamer resolves the class name through the importing
 -- module's imports.
-extendFunctionType :: Text -> [TypeExpr] -> TypeExpr -> Declaration
-extendFunctionType name argTypes returnType =
-  ExtendFunctionTypeDecl
+extendClassType :: Text -> [TypeExpr] -> TypeExpr -> Declaration
+extendClassType name argTypes returnType =
+  ExtendClassTypeDecl
     { name = name,
       arity = length argTypes,
       argTypes = Just argTypes,

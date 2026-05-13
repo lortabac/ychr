@@ -1,0 +1,6 @@
+:- module(ext, []).
+:- use_module(owner, [f/1]).
+
+% Forbidden: extend_class targets an :- open_function. Use
+% :- extend_function for equation extensions on :- open_function.
+:- extend_class f(2) -> 2.

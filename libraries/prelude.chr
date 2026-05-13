@@ -58,25 +58,33 @@
     nl/0,
     writeln/1.
 
-:- function
+:- class
     ('+'(int, int) -> int),
-    ('+'(float, float) -> float),
+    ('+'(float, float) -> float).
+:- class
     ('-'(int, int) -> int),
-    ('-'(float, float) -> float),
+    ('-'(float, float) -> float).
+:- class
     ('*'(int, int) -> int),
-    ('*'(float, float) -> float),
+    ('*'(float, float) -> float).
+:- class
+    ('<'(int, int) -> bool),
+    ('<'(float, float) -> bool).
+:- class
+    ('>'(int, int) -> bool),
+    ('>'(float, float) -> bool).
+:- class
+    ('>='(int, int) -> bool),
+    ('>='(float, float) -> bool).
+:- class
+    ('=<'(int, int) -> bool),
+    ('=<'(float, float) -> bool).
+
+:- function
     ('/'(float, float) -> float),
     ('div'(int, int) -> int),
     ('mod'(int, int) -> int),
     ('rem'(int, int) -> int),
-    ('<'(int, int) -> bool),
-    ('<'(float, float) -> bool),
-    ('>'(int, int) -> bool),
-    ('>'(float, float) -> bool),
-    ('>='(int, int) -> bool),
-    ('>='(float, float) -> bool),
-    ('=<'(int, int) -> bool),
-    ('=<'(float, float) -> bool),
     ('=='(A, A) -> bool),
     (var(any) -> bool),
     (nonvar(any) -> bool),

@@ -35,6 +35,7 @@ module YCHR.Parsed
     Module (..),
     Import (..),
     Declaration (..),
+    FunctionDeclKind (..),
     OpType (..),
     OpDecl (..),
     Rule (..),
@@ -93,9 +94,24 @@ data Module = Module
     typeDecls :: [Ann TypeDefinition],
     rules :: [Rule],
     equations :: [AnnP FunctionEquation],
+    -- | Equations contributed by @:- extend_function@ directives.
+    -- Each must target an @:- open_function@.
     extensions :: [AnnP FunctionEquation],
+    -- | Equations contributed by @:- extend_class@ directives.
+    -- Each must target an @:- open_class@.
+    classExtensions :: [AnnP FunctionEquation],
     exports :: Maybe (AnnP [Declaration])
   }
+  deriving (Show, Eq, Lift)
+
+-- | Whether a function-like declaration was written with the
+-- @:- function@ / @:- open_function@ keyword (single signature
+-- only, may carry @requiring@) or the @:- class@ / @:- open_class@
+-- keyword (overloaded signatures permitted, never carries
+-- @requiring@). The two forms produce the same downstream
+-- 'YCHR.Resolved.FunctionDef'; the kind only affects source-level
+-- validation.
+data FunctionDeclKind = DKFunction | DKClass
   deriving (Show, Eq, Lift)
 
 data Declaration
@@ -115,18 +131,20 @@ data Declaration
         argTypes :: Maybe [TypeExpr],
         returnType :: Maybe TypeExpr,
         isOpen :: Bool,
+        kind :: FunctionDeclKind,
         -- | Bounded polymorphism: a non-'Nothing' value carries the
         -- @requiring@ clause's bound signatures. Permitted only on
-        -- the typed single-signature form (closed or open); the
-        -- parser rejects @requiring@ on multi-signature groups.
+        -- the @:- function@ / @:- open_function@ forms (i.e. with
+        -- @kind == DKFunction@). The parser rejects @requiring@ on
+        -- @:- class@ / @:- open_class@ declarations.
         requiring :: Maybe [BoundSig]
       }
-  | -- | Adds an overloaded type signature to an open function declared
-    -- in another module. The renamer fills in @target@ with the
-    -- function's resolved qualified name. After the rename phase,
+  | -- | Adds an overloaded type signature to an @:- open_class@
+    -- declared in another module. The renamer fills in @target@ with
+    -- the class's resolved qualified name. After the rename phase,
     -- @target@ is always @Just (Qualified _ _)@; @Nothing@ only appears
     -- in the freshly-parsed AST, before the renamer has run.
-    ExtendFunctionTypeDecl
+    ExtendClassTypeDecl
       { name :: Text,
         arity :: Int,
         argTypes :: Maybe [TypeExpr],

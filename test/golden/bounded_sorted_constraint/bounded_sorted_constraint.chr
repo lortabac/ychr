@@ -1,7 +1,7 @@
 :- module(bounded_sorted_constraint, [check_int/1, check_float/1]).
 :- use_module(library(prelude)).
 
-:- function (lt(int, int) -> bool), (lt(float, float) -> bool).
+:- class (lt(int, int) -> bool), (lt(float, float) -> bool).
 lt(X, Y) -> X < Y.
 
 % Bounded constraint: sorted is parametric in the element type, with a

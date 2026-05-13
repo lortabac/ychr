@@ -1,0 +1,10 @@
+:- module(function_with_multi_sig, [result/1]).
+:- chr_constraint result(any).
+
+% Forbidden: two signatures for the same name/arity declared with
+% :- function. Multi-signature overloading requires :- class.
+:- function (size(int) -> int), (size(string) -> int).
+
+size(N) -> N.
+
+result(R) <=> R is size(1).

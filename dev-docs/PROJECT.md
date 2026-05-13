@@ -307,19 +307,29 @@ is *closed*: all of its declarations (typed or untyped) and all of its
 equations must live in one module — the declaring module — and the
 declarations must form a contiguous block of module items. A function
 declared with `:- open_function ...` is *open*: the same constraints
-apply to its primary declarations, but other modules may extend it via
-dedicated directives:
+apply to its primary declarations, but other modules may extend it
+with equations via `:- extend_function name(P1, ..., Pn) [| Guards] -> Body.`.
+`:- function` / `:- open_function` accept only a single signature
+(multi-sig groups are rejected as YCHR-16011, `MultiSigOnFunction`),
+and may carry a `requiring` clause for bounded polymorphism.
 
-- `:- extend_function_type (name(T1, ..., Tn) -> Tret).` adds an
-  overloaded signature to an open function declared elsewhere.
-- `:- extend_function name(P1, ..., Pn) [| Guards] -> Body.` adds an
-  equation to an open function declared elsewhere.
+Multi-signature overloading uses the parallel pair `:- class` /
+`:- open_class`. `:- open_class` is extended cross-module via
+`:- extend_class_type (name(T1, ..., Tn) -> Tret).` (new signature)
+and `:- extend_class name(P1, ..., Pn) [| Guards] -> Body.` (new
+equation). `:- class` / `:- open_class` cannot carry `requiring`
+(rejected as YCHR-15005, `RequiringOnClass`).
 
-Both forms resolve the function name through the importing module's
-imports. Targeting a closed function is rejected (YCHR-16005). Writing
-a free-floating equation `name(args) -> body.` outside the declaring
-module is also rejected (YCHR-16006); the importer must use
-`:- extend_function` instead.
+Both extension directives resolve their target through the importing
+module's imports. Targeting a closed declaration is rejected
+(YCHR-16005, `ExtendsClosedFunction`). Targeting the wrong kind is
+also rejected: `:- extend_class_type` on `:- open_function`
+(YCHR-16013), `:- extend_class` on `:- open_function`
+(YCHR-16014), and `:- extend_function` on `:- open_class`
+(YCHR-16015). Writing a free-floating equation
+`name(args) -> body.` outside the declaring module is also rejected
+(YCHR-16006); the importer must use `:- extend_function` /
+`:- extend_class` instead.
 
 ### Lambdas and Function References
 

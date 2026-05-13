@@ -1,0 +1,7 @@
+:- module(owner, [classify/1, run/2]).
+:- open_class (classify(int) -> int).
+
+classify(0) -> 100.
+
+:- chr_constraint run(any, any).
+run(X, R) <=> R is classify(X).

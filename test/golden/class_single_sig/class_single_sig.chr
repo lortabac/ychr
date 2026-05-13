@@ -1,0 +1,9 @@
+:- module(class_single_sig, [result/1]).
+:- chr_constraint result(any).
+
+% A :- class with a single signature is allowed — verbose, but legal.
+% Idiomatic single-signature code still uses :- function.
+:- class (sz(int) -> int).
+sz(N) -> N.
+
+result(R) <=> R is sz(7).

@@ -3,7 +3,7 @@
 
 :- chr_constraint result(int).
 
-:- function (gt(int, int) -> bool), (gt(float, float) -> bool).
+:- class (gt(int, int) -> bool), (gt(float, float) -> bool).
 gt(X, Y) -> X > Y.
 
 % Bounded open function with one initial equation.

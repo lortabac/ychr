@@ -2,8 +2,8 @@
 :- use_module(owner, [classify/1, run/2]).
 
 % Add a second overloaded signature targeting strings.
-:- extend_function_type (classify(string) -> string).
+:- extend_class_type (classify(string) -> string).
 
 % Add an equation for the new overload.
-:- extend_function classify("hello") -> "world".
-:- extend_function classify(_) -> "other".
+:- extend_class classify("hello") -> "world".
+:- extend_class classify(_) -> "other".

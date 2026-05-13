@@ -241,9 +241,10 @@ constraint_match @
 % Bounded function usage: same shape as `function_match` plus a
 % bound-discharge phase. Listed before `function_match` for the same
 % reason `bounded_constraint_match` precedes `constraint_match`.
-% Bounded functions are single-signature only (the spec disallows
-% `requiring` on the multi-signature form), so there is no bounded
-% counterpart to `overloaded_function_match`.
+% Bounded functions are single-signature only (the spec restricts
+% `requiring` to :- function / :- open_function, never :- class /
+% :- open_class), so there is no bounded counterpart to
+% `overloaded_function_match`.
 bounded_function_match @
     function_sig(Name, Sig), function_bounds(Name, Bounds) \
         check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>

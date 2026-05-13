@@ -188,8 +188,8 @@ parseValidationErrorCode (DiscontiguousEquations _) = ErrorCode 15001
 parseValidationErrorCode MalformedImport = ErrorCode 15002
 parseValidationErrorCode MalformedConstraint = ErrorCode 15003
 parseValidationErrorCode (DiscontiguousFunctionDecls _) = ErrorCode 15004
-parseValidationErrorCode (RequiringOnMultiSig _) = ErrorCode 15005
-parseValidationErrorCode (RequiringOnExtendFunctionType _) = ErrorCode 15006
+parseValidationErrorCode (RequiringOnClass _) = ErrorCode 15005
+parseValidationErrorCode (RequiringOnExtendClassType _) = ErrorCode 15006
 
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
@@ -206,6 +206,11 @@ resolveErrorCode (ExtendTypeOnBoundedFunction _) = ErrorCode 16007
 resolveErrorCode (UnboundBoundVariable _ _) = ErrorCode 16008
 resolveErrorCode (UnknownBoundFunction _ _ _) = ErrorCode 16009
 resolveErrorCode (BoundCycle _) = ErrorCode 16010
+resolveErrorCode (MultiSigOnFunction _) = ErrorCode 16011
+resolveErrorCode (MixedDeclKinds _) = ErrorCode 16012
+resolveErrorCode (ExtendClassTypeOnFunction _) = ErrorCode 16013
+resolveErrorCode (ExtendClassOnFunction _) = ErrorCode 16014
+resolveErrorCode (ExtendFunctionOnClass _) = ErrorCode 16015
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 was previously used for OperatorInImportList; now reserved
@@ -281,8 +286,11 @@ parseValidationErrorMsg (DiscontiguousEquations name) =
     "declare the function with :- open_function to allow equations from other modules"
 parseValidationErrorMsg (DiscontiguousFunctionDecls name) =
   withHint
-    ("Declarations for function '" ++ T.unpack name ++ "' must be contiguous")
-    "use :- extend_function_type from another module to extend an open function"
+    ("Declarations for '" ++ T.unpack name ++ "' must be contiguous")
+    ( "use :- extend_function (open_function), :- extend_class"
+        ++ " or :- extend_class_type (open_class) from another module"
+        ++ " to extend an open declaration"
+    )
 parseValidationErrorMsg MalformedImport =
   withHint
     "Invalid import"
@@ -291,18 +299,16 @@ parseValidationErrorMsg MalformedConstraint =
   withHint
     "Invalid constraint"
     "expected an atom or compound term"
-parseValidationErrorMsg (RequiringOnMultiSig name) =
+parseValidationErrorMsg (RequiringOnClass name) =
   withHint
-    ( "'requiring' is not allowed on the multi-signature form of '"
+    ( "'requiring' is not allowed on ':- class' / ':- open_class' (declaration '"
         ++ T.unpack name
-        ++ "'"
+        ++ "')"
     )
-    ( "use a single typed declaration with 'requiring',"
-        ++ " or split the multi-signature form into separate declarations"
-    )
-parseValidationErrorMsg (RequiringOnExtendFunctionType name) =
+    "bounded polymorphism is reserved for :- function / :- open_function"
+parseValidationErrorMsg (RequiringOnExtendClassType name) =
   withHint
-    ( "'requiring' is not allowed on ':- extend_function_type' (target '"
+    ( "'requiring' is not allowed on ':- extend_class_type' (target '"
         ++ T.unpack name
         ++ "')"
     )
@@ -348,9 +354,9 @@ resolveErrorMsg (ExtendsClosedFunction name) =
   withHint
     ( "Cannot extend '"
         ++ displayName name
-        ++ "' because it is declared as a closed function"
+        ++ "' because it is declared as closed"
     )
-    "declare it with :- open_function to allow cross-module signatures and equations"
+    "declare it with :- open_function or :- open_class to allow cross-module extensions"
 resolveErrorMsg (OrphanFunctionEquation name modName) =
   withHint
     ( "Function '"
@@ -359,7 +365,9 @@ resolveErrorMsg (OrphanFunctionEquation name modName) =
         ++ T.unpack modName
         ++ "'"
     )
-    "use :- extend_function to add equations to an open function from another module"
+    ( "use :- extend_function (or :- extend_class) to add equations"
+        ++ " to an open declaration from another module"
+    )
 resolveErrorMsg (ExtendTypeOnBoundedFunction name) =
   withHint
     ( "Cannot extend the type of bounded open function '"
@@ -402,6 +410,47 @@ resolveErrorMsg (BoundCycle names) =
         ++ intercalate " -> " (map T.unpack names)
     )
     "the bound graph must be acyclic; remove or restructure one of the requiring edges"
+resolveErrorMsg (MultiSigOnFunction name) =
+  withHint
+    ( "'"
+        ++ displayName name
+        ++ "' is declared with multiple signatures but is not a class"
+    )
+    ( "use :- class / :- open_class to enable signature overloading,"
+        ++ " or keep a single :- function signature"
+    )
+resolveErrorMsg (MixedDeclKinds name) =
+  withHint
+    ( "'"
+        ++ displayName name
+        ++ "' is declared with both :- function and :- class forms"
+    )
+    ( "pick one form: :- function / :- open_function for single signatures,"
+        ++ " :- class / :- open_class for overloads"
+    )
+resolveErrorMsg (ExtendClassTypeOnFunction name) =
+  withHint
+    ( "':- extend_class_type' targets '"
+        ++ displayName name
+        ++ "', which is declared as :- open_function"
+    )
+    ( "type extensions are only meaningful on :- open_class;"
+        ++ " declare the target as :- open_class to overload it"
+    )
+resolveErrorMsg (ExtendClassOnFunction name) =
+  withHint
+    ( "':- extend_class' targets '"
+        ++ displayName name
+        ++ "', which is declared as :- open_function"
+    )
+    "use :- extend_function to add equations to an :- open_function"
+resolveErrorMsg (ExtendFunctionOnClass name) =
+  withHint
+    ( "':- extend_function' targets '"
+        ++ displayName name
+        ++ "', which is declared as :- open_class"
+    )
+    "use :- extend_class to add equations to an :- open_class"
 
 instance Display (Diagnostic CollectError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =

@@ -56,6 +56,12 @@ combined arguments.
 | `:- module(order, [leq/2]).` | `module' "order" \`exporting\` ["leq" // 2]` |
 | `:- chr_constraint leq/2.` | `\`declaring\` ["leq" // 2]` |
 | `:- function factorial/1.` | `\`declaring\` [function "factorial" 1]` |
+| `:- class size/1.` | `\`declaring\` [class_ "size" 1]` |
+| `:- open_function f/1.` | `\`declaring\` [openFunction "f" 1]` |
+| `:- open_class f/1.` | `\`declaring\` [openClass "f" 1]` |
+| `:- extend_class_type (f(int) -> int).` | `\`declaring\` [extendClassType "f" [TypeCon (Unqualified "int") []] (TypeCon (Unqualified "int") [])]` |
+| `:- extend_function f(X) -> X.` | `\`withExtensions\` [equation "f" [var "X"] [] (var "X")]` |
+| `:- extend_class f(X) -> X.` | `\`withClassExtensions\` [equation "f" [var "X"] [] (var "X")]` |
 | `:- chr_type color ---> red ; green.` | `\`chrType\` tyDef "color" [] [dataCtor "red" [], dataCtor "green" []]` |
 | `:- use_module(other).` | `\`importing\` ["other"]` |
 | `:- use_module(library(lists)).` | `\`library\` "lists"` |

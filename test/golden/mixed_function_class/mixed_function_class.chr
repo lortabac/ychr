@@ -1,0 +1,11 @@
+:- module(mixed_function_class, [result/1]).
+:- chr_constraint result(any).
+
+% Forbidden: the same name+arity declared with both :- function and
+% :- class forms. Each name+arity must commit to one form.
+:- function size(int) -> int.
+:- class (size(string) -> int).
+
+size(X) -> X.
+
+result(R) <=> R is size(1).

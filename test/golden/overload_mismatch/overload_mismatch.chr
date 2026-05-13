@@ -6,7 +6,7 @@
 :- chr_type color ---> red ; green ; blue.
 
 % Overloaded function: works on int and string only
-:- function
+:- class
     (size(int) -> int),
     (size(string) -> int).
 

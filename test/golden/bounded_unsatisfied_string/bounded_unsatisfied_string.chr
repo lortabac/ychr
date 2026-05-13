@@ -4,7 +4,7 @@
 :- chr_constraint result(any).
 
 % Only int and float overloads — no string variant.
-:- function (gt(int, int) -> bool), (gt(float, float) -> bool).
+:- class (gt(int, int) -> bool), (gt(float, float) -> bool).
 gt(X, Y) -> X > Y.
 
 :- function pick_max(T, T) -> T requiring gt(T, T) -> bool.

@@ -176,6 +176,7 @@ directiveTests =
                 (Just [TypeCon (Unqualified "int") []])
                 (Just (TypeCon (Unqualified "int") []))
                 False
+                DKFunction
                 Nothing
             ],
       testCase "function typed multiple args" $
@@ -187,11 +188,12 @@ directiveTests =
                 (Just [TypeCon (Unqualified "int") [], TypeCon (Unqualified "int") []])
                 (Just (TypeCon (Unqualified "int") []))
                 False
+                DKFunction
                 Nothing
             ],
       testCase "function untyped" $
         (map (.node) . (.decls)) <$> p ":- function foo/2."
-          @?= Right [FunctionDecl "foo" 2 Nothing Nothing False Nothing]
+          @?= Right [FunctionDecl "foo" 2 Nothing Nothing False DKFunction Nothing]
     ]
 
 -- ---------------------------------------------------------------------------
@@ -620,6 +622,7 @@ moduleTests =
                     ],
                   equations = [],
                   extensions = [],
+                  classExtensions = [],
                   exports = Just (noAnnP [])
                 }
             ),

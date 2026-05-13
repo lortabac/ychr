@@ -90,6 +90,32 @@ Functions are callable in guards, on the right-hand side of `is`, and
 in rule body position (where the result is discarded). If no equation
 matches, a runtime error is raised.
 
+### `:- function` vs `:- class`
+
+`:- function` declares a single-signature function. To overload a
+function across multiple types, use `:- class`:
+
+```
+:- class
+    (size(int) -> int),
+    (size(string) -> int).
+
+size(N) | integer(N) -> N.
+size(S) | string(S) -> string_length(S).
+```
+
+A `:- function` declaration with more than one typed signature is an
+error (`MultiSigOnFunction`, YCHR-16011); use `:- class` instead. A
+`:- class` may also carry a single signature — verbose, but legal.
+The cross-module pair `:- open_function` / `:- open_class` mirrors
+the closed forms: only `:- open_class` accepts new type signatures
+(via `:- extend_class_type`); `:- open_function` accepts only
+new equations (via `:- extend_function`).
+
+Bounded polymorphism (`requiring`) is reserved for `:- function` and
+`:- open_function`; combining it with `:- class` / `:- open_class` is
+rejected as `RequiringOnClass` (YCHR-15005).
+
 ## The `is` operator
 
 `is` is generalized to accept any expression on the RHS, including

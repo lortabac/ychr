@@ -10,7 +10,7 @@ gt(X, Y) -> X > Y.
 :- open_function pick(T, T) -> T requiring gt(T, T) -> bool.
 pick(X, _) -> X.
 
-% Forbidden: extend_function_type on a bounded open function.
-:- extend_function_type (pick(float, float) -> float).
+% Forbidden: extend_class_type on a bounded open function.
+:- extend_class_type (pick(float, float) -> float).
 
 result(R) <=> R is pick(1, 2).

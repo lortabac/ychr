@@ -105,7 +105,10 @@ builtinOps =
           (P.Fx, "chr_type"),
           (P.Fx, "function"),
           (P.Fx, "open_function"),
-          (P.Fx, "extend_function_type"),
+          (P.Fx, "class"),
+          (P.Fx, "open_class"),
+          (P.Fx, "extend_class_type"),
+          (P.Fx, "extend_class"),
           (P.Fx, "extend_function")
         ]
       ),
@@ -497,8 +500,11 @@ data Directive
   | DirConstraintDecl [Ann Declaration]
   | DirFunctionDecl [Ann Declaration]
   | DirOpenFunctionDecl [Ann Declaration]
-  | DirExtendFunctionTypeDecl [Ann Declaration]
+  | DirClassDecl [Ann Declaration]
+  | DirOpenClassDecl [Ann Declaration]
+  | DirExtendClassTypeDecl [Ann Declaration]
   | DirExtendFunctionEqn (AnnP FunctionEquation)
+  | DirExtendClassEqn (AnnP FunctionEquation)
   | DirTypeDecl [Ann TypeDefinition]
   | DirOther
 
@@ -521,17 +527,16 @@ data ParseValidationError
   | -- | A constraint position contained something that is not an atom or
     -- compound term (e.g. a bare variable, integer, or string).
     MalformedConstraint
-  | -- | A @requiring@ clause appears inside a comma-separated
-    -- multi-signature @:- function@ declaration. The bounded form is
-    -- only permitted on a typed single-signature declaration; the
-    -- spec rules this out at the surface-syntax level. Carries the
-    -- bounded function's name.
-    RequiringOnMultiSig Text
-  | -- | A @requiring@ clause appears on a @:- extend_function_type@
+  | -- | A @requiring@ clause appears on a @:- class@ or
+    -- @:- open_class@ declaration. @requiring@ is reserved for
+    -- @:- function@ / @:- open_function@; the two forms are
+    -- intentionally orthogonal. Carries the class's name.
+    RequiringOnClass Text
+  | -- | A @requiring@ clause appears on a @:- extend_class_type@
     -- directive. Bounds are part of the original declaration; an
     -- extension cannot introduce them. Carries the extension target's
     -- name.
-    RequiringOnExtendFunctionType Text
+    RequiringOnExtendClassType Text
   deriving (Eq, Show)
 
 -- | Convert a list of top-level PExpr terms to a 'Module', along with
@@ -554,12 +559,16 @@ convertModule terms =
         concat [ds | DirConstraintDecl ds <- dirs]
           ++ concat [ds | DirFunctionDecl ds <- dirs]
           ++ concat [ds | DirOpenFunctionDecl ds <- dirs]
-      modExtensionTypes_ = concat [ds | DirExtendFunctionTypeDecl ds <- dirs]
+          ++ concat [ds | DirClassDecl ds <- dirs]
+          ++ concat [ds | DirOpenClassDecl ds <- dirs]
+      modExtensionTypes_ = concat [ds | DirExtendClassTypeDecl ds <- dirs]
       modTypeDecls_ = concat [ds | DirTypeDecl ds <- dirs]
       modExtensions_ = [e | ItemDirective (DirExtendFunctionEqn e) <- items]
+      modClassExtensions_ = [e | ItemDirective (DirExtendClassEqn e) <- items]
       openNames =
-        Set.fromList
+        Set.fromList $
           [d.name | DirOpenFunctionDecl ds <- dirs, Ann d _ <- ds]
+            ++ [d.name | DirOpenClassDecl ds <- dirs, Ann d _ <- ds]
       contiguityErrors = checkContiguity openNames items
       mod_ =
         Module
@@ -571,6 +580,7 @@ convertModule terms =
             rules = rules,
             equations = eqs,
             extensions = modExtensions_,
+            classExtensions = modClassExtensions_,
             exports = modExports_
           }
    in (mod_, itemErrors ++ contiguityErrors)
@@ -642,6 +652,8 @@ checkDeclContiguity openNames = go Set.empty Set.empty
 
     declListOf (DirFunctionDecl ds) = Just ds
     declListOf (DirOpenFunctionDecl ds) = Just ds
+    declListOf (DirClassDecl ds) = Just ds
+    declListOf (DirOpenClassDecl ds) = Just ds
     declListOf _ = Nothing
 
 -- | Classify and convert a single top-level PExpr, collecting any errors
@@ -700,26 +712,43 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
         results = map convertFunctionDecl pieces
         decls' = map fst results
         innerErrs = concatMap snd results
-        multiSigErrs = multiSigRequiringErrors loc body.node decls'
-     in (DirFunctionDecl decls', innerErrs ++ multiSigErrs)
+     in (DirFunctionDecl decls', innerErrs)
   -- :- open_function foo/2.
   Compound "open_function" [decls] ->
     let pieces = flattenComma decls
         results = map convertOpenFunctionDecl pieces
         decls' = map fst results
         innerErrs = concatMap snd results
-        multiSigErrs = multiSigRequiringErrors loc body.node decls'
-     in (DirOpenFunctionDecl decls', innerErrs ++ multiSigErrs)
-  -- :- extend_function_type (foo(int) -> int).
-  Compound "extend_function_type" [decls] ->
+     in (DirOpenFunctionDecl decls', innerErrs)
+  -- :- class size(int) -> int.  or  :- class (size(int) -> int), (size(string) -> int).
+  Compound "class" [decls] ->
     let pieces = flattenComma decls
-        results = map convertExtendFunctionTypeDecl pieces
+        results = map convertClassDecl pieces
+        decls' = map fst results
+        innerErrs = concatMap snd results
+        classReqErrs = requiringOnClassErrors loc body.node decls'
+     in (DirClassDecl decls', innerErrs ++ classReqErrs)
+  -- :- open_class size(int) -> int.
+  Compound "open_class" [decls] ->
+    let pieces = flattenComma decls
+        results = map convertOpenClassDecl pieces
+        decls' = map fst results
+        innerErrs = concatMap snd results
+        classReqErrs = requiringOnClassErrors loc body.node decls'
+     in (DirOpenClassDecl decls', innerErrs ++ classReqErrs)
+  -- :- extend_class_type (foo(int) -> int).
+  Compound "extend_class_type" [decls] ->
+    let pieces = flattenComma decls
+        results = map convertExtendClassTypeDecl pieces
         decls' = map fst results
         errs = concatMap snd results
-     in (DirExtendFunctionTypeDecl decls', errs)
+     in (DirExtendClassTypeDecl decls', errs)
   -- :- extend_function name(args) [| guards] -> body.
   Compound "extend_function" [eqn] ->
     (DirExtendFunctionEqn (convertFunctionEquation eqn), [])
+  -- :- extend_class name(args) [| guards] -> body.
+  Compound "extend_class" [eqn] ->
+    (DirExtendClassEqn (convertFunctionEquation eqn), [])
   -- :- chr_type name ---> con1 ; con2 ; ...
   -- Parsed as prefix op: Compound "chr_type" [Compound "--->" [head, alts]]
   Compound "chr_type" [typeBody] ->
@@ -759,29 +788,27 @@ convertImportWithList dirLoc dirPExpr imp importList =
         Atom name -> Right (AnnP (ModuleImport name (Just items)) dirLoc dirPExpr)
         _ -> Left (AnnP MalformedImport imp.sourceLoc imp.node)
 
--- | Report a 'RequiringOnMultiSig' error for every declaration in a
--- comma-separated group of two or more function declarations that
--- carries a @requiring@ clause. A single-decl group is the normal
--- bounded form and produces no error. The shared location and origin
--- come from the surrounding directive so the diagnostic points at the
--- whole @:- function@.
-multiSigRequiringErrors ::
+-- | Report a 'RequiringOnClass' error for every declaration inside a
+-- @:- class@ or @:- open_class@ directive that carries a @requiring@
+-- clause. Bounded polymorphism is reserved for @:- function@ /
+-- @:- open_function@; the two forms are intentionally orthogonal.
+-- The shared location and origin come from the surrounding directive
+-- so the diagnostic points at the whole @:- class@.
+requiringOnClassErrors ::
   SourceLoc -> PExpr -> [Ann Declaration] -> [AnnP ParseValidationError]
-multiSigRequiringErrors loc origin decls
-  | length decls < 2 = []
-  | otherwise =
-      [ AnnP (RequiringOnMultiSig d.name) loc origin
-      | Ann d _ <- decls,
-        case d of
-          FunctionDecl {requiring = Just _} -> True
-          _ -> False
-      ]
+requiringOnClassErrors loc origin decls =
+  [ AnnP (RequiringOnClass d.name) loc origin
+  | Ann d _ <- decls,
+    case d of
+      FunctionDecl {requiring = Just _} -> True
+      _ -> False
+  ]
 
 -- | Convert an export item PExpr to a 'Declaration'.
 convertExportItem :: Ann PExpr -> Declaration
 convertExportItem (Ann pexpr _) = case pexpr of
   Compound "fun" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
-    FunctionDecl name arity Nothing Nothing False Nothing
+    FunctionDecl name arity Nothing Nothing False DKFunction Nothing
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
     ConstraintDecl name arity Nothing Nothing
   Compound "op" [Ann (P.Int fix) _, Ann tyExpr _, Ann nameExpr _]
@@ -835,31 +862,40 @@ convertConstraintDecl (Ann pexpr loc) = case pexpr of
 
 -- | Convert a PExpr to a closed-function declaration.
 convertFunctionDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
-convertFunctionDecl = convertFunctionDeclWith False
+convertFunctionDecl = convertFunctionDeclWith False DKFunction
 
 -- | Convert a PExpr to an open-function declaration.
 convertOpenFunctionDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
-convertOpenFunctionDecl = convertFunctionDeclWith True
+convertOpenFunctionDecl = convertFunctionDeclWith True DKFunction
 
--- | Convert a PExpr to an extension type declaration.
+-- | Convert a PExpr to a closed-class declaration.
+convertClassDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
+convertClassDecl = convertFunctionDeclWith False DKClass
+
+-- | Convert a PExpr to an open-class declaration.
+convertOpenClassDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
+convertOpenClassDecl = convertFunctionDeclWith True DKClass
+
+-- | Convert a PExpr to an extension type declaration. Targets
+-- @:- open_class@ declarations and adds an overloaded signature.
 -- Only the typed form @name(types) -> type@ is supported: an extension
 -- declaration that does not carry a signature has nothing to contribute.
 --
--- A @requiring@ clause on an @:- extend_function_type@ is rejected
+-- A @requiring@ clause on an @:- extend_class_type@ is rejected
 -- syntactically: bounds belong to the original declaration, not to
 -- an extension.
-convertExtendFunctionTypeDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
-convertExtendFunctionTypeDecl (Ann pexpr loc) = case pexpr of
+convertExtendClassTypeDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
+convertExtendClassTypeDecl (Ann pexpr loc) = case pexpr of
   Compound "requiring" [sig, _] ->
-    let (declAnn, errs) = convertExtendFunctionTypeDecl sig
+    let (declAnn, errs) = convertExtendClassTypeDecl sig
         targetName = case sig.node of
           Compound "->" [Ann (Compound n _) _, _] -> n
           _ -> "<unknown>"
-        err = AnnP (RequiringOnExtendFunctionType targetName) loc pexpr
+        err = AnnP (RequiringOnExtendClassType targetName) loc pexpr
      in (declAnn, err : errs)
   Compound "->" [Ann (Compound name args) _, ret] ->
     ( Ann
-        ( ExtendFunctionTypeDecl
+        ( ExtendClassTypeDecl
             name
             (length args)
             (Just (map convertTypeExpr args))
@@ -869,15 +905,19 @@ convertExtendFunctionTypeDecl (Ann pexpr loc) = case pexpr of
         loc,
       []
     )
-  _ -> (Ann (ExtendFunctionTypeDecl "<unknown>" 0 Nothing Nothing Nothing) loc, [])
+  _ -> (Ann (ExtendClassTypeDecl "<unknown>" 0 Nothing Nothing Nothing) loc, [])
 
--- | Shared implementation of 'convertFunctionDecl' and
--- 'convertOpenFunctionDecl'. The 'Bool' argument is the @open@ flag stored
--- on the resulting 'FunctionDecl'. Returns parse-validation errors for
--- malformed @requiring@ placements.
+-- | Shared implementation of 'convertFunctionDecl',
+-- 'convertOpenFunctionDecl', 'convertClassDecl' and
+-- 'convertOpenClassDecl'. The 'Bool' argument is the @open@ flag and
+-- the 'FunctionDeclKind' selects between @:- function@ and @:- class@.
+-- Returns parse-validation errors for malformed @requiring@ placements.
 convertFunctionDeclWith ::
-  Bool -> Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
-convertFunctionDeclWith open (Ann pexpr loc) = case pexpr of
+  Bool ->
+  FunctionDeclKind ->
+  Ann PExpr ->
+  (Ann Declaration, [AnnP ParseValidationError])
+convertFunctionDeclWith open kind (Ann pexpr loc) = case pexpr of
   -- @name(types) -> ret requiring bound, ...@
   Compound "requiring" [sig, bounds] ->
     case sig.node of
@@ -890,6 +930,7 @@ convertFunctionDeclWith open (Ann pexpr loc) = case pexpr of
                     (Just (map convertTypeExpr args))
                     (Just (convertTypeExpr ret))
                     open
+                    kind
                     (Just bs)
                 )
                 loc,
@@ -900,10 +941,10 @@ convertFunctionDeclWith open (Ann pexpr loc) = case pexpr of
         -- requiring clause and fall through to the malformed-decl
         -- placeholder used elsewhere; there is nothing meaningful to
         -- attach the bounds to.
-        (Ann (FunctionDecl "<unknown>" 0 Nothing Nothing open Nothing) loc, [])
+        (Ann (FunctionDecl "<unknown>" 0 Nothing Nothing open kind Nothing) loc, [])
   -- Untyped: name/arity
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    (Ann (FunctionDecl name arity Nothing Nothing open Nothing) loc, [])
+    (Ann (FunctionDecl name arity Nothing Nothing open kind Nothing) loc, [])
   -- Typed: name(type, ...) -> type
   Compound "->" [Ann (Compound name args) _, ret] ->
     ( Ann
@@ -913,12 +954,13 @@ convertFunctionDeclWith open (Ann pexpr loc) = case pexpr of
             (Just (map convertTypeExpr args))
             (Just (convertTypeExpr ret))
             open
+            kind
             Nothing
         )
         loc,
       []
     )
-  _ -> (Ann (FunctionDecl "<unknown>" 0 Nothing Nothing open Nothing) loc, [])
+  _ -> (Ann (FunctionDecl "<unknown>" 0 Nothing Nothing open kind Nothing) loc, [])
 
 -- | Convert a single bound signature inside a @requiring@ clause. The
 -- expected shape is @name(τ₁, ..., τₙ) -> τᵣ@. A name appearing without

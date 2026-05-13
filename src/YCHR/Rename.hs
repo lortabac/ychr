@@ -420,6 +420,7 @@ renameModule mods ctx = do
   renamedRules <- traverse (renameRule ctx) m.rules
   renamedEquations <- traverse (traverse (renameEquation ctx)) m.equations
   renamedExtensions <- traverse (traverse (renameEquation ctx)) m.extensions
+  renamedClassExtensions <- traverse (traverse (renameEquation ctx)) m.classExtensions
   let renamedTypeDecls = map (fmap (renameTypeDefinition ctx)) m.typeDecls
   renamedDecls <- traverse (renameAnnDecl ctx) m.decls
   renamedExtensionTypes <- traverse (renameAnnDecl ctx) m.extensionTypes
@@ -428,6 +429,7 @@ renameModule mods ctx = do
       { rules = renamedRules,
         equations = renamedEquations,
         extensions = renamedExtensions,
+        classExtensions = renamedClassExtensions,
         typeDecls = renamedTypeDecls,
         decls = renamedDecls,
         extensionTypes = renamedExtensionTypes
@@ -470,10 +472,10 @@ validateImportLists mods ctx =
     checkItem mn loc origin (ConstraintDecl n a _ _) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
-    checkItem mn loc origin (FunctionDecl n a _ _ _ _) =
+    checkItem mn loc origin (FunctionDecl n a _ _ _ _ _) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
-    checkItem _ _ _ ExtendFunctionTypeDecl {} = pure ()
+    checkItem _ _ _ ExtendClassTypeDecl {} = pure ()
     checkItem mn loc origin (TypeExportDecl n a cs) =
       if mn `notElem` lookupExport (n, a) ctx.typeExportEnv
         then emitError (AnnP (UnknownImport mn n a) loc origin)
@@ -739,7 +741,7 @@ importListPermits _ _ Nothing = True
 importListPermits n arity (Just decls) = any match decls
   where
     match (ConstraintDecl dn da _ _) = dn == n && da == arity
-    match (FunctionDecl dn da _ _ _ _) = dn == n && da == arity
+    match (FunctionDecl dn da _ _ _ _ _) = dn == n && da == arity
     match _ = False
 
 -- | Check whether a type name/arity is permitted by an import list.
@@ -871,7 +873,7 @@ renameDeclaration ctx loc (ConstraintDecl n a argTypes requiring) = do
         argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
         requiring = requiring'
       }
-renameDeclaration ctx loc (FunctionDecl n a argTypes returnType isOpen requiring) = do
+renameDeclaration ctx loc (FunctionDecl n a argTypes returnType isOpen kind requiring) = do
   requiring' <- traverse (traverse (renameBoundSig ctx loc)) requiring
   pure
     FunctionDecl
@@ -880,9 +882,10 @@ renameDeclaration ctx loc (FunctionDecl n a argTypes returnType isOpen requiring
         argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
         returnType = fmap (renameTypeExpr ctx) returnType,
         isOpen = isOpen,
+        kind = kind,
         requiring = requiring'
       }
-renameDeclaration ctx loc d@ExtendFunctionTypeDecl {name, arity, argTypes, returnType} = do
+renameDeclaration ctx loc d@ExtendClassTypeDecl {name, arity, argTypes, returnType} = do
   resolved <- resolveName ResolveTop ctx loc (Atom name) (Unqualified name) arity
   pure
     d
@@ -986,6 +989,7 @@ renameQueryTerms mods mode terms =
             rules = [],
             equations = [],
             extensions = [],
+            classExtensions = [],
             exports = Nothing
           }
       ctx0 =

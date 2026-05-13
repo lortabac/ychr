@@ -2,5 +2,5 @@
 :- use_module(owner, [classify/1]).
 
 % Second extender adds an atom overload (distinct from the string one).
-:- extend_function_type (classify(atom) -> atom).
-:- extend_function classify(red) -> color.
+:- extend_class_type (classify(atom) -> atom).
+:- extend_class classify(red) -> color.
