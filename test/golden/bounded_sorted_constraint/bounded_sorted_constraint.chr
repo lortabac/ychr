@@ -1,0 +1,17 @@
+:- module(bounded_sorted_constraint, [check_int/1, check_float/1]).
+:- use_module(library(prelude)).
+
+:- function (lt(int, int) -> bool), (lt(float, float) -> bool).
+lt(X, Y) -> X < Y.
+
+% Bounded constraint: sorted is parametric in the element type, with a
+% required ordering operation on that type.
+:- chr_constraint sorted(list(T)) requiring lt(T, T) -> bool.
+:- chr_constraint check_int(int), check_float(int).
+
+sorted([]) <=> true.
+sorted([_]) <=> true.
+sorted([X, Y | Rest]) <=> lt(X, Y) | sorted([Y | Rest]).
+
+check_int(_) <=> sorted([1, 2, 3]).
+check_float(_) <=> sorted([1.0, 2.0, 3.0]).

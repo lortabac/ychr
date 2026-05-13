@@ -1,0 +1,15 @@
+:- module(bounded_unresolved_arg, [result/2]).
+:- use_module(library(prelude)).
+
+:- chr_constraint result(any, any).
+
+:- function (gt(int, int) -> bool), (gt(float, float) -> bool).
+gt(X, Y) -> X > Y.
+
+:- function pick(T, T) -> T requiring gt(T, T) -> bool.
+pick(X, _) -> X.
+
+% Polymorphic use: X is unconstrained at the call site, so the bound's
+% substitution stays partial and discharges silently per the gradual
+% guarantee. Type-check should accept this with no errors.
+result(X, R) <=> R is pick(X, X).

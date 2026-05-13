@@ -21,12 +21,14 @@ import YCHR.PExpr qualified as PExpr
 import YCHR.Parsed qualified as P
 import YCHR.Resolved qualified as R
 import YCHR.Types
-  ( Constraint (..),
+  ( BoundSig (..),
+    Constraint (..),
     Name (..),
     QualifiedConstraint (..),
     QualifiedIdentifier (..),
     QualifiedName (..),
     TypeExpr (..),
+    flattenName,
   )
 
 data ResolveError
@@ -47,6 +49,24 @@ data ResolveError
     -- not the declaring module of the function. Carries the qualified
     -- function name and the module in which the equation was found.
     OrphanFunctionEquation Name Text
+  | -- | An @:- extend_function_type@ directive targets an open function
+    -- that itself carries a @requiring@ clause. The instance set of a
+    -- bounded open function is determined by its bounds, not by
+    -- enumerated extensions.
+    ExtendTypeOnBoundedFunction Name
+  | -- | A @requiring@ clause references a type variable that does not
+    -- appear in the enclosing declaration's primary signature. Carries
+    -- the enclosing declaration's flattened name and the offending
+    -- variable name.
+    UnboundBoundVariable Text Text
+  | -- | A @requiring@ clause names a function that is not declared in
+    -- the program (or is declared at a different arity). Carries the
+    -- enclosing declaration's flattened name, the bound function's
+    -- flattened name, and the bound's arity.
+    UnknownBoundFunction Text Text Int
+  | -- | The bound graph contains a cycle. Carries the flattened names
+    -- of the declarations on the cycle in source order.
+    BoundCycle [Text]
   deriving (Eq, Show)
 
 -- | Flatten modules into a single resolved program.
@@ -60,13 +80,17 @@ resolveProgram mods =
   let constraintNames = buildConstraintNames mods
       functionNames = buildFunctionNames mods
       conTypes = collectConstraintTypes mods
+      conBounds = collectConstraintBounds mods
       typeDefs = [td.node | m <- mods, td <- m.typeDecls]
       funcOpenness = buildFunctionOpenness mods
+      funcRequiring = buildFunctionRequiring mods
       eqErrors = checkEquations constraintNames mods
       headErrors = checkRuleHeads (Set.map qualifiedNameToLooseName functionNames) mods
       reservedErrors = checkReservedNames mods
       orphanEqErrors = checkOrphanEquations functionNames mods
       extendsClosedErrors = checkExtendsClosed funcOpenness mods
+      extendsBoundedErrors = checkExtendsBounded funcRequiring mods
+      boundedDeclErrors = checkBoundedDeclarations functionNames mods
       (resolvedRules, ruleErrs) = resolveRules mods
       errs =
         eqErrors
@@ -74,6 +98,8 @@ resolveProgram mods =
           ++ reservedErrors
           ++ orphanEqErrors
           ++ extendsClosedErrors
+          ++ extendsBoundedErrors
+          ++ boundedDeclErrors
           ++ ruleErrs
    in if null errs
         then
@@ -82,6 +108,7 @@ resolveProgram mods =
               { rules = resolvedRules,
                 functions = resolveFunctions mods,
                 constraintTypes = conTypes,
+                constraintBounds = conBounds,
                 functionNames = functionNames,
                 typeDefinitions = typeDefs
               }
@@ -132,6 +159,28 @@ collectConstraintTypes mods =
       let ts = case d.argTypes of
             Just types -> types
             Nothing -> replicate d.arity (TypeCon (Unqualified "any") [])
+    ]
+
+-- | Bounds declared on every @:- chr_constraint@ that carries a
+-- @requiring@ clause. Unbounded constraints are absent from the map.
+collectConstraintBounds :: [P.Module] -> Map.Map QualifiedName [BoundSig]
+collectConstraintBounds mods =
+  Map.fromList
+    [ (QualifiedName m.name d.name, bs)
+    | m <- mods,
+      P.Ann d _ <- m.decls,
+      P.ConstraintDecl {requiring = Just bs} <- [d]
+    ]
+
+-- | Bounds declared on every @:- function@ / @:- open_function@ that
+-- carries a @requiring@ clause. Unbounded functions are absent.
+buildFunctionRequiring :: [P.Module] -> Map.Map QualifiedName [BoundSig]
+buildFunctionRequiring mods =
+  Map.fromList
+    [ (QualifiedName m.name d.name, bs)
+    | m <- mods,
+      P.Ann d _ <- m.decls,
+      P.FunctionDecl {requiring = Just bs} <- [d]
     ]
 
 -- ---------------------------------------------------------------------------
@@ -213,6 +262,173 @@ checkExtendsClosed funcOpenness mods =
         Just False -> True
         _ -> False
     isKnownClosed _ _ = False
+
+-- | Reject @:- extend_function_type@ directives that target a bounded
+-- open function. The instance set of a bounded open function is
+-- determined by its bound-named functions, not by enumerated extensions.
+-- @:- extend_function@ (equation extension) is /not/ rejected here —
+-- new equations of a bounded open function are valid and are checked
+-- under the same ambient bound as the original equations.
+checkExtendsBounded ::
+  Map.Map QualifiedName [BoundSig] -> [P.Module] -> [Diagnostic ResolveError]
+checkExtendsBounded funcRequiring mods =
+  [ noDiag
+      (P.AnnP (ExtendTypeOnBoundedFunction target) loc (PExpr.Atom d.name))
+  | m <- mods,
+    P.Ann d loc <- m.extensionTypes,
+    Just target <- [d.target],
+    isBounded target
+  ]
+  where
+    isBounded (Qualified mn n) =
+      Map.member (QualifiedName mn n) funcRequiring
+    isBounded _ = False
+
+-- | Validate every @requiring@ clause in the program.
+--
+-- Reports three kinds of error:
+--
+--   * 'UnboundBoundVariable' — a type variable in the @requiring@
+--     clause has no occurrence in the enclosing declaration's primary
+--     signature.
+--   * 'UnknownBoundFunction' — the bound's named function (with that
+--     exact arity) is not declared anywhere in the program.
+--   * 'BoundCycle' — the bound graph (with vertices for every function
+--     and bounded constraint, and edges from each declaration to the
+--     functions named in its @requiring@ clause) contains a cycle.
+--
+-- All three checks run together so the user sees every shape of bound
+-- error in a single pass.
+checkBoundedDeclarations ::
+  Set QualifiedName -> [P.Module] -> [Diagnostic ResolveError]
+checkBoundedDeclarations functionNames mods =
+  let funcBounds =
+        [ (QualifiedName m.name d.name, primaryVars, bs, originForDecl m d)
+        | m <- mods,
+          P.Ann d _ <- m.decls,
+          P.FunctionDecl {requiring = Just bs, argTypes, returnType} <- [d],
+          let primaryVars =
+                Set.fromList $
+                  concatMap typeExprVars (maybe [] id argTypes)
+                    ++ maybe [] typeExprVars returnType
+        ]
+      conBounds =
+        [ (QualifiedName m.name d.name, primaryVars, bs, originForDecl m d)
+        | m <- mods,
+          P.Ann d _ <- m.decls,
+          P.ConstraintDecl {requiring = Just bs, argTypes} <- [d],
+          let primaryVars =
+                Set.fromList (concatMap typeExprVars (maybe [] id argTypes))
+        ]
+      allBounded = funcBounds ++ conBounds
+      varErrs =
+        [ noDiag (P.AnnP (UnboundBoundVariable declText v) bs.loc origin)
+        | (qn, primary, bsigs, origin) <- allBounded,
+          let declText = qualifiedToLooseText qn,
+          bs <- bsigs,
+          let bsVars =
+                Set.fromList
+                  (concatMap typeExprVars bs.argTypes ++ typeExprVars bs.returnType),
+          v <- Set.toList bsVars,
+          Set.notMember v primary
+        ]
+      unknownErrs =
+        [ noDiag
+            ( P.AnnP
+                (UnknownBoundFunction declText (flattenName bs.name) bs.arity)
+                bs.loc
+                origin
+            )
+        | (qn, _, bsigs, origin) <- allBounded,
+          let declText = qualifiedToLooseText qn,
+          bs <- bsigs,
+          not (boundResolvesToFunction bs)
+        ]
+      cycleErrs = detectBoundCycles allBounded
+   in varErrs ++ unknownErrs ++ cycleErrs
+  where
+    qualifiedToLooseText qn = flattenName (qualifiedNameToLooseName qn)
+    boundResolvesToFunction bs = case bs.name of
+      Qualified m n -> Set.member (QualifiedName m n) functionNames
+      Unqualified _ ->
+        -- The renamer should have qualified the name; if it did not,
+        -- the renamer already reported YCHR-20002 for the unknown
+        -- reference. We skip emitting our own bound-specific error
+        -- in that case to avoid double-reporting.
+        True
+    originForDecl m d = PExpr.Atom (m.name <> ":" <> d.name)
+
+-- | Detect cycles in the bound graph by depth-first search.
+--
+-- Vertices are the qualified names of bounded declarations. There is
+-- an edge from @f@ to @g@ whenever @g@ appears in @f@'s @requiring@
+-- clause (bounded names are always functions per the spec).
+--
+-- At most one diagnostic is emitted per simple cycle: subsequent
+-- starting vertices that re-enter the same cycle hit it via the
+-- 'visited' set and are skipped.
+detectBoundCycles ::
+  [(QualifiedName, Set Text, [BoundSig], PExpr.PExpr)] ->
+  [Diagnostic ResolveError]
+detectBoundCycles bounded =
+  let graph :: Map.Map QualifiedName [QualifiedName]
+      graph =
+        Map.fromList
+          [ ( qn,
+              [ QualifiedName m n
+              | b <- bs,
+                Qualified m n <- [b.name]
+              ]
+            )
+          | (qn, _, bs, _) <- bounded
+          ]
+      origins :: Map.Map QualifiedName PExpr.PExpr
+      origins = Map.fromList [(qn, origin) | (qn, _, _, origin) <- bounded]
+      (_, cycles) = foldl visit (Set.empty, []) (Map.keys graph)
+      visit (visited, acc) qn = dfs graph visited [] acc qn
+   in map (emitCycleDiag origins) cycles
+
+-- | Iterative DFS from @qn@ that pushes any detected cycle onto the
+-- accumulator and returns the updated @(visited, cycles)@ pair. A
+-- vertex is added to @visited@ only after its entire subtree has been
+-- explored, ensuring each simple cycle is reported exactly once.
+dfs ::
+  Map.Map QualifiedName [QualifiedName] ->
+  Set QualifiedName ->
+  [QualifiedName] ->
+  [[QualifiedName]] ->
+  QualifiedName ->
+  (Set QualifiedName, [[QualifiedName]])
+dfs graph visited path acc qn
+  | qn `elem` path =
+      let cycle_ = reverse (qn : takeWhile (/= qn) path) ++ [qn]
+       in (visited, cycle_ : acc)
+  | qn `Set.member` visited = (visited, acc)
+  | otherwise =
+      let neighbors = Map.findWithDefault [] qn graph
+          (visited', acc') =
+            foldl
+              (\(v, a) target -> dfs graph v (qn : path) a target)
+              (visited, acc)
+              neighbors
+       in (Set.insert qn visited', acc')
+
+emitCycleDiag ::
+  Map.Map QualifiedName PExpr.PExpr ->
+  [QualifiedName] ->
+  Diagnostic ResolveError
+emitCycleDiag origins cycle_ =
+  let names = map (flattenName . qualifiedNameToLooseName) cycle_
+      origin = case cycle_ of
+        (q : _) -> Map.findWithDefault (PExpr.Atom "<bound_cycle>") q origins
+        [] -> PExpr.Atom "<bound_cycle>"
+      loc' = P.SourceLoc "<bound_cycle>" 0 0
+   in noDiag (P.AnnP (BoundCycle names) loc' origin)
+
+-- | Collect every type variable mentioned in a type expression.
+typeExprVars :: TypeExpr -> [Text]
+typeExprVars (TypeVar v) = [v]
+typeExprVars (TypeCon _ args) = concatMap typeExprVars args
 
 -- | Check that no rule head constraint is a function-declared name.
 -- Reports only the first rule per name.
@@ -329,6 +545,7 @@ resolveFunctions mods =
               collectSignatures decls
                 ++ collectExtensionSignatures mods qn ar,
             isOpen = any (\(d, _) -> d.isOpen) decls,
+            requiring = concatMap (\(d, _) -> maybe [] id d.requiring) decls,
             equations = concatMap (\(d, m) -> gatherEquations mods m d) decls
           }
       | ((qn, ar), decls) <- grouped

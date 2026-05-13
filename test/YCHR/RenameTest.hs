@@ -518,7 +518,7 @@ multiModuleTests =
                 ( [ Module
                       { name = "M",
                         imports = [],
-                        decls = [noAnn (ConstraintDecl "leq" 2 Nothing)],
+                        decls = [noAnn (ConstraintDecl "leq" 2 Nothing Nothing)],
                         extensionTypes = [],
                         typeDecls = [],
                         rules = [],
@@ -883,6 +883,7 @@ importListTests =
                                     "leq"
                                     2
                                     Nothing
+                                    Nothing
                                 ]
                             )
                         )
@@ -919,6 +920,7 @@ importListTests =
                                     "geq"
                                     2
                                     Nothing
+                                    Nothing
                                 ]
                             )
                         )
@@ -942,6 +944,7 @@ importListTests =
                                 [ ConstraintDecl
                                     "nonexistent"
                                     1
+                                    Nothing
                                     Nothing
                                 ]
                             )

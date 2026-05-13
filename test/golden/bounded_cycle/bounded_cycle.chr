@@ -1,0 +1,12 @@
+:- module(bounded_cycle, [result/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint result(int).
+
+:- function f(T) -> T requiring g(T) -> T.
+:- function g(T) -> T requiring f(T) -> T.
+
+f(X) -> X.
+g(X) -> X.
+
+result(R) <=> R is f(1).

@@ -26,4 +26,10 @@ data TypeCheckError
     -- part of a constructor's identity and any mismatch is an
     -- error rather than a fall-through to @any@.
     ConstructorArityMismatch Text Int Int
+  | -- | A use site of a bounded function or constraint infers a
+    -- substitution whose required signatures cannot be satisfied by
+    -- any declared signature of the bound's named function. Carries
+    -- the bound function's flattened name. Emitted at the call site
+    -- (or head/body occurrence for a bounded constraint).
+    BoundUnsatisfied Text
   deriving (Show, Eq)

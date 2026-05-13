@@ -48,6 +48,7 @@ module YCHR.Parsed
     TypeDefinition (..),
     DataConstructor (..),
     TypeExpr (..),
+    BoundSig (..),
   )
 where
 
@@ -56,7 +57,8 @@ import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Loc (Ann (..), SourceLoc (..), dummyLoc, noAnn)
 import YCHR.PExpr (OpType (..), PExpr (..))
 import YCHR.Types
-  ( Constraint (..),
+  ( BoundSig (..),
+    Constraint (..),
     DataConstructor (..),
     Name (..),
     Term (..),
@@ -97,13 +99,27 @@ data Module = Module
   deriving (Show, Eq, Lift)
 
 data Declaration
-  = ConstraintDecl {name :: Text, arity :: Int, argTypes :: Maybe [TypeExpr]}
+  = ConstraintDecl
+      { name :: Text,
+        arity :: Int,
+        argTypes :: Maybe [TypeExpr],
+        -- | Bounded polymorphism: a non-'Nothing' value carries the
+        -- @requiring@ clause's bound signatures. Permitted only on
+        -- the typed form of a constraint declaration; the parser
+        -- enforces this.
+        requiring :: Maybe [BoundSig]
+      }
   | FunctionDecl
       { name :: Text,
         arity :: Int,
         argTypes :: Maybe [TypeExpr],
         returnType :: Maybe TypeExpr,
-        isOpen :: Bool
+        isOpen :: Bool,
+        -- | Bounded polymorphism: a non-'Nothing' value carries the
+        -- @requiring@ clause's bound signatures. Permitted only on
+        -- the typed single-signature form (closed or open); the
+        -- parser rejects @requiring@ on multi-signature groups.
+        requiring :: Maybe [BoundSig]
       }
   | -- | Adds an overloaded type signature to an open function declared
     -- in another module. The renamer fills in @target@ with the

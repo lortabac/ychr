@@ -68,7 +68,7 @@ moduleTests =
       testCase "declaring sets modDecls" $
         module' "Foo" `declaring` ["leq" // 2]
           @?= (emptyModule "Foo")
-            { decls = [noAnn (ConstraintDecl "leq" 2 Nothing)]
+            { decls = [noAnn (ConstraintDecl "leq" 2 Nothing Nothing)]
             },
       testCase "defining sets modRules" $
         let r = [term "leq" [var "X"]] <=> [atom "true"]
@@ -82,13 +82,13 @@ moduleTests =
               `defining` [r]
               @?= (emptyModule "M")
                 { imports = [noAnnP (ModuleImport "A" Nothing)],
-                  decls = [noAnn (ConstraintDecl "c" 0 Nothing)],
+                  decls = [noAnn (ConstraintDecl "c" 0 Nothing Nothing)],
                   rules = [r]
                 },
       testCase "exporting sets modExports" $
         module' "Foo" `exporting` ["leq" // 2]
           @?= (emptyModule "Foo")
-            { exports = Just (noAnnP [ConstraintDecl "leq" 2 Nothing])
+            { exports = Just (noAnnP [ConstraintDecl "leq" 2 Nothing Nothing])
             },
       testCase "library appends a LibraryImport" $
         module' "Foo" `library` "lists" `library` "math"
@@ -106,7 +106,9 @@ moduleTests =
             { exports =
                 Just
                   ( noAnnP
-                      [ConstraintDecl "a" 1 Nothing, ConstraintDecl "b" 2 Nothing]
+                      [ ConstraintDecl "a" 1 Nothing Nothing,
+                        ConstraintDecl "b" 2 Nothing Nothing
+                      ]
                   )
             },
       testCase "withEquations appends to module.equations" $
@@ -133,9 +135,9 @@ declarationTests =
   testGroup
     "declaration"
     [ testCase "\"leq\" // 2 produces ConstraintDecl" $
-        "leq" // 2 @?= ConstraintDecl "leq" 2 Nothing,
+        "leq" // 2 @?= ConstraintDecl "leq" 2 Nothing Nothing,
       testCase "\"foo\" // 0 produces ConstraintDecl with arity 0" $
-        "foo" // 0 @?= ConstraintDecl "foo" 0 Nothing,
+        "foo" // 0 @?= ConstraintDecl "foo" 0 Nothing Nothing,
       testCase "extendFunctionType produces ExtendFunctionTypeDecl" $
         extendFunctionType
           "classify"
@@ -165,7 +167,8 @@ functionDeclarationTests =
               arity = 1,
               argTypes = Nothing,
               returnType = Nothing,
-              isOpen = False
+              isOpen = False,
+              requiring = Nothing
             },
       testCase "openFunction produces FunctionDecl with isOpen = True" $
         openFunction "show" 1
@@ -174,7 +177,8 @@ functionDeclarationTests =
               arity = 1,
               argTypes = Nothing,
               returnType = Nothing,
-              isOpen = True
+              isOpen = True,
+              requiring = Nothing
             },
       testCase "extendFunctionType arity matches argTypes length" $
         let intCon = TypeCon (Unqualified "int") []
@@ -522,7 +526,7 @@ integrationTests =
           @?= Module
             { name = "Order",
               imports = [],
-              decls = [noAnn (ConstraintDecl "leq" 2 Nothing)],
+              decls = [noAnn (ConstraintDecl "leq" 2 Nothing Nothing)],
               extensionTypes = [],
               typeDecls = [],
               rules =

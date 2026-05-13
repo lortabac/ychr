@@ -43,6 +43,9 @@ module YCHR.Types
     TypeDefinition (..),
     DataConstructor (..),
     TypeExpr (..),
+
+    -- * Bounded polymorphism
+    BoundSig (..),
   )
 where
 
@@ -203,6 +206,26 @@ data DataConstructor = DataConstructor
 data TypeExpr
   = TypeVar Text
   | TypeCon Name [TypeExpr]
+  deriving (Show, Eq, Lift)
+
+-- | A required signature appearing inside a @requiring@ clause on a
+-- bounded function or constraint declaration. Carries the same shape
+-- as a function signature (name + arg types + return type) plus the
+-- arity (redundant with @length argTypes@ but kept explicit so the
+-- bound-graph code can compare against function declarations by
+-- @(name, arity)@ without re-counting).
+--
+-- The 'name' field follows the same Unqualified-to-Qualified
+-- progression as 'Constraint.name': the parser emits 'Unqualified',
+-- the renamer rewrites it to 'Qualified', and the resolver checks
+-- it against the program's declared functions.
+data BoundSig = BoundSig
+  { name :: Name,
+    arity :: Int,
+    argTypes :: [TypeExpr],
+    returnType :: TypeExpr,
+    loc :: SourceLoc
+  }
   deriving (Show, Eq, Lift)
 
 -- | Prolog-compatible terms.

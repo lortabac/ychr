@@ -223,7 +223,7 @@ exporting m ds = case m.exports of
 --
 -- > "leq" // 2
 (//) :: Text -> Int -> Declaration
-(//) name arity = ConstraintDecl name arity Nothing
+(//) name arity = ConstraintDecl name arity Nothing Nothing
 
 -- | Function declaration: @:- function name/arity@.
 function :: Text -> Int -> Declaration
@@ -233,7 +233,8 @@ function name arity =
       arity = arity,
       argTypes = Nothing,
       returnType = Nothing,
-      isOpen = False
+      isOpen = False,
+      requiring = Nothing
     }
 
 -- | Open-function declaration: @:- open_function name/arity@. Open functions
@@ -245,7 +246,8 @@ openFunction name arity =
       arity = arity,
       argTypes = Nothing,
       returnType = Nothing,
-      isOpen = True
+      isOpen = True,
+      requiring = Nothing
     }
 
 -- | Extension type declaration: @:- extend_function_type (name(args) -> ret)@.

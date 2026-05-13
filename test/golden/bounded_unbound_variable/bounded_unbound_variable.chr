@@ -1,0 +1,14 @@
+:- module(bounded_unbound_variable, [result/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint result(int).
+
+:- function (gt(int, int) -> bool).
+gt(X, Y) -> X > Y.
+
+% U is not bound by the primary signature.
+:- function pick(T, T) -> T requiring gt(U, U) -> bool.
+
+pick(X, _) -> X.
+
+result(R) <=> R is pick(1, 2).

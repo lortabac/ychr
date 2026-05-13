@@ -1,0 +1,16 @@
+:- module(bounded_unsatisfied_string, [result/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint result(any).
+
+% Only int and float overloads — no string variant.
+:- function (gt(int, int) -> bool), (gt(float, float) -> bool).
+gt(X, Y) -> X > Y.
+
+:- function pick_max(T, T) -> T requiring gt(T, T) -> bool.
+
+pick_max(X, Y) | gt(X, Y) -> X.
+pick_max(_, Y) -> Y.
+
+% Bound unsatisfied: there is no gt(string, string) -> bool.
+result(R) <=> R is pick_max("a", "b").

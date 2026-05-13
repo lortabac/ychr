@@ -323,14 +323,25 @@ prepareQuery cp src = do
   let cdp = cp.desugaredProgram
       progForCheck =
         D.Program
-          cdp.rules
-          (cdp.functions ++ lambdas)
-          cdp.constraintTypes
-          cdp.typeDefinitions
+          { rules = cdp.rules,
+            functions = cdp.functions ++ lambdas,
+            constraintTypes = cdp.constraintTypes,
+            constraintBounds = cdp.constraintBounds,
+            typeDefinitions = cdp.typeDefinitions
+          }
   tcErrs <- typeCheckGoals progForCheck queryLoc (Just "query") lifted
   unless (null tcErrs) (throwIO (TypeErrors tcErrs))
   let allFuns = cp.allFunctions ++ lambdas
-      funSet = buildFunctionSet (D.Program [] allFuns Map.empty [])
+      funSet =
+        buildFunctionSet
+          ( D.Program
+              { rules = [],
+                functions = allFuns,
+                constraintTypes = Map.empty,
+                constraintBounds = Map.empty,
+                typeDefinitions = []
+              }
+          )
       queryProcs = compileQueryLambdas funSet lambdas
       queryDispatches = genCallFunDispatches allFuns
       warnings = [RenameWarnings renameWs | not (null renameWs)]

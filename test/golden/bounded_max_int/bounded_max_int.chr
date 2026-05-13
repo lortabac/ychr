@@ -1,0 +1,15 @@
+:- module(bounded_max_int, [result/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint result(int).
+
+:- function (gt(int, int) -> bool), (gt(float, float) -> bool).
+gt(X, Y) | integer(X), integer(Y) -> X > Y.
+gt(X, Y) -> X > Y.
+
+:- function pick_max(T, T) -> T requiring gt(T, T) -> bool.
+
+pick_max(X, Y) | gt(X, Y) -> X.
+pick_max(_, Y) -> Y.
+
+result(R) <=> R is pick_max(3, 4).

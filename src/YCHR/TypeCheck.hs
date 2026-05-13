@@ -55,7 +55,8 @@ import YCHR.Runtime.Var (Unify, deref, newVar)
 import YCHR.TypeCheck.Compiled (typeCheckerProgram)
 import YCHR.TypeCheck.Error (TypeCheckError (..))
 import YCHR.Types
-  ( DataConstructor (..),
+  ( BoundSig (..),
+    DataConstructor (..),
     HeadArg (..),
     Name (..),
     Term (..),
@@ -120,7 +121,18 @@ data TypeCheckEnv = TypeCheckEnv
     -- lookup behaves as if the name were unknown.
     conAlias :: Map Text Name,
     -- | Set of known function identifiers (name, arity).
-    funSet :: Set (Name, Int)
+    funSet :: Set (Name, Int),
+    -- | Declared bounds for every bounded @:- chr_constraint@. Used
+    -- by 'checkRule' to allocate per-head-occurrence ambient
+    -- signatures and emit the head-occurrence bound checks
+    -- (§Bounded constraints §Use sites).
+    constraintBoundsEnv :: Map Types.QualifiedName [BoundSig],
+    -- | Declared argument types for every @:- chr_constraint@ —
+    -- the same data 'tellConstraintSigs' tells to the CHR program.
+    -- Pulled in here so 'checkRule' can encode a bounded
+    -- constraint's primary signature against the same σ as its
+    -- ambient signatures.
+    constraintTypesEnv :: Map Types.QualifiedName [TypeExpr]
   }
 
 -- | Per-rule or per-equation checking context, passed explicitly
@@ -133,7 +145,20 @@ data CheckCtx = CheckCtx
     -- | Source location of the current AST section.
     loc :: SourceLoc,
     -- | Original PExpr for the current AST section.
-    origin :: PExpr
+    origin :: PExpr,
+    -- | Ambient signatures contributed by the enclosing bounded
+    -- declarations. Keyed by the runtime name of the bound's target
+    -- function. Each entry is the list of @sig(args, ret)@ values
+    -- visible at every call site in this scope; the list has one
+    -- entry per relevant bound currently active. Empty for code
+    -- outside any bounded scope.
+    --
+    -- A call to a function whose name appears in this map is emitted
+    -- as @check_function_use_with_ambient@; calls to other functions
+    -- use the ordinary @check_function_use@ path. See the CHR
+    -- @check_with_ambient_*@ rules in
+    -- @typechecker\/typechecker.chr@.
+    ambientSigs :: Map Text [Value]
   }
 
 buildConMap :: [TypeDefinition] -> Map Name (TypeDefinition, DataConstructor)
@@ -229,17 +254,35 @@ data CtxInfo = CtxInfo
 type CtxMap = Map Int CtxInfo
 
 -- | Holds the source-location info for every CHR-side @Ctx@ handle the
--- driver has allocated. Threaded as a single 'State' effect so the
--- counter and the map stay in step.
+-- driver has allocated, together with a separate counter for
+-- ambient-signature scope ids. Threaded as a single 'State' effect so
+-- both counters and the location map stay in step.
 data CtxStore = CtxStore
-  { -- | Next handle to allocate.
+  { -- | Next ctx handle to allocate.
     nextId :: !Int,
     -- | Source-location info for every handle allocated so far.
-    ctxMap :: !CtxMap
+    ctxMap :: !CtxMap,
+    -- | Next ambient-sig scope id to allocate. Lives in its own
+    -- numeric namespace so scope ids do not collide with ctx
+    -- handles. (CHR-side the two flow through different argument
+    -- positions so a collision would be harmless, but keeping them
+    -- separate makes debug output less confusing.)
+    nextScopeId :: !Int
   }
 
 emptyCtxStore :: CtxStore
-emptyCtxStore = CtxStore {nextId = 0, ctxMap = Map.empty}
+emptyCtxStore = CtxStore {nextId = 0, ctxMap = Map.empty, nextScopeId = 0}
+
+-- | Allocate a fresh ambient-sig scope id. Each bounded scope (a
+-- bounded function's equation, a rule with a bounded head
+-- constraint) gets its own id so 'end_scope' can tear down exactly
+-- the right ambient signatures.
+freshScopeId :: (State CtxStore :> es) => Eff es Int
+freshScopeId = do
+  store <- get @CtxStore
+  let n = store.nextScopeId
+  put store {nextScopeId = n + 1}
+  pure n
 
 -- | Effect constraint shared by all internal checking functions.
 type CheckEffects es = (CHREffects es, Reader TypeCheckEnv :> es, State CtxStore :> es)
@@ -263,7 +306,14 @@ typeCheckProgram prog = do
       conAlias = buildConAlias prog.typeDefinitions
       funSet = buildFunSet prog.functions
       -- Haskell-side validation
-      env = TypeCheckEnv {conMap, conAlias, funSet}
+      env =
+        TypeCheckEnv
+          { conMap,
+            conAlias,
+            funSet,
+            constraintBoundsEnv = prog.constraintBounds,
+            constraintTypesEnv = prog.constraintTypes
+          }
       hsErrors =
         validateTypeDefinitions
           prog.typeDefinitions
@@ -315,7 +365,14 @@ typeCheckGoals prog loc lbl goals = do
   let conMap = buildConMap prog.typeDefinitions
       conAlias = buildConAlias prog.typeDefinitions
       funSet = buildFunSet prog.functions
-      env = TypeCheckEnv {conMap, conAlias, funSet}
+      env =
+        TypeCheckEnv
+          { conMap,
+            conAlias,
+            funSet,
+            constraintBoundsEnv = prog.constraintBounds,
+            constraintTypesEnv = prog.constraintTypes
+          }
   withCHR typeCheckerProgram baseHostCallRegistry $ do
     runReader env $
       evalState emptyCtxStore $ do
@@ -325,7 +382,14 @@ typeCheckGoals prog loc lbl goals = do
         tellConSigs prog
         let allVarNames = foldMap collectVarsInBodyGoal goals
         varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> newVar) (Set.toList allVarNames)
-        let cctx = CheckCtx {varTypes, label = lbl, loc, origin = Atom ""}
+        let cctx =
+              CheckCtx
+                { varTypes,
+                  label = lbl,
+                  loc,
+                  origin = Atom "",
+                  ambientSigs = Map.empty
+                }
         mapM_ (checkBodyGoal cctx) goals
         collectErrors
 
@@ -346,62 +410,101 @@ freshCtxHandle cctx = do
   store <- get @CtxStore
   let n = store.nextId
       info = CtxInfo {label = cctx.label, loc = cctx.loc, origin = cctx.origin}
-  put
-    CtxStore
-      { nextId = n + 1,
-        ctxMap = Map.insert n info store.ctxMap
-      }
+  put store {nextId = n + 1, ctxMap = Map.insert n info store.ctxMap}
   pure (VInt n)
 
 -- ---------------------------------------------------------------------------
 -- Environment setup
 -- ---------------------------------------------------------------------------
 
+-- | Tell @constraint_sig@ for every declared constraint. Bounded
+-- constraints additionally emit @constraint_bounds@ using the SAME
+-- shared type-variable map so a single @copy_term@ at the use site
+-- freshens both the argument types and the bound signatures
+-- consistently.
 tellConstraintSigs :: (CHREffects es, State CtxStore :> es) => D.Program -> Eff es ()
 tellConstraintSigs prog =
   Map.foldlWithKey'
     ( \m name argTypes ->
         m >> do
-          tvars <- freshTypeVarsForDecl (collectTypeVars argTypes)
+          let bounds = Map.findWithDefault [] name prog.constraintBounds
+              allVars = collectTypeVars argTypes ++ concatMap boundSigVars bounds
+          tvars <- freshTypeVarsForDecl allVars
           encodedArgs <- traverse (encodeTypeExpr tvars) argTypes
+          let runtimeNm = runtimeName (Types.qualifiedToName name)
           tellConstraint
             (Qualified "typechecker" "constraint_sig")
-            [ VAtom (runtimeName (Types.qualifiedToName name)),
-              valueList encodedArgs
-            ]
+            [VAtom runtimeNm, valueList encodedArgs]
+          case bounds of
+            [] -> pure ()
+            _ -> do
+              encodedBounds <- traverse (encodeNamedBound tvars) bounds
+              tellConstraint
+                (Qualified "typechecker" "constraint_bounds")
+                [VAtom runtimeNm, valueList encodedBounds]
     )
     (pure ())
     prog.constraintTypes
 
+-- | Tell @function_sig@ or @function_sigs@ for every declared
+-- function. Bounded single-sig functions additionally emit
+-- @function_bounds@ using a shared type-variable map so a single
+-- @copy_term@ at the use site freshens the signature and the
+-- bound signatures consistently (see
+-- 'YCHR.Types.BoundSig' and the @bounded_function_match@ rule).
 tellFunctionSigs :: (CHREffects es, State CtxStore :> es) => D.Program -> Eff es ()
 tellFunctionSigs prog = mapM_ tellOne prog.functions
   where
     tellOne f =
       let fName = Types.qualifiedToName f.name
-       in case f.signatures of
-            [] -> do
-              -- No annotations: default to all-any.
+          runtimeNm = runtimeName fName
+       in case (f.signatures, f.requiring) of
+            ([], _) -> do
+              -- No annotations: default to all-any. Bounded functions
+              -- always have one signature (the resolver guarantees
+              -- this), so a missing signature implies no bounds.
               let anyArgs = replicate f.arity (tcCon0 "any")
                   sig = VTerm (tcAtom "sig") [valueList anyArgs, tcCon0 "any"]
               tellConstraint
                 (Qualified "typechecker" "function_sig")
-                [ VAtom (runtimeName fName),
-                  sig
-                ]
-            [s] -> do
+                [VAtom runtimeNm, sig]
+            ([s], bounds@(_ : _)) -> do
+              -- Bounded single-sig: encode sig and bounds with a
+              -- shared tvars map, then tell both. The @copy_term@ at
+              -- the call site sees @function_sig@ and
+              -- @function_bounds@ via @bounded_function_match@'s
+              -- multi-head pattern; because the shared map made
+              -- their variables identical at tell time, the freshened
+              -- substitution is consistent across signature and
+              -- bounds.
+              let (argTys, retTy) = s
+                  allVars =
+                    collectTypeVars argTys
+                      ++ collectTypeVarsExpr retTy
+                      ++ concatMap boundSigVars bounds
+              tvars <- freshTypeVarsForDecl allVars
+              encodedArgs <- traverse (encodeTypeExpr tvars) argTys
+              encodedRet <- encodeTypeExpr tvars retTy
+              let sig = VTerm (tcAtom "sig") [valueList encodedArgs, encodedRet]
+              encodedBounds <- traverse (encodeNamedBound tvars) bounds
+              tellConstraint
+                (Qualified "typechecker" "function_sig")
+                [VAtom runtimeNm, sig]
+              tellConstraint
+                (Qualified "typechecker" "function_bounds")
+                [VAtom runtimeNm, valueList encodedBounds]
+            ([s], []) -> do
               sig <- encodeFunctionSig s
               tellConstraint
                 (Qualified "typechecker" "function_sig")
-                [ VAtom (runtimeName fName),
-                  sig
-                ]
-            ss -> do
+                [VAtom runtimeNm, sig]
+            (ss, _) -> do
+              -- Multi-signature: the resolver rejects @requiring@ on
+              -- this form, so any bounds here are a bug; ignore them.
               sigs <- traverse encodeFunctionSig ss
               tellConstraint
                 (Qualified "typechecker" "function_sigs")
-                [ VAtom (runtimeName fName),
-                  valueList sigs
-                ]
+                [VAtom runtimeNm, valueList sigs]
 
 -- | Encode one declared @(arg-types, return-type)@ pair as a runtime
 -- @sig(args, ret)@ value, allocating fresh logical variables for the
@@ -412,6 +515,27 @@ encodeFunctionSig (argTys, retTy) = do
   encodedArgs <- traverse (encodeTypeExpr tvars) argTys
   encodedRet <- encodeTypeExpr tvars retTy
   pure (VTerm (tcAtom "sig") [valueList encodedArgs, encodedRet])
+
+-- | Encode a single 'BoundSig' against a shared type-variable map
+-- as a runtime @nbound(GName, args, ret)@ value (the flat shape
+-- expected by the CHR-side @bound_named@ algebraic type). The
+-- shared map is essential: every bound on the same declaration uses
+-- the same logical variables for the declaration's type parameters,
+-- so a single @copy_term@ at the call site freshens them
+-- consistently across signature and bounds.
+encodeNamedBound :: (Unify :> es) => Map Text Value -> BoundSig -> Eff es Value
+encodeNamedBound tvars bs = do
+  encodedArgs <- traverse (encodeTypeExpr tvars) bs.argTypes
+  encodedRet <- encodeTypeExpr tvars bs.returnType
+  pure
+    ( VTerm
+        (tcAtom "nbound")
+        [VAtom (runtimeName bs.name), valueList encodedArgs, encodedRet]
+    )
+
+-- | Collect every type variable mentioned in a 'BoundSig'.
+boundSigVars :: BoundSig -> [Text]
+boundSigVars bs = collectTypeVars bs.argTypes ++ collectTypeVarsExpr bs.returnType
 
 tellConSigs :: (CHREffects es, State CtxStore :> es) => D.Program -> Eff es ()
 tellConSigs prog =
@@ -507,21 +631,137 @@ encodeTypeExpr tvars (TypeCon name args) = do
 
 checkRule :: (CheckEffects es) => D.Rule -> Eff es ()
 checkRule rule = do
+  env <- ask @TypeCheckEnv
   let allVarNames = collectVarsInRule rule
   varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> newVar) (Set.toList allVarNames)
   let ruleLabel = fmap (\n -> "rule " <> n) rule.name
       AnnP hd headLoc headOrigin = rule.head
       AnnP guards guardLoc guardOrigin = rule.guard
       AnnP body bodyLoc bodyOrigin = rule.body
-      headCtx = CheckCtx {varTypes, label = ruleLabel, loc = headLoc, origin = headOrigin}
-      guardCtx = CheckCtx {varTypes, label = ruleLabel, loc = guardLoc, origin = guardOrigin}
-      bodyCtx = CheckCtx {varTypes, label = ruleLabel, loc = bodyLoc, origin = bodyOrigin}
-  -- Head constraints (kept and removed)
-  mapM_ (checkConstraintUse headCtx . headConstraintToConstraint) (hd.kept ++ hd.removed)
-  -- Guards
+      headCtx0 =
+        CheckCtx
+          { varTypes,
+            label = ruleLabel,
+            loc = headLoc,
+            origin = headOrigin,
+            ambientSigs = Map.empty
+          }
+      headConstraints = hd.kept ++ hd.removed
+      hasBoundedHead =
+        any
+          (\hc -> Map.member hc.name env.constraintBoundsEnv)
+          headConstraints
+  -- Allocate the rule's ambient-sig scope only when at least one
+  -- bounded constraint sits in the head. Without one there are no
+  -- ambient sigs to contribute and the scope teardown is a no-op.
+  scopeId <-
+    if hasBoundedHead
+      then freshScopeId
+      else pure (-1)
+  -- Walk each head constraint. For bounded constraints, allocate a
+  -- fresh σ for this head occurrence (per §Use sites: each
+  -- occurrence's type variables are freshly allocated even when the
+  -- same bounded constraint appears twice) and emit ambient sigs +
+  -- bound-discharge residuals. For unbounded constraints, fall
+  -- through to the ordinary check.
+  ambientPerName <-
+    fmap (Map.unionsWith (++)) $
+      traverse (checkHeadConstraint headCtx0 scopeId env) headConstraints
+  -- Activate the scope so the CHR-side ambient_sig entries are
+  -- visible to the body's checks. Skip when there are no bounds:
+  -- emitting active_scope with no ambient_sig would still be sound
+  -- but pollutes the constraint store.
+  when hasBoundedHead $
+    tellConstraint
+      (Qualified "typechecker" "active_scope")
+      [VInt scopeId]
+  let guardCtx =
+        CheckCtx
+          { varTypes,
+            label = ruleLabel,
+            loc = guardLoc,
+            origin = guardOrigin,
+            ambientSigs = ambientPerName
+          }
+      bodyCtx =
+        CheckCtx
+          { varTypes,
+            label = ruleLabel,
+            loc = bodyLoc,
+            origin = bodyOrigin,
+            ambientSigs = ambientPerName
+          }
   checkGuards guardCtx guards
-  -- Body goals
   mapM_ (checkBodyGoal bodyCtx) body
+  when hasBoundedHead $
+    tellConstraint
+      (Qualified "typechecker" "end_scope")
+      [VInt scopeId]
+
+-- | Check one head constraint occurrence. Returns the ambient sigs
+-- this occurrence contributes (empty for unbounded constraints).
+checkHeadConstraint ::
+  (CheckEffects es) =>
+  CheckCtx ->
+  Int ->
+  TypeCheckEnv ->
+  D.HeadConstraint ->
+  Eff es (Map Text [Value])
+checkHeadConstraint cctx scopeId env hc =
+  case Map.lookup hc.name env.constraintBoundsEnv of
+    Nothing -> do
+      checkConstraintUse cctx (headConstraintToConstraint hc)
+      pure Map.empty
+    Just bounds -> do
+      let argTypes = Map.findWithDefault [] hc.name env.constraintTypesEnv
+          allVars = collectTypeVars argTypes ++ concatMap boundSigVars bounds
+      tvars <- freshTypeVarsForDecl allVars
+      encodedDeclArgs <- traverse (encodeTypeExpr tvars) argTypes
+      headArgValues <- traverse (typeOfTerm cctx . headArgToTerm) hc.args
+      ctx <- freshCtxHandle cctx
+      -- Unify head arg types with the σ-substituted declared arg
+      -- types. Mirrors what bounded_constraint_match does
+      -- internally, but with σ vars under driver control so the
+      -- bounds' encoding shares them.
+      zipWithM_
+        ( \hv ev ->
+            tellConstraint
+              (Qualified "typechecker" "check_unify")
+              [hv, ev, ctx]
+        )
+        headArgValues
+        encodedDeclArgs
+      -- Emit ambient sigs and bound-discharge residuals.
+      ambEntries <- traverse (emitAmbientAndBound scopeId ctx tvars) bounds
+      pure (Map.fromListWith (++) ambEntries)
+  where
+    zipWithM_ f xs ys = sequence_ (zipWith f xs ys)
+
+-- | Encode one bound, tell its @ambient_sig@ (for in-scope calls to
+-- the bound's named function) and a @check_bound@ residual (for the
+-- spec's head-occurrence discharge rule). Returns the @(runtimeName,
+-- [sigValue])@ entry the caller folds into the rule's ambient-sigs
+-- map so 'CheckCtx.ambientSigs' carries the same data the CHR-side
+-- 'check_function_use_with_ambient' rule needs.
+emitAmbientAndBound ::
+  (CheckEffects es) =>
+  Int ->
+  Value ->
+  Map Text Value ->
+  BoundSig ->
+  Eff es (Text, [Value])
+emitAmbientAndBound scopeId ctx tvars bs = do
+  encodedArgs <- traverse (encodeTypeExpr tvars) bs.argTypes
+  encodedRet <- encodeTypeExpr tvars bs.returnType
+  let sigVal = VTerm (tcAtom "sig") [valueList encodedArgs, encodedRet]
+      runtimeNm = runtimeName bs.name
+  tellConstraint
+    (Qualified "typechecker" "ambient_sig")
+    [VInt scopeId, VAtom runtimeNm, sigVal]
+  tellConstraint
+    (Qualified "typechecker" "check_bound")
+    [VAtom runtimeNm, valueList encodedArgs, encodedRet, ctx]
+  pure (runtimeNm, [sigVal])
 
 checkConstraintUse :: (CheckEffects es) => CheckCtx -> Types.QualifiedConstraint -> Eff es ()
 checkConstraintUse cctx c = do
@@ -639,17 +879,46 @@ checkBodyGoal cctx (D.BodyIs v term) = do
 checkBodyGoal cctx (D.BodyFunctionCall name args) = do
   argTypeVars <- traverse (typeOfTerm cctx) args
   retTypeVar <- newVar
-  ctx <- freshCtxHandle cctx
-  tellConstraint
-    (Qualified "typechecker" "check_function_use")
-    [ VAtom (runtimeName name),
-      valueList argTypeVars,
-      retTypeVar,
-      ctx
-    ]
+  emitFunctionCall cctx name argTypeVars retTypeVar
 checkBodyGoal cctx (D.BodyHostStmt _ args) = do
   -- Process arguments for side effects (nested constructors/functions still get checked)
   mapM_ (typeOfTerm cctx) args
+
+-- | Emit a function-call type check. Routes through
+-- @check_function_use_with_ambient@ when the call's target name has
+-- ambient signatures in the current 'CheckCtx' (i.e. the call sits
+-- inside a bounded function's equation or under a bounded
+-- constraint's head occurrence in a rule). Otherwise falls back to
+-- the plain @check_function_use@ path. The CHR side handles both
+-- forms with the same overload-resolution mechanism.
+emitFunctionCall ::
+  (CheckEffects es) =>
+  CheckCtx ->
+  Name ->
+  [Value] ->
+  Value ->
+  Eff es ()
+emitFunctionCall cctx name argTypeVars retTypeVar = do
+  ctx <- freshCtxHandle cctx
+  let runtimeFname = runtimeName name
+  case Map.lookup runtimeFname cctx.ambientSigs of
+    Just ambs@(_ : _) ->
+      tellConstraint
+        (Qualified "typechecker" "check_function_use_with_ambient")
+        [ VAtom runtimeFname,
+          valueList ambs,
+          valueList argTypeVars,
+          retTypeVar,
+          ctx
+        ]
+    _ ->
+      tellConstraint
+        (Qualified "typechecker" "check_function_use")
+        [ VAtom runtimeFname,
+          valueList argTypeVars,
+          retTypeVar,
+          ctx
+        ]
 
 -- ---------------------------------------------------------------------------
 -- Per-equation checking
@@ -670,22 +939,16 @@ checkEquation ::
 checkEquation func loc origin eq = do
   let allVarNames = collectVarsInEq eq
   varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> newVar) (Set.toList allVarNames)
-  let cctx =
-        CheckCtx
-          { varTypes,
-            label = Just ("function " <> flattenName (Types.qualifiedToName func.name)),
-            loc,
-            origin
-          }
-  -- Untyped functions skip equation checking entirely; typed (single or
-  -- overloaded) ones go through check_function_use, which dispatches on
-  -- whether function_sig (single) or function_sigs (overloaded) is
-  -- registered for this name. The CHR rule does the same copy_term-and-
-  -- unify work that we'd otherwise do here, so a single emission point
-  -- handles both cases.
-  case func.signatures of
-    [] -> pure ()
-    _ -> do
+  case (func.signatures, func.requiring) of
+    ([], _) -> do
+      -- Untyped functions skip the signature-vs-equation cross-check
+      -- entirely. Guards are still walked so any constructor uses
+      -- inside them get the normal type-check treatment.
+      let cctx = freshCheckCtx varTypes Map.empty
+      checkGuards cctx eq.guards
+    ([sig], bounds@(_ : _)) -> checkBoundedEquation func sig bounds varTypes eq
+    (_, _) -> do
+      let cctx = freshCheckCtx varTypes Map.empty
       argTypeVars <- traverse (typeOfTerm cctx . headArgToTerm) eq.params
       retTypeVar <- typeOfTerm cctx eq.rhs
       ctx <- freshCtxHandle cctx
@@ -696,7 +959,83 @@ checkEquation func loc origin eq = do
           retTypeVar,
           ctx
         ]
+      checkGuards cctx eq.guards
+  where
+    freshCheckCtx vt ambs =
+      CheckCtx
+        { varTypes = vt,
+          label = Just ("function " <> flattenName (Types.qualifiedToName func.name)),
+          loc,
+          origin,
+          ambientSigs = ambs
+        }
+
+-- | Check an equation of a bounded function. Allocates a fresh σ
+-- explicitly so the equation's parameter types, RHS type, and the
+-- ambient signatures contributed by the function's @requiring@
+-- clause all share the same logical variables. This is what makes
+-- the spec's "the ambient signature's type variables share identity
+-- with the enclosing function's declared type variables" property
+-- hold: a call to a bound-named function inside the equation that
+-- resolves through the ambient sig stays polymorphic in T, because
+-- T is the SAME logical variable the equation parameters' types are
+-- bound to.
+checkBoundedEquation ::
+  (CheckEffects es) =>
+  D.Function ->
+  ([TypeExpr], TypeExpr) ->
+  [BoundSig] ->
+  Map Text Value ->
+  D.Equation ->
+  Eff es ()
+checkBoundedEquation func (argTys, retTy) bounds varTypes eq = do
+  let allVars =
+        collectTypeVars argTys
+          ++ collectTypeVarsExpr retTy
+          ++ concatMap boundSigVars bounds
+  tvars <- freshTypeVarsForDecl allVars
+  encodedArgs <- traverse (encodeTypeExpr tvars) argTys
+  encodedRet <- encodeTypeExpr tvars retTy
+  -- Allocate scope and tell ambient sigs.
+  scopeId <- freshScopeId
+  let AnnP _ eqLoc eqOrigin = func.equations
+  let baseCtx =
+        CheckCtx
+          { varTypes,
+            label = Just ("function " <> flattenName (Types.qualifiedToName func.name)),
+            loc = eqLoc,
+            origin = eqOrigin,
+            ambientSigs = Map.empty
+          }
+  ctx <- freshCtxHandle baseCtx
+  ambEntries <-
+    traverse (emitAmbientAndBound scopeId ctx tvars) bounds
+  let ambMap = Map.fromListWith (++) ambEntries
+      cctx = baseCtx {ambientSigs = ambMap}
+  tellConstraint
+    (Qualified "typechecker" "active_scope")
+    [VInt scopeId]
+  -- Unify each parameter's type slot with the σ-substituted
+  -- declared arg type; same for the RHS and the return type.
+  paramTypes <- traverse (typeOfTerm cctx . headArgToTerm) eq.params
+  zipWithM_eq cctx ctx paramTypes encodedArgs
+  rhsType <- typeOfTerm cctx eq.rhs
+  tellConstraint
+    (Qualified "typechecker" "check_unify")
+    [rhsType, encodedRet, ctx]
   checkGuards cctx eq.guards
+  tellConstraint
+    (Qualified "typechecker" "end_scope")
+    [VInt scopeId]
+  where
+    zipWithM_eq cctx ctx ps es =
+      sequence_
+        [ tellConstraint
+            (Qualified "typechecker" "check_unify")
+            [p, e, ctx]
+        | (p, e) <- zip ps es,
+          _ <- [cctx] -- keep cctx in scope; lambda would shadow
+        ]
 
 -- ---------------------------------------------------------------------------
 -- Term typing
@@ -766,15 +1105,7 @@ typeOfCompound cctx (Unqualified "->") [CompoundTerm (Unqualified "fun") params,
 typeOfCompound cctx (Unqualified "/") [AtomTerm fname, IntTerm arity] = do
   argTypeVars <- replicateM arity newVar
   retTypeVar <- newVar
-  ctx <- freshCtxHandle cctx
-  let runtimeFname = runtimeName (parseFlattenedName fname)
-  tellConstraint
-    (Qualified "typechecker" "check_function_use")
-    [ VAtom runtimeFname,
-      valueList argTypeVars,
-      retTypeVar,
-      ctx
-    ]
+  emitFunctionCall cctx (parseFlattenedName fname) argTypeVars retTypeVar
   pure (VTerm (tcAtom "fun") [valueList argTypeVars, retTypeVar])
 -- Constructor or function. Constructors are canonicalized so that bare
 -- functor names (e.g. cons "." or own-module names) resolve to their
@@ -806,17 +1137,7 @@ typeOfCompound cctx name args = do
         then do
           argTypes <- traverse (typeOfTerm cctx) args
           resultType <- newVar
-          ctx <- freshCtxHandle cctx
-          tellConstraint
-            (Qualified "typechecker" "check_function_use")
-            [ VAtom
-                ( runtimeName
-                    name
-                ),
-              valueList argTypes,
-              resultType,
-              ctx
-            ]
+          emitFunctionCall cctx name argTypes resultType
           pure resultType
         else do
           -- Unknown (or wrong-arity constructor — error pre-reported).
@@ -926,6 +1247,17 @@ decodeError ctxMap (VTerm errorFunctor [ctxVal, codeVal, detailVal])
                 info.label
                 ( AnnP
                     (NoMatchingOverload nameText)
+                    info.loc
+                    info.origin
+                )
+            ]
+        VTerm c [] | c == tcAtom "bound_unsatisfied" -> do
+          nameText <- showValue detail
+          pure
+            [ Diagnostic
+                info.label
+                ( AnnP
+                    (BoundUnsatisfied nameText)
                     info.loc
                     info.origin
                 )

@@ -467,10 +467,10 @@ validateImportLists mods ctx =
     checkItem mn loc origin (OperatorDecl op) =
       when (op `notElem` Map.findWithDefault [] mn ctx.operatorExports) $
         emitError (AnnP (UnknownOperatorImport mn op.opName) loc origin)
-    checkItem mn loc origin (ConstraintDecl n a _) =
+    checkItem mn loc origin (ConstraintDecl n a _ _) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
-    checkItem mn loc origin (FunctionDecl n a _ _ _) =
+    checkItem mn loc origin (FunctionDecl n a _ _ _ _) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
     checkItem _ _ _ ExtendFunctionTypeDecl {} = pure ()
@@ -738,8 +738,8 @@ importListPermits :: Text -> Int -> Maybe [Declaration] -> Bool
 importListPermits _ _ Nothing = True
 importListPermits n arity (Just decls) = any match decls
   where
-    match (ConstraintDecl dn da _) = dn == n && da == arity
-    match (FunctionDecl dn da _ _ _) = dn == n && da == arity
+    match (ConstraintDecl dn da _ _) = dn == n && da == arity
+    match (FunctionDecl dn da _ _ _ _) = dn == n && da == arity
     match _ = False
 
 -- | Check whether a type name/arity is permitted by an import list.
@@ -862,13 +862,25 @@ renameAnnDecl ctx (Ann d loc) = do
 
 renameDeclaration ::
   RenameCtx -> SourceLoc -> Declaration -> Eff RenameEffs Declaration
-renameDeclaration ctx _ d@ConstraintDecl {argTypes} =
-  pure d {argTypes = fmap (map (renameTypeExpr ctx)) argTypes}
-renameDeclaration ctx _ d@FunctionDecl {argTypes, returnType} =
+renameDeclaration ctx loc (ConstraintDecl n a argTypes requiring) = do
+  requiring' <- traverse (traverse (renameBoundSig ctx loc)) requiring
   pure
-    d
-      { argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
-        returnType = fmap (renameTypeExpr ctx) returnType
+    ConstraintDecl
+      { name = n,
+        arity = a,
+        argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
+        requiring = requiring'
+      }
+renameDeclaration ctx loc (FunctionDecl n a argTypes returnType isOpen requiring) = do
+  requiring' <- traverse (traverse (renameBoundSig ctx loc)) requiring
+  pure
+    FunctionDecl
+      { name = n,
+        arity = a,
+        argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
+        returnType = fmap (renameTypeExpr ctx) returnType,
+        isOpen = isOpen,
+        requiring = requiring'
       }
 renameDeclaration ctx loc d@ExtendFunctionTypeDecl {name, arity, argTypes, returnType} = do
   resolved <- resolveName ResolveTop ctx loc (Atom name) (Unqualified name) arity
@@ -879,6 +891,29 @@ renameDeclaration ctx loc d@ExtendFunctionTypeDecl {name, arity, argTypes, retur
         target = Just resolved
       }
 renameDeclaration _ _ d = pure d
+
+-- | Rename a 'BoundSig' inside a @requiring@ clause: resolve the bound
+-- function's name to a 'Qualified' form (so the resolver can look it up
+-- by qualified name) and rename type-expression references in the
+-- argument and return types. Names that fail to resolve here trigger an
+-- 'UnknownName' (YCHR-20002); the resolver later layers the dedicated
+-- 'unknown_bound_function' diagnostic for callers who want the bound-
+-- specific message.
+renameBoundSig :: RenameCtx -> SourceLoc -> BoundSig -> Eff RenameEffs BoundSig
+renameBoundSig ctx _ bs = do
+  resolved <- resolveName ResolveTop ctx bs.loc (Atom (boundSigName bs)) bs.name bs.arity
+  pure
+    BoundSig
+      { name = resolved,
+        arity = bs.arity,
+        argTypes = map (renameTypeExpr ctx) bs.argTypes,
+        returnType = renameTypeExpr ctx bs.returnType,
+        loc = bs.loc
+      }
+  where
+    boundSigName b = case b.name of
+      Unqualified t -> t
+      Qualified _ t -> t
 
 renameTypeExpr :: RenameCtx -> TypeExpr -> TypeExpr
 renameTypeExpr _ (TypeVar v) = TypeVar v

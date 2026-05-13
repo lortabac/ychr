@@ -91,6 +91,13 @@ builtinOps =
       (1105, [(P.Xfy, "|")]),
       (1110, [(P.Xfy, "->")]),
       (1100, [(P.Xfy, ";"), (P.Xfx, "\\")]),
+      -- Bounded polymorphism: @sig requiring bound1, bound2, ...@.
+      -- Looser than @->@ (1110) so the bound clause sits outside the
+      -- signature's arrow, tighter than the directive prefix at 1180
+      -- so a @requiring@ clause stays inside the @:- function@ arg.
+      -- Comma (1000) is also tighter, so the bound list on the right
+      -- is a comma chain consumed as a single argument here.
+      (1140, [(P.Xfx, "requiring")]),
       (1150, [(P.Xfx, "--->"), (P.Fx, "dynamic")]),
       (1180, [(P.Xfx, "<=>"), (P.Xfx, "==>")]),
       ( 1180,
@@ -514,6 +521,17 @@ data ParseValidationError
   | -- | A constraint position contained something that is not an atom or
     -- compound term (e.g. a bare variable, integer, or string).
     MalformedConstraint
+  | -- | A @requiring@ clause appears inside a comma-separated
+    -- multi-signature @:- function@ declaration. The bounded form is
+    -- only permitted on a typed single-signature declaration; the
+    -- spec rules this out at the surface-syntax level. Carries the
+    -- bounded function's name.
+    RequiringOnMultiSig Text
+  | -- | A @requiring@ clause appears on a @:- extend_function_type@
+    -- directive. Bounds are part of the original declaration; an
+    -- extension cannot introduce them. Carries the extension target's
+    -- name.
+    RequiringOnExtendFunctionType Text
   deriving (Eq, Show)
 
 -- | Convert a list of top-level PExpr terms to a 'Module', along with
@@ -671,16 +689,34 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- :- chr_constraint leq/2, fib/2.
   -- Parsed as prefix op: Compound "chr_constraint" [body]
   Compound "chr_constraint" [decls] ->
-    (DirConstraintDecl (map convertConstraintDecl (flattenComma decls)), [])
+    let pieces = flattenComma decls
+        results = map convertConstraintDecl pieces
+        decls' = map fst results
+        errs = concatMap snd results
+     in (DirConstraintDecl decls', errs)
   -- :- function foo/2.  or  :- function factorial(int) -> int.
   Compound "function" [decls] ->
-    (DirFunctionDecl (map convertFunctionDecl (flattenComma decls)), [])
+    let pieces = flattenComma decls
+        results = map convertFunctionDecl pieces
+        decls' = map fst results
+        innerErrs = concatMap snd results
+        multiSigErrs = multiSigRequiringErrors loc body.node decls'
+     in (DirFunctionDecl decls', innerErrs ++ multiSigErrs)
   -- :- open_function foo/2.
   Compound "open_function" [decls] ->
-    (DirOpenFunctionDecl (map convertOpenFunctionDecl (flattenComma decls)), [])
+    let pieces = flattenComma decls
+        results = map convertOpenFunctionDecl pieces
+        decls' = map fst results
+        innerErrs = concatMap snd results
+        multiSigErrs = multiSigRequiringErrors loc body.node decls'
+     in (DirOpenFunctionDecl decls', innerErrs ++ multiSigErrs)
   -- :- extend_function_type (foo(int) -> int).
   Compound "extend_function_type" [decls] ->
-    (DirExtendFunctionTypeDecl (map convertExtendFunctionTypeDecl (flattenComma decls)), [])
+    let pieces = flattenComma decls
+        results = map convertExtendFunctionTypeDecl pieces
+        decls' = map fst results
+        errs = concatMap snd results
+     in (DirExtendFunctionTypeDecl decls', errs)
   -- :- extend_function name(args) [| guards] -> body.
   Compound "extend_function" [eqn] ->
     (DirExtendFunctionEqn (convertFunctionEquation eqn), [])
@@ -723,13 +759,31 @@ convertImportWithList dirLoc dirPExpr imp importList =
         Atom name -> Right (AnnP (ModuleImport name (Just items)) dirLoc dirPExpr)
         _ -> Left (AnnP MalformedImport imp.sourceLoc imp.node)
 
+-- | Report a 'RequiringOnMultiSig' error for every declaration in a
+-- comma-separated group of two or more function declarations that
+-- carries a @requiring@ clause. A single-decl group is the normal
+-- bounded form and produces no error. The shared location and origin
+-- come from the surrounding directive so the diagnostic points at the
+-- whole @:- function@.
+multiSigRequiringErrors ::
+  SourceLoc -> PExpr -> [Ann Declaration] -> [AnnP ParseValidationError]
+multiSigRequiringErrors loc origin decls
+  | length decls < 2 = []
+  | otherwise =
+      [ AnnP (RequiringOnMultiSig d.name) loc origin
+      | Ann d _ <- decls,
+        case d of
+          FunctionDecl {requiring = Just _} -> True
+          _ -> False
+      ]
+
 -- | Convert an export item PExpr to a 'Declaration'.
 convertExportItem :: Ann PExpr -> Declaration
 convertExportItem (Ann pexpr _) = case pexpr of
   Compound "fun" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
-    FunctionDecl name arity Nothing Nothing False
+    FunctionDecl name arity Nothing Nothing False Nothing
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    ConstraintDecl name arity Nothing
+    ConstraintDecl name arity Nothing Nothing
   Compound "op" [Ann (P.Int fix) _, Ann tyExpr _, Ann nameExpr _]
     | Just ty <- parseOpTypeFromPExpr tyExpr,
       Just name <- atomName nameExpr ->
@@ -742,67 +796,161 @@ convertExportItem (Ann pexpr _) = case pexpr of
       Ann conList _
       ] ->
       TypeExportDecl name arity (Just [c | Ann (Atom c) _ <- unfoldList conList])
-  _ -> ConstraintDecl "<unknown>" 0 Nothing
+  _ -> ConstraintDecl "<unknown>" 0 Nothing Nothing
 
--- | Convert a PExpr to a constraint declaration.
-convertConstraintDecl :: Ann PExpr -> Ann Declaration
+-- | Convert a PExpr to a constraint declaration. Returns both the
+-- 'Declaration' and any parse-validation errors found (currently only
+-- @requiring@ on an untyped constraint, which is silently ignored — the
+-- spec restricts @requiring@ to typed forms).
+convertConstraintDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
 convertConstraintDecl (Ann pexpr loc) = case pexpr of
+  -- @sig requiring bound, ...@
+  Compound "requiring" [sig, bounds] ->
+    case sig.node of
+      Compound name args ->
+        let bs = map convertBoundSig (flattenComma bounds)
+         in ( Ann
+                ( ConstraintDecl
+                    name
+                    (length args)
+                    (Just (map convertTypeExpr args))
+                    (Just bs)
+                )
+                loc,
+              []
+            )
+      _ ->
+        -- Malformed: @requiring@ on an untyped or non-compound LHS.
+        (Ann (ConstraintDecl "<unknown>" 0 Nothing Nothing) loc, [])
   -- Untyped: name/arity
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    Ann (ConstraintDecl name arity Nothing) loc
+    (Ann (ConstraintDecl name arity Nothing Nothing) loc, [])
   -- Typed: name(type, ...)
   Compound name args ->
-    Ann (ConstraintDecl name (length args) (Just (map convertTypeExpr args))) loc
+    (Ann (ConstraintDecl name (length args) (Just (map convertTypeExpr args)) Nothing) loc, [])
   -- Zero-arity bare atom
   Atom name ->
-    Ann (ConstraintDecl name 0 Nothing) loc
-  _ -> Ann (ConstraintDecl "<unknown>" 0 Nothing) loc
+    (Ann (ConstraintDecl name 0 Nothing Nothing) loc, [])
+  _ -> (Ann (ConstraintDecl "<unknown>" 0 Nothing Nothing) loc, [])
 
 -- | Convert a PExpr to a closed-function declaration.
-convertFunctionDecl :: Ann PExpr -> Ann Declaration
+convertFunctionDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
 convertFunctionDecl = convertFunctionDeclWith False
 
 -- | Convert a PExpr to an open-function declaration.
-convertOpenFunctionDecl :: Ann PExpr -> Ann Declaration
+convertOpenFunctionDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
 convertOpenFunctionDecl = convertFunctionDeclWith True
 
 -- | Convert a PExpr to an extension type declaration.
 -- Only the typed form @name(types) -> type@ is supported: an extension
 -- declaration that does not carry a signature has nothing to contribute.
-convertExtendFunctionTypeDecl :: Ann PExpr -> Ann Declaration
+--
+-- A @requiring@ clause on an @:- extend_function_type@ is rejected
+-- syntactically: bounds belong to the original declaration, not to
+-- an extension.
+convertExtendFunctionTypeDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
 convertExtendFunctionTypeDecl (Ann pexpr loc) = case pexpr of
+  Compound "requiring" [sig, _] ->
+    let (declAnn, errs) = convertExtendFunctionTypeDecl sig
+        targetName = case sig.node of
+          Compound "->" [Ann (Compound n _) _, _] -> n
+          _ -> "<unknown>"
+        err = AnnP (RequiringOnExtendFunctionType targetName) loc pexpr
+     in (declAnn, err : errs)
   Compound "->" [Ann (Compound name args) _, ret] ->
-    Ann
-      ( ExtendFunctionTypeDecl
-          name
-          (length args)
-          (Just (map convertTypeExpr args))
-          (Just (convertTypeExpr ret))
-          Nothing
-      )
-      loc
-  _ -> Ann (ExtendFunctionTypeDecl "<unknown>" 0 Nothing Nothing Nothing) loc
+    ( Ann
+        ( ExtendFunctionTypeDecl
+            name
+            (length args)
+            (Just (map convertTypeExpr args))
+            (Just (convertTypeExpr ret))
+            Nothing
+        )
+        loc,
+      []
+    )
+  _ -> (Ann (ExtendFunctionTypeDecl "<unknown>" 0 Nothing Nothing Nothing) loc, [])
 
 -- | Shared implementation of 'convertFunctionDecl' and
 -- 'convertOpenFunctionDecl'. The 'Bool' argument is the @open@ flag stored
--- on the resulting 'FunctionDecl'.
-convertFunctionDeclWith :: Bool -> Ann PExpr -> Ann Declaration
+-- on the resulting 'FunctionDecl'. Returns parse-validation errors for
+-- malformed @requiring@ placements.
+convertFunctionDeclWith ::
+  Bool -> Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
 convertFunctionDeclWith open (Ann pexpr loc) = case pexpr of
+  -- @name(types) -> ret requiring bound, ...@
+  Compound "requiring" [sig, bounds] ->
+    case sig.node of
+      Compound "->" [Ann (Compound name args) _, ret] ->
+        let bs = map convertBoundSig (flattenComma bounds)
+         in ( Ann
+                ( FunctionDecl
+                    name
+                    (length args)
+                    (Just (map convertTypeExpr args))
+                    (Just (convertTypeExpr ret))
+                    open
+                    (Just bs)
+                )
+                loc,
+              []
+            )
+      _ ->
+        -- Malformed: @requiring@ on a non-typed signature. Drop the
+        -- requiring clause and fall through to the malformed-decl
+        -- placeholder used elsewhere; there is nothing meaningful to
+        -- attach the bounds to.
+        (Ann (FunctionDecl "<unknown>" 0 Nothing Nothing open Nothing) loc, [])
   -- Untyped: name/arity
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    Ann (FunctionDecl name arity Nothing Nothing open) loc
+    (Ann (FunctionDecl name arity Nothing Nothing open Nothing) loc, [])
   -- Typed: name(type, ...) -> type
   Compound "->" [Ann (Compound name args) _, ret] ->
-    Ann
-      ( FunctionDecl
-          name
-          (length args)
-          (Just (map convertTypeExpr args))
-          (Just (convertTypeExpr ret))
-          open
-      )
-      loc
-  _ -> Ann (FunctionDecl "<unknown>" 0 Nothing Nothing open) loc
+    ( Ann
+        ( FunctionDecl
+            name
+            (length args)
+            (Just (map convertTypeExpr args))
+            (Just (convertTypeExpr ret))
+            open
+            Nothing
+        )
+        loc,
+      []
+    )
+  _ -> (Ann (FunctionDecl "<unknown>" 0 Nothing Nothing open Nothing) loc, [])
+
+-- | Convert a single bound signature inside a @requiring@ clause. The
+-- expected shape is @name(τ₁, ..., τₙ) -> τᵣ@. A name appearing without
+-- arguments (e.g. @foo -> bool@) is treated as a zero-arity bound. A
+-- malformed shape yields a placeholder bound that the resolver's
+-- 'unknown_bound_function' check will reject.
+convertBoundSig :: Ann PExpr -> BoundSig
+convertBoundSig (Ann pexpr loc) = case pexpr of
+  Compound "->" [Ann (Compound name args) _, ret] ->
+    BoundSig
+      { name = Unqualified name,
+        arity = length args,
+        argTypes = map convertTypeExpr args,
+        returnType = convertTypeExpr ret,
+        loc = loc
+      }
+  Compound "->" [Ann (Atom name) _, ret] ->
+    BoundSig
+      { name = Unqualified name,
+        arity = 0,
+        argTypes = [],
+        returnType = convertTypeExpr ret,
+        loc = loc
+      }
+  _ ->
+    BoundSig
+      { name = Unqualified "<unknown>",
+        arity = 0,
+        argTypes = [],
+        returnType = TypeCon (Unqualified "any") [],
+        loc = loc
+      }
 
 -- | Convert a PExpr to a 'TypeExpr'.
 convertTypeExpr :: Ann PExpr -> TypeExpr

@@ -2,13 +2,20 @@
     constraint_sig/2,
     function_sig/2,
     function_sigs/2,
+    function_bounds/2,
+    constraint_bounds/2,
     con_sig/2,
     check_constraint_use/3,
     check_function_use/4,
+    check_function_use_with_ambient/5,
     check_constructor_use/4,
     check_unify/3,
     check_guard_bool/2,
     check_guard_getarg/5,
+    check_bound/4,
+    ambient_sig/3,
+    active_scope/1,
+    end_scope/1,
     errors/1,
     collect/1
 ]).
@@ -41,8 +48,15 @@
 
 % Atoms used as the Code field of `error/3`. Declared so the renamer
 % recognizes them as data constructors; the value-level type stays `any`.
+% `bound_unsatisfied` is emitted CHR-side from `check_bound` when no
+% declared signature of the bound's named function is consistent with
+% the substituted bound. The other bounded-polymorphism error codes
+% (unbound bound variable, unknown bound function, bound cycle,
+% extend-on-bounded) are produced by the Haskell resolver and never
+% flow through this CHR program.
 :- chr_type error_code ---> inconsistent
-                          ; no_matching_overload.
+                          ; no_matching_overload
+                          ; bound_unsatisfied.
 
 % Literal values used as the Detail field of `error/3`. Detail is
 % heterogeneous (atoms, pairs, constraint-name variables); only the
@@ -50,13 +64,27 @@
 :- chr_type error_detail ---> pair(any, any)
                             ; overloaded.
 
+% A named bound signature inside a `requiring` clause: the bound
+% function's flat-atom name together with the argument-types and
+% return-type of its required signature. The fields share logical
+% variables with the enclosing declaration's primary signature; both
+% are bundled in `function_bounds` / `constraint_bounds` so a single
+% `copy_term` freshens them consistently at each use site. Storing
+% the args/ret flat (rather than wrapped in `sig_t`) keeps the type
+% checker's pattern inference simple, and matches the shape the
+% discharge rule consumes.
+:- chr_type bound_named ---> nbound(any, list(ty), ty).
+
 :- chr_constraint
     constraint_sig(any, list(ty)),
     function_sig(any, sig_t(list(ty), ty)),
     function_sigs(any, list(sig_t(list(ty), ty))),
+    function_bounds(any, list(bound_named)),
+    constraint_bounds(any, list(bound_named)),
     con_sig(any, sig_t(ty, list(ty))),
     check_constraint_use(any, list(ty), int),
     check_function_use(any, list(ty), ty, int),
+    check_function_use_with_ambient(any, list(sig_t(list(ty), ty)), list(ty), ty, int),
     check_constructor_use(any, list(ty), ty, int),
     check_unify(ty, ty, int),
     check_guard_bool(ty, int),
@@ -65,6 +93,12 @@
     tc_unify(ty, ty, int),
     tc_unify_list(list(ty), list(ty), int),
     resolve_overload(any, list(sig_t(list(ty), ty)), list(ty), ty, int),
+    check_bound(any, list(ty), ty, int),
+    discharge_bound_check(list(sig_t(list(ty), ty)), any, list(ty), ty, int),
+    emit_bounds(list(bound_named), int),
+    ambient_sig(int, any, sig_t(list(ty), ty)),
+    active_scope(int),
+    end_scope(int),
     report_error(int, any, any),
     errors(list(error)),
     collect(list(error)).
@@ -99,8 +133,98 @@ type_consistent(X, X) -> true.
 type_consistent(_, _) -> false.
 
 % ==========================================================================
+% Bounded polymorphism helpers (pure functions, no var binding)
+% ==========================================================================
+
+% Existential consistency: deep, non-binding consistency between two
+% type-structures. Unlike `tc_unify` this never binds any variable,
+% so it is safe to call from `check_bound`'s discharge guard when we
+% need to know "does any candidate signature exist that is consistent
+% with the substituted bound?" without modifying the surrounding
+% solver state.
+:- function
+    (existential_consistent(ty, ty) -> bool),
+    (existential_consistent_list(list(ty), list(ty)) -> bool),
+    (sig_one_consistent(sig_t(list(ty), ty), list(ty), ty) -> bool),
+    (sig_existential(list(sig_t(list(ty), ty)), list(ty), ty) -> bool).
+
+existential_consistent(T, _) | var(T) -> true.
+existential_consistent(_, T) | var(T) -> true.
+existential_consistent(any, _) -> true.
+existential_consistent(_, any) -> true.
+existential_consistent(int, int) -> true.
+existential_consistent(float, float) -> true.
+existential_consistent(string, string) -> true.
+existential_consistent(tcon(C, A1), tcon(C, A2)) -> existential_consistent_list(A1, A2).
+existential_consistent(fun(A1, R1), fun(A2, R2))
+    | existential_consistent_list(A1, A2) -> existential_consistent(R1, R2).
+existential_consistent(_, _) -> false.
+
+existential_consistent_list([], []) -> true.
+existential_consistent_list([X|Xs], [Y|Ys])
+    | existential_consistent(X, Y) -> existential_consistent_list(Xs, Ys).
+existential_consistent_list(_, _) -> false.
+
+% A single declared signature is consistent with the substituted bound
+% when its argument list and return type are pairwise existentially
+% consistent.
+sig_one_consistent(sig(DeclArgs, DeclRet), SubArgs, SubRet)
+    | existential_consistent_list(DeclArgs, SubArgs)
+    -> existential_consistent(DeclRet, SubRet).
+sig_one_consistent(_, _, _) -> false.
+
+% True when at least one declared signature in the list is consistent
+% with the substituted bound. Implements the existence semantics of
+% `check_bound`: any matching candidate discharges the bound, without
+% committing to a particular candidate.
+sig_existential([], _, _) -> false.
+sig_existential([Sig|_], SubArgs, SubRet)
+    | sig_one_consistent(Sig, SubArgs, SubRet) -> true.
+sig_existential([_|Rest], SubArgs, SubRet) -> sig_existential(Rest, SubArgs, SubRet).
+
+% Ground-substitution check: true when every leaf of @SubArgs@ and
+% @SubRet@ is a concrete type (no free type variable). When this is
+% false the bound stays residual — per the gradual guarantee, a check
+% that lacks the information to fail is not a failure.
+:- function
+    (sub_ground(list(ty), ty) -> bool),
+    (ty_concrete(ty) -> bool),
+    (ty_concrete_list(list(ty)) -> bool).
+
+sub_ground(Args, Ret) | ty_concrete_list(Args) -> ty_concrete(Ret).
+sub_ground(_, _) -> false.
+
+ty_concrete(T) | var(T) -> false.
+ty_concrete(any) -> true.
+ty_concrete(int) -> true.
+ty_concrete(float) -> true.
+ty_concrete(string) -> true.
+ty_concrete(tcon(_, Args)) -> ty_concrete_list(Args).
+ty_concrete(fun(Args, Ret)) | ty_concrete_list(Args) -> ty_concrete(Ret).
+ty_concrete(_) -> false.
+
+ty_concrete_list([]) -> true.
+ty_concrete_list([T|Rest]) | ty_concrete(T) -> ty_concrete_list(Rest).
+ty_concrete_list(_) -> false.
+
+% ==========================================================================
 % Declaration matching
 % ==========================================================================
+
+% Bounded constraint usage: copy_term the declaration packed with its
+% bounds so the bound's logical variables stay shared with the head
+% arguments' types. After unifying the argument list, emit one
+% `check_bound` per bound at the freshly-renamed substitution. This
+% rule is listed before `constraint_match` so the more-specific
+% three-head pattern is preferred when both rules match.
+bounded_constraint_match @
+    constraint_sig(Name, DeclTypes), constraint_bounds(Name, Bounds) \
+        check_constraint_use(Name, ArgTypes, Ctx) <=>
+    Fresh is copy_term(term(sig(DeclTypes, Bounds))),
+    FreshTypes is sig_fst(Fresh),
+    FreshBounds is sig_snd(Fresh),
+    check_arg_list(FreshTypes, ArgTypes, Ctx),
+    emit_bounds(FreshBounds, Ctx).
 
 % Constraint usage: copy_term the declaration, check args pairwise.
 % The Haskell driver registers a constraint_sig for every constraint
@@ -113,6 +237,24 @@ constraint_match @
         check_constraint_use(Name, ArgTypes, Ctx) <=>
     FreshTypes is copy_term(term(DeclTypes)),
     check_arg_list(FreshTypes, ArgTypes, Ctx).
+
+% Bounded function usage: same shape as `function_match` plus a
+% bound-discharge phase. Listed before `function_match` for the same
+% reason `bounded_constraint_match` precedes `constraint_match`.
+% Bounded functions are single-signature only (the spec disallows
+% `requiring` on the multi-signature form), so there is no bounded
+% counterpart to `overloaded_function_match`.
+bounded_function_match @
+    function_sig(Name, Sig), function_bounds(Name, Bounds) \
+        check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
+    Fresh is copy_term(term(sig(Sig, Bounds))),
+    FreshSig is sig_fst(Fresh),
+    FreshBounds is sig_snd(Fresh),
+    FreshArgTypes is sig_fst(FreshSig),
+    FreshRetType is sig_snd(FreshSig),
+    check_arg_list(FreshArgTypes, ArgTypes, Ctx),
+    tc_unify(RetTypeVar, FreshRetType, Ctx),
+    emit_bounds(FreshBounds, Ctx).
 
 % Function usage: copy_term preserves arg/ret sharing
 function_match @
@@ -139,6 +281,134 @@ overloaded_function_match @
         check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
     Matching is filter_consistent(Sigs, ArgTypes),
     resolve_overload(Name, Matching, ArgTypes, RetTypeVar, Ctx).
+
+% ==========================================================================
+% Bounded polymorphism: ambient signatures at call sites
+% ==========================================================================
+%
+% Inside the equations of a bounded function (or the body/guard of a
+% rule whose head mentions a bounded constraint), calls to the bound's
+% named functions see the bound's required signature(s) as additional
+% candidates alongside the function's ordinary declared signatures.
+% The driver determines which calls qualify and emits
+% `check_function_use_with_ambient(Name, AmbSigs, Args, Ret, Ctx)`
+% (and the analogous body-tell form for bounded constraints) when the
+% target name has at least one ambient signature in the surrounding
+% scope. AmbSigs is the complete list of ambient signatures for that
+% name across every currently active scope; the driver computes this
+% list at call time so the rules below do not need to gather across
+% stored ambient_sig constraints.
+
+% With ambient + single declared sig: prepend ambients, treat as
+% overload candidates.
+check_with_ambient_single @
+    function_sig(Name, DeclSig) \
+        check_function_use_with_ambient(Name, AmbSigs, ArgTypes, RetTypeVar, Ctx) <=>
+    AllSigs is append(AmbSigs, [DeclSig]),
+    Matching is filter_consistent(AllSigs, ArgTypes),
+    resolve_overload(Name, Matching, ArgTypes, RetTypeVar, Ctx).
+
+% With ambient + overloaded declared sigs.
+check_with_ambient_multi @
+    function_sigs(Name, DeclSigs) \
+        check_function_use_with_ambient(Name, AmbSigs, ArgTypes, RetTypeVar, Ctx) <=>
+    AllSigs is append(AmbSigs, DeclSigs),
+    Matching is filter_consistent(AllSigs, ArgTypes),
+    resolve_overload(Name, Matching, ArgTypes, RetTypeVar, Ctx).
+
+% No declared sig — the ambient sigs are the only candidates.
+check_with_ambient_only @
+    check_function_use_with_ambient(Name, AmbSigs, ArgTypes, RetTypeVar, Ctx) <=>
+    Matching is filter_consistent(AmbSigs, ArgTypes),
+    resolve_overload(Name, Matching, ArgTypes, RetTypeVar, Ctx).
+
+% ==========================================================================
+% Bounded polymorphism: bound emission and discharge
+% ==========================================================================
+
+% Walk a freshly-copy_term'd bounds list, emitting one residual
+% `check_bound` constraint per entry. The bound's argument list and
+% return type carry the call-site's fresh substitution (because the
+% surrounding match rule copy_term'd them together with the function's
+% signature), so the discharge rules see a substitution that is
+% consistent with the call.
+:- function
+    (nbound_name(bound_named) -> any),
+    (nbound_args(bound_named) -> list(ty)),
+    (nbound_ret(bound_named) -> ty).
+nbound_name(nbound(N, _, _)) -> N.
+nbound_args(nbound(_, A, _)) -> A.
+nbound_ret(nbound(_, _, R)) -> R.
+
+emit_bounds_done @ emit_bounds([], _) <=> true.
+emit_bounds_step @ emit_bounds([B | Rest], Ctx) <=>
+    GName is nbound_name(B),
+    BArgs is nbound_args(B),
+    BRet is nbound_ret(B),
+    check_bound(GName, BArgs, BRet, Ctx),
+    emit_bounds(Rest, Ctx).
+
+% `check_bound` is a residual: it stays in the store until the
+% substitution becomes ground enough to either find a consistent
+% declared signature (discharge silently) or rule them all out
+% (`bound_unsatisfied`). The `sub_ground` guard implements the
+% "ground enough" condition; partial substitutions leave the bound
+% in place, matching the gradual-guarantee silent-success rule.
+%
+% Both the single-sig and overloaded-sig variants reuse
+% `discharge_bound_check`, which is a worker constraint that
+% sees a list of candidate signatures and runs an existence check.
+
+discharge_bound_overloaded @
+    function_sigs(GName, DeclSigs) \ check_bound(GName, SubArgs, SubRet, Ctx) <=>
+        sub_ground(SubArgs, SubRet) |
+    discharge_bound_check(DeclSigs, GName, SubArgs, SubRet, Ctx).
+
+discharge_bound_single @
+    function_sig(GName, DeclSig) \ check_bound(GName, SubArgs, SubRet, Ctx) <=>
+        sub_ground(SubArgs, SubRet) |
+    discharge_bound_check([DeclSig], GName, SubArgs, SubRet, Ctx).
+
+% No declared signature for the bound's named function. The
+% Haskell-side `unknown_bound_function` check already rejects bounds
+% whose target is not declared, so this rule is a defensive
+% catch-all: with `sub_ground` true and no declared sig found
+% (neither single nor overloaded), the bound cannot be satisfied.
+discharge_bound_no_decl @
+    check_bound(GName, SubArgs, SubRet, Ctx) <=>
+        sub_ground(SubArgs, SubRet) |
+    report_error(Ctx, bound_unsatisfied, GName).
+
+% Existence check: discharge silently if any declared signature is
+% consistent; otherwise emit `bound_unsatisfied`. Two rules with
+% mutually exclusive guards; textual order picks the success case
+% first when both could fire, matching the spec's "succeed if any
+% candidate is consistent" semantics.
+discharge_bound_check_ok @
+    discharge_bound_check(Sigs, _, SubArgs, SubRet, _) <=>
+        sig_existential(Sigs, SubArgs, SubRet) | true.
+
+discharge_bound_check_fail @
+    discharge_bound_check(_, GName, _, _, Ctx) <=>
+    report_error(Ctx, bound_unsatisfied, GName).
+
+% ==========================================================================
+% Bounded polymorphism: scope teardown
+% ==========================================================================
+%
+% When the driver finishes type-checking a bounded function's
+% equation or a rule whose head mentions a bounded constraint, it
+% tells `end_scope(S)`. These rules remove every `ambient_sig(S, _, _)`
+% and the matching `active_scope(S)` so the scope's ambient
+% signatures do not leak into subsequent equations or rules.
+end_scope_ambient @
+    end_scope(S) \ ambient_sig(S, _, _) <=> true.
+
+end_scope_active @
+    end_scope(S) \ active_scope(S) <=> true.
+
+end_scope_done @
+    end_scope(_) <=> true.
 
 % Constructor usage: copy_term preserves parent/field sharing
 constructor_match @

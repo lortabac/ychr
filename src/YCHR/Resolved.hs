@@ -32,7 +32,14 @@ import Data.Set (Set)
 import Data.Text (Text)
 import YCHR.Loc (Ann)
 import YCHR.Parsed (AnnP)
-import YCHR.Types (QualifiedConstraint, QualifiedName, Term, TypeDefinition, TypeExpr)
+import YCHR.Types
+  ( BoundSig,
+    QualifiedConstraint,
+    QualifiedName,
+    Term,
+    TypeDefinition,
+    TypeExpr,
+  )
 
 -- | A resolved program: all modules flattened, equations grouped under
 -- their function declarations.
@@ -40,6 +47,11 @@ data Program = Program
   { rules :: [Rule],
     functions :: [FunctionDef],
     constraintTypes :: Map QualifiedName [TypeExpr],
+    -- | Bounds declared on each @:- chr_constraint@ that carries a
+    -- @requiring@ clause. Constraints without bounds do not appear in
+    -- this map (rather than mapping to @[]@) so a single membership
+    -- check distinguishes "bounded constraint" from "unbounded".
+    constraintBounds :: Map QualifiedName [BoundSig],
     functionNames :: Set QualifiedName,
     typeDefinitions :: [TypeDefinition]
   }
@@ -71,6 +83,9 @@ data FunctionDef = FunctionDef
     arity :: Int,
     signatures :: [([TypeExpr], TypeExpr)],
     isOpen :: Bool,
+    -- | Bounds declared on this function via @requiring@. Empty when
+    -- the function is unbounded.
+    requiring :: [BoundSig],
     equations :: [AnnP FunctionEquation]
   }
   deriving (Show)

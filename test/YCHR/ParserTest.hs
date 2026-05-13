@@ -77,7 +77,12 @@ directiveTests =
         fmap (.node) . (.exports) <$> p ":- module(order, [])." @?= Right (Just []),
       testCase "export list parsed correctly" $
         fmap (.node) . (.exports) <$> p ":- module(order, [leq/2, foo/1])."
-          @?= Right (Just [ConstraintDecl "leq" 2 Nothing, ConstraintDecl "foo" 1 Nothing]),
+          @?= Right
+            ( Just
+                [ ConstraintDecl "leq" 2 Nothing Nothing,
+                  ConstraintDecl "foo" 1 Nothing Nothing
+                ]
+            ),
       testCase "use_module" $
         (map (.node) . (.imports))
           <$> p ":- use_module(stdlib)."
@@ -92,7 +97,7 @@ directiveTests =
           @?= Right [LibraryImport "mylib" Nothing],
       testCase "use_module with import list" $
         (map (.node) . (.imports)) <$> p ":- use_module(order, [leq/2])."
-          @?= Right [ModuleImport "order" (Just [ConstraintDecl "leq" 2 Nothing])],
+          @?= Right [ModuleImport "order" (Just [ConstraintDecl "leq" 2 Nothing Nothing])],
       testCase "use_module library with import list" $
         (map (.node) . (.imports))
           <$> p ":- use_module(library(mylib), [foo/1, type(tree/0)])."
@@ -100,25 +105,28 @@ directiveTests =
             [ LibraryImport
                 "mylib"
                 ( Just
-                    [ ConstraintDecl "foo" 1 Nothing,
+                    [ ConstraintDecl "foo" 1 Nothing Nothing,
                       TypeExportDecl "tree" 0 Nothing
                     ]
                 )
             ],
       testCase "chr_constraint single" $
         (map (.node) . (.decls)) <$> p ":- chr_constraint leq/2."
-          @?= Right [ConstraintDecl "leq" 2 Nothing],
+          @?= Right [ConstraintDecl "leq" 2 Nothing Nothing],
       testCase "chr_constraint multiple in one directive" $
         (map (.node) . (.decls)) <$> p ":- chr_constraint fib/2, upto/1."
-          @?= Right [ConstraintDecl "fib" 2 Nothing, ConstraintDecl "upto" 1 Nothing],
+          @?= Right
+            [ ConstraintDecl "fib" 2 Nothing Nothing,
+              ConstraintDecl "upto" 1 Nothing Nothing
+            ],
       testCase "chr_constraint zero arity" $
         (map (.node) . (.decls)) <$> p ":- chr_constraint fire/0."
-          @?= Right [ConstraintDecl "fire" 0 Nothing],
+          @?= Right [ConstraintDecl "fire" 0 Nothing Nothing],
       testCase "type export in export list" $
         fmap (.node) . (.exports) <$> p ":- module(m, [type(tree/0), leq/2])."
           @?= Right
             ( Just
-                [TypeExportDecl "tree" 0 Nothing, ConstraintDecl "leq" 2 Nothing]
+                [TypeExportDecl "tree" 0 Nothing, ConstraintDecl "leq" 2 Nothing Nothing]
             ),
       testCase "parameterized type export" $
         fmap (.node) . (.exports) <$> p ":- module(m, [type(list/1)])."
@@ -133,7 +141,7 @@ directiveTests =
           @?= Right (Just [TypeExportDecl "foo" 0 (Just [])]),
       testCase "unknown directive is skipped" $
         (map (.node) . (.decls)) <$> p ":- dynamic foo/1.\n:- chr_constraint leq/2."
-          @?= Right [ConstraintDecl "leq" 2 Nothing],
+          @?= Right [ConstraintDecl "leq" 2 Nothing Nothing],
       testCase "chr_constraint typed" $
         (map (.node) . (.decls)) <$> p ":- chr_constraint leq(int, int)."
           @?= Right
@@ -145,6 +153,7 @@ directiveTests =
                       TypeCon (Unqualified "int") []
                     ]
                 )
+                Nothing
             ],
       testCase "chr_constraint typed with type variables" $
         (map (.node) . (.decls)) <$> p ":- chr_constraint foo(list(T), T)."
@@ -153,10 +162,11 @@ directiveTests =
                 "foo"
                 2
                 (Just [TypeCon (Unqualified "list") [TypeVar "T"], TypeVar "T"])
+                Nothing
             ],
       testCase "chr_constraint typed zero arity" $
         (map (.node) . (.decls)) <$> p ":- chr_constraint fire()."
-          @?= Right [ConstraintDecl "fire" 0 (Just [])],
+          @?= Right [ConstraintDecl "fire" 0 (Just []) Nothing],
       testCase "function typed" $
         (map (.node) . (.decls)) <$> p ":- function factorial(int) -> int."
           @?= Right
@@ -166,6 +176,7 @@ directiveTests =
                 (Just [TypeCon (Unqualified "int") []])
                 (Just (TypeCon (Unqualified "int") []))
                 False
+                Nothing
             ],
       testCase "function typed multiple args" $
         (map (.node) . (.decls)) <$> p ":- function add(int, int) -> int."
@@ -176,10 +187,11 @@ directiveTests =
                 (Just [TypeCon (Unqualified "int") [], TypeCon (Unqualified "int") []])
                 (Just (TypeCon (Unqualified "int") []))
                 False
+                Nothing
             ],
       testCase "function untyped" $
         (map (.node) . (.decls)) <$> p ":- function foo/2."
-          @?= Right [FunctionDecl "foo" 2 Nothing Nothing False]
+          @?= Right [FunctionDecl "foo" 2 Nothing Nothing False Nothing]
     ]
 
 -- ---------------------------------------------------------------------------
@@ -510,7 +522,7 @@ typeTests =
         case p ":- chr_type t ---> a.\n:- chr_constraint c/1." of
           Left err -> assertFailure (show err)
           Right m -> do
-            map (.node) m.decls @?= [ConstraintDecl "c" 1 Nothing]
+            map (.node) m.decls @?= [ConstraintDecl "c" 1 Nothing Nothing]
             map (normalizeTypeDefLoc . (.node)) m.typeDecls
               @?= [ TypeDefinition
                       (Unqualified "t")
@@ -549,7 +561,7 @@ moduleTests =
             ( Module
                 { name = "order",
                   imports = [],
-                  decls = [noAnn (ConstraintDecl "leq" 2 Nothing)],
+                  decls = [noAnn (ConstraintDecl "leq" 2 Nothing Nothing)],
                   extensionTypes = [],
                   typeDecls = [],
                   rules =
@@ -766,7 +778,13 @@ typeDefsOf src = case p src of
 -- | Strip the source location from a parsed 'TypeDefinition' so test
 -- expected values can omit line/column numbers.
 normalizeTypeDefLoc :: TypeDefinition -> TypeDefinition
-normalizeTypeDefLoc td = td {loc = dummyLoc}
+normalizeTypeDefLoc td =
+  TypeDefinition
+    { name = td.name,
+      typeVars = td.typeVars,
+      constructors = td.constructors,
+      loc = dummyLoc
+    }
 
 bodyOf :: Text -> IO [Term]
 bodyOf src = case p src of

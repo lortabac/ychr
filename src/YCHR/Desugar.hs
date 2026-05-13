@@ -116,7 +116,14 @@ desugarProgram rprog =
       (result, errs) = runPureEff . runWriter $ do
         rules <- traverse (desugarRule funSet) rprog.rules
         functions <- traverse desugarFunctionDef rprog.functions
-        pure (D.Program rules functions rprog.constraintTypes rprog.typeDefinitions)
+        pure
+          D.Program
+            { rules = rules,
+              functions = functions,
+              constraintTypes = rprog.constraintTypes,
+              constraintBounds = rprog.constraintBounds,
+              typeDefinitions = rprog.typeDefinitions
+            }
    in if null errs then Right result else Left errs
 
 -- | Scans a desugared program and builds the optimization map.
@@ -312,6 +319,7 @@ desugarFunctionDef fdef = do
       { name = fdef.name,
         arity = fdef.arity,
         signatures = fdef.signatures,
+        requiring = fdef.requiring,
         equations = AnnP desugaredEqs loc parsed
       }
 
@@ -476,17 +484,25 @@ extractLambdaParams t = ([], t)
 -- @F1 .. Fn@ are the captured free variables; the lambda body itself
 -- is lifted into a fresh top-level 'D.Function'. Returns the updated
 -- state and the rewritten term.
+--
+-- The @parentRequiring@ argument is the enclosing bounded
+-- declaration's @requiring@ clause (or @[]@ when the lambda's parent
+-- is unbounded). Every lifted lambda inherits this clause so that
+-- bound-named operations inside the lambda body resolve against the
+-- same ambient signatures as in the parent's equation. Nested lambdas
+-- inherit recursively.
 liftTerm ::
   Text ->
   P.SourceLoc ->
   PExpr ->
   Set.Set Text ->
+  [BoundSig] ->
   LiftState ->
   Term ->
   ( LiftState,
     Term
   )
-liftTerm modName loc origin scope st term = case term of
+liftTerm modName loc origin scope parentRequiring st term = case term of
   CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") _, _] ->
     let (params, body) = extractLambdaParams term
         badParams = [p | p <- params, termToHeadArg p == Nothing]
@@ -507,7 +523,7 @@ liftTerm modName loc origin scope st term = case term of
                 `Set.difference` paramVarNames
             )
         innerScope = scope `Set.union` paramVarNames
-        (st', liftedBody) = liftTerm modName loc origin innerScope st body
+        (st', liftedBody) = liftTerm modName loc origin innerScope parentRequiring st body
         idx = st'.counter
         lambdaName = lambdaPrefix <> T.pack (show idx)
         qualName = QualifiedName modName lambdaName
@@ -517,6 +533,7 @@ liftTerm modName loc origin scope st term = case term of
             { name = qualName,
               arity = length allParams,
               signatures = [],
+              requiring = parentRequiring,
               equations =
                 noAnnP
                   [ D.Equation
@@ -537,7 +554,7 @@ liftTerm modName loc origin scope st term = case term of
         closureArgs = [AtomTerm lambdaId, quoteTerm term] ++ map VarTerm freeVars
      in (st'', CompoundTerm (Unqualified closureFunctor) closureArgs)
   CompoundTerm name args ->
-    let (st', args') = mapAccumL (liftTerm modName loc origin scope) st args
+    let (st', args') = mapAccumL (liftTerm modName loc origin scope parentRequiring) st args
      in (st', CompoundTerm name args')
   _ -> (st, term)
 
@@ -547,25 +564,26 @@ liftBodyGoal ::
   P.SourceLoc ->
   PExpr ->
   Set.Set Text ->
+  [BoundSig] ->
   LiftState ->
   D.BodyGoal ->
   (LiftState, D.BodyGoal)
-liftBodyGoal modName loc origin scope st goal = case goal of
+liftBodyGoal modName loc origin scope parentRequiring st goal = case goal of
   D.BodyIs v expr ->
-    let (st', expr') = liftTerm modName loc origin scope st expr
+    let (st', expr') = liftTerm modName loc origin scope parentRequiring st expr
      in (st', D.BodyIs v expr')
   D.BodyFunctionCall name args ->
-    let (st', args') = mapAccumL (liftTerm modName loc origin scope) st args
+    let (st', args') = mapAccumL (liftTerm modName loc origin scope parentRequiring) st args
      in (st', D.BodyFunctionCall name args')
   D.BodyConstraint (QualifiedConstraint cname cargs) ->
-    let (st', cargs') = mapAccumL (liftTerm modName loc origin scope) st cargs
+    let (st', cargs') = mapAccumL (liftTerm modName loc origin scope parentRequiring) st cargs
      in (st', D.BodyConstraint (QualifiedConstraint cname cargs'))
   D.BodyUnify t1 t2 ->
-    let (st', t1') = liftTerm modName loc origin scope st t1
-        (st'', t2') = liftTerm modName loc origin scope st' t2
+    let (st', t1') = liftTerm modName loc origin scope parentRequiring st t1
+        (st'', t2') = liftTerm modName loc origin scope parentRequiring st' t2
      in (st'', D.BodyUnify t1' t2')
   D.BodyHostStmt f args ->
-    let (st', args') = mapAccumL (liftTerm modName loc origin scope) st args
+    let (st', args') = mapAccumL (liftTerm modName loc origin scope parentRequiring) st args
      in (st', D.BodyHostStmt f args')
   D.BodyTrue -> (st, D.BodyTrue)
 
@@ -575,13 +593,14 @@ liftGuard ::
   P.SourceLoc ->
   PExpr ->
   Set.Set Text ->
+  [BoundSig] ->
   LiftState ->
   D.Guard ->
   (LiftState, D.Guard)
-liftGuard modName loc origin scope st (D.GuardExpr term) =
-  let (st', term') = liftTerm modName loc origin scope st term
+liftGuard modName loc origin scope parentRequiring st (D.GuardExpr term) =
+  let (st', term') = liftTerm modName loc origin scope parentRequiring st term
    in (st', D.GuardExpr term')
-liftGuard _ _ _ _ st g = (st, g)
+liftGuard _ _ _ _ _ st g = (st, g)
 
 -- | Lift lambdas in a function equation. The scope visible to the RHS
 -- (and therefore to any lambda captured inside it) includes the pattern
@@ -592,26 +611,37 @@ liftEquation ::
   Text ->
   P.SourceLoc ->
   PExpr ->
+  [BoundSig] ->
   LiftState ->
   D.Equation ->
   ( LiftState,
     D.Equation
   )
-liftEquation modName loc origin st eq =
+liftEquation modName loc origin parentRequiring st eq =
   let scope =
         Set.unions (map headArgVars eq.params)
           `Set.union` guardVars eq.guards
-      (st', guards') = mapAccumL (liftGuard modName loc origin scope) st eq.guards
-      (st'', rhs') = liftTerm modName loc origin scope st' eq.rhs
+      (st', guards') =
+        mapAccumL
+          (liftGuard modName loc origin scope parentRequiring)
+          st
+          eq.guards
+      (st'', rhs') = liftTerm modName loc origin scope parentRequiring st' eq.rhs
    in (st'', eq {D.guards = guards', D.rhs = rhs'})
 
--- | Lift lambdas in a function definition.
+-- | Lift lambdas in a function definition. The function's own
+-- @requiring@ clause is the @parentRequiring@ propagated to every
+-- lambda lifted out of its equations.
 liftFunction :: LiftState -> D.Function -> (LiftState, D.Function)
 liftFunction st func =
   let modName = func.name.moduleName
       loc = func.equations.sourceLoc
       origin = func.equations.parsed
-      (st', eqs') = mapAccumL (liftEquation modName loc origin) st func.equations.node
+      (st', eqs') =
+        mapAccumL
+          (liftEquation modName loc origin func.requiring)
+          st
+          func.equations.node
    in (st', func {D.equations = func.equations {node = eqs'}})
 
 -- | Variables introduced by a single 'HeadArg'. Wildcards contribute
@@ -659,7 +689,11 @@ guardVars = Set.unions . map gVars
     gVars (D.GuardMatch t _ _) = termVars t
 
 -- | Lift lambdas in a rule. The scope includes all variables from the
--- entire rule (head, guard, and body).
+-- entire rule (head, guard, and body). Rules use an empty
+-- @parentRequiring@: bounded constraints contribute ambient signatures
+-- at type-check time through the head-occurrence mechanism, not by
+-- pushing bounds onto lifted lambdas (lambdas in rule bodies that need
+-- bound-named operations remain rare in practice).
 liftRule :: LiftState -> D.Rule -> (LiftState, D.Rule)
 liftRule st rule =
   let headNode = rule.head.node
@@ -674,12 +708,12 @@ liftRule st rule =
       bodyOrigin = rule.body.parsed
       (st', guards') =
         mapAccumL
-          (liftGuard modName guardLoc guardOrigin scope)
+          (liftGuard modName guardLoc guardOrigin scope [])
           st
           rule.guard.node
       (st'', body') =
         mapAccumL
-          (liftBodyGoal modName bodyLoc bodyOrigin scope)
+          (liftBodyGoal modName bodyLoc bodyOrigin scope [])
           st'
           rule.body.node
    in ( st'',
@@ -708,6 +742,8 @@ liftAllLambdas prog =
 -- and any generated function definitions (to be compiled on the fly).
 -- Uses @\"__query\"@ as the module name for lifted lambdas, and starts
 -- the counter high enough to avoid collisions with program lambdas.
+-- Query lambdas inherit no @requiring@ clause: the top-level goal has
+-- no enclosing bounded declaration whose bound could propagate.
 liftQueryLambdas ::
   Int ->
   P.SourceLoc ->
@@ -717,7 +753,7 @@ liftQueryLambdas ::
 liftQueryLambdas startCounter loc origin goals =
   let scope = bodyGoalVars goals
       initState = LiftState startCounter [] []
-      (st, goals') = mapAccumL (liftBodyGoal "__query" loc origin scope) initState goals
+      (st, goals') = mapAccumL (liftBodyGoal "__query" loc origin scope []) initState goals
    in if null st.errors
         then Right (goals', st.liftedFunctions)
         else Left (reverse st.errors)

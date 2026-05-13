@@ -1,0 +1,14 @@
+:- module(bounded_unknown_function, [result/1]).
+:- use_module(library(prelude)).
+
+% A constraint, not a function. The renamer accepts the name in the
+% requiring clause (constraints and functions share the symbol
+% namespace), but the resolver detects that the bound's target is
+% not a function and emits unknown_bound_function.
+:- chr_constraint result(any), foo(int, int).
+
+:- function pick(T, T) -> T requiring foo(T, T) -> bool.
+
+pick(X, _) -> X.
+
+result(R) <=> R is pick(1, 2).

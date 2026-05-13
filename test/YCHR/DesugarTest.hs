@@ -570,7 +570,7 @@ symbolTableTests =
   testGroup
     "symbol-table"
     [ testCase "empty program yields empty table" $
-        extractSymbolTable (D.Program [] [] Map.empty []) @?= mkSymbolTable [],
+        extractSymbolTable (D.Program [] [] Map.empty Map.empty []) @?= mkSymbolTable [],
       testCase "one qualified constraint in head gets id 0" $ do
         let prog =
               D.Program
@@ -581,6 +581,7 @@ symbolTableTests =
                     (noAnnP [])
                 ]
                 []
+                Map.empty
                 Map.empty
                 []
         extractSymbolTable prog
@@ -607,6 +608,7 @@ symbolTableTests =
                 ]
                 []
                 Map.empty
+                Map.empty
                 []
         let table = extractSymbolTable prog
         symbolTableSize table @?= 2,
@@ -627,6 +629,7 @@ symbolTableTests =
                 ]
                 []
                 Map.empty
+                Map.empty
                 []
         extractSymbolTable prog
           @?= mkSymbolTable
@@ -644,6 +647,7 @@ symbolTableTests =
                     (noAnnP [D.BodyHostStmt "print" []])
                 ]
                 []
+                Map.empty
                 Map.empty
                 []
         let table = extractSymbolTable prog
@@ -666,6 +670,7 @@ symbolTableTests =
                     (noAnnP [])
                 ]
                 []
+                Map.empty
                 Map.empty
                 []
         let table = extractSymbolTable prog
@@ -701,6 +706,7 @@ symbolTableTests =
                 ]
                 []
                 Map.empty
+                Map.empty
                 []
         let table = extractSymbolTable prog
         symbolTableSize table @?= 2
@@ -735,7 +741,8 @@ lambdaLiftTests =
                     arity = 1,
                     argTypes = Nothing,
                     returnType = Nothing,
-                    isOpen = False
+                    isOpen = False,
+                    requiring = Nothing
                   }
             funEq =
               noAnnP
@@ -770,7 +777,7 @@ lambdaLiftTests =
                 [ CompoundTerm (Unqualified "fun") [TextTerm "hello"],
                   TextTerm "world"
                 ]
-            funDecl = Ann (FunctionDecl "f" 1 Nothing Nothing False) dummyLoc
+            funDecl = Ann (FunctionDecl "f" 1 Nothing Nothing False Nothing) dummyLoc
             funEq =
               AnnP
                 FunctionEquation

@@ -188,6 +188,8 @@ parseValidationErrorCode (DiscontiguousEquations _) = ErrorCode 15001
 parseValidationErrorCode MalformedImport = ErrorCode 15002
 parseValidationErrorCode MalformedConstraint = ErrorCode 15003
 parseValidationErrorCode (DiscontiguousFunctionDecls _) = ErrorCode 15004
+parseValidationErrorCode (RequiringOnMultiSig _) = ErrorCode 15005
+parseValidationErrorCode (RequiringOnExtendFunctionType _) = ErrorCode 15006
 
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
@@ -197,6 +199,13 @@ resolveErrorCode (ReservedName _) = ErrorCode 16003
 resolveErrorCode (UnqualifiedConstraintName _) = ErrorCode 16004
 resolveErrorCode (ExtendsClosedFunction _) = ErrorCode 16005
 resolveErrorCode (OrphanFunctionEquation _ _) = ErrorCode 16006
+-- Bounded polymorphism (per docs/reference/type-system.md §Bounded
+-- Polymorphism §Errors): the unbound-variable, unknown-bound, cycle,
+-- and extend-on-bounded checks all live in the resolve phase.
+resolveErrorCode (ExtendTypeOnBoundedFunction _) = ErrorCode 16007
+resolveErrorCode (UnboundBoundVariable _ _) = ErrorCode 16008
+resolveErrorCode (UnknownBoundFunction _ _ _) = ErrorCode 16009
+resolveErrorCode (BoundCycle _) = ErrorCode 16010
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 was previously used for OperatorInImportList; now reserved
@@ -234,6 +243,7 @@ typeCheckErrorCode (UndefinedType _ _ _) = ErrorCode 60005
 typeCheckErrorCode (NoMatchingOverload _) = ErrorCode 60006
 typeCheckErrorCode (DuplicateConstructor _ _) = ErrorCode 60007
 typeCheckErrorCode (ConstructorArityMismatch _ _ _) = ErrorCode 60008
+typeCheckErrorCode (BoundUnsatisfied _) = ErrorCode 60012
 
 -- | 5xxxx — top-level errors
 parseErrorCode :: ErrorCode
@@ -281,6 +291,22 @@ parseValidationErrorMsg MalformedConstraint =
   withHint
     "Invalid constraint"
     "expected an atom or compound term"
+parseValidationErrorMsg (RequiringOnMultiSig name) =
+  withHint
+    ( "'requiring' is not allowed on the multi-signature form of '"
+        ++ T.unpack name
+        ++ "'"
+    )
+    ( "use a single typed declaration with 'requiring',"
+        ++ " or split the multi-signature form into separate declarations"
+    )
+parseValidationErrorMsg (RequiringOnExtendFunctionType name) =
+  withHint
+    ( "'requiring' is not allowed on ':- extend_function_type' (target '"
+        ++ T.unpack name
+        ++ "')"
+    )
+    "bounds belong to the original declaration; an extension cannot introduce them"
 
 instance Display (Diagnostic ResolveError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -334,6 +360,48 @@ resolveErrorMsg (OrphanFunctionEquation name modName) =
         ++ "'"
     )
     "use :- extend_function to add equations to an open function from another module"
+resolveErrorMsg (ExtendTypeOnBoundedFunction name) =
+  withHint
+    ( "Cannot extend the type of bounded open function '"
+        ++ displayName name
+        ++ "'"
+    )
+    ( "the instance set of a bounded open function is determined by its"
+        ++ " requiring clause; declare a new signature of the bound function"
+        ++ " instead"
+    )
+resolveErrorMsg (UnboundBoundVariable declName var) =
+  withHint
+    ( "Type variable '"
+        ++ T.unpack var
+        ++ "' in the requiring clause of '"
+        ++ T.unpack declName
+        ++ "' is not bound by the declaration's primary signature"
+    )
+    ( "every variable in 'requiring' must also appear in the"
+        ++ " declaration's argument or return types"
+    )
+resolveErrorMsg (UnknownBoundFunction declName boundName arity) =
+  withHint
+    ( "'"
+        ++ T.unpack declName
+        ++ "' requires '"
+        ++ T.unpack boundName
+        ++ "/"
+        ++ show arity
+        ++ "' but no such function is declared"
+    )
+    "declare ':- function "
+    ++ T.unpack boundName
+    ++ "/"
+    ++ show arity
+    ++ ".' (or import a module that does)"
+resolveErrorMsg (BoundCycle names) =
+  withHint
+    ( "Cyclic 'requiring' clause: "
+        ++ intercalate " -> " (map T.unpack names)
+    )
+    "the bound graph must be acyclic; remove or restructure one of the requiring edges"
 
 instance Display (Diagnostic CollectError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -559,6 +627,15 @@ typeCheckErrorMsg (ConstructorArityMismatch conName usedArity declaredArity) =
     ++ show usedArity
     ++ " argument(s) but declared with "
     ++ show declaredArity
+typeCheckErrorMsg (BoundUnsatisfied boundName) =
+  withHint
+    ( "No declared signature of '"
+        ++ T.unpack boundName
+        ++ "' is consistent with the substituted bound at this use site"
+    )
+    ( "either widen the bound function's overload set or call the bounded"
+        ++ " operation at a type for which a signature exists"
+    )
 
 displayName :: Types.Name -> String
 displayName (Types.Unqualified n) = T.unpack n

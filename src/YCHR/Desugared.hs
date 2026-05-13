@@ -41,6 +41,7 @@ module YCHR.Desugared
     Term (..),
     TypeExpr (..),
     TypeDefinition (..),
+    BoundSig (..),
   )
 where
 
@@ -53,6 +54,11 @@ data Program = Program
   { rules :: [Rule],
     functions :: [Function],
     constraintTypes :: Map QualifiedName [TypeExpr],
+    -- | Bounds declared on each @:- chr_constraint@ that carries a
+    -- @requiring@ clause. See 'YCHR.Resolved.Program' for the
+    -- bounded-vs-unbounded convention (constraints without bounds are
+    -- absent from the map).
+    constraintBounds :: Map QualifiedName [BoundSig],
     typeDefinitions :: [TypeDefinition]
   }
   deriving (Show)
@@ -91,6 +97,9 @@ data Function = Function
   { name :: QualifiedName,
     arity :: Int,
     signatures :: [([TypeExpr], TypeExpr)],
+    -- | Bounds declared on this function via @requiring@. Empty when
+    -- the function is unbounded.
+    requiring :: [BoundSig],
     equations :: AnnP [Equation]
   }
   deriving (Show)
