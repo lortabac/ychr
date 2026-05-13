@@ -45,6 +45,7 @@ module YCHR.PExpr
   )
 where
 
+import Control.Applicative (some)
 import Control.Monad (foldM, void)
 import Data.Char (isAlphaNum, isLower)
 import Data.IntMap.Strict (IntMap)
@@ -56,12 +57,30 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Void (Void)
-import Language.Haskell.TH.Syntax (Lift)
-import Text.Megaparsec
-import Text.Megaparsec.Char
-import Text.Megaparsec.Char.Lexer qualified as L
+import Text.Parsec
+  ( ParseError,
+    Parsec,
+    SourcePos,
+    between,
+    choice,
+    eof,
+    getInput,
+    getPosition,
+    lookAhead,
+    many,
+    notFollowedBy,
+    option,
+    optionMaybe,
+    parse,
+    sepBy,
+    try,
+    (<|>),
+  )
+import Text.Parsec.Char (alphaNum, anyChar, char, digit, lower, oneOf, satisfy, string, upper)
+import Text.Parsec.Pos (sourceColumn, sourceLine, sourceName)
+import Text.Parsec.Text ()
 import YCHR.Loc
+import YCHR.Parsing.Lexer qualified as L
 
 -- ---------------------------------------------------------------------------
 -- Terms
@@ -85,7 +104,7 @@ data PExpr
     Compound Text [Ann PExpr]
   | -- | Anonymous variable (@_@).
     Wildcard
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- ---------------------------------------------------------------------------
 -- Operator table
@@ -108,7 +127,7 @@ data OpType
   | Fy
   | Xf
   | Yf
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | Is the operator an infix operator?
 isInfix :: OpType -> Bool
@@ -263,7 +282,7 @@ symbolChars = "\\:=<>+-*/#@^~!&?"
 -- Parser type
 -- ---------------------------------------------------------------------------
 
-type Parser = Parsec Void Text
+type Parser = Parsec Text ()
 
 -- ---------------------------------------------------------------------------
 -- Space consumer and lexeme helpers
@@ -271,7 +290,7 @@ type Parser = Parsec Void Text
 
 -- | Consume whitespace and @%@ line comments.
 sc :: Parser ()
-sc = L.space space1 (L.skipLineComment "%") empty
+sc = L.space L.space1 (L.skipLineComment "%")
 
 -- | Wrap a parser to consume trailing whitespace.
 lexeme :: Parser a -> Parser a
@@ -293,19 +312,19 @@ comma = void (symbol ",")
 -- Source locations
 -- ---------------------------------------------------------------------------
 
--- | Convert a megaparsec 'SourcePos' to a 'SourceLoc'.
+-- | Convert a parsec 'SourcePos' to a 'SourceLoc'.
 sourceLocFromPos :: SourcePos -> SourceLoc
 sourceLocFromPos sp =
   SourceLoc
     { file = sourceName sp,
-      line = unPos (sourceLine sp),
-      col = unPos (sourceColumn sp)
+      line = sourceLine sp,
+      col = sourceColumn sp
     }
 
 -- | Wrap a parser's result with the source location of its first character.
 withLoc :: Parser a -> Parser (Ann a)
 withLoc p = do
-  sp <- getSourcePos
+  sp <- getPosition
   x <- p
   pure (Ann x (sourceLocFromPos sp))
 
@@ -334,7 +353,7 @@ atomP table = lexeme (unquotedP <|> quotedAtomP)
 -- or double underscores — callers are responsible for validation.
 identifierP :: Parser Text
 identifierP = do
-  name <- (:) <$> lowerChar <*> many (alphaNumChar <|> char '_')
+  name <- (:) <$> lower <*> many (alphaNum <|> char '_')
   let t = T.pack name
   if "__" `T.isInfixOf` t
     then fail "double underscore (__) is not allowed in atoms"
@@ -370,27 +389,27 @@ quotedAtomP = do
           '\\' <$ char '\\',
           '\n' <$ char 'n',
           '\t' <$ char 't',
-          anySingle
+          anyChar
         ]
 
 -- | Parse a variable (uppercase identifier).
 varP :: Parser PExpr
 varP = lexeme $ do
-  c <- upperChar
-  rest <- many (alphaNumChar <|> char '_')
+  c <- upper
+  rest <- many (alphaNum <|> char '_')
   pure (Var (T.pack (c : rest)))
 
 -- | Parse a wildcard: bare @_@ not followed by a word character.
 wildcardP :: Parser PExpr
 wildcardP = lexeme $ do
   _ <- char '_'
-  notFollowedBy (alphaNumChar <|> char '_')
+  notFollowedBy (alphaNum <|> char '_')
   pure Wildcard
 
 -- | Parse a number: try float first (requires decimal point), then integer.
 numberP :: Parser PExpr
 numberP = lexeme $ do
-  sign <- optional (char '-')
+  sign <- optionMaybe (char '-')
   let applySign :: (Num a) => a -> Maybe Char -> a
       applySign x Nothing = x
       applySign x (Just _) = negate x
@@ -398,7 +417,7 @@ numberP = lexeme $ do
     ( do
         whole <- L.decimal
         _ <- char '.'
-        fracStr <- some digitChar
+        fracStr <- some digit
         let str = show (whole :: Int) ++ "." ++ fracStr
             val = read str :: Double
         pure (Float (applySign val sign))
@@ -433,9 +452,9 @@ anyOpToken table = lexeme (trySymbol <|> trySingleChar <|> tryWord)
         then pure name
         else fail ("not an operator: " ++ [c])
     tryWord = try $ do
-      w <- T.pack <$> ((:) <$> lowerChar <*> many (alphaNumChar <|> char '_'))
+      w <- T.pack <$> ((:) <$> lower <*> many (alphaNum <|> char '_'))
       if Set.member w table.wordOpSet
-        then w <$ notFollowedBy (alphaNumChar <|> char '_')
+        then w <$ notFollowedBy (alphaNum <|> char '_')
         else fail ("not a word operator: " ++ T.unpack w)
 
 -- ---------------------------------------------------------------------------
@@ -465,7 +484,7 @@ stringP = lexeme $ Str . T.pack <$> (char '"' *> go)
           '\\' <$ char '\\',
           '\n' <$ char 'n',
           '\t' <$ char 't',
-          anySingle
+          anyChar
         ]
 
 -- | Parse a list term using Prolog list notation.
@@ -491,11 +510,11 @@ listTermP table = between (symbol "[") (symbol "]") listBody
 -- same representation as @\'->'(fun(X), X + 1)@.
 lambdaP :: OpTable -> Parser PExpr
 lambdaP table = try $ do
-  _ <- lexeme (string "fun" <* notFollowedBy (alphaNumChar <|> char '_'))
+  _ <- lexeme (string "fun" <* notFollowedBy (alphaNum <|> char '_'))
   params <- parens (withLoc (termP table maxArgPrec) `sepBy` comma)
   _ <- symbol "->"
   body <- withLoc (termP table maxPrec)
-  _ <- lexeme (string "end" <* notFollowedBy (alphaNumChar <|> char '_'))
+  _ <- lexeme (string "end" <* notFollowedBy (alphaNum <|> char '_'))
   pure (Compound "->" [noAnn (Compound "fun" params), body])
 
 -- | Parse an atomic (non-operator) term.
@@ -531,7 +550,7 @@ nudP table maxFix = try atomicTerm <|> prefixOp
   where
     atomicTerm = (,0) <$> atomicTermP table
     prefixOp = try $ do
-      sp <- getSourcePos
+      sp <- getPosition
       name <- anyOpToken table
       case Map.lookup name table.prefixByName of
         Just (fix, ty) | fix <= maxFix -> do
@@ -549,7 +568,7 @@ nudP table maxFix = try atomicTerm <|> prefixOp
 -- satisfied by the current left-hand side.
 ledLoop :: OpTable -> Int -> Ann PExpr -> Int -> Parser (Ann PExpr)
 ledLoop table maxFix lhs lhsFix = do
-  mOp <- optional (lookAhead (try (anyOpToken table)))
+  mOp <- optionMaybe (lookAhead (try (anyOpToken table)))
   case mOp of
     Just name
       | Just (fix, ty) <- Map.lookup name table.infixByName,
@@ -606,7 +625,7 @@ atomOrCompoundP table = prefixWordAsFunctor <|> regular
           pure (Compound name args)
     regular = do
       name <- atomP table
-      maybeOpen <- optional (symbol "(")
+      maybeOpen <- optionMaybe (symbol "(")
       case maybeOpen of
         Nothing -> pure (Atom name)
         Just _ -> do
@@ -625,15 +644,15 @@ atomOrCompoundP table = prefixWordAsFunctor <|> regular
 --
 -- The first argument is the operator table. The second is the source file
 -- name (used in error messages only).
-parseTerms :: OpTable -> String -> Text -> Either (ParseErrorBundle Text Void) [Ann PExpr]
+parseTerms :: OpTable -> String -> Text -> Either ParseError [Ann PExpr]
 parseTerms table = parse (sc *> many (withLoc (termP table maxPrec) <* symbol ".") <* eof)
 
 -- | Parse a single dot-terminated term from source text.
-parseTerm :: OpTable -> String -> Text -> Either (ParseErrorBundle Text Void) (Ann PExpr)
+parseTerm :: OpTable -> String -> Text -> Either ParseError (Ann PExpr)
 parseTerm table = parse (sc *> withLoc (termP table maxPrec) <* symbol "." <* eof)
 
 -- | Parse a single term from source text (no dot terminator required).
-parseTermNoDot :: OpTable -> String -> Text -> Either (ParseErrorBundle Text Void) (Ann PExpr)
+parseTermNoDot :: OpTable -> String -> Text -> Either ParseError (Ann PExpr)
 parseTermNoDot table = parse (sc *> withLoc (termP table maxPrec) <* eof)
 
 -- | Parse the first dot-terminated term from source text, ignoring the rest.
@@ -643,18 +662,18 @@ parseFirstTerm ::
   OpTable ->
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) (Maybe (Ann PExpr))
+  Either ParseError (Maybe (Ann PExpr))
 parseFirstTerm table =
   parse
     ( sc
-        *> optional
+        *> optionMaybe
           ( try
               ( withLoc (termP table maxPrec)
                   <* symbol
                     "."
               )
           )
-        <* void takeRest
+        <* void (many anyChar)
     )
 
 -- | Parse leading dot-terminated terms while they parse with the given
@@ -667,20 +686,20 @@ parseLeadingTerms ::
   OpTable ->
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) ([Ann PExpr], Maybe SourceLoc)
+  Either ParseError ([Ann PExpr], Maybe SourceLoc)
 parseLeadingTerms table = parse (sc *> loop [])
   where
     loop acc = do
-      mTerm <- optional (try (withLoc (termP table maxPrec) <* symbol "."))
+      mTerm <- optionMaybe (try (withLoc (termP table maxPrec) <* symbol "."))
       case mTerm of
         Just t -> loop (t : acc)
         Nothing -> do
-          done <- atEnd
-          if done
+          remaining <- getInput
+          if T.null remaining
             then pure (reverse acc, Nothing)
             else do
-              sp <- getSourcePos
-              _ <- takeRest
+              sp <- getPosition
+              _ <- many anyChar
               pure (reverse acc, Just (sourceLocFromPos sp))
 
 -- ---------------------------------------------------------------------------

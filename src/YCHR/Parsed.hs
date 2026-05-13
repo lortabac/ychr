@@ -54,7 +54,6 @@ module YCHR.Parsed
 where
 
 import Data.Text (Text)
-import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Loc (Ann (..), SourceLoc (..), dummyLoc, noAnn)
 import YCHR.PExpr (OpType (..), PExpr (..))
 import YCHR.Types
@@ -74,7 +73,7 @@ data AnnP a = AnnP
     sourceLoc :: SourceLoc,
     parsed :: PExpr
   }
-  deriving (Show, Eq, Lift, Functor, Foldable, Traversable)
+  deriving (Show, Eq, Functor, Foldable, Traversable)
 
 -- | Wrap a node with a dummy source location and a dummy parsed origin.
 -- Useful for constructing values in tests where provenance is irrelevant.
@@ -84,7 +83,7 @@ noAnnP x = AnnP x dummyLoc (Atom "")
 data Import
   = ModuleImport Text (Maybe [Declaration])
   | LibraryImport Text (Maybe [Declaration])
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 data Module = Module
   { name :: Text,
@@ -102,7 +101,7 @@ data Module = Module
     classExtensions :: [AnnP FunctionEquation],
     exports :: Maybe (AnnP [Declaration])
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | Whether a function-like declaration was written with the
 -- @:- function@ / @:- open_function@ keyword (single signature
@@ -112,7 +111,7 @@ data Module = Module
 -- 'YCHR.Resolved.FunctionDef'; the kind only affects source-level
 -- validation.
 data FunctionDeclKind = DKFunction | DKClass
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 data Declaration
   = ConstraintDecl
@@ -153,14 +152,14 @@ data Declaration
       }
   | OperatorDecl OpDecl
   | TypeExportDecl {name :: Text, arity :: Int, conExports :: Maybe [Text]}
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 data OpDecl = OpDecl
   { fixity :: Int,
     opType :: OpType,
     opName :: Text
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 data FunctionEquation = FunctionEquation
   { funName :: Name,
@@ -168,7 +167,7 @@ data FunctionEquation = FunctionEquation
     guard :: AnnP [Term],
     rhs :: AnnP Term
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 data Rule = Rule
   { name :: Maybe (Ann Text),
@@ -176,10 +175,10 @@ data Rule = Rule
     guard :: AnnP [Term],
     body :: AnnP [Term]
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 data Head
   = Simplification [Constraint]
   | Propagation [Constraint]
   | Simpagation [Constraint] [Constraint]
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)

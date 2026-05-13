@@ -5,6 +5,7 @@ TAGS
 tags
 /dist
 /dist-newstyle
+/dist-mcabal
 .hiedb
 .hiefiles/
 CLAUDE.local.md

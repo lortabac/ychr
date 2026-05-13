@@ -33,8 +33,6 @@ import Data.IORef
 import Data.IntMap.Strict qualified as IntMap
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
-import Data.Vector qualified as V
-import Data.Vector.Mutable qualified as MV
 import YCHR.Runtime.Monad (Chr, SessionEnv (..))
 import YCHR.Runtime.Types (Suspension (..), SuspensionId (..), Value (..))
 import YCHR.Runtime.Var (addObserver)
@@ -76,7 +74,7 @@ storeConstraint sid = do
   susp <- lookupSusp sid
   SessionEnv {storeByType} <- ask
   let Suspension {suspType = ConstraintType idx, args = sargs} = susp
-  liftIO $ MV.modify storeByType (Seq.|> susp) idx
+  liftIO $ modifyIORef' storeByType (IntMap.adjust (Seq.|> susp) idx)
   mapM_ (addObserver sid) sargs
 
 -- | Kill a constraint (set alive to False).
@@ -121,9 +119,7 @@ isConstraintType sid cType = do
 getStoreSnapshot :: ConstraintType -> Chr (Seq Suspension)
 getStoreSnapshot (ConstraintType idx) = do
   SessionEnv {storeByType} <- ask
-  if idx >= 0 && idx < MV.length storeByType
-    then liftIO $ MV.read storeByType idx
-    else pure Seq.empty
+  liftIO $ IntMap.findWithDefault Seq.empty idx <$> readIORef storeByType
 
 -- | Return a snapshot of every constraint type in the store, paired with
 -- its source name and the sequence of stored suspensions. Types are
@@ -133,15 +129,11 @@ getStoreSnapshot (ConstraintType idx) = do
 getAllStoredConstraints :: Chr [(Name, Seq Suspension)]
 getAllStoredConstraints = do
   SessionEnv {storeByType, storeTypeNames} <- ask
-  let n = MV.length storeByType
-  liftIO $
-    traverse
-      ( \i -> do
-          susps <- MV.read storeByType i
-          let name = storeTypeNames V.! i
-          pure (name, susps)
-      )
-      [0 .. n - 1]
+  storeMap <- liftIO (readIORef storeByType)
+  pure
+    [ (name, IntMap.findWithDefault Seq.empty i storeMap)
+    | (i, name) <- IntMap.toAscList storeTypeNames
+    ]
 
 -- | Check if a suspension is alive by reading its IORef.
 isSuspAlive :: Suspension -> Chr Bool

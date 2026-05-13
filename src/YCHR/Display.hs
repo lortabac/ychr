@@ -23,11 +23,8 @@ module YCHR.Display
   )
 where
 
-import Data.Foldable (toList)
-import Data.List (dropWhileEnd, intercalate)
-import Data.Text (Text)
+import Data.List (intercalate)
 import Data.Text qualified as T
-import Data.Void (Void)
 import System.Console.ANSI
   ( Color (..),
     ColorIntensity (..),
@@ -36,7 +33,8 @@ import System.Console.ANSI
     SGR (..),
     setSGRCode,
   )
-import Text.Megaparsec
+import Text.Parsec.Error qualified as PE
+import Text.Parsec.Pos (SourcePos, sourceColumn, sourceLine, sourceName)
 import YCHR.Collect (CollectError (..))
 import YCHR.Compile (CompileError (..))
 import YCHR.Compile.Pipeline (Error (..), Warning (..))
@@ -164,13 +162,13 @@ displayErrors = intercalate "\n"
 withHint :: String -> String -> String
 withHint msg hint = msg ++ "\n  Hint: " ++ hint
 
--- | Convert a megaparsec 'SourcePos' to a 'P.SourceLoc'.
+-- | Convert a parsec 'Text.Parsec.Pos.SourcePos' to a 'P.SourceLoc'.
 sourceLocFromPos :: SourcePos -> P.SourceLoc
 sourceLocFromPos sp =
   P.SourceLoc
     { P.file = sourceName sp,
-      P.line = unPos (sourceLine sp),
-      P.col = unPos (sourceColumn sp)
+      P.line = sourceLine sp,
+      P.col = sourceColumn sp
     }
 
 -- ---------------------------------------------------------------------------
@@ -691,21 +689,24 @@ displayName (Types.Unqualified n) = T.unpack n
 displayName (Types.Qualified m n) = T.unpack m ++ ":" ++ T.unpack n
 
 -- | Display a single parse error using our 'displayMsgWithSrcLoc' format.
-displayParseError :: PosState Text -> ParseError Text Void -> String
-displayParseError posState err =
-  let (_, posState') = reachOffset (errorOffset err) posState
-      loc = sourceLocFromPos (pstateSourcePos posState')
-      msg = dropWhileEnd (== '\n') (parseErrorTextPretty err)
+displayParseError :: PE.ParseError -> String
+displayParseError err =
+  let loc = sourceLocFromPos (PE.errorPos err)
+      -- parsec's @show@ on 'ParseError' prepends a line such as
+      -- @\"file\" (line N, column M):@ before the actual messages.
+      -- Our 'displayMsgWithSrcLoc' renders the location itself, so
+      -- strip parsec's prefix to avoid duplication.
+      raw = show err
+      msg = case dropWhile (/= '\n') raw of
+        ('\n' : rest) -> dropWhile (== '\n') rest
+        other -> other
    in displayMsgWithSrcLoc parseErrorCode SevError msg loc Nothing Nothing
 
 instance Display Warning where
   displayMsg (RenameWarnings ws) = displayErrors (map displayMsg ws)
 
 instance Display Error where
-  displayMsg (ParseError _ bundle) =
-    let posState = bundlePosState bundle
-        errs = bundleErrors bundle
-     in displayErrors (map (displayParseError posState) (toList errs))
+  displayMsg (ParseError _ err) = displayParseError err
   displayMsg (ParseValidationErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (CollectErrors errs) = displayErrors (map displayMsg errs)
   displayMsg (RenameErrors errs) = displayErrors (map displayMsg errs)

@@ -5,10 +5,9 @@ module YCHR.ParserTest (tests) where
 import Data.Either (isLeft)
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Data.Void (Void)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import Text.Megaparsec (ParseErrorBundle)
+import Text.Parsec (ParseError)
 import YCHR.Parsed
 import YCHR.Parser
   ( ModuleHeader (..),
@@ -36,7 +35,7 @@ tests =
     ]
 
 -- | Parse a source string with no filename.
-p :: Text -> Either (ParseErrorBundle Text Void) Module
+p :: Text -> Either (ParseError) Module
 p src = fst <$> parseModule "" src
 
 -- | Strip source locations from a Rule for structural comparison.
@@ -720,11 +719,11 @@ errorTests =
 -- ---------------------------------------------------------------------------
 
 -- | Helper: collect operators from a module header.
-ops :: Text -> Either (ParseErrorBundle Text Void) [OpDecl]
+ops :: Text -> Either (ParseError) [OpDecl]
 ops src = (.exportOps) <$> collectModuleHeader "" src
 
 -- | Helper: collect imports from a module header.
-hdrImports :: Text -> Either (ParseErrorBundle Text Void) [Import]
+hdrImports :: Text -> Either (ParseError) [Import]
 hdrImports src = map (.node) . (.headerImports) <$> collectModuleHeader "" src
 
 firstPassTests :: TestTree

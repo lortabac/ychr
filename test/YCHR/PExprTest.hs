@@ -5,10 +5,9 @@ module YCHR.PExprTest (tests) where
 import Data.Either (isLeft)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Void (Void)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import Text.Megaparsec (ParseErrorBundle)
+import Text.Parsec (ParseError)
 import YCHR.Loc (Ann (..), noAnn)
 import YCHR.PExpr
 
@@ -34,11 +33,11 @@ tests =
     ]
 
 -- | Parse with no operators.
-p :: Text -> Either (ParseErrorBundle Text Void) [Ann PExpr]
+p :: Text -> Either (ParseError) [Ann PExpr]
 p = parseTerms emptyOps ""
 
 -- | Parse with standard arithmetic operators.
-pOps :: Text -> Either (ParseErrorBundle Text Void) [Ann PExpr]
+pOps :: Text -> Either (ParseError) [Ann PExpr]
 pOps = parseTerms testOps ""
 
 -- | An empty operator table.
@@ -265,7 +264,7 @@ commaOps =
     ]
 
 -- | Parse with comma/pipe operators.
-pComma :: Text -> Either (ParseErrorBundle Text Void) [Ann PExpr]
+pComma :: Text -> Either (ParseError) [Ann PExpr]
 pComma = parseTerms commaOps ""
 
 maxPrecTests :: TestTree
@@ -347,7 +346,7 @@ dualOps =
     ]
 
 -- | Parse with dual-role operators.
-pDual :: Text -> Either (ParseErrorBundle Text Void) [Ann PExpr]
+pDual :: Text -> Either (ParseError) [Ann PExpr]
 pDual = parseTerms dualOps ""
 
 dualRoleTests :: TestTree

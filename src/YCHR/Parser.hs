@@ -59,8 +59,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
-import Data.Void (Void)
-import Text.Megaparsec (ParseErrorBundle)
+import Text.Parsec (ParseError)
 import YCHR.PExpr (PExpr (Atom, Compound, Str, Var))
 import YCHR.PExpr qualified as P
 import YCHR.Parsed
@@ -141,7 +140,7 @@ opTableEntries = P.opTableEntries
 parseModule ::
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) (Module, [AnnP ParseValidationError])
+  Either (ParseError) (Module, [AnnP ParseValidationError])
 parseModule = parseModuleWith builtinOps
 
 -- | Parse a CHR module from source text using a custom operator table.
@@ -149,14 +148,14 @@ parseModuleWith ::
   OpTable ->
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) (Module, [AnnP ParseValidationError])
+  Either (ParseError) (Module, [AnnP ParseValidationError])
 parseModuleWith table sourceName src = do
   terms <- P.parseTerms table sourceName src
   pure (convertModule terms)
 
 -- | Parse a single constraint from surface-language 'Text'.
 --
--- The outer 'Left' is a megaparsec parse error; the inner 'Left' is a
+-- The outer 'Left' is a parsec parse error; the inner 'Left' is a
 -- 'ParseValidationError' (the input parsed but did not denote a
 -- constraint, e.g. a bare variable or integer).
 --
@@ -165,7 +164,7 @@ parseModuleWith table sourceName src = do
 parseConstraint ::
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) (Either (AnnP ParseValidationError) Constraint)
+  Either (ParseError) (Either (AnnP ParseValidationError) Constraint)
 parseConstraint sourceName src = do
   term <- P.parseTermNoDot builtinOps sourceName src
   pure (convertConstraint term)
@@ -177,7 +176,7 @@ parseConstraint sourceName src = do
 parseTerm ::
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) Term
+  Either (ParseError) Term
 parseTerm = parseTermWith builtinOps
 
 -- | Parse a single term with a custom operator table.
@@ -185,7 +184,7 @@ parseTermWith ::
   OpTable ->
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) Term
+  Either (ParseError) Term
 parseTermWith table sourceName src = do
   term <- P.parseTermNoDot table sourceName src
   pure (convertTerm term)
@@ -197,7 +196,7 @@ parseTermWith table sourceName src = do
 parseQuery ::
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) [Term]
+  Either (ParseError) [Term]
 parseQuery = parseQueryWith builtinOps
 
 -- | Parse a query with a custom operator table.
@@ -205,7 +204,7 @@ parseQueryWith ::
   OpTable ->
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) [Term]
+  Either (ParseError) [Term]
 parseQueryWith table sourceName src =
   -- Try with dot terminator first, then without.
   case P.parseTerm table sourceName src of
@@ -216,7 +215,7 @@ parseQueryWith table sourceName src =
 
 -- | Parse a single CHR rule from surface-language 'Text'.
 --
--- The outer 'Left' is a megaparsec parse error; the second component of
+-- The outer 'Left' is a parsec parse error; the second component of
 -- the 'Right' is a list of 'ParseValidationError's collected while
 -- converting the rule (currently only 'MalformedConstraint' from rule
 -- heads).
@@ -225,7 +224,7 @@ parseQueryWith table sourceName src =
 parseRule ::
   String ->
   Text ->
-  Either (ParseErrorBundle Text Void) (Rule, [AnnP ParseValidationError])
+  Either (ParseError) (Rule, [AnnP ParseValidationError])
 parseRule sourceName src = do
   term <- P.parseTerm builtinOps sourceName src
   pure (convertRule term)
@@ -286,7 +285,7 @@ data ModuleDirectiveInfo = ModuleDirectiveInfo
 -- Stops at the first directive or rule that cannot be parsed by the
 -- first-pass table — which in practice means anything other than
 -- @:- module(...)@ or @:- use_module(...)@.
-collectModuleHeader :: String -> Text -> Either (ParseErrorBundle Text Void) ModuleHeader
+collectModuleHeader :: String -> Text -> Either (ParseError) ModuleHeader
 collectModuleHeader sourceName src = do
   (terms, tloc) <- P.parseLeadingTerms firstPassTable sourceName src
   let (modPart, rest1) = case terms of

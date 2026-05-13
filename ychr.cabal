@@ -118,7 +118,7 @@ test-suite ychr-tests
                     , directory
                     , filepath
                     , hedgehog >=1.5 && <2
-                    , megaparsec ^>=9.6
+                    , parsec
                     , tasty
                     , tasty-hedgehog >=1.4 && <2
                     , tasty-hunit
@@ -161,15 +161,14 @@ library
                     , YCHR.DSL
                     , YCHR.Parser
                     , YCHR.Parsed
+                    , YCHR.Parsing.Lexer
                     , YCHR.PExpr
                     , YCHR.Pretty
                     , YCHR.Rename
                     , YCHR.Rename.Types
                     , YCHR.StdLib
-                    , YCHR.StdLib.TH
                     , YCHR.TypeCheck
                     , YCHR.TypeCheck.Error
-                    , YCHR.TypeCheck.TH
                     , YCHR.TypeCheck.Compiled
                     , YCHR.Types
                     , YCHR.Resolve
@@ -199,12 +198,9 @@ library
                     , directory
                     , filepath
                     , haskeline
-                    , megaparsec ^>=9.6
-                    , parser-combinators
-                    , template-haskell
+                    , parsec
                     , text
                     , transformers
-                    , vector
 
     -- Directories containing source files.
     hs-source-dirs:   src

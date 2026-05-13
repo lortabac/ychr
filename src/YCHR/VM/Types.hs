@@ -72,7 +72,6 @@ where
 import Data.String (IsString (..))
 import Data.Text (Text)
 import Data.Text qualified as T
-import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Loc (SourceLoc)
 import YCHR.Types (ConstraintType (..), RuleId (..))
 import YCHR.Types qualified as Types
@@ -89,7 +88,7 @@ data StackFrame = StackFrame
     -- | Pretty-printed source code (from the parsed expression).
     frameSourceCode :: Text
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | A VM program is a collection of named procedures.
 data Program = Program
@@ -110,7 +109,7 @@ data Program = Program
     -- | The procedures that make up the program.
     procedures :: [Procedure]
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | A named procedure with parameters and a body.
 --
@@ -134,7 +133,7 @@ data Procedure = Procedure
     -- | Body statements
     body :: [Stmt]
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | Statements (imperative, side-effecting).
 data Stmt
@@ -211,7 +210,7 @@ data Stmt
     -- The interpreter automatically pops frames when a procedure
     -- returns (save\/restore around 'callProc').
     PushFrame StackFrame
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | Value-producing expressions: everything that evaluates to an
 -- ordinary 'Value' from the unification domain.
@@ -249,7 +248,7 @@ data ValExpr
     FieldArg IdExpr ArgIndex
   | -- | Extract the constraint type tag from a suspension.
     FieldType IdExpr
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | Boolean-producing expressions. Operands of 'If', 'BNot', 'BAnd',
 -- and 'BOr' are statically booleans, so the interpreter never has to
@@ -300,7 +299,7 @@ data BoolExpr
     -- 'ValExpr' or 'IdExpr' payloads inside the nested expression
     -- are evaluated in deep-deref mode.
     BEvalDeep BoolExpr
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | Constraint-identifier-producing expressions.
 --
@@ -317,7 +316,7 @@ data IdExpr
     -- arguments. Returns a constraint identifier. The constraint
     -- is not yet stored; use 'Store' to add it to the constraint store.
     CreateConstraint ConstraintType [ValExpr]
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | Procedure-call argument. Procedures may take a heterogeneous
 -- mix of value and id parameters; this wrapper makes the kind
@@ -325,7 +324,7 @@ data IdExpr
 data CallArg
   = AVal ValExpr
   | AId IdExpr
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | Literal values.
 data Literal
@@ -341,20 +340,20 @@ data Literal
     BoolLit Bool
   | -- | Wildcard literal: evaluates to 'VWildcard'.
     WildcardLit
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | Zero-based index into a constraint's argument list.
 newtype ArgIndex = ArgIndex Int
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | Variable or procedure name.
 newtype Name = Name {unName :: Text}
-  deriving (Show, Eq, Ord, Lift)
+  deriving (Show, Eq, Ord)
 
 instance IsString Name where fromString = Name . T.pack
 
 -- | Label for 'Foreach' loops, used with 'Continue' and 'Break'.
 newtype Label = Label {unLabel :: Text}
-  deriving (Show, Eq, Ord, Lift)
+  deriving (Show, Eq, Ord)
 
 instance IsString Label where fromString = Label . T.pack

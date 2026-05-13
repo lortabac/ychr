@@ -37,10 +37,6 @@ import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Set (Set)
 import Data.Set qualified as Set
-import Data.Vector (Vector)
-import Data.Vector qualified as V
-import Data.Vector.Mutable (IOVector)
-import Data.Vector.Mutable qualified as MV
 import YCHR.Compile.Pipeline (ExportResolution)
 import YCHR.Runtime.Types (Suspension, SuspensionId, Value, VarId (..))
 import YCHR.Types qualified as Types
@@ -73,10 +69,12 @@ newtype HostCallFn = HostCallFn
 data SessionEnv = SessionEnv
   { -- | Counter for fresh logical-variable IDs.
     varCounter :: !(IORef VarId),
-    -- | Type-indexed store: one append-only sequence per constraint type.
-    storeByType :: !(IOVector (Seq Suspension)),
-    -- | Source names parallel to 'storeByType', indexed by 'ConstraintType'.
-    storeTypeNames :: !(Vector Types.Name),
+    -- | Type-indexed store: one append-only sequence per constraint
+    -- type, keyed by the integer wrapped in 'ConstraintType'.
+    storeByType :: !(IORef (IntMap (Seq Suspension))),
+    -- | Source names parallel to 'storeByType', indexed by
+    -- 'ConstraintType'.
+    storeTypeNames :: !(IntMap Types.Name),
     -- | Map from suspension id to the suspension record. Populated on
     -- 'createConstraint'.
     storeById :: !(IORef (IntMap Suspension)),
@@ -111,7 +109,10 @@ initSessionEnv ::
   IO SessionEnv
 initSessionEnv typeNames pm hc expMap expSet = do
   vc <- newIORef (VarId 0)
-  bt <- MV.replicate (length typeNames) Seq.empty
+  let typeCount = length typeNames
+      emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
+      typeNameMap = IntMap.fromList (zip [0 ..] typeNames)
+  bt <- newIORef emptyStore
   bi <- newIORef IntMap.empty
   ni <- newIORef 0
   hi <- newIORef Set.empty
@@ -122,7 +123,7 @@ initSessionEnv typeNames pm hc expMap expSet = do
     SessionEnv
       { varCounter = vc,
         storeByType = bt,
-        storeTypeNames = V.fromList typeNames,
+        storeTypeNames = typeNameMap,
         storeById = bi,
         storeNextId = ni,
         history = hi,

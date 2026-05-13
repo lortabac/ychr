@@ -24,11 +24,17 @@ where
 import Data.Char (isAlpha, isAlphaNum)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Void (Void)
-import Text.Megaparsec
-import Text.Megaparsec.Char
-import Text.Megaparsec.Char.Lexer qualified as L
+import Text.Parsec (Parsec, between, choice, eof, many, parse, try)
+import Text.Parsec qualified as P
+import Text.Parsec.Char (char, satisfy)
+import Text.Parsec.Text ()
 import Text.Read (readMaybe)
+import YCHR.Parsing.Lexer
+  ( charLiteral,
+    skipLineComment,
+    space,
+    space1,
+  )
 
 -- | A generic s-expression.
 data SExpr
@@ -72,12 +78,12 @@ escapeString = T.concatMap esc
 -- Parser
 -- ---------------------------------------------------------------------------
 
-type Parser = Parsec Void Text
+type Parser = Parsec Text ()
 
 -- | Parse a single s-expression from 'Text'.
 parseSExpr :: Text -> Either String SExpr
 parseSExpr input = case parse (sc *> pSExpr <* eof) "<sexpr>" input of
-  Left err -> Left (errorBundlePretty err)
+  Left err -> Left (show err)
   Right s -> Right s
 
 -- | Parse a single s-expression, consuming trailing whitespace.
@@ -88,11 +94,11 @@ pList :: Parser SExpr
 pList = SList <$> between (char '(' *> sc) (char ')') (many pSExpr)
 
 pString :: Parser SExpr
-pString = SString . T.pack <$> (char '"' *> manyTill L.charLiteral (char '"'))
+pString = SString . T.pack <$> (char '"' *> P.manyTill charLiteral (try (char '"')))
 
 pAtomOrInt :: Parser SExpr
 pAtomOrInt = do
-  tok <- takeWhile1P (Just "atom, integer, or float") isAtomChar
+  tok <- T.pack <$> P.many1 (satisfy isAtomChar)
   pure $ case readInt tok of
     Just n -> SInt n
     Nothing
@@ -116,7 +122,7 @@ isAtomChar c = isAlphaNum c || c == '_' || c == '-' || c == '.'
 
 -- | Whitespace consumer (spaces + line comments starting with @;@).
 sc :: Parser ()
-sc = L.space space1 (L.skipLineComment ";") empty
+sc = space space1 (skipLineComment ";")
 
 -- | Check if the first character is valid for an atom start.
 _isAtomStart :: Char -> Bool

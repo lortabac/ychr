@@ -39,7 +39,6 @@ import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Compile (tellProcName)
 import YCHR.Compile.Pipeline (CompiledProgram (..), ExportResolution (..))
 import YCHR.Runtime.Error (runtimeErrorS)
@@ -64,7 +63,7 @@ data SessionInput = SessionInput
     exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
     exportedSet :: Set Types.QualifiedIdentifier
   }
-  deriving (Lift)
+  deriving ()
 
 -- | Project a 'CompiledProgram' down to the slice 'withCHR' /
 -- 'withCHRExtra' actually read.

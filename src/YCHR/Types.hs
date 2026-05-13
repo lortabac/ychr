@@ -52,23 +52,22 @@ where
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
-import Language.Haskell.TH.Syntax (Lift)
 import YCHR.Loc (SourceLoc)
 
 -- | A numeric identifier for a constraint type, assigned by the symbol table.
 newtype ConstraintType = ConstraintType {unConstraintType :: Int}
-  deriving (Show, Eq, Ord, Lift)
+  deriving (Show, Eq, Ord)
 
 -- | A numeric identifier for a rule, assigned in source order during
 -- occurrence collection. Used as the propagation history key. Keeping
 -- identity numeric (rather than textual) ensures two rules named
 -- @trans@ in different modules cannot collide in the history.
 newtype RuleId = RuleId {unRuleId :: Int}
-  deriving (Show, Eq, Ord, Lift)
+  deriving (Show, Eq, Ord)
 
 -- | A name together with its arity, identifying a constraint or function.
 data Identifier = Identifier {name :: Name, arity :: Int}
-  deriving (Show, Eq, Ord, Lift)
+  deriving (Show, Eq, Ord)
 
 -- | An unqualified name with its arity.  Used in 'exportMap' where
 -- names are looked up before qualification.
@@ -76,7 +75,7 @@ data UnqualifiedIdentifier = UnqualifiedIdentifier
   { localName :: Text,
     arity :: Int
   }
-  deriving (Show, Eq, Ord, Lift)
+  deriving (Show, Eq, Ord)
 
 -- | A fully-qualified name with its arity.  Used in 'exportedSet' where
 -- all names are guaranteed to be module-qualified.
@@ -85,11 +84,11 @@ data QualifiedIdentifier = QualifiedIdentifier
     localName :: Text,
     arity :: Int
   }
-  deriving (Show, Eq, Ord, Lift)
+  deriving (Show, Eq, Ord)
 
 -- | Maps identifiers (name + arity) to unique 0-indexed numeric IDs.
 newtype SymbolTable = SymbolTable (Map Identifier ConstraintType)
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 mkSymbolTable :: [(Identifier, ConstraintType)] -> SymbolTable
 mkSymbolTable = SymbolTable . Map.fromList
@@ -109,7 +108,7 @@ data Name
     Unqualified Text
   | -- | e.g., "Order", "leq"
     Qualified Text Text
-  deriving (Show, Eq, Ord, Lift)
+  deriving (Show, Eq, Ord)
 
 -- | A name guaranteed to be module-qualified. Established by the
 -- resolve phase and propagated through 'YCHR.Resolved' and
@@ -119,7 +118,7 @@ data QualifiedName = QualifiedName
   { moduleName :: !Text,
     baseName :: !Text
   }
-  deriving (Show, Eq, Ord, Lift)
+  deriving (Show, Eq, Ord)
 
 -- | Flatten a 'Name' to its surface 'Text' form. Qualified names are
 -- rendered as @"Module:name"@.
@@ -142,7 +141,7 @@ data Constraint = Constraint
   { name :: Name,
     args :: [Term]
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | A CHR constraint occurrence with a qualified head name. Used in
 -- 'YCHR.Resolved' and 'YCHR.Desugared' rule heads and bodies, where
@@ -152,7 +151,7 @@ data QualifiedConstraint = QualifiedConstraint
   { name :: QualifiedName,
     args :: [Term]
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | A head argument after Head Normal Form. The desugarer guarantees
 -- that every head argument is either a variable or a wildcard;
@@ -163,7 +162,7 @@ data QualifiedConstraint = QualifiedConstraint
 data HeadArg
   = HeadVar Text
   | HeadWildcard
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | A constraint occurrence in a post-HNF rule head. Mirrors
 -- 'QualifiedConstraint' but with the narrower 'HeadArg' for arguments.
@@ -171,7 +170,7 @@ data HeadConstraint = HeadConstraint
   { name :: QualifiedName,
     args :: [HeadArg]
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | Lossless conversion from a 'HeadArg' to a 'Term'. Used at the
 -- boundary with code that operates uniformly on terms (the
@@ -193,20 +192,20 @@ data TypeDefinition = TypeDefinition
     constructors :: [DataConstructor],
     loc :: SourceLoc
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | A data constructor within a type declaration.
 data DataConstructor = DataConstructor
   { conName :: Name,
     conArgs :: [TypeExpr]
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | A type expression (argument of a data constructor).
 data TypeExpr
   = TypeVar Text
   | TypeCon Name [TypeExpr]
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | A required signature appearing inside a @requiring@ clause on a
 -- bounded function or constraint declaration. Carries the same shape
@@ -226,7 +225,7 @@ data BoundSig = BoundSig
     returnType :: TypeExpr,
     loc :: SourceLoc
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | Prolog-compatible terms.
 data Term
@@ -237,4 +236,4 @@ data Term
   | TextTerm Text
   | CompoundTerm Name [Term]
   | Wildcard
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)

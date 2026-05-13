@@ -26,9 +26,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import Data.Void (Void)
-import Language.Haskell.TH.Syntax (Lift)
-import Text.Megaparsec (ParseErrorBundle)
+import Text.Parsec (ParseError)
 import YCHR.Collect (CollectError, addLibraryPrelude, resolveLibraryClosure, rewriteImports)
 import YCHR.Compile (CompileError, compile)
 import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable, liftAllLambdas)
@@ -64,7 +62,7 @@ import YCHR.Types qualified as Types
 import YCHR.VM (Program, StackFrame)
 
 data Error
-  = ParseError FilePath (ParseErrorBundle Text Void)
+  = ParseError FilePath ParseError
   | ParseValidationErrors [AnnP ParseValidationError]
   | CollectErrors [Diagnostic CollectError]
   | RenameErrors [Diagnostic RenameError]
@@ -119,7 +117,7 @@ data CompiledProgram = CompiledProgram
 data ExportResolution
   = UniqueExport Types.Name
   | AmbiguousExport [Text]
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 compileModules :: Bool -> [(FilePath, Text)] -> Either Error (CompiledProgram, [Warning])
 compileModules includeStdlib inputs = do

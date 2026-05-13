@@ -7,22 +7,20 @@ module YCHR.Loc
   )
 where
 
-import Language.Haskell.TH.Syntax (Lift)
-
 -- | A source file location (file, line, column).
 data SourceLoc = SourceLoc
   { file :: String,
     line :: Int,
     col :: Int
   }
-  deriving (Show, Eq, Lift)
+  deriving (Show, Eq)
 
 -- | A value annotated with a source location.
 data Ann a = Ann
   { node :: a,
     sourceLoc :: SourceLoc
   }
-  deriving (Show, Eq, Lift, Functor, Foldable, Traversable)
+  deriving (Show, Eq, Functor, Foldable, Traversable)
 
 -- | A dummy source location for programmatically-constructed nodes.
 dummyLoc :: SourceLoc
