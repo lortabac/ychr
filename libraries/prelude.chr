@@ -68,7 +68,7 @@
     ('/'(float, float) -> float),
     ('div'(int, int) -> int),
     ('mod'(int, int) -> int),
-    'rem'/2,
+    ('rem'(int, int) -> int),
     ('<'(int, int) -> bool),
     ('<'(float, float) -> bool),
     ('>'(int, int) -> bool),
@@ -78,8 +78,6 @@
     ('=<'(int, int) -> bool),
     ('=<'(float, float) -> bool),
     ('=='(A, A) -> bool),
-    max/2,
-    min/2,
     (var(any) -> bool),
     (nonvar(any) -> bool),
     (integer(any) -> bool),
@@ -97,6 +95,9 @@
     (list_to_compound(list(any)) -> any),
     (call(fun(A) -> B end, A) -> B),
     (call(fun(A, B) -> C end, A, B) -> C).
+
+:- function max(T, T) -> T requiring '>='(T, T) -> bool.
+:- function min(T, T) -> T requiring '=<'(T, T) -> bool.
 
 X + Y -> host:'+'(X, Y).
 
