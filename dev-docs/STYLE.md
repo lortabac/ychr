@@ -41,29 +41,33 @@ that's the whole point of the extension trio.
 
 Do not prefix field names with an abbreviation of the type (e.g. `cArgs`).
 
-## Track effects with `effectful`
+## Track effects with `transformers`
 
-Use `effectful` wherever it makes the side-effect surface clearer — there's no
-rule confining it to the runtime. A pass that accumulates diagnostics, threads
-a counter, or talks to mutable state is usually clearer with a dedicated effect
-than with a hand-rolled monad transformer stack.
+The runtime is a single concrete monad — `type Chr = ReaderT SessionEnv IO`
+defined in `src/YCHR/Runtime/Monad.hs`. `SessionEnv` is a record of `IORef`s
+(unification counter, constraint store, propagation history, reactivation
+queue, call stack, procedure map) plus immutable session-level fields
+(host-call registry, export maps). Everything that runs against a session
+is `Chr a`. Because `Chr` is `MonadIO`, callers can freely interleave
+`liftIO` for raw IO — file handles, IORefs not living in `SessionEnv`, etc.
 
-Define new effects following the pattern in `src/YCHR/Runtime/Store.hs`:
+For pure passes (diagnostics, fresh-name supply, accumulating output) use
+plain transformers — `StateT`, `ReaderT`, `WriterT` from `Control.Monad.Trans.*`.
+**Use the CPS variant** `Control.Monad.Trans.Writer.CPS` for `Writer` —
+the strict and lazy variants leak space.
 
-```haskell
-data CHRStore :: Effect
-type instance DispatchOf CHRStore = Static WithSideEffects
-```
+Multiple layers stack concretely (no mtl): e.g. the type-checker uses
+`type TC = ReaderT TypeCheckEnv (StateT CtxStore Chr)`, with a small
+`chrOp = lift . lift` helper to lift `Chr` actions into `TC`.
 
-Keep effect rows narrow: a function should only list the effects it actually
-uses. If a function is genuinely pure, leave it pure — wrapping pure
-computations in `Eff` for uniformity adds noise without payoff.
+If a function is genuinely pure, leave it pure — wrapping pure
+computations in a monad for uniformity adds noise without payoff.
 
 ## Errors as data
 
 Each compilation pass defines its own error ADT — `ParseValidationError`,
 `RenameError`, `DesugarError`, `CompileError`, and so on. Failures are reported
-through `Either` or effectful's `Error` effect, never thrown as exceptions.
+through `Either` or the pass's `Writer` accumulator, never thrown as exceptions.
 This keeps the type signature honest about what a pass can return and lets
 callers handle errors structurally.
 

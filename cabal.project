@@ -1,4 +1,6 @@
 packages: .
 
+tests: True
+
 package ychr
   ghc-options: -Werror

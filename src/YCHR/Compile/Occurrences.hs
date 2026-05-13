@@ -18,11 +18,10 @@ module YCHR.Compile.Occurrences
   )
 where
 
+import Control.Monad.Trans.Writer.CPS (Writer, tell)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Traversable (for)
-import Effectful (Eff)
-import Effectful.Writer.Static.Local (Writer, tell)
 import YCHR.Compile.Types
 import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic (..))
@@ -49,7 +48,7 @@ import YCHR.VM (ConstraintType (..))
 collectOccurrences ::
   SymbolTable ->
   D.Program ->
-  Eff '[Writer [Diagnostic CompileError]] (OccurrenceMap, [Text])
+  Writer [Diagnostic CompileError] (OccurrenceMap, [Text])
 collectOccurrences symTab prog = do
   let indexed = zip [0 ..] prog.rules
       displayNames = map (uncurry ruleDisplayName) indexed
@@ -84,7 +83,7 @@ ruleOccurrences ::
   ( Int,
     D.Rule
   ) ->
-  Eff '[Writer [Diagnostic CompileError]] [Occurrence]
+  Writer [Diagnostic CompileError] [Occurrence]
 ruleOccurrences symTab (ruleIdx, rule) = do
   let AnnP {node = ruleHead} = rule.head
       kept = ruleHead.kept
@@ -114,7 +113,7 @@ mkOccurrence ::
   HeadPosition ->
   HeadConstraint ->
   Bool ->
-  Eff '[Writer [Diagnostic CompileError]] Occurrence
+  Writer [Diagnostic CompileError] Occurrence
 mkOccurrence symTab rule ruleId' display combined activeIdx activeCon activeIsKept = do
   let partners' = [(idx, con, isKept) | (idx, con, isKept) <- combined, idx /= activeIdx]
       headLoc = rule.head.sourceLoc
@@ -163,7 +162,7 @@ lookupCType ::
   PExpr ->
   Maybe Text ->
   Identifier ->
-  Eff '[Writer [Diagnostic CompileError]] ConstraintType
+  Writer [Diagnostic CompileError] ConstraintType
 lookupCType symTab loc p label ident = case lookupSymbol ident symTab of
   Just ct -> pure ct
   Nothing -> do

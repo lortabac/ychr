@@ -1,13 +1,20 @@
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes #-}
 
 -- | Haskell interpreter for CHR VM programs.
 --
--- Executes VM programs directly using the Haskell runtime effects
--- (Unify, CHRStore, PropHistory, ReactQueue). This enables testing
--- the compilation scheme end-to-end before building JS/Scheme backends.
+-- Executes VM programs directly using the 'Chr' runtime monad. The
+-- 'Chr' monad reads a 'SessionEnv' that bundles the constraint store,
+-- propagation history, reactivation queue, unification-variable
+-- counter, interpreter call stack, the procedure map and the host-call
+-- registry. Per-procedure-call local variables ('Env') live in a
+-- mutable 'IORef' read through a thin 'ReaderT' layer so exception-driven
+-- non-local jumps preserve state across catches.
+--
+-- Non-local control flow ('Return', labelled 'Continue', 'Break') is
+-- implemented with real 'Control.Exception' exceptions thrown in 'IO':
+-- 'try' delimits each procedure invocation and each 'Foreach' body.
 module YCHR.Runtime.Interpreter
   ( -- * Public API
     interpret,
@@ -22,30 +29,43 @@ module YCHR.Runtime.Interpreter
   )
 where
 
-import Control.Exception (SomeException, displayException, fromException)
+import Control.Exception
+  ( Exception,
+    SomeAsyncException,
+    SomeException,
+    bracket,
+    displayException,
+    fromException,
+    throwIO,
+    try,
+  )
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
 import Data.Foldable (toList, traverse_)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Effectful
-import Effectful.Error.Static (Error, runError, throwError)
-import Effectful.Exception qualified as Eff
-import Effectful.State.Static.Local (State, evalState, get, modify, put)
-import Effectful.Writer.Static.Local (Writer, listen, runWriter)
 import YCHR.Meta (valueToTerm)
 import YCHR.Pretty (prettyTerm)
-import YCHR.Runtime.Error (CallStack, RuntimeErrorThrown, runtimeError', runtimeErrorS)
-import YCHR.Runtime.History (PropHistory, addHistory, notInHistory, runPropHistory)
-import YCHR.Runtime.Reactivation (ReactQueue, drainQueue, enqueue, runReactQueue)
-import YCHR.Runtime.Registry
-  ( HostCallFn (..),
+import YCHR.Runtime.Error (RuntimeErrorThrown, runtimeError', runtimeErrorS)
+import YCHR.Runtime.History (addHistory, notInHistory)
+import YCHR.Runtime.Monad
+  ( Chr,
+    HostCallFn (..),
     HostCallRegistry,
-    baseHostCallRegistry,
+    SessionEnv (..),
+    initSessionEnv,
+    runChr,
+  )
+import YCHR.Runtime.Reactivation (drainQueue, enqueue)
+import YCHR.Runtime.Registry
+  ( baseHostCallRegistry,
     unit,
   )
 import YCHR.Runtime.Store
-  ( CHRStore,
-    Suspension (..),
+  ( Suspension (..),
     aliveConstraint,
     createConstraint,
     getConstraintArg,
@@ -55,20 +75,17 @@ import YCHR.Runtime.Store
     isConstraintType,
     isSuspAlive,
     killConstraint,
-    runCHRStore,
     storeConstraint,
     suspArg,
   )
-import YCHR.Runtime.Types (CallVal (..), SuspensionId (..), Value (..))
+import YCHR.Runtime.Types (CallVal (..), SuspensionId, Value (..))
 import YCHR.Runtime.Var
-  ( Unify,
-    deref,
+  ( deref,
     equal,
     getArg,
     makeTerm,
     matchTerm,
     newVar,
-    runUnify,
     unify,
   )
 import YCHR.VM
@@ -76,9 +93,6 @@ import YCHR.VM
 -- ---------------------------------------------------------------------------
 -- Types
 -- ---------------------------------------------------------------------------
-
--- | Map from procedure name to procedure definition.
-type ProcMap = Map Name Procedure
 
 -- | Local variable environment for a procedure call. Split by kind:
 -- value-bound names live in 'envValues', id-bound names in 'envIds'.
@@ -101,9 +115,10 @@ insertId n s e = e {envIds = Map.insert n s e.envIds}
 maxCallStackDepth :: Int
 maxCallStackDepth = 10
 
--- | Non-local control flow signals. We use 'Effectful.Error.Static.Error'
--- as an exception mechanism: 'Return' exits a procedure, 'Continue' and
--- 'Break' target labeled 'Foreach' loops.
+-- | Non-local control flow signals. Thrown as exceptions to escape
+-- the current procedure or 'Foreach' loop and caught at the matching
+-- boundary. 'CFReturn' is caught by 'callProc'; 'CFContinue' / 'CFBreak'
+-- by 'execForeach' on its labelled loop.
 data ControlFlow
   = CFReturn Value
   | CFContinue Label
@@ -114,81 +129,118 @@ instance Show ControlFlow where
   show (CFContinue l) = "CFContinue " ++ T.unpack l.unLabel
   show (CFBreak l) = "CFBreak " ++ T.unpack l.unLabel
 
+instance Exception ControlFlow
+
+-- | The interpreter's local stack: an 'IORef Env' threaded above 'Chr'.
+-- Using a ref lets exception-driven jumps preserve any state changes
+-- made before the jump, matching the original effectful-static-Local
+-- 'runError'-with-outer-state semantics.
+type InterpM = ReaderT (IORef Env) Chr
+
 -- ---------------------------------------------------------------------------
 -- Public API
 -- ---------------------------------------------------------------------------
 
 -- | Interpret a VM program by calling a named procedure with the given
--- value arguments. Entry-point arguments are always values; procedures
--- that require a constraint id at this layer use a different entry
--- point (e.g. @reactivate_dispatch@) called via 'callProc' directly.
+-- value arguments. Builds a fresh 'SessionEnv' for the program and
+-- runs the call inside it.
 interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO Value
 interpret prog hostCalls entryName args = do
   let procMap = Map.fromList [(p.name, p) | p <- prog.procedures]
-      argVals = map CVal args
-  runEff
-    . runUnifyWithWriter
-    . runCHRStoreEff
-    . runPropHistoryEff
-    . runReactQueueEff
-    . evalState @CallStack []
-    $ callProc procMap hostCalls entryName argVals
-  where
-    -- Run Unify with a Writer layer for observer collection.
-    -- The Writer is run inside Unify so it's available to unify calls.
-    runUnifyWithWriter m =
-      YCHR.Runtime.Var.runUnify
-        . fmap fst
-        . runWriter @[SuspensionId]
-        $ m
-    runCHRStoreEff = YCHR.Runtime.Store.runCHRStore prog.typeNames
-    runPropHistoryEff = YCHR.Runtime.History.runPropHistory
-    runReactQueueEff = YCHR.Runtime.Reactivation.runReactQueue
+  env <- initSessionEnv prog.typeNames procMap hostCalls Map.empty mempty
+  runChr (callProc entryName (map CVal args)) env
+
+-- ---------------------------------------------------------------------------
+-- Env helpers
+-- ---------------------------------------------------------------------------
+
+getEnv :: InterpM Env
+getEnv = do
+  ref <- ask
+  liftIO (readIORef ref)
+
+modifyEnv :: (Env -> Env) -> InterpM ()
+modifyEnv f = do
+  ref <- ask
+  liftIO (modifyIORef' ref f)
+
+withFreshEnv :: Env -> InterpM a -> Chr a
+withFreshEnv env action = do
+  ref <- liftIO (newIORef env)
+  runReaderT action ref
+
+-- ---------------------------------------------------------------------------
+-- Session helpers
+-- ---------------------------------------------------------------------------
+
+lookupProc :: Name -> Chr (Maybe Procedure)
+lookupProc name = do
+  SessionEnv {procMap} <- ask
+  pm <- liftIO (readIORef procMap)
+  pure (Map.lookup name pm)
+
+lookupHostCall :: Name -> Chr (Maybe HostCallFn)
+lookupHostCall name = do
+  SessionEnv {hostCalls} <- ask
+  pure (Map.lookup name hostCalls)
+
+pushFrame :: StackFrame -> Chr ()
+pushFrame frame = do
+  SessionEnv {callStack} <- ask
+  liftIO $
+    atomicModifyIORef' callStack $ \stack ->
+      (take maxCallStackDepth (frame : stack), ())
+
+-- | Save the call stack, run @action@, and restore the saved frames
+-- on the way out — whether @action@ returns normally or throws. The
+-- restore-on-throw matters because the REPL's outer @try@ may catch
+-- a 'RuntimeErrorThrown' that escapes a procedure call; without
+-- bracketing, frames pushed during the failed call would leak into
+-- the next operation that observes the same 'SessionEnv'.
+withSavedCallStack :: Chr a -> Chr a
+withSavedCallStack action = do
+  env@SessionEnv {callStack} <- ask
+  liftIO $
+    bracket
+      (readIORef callStack)
+      (writeIORef callStack)
+      (\_ -> runChr action env)
+
+-- | Catch a 'ControlFlow' exception thrown inside a 'Chr' action.
+-- Uses 'try' at the 'IO' layer so the action's state changes (in
+-- 'SessionEnv' refs and in any 'InterpM' env ref currently in scope)
+-- survive the catch.
+tryControlFlow :: Chr a -> Chr (Either ControlFlow a)
+tryControlFlow m = do
+  env <- ask
+  liftIO (try (runChr m env))
 
 -- ---------------------------------------------------------------------------
 -- Core interpreter
 -- ---------------------------------------------------------------------------
 
--- | The effect constraints needed by the interpreter.
-type InterpEffects es =
-  ( IOE :> es,
-    Writer [SuspensionId] :> es,
-    Unify :> es,
-    CHRStore :> es,
-    PropHistory :> es,
-    ReactQueue :> es,
-    State CallStack :> es
-  )
-
--- | Call a procedure. Creates a fresh environment with parameter bindings,
--- executes the body, and catches CFReturn. Default return: VBool False.
-callProc ::
-  (InterpEffects es) =>
-  ProcMap -> HostCallRegistry -> Name -> [CallVal] -> Eff es Value
-callProc procMap hostCalls name args = do
-  case Map.lookup name procMap of
+-- | Call a procedure. Creates a fresh local 'Env' with parameter
+-- bindings, executes the body, and catches 'CFReturn'. Default
+-- return: 'VBool False'.
+callProc :: Name -> [CallVal] -> Chr Value
+callProc name args = do
+  mproc <- lookupProc name
+  case mproc of
     Nothing -> runtimeError' "callProc: unknown procedure " name.unName
     Just proc -> do
       env <- case bindParams name proc.params args of
         Right e -> pure e
         Left msg -> runtimeErrorS msg
-      savedStack <- get @CallStack
-      result <-
-        evalState env
-          . runError @ControlFlow
-          $ execStmts procMap hostCalls proc.body
-      put @CallStack savedStack
-      case result of
-        Right () -> pure (VBool False)
-        Left (_, CFReturn v) -> pure v
-        Left (_, CFContinue l) -> runtimeError' "callProc: uncaught Continue " l.unLabel
-        Left (_, CFBreak l) -> runtimeError' "callProc: uncaught Break " l.unLabel
+      withSavedCallStack $ do
+        result <- tryControlFlow (withFreshEnv env (execStmts proc.body))
+        case result of
+          Right () -> pure (VBool False)
+          Left (CFReturn v) -> pure v
+          Left (CFContinue l) -> runtimeError' "callProc: uncaught Continue " l.unLabel
+          Left (CFBreak l) -> runtimeError' "callProc: uncaught Break " l.unLabel
 
 -- | Bind procedure parameters into the appropriate environment slot
--- based on the runtime tag of each argument. Returns 'Left' with a
--- diagnostic message on arity mismatch, which is a compiler-invariant
--- violation: every 'CallExpr' the compiler emits must match the called
--- procedure's parameter list in length.
+-- based on the runtime tag of each argument.
 bindParams :: Name -> [Name] -> [CallVal] -> Either String Env
 bindParams pname params args
   | length params /= length args =
@@ -206,262 +258,253 @@ bindParams pname params args
     step e (p, CId s) = insertId p s e
 
 -- | Execute a list of statements sequentially.
-execStmts ::
-  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap -> HostCallRegistry -> [Stmt] -> Eff es ()
-execStmts procMap hostCalls = traverse_ (execStmt procMap hostCalls)
+execStmts :: [Stmt] -> InterpM ()
+execStmts = traverse_ execStmt
 
 -- | Execute a single statement.
-execStmt ::
-  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap -> HostCallRegistry -> Stmt -> Eff es ()
-execStmt pm hc (LetVal name expr) = do
-  v <- evalValExpr pm hc expr
-  modify (insertVal name v)
-execStmt pm hc (LetId name expr) = do
-  s <- evalIdExpr pm hc expr
-  modify (insertId name s)
-execStmt pm hc (AssignVal name expr) = do
-  v <- evalValExpr pm hc expr
-  modify (insertVal name v)
-execStmt pm hc (AssignId name expr) = do
-  s <- evalIdExpr pm hc expr
-  modify (insertId name s)
-execStmt pm hc (If cond thenBranch elseBranch) = do
-  b <- evalBoolExpr pm hc cond
-  if b then execStmts pm hc thenBranch else execStmts pm hc elseBranch
-execStmt pm hc (Foreach lbl cType suspVar conditions body) = do
-  snapshot <- getStoreSnapshot cType
+execStmt :: Stmt -> InterpM ()
+execStmt (LetVal name expr) = do
+  v <- evalValExpr expr
+  modifyEnv (insertVal name v)
+execStmt (LetId name expr) = do
+  s <- evalIdExpr expr
+  modifyEnv (insertId name s)
+execStmt (AssignVal name expr) = do
+  v <- evalValExpr expr
+  modifyEnv (insertVal name v)
+execStmt (AssignId name expr) = do
+  s <- evalIdExpr expr
+  modifyEnv (insertId name s)
+execStmt (If cond thenBranch elseBranch) = do
+  b <- evalBoolExpr cond
+  if b then execStmts thenBranch else execStmts elseBranch
+execStmt (Foreach lbl cType suspVar conditions body) = do
+  snapshot <- lift (getStoreSnapshot cType)
   let susps = toList snapshot
-  execForeach pm hc lbl suspVar conditions body susps
-execStmt _ _ (Continue lbl) = throwError (CFContinue lbl)
-execStmt _ _ (Break lbl) = throwError (CFBreak lbl)
-execStmt pm hc (Return expr) = do
-  v <- evalValExpr pm hc expr
-  throwError (CFReturn v)
-execStmt pm hc (ExprStmt expr) = do
-  _ <- evalValExpr pm hc expr
+  execForeach lbl suspVar conditions body susps
+execStmt (Continue lbl) = liftIO (throwIO (CFContinue lbl))
+execStmt (Break lbl) = liftIO (throwIO (CFBreak lbl))
+execStmt (Return expr) = do
+  v <- evalValExpr expr
+  liftIO (throwIO (CFReturn v))
+execStmt (ExprStmt expr) = do
+  _ <- evalValExpr expr
   pure ()
-execStmt pm hc (BoolExprStmt expr) = do
-  _ <- evalBoolExpr pm hc expr
+execStmt (BoolExprStmt expr) = do
+  _ <- evalBoolExpr expr
   pure ()
-execStmt pm hc (Store expr) = do
-  sid <- evalIdExpr pm hc expr
-  storeConstraint sid
-execStmt pm hc (Kill expr) = do
-  sid <- evalIdExpr pm hc expr
-  killConstraint sid
-execStmt pm hc (AddHistory ruleId exprs) = do
-  sids <- traverse (evalIdExpr pm hc) exprs
-  addHistory ruleId sids
-execStmt pm hc (DrainReactivationQueue suspVar body) = do
-  drainQueue $ \sid -> do
-    alive <- aliveConstraint sid
-    if alive
-      then do
-        modify (insertId suspVar sid)
-        execStmts pm hc body
-      else pure ()
-execStmt _ _ (PushFrame frame) = do
-  modify @CallStack $ \stack ->
-    take maxCallStackDepth (frame : stack)
+execStmt (Store expr) = do
+  sid <- evalIdExpr expr
+  lift (storeConstraint sid)
+execStmt (Kill expr) = do
+  sid <- evalIdExpr expr
+  lift (killConstraint sid)
+execStmt (AddHistory ruleId exprs) = do
+  sids <- traverse evalIdExpr exprs
+  lift (addHistory ruleId sids)
+execStmt (DrainReactivationQueue suspVar body) = do
+  envRef <- ask
+  lift $
+    drainQueue $ \sid -> do
+      alive <- aliveConstraint sid
+      if alive
+        then do
+          liftIO (modifyIORef' envRef (insertId suspVar sid))
+          runReaderT (execStmts body) envRef
+        else pure ()
+execStmt (PushFrame frame) = lift (pushFrame frame)
 
 -- ---------------------------------------------------------------------------
 -- Foreach implementation
 -- ---------------------------------------------------------------------------
 
 execForeach ::
-  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap ->
-  HostCallRegistry ->
   Label ->
   Name ->
   [(ArgIndex, ValExpr)] ->
   [Stmt] ->
   [Suspension] ->
-  Eff es ()
-execForeach _ _ _ _ _ _ [] = pure ()
-execForeach pm hc lbl suspVar conditions body (susp : rest) = do
-  alive <- isSuspAlive susp
+  InterpM ()
+execForeach _ _ _ _ [] = pure ()
+execForeach lbl suspVar conditions body (susp : rest) = do
+  alive <- lift (isSuspAlive susp)
   if not alive
-    then execForeach pm hc lbl suspVar conditions body rest
+    then execForeach lbl suspVar conditions body rest
     else do
-      ok <- checkConditions pm hc susp conditions
+      ok <- checkConditions susp conditions
       if not ok
-        then execForeach pm hc lbl suspVar conditions body rest
+        then execForeach lbl suspVar conditions body rest
         else do
-          let Suspension {suspId = sid} = susp
-          modify (insertId suspVar sid)
-          result <- runError @ControlFlow $ execStmts pm hc body
+          modifyEnv (insertId suspVar susp.suspId)
+          envRef <- ask
+          result <- lift (tryControlFlow (runReaderT (execStmts body) envRef))
           case result of
-            Right () ->
-              execForeach pm hc lbl suspVar conditions body rest
-            Left (_, CFContinue l)
-              | l == lbl -> execForeach pm hc lbl suspVar conditions body rest
-              | otherwise -> throwError (CFContinue l)
-            Left (_, CFBreak l)
+            Right () -> execForeach lbl suspVar conditions body rest
+            Left (CFContinue l)
+              | l == lbl -> execForeach lbl suspVar conditions body rest
+              | otherwise -> liftIO (throwIO (CFContinue l))
+            Left (CFBreak l)
               | l == lbl -> pure ()
-              | otherwise -> throwError (CFBreak l)
-            Left (_, cf@(CFReturn _)) -> throwError cf
+              | otherwise -> liftIO (throwIO (CFBreak l))
+            Left cf@(CFReturn _) -> liftIO (throwIO cf)
 
-checkConditions ::
-  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap -> HostCallRegistry -> Suspension -> [(ArgIndex, ValExpr)] -> Eff es Bool
-checkConditions _ _ _ [] = pure True
-checkConditions pm hc susp ((ArgIndex i, expr) : rest) = do
-  v <- evalValExpr pm hc expr
+checkConditions :: Suspension -> [(ArgIndex, ValExpr)] -> InterpM Bool
+checkConditions _ [] = pure True
+checkConditions susp ((ArgIndex i, expr) : rest) = do
+  v <- evalValExpr expr
   let argVal = suspArg susp i
-  eq <- equal v argVal
+  eq <- lift (equal v argVal)
   if eq
-    then checkConditions pm hc susp rest
+    then checkConditions susp rest
     else pure False
 
 -- ---------------------------------------------------------------------------
 -- Value-expression evaluator (normal mode)
 -- ---------------------------------------------------------------------------
 
-evalValExpr ::
-  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap -> HostCallRegistry -> ValExpr -> Eff es Value
-evalValExpr _ _ (Var name) = do
-  env <- get @Env
+evalValExpr :: ValExpr -> InterpM Value
+evalValExpr (Var name) = do
+  env <- getEnv
   case Map.lookup name env.envValues of
     Just v -> pure v
-    Nothing -> runtimeError' "evalValExpr: unbound variable " name.unName
-evalValExpr _ _ (Lit (IntLit n)) = pure (VInt n)
-evalValExpr _ _ (Lit (FloatLit n)) = pure (VFloat n)
-evalValExpr _ _ (Lit (AtomLit s)) = pure (VAtom s)
-evalValExpr _ _ (Lit (TextLit s)) = pure (VText s)
-evalValExpr _ _ (Lit (BoolLit b)) = pure (VBool b)
-evalValExpr _ _ (Lit WildcardLit) = pure VWildcard
-evalValExpr pm hc (CallExpr name args) = do
-  argVals <- traverse (evalCallArg pm hc) args
-  callProc pm hc name argVals
-evalValExpr pm hc (HostCall name args) = do
-  argVals <- traverse (evalValExpr pm hc) args
-  derefedVals <- traverse deref argVals
-  invokeHostCall hc name derefedVals
-evalValExpr _ _ NewVar = newVar
-evalValExpr pm hc (MakeTerm functor args) = do
-  argVals <- traverse (evalValExpr pm hc) args
+    Nothing -> lift (runtimeError' "evalValExpr: unbound variable " name.unName)
+evalValExpr (Lit (IntLit n)) = pure (VInt n)
+evalValExpr (Lit (FloatLit n)) = pure (VFloat n)
+evalValExpr (Lit (AtomLit s)) = pure (VAtom s)
+evalValExpr (Lit (TextLit s)) = pure (VText s)
+evalValExpr (Lit (BoolLit b)) = pure (VBool b)
+evalValExpr (Lit WildcardLit) = pure VWildcard
+evalValExpr (CallExpr name args) = do
+  argVals <- traverse evalCallArg args
+  lift (callProc name argVals)
+evalValExpr (HostCall name args) = do
+  argVals <- traverse evalValExpr args
+  derefedVals <- lift (traverse deref argVals)
+  lift (invokeHostCall name derefedVals)
+evalValExpr NewVar = lift newVar
+evalValExpr (MakeTerm functor args) = do
+  argVals <- traverse evalValExpr args
   pure $ makeTerm functor.unName argVals
-evalValExpr pm hc (GetArg expr idx) = do
-  v <- evalValExpr pm hc expr
-  getArg v idx
-evalValExpr pm hc (FieldArg expr (ArgIndex i)) = do
-  sid <- evalIdExpr pm hc expr
-  getConstraintArg sid i
-evalValExpr pm hc (FieldType expr) = do
-  sid <- evalIdExpr pm hc expr
-  (\ct -> VInt ct.unConstraintType) <$> getConstraintType sid
-evalValExpr pm hc (EvalDeep expr) = evalValExprDeep pm hc expr
+evalValExpr (GetArg expr idx) = do
+  v <- evalValExpr expr
+  lift (getArg v idx)
+evalValExpr (FieldArg expr (ArgIndex i)) = do
+  sid <- evalIdExpr expr
+  lift (getConstraintArg sid i)
+evalValExpr (FieldType expr) = do
+  sid <- evalIdExpr expr
+  ct <- lift (getConstraintType sid)
+  pure (VInt ct.unConstraintType)
+evalValExpr (EvalDeep expr) = evalValExprDeep expr
 
 -- ---------------------------------------------------------------------------
 -- Bool-expression evaluator (normal mode)
 -- ---------------------------------------------------------------------------
 
-evalBoolExpr ::
-  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap -> HostCallRegistry -> BoolExpr -> Eff es Bool
-evalBoolExpr _ _ (BLit b) = pure b
-evalBoolExpr pm hc (BNot e) = not <$> evalBoolExpr pm hc e
-evalBoolExpr pm hc (BAnd e1 e2) = do
-  b1 <- evalBoolExpr pm hc e1
-  if b1 then evalBoolExpr pm hc e2 else pure False
-evalBoolExpr pm hc (BOr e1 e2) = do
-  b1 <- evalBoolExpr pm hc e1
-  if b1 then pure True else evalBoolExpr pm hc e2
-evalBoolExpr pm hc (BMatchTerm expr functor arity) = do
-  v <- evalValExpr pm hc expr
-  matchTerm v functor.unName arity
-evalBoolExpr pm hc (BEqual e1 e2) = do
-  v1 <- evalValExpr pm hc e1
-  v2 <- evalValExpr pm hc e2
-  equal v1 v2
-evalBoolExpr pm hc (BIdEqual e1 e2) = do
-  s1 <- evalIdExpr pm hc e1
-  s2 <- evalIdExpr pm hc e2
+evalBoolExpr :: BoolExpr -> InterpM Bool
+evalBoolExpr (BLit b) = pure b
+evalBoolExpr (BNot e) = not <$> evalBoolExpr e
+evalBoolExpr (BAnd e1 e2) = do
+  b1 <- evalBoolExpr e1
+  if b1 then evalBoolExpr e2 else pure False
+evalBoolExpr (BOr e1 e2) = do
+  b1 <- evalBoolExpr e1
+  if b1 then pure True else evalBoolExpr e2
+evalBoolExpr (BMatchTerm expr functor arity) = do
+  v <- evalValExpr expr
+  lift (matchTerm v functor.unName arity)
+evalBoolExpr (BEqual e1 e2) = do
+  v1 <- evalValExpr e1
+  v2 <- evalValExpr e2
+  lift (equal v1 v2)
+evalBoolExpr (BIdEqual e1 e2) = do
+  s1 <- evalIdExpr e1
+  s2 <- evalIdExpr e2
   pure (idEqual s1 s2)
-evalBoolExpr pm hc (BAlive expr) = do
-  sid <- evalIdExpr pm hc expr
-  aliveConstraint sid
-evalBoolExpr pm hc (BIsConstraintType expr cType) = do
-  sid <- evalIdExpr pm hc expr
-  isConstraintType sid cType
-evalBoolExpr pm hc (BNotInHistory ruleId args) = do
-  sids <- traverse (evalIdExpr pm hc) args
-  notInHistory ruleId sids
-evalBoolExpr pm hc (BUnify e1 e2) = do
-  v1 <- evalValExpr pm hc e1
-  v2 <- evalValExpr pm hc e2
-  (ok, observers) <- listen (unify v1 v2)
-  enqueue observers
+evalBoolExpr (BAlive expr) = do
+  sid <- evalIdExpr expr
+  lift (aliveConstraint sid)
+evalBoolExpr (BIsConstraintType expr cType) = do
+  sid <- evalIdExpr expr
+  lift (isConstraintType sid cType)
+evalBoolExpr (BNotInHistory ruleId args) = do
+  sids <- traverse evalIdExpr args
+  lift (notInHistory ruleId sids)
+evalBoolExpr (BUnify e1 e2) = do
+  v1 <- evalValExpr e1
+  v2 <- evalValExpr e2
+  (ok, observers) <- lift (unify v1 v2)
+  lift (enqueue observers)
   if ok
     then pure True
     else do
-      t1 <- valueToTerm Map.empty v1
-      t2 <- valueToTerm Map.empty v2
-      runtimeErrorS $
-        "unification failure: cannot unify "
-          ++ prettyTerm t1
-          ++ " with "
-          ++ prettyTerm t2
-evalBoolExpr pm hc (BFromVal expr) = do
-  v <- evalValExpr pm hc expr
+      t1 <- lift (valueToTerm Map.empty v1)
+      t2 <- lift (valueToTerm Map.empty v2)
+      lift $
+        runtimeErrorS $
+          "unification failure: cannot unify "
+            ++ prettyTerm t1
+            ++ " with "
+            ++ prettyTerm t2
+evalBoolExpr (BFromVal expr) = do
+  v <- evalValExpr expr
   case v of
     VBool b -> pure b
-    _ -> runtimeErrorS "BFromVal: expected boolean"
-evalBoolExpr pm hc (BEvalDeep expr) = evalBoolExprDeep pm hc expr
+    _ -> lift (runtimeErrorS "BFromVal: expected boolean")
+evalBoolExpr (BEvalDeep expr) = evalBoolExprDeep expr
 
 -- ---------------------------------------------------------------------------
 -- Id-expression evaluator
 -- ---------------------------------------------------------------------------
 
-evalIdExpr ::
-  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap -> HostCallRegistry -> IdExpr -> Eff es SuspensionId
-evalIdExpr _ _ (IdVar name) = do
-  env <- get @Env
+evalIdExpr :: IdExpr -> InterpM SuspensionId
+evalIdExpr (IdVar name) = do
+  env <- getEnv
   case Map.lookup name env.envIds of
     Just s -> pure s
-    Nothing -> runtimeError' "evalIdExpr: unbound id variable " name.unName
-evalIdExpr pm hc (CreateConstraint cType args) = do
-  argVals <- traverse (evalValExpr pm hc) args
-  createConstraint cType argVals
+    Nothing -> lift (runtimeError' "evalIdExpr: unbound id variable " name.unName)
+evalIdExpr (CreateConstraint cType args) = do
+  argVals <- traverse evalValExpr args
+  lift (createConstraint cType argVals)
 
 -- ---------------------------------------------------------------------------
 -- Call-arg evaluator
 -- ---------------------------------------------------------------------------
 
-evalCallArg ::
-  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap -> HostCallRegistry -> CallArg -> Eff es CallVal
-evalCallArg pm hc (AVal e) = CVal <$> evalValExpr pm hc e
-evalCallArg pm hc (AId e) = CId <$> evalIdExpr pm hc e
+evalCallArg :: CallArg -> InterpM CallVal
+evalCallArg (AVal e) = CVal <$> evalValExpr e
+evalCallArg (AId e) = CId <$> evalIdExpr e
 
 -- ---------------------------------------------------------------------------
 -- Host call dispatch
 -- ---------------------------------------------------------------------------
 
-invokeHostCall ::
-  (InterpEffects es) =>
-  HostCallRegistry -> Name -> [Value] -> Eff es Value
-invokeHostCall hc name argVals =
-  case Map.lookup name hc of
+invokeHostCall :: Name -> [Value] -> Chr Value
+invokeHostCall name argVals = do
+  mfn <- lookupHostCall name
+  case mfn of
     Just (HostCallFn f) -> do
-      result <- Eff.try @SomeException (f argVals)
+      env <- ask
+      -- Only synchronous, non-control-flow exceptions thrown by the
+      -- host call body get wrapped as runtime errors. 'ControlFlow'
+      -- (interpreter-internal: Return/Continue/Break) and async
+      -- exceptions (Ctrl+C, thread kill) must keep their identity so
+      -- they reach their intended handler; 'RuntimeErrorThrown' is
+      -- re-thrown verbatim so nested host calls preserve the original
+      -- message and stack frames.
+      result <- liftIO (try @SomeException (runChr (f argVals) env))
       case result of
         Right v -> pure v
-        Left exc -> case fromException exc :: Maybe RuntimeErrorThrown of
-          -- A 'RuntimeErrorThrown' from a nested host call already carries
-          -- a fully-formatted message and the call stack at its throw site;
-          -- re-throwing it preserves both. Wrapping with 'runtimeErrorS'
-          -- would 'show'-encode the inner exception into the outer message
-          -- and discard the inner stack.
-          Just rte -> Eff.throwIO rte
-          Nothing ->
-            runtimeErrorS $
-              "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc
+        Left exc
+          | Just (cf :: ControlFlow) <- fromException exc ->
+              liftIO (throwIO cf)
+          | Just (ae :: SomeAsyncException) <- fromException exc ->
+              liftIO (throwIO ae)
+          | Just (rte :: RuntimeErrorThrown) <- fromException exc ->
+              liftIO (throwIO rte)
+          | otherwise ->
+              runtimeErrorS $
+                "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc
     Nothing -> runtimeError' "evalValExpr: unknown host call " name.unName
 
 -- ---------------------------------------------------------------------------
@@ -471,73 +514,66 @@ invokeHostCall hc name argVals =
 -- | Evaluate a value expression with automatic dereferencing: variable
 -- references follow binding chains before use, and this mode propagates
 -- into sub-expressions. Used to implement 'EvalDeep' (guards and @is@ RHS).
-evalValExprDeep ::
-  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap -> HostCallRegistry -> ValExpr -> Eff es Value
-evalValExprDeep pm hc (Var name) = do
-  v <- evalValExpr pm hc (Var name)
-  deref v
-evalValExprDeep pm hc (HostCall name args) = do
-  argVals <- traverse (evalValExprDeep pm hc) args
-  invokeHostCall hc name argVals
-evalValExprDeep pm hc (CallExpr name args) = do
-  argVals <- traverse (evalCallArgDeep pm hc) args
-  callProc pm hc name argVals
-evalValExprDeep pm hc (MakeTerm functor args) = do
-  argVals <- traverse (evalValExprDeep pm hc) args
+evalValExprDeep :: ValExpr -> InterpM Value
+evalValExprDeep (Var name) = do
+  v <- evalValExpr (Var name)
+  lift (deref v)
+evalValExprDeep (HostCall name args) = do
+  argVals <- traverse evalValExprDeep args
+  lift (invokeHostCall name argVals)
+evalValExprDeep (CallExpr name args) = do
+  argVals <- traverse evalCallArgDeep args
+  lift (callProc name argVals)
+evalValExprDeep (MakeTerm functor args) = do
+  argVals <- traverse evalValExprDeep args
   pure $ makeTerm functor.unName argVals
-evalValExprDeep pm hc expr = evalValExpr pm hc expr
+evalValExprDeep expr = evalValExpr expr
 
-evalCallArgDeep ::
-  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap -> HostCallRegistry -> CallArg -> Eff es CallVal
-evalCallArgDeep pm hc (AVal e) = CVal <$> evalValExprDeep pm hc e
-evalCallArgDeep pm hc (AId e) = CId <$> evalIdExpr pm hc e
+evalCallArgDeep :: CallArg -> InterpM CallVal
+evalCallArgDeep (AVal e) = CVal <$> evalValExprDeep e
+evalCallArgDeep (AId e) = CId <$> evalIdExpr e
 
 -- ---------------------------------------------------------------------------
 -- Bool-expression evaluator (deep deref mode)
 -- ---------------------------------------------------------------------------
 
 -- | Deep-deref evaluation for 'BoolExpr'. Mirrors 'evalValExprDeep':
--- propagates deep mode into 'ValExpr' and 'IdExpr' payloads, while
--- recursing through the boolean structure of 'BNot'/'BAnd'/'BOr' and
--- 'BEvalDeep' itself.
-evalBoolExprDeep ::
-  (InterpEffects es, State Env :> es, Error ControlFlow :> es) =>
-  ProcMap -> HostCallRegistry -> BoolExpr -> Eff es Bool
-evalBoolExprDeep pm hc (BNot e) = not <$> evalBoolExprDeep pm hc e
-evalBoolExprDeep pm hc (BAnd e1 e2) = do
-  b1 <- evalBoolExprDeep pm hc e1
-  if b1 then evalBoolExprDeep pm hc e2 else pure False
-evalBoolExprDeep pm hc (BOr e1 e2) = do
-  b1 <- evalBoolExprDeep pm hc e1
-  if b1 then pure True else evalBoolExprDeep pm hc e2
-evalBoolExprDeep pm hc (BMatchTerm expr functor arity) = do
-  v <- evalValExprDeep pm hc expr
-  matchTerm v functor.unName arity
-evalBoolExprDeep pm hc (BEqual e1 e2) = do
-  v1 <- evalValExprDeep pm hc e1
-  v2 <- evalValExprDeep pm hc e2
-  equal v1 v2
-evalBoolExprDeep pm hc (BUnify e1 e2) = do
-  v1 <- evalValExprDeep pm hc e1
-  v2 <- evalValExprDeep pm hc e2
-  (ok, observers) <- listen (unify v1 v2)
-  enqueue observers
+-- propagates deep mode into 'ValExpr' and 'IdExpr' payloads.
+evalBoolExprDeep :: BoolExpr -> InterpM Bool
+evalBoolExprDeep (BNot e) = not <$> evalBoolExprDeep e
+evalBoolExprDeep (BAnd e1 e2) = do
+  b1 <- evalBoolExprDeep e1
+  if b1 then evalBoolExprDeep e2 else pure False
+evalBoolExprDeep (BOr e1 e2) = do
+  b1 <- evalBoolExprDeep e1
+  if b1 then pure True else evalBoolExprDeep e2
+evalBoolExprDeep (BMatchTerm expr functor arity) = do
+  v <- evalValExprDeep expr
+  lift (matchTerm v functor.unName arity)
+evalBoolExprDeep (BEqual e1 e2) = do
+  v1 <- evalValExprDeep e1
+  v2 <- evalValExprDeep e2
+  lift (equal v1 v2)
+evalBoolExprDeep (BUnify e1 e2) = do
+  v1 <- evalValExprDeep e1
+  v2 <- evalValExprDeep e2
+  (ok, observers) <- lift (unify v1 v2)
+  lift (enqueue observers)
   if ok
     then pure True
     else do
-      t1 <- valueToTerm Map.empty v1
-      t2 <- valueToTerm Map.empty v2
-      runtimeErrorS $
-        "unification failure: cannot unify "
-          ++ prettyTerm t1
-          ++ " with "
-          ++ prettyTerm t2
-evalBoolExprDeep pm hc (BFromVal expr) = do
-  v <- evalValExprDeep pm hc expr
+      t1 <- lift (valueToTerm Map.empty v1)
+      t2 <- lift (valueToTerm Map.empty v2)
+      lift $
+        runtimeErrorS $
+          "unification failure: cannot unify "
+            ++ prettyTerm t1
+            ++ " with "
+            ++ prettyTerm t2
+evalBoolExprDeep (BFromVal expr) = do
+  v <- evalValExprDeep expr
   case v of
     VBool b -> pure b
-    _ -> runtimeErrorS "BFromVal: expected boolean"
-evalBoolExprDeep pm hc (BEvalDeep expr) = evalBoolExprDeep pm hc expr
-evalBoolExprDeep pm hc expr = evalBoolExpr pm hc expr
+    _ -> lift (runtimeErrorS "BFromVal: expected boolean")
+evalBoolExprDeep (BEvalDeep expr) = evalBoolExprDeep expr
+evalBoolExprDeep expr = evalBoolExpr expr

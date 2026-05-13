@@ -1,6 +1,5 @@
-{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeFamilies #-}
 
 -- | Top-level orchestration: compile a program, then run goals or
 -- multi-goal queries against it. The CHR session machinery lives in
@@ -19,10 +18,8 @@ module YCHR.Run
     compileFiles,
     compileParsedModules,
 
-    -- * CHR effect (re-exported from "YCHR.Runtime.Session")
-    CHR,
-    CHREffects,
-    runCHR,
+    -- * CHR session (re-exported from "YCHR.Runtime.Session")
+    Chr,
     withCHR,
     toSessionInput,
     tellConstraint,
@@ -51,6 +48,12 @@ where
 
 import Control.Exception (handle, throwIO)
 import Control.Monad (unless, void, when)
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Reader (ask, runReaderT)
+import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
+import Control.Monad.Trans.Writer.CPS (runWriter)
+import Data.IORef (readIORef)
 import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -58,11 +61,6 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Effectful
-import Effectful.Dispatch.Static
-import Effectful.Exception qualified as Eff
-import Effectful.State.Static.Local (State, evalState, get, modify)
-import Effectful.Writer.Static.Local (listen, runWriter)
 import YCHR.Compile
   ( buildFunctionSet,
     compileFunctionDef,
@@ -88,23 +86,19 @@ import YCHR.Parsed (SourceLoc (..))
 import YCHR.Parser (parseConstraint, parseQueryWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (renameQueryArgs, renameQueryGoals)
-import YCHR.Runtime.Error (CallStack, RuntimeErrorThrown (..))
+import YCHR.Runtime.Error (RuntimeErrorThrown (..))
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc)
+import YCHR.Runtime.Monad (Chr, SessionEnv (..))
 import YCHR.Runtime.Reactivation (drainQueue, enqueue)
 import YCHR.Runtime.Session
-  ( CHR,
-    CHREffects,
-    ProcMap,
-    StaticRep (CHRRep),
-    runCHR,
-    tellConstraint,
+  ( tellConstraint,
     toSessionInput,
     withCHR,
     withCHRExtra,
   )
-import YCHR.Runtime.Store (CHRStore, aliveConstraint)
+import YCHR.Runtime.Store (aliveConstraint)
 import YCHR.Runtime.Types (CallVal (..), Value (..), VarId)
-import YCHR.Runtime.Var (Unify, deref, equal, getVarId, newVar, unify)
+import YCHR.Runtime.Var (deref, equal, getVarId, newVar, unify)
 import YCHR.TypeCheck (typeCheckGoals)
 import YCHR.Types (Constraint (..), ConstraintType, Term (..))
 import YCHR.Types qualified as Types
@@ -154,18 +148,11 @@ resolveQueryConstraint cp (Constraint cname cargs) = case cname of
               )
 
 -- | Run a single CHR constraint against a compiled program.
---
--- Reuses 'withCHR' for session setup so that the runtime effect stack
--- lives in one place ("YCHR.Runtime.Session"). The query-scope
--- variable map is layered on top via 'evalState'.
 runProgramWithGoalDSL ::
   CompiledProgram ->
   HostCallRegistry ->
   Constraint ->
-  IO
-    ( Value,
-      Map Text Term
-    )
+  IO (Value, Map Text Term)
 runProgramWithGoalDSL cp hostCalls constraint = convertRuntimeError $ do
   resolved <- case resolveQueryConstraint cp constraint of
     Left err -> fail err
@@ -175,16 +162,23 @@ runProgramWithGoalDSL cp hostCalls constraint = convertRuntimeError $ do
   unless (Map.member tellName procMap) $
     fail ("Constraint not found: " ++ T.unpack tellName.unName)
   withCHR (toSessionInput cp) hostCalls $
-    evalState (Map.empty :: Map Text Value) $ do
-      argVals <- traverse termToValue resolved.args
-      result <- callProc procMap hostCalls tellName (map CVal argVals)
-      varMap <- get
-      classes <- buildAliasClasses varMap
-      bindings <-
-        Map.traverseWithKey
-          (\k v -> valueToTerm (perKeyAliases classes k) v)
-          varMap
-      pure (result, bindings)
+    evalStateT (runConstraintAndCollect tellName resolved) Map.empty
+
+runConstraintAndCollect ::
+  Name ->
+  Types.QualifiedConstraint ->
+  StateT (Map Text Value) Chr (Value, Map Text Term)
+runConstraintAndCollect tellName resolved = do
+  argVals <- traverse termToValue resolved.args
+  result <- lift (callProc tellName (map CVal argVals))
+  varMap <- get
+  classes <- lift (buildAliasClasses varMap)
+  bindings <-
+    lift $
+      Map.traverseWithKey
+        (\k v -> valueToTerm (perKeyAliases classes k) v)
+        varMap
+  pure (result, bindings)
 
 -- | Re-throw 'RuntimeErrorThrown' (from the runtime layer) as the
 -- user-facing 'RuntimeError' constructor of 'Error'. Applied at the
@@ -195,12 +189,15 @@ convertRuntimeError :: IO a -> IO a
 convertRuntimeError = handle $ \(RuntimeErrorThrown msg stack) ->
   throwIO (RuntimeError msg stack)
 
--- | 'Eff'-flavored version of 'convertRuntimeError', applied at the
+-- | 'Chr'-flavored version of 'convertRuntimeError', applied at the
 -- 'executePreparedQuery' boundary so the REPL's catch helpers see a
 -- uniform 'Error' value regardless of which path raised it.
-convertRuntimeErrorEff :: (IOE :> es) => Eff es a -> Eff es a
-convertRuntimeErrorEff = Eff.handle $ \(RuntimeErrorThrown msg stack) ->
-  liftIO (throwIO (RuntimeError msg stack))
+convertRuntimeErrorChr :: Chr a -> Chr a
+convertRuntimeErrorChr m = do
+  env <- ask
+  liftIO $
+    handle (\(RuntimeErrorThrown msg stack) -> throwIO (RuntimeError msg stack)) $
+      runReaderT m env
 
 -- | Parse and rename a goal, returning the canonicalized 'Constraint'
 -- alongside any rename warnings. Throws on parse or rename errors.
@@ -210,9 +207,6 @@ prepareGoal :: CompiledProgram -> Text -> IO (Constraint, [Warning])
 prepareGoal cp src = case parseConstraint "<query>" src of
   Left err -> throwIO (ParseError "<query>" err)
   Right (Left validErr) -> throwIO (ParseValidationErrors [validErr])
-  -- Rename the constraint's arguments so that bare data-constructor
-  -- references (e.g. @[H|T]@, declared atoms) get canonicalized to
-  -- the same flat-functor form the compiled head patterns expect.
   Right (Right (Constraint cname cargs)) -> do
     (renamedArgs, ws) <-
       either
@@ -230,10 +224,6 @@ runPreparedGoal ::
   Constraint ->
   IO (Value, Map Text Term)
 runPreparedGoal cp hostCalls original = do
-  -- Canonicalize the constraint name via the export map so the
-  -- type-check sees the same qualified name 'tellConstraintSigs'
-  -- registers. Defer name-resolution failures to 'runProgramWithGoalDSL'
-  -- (which produces a clearer "constraint not found" error).
   tcErrs <- case resolveQueryConstraint cp original of
     Right qc ->
       typeCheckGoals
@@ -246,15 +236,11 @@ runPreparedGoal cp hostCalls original = do
   runProgramWithGoalDSL cp hostCalls original
 
 -- | Like 'runProgramWithGoalDSL' but accepts a query as surface-language 'Text'.
--- Convenience wrapper: 'prepareGoal' + 'runPreparedGoal', dropping warnings.
 runProgramWithGoal ::
   CompiledProgram ->
   HostCallRegistry ->
   Text ->
-  IO
-    ( Value,
-      Map Text Term
-    )
+  IO (Value, Map Text Term)
 runProgramWithGoal cp hostCalls src = do
   (constraint, _ws) <- prepareGoal cp src
   runPreparedGoal cp hostCalls constraint
@@ -275,9 +261,6 @@ data PreparedQuery = PreparedQuery
   }
 
 -- | Parse, rename, desugar, lambda-lift, and type-check a query.
--- Returns the prepared query alongside any rename warnings produced
--- while canonicalizing the goals' terms. Throws the appropriate
--- 'Error' constructor on failure.
 prepareQuery :: CompiledProgram -> Text -> IO (PreparedQuery, [Warning])
 prepareQuery cp src = do
   goals <-
@@ -305,7 +288,6 @@ prepareQuery cp src = do
           cp.functionNameSet
           renamed
       )
-  -- Lambda-lift query body goals and compile the generated functions
   let queryLoc = SourceLoc "<query>" 1 1
   (lifted, lambdas) <-
     either
@@ -317,9 +299,6 @@ prepareQuery cp src = do
           (Atom "")
           bodyGoals
       )
-  -- Type-check the goals (after lambda lifting so lifted lambdas are
-  -- visible as untyped functions defaulting to all-@any@). Goal-time
-  -- type errors abort execution and surface as 'TypeErrors'.
   let cdp = cp.desugaredProgram
       progForCheck =
         D.Program
@@ -356,41 +335,28 @@ prepareQuery cp src = do
 
 -- | Execute the lifted goals of a 'PreparedQuery' inside an existing CHR
 -- session. Opens its own per-query variable scope and returns the
--- resulting bindings.
-executePreparedQuery ::
-  (CHREffects es) =>
-  HostCallRegistry ->
-  [D.BodyGoal] ->
-  Eff es (Map Text Term)
-executePreparedQuery hostCalls lifted =
-  convertRuntimeErrorEff $
-    evalState (Map.empty :: Map Text Value) $ do
-      mapM_ (executeBodyGoal hostCalls) lifted
-      varMap <- get
-      classes <- buildAliasClasses varMap
-      Map.traverseWithKey
-        (\k v -> valueToTerm (perKeyAliases classes k) v)
-        varMap
+-- resulting bindings. The host-call registry is read from the ambient
+-- 'SessionEnv'; the action only needs the goals.
+executePreparedQuery :: [D.BodyGoal] -> Chr (Map Text Term)
+executePreparedQuery lifted =
+  convertRuntimeErrorChr $
+    evalStateT
+      ( do
+          mapM_ executeBodyGoal lifted
+          varMap <- get
+          classes <- lift (buildAliasClasses varMap)
+          lift $
+            Map.traverseWithKey
+              (\k v -> valueToTerm (perKeyAliases classes k) v)
+              varMap
+      )
+      (Map.empty :: Map Text Value)
 
 -- | Group the user-visible query variables by their underlying
--- 'VarId'. Two query variables that unified into the same equivalence
--- class dereference to the same unbound 'Var', and the REPL renders
--- that via 'perKeyAliases' — e.g. @A = B@ shows up as
--- @A = B, B = A.@ rather than @A = _, B = _.@.
---
--- Each class is a list of surface names sorted alphabetically.
--- Variables that have been bound to non-variable values are excluded
--- (they don't need an alias). Names starting with @_@ are filtered
--- out so internal/wildcard variables never appear as aliases for
--- user-visible bindings.
-buildAliasClasses ::
-  (Unify :> es) =>
-  Map Text Value ->
-  Eff es (Map VarId [Text])
+-- 'VarId'. See module-internal explanation in 'perKeyAliases'.
+buildAliasClasses :: Map Text Value -> Chr (Map VarId [Text])
 buildAliasClasses varMap = do
   pairs <- traverse vidOf (Map.toAscList varMap)
-  -- ascending input ⇒ each appended list is already ascending; the
-  -- 'flip (++)' keeps that invariant under 'fromListWith'.
   pure $ Map.fromListWith (flip (++)) [(vid, [k]) | (k, Just vid) <- pairs]
   where
     vidOf (k, v)
@@ -401,19 +367,6 @@ buildAliasClasses varMap = do
 
 -- | Build the 'VarId' → display name map that 'valueToTerm' should
 -- use when printing the binding for surface variable @k@.
---
--- For every equivalence class:
---
--- * If @k@ is /in/ the class, the entry maps the class's 'VarId' to
---   the /next/ name after @k@ (wrapping to the first). This is what
---   gives @A = B, B = C, C = A.@ for the class @{A, B, C}@.
--- * Otherwise the entry maps the class's 'VarId' to the canonical
---   (alphabetically first) name in the class — so inner occurrences
---   of an alias inside a compound (e.g. the @A@ in @X = foo(A)@ when
---   @A = B@) render with a stable, non-self-referential name.
---
--- Singleton classes contribute no entry; their variables stay
--- unaliased and 'valueToTerm' renders them as 'Wildcard'.
 perKeyAliases :: Map VarId [Text] -> Text -> Map VarId Text
 perKeyAliases classes k = Map.mapMaybe pick classes
   where
@@ -425,32 +378,28 @@ perKeyAliases classes k = Map.mapMaybe pick classes
       (_, []) -> canonical
 
 -- | Run a multi-goal query against a compiled program.
---
--- Parses the input as a comma-separated, dot-terminated list of goals,
--- renames and desugars them like rule bodies, then executes each goal.
--- Convenience wrapper over 'prepareQuery' + 'executePreparedQuery';
--- discards rename warnings (callers that need them — e.g. the REPL
--- under @--Werror@ — should call 'prepareQuery' directly).
 runProgramWithQuery :: CompiledProgram -> HostCallRegistry -> Text -> IO (Map Text Term)
 runProgramWithQuery cp hostCalls src = do
   (prep, _ws) <- prepareQuery cp src
   withCHRExtra (toSessionInput cp) hostCalls prep.extraProcs $
-    executePreparedQuery hostCalls prep.liftedGoals
+    executePreparedQuery prep.liftedGoals
 
 -- ---------------------------------------------------------------------------
 -- Query goal evaluator (internal)
 -- ---------------------------------------------------------------------------
 
+type QueryM = StateT (Map Text Value) Chr
+
 -- | Resolve a surface 'Term' to a 'Value' inside the per-query
 -- variable scope, allocating a fresh logical variable for each new
 -- 'VarTerm' the query introduces.
-termToValue :: (Unify :> es, State (Map Text Value) :> es) => Term -> Eff es Value
+termToValue :: Term -> QueryM Value
 termToValue (VarTerm n) = do
   varMap <- get
   case Map.lookup n varMap of
     Just v -> pure v
     Nothing -> do
-      v <- newVar
+      v <- lift newVar
       modify (Map.insert n v)
       pure v
 termToValue (IntTerm n) = pure (VInt n)
@@ -458,63 +407,52 @@ termToValue (FloatTerm n) = pure (VFloat n)
 termToValue (AtomTerm s) = pure (VAtom s)
 termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard
--- 'Qualified' constructors flatten to a single @vmName@-encoded
--- functor (@m__n@), matching what 'YCHR.Compile.compileTerm' emits.
--- 0-arity uses keep an empty arg vector so 'matchTerm' (which only
--- looks at 'VTerm') can dispatch on them.
 termToValue (CompoundTerm name@(Types.Qualified _ _) ts) = do
   ts' <- traverse termToValue ts
   pure (VTerm (vmName name).unName ts')
 termToValue (CompoundTerm name ts) = VTerm (vmName name).unName <$> traverse termToValue ts
 
 -- | Execute a single desugared body goal in the query context.
-executeBodyGoal ::
-  (CHREffects es, State (Map Text Value) :> es) =>
-  HostCallRegistry ->
-  D.BodyGoal ->
-  Eff es ()
-executeBodyGoal _ D.BodyTrue = pure ()
-executeBodyGoal _ (D.BodyUnify l r) = do
+executeBodyGoal :: D.BodyGoal -> QueryM ()
+executeBodyGoal D.BodyTrue = pure ()
+executeBodyGoal (D.BodyUnify l r) = do
   v1 <- termToValue l
   v2 <- termToValue r
-  CHRRep procMap hc' _ _ <- getStaticRep
-  (ok, observers) <- listen (unify v1 v2)
-  enqueue observers
-  unless ok (raiseUnifyFailure v1 v2)
-  drainReactivation procMap hc'
-executeBodyGoal hc (D.BodyHostStmt f args) = do
+  (ok, observers) <- lift (unify v1 v2)
+  lift (enqueue observers)
+  unless ok (lift (raiseUnifyFailure v1 v2))
+  lift drainReactivation
+executeBodyGoal (D.BodyHostStmt f args) = do
   argVals <- traverse termToValue args
-  _ <- hostCall (Map.lookup (Name f) hc) f argVals
+  env <- lift ask
+  _ <- lift (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
   pure ()
-executeBodyGoal hc (D.BodyIs v expr) = do
-  result <- evalNestedExpr hc expr
+executeBodyGoal (D.BodyIs v expr) = do
+  result <- evalNestedExpr expr
   varMap <- get
   case Map.lookup v varMap of
     Just existing -> do
-      CHRRep procMap hc' _ _ <- getStaticRep
-      (ok, observers) <- listen (unify existing result)
-      enqueue observers
-      unless ok (raiseUnifyFailure existing result)
-      drainReactivation procMap hc'
+      (ok, observers) <- lift (unify existing result)
+      lift (enqueue observers)
+      unless ok (lift (raiseUnifyFailure existing result))
+      lift drainReactivation
     Nothing -> modify (Map.insert v result)
-executeBodyGoal _ (D.BodyConstraint c) = do
+executeBodyGoal (D.BodyConstraint c) = do
   argVals <- traverse termToValue c.args
-  tellConstraint (Types.qualifiedToName c.name) argVals
-executeBodyGoal hc (D.BodyFunctionCall (Types.Unqualified "$call") args) = do
-  CHRRep procMap _ _ _ <- getStaticRep
+  lift (tellConstraint (Types.qualifiedToName c.name) argVals)
+executeBodyGoal (D.BodyFunctionCall (Types.Unqualified "$call") args) = do
   argVals <- traverse termToValue args
   let n = length args - 1
       dispatchName = Name ("call_" <> T.pack (show n))
-  _ <- callProc procMap hc dispatchName (map CVal argVals)
+  _ <- lift (callProc dispatchName (map CVal argVals))
   pure ()
-executeBodyGoal hc (D.BodyFunctionCall name args) = do
-  CHRRep procMap _ _ _ <- getStaticRep
+executeBodyGoal (D.BodyFunctionCall name args) = do
   argVals <- traverse termToValue args
-  _ <- callProc procMap hc (funcProcName name (length argVals)) (map CVal argVals)
+  _ <- lift (callProc (funcProcName name (length argVals)) (map CVal argVals))
   pure ()
 
 -- | Raise a runtime error describing a failed unification.
-raiseUnifyFailure :: (Unify :> es) => Value -> Value -> Eff es ()
+raiseUnifyFailure :: Value -> Value -> Chr ()
 raiseUnifyFailure v1 v2 = do
   t1 <- valueToTerm Map.empty v1
   t2 <- valueToTerm Map.empty v2
@@ -525,78 +463,64 @@ raiseUnifyFailure v1 v2 = do
       ++ prettyTerm t2
 
 -- | Call a host function, failing with a clear message if not found.
-hostCall ::
-  ( Unify :> es,
-    CHRStore :> es,
-    IOE :> es,
-    State CallStack :> es
-  ) =>
-  Maybe HostCallFn -> Text -> [Value] -> Eff es Value
+hostCall :: Maybe HostCallFn -> Text -> [Value] -> Chr Value
 hostCall (Just (HostCallFn f)) _ args = f args
 hostCall Nothing name _ = error $ "Unknown host function: " ++ T.unpack name
 
 -- | Drain the reactivation queue, dispatching each constraint.
-drainReactivation ::
-  (CHREffects es) =>
-  ProcMap ->
-  HostCallRegistry ->
-  Eff es ()
-drainReactivation procMap hc =
+drainReactivation :: Chr ()
+drainReactivation =
   drainQueue $ \sid -> do
     alive <- aliveConstraint sid
     when alive $
       void $
-        callProc procMap hc (Name "reactivate_dispatch") [CId sid]
+        callProc (Name "reactivate_dispatch") [CId sid]
 
 -- | Evaluate a term as a nested expression (used for @is@ RHS and guard
 -- expressions). Handles host calls (@host:f(args)@), user-defined function
--- calls, @term(X)@ (quoting — delegates to 'termToValue' to suppress
--- evaluation; see the Notes in "YCHR.Compile"), and data terms.
-evalNestedExpr ::
-  (CHREffects es, State (Map Text Value) :> es) =>
-  HostCallRegistry ->
-  Term ->
-  Eff es Value
-evalNestedExpr _ (IntTerm n) = pure (VInt n)
-evalNestedExpr _ (FloatTerm n) = pure (VFloat n)
-evalNestedExpr _ (AtomTerm s) = pure (VAtom s)
-evalNestedExpr _ (TextTerm s) = pure (VText s)
-evalNestedExpr _ Wildcard = pure VWildcard
-evalNestedExpr _ (VarTerm v) = do
+-- calls, @term(X)@ (quoting), and data terms.
+evalNestedExpr :: Term -> QueryM Value
+evalNestedExpr (IntTerm n) = pure (VInt n)
+evalNestedExpr (FloatTerm n) = pure (VFloat n)
+evalNestedExpr (AtomTerm s) = pure (VAtom s)
+evalNestedExpr (TextTerm s) = pure (VText s)
+evalNestedExpr Wildcard = pure VWildcard
+evalNestedExpr (VarTerm v) = do
   varMap <- get
   case Map.lookup v varMap of
-    Just val -> deref val
+    Just val -> lift (deref val)
     Nothing -> do
-      fresh <- newVar
+      fresh <- lift newVar
       modify (Map.insert v fresh)
       pure fresh
-evalNestedExpr hc (CompoundTerm (Types.Unqualified "$call") args)
+evalNestedExpr (CompoundTerm (Types.Unqualified "$call") args)
   | length args >= 2 = do
-      CHRRep procMap _ _ _ <- getStaticRep
-      argVals <- traverse (evalNestedExpr hc) args
+      argVals <- traverse evalNestedExpr args
       let n = length args - 1
           dispatchName = Name ("call_" <> T.pack (show n))
-      callProc procMap hc dispatchName (map CVal argVals)
-evalNestedExpr _ (CompoundTerm (Types.Unqualified "term") [arg]) =
+      lift (callProc dispatchName (map CVal argVals))
+evalNestedExpr (CompoundTerm (Types.Unqualified "term") [arg]) =
   termToValue arg
-evalNestedExpr hc (CompoundTerm (Types.Qualified "host" f) args) = do
-  argVals <- traverse (evalNestedExpr hc) args
-  hostCall (Map.lookup (Name f) hc) f argVals
-evalNestedExpr hc (CompoundTerm name args) = do
-  CHRRep procMap _ _ _ <- getStaticRep
+evalNestedExpr (CompoundTerm (Types.Qualified "host" f) args) = do
+  argVals <- traverse evalNestedExpr args
+  env <- lift ask
+  lift (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
+evalNestedExpr (CompoundTerm name args) = do
+  env <- lift ask
+  pm <- liftIO (readIORef env.procMap)
   let fnName = funcProcName name (length args)
-  if Map.member fnName procMap
+  if Map.member fnName pm
     then do
-      argVals <- traverse (evalNestedExpr hc) args
-      callProc procMap hc fnName (map CVal argVals)
+      argVals <- traverse evalNestedExpr args
+      lift (callProc fnName (map CVal argVals))
     else VTerm (vmName name).unName <$> traverse termToValue args
 
 -- | Compile lifted query lambdas into VM procedures. Discards the
--- 'Writer' error channel: by the time this runs, 'prepareQuery' has
--- already lifted these lambdas from a desugared program that
--- compiled cleanly and has type-checked them, so any error here
--- would indicate a compiler bug rather than a user problem.
+-- error channel: by the time this runs, 'prepareQuery' has already
+-- lifted these lambdas from a desugared program that compiled
+-- cleanly and has type-checked them, so any error here would
+-- indicate a compiler bug rather than a user problem.
 compileQueryLambdas :: Set Types.Identifier -> [D.Function] -> [Procedure]
 compileQueryLambdas funSet lambdas =
-  let (procs, _errs) = runPureEff . runWriter $ traverse (compileFunctionDef funSet) lambdas
+  let (procs, _errs) = runWriter $ traverse (compileFunctionDef funSet) lambdas
    in procs

@@ -1,4 +1,3 @@
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module YCHR.RunTest (tests) where
@@ -8,12 +7,12 @@ import Data.Foldable (toList)
 import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
-import Effectful (Eff, (:>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Display (displayMsg)
 import YCHR.Run
-  ( CompiledProgram (..),
+  ( Chr,
+    CompiledProgram (..),
     ConstraintType,
     Error (..),
     Value (..),
@@ -28,7 +27,7 @@ import YCHR.Run
     withCHR,
   )
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
-import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive)
+import YCHR.Runtime.Store (getStoreSnapshot, isSuspAlive)
 import YCHR.Types
   ( Constraint (..),
     Identifier (..),
@@ -61,7 +60,7 @@ compileOrFail inputs = case compileModules False inputs of
   Left err -> assertFailure $ show err
   Right (cp, _) -> pure cp
 
-countAlive :: (CHRStore :> es) => VM.ConstraintType -> Eff es Int
+countAlive :: VM.ConstraintType -> Chr Int
 countAlive cType = do
   snapshot <- getStoreSnapshot cType
   alives <- traverse isSuspAlive (toList snapshot)

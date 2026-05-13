@@ -1,7 +1,8 @@
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Helpers that raise runtime errors from any runtime module
--- ('runtimeError'', 'runtimeErrorS'), the 'CallStack' alias they thread
+-- | Helpers that raise runtime errors from any 'Chr' action
+-- ('runtimeError'', 'runtimeErrorS'), the 'CallStack' alias they read
 -- through, and the 'RuntimeErrorThrown' exception they throw. Living
 -- here keeps "YCHR.Runtime.Registry" and "YCHR.Runtime.Session" free of
 -- import cycles with "YCHR.Runtime.Interpreter".
@@ -22,13 +23,12 @@ module YCHR.Runtime.Error
 where
 
 import Control.Exception (Exception, throwIO)
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Reader (ask)
+import Data.IORef (readIORef)
 import Data.Text qualified as T
-import Effectful
-import Effectful.State.Static.Local (State, get)
+import YCHR.Runtime.Monad (CallStack, Chr, SessionEnv (..))
 import YCHR.VM (StackFrame)
-
--- | Runtime call stack for error reporting (newest first).
-type CallStack = [StackFrame]
 
 -- | Exception thrown by 'runtimeError'' and 'runtimeErrorS'. Carries
 -- the message and the call stack captured at the throw site (newest
@@ -40,22 +40,15 @@ data RuntimeErrorThrown = RuntimeErrorThrown String [StackFrame]
 instance Exception RuntimeErrorThrown
 
 -- | Raise a runtime error with the current call stack.
--- Throws 'RuntimeErrorThrown' so the driver can catch and display it.
-runtimeError' ::
-  (IOE :> es, State CallStack :> es) =>
-  String ->
-  T.Text ->
-  Eff es a
+runtimeError' :: String -> T.Text -> Chr a
 runtimeError' prefix detail = do
-  stack <- get @CallStack
+  SessionEnv {callStack} <- ask
+  stack <- liftIO $ readIORef callStack
   liftIO $ throwIO (RuntimeErrorThrown (prefix ++ T.unpack detail) stack)
 
 -- | Raise a runtime error with the current call stack (String-only variant).
--- Throws 'RuntimeErrorThrown' so the driver can catch and display it.
-runtimeErrorS ::
-  (IOE :> es, State CallStack :> es) =>
-  String ->
-  Eff es a
+runtimeErrorS :: String -> Chr a
 runtimeErrorS msg = do
-  stack <- get @CallStack
+  SessionEnv {callStack} <- ask
+  stack <- liftIO $ readIORef callStack
   liftIO $ throwIO (RuntimeErrorThrown msg stack)

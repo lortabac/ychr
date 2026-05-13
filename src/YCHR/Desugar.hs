@@ -59,14 +59,14 @@ module YCHR.Desugar
   )
 where
 
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
+import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (mapAccumL)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Effectful (Eff, runPureEff, (:>))
-import Effectful.State.Static.Local (State, evalState, get, modify)
-import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.PExpr (PExpr (Atom))
@@ -113,7 +113,7 @@ quoteTerm t = t -- IntTerm, AtomTerm, TextTerm are already ground
 desugarProgram :: R.Program -> Either [Diagnostic DesugarError] D.Program
 desugarProgram rprog =
   let funSet = Set.map qualifiedToName rprog.functionNames
-      (result, errs) = runPureEff . runWriter $ do
+      (result, errs) = runWriter $ do
         rules <- traverse (desugarRule funSet) rprog.rules
         functions <- traverse desugarFunctionDef rprog.functions
         pure
@@ -151,7 +151,7 @@ getRuleConstraints r =
 -- | Desugar one resolved rule: classify its body goals, desugar its user
 -- guards, flatten the head kind, and run HNF on the head. HNF-emitted
 -- guards are prepended to the user guards so they run first.
-desugarRule :: Set Name -> R.Rule -> Eff '[Writer [Diagnostic DesugarError]] D.Rule
+desugarRule :: Set Name -> R.Rule -> Writer [Diagnostic DesugarError] D.Rule
 desugarRule funSet r = do
   let ruleLabel = fmap (\ann -> "rule " <> ann.node) r.name
   ruleBody <- desugarBodyGoals funSet ruleLabel r.body.sourceLoc r.body.parsed r.body.node
@@ -308,7 +308,7 @@ decomposeArg HnfState {counter, seen, guards} parentVar i term =
 
 -- | Desugar a resolved function definition: HNF-normalize its equation
 -- patterns and produce a 'D.Function'.
-desugarFunctionDef :: R.FunctionDef -> Eff '[Writer [Diagnostic DesugarError]] D.Function
+desugarFunctionDef :: R.FunctionDef -> Writer [Diagnostic DesugarError] D.Function
 desugarFunctionDef fdef = do
   desugaredEqs <- traverse desugarResolvedEquation fdef.equations
   let (loc, parsed) = case fdef.equations of
@@ -325,10 +325,10 @@ desugarFunctionDef fdef = do
 
 desugarResolvedEquation ::
   AnnP R.FunctionEquation ->
-  Eff '[Writer [Diagnostic DesugarError]] D.Equation
+  Writer [Diagnostic DesugarError] D.Equation
 desugarResolvedEquation annEq = desugarEquation' annEq.node
 
-desugarEquation' :: R.FunctionEquation -> Eff '[Writer [Diagnostic DesugarError]] D.Equation
+desugarEquation' :: R.FunctionEquation -> Writer [Diagnostic DesugarError] D.Equation
 desugarEquation' eq = do
   let initState = HnfState 0 Set.empty []
       (st, normalizedArgs) = mapAccumL normalizeArg initState eq.args
@@ -345,7 +345,7 @@ desugarEquation' eq = do
 --
 -- Every term is accepted as a 'D.GuardExpr'. Type errors (e.g. a
 -- non-boolean guard) are deferred to a future typechecker.
-desugarGuard :: P.SourceLoc -> Term -> Eff '[Writer [Diagnostic DesugarError]] D.Guard
+desugarGuard :: P.SourceLoc -> Term -> Writer [Diagnostic DesugarError] D.Guard
 desugarGuard _ t = pure $ D.GuardExpr t
 
 -- | Desugar a list of query goal terms into 'BodyGoal's.
@@ -353,7 +353,7 @@ desugarGuard _ t = pure $ D.GuardExpr t
 desugarQueryGoals :: Set Name -> [Term] -> Either [Diagnostic DesugarError] [D.BodyGoal]
 desugarQueryGoals funSet goals =
   let (results, errs) =
-        runPureEff . runWriter $
+        runWriter $
           desugarBodyGoals funSet Nothing P.dummyLoc (Atom "") goals
    in if null errs then Right results else Left errs
 
@@ -361,25 +361,26 @@ desugarQueryGoals funSet goals =
 -- VarNameSupply: fresh variable generation for desugaring
 -- ---------------------------------------------------------------------------
 
-freshVarName :: (State Int :> es) => Eff es Text
+freshVarName :: StateT Int (Writer [Diagnostic DesugarError]) Text
 freshVarName = do
-  n <- get @Int
-  modify @Int (+ 1)
+  n <- get
+  modify (+ 1)
   pure (isPrefix <> T.pack (show n))
 
-runVarNameSupply :: Eff (State Int : es) a -> Eff es a
-runVarNameSupply = evalState (0 :: Int)
+runVarNameSupply ::
+  StateT Int (Writer [Diagnostic DesugarError]) a ->
+  Writer [Diagnostic DesugarError] a
+runVarNameSupply m = evalStateT m 0
 
 -- | Desugar a list of body terms, flattening any multi-goal expansions
 -- (e.g. non-variable @is@ LHS).
 desugarBodyGoals ::
-  (Writer [Diagnostic DesugarError] :> es) =>
   Set Name ->
   Maybe Text ->
   P.SourceLoc ->
   PExpr ->
   [Term] ->
-  Eff es [D.BodyGoal]
+  Writer [Diagnostic DesugarError] [D.BodyGoal]
 desugarBodyGoals funSet label loc origin terms =
   runVarNameSupply $ concat <$> traverse (desugarBodyGoal funSet label loc origin) terms
 
@@ -400,13 +401,12 @@ desugarBodyGoals funSet label loc origin terms =
 -- 9. Unqualified compound (renamer should have caught this) -> error
 -- 10. Anything else (bare variable, integer, atom, …) -> error
 desugarBodyGoal ::
-  (State Int :> es, Writer [Diagnostic DesugarError] :> es) =>
   Set Name ->
   Maybe Text ->
   P.SourceLoc ->
   PExpr ->
   Term ->
-  Eff es [D.BodyGoal]
+  StateT Int (Writer [Diagnostic DesugarError]) [D.BodyGoal]
 desugarBodyGoal funSet label loc origin t = case t of
   CompoundTerm (Unqualified "=") [l, r] -> pure [D.BodyUnify l r]
   CompoundTerm (Unqualified "is") [VarTerm v, expr] ->
@@ -416,9 +416,6 @@ desugarBodyGoal funSet label loc origin t = case t of
     pure [D.BodyIs v expr, D.BodyUnify (VarTerm v) lhs]
   CompoundTerm (Qualified "host" f) args ->
     pure [D.BodyHostStmt f args]
-  -- Canonicalized prelude:true reaching body position is a no-op
-  -- (renamer rewrites bare `true` to its qualified form; the body's
-  -- "do nothing" sentinel must still resolve to BodyTrue).
   CompoundTerm (Qualified "prelude" "true") [] -> pure [D.BodyTrue]
   CompoundTerm name@(Qualified _ _) args
     | Set.member name funSet ->
@@ -430,10 +427,10 @@ desugarBodyGoal funSet label loc origin t = case t of
         pure [D.BodyFunctionCall (Unqualified "$call") args]
   AtomTerm "true" -> pure [D.BodyTrue]
   CompoundTerm (Unqualified _) _ -> do
-    tell [Diagnostic label (AnnP (UnexpectedBodyTerm t) loc origin)]
+    lift (tell [Diagnostic label (AnnP (UnexpectedBodyTerm t) loc origin)])
     pure [D.BodyTrue]
   _ -> do
-    tell [Diagnostic label (AnnP (UnexpectedBodyTerm t) loc origin)]
+    lift (tell [Diagnostic label (AnnP (UnexpectedBodyTerm t) loc origin)])
     pure [D.BodyTrue]
 
 -- ---------------------------------------------------------------------------

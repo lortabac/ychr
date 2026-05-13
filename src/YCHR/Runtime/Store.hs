@@ -1,5 +1,4 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 
 -- | Constraint store for the CHR Haskell runtime.
 --
@@ -11,11 +10,6 @@
 module YCHR.Runtime.Store
   ( -- * Types
     Suspension (..),
-    StoreState,
-
-    -- * Effect
-    CHRStore,
-    runCHRStore,
 
     -- * Operations
     createConstraint,
@@ -33,149 +27,90 @@ module YCHR.Runtime.Store
   )
 where
 
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Reader (ask)
 import Data.IORef
-import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
-import Data.Vector (Vector)
 import Data.Vector qualified as V
-import Data.Vector.Mutable (IOVector)
 import Data.Vector.Mutable qualified as MV
-import Effectful
-import Effectful.Dispatch.Static
-import YCHR.Runtime.Types (SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (Unify, addObserver)
+import YCHR.Runtime.Monad (Chr, SessionEnv (..))
+import YCHR.Runtime.Types (Suspension (..), SuspensionId (..), Value (..))
+import YCHR.Runtime.Var (addObserver)
 import YCHR.Types (ConstraintType (..), Name)
-
--- ---------------------------------------------------------------------------
--- Types
--- ---------------------------------------------------------------------------
-
--- | A constraint suspension in the store.
-data Suspension = Suspension
-  { suspId :: !SuspensionId,
-    suspType :: !ConstraintType,
-    args :: ![Value],
-    alive :: !(IORef Bool)
-  }
-
--- | Internal state of the constraint store.
-data StoreState = StoreState
-  { byType :: !(IOVector (Seq Suspension)),
-    -- | Source name of each constraint type, indexed by 'ConstraintType'.
-    -- Parallel to 'byType'. Used by introspection (e.g. @print_store@).
-    typeNames :: !(Vector Name),
-    byId :: !(IORef (IntMap Suspension)),
-    nextId :: !(IORef Int)
-  }
-
--- ---------------------------------------------------------------------------
--- Effect
--- ---------------------------------------------------------------------------
-
-data CHRStore :: Effect
-
-type instance DispatchOf CHRStore = Static WithSideEffects
-
-newtype instance StaticRep CHRStore = CHRStoreRep StoreState
-
--- | Run a computation that uses 'CHRStore'. The argument is the list of
--- constraint type source names, indexed by 'ConstraintType'; its length
--- determines the number of distinct types and the store pre-allocates a
--- vector of that size.
-runCHRStore :: (IOE :> es) => [Name] -> Eff (CHRStore : es) a -> Eff es a
-runCHRStore typeNameList m = do
-  let numTypes = length typeNameList
-  byType <- liftIO $ MV.replicate numTypes Seq.empty
-  byId <- liftIO $ newIORef IntMap.empty
-  nextId <- liftIO $ newIORef 0
-  evalStaticRep (CHRStoreRep (StoreState byType (V.fromList typeNameList) byId nextId)) m
-
--- ---------------------------------------------------------------------------
--- Internal helpers
--- ---------------------------------------------------------------------------
-
--- | Read the underlying mutable store state from the effect environment.
-getStoreState :: (CHRStore :> es) => Eff es StoreState
-getStoreState = do
-  CHRStoreRep st <- getStaticRep
-  pure st
-
--- | Look up a suspension by id. Calls 'error' on miss because every id
--- in circulation must have been allocated via 'createConstraint'; a miss
--- is a runtime invariant violation, not a user-facing failure.
-lookupSusp :: (CHRStore :> es) => SuspensionId -> Eff es Suspension
-lookupSusp (SuspensionId sid) = do
-  st <- getStoreState
-  m <- unsafeEff_ $ readIORef st.byId
-  case IntMap.lookup sid m of
-    Just s -> pure s
-    Nothing -> error $ "lookupSusp: unknown SuspensionId " ++ show sid
 
 -- ---------------------------------------------------------------------------
 -- Operations
 -- ---------------------------------------------------------------------------
 
+-- | Look up a suspension by id. Calls 'error' on miss because every id
+-- in circulation must have been allocated via 'createConstraint'; a miss
+-- is a runtime invariant violation, not a user-facing failure.
+lookupSusp :: SuspensionId -> Chr Suspension
+lookupSusp (SuspensionId sid) = do
+  SessionEnv {storeById} <- ask
+  m <- liftIO $ readIORef storeById
+  case IntMap.lookup sid m of
+    Just s -> pure s
+    Nothing -> error $ "lookupSusp: unknown SuspensionId " ++ show sid
+
 -- | Allocate a new constraint suspension. The constraint is alive but
 -- not yet in the type-indexed store. Use 'storeConstraint' to add it.
-createConstraint :: (CHRStore :> es) => ConstraintType -> [Value] -> Eff es SuspensionId
-createConstraint cType args = do
-  st <- getStoreState
-  sid <- unsafeEff_ $ do
-    n <- readIORef st.nextId
-    writeIORef st.nextId (n + 1)
+createConstraint :: ConstraintType -> [Value] -> Chr SuspensionId
+createConstraint cType cArgs = do
+  SessionEnv {storeNextId, storeById} <- ask
+  sid <- liftIO $ do
+    n <- readIORef storeNextId
+    writeIORef storeNextId (n + 1)
     pure (SuspensionId n)
-  aliveRef <- unsafeEff_ $ newIORef True
-  let susp = Suspension sid cType args aliveRef
-  unsafeEff_ $ modifyIORef' st.byId (IntMap.insert (let SuspensionId n = sid in n) susp)
+  aliveRef <- liftIO $ newIORef True
+  let susp = Suspension sid cType cArgs aliveRef
+  liftIO $ modifyIORef' storeById (IntMap.insert (let SuspensionId n = sid in n) susp)
   pure sid
 
 -- | Add a constraint to the type-indexed store and register it as an
 -- observer on each of its variable arguments.
-storeConstraint :: (CHRStore :> es, Unify :> es) => SuspensionId -> Eff es ()
+storeConstraint :: SuspensionId -> Chr ()
 storeConstraint sid = do
   susp <- lookupSusp sid
-  st <- getStoreState
-  let ConstraintType idx = susp.suspType
-  unsafeEff_ $ MV.modify st.byType (Seq.|> susp) idx
-  -- Register as observer on each variable argument
-  mapM_ (registerObserver sid) susp.args
-
--- | Register a suspension as an observer on a value, if it's an unbound variable.
-registerObserver :: (CHRStore :> es, Unify :> es) => SuspensionId -> Value -> Eff es ()
-registerObserver sid val = addObserver sid val
+  SessionEnv {storeByType} <- ask
+  let Suspension {suspType = ConstraintType idx, args = sargs} = susp
+  liftIO $ MV.modify storeByType (Seq.|> susp) idx
+  mapM_ (addObserver sid) sargs
 
 -- | Kill a constraint (set alive to False).
-killConstraint :: (CHRStore :> es) => SuspensionId -> Eff es ()
+killConstraint :: SuspensionId -> Chr ()
 killConstraint sid = do
-  susp <- lookupSusp sid
-  unsafeEff_ $ writeIORef susp.alive False
+  Suspension {alive} <- lookupSusp sid
+  liftIO $ writeIORef alive False
 
 -- | Check if a constraint is still alive.
-aliveConstraint :: (CHRStore :> es) => SuspensionId -> Eff es Bool
+aliveConstraint :: SuspensionId -> Chr Bool
 aliveConstraint sid = do
-  susp <- lookupSusp sid
-  unsafeEff_ $ readIORef susp.alive
+  Suspension {alive} <- lookupSusp sid
+  liftIO $ readIORef alive
 
 -- | Get a constraint argument by 0-based index.
-getConstraintArg :: (CHRStore :> es) => SuspensionId -> Int -> Eff es Value
+getConstraintArg :: SuspensionId -> Int -> Chr Value
 getConstraintArg sid idx = do
-  susp <- lookupSusp sid
-  if idx >= 0 && idx < length susp.args
-    then pure (susp.args !! idx)
+  Suspension {args = sargs} <- lookupSusp sid
+  if idx >= 0 && idx < length sargs
+    then pure (sargs !! idx)
     else error $ "getConstraintArg: index " ++ show idx ++ " out of bounds"
 
 -- | Get the constraint type of a suspension.
-getConstraintType :: (CHRStore :> es) => SuspensionId -> Eff es ConstraintType
-getConstraintType sid = (.suspType) <$> lookupSusp sid
+getConstraintType :: SuspensionId -> Chr ConstraintType
+getConstraintType sid = do
+  Suspension {suspType} <- lookupSusp sid
+  pure suspType
 
 -- | Compare two suspension IDs for equality. Pure.
 idEqual :: SuspensionId -> SuspensionId -> Bool
 idEqual = (==)
 
 -- | Check if a suspension has the given constraint type.
-isConstraintType :: (CHRStore :> es) => SuspensionId -> ConstraintType -> Eff es Bool
+isConstraintType :: SuspensionId -> ConstraintType -> Chr Bool
 isConstraintType sid cType = do
   t <- getConstraintType sid
   pure (t == cType)
@@ -183,35 +118,35 @@ isConstraintType sid cType = do
 -- | Get a snapshot of all suspensions of a given type. The returned
 -- 'Seq' is an immutable snapshot: new constraints appended after this
 -- call are invisible to the iterator.
-getStoreSnapshot :: (CHRStore :> es) => ConstraintType -> Eff es (Seq Suspension)
+getStoreSnapshot :: ConstraintType -> Chr (Seq Suspension)
 getStoreSnapshot (ConstraintType idx) = do
-  st <- getStoreState
-  if idx >= 0 && idx < MV.length st.byType
-    then unsafeEff_ $ MV.read st.byType idx
+  SessionEnv {storeByType} <- ask
+  if idx >= 0 && idx < MV.length storeByType
+    then liftIO $ MV.read storeByType idx
     else pure Seq.empty
 
 -- | Return a snapshot of every constraint type in the store, paired with
--- its source name (from the 'runCHRStore' argument) and the sequence of
--- stored suspensions. Types are returned in 'ConstraintType' index order.
--- The returned 'Seq's are immutable snapshots; callers still need to
--- filter out dead suspensions via 'isSuspAlive'.
-getAllStoredConstraints :: (CHRStore :> es) => Eff es [(Name, Seq Suspension)]
+-- its source name and the sequence of stored suspensions. Types are
+-- returned in 'ConstraintType' index order. The returned 'Seq's are
+-- immutable snapshots; callers still need to filter out dead suspensions
+-- via 'isSuspAlive'.
+getAllStoredConstraints :: Chr [(Name, Seq Suspension)]
 getAllStoredConstraints = do
-  st <- getStoreState
-  let n = MV.length st.byType
-  unsafeEff_ $
+  SessionEnv {storeByType, storeTypeNames} <- ask
+  let n = MV.length storeByType
+  liftIO $
     traverse
       ( \i -> do
-          susps <- MV.read st.byType i
-          let name = st.typeNames V.! i
+          susps <- MV.read storeByType i
+          let name = storeTypeNames V.! i
           pure (name, susps)
       )
       [0 .. n - 1]
 
 -- | Check if a suspension is alive by reading its IORef.
-isSuspAlive :: (CHRStore :> es) => Suspension -> Eff es Bool
-isSuspAlive susp = unsafeEff_ $ readIORef susp.alive
+isSuspAlive :: Suspension -> Chr Bool
+isSuspAlive Suspension {alive} = liftIO $ readIORef alive
 
 -- | Get a suspension argument by 0-based index. Pure.
 suspArg :: Suspension -> Int -> Value
-suspArg susp idx = susp.args !! idx
+suspArg Suspension {args = sargs} idx = sargs !! idx

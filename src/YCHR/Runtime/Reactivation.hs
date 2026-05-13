@@ -1,6 +1,5 @@
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 
 -- | Reactivation queue for the CHR Haskell runtime.
 --
@@ -10,64 +9,34 @@
 -- iteration so that IDs enqueued by reentrant unifications during the
 -- callback are picked up.
 module YCHR.Runtime.Reactivation
-  ( -- * Effect
-    ReactQueue,
-    runReactQueue,
-
-    -- * Operations
-    enqueue,
+  ( enqueue,
     drainQueue,
   )
 where
 
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Reader (ask)
 import Data.IORef
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
-import Effectful
-import Effectful.Dispatch.Static
-import YCHR.Runtime.Types (SuspensionId (..))
-
--- ---------------------------------------------------------------------------
--- Effect
--- ---------------------------------------------------------------------------
-
-data ReactQueue :: Effect
-
-type instance DispatchOf ReactQueue = Static WithSideEffects
-
-newtype instance StaticRep ReactQueue = ReactQueueRep (IORef (Seq SuspensionId))
-
--- | Run a computation that uses 'ReactQueue', starting with an empty queue.
-runReactQueue :: (IOE :> es) => Eff (ReactQueue : es) a -> Eff es a
-runReactQueue m = do
-  ref <- liftIO $ newIORef Seq.empty
-  evalStaticRep (ReactQueueRep ref) m
-
--- ---------------------------------------------------------------------------
--- Operations
--- ---------------------------------------------------------------------------
-
--- | Read the underlying mutable queue reference from the effect environment.
-getRef :: (ReactQueue :> es) => Eff es (IORef (Seq SuspensionId))
-getRef = do
-  ReactQueueRep ref <- getStaticRep
-  pure ref
+import YCHR.Runtime.Monad (Chr, SessionEnv (..))
+import YCHR.Runtime.Types (SuspensionId)
 
 -- | Append suspension IDs to the back of the queue.
-enqueue :: (ReactQueue :> es) => [SuspensionId] -> Eff es ()
+enqueue :: [SuspensionId] -> Chr ()
 enqueue ids = do
-  ref <- getRef
-  unsafeEff_ $ modifyIORef' ref (<> Seq.fromList ids)
+  SessionEnv {reactQueue} <- ask
+  liftIO $ modifyIORef' reactQueue (<> Seq.fromList ids)
 
 -- | Drain the queue one element at a time, calling the callback for each.
 -- Re-reads the queue on every iteration so that IDs enqueued by the
 -- callback (via reentrant unifications) are picked up.
-drainQueue :: (ReactQueue :> es) => (SuspensionId -> Eff es ()) -> Eff es ()
+drainQueue :: (SuspensionId -> Chr ()) -> Chr ()
 drainQueue callback = go
   where
     go = do
-      ref <- getRef
-      mNext <- unsafeEff_ $ atomicModifyIORef' ref $ \case
+      SessionEnv {reactQueue} <- ask
+      mNext <- liftIO $ atomicModifyIORef' reactQueue $ \case
         Empty -> (Seq.empty, Nothing)
         x :<| rest -> (rest, Just x)
       case mNext of

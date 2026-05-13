@@ -15,14 +15,13 @@ where
 import Control.Exception (SomeException, displayException, fromException, try)
 import Control.Monad (unless, when)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Reader (ask, runReaderT)
 import Data.List (intercalate, isPrefixOf, sort)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Effectful (Eff)
-import Effectful.Exception qualified as Eff
 import System.Console.Haskeline
   ( Completion (isFinished),
     InputT,
@@ -56,7 +55,8 @@ import YCHR.Run
     prepareQuery,
   )
 import YCHR.Runtime.Interpreter (HostCallRegistry)
-import YCHR.Runtime.Session (CHREffects, toSessionInput, withCHR, withCHRExtra)
+import YCHR.Runtime.Monad (Chr)
+import YCHR.Runtime.Session (toSessionInput, withCHR, withCHRExtra)
 import YCHR.TypeCheck (typeCheckProgram)
 import YCHR.Types (Term)
 import YCHR.Types qualified as Types
@@ -165,7 +165,7 @@ runOuterQuery hostCalls werror prog line = do
           liftIO $
             try @SomeException $
               withCHRExtra (toSessionInput prog) hostCalls prep.extraProcs $
-                executePreparedQuery hostCalls prep.liftedGoals
+                executePreparedQuery prep.liftedGoals
         case execResult of
           Left exc -> reportException exc
           Right bindings -> outputStr (prettyQueryResult bindings)
@@ -194,7 +194,7 @@ runLiveSession hostCalls settings quietMode werror cp =
   withCHR (toSessionInput cp) hostCalls liveLoop
   where
     prompt = if quietMode then "" else "ychr live> "
-    liveLoop :: (CHREffects es) => Eff es ()
+    liveLoop :: Chr ()
     liveLoop = do
       mline <- liftIO (runInputT settings (getInputLine prompt))
       case mline of
@@ -204,7 +204,7 @@ runLiveSession hostCalls settings quietMode werror cp =
       | stripped == ":end" = pure ()
       | T.null stripped = liveLoop
       | otherwise = do
-          outcome <- handleLiveQuery cp hostCalls werror (T.pack line)
+          outcome <- handleLiveQuery cp werror (T.pack line)
           case outcome of
             QueryOk bindings -> do
               liftIO (putStr (prettyQueryResult bindings))
@@ -237,13 +237,11 @@ data QueryOutcome
 -- to stderr and the query is treated as recoverable, leaving the
 -- session's constraint store untouched.
 handleLiveQuery ::
-  (CHREffects es) =>
   CompiledProgram ->
-  HostCallRegistry ->
   Bool ->
   Text ->
-  Eff es QueryOutcome
-handleLiveQuery cp hostCalls werror src = do
+  Chr QueryOutcome
+handleLiveQuery cp werror src = do
   prepResult <- liftIO (try @SomeException (prepareQuery cp src))
   case prepResult of
     Left exc -> pure (classifyAsRecoverable exc)
@@ -257,12 +255,11 @@ handleLiveQuery cp hostCalls werror src = do
                 Parsed.AnnP _ loc origin = lamEqs
              in pure (QueryRecoverable (displayMsg (LambdasInLiveQuery loc origin)))
           [] -> do
+            env <- ask
             execResult <-
-              Eff.try @SomeException
-                ( executePreparedQuery
-                    hostCalls
-                    prep.liftedGoals
-                )
+              liftIO $
+                try @SomeException $
+                  runReaderT (executePreparedQuery prep.liftedGoals) env
             case execResult of
               Left exc -> pure (QueryFatal (renderFatal exc))
               Right bindings -> pure (QueryOk bindings)

@@ -1,11 +1,12 @@
-{-# LANGUAGE DataKinds #-}
-
 module YCHR.Runtime.ReactivationTest (tests) where
 
+import Control.Monad.IO.Class (liftIO)
 import Data.IORef
-import Effectful
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
+import YCHR.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Runtime.Reactivation
 import YCHR.Runtime.Types (SuspensionId (..))
 
@@ -19,23 +20,17 @@ tests =
       miscTests
     ]
 
--- ---------------------------------------------------------------------------
--- Helpers
--- ---------------------------------------------------------------------------
-
-runReactEnv :: Eff [ReactQueue, IOE] a -> IO a
-runReactEnv = runEff . runReactQueue
+runReactEnv :: Chr a -> IO a
+runReactEnv action = do
+  env <- initSessionEnv [] Map.empty Map.empty Map.empty Set.empty
+  runChr action env
 
 -- | Drain the queue, collecting all IDs in order.
-drainCollect :: (ReactQueue :> es, IOE :> es) => Eff es [SuspensionId]
+drainCollect :: Chr [SuspensionId]
 drainCollect = do
   ref <- liftIO $ newIORef []
   drainQueue $ \sid -> liftIO $ modifyIORef' ref (sid :)
   liftIO $ reverse <$> readIORef ref
-
--- ---------------------------------------------------------------------------
--- Empty queue
--- ---------------------------------------------------------------------------
 
 emptyTests :: TestTree
 emptyTests =
@@ -45,10 +40,6 @@ emptyTests =
         ids <- runReactEnv drainCollect
         ids @?= []
     ]
-
--- ---------------------------------------------------------------------------
--- FIFO order
--- ---------------------------------------------------------------------------
 
 orderTests :: TestTree
 orderTests =
@@ -71,10 +62,6 @@ orderTests =
           drainCollect
         ids @?= []
     ]
-
--- ---------------------------------------------------------------------------
--- Reentrancy
--- ---------------------------------------------------------------------------
 
 reentrancyTests :: TestTree
 reentrancyTests =
@@ -104,10 +91,6 @@ reentrancyTests =
         ids @?= [SuspensionId 0, SuspensionId 1, SuspensionId 2, SuspensionId 3]
     ]
 
--- ---------------------------------------------------------------------------
--- Misc
--- ---------------------------------------------------------------------------
-
 miscTests :: TestTree
 miscTests =
   testGroup
@@ -115,8 +98,8 @@ miscTests =
     [ testCase "queue empty after drain" $ do
         ids <- runReactEnv $ do
           enqueue [SuspensionId 0, SuspensionId 1]
-          _ <- drainCollect -- first drain
-          drainCollect -- second drain should be empty
+          _ <- drainCollect
+          drainCollect
         ids @?= [],
       testCase "duplicates preserved" $ do
         ids <- runReactEnv $ do

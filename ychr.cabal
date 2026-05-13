@@ -116,7 +116,6 @@ test-suite ychr-tests
                     , ychr
                     , containers
                     , directory
-                    , effectful-core
                     , filepath
                     , hedgehog >=1.5 && <2
                     , megaparsec ^>=9.6
@@ -180,6 +179,7 @@ library
                     , YCHR.VM.SExpr
                     , YCHR.SExpr
                     , YCHR.Runtime.Interpreter
+                    , YCHR.Runtime.Monad
                     , YCHR.Runtime.Registry
                     , YCHR.Runtime.Session
                     , YCHR.Runtime.Types
@@ -197,7 +197,6 @@ library
                     , ansi-terminal
                     , containers
                     , directory
-                    , effectful-core
                     , filepath
                     , haskeline
                     , megaparsec ^>=9.6

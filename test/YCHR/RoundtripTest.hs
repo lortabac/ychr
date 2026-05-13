@@ -6,10 +6,9 @@ module YCHR.RoundtripTest (tests) where
 
 import Data.List (intercalate)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Effectful (runEff)
-import Effectful.State.Static.Local (evalState)
 import Hedgehog
   ( Gen,
     Property,
@@ -30,11 +29,9 @@ import Test.Tasty.Hedgehog (testProperty)
 import YCHR.Parsed qualified as P
 import YCHR.Parser (parseConstraint, parseRule, parseTerm)
 import YCHR.Pretty (prettyConstraintSrc, prettyRuleSrc, prettyTermSrc)
-import YCHR.Runtime.Error (CallStack)
+import YCHR.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Runtime.Registry (HostCallFn (..), baseHostCallRegistry, valueList)
-import YCHR.Runtime.Store (runCHRStore)
 import YCHR.Runtime.Types (Value (..))
-import YCHR.Runtime.Var (runUnify)
 import YCHR.Types (Constraint (..), Name (..), Term (..))
 import YCHR.VM qualified as VM
 
@@ -261,19 +258,18 @@ lookupHostCall name = case Map.lookup name baseHostCallRegistry of
   Just hc -> hc
   Nothing -> error $ "host call not found: " ++ show name
 
+runChrEmpty :: Chr a -> IO a
+runChrEmpty action = do
+  env <- initSessionEnv [] Map.empty Map.empty Map.empty Set.empty
+  runChr action env
+
 prop_compoundToListRoundtrip :: Property
 prop_compoundToListRoundtrip = property $ do
   term <- forAllWith showGroundValue genCompoundValue
   let HostCallFn toList = lookupHostCall "compound_to_list"
       HostCallFn fromList = lookupHostCall "list_to_compound"
-  list <-
-    evalIO $
-      runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
-        toList [term]
-  term' <-
-    evalIO $
-      runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
-        fromList [list]
+  list <- evalIO (runChrEmpty (toList [term]))
+  term' <- evalIO (runChrEmpty (fromList [list]))
   annotate (showGroundValue term)
   annotate (showGroundValue term')
   assert (groundEq term term')
@@ -288,14 +284,8 @@ prop_listToCompoundRoundtrip = property $ do
   let list = valueList (VAtom f : args)
   let HostCallFn fromList = lookupHostCall "list_to_compound"
       HostCallFn toList = lookupHostCall "compound_to_list"
-  compound <-
-    evalIO $
-      runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
-        fromList [list]
-  list' <-
-    evalIO $
-      runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
-        toList [compound]
+  compound <- evalIO (runChrEmpty (fromList [list]))
+  list' <- evalIO (runChrEmpty (toList [compound]))
   annotate (showGroundValue list)
   annotate (showGroundValue list')
   assert (groundEq list list')

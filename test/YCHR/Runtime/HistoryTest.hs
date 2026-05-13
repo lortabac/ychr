@@ -1,12 +1,14 @@
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module YCHR.Runtime.HistoryTest (tests) where
 
-import Effectful
+import Control.Monad.IO.Class (liftIO)
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 import YCHR.Runtime.History
+import YCHR.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Runtime.Types (SuspensionId (..))
 import YCHR.VM (RuleId (..))
 
@@ -20,16 +22,10 @@ tests =
       miscTests
     ]
 
--- ---------------------------------------------------------------------------
--- Helpers
--- ---------------------------------------------------------------------------
-
-runHistoryEnv :: Eff [PropHistory, IOE] a -> IO a
-runHistoryEnv = runEff . runPropHistory
-
--- ---------------------------------------------------------------------------
--- Empty history
--- ---------------------------------------------------------------------------
+runHistoryEnv :: Chr a -> IO a
+runHistoryEnv action = do
+  env <- initSessionEnv [] Map.empty Map.empty Map.empty Set.empty
+  runChr action env
 
 emptyTests :: TestTree
 emptyTests =
@@ -39,10 +35,6 @@ emptyTests =
         r <- runHistoryEnv $ notInHistory (RuleId 1) [SuspensionId 0]
         r @?= True
     ]
-
--- ---------------------------------------------------------------------------
--- After addHistory
--- ---------------------------------------------------------------------------
 
 addTests :: TestTree
 addTests =
@@ -60,10 +52,6 @@ addTests =
           notInHistory (RuleId 1) [SuspensionId 0]
         r @?= False
     ]
-
--- ---------------------------------------------------------------------------
--- Distinction tests
--- ---------------------------------------------------------------------------
 
 distinctionTests :: TestTree
 distinctionTests =
@@ -85,10 +73,6 @@ distinctionTests =
           notInHistory (RuleId 1) [SuspensionId 1, SuspensionId 0]
         r @?= True
     ]
-
--- ---------------------------------------------------------------------------
--- Misc
--- ---------------------------------------------------------------------------
 
 miscTests :: TestTree
 miscTests =

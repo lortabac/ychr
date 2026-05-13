@@ -1,21 +1,18 @@
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module YCHR.MetaTest (tests) where
 
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text (Text)
-import Effectful (runEff)
-import Effectful.State.Static.Local (evalState)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase)
 import YCHR.Meta (metaHostCallRegistry)
 import YCHR.Run (CompiledProgram (..), compileModules, runProgramWithQuery)
-import YCHR.Runtime.Error (CallStack)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, baseHostCallRegistry)
-import YCHR.Runtime.Store (runCHRStore)
+import YCHR.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Runtime.Types (Value (..))
-import YCHR.Runtime.Var (deref, equal, runUnify)
+import YCHR.Runtime.Var (deref, equal)
 import YCHR.Types (Term (..))
 import YCHR.Types qualified as Types
 import YCHR.VM (Name (..))
@@ -27,28 +24,24 @@ tests =
     [ readTermTests
     ]
 
--- ---------------------------------------------------------------------------
--- Helpers
--- ---------------------------------------------------------------------------
-
 hostCalls :: HostCallRegistry
 hostCalls = baseHostCallRegistry <> metaHostCallRegistry
+
+runChrBase :: Chr a -> IO a
+runChrBase action = do
+  env <- initSessionEnv [] Map.empty baseHostCallRegistry Map.empty Set.empty
+  runChr action env
 
 -- | Invoke the read_term_from_string host call directly and return the Value.
 readTerm :: Text -> IO Value
 readTerm s = case Map.lookup (Name "read_term_from_string") metaHostCallRegistry of
   Nothing -> assertFailure "read_term_from_string not found in registry"
-  Just (HostCallFn f) ->
-    runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [VText s]
+  Just (HostCallFn f) -> runChrBase (f [VText s])
 
 compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
 compileOrFail inputs = case compileModules False inputs of
   Left err -> assertFailure $ show err
   Right (cp, _) -> pure cp
-
--- ---------------------------------------------------------------------------
--- read_term_from_string tests
--- ---------------------------------------------------------------------------
 
 readTermTests :: TestTree
 readTermTests =
@@ -96,25 +89,24 @@ readTermTests =
           _ -> assertFailure "unexpected result for f(g(1), h(2, 3))",
       testCase "variable produces a fresh unbound var" $ do
         v <- readTerm "X"
-        v' <- runEff . runUnify . runCHRStore [] $ deref v
+        v' <- runChrBase (deref v)
         case v' of
           VVar _ -> pure ()
           _ -> assertFailure "expected unbound variable",
       testCase "same variable name maps to same var" $ do
         v <- readTerm "f(X, X)"
-        eq <- runEff . runUnify . runCHRStore [] $ case v of
+        eq <- runChrBase $ case v of
           VTerm "f" [a, b] -> equal a b
           _ -> pure False
         assertBool "both X args should be the same variable" eq,
       testCase "different variable names map to different vars" $ do
         v <- readTerm "f(X, Y)"
-        eq <- runEff . runUnify . runCHRStore [] $ case v of
+        eq <- runChrBase $ case v of
           VTerm "f" [a, b] -> equal a b
           _ -> pure True
         assertBool "X and Y should be different variables" (not eq),
       testCase "list syntax" $ do
         v <- readTerm "[1, 2, 3]"
-        -- [1,2,3] desugars to '.'(1, '.'(2, '.'(3, '[]')))
         case v of
           VTerm "." [VInt 1, VTerm "." [VInt 2, VTerm "." [VInt 3, VAtom "[]"]]] -> pure ()
           _ -> assertFailure "unexpected result for [1, 2, 3]",
@@ -145,8 +137,6 @@ endToEndReadTermTest =
         prog
         hostCalls
         "T is host:read_term_from_string(\"f(1, hello)\"), check(T, f(1, hello))."
-    -- check/2 should fire (both args unify), leaving no bindings
-    -- except T bound to f(1, hello)
     case Map.lookup "T" bindings of
       Just (CompoundTerm (Types.Unqualified "f") [IntTerm 1, AtomTerm "hello"]) -> pure ()
       other -> assertFailure $ "Expected T = f(1, hello), got: " ++ show other

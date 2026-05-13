@@ -59,14 +59,14 @@ module YCHR.Rename
 where
 
 import Control.Monad (when)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Writer.CPS (Writer, WriterT, runWriter, runWriterT, tell)
 import Data.Foldable (traverse_)
 import Data.List (nub)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
-import Effectful (Eff, runPureEff)
-import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import YCHR.Diagnostic (Diagnostic, noDiag)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
@@ -123,13 +123,16 @@ data DeclaredType = DeclaredType
   }
   deriving (Eq, Ord, Show)
 
-type RenameEffs = '[Writer [Diagnostic RenameWarning], Writer [Diagnostic RenameError]]
+-- | Renamer monad: two stacked 'Writer's, one for errors (inner) and
+-- one for warnings (outer). Concrete type so callers don't need 'mtl'
+-- classes; 'emitError' lifts past the warning layer.
+type Rename = WriterT [Diagnostic RenameWarning] (Writer [Diagnostic RenameError])
 
-emitError :: AnnP RenameError -> Eff RenameEffs ()
-emitError e = tell @[Diagnostic RenameError] [noDiag e]
+emitError :: AnnP RenameError -> Rename ()
+emitError e = lift (tell [noDiag e])
 
-emitWarning :: AnnP RenameWarning -> Eff RenameEffs ()
-emitWarning w = tell @[Diagnostic RenameWarning] [noDiag w]
+emitWarning :: AnnP RenameWarning -> Rename ()
+emitWarning w = tell [noDiag w]
 
 -- | Global environments consulted while renaming one module. Bundled
 -- into a record so recursive helpers don't have to thread six parameters.
@@ -346,17 +349,16 @@ renameProgram inputs mods =
               }
       ( (result, warnings),
         errs
-        ) = runPureEff
-          . runWriter @[Diagnostic RenameError]
-          . runWriter
-            @[Diagnostic RenameWarning]
-          $ do
-            validateExports mods
-            traverse (\m -> renameModule mods (ctxFor m)) mods
+        ) =
+          runWriter
+            ( runWriterT $ do
+                validateExports mods
+                traverse (\m -> renameModule mods (ctxFor m)) mods
+            )
    in if null errs then Right (result, warnings) else Left errs
 
 -- | Check that every name in a module's export list is actually declared.
-validateExports :: [Module] -> Eff RenameEffs ()
+validateExports :: [Module] -> Rename ()
 validateExports = traverse_ validateOne
   where
     validateOne m = case m.exports of
@@ -413,7 +415,7 @@ validateExports = traverse_ validateOne
 -- Module, rule, equation, head renaming
 -- ---------------------------------------------------------------------------
 
-renameModule :: [Module] -> RenameCtx -> Eff RenameEffs Module
+renameModule :: [Module] -> RenameCtx -> Rename Module
 renameModule mods ctx = do
   let m = ctx.currentModule
   validateImportLists mods ctx
@@ -445,7 +447,7 @@ renameModule mods ctx = do
 --     source module exports for that type ('UnknownExportedConstructor').
 --   * Each @use_module@ directive must appear before the first non-import
 --     directive in the file ('UseModuleOutOfOrder').
-validateImportLists :: [Module] -> RenameCtx -> Eff RenameEffs ()
+validateImportLists :: [Module] -> RenameCtx -> Rename ()
 validateImportLists mods ctx =
   traverse_ checkImport ctx.currentModule.imports
   where
@@ -521,14 +523,14 @@ validateImportLists mods ctx =
 locAtOrAfter :: SourceLoc -> SourceLoc -> Bool
 locAtOrAfter a b = (a.line, a.col) >= (b.line, b.col)
 
-renameRule :: RenameCtx -> Rule -> Eff RenameEffs Rule
+renameRule :: RenameCtx -> Rule -> Rename Rule
 renameRule ctx r = do
   h <- traverse (renameHead ctx r.head.sourceLoc r.head.parsed) r.head
   g <- traverse (traverse (renameTerm ctx r.guard.sourceLoc r.guard.parsed ResolveAll)) r.guard
   b <- traverse (traverse (renameTerm ctx r.body.sourceLoc r.body.parsed ResolveTop)) r.body
   pure r {head = h, guard = g, body = b}
 
-renameEquation :: RenameCtx -> FunctionEquation -> Eff RenameEffs FunctionEquation
+renameEquation :: RenameCtx -> FunctionEquation -> Rename FunctionEquation
 renameEquation ctx eq = do
   -- Equation args don't carry their own SourceLoc; use the guard's as a proxy.
   let loc = eq.guard.sourceLoc
@@ -545,7 +547,7 @@ renameEquation ctx eq = do
         rhs = renamedRhs
       }
 
-renameHead :: RenameCtx -> SourceLoc -> PExpr -> Head -> Eff RenameEffs Head
+renameHead :: RenameCtx -> SourceLoc -> PExpr -> Head -> Rename Head
 renameHead ctx loc origin h = case h of
   Simplification cs -> Simplification <$> traverse (renameCon ctx loc origin) cs
   Propagation cs -> Propagation <$> traverse (renameCon ctx loc origin) cs
@@ -554,7 +556,7 @@ renameHead ctx loc origin h = case h of
       <$> traverse (renameCon ctx loc origin) k
       <*> traverse (renameCon ctx loc origin) r
 
-renameCon :: RenameCtx -> SourceLoc -> PExpr -> Constraint -> Eff RenameEffs Constraint
+renameCon :: RenameCtx -> SourceLoc -> PExpr -> Constraint -> Rename Constraint
 renameCon ctx loc origin (Constraint cname cargs) = do
   renamedName <- resolveName ResolveTop ctx loc origin cname (length cargs)
   renamedArgs <- traverse (renameTerm ctx loc origin NoResolve) cargs
@@ -592,7 +594,7 @@ errorOnUnknown :: ResolveMode -> Bool
 errorOnUnknown ResolveTop = True
 errorOnUnknown _ = False
 
-renameTerm :: RenameCtx -> SourceLoc -> PExpr -> ResolveMode -> Term -> Eff RenameEffs Term
+renameTerm :: RenameCtx -> SourceLoc -> PExpr -> ResolveMode -> Term -> Rename Term
 renameTerm ctx loc origin mode t = case t of
   -- Special case: @is@ LHS is a pattern (no resolution), RHS is an expression.
   CompoundTerm (Unqualified "is") [lhs, rhs] | mode /= NoResolve -> do
@@ -692,7 +694,7 @@ resolveName ::
   PExpr ->
   Name ->
   Int ->
-  Eff RenameEffs Name
+  Rename Name
 resolveName mode ctx loc origin (Unqualified n) arity
   | isReserved n = pure (Unqualified n)
   | otherwise =
@@ -821,7 +823,7 @@ visibleDataCons mods ctx =
 -- | Check an unresolved name against data-constructor declarations.
 -- If found with matching arity: silent. If found with wrong arity: warning.
 -- If not found at all: warning.
-warnUnknownDataCon :: DataConEnv -> SourceLoc -> PExpr -> Text -> Int -> Eff RenameEffs ()
+warnUnknownDataCon :: DataConEnv -> SourceLoc -> PExpr -> Text -> Int -> Rename ()
 warnUnknownDataCon dataConEnv loc origin n arity =
   case Map.lookup n dataConEnv of
     Just arities
@@ -840,7 +842,7 @@ warnUnknownDataCon dataConEnv loc origin n arity =
 -- Pure (not in 'Eff'): type renaming never fails — unknown types simply
 -- stay 'Unqualified' so the interpreter can decide what to do with them
 -- (e.g. built-in @int@). If type errors are introduced later this will
--- need to move into 'Eff RenameEffs'.
+-- need to move into 'Rename'.
 renameTypeDefinition :: RenameCtx -> TypeDefinition -> TypeDefinition
 renameTypeDefinition ctx td =
   TypeDefinition
@@ -857,13 +859,13 @@ renameDataConstructor ctx dc =
       conArgs = map (renameTypeExpr ctx) dc.conArgs
     }
 
-renameAnnDecl :: RenameCtx -> Ann Declaration -> Eff RenameEffs (Ann Declaration)
+renameAnnDecl :: RenameCtx -> Ann Declaration -> Rename (Ann Declaration)
 renameAnnDecl ctx (Ann d loc) = do
   d' <- renameDeclaration ctx loc d
   pure (Ann d' loc)
 
 renameDeclaration ::
-  RenameCtx -> SourceLoc -> Declaration -> Eff RenameEffs Declaration
+  RenameCtx -> SourceLoc -> Declaration -> Rename Declaration
 renameDeclaration ctx loc (ConstraintDecl n a argTypes requiring) = do
   requiring' <- traverse (traverse (renameBoundSig ctx loc)) requiring
   pure
@@ -902,7 +904,7 @@ renameDeclaration _ _ d = pure d
 -- 'UnknownName' (YCHR-20002); the resolver later layers the dedicated
 -- 'unknown_bound_function' diagnostic for callers who want the bound-
 -- specific message.
-renameBoundSig :: RenameCtx -> SourceLoc -> BoundSig -> Eff RenameEffs BoundSig
+renameBoundSig :: RenameCtx -> SourceLoc -> BoundSig -> Rename BoundSig
 renameBoundSig ctx _ bs = do
   resolved <- resolveName ResolveTop ctx bs.loc (Atom (boundSigName bs)) bs.name bs.arity
   pure
@@ -1011,13 +1013,10 @@ renameQueryTerms mods mode terms =
             dataConProviders = buildDataConProviders visible mods
           }
       ((renamed, warnings), errs) =
-        runPureEff
-          . runWriter @[Diagnostic RenameError]
-          . runWriter
-            @[ Diagnostic
-                 RenameWarning
-             ]
-          $ traverse (renameTerm ctx dummyLoc (Atom "") mode) terms
+        runWriter
+          ( runWriterT $
+              traverse (renameTerm ctx dummyLoc (Atom "") mode) terms
+          )
    in if null errs then Right (renamed, warnings) else Left errs
 
 {- ---------------------------------------------------------------------------
@@ -1046,5 +1045,5 @@ atom is instead declared as a zero-arity constraint or function, it is
 Why 'renameTypeDefinition' is pure while the rule/equation helpers live in
 'Eff': type renaming currently emits no errors or warnings (unknown types
 fall through as 'Unqualified'). If type checking is introduced later,
-these helpers will need to move into 'Eff RenameEffs'.
+these helpers will need to move into 'Rename'.
 --------------------------------------------------------------------------- -}

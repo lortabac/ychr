@@ -64,14 +64,13 @@ module YCHR.Compile
 where
 
 import Control.Monad (foldM)
+import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (partition, sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Effectful (Eff, runPureEff)
-import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import YCHR.Compile.Names
 import YCHR.Compile.Occurrences (collectOccurrences)
 import YCHR.Compile.Types
@@ -120,11 +119,11 @@ compile prog symTab =
   let funSet = buildFunctionSet prog
       ( (occMap, ruleDisplayNames),
         occErrs
-        ) = runPureEff . runWriter $ collectOccurrences symTab prog
-      (procs, procErrs) = runPureEff . runWriter $ do
+        ) = runWriter (collectOccurrences symTab prog)
+      (procs, procErrs) = runWriter $ do
         fmap concat $
           traverse (genConstraintProcs funSet symTab occMap) (symbolTableToList symTab)
-      (funProcs, funErrs) = runPureEff . runWriter $ do
+      (funProcs, funErrs) = runWriter $ do
         traverse (compileFunctionDef funSet) prog.functions
       dispatch = genReactivateDispatch symTab
       callFunDispatches = genCallFunDispatches prog.functions
@@ -168,7 +167,7 @@ genConstraintProcs ::
   ( Identifier,
     ConstraintType
   ) ->
-  Eff '[Writer [Diagnostic CompileError]] [Procedure]
+  Writer [Diagnostic CompileError] [Procedure]
 genConstraintProcs funSet symTab occMap (ident, cType) = do
   let occs = lookupOccurrences ident occMap
       tellProc = genTell ident.name cType ident.arity
@@ -232,7 +231,7 @@ genOccurrence ::
   Types.Name ->
   Int ->
   Occurrence ->
-  Eff '[Writer [Diagnostic CompileError]] Procedure
+  Writer [Diagnostic CompileError] Procedure
 genOccurrence funSet symTab name arity occ = do
   let params = activeName : argNames arity
       procName' = occProcName name arity occ.number
@@ -266,7 +265,7 @@ genOccurrenceBody ::
   SymbolTable ->
   VarMap ->
   Occurrence ->
-  Eff '[Writer [Diagnostic CompileError]] [Stmt]
+  Writer [Diagnostic CompileError] [Stmt]
 genOccurrenceBody funSet symTab varMap occ = do
   (inner, condMap) <- genGuardedFire funSet symTab varMap occ
   let body = wrapInPartnerLoops occ condMap inner
@@ -283,7 +282,7 @@ genGuardedFire ::
   SymbolTable ->
   VarMap ->
   Occurrence ->
-  Eff '[Writer [Diagnostic CompileError]] ([Stmt], PartnerCondMap)
+  Writer [Diagnostic CompileError] ([Stmt], PartnerCondMap)
 genGuardedFire funSet symTab varMap occ = do
   let AnnP {node = guards, sourceLoc = guardLoc, parsed = guardP} = occ.rule.guard
       ruleLabel = Just ("rule " <> occ.ruleDisplay)
@@ -359,7 +358,7 @@ genFireStmts ::
   SymbolTable ->
   VarMap ->
   Occurrence ->
-  Eff '[Writer [Diagnostic CompileError]] [Stmt]
+  Writer [Diagnostic CompileError] [Stmt]
 genFireStmts funSet symTab varMap occ = do
   let rule = occ.rule
       AnnP {node = ruleHead} = rule.head
@@ -459,7 +458,7 @@ genKillStmts occ =
 -- Compile terms
 -- ---------------------------------------------------------------------------
 
-compileTerm :: VarMap -> SrcInfo -> Term -> Eff '[Writer [Diagnostic CompileError]] ValExpr
+compileTerm :: VarMap -> SrcInfo -> Term -> Writer [Diagnostic CompileError] ValExpr
 compileTerm varMap si (VarTerm v) = case lookupVar v varMap of
   Just expr -> pure expr
   Nothing -> do
@@ -505,7 +504,7 @@ compileExpr ::
   VarMap ->
   SrcInfo ->
   Term ->
-  Eff '[Writer [Diagnostic CompileError]] ValExpr
+  Writer [Diagnostic CompileError] ValExpr
 compileExpr funSet varMap si (CompoundTerm (Types.Unqualified "$call") args)
   | length args >= 2 = do
       args' <- traverse (compileExpr funSet varMap si) args
@@ -627,7 +626,7 @@ compileGuards ::
   VarMap ->
   SrcInfo ->
   [D.Guard] ->
-  Eff '[Writer [Diagnostic CompileError]] CompiledGuards
+  Writer [Diagnostic CompileError] CompiledGuards
 compileGuards funSet mOcc varMap si guards = do
   let (matchGuards, checkGuards) = partition isMatchGuard guards
   (wrapper, varMap') <- foldM (compileMatchGuard si) (id, varMap) matchGuards
@@ -648,7 +647,7 @@ compileMatchGuard ::
   SrcInfo ->
   ([Stmt] -> [Stmt], VarMap) ->
   D.Guard ->
-  Eff '[Writer [Diagnostic CompileError]] ([Stmt] -> [Stmt], VarMap)
+  Writer [Diagnostic CompileError] ([Stmt] -> [Stmt], VarMap)
 compileMatchGuard si (matchWrapper, varMap) (D.GuardMatch term name arity) = do
   termExpr <- compileTerm varMap si term
   let check body = [If (BMatchTerm termExpr (vmName name) arity) body []]
@@ -674,7 +673,7 @@ compileCheckGuards ::
   VarMap ->
   SrcInfo ->
   [D.Guard] ->
-  Eff '[Writer [Diagnostic CompileError]] (PartnerCondMap, Maybe BoolExpr)
+  Writer [Diagnostic CompileError] (PartnerCondMap, Maybe BoolExpr)
 compileCheckGuards funSet mOcc varMap si guards = do
   (condMap, residuals) <- foldM step (Map.empty, []) guards
   let residual = case residuals of
@@ -709,7 +708,7 @@ compileBodyGoals ::
   VarMap ->
   SrcInfo ->
   [D.BodyGoal] ->
-  Eff '[Writer [Diagnostic CompileError]] [Stmt]
+  Writer [Diagnostic CompileError] [Stmt]
 compileBodyGoals funSet symTab varMap si goals = do
   (stmts, _) <- foldM step ([], varMap) goals
   pure stmts
@@ -740,7 +739,7 @@ compileBodyGoal ::
   VarMap ->
   SrcInfo ->
   D.BodyGoal ->
-  Eff '[Writer [Diagnostic CompileError]] ([Stmt], VarMap)
+  Writer [Diagnostic CompileError] ([Stmt], VarMap)
 compileBodyGoal _ _ varMap _ D.BodyTrue = pure ([], varMap)
 compileBodyGoal _ _ varMap si (D.BodyConstraint con) = do
   let argVars = [v | VarTerm v <- con.args, notMemberVar v varMap]
@@ -781,7 +780,7 @@ compileBodyGoal funSet _ varMap si (D.BodyFunctionCall name args) = do
 compileFunctionDef ::
   Set Identifier ->
   D.Function ->
-  Eff '[Writer [Diagnostic CompileError]] Procedure
+  Writer [Diagnostic CompileError] Procedure
 compileFunctionDef funSet func = do
   let funcName = Types.qualifiedToName func.name
       procName' = funcProcName funcName func.arity
@@ -817,7 +816,7 @@ compileEquation ::
   [Name] ->
   SrcInfo ->
   D.Equation ->
-  Eff '[Writer [Diagnostic CompileError]] [Stmt]
+  Writer [Diagnostic CompileError] [Stmt]
 compileEquation funSet params si eq = do
   let varMap = buildEquationVarMap params eq.params
   -- Equations have no partners, so the index-condition pushdown

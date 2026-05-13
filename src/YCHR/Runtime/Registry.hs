@@ -1,7 +1,5 @@
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes #-}
 
 -- | Host call registry for the CHR runtime.
 --
@@ -9,7 +7,7 @@
 -- comparisons, string operations, type predicates) and generic helpers
 -- for building custom host calls.
 module YCHR.Runtime.Registry
-  ( -- * Types
+  ( -- * Types (re-exported from "YCHR.Runtime.Monad")
     HostCallFn (..),
     HostCallRegistry,
 
@@ -37,41 +35,15 @@ module YCHR.Runtime.Registry
   )
 where
 
-import Data.Map.Strict (Map)
+import Control.Monad.IO.Class (liftIO)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Effectful
-import Effectful.State.Static.Local (State)
-import YCHR.Runtime.Error (CallStack, runtimeErrorS)
-import YCHR.Runtime.Store (CHRStore)
+import YCHR.Runtime.Error (runtimeErrorS)
+import YCHR.Runtime.Monad (Chr, HostCallFn (..), HostCallRegistry)
 import YCHR.Runtime.Types (Value (..), VarId)
-import YCHR.Runtime.Var (Unify, deref, equal, getVarId, newVar, unifiable)
+import YCHR.Runtime.Var (deref, equal, getVarId, newVar, unifiable)
 import YCHR.VM (Name (..))
-
--- ---------------------------------------------------------------------------
--- Types
--- ---------------------------------------------------------------------------
-
--- | A host call function that can use logical variables, the constraint
--- store, IO, and the runtime call stack (for raising runtime errors via
--- 'runtimeErrorS' on bad arity or argument types).
---
--- Host functions take and return ordinary values; constraint identifiers
--- never flow through this interface.
-newtype HostCallFn = HostCallFn
-  { runHostCall ::
-      forall es.
-      ( Unify :> es,
-        CHRStore :> es,
-        IOE :> es,
-        State CallStack :> es
-      ) =>
-      [Value] -> Eff es Value
-  }
-
--- | Registry of host language functions.
-type HostCallRegistry = Map Name HostCallFn
 
 -- ---------------------------------------------------------------------------
 -- Registry
@@ -220,38 +192,31 @@ unit = VAtom "()"
 -- Value predicates
 -- ---------------------------------------------------------------------------
 
--- | Check whether a 'Value' is an integer.
 isInteger :: Value -> Bool
 isInteger (VInt _) = True
 isInteger _ = False
 
--- | Check whether a 'Value' is a float.
 isFloat :: Value -> Bool
 isFloat (VFloat _) = True
 isFloat _ = False
 
--- | Check whether a 'Value' is an atom.
 isAtom :: Value -> Bool
 isAtom (VAtom _) = True
 isAtom _ = False
 
--- | Check whether a 'Value' is a boolean.
 isBoolean :: Value -> Bool
 isBoolean (VBool _) = True
 isBoolean _ = False
 
--- | Check whether a 'Value' is a text string.
 isString :: Value -> Bool
 isString (VText _) = True
 isString _ = False
 
--- | Check whether a 'Value' is an unbound variable or wildcard.
 isVar :: Value -> Bool
 isVar (VVar _) = True
 isVar VWildcard = True
 isVar _ = False
 
--- | Check whether a 'Value' is not a variable.
 isNonvar :: Value -> Bool
 isNonvar = not . isVar
 
@@ -262,7 +227,7 @@ isNonvar = not . isVar
 -- | Deep-copy a term, replacing all unbound variables with fresh ones.
 -- Preserves sharing: the same original variable always maps to the same
 -- fresh variable across the entire copied term.
-copyTerm :: (Unify :> es, IOE :> es) => Value -> Eff es Value
+copyTerm :: Value -> Chr Value
 copyTerm val = fst <$> go Map.empty val
   where
     go cache v = do
@@ -295,14 +260,9 @@ copyTerm val = fst <$> go Map.empty val
 -- compound term arguments. Wildcards are replaced with fresh variables.
 -- Returns the collected variables and the updated set of seen 'VarId's.
 collectVars ::
-  (Unify :> es, IOE :> es) =>
   Set.Set VarId ->
   Value ->
-  Eff
-    es
-    ( [Value],
-      Set.Set VarId
-    )
+  Chr ([Value], Set.Set VarId)
 collectVars seen v = do
   v' <- deref v
   case v' of

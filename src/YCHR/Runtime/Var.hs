@@ -1,5 +1,5 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 -- | Logical variables, compound terms, unification, and equality.
 --
@@ -19,10 +19,6 @@ module YCHR.Runtime.Var
     VarState (..),
     Value (..),
 
-    -- * Unify effect
-    Unify,
-    runUnify,
-
     -- * Operations
     newVar,
     deref,
@@ -37,13 +33,13 @@ module YCHR.Runtime.Var
   )
 where
 
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Reader (ask)
 import Data.IORef
 import Data.Text (Text)
-import Effectful
-import Effectful.Dispatch.Static
-import Effectful.Writer.Static.Local (Writer, tell)
+import YCHR.Runtime.Monad (Chr, SessionEnv (..))
 import YCHR.Runtime.Types
-  ( SuspensionId (..),
+  ( SuspensionId,
     Value (..),
     Var (..),
     VarId (..),
@@ -51,41 +47,24 @@ import YCHR.Runtime.Types
   )
 
 -- ---------------------------------------------------------------------------
--- Unify effect
--- ---------------------------------------------------------------------------
-
-data Unify :: Effect
-
-type instance DispatchOf Unify = Static WithSideEffects
-
-newtype instance StaticRep Unify = UnifyRep (IORef VarId)
-
--- | Run a computation that uses 'Unify'. Requires 'IOE' only at the
--- runner level; individual operations do not need it.
-runUnify :: (IOE :> es) => Eff (Unify : es) a -> Eff es a
-runUnify m = do
-  counter <- liftIO $ newIORef (VarId 0)
-  evalStaticRep (UnifyRep counter) m
-
--- ---------------------------------------------------------------------------
 -- Internal Unify primitives
 -- ---------------------------------------------------------------------------
 
-readVarState :: (Unify :> es) => Var -> Eff es VarState
-readVarState (Var ref) = unsafeEff_ $ readIORef ref
+readVarState :: Var -> Chr VarState
+readVarState (Var ref) = liftIO $ readIORef ref
 
-writeVarState :: (Unify :> es) => Var -> VarState -> Eff es ()
-writeVarState (Var ref) st = unsafeEff_ $ writeIORef ref st
+writeVarState :: Var -> VarState -> Chr ()
+writeVarState (Var ref) st = liftIO $ writeIORef ref st
 
-newVarRef :: (Unify :> es) => VarState -> Eff es Var
-newVarRef st = unsafeEff_ $ Var <$> newIORef st
+newVarRef :: VarState -> Chr Var
+newVarRef st = liftIO $ Var <$> newIORef st
 
-freshVarId :: (Unify :> es) => Eff es VarId
+freshVarId :: Chr VarId
 freshVarId = do
-  UnifyRep counter <- getStaticRep
-  unsafeEff_ $ do
-    vid@(VarId n) <- readIORef counter
-    writeIORef counter (VarId (n + 1))
+  SessionEnv {varCounter} <- ask
+  liftIO $ do
+    vid@(VarId n) <- readIORef varCounter
+    writeIORef varCounter (VarId (n + 1))
     pure vid
 
 -- ---------------------------------------------------------------------------
@@ -93,7 +72,7 @@ freshVarId = do
 -- ---------------------------------------------------------------------------
 
 -- | Create a fresh unbound logical variable.
-newVar :: (Unify :> es) => Eff es Value
+newVar :: Chr Value
 newVar = do
   vid <- freshVarId
   v <- newVarRef (Unbound vid [])
@@ -102,41 +81,45 @@ newVar = do
 -- | Follow binding chains to find the ultimate value, applying
 -- path compression along the way. If the result is an unbound
 -- variable, returns the 'VVar' wrapping it.
-deref :: (Unify :> es) => Value -> Eff es Value
+deref :: Value -> Chr Value
 deref val@(VVar var@(Var ref)) = do
   st <- readVarState var
   case st of
     Unbound {} -> pure val
     Bound v -> do
       v' <- deref v
-      -- Path compression: point directly to the end of the chain.
       case v' of
         VVar (Var ref')
-          | ref == ref' -> pure () -- already pointing to itself
+          | ref == ref' -> pure ()
         _ -> writeVarState var (Bound v')
       pure v'
 deref val = pure val
 
 -- | Unify two values (tell semantics, Prolog @=@).
 --
--- Returns whether unification succeeded. Observer IDs from bound
--- variables are emitted via the 'Writer' effect. The caller is
--- responsible for reactivating the constraints identified by those
--- observer IDs.
-unify :: (Writer [SuspensionId] :> es, Unify :> es) => Value -> Value -> Eff es Bool
+-- Returns @(success, observers)@: the boolean indicates whether
+-- unification succeeded, and the list is the observer ids gathered
+-- from every variable that was bound during the call. Callers
+-- (typically the 'BUnify' interpretation in
+-- "YCHR.Runtime.Interpreter") forward the observers to the
+-- reactivation queue.
+--
+-- The observer list is meaningful even when @success@ is 'False':
+-- 'unifyArgs' short-circuits on the first failing argument pair, but
+-- variables bound by earlier pairs remain bound (we do not roll back),
+-- and the observers from those bindings are still returned. Callers
+-- must enqueue them so the half-committed bindings are followed up on.
+unify :: Value -> Value -> Chr (Bool, [SuspensionId])
 unify v1 v2 = do
   d1 <- deref v1
   d2 <- deref v2
   unify' d1 d2
 
-unify' :: (Writer [SuspensionId] :> es, Unify :> es) => Value -> Value -> Eff es Bool
--- Wildcard: unifies with anything without binding
-unify' VWildcard _ = pure True
-unify' _ VWildcard = pure True
--- Var-Var, same variable
+unify' :: Value -> Value -> Chr (Bool, [SuspensionId])
+unify' VWildcard _ = pure (True, [])
+unify' _ VWildcard = pure (True, [])
 unify' (VVar (Var ref1)) (VVar (Var ref2))
-  | ref1 == ref2 = pure True
--- Var-Var, different variables: bind first to second, merge observers
+  | ref1 == ref2 = pure (True, [])
 unify' (VVar var1) v2@(VVar var2) = do
   st1 <- readVarState var1
   case st1 of
@@ -147,50 +130,37 @@ unify' (VVar var1) v2@(VVar var2) = do
         Unbound vid2 obs2 -> do
           writeVarState var1 (Bound v2)
           writeVarState var2 (Unbound vid2 (obs1 ++ obs2))
-          tell obs1
-          pure True
+          pure (True, obs1)
         Bound {} -> error "unify': unexpected Bound after deref"
--- Var-NonVar: bind var to value
 unify' (VVar var) v = do
   st <- readVarState var
   case st of
     Bound {} -> error "unify': unexpected Bound after deref"
     Unbound _ obs -> do
       writeVarState var (Bound v)
-      tell obs
-      pure True
--- NonVar-Var: symmetric
+      pure (True, obs)
 unify' v (VVar vr) = unify' (VVar vr) v
--- Int-Int
-unify' (VInt a) (VInt b) = pure (a == b)
--- Float-Float
-unify' (VFloat a) (VFloat b) = pure (a == b)
--- Atom-Atom
-unify' (VAtom a) (VAtom b) = pure (a == b)
--- Text-Text
-unify' (VText a) (VText b) = pure (a == b)
--- Bool-Bool
-unify' (VBool a) (VBool b) = pure (a == b)
--- Term-Term: same functor and arity, unify args pairwise
+unify' (VInt a) (VInt b) = pure (a == b, [])
+unify' (VFloat a) (VFloat b) = pure (a == b, [])
+unify' (VAtom a) (VAtom b) = pure (a == b, [])
+unify' (VText a) (VText b) = pure (a == b, [])
+unify' (VBool a) (VBool b) = pure (a == b, [])
 unify' (VTerm f1 args1) (VTerm f2 args2)
   | f1 == f2 && length args1 == length args2 = unifyArgs args1 args2
--- Everything else fails
-unify' _ _ = pure False
+unify' _ _ = pure (False, [])
 
--- | Unify argument lists pairwise.
--- Short-circuits on the first failure.
-unifyArgs ::
-  (Writer [SuspensionId] :> es, Unify :> es) =>
-  [Value] ->
-  [Value] ->
-  Eff es Bool
-unifyArgs [] [] = pure True
+-- | Unify argument lists pairwise. Short-circuits on the first failure.
+-- Observer lists from successful element unifications are concatenated.
+unifyArgs :: [Value] -> [Value] -> Chr (Bool, [SuspensionId])
+unifyArgs [] [] = pure (True, [])
 unifyArgs (a : as) (b : bs) = do
-  ok <- unify a b
+  (ok, obs) <- unify a b
   if ok
-    then unifyArgs as bs
-    else pure False
-unifyArgs _ _ = pure False -- arity mismatch (shouldn't happen)
+    then do
+      (ok', obs') <- unifyArgs as bs
+      pure (ok', obs ++ obs')
+    else pure (False, obs)
+unifyArgs _ _ = pure (False, [])
 
 -- | Check whether two values can be unified, without committing any
 -- bindings. Returns 'True' iff 'unify' would succeed.
@@ -199,19 +169,19 @@ unifyArgs _ _ = pure False -- arity mismatch (shouldn't happen)
 -- local trail and rolled back before returning, so the operation is
 -- observably pure with respect to variable bindings. Path compression
 -- performed by 'deref' is preserved (it is semantically invisible).
--- Observer lists are never modified. No 'Writer' effect is needed.
-unifiable :: (Unify :> es) => Value -> Value -> Eff es Bool
+-- Observer lists are never modified.
+unifiable :: Value -> Value -> Chr Bool
 unifiable a b = do
-  trailRef <- unsafeEff_ $ newIORef []
+  trailRef <- liftIO $ newIORef []
   result <- uni trailRef a b
-  unsafeEff_ $ do
+  liftIO $ do
     entries <- readIORef trailRef
     -- Entries are prepended newest-first, so walking front-to-back
     -- restores each cell to its oldest captured state.
     mapM_ (\(Var ref, st) -> writeIORef ref st) entries
   pure result
   where
-    trailWrite trailRef var@(Var ref) newSt = unsafeEff_ $ do
+    trailWrite trailRef var@(Var ref) newSt = liftIO $ do
       cur <- readIORef ref
       modifyIORef' trailRef ((var, cur) :)
       writeIORef ref newSt
@@ -259,31 +229,26 @@ unifiable a b = do
 --
 -- No mutation beyond path compression during dereferencing.
 -- Two distinct unbound variables are /not/ equal.
-equal :: (Unify :> es) => Value -> Value -> Eff es Bool
+equal :: Value -> Value -> Chr Bool
 equal v1 v2 = do
   d1 <- deref v1
   d2 <- deref v2
   equal' d1 d2
 
-equal' :: (Unify :> es) => Value -> Value -> Eff es Bool
--- Var-Var: equal iff same underlying ref (same VarId)
+equal' :: Value -> Value -> Chr Bool
 equal' (VVar (Var ref1)) (VVar (Var ref2)) = pure (ref1 == ref2)
--- Var-NonVar or NonVar-Var: not equal
 equal' (VVar _) _ = pure False
 equal' _ (VVar _) = pure False
--- Ground-Ground
 equal' (VInt a) (VInt b) = pure (a == b)
 equal' (VFloat a) (VFloat b) = pure (a == b)
 equal' (VAtom a) (VAtom b) = pure (a == b)
 equal' (VText a) (VText b) = pure (a == b)
 equal' (VBool a) (VBool b) = pure (a == b)
--- Term-Term: same functor, same arity, all args recursively equal
 equal' (VTerm f1 args1) (VTerm f2 args2)
   | f1 == f2 && length args1 == length args2 = allEqual args1 args2
 equal' _ _ = pure False
 
--- | Check pairwise equality of argument lists. Short-circuits on first mismatch.
-allEqual :: (Unify :> es) => [Value] -> [Value] -> Eff es Bool
+allEqual :: [Value] -> [Value] -> Chr Bool
 allEqual [] [] = pure True
 allEqual (a : as) (b : bs) = do
   ok <- equal a b
@@ -296,7 +261,7 @@ makeTerm = VTerm
 
 -- | Check whether a value is a compound term with the given functor and arity.
 -- Dereferences first.
-matchTerm :: (Unify :> es) => Value -> Text -> Int -> Eff es Bool
+matchTerm :: Value -> Text -> Int -> Chr Bool
 matchTerm v functor arity = do
   d <- deref v
   case d of
@@ -306,7 +271,7 @@ matchTerm v functor arity = do
 -- | Extract an argument from a compound term by 0-based index.
 -- Dereferences first. Raises an error if the value is not a term
 -- or the index is out of bounds.
-getArg :: (Unify :> es) => Value -> Int -> Eff es Value
+getArg :: Value -> Int -> Chr Value
 getArg v idx = do
   d <- deref v
   case d of
@@ -317,7 +282,7 @@ getArg v idx = do
 
 -- | Register an observer on a logical variable. If the value is not
 -- an unbound variable (after dereferencing), this is a no-op.
-addObserver :: (Unify :> es) => SuspensionId -> Value -> Eff es ()
+addObserver :: SuspensionId -> Value -> Chr ()
 addObserver oid v = do
   d <- deref v
   case d of
@@ -325,12 +290,12 @@ addObserver oid v = do
       st <- readVarState var
       case st of
         Unbound vid obs -> writeVarState var (Unbound vid (oid : obs))
-        Bound {} -> pure () -- already bound, no-op
+        Bound {} -> pure ()
     _ -> pure ()
 
 -- | Extract the 'VarId' of an unbound variable after dereferencing.
 -- Returns 'Nothing' if the value is not an unbound variable.
-getVarId :: (Unify :> es) => Value -> Eff es (Maybe VarId)
+getVarId :: Value -> Chr (Maybe VarId)
 getVarId v = do
   d <- deref v
   case d of
@@ -338,5 +303,5 @@ getVarId v = do
       st <- readVarState var
       case st of
         Unbound vid _ -> pure (Just vid)
-        Bound {} -> pure Nothing -- shouldn't happen after deref
+        Bound {} -> pure Nothing
     _ -> pure Nothing

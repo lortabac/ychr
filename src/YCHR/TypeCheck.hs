@@ -32,6 +32,9 @@ module YCHR.TypeCheck
 where
 
 import Control.Monad (replicateM, when)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
+import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, put)
 import Data.List qualified as List
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -39,19 +42,17 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Effectful
-import Effectful.Reader.Static (Reader, ask, runReader)
-import Effectful.State.Static.Local (State, evalState, get, put)
 import YCHR.Compile.Names (vmName)
 import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic (..))
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed (AnnP (..), SourceLoc (..))
 import YCHR.Runtime.Interpreter (baseHostCallRegistry)
+import YCHR.Runtime.Monad (Chr)
 import YCHR.Runtime.Registry (fromValueList, valueList)
-import YCHR.Runtime.Session (CHREffects, tellConstraint, withCHR)
+import YCHR.Runtime.Session (tellConstraint, withCHR)
 import YCHR.Runtime.Types (Value (..))
-import YCHR.Runtime.Var (Unify, deref, newVar)
+import YCHR.Runtime.Var (deref, newVar)
 import YCHR.TypeCheck.Compiled (typeCheckerProgram)
 import YCHR.TypeCheck.Error (TypeCheckError (..))
 import YCHR.Types
@@ -273,19 +274,33 @@ data CtxStore = CtxStore
 emptyCtxStore :: CtxStore
 emptyCtxStore = CtxStore {nextId = 0, ctxMap = Map.empty, nextScopeId = 0}
 
+-- | Internal monad of the type-check driver: a 'ReaderT' carrying the
+-- program-wide environment over a 'StateT' for the context store,
+-- both sitting above the 'Chr' session monad.
+type TC = ReaderT TypeCheckEnv (StateT CtxStore Chr)
+
+-- | Lift a 'Chr' action into 'TC'.
+chrOp :: Chr a -> TC a
+chrOp = lift . lift
+
+-- | Read the context store.
+getStore :: TC CtxStore
+getStore = lift get
+
+-- | Replace the context store.
+putStore :: CtxStore -> TC ()
+putStore = lift . put
+
 -- | Allocate a fresh ambient-sig scope id. Each bounded scope (a
 -- bounded function's equation, a rule with a bounded head
 -- constraint) gets its own id so 'end_scope' can tear down exactly
 -- the right ambient signatures.
-freshScopeId :: (State CtxStore :> es) => Eff es Int
+freshScopeId :: TC Int
 freshScopeId = do
-  store <- get @CtxStore
+  store <- getStore
   let n = store.nextScopeId
-  put store {nextScopeId = n + 1}
+  putStore store {nextScopeId = n + 1}
   pure n
-
--- | Effect constraint shared by all internal checking functions.
-type CheckEffects es = (CHREffects es, Reader TypeCheckEnv :> es, State CtxStore :> es)
 
 -- ---------------------------------------------------------------------------
 -- Main entry point
@@ -326,20 +341,26 @@ typeCheckProgram prog = do
           )
           ++ detectDuplicateConstructors prog.typeDefinitions
           ++ validateConstructorArities env prog
-  chrErrors <- withCHR typeCheckerProgram baseHostCallRegistry $ do
-    runReader env $
-      evalState emptyCtxStore $ do
-        -- Initialize error accumulator
-        tellConstraint (Qualified "typechecker" "errors") [valueList []]
-        -- Tell environment: constraint, function, and constructor signatures
-        tellConstraintSigs prog
-        tellFunctionSigs prog
-        tellConSigs prog
-        -- Check each rule and function equation
-        mapM_ checkRule prog.rules
-        mapM_ checkFunction prog.functions
-        -- Collect errors from the CHR session
-        collectErrors
+  chrErrors <-
+    withCHR typeCheckerProgram baseHostCallRegistry $
+      evalStateT
+        ( runReaderT
+            ( do
+                -- Initialize error accumulator
+                chrOp (tellConstraint (Qualified "typechecker" "errors") [valueList []])
+                -- Tell environment: constraint, function, and constructor signatures
+                tellConstraintSigs prog
+                tellFunctionSigs prog
+                tellConSigs prog
+                -- Check each rule and function equation
+                mapM_ checkRule prog.rules
+                mapM_ checkFunction prog.functions
+                -- Collect errors from the CHR session
+                collectErrors
+            )
+            env
+        )
+        emptyCtxStore
   pure (hsErrors ++ chrErrors)
 
 -- | Type-check a list of body goals (a query or single goal) against
@@ -373,25 +394,32 @@ typeCheckGoals prog loc lbl goals = do
             constraintBoundsEnv = prog.constraintBounds,
             constraintTypesEnv = prog.constraintTypes
           }
-  withCHR typeCheckerProgram baseHostCallRegistry $ do
-    runReader env $
-      evalState emptyCtxStore $ do
-        tellConstraint (Qualified "typechecker" "errors") [valueList []]
-        tellConstraintSigs prog
-        tellFunctionSigs prog
-        tellConSigs prog
-        let allVarNames = foldMap collectVarsInBodyGoal goals
-        varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> newVar) (Set.toList allVarNames)
-        let cctx =
-              CheckCtx
-                { varTypes,
-                  label = lbl,
-                  loc,
-                  origin = Atom "",
-                  ambientSigs = Map.empty
-                }
-        mapM_ (checkBodyGoal cctx) goals
-        collectErrors
+  withCHR typeCheckerProgram baseHostCallRegistry $
+    evalStateT
+      ( runReaderT
+          ( do
+              chrOp (tellConstraint (Qualified "typechecker" "errors") [valueList []])
+              tellConstraintSigs prog
+              tellFunctionSigs prog
+              tellConSigs prog
+              let allVarNames = foldMap collectVarsInBodyGoal goals
+              varTypes <-
+                Map.fromList
+                  <$> mapM (\v -> (v,) <$> chrOp newVar) (Set.toList allVarNames)
+              let cctx =
+                    CheckCtx
+                      { varTypes,
+                        label = lbl,
+                        loc,
+                        origin = Atom "",
+                        ambientSigs = Map.empty
+                      }
+              mapM_ (checkBodyGoal cctx) goals
+              collectErrors
+          )
+          env
+      )
+      emptyCtxStore
 
 -- ---------------------------------------------------------------------------
 -- Context helpers
@@ -402,15 +430,12 @@ typeCheckGoals prog loc lbl goals = do
 -- The returned 'VInt' is what the CHR rules carry around as the
 -- @Ctx@ argument; on error decoding we look the handle back up to
 -- recover the source location for the diagnostic.
-freshCtxHandle ::
-  (State CtxStore :> es) =>
-  CheckCtx ->
-  Eff es Value
+freshCtxHandle :: CheckCtx -> TC Value
 freshCtxHandle cctx = do
-  store <- get @CtxStore
+  store <- getStore
   let n = store.nextId
       info = CtxInfo {label = cctx.label, loc = cctx.loc, origin = cctx.origin}
-  put store {nextId = n + 1, ctxMap = Map.insert n info store.ctxMap}
+  putStore store {nextId = n + 1, ctxMap = Map.insert n info store.ctxMap}
   pure (VInt n)
 
 -- ---------------------------------------------------------------------------
@@ -422,26 +447,28 @@ freshCtxHandle cctx = do
 -- shared type-variable map so a single @copy_term@ at the use site
 -- freshens both the argument types and the bound signatures
 -- consistently.
-tellConstraintSigs :: (CHREffects es, State CtxStore :> es) => D.Program -> Eff es ()
+tellConstraintSigs :: D.Program -> TC ()
 tellConstraintSigs prog =
   Map.foldlWithKey'
     ( \m name argTypes ->
         m >> do
           let bounds = Map.findWithDefault [] name prog.constraintBounds
               allVars = collectTypeVars argTypes ++ concatMap boundSigVars bounds
-          tvars <- freshTypeVarsForDecl allVars
-          encodedArgs <- traverse (encodeTypeExpr tvars) argTypes
+          tvars <- chrOp (freshTypeVarsForDecl allVars)
+          encodedArgs <- chrOp (traverse (encodeTypeExpr tvars) argTypes)
           let runtimeNm = runtimeName (Types.qualifiedToName name)
-          tellConstraint
-            (Qualified "typechecker" "constraint_sig")
-            [VAtom runtimeNm, valueList encodedArgs]
+          chrOp $
+            tellConstraint
+              (Qualified "typechecker" "constraint_sig")
+              [VAtom runtimeNm, valueList encodedArgs]
           case bounds of
             [] -> pure ()
             _ -> do
-              encodedBounds <- traverse (encodeNamedBound tvars) bounds
-              tellConstraint
-                (Qualified "typechecker" "constraint_bounds")
-                [VAtom runtimeNm, valueList encodedBounds]
+              encodedBounds <- chrOp (traverse (encodeNamedBound tvars) bounds)
+              chrOp $
+                tellConstraint
+                  (Qualified "typechecker" "constraint_bounds")
+                  [VAtom runtimeNm, valueList encodedBounds]
     )
     (pure ())
     prog.constraintTypes
@@ -452,7 +479,7 @@ tellConstraintSigs prog =
 -- @copy_term@ at the use site freshens the signature and the
 -- bound signatures consistently (see
 -- 'YCHR.Types.BoundSig' and the @bounded_function_match@ rule).
-tellFunctionSigs :: (CHREffects es, State CtxStore :> es) => D.Program -> Eff es ()
+tellFunctionSigs :: D.Program -> TC ()
 tellFunctionSigs prog = mapM_ tellOne prog.functions
   where
     tellOne f =
@@ -465,51 +492,46 @@ tellFunctionSigs prog = mapM_ tellOne prog.functions
               -- this), so a missing signature implies no bounds.
               let anyArgs = replicate f.arity (tcCon0 "any")
                   sig = VTerm (tcAtom "sig") [valueList anyArgs, tcCon0 "any"]
-              tellConstraint
-                (Qualified "typechecker" "function_sig")
-                [VAtom runtimeNm, sig]
+              chrOp $
+                tellConstraint
+                  (Qualified "typechecker" "function_sig")
+                  [VAtom runtimeNm, sig]
             ([s], bounds@(_ : _)) -> do
-              -- Bounded single-sig: encode sig and bounds with a
-              -- shared tvars map, then tell both. The @copy_term@ at
-              -- the call site sees @function_sig@ and
-              -- @function_bounds@ via @bounded_function_match@'s
-              -- multi-head pattern; because the shared map made
-              -- their variables identical at tell time, the freshened
-              -- substitution is consistent across signature and
-              -- bounds.
               let (argTys, retTy) = s
                   allVars =
                     collectTypeVars argTys
                       ++ collectTypeVarsExpr retTy
                       ++ concatMap boundSigVars bounds
-              tvars <- freshTypeVarsForDecl allVars
-              encodedArgs <- traverse (encodeTypeExpr tvars) argTys
-              encodedRet <- encodeTypeExpr tvars retTy
+              tvars <- chrOp (freshTypeVarsForDecl allVars)
+              encodedArgs <- chrOp (traverse (encodeTypeExpr tvars) argTys)
+              encodedRet <- chrOp (encodeTypeExpr tvars retTy)
               let sig = VTerm (tcAtom "sig") [valueList encodedArgs, encodedRet]
-              encodedBounds <- traverse (encodeNamedBound tvars) bounds
-              tellConstraint
-                (Qualified "typechecker" "function_sig")
-                [VAtom runtimeNm, sig]
-              tellConstraint
-                (Qualified "typechecker" "function_bounds")
-                [VAtom runtimeNm, valueList encodedBounds]
+              encodedBounds <- chrOp (traverse (encodeNamedBound tvars) bounds)
+              chrOp $
+                tellConstraint
+                  (Qualified "typechecker" "function_sig")
+                  [VAtom runtimeNm, sig]
+              chrOp $
+                tellConstraint
+                  (Qualified "typechecker" "function_bounds")
+                  [VAtom runtimeNm, valueList encodedBounds]
             ([s], []) -> do
-              sig <- encodeFunctionSig s
-              tellConstraint
-                (Qualified "typechecker" "function_sig")
-                [VAtom runtimeNm, sig]
+              sig <- chrOp (encodeFunctionSig s)
+              chrOp $
+                tellConstraint
+                  (Qualified "typechecker" "function_sig")
+                  [VAtom runtimeNm, sig]
             (ss, _) -> do
-              -- Multi-signature: the resolver rejects @requiring@ on
-              -- this form, so any bounds here are a bug; ignore them.
-              sigs <- traverse encodeFunctionSig ss
-              tellConstraint
-                (Qualified "typechecker" "function_sigs")
-                [VAtom runtimeNm, valueList sigs]
+              sigs <- chrOp (traverse encodeFunctionSig ss)
+              chrOp $
+                tellConstraint
+                  (Qualified "typechecker" "function_sigs")
+                  [VAtom runtimeNm, valueList sigs]
 
 -- | Encode one declared @(arg-types, return-type)@ pair as a runtime
 -- @sig(args, ret)@ value, allocating fresh logical variables for the
 -- type variables shared between the args and the return.
-encodeFunctionSig :: (Unify :> es) => ([TypeExpr], TypeExpr) -> Eff es Value
+encodeFunctionSig :: ([TypeExpr], TypeExpr) -> Chr Value
 encodeFunctionSig (argTys, retTy) = do
   tvars <- freshTypeVarsForDecl (collectTypeVars argTys ++ collectTypeVarsExpr retTy)
   encodedArgs <- traverse (encodeTypeExpr tvars) argTys
@@ -523,7 +545,7 @@ encodeFunctionSig (argTys, retTy) = do
 -- the same logical variables for the declaration's type parameters,
 -- so a single @copy_term@ at the call site freshens them
 -- consistently across signature and bounds.
-encodeNamedBound :: (Unify :> es) => Map Text Value -> BoundSig -> Eff es Value
+encodeNamedBound :: Map Text Value -> BoundSig -> Chr Value
 encodeNamedBound tvars bs = do
   encodedArgs <- traverse (encodeTypeExpr tvars) bs.argTypes
   encodedRet <- encodeTypeExpr tvars bs.returnType
@@ -537,25 +559,26 @@ encodeNamedBound tvars bs = do
 boundSigVars :: BoundSig -> [Text]
 boundSigVars bs = collectTypeVars bs.argTypes ++ collectTypeVarsExpr bs.returnType
 
-tellConSigs :: (CHREffects es, State CtxStore :> es) => D.Program -> Eff es ()
+tellConSigs :: D.Program -> TC ()
 tellConSigs prog =
   mapM_
     ( \td ->
         mapM_
           ( \dc -> do
               let allVars = td.typeVars
-              tvars <- freshTypeVarsForDecl allVars
+              tvars <- chrOp (freshTypeVarsForDecl allVars)
               let parentType = encodeTCon tvars td.name td.typeVars
-              encodedFields <- traverse (encodeTypeExpr tvars) dc.conArgs
+              encodedFields <- chrOp (traverse (encodeTypeExpr tvars) dc.conArgs)
               let sig = VTerm (tcAtom "sig") [parentType, valueList encodedFields]
-              tellConstraint
-                (Qualified "typechecker" "con_sig")
-                [ VAtom
-                    ( runtimeName
-                        dc.conName
-                    ),
-                  sig
-                ]
+              chrOp $
+                tellConstraint
+                  (Qualified "typechecker" "con_sig")
+                  [ VAtom
+                      ( runtimeName
+                          dc.conName
+                      ),
+                    sig
+                  ]
           )
           td.constructors
     )
@@ -593,14 +616,14 @@ collectTypeVarsExpr (TypeVar v) = [v]
 collectTypeVarsExpr (TypeCon _ args) = concatMap collectTypeVarsExpr args
 
 -- | Create fresh logical variables for each unique type variable name.
-freshTypeVarsForDecl :: (Unify :> es) => [Text] -> Eff es (Map Text Value)
+freshTypeVarsForDecl :: [Text] -> Chr (Map Text Value)
 freshTypeVarsForDecl vars = do
   let unique = Set.toList (Set.fromList vars)
   pairs <- mapM (\v -> (v,) <$> newVar) unique
   pure (Map.fromList pairs)
 
 -- | Encode a TypeExpr as a runtime Value.
-encodeTypeExpr :: (Unify :> es) => Map Text Value -> TypeExpr -> Eff es Value
+encodeTypeExpr :: Map Text Value -> TypeExpr -> Chr Value
 encodeTypeExpr tvars (TypeVar v) =
   case Map.lookup v tvars of
     Just val -> pure val
@@ -629,11 +652,11 @@ encodeTypeExpr tvars (TypeCon name args) = do
 -- Per-rule checking
 -- ---------------------------------------------------------------------------
 
-checkRule :: (CheckEffects es) => D.Rule -> Eff es ()
+checkRule :: D.Rule -> TC ()
 checkRule rule = do
-  env <- ask @TypeCheckEnv
+  env <- ask
   let allVarNames = collectVarsInRule rule
-  varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> newVar) (Set.toList allVarNames)
+  varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> chrOp newVar) (Set.toList allVarNames)
   let ruleLabel = fmap (\n -> "rule " <> n) rule.name
       AnnP hd headLoc headOrigin = rule.head
       AnnP guards guardLoc guardOrigin = rule.guard
@@ -672,9 +695,10 @@ checkRule rule = do
   -- emitting active_scope with no ambient_sig would still be sound
   -- but pollutes the constraint store.
   when hasBoundedHead $
-    tellConstraint
-      (Qualified "typechecker" "active_scope")
-      [VInt scopeId]
+    chrOp $
+      tellConstraint
+        (Qualified "typechecker" "active_scope")
+        [VInt scopeId]
   let guardCtx =
         CheckCtx
           { varTypes,
@@ -694,19 +718,19 @@ checkRule rule = do
   checkGuards guardCtx guards
   mapM_ (checkBodyGoal bodyCtx) body
   when hasBoundedHead $
-    tellConstraint
-      (Qualified "typechecker" "end_scope")
-      [VInt scopeId]
+    chrOp $
+      tellConstraint
+        (Qualified "typechecker" "end_scope")
+        [VInt scopeId]
 
 -- | Check one head constraint occurrence. Returns the ambient sigs
 -- this occurrence contributes (empty for unbounded constraints).
 checkHeadConstraint ::
-  (CheckEffects es) =>
   CheckCtx ->
   Int ->
   TypeCheckEnv ->
   D.HeadConstraint ->
-  Eff es (Map Text [Value])
+  TC (Map Text [Value])
 checkHeadConstraint cctx scopeId env hc =
   case Map.lookup hc.name env.constraintBoundsEnv of
     Nothing -> do
@@ -715,23 +739,19 @@ checkHeadConstraint cctx scopeId env hc =
     Just bounds -> do
       let argTypes = Map.findWithDefault [] hc.name env.constraintTypesEnv
           allVars = collectTypeVars argTypes ++ concatMap boundSigVars bounds
-      tvars <- freshTypeVarsForDecl allVars
-      encodedDeclArgs <- traverse (encodeTypeExpr tvars) argTypes
+      tvars <- chrOp (freshTypeVarsForDecl allVars)
+      encodedDeclArgs <- chrOp (traverse (encodeTypeExpr tvars) argTypes)
       headArgValues <- traverse (typeOfTerm cctx . headArgToTerm) hc.args
       ctx <- freshCtxHandle cctx
-      -- Unify head arg types with the σ-substituted declared arg
-      -- types. Mirrors what bounded_constraint_match does
-      -- internally, but with σ vars under driver control so the
-      -- bounds' encoding shares them.
       zipWithM_
         ( \hv ev ->
-            tellConstraint
-              (Qualified "typechecker" "check_unify")
-              [hv, ev, ctx]
+            chrOp $
+              tellConstraint
+                (Qualified "typechecker" "check_unify")
+                [hv, ev, ctx]
         )
         headArgValues
         encodedDeclArgs
-      -- Emit ambient sigs and bound-discharge residuals.
       ambEntries <- traverse (emitAmbientAndBound scopeId ctx tvars) bounds
       pure (Map.fromListWith (++) ambEntries)
   where
@@ -744,35 +764,37 @@ checkHeadConstraint cctx scopeId env hc =
 -- map so 'CheckCtx.ambientSigs' carries the same data the CHR-side
 -- 'check_function_use_with_ambient' rule needs.
 emitAmbientAndBound ::
-  (CheckEffects es) =>
   Int ->
   Value ->
   Map Text Value ->
   BoundSig ->
-  Eff es (Text, [Value])
+  TC (Text, [Value])
 emitAmbientAndBound scopeId ctx tvars bs = do
-  encodedArgs <- traverse (encodeTypeExpr tvars) bs.argTypes
-  encodedRet <- encodeTypeExpr tvars bs.returnType
+  encodedArgs <- chrOp (traverse (encodeTypeExpr tvars) bs.argTypes)
+  encodedRet <- chrOp (encodeTypeExpr tvars bs.returnType)
   let sigVal = VTerm (tcAtom "sig") [valueList encodedArgs, encodedRet]
       runtimeNm = runtimeName bs.name
-  tellConstraint
-    (Qualified "typechecker" "ambient_sig")
-    [VInt scopeId, VAtom runtimeNm, sigVal]
-  tellConstraint
-    (Qualified "typechecker" "check_bound")
-    [VAtom runtimeNm, valueList encodedArgs, encodedRet, ctx]
+  chrOp $
+    tellConstraint
+      (Qualified "typechecker" "ambient_sig")
+      [VInt scopeId, VAtom runtimeNm, sigVal]
+  chrOp $
+    tellConstraint
+      (Qualified "typechecker" "check_bound")
+      [VAtom runtimeNm, valueList encodedArgs, encodedRet, ctx]
   pure (runtimeNm, [sigVal])
 
-checkConstraintUse :: (CheckEffects es) => CheckCtx -> Types.QualifiedConstraint -> Eff es ()
+checkConstraintUse :: CheckCtx -> Types.QualifiedConstraint -> TC ()
 checkConstraintUse cctx c = do
   argTypeVars <- traverse (typeOfTerm cctx) c.args
   ctx <- freshCtxHandle cctx
-  tellConstraint
-    (Qualified "typechecker" "check_constraint_use")
-    [ VAtom (runtimeName (Types.qualifiedToName c.name)),
-      valueList argTypeVars,
-      ctx
-    ]
+  chrOp $
+    tellConstraint
+      (Qualified "typechecker" "check_constraint_use")
+      [ VAtom (runtimeName (Types.qualifiedToName c.name)),
+        valueList argTypeVars,
+        ctx
+      ]
 
 -- ---------------------------------------------------------------------------
 -- Guard checking
@@ -785,7 +807,7 @@ checkConstraintUse cctx c = do
 -- @GuardMatch@ on the same term — the match establishes which
 -- constructor's field types to use, which the get-arg then needs to
 -- resolve a field index.
-checkGuards :: (CheckEffects es) => CheckCtx -> [D.Guard] -> Eff es ()
+checkGuards :: CheckCtx -> [D.Guard] -> TC ()
 checkGuards cctx = go Nothing
   where
     go _ [] = pure ()
@@ -793,72 +815,59 @@ checkGuards cctx = go Nothing
       newLastCon <- checkGuard cctx lastConName g
       go newLastCon gs
 
-checkGuard :: (CheckEffects es) => CheckCtx -> Maybe Name -> D.Guard -> Eff es (Maybe Name)
+checkGuard :: CheckCtx -> Maybe Name -> D.Guard -> TC (Maybe Name)
 checkGuard cctx lastConName (D.GuardEqual t1 t2) = do
   tv1 <- typeOfTerm cctx t1
   tv2 <- typeOfTerm cctx t2
   ctx <- freshCtxHandle cctx
-  tellConstraint (Qualified "typechecker" "check_unify") [tv1, tv2, ctx]
+  chrOp $ tellConstraint (Qualified "typechecker" "check_unify") [tv1, tv2, ctx]
   pure lastConName
 checkGuard cctx _ (D.GuardMatch term conName arity) = do
-  -- Canonicalize the name so subsequent GuardGetArgs (and the
-  -- check_constructor_use we emit below) all reference the same
-  -- declaration-side qualified form.
-  env <- ask @TypeCheckEnv
+  env <- ask
   let canonical = canonicalizeConName env conName
-  -- Emit check_constructor_use only when the constructor is known
-  -- \*and* the use-site arity matches the declaration. Wrong-arity
-  -- uses are reported by 'validateConstructorArities' as a
-  -- ConstructorArityMismatch; here we silently fall through so we
-  -- don't pile a spurious tcon mismatch on top of the real error.
   when (knownConstructorWithArity env canonical arity) $ do
     termType <- typeOfTerm cctx term
-    argTypeVars <- replicateM arity newVar
+    argTypeVars <- chrOp (replicateM arity newVar)
     ctx <- freshCtxHandle cctx
-    tellConstraint
-      (Qualified "typechecker" "check_constructor_use")
-      [VAtom (runtimeName canonical), valueList argTypeVars, termType, ctx]
+    chrOp $
+      tellConstraint
+        (Qualified "typechecker" "check_constructor_use")
+        [VAtom (runtimeName canonical), valueList argTypeVars, termType, ctx]
   pure (Just canonical)
 checkGuard cctx lastConName (D.GuardGetArg varName term idx) = do
-  resultTypeVar <- varType cctx varName
-  -- The lastConName fallback covers a (defensively impossible)
-  -- GuardGetArg with no preceding GuardMatch on the same term.
+  resultTypeVar <- chrOp (varType cctx varName)
   conName <- case lastConName of
     Just cn -> pure cn
     Nothing -> pure (Unqualified varName)
-  -- Skip emission when the preceding pattern was a known constructor
-  -- but the field index is outside its declared arity. The
-  -- ConstructorArityMismatch from 'validateConstructorArities' has
-  -- already covered the user-facing error; emitting here would let the
-  -- @delegate_guard_getarg@ rule call @nth@ out of bounds.
-  env <- ask @TypeCheckEnv
+  env <- ask
   let withinArity =
         case Map.lookup conName env.conMap of
           Just (_, dc) -> idx < length dc.conArgs
-          Nothing -> True -- unknown constructor → unknown_guard_getarg handles it
+          Nothing -> True
   when withinArity $ do
     termType <- typeOfTerm cctx term
     ctx <- freshCtxHandle cctx
-    tellConstraint
-      (Qualified "typechecker" "check_guard_getarg")
-      [ resultTypeVar,
-        termType,
-        VAtom (runtimeName conName),
-        VInt idx,
-        ctx
-      ]
+    chrOp $
+      tellConstraint
+        (Qualified "typechecker" "check_guard_getarg")
+        [ resultTypeVar,
+          termType,
+          VAtom (runtimeName conName),
+          VInt idx,
+          ctx
+        ]
   pure lastConName
 checkGuard cctx _ (D.GuardExpr term) = do
   tv <- typeOfTerm cctx term
   ctx <- freshCtxHandle cctx
-  tellConstraint (Qualified "typechecker" "check_guard_bool") [tv, ctx]
+  chrOp $ tellConstraint (Qualified "typechecker" "check_guard_bool") [tv, ctx]
   pure Nothing
 
 -- ---------------------------------------------------------------------------
 -- Body goal checking
 -- ---------------------------------------------------------------------------
 
-checkBodyGoal :: (CheckEffects es) => CheckCtx -> D.BodyGoal -> Eff es ()
+checkBodyGoal :: CheckCtx -> D.BodyGoal -> TC ()
 checkBodyGoal _ D.BodyTrue = pure ()
 checkBodyGoal cctx (D.BodyConstraint c) =
   checkConstraintUse cctx c
@@ -866,22 +875,17 @@ checkBodyGoal cctx (D.BodyUnify t1 t2) = do
   tv1 <- typeOfTerm cctx t1
   tv2 <- typeOfTerm cctx t2
   ctx <- freshCtxHandle cctx
-  tellConstraint (Qualified "typechecker" "check_unify") [tv1, tv2, ctx]
--- The spec says `is` is a directed assignment (RHS type flows to LHS).
--- We use bidirectional check_unify here, which is equivalent: if the
--- LHS var is unbound, unify binds it to the RHS type; if already bound,
--- it checks consistency. Both match the spec's semantics.
+  chrOp $ tellConstraint (Qualified "typechecker" "check_unify") [tv1, tv2, ctx]
 checkBodyGoal cctx (D.BodyIs v term) = do
-  vType <- varType cctx v
+  vType <- chrOp (varType cctx v)
   termType <- typeOfTerm cctx term
   ctx <- freshCtxHandle cctx
-  tellConstraint (Qualified "typechecker" "check_unify") [vType, termType, ctx]
+  chrOp $ tellConstraint (Qualified "typechecker" "check_unify") [vType, termType, ctx]
 checkBodyGoal cctx (D.BodyFunctionCall name args) = do
   argTypeVars <- traverse (typeOfTerm cctx) args
-  retTypeVar <- newVar
+  retTypeVar <- chrOp newVar
   emitFunctionCall cctx name argTypeVars retTypeVar
-checkBodyGoal cctx (D.BodyHostStmt _ args) = do
-  -- Process arguments for side effects (nested constructors/functions still get checked)
+checkBodyGoal cctx (D.BodyHostStmt _ args) =
   mapM_ (typeOfTerm cctx) args
 
 -- | Emit a function-call type check. Routes through
@@ -892,58 +896,55 @@ checkBodyGoal cctx (D.BodyHostStmt _ args) = do
 -- the plain @check_function_use@ path. The CHR side handles both
 -- forms with the same overload-resolution mechanism.
 emitFunctionCall ::
-  (CheckEffects es) =>
   CheckCtx ->
   Name ->
   [Value] ->
   Value ->
-  Eff es ()
+  TC ()
 emitFunctionCall cctx name argTypeVars retTypeVar = do
   ctx <- freshCtxHandle cctx
   let runtimeFname = runtimeName name
   case Map.lookup runtimeFname cctx.ambientSigs of
     Just ambs@(_ : _) ->
-      tellConstraint
-        (Qualified "typechecker" "check_function_use_with_ambient")
-        [ VAtom runtimeFname,
-          valueList ambs,
-          valueList argTypeVars,
-          retTypeVar,
-          ctx
-        ]
+      chrOp $
+        tellConstraint
+          (Qualified "typechecker" "check_function_use_with_ambient")
+          [ VAtom runtimeFname,
+            valueList ambs,
+            valueList argTypeVars,
+            retTypeVar,
+            ctx
+          ]
     _ ->
-      tellConstraint
-        (Qualified "typechecker" "check_function_use")
-        [ VAtom runtimeFname,
-          valueList argTypeVars,
-          retTypeVar,
-          ctx
-        ]
+      chrOp $
+        tellConstraint
+          (Qualified "typechecker" "check_function_use")
+          [ VAtom runtimeFname,
+            valueList argTypeVars,
+            retTypeVar,
+            ctx
+          ]
 
 -- ---------------------------------------------------------------------------
 -- Per-equation checking
 -- ---------------------------------------------------------------------------
 
-checkFunction :: (CheckEffects es) => D.Function -> Eff es ()
+checkFunction :: D.Function -> TC ()
 checkFunction func = do
   let AnnP eqs eqLoc eqOrigin = func.equations
   mapM_ (checkEquation func eqLoc eqOrigin) eqs
 
 checkEquation ::
-  (CheckEffects es) =>
   D.Function ->
   SourceLoc ->
   PExpr ->
   D.Equation ->
-  Eff es ()
+  TC ()
 checkEquation func loc origin eq = do
   let allVarNames = collectVarsInEq eq
-  varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> newVar) (Set.toList allVarNames)
+  varTypes <- Map.fromList <$> mapM (\v -> (v,) <$> chrOp newVar) (Set.toList allVarNames)
   case (func.signatures, func.requiring) of
     ([], _) -> do
-      -- Untyped functions skip the signature-vs-equation cross-check
-      -- entirely. Guards are still walked so any constructor uses
-      -- inside them get the normal type-check treatment.
       let cctx = freshCheckCtx varTypes Map.empty
       checkGuards cctx eq.guards
     ([sig], bounds@(_ : _)) -> checkBoundedEquation func sig bounds varTypes eq
@@ -952,13 +953,14 @@ checkEquation func loc origin eq = do
       argTypeVars <- traverse (typeOfTerm cctx . headArgToTerm) eq.params
       retTypeVar <- typeOfTerm cctx eq.rhs
       ctx <- freshCtxHandle cctx
-      tellConstraint
-        (Qualified "typechecker" "check_function_use")
-        [ VAtom (runtimeName (Types.qualifiedToName func.name)),
-          valueList argTypeVars,
-          retTypeVar,
-          ctx
-        ]
+      chrOp $
+        tellConstraint
+          (Qualified "typechecker" "check_function_use")
+          [ VAtom (runtimeName (Types.qualifiedToName func.name)),
+            valueList argTypeVars,
+            retTypeVar,
+            ctx
+          ]
       checkGuards cctx eq.guards
   where
     freshCheckCtx vt ambs =
@@ -981,22 +983,20 @@ checkEquation func loc origin eq = do
 -- T is the SAME logical variable the equation parameters' types are
 -- bound to.
 checkBoundedEquation ::
-  (CheckEffects es) =>
   D.Function ->
   ([TypeExpr], TypeExpr) ->
   [BoundSig] ->
   Map Text Value ->
   D.Equation ->
-  Eff es ()
+  TC ()
 checkBoundedEquation func (argTys, retTy) bounds varTypes eq = do
   let allVars =
         collectTypeVars argTys
           ++ collectTypeVarsExpr retTy
           ++ concatMap boundSigVars bounds
-  tvars <- freshTypeVarsForDecl allVars
-  encodedArgs <- traverse (encodeTypeExpr tvars) argTys
-  encodedRet <- encodeTypeExpr tvars retTy
-  -- Allocate scope and tell ambient sigs.
+  tvars <- chrOp (freshTypeVarsForDecl allVars)
+  encodedArgs <- chrOp (traverse (encodeTypeExpr tvars) argTys)
+  encodedRet <- chrOp (encodeTypeExpr tvars retTy)
   scopeId <- freshScopeId
   let AnnP _ eqLoc eqOrigin = func.equations
   let baseCtx =
@@ -1012,29 +1012,30 @@ checkBoundedEquation func (argTys, retTy) bounds varTypes eq = do
     traverse (emitAmbientAndBound scopeId ctx tvars) bounds
   let ambMap = Map.fromListWith (++) ambEntries
       cctx = baseCtx {ambientSigs = ambMap}
-  tellConstraint
-    (Qualified "typechecker" "active_scope")
-    [VInt scopeId]
-  -- Unify each parameter's type slot with the σ-substituted
-  -- declared arg type; same for the RHS and the return type.
+  chrOp $
+    tellConstraint
+      (Qualified "typechecker" "active_scope")
+      [VInt scopeId]
   paramTypes <- traverse (typeOfTerm cctx . headArgToTerm) eq.params
-  zipWithM_eq cctx ctx paramTypes encodedArgs
+  zipWithM_eq ctx paramTypes encodedArgs
   rhsType <- typeOfTerm cctx eq.rhs
-  tellConstraint
-    (Qualified "typechecker" "check_unify")
-    [rhsType, encodedRet, ctx]
+  chrOp $
+    tellConstraint
+      (Qualified "typechecker" "check_unify")
+      [rhsType, encodedRet, ctx]
   checkGuards cctx eq.guards
-  tellConstraint
-    (Qualified "typechecker" "end_scope")
-    [VInt scopeId]
+  chrOp $
+    tellConstraint
+      (Qualified "typechecker" "end_scope")
+      [VInt scopeId]
   where
-    zipWithM_eq cctx ctx ps es =
+    zipWithM_eq ctx ps es =
       sequence_
-        [ tellConstraint
-            (Qualified "typechecker" "check_unify")
-            [p, e, ctx]
-        | (p, e) <- zip ps es,
-          _ <- [cctx] -- keep cctx in scope; lambda would shadow
+        [ chrOp $
+            tellConstraint
+              (Qualified "typechecker" "check_unify")
+              [p, e, ctx]
+        | (p, e) <- zip ps es
         ]
 
 -- ---------------------------------------------------------------------------
@@ -1048,100 +1049,83 @@ checkBoundedEquation func (argTys, retTy) bounds varTypes eq = do
 -- visit, so every variable has an entry in 'CheckCtx.varTypes' before
 -- type checking begins. The fallback exists only to keep us from
 -- crashing if the desugarer ever emits a variable we missed.
-varType :: (Unify :> es) => CheckCtx -> Text -> Eff es Value
+varType :: CheckCtx -> Text -> Chr Value
 varType cctx v = case Map.lookup v cctx.varTypes of
   Just val -> pure val
   Nothing -> newVar
 
-typeOfTerm :: (CheckEffects es) => CheckCtx -> Term -> Eff es Value
-typeOfTerm cctx (VarTerm v) = varType cctx v
+typeOfTerm :: CheckCtx -> Term -> TC Value
+typeOfTerm cctx (VarTerm v) = chrOp (varType cctx v)
 typeOfTerm _ (IntTerm _) = pure (tcCon0 "int")
 typeOfTerm _ (FloatTerm _) = pure (tcCon0 "float")
 typeOfTerm _ (TextTerm _) = pure (tcCon0 "string")
-typeOfTerm _ Wildcard = newVar
+typeOfTerm _ Wildcard = chrOp newVar
 typeOfTerm cctx (AtomTerm s) =
   typeOfAtom cctx (Unqualified s)
 typeOfTerm cctx (CompoundTerm name args) =
   typeOfCompound cctx name args
 
-typeOfAtom :: (CheckEffects es) => CheckCtx -> Name -> Eff es Value
+typeOfAtom :: CheckCtx -> Name -> TC Value
 typeOfAtom cctx name = do
-  env <- ask @TypeCheckEnv
+  env <- ask
   let canonical = canonicalizeConName env name
   if knownConstructorWithArity env canonical 0
     then do
-      resultType <- newVar
+      resultType <- chrOp newVar
       ctx <- freshCtxHandle cctx
-      tellConstraint
-        (Qualified "typechecker" "check_constructor_use")
-        [ VAtom
-            ( runtimeName
-                canonical
-            ),
-          valueList [],
-          resultType,
-          ctx
-        ]
+      chrOp $
+        tellConstraint
+          (Qualified "typechecker" "check_constructor_use")
+          [ VAtom
+              ( runtimeName
+                  canonical
+              ),
+            valueList [],
+            resultType,
+            ctx
+          ]
       pure resultType
-    else
-      -- Either unknown or a known constructor of nonzero arity (in
-      -- which case 'validateConstructorArities' already reported it).
-      pure (tcCon0 "any")
+    else pure (tcCon0 "any")
 
-typeOfCompound :: (CheckEffects es) => CheckCtx -> Name -> [Term] -> Eff es Value
--- Lambda: fun(X, Y) -> Expr end
--- Represented as CompoundTerm "->" [CompoundTerm "fun" params, body]
+typeOfCompound :: CheckCtx -> Name -> [Term] -> TC Value
 typeOfCompound cctx (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body] = do
   paramTypeVars <- traverse (typeOfTerm cctx) params
   bodyType <- typeOfTerm cctx body
   pure (VTerm (tcAtom "fun") [valueList paramTypeVars, bodyType])
--- Function reference: fun name/arity
--- After renaming the outer "fun" is stripped, leaving
--- CompoundTerm "/" [AtomTerm name, IntTerm arity].
--- The renamer flattens the resolved name with @flattenName@ (@:@-separator);
--- 'parseFlattenedName' . 'runtimeName' converts it to the runtime form
--- (@__@-separator) so the emitted @check_function_use@ joins with the
--- @function_sig@ that 'tellFunctionSigs' tells.
 typeOfCompound cctx (Unqualified "/") [AtomTerm fname, IntTerm arity] = do
-  argTypeVars <- replicateM arity newVar
-  retTypeVar <- newVar
+  argTypeVars <- chrOp (replicateM arity newVar)
+  retTypeVar <- chrOp newVar
   emitFunctionCall cctx (parseFlattenedName fname) argTypeVars retTypeVar
   pure (VTerm (tcAtom "fun") [valueList argTypeVars, retTypeVar])
--- Constructor or function. Constructors are canonicalized so that bare
--- functor names (e.g. cons "." or own-module names) resolve to their
--- declaration-side qualified form. Wrong-arity constructor uses fall
--- through to the function/unknown path here; 'validateConstructorArities'
--- reports them as ConstructorArityMismatch.
 typeOfCompound cctx name args = do
-  env <- ask @TypeCheckEnv
+  env <- ask
   let arity = length args
       canonical = canonicalizeConName env name
   if knownConstructorWithArity env canonical arity
     then do
       argTypes <- traverse (typeOfTerm cctx) args
-      resultType <- newVar
+      resultType <- chrOp newVar
       ctx <- freshCtxHandle cctx
-      tellConstraint
-        (Qualified "typechecker" "check_constructor_use")
-        [ VAtom
-            ( runtimeName
-                canonical
-            ),
-          valueList argTypes,
-          resultType,
-          ctx
-        ]
+      chrOp $
+        tellConstraint
+          (Qualified "typechecker" "check_constructor_use")
+          [ VAtom
+              ( runtimeName
+                  canonical
+              ),
+            valueList argTypes,
+            resultType,
+            ctx
+          ]
       pure resultType
     else
       if Set.member (name, arity) env.funSet
         then do
           argTypes <- traverse (typeOfTerm cctx) args
-          resultType <- newVar
+          resultType <- chrOp newVar
           emitFunctionCall cctx name argTypes resultType
           pure resultType
         else do
-          -- Unknown (or wrong-arity constructor — error pre-reported).
-          -- Process args for side effects, return any.
           mapM_ (typeOfTerm cctx) args
           pure (tcCon0 "any")
 
@@ -1199,23 +1183,21 @@ collectVarsInTerm _ = Set.empty
 -- Error collection
 -- ---------------------------------------------------------------------------
 
-collectErrors ::
-  (CheckEffects es) =>
-  Eff es [Diagnostic TypeCheckError]
+collectErrors :: TC [Diagnostic TypeCheckError]
 collectErrors = do
-  errVar <- newVar
-  tellConstraint (Qualified "typechecker" "collect") [errVar]
-  errVal <- deref errVar
-  store <- get @CtxStore
-  decodeErrorList store.ctxMap errVal
+  errVar <- chrOp newVar
+  chrOp (tellConstraint (Qualified "typechecker" "collect") [errVar])
+  errVal <- chrOp (deref errVar)
+  store <- getStore
+  chrOp (decodeErrorList store.ctxMap errVal)
 
-decodeErrorList :: (Unify :> es) => CtxMap -> Value -> Eff es [Diagnostic TypeCheckError]
+decodeErrorList :: CtxMap -> Value -> Chr [Diagnostic TypeCheckError]
 decodeErrorList ctxMap val = do
   case fromValueList val of
     Just items -> concat <$> traverse (decodeError ctxMap) items
     Nothing -> pure []
 
-decodeError :: (Unify :> es) => CtxMap -> Value -> Eff es [Diagnostic TypeCheckError]
+decodeError :: CtxMap -> Value -> Chr [Diagnostic TypeCheckError]
 decodeError ctxMap (VTerm errorFunctor [ctxVal, codeVal, detailVal])
   | errorFunctor == tcAtom "error" = do
       let info = case ctxVal of
@@ -1292,7 +1274,7 @@ showTypeName (VAtom a) = displayQualifiedAtom a
 showTypeName (VTerm functor []) = displayQualifiedAtom functor
 showTypeName _ = "?"
 
-showValue :: (Unify :> es) => Value -> Eff es Text
+showValue :: Value -> Chr Text
 showValue v = do
   v' <- deref v
   case v' of

@@ -6,11 +6,13 @@ module YCHR.Runtime.Types
     VarState (..),
     Value (..),
     CallVal (..),
+    Suspension (..),
   )
 where
 
 import Data.IORef
 import Data.Text (Text)
+import YCHR.Types (ConstraintType)
 
 -- | Unique identifier for a constraint suspension. Also serves as the
 -- observer key on variables for selective reactivation.
@@ -55,3 +57,13 @@ data Value
 data CallVal
   = CVal !Value
   | CId !SuspensionId
+
+-- | A constraint suspension in the store. The 'alive' flag is mutable so
+-- that 'killConstraint' is O(1) and copies of the suspension obtained
+-- before the kill see the updated state without an explicit lookup.
+data Suspension = Suspension
+  { suspId :: !SuspensionId,
+    suspType :: !ConstraintType,
+    args :: ![Value],
+    alive :: !(IORef Bool)
+  }

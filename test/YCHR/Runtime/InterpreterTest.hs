@@ -1,19 +1,16 @@
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module YCHR.Runtime.InterpreterTest (tests) where
 
 import Control.Exception (try)
+import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (toList)
 import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
-import Effectful
-import Effectful.State.Static.Local (State, evalState)
-import Effectful.Writer.Static.Local (Writer, runWriter)
+import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Runtime.Error (CallStack, RuntimeErrorThrown (..))
-import YCHR.Runtime.History (PropHistory, runPropHistory)
+import YCHR.Runtime.Error (RuntimeErrorThrown (..))
 import YCHR.Runtime.Interpreter
   ( HostCallFn (..),
     HostCallRegistry,
@@ -22,10 +19,10 @@ import YCHR.Runtime.Interpreter
     callProc,
     interpret,
   )
-import YCHR.Runtime.Reactivation (ReactQueue, runReactQueue)
-import YCHR.Runtime.Store (CHRStore, getStoreSnapshot, isSuspAlive, runCHRStore)
+import YCHR.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Runtime.Store (getStoreSnapshot, isSuspAlive)
 import YCHR.Runtime.Types (CallVal (..), SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (Unify, equal, newVar, runUnify, unify)
+import YCHR.Runtime.Var (equal, newVar, unify)
 import YCHR.Types qualified as Types
 import YCHR.VM
 
@@ -42,12 +39,41 @@ tests =
     ]
 
 -- ---------------------------------------------------------------------------
+-- Session helpers
+-- ---------------------------------------------------------------------------
+
+-- | Run a Chr action with an empty session (no procedures, no types,
+-- no host calls). Useful for tests that exercise primitives that only
+-- need 'Unify' / store / queue, where the session is set up just to
+-- give them a place to live.
+runChrEmpty :: Chr a -> IO a
+runChrEmpty action = do
+  env <- initSessionEnv [] Map.empty Map.empty Map.empty Set.empty
+  runChr action env
+
+-- | Like 'runChrEmpty' but with the base host-call registry available.
+runChrBase :: Chr a -> IO a
+runChrBase action = do
+  env <- initSessionEnv [] Map.empty baseHostCallRegistry Map.empty Set.empty
+  runChr action env
+
+-- | Run a Chr action against the LEQ session.
+runChrLeq :: Chr a -> IO a
+runChrLeq action = do
+  env <-
+    initSessionEnv
+      [Types.Unqualified "leq"]
+      leqProcMap
+      Map.empty
+      Map.empty
+      Set.empty
+  runChr action env
+
+-- ---------------------------------------------------------------------------
 -- Runtime-error trigger tests
 -- ---------------------------------------------------------------------------
 
 -- | Run a single-procedure VM program and expect a 'RuntimeErrorThrown'.
--- Fails the test if the program completes normally or throws a different
--- exception type. Returns the message field for further assertion.
 expectRuntimeError :: Program -> Name -> [Value] -> IO String
 expectRuntimeError prog entry args = do
   outcome <- try @RuntimeErrorThrown (interpret prog Map.empty entry args)
@@ -70,9 +96,6 @@ errorPathTests =
   testGroup
     "runtime error paths"
     [ testCase "BFromVal on a non-bool value reports a type mismatch" $ do
-        -- @BFromVal (Lit (IntLit 42))@ wraps an int in boolean position; the
-        -- runtime check at 'evalBoolExpr (BFromVal _)' must catch it. See
-        -- Interpreter.hs:413,534.
         let prog =
               singleProc
                 "p"
@@ -84,9 +107,6 @@ errorPathTests =
         assertBool ("expected 'expected boolean' in: " ++ msg) $
           "expected boolean" `isInfixOf` msg,
       testCase "Break with a label no enclosing Foreach catches escapes" $ do
-        -- A top-level @Break "missing"@ propagates up to 'callProc',
-        -- which reports it as 'callProc: uncaught Break missing'. See
-        -- Interpreter.hs:184-185.
         let prog =
               singleProc
                 "p"
@@ -109,10 +129,6 @@ errorPathTests =
         assertBool ("expected label 'nope' in: " ++ msg) $
           "nope" `isInfixOf` msg,
       testCase "CallExpr targeting an unknown procedure errors with its name" $ do
-        -- 'callProc' raises 'callProc: unknown procedure <name>' when the
-        -- procedure map has no entry for the requested name; see
-        -- Interpreter.hs:170. The compiler is supposed to make this
-        -- unreachable, but the runtime guard is what catches a regression.
         let prog =
               singleProc
                 "p"
@@ -126,9 +142,6 @@ errorPathTests =
         assertBool ("expected the missing name in: " ++ msg) $
           "no_such_proc" `isInfixOf` msg,
       testCase "evaluating an unbound named variable errors with its name" $ do
-        -- 'evalValExpr' on @Var "missing"@ when the env has no binding
-        -- raises 'evalValExpr: unbound variable missing'. See
-        -- Interpreter.hs:330.
         let prog =
               singleProc
                 "p"
@@ -140,10 +153,6 @@ errorPathTests =
         assertBool ("expected the missing name in: " ++ msg) $
           "missing" `isInfixOf` msg,
       testCase "EvalDeep of an unbound fresh variable returns the variable itself" $ do
-        -- Pinning a non-error: deep-dereferencing a fresh logical variable
-        -- doesn't fail; it returns the unbound 'VVar'. The behavior matters
-        -- because it's how query bindings surface free variables; an
-        -- accidental change to 'error on unbound' would be a regression.
         let prog =
               singleProc
                 "p"
@@ -156,10 +165,6 @@ errorPathTests =
           VVar _ -> pure ()
           _ -> assertFailure "expected VVar, got something else"
     ]
-
--- ---------------------------------------------------------------------------
--- bindParams arity-mismatch tests
--- ---------------------------------------------------------------------------
 
 bindParamsTests :: TestTree
 bindParamsTests =
@@ -184,8 +189,6 @@ bindParamsTests =
               "arity mismatch" `isInfixOf` msg
           Right _ -> assertFailure "expected Left",
       testCase "mixed-kind args bind by tag" $
-        -- `bindParams` itself only checks length; kind tags are stored
-        -- in the env and surface at lookup time.
         case bindParams "p" ["v", "i"] [CVal (VInt 7), CId (SuspensionId 3)] of
           Right _ -> pure ()
           Left msg -> assertFailure ("expected Right, got Left: " ++ msg)
@@ -516,60 +519,18 @@ reactivateDispatch =
     ]
 
 -- ---------------------------------------------------------------------------
--- Host call registry (empty for LEQ)
--- ---------------------------------------------------------------------------
-
-leqHostCalls :: HostCallRegistry
-leqHostCalls = Map.empty
-
--- ---------------------------------------------------------------------------
 -- Test helpers
 -- ---------------------------------------------------------------------------
 
--- | Count alive constraints of a given type in the store.
-countAlive :: (CHRStore :> es) => ConstraintType -> Eff es Int
+countAlive :: ConstraintType -> Chr Int
 countAlive cType = do
   snapshot <- getStoreSnapshot cType
   alives <- traverse isSuspAlive (toList snapshot)
   pure (length (filter id alives))
 
--- | Run within the full effect stack, returning a result.
-runFullStack ::
-  Eff
-    [ State [StackFrame],
-      Writer [SuspensionId],
-      ReactQueue,
-      PropHistory,
-      CHRStore,
-      Unify,
-      IOE
-    ]
-    a ->
-  IO a
-runFullStack m =
-  runEff
-    . runUnify
-    . runCHRStore [Types.Unqualified "leq"]
-    . runPropHistory
-    . runReactQueue
-    . fmap fst
-    . runWriter @[SuspensionId]
-    . evalState @[StackFrame] []
-    $ m
-
--- | Call tell_leq within the full effect stack.
-callTellLeq ::
-  ( IOE :> es,
-    Writer [SuspensionId] :> es,
-    Unify :> es,
-    CHRStore :> es,
-    PropHistory :> es,
-    ReactQueue :> es,
-    State [StackFrame] :> es
-  ) =>
-  Value -> Value -> Eff es Value
+callTellLeq :: Value -> Value -> Chr Value
 callTellLeq x y =
-  callProc leqProcMap leqHostCalls "tell_leq2" [CVal x, CVal y]
+  callProc "tell_leq2" [CVal x, CVal y]
 
 -- ---------------------------------------------------------------------------
 -- Tests
@@ -580,17 +541,17 @@ leqTests =
   testGroup
     "LEQ handler"
     [ testCase "reflexivity: leq(3, 3) fires, store empty" $ do
-        n <- runFullStack $ do
+        n <- runChrLeq $ do
           _ <- callTellLeq (VInt 3) (VInt 3)
           countAlive leqType
         n @?= 0,
       testCase "no rule fires: leq(1, 2) stays" $ do
-        n <- runFullStack $ do
+        n <- runChrLeq $ do
           _ <- callTellLeq (VInt 1) (VInt 2)
           countAlive leqType
         n @?= 1,
       testCase "antisymmetry: leq(X, Y), leq(Y, X) unifies X=Y, store empty" $ do
-        (n, areEqual) <- runFullStack $ do
+        (n, areEqual) <- runChrLeq $ do
           x <- newVar
           y <- newVar
           _ <- callTellLeq x y
@@ -601,20 +562,19 @@ leqTests =
         n @?= 0
         assertBool "X and Y should be unified" areEqual,
       testCase "transitivity: leq(1,2), leq(2,3) produces leq(1,3)" $ do
-        n <- runFullStack $ do
+        n <- runChrLeq $ do
           _ <- callTellLeq (VInt 1) (VInt 2)
           _ <- callTellLeq (VInt 2) (VInt 3)
           countAlive leqType
-        -- leq(1,2), leq(2,3) stay, transitivity adds leq(1,3) = 3 total
         n @?= 3,
       testCase "idempotence: leq(1,2), leq(1,2) removes duplicate" $ do
-        n <- runFullStack $ do
+        n <- runChrLeq $ do
           _ <- callTellLeq (VInt 1) (VInt 2)
           _ <- callTellLeq (VInt 1) (VInt 2)
           countAlive leqType
         n @?= 1,
       testCase "full cycle: leq(a,b), leq(b,c), leq(c,a) — all removed, all unified" $ do
-        (n, eqAB, eqBC) <- runFullStack $ do
+        (n, eqAB, eqBC) <- runChrLeq $ do
           a <- newVar
           b <- newVar
           c <- newVar
@@ -707,29 +667,36 @@ evalDeepTests =
 -- Type predicate tests
 -- ---------------------------------------------------------------------------
 
--- | Call a type predicate from baseHostCallRegistry and return the Bool result.
-callTypePred :: Name -> Value -> IO Bool
-callTypePred name v = case Map.lookup name baseHostCallRegistry of
+-- | Call a base host call by name on a single Value, returning the result.
+callBaseHC :: Name -> Value -> IO Value
+callBaseHC name v = case Map.lookup name baseHostCallRegistry of
   Nothing -> assertFailure $ "host call not found: " ++ show name
-  Just (HostCallFn f) -> do
-    result <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [v]
-    case result of
-      VBool b -> pure b
-      _ -> assertFailure $ show name ++ ": expected Bool result"
+  Just (HostCallFn f) -> runChrBase (f [v])
 
--- | Call term_variables directly, returning the resulting Value.
+-- | Call a single-argument predicate, expecting a Bool.
+callTypePred :: Name -> Value -> IO Bool
+callTypePred name v = do
+  result <- callBaseHC name v
+  case result of
+    VBool b -> pure b
+    _ -> assertFailure $ show name ++ ": expected Bool result"
+
+-- | Lookup a HostCallFn from the base registry, calling 'assertFailure'
+-- if not found.
+findBaseHC :: Name -> IO HostCallFn
+findBaseHC name = case Map.lookup name baseHostCallRegistry of
+  Nothing -> assertFailure $ "host call not found: " ++ show name
+  Just fn -> pure fn
+
+-- | Call 'term_variables' on a value, returning the resulting list value.
 callTermVars :: Value -> IO Value
-callTermVars v = case Map.lookup (Name "term_variables") baseHostCallRegistry of
-  Nothing -> assertFailure "term_variables not found in registry"
-  Just (HostCallFn f) ->
-    runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [v]
+callTermVars v = do
+  HostCallFn f <- findBaseHC (Name "term_variables")
+  runChrBase (f [v])
 
--- | Call term_variables within an existing Eff context.
-callTermVarsEff ::
-  (Unify :> es, CHRStore :> es, IOE :> es, State CallStack :> es) =>
-  Value ->
-  Eff es Value
-callTermVarsEff v = case Map.lookup (Name "term_variables") baseHostCallRegistry of
+-- | Variant inside a 'Chr' computation that already has a session set up.
+callTermVarsChr :: Value -> Chr Value
+callTermVarsChr v = case Map.lookup (Name "term_variables") baseHostCallRegistry of
   Nothing -> error "term_variables not found in registry"
   Just (HostCallFn f) -> f [v]
 
@@ -762,63 +729,53 @@ typePredicateTests =
         b <- callTypePred "string" (VAtom "hello")
         assertBool "expected false" (not b),
       testCase "var: true for unbound variable" $ do
-        b <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
+        b <- runChrBase $ do
           v <- newVar
-          let HostCallFn f = case Map.lookup (Name "var") baseHostCallRegistry of
-                Just hc -> hc
-                Nothing -> error "var not found"
+          HostCallFn f <- case Map.lookup (Name "var") baseHostCallRegistry of
+            Just hc -> pure hc
+            Nothing -> error "var not found"
           result <- f [v]
           case result of
             VBool b' -> pure b'
             _ -> pure False
         assertBool "expected true" b,
       testCase "var: false for bound variable" $ do
-        (b, _) <- runEff
-          . runUnify
-          . runCHRStore []
-          . evalState @CallStack []
-          . runWriter @[SuspensionId]
-          $ do
-            v <- newVar
-            _ <- unify v (VInt 42)
-            let HostCallFn f = case Map.lookup (Name "var") baseHostCallRegistry of
-                  Just hc -> hc
-                  Nothing -> error "var not found"
-            result <- f [v]
-            case result of
-              VBool b' -> pure b'
-              _ -> pure False
+        b <- runChrBase $ do
+          v <- newVar
+          _ <- unify v (VInt 42)
+          HostCallFn f <- case Map.lookup (Name "var") baseHostCallRegistry of
+            Just hc -> pure hc
+            Nothing -> error "var not found"
+          result <- f [v]
+          case result of
+            VBool b' -> pure b'
+            _ -> pure False
         assertBool "expected false" (not b),
       testCase "var: false for ground value" $ do
         b <- callTypePred "var" (VInt 42)
         assertBool "expected false" (not b),
       testCase "nonvar: false for unbound variable" $ do
-        b <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
+        b <- runChrBase $ do
           v <- newVar
-          let HostCallFn f = case Map.lookup (Name "nonvar") baseHostCallRegistry of
-                Just hc -> hc
-                Nothing -> error "nonvar not found"
+          HostCallFn f <- case Map.lookup (Name "nonvar") baseHostCallRegistry of
+            Just hc -> pure hc
+            Nothing -> error "nonvar not found"
           result <- f [v]
           case result of
             VBool b' -> pure b'
             _ -> pure False
         assertBool "expected false" (not b),
       testCase "nonvar: true for bound variable" $ do
-        (b, _) <- runEff
-          . runUnify
-          . runCHRStore []
-          . evalState @CallStack []
-          . runWriter @[SuspensionId]
-          $ do
-            v <- newVar
-            _ <- unify v (VInt 42)
-            let HostCallFn f = case Map.lookup (Name "nonvar") baseHostCallRegistry of
-                  Just hc -> hc
-                  Nothing -> error "nonvar not found"
-            result <- f [v]
-            case result of
-              VBool b' -> pure b'
-              _ -> pure False
+        b <- runChrBase $ do
+          v <- newVar
+          _ <- unify v (VInt 42)
+          HostCallFn f <- case Map.lookup (Name "nonvar") baseHostCallRegistry of
+            Just hc -> pure hc
+            Nothing -> error "nonvar not found"
+          result <- f [v]
+          case result of
+            VBool b' -> pure b'
+            _ -> pure False
         assertBool "expected true" b,
       testCase "nonvar: true for ground value" $ do
         b <- callTypePred "nonvar" (VInt 42)
@@ -833,43 +790,38 @@ typePredicateTests =
         b <- callTypePred "ground" (VTerm "f" [VInt 1, VAtom "hello"])
         assertBool "expected true" b,
       testCase "ground: false for unbound variable" $ do
-        b <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
+        b <- runChrBase $ do
           v <- newVar
-          let HostCallFn f = case Map.lookup (Name "ground") baseHostCallRegistry of
-                Just hc -> hc
-                Nothing -> error "ground not found"
+          HostCallFn f <- case Map.lookup (Name "ground") baseHostCallRegistry of
+            Just hc -> pure hc
+            Nothing -> error "ground not found"
           result <- f [v]
           case result of
             VBool b' -> pure b'
             _ -> pure True
         assertBool "expected false" (not b),
       testCase "ground: false for compound with unbound var" $ do
-        b <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
+        b <- runChrBase $ do
           v <- newVar
-          let HostCallFn f = case Map.lookup (Name "ground") baseHostCallRegistry of
-                Just hc -> hc
-                Nothing -> error "ground not found"
+          HostCallFn f <- case Map.lookup (Name "ground") baseHostCallRegistry of
+            Just hc -> pure hc
+            Nothing -> error "ground not found"
           result <- f [VTerm "f" [VInt 1, v]]
           case result of
             VBool b' -> pure b'
             _ -> pure True
         assertBool "expected false" (not b),
       testCase "ground: true for compound with bound var" $ do
-        (b, _) <- runEff
-          . runUnify
-          . runCHRStore []
-          . evalState @CallStack []
-          . runWriter @[SuspensionId]
-          $ do
-            v <- newVar
-            _ <- unify v (VInt 2)
-            let HostCallFn f = case Map.lookup (Name "ground") baseHostCallRegistry of
-                  Just hc -> hc
-                  Nothing -> error "ground not found"
-            result <- f [VTerm "f" [VInt 1, v]]
-            case result of
-              VBool b' -> pure b'
-              _ -> pure True
+        b <- runChrBase $ do
+          v <- newVar
+          _ <- unify v (VInt 2)
+          HostCallFn f <- case Map.lookup (Name "ground") baseHostCallRegistry of
+            Just hc -> pure hc
+            Nothing -> error "ground not found"
+          result <- f [VTerm "f" [VInt 1, v]]
+          case result of
+            VBool b' -> pure b'
+            _ -> pure True
         assertBool "expected true" b,
       testCase "ground: false for wildcard" $ do
         b <- callTypePred "ground" VWildcard
@@ -885,21 +837,20 @@ typePredicateTests =
           VTerm "prelude__[]" [] -> pure ()
           _ -> assertFailure "expected empty list",
       testCase "term_variables: unbound var yields singleton list" $ do
-        (isSingleton, sameVar) <-
-          runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
-            v <- newVar
-            result <- callTermVarsEff v
-            case result of
-              VTerm "prelude__." [x, VTerm "prelude__[]" []] -> do
-                eq <- equal x v
-                pure (True, eq)
-              _ -> pure (False, False)
+        (isSingleton, sameVar) <- runChrBase $ do
+          v <- newVar
+          result <- callTermVarsChr v
+          case result of
+            VTerm "prelude__." [x, VTerm "prelude__[]" []] -> do
+              eq <- equal x v
+              pure (True, eq)
+            _ -> pure (False, False)
         assertBool "expected singleton list" isSingleton
         assertBool "list element should be same variable" sameVar,
       testCase "term_variables: duplicate var appears once" $ do
-        (len, sameVar) <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
+        (len, sameVar) <- runChrBase $ do
           v <- newVar
-          result <- callTermVarsEff (VTerm "f" [v, v])
+          result <- callTermVarsChr (VTerm "f" [v, v])
           case result of
             VTerm "prelude__." [x, VTerm "prelude__[]" []] -> do
               eq <- equal x v
@@ -908,10 +859,10 @@ typePredicateTests =
         len @?= 1
         assertBool "list element should be same variable" sameVar,
       testCase "term_variables: two distinct vars in order" $ do
-        (len, eq1, eq2) <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
+        (len, eq1, eq2) <- runChrBase $ do
           x <- newVar
           y <- newVar
-          result <- callTermVarsEff (VTerm "f" [x, y])
+          result <- callTermVarsChr (VTerm "f" [x, y])
           case result of
             VTerm "prelude__." [a, VTerm "prelude__." [b, VTerm "prelude__[]" []]] -> do
               e1 <- equal a x
@@ -922,16 +873,15 @@ typePredicateTests =
         assertBool "first element should be X" eq1
         assertBool "second element should be Y" eq2,
       testCase "term_variables: wildcard produces fresh var" $ do
-        result <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
-          callTermVarsEff VWildcard
+        result <- runChrBase $ callTermVarsChr VWildcard
         case result of
           VTerm "prelude__." [_, VTerm "prelude__[]" []] -> pure ()
           _ -> assertFailure "expected singleton list",
       testCase "term_variables: nested compound" $ do
-        (len, eq1, eq2) <- runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ do
+        (len, eq1, eq2) <- runChrBase $ do
           x <- newVar
           y <- newVar
-          result <- callTermVarsEff (VTerm "f" [VTerm "g" [x, VInt 1], y])
+          result <- callTermVarsChr (VTerm "f" [VTerm "g" [x, VInt 1], y])
           case result of
             VTerm "prelude__." [a, VTerm "prelude__." [b, VTerm "prelude__[]" []]] -> do
               e1 <- equal a x
@@ -952,9 +902,7 @@ typePredicateTests =
     callUnifiable a b = case Map.lookup (Name "unifiable") baseHostCallRegistry of
       Nothing -> assertFailure "unifiable not found in registry"
       Just (HostCallFn f) -> do
-        result <-
-          runEff . runUnify . runCHRStore [] . evalState @CallStack [] $
-            f [a, b]
+        result <- runChrEmpty (f [a, b])
         case result of
           VBool b' -> pure b'
           _ -> assertFailure "unifiable: expected Bool result"
@@ -963,12 +911,10 @@ typePredicateTests =
 -- =.. (univ) tests
 -- ---------------------------------------------------------------------------
 
--- | Call a host call by name, passing a single Value argument.
 callHostCall1 :: Name -> Value -> IO Value
 callHostCall1 name v = case Map.lookup name baseHostCallRegistry of
   Nothing -> assertFailure $ "host call not found: " ++ show name
-  Just (HostCallFn f) ->
-    runEff . runUnify . runCHRStore [] . evalState @CallStack [] $ f [v]
+  Just (HostCallFn f) -> runChrEmpty (f [v])
 
 univTests :: TestTree
 univTests =

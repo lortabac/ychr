@@ -1,65 +1,32 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 
 -- | Propagation history for the CHR Haskell runtime.
 --
 -- Tracks which rule has fired with which combination of constraint
 -- identifiers, to prevent redundant re-firing of propagation rules.
 module YCHR.Runtime.History
-  ( -- * Effect
-    PropHistory,
-    runPropHistory,
-
-    -- * Operations
-    addHistory,
+  ( addHistory,
     notInHistory,
   )
 where
 
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Reader (ask)
 import Data.IORef
-import Data.Set (Set)
 import Data.Set qualified as Set
-import Effectful
-import Effectful.Dispatch.Static
-import YCHR.Runtime.Types (SuspensionId (..))
+import YCHR.Runtime.Monad (Chr, SessionEnv (..))
+import YCHR.Runtime.Types (SuspensionId)
 import YCHR.VM (RuleId)
 
--- ---------------------------------------------------------------------------
--- Effect
--- ---------------------------------------------------------------------------
-
-data PropHistory :: Effect
-
-type instance DispatchOf PropHistory = Static WithSideEffects
-
-newtype instance StaticRep PropHistory
-  = PropHistoryRep (IORef (Set (RuleId, [SuspensionId])))
-
--- | Run a computation that uses 'PropHistory', starting with an empty history.
-runPropHistory :: (IOE :> es) => Eff (PropHistory : es) a -> Eff es a
-runPropHistory m = do
-  ref <- liftIO $ newIORef Set.empty
-  evalStaticRep (PropHistoryRep ref) m
-
--- ---------------------------------------------------------------------------
--- Operations
--- ---------------------------------------------------------------------------
-
--- | Read the underlying mutable history reference from the effect environment.
-getRef :: (PropHistory :> es) => Eff es (IORef (Set (RuleId, [SuspensionId])))
-getRef = do
-  PropHistoryRep ref <- getStaticRep
-  pure ref
-
 -- | Record that a rule has fired with the given constraint identifiers.
-addHistory :: (PropHistory :> es) => RuleId -> [SuspensionId] -> Eff es ()
+addHistory :: RuleId -> [SuspensionId] -> Chr ()
 addHistory ruleId ids = do
-  ref <- getRef
-  unsafeEff_ $ modifyIORef' ref (Set.insert (ruleId, ids))
+  SessionEnv {history} <- ask
+  liftIO $ modifyIORef' history (Set.insert (ruleId, ids))
 
 -- | Check that a rule has /not/ fired with the given constraint identifiers.
 -- Returns 'True' if the entry is absent (i.e. the rule may fire).
-notInHistory :: (PropHistory :> es) => RuleId -> [SuspensionId] -> Eff es Bool
+notInHistory :: RuleId -> [SuspensionId] -> Chr Bool
 notInHistory ruleId ids = do
-  ref <- getRef
-  unsafeEff_ $ Set.notMember (ruleId, ids) <$> readIORef ref
+  SessionEnv {history} <- ask
+  liftIO $ Set.notMember (ruleId, ids) <$> readIORef history
