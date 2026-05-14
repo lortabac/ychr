@@ -4,9 +4,11 @@
 --
 -- Owns all REPL UI: outer command loop (one-off queries plus colon
 -- commands like @:list_declarations@), live-session loop (persistent
--- constraint store between queries, exit with @:end@), haskeline
--- 'Settings' (history file, tab completions, prompts), and the help
--- text. Only 'runRepl' is exported; everything else is internal.
+-- constraint store between queries, exit with @:end@), prompts, and
+-- the help text. Line input (history, tab completion, EOF handling)
+-- is delegated to 'YCHR.LineInput', whose implementation differs
+-- between GHC (haskeline) and MicroHS (bare 'getLine'). Only
+-- 'runRepl' is exported; everything else is internal.
 module YCHR.Repl
   ( runRepl,
   )
@@ -16,31 +18,17 @@ import Control.Exception (SomeException, displayException, fromException, try)
 import Control.Monad (unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask, runReaderT)
-import Data.List (intercalate, isPrefixOf, sort)
+import Data.List (intercalate, sort)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import System.Console.Haskeline
-  ( Completion (isFinished),
-    InputT,
-    Settings (complete, historyFile),
-    completeWord,
-    defaultSettings,
-    getInputLine,
-    outputStr,
-    outputStrLn,
-    runInputT,
-    simpleCompletion,
-  )
-import System.Console.Haskeline.Completion (CompletionFunc)
-import System.Directory (XdgDirectory (..), createDirectoryIfMissing, getXdgDirectory)
 import System.Exit (exitFailure)
-import System.FilePath (takeDirectory)
 import System.IO (hPutStr, hPutStrLn, stderr)
 import YCHR.Desugared qualified as D
 import YCHR.Display (Display (..), displayMsg)
+import YCHR.LineInput (LineInput (..), LineInputSettings (..), mkLineInput)
 import YCHR.PExpr qualified as P
 import YCHR.Parsed qualified as Parsed
 import YCHR.Parser (opTableEntries)
@@ -83,13 +71,20 @@ runRepl hostCalls quietMode werror files = do
       when (warnsFatal || not quietMode) (printWarnings warnings)
       when warnsFatal exitFailure
       unless quietMode (printTypeErrors prog)
-      histFile <- getXdgDirectory XdgData "ychr/history"
-      createDirectoryIfMissing True (takeDirectory histFile)
       let exported = exportedNames prog
-          baseSettings = (defaultSettings :: Settings IO) {historyFile = Just histFile}
-          outerSettings = baseSettings {complete = matchAgainst (commandNames ++ exported)}
-          liveSettings = baseSettings {complete = matchAgainst (":end" : exported)}
-      runInputT outerSettings (outerLoop hostCalls quietMode werror files liveSettings prog)
+      outerInput <-
+        mkLineInput
+          LineInputSettings
+            { historyFile = Just "ychr/history",
+              completionCandidates = commandNames ++ exported
+            }
+      liveInput <-
+        mkLineInput
+          LineInputSettings
+            { historyFile = Just "ychr/history",
+              completionCandidates = ":end" : exported
+            }
+      outerLoop hostCalls quietMode werror files outerInput liveInput prog
 
 -- ---------------------------------------------------------------------------
 -- Outer REPL loop
@@ -100,14 +95,15 @@ outerLoop ::
   Bool ->
   Bool ->
   [FilePath] ->
-  Settings IO ->
+  LineInput ->
+  LineInput ->
   CompiledProgram ->
-  InputT IO ()
-outerLoop hostCalls quietMode werror files liveSettings = go
+  IO ()
+outerLoop hostCalls quietMode werror files outerInput liveInput = go
   where
     prompt = if quietMode then "" else "ychr> "
     go prog = do
-      minput <- getInputLine prompt
+      minput <- outerInput.readLine prompt
       case minput of
         Nothing -> pure ()
         Just input -> dispatch prog input
@@ -123,25 +119,25 @@ outerLoop hostCalls quietMode werror files liveSettings = go
       ":list_declarations" -> showDeclarations prog *> go prog
       ":list_operators" -> showOperators prog *> go prog
       ":begin" -> do
-        liftIO (runLiveSession hostCalls liveSettings quietMode werror prog)
+        runLiveSession hostCalls liveInput quietMode werror prog
         go prog
       "" -> go prog
       line -> runOuterQuery hostCalls werror prog line *> go prog
     recompile prog = do
-      result <- liftIO (compileFiles True files)
+      result <- compileFiles True files
       case result of
-        Left err -> outputStr (displayMsg err) *> go prog
+        Left err -> putStr (displayMsg err) *> go prog
         Right (prog', warnings)
           | werror && not (null warnings) -> do
-              liftIO (printWarnings warnings)
+              printWarnings warnings
               -- Surface type errors of the rejected program too, so the
               -- user sees the full diagnostic picture before deciding
               -- what to fix; the previous program stays loaded.
-              liftIO (printTypeErrors prog')
+              printTypeErrors prog'
               go prog
           | otherwise -> do
-              liftIO (printWarnings warnings)
-              liftIO (printTypeErrors prog')
+              printWarnings warnings
+              printTypeErrors prog'
               go prog'
 
 -- | Run a one-off query in the outer REPL: parse, typecheck, execute
@@ -150,29 +146,27 @@ outerLoop hostCalls quietMode werror files liveSettings = go
 -- @"Error: " ++ displayException@. Under @--Werror@, query-rename
 -- warnings short-circuit before execution; the constraint store is
 -- untouched (one-shot queries get a fresh store anyway).
-runOuterQuery :: HostCallRegistry -> Bool -> CompiledProgram -> String -> InputT IO ()
+runOuterQuery :: HostCallRegistry -> Bool -> CompiledProgram -> String -> IO ()
 runOuterQuery hostCalls werror prog line = do
   prepResult <-
-    liftIO $
-      try @SomeException $
-        prepareQuery prog (T.pack line)
+    try @SomeException $
+      prepareQuery prog (T.pack line)
   case prepResult of
     Left exc -> reportException exc
     Right (prep, ws) -> do
-      liftIO (printWarnings ws)
+      printWarnings ws
       unless (werror && not (null ws)) $ do
         execResult <-
-          liftIO $
-            try @SomeException $
-              withCHRExtra (toSessionInput prog) hostCalls prep.extraProcs $
-                executePreparedQuery prep.liftedGoals
+          try @SomeException $
+            withCHRExtra (toSessionInput prog) hostCalls prep.extraProcs $
+              executePreparedQuery prep.liftedGoals
         case execResult of
           Left exc -> reportException exc
-          Right bindings -> outputStr (prettyQueryResult bindings)
+          Right bindings -> putStr (prettyQueryResult bindings)
   where
     reportException exc = case fromException exc of
-      Just err -> outputStr (displayMsg (err :: Error))
-      Nothing -> outputStrLn ("Error: " ++ displayException exc)
+      Just err -> putStr (displayMsg (err :: Error))
+      Nothing -> putStrLn ("Error: " ++ displayException exc)
 
 -- ---------------------------------------------------------------------------
 -- Live REPL session
@@ -185,18 +179,18 @@ runOuterQuery hostCalls werror prog line = do
 -- hits EOF, or a runtime error aborts execution.
 runLiveSession ::
   HostCallRegistry ->
-  Settings IO ->
+  LineInput ->
   Bool ->
   Bool ->
   CompiledProgram ->
   IO ()
-runLiveSession hostCalls settings quietMode werror cp =
+runLiveSession hostCalls liveInput quietMode werror cp =
   withCHR (toSessionInput cp) hostCalls liveLoop
   where
     prompt = if quietMode then "" else "ychr live> "
     liveLoop :: Chr ()
     liveLoop = do
-      mline <- liftIO (runInputT settings (getInputLine prompt))
+      mline <- liftIO (liveInput.readLine prompt)
       case mline of
         Nothing -> pure ()
         Just line -> dispatch line
@@ -306,10 +300,10 @@ commandNames = concatMap (\c -> c.names) commands
 -- Command handlers
 -- ---------------------------------------------------------------------------
 
-showHelp :: InputT IO ()
+showHelp :: IO ()
 showHelp = do
-  outputStrLn "Commands:"
-  mapM_ (outputStrLn . renderCommand) commands
+  putStrLn "Commands:"
+  mapM_ (putStrLn . renderCommand) commands
   where
     -- Align descriptions at column 25 to match the original layout.
     renderCommand c =
@@ -317,15 +311,15 @@ showHelp = do
           padding = replicate (max 1 (23 - length label)) ' '
        in "  " ++ label ++ padding ++ c.description
 
-showFiles :: [FilePath] -> InputT IO ()
-showFiles = mapM_ outputStrLn
+showFiles :: [FilePath] -> IO ()
+showFiles = mapM_ putStrLn
 
-showModules :: CompiledProgram -> InputT IO ()
+showModules :: CompiledProgram -> IO ()
 showModules prog =
-  mapM_ (\(Parsed.Module {name = n}) -> outputStrLn (T.unpack n)) prog.allModules
+  mapM_ (\(Parsed.Module {name = n}) -> putStrLn (T.unpack n)) prog.allModules
 
-showDeclarations :: CompiledProgram -> InputT IO ()
-showDeclarations prog = mapM_ outputStrLn declLines
+showDeclarations :: CompiledProgram -> IO ()
+showDeclarations prog = mapM_ putStrLn declLines
   where
     declLines =
       [ renderDecl kw m.name n a
@@ -355,8 +349,8 @@ showDeclarations prog = mapM_ outputStrLn declLines
         ++ show arity
         ++ "."
 
-showOperators :: CompiledProgram -> InputT IO ()
-showOperators prog = mapM_ (outputStrLn . renderOp) entries
+showOperators :: CompiledProgram -> IO ()
+showOperators prog = mapM_ (putStrLn . renderOp) entries
   where
     entries = sort [(fix, opTypeStr ty, name) | (fix, ty, name) <- opTableEntries prog.opTable]
     renderOp (fix, ty, name) =
@@ -371,20 +365,8 @@ showOperators prog = mapM_ (outputStrLn . renderOp) entries
       P.Yf -> "yf"
 
 -- ---------------------------------------------------------------------------
--- Completion and reporting helpers
+-- Reporting helpers
 -- ---------------------------------------------------------------------------
-
--- | Build a completion function that matches a fixed list of
--- candidates by prefix. Word boundaries are space and comma, matching
--- how a constraint conjunction is written.
-matchAgainst :: [String] -> CompletionFunc IO
-matchAgainst candidates =
-  completeWord Nothing " ," $ \prefix ->
-    pure $
-      [ (simpleCompletion n) {isFinished = False}
-      | n <- candidates,
-        prefix `isPrefixOf` n
-      ]
 
 -- | Sorted list of unqualified exported constraint names from a
 -- compiled program. Used as completion candidates in both modes.
