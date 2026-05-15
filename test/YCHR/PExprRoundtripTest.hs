@@ -26,6 +26,21 @@ testOps =
       (700, [(Xfx, "is")])
     ]
 
+-- | Operator table covering every fixity kind, including postfix.
+--
+-- '**' (Yf) is chosen as a symbol token disjoint from '*' under
+-- the parser's greedy longest-match rule, so 'X * Y' and 'X **'
+-- remain unambiguous.
+fullOps :: OpTable
+fullOps =
+  mkOpTable
+    [ (200, [(Yfx, "*"), (Yfx, "/")]),
+      (300, [(Yfx, "+"), (Yfx, "-")]),
+      (500, [(Fx, "~")]),
+      (700, [(Xfx, "is")]),
+      (250, [(Xf, "!"), (Yf, "**")])
+    ]
+
 -- ---------------------------------------------------------------------------
 -- Generators
 -- ---------------------------------------------------------------------------
@@ -70,6 +85,38 @@ genVar = do
   rest <- Gen.list (Range.linear 0 4) (Gen.choice [Gen.alphaNum, pure '_'])
   pure (Text.pack (c : rest))
 
+-- | Generate a Double whose Haskell 'show' does not use scientific
+-- notation (so the parser, which only accepts @digit+ '.' digit+@,
+-- can roundtrip it).  Discards values whose show contains an 'e'/'E';
+-- with magnitudes mostly in [1, 1000] the rejection rate is negligible.
+genFloat :: Gen Double
+genFloat = Gen.filter showsDecimal $ do
+  whole <- Gen.int (Range.linearFrom 0 (-1000) 1000)
+  fracLen <- Gen.int (Range.linear 1 6)
+  fracDigits <- Gen.list (Range.singleton fracLen) (Gen.element ['0' .. '9'])
+  pure (read (show whole ++ "." ++ fracDigits) :: Double)
+  where
+    showsDecimal d =
+      let s = show d
+       in 'e' `notElem` s && 'E' `notElem` s
+
+-- | Build a lambda PExpr from a sub-generator: up to three params and a
+-- body, both drawn from @sub@.  The resulting shape is what the
+-- pretty-printer emits as @fun(...) -> ... end@ and what 'lambdaP'
+-- recognises on parse.
+genLambda :: Gen PExpr -> Gen PExpr
+genLambda sub = do
+  paramCount <- Gen.int (Range.linear 0 3)
+  params <- Gen.list (Range.singleton paramCount) sub
+  body <- sub
+  pure
+    ( Compound
+        "->"
+        [ noAnn (Compound "fun" (map noAnn params)),
+          noAnn body
+        ]
+    )
+
 -- | Generate a string literal body.
 genStringContent :: Gen Text
 genStringContent =
@@ -90,6 +137,7 @@ genPExpr =
     -- Base cases
     [ Var <$> genVar,
       Int <$> Gen.int (Range.linear (-1000) 1000),
+      Float <$> genFloat,
       Atom <$> genAtom,
       Str <$> genStringContent,
       pure Wildcard,
@@ -114,7 +162,9 @@ genPExpr =
         pure (foldr (\h t -> Compound "." [noAnn h, noAnn t]) nil elems),
       -- Head|Tail list
       Gen.subtermM2 genPExpr genPExpr $ \h t ->
-        pure (Compound "." [noAnn h, noAnn t])
+        pure (Compound "." [noAnn h, noAnn t]),
+      -- Lambda
+      genLambda genPExpr
     ]
 
 -- | Generate a PExpr that may contain operator-shaped compounds.
@@ -125,6 +175,7 @@ genPExprWithOps =
     -- Base cases (same as genPExpr)
     [ Var <$> genVar,
       Int <$> Gen.int (Range.linear (-1000) 1000),
+      Float <$> genFloat,
       Atom <$> genAtom,
       Str <$> genStringContent,
       pure Wildcard,
@@ -147,7 +198,46 @@ genPExprWithOps =
       -- List
       do
         elems <- Gen.list (Range.linear 1 3) genPExprWithOps
-        pure (foldr (\h t -> Compound "." [noAnn h, noAnn t]) (Atom "[]") elems)
+        pure (foldr (\h t -> Compound "." [noAnn h, noAnn t]) (Atom "[]") elems),
+      -- Lambda
+      genLambda genPExprWithOps
+    ]
+
+-- | Generate a PExpr covering the full grammar: operator expressions,
+-- postfix ops, lambdas, lists, floats, and the base atoms/vars/strings.
+genPExprFull :: Gen PExpr
+genPExprFull =
+  Gen.recursive
+    Gen.choice
+    [ Var <$> genVar,
+      Int <$> Gen.int (Range.linear (-1000) 1000),
+      Float <$> genFloat,
+      Atom <$> genAtom,
+      Str <$> genStringContent,
+      pure Wildcard,
+      pure (Atom "[]")
+    ]
+    [ Gen.subtermM genPExprFull $ \t -> do
+        f <- genSafeAtom
+        pure (Compound f [noAnn t]),
+      Gen.subtermM2 genPExprFull genPExprFull $ \t1 t2 -> do
+        f <- genSafeAtom
+        pure (Compound f [noAnn t1, noAnn t2]),
+      Gen.subtermM2 genPExprFull genPExprFull $ \l r -> do
+        op <- Gen.element ["+", "-", "*", "/", "is"]
+        pure (Compound op [noAnn l, noAnn r]),
+      Gen.subtermM genPExprFull $ \x ->
+        pure (Compound "~" [noAnn x]),
+      -- Xf postfix
+      Gen.subtermM genPExprFull $ \x ->
+        pure (Compound "!" [noAnn x]),
+      -- Yf postfix
+      Gen.subtermM genPExprFull $ \x ->
+        pure (Compound "**" [noAnn x]),
+      do
+        elems <- Gen.list (Range.linear 1 3) genPExprFull
+        pure (foldr (\h t -> Compound "." [noAnn h, noAnn t]) (Atom "[]") elems),
+      genLambda genPExprFull
     ]
 
 -- ---------------------------------------------------------------------------
@@ -183,7 +273,8 @@ tests =
   testGroup
     "YCHR.PExpr.Roundtrip"
     [ testProperty "roundtrip without operators" (prop_roundtrip emptyOps genPExpr),
-      testProperty "roundtrip with operators" (prop_roundtrip testOps genPExprWithOps)
+      testProperty "roundtrip with operators" (prop_roundtrip testOps genPExprWithOps),
+      testProperty "roundtrip with full grammar" (prop_roundtrip fullOps genPExprFull)
     ]
   where
     emptyOps = mkOpTable []
