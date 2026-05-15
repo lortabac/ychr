@@ -23,8 +23,6 @@ GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden")
 HASKELL_ONLY = {
     # read_term_from_string is a stub on the Scheme runtime.
     "read_term_test",
-    # Mangled constructor pretty-printing differs.
-    "typecheck_constructor_in_lambda_body",
     # write_store_to_list is a Haskell-only meta host call; no Scheme
     # implementation exists yet (parallels print_store).
     "write_store_to_list_test",

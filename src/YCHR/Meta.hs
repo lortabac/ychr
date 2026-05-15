@@ -47,13 +47,20 @@ valueToTerm aliases v = do
     VTerm "prelude__[]" [] -> pure (AtomTerm "[]")
     VTerm "prelude__." ts ->
       CompoundTerm (Types.Unqualified ".") <$> traverse (valueToTerm aliases) ts
-    -- A 0-arity term whose functor contains @__@ is the runtime form
-    -- of a qualified atom (see 'YCHR.Compile.compileTerm'). Split on
-    -- the first @__@ so the pretty-printer renders it as @m:n@.
-    VTerm f []
+    -- A term whose functor contains @__@ is the runtime form of a
+    -- qualified atom or constructor (see 'YCHR.Compile.compileTerm',
+    -- which emits the mangled form @m__n@ as a single VM-level functor
+    -- regardless of arity). Split on the first @__@ at position ≥ 1 so
+    -- the pretty-printer renders it as @m:n@. The non-empty-prefix
+    -- check rejects symbols that begin with @__@ (e.g. unicode escapes
+    -- @__uXXXX__@ or bare internal names) — those keep flowing through
+    -- as @Unqualified@.
+    VTerm f ts
       | (m, rest) <- T.breakOn "__" f,
+        not (T.null m),
         not (T.null rest) ->
-          pure (CompoundTerm (Types.Qualified m (T.drop 2 rest)) [])
+          CompoundTerm (Types.Qualified m (T.drop 2 rest))
+            <$> traverse (valueToTerm aliases) ts
     VTerm f ts -> CompoundTerm (Types.Unqualified f) <$> traverse (valueToTerm aliases) ts
     VVar _ -> do
       mvid <- getVarId v'

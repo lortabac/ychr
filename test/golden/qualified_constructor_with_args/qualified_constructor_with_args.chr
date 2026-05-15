@@ -1,0 +1,17 @@
+:- module(qc, [run/2, type(pair/2), type(maybe/1)]).
+:- use_module(prelude).
+:- chr_constraint run/2.
+
+:- chr_type pair(A, B) ---> mkpair(A, B).
+:- chr_type maybe(T)   ---> just(T) ; nothing.
+
+% Regression: qualified n-arity data constructors used outside of a
+% lambda body must still pretty-print as `module:name(args)`, not as
+% the mangled `'module__name'(args)`. Exercises valueToTerm's split
+% on the first `__` for compound terms whose arg list is non-empty.
+:- function (wrap(int) -> maybe(int)).
+:- function (paired(int, maybe(int)) -> pair(int, maybe(int))).
+wrap(X)      -> just(X).
+paired(X, Y) -> mkpair(X, Y).
+
+run(N, R) <=> R is paired(N, wrap(N)).

@@ -39,25 +39,6 @@ logic as `renderAtom` — bare lowercase + alphanumeric + underscore stays
 unquoted, anything else gets `'…'` with embedded `'` doubled.
 
 
-## Lambda-body constructor leaks mangled name (Haskell-side)
-
-All cases under `typecheck_constructor_in_lambda_body` are skipped via
-`HASKELL_ONLY`. The `.expected` files pin `R = 'tc__just'(0)`. After
-the qualified-name unmangle pass landed in `pretty.sls`, the Scheme
-backend now prints `R = tc:just(0)` for the same goal — the *correct*
-qualified-atom rendering. The Haskell interpreter still produces
-`'tc__just'(0)`, meaning the lambda-lifting / constructor-handling path
-in `src/YCHR/Desugar.hs` (or downstream) is leaking the mangled name as
-an `Unqualified` atom rather than keeping it as `Qualified tc just`.
-The quoting on the Haskell side is incidental — it kicks in because
-`tc__just` contains `__`, which is illegal in an unquoted atom.
-
-**Fix sketch:** trace where the constructor reference inside the
-lifted lambda body loses its qualified form. Once that is corrected,
-both backends will print `tc:just(0)` and the `.expected` files can be
-updated, then the entry removed from `HASKELL_ONLY`.
-
-
 ## `ground/1` in goal queries with nested unbound vars
 
 The case `("type_predicates", "grd_no")` runs the goal
@@ -101,6 +82,19 @@ record of which fixes have already shipped.
   matches because the underlying `Equal` VM expression already routes
   through `equal?/chr`, and the equality fix above means flonum-flonum
   compares structurally.
+- **Qualified n-arity constructor leaked mangled name (Haskell side)**
+  — `valueToTerm` in `src/YCHR/Meta.hs` only unmangled the runtime
+  functor `m__n` back into `Qualified m n` for **0-arity** terms; any
+  `VTerm "m__n" (x:_)` fell through to `Unqualified "m__n"`, so a
+  qualified constructor like `just(X)` (whether produced directly by
+  the interpreter or via a lifted lambda body) pretty-printed as
+  `'mod__just'(X)` instead of `mod:just(X)`. Fixed by extending the
+  split to any arity, guarded by a non-empty module prefix so unicode
+  escapes (`__uXXXX__`) and internal names starting with `__` still
+  flow through as `Unqualified`. Closed `HASKELL_ONLY` entry for
+  `typecheck_constructor_in_lambda_body`; `.expected` files updated
+  from `'tc__just'(N)` to `tc:just(N)`. Regression locked by
+  `test/golden/qualified_constructor_with_args/` (non-lambda path).
 - **Qualified-name separator (`__` vs `:`)** — `pretty-term` in
   `scheme/ychr/pretty.sls` now unmangles `module__name` back to
   `module:name` on output (via `unmangle-qualified`, splitting on the

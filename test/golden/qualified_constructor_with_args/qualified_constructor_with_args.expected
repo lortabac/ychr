@@ -1,0 +1,1 @@
+R = qc:mkpair(5, qc:just(5))

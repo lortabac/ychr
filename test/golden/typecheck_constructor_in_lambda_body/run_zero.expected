@@ -1,1 +1,1 @@
-R = 'tc__just'(0)
+R = tc:just(0)
