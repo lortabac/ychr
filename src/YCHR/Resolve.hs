@@ -4,8 +4,7 @@
 --
 -- Flattens @[P.Module]@ into a single 'R.Program', grouping function
 -- equations under their declarations and verifying that declaration
--- kinds are used consistently. Replaces the former @YCHR.Validate@
--- pass with a transformation: the output is valid by construction.
+-- kinds are used consistently.
 module YCHR.Resolve
   ( ResolveError (..),
     resolveProgram,
