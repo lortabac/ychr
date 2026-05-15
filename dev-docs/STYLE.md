@@ -5,8 +5,7 @@ practices already universal in `src/`; treat the rules as defaults with
 rationale, not as obligations. Deviating is fine when there's a reason — but
 the reason should be explicit (a comment, a `Note`, a commit message).
 
-For project architecture, see `PROJECT.md`. For formatting, see the Reminders
-section of `CLAUDE.md` (`ormolu -i $(find src test -name '*.hs')`).
+For project architecture, see `PROJECT.md`.
 
 ## Simplicity over cleverness
 
@@ -124,13 +123,7 @@ Avoid features that pay a large compile-time cost unless the payoff is clear.
 `Generic` and `DeriveGeneric` are absent from `src/` for this reason; reach
 for explicit instances or small helper functions instead.
 
-`TypeFamilies` is the standard way to declare an effect's dispatch
-(`type instance DispatchOf E = Static WithSideEffects`) — that use is fine
-and won't show up in profiles. Avoid type families in domain logic, where the
-same problem usually has a simpler solution with ordinary data types.
-
-Template Haskell is allowed where it genuinely earns its keep (the type
-checker uses it), but treat it as a last resort.
+Avoid type families.
 
 ## Formatting
 
@@ -140,8 +133,6 @@ committing:
 ```
 ormolu -i $(find src test -name '*.hs')
 ```
-
-This is also listed in `CLAUDE.md` alongside the test and benchmark commands.
 
 Keep lines to roughly 90 characters or fewer. `ormolu` does not enforce a hard
 limit, so this is on the author: break long expressions, signatures, and
