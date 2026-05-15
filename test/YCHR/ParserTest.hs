@@ -11,6 +11,7 @@ import Text.Parsec (ParseError)
 import YCHR.Parsed
 import YCHR.Parser
   ( ModuleHeader (..),
+    ParseValidationError (..),
     builtinOps,
     collectModuleHeader,
     mergeOps,
@@ -25,6 +26,7 @@ tests =
     [ directiveTests,
       termTests,
       negativeIntTests,
+      floatLiteralTests,
       operatorTests,
       ruleTests,
       typeTests,
@@ -37,6 +39,11 @@ tests =
 -- | Parse a source string with no filename.
 p :: Text -> Either (ParseError) Module
 p src = fst <$> parseModule "" src
+
+-- | Parse and return only the validation errors, with each error's
+-- variant extracted (location/origin discarded).
+pErrs :: Text -> Either (ParseError) [ParseValidationError]
+pErrs src = map (.node) . snd <$> parseModule "" src
 
 -- | Strip source locations from a Rule for structural comparison.
 stripRuleLoc :: Rule -> Rule
@@ -138,6 +145,24 @@ directiveTests =
         fmap (.node) . (.exports)
           <$> p ":- module(m, [type(foo/0, [])])."
           @?= Right (Just [TypeExportDecl "foo" 0 (Just [])]),
+      testCase "non-list constructor argument is rejected" $ do
+        fmap (.node) . (.exports)
+          <$> p ":- module(m, [type(foo/0, oops)])."
+          @?= Right (Just [])
+        pErrs ":- module(m, [type(foo/0, oops)])."
+          @?= Right [MalformedExportItem],
+      testCase "non-atom in constructor list is rejected" $ do
+        -- One non-atom element (Node is a variable) drops the whole
+        -- TypeExportDecl and emits one MalformedExportItem per bad
+        -- element.
+        fmap (.node) . (.exports)
+          <$> p ":- module(m, [type(foo/0, [bar, Node])])."
+          @?= Right (Just [])
+        pErrs ":- module(m, [type(foo/0, [bar, Node])])."
+          @?= Right [MalformedExportItem],
+      testCase "multiple bad elements report multiple errors" $
+        pErrs ":- module(m, [type(foo/0, [X, Y])])."
+          @?= Right [MalformedExportItem, MalformedExportItem],
       testCase "unknown directive is skipped" $
         (map (.node) . (.decls)) <$> p ":- dynamic foo/1.\n:- chr_constraint leq/2."
           @?= Right [ConstraintDecl "leq" 2 Nothing Nothing],
@@ -272,6 +297,31 @@ negativeIntTests =
       testCase "negative zero" $
         bodyOf "c <=> f(-0)."
           >>= (@?= [CompoundTerm (Unqualified "f") [IntTerm 0]])
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Float literals
+-- ---------------------------------------------------------------------------
+
+floatLiteralTests :: TestTree
+floatLiteralTests =
+  testGroup
+    "float literals"
+    [ testCase "positive float in body" $
+        bodyOf "c <=> f(3.14)."
+          >>= (@?= [CompoundTerm (Unqualified "f") [FloatTerm 3.14]]),
+      testCase "negative float in body" $
+        bodyOf "c <=> f(-2.5)."
+          >>= (@?= [CompoundTerm (Unqualified "f") [FloatTerm (-2.5)]]),
+      testCase "float in constraint argument" $
+        headOf "c(1.5, X) <=> true."
+          >>= ( @?=
+                  Simplification
+                    [Constraint (Unqualified "c") [FloatTerm 1.5, VarTerm "X"]]
+              ),
+      testCase "zero float" $
+        bodyOf "c <=> f(0.0)."
+          >>= (@?= [CompoundTerm (Unqualified "f") [FloatTerm 0.0]])
     ]
 
 -- ---------------------------------------------------------------------------

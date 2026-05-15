@@ -30,6 +30,7 @@ module YCHR.Parsed
     -- * Annotated parsed node
     AnnP (..),
     noAnnP,
+    noAnnPAt,
 
     -- * Program structure
     Module (..),
@@ -79,6 +80,12 @@ data AnnP a = AnnP
 -- Useful for constructing values in tests where provenance is irrelevant.
 noAnnP :: a -> AnnP a
 noAnnP x = AnnP x dummyLoc (Atom "")
+
+-- | Wrap a node with a real source location but a dummy parsed origin.
+-- Used by the parser to synthesize annotations (e.g. empty guard lists)
+-- that have a meaningful location but no underlying surface 'PExpr'.
+noAnnPAt :: SourceLoc -> a -> AnnP a
+noAnnPAt loc x = AnnP x loc (Atom "")
 
 data Import
   = ModuleImport Text (Maybe [Declaration])

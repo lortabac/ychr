@@ -59,6 +59,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as Text
 import Text.Parsec (ParseError)
 import YCHR.PExpr (PExpr (Atom, Compound, Str, Var))
 import YCHR.PExpr qualified as P
@@ -200,31 +201,38 @@ parseQuery ::
 parseQuery = parseQueryWith builtinOps
 
 -- | Parse a query with a custom operator table.
+--
+-- The terminating @.@ is optional: if @src@ (with trailing whitespace
+-- stripped) ends in a dot, the dot-terminated parser is used; otherwise
+-- the non-terminated one. Picking the parser up front (rather than
+-- retrying on failure) keeps the parse error message attached to the
+-- right phase — a missing or extra dot is no longer reported as a
+-- term-shape error.
 parseQueryWith ::
   OpTable ->
   String ->
   Text ->
   Either (ParseError) [Term]
 parseQueryWith table sourceName src =
-  -- Try with dot terminator first, then without.
-  case P.parseTerm table sourceName src of
-    Right term -> Right (map convertTerm (flattenComma term))
-    Left _ -> do
-      term <- P.parseTermNoDot table sourceName src
-      pure (map convertTerm (flattenComma term))
+  let parser = if dotTerminated then P.parseTerm else P.parseTermNoDot
+   in map convertTerm . flattenComma <$> parser table sourceName src
+  where
+    trimmed = Text.stripEnd src
+    dotTerminated = not (Text.null trimmed) && Text.last trimmed == '.'
 
 -- | Parse a single CHR rule from surface-language 'Text'.
 --
--- The outer 'Left' is a parsec parse error; the second component of
--- the 'Right' is a list of 'ParseValidationError's collected while
--- converting the rule (currently only 'MalformedConstraint' from rule
--- heads).
+-- The outer 'Left' is a parsec parse error. On parse success, the
+-- 'Maybe' is 'Nothing' if the parsed term is not a rule shape (a
+-- 'MalformedTopLevel' error is emitted in that case); otherwise it
+-- contains the parsed 'Rule' and any 'MalformedConstraint' errors
+-- collected from its head.
 --
 -- The source name (first argument) is used in error messages only.
 parseRule ::
   String ->
   Text ->
-  Either (ParseError) (Rule, [AnnP ParseValidationError])
+  Either (ParseError) (Maybe Rule, [AnnP ParseValidationError])
 parseRule sourceName src = do
   term <- P.parseTerm builtinOps sourceName src
   pure (convertRule term)
@@ -345,7 +353,7 @@ collectModuleHeader sourceName src = do
       Compound "use_module" [imp, importList] ->
         let (more, leftover) = takeImports rest
          in case convertImportWithList loc body.node imp importList of
-              Right ann -> (ann : more, leftover)
+              Right (ann, _) -> (ann : more, leftover)
               Left _ -> (more, leftover)
       _ -> ([], all_)
     takeImports rest = ([], rest)
@@ -490,6 +498,15 @@ unfoldList (Atom "[]") = []
 unfoldList (Compound "." [h, t]) = h : unfoldList t.node
 unfoldList _ = [] -- non-proper list tail: ignore
 
+-- | Like 'unfoldList', but returns 'Nothing' for inputs that are not a
+-- proper Prolog list (i.e. that do not terminate in @[]@). Use this
+-- where a non-list argument should be rejected with a structured error
+-- rather than silently coerced to an empty list.
+unfoldListStrict :: PExpr -> Maybe [Ann PExpr]
+unfoldListStrict (Atom "[]") = Just []
+unfoldListStrict (Compound "." [h, t]) = (h :) <$> unfoldListStrict t.node
+unfoldListStrict _ = Nothing
+
 -- ** Module conversion
 
 -- | Internal directive type.
@@ -526,6 +543,37 @@ data ParseValidationError
   | -- | A constraint position contained something that is not an atom or
     -- compound term (e.g. a bare variable, integer, or string).
     MalformedConstraint
+  | -- | A declaration inside @:- chr_constraint@ / @:- function@ /
+    -- @:- open_function@ / @:- class@ / @:- open_class@ /
+    -- @:- extend_class_type@ has a shape the parser does not recognize.
+    -- The declaration is dropped.
+    MalformedDeclaration
+  | -- | An item in a @module(...)@ export list or @use_module/2@ import
+    -- list is not one of the recognized shapes (@name/arity@,
+    -- @fun name/arity@, @op(...)@, @type(...)@). The item is dropped.
+    MalformedExportItem
+  | -- | A type expression (in an argument type, return type, or bound
+    -- signature) is not a variable, atom, or compound term — typically a
+    -- stray literal or string. The enclosing declaration is dropped.
+    MalformedTypeExpr
+  | -- | A data constructor in a @:- chr_type ... ---> ...@ definition is
+    -- not an atom or compound term. The enclosing type definition is
+    -- dropped.
+    MalformedDataConstructor
+  | -- | A @:- chr_type@ directive does not have the expected
+    -- @head ---> alts@ shape. The type definition is dropped.
+    MalformedTypeDefinition
+  | -- | A bound signature inside a @requiring@ clause does not have the
+    -- expected @name(τ₁, …, τₙ) -> τᵣ@ shape. The enclosing declaration
+    -- is dropped.
+    MalformedBoundSig
+  | -- | A @:- extend_function@ / @:- extend_class@ payload, or a
+    -- top-level equation, does not have the expected
+    -- @lhs [| guard] -> rhs@ shape. The equation is dropped.
+    MalformedFunctionEquation
+  | -- | A top-level term is neither a directive, a rule
+    -- (@\<=\>@/@==\>@), nor a function equation. The item is dropped.
+    MalformedTopLevel
   | -- | A @requiring@ clause appears on a @:- class@ or
     -- @:- open_class@ declaration. @requiring@ is reserved for
     -- @:- function@ / @:- open_function@; the two forms are
@@ -541,10 +589,13 @@ data ParseValidationError
 -- | Convert a list of top-level PExpr terms to a 'Module', along with
 -- any validation errors (discontiguous equations, malformed imports,
 -- malformed constraints).
+--
+-- Items whose conversion fails entirely are dropped from the resulting
+-- module; their errors are still returned in the second component.
 convertModule :: [Ann PExpr] -> (Module, [AnnP ParseValidationError])
 convertModule terms =
   let itemResults = map convertModuleItem terms
-      items = map fst itemResults
+      items = [i | (Just i, _) <- itemResults]
       itemErrors = concatMap snd itemResults
       dirs = [d | ItemDirective d <- items]
       rules = [r | ItemRule r <- items]
@@ -638,7 +689,7 @@ checkDeclContiguity openNames = go Set.empty Set.empty
           let names = [(d.name, loc) | Ann d loc <- ds]
               nonOpenNames = [n | n <- map fst names, n `Set.notMember` openNames]
               reopened =
-                [ AnnP (DiscontiguousFunctionDecls n) loc (Atom "")
+                [ noAnnPAt loc (DiscontiguousFunctionDecls n)
                 | (n, loc) <- names,
                   n `Set.notMember` openNames,
                   n `Set.member` closed,
@@ -656,12 +707,15 @@ checkDeclContiguity openNames = go Set.empty Set.empty
     declListOf _ = Nothing
 
 -- | Classify and convert a single top-level PExpr, collecting any errors
--- raised during conversion.
-convertModuleItem :: Ann PExpr -> (ModuleItem, [AnnP ParseValidationError])
+-- raised during conversion. Returns 'Nothing' if the term does not denote
+-- a recognized top-level item; a 'MalformedTopLevel' error is emitted
+-- in that case.
+convertModuleItem ::
+  Ann PExpr -> (Maybe ModuleItem, [AnnP ParseValidationError])
 convertModuleItem expr = case expr.node of
   -- Directive: :- body
   Compound ":-" [_] ->
-    let (d, errs) = convertDirective expr in (ItemDirective d, errs)
+    let (d, errs) = convertDirective expr in (Just (ItemDirective d), errs)
   -- Named rule: name @ ...
   Compound "@" [_, Ann (Compound "<=>" _) _] -> ruleItem
   Compound "@" [_, Ann (Compound "==>" _) _] -> ruleItem
@@ -669,29 +723,32 @@ convertModuleItem expr = case expr.node of
   Compound "<=>" _ -> ruleItem
   Compound "==>" _ -> ruleItem
   -- Function equation (contains -> at top level)
-  Compound "->" _ -> (ItemEquation (convertFunctionEquation expr), [])
-  -- Fallback: try as rule
-  _ -> ruleItem
+  Compound "->" _ ->
+    let (mEq, errs) = convertFunctionEquation expr
+     in (ItemEquation <$> mEq, errs)
+  -- Anything else at top level is malformed.
+  _ -> (Nothing, [AnnP MalformedTopLevel expr.sourceLoc expr.node])
   where
-    ruleItem = let (r, errs) = convertRule expr in (ItemRule r, errs)
+    ruleItem = let (mr, errs) = convertRule expr in (ItemRule <$> mr, errs)
 
 -- ** Directive conversion
 
 -- | Convert a directive PExpr to a 'Directive', collecting any errors
--- raised during conversion (currently only from malformed @use_module@
--- arguments).
+-- raised during conversion. Malformed sub-items (declarations, equations,
+-- export items) are dropped and reported via 'ParseValidationError's.
 convertDirective :: Ann PExpr -> (Directive, [AnnP ParseValidationError])
 convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- :- module(name, [exports]).
   Compound "module" [Ann (Atom name) _, exports] ->
-    (DirModule name loc body.node (Just (map convertExportItem (unfoldList exports.node))), [])
+    let (decls, errs) = collectMaybes (map convertExportItem (unfoldList exports.node))
+     in (DirModule name loc body.node (Just decls), errs)
   -- :- module(name).  (no export list — exports everything)
   Compound "module" [Ann (Atom name) _] ->
     (DirModule name loc body.node Nothing, [])
   -- :- use_module(name).  or  :- use_module(library(name)).
   Compound "use_module" [imp, importList] ->
     case convertImportWithList loc body.node imp importList of
-      Right ann -> (DirImport ann, [])
+      Right (ann, errs) -> (DirImport ann, errs)
       Left err -> (DirOther, [err])
   Compound "use_module" [imp] ->
     case convertImport loc body.node imp of
@@ -700,61 +757,63 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   -- :- chr_constraint leq/2, fib/2.
   -- Parsed as prefix op: Compound "chr_constraint" [body]
   Compound "chr_constraint" [decls] ->
-    let pieces = flattenComma decls
-        results = map convertConstraintDecl pieces
-        decls' = map fst results
-        errs = concatMap snd results
+    let (decls', errs) = collectDecls convertConstraintDecl decls
      in (DirConstraintDecl decls', errs)
   -- :- function foo/2.  or  :- function factorial(int) -> int.
   Compound "function" [decls] ->
-    let pieces = flattenComma decls
-        results = map convertFunctionDecl pieces
-        decls' = map fst results
-        innerErrs = concatMap snd results
-     in (DirFunctionDecl decls', innerErrs)
+    let (decls', errs) = collectDecls convertFunctionDecl decls
+     in (DirFunctionDecl decls', errs)
   -- :- open_function foo/2.
   Compound "open_function" [decls] ->
-    let pieces = flattenComma decls
-        results = map convertOpenFunctionDecl pieces
-        decls' = map fst results
-        innerErrs = concatMap snd results
-     in (DirOpenFunctionDecl decls', innerErrs)
+    let (decls', errs) = collectDecls convertOpenFunctionDecl decls
+     in (DirOpenFunctionDecl decls', errs)
   -- :- class size(int) -> int.  or  :- class (size(int) -> int), (size(string) -> int).
   Compound "class" [decls] ->
-    let pieces = flattenComma decls
-        results = map convertClassDecl pieces
-        decls' = map fst results
-        innerErrs = concatMap snd results
+    let (decls', errs) = collectDecls convertClassDecl decls
         classReqErrs = requiringOnClassErrors loc body.node decls'
-     in (DirClassDecl decls', innerErrs ++ classReqErrs)
+     in (DirClassDecl decls', errs ++ classReqErrs)
   -- :- open_class size(int) -> int.
   Compound "open_class" [decls] ->
-    let pieces = flattenComma decls
-        results = map convertOpenClassDecl pieces
-        decls' = map fst results
-        innerErrs = concatMap snd results
+    let (decls', errs) = collectDecls convertOpenClassDecl decls
         classReqErrs = requiringOnClassErrors loc body.node decls'
-     in (DirOpenClassDecl decls', innerErrs ++ classReqErrs)
+     in (DirOpenClassDecl decls', errs ++ classReqErrs)
   -- :- extend_class_type (foo(int) -> int).
   Compound "extend_class_type" [decls] ->
-    let pieces = flattenComma decls
-        results = map convertExtendClassTypeDecl pieces
-        decls' = map fst results
-        errs = concatMap snd results
+    let (decls', errs) = collectDecls convertExtendClassTypeDecl decls
      in (DirExtendClassTypeDecl decls', errs)
   -- :- extend_function name(args) [| guards] -> body.
   Compound "extend_function" [eqn] ->
-    (DirExtendFunctionEqn (convertFunctionEquation eqn), [])
+    case convertFunctionEquation eqn of
+      (Just annEq, errs) -> (DirExtendFunctionEqn annEq, errs)
+      (Nothing, errs) -> (DirOther, errs)
   -- :- extend_class name(args) [| guards] -> body.
   Compound "extend_class" [eqn] ->
-    (DirExtendClassEqn (convertFunctionEquation eqn), [])
+    case convertFunctionEquation eqn of
+      (Just annEq, errs) -> (DirExtendClassEqn annEq, errs)
+      (Nothing, errs) -> (DirOther, errs)
   -- :- chr_type name ---> con1 ; con2 ; ...
   -- Parsed as prefix op: Compound "chr_type" [Compound "--->" [head, alts]]
   Compound "chr_type" [typeBody] ->
-    (DirTypeDecl [convertTypeDefinition typeBody], [])
+    case convertTypeDefinition typeBody of
+      (Just annDef, errs) -> (DirTypeDecl [annDef], errs)
+      (Nothing, errs) -> (DirOther, errs)
   -- Unknown directives (e.g. :- dynamic foo/1.)
   _ -> (DirOther, [])
 convertDirective _ = (DirOther, [])
+
+-- | Run a per-declaration converter over a comma-separated declaration
+-- list, dropping declarations that failed conversion and accumulating
+-- their errors.
+collectDecls ::
+  (Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])) ->
+  Ann PExpr ->
+  ([Ann Declaration], [AnnP ParseValidationError])
+collectDecls conv = collectMaybes . map conv . flattenComma
+
+-- | Flatten a list of @(Maybe a, errors)@ results: keep the successes,
+-- concatenate the errors.
+collectMaybes :: [(Maybe a, [e])] -> ([a], [e])
+collectMaybes results = ([a | (Just a, _) <- results], concatMap snd results)
 
 -- | Convert an import PExpr (use_module/1, imports everything).
 -- Returns 'Left' with a 'MalformedImport' error if the argument is not a
@@ -772,19 +831,24 @@ convertImport dirLoc dirPExpr (Ann pexpr loc) = case pexpr of
 
 -- | Convert an import PExpr with an explicit import list (use_module/2).
 -- Returns 'Left' with a 'MalformedImport' error if the import target is not
--- a module name or @library(name)@.
+-- a module name or @library(name)@. On success, also returns any
+-- 'MalformedExportItem' errors from items inside the import list.
 convertImportWithList ::
   SourceLoc ->
   PExpr ->
   Ann PExpr ->
   Ann PExpr ->
-  Either (AnnP ParseValidationError) (AnnP Import)
+  Either
+    (AnnP ParseValidationError)
+    (AnnP Import, [AnnP ParseValidationError])
 convertImportWithList dirLoc dirPExpr imp importList =
-  let items = map convertExportItem (unfoldList importList.node)
+  let (items, itemErrs) =
+        collectMaybes (map convertExportItem (unfoldList importList.node))
    in case imp.node of
         Compound "library" [Ann (Atom name) _] ->
-          Right (AnnP (LibraryImport name (Just items)) dirLoc dirPExpr)
-        Atom name -> Right (AnnP (ModuleImport name (Just items)) dirLoc dirPExpr)
+          Right (AnnP (LibraryImport name (Just items)) dirLoc dirPExpr, itemErrs)
+        Atom name ->
+          Right (AnnP (ModuleImport name (Just items)) dirLoc dirPExpr, itemErrs)
         _ -> Left (AnnP MalformedImport imp.sourceLoc imp.node)
 
 -- | Report a 'RequiringOnClass' error for every declaration inside a
@@ -803,252 +867,334 @@ requiringOnClassErrors loc origin decls =
       _ -> False
   ]
 
--- | Convert an export item PExpr to a 'Declaration'.
-convertExportItem :: Ann PExpr -> Declaration
-convertExportItem (Ann pexpr _) = case pexpr of
+-- | Convert an export item PExpr to a 'Declaration'. Items whose shape
+-- is not recognized are dropped with a 'MalformedExportItem' error.
+--
+-- For @type(name\/arity, [con1, …])@ the constructor list is validated
+-- strictly: a non-list argument or any non-atom element causes the
+-- entire export item to be dropped, with one 'MalformedExportItem'
+-- error per offending position. Dropping (rather than salvaging the
+-- well-formed atoms) keeps the parser uniform with the rest of the
+-- malformed-input policy, and avoids accidentally widening or
+-- narrowing the constructor allowlist relative to what the user wrote.
+convertExportItem ::
+  Ann PExpr -> (Maybe Declaration, [AnnP ParseValidationError])
+convertExportItem (Ann pexpr loc) = case pexpr of
   Compound "fun" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
-    FunctionDecl name arity Nothing Nothing False DKFunction Nothing
+    (Just (FunctionDecl name arity Nothing Nothing False DKFunction Nothing), [])
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    ConstraintDecl name arity Nothing Nothing
+    (Just (ConstraintDecl name arity Nothing Nothing), [])
   Compound "op" [Ann (P.Int fix) _, Ann tyExpr _, Ann nameExpr _]
     | Just ty <- parseOpTypeFromPExpr tyExpr,
       Just name <- atomName nameExpr ->
-        OperatorDecl (OpDecl fix ty name)
+        (Just (OperatorDecl (OpDecl fix ty name)), [])
   Compound "type" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
-    TypeExportDecl name arity Nothing
-  Compound
-    "type"
-    [ Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _,
-      Ann conList _
-      ] ->
-      TypeExportDecl name arity (Just [c | Ann (Atom c) _ <- unfoldList conList])
-  _ -> ConstraintDecl "<unknown>" 0 Nothing Nothing
+    (Just (TypeExportDecl name arity Nothing), [])
+  Compound "type" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _, conList] ->
+    case unfoldListStrict conList.node of
+      Nothing ->
+        (Nothing, [AnnP MalformedExportItem conList.sourceLoc conList.node])
+      Just items -> case partitionEithers (map atomElement items) of
+        ([], names) -> (Just (TypeExportDecl name arity (Just names)), [])
+        (errs, _) -> (Nothing, errs)
+  _ -> (Nothing, [AnnP MalformedExportItem loc pexpr])
+  where
+    atomElement (Ann (Atom n) _) = Right n
+    atomElement (Ann e l) = Left (AnnP MalformedExportItem l e)
 
--- | Convert a PExpr to a constraint declaration. Returns both the
--- 'Declaration' and any parse-validation errors found (currently only
--- @requiring@ on an untyped constraint, which is silently ignored — the
--- spec restricts @requiring@ to typed forms).
-convertConstraintDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
+-- | Convert a PExpr to a constraint declaration. Returns 'Nothing' and
+-- a 'MalformedDeclaration' (or 'MalformedTypeExpr' / 'MalformedBoundSig'
+-- from sub-conversions) error if the declaration cannot be converted.
+convertConstraintDecl ::
+  Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])
 convertConstraintDecl (Ann pexpr loc) = case pexpr of
   -- @sig requiring bound, ...@
-  Compound "requiring" [sig, bounds] ->
-    case sig.node of
-      Compound name args ->
-        let bs = map convertBoundSig (flattenComma bounds)
-         in ( Ann
-                ( ConstraintDecl
-                    name
-                    (length args)
-                    (Just (map convertTypeExpr args))
-                    (Just bs)
-                )
-                loc,
-              []
-            )
-      _ ->
-        -- Malformed: @requiring@ on an untyped or non-compound LHS.
-        (Ann (ConstraintDecl "<unknown>" 0 Nothing Nothing) loc, [])
+  Compound "requiring" [sig, bounds] -> case sig.node of
+    Compound name args ->
+      let (argTypeErrs, argTypes) = partitionEithers (map convertTypeExpr args)
+          (boundErrs, bs) =
+            partitionEithers (map convertBoundSig (flattenComma bounds))
+       in case argTypeErrs ++ boundErrs of
+            [] ->
+              ( Just
+                  ( Ann
+                      ( ConstraintDecl
+                          name
+                          (length args)
+                          (Just argTypes)
+                          (Just bs)
+                      )
+                      loc
+                  ),
+                []
+              )
+            errs -> (Nothing, errs)
+    _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
   -- Untyped: name/arity
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    (Ann (ConstraintDecl name arity Nothing Nothing) loc, [])
+    (Just (Ann (ConstraintDecl name arity Nothing Nothing) loc), [])
   -- Typed: name(type, ...)
-  Compound name args ->
-    (Ann (ConstraintDecl name (length args) (Just (map convertTypeExpr args)) Nothing) loc, [])
+  Compound name args -> case partitionEithers (map convertTypeExpr args) of
+    ([], argTypes) ->
+      ( Just
+          ( Ann
+              (ConstraintDecl name (length args) (Just argTypes) Nothing)
+              loc
+          ),
+        []
+      )
+    (errs, _) -> (Nothing, errs)
   -- Zero-arity bare atom
   Atom name ->
-    (Ann (ConstraintDecl name 0 Nothing Nothing) loc, [])
-  _ -> (Ann (ConstraintDecl "<unknown>" 0 Nothing Nothing) loc, [])
+    (Just (Ann (ConstraintDecl name 0 Nothing Nothing) loc), [])
+  _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
 
 -- | Convert a PExpr to a closed-function declaration.
-convertFunctionDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
+convertFunctionDecl ::
+  Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])
 convertFunctionDecl = convertFunctionDeclWith False DKFunction
 
 -- | Convert a PExpr to an open-function declaration.
-convertOpenFunctionDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
+convertOpenFunctionDecl ::
+  Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])
 convertOpenFunctionDecl = convertFunctionDeclWith True DKFunction
 
 -- | Convert a PExpr to a closed-class declaration.
-convertClassDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
+convertClassDecl ::
+  Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])
 convertClassDecl = convertFunctionDeclWith False DKClass
 
 -- | Convert a PExpr to an open-class declaration.
-convertOpenClassDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
+convertOpenClassDecl ::
+  Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])
 convertOpenClassDecl = convertFunctionDeclWith True DKClass
 
 -- | Convert a PExpr to an extension type declaration. Targets
 -- @:- open_class@ declarations and adds an overloaded signature.
--- Only the typed form @name(types) -> type@ is supported: an extension
--- declaration that does not carry a signature has nothing to contribute.
+-- Only the typed form @name(types) -> type@ is supported.
 --
 -- A @requiring@ clause on an @:- extend_class_type@ is rejected
 -- syntactically: bounds belong to the original declaration, not to
--- an extension.
-convertExtendClassTypeDecl :: Ann PExpr -> (Ann Declaration, [AnnP ParseValidationError])
+-- an extension. The inner signature is still converted so that any
+-- sub-errors (malformed type expressions) are reported alongside the
+-- 'RequiringOnExtendClassType' error.
+convertExtendClassTypeDecl ::
+  Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])
 convertExtendClassTypeDecl (Ann pexpr loc) = case pexpr of
+  -- @requiring@ is Xfx, so the inner @sig@ is never another @requiring@.
   Compound "requiring" [sig, _] ->
-    let (declAnn, errs) = convertExtendClassTypeDecl sig
+    let (mDecl, errs) = convertSig sig
         targetName = case sig.node of
           Compound "->" [Ann (Compound n _) _, _] -> n
           _ -> "<unknown>"
-        err = AnnP (RequiringOnExtendClassType targetName) loc pexpr
-     in (declAnn, err : errs)
-  Compound "->" [Ann (Compound name args) _, ret] ->
-    ( Ann
-        ( ExtendClassTypeDecl
-            name
-            (length args)
-            (Just (map convertTypeExpr args))
-            (Just (convertTypeExpr ret))
-            Nothing
-        )
-        loc,
-      []
-    )
-  _ -> (Ann (ExtendClassTypeDecl "<unknown>" 0 Nothing Nothing Nothing) loc, [])
+        reqErr = AnnP (RequiringOnExtendClassType targetName) loc pexpr
+     in (mDecl, reqErr : errs)
+  _ -> convertSig (Ann pexpr loc)
+  where
+    convertSig (Ann e l) = case e of
+      Compound "->" [Ann (Compound name args) _, ret] ->
+        case (partitionEithers (map convertTypeExpr args), convertTypeExpr ret) of
+          (([], argTypes), Right retType) ->
+            ( Just
+                ( Ann
+                    ( ExtendClassTypeDecl
+                        name
+                        (length args)
+                        (Just argTypes)
+                        (Just retType)
+                        Nothing
+                    )
+                    l
+                ),
+              []
+            )
+          ((argErrs, _), retE) ->
+            (Nothing, argErrs ++ leftToList retE)
+      _ -> (Nothing, [AnnP MalformedDeclaration l e])
 
 -- | Shared implementation of 'convertFunctionDecl',
 -- 'convertOpenFunctionDecl', 'convertClassDecl' and
 -- 'convertOpenClassDecl'. The 'Bool' argument is the @open@ flag and
 -- the 'FunctionDeclKind' selects between @:- function@ and @:- class@.
--- Returns parse-validation errors for malformed @requiring@ placements.
+-- Malformed declarations are dropped and reported via errors.
 convertFunctionDeclWith ::
   Bool ->
   FunctionDeclKind ->
   Ann PExpr ->
-  (Ann Declaration, [AnnP ParseValidationError])
+  (Maybe (Ann Declaration), [AnnP ParseValidationError])
 convertFunctionDeclWith open kind (Ann pexpr loc) = case pexpr of
   -- @name(types) -> ret requiring bound, ...@
-  Compound "requiring" [sig, bounds] ->
-    case sig.node of
-      Compound "->" [Ann (Compound name args) _, ret] ->
-        let bs = map convertBoundSig (flattenComma bounds)
-         in ( Ann
+  Compound "requiring" [sig, bounds] -> case sig.node of
+    Compound "->" [Ann (Compound name args) _, ret] ->
+      let (argErrs, argTypes) = partitionEithers (map convertTypeExpr args)
+          retResult = convertTypeExpr ret
+          (boundErrs, bs) =
+            partitionEithers (map convertBoundSig (flattenComma bounds))
+       in case (argErrs, retResult, boundErrs) of
+            ([], Right retType, []) ->
+              ( Just
+                  ( Ann
+                      ( FunctionDecl
+                          name
+                          (length args)
+                          (Just argTypes)
+                          (Just retType)
+                          open
+                          kind
+                          (Just bs)
+                      )
+                      loc
+                  ),
+                []
+              )
+            _ -> (Nothing, argErrs ++ leftToList retResult ++ boundErrs)
+    _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
+  -- Untyped: name/arity
+  Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
+    ( Just (Ann (FunctionDecl name arity Nothing Nothing open kind Nothing) loc),
+      []
+    )
+  -- Typed: name(type, ...) -> type
+  Compound "->" [Ann (Compound name args) _, ret] ->
+    case (partitionEithers (map convertTypeExpr args), convertTypeExpr ret) of
+      (([], argTypes), Right retType) ->
+        ( Just
+            ( Ann
                 ( FunctionDecl
                     name
                     (length args)
-                    (Just (map convertTypeExpr args))
-                    (Just (convertTypeExpr ret))
+                    (Just argTypes)
+                    (Just retType)
                     open
                     kind
-                    (Just bs)
+                    Nothing
                 )
-                loc,
-              []
-            )
-      _ ->
-        -- Malformed: @requiring@ on a non-typed signature. Drop the
-        -- requiring clause and fall through to the malformed-decl
-        -- placeholder used elsewhere; there is nothing meaningful to
-        -- attach the bounds to.
-        (Ann (FunctionDecl "<unknown>" 0 Nothing Nothing open kind Nothing) loc, [])
-  -- Untyped: name/arity
-  Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    (Ann (FunctionDecl name arity Nothing Nothing open kind Nothing) loc, [])
-  -- Typed: name(type, ...) -> type
-  Compound "->" [Ann (Compound name args) _, ret] ->
-    ( Ann
-        ( FunctionDecl
-            name
-            (length args)
-            (Just (map convertTypeExpr args))
-            (Just (convertTypeExpr ret))
-            open
-            kind
-            Nothing
+                loc
+            ),
+          []
         )
-        loc,
-      []
-    )
-  _ -> (Ann (FunctionDecl "<unknown>" 0 Nothing Nothing open kind Nothing) loc, [])
+      ((argErrs, _), retE) -> (Nothing, argErrs ++ leftToList retE)
+  _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
+
+-- | Lift a single 'Left' into a singleton list of errors, dropping the
+-- 'Right' case. Used when threading 'Either'-based sub-conversion
+-- results into an accumulating @[error]@ list.
+leftToList :: Either e a -> [e]
+leftToList = either pure (const [])
 
 -- | Convert a single bound signature inside a @requiring@ clause. The
--- expected shape is @name(τ₁, ..., τₙ) -> τᵣ@. A name appearing without
--- arguments (e.g. @foo -> bool@) is treated as a zero-arity bound. A
--- malformed shape yields a placeholder bound that the resolver's
--- 'unknown_bound_function' check will reject.
-convertBoundSig :: Ann PExpr -> BoundSig
+-- expected shape is @name(τ₁, ..., τₙ) -> τᵣ@; a bare @name -> τᵣ@ is
+-- treated as a zero-arity bound. A malformed shape (or a malformed type
+-- inside) is returned as 'Left'; the enclosing declaration is then
+-- dropped.
+convertBoundSig :: Ann PExpr -> Either (AnnP ParseValidationError) BoundSig
 convertBoundSig (Ann pexpr loc) = case pexpr of
-  Compound "->" [Ann (Compound name args) _, ret] ->
-    BoundSig
-      { name = Unqualified name,
-        arity = length args,
-        argTypes = map convertTypeExpr args,
-        returnType = convertTypeExpr ret,
-        loc = loc
-      }
-  Compound "->" [Ann (Atom name) _, ret] ->
-    BoundSig
-      { name = Unqualified name,
-        arity = 0,
-        argTypes = [],
-        returnType = convertTypeExpr ret,
-        loc = loc
-      }
-  _ ->
-    BoundSig
-      { name = Unqualified "<unknown>",
-        arity = 0,
-        argTypes = [],
-        returnType = TypeCon (Unqualified "any") [],
-        loc = loc
-      }
+  Compound "->" [Ann (Compound name args) _, ret] -> do
+    argTypes <- traverse convertTypeExpr args
+    returnType <- convertTypeExpr ret
+    Right
+      BoundSig
+        { name = Unqualified name,
+          arity = length args,
+          argTypes,
+          returnType,
+          loc
+        }
+  Compound "->" [Ann (Atom name) _, ret] -> do
+    returnType <- convertTypeExpr ret
+    Right
+      BoundSig
+        { name = Unqualified name,
+          arity = 0,
+          argTypes = [],
+          returnType,
+          loc
+        }
+  _ -> Left (AnnP MalformedBoundSig loc pexpr)
 
 -- | Convert a PExpr to a 'TypeExpr'.
-convertTypeExpr :: Ann PExpr -> TypeExpr
-convertTypeExpr (Ann pexpr _) = case pexpr of
-  Var t -> TypeVar t
-  Atom "[]" -> TypeCon (Unqualified "[]") []
-  Atom name -> TypeCon (Unqualified name) []
-  -- See Note [Qualified name handling].
+--
+-- Returns 'Left' with a 'MalformedTypeExpr' error when the input is not
+-- a variable, atom, or compound term (e.g. a stray literal or string in
+-- a type position).
+--
+-- See Note [Qualified name handling].
+convertTypeExpr :: Ann PExpr -> Either (AnnP ParseValidationError) TypeExpr
+convertTypeExpr (Ann pexpr loc) = case pexpr of
+  Var t -> Right (TypeVar t)
+  Atom "[]" -> Right (TypeCon (Unqualified "[]") [])
+  Atom name -> Right (TypeCon (Unqualified name) [])
   Compound ":" [Ann (Atom m) _, Ann (Atom n) _] ->
-    TypeCon (Qualified m n) []
+    Right (TypeCon (Qualified m n) [])
   Compound ":" [Ann (Atom m) _, Ann (Compound n args) _] ->
-    TypeCon (Qualified m n) (map convertTypeExpr args)
-  Compound "." args -> TypeCon (Unqualified ".") (map convertTypeExpr args)
-  Compound name args -> TypeCon (Unqualified name) (map convertTypeExpr args)
-  _ -> TypeCon (Unqualified "<unknown>") []
+    TypeCon (Qualified m n) <$> traverse convertTypeExpr args
+  Compound "." args ->
+    TypeCon (Unqualified ".") <$> traverse convertTypeExpr args
+  Compound name args ->
+    TypeCon (Unqualified name) <$> traverse convertTypeExpr args
+  _ -> Left (AnnP MalformedTypeExpr loc pexpr)
 
--- | Convert a PExpr to a 'TypeDefinition'.
-convertTypeDefinition :: Ann PExpr -> Ann TypeDefinition
+-- | Convert a PExpr to a 'TypeDefinition'. Returns 'Nothing' and a
+-- 'MalformedTypeDefinition' (or 'MalformedDataConstructor' /
+-- 'MalformedTypeExpr' from sub-conversions) error if the definition
+-- cannot be converted.
+convertTypeDefinition ::
+  Ann PExpr -> (Maybe (Ann TypeDefinition), [AnnP ParseValidationError])
 convertTypeDefinition (Ann pexpr loc) = case pexpr of
   -- name(Vars) ---> con1 ; con2 ; ...
-  Compound "--->" [typeHead, alts] ->
-    let (tname, tvars) = case typeHead.node of
-          Atom n -> (n, [])
-          Compound n vars -> (n, [v | Ann (Var v) _ <- vars])
-          _ -> ("<unknown>", [])
-        cons = map convertDataConstructor (flattenSemicolon alts)
-     in Ann (TypeDefinition (Unqualified tname) tvars cons loc) loc
-  _ -> Ann (TypeDefinition (Unqualified "<unknown>") [] [] loc) loc
+  Compound "--->" [typeHead, alts] -> case typeHeadShape typeHead.node of
+    Nothing -> (Nothing, [AnnP MalformedTypeDefinition loc pexpr])
+    Just (tname, tvars) ->
+      case partitionEithers
+        (map convertDataConstructor (flattenSemicolon alts)) of
+        ([], cons) ->
+          ( Just (Ann (TypeDefinition (Unqualified tname) tvars cons loc) loc),
+            []
+          )
+        (errs, _) -> (Nothing, errs)
+  _ -> (Nothing, [AnnP MalformedTypeDefinition loc pexpr])
+  where
+    typeHeadShape (Atom n) = Just (n, [])
+    typeHeadShape (Compound n vars) = Just (n, [v | Ann (Var v) _ <- vars])
+    typeHeadShape _ = Nothing
 
--- | Convert a PExpr to a 'DataConstructor'.
-convertDataConstructor :: Ann PExpr -> DataConstructor
-convertDataConstructor (Ann pexpr _) = case pexpr of
-  Atom "[]" -> DataConstructor (Unqualified "[]") []
-  Atom name -> DataConstructor (Unqualified name) []
+-- | Convert a PExpr to a 'DataConstructor'. Returns 'Left' if the
+-- constructor or any of its argument types is malformed.
+convertDataConstructor ::
+  Ann PExpr -> Either (AnnP ParseValidationError) DataConstructor
+convertDataConstructor (Ann pexpr loc) = case pexpr of
+  Atom "[]" -> Right (DataConstructor (Unqualified "[]") [])
+  Atom name -> Right (DataConstructor (Unqualified name) [])
   -- [T|list(T)] — list constructor sugar
   Compound "." args ->
-    DataConstructor (Unqualified ".") (map convertTypeExpr args)
+    DataConstructor (Unqualified ".") <$> traverse convertTypeExpr args
   Compound name args ->
-    DataConstructor (Unqualified name) (map convertTypeExpr args)
-  _ -> DataConstructor (Unqualified "<unknown>") []
+    DataConstructor (Unqualified name) <$> traverse convertTypeExpr args
+  _ -> Left (AnnP MalformedDataConstructor loc pexpr)
 
 -- ** Rule conversion
 
 -- | Convert a top-level PExpr to a 'Rule', collecting any
 -- 'MalformedConstraint' errors found in its head.
-convertRule :: Ann PExpr -> (Rule, [AnnP ParseValidationError])
+--
+-- Returns 'Nothing' and a 'MalformedTopLevel' error when the input is
+-- not a recognized rule shape (named or unnamed @\<=\>@/@==\>@).
+convertRule :: Ann PExpr -> (Maybe Rule, [AnnP ParseValidationError])
 convertRule expr =
   let (mName, ruleExpr) = case expr.node of
         Compound "@" [Ann (Atom name) nameLoc, body] ->
           (Just (Ann name nameLoc), body)
         _ -> (Nothing, expr)
-      ((head_, headErrs), guardBody) = case ruleExpr.node of
-        Compound "<=>" [h, gb] -> (convertHead h, gb)
-        Compound "==>" [h, gb] -> (convertPropagationHead h, gb)
-        _ -> ((noAnnP (Simplification []), []), ruleExpr) -- fallback
-      (guard_, body_) = splitGuardBody guardBody
-   in (Rule mName head_ guard_ body_, headErrs)
+   in case ruleExpr.node of
+        Compound "<=>" [h, gb] ->
+          let (head_, headErrs) = convertHead h
+              (guard_, body_) = splitGuardBody gb
+           in (Just (Rule mName head_ guard_ body_), headErrs)
+        Compound "==>" [h, gb] ->
+          let (head_, headErrs) = convertPropagationHead h
+              (guard_, body_) = splitGuardBody gb
+           in (Just (Rule mName head_ guard_ body_), headErrs)
+        _ -> (Nothing, [AnnP MalformedTopLevel expr.sourceLoc expr.node])
 
 -- | Convert the head of a simplification or simpagation rule. Malformed
 -- constraints are dropped from the resulting head and reported as errors.
@@ -1079,64 +1225,68 @@ splitGuardBody expr = case expr.node of
       AnnP (map convertTerm (flattenComma body_)) body_.sourceLoc body_.node
     )
   _ ->
-    ( AnnP [] expr.sourceLoc (Atom ""),
+    ( noAnnPAt expr.sourceLoc [],
       AnnP (map convertTerm (flattenComma expr)) expr.sourceLoc expr.node
     )
 
 -- ** Function equation conversion
 
--- | Convert a top-level PExpr to a 'FunctionEquation'.
-convertFunctionEquation :: Ann PExpr -> AnnP FunctionEquation
+-- | Convert a top-level PExpr to a 'FunctionEquation'. Returns 'Nothing'
+-- and a 'MalformedFunctionEquation' error when the input is not of the
+-- expected @lhs [| guard] -> rhs@ shape.
+convertFunctionEquation ::
+  Ann PExpr -> (Maybe (AnnP FunctionEquation), [AnnP ParseValidationError])
 convertFunctionEquation (Ann pexpr loc) = case pexpr of
-  Compound "->" [lhs, rhs] ->
-    case lhs.node of
-      -- Guarded: lhs_pattern | guard -> rhs
-      Compound "|" [pat, guard_] ->
-        let (name, args) = extractFunNameArgs pat
-         in AnnP
-              ( FunctionEquation
-                  (Unqualified name)
-                  args
-                  (AnnP (map convertTerm (flattenComma guard_)) guard_.sourceLoc guard_.node)
-                  (AnnP (convertTerm rhs) rhs.sourceLoc rhs.node)
-              )
-              loc
-              pexpr
-      -- Unguarded: lhs_pattern -> rhs
-      _ ->
-        let (name, args) = extractFunNameArgs lhs
-         in AnnP
-              ( FunctionEquation
-                  (Unqualified name)
-                  args
-                  (AnnP [] lhs.sourceLoc (Atom ""))
-                  (AnnP (convertTerm rhs) rhs.sourceLoc rhs.node)
-              )
-              loc
-              pexpr
-  _ ->
-    AnnP
-      ( FunctionEquation
-          (Unqualified "<unknown>")
+  Compound "->" [lhs, rhs] -> case lhs.node of
+    -- Guarded: lhs_pattern | guard -> rhs
+    Compound "|" [pat, guard_] -> case extractFunNameArgs pat of
+      Just (name, args) ->
+        ( Just
+            ( AnnP
+                ( FunctionEquation
+                    (Unqualified name)
+                    args
+                    ( AnnP
+                        (map convertTerm (flattenComma guard_))
+                        guard_.sourceLoc
+                        guard_.node
+                    )
+                    (AnnP (convertTerm rhs) rhs.sourceLoc rhs.node)
+                )
+                loc
+                pexpr
+            ),
           []
-          (AnnP [] loc (Atom ""))
-          ( AnnP
-              (convertTerm (Ann pexpr loc))
-              loc
-              pexpr
-          )
-      )
-      loc
-      pexpr
+        )
+      Nothing -> (Nothing, [AnnP MalformedFunctionEquation loc pexpr])
+    -- Unguarded: lhs_pattern -> rhs
+    _ -> case extractFunNameArgs lhs of
+      Just (name, args) ->
+        ( Just
+            ( AnnP
+                ( FunctionEquation
+                    (Unqualified name)
+                    args
+                    (noAnnPAt lhs.sourceLoc [])
+                    (AnnP (convertTerm rhs) rhs.sourceLoc rhs.node)
+                )
+                loc
+                pexpr
+            ),
+          []
+        )
+      Nothing -> (Nothing, [AnnP MalformedFunctionEquation loc pexpr])
+  _ -> (Nothing, [AnnP MalformedFunctionEquation loc pexpr])
 
 -- | Extract the function name and argument list from an equation LHS.
 --
--- Handles prefix notation @name(args)@ and operator notation @X op Y@.
-extractFunNameArgs :: Ann PExpr -> (Text, [Term])
+-- Handles prefix notation @name(args)@ and operator notation @X op Y@
+-- (which parses as @Compound op [X, Y]@). Returns 'Nothing' if the LHS
+-- is a literal, variable, wildcard, or string.
+extractFunNameArgs :: Ann PExpr -> Maybe (Text, [Term])
 extractFunNameArgs (Ann pexpr _) = case pexpr of
-  -- Prefix: name(arg1, arg2, ...)
-  Compound name args -> (name, map convertTerm args)
+  -- Prefix: name(arg1, arg2, ...) — also covers operator notation.
+  Compound name args -> Just (name, map convertTerm args)
   -- Bare atom (zero-arity function)
-  Atom name -> (name, [])
-  -- Shouldn't happen, but provide a fallback
-  _ -> ("<unknown>", [])
+  Atom name -> Just (name, [])
+  _ -> Nothing

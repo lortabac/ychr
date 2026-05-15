@@ -190,7 +190,8 @@ prop_ruleRoundtrip = property $ do
   case parseRule "<roundtrip>" (Text.pack src) of
     Left err -> annotate (show err) >> failure
     Right (_, validErrs@(_ : _)) -> annotate (show validErrs) >> failure
-    Right (r', []) -> stripRuleAnn r' === r
+    Right (Nothing, _) -> annotate "parser returned no rule" >> failure
+    Right (Just r', []) -> stripRuleAnn r' === r
 
 -- ---------------------------------------------------------------------------
 -- =.. roundtrip
@@ -316,14 +317,18 @@ assertRuleRoundtrips src = case parseRule "<roundtrip>" src of
   Left err -> assertFailure ("parse failed on input:\n" ++ Text.unpack src ++ "\n" ++ show err)
   Right (_, validErrs@(_ : _)) ->
     assertFailure ("parse validation errors on input:\n" ++ show validErrs)
-  Right (rule1, []) -> do
+  Right (Nothing, _) ->
+    assertFailure ("parser returned no rule for input:\n" ++ Text.unpack src)
+  Right (Just rule1, []) -> do
     let pretty1 = prettyRuleSrc rule1
     case parseRule "<roundtrip>" (Text.pack pretty1) of
       Left err ->
         assertFailure ("re-parse failed on pretty output:\n" ++ pretty1 ++ "\n" ++ show err)
       Right (_, validErrs@(_ : _)) ->
         assertFailure ("re-parse validation errors on pretty output:\n" ++ show validErrs)
-      Right (rule2, []) -> prettyRuleSrc rule2 @?= pretty1
+      Right (Nothing, _) ->
+        assertFailure ("re-parse produced no rule on pretty output:\n" ++ pretty1)
+      Right (Just rule2, []) -> prettyRuleSrc rule2 @?= pretty1
 
 fixedRuleCases :: TestTree
 fixedRuleCases =

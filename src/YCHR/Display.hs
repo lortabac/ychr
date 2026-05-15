@@ -188,6 +188,14 @@ parseValidationErrorCode MalformedConstraint = ErrorCode 15003
 parseValidationErrorCode (DiscontiguousFunctionDecls _) = ErrorCode 15004
 parseValidationErrorCode (RequiringOnClass _) = ErrorCode 15005
 parseValidationErrorCode (RequiringOnExtendClassType _) = ErrorCode 15006
+parseValidationErrorCode MalformedDeclaration = ErrorCode 15007
+parseValidationErrorCode MalformedExportItem = ErrorCode 15008
+parseValidationErrorCode MalformedTypeExpr = ErrorCode 15009
+parseValidationErrorCode MalformedDataConstructor = ErrorCode 15010
+parseValidationErrorCode MalformedTypeDefinition = ErrorCode 15011
+parseValidationErrorCode MalformedBoundSig = ErrorCode 15012
+parseValidationErrorCode MalformedFunctionEquation = ErrorCode 15013
+parseValidationErrorCode MalformedTopLevel = ErrorCode 15014
 
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
@@ -311,6 +319,38 @@ parseValidationErrorMsg (RequiringOnExtendClassType name) =
         ++ "')"
     )
     "bounds belong to the original declaration; an extension cannot introduce them"
+parseValidationErrorMsg MalformedDeclaration =
+  withHint
+    "Invalid declaration"
+    "expected name/arity, name(types) -> ret, or sig requiring bounds"
+parseValidationErrorMsg MalformedExportItem =
+  withHint
+    "Invalid export/import list item"
+    "expected name/arity, fun name/arity, type(name/arity), or op(prio, type, name)"
+parseValidationErrorMsg MalformedTypeExpr =
+  withHint
+    "Invalid type expression"
+    "expected a type variable, atom, or compound type"
+parseValidationErrorMsg MalformedDataConstructor =
+  withHint
+    "Invalid data constructor"
+    "expected an atom or compound term in a chr_type alternative"
+parseValidationErrorMsg MalformedTypeDefinition =
+  withHint
+    "Invalid type definition"
+    "expected 'name(Vars) ---> con1 ; con2 ; ...'"
+parseValidationErrorMsg MalformedBoundSig =
+  withHint
+    "Invalid bound signature"
+    "expected 'name(t1, ..., tn) -> tret' (or 'name -> tret' for arity zero)"
+parseValidationErrorMsg MalformedFunctionEquation =
+  withHint
+    "Invalid function equation"
+    "expected 'lhs [| guard] -> rhs'"
+parseValidationErrorMsg MalformedTopLevel =
+  withHint
+    "Invalid top-level term"
+    "expected a directive, rule (<=> or ==>), or function equation (->)"
 
 instance Display (Diagnostic ResolveError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
