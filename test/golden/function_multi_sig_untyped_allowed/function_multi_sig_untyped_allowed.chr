@@ -1,0 +1,14 @@
+:- module(function_multi_sig_untyped_allowed, [result/1]).
+:- chr_constraint result(any).
+
+% One typed and one untyped declaration for the same function. The
+% multi-sig check filters out untyped declarations (they contribute no
+% signature), so this should compile cleanly — exercises the
+% 'argTypes = Just _, returnType = Just _' filter in the
+% MultiSigOnFunction check.
+:- function (size(int) -> int).
+:- function size/1.
+
+size(N) -> N.
+
+result(R) <=> R is size(7).

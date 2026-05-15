@@ -1,0 +1,12 @@
+:- module(function_with_three_sigs, [result/1]).
+:- chr_constraint result(any).
+
+% Forbidden: three signatures for the same name+arity declared with
+% :- function. Multi-signature overloading requires :- class. The
+% diagnostic should fire on the second offending signature; further
+% signatures don't multiply the diagnostic count.
+:- function (size(int) -> int), (size(string) -> int), (size(bool) -> int).
+
+size(N) -> N.
+
+result(R) <=> R is size(1).

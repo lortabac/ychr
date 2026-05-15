@@ -32,7 +32,7 @@ This page is a stub. The eventual reference will cover:
 | `:- module(Name).` | Module header that exports every declared identifier. |
 | `:- use_module(M)` / `:- use_module(M, Imports).` | Import another module. Import items use the same forms as export items. |
 | `type(name/arity, [Con1, ...])` | Two-argument type form. Exports (or imports) the type and only the listed data constructors; `type(name/arity)` covers all of them. |
-| `:- chr_constraint Decls.` | Declare CHR constraints. |
+| `:- chr_constraint Decls.` | Declare CHR constraints. A name+arity declared here cannot also be declared as a function-like form (`:- function`, `:- open_function`, `:- class`, `:- open_class`) in the same module (YCHR-16016). |
 | `:- chr_type T ---> Cs.` | Declare an algebraic type. |
 | `:- function Decls.` | Declare a closed user-defined function. Single signature only — multi-signature requires `:- class` (YCHR-16011). All decls (typed or untyped) and all equations must live in the declaring module; the decls must form a contiguous block of module items. May carry a `requiring` clause (bounded polymorphism). |
 | `:- open_function Decls.` | Declare an open user-defined function. Single signature only. Decls must still be in one module and contiguous, but other modules may contribute extension equations via `:- extend_function`. Type-signature extension is not available (see `:- open_class`). |

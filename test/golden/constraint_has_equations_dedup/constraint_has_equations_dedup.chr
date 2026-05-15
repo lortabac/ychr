@@ -1,0 +1,11 @@
+:- module(constraint_has_equations_dedup, [result/1]).
+:- chr_constraint result(any), foo(any).
+
+% Three equations for the same constraint name. The check should emit
+% exactly one diagnostic (the first offending equation) rather than
+% flooding the user with one diagnostic per equation.
+foo(1) -> a.
+foo(2) -> b.
+foo(3) -> c.
+
+result(R) <=> R is foo(1).

@@ -1,0 +1,9 @@
+:- module(function_in_rule_head_propagation, [go/0]).
+:- chr_constraint go.
+:- function foo/1.
+foo(X) -> X.
+
+% Forbidden: 'foo' is a function appearing in a propagation rule head.
+foo(X) ==> true.
+
+go <=> true.

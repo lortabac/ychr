@@ -1,0 +1,12 @@
+:- module(mixed_function_open_class, [result/1]).
+:- chr_constraint result(any).
+
+% Forbidden: the same name+arity is declared with both :- function
+% (DKFunction) and :- open_class (DKClass). Each name+arity must commit
+% to one form.
+:- function size/1.
+:- open_class (size(int) -> int).
+
+size(X) -> X.
+
+result(R) <=> R is size(1).

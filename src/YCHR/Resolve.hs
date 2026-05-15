@@ -88,6 +88,12 @@ data ResolveError
     -- declared with @:- class@ / @:- open_class@; use
     -- @:- extend_class@ instead.
     ExtendFunctionOnClass Name
+  | -- | The same name and arity is declared as both
+    -- @:- chr_constraint@ and @:- function@ / @:- open_function@ /
+    -- @:- class@ / @:- open_class@ in a single module. Constraints
+    -- and functions share the symbol namespace, so the collision is
+    -- ambiguous regardless of whether the name is ever referenced.
+    ConstraintFunctionCollision Name
   deriving (Eq, Show)
 
 -- | Flatten modules into a single resolved program.
@@ -116,6 +122,7 @@ resolveProgram mods =
       multiSigErrors = checkMultiSigOnFunction mods
       mixedKindErrors = checkMixedDeclKinds mods
       extensionKindErrors = checkExtensionKinds funcKinds mods
+      collisionErrors = checkConstraintFunctionCollision mods
       (resolvedRules, ruleErrs) = resolveRules mods
       errs =
         eqErrors
@@ -128,6 +135,7 @@ resolveProgram mods =
           ++ multiSigErrors
           ++ mixedKindErrors
           ++ extensionKindErrors
+          ++ collisionErrors
           ++ ruleErrs
    in if null errs
         then
@@ -340,6 +348,44 @@ checkMixedDeclKinds mods =
     (d, m, loc, _) : _ <-
       [[entry | entry@(P.FunctionDecl {kind = k}, _, _, _) <- decls, k /= k0]]
   ]
+
+-- | Reject same name+arity declared as both @:- chr_constraint@ and a
+-- function-like form (@:- function@, @:- open_function@, @:- class@,
+-- @:- open_class@) in a single module. Constraints and functions share
+-- the symbol namespace, so the collision is ambiguous regardless of
+-- whether the name is ever referenced. One diagnostic per
+-- @(module, name, arity)@ collision, pointed at the first
+-- function-side declaration (subsequent function-side declarations of
+-- the same name are suppressed to avoid duplicate diagnostics when a
+-- name is declared as e.g. both @:- function@ and @:- class@).
+checkConstraintFunctionCollision :: [P.Module] -> [Diagnostic ResolveError]
+checkConstraintFunctionCollision mods = snd $ foldl go (Set.empty, []) entries
+  where
+    entries =
+      [ (m, d, loc)
+      | m <- mods,
+        let conKeys =
+              Set.fromList
+                [(c.name, c.arity) | P.Ann c _ <- m.decls, P.ConstraintDecl {} <- [c]],
+        P.Ann d loc <- m.decls,
+        P.FunctionDecl {} <- [d],
+        Set.member (d.name, d.arity) conKeys
+      ]
+    go (seen, errs) (m, d, loc) =
+      let key = (m.name, d.name, d.arity)
+       in if Set.member key seen
+            then (seen, errs)
+            else
+              ( Set.insert key seen,
+                errs
+                  ++ [ noDiag
+                         ( P.AnnP
+                             (ConstraintFunctionCollision (Qualified m.name d.name))
+                             loc
+                             (PExpr.Atom d.name)
+                         )
+                     ]
+              )
 
 -- | Reject extension directives whose declaration kind disagrees with
 -- the target's kind:

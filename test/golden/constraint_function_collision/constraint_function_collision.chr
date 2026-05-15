@@ -1,0 +1,11 @@
+:- module(constraint_function_collision, [go/0]).
+:- chr_constraint go, foo(any).
+
+% Forbidden: 'foo/1' is declared as both :- chr_constraint and :- function
+% in the same module. Constraints and functions share the symbol
+% namespace, so the collision is ambiguous regardless of whether 'foo'
+% is ever referenced. No equation or rule head touches 'foo', so this
+% test isolates the collision check from YCHR-16001 / YCHR-16002.
+:- function foo/1.
+
+go <=> true.

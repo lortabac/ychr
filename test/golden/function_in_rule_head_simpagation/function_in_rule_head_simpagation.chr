@@ -1,0 +1,11 @@
+:- module(function_in_rule_head_simpagation, [go/0]).
+:- chr_constraint go, bar(any).
+:- function foo/1.
+foo(X) -> X.
+
+% Forbidden: 'foo' is a function appearing as the kept partner of a
+% simpagation rule. The check should catch it whether the function
+% appears on the kept (\) or removed side.
+foo(X) \ bar(Y) <=> true.
+
+go <=> true.

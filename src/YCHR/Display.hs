@@ -217,6 +217,7 @@ resolveErrorCode (MixedDeclKinds _) = ErrorCode 16012
 resolveErrorCode (ExtendClassTypeOnFunction _) = ErrorCode 16013
 resolveErrorCode (ExtendClassOnFunction _) = ErrorCode 16014
 resolveErrorCode (ExtendFunctionOnClass _) = ErrorCode 16015
+resolveErrorCode (ConstraintFunctionCollision _) = ErrorCode 16016
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 was previously used for OperatorInImportList; now reserved
@@ -489,6 +490,14 @@ resolveErrorMsg (ExtendFunctionOnClass name) =
         ++ "', which is declared as :- open_class"
     )
     "use :- extend_class to add equations to an :- open_class"
+resolveErrorMsg (ConstraintFunctionCollision name) =
+  withHint
+    ( "'"
+        ++ displayName name
+        ++ "' is declared as both :- chr_constraint and a function-like"
+        ++ " form in the same module"
+    )
+    "constraints and functions share the symbol namespace; pick one form for this name"
 
 instance Display (Diagnostic CollectError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =

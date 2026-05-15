@@ -1,0 +1,12 @@
+:- module(orphan_equation_in_declaring_module, [result/1]).
+:- chr_constraint result(any).
+
+% Positive case: an equation that lives in the *declaring* module of
+% its function. The orphan check (YCHR-16006) must only fire when the
+% equation lives in a different module than the function's declaration,
+% so this should compile and run cleanly.
+:- open_function classify/1.
+classify(0) -> 100.
+classify(_) -> 999.
+
+result(R) <=> R is classify(0).

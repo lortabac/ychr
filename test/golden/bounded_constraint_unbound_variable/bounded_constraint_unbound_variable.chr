@@ -1,0 +1,14 @@
+:- module(bounded_constraint_unbound_variable, [result/1]).
+:- use_module(library(prelude)).
+
+:- function (gt(int, int) -> bool).
+gt(X, Y) -> X > Y.
+
+% Forbidden: U is mentioned in the constraint's requiring clause but
+% has no occurrence in the primary signature. This exercises the
+% 'conBounds' branch of checkBoundedDeclarations — existing tests only
+% cover the 'funcBounds' branch.
+:- chr_constraint pick(T, T) requiring gt(U, U) -> bool.
+:- chr_constraint result(int).
+
+pick(_, _), result(_) <=> true.

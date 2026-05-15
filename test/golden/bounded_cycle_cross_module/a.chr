@@ -1,0 +1,7 @@
+:- module(a, [f/1]).
+:- use_module(library(prelude)).
+:- use_module(b, [g/1]).
+
+% Module a's 'f' requires module b's 'g'.
+:- function f(T) -> T requiring g(T) -> T.
+f(X) -> X.

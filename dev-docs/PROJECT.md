@@ -298,7 +298,7 @@ Functions are callable in guards, `is` RHS expressions, and rule body position (
 
 Equation patterns are normalized using the same Head Normal Form (HNF) machinery as rule heads: non-variable patterns become fresh variables with explicit guard conditions. Equations are tried top-to-bottom; if no equation matches, a runtime error is raised.
 
-Function names are qualified like constraint names and cannot collide with constraint declarations in the same module.
+Function names are qualified like constraint names and cannot collide with constraint declarations in the same module (rejected as YCHR-16016, `ConstraintFunctionCollision`).
 
 ### Closed and Open Functions
 

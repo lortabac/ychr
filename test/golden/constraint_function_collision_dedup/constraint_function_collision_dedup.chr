@@ -1,0 +1,12 @@
+:- module(constraint_function_collision_dedup, [go/0]).
+:- chr_constraint go, foo(any).
+
+% Same constraint colliding with multiple function-side declarations.
+% The collision check must emit exactly one diagnostic per
+% (module, name, arity), not one per function-side declaration —
+% otherwise the user gets duplicate complaints about the same root
+% cause.
+:- function foo/1.
+:- class (foo(int) -> int).
+
+go <=> true.

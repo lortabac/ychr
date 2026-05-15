@@ -1,0 +1,9 @@
+:- module(constraint_has_equations, [result/1]).
+:- chr_constraint result(any), foo(any).
+
+% Forbidden: 'foo/1' is declared as a CHR constraint but has a function
+% equation. Constraint names cannot define equations; either remove the
+% equation or redeclare 'foo' as ':- function'.
+foo(X) -> X.
+
+result(R) <=> R is foo(1).

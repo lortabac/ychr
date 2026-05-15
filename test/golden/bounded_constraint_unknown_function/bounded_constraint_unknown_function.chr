@@ -1,0 +1,11 @@
+:- module(bounded_constraint_unknown_function, [result/1]).
+:- use_module(library(prelude)).
+
+% 'cmp/2' is a constraint, not a function. The renamer accepts the name
+% in the requiring clause (constraints and functions share the symbol
+% namespace), but the resolver detects that the bound's target is not a
+% function. Exercises the constraint-bounds side of checkBoundedDeclarations.
+:- chr_constraint pick(T, T) requiring cmp(T, T) -> bool.
+:- chr_constraint result(int), cmp(any, any).
+
+pick(_, _), result(_) <=> true.

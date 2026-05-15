@@ -1,0 +1,11 @@
+:- module(function_in_rule_head_dedup, [go/0]).
+:- chr_constraint go.
+:- function foo/1.
+foo(X) -> X.
+
+% Two rules with the same function name in the head. The check should
+% emit exactly one diagnostic per name, not one per rule.
+foo(X) <=> true.
+foo(Y) ==> true.
+
+go <=> true.
