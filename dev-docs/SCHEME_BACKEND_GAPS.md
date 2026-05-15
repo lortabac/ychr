@@ -23,21 +23,39 @@ runtime in `scheme/ychr/`. Goals are run through `guile3.0 --r6rs` per
 
 The Haskell `prettyTerm` (`src/YCHR/PExpr.hs`) quotes atoms whose text is
 not a bare lowercase identifier, escaping embedded quotes — so `'hello
-world'`, `'café'`, `'你好'`, and the mangled internal forms like
-`'tc__just'(0)` are quoted on output. The Scheme `pretty-term`
-(`scheme/ychr/pretty.sls`) emits all symbols via `symbol->string` with
-no quoting.
+world'`, `'café'`, and `'你好'` are quoted on output. The Scheme
+`pretty-term` (`scheme/ychr/pretty.sls`) emits symbols via
+`symbol->string` (after the qualified-name unmangle pass) with no
+quoting.
 
 Tests still skipped on the Scheme backend:
 
-- All cases under `typecheck_constructor_in_lambda_body` (mangled
-  constructor names render unquoted).
 - `("unicode_atoms_strings", "quoted_with_space" | "quoted_unicode" |
-  "quoted_chinese")`.
+  "quoted_chinese")` — Scheme prints the bare text where Haskell quotes
+  it.
 
 **Fix sketch:** teach `scheme/ychr/pretty.sls` the same `needsQuoting`
 logic as `renderAtom` — bare lowercase + alphanumeric + underscore stays
 unquoted, anything else gets `'…'` with embedded `'` doubled.
+
+
+## Lambda-body constructor leaks mangled name (Haskell-side)
+
+All cases under `typecheck_constructor_in_lambda_body` are skipped via
+`HASKELL_ONLY`. The `.expected` files pin `R = 'tc__just'(0)`. After
+the qualified-name unmangle pass landed in `pretty.sls`, the Scheme
+backend now prints `R = tc:just(0)` for the same goal — the *correct*
+qualified-atom rendering. The Haskell interpreter still produces
+`'tc__just'(0)`, meaning the lambda-lifting / constructor-handling path
+in `src/YCHR/Desugar.hs` (or downstream) is leaking the mangled name as
+an `Unqualified` atom rather than keeping it as `Qualified tc just`.
+The quoting on the Haskell side is incidental — it kicks in because
+`tc__just` contains `__`, which is illegal in an unquoted atom.
+
+**Fix sketch:** trace where the constructor reference inside the
+lifted lambda body loses its qualified form. Once that is corrected,
+both backends will print `tc:just(0)` and the `.expected` files can be
+updated, then the entry removed from `HASKELL_ONLY`.
 
 
 ## `ground/1` in goal queries with nested unbound vars
@@ -83,3 +101,12 @@ record of which fixes have already shipped.
   matches because the underlying `Equal` VM expression already routes
   through `equal?/chr`, and the equality fix above means flonum-flonum
   compares structurally.
+- **Qualified-name separator (`__` vs `:`)** — `pretty-term` in
+  `scheme/ychr/pretty.sls` now unmangles `module__name` back to
+  `module:name` on output (via `unmangle-qualified`, splitting on the
+  first `__` at position ≥ 1). This is safe because the lexer
+  (`src/YCHR/PExpr.hs`) rejects `__` inside any user atom. Closed
+  `HASKELL_ONLY_CASES` entries for `type_export_constructor_allowlist`
+  and `type_import_constructor_narrowing`. The unicode-escape form
+  `__u<hex>__` still passes through unchanged and is covered by the
+  unicode quoting divergence above.

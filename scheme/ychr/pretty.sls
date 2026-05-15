@@ -56,6 +56,39 @@
       ((null? (cdr strs)) (car strs))
       (else (string-append (car strs) sep (join sep (cdr strs))))))
 
+  ;; Find the first index of NEEDLE in HAYSTACK starting from START,
+  ;; or #f if not found.
+  (define (string-search haystack needle start)
+    (let ((hlen (string-length haystack))
+          (nlen (string-length needle)))
+      (let loop ((i start))
+        (cond
+          ((> (+ i nlen) hlen) #f)
+          ((string=? (substring haystack i (+ i nlen)) needle) i)
+          (else (loop (+ i 1)))))))
+
+  ;; Unmangle a compiler-generated qualified-name symbol back to its
+  ;; surface form. The compiler joins (module, base) with "__" — split
+  ;; on the first "__" (when not at position 0) and replace it with ":"
+  ;; so the Scheme pretty-printer matches Haskell's "mod:foo" output.
+  ;; The lexer rejects "__" inside user identifiers (PExpr.hs), so the
+  ;; only "__" in an ASCII symbol is the module/base separator (plus
+  ;; possibly an immediately following compiler-internal "__lambda_N"
+  ;; base name, which the search-from-1 strategy preserves intact).
+  ;; Symbols starting with "__" (unicode-escape or bare lambda) are
+  ;; left untouched.
+  (define (unmangle-qualified s)
+    (let ((idx (and (> (string-length s) 0)
+                    (string-search s "__" 1))))
+      (if idx
+          (string-append (substring s 0 idx)
+                         ":"
+                         (substring s (+ idx 2) (string-length s)))
+          s)))
+
+  (define (pretty-symbol sym)
+    (unmangle-qualified (symbol->string sym)))
+
   ;; Pretty-print a CHR value, matching Haskell prettyTerm exactly.
   (define (pretty-term v)
     (let ((d (deref v)))
@@ -81,7 +114,7 @@
         ;; String
         ((string? d) (string-append "\"" (escape-string d) "\""))
         ;; Symbol (atom)
-        ((symbol? d) (symbol->string d))
+        ((symbol? d) (pretty-symbol d))
         ;; Empty list (canonicalized 0-arity term form)
         ((and (term? d)
               (nil-functor? (term-functor d))
@@ -96,7 +129,7 @@
         ;; Other compound term
         ((term? d)
          (let ((args (vector->list (term-args d))))
-           (string-append (symbol->string (term-functor d))
+           (string-append (pretty-symbol (term-functor d))
                           "(" (join ", " (map pretty-term args)) ")")))
         ;; Fallback
         (else (call-with-string-output-port
