@@ -84,3 +84,7 @@ what is planned.
 
 - [ ] Formatter
 - [ ] LSP server
+
+## Development
+
+- [ ] MicroHs compatibility
