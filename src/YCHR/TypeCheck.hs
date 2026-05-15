@@ -1,4 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Haskell driver for the YCHR type checker.
@@ -31,7 +30,7 @@ module YCHR.TypeCheck
   )
 where
 
-import Control.Monad (replicateM, when)
+import Control.Monad (replicateM, when, zipWithM_)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, put)
@@ -251,28 +250,49 @@ data CtxInfo = CtxInfo
     origin :: PExpr
   }
 
--- | Map from @Ctx@ handle (an 'Int') to the originating source location.
-type CtxMap = Map Int CtxInfo
+-- | Opaque handle into 'CtxMap'. Travels through the CHR program as
+-- the @Ctx@ argument of every @check_*@ constraint and comes back in
+-- 'decodeError' to recover the originating source location. Lives in
+-- its own newtype so it cannot be confused with 'ScopeId' (they are
+-- both small integers in different namespaces).
+newtype CtxHandle = CtxHandle Int
+  deriving (Eq, Ord)
 
--- | Holds the source-location info for every CHR-side @Ctx@ handle the
--- driver has allocated, together with a separate counter for
--- ambient-signature scope ids. Threaded as a single 'State' effect so
--- both counters and the location map stay in step.
+-- | Materialize a 'CtxHandle' as the 'Value' the CHR program sees.
+ctxHandleValue :: CtxHandle -> Value
+ctxHandleValue (CtxHandle n) = VInt n
+
+-- | Ambient-signature scope id. Each bounded scope (a bounded
+-- function's equation or a rule with a bounded head constraint) gets
+-- its own; @active_scope@ / @end_scope@ pair up by this id so the
+-- right ambient signatures are torn down.
+newtype ScopeId = ScopeId Int
+  deriving (Eq, Ord)
+
+-- | Materialize a 'ScopeId' as the 'Value' the CHR program sees.
+scopeIdValue :: ScopeId -> Value
+scopeIdValue (ScopeId n) = VInt n
+
+-- | Map from 'CtxHandle' to the originating source location.
+type CtxMap = Map CtxHandle CtxInfo
+
+-- | Holds the source-location info for every allocated 'CtxHandle'
+-- together with a separate counter for 'ScopeId's. Threaded as a
+-- single 'State' effect so both counters and the location map stay in
+-- step.
 data CtxStore = CtxStore
-  { -- | Next ctx handle to allocate.
-    nextId :: !Int,
-    -- | Source-location info for every handle allocated so far.
+  { nextCtxHandle :: !CtxHandle,
     ctxMap :: !CtxMap,
-    -- | Next ambient-sig scope id to allocate. Lives in its own
-    -- numeric namespace so scope ids do not collide with ctx
-    -- handles. (CHR-side the two flow through different argument
-    -- positions so a collision would be harmless, but keeping them
-    -- separate makes debug output less confusing.)
-    nextScopeId :: !Int
+    nextScopeId :: !ScopeId
   }
 
 emptyCtxStore :: CtxStore
-emptyCtxStore = CtxStore {nextId = 0, ctxMap = Map.empty, nextScopeId = 0}
+emptyCtxStore =
+  CtxStore
+    { nextCtxHandle = CtxHandle 0,
+      ctxMap = Map.empty,
+      nextScopeId = ScopeId 0
+    }
 
 -- | Internal monad of the type-check driver: a 'ReaderT' carrying the
 -- program-wide environment over a 'StateT' for the context store,
@@ -291,16 +311,13 @@ getStore = lift get
 putStore :: CtxStore -> TC ()
 putStore = lift . put
 
--- | Allocate a fresh ambient-sig scope id. Each bounded scope (a
--- bounded function's equation, a rule with a bounded head
--- constraint) gets its own id so 'end_scope' can tear down exactly
--- the right ambient signatures.
-freshScopeId :: TC Int
+-- | Allocate a fresh ambient-sig 'ScopeId'.
+freshScopeId :: TC ScopeId
 freshScopeId = do
   store <- getStore
-  let n = store.nextScopeId
-  putStore store {nextScopeId = n + 1}
-  pure n
+  let ScopeId n = store.nextScopeId
+  putStore store {nextScopeId = ScopeId (n + 1)}
+  pure (ScopeId n)
 
 -- ---------------------------------------------------------------------------
 -- Main entry point
@@ -425,18 +442,24 @@ typeCheckGoals prog loc lbl goals = do
 -- Context helpers
 -- ---------------------------------------------------------------------------
 
--- | Allocate a fresh integer handle and store the current
--- 'CheckCtx''s source-location info in 'CtxMap' under that handle.
--- The returned 'VInt' is what the CHR rules carry around as the
--- @Ctx@ argument; on error decoding we look the handle back up to
--- recover the source location for the diagnostic.
-freshCtxHandle :: CheckCtx -> TC Value
+-- | Allocate a fresh 'CtxHandle' and store the current 'CheckCtx''s
+-- source-location info in 'CtxMap' under it. The handle travels
+-- through the CHR program as the @Ctx@ argument of every @check_*@
+-- constraint (materialised via 'ctxHandleValue'); on error decoding
+-- we look it back up to recover the source location for the
+-- diagnostic.
+freshCtxHandle :: CheckCtx -> TC CtxHandle
 freshCtxHandle cctx = do
   store <- getStore
-  let n = store.nextId
+  let CtxHandle n = store.nextCtxHandle
+      handle = CtxHandle n
       info = CtxInfo {label = cctx.label, loc = cctx.loc, origin = cctx.origin}
-  putStore store {nextId = n + 1, ctxMap = Map.insert n info store.ctxMap}
-  pure (VInt n)
+  putStore
+    store
+      { nextCtxHandle = CtxHandle (n + 1),
+        ctxMap = Map.insert handle info store.ctxMap
+      }
+  pure handle
 
 -- ---------------------------------------------------------------------------
 -- Environment setup
@@ -674,13 +697,11 @@ checkRule rule = do
         any
           (\hc -> Map.member hc.name env.constraintBoundsEnv)
           headConstraints
-  -- Allocate the rule's ambient-sig scope only when at least one
-  -- bounded constraint sits in the head. Without one there are no
-  -- ambient sigs to contribute and the scope teardown is a no-op.
-  scopeId <-
-    if hasBoundedHead
-      then freshScopeId
-      else pure (-1)
+  -- Allocate this rule's ambient-sig scope id. Unused when no
+  -- bounded constraint sits in the head, but allocating eagerly is
+  -- cheap and avoids carrying a "no-scope" sentinel through
+  -- 'checkHeadConstraint'.
+  scopeId <- freshScopeId
   -- Walk each head constraint. For bounded constraints, allocate a
   -- fresh σ for this head occurrence (per §Use sites: each
   -- occurrence's type variables are freshly allocated even when the
@@ -698,7 +719,7 @@ checkRule rule = do
     chrOp $
       tellConstraint
         (Qualified "typechecker" "active_scope")
-        [VInt scopeId]
+        [scopeIdValue scopeId]
   let guardCtx =
         CheckCtx
           { varTypes,
@@ -721,13 +742,13 @@ checkRule rule = do
     chrOp $
       tellConstraint
         (Qualified "typechecker" "end_scope")
-        [VInt scopeId]
+        [scopeIdValue scopeId]
 
 -- | Check one head constraint occurrence. Returns the ambient sigs
 -- this occurrence contributes (empty for unbounded constraints).
 checkHeadConstraint ::
   CheckCtx ->
-  Int ->
+  ScopeId ->
   TypeCheckEnv ->
   D.HeadConstraint ->
   TC (Map Text [Value])
@@ -743,19 +764,20 @@ checkHeadConstraint cctx scopeId env hc =
       encodedDeclArgs <- chrOp (traverse (encodeTypeExpr tvars) argTypes)
       headArgValues <- traverse (typeOfTerm cctx . headArgToTerm) hc.args
       ctx <- freshCtxHandle cctx
-      zipWithM_
-        ( \hv ev ->
-            chrOp $
-              tellConstraint
-                (Qualified "typechecker" "check_unify")
-                [hv, ev, ctx]
-        )
-        headArgValues
-        encodedDeclArgs
+      zipWithM_ (tellCheckUnify ctx) headArgValues encodedDeclArgs
       ambEntries <- traverse (emitAmbientAndBound scopeId ctx tvars) bounds
       pure (Map.fromListWith (++) ambEntries)
-  where
-    zipWithM_ f xs ys = sequence_ (zipWith f xs ys)
+
+-- | Emit a @check_unify(t1, t2, ctx)@ constraint. The argument order
+-- matches the CHR rule: source-variable type first, declared type
+-- second. See the @tc_unify@ argument-order note in the module
+-- header.
+tellCheckUnify :: CtxHandle -> Value -> Value -> TC ()
+tellCheckUnify ctx t1 t2 =
+  chrOp $
+    tellConstraint
+      (Qualified "typechecker" "check_unify")
+      [t1, t2, ctxHandleValue ctx]
 
 -- | Encode one bound, tell its @ambient_sig@ (for in-scope calls to
 -- the bound's named function) and a @check_bound@ residual (for the
@@ -764,8 +786,8 @@ checkHeadConstraint cctx scopeId env hc =
 -- map so 'CheckCtx.ambientSigs' carries the same data the CHR-side
 -- 'check_function_use_with_ambient' rule needs.
 emitAmbientAndBound ::
-  Int ->
-  Value ->
+  ScopeId ->
+  CtxHandle ->
   Map Text Value ->
   BoundSig ->
   TC (Text, [Value])
@@ -777,11 +799,11 @@ emitAmbientAndBound scopeId ctx tvars bs = do
   chrOp $
     tellConstraint
       (Qualified "typechecker" "ambient_sig")
-      [VInt scopeId, VAtom runtimeNm, sigVal]
+      [scopeIdValue scopeId, VAtom runtimeNm, sigVal]
   chrOp $
     tellConstraint
       (Qualified "typechecker" "check_bound")
-      [VAtom runtimeNm, valueList encodedArgs, encodedRet, ctx]
+      [VAtom runtimeNm, valueList encodedArgs, encodedRet, ctxHandleValue ctx]
   pure (runtimeNm, [sigVal])
 
 checkConstraintUse :: CheckCtx -> Types.QualifiedConstraint -> TC ()
@@ -793,7 +815,7 @@ checkConstraintUse cctx c = do
       (Qualified "typechecker" "check_constraint_use")
       [ VAtom (runtimeName (Types.qualifiedToName c.name)),
         valueList argTypeVars,
-        ctx
+        ctxHandleValue ctx
       ]
 
 -- ---------------------------------------------------------------------------
@@ -820,7 +842,7 @@ checkGuard cctx lastConName (D.GuardEqual t1 t2) = do
   tv1 <- typeOfTerm cctx t1
   tv2 <- typeOfTerm cctx t2
   ctx <- freshCtxHandle cctx
-  chrOp $ tellConstraint (Qualified "typechecker" "check_unify") [tv1, tv2, ctx]
+  tellCheckUnify ctx tv1 tv2
   pure lastConName
 checkGuard cctx _ (D.GuardMatch term conName arity) = do
   env <- ask
@@ -832,7 +854,11 @@ checkGuard cctx _ (D.GuardMatch term conName arity) = do
     chrOp $
       tellConstraint
         (Qualified "typechecker" "check_constructor_use")
-        [VAtom (runtimeName canonical), valueList argTypeVars, termType, ctx]
+        [ VAtom (runtimeName canonical),
+          valueList argTypeVars,
+          termType,
+          ctxHandleValue ctx
+        ]
   pure (Just canonical)
 checkGuard cctx lastConName (D.GuardGetArg varName term idx) = do
   resultTypeVar <- chrOp (varType cctx varName)
@@ -854,13 +880,16 @@ checkGuard cctx lastConName (D.GuardGetArg varName term idx) = do
           termType,
           VAtom (runtimeName conName),
           VInt idx,
-          ctx
+          ctxHandleValue ctx
         ]
   pure lastConName
 checkGuard cctx _ (D.GuardExpr term) = do
   tv <- typeOfTerm cctx term
   ctx <- freshCtxHandle cctx
-  chrOp $ tellConstraint (Qualified "typechecker" "check_guard_bool") [tv, ctx]
+  chrOp $
+    tellConstraint
+      (Qualified "typechecker" "check_guard_bool")
+      [tv, ctxHandleValue ctx]
   pure Nothing
 
 -- ---------------------------------------------------------------------------
@@ -875,12 +904,12 @@ checkBodyGoal cctx (D.BodyUnify t1 t2) = do
   tv1 <- typeOfTerm cctx t1
   tv2 <- typeOfTerm cctx t2
   ctx <- freshCtxHandle cctx
-  chrOp $ tellConstraint (Qualified "typechecker" "check_unify") [tv1, tv2, ctx]
+  tellCheckUnify ctx tv1 tv2
 checkBodyGoal cctx (D.BodyIs v term) = do
   vType <- chrOp (varType cctx v)
   termType <- typeOfTerm cctx term
   ctx <- freshCtxHandle cctx
-  chrOp $ tellConstraint (Qualified "typechecker" "check_unify") [vType, termType, ctx]
+  tellCheckUnify ctx vType termType
 checkBodyGoal cctx (D.BodyFunctionCall name args) = do
   argTypeVars <- traverse (typeOfTerm cctx) args
   retTypeVar <- chrOp newVar
@@ -904,6 +933,7 @@ emitFunctionCall ::
 emitFunctionCall cctx name argTypeVars retTypeVar = do
   ctx <- freshCtxHandle cctx
   let runtimeFname = runtimeName name
+      ctxVal = ctxHandleValue ctx
   case Map.lookup runtimeFname cctx.ambientSigs of
     Just ambs@(_ : _) ->
       chrOp $
@@ -913,7 +943,7 @@ emitFunctionCall cctx name argTypeVars retTypeVar = do
             valueList ambs,
             valueList argTypeVars,
             retTypeVar,
-            ctx
+            ctxVal
           ]
     _ ->
       chrOp $
@@ -922,7 +952,7 @@ emitFunctionCall cctx name argTypeVars retTypeVar = do
           [ VAtom runtimeFname,
             valueList argTypeVars,
             retTypeVar,
-            ctx
+            ctxVal
           ]
 
 -- ---------------------------------------------------------------------------
@@ -959,7 +989,7 @@ checkEquation func loc origin eq = do
           [ VAtom (runtimeName (Types.qualifiedToName func.name)),
             valueList argTypeVars,
             retTypeVar,
-            ctx
+            ctxHandleValue ctx
           ]
       checkGuards cctx eq.guards
   where
@@ -1015,44 +1045,31 @@ checkBoundedEquation func (argTys, retTy) bounds varTypes eq = do
   chrOp $
     tellConstraint
       (Qualified "typechecker" "active_scope")
-      [VInt scopeId]
+      [scopeIdValue scopeId]
   paramTypes <- traverse (typeOfTerm cctx . headArgToTerm) eq.params
-  zipWithM_eq ctx paramTypes encodedArgs
+  zipWithM_ (tellCheckUnify ctx) paramTypes encodedArgs
   rhsType <- typeOfTerm cctx eq.rhs
-  chrOp $
-    tellConstraint
-      (Qualified "typechecker" "check_unify")
-      [rhsType, encodedRet, ctx]
+  tellCheckUnify ctx rhsType encodedRet
   checkGuards cctx eq.guards
   chrOp $
     tellConstraint
       (Qualified "typechecker" "end_scope")
-      [VInt scopeId]
-  where
-    zipWithM_eq ctx ps es =
-      sequence_
-        [ chrOp $
-            tellConstraint
-              (Qualified "typechecker" "check_unify")
-              [p, e, ctx]
-        | (p, e) <- zip ps es
-        ]
+      [scopeIdValue scopeId]
 
 -- ---------------------------------------------------------------------------
 -- Term typing
 -- ---------------------------------------------------------------------------
 
--- | Look up a source variable's pre-allocated type slot, or fall back to
--- a fresh logical variable. The fallback is unreachable for a
--- well-formed desugared AST: 'collectVarsInRule' / 'collectVarsInEq' walk
--- the same nodes that 'typeOfTerm' / @checkGuard@ / @checkBodyGoal@
--- visit, so every variable has an entry in 'CheckCtx.varTypes' before
--- type checking begins. The fallback exists only to keep us from
--- crashing if the desugarer ever emits a variable we missed.
+-- | Look up a source variable's pre-allocated type slot.
+-- 'collectVarsInRule' / 'collectVarsInEq' walk the same nodes that
+-- 'typeOfTerm' / @checkGuard@ / @checkBodyGoal@ visit, so every
+-- variable has an entry in 'CheckCtx.varTypes' before type checking
+-- begins. A missing entry signals a broken invariant in the desugarer
+-- or the variable collector.
 varType :: CheckCtx -> Text -> Chr Value
 varType cctx v = case Map.lookup v cctx.varTypes of
   Just val -> pure val
-  Nothing -> newVar
+  Nothing -> error ("TypeCheck.varType: missing var slot for " <> T.unpack v)
 
 typeOfTerm :: CheckCtx -> Term -> TC Value
 typeOfTerm cctx (VarTerm v) = chrOp (varType cctx v)
@@ -1076,13 +1093,10 @@ typeOfAtom cctx name = do
       chrOp $
         tellConstraint
           (Qualified "typechecker" "check_constructor_use")
-          [ VAtom
-              ( runtimeName
-                  canonical
-              ),
+          [ VAtom (runtimeName canonical),
             valueList [],
             resultType,
-            ctx
+            ctxHandleValue ctx
           ]
       pure resultType
     else pure (tcCon0 "any")
@@ -1109,13 +1123,10 @@ typeOfCompound cctx name args = do
       chrOp $
         tellConstraint
           (Qualified "typechecker" "check_constructor_use")
-          [ VAtom
-              ( runtimeName
-                  canonical
-              ),
+          [ VAtom (runtimeName canonical),
             valueList argTypes,
             resultType,
-            ctx
+            ctxHandleValue ctx
           ]
       pure resultType
     else
@@ -1198,11 +1209,27 @@ decodeErrorList ctxMap val = do
     Nothing -> pure []
 
 decodeError :: CtxMap -> Value -> Chr [Diagnostic TypeCheckError]
-decodeError ctxMap (VTerm errorFunctor [ctxVal, codeVal, detailVal])
-  | errorFunctor == tcAtom "error" = do
+decodeError ctxMap val = do
+  val' <- deref val
+  case val' of
+    VTerm errorFunctor [ctxValRaw, codeVal, detailVal]
+      | errorFunctor == tcAtom "error" -> decodeErrorBody ctxValRaw codeVal detailVal
+    _ ->
+      error ("TypeCheck.decodeError: malformed error term: " <> showValueShape val')
+  where
+    decodeErrorBody ctxValRaw codeVal detailVal = do
+      ctxVal <- deref ctxValRaw
       let info = case ctxVal of
-            VInt n -> Map.findWithDefault dummyCtxInfo n ctxMap
-            _ -> dummyCtxInfo
+            VInt n ->
+              Map.findWithDefault
+                (error ("TypeCheck.decodeError: orphan Ctx handle " <> show n))
+                (CtxHandle n)
+                ctxMap
+            _ ->
+              error
+                ( "TypeCheck.decodeError: non-Int Ctx value: "
+                    <> showValueShape ctxVal
+                )
       code <- deref codeVal
       detail <- deref detailVal
       case code of
@@ -1244,8 +1271,25 @@ decodeError ctxMap (VTerm errorFunctor [ctxVal, codeVal, detailVal])
                     info.origin
                 )
             ]
-        _ -> pure []
-decodeError _ _ = pure []
+        VTerm c [] ->
+          error
+            ( "TypeCheck.decodeError: unknown error code "
+                <> T.unpack (displayQualifiedAtom c)
+            )
+        _ -> error "TypeCheck.decodeError: malformed error code value"
+
+-- | One-line description of a runtime 'Value''s outer shape, used only
+-- in 'error' messages for broken-invariant cases in 'decodeError'.
+showValueShape :: Value -> String
+showValueShape (VTerm f xs) =
+  "VTerm " <> T.unpack f <> "/" <> show (length xs)
+showValueShape (VAtom a) = "VAtom " <> T.unpack a
+showValueShape (VInt _) = "VInt"
+showValueShape (VFloat _) = "VFloat"
+showValueShape (VText _) = "VText"
+showValueShape (VBool _) = "VBool"
+showValueShape (VVar _) = "VVar"
+showValueShape VWildcard = "VWildcard"
 
 showType :: Value -> Text
 showType (VAtom a) = displayQualifiedAtom a
@@ -1288,12 +1332,6 @@ showValue v = do
 -- Inverse of 'runtimeName'.
 displayQualifiedAtom :: Text -> Text
 displayQualifiedAtom = T.replace "__" ":"
-
-dummyLoc :: SourceLoc
-dummyLoc = SourceLoc "<typechecker>" 0 0
-
-dummyCtxInfo :: CtxInfo
-dummyCtxInfo = CtxInfo {label = Nothing, loc = dummyLoc, origin = Atom ""}
 
 -- ---------------------------------------------------------------------------
 -- Type definition validation (pure, Haskell-side)
