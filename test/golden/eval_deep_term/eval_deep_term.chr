@@ -1,0 +1,6 @@
+:- module(eval_deep_term, [box/2, nested/2]).
+:- chr_constraint box/2, nested/2.
+
+box(In, Out) <=> Out is wrap(In).
+
+nested(In, Out) <=> Out is outer(middle(In)).

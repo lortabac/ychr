@@ -434,29 +434,42 @@ hostCallMap =
 sessionHostCalls :: Set.Set Text
 sessionHostCalls = Set.fromList ["copy_term"]
 
--- | Compile a host call.  Arguments are dereferenced before calling.
+-- | Compile a host call. Arguments are dereferenced before calling.
 -- Calls listed in 'sessionHostCalls' get the session @%s@ threaded as
 -- their first argument (before the user-visible arguments).
 compileHostCall :: Name -> [ValExpr] -> SExpr
-compileHostCall (Name n) args =
+compileHostCall = compileHostCallWith compileValExpr
+
+-- | Worker for 'compileHostCall' parameterized by how arguments are
+-- compiled. 'compileEvalDeep' reuses this with itself as the inner
+-- compiler so deep-deref propagates into host-call arguments.
+compileHostCallWith :: (ValExpr -> SExpr) -> Name -> [ValExpr] -> SExpr
+compileHostCallWith compile (Name n) args =
   let fn = Map.findWithDefault n n hostCallMap
-      derefedArgs = map (\a -> SList [SAtom "deref", compileValExpr a]) args
+      derefedArgs = map (\a -> SList [SAtom "deref", compile a]) args
       allArgs
         | Set.member n sessionHostCalls = SAtom "%s" : derefedArgs
         | otherwise = derefedArgs
    in SList (SAtom fn : allArgs)
 
--- | Compile an EvalDeep expression.  Like the standard expression
+-- | Compile an EvalDeep expression. Like the standard expression
 -- compiler, but Var references are dereferenced (following binding
 -- chains) and the transformation propagates recursively into
--- sub-expressions.
+-- sub-expressions ('call-expr' arguments, 'make-term' arguments,
+-- 'host-call' arguments).
 compileEvalDeep :: ValExpr -> SExpr
 compileEvalDeep (Lit l) = compileLiteral l
 compileEvalDeep (Var n) = SList [SAtom "deref", SAtom (mangleName n)]
-compileEvalDeep (HostCall n args) = compileHostCall n args
+compileEvalDeep (HostCall n args) = compileHostCallWith compileEvalDeep n args
 compileEvalDeep (CallExpr n args) =
   SList (SAtom (mangleName n) : SAtom "%s" : map compileCallArgDeep args)
-compileEvalDeep e = compileValExpr e -- MakeTerm, GetArg, FieldArg, etc.
+compileEvalDeep (MakeTerm (Name f) args) =
+  SList
+    [ SAtom "make-term",
+      compileSymbol f,
+      SList (SAtom "vector" : map compileEvalDeep args)
+    ]
+compileEvalDeep e = compileValExpr e -- GetArg, FieldArg, FieldType, NewVar
 
 compileCallArgDeep :: CallArg -> SExpr
 compileCallArgDeep (AVal e) = compileEvalDeep e

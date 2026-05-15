@@ -43,7 +43,14 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
 import Data.Foldable (toList, traverse_)
-import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef
+  ( IORef,
+    atomicModifyIORef',
+    modifyIORef',
+    newIORef,
+    readIORef,
+    writeIORef,
+  )
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -261,7 +268,9 @@ bindParams pname params args
 execStmts :: [Stmt] -> InterpM ()
 execStmts = traverse_ execStmt
 
--- | Execute a single statement.
+-- | Execute a single statement. Mutates the local 'Env' for binders,
+-- delegates control-flow stmts to the throw-and-catch machinery, and
+-- routes store / history / reactivation effects through 'Chr'.
 execStmt :: Stmt -> InterpM ()
 execStmt (LetVal name expr) = do
   v <- evalValExpr expr
@@ -318,6 +327,11 @@ execStmt (PushFrame frame) = lift (pushFrame frame)
 -- Foreach implementation
 -- ---------------------------------------------------------------------------
 
+-- | Iterate the body of a 'Foreach' over a snapshot of candidate
+-- suspensions. Dead suspensions and suspensions failing the index
+-- conditions are skipped without entering the body. Labelled
+-- 'CFContinue' / 'CFBreak' are caught here; non-matching labels and
+-- 'CFReturn' propagate to the next outer handler.
 execForeach ::
   Label ->
   Name ->
@@ -362,6 +376,9 @@ checkConditions susp ((ArgIndex i, expr) : rest) = do
 -- Value-expression evaluator (normal mode)
 -- ---------------------------------------------------------------------------
 
+-- | Evaluate a 'ValExpr' in normal (non-deep) mode. Variable references
+-- return whatever value is currently bound; chains are not followed.
+-- 'EvalDeep' delegates to 'evalValExprDeep'.
 evalValExpr :: ValExpr -> InterpM Value
 evalValExpr (Var name) = do
   env <- getEnv
@@ -401,6 +418,8 @@ evalValExpr (EvalDeep expr) = evalValExprDeep expr
 -- Bool-expression evaluator (normal mode)
 -- ---------------------------------------------------------------------------
 
+-- | Evaluate a 'BoolExpr' in normal (non-deep) mode. Logical connectives
+-- short-circuit. 'BEvalDeep' delegates to 'evalBoolExprDeep'.
 evalBoolExpr :: BoolExpr -> InterpM Bool
 evalBoolExpr (BLit b) = pure b
 evalBoolExpr (BNot e) = not <$> evalBoolExpr e
@@ -433,19 +452,7 @@ evalBoolExpr (BNotInHistory ruleId args) = do
 evalBoolExpr (BUnify e1 e2) = do
   v1 <- evalValExpr e1
   v2 <- evalValExpr e2
-  (ok, observers) <- lift (unify v1 v2)
-  lift (enqueue observers)
-  if ok
-    then pure True
-    else do
-      t1 <- lift (valueToTerm Map.empty v1)
-      t2 <- lift (valueToTerm Map.empty v2)
-      lift $
-        runtimeErrorS $
-          "unification failure: cannot unify "
-            ++ prettyTerm t1
-            ++ " with "
-            ++ prettyTerm t2
+  lift (unifyOrError v1 v2)
 evalBoolExpr (BFromVal expr) = do
   v <- evalValExpr expr
   case v of
@@ -457,6 +464,9 @@ evalBoolExpr (BEvalDeep expr) = evalBoolExprDeep expr
 -- Id-expression evaluator
 -- ---------------------------------------------------------------------------
 
+-- | Evaluate an 'IdExpr' to a 'SuspensionId': either a lookup in the
+-- id slot of the local 'Env', or a fresh suspension created from a
+-- 'CreateConstraint' (not yet 'Store'd).
 evalIdExpr :: IdExpr -> InterpM SuspensionId
 evalIdExpr (IdVar name) = do
   env <- getEnv
@@ -479,19 +489,19 @@ evalCallArg (AId e) = CId <$> evalIdExpr e
 -- Host call dispatch
 -- ---------------------------------------------------------------------------
 
+-- | Dispatch a host call by name. Only synchronous, non-control-flow
+-- exceptions thrown by the host body get wrapped as runtime errors:
+-- 'ControlFlow' (interpreter-internal: Return/Continue/Break) and
+-- async exceptions (Ctrl+C, thread kill) must keep their identity so
+-- they reach their intended handler; 'RuntimeErrorThrown' is re-thrown
+-- verbatim so nested host calls preserve the original message and
+-- stack frames.
 invokeHostCall :: Name -> [Value] -> Chr Value
 invokeHostCall name argVals = do
   mfn <- lookupHostCall name
   case mfn of
     Just (HostCallFn f) -> do
       env <- ask
-      -- Only synchronous, non-control-flow exceptions thrown by the
-      -- host call body get wrapped as runtime errors. 'ControlFlow'
-      -- (interpreter-internal: Return/Continue/Break) and async
-      -- exceptions (Ctrl+C, thread kill) must keep their identity so
-      -- they reach their intended handler; 'RuntimeErrorThrown' is
-      -- re-thrown verbatim so nested host calls preserve the original
-      -- message and stack frames.
       result <- liftIO (try @SomeException (runChr (f argVals) env))
       case result of
         Right v -> pure v
@@ -505,7 +515,27 @@ invokeHostCall name argVals = do
           | otherwise ->
               runtimeErrorS $
                 "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc
-    Nothing -> runtimeError' "evalValExpr: unknown host call " name.unName
+    Nothing -> runtimeError' "invokeHostCall: unknown host call " name.unName
+
+-- | Unify two already-evaluated values (tell semantics). Enqueues
+-- observers of any variables affected by the unification — including
+-- on failure, where partial bindings may still have produced
+-- observers worth reactivating. Raises a runtime error with both
+-- operands pretty-printed when unification fails.
+unifyOrError :: Value -> Value -> Chr Bool
+unifyOrError v1 v2 = do
+  (ok, observers) <- unify v1 v2
+  enqueue observers
+  if ok
+    then pure True
+    else do
+      t1 <- valueToTerm Map.empty v1
+      t2 <- valueToTerm Map.empty v2
+      runtimeErrorS $
+        "unification failure: cannot unify "
+          ++ prettyTerm t1
+          ++ " with "
+          ++ prettyTerm t2
 
 -- ---------------------------------------------------------------------------
 -- Value-expression evaluator (deep deref mode)
@@ -557,19 +587,7 @@ evalBoolExprDeep (BEqual e1 e2) = do
 evalBoolExprDeep (BUnify e1 e2) = do
   v1 <- evalValExprDeep e1
   v2 <- evalValExprDeep e2
-  (ok, observers) <- lift (unify v1 v2)
-  lift (enqueue observers)
-  if ok
-    then pure True
-    else do
-      t1 <- lift (valueToTerm Map.empty v1)
-      t2 <- lift (valueToTerm Map.empty v2)
-      lift $
-        runtimeErrorS $
-          "unification failure: cannot unify "
-            ++ prettyTerm t1
-            ++ " with "
-            ++ prettyTerm t2
+  lift (unifyOrError v1 v2)
 evalBoolExprDeep (BFromVal expr) = do
   v <- evalValExprDeep expr
   case v of
