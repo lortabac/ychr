@@ -1,0 +1,17 @@
+:- module(overload_return_propagation).
+:- use_module(library(prelude)).
+
+% Regression test: when an overloaded class call's argument types
+% narrow to a unique signature, the chosen signature's return type
+% must propagate to the call site. Previously, `filter_consistent`
+% built its result list via `[Sig | filter_consistent(...)]` where
+% the recursive call sat inside a compound term and was therefore
+% left unevaluated by the compiler. The patterns of `resolve_one`
+% (and friends) never matched the resulting partially-evaluated
+% list, so the return type silently failed to propagate.
+
+:- chr_constraint go(string).
+
+% 1 + 2 narrows '+' to (int, int) -> int; the int result must
+% conflict with R's declared string type.
+go(R) <=> R is 1 + 2.

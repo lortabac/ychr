@@ -119,7 +119,7 @@ all_nonvar_list([X|_]) | var(X) -> false.
 
 filter_consistent([], _) -> [].
 filter_consistent([Sig|Rest], ArgTypes) | sig_args_consistent(sig_fst(Sig), ArgTypes) ->
-    [Sig | filter_consistent(Rest, ArgTypes)].
+    cons(Sig, filter_consistent(Rest, ArgTypes)).
 filter_consistent([_|Rest], ArgTypes) -> filter_consistent(Rest, ArgTypes).
 
 sig_args_consistent([], []) -> true.
