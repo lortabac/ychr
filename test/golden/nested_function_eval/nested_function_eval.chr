@@ -1,0 +1,21 @@
+:- module(nested_function_eval).
+:- use_module(library(prelude)).
+
+% Regression test: a function-equation RHS that constructs a list
+% whose elements are function calls. Previously, `compileExpr` did not
+% recurse through non-function compound heads (here the cons cell), so
+% `add1(N)` was left as an opaque `MakeTerm` and the result was the
+% partially-evaluated list `[add1(5), add1(5) + 10]` instead of
+% `[6, 16]`. Do NOT rewrite this as `cons(add1(N), ...)` — that form
+% only works because `cons/2` is itself a function and was the original
+% workaround in the typechecker. The point of this test is the bare
+% cons-cell form.
+:- function add1(int) -> int.
+add1(N) -> N + 1.
+
+:- function chain(int) -> list(int).
+chain(N) -> [add1(N), add1(N) + 10].
+
+:- chr_constraint go(list(int)).
+
+go(R) <=> R is chain(5).

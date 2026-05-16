@@ -492,13 +492,14 @@ compileTerm varMap si (CompoundTerm name args) = do
 compileTerm _ _ Wildcard = pure (Lit WildcardLit)
 
 -- | Like 'compileTerm', but also recognises @$call@, @term(...)@,
--- user-defined function calls and @host:f(...)@ at the top level of the
--- term and emits the appropriate 'CallExpr' \/ 'HostCall'. Recursion
--- only happens through these recognised forms; nested compound terms
--- whose head is /not/ a function are compiled as opaque data via
--- 'compileTerm'. The @term\/1@ clause short-circuits directly to
--- 'compileTerm', suppressing evaluation of the argument. See the
--- \"Notes\" block at the bottom of this file.
+-- user-defined function calls and @host:f(...)@ at every level of the
+-- term and emits the appropriate 'CallExpr' \/ 'HostCall'. Compound
+-- terms whose head is a data constructor still compile to 'MakeTerm',
+-- but their arguments are recursively put through 'compileExpr' so
+-- nested function calls inside them are evaluated. The @term\/1@
+-- clause short-circuits to 'compileTerm', suppressing evaluation of
+-- the argument and any subterms. See the \"Notes\" block at the
+-- bottom of this file.
 compileExpr ::
   Set Identifier ->
   VarMap ->
@@ -518,6 +519,19 @@ compileExpr funSet varMap si (CompoundTerm name args)
   | Types.Qualified "host" f <- name = do
       args' <- traverse (compileExpr funSet varMap si) args
       pure (HostCall (Name f) args')
+-- Data-constructor compound at an expression position: still emits a
+-- 'MakeTerm', but each argument is in expression context and is run
+-- through 'compileExpr' so a nested function call (e.g. the
+-- @filter_consistent(...)@ in @[Sig | filter_consistent(Rest, AT)]@)
+-- is recognised. Use @term\/1@ to suppress this and keep the subterm
+-- opaque.
+compileExpr funSet varMap si (CompoundTerm name args@(_ : _)) = do
+  args' <- traverse (compileExpr funSet varMap si) args
+  pure (MakeTerm (vmName name) args')
+-- Non-compound terms (vars, atoms, ints, ...) and 0-arg compounds
+-- (which have no children to descend into and where 'compileTerm''s
+-- @prelude:true@ / @prelude:false@ / qualified-empty-args fast paths
+-- apply) delegate to 'compileTerm'.
 compileExpr _ varMap si t = compileTerm varMap si t
 
 -- ---------------------------------------------------------------------------
@@ -989,17 +1003,19 @@ talk about a "suspension" are @reactivate_dispatch@ ('suspParamName')
 and 'DrainReactivationQueue' ('pendingName'), where the value really is
 "a suspension we received from somewhere else".
 
-Why 'compileExpr' does not recurse through non-function compound terms:
-function calls are only resolved at the top level of an expression
-context (an @is@ RHS, a guard expression, or an argument of a recognised
-function call). Inside an opaque data constructor like
-@pair(foo(X), bar(Y))@, the @foo@ and @bar@ subterms are /terms/, not
-calls — Prolog and CHR both treat data constructors and function symbols
-as syntactically indistinguishable, and the recogniser uses the
-'funSet' membership test to decide which is which. The fall-through
-'compileTerm' branch is therefore intentional: it compiles such subterms
-as 'MakeTerm' nodes regardless of whether their head /happens/ to share a
-name with a declared function.
+How 'compileExpr' handles compound terms: at every level it asks the
+'funSet' / @host:f@ recogniser whether the current head names a
+function. If so, the term compiles to a 'CallExpr' or 'HostCall'
+(and its arguments stay in expression context). If not, the term
+compiles to a 'MakeTerm', /but its arguments are still in expression
+context/ — they are recursively re-entered through 'compileExpr', so
+a nested @foo(X)@ inside @pair(foo(X), bar(Y))@ becomes a call
+whenever @foo@ is a declared function. Prolog and CHR both treat
+data constructors and function symbols as syntactically
+indistinguishable, and the user opts out of this evaluation with
+@term\/1@: @term(foo(X))@ short-circuits to 'compileTerm' and keeps
+the subterm opaque regardless of whether @foo@ happens to be a
+declared function.
 
 Why 'genFireStmts' skips the alive check for removed partners during
 backjumping: 'genKillStmts' has just emitted an unconditional 'Kill' for

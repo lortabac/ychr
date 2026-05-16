@@ -548,7 +548,14 @@ liftTerm modName loc origin scope parentRequiring st term = case term of
               errors = newErrors ++ st'.errors
             }
         lambdaId = modName <> "__" <> lambdaName
-        closureArgs = [AtomTerm lambdaId, quoteTerm term] ++ map VarTerm freeVars
+        -- The quoted source form is for pretty-printing only and must
+        -- stay opaque: it contains the lambda body with all its
+        -- function-named subterms (@'+'@, @'*'@, user functions, …)
+        -- still spelled out, and 'compileExpr' would otherwise
+        -- eagerly evaluate them at closure-construction time. Wrap
+        -- in @term/1@ so 'compileExpr' short-circuits to 'compileTerm'.
+        sourceForm = CompoundTerm (Unqualified "term") [quoteTerm term]
+        closureArgs = [AtomTerm lambdaId, sourceForm] ++ map VarTerm freeVars
      in (st'', CompoundTerm (Unqualified closureFunctor) closureArgs)
   CompoundTerm name args ->
     let (st', args') = mapAccumL (liftTerm modName loc origin scope parentRequiring) st args
