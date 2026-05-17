@@ -33,6 +33,9 @@ module YCHR.Desugared
     Guard (..),
     BodyGoal (..),
 
+    -- * Expressions
+    Expr (..),
+
     -- * Re-exports from CHR.Types
     QualifiedConstraint (..),
     QualifiedName (..),
@@ -48,6 +51,7 @@ where
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import YCHR.Parsed (AnnP)
+import YCHR.Resolved (Expr (..))
 import YCHR.Types
 
 data Program = Program
@@ -77,20 +81,36 @@ data Head = Head
   }
   deriving (Show, Eq)
 
+-- | Guards over the typed 'Expr' AST. 'GuardMatch' and 'GuardGetArg'
+-- always carry a 'VarExpr' as their operand: HNF only introduces
+-- match/getarg guards for fresh variables it has just bound. The
+-- operand type is left as 'Expr' rather than 'Text' so the lambda
+-- lifter and pretty-printer can walk guards uniformly.
 data Guard
-  = GuardEqual Term Term
-  | GuardMatch Term Name Int
-  | GuardGetArg Text Term Int
-  | GuardExpr Term
+  = GuardEqual Expr Expr
+  | GuardMatch Expr Name Int
+  | GuardGetArg Text Expr Int
+  | GuardExpr Expr
   deriving (Show, Eq)
 
+-- | Body goals over the typed 'Expr' AST.
+--
+-- 'BodyConstraint' keeps its 'QualifiedConstraint' (whose arguments
+-- are 'Term') unchanged: constraint arguments are patterns, so the
+-- call-vs-constructor question doesn't arise for them. Migrating
+-- constraint arguments to 'Expr' would force matching changes through
+-- 'YCHR.Types' and the runtime; that is out of scope for this pass.
+--
+-- 'BodyCall' replaces the legacy @BodyFunctionCall@ for static calls
+-- and 'BodyApply' replaces it for dynamic dispatch ('$call').
 data BodyGoal
   = BodyTrue
   | BodyConstraint QualifiedConstraint
-  | BodyUnify Term Term
-  | BodyHostStmt Text [Term]
-  | BodyIs Text Term
-  | BodyFunctionCall Name [Term]
+  | BodyUnify Expr Expr
+  | BodyHostStmt Text [Expr]
+  | BodyIs Text Expr
+  | BodyCall QualifiedName [Expr]
+  | BodyApply Expr [Expr]
   deriving (Show, Eq)
 
 data Function = Function
@@ -107,6 +127,6 @@ data Function = Function
 data Equation = Equation
   { params :: [HeadArg],
     guards :: [Guard],
-    rhs :: Term
+    rhs :: Expr
   }
   deriving (Show)

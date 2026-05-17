@@ -63,12 +63,11 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (mapAccumL)
-import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Desugared qualified as D
-import YCHR.Diagnostic (Diagnostic (..), noDiag)
+import YCHR.Diagnostic (Diagnostic (..))
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed (AnnP (..), noAnnP)
 import YCHR.Parsed qualified as P
@@ -76,8 +75,7 @@ import YCHR.Resolved qualified as R
 import YCHR.Types
 
 data DesugarError
-  = UnexpectedBodyTerm Term
-  | InvalidLambdaParam Term
+  = UnexpectedBodyExpr R.Expr
   deriving (Eq, Show)
 
 -- | Prefix for fresh variables introduced by the Head Normal Form
@@ -99,22 +97,55 @@ lambdaPrefix = "__lambda_"
 closureFunctor :: Text
 closureFunctor = "__closure"
 
--- | Quote a term so it becomes ground: all 'VarTerm' names become
--- 'AtomTerm' values, and 'Wildcard' becomes @AtomTerm "_"@. Used to
--- embed the original lambda source form in the closure term without
--- introducing variable references.
-quoteTerm :: Term -> Term
-quoteTerm (VarTerm v) = AtomTerm v
-quoteTerm Wildcard = AtomTerm "_"
-quoteTerm (CompoundTerm n args) = CompoundTerm n (map quoteTerm args)
-quoteTerm t = t -- IntTerm, AtomTerm, TextTerm are already ground
+-- | Quote an expression so it becomes ground: variable references
+-- become atom literals; wildcards become @AtomExpr "_"@. Used to embed
+-- the original lambda source form in the closure expression without
+-- introducing dangling variable references. The pretty-printer reads
+-- the quoted form back out at display time; the form is never
+-- evaluated. See the comment at 'sourceForm' in 'liftExpr' for the
+-- reason 'LambdaExpr' is flattened here rather than preserved.
+quoteExpr :: R.Expr -> R.Expr
+quoteExpr (R.VarExpr v) = R.AtomExpr v
+quoteExpr R.WildcardExpr = R.AtomExpr "_"
+quoteExpr (R.CtorExpr n args) = R.CtorExpr n (map quoteExpr args)
+quoteExpr (R.CallExpr qn args) = R.CallExpr qn (map quoteExpr args)
+quoteExpr (R.ApplyExpr f args) =
+  R.ApplyExpr (quoteExpr f) (map quoteExpr args)
+quoteExpr (R.HostExpr f args) = R.HostExpr f (map quoteExpr args)
+quoteExpr (R.LambdaExpr params body) =
+  R.CtorExpr
+    (Unqualified "->")
+    [ R.CtorExpr (Unqualified "fun") (map paramAtom params),
+      quoteExpr body
+    ]
+  where
+    paramAtom (HeadVar v) = R.AtomExpr v
+    paramAtom HeadWildcard = R.AtomExpr "_"
+quoteExpr e@(R.IntExpr _) = e
+quoteExpr e@(R.FloatExpr _) = e
+quoteExpr e@(R.AtomExpr _) = e
+quoteExpr e@(R.TextExpr _) = e
+quoteExpr e@(R.FunRefExpr _ _) = e
+
+-- | Convert a head-position 'Term' (always a pattern: variable, wildcard,
+-- literal, or constructor compound) to its 'R.Expr' equivalent. HNF
+-- emits guards whose operands are these patterns, so the conversion is
+-- exhaustive over the pattern grammar.
+headTermToExpr :: Term -> R.Expr
+headTermToExpr (VarTerm v) = R.VarExpr v
+headTermToExpr Wildcard = R.WildcardExpr
+headTermToExpr (IntTerm n) = R.IntExpr n
+headTermToExpr (FloatTerm n) = R.FloatExpr n
+headTermToExpr (AtomTerm s) = R.AtomExpr s
+headTermToExpr (TextTerm s) = R.TextExpr s
+headTermToExpr (CompoundTerm n args) =
+  R.CtorExpr n (map headTermToExpr args)
 
 -- | The primary entry point: converts a resolved program to a desugared program.
 desugarProgram :: R.Program -> Either [Diagnostic DesugarError] D.Program
 desugarProgram rprog =
-  let funSet = Set.map qualifiedToName rprog.functionNames
-      (result, errs) = runWriter $ do
-        rules <- traverse (desugarRule funSet) rprog.rules
+  let (result, errs) = runWriter $ do
+        rules <- traverse desugarRule rprog.rules
         functions <- traverse desugarFunctionDef rprog.functions
         pure
           D.Program
@@ -151,10 +182,10 @@ getRuleConstraints r =
 -- | Desugar one resolved rule: classify its body goals, desugar its user
 -- guards, flatten the head kind, and run HNF on the head. HNF-emitted
 -- guards are prepended to the user guards so they run first.
-desugarRule :: Set Name -> R.Rule -> Writer [Diagnostic DesugarError] D.Rule
-desugarRule funSet r = do
+desugarRule :: R.Rule -> Writer [Diagnostic DesugarError] D.Rule
+desugarRule r = do
   let ruleLabel = fmap (\ann -> "rule " <> ann.node) r.name
-  ruleBody <- desugarBodyGoals funSet ruleLabel r.body.sourceLoc r.body.parsed r.body.node
+  ruleBody <- desugarBodyGoals ruleLabel r.body.sourceLoc r.body.parsed r.body.node
   userGuards <- traverse (desugarGuard r.guard.sourceLoc) r.guard.node
   let (rawKept, rawRemoved) = flattenHeadKind r.head.node
       (guards, normalizedHead) = normalizeHead rawKept rawRemoved
@@ -224,7 +255,7 @@ normalizeArg HnfState {counter, seen, guards} (VarTerm v)
        in ( HnfState
               { counter = counter + 1,
                 seen,
-                guards = D.GuardEqual (VarTerm v) (VarTerm fresh) : guards
+                guards = D.GuardEqual (R.VarExpr v) (R.VarExpr fresh) : guards
               },
             HeadVar fresh
           )
@@ -245,7 +276,7 @@ normalizeArg HnfState {counter, seen, guards} term =
    in ( HnfState
           { counter = counter + 1,
             seen,
-            guards = D.GuardEqual (VarTerm fresh) term : guards
+            guards = D.GuardEqual (R.VarExpr fresh) (headTermToExpr term) : guards
           },
         HeadVar fresh
       )
@@ -258,7 +289,7 @@ normalizeArg HnfState {counter, seen, guards} term =
 -- 'GuardMatch' per compound regardless of where the name originated.
 decomposeCompound :: HnfState -> Text -> Name -> [Term] -> HnfState
 decomposeCompound HnfState {counter, seen, guards} parentVar cname cargs =
-  let matchGuard = D.GuardMatch (VarTerm parentVar) cname (length cargs)
+  let matchGuard = D.GuardMatch (R.VarExpr parentVar) cname (length cargs)
       st' = HnfState {counter, seen, guards = matchGuard : guards}
    in foldl' (\s (i, arg) -> decomposeArg s parentVar i arg) st' (zip [0 ..] cargs)
 
@@ -268,8 +299,8 @@ decomposeArg HnfState {counter, seen, guards} parentVar i (VarTerm v)
   | Set.member v seen =
       -- Duplicate variable: extract and check equality
       let fresh = hnfPrefix <> T.pack (show counter)
-          getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
-          eqGuard = D.GuardEqual (VarTerm v) (VarTerm fresh)
+          getGuard = D.GuardGetArg fresh (R.VarExpr parentVar) i
+          eqGuard = D.GuardEqual (R.VarExpr v) (R.VarExpr fresh)
        in HnfState
             { counter = counter + 1,
               seen,
@@ -277,7 +308,7 @@ decomposeArg HnfState {counter, seen, guards} parentVar i (VarTerm v)
             }
   | otherwise =
       -- First occurrence: extract and bind
-      let getGuard = D.GuardGetArg v (VarTerm parentVar) i
+      let getGuard = D.GuardGetArg v (R.VarExpr parentVar) i
        in HnfState
             { counter,
               seen = Set.insert v seen,
@@ -287,7 +318,7 @@ decomposeArg st _ _ Wildcard = st
 decomposeArg HnfState {counter, seen, guards} parentVar i (CompoundTerm cname cargs) =
   -- Nested compound: extract then recursively decompose
   let fresh = hnfPrefix <> T.pack (show counter)
-      getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
+      getGuard = D.GuardGetArg fresh (R.VarExpr parentVar) i
       st' =
         HnfState
           { counter = counter + 1,
@@ -298,8 +329,8 @@ decomposeArg HnfState {counter, seen, guards} parentVar i (CompoundTerm cname ca
 decomposeArg HnfState {counter, seen, guards} parentVar i term =
   -- Ground term (atom, integer, string): extract and check equality
   let fresh = hnfPrefix <> T.pack (show counter)
-      getGuard = D.GuardGetArg fresh (VarTerm parentVar) i
-      eqGuard = D.GuardEqual (VarTerm fresh) term
+      getGuard = D.GuardGetArg fresh (R.VarExpr parentVar) i
+      eqGuard = D.GuardEqual (R.VarExpr fresh) (headTermToExpr term)
    in HnfState
         { counter = counter + 1,
           seen,
@@ -341,20 +372,20 @@ desugarEquation' eq = do
         rhs = eq.rhs.node
       }
 
--- | Classify a parsed guard term into a 'D.Guard'.
+-- | Classify a resolved guard expression into a 'D.Guard'.
 --
--- Every term is accepted as a 'D.GuardExpr'. Type errors (e.g. a
+-- Every expression is accepted as a 'D.GuardExpr'. Type errors (e.g. a
 -- non-boolean guard) are deferred to a future typechecker.
-desugarGuard :: P.SourceLoc -> Term -> Writer [Diagnostic DesugarError] D.Guard
-desugarGuard _ t = pure $ D.GuardExpr t
+desugarGuard :: P.SourceLoc -> R.Expr -> Writer [Diagnostic DesugarError] D.Guard
+desugarGuard _ e = pure $ D.GuardExpr e
 
--- | Desugar a list of query goal terms into 'BodyGoal's.
+-- | Desugar a list of query goal expressions into 'BodyGoal's.
 -- Returns 'Left' if any desugaring errors occur.
-desugarQueryGoals :: Set Name -> [Term] -> Either [Diagnostic DesugarError] [D.BodyGoal]
-desugarQueryGoals funSet goals =
+desugarQueryGoals :: [R.Expr] -> Either [Diagnostic DesugarError] [D.BodyGoal]
+desugarQueryGoals goals =
   let (results, errs) =
         runWriter $
-          desugarBodyGoals funSet Nothing P.dummyLoc (Atom "") goals
+          desugarBodyGoals Nothing P.dummyLoc (Atom "") goals
    in if null errs then Right results else Left errs
 
 -- ---------------------------------------------------------------------------
@@ -372,65 +403,58 @@ runVarNameSupply ::
   Writer [Diagnostic DesugarError] a
 runVarNameSupply m = evalStateT m 0
 
--- | Desugar a list of body terms, flattening any multi-goal expansions
--- (e.g. non-variable @is@ LHS).
+-- | Desugar a list of body expressions, flattening any multi-goal
+-- expansions (e.g. non-variable @is@ LHS).
 desugarBodyGoals ::
-  Set Name ->
   Maybe Text ->
   P.SourceLoc ->
   PExpr ->
-  [Term] ->
+  [R.Expr] ->
   Writer [Diagnostic DesugarError] [D.BodyGoal]
-desugarBodyGoals funSet label loc origin terms =
-  runVarNameSupply $ concat <$> traverse (desugarBodyGoal funSet label loc origin) terms
+desugarBodyGoals label loc origin exprs =
+  runVarNameSupply $ concat <$> traverse (desugarBodyGoal label loc origin) exprs
 
--- | Classify a parsed body term into 'D.BodyGoal's.
+-- | Classify a resolved body expression into 'D.BodyGoal's.
 --
 -- Pattern priority (order matters):
 --
 -- 1. @X = Y@ -> 'D.BodyUnify'
 -- 2. @X is Expr@ (variable LHS) -> 'D.BodyIs'
 -- 3. @T is Expr@ (non-variable LHS) -> @R is Expr, R = T@ with fresh @R@
--- 4. @host:f(…)@ -> 'D.BodyHostStmt'
--- 5. Qualified name in function set -> 'D.BodyFunctionCall'
--- 6. Other qualified name -> 'D.BodyConstraint'
--- 7. @'$call'(F, …)@ -> 'D.BodyFunctionCall' — @$call@ stays
---    'Unqualified' (it is reserved by the renamer), so it would
---    otherwise fall into the unqualified-compound error case below.
--- 8. @true@ -> 'D.BodyTrue'
--- 9. Unqualified compound (renamer should have caught this) -> error
--- 10. Anything else (bare variable, integer, atom, …) -> error
+-- 4. 'R.HostExpr' -> 'D.BodyHostStmt'
+-- 5. 'R.CallExpr' -> 'D.BodyCall'
+-- 6. 'R.ApplyExpr' -> 'D.BodyApply'
+-- 7. Constructor with a 'Qualified' name -> 'D.BodyConstraint'
+-- 8. @true@ in any spelling -> 'D.BodyTrue'
+-- 9. Anything else -> error
 desugarBodyGoal ::
-  Set Name ->
   Maybe Text ->
   P.SourceLoc ->
   PExpr ->
-  Term ->
+  R.Expr ->
   StateT Int (Writer [Diagnostic DesugarError]) [D.BodyGoal]
-desugarBodyGoal funSet label loc origin t = case t of
-  CompoundTerm (Unqualified "=") [l, r] -> pure [D.BodyUnify l r]
-  CompoundTerm (Unqualified "is") [VarTerm v, expr] ->
+desugarBodyGoal label loc origin e = case e of
+  -- Surface '=' arrives as CtorExpr "=" from the resolver.
+  R.CtorExpr (Unqualified "=") [l, r] -> pure [D.BodyUnify l r]
+  -- 'is' with a variable LHS.
+  R.CtorExpr (Unqualified "is") [R.VarExpr v, expr] ->
     pure [D.BodyIs v expr]
-  CompoundTerm (Unqualified "is") [lhs, expr] -> do
+  -- 'is' with a non-variable LHS: introduce a fresh value, then unify.
+  R.CtorExpr (Unqualified "is") [lhs, expr] -> do
     v <- freshVarName
-    pure [D.BodyIs v expr, D.BodyUnify (VarTerm v) lhs]
-  CompoundTerm (Qualified "host" f) args ->
-    pure [D.BodyHostStmt f args]
-  CompoundTerm (Qualified "prelude" "true") [] -> pure [D.BodyTrue]
-  CompoundTerm name@(Qualified _ _) args
-    | Set.member name funSet ->
-        pure [D.BodyFunctionCall name args]
-  CompoundTerm (Qualified m b) args ->
-    pure [D.BodyConstraint (QualifiedConstraint (QualifiedName m b) args)]
-  CompoundTerm (Unqualified "$call") args
-    | length args >= 2 ->
-        pure [D.BodyFunctionCall (Unqualified "$call") args]
-  AtomTerm "true" -> pure [D.BodyTrue]
-  CompoundTerm (Unqualified _) _ -> do
-    lift (tell [Diagnostic label (AnnP (UnexpectedBodyTerm t) loc origin)])
-    pure [D.BodyTrue]
+    pure [D.BodyIs v expr, D.BodyUnify (R.VarExpr v) lhs]
+  R.HostExpr f args -> pure [D.BodyHostStmt f args]
+  R.CtorExpr (Qualified "prelude" "true") [] -> pure [D.BodyTrue]
+  R.AtomExpr "true" -> pure [D.BodyTrue]
+  R.CallExpr qn args -> pure [D.BodyCall qn args]
+  R.ApplyExpr f args -> pure [D.BodyApply f args]
+  R.CtorExpr (Qualified m b) args ->
+    pure
+      [ D.BodyConstraint
+          (QualifiedConstraint (QualifiedName m b) (map R.exprToTerm args))
+      ]
   _ -> do
-    lift (tell [Diagnostic label (AnnP (UnexpectedBodyTerm t) loc origin)])
+    lift (tell [Diagnostic label (AnnP (UnexpectedBodyExpr e) loc origin)])
     pure [D.BodyTrue]
 
 -- ---------------------------------------------------------------------------
@@ -446,85 +470,69 @@ data LiftState = LiftState
     errors :: [Diagnostic DesugarError]
   }
 
--- | Convert a parsed lambda parameter to a 'HeadArg'. Returns
--- 'Nothing' when the term is neither a variable nor a wildcard;
--- those are reported as 'InvalidLambdaParam'.
-termToHeadArg :: Term -> Maybe HeadArg
-termToHeadArg (VarTerm v) = Just (HeadVar v)
-termToHeadArg Wildcard = Just HeadWildcard
-termToHeadArg _ = Nothing
+-- | Collect all variable names referenced inside an expression.
+exprVars :: R.Expr -> Set.Set Text
+exprVars (R.VarExpr v) = Set.singleton v
+exprVars (R.CtorExpr _ args) = Set.unions (map exprVars args)
+exprVars (R.CallExpr _ args) = Set.unions (map exprVars args)
+exprVars (R.ApplyExpr f args) =
+  exprVars f `Set.union` Set.unions (map exprVars args)
+exprVars (R.HostExpr _ args) = Set.unions (map exprVars args)
+exprVars (R.LambdaExpr params body) =
+  exprVars body `Set.difference` Set.fromList [v | HeadVar v <- params]
+exprVars (R.FunRefExpr _ _) = Set.empty
+exprVars (R.IntExpr _) = Set.empty
+exprVars (R.FloatExpr _) = Set.empty
+exprVars (R.AtomExpr _) = Set.empty
+exprVars (R.TextExpr _) = Set.empty
+exprVars R.WildcardExpr = Set.empty
 
--- | Collect all variable names from a term.
+-- | Variables referenced in a 'Term'. Reused for the surviving
+-- @[Term]@ positions in the desugared AST (notably constraint args).
 termVars :: Term -> Set.Set Text
 termVars (VarTerm v) = Set.singleton v
 termVars (CompoundTerm _ args) = Set.unions (map termVars args)
 termVars _ = Set.empty
 
--- | Extract parameters and body from a @fun(X, Y) -> body@ lambda term.
--- Parameters are kept as 'Term' values ('VarTerm' or 'Wildcard').
-extractLambdaParams :: Term -> ([Term], Term)
-extractLambdaParams
-  ( CompoundTerm
-      (Unqualified "->")
-      [ CompoundTerm (Unqualified "fun") params,
-        body
-        ]
-    ) =
-    (params, body)
-extractLambdaParams t = ([], t)
-
--- | Lift lambdas in a single term. Each @fun(...) -> ...@ is replaced
--- by a /self-describing closure/ of the form
--- @__closure(LambdaId, SourceForm, F1, …, Fn)@, where @LambdaId@ is
--- an atom identifying the lifted function, @SourceForm@ is a quoted
--- copy of the original lambda term (for pretty-printing), and
--- @F1 .. Fn@ are the captured free variables; the lambda body itself
--- is lifted into a fresh top-level 'D.Function'. Returns the updated
--- state and the rewritten term.
+-- | Lift lambdas in a single expression. Each 'R.LambdaExpr' is
+-- replaced by a /self-describing closure/ of the form
+-- @__closure(LambdaId, SourceForm, F1, …, Fn)@: @LambdaId@ is an atom
+-- identifying the lifted function, @SourceForm@ is a quoted copy of
+-- the original lambda (for pretty-printing), and @F1 .. Fn@ are the
+-- captured free variables. The lambda body itself is lifted into a
+-- fresh top-level 'D.Function'. Returns the updated state and the
+-- rewritten expression.
 --
--- The @parentRequiring@ argument is the enclosing bounded
--- declaration's @requiring@ clause (or @[]@ when the lambda's parent
--- is unbounded). Every lifted lambda inherits this clause so that
--- bound-named operations inside the lambda body resolve against the
--- same ambient signatures as in the parent's equation. Nested lambdas
--- inherit recursively.
-liftTerm ::
+-- @parentRequiring@ is the enclosing bounded declaration's
+-- @requiring@ clause (or @[]@ when the lambda's parent is unbounded).
+-- Every lifted lambda inherits this clause so that bound-named
+-- operations inside the lambda body resolve against the same ambient
+-- signatures as in the parent's equation. Nested lambdas inherit
+-- recursively.
+liftExpr ::
   Text ->
-  P.SourceLoc ->
-  PExpr ->
   Set.Set Text ->
   [BoundSig] ->
   LiftState ->
-  Term ->
-  ( LiftState,
-    Term
-  )
-liftTerm modName loc origin scope parentRequiring st term = case term of
-  CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") _, _] ->
-    let (params, body) = extractLambdaParams term
-        badParams = [p | p <- params, termToHeadArg p == Nothing]
-        -- Convert valid params; invalid ones get a 'HeadWildcard'
-        -- placeholder so the rest of this branch can still build a
-        -- (discarded) function value. The 'InvalidLambdaParam'
-        -- diagnostic recorded below causes 'liftAllLambdas' to return
-        -- 'Left', so the placeholder is never seen by downstream
-        -- passes.
-        paramHeadArgs =
-          map (\p -> maybe HeadWildcard id (termToHeadArg p)) params
-        paramVarNames = Set.fromList [v | HeadVar v <- paramHeadArgs]
-        bodyVars = termVars body
+  R.Expr ->
+  (LiftState, R.Expr)
+liftExpr modName scope parentRequiring st0 expr = case expr of
+  R.LambdaExpr params body ->
+    let paramVarNames = Set.fromList [v | HeadVar v <- params]
+        bodyFree = exprVars body
         freeVars =
           Set.toAscList
-            ( bodyVars
+            ( bodyFree
                 `Set.intersection` scope
                 `Set.difference` paramVarNames
             )
         innerScope = scope `Set.union` paramVarNames
-        (st', liftedBody) = liftTerm modName loc origin innerScope parentRequiring st body
-        idx = st'.counter
+        (st1, liftedBody) =
+          liftExpr modName innerScope parentRequiring st0 body
+        idx = st1.counter
         lambdaName = lambdaPrefix <> T.pack (show idx)
         qualName = QualifiedName modName lambdaName
-        allParams = map HeadVar freeVars ++ paramHeadArgs
+        allParams = map HeadVar freeVars ++ params
         func =
           D.Function
             { name = qualName,
@@ -540,12 +548,10 @@ liftTerm modName loc origin scope parentRequiring st term = case term of
                       }
                   ]
             }
-        newErrors = map (\p -> noDiag (AnnP (InvalidLambdaParam p) loc origin)) badParams
-        st'' =
-          st'
+        st2 =
+          st1
             { counter = idx + 1,
-              liftedFunctions = func : st'.liftedFunctions,
-              errors = newErrors ++ st'.errors
+              liftedFunctions = func : st1.liftedFunctions
             }
         lambdaId = modName <> "__" <> lambdaName
         -- The quoted source form is for pretty-printing only and must
@@ -553,58 +559,100 @@ liftTerm modName loc origin scope parentRequiring st term = case term of
         -- function-named subterms (@'+'@, @'*'@, user functions, …)
         -- still spelled out, and 'compileExpr' would otherwise
         -- eagerly evaluate them at closure-construction time. Wrap
-        -- in @term/1@ so 'compileExpr' short-circuits to 'compileTerm'.
-        sourceForm = CompoundTerm (Unqualified "term") [quoteTerm term]
-        closureArgs = [AtomTerm lambdaId, sourceForm] ++ map VarTerm freeVars
-     in (st'', CompoundTerm (Unqualified closureFunctor) closureArgs)
-  CompoundTerm name args ->
-    let (st', args') = mapAccumL (liftTerm modName loc origin scope parentRequiring) st args
-     in (st', CompoundTerm name args')
-  _ -> (st, term)
+        -- in @term/1@ so 'compileExpr' short-circuits via
+        -- 'compileTerm' on the 'R.exprToTerm' of the quoted subtree.
+        --
+        -- 'quoteExpr' also rewrites 'R.LambdaExpr' into a surface
+        -- @->@/@fun@ 'CtorExpr' with atomised parameter names.
+        -- Keeping a real 'LambdaExpr' here would leave its parameter
+        -- variables as 'HeadVar's; 'R.exprToTerm' would turn each
+        -- into a 'VarTerm', and 'compileTerm' would then look it up
+        -- in the enclosing rule's varMap (where it does not exist)
+        -- and raise 'UnboundVariable'. Atomising the parameters
+        -- breaks that lookup chain.
+        sourceForm =
+          R.CtorExpr (Unqualified "term") [quoteExpr expr]
+        closureArgs =
+          R.AtomExpr lambdaId : sourceForm : map R.VarExpr freeVars
+     in (st2, R.CtorExpr (Unqualified closureFunctor) closureArgs)
+  R.CtorExpr name args ->
+    let (st1, args') =
+          mapAccumL (liftExpr modName scope parentRequiring) st0 args
+     in (st1, R.CtorExpr name args')
+  R.CallExpr qn args ->
+    let (st1, args') =
+          mapAccumL (liftExpr modName scope parentRequiring) st0 args
+     in (st1, R.CallExpr qn args')
+  R.ApplyExpr f args ->
+    let (st1, f') = liftExpr modName scope parentRequiring st0 f
+        (st2, args') =
+          mapAccumL (liftExpr modName scope parentRequiring) st1 args
+     in (st2, R.ApplyExpr f' args')
+  R.HostExpr f args ->
+    let (st1, args') =
+          mapAccumL (liftExpr modName scope parentRequiring) st0 args
+     in (st1, R.HostExpr f args')
+  _ -> (st0, expr)
 
--- | Lift lambdas in a body goal.
+-- | Lift lambdas in a body goal. Body-constraint argument lists carry
+-- @[Term]@ values that, in CHR semantics, are unevaluated data —
+-- a literal @fun(...) -> body@ Term inside a constraint argument
+-- stays as a compound term rather than becoming a callable closure.
+-- We therefore do not walk 'D.BodyConstraint.args' at all; every other
+-- body goal carries 'Expr'-typed children that 'liftExpr' lifts.
 liftBodyGoal ::
   Text ->
-  P.SourceLoc ->
-  PExpr ->
   Set.Set Text ->
   [BoundSig] ->
   LiftState ->
   D.BodyGoal ->
   (LiftState, D.BodyGoal)
-liftBodyGoal modName loc origin scope parentRequiring st goal = case goal of
+liftBodyGoal modName scope parentRequiring st goal = case goal of
   D.BodyIs v expr ->
-    let (st', expr') = liftTerm modName loc origin scope parentRequiring st expr
+    let (st', expr') = liftExpr modName scope parentRequiring st expr
      in (st', D.BodyIs v expr')
-  D.BodyFunctionCall name args ->
-    let (st', args') = mapAccumL (liftTerm modName loc origin scope parentRequiring) st args
-     in (st', D.BodyFunctionCall name args')
-  D.BodyConstraint (QualifiedConstraint cname cargs) ->
-    let (st', cargs') = mapAccumL (liftTerm modName loc origin scope parentRequiring) st cargs
-     in (st', D.BodyConstraint (QualifiedConstraint cname cargs'))
+  D.BodyCall qn args ->
+    let (st', args') =
+          mapAccumL (liftExpr modName scope parentRequiring) st args
+     in (st', D.BodyCall qn args')
+  D.BodyApply f args ->
+    let (st', f') = liftExpr modName scope parentRequiring st f
+        (st'', args') =
+          mapAccumL (liftExpr modName scope parentRequiring) st' args
+     in (st'', D.BodyApply f' args')
+  D.BodyConstraint c -> (st, D.BodyConstraint c)
   D.BodyUnify t1 t2 ->
-    let (st', t1') = liftTerm modName loc origin scope parentRequiring st t1
-        (st'', t2') = liftTerm modName loc origin scope parentRequiring st' t2
+    let (st', t1') = liftExpr modName scope parentRequiring st t1
+        (st'', t2') = liftExpr modName scope parentRequiring st' t2
      in (st'', D.BodyUnify t1' t2')
   D.BodyHostStmt f args ->
-    let (st', args') = mapAccumL (liftTerm modName loc origin scope parentRequiring) st args
+    let (st', args') =
+          mapAccumL (liftExpr modName scope parentRequiring) st args
      in (st', D.BodyHostStmt f args')
   D.BodyTrue -> (st, D.BodyTrue)
 
--- | Lift lambdas in a guard.
+-- | Lift lambdas in a guard. 'GuardExpr' and 'GuardEqual' carry
+-- user-written expressions that can contain a lambda
+-- (@X == fun(Y) -> Y end@ is unusual but legal), so both arms walk
+-- their operands with 'liftExpr'. 'GuardMatch' and 'GuardGetArg' are
+-- HNF-synthetic: their operands are always 'R.VarExpr', so a walk
+-- would be a no-op and we leave them untouched.
 liftGuard ::
   Text ->
-  P.SourceLoc ->
-  PExpr ->
   Set.Set Text ->
   [BoundSig] ->
   LiftState ->
   D.Guard ->
   (LiftState, D.Guard)
-liftGuard modName loc origin scope parentRequiring st (D.GuardExpr term) =
-  let (st', term') = liftTerm modName loc origin scope parentRequiring st term
-   in (st', D.GuardExpr term')
-liftGuard _ _ _ _ _ st g = (st, g)
+liftGuard modName scope parentRequiring st guard_ = case guard_ of
+  D.GuardExpr e ->
+    let (st', e') = liftExpr modName scope parentRequiring st e
+     in (st', D.GuardExpr e')
+  D.GuardEqual e1 e2 ->
+    let (st', e1') = liftExpr modName scope parentRequiring st e1
+        (st'', e2') = liftExpr modName scope parentRequiring st' e2
+     in (st'', D.GuardEqual e1' e2')
+  _ -> (st, guard_)
 
 -- | Lift lambdas in a function equation. The scope visible to the RHS
 -- (and therefore to any lambda captured inside it) includes the pattern
@@ -613,24 +661,17 @@ liftGuard _ _ _ _ _ st g = (st, g)
 -- of a compound pattern like @maplist(F, [X|Xs]) -> ...@.
 liftEquation ::
   Text ->
-  P.SourceLoc ->
-  PExpr ->
   [BoundSig] ->
   LiftState ->
   D.Equation ->
-  ( LiftState,
-    D.Equation
-  )
-liftEquation modName loc origin parentRequiring st eq =
+  (LiftState, D.Equation)
+liftEquation modName parentRequiring st eq =
   let scope =
         Set.unions (map headArgVars eq.params)
           `Set.union` guardVars eq.guards
       (st', guards') =
-        mapAccumL
-          (liftGuard modName loc origin scope parentRequiring)
-          st
-          eq.guards
-      (st'', rhs') = liftTerm modName loc origin scope parentRequiring st' eq.rhs
+        mapAccumL (liftGuard modName scope parentRequiring) st eq.guards
+      (st'', rhs') = liftExpr modName scope parentRequiring st' eq.rhs
    in (st'', eq {D.guards = guards', D.rhs = rhs'})
 
 -- | Lift lambdas in a function definition. The function's own
@@ -639,11 +680,9 @@ liftEquation modName loc origin parentRequiring st eq =
 liftFunction :: LiftState -> D.Function -> (LiftState, D.Function)
 liftFunction st func =
   let modName = func.name.moduleName
-      loc = func.equations.sourceLoc
-      origin = func.equations.parsed
       (st', eqs') =
         mapAccumL
-          (liftEquation modName loc origin func.requiring)
+          (liftEquation modName func.requiring)
           st
           func.equations.node
    in (st', func {D.equations = func.equations {node = eqs'}})
@@ -676,21 +715,24 @@ ruleModName h = case h.kept ++ h.removed of
 bodyGoalVars :: [D.BodyGoal] -> Set.Set Text
 bodyGoalVars = Set.unions . map goalVars
   where
-    goalVars (D.BodyIs v expr) = Set.insert v (termVars expr)
-    goalVars (D.BodyFunctionCall _ args) = Set.unions (map termVars args)
-    goalVars (D.BodyConstraint (QualifiedConstraint _ args)) = Set.unions (map termVars args)
-    goalVars (D.BodyUnify t1 t2) = termVars t1 `Set.union` termVars t2
-    goalVars (D.BodyHostStmt _ args) = Set.unions (map termVars args)
+    goalVars (D.BodyIs v expr) = Set.insert v (exprVars expr)
+    goalVars (D.BodyCall _ args) = Set.unions (map exprVars args)
+    goalVars (D.BodyApply f args) =
+      exprVars f `Set.union` Set.unions (map exprVars args)
+    goalVars (D.BodyConstraint (QualifiedConstraint _ args)) =
+      Set.unions (map termVars args)
+    goalVars (D.BodyUnify e1 e2) = exprVars e1 `Set.union` exprVars e2
+    goalVars (D.BodyHostStmt _ args) = Set.unions (map exprVars args)
     goalVars D.BodyTrue = Set.empty
 
 -- | Collect all variables from a list of guards.
 guardVars :: [D.Guard] -> Set.Set Text
 guardVars = Set.unions . map gVars
   where
-    gVars (D.GuardExpr t) = termVars t
-    gVars (D.GuardEqual t1 t2) = termVars t1 `Set.union` termVars t2
-    gVars (D.GuardGetArg v t _) = Set.insert v (termVars t)
-    gVars (D.GuardMatch t _ _) = termVars t
+    gVars (D.GuardExpr e) = exprVars e
+    gVars (D.GuardEqual e1 e2) = exprVars e1 `Set.union` exprVars e2
+    gVars (D.GuardGetArg v e _) = Set.insert v (exprVars e)
+    gVars (D.GuardMatch e _ _) = exprVars e
 
 -- | Lift lambdas in a rule. The scope includes all variables from the
 -- entire rule (head, guard, and body). Rules use an empty
@@ -706,20 +748,10 @@ liftRule st rule =
           `Set.union` guardVars rule.guard.node
           `Set.union` bodyGoalVars rule.body.node
       modName = ruleModName headNode
-      guardLoc = rule.guard.sourceLoc
-      guardOrigin = rule.guard.parsed
-      bodyLoc = rule.body.sourceLoc
-      bodyOrigin = rule.body.parsed
       (st', guards') =
-        mapAccumL
-          (liftGuard modName guardLoc guardOrigin scope [])
-          st
-          rule.guard.node
+        mapAccumL (liftGuard modName scope []) st rule.guard.node
       (st'', body') =
-        mapAccumL
-          (liftBodyGoal modName bodyLoc bodyOrigin scope [])
-          st'
-          rule.body.node
+        mapAccumL (liftBodyGoal modName scope []) st' rule.body.node
    in ( st'',
         rule
           { D.guard = rule.guard {node = guards'},
@@ -750,14 +782,13 @@ liftAllLambdas prog =
 -- no enclosing bounded declaration whose bound could propagate.
 liftQueryLambdas ::
   Int ->
-  P.SourceLoc ->
-  PExpr ->
   [D.BodyGoal] ->
   Either [Diagnostic DesugarError] ([D.BodyGoal], [D.Function])
-liftQueryLambdas startCounter loc origin goals =
+liftQueryLambdas startCounter goals =
   let scope = bodyGoalVars goals
       initState = LiftState startCounter [] []
-      (st, goals') = mapAccumL (liftBodyGoal "__query" loc origin scope []) initState goals
+      (st, goals') =
+        mapAccumL (liftBodyGoal "__query" scope []) initState goals
    in if null st.errors
         then Right (goals', st.liftedFunctions)
         else Left (reverse st.errors)

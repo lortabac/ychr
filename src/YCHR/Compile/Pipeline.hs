@@ -108,8 +108,11 @@ data CompiledProgram = CompiledProgram
     allFunctions :: [D.Function],
     -- | Counter for the next lambda index (to avoid collisions in queries).
     nextLambdaIndex :: Int,
-    -- | Set of declared function names (for query goal classification).
-    functionNameSet :: Set Types.Name,
+    -- | Set of declared function names. Surfaced from 'Resolve' for
+    -- the query-time 'YCHR.Resolve.termToExpr' translator, which is the
+    -- only remaining consumer once the compile-time funSet plumbing
+    -- has been removed.
+    functionNameSet :: Set Types.QualifiedName,
     -- | The desugared program (before lambda lifting), for type checking.
     desugaredProgram :: D.Program
   }
@@ -268,7 +271,7 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
         queryTable
         desugared'.functions
         lambdaCount
-        (Set.map Types.qualifiedToName resolved.functionNames)
+        resolved.functionNames
         desugared,
       warnings
     )

@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 -- | Resolved AST
 --
@@ -24,6 +25,8 @@ module YCHR.Resolved
     Head (..),
     FunctionDef (..),
     FunctionEquation (..),
+    Expr (..),
+    exprToTerm,
   )
 where
 
@@ -34,11 +37,16 @@ import YCHR.Loc (Ann)
 import YCHR.Parsed (AnnP)
 import YCHR.Types
   ( BoundSig,
+    HeadArg,
+    Name (..),
     QualifiedConstraint,
     QualifiedName,
-    Term,
+    Term (..),
     TypeDefinition,
     TypeExpr,
+    flattenName,
+    headArgToTerm,
+    qualifiedToName,
   )
 
 -- | A resolved program: all modules flattened, equations grouped under
@@ -59,11 +67,17 @@ data Program = Program
 
 -- | A rule in the resolved AST. Structurally identical to the parsed
 -- rule; the three head kinds are preserved for desugaring to flatten.
+--
+-- Guards and bodies are 'Expr' (not 'Term'): the resolver has already
+-- decided, for every compound, whether it is a function call, a data
+-- constructor application, a dynamic dispatch, a function reference,
+-- or a lambda. Downstream passes dispatch structurally and never need
+-- to re-check the function-name set.
 data Rule = Rule
   { name :: Maybe (Ann Text),
     head :: AnnP Head,
-    guard :: AnnP [Term],
-    body :: AnnP [Term]
+    guard :: AnnP [Expr],
+    body :: AnnP [Expr]
   }
   deriving (Show)
 
@@ -92,9 +106,85 @@ data FunctionDef = FunctionDef
 
 -- | A function equation. Unlike 'YCHR.Parsed.FunctionEquation', there
 -- is no @funName@ field — the name comes from the enclosing 'FunctionDef'.
+--
+-- 'args' stays as @[Term]@ because equation arguments are patterns:
+-- they are normalized to 'HeadArg's by HNF in the desugarer, and the
+-- call-vs-constructor question does not arise for them. 'guard' and
+-- 'rhs' carry expression-position 'Expr's.
 data FunctionEquation = FunctionEquation
   { args :: [Term],
-    guard :: AnnP [Term],
-    rhs :: AnnP Term
+    guard :: AnnP [Expr],
+    rhs :: AnnP Expr
   }
   deriving (Show)
+
+-- | An expression in a body, guard, or function RHS. Each constructor
+-- corresponds to a single dynamic behavior at runtime, eliminating the
+-- ambiguity of the uniform 'Term' shape:
+--
+--   * 'CallExpr' is a statically-known call to a user-declared
+--     function.
+--   * 'CtorExpr' is a data constructor application — compiled to a
+--     @MakeTerm@ in the VM.
+--   * 'ApplyExpr' is dynamic dispatch (the surface @'$call'(F, A1..An)@).
+--   * 'FunRefExpr' is a first-class function reference
+--     (the surface @fun name/arity@).
+--   * 'LambdaExpr' is an anonymous function value. It exists between
+--     resolution and the desugarer's lambda-lifting pass, after which
+--     it is rewritten to a @__closure@-headed 'CtorExpr'.
+--   * 'HostExpr' is a call into the host language
+--     (the surface @host:f(args)@).
+data Expr
+  = VarExpr Text
+  | IntExpr Int
+  | FloatExpr Double
+  | AtomExpr Text
+  | TextExpr Text
+  | WildcardExpr
+  | CtorExpr Name [Expr]
+  | CallExpr QualifiedName [Expr]
+  | ApplyExpr Expr [Expr]
+  | FunRefExpr QualifiedName Int
+  | LambdaExpr [HeadArg] Expr
+  | HostExpr Text [Expr]
+  deriving (Show, Eq)
+
+-- | Convert an 'Expr' back to a surface-shaped 'Term'. Used as a
+-- narrow bridge for code that still operates on 'Term' (notably the
+-- @args@ field of 'YCHR.Types.QualifiedConstraint', which body-
+-- constraint goals carry verbatim).
+--
+-- The conversion flattens every node to its surface compound shape:
+-- 'CallExpr' becomes a 'CompoundTerm' with the function's qualified
+-- 'Name' as the head, 'ApplyExpr' becomes a @'$call'@ compound,
+-- 'LambdaExpr' becomes its surface @fun(...) -> body@ shape, and so
+-- on. The result discards the call/host/apply distinctions — those
+-- live only in the 'Expr' tree. This is intentional: every consumer
+-- of the resulting 'Term' (e.g. 'YCHR.Compile.compileTerm',
+-- 'YCHR.Run.termToValue') treats every compound as data, which
+-- matches CHR's value semantics for constraint arguments and quoted
+-- @term\/1@ subtrees.
+exprToTerm :: Expr -> Term
+exprToTerm (VarExpr v) = VarTerm v
+exprToTerm (IntExpr n) = IntTerm n
+exprToTerm (FloatExpr n) = FloatTerm n
+exprToTerm (AtomExpr s) = AtomTerm s
+exprToTerm (TextExpr s) = TextTerm s
+exprToTerm WildcardExpr = Wildcard
+exprToTerm (CtorExpr name args) = CompoundTerm name (map exprToTerm args)
+exprToTerm (CallExpr qn args) =
+  CompoundTerm (qualifiedToName qn) (map exprToTerm args)
+exprToTerm (ApplyExpr f args) =
+  CompoundTerm (Unqualified "$call") (exprToTerm f : map exprToTerm args)
+exprToTerm (HostExpr f args) =
+  CompoundTerm (Qualified "host" f) (map exprToTerm args)
+exprToTerm (FunRefExpr qn arity) =
+  CompoundTerm
+    (Unqualified "/")
+    [AtomTerm (flattenName (qualifiedToName qn)), IntTerm arity]
+exprToTerm (LambdaExpr params body) =
+  CompoundTerm
+    (Unqualified "->")
+    [ CompoundTerm (Unqualified "fun") (map headArgToTerm params),
+      exprToTerm body
+    ]

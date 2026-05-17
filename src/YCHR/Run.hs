@@ -53,17 +53,14 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ask, runReaderT)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
 import Control.Monad.Trans.Writer.CPS (runWriter)
-import Data.IORef (readIORef)
 import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Compile
-  ( buildFunctionSet,
-    compileFunctionDef,
+  ( compileFunctionDef,
     funcProcName,
     genCallFunDispatches,
     tellProcName,
@@ -86,6 +83,8 @@ import YCHR.Parsed (SourceLoc (..))
 import YCHR.Parser (parseConstraint, parseQueryWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (renameQueryArgs, renameQueryGoals)
+import YCHR.Resolve (termToExpr)
+import YCHR.Resolved qualified as R
 import YCHR.Runtime.Error (RuntimeErrorThrown (..))
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc)
 import YCHR.Runtime.Monad (Chr, SessionEnv (..))
@@ -280,25 +279,21 @@ prepareQuery cp src = do
           cp.allModules
           goals
       )
+  let queryLoc = SourceLoc "<query>" 1 1
+      queryOrigin = Atom ""
+      (exprs, exprErrs) =
+        runWriter (traverse (termToExpr cp.functionNameSet queryLoc queryOrigin) renamed)
+  unless (null exprErrs) (throwIO (ResolveErrors exprErrs))
   bodyGoals <-
     either
       (throwIO . DesugarErrors)
       pure
-      ( desugarQueryGoals
-          cp.functionNameSet
-          renamed
-      )
-  let queryLoc = SourceLoc "<query>" 1 1
+      (desugarQueryGoals exprs)
   (lifted, lambdas) <-
     either
       (throwIO . DesugarErrors)
       pure
-      ( liftQueryLambdas
-          cp.nextLambdaIndex
-          queryLoc
-          (Atom "")
-          bodyGoals
-      )
+      (liftQueryLambdas cp.nextLambdaIndex bodyGoals)
   let cdp = cp.desugaredProgram
       progForCheck =
         D.Program
@@ -311,17 +306,7 @@ prepareQuery cp src = do
   tcErrs <- typeCheckGoals progForCheck queryLoc (Just "query") lifted
   unless (null tcErrs) (throwIO (TypeErrors tcErrs))
   let allFuns = cp.allFunctions ++ lambdas
-      funSet =
-        buildFunctionSet
-          ( D.Program
-              { rules = [],
-                functions = allFuns,
-                constraintTypes = Map.empty,
-                constraintBounds = Map.empty,
-                typeDefinitions = []
-              }
-          )
-      queryProcs = compileQueryLambdas funSet lambdas
+      queryProcs = compileQueryLambdas lambdas
       queryDispatches = genCallFunDispatches allFuns
       warnings = [RenameWarnings renameWs | not (null renameWs)]
   pure
@@ -416,14 +401,14 @@ termToValue (CompoundTerm name ts) = VTerm (vmName name).unName <$> traverse ter
 executeBodyGoal :: D.BodyGoal -> QueryM ()
 executeBodyGoal D.BodyTrue = pure ()
 executeBodyGoal (D.BodyUnify l r) = do
-  v1 <- termToValue l
-  v2 <- termToValue r
+  v1 <- exprToValue l
+  v2 <- exprToValue r
   (ok, observers) <- lift (unify v1 v2)
   lift (enqueue observers)
   unless ok (lift (raiseUnifyFailure v1 v2))
   lift drainReactivation
 executeBodyGoal (D.BodyHostStmt f args) = do
-  argVals <- traverse termToValue args
+  argVals <- traverse exprToValue args
   env <- lift ask
   _ <- lift (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
   pure ()
@@ -440,15 +425,16 @@ executeBodyGoal (D.BodyIs v expr) = do
 executeBodyGoal (D.BodyConstraint c) = do
   argVals <- traverse termToValue c.args
   lift (tellConstraint (Types.qualifiedToName c.name) argVals)
-executeBodyGoal (D.BodyFunctionCall (Types.Unqualified "$call") args) = do
-  argVals <- traverse termToValue args
-  let n = length args - 1
-      dispatchName = Name ("call_" <> T.pack (show n))
-  _ <- lift (callProc dispatchName (map CVal argVals))
+executeBodyGoal (D.BodyCall qn args) = do
+  argVals <- traverse exprToValue args
+  let funcName = Types.qualifiedToName qn
+  _ <- lift (callProc (funcProcName funcName (length argVals)) (map CVal argVals))
   pure ()
-executeBodyGoal (D.BodyFunctionCall name args) = do
-  argVals <- traverse termToValue args
-  _ <- lift (callProc (funcProcName name (length argVals)) (map CVal argVals))
+executeBodyGoal (D.BodyApply f args) = do
+  fAndArgVals <- traverse exprToValue (f : args)
+  let n = length args
+      dispatchName = Name ("call_" <> T.pack (show n))
+  _ <- lift (callProc dispatchName (map CVal fAndArgVals))
   pure ()
 
 -- | Raise a runtime error describing a failed unification.
@@ -476,16 +462,26 @@ drainReactivation =
       void $
         callProc (Name "reactivate_dispatch") [CId sid]
 
--- | Evaluate a term as a nested expression (used for @is@ RHS and guard
--- expressions). Handles host calls (@host:f(args)@), user-defined function
--- calls, @term(X)@ (quoting), and data terms.
-evalNestedExpr :: Term -> QueryM Value
-evalNestedExpr (IntTerm n) = pure (VInt n)
-evalNestedExpr (FloatTerm n) = pure (VFloat n)
-evalNestedExpr (AtomTerm s) = pure (VAtom s)
-evalNestedExpr (TextTerm s) = pure (VText s)
-evalNestedExpr Wildcard = pure VWildcard
-evalNestedExpr (VarTerm v) = do
+-- | Build a runtime 'Value' from a desugared 'D.Expr' without
+-- evaluating embedded function calls. Mirrors 'termToValue' on the
+-- typed side by round-tripping through the surface 'Term' shape via
+-- 'R.exprToTerm', so query-time value construction stays bit-for-bit
+-- compatible with the pre-refactor behaviour.
+exprToValue :: D.Expr -> QueryM Value
+exprToValue = termToValue . R.exprToTerm
+
+-- | Evaluate an expression in the query context (used for @is@ RHS
+-- and guard expressions). 'CallExpr', 'ApplyExpr', and 'HostExpr'
+-- evaluate their arguments and invoke the appropriate procedure;
+-- 'CtorExpr' (and the @term\/1@ quoting form) build values
+-- structurally without re-evaluating their children.
+evalNestedExpr :: D.Expr -> QueryM Value
+evalNestedExpr (R.IntExpr n) = pure (VInt n)
+evalNestedExpr (R.FloatExpr n) = pure (VFloat n)
+evalNestedExpr (R.AtomExpr s) = pure (VAtom s)
+evalNestedExpr (R.TextExpr s) = pure (VText s)
+evalNestedExpr R.WildcardExpr = pure VWildcard
+evalNestedExpr (R.VarExpr v) = do
   varMap <- get
   case Map.lookup v varMap of
     Just val -> lift (deref val)
@@ -493,34 +489,34 @@ evalNestedExpr (VarTerm v) = do
       fresh <- lift newVar
       modify (Map.insert v fresh)
       pure fresh
-evalNestedExpr (CompoundTerm (Types.Unqualified "$call") args)
-  | length args >= 2 = do
-      argVals <- traverse evalNestedExpr args
-      let n = length args - 1
-          dispatchName = Name ("call_" <> T.pack (show n))
-      lift (callProc dispatchName (map CVal argVals))
-evalNestedExpr (CompoundTerm (Types.Unqualified "term") [arg]) =
-  termToValue arg
-evalNestedExpr (CompoundTerm (Types.Qualified "host" f) args) = do
+evalNestedExpr (R.CallExpr qn args) = do
+  argVals <- traverse evalNestedExpr args
+  let funcName = Types.qualifiedToName qn
+  lift (callProc (funcProcName funcName (length argVals)) (map CVal argVals))
+evalNestedExpr (R.ApplyExpr f args) = do
+  fAndArgVals <- traverse evalNestedExpr (f : args)
+  let n = length args
+      dispatchName = Name ("call_" <> T.pack (show n))
+  lift (callProc dispatchName (map CVal fAndArgVals))
+evalNestedExpr (R.HostExpr f args) = do
   argVals <- traverse evalNestedExpr args
   env <- lift ask
   lift (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
-evalNestedExpr (CompoundTerm name args) = do
-  env <- lift ask
-  pm <- liftIO (readIORef env.procMap)
-  let fnName = funcProcName name (length args)
-  if Map.member fnName pm
-    then do
-      argVals <- traverse evalNestedExpr args
-      lift (callProc fnName (map CVal argVals))
-    else VTerm (vmName name).unName <$> traverse termToValue args
+-- @term(X)@ short-circuit: build the inner value as data, no
+-- nested-call evaluation. Mirrors the legacy 'termToValue arg' path.
+evalNestedExpr (R.CtorExpr (Types.Unqualified "term") [arg]) = exprToValue arg
+evalNestedExpr (R.CtorExpr name args) =
+  VTerm (vmName name).unName <$> traverse exprToValue args
+evalNestedExpr e@(R.FunRefExpr _ _) = exprToValue e
+evalNestedExpr (R.LambdaExpr _ _) =
+  error "Run.evalNestedExpr: LambdaExpr survived lambda lifting"
 
 -- | Compile lifted query lambdas into VM procedures. Discards the
 -- error channel: by the time this runs, 'prepareQuery' has already
 -- lifted these lambdas from a desugared program that compiled
 -- cleanly and has type-checked them, so any error here would
 -- indicate a compiler bug rather than a user problem.
-compileQueryLambdas :: Set Types.Identifier -> [D.Function] -> [Procedure]
-compileQueryLambdas funSet lambdas =
-  let (procs, _errs) = runWriter $ traverse (compileFunctionDef funSet) lambdas
+compileQueryLambdas :: [D.Function] -> [Procedure]
+compileQueryLambdas lambdas =
+  let (procs, _errs) = runWriter $ traverse compileFunctionDef lambdas
    in procs

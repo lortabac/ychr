@@ -46,6 +46,7 @@ import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic (..))
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed (AnnP (..), SourceLoc (..))
+import YCHR.Resolved qualified as R
 import YCHR.Runtime.Interpreter (baseHostCallRegistry)
 import YCHR.Runtime.Monad (Chr)
 import YCHR.Runtime.Registry (fromValueList, valueList)
@@ -75,17 +76,6 @@ import YCHR.VM qualified as VM
 -- produce after the renamer canonicalizes data-constructor names.
 runtimeName :: Name -> Text
 runtimeName name = let VM.Name t = vmName name in t
-
--- | Parse a 'flattenName'-encoded text back into a 'Name'. The renamer
--- emits qualified names as @\"module:local\"@ and unqualified names as
--- @\"local\"@; this is the inverse of 'flattenName'. Used for AST nodes
--- that store the flattened text (e.g. function-reference @AtomTerm@s)
--- so we can route the name through 'runtimeName' rather than hand-edit
--- the encoding.
-parseFlattenedName :: Text -> Name
-parseFlattenedName t = case T.splitOn ":" t of
-  [m, n] -> Qualified m n
-  _ -> Unqualified t
 
 -- | Runtime functor name of a constructor declared in the @typechecker@
 -- module — base types (@int@), record/tag constructors (@sig@), and
@@ -120,8 +110,6 @@ data TypeCheckEnv = TypeCheckEnv
     -- one module) are omitted so the canonicalization falls through and the
     -- lookup behaves as if the name were unknown.
     conAlias :: Map Text Name,
-    -- | Set of known function identifiers (name, arity).
-    funSet :: Set (Name, Int),
     -- | Declared bounds for every bounded @:- chr_constraint@. Used
     -- by 'checkRule' to allocate per-head-occurrence ambient
     -- signatures and emit the head-occurrence bound checks
@@ -240,9 +228,6 @@ knownConstructorWithArity env name useArity =
     Just (_, dc) -> length dc.conArgs == useArity
     Nothing -> False
 
-buildFunSet :: [D.Function] -> Set (Name, Int)
-buildFunSet fns = Set.fromList [(Types.qualifiedToName f.name, f.arity) | f <- fns]
-
 -- | Source-location info recovered from a CHR-side @Ctx@ handle.
 data CtxInfo = CtxInfo
   { label :: Maybe Text,
@@ -336,13 +321,11 @@ typeCheckProgram :: D.Program -> IO [Diagnostic TypeCheckError]
 typeCheckProgram prog = do
   let conMap = buildConMap prog.typeDefinitions
       conAlias = buildConAlias prog.typeDefinitions
-      funSet = buildFunSet prog.functions
       -- Haskell-side validation
       env =
         TypeCheckEnv
           { conMap,
             conAlias,
-            funSet,
             constraintBoundsEnv = prog.constraintBounds,
             constraintTypesEnv = prog.constraintTypes
           }
@@ -402,12 +385,10 @@ typeCheckGoals ::
 typeCheckGoals prog loc lbl goals = do
   let conMap = buildConMap prog.typeDefinitions
       conAlias = buildConAlias prog.typeDefinitions
-      funSet = buildFunSet prog.functions
       env =
         TypeCheckEnv
           { conMap,
             conAlias,
-            funSet,
             constraintBoundsEnv = prog.constraintBounds,
             constraintTypesEnv = prog.constraintTypes
           }
@@ -838,17 +819,17 @@ checkGuards cctx = go Nothing
       go newLastCon gs
 
 checkGuard :: CheckCtx -> Maybe Name -> D.Guard -> TC (Maybe Name)
-checkGuard cctx lastConName (D.GuardEqual t1 t2) = do
-  tv1 <- typeOfTerm cctx t1
-  tv2 <- typeOfTerm cctx t2
+checkGuard cctx lastConName (D.GuardEqual e1 e2) = do
+  tv1 <- typeOfExpr cctx e1
+  tv2 <- typeOfExpr cctx e2
   ctx <- freshCtxHandle cctx
   tellCheckUnify ctx tv1 tv2
   pure lastConName
-checkGuard cctx _ (D.GuardMatch term conName arity) = do
+checkGuard cctx _ (D.GuardMatch operand conName arity) = do
   env <- ask
   let canonical = canonicalizeConName env conName
   when (knownConstructorWithArity env canonical arity) $ do
-    termType <- typeOfTerm cctx term
+    operandType <- typeOfExpr cctx operand
     argTypeVars <- chrOp (replicateM arity newVar)
     ctx <- freshCtxHandle cctx
     chrOp $
@@ -856,11 +837,11 @@ checkGuard cctx _ (D.GuardMatch term conName arity) = do
         (Qualified "typechecker" "check_constructor_use")
         [ VAtom (runtimeName canonical),
           valueList argTypeVars,
-          termType,
+          operandType,
           ctxHandleValue ctx
         ]
   pure (Just canonical)
-checkGuard cctx lastConName (D.GuardGetArg varName term idx) = do
+checkGuard cctx lastConName (D.GuardGetArg varName operand idx) = do
   resultTypeVar <- chrOp (varType cctx varName)
   conName <- case lastConName of
     Just cn -> pure cn
@@ -871,20 +852,20 @@ checkGuard cctx lastConName (D.GuardGetArg varName term idx) = do
           Just (_, dc) -> idx < length dc.conArgs
           Nothing -> True
   when withinArity $ do
-    termType <- typeOfTerm cctx term
+    operandType <- typeOfExpr cctx operand
     ctx <- freshCtxHandle cctx
     chrOp $
       tellConstraint
         (Qualified "typechecker" "check_guard_getarg")
         [ resultTypeVar,
-          termType,
+          operandType,
           VAtom (runtimeName conName),
           VInt idx,
           ctxHandleValue ctx
         ]
   pure lastConName
-checkGuard cctx _ (D.GuardExpr term) = do
-  tv <- typeOfTerm cctx term
+checkGuard cctx _ (D.GuardExpr expr) = do
+  tv <- typeOfExpr cctx expr
   ctx <- freshCtxHandle cctx
   chrOp $
     tellConstraint
@@ -900,22 +881,25 @@ checkBodyGoal :: CheckCtx -> D.BodyGoal -> TC ()
 checkBodyGoal _ D.BodyTrue = pure ()
 checkBodyGoal cctx (D.BodyConstraint c) =
   checkConstraintUse cctx c
-checkBodyGoal cctx (D.BodyUnify t1 t2) = do
-  tv1 <- typeOfTerm cctx t1
-  tv2 <- typeOfTerm cctx t2
+checkBodyGoal cctx (D.BodyUnify e1 e2) = do
+  tv1 <- typeOfExpr cctx e1
+  tv2 <- typeOfExpr cctx e2
   ctx <- freshCtxHandle cctx
   tellCheckUnify ctx tv1 tv2
-checkBodyGoal cctx (D.BodyIs v term) = do
+checkBodyGoal cctx (D.BodyIs v expr) = do
   vType <- chrOp (varType cctx v)
-  termType <- typeOfTerm cctx term
+  exprType <- typeOfExpr cctx expr
   ctx <- freshCtxHandle cctx
-  tellCheckUnify ctx vType termType
-checkBodyGoal cctx (D.BodyFunctionCall name args) = do
-  argTypeVars <- traverse (typeOfTerm cctx) args
+  tellCheckUnify ctx vType exprType
+checkBodyGoal cctx (D.BodyCall qn args) = do
+  argTypeVars <- traverse (typeOfExpr cctx) args
   retTypeVar <- chrOp newVar
-  emitFunctionCall cctx name argTypeVars retTypeVar
+  emitFunctionCall cctx (Types.qualifiedToName qn) argTypeVars retTypeVar
+checkBodyGoal cctx (D.BodyApply f args) = do
+  _ <- typeOfExpr cctx f
+  mapM_ (typeOfExpr cctx) args
 checkBodyGoal cctx (D.BodyHostStmt _ args) =
-  mapM_ (typeOfTerm cctx) args
+  mapM_ (typeOfExpr cctx) args
 
 -- | Emit a function-call type check. Routes through
 -- @check_function_use_with_ambient@ when the call's target name has
@@ -981,7 +965,7 @@ checkEquation func loc origin eq = do
     (_, _) -> do
       let cctx = freshCheckCtx varTypes Map.empty
       argTypeVars <- traverse (typeOfTerm cctx . headArgToTerm) eq.params
-      retTypeVar <- typeOfTerm cctx eq.rhs
+      retTypeVar <- typeOfExpr cctx eq.rhs
       ctx <- freshCtxHandle cctx
       chrOp $
         tellConstraint
@@ -1048,7 +1032,7 @@ checkBoundedEquation func (argTys, retTy) bounds varTypes eq = do
       [scopeIdValue scopeId]
   paramTypes <- traverse (typeOfTerm cctx . headArgToTerm) eq.params
   zipWithM_ (tellCheckUnify ctx) paramTypes encodedArgs
-  rhsType <- typeOfTerm cctx eq.rhs
+  rhsType <- typeOfExpr cctx eq.rhs
   tellCheckUnify ctx rhsType encodedRet
   checkGuards cctx eq.guards
   chrOp $
@@ -1071,6 +1055,12 @@ varType cctx v = case Map.lookup v cctx.varTypes of
   Just val -> pure val
   Nothing -> error ("TypeCheck.varType: missing var slot for " <> T.unpack v)
 
+-- | Type a 'Term' at a value position. Used for the 'Term'-typed slots
+-- the desugared AST still carries: head occurrence arguments,
+-- 'D.BodyConstraint.args', and the 'GuardMatch' / 'GuardGetArg'
+-- operand of head normal-form guards. Every 'CompoundTerm' is treated
+-- as a data-constructor application — call vs constructor
+-- disambiguation has been moved upstream into the 'D.Expr' AST.
 typeOfTerm :: CheckCtx -> Term -> TC Value
 typeOfTerm cctx (VarTerm v) = chrOp (varType cctx v)
 typeOfTerm _ (IntTerm _) = pure (tcCon0 "int")
@@ -1080,7 +1070,7 @@ typeOfTerm _ Wildcard = chrOp newVar
 typeOfTerm cctx (AtomTerm s) =
   typeOfAtom cctx (Unqualified s)
 typeOfTerm cctx (CompoundTerm name args) =
-  typeOfCompound cctx name args
+  typeOfTermCtor cctx name args
 
 typeOfAtom :: CheckCtx -> Name -> TC Value
 typeOfAtom cctx name = do
@@ -1101,17 +1091,17 @@ typeOfAtom cctx name = do
       pure resultType
     else pure (tcCon0 "any")
 
-typeOfCompound :: CheckCtx -> Name -> [Term] -> TC Value
-typeOfCompound cctx (Unqualified "->") [CompoundTerm (Unqualified "fun") params, body] = do
-  paramTypeVars <- traverse (typeOfTerm cctx) params
-  bodyType <- typeOfTerm cctx body
-  pure (VTerm (tcAtom "fun") [valueList paramTypeVars, bodyType])
-typeOfCompound cctx (Unqualified "/") [AtomTerm fname, IntTerm arity] = do
-  argTypeVars <- chrOp (replicateM arity newVar)
-  retTypeVar <- chrOp newVar
-  emitFunctionCall cctx (parseFlattenedName fname) argTypeVars retTypeVar
-  pure (VTerm (tcAtom "fun") [valueList argTypeVars, retTypeVar])
-typeOfCompound cctx name args = do
+-- | Type a 'Term'-shaped constructor application. Used for the
+-- 'Term'-typed positions that the desugared AST still carries: head
+-- arguments (via 'headArgToTerm') and 'D.BodyConstraint.args'.
+--
+-- Constraint arguments are unevaluated data in CHR/Prolog semantics —
+-- a compound whose head happens to name a declared function is still
+-- a literal term, never a call. We therefore treat every compound as
+-- a constructor application here. Calls inside expression positions
+-- are handled structurally by 'typeOfExpr' against 'R.CallExpr'.
+typeOfTermCtor :: CheckCtx -> Name -> [Term] -> TC Value
+typeOfTermCtor cctx name args = do
   env <- ask
   let arity = length args
       canonical = canonicalizeConName env name
@@ -1129,16 +1119,72 @@ typeOfCompound cctx name args = do
             ctxHandleValue ctx
           ]
       pure resultType
-    else
-      if Set.member (name, arity) env.funSet
-        then do
-          argTypes <- traverse (typeOfTerm cctx) args
-          resultType <- chrOp newVar
-          emitFunctionCall cctx name argTypes resultType
-          pure resultType
-        else do
-          mapM_ (typeOfTerm cctx) args
-          pure (tcCon0 "any")
+    else do
+      mapM_ (typeOfTerm cctx) args
+      pure (tcCon0 "any")
+
+-- | Type an expression. Each 'D.Expr' constructor maps to a specific
+-- typechecker query; the call-vs-constructor split is structural here,
+-- replacing the legacy @typeOfCompound@'s @funSet@ membership test.
+typeOfExpr :: CheckCtx -> D.Expr -> TC Value
+typeOfExpr cctx e = case e of
+  R.VarExpr v -> chrOp (varType cctx v)
+  R.IntExpr _ -> pure (tcCon0 "int")
+  R.FloatExpr _ -> pure (tcCon0 "float")
+  R.TextExpr _ -> pure (tcCon0 "string")
+  R.AtomExpr s -> typeOfAtom cctx (Unqualified s)
+  R.WildcardExpr -> chrOp newVar
+  R.CtorExpr name args -> typeOfExprCtor cctx name args
+  R.CallExpr qn args -> do
+    argTypes <- traverse (typeOfExpr cctx) args
+    resultType <- chrOp newVar
+    emitFunctionCall cctx (Types.qualifiedToName qn) argTypes resultType
+    pure resultType
+  R.ApplyExpr f args -> do
+    _ <- typeOfExpr cctx f
+    mapM_ (typeOfExpr cctx) args
+    pure (tcCon0 "any")
+  R.HostExpr _ args -> do
+    mapM_ (typeOfExpr cctx) args
+    pure (tcCon0 "any")
+  R.FunRefExpr qn arity -> do
+    argTypeVars <- chrOp (replicateM arity newVar)
+    retTypeVar <- chrOp newVar
+    emitFunctionCall cctx (Types.qualifiedToName qn) argTypeVars retTypeVar
+    pure (VTerm (tcAtom "fun") [valueList argTypeVars, retTypeVar])
+  R.LambdaExpr params body -> do
+    paramTypeVars <- traverse (typeOfHeadArg cctx) params
+    bodyType <- typeOfExpr cctx body
+    pure (VTerm (tcAtom "fun") [valueList paramTypeVars, bodyType])
+  where
+    typeOfHeadArg c (HeadVar v) = chrOp (varType c v)
+    typeOfHeadArg _ HeadWildcard = chrOp newVar
+
+-- | Type a 'CtorExpr' application. Mirrors 'typeOfTermCtor' for the
+-- typed-expression side: constructors with a known declared arity emit
+-- @check_constructor_use@; everything else falls back to @any@.
+typeOfExprCtor :: CheckCtx -> Name -> [D.Expr] -> TC Value
+typeOfExprCtor cctx name args = do
+  env <- ask
+  let arity = length args
+      canonical = canonicalizeConName env name
+  if knownConstructorWithArity env canonical arity
+    then do
+      argTypes <- traverse (typeOfExpr cctx) args
+      resultType <- chrOp newVar
+      ctx <- freshCtxHandle cctx
+      chrOp $
+        tellConstraint
+          (Qualified "typechecker" "check_constructor_use")
+          [ VAtom (runtimeName canonical),
+            valueList argTypes,
+            resultType,
+            ctxHandleValue ctx
+          ]
+      pure resultType
+    else do
+      mapM_ (typeOfExpr cctx) args
+      pure (tcCon0 "any")
 
 -- ---------------------------------------------------------------------------
 -- Variable collection
@@ -1161,7 +1207,7 @@ collectVarsInEq eq =
   mconcat
     [ foldMap collectVarsInHeadArg eq.params,
       foldMap collectVarsInGuard eq.guards,
-      collectVarsInTerm eq.rhs
+      collectVarsInExpr eq.rhs
     ]
 
 collectVarsInConstraint :: Types.QualifiedConstraint -> Set Text
@@ -1172,23 +1218,41 @@ collectVarsInHeadArg (HeadVar v) = Set.singleton v
 collectVarsInHeadArg HeadWildcard = Set.empty
 
 collectVarsInGuard :: D.Guard -> Set Text
-collectVarsInGuard (D.GuardEqual t1 t2) = collectVarsInTerm t1 <> collectVarsInTerm t2
-collectVarsInGuard (D.GuardMatch t _ _) = collectVarsInTerm t
-collectVarsInGuard (D.GuardGetArg v t _) = Set.singleton v <> collectVarsInTerm t
-collectVarsInGuard (D.GuardExpr t) = collectVarsInTerm t
+collectVarsInGuard (D.GuardEqual e1 e2) = collectVarsInExpr e1 <> collectVarsInExpr e2
+collectVarsInGuard (D.GuardMatch e _ _) = collectVarsInExpr e
+collectVarsInGuard (D.GuardGetArg v e _) = Set.singleton v <> collectVarsInExpr e
+collectVarsInGuard (D.GuardExpr e) = collectVarsInExpr e
 
 collectVarsInBodyGoal :: D.BodyGoal -> Set Text
 collectVarsInBodyGoal D.BodyTrue = Set.empty
 collectVarsInBodyGoal (D.BodyConstraint c) = collectVarsInConstraint c
-collectVarsInBodyGoal (D.BodyUnify t1 t2) = collectVarsInTerm t1 <> collectVarsInTerm t2
-collectVarsInBodyGoal (D.BodyHostStmt _ args) = foldMap collectVarsInTerm args
-collectVarsInBodyGoal (D.BodyIs v t) = Set.singleton v <> collectVarsInTerm t
-collectVarsInBodyGoal (D.BodyFunctionCall _ args) = foldMap collectVarsInTerm args
+collectVarsInBodyGoal (D.BodyUnify e1 e2) = collectVarsInExpr e1 <> collectVarsInExpr e2
+collectVarsInBodyGoal (D.BodyHostStmt _ args) = foldMap collectVarsInExpr args
+collectVarsInBodyGoal (D.BodyIs v e) = Set.singleton v <> collectVarsInExpr e
+collectVarsInBodyGoal (D.BodyCall _ args) = foldMap collectVarsInExpr args
+collectVarsInBodyGoal (D.BodyApply f args) =
+  collectVarsInExpr f <> foldMap collectVarsInExpr args
 
 collectVarsInTerm :: Term -> Set Text
 collectVarsInTerm (VarTerm v) = Set.singleton v
 collectVarsInTerm (CompoundTerm _ args) = foldMap collectVarsInTerm args
 collectVarsInTerm _ = Set.empty
+
+-- | Collect every variable name an expression mentions, including
+-- lambda parameter names. Type-slot allocation needs *all* names
+-- (lambda params become local bindings the typechecker must type),
+-- which is wider than what the lambda lifter uses when computing
+-- captures.
+collectVarsInExpr :: D.Expr -> Set Text
+collectVarsInExpr (R.VarExpr v) = Set.singleton v
+collectVarsInExpr (R.CtorExpr _ args) = foldMap collectVarsInExpr args
+collectVarsInExpr (R.CallExpr _ args) = foldMap collectVarsInExpr args
+collectVarsInExpr (R.ApplyExpr f args) =
+  collectVarsInExpr f <> foldMap collectVarsInExpr args
+collectVarsInExpr (R.HostExpr _ args) = foldMap collectVarsInExpr args
+collectVarsInExpr (R.LambdaExpr params body) =
+  Set.fromList [v | HeadVar v <- params] <> collectVarsInExpr body
+collectVarsInExpr _ = Set.empty
 
 -- ---------------------------------------------------------------------------
 -- Error collection
@@ -1433,22 +1497,36 @@ validateConstructorArities env prog =
     eqArity eq =
       foldMap (termArity . headArgToTerm) eq.params
         <> foldMap guardArity eq.guards
-        <> termArity eq.rhs
-    guardArity (D.GuardEqual t1 t2) = termArity t1 <> termArity t2
-    guardArity (D.GuardMatch t conName arity) = checkArity conName arity <> termArity t
-    guardArity (D.GuardGetArg _ t _) = termArity t
-    guardArity (D.GuardExpr t) = termArity t
+        <> exprArity eq.rhs
+    guardArity (D.GuardEqual e1 e2) = exprArity e1 <> exprArity e2
+    guardArity (D.GuardMatch e conName arity) = checkArity conName arity <> exprArity e
+    guardArity (D.GuardGetArg _ e _) = exprArity e
+    guardArity (D.GuardExpr e) = exprArity e
     bodyArity D.BodyTrue = mempty
     bodyArity (D.BodyConstraint c) = foldMap termArity c.args
-    bodyArity (D.BodyUnify t1 t2) = termArity t1 <> termArity t2
-    bodyArity (D.BodyIs _ t) = termArity t
-    bodyArity (D.BodyFunctionCall _ args) = foldMap termArity args
-    bodyArity (D.BodyHostStmt _ args) = foldMap termArity args
-    -- An atom is a 0-arity constructor use; a compound is an n-arity use.
-    -- Function-reference @name/arity@ and lambdas @fun(...) -> body end@
-    -- are compound terms whose subterms (the bare function name, the
-    -- lambda parameter list) must NOT be treated as constructor uses,
-    -- so we skip walking into them.
+    bodyArity (D.BodyUnify e1 e2) = exprArity e1 <> exprArity e2
+    bodyArity (D.BodyIs _ e) = exprArity e
+    bodyArity (D.BodyCall _ args) = foldMap exprArity args
+    bodyArity (D.BodyApply f args) = exprArity f <> foldMap exprArity args
+    bodyArity (D.BodyHostStmt _ args) = foldMap exprArity args
+    -- An atom is a 0-arity constructor use; a 'CtorExpr' is an n-arity
+    -- use. 'CallExpr', 'ApplyExpr', 'HostExpr', 'FunRefExpr', and
+    -- 'LambdaExpr' are not constructor applications: their children
+    -- are walked, but the heads themselves are not subjected to the
+    -- arity check.
+    exprArity (R.AtomExpr s) = checkArity (Unqualified s) 0
+    exprArity (R.CtorExpr name args) =
+      checkArity name (length args) <> foldMap exprArity args
+    exprArity (R.CallExpr _ args) = foldMap exprArity args
+    exprArity (R.ApplyExpr f args) = exprArity f <> foldMap exprArity args
+    exprArity (R.HostExpr _ args) = foldMap exprArity args
+    exprArity (R.LambdaExpr _ body) = exprArity body
+    exprArity _ = mempty
+    -- 'BodyConstraint.args' are still 'Term'-typed (round-tripped via
+    -- 'YCHR.Resolved.exprToTerm'), so the legacy 'Term'-walker keeps
+    -- doing arity checks there. It mirrors 'exprArity' for the
+    -- pattern grammar plus the surface @fun(...) -> body@ /
+    -- @name/arity@ shapes that 'exprToTerm' emits.
     termArity (AtomTerm s) = checkArity (Unqualified s) 0
     termArity (CompoundTerm (Unqualified "/") [AtomTerm _, IntTerm _]) = mempty
     termArity (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") _, body]) =

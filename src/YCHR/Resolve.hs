@@ -8,13 +8,16 @@
 module YCHR.Resolve
   ( ResolveError (..),
     resolveProgram,
+    termToExpr,
   )
 where
 
+import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as T
 import YCHR.Diagnostic (Diagnostic, noDiag)
 import YCHR.PExpr qualified as PExpr
 import YCHR.Parsed (FunctionDeclKind (..))
@@ -23,10 +26,12 @@ import YCHR.Resolved qualified as R
 import YCHR.Types
   ( BoundSig (..),
     Constraint (..),
+    HeadArg (..),
     Name (..),
     QualifiedConstraint (..),
     QualifiedIdentifier (..),
     QualifiedName (..),
+    Term (..),
     TypeExpr (..),
     flattenName,
   )
@@ -94,6 +99,11 @@ data ResolveError
     -- and functions share the symbol namespace, so the collision is
     -- ambiguous regardless of whether the name is ever referenced.
     ConstraintFunctionCollision Name
+  | -- | A lambda parameter is neither a variable nor a wildcard.
+    -- Lambda params must be patterns; literals and compound terms
+    -- are rejected here so the resolved AST guarantees well-formed
+    -- 'R.LambdaExpr' values.
+    LambdaParamError Term
   deriving (Eq, Show)
 
 -- | Flatten modules into a single resolved program.
@@ -123,7 +133,8 @@ resolveProgram mods =
       mixedKindErrors = checkMixedDeclKinds mods
       extensionKindErrors = checkExtensionKinds funcKinds mods
       collisionErrors = checkConstraintFunctionCollision mods
-      (resolvedRules, ruleErrs) = resolveRules mods
+      (resolvedRules, ruleErrs) = resolveRules functionNames mods
+      (resolvedFunctions, funErrs) = resolveFunctions functionNames mods
       errs =
         eqErrors
           ++ headErrors
@@ -137,12 +148,13 @@ resolveProgram mods =
           ++ extensionKindErrors
           ++ collisionErrors
           ++ ruleErrs
+          ++ funErrs
    in if null errs
         then
           Right
             R.Program
               { rules = resolvedRules,
-                functions = resolveFunctions mods,
+                functions = resolvedFunctions,
                 constraintTypes = conTypes,
                 constraintBounds = conBounds,
                 functionNames = functionNames,
@@ -678,22 +690,33 @@ toQualId (Unqualified _) _ = Nothing
 -- Module flattening
 -- ---------------------------------------------------------------------------
 
-resolveRules :: [P.Module] -> ([R.Rule], [Diagnostic ResolveError])
-resolveRules mods =
+resolveRules ::
+  Set QualifiedName -> [P.Module] -> ([R.Rule], [Diagnostic ResolveError])
+resolveRules fs mods =
   let raws = [(r, m) | m <- mods, r <- m.rules]
       go (acc, errs) (r, _m) =
         case resolveHead r.head.sourceLoc r.head.parsed r.head.node of
           Right rh ->
-            ( acc
-                ++ [ R.Rule
-                       { name = r.name,
-                         head = P.AnnP rh r.head.sourceLoc r.head.parsed,
-                         guard = r.guard,
-                         body = r.body
-                       }
-                   ],
-              errs
-            )
+            let (guardExprs, guardErrs) =
+                  runWriter
+                    ( traverse
+                        (termToExpr fs r.guard.sourceLoc r.guard.parsed)
+                        r.guard.node
+                    )
+                (bodyExprs, bodyErrs) =
+                  runWriter
+                    ( traverse
+                        (termToExpr fs r.body.sourceLoc r.body.parsed)
+                        r.body.node
+                    )
+                rule =
+                  R.Rule
+                    { name = r.name,
+                      head = P.AnnP rh r.head.sourceLoc r.head.parsed,
+                      guard = P.AnnP guardExprs r.guard.sourceLoc r.guard.parsed,
+                      body = P.AnnP bodyExprs r.body.sourceLoc r.body.parsed
+                    }
+             in (acc ++ [rule], errs ++ guardErrs ++ bodyErrs)
           Left newErrs -> (acc, errs ++ newErrs)
    in foldl go ([], []) raws
 
@@ -720,8 +743,11 @@ qualifyConstraint loc origin (Constraint n args) = case n of
   Unqualified _ ->
     Left [noDiag (P.AnnP (UnqualifiedConstraintName n) loc origin)]
 
-resolveFunctions :: [P.Module] -> [R.FunctionDef]
-resolveFunctions mods =
+resolveFunctions ::
+  Set QualifiedName ->
+  [P.Module] ->
+  ([R.FunctionDef], [Diagnostic ResolveError])
+resolveFunctions fs mods =
   let -- Collect all function declarations with their module context
       allDecls =
         [ (QualifiedName m.name d.name, d.arity, d, m)
@@ -737,18 +763,26 @@ resolveFunctions mods =
             [ ((qn, ar), [(d, m)])
             | (qn, ar, d, m) <- allDecls
             ]
-   in [ R.FunctionDef
-          { name = qn,
-            arity = ar,
-            signatures =
-              collectSignatures decls
-                ++ collectExtensionSignatures mods qn ar,
-            isOpen = any (\(d, _) -> d.isOpen) decls,
-            requiring = concatMap (\(d, _) -> maybe [] id d.requiring) decls,
-            equations = concatMap (\(d, m) -> gatherEquations mods m d) decls
-          }
-      | ((qn, ar), decls) <- grouped
-      ]
+      build ((qn, ar), decls) =
+        let (eqss, declErrss) =
+              unzip
+                [ gatherEquations fs mods m d
+                | (d, m) <- decls
+                ]
+            def =
+              R.FunctionDef
+                { name = qn,
+                  arity = ar,
+                  signatures =
+                    collectSignatures decls
+                      ++ collectExtensionSignatures mods qn ar,
+                  isOpen = any (\(d, _) -> d.isOpen) decls,
+                  requiring = concatMap (\(d, _) -> maybe [] id d.requiring) decls,
+                  equations = concat eqss
+                }
+         in (def, concat declErrss)
+      (defs, defErrss) = unzip (map build grouped)
+   in (defs, concat defErrss)
 
 -- | Collect type signatures from a group of declarations for the same function.
 collectSignatures :: [(P.Declaration, P.Module)] -> [([TypeExpr], TypeExpr)]
@@ -783,8 +817,13 @@ collectExtensionSignatures mods qn ar =
 -- @checkExtensionKinds@ pass rejects mismatches between the directive
 -- and the target's kind, so by the time we get here either list is a
 -- legitimate source for this declaration.
-gatherEquations :: [P.Module] -> P.Module -> P.Declaration -> [P.AnnP R.FunctionEquation]
-gatherEquations mods m d =
+gatherEquations ::
+  Set QualifiedName ->
+  [P.Module] ->
+  P.Module ->
+  P.Declaration ->
+  ([P.AnnP R.FunctionEquation], [Diagnostic ResolveError])
+gatherEquations fs mods m d =
   let qualName = Qualified m.name d.name
       primaryEqs =
         [ annEq
@@ -799,15 +838,129 @@ gatherEquations mods m d =
           annEq.node.funName == qualName,
           length annEq.node.args == d.arity
         ]
-   in map stripFunName (primaryEqs ++ extensionEqs)
+      (eqs, eqErrss) = unzip (map (stripFunName fs) (primaryEqs ++ extensionEqs))
+   in (eqs, concat eqErrss)
 
-stripFunName :: P.AnnP P.FunctionEquation -> P.AnnP R.FunctionEquation
-stripFunName (P.AnnP eq loc parsed) =
-  P.AnnP
-    R.FunctionEquation
-      { args = eq.args,
-        guard = eq.guard,
-        rhs = eq.rhs
-      }
-    loc
-    parsed
+stripFunName ::
+  Set QualifiedName ->
+  P.AnnP P.FunctionEquation ->
+  (P.AnnP R.FunctionEquation, [Diagnostic ResolveError])
+stripFunName fs (P.AnnP eq loc parsed) =
+  let (guardExprs, guardErrs) =
+        runWriter
+          ( traverse
+              (termToExpr fs eq.guard.sourceLoc eq.guard.parsed)
+              eq.guard.node
+          )
+      (rhsExpr, rhsErrs) =
+        runWriter (termToExpr fs eq.rhs.sourceLoc eq.rhs.parsed eq.rhs.node)
+      resolvedEq =
+        R.FunctionEquation
+          { args = eq.args,
+            guard = P.AnnP guardExprs eq.guard.sourceLoc eq.guard.parsed,
+            rhs = P.AnnP rhsExpr eq.rhs.sourceLoc eq.rhs.parsed
+          }
+   in (P.AnnP resolvedEq loc parsed, guardErrs ++ rhsErrs)
+
+-- ---------------------------------------------------------------------------
+-- Term -> Expr translation
+-- ---------------------------------------------------------------------------
+
+-- | Translate a renamed surface 'Term' into the structurally typed
+-- 'R.Expr'. The function set tells us which qualified compounds are
+-- static calls — every other qualified compound is a data constructor.
+-- '$call', 'fun name/arity', lambdas, 'host:f' calls, and the @term/1@
+-- quoting form are recognized by their canonical post-rename shape.
+--
+-- Diagnostics accumulate in the writer; the translator always returns
+-- an 'R.Expr', substituting plausible placeholders so traversal can
+-- continue. The enclosing call sites use the accumulated diagnostics
+-- (combined with the rest of 'resolveProgram''s checks) to decide
+-- whether to fail.
+termToExpr ::
+  Set QualifiedName ->
+  P.SourceLoc ->
+  PExpr.PExpr ->
+  Term ->
+  Writer [Diagnostic ResolveError] R.Expr
+termToExpr fs loc origin = go
+  where
+    go t = case t of
+      VarTerm v -> pure (R.VarExpr v)
+      IntTerm n -> pure (R.IntExpr n)
+      FloatTerm n -> pure (R.FloatExpr n)
+      AtomTerm s -> pure (R.AtomExpr s)
+      TextTerm s -> pure (R.TextExpr s)
+      Wildcard -> pure R.WildcardExpr
+      -- '$call'(F, A1..An) — surface dynamic dispatch. The callee is
+      -- the first argument; the rest are the call's actual arguments.
+      CompoundTerm (Unqualified "$call") (f : args)
+        | not (null args) -> R.ApplyExpr <$> go f <*> traverse go args
+      -- 'fun name/arity' — canonicalized by the renamer to a single
+      -- AtomTerm holding the flat 'module:name'.
+      CompoundTerm (Unqualified "/") [AtomTerm flatName, IntTerm arity] ->
+        pure (R.FunRefExpr (parseFlatName flatName) arity)
+      -- Lambda 'fun(P1..Pn) -> body'. Params are patterns; invalid
+      -- params get reported here and replaced with 'HeadWildcard' so
+      -- traversal can keep going.
+      CompoundTerm
+        (Unqualified "->")
+        [CompoundTerm (Unqualified "fun") params, body] -> do
+          hargs <- traverse classifyParam params
+          body' <- go body
+          pure (R.LambdaExpr hargs body')
+      -- 'term(arg)' — quoting suppresses evaluation of the subtree;
+      -- every compound inside is a data constructor.
+      CompoundTerm (Unqualified "term") [arg] ->
+        pure (R.CtorExpr (Unqualified "term") [quotedToExpr arg])
+      -- 'host:f(args)' — host language call.
+      CompoundTerm (Qualified "host" f) args ->
+        R.HostExpr f <$> traverse go args
+      -- Qualified compound: call if declared as a function, else
+      -- a data constructor application.
+      CompoundTerm name@(Qualified m b) args
+        | QualifiedName m b `Set.member` fs ->
+            R.CallExpr (QualifiedName m b) <$> traverse go args
+        | otherwise ->
+            R.CtorExpr name <$> traverse go args
+      -- Any remaining unqualified compound: a reserved operator
+      -- (@=@, @is@, ...) or an unresolved leftover (already reported
+      -- by the renamer). Pass through as a 'CtorExpr' so downstream
+      -- error reporting can fire on it.
+      CompoundTerm name args ->
+        R.CtorExpr name <$> traverse go args
+
+    classifyParam :: Term -> Writer [Diagnostic ResolveError] HeadArg
+    classifyParam (VarTerm v) = pure (HeadVar v)
+    classifyParam Wildcard = pure HeadWildcard
+    classifyParam bad = do
+      tell [noDiag (P.AnnP (LambdaParamError bad) loc origin)]
+      pure HeadWildcard
+
+-- | Translate a 'Term' that lives inside a @term/1@ quotation. No
+-- function-set lookup happens here: quoting suppresses evaluation, so
+-- every compound is a data constructor.
+quotedToExpr :: Term -> R.Expr
+quotedToExpr (VarTerm v) = R.VarExpr v
+quotedToExpr (IntTerm n) = R.IntExpr n
+quotedToExpr (FloatTerm n) = R.FloatExpr n
+quotedToExpr (AtomTerm s) = R.AtomExpr s
+quotedToExpr (TextTerm s) = R.TextExpr s
+quotedToExpr Wildcard = R.WildcardExpr
+quotedToExpr (CompoundTerm name args) =
+  R.CtorExpr name (map quotedToExpr args)
+
+-- | Recover a 'QualifiedName' from a flat @"module:name"@ atom emitted
+-- by the renamer (see 'YCHR.Rename.renameTerm' for @fun name/arity@).
+-- The renamer always emits a colon-separated form, so the missing-
+-- separator case is an internal invariant violation rather than a
+-- user-facing error.
+parseFlatName :: Text -> QualifiedName
+parseFlatName t = case T.breakOn ":" t of
+  (m, rest) | not (T.null rest) -> QualifiedName m (T.drop 1 rest)
+  _ ->
+    error
+      ( "YCHR.Resolve.parseFlatName: missing ':' separator in "
+          <> T.unpack t
+          <> " — renamer post-condition violated"
+      )

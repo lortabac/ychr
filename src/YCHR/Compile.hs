@@ -48,7 +48,6 @@ module YCHR.Compile
 
     -- * Function compilation
     compileFunctionDef,
-    buildFunctionSet,
 
     -- * Call dispatch
     genCallFunDispatches,
@@ -81,6 +80,7 @@ import YCHR.PExpr (PExpr)
 import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
 import YCHR.Pretty (prettyPExprSrc)
+import YCHR.Resolved qualified as R
 import YCHR.Types
   ( HeadArg (..),
     Identifier (..),
@@ -116,15 +116,14 @@ data SrcInfo = SrcInfo
 -- possible in one go.
 compile :: D.Program -> SymbolTable -> Either [Diagnostic CompileError] Program
 compile prog symTab =
-  let funSet = buildFunctionSet prog
-      ( (occMap, ruleDisplayNames),
+  let ( (occMap, ruleDisplayNames),
         occErrs
         ) = runWriter (collectOccurrences symTab prog)
       (procs, procErrs) = runWriter $ do
         fmap concat $
-          traverse (genConstraintProcs funSet symTab occMap) (symbolTableToList symTab)
+          traverse (genConstraintProcs symTab occMap) (symbolTableToList symTab)
       (funProcs, funErrs) = runWriter $ do
-        traverse (compileFunctionDef funSet) prog.functions
+        traverse compileFunctionDef prog.functions
       dispatch = genReactivateDispatch symTab
       callFunDispatches = genCallFunDispatches prog.functions
       allErrs = occErrs ++ procErrs ++ funErrs
@@ -139,11 +138,6 @@ compile prog symTab =
                 procedures = procs ++ funProcs ++ [dispatch] ++ callFunDispatches
               }
         else Left allErrs
-
--- | Build the set of qualified function identifiers from the program.
-buildFunctionSet :: D.Program -> Set Identifier
-buildFunctionSet prog =
-  Set.fromList [Identifier (Types.qualifiedToName f.name) f.arity | f <- prog.functions]
 
 -- | Build the list of constraint type source names, indexed by
 -- 'Types.ConstraintType'. The list is ordered by the constraint type's
@@ -161,18 +155,17 @@ buildTypeNames symTab =
 -- ---------------------------------------------------------------------------
 
 genConstraintProcs ::
-  Set Identifier ->
   SymbolTable ->
   OccurrenceMap ->
   ( Identifier,
     ConstraintType
   ) ->
   Writer [Diagnostic CompileError] [Procedure]
-genConstraintProcs funSet symTab occMap (ident, cType) = do
+genConstraintProcs symTab occMap (ident, cType) = do
   let occs = lookupOccurrences ident occMap
       tellProc = genTell ident.name cType ident.arity
       activate = genActivate ident.name ident.arity occs
-  occProcs <- traverse (genOccurrence funSet symTab ident.name ident.arity) occs
+  occProcs <- traverse (genOccurrence symTab ident.name ident.arity) occs
   pure (tellProc : activate : occProcs)
 
 -- ---------------------------------------------------------------------------
@@ -226,17 +219,16 @@ genActivate name arity occs =
 -- ---------------------------------------------------------------------------
 
 genOccurrence ::
-  Set Identifier ->
   SymbolTable ->
   Types.Name ->
   Int ->
   Occurrence ->
   Writer [Diagnostic CompileError] Procedure
-genOccurrence funSet symTab name arity occ = do
+genOccurrence symTab name arity occ = do
   let params = activeName : argNames arity
       procName' = occProcName name arity occ.number
       varMap = buildVarMap occ
-  body <- genOccurrenceBody funSet symTab varMap occ
+  body <- genOccurrenceBody symTab varMap occ
   pure (Procedure procName' params body)
 
 -- | Map every user-written head variable in an 'Occurrence' to the
@@ -261,13 +253,12 @@ buildVarMap occ =
 -- "guards-then-fire" block, wrap it in one nested 'Foreach' per partner,
 -- then append the trailing @Return false@ that signals "no early drop".
 genOccurrenceBody ::
-  Set Identifier ->
   SymbolTable ->
   VarMap ->
   Occurrence ->
   Writer [Diagnostic CompileError] [Stmt]
-genOccurrenceBody funSet symTab varMap occ = do
-  (inner, condMap) <- genGuardedFire funSet symTab varMap occ
+genOccurrenceBody symTab varMap occ = do
+  (inner, condMap) <- genGuardedFire symTab varMap occ
   let body = wrapInPartnerLoops occ condMap inner
   pure (body ++ [Return (Lit (BoolLit False))])
 
@@ -278,17 +269,16 @@ genOccurrenceBody funSet symTab varMap occ = do
 -- 'genFireStmts' result — together with the per-partner index
 -- conditions lifted out of equality check guards by 'compileCheckGuards'.
 genGuardedFire ::
-  Set Identifier ->
   SymbolTable ->
   VarMap ->
   Occurrence ->
   Writer [Diagnostic CompileError] ([Stmt], PartnerCondMap)
-genGuardedFire funSet symTab varMap occ = do
+genGuardedFire symTab varMap occ = do
   let AnnP {node = guards, sourceLoc = guardLoc, parsed = guardP} = occ.rule.guard
       ruleLabel = Just ("rule " <> occ.ruleDisplay)
       guardSi = SrcInfo guardLoc guardP ruleLabel
-  compiled <- compileGuards funSet (Just occ) varMap guardSi guards
-  fireStmts <- genFireStmts funSet symTab compiled.extendedVarMap occ
+  compiled <- compileGuards (Just occ) varMap guardSi guards
+  fireStmts <- genFireStmts symTab compiled.extendedVarMap occ
   let guarded = case compiled.residualCheck of
         Nothing -> fireStmts
         Just gExpr -> [If gExpr fireStmts []]
@@ -354,12 +344,11 @@ wrapInPartnerLoops occ condMap inner =
 -- ---------------------------------------------------------------------------
 
 genFireStmts ::
-  Set Identifier ->
   SymbolTable ->
   VarMap ->
   Occurrence ->
   Writer [Diagnostic CompileError] [Stmt]
-genFireStmts funSet symTab varMap occ = do
+genFireStmts symTab varMap occ = do
   let rule = occ.rule
       AnnP {node = ruleHead} = rule.head
       isPropagation = null ruleHead.removed
@@ -370,7 +359,7 @@ genFireStmts funSet symTab varMap occ = do
   let AnnP {node = ruleBody, sourceLoc = bodyLoc, parsed = bodyP} = rule.body
       ruleLabel = Just ("rule " <> occ.ruleDisplay)
       bodySi = SrcInfo bodyLoc bodyP ruleLabel
-  bodyStmts <- compileBodyGoals funSet symTab varMap bodySi ruleBody
+  bodyStmts <- compileBodyGoals symTab varMap bodySi ruleBody
   let earlyDropStmts
         | activeIsRemoved = [Return (Lit (BoolLit True))]
         | otherwise = [If (BNot (BAlive (IdVar activeName))) [Return (Lit (BoolLit True))] []]
@@ -491,48 +480,77 @@ compileTerm varMap si (CompoundTerm name args) = do
   pure (MakeTerm (vmName name) args')
 compileTerm _ _ Wildcard = pure (Lit WildcardLit)
 
--- | Like 'compileTerm', but also recognises @$call@, @term(...)@,
--- user-defined function calls and @host:f(...)@ at every level of the
--- term and emits the appropriate 'CallExpr' \/ 'HostCall'. Compound
--- terms whose head is a data constructor still compile to 'MakeTerm',
--- but their arguments are recursively put through 'compileExpr' so
--- nested function calls inside them are evaluated. The @term\/1@
--- clause short-circuits to 'compileTerm', suppressing evaluation of
--- the argument and any subterms. See the \"Notes\" block at the
--- bottom of this file.
+-- | Lower a typed 'D.Expr' to a VM 'ValExpr'. Each constructor maps to
+-- exactly one runtime behavior:
+--
+--   * 'D.CallExpr' / 'D.ApplyExpr' / 'D.HostExpr' produce 'CallExpr' /
+--     'HostCall' instructions.
+--   * 'D.CtorExpr' produces a 'MakeTerm', with its arguments recursively
+--     lowered. The native-bool fast path and the @term\/1@ quoting form
+--     are the only structural special cases.
+--   * 'D.FunRefExpr' produces the canonical @'/'(<flatname>, <arity>)@
+--     compound that 'genCallFunDispatches' pattern-matches at runtime.
+--   * 'D.LambdaExpr' is removed by lambda lifting before compilation
+--     and is therefore unreachable here.
 compileExpr ::
-  Set Identifier ->
   VarMap ->
   SrcInfo ->
-  Term ->
+  D.Expr ->
   Writer [Diagnostic CompileError] ValExpr
-compileExpr funSet varMap si (CompoundTerm (Types.Unqualified "$call") args)
-  | length args >= 2 = do
-      args' <- traverse (compileExpr funSet varMap si) args
-      pure (CallExpr (callFunProcName (length args - 1)) (map AVal args'))
-compileExpr _ varMap si (CompoundTerm (Types.Unqualified "term") [arg]) =
-  compileTerm varMap si arg
-compileExpr funSet varMap si (CompoundTerm name args)
-  | Set.member (Identifier name (length args)) funSet = do
-      args' <- traverse (compileExpr funSet varMap si) args
-      pure (CallExpr (funcProcName name (length args')) (map AVal args'))
-  | Types.Qualified "host" f <- name = do
-      args' <- traverse (compileExpr funSet varMap si) args
-      pure (HostCall (Name f) args')
--- Data-constructor compound at an expression position: still emits a
--- 'MakeTerm', but each argument is in expression context and is run
--- through 'compileExpr' so a nested function call (e.g. the
--- @filter_consistent(...)@ in @[Sig | filter_consistent(Rest, AT)]@)
--- is recognised. Use @term\/1@ to suppress this and keep the subterm
--- opaque.
-compileExpr funSet varMap si (CompoundTerm name args@(_ : _)) = do
-  args' <- traverse (compileExpr funSet varMap si) args
-  pure (MakeTerm (vmName name) args')
--- Non-compound terms (vars, atoms, ints, ...) and 0-arg compounds
--- (which have no children to descend into and where 'compileTerm''s
--- @prelude:true@ / @prelude:false@ / qualified-empty-args fast paths
--- apply) delegate to 'compileTerm'.
-compileExpr _ varMap si t = compileTerm varMap si t
+compileExpr varMap si e = case e of
+  R.VarExpr v -> case lookupVar v varMap of
+    Just expr -> pure expr
+    Nothing -> do
+      tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed)]
+      pure (Lit WildcardLit)
+  R.IntExpr n -> pure (Lit (IntLit n))
+  R.FloatExpr n -> pure (Lit (FloatLit n))
+  R.AtomExpr s -> pure (Lit (AtomLit s))
+  R.TextExpr s -> pure (Lit (TextLit s))
+  R.WildcardExpr -> pure (Lit WildcardLit)
+  -- Native-bool fast path: the renamer canonicalizes source @true@ /
+  -- @false@ to @prelude:true@ / @prelude:false@ (see
+  -- 'YCHR.Rename.canonicalizeDataCon'). Matching them structurally
+  -- lets 'If' dispatch on 'VBool' without boxing.
+  R.CtorExpr (Types.Qualified "prelude" "true") [] ->
+    pure (Lit (BoolLit True))
+  R.CtorExpr (Types.Qualified "prelude" "false") [] ->
+    pure (Lit (BoolLit False))
+  -- @term\/1@ short-circuit: the subtree stays opaque (no calls are
+  -- evaluated). Delegate to 'compileTerm' on the surface 'Term' shape
+  -- of the argument; the user opts into this with @term(foo(X))@ when
+  -- they want @foo@ kept structural even if it is also a declared
+  -- function.
+  R.CtorExpr (Types.Unqualified "term") [arg] ->
+    compileTerm varMap si (R.exprToTerm arg)
+  -- Other constructor compounds: arguments stay in expression context
+  -- so nested calls (e.g. @foo(X)@ inside @pair(foo(X), bar)@) are
+  -- evaluated. Empty-arg qualified compounds get the same uniform
+  -- @VTerm name []@ shape that 'compileTerm' uses, so the runtime can
+  -- match them with 'BMatchTerm' regardless of how they were written.
+  R.CtorExpr name args -> do
+    args' <- traverse (compileExpr varMap si) args
+    pure (MakeTerm (vmName name) args')
+  R.CallExpr qn args -> do
+    args' <- traverse (compileExpr varMap si) args
+    let funcName = Types.qualifiedToName qn
+    pure (CallExpr (funcProcName funcName (length args')) (map AVal args'))
+  R.ApplyExpr f args -> do
+    fAndArgs <- traverse (compileExpr varMap si) (f : args)
+    pure (CallExpr (callFunProcName (length args)) (map AVal fAndArgs))
+  R.HostExpr f args -> do
+    args' <- traverse (compileExpr varMap si) args
+    pure (HostCall (Name f) args')
+  R.FunRefExpr qn arity ->
+    pure
+      ( MakeTerm
+          (Name "/")
+          [ Lit (AtomLit (flattenName (Types.qualifiedToName qn))),
+            Lit (IntLit arity)
+          ]
+      )
+  R.LambdaExpr {} ->
+    error "Compile.compileExpr: LambdaExpr survived lambda lifting"
 
 -- ---------------------------------------------------------------------------
 -- Compile guards
@@ -635,16 +653,15 @@ classifyEqual occ a b
 -- 'Nothing' (e.g. when compiling user-defined function equations) to
 -- bypass classification — no partners exist so nothing is liftable.
 compileGuards ::
-  Set Identifier ->
   Maybe Occurrence ->
   VarMap ->
   SrcInfo ->
   [D.Guard] ->
   Writer [Diagnostic CompileError] CompiledGuards
-compileGuards funSet mOcc varMap si guards = do
+compileGuards mOcc varMap si guards = do
   let (matchGuards, checkGuards) = partition isMatchGuard guards
   (wrapper, varMap') <- foldM (compileMatchGuard si) (id, varMap) matchGuards
-  (condMap, checkExpr) <- compileCheckGuards funSet mOcc varMap' si checkGuards
+  (condMap, checkExpr) <- compileCheckGuards mOcc varMap' si checkGuards
   pure
     CompiledGuards
       { matchWrapper = wrapper,
@@ -662,13 +679,16 @@ compileMatchGuard ::
   ([Stmt] -> [Stmt], VarMap) ->
   D.Guard ->
   Writer [Diagnostic CompileError] ([Stmt] -> [Stmt], VarMap)
-compileMatchGuard si (matchWrapper, varMap) (D.GuardMatch term name arity) = do
-  termExpr <- compileTerm varMap si term
-  let check body = [If (BMatchTerm termExpr (vmName name) arity) body []]
+compileMatchGuard si (matchWrapper, varMap) (D.GuardMatch operand name arity) = do
+  -- HNF only emits 'GuardMatch' with a 'VarExpr' operand, but
+  -- 'compileExpr' handles every 'Expr' constructor structurally, so
+  -- delegating is safe and keeps the invariant unenforced-but-honoured.
+  operandExpr <- compileExpr varMap si operand
+  let check body = [If (BMatchTerm operandExpr (vmName name) arity) body []]
   pure (matchWrapper . check, varMap)
-compileMatchGuard si (matchWrapper, varMap) (D.GuardGetArg vname term idx) = do
-  termExpr <- compileTerm varMap si term
-  let binding body = LetVal (Name vname) (GetArg termExpr idx) : body
+compileMatchGuard si (matchWrapper, varMap) (D.GuardGetArg vname operand idx) = do
+  operandExpr <- compileExpr varMap si operand
+  let binding body = LetVal (Name vname) (GetArg operandExpr idx) : body
       varMap' = insertVar vname (Var (Name vname)) varMap
   pure (matchWrapper . binding, varMap')
 compileMatchGuard _ acc _ = pure acc
@@ -682,13 +702,12 @@ compileMatchGuard _ acc _ = pure acc
 -- 'classifyEqual'. Liftable equalities are routed to a per-partner map;
 -- the rest are 'And'-folded in source order into the residual check.
 compileCheckGuards ::
-  Set Identifier ->
   Maybe Occurrence ->
   VarMap ->
   SrcInfo ->
   [D.Guard] ->
   Writer [Diagnostic CompileError] (PartnerCondMap, Maybe BoolExpr)
-compileCheckGuards funSet mOcc varMap si guards = do
+compileCheckGuards mOcc varMap si guards = do
   (condMap, residuals) <- foldM step (Map.empty, []) guards
   let residual = case residuals of
         [] -> Nothing
@@ -699,16 +718,16 @@ compileCheckGuards funSet mOcc varMap si guards = do
       Just occ -> classifyEqual occ e1 e2
       Nothing -> Nothing
     step (cm, rs) (D.GuardEqual t1 t2) = do
-      e1 <- compileTerm varMap si t1
-      e2 <- compileTerm varMap si t2
+      e1 <- compileExpr varMap si t1
+      e2 <- compileExpr varMap si t2
       case classify e1 e2 of
         Just (k, j, other) ->
           let cond = IndexCondition {argIndex = j, expectedValue = other}
            in pure (Map.insertWith (flip (++)) k [cond] cm, rs)
         Nothing ->
           pure (cm, rs ++ [BEqual e1 e2])
-    step (cm, rs) (D.GuardExpr term) = do
-      e <- BFromVal . EvalDeep <$> compileExpr funSet varMap si term
+    step (cm, rs) (D.GuardExpr expr) = do
+      e <- BFromVal . EvalDeep <$> compileExpr varMap si expr
       pure (cm, rs ++ [e])
     step acc _ = pure acc
 
@@ -717,18 +736,17 @@ compileCheckGuards funSet mOcc varMap si guards = do
 -- ---------------------------------------------------------------------------
 
 compileBodyGoals ::
-  Set Identifier ->
   SymbolTable ->
   VarMap ->
   SrcInfo ->
   [D.BodyGoal] ->
   Writer [Diagnostic CompileError] [Stmt]
-compileBodyGoals funSet symTab varMap si goals = do
+compileBodyGoals symTab varMap si goals = do
   (stmts, _) <- foldM step ([], varMap) goals
   pure stmts
   where
     step (acc, vm) goal = do
-      (stmts, vm') <- compileBodyGoal funSet symTab vm si goal
+      (stmts, vm') <- compileBodyGoal symTab vm si goal
       pure (acc ++ stmts, vm')
 
 -- | Tell-unify two terms and immediately drain the resulting
@@ -748,29 +766,31 @@ unifyAndReactivate l r =
 -- variables (e.g. @is@ binding a fresh variable, or a constraint whose
 -- arguments reference not-yet-seen variables that need 'NewVar').
 compileBodyGoal ::
-  Set Identifier ->
   SymbolTable ->
   VarMap ->
   SrcInfo ->
   D.BodyGoal ->
   Writer [Diagnostic CompileError] ([Stmt], VarMap)
-compileBodyGoal _ _ varMap _ D.BodyTrue = pure ([], varMap)
-compileBodyGoal _ _ varMap si (D.BodyConstraint con) = do
+compileBodyGoal _ varMap _ D.BodyTrue = pure ([], varMap)
+compileBodyGoal _ varMap si (D.BodyConstraint con) = do
+  -- 'BodyConstraint' arguments are still 'Term'-typed (see
+  -- 'YCHR.Desugared.BodyGoal' for the rationale). Variables used only
+  -- here need a fresh 'NewVar' so they exist before the tell.
   let argVars = [v | VarTerm v <- con.args, notMemberVar v varMap]
       newStmts = [LetVal (Name v) NewVar | v <- argVars]
       varMap' = foldl' (\m v -> insertVar v (Var (Name v)) m) varMap argVars
   callArgs <- traverse (compileTerm varMap' si) con.args
   let tellName = tellProcName (Types.qualifiedToName con.name) (length callArgs)
   pure (newStmts ++ [ExprStmt (CallExpr tellName (map AVal callArgs))], varMap')
-compileBodyGoal _ _ varMap si (D.BodyUnify t1 t2) = do
-  t1' <- compileTerm varMap si t1
-  t2' <- compileTerm varMap si t2
+compileBodyGoal _ varMap si (D.BodyUnify t1 t2) = do
+  t1' <- compileExpr varMap si t1
+  t2' <- compileExpr varMap si t2
   pure (unifyAndReactivate t1' t2', varMap)
-compileBodyGoal _ _ varMap si (D.BodyHostStmt f args) = do
-  args' <- traverse (compileTerm varMap si) args
+compileBodyGoal _ varMap si (D.BodyHostStmt f args) = do
+  args' <- traverse (compileExpr varMap si) args
   pure ([ExprStmt (HostCall (Name f) args')], varMap)
-compileBodyGoal funSet _ varMap si (D.BodyIs v expr) = do
-  expr' <- compileExpr funSet varMap si expr
+compileBodyGoal _ varMap si (D.BodyIs v expr) = do
+  expr' <- compileExpr varMap si expr
   case lookupVar v varMap of
     -- Re-binding a variable already bound by the head: tell-unify so any
     -- existing constraints observing it are reactivated.
@@ -780,22 +800,22 @@ compileBodyGoal funSet _ varMap si (D.BodyIs v expr) = do
     Nothing ->
       let varMap' = insertVar v (Var (Name v)) varMap
        in pure ([LetVal (Name v) (EvalDeep expr')], varMap')
-compileBodyGoal funSet _ varMap si (D.BodyFunctionCall (Types.Unqualified "$call") args) = do
-  args' <- traverse (compileExpr funSet varMap si) args
-  pure ([ExprStmt (CallExpr (callFunProcName (length args - 1)) (map AVal args'))], varMap)
-compileBodyGoal funSet _ varMap si (D.BodyFunctionCall name args) = do
-  args' <- traverse (compileExpr funSet varMap si) args
-  pure ([ExprStmt (CallExpr (funcProcName name (length args')) (map AVal args'))], varMap)
+compileBodyGoal _ varMap si (D.BodyCall qn args) = do
+  args' <- traverse (compileExpr varMap si) args
+  let funcName = Types.qualifiedToName qn
+  pure ([ExprStmt (CallExpr (funcProcName funcName (length args')) (map AVal args'))], varMap)
+compileBodyGoal _ varMap si (D.BodyApply f args) = do
+  fAndArgs <- traverse (compileExpr varMap si) (f : args)
+  pure ([ExprStmt (CallExpr (callFunProcName (length args)) (map AVal fAndArgs))], varMap)
 
 -- ---------------------------------------------------------------------------
 -- Compile function definitions
 -- ---------------------------------------------------------------------------
 
 compileFunctionDef ::
-  Set Identifier ->
   D.Function ->
   Writer [Diagnostic CompileError] Procedure
-compileFunctionDef funSet func = do
+compileFunctionDef func = do
   let funcName = Types.qualifiedToName func.name
       procName' = funcProcName funcName func.arity
       params = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. func.arity - 1]]
@@ -812,7 +832,7 @@ compileFunctionDef funSet func = do
           ("function " <> flattenName funcName <> "/" <> T.pack (show func.arity))
           func.equations.sourceLoc
           func.equations.parsed
-  eqStmts <- traverse (compileEquation funSet params funcSi) func.equations.node
+  eqStmts <- traverse (compileEquation params funcSi) func.equations.node
   let errorStmt = ExprStmt (HostCall chrErrorName [Lit (AtomLit "no_matching_equation")])
   pure (Procedure procName' params (PushFrame frame : concat eqStmts ++ [errorStmt]))
 
@@ -826,17 +846,16 @@ buildEquationVarMap procParams normalizedArgs =
     ]
 
 compileEquation ::
-  Set Identifier ->
   [Name] ->
   SrcInfo ->
   D.Equation ->
   Writer [Diagnostic CompileError] [Stmt]
-compileEquation funSet params si eq = do
+compileEquation params si eq = do
   let varMap = buildEquationVarMap params eq.params
   -- Equations have no partners, so the index-condition pushdown
   -- classifier never fires; pass 'Nothing' to short-circuit it.
-  compiled <- compileGuards funSet Nothing varMap si eq.guards
-  rhsExpr <- compileExpr funSet compiled.extendedVarMap si eq.rhs
+  compiled <- compileGuards Nothing varMap si eq.guards
+  rhsExpr <- compileExpr compiled.extendedVarMap si eq.rhs
   let returnStmt = [Return rhsExpr]
       inner = case compiled.residualCheck of
         Nothing -> returnStmt
@@ -1003,19 +1022,19 @@ talk about a "suspension" are @reactivate_dispatch@ ('suspParamName')
 and 'DrainReactivationQueue' ('pendingName'), where the value really is
 "a suspension we received from somewhere else".
 
-How 'compileExpr' handles compound terms: at every level it asks the
-'funSet' / @host:f@ recogniser whether the current head names a
-function. If so, the term compiles to a 'CallExpr' or 'HostCall'
-(and its arguments stay in expression context). If not, the term
-compiles to a 'MakeTerm', /but its arguments are still in expression
-context/ — they are recursively re-entered through 'compileExpr', so
-a nested @foo(X)@ inside @pair(foo(X), bar(Y))@ becomes a call
-whenever @foo@ is a declared function. Prolog and CHR both treat
-data constructors and function symbols as syntactically
-indistinguishable, and the user opts out of this evaluation with
-@term\/1@: @term(foo(X))@ short-circuits to 'compileTerm' and keeps
-the subterm opaque regardless of whether @foo@ happens to be a
-declared function.
+How 'compileExpr' handles compound forms: each 'D.Expr' constructor
+maps to one runtime behavior. 'D.CallExpr' / 'D.ApplyExpr' /
+'D.HostExpr' lower to 'CallExpr' / 'HostCall' (and their arguments
+stay in expression context); 'D.CtorExpr' lowers to 'MakeTerm', with
+its arguments recursively re-entered through 'compileExpr' so a
+nested call inside @pair(foo(X), bar(Y))@ is still evaluated when
+@foo@ is a declared function. The user opts out of this with
+@term\/1@: @term(foo(X))@ delegates to 'compileTerm' on the surface
+'Term' shape and keeps the subterm opaque regardless of whether
+@foo@ happens to be a declared function. The call-vs-constructor
+distinction was once made by a 'funSet' membership check at every
+compound; it is now structural at the 'D.Expr' level
+('YCHR.Resolve' commits to it once, in 'YCHR.Resolve.termToExpr').
 
 Why 'genFireStmts' skips the alive check for removed partners during
 backjumping: 'genKillStmts' has just emitted an unconditional 'Kill' for

@@ -46,6 +46,7 @@ import YCHR.Parser (ParseValidationError (..))
 import YCHR.Pretty (prettyPExprSrc, prettyTermSrc)
 import YCHR.Rename (RenameError (..), RenameWarning (..))
 import YCHR.Resolve (ResolveError (..))
+import YCHR.Resolved qualified as R
 import YCHR.TypeCheck (TypeCheckError (..))
 import YCHR.Types qualified as Types
 import YCHR.VM (StackFrame (..))
@@ -218,6 +219,7 @@ resolveErrorCode (ExtendClassTypeOnFunction _) = ErrorCode 16013
 resolveErrorCode (ExtendClassOnFunction _) = ErrorCode 16014
 resolveErrorCode (ExtendFunctionOnClass _) = ErrorCode 16015
 resolveErrorCode (ConstraintFunctionCollision _) = ErrorCode 16016
+resolveErrorCode (LambdaParamError _) = ErrorCode 16017
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 was previously used for OperatorInImportList; now reserved
@@ -239,8 +241,7 @@ renameWarningCode (DataConstructorArityMismatch _ _) = ErrorCode 20102
 
 -- | 3xxxx — desugar phase
 desugarErrorCode :: DesugarError -> ErrorCode
-desugarErrorCode (UnexpectedBodyTerm _) = ErrorCode 30001
-desugarErrorCode (InvalidLambdaParam _) = ErrorCode 30003
+desugarErrorCode (UnexpectedBodyExpr _) = ErrorCode 30001
 
 -- | 4xxxx — compile phase
 compileErrorCode :: CompileError -> ErrorCode
@@ -490,6 +491,10 @@ resolveErrorMsg (ExtendFunctionOnClass name) =
         ++ "', which is declared as :- open_class"
     )
     "use :- extend_class to add equations to an :- open_class"
+resolveErrorMsg (LambdaParamError term) =
+  withHint
+    ("Invalid lambda parameter: " ++ prettyTermSrc term)
+    "lambda parameters must be variables or the anonymous variable (_)"
 resolveErrorMsg (ConstraintFunctionCollision name) =
   withHint
     ( "'"
@@ -638,16 +643,12 @@ instance Display (Diagnostic DesugarError) where
       (Just (prettyPExprSrc origin))
 
 desugarErrorMsg :: DesugarError -> String
-desugarErrorMsg (UnexpectedBodyTerm term) =
+desugarErrorMsg (UnexpectedBodyExpr e) =
   withHint
-    ("This term is not valid in a rule body: " ++ prettyTermSrc term)
+    ("This expression is not valid in a rule body: " ++ prettyTermSrc (R.exprToTerm e))
     ( "rule bodies may contain constraints, function calls,"
         ++ " unifications (=), 'is' expressions, and 'true'"
     )
-desugarErrorMsg (InvalidLambdaParam term) =
-  withHint
-    ("Invalid lambda parameter: " ++ prettyTermSrc term)
-    "lambda parameters must be variables or the anonymous variable (_)"
 
 instance Display (Diagnostic CompileError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =

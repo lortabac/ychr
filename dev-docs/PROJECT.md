@@ -33,6 +33,8 @@ Parser ──▶ Rename ──▶ Resolve ──▶ Desugar ──▶ TypeCheck 
 
 Parses standard CHR with Prolog-compatible syntax. Produces an internal representation of CHR handlers: constraint declarations, rule definitions (simplification, propagation, simpagation), with heads, guards, and bodies. The frontend pipeline runs Rename → Resolve (module flattening + declaration-kind validation) → Desugar, with an optional static type-check stage on the desugared AST.
 
+The Resolve phase, in addition to flattening modules, also commits to a structurally typed expression representation. The surface AST uses a uniform `Term` for everything a compound can be — a data constructor application, a user function call, a dynamic dispatch (`'$call'`), a function reference (`fun foo/2`), a lambda, or a host call. `Resolve.termToExpr` translates each `Term` in expression position into a typed `YCHR.Resolved.Expr` (`VarExpr`, `IntExpr`, `CtorExpr`, `CallExpr`, `ApplyExpr`, `FunRefExpr`, `LambdaExpr`, `HostExpr`, …). The translator consults the program's function-name set exactly once, at this boundary; the call-vs-constructor decision is then a structural property of the AST. Desugar, Compile, and TypeCheck all dispatch on `Expr` constructors without re-checking any function-name set. `Term` itself stays as the value type for the surface, the DSL, pretty-printing, the runtime/value bridge, and constraint arguments (which CHR semantics keeps unevaluated, so they remain plain data terms).
+
 ### CHR-to-VM Compiler
 
 Implemented in Haskell. Transforms CHR handlers into VM programs following the compilation scheme from the paper. This includes:

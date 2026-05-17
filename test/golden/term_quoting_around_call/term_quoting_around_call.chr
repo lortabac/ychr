@@ -1,0 +1,14 @@
+:- module(term_quoting_around_call, [test/1]).
+
+:- chr_constraint test/1.
+
+:- function double/1.
+double(N) -> N + N.
+
+% term/1 keeps the subtree opaque even when its head names a declared
+% function: 'R' should bind to the literal term 'double(5)', not to
+% the result 10. This exercises 'compileExpr's term/1 short-circuit
+% through 'R.exprToTerm', verifying that a 'CallExpr' inside a quoted
+% subtree compiles as a structural compound rather than a runtime
+% function call.
+test(R) <=> R is term(double(5)).
