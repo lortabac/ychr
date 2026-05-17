@@ -33,6 +33,7 @@ module YCHR.Run
 
     -- * Single-goal API
     resolveQueryConstraint,
+    resolveQueryTell,
     runProgramWithGoalDSL,
     runProgramWithGoal,
     prepareGoal,
@@ -77,13 +78,14 @@ import YCHR.Compile.Pipeline
   )
 import YCHR.Desugar (desugarQueryGoals, liftQueryLambdas)
 import YCHR.Desugared qualified as D
+import YCHR.Diagnostic (Diagnostic)
 import YCHR.Meta (valueToTerm)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed (SourceLoc (..))
-import YCHR.Parser (parseConstraint, parseQueryWith)
+import YCHR.Parser (parseConstraintWith, parseQueryWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Rename (renameQueryArgs, renameQueryGoals)
-import YCHR.Resolve (termToExpr)
+import YCHR.Resolve (ResolveError, termToExpr)
 import YCHR.Resolved qualified as R
 import YCHR.Runtime.Error (RuntimeErrorThrown (..))
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc)
@@ -146,38 +148,73 @@ resolveQueryConstraint cp (Constraint cname cargs) = case cname of
                   ++ show arity
               )
 
--- | Run a single CHR constraint against a compiled program.
+-- | Resolve a query constraint to its qualified name and 'Expr'-typed
+-- arguments. The arguments are lifted from the surface 'Term' shape via
+-- 'termToExpr', so they are evaluated like any other tell-side
+-- argument when the goal runs. The outer 'Either' carries
+-- name-resolution failures (in the same string format as
+-- 'resolveQueryConstraint'); the inner diagnostic list collects any
+-- non-fatal resolve errors emitted while typing the arguments.
+resolveQueryTell ::
+  CompiledProgram ->
+  Constraint ->
+  Either String ((Types.QualifiedName, [R.Expr]), [Diagnostic ResolveError])
+resolveQueryTell cp c = do
+  qc <- resolveQueryConstraint cp c
+  let (exprs, errs) =
+        runWriter
+          (traverse (termToExpr cp.functionNameSet queryLoc queryOrigin) qc.args)
+  pure ((qc.name, exprs), errs)
+
+-- | Run a single CHR constraint against a compiled program. Returns
+-- the per-query variable bindings.
 runProgramWithGoalDSL ::
   CompiledProgram ->
   HostCallRegistry ->
   Constraint ->
-  IO (Value, Map Text Term)
+  IO (Map Text Term)
 runProgramWithGoalDSL cp hostCalls constraint = convertRuntimeError $ do
-  resolved <- case resolveQueryConstraint cp constraint of
-    Left err -> fail err
-    Right c -> pure c
+  (qn, exprs) <- resolveQueryTellOrThrow cp constraint
+  (lifted, lambdas) <- liftSingleGoalLambdas cp qn exprs
   let procMap = Map.fromList [(p.name, p) | p <- cp.program.procedures]
-      tellName = tellProcName (Types.qualifiedToName resolved.name) (length resolved.args)
+      tellName = tellProcName (Types.qualifiedToName qn) (length exprs)
   unless (Map.member tellName procMap) $
     fail ("Constraint not found: " ++ T.unpack tellName.unName)
-  withCHR (toSessionInput cp) hostCalls $
-    evalStateT (runConstraintAndCollect tellName resolved) Map.empty
+  let queryProcs = compileQueryLambdas lambdas
+      allFuns = cp.allFunctions ++ lambdas
+      queryDispatches = genCallFunDispatches allFuns
+      extraProcs = queryProcs ++ queryDispatches
+  withCHRExtra (toSessionInput cp) hostCalls extraProcs $
+    executePreparedQuery lifted
 
-runConstraintAndCollect ::
-  Name ->
-  Types.QualifiedConstraint ->
-  StateT (Map Text Value) Chr (Value, Map Text Term)
-runConstraintAndCollect tellName resolved = do
-  argVals <- traverse termToValue resolved.args
-  result <- lift (callProc tellName (map CVal argVals))
-  varMap <- get
-  classes <- lift (buildAliasClasses varMap)
-  bindings <-
-    lift $
-      Map.traverseWithKey
-        (\k v -> valueToTerm (perKeyAliases classes k) v)
-        varMap
-  pure (result, bindings)
+-- | Resolve a goal and throw on any failure. Used by both
+-- 'runProgramWithGoalDSL' and 'runPreparedGoal'.
+resolveQueryTellOrThrow ::
+  CompiledProgram -> Constraint -> IO (Types.QualifiedName, [R.Expr])
+resolveQueryTellOrThrow cp c = case resolveQueryTell cp c of
+  Left err -> fail err
+  Right (pair, errs) -> do
+    unless (null errs) (throwIO (ResolveErrors errs))
+    pure pair
+
+-- | Lambda-lift a single-goal tell, returning the lifted body goals and
+-- any newly emitted lambda functions.
+liftSingleGoalLambdas ::
+  CompiledProgram ->
+  Types.QualifiedName ->
+  [R.Expr] ->
+  IO ([D.BodyGoal], [D.Function])
+liftSingleGoalLambdas cp qn exprs =
+  either
+    (throwIO . DesugarErrors)
+    pure
+    (liftQueryLambdas cp.nextLambdaIndex [D.BodyTell qn exprs])
+
+queryLoc :: SourceLoc
+queryLoc = SourceLoc "<query>" 1 1
+
+queryOrigin :: PExpr
+queryOrigin = Atom ""
 
 -- | Re-throw 'RuntimeErrorThrown' (from the runtime layer) as the
 -- user-facing 'RuntimeError' constructor of 'Error'. Applied at the
@@ -203,7 +240,7 @@ convertRuntimeErrorChr m = do
 -- Splitting this out lets the CLI surface goal-argument warnings before
 -- the goal runs (notably for @--Werror@).
 prepareGoal :: CompiledProgram -> Text -> IO (Constraint, [Warning])
-prepareGoal cp src = case parseConstraint "<query>" src of
+prepareGoal cp src = case parseConstraintWith cp.opTable "<query>" src of
   Left err -> throwIO (ParseError "<query>" err)
   Right (Left validErr) -> throwIO (ParseValidationErrors [validErr])
   Right (Right (Constraint cname cargs)) -> do
@@ -216,21 +253,26 @@ prepareGoal cp src = case parseConstraint "<query>" src of
     pure (Constraint cname renamedArgs, warnings)
 
 -- | Type-check and run a previously prepared single-goal constraint.
--- Throws 'TypeErrors' on goal-time type errors.
+-- Throws 'TypeErrors' on goal-time type errors. Returns the per-query
+-- variable bindings.
 runPreparedGoal ::
   CompiledProgram ->
   HostCallRegistry ->
   Constraint ->
-  IO (Value, Map Text Term)
+  IO (Map Text Term)
 runPreparedGoal cp hostCalls original = do
-  tcErrs <- case resolveQueryConstraint cp original of
-    Right qc ->
-      typeCheckGoals
-        cp.desugaredProgram
-        (SourceLoc "<query>" 1 1)
-        (Just "query")
-        [D.BodyConstraint qc]
-    Left _ -> pure []
+  tcErrs <- case resolveQueryTell cp original of
+    Right ((qn, exprs), errs)
+      | null errs ->
+          typeCheckGoals
+            cp.desugaredProgram
+            queryLoc
+            (Just "query")
+            [D.BodyTell qn exprs]
+    -- Skip type-checking if name resolution failed or termToExpr
+    -- raised diagnostics; the runtime path will surface the same
+    -- errors with the same messages.
+    _ -> pure []
   unless (null tcErrs) (throwIO (TypeErrors tcErrs))
   runProgramWithGoalDSL cp hostCalls original
 
@@ -239,7 +281,7 @@ runProgramWithGoal ::
   CompiledProgram ->
   HostCallRegistry ->
   Text ->
-  IO (Value, Map Text Term)
+  IO (Map Text Term)
 runProgramWithGoal cp hostCalls src = do
   (constraint, _ws) <- prepareGoal cp src
   runPreparedGoal cp hostCalls constraint
@@ -279,9 +321,7 @@ prepareQuery cp src = do
           cp.allModules
           goals
       )
-  let queryLoc = SourceLoc "<query>" 1 1
-      queryOrigin = Atom ""
-      (exprs, exprErrs) =
+  let (exprs, exprErrs) =
         runWriter (traverse (termToExpr cp.functionNameSet queryLoc queryOrigin) renamed)
   unless (null exprErrs) (throwIO (ResolveErrors exprErrs))
   bodyGoals <-
@@ -408,7 +448,7 @@ executeBodyGoal (D.BodyUnify l r) = do
   unless ok (lift (raiseUnifyFailure v1 v2))
   lift drainReactivation
 executeBodyGoal (D.BodyHostStmt f args) = do
-  argVals <- traverse exprToValue args
+  argVals <- traverse evalNestedExpr args
   env <- lift ask
   _ <- lift (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
   pure ()
@@ -422,9 +462,9 @@ executeBodyGoal (D.BodyIs v expr) = do
       unless ok (lift (raiseUnifyFailure existing result))
       lift drainReactivation
     Nothing -> modify (Map.insert v result)
-executeBodyGoal (D.BodyConstraint c) = do
-  argVals <- traverse termToValue c.args
-  lift (tellConstraint (Types.qualifiedToName c.name) argVals)
+executeBodyGoal (D.BodyTell qn args) = do
+  argVals <- traverse evalNestedExpr args
+  lift (tellConstraint (Types.qualifiedToName qn) argVals)
 executeBodyGoal (D.BodyCall qn args) = do
   argVals <- traverse exprToValue args
   let funcName = Types.qualifiedToName qn
@@ -506,7 +546,11 @@ evalNestedExpr (R.HostExpr f args) = do
 -- nested-call evaluation. Mirrors the legacy 'termToValue arg' path.
 evalNestedExpr (R.CtorExpr (Types.Unqualified "term") [arg]) = exprToValue arg
 evalNestedExpr (R.CtorExpr name args) =
-  VTerm (vmName name).unName <$> traverse exprToValue args
+  -- Recurse with 'evalNestedExpr' (not 'exprToValue'): a 'CtorExpr'
+  -- can contain nested 'CallExpr' / 'HostExpr' children that must
+  -- evaluate before the surrounding compound is built. Mirrors the
+  -- compiled path in 'Compile.compileExpr' for 'CtorExpr'.
+  VTerm (vmName name).unName <$> traverse evalNestedExpr args
 evalNestedExpr e@(R.FunRefExpr _ _) = exprToValue e
 evalNestedExpr (R.LambdaExpr _ _) =
   error "Run.evalNestedExpr: LambdaExpr survived lambda lifting"

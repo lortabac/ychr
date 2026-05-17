@@ -160,7 +160,7 @@ runPositive spec goalFile expectedFile = do
         ("Type errors in " ++ spec.testName ++ ":\n" ++ unlines (map displayMsg errs))
   query <- TIO.readFile goalFile
   expected <- readFile expectedFile
-  (_, bindings) <-
+  bindings <-
     runProgramWithGoal prog (baseHostCallRegistry <> metaHostCallRegistry) (T.strip query)
   prettyBindings bindings @?= expected
 

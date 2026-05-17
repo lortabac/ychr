@@ -1,0 +1,29 @@
+:- module(evaluated_tell_args, [direct/2, via_body/2, quoted/2, plus/2]).
+:- use_module(prelude).
+
+:- chr_type pair_t ---> pair(any, any).
+
+:- function plus/2.
+plus(X, Y) -> X + Y.
+
+:- chr_constraint
+    direct/2,
+    via_body/2,
+    relay/2,
+    quoted/2.
+
+% A goal of the form 'direct(EXPR, R)' tests that EXPR is evaluated
+% before the constraint is told. R is unified with the (evaluated)
+% first argument.
+direct(N, R) <=> R = N.
+
+% A goal of the form 'via_body(EXPR, R)' tests that EXPR is evaluated
+% before the rule body's tell. The body retells 'relay(EXPR + 10, R)';
+% the relay rule then unifies R with the (evaluated) value.
+via_body(N, R) <=> relay(N + 10, R).
+relay(X, R)    <=> R = X.
+
+% 'quoted(EXPR, R)' uses term/1 to opt out of evaluation: EXPR stays as
+% a data term. This pins the existing quoting escape hatch and ensures
+% the opt-out keeps working after the semantic change.
+quoted(N, R) <=> R = N.

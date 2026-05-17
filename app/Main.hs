@@ -13,7 +13,7 @@ import YCHR.Backend.Scheme (generateScheme)
 import YCHR.Backend.SchemeDriver (generateDriver)
 import YCHR.Display (displayMsg)
 import YCHR.Meta (metaHostCallRegistry)
-import YCHR.Parser (parseConstraint)
+import YCHR.Parser (parseConstraintWith)
 import YCHR.Pretty (prettyBindings)
 import YCHR.Rename (renameQueryArgs)
 import YCHR.Repl qualified as Repl
@@ -23,7 +23,7 @@ import YCHR.Run
     Warning (..),
     compileFiles,
     prepareGoal,
-    resolveQueryConstraint,
+    resolveQueryTell,
     runPreparedGoal,
   )
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
@@ -203,7 +203,7 @@ runGoal opts files = withCompiled False files $ \prog warnings -> do
       outcome <- try @SomeException (runPreparedGoal prog hostCalls constraint)
       case outcome of
         Left exc -> reportErrorAndExit exc
-        Right (_, bindings) ->
+        Right bindings ->
           when opts.showBindings (putStr (prettyBindings bindings))
   where
     reportErrorAndExit exc = do
@@ -240,7 +240,7 @@ runGenDriver :: GenDriverOpts -> [FilePath] -> IO ()
 runGenDriver opts files = withCompiled False files $ \prog warnings -> do
   printWarnings warnings
   typeCheckOrExit prog
-  Constraint cname cargs <- case parseConstraint "<query>" opts.gdGoal of
+  Constraint cname cargs <- case parseConstraintWith prog.opTable "<query>" opts.gdGoal of
     Left err -> do
       putStr (displayMsg (ParseError "<query>" err))
       exitFailure
@@ -259,15 +259,19 @@ runGenDriver opts files = withCompiled False files $ \prog warnings -> do
       let gws = [RenameWarnings ws | not (null ws)]
       printWarnings gws
       pure (rs, gws)
-  resolved <- case resolveQueryConstraint prog (Constraint cname renamedArgs) of
+  (qn, exprs) <- case resolveQueryTell prog (Constraint cname renamedArgs) of
     Left err -> do
       putStrLn err
       exitFailure
-    Right c -> pure c
+    Right (pair, errs) -> do
+      unless (null errs) $ do
+        mapM_ (hPutStr stderr . displayMsg) errs
+        exitFailure
+      pure pair
   -- Combine file-level and goal-level warnings into a single Werror
   -- decision so a single run reports every warning before exiting.
   exitOnWerror opts.werror (warnings ++ goalWarnings)
-  TIO.putStr (generateDriver (T.pack "program") resolved)
+  TIO.putStr (generateDriver (T.pack "program") qn exprs)
 
 runCheck :: CheckOpts -> [FilePath] -> IO ()
 runCheck opts files = withCompiled False files $ \prog warnings -> do

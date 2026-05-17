@@ -31,6 +31,7 @@ module YCHR.Parser
     parseModule,
     parseModuleWith,
     parseConstraint,
+    parseConstraintWith,
     parseQuery,
     parseQueryWith,
     parseTerm,
@@ -154,7 +155,8 @@ parseModuleWith table sourceName src = do
   terms <- P.parseTerms table sourceName src
   pure (convertModule terms)
 
--- | Parse a single constraint from surface-language 'Text'.
+-- | Parse a single constraint from surface-language 'Text', using the
+-- builtin operator table.
 --
 -- The outer 'Left' is a parsec parse error; the inner 'Left' is a
 -- 'ParseValidationError' (the input parsed but did not denote a
@@ -166,8 +168,19 @@ parseConstraint ::
   String ->
   Text ->
   Either (ParseError) (Either (AnnP ParseValidationError) Constraint)
-parseConstraint sourceName src = do
-  term <- P.parseTermNoDot builtinOps sourceName src
+parseConstraint = parseConstraintWith builtinOps
+
+-- | Parse a single constraint from surface-language 'Text' using a
+-- custom operator table. Used by the single-goal entry points so that
+-- user-declared operators (e.g. @+@ from the prelude) are recognized
+-- in goal arguments, mirroring the multi-goal parser.
+parseConstraintWith ::
+  OpTable ->
+  String ->
+  Text ->
+  Either (ParseError) (Either (AnnP ParseValidationError) Constraint)
+parseConstraintWith table sourceName src = do
+  term <- P.parseTermNoDot table sourceName src
   pure (convertConstraint term)
 
 -- | Parse a single term from surface-language 'Text'.

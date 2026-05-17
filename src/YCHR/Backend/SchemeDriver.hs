@@ -16,24 +16,29 @@ import Data.List (nub, sort)
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Backend.Scheme (compileSymbol)
-import YCHR.Compile (tellProcName)
+import YCHR.Compile (funcProcName, tellProcName)
+import YCHR.Resolved qualified as R
 import YCHR.SExpr (SExpr (..), printSExpr)
-import YCHR.Types (QualifiedConstraint (..), Term (..))
+import YCHR.Types (HeadArg (..), QualifiedName, Term (..))
 import YCHR.Types qualified as Types
 import YCHR.VM.Types (Name (..))
 
 -- | Generate a complete Scheme driver script.
 --
 -- The script imports the generated library, creates fresh logical
--- variables for each 'VarTerm' in the query, calls the tell procedure,
--- and prints each variable binding sorted alphabetically.
-generateDriver :: Text -> QualifiedConstraint -> Text
-generateDriver moduleName constraint =
-  let arity = length constraint.args
-      tellName = tellProcName (Types.qualifiedToName constraint.name) arity
-      varNames = nub [n | VarTerm n <- constraint.args]
+-- variables for each variable mentioned in the goal arguments, calls
+-- the tell procedure, and prints each variable binding sorted
+-- alphabetically. Argument expressions are evaluated like any other
+-- tell-side expression: 'CallExpr' triggers a function call,
+-- 'HostExpr' a host call, 'CtorExpr' builds a compound term, and so
+-- on.
+generateDriver :: Text -> QualifiedName -> [R.Expr] -> Text
+generateDriver moduleName qn args =
+  let arity = length args
+      tellName = tellProcName (Types.qualifiedToName qn) arity
+      varNames = nub (concatMap exprVars args)
       sortedVars = sort varNames
-      argExprs = map termToScheme constraint.args
+      argExprs = map exprToScheme args
       tellCall = "(" <> tellName.unName <> " %s " <> T.intercalate " " argExprs <> ")"
       printStmts = concatMap mkPrintBinding sortedVars
       body = map ("    " <>) (tellCall : printStmts)
@@ -62,7 +67,68 @@ generateDriver moduleName constraint =
                 ++ body
                 ++ ["))"]
 
--- | Convert a 'Term' to a Scheme expression.
+-- | Convert an 'R.Expr' to a Scheme expression. Mirrors the dispatch
+-- in 'YCHR.Compile.compileExpr' / 'YCHR.Backend.Scheme.compileValExpr':
+-- 'CallExpr' becomes a function call, 'HostExpr' a host bridge,
+-- 'CtorExpr' a 'make-term', and so on. Variables are referenced by
+-- their declared name in the surrounding @let*@ block.
+exprToScheme :: R.Expr -> Text
+exprToScheme (R.VarExpr v) = v
+exprToScheme (R.IntExpr n) = T.pack (show n)
+exprToScheme (R.FloatExpr n) = printSExpr (SFloat n)
+exprToScheme (R.AtomExpr s) = printSExpr (compileSymbol s)
+exprToScheme (R.TextExpr s) = printSExpr (SString s)
+exprToScheme R.WildcardExpr = "*wildcard*"
+-- @term(arg)@: the surface quoting form opts out of evaluation. The
+-- inner term stays as a data tree; mirror 'compileTerm' here.
+exprToScheme (R.CtorExpr (Types.Unqualified "term") [arg]) =
+  termToScheme (R.exprToTerm arg)
+exprToScheme (R.CtorExpr name args) =
+  let flat = case name of
+        Types.Qualified m n -> m <> "__" <> n
+        Types.Unqualified n -> n
+      argExprs = map exprToScheme args
+   in "(make-term "
+        <> printSExpr (compileSymbol flat)
+        <> " (vector "
+        <> T.intercalate " " argExprs
+        <> "))"
+exprToScheme (R.CallExpr qn args) =
+  let funcName = funcProcName (Types.qualifiedToName qn) (length args)
+      argExprs = map exprToScheme args
+   in "(" <> funcName.unName <> " %s " <> T.intercalate " " argExprs <> ")"
+exprToScheme (R.HostExpr f args) =
+  let argExprs = map exprToScheme args
+   in "(" <> hostBridgeName f <> " " <> T.intercalate " " argExprs <> ")"
+exprToScheme (R.ApplyExpr f args) =
+  let n = length args
+      dispatch = "call_" <> T.pack (show n)
+      fAndArgs = map exprToScheme (f : args)
+   in "(" <> dispatch <> " %s " <> T.intercalate " " fAndArgs <> ")"
+exprToScheme (R.FunRefExpr qn arity) =
+  -- Mirrors 'compileExpr's encoding for first-class function refs.
+  let flat = case Types.qualifiedToName qn of
+        Types.Qualified m n -> m <> "__" <> n
+        Types.Unqualified n -> n
+   in "(make-term "
+        <> printSExpr (compileSymbol "/")
+        <> " (vector "
+        <> printSExpr (compileSymbol flat)
+        <> " "
+        <> T.pack (show arity)
+        <> "))"
+exprToScheme (R.LambdaExpr _ _) =
+  error
+    "SchemeDriver.exprToScheme: lambdas in goal arguments \
+    \are not supported in the Scheme driver"
+
+-- | Host-call bridge name. Mirrors the encoding used by
+-- 'YCHR.Backend.Scheme.compileHostCall'.
+hostBridgeName :: Text -> Text
+hostBridgeName f = "host__" <> f
+
+-- | Convert a 'Term' to a Scheme expression. Used for the
+-- @term(...)@ quoting form, which keeps the inner tree opaque.
 termToScheme :: Term -> Text
 termToScheme (IntTerm n) = T.pack (show n)
 termToScheme (FloatTerm n) = printSExpr (SFloat n)
@@ -72,10 +138,6 @@ termToScheme (VarTerm n) = n
 termToScheme Wildcard = "*wildcard*"
 termToScheme (CompoundTerm (Types.Unqualified ".") [h, t]) =
   "(%cons " <> termToScheme h <> " " <> termToScheme t <> ")"
--- Qualified names flatten to a single @m__n@ functor symbol,
--- mirroring 'compileTerm' in @Compile.hs@. 0-arity uses become
--- 'make-term' with an empty arg vector so @match-term@ can dispatch
--- on the same shape that compiled head patterns produce.
 termToScheme (CompoundTerm (Types.Qualified m n) ts) =
   let flat = m <> "__" <> n
       argExprs = map termToScheme ts
@@ -88,6 +150,21 @@ termToScheme (CompoundTerm (Types.Unqualified n) ts) =
   let symExpr = compileSymbol n
       argExprs = map termToScheme ts
    in "(make-term " <> printSExpr symExpr <> " (vector " <> T.intercalate " " argExprs <> "))"
+
+-- | Collect every variable name mentioned anywhere in an expression
+-- tree, so each can be declared as a logical variable in the
+-- surrounding @let*@ block. Lambda parameter names are excluded
+-- (they are bound locally), though lambdas are not actually supported
+-- in this path — see 'exprToScheme'.
+exprVars :: R.Expr -> [Text]
+exprVars (R.VarExpr v) = [v]
+exprVars (R.CtorExpr _ args) = concatMap exprVars args
+exprVars (R.CallExpr _ args) = concatMap exprVars args
+exprVars (R.ApplyExpr f args) = exprVars f ++ concatMap exprVars args
+exprVars (R.HostExpr _ args) = concatMap exprVars args
+exprVars (R.LambdaExpr params body) =
+  filter (`notElem` [v | HeadVar v <- params]) (exprVars body)
+exprVars _ = []
 
 -- | Generate display statements for one variable binding.
 mkPrintBinding :: Text -> [Text]

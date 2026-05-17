@@ -787,14 +787,27 @@ emitAmbientAndBound scopeId ctx tvars bs = do
       [VAtom runtimeNm, valueList encodedArgs, encodedRet, ctxHandleValue ctx]
   pure (runtimeNm, [sigVal])
 
+-- | Head-side constraint use: the arguments are still 'Term' patterns
+-- (they reached the typechecker through 'headConstraintToConstraint').
 checkConstraintUse :: CheckCtx -> Types.QualifiedConstraint -> TC ()
 checkConstraintUse cctx c = do
   argTypeVars <- traverse (typeOfTerm cctx) c.args
+  emitConstraintUse cctx c.name argTypeVars
+
+-- | Tell-side constraint use: arguments are 'Expr's and are evaluated
+-- like any other expression position.
+checkConstraintTell :: CheckCtx -> Types.QualifiedName -> [D.Expr] -> TC ()
+checkConstraintTell cctx qn args = do
+  argTypeVars <- traverse (typeOfExpr cctx) args
+  emitConstraintUse cctx qn argTypeVars
+
+emitConstraintUse :: CheckCtx -> Types.QualifiedName -> [Value] -> TC ()
+emitConstraintUse cctx qn argTypeVars = do
   ctx <- freshCtxHandle cctx
   chrOp $
     tellConstraint
       (Qualified "typechecker" "check_constraint_use")
-      [ VAtom (runtimeName (Types.qualifiedToName c.name)),
+      [ VAtom (runtimeName (Types.qualifiedToName qn)),
         valueList argTypeVars,
         ctxHandleValue ctx
       ]
@@ -879,8 +892,8 @@ checkGuard cctx _ (D.GuardExpr expr) = do
 
 checkBodyGoal :: CheckCtx -> D.BodyGoal -> TC ()
 checkBodyGoal _ D.BodyTrue = pure ()
-checkBodyGoal cctx (D.BodyConstraint c) =
-  checkConstraintUse cctx c
+checkBodyGoal cctx (D.BodyTell qn args) =
+  checkConstraintTell cctx qn args
 checkBodyGoal cctx (D.BodyUnify e1 e2) = do
   tv1 <- typeOfExpr cctx e1
   tv2 <- typeOfExpr cctx e2
@@ -1056,11 +1069,11 @@ varType cctx v = case Map.lookup v cctx.varTypes of
   Nothing -> error ("TypeCheck.varType: missing var slot for " <> T.unpack v)
 
 -- | Type a 'Term' at a value position. Used for the 'Term'-typed slots
--- the desugared AST still carries: head occurrence arguments,
--- 'D.BodyConstraint.args', and the 'GuardMatch' / 'GuardGetArg'
--- operand of head normal-form guards. Every 'CompoundTerm' is treated
--- as a data-constructor application — call vs constructor
--- disambiguation has been moved upstream into the 'D.Expr' AST.
+-- the desugared AST still carries: head occurrence arguments and the
+-- 'GuardMatch' / 'GuardGetArg' operand of head normal-form guards.
+-- Every 'CompoundTerm' is treated as a data-constructor application —
+-- call vs constructor disambiguation has been moved upstream into the
+-- 'D.Expr' AST.
 typeOfTerm :: CheckCtx -> Term -> TC Value
 typeOfTerm cctx (VarTerm v) = chrOp (varType cctx v)
 typeOfTerm _ (IntTerm _) = pure (tcCon0 "int")
@@ -1093,12 +1106,12 @@ typeOfAtom cctx name = do
 
 -- | Type a 'Term'-shaped constructor application. Used for the
 -- 'Term'-typed positions that the desugared AST still carries: head
--- arguments (via 'headArgToTerm') and 'D.BodyConstraint.args'.
+-- arguments (via 'headArgToTerm').
 --
--- Constraint arguments are unevaluated data in CHR/Prolog semantics —
--- a compound whose head happens to name a declared function is still
--- a literal term, never a call. We therefore treat every compound as
--- a constructor application here. Calls inside expression positions
+-- Head/equation patterns are unevaluated: a compound whose head
+-- happens to name a declared function is still a literal term in
+-- pattern position, never a call. We therefore treat every compound
+-- as a constructor application here. Calls inside expression positions
 -- are handled structurally by 'typeOfExpr' against 'R.CallExpr'.
 typeOfTermCtor :: CheckCtx -> Name -> [Term] -> TC Value
 typeOfTermCtor cctx name args = do
@@ -1225,7 +1238,7 @@ collectVarsInGuard (D.GuardExpr e) = collectVarsInExpr e
 
 collectVarsInBodyGoal :: D.BodyGoal -> Set Text
 collectVarsInBodyGoal D.BodyTrue = Set.empty
-collectVarsInBodyGoal (D.BodyConstraint c) = collectVarsInConstraint c
+collectVarsInBodyGoal (D.BodyTell _ args) = foldMap collectVarsInExpr args
 collectVarsInBodyGoal (D.BodyUnify e1 e2) = collectVarsInExpr e1 <> collectVarsInExpr e2
 collectVarsInBodyGoal (D.BodyHostStmt _ args) = foldMap collectVarsInExpr args
 collectVarsInBodyGoal (D.BodyIs v e) = Set.singleton v <> collectVarsInExpr e
@@ -1503,7 +1516,7 @@ validateConstructorArities env prog =
     guardArity (D.GuardGetArg _ e _) = exprArity e
     guardArity (D.GuardExpr e) = exprArity e
     bodyArity D.BodyTrue = mempty
-    bodyArity (D.BodyConstraint c) = foldMap termArity c.args
+    bodyArity (D.BodyTell _ args) = foldMap exprArity args
     bodyArity (D.BodyUnify e1 e2) = exprArity e1 <> exprArity e2
     bodyArity (D.BodyIs _ e) = exprArity e
     bodyArity (D.BodyCall _ args) = foldMap exprArity args
@@ -1522,11 +1535,10 @@ validateConstructorArities env prog =
     exprArity (R.HostExpr _ args) = foldMap exprArity args
     exprArity (R.LambdaExpr _ body) = exprArity body
     exprArity _ = mempty
-    -- 'BodyConstraint.args' are still 'Term'-typed (round-tripped via
-    -- 'YCHR.Resolved.exprToTerm'), so the legacy 'Term'-walker keeps
-    -- doing arity checks there. It mirrors 'exprArity' for the
-    -- pattern grammar plus the surface @fun(...) -> body@ /
-    -- @name/arity@ shapes that 'exprToTerm' emits.
+    -- Walks the surviving 'Term'-typed positions in the desugared AST
+    -- (equation parameters). Pattern shapes that 'headTermToExpr'
+    -- would otherwise round-trip through @fun(...) -> body@ /
+    -- @name/arity@ are short-circuited here.
     termArity (AtomTerm s) = checkArity (Unqualified s) 0
     termArity (CompoundTerm (Unqualified "/") [AtomTerm _, IntTerm _]) = mempty
     termArity (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") _, body]) =

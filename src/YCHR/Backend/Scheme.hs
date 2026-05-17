@@ -59,9 +59,10 @@ generateScheme libName vmp =
 -- Library wrapper
 -- ---------------------------------------------------------------------------
 
--- | Build the @(export ...)@ clause containing only the @tell_*@ procedures
--- for constraints that actually have a generated @tell_*@ procedure,
--- plus @%init!@.
+-- | Build the @(export ...)@ clause. Exports the @tell_*@ procedures
+-- for constraints with a generated @tell_*@, all @func_*@ procedures
+-- (so drivers can evaluate function calls in goal-argument position —
+-- see 'YCHR.Desugared.BodyTell'), and @%init!@.
 exportClause :: VMProgram -> SExpr
 exportClause vmp =
   let procNames = Set.fromList [n.unName | p <- vmp.program.procedures, let n = p.name]
@@ -71,7 +72,10 @@ exportClause vmp =
           let tn = tellProcName (Types.Qualified m n) a,
           Set.member tn.unName procNames
         ]
-   in SList (SAtom "export" : SAtom "%init!" : map SAtom tellNames)
+      funcNames =
+        [ n | n <- Set.toList procNames, "func_" `T.isPrefixOf` n
+        ]
+   in SList (SAtom "export" : SAtom "%init!" : map SAtom (tellNames ++ funcNames))
 
 -- | Import clause for the runtime.
 importClause :: SExpr

@@ -95,17 +95,19 @@ data Guard
 
 -- | Body goals over the typed 'Expr' AST.
 --
--- 'BodyConstraint' keeps its 'QualifiedConstraint' (whose arguments
--- are 'Term') unchanged: constraint arguments are patterns, so the
--- call-vs-constructor question doesn't arise for them. Migrating
--- constraint arguments to 'Expr' would force matching changes through
--- 'YCHR.Types' and the runtime; that is out of scope for this pass.
+-- 'BodyTell' is a tell of a user-declared constraint. Its arguments
+-- are 'Expr' and are evaluated at runtime, like every other expression
+-- position in the language (function args, constructor args, @is@ RHS,
+-- @=@ operands). Head patterns and equation patterns still carry
+-- 'Term' (see 'HeadConstraint' / 'Equation'); the call-vs-constructor
+-- question is decided structurally for tells but does not arise for
+-- patterns.
 --
 -- 'BodyCall' replaces the legacy @BodyFunctionCall@ for static calls
 -- and 'BodyApply' replaces it for dynamic dispatch ('$call').
 data BodyGoal
   = BodyTrue
-  | BodyConstraint QualifiedConstraint
+  | BodyTell QualifiedName [Expr]
   | BodyUnify Expr Expr
   | BodyHostStmt Text [Expr]
   | BodyIs Text Expr

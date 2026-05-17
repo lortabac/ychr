@@ -64,7 +64,7 @@ where
 
 import Control.Monad (foldM)
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
-import Data.List (partition, sortOn)
+import Data.List (nub, partition, sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -772,15 +772,21 @@ compileBodyGoal ::
   D.BodyGoal ->
   Writer [Diagnostic CompileError] ([Stmt], VarMap)
 compileBodyGoal _ varMap _ D.BodyTrue = pure ([], varMap)
-compileBodyGoal _ varMap si (D.BodyConstraint con) = do
-  -- 'BodyConstraint' arguments are still 'Term'-typed (see
-  -- 'YCHR.Desugared.BodyGoal' for the rationale). Variables used only
-  -- here need a fresh 'NewVar' so they exist before the tell.
-  let argVars = [v | VarTerm v <- con.args, notMemberVar v varMap]
-      newStmts = [LetVal (Name v) NewVar | v <- argVars]
-      varMap' = foldl' (\m v -> insertVar v (Var (Name v)) m) varMap argVars
-  callArgs <- traverse (compileTerm varMap' si) con.args
-  let tellName = tellProcName (Types.qualifiedToName con.name) (length callArgs)
+compileBodyGoal _ varMap si (D.BodyTell qn args) = do
+  -- A top-level bare 'VarExpr' in a tell argument refers to a logical
+  -- variable that may not yet exist (e.g. 'foo(X)' on its first
+  -- appearance); introduce a fresh 'NewVar' before evaluating the
+  -- argument list. Variables nested inside a 'CallExpr' / 'CtorExpr'
+  -- argument are evaluated by 'compileExpr', which runtime-errors if
+  -- they are unbound.
+  -- 'nub' guards against repeated top-level 'VarExpr's like
+  -- 'foo(X, X)' that would otherwise emit two consecutive 'LetVal
+  -- X NewVar' (shadowing the first and leaking its allocation).
+  let freshVars = nub [v | R.VarExpr v <- args, notMemberVar v varMap]
+      newStmts = [LetVal (Name v) NewVar | v <- freshVars]
+      varMap' = foldl' (\m v -> insertVar v (Var (Name v)) m) varMap freshVars
+  callArgs <- traverse (compileExpr varMap' si) args
+  let tellName = tellProcName (Types.qualifiedToName qn) (length callArgs)
   pure (newStmts ++ [ExprStmt (CallExpr tellName (map AVal callArgs))], varMap')
 compileBodyGoal _ varMap si (D.BodyUnify t1 t2) = do
   t1' <- compileExpr varMap si t1

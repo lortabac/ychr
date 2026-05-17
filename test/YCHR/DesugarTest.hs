@@ -342,18 +342,11 @@ bodyTests =
                       ]
                   )
               ],
-      testCase "Qualified compound becomes BodyConstraint" $ do
+      testCase "Qualified compound becomes BodyTell" $ do
         let body = [CompoundTerm (Qualified "M" "leq") [var "X"]]
         rule <- singleRule [simpleModule' (Simplification [leqQual]) body]
         getNode rule.body
-          @?= [ D.BodyConstraint
-                  ( D.QualifiedConstraint
-                      (D.QualifiedName "M" "leq")
-                      [ VarTerm
-                          "X"
-                      ]
-                  )
-              ],
+          @?= [D.BodyTell (D.QualifiedName "M" "leq") [R.VarExpr "X"]],
       testCase "hostCall becomes BodyHostStmt" $ do
         rule <-
           singleRule
@@ -622,9 +615,7 @@ symbolTableTests =
                     )
                     (noAnnP [])
                     ( noAnnP
-                        [ D.BodyConstraint
-                            (D.QualifiedConstraint (D.QualifiedName "M" "leq") [])
-                        ]
+                        [D.BodyTell (D.QualifiedName "M" "leq") []]
                     )
                 ]
                 []
@@ -694,13 +685,9 @@ symbolTableTests =
                     )
                     (noAnnP [])
                     ( noAnnP
-                        [ D.BodyConstraint
-                            ( D.QualifiedConstraint
-                                (D.QualifiedName "M" "foo")
-                                [ VarTerm "X",
-                                  VarTerm "Y"
-                                ]
-                            )
+                        [ D.BodyTell
+                            (D.QualifiedName "M" "foo")
+                            [R.VarExpr "X", R.VarExpr "Y"]
                         ]
                     )
                 ]

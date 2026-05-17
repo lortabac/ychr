@@ -614,7 +614,7 @@ runDSLWithHostCallRegistry ::
   HostCallRegistry -> [Module] -> Term -> IO (Map Text Term)
 runDSLWithHostCallRegistry hostCalls modules goal = do
   cp <- compileOrThrow modules
-  snd <$> runProgramWithGoalDSL cp hostCalls (termToConstraint goal)
+  runProgramWithGoalDSL cp hostCalls (termToConstraint goal)
 
 compileOrThrow :: [Module] -> IO CompiledProgram
 compileOrThrow modules = case compileParsedModules True modules of

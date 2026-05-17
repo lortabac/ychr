@@ -21,7 +21,7 @@
 --
 -- 3. /Goal classification/: partition each body into structured 'D.BodyGoal'
 --    values ('D.BodyUnify', 'D.BodyIs', 'D.BodyHostStmt',
---    'D.BodyFunctionCall', 'D.BodyConstraint', or 'D.BodyTrue').
+--    'D.BodyCall', 'D.BodyTell', or 'D.BodyTrue').
 --
 -- 4. /Guard classification/: map each surface guard term to a 'D.Guard'.
 --
@@ -164,20 +164,23 @@ extractSymbolTable prog =
   let rules = prog.rules
       allIds =
         Set.fromList
-          [ qualifiedNameToIdentifier c.name (length c.args)
+          [ qualifiedNameToIdentifier name arity
           | r <- rules,
-            c <- getRuleConstraints r
+            (name, arity) <- getRuleConstraints r
           ]
    in mkSymbolTable (zip (Set.toList allIds) (map ConstraintType [0 ..]))
 
--- | Helper to find every constraint instance in a desugared rule.
-getRuleConstraints :: D.Rule -> [QualifiedConstraint]
+-- | Helper to find every constraint instance in a desugared rule,
+-- returning its qualified name and arity. Head and body tells are both
+-- included, since both contribute to the constraint-symbol table.
+getRuleConstraints :: D.Rule -> [(QualifiedName, Int)]
 getRuleConstraints r =
   let AnnP {node = rHead} = r.head
       AnnP {node = rBody} = r.body
-   in map headConstraintToConstraint rHead.kept
-        ++ map headConstraintToConstraint rHead.removed
-        ++ [c | D.BodyConstraint c <- rBody]
+      headPair hc = (hc.name, length hc.args)
+   in map headPair rHead.kept
+        ++ map headPair rHead.removed
+        ++ [(qn, length args) | D.BodyTell qn args <- rBody]
 
 -- | Desugar one resolved rule: classify its body goals, desugar its user
 -- guards, flatten the head kind, and run HNF on the head. HNF-emitted
@@ -424,7 +427,7 @@ desugarBodyGoals label loc origin exprs =
 -- 4. 'R.HostExpr' -> 'D.BodyHostStmt'
 -- 5. 'R.CallExpr' -> 'D.BodyCall'
 -- 6. 'R.ApplyExpr' -> 'D.BodyApply'
--- 7. Constructor with a 'Qualified' name -> 'D.BodyConstraint'
+-- 7. Constructor with a 'Qualified' name -> 'D.BodyTell'
 -- 8. @true@ in any spelling -> 'D.BodyTrue'
 -- 9. Anything else -> error
 desugarBodyGoal ::
@@ -449,10 +452,7 @@ desugarBodyGoal label loc origin e = case e of
   R.CallExpr qn args -> pure [D.BodyCall qn args]
   R.ApplyExpr f args -> pure [D.BodyApply f args]
   R.CtorExpr (Qualified m b) args ->
-    pure
-      [ D.BodyConstraint
-          (QualifiedConstraint (QualifiedName m b) (map R.exprToTerm args))
-      ]
+    pure [D.BodyTell (QualifiedName m b) args]
   _ -> do
     lift (tell [Diagnostic label (AnnP (UnexpectedBodyExpr e) loc origin)])
     pure [D.BodyTrue]
@@ -486,13 +486,6 @@ exprVars (R.FloatExpr _) = Set.empty
 exprVars (R.AtomExpr _) = Set.empty
 exprVars (R.TextExpr _) = Set.empty
 exprVars R.WildcardExpr = Set.empty
-
--- | Variables referenced in a 'Term'. Reused for the surviving
--- @[Term]@ positions in the desugared AST (notably constraint args).
-termVars :: Term -> Set.Set Text
-termVars (VarTerm v) = Set.singleton v
-termVars (CompoundTerm _ args) = Set.unions (map termVars args)
-termVars _ = Set.empty
 
 -- | Lift lambdas in a single expression. Each 'R.LambdaExpr' is
 -- replaced by a /self-describing closure/ of the form
@@ -594,12 +587,8 @@ liftExpr modName scope parentRequiring st0 expr = case expr of
      in (st1, R.HostExpr f args')
   _ -> (st0, expr)
 
--- | Lift lambdas in a body goal. Body-constraint argument lists carry
--- @[Term]@ values that, in CHR semantics, are unevaluated data —
--- a literal @fun(...) -> body@ Term inside a constraint argument
--- stays as a compound term rather than becoming a callable closure.
--- We therefore do not walk 'D.BodyConstraint.args' at all; every other
--- body goal carries 'Expr'-typed children that 'liftExpr' lifts.
+-- | Lift lambdas in a body goal. Every body goal carries 'Expr'-typed
+-- children, so 'liftExpr' walks them uniformly.
 liftBodyGoal ::
   Text ->
   Set.Set Text ->
@@ -620,7 +609,10 @@ liftBodyGoal modName scope parentRequiring st goal = case goal of
         (st'', args') =
           mapAccumL (liftExpr modName scope parentRequiring) st' args
      in (st'', D.BodyApply f' args')
-  D.BodyConstraint c -> (st, D.BodyConstraint c)
+  D.BodyTell qn args ->
+    let (st', args') =
+          mapAccumL (liftExpr modName scope parentRequiring) st args
+     in (st', D.BodyTell qn args')
   D.BodyUnify t1 t2 ->
     let (st', t1') = liftExpr modName scope parentRequiring st t1
         (st'', t2') = liftExpr modName scope parentRequiring st' t2
@@ -719,8 +711,7 @@ bodyGoalVars = Set.unions . map goalVars
     goalVars (D.BodyCall _ args) = Set.unions (map exprVars args)
     goalVars (D.BodyApply f args) =
       exprVars f `Set.union` Set.unions (map exprVars args)
-    goalVars (D.BodyConstraint (QualifiedConstraint _ args)) =
-      Set.unions (map termVars args)
+    goalVars (D.BodyTell _ args) = Set.unions (map exprVars args)
     goalVars (D.BodyUnify e1 e2) = exprVars e1 `Set.union` exprVars e2
     goalVars (D.BodyHostStmt _ args) = Set.unions (map exprVars args)
     goalVars D.BodyTrue = Set.empty

@@ -1,0 +1,6 @@
+:- module(evaluated_tell_args_unbound, [direct/2]).
+:- use_module(prelude).
+
+:- chr_constraint direct/2.
+
+direct(_, _) <=> true.

@@ -194,7 +194,7 @@ fibTests =
     "Fibonacci (from surface language)"
     [ testCase "fib 10 = 55" $ do
         prog <- compileOrFail [("fib.chr", fibSource)]
-        (_, bindings) <- runProgramWithGoal prog fibHostCalls "fib:fib(10, R)"
+        bindings <- runProgramWithGoal prog fibHostCalls "fib:fib(10, R)"
         Map.lookup "R" bindings @?= Just (IntTerm 55)
     ]
 
@@ -412,7 +412,7 @@ unicodeTests =
     "Non-ASCII constraint names"
     [ testCase "constraint with non-ASCII name compiles and runs" $ do
         prog <- compileOrFail [("uni.chr", unicodeSource)]
-        (_, bindings) <- runProgramWithGoal prog Map.empty "uni:'\xe9cho'(R)"
+        bindings <- runProgramWithGoal prog Map.empty "uni:'\xe9cho'(R)"
         Map.lookup "R" bindings @?= Just (AtomTerm "done")
     ]
 
@@ -434,11 +434,11 @@ arityOverloadTests =
     "Arity overloading"
     [ testCase "foo/1 and foo/2 are distinct constraints" $ do
         prog <- compileOrFail [("m.chr", arityOverloadSource)]
-        (_, bindings1) <- runProgramWithGoal prog Map.empty "m:foo(R)"
+        bindings1 <- runProgramWithGoal prog Map.empty "m:foo(R)"
         Map.lookup "R" bindings1 @?= Just (AtomTerm "one"),
       testCase "foo/2 fires its own rule" $ do
         prog <- compileOrFail [("m.chr", arityOverloadSource)]
-        (_, bindings2) <- runProgramWithGoal prog Map.empty "m:foo(R1, R2)"
+        bindings2 <- runProgramWithGoal prog Map.empty "m:foo(R1, R2)"
         Map.lookup "R1" bindings2 @?= Just (AtomTerm "two")
         Map.lookup "R2" bindings2 @?= Just (AtomTerm "args")
     ]

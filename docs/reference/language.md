@@ -116,6 +116,41 @@ Bounded polymorphism (`requiring`) is reserved for `:- function` and
 `:- open_function`; combining it with `:- class` / `:- open_class` is
 rejected as `RequiringOnClass` (YCHR-15005).
 
+## Constraint arguments evaluate
+
+Tell-side constraint arguments — in rule bodies and top-level goals —
+are evaluated expressions, like every other expression position in
+the language. A function call or operator-style expression in argument
+position runs at tell time, and the resulting value is what gets
+stored.
+
+For instance, given:
+
+```
+:- chr_constraint store/1, ask/1.
+store(X), ask(R) <=> R = X.
+```
+
+calling `store(1 + 2), ask(R)` stores `store(3)` (not `store(1 + 2)`),
+and the second rule then unifies `R = 3`. The same applies to
+function calls: `store(member(1, [0, 1, 2]))` stores `store(true)`.
+
+The opt-out for users who want to pass an unevaluated data term is
+the `term(...)` quoting form:
+
+```
+store(term(plus(2, 3)))   % stored as store(plus(2, 3))
+```
+
+If an argument expression mentions a logical variable that is still
+unbound at tell time, evaluation runtime-errors — there is no
+auto-suspension or symbolic fallback. The `term(...)` opt-out is the
+way to keep an expression symbolic until something else binds the
+variables.
+
+Heads and equation patterns are unchanged: they match on data shapes
+and never trigger evaluation.
+
 ## The `is` operator
 
 `is` is generalized to accept any expression on the RHS, including

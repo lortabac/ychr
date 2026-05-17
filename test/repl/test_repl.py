@@ -31,7 +31,7 @@ REPL_TESTS = [
     ("R is compound_to_list(term(1 + 1)).", "R = ['+', 1, 1].\n"),
     ("R is copy_term(term(foo(X))), X = 1.", "R = foo(_),\nX = 1.\n"),
     ("host:print(':'(foo, bar)).", "foo:bar()\n"),
-    ("host:print(1 + 1).", "1 + 1\n"),
+    ("host:print(1 + 1).", "2\n"),
     ("host:print((foo, bar)).", "foo, bar\n"),
     ("host:print((foo; bar)).", "foo; bar\n"),
     ("host:print(','(foo, bar)).", "foo, bar\n"),

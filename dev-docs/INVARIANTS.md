@@ -29,6 +29,23 @@ removable when closed.
   rare paths still use `Types.qualifiedToName` to feed legacy helpers
   that operate on `Name`; those helpers can be migrated incrementally.)
 
+- **Tell-side constraint arguments are evaluated expressions, not
+  patterns.** Encoded by replacing `Desugared.BodyConstraint
+  QualifiedConstraint` (a `[Term]` carrier) with
+  `Desugared.BodyTell QualifiedName [Expr]`. Rule bodies and top-level
+  goals both flow through `BodyTell`; head occurrence patterns keep
+  `HeadConstraint` / `Term` because matching still operates on data
+  shapes. `Compile.compileBodyGoal`'s `BodyTell` arm pre-walks top-
+  level `VarExpr` args to lift fresh logical variables (preserving
+  the `foo(X)` convenience), then routes the args through `compileExpr`
+  — the same path used by `is` RHS and `=` operands. The interpreter
+  mirrors this via `Run.evalNestedExpr`. `Resolve.termToExpr` learns
+  to canonicalize bare-named functions when exactly one declared
+  function shares the name (e.g. `+(2, 1)` → `CallExpr prelude:+`),
+  so operator-style expressions in tell-arg position evaluate without
+  forcing the user to fully qualify. Quoting (`term(foo(X))`) is the
+  opt-out for callers who want a literal data term.
+
 - **Head Normal Form: post-HNF head args are variables or wildcards.**
   Encoded by introducing `Types.HeadArg = HeadVar Text | HeadWildcard`
   and `Types.HeadConstraint`, narrowing `Desugared.Head`'s `kept`/

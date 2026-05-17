@@ -923,12 +923,25 @@ termToExpr fs loc origin = go
             R.CallExpr (QualifiedName m b) <$> traverse go args
         | otherwise ->
             R.CtorExpr name <$> traverse go args
-      -- Any remaining unqualified compound: a reserved operator
-      -- (@=@, @is@, ...) or an unresolved leftover (already reported
-      -- by the renamer). Pass through as a 'CtorExpr' so downstream
-      -- error reporting can fire on it.
-      CompoundTerm name args ->
-        R.CtorExpr name <$> traverse go args
+      -- Unqualified compound. If exactly one declared function has
+      -- this local name, canonicalize it to a 'CallExpr': this is how
+      -- the nested function-call arguments of a tell-side body
+      -- constraint (or a top-level goal) get evaluated, since the
+      -- renamer's 'NoResolve' mode for body-compound children leaves
+      -- them unqualified. Ambiguous matches (multiple modules declare
+      -- the same name) and zero matches both fall through to
+      -- 'CtorExpr', matching the old data-term behaviour.
+      --
+      -- BUG: the match is against the program-wide function set, not
+      -- the current module's import scope. A function declared in
+      -- module B but not imported by the current module is still
+      -- canonicalized here, so the calling module silently invokes a
+      -- function it never imported. See @dev-docs/BUGS.md@ for the
+      -- full repro and fix sketch.
+      CompoundTerm name@(Unqualified n) args ->
+        case [qn | qn@(QualifiedName _ b) <- Set.toList fs, b == n] of
+          [qn] -> R.CallExpr qn <$> traverse go args
+          _ -> R.CtorExpr name <$> traverse go args
 
     classifyParam :: Term -> Writer [Diagnostic ResolveError] HeadArg
     classifyParam (VarTerm v) = pure (HeadVar v)
