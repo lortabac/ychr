@@ -18,6 +18,20 @@ The yardstick is whether a reader new to the module can follow the code without
 chasing several layers of indirection. Three similar lines side by side beat a
 clever combinator that nobody will reach for again.
 
+## Make invalid states unrepresentable
+
+Shape data types so they encode the business logic and its invariants as
+precisely as the type system allows. A constructor that cannot occur, a field
+that is always `Just`, a list that is never empty — each is an invariant the
+type system can carry for you instead of the reader. Prefer sum types over
+booleans-plus-conventions, non-empty containers over "list, but never empty",
+and dedicated variants over sentinel values.
+
+This rule yields to *Simplicity over cleverness*. When a precise encoding
+demands types that obscure intent — deep GADT machinery, type-level tricks,
+phantom indices that every call site has to thread — give up the precision and
+fall back to a looser type with a comment naming the invariant.
+
 ## Named, unique data types
 
 Prefer `newtype` over naked types for identifiers and semantic scalars.
