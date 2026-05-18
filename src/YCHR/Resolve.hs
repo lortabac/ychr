@@ -6,9 +6,14 @@
 -- equations under their declarations and verifying that declaration
 -- kinds are used consistently.
 module YCHR.Resolve
-  ( ResolveError (..),
+  ( -- * Errors
+    ResolveError (..),
+
+    -- * Resolution
     resolveProgram,
     termToExpr,
+
+    -- * Visibility
     FunVisibility,
     buildQueryFunctionVisibility,
   )
@@ -192,14 +197,35 @@ buildFunctionNames mods =
       P.FunctionDecl {} <- [d]
     ]
 
+{- Note [FunVisibility vs renamer visibility]
+
+The renamer qualifies every constraint, type, and data-constructor
+reference per-module: it knows which providers each module imports
+and rewrites bare names to 'Qualified' form. So by the time we reach
+Resolve, those three name classes are already disambiguated.
+
+Functions are different. In @NoResolve@ positions (compound
+arguments of tell-side body constraints and top-level goals) the
+renamer deliberately leaves compound heads unqualified — the
+call-vs-constructor decision is structural and gets made here in
+'termToExpr'. To make that decision we need the same
+function-visibility view the renamer uses for @ResolveAll@ /
+@ResolveTop@ positions, but restricted to 'FunctionDecl': hence
+'FunVisibility'.
+
+The model is per-module: 'buildFunctionVisibility' produces one
+table per source module, keyed by the local @(name, arity)@ a term
+might mention; 'buildQueryFunctionVisibility' produces a single
+combined table for the synthetic @<query>@ module the renamer
+fabricates for top-level goals (see 'Rename.renameQueryGoals'). Both
+are read by 'termToExpr' to commit each compound to a 'CallExpr' or
+'CtorExpr'.
+-}
+
 -- | Per-module function visibility. Maps each local @(name, arity)@
 -- reachable from the module to the qualified names of the function
--- declarations that provide it. Mirrors 'Rename.visibleProviders'
--- restricted to 'FunctionDecl': the renamer already qualifies every
--- constraint, type, and data-constructor reference per-module, but
--- function-vs-constructor disambiguation in @NoResolve@ positions
--- happens here in Resolve, so 'termToExpr' needs the same visibility
--- view the renamer uses.
+-- declarations that provide it.
+-- See Note [FunVisibility vs renamer visibility].
 type FunVisibility = Map (Text, Int) [QualifiedName]
 
 -- | Build a function-visibility map for every module in a program.
@@ -264,6 +290,8 @@ funVisibilityFor mv m = Map.findWithDefault Map.empty m mv
 -- module with @use_module(M)@ and resolves names through each
 -- module's export list). Used by 'YCHR.Run' to translate top-level
 -- goal and argument terms.
+--
+-- See Note [FunVisibility vs renamer visibility].
 buildQueryFunctionVisibility :: [P.Module] -> FunVisibility
 buildQueryFunctionVisibility mods =
   Map.fromListWith
@@ -667,15 +695,33 @@ checkBoundedDeclarations functionNames mods =
         True
     originForDecl m d = PExpr.Atom (m.name <> ":" <> d.name)
 
+{- Note [Bound graph cycle detection]
+
+Vertices of the bound graph are the qualified names of bounded
+declarations (functions and constraints carrying a @requiring@
+clause). There is an edge from @f@ to @g@ whenever @g@ appears in
+@f@'s @requiring@ clause; bounded references always resolve to a
+function per the spec.
+
+Edges are derived from the @allBounded@ list assembled in
+'checkBoundedDeclarations', which itself draws from
+'buildFunctionRequiring' (function bounds) and the constraint-side
+@requiring@ field collected by 'collectConstraintBounds'.
+
+Detection is iterative DFS rather than recursive: bound chains may be
+arbitrarily deep, so we keep the work stack on the heap. A vertex is
+added to @visited@ only after its entire subtree has been explored,
+so each simple cycle is reported exactly once even when several
+starting vertices reach it.
+
+'BoundCycle' carries the cycle in source order: 'dfs' builds the
+cycle by reversing the current DFS path from the re-entered vertex
+back to itself, which is the same order in which the bounds were
+encountered while walking @requiring@ clauses top-to-bottom.
+-}
+
 -- | Detect cycles in the bound graph by depth-first search.
---
--- Vertices are the qualified names of bounded declarations. There is
--- an edge from @f@ to @g@ whenever @g@ appears in @f@'s @requiring@
--- clause (bounded names are always functions per the spec).
---
--- At most one diagnostic is emitted per simple cycle: subsequent
--- starting vertices that re-enter the same cycle hit it via the
--- 'visited' set and are skipped.
+-- See Note [Bound graph cycle detection].
 detectBoundCycles ::
   [(QualifiedName, Set Text, [BoundSig], PExpr.PExpr)] ->
   [Diagnostic ResolveError]
@@ -698,9 +744,8 @@ detectBoundCycles bounded =
    in map (emitCycleDiag origins) cycles
 
 -- | Iterative DFS from @qn@ that pushes any detected cycle onto the
--- accumulator and returns the updated @(visited, cycles)@ pair. A
--- vertex is added to @visited@ only after its entire subtree has been
--- explored, ensuring each simple cycle is reported exactly once.
+-- accumulator and returns the updated @(visited, cycles)@ pair.
+-- See Note [Bound graph cycle detection].
 dfs ::
   Map.Map QualifiedName [QualifiedName] ->
   Set QualifiedName ->
@@ -970,10 +1015,14 @@ stripFunName vis (P.AnnP eq loc parsed) =
 -- ---------------------------------------------------------------------------
 
 -- | Translate a renamed surface 'Term' into the structurally typed
--- 'R.Expr'. The function set tells us which qualified compounds are
--- static calls — every other qualified compound is a data constructor.
--- '$call', 'fun name/arity', lambdas, 'host:f' calls, and the @term/1@
--- quoting form are recognized by their canonical post-rename shape.
+-- 'R.Expr'. The 'FunVisibility' tells us which qualified compounds
+-- are static calls — every other qualified compound is a data
+-- constructor. '$call', 'fun name/arity', lambdas, 'host:f' calls,
+-- and the @term/1@ quoting form are recognized by their canonical
+-- post-rename shape.
+--
+-- See Note [FunVisibility vs renamer visibility] for why this pass
+-- recomputes function visibility instead of relying on the renamer.
 --
 -- Diagnostics accumulate in the writer; the translator always returns
 -- an 'R.Expr', substituting plausible placeholders so traversal can

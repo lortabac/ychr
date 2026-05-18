@@ -339,7 +339,8 @@ renameProgram inputs mods =
                   typeDeclEnv = typeDeclEnv0,
                   typeExportEnv = typeExportEnv0,
                   operatorExports = inputs.operatorExports,
-                  currentTrailingLoc = Map.findWithDefault Nothing m.name inputs.trailingLoc,
+                  currentTrailingLoc =
+                    Map.findWithDefault Nothing m.name inputs.trailingLoc,
                   currentModule = m
                 }
             visible = visibleDataCons mods ctx0
@@ -526,8 +527,14 @@ locAtOrAfter a b = (a.line, a.col) >= (b.line, b.col)
 renameRule :: RenameCtx -> Rule -> Rename Rule
 renameRule ctx r = do
   h <- traverse (renameHead ctx r.head.sourceLoc r.head.parsed) r.head
-  g <- traverse (traverse (renameTerm ctx r.guard.sourceLoc r.guard.parsed ResolveAll)) r.guard
-  b <- traverse (traverse (renameTerm ctx r.body.sourceLoc r.body.parsed ResolveTop)) r.body
+  g <-
+    traverse
+      (traverse (renameTerm ctx r.guard.sourceLoc r.guard.parsed ResolveAll))
+      r.guard
+  b <-
+    traverse
+      (traverse (renameTerm ctx r.body.sourceLoc r.body.parsed ResolveTop))
+      r.body
   pure r {head = h, guard = g, body = b}
 
 renameEquation :: RenameCtx -> FunctionEquation -> Rename FunctionEquation
@@ -634,7 +641,11 @@ renameTerm ctx loc origin mode t = case t of
           ]
       ] | mode /= NoResolve -> do
       resolved <- resolveName ResolveAll ctx loc origin (Unqualified fname) farity
-      pure (CompoundTerm (Unqualified "/") [AtomTerm (flattenName resolved), IntTerm farity])
+      pure
+        ( CompoundTerm
+            (Unqualified "/")
+            [AtomTerm (flattenName resolved), IntTerm farity]
+        )
   CompoundTerm name args -> do
     let childMode = case mode of
           NoResolve -> NoResolve
@@ -734,7 +745,10 @@ resolveName _ ctx loc origin (Qualified m n) arity
 -- module that /exports/ it.
 visibleProviders :: RenameCtx -> Text -> Int -> [Text]
 visibleProviders ctx n arity =
-  let ownProviders = filter (== ctx.currentModule.name) (lookupDecl (n, arity) ctx.declEnv)
+  let ownProviders =
+        filter
+          (== ctx.currentModule.name)
+          (lookupDecl (n, arity) ctx.declEnv)
       imports = [(mn, il) | AnnP (ModuleImport mn il) _ _ <- ctx.currentModule.imports]
       importProviders =
         filter
@@ -883,18 +897,21 @@ renameDeclaration ctx loc (ConstraintDecl n a argTypes requiring) = do
         argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
         requiring = requiring'
       }
-renameDeclaration ctx loc (FunctionDecl n a argTypes returnType isOpen kind requiring) = do
-  requiring' <- traverse (traverse (renameBoundSig ctx loc)) requiring
-  pure
-    FunctionDecl
-      { name = n,
-        arity = a,
-        argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
-        returnType = fmap (renameTypeExpr ctx) returnType,
-        isOpen = isOpen,
-        kind = kind,
-        requiring = requiring'
-      }
+renameDeclaration
+  ctx
+  loc
+  (FunctionDecl n a argTypes returnType isOpen kind requiring) = do
+    requiring' <- traverse (traverse (renameBoundSig ctx loc)) requiring
+    pure
+      FunctionDecl
+        { name = n,
+          arity = a,
+          argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
+          returnType = fmap (renameTypeExpr ctx) returnType,
+          isOpen = isOpen,
+          kind = kind,
+          requiring = requiring'
+        }
 renameDeclaration ctx loc d@ExtendClassTypeDecl {name, arity, argTypes, returnType} = do
   resolved <- resolveName ResolveTop ctx loc (Atom name) (Unqualified name) arity
   pure
@@ -940,11 +957,18 @@ renameTypeExpr ctx (TypeCon n args) =
 -- 'Unqualified'.
 resolveTypeName :: RenameCtx -> Text -> Int -> Name
 resolveTypeName ctx n arity =
-  let ownProviders = filter (== ctx.currentModule.name) (lookupDecl (n, arity) ctx.typeDeclEnv)
+  let ownProviders =
+        filter
+          (== ctx.currentModule.name)
+          (lookupDecl (n, arity) ctx.typeDeclEnv)
       imports = [(mn, il) | AnnP (ModuleImport mn il) _ _ <- ctx.currentModule.imports]
       importProviders =
         filter
-          (\mn -> any (\(imn, il) -> imn == mn && importListPermitsType n arity il) imports)
+          ( \mn ->
+              any
+                (\(imn, il) -> imn == mn && importListPermitsType n arity il)
+                imports
+          )
           (lookupExport (n, arity) ctx.typeExportEnv)
       matches = ownProviders ++ importProviders
    in case matches of
