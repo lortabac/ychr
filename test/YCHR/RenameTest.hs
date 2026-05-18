@@ -712,6 +712,21 @@ warningTests =
                 }
         ws <- warningsOf [m]
         ws @?= [],
+      testCase "declared function in tell-side argument position produces no warning" $ do
+        -- Regression: a bare compound like 'f(X)' appearing as an argument
+        -- to a tell-side constraint is renamed in 'NoResolve' mode but
+        -- must not be warned as a data constructor when 'f' is a visible
+        -- function -- 'Resolve.termToExpr' will later canonicalize it to
+        -- a 'CallExpr' for tell-time evaluation.
+        let m =
+              module' "M"
+                `declaring` ["c" // 1, function "f" 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [atom "true"]
+                               |- [term "c" [term "f" [var "X"]]]
+                           ]
+        ws <- warningsOf [m]
+        ws @?= [],
       testCase "data constructor arity mismatch" $ do
         let m =
               ( module' "M"

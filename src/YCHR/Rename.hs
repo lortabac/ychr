@@ -644,8 +644,15 @@ renameTerm ctx loc origin mode t = case t of
     newName <- case mode of
       NoResolve -> do
         case name of
-          Unqualified n ->
-            warnUnknownDataCon ctx.dataConEnv loc origin n (length args)
+          -- Skip the unknown-data-constructor warning when the bare
+          -- name matches a visible function or constraint declaration:
+          -- 'Resolve.termToExpr' will later canonicalize it to a
+          -- 'CallExpr' for tell-side argument evaluation, so it is not
+          -- a misspelled data constructor.
+          Unqualified n
+            | null (visibleProviders ctx n (length args)) ->
+                warnUnknownDataCon ctx.dataConEnv loc origin n (length args)
+            | otherwise -> pure ()
           _ -> pure ()
         pure (canonicalizeData ctx name (length args))
       _ -> do
