@@ -222,6 +222,44 @@ Drop the `Data.Either` import and inline the same definition at the
 top of `Parser.hs`. Three lines.
 
 
+## 6. No `TemplateHaskell` support
+
+MicroHs is a combinator-based compiler with no staged compilation.
+The `TemplateHaskell` extension is not recognised; modules using it
+cannot build under `mcabal`.
+
+YCHR uses TH to embed `libraries/*.chr` and
+`typechecker/typechecker.chr` into the binary at compile time
+(`YCHR.StdLib.TH`, `YCHR.TypeCheck.TH`). This makes the GHC-built
+binary self-contained and cwd-independent. Without TH, mhs has no
+equivalent compile-time embedding path.
+
+### Root cause
+
+`MicroHs/src/MicroHs/Lex.hs` and `Parse.hs` have no quotation /
+splice grammar; the compiler has no staged-evaluation phase.
+Implementing TH would require a second compilation pass over
+splice-producing modules and a runtime evaluator for `Q` actions —
+effectively another compiler. Not realistic as an upstream fix; TH
+is a non-goal for MicroHs by design.
+
+### Upstream fix sketch
+
+None viable.
+
+### Local workaround
+
+None. `mcabal build` is expected to fail at `src/YCHR/StdLib.hs` and
+`src/YCHR/TypeCheck/Compiled.hs`. Users must build with `cabal`/GHC.
+This was a conscious trade-off taken when reverting from the runtime
+loader (the change `2142c05` was originally motivated by) back to TH
+embedding: the runtime loader had a known cwd-relative bug, and the
+GHC-only fix is the cleanest available. If future work restores mhs
+compat, the loaders will need a per-backend split (`src/ghc/` +
+`src/mhs/`, mirroring the existing `YCHR.LineInput` pattern) — but
+that machinery is intentionally not added preemptively.
+
+
 ## Out of scope (not gaps, just noted)
 
 - `Data.List.foldl'` is present in MicroHs but isn't re-exported from

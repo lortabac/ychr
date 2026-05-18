@@ -188,6 +188,8 @@ library
                     , YCHR.Runtime.Error
 
     other-modules:    YCHR.LineInput
+                    , YCHR.StdLib.TH
+                    , YCHR.TypeCheck.TH
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -199,6 +201,7 @@ library
                     , directory
                     , filepath
                     , parsec
+                    , template-haskell
                     , text
                     , transformers
 
