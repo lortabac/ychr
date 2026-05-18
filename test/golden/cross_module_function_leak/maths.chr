@@ -1,0 +1,5 @@
+:- module(maths, [add/2]).
+:- use_module(library(prelude)).
+
+:- function add/2.
+add(X, Y) -> X + Y.

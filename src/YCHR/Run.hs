@@ -163,7 +163,7 @@ resolveQueryTell cp c = do
   qc <- resolveQueryConstraint cp c
   let (exprs, errs) =
         runWriter
-          (traverse (termToExpr cp.functionNameSet queryLoc queryOrigin) qc.args)
+          (traverse (termToExpr cp.queryFunctionVisibility queryLoc queryOrigin) qc.args)
   pure ((qc.name, exprs), errs)
 
 -- | Run a single CHR constraint against a compiled program. Returns
@@ -321,8 +321,9 @@ prepareQuery cp src = do
           cp.allModules
           goals
       )
-  let (exprs, exprErrs) =
-        runWriter (traverse (termToExpr cp.functionNameSet queryLoc queryOrigin) renamed)
+  let vis = cp.queryFunctionVisibility
+      (exprs, exprErrs) =
+        runWriter (traverse (termToExpr vis queryLoc queryOrigin) renamed)
   unless (null exprErrs) (throwIO (ResolveErrors exprErrs))
   bodyGoals <-
     either

@@ -53,8 +53,12 @@ import YCHR.Rename
     renameProgram,
   )
 import YCHR.Rename.Types (toListExport)
-import YCHR.Resolve (ResolveError, resolveProgram)
-import YCHR.Resolved qualified as R
+import YCHR.Resolve
+  ( FunVisibility,
+    ResolveError,
+    buildQueryFunctionVisibility,
+    resolveProgram,
+  )
 import YCHR.StdLib (stdlib)
 import YCHR.TypeCheck.Error (TypeCheckError)
 import YCHR.Types (SymbolTable)
@@ -108,11 +112,11 @@ data CompiledProgram = CompiledProgram
     allFunctions :: [D.Function],
     -- | Counter for the next lambda index (to avoid collisions in queries).
     nextLambdaIndex :: Int,
-    -- | Set of declared function names. Surfaced from 'Resolve' for
-    -- the query-time 'YCHR.Resolve.termToExpr' translator, which is the
-    -- only remaining consumer once the compile-time funSet plumbing
-    -- has been removed.
-    functionNameSet :: Set Types.QualifiedName,
+    -- | Function-visibility table for query-time 'YCHR.Resolve.termToExpr'
+    -- calls. Mirrors the synthetic @\<query\>@ module the renamer
+    -- builds: every function declared by any loaded module is in scope
+    -- for a query.
+    queryFunctionVisibility :: FunVisibility,
     -- | The desugared program (before lambda lifting), for type checking.
     desugaredProgram :: D.Program
   }
@@ -271,7 +275,7 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
         queryTable
         desugared'.functions
         lambdaCount
-        resolved.functionNames
+        (buildQueryFunctionVisibility allMods)
         desugared,
       warnings
     )

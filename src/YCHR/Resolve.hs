@@ -9,10 +9,14 @@ module YCHR.Resolve
   ( ResolveError (..),
     resolveProgram,
     termToExpr,
+    FunVisibility,
+    buildQueryFunctionVisibility,
   )
 where
 
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
+import Data.List (nub)
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -133,8 +137,9 @@ resolveProgram mods =
       mixedKindErrors = checkMixedDeclKinds mods
       extensionKindErrors = checkExtensionKinds funcKinds mods
       collisionErrors = checkConstraintFunctionCollision mods
-      (resolvedRules, ruleErrs) = resolveRules functionNames mods
-      (resolvedFunctions, funErrs) = resolveFunctions functionNames mods
+      funVisibility = buildFunctionVisibility mods
+      (resolvedRules, ruleErrs) = resolveRules funVisibility mods
+      (resolvedFunctions, funErrs) = resolveFunctions funVisibility mods
       errs =
         eqErrors
           ++ headErrors
@@ -186,6 +191,99 @@ buildFunctionNames mods =
       P.Ann d _ <- m.decls,
       P.FunctionDecl {} <- [d]
     ]
+
+-- | Per-module function visibility. Maps each local @(name, arity)@
+-- reachable from the module to the qualified names of the function
+-- declarations that provide it. Mirrors 'Rename.visibleProviders'
+-- restricted to 'FunctionDecl': the renamer already qualifies every
+-- constraint, type, and data-constructor reference per-module, but
+-- function-vs-constructor disambiguation in @NoResolve@ positions
+-- happens here in Resolve, so 'termToExpr' needs the same visibility
+-- view the renamer uses.
+type FunVisibility = Map (Text, Int) [QualifiedName]
+
+-- | Build a function-visibility map for every module in a program.
+--
+-- A function declared in module @P@ is visible in module @M@ iff
+-- either @P == M@, or @M@ has a @use_module(P)@ import whose import
+-- list permits the declared @(name, arity)@ and @P@'s export list
+-- (if any) includes the declaration. 'YCHR.Collect.rewriteImports'
+-- rewrites every @library(...)@ import to a 'ModuleImport' before
+-- 'resolveProgram' runs, so only 'ModuleImport' needs to be handled.
+buildFunctionVisibility :: [P.Module] -> Map Text FunVisibility
+buildFunctionVisibility mods =
+  Map.fromList [(m.name, perModule m) | m <- mods]
+  where
+    perModule selfMod =
+      Map.fromListWith
+        (\a b -> nub (a ++ b))
+        [ ((d.name, d.arity), [QualifiedName provider.name d.name])
+        | provider <- mods,
+          P.Ann d _ <- provider.decls,
+          P.FunctionDecl {} <- [d],
+          visibleTo selfMod provider d
+        ]
+
+    visibleTo selfMod provider d
+      | provider.name == selfMod.name = True
+      | not (importPermits selfMod provider d) = False
+      | otherwise = exportPermits provider d
+
+    importPermits selfMod provider d =
+      any
+        (matchesImport provider.name d)
+        [im.node | im <- selfMod.imports]
+
+    matchesImport providerName d (P.ModuleImport mn il)
+      | mn == providerName = importListPermitsFun d il
+      | otherwise = False
+    matchesImport _ _ (P.LibraryImport _ _) = False
+
+    importListPermitsFun _ Nothing = True
+    importListPermitsFun d (Just decls) = any (matchesFunDecl d) decls
+
+    exportPermits provider d = case provider.exports of
+      Nothing -> True
+      Just annExports -> any (matchesFunDecl d) annExports.node
+
+    matchesFunDecl d (P.FunctionDecl {name = n, arity = a}) =
+      n == d.name && a == d.arity
+    matchesFunDecl d (P.ConstraintDecl {name = n, arity = a}) =
+      n == d.name && a == d.arity
+    matchesFunDecl _ _ = False
+
+-- | Look up the function-visibility table for a single module,
+-- returning the empty map for unknown modules.
+funVisibilityFor :: Map Text FunVisibility -> Text -> FunVisibility
+funVisibilityFor mv m = Map.findWithDefault Map.empty m mv
+
+-- | Visibility table for query-time term resolution. A query has no
+-- enclosing module and sees every /exported/ function declared by any
+-- loaded module, mirroring the synthetic @\<query\>@ module the
+-- renamer builds in 'Rename.renameQueryGoals' (which imports every
+-- module with @use_module(M)@ and resolves names through each
+-- module's export list). Used by 'YCHR.Run' to translate top-level
+-- goal and argument terms.
+buildQueryFunctionVisibility :: [P.Module] -> FunVisibility
+buildQueryFunctionVisibility mods =
+  Map.fromListWith
+    (\a b -> nub (a ++ b))
+    [ ((d.name, d.arity), [QualifiedName m.name d.name])
+    | m <- mods,
+      P.Ann d _ <- m.decls,
+      P.FunctionDecl {} <- [d],
+      exportedBy m d
+    ]
+  where
+    exportedBy m d = case m.exports of
+      Nothing -> True
+      Just annExports -> any (matchesFunDecl d) annExports.node
+
+    matchesFunDecl d (P.FunctionDecl {name = n, arity = a}) =
+      n == d.name && a == d.arity
+    matchesFunDecl d (P.ConstraintDecl {name = n, arity = a}) =
+      n == d.name && a == d.arity
+    matchesFunDecl _ _ = False
 
 -- | Map each declared function to whether its declaration is open.
 buildFunctionOpenness :: [P.Module] -> Map.Map QualifiedName Bool
@@ -691,33 +789,36 @@ toQualId (Unqualified _) _ = Nothing
 -- ---------------------------------------------------------------------------
 
 resolveRules ::
-  Set QualifiedName -> [P.Module] -> ([R.Rule], [Diagnostic ResolveError])
-resolveRules fs mods =
+  Map Text FunVisibility ->
+  [P.Module] ->
+  ([R.Rule], [Diagnostic ResolveError])
+resolveRules visMap mods =
   let raws = [(r, m) | m <- mods, r <- m.rules]
-      go (acc, errs) (r, _m) =
-        case resolveHead r.head.sourceLoc r.head.parsed r.head.node of
-          Right rh ->
-            let (guardExprs, guardErrs) =
-                  runWriter
-                    ( traverse
-                        (termToExpr fs r.guard.sourceLoc r.guard.parsed)
-                        r.guard.node
-                    )
-                (bodyExprs, bodyErrs) =
-                  runWriter
-                    ( traverse
-                        (termToExpr fs r.body.sourceLoc r.body.parsed)
-                        r.body.node
-                    )
-                rule =
-                  R.Rule
-                    { name = r.name,
-                      head = P.AnnP rh r.head.sourceLoc r.head.parsed,
-                      guard = P.AnnP guardExprs r.guard.sourceLoc r.guard.parsed,
-                      body = P.AnnP bodyExprs r.body.sourceLoc r.body.parsed
-                    }
-             in (acc ++ [rule], errs ++ guardErrs ++ bodyErrs)
-          Left newErrs -> (acc, errs ++ newErrs)
+      go (acc, errs) (r, m) =
+        let vis = funVisibilityFor visMap m.name
+         in case resolveHead r.head.sourceLoc r.head.parsed r.head.node of
+              Right rh ->
+                let (guardExprs, guardErrs) =
+                      runWriter
+                        ( traverse
+                            (termToExpr vis r.guard.sourceLoc r.guard.parsed)
+                            r.guard.node
+                        )
+                    (bodyExprs, bodyErrs) =
+                      runWriter
+                        ( traverse
+                            (termToExpr vis r.body.sourceLoc r.body.parsed)
+                            r.body.node
+                        )
+                    rule =
+                      R.Rule
+                        { name = r.name,
+                          head = P.AnnP rh r.head.sourceLoc r.head.parsed,
+                          guard = P.AnnP guardExprs r.guard.sourceLoc r.guard.parsed,
+                          body = P.AnnP bodyExprs r.body.sourceLoc r.body.parsed
+                        }
+                 in (acc ++ [rule], errs ++ guardErrs ++ bodyErrs)
+              Left newErrs -> (acc, errs ++ newErrs)
    in foldl go ([], []) raws
 
 resolveHead ::
@@ -744,10 +845,10 @@ qualifyConstraint loc origin (Constraint n args) = case n of
     Left [noDiag (P.AnnP (UnqualifiedConstraintName n) loc origin)]
 
 resolveFunctions ::
-  Set QualifiedName ->
+  Map Text FunVisibility ->
   [P.Module] ->
   ([R.FunctionDef], [Diagnostic ResolveError])
-resolveFunctions fs mods =
+resolveFunctions visMap mods =
   let -- Collect all function declarations with their module context
       allDecls =
         [ (QualifiedName m.name d.name, d.arity, d, m)
@@ -766,7 +867,7 @@ resolveFunctions fs mods =
       build ((qn, ar), decls) =
         let (eqss, declErrss) =
               unzip
-                [ gatherEquations fs mods m d
+                [ gatherEquations visMap mods m d
                 | (d, m) <- decls
                 ]
             def =
@@ -818,42 +919,44 @@ collectExtensionSignatures mods qn ar =
 -- and the target's kind, so by the time we get here either list is a
 -- legitimate source for this declaration.
 gatherEquations ::
-  Set QualifiedName ->
+  Map Text FunVisibility ->
   [P.Module] ->
   P.Module ->
   P.Declaration ->
   ([P.AnnP R.FunctionEquation], [Diagnostic ResolveError])
-gatherEquations fs mods m d =
+gatherEquations visMap mods m d =
   let qualName = Qualified m.name d.name
       primaryEqs =
-        [ annEq
+        [ (annEq, m)
         | annEq <- m.equations,
           annEq.node.funName == qualName,
           length annEq.node.args == d.arity
         ]
       extensionEqs =
-        [ annEq
+        [ (annEq, mod_)
         | mod_ <- mods,
           annEq <- mod_.extensions ++ mod_.classExtensions,
           annEq.node.funName == qualName,
           length annEq.node.args == d.arity
         ]
-      (eqs, eqErrss) = unzip (map (stripFunName fs) (primaryEqs ++ extensionEqs))
+      strip (annEq, srcMod) =
+        stripFunName (funVisibilityFor visMap srcMod.name) annEq
+      (eqs, eqErrss) = unzip (map strip (primaryEqs ++ extensionEqs))
    in (eqs, concat eqErrss)
 
 stripFunName ::
-  Set QualifiedName ->
+  FunVisibility ->
   P.AnnP P.FunctionEquation ->
   (P.AnnP R.FunctionEquation, [Diagnostic ResolveError])
-stripFunName fs (P.AnnP eq loc parsed) =
+stripFunName vis (P.AnnP eq loc parsed) =
   let (guardExprs, guardErrs) =
         runWriter
           ( traverse
-              (termToExpr fs eq.guard.sourceLoc eq.guard.parsed)
+              (termToExpr vis eq.guard.sourceLoc eq.guard.parsed)
               eq.guard.node
           )
       (rhsExpr, rhsErrs) =
-        runWriter (termToExpr fs eq.rhs.sourceLoc eq.rhs.parsed eq.rhs.node)
+        runWriter (termToExpr vis eq.rhs.sourceLoc eq.rhs.parsed eq.rhs.node)
       resolvedEq =
         R.FunctionEquation
           { args = eq.args,
@@ -878,12 +981,12 @@ stripFunName fs (P.AnnP eq loc parsed) =
 -- (combined with the rest of 'resolveProgram''s checks) to decide
 -- whether to fail.
 termToExpr ::
-  Set QualifiedName ->
+  FunVisibility ->
   P.SourceLoc ->
   PExpr.PExpr ->
   Term ->
   Writer [Diagnostic ResolveError] R.Expr
-termToExpr fs loc origin = go
+termToExpr vis loc origin = go
   where
     go t = case t of
       VarTerm v -> pure (R.VarExpr v)
@@ -916,31 +1019,30 @@ termToExpr fs loc origin = go
       -- 'host:f(args)' — host language call.
       CompoundTerm (Qualified "host" f) args ->
         R.HostExpr f <$> traverse go args
-      -- Qualified compound: call if declared as a function, else
-      -- a data constructor application.
+      -- Qualified compound: call if declared as a function visible to
+      -- this module, else a data constructor application. Qualified
+      -- references that survived the renamer are already
+      -- visibility-validated, so the @elem@ check here is effectively
+      -- a function-vs-constructor distinction.
       CompoundTerm name@(Qualified m b) args
-        | QualifiedName m b `Set.member` fs ->
+        | QualifiedName m b `elem` Map.findWithDefault [] (b, length args) vis ->
             R.CallExpr (QualifiedName m b) <$> traverse go args
         | otherwise ->
             R.CtorExpr name <$> traverse go args
-      -- Unqualified compound. If exactly one declared function has
-      -- this local name, canonicalize it to a 'CallExpr': this is how
-      -- the nested function-call arguments of a tell-side body
-      -- constraint (or a top-level goal) get evaluated, since the
-      -- renamer's 'NoResolve' mode for body-compound children leaves
-      -- them unqualified. Ambiguous matches (multiple modules declare
-      -- the same name) and zero matches both fall through to
-      -- 'CtorExpr', matching the old data-term behaviour.
-      --
-      -- BUG: the match is against the program-wide function set, not
-      -- the current module's import scope. A function declared in
-      -- module B but not imported by the current module is still
-      -- canonicalized here, so the calling module silently invokes a
-      -- function it never imported. See @dev-docs/BUGS.md@ for the
-      -- full repro and fix sketch.
+      -- Unqualified compound. If exactly one declared function with
+      -- this local name is visible to the current module, canonicalize
+      -- to a 'CallExpr'; this is how nested function-call arguments
+      -- of tell-side body constraints (and top-level goals) get
+      -- evaluated, since the renamer's 'NoResolve' mode leaves
+      -- body-compound children unqualified. Zero matches (the name
+      -- is genuinely a data constructor or undefined) and ambiguous
+      -- matches both fall through to 'CtorExpr'; the renamer is
+      -- responsible for the corresponding diagnostics
+      -- (@UnknownName@/@AmbiguousName@ in @ResolveAll@ positions,
+      -- @UndeclaredDataConstructor@ in @NoResolve@).
       CompoundTerm name@(Unqualified n) args ->
-        case [qn | qn@(QualifiedName _ b) <- Set.toList fs, b == n] of
-          [qn] -> R.CallExpr qn <$> traverse go args
+        case Map.lookup (n, length args) vis of
+          Just [qn] -> R.CallExpr qn <$> traverse go args
           _ -> R.CtorExpr name <$> traverse go args
 
     classifyParam :: Term -> Writer [Diagnostic ResolveError] HeadArg

@@ -1,0 +1,10 @@
+:- module(app, [run/2]).
+:- use_module(library(prelude)).
+% Note: does NOT use_module(maths). Before the fix, Resolve.termToExpr
+% silently canonicalized 'add(X, 1)' to a call into maths:add via a
+% program-wide function-set lookup that ignored imports. Post-fix the
+% unqualified compound stays a data constructor.
+
+:- chr_constraint run/2.
+
+run(X, R) <=> R = add(X, 1).
