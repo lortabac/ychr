@@ -1,0 +1,13 @@
+:- module(polymorphic_unbounded_overload, [foo/2]).
+:- use_module(library(prelude)).
+
+% A polymorphic function whose body calls an overloaded operator at
+% the declaration's own type variable, with no `requiring` clause to
+% contribute an ambient signature. Under rigid type variables this
+% must fail: the prelude declares `>` only at (int, int) -> bool and
+% (float, float) -> bool, neither of which is consistent with the
+% rigid T. Adding `requiring '>'(T, T) -> bool` to the signature
+% makes this program type-check.
+:- function foo(T, T) -> bool.
+
+foo(X, Y) -> X > Y.

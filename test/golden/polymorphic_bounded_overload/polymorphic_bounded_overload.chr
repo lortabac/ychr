@@ -1,0 +1,16 @@
+:- module(polymorphic_bounded_overload, [result/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint result(any).
+
+% A polymorphic function whose body calls an overloaded operator at
+% the declaration's own type variable. The `requiring '>'(T, T) -> bool`
+% clause contributes an ambient signature for `>` at the rigid T, so
+% the body call resolves through the ambient and the equation type-checks.
+% At the use site `foo(3, 4)`, σ = (T := int) and the bound discharges
+% against the prelude's declared `'>'(int, int) -> bool`.
+:- function foo(T, T) -> bool requiring '>'(T, T) -> bool.
+
+foo(X, Y) -> X > Y.
+
+result(R) <=> R = foo(3, 4).

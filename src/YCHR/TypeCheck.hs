@@ -262,13 +262,18 @@ scopeIdValue (ScopeId n) = VInt n
 type CtxMap = Map CtxHandle CtxInfo
 
 -- | Holds the source-location info for every allocated 'CtxHandle'
--- together with a separate counter for 'ScopeId's. Threaded as a
--- single 'State' effect so both counters and the location map stay in
--- step.
+-- together with separate counters for 'ScopeId's and rigid-type-var
+-- ids. Threaded as a single 'State' effect so all counters and the
+-- location map stay in step.
 data CtxStore = CtxStore
   { nextCtxHandle :: !CtxHandle,
     ctxMap :: !CtxMap,
-    nextScopeId :: !ScopeId
+    nextScopeId :: !ScopeId,
+    -- | Fresh-id counter for rigid type variables. Each rigid tvar
+    -- is encoded as the runtime term @rigid(N)@ where @N@ is a
+    -- globally unique integer from this counter; distinct rigid
+    -- identities therefore never accidentally unify.
+    nextRigidId :: !Int
   }
 
 emptyCtxStore :: CtxStore
@@ -276,7 +281,8 @@ emptyCtxStore =
   CtxStore
     { nextCtxHandle = CtxHandle 0,
       ctxMap = Map.empty,
-      nextScopeId = ScopeId 0
+      nextScopeId = ScopeId 0,
+      nextRigidId = 0
     }
 
 -- | Internal monad of the type-check driver: a 'ReaderT' carrying the
@@ -303,6 +309,34 @@ freshScopeId = do
   let ScopeId n = store.nextScopeId
   putStore store {nextScopeId = ScopeId (n + 1)}
   pure (ScopeId n)
+
+-- | Allocate a fresh rigid type variable. Distinct allocations get
+-- distinct identities; the only way two rigid tvars unify is if
+-- they share the same identity (typically via the same entry in a
+-- @tvars@ map shared between the declaration's parameter encoding
+-- and its ambient bound signatures).
+freshRigidTypeVar :: TC Value
+freshRigidTypeVar = do
+  store <- getStore
+  let n = store.nextRigidId
+  putStore store {nextRigidId = n + 1}
+  pure (VTerm (tcAtom "rigid") [VInt n])
+
+-- | Allocate fresh rigid type variables for each unique type variable
+-- name. Mirrors 'freshTypeVarsForDecl' but uses rigid identities;
+-- intended for a polymorphic function's own equation-body scope, where
+-- the enclosing tvars must enforce a structural match (so calls to
+-- overloaded operations at those tvars fail without a covering
+-- @requiring@ clause).
+--
+-- Lives in 'TC' rather than 'Chr' because the rigid-id counter is in
+-- 'CtxStore' (the @StateT@ layer); 'freshTypeVarsForDecl' has no such
+-- counter so it can live in 'Chr' directly.
+freshRigidTypeVarsForDecl :: [Text] -> TC (Map Text Value)
+freshRigidTypeVarsForDecl vars = do
+  let unique = Set.toList (Set.fromList vars)
+  pairs <- mapM (\v -> (v,) <$> freshRigidTypeVar) unique
+  pure (Map.fromList pairs)
 
 -- ---------------------------------------------------------------------------
 -- Main entry point
@@ -727,6 +761,20 @@ checkRule rule = do
 
 -- | Check one head constraint occurrence. Returns the ambient sigs
 -- this occurrence contributes (empty for unbounded constraints).
+--
+-- Constraint head occurrences use *flexible* tvars per occurrence,
+-- not rigid. The reason is intra-rule type sharing: a rule like
+-- @trans @@ leq(X, Y), leq(Y, Z) ==> leq(X, Z).@ over a polymorphic
+-- @:- chr_constraint leq(T, T).@ relies on the type variables in
+-- the two head occurrences being unifiable. Rigid tvars (distinct
+-- identities per occurrence) would reject this idiom. Per the spec
+-- §Use sites "each occurrence's type variables are freshly
+-- allocated"; under flexible σ "fresh" just means a new
+-- unification variable that can later unify with another fresh
+-- one. The function-equation soundness gap rigidity closes
+-- (§Soundness) does not apply at rule heads: rule bodies are not
+-- the "implementation" of the constraint declaration in the way
+-- that function equations are the implementation of a function.
 checkHeadConstraint ::
   CheckCtx ->
   ScopeId ->
@@ -789,6 +837,10 @@ emitAmbientAndBound scopeId ctx tvars bs = do
 
 -- | Head-side constraint use: the arguments are still 'Term' patterns
 -- (they reached the typechecker through 'headConstraintToConstraint').
+-- Goes through @check_constraint_use@ which @copy_term@s the stored
+-- declared sig, allocating fresh flexible tvars per use — so two
+-- head occurrences of a polymorphic constraint in the same rule get
+-- their own flex σ that can later unify when a body goal forces it.
 checkConstraintUse :: CheckCtx -> Types.QualifiedConstraint -> TC ()
 checkConstraintUse cctx c = do
   argTypeVars <- traverse (typeOfTerm cctx) c.args
@@ -974,7 +1026,22 @@ checkEquation func loc origin eq = do
     ([], _) -> do
       let cctx = freshCheckCtx varTypes Map.empty
       checkGuards cctx eq.guards
-    ([sig], bounds@(_ : _)) -> checkBoundedEquation func sig bounds varTypes eq
+    -- Single-sig (bounded or unbounded): allocate the function's
+    -- declared tvars as rigid for this equation. Calls inside the
+    -- body that target the rigid tvars must resolve through ambient
+    -- signatures contributed by a `requiring` clause; without a
+    -- matching clause, an overloaded operator at the tvar fails
+    -- with @no_matching_overload@. Empty @bounds@ is fine — it just
+    -- means no ambient signatures are emitted.
+    ([sig], bounds) -> checkSingleSigEquation func sig bounds varTypes eq
+    -- Multi-sig (class) equations stay on the flexible path:
+    -- @check_function_use@ runs overload resolution against the
+    -- declared sigs and any of them that matches makes the equation
+    -- accepted. Rigid tvars would conflict with that semantics
+    -- (every sig is a separate candidate, not a single parametric
+    -- shape). `:- class` with `requiring` is rejected upstream as
+    -- @RequiringOnClass@, so this branch never sees a class with
+    -- bounds.
     (_, _) -> do
       let cctx = freshCheckCtx varTypes Map.empty
       argTypeVars <- traverse (typeOfTerm cctx . headArgToTerm) eq.params
@@ -999,29 +1066,33 @@ checkEquation func loc origin eq = do
           ambientSigs = ambs
         }
 
--- | Check an equation of a bounded function. Allocates a fresh σ
--- explicitly so the equation's parameter types, RHS type, and the
--- ambient signatures contributed by the function's @requiring@
--- clause all share the same logical variables. This is what makes
--- the spec's "the ambient signature's type variables share identity
--- with the enclosing function's declared type variables" property
--- hold: a call to a bound-named function inside the equation that
--- resolves through the ambient sig stays polymorphic in T, because
--- T is the SAME logical variable the equation parameters' types are
--- bound to.
-checkBoundedEquation ::
+-- | Check an equation of a single-signature function (bounded or
+-- unbounded). Allocates the function's declared type variables as
+-- *rigid* identities, shared between the equation's parameter types,
+-- RHS type, and any ambient signatures contributed by a @requiring@
+-- clause. The rigid identity is what makes the spec's "the ambient
+-- signature's type variables share identity with the enclosing
+-- function's declared type variables" property hold: a call to a
+-- bound-named function inside the equation that resolves through the
+-- ambient sig stays polymorphic in T, because T is the SAME rigid
+-- term the equation parameters' types are bound to. Rigidity also
+-- closes the soundness gap for /unbounded/ polymorphic functions:
+-- @foo(T, T) -> bool@ with body @X > Y@ now fails to type-check
+-- (no_matching_overload on @>@), because there is no ambient sig and
+-- no declared sig of @>@ is consistent with the rigid @T@.
+checkSingleSigEquation ::
   D.Function ->
   ([TypeExpr], TypeExpr) ->
   [BoundSig] ->
   Map Text Value ->
   D.Equation ->
   TC ()
-checkBoundedEquation func (argTys, retTy) bounds varTypes eq = do
+checkSingleSigEquation func (argTys, retTy) bounds varTypes eq = do
   let allVars =
         collectTypeVars argTys
           ++ collectTypeVarsExpr retTy
           ++ concatMap boundSigVars bounds
-  tvars <- chrOp (freshTypeVarsForDecl allVars)
+  tvars <- freshRigidTypeVarsForDecl allVars
   encodedArgs <- chrOp (traverse (encodeTypeExpr tvars) argTys)
   encodedRet <- chrOp (encodeTypeExpr tvars retTy)
   scopeId <- freshScopeId
@@ -1039,19 +1110,25 @@ checkBoundedEquation func (argTys, retTy) bounds varTypes eq = do
     traverse (emitAmbientAndBound scopeId ctx tvars) bounds
   let ambMap = Map.fromListWith (++) ambEntries
       cctx = baseCtx {ambientSigs = ambMap}
-  chrOp $
-    tellConstraint
-      (Qualified "typechecker" "active_scope")
-      [scopeIdValue scopeId]
+      hasBounds = not (null bounds)
+  -- Skip the @active_scope@ / @end_scope@ pair when there are no
+  -- bounds: with no ambient sigs to scope, emitting them would just
+  -- pollute the constraint store. Mirrors the same gate in 'checkRule'.
+  when hasBounds $
+    chrOp $
+      tellConstraint
+        (Qualified "typechecker" "active_scope")
+        [scopeIdValue scopeId]
   paramTypes <- traverse (typeOfTerm cctx . headArgToTerm) eq.params
   zipWithM_ (tellCheckUnify ctx) paramTypes encodedArgs
   rhsType <- typeOfExpr cctx eq.rhs
   tellCheckUnify ctx rhsType encodedRet
   checkGuards cctx eq.guards
-  chrOp $
-    tellConstraint
-      (Qualified "typechecker" "end_scope")
-      [scopeIdValue scopeId]
+  when hasBounds $
+    chrOp $
+      tellConstraint
+        (Qualified "typechecker" "end_scope")
+        [scopeIdValue scopeId]
 
 -- ---------------------------------------------------------------------------
 -- Term typing
@@ -1386,6 +1463,14 @@ showType (VTerm functor [a, b])
       case fromValueList a of
         Just as -> "fun(" <> T.intercalate ", " (map showType as) <> ") -> " <> showType b
         Nothing -> "fun(?) -> " <> showType b
+-- Rigid type variable: rendered with its synthetic id so distinct
+-- rigids are distinguishable in inconsistency messages. The original
+-- source-level tvar name (@T@, @A@, ...) is not preserved because the
+-- driver does not currently maintain an id-to-name map; @T#<n>@ is
+-- enough to communicate "this is a polymorphic type variable" to the
+-- reader.
+showType (VTerm functor [VInt n])
+  | functor == tcAtom "rigid" = "T#" <> T.pack (show n)
 showType (VVar _) = "_"
 showType (VInt n) = T.pack (show n)
 showType _ = "?"

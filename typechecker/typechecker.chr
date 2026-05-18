@@ -29,12 +29,21 @@
 % compound terms. The first field of `tcon` is `any` because a type
 % constructor name may be either an atom (`bool`) or a `:(M, N)`
 % qualified-name compound (`prelude:bool`).
+% `rigid(N)` is a *rigid* type variable: a fresh identity allocated
+% by the driver while checking a polymorphic declaration's own
+% equations or rule bodies. Unlike unbound CHR variables (which are
+% *flexible* and consistent with every declared type per the gradual
+% guarantee), a rigid tvar is only consistent with itself and `any`.
+% This is what closes the soundness gap where a polymorphic body
+% calling an overloaded function at its own type parameter would
+% silently type-check without a `requiring` clause.
 :- chr_type ty ---> int
                   ; float
                   ; string
                   ; any
                   ; tcon(any, list(ty))
-                  ; fun(list(ty), ty).
+                  ; fun(list(ty), ty)
+                  ; rigid(int).
 
 % Polymorphic two-field record reused for both function signatures
 % (sig_t(list(ty), ty)) and constructor signatures
@@ -155,6 +164,12 @@ existential_consistent(_, any) -> true.
 existential_consistent(int, int) -> true.
 existential_consistent(float, float) -> true.
 existential_consistent(string, string) -> true.
+% Same-rigid succeeds; different-rigid (rigid(N), rigid(M) with N≠M)
+% falls through to the `(_, _) -> false` fallthrough below, so two
+% distinct rigid identities are deliberately inconsistent. This is
+% what makes the existence-check semantics in `discharge_bound_via_ambient`
+% reject an ambient_sig that doesn't share the call site's rigid σ.
+existential_consistent(rigid(N), rigid(N)) -> true.
 existential_consistent(tcon(C, A1), tcon(C, A2)) -> existential_consistent_list(A1, A2).
 existential_consistent(fun(A1, R1), fun(A2, R2))
     | existential_consistent_list(A1, A2) -> existential_consistent(R1, R2).
@@ -201,6 +216,14 @@ ty_concrete(float) -> true.
 ty_concrete(string) -> true.
 ty_concrete(tcon(_, Args)) -> ty_concrete_list(Args).
 ty_concrete(fun(Args, Ret)) | ty_concrete_list(Args) -> ty_concrete(Ret).
+% A rigid tvar is treated as concrete for the purpose of
+% `sub_ground`. It is structurally ground (a fully-specified term)
+% even though it stands for an abstract type — the gradual guarantee
+% applies to /flexible/ unbound vars, not rigid identities. Without
+% this, `check_bound` at a rigid σ would stay residual forever and
+% the bound's discharge (`discharge_bound_via_ambient`) would never
+% fire.
+ty_concrete(rigid(_)) -> true.
 ty_concrete(_) -> false.
 
 ty_concrete_list([]) -> true.
@@ -359,6 +382,34 @@ emit_bounds_step @ emit_bounds([B | Rest], Ctx) <=>
 % Both the single-sig and overloaded-sig variants reuse
 % `discharge_bound_check`, which is a worker constraint that
 % sees a list of candidate signatures and runs an existence check.
+
+% Per spec §Use-site checking step 4: "When this check happens during
+% the equation checking of an enclosing bounded function, 'declared
+% signature' includes the ambient signatures contributed by the
+% enclosing function's bound." An ambient_sig that is consistent with
+% the substituted bound discharges it silently — this is what keeps
+% recursive uses of a bounded function polymorphic at the enclosing
+% tvars, and what makes the equation-time bound check (emitted by the
+% driver alongside the ambient sig in `emitAmbientAndBound`)
+% trivially satisfy itself under rigid type variables.
+%
+% Listed before `discharge_bound_overloaded`/`discharge_bound_single`
+% so an ambient match takes precedence; if no ambient_sig is
+% consistent, those rules fall through to the declared-signature path.
+%
+% The `ambient_sig` head pattern intentionally ignores the scope id:
+% any active ambient_sig with the matching name is a candidate. Stale
+% ambients are removed by `end_scope` before any out-of-scope bound
+% check can fire (each `check_bound` is emitted with a scope_id that
+% gets torn down at the same end_scope call). The trivial-discharge
+% property at function equation time relies on the fact that
+% `emitAmbientAndBound` uses /one/ tvars map per call, so the
+% ambient_sig and the check_bound it emits share rigid identity by
+% construction.
+discharge_bound_via_ambient @
+    ambient_sig(_, GName, AmbSig) \ check_bound(GName, SubArgs, SubRet, Ctx) <=>
+        sub_ground(SubArgs, SubRet),
+        sig_one_consistent(AmbSig, SubArgs, SubRet) | true.
 
 discharge_bound_overloaded @
     function_sigs(GName, DeclSigs) \ check_bound(GName, SubArgs, SubRet, Ctx) <=>
@@ -524,6 +575,16 @@ tc_unify_fun @
     tc_unify(fun(A1, R1), fun(A2, R2), Ctx) <=>
     tc_unify_list(A1, A2, Ctx),
     tc_unify(R1, R2, Ctx).
+
+% --- rigid type variables ---
+%
+% Same-rigid: succeed silently. Different-rigid or rigid-vs-concrete
+% falls through to tc_unify_error and reports an inconsistency. A
+% flexible var meeting a rigid is handled by the var rules below
+% (the flex side binds to the rigid term).
+
+tc_unify_rigid @
+    tc_unify(rigid(N), rigid(N), _) <=> true.
 
 % --- var rules ---
 

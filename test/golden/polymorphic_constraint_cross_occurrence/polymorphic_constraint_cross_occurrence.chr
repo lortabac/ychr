@@ -1,0 +1,17 @@
+:- module(polymorphic_constraint_cross_occurrence, [leq/2, result/1]).
+:- use_module(library(prelude)).
+
+% Regression: a transitivity rule over a polymorphic constraint must
+% type-check. The two head occurrences of leq(T, T) each get their
+% own fresh σ; the body goal leq(X, Z) inherits the types of X and Z
+% from the head occurrences, which the rule body unifies via the
+% shared variable Y. Under rigid σ per head occurrence this rule
+% would fail with a Type mismatch between the two head occurrences'
+% T identities; the typechecker uses *flexible* σ at constraint head
+% occurrences specifically so this idiom keeps working. See
+% §"Rigid and flexible type variables" in the type-system spec.
+:- chr_constraint leq(T, T), result(any).
+
+trans @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
+
+result(R) <=> leq(1, 2), leq(2, 3), R = 0.

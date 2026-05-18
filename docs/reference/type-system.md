@@ -271,6 +271,46 @@ The concrete type `int` is preserved despite the `any` input.
 Unconstrained type variables remaining after solving are not errors.
 They represent genuinely polymorphic usage.
 
+#### Rigid and flexible type variables
+
+The checker distinguishes two flavors of unsolved type variable:
+
+- A **flexible** type variable is a fresh unification variable
+  allocated at a use site of a declared constraint or function. It
+  acts as a normal HM unification variable: it can be bound to a
+  concrete type by later constraints, it succeeds silently in
+  overload resolution when its declared counterpart is also unbound
+  (see §When arguments are not yet resolved), and it satisfies the
+  gradual guarantee.
+
+- A **rigid** type variable is a *function*'s own type parameter,
+  in scope while checking that function's equations. Rigid type
+  variables are consistent only with themselves and `any`; they
+  never silently match a declared concrete type. A polymorphic
+  function-equation body that uses an overloaded operation at a
+  rigid tvar must therefore resolve through an ambient signature
+  contributed by the function's `requiring` clause — without one
+  the call fails with `no_matching_overload`.
+
+Rigidity applies only to **function equations**. Constraint head
+occurrences use flexible type variables, even when the constraint
+itself is polymorphic: a rule like
+`leq(X, Y), leq(Y, Z) ==> leq(X, Z).` over a polymorphic
+`:- chr_constraint leq(T, T).` relies on the T variable in each
+head occurrence being unifiable across occurrences, which rigidity
+would prevent. This is a deliberate trade-off — it leaves a
+soundness gap for unbounded polymorphic constraints whose rule
+bodies use overloaded operations at the constraint's type
+parameter (analogous to the function gap rigidity closes), but
+preserves common multi-head rule idioms. The gap can be closed
+explicitly by adding a `requiring` clause to the constraint
+declaration.
+
+Rigidity is local to the function's own equation check. At every
+use site of the same function, fresh *flexible* variables are
+allocated by `copy_term`-style refresh, so callers retain the
+gradual guarantee unchanged.
+
 
 ## Sources of Type Information
 
@@ -574,10 +614,24 @@ or an unbound type variable is consistent with any declared type.
 
 ### When arguments are not yet resolved
 
-If argument types are not yet ground (still unbound type variables
-with no concrete type), all signatures are trivially consistent, and
-the check succeeds silently. This preserves the gradual guarantee:
-unannotated code produces no errors.
+The check's behavior depends on the variable's flavor (see §Type
+variables and instantiation):
+
+- **Flexible** type variables (use-site fresh variables, no concrete
+  type assigned yet) are consistent with every declared type; the
+  check succeeds silently. This preserves the gradual guarantee:
+  unannotated code produces no errors.
+
+- **Rigid** type variables (a function's own type parameters, in
+  scope while checking its equations) are consistent only with
+  themselves and `any`. If no declared signature is consistent
+  with the rigid tvar — and no ambient signature contributed by a
+  `requiring` clause covers it — the call fails with
+  `no_matching_overload`. This closes the soundness gap that would
+  otherwise let `foo(T, T) -> bool` silently type-check while
+  calling an overloaded `>` at `T` in its body. Rigidity applies
+  only at function equations, not at constraint rule heads — see
+  §Rigid and flexible type variables.
 
 ### Equation checking
 
@@ -1174,6 +1228,32 @@ The relevant correctness properties are:
    Conversely, making types more precise can only add errors, never
    remove them. This ensures that adding type annotations is always
    safe and never breaks a working program.
+
+Rigid type variables (§Type variables and instantiation §Rigid and
+flexible type variables) are what make property 1 hold for
+polymorphic *functions* whose equation bodies use overloaded
+operations: a declaration like `:- function foo(T, T) -> bool.`
+whose equation body calls an overloaded operator at the type
+variable cannot type-check without a `requiring` clause covering
+that operation. Without rigidity, such a program type-checked
+silently (every declared signature filtered as "consistent" against
+the unbound flexible variable representing T), but it could fail
+at runtime when called at a type for which no equation of the
+overloaded operator existed. Rigidity does not constrain
+unannotated programs: in code without type annotations, the
+enclosing declaration has no type variables of its own to allocate
+as rigid, so the gradual guarantee continues to hold.
+
+An analogous gap remains for polymorphic *constraints* whose rule
+bodies use overloaded operations at the constraint's type
+parameter (e.g. `:- chr_constraint foo(T, T). foo(X, Y) <=> X > Y.`
+silently type-checks even though `>` is not defined at all `T`).
+The cost of closing this gap with rigidity at rule heads is
+rejecting common multi-head rule idioms that rely on cross-head
+type-variable unification (e.g. transitivity of a polymorphic
+`leq(T, T)`), so the constraint case is intentionally left lax;
+users who need stronger checking can add an explicit `requiring`
+clause to the constraint declaration.
 
 Since YCHR erases types completely (no runtime casts, no blame
 tracking), the checker cannot guarantee that programs using `any` are
