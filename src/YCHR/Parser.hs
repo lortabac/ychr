@@ -78,7 +78,7 @@ type OpTable = P.OpTable
 -- language structure. Arithmetic and comparison operators are provided
 -- by the @builtins@ library.
 --
--- Directive keywords (@chr_constraint@, @function@, @chr_type@, @dynamic@)
+-- Directive keywords (@chr_constraint@, @function@, @chr_type@, ...)
 -- are prefix operators following standard Prolog convention, so that
 -- @:- chr_constraint leq\/2.@ parses as a single term.
 builtinOps :: OpTable
@@ -99,7 +99,7 @@ builtinOps =
       -- Comma (1000) is also tighter, so the bound list on the right
       -- is a comma chain consumed as a single argument here.
       (1140, [(P.Xfx, "requiring")]),
-      (1150, [(P.Xfx, "--->"), (P.Fx, "dynamic")]),
+      (1150, [(P.Xfx, "--->")]),
       (1180, [(P.Xfx, "<=>"), (P.Xfx, "==>")]),
       ( 1180,
         [ (P.Fx, "chr_constraint"),
@@ -810,7 +810,7 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
     case convertTypeDefinition typeBody of
       (Just annDef, errs) -> (DirTypeDecl [annDef], errs)
       (Nothing, errs) -> (DirOther, errs)
-  -- Unknown directives (e.g. :- dynamic foo/1.)
+  -- Unknown directives (any other @:- name(...)@ shape).
   _ -> (DirOther, [])
 convertDirective _ = (DirOther, [])
 

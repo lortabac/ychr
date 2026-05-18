@@ -335,7 +335,7 @@ withLoc p = do
 -- | Parse an atom: a lowercase identifier or a single-quoted string.
 --
 -- Rejects identifiers that are prefix word operators (e.g.
--- @chr_constraint@, @dynamic@) so that the Pratt parser can handle
+-- @chr_constraint@, @function@) so that the Pratt parser can handle
 -- them.  Infix-only word operators (e.g. @div@, @mod@, @is@) are
 -- allowed as atoms, following standard Prolog behaviour.
 atomP :: OpTable -> Parser Text

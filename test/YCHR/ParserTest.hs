@@ -164,7 +164,7 @@ directiveTests =
         pErrs ":- module(m, [type(foo/0, [X, Y])])."
           @?= Right [MalformedExportItem, MalformedExportItem],
       testCase "unknown directive is skipped" $
-        (map (.node) . (.decls)) <$> p ":- dynamic foo/1.\n:- chr_constraint leq/2."
+        (map (.node) . (.decls)) <$> p ":- mystery_directive(foo).\n:- chr_constraint leq/2."
           @?= Right [ConstraintDecl "leq" 2 Nothing Nothing],
       testCase "chr_constraint typed" $
         (map (.node) . (.decls)) <$> p ":- chr_constraint leq(int, int)."
