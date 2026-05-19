@@ -761,6 +761,17 @@ unifyAndReactivate l r =
       [ExprStmt (CallExpr reactivateDispatchName [AId (IdVar pendingName)])]
   ]
 
+-- | Collect variables in term-construction positions: the expression
+-- itself if it is a variable, or any variable reachable by descending
+-- through 'CtorExpr' arguments. Stops at 'CallExpr', 'HostExpr',
+-- 'ApplyExpr', 'FunRefExpr', 'LambdaExpr' — those are evaluation
+-- positions whose variables must already be in scope, so a fresh name
+-- there is a typo and should surface as YCHR-40002 via 'compileExpr'.
+termPositionVars :: R.Expr -> [Text]
+termPositionVars (R.VarExpr v) = [v]
+termPositionVars (R.CtorExpr _ args) = concatMap termPositionVars args
+termPositionVars _ = []
+
 -- | Compile a single body goal, returning the generated statements and
 -- an updated 'VarMap'. The VarMap may grow when a goal introduces new
 -- variables (e.g. @is@ binding a fresh variable, or a constraint whose
@@ -778,7 +789,10 @@ compileBodyGoal _ varMap si (D.BodyTell qn args) = do
   -- appearance); introduce a fresh 'NewVar' before evaluating the
   -- argument list. Variables nested inside a 'CallExpr' / 'CtorExpr'
   -- argument are evaluated by 'compileExpr', which runtime-errors if
-  -- they are unbound.
+  -- they are unbound. Tell arguments are evaluated, so the
+  -- introduction is top-level only; contrast 'BodyUnify' below,
+  -- whose operands are unification terms and may introduce variables
+  -- under a 'CtorExpr' as well.
   -- 'nub' guards against repeated top-level 'VarExpr's like
   -- 'foo(X, X)' that would otherwise emit two consecutive 'LetVal
   -- X NewVar' (shadowing the first and leaking its allocation).
@@ -789,9 +803,22 @@ compileBodyGoal _ varMap si (D.BodyTell qn args) = do
   let tellName = tellProcName (Types.qualifiedToName qn) (length callArgs)
   pure (newStmts ++ [ExprStmt (CallExpr tellName (map AVal callArgs))], varMap')
 compileBodyGoal _ varMap si (D.BodyUnify t1 t2) = do
-  t1' <- compileExpr varMap si t1
-  t2' <- compileExpr varMap si t2
-  pure (unifyAndReactivate t1' t2', varMap)
+  -- A variable that appears on either side of '=' in a term-construction
+  -- position (top, or under a 'CtorExpr') but is not yet in scope is
+  -- introduced by the unification itself: it becomes a fresh logical
+  -- variable slot that 'BUnify' then binds. Variables nested in a
+  -- 'CallExpr' / 'HostExpr' / 'ApplyExpr' argument are evaluating
+  -- positions and must already be in scope; 'compileExpr' raises
+  -- YCHR-40002 if they are not. 'nub' guards against repeated
+  -- occurrences like 'X = X' that would otherwise allocate two
+  -- 'NewVar's for the same name.
+  let freshVars =
+        nub [v | v <- termPositionVars t1 ++ termPositionVars t2, notMemberVar v varMap]
+      newStmts = [LetVal (Name v) NewVar | v <- freshVars]
+      varMap' = foldl' (\m v -> insertVar v (Var (Name v)) m) varMap freshVars
+  t1' <- compileExpr varMap' si t1
+  t2' <- compileExpr varMap' si t2
+  pure (newStmts ++ unifyAndReactivate t1' t2', varMap')
 compileBodyGoal _ varMap si (D.BodyHostStmt f args) = do
   args' <- traverse (compileExpr varMap si) args
   pure ([ExprStmt (HostCall (Name f) args')], varMap)

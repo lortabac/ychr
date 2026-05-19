@@ -207,7 +207,9 @@ constructor.
 - Rule body constraints (tell-side): `c(1 + 2)` stores `c(3)`.
 - Top-level goals.
 - Function and constructor arguments inside any of the above.
-- The right-hand side of `is` and `=`.
+- The right-hand side of `is`.
+- Operands of `=`, with the unification exception described in
+  [The `=` operator](#the--operator).
 - Rule guards and equation guards.
 - Function equation right-hand sides.
 
@@ -259,6 +261,29 @@ like arithmetic or comparison) the evaluation runtime-errors. The
 Haskell interpreter surfaces this as `YCHR-60001`. Use `term(...)`
 to keep an expression symbolic until something else binds the
 variables.
+
+## The `=` operator
+
+`=` is unification, not pure evaluation. Function calls, host calls,
+and ctor arguments on either side evaluate as usual, but a bare
+variable on either side — or a variable as a direct child of a
+data-constructor compound — is a unification slot: if the name is
+not already in scope it is introduced as a fresh logical variable
+and the unifier binds it.
+
+```chr
+test(R) <=> Y = 10, R = Y.                       % Y introduced by '='
+test(R1, R2) <=> pair(X, Y) = pair(1, 2),        % X, Y introduced under ctor
+                 R1 = X, R2 = Y.
+```
+
+A variable inside a function-call or host-call argument is *not* a
+unification slot — those positions evaluate, so an unbound name there
+is rejected with `YCHR-40002` at compile time:
+
+```chr
+test(R) <=> R = double(YY).   % rejected: YY unbound in a call argument
+```
 
 ## The `is` operator
 

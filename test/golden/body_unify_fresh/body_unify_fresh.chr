@@ -1,0 +1,12 @@
+:- module(buf, [test/1, test2/1, test3/2]).
+:- chr_constraint test/1, test2/1, test3/2.
+:- chr_type pair_t(A, B) ---> pair(A, B).
+
+% Basic: introduce Y via =, then use it (the repro from BUGS.md)
+test(R) <=> Y = 10, R = Y.
+
+% Two fresh vars unified, then one bound
+test2(R) <=> X = Y, Y = 20, R = X.
+
+% Fresh vars inside compound terms
+test3(R1, R2) <=> pair(X, Y) = pair(1, 2), R1 = X, R2 = Y.

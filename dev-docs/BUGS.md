@@ -7,27 +7,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 For terse, fix-shaped formatting, see `SCHEME_BACKEND_GAPS.md`. Remove
 entries from this file when the underlying bug is fixed.
 
-## `=` in body cannot introduce a fresh variable (asymmetric with `is`)
-
-`docs/reference/language.md` §Tell-side evaluation lists "the
-right-hand side of `is` and `=`" symmetrically as evaluating positions.
-In practice `Y = 10, R = Y` in a body is rejected as unbound while
-`Y is 10, R = Y` is accepted. The error hint ("variables used in a
-guard or body must also appear in the rule head") is also wrong —
-`is`-introduced variables don't appear in the head either.
-
-Repro:
-
-```chr
-:- module(q).
-:- chr_constraint test/1.
-test(R) <=> Y = 10, R = Y.
-```
-
-Goal: `q:test(R)`. Actual: `YCHR-40002 Unbound variable 'Y'`. The
-asymmetry between `is` and `=` for body-introduced variables is not
-documented anywhere.
-
 ## `term(...)` quoting produces spurious YCHR-20101 warnings
 
 `docs/reference/language.md` §The `term/1` quoting form documents
