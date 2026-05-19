@@ -1090,7 +1090,8 @@ being evaluated to @2@.
 
 Why 'extractSymbolTable' lives in 'YCHR.Desugar' rather than here: the
 constraint-type indices it produces are needed both by this module and
-by 'YCHR.Compile.compile', but they are derivable purely from the
-desugared program's rule heads. Computing them in the desugarer keeps
-the compilation pipeline single-pass over the desugared AST.
+by 'YCHR.Compile.compile', but they are derivable from the desugared
+program's rule heads together with its 'constraintTypes' map.
+Computing them in the desugarer keeps the compilation pipeline
+single-pass over the desugared AST.
 --------------------------------------------------------------------------- -}

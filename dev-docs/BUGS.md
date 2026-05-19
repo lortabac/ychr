@@ -7,26 +7,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 For terse, fix-shaped formatting, see `SCHEME_BACKEND_GAPS.md`. Remove
 entries from this file when the underlying bug is fixed.
 
-## Declared-but-unreferenced constraints crash at goal time with a raw `user error`
-
-A constraint declared with `:- chr_constraint c/n.` but never
-mentioned in any rule cannot be told: the runtime fails with
-`Error: user error (Constraint not found: tell_M__cn)`, not a
-YCHR-NNNNN diagnostic. Adding any rule that mentions `c/n` (even
-`c(_) ==> true.`) is enough to make it tellable, so the compiler
-appears to emit `tell_c` only for constraints reached from rule sites.
-
-Repro:
-
-```chr
-:- module(rt, [p/1]).
-:- chr_constraint p/1.
-```
-
-Goal: `rt:p(1)`. Expected: silent success (no rule fires, constraint
-stored). Actual: `user error (Constraint not found: tell_rt__p1)`,
-exit 1.
-
 ## `=` in body cannot introduce a fresh variable (asymmetric with `is`)
 
 `docs/reference/language.md` §Tell-side evaluation lists "the

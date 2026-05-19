@@ -63,6 +63,7 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (mapAccumL)
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -159,15 +160,35 @@ desugarProgram rprog =
 
 -- | Scans a desugared program and builds the optimization map.
 -- It ensures that all qualified names get a sequential ID starting from 0.
+--
+-- Constraint names come from two sources:
+--
+--   1. Every head constraint and body-tell in every rule (rules are the
+--      primary source — they tell us which constraints participate in
+--      the ωr activation-dispatch loop).
+--   2. Every constraint declared via @:- chr_constraint@ that does not
+--      appear in any rule (unreferenced constraints still need a
+--      @tell_c@ procedure so the user can tell them at goal time without
+--      a raw \"Constraint not found\" error).
 extractSymbolTable :: D.Program -> SymbolTable
 extractSymbolTable prog =
   let rules = prog.rules
-      allIds =
+      ruleIds =
         Set.fromList
           [ qualifiedNameToIdentifier name arity
           | r <- rules,
             (name, arity) <- getRuleConstraints r
           ]
+      -- Constraints declared via :- chr_constraint that never appear in
+      -- any rule still need a tell_c and activate_c procedure. Without
+      -- a symbol-table entry the compiler skips them entirely and the
+      -- user hits a raw "user error (Constraint not found)" at goal time.
+      declaredIds =
+        Set.fromList
+          [ qualifiedNameToIdentifier qn (length types)
+          | (qn, types) <- Map.toList prog.constraintTypes
+          ]
+      allIds = ruleIds `Set.union` declaredIds
    in mkSymbolTable (zip (Set.toList allIds) (map ConstraintType [0 ..]))
 
 -- | Helper to find every constraint instance in a desugared rule,
@@ -812,11 +833,17 @@ Why there are three different fresh-variable prefixes:
 Each prefix is owned by a different phase and they cannot collide with
 each other or with user variables.
 
-Why 'extractSymbolTable' only scans rules and not functions: the symbol
-table is used by the VM for CHR constraint dispatch (array-indexed
-activation of rule-head occurrences). Functions are invoked by name
-through 'D.BodyFunctionCall', not through the constraint dispatch table,
-so they do not need numeric IDs.
+Why 'extractSymbolTable' scans both rules and constraintTypes: the symbol
+table assigns a numeric ID to every CHR constraint type so the VM can
+dispatch activations by array index. Rule heads provide the primary
+source (they determine which constraints participate in the &omega;r
+activation-dispatch loop). Functions are invoked by name through
+'D.BodyFunctionCall', not through the constraint dispatch table, so they
+do not need numeric IDs. Constraints declared via ':- chr_constraint'
+that never appear in any rule are also included from the
+'prog.constraintTypes' map; without a symbol-table entry the compiler
+generates no 'tell_c' procedure for them and the user gets a raw
+"Constraint not found" error at goal time.
 
 Why 'liftQueryLambdas' uses @\"__query\"@ as the module name: query
 goals don't belong to any user module, but lifted lambdas still need a

@@ -1,0 +1,2 @@
+:- module(rt, [p/1]).
+:- chr_constraint p/1.
