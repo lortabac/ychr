@@ -7,26 +7,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 For terse, fix-shaped formatting, see `SCHEME_BACKEND_GAPS.md`. Remove
 entries from this file when the underlying bug is fixed.
 
-## Prelude advertises `rem/2` but the host has no implementation
-
-`docs/reference/prelude.md` §Arithmetic lists `rem/2` (priority 400,
-yfx in the operator table). The prelude desugars `X rem Y` to
-`host:'rem'(X, Y)` (`libraries/prelude.chr:122`), but the Haskell
-runtime registers no `rem` host call.
-
-Repro:
-
-```chr
-:- module(q).
-:- chr_constraint test/1.
-test(R) <=> R is 10 rem 3.
-```
-
-Actual: `YCHR-60001 invokeHostCall: unknown host call rem`. Fix
-sketch: register `rem` alongside `div` and `mod` in the host-call
-table (`src/YCHR/Runtime/Registry.hs` or wherever the arithmetic
-primitives live).
-
 ## Zero-parameter lambda `fun() -> Body end` silently degrades to a compound term
 
 `docs/reference/syntax.md` §Expressions and `docs/reference/language.md`

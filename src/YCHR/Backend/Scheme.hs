@@ -406,7 +406,7 @@ hostCallMap =
   Map.fromList
     [ ("div", "%idiv"),
       ("mod", "%imod"),
-      ("rem", "mod0"),
+      ("rem", "%irem"),
       ("=<", "<="),
       ("==", "equal?/chr"),
       ("float", "flonum?"),
@@ -519,7 +519,6 @@ schemeBuiltins =
     "/",
     "div",
     "mod",
-    "mod0",
     "<",
     ">",
     ">=",

@@ -25,7 +25,7 @@
     %term-variables %compound-to-list %list-to-compound
     %read-term-from-string
     %int-to-float %float-to-int
-    %idiv %imod
+    %idiv %imod %irem
     %copy-term
     %nil %cons
     ;; Session initialization
@@ -85,6 +85,13 @@
   ;;; negative infinity.
   (define (%idiv n d) (exact (floor (/ n d))))
   (define (%imod n d) (- n (* (%idiv n d) d)))
+
+  ;;; Truncated remainder, matching Haskell `rem`: the result takes
+  ;;; the sign of the dividend. r6rs `mod0` is balanced (result in
+  ;;; [-|d|/2, |d|/2)), and the Scheme `remainder` builtin is not
+  ;;; visible from `(rnrs)` inside a library in Guile, so we compute
+  ;;; it explicitly from `truncate`.
+  (define (%irem n d) (- n (* (exact (truncate (/ n d))) d)))
 
   ;;; Groundness check
   (define (%ground? v)
