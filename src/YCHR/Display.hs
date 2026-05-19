@@ -242,6 +242,7 @@ renameWarningCode (DataConstructorArityMismatch _ _) = ErrorCode 20102
 -- | 3xxxx — desugar phase
 desugarErrorCode :: DesugarError -> ErrorCode
 desugarErrorCode (UnexpectedBodyExpr _) = ErrorCode 30001
+desugarErrorCode (NonBooleanGuard _) = ErrorCode 30002
 
 -- | 4xxxx — compile phase
 compileErrorCode :: CompileError -> ErrorCode
@@ -648,6 +649,14 @@ desugarErrorMsg (UnexpectedBodyExpr e) =
     ("This expression is not valid in a rule body: " ++ prettyTermSrc (R.exprToTerm e))
     ( "rule bodies may contain constraints, function calls,"
         ++ " unifications (=), 'is' expressions, and 'true'"
+    )
+desugarErrorMsg (NonBooleanGuard e) =
+  withHint
+    ( "This expression cannot evaluate to a boolean and is not valid as a guard: "
+        ++ prettyTermSrc (R.exprToTerm e)
+    )
+    ( "guards must be function calls, boolean-typed variables,"
+        ++ " true/false, or a host call returning a boolean"
     )
 
 instance Display (Diagnostic CompileError) where

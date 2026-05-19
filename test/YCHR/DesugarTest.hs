@@ -207,13 +207,13 @@ hnfTests =
                 `defining` [ Rule
                                Nothing
                                (noAnnP (Simplification [qcon "M" "leq" [var "X", var "X"]]))
-                               (noAnnP [term "gt" [var "X", IntTerm 0]])
+                               (noAnnP [hostCall "gt" [var "X", IntTerm 0]])
                                (noAnnP [atom "true"])
                            ]
         rule <- singleRule [m]
         getNode rule.guard
           @?= [ D.GuardEqual (R.VarExpr "X") (R.VarExpr "_hnf_0"),
-                D.GuardExpr (R.CtorExpr (Unqualified "gt") [R.VarExpr "X", R.IntExpr 0])
+                D.GuardExpr (R.HostExpr "gt" [R.VarExpr "X", R.IntExpr 0])
               ],
       testCase "wildcard passes through HNF unchanged" $ do
         let m = simpleModule (Simplification [qcon "M" "foo" [wildcard]])
@@ -252,14 +252,14 @@ guardTests :: TestTree
 guardTests =
   testGroup
     "guard-classification"
-    [ testCase "== becomes GuardExpr" $ do
+    [ testCase "host call becomes GuardExpr" $ do
         let m =
               module' "M"
                 `defining` [ Rule
                                Nothing
                                (noAnnP (Simplification [leqQual]))
                                ( noAnnP
-                                   [ term "==" [var "X", var "Y"]
+                                   [ hostCall "gt" [var "X", IntTerm 0]
                                    ]
                                )
                                (noAnnP [atom "true"])
@@ -267,30 +267,8 @@ guardTests =
         rule <- singleRule [m]
         getNode rule.guard
           @?= [ D.GuardExpr
-                  ( R.CtorExpr
-                      (Unqualified "==")
-                      [ R.VarExpr "X",
-                        R.VarExpr "Y"
-                      ]
-                  )
-              ],
-      testCase "host call becomes GuardExpr" $ do
-        let m =
-              module' "M"
-                `defining` [ Rule
-                               Nothing
-                               (noAnnP (Simplification [leqQual]))
-                               ( noAnnP
-                                   [ term "gt" [var "X", IntTerm 0]
-                                   ]
-                               )
-                               (noAnnP [atom "true"])
-                           ]
-        rule <- singleRule [m]
-        getNode rule.guard
-          @?= [ D.GuardExpr
-                  ( R.CtorExpr
-                      (Unqualified "gt")
+                  ( R.HostExpr
+                      "gt"
                       [ R.VarExpr "X",
                         R.IntExpr 0
                       ]
@@ -475,38 +453,73 @@ errorTests =
           Right prog -> case prog.rules of
             (rule : _) -> getNode rule.guard @?= [D.GuardExpr (R.VarExpr "X")]
             [] -> assertFailure "expected at least 1 rule",
-      testCase "bare integer in guard becomes GuardExpr" $ do
-        let goal = int 42
+      testCase "bare integer in guard produces NonBooleanGuard" $ do
+        let badExpr = R.IntExpr 42
             m =
               module' "M"
                 `defining` [ Rule
                                Nothing
                                (noAnnP (Simplification [leqQual]))
-                               (noAnnP [goal])
+                               (noAnnP [int 42])
                                (noAnnP [atom "true"])
                            ]
         rprog <- resolve [m]
         case desugarProgram rprog of
-          Left errs -> assertFailure ("unexpected errors: " ++ show errs)
-          Right prog -> case prog.rules of
-            (rule : _) -> getNode rule.guard @?= [D.GuardExpr (R.IntExpr 42)]
-            [] -> assertFailure "expected at least 1 rule",
-      testCase "non-true atom in guard becomes GuardExpr" $ do
-        let goal = atom "foo"
+          Left errs -> errs @?= [noDiag (AnnP (NonBooleanGuard badExpr) dummyLoc (Atom ""))]
+          Right _ -> assertFailure "expected Left",
+      testCase "bare float in guard produces NonBooleanGuard" $ do
+        let badExpr = R.FloatExpr 3.14
             m =
               module' "M"
                 `defining` [ Rule
                                Nothing
                                (noAnnP (Simplification [leqQual]))
-                               (noAnnP [goal])
+                               (noAnnP [float 3.14])
                                (noAnnP [atom "true"])
                            ]
         rprog <- resolve [m]
         case desugarProgram rprog of
-          Left errs -> assertFailure ("unexpected errors: " ++ show errs)
-          Right prog -> case prog.rules of
-            (rule : _) -> getNode rule.guard @?= [D.GuardExpr (R.AtomExpr "foo")]
-            [] -> assertFailure "expected at least 1 rule"
+          Left errs -> errs @?= [noDiag (AnnP (NonBooleanGuard badExpr) dummyLoc (Atom ""))]
+          Right _ -> assertFailure "expected Left",
+      testCase "bare string in guard produces NonBooleanGuard" $ do
+        let badExpr = R.TextExpr "hi"
+            m =
+              module' "M"
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP [text "hi"])
+                               (noAnnP [atom "true"])
+                           ]
+        rprog <- resolve [m]
+        case desugarProgram rprog of
+          Left errs -> errs @?= [noDiag (AnnP (NonBooleanGuard badExpr) dummyLoc (Atom ""))]
+          Right _ -> assertFailure "expected Left",
+      testCase "non-true/false atom in guard produces NonBooleanGuard" $ do
+        let badExpr = R.AtomExpr "foo"
+            m =
+              module' "M"
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP [atom "foo"])
+                               (noAnnP [atom "true"])
+                           ]
+        rprog <- resolve [m]
+        case desugarProgram rprog of
+          Left errs -> errs @?= [noDiag (AnnP (NonBooleanGuard badExpr) dummyLoc (Atom ""))]
+          Right _ -> assertFailure "expected Left",
+      testCase "atom false becomes GuardExpr" $ do
+        let m =
+              module' "M"
+                `defining` [ Rule
+                               Nothing
+                               (noAnnP (Simplification [leqQual]))
+                               (noAnnP [atom "false"])
+                               (noAnnP [atom "true"])
+                           ]
+        rule <- singleRule [m]
+        getNode rule.guard @?= [D.GuardExpr (R.AtomExpr "false")]
     ]
 
 --------------------------------------------------------------------------------

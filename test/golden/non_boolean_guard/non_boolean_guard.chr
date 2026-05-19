@@ -1,0 +1,4 @@
+:- module(q).
+:- chr_constraint test/2.
+test(X, R) <=> X = 5 | R = 1.
+test(_, R) <=> R = 0.

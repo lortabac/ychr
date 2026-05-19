@@ -77,6 +77,7 @@ import YCHR.Types
 
 data DesugarError
   = UnexpectedBodyExpr R.Expr
+  | NonBooleanGuard R.Expr
   deriving (Eq, Show)
 
 -- | Prefix for fresh variables introduced by the Head Normal Form
@@ -210,7 +211,7 @@ desugarRule :: R.Rule -> Writer [Diagnostic DesugarError] D.Rule
 desugarRule r = do
   let ruleLabel = fmap (\ann -> "rule " <> ann.node) r.name
   ruleBody <- desugarBodyGoals ruleLabel r.body.sourceLoc r.body.parsed r.body.node
-  userGuards <- traverse (desugarGuard r.guard.sourceLoc) r.guard.node
+  userGuards <- traverse (desugarGuard r.guard.sourceLoc r.guard.parsed) r.guard.node
   let (rawKept, rawRemoved) = flattenHeadKind r.head.node
       (guards, normalizedHead) = normalizeHead rawKept rawRemoved
   pure
@@ -388,7 +389,7 @@ desugarEquation' eq = do
   let initState = HnfState 0 Set.empty []
       (st, normalizedArgs) = mapAccumL normalizeArg initState eq.args
       guards = reverse st.guards
-  userGuards <- traverse (desugarGuard eq.guard.sourceLoc) eq.guard.node
+  userGuards <- traverse (desugarGuard eq.guard.sourceLoc eq.guard.parsed) eq.guard.node
   pure
     D.Equation
       { params = normalizedArgs,
@@ -398,10 +399,41 @@ desugarEquation' eq = do
 
 -- | Classify a resolved guard expression into a 'D.Guard'.
 --
--- Every expression is accepted as a 'D.GuardExpr'. Type errors (e.g. a
--- non-boolean guard) are deferred to a future typechecker.
-desugarGuard :: P.SourceLoc -> R.Expr -> Writer [Diagnostic DesugarError] D.Guard
-desugarGuard _ e = pure $ D.GuardExpr e
+-- Expressions that structurally cannot evaluate to a boolean
+-- (non-boolean literals, data constructor applications other than
+-- @prelude:true@/@prelude:false@, function references, lambdas,
+-- wildcards) are rejected with 'NonBooleanGuard'. This catches
+-- categorical bugs like writing @=@ (a data constructor application)
+-- or a numeric literal in guard position at desugar time, independent
+-- of whether the optional typechecker runs.
+desugarGuard ::
+  P.SourceLoc ->
+  PExpr ->
+  R.Expr ->
+  Writer [Diagnostic DesugarError] D.Guard
+desugarGuard loc origin e
+  | guardExprIsAllowed e = pure (D.GuardExpr e)
+  | otherwise = do
+      tell [Diagnostic Nothing (AnnP (NonBooleanGuard e) loc origin)]
+      pure (D.GuardExpr e)
+
+-- | Predicate: can this expression plausibly evaluate to a boolean?
+-- Variables, calls, dynamic dispatch, host calls, the bare atoms
+-- @true@/@false@, and the canonicalized @prelude:true@/@prelude:false@
+-- constructors are accepted. Every other atom is rejected: an
+-- unqualified atom that is neither @true@ nor @false@ cannot possibly
+-- evaluate to a boolean.
+guardExprIsAllowed :: R.Expr -> Bool
+guardExprIsAllowed e = case e of
+  R.VarExpr {} -> True
+  R.AtomExpr "true" -> True
+  R.AtomExpr "false" -> True
+  R.CallExpr {} -> True
+  R.ApplyExpr {} -> True
+  R.HostExpr {} -> True
+  R.CtorExpr (Qualified "prelude" "true") [] -> True
+  R.CtorExpr (Qualified "prelude" "false") [] -> True
+  _ -> False
 
 -- | Desugar a list of query goal expressions into 'BodyGoal's.
 -- Returns 'Left' if any desugaring errors occur.

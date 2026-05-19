@@ -7,29 +7,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 For terse, fix-shaped formatting, see `SCHEME_BACKEND_GAPS.md`. Remove
 entries from this file when the underlying bug is fixed.
 
-## `=` in guard position type-checks but crashes at runtime
-
-`dev-docs/PROJECT.md` ("Guards use `Equal`, bodies use `Unify`") and
-`docs/reference/type-system.md` §8 (guard term type must be consistent
-with `prelude:bool`) jointly imply that `=` in guard position is a
-static error. The check passes silently today; the program crashes
-at goal time with `YCHR-60001 BFromVal: expected boolean`, with no
-hint that the user wrote `=` where `==` was expected. The same hole
-exists for any host function with `any` return type used in guard
-position.
-
-Repro:
-
-```chr
-:- module(q).
-:- chr_constraint test/2.
-test(X, R) <=> X = 5 | R = 1.
-test(_, R) <=> R = 0.
-```
-
-Goal: `q:test(5, R)`. Expected: static rejection at `ychr check`.
-Actual: silent compile + runtime crash.
-
 ## Prelude advertises `rem/2` but the host has no implementation
 
 `docs/reference/prelude.md` §Arithmetic lists `rem/2` (priority 400,
