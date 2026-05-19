@@ -166,6 +166,34 @@ would close the first; an opaque `IdExpr`/`ValExpr` constructor that
 can only be made by the binder would close the second; a typed
 `HostCallRef` issued by the registry would close the third.
 
+### `R.LambdaExpr` survives lambda lifting — `src/YCHR/Run.hs:556`, `src/YCHR/Compile.hs:552`, `src/YCHR/Backend/SchemeDriver.hs:120`
+
+```haskell
+-- Run.hs
+evalNestedExpr (R.LambdaExpr _ _) =
+  error "Run.evalNestedExpr: LambdaExpr survived lambda lifting"
+-- Compile.hs
+R.LambdaExpr {} ->
+  error "Compile.compileExpr: LambdaExpr survived lambda lifting"
+-- SchemeDriver.hs (goal-argument path)
+exprToScheme (R.LambdaExpr _ _) =
+  error
+    "SchemeDriver.exprToScheme: lambdas in goal arguments \
+    \are not supported in the Scheme driver"
+```
+
+`Desugar.liftAllLambdas` is documented (see the `LambdaExpr` haddock in
+`src/YCHR/Resolved.hs`) to rewrite every `R.LambdaExpr` into a
+`__closure`-headed `R.CtorExpr` before Compile/Run run. The IR type
+still carries the constructor, so each consumer keeps a defensive
+`error`. A separate post-lifting expression type (or a phase index,
+e.g. `Expr 'PreLift` / `Expr 'PostLift`) with no `LambdaExpr`
+constructor would turn all three runtime crashes into compile errors.
+The Scheme driver site is a slightly different concern — goal-argument
+expressions never reach `liftAllLambdas`, so today the driver gives a
+gap message rather than a true panic; the same type-level fix closes
+it by making "lambdas in goal arguments" representable separately.
+
 ### `ConstraintType (-1)` placeholder — `src/YCHR/Compile/Occurrences.hs:171`
 
 ```haskell
