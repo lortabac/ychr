@@ -588,8 +588,15 @@ renameCon ctx loc origin (Constraint cname cargs) = do
 --   is resolved, but unknown names are /tolerated/ (they may be data
 --   constructors like @.@ for lists). Unresolved names trigger a
 --   data-constructor warning.
+--
+-- * 'NoResolveQuoted' — inside a @term(...)@ body. Same name policy as
+--   'NoResolve' (functors stay unqualified, declared data constructors
+--   still get canonicalized to @Mod:name@), but the undeclared-
+--   constructor warning is suppressed because the body is intentionally
+--   opaque (see the language reference §The @term/1@ quoting form).
 data ResolveMode
   = NoResolve
+  | NoResolveQuoted
   | ResolveTop
   | ResolveAll
   deriving (Eq)
@@ -601,10 +608,20 @@ errorOnUnknown :: ResolveMode -> Bool
 errorOnUnknown ResolveTop = True
 errorOnUnknown _ = False
 
+-- | Whether the current position evaluates expressions (so the syntactic
+-- special cases for @is@, lambdas, and @fun name/arity@ apply). Returns
+-- 'False' for both pattern positions ('NoResolve') and quoted bodies
+-- ('NoResolveQuoted'), where these forms must remain literal compound
+-- terms instead of being interpreted.
+isResolving :: ResolveMode -> Bool
+isResolving ResolveTop = True
+isResolving ResolveAll = True
+isResolving _ = False
+
 renameTerm :: RenameCtx -> SourceLoc -> PExpr -> ResolveMode -> Term -> Rename Term
 renameTerm ctx loc origin mode t = case t of
   -- Special case: @is@ LHS is a pattern (no resolution), RHS is an expression.
-  CompoundTerm (Unqualified "is") [lhs, rhs] | mode /= NoResolve -> do
+  CompoundTerm (Unqualified "is") [lhs, rhs] | isResolving mode -> do
     renamedLhs <- renameTerm ctx loc origin NoResolve lhs
     renamedRhs <- renameTerm ctx loc origin ResolveAll rhs
     pure (CompoundTerm (Unqualified "is") [renamedLhs, renamedRhs])
@@ -614,7 +631,7 @@ renameTerm ctx loc origin mode t = case t of
     (Unqualified "->")
     [ CompoundTerm (Unqualified "fun") params,
       body
-      ] | mode /= NoResolve -> do
+      ] | isResolving mode -> do
       renamedBody <- renameTerm ctx loc origin ResolveAll body
       pure
         ( CompoundTerm
@@ -623,12 +640,16 @@ renameTerm ctx loc origin mode t = case t of
               renamedBody
             ]
         )
-  -- Quoting: @term(X)@ suppresses resolution of functor names inside the
-  -- argument so the surface-level term structure is preserved.  Variables
-  -- are still renamed (they need runtime resolution), but compound-term
-  -- heads stay unqualified.
-  CompoundTerm (Unqualified "term") [arg] | mode /= NoResolve -> do
-    renamedArg <- renameTerm ctx loc origin NoResolve arg
+  -- Quoting: @term(X)@ keeps its argument opaque. Functor names inside
+  -- stay unqualified, declared data constructors are silently
+  -- canonicalized, and undeclared-data-constructor warnings are
+  -- suppressed because the body is intentionally not subject to those
+  -- checks (see docs/reference/language.md §The @term/1@ quoting form).
+  -- Fires in any surrounding mode so a nested @term(...)@ behind a
+  -- 'NoResolve' parent (e.g. a body-position constraint argument) is
+  -- also covered.
+  CompoundTerm (Unqualified "term") [arg] -> do
+    renamedArg <- renameTerm ctx loc origin NoResolveQuoted arg
     pure (CompoundTerm (Unqualified "term") [renamedArg])
   -- Function reference: @fun name/arity@. Resolve the function name,
   -- then strip the @fun@ wrapper so downstream passes see bare @name/arity@.
@@ -639,7 +660,7 @@ renameTerm ctx loc origin mode t = case t of
         [ AtomTerm fname,
           IntTerm farity
           ]
-      ] | mode /= NoResolve -> do
+      ] | isResolving mode -> do
       resolved <- resolveName ResolveAll ctx loc origin (Unqualified fname) farity
       pure
         ( CompoundTerm
@@ -649,6 +670,7 @@ renameTerm ctx loc origin mode t = case t of
   CompoundTerm name args -> do
     let childMode = case mode of
           NoResolve -> NoResolve
+          NoResolveQuoted -> NoResolveQuoted
           ResolveTop -> NoResolve
           ResolveAll -> ResolveAll
     renamedArgs <- traverse (renameTerm ctx loc origin childMode) args
@@ -666,6 +688,8 @@ renameTerm ctx loc origin mode t = case t of
             | otherwise -> pure ()
           _ -> pure ()
         pure (canonicalizeData ctx name (length args))
+      NoResolveQuoted ->
+        pure (canonicalizeData ctx name (length args))
       _ -> do
         resolved <- resolveName mode ctx loc origin name (length args)
         pure $ case resolved of
@@ -681,6 +705,8 @@ renameTerm ctx loc origin mode t = case t of
     resolved <- case mode of
       NoResolve -> do
         warnUnknownDataCon ctx.dataConEnv loc origin n 0
+        pure (Unqualified n)
+      NoResolveQuoted ->
         pure (Unqualified n)
       _ -> resolveName ResolveAll ctx loc origin (Unqualified n) 0
     case resolved of

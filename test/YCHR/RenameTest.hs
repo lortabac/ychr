@@ -770,6 +770,69 @@ warningTests =
                 `defining` [[term "c" [term "unknown" [var "X"]]] <=> [atom "true"]]
         ws <- warningsOf [m]
         ws @?= [noDiag (AnnP (UndeclaredDataConstructor "unknown") dummyLoc (Atom ""))],
+      testCase "no warning inside term(...) quoting in body position" $ do
+        -- Regression for the BUGS.md case 'store(term(plus(X, 3)))': the
+        -- term/1 quoting form should keep its argument opaque, so neither
+        -- 'term' itself nor any undeclared functor inside should produce
+        -- an 'UndeclaredDataConstructor' warning.
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [term "c" [term "term" [term "plus" [var "X", int 3]]]]
+                           ]
+        ws <- warningsOf [m]
+        ws @?= [],
+      testCase "no warning inside term(...) quoting in guard position" $ do
+        -- The quoting form must also stay opaque in expression-position
+        -- contexts (guards, is-RHS), where the surrounding mode is
+        -- 'ResolveAll' rather than 'NoResolve'.
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [atom "true"]
+                               |- [term "term" [term "plus" [var "X", int 3]]]
+                           ]
+        ws <- warningsOf [m]
+        ws @?= [],
+      testCase "no warning inside nested term(term(...)) quoting" $ do
+        -- Quoting nests: the inner 'term(...)' must also fire the
+        -- special case (childMode propagates 'NoResolveQuoted'), so no
+        -- warning is emitted for the inner functor either.
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [ term
+                                       "c"
+                                       [ term
+                                           "term"
+                                           [term "term" [term "plus" [var "X", int 3]]]
+                                       ]
+                                   ]
+                           ]
+        ws <- warningsOf [m]
+        ws @?= [],
+      testCase "syntactic forms stay literal inside term(...) quoting" $ do
+        -- 'is', lambdas, and 'fun name/arity' references are interpreted
+        -- only in evaluating positions ('isResolving'). Inside a quoted
+        -- body they must remain literal compound terms — no warning for
+        -- their undeclared inner functors either.
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [ term
+                                       "c"
+                                       [ term
+                                           "term"
+                                           [term "is" [var "X", term "foo" [int 1]]]
+                                       ]
+                                   ]
+                           ]
+        ws <- warningsOf [m]
+        ws @?= [],
       testCase "exporting undeclared type produces error" $ do
         let m = (module' "M") {exports = Just (noAnnP [TypeExportDecl "tree" 0 Nothing])}
         renameProgram [m]

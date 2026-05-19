@@ -7,36 +7,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 For terse, fix-shaped formatting, see `SCHEME_BACKEND_GAPS.md`. Remove
 entries from this file when the underlying bug is fixed.
 
-## `term(...)` quoting produces spurious YCHR-20101 warnings
-
-`docs/reference/language.md` §The `term/1` quoting form documents
-`term` as a reserved keyword and the quoted body as a "surface term"
-(opaque data, not subject to constructor-undeclared checks). Today
-both `term` itself and any non-declared functor inside the quoting
-form trigger `YCHR-20101 Undeclared data constructor ...`, which
-turns into hard `--Werror` failures on any program that uses
-`term(...)`.
-
-Repro:
-
-```chr
-:- module(q).
-:- chr_constraint store/1, ask/1, go/2.
-store(X), ask(R) <=> R = X.
-go(X, R) <=> store(term(plus(X, 3))), ask(R).
-```
-
-Output includes:
-
-```
-YCHR-20101 Undeclared data constructor 'plus'
-YCHR-20101 Undeclared data constructor 'term'
-```
-
-The resolver should treat `term/1` as the wired-in quoting form (the
-same special case that underwrites YCHR-16003) and should not walk
-into a `term(...)` body looking for constructor declarations.
-
 ## `=` in guard position type-checks but crashes at runtime
 
 `dev-docs/PROJECT.md` ("Guards use `Equal`, bodies use `Unify`") and
