@@ -321,7 +321,8 @@ result(R) <=> R is apply(fun(X) -> X + 1 end, 5).
 Lambda parameters are restricted to variables and wildcards. Pattern
 matching on lambda arguments is not supported; if you need pattern
 dispatch, use a named function declared with `:- function` and
-multiple equations.
+multiple equations. A lambda must declare at least one parameter;
+use `:- function` for a no-arg helper.
 
 Lambdas are first-class values: they can be passed as arguments,
 returned from functions, and called via the prelude's `call/N`. They

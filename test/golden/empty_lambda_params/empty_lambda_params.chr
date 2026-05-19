@@ -1,0 +1,2 @@
+:- chr_constraint test/1.
+test(R) <=> R = fun() -> 42 end.

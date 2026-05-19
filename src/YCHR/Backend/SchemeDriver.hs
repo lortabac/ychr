@@ -13,6 +13,7 @@ module YCHR.Backend.SchemeDriver
 where
 
 import Data.List (nub, sort)
+import Data.List.NonEmpty qualified as NE
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Backend.Scheme (compileSymbol)
@@ -163,7 +164,7 @@ exprVars (R.CallExpr _ args) = concatMap exprVars args
 exprVars (R.ApplyExpr f args) = exprVars f ++ concatMap exprVars args
 exprVars (R.HostExpr _ args) = concatMap exprVars args
 exprVars (R.LambdaExpr params body) =
-  filter (`notElem` [v | HeadVar v <- params]) (exprVars body)
+  filter (`notElem` [v | HeadVar v <- NE.toList params]) (exprVars body)
 exprVars _ = []
 
 -- | Generate display statements for one variable binding.

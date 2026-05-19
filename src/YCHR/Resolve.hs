@@ -21,6 +21,7 @@ where
 
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (nub)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -113,6 +114,13 @@ data ResolveError
     -- are rejected here so the resolved AST guarantees well-formed
     -- 'R.LambdaExpr' values.
     LambdaParamError Term
+  | -- | A lambda was written with an empty parameter list
+    -- (@fun() -> Body end@). Lambdas must take at least one
+    -- parameter; users who want a no-arg helper should declare a
+    -- named function via @:- function@. The 'R.LambdaExpr' parameter
+    -- list is 'NonEmpty', so the resolver substitutes a single
+    -- wildcard for recovery.
+    EmptyLambdaParams
   deriving (Eq, Show)
 
 -- | Flatten modules into a single resolved program.
@@ -1054,13 +1062,21 @@ termToExpr vis loc origin = go
         pure (R.FunRefExpr (parseFlatName flatName) arity)
       -- Lambda 'fun(P1..Pn) -> body'. Params are patterns; invalid
       -- params get reported here and replaced with 'HeadWildcard' so
-      -- traversal can keep going.
+      -- traversal can keep going. An empty parameter list is rejected
+      -- here ('EmptyLambdaParams', YCHR-16018); we substitute a single
+      -- wildcard so the resulting 'R.LambdaExpr' satisfies the
+      -- 'NonEmpty' invariant and downstream stages can continue.
       CompoundTerm
         (Unqualified "->")
         [CompoundTerm (Unqualified "fun") params, body] -> do
-          hargs <- traverse classifyParam params
           body' <- go body
-          pure (R.LambdaExpr hargs body')
+          case params of
+            [] -> do
+              tell [noDiag (P.AnnP EmptyLambdaParams loc origin)]
+              pure (R.LambdaExpr (HeadWildcard :| []) body')
+            p : ps -> do
+              hargs <- traverse classifyParam (p :| ps)
+              pure (R.LambdaExpr hargs body')
       -- 'term(arg)' — quoting suppresses evaluation of the subtree;
       -- every compound inside is a data constructor.
       CompoundTerm (Unqualified "term") [arg] ->

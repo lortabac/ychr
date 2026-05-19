@@ -63,6 +63,7 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (mapAccumL)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -117,7 +118,7 @@ quoteExpr (R.HostExpr f args) = R.HostExpr f (map quoteExpr args)
 quoteExpr (R.LambdaExpr params body) =
   R.CtorExpr
     (Unqualified "->")
-    [ R.CtorExpr (Unqualified "fun") (map paramAtom params),
+    [ R.CtorExpr (Unqualified "fun") (map paramAtom (NE.toList params)),
       quoteExpr body
     ]
   where
@@ -532,7 +533,7 @@ exprVars (R.ApplyExpr f args) =
   exprVars f `Set.union` Set.unions (map exprVars args)
 exprVars (R.HostExpr _ args) = Set.unions (map exprVars args)
 exprVars (R.LambdaExpr params body) =
-  exprVars body `Set.difference` Set.fromList [v | HeadVar v <- params]
+  exprVars body `Set.difference` Set.fromList [v | HeadVar v <- NE.toList params]
 exprVars (R.FunRefExpr _ _) = Set.empty
 exprVars (R.IntExpr _) = Set.empty
 exprVars (R.FloatExpr _) = Set.empty
@@ -564,7 +565,8 @@ liftExpr ::
   (LiftState, R.Expr)
 liftExpr modName scope parentRequiring st0 expr = case expr of
   R.LambdaExpr params body ->
-    let paramVarNames = Set.fromList [v | HeadVar v <- params]
+    let paramsList = NE.toList params
+        paramVarNames = Set.fromList [v | HeadVar v <- paramsList]
         bodyFree = exprVars body
         freeVars =
           Set.toAscList
@@ -578,7 +580,7 @@ liftExpr modName scope parentRequiring st0 expr = case expr of
         idx = st1.counter
         lambdaName = lambdaPrefix <> T.pack (show idx)
         qualName = QualifiedName modName lambdaName
-        allParams = map HeadVar freeVars ++ params
+        allParams = map HeadVar freeVars ++ paramsList
         func =
           D.Function
             { name = qualName,

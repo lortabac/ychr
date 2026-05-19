@@ -35,6 +35,7 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, put)
 import Data.List qualified as List
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -1245,7 +1246,7 @@ typeOfExpr cctx e = case e of
   R.LambdaExpr params body -> do
     paramTypeVars <- traverse (typeOfHeadArg cctx) params
     bodyType <- typeOfExpr cctx body
-    pure (VTerm (tcAtom "fun") [valueList paramTypeVars, bodyType])
+    pure (VTerm (tcAtom "fun") [valueList (NE.toList paramTypeVars), bodyType])
   where
     typeOfHeadArg c (HeadVar v) = chrOp (varType c v)
     typeOfHeadArg _ HeadWildcard = chrOp newVar
@@ -1341,7 +1342,7 @@ collectVarsInExpr (R.ApplyExpr f args) =
   collectVarsInExpr f <> foldMap collectVarsInExpr args
 collectVarsInExpr (R.HostExpr _ args) = foldMap collectVarsInExpr args
 collectVarsInExpr (R.LambdaExpr params body) =
-  Set.fromList [v | HeadVar v <- params] <> collectVarsInExpr body
+  Set.fromList [v | HeadVar v <- NE.toList params] <> collectVarsInExpr body
 collectVarsInExpr _ = Set.empty
 
 -- ---------------------------------------------------------------------------

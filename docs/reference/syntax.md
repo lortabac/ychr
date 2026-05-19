@@ -133,7 +133,7 @@ evaluates).
 | `M:name`, `M:name(A)` | Module-qualified reference. |
 | `host:name(A)` | Host-language call (see [language.md §Host calls](language.md#host-calls)). |
 | `term(E)` | Quote `E` as a data term (see [language.md §Tell-side evaluation](language.md#tell-side-evaluation)). |
-| `fun(X, Y) -> Body end` | Lambda (anonymous function). Parameters are variables or wildcards only. |
+| `fun(X, Y) -> Body end` | Lambda (anonymous function). Takes one or more parameters, each a variable or wildcard. |
 | `fun name/arity` | Function reference (first-class value). |
 | `'$call'(F, A1, A2)` | Wired-in dynamic-dispatch primitive. Prefer the prelude's typed `call/N` wrapper. |
 | `X is E`, `X = E`, `A == B` | Evaluation, unification (tell), structural equality (ask). |

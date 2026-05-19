@@ -220,6 +220,7 @@ resolveErrorCode (ExtendClassOnFunction _) = ErrorCode 16014
 resolveErrorCode (ExtendFunctionOnClass _) = ErrorCode 16015
 resolveErrorCode (ConstraintFunctionCollision _) = ErrorCode 16016
 resolveErrorCode (LambdaParamError _) = ErrorCode 16017
+resolveErrorCode EmptyLambdaParams = ErrorCode 16018
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 was previously used for OperatorInImportList; now reserved
@@ -496,6 +497,10 @@ resolveErrorMsg (LambdaParamError term) =
   withHint
     ("Invalid lambda parameter: " ++ prettyTermSrc term)
     "lambda parameters must be variables or the anonymous variable (_)"
+resolveErrorMsg EmptyLambdaParams =
+  withHint
+    "Lambda has no parameters"
+    "lambdas must declare at least one parameter; use ':- function' for a no-arg helper"
 resolveErrorMsg (ConstraintFunctionCollision name) =
   withHint
     ( "'"

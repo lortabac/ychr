@@ -7,29 +7,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 For terse, fix-shaped formatting, see `SCHEME_BACKEND_GAPS.md`. Remove
 entries from this file when the underlying bug is fixed.
 
-## Zero-parameter lambda `fun() -> Body end` silently degrades to a compound term
-
-`docs/reference/syntax.md` §Expressions and `docs/reference/language.md`
-§Lambdas say lambda parameters are "restricted to variables and
-wildcards" but do not forbid an empty parameter list. Today the parser
-silently re-interprets `fun() -> Body end` as the compound term
-`'->'(fun(), Body)`, then the resolver emits `YCHR-20101` warnings
-for both `fun` and `->`. The user ends up with a piece of data, not a
-callable thunk: `'$call'(F)` on it returns the unevaluated compound
-rather than `Body`.
-
-Repro:
-
-```chr
-:- module(q).
-:- chr_constraint test/1.
-test(R) <=> R = fun() -> 42 end.
-```
-
-Expected: either a clean parse-time rejection ("lambdas require at
-least one parameter") or a working thunk callable via `'$call'(F)`.
-Actual: degraded to compound + warnings; `R = fun() -> 42 end`.
-
 ## Qualified access bypasses the exporter's constructor allowlist
 
 `docs/reference/language.md` §Type and constructor exports promises

@@ -30,6 +30,8 @@ module YCHR.Resolved
   )
 where
 
+import Data.List.NonEmpty (NonEmpty)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Set (Set)
 import Data.Text (Text)
@@ -131,7 +133,10 @@ data FunctionEquation = FunctionEquation
 --     (the surface @fun name/arity@).
 --   * 'LambdaExpr' is an anonymous function value. It exists between
 --     resolution and the desugarer's lambda-lifting pass, after which
---     it is rewritten to a @__closure@-headed 'CtorExpr'.
+--     it is rewritten to a @__closure@-headed 'CtorExpr'. The
+--     parameter list is 'NonEmpty': the resolver rejects
+--     @fun() -> Body end@ with 'EmptyLambdaParams' (YCHR-16018) and
+--     downstream stages can rely on at least one parameter.
 --   * 'HostExpr' is a call into the host language
 --     (the surface @host:f(args)@).
 data Expr
@@ -145,7 +150,7 @@ data Expr
   | CallExpr QualifiedName [Expr]
   | ApplyExpr Expr [Expr]
   | FunRefExpr QualifiedName Int
-  | LambdaExpr [HeadArg] Expr
+  | LambdaExpr (NonEmpty HeadArg) Expr
   | HostExpr Text [Expr]
   deriving (Show, Eq)
 
@@ -185,6 +190,6 @@ exprToTerm (FunRefExpr qn arity) =
 exprToTerm (LambdaExpr params body) =
   CompoundTerm
     (Unqualified "->")
-    [ CompoundTerm (Unqualified "fun") (map headArgToTerm params),
+    [ CompoundTerm (Unqualified "fun") (map headArgToTerm (NE.toList params)),
       exprToTerm body
     ]
