@@ -233,6 +233,21 @@ termTests =
       testCase "wildcard in head" $
         headOf "c(_) <=> true."
           >>= (@?= Simplification [Constraint (Unqualified "c") [Wildcard]]),
+      testCase "underscore-prefixed variable in body" $
+        bodyOf "c(X) <=> _X." >>= (@?= [VarTerm "_X"]),
+      testCase "underscore-prefixed variable in head" $
+        headOf "c(_X) <=> true."
+          >>= (@?= Simplification [Constraint (Unqualified "c") [VarTerm "_X"]]),
+      testCase "underscore-prefixed variable as list tail" $
+        bodyOf "c <=> f([H | _Tail])."
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "f")
+                      [CompoundTerm (Unqualified ".") [VarTerm "H", VarTerm "_Tail"]]
+                  ]
+              ),
+      testCase "double-underscore variable" $
+        bodyOf "c <=> __Foo." >>= (@?= [VarTerm "__Foo"]),
       testCase "integer in body" $
         bodyOf "c <=> f(1)."
           >>= (@?= [CompoundTerm (Unqualified "f") [IntTerm 1]]),

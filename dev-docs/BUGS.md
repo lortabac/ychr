@@ -7,26 +7,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 For terse, fix-shaped formatting, see `SCHEME_BACKEND_GAPS.md`. Remove
 entries from this file when the underlying bug is fixed.
 
-## Underscore-prefixed variables (`_X`, `_Tail`) are rejected by the parser
-
-`docs/reference/syntax.md:28` states: "Variables start with an
-uppercase letter or underscore, then letters, digits, or underscores.
-The bare `_` is the wildcard." The expressions table at
-`docs/reference/syntax.md:130` lists `_Tail` as an example. Only the
-bare `_` is accepted today; any `_<id>` form is a parse error.
-
-Repro:
-
-```chr
-:- module(q).
-:- chr_constraint p/1.
-p(_X) <=> true.
-```
-
-Actual: `YCHR-50001 unexpected 'X'`. Fails uniformly in head patterns,
-body arguments, `term(...)` bodies, list tails (`[H | _Tail]`), and
-CLI goals (`-g 'q:p(_X)'`).
-
 ## Declared-but-unreferenced constraints crash at goal time with a raw `user error`
 
 A constraint declared with `:- chr_constraint c/n.` but never

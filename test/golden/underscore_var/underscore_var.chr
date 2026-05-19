@@ -1,0 +1,11 @@
+:- module(underscore_var, [head_use/2, list_tail/2, trivial/1]).
+:- chr_constraint head_use/2, list_tail/2, trivial/1.
+
+% _X in head position binds normally and is referenced in the body.
+head_use(_X, R) <=> R = _X.
+
+% _Tail in a list pattern is just an ordinary variable name.
+list_tail([_H | _Tail], R) <=> R = _Tail.
+
+% Repro from BUGS.md: parser must accept p(_X) <=> true.
+trivial(_X) <=> true.

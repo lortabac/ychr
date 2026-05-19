@@ -392,19 +392,19 @@ quotedAtomP = do
           anyChar
         ]
 
--- | Parse a variable (uppercase identifier).
-varP :: Parser PExpr
-varP = lexeme $ do
-  c <- upper
+-- | Parse a variable or the wildcard.
+--
+-- Variables start with an uppercase letter or an underscore, then
+-- letters, digits, or underscores. The bare @_@ is the wildcard;
+-- @_X@, @_Tail@, @__Foo@ are ordinary variables.
+varOrWildcardP :: Parser PExpr
+varOrWildcardP = lexeme $ do
+  c <- upper <|> char '_'
   rest <- many (alphaNum <|> char '_')
-  pure (Var (T.pack (c : rest)))
-
--- | Parse a wildcard: bare @_@ not followed by a word character.
-wildcardP :: Parser PExpr
-wildcardP = lexeme $ do
-  _ <- char '_'
-  notFollowedBy (alphaNum <|> char '_')
-  pure Wildcard
+  pure $
+    if c == '_' && null rest
+      then Wildcard
+      else Var (T.pack (c : rest))
 
 -- | Parse a number: try float first (requires decimal point), then integer.
 numberP :: Parser PExpr
@@ -522,8 +522,7 @@ atomicTermP :: OpTable -> Parser (Ann PExpr)
 atomicTermP table =
   withLoc $
     choice
-      [ wildcardP,
-        varP,
+      [ varOrWildcardP,
         try intP,
         stringP,
         listTermP table,
