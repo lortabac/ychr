@@ -1,0 +1,7 @@
+:- module(user, [test/1]).
+:- use_module(palette).
+:- chr_constraint test/1.
+
+% Bug repro from dev-docs/BUGS.md: qualified syntax `palette:green`
+% must not reach in and use a non-exported constructor.
+test(R) <=> R = palette:green.

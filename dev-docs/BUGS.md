@@ -6,37 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## Qualified access bypasses the exporter's constructor allowlist
-
-`docs/reference/language.md` §Type and constructor exports promises
-that a constructor not in the type's export allowlist is invisible to
-importers (the "only `red`" example, YCHR-20008 on violations).
-Qualified syntax `palette:green` reaches in and uses a non-exported
-constructor anyway. A second sub-finding: when an *import* list
-mentions a non-exported (but declared) constructor, the diagnostic
-says "constructor `green` is not declared on the type," which is
-wrong — it *is* declared, just not exported.
-
-Repro:
-
-```
-palette.chr:
-    :- module(palette, [type(col/0, [red])]).
-    :- chr_type col ---> red ; green ; blue.
-
-user.chr:
-    :- module(user).
-    :- use_module(palette).
-    :- chr_constraint test/1.
-    test(R) <=> R = palette:green.
-```
-
-Goal: `user:test(R)`. Actual: `R = palette:green()`, exit 0.
-Expected: rejection of the qualified reference (the allowlist should
-apply to qualified syntax too). Suspect site: constructor resolution
-in `src/YCHR/Resolve.hs` does not consult the per-type export
-allowlist when the reference is fully qualified.
-
 ## `bound_cycle` diagnostic duplicates the last vertex
 
 `docs/reference/type-system.md` §Errors documents `bound_cycle` as a

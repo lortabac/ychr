@@ -1,0 +1,5 @@
+:- module(undeclared_ctor_main, [go/0]).
+:- use_module(undeclared_ctor_lib, [type(col/0, [purple])]).
+:- chr_constraint go/0.
+
+go <=> true.

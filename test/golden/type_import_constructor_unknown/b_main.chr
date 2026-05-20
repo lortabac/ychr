@@ -4,5 +4,11 @@
 
 % `green` exists as a constructor of `col` in import_ctor_lib, but
 % the library's export list restricts visible constructors to `red`.
-% Asking for `green` here must fail with YCHR-20008.
+% Asking for `green` here must fail with YCHR-20011 (constructor
+% declared on the type but excluded by the exporter's allowlist,
+% observed at an import-list site) — distinct from YCHR-20008,
+% which fires only when the constructor is not declared at all (see
+% test/golden/type_import_constructor_undeclared/), and from
+% YCHR-20010, which is the same exclusion observed at a qualified
+% use-site (see test/golden/qualified_non_exported_constructor/).
 go <=> true.

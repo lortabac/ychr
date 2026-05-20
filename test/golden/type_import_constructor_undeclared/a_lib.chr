@@ -1,0 +1,8 @@
+:- module(undeclared_ctor_lib, [type(col/0)]).
+
+% The library exports every constructor of `col`. The importer below
+% lists a constructor (`purple`) that is not declared on `col` at all,
+% which must fail with YCHR-20008 (genuinely-undeclared constructor),
+% distinct from YCHR-20010 in
+% test/golden/type_import_constructor_unknown/ (declared but hidden).
+:- chr_type col ---> red ; green.

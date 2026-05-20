@@ -78,9 +78,16 @@ intersects with the exporter's allowlist:
 :- use_module(palette, [type(col/0, [red])]).
 ```
 
-If a constructor named in either list is not declared on the type (or,
-on the import side, is not in the exporter's allowlist), the program is
-rejected with `YCHR-20008`.
+If a constructor named in either list is not declared on the type, the
+program is rejected with `YCHR-20008`. On the import side, a constructor
+that is declared on the type but excluded by the exporter's allowlist is
+rejected with `YCHR-20011` (a separate code so users can distinguish
+"misspelled or unknown" from "declared but not visible").
+
+The allowlist also governs qualified references: writing `palette:green`
+in a rule, guard, or expression is rejected with `YCHR-20010` when
+`green` is declared on `col` but not in `palette`'s export allowlist.
+Bare and qualified syntax see the same view of the module.
 
 ## Constraints
 
@@ -250,6 +257,15 @@ become part of the resulting term value without erroring.
 In head and equation patterns `term(X)` is treated like any other
 compound — heads never evaluate, so the quoting form has no
 additional effect there.
+
+The body of `term(...)` is also opaque to module-visibility checks:
+qualified atoms inside are not validated against the per-module
+constructor allowlist or any other namespace, so the form is the
+supported way to construct synthetic qualified atoms (e.g. as
+type-tag values) when no corresponding exported declaration exists.
+Outside `term(...)`, a qualified reference `M:n` must resolve to a
+visible value-level identifier — function, constraint, or data
+constructor — in `M` (see §Type and constructor exports).
 
 ### Tell-time evaluation errors
 

@@ -1,0 +1,7 @@
+:- module(palette, [type(col/0, [red])]).
+
+% Only `red` is exported. `green` is declared on the type but excluded
+% from the module's export list, so cross-module references to it must
+% be rejected regardless of whether the user writes bare `green` or
+% the explicitly-qualified `palette:green`.
+:- chr_type col ---> red ; green ; blue.

@@ -234,6 +234,8 @@ renameErrorCode (UnknownOperatorImport _ _) = ErrorCode 20006
 renameErrorCode (UseModuleOutOfOrder _) = ErrorCode 20007
 renameErrorCode (UnknownExportedConstructor _ _ _ _) = ErrorCode 20008
 renameErrorCode (NotExportedByModule _ _ _) = ErrorCode 20009
+renameErrorCode (NonExportedConstructor _ _ _) = ErrorCode 20010
+renameErrorCode (ConstructorNotExported _ _ _ _) = ErrorCode 20011
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
@@ -615,6 +617,46 @@ renameErrorMsg (UnknownExportedConstructor modName tyName tyArity conName) =
     ++ "' listing constructor '"
     ++ T.unpack conName
     ++ "', but that constructor is not declared on the type"
+renameErrorMsg (NonExportedConstructor modName conName arity) =
+  withHint
+    ( "Module '"
+        ++ T.unpack modName
+        ++ "' does not export data constructor '"
+        ++ T.unpack conName
+        ++ "/"
+        ++ show arity
+        ++ "'"
+    )
+    ( "add '"
+        ++ T.unpack conName
+        ++ "' to the type's constructor export list in '"
+        ++ T.unpack modName
+        ++ "' (e.g. type(t/n, ["
+        ++ T.unpack conName
+        ++ ", ...]))"
+    )
+renameErrorMsg (ConstructorNotExported modName tyName tyArity conName) =
+  withHint
+    ( "Module '"
+        ++ T.unpack modName
+        ++ "' declares constructor '"
+        ++ T.unpack conName
+        ++ "' on type '"
+        ++ T.unpack tyName
+        ++ "/"
+        ++ show tyArity
+        ++ "' but does not export it"
+    )
+    ( "add '"
+        ++ T.unpack conName
+        ++ "' to the constructor export list of type '"
+        ++ T.unpack tyName
+        ++ "/"
+        ++ show tyArity
+        ++ "' in module '"
+        ++ T.unpack modName
+        ++ "'"
+    )
 
 instance Display (Diagnostic RenameWarning) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =

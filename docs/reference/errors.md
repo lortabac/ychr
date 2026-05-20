@@ -30,7 +30,9 @@ are stable across releases; user-facing messages may evolve.
 
 | Code | Phase | Meaning |
 |------|-------|---------|
-| `YCHR-20008` | Rename | A `type(t/n, [c, ...])` export or import entry names a constructor that the type does not declare (or, on the import side, that the source module does not export). Fix the typo, add the constructor to the type, or remove it from the list. |
+| `YCHR-20008` | Rename | A `type(t/n, [c, ...])` export or import entry names a constructor that the type does not declare. Fix the typo, add the constructor to the type, or remove it from the list. |
+| `YCHR-20010` | Rename | A qualified reference like `palette:green` names a data constructor that is declared on the type but excluded by the exporting module's allowlist. Add the constructor to the exporter's `type(t/n, [...])` list, or use a different one. |
+| `YCHR-20011` | Rename | A `use_module(palette, [type(col/0, [green])])` import lists a constructor that is declared on the type but excluded by the exporting module's allowlist. Same underlying condition as `YCHR-20010` but observed at the import site rather than at a use site. |
 
 ## See also
 

@@ -94,6 +94,18 @@ data RenameError
     -- that is not declared on type @t@. Carries the source module name,
     -- the type name, the type arity, and the offending constructor name.
     UnknownExportedConstructor Text Text Int Text
+  | -- | A qualified compound term @M:c/a@ names a data constructor that
+    -- @M@ declares but does not export (per the @type(t/n, [...])@
+    -- allowlist in @M@'s module header). Carries the source module
+    -- name, the constructor name, and the arity.
+    NonExportedConstructor Text Text Int
+  | -- | A @type(t/n, [c, ...])@ entry in a @use_module@ import list
+    -- names a constructor that @M@ declares on @t@ but does not export.
+    -- Distinct from 'UnknownExportedConstructor' (which fires when the
+    -- constructor is genuinely not declared). Carries the source module
+    -- name, the type name, the type arity, and the offending
+    -- constructor name.
+    ConstructorNotExported Text Text Int Text
   deriving (Eq, Show)
 
 data RenameWarning
@@ -145,6 +157,14 @@ data RenameCtx = RenameCtx
     exportEnv :: ExportEnv,
     dataConEnv :: DataConEnv,
     dataConProviders :: DataConProviders,
+    -- | All declared @(constructorName, arity)@ providers across the
+    -- program, /unfiltered/ by visibility. Used to disambiguate
+    -- diagnostics for qualified references: if a missing
+    -- @'Qualified' m n@ matches an entry whose providers include @m@,
+    -- the user named a real-but-hidden constructor and gets
+    -- 'NonExportedConstructor'; otherwise they get 'NotExportedByModule'
+    -- as before.
+    allDataConProviders :: DataConProviders,
     typeDeclEnv :: DeclEnv,
     typeExportEnv :: ExportEnv,
     -- | Operators exported by each module, keyed by module name. Used to
@@ -223,6 +243,22 @@ buildDataConProviders visible mods =
       dc <- td.constructors,
       Unqualified t <- [dc.conName],
       t `Set.member` visibleCons
+    ]
+
+-- | Like 'buildDataConProviders' but ignores the visibility map. The
+-- result lists every declared @(constructorName, arity)@ alongside the
+-- modules that declare it, regardless of export allowlists or import
+-- lists. Used to distinguish "declared but hidden" from "not declared
+-- at all" when emitting diagnostics for qualified references.
+buildAllDataConProviders :: [Module] -> DataConProviders
+buildAllDataConProviders mods =
+  Map.fromListWith
+    (++)
+    [ ((t, length dc.conArgs), [m.name])
+    | m <- mods,
+      Ann td _ <- m.typeDecls,
+      dc <- td.constructors,
+      Unqualified t <- [dc.conName]
     ]
 
 -- | Canonicalize a use-site data-constructor reference to its declared
@@ -329,6 +365,7 @@ renameProgram inputs mods =
       exportEnv0 = buildExportEnv mods
       typeDeclEnv0 = buildTypeDeclEnv mods
       typeExportEnv0 = buildTypeExportEnv mods
+      allCons = buildAllDataConProviders mods
       ctxFor m =
         let ctx0 =
               RenameCtx
@@ -336,6 +373,7 @@ renameProgram inputs mods =
                   exportEnv = exportEnv0,
                   dataConEnv = Map.empty,
                   dataConProviders = Map.empty,
+                  allDataConProviders = allCons,
                   typeDeclEnv = typeDeclEnv0,
                   typeExportEnv = typeExportEnv0,
                   operatorExports = inputs.operatorExports,
@@ -486,29 +524,41 @@ validateImportLists mods ctx =
 
     checkImportedCons _ _ _ _ _ Nothing = pure ()
     checkImportedCons mn loc origin n a (Just xs) =
-      let exported = exportedConstructors mn n a
+      let declared = declaredConstructorsOn mn n a
+          exported = filterByExporterAllowlist mn n a declared
        in traverse_
             ( \c ->
-                when (c `notElem` exported) $
-                  emitError
-                    (AnnP (UnknownExportedConstructor mn n a c) loc origin)
+                if c `notElem` declared
+                  then
+                    emitError
+                      (AnnP (UnknownExportedConstructor mn n a c) loc origin)
+                  else
+                    when (c `notElem` exported) $
+                      emitError
+                        (AnnP (ConstructorNotExported mn n a c) loc origin)
             )
             xs
 
-    -- Constructors of type @n/a@ that module @mn@ exports. Combines the
-    -- type's declared constructors with the exporter's optional
-    -- @type(...)@ allowlist.
-    exportedConstructors mn n a =
+    -- All constructors of type @n/a@ declared in module @mn@, ignoring
+    -- the module's export allowlist.
+    declaredConstructorsOn mn n a =
       case [m | m <- mods, m.name == mn] of
         (m : _) ->
-          let declared =
-                [ unqualifiedText dc.conName
-                | Ann td _ <- m.typeDecls,
-                  unqualifiedText td.name == n,
-                  length td.typeVars == a,
-                  dc <- td.constructors
-                ]
-              allowed = case m.exports of
+          [ unqualifiedText dc.conName
+          | Ann td _ <- m.typeDecls,
+            unqualifiedText td.name == n,
+            length td.typeVars == a,
+            dc <- td.constructors
+          ]
+        [] -> []
+
+    -- Intersect the supplied 'declared' list with @mn@'s optional
+    -- @type(...)@ allowlist (or pass through unchanged if @mn@ has no
+    -- export list, in which case everything declared is exported).
+    filterByExporterAllowlist mn n a declared =
+      case [m | m <- mods, m.name == mn] of
+        (m : _) ->
+          let allowed = case m.exports of
                 Nothing -> Nothing
                 Just (AnnP exports _ _) ->
                   case [acs | TypeExportDecl tn ta acs <- exports, tn == n, ta == a] of
@@ -686,9 +736,19 @@ renameTerm ctx loc origin mode t = case t of
             | null (visibleProviders ctx n (length args)) ->
                 warnUnknownDataCon ctx.dataConEnv loc origin n (length args)
             | otherwise -> pure ()
-          _ -> pure ()
+          -- Qualified references in pattern position (head args,
+          -- body-tell args) get the same visibility check as in
+          -- resolving positions; the parser can't tell a constructor,
+          -- a function/constraint, or a type-tag apart at the term
+          -- level, so any of those visibility leg passes.
+          Qualified m n -> validateQualified ctx loc origin m n (length args)
         pure (canonicalizeData ctx name (length args))
       NoResolveQuoted ->
+        -- Inside a 'term/1' quote the body is fully opaque: no
+        -- visibility checks fire and qualified atoms are kept
+        -- as-written. This is the supported escape hatch for
+        -- constructing arbitrary qualified atoms as data (e.g. type
+        -- tags inside the typechecker's CHR program).
         pure (canonicalizeData ctx name (length args))
       _ -> do
         resolved <- resolveName mode ctx loc origin name (length args)
@@ -756,15 +816,35 @@ resolveName mode ctx loc origin (Unqualified n) arity
         ms -> do
           emitError (AnnP (AmbiguousName n arity ms) loc origin)
           pure (Unqualified n)
--- "host"-qualified names are external calls; skip validation.
-resolveName _ _ _ _ (Qualified "host" n) _ = pure (Qualified "host" n)
-resolveName _ ctx loc origin (Qualified m n) arity
-  | m `elem` visibleProviders ctx n arity = pure (Qualified m n)
-  | otherwise = do
-      -- Qualified references have no data-constructor fallback, so the
-      -- visibility failure is always an error regardless of 'ResolveMode'.
+resolveName _ ctx loc origin name@(Qualified m n) arity = do
+  validateQualified ctx loc origin m n arity
+  pure name
+
+-- | Verify that a qualified reference @M:n/a@ is in scope as a
+-- /value-level/ identifier: function, constraint, or data
+-- constructor. Types are intentionally not accepted — they live in a
+-- separate namespace and cannot appear in value positions. Users who
+-- need a qualified atom as opaque data (e.g. the typechecker's
+-- type-name tags) must wrap it with @term/1@, which switches the
+-- renamer into 'NoResolveQuoted' mode and skips this check entirely.
+-- The @host@ pseudo-module is exempt (host calls are external).
+--
+-- For a miss, the diagnostic is constructor-flavored
+-- ('NonExportedConstructor', YCHR-20010) iff @M@ declares
+-- @(n, arity)@ as a constructor anywhere — i.e. the user named a
+-- real but hidden ctor. Otherwise we emit the existing generic
+-- 'NotExportedByModule' (YCHR-20009). Callers return the
+-- 'Qualified' name unchanged so traversal can continue.
+validateQualified ::
+  RenameCtx -> SourceLoc -> PExpr -> Text -> Text -> Int -> Rename ()
+validateQualified ctx loc origin m n arity
+  | m == "host" = pure ()
+  | m `elem` visibleProviders ctx n arity = pure ()
+  | m `elem` Map.findWithDefault [] (n, arity) ctx.dataConProviders = pure ()
+  | m `elem` Map.findWithDefault [] (n, arity) ctx.allDataConProviders =
+      emitError (AnnP (NonExportedConstructor m n arity) loc origin)
+  | otherwise =
       emitError (AnnP (NotExportedByModule m n arity) loc origin)
-      pure (Qualified m n)
 
 -- | All modules that can provide @(name, arity)@ to the current module:
 -- the current module itself if it declares the name, plus every imported
@@ -1058,6 +1138,7 @@ renameQueryTerms mods mode terms =
             exportEnv = buildExportEnv mods,
             dataConEnv = Map.empty,
             dataConProviders = Map.empty,
+            allDataConProviders = buildAllDataConProviders mods,
             typeDeclEnv = buildTypeDeclEnv mods,
             typeExportEnv = buildTypeExportEnv mods,
             operatorExports = Map.empty,

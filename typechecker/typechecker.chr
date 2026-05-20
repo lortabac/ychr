@@ -27,8 +27,13 @@
 % emitted by src/YCHR/TypeCheck.hs (encodeTypeExpr): base types are
 % 0-arity constructors, type constructors and function types are
 % compound terms. The first field of `tcon` is `any` because a type
-% constructor name may be either an atom (`bool`) or a `:(M, N)`
-% qualified-name compound (`prelude:bool`).
+% constructor name may be either an atom (`bool`) or a qualified
+% atom (e.g. `prelude:bool`). Qualified type names that originate in
+% this CHR source — as opposed to being passed in by the Haskell
+% driver — must be wrapped in `term/1` so the renamer treats them as
+% opaque data rather than as cross-module references subject to
+% value-level visibility checks. See language.md §The `term/1`
+% quoting form.
 % `rigid(N)` is a *rigid* type variable: a fresh identity allocated
 % by the driver while checking a polymorphic declaration's own
 % equations or rule bodies. Unlike unbound CHR variables (which are
@@ -515,7 +520,7 @@ delegate_unify @
 
 delegate_guard_bool @
     check_guard_bool(T, Ctx) <=>
-    tc_unify(T, tcon(prelude:bool, []), Ctx).
+    tc_unify(T, tcon(term(prelude:bool), []), Ctx).
 
 delegate_guard_getarg @
     con_sig(ConName, Sig) \

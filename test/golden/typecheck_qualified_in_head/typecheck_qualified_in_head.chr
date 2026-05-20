@@ -1,9 +1,14 @@
-:- module(typecheck_qualified_in_head, [c/2]).
+:- module(typecheck_qualified_in_head, [c/2, type(col/0)]).
 
 % Positive end-to-end test for Section 7's fix: a constraint declared
 % with a parameter typed using a qualified type name, matched by a
 % qualified-in-head constructor pattern. The type checker must accept
 % the program and the rule must fire at runtime.
+%
+% The module exports `type(col/0)` so the query goal below can
+% construct a `typecheck_qualified_in_head:red` value (per the
+% constructor-export allowlist semantics — see
+% docs/reference/language.md §Type and constructor exports).
 :- chr_type col ---> red ; green ; blue.
 
 :- chr_constraint c(typecheck_qualified_in_head:col, any).

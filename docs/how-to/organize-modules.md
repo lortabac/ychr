@@ -38,8 +38,14 @@ intersects with the exporter's allowlist:
 ```
 
 If a constructor named in either list is not actually a constructor of
-the type (or, on the import side, is not in the source module's
-allowlist), the renamer rejects the program with `YCHR-20008`.
+the type, the renamer rejects the program with `YCHR-20008`. If an
+import-list constructor is declared but excluded by the exporter's
+allowlist, the rejection code is `YCHR-20011` instead — a separate code
+so the diagnostic distinguishes "misspelled or unknown" from "declared
+but not visible". Qualified references like `palette:green` are subject
+to the same allowlist and produce `YCHR-20010` when the constructor is
+hidden — the same underlying condition as `YCHR-20011`, observed at a
+use site rather than an import site.
 
 ## Restricted imports
 
