@@ -2,7 +2,7 @@
 ;;;;
 ;;;; Matches the output format of prettyTerm in YCHR.Pretty (Haskell).
 (library (ychr pretty)
-  (export pretty-term)
+  (export pretty-term pretty-bindings bindings->string)
   (import (rnrs) (ychr var))
 
   ;; Escape a string for display (matching Haskell renderString).
@@ -134,4 +134,29 @@
         ;; Fallback
         (else (call-with-string-output-port
                (lambda (p) (display d p)))))))
+
+  ;; Format an alist of ((symbol . value) ...) bindings as
+  ;;   Name = pretty-term\n
+  ;; one per line, sorted by symbol name. Matches the output of
+  ;; YCHR.Pretty.prettyBindings on the Haskell side. Returns a string.
+  (define (bindings->string bs)
+    (let ((sorted (list-sort
+                   (lambda (a b)
+                     (string<? (symbol->string (car a))
+                               (symbol->string (car b))))
+                   bs)))
+      (let-values (((port extract) (open-string-output-port)))
+        (for-each
+         (lambda (b)
+           (put-string port (symbol->string (car b)))
+           (put-string port " = ")
+           (put-string port (pretty-term (cdr b)))
+           (put-char port #\newline))
+         sorted)
+        (extract))))
+
+  ;; Print bindings using `bindings->string`. Side-effect-only wrapper
+  ;; for the common case where the formatted output is just displayed.
+  (define (pretty-bindings bs)
+    (display (bindings->string bs)))
 )

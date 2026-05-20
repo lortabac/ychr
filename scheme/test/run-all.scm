@@ -34,6 +34,7 @@
 (load "test-history.scm")
 (load "test-reactivation.scm")
 (load "test-runtime.scm")
+(load "test-repl.scm")
 
 (format #t "~%Total failures: ~a~%" total-failures)
 (exit (zero? total-failures))

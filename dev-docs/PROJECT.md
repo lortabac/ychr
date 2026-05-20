@@ -377,6 +377,13 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
 - Haskell interpreter in `src/YCHR/Runtime/Interpreter.hs`.
 - User-defined functions: parsing, renaming, desugaring, compilation, and interpretation.
 - Scheme backend (`src/YCHR/Backend/Scheme.hs`) and runtime (`scheme/ychr/`).
+  Each generated library exports a program-info dispatcher (named after the
+  library's final segment) carrying the program's `%init!` thunk and a
+  `module:name/arity` → `tell_*` alist. The `(ychr)` umbrella library
+  re-exports the runtime, pretty-printer, and `(ychr repl)` helpers
+  (`open-session`, `query`, `tell-by-name`, `with-program`) so end-users
+  can drive a compiled program interactively without writing a driver
+  script — see [`docs/how-to/scheme-repl.md`](../docs/how-to/scheme-repl.md).
 
 
 ## Work Remaining

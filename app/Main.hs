@@ -9,7 +9,7 @@ import System.Directory (createDirectoryIfMissing)
 import System.Exit (exitFailure)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hPutStr, stderr)
-import YCHR.Backend.Scheme (generateScheme)
+import YCHR.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
 import YCHR.Backend.SchemeDriver (generateDriver)
 import YCHR.Display (displayMsg)
 import YCHR.Meta (metaHostCallRegistry)
@@ -230,6 +230,16 @@ runCompile opts files = withCompiled False files $ \prog warnings -> do
       TIO.writeFile outPath (serialize vmp)
       putStrLn outPath
     TargetScheme -> do
+      unless (isValidSchemeIdentifier name) $ do
+        hPutStr
+          stderr
+          ( "Error: --base-name "
+              ++ show (T.unpack name)
+              ++ " is not a valid Scheme identifier; the Scheme target uses\n"
+              ++ "       it as the library's final segment and as the exported\n"
+              ++ "       program-info binding name.\n"
+          )
+        exitFailure
       let libName = [T.pack "ychr", T.pack "generated", name]
           outPath = opts.outputDir </> "ychr" </> "generated" </> T.unpack name ++ ".sls"
       createDirectoryIfMissing True (takeDirectory outPath)

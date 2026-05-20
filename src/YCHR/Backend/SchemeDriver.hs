@@ -41,8 +41,16 @@ generateDriver moduleName qn args =
       sortedVars = sort varNames
       argExprs = map exprToScheme args
       tellCall = "(" <> tellName.unName <> " %s " <> T.intercalate " " argExprs <> ")"
-      printStmts = concatMap mkPrintBinding sortedVars
-      body = map ("    " <>) (tellCall : printStmts)
+      bindingsCall = case sortedVars of
+        [] -> []
+        vs ->
+          [ "(pretty-bindings (list "
+              <> T.intercalate
+                " "
+                ["(cons (quote " <> v <> ") " <> v <> ")" | v <- vs]
+              <> "))"
+          ]
+      body = map ("    " <>) (tellCall : bindingsCall)
    in T.unlines $
         [ "(import (rnrs) (ychr runtime) (ychr pretty)",
           "        (ychr generated " <> moduleName <> "))",
@@ -166,11 +174,3 @@ exprVars (R.HostExpr _ args) = concatMap exprVars args
 exprVars (R.LambdaExpr params body) =
   filter (`notElem` [v | HeadVar v <- NE.toList params]) (exprVars body)
 exprVars _ = []
-
--- | Generate display statements for one variable binding.
-mkPrintBinding :: Text -> [Text]
-mkPrintBinding var =
-  [ "(display \"" <> var <> " = \")",
-    "(display (pretty-term (deref " <> var <> ")))",
-    "(newline)"
-  ]

@@ -110,6 +110,9 @@ ychr compile -t scheme -d build/ examples/bakery.chr
 ychr gen-driver -g 'cake' examples/bakery.chr > build/run.scm
 ```
 
+For interactive use against a compiled program, see
+[`docs/how-to/scheme-repl.md`](../how-to/scheme-repl.md).
+
 ## Files
 
 - REPL line history: `$XDG_DATA_HOME/ychr/history` (typically
