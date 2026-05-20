@@ -4,8 +4,8 @@
 :- chr_constraint result(int).
 
 % Forbidden: f -> g -> h -> f. The cycle is longer than two nodes,
-% exercising the cycle reconstruction path in dfs ('reverse (qn :
-% takeWhile (/= qn) path) ++ [qn]') with a non-trivial 'path' length.
+% exercising the cycle reconstruction path in dfs ('qn : reverse
+% (takeWhile (/= qn) path) ++ [qn]') with a non-trivial 'path' length.
 :- function f(T) -> T requiring g(T) -> T.
 :- function g(T) -> T requiring h(T) -> T.
 :- function h(T) -> T requiring f(T) -> T.

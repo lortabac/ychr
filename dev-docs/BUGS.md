@@ -6,28 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `bound_cycle` diagnostic duplicates the last vertex
-
-`docs/reference/type-system.md` §Errors documents `bound_cycle` as a
-cycle in the bound graph: "a function that requires itself directly,
-or any longer chain of `requiring`-clause edges that returns to its
-starting function." Today the printed path duplicates the final
-vertex rather than wrapping back to the start.
-
-Repro:
-
-```chr
-:- module(q).
-:- function foo(T) -> T requiring bar(T) -> T.
-:- function bar(T) -> T requiring foo(T) -> T.
-foo(X) -> X.
-bar(X) -> X.
-```
-
-Actual: `YCHR-16010 Cyclic 'requiring' clause: q:foo -> q:bar -> q:bar`.
-Expected: `... q:foo -> q:bar -> q:foo` (the cycle closes on its
-starting vertex).
-
 ## `unknown_bound_function` is reported as the generic YCHR-20002
 
 `docs/reference/type-system.md` §Errors lists

@@ -763,7 +763,7 @@ dfs ::
   (Set QualifiedName, [[QualifiedName]])
 dfs graph visited path acc qn
   | qn `elem` path =
-      let cycle_ = reverse (qn : takeWhile (/= qn) path) ++ [qn]
+      let cycle_ = qn : reverse (takeWhile (/= qn) path) ++ [qn]
        in (visited, cycle_ : acc)
   | qn `Set.member` visited = (visited, acc)
   | otherwise =
