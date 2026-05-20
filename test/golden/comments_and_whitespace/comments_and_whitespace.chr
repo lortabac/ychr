@@ -1,17 +1,18 @@
 % Top-level comment before module declaration.
-:- module(cw, [t/2]).
+:- module(cw, [t/2, type(tags/0)]).
 :- use_module(prelude). % Trailing comment after directive.
 
 % Comment between directives.
 
 :- chr_constraint t/2.
+:- chr_type tags ---> simple ; after_blank ; many_blanks ; deep_calc.
 
 % Comment between rules.
-t(simple, R) <=> R = ok.   % Mid-line trailing comment.
+t(simple, R) <=> R = term(ok).   % Mid-line trailing comment.
 
 t(after_blank,
   R) <=>          % Comment in mid-rule.
-    R = wrapped.  % Comment between body items.
+    R = term(wrapped).  % Comment between body items.
 
 % Multi-paragraph block.
 %
@@ -21,7 +22,7 @@ t(after_blank,
 t(many_blanks, R) <=>
 
 
-    R = blanks_ok.
+    R = term(blanks_ok).
 
 t(deep_calc, R) <=>
     % Comment inside a body.

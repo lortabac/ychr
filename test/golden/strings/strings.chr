@@ -1,7 +1,8 @@
-:- module(strings, [t/2]).
+:- module(strings, [t/2, type(tags/0)]).
 :- use_module(prelude).
 :- use_module(library(strings)).
 :- chr_constraint t/2.
+:- chr_type tags ---> concat_basic ; concat_empty_l ; concat_empty_r ; concat_both ; len_zero ; len_short ; len_basic ; len_unicode ; upper_basic ; upper_already ; upper_empty ; upper_unicode ; lower_basic ; lower_mixed ; lower_empty.
 
 t(concat_basic, R)    <=> R is string_concat("foo", "bar").
 t(concat_empty_l, R)  <=> R is string_concat("", "abc").

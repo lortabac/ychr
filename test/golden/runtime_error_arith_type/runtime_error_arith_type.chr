@@ -2,4 +2,4 @@
 :- use_module(prelude).
 :- chr_constraint boom/1.
 
-go @ boom(R) <=> R is foo + 1.
+go @ boom(R) <=> R is term(foo) + 1.

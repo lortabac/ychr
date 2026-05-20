@@ -6,6 +6,8 @@ import Control.Exception (SomeException, fromException, try)
 import Control.Monad (filterM)
 import Data.Char (isSpace)
 import Data.List (isInfixOf, partition, sort, sortOn)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import System.Directory (doesDirectoryExist, listDirectory)
@@ -15,9 +17,31 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Display (Display (..))
 import YCHR.Meta (metaHostCallRegistry)
 import YCHR.Pretty (prettyBindings)
-import YCHR.Run (CompiledProgram (..), Error, compileFiles, runProgramWithGoal)
+import YCHR.Run
+  ( CompiledProgram (..),
+    Error,
+    Warning,
+    compileFiles,
+    prepareGoal,
+    runPreparedGoal,
+  )
 import YCHR.Runtime.Interpreter (baseHostCallRegistry)
 import YCHR.TypeCheck (typeCheckProgram)
+
+-- | Test directories whose @.chr@ programs or goals deliberately
+-- reference bare atoms that the renamer cannot resolve — typically
+-- because the test exists to verify the renamer's behaviour on
+-- unexported or unknown constructors. Warnings emitted by these
+-- tests are part of what they exercise, not a failure mode.
+expectsWarnings :: Set String
+expectsWarnings =
+  Set.fromList
+    [ "bare_atom_canonicalization",
+      "cross_module_function_leak",
+      "type_export_constructor_allowlist",
+      "type_export_constructor_empty",
+      "type_import_constructor_narrowing"
+    ]
 
 data Case
   = Positive String FilePath FilePath
@@ -149,9 +173,10 @@ makeCase spec c = case c of
 
 runPositive :: TestSpec -> FilePath -> FilePath -> IO ()
 runPositive spec goalFile expectedFile = do
-  (prog, _) <-
+  (prog, ws) <-
     compileFiles False spec.chrFiles
       >>= either (assertFailure . show) pure
+  checkWarnings spec "compile" ws
   typeErrors <- typeCheckProgram prog.desugaredProgram
   case typeErrors of
     [] -> pure ()
@@ -160,8 +185,9 @@ runPositive spec goalFile expectedFile = do
         ("Type errors in " ++ spec.testName ++ ":\n" ++ unlines (map displayMsg errs))
   query <- TIO.readFile goalFile
   expected <- readFile expectedFile
-  bindings <-
-    runProgramWithGoal prog (baseHostCallRegistry <> metaHostCallRegistry) (T.strip query)
+  (constraint, goalWs) <- prepareGoal prog (T.strip query)
+  checkWarnings spec "goal" goalWs
+  bindings <- runPreparedGoal prog (baseHostCallRegistry <> metaHostCallRegistry) constraint
   prettyBindings bindings @?= expected
 
 -- | Compile + program-typecheck must succeed; running the goal must throw
@@ -170,9 +196,10 @@ runPositive spec goalFile expectedFile = do
 -- the test.
 runGoalNegative :: TestSpec -> FilePath -> FilePath -> IO ()
 runGoalNegative spec goalFile errorFile = do
-  (prog, _) <-
+  (prog, ws) <-
     compileFiles False spec.chrFiles
       >>= either (assertFailure . show) pure
+  checkWarnings spec "compile" ws
   typeErrors <- typeCheckProgram prog.desugaredProgram
   case typeErrors of
     [] -> pure ()
@@ -181,14 +208,16 @@ runGoalNegative spec goalFile errorFile = do
         ("Type errors in " ++ spec.testName ++ ":\n" ++ unlines (map displayMsg errs))
   query <- TIO.readFile goalFile
   expectedCode <- trim <$> readFile errorFile
+  (constraint, goalWs) <- prepareGoal prog (T.strip query)
+  checkWarnings spec "goal" goalWs
   outcome <-
     try @SomeException $
-      runProgramWithGoal
+      runPreparedGoal
         prog
         ( baseHostCallRegistry
             <> metaHostCallRegistry
         )
-        (T.strip query)
+        constraint
   case outcome of
     Right _ ->
       assertFailure
@@ -215,7 +244,7 @@ runNegative spec errorFile = do
       assertBool
         ("Expected error code " ++ expectedCode ++ " in:\n" ++ msg)
         (expectedCode `isInfixOf` msg)
-    Right (prog, _) -> do
+    Right (prog, _ws) -> do
       typeErrors <- typeCheckProgram prog.desugaredProgram
       case typeErrors of
         [] -> assertFailure "Expected compilation or type checking to fail, but it succeeded"
@@ -226,3 +255,19 @@ runNegative spec errorFile = do
             (expectedCode `isInfixOf` msg)
   where
     trim = reverse . dropWhile isSpace . reverse . dropWhile isSpace
+
+-- | Assert no warnings unless the test is on the allowlist. The
+-- @phase@ label distinguishes compile-time warnings from goal-time
+-- ones in the failure message.
+checkWarnings :: TestSpec -> String -> [Warning] -> IO ()
+checkWarnings spec phase ws
+  | Set.member spec.testName expectsWarnings = pure ()
+  | null ws = pure ()
+  | otherwise =
+      assertFailure
+        ( spec.testName
+            ++ ": "
+            ++ phase
+            ++ ": unexpected warnings\n"
+            ++ unlines (map displayMsg ws)
+        )

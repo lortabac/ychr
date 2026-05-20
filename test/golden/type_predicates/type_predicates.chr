@@ -1,35 +1,36 @@
-:- module(type_predicates, [t/3]).
+:- module(type_predicates, [t/3, type(tags/0)]).
 :- use_module(prelude).
 :- chr_constraint t/3.
 :- chr_constraint check_bool/2.
+:- chr_type tags ---> int ; flt ; atm ; str ; boo_yes ; boo_no ; vr ; nvr ; grd.
 
-check_bool(V, R) <=> boolean(V) | R = yes.
-check_bool(_, R) <=> R = no.
+check_bool(V, R) <=> boolean(V) | R = term(yes).
+check_bool(_, R) <=> R = term(no).
 
 % Tag-dispatched predicate test. Goal supplies the probe value V and an
 % empty R; rules pick yes/no based on the predicate.
 
-t(int, V, R)     <=> integer(V) | R = yes.
-t(int, _, R)     <=> R = no.
+t(int, V, R)     <=> integer(V) | R = term(yes).
+t(int, _, R)     <=> R = term(no).
 
-t(flt, V, R)     <=> float(V)   | R = yes.
-t(flt, _, R)     <=> R = no.
+t(flt, V, R)     <=> float(V)   | R = term(yes).
+t(flt, _, R)     <=> R = term(no).
 
-t(atm, V, R)     <=> atom(V)    | R = yes.
-t(atm, _, R)     <=> R = no.
+t(atm, V, R)     <=> atom(V)    | R = term(yes).
+t(atm, _, R)     <=> R = term(no).
 
-t(str, V, R)     <=> string(V)  | R = yes.
-t(str, _, R)     <=> R = no.
+t(str, V, R)     <=> string(V)  | R = term(yes).
+t(str, _, R)     <=> R = term(no).
 
 % boo_yes synthesizes a real VBool via integer/1; boo_no probes a plain atom.
 t(boo_yes, _, R) <=> B is integer(1), check_bool(B, R).
 t(boo_no, V, R)  <=> check_bool(V, R).
 
-t(vr, V, R)      <=> var(V)     | R = yes.
-t(vr, _, R)      <=> R = no.
+t(vr, V, R)      <=> var(V)     | R = term(yes).
+t(vr, _, R)      <=> R = term(no).
 
-t(nvr, V, R)     <=> nonvar(V)  | R = yes.
-t(nvr, _, R)     <=> R = no.
+t(nvr, V, R)     <=> nonvar(V)  | R = term(yes).
+t(nvr, _, R)     <=> R = term(no).
 
-t(grd, V, R)     <=> ground(V)  | R = yes.
-t(grd, _, R)     <=> R = no.
+t(grd, V, R)     <=> ground(V)  | R = term(yes).
+t(grd, _, R)     <=> R = term(no).

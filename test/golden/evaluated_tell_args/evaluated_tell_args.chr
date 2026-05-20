@@ -1,4 +1,4 @@
-:- module(evaluated_tell_args, [direct/2, via_body/2, quoted/2, plus/2]).
+:- module(evaluated_tell_args, [direct/2, via_body/2, quoted/2, plus/2, type(pair_t/0)]).
 :- use_module(prelude).
 
 :- chr_type pair_t ---> pair(any, any).

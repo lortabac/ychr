@@ -1,5 +1,6 @@
-:- module(lambda_test, [result/2, fun double/1, fun apply/2, fun apply2/3, fun make_adder/1]).
+:- module(lambda_test, [result/2, fun double/1, fun apply/2, fun apply2/3, fun make_adder/1, type(tags/0)]).
 :- chr_constraint result/2.
+:- chr_type tags ---> test1 ; test2 ; test3 ; test4 ; test5 ; test6 ; test7.
 :- function double/1.
 :- function apply/2.
 :- function apply2/3.

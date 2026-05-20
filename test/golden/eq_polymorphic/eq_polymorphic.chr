@@ -1,7 +1,8 @@
-:- module(eq_polymorphic, [result/2]).
+:- module(eq_polymorphic, [result/2, type(tags/0)]).
 :- use_module(library(prelude)).
 
 :- chr_constraint result(any, any).
+:- chr_type tags ---> test1 ; test2.
 
 % == should work on any pair of same-type values
 result(test1, R) <=> R is (1 == 2).

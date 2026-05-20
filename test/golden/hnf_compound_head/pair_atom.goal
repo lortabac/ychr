@@ -1,1 +1,1 @@
-hnf_compound_head:pair(p(a, b), R)
+hnf_compound_head:pair(term(p(a, b)), R)

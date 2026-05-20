@@ -1,19 +1,20 @@
-:- module(hnf_compound_head, [pair/2, tri/2, deep/2, mismatch/2]).
+:- module(hnf_compound_head, [pair/2, tri/2, deep/2, mismatch/2, type(pat/0)]).
 :- chr_constraint pair/2, tri/2, deep/2, mismatch/2.
+:- chr_type pat ---> p(any, any) ; q(any) ; h(any) ; f(any) ; g(any).
 
 % Pair head: extract both inner vars, return them in the result.
-pair(p(X, Y), R) <=> R = result(X, Y).
-pair(_, R)       <=> R = no_match.
+pair(p(X, Y), R) <=> R = term(result(X, Y)).
+pair(_, R)       <=> R = term(no_match).
 
 % Triple-nested compound: inner var must thread through three levels.
 tri(f(g(h(X))), R) <=> R = X.
-tri(_, R)          <=> R = no_match.
+tri(_, R)          <=> R = term(no_match).
 
 % Mixed-shape head: the second arg is also a compound.
-deep(p(X, q(Y)), R) <=> R = pair_q(X, Y).
-deep(_, R)          <=> R = no_match.
+deep(p(X, q(Y)), R) <=> R = term(pair_q(X, Y)).
+deep(_, R)          <=> R = term(no_match).
 
 % Pattern that should NOT match: probe falls through to the third rule.
-mismatch(f(_), R) <=> R = matched_f.
-mismatch(g(_), R) <=> R = matched_g.
-mismatch(_, R)    <=> R = none.
+mismatch(f(_), R) <=> R = term(matched_f).
+mismatch(g(_), R) <=> R = term(matched_g).
+mismatch(_, R)    <=> R = term(none).

@@ -1,1 +1,1 @@
-owner:run(banana, R)
+owner:run(term(banana), R)

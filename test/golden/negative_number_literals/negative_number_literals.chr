@@ -1,6 +1,7 @@
-:- module(nnl, [t/2, neg/2]).
+:- module(nnl, [t/2, neg/2, type(tags/0)]).
 :- use_module(prelude).
 :- chr_constraint t/2, neg/2.
+:- chr_type tags ---> neg_int ; neg_float ; arith_int ; arith_flt ; diff.
 
 % Negative literals as direct values.
 t(neg_int, R)    <=> R = -42.

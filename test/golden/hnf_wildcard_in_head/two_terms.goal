@@ -1,1 +1,1 @@
-hnf_wildcard_in_head:two(p(1), q(2), R)
+hnf_wildcard_in_head:two(term(p(1)), term(q(2)), R)

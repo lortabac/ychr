@@ -1,1 +1,1 @@
-function_pattern_dispatch:t(d, foo, R)
+function_pattern_dispatch:t(d, term(foo), R)

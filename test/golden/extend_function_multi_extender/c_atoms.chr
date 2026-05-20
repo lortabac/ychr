@@ -1,6 +1,7 @@
-:- module(atoms, []).
+:- module(atoms, [type(colors/0)]).
 :- use_module(owner, [classify/1]).
+:- chr_type colors ---> red.
 
 % Second extender adds an atom overload (distinct from the string one).
 :- extend_class_type (classify(atom) -> atom).
-:- extend_class classify(red) -> color.
+:- extend_class classify(red) -> term(color).

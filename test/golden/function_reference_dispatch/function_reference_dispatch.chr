@@ -1,6 +1,7 @@
-:- module(function_reference_dispatch, [t/2]).
+:- module(function_reference_dispatch, [t/2, type(tags/0)]).
 :- use_module(prelude).
 :- chr_constraint t/2.
+:- chr_type tags ---> unary ; binary ; identity ; via_var ; mixed.
 
 :- function double/1, plus/2, identity/1, apply/2, apply2/3.
 
@@ -21,7 +22,7 @@ t(binary, R) <=>
 
 % identity/1 — first-class function reference returns input.
 t(identity, R) <=>
-    R is apply(fun identity/1, foo).
+    R is apply(fun identity/1, term(foo)).
 
 % Reference threaded through a local variable.
 t(via_var, R) <=>
@@ -32,4 +33,4 @@ t(via_var, R) <=>
 t(mixed, R) <=>
     R1 is apply(fun double/1, 5),
     R2 is apply(fun(X) -> X * 3 end, 5),
-    R = pair(R1, R2).
+    R = term(pair(R1, R2)).

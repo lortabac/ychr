@@ -1,10 +1,11 @@
-:- module(owner, [classify/1, run/2]).
+:- module(owner, [classify/1, run/2, type(colors/0)]).
 
 :- open_function classify/1.
+:- chr_type colors ---> red ; green ; blue.
 
-classify(red)   -> color.
-classify(green) -> color.
-classify(blue)  -> color.
+classify(red)   -> term(color).
+classify(green) -> term(color).
+classify(blue)  -> term(color).
 
 :- chr_constraint run/2.
 run(X, R) <=> R is classify(X).

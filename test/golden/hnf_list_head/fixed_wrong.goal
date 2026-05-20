@@ -1,1 +1,1 @@
-hnf_list_head:fixed([a, b, x], R)
+hnf_list_head:fixed(term([a, b, x]), R)

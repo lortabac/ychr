@@ -1,10 +1,11 @@
-:- module(uas, [t/2]).
+:- module(uas, [t/2, type(tags/0)]).
 :- chr_constraint t/2.
+:- chr_type tags ---> quoted_atom ; quoted_with_space ; quoted_unicode ; quoted_chinese ; string_unicode ; string_emoji ; string_escape_n ; string_escape_t ; string_escape_q ; string_backslash.
 
-t(quoted_atom, R)     <=> R = 'café'.
-t(quoted_with_space, R) <=> R = 'hello world'.
-t(quoted_unicode, R)  <=> R = 'naïve résumé'.
-t(quoted_chinese, R)  <=> R = '你好'.
+t(quoted_atom, R)     <=> R = term('café').
+t(quoted_with_space, R) <=> R = term('hello world').
+t(quoted_unicode, R)  <=> R = term('naïve résumé').
+t(quoted_chinese, R)  <=> R = term('你好').
 t(string_unicode, R)  <=> R = "café".
 t(string_emoji, R)    <=> R = "hi 👋".
 t(string_escape_n, R) <=> R = "line1\nline2".

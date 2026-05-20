@@ -1,19 +1,20 @@
-:- module(hnf_list_head, [first/2, rest/2, kind/2, fixed/2]).
+:- module(hnf_list_head, [first/2, rest/2, kind/2, fixed/2, type(lit/0)]).
 :- chr_constraint first/2, rest/2, kind/2, fixed/2.
+:- chr_type lit ---> a ; b ; c.
 
 % Head matches cons cell, extracts head.
 first([H|_], R) <=> R = H.
-first([], R)    <=> R = empty.
+first([], R)    <=> R = term(empty).
 
 % Head matches cons cell, extracts tail.
 rest([_|T], R) <=> R = T.
-rest([], R)    <=> R = empty.
+rest([], R)    <=> R = term(empty).
 
 % Tag the input as empty / cons / other.
-kind([], R)     <=> R = empty.
-kind([_|_], R)  <=> R = cons.
-kind(_, R)      <=> R = other.
+kind([], R)     <=> R = term(empty).
+kind([_|_], R)  <=> R = term(cons).
+kind(_, R)      <=> R = term(other).
 
 % Fixed-length pattern: matches exactly [a, b, c].
-fixed([a, b, c], R) <=> R = abc.
-fixed(_, R)         <=> R = no_match.
+fixed([a, b, c], R) <=> R = term(abc).
+fixed(_, R)         <=> R = term(no_match).

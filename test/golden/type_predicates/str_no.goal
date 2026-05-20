@@ -1,1 +1,1 @@
-type_predicates:t(str, foo, R)
+type_predicates:t(str, term(foo), R)

@@ -1,6 +1,7 @@
-:- module(int_float_conversion, [t/2]).
+:- module(int_float_conversion, [t/2, type(tags/0)]).
 :- use_module(prelude).
 :- chr_constraint t/2.
+:- chr_type tags ---> i2f_zero ; i2f_pos ; i2f_neg ; i2f_big ; f2i_pos ; f2i_neg ; f2i_pos_zero ; f2i_whole ; rt_int ; rt_float.
 
 t(i2f_zero, R)    <=> R is int_to_float(0).
 t(i2f_pos, R)     <=> R is int_to_float(42).

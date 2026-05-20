@@ -1,6 +1,7 @@
-:- module(icr, [t/2]).
+:- module(icr, [t/2, type(tags/0)]).
 :- use_module(prelude).
 :- chr_constraint t/2.
+:- chr_type tags ---> parens ; nested_fns ; three_deep ; mixed ; lambda_call ; lambda_arith ; max_basic ; min_basic.
 
 :- function double/1, square/1, plus/2.
 double(X) -> X + X.

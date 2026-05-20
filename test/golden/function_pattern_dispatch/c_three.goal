@@ -1,1 +1,1 @@
-function_pattern_dispatch:t(c, [a, b, c], R)
+function_pattern_dispatch:t(c, term([a, b, c]), R)

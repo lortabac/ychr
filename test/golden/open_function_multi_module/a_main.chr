@@ -1,12 +1,13 @@
-:- module(main, [classify/1, run/2]).
+:- module(main, [classify/1, run/2, type(colors/0)]).
 :- use_module(prelude).
 :- chr_constraint run/2.
+:- chr_type colors ---> red ; blue.
 
 :- open_function classify/1.
 
 % Equations declared in this module.
-classify(red)   -> color.
-classify(blue)  -> color.
+classify(red)   -> term(color).
+classify(blue)  -> term(color).
 
 run(X, R) <=>
     R is classify(X).

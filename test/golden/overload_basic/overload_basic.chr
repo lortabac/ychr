@@ -1,7 +1,9 @@
-:- module(overload_basic, [result/2]).
+:- module(overload_basic, [result/2, type(tags/0)]).
 :- use_module(library(prelude)).
+:- use_module(library(strings)).
 
 :- chr_constraint result(any, any).
+:- chr_type tags ---> test1 ; test2.
 
 % Overloaded function: works on both int and string
 :- class

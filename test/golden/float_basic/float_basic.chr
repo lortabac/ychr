@@ -1,7 +1,8 @@
-:- module(float_basic, [result/2]).
+:- module(float_basic, [result/2, type(tags/0)]).
 :- use_module(library(prelude)).
 
 :- chr_constraint result(any, any).
+:- chr_type tags ---> test1 ; test2 ; test3.
 
 result(test1, R) <=> R is 3.0 + 2.5.
 result(test2, R) <=> R is 10.0 / 4.0.

@@ -3,18 +3,18 @@
 :- chr_constraint c2l/1, l2c/1, roundtrip/1, atom0/1, nested/1.
 
 % compound_to_list: f(1, 2) → [f, 1, 2].
-c2l(R) <=> R is compound_to_list(f(1, 2)).
+c2l(R) <=> R is compound_to_list(term(f(1, 2))).
 
 % list_to_compound: [g, a, b] → g(a, b).
-l2c(R) <=> R is list_to_compound([g, a, b]).
+l2c(R) <=> R is list_to_compound(term([g, a, b])).
 
 % Round-trip: c → list → c.
 roundtrip(R) <=>
-    L is compound_to_list(p(1, foo, bar)),
+    L is compound_to_list(term(p(1, foo, bar))),
     R is list_to_compound(L).
 
 % Zero-arg atom: list_to_compound([sym]) → sym (atom).
-atom0(R) <=> R is list_to_compound([sym]).
+atom0(R) <=> R is list_to_compound(term([sym])).
 
 % Nested compound: structure preserved.
-nested(R) <=> R is compound_to_list(outer(inner(1, 2), 3)).
+nested(R) <=> R is compound_to_list(term(outer(inner(1, 2), 3))).

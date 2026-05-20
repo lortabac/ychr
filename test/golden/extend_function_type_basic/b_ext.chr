@@ -1,7 +1,8 @@
-:- module(ext, []).
+:- module(ext, [type(animals/0)]).
 :- use_module(owner, [classify/1, run/2]).
+:- chr_type animals ---> dog ; cat.
 
 % Add equations from this module to the open function declared in owner.
-:- extend_function classify(dog) -> animal.
-:- extend_function classify(cat) -> animal.
-:- extend_function classify(_)   -> unknown.
+:- extend_function classify(dog) -> term(animal).
+:- extend_function classify(cat) -> term(animal).
+:- extend_function classify(_)   -> term(unknown).

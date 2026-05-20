@@ -44,6 +44,19 @@ HASKELL_ONLY_CASES = {
     ("unicode_atoms_strings", "quoted_chinese"),
 }
 
+# Test directories where the .chr program or goal deliberately uses
+# bare atoms whose constructor the renamer cannot resolve — the warning
+# is part of what the test exercises (cross-module visibility,
+# canonicalization fallbacks). Mirrors `expectsWarnings` in
+# test/YCHR/GoldenTest.hs. `--Werror` is omitted for these.
+WERROR_EXEMPT = {
+    "bare_atom_canonicalization",
+    "cross_module_function_leak",
+    "type_export_constructor_allowlist",
+    "type_export_constructor_empty",
+    "type_import_constructor_narrowing",
+}
+
 
 def discover_cases():
     """Return sorted list of (test_dir, case_name) for all positive cases."""
@@ -79,9 +92,11 @@ def test_scheme_golden(test_dir, case_name, ychr_bin, guile_bin, scheme_lib_dir,
     with open(expected_file) as f:
         expected = f.read()
 
+    werror_flags = [] if test_dir in WERROR_EXEMPT else ["--Werror"]
+
     # 1. Compile to Scheme
     result = subprocess.run(
-        [ychr_bin, "compile", "-t", "scheme", "-d", str(tmp_path), *chr_files],
+        [ychr_bin, "compile", *werror_flags, "-t", "scheme", "-d", str(tmp_path), *chr_files],
         capture_output=True,
         text=True,
         cwd=project_root,
@@ -90,7 +105,7 @@ def test_scheme_golden(test_dir, case_name, ychr_bin, guile_bin, scheme_lib_dir,
 
     # 2. Generate driver
     result = subprocess.run(
-        [ychr_bin, "gen-driver", "-g", query, *chr_files],
+        [ychr_bin, "gen-driver", *werror_flags, "-g", query, *chr_files],
         capture_output=True,
         text=True,
         cwd=project_root,

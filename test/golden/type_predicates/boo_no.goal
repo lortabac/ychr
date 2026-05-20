@@ -1,1 +1,1 @@
-type_predicates:t(boo_no, foo, R)
+type_predicates:t(boo_no, term(foo), R)

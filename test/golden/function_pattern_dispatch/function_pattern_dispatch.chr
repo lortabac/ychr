@@ -1,27 +1,29 @@
-:- module(function_pattern_dispatch, [t/3]).
+:- module(function_pattern_dispatch, [t/3, type(tags/0), type(pair_t/0)]).
 :- use_module(prelude).
 :- chr_constraint t/3.
+:- chr_type tags ---> fn ; c ; d.
+:- chr_type pair_t ---> p(any, any).
 
 :- function f/1, classify/1, deep/1.
 
 % Literal patterns first; variable as fallback. Top-to-bottom matters.
-f(0)  -> zero.
-f(1)  -> one.
-f(42) -> answer.
-f(_)  -> other.
+f(0)  -> term(zero).
+f(1)  -> term(one).
+f(42) -> term(answer).
+f(_)  -> term(other).
 
 % Compound-term patterns, exercised top-to-bottom.
-classify([])         -> empty.
-classify([_])        -> one_elem.
-classify([_, _])     -> two_elems.
-classify([_, _, _])  -> three_elems.
-classify(_)          -> many.
+classify([])         -> term(empty).
+classify([_])        -> term(one_elem).
+classify([_, _])     -> term(two_elems).
+classify([_, _, _])  -> term(three_elems).
+classify(_)          -> term(many).
 
 % Nested patterns: order matters when several would match.
-deep(p(0, _))      -> zero_first.
-deep(p(_, 0))      -> zero_second.
-deep(p(_, _))      -> pair.
-deep(_)            -> other.
+deep(p(0, _))      -> term(zero_first).
+deep(p(_, 0))      -> term(zero_second).
+deep(p(_, _))      -> term(pair).
+deep(_)            -> term(other).
 
 t(fn, X, R)       <=> R is f(X).
 t(c, X, R)        <=> R is classify(X).

@@ -1,1 +1,1 @@
-hnf_compound_head:mismatch(other, R)
+hnf_compound_head:mismatch(term(other), R)

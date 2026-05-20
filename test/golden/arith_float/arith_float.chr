@@ -1,6 +1,7 @@
-:- module(arith_float, [t/2]).
+:- module(arith_float, [t/2, type(tags/0)]).
 :- use_module(prelude).
 :- chr_constraint t/2.
+:- chr_type tags ---> add_pos ; add_zero ; add_neg ; sub_pos ; sub_neg ; mul ; mul_neg ; mul_zero ; div_basic ; div_whole ; div_neg ; small ; large ; neg_zero_add.
 
 t(add_pos, R)      <=> R is 1.5 + 2.25.
 t(add_zero, R)     <=> R is 0.0 + 3.5.

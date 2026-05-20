@@ -1,1 +1,1 @@
-hnf_compound_head:tri(f(g(notH(99))), R)
+hnf_compound_head:tri(term(f(g(notH(99)))), R)

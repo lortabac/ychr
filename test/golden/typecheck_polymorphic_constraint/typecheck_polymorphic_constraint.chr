@@ -1,10 +1,11 @@
-:- module(tc, [box/1, run/2]).
+:- module(tc, [box/1, run/2, type(tags/0)]).
 :- use_module(prelude).
 :- chr_constraint box(T), run/2.
+:- chr_type tags ---> int_case ; str_case ; list_case.
 
 % Polymorphic constraint box(T): each use site instantiates T.
 % This program uses box at int, string, and a list — three monomorphic
 % instantiations of the same polymorphic declaration.
-run(int_case, R) <=> box(42), R = ok.
-run(str_case, R) <=> box("hi"), R = ok.
-run(list_case, R) <=> box([1, 2, 3]), R = ok.
+run(int_case, R) <=> box(42), R = term(ok).
+run(str_case, R) <=> box("hi"), R = term(ok).
+run(list_case, R) <=> box([1, 2, 3]), R = term(ok).

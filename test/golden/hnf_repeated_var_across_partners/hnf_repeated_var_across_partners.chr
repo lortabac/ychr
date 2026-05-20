@@ -1,5 +1,6 @@
-:- module(hnf_repeated_var_across_partners, [run/2, run/3]).
+:- module(hnf_repeated_var_across_partners, [run/2, run/3, type(keys/0)]).
 :- chr_constraint entry/2, lookup/2, run/2, run/3.
+:- chr_type keys ---> a ; b ; c.
 
 % Repeated K in head: lookup(K, V) joins entry(K, V2) on K — partner index condition.
 lookup(K, V), entry(K, V2) <=> V = V2.
@@ -18,4 +19,4 @@ run(K1, K2, R) <=>
     entry(c, 3),
     lookup(K1, V1),
     lookup(K2, V2),
-    R = pair(V1, V2).
+    R = term(pair(V1, V2)).

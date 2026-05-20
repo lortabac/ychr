@@ -1,5 +1,6 @@
 :- module(runtime_error_call_stack, [boom/1]).
 :- use_module(prelude).
+:- chr_type tags ---> foo.
 
 :- function helper/1.
 helper(X) -> X + foo.
