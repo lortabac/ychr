@@ -13,7 +13,7 @@
 (library (ychr)
   (export
     ;; --- (ychr repl) -------------------------------------------------
-    open-session query tell-by-name with-program
+    open-session tell
     ;; --- (ychr pretty) -----------------------------------------------
     pretty-term pretty-bindings bindings->string
     ;; --- (ychr runtime): vars, terms, unification --------------------

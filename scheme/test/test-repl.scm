@@ -1,38 +1,41 @@
 (import (rnrs)
+        (rnrs io ports)
         (srfi :64)
         (ychr runtime)
         (ychr pretty)
         (ychr repl))
 
 ;;; --------------------------------------------------------------------------
-;;; A mock program-info dispatcher built by hand. Mirrors the shape the
-;;; Scheme codegen emits (`(ychr generated <name>)` exports a procedure
-;;; that responds to 'init and 'tells), so this test exercises the
-;;; helpers without needing the Haskell compiler in the loop.
+;;; Hand-built mock that mirrors what `(ychr generated <name>)` emits:
+;;; a session thunk plus one tell procedure per constraint with friendly
+;;; aliases bound to it. The codegen produces both qualified and short
+;;; aliases (the latter only when unique within the library); here we
+;;; replicate that pattern manually.
 ;;; --------------------------------------------------------------------------
 
-;;; Mock tell: bind the second argument to the first plus one. Lets us
-;;; verify that name resolution dispatched to the right procedure and
-;;; that fresh-var arguments were threaded through correctly.
-(define (mock-tell-succ s x y)
+(define (mock-program) (%make-session 0))
+
+;;; Mock tell: bind the second argument to the first plus one.
+(define (tell_foo__succ2 s x y)
   (%unify s y (+ (deref x) 1)))
 
 ;;; Mock tell: bind the second argument to the first doubled.
-(define (mock-tell-double s x y)
+(define (tell_baz__double2 s x y)
   (%unify s y (* (deref x) 2)))
 
-(define (mock-program key)
-  (case key
-    ((init) (%make-session 0))
-    ((tells)
-     (list (cons "foo:succ/2"  mock-tell-succ)
-           ;; Two `bar/2` entries in different modules: short form
-           ;; "bar/2" must be reported as ambiguous.
-           (cons "foo:bar/2"   mock-tell-succ)
-           (cons "baz:bar/2"   mock-tell-double)
-           ;; Unique short form "unique/2".
-           (cons "foo:unique/2" mock-tell-succ)))
-    (else (error 'mock-program "unknown key" key))))
+(define foo:succ/2 tell_foo__succ2)
+(define succ/2 tell_foo__succ2)
+(define baz:double/2 tell_baz__double2)
+(define double/2 tell_baz__double2)
+
+;;; Capture everything the body writes to (current-output-port).
+;;; `tell` reports bindings via `display`, so checking that channel is
+;;; the only way to assert the printed form.
+(define (capture-stdout thunk)
+  (let-values (((port extract) (open-string-output-port)))
+    (parameterize ((current-output-port port))
+      (thunk))
+    (extract)))
 
 (test-begin "repl")
 
@@ -57,45 +60,59 @@
                 (bindings->string (list (cons 'X v))))))
 
 ;;; --------------------------------------------------------------------------
-;;; query: end-to-end dispatch and binding capture
+;;; open-session
 ;;; --------------------------------------------------------------------------
 
-(test-group "query qualified name"
-  (let ((s (open-session mock-program)))
-    (let ((r (make-var s)))
-      ;; tell-by-name bypasses the implicit fresh-var handling so we
-      ;; can inspect the bound value directly.
-      (tell-by-name s "foo:succ/2" 10 r)
-      (test-equal "succ(10) binds R to 11" 11 (deref r)))))
+(test-group "open-session returns a fresh session"
+  (let ((s1 (open-session mock-program))
+        (s2 (open-session mock-program)))
+    (test-assert "two opens give distinct sessions"
+                 (not (eq? s1 s2)))))
 
-(test-group "query unambiguous short name"
-  (let ((s (open-session mock-program)))
-    (let ((r (make-var s)))
-      (tell-by-name s "unique/2" 7 r)
-      (test-equal "unique(7) binds R to 8" 8 (deref r)))))
+;;; --------------------------------------------------------------------------
+;;; tell with a qualified alias and a fresh-var placeholder
+;;; --------------------------------------------------------------------------
 
-(test-group "query ambiguous short name raises"
+(test-group "tell with qualified alias and fresh-var placeholder"
   (let ((s (open-session mock-program)))
-    (let ((r (make-var s)))
-      (test-error "bar/2 is ambiguous"
-                  (tell-by-name s "bar/2" 1 r)))))
+    (test-equal "succ(10, R) prints R = 11"
+                "R = 11\n"
+                (capture-stdout
+                 (lambda () (tell s foo:succ/2 10 'R))))))
 
-(test-group "query unknown name raises"
+;;; --------------------------------------------------------------------------
+;;; tell with the short alias
+;;; --------------------------------------------------------------------------
+
+(test-group "tell with short alias"
   (let ((s (open-session mock-program)))
-    (let ((r (make-var s)))
-      (test-error "no such constraint"
-                  (tell-by-name s "missing/1" r))
-      (test-error "qualified unknown name"
-                  (tell-by-name s "foo:nope/1" r)))))
+    (test-equal "succ(7, R) via short alias"
+                "R = 8\n"
+                (capture-stdout
+                 (lambda () (tell s succ/2 7 'R))))))
 
-(test-group "query without a program raises"
-  ;; Drive the implicit context to #f — the same value the parameter
-  ;; holds before any open-session call. dynamic-wind in with-program
-  ;; restores the prior value cleanly, so the surrounding tests'
-  ;; setup is not perturbed even on the raised-and-caught path.
-  (with-program #f
-    (test-error "no program registered"
-                (let ((s (%make-session 0)))
-                  (tell-by-name s "foo/1" 1)))))
+;;; --------------------------------------------------------------------------
+;;; tell prints nothing when no placeholder is supplied
+;;; --------------------------------------------------------------------------
+
+(test-group "tell with no placeholders prints empty string"
+  (let* ((s (open-session mock-program))
+         (r (make-var s))
+         (out (capture-stdout
+               (lambda () (tell s foo:succ/2 10 r)))))
+    (test-equal "no placeholder => empty output" "" out)
+    (test-equal "var was still bound by the tell call" 11 (deref r))))
+
+;;; --------------------------------------------------------------------------
+;;; Raw direct-call form (skipping tell): users who want full control
+;;; over var lifecycle and output can call the alias as a plain
+;;; procedure.
+;;; --------------------------------------------------------------------------
+
+(test-group "direct-call form"
+  (let* ((s (open-session mock-program))
+         (r (make-var s)))
+    (foo:succ/2 s 10 r)
+    (test-equal "direct call binds r to 11" 11 (deref r))))
 
 (test-end "repl")

@@ -31,6 +31,8 @@ module YCHR.Compile.Names
 
     -- * Source-name encoding
     encodeText,
+    encodeIdentifier,
+    isIdInitialSafe,
     vmName,
 
     -- * Active-constraint argument variables
@@ -55,7 +57,7 @@ module YCHR.Compile.Names
   )
 where
 
-import Data.Char (isAscii, ord)
+import Data.Char (isAlpha, isAscii, isDigit, ord)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Numeric (showHex)
@@ -67,10 +69,21 @@ import YCHR.VM (Label (..), Name (..))
 -- Source-name encoding
 -- ---------------------------------------------------------------------------
 
--- | Encode a text component for use in generated names. ASCII characters
--- pass through unchanged; non-ASCII characters are encoded as
--- @__u{hex codepoint}__@ so the result is always a valid identifier in
--- every backend's target language.
+-- | Encode a text component for use in generated /symbolic/ VM names —
+-- compound-term functors and lambda-closure identifiers. ASCII
+-- characters pass through unchanged; non-ASCII characters are
+-- rewritten to @__u{hex codepoint}__@.
+--
+-- This is the encoding used by 'vmName'. The resulting string is
+-- treated as a symbol by the runtime (the Scheme backend falls back
+-- to @(string->symbol "...")@ via 'YCHR.Backend.Scheme.compileSymbol'
+-- when the encoded form isn't a valid Scheme identifier), so the
+-- encoding need not produce a strictly identifier-safe result.
+--
+-- For generated /procedure/ names — @tell_*@, @activate_*@, @func_*@
+-- — use 'encodeIdentifier' instead. Those names are emitted as bare
+-- identifiers in target code and must be valid in both Scheme and
+-- JavaScript.
 encodeText :: Text -> Text
 encodeText = T.concatMap encodeChar
   where
@@ -78,15 +91,61 @@ encodeText = T.concatMap encodeChar
       | isAscii c = T.singleton c
       | otherwise = "__u" <> T.pack (showHex (ord c) "") <> "__"
 
+-- | Encode a text component into an identifier that is valid in every
+-- backend's target language. ASCII letters, digits, @_@, and @$@ pass
+-- through; every other character is rewritten to @__u{hex codepoint}__@.
+--
+-- The allowed character set is the intersection of what JavaScript
+-- and R6RS Scheme accept in identifiers: function names like
+-- @func_prelude__+2@ would be a valid Scheme identifier but not a
+-- valid JavaScript one, so @+@ is escaped.
+--
+-- Used by 'procNameFor' (so generated procedures like @tell_*@ are
+-- always valid identifiers in the target language) and by the alias
+-- builder in 'YCHR.Backend.Scheme'.
+--
+-- The encoding is one-way: total, deterministic, and unambiguous.
+-- Injectivity follows from the parser: 'YCHR.PExpr' rejects atoms
+-- containing @__@, so no source-language name can look like an
+-- escape sequence and collide with one.
+encodeIdentifier :: Text -> Text
+encodeIdentifier = T.concatMap encodeChar
+  where
+    encodeChar c
+      | isAscii c && (isAlpha c || isDigit c || c == '_' || c == '$') =
+          T.singleton c
+      | otherwise = "__u" <> T.pack (showHex (ord c) "") <> "__"
+
+-- | Predicate that classifies a character as safe as the /first/
+-- character of an identifier. Letters, @_@, and @$@ qualify; digits
+-- do not. Used by alias builders, where the encoded component lands
+-- at the start of an identifier and a leading digit would be
+-- syntactically illegal.
+isIdInitialSafe :: Char -> Bool
+isIdInitialSafe c = isAscii c && (isAlpha c || c == '_' || c == '$')
+
 -- | Build a VM 'Name' for a source-language identifier of the given
 -- arity, prefixed by a procedure-kind tag (@tell@, @activate@, @func@,
 -- …). Qualified names embed both the module and the local part,
 -- separated by @__@.
+--
+-- The module and constraint-name components are passed through
+-- 'encodeIdentifier' (not 'encodeText') so the resulting procedure
+-- name is always a valid identifier in every backend's target
+-- language — including JavaScript, where operator characters like
+-- @+@, @-@, @*@, @/@ are illegal in function names.
 procNameFor :: Text -> Types.Name -> Int -> Name
 procNameFor prefix (Types.Qualified m n) arity =
-  Name (prefix <> "_" <> encodeText m <> "__" <> encodeText n <> T.pack (show arity))
+  Name
+    ( prefix
+        <> "_"
+        <> encodeIdentifier m
+        <> "__"
+        <> encodeIdentifier n
+        <> T.pack (show arity)
+    )
 procNameFor prefix (Types.Unqualified n) arity =
-  Name (prefix <> "_" <> encodeText n <> T.pack (show arity))
+  Name (prefix <> "_" <> encodeIdentifier n <> T.pack (show arity))
 
 -- | Encode a source-language 'Types.Name' as a VM 'Name' /without/ a
 -- procedure-kind prefix. Used for compound-term functors and lambda

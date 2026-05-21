@@ -410,7 +410,8 @@ the layer construction.
 `src/YCHR/Backend/Scheme.hs` bakes in many assumptions the Scheme
 runtime must satisfy: the `(ychr runtime)` library is imported, every
 procedure takes `%s` as its first parameter, return is via `call/cc`
-with `%return`, `%init!` takes the type count, `drain-queue!` takes
+with `%return`, the session thunk exported by each generated library
+calls `(%make-session N)` directly, `drain-queue!` takes
 `(session, alive-checking-lambda)`, `Foreach` expects
 `(snapshot, count)` from the runtime. These contracts live only in
 code, on both sides. A small ABI-doc section in

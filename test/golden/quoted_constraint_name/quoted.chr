@@ -1,0 +1,12 @@
+:- module(quoted, ['foo bar'/2]).
+
+% Exercises the Scheme-identifier encoding for constraint names that
+% are valid Prolog atoms (single-quoted) but whose characters are not
+% legal in a Scheme identifier. The space here forces the encoder to
+% emit '__u20__' in both the mangled procedure name and the friendly
+% alias, so the generated library is loadable and the alias resolves
+% statically.
+
+:- chr_constraint 'foo bar'/2.
+
+'foo bar'(_, R) <=> R = term(ok).

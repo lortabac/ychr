@@ -16,8 +16,9 @@ import Data.List (nub, sort)
 import Data.List.NonEmpty qualified as NE
 import Data.Text (Text)
 import Data.Text qualified as T
-import YCHR.Backend.Scheme (compileSymbol)
-import YCHR.Compile (funcProcName, tellProcName)
+import YCHR.Backend.Scheme (compileSymbol, qualifiedAliasIdentifier)
+import YCHR.Compile (funcProcName)
+import YCHR.Compile.Names (vmName)
 import YCHR.Resolved qualified as R
 import YCHR.SExpr (SExpr (..), printSExpr)
 import YCHR.Types (HeadArg (..), QualifiedName, Term (..))
@@ -36,11 +37,16 @@ import YCHR.VM.Types (Name (..))
 generateDriver :: Text -> QualifiedName -> [R.Expr] -> Text
 generateDriver moduleName qn args =
   let arity = length args
-      tellName = tellProcName (Types.qualifiedToName qn) arity
+      -- Use the exported friendly alias (e.g. @mod:name/2@) emitted by
+      -- the Scheme backend, not the internal mangled @tell_*@ — the
+      -- mangled procedures are no longer exported by generated
+      -- libraries. 'qualifiedAliasIdentifier' is total: it encodes any
+      -- constraint name into a well-formed Scheme identifier.
+      tellAlias = qualifiedAliasIdentifier (Types.qualifiedToName qn) arity
       varNames = nub (concatMap exprVars args)
       sortedVars = sort varNames
       argExprs = map exprToScheme args
-      tellCall = "(" <> tellName.unName <> " %s " <> T.intercalate " " argExprs <> ")"
+      tellCall = "(" <> tellAlias <> " %s " <> T.intercalate " " argExprs <> ")"
       bindingsCall = case sortedVars of
         [] -> []
         vs ->
@@ -51,6 +57,10 @@ generateDriver moduleName qn args =
               <> "))"
           ]
       body = map ("    " <>) (tellCall : bindingsCall)
+      -- The generated library's program-info binding is a thunk named
+      -- after the library's final segment; calling it creates a fresh
+      -- session.
+      openSession = "(let ((%s (" <> moduleName <> ")))"
    in T.unlines $
         [ "(import (rnrs) (ychr runtime) (ychr pretty)",
           "        (ychr generated " <> moduleName <> "))",
@@ -58,11 +68,11 @@ generateDriver moduleName qn args =
         ]
           ++ case varNames of
             [] ->
-              ["(let ((%s (%init!)))"]
+              [openSession]
                 ++ body
                 ++ [")"]
             _ ->
-              [ "(let ((%s (%init!)))",
+              [ openSession,
                 "  (let* ("
                   <> T.intercalate
                     "\n         "
@@ -93,9 +103,7 @@ exprToScheme R.WildcardExpr = "*wildcard*"
 exprToScheme (R.CtorExpr (Types.Unqualified "term") [arg]) =
   termToScheme (R.exprToTerm arg)
 exprToScheme (R.CtorExpr name args) =
-  let flat = case name of
-        Types.Qualified m n -> m <> "__" <> n
-        Types.Unqualified n -> n
+  let flat = (vmName name).unName
       argExprs = map exprToScheme args
    in "(make-term "
         <> printSExpr (compileSymbol flat)
@@ -116,9 +124,7 @@ exprToScheme (R.ApplyExpr f args) =
    in "(" <> dispatch <> " %s " <> T.intercalate " " fAndArgs <> ")"
 exprToScheme (R.FunRefExpr qn arity) =
   -- Mirrors 'compileExpr's encoding for first-class function refs.
-  let flat = case Types.qualifiedToName qn of
-        Types.Qualified m n -> m <> "__" <> n
-        Types.Unqualified n -> n
+  let flat = (vmName (Types.qualifiedToName qn)).unName
    in "(make-term "
         <> printSExpr (compileSymbol "/")
         <> " (vector "
@@ -147,8 +153,8 @@ termToScheme (VarTerm n) = n
 termToScheme Wildcard = "*wildcard*"
 termToScheme (CompoundTerm (Types.Unqualified ".") [h, t]) =
   "(%cons " <> termToScheme h <> " " <> termToScheme t <> ")"
-termToScheme (CompoundTerm (Types.Qualified m n) ts) =
-  let flat = m <> "__" <> n
+termToScheme (CompoundTerm name@(Types.Qualified _ _) ts) =
+  let flat = (vmName name).unName
       argExprs = map termToScheme ts
    in "(make-term "
         <> printSExpr (compileSymbol flat)
