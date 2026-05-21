@@ -1,0 +1,11 @@
+:- module(m3).
+:- use_module(m1).
+:- use_module(m2).
+:- chr_constraint r/1.
+
+% Bug repro from dev-docs/BUGS.md: both m1 and m2 export a data
+% constructor named `foo`. An unqualified use must be rejected
+% with YCHR-20012, parallel to YCHR-20001 in the function/constraint
+% namespace. The user should qualify the constructor (`m1:foo` or
+% `m2:foo`) to disambiguate.
+r(R) <=> R = foo.

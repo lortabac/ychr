@@ -36,6 +36,7 @@ tests =
     [ sameModuleTests,
       importedTests,
       ambiguousTests,
+      ambiguousDataConTests,
       unknownTests,
       alreadyQualifiedTests,
       goalClassificationTests,
@@ -165,6 +166,66 @@ ambiguousTests =
           Left [Diagnostic _ (AnnP (AmbiguousName "leq" 2 _) _ _)] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other
     ]
+
+--------------------------------------------------------------------------------
+-- ambiguous data constructors: multiple visible providers ->
+-- AmbiguousDataConstructor (YCHR-20012). Parallel to 'ambiguousTests'
+-- but for the constructor namespace, which carries no arity (data
+-- constructors are not arity-overloadable).
+--------------------------------------------------------------------------------
+
+ambiguousDataConTests :: TestTree
+ambiguousDataConTests =
+  testGroup
+    "ambiguous data constructor"
+    [ testCase "two imports both export a nullary constructor 'foo'" $ do
+        let modA = modWithCtor "A" "foo" []
+            modB = modWithCtor "B" "foo" []
+            modC =
+              ( module' "C"
+                  `importing` ["A", "B"]
+                  `declaring` ["r" // 1]
+                  `defining` [[term "r" [var "R"]] <=> [var "R" .=. atom "foo"]]
+              )
+        case renameProgram [modA, modB, modC] of
+          Left [Diagnostic _ (AnnP (AmbiguousDataConstructor "foo" _) _ _)] ->
+            pure ()
+          other ->
+            assertFailure $
+              "expected AmbiguousDataConstructor error, got " ++ show other,
+      testCase "two imports both export a unary constructor 'foo'" $ do
+        let modA = modWithCtor "A" "foo" [TypeCon (Unqualified "int") []]
+            modB = modWithCtor "B" "foo" [TypeCon (Unqualified "int") []]
+            modC =
+              ( module' "C"
+                  `importing` ["A", "B"]
+                  `declaring` ["r" // 1]
+                  `defining` [ [term "r" [var "R"]]
+                                 <=> [var "R" .=. term "foo" [IntTerm 42]]
+                             ]
+              )
+        case renameProgram [modA, modB, modC] of
+          Left [Diagnostic _ (AnnP (AmbiguousDataConstructor "foo" _) _ _)] ->
+            pure ()
+          other ->
+            assertFailure $
+              "expected AmbiguousDataConstructor error, got " ++ show other
+    ]
+  where
+    -- Empty module that declares a single type @t/0@ with one
+    -- constructor @ctor@ at the given argument shape.
+    modWithCtor modName ctor argTypes =
+      (module' modName)
+        { typeDecls =
+            [ noAnn
+                ( TypeDefinition
+                    (Unqualified "t")
+                    []
+                    [DataConstructor (Unqualified ctor) argTypes]
+                    dummyLoc
+                )
+            ]
+        }
 
 --------------------------------------------------------------------------------
 -- unknown: no visible provider -> UnknownName error

@@ -236,6 +236,7 @@ renameErrorCode (UnknownExportedConstructor _ _ _ _) = ErrorCode 20008
 renameErrorCode (NotExportedByModule _ _ _) = ErrorCode 20009
 renameErrorCode (NonExportedConstructor _ _ _) = ErrorCode 20010
 renameErrorCode (ConstructorNotExported _ _ _ _) = ErrorCode 20011
+renameErrorCode (AmbiguousDataConstructor _ _) = ErrorCode 20012
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
@@ -656,6 +657,13 @@ renameErrorMsg (ConstructorNotExported modName tyName tyArity conName) =
         ++ "' in module '"
         ++ T.unpack modName
         ++ "'"
+    )
+renameErrorMsg (AmbiguousDataConstructor name candidates) =
+  withHint
+    ("Ambiguous data constructor '" ++ T.unpack name ++ "'")
+    ( "exported by: "
+        ++ intercalate ", " (map T.unpack candidates)
+        ++ "; qualify the constructor explicitly to disambiguate"
     )
 
 instance Display (Diagnostic RenameWarning) where

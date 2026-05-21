@@ -52,39 +52,6 @@ r(R) <=> L = fun(X) -> X + 1 end, R is call(L, 5).
 Actual: two `YCHR-20101` warnings for `fun` and `->`; runs and yields
 `R = 6`. Expected: clean compile.
 
-## Ambiguous unqualified constructor reference is silently accepted
-
-`docs/reference/language.md` §Modules: "If two imports both export an
-identifier of the same name and arity, an unqualified use is rejected
-and the user must disambiguate. The same qualification applies to
-data constructors and atoms." The rule is enforced for functions
-(fires `YCHR-20001 Ambiguous name 'f/1'`) but skipped for the
-constructor namespace.
-
-Repro:
-
-```chr
-% m1.chr
-:- module(m1).
-:- chr_type t ---> foo ; bar.
-
-% m2.chr
-:- module(m2).
-:- chr_type t ---> foo ; baz.
-
-% m3.chr
-:- module(m3).
-:- use_module(m1).
-:- use_module(m2).
-:- chr_constraint r/1.
-r(R) <=> R = foo.
-```
-
-Actual: `ychr check` exits 0; goal `m3:r(R)` yields `R = foo` — a
-bare atom that is neither `m1:foo` nor `m2:foo`, so downstream `==`
-against either returns false. Expected: rejection parallel to the
-function case. Same divergence at non-zero arity.
-
 ## `ychr run -g GOAL` rejects goals the REPL accepts
 
 `docs/reference/language.md` §Tell-side evaluation lists "Top-level

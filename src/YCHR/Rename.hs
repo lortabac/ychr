@@ -106,6 +106,13 @@ data RenameError
     -- name, the type name, the type arity, and the offending
     -- constructor name.
     ConstructorNotExported Text Text Int Text
+  | -- | An unqualified bare reference to a data constructor that is
+    -- exported by more than one visible module. Parallel to
+    -- 'AmbiguousName' (YCHR-20001) for the function/constraint
+    -- namespace, but without arity: data constructors are not
+    -- arity-overloadable, so the name alone identifies the clash.
+    -- Carries the constructor name and the list of providers.
+    AmbiguousDataConstructor Text [Text]
   deriving (Eq, Show)
 
 data RenameWarning
@@ -280,6 +287,20 @@ canonicalizeData ctx (Unqualified n) arity =
   case canonicalizeDataCon ctx n arity of
     Just qn -> qn
     Nothing -> Unqualified n
+
+-- | Emit 'AmbiguousDataConstructor' (YCHR-20012) when the data-constructor
+-- providers map lists more than one module for @(n, arity)@. Mirrors
+-- the multi-provider arm of 'resolveName' (YCHR-20001) but for the
+-- constructor namespace. Callers invoke this at every non-opaque use
+-- site that would otherwise silently fall through 'canonicalizeData'
+-- (which collapses both unknown and ambiguous into a no-op rewrite).
+checkAmbiguousDataCon ::
+  RenameCtx -> SourceLoc -> PExpr -> Text -> Int -> Rename ()
+checkAmbiguousDataCon ctx loc origin n arity =
+  case Map.lookup (n, arity) ctx.dataConProviders of
+    Just ms@(_ : _ : _) ->
+      emitError (AnnP (AmbiguousDataConstructor n ms) loc origin)
+    _ -> pure ()
 
 -- | All declared constraints and functions across all modules, indexed by
 -- @(name, arity)@. Functions and constraints share a namespace, so both
@@ -731,10 +752,15 @@ renameTerm ctx loc origin mode t = case t of
           -- name matches a visible function or constraint declaration:
           -- 'Resolve.termToExpr' will later canonicalize it to a
           -- 'CallExpr' for tell-side argument evaluation, so it is not
-          -- a misspelled data constructor.
+          -- a misspelled data constructor. The data-constructor
+          -- ambiguity check is gated by the same condition: if the
+          -- name resolves unambiguously in the function/constraint
+          -- namespace, that resolution wins and any data-constructor
+          -- ambiguity in the same name is moot for this use.
           Unqualified n
-            | null (visibleProviders ctx n (length args)) ->
+            | null (visibleProviders ctx n (length args)) -> do
                 warnUnknownDataCon ctx.dataConEnv loc origin n (length args)
+                checkAmbiguousDataCon ctx loc origin n (length args)
             | otherwise -> pure ()
           -- Qualified references in pattern position (head args,
           -- body-tell args) get the same visibility check as in
@@ -752,9 +778,15 @@ renameTerm ctx loc origin mode t = case t of
         pure (canonicalizeData ctx name (length args))
       _ -> do
         resolved <- resolveName mode ctx loc origin name (length args)
-        pure $ case resolved of
-          Unqualified _ -> canonicalizeData ctx resolved (length args)
-          Qualified _ _ -> resolved
+        case resolved of
+          Unqualified n -> do
+            -- Gate on 'null visibleProviders' so we don't pile a
+            -- YCHR-20012 on top of the YCHR-20001 that 'resolveName'
+            -- has already emitted when both namespaces are ambiguous.
+            when (null (visibleProviders ctx n (length args))) $
+              checkAmbiguousDataCon ctx loc origin n (length args)
+            pure (canonicalizeData ctx resolved (length args))
+          Qualified _ _ -> pure resolved
     pure (CompoundTerm newName renamedArgs)
   -- Zero-arity atom promotion: if a bare atom matches a declared
   -- constraint, function, or data constructor with arity 0, promote
@@ -771,9 +803,20 @@ renameTerm ctx loc origin mode t = case t of
       _ -> resolveName ResolveAll ctx loc origin (Unqualified n) 0
     case resolved of
       Qualified _ _ -> pure (CompoundTerm resolved [])
-      Unqualified _ -> case canonicalizeDataCon ctx n 0 of
-        Just qn -> pure (CompoundTerm qn [])
-        Nothing -> pure (AtomTerm n)
+      Unqualified _ -> do
+        -- Skip the ambiguity check in the @term/1@ opaque-quote
+        -- mode, and skip it when the function/constraint namespace
+        -- already has something to say about the name (either it
+        -- resolves there, or 'resolveName' has already emitted
+        -- YCHR-20001 for an ambiguity there).
+        case mode of
+          NoResolveQuoted -> pure ()
+          _ ->
+            when (null (visibleProviders ctx n 0)) $
+              checkAmbiguousDataCon ctx loc origin n 0
+        case canonicalizeDataCon ctx n 0 of
+          Just qn -> pure (CompoundTerm qn [])
+          Nothing -> pure (AtomTerm n)
   other -> pure other
 
 -- ---------------------------------------------------------------------------
