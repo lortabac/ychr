@@ -3,6 +3,7 @@ module YCHR.VM
   ( -- * Program structure
     Program (..),
     Procedure (..),
+    EvaluableKey (..),
 
     -- * Statements
     Stmt (..),

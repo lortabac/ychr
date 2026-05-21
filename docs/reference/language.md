@@ -215,13 +215,13 @@ constructor.
 - Top-level goals.
 - Function and constructor arguments inside any of the above.
 - The right-hand side of `is`.
-- Operands of `=`, with the unification exception described in
-  [The `=` operator](#the--operator).
 - Rule guards and equation guards.
 - Function equation right-hand sides.
 
 **Non-evaluating positions:**
 
+- Operands of `=` — `=` is pure structural unification; see
+  [The `=` operator](#the--operator).
 - Rule heads and equation patterns: these match on data shapes; a
   pattern like `f(g(X))` matches a compound whose argument is itself
   a compound, regardless of what `g` resolves to.
@@ -280,26 +280,26 @@ variables.
 
 ## The `=` operator
 
-`=` is unification, not pure evaluation. Function calls, host calls,
-and ctor arguments on either side evaluate as usual, but a bare
-variable on either side — or a variable as a direct child of a
-data-constructor compound — is a unification slot: if the name is
-not already in scope it is introduced as a fresh logical variable
-and the unifier binds it.
+`=` is pure structural unification — neither operand evaluates. A
+compound on either side is treated as data, even when its head names
+a declared function or host call. Variables appearing anywhere in
+either operand are unification slots: if the name is not already in
+scope it is introduced as a fresh logical variable and the unifier
+binds it.
 
 ```chr
 test(R) <=> Y = 10, R = Y.                       % Y introduced by '='
 test(R1, R2) <=> pair(X, Y) = pair(1, 2),        % X, Y introduced under ctor
                  R1 = X, R2 = Y.
+test(R) <=> R = 1 + 1.                           % R bound to compound '+(1, 1)'
+test(R) <=> R = double(YY).                      % R bound to compound 'double(YY)';
+                                                 % YY allocated as a fresh var
 ```
 
-A variable inside a function-call or host-call argument is *not* a
-unification slot — those positions evaluate, so an unbound name there
-is rejected with `YCHR-40002` at compile time:
-
-```chr
-test(R) <=> R = double(YY).   % rejected: YY unbound in a call argument
-```
+Use `is` when you want to evaluate arithmetic, call a function for
+its return value, or otherwise reduce an expression — see
+[The `is` operator](#the-is-operator). The same `=` policy applies
+in rule bodies and queries.
 
 ## The `is` operator
 

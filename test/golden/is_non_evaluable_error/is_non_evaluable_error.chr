@@ -1,0 +1,10 @@
+:- module(ine, [bad/1, type(pair/2)]).
+:- use_module(prelude).
+:- chr_constraint bad/1.
+:- chr_type pair(A, B) ---> pair(A, B).
+
+% Build a compound whose functor is a declared *constructor* (not a
+% function). Deep-evaluating it via `is` should raise a runtime
+% error: the runtime evaluator has no procedure to call for a
+% data constructor.
+bad(R) <=> X = pair(1, 2), R is X.

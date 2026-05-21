@@ -13,4 +13,4 @@
 
 foo(X, Y) -> X > Y.
 
-result(R) <=> R = foo(3, 4).
+result(R) <=> R is foo(3, 4).

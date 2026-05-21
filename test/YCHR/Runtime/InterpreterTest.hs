@@ -48,13 +48,13 @@ tests =
 -- give them a place to live.
 runChrEmpty :: Chr a -> IO a
 runChrEmpty action = do
-  env <- initSessionEnv [] Map.empty Map.empty Map.empty Set.empty
+  env <- initSessionEnv [] Map.empty Map.empty Map.empty Map.empty Set.empty
   runChr action env
 
 -- | Like 'runChrEmpty' but with the base host-call registry available.
 runChrBase :: Chr a -> IO a
 runChrBase action = do
-  env <- initSessionEnv [] Map.empty baseHostCallRegistry Map.empty Set.empty
+  env <- initSessionEnv [] Map.empty baseHostCallRegistry Map.empty Map.empty Set.empty
   runChr action env
 
 -- | Run a Chr action against the LEQ session.
@@ -64,6 +64,7 @@ runChrLeq action = do
     initSessionEnv
       [Types.Unqualified "leq"]
       leqProcMap
+      Map.empty
       Map.empty
       Map.empty
       Set.empty
@@ -88,7 +89,8 @@ singleProc procName params body =
       typeNames = [],
       numRules = 0,
       ruleNames = [],
-      procedures = [Procedure procName params body]
+      procedures = [Procedure procName params body],
+      evaluables = []
     }
 
 errorPathTests :: TestTree
@@ -208,6 +210,7 @@ leqProgram =
       typeNames = [Types.Unqualified "leq"],
       numRules = 1,
       ruleNames = ["transitivity"],
+      evaluables = [],
       procedures =
         [ tellLeq,
           activateLeq,
@@ -616,6 +619,7 @@ makeCalcProc body =
       typeNames = [],
       numRules = 0,
       ruleNames = [],
+      evaluables = [],
       procedures =
         [ Procedure
             "calc"

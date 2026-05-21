@@ -46,6 +46,7 @@ module YCHR.VM.Types
   ( -- * Program structure
     Program (..),
     Procedure (..),
+    EvaluableKey (..),
 
     -- * Statements
     Stmt (..),
@@ -107,9 +108,28 @@ data Program = Program
     -- by runtime introspection and preserved across VM serialization.
     ruleNames :: ![Text],
     -- | The procedures that make up the program.
-    procedures :: [Procedure]
+    procedures :: [Procedure],
+    -- | Dispatch table for the @is@ deep-evaluator. Maps a
+    -- @(functor, arity)@ key (as found on a @VTerm@) to the
+    -- mangled procedure name in 'procedures'. One entry per
+    -- user-defined function (prelude host calls are handled by
+    -- the runtime's host-call registry, which is bare-functor
+    -- keyed). Used by the runtime to call into user-defined
+    -- functions when @is@ walks a dereferenced compound term.
+    evaluables :: ![(EvaluableKey, Name)]
   }
   deriving (Show, Eq)
+
+-- | Dispatch key for the @is@ deep-evaluator. Parallel in structure
+-- to 'YCHR.Types.Identifier', but carries the VM-encoded form of the
+-- functor (the same text stored on @VTerm@ values), so dispatch is
+-- a direct map lookup with no need to invert
+-- 'YCHR.Compile.Names.encodeText'.
+data EvaluableKey = EvaluableKey
+  { functor :: !Name,
+    arity :: !Int
+  }
+  deriving (Show, Eq, Ord)
 
 -- | A named procedure with parameters and a body.
 --
@@ -230,8 +250,17 @@ data ValExpr
     -- expression: 'Var' references are dereferenced (following binding
     -- chains) before use, and this mode propagates recursively into
     -- sub-expressions ('CallExpr', 'MakeTerm', etc.). Used for guard
-    -- expressions and the right-hand side of @is@.
+    -- expressions and the non-'Var' right-hand sides of @is@.
     EvalDeep ValExpr
+  | -- | The @is@-with-variable-RHS case: evaluate the nested expression
+    -- in deep-deref mode and then walk the resulting 'Value',
+    -- evaluating any compound subterm whose @(functor, arity)@ names
+    -- a declared evaluable. Emitted only by 'compileBodyGoal' for
+    -- @D.BodyIs v expr@ when @expr@ is syntactically a variable; this
+    -- is the marker that makes the walker fire for @R is X@ without
+    -- affecting guards or other 'EvalDeep' use sites. See the
+    -- "Variable RHS in @is@" subsection of the type-system reference.
+    EvalIs ValExpr
   | -- Logical variables
 
     -- | Create a fresh unbound logical variable.

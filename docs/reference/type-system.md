@@ -233,6 +233,38 @@ rule @ result(R) <=> R is double(1).
 - `result(R)`: `R` is `int`, which constrains the argument of
   `result`.
 
+### Variable RHS in `is`
+
+When the RHS of `is` is *syntactically a variable* — e.g.
+`R is X` — the type checker widens the LHS to `any`. This is a
+deliberate escape hatch: at runtime the deep evaluator walks the
+bound term and may dispatch to any declared function selected by
+the dynamic shape of the value (so `X = 1 + 1, R is X` binds
+`R` to `2`, and `Y = foo(3), R is Y` binds `R` to whatever the
+declared `foo/1` returns). The static type of the variable on the
+RHS is therefore not a reliable predictor of the dynamic result
+type, so the LHS is left at `any`.
+
+Downstream uses of the LHS may still constrain it through normal
+gradual-typing rules — `any` unifies with any concrete type
+established elsewhere in the rule.
+
+This widening applies *only* to the bare-variable case. Every
+other RHS shape (host calls like `R is 1 + 1`, user function calls
+like `R is double(1)`, term constructors like `R is term(pair(1, 2))`,
+and any compound expression nesting those) keeps the existing
+rule: the LHS unifies with the RHS's inferred type. The outer
+typed operation determines the result type, so static information
+is preserved.
+
+Note that the type checker's inferred LHS type can still be
+unreachable at runtime — `R is term(pair(1, 2))` type-checks with
+`R: pair(int, int)` because `term(...)` is a quoting form, but the
+runtime evaluator sees `pair/2` as a non-evaluable functor and
+raises `YCHR-60001`. The type checker doesn't model the runtime
+distinction between evaluable functions and data constructors; that
+distinction is only enforced at evaluation time.
+
 
 ## Type Checking Procedure
 

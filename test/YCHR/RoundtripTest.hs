@@ -261,7 +261,7 @@ lookupHostCall name = case Map.lookup name baseHostCallRegistry of
 
 runChrEmpty :: Chr a -> IO a
 runChrEmpty action = do
-  env <- initSessionEnv [] Map.empty Map.empty Map.empty Set.empty
+  env <- initSessionEnv [] Map.empty Map.empty Map.empty Map.empty Set.empty
   runChr action env
 
 prop_compoundToListRoundtrip :: Property

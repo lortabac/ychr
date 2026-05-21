@@ -135,9 +135,32 @@ compile prog symTab =
                 typeNames = buildTypeNames symTab,
                 numRules = length ruleDisplayNames,
                 ruleNames = ruleDisplayNames,
-                procedures = procs ++ funProcs ++ [dispatch] ++ callFunDispatches
+                procedures = procs ++ funProcs ++ [dispatch] ++ callFunDispatches,
+                evaluables = buildEvaluables prog.functions
               }
         else Left allErrs
+
+-- | Build the dispatch table consumed by the runtime @is@
+-- deep-evaluator. Each user-defined function contributes one entry
+-- mapping its 'EvaluableKey' (VM-encoded functor + arity, matching
+-- the form stored on a @VTerm@) to the mangled 'funcProcName' that
+-- resolves the compiled procedure.
+--
+-- The list may carry one entry per source function, which means the
+-- @(functor, arity)@ key is unique by construction: the language
+-- already forbids two functions of the same name and arity (an
+-- @open_function@ across modules still has a single equation set
+-- under the same qualified name, so it surfaces here as one entry).
+-- The runtime's @Map.fromList@ would otherwise pick the last entry
+-- silently.
+buildEvaluables :: [D.Function] -> [(EvaluableKey, Name)]
+buildEvaluables functions =
+  [ ( EvaluableKey {functor = vmName funcName, arity = func.arity},
+      funcProcName funcName func.arity
+    )
+  | func <- functions,
+    let funcName = Types.qualifiedToName func.name
+  ]
 
 -- | Build the list of constraint type source names, indexed by
 -- 'Types.ConstraintType'. The list is ordered by the constraint type's
@@ -457,6 +480,16 @@ compileTerm _ _ (IntTerm n) = pure (Lit (IntLit n))
 compileTerm _ _ (FloatTerm n) = pure (Lit (FloatLit n))
 compileTerm _ _ (AtomTerm s) = pure (Lit (AtomLit s))
 compileTerm _ _ (TextTerm s) = pure (Lit (TextLit s))
+-- @term/1@ quoting marker: transparent at compile time. Lets callers
+-- that compile through 'exprToTerm' (e.g. 'compileBodyGoal' for
+-- 'D.BodyUnify') preserve the user's "keep symbolic" intent — the
+-- marker collapses, and the inner term compiles in its place. The
+-- only place 'term/1' is *not* transparent is inside 'compileExpr',
+-- which used to short-circuit on the wrapper before delegating here;
+-- after the unification rewrite the short-circuit is redundant but
+-- still harmless.
+compileTerm varMap si (CompoundTerm (Types.Unqualified "term") [arg]) =
+  compileTerm varMap si arg
 -- Native-bool fast path: source @true@/@false@ reach @compileTerm@ only
 -- as the renamer-canonicalized @prelude:true@ / @prelude:false@ form
 -- (see 'YCHR.Rename.canonicalizeDataCon'). Match the canonical compound
@@ -571,6 +604,7 @@ freeVars = goV
     goV (CallExpr _ args) = Set.unions (map goA args)
     goV (HostCall _ es) = Set.unions (map goV es)
     goV (EvalDeep e) = goV e
+    goV (EvalIs e) = goV e
     goV (MakeTerm _ es) = Set.unions (map goV es)
     goV (GetArg e _) = goV e
     goV (FieldArg e _) = goI e
@@ -767,9 +801,22 @@ unifyAndReactivate l r =
 -- 'ApplyExpr', 'FunRefExpr', 'LambdaExpr' — those are evaluation
 -- positions whose variables must already be in scope, so a fresh name
 -- there is a typo and should surface as YCHR-40002 via 'compileExpr'.
+-- | Free variables that appear in /term position/ within an
+-- expression — i.e. positions where 'compileTerm' will consume the
+-- value structurally rather than evaluating it. Under non-evaluating
+-- '=' every sub-expression of an '=' operand is a term position, so
+-- this recurses through every compound shape ('CtorExpr',
+-- 'CallExpr', 'HostExpr', 'ApplyExpr'). Used by
+-- 'compileBodyGoal' for 'D.BodyUnify' to decide which fresh
+-- 'NewVar's the unification itself must allocate before
+-- 'compileTerm' sees an unbound name and raises @YCHR-40002@.
 termPositionVars :: R.Expr -> [Text]
 termPositionVars (R.VarExpr v) = [v]
 termPositionVars (R.CtorExpr _ args) = concatMap termPositionVars args
+termPositionVars (R.CallExpr _ args) = concatMap termPositionVars args
+termPositionVars (R.HostExpr _ args) = concatMap termPositionVars args
+termPositionVars (R.ApplyExpr f args) =
+  termPositionVars f ++ concatMap termPositionVars args
 termPositionVars _ = []
 
 -- | Compile a single body goal, returning the generated statements and
@@ -803,36 +850,50 @@ compileBodyGoal _ varMap si (D.BodyTell qn args) = do
   let tellName = tellProcName (Types.qualifiedToName qn) (length callArgs)
   pure (newStmts ++ [ExprStmt (CallExpr tellName (map AVal callArgs))], varMap')
 compileBodyGoal _ varMap si (D.BodyUnify t1 t2) = do
-  -- A variable that appears on either side of '=' in a term-construction
-  -- position (top, or under a 'CtorExpr') but is not yet in scope is
-  -- introduced by the unification itself: it becomes a fresh logical
-  -- variable slot that 'BUnify' then binds. Variables nested in a
-  -- 'CallExpr' / 'HostExpr' / 'ApplyExpr' argument are evaluating
-  -- positions and must already be in scope; 'compileExpr' raises
-  -- YCHR-40002 if they are not. 'nub' guards against repeated
-  -- occurrences like 'X = X' that would otherwise allocate two
-  -- 'NewVar's for the same name.
+  -- '=' is pure structural unification: both operands are compiled as
+  -- terms, not expressions. Function-call shapes ('CallExpr',
+  -- 'HostExpr', 'ApplyExpr') do not evaluate — they become symbolic
+  -- compounds via 'R.exprToTerm' + 'compileTerm', the same chain that
+  -- powers the 'term/1' quoting form. Mirrors the query-side
+  -- 'Run.exprToValue' so '=' has the same semantics in rule bodies
+  -- and queries. Use 'is' for arithmetic evaluation.
+  --
+  -- Any variable appearing anywhere inside an operand that is not yet
+  -- in scope is introduced by the unification itself: it becomes a
+  -- fresh logical variable slot that 'BUnify' then binds. 'nub' guards
+  -- against repeated occurrences like 'X = X' that would otherwise
+  -- allocate two 'NewVar's for the same name.
   let freshVars =
         nub [v | v <- termPositionVars t1 ++ termPositionVars t2, notMemberVar v varMap]
       newStmts = [LetVal (Name v) NewVar | v <- freshVars]
       varMap' = foldl' (\m v -> insertVar v (Var (Name v)) m) varMap freshVars
-  t1' <- compileExpr varMap' si t1
-  t2' <- compileExpr varMap' si t2
+  t1' <- compileTerm varMap' si (R.exprToTerm t1)
+  t2' <- compileTerm varMap' si (R.exprToTerm t2)
   pure (newStmts ++ unifyAndReactivate t1' t2', varMap')
 compileBodyGoal _ varMap si (D.BodyHostStmt f args) = do
   args' <- traverse (compileExpr varMap si) args
   pure ([ExprStmt (HostCall (Name f) args')], varMap)
 compileBodyGoal _ varMap si (D.BodyIs v expr) = do
   expr' <- compileExpr varMap si expr
+  -- A bare-variable RHS (@R is X@) needs the dereferenced compound to
+  -- be walked at runtime: emit 'EvalIs' to trigger 'deepEvalValue'.
+  -- Any other RHS shape (host call, user function call, term ctor)
+  -- already returns an evaluated value from its outer operation;
+  -- 'EvalDeep' (deep-deref only) is sufficient. Mirrors the
+  -- syntactic gate in 'checkBodyGoal' for the type checker — same
+  -- pattern, same widening rule.
+  let rhs = case expr of
+        R.VarExpr _ -> EvalIs expr'
+        _ -> EvalDeep expr'
   case lookupVar v varMap of
     -- Re-binding a variable already bound by the head: tell-unify so any
     -- existing constraints observing it are reactivated.
-    Just existing -> pure (unifyAndReactivate existing (EvalDeep expr'), varMap)
+    Just existing -> pure (unifyAndReactivate existing rhs, varMap)
     -- First binding of this variable: an ordinary 'LetVal' is enough; no
     -- observers can exist yet.
     Nothing ->
       let varMap' = insertVar v (Var (Name v)) varMap
-       in pure ([LetVal (Name v) (EvalDeep expr')], varMap')
+       in pure ([LetVal (Name v) rhs], varMap')
 compileBodyGoal _ varMap si (D.BodyCall qn args) = do
   args' <- traverse (compileExpr varMap si) args
   let funcName = Types.qualifiedToName qn

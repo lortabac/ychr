@@ -96,7 +96,15 @@ withCHRExtra si hc extraProcs action = do
         Map.fromList [(p.name, p) | p <- si.program.procedures]
       extraProcMap = Map.fromList [(p.name, p) | p <- extraProcs]
       procMap = extraProcMap `Map.union` baseProcMap
-  env <- initSessionEnv si.program.typeNames procMap hc si.exportMap si.exportedSet
+  let evaluableMap = Map.fromList si.program.evaluables
+  env <-
+    initSessionEnv
+      si.program.typeNames
+      procMap
+      hc
+      evaluableMap
+      si.exportMap
+      si.exportedSet
   runChr action env
 
 -- | Add a constraint to the store. The constraint name can be

@@ -5,6 +5,7 @@ module YCHR.GoldenTest (tests) where
 import Control.Exception (SomeException, fromException, try)
 import Control.Monad (filterM)
 import Data.Char (isSpace)
+import Data.Foldable (traverse_)
 import Data.List (isInfixOf, partition, sort, sortOn)
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -191,9 +192,14 @@ runPositive spec goalFile expectedFile = do
   prettyBindings bindings @?= expected
 
 -- | Compile + program-typecheck must succeed; running the goal must throw
--- an 'Error' whose displayed message contains the expected error code.
--- Any other outcome (success, non-'Error' exception, wrong code) fails
--- the test.
+-- an 'Error' whose displayed message contains every non-empty line of
+-- the '.error' file (each line is an independent substring assertion).
+-- The first line is conventionally the @YCHR-NNNNN@ code, but the code
+-- alone is often too generic — @YCHR-60001@ covers every runtime error,
+-- so a typo could satisfy the assertion accidentally. Subsequent lines
+-- pin a phrase from the actual error text to anchor the test against
+-- the intended failure path. Any other outcome (success, non-'Error'
+-- exception, missing substring) fails the test.
 runGoalNegative :: TestSpec -> FilePath -> FilePath -> IO ()
 runGoalNegative spec goalFile errorFile = do
   (prog, ws) <-
@@ -207,7 +213,7 @@ runGoalNegative spec goalFile errorFile = do
       assertFailure
         ("Type errors in " ++ spec.testName ++ ":\n" ++ unlines (map displayMsg errs))
   query <- TIO.readFile goalFile
-  expectedCode <- trim <$> readFile errorFile
+  expectedSubstrings <- nonEmptyLines <$> readFile errorFile
   (constraint, goalWs) <- prepareGoal prog (T.strip query)
   checkWarnings spec "goal" goalWs
   outcome <-
@@ -221,40 +227,52 @@ runGoalNegative spec goalFile errorFile = do
   case outcome of
     Right _ ->
       assertFailure
-        ("Expected goal to fail with " ++ expectedCode ++ " but it succeeded")
+        ( "Expected goal to fail with "
+            ++ show expectedSubstrings
+            ++ " but it succeeded"
+        )
     Left exc -> case fromException exc of
       Just (err :: Error) -> do
         let msg = displayMsg err
-        assertBool
-          ("Expected error code " ++ expectedCode ++ " in:\n" ++ msg)
-          (expectedCode `isInfixOf` msg)
+        traverse_
+          ( \sub ->
+              assertBool
+                ("Expected substring " ++ show sub ++ " in:\n" ++ msg)
+                (sub `isInfixOf` msg)
+          )
+          expectedSubstrings
       Nothing ->
         assertFailure
-          ("Expected an Error matching " ++ expectedCode ++ " but got: " ++ show exc)
+          ( "Expected an Error matching "
+              ++ show expectedSubstrings
+              ++ " but got: "
+              ++ show exc
+          )
   where
     trim = reverse . dropWhile isSpace . reverse . dropWhile isSpace
+    nonEmptyLines = filter (not . null) . map trim . lines
 
 runNegative :: TestSpec -> FilePath -> IO ()
 runNegative spec errorFile = do
   result <- compileFiles False spec.chrFiles
-  expectedCode <- trim <$> readFile errorFile
+  expectedSubstrings <- nonEmptyLines <$> readFile errorFile
   case result of
-    Left err -> do
-      let msg = displayMsg err
-      assertBool
-        ("Expected error code " ++ expectedCode ++ " in:\n" ++ msg)
-        (expectedCode `isInfixOf` msg)
+    Left err -> assertAllPresent (displayMsg err) expectedSubstrings
     Right (prog, _ws) -> do
       typeErrors <- typeCheckProgram prog.desugaredProgram
       case typeErrors of
         [] -> assertFailure "Expected compilation or type checking to fail, but it succeeded"
-        errs -> do
-          let msg = unlines (map displayMsg errs)
-          assertBool
-            ("Expected error code " ++ expectedCode ++ " in:\n" ++ msg)
-            (expectedCode `isInfixOf` msg)
+        errs -> assertAllPresent (unlines (map displayMsg errs)) expectedSubstrings
   where
     trim = reverse . dropWhile isSpace . reverse . dropWhile isSpace
+    nonEmptyLines = filter (not . null) . map trim . lines
+    assertAllPresent msg =
+      traverse_
+        ( \sub ->
+            assertBool
+              ("Expected substring " ++ show sub ++ " in:\n" ++ msg)
+              (sub `isInfixOf` msg)
+        )
 
 -- | Assert no warnings unless the test is on the allowlist. The
 -- @phase@ label distinguishes compile-time warnings from goal-time

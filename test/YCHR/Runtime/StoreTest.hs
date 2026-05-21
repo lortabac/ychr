@@ -36,6 +36,7 @@ runStoreEnv action = do
       Map.empty
       Map.empty
       Map.empty
+      Map.empty
       Set.empty
   runChr action env
 

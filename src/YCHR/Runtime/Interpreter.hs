@@ -22,6 +22,9 @@ module YCHR.Runtime.Interpreter
     HostCallRegistry,
     baseHostCallRegistry,
 
+    -- * Deep-eval walker (shared with the query-time evaluator)
+    deepEvalValue,
+
     -- * Internal (for testing)
     callProc,
     bindParams,
@@ -154,7 +157,8 @@ type InterpM = ReaderT (IORef Env) Chr
 interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO Value
 interpret prog hostCalls entryName args = do
   let procMap = Map.fromList [(p.name, p) | p <- prog.procedures]
-  env <- initSessionEnv prog.typeNames procMap hostCalls Map.empty mempty
+      evaluableMap = Map.fromList prog.evaluables
+  env <- initSessionEnv prog.typeNames procMap hostCalls evaluableMap Map.empty mempty
   runChr (callProc entryName (map CVal args)) env
 
 -- ---------------------------------------------------------------------------
@@ -413,6 +417,17 @@ evalValExpr (FieldType expr) = do
   ct <- lift (getConstraintType sid)
   pure (VInt ct.unConstraintType)
 evalValExpr (EvalDeep expr) = evalValExprDeep expr
+-- 'EvalIs' is the @is@-with-variable-RHS marker. The compiler only
+-- emits it for @R is X@ where @X@ is syntactically a variable; the
+-- inner expression is therefore always a 'Var'. We evaluate that
+-- 'Var', dereference, and then walk the resulting value with
+-- 'deepEvalValue' so a bound compound whose functor is a declared
+-- function actually evaluates (matching SWI Prolog's @is@ on a
+-- variable). Other 'EvalDeep' use sites (guards, non-variable @is@
+-- RHSes) do not invoke the walker.
+evalValExpr (EvalIs expr) = do
+  v <- evalValExprDeep expr
+  lift (deepEvalValue v)
 
 -- ---------------------------------------------------------------------------
 -- Bool-expression evaluator (normal mode)
@@ -544,6 +559,16 @@ unifyOrError v1 v2 = do
 -- | Evaluate a value expression with automatic dereferencing: variable
 -- references follow binding chains before use, and this mode propagates
 -- into sub-expressions. Used to implement 'EvalDeep' (guards and @is@ RHS).
+--
+-- This evaluator dereferences 'Var' references once. The
+-- 'EvalDeep' case at 'evalValExpr' is responsible for the additional
+-- value-side walk that evaluates a dereferenced compound term —
+-- it applies only when the outer 'EvalDeep' is a bare 'Var', so that
+-- @R is X@ (RHS is a variable) walks @X@'s bound term but
+-- @R is copy_term(term(X))@ (RHS is a host call) leaves @X@'s bound
+-- compound symbolic for the host call's benefit. This intentionally
+-- mirrors the type checker's rule: only @R is X@ widens the LHS to
+-- @any@.
 evalValExprDeep :: ValExpr -> InterpM Value
 evalValExprDeep (Var name) = do
   v <- evalValExpr (Var name)
@@ -558,6 +583,46 @@ evalValExprDeep (MakeTerm functor args) = do
   argVals <- traverse evalValExprDeep args
   pure $ makeTerm functor.unName argVals
 evalValExprDeep expr = evalValExpr expr
+
+-- | Walk a runtime 'Value', evaluating any compound subterm whose
+-- @(functor, arity)@ names a declared host call or a compiled user
+-- function. Atomic values pass through. Unbound variables are
+-- dereferenced once and then re-walked, so a chain of bindings
+-- ending in a compound triggers full evaluation. Functors that do
+-- not name an evaluable declaration (constructors, undeclared
+-- atoms, arity mismatches with the host-call registry) raise a
+-- runtime error — mirroring SWI Prolog's @type_error(evaluable, F\/N)@.
+--
+-- 'MakeTerm' callers do /not/ funnel through this walker — the
+-- @term/1@ quoting form must continue to produce the symbolic
+-- compound it was asked to build.
+deepEvalValue :: Value -> Chr Value
+deepEvalValue v = do
+  v' <- deref v
+  case v' of
+    VTerm functor args -> do
+      args' <- traverse deepEvalValue args
+      let key = EvaluableKey {functor = Name functor, arity = length args}
+      invokeByKey key args'
+    _ -> pure v'
+
+-- | Dispatch a value-side deep-evaluation step: prefer a user-defined
+-- function (resolved through the compiler-emitted 'evaluables' table),
+-- fall back to the host-call registry, and raise a runtime error if
+-- neither matches. The two-tier order lets a user shadow a prelude
+-- host call by declaring a function of the same name and arity.
+invokeByKey :: EvaluableKey -> [Value] -> Chr Value
+invokeByKey key args = do
+  SessionEnv {evaluables, hostCalls} <- ask
+  case Map.lookup key evaluables of
+    Just procName -> callProc procName (map CVal args)
+    Nothing ->
+      case Map.lookup key.functor hostCalls of
+        Just _ -> invokeHostCall key.functor args
+        Nothing ->
+          runtimeError'
+            "is: functor is not evaluable: "
+            (key.functor.unName <> "/" <> T.pack (show key.arity))
 
 evalCallArgDeep :: CallArg -> InterpM CallVal
 evalCallArgDeep (AVal e) = CVal <$> evalValExprDeep e

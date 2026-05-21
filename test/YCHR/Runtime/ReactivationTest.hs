@@ -22,7 +22,7 @@ tests =
 
 runReactEnv :: Chr a -> IO a
 runReactEnv action = do
-  env <- initSessionEnv [] Map.empty Map.empty Map.empty Set.empty
+  env <- initSessionEnv [] Map.empty Map.empty Map.empty Map.empty Set.empty
   runChr action env
 
 -- | Drain the queue, collecting all IDs in order.

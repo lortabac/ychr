@@ -113,8 +113,13 @@ programToSExpr prog =
         : SList (SAtom "type-names" : map chrNameToSExpr prog.typeNames)
         : SInt prog.numRules
         : SList (SAtom "rule-names" : map SString prog.ruleNames)
+        : SList (SAtom "evaluables" : map evaluableEntryToSExpr prog.evaluables)
         : map procedureToSExpr prog.procedures
     )
+
+evaluableEntryToSExpr :: (EvaluableKey, Name) -> SExpr
+evaluableEntryToSExpr (key, procName) =
+  SList [nameToSExpr key.functor, SInt key.arity, nameToSExpr procName]
 
 procedureToSExpr :: Procedure -> SExpr
 procedureToSExpr proc =
@@ -170,6 +175,7 @@ valExprToSExpr (CallExpr n es) =
 valExprToSExpr (HostCall n es) =
   SList (SAtom "host-call" : nameToSExpr n : map valExprToSExpr es)
 valExprToSExpr (EvalDeep e) = SList [SAtom "eval-deep", valExprToSExpr e]
+valExprToSExpr (EvalIs e) = SList [SAtom "eval-is", valExprToSExpr e]
 valExprToSExpr NewVar = SAtom "new-var"
 valExprToSExpr (MakeTerm n es) =
   SList (SAtom "make-term" : nameToSExpr n : map valExprToSExpr es)
@@ -288,11 +294,13 @@ programFromSExpr
           : SList (SAtom "type-names" : tnSexprs)
           : SInt nr
           : SList (SAtom "rule-names" : rnSexprs)
+          : SList (SAtom "evaluables" : evSexprs)
           : procs
         )
     ) = do
     tns <- traverse chrNameFromSExpr tnSexprs
     rns <- traverse textFromSExpr rnSexprs
+    evs <- traverse evaluableEntryFromSExpr evSexprs
     ps <- traverse procedureFromSExpr procs
     pure
       Program
@@ -300,9 +308,17 @@ programFromSExpr
           typeNames = tns,
           numRules = nr,
           ruleNames = rns,
+          evaluables = evs,
           procedures = ps
         }
 programFromSExpr s = err ("expected (program ...), got: " <> printSExpr s)
+
+evaluableEntryFromSExpr :: SExpr -> Err (EvaluableKey, Name)
+evaluableEntryFromSExpr (SList [fSexpr, SInt arity, pSexpr]) = do
+  functor <- nameFromSExpr fSexpr
+  procName <- nameFromSExpr pSexpr
+  pure (EvaluableKey {functor = functor, arity = arity}, procName)
+evaluableEntryFromSExpr s = err ("expected evaluable entry, got: " <> printSExpr s)
 
 textFromSExpr :: SExpr -> Err Text
 textFromSExpr (SString t) = pure t
@@ -375,6 +391,7 @@ valExprFromSExpr (SList (SAtom "call-expr" : n : es)) =
 valExprFromSExpr (SList (SAtom "host-call" : n : es)) =
   HostCall <$> nameFromSExpr n <*> traverse valExprFromSExpr es
 valExprFromSExpr (SList [SAtom "eval-deep", e]) = EvalDeep <$> valExprFromSExpr e
+valExprFromSExpr (SList [SAtom "eval-is", e]) = EvalIs <$> valExprFromSExpr e
 valExprFromSExpr (SAtom "new-var") = pure NewVar
 valExprFromSExpr (SList (SAtom "make-term" : n : es)) =
   MakeTerm <$> nameFromSExpr n <*> traverse valExprFromSExpr es

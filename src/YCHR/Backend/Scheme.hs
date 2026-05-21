@@ -214,9 +214,15 @@ programInfoBindingName libName = case reverse libName of
   [] -> error "programInfoBindingName: empty library name"
 
 -- | Build the program-info binding: a zero-argument thunk that
--- allocates a fresh runtime session.
+-- allocates a fresh runtime session. The session's deep-eval
+-- dispatch table is populated immediately so @is@ can reach every
+-- user-defined function in the library.
 --
--- > (define (NAME) (%make-session N))
+-- > (define (NAME)
+-- >   (let ((%s (%make-session N)))
+-- >     (register-evaluable! %s 'functor1 arity1 proc1)
+-- >     ...
+-- >     %s))
 --
 -- @(open-session NAME)@ in the REPL library simply invokes this thunk;
 -- the dispatcher-style @(NAME 'init)@ / @(NAME 'tells)@ protocol is
@@ -224,10 +230,28 @@ programInfoBindingName libName = case reverse libName of
 -- exported alias identifiers.
 programInfoSExpr :: Text -> VMProgram -> SExpr
 programInfoSExpr infoName vmp =
+  let bindings = [SList [SAtom "%s", SList [SAtom "%make-session", SInt vmp.program.numTypes]]]
+      registrations = map evaluableRegistration vmp.program.evaluables
+      -- The let body is the session itself, returned to the caller.
+      letBody = SAtom "%s"
+   in SList
+        [ SAtom "define",
+          SList [SAtom infoName],
+          SList ([SAtom "let", SList bindings] ++ registrations ++ [letBody])
+        ]
+
+-- | Emit @(register-evaluable! %s 'functor arity procedure)@ for a
+-- single entry of the program's evaluables table. The procedure
+-- identifier is the same mangled name bound by 'compileProcedure', so
+-- direct identifier reference resolves it in the library's scope.
+evaluableRegistration :: (EvaluableKey, Name) -> SExpr
+evaluableRegistration (key, procName) =
   SList
-    [ SAtom "define",
-      SList [SAtom infoName],
-      SList [SAtom "%make-session", SInt vmp.program.numTypes]
+    [ SAtom "register-evaluable!",
+      SAtom "%s",
+      compileSymbol key.functor.unName,
+      SInt key.arity,
+      SAtom procName.unName
     ]
 
 -- ---------------------------------------------------------------------------
@@ -447,6 +471,18 @@ compileValExpr (HostCall n args) =
   compileHostCall n args
 compileValExpr (EvalDeep e) =
   compileEvalDeep e
+compileValExpr (EvalIs e) =
+  -- @is@-with-variable-RHS marker. The inner expression is always a
+  -- 'Var' (the compiler only emits this form for that case): we
+  -- evaluate it with deep-deref and then walk the dereferenced value
+  -- through 'deep-eval-value' so a bound compound whose functor is a
+  -- declared evaluable gets actually evaluated. Mirrors
+  -- 'evalValExpr (EvalIs _)' in the Haskell interpreter.
+  SList
+    [ SAtom "deep-eval-value",
+      SAtom "%s",
+      compileEvalDeep e
+    ]
 compileValExpr NewVar =
   SList [SAtom "make-var", SAtom "%s"]
 compileValExpr (MakeTerm (Name f) args) =

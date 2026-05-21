@@ -25,6 +25,7 @@ module YCHR.Runtime.Monad
     ProcMap,
     HostCallFn (..),
     HostCallRegistry,
+    EvaluableRegistry,
   )
 where
 
@@ -40,7 +41,7 @@ import Data.Set qualified as Set
 import YCHR.Compile.Pipeline (ExportResolution)
 import YCHR.Runtime.Types (Suspension, SuspensionId, Value, VarId (..))
 import YCHR.Types qualified as Types
-import YCHR.VM (Procedure, RuleId, StackFrame)
+import YCHR.VM (EvaluableKey, Procedure, RuleId, StackFrame)
 import YCHR.VM qualified as VM
 
 -- | The runtime call stack (newest frame first), used for error reporting.
@@ -51,6 +52,12 @@ type ProcMap = Map VM.Name Procedure
 
 -- | Registry of host-language functions callable from compiled code.
 type HostCallRegistry = Map VM.Name HostCallFn
+
+-- | Registry of user-defined functions that the deep-evaluator can
+-- dispatch to. Maps a @(functor, arity)@ key (as seen on a 'VTerm')
+-- to the mangled 'ProcMap' key that resolves the corresponding
+-- compiled procedure.
+type EvaluableRegistry = Map EvaluableKey VM.Name
 
 -- | The host-side runtime monad.
 type Chr = ReaderT SessionEnv IO
@@ -92,6 +99,10 @@ data SessionEnv = SessionEnv
     procMap :: !(IORef ProcMap),
     -- | Host-call registry.
     hostCalls :: !HostCallRegistry,
+    -- | Deep-evaluator dispatch table for the @is@ operator.
+    -- Populated from the compiler's user-defined-function list at
+    -- session init.
+    evaluables :: !EvaluableRegistry,
     -- | Export map from the compiler — used to resolve unqualified
     -- constraint names at 'tellConstraint' time.
     exportMap :: !(Map Types.UnqualifiedIdentifier ExportResolution),
@@ -104,10 +115,11 @@ initSessionEnv ::
   [Types.Name] ->
   ProcMap ->
   HostCallRegistry ->
+  EvaluableRegistry ->
   Map Types.UnqualifiedIdentifier ExportResolution ->
   Set Types.QualifiedIdentifier ->
   IO SessionEnv
-initSessionEnv typeNames pm hc expMap expSet = do
+initSessionEnv typeNames pm hc ev expMap expSet = do
   vc <- newIORef (VarId 0)
   let typeCount = length typeNames
       emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
@@ -131,6 +143,7 @@ initSessionEnv typeNames pm hc expMap expSet = do
         callStack = cs,
         procMap = pmRef,
         hostCalls = hc,
+        evaluables = ev,
         exportMap = expMap,
         exportedSet = expSet
       }

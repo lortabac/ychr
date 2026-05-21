@@ -25,12 +25,12 @@ tests =
 
 roundtripTests :: [TestTree]
 roundtripTests =
-  [ testCase "empty program" $ roundtrip (Program 0 [] 0 [] []),
+  [ testCase "empty program" $ roundtrip (Program 0 [] 0 [] [] []),
     testCase "single empty procedure" $
-      roundtrip (Program 1 [Types.Unqualified "foo"] 0 [] [Procedure "foo" [] []]),
+      roundtrip (Program 1 [Types.Unqualified "foo"] 0 [] [Procedure "foo" [] []] []),
     testCase "procedure with params" $
       roundtrip
-        (Program 1 [Types.Unqualified "leq"] 0 [] [Procedure "tell_leq2" ["X", "Y"] []]),
+        (Program 1 [Types.Unqualified "leq"] 0 [] [Procedure "tell_leq2" ["X", "Y"] []] []),
     testCase "let-val statement" $
       roundtrip (mkProg [LetVal "x" (Lit (IntLit 42))]),
     testCase "let-id statement" $
@@ -175,6 +175,7 @@ roundtripTests =
                     []
                 ]
             ]
+            []
         )
   ]
 
@@ -203,7 +204,9 @@ formatTests =
   [ testCase "var serialization" $
       assertContains
         (serializeProg (mkProg [ExprStmt (Var "x")]))
-        "(program 0 (type-names) 0 (rule-names) (procedure \"p\" () (expr-stmt (var \"x\"))))",
+        ( "(program 0 (type-names) 0 (rule-names) (evaluables) "
+            <> "(procedure \"p\" () (expr-stmt (var \"x\"))))"
+        ),
     testCase "literals inline without wrapper" $ do
       assertContains (serializeProg (mkProg [LetVal "x" (Lit (BoolLit True))])) "true"
       assertContains (serializeProg (mkProg [LetVal "x" (Lit (BoolLit False))])) "false"
@@ -222,6 +225,7 @@ formatTests =
                     2
                     [Types.Qualified "M" "leq", Types.Unqualified "gcd"]
                     0
+                    []
                     []
                     [],
                 exportedSet =
@@ -257,7 +261,7 @@ serializeProg = serialize . mkVMProg
 
 -- | Build a minimal program with one procedure containing the given body.
 mkProg :: [Stmt] -> Program
-mkProg body = Program 0 [] 0 [] [Procedure "p" [] body]
+mkProg body = Program 0 [] 0 [] [Procedure "p" [] body] []
 
 -- | Wrap a Program into a VMProgram with empty metadata.
 mkVMProg :: Program -> VMProgram

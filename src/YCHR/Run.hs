@@ -88,7 +88,7 @@ import YCHR.Rename (renameQueryArgs, renameQueryGoals)
 import YCHR.Resolve (ResolveError, termToExpr)
 import YCHR.Resolved qualified as R
 import YCHR.Runtime.Error (RuntimeErrorThrown (..))
-import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc)
+import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc, deepEvalValue)
 import YCHR.Runtime.Monad (Chr, SessionEnv (..))
 import YCHR.Runtime.Reactivation (drainQueue, enqueue)
 import YCHR.Runtime.Session
@@ -454,7 +454,15 @@ executeBodyGoal (D.BodyHostStmt f args) = do
   _ <- lift (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
   pure ()
 executeBodyGoal (D.BodyIs v expr) = do
-  result <- evalNestedExpr expr
+  -- Mirror 'evalValExpr (EvalDeep (Var _))' in the compiled interpreter:
+  -- when the RHS is syntactically a variable, walk the dereferenced
+  -- value so a bound compound with an evaluable functor gets evaluated
+  -- (@X = 1 + 1, R is X@ ⇒ @R = 2@). For all other RHS shapes the
+  -- result of the outer typed operation is already final.
+  raw <- evalNestedExpr expr
+  result <- case expr of
+    R.VarExpr _ -> lift (deepEvalValue raw)
+    _ -> pure raw
   varMap <- get
   case Map.lookup v varMap of
     Just existing -> do

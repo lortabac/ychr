@@ -1,0 +1,19 @@
+:- module(idc, [arith/1, ufun/1, bare_quoted/1]).
+:- use_module(prelude).
+:- chr_constraint arith/1, ufun/1, bare_quoted/1.
+
+:- function tenfold/1.
+tenfold(N) -> N * 10.
+
+% RHS is a bare variable bound to an arithmetic compound; the
+% deep-evaluator must walk it.
+arith(R) <=> X = 1 + 1, R is X.
+
+% Same idea with a user-defined function as the bound functor.
+ufun(R) <=> Y = tenfold(3), R is Y.
+
+% Bare-functor quoted via term/1: VTerm carries unqualified `+`. The
+% deep-evaluator's prelude host-call fallback (parallel to Haskell's
+% `hostCalls` lookup in `invokeByKey`) handles this case identically
+% on both backends.
+bare_quoted(R) <=> X = term('+'(1, 1)), R is X.
