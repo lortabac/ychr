@@ -956,15 +956,7 @@ checkBodyGoal cctx (D.BodyIs v expr) = do
   vType <- chrOp (varType cctx v)
   exprType <- typeOfExpr cctx expr
   ctx <- freshCtxHandle cctx
-  case expr of
-    -- @R is X@ where the RHS is syntactically a variable: at runtime
-    -- the deep-evaluator walks @X@'s bound term and may invoke any
-    -- declared function selected by the dynamic shape of the value,
-    -- so the result type is not statically predictable. Widen @R@
-    -- to @any@. The RHS expression has still been type-checked
-    -- above (via 'typeOfExpr') for its own well-formedness.
-    R.VarExpr _ -> tellCheckUnify ctx vType (tcCon0 "any")
-    _ -> tellCheckUnify ctx vType exprType
+  tellCheckUnify ctx vType exprType
 checkBodyGoal cctx (D.BodyCall qn args) = do
   argTypeVars <- traverse (typeOfExpr cctx) args
   retTypeVar <- chrOp newVar

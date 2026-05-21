@@ -1,0 +1,13 @@
+:- module(ivpt, [go/2]).
+:- use_module(prelude).
+
+% Two arguments share the type parameter A, so the head ties R's
+% inferred type to S's. `Sum = 1 + 1` makes Sum : int; with the new
+% rule, `R is Sum` propagates int to R (and thus to A and S), so
+% unifying S with a string literal is a type error.
+%
+% Under the previous bare-variable widening, `R is Sum` set R to
+% `any` and the rule type-checked silently.
+:- chr_constraint go(A, A).
+
+go(R, S) <=> Sum = 1 + 1, R is Sum, S = "hello".
