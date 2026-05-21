@@ -29,29 +29,6 @@ Actual: `YCHR-20002 Unknown name 'nonexistent/1'`. Expected: a
 distinct 16xxx code naming the `requiring` clause, parallel to
 YCHR-16008.
 
-## Lambdas on the RHS of `=` emit spurious YCHR-20101 warnings
-
-`docs/reference/language.md` §"Lambdas and function references" lists
-lambdas as first-class values; `docs/reference/syntax.md` §Expressions
-treats `fun(...) -> Body end` as a distinct expression form. Nothing
-says binding a lambda with `=` is special. In practice, a lambda on
-the RHS of `=` is mis-classified as the compound `'->'(fun(X), Body)`,
-producing two `YCHR-20101 Undeclared data constructor` warnings (for
-`fun` and `->`). The same lambda on the RHS of `is` is warning-clean.
-Under `--Werror` this rejects an otherwise-valid program, and the
-warning hint ("declare it with `:- chr_type`") cannot fix a lambda.
-
-Repro:
-
-```chr
-:- module(z).
-:- chr_constraint r/1.
-r(R) <=> L = fun(X) -> X + 1 end, R is call(L, 5).
-```
-
-Actual: two `YCHR-20101` warnings for `fun` and `->`; runs and yields
-`R = 6`. Expected: clean compile.
-
 ## `ychr run -g GOAL` rejects goals the REPL accepts
 
 `docs/reference/language.md` §Tell-side evaluation lists "Top-level

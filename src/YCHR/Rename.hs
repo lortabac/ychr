@@ -696,6 +696,15 @@ renameTerm ctx loc origin mode t = case t of
     renamedLhs <- renameTerm ctx loc origin NoResolve lhs
     renamedRhs <- renameTerm ctx loc origin ResolveAll rhs
     pure (CompoundTerm (Unqualified "is") [renamedLhs, renamedRhs])
+  -- Special case: @=@ is symmetric unification; both operands are
+  -- evaluated expressions (PROJECT.md). Without this, the parent
+  -- 'ResolveTop' would demote the operands to 'NoResolve', the lambda
+  -- arm's 'isResolving' guard would fail, and 'fun'/'->' would leak
+  -- out as spurious YCHR-20101 warnings.
+  CompoundTerm (Unqualified "=") [lhs, rhs] | isResolving mode -> do
+    renamedLhs <- renameTerm ctx loc origin ResolveAll lhs
+    renamedRhs <- renameTerm ctx loc origin ResolveAll rhs
+    pure (CompoundTerm (Unqualified "=") [renamedLhs, renamedRhs])
   -- Lambda: @fun(params) -> body@. Params are variable patterns (don't resolve),
   -- the body is always an expression.
   CompoundTerm

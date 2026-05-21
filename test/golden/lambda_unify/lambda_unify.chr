@@ -1,0 +1,4 @@
+:- module(lambda_unify, [result/1]).
+:- chr_constraint result/1.
+
+result(R) <=> L = fun(X) -> X + 1 end, R is '$call'(L, 5).
