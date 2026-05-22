@@ -64,6 +64,7 @@ userMod :: [AnnP Import] -> Module
 userMod imps =
   Module
     { name = "user",
+      nameLoc = dummyLoc,
       imports = imps,
       decls = [],
       extensionTypes = [],
@@ -79,6 +80,7 @@ libMod :: Text -> Module
 libMod name =
   Module
     { name = name,
+      nameLoc = dummyLoc,
       imports = [],
       decls = [],
       extensionTypes = [],

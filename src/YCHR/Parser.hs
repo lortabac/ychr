@@ -613,10 +613,10 @@ convertModule terms =
       dirs = [d | ItemDirective d <- items]
       rules = [r | ItemRule r <- items]
       eqs = [e | ItemEquation e <- items]
-      (modName_, modExports_) = case [(n, l, p, e) | DirModule n l p e <- dirs] of
-        ((n, l, p, Just decls) : _) -> (n, Just (AnnP decls l p))
-        ((n, _, _, Nothing) : _) -> (n, Nothing)
-        [] -> ("<no_module>", Nothing)
+      (modName_, modNameLoc_, modExports_) = case [(n, l, p, e) | DirModule n l p e <- dirs] of
+        ((n, l, p, Just decls) : _) -> (n, l, Just (AnnP decls l p))
+        ((n, l, _, Nothing) : _) -> (n, l, Nothing)
+        [] -> ("<no_module>", dummyLoc, Nothing)
       modImports_ = [n | DirImport n <- dirs]
       modDecls_ =
         concat [ds | DirConstraintDecl ds <- dirs]
@@ -636,6 +636,7 @@ convertModule terms =
       mod_ =
         Module
           { name = modName_,
+            nameLoc = modNameLoc_,
             imports = modImports_,
             decls = modDecls_,
             extensionTypes = modExtensionTypes_,

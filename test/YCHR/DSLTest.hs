@@ -120,6 +120,7 @@ moduleTests =
     emptyModule n =
       Module
         { name = n,
+          nameLoc = dummyLoc,
           imports = [],
           decls = [],
           extensionTypes = [],
@@ -554,6 +555,7 @@ integrationTests =
         orderModule
           @?= Module
             { name = "Order",
+              nameLoc = dummyLoc,
               imports = [],
               decls = [noAnn (ConstraintDecl "leq" 2 Nothing Nothing)],
               extensionTypes = [],
@@ -581,6 +583,7 @@ integrationTests =
         logicModule
           @?= Module
             { name = "Logic",
+              nameLoc = dummyLoc,
               imports = [noAnnP (ModuleImport "Order" Nothing)],
               decls = [],
               extensionTypes = [],

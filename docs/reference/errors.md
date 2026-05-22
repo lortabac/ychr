@@ -59,6 +59,7 @@ internal error constructor to its code and human-readable message.
 | `YCHR-16016` | `ConstraintFunctionCollision` | A name is declared as both `:- chr_constraint` and a function-like form in the same module. Constraints and functions share the symbol namespace. |
 | `YCHR-16017` | `LambdaParamError` | A lambda parameter is not a variable or the anonymous variable (`_`). |
 | `YCHR-16018` | `EmptyLambdaParams` | A lambda has no parameters. Lambdas must declare at least one parameter; use `:- function` for a no-arg helper. |
+| `YCHR-16019` | `ReservedModuleName` | A user module is declared with a reserved name (currently `host`, which is wired in as the host-call qualifier). Rename the module. |
 
 ### Rename phase (`2xxxx` errors, `2x1xx` warnings)
 

@@ -6,29 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## A user module named `host` shadows its own functions
-
-`docs/reference/language.md` §"Host calls": "`host:` is a wired-in
-qualifier, not a real module." Module names are otherwise free
-identifiers; the spec is silent on `host` as a user module name. The
-`host:` interception runs at value-evaluation sites and shadows the
-user's own function at its own definition site.
-
-Repro:
-
-```chr
-:- module(host).
-:- function id_/1.
-id_(X) -> X.
-:- chr_constraint c/1.
-c(R) <=> R is id_(42).
-```
-
-Actual: `ychr check` exits 0; goal `host:c(R)` raises
-`YCHR-60001 invokeHostCall: unknown host call id_`. Expected: reserve
-the name `host` (parallel to `term/1`'s `YCHR-16003`), or qualify
-user-function lookups before `host:` dispatch.
-
 ## `:- module(...)` is documented as required but is optional; `<no_module>` leaks
 
 `docs/reference/language.md` §Modules: "Every program is organized

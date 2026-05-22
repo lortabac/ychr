@@ -94,6 +94,10 @@ data Import
 
 data Module = Module
   { name :: Text,
+    -- | Source location of the @:- module(...)@ directive. For
+    -- header-less files, or synthetic modules built outside the
+    -- parser (DSL, query scaffolding), this is 'dummyLoc'.
+    nameLoc :: SourceLoc,
     imports :: [AnnP Import],
     decls :: [Ann Declaration],
     extensionTypes :: [Ann Declaration],

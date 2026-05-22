@@ -1191,6 +1191,7 @@ renameQueryTerms mods mode terms =
   let queryMod =
         Module
           { name = "<query>",
+            nameLoc = dummyLoc,
             imports = [noAnnP (ModuleImport m.name Nothing) | m <- mods],
             decls = [],
             extensionTypes = [],

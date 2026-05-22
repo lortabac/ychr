@@ -387,6 +387,9 @@ and constraint arguments. Argument values are evaluated normally
 before they reach the host; the host return value flows back as an
 ordinary YCHR value.
 
+Because `host:` is wired in, `host` itself is reserved and cannot be
+used as a user module name (`YCHR-16019`).
+
 The prelude already wraps every host arithmetic, comparison, and
 string operation it relies on, so most programs never need to write
 `host:` directly.

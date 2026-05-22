@@ -204,6 +204,7 @@ resolveErrorCode :: ResolveError -> ErrorCode
 resolveErrorCode (ConstraintHasEquations _) = ErrorCode 16001
 resolveErrorCode (FunctionInRuleHead _) = ErrorCode 16002
 resolveErrorCode (ReservedName _) = ErrorCode 16003
+resolveErrorCode (ReservedModuleName _) = ErrorCode 16019
 resolveErrorCode (UnqualifiedConstraintName _) = ErrorCode 16004
 resolveErrorCode (ExtendsClosedFunction _) = ErrorCode 16005
 resolveErrorCode (OrphanFunctionEquation _ _) = ErrorCode 16006
@@ -396,6 +397,10 @@ resolveErrorMsg (ReservedName name) =
   "'"
     ++ displayName name
     ++ "' is a reserved name and cannot be used as a constraint or function"
+resolveErrorMsg (ReservedModuleName name) =
+  withHint
+    ("'" ++ T.unpack name ++ "' is a reserved name and cannot be used as a module name")
+    "'host' is the wired-in host-call qualifier; rename the module"
 resolveErrorMsg (UnqualifiedConstraintName name) =
   withHint
     ( "Internal error: unqualified constraint name reached the resolve phase ('"

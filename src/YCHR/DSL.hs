@@ -146,6 +146,7 @@ module' :: Text -> Module
 module' name =
   Module
     { name = name,
+      nameLoc = dummyLoc,
       imports = [],
       decls = [],
       extensionTypes = [],

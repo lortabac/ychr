@@ -578,6 +578,7 @@ multiModuleTests =
               @?= Right
                 ( [ Module
                       { name = "M",
+                        nameLoc = dummyLoc,
                         imports = [],
                         decls = [noAnn (ConstraintDecl "leq" 2 Nothing Nothing)],
                         extensionTypes = [],

@@ -59,7 +59,8 @@ stripRuleLoc r =
 stripModLoc :: Module -> Module
 stripModLoc m =
   m
-    { imports = map (noAnnP . (.node)) m.imports,
+    { nameLoc = dummyLoc,
+      imports = map (noAnnP . (.node)) m.imports,
       decls = map (noAnn . (.node)) m.decls,
       typeDecls = map (noAnn . (.node)) m.typeDecls,
       rules = map stripRuleLoc m.rules,
@@ -626,6 +627,7 @@ moduleTests =
           @?= Right
             ( Module
                 { name = "order",
+                  nameLoc = dummyLoc,
                   imports = [],
                   decls = [noAnn (ConstraintDecl "leq" 2 Nothing Nothing)],
                   extensionTypes = [],

@@ -53,6 +53,9 @@ data ResolveError
     FunctionInRuleHead Name
   | -- | A name collides with a reserved built-in.
     ReservedName Name
+  | -- | A user module is declared with a reserved name (currently
+    -- only @host@, which is wired in as the host-call qualifier).
+    ReservedModuleName Text
   | -- | A constraint name reached the resolve phase without being
     -- module-qualified by the renamer. Indicates a renamer bug rather
     -- than user error.
@@ -142,6 +145,7 @@ resolveProgram mods =
       eqErrors = checkEquations constraintNames mods
       headErrors = checkRuleHeads (Set.map qualifiedNameToLooseName functionNames) mods
       reservedErrors = checkReservedNames mods
+      reservedModuleErrors = checkReservedModuleNames mods
       orphanEqErrors = checkOrphanEquations functionNames mods
       extendsClosedErrors = checkExtendsClosed funcOpenness mods
       extendsBoundedErrors = checkExtendsBounded funcRequiring mods
@@ -157,6 +161,7 @@ resolveProgram mods =
         eqErrors
           ++ headErrors
           ++ reservedErrors
+          ++ reservedModuleErrors
           ++ orphanEqErrors
           ++ extendsClosedErrors
           ++ extendsBoundedErrors
@@ -828,6 +833,21 @@ checkReservedNames mods =
     isDeclNamed P.ConstraintDecl {} = True
     isDeclNamed P.FunctionDecl {} = True
     isDeclNamed _ = False
+
+-- | Reserved names that cannot be used as user module names. Currently
+-- just @host@, which is wired in as the host-call qualifier in
+-- @Resolve.termToExpr@; allowing it as a user module name would shadow
+-- the user's own functions at their definition site.
+reservedModuleNames :: Set Text
+reservedModuleNames = Set.fromList ["host"]
+
+-- | Check that no module uses a reserved name.
+checkReservedModuleNames :: [P.Module] -> [Diagnostic ResolveError]
+checkReservedModuleNames mods =
+  [ noDiag (P.AnnP (ReservedModuleName m.name) m.nameLoc (PExpr.Atom ""))
+  | m <- mods,
+    m.name `Set.member` reservedModuleNames
+  ]
 
 headConstraints :: P.Head -> [P.Constraint]
 headConstraints (P.Simplification cs) = cs
