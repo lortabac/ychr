@@ -20,6 +20,7 @@ module YCHR.Display
     operatorConflictCode,
     lambdasInLiveQueryCode,
     runtimeErrorCode,
+    goalNotAConstraintCode,
   )
 where
 
@@ -37,7 +38,7 @@ import Text.Parsec.Error qualified as PE
 import Text.Parsec.Pos (SourcePos, sourceColumn, sourceLine, sourceName)
 import YCHR.Collect (CollectError (..))
 import YCHR.Compile (CompileError (..))
-import YCHR.Compile.Pipeline (Error (..), Warning (..))
+import YCHR.Compile.Pipeline (Error (..), GoalRejection (..), Warning (..))
 import YCHR.Desugar (DesugarError (..))
 import YCHR.Diagnostic (Diagnostic (..))
 import YCHR.Parsed (AnnP (..))
@@ -272,6 +273,13 @@ operatorConflictCode = ErrorCode 50002
 
 lambdasInLiveQueryCode :: ErrorCode
 lambdasInLiveQueryCode = ErrorCode 50003
+
+-- | 20013 — @ychr run -g GOAL@ received a goal that is not a single
+-- declared constraint (bare expression, conjunction, function call,
+-- or an unknown name). Lives in the rename/resolution range because
+-- the rejection is about goal-name resolution, not runtime behavior.
+goalNotAConstraintCode :: ErrorCode
+goalNotAConstraintCode = ErrorCode 20013
 
 -- | 6xxxx — shared with type-check; 60001 is also used for runtime errors
 -- raised by 'YCHR.Runtime.Error.runtimeError''/'runtimeErrorS'.
@@ -860,6 +868,43 @@ instance Display Error where
       loc
       (Just "live session")
       (Just (prettyPExprSrc origin))
+  displayMsg (GoalNotAConstraint c reason) =
+    displayMsgWithSrcLoc
+      goalNotAConstraintCode
+      SevError
+      ( withHint
+          ( case reason of
+              NoSuchConstraint ->
+                "Goal '" ++ nameArity ++ "' is not a declared constraint"
+              AmbiguousConstraint ms ->
+                "Goal '"
+                  ++ nameArity
+                  ++ "' is ambiguous: exported by "
+                  ++ intercalate ", " (map T.unpack ms)
+              ConstraintNotExported qn ->
+                "Goal '"
+                  ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+                  ++ "/"
+                  ++ show (length c.args)
+                  ++ "' is not exported by its module"
+              NotAConstraintItem qn ->
+                "Goal '"
+                  ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+                  ++ "/"
+                  ++ show (length c.args)
+                  ++ "' names a function, not a constraint"
+          )
+          ( "`ychr run -g GOAL` accepts only a single declared constraint."
+              ++ " For expression goals like `1 + 1` or `X is E`,"
+              ++ " conjunctions like `a, b`, or function calls,"
+              ++ " use `ychr repl` instead — or wrap them in a helper constraint."
+          )
+      )
+      P.dummyLoc
+      (Just "<query>")
+      Nothing
+    where
+      nameArity = T.unpack (Types.flattenName c.name) ++ "/" ++ show (length c.args)
   displayMsg (RuntimeError msg stack) = displayErrors (renderFrames msg stack)
     where
       -- An empty stack means the error fired before any 'PushFrame'; we

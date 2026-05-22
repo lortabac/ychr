@@ -10,6 +10,7 @@
 module YCHR.Run
   ( -- * Compilation (re-exported from "YCHR.Compile.Pipeline")
     Error (..),
+    GoalRejection (..),
     Warning (..),
     CompiledProgram (..),
     ExportResolution (..),
@@ -34,6 +35,7 @@ module YCHR.Run
     -- * Single-goal API
     resolveQueryConstraint,
     resolveQueryTell,
+    resolveQueryTellOrThrow,
     runProgramWithGoalDSL,
     runProgramWithGoal,
     prepareGoal,
@@ -54,7 +56,6 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ask, runReaderT)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
 import Control.Monad.Trans.Writer.CPS (runWriter)
-import Data.List (intercalate)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
@@ -72,6 +73,7 @@ import YCHR.Compile.Pipeline
   ( CompiledProgram (..),
     Error (..),
     ExportResolution (..),
+    GoalRejection (..),
     Warning (..),
     compileFiles,
     compileModules,
@@ -112,11 +114,17 @@ import YCHR.VM (Name (..), Procedure (..))
 
 -- | Resolve a query constraint against the export map. The resolved
 -- form is a 'Types.QualifiedConstraint' since name resolution always
--- produces a fully-qualified name.
+-- produces a fully-qualified name. On failure, returns a structured
+-- 'GoalRejection' so 'resolveQueryTellOrThrow' can surface a
+-- @YCHR-NNNNN@-coded diagnostic. The rejection only covers
+-- name-resolution failures; the post-resolution check that the
+-- resolved name actually refers to a constraint (and not a function)
+-- lives in 'resolveQueryTellOrThrow', which has the desugared program
+-- in hand.
 resolveQueryConstraint ::
   CompiledProgram ->
   Constraint ->
-  Either String Types.QualifiedConstraint
+  Either GoalRejection Types.QualifiedConstraint
 resolveQueryConstraint cp (Constraint cname cargs) = case cname of
   Types.Unqualified n ->
     let arity = length cargs
@@ -124,28 +132,13 @@ resolveQueryConstraint cp (Constraint cname cargs) = case cname of
           Just (UniqueExport qname) ->
             Right (Types.QualifiedConstraint qname cargs)
           Just (AmbiguousExport ms) ->
-            Left
-              ( "Ambiguous constraint: "
-                  ++ T.unpack n
-                  ++ "/"
-                  ++ show arity
-                  ++ ", exported by: "
-                  ++ intercalate ", " (map T.unpack ms)
-              )
-          Nothing -> Left ("Unknown constraint: " ++ T.unpack n ++ "/" ++ show arity)
+            Left (AmbiguousConstraint ms)
+          Nothing -> Left NoSuchConstraint
   Types.Qualified m n ->
     let arity = length cargs
      in if Set.member (Types.QualifiedIdentifier m n arity) cp.exportedSet
           then Right (Types.QualifiedConstraint (Types.QualifiedName m n) cargs)
-          else
-            Left
-              ( "Constraint not exported: "
-                  ++ T.unpack m
-                  ++ ":"
-                  ++ T.unpack n
-                  ++ "/"
-                  ++ show arity
-              )
+          else Left (ConstraintNotExported (Types.QualifiedName m n))
 
 -- | Resolve a query constraint to its qualified name and 'Expr'-typed
 -- arguments. The arguments are lifted from the surface 'Term' shape via
@@ -157,7 +150,7 @@ resolveQueryConstraint cp (Constraint cname cargs) = case cname of
 resolveQueryTell ::
   CompiledProgram ->
   Constraint ->
-  Either String ((Types.QualifiedName, [R.Expr]), [Diagnostic ResolveError])
+  Either GoalRejection ((Types.QualifiedName, [R.Expr]), [Diagnostic ResolveError])
 resolveQueryTell cp c = do
   qc <- resolveQueryConstraint cp c
   let (exprs, errs) =
@@ -185,13 +178,21 @@ runProgramWithGoalDSL cp hostCalls constraint = convertRuntimeError $ do
 
 -- | Resolve a goal and throw on any failure. Used by both
 -- 'runProgramWithGoalDSL' and 'runPreparedGoal'.
+--
+-- A name-resolution failure (or a name that resolves to a function
+-- rather than a constraint) becomes 'GoalNotAConstraint', so the CLI's
+-- single-constraint goal surface surfaces a @YCHR-20013@ diagnostic
+-- with a hint pointing at the REPL.
 resolveQueryTellOrThrow ::
   CompiledProgram -> Constraint -> IO (Types.QualifiedName, [R.Expr])
 resolveQueryTellOrThrow cp c = case resolveQueryTell cp c of
-  Left err -> fail err
-  Right (pair, errs) -> do
-    unless (null errs) (throwIO (ResolveErrors errs))
-    pure pair
+  Left rejection -> throwIO (GoalNotAConstraint c rejection)
+  Right ((qn, exprs), errs)
+    | not (Map.member qn cp.desugaredProgram.constraintTypes) ->
+        throwIO (GoalNotAConstraint c (NotAConstraintItem qn))
+    | otherwise -> do
+        unless (null errs) (throwIO (ResolveErrors errs))
+        pure (qn, exprs)
 
 queryLoc :: SourceLoc
 queryLoc = SourceLoc "<query>" 1 1

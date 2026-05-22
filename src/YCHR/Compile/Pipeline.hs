@@ -8,6 +8,7 @@
 module YCHR.Compile.Pipeline
   ( -- * Compilation
     Error (..),
+    GoalRejection (..),
     Warning (..),
     CompiledProgram (..),
     ExportResolution (..),
@@ -92,6 +93,32 @@ data Error
     -- so the test harness (and the REPL) can catch and display it
     -- instead of the process exiting unconditionally.
     RuntimeError String [StackFrame]
+  | -- | The CLI received a goal via @ychr run -g GOAL@ whose top-level
+    -- name does not resolve to a declared constraint. Distinct from
+    -- 'ResolveErrors' so the diagnostic can hint that the REPL accepts
+    -- broader goal forms (bare expressions, conjunctions, @is@, @=@).
+    -- Carries the original 'Types.Constraint' (for name+arity in the
+    -- message) and a tag distinguishing the rejection mode.
+    GoalNotAConstraint Types.Constraint GoalRejection
+  deriving (Show)
+
+-- | Why a goal was rejected as not-a-constraint. Used by the
+-- 'GoalNotAConstraint' 'Error' constructor.
+data GoalRejection
+  = -- | The unqualified goal name has no matching export in any loaded
+    -- module (e.g. @ychr run -g 'true'@ when no @true/0@ constraint is
+    -- declared).
+    NoSuchConstraint
+  | -- | The unqualified goal name is exported by more than one module
+    -- and is therefore ambiguous. Carries the module names.
+    AmbiguousConstraint [Text]
+  | -- | The qualified goal name names a module that does not export it.
+    -- Carries the resolved name for the message.
+    ConstraintNotExported Types.QualifiedName
+  | -- | The goal name resolves successfully, but to a function rather
+    -- than a constraint (e.g. @ychr run -g '1 + 1'@ resolves to
+    -- @prelude:+/2@, which is a function). Carries the resolved name.
+    NotAConstraintItem Types.QualifiedName
   deriving (Show)
 
 instance Exception Error

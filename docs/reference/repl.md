@@ -62,6 +62,11 @@ goal and executed against a **fresh** constraint store. The store is
 discarded when the query returns. Resulting bindings (if any) are
 printed.
 
+Unlike `ychr run -g` (which accepts only a single declared constraint
+— see [`cli.md`](cli.md)), the REPL accepts any goal: bare expressions
+(`1 + 1.`), equality and `is` (`X = 2.`, `X is 1 + 1.`), comma-separated
+conjunctions, and constraint calls all work.
+
 ```ychr-repl
 ychr> :quit
 ychr>

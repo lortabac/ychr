@@ -34,6 +34,7 @@ are stable across releases; user-facing messages may evolve.
 | `YCHR-20010` | Rename | A qualified reference like `palette:green` names a data constructor that is declared on the type but excluded by the exporting module's allowlist. Add the constructor to the exporter's `type(t/n, [...])` list, or use a different one. |
 | `YCHR-20011` | Rename | A `use_module(palette, [type(col/0, [green])])` import lists a constructor that is declared on the type but excluded by the exporting module's allowlist. Same underlying condition as `YCHR-20010` but observed at the import site rather than at a use site. |
 | `YCHR-20012` | Rename | An unqualified data-constructor reference is exported by more than one imported module. Qualify the constructor (`mod:ctor`) to disambiguate, or narrow the import list. Parallel to `YCHR-20001` for functions/constraints; data constructors are not arity-overloadable, so the error names only the constructor and the modules that export it. |
+| `YCHR-20013` | CLI / goal resolution | `ychr run -g GOAL` was given a goal that is not a single declared constraint — a bare expression (`true`, `1 + 1`), an `is`/`=` form, a conjunction (`a, b`), a function call (`factorial(5)`), or an unknown name. The CLI's `-g` surface is intentionally narrower than the REPL; rewrite the goal as a `chr_constraint`-declared call (or wrap it in one) for the CLI, or use `ychr repl` for the broader goal syntax. |
 
 ## See also
 

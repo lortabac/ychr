@@ -23,7 +23,7 @@ import YCHR.Run
     Warning (..),
     compileFiles,
     prepareGoal,
-    resolveQueryTell,
+    resolveQueryTellOrThrow,
     runPreparedGoal,
   )
 import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
@@ -269,15 +269,18 @@ runGenDriver opts files = withCompiled False files $ \prog warnings -> do
       let gws = [RenameWarnings ws | not (null ws)]
       printWarnings gws
       pure (rs, gws)
-  (qn, exprs) <- case resolveQueryTell prog (Constraint cname renamedArgs) of
-    Left err -> do
-      putStrLn err
-      exitFailure
-    Right (pair, errs) -> do
-      unless (null errs) $ do
-        mapM_ (hPutStr stderr . displayMsg) errs
+  outcome <-
+    try @SomeException
+      (resolveQueryTellOrThrow prog (Constraint cname renamedArgs))
+  (qn, exprs) <- case outcome of
+    Left e -> case fromException e of
+      Just (err :: Error) -> do
+        putStr (displayMsg err)
         exitFailure
-      pure pair
+      Nothing -> do
+        hPutStr stderr ("Error: " ++ displayException e ++ "\n")
+        exitFailure
+    Right pair -> pure pair
   -- Combine file-level and goal-level warnings into a single Werror
   -- decision so a single run reports every warning before exiting.
   exitOnWerror opts.werror (warnings ++ goalWarnings)

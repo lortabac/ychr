@@ -45,7 +45,7 @@ Compile the given files and execute a single goal non-interactively.
 
 | Option | Description |
 |--------|-------------|
-| `-g GOAL` | The goal to execute. **Only one goal** per invocation — conjunctions like `a, b` are not accepted at this level. |
+| `-g GOAL` | The goal to execute. **Must be a single declared constraint** — an atom or compound whose name and arity match a `:- chr_constraint` declaration in scope (e.g. `cake`, `compute(5, R)`, `bakery:egg`). Bare expressions (`true`, `1 + 1`), evaluation forms (`X is E`, `X = E`), conjunctions (`a, b`), and function calls (`factorial(5)`) are rejected with `YCHR-20013`. The REPL is broader on purpose; use it (or wrap them in a helper constraint) for those forms. |
 | `--show-bindings` | Print the resulting variable bindings (one binding per line, sorted alphabetically). |
 | `--Werror` | Treat warnings as errors. Exits non-zero before the goal runs if any warnings were produced. |
 
@@ -55,9 +55,10 @@ Example:
 ychr run -g 'cake' examples/bakery.chr
 ```
 
-`run` exits silently on success. To compose multiple goals, use the
-REPL with a live session, or wrap them in a single helper constraint
-that posts the others as its body.
+`run` exits silently on success. To execute expression goals,
+conjunctions, or function calls non-interactively, wrap them in a
+single helper constraint whose body posts them; otherwise use the
+REPL (one-shot or `:begin ... :end` live session).
 
 ### `ychr check [--Werror] [FILES...]`
 

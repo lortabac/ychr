@@ -1,0 +1,4 @@
+YCHR-20013
+goal_not_a_constraint:f/1
+names a function, not a constraint
+ychr repl

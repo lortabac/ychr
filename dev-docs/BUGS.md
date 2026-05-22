@@ -6,29 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `ychr run -g GOAL` rejects goals the REPL accepts
-
-`docs/reference/language.md` §Tell-side evaluation lists "Top-level
-goals" as an evaluating position; `cli.md` and `repl.md` describe
-both surfaces as accepting "a goal." `true` and bare expression
-goals work in the REPL but are rejected by `ychr run` with
-unstructured `user error` messages (no `YCHR-NNNNN` code).
-
-Repro (against any file containing a module):
-
-```sh
-$ ychr run -g 'true' file.chr
-Error: user error (Unknown constraint: true/0)
-$ printf 'true.\n:quit\n' | ychr repl file.chr   # succeeds
-
-$ ychr run -g '1 + 1' file.chr
-Error: user error (Constraint not found: tell_prelude__+2)
-$ printf '1 + 1.\n:quit\n' | ychr repl file.chr  # succeeds
-```
-
-Expected: either both surfaces accept these goals, or both reject
-with a formatted `YCHR-NNNNN` diagnostic.
-
 ## `:- use_module(...)` ordering is enforced but undocumented
 
 `docs/reference/syntax.md` §Directives describes `use_module` with

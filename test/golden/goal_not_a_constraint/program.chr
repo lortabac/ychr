@@ -1,0 +1,8 @@
+:- module(goal_not_a_constraint, [c/1, fun f/1]).
+:- use_module(prelude).
+:- chr_constraint c/1.
+:- function f/1.
+
+f(X) -> X + 1.
+
+c(R) <=> R = 0.
