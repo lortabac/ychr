@@ -1083,13 +1083,16 @@ renameDeclaration _ _ d = pure d
 -- | Rename a 'BoundSig' inside a @requiring@ clause: resolve the bound
 -- function's name to a 'Qualified' form (so the resolver can look it up
 -- by qualified name) and rename type-expression references in the
--- argument and return types. Names that fail to resolve here trigger an
--- 'UnknownName' (YCHR-20002); the resolver later layers the dedicated
--- 'unknown_bound_function' diagnostic for callers who want the bound-
--- specific message.
+-- argument and return types. Unresolvable bound names are deferred to
+-- the resolver, which emits the dedicated 'unknown_bound_function'
+-- diagnostic (YCHR-16009) with the requiring-clause context. We do not
+-- reuse 'resolveName' here because 'ResolveTop' would emit the generic
+-- 'UnknownName' (YCHR-20002) on a miss and 'ResolveAll' would trigger
+-- spurious 'warnUnknownDataCon' warnings — a bound reference never
+-- names a data constructor.
 renameBoundSig :: RenameCtx -> SourceLoc -> BoundSig -> Rename BoundSig
 renameBoundSig ctx _ bs = do
-  resolved <- resolveName ResolveTop ctx bs.loc (Atom (boundSigName bs)) bs.name bs.arity
+  resolved <- resolveBoundName
   pure
     BoundSig
       { name = resolved,
@@ -1102,6 +1105,20 @@ renameBoundSig ctx _ bs = do
     boundSigName b = case b.name of
       Unqualified t -> t
       Qualified _ t -> t
+    origin = Atom (boundSigName bs)
+    resolveBoundName = case bs.name of
+      Qualified m n -> do
+        validateQualified ctx bs.loc origin m n bs.arity
+        pure (Qualified m n)
+      Unqualified n
+        | isReserved n -> pure (Unqualified n)
+        | otherwise ->
+            case visibleProviders ctx n bs.arity of
+              [m] -> pure (Qualified m n)
+              [] -> pure (Unqualified n)
+              ms -> do
+                emitError (AnnP (AmbiguousName n bs.arity ms) bs.loc origin)
+                pure (Unqualified n)
 
 renameTypeExpr :: RenameCtx -> TypeExpr -> TypeExpr
 renameTypeExpr _ (TypeVar v) = TypeVar v

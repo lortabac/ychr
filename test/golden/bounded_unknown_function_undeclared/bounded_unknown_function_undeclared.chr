@@ -1,0 +1,9 @@
+:- module(q).
+
+% A 'requiring' clause references a name that is not declared as
+% anything in scope. The renamer cannot qualify it; the resolver
+% emits the dedicated unknown_bound_function diagnostic
+% (YCHR-16009) — not the generic YCHR-20002.
+:- function foo(T) -> T requiring nonexistent(T) -> T.
+
+foo(X) -> X.

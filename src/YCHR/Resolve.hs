@@ -696,11 +696,12 @@ checkBoundedDeclarations functionNames mods =
     boundResolvesToFunction bs = case bs.name of
       Qualified m n -> Set.member (QualifiedName m n) functionNames
       Unqualified _ ->
-        -- The renamer should have qualified the name; if it did not,
-        -- the renamer already reported YCHR-20002 for the unknown
-        -- reference. We skip emitting our own bound-specific error
-        -- in that case to avoid double-reporting.
-        True
+        -- If the renamer left the name 'Unqualified', no visible
+        -- provider exposes a function (or anything else) at this
+        -- name/arity — emit the dedicated 'UnknownBoundFunction'
+        -- diagnostic ourselves. (The renamer used to pre-report
+        -- this as the generic YCHR-20002; it now defers to us.)
+        False
     originForDecl m d = PExpr.Atom (m.name <> ":" <> d.name)
 
 {- Note [Bound graph cycle detection]

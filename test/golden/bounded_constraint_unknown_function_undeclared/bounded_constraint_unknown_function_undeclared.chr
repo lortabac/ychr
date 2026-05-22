@@ -1,0 +1,9 @@
+:- module(q).
+
+% Constraint-side mirror of bounded_unknown_function_undeclared: the
+% 'requiring' clause on a ':- chr_constraint' references a name that
+% is not declared as anything in scope. The renamer cannot qualify
+% it; the resolver emits unknown_bound_function (YCHR-16009).
+:- chr_constraint pick(T, T) requiring nonexistent(T) -> T.
+
+pick(_, _) <=> true.
