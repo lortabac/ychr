@@ -6,28 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `:- module(...)` is documented as required but is optional; `<no_module>` leaks
-
-`docs/reference/language.md` §Modules: "Every program is organized
-into modules. A module declares its name and its export list, and may
-import other modules." Header-less files in fact compile and run; the
-implementation assigns them a magic name `<no_module>` that surfaces
-in user-facing diagnostics.
-
-Repro:
-
-```chr
-:- chr_constraint c/1.
-c(R) <=> R = 42.
-```
-
-Actual: `ychr run --show-bindings -g 'c(R)' a.chr` runs cleanly,
-`R = 42`. With two such header-less files:
-`Error: user error (Ambiguous constraint: c/1, exported by: <no_module>, <no_module>)`.
-Expected: either reject header-less files at parse time, or document
-a real default module name (the file basename, say) and stop leaking
-`<no_module>`.
-
 ## `docs/reference/prelude.md` lists `rem/2` as `_/2` but the implementation rejects floats
 
 `docs/reference/prelude.md` §Arithmetic shows `rem` with signature

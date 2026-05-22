@@ -68,8 +68,8 @@ in `libraries/prelude.chr` plus the user modules.
 
 | Directive | Purpose |
 |-----------|---------|
-| `:- module(Name, Exports).` | Module header with explicit export list. Each entry is `name/arity`, `fun name/arity`, `op(Pri, Type, Name)`, `type(name/arity)`, or `type(name/arity, [Con, ...])`. |
-| `:- module(Name).` | Module header that exports every constraint, function, type, and operator declared in the module. |
+| `:- module(Name, Exports).` | *Optional* module header with explicit export list. Each entry is `name/arity`, `fun name/arity`, `op(Pri, Type, Name)`, `type(name/arity)`, or `type(name/arity, [Con, ...])`. |
+| `:- module(Name).` | *Optional* module header that exports every constraint, function, type, and operator declared in the module. A file with no header forms an unnamed module with the same export semantics; diagnostics refer to it by its file basename (e.g. `<a>` for `a.chr`). |
 | `:- use_module(M)` / `:- use_module(M, Imports).` | Import another module. Import items use the same forms as export items. The wrapper `library(Name)` is accepted as a synonym for a bare module name. All `use_module` directives must appear before the first non-import directive or rule in the file (YCHR-20007). |
 | `type(name/arity, [Con1, ...])` | Two-argument type form. Exports (or imports) the type and only the listed data constructors; `type(name/arity)` covers all of them. The arity is the number of *type parameters*. |
 | `:- chr_constraint Decls.` | Declare CHR constraints. Each `Decl` is `name/arity` (untyped) or `name(τ₁, ..., τₙ)` (typed; arity inferred). May carry a `requiring` clause when typed. A name+arity declared here cannot also be declared as a function-like form (`:- function`, `:- open_function`, `:- class`, `:- open_class`) in the same module (YCHR-16016). |

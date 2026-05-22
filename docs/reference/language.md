@@ -13,8 +13,8 @@ table, the rule and expression forms), see
 
 ## Modules
 
-Every program is organized into modules. A module declares its name
-and its export list, and may import other modules:
+A YCHR program is organized into modules. A module *may* declare its
+name and its export list, and may import other modules:
 
 ```
 :- module(order, [leq/2]).
@@ -35,6 +35,16 @@ A module may also be declared without an export list:
 
 This form exports every constraint, function, type, and operator
 declared in the module. It does not re-export imports.
+
+The `:- module(...)` directive itself is optional. A file with no
+module header forms an *unnamed* module that exports every constraint,
+function, type, and operator it declares — the same visibility rule
+as `:- module(Name).` without the name. Diagnostics refer to such a
+module by its file basename in angle brackets (`<a>` for `a.chr`).
+This form is intended for single-file programs and ad-hoc scripts;
+combining multiple header-less files in one program is supported,
+but unqualified references to a name declared in more than one
+unnamed module are ambiguous and rejected.
 
 Constraint and function names are qualified with their defining
 module; unqualified references in source are resolved against the

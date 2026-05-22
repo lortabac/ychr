@@ -12,6 +12,13 @@ This page is a stub.
 :- chr_constraint leq/2.
 ```
 
+The module header is optional. A single-file program may omit it
+entirely; the file then forms an unnamed module that exports
+everything it declares, and diagnostics refer to it by its file
+basename (e.g. `<order>` for `order.chr`). Declare a module name as
+soon as you split code across files or want to control what other
+modules see.
+
 ## Import another module
 
 ```prolog

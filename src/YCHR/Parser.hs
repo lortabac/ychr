@@ -61,6 +61,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
+import System.FilePath (takeBaseName)
 import Text.Parsec (ParseError)
 import YCHR.PExpr (PExpr (Atom, Compound, Str, Var))
 import YCHR.PExpr qualified as P
@@ -153,7 +154,21 @@ parseModuleWith ::
   Either (ParseError) (Module, [AnnP ParseValidationError])
 parseModuleWith table sourceName src = do
   terms <- P.parseTerms table sourceName src
-  pure (convertModule terms)
+  pure (convertModule (defaultModuleNameForSource sourceName) terms)
+
+-- | Default module name for a header-less source.
+--
+-- File-backed inputs become @\<basename\>@ (directory and extension
+-- stripped), so an ambiguity diagnostic that mentions two header-less
+-- files names the files instead of printing two identical placeholders.
+-- Empty or degenerate source names fall back to the sentinel
+-- @\<no_module\>@; the DSL, REPL one-shots, and parser tests reach this
+-- branch.
+defaultModuleNameForSource :: String -> Text
+defaultModuleNameForSource sourceName =
+  case takeBaseName sourceName of
+    "" -> "<no_module>"
+    base -> "<" <> Text.pack base <> ">"
 
 -- | Parse a single constraint from surface-language 'Text', using the
 -- builtin operator table.
@@ -320,7 +335,7 @@ collectModuleHeader sourceName src = do
         Just i -> i
         Nothing ->
           ModuleDirectiveInfo
-            { name = "<no_module>",
+            { name = defaultModuleNameForSource sourceName,
               loc = dummyLoc,
               origin = Atom "",
               exportOps = []
@@ -605,8 +620,8 @@ data ParseValidationError
 --
 -- Items whose conversion fails entirely are dropped from the resulting
 -- module; their errors are still returned in the second component.
-convertModule :: [Ann PExpr] -> (Module, [AnnP ParseValidationError])
-convertModule terms =
+convertModule :: Text -> [Ann PExpr] -> (Module, [AnnP ParseValidationError])
+convertModule defaultName terms =
   let itemResults = map convertModuleItem terms
       items = [i | (Just i, _) <- itemResults]
       itemErrors = concatMap snd itemResults
@@ -616,7 +631,7 @@ convertModule terms =
       (modName_, modNameLoc_, modExports_) = case [(n, l, p, e) | DirModule n l p e <- dirs] of
         ((n, l, p, Just decls) : _) -> (n, l, Just (AnnP decls l p))
         ((n, l, _, Nothing) : _) -> (n, l, Nothing)
-        [] -> ("<no_module>", dummyLoc, Nothing)
+        [] -> (defaultName, dummyLoc, Nothing)
       modImports_ = [n | DirImport n <- dirs]
       modDecls_ =
         concat [ds | DirConstraintDecl ds <- dirs]
