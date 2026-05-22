@@ -122,7 +122,7 @@ data CompiledProgram = CompiledProgram
   }
 
 data ExportResolution
-  = UniqueExport Types.Name
+  = UniqueExport Types.QualifiedName
   | AmbiguousExport [Text]
   deriving (Show, Eq)
 
@@ -253,7 +253,7 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
   (renamed, renameWarnings) <- first RenameErrors (renameProgram renameInputs allMods)
   resolved <- first ResolveErrors (resolveProgram renamed)
   desugared <- first DesugarErrors (desugarProgram resolved)
-  desugared' <- first DesugarErrors (liftAllLambdas desugared)
+  let desugared' = liftAllLambdas desugared
   let symTab = extractSymbolTable desugared'
       warnings = [RenameWarnings renameWarnings | not (null renameWarnings)]
   prog <- first CompileErrors (compile desugared' symTab)
@@ -280,7 +280,7 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
       warnings
     )
   where
-    toResolution n [m] = UniqueExport (Types.Qualified m n)
+    toResolution n [m] = UniqueExport (Types.QualifiedName m n)
     toResolution _ ms = AmbiguousExport ms
 
 -- | Prepend a synthetic @use_module(library(prelude))@ to a user module so

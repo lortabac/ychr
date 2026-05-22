@@ -762,10 +762,7 @@ lambdaLiftTests =
                   }
             m = (module' "M") {decls = [funDecl], equations = [funEq]}
         prog <- desugar [m]
-        lifted <- case liftAllLambdas prog of
-          Left errs ->
-            assertFailure ("liftAllLambdas failed: " ++ show errs) >> error "unreachable"
-          Right p -> pure p
+        let lifted = liftAllLambdas prog
         let isLambda f = f.name.baseName == "__lambda_0"
         case filter isLambda lifted.functions of
           [lam] -> do

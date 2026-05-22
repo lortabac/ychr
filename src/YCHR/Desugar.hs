@@ -517,11 +517,12 @@ desugarBodyGoal label loc origin e = case e of
 
 -- | Threaded state for the lambda-lifter: a counter that supplies fresh
 -- @__lambda_N@ names, and the list of top-level functions that have
--- already been lifted out (in reverse discovery order).
+-- already been lifted out (in reverse discovery order). The lifter is
+-- a pure rewrite — it can't fail on a successfully desugared input —
+-- so no error channel is threaded through.
 data LiftState = LiftState
   { counter :: !Int,
-    liftedFunctions :: [D.Function],
-    errors :: [Diagnostic DesugarError]
+    liftedFunctions :: [D.Function]
   }
 
 -- | Collect all variable names referenced inside an expression.
@@ -806,19 +807,15 @@ liftRule st rule =
       )
 
 -- | Post-desugaring pass: lift all lambda expressions into top-level functions.
-liftAllLambdas :: D.Program -> Either [Diagnostic DesugarError] D.Program
+liftAllLambdas :: D.Program -> D.Program
 liftAllLambdas prog =
-  let initState = LiftState 0 [] []
+  let initState = LiftState 0 []
       (st1, functions') = mapAccumL liftFunction initState prog.functions
       (st2, rules') = mapAccumL liftRule st1 prog.rules
-   in if null st2.errors
-        then
-          Right
-            prog
-              { D.functions = functions' ++ st2.liftedFunctions,
-                D.rules = rules'
-              }
-        else Left (reverse st2.errors)
+   in prog
+        { D.functions = functions' ++ st2.liftedFunctions,
+          D.rules = rules'
+        }
 
 -- | Lift lambdas from query body goals. Returns the rewritten goals
 -- and any generated function definitions (to be compiled on the fly).
@@ -829,15 +826,13 @@ liftAllLambdas prog =
 liftQueryLambdas ::
   Int ->
   [D.BodyGoal] ->
-  Either [Diagnostic DesugarError] ([D.BodyGoal], [D.Function])
+  ([D.BodyGoal], [D.Function])
 liftQueryLambdas startCounter goals =
   let scope = bodyGoalVars goals
-      initState = LiftState startCounter [] []
+      initState = LiftState startCounter []
       (st, goals') =
         mapAccumL (liftBodyGoal "__query" scope []) initState goals
-   in if null st.errors
-        then Right (goals', st.liftedFunctions)
-        else Left (reverse st.errors)
+   in (goals', st.liftedFunctions)
 
 {- ---------------------------------------------------------------------------
 Notes

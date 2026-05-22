@@ -55,6 +55,8 @@ import Control.Monad.Trans.Reader (ask, runReaderT)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
 import Control.Monad.Trans.Writer.CPS (runWriter)
 import Data.List (intercalate)
+import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -64,7 +66,6 @@ import YCHR.Compile
   ( compileFunctionDef,
     funcProcName,
     genCallFunDispatches,
-    tellProcName,
     vmName,
   )
 import YCHR.Compile.Pipeline
@@ -103,7 +104,7 @@ import YCHR.Runtime.Var (deref, equal, getVarId, newVar, unify)
 import YCHR.TypeCheck (typeCheckGoals)
 import YCHR.Types (Constraint (..), ConstraintType, Term (..))
 import YCHR.Types qualified as Types
-import YCHR.VM (Name (..), Procedure (..), Program (..))
+import YCHR.VM (Name (..), Procedure (..))
 
 -- ---------------------------------------------------------------------------
 -- Single-goal API
@@ -120,10 +121,8 @@ resolveQueryConstraint cp (Constraint cname cargs) = case cname of
   Types.Unqualified n ->
     let arity = length cargs
      in case Map.lookup (Types.UnqualifiedIdentifier n arity) cp.exportMap of
-          Just (UniqueExport (Types.Qualified m b)) ->
-            Right (Types.QualifiedConstraint (Types.QualifiedName m b) cargs)
-          Just (UniqueExport (Types.Unqualified _)) ->
-            Left ("Unqualified export resolution for " ++ T.unpack n)
+          Just (UniqueExport qname) ->
+            Right (Types.QualifiedConstraint qname cargs)
           Just (AmbiguousExport ms) ->
             Left
               ( "Ambiguous constraint: "
@@ -175,12 +174,9 @@ runProgramWithGoalDSL ::
   IO (Map Text Term)
 runProgramWithGoalDSL cp hostCalls constraint = convertRuntimeError $ do
   (qn, exprs) <- resolveQueryTellOrThrow cp constraint
-  (lifted, lambdas) <- liftSingleGoalLambdas cp qn exprs
-  let procMap = Map.fromList [(p.name, p) | p <- cp.program.procedures]
-      tellName = tellProcName (Types.qualifiedToName qn) (length exprs)
-  unless (Map.member tellName procMap) $
-    fail ("Constraint not found: " ++ T.unpack tellName.unName)
-  let queryProcs = compileQueryLambdas lambdas
+  let (lifted, lambdas) =
+        liftQueryLambdas cp.nextLambdaIndex [D.BodyTell qn exprs]
+      queryProcs = compileQueryLambdas lambdas
       allFuns = cp.allFunctions ++ lambdas
       queryDispatches = genCallFunDispatches allFuns
       extraProcs = queryProcs ++ queryDispatches
@@ -196,19 +192,6 @@ resolveQueryTellOrThrow cp c = case resolveQueryTell cp c of
   Right (pair, errs) -> do
     unless (null errs) (throwIO (ResolveErrors errs))
     pure pair
-
--- | Lambda-lift a single-goal tell, returning the lifted body goals and
--- any newly emitted lambda functions.
-liftSingleGoalLambdas ::
-  CompiledProgram ->
-  Types.QualifiedName ->
-  [R.Expr] ->
-  IO ([D.BodyGoal], [D.Function])
-liftSingleGoalLambdas cp qn exprs =
-  either
-    (throwIO . DesugarErrors)
-    pure
-    (liftQueryLambdas cp.nextLambdaIndex [D.BodyTell qn exprs])
 
 queryLoc :: SourceLoc
 queryLoc = SourceLoc "<query>" 1 1
@@ -330,11 +313,7 @@ prepareQuery cp src = do
       (throwIO . DesugarErrors)
       pure
       (desugarQueryGoals exprs)
-  (lifted, lambdas) <-
-    either
-      (throwIO . DesugarErrors)
-      pure
-      (liftQueryLambdas cp.nextLambdaIndex bodyGoals)
+  let (lifted, lambdas) = liftQueryLambdas cp.nextLambdaIndex bodyGoals
   let cdp = cp.desugaredProgram
       progForCheck =
         D.Program
@@ -379,11 +358,13 @@ executePreparedQuery lifted =
       (Map.empty :: Map Text Value)
 
 -- | Group the user-visible query variables by their underlying
--- 'VarId'. See module-internal explanation in 'perKeyAliases'.
-buildAliasClasses :: Map Text Value -> Chr (Map VarId [Text])
+-- 'VarId'. Each class is non-empty by construction: a fresh class
+-- starts as a one-element 'NonEmpty', and subsequent variables sharing
+-- the same 'VarId' are appended.
+buildAliasClasses :: Map Text Value -> Chr (Map VarId (NonEmpty Text))
 buildAliasClasses varMap = do
   pairs <- traverse vidOf (Map.toAscList varMap)
-  pure $ Map.fromListWith (flip (++)) [(vid, [k]) | (k, Just vid) <- pairs]
+  pure $ Map.fromListWith (flip (<>)) [(vid, k :| []) | (k, Just vid) <- pairs]
   where
     vidOf (k, v)
       | "_" `T.isPrefixOf` k = pure (k, Nothing)
@@ -392,13 +373,15 @@ buildAliasClasses varMap = do
           pure (k, mvid)
 
 -- | Build the 'VarId' → display name map that 'valueToTerm' should
--- use when printing the binding for surface variable @k@.
-perKeyAliases :: Map VarId [Text] -> Text -> Map VarId Text
+-- use when printing the binding for surface variable @k@. A singleton
+-- alias class contributes nothing (no aliasing); otherwise we pick the
+-- name that follows @k@ in the class, wrapping back to the canonical
+-- (head) name if @k@ is at the end of, or absent from, the class.
+perKeyAliases :: Map VarId (NonEmpty Text) -> Text -> Map VarId Text
 perKeyAliases classes k = Map.mapMaybe pick classes
   where
-    pick [] = Nothing
-    pick [_] = Nothing
-    pick names@(canonical : _) = Just $ case break (== k) names of
+    pick (_ :| []) = Nothing
+    pick names@(canonical :| _) = Just $ case break (== k) (NE.toList names) of
       (_, _ : next : _) -> next
       (_, [_]) -> canonical
       (_, []) -> canonical

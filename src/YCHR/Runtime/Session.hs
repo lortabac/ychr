@@ -136,7 +136,7 @@ resolveByExport ::
 resolveByExport expMap expSet name arity = case name of
   Types.Unqualified n ->
     case Map.lookup (Types.UnqualifiedIdentifier n arity) expMap of
-      Just (UniqueExport qname) -> Right qname
+      Just (UniqueExport qname) -> Right (Types.qualifiedToName qname)
       Just (AmbiguousExport ms) ->
         Left
           ( "Ambiguous constraint: "
