@@ -6,27 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `:- use_module(...)` ordering is enforced but undocumented
-
-`docs/reference/syntax.md` §Directives describes `use_module` with
-no ordering requirement. The implementation requires `use_module`
-directives immediately after `:- module(...)`, before any other
-directive or rule, and fires `YCHR-20007` otherwise. `YCHR-20007`
-itself is not listed in `docs/reference/errors.md`.
-
-Repro:
-
-```chr
-:- module(z).
-:- chr_constraint c/1.
-:- use_module(library(lists)).
-c(R) <=> R = 1.
-```
-
-Actual: `YCHR-20007 use_module(lists) appears out of order`.
-Expected: either documented in `syntax.md` and `errors.md`, or the
-constraint relaxed.
-
 ## A user module named `host` shadows its own functions
 
 `docs/reference/language.md` §"Host calls": "`host:` is a wired-in
