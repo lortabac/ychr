@@ -47,6 +47,7 @@ tests =
       fibTests,
       visibilityTests,
       queryErrorTests,
+      queryBodyTests,
       unicodeTests,
       arityOverloadTests
     ]
@@ -441,4 +442,115 @@ arityOverloadTests =
         bindings2 <- runProgramWithGoal prog Map.empty "m:foo(R1, R2)"
         Map.lookup "R1" bindings2 @?= Just (AtomTerm "two")
         Map.lookup "R2" bindings2 @?= Just (AtomTerm "args")
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Multi-goal query body forms
+-- ---------------------------------------------------------------------------
+--
+-- Most existing 'RunTest' cases exercise queries shaped like a single
+-- @tell@ — they hit 'D.BodyTell' and the simple expression shapes inside
+-- it, but leave the other 'executeBodyGoal' arms in 'YCHR.Run' (BodyTrue,
+-- BodyUnify standalone, BodyHostStmt, BodyCall, BodyApply) and the
+-- 'evalNestedExpr' shapes for ApplyExpr / FunRefExpr untouched. The cases
+-- below pin each of those arms through the public 'runProgramWithQuery'
+-- entry point, and pin the user-visible error messages for the runtime
+-- unification-failure and unknown-host-function paths.
+--
+-- All cases assert on the final bindings or on the thrown exception —
+-- no store/history introspection.
+
+qbodySource :: Text
+qbodySource =
+  ":- module(qbody, [keep/1, fun triple/1]).\n\
+  \:- chr_constraint keep/1.\n\
+  \:- function triple/1.\n\
+  \triple(X) -> host:'*'(X, 3).\n\
+  \keep(_) <=> true.\n"
+
+qbodyHostCalls :: HostCallRegistry
+qbodyHostCalls =
+  Map.fromList
+    [ ( VM.Name "+",
+        HostCallFn $ \args ->
+          let (a, b) = extractIntArgs "+" args in pure (VInt (a + b))
+      ),
+      ( VM.Name "*",
+        HostCallFn $ \args ->
+          let (a, b) = extractIntArgs "*" args in pure (VInt (a * b))
+      )
+    ]
+
+expectErrorContaining :: String -> IO a -> IO ()
+expectErrorContaining needle act = do
+  outcome <- try @SomeException act
+  case outcome of
+    Left exc ->
+      assertBool
+        ("expected exception message to contain " ++ show needle ++ ", got: " ++ show exc)
+        (needle `isInfixOf` show exc)
+    Right _ ->
+      assertFailure ("expected exception containing " ++ show needle ++ ", got success")
+
+queryBodyTests :: TestTree
+queryBodyTests =
+  testGroup
+    "Query body forms"
+    [ testCase "BodyTrue: 'true, R = 1' binds R" $ do
+        prog <- compileOrFail [("qbody.chr", qbodySource)]
+        bindings <- runProgramWithQuery prog qbodyHostCalls "true, R = 1."
+        Map.lookup "R" bindings @?= Just (IntTerm 1),
+      testCase "BodyUnify chain: X = 1, Y = X, R = Y" $ do
+        prog <- compileOrFail [("qbody.chr", qbodySource)]
+        bindings <- runProgramWithQuery prog qbodyHostCalls "X = 1, Y = X, R = Y."
+        Map.lookup "R" bindings @?= Just (IntTerm 1),
+      testCase "BodyUnify failure: 1 = 2 raises 'unification failure'" $ do
+        prog <- compileOrFail [("qbody.chr", qbodySource)]
+        expectErrorContaining "unification failure" $
+          runProgramWithQuery prog qbodyHostCalls "1 = 2.",
+      testCase "BodyIs re-bind with matching value succeeds" $ do
+        prog <- compileOrFail [("qbody.chr", qbodySource)]
+        bindings <- runProgramWithQuery prog qbodyHostCalls "R is 1, R is 1."
+        Map.lookup "R" bindings @?= Just (IntTerm 1),
+      testCase "BodyIs re-bind with conflicting value raises 'unification failure'" $ do
+        prog <- compileOrFail [("qbody.chr", qbodySource)]
+        expectErrorContaining "unification failure" $
+          runProgramWithQuery prog qbodyHostCalls "R is 1, R is 2.",
+      testCase "BodyHostStmt: host:'+'(1, 2) as statement runs and is discarded" $ do
+        prog <- compileOrFail [("qbody.chr", qbodySource)]
+        bindings <-
+          runProgramWithQuery prog qbodyHostCalls "host:'+'(1, 2), R = ok."
+        Map.lookup "R" bindings @?= Just (AtomTerm "ok"),
+      testCase "BodyCall: triple(5) as statement runs and is discarded" $ do
+        prog <- compileOrFail [("qbody.chr", qbodySource)]
+        bindings <- runProgramWithQuery prog qbodyHostCalls "triple(5), R = ok."
+        Map.lookup "R" bindings @?= Just (AtomTerm "ok"),
+      testCase "BodyApply: '$call'(F, X) as statement runs and is discarded" $ do
+        prog <- compileOrFail [("qbody.chr", qbodySource)]
+        bindings <-
+          runProgramWithQuery
+            prog
+            qbodyHostCalls
+            "F = fun(X) -> X end, '$call'(F, 1), R = ok."
+        Map.lookup "R" bindings @?= Just (AtomTerm "ok"),
+      testCase "ApplyExpr in is: R is '$call'(fun triple/1, 4)" $ do
+        prog <- compileOrFail [("qbody.chr", qbodySource)]
+        bindings <-
+          runProgramWithQuery
+            prog
+            qbodyHostCalls
+            "R is '$call'(fun triple/1, 4)."
+        Map.lookup "R" bindings @?= Just (IntTerm 12),
+      testCase "unknown host function raises 'Unknown host function'" $ do
+        prog <- compileOrFail [("qbody.chr", qbodySource)]
+        expectErrorContaining "Unknown host function" $
+          runProgramWithQuery prog qbodyHostCalls "R is host:nope(1).",
+      testCase "BodyUnify with FloatExpr RHS binds R to FloatTerm" $ do
+        prog <- compileOrFail [("qbody.chr", qbodySource)]
+        bindings <- runProgramWithQuery prog qbodyHostCalls "R = 1.5."
+        Map.lookup "R" bindings @?= Just (FloatTerm 1.5),
+      testCase "BodyUnify with TextExpr RHS binds R to TextTerm" $ do
+        prog <- compileOrFail [("qbody.chr", qbodySource)]
+        bindings <- runProgramWithQuery prog qbodyHostCalls "R = \"hello\"."
+        Map.lookup "R" bindings @?= Just (TextTerm "hello")
     ]
