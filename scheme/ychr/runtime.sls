@@ -21,7 +21,7 @@
     ;; From (ychr reactivation)
     enqueue! drain-queue!
     ;; Helpers for generated code
-    %unify %unifiable? %nonvar? %chr-error %print %ground?
+    %unify %unifiable? %nonvar? %chr-error %print %writeln %ground?
     %term-variables %compound-to-list %list-to-compound
     %read-term-from-string
     %int-to-float %float-to-int
@@ -191,6 +191,9 @@
 
   ;;; Print
   (define (%print v) (display v) (newline))
+
+  ;;; Writeln (display + newline; `write` itself maps directly to `display`)
+  (define (%writeln s) (display s) (newline))
 
   ;;; Numeric conversions. `inexact` is the r6rs replacement for
   ;;; `exact->inexact`; `(exact (truncate x))` truncates toward zero,

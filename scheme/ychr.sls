@@ -24,7 +24,7 @@
     alive-constraint? constraint-id constraint-arg constraint-type
     id-equal? is-constraint-type? kill-constraint
     ;; --- (ychr runtime): helpers used in goals/scripting -------------
-    %unify %unifiable? %nonvar? %ground? %print
+    %unify %unifiable? %nonvar? %ground? %print %writeln
     %term-variables %compound-to-list %list-to-compound %copy-term
     %nil %cons
     %int-to-float %float-to-int %idiv %imod %irem)

@@ -584,6 +584,7 @@ hostCallMap =
       ("int_to_float", "%int-to-float"),
       ("float_to_int", "%float-to-int"),
       ("write", "display"),
+      ("writeln", "%writeln"),
       ("print", "%print"),
       ("string_concat", "string-append"),
       ("string_length", "string-length"),

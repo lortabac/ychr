@@ -76,6 +76,7 @@ baseHostCallRegistry =
       (Name "string_lower", stringLower),
       (Name "__chr_error", chrError),
       (Name "write", writeStr),
+      (Name "writeln", writeStrLn),
       (Name "integer", typePred isInteger),
       (Name "atom", typePred isAtom),
       (Name "boolean", typePred isBoolean),
@@ -149,6 +150,9 @@ baseHostCallRegistry =
     writeStr = HostCallFn $ \case
       [VText s] -> unit <$ liftIO (putStr (T.unpack s))
       _ -> runtimeErrorS "write: expected 1 Text argument"
+    writeStrLn = HostCallFn $ \case
+      [VText s] -> unit <$ liftIO (putStrLn (T.unpack s))
+      _ -> runtimeErrorS "writeln: expected 1 Text argument"
     typePred p = HostCallFn $ \case
       [v] -> do
         v' <- deref v

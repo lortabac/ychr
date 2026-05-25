@@ -8,7 +8,7 @@
 The prelude is a small CHR module ([`libraries/prelude.chr`](../../libraries/prelude.chr))
 that ships with YCHR. It defines arithmetic and comparison operators,
 type-predicate functions, term-introspection helpers, and a handful of
-I/O constraints.
+I/O functions.
 
 ## How the prelude is structured
 
@@ -32,12 +32,12 @@ Two patterns are worth understanding before reading the tables:
   types of the actual arguments. See
   [type-system.md](type-system.md) for the resolution rules.
 
-- **Functions are evaluated, constraints are stored.** Most prelude
+- **Functions are evaluated, constraints are stored.** All prelude
   exports are *functions* or *classes* (declared with `:- function`
-  / `:- class`) and are callable in guards and on the right of `is`.
-  A few exports — `write/1`, `nl/0`, `writeln/1` — are *constraints*
-  (declared with `:- chr_constraint`) that perform I/O when added to
-  the store.
+  / `:- class`) and are callable in guards, on the right of `is`,
+  and in body / top-level position. I/O entries (`write/1`, `nl/0`,
+  `writeln/1`) are functions too: they perform their side effect on
+  evaluation and their unit return is discarded.
 
 ## Arithmetic
 
@@ -157,10 +157,10 @@ Y = _.
 `call/N` is a typed wrapper over the host primitive `'$call'`. Use it
 to invoke first-class function values (lambdas, function references).
 
-## I/O constraints
+## I/O
 
-These are constraints, not functions — added to the store with `,` in
-a body or directly at the prompt:
+These are functions: calling them in a rule body or at the prompt
+evaluates them for their side effect and discards the unit return.
 
 | Identifier | Effect |
 |------------|--------|

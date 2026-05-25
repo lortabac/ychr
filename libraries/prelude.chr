@@ -30,9 +30,9 @@
     fun compound_to_list/1,
     fun list_to_compound/1,
     fun copy_term/1,
-    write/1,
-    nl/0,
-    writeln/1,
+    fun write/1,
+    fun nl/0,
+    fun writeln/1,
     fun call/2,
     fun call/3,
     op(500, yfx, '+'),
@@ -52,11 +52,6 @@
 :- chr_type bool ---> true ; false.
 
 :- chr_type list(T) ---> [] ; [T|list(T)].
-
-:- chr_constraint
-    write/1,
-    nl/0,
-    writeln/1.
 
 :- class
     ('+'(int, int) -> int),
@@ -102,7 +97,10 @@
     (compound_to_list(any) -> list(any)),
     (list_to_compound(list(any)) -> any),
     (call(fun(A) -> B end, A) -> B),
-    (call(fun(A, B) -> C end, A, B) -> C).
+    (call(fun(A, B) -> C end, A, B) -> C),
+    (write(string) -> any),
+    (nl() -> any),
+    (writeln(string) -> any).
 
 :- function max(T, T) -> T requiring '>='(T, T) -> bool.
 :- function min(T, T) -> T requiring '=<'(T, T) -> bool.
@@ -165,11 +163,11 @@ compound_to_list(C) -> host:compound_to_list(C).
 
 list_to_compound(Xs) -> host:list_to_compound(Xs).
 
-write(S) <=> host:write(S).
+write(S) -> host:write(S).
 
-nl <=> host:write("\n").
+nl -> host:write("\n").
 
-writeln(S) <=> write(S), nl.
+writeln(S) -> host:writeln(S).
 
 copy_term(T) -> host:copy_term(T).
 

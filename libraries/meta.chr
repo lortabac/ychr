@@ -1,21 +1,19 @@
 :- module(meta, [
-    print/1,
+    fun print/1,
     fun read_term_from_string/1,
     fun write_term_to_string/1,
     fun write_store_to_list/0,
-    print_store/0
+    fun print_store/0
 ]).
 
-:- chr_constraint
-    print/1,
-    print_store/0.
-
 :- function
+    (print(any) -> any),
+    (print_store() -> any),
     (read_term_from_string(string) -> any),
     (write_term_to_string(any) -> string),
     (write_store_to_list() -> list(any)).
 
-print(X) <=> host:print(X).
+print(X) -> host:print(X).
 
 write_term_to_string(T) -> host:write_term_to_string(T).
 
@@ -23,4 +21,4 @@ read_term_from_string(S) -> host:read_term_from_string(S).
 
 write_store_to_list -> host:write_store_to_list.
 
-print_store <=> host:print_store.
+print_store -> host:print_store.
