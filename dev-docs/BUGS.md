@@ -6,25 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `docs/reference/prelude.md` lists `rem/2` as `_/2` but the implementation rejects floats
-
-`docs/reference/prelude.md` §Arithmetic shows `rem` with signature
-`_/2` ("Remainder; signatures default to `any`."). The row above
-(`mod`) is `(int, int) -> int`. `libraries/prelude.chr:87` declares
-`rem` identically to `mod`. Pure doc drift.
-
-Repro:
-
-```chr
-:- module(z).
-:- chr_constraint r/1.
-r(R) <=> R is 7.5 rem 3.0.
-```
-
-Actual: `YCHR-60001 Type mismatch: 'typechecker:float' does not match
-'typechecker:int'`. Expected: change the `rem` row in `prelude.md` to
-`(int, int) -> int`, matching `mod`.
-
 ## Integer division by zero produces a raw Haskell error with no `YCHR-NNNNN` code
 
 `docs/reference/errors.md`: "YCHR diagnostics carry a numeric code of

@@ -51,7 +51,7 @@ Operators on numbers. Each is overloaded for `int` and `float`.
 | `/` | `(float, float) -> float` | Float division. For integer division, use `div`. |
 | `div` | `(int, int) -> int` | Integer division. |
 | `mod` | `(int, int) -> int` | Integer modulo. |
-| `rem` | `_/2` | Remainder; signatures default to `any`. |
+| `rem` | `(int, int) -> int` | Integer remainder. |
 
 Operator precedence and associativity (declared via `op/3`):
 
