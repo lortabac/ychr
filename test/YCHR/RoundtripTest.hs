@@ -95,7 +95,7 @@ genTerm =
     Gen.choice
     -- Base cases
     [ VarTerm <$> genVarName,
-      IntTerm <$> Gen.int (Range.linear (-1000) 1000),
+      IntTerm <$> Gen.integral (Range.linear (-1000) 1000),
       AtomTerm <$> genAtom,
       TextTerm <$> genStringContent,
       pure Wildcard
@@ -223,7 +223,7 @@ genCompoundValue =
     genLeafOrCompound =
       Gen.recursive
         Gen.choice
-        [ VInt <$> Gen.int (Range.linear (-100) 100),
+        [ VInt <$> Gen.integral (Range.linear (-100) 100),
           VAtom <$> genSafeAtom,
           VBool <$> Gen.bool
         ]
@@ -281,7 +281,7 @@ prop_listToCompoundRoundtrip = property $ do
   args <-
     forAllWith (show . map showGroundValue) $
       Gen.list (Range.linear 0 3) $
-        Gen.choice [VInt <$> Gen.int (Range.linear 0 100), VAtom <$> genSafeAtom]
+        Gen.choice [VInt <$> Gen.integral (Range.linear 0 100), VAtom <$> genSafeAtom]
   let list = valueList (VAtom f : args)
   let HostCallFn fromList = lookupHostCall "list_to_compound"
       HostCallFn toList = lookupHostCall "compound_to_list"

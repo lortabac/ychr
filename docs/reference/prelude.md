@@ -41,7 +41,9 @@ Two patterns are worth understanding before reading the tables:
 
 ## Arithmetic
 
-Operators on numbers. Each is overloaded for `int` and `float`.
+Operators on numbers. Each is overloaded for `int` and `float`. `int`
+arithmetic is arbitrary-precision and never overflows; `float`
+arithmetic uses the host's IEEE-754 doubles.
 
 | Identifier | Signature(s) | Notes |
 |------------|--------------|-------|

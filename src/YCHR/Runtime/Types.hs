@@ -40,7 +40,7 @@ data VarState
 data Value
   = -- | A logical variable (possibly unbound, possibly bound).
     VVar !Var
-  | VInt !Int
+  | VInt !Integer
   | VFloat !Double
   | VAtom !Text
   | VText !Text

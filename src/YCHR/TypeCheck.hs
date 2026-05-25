@@ -246,7 +246,7 @@ newtype CtxHandle = CtxHandle Int
 
 -- | Materialize a 'CtxHandle' as the 'Value' the CHR program sees.
 ctxHandleValue :: CtxHandle -> Value
-ctxHandleValue (CtxHandle n) = VInt n
+ctxHandleValue (CtxHandle n) = VInt (fromIntegral n)
 
 -- | Ambient-signature scope id. Each bounded scope (a bounded
 -- function's equation or a rule with a bounded head constraint) gets
@@ -257,7 +257,7 @@ newtype ScopeId = ScopeId Int
 
 -- | Materialize a 'ScopeId' as the 'Value' the CHR program sees.
 scopeIdValue :: ScopeId -> Value
-scopeIdValue (ScopeId n) = VInt n
+scopeIdValue (ScopeId n) = VInt (fromIntegral n)
 
 -- | Map from 'CtxHandle' to the originating source location.
 type CtxMap = Map CtxHandle CtxInfo
@@ -321,7 +321,7 @@ freshRigidTypeVar = do
   store <- getStore
   let n = store.nextRigidId
   putStore store {nextRigidId = n + 1}
-  pure (VTerm (tcAtom "rigid") [VInt n])
+  pure (VTerm (tcAtom "rigid") [VInt (fromIntegral n)])
 
 -- | Allocate fresh rigid type variables for each unique type variable
 -- name. Mirrors 'freshTypeVarsForDecl' but uses rigid identities;
@@ -926,7 +926,7 @@ checkGuard cctx lastConName (D.GuardGetArg varName operand idx) = do
         [ resultTypeVar,
           operandType,
           VAtom (runtimeName conName),
-          VInt idx,
+          VInt (fromIntegral idx),
           ctxHandleValue ctx
         ]
   pure lastConName
@@ -1378,7 +1378,7 @@ decodeError ctxMap val = do
             VInt n ->
               Map.findWithDefault
                 (error ("TypeCheck.decodeError: orphan Ctx handle " <> show n))
-                (CtxHandle n)
+                (CtxHandle (fromInteger n))
                 ctxMap
             _ ->
               error

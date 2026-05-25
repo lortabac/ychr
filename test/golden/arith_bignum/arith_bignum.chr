@@ -1,0 +1,8 @@
+:- module(arith_bignum, [t/2, type(tags/0)]).
+:- use_module(prelude).
+:- chr_constraint t/2.
+:- chr_type tags ---> overflow_64 ; mul_above_2_64 ; neg_overflow.
+
+t(overflow_64, R)    <=> R is 9223372036854775807 + 1.
+t(mul_above_2_64, R) <=> R is 1000000000000 * 1000000000000.
+t(neg_overflow, R)   <=> R is (-9223372036854775808) - 1.

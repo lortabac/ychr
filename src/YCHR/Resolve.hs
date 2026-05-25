@@ -1080,7 +1080,7 @@ termToExpr vis loc origin = go
       -- 'fun name/arity' — canonicalized by the renamer to a single
       -- AtomTerm holding the flat 'module:name'.
       CompoundTerm (Unqualified "/") [AtomTerm flatName, IntTerm arity] ->
-        pure (R.FunRefExpr (parseFlatName flatName) arity)
+        pure (R.FunRefExpr (parseFlatName flatName) (fromInteger arity))
       -- Lambda 'fun(P1..Pn) -> body'. Params are patterns; invalid
       -- params get reported here and replaced with 'HeadWildcard' so
       -- traversal can keep going. An empty parameter list is rejected

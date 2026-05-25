@@ -466,8 +466,8 @@ var = VarTerm
 atom :: Text -> Term
 atom = AtomTerm
 
--- | Integer literal term.
-int :: Int -> Term
+-- | Integer literal term (arbitrary precision).
+int :: Integer -> Term
 int = IntTerm
 
 -- | Floating-point literal term.
@@ -544,7 +544,7 @@ funRef :: Text -> Int -> Term
 funRef n arity =
   CompoundTerm
     (Unqualified "fun")
-    [CompoundTerm (Unqualified "/") [AtomTerm n, IntTerm arity]]
+    [CompoundTerm (Unqualified "/") [AtomTerm n, IntTerm (fromIntegral arity)]]
 
 -- | Call a first-class function value (a 'lambda' or 'funRef') with the
 -- given arguments. Mirrors the surface @'$call'(F, A1, A2, ...)@.
@@ -570,7 +570,7 @@ call_ f args = CompoundTerm (Unqualified "$call") (f : args)
 -- '.>=', '.==') build comparison goals usable in guards.
 
 instance Num Term where
-  fromInteger n = IntTerm (fromInteger n)
+  fromInteger n = IntTerm n
   l + r = CompoundTerm (Unqualified "+") [l, r]
   l - r = CompoundTerm (Unqualified "-") [l, r]
   l * r = CompoundTerm (Unqualified "*") [l, r]

@@ -38,7 +38,8 @@ The type language is defined by the following grammar:
 
 ### Built-in types
 
-- **`int`** -- integer values.
+- **`int`** -- arbitrary-precision integer values. Arithmetic never
+  overflows; the host runtime carries integers as bignums.
 - **`float`** -- floating-point values.
 - **`string`** -- string values.
 - **`any`** -- the dynamic type. Consistent with every other type.

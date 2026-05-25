@@ -415,7 +415,7 @@ evalValExpr (FieldArg expr (ArgIndex i)) = do
 evalValExpr (FieldType expr) = do
   sid <- evalIdExpr expr
   ct <- lift (getConstraintType sid)
-  pure (VInt ct.unConstraintType)
+  pure (VInt (fromIntegral ct.unConstraintType))
 evalValExpr (EvalDeep expr) = evalValExprDeep expr
 -- 'EvalIs' is the @is@-with-variable-RHS marker. The compiler only
 -- emits it for @R is X@ where @X@ is syntactically a variable; the

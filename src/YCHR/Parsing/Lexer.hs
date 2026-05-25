@@ -43,8 +43,8 @@ lexeme sc p = p <* sc
 symbol :: (Stream s m Char) => ParsecT s u m () -> Text -> ParsecT s u m Text
 symbol sc s = lexeme sc (T.pack <$> PC.string (T.unpack s))
 
--- | Parse one or more decimal digits as an 'Int'.
-decimal :: (Stream s m Char) => ParsecT s u m Int
+-- | Parse one or more decimal digits as an 'Integer' (arbitrary precision).
+decimal :: (Stream s m Char) => ParsecT s u m Integer
 decimal = read <$> P.many1 PC.digit
 
 -- | Skip everything from a literal prefix to (but not including) the

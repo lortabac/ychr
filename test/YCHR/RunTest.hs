@@ -171,7 +171,7 @@ fibSource =
   \rec @ fib(N, R) <=> N1 is host:'-'(N, 1), N2 is host:'-'(N, 2), \
   \fib(N1, R1), fib(N2, R2), Tmp is host:'+'(R1, R2), R = Tmp.\n"
 
-extractIntArgs :: String -> [Value] -> (Int, Int)
+extractIntArgs :: String -> [Value] -> (Integer, Integer)
 extractIntArgs _ [VInt a, VInt b] = (a, b)
 extractIntArgs context vals =
   error $

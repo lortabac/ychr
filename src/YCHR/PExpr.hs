@@ -90,8 +90,8 @@ import YCHR.Parsing.Lexer qualified as L
 data PExpr
   = -- | Uppercase variable (e.g. @X@, @Foo@).
     Var Text
-  | -- | Integer literal.
-    Int Int
+  | -- | Integer literal (arbitrary precision).
+    Int Integer
   | -- | Floating-point literal.
     Float Double
   | -- | Atom (lowercase identifier or single-quoted string).
@@ -418,7 +418,7 @@ numberP = lexeme $ do
         whole <- L.decimal
         _ <- char '.'
         fracStr <- some digit
-        let str = show (whole :: Int) ++ "." ++ fracStr
+        let str = show (whole :: Integer) ++ "." ++ fracStr
             val = read str :: Double
         pure (Float (applySign val sign))
     )

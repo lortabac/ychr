@@ -40,8 +40,8 @@ import YCHR.Parsing.Lexer
 data SExpr
   = -- | Unquoted identifier (e.g. @let@, @create-constraint@).
     SAtom Text
-  | -- | Integer literal.
-    SInt Int
+  | -- | Integer literal (arbitrary precision).
+    SInt Integer
   | -- | Floating-point literal.
     SFloat Double
   | -- | Double-quoted string literal.
@@ -105,7 +105,7 @@ pAtomOrInt = do
       | T.any (== '.') tok, Just f <- readMaybe (T.unpack tok) -> SFloat f
       | otherwise -> SAtom tok
 
-readInt :: Text -> Maybe Int
+readInt :: Text -> Maybe Integer
 readInt t = case T.uncons t of
   Just ('-', rest)
     | not (T.null rest), T.all isDigit rest -> Just (negate (read (T.unpack rest)))

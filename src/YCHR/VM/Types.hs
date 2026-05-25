@@ -357,8 +357,9 @@ data CallArg
 
 -- | Literal values.
 data Literal
-  = -- | Integer literal.
-    IntLit Int
+  = -- | Integer literal. Arbitrary precision; the runtime carries
+    -- 'Integer' end to end so user programs cannot silently overflow.
+    IntLit Integer
   | -- | Floating-point literal.
     FloatLit Double
   | -- | Atom literal (symbolic constant).

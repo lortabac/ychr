@@ -633,7 +633,7 @@ makeCalcProc body =
 runCalc :: ValExpr -> Value -> IO Value
 runCalc body x = interpret (makeCalcProc body) arithCalls "calc" [x]
 
-expectInt :: Value -> IO Int
+expectInt :: Value -> IO Integer
 expectInt (VInt n) = pure n
 expectInt _ = assertFailure "expected VInt _"
 

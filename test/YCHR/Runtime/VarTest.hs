@@ -65,8 +65,8 @@ assertUnifyFailure a b = do
   (ok, _) <- unify a b
   liftIO $ assertBool "unify should fail" (not ok)
 
--- | Assert that a value dereferences to a given Int.
-assertDerefInt :: Value -> Int -> Chr ()
+-- | Assert that a value dereferences to a given Integer.
+assertDerefInt :: Value -> Integer -> Chr ()
 assertDerefInt v expected = do
   d <- deref v
   liftIO $ case d of

@@ -230,7 +230,7 @@ data BoundSig = BoundSig
 -- | Prolog-compatible terms.
 data Term
   = VarTerm Text
-  | IntTerm Int
+  | IntTerm Integer
   | FloatTerm Double
   | AtomTerm Text
   | TextTerm Text

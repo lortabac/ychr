@@ -230,7 +230,12 @@ programInfoBindingName libName = case reverse libName of
 -- exported alias identifiers.
 programInfoSExpr :: Text -> VMProgram -> SExpr
 programInfoSExpr infoName vmp =
-  let bindings = [SList [SAtom "%s", SList [SAtom "%make-session", SInt vmp.program.numTypes]]]
+  let bindings =
+        [ SList
+            [ SAtom "%s",
+              SList [SAtom "%make-session", SInt (fromIntegral vmp.program.numTypes)]
+            ]
+        ]
       registrations = map evaluableRegistration vmp.program.evaluables
       -- The let body is the session itself, returned to the caller.
       letBody = SAtom "%s"
@@ -250,7 +255,7 @@ evaluableRegistration (key, procName) =
     [ SAtom "register-evaluable!",
       SAtom "%s",
       compileSymbol key.functor.unName,
-      SInt key.arity,
+      SInt (fromIntegral key.arity),
       SAtom procName.unName
     ]
 
@@ -356,7 +361,7 @@ compileStmt (AddHistory (RuleId rid) es) =
   SList
     [ SAtom "add-history!",
       SAtom "%s",
-      SInt rid,
+      SInt (fromIntegral rid),
       SList
         ( SAtom "list"
             : map (\e -> SList [SAtom "constraint-id", compileIdExpr e]) es
@@ -401,7 +406,7 @@ compileForeach (Label lbl) ct (Name sv) conds body =
               SList
                 [ SList
                     [ SList [SAtom "%vec", SAtom "%count"],
-                      SList [SAtom "store-snapshot", SAtom "%s", SInt ct]
+                      SList [SAtom "store-snapshot", SAtom "%s", SInt (fromIntegral ct)]
                     ]
                 ],
               SList
@@ -454,7 +459,7 @@ foreachInner lbl sv conds body =
     compileCondition (ArgIndex i, e) =
       SList
         [ SAtom "equal?/chr",
-          SList [SAtom "constraint-arg", SAtom sv, SInt i],
+          SList [SAtom "constraint-arg", SAtom sv, SInt (fromIntegral i)],
           compileValExpr e
         ]
 
@@ -492,9 +497,9 @@ compileValExpr (MakeTerm (Name f) args) =
       SList (SAtom "vector" : map compileValExpr args)
     ]
 compileValExpr (GetArg e i) =
-  SList [SAtom "get-arg", compileValExpr e, SInt i]
+  SList [SAtom "get-arg", compileValExpr e, SInt (fromIntegral i)]
 compileValExpr (FieldArg e (ArgIndex i)) =
-  SList [SAtom "constraint-arg", compileIdExpr e, SInt i]
+  SList [SAtom "constraint-arg", compileIdExpr e, SInt (fromIntegral i)]
 compileValExpr (FieldType e) =
   SList [SAtom "constraint-type", compileIdExpr e]
 
@@ -509,7 +514,7 @@ compileBoolExpr (BNot e) = SList [SAtom "not", compileBoolExpr e]
 compileBoolExpr (BAnd a b) = SList [SAtom "and", compileBoolExpr a, compileBoolExpr b]
 compileBoolExpr (BOr a b) = SList [SAtom "or", compileBoolExpr a, compileBoolExpr b]
 compileBoolExpr (BMatchTerm e (Name f) arity) =
-  SList [SAtom "match-term", compileValExpr e, compileSymbol f, SInt arity]
+  SList [SAtom "match-term", compileValExpr e, compileSymbol f, SInt (fromIntegral arity)]
 compileBoolExpr (BEqual a b) =
   SList [SAtom "equal?/chr", compileValExpr a, compileValExpr b]
 compileBoolExpr (BIdEqual a b) =
@@ -517,12 +522,12 @@ compileBoolExpr (BIdEqual a b) =
 compileBoolExpr (BAlive e) =
   SList [SAtom "alive-constraint?", compileIdExpr e]
 compileBoolExpr (BIsConstraintType e (ConstraintType ct)) =
-  SList [SAtom "is-constraint-type?", compileIdExpr e, SInt ct]
+  SList [SAtom "is-constraint-type?", compileIdExpr e, SInt (fromIntegral ct)]
 compileBoolExpr (BNotInHistory (RuleId rid) es) =
   SList
     [ SAtom "not-in-history?",
       SAtom "%s",
-      SInt rid,
+      SInt (fromIntegral rid),
       SList
         ( SAtom "list"
             : map (\e -> SList [SAtom "constraint-id", compileIdExpr e]) es
@@ -539,7 +544,7 @@ compileIdExpr (CreateConstraint (ConstraintType ct) args) =
   SList
     [ SAtom "create-constraint",
       SAtom "%s",
-      SInt ct,
+      SInt (fromIntegral ct),
       SList (SAtom "vector" : map compileValExpr args)
     ]
 
@@ -668,7 +673,7 @@ compileBoolEvalDeep (BAnd a b) =
 compileBoolEvalDeep (BOr a b) =
   SList [SAtom "or", compileBoolEvalDeep a, compileBoolEvalDeep b]
 compileBoolEvalDeep (BMatchTerm e (Name f) arity) =
-  SList [SAtom "match-term", compileEvalDeep e, compileSymbol f, SInt arity]
+  SList [SAtom "match-term", compileEvalDeep e, compileSymbol f, SInt (fromIntegral arity)]
 compileBoolEvalDeep (BEqual a b) =
   SList [SAtom "equal?/chr", compileEvalDeep a, compileEvalDeep b]
 compileBoolEvalDeep (BUnify a b) =

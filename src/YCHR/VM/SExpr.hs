@@ -86,8 +86,8 @@ symbolTableToSExpr st =
     entryToSExpr (Types.Identifier n arity, Types.ConstraintType ct) =
       SList
         [ chrNameToSExpr n,
-          SInt arity,
-          SInt ct
+          SInt (fromIntegral arity),
+          SInt (fromIntegral ct)
         ]
 
 identToSExpr :: Types.QualifiedIdentifier -> SExpr
@@ -98,7 +98,7 @@ identToSExpr (Types.QualifiedIdentifier m n arity) =
             m
             n
         ),
-      SInt arity
+      SInt (fromIntegral arity)
     ]
 
 chrNameToSExpr :: Types.Name -> SExpr
@@ -109,9 +109,9 @@ programToSExpr :: Program -> SExpr
 programToSExpr prog =
   SList
     ( SAtom "program"
-        : SInt prog.numTypes
+        : SInt (fromIntegral prog.numTypes)
         : SList (SAtom "type-names" : map chrNameToSExpr prog.typeNames)
-        : SInt prog.numRules
+        : SInt (fromIntegral prog.numRules)
         : SList (SAtom "rule-names" : map SString prog.ruleNames)
         : SList (SAtom "evaluables" : map evaluableEntryToSExpr prog.evaluables)
         : map procedureToSExpr prog.procedures
@@ -119,7 +119,7 @@ programToSExpr prog =
 
 evaluableEntryToSExpr :: (EvaluableKey, Name) -> SExpr
 evaluableEntryToSExpr (key, procName) =
-  SList [nameToSExpr key.functor, SInt key.arity, nameToSExpr procName]
+  SList [nameToSExpr key.functor, SInt (fromIntegral key.arity), nameToSExpr procName]
 
 procedureToSExpr :: Procedure -> SExpr
 procedureToSExpr proc =
@@ -143,7 +143,7 @@ stmtToSExpr (Foreach lbl ct sv conds body) =
       labelToSExpr lbl,
       constraintTypeToSExpr ct,
       nameToSExpr sv,
-      SList [SList [SInt i, valExprToSExpr e] | (ArgIndex i, e) <- conds],
+      SList [SList [SInt (fromIntegral i), valExprToSExpr e] | (ArgIndex i, e) <- conds],
       SList (map stmtToSExpr body)
     ]
 stmtToSExpr (Continue lbl) = SList [SAtom "continue", labelToSExpr lbl]
@@ -179,9 +179,9 @@ valExprToSExpr (EvalIs e) = SList [SAtom "eval-is", valExprToSExpr e]
 valExprToSExpr NewVar = SAtom "new-var"
 valExprToSExpr (MakeTerm n es) =
   SList (SAtom "make-term" : nameToSExpr n : map valExprToSExpr es)
-valExprToSExpr (GetArg e i) = SList [SAtom "get-arg", valExprToSExpr e, SInt i]
+valExprToSExpr (GetArg e i) = SList [SAtom "get-arg", valExprToSExpr e, SInt (fromIntegral i)]
 valExprToSExpr (FieldArg e (ArgIndex i)) =
-  SList [SAtom "field-arg", idExprToSExpr e, SInt i]
+  SList [SAtom "field-arg", idExprToSExpr e, SInt (fromIntegral i)]
 valExprToSExpr (FieldType e) = SList [SAtom "field-type", idExprToSExpr e]
 
 boolExprToSExpr :: BoolExpr -> SExpr
@@ -195,7 +195,7 @@ boolExprToSExpr (BMatchTerm e n a) =
     [ SAtom "bmatch-term",
       valExprToSExpr e,
       nameToSExpr n,
-      SInt a
+      SInt (fromIntegral a)
     ]
 boolExprToSExpr (BEqual a b) = SList [SAtom "bequal", valExprToSExpr a, valExprToSExpr b]
 boolExprToSExpr (BIdEqual a b) = SList [SAtom "bid-equal", idExprToSExpr a, idExprToSExpr b]
@@ -233,10 +233,10 @@ labelToSExpr :: Label -> SExpr
 labelToSExpr (Label t) = SString t
 
 ruleIdToSExpr :: RuleId -> SExpr
-ruleIdToSExpr (RuleId n) = SInt n
+ruleIdToSExpr (RuleId n) = SInt (fromIntegral n)
 
 constraintTypeToSExpr :: ConstraintType -> SExpr
-constraintTypeToSExpr (ConstraintType n) = SInt n
+constraintTypeToSExpr (ConstraintType n) = SInt (fromIntegral n)
 
 -- ---------------------------------------------------------------------------
 -- Deserialization (SExpr → VM)
@@ -269,7 +269,7 @@ symbolTableFromSExpr (SList (SAtom "symbol-table" : entries)) = do
   where
     entryFromSExpr (SList [n, SInt arity, SInt ct]) = do
       name <- chrNameFromSExpr n
-      pure (Types.Identifier name arity, Types.ConstraintType ct)
+      pure (Types.Identifier name (fromInteger arity), Types.ConstraintType (fromInteger ct))
     entryFromSExpr s = err ("expected (name arity int), got: " <> printSExpr s)
 symbolTableFromSExpr s = err ("expected (symbol-table ...), got: " <> printSExpr s)
 
@@ -277,7 +277,7 @@ identFromSExpr :: SExpr -> Err Types.QualifiedIdentifier
 identFromSExpr (SList [n, SInt arity]) = do
   name <- chrNameFromSExpr n
   case name of
-    Types.Qualified m t -> pure (Types.QualifiedIdentifier m t arity)
+    Types.Qualified m t -> pure (Types.QualifiedIdentifier m t (fromInteger arity))
     Types.Unqualified t -> err ("expected qualified name in export, got: " <> t)
 identFromSExpr s = err ("expected (name arity), got: " <> printSExpr s)
 
@@ -304,9 +304,9 @@ programFromSExpr
     ps <- traverse procedureFromSExpr procs
     pure
       Program
-        { numTypes = n,
+        { numTypes = fromInteger n,
           typeNames = tns,
-          numRules = nr,
+          numRules = fromInteger nr,
           ruleNames = rns,
           evaluables = evs,
           procedures = ps
@@ -317,7 +317,7 @@ evaluableEntryFromSExpr :: SExpr -> Err (EvaluableKey, Name)
 evaluableEntryFromSExpr (SList [fSexpr, SInt arity, pSexpr]) = do
   functor <- nameFromSExpr fSexpr
   procName <- nameFromSExpr pSexpr
-  pure (EvaluableKey {functor = functor, arity = arity}, procName)
+  pure (EvaluableKey {functor = functor, arity = fromInteger arity}, procName)
 evaluableEntryFromSExpr s = err ("expected evaluable entry, got: " <> printSExpr s)
 
 textFromSExpr :: SExpr -> Err Text
@@ -396,9 +396,9 @@ valExprFromSExpr (SAtom "new-var") = pure NewVar
 valExprFromSExpr (SList (SAtom "make-term" : n : es)) =
   MakeTerm <$> nameFromSExpr n <*> traverse valExprFromSExpr es
 valExprFromSExpr (SList [SAtom "get-arg", e, SInt i]) =
-  GetArg <$> valExprFromSExpr e <*> pure i
+  GetArg <$> valExprFromSExpr e <*> pure (fromInteger i)
 valExprFromSExpr (SList [SAtom "field-arg", e, SInt i]) =
-  FieldArg <$> idExprFromSExpr e <*> pure (ArgIndex i)
+  FieldArg <$> idExprFromSExpr e <*> pure (ArgIndex (fromInteger i))
 valExprFromSExpr (SList [SAtom "field-type", e]) =
   FieldType <$> idExprFromSExpr e
 valExprFromSExpr s = err ("expected value expression, got: " <> printSExpr s)
@@ -412,7 +412,7 @@ boolExprFromSExpr (SList [SAtom "band", a, b]) =
 boolExprFromSExpr (SList [SAtom "bor", a, b]) =
   BOr <$> boolExprFromSExpr a <*> boolExprFromSExpr b
 boolExprFromSExpr (SList [SAtom "bmatch-term", e, n, SInt a]) =
-  BMatchTerm <$> valExprFromSExpr e <*> nameFromSExpr n <*> pure a
+  BMatchTerm <$> valExprFromSExpr e <*> nameFromSExpr n <*> pure (fromInteger a)
 boolExprFromSExpr (SList [SAtom "bequal", a, b]) =
   BEqual <$> valExprFromSExpr a <*> valExprFromSExpr b
 boolExprFromSExpr (SList [SAtom "bid-equal", a, b]) =
@@ -440,7 +440,7 @@ callArgFromSExpr (SList [SAtom "arg-id", e]) = AId <$> idExprFromSExpr e
 callArgFromSExpr s = err ("expected call argument, got: " <> printSExpr s)
 
 condFromSExpr :: SExpr -> Err (ArgIndex, ValExpr)
-condFromSExpr (SList [SInt i, e]) = (ArgIndex i,) <$> valExprFromSExpr e
+condFromSExpr (SList [SInt i, e]) = (ArgIndex (fromInteger i),) <$> valExprFromSExpr e
 condFromSExpr s = err ("expected (index expr), got: " <> printSExpr s)
 
 nameFromSExpr :: SExpr -> Err Name
@@ -452,9 +452,9 @@ labelFromSExpr (SString t) = pure (Label t)
 labelFromSExpr s = err ("expected string (label), got: " <> printSExpr s)
 
 ruleIdFromSExpr :: SExpr -> Err RuleId
-ruleIdFromSExpr (SInt n) = pure (RuleId n)
+ruleIdFromSExpr (SInt n) = pure (RuleId (fromInteger n))
 ruleIdFromSExpr s = err ("expected int (rule id), got: " <> printSExpr s)
 
 constraintTypeFromSExpr :: SExpr -> Err ConstraintType
-constraintTypeFromSExpr (SInt n) = pure (ConstraintType n)
+constraintTypeFromSExpr (SInt n) = pure (ConstraintType (fromInteger n))
 constraintTypeFromSExpr s = err ("expected int (constraint type), got: " <> printSExpr s)

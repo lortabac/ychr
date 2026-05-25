@@ -579,7 +579,7 @@ compileExpr varMap si e = case e of
       ( MakeTerm
           (Name "/")
           [ Lit (AtomLit (flattenName (Types.qualifiedToName qn))),
-            Lit (IntLit arity)
+            Lit (IntLit (fromIntegral arity))
           ]
       )
   R.LambdaExpr {} ->
@@ -1021,7 +1021,10 @@ genFunRefBranch callArity argParams func
               (BMatchTerm (Var (Name "closure")) (Name "/") 2)
               ( BAnd
                   (BEqual (GetArg (Var (Name "closure")) 0) (Lit (AtomLit flatName)))
-                  (BEqual (GetArg (Var (Name "closure")) 1) (Lit (IntLit func.arity)))
+                  ( BEqual
+                      (GetArg (Var (Name "closure")) 1)
+                      (Lit (IntLit (fromIntegral func.arity)))
+                  )
               )
        in [ If
               condition

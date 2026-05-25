@@ -140,7 +140,7 @@ baseHostCallRegistry =
       [VText a, VText b] -> pure (VText (a <> b))
       _ -> runtimeErrorS "string_concat: expected 2 Text arguments"
     stringLength = HostCallFn $ \case
-      [VText s] -> pure (VInt (T.length s))
+      [VText s] -> pure (VInt (fromIntegral (T.length s)))
       _ -> runtimeErrorS "string_length: expected 1 Text argument"
     stringUpper = HostCallFn $ \case
       [VText s] -> pure (VText (T.toUpper s))

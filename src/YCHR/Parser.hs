@@ -433,7 +433,7 @@ extractOpDeclsFromPExpr pexpr =
     toOpDecl (Compound "op" [Ann (P.Int fix) _, Ann tyExpr _, Ann nameExpr _])
       | Just ty <- parseOpTypeFromPExpr tyExpr,
         Just name <- atomName nameExpr =
-          Just (OpDecl fix ty name)
+          Just (OpDecl (fromInteger fix) ty name)
     toOpDecl _ = Nothing
 
 -- | If the expression is an atom, return its text; otherwise 'Nothing'.
@@ -910,21 +910,21 @@ convertExportItem ::
   Ann PExpr -> (Maybe Declaration, [AnnP ParseValidationError])
 convertExportItem (Ann pexpr loc) = case pexpr of
   Compound "fun" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
-    (Just (FunctionDecl name arity Nothing Nothing False DKFunction Nothing), [])
+    (Just (FunctionDecl name (fromInteger arity) Nothing Nothing False DKFunction Nothing), [])
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    (Just (ConstraintDecl name arity Nothing Nothing), [])
+    (Just (ConstraintDecl name (fromInteger arity) Nothing Nothing), [])
   Compound "op" [Ann (P.Int fix) _, Ann tyExpr _, Ann nameExpr _]
     | Just ty <- parseOpTypeFromPExpr tyExpr,
       Just name <- atomName nameExpr ->
-        (Just (OperatorDecl (OpDecl fix ty name)), [])
+        (Just (OperatorDecl (OpDecl (fromInteger fix) ty name)), [])
   Compound "type" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
-    (Just (TypeExportDecl name arity Nothing), [])
+    (Just (TypeExportDecl name (fromInteger arity) Nothing), [])
   Compound "type" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _, conList] ->
     case unfoldListStrict conList.node of
       Nothing ->
         (Nothing, [AnnP MalformedExportItem conList.sourceLoc conList.node])
       Just items -> case partitionEithers (map atomElement items) of
-        ([], names) -> (Just (TypeExportDecl name arity (Just names)), [])
+        ([], names) -> (Just (TypeExportDecl name (fromInteger arity) (Just names)), [])
         (errs, _) -> (Nothing, errs)
   _ -> (Nothing, [AnnP MalformedExportItem loc pexpr])
   where
@@ -961,7 +961,7 @@ convertConstraintDecl (Ann pexpr loc) = case pexpr of
     _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
   -- Untyped: name/arity
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    (Just (Ann (ConstraintDecl name arity Nothing Nothing) loc), [])
+    (Just (Ann (ConstraintDecl name (fromInteger arity) Nothing Nothing) loc), [])
   -- Typed: name(type, ...)
   Compound name args -> case partitionEithers (map convertTypeExpr args) of
     ([], argTypes) ->
@@ -1080,7 +1080,7 @@ convertFunctionDeclWith open kind (Ann pexpr loc) = case pexpr of
     _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
   -- Untyped: name/arity
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    ( Just (Ann (FunctionDecl name arity Nothing Nothing open kind Nothing) loc),
+    ( Just (Ann (FunctionDecl name (fromInteger arity) Nothing Nothing open kind Nothing) loc),
       []
     )
   -- Typed: name(type, ...) -> type

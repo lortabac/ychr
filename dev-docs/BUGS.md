@@ -6,26 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## Integer arithmetic silently overflows at the 64-bit boundary (spec ambiguous)
-
-`docs/reference/type-system.md` describes `int` as "integer values"
-without specifying width. The prelude declares `+` as
-`(int, int) -> int` with no overflow caveat. The doc's Prolog-flavored
-framing implies arbitrary precision; the implementation uses the
-host's fixed-width `Int` and wraps silently.
-
-Repro:
-
-```chr
-:- module(z).
-:- chr_constraint r/1.
-r(R) <=> R is 9223372036854775807 + 1.
-```
-
-Actual: `R = (-9223372036854775808)`. Expected: either bignum
-semantics, or commit to fixed-width in `type-system.md`/`prelude.md`
-and (ideally) trap overflow at runtime.
-
 ## `host:foo(...)` is accepted as a rule-head pattern (spec silent)
 
 `docs/reference/language.md` §"Host calls" describes `host:` as a

@@ -29,8 +29,8 @@ typing rules over this syntax see [type-system.md](type-system.md).
     distinct occurrences are independent.
 - **Number literals.**
   - Integers: a decimal digit sequence, optionally preceded by `-`.
-    No underscore separators, no hexadecimal / octal / binary
-    notation.
+    Arbitrary precision; there is no upper or lower bound. No
+    underscore separators, no hexadecimal / octal / binary notation.
   - Floats: an integer part, a `.`, and at least one fractional
     digit, optionally preceded by `-`. No exponent syntax.
 - **String literals.** Double-quoted: `"…"`. Recognized escapes are

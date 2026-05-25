@@ -141,7 +141,7 @@ data FunctionEquation = FunctionEquation
 --     (the surface @host:f(args)@).
 data Expr
   = VarExpr Text
-  | IntExpr Int
+  | IntExpr Integer
   | FloatExpr Double
   | AtomExpr Text
   | TextExpr Text
@@ -186,7 +186,7 @@ exprToTerm (HostExpr f args) =
 exprToTerm (FunRefExpr qn arity) =
   CompoundTerm
     (Unqualified "/")
-    [AtomTerm (flattenName (qualifiedToName qn)), IntTerm arity]
+    [AtomTerm (flattenName (qualifiedToName qn)), IntTerm (fromIntegral arity)]
 exprToTerm (LambdaExpr params body) =
   CompoundTerm
     (Unqualified "->")

@@ -136,7 +136,7 @@ genPExpr =
     Gen.choice
     -- Base cases
     [ Var <$> genVar,
-      Int <$> Gen.int (Range.linear (-1000) 1000),
+      Int <$> Gen.integral (Range.linear (-1000) 1000),
       Float <$> genFloat,
       Atom <$> genAtom,
       Str <$> genStringContent,
@@ -174,7 +174,7 @@ genPExprWithOps =
     Gen.choice
     -- Base cases (same as genPExpr)
     [ Var <$> genVar,
-      Int <$> Gen.int (Range.linear (-1000) 1000),
+      Int <$> Gen.integral (Range.linear (-1000) 1000),
       Float <$> genFloat,
       Atom <$> genAtom,
       Str <$> genStringContent,
@@ -210,7 +210,7 @@ genPExprFull =
   Gen.recursive
     Gen.choice
     [ Var <$> genVar,
-      Int <$> Gen.int (Range.linear (-1000) 1000),
+      Int <$> Gen.integral (Range.linear (-1000) 1000),
       Float <$> genFloat,
       Atom <$> genAtom,
       Str <$> genStringContent,
