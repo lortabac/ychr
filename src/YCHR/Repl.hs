@@ -321,8 +321,9 @@ showModules prog =
 showDeclarations :: CompiledProgram -> IO ()
 showDeclarations prog = mapM_ putStrLn declLines
   where
-    declLines =
-      [ renderDecl kw m.name n a
+    declLines = dedup entries
+    entries =
+      [ (kw, m.name, n, a)
       | m <- prog.allModules,
         Parsed.Ann d _ <- m.decls,
         (kw, n, a) <- case d of
@@ -338,6 +339,12 @@ showDeclarations prog = mapM_ putStrLn declLines
             [("extend_class_type", n, a)]
           _ -> []
       ]
+    dedup = go Set.empty
+      where
+        go _ [] = []
+        go seen (e@(kw, modName, n, a) : rest)
+          | Set.member e seen = go seen rest
+          | otherwise = renderDecl kw modName n a : go (Set.insert e seen) rest
     renderDecl kw modName name arity =
       ":- "
         ++ kw
