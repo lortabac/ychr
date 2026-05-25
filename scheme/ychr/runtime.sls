@@ -205,15 +205,24 @@
   ;;; Euclidean (remainder always non-negative), which disagrees on
   ;;; cases like `20 div -3` where the result must round toward
   ;;; negative infinity.
-  (define (%idiv n d) (exact (floor (/ n d))))
-  (define (%imod n d) (- n (* (%idiv n d) d)))
+  (define (%idiv n d)
+    (if (zero? d)
+        (error '%idiv "integer div: division by zero")
+        (exact (floor (/ n d)))))
+  (define (%imod n d)
+    (if (zero? d)
+        (error '%imod "integer mod: division by zero")
+        (- n (* (%idiv n d) d))))
 
   ;;; Truncated remainder, matching Haskell `rem`: the result takes
   ;;; the sign of the dividend. r6rs `mod0` is balanced (result in
   ;;; [-|d|/2, |d|/2)), and the Scheme `remainder` builtin is not
   ;;; visible from `(rnrs)` inside a library in Guile, so we compute
   ;;; it explicitly from `truncate`.
-  (define (%irem n d) (- n (* (exact (truncate (/ n d))) d)))
+  (define (%irem n d)
+    (if (zero? d)
+        (error '%irem "integer rem: division by zero")
+        (- n (* (exact (truncate (/ n d))) d))))
 
   ;;; Groundness check
   (define (%ground? v)

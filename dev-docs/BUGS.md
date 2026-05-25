@@ -6,29 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## Integer division by zero produces a raw Haskell error with no `YCHR-NNNNN` code
-
-`docs/reference/errors.md`: "YCHR diagnostics carry a numeric code of
-the form `YCHR-NNNNN`." `PROJECT.md` documents `YCHR-60001` as the
-runtime-error code for arithmetic failures. Integer `div`/`mod` by
-zero bypasses the YCHR diagnostic infrastructure entirely.
-
-Repro:
-
-```chr
-:- module(z).
-:- chr_constraint r/1.
-r(R) <=> R is 10 div 0.
-```
-
-Actual: `Error: divide by zero` — no code, no rule context, no source
-location, none of the `=== runtime error ===` framing. Expected: a
-formatted `YCHR-NNNNN` diagnostic. Same category as the `ychr run
--g 'true'` failure above — a class of runtime errors that bypasses
-YCHR diagnostics.
-
-Cross-check: `1.0 / 0.0` returns `Infinity.0` without error.
-
 ## Integer arithmetic silently overflows at the 64-bit boundary (spec ambiguous)
 
 `docs/reference/type-system.md` describes `int` as "integer values"

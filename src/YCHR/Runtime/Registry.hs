@@ -57,9 +57,9 @@ baseHostCallRegistry =
     [ (Name "+", numArith2 (+) (+)),
       (Name "-", numArith2 (-) (-)),
       (Name "*", numArith2 (*) (*)),
-      (Name "div", intArith2 div),
-      (Name "mod", intArith2 mod),
-      (Name "rem", intArith2 rem),
+      (Name "div", intDivOp2 "div" div),
+      (Name "mod", intDivOp2 "mod" mod),
+      (Name "rem", intDivOp2 "rem" rem),
       (Name "/", floatArith2 (/)),
       (Name "<", numCmp (<) (<)),
       (Name ">", numCmp (>) (>)),
@@ -97,7 +97,9 @@ baseHostCallRegistry =
         runtimeErrorS $
           "arithmetic host call: expected 2 numeric arguments of same type, got "
             ++ show (length args)
-    intArith2 op = HostCallFn $ \case
+    intDivOp2 opName op = HostCallFn $ \case
+      [VInt _, VInt 0] ->
+        runtimeErrorS $ "integer " ++ opName ++ ": division by zero"
       [VInt a, VInt b] -> pure (VInt (op a b))
       args ->
         runtimeErrorS $

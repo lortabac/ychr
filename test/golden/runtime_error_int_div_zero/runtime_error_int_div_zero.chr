@@ -1,0 +1,6 @@
+:- module(runtime_error_int_div_zero, [d/1, m/1]).
+:- use_module(prelude).
+:- chr_constraint d/1, m/1.
+
+d(R) <=> R is 10 div 0.
+m(R) <=> R is 10 mod 0.
