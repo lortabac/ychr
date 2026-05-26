@@ -3,7 +3,7 @@
 This guide documents the Haskell conventions used in YCHR. It mostly codifies
 practices already universal in `src/`; treat the rules as defaults with
 rationale, not as obligations. Deviating is fine when there's a reason — but
-the reason should be explicit (a comment, a `Note`, a commit message).
+the reason should be explicit (a comment or a `Note`).
 
 For project architecture, see `PROJECT.md`.
 
