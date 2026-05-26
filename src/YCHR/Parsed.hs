@@ -54,6 +54,7 @@ module YCHR.Parsed
   )
 where
 
+import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
 import YCHR.Loc (Ann (..), SourceLoc (..), dummyLoc, noAnn)
 import YCHR.PExpr (OpType (..), PExpr (..))
@@ -176,7 +177,7 @@ data FunctionEquation = FunctionEquation
   { funName :: Name,
     args :: [Term],
     guard :: AnnP [Term],
-    rhs :: AnnP Term
+    rhs :: AnnP (NonEmpty Term)
   }
   deriving (Show, Eq)
 

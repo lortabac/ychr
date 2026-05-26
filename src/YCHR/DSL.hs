@@ -99,6 +99,7 @@ module YCHR.DSL
     -- * Function equations and lambdas
     FunctionEquation,
     equation,
+    equationSeq,
     lambda,
     funRef,
     call_,
@@ -125,6 +126,7 @@ module YCHR.DSL
 where
 
 import Control.Exception (throwIO)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import YCHR.Meta (metaHostCallRegistry)
@@ -512,13 +514,22 @@ hostCall f args = CompoundTerm (Qualified "host" f) args
 -- Function equations and lambdas
 -- ---------------------------------------------------------------------------
 
--- | A single function-defining equation.
+-- | A single function-defining equation with a single-expression body.
+-- Use 'equationSeq' for a sequenced body (@A1, A2, ..., Return@).
 --
 -- > equation "factorial" [int 0]   [] (int 1)
 -- > equation "factorial" [var "N"] [var "N" .> int 0]
 -- >   (var "N" .* call_ (funRef "factorial" 1) [var "N" .- int 1])
 equation :: Text -> [Term] -> [Term] -> Term -> FunctionEquation
-equation n args guard rhs =
+equation n args guard rhs = equationSeq n args guard (NE.singleton rhs)
+
+-- | A function-defining equation whose body is a non-empty sequence of
+-- terms. The last term is the return expression; earlier terms must be
+-- either an @is@ binding or an IO action (host call / discardable function
+-- call). Validated in the desugarer.
+equationSeq ::
+  Text -> [Term] -> [Term] -> NE.NonEmpty Term -> FunctionEquation
+equationSeq n args guard rhs =
   FunctionEquation
     { funName = Unqualified n,
       args = args,

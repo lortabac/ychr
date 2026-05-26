@@ -56,6 +56,7 @@ module YCHR.Parser
 where
 
 import Data.Either (partitionEithers)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -1280,7 +1281,7 @@ convertFunctionEquation (Ann pexpr loc) = case pexpr of
                         guard_.sourceLoc
                         guard_.node
                     )
-                    (AnnP (convertTerm rhs) rhs.sourceLoc rhs.node)
+                    (AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node)
                 )
                 loc
                 pexpr
@@ -1297,7 +1298,7 @@ convertFunctionEquation (Ann pexpr loc) = case pexpr of
                     (Unqualified name)
                     args
                     (noAnnPAt lhs.sourceLoc [])
-                    (AnnP (convertTerm rhs) rhs.sourceLoc rhs.node)
+                    (AnnP (convertRhsSequence rhs) rhs.sourceLoc rhs.node)
                 )
                 loc
                 pexpr
@@ -1306,6 +1307,12 @@ convertFunctionEquation (Ann pexpr loc) = case pexpr of
         )
       Nothing -> (Nothing, [AnnP MalformedFunctionEquation loc pexpr])
   _ -> (Nothing, [AnnP MalformedFunctionEquation loc pexpr])
+
+-- | Flatten a function-equation RHS (or lambda body) on the top-level
+-- comma operator. The result is always non-empty because 'flattenComma'
+-- returns at least the input itself.
+convertRhsSequence :: Ann PExpr -> NE.NonEmpty Term
+convertRhsSequence rhs = NE.fromList (map convertTerm (flattenComma rhs))
 
 -- | Extract the function name and argument list from an equation LHS.
 --

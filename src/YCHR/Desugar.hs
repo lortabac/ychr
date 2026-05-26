@@ -79,6 +79,14 @@ import YCHR.Types
 data DesugarError
   = UnexpectedBodyExpr R.Expr
   | NonBooleanGuard R.Expr
+  | -- | A non-final item in a function body sequence was not one of the
+    -- allowed shapes (@X is E@, @host:f(args)@, function call, or
+    -- @'$call'@).
+    NonPreludeFunctionBodyItem R.Expr
+  | -- | A non-final @is@ binding had a non-variable LHS, which is not
+    -- supported in a function body (function bodies have no unification
+    -- machinery).
+    NonVariableIsInFunctionBody R.Expr
   deriving (Eq, Show)
 
 -- | Prefix for fresh variables introduced by the Head Normal Form
@@ -119,11 +127,19 @@ quoteExpr (R.LambdaExpr params body) =
   R.CtorExpr
     (Unqualified "->")
     [ R.CtorExpr (Unqualified "fun") (map paramAtom (NE.toList params)),
-      quoteExpr body
+      quoteSequence body
     ]
   where
     paramAtom (HeadVar v) = R.AtomExpr v
     paramAtom HeadWildcard = R.AtomExpr "_"
+    quoteSequence = go . NE.toList
+      where
+        go [e] = quoteExpr e
+        go (e : es) =
+          R.CtorExpr
+            (Unqualified ",")
+            [quoteExpr e, go es]
+        go [] = R.AtomExpr "true" -- unreachable: NonEmpty
 quoteExpr e@(R.IntExpr _) = e
 quoteExpr e@(R.FloatExpr _) = e
 quoteExpr e@(R.AtomExpr _) = e
@@ -391,12 +407,52 @@ desugarEquation' eq = do
       (st, normalizedArgs) = mapAccumL normalizeArg initState eq.args
       guards = reverse st.guards
   userGuards <- traverse (desugarGuard eq.guard.sourceLoc eq.guard.parsed) eq.guard.node
+  (prelude, returnExpr) <-
+    classifyFunctionBody eq.rhs.sourceLoc eq.rhs.parsed eq.rhs.node
   pure
     D.Equation
       { params = normalizedArgs,
         guards = guards ++ userGuards,
-        rhs = eq.rhs.node
+        prelude = prelude,
+        rhs = returnExpr
       }
+
+-- | Split a function-body sequence into its non-final prelude items
+-- and the trailing return expression. Each non-final item must be one
+-- of @host:f(args)@, @X is E@ (variable LHS), a function call, or
+-- @'$call'(F, args)@; anything else is reported as 'NonPreludeFunctionBodyItem'.
+-- A non-variable @is@ LHS in non-final position is reported as
+-- 'NonVariableIsInFunctionBody'. The return expression is left as-is.
+classifyFunctionBody ::
+  P.SourceLoc ->
+  PExpr ->
+  NE.NonEmpty R.Expr ->
+  Writer [Diagnostic DesugarError] ([D.FunStmt], R.Expr)
+classifyFunctionBody loc origin body = do
+  let (initExprs, lastExpr) = (NE.init body, NE.last body)
+  stmts <- traverse (classifyFunStmt loc origin) initExprs
+  pure (stmts, lastExpr)
+
+-- | Classify a single non-final function-body expression into a 'D.FunStmt'.
+-- Emits a diagnostic and returns a no-op placeholder when the shape is
+-- not one of the allowed forms; the placeholder is unreachable because
+-- compilation aborts whenever any diagnostic is emitted.
+classifyFunStmt ::
+  P.SourceLoc ->
+  PExpr ->
+  R.Expr ->
+  Writer [Diagnostic DesugarError] D.FunStmt
+classifyFunStmt loc origin e = case e of
+  R.HostExpr f args -> pure (D.FunHostStmt f args)
+  R.CtorExpr (Unqualified "is") [R.VarExpr v, expr] -> pure (D.FunIs v expr)
+  R.CtorExpr (Unqualified "is") [_, _] -> do
+    tell [Diagnostic Nothing (AnnP (NonVariableIsInFunctionBody e) loc origin)]
+    pure (D.FunHostStmt "" [])
+  R.CallExpr qn args -> pure (D.FunCall qn args)
+  R.ApplyExpr f args -> pure (D.FunApply f args)
+  _ -> do
+    tell [Diagnostic Nothing (AnnP (NonPreludeFunctionBodyItem e) loc origin)]
+    pure (D.FunHostStmt "" [])
 
 -- | Classify a resolved guard expression into a 'D.Guard'.
 --
@@ -516,13 +572,15 @@ desugarBodyGoal label loc origin e = case e of
 -- ---------------------------------------------------------------------------
 
 -- | Threaded state for the lambda-lifter: a counter that supplies fresh
--- @__lambda_N@ names, and the list of top-level functions that have
--- already been lifted out (in reverse discovery order). The lifter is
--- a pure rewrite — it can't fail on a successfully desugared input —
--- so no error channel is threaded through.
+-- @__lambda_N@ names, the list of top-level functions that have already
+-- been lifted out (in reverse discovery order), and an error accumulator
+-- for lambda-body classification failures discovered during the lift.
+-- Errors here mirror the diagnostics 'desugarEquation'' emits for the
+-- top-level RHS sequence of an equation.
 data LiftState = LiftState
   { counter :: !Int,
-    liftedFunctions :: [D.Function]
+    liftedFunctions :: [D.Function],
+    liftErrors :: [Diagnostic DesugarError]
   }
 
 -- | Collect all variable names referenced inside an expression.
@@ -534,13 +592,34 @@ exprVars (R.ApplyExpr f args) =
   exprVars f `Set.union` Set.unions (map exprVars args)
 exprVars (R.HostExpr _ args) = Set.unions (map exprVars args)
 exprVars (R.LambdaExpr params body) =
-  exprVars body `Set.difference` Set.fromList [v | HeadVar v <- NE.toList params]
+  sequenceFree (NE.toList body)
+    `Set.difference` Set.fromList [v | HeadVar v <- NE.toList params]
 exprVars (R.FunRefExpr _ _) = Set.empty
 exprVars (R.IntExpr _) = Set.empty
 exprVars (R.FloatExpr _) = Set.empty
 exprVars (R.AtomExpr _) = Set.empty
 exprVars (R.TextExpr _) = Set.empty
 exprVars R.WildcardExpr = Set.empty
+
+-- | Free variables of a sequenced expression list (lambda body or
+-- top-level function body), treating an @X is E@ item as a binder for
+-- X: uses of X /before/ the binding (and uses of X in @E@ itself, which
+-- is evaluated /before/ the binding takes effect) still count, while
+-- uses in /later/ items resolve to the local binding and do not escape.
+sequenceFree :: [R.Expr] -> Set.Set Text
+sequenceFree = go Set.empty
+  where
+    go _ [] = Set.empty
+    go bound (e : es) =
+      let usedHere = case e of
+            R.CtorExpr (Unqualified "is") [R.VarExpr _, rhs] -> exprVars rhs
+            _ -> exprVars e
+          contrib = usedHere `Set.difference` bound
+          bound' = case e of
+            R.CtorExpr (Unqualified "is") [R.VarExpr v, _] ->
+              Set.insert v bound
+            _ -> bound
+       in contrib `Set.union` go bound' es
 
 -- | Lift lambdas in a single expression. Each 'R.LambdaExpr' is
 -- replaced by a /self-describing closure/ of the form
@@ -568,17 +647,43 @@ liftExpr modName scope parentRequiring st0 expr = case expr of
   R.LambdaExpr params body ->
     let paramsList = NE.toList params
         paramVarNames = Set.fromList [v | HeadVar v <- paramsList]
-        bodyFree = exprVars body
+        bodyList = NE.toList body
+        -- Walk the body left-to-right so that a name bound by an
+        -- earlier 'X is E' shadows later uses of X but does NOT
+        -- shadow uses in the same item's RHS or in items that
+        -- precede the binding. The latter still capture the outer
+        -- value, which 'fun(X) -> N is N + 1, N end' relies on:
+        -- the inner 'N' on the RHS of 'is' is the captured outer N.
+        bodyFree = sequenceFree bodyList
         freeVars =
           Set.toAscList
             ( bodyFree
                 `Set.intersection` scope
                 `Set.difference` paramVarNames
             )
-        innerScope = scope `Set.union` paramVarNames
+        -- The inner scope is a superset; locally-bound names are
+        -- added so nested lambdas can find them, on top of params
+        -- and any names bound by prelude 'is' statements.
+        innerScope =
+          scope
+            `Set.union` paramVarNames
+            `Set.union` Set.fromList
+              [v | R.CtorExpr (Unqualified "is") [R.VarExpr v, _] <- bodyList]
         (st1, liftedBody) =
-          liftExpr modName innerScope parentRequiring st0 body
-        idx = st1.counter
+          mapAccumL
+            (liftExpr modName innerScope parentRequiring)
+            st0
+            bodyList
+        liftedBodyNE = NE.fromList liftedBody
+        (preludeExprs, rhsExpr) =
+          (NE.init liftedBodyNE, NE.last liftedBodyNE)
+        (prelude, classifyErrs) =
+          runWriter $
+            traverse
+              (classifyFunStmt P.dummyLoc (Atom ""))
+              preludeExprs
+        st1' = st1 {liftErrors = st1.liftErrors ++ classifyErrs}
+        idx = st1'.counter
         lambdaName = lambdaPrefix <> T.pack (show idx)
         qualName = QualifiedName modName lambdaName
         allParams = map HeadVar freeVars ++ paramsList
@@ -593,14 +698,15 @@ liftExpr modName scope parentRequiring st0 expr = case expr of
                   [ D.Equation
                       { params = allParams,
                         guards = [],
-                        rhs = liftedBody
+                        prelude = prelude,
+                        rhs = rhsExpr
                       }
                   ]
             }
         st2 =
-          st1
+          st1'
             { counter = idx + 1,
-              liftedFunctions = func : st1.liftedFunctions
+              liftedFunctions = func : st1'.liftedFunctions
             }
         lambdaId = modName <> "__" <> lambdaName
         -- The quoted source form is for pretty-printing only and must
@@ -717,10 +823,47 @@ liftEquation modName parentRequiring st eq =
   let scope =
         Set.unions (map headArgVars eq.params)
           `Set.union` guardVars eq.guards
+          `Set.union` funStmtBindings eq.prelude
       (st', guards') =
         mapAccumL (liftGuard modName scope parentRequiring) st eq.guards
-      (st'', rhs') = liftExpr modName scope parentRequiring st' eq.rhs
-   in (st'', eq {D.guards = guards', D.rhs = rhs'})
+      (st'', prelude') =
+        mapAccumL (liftFunStmt modName scope parentRequiring) st' eq.prelude
+      (st''', rhs') = liftExpr modName scope parentRequiring st'' eq.rhs
+   in (st''', eq {D.guards = guards', D.prelude = prelude', D.rhs = rhs'})
+
+-- | Lift lambdas in a function-body prelude statement.
+liftFunStmt ::
+  Text ->
+  Set.Set Text ->
+  [BoundSig] ->
+  LiftState ->
+  D.FunStmt ->
+  (LiftState, D.FunStmt)
+liftFunStmt modName scope parentRequiring st stmt = case stmt of
+  D.FunIs v expr ->
+    let (st', expr') = liftExpr modName scope parentRequiring st expr
+     in (st', D.FunIs v expr')
+  D.FunHostStmt f args ->
+    let (st', args') =
+          mapAccumL (liftExpr modName scope parentRequiring) st args
+     in (st', D.FunHostStmt f args')
+  D.FunCall qn args ->
+    let (st', args') =
+          mapAccumL (liftExpr modName scope parentRequiring) st args
+     in (st', D.FunCall qn args')
+  D.FunApply f args ->
+    let (st', f') = liftExpr modName scope parentRequiring st f
+        (st'', args') =
+          mapAccumL (liftExpr modName scope parentRequiring) st' args
+     in (st'', D.FunApply f' args')
+
+-- | Variables bound by a list of function-body prelude statements (only
+-- 'FunIs' contributes a binding).
+funStmtBindings :: [D.FunStmt] -> Set.Set Text
+funStmtBindings = Set.fromList . concatMap binds
+  where
+    binds (D.FunIs v _) = [v]
+    binds _ = []
 
 -- | Lift lambdas in a function definition. The function's own
 -- @requiring@ clause is the @parentRequiring@ propagated to every
@@ -806,16 +949,21 @@ liftRule st rule =
           }
       )
 
--- | Post-desugaring pass: lift all lambda expressions into top-level functions.
-liftAllLambdas :: D.Program -> D.Program
+-- | Post-desugaring pass: lift all lambda expressions into top-level
+-- functions. Returns any diagnostics produced while classifying lambda
+-- body sequences (see 'classifyFunStmt'). Callers must merge these
+-- with the rest of the pipeline's errors.
+liftAllLambdas :: D.Program -> (D.Program, [Diagnostic DesugarError])
 liftAllLambdas prog =
-  let initState = LiftState 0 []
+  let initState = LiftState 0 [] []
       (st1, functions') = mapAccumL liftFunction initState prog.functions
       (st2, rules') = mapAccumL liftRule st1 prog.rules
-   in prog
-        { D.functions = functions' ++ st2.liftedFunctions,
-          D.rules = rules'
-        }
+   in ( prog
+          { D.functions = functions' ++ st2.liftedFunctions,
+            D.rules = rules'
+          },
+        st2.liftErrors
+      )
 
 -- | Lift lambdas from query body goals. Returns the rewritten goals
 -- and any generated function definitions (to be compiled on the fly).
@@ -826,13 +974,13 @@ liftAllLambdas prog =
 liftQueryLambdas ::
   Int ->
   [D.BodyGoal] ->
-  ([D.BodyGoal], [D.Function])
+  ([D.BodyGoal], [D.Function], [Diagnostic DesugarError])
 liftQueryLambdas startCounter goals =
   let scope = bodyGoalVars goals
-      initState = LiftState startCounter []
+      initState = LiftState startCounter [] []
       (st, goals') =
         mapAccumL (liftBodyGoal "__query" scope []) initState goals
-   in (goals', st.liftedFunctions)
+   in (goals', st.liftedFunctions, st.liftErrors)
 
 {- ---------------------------------------------------------------------------
 Notes

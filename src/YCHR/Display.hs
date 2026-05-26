@@ -249,6 +249,8 @@ renameWarningCode (DataConstructorArityMismatch _ _) = ErrorCode 20102
 desugarErrorCode :: DesugarError -> ErrorCode
 desugarErrorCode (UnexpectedBodyExpr _) = ErrorCode 30001
 desugarErrorCode (NonBooleanGuard _) = ErrorCode 30002
+desugarErrorCode (NonPreludeFunctionBodyItem _) = ErrorCode 30003
+desugarErrorCode (NonVariableIsInFunctionBody _) = ErrorCode 30004
 
 -- | 4xxxx — compile phase
 compileErrorCode :: CompileError -> ErrorCode
@@ -726,6 +728,21 @@ desugarErrorMsg (NonBooleanGuard e) =
     ( "guards must be function calls, boolean-typed variables,"
         ++ " true/false, or a host call returning a boolean"
     )
+desugarErrorMsg (NonPreludeFunctionBodyItem e) =
+  withHint
+    ( "This expression is not valid before the final return value in a"
+        ++ " function body: "
+        ++ prettyTermSrc (R.exprToTerm e)
+    )
+    ( "non-final items must be an 'is' binding (X is E), a host call"
+        ++ " (host:f(args)), or a function call"
+    )
+desugarErrorMsg (NonVariableIsInFunctionBody e) =
+  withHint
+    ( "The left-hand side of 'is' in a function body must be a variable: "
+        ++ prettyTermSrc (R.exprToTerm e)
+    )
+    "use 'X is E' to bind, then pattern-match on X in subsequent positions"
 
 instance Display (Diagnostic CompileError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =

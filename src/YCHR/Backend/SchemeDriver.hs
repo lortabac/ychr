@@ -178,5 +178,7 @@ exprVars (R.CallExpr _ args) = concatMap exprVars args
 exprVars (R.ApplyExpr f args) = exprVars f ++ concatMap exprVars args
 exprVars (R.HostExpr _ args) = concatMap exprVars args
 exprVars (R.LambdaExpr params body) =
-  filter (`notElem` [v | HeadVar v <- NE.toList params]) (exprVars body)
+  filter
+    (`notElem` [v | HeadVar v <- NE.toList params])
+    (concatMap exprVars (NE.toList body))
 exprVars _ = []

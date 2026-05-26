@@ -165,6 +165,55 @@ Functions are callable everywhere an expression evaluates — see
 [Tell-side evaluation](#tell-side-evaluation) for the full list. If
 no equation matches, a runtime error is raised.
 
+### Sequencing in function bodies
+
+A function body may also be a comma-separated sequence. The last item
+is the return expression; earlier items run for their effect or to
+bind a value before the return is computed:
+
+```
+:- function factorial/1.
+
+factorial(0)         -> 1.
+factorial(N) | N > 0 ->
+    host:print(N),
+    Prev is factorial(N - 1),
+    N * Prev.
+```
+
+Items are evaluated strictly left-to-right. A non-final item must be
+one of:
+
+- An `is` binding `X is E`. The left-hand side must be a variable
+  (function bodies have no unification machinery); a non-variable LHS
+  is rejected (`NonVariableIsInFunctionBody`, YCHR-30004).
+- A host call `host:f(args)`. Its return value is discarded.
+- A function call `f(args)` or `'$call'(F, args)`. The return value
+  is discarded.
+
+Anything else — including `=` unification, a CHR tell, `true`, or a
+bare expression like `(A, B)` — is rejected
+(`NonPreludeFunctionBodyItem`, YCHR-30003) with a hint pointing at the
+offending item. The single-expression body (the form without commas)
+is the degenerate case and continues to work unchanged.
+
+Comma at the top of the body is always a sequencer, even when written
+in functor form (`','(A, B)`); both surface forms parse to the same
+compound. To return a `,/2` constructor value, wrap it in `term/1`:
+`f() -> term(','(foo, bar)).`
+
+An `is` binding may shadow a parameter or an earlier binding of the
+same name. The RHS sees the *old* value; subsequent statements and the
+return expression see the new one. This is lexical shadowing — there
+is no unification with the previous slot — so `f(X) -> X is X + 1, X.`
+is well-typed even when `X` and `X + 1` have different types.
+
+Lambdas (`fun(X) -> ... end`) accept the same sequenced form:
+
+```
+make_doubler() -> fun(X) -> Y is X + 1, Y * 2 end.
+```
+
 ### `:- function` vs `:- class`
 
 `:- function` declares a single-signature function. To overload a

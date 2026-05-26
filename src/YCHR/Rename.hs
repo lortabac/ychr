@@ -616,7 +616,10 @@ renameEquation ctx eq = do
   resolvedFunName <- resolveName ResolveTop ctx loc origin eq.funName (length eq.args)
   renamedArgs <- traverse (renameTerm ctx loc origin NoResolve) eq.args
   renamedGuard <- traverse (traverse (renameTerm ctx loc origin ResolveAll)) eq.guard
-  renamedRhs <- traverse (renameTerm ctx eq.rhs.sourceLoc eq.rhs.parsed ResolveAll) eq.rhs
+  renamedRhs <-
+    traverse
+      (traverse (renameTerm ctx eq.rhs.sourceLoc eq.rhs.parsed ResolveAll))
+      eq.rhs
   pure
     eq
       { funName = resolvedFunName,
@@ -689,6 +692,17 @@ isResolving ResolveTop = True
 isResolving ResolveAll = True
 isResolving _ = False
 
+-- | Rename a lambda body, walking through any top-level comma sequencer
+-- without treating @,@ itself as a data constructor. Each comma-separated
+-- item is renamed in 'ResolveAll' mode like an ordinary lambda body.
+renameLambdaBody :: RenameCtx -> SourceLoc -> PExpr -> Term -> Rename Term
+renameLambdaBody ctx loc origin t = case t of
+  CompoundTerm (Unqualified ",") [l, r] -> do
+    l' <- renameLambdaBody ctx loc origin l
+    r' <- renameLambdaBody ctx loc origin r
+    pure (CompoundTerm (Unqualified ",") [l', r'])
+  _ -> renameTerm ctx loc origin ResolveAll t
+
 renameTerm :: RenameCtx -> SourceLoc -> PExpr -> ResolveMode -> Term -> Rename Term
 renameTerm ctx loc origin mode t = case t of
   -- Special case: @is@ LHS is a pattern (no resolution), RHS is an expression.
@@ -706,13 +720,16 @@ renameTerm ctx loc origin mode t = case t of
     renamedRhs <- renameTerm ctx loc origin ResolveAll rhs
     pure (CompoundTerm (Unqualified "=") [renamedLhs, renamedRhs])
   -- Lambda: @fun(params) -> body@. Params are variable patterns (don't resolve),
-  -- the body is always an expression.
+  -- the body is always an expression. The body may use comma sequencing
+  -- (@A, B, C@) at its top level; walk through any such top-level commas
+  -- without treating them as a data constructor, mirroring the parser's
+  -- comma flattening for top-level function-equation RHS.
   CompoundTerm
     (Unqualified "->")
     [ CompoundTerm (Unqualified "fun") params,
       body
       ] | isResolving mode -> do
-      renamedBody <- renameTerm ctx loc origin ResolveAll body
+      renamedBody <- renameLambdaBody ctx loc origin body
       pure
         ( CompoundTerm
             (Unqualified "->")

@@ -32,6 +32,7 @@ module YCHR.Desugared
     -- * Goals
     Guard (..),
     BodyGoal (..),
+    FunStmt (..),
 
     -- * Expressions
     Expr (..),
@@ -129,6 +130,27 @@ data Function = Function
 data Equation = Equation
   { params :: [HeadArg],
     guards :: [Guard],
+    -- | Statements executed before evaluating 'rhs'. Empty for
+    -- single-expression bodies. The desugarer is responsible for
+    -- restricting which 'R.Expr' shapes are accepted in non-final
+    -- position; see 'FunStmt'.
+    prelude :: [FunStmt],
     rhs :: Expr
   }
   deriving (Show)
+
+-- | A statement appearing in non-final position of a function equation's
+-- right-hand side. Strictly a subset of 'BodyGoal' — rule-body-only forms
+-- like 'BodyTell', 'BodyUnify', and 'BodyTrue' are intentionally not
+-- representable.
+data FunStmt
+  = -- | @X is E@. The LHS must be a variable; the desugarer rejects
+    -- non-variable LHS in this position.
+    FunIs Text Expr
+  | -- | @host:f(args)@ evaluated for side effects.
+    FunHostStmt Text [Expr]
+  | -- | Statically resolved user-function call; result discarded.
+    FunCall QualifiedName [Expr]
+  | -- | Dynamic dispatch (@'$call'(F, args)@); result discarded.
+    FunApply Expr [Expr]
+  deriving (Show, Eq)

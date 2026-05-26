@@ -1,0 +1,10 @@
+:- module(function_body_host_sequence, [compute/2]).
+:- chr_constraint compute/2.
+:- function calc/1.
+
+calc(X) ->
+    host:'+'(X, 1),
+    Y is X * 2,
+    Y + 1.
+
+compute(N, R) <=> R is calc(N).

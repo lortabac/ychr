@@ -116,7 +116,7 @@ data FunctionDef = FunctionDef
 data FunctionEquation = FunctionEquation
   { args :: [Term],
     guard :: AnnP [Expr],
-    rhs :: AnnP Expr
+    rhs :: AnnP (NonEmpty Expr)
   }
   deriving (Show)
 
@@ -150,7 +150,7 @@ data Expr
   | CallExpr QualifiedName [Expr]
   | ApplyExpr Expr [Expr]
   | FunRefExpr QualifiedName Int
-  | LambdaExpr (NonEmpty HeadArg) Expr
+  | LambdaExpr (NonEmpty HeadArg) (NonEmpty Expr)
   | HostExpr Text [Expr]
   deriving (Show, Eq)
 
@@ -191,5 +191,15 @@ exprToTerm (LambdaExpr params body) =
   CompoundTerm
     (Unqualified "->")
     [ CompoundTerm (Unqualified "fun") (map headArgToTerm (NE.toList params)),
-      exprToTerm body
+      sequenceToTerm body
     ]
+
+-- | Re-build a comma-sequence 'Term' from a non-empty list of 'Expr's.
+-- Inverse of the comma flattening done at the equation- and lambda-body
+-- boundaries.
+sequenceToTerm :: NonEmpty Expr -> Term
+sequenceToTerm = go . NE.toList
+  where
+    go [e] = exprToTerm e
+    go (e : es) = CompoundTerm (Unqualified ",") [exprToTerm e, go es]
+    go [] = AtomTerm "true" -- unreachable: NonEmpty

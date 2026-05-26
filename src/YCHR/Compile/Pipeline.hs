@@ -280,7 +280,10 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
   (renamed, renameWarnings) <- first RenameErrors (renameProgram renameInputs allMods)
   resolved <- first ResolveErrors (resolveProgram renamed)
   desugared <- first DesugarErrors (desugarProgram resolved)
-  let desugared' = liftAllLambdas desugared
+  let (desugared', liftErrs) = liftAllLambdas desugared
+  case liftErrs of
+    [] -> pure ()
+    _ -> Left (DesugarErrors liftErrs)
   let symTab = extractSymbolTable desugared'
       warnings = [RenameWarnings renameWarnings | not (null renameWarnings)]
   prog <- first CompileErrors (compile desugared' symTab)

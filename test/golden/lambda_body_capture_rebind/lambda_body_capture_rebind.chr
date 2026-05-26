@@ -1,0 +1,7 @@
+:- module(lambda_body_capture_rebind, [compute/2]).
+:- chr_constraint compute/2.
+:- function outer/1.
+
+outer(N) -> '$call'(fun(X) -> N is N + 1, N + X end, 5).
+
+compute(N, R) <=> R is outer(N).

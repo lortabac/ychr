@@ -1029,15 +1029,28 @@ stripFunName vis (P.AnnP eq loc parsed) =
               (termToExpr vis eq.guard.sourceLoc eq.guard.parsed)
               eq.guard.node
           )
-      (rhsExpr, rhsErrs) =
-        runWriter (termToExpr vis eq.rhs.sourceLoc eq.rhs.parsed eq.rhs.node)
+      (rhsExprs, rhsErrs) =
+        runWriter
+          ( traverse
+              (termToExpr vis eq.rhs.sourceLoc eq.rhs.parsed)
+              eq.rhs.node
+          )
       resolvedEq =
         R.FunctionEquation
           { args = eq.args,
             guard = P.AnnP guardExprs eq.guard.sourceLoc eq.guard.parsed,
-            rhs = P.AnnP rhsExpr eq.rhs.sourceLoc eq.rhs.parsed
+            rhs = P.AnnP rhsExprs eq.rhs.sourceLoc eq.rhs.parsed
           }
    in (P.AnnP resolvedEq loc parsed, guardErrs ++ rhsErrs)
+
+-- | Flatten the top-level comma operator of a 'Term' into a non-empty
+-- sequence. Used to give lambda bodies the same sequenced form as
+-- top-level function equations.
+flattenTermComma :: Term -> NonEmpty Term
+flattenTermComma t = case t of
+  CompoundTerm (Unqualified ",") [l, r] ->
+    flattenTermComma l <> flattenTermComma r
+  _ -> t :| []
 
 -- ---------------------------------------------------------------------------
 -- Term -> Expr translation
@@ -1090,7 +1103,7 @@ termToExpr vis loc origin = go
       CompoundTerm
         (Unqualified "->")
         [CompoundTerm (Unqualified "fun") params, body] -> do
-          body' <- go body
+          body' <- traverse go (flattenTermComma body)
           case params of
             [] -> do
               tell [noDiag (P.AnnP EmptyLambdaParams loc origin)]

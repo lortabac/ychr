@@ -1,0 +1,9 @@
+:- module(function_body_is_shadow, [compute/2]).
+:- chr_constraint compute/2.
+:- function (process(int) -> int).
+
+process(X) ->
+    X is X + 100,
+    X * 2.
+
+compute(N, R) <=> R is process(N).

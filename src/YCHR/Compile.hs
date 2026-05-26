@@ -949,12 +949,63 @@ compileEquation params si eq = do
   -- Equations have no partners, so the index-condition pushdown
   -- classifier never fires; pass 'Nothing' to short-circuit it.
   compiled <- compileGuards Nothing varMap si eq.guards
-  rhsExpr <- compileExpr compiled.extendedVarMap si eq.rhs
-  let returnStmt = [Return rhsExpr]
+  (preludeStmts, varMap1) <-
+    compilePrelude compiled.extendedVarMap si eq.prelude
+  rhsExpr <- compileExpr varMap1 si eq.rhs
+  let returnStmts = preludeStmts ++ [Return rhsExpr]
       inner = case compiled.residualCheck of
-        Nothing -> returnStmt
-        Just gExpr -> [If gExpr returnStmt []]
+        Nothing -> returnStmts
+        Just gExpr -> [If gExpr returnStmts []]
   pure (compiled.matchWrapper inner)
+
+-- | Compile a function-body prelude: lower each 'D.FunStmt' to its VM
+-- statements, threading the 'VarMap' so that an @X is E@ binding becomes
+-- visible to later statements and to the trailing return expression.
+-- Mirrors a subset of 'compileBodyGoal' but skips the rule-body-only
+-- reactivation-on-rebind path: a function has no constraint store to
+-- reactivate against. An @is@ that shadows a same-named parameter is
+-- intentional and works via the host language's lexical scoping —
+-- 'LetVal' lowers to a let binding that shadows the outer name for
+-- the rest of the procedure body.
+compilePrelude ::
+  VarMap ->
+  SrcInfo ->
+  [D.FunStmt] ->
+  Writer [Diagnostic CompileError] ([Stmt], VarMap)
+compilePrelude varMap si = foldM step ([], varMap)
+  where
+    step (acc, vm) stmt = do
+      (stmts, vm') <- compileFunStmt vm si stmt
+      pure (acc ++ stmts, vm')
+
+compileFunStmt ::
+  VarMap ->
+  SrcInfo ->
+  D.FunStmt ->
+  Writer [Diagnostic CompileError] ([Stmt], VarMap)
+compileFunStmt varMap si (D.FunHostStmt f args) = do
+  args' <- traverse (compileExpr varMap si) args
+  pure ([ExprStmt (HostCall (Name f) args')], varMap)
+compileFunStmt varMap si (D.FunIs v expr) = do
+  expr' <- compileExpr varMap si expr
+  let rhs = case expr of
+        R.VarExpr _ -> EvalIs expr'
+        _ -> EvalDeep expr'
+      varMap' = insertVar v (Var (Name v)) varMap
+  pure ([LetVal (Name v) rhs], varMap')
+compileFunStmt varMap si (D.FunCall qn args) = do
+  args' <- traverse (compileExpr varMap si) args
+  let funcName = Types.qualifiedToName qn
+  pure
+    ( [ExprStmt (CallExpr (funcProcName funcName (length args')) (map AVal args'))],
+      varMap
+    )
+compileFunStmt varMap si (D.FunApply f args) = do
+  fAndArgs <- traverse (compileExpr varMap si) (f : args)
+  pure
+    ( [ExprStmt (CallExpr (callFunProcName (length args)) (map AVal fAndArgs))],
+      varMap
+    )
 
 -- ---------------------------------------------------------------------------
 -- reactivate_dispatch

@@ -1,0 +1,9 @@
+:- module(function_body_nonvar_is, [compute/2]).
+:- chr_constraint compute/2.
+:- function f/1.
+
+f(X) ->
+    1 is X,
+    X.
+
+compute(N, R) <=> R is f(N).

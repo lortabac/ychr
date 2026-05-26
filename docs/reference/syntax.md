@@ -115,6 +115,22 @@ expressions evaluated with ask semantics (no variable binding); see
 [language.md §Tell-side evaluation](language.md#tell-side-evaluation).
 `Body` is a comma-separated list of constraints to tell.
 
+## Function equations
+
+Function equations have the form
+
+```
+Name(Args) [| Guards] -> Body.
+```
+
+`Body` is either a single expression or a comma-separated sequence
+`Item1, Item2, ..., Return` where `Return` is an expression and each
+earlier `Item` is one of: `X is E` (variable LHS only), `host:f(args)`,
+a function call `f(args)`, or `'$call'(F, args)`. Lambdas
+(`fun(X) -> Body end`) accept the same body forms. Anything else in a
+non-final position is rejected — see [language.md §Sequencing in
+function bodies](language.md#sequencing-in-function-bodies).
+
 ## Expressions
 
 Every expression position parses the same surface terms; the *kind*

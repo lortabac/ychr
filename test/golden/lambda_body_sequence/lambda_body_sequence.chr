@@ -1,0 +1,8 @@
+:- module(lambda_body_sequence, [compute/2]).
+:- chr_constraint compute/2.
+:- function apply/2.
+
+apply(F, X) -> '$call'(F, X).
+
+compute(N, R) <=>
+    R is apply(fun(X) -> Y is X + 1, Y * 2 end, N).

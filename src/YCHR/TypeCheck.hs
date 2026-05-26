@@ -30,7 +30,7 @@ module YCHR.TypeCheck
   )
 where
 
-import Control.Monad (replicateM, when, zipWithM_)
+import Control.Monad (foldM, replicateM, when, zipWithM_)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, put)
@@ -967,6 +967,37 @@ checkBodyGoal cctx (D.BodyApply f args) = do
 checkBodyGoal cctx (D.BodyHostStmt _ args) =
   mapM_ (typeOfExpr cctx) args
 
+-- | Type-check a function-body prelude statement and return a 'CheckCtx'
+-- to use for the remainder of the body. A 'FunIs' binding allocates a
+-- /fresh/ type slot for the bound variable (mirroring the runtime's
+-- lexical shadowing — 'compileFunStmt' emits 'LetVal', not unification),
+-- so subsequent statements and the return expression see the new slot.
+-- The RHS itself is typed against the previous slot, so @N is N + 1@
+-- with N captured from an outer scope still type-checks against the
+-- outer N's type.
+checkFunStmt :: CheckCtx -> D.FunStmt -> TC CheckCtx
+checkFunStmt cctx (D.FunIs v expr) = do
+  exprType <- typeOfExpr cctx expr
+  newSlot <- chrOp newVar
+  ctx <- freshCtxHandle cctx
+  tellCheckUnify ctx newSlot exprType
+  pure cctx {varTypes = Map.insert v newSlot cctx.varTypes}
+checkFunStmt cctx (D.FunHostStmt _ args) = do
+  mapM_ (typeOfExpr cctx) args
+  pure cctx
+checkFunStmt cctx (D.FunCall qn args) = do
+  argTypeVars <- traverse (typeOfExpr cctx) args
+  retTypeVar <- chrOp newVar
+  emitFunctionCall cctx (Types.qualifiedToName qn) argTypeVars retTypeVar
+  pure cctx
+checkFunStmt cctx (D.FunApply f args) = do
+  _ <- typeOfExpr cctx f
+  mapM_ (typeOfExpr cctx) args
+  pure cctx
+
+checkFunStmts :: CheckCtx -> [D.FunStmt] -> TC CheckCtx
+checkFunStmts = foldM checkFunStmt
+
 -- | Emit a function-call type check. Routes through
 -- @check_function_use_with_ambient@ when the call's target name has
 -- ambient signatures in the current 'CheckCtx' (i.e. the call sits
@@ -1046,8 +1077,9 @@ checkEquation func loc origin eq = do
     (_, _) -> do
       let cctx = freshCheckCtx varTypes Map.empty
       argTypeVars <- traverse (typeOfTerm cctx . headArgToTerm) eq.params
-      retTypeVar <- typeOfExpr cctx eq.rhs
-      ctx <- freshCtxHandle cctx
+      cctx' <- checkFunStmts cctx eq.prelude
+      retTypeVar <- typeOfExpr cctx' eq.rhs
+      ctx <- freshCtxHandle cctx'
       chrOp $
         tellConstraint
           (Qualified "typechecker" "check_function_use")
@@ -1122,7 +1154,8 @@ checkSingleSigEquation func (argTys, retTy) bounds varTypes eq = do
         [scopeIdValue scopeId]
   paramTypes <- traverse (typeOfTerm cctx . headArgToTerm) eq.params
   zipWithM_ (tellCheckUnify ctx) paramTypes encodedArgs
-  rhsType <- typeOfExpr cctx eq.rhs
+  cctx' <- checkFunStmts cctx eq.prelude
+  rhsType <- typeOfExpr cctx' eq.rhs
   tellCheckUnify ctx rhsType encodedRet
   checkGuards cctx eq.guards
   when hasBounds $
@@ -1245,7 +1278,12 @@ typeOfExpr cctx e = case e of
     pure (VTerm (tcAtom "fun") [valueList argTypeVars, retTypeVar])
   R.LambdaExpr params body -> do
     paramTypeVars <- traverse (typeOfHeadArg cctx) params
-    bodyType <- typeOfExpr cctx body
+    -- Type each non-final body item; the lambda's value type is the
+    -- type of its trailing return expression.
+    let initExprs = NE.init body
+        lastExpr = NE.last body
+    mapM_ (typeOfExpr cctx) initExprs
+    bodyType <- typeOfExpr cctx lastExpr
     pure (VTerm (tcAtom "fun") [valueList (NE.toList paramTypeVars), bodyType])
   where
     typeOfHeadArg c (HeadVar v) = chrOp (varType c v)
@@ -1298,8 +1336,16 @@ collectVarsInEq eq =
   mconcat
     [ foldMap collectVarsInHeadArg eq.params,
       foldMap collectVarsInGuard eq.guards,
+      foldMap collectVarsInFunStmt eq.prelude,
       collectVarsInExpr eq.rhs
     ]
+
+collectVarsInFunStmt :: D.FunStmt -> Set Text
+collectVarsInFunStmt (D.FunIs v e) = Set.singleton v <> collectVarsInExpr e
+collectVarsInFunStmt (D.FunHostStmt _ args) = foldMap collectVarsInExpr args
+collectVarsInFunStmt (D.FunCall _ args) = foldMap collectVarsInExpr args
+collectVarsInFunStmt (D.FunApply f args) =
+  collectVarsInExpr f <> foldMap collectVarsInExpr args
 
 collectVarsInConstraint :: Types.QualifiedConstraint -> Set Text
 collectVarsInConstraint c = foldMap collectVarsInTerm c.args
@@ -1342,7 +1388,8 @@ collectVarsInExpr (R.ApplyExpr f args) =
   collectVarsInExpr f <> foldMap collectVarsInExpr args
 collectVarsInExpr (R.HostExpr _ args) = foldMap collectVarsInExpr args
 collectVarsInExpr (R.LambdaExpr params body) =
-  Set.fromList [v | HeadVar v <- NE.toList params] <> collectVarsInExpr body
+  Set.fromList [v | HeadVar v <- NE.toList params]
+    <> foldMap collectVarsInExpr (NE.toList body)
 collectVarsInExpr _ = Set.empty
 
 -- ---------------------------------------------------------------------------
@@ -1619,7 +1666,7 @@ validateConstructorArities env prog =
     exprArity (R.CallExpr _ args) = foldMap exprArity args
     exprArity (R.ApplyExpr f args) = exprArity f <> foldMap exprArity args
     exprArity (R.HostExpr _ args) = foldMap exprArity args
-    exprArity (R.LambdaExpr _ body) = exprArity body
+    exprArity (R.LambdaExpr _ body) = foldMap exprArity (NE.toList body)
     exprArity _ = mempty
     -- Walks the surviving 'Term'-typed positions in the desugared AST
     -- (equation parameters). Pattern shapes that 'headTermToExpr'

@@ -1,0 +1,16 @@
+:- module(function_body_sequence, [compute/2]).
+:- chr_constraint compute/2.
+:- function bump/1.
+:- function double/1.
+:- function process/1.
+
+bump(X) -> X + 1.
+double(X) -> X * 2.
+
+process(X) ->
+    Y is bump(X),
+    double(Y),
+    Z is double(Y),
+    Y + Z.
+
+compute(N, R) <=> R is process(N).

@@ -2,6 +2,7 @@
 
 module YCHR.DesugarTest (tests) where
 
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
@@ -758,11 +759,12 @@ lambdaLiftTests =
                   { funName = Qualified "M" "f",
                     args = [listPattern],
                     guard = noAnnP [],
-                    rhs = noAnnP lambdaTerm
+                    rhs = noAnnP (NE.singleton lambdaTerm)
                   }
             m = (module' "M") {decls = [funDecl], equations = [funEq]}
         prog <- desugar [m]
-        let lifted = liftAllLambdas prog
+        let (lifted, liftErrs) = liftAllLambdas prog
+        liftErrs @?= []
         let isLambda f = f.name.baseName == "__lambda_0"
         case filter isLambda lifted.functions of
           [lam] -> do
@@ -771,6 +773,7 @@ lambdaLiftTests =
               [eq] -> do
                 eq.params @?= [D.HeadVar "X", D.HeadVar "Y"]
                 eq.guards @?= []
+                eq.prelude @?= []
                 eq.rhs @?= lambdaBodyExpr
               eqs -> assertFailure $ "expected 1 equation, got " ++ show (length eqs)
           fs -> assertFailure $ "expected exactly one __lambda_0, got " ++ show (length fs),
@@ -793,7 +796,7 @@ lambdaLiftTests =
                   { funName = Qualified "M" "f",
                     args = [var "X"],
                     guard = noAnnP [],
-                    rhs = noAnnP lambdaTerm
+                    rhs = noAnnP (NE.singleton lambdaTerm)
                   }
                 dummyLoc
                 (Atom "")

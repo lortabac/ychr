@@ -167,9 +167,10 @@ runProgramWithGoalDSL ::
   IO (Map Text Term)
 runProgramWithGoalDSL cp hostCalls constraint = convertRuntimeError $ do
   (qn, exprs) <- resolveQueryTellOrThrow cp constraint
-  let (lifted, lambdas) =
+  let (lifted, lambdas, liftErrs) =
         liftQueryLambdas cp.nextLambdaIndex [D.BodyTell qn exprs]
-      queryProcs = compileQueryLambdas lambdas
+  unless (null liftErrs) (throwIO (DesugarErrors liftErrs))
+  let queryProcs = compileQueryLambdas lambdas
       allFuns = cp.allFunctions ++ lambdas
       queryDispatches = genCallFunDispatches allFuns
       extraProcs = queryProcs ++ queryDispatches
@@ -314,7 +315,8 @@ prepareQuery cp src = do
       (throwIO . DesugarErrors)
       pure
       (desugarQueryGoals exprs)
-  let (lifted, lambdas) = liftQueryLambdas cp.nextLambdaIndex bodyGoals
+  let (lifted, lambdas, liftErrs) = liftQueryLambdas cp.nextLambdaIndex bodyGoals
+  unless (null liftErrs) (throwIO (DesugarErrors liftErrs))
   let cdp = cp.desugaredProgram
       progForCheck =
         D.Program
