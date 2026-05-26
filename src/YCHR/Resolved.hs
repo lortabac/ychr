@@ -20,12 +20,15 @@
 --     so the qualification invariant established by the renamer is
 --     reflected in the type system.
 module YCHR.Resolved
-  ( Program (..),
+  ( -- * Types
+    Program (..),
     Rule (..),
     Head (..),
     FunctionDef (..),
     FunctionEquation (..),
     Expr (..),
+
+    -- * Operations
     exprToTerm,
   )
 where

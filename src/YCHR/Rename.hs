@@ -373,6 +373,14 @@ unqualifiedText (Qualified _ t) = t
 -- Entry points
 -- ---------------------------------------------------------------------------
 
+-- | Rename a multi-module program: qualify every constraint, function,
+-- type, and data-constructor reference against the appropriate provider
+-- module, and validate export and import lists. Caller-supplied
+-- 'RenameInputs' carries per-module operator-export tables and trailing
+-- header locations gathered by 'YCHR.Collect'; pass 'defaultRenameInputs'
+-- when those tables are unavailable (tests, query renaming).
+-- Returns the renamed modules and any warnings on success, or the
+-- accumulated diagnostics on failure.
 renameProgram ::
   RenameInputs ->
   [Module] ->
@@ -1172,9 +1180,6 @@ resolveTypeName ctx n arity =
 -- Query renaming
 -- ---------------------------------------------------------------------------
 
--- | Rename a list of query goal terms using all modules as the visible
--- scope. Each term is renamed at 'ResolveTop' level (same as rule bodies).
--- Returns 'Left' if any rename errors occur.
 -- | Like 'renameQueryGoals' but uses 'NoResolve' mode — appropriate
 -- for the argument terms of a single goal constraint, where each
 -- term is data (constructors / atoms / variables) rather than a
@@ -1190,6 +1195,9 @@ renameQueryArgs ::
     )
 renameQueryArgs mods args = renameQueryTerms mods NoResolve args
 
+-- | Rename a list of query goal terms using all modules as the visible
+-- scope. Each term is renamed at 'ResolveTop' level (same as rule bodies).
+-- Returns 'Left' if any rename errors occur.
 renameQueryGoals ::
   [Module] ->
   [Term] ->
