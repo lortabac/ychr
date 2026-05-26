@@ -508,12 +508,18 @@ convertConstraint (Ann pexpr loc) = case pexpr of
 
 -- ** Flattening helpers
 
--- | Flatten a right-nested comma operator into a list.
+-- | Flatten a right-nested comma operator into a non-empty list.
 -- Note: O(n) because @,@ is @xfy@ so the tree is right-heavy (left child
 -- is always a leaf).
+flattenComma1 :: Ann PExpr -> NE.NonEmpty (Ann PExpr)
+flattenComma1 (Ann (Compound "," [l, r]) _) =
+  flattenComma1 l <> flattenComma1 r
+flattenComma1 e = NE.singleton e
+
+-- | List-returning view of 'flattenComma1' for callers that don't need
+-- the non-emptiness invariant.
 flattenComma :: Ann PExpr -> [Ann PExpr]
-flattenComma (Ann (Compound "," [l, r]) _) = flattenComma l ++ flattenComma r
-flattenComma e = [e]
+flattenComma = NE.toList . flattenComma1
 
 -- | Flatten a right-nested semicolon operator into a list.
 flattenSemicolon :: Ann PExpr -> [Ann PExpr]
@@ -1336,10 +1342,9 @@ convertFunctionEquation (Ann pexpr loc) = case pexpr of
   _ -> (Nothing, [AnnP MalformedFunctionEquation loc pexpr])
 
 -- | Flatten a function-equation RHS (or lambda body) on the top-level
--- comma operator. The result is always non-empty because 'flattenComma'
--- returns at least the input itself.
+-- comma operator. Non-empty by construction.
 convertRhsSequence :: Ann PExpr -> NE.NonEmpty Term
-convertRhsSequence rhs = NE.fromList (map convertTerm (flattenComma rhs))
+convertRhsSequence = fmap convertTerm . flattenComma1
 
 -- | Extract the function name and argument list from an equation LHS.
 --
