@@ -144,7 +144,7 @@ opTableEntries = P.opTableEntries
 parseModule ::
   String ->
   Text ->
-  Either (ParseError) (Module, [AnnP ParseValidationError])
+  Either ParseError (Module, [AnnP ParseValidationError])
 parseModule = parseModuleWith builtinOps
 
 -- | Parse a CHR module from source text using a custom operator table.
@@ -152,7 +152,7 @@ parseModuleWith ::
   OpTable ->
   String ->
   Text ->
-  Either (ParseError) (Module, [AnnP ParseValidationError])
+  Either ParseError (Module, [AnnP ParseValidationError])
 parseModuleWith table sourceName src = do
   terms <- P.parseTerms table sourceName src
   pure (convertModule (defaultModuleNameForSource sourceName) terms)
@@ -183,7 +183,7 @@ defaultModuleNameForSource sourceName =
 parseConstraint ::
   String ->
   Text ->
-  Either (ParseError) (Either (AnnP ParseValidationError) Constraint)
+  Either ParseError (Either (AnnP ParseValidationError) Constraint)
 parseConstraint = parseConstraintWith builtinOps
 
 -- | Parse a single constraint from surface-language 'Text' using a
@@ -194,7 +194,7 @@ parseConstraintWith ::
   OpTable ->
   String ->
   Text ->
-  Either (ParseError) (Either (AnnP ParseValidationError) Constraint)
+  Either ParseError (Either (AnnP ParseValidationError) Constraint)
 parseConstraintWith table sourceName src = do
   term <- P.parseTermNoDot table sourceName src
   pure (convertConstraint term)
@@ -206,7 +206,7 @@ parseConstraintWith table sourceName src = do
 parseTerm ::
   String ->
   Text ->
-  Either (ParseError) Term
+  Either ParseError Term
 parseTerm = parseTermWith builtinOps
 
 -- | Parse a single term with a custom operator table.
@@ -214,7 +214,7 @@ parseTermWith ::
   OpTable ->
   String ->
   Text ->
-  Either (ParseError) Term
+  Either ParseError Term
 parseTermWith table sourceName src = do
   term <- P.parseTermNoDot table sourceName src
   pure (convertTerm term)
@@ -226,7 +226,7 @@ parseTermWith table sourceName src = do
 parseQuery ::
   String ->
   Text ->
-  Either (ParseError) [Term]
+  Either ParseError [Term]
 parseQuery = parseQueryWith builtinOps
 
 -- | Parse a query with a custom operator table.
@@ -241,7 +241,7 @@ parseQueryWith ::
   OpTable ->
   String ->
   Text ->
-  Either (ParseError) [Term]
+  Either ParseError [Term]
 parseQueryWith table sourceName src =
   let parser = if dotTerminated then P.parseTerm else P.parseTermNoDot
    in map convertTerm . flattenComma <$> parser table sourceName src
@@ -261,7 +261,7 @@ parseQueryWith table sourceName src =
 parseRule ::
   String ->
   Text ->
-  Either (ParseError) (Maybe Rule, [AnnP ParseValidationError])
+  Either ParseError (Maybe Rule, [AnnP ParseValidationError])
 parseRule sourceName src = do
   term <- P.parseTerm builtinOps sourceName src
   pure (convertRule term)
@@ -322,7 +322,7 @@ data ModuleDirectiveInfo = ModuleDirectiveInfo
 -- Stops at the first directive or rule that cannot be parsed by the
 -- first-pass table — which in practice means anything other than
 -- @:- module(...)@ or @:- use_module(...)@.
-collectModuleHeader :: String -> Text -> Either (ParseError) ModuleHeader
+collectModuleHeader :: String -> Text -> Either ParseError ModuleHeader
 collectModuleHeader sourceName src = do
   (terms, tloc) <- P.parseLeadingTerms firstPassTable sourceName src
   let (modPart, rest1) = case terms of
@@ -629,7 +629,8 @@ convertModule defaultName terms =
       dirs = [d | ItemDirective d <- items]
       rules = [r | ItemRule r <- items]
       eqs = [e | ItemEquation e <- items]
-      (modName_, modNameLoc_, modExports_) = case [(n, l, p, e) | DirModule n l p e <- dirs] of
+      moduleDirs = [(n, l, p, e) | DirModule n l p e <- dirs]
+      (modName_, modNameLoc_, modExports_) = case moduleDirs of
         ((n, l, p, Just decls) : _) -> (n, l, Just (AnnP decls l p))
         ((n, l, _, Nothing) : _) -> (n, l, Nothing)
         [] -> (defaultName, dummyLoc, Nothing)
@@ -911,7 +912,18 @@ convertExportItem ::
   Ann PExpr -> (Maybe Declaration, [AnnP ParseValidationError])
 convertExportItem (Ann pexpr loc) = case pexpr of
   Compound "fun" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
-    (Just (FunctionDecl name (fromInteger arity) Nothing Nothing False DKFunction Nothing), [])
+    ( Just
+        ( FunctionDecl
+            name
+            (fromInteger arity)
+            Nothing
+            Nothing
+            False
+            DKFunction
+            Nothing
+        ),
+      []
+    )
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
     (Just (ConstraintDecl name (fromInteger arity) Nothing Nothing), [])
   Compound "op" [Ann (P.Int fix) _, Ann tyExpr _, Ann nameExpr _]
@@ -920,13 +932,15 @@ convertExportItem (Ann pexpr loc) = case pexpr of
         (Just (OperatorDecl (OpDecl (fromInteger fix) ty name)), [])
   Compound "type" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
     (Just (TypeExportDecl name (fromInteger arity) Nothing), [])
-  Compound "type" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _, conList] ->
-    case unfoldListStrict conList.node of
-      Nothing ->
-        (Nothing, [AnnP MalformedExportItem conList.sourceLoc conList.node])
-      Just items -> case partitionEithers (map atomElement items) of
-        ([], names) -> (Just (TypeExportDecl name (fromInteger arity) (Just names)), [])
-        (errs, _) -> (Nothing, errs)
+  Compound "type" [spec, conList]
+    | Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] <- spec.node ->
+        case unfoldListStrict conList.node of
+          Nothing ->
+            (Nothing, [AnnP MalformedExportItem conList.sourceLoc conList.node])
+          Just items -> case partitionEithers (map atomElement items) of
+            ([], names) ->
+              (Just (TypeExportDecl name (fromInteger arity) (Just names)), [])
+            (errs, _) -> (Nothing, errs)
   _ -> (Nothing, [AnnP MalformedExportItem loc pexpr])
   where
     atomElement (Ann (Atom n) _) = Right n
@@ -1081,7 +1095,19 @@ convertFunctionDeclWith open kind (Ann pexpr loc) = case pexpr of
     _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
   -- Untyped: name/arity
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    ( Just (Ann (FunctionDecl name (fromInteger arity) Nothing Nothing open kind Nothing) loc),
+    ( Just
+        ( Ann
+            ( FunctionDecl
+                name
+                (fromInteger arity)
+                Nothing
+                Nothing
+                open
+                kind
+                Nothing
+            )
+            loc
+        ),
       []
     )
   -- Typed: name(type, ...) -> type
@@ -1237,7 +1263,8 @@ convertHead (Ann pexpr loc) = case pexpr of
           ) = partitionEithers (map convertConstraint (flattenComma removed))
      in (AnnP (Simpagation keptOk removedOk) loc pexpr, keptErrs ++ removedErrs)
   _ ->
-    let (errs, ok) = partitionEithers (map convertConstraint (flattenComma (Ann pexpr loc)))
+    let constraints = flattenComma (Ann pexpr loc)
+        (errs, ok) = partitionEithers (map convertConstraint constraints)
      in (AnnP (Simplification ok) loc pexpr, errs)
 
 -- | Convert the head of a propagation rule. Malformed constraints are
