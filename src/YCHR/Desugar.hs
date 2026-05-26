@@ -76,9 +76,18 @@ import YCHR.Parsed qualified as P
 import YCHR.Resolved qualified as R
 import YCHR.Types
 
+-- | Errors produced by the desugaring pass.
 data DesugarError
-  = UnexpectedBodyExpr R.Expr
-  | NonBooleanGuard R.Expr
+  = -- | A rule-body expression did not match any of the recognized
+    -- body-goal forms (unification, @is@, host call, user-function
+    -- call, dynamic dispatch, constraint tell, @true@). See
+    -- 'desugarBodyGoal' for the accepted shapes.
+    UnexpectedBodyExpr R.Expr
+  | -- | A guard expression that structurally cannot evaluate to a
+    -- boolean (e.g. a numeric literal, a non-@true@/@false@ atom, a
+    -- data constructor application, a lambda). See 'guardExprIsAllowed'
+    -- for the rejection predicate.
+    NonBooleanGuard R.Expr
   | -- | A non-final item in a function body sequence was not one of the
     -- allowed shapes (@X is E@, @host:f(args)@, function call, or
     -- @'$call'@).
