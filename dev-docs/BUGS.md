@@ -6,28 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `print_store/0` (and other meta-library entries) are described as "constraints" but are functions
-
-**Documented claim.** `docs/reference/repl.md`: "The `print_store/0`
-constraint from the meta library prints every alive constraint in the
-store, qualified by module."
-
-**Test.** `libraries/meta.chr` declares:
-
-    :- function
-        (print(any) -> any),
-        (print_store() -> any),
-        ...
-
-**Actual.** `print_store/0` is declared with `:- function`, not
-`:- chr_constraint`. The same wording slip applies to the other
-meta-library entries listed in `prelude.md` (`print/1`,
-`read_term_from_string/1`, `write_term_to_string/1`,
-`write_store_to_list/0`): they are all `:- function`.
-
-**Notes.** Doc-shaped, low-severity terminology slip in
-`docs/reference/repl.md`.
-
 ## Internal post-condition leak on unqualified bad `fun name/arity`
 
 **Documented claim.** Diagnostics carry stable `YCHR-NNNNN` codes

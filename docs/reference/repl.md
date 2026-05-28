@@ -89,7 +89,7 @@ Inside `:begin … :end`, the store **persists** between inputs. Each
 line is a goal that adds to (or fires rules against) the running
 store. `:end` discards the session's store and returns to normal mode.
 
-The `print_store/0` constraint from the meta library prints every
+The `print_store/0` function from the meta library prints every
 alive constraint in the store, qualified by module:
 
 ```ychr-repl
