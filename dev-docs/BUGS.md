@@ -6,35 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## Internal post-condition leak on unqualified bad `fun name/arity`
-
-**Documented claim.** Diagnostics carry stable `YCHR-NNNNN` codes
-(`docs/reference/errors.md` §Catalog).
-
-**Test.** Typed at the REPL with no `nonexistent` declared anywhere:
-
-    R is call(fun nonexistent/2, 1, 2).
-
-**Expected.** A user-facing diagnostic with a `YCHR-NNNNN` code —
-naturally `YCHR-20002` (`UnknownName`).
-
-**Actual.**
-
-    Error: YCHR.Resolve.parseFlatName: missing ':' separator in
-    nonexistent — renamer post-condition violated
-
-An internal post-condition assertion leaks to the user as a plain
-`Error:` line, with no error code and a reference to a Haskell
-function name. The qualified form `fun foobar:nonexistent/2` is
-handled cleanly with `YCHR-20009` (`NotExportedByModule`), so the leak
-is specifically on the unqualified-and-unknown path through
-`Resolve.parseFlatName`.
-
-**Notes.** The renamer's invariant that all names reaching
-`parseFlatName` are already qualified is being violated by the
-function-reference path before the regular `UnknownName` diagnostic
-gets a chance to fire.
-
 ## Spurious "Undeclared data constructor" warnings for `fun` and `->` when a lambda appears directly as a constraint argument
 
 **Documented claim.** `YCHR-20101` (`docs/reference/errors.md`):

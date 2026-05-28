@@ -1,0 +1,3 @@
+:- module(funref_unknown_name).
+:- chr_constraint go/1.
+go(R) <=> R = fun nonexistent/2.

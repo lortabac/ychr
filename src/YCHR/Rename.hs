@@ -767,7 +767,7 @@ renameTerm ctx loc origin mode t = case t of
           ]
       ] | isResolving mode -> do
       resolved <-
-        resolveName ResolveAll ctx loc origin (Unqualified fname) (fromInteger farity)
+        resolveName ResolveTop ctx loc origin (Unqualified fname) (fromInteger farity)
       pure
         ( CompoundTerm
             (Unqualified "/")
