@@ -42,6 +42,21 @@ REPL_TESTS = [
     ("host:print(';'(foo, bar)).", "foo; bar\n"),
     ("host:print((foo,(bar;baz))).", "foo, (bar; baz)\n"),
     ("host:print((foo,(bar,baz))).", "foo, bar, baz\n"),
+    # Boolean output is bare `true`/`false` regardless of the path that
+    # produced it: `is`-RHS literal (evalNestedExpr), `=` operand
+    # (termToValue), comparison host call, and the explicit qualified
+    # form `prelude:true()`. The cross-form case at the end confirms
+    # that `=`-bound and comparison-produced booleans share a single
+    # runtime representation (otherwise `==` would fail).
+    ("B is true.", "B = true.\n"),
+    ("B is false.", "B = false.\n"),
+    ("X = true.", "X = true.\n"),
+    ("X = false.", "X = false.\n"),
+    ("R is 5 == 5.", "R = true.\n"),
+    ("R is 5 == 6.", "R = false.\n"),
+    ("B is prelude:true().", "B = true.\n"),
+    ("B is prelude:false().", "B = false.\n"),
+    ("X = true, X == (5 == 5).", "X = true.\n"),
     ("1 = 2.", "Error: unification failure: cannot unify 1 with 2\n"),
     (
         "[X, Y] = [1, 2, 3].",

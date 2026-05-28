@@ -67,40 +67,6 @@ descend into lambda subterms in argument position and treat the
 surface lambda compound `'->'(fun(X), X + 1)` as data, surfacing its
 synthetic functors `fun` and `->` as "undeclared constructors".
 
-## Inconsistent printing of boolean values (`true` from a literal vs `true` from a comparison)
-
-**Documented claim.** `docs/reference/type-system.md`: "The `bool` type
-is not built-in. It is an algebraic type declared in the prelude as
-`bool ---> true ; false`." The prelude reference shows comparisons
-returning bare `true`/`false` in `ychr-repl` snippets (e.g. `B = true.`).
-
-**Test.**
-
-    ychr> B is true.
-    ychr> X = true.
-    ychr> B is 5 == 5.
-
-**Expected.** Consistent printing — either all three show
-`prelude:true()` or all three show `true`.
-
-**Actual.**
-
-    ychr> B is true.
-    B = prelude:true().
-    ychr> X = true.
-    X = prelude:true().
-    ychr> B is 5 == 5.
-    B = true.
-
-`X = false` likewise prints `prelude:false()`. A user who writes
-`X = true` sees a different surface form than a user whose `X` came
-from a comparison.
-
-**Notes.** The canonicalized `BoolLit`/`VBool` path is used for
-comparisons; the literal path goes through ordinary ctor construction.
-Either the printer should normalize back to bare `true`/`false`, or
-the spec should describe the two-way printing.
-
 ## Zero-arity constructors print as `name()` with empty parens
 
 **Documented claim.** `docs/reference/syntax.md` lists `foo`, `'a-b'`

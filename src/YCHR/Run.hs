@@ -419,6 +419,12 @@ termToValue (FloatTerm n) = pure (VFloat n)
 termToValue (AtomTerm s) = pure (VAtom s)
 termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard
+-- Native-bool fast path. Mirrors 'Compile.compileTerm' for
+-- @prelude:true@/@prelude:false@: the @=@-operand lowering must
+-- produce 'VBool' so structural unification with comparison results
+-- (which return 'VBool' directly) succeeds.
+termToValue (CompoundTerm (Types.Qualified "prelude" "true") []) = pure (VBool True)
+termToValue (CompoundTerm (Types.Qualified "prelude" "false") []) = pure (VBool False)
 termToValue (CompoundTerm name@(Types.Qualified _ _) ts) = do
   ts' <- traverse termToValue ts
   pure (VTerm (vmName name).unName ts')
@@ -540,6 +546,12 @@ evalNestedExpr (R.HostExpr f args) = do
 -- @term(X)@ short-circuit: build the inner value as data, no
 -- nested-call evaluation. Mirrors the legacy 'termToValue arg' path.
 evalNestedExpr (R.CtorExpr (Types.Unqualified "term") [arg]) = exprToValue arg
+-- Native-bool fast path. Mirrors 'Compile.compileExpr' for
+-- @prelude:true@/@prelude:false@: queries must produce 'VBool' just
+-- like compiled rules, so a REPL @is@ RHS or tell-side argument
+-- agrees with comparison results (which return 'VBool' directly).
+evalNestedExpr (R.CtorExpr (Types.Qualified "prelude" "true") []) = pure (VBool True)
+evalNestedExpr (R.CtorExpr (Types.Qualified "prelude" "false") []) = pure (VBool False)
 evalNestedExpr (R.CtorExpr name args) =
   -- Recurse with 'evalNestedExpr' (not 'exprToValue'): a 'CtorExpr'
   -- can contain nested 'CallExpr' / 'HostExpr' children that must
