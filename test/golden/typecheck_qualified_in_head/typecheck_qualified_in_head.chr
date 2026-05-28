@@ -13,4 +13,4 @@
 
 :- chr_constraint c(typecheck_qualified_in_head:col, any).
 
-c(typecheck_qualified_in_head:red, R) <=> R = term(ok).
+c(typecheck_qualified_in_head:red, R) <=> R = ok.

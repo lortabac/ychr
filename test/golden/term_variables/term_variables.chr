@@ -10,7 +10,7 @@ empty(R) <=>
 one(X, R) <=>
     Vs is term_variables(term(p(1, X, foo))),
     L is length(Vs),
-    R = term(result(L, Vs)).
+    R = result(L, Vs).
 
 % Repeated variable in term: deduplicated to one.
 repeated(X, R) <=>

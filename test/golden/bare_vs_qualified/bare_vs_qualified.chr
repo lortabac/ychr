@@ -8,4 +8,4 @@
 
 :- chr_constraint c(col, any).
 
-c(red, R) <=> R = term(ok).
+c(red, R) <=> R = ok.

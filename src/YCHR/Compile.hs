@@ -480,16 +480,6 @@ compileTerm _ _ (IntTerm n) = pure (Lit (IntLit n))
 compileTerm _ _ (FloatTerm n) = pure (Lit (FloatLit n))
 compileTerm _ _ (AtomTerm s) = pure (Lit (AtomLit s))
 compileTerm _ _ (TextTerm s) = pure (Lit (TextLit s))
--- @term/1@ quoting marker: transparent at compile time. Lets callers
--- that compile through 'exprToTerm' (e.g. 'compileBodyGoal' for
--- 'D.BodyUnify') preserve the user's "keep symbolic" intent — the
--- marker collapses, and the inner term compiles in its place. The
--- only place 'term/1' is *not* transparent is inside 'compileExpr',
--- which used to short-circuit on the wrapper before delegating here;
--- after the unification rewrite the short-circuit is redundant but
--- still harmless.
-compileTerm varMap si (CompoundTerm (Types.Unqualified "term") [arg]) =
-  compileTerm varMap si arg
 -- Native-bool fast path: source @true@/@false@ reach @compileTerm@ only
 -- as the renamer-canonicalized @prelude:true@ / @prelude:false@ form
 -- (see 'YCHR.Rename.canonicalizeDataCon'). Match the canonical compound
@@ -853,10 +843,12 @@ compileBodyGoal _ varMap si (D.BodyUnify t1 t2) = do
   -- '=' is pure structural unification: both operands are compiled as
   -- terms, not expressions. Function-call shapes ('CallExpr',
   -- 'HostExpr', 'ApplyExpr') do not evaluate — they become symbolic
-  -- compounds via 'R.exprToTerm' + 'compileTerm', the same chain that
-  -- powers the 'term/1' quoting form. Mirrors the query-side
-  -- 'Run.exprToValue' so '=' has the same semantics in rule bodies
-  -- and queries. Use 'is' for arithmetic evaluation.
+  -- compounds via 'R.exprToTerm' + 'compileTerm'. The 'term/1' quoting
+  -- form is preserved as ordinary compound data here (no strip),
+  -- matching head/equation patterns and the REPL's 'termToValue'.
+  -- Mirrors the query-side 'Run.exprToValue' so '=' has the same
+  -- semantics in rule bodies and queries. Use 'is' for arithmetic
+  -- evaluation.
   --
   -- Any variable appearing anywhere inside an operand that is not yet
   -- in scope is introduced by the unification itself: it becomes a

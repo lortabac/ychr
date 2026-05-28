@@ -4,30 +4,30 @@
 :- chr_type tags ---> var_atom ; atom_eq ; atom_neq ; struct_mismatch ; struct_match.
 
 % var-vs-atom: succeeds.
-t(var_atom, R) <=> unifiable(_, term(foo)) | R = term(yes).
-t(var_atom, R) <=> R = term(no).
+t(var_atom, R) <=> unifiable(_, term(foo)) | R = yes.
+t(var_atom, R) <=> R = no.
 
 % atom-vs-atom equal: succeeds.
-t(atom_eq, R) <=> unifiable(term(foo), term(foo)) | R = term(yes).
-t(atom_eq, R) <=> R = term(no).
+t(atom_eq, R) <=> unifiable(term(foo), term(foo)) | R = yes.
+t(atom_eq, R) <=> R = no.
 
 % atom-vs-atom different: fails.
-t(atom_neq, R) <=> unifiable(term(foo), term(bar)) | R = term(yes).
-t(atom_neq, R) <=> R = term(no).
+t(atom_neq, R) <=> unifiable(term(foo), term(bar)) | R = yes.
+t(atom_neq, R) <=> R = no.
 
 % structure mismatch: fails.
-t(struct_mismatch, R) <=> unifiable(term(f(_)), term(g(_))) | R = term(yes).
-t(struct_mismatch, R) <=> R = term(no).
+t(struct_mismatch, R) <=> unifiable(term(f(_)), term(g(_))) | R = yes.
+t(struct_mismatch, R) <=> R = no.
 
 % same-shape compound: succeeds.
-t(struct_match, R) <=> unifiable(term(f(_, 2)), term(f(1, _))) | R = term(yes).
-t(struct_match, R) <=> R = term(no).
+t(struct_match, R) <=> unifiable(term(f(_, 2)), term(f(1, _))) | R = yes.
+t(struct_match, R) <=> R = no.
 
 % No-binding probe: after unifiable(X, foo), X must still be unbound.
 t_var(X, R) <=>
     unifiable(X, term(foo)),
-    var(X) | R = term(still_unbound).
-t_var(_, R) <=> R = term(bound).
+    var(X) | R = still_unbound.
+t_var(_, R) <=> R = bound.
 
 % Capture the boolean directly.
 capture(X, R) <=>

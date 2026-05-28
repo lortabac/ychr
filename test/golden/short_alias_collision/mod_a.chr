@@ -2,4 +2,4 @@
 
 :- chr_constraint collide/2.
 
-collide(_, R) <=> R = term(a).
+collide(_, R) <=> R = a.

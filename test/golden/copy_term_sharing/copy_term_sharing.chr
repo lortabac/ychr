@@ -6,13 +6,13 @@
 % copy's first arg to 1 must propagate to its second arg via R.
 shared(X, R) <=>
     C is copy_term(term(f(X, X))),
-    C = term(f(1, R)).
+    C = f(1, R).
 
 % Non-sharing: the copy of f(X, Y) is f(Y1, Y2) with distinct vars.
 % Binding only the first arg of the copy leaves R unbound.
 non_shared(X, Y, R) <=>
     C is copy_term(term(f(X, Y))),
-    C = term(f(1, R)).
+    C = f(1, R).
 
 % Ground term copy: structure preserved verbatim.
 ground_copy(R) <=>

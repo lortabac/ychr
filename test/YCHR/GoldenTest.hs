@@ -32,16 +32,42 @@ import YCHR.TypeCheck (typeCheckProgram)
 -- | Test directories whose @.chr@ programs or goals deliberately
 -- reference bare atoms that the renamer cannot resolve — typically
 -- because the test exists to verify the renamer's behaviour on
--- unexported or unknown constructors. Warnings emitted by these
--- tests are part of what they exercise, not a failure mode.
+-- unexported or unknown constructors, or because the test uses bare
+-- sentinel atoms as RHS of @=@ (where @term/1@ no longer strips,
+-- per the spec). Warnings emitted by these tests are part of what
+-- they exercise, not a failure mode.
 expectsWarnings :: Set String
 expectsWarnings =
   Set.fromList
-    [ "bare_atom_canonicalization",
+    [ "arity_overload",
+      "bare_atom_canonicalization",
+      "bare_vs_qualified",
+      "bare_vs_qualified_swapped",
+      "comments_and_whitespace",
+      "comparisons",
+      "copy_term_sharing",
       "cross_module_function_leak",
+      "false_guard",
+      "function_reference_dispatch",
+      "graph_test",
+      "hnf_compound_head",
+      "hnf_list_head",
+      "hnf_literal_in_head",
+      "hnf_repeated_var_across_partners",
+      "hnf_repeated_var_within_head",
+      "hnf_wildcard_in_head",
+      "lambda_curried_adder",
+      "quoted_constraint_name",
+      "short_alias_collision",
+      "term_variables",
       "type_export_constructor_allowlist",
       "type_export_constructor_empty",
-      "type_import_constructor_narrowing"
+      "type_import_constructor_narrowing",
+      "type_predicates",
+      "typecheck_polymorphic_constraint",
+      "typecheck_qualified_in_head",
+      "unicode_atoms_strings",
+      "unifiable"
     ]
 
 data Case

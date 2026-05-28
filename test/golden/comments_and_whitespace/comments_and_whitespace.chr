@@ -8,11 +8,11 @@
 :- chr_type tags ---> simple ; after_blank ; many_blanks ; deep_calc.
 
 % Comment between rules.
-t(simple, R) <=> R = term(ok).   % Mid-line trailing comment.
+t(simple, R) <=> R = ok.   % Mid-line trailing comment.
 
 t(after_blank,
   R) <=>          % Comment in mid-rule.
-    R = term(wrapped).  % Comment between body items.
+    R = wrapped.  % Comment between body items.
 
 % Multi-paragraph block.
 %
@@ -22,7 +22,7 @@ t(after_blank,
 t(many_blanks, R) <=>
 
 
-    R = term(blanks_ok).
+    R = blanks_ok.
 
 t(deep_calc, R) <=>
     % Comment inside a body.

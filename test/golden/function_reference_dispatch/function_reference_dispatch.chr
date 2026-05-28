@@ -33,4 +33,4 @@ t(via_var, R) <=>
 t(mixed, R) <=>
     R1 is apply(fun double/1, 5),
     R2 is apply(fun(X) -> X * 3 end, 5),
-    R = term(pair(R1, R2)).
+    R = pair(R1, R2).

@@ -5,44 +5,44 @@
 
 % Integer comparisons. Each rule is dispatched on the tag and a numeric
 % comparison guard; the binding tells us which clause matched.
-t(int_lt, R)     <=> 3 < 5  | R = term(lt).
-t(int_lt, R)     <=> R = term(ge).
+t(int_lt, R)     <=> 3 < 5  | R = lt.
+t(int_lt, R)     <=> R = ge.
 
-t(int_gt, R)     <=> 5 > 3  | R = term(gt).
-t(int_gt, R)     <=> R = term(le).
+t(int_gt, R)     <=> 5 > 3  | R = gt.
+t(int_gt, R)     <=> R = le.
 
-t(int_le_eq, R)  <=> 4 =< 4 | R = term(le).
-t(int_le_eq, R)  <=> R = term(gt).
+t(int_le_eq, R)  <=> 4 =< 4 | R = le.
+t(int_le_eq, R)  <=> R = gt.
 
-t(int_le_lt, R)  <=> 3 =< 4 | R = term(le).
-t(int_le_lt, R)  <=> R = term(gt).
+t(int_le_lt, R)  <=> 3 =< 4 | R = le.
+t(int_le_lt, R)  <=> R = gt.
 
-t(int_ge_eq, R)  <=> 4 >= 4 | R = term(ge).
-t(int_ge_eq, R)  <=> R = term(lt).
+t(int_ge_eq, R)  <=> 4 >= 4 | R = ge.
+t(int_ge_eq, R)  <=> R = lt.
 
-t(int_eq_yes, R) <=> 7 == 7 | R = term(yes).
-t(int_eq_yes, R) <=> R = term(no).
+t(int_eq_yes, R) <=> 7 == 7 | R = yes.
+t(int_eq_yes, R) <=> R = no.
 
-t(int_eq_no, R)  <=> 7 == 8 | R = term(yes).
-t(int_eq_no, R)  <=> R = term(no).
+t(int_eq_no, R)  <=> 7 == 8 | R = yes.
+t(int_eq_no, R)  <=> R = no.
 
 % Float comparisons.
-t(flt_lt, R)     <=> 1.5 < 2.5 | R = term(lt).
-t(flt_lt, R)     <=> R = term(ge).
+t(flt_lt, R)     <=> 1.5 < 2.5 | R = lt.
+t(flt_lt, R)     <=> R = ge.
 
-t(flt_eq, R)     <=> 1.5 == 1.5 | R = term(yes).
-t(flt_eq, R)     <=> R = term(no).
+t(flt_eq, R)     <=> 1.5 == 1.5 | R = yes.
+t(flt_eq, R)     <=> R = no.
 
 % Atom equality (==).
-t(atom_eq, R)    <=> term(foo) == term(foo) | R = term(yes).
-t(atom_eq, R)    <=> R = term(no).
+t(atom_eq, R)    <=> term(foo) == term(foo) | R = yes.
+t(atom_eq, R)    <=> R = no.
 
-t(atom_neq, R)   <=> term(foo) == term(bar) | R = term(yes).
-t(atom_neq, R)   <=> R = term(no).
+t(atom_neq, R)   <=> term(foo) == term(bar) | R = yes.
+t(atom_neq, R)   <=> R = no.
 
 % Term equality (==): structural.
-t(term_eq, R)    <=> term(p(1,2)) == term(p(1,2)) | R = term(yes).
-t(term_eq, R)    <=> R = term(no).
+t(term_eq, R)    <=> term(p(1,2)) == term(p(1,2)) | R = yes.
+t(term_eq, R)    <=> R = no.
 
-t(term_neq, R)   <=> term(p(1,2)) == term(p(1,3)) | R = term(yes).
-t(term_neq, R)   <=> R = term(no).
+t(term_neq, R)   <=> term(p(1,2)) == term(p(1,3)) | R = yes.
+t(term_neq, R)   <=> R = no.

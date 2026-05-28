@@ -3,11 +3,11 @@
 :- chr_type pat ---> a ; b ; p(any, any).
 
 % Repeated var within a single head: eq(X, X, R). Implicit equality.
-eq(X, X, R) <=> R = term(same).
-eq(_, _, R) <=> R = term(different).
+eq(X, X, R) <=> R = same.
+eq(_, _, R) <=> R = different.
 
 % Three-arg variant.
-threeway(X, X, X, R) <=> R = term(all_equal).
-threeway(X, X, _, R) <=> R = term(first_two).
-threeway(_, X, X, R) <=> R = term(last_two).
-threeway(_, _, _, R) <=> R = term(all_different).
+threeway(X, X, X, R) <=> R = all_equal.
+threeway(X, X, _, R) <=> R = first_two.
+threeway(_, X, X, R) <=> R = last_two.
+threeway(_, _, _, R) <=> R = all_different.

@@ -1,0 +1,13 @@
+:- module(term_quote_in_unify, [flat/1, nested/1]).
+:- use_module(prelude).
+:- chr_constraint flat/1, nested/1.
+
+% '=' is pure structural unification: neither operand evaluates, and
+% the 'term/1' quoting form is preserved as ordinary compound data
+% (same as in head/equation patterns). Regression for the bug where
+% the rule-body lowering of '=' stripped term/1 while the REPL did
+% not.
+
+flat(R) <=> R = term(plus(2, 3)).
+
+nested(R) <=> R = term(term(plus(2, 3))).

@@ -6,38 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `term(...)` is unwrapped on the RHS of `=` inside rule bodies
-
-**Documented claim.** `docs/reference/language.md` §The `=` operator:
-"`=` is pure structural unification — neither operand evaluates. A
-compound on either side is treated as data, even when its head names a
-declared function or host call." And: "The same `=` policy applies in
-rule bodies and queries." `term(...)` is documented (same file, §The
-`term/1` quoting form) as an opaque quoting form.
-
-**Test.** Same surface expression `X = term(plus(2, 3))` in (a) a REPL
-one-shot query and (b) a rule body:
-
-    :- module(tec).
-    :- chr_constraint go/1.
-    go(R) <=> R = term(plus(2, 3)).
-
-**Expected.** Per the spec, `=` is structural — `R` should be bound to
-the compound `term(plus(2, 3))` in both cases.
-
-**Actual.**
-- REPL one-shot `X = term(plus(2, 3)).` → `X = term(plus(2, 3)).` (matches spec)
-- Goal `tec:go(R)` against the rule above → `R = plus(2, 3)` (the
-  `term/1` wrapper is stripped)
-
-With `R = term(term(plus(2, 3)))` in a rule body, *both* layers are
-stripped and `R = plus(2, 3)`.
-
-**Notes.** The rule-body lowering of `=` appears to run its RHS
-through the term-stripping pass that should only apply to evaluating
-positions. The REPL path is the correct behavior per the documented
-"neither operand evaluates" rule; the rule-body case diverges.
-
 ## `print_store/0` (and other meta-library entries) are described as "constraints" but are functions
 
 **Documented claim.** `docs/reference/repl.md`: "The `print_store/0`

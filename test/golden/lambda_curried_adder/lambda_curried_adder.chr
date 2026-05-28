@@ -14,14 +14,14 @@ t(both, R) <=>
     F2 is make_adder(20),
     R1 is '$call'(F1, 5),
     R2 is '$call'(F2, 5),
-    R = term(pair(R1, R2)).
+    R = pair(R1, R2).
 
 % Same lambda used twice; result is sum of two applications.
 t(reuse, R) <=>
     F is make_adder(7),
     R1 is '$call'(F, 1),
     R2 is '$call'(F, 100),
-    R = term(pair(R1, R2)).
+    R = pair(R1, R2).
 
 % Two distinct closures from different recipes.
 t(twice_then_add, R) <=>

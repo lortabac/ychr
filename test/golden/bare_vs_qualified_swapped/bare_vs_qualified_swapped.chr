@@ -6,4 +6,4 @@
 
 :- chr_constraint c(col, any).
 
-c(bare_vs_qualified_swapped:red, R) <=> R = term(ok).
+c(bare_vs_qualified_swapped:red, R) <=> R = ok.

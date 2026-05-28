@@ -5,7 +5,7 @@
 peek(_, X, R)    <=> R = X.
 
 % Multiple wildcards at different positions.
-two(_, _, R)     <=> R = term(matched).
+two(_, _, R)     <=> R = matched.
 
 % Wildcard between two named arguments — the named ones must still bind.
-mid(A, _, B, R)  <=> R = term(pair(A, B)).
+mid(A, _, B, R)  <=> R = pair(A, B).

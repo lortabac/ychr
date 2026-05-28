@@ -4,17 +4,17 @@
 
 % Head matches cons cell, extracts head.
 first([H|_], R) <=> R = H.
-first([], R)    <=> R = term(empty).
+first([], R)    <=> R = empty.
 
 % Head matches cons cell, extracts tail.
 rest([_|T], R) <=> R = T.
-rest([], R)    <=> R = term(empty).
+rest([], R)    <=> R = empty.
 
 % Tag the input as empty / cons / other.
-kind([], R)     <=> R = term(empty).
-kind([_|_], R)  <=> R = term(cons).
-kind(_, R)      <=> R = term(other).
+kind([], R)     <=> R = empty.
+kind([_|_], R)  <=> R = cons.
+kind(_, R)      <=> R = other.
 
 % Fixed-length pattern: matches exactly [a, b, c].
-fixed([a, b, c], R) <=> R = term(abc).
-fixed(_, R)         <=> R = term(no_match).
+fixed([a, b, c], R) <=> R = abc.
+fixed(_, R)         <=> R = no_match.

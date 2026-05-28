@@ -6,6 +6,6 @@
 % Polymorphic constraint box(T): each use site instantiates T.
 % This program uses box at int, string, and a list — three monomorphic
 % instantiations of the same polymorphic declaration.
-run(int_case, R) <=> box(42), R = term(ok).
-run(str_case, R) <=> box("hi"), R = term(ok).
-run(list_case, R) <=> box([1, 2, 3]), R = term(ok).
+run(int_case, R) <=> box(42), R = ok.
+run(str_case, R) <=> box("hi"), R = ok.
+run(list_case, R) <=> box([1, 2, 3]), R = ok.
