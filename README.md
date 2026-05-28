@@ -22,7 +22,11 @@ transitivity  @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
 ```
 
 ```sh
-$ ychr run -g 'leq(1, X), leq(X, 1)' leq.chr
+$ ychr repl examples/leq.chr
+ychr> leq(X, Y), leq(Y, X).
+X = Y,
+Y = X.
+ychr>
 ```
 
 ## Status
@@ -45,7 +49,7 @@ make install
 
 ```sh
 ychr repl file.chr           # interactive REPL (Prolog-style queries)
-ychr run -g 'goal(...)' file # run a single goal
+ychr run -g 'constraint(args)' file # run a single constraint as the goal
 ychr check file.chr          # type-check only
 ychr compile --target=scheme -o out file.chr
 ```
