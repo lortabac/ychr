@@ -6,38 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## Spurious "Undeclared data constructor" warnings for `fun` and `->` when a lambda appears directly as a constraint argument
-
-**Documented claim.** `YCHR-20101` (`docs/reference/errors.md`):
-"A symbol used in constructor position is not declared with
-`:- chr_type`." Lambdas are first-class values
-(`docs/reference/language.md` §Lambdas and function references), not
-data constructors; `fun`/`->` are lambda syntax.
-
-**Test.**
-
-    :- module(la).
-    :- chr_constraint c/1.
-    :- chr_constraint go/1.
-    go(R) <=> c(fun(X) -> X + 1 end), R = ok.
-
-**Expected.** At most one `YCHR-20101` for `ok`.
-
-**Actual.** Three warnings:
-
-    YCHR-20101: Undeclared data constructor 'fun'
-    YCHR-20101: Undeclared data constructor '->'
-    YCHR-20101: Undeclared data constructor 'ok'
-
-If the lambda is first bound to a variable and then passed
-(`F = fun(X) -> X + 1 end, c(F)`), the spurious `fun` and `->`
-warnings disappear; only the legitimate `ok` warning fires.
-
-**Notes.** Warning-only. The constructor-validation pass appears to
-descend into lambda subterms in argument position and treat the
-surface lambda compound `'->'(fun(X), X + 1)` as data, surfacing its
-synthetic functors `fun` and `->` as "undeclared constructors".
-
 ## Zero-arity constructors print as `name()` with empty parens
 
 **Documented claim.** `docs/reference/syntax.md` lists `foo`, `'a-b'`

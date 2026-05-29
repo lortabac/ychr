@@ -164,6 +164,99 @@ ambiguousTests =
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         case renameProgram [modA, modB, modC] of
           Left [Diagnostic _ (AnnP (AmbiguousName "leq" 2 _) _ _)] -> pure ()
+          other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
+      testCase "ambiguous function used as a body-tell constraint argument" $ do
+        -- The bare 'f(1)' lands in 'NoResolve' (demoted from the
+        -- 'ResolveTop' parent 'c(...)'). Previously this was the silent
+        -- 'otherwise -> pure ()' branch — 'Resolve.termToExpr' would
+        -- fall through to 'CtorExpr' with no diagnostic at any stage.
+        -- The renamer now mirrors 'resolveName''s multi-provider arm
+        -- so the user gets the same YCHR-20001 diagnostic they would
+        -- in a guard or 'is'-RHS position.
+        let modA = module' "A" `declaring` [function "f" 1]
+            modB = module' "B" `declaring` [function "f" 1]
+            modC =
+              module' "C"
+                `importing` ["A", "B"]
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [term "c" [term "f" [int 1]]]
+                           ]
+        case renameProgram [modA, modB, modC] of
+          Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _)] -> pure ()
+          other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
+      testCase "ambiguous function on '=' operand" $ do
+        -- '=' no longer has a special arm that routed operands to
+        -- 'ResolveAll' (the lambda workaround). Operands inherit
+        -- 'NoResolve' from the 'ResolveTop' body, so the multi-provider
+        -- check has to live in 'NoResolve' itself; this case locks in
+        -- that the diagnostic that the workaround used to surface still
+        -- fires under the uniform path.
+        let modA = module' "A" `declaring` [function "f" 1]
+            modB = module' "B" `declaring` [function "f" 1]
+            modC =
+              module' "C"
+                `importing` ["A", "B"]
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [var "R" .=. term "f" [int 1]]
+                           ]
+        case renameProgram [modA, modB, modC] of
+          Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _)] -> pure ()
+          other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
+      testCase "ambiguous compound nested inside a head-pattern argument" $ do
+        -- The constraint functor itself (the outer 'c') resolves via
+        -- 'renameCon' → 'resolveName ResolveTop', which has always
+        -- diagnosed multi-provider. The compound /inside/ the head arg
+        -- ('f(X)' below) is renamed in 'NoResolve' via 'renameTerm';
+        -- previously that arm silently accepted multi-provider names.
+        -- The 'NoResolve' multi-provider arm now diagnoses it.
+        let modA = module' "A" `declaring` [function "f" 1]
+            modB = module' "B" `declaring` [function "f" 1]
+            modC =
+              module' "C"
+                `importing` ["A", "B"]
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [term "f" [var "X"]]]
+                               <=> [atom "true"]
+                           ]
+        case renameProgram [modA, modB, modC] of
+          Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _)] -> pure ()
+          other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
+      testCase "ambiguous compound in a function-equation pattern" $ do
+        -- 'renameEquation' renames the equation's argument patterns in
+        -- 'NoResolve'. A multi-provider name used as a pattern functor
+        -- there has the same downstream gap (silent 'CtorExpr' fall-
+        -- through) as in body-tell args; lock the diagnostic in.
+        let modA = module' "A" `declaring` [function "f" 1]
+            modB = module' "B" `declaring` [function "f" 1]
+            modC =
+              ( module' "C"
+                  `importing` ["A", "B"]
+                  `declaring` [function "g" 1]
+              )
+                `withEquations` [equation "g" [term "f" [var "X"]] [] (var "X")]
+        case renameProgram [modA, modB, modC] of
+          Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _)] -> pure ()
+          other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
+      testCase "ambiguous zero-arity atom in 'NoResolve' position" $ do
+        -- Companion to the compound cases for the 'AtomTerm' arm.
+        -- A bare 'f' inside a tell-side constraint argument lands in
+        -- 'NoResolve'; if two modules export 'f/0' as a function, the
+        -- atom arm now emits 'AmbiguousName' instead of silently
+        -- producing an 'AtomTerm' that 'Resolve.termToExpr' can't
+        -- disambiguate.
+        let modA = module' "A" `declaring` [function "f" 0]
+            modB = module' "B" `declaring` [function "f" 0]
+            modC =
+              module' "C"
+                `importing` ["A", "B"]
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [term "c" [atom "f"]]
+                           ]
+        case renameProgram [modA, modB, modC] of
+          Left [Diagnostic _ (AnnP (AmbiguousName "f" 0 _) _ _)] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other
     ]
 
@@ -878,9 +971,9 @@ warningTests =
         ws @?= [],
       testCase "syntactic forms stay literal inside term(...) quoting" $ do
         -- 'is', lambdas, and 'fun name/arity' references are interpreted
-        -- only in evaluating positions ('isResolving'). Inside a quoted
-        -- body they must remain literal compound terms — no warning for
-        -- their undeclared inner functors either.
+        -- only outside @term/1@. Inside a quoted body they must remain
+        -- literal compound terms — no warning for their undeclared inner
+        -- functors either.
         let m =
               module' "M"
                 `declaring` ["c" // 1]
@@ -892,6 +985,86 @@ warningTests =
                                            [term "is" [var "X", term "foo" [int 1]]]
                                        ]
                                    ]
+                           ]
+        ws <- warningsOf [m]
+        ws @?= [],
+      testCase "lambda passed directly as a tell-side constraint argument is not warned" $ do
+        -- Regression for BUGS.md "Spurious 'Undeclared data constructor'
+        -- warnings for 'fun' and '->'". A lambda is a first-class value;
+        -- its synthetic '->' and 'fun' functors are surface syntax, not
+        -- data constructors. Previously the renamer demoted the
+        -- constraint's argument to 'NoResolve', the lambda arm's
+        -- 'isResolving' guard failed, and the synthetic functors leaked
+        -- through to 'warnUnknownDataCon'. The lambda body is a bare
+        -- variable so the test isolates the surface-syntax bug without
+        -- pulling in prelude functions that this minimal DSL module
+        -- doesn't import.
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [term "c" [lambda [var "Y"] (var "Y")]]
+                           ]
+        ws <- warningsOf [m]
+        ws @?= [],
+      testCase "lambda bound via '=' then passed is not warned" $ do
+        -- The bind-then-pass form ('F = fun(...) -> ... end, c(F)') was
+        -- the documented workaround for the lambda bug. Now that the
+        -- lambda arm fires in every non-quoted mode, the workaround on
+        -- '=' itself was removed; this case verifies the bind-then-pass
+        -- form still produces no spurious warnings under the simplified
+        -- pipeline.
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [ var "F" .=. lambda [var "Y"] (var "Y"),
+                                     term "c" [var "F"]
+                                   ]
+                           ]
+        ws <- warningsOf [m]
+        ws @?= [],
+      testCase "function reference passed directly as constraint argument is not warned" $ do
+        -- Same structural bug as the lambda case, on the @fun name/arity@
+        -- arm: a funref is a first-class value, not data. Previously
+        -- 'c(fun f/1)' would emit a spurious 'UndeclaredDataConstructor
+        -- "fun"' under 'NoResolve'.
+        let m =
+              module' "M"
+                `declaring` ["c" // 1, function "f" 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [term "c" [funRef "f" 1]]
+                           ]
+        ws <- warningsOf [m]
+        ws @?= [],
+      testCase "lambda inside term(...) stays opaque" $ do
+        -- Negative companion to the lambda fix: 'term(fun(X) -> X end)'
+        -- must NOT be recognized as a lambda (the user has explicitly
+        -- opted into raw compound shape). The relaxed lambda guard
+        -- skips 'NoResolveQuoted' for exactly this reason; this case
+        -- locks that contract in.
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [term "c" [term "term" [lambda [var "Y"] (var "Y")]]]
+                           ]
+        ws <- warningsOf [m]
+        ws @?= [],
+      testCase "funref inside term(...) stays opaque" $ do
+        -- Funref counterpart to the lambda-inside-term/1 case. The
+        -- relaxed funref guard ('mode /= NoResolveQuoted') means a
+        -- funref outside 'term/1' resolves; inside 'term/1' it must
+        -- remain a literal compound. 'f' is *not* declared as a
+        -- function in this module, so if the funref arm fired
+        -- 'resolveName' would emit an UnknownName error and the
+        -- compile would fail — the program rename-succeeds only
+        -- because the funref arm correctly skips 'NoResolveQuoted'.
+        let m =
+              module' "M"
+                `declaring` ["c" // 1]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [term "c" [term "term" [funRef "f" 1]]]
                            ]
         ws <- warningsOf [m]
         ws @?= [],

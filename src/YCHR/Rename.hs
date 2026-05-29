@@ -718,25 +718,23 @@ renameTerm ctx loc origin mode t = case t of
     renamedLhs <- renameTerm ctx loc origin NoResolve lhs
     renamedRhs <- renameTerm ctx loc origin ResolveAll rhs
     pure (CompoundTerm (Unqualified "is") [renamedLhs, renamedRhs])
-  -- Special case: @=@ is symmetric unification; both operands are
-  -- evaluated expressions (PROJECT.md). Without this, the parent
-  -- 'ResolveTop' would demote the operands to 'NoResolve', the lambda
-  -- arm's 'isResolving' guard would fail, and 'fun'/'->' would leak
-  -- out as spurious YCHR-20101 warnings.
-  CompoundTerm (Unqualified "=") [lhs, rhs] | isResolving mode -> do
-    renamedLhs <- renameTerm ctx loc origin ResolveAll lhs
-    renamedRhs <- renameTerm ctx loc origin ResolveAll rhs
-    pure (CompoundTerm (Unqualified "=") [renamedLhs, renamedRhs])
-  -- Lambda: @fun(params) -> body@. Params are variable patterns (don't resolve),
-  -- the body is always an expression. The body may use comma sequencing
-  -- (@A, B, C@) at its top level; walk through any such top-level commas
-  -- without treating them as a data constructor, mirroring the parser's
-  -- comma flattening for top-level function-equation RHS.
+  -- Lambda: @fun(params) -> body end@. A lambda is a first-class value,
+  -- not data; @'->'@ and @fun@ are surface syntax for the desugarable
+  -- compound @'->'(fun(params), body)@, never data constructors. The
+  -- arm therefore fires in every non-quoted position (pattern or
+  -- expression) so a lambda passed straight as a constraint or partner
+  -- argument is not mis-warned as @YCHR-20101 Undeclared data
+  -- constructor 'fun'/'->'@. The body is always an expression and is
+  -- renamed in 'ResolveAll' regardless of the surrounding mode; the
+  -- body may also use top-level comma sequencing (@A, B, C@), which
+  -- 'renameLambdaBody' walks through without treating @,@ as a data
+  -- constructor. The explicit opt-out for opaque shape is @term/1@,
+  -- handled in the 'NoResolveQuoted' branch below.
   CompoundTerm
     (Unqualified "->")
     [ CompoundTerm (Unqualified "fun") params,
       body
-      ] | isResolving mode -> do
+      ] | mode /= NoResolveQuoted -> do
       renamedBody <- renameLambdaBody ctx loc origin body
       pure
         ( CompoundTerm
@@ -756,8 +754,17 @@ renameTerm ctx loc origin mode t = case t of
   CompoundTerm (Unqualified "term") [arg] -> do
     renamedArg <- renameTerm ctx loc origin NoResolveQuoted arg
     pure (CompoundTerm (Unqualified "term") [renamedArg])
-  -- Function reference: @fun name/arity@. Resolve the function name,
-  -- then strip the @fun@ wrapper so downstream passes see bare @name/arity@.
+  -- Function reference: @fun name/arity@. A function reference is a
+  -- first-class value, not data; @fun@ here is surface syntax for the
+  -- desugarable compound @'fun'('/'(name, arity))@, never a data
+  -- constructor. The arm fires in every non-quoted position (pattern
+  -- or expression) so a funref passed straight as a constraint or
+  -- partner argument is not mis-warned as @YCHR-20101 Undeclared data
+  -- constructor 'fun'@. Resolution always happens in 'ResolveTop' mode
+  -- (errors on unknowns), which is the right behavior wherever a
+  -- funref appears; the @fun@ wrapper is then stripped so downstream
+  -- passes see bare @name/arity@. The explicit opt-out for opaque
+  -- shape is @term/1@.
   CompoundTerm
     (Unqualified "fun")
     [ CompoundTerm
@@ -765,7 +772,7 @@ renameTerm ctx loc origin mode t = case t of
         [ AtomTerm fname,
           IntTerm farity
           ]
-      ] | isResolving mode -> do
+      ] | mode /= NoResolveQuoted -> do
       resolved <-
         resolveName ResolveTop ctx loc origin (Unqualified fname) (fromInteger farity)
       pure
@@ -783,20 +790,35 @@ renameTerm ctx loc origin mode t = case t of
     newName <- case mode of
       NoResolve -> do
         case name of
-          -- Skip the unknown-data-constructor warning when the bare
-          -- name matches a visible function or constraint declaration:
-          -- 'Resolve.termToExpr' will later canonicalize it to a
-          -- 'CallExpr' for tell-side argument evaluation, so it is not
-          -- a misspelled data constructor. The data-constructor
-          -- ambiguity check is gated by the same condition: if the
-          -- name resolves unambiguously in the function/constraint
-          -- namespace, that resolution wins and any data-constructor
-          -- ambiguity in the same name is moot for this use.
-          Unqualified n
-            | null (visibleProviders ctx n (length args)) -> do
+          -- Three legs by what the function/constraint namespace says:
+          --   []      — no visible callable; this is a pattern-style
+          --             use of an unqualified name. Run the data-
+          --             constructor checks ('warnUnknownDataCon' for
+          --             the bare 'is this declared anywhere' question,
+          --             'checkAmbiguousDataCon' for the cross-module
+          --             data-constructor ambiguity question).
+          --   [_]     — exactly one callable; 'Resolve.termToExpr' will
+          --             canonicalize this to a 'CallExpr' for tell-side
+          --             argument evaluation, so it is not a misspelled
+          --             data constructor. Any data-constructor ambiguity
+          --             with the same name is moot for this use.
+          --   _:_:_   — multiple callables and 'Resolve.termToExpr' has
+          --             no way to pick one (the multi-provider entry
+          --             silently falls through to 'CtorExpr', see
+          --             'Resolve.hs' on the @CompoundTerm Unqualified@
+          --             arm). Mirror the multi-provider arm of
+          --             'resolveName' (which 'ResolveTop'/'ResolveAll'
+          --             positions already go through) so that pattern-
+          --             position uses get the same 'AmbiguousName'
+          --             diagnostic instead of a silent downstream
+          --             failure.
+          Unqualified n ->
+            case visibleProviders ctx n (length args) of
+              [] -> do
                 warnUnknownDataCon ctx.dataConEnv loc origin n (length args)
                 checkAmbiguousDataCon ctx loc origin n (length args)
-            | otherwise -> pure ()
+              [_] -> pure ()
+              ms -> emitError (AnnP (AmbiguousName n (length args) ms) loc origin)
           -- Qualified references in pattern position (head args,
           -- body-tell args) get the same visibility check as in
           -- resolving positions; the parser can't tell a constructor,
@@ -832,6 +854,17 @@ renameTerm ctx loc origin mode t = case t of
     resolved <- case mode of
       NoResolve -> do
         warnUnknownDataCon ctx.dataConEnv loc origin n 0
+        -- Mirror the multi-provider arm of the @NoResolve@ compound
+        -- case (and of 'resolveName'): a zero-arity name with two or
+        -- more visible function/constraint providers cannot be
+        -- disambiguated downstream — 'Resolve.termToExpr' falls
+        -- through to 'CtorExpr' with no diagnostic — so emit
+        -- 'AmbiguousName' here rather than let the program compile
+        -- to a confusing downstream failure.
+        case visibleProviders ctx n 0 of
+          ms@(_ : _ : _) ->
+            emitError (AnnP (AmbiguousName n 0 ms) loc origin)
+          _ -> pure ()
         pure (Unqualified n)
       NoResolveQuoted ->
         pure (Unqualified n)
@@ -842,8 +875,8 @@ renameTerm ctx loc origin mode t = case t of
         -- Skip the ambiguity check in the @term/1@ opaque-quote
         -- mode, and skip it when the function/constraint namespace
         -- already has something to say about the name (either it
-        -- resolves there, or 'resolveName' has already emitted
-        -- YCHR-20001 for an ambiguity there).
+        -- resolves there, or 'resolveName'/the multi-provider arm
+        -- above has already emitted YCHR-20001 for an ambiguity).
         case mode of
           NoResolveQuoted -> pure ()
           _ ->
