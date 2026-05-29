@@ -36,6 +36,8 @@ REPL_TESTS = [
     # `:`-compound inside.
     ("host:print(term(':'(foo, bar))).", "foo:bar\n"),
     ("host:print(1 + 1).", "2\n"),
+    ("print(1 + 1).", "2\n"),
+    ("'$call'(fun(X) -> host:print(X) end, 1 + 1).", "2\n"),
     ("host:print((foo, bar)).", "foo, bar\n"),
     ("host:print((foo; bar)).", "foo; bar\n"),
     ("host:print(','(foo, bar)).", "foo, bar\n"),

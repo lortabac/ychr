@@ -470,12 +470,12 @@ executeBodyGoal (D.BodyTell qn args) = do
   argVals <- traverse evalNestedExpr args
   lift (tellConstraint (Types.qualifiedToName qn) argVals)
 executeBodyGoal (D.BodyCall qn args) = do
-  argVals <- traverse exprToValue args
+  argVals <- traverse evalNestedExpr args
   let funcName = Types.qualifiedToName qn
   _ <- lift (callProc (funcProcName funcName (length argVals)) (map CVal argVals))
   pure ()
 executeBodyGoal (D.BodyApply f args) = do
-  fAndArgVals <- traverse exprToValue (f : args)
+  fAndArgVals <- traverse evalNestedExpr (f : args)
   let n = length args
       dispatchName = Name ("call_" <> T.pack (show n))
   _ <- lift (callProc dispatchName (map CVal fAndArgVals))
