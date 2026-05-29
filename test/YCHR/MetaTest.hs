@@ -7,7 +7,8 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase)
-import YCHR.Meta (metaHostCallRegistry)
+import YCHR.Compile.Names (vmName)
+import YCHR.Meta (metaHostCallRegistry, valueToTerm)
 import YCHR.Run (CompiledProgram (..), compileModules, runProgramWithQuery)
 import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, baseHostCallRegistry)
 import YCHR.Runtime.Monad (Chr, initSessionEnv, runChr)
@@ -21,7 +22,8 @@ tests :: TestTree
 tests =
   testGroup
     "YCHR.Meta"
-    [ readTermTests
+    [ readTermTests,
+      vmNameRoundTripTests
     ]
 
 hostCalls :: HostCallRegistry
@@ -144,3 +146,59 @@ endToEndReadTermTest =
             [IntTerm 1, CompoundTerm (Types.Unqualified "hello") []]
           ) -> pure ()
       other -> assertFailure $ "Expected T = f(1, hello), got: " ++ show other
+
+-- | Property: 'YCHR.Meta.valueToTerm' (run on a 'VAtom' whose payload
+-- comes from 'YCHR.Compile.Names.vmName') recovers the original
+-- 'Types.Name' as a qualified or unqualified 'CompoundTerm'. This
+-- pins the injectivity of the mangling pair @encodeText@\/@%%u@
+-- escape ↔ @decodeMangled@\/@decodeEscapes@.
+vmNameRoundTripTests :: TestTree
+vmNameRoundTripTests =
+  testGroup
+    "vmName round-trip"
+    [ roundTrip "ASCII qualified" (Types.Qualified "mymodule" "foo"),
+      roundTrip "non-ASCII base" (Types.Qualified "m" "naïve"),
+      roundTrip "non-ASCII module" (Types.Qualified "naïve" "foo"),
+      roundTrip "non-ASCII both" (Types.Qualified "café" "naïve"),
+      -- Previously broken: base whose encoded form follows a non-ASCII
+      -- escape with literal "u<hex>" chars, which the old "__u<HEX>__"
+      -- decoder mis-split.
+      roundTrip "uffï base" (Types.Qualified "mymodule" "uffï"),
+      -- Previously broken: module ending in non-ASCII + literal
+      -- "u<hex>". With the old encoding this collided with another
+      -- (m, n) pair; the new "%%u<6 hex>" encoding is injective.
+      roundTrip "fooáue module" (Types.Qualified "fooáue" "b"),
+      -- Base that LOOKS like a stale "__u<HEX>__" escape but is just
+      -- ASCII content past the separator.
+      roundTrip "uaafoo base" (Types.Qualified "mymodule" "uaafoo"),
+      -- 0-arity 'Unqualified' atoms go through 'VAtom' too.
+      roundTripUnqualified "ASCII unqualified" "foo",
+      roundTripUnqualified "unicode unqualified" "naïve"
+    ]
+  where
+    roundTrip label name = testCase label $ do
+      let mangled = (vmName name).unName
+      t <- runChrBase (valueToTerm Map.empty (VAtom mangled))
+      case t of
+        CompoundTerm n [] | n == name -> pure ()
+        other ->
+          assertFailure $
+            "Round-trip failed for "
+              ++ show name
+              ++ "\n  mangled = "
+              ++ show mangled
+              ++ "\n  got     = "
+              ++ show other
+    roundTripUnqualified label n = testCase label $ do
+      let mangled = (vmName (Types.Unqualified n)).unName
+      t <- runChrBase (valueToTerm Map.empty (VAtom mangled))
+      case t of
+        CompoundTerm (Types.Unqualified n') [] | n' == n -> pure ()
+        other ->
+          assertFailure $
+            "Round-trip failed for unqualified "
+              ++ show n
+              ++ "\n  mangled = "
+              ++ show mangled
+              ++ "\n  got     = "
+              ++ show other

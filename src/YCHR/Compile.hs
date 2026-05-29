@@ -496,8 +496,8 @@ compileTerm _ _ (CompoundTerm (Types.Qualified "prelude" "false") []) =
 -- Qualified 0-arity uses 'vmName' for the @m__n@ mangled functor;
 -- unqualified 0-arity (user-quoted atoms, undeclared bare names)
 -- keeps the raw name so unicode is preserved as data — 'vmName' would
--- escape non-ASCII to @__uXXXX__@, which is appropriate for
--- procedure names but not for atom values.
+-- escape non-ASCII to @%%u\<hex\>@, which is appropriate for
+-- qualified-name mangling but not for atom values.
 compileTerm _ _ (CompoundTerm name@(Types.Qualified _ _) []) =
   pure (Lit (AtomLit (vmName name).unName))
 compileTerm _ _ (CompoundTerm (Types.Unqualified n) []) =

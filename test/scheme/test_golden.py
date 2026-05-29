@@ -42,6 +42,12 @@ HASKELL_ONLY_CASES = {
     ("unicode_atoms_strings", "quoted_with_space"),
     ("unicode_atoms_strings", "quoted_unicode"),
     ("unicode_atoms_strings", "quoted_chinese"),
+    # Same quoting gap as above: '£foo' is an atom whose first char
+    # ('£') is not alphanumeric, so Haskell quotes it; the Scheme
+    # pretty-printer has no needsQuoting equivalent yet and prints
+    # the bare form. The escape decoding the test exercises is shared
+    # with the four passing siblings in the same directory.
+    ("qualified_unicode_ctor", "pound_foo"),
 }
 
 # Test directories where the .chr program or goal deliberately uses

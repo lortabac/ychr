@@ -1,0 +1,20 @@
+:- module('fooáue', [t/1]).
+
+% Regression test for an encoding-injectivity bug in an earlier fix.
+%
+% The old encoder joined module/base with "__" and escaped non-ASCII
+% as "__u<HEX>__". For source ('fooáue', b) the mangled symbol was
+% "foo__ue1__ue__b", which the same encoder also produces for
+% ('foo', 'ue1<U+000E>b'). No decoder could disambiguate, and the
+% printer would render 'fooáue':b as foo:'ue1<SO>b' — a wrong split
+% silently.
+%
+% The injectivity-restoring fix moves the unicode escape to "%%u<6
+% hex>" (no closing delimiter, marker that the lexer reserves), so
+% the only "__" left in the mangled form is the module separator.
+% This test pins the correct round-trip of the previously broken
+% case.
+:- chr_type tags ---> b ; ordinary.
+:- chr_constraint t/1.
+
+t(R) <=> R = b.

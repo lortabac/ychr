@@ -23,7 +23,9 @@ typing rules over this syntax see [type-system.md](type-system.md).
   - **Quoted atoms** are written `'…'`. Inside the quotes, `''`
     encodes a literal single quote (ISO Prolog convention), and the
     backslash escapes `\\`, `\'`, `\n`, `\t` are recognized. Any other
-    `\c` falls through to the literal `c`.
+    `\c` falls through to the literal `c`. Two infixes are rejected:
+    `__` (the qualified-name separator) and `%%u` (the unicode-escape
+    marker used by the compiled-name encoding).
   - At the value level an atom and a 0-arity data-constructor
     application are interchangeable — `red` written bare and `red`
     declared via `:- chr_type colour ---> red ; green` produce the

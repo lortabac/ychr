@@ -351,6 +351,10 @@ atomP table = lexeme (unquotedP <|> quotedAtomP)
 
 -- | Parse an unquoted lowercase identifier.  Does not reject word operators
 -- or double underscores — callers are responsible for validation.
+--
+-- Unquoted identifiers cannot contain @%@ (it's not in 'alphaNum' or
+-- @_@), so the reserved @%%u@ unicode-escape marker can only sneak in
+-- via 'quotedAtomP' — which checks for it.
 identifierP :: Parser Text
 identifierP = do
   name <- (:) <$> lower <*> many (alphaNum <|> char '_')
@@ -360,12 +364,20 @@ identifierP = do
     else pure t
 
 -- | Parse a single-quoted atom (e.g. @\'hello world\'@).
+--
+-- Two infixes are reserved and rejected: @__@ (the qualified-name
+-- separator) and @%%u@ (the unicode-escape marker used by
+-- 'YCHR.Compile.Names.encodeText'). Source atoms must not contain
+-- either, so the encoder's output is unambiguously decodable.
 quotedAtomP :: Parser Text
 quotedAtomP = do
   t <- T.pack <$> (char '\'' *> go)
   if "__" `T.isInfixOf` t
     then fail "double underscore (__) is not allowed in atoms"
-    else pure t
+    else
+      if "%%u" `T.isInfixOf` t
+        then fail "%%u is reserved for unicode escapes and is not allowed in atoms"
+        else pure t
   where
     go =
       choice

@@ -231,14 +231,30 @@ constraint name. The `call_n` dispatchers (`call_1`, `call_2`, ...)
 are likewise unique per call arity.
 
 **Non-ASCII encoding.** Characters outside the ASCII range are encoded
-as `__u<hex>__` where `<hex>` is the Unicode code point in
-hexadecimal. For example, a constraint named `café` produces the
-encoded component `caf__u00e9__`. ASCII characters (including
-punctuation and underscores) pass through unchanged.
+as `%%u<hex>` where `<hex>` is the Unicode code point in lowercase
+hexadecimal, padded to exactly six digits. There is no closing
+delimiter — the escape is always 9 characters long. For example, a
+constraint named `café` produces the encoded component
+`caf%%u0000e9`. ASCII characters (including punctuation and
+underscores) pass through unchanged.
 
-**Restrictions.** Double underscores (`__`) are forbidden in atom
-names (both quoted and unquoted) at the source level. This ensures the
-`__` separator is unambiguous.
+This encoding applies to *term functor* names used by `make-term`,
+`bmatch-term`, and runtime values. The separate identifier encoding
+used for generated procedure names (`tell_*`, `activate_*`, `func_*`)
+keeps the older `__u<hex>__` form because procedure names must be
+valid identifiers in every target language (Scheme, JavaScript),
+neither of which accept `%`.
+
+**Restrictions.** Two infixes are forbidden in source atom names
+(both quoted and unquoted) at the source level:
+
+- `__` — reserved as the module/base separator in mangled symbols.
+- `%%u` — reserved as the unicode-escape marker in mangled symbols.
+
+Together with the fixed-width escape (no `__` in encoded text), these
+restrictions make the mangling injective: the only `__` in a mangled
+symbol is the module separator, and the only `%%u` is the start of a
+unicode escape.
 
 **Term functor names** (used in `make-term` and `bmatch-term`) follow
 the same encoding and module separator rules but do **not** include

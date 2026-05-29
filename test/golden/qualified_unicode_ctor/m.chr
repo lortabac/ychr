@@ -1,0 +1,20 @@
+:- module(mymodule, [naive_t/1, uaafoo_t/1, pound_t/1, urgent_t/1, uffi_t/1]).
+
+% Regression tests for decoding qualified atoms whose base name
+% contains non-ASCII chars (encoded as "%%u<6 hex digits>" by
+% encodeText in Compile/Names.hs). Each case pins one of: a base
+% with an embedded unicode escape (naive), an ASCII base that looks
+% hex-like after the separator (uaafoo), a non-ASCII char at the
+% start of the base (pound_foo), a base starting with the literal
+% char 'u' (urgent), and a base whose encoded form follows a
+% non-ASCII char with literal "u<hex>" chars (uffi — the case that
+% defeated an earlier decoder-only fix and motivated moving the
+% escape marker from "__u<hex>__" to "%%u<6 hex>").
+:- chr_type tags ---> 'naïve' ; uaafoo ; '£foo' ; urgent ; 'uffï'.
+:- chr_constraint naive_t/1, uaafoo_t/1, pound_t/1, urgent_t/1, uffi_t/1.
+
+naive_t(R)  <=> R = 'naïve'.
+uaafoo_t(R) <=> R = uaafoo.
+pound_t(R)  <=> R = '£foo'.
+urgent_t(R) <=> R = urgent.
+uffi_t(R)   <=> R = 'uffï'.

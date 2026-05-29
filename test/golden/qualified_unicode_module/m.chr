@@ -1,0 +1,12 @@
+:- module('naïve', [t/1]).
+
+% Verifies that a module name containing non-ASCII characters (which
+% produces a __u<HEX>__ unicode escape in the encoded module half of
+% the mangled symbol) is decoded back to its source form. The first
+% "__" in the mangled symbol falls inside the module-name escape, not
+% at the module/base boundary — so the decoder must skip past the
+% escape's closing "__" before splitting.
+:- chr_type tags ---> foo ; bar.
+:- chr_constraint t/1.
+
+t(R) <=> R = foo.

@@ -14,10 +14,12 @@ where
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, gets, modify')
+import Data.Char (chr)
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text, pack)
 import Data.Text qualified as T
+import Numeric (readHex)
 import YCHR.Parser (builtinOps, parseTermWith)
 import YCHR.Pretty (prettyTerm)
 import YCHR.Runtime.Monad (Chr)
@@ -45,49 +47,76 @@ valueToTerm aliases v = do
     VWildcard -> pure Wildcard
     -- 'VAtom' is the runtime form of every 0-arity value (atoms and
     -- declared 0-arity ctors collapse to it; see 'Compile.compileTerm').
-    -- Recover the surface qualification from the @m__n@ mangled functor
-    -- so the pretty-printer renders qualified atoms as @m:n@. Two
-    -- guards: (a) the prefix must be non-empty (rejects symbols that
-    -- begin with @__@), (b) the suffix must not contain @__@ itself
-    -- (rejects user-quoted atoms with unicode escapes @__uXXXX__@,
-    -- whose internal @__@ would otherwise be mistaken for a module
-    -- separator — the renamer guarantees both module and base names
-    -- are @__@-free /for ASCII identifiers/).
-    --
-    -- Known limitation: a qualified ctor whose base name contains
-    -- non-ASCII (e.g. @:- chr_type t ---> 'naïve'@ in module @m@) is
-    -- mangled to @"m__na__uef__ve"@ and the suffix-@__@-check refuses
-    -- the split, so the qualifier is lost in display. This case has no
-    -- test coverage and was bug-for-bug broken pre-refactor (the
-    -- qualified form was preserved but the unicode escape was never
-    -- decoded). A proper fix needs a richer separator in 'vmName'.
-    VAtom s
-      | (m, rest) <- T.breakOn "__" s,
-        not (T.null m),
-        not (T.null rest),
-        let n = T.drop 2 rest,
-        not (T.isInfixOf "__" n) ->
-          pure (CompoundTerm (Types.Qualified m n) [])
-      | otherwise -> pure (CompoundTerm (Types.Unqualified s) [])
+    -- Recover the surface name from the mangled functor produced by
+    -- 'Compile.Names.vmName': @encodeText m <> "__" <> encodeText n@
+    -- for qualified names, @encodeText n@ for unqualified.
+    VAtom s -> pure (decodeName s [])
     VTerm "prelude__." ts ->
       CompoundTerm (Types.Unqualified ".") <$> traverse (valueToTerm aliases) ts
-    -- A term whose functor contains @__@ is the runtime form of a
-    -- qualified compound (the mangled form @m__n@). See the matching
-    -- guard on 'VAtom' above for why the suffix must be @__@-free.
-    VTerm f ts
-      | (m, rest) <- T.breakOn "__" f,
-        not (T.null m),
-        not (T.null rest),
-        let n = T.drop 2 rest,
-        not (T.isInfixOf "__" n) ->
-          CompoundTerm (Types.Qualified m n)
-            <$> traverse (valueToTerm aliases) ts
-    VTerm f ts -> CompoundTerm (Types.Unqualified f) <$> traverse (valueToTerm aliases) ts
+    VTerm f ts -> do
+      ts' <- traverse (valueToTerm aliases) ts
+      pure (decodeName f ts')
     VVar _ -> do
       mvid <- getVarId v'
       case mvid >>= (`Map.lookup` aliases) of
         Just name -> pure (VarTerm name)
         Nothing -> pure Wildcard
+
+-- | Build a 'CompoundTerm' from a mangled functor text and already-decoded
+-- argument terms. Splits @s@ into module/base parts (when present) using
+-- 'decodeMangled' and turns each @%%u\<6 hex digits\>@ unicode escape
+-- back into its source character.
+decodeName :: Text -> [Term] -> Term
+decodeName s args = case decodeMangled s of
+  Just (m, n) ->
+    CompoundTerm (Types.Qualified (decodeEscapes m) (decodeEscapes n)) args
+  Nothing -> CompoundTerm (Types.Unqualified (decodeEscapes s)) args
+
+-- | Inverse of 'Compile.Names.vmName'. Returns @Just (mod, base)@ when
+-- the input is a qualified mangled name, @Nothing@ when it is
+-- unqualified.
+--
+-- The encoding @encodeText m \<\> "__" \<\> encodeText n@ is injective
+-- because 'encodeText' never emits @__@ in its output (non-ASCII chars
+-- use the @%%u\<6 hex\>@ marker instead) and the lexer rejects @__@
+-- in source. So the only @__@ in the mangled form is the module/base
+-- separator — finding it is a single 'T.breakOn' away.
+--
+-- A leading @__@ (e.g. compiler-internal @__lambda_3@) yields an empty
+-- module prefix, which the caller treats as unqualified.
+decodeMangled :: Text -> Maybe (Text, Text)
+decodeMangled s = case T.breakOn "__" s of
+  (_, rest) | T.null rest -> Nothing
+  (m, _) | T.null m -> Nothing
+  (m, rest) -> Just (m, T.drop 2 rest)
+
+-- | Replace every @%%u\<6 hex digits\>@ escape in @s@ with the
+-- corresponding character (inverse of 'Compile.Names.encodeText''s
+-- non-ASCII case). 'encodeText' emits exactly six lowercase hex
+-- digits per escape and never any closing delimiter; the decoder
+-- mirrors that.
+decodeEscapes :: Text -> Text
+decodeEscapes = T.pack . go . T.unpack
+  where
+    go [] = []
+    go ('%' : '%' : 'u' : a : b : c : d : e : f : rest)
+      | all isLowerHexDigit hex,
+        [(code, "")] <- readHex hex,
+        isValidCodePoint code =
+          chr code : go rest
+      where
+        hex = [a, b, c, d, e, f]
+    go (c : cs) = c : go cs
+
+    -- A valid Unicode scalar value is in [0, 0x10FFFF] and not in the
+    -- surrogate range [0xD800, 0xDFFF]. 'encodeText' only emits scalar
+    -- values, so a malformed input outside this range falls through
+    -- as a literal char sequence instead of crashing 'chr'.
+    isValidCodePoint code =
+      code <= 0x10FFFF && not (code >= 0xD800 && code <= 0xDFFF)
+
+isLowerHexDigit :: Char -> Bool
+isLowerHexDigit c = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
 
 -- | Pretty-print a 'Value' using the surface pretty-printer.
 -- Dereferences logical variables before rendering. Runs inside 'Chr'

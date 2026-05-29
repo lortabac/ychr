@@ -56,35 +56,81 @@
       ((null? (cdr strs)) (car strs))
       (else (string-append (car strs) sep (join sep (cdr strs))))))
 
-  ;; Find the first index of NEEDLE in HAYSTACK starting from START,
-  ;; or #f if not found.
-  (define (string-search haystack needle start)
-    (let ((hlen (string-length haystack))
-          (nlen (string-length needle)))
-      (let loop ((i start))
+  ;; True if CH is an ASCII hex digit (0-9, a-f).
+  ;; encodeText in Compile/Names.hs uses lowercase hex.
+  (define (hex-digit? ch)
+    (or (and (char<=? #\0 ch) (char<=? ch #\9))
+        (and (char<=? #\a ch) (char<=? ch #\f))))
+
+  ;; True if S starting at I has six consecutive hex digits.
+  (define (six-hex? s i)
+    (and (<= (+ i 6) (string-length s))
+         (hex-digit? (string-ref s i))
+         (hex-digit? (string-ref s (+ i 1)))
+         (hex-digit? (string-ref s (+ i 2)))
+         (hex-digit? (string-ref s (+ i 3)))
+         (hex-digit? (string-ref s (+ i 4)))
+         (hex-digit? (string-ref s (+ i 5)))))
+
+  ;; Replace each "%%u<6 hex digits>" escape in S between [FROM, TO)
+  ;; with its character. Inverse of encodeText in Compile/Names.hs:
+  ;; the encoder emits exactly six lowercase hex digits per escape
+  ;; with no closing delimiter, so the decoder consumes the same.
+  (define (decode-escapes-range s from to)
+    (let-values (((port extract) (open-string-output-port)))
+      (let loop ((i from))
         (cond
-          ((> (+ i nlen) hlen) #f)
-          ((string=? (substring haystack i (+ i nlen)) needle) i)
+          ((>= i to) (extract))
+          ((and (<= (+ i 9) to)
+                (char=? (string-ref s i) #\%)
+                (char=? (string-ref s (+ i 1)) #\%)
+                (char=? (string-ref s (+ i 2)) #\u)
+                (six-hex? s (+ i 3)))
+           (let* ((hex (substring s (+ i 3) (+ i 9)))
+                  (code (string->number hex 16)))
+             ;; Reject surrogates and out-of-range code points
+             ;; (encodeText never emits these) so a malformed input
+             ;; doesn't crash integer->char.
+             (if (and (<= code #x10FFFF)
+                      (not (and (>= code #xD800) (<= code #xDFFF))))
+                 (begin (put-char port (integer->char code))
+                        (loop (+ i 9)))
+                 (begin (put-char port (string-ref s i))
+                        (loop (+ i 1))))))
+          (else
+           (put-char port (string-ref s i))
+           (loop (+ i 1)))))))
+
+  (define (decode-escapes s)
+    (decode-escapes-range s 0 (string-length s)))
+
+  ;; Find the first occurrence of "__" in S, or #f if absent.
+  (define (find-double-underscore s)
+    (let ((n (string-length s)))
+      (let loop ((i 0))
+        (cond
+          ((> (+ i 2) n) #f)
+          ((and (char=? (string-ref s i) #\_)
+                (char=? (string-ref s (+ i 1)) #\_))
+           i)
           (else (loop (+ i 1)))))))
 
-  ;; Unmangle a compiler-generated qualified-name symbol back to its
-  ;; surface form. The compiler joins (module, base) with "__" — split
-  ;; on the first "__" (when not at position 0) and replace it with ":"
-  ;; so the Scheme pretty-printer matches Haskell's "mod:foo" output.
-  ;; The lexer rejects "__" inside user identifiers (PExpr.hs), so the
-  ;; only "__" in an ASCII symbol is the module/base separator (plus
-  ;; possibly an immediately following compiler-internal "__lambda_N"
-  ;; base name, which the search-from-1 strategy preserves intact).
-  ;; Symbols starting with "__" (unicode-escape or bare lambda) are
-  ;; left untouched.
+  ;; Inverse of vmName in Compile/Names.hs. The encoding is injective
+  ;; (see encodeText's haddock): encodeText emits no "__" of its own
+  ;; (non-ASCII chars use "%%u<6 hex>" instead), and the lexer rejects
+  ;; "__" in source, so the only "__" in the mangled form is the
+  ;; module/base separator. Split there; decode "%%u..." escapes in
+  ;; each half. A leading "__" (compiler-internal name like
+  ;; "__lambda_3") yields an empty module — treat as unqualified.
   (define (unmangle-qualified s)
-    (let ((idx (and (> (string-length s) 0)
-                    (string-search s "__" 1))))
-      (if idx
-          (string-append (substring s 0 idx)
-                         ":"
-                         (substring s (+ idx 2) (string-length s)))
-          s)))
+    (let ((n (string-length s))
+          (sep (find-double-underscore s)))
+      (cond
+        ((or (not sep) (zero? sep)) (decode-escapes s))
+        (else
+         (string-append (decode-escapes-range s 0 sep)
+                        ":"
+                        (decode-escapes-range s (+ sep 2) n))))))
 
   (define (pretty-symbol sym)
     (unmangle-qualified (symbol->string sym)))

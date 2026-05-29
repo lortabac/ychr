@@ -72,24 +72,42 @@ import YCHR.VM (Label (..), Name (..))
 -- | Encode a text component for use in generated /symbolic/ VM names —
 -- compound-term functors and lambda-closure identifiers. ASCII
 -- characters pass through unchanged; non-ASCII characters are
--- rewritten to @__u{hex codepoint}__@.
+-- rewritten to @%%u\<hex\>@ where @\<hex\>@ is the Unicode codepoint
+-- padded to exactly 6 lowercase digits.
 --
--- This is the encoding used by 'vmName'. The resulting string is
--- treated as a symbol by the runtime (the Scheme backend falls back
--- to @(string->symbol "...")@ via 'YCHR.Backend.Scheme.compileSymbol'
--- when the encoded form isn't a valid Scheme identifier), so the
--- encoding need not produce a strictly identifier-safe result.
+-- The escape marker @%%u@ is reserved by the lexer (see
+-- 'YCHR.PExpr.quotedAtomP') so it can never appear in a source atom.
+-- Together with the lexer's existing rejection of @__@, this makes
+-- the encoding @encodeText m <> "__" <> encodeText n@ used by
+-- 'vmName' /injective/: encoded text contains no @__@ at all (escapes
+-- use @%%u@ instead, and source contributes none), so the only @__@
+-- in the mangled form is the module/base separator. Every @%%u@ is
+-- followed by exactly 6 hex digits — fixed-width with no closing
+-- delimiter, so escape boundaries cannot overlap with the separator
+-- or with each other. Six digits covers the whole Unicode range
+-- (@U+10FFFF@). The decoder ('YCHR.Meta.decodeMangled') therefore
+-- splits on the first @__@ and then expands @%%u\<6 hex digits\>@ in
+-- each half.
+--
+-- The resulting string is treated as a symbol by the runtime (the
+-- Scheme backend falls back to @(string->symbol "...")@ via
+-- 'YCHR.Backend.Scheme.compileSymbol' when the encoded form isn't a
+-- valid Scheme identifier), so the encoding need not produce a
+-- strictly identifier-safe result.
 --
 -- For generated /procedure/ names — @tell_*@, @activate_*@, @func_*@
 -- — use 'encodeIdentifier' instead. Those names are emitted as bare
 -- identifiers in target code and must be valid in both Scheme and
--- JavaScript.
+-- JavaScript, neither of which accept @%@; the older
+-- @__u\<hex\>__@ escape is retained there since procedure names are
+-- never decoded.
 encodeText :: Text -> Text
 encodeText = T.concatMap encodeChar
   where
     encodeChar c
       | isAscii c = T.singleton c
-      | otherwise = "__u" <> T.pack (showHex (ord c) "") <> "__"
+      | otherwise = "%%u" <> T.pack (padHex6 (showHex (ord c) ""))
+    padHex6 h = replicate (6 - length h) '0' ++ h
 
 -- | Encode a text component into an identifier that is valid in every
 -- backend's target language. ASCII letters, digits, @_@, and @$@ pass

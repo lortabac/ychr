@@ -89,9 +89,9 @@ record of which fixes have already shipped.
   qualified constructor like `just(X)` (whether produced directly by
   the interpreter or via a lifted lambda body) pretty-printed as
   `'mod__just'(X)` instead of `mod:just(X)`. Fixed by extending the
-  split to any arity, guarded by a non-empty module prefix so unicode
-  escapes (`__uXXXX__`) and internal names starting with `__` still
-  flow through as `Unqualified`. Closed `HASKELL_ONLY` entry for
+  split to any arity, guarded by a non-empty module prefix so internal
+  names starting with `__` still flow through as `Unqualified`.
+  Closed `HASKELL_ONLY` entry for
   `typecheck_constructor_in_lambda_body`; `.expected` files updated
   from `'tc__just'(N)` to `tc:just(N)`. Regression locked by
   `test/golden/qualified_constructor_with_args/` (non-lambda path).
@@ -99,8 +99,9 @@ record of which fixes have already shipped.
   `scheme/ychr/pretty.sls` now unmangles `module__name` back to
   `module:name` on output (via `unmangle-qualified`, splitting on the
   first `__` at position ≥ 1). This is safe because the lexer
-  (`src/YCHR/PExpr.hs`) rejects `__` inside any user atom. Closed
-  `HASKELL_ONLY_CASES` entries for `type_export_constructor_allowlist`
-  and `type_import_constructor_narrowing`. The unicode-escape form
-  `__u<hex>__` still passes through unchanged and is covered by the
-  unicode quoting divergence above.
+  (`src/YCHR/PExpr.hs`) rejects `__` inside any user atom, and the
+  encoder (`encodeText` in `Compile/Names.hs`) emits no `__` of its
+  own (non-ASCII characters use the `%%u<6 hex>` escape instead).
+  Closed `HASKELL_ONLY_CASES` entries for
+  `type_export_constructor_allowlist` and
+  `type_import_constructor_narrowing`.

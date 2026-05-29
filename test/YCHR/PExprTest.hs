@@ -98,7 +98,15 @@ atomTests =
       testCase "quoted atom with backslash escape" $
         stripAll (p "'line\\none'.") @?= Right [Atom "line\none"],
       testCase "double underscore rejected" $
-        assertBool "should fail" (isLeft (p "foo__bar."))
+        assertBool "should fail" (isLeft (p "foo__bar.")),
+      testCase "%%u rejected as infix in quoted atom" $
+        assertBool "should fail" (isLeft (p "'foo%%ubar'.")),
+      testCase "%%u rejected as prefix in quoted atom" $
+        assertBool "should fail" (isLeft (p "'%%ufoo'.")),
+      testCase "%%u rejected as suffix in quoted atom" $
+        assertBool "should fail" (isLeft (p "'foo%%u'.")),
+      testCase "%% alone is allowed in quoted atom" $
+        stripAll (p "'foo%%bar'.") @?= Right [Atom "foo%%bar"]
     ]
 
 -- ---------------------------------------------------------------------------
