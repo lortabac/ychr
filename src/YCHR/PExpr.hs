@@ -50,7 +50,7 @@ import Control.Monad (foldM, void)
 import Data.Char (isAlphaNum, isLower)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
-import Data.List (intercalate)
+import Data.List (intercalate, nub)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -210,7 +210,10 @@ mergeOps base decls = do
   pure
     OpTable
       { opsByFixity =
-          IntMap.unionWith (++) base.opsByFixity (IntMap.fromListWith (++) userEntries),
+          IntMap.unionWith
+            mergeBucket
+            base.opsByFixity
+            (IntMap.fromListWith mergeBucket userEntries),
         wordOpSet =
           Set.union
             base.wordOpSet
@@ -227,6 +230,7 @@ mergeOps base decls = do
             )
       }
   where
+    mergeBucket xs ys = nub (xs ++ ys)
     checkConflicts :: Either Text ()
     checkConflicts =
       let -- Check prefix ops for conflicts

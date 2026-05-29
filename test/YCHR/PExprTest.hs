@@ -929,7 +929,19 @@ mergeOpsTests =
         let base = mkOpTable [(500, [(Yfx, "**")])]
          in case mergeOps base [(500, Yfx, "**")] of
               Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
-              Right _ -> pure (),
+              Right merged ->
+                length [() | (_, _, "**") <- opTableEntries merged] @?= 1,
+      testCase "redeclaring an op from base does not duplicate" $
+        let base = mkOpTable [(400, [(Yfx, "/")])]
+         in case mergeOps base [(400, Yfx, "/")] of
+              Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
+              Right merged ->
+                length [() | (_, _, "/") <- opTableEntries merged] @?= 1,
+      testCase "repeated entries within decls do not duplicate" $
+        case mergeOps emptyOps [(500, Yfx, "++"), (500, Yfx, "++")] of
+          Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
+          Right merged ->
+            length [() | (_, _, "++") <- opTableEntries merged] @?= 1,
       testCase "prefix conflict (different fixity) returns Left" $
         let base = mkOpTable [(500, [(Fx, "foo")])]
          in case mergeOps base [(600, Fx, "foo")] of

@@ -6,30 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `:- list_operators` reports `op(400, yfx, '/')` twice
-
-**Documented claim.** `docs/reference/prelude.md` lists `'/'` once at
-priority 400, type `yfx`. `libraries/prelude.chr` declares it once.
-
-**Test.**
-
-    ychr> :list_operators
-
-**Expected.** Each `op(prio, type, name)` listed once.
-
-**Actual.** Two adjacent lines:
-
-    op(400, yfx, '/')
-    op(400, yfx, '/')
-
-No duplicate appears for `+`, `*`, etc. The duplication is specific to
-`/`.
-
-**Notes.** Cosmetic. Probably an operator-table merge that
-double-includes the `:- function ('/'(float, float) -> float).`
-declaration's implicit op-entry alongside the explicit
-`op(400, yfx, '/')` from the export list.
-
 ## Variables starting with `_` are silently suppressed from REPL output
 
 **Documented claim.** `docs/reference/syntax.md` §Identifiers and
