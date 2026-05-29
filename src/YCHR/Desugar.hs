@@ -118,15 +118,16 @@ closureFunctor :: Text
 closureFunctor = "__closure"
 
 -- | Quote an expression so it becomes ground: variable references
--- become atom literals; wildcards become @AtomExpr "_"@. Used to embed
--- the original lambda source form in the closure expression without
--- introducing dangling variable references. The pretty-printer reads
--- the quoted form back out at display time; the form is never
--- evaluated. See the comment at 'sourceForm' in 'liftExpr' for the
--- reason 'LambdaExpr' is flattened here rather than preserved.
+-- become 0-arity ctor literals; wildcards become @CtorExpr "_" []@.
+-- Used to embed the original lambda source form in the closure
+-- expression without introducing dangling variable references. The
+-- pretty-printer reads the quoted form back out at display time; the
+-- form is never evaluated. See the comment at 'sourceForm' in
+-- 'liftExpr' for the reason 'LambdaExpr' is flattened here rather
+-- than preserved.
 quoteExpr :: R.Expr -> R.Expr
-quoteExpr (R.VarExpr v) = R.AtomExpr v
-quoteExpr R.WildcardExpr = R.AtomExpr "_"
+quoteExpr (R.VarExpr v) = R.CtorExpr (Unqualified v) []
+quoteExpr R.WildcardExpr = R.CtorExpr (Unqualified "_") []
 quoteExpr (R.CtorExpr n args) = R.CtorExpr n (map quoteExpr args)
 quoteExpr (R.CallExpr qn args) = R.CallExpr qn (map quoteExpr args)
 quoteExpr (R.ApplyExpr f args) =
@@ -139,8 +140,8 @@ quoteExpr (R.LambdaExpr params body) =
       quoteSequence body
     ]
   where
-    paramAtom (HeadVar v) = R.AtomExpr v
-    paramAtom HeadWildcard = R.AtomExpr "_"
+    paramAtom (HeadVar v) = R.CtorExpr (Unqualified v) []
+    paramAtom HeadWildcard = R.CtorExpr (Unqualified "_") []
     quoteSequence = go . NE.toList
       where
         go [e] = quoteExpr e
@@ -148,10 +149,9 @@ quoteExpr (R.LambdaExpr params body) =
           R.CtorExpr
             (Unqualified ",")
             [quoteExpr e, go es]
-        go [] = R.AtomExpr "true" -- unreachable: NonEmpty
+        go [] = R.CtorExpr (Unqualified "true") [] -- unreachable: NonEmpty
 quoteExpr e@(R.IntExpr _) = e
 quoteExpr e@(R.FloatExpr _) = e
-quoteExpr e@(R.AtomExpr _) = e
 quoteExpr e@(R.TextExpr _) = e
 quoteExpr e@(R.FunRefExpr _ _) = e
 
@@ -164,7 +164,6 @@ headTermToExpr (VarTerm v) = R.VarExpr v
 headTermToExpr Wildcard = R.WildcardExpr
 headTermToExpr (IntTerm n) = R.IntExpr n
 headTermToExpr (FloatTerm n) = R.FloatExpr n
-headTermToExpr (AtomTerm s) = R.AtomExpr s
 headTermToExpr (TextTerm s) = R.TextExpr s
 headTermToExpr (CompoundTerm n args) =
   R.CtorExpr n (map headTermToExpr args)
@@ -492,8 +491,8 @@ desugarGuard loc origin e
 guardExprIsAllowed :: R.Expr -> Bool
 guardExprIsAllowed e = case e of
   R.VarExpr {} -> True
-  R.AtomExpr "true" -> True
-  R.AtomExpr "false" -> True
+  R.CtorExpr (Unqualified "true") [] -> True
+  R.CtorExpr (Unqualified "false") [] -> True
   R.CallExpr {} -> True
   R.ApplyExpr {} -> True
   R.HostExpr {} -> True
@@ -567,7 +566,7 @@ desugarBodyGoal label loc origin e = case e of
     pure [D.BodyIs v expr, D.BodyUnify (R.VarExpr v) lhs]
   R.HostExpr f args -> pure [D.BodyHostStmt f args]
   R.CtorExpr (Qualified "prelude" "true") [] -> pure [D.BodyTrue]
-  R.AtomExpr "true" -> pure [D.BodyTrue]
+  R.CtorExpr (Unqualified "true") [] -> pure [D.BodyTrue]
   R.CallExpr qn args -> pure [D.BodyCall qn args]
   R.ApplyExpr f args -> pure [D.BodyApply f args]
   R.CtorExpr (Qualified m b) args ->
@@ -606,7 +605,6 @@ exprVars (R.LambdaExpr params body) =
 exprVars (R.FunRefExpr _ _) = Set.empty
 exprVars (R.IntExpr _) = Set.empty
 exprVars (R.FloatExpr _) = Set.empty
-exprVars (R.AtomExpr _) = Set.empty
 exprVars (R.TextExpr _) = Set.empty
 exprVars R.WildcardExpr = Set.empty
 
@@ -737,7 +735,7 @@ liftExpr modName scope parentRequiring st0 expr = case expr of
         sourceForm =
           R.CtorExpr (Unqualified "term") [quoteExpr expr]
         closureArgs =
-          R.AtomExpr lambdaId : sourceForm : map R.VarExpr freeVars
+          R.CtorExpr (Unqualified lambdaId) [] : sourceForm : map R.VarExpr freeVars
      in (st2, R.CtorExpr (Unqualified closureFunctor) closureArgs)
   R.CtorExpr name args ->
     let (st1, args') =

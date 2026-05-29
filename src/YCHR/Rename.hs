@@ -769,7 +769,7 @@ renameTerm ctx loc origin mode t = case t of
     (Unqualified "fun")
     [ CompoundTerm
         (Unqualified "/")
-        [ AtomTerm fname,
+        [ CompoundTerm (Unqualified fname) [],
           IntTerm farity
           ]
       ] | mode /= NoResolveQuoted -> do
@@ -778,8 +778,37 @@ renameTerm ctx loc origin mode t = case t of
       pure
         ( CompoundTerm
             (Unqualified "/")
-            [AtomTerm (flattenName resolved), IntTerm farity]
+            [CompoundTerm (Unqualified (flattenName resolved)) [], IntTerm farity]
         )
+  -- 0-arity unqualified compounds (the AST form of bare atoms after
+  -- the parser's @Atom t@ rewrite): always lenient under resolution.
+  -- A bare atom in body or guard position has the same surface meaning
+  -- as a 0-arity data-constructor use, so we force 'ResolveAll' here
+  -- (warn but don't error on undeclared) regardless of the surrounding
+  -- 'ResolveTop'. Then fall back to data-constructor canonicalization.
+  CompoundTerm (Unqualified n) [] -> do
+    resolved <- case mode of
+      NoResolve -> do
+        warnUnknownDataCon ctx.dataConEnv loc origin n 0
+        case visibleProviders ctx n 0 of
+          ms@(_ : _ : _) ->
+            emitError (AnnP (AmbiguousName n 0 ms) loc origin)
+          _ -> pure ()
+        pure (Unqualified n)
+      NoResolveQuoted ->
+        pure (Unqualified n)
+      _ -> resolveName ResolveAll ctx loc origin (Unqualified n) 0
+    case resolved of
+      Qualified _ _ -> pure (CompoundTerm resolved [])
+      Unqualified _ -> do
+        case mode of
+          NoResolveQuoted -> pure ()
+          _ ->
+            when (null (visibleProviders ctx n 0)) $
+              checkAmbiguousDataCon ctx loc origin n 0
+        case canonicalizeDataCon ctx n 0 of
+          Just qn -> pure (CompoundTerm qn [])
+          Nothing -> pure (CompoundTerm (Unqualified n) [])
   CompoundTerm name args -> do
     let childMode = case mode of
           NoResolve -> NoResolve
@@ -845,46 +874,6 @@ renameTerm ctx loc origin mode t = case t of
             pure (canonicalizeData ctx resolved (length args))
           Qualified _ _ -> pure resolved
     pure (CompoundTerm newName renamedArgs)
-  -- Zero-arity atom promotion: if a bare atom matches a declared
-  -- constraint, function, or data constructor with arity 0, promote
-  -- it to a qualified 'CompoundTerm'. Data-constructor canonicalization
-  -- applies in @NoResolve@ mode too (head patterns) so that bare and
-  -- qualified uses end up at the same runtime atom.
-  AtomTerm n -> do
-    resolved <- case mode of
-      NoResolve -> do
-        warnUnknownDataCon ctx.dataConEnv loc origin n 0
-        -- Mirror the multi-provider arm of the @NoResolve@ compound
-        -- case (and of 'resolveName'): a zero-arity name with two or
-        -- more visible function/constraint providers cannot be
-        -- disambiguated downstream — 'Resolve.termToExpr' falls
-        -- through to 'CtorExpr' with no diagnostic — so emit
-        -- 'AmbiguousName' here rather than let the program compile
-        -- to a confusing downstream failure.
-        case visibleProviders ctx n 0 of
-          ms@(_ : _ : _) ->
-            emitError (AnnP (AmbiguousName n 0 ms) loc origin)
-          _ -> pure ()
-        pure (Unqualified n)
-      NoResolveQuoted ->
-        pure (Unqualified n)
-      _ -> resolveName ResolveAll ctx loc origin (Unqualified n) 0
-    case resolved of
-      Qualified _ _ -> pure (CompoundTerm resolved [])
-      Unqualified _ -> do
-        -- Skip the ambiguity check in the @term/1@ opaque-quote
-        -- mode, and skip it when the function/constraint namespace
-        -- already has something to say about the name (either it
-        -- resolves there, or 'resolveName'/the multi-provider arm
-        -- above has already emitted YCHR-20001 for an ambiguity).
-        case mode of
-          NoResolveQuoted -> pure ()
-          _ ->
-            when (null (visibleProviders ctx n 0)) $
-              checkAmbiguousDataCon ctx loc origin n 0
-        case canonicalizeDataCon ctx n 0 of
-          Just qn -> pure (CompoundTerm qn [])
-          Nothing -> pure (AtomTerm n)
   other -> pure other
 
 -- ---------------------------------------------------------------------------
@@ -1305,10 +1294,13 @@ term to unify with) and does not contain callable references, whereas the
 RHS is an arbitrary expression.
 
 Why a bare atom in expression position can emit an
-'UndeclaredDataConstructor' warning: in CHR, bare atoms are used as
-zero-arity data constructors, so the renamer treats them as such. If an
-atom is instead declared as a zero-arity constraint or function, it is
-/promoted/ to a 'CompoundTerm' before the warning path runs.
+'UndeclaredDataConstructor' warning: at the AST level there is no
+separate atom form — the parser already represents bare names as
+@CompoundTerm (Unqualified n) []@, so the renamer treats them
+uniformly as zero-arity data constructors. If the name is instead
+declared as a zero-arity constraint or function, the dedicated 0-arity
+arm in 'renameTerm' canonicalizes it to the qualified form before the
+warning path runs.
 
 Why 'renameTypeDefinition' is pure while the rule/equation helpers live in
 'Eff': type renaming currently emits no errors or warnings (unknown types

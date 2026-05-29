@@ -478,7 +478,6 @@ compileTerm varMap si (VarTerm v) = case lookupVar v varMap of
     pure (Lit WildcardLit)
 compileTerm _ _ (IntTerm n) = pure (Lit (IntLit n))
 compileTerm _ _ (FloatTerm n) = pure (Lit (FloatLit n))
-compileTerm _ _ (AtomTerm s) = pure (Lit (AtomLit s))
 compileTerm _ _ (TextTerm s) = pure (Lit (TextLit s))
 -- Native-bool fast path: source @true@/@false@ reach @compileTerm@ only
 -- as the renamer-canonicalized @prelude:true@ / @prelude:false@ form
@@ -488,16 +487,21 @@ compileTerm _ _ (CompoundTerm (Types.Qualified "prelude" "true") []) =
   pure (Lit (BoolLit True))
 compileTerm _ _ (CompoundTerm (Types.Qualified "prelude" "false") []) =
   pure (Lit (BoolLit False))
--- All other declared constructors compile to compounds with
--- @vmName@-flattened functor (@m__n@). 0-arity uses get an empty
--- args vector — staying as @VTerm name []@ rather than @VAtom name@
--- so 'matchTerm' (which only recognises 'VTerm') sees a uniform shape
--- regardless of whether the constructor was written bare or qualified.
+-- 0-arity compounds normalize to atom literals: at the runtime layer
+-- the canonical form is 'VAtom' (no empty-args vector), and 'AtomLit'
+-- is the cheap VM constructor for that value. 'BMatchTerm' accepts
+-- 'VAtom' for arity-0 tests so the dispatch invariant is preserved at
+-- the matcher layer rather than via a parallel runtime representation.
+--
+-- Qualified 0-arity uses 'vmName' for the @m__n@ mangled functor;
+-- unqualified 0-arity (user-quoted atoms, undeclared bare names)
+-- keeps the raw name so unicode is preserved as data — 'vmName' would
+-- escape non-ASCII to @__uXXXX__@, which is appropriate for
+-- procedure names but not for atom values.
 compileTerm _ _ (CompoundTerm name@(Types.Qualified _ _) []) =
-  pure (MakeTerm (vmName name) [])
-compileTerm varMap si (CompoundTerm name@(Types.Qualified _ _) args) = do
-  args' <- traverse (compileTerm varMap si) args
-  pure (MakeTerm (vmName name) args')
+  pure (Lit (AtomLit (vmName name).unName))
+compileTerm _ _ (CompoundTerm (Types.Unqualified n) []) =
+  pure (Lit (AtomLit n))
 compileTerm varMap si (CompoundTerm name args) = do
   args' <- traverse (compileTerm varMap si) args
   pure (MakeTerm (vmName name) args')
@@ -528,7 +532,6 @@ compileExpr varMap si e = case e of
       pure (Lit WildcardLit)
   R.IntExpr n -> pure (Lit (IntLit n))
   R.FloatExpr n -> pure (Lit (FloatLit n))
-  R.AtomExpr s -> pure (Lit (AtomLit s))
   R.TextExpr s -> pure (Lit (TextLit s))
   R.WildcardExpr -> pure (Lit WildcardLit)
   -- Native-bool fast path: the renamer canonicalizes source @true@ /
@@ -546,11 +549,15 @@ compileExpr varMap si e = case e of
   -- function.
   R.CtorExpr (Types.Unqualified "term") [arg] ->
     compileTerm varMap si (R.exprToTerm arg)
+  -- 0-arity ctors collapse to atom literals at runtime (see comment
+  -- in 'compileTerm'). Compiler never emits @MakeTerm name []@.
+  R.CtorExpr name@(Types.Qualified _ _) [] ->
+    pure (Lit (AtomLit (vmName name).unName))
+  R.CtorExpr (Types.Unqualified n) [] ->
+    pure (Lit (AtomLit n))
   -- Other constructor compounds: arguments stay in expression context
   -- so nested calls (e.g. @foo(X)@ inside @pair(foo(X), bar)@) are
-  -- evaluated. Empty-arg qualified compounds get the same uniform
-  -- @VTerm name []@ shape that 'compileTerm' uses, so the runtime can
-  -- match them with 'BMatchTerm' regardless of how they were written.
+  -- evaluated.
   R.CtorExpr name args -> do
     args' <- traverse (compileExpr varMap si) args
     pure (MakeTerm (vmName name) args')

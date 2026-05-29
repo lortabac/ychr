@@ -24,6 +24,11 @@ typing rules over this syntax see [type-system.md](type-system.md).
     encodes a literal single quote (ISO Prolog convention), and the
     backslash escapes `\\`, `\'`, `\n`, `\t` are recognized. Any other
     `\c` falls through to the literal `c`.
+  - At the value level an atom and a 0-arity data-constructor
+    application are interchangeable — `red` written bare and `red`
+    declared via `:- chr_type colour ---> red ; green` produce the
+    same value. The runtime prints both bare (with the qualifying
+    module, if any).
   - **Variables** start with an uppercase letter or underscore, then
     letters, digits, or underscores. The bare `_` is the wildcard:
     distinct occurrences are independent.

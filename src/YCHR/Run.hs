@@ -416,7 +416,6 @@ termToValue (VarTerm n) = do
       pure v
 termToValue (IntTerm n) = pure (VInt n)
 termToValue (FloatTerm n) = pure (VFloat n)
-termToValue (AtomTerm s) = pure (VAtom s)
 termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard
 -- Native-bool fast path. Mirrors 'Compile.compileTerm' for
@@ -425,9 +424,13 @@ termToValue Wildcard = pure VWildcard
 -- (which return 'VBool' directly) succeeds.
 termToValue (CompoundTerm (Types.Qualified "prelude" "true") []) = pure (VBool True)
 termToValue (CompoundTerm (Types.Qualified "prelude" "false") []) = pure (VBool False)
-termToValue (CompoundTerm name@(Types.Qualified _ _) ts) = do
-  ts' <- traverse termToValue ts
-  pure (VTerm (vmName name).unName ts')
+-- 0-arity ctors collapse to atoms at the runtime layer. Qualified
+-- 0-arity uses the @vmName@-mangled @m__n@ form; unqualified 0-arity
+-- (user-quoted atoms, undeclared bare names) keeps the raw name.
+-- See 'YCHR.Compile.compileTerm' for the rationale.
+termToValue (CompoundTerm name@(Types.Qualified _ _) []) =
+  pure (VAtom (vmName name).unName)
+termToValue (CompoundTerm (Types.Unqualified n) []) = pure (VAtom n)
 termToValue (CompoundTerm name ts) = VTerm (vmName name).unName <$> traverse termToValue ts
 
 -- | Execute a single desugared body goal in the query context.
@@ -519,7 +522,6 @@ exprToValue = termToValue . R.exprToTerm
 evalNestedExpr :: D.Expr -> QueryM Value
 evalNestedExpr (R.IntExpr n) = pure (VInt n)
 evalNestedExpr (R.FloatExpr n) = pure (VFloat n)
-evalNestedExpr (R.AtomExpr s) = pure (VAtom s)
 evalNestedExpr (R.TextExpr s) = pure (VText s)
 evalNestedExpr R.WildcardExpr = pure VWildcard
 evalNestedExpr (R.VarExpr v) = do
@@ -552,6 +554,10 @@ evalNestedExpr (R.CtorExpr (Types.Unqualified "term") [arg]) = exprToValue arg
 -- agrees with comparison results (which return 'VBool' directly).
 evalNestedExpr (R.CtorExpr (Types.Qualified "prelude" "true") []) = pure (VBool True)
 evalNestedExpr (R.CtorExpr (Types.Qualified "prelude" "false") []) = pure (VBool False)
+-- 0-arity ctors collapse to atoms at the runtime layer.
+evalNestedExpr (R.CtorExpr name@(Types.Qualified _ _) []) =
+  pure (VAtom (vmName name).unName)
+evalNestedExpr (R.CtorExpr (Types.Unqualified n) []) = pure (VAtom n)
 evalNestedExpr (R.CtorExpr name args) =
   -- Recurse with 'evalNestedExpr' (not 'exprToValue'): a 'CtorExpr'
   -- can contain nested 'CallExpr' / 'HostExpr' children that must

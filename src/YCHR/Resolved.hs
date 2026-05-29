@@ -146,7 +146,6 @@ data Expr
   = VarExpr Text
   | IntExpr Integer
   | FloatExpr Double
-  | AtomExpr Text
   | TextExpr Text
   | WildcardExpr
   | CtorExpr Name [Expr]
@@ -176,7 +175,6 @@ exprToTerm :: Expr -> Term
 exprToTerm (VarExpr v) = VarTerm v
 exprToTerm (IntExpr n) = IntTerm n
 exprToTerm (FloatExpr n) = FloatTerm n
-exprToTerm (AtomExpr s) = AtomTerm s
 exprToTerm (TextExpr s) = TextTerm s
 exprToTerm WildcardExpr = Wildcard
 exprToTerm (CtorExpr name args) = CompoundTerm name (map exprToTerm args)
@@ -189,7 +187,9 @@ exprToTerm (HostExpr f args) =
 exprToTerm (FunRefExpr qn arity) =
   CompoundTerm
     (Unqualified "/")
-    [AtomTerm (flattenName (qualifiedToName qn)), IntTerm (fromIntegral arity)]
+    [ CompoundTerm (Unqualified (flattenName (qualifiedToName qn))) [],
+      IntTerm (fromIntegral arity)
+    ]
 exprToTerm (LambdaExpr params body) =
   CompoundTerm
     (Unqualified "->")
@@ -205,4 +205,4 @@ sequenceToTerm = go . NE.toList
   where
     go [e] = exprToTerm e
     go (e : es) = CompoundTerm (Unqualified ",") [exprToTerm e, go es]
-    go [] = AtomTerm "true" -- unreachable: NonEmpty
+    go [] = CompoundTerm (Unqualified "true") [] -- unreachable: NonEmpty

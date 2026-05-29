@@ -34,7 +34,7 @@ REPL_TESTS = [
     # `term/1` opt-out: the renamer treats `term(X)` as fully opaque
     # data, so no module-visibility check fires on the qualified
     # `:`-compound inside.
-    ("host:print(term(':'(foo, bar))).", "foo:bar()\n"),
+    ("host:print(term(':'(foo, bar))).", "foo:bar\n"),
     ("host:print(1 + 1).", "2\n"),
     ("host:print((foo, bar)).", "foo, bar\n"),
     ("host:print((foo; bar)).", "foo; bar\n"),

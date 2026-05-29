@@ -1083,7 +1083,6 @@ termToExpr vis loc origin = go
       VarTerm v -> pure (R.VarExpr v)
       IntTerm n -> pure (R.IntExpr n)
       FloatTerm n -> pure (R.FloatExpr n)
-      AtomTerm s -> pure (R.AtomExpr s)
       TextTerm s -> pure (R.TextExpr s)
       Wildcard -> pure R.WildcardExpr
       -- '$call'(F, A1..An) — surface dynamic dispatch. The callee is
@@ -1091,9 +1090,11 @@ termToExpr vis loc origin = go
       CompoundTerm (Unqualified "$call") (f : args)
         | not (null args) -> R.ApplyExpr <$> go f <*> traverse go args
       -- 'fun name/arity' — canonicalized by the renamer to a single
-      -- AtomTerm holding the flat 'module:name'.
-      CompoundTerm (Unqualified "/") [AtomTerm flatName, IntTerm arity] ->
-        pure (R.FunRefExpr (parseFlatName flatName) (fromInteger arity))
+      -- 0-arity compound holding the flat 'module:name'.
+      CompoundTerm
+        (Unqualified "/")
+        [CompoundTerm (Unqualified flatName) [], IntTerm arity] ->
+          pure (R.FunRefExpr (parseFlatName flatName) (fromInteger arity))
       -- Lambda 'fun(P1..Pn) -> body'. Params are patterns; invalid
       -- params get reported here and replaced with 'HeadWildcard' so
       -- traversal can keep going. An empty parameter list is rejected
@@ -1158,7 +1159,6 @@ quotedToExpr :: Term -> R.Expr
 quotedToExpr (VarTerm v) = R.VarExpr v
 quotedToExpr (IntTerm n) = R.IntExpr n
 quotedToExpr (FloatTerm n) = R.FloatExpr n
-quotedToExpr (AtomTerm s) = R.AtomExpr s
 quotedToExpr (TextTerm s) = R.TextExpr s
 quotedToExpr Wildcard = R.WildcardExpr
 quotedToExpr (CompoundTerm name args) =

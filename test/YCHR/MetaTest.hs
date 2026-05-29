@@ -138,5 +138,9 @@ endToEndReadTermTest =
         hostCalls
         "T is host:read_term_from_string(\"f(1, hello)\"), check(T, f(1, hello))."
     case Map.lookup "T" bindings of
-      Just (CompoundTerm (Types.Unqualified "f") [IntTerm 1, AtomTerm "hello"]) -> pure ()
+      Just
+        ( CompoundTerm
+            (Types.Unqualified "f")
+            [IntTerm 1, CompoundTerm (Types.Unqualified "hello") []]
+          ) -> pure ()
       other -> assertFailure $ "Expected T = f(1, hello), got: " ++ show other

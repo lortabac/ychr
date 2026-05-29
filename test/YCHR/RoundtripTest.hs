@@ -96,7 +96,7 @@ genTerm =
     -- Base cases
     [ VarTerm <$> genVarName,
       IntTerm <$> Gen.integral (Range.linear (-1000) 1000),
-      AtomTerm <$> genAtom,
+      (\s -> CompoundTerm (Unqualified s) []) <$> genAtom,
       TextTerm <$> genStringContent,
       pure Wildcard
     ]
@@ -198,14 +198,14 @@ prop_ruleRoundtrip = property $ do
 -- ---------------------------------------------------------------------------
 
 -- | Generate a runtime 'Value' compound term (including arity 0).
+-- The arity-0 base case is 'VAtom', matching the runtime collapse
+-- enforced by 'YCHR.Compile.compileTerm'.
 genCompoundValue :: Gen Value
 genCompoundValue =
   Gen.recursive
     Gen.choice
-    -- Base: arity-0 compound terms
-    [ do
-        f <- genSafeAtom
-        pure (VTerm f [])
+    -- Base: arity-0 compound terms (canonical form is 'VAtom').
+    [ VAtom <$> genSafeAtom
     ]
     -- Recursive: arity 1–3
     [ Gen.subtermM genLeafOrCompound $ \t -> do

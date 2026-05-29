@@ -26,13 +26,17 @@ basicTests =
     [ testCase "IntTerm" $
         prettyTerm (IntTerm 42) @?= "42",
       testCase "AtomTerm" $
-        prettyTerm (AtomTerm "foo") @?= "foo",
+        prettyTerm (CompoundTerm (Unqualified "foo") []) @?= "foo",
       testCase "VarTerm renders its name" $
         prettyTerm (VarTerm "X") @?= "X",
       testCase "Wildcard" $
         prettyTerm Wildcard @?= "_",
       testCase "CompoundTerm unqualified" $
-        prettyTerm (CompoundTerm (Unqualified "f") [IntTerm 1, AtomTerm "a"])
+        prettyTerm
+          ( CompoundTerm
+              (Unqualified "f")
+              [IntTerm 1, CompoundTerm (Unqualified "a") []]
+          )
           @?= "f(1, a)",
       testCase "CompoundTerm qualified" $
         prettyTerm (CompoundTerm (Qualified "m" "f") [IntTerm 1])
@@ -109,7 +113,7 @@ listRenderingTests =
       testCase "improper list with variable tail" $
         prettyTerm (cons (IntTerm 1) (VarTerm "T")) @?= "[1 | T]",
       testCase "improper list with atom tail" $
-        prettyTerm (cons (IntTerm 1) (AtomTerm "foo")) @?= "[1 | foo]"
+        prettyTerm (cons (IntTerm 1) (CompoundTerm (Unqualified "foo") [])) @?= "[1 | foo]"
     ]
   where
     nil = CompoundTerm (Unqualified "prelude__[]") []
@@ -126,13 +130,13 @@ closureUnwrapTests =
         let source =
               CompoundTerm
                 (Unqualified "->")
-                [ CompoundTerm (Unqualified "fun") [AtomTerm "X"],
-                  CompoundTerm (Unqualified "+") [AtomTerm "X", IntTerm 1]
+                [ CompoundTerm (Unqualified "fun") [CompoundTerm (Unqualified "X") []],
+                  CompoundTerm (Unqualified "+") [CompoundTerm (Unqualified "X") [], IntTerm 1]
                 ]
             closure =
               CompoundTerm
                 (Unqualified "__closure")
-                [AtomTerm "__lambda_0", source]
+                [CompoundTerm (Unqualified "__lambda_0") [], source]
          in prettyTerm closure @?= "fun(X) -> X + 1 end",
       -- 'unquoteToPExpr' turns atoms whose name looks like a variable
       -- (uppercase-first or leading underscore) back into variables —
@@ -142,13 +146,13 @@ closureUnwrapTests =
         let source =
               CompoundTerm
                 (Unqualified "->")
-                [ CompoundTerm (Unqualified "fun") [AtomTerm "X"],
-                  AtomTerm "X"
+                [ CompoundTerm (Unqualified "fun") [CompoundTerm (Unqualified "X") []],
+                  CompoundTerm (Unqualified "X") []
                 ]
             closure =
               CompoundTerm
                 (Unqualified "__closure")
-                [AtomTerm "__lambda_1", source]
+                [CompoundTerm (Unqualified "__lambda_1") [], source]
          in prettyTerm closure @?= "fun(X) -> X end"
     ]
 
@@ -175,7 +179,7 @@ bindingsTests =
         prettyQueryResult
           ( Map.fromList
               [ ("X", IntTerm 1),
-                ("Y", AtomTerm "ok"),
+                ("Y", CompoundTerm (Unqualified "ok") []),
                 ("Z", Wildcard)
               ]
           )
@@ -184,7 +188,7 @@ bindingsTests =
         prettyQueryResult
           ( Map.fromList
               [ ("R", IntTerm 42),
-                ("_internal", AtomTerm "hidden")
+                ("_internal", CompoundTerm (Unqualified "hidden") [])
               ]
           )
           @?= "R = 42.\n"

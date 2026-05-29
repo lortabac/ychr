@@ -428,7 +428,7 @@ unicodeTests =
     [ testCase "constraint with non-ASCII name compiles and runs" $ do
         prog <- compileOrFail [("uni.chr", unicodeSource)]
         bindings <- runProgramWithGoal prog Map.empty "uni:'\xe9cho'(R)"
-        Map.lookup "R" bindings @?= Just (AtomTerm "done")
+        Map.lookup "R" bindings @?= Just (CompoundTerm (Unqualified "done") [])
     ]
 
 -- ---------------------------------------------------------------------------
@@ -450,12 +450,12 @@ arityOverloadTests =
     [ testCase "foo/1 and foo/2 are distinct constraints" $ do
         prog <- compileOrFail [("m.chr", arityOverloadSource)]
         bindings1 <- runProgramWithGoal prog Map.empty "m:foo(R)"
-        Map.lookup "R" bindings1 @?= Just (AtomTerm "one"),
+        Map.lookup "R" bindings1 @?= Just (CompoundTerm (Unqualified "one") []),
       testCase "foo/2 fires its own rule" $ do
         prog <- compileOrFail [("m.chr", arityOverloadSource)]
         bindings2 <- runProgramWithGoal prog Map.empty "m:foo(R1, R2)"
-        Map.lookup "R1" bindings2 @?= Just (AtomTerm "two")
-        Map.lookup "R2" bindings2 @?= Just (AtomTerm "args")
+        Map.lookup "R1" bindings2 @?= Just (CompoundTerm (Unqualified "two") [])
+        Map.lookup "R2" bindings2 @?= Just (CompoundTerm (Unqualified "args") [])
     ]
 
 -- ---------------------------------------------------------------------------
@@ -534,11 +534,11 @@ queryBodyTests =
         prog <- compileOrFail [("qbody.chr", qbodySource)]
         bindings <-
           runProgramWithQuery prog qbodyHostCalls "host:'+'(1, 2), R = ok."
-        Map.lookup "R" bindings @?= Just (AtomTerm "ok"),
+        Map.lookup "R" bindings @?= Just (CompoundTerm (Unqualified "ok") []),
       testCase "BodyCall: triple(5) as statement runs and is discarded" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
         bindings <- runProgramWithQuery prog qbodyHostCalls "triple(5), R = ok."
-        Map.lookup "R" bindings @?= Just (AtomTerm "ok"),
+        Map.lookup "R" bindings @?= Just (CompoundTerm (Unqualified "ok") []),
       testCase "BodyApply: '$call'(F, X) as statement runs and is discarded" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
         bindings <-
@@ -546,7 +546,7 @@ queryBodyTests =
             prog
             qbodyHostCalls
             "F = fun(X) -> X end, '$call'(F, 1), R = ok."
-        Map.lookup "R" bindings @?= Just (AtomTerm "ok"),
+        Map.lookup "R" bindings @?= Just (CompoundTerm (Unqualified "ok") []),
       testCase "ApplyExpr in is: R is '$call'(fun triple/1, 4)" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
         bindings <-

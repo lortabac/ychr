@@ -514,7 +514,7 @@ goalClassificationTests =
                            ]
         rule <- singleRule m
         rule.guard.node
-          @?= [VarTerm "X", AtomTerm "zero", IntTerm 42],
+          @?= [VarTerm "X", CompoundTerm (Unqualified "zero") [], IntTerm 42],
       testCase "non-compound terms in body untouched" $ do
         let m =
               module' "M"
@@ -522,7 +522,7 @@ goalClassificationTests =
                 `defining` [[term "c" [var "X"]] <=> [var "X", atom "zero", IntTerm 42]]
         rule <- singleRule m
         rule.body.node
-          @?= [VarTerm "X", AtomTerm "zero", IntTerm 42],
+          @?= [VarTerm "X", CompoundTerm (Unqualified "zero") [], IntTerm 42],
       testCase "zero-arity atom in body promoted to constraint" $ do
         let m =
               module' "M"
@@ -548,7 +548,7 @@ goalClassificationTests =
                 `defining` [[term "c" [var "X"]] <=> [atom "hello"]]
         rule <- singleRule m
         rule.body.node
-          @?= [AtomTerm "hello"],
+          @?= [CompoundTerm (Unqualified "hello") []],
       testCase "undeclared atom in guard stays as AtomTerm" $ do
         let m =
               module' "M"
@@ -558,7 +558,7 @@ goalClassificationTests =
                            ]
         rule <- singleRule m
         rule.guard.node
-          @?= [AtomTerm "hello"],
+          @?= [CompoundTerm (Unqualified "hello") []],
       testCase "zero-arity atom in head arg stays as AtomTerm (NoResolve)" $ do
         let m =
               module' "M"
@@ -566,7 +566,11 @@ goalClassificationTests =
                 `defining` [[term "c" [atom "done"]] <=> [atom "true"]]
         rule <- singleRule m
         rule.head.node
-          @?= Simplification [Constraint (Qualified "M" "c") [AtomTerm "done"]]
+          @?= Simplification
+            [ Constraint
+                (Qualified "M" "c")
+                [CompoundTerm (Unqualified "done") []]
+            ]
     ]
 
 --------------------------------------------------------------------------------
@@ -641,7 +645,7 @@ multiModuleTests =
                         )
                     )
                     (noAnnP [])
-                    (noAnnP [AtomTerm "true"])
+                    (noAnnP [CompoundTerm (Unqualified "true") []])
                 ],
                 [ Rule
                     (Just (noAnn "trans"))

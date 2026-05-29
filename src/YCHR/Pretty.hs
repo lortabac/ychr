@@ -63,9 +63,11 @@ termToPExpr :: Term -> PE.PExpr
 termToPExpr (VarTerm v) = PE.Var v
 termToPExpr (IntTerm n) = PE.Int n
 termToPExpr (FloatTerm n) = PE.Float n
-termToPExpr (AtomTerm s) = PE.Atom s
 termToPExpr (TextTerm s) = PE.Str s
 termToPExpr Wildcard = PE.Wildcard
+termToPExpr (CompoundTerm (Unqualified f) []) = PE.Atom f
+termToPExpr (CompoundTerm (Qualified m f) []) =
+  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom f)]
 termToPExpr (CompoundTerm (Qualified m f) args) =
   PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Compound f (map (noAnn . termToPExpr) args))]
 termToPExpr (CompoundTerm (Unqualified f) args) =
@@ -168,8 +170,12 @@ runtimeToPExpr (CompoundTerm (Unqualified "__closure") (_ : sourceForm : _)) =
 -- (e.g. round-trips of already-rendered runtime values) still hit
 -- this path.
 runtimeToPExpr (CompoundTerm (Unqualified "prelude__[]") []) = PE.Atom "[]"
+runtimeToPExpr (CompoundTerm (Qualified "prelude" "[]") []) = PE.Atom "[]"
 runtimeToPExpr (CompoundTerm (Unqualified "prelude__.") args) =
   PE.Compound "." (map (noAnn . runtimeToPExpr) args)
+runtimeToPExpr (CompoundTerm (Unqualified f) []) = PE.Atom f
+runtimeToPExpr (CompoundTerm (Qualified m f) []) =
+  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom f)]
 runtimeToPExpr (CompoundTerm (Qualified m f) args) =
   PE.Compound
     ":"
@@ -180,16 +186,16 @@ runtimeToPExpr (CompoundTerm (Unqualified f) args) =
   PE.Compound f (map (noAnn . runtimeToPExpr) args)
 runtimeToPExpr (IntTerm n) = PE.Int n
 runtimeToPExpr (FloatTerm n) = PE.Float n
-runtimeToPExpr (AtomTerm s) = PE.Atom s
 runtimeToPExpr (TextTerm s) = PE.Str s
 
 -- | Like 'runtimeToPExpr' but reverses the 'quoteTerm' transformation:
 -- atoms that look like variable names (start with uppercase or @_@) are
 -- rendered as variables. Used for closure source forms where 'quoteTerm'
--- has turned @VarTerm v@ into @AtomTerm v@.
+-- has turned @VarTerm v@ into a 0-arity unqualified compound.
 unquoteToPExpr :: Term -> PE.PExpr
-unquoteToPExpr (AtomTerm s)
+unquoteToPExpr (CompoundTerm (Unqualified s) [])
   | Just (c, _) <- T.uncons s, isUpper c || c == '_' = PE.Var s
+  | otherwise = PE.Atom s
 unquoteToPExpr (CompoundTerm (Unqualified f) args) =
   PE.Compound f (map (noAnn . unquoteToPExpr) args)
 unquoteToPExpr (CompoundTerm (Qualified m f) []) =

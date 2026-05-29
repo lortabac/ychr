@@ -228,11 +228,17 @@ data BoundSig = BoundSig
   deriving (Show, Eq)
 
 -- | Prolog-compatible terms.
+--
+-- Atoms and zero-arity compounds collapse to the same AST form
+-- @CompoundTerm name []@: downstream phases (Resolve, Desugar,
+-- TypeCheck, Compile) dispatch on a uniform shape. The runtime
+-- representation is asymmetric — zero-arity compounds become 'VAtom'
+-- for cheap allocation and comparison — but the AST keeps the
+-- compound form so pattern matching stays uniform.
 data Term
   = VarTerm Text
   | IntTerm Integer
   | FloatTerm Double
-  | AtomTerm Text
   | TextTerm Text
   | CompoundTerm Name [Term]
   | Wildcard

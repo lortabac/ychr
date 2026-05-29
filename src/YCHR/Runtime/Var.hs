@@ -259,12 +259,15 @@ allEqual _ _ = pure False
 makeTerm :: Text -> [Value] -> Value
 makeTerm = VTerm
 
--- | Check whether a value is a compound term with the given functor and arity.
--- Dereferences first.
+-- | Check whether a value is a compound term with the given functor and
+-- arity. Dereferences first. 0-arity compounds collapse to 'VAtom' at
+-- the runtime layer, so a 'VAtom' matches when @arity == 0@ and its
+-- name matches @functor@.
 matchTerm :: Value -> Text -> Int -> Chr Bool
 matchTerm v functor arity = do
   d <- deref v
   case d of
+    VAtom a -> pure (arity == 0 && a == functor)
     VTerm f args -> pure (f == functor && length args == arity)
     _ -> pure False
 

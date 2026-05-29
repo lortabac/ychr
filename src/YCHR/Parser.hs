@@ -478,7 +478,7 @@ convertTerm (Ann pexpr _) = case pexpr of
   Var t -> VarTerm t
   P.Int n -> IntTerm n
   P.Float n -> FloatTerm n
-  Atom t -> AtomTerm t
+  Atom t -> CompoundTerm (Unqualified t) []
   Str t -> TextTerm t
   P.Wildcard -> Wildcard
   Compound ":" [Ann (Atom m) _, Ann (Atom n) _] ->

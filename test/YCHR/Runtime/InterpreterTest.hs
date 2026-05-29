@@ -833,19 +833,19 @@ typePredicateTests =
       testCase "term_variables: ground term yields empty list" $ do
         result <- callTermVars (VTerm "f" [VInt 1, VAtom "hello"])
         case result of
-          VTerm "prelude__[]" [] -> pure ()
+          VAtom "prelude__[]" -> pure ()
           _ -> assertFailure "expected empty list",
       testCase "term_variables: integer yields empty list" $ do
         result <- callTermVars (VInt 42)
         case result of
-          VTerm "prelude__[]" [] -> pure ()
+          VAtom "prelude__[]" -> pure ()
           _ -> assertFailure "expected empty list",
       testCase "term_variables: unbound var yields singleton list" $ do
         (isSingleton, sameVar) <- runChrBase $ do
           v <- newVar
           result <- callTermVarsChr v
           case result of
-            VTerm "prelude__." [x, VTerm "prelude__[]" []] -> do
+            VTerm "prelude__." [x, VAtom "prelude__[]"] -> do
               eq <- equal x v
               pure (True, eq)
             _ -> pure (False, False)
@@ -856,7 +856,7 @@ typePredicateTests =
           v <- newVar
           result <- callTermVarsChr (VTerm "f" [v, v])
           case result of
-            VTerm "prelude__." [x, VTerm "prelude__[]" []] -> do
+            VTerm "prelude__." [x, VAtom "prelude__[]"] -> do
               eq <- equal x v
               pure (1 :: Int, eq)
             _ -> pure (0, False)
@@ -868,7 +868,7 @@ typePredicateTests =
           y <- newVar
           result <- callTermVarsChr (VTerm "f" [x, y])
           case result of
-            VTerm "prelude__." [a, VTerm "prelude__." [b, VTerm "prelude__[]" []]] -> do
+            VTerm "prelude__." [a, VTerm "prelude__." [b, VAtom "prelude__[]"]] -> do
               e1 <- equal a x
               e2 <- equal b y
               pure (2 :: Int, e1, e2)
@@ -879,7 +879,7 @@ typePredicateTests =
       testCase "term_variables: wildcard produces fresh var" $ do
         result <- runChrBase $ callTermVarsChr VWildcard
         case result of
-          VTerm "prelude__." [_, VTerm "prelude__[]" []] -> pure ()
+          VTerm "prelude__." [_, VAtom "prelude__[]"] -> pure ()
           _ -> assertFailure "expected singleton list",
       testCase "term_variables: nested compound" $ do
         (len, eq1, eq2) <- runChrBase $ do
@@ -887,7 +887,7 @@ typePredicateTests =
           y <- newVar
           result <- callTermVarsChr (VTerm "f" [VTerm "g" [x, VInt 1], y])
           case result of
-            VTerm "prelude__." [a, VTerm "prelude__." [b, VTerm "prelude__[]" []]] -> do
+            VTerm "prelude__." [a, VTerm "prelude__." [b, VAtom "prelude__[]"]] -> do
               e1 <- equal a x
               e2 <- equal b y
               pure (2 :: Int, e1, e2)
@@ -933,7 +933,7 @@ univTests =
               VTerm
                 "prelude__."
                 [ VInt 1,
-                  VTerm "prelude__." [VInt 2, VTerm "prelude__[]" []]
+                  VTerm "prelude__." [VInt 2, VAtom "prelude__[]"]
                   ]
               ] -> pure ()
           _ -> assertFailure "unexpected result",
@@ -946,14 +946,14 @@ univTests =
               VTerm
                 "prelude__."
                 [ VAtom "hello",
-                  VTerm "prelude__[]" []
+                  VAtom "prelude__[]"
                   ]
               ] -> pure ()
           _ -> assertFailure "unexpected result",
       testCase "compound_to_list: foo() -> [foo]" $ do
         result <- callHostCall1 "compound_to_list" (VTerm "foo" [])
         case result of
-          VTerm "prelude__." [VAtom "foo", VTerm "prelude__[]" []] -> pure ()
+          VTerm "prelude__." [VAtom "foo", VAtom "prelude__[]"] -> pure ()
           _ -> assertFailure "unexpected result",
       testCase "compound_to_list: f(g(1), 2) -> [f, g(1), 2]" $ do
         result <- callHostCall1 "compound_to_list" (VTerm "f" [VTerm "g" [VInt 1], VInt 2])
@@ -964,7 +964,7 @@ univTests =
               VTerm
                 "prelude__."
                 [ VTerm "g" [VInt 1],
-                  VTerm "prelude__." [VInt 2, VTerm "prelude__[]" []]
+                  VTerm "prelude__." [VInt 2, VAtom "prelude__[]"]
                   ]
               ] -> pure ()
           _ -> assertFailure "unexpected result",
@@ -976,18 +976,18 @@ univTests =
                   VTerm
                     "prelude__."
                     [ VInt 1,
-                      VTerm "prelude__." [VInt 2, VTerm "prelude__[]" []]
+                      VTerm "prelude__." [VInt 2, VAtom "prelude__[]"]
                     ]
                 ]
         result <- callHostCall1 "list_to_compound" list
         case result of
           VTerm "f" [VInt 1, VInt 2] -> pure ()
           _ -> assertFailure "unexpected result",
-      testCase "list_to_compound: [foo] -> foo()" $ do
-        let list = VTerm "prelude__." [VAtom "foo", VTerm "prelude__[]" []]
+      testCase "list_to_compound: [foo] -> foo (atom)" $ do
+        let list = VTerm "prelude__." [VAtom "foo", VAtom "prelude__[]"]
         result <- callHostCall1 "list_to_compound" list
         case result of
-          VTerm "foo" [] -> pure ()
+          VAtom "foo" -> pure ()
           _ -> assertFailure "unexpected result",
       testCase "list_to_compound: [g, hello] -> g(hello)" $ do
         let list =
@@ -997,7 +997,7 @@ univTests =
                   VTerm
                     "prelude__."
                     [ VAtom "hello",
-                      VTerm "prelude__[]" []
+                      VAtom "prelude__[]"
                     ]
                 ]
         result <- callHostCall1 "list_to_compound" list

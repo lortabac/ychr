@@ -112,7 +112,7 @@ All type predicates take a value of type `any` and return `bool`.
 | `nonvar/1` | The argument is not an unbound variable. |
 | `integer/1` | The argument is an `int` literal. |
 | `float/1` | The argument is a `float` literal. |
-| `atom/1` | The argument is an atom (symbolic constant). |
+| `atom/1` | The argument is an atom or 0-arity data constructor (e.g. `red`, `prelude:[]`, declared `mlt`). The two are interchangeable at the value level. |
 | `boolean/1` | The argument is `true` or `false`. |
 | `string/1` | The argument is a string literal. |
 | `ground/1` | The argument contains no unbound variables anywhere. |

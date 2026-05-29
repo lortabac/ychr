@@ -6,31 +6,60 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## Zero-arity constructors print as `name()` with empty parens
+## Qualified data constructors with non-ASCII names display in an unparseable form
 
-**Documented claim.** `docs/reference/syntax.md` lists `foo`, `'a-b'`
-as atom literal forms. Existing golden tests use `red` / `green` /
-etc. as bare atoms in expected output. Pretty-printing of 0-arity user
-constructors is not explicitly specified.
+**Documented claim.** `docs/reference/syntax.md` §Identifiers and atoms
+describes quoted atoms (`'...'`) and notes that `__` is reserved as
+the qualified-name separator. The REPL doc and `docs/reference/prelude.md`
+imply that displayed values can be fed back through
+`read_term_from_string` and that pretty-printing is the inverse of
+parsing.
 
-**Test.**
+**Test.** Save to `/tmp/m.chr`:
 
-    :- module(mod_a).
-    :- chr_type myord ---> mlt ; meq ; mgt.
-    :- chr_constraint go/2.
-    go(N, R) <=> R is cmp(N, 5).   %% returns mlt | meq | mgt
+    :- module(m, [t/1]).
+    :- use_module(prelude).
+    :- chr_type colours ---> 'naïve' ; ordinary.
+    :- chr_constraint t/1.
+    t(R) <=> R = 'naïve'.
 
-**Expected.** `R = mod_a:mlt` (or `R = mlt` after disambiguation).
+Then in the REPL:
 
-**Actual.** `R = mod_a:mlt()` — with empty parens. Same for
-`leaf` from a recursive type: `nt:node(1, nt:leaf(), nt:leaf())`. Same
-for `prelude:true()` / `prelude:false()` from a literal `true` (see
-the boolean-printing bug above).
+    ychr --quiet /tmp/m.chr
+    ychr> m:t(R).
 
-**Notes.** Ambiguous — could be defensible (disambiguates atom from
-0-arity ctor visually), but it diverges from the convention used in
-doc snippets that show bare names like `B = true.` and `mod_a:meq`.
-Worth a spec line either way.
+**Expected.** `R = m:'naïve'.` — qualifier preserved, just like for
+the ASCII sibling `ordinary` (which prints as `R = m:ordinary.`).
+
+**Actual.** `R = 'm__na__uef__ve'.` — qualifier lost, mangled
+`__uXXXX__` unicode escapes leak into the displayed atom.
+
+**Cause.** `Compile.Names.vmName` encodes non-ASCII chars as
+`__uHEX__` and joins module/base with `__`, producing
+`m__na__uef__ve` at the VM level. `Meta.valueToTerm` recovers the
+qualifier by splitting on the first `__`, but its suffix guard
+(introduced to keep user-quoted unicode atoms like `'café'` from being
+mis-split) refuses the split when the suffix itself contains `__` —
+which it does, because of the unicode escapes. See the comment block
+at `src/YCHR/Meta.hs` on the `VAtom` arm.
+
+**Impact.** Worse than cosmetic:
+- The displayed form `'m__na__uef__ve'` is rejected by the lexer
+  (YCHR-50001 — `__` not allowed in atoms), so
+  `read_term_from_string(write_term_to_string(R))` errors instead of
+  round-tripping.
+- The display gives users no path back to the source spelling
+  (`m:'naïve'`); they'd have to recognise the encoding by hand.
+- Runtime semantics are unaffected — the mangled form is the canonical
+  runtime identity, so `==`, unification, pattern matching, and
+  storage all behave correctly. The bug surfaces only at the
+  value↔string boundary.
+
+**Notes.** Proper fix needs `vmName` to use a separator the lexer
+reserves *and* that cannot appear inside an atom's encoded form
+(unlike `__`, which collides with `__uXXXX__` unicode escapes). The
+ASCII-only case introduced this asymmetric runtime collapse cleanly;
+non-ASCII names need a richer encoding scheme.
 
 ## `:- list_operators` reports `op(400, yfx, '/')` twice
 

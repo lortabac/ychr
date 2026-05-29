@@ -113,9 +113,13 @@
                s)))
         ;; String
         ((string? d) (string-append "\"" (escape-string d) "\""))
+        ;; Empty list (atom form — the runtime collapse of 0-arity
+        ;; @prelude:[]@). Checked before the general symbol case so the
+        ;; nil functor isn't unmangled to "prelude:[]".
+        ((and (symbol? d) (nil-functor? d)) "[]")
         ;; Symbol (atom)
         ((symbol? d) (pretty-symbol d))
-        ;; Empty list (canonicalized 0-arity term form)
+        ;; Empty list (legacy 0-arity term form)
         ((and (term? d)
               (nil-functor? (term-functor d))
               (= (vector-length (term-args d)) 0))

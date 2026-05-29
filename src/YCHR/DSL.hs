@@ -379,7 +379,6 @@ instance IsRuleHead Simpa where
 -- same shape of error the parser raises for a 'MalformedConstraint'.
 termToConstraint :: Term -> Constraint
 termToConstraint (CompoundTerm n args) = Constraint n args
-termToConstraint (AtomTerm n) = Constraint (Unqualified n) []
 termToConstraint t =
   errorWithoutStackTrace $
     "YCHR.DSL: term is not a valid constraint occurrence: " <> show t
@@ -464,9 +463,10 @@ qterm m n args = CompoundTerm (Qualified m n) args
 var :: Text -> Term
 var = VarTerm
 
--- | Atom term.
+-- | Atom term. Surface atoms are represented as 0-arity unqualified
+-- compounds in the AST; the runtime collapses them to 'VAtom'.
 atom :: Text -> Term
-atom = AtomTerm
+atom s = CompoundTerm (Unqualified s) []
 
 -- | Integer literal term (arbitrary precision).
 int :: Integer -> Term
@@ -479,8 +479,8 @@ float = FloatTerm
 -- | Boolean literal — produces the canonical @true@ / @false@ atom term
 -- the renamer expects. Equivalent to @atom \"true\"@ / @atom \"false\"@.
 bool :: Bool -> Term
-bool True = AtomTerm "true"
-bool False = AtomTerm "false"
+bool True = CompoundTerm (Unqualified "true") []
+bool False = CompoundTerm (Unqualified "false") []
 
 -- | Text/string literal term.
 text :: Text -> Term
@@ -555,7 +555,10 @@ funRef :: Text -> Int -> Term
 funRef n arity =
   CompoundTerm
     (Unqualified "fun")
-    [CompoundTerm (Unqualified "/") [AtomTerm n, IntTerm (fromIntegral arity)]]
+    [ CompoundTerm
+        (Unqualified "/")
+        [CompoundTerm (Unqualified n) [], IntTerm (fromIntegral arity)]
+    ]
 
 -- | Call a first-class function value (a 'lambda' or 'funRef') with the
 -- given arguments. Mirrors the surface @'$call'(F, A1, A2, ...)@.

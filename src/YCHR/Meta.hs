@@ -39,27 +39,48 @@ valueToTerm aliases v = do
   case v' of
     VInt n -> pure (IntTerm n)
     VFloat n -> pure (FloatTerm n)
-    VAtom s -> pure (AtomTerm s)
     VText s -> pure (TextTerm s)
-    VBool True -> pure (AtomTerm "true")
-    VBool False -> pure (AtomTerm "false")
+    VBool True -> pure (CompoundTerm (Types.Unqualified "true") [])
+    VBool False -> pure (CompoundTerm (Types.Unqualified "false") [])
     VWildcard -> pure Wildcard
-    VTerm "prelude__[]" [] -> pure (AtomTerm "[]")
+    -- 'VAtom' is the runtime form of every 0-arity value (atoms and
+    -- declared 0-arity ctors collapse to it; see 'Compile.compileTerm').
+    -- Recover the surface qualification from the @m__n@ mangled functor
+    -- so the pretty-printer renders qualified atoms as @m:n@. Two
+    -- guards: (a) the prefix must be non-empty (rejects symbols that
+    -- begin with @__@), (b) the suffix must not contain @__@ itself
+    -- (rejects user-quoted atoms with unicode escapes @__uXXXX__@,
+    -- whose internal @__@ would otherwise be mistaken for a module
+    -- separator — the renamer guarantees both module and base names
+    -- are @__@-free /for ASCII identifiers/).
+    --
+    -- Known limitation: a qualified ctor whose base name contains
+    -- non-ASCII (e.g. @:- chr_type t ---> 'naïve'@ in module @m@) is
+    -- mangled to @"m__na__uef__ve"@ and the suffix-@__@-check refuses
+    -- the split, so the qualifier is lost in display. This case has no
+    -- test coverage and was bug-for-bug broken pre-refactor (the
+    -- qualified form was preserved but the unicode escape was never
+    -- decoded). A proper fix needs a richer separator in 'vmName'.
+    VAtom s
+      | (m, rest) <- T.breakOn "__" s,
+        not (T.null m),
+        not (T.null rest),
+        let n = T.drop 2 rest,
+        not (T.isInfixOf "__" n) ->
+          pure (CompoundTerm (Types.Qualified m n) [])
+      | otherwise -> pure (CompoundTerm (Types.Unqualified s) [])
     VTerm "prelude__." ts ->
       CompoundTerm (Types.Unqualified ".") <$> traverse (valueToTerm aliases) ts
     -- A term whose functor contains @__@ is the runtime form of a
-    -- qualified atom or constructor (see 'YCHR.Compile.compileTerm',
-    -- which emits the mangled form @m__n@ as a single VM-level functor
-    -- regardless of arity). Split on the first @__@ at position ≥ 1 so
-    -- the pretty-printer renders it as @m:n@. The non-empty-prefix
-    -- check rejects symbols that begin with @__@ (e.g. unicode escapes
-    -- @__uXXXX__@ or bare internal names) — those keep flowing through
-    -- as @Unqualified@.
+    -- qualified compound (the mangled form @m__n@). See the matching
+    -- guard on 'VAtom' above for why the suffix must be @__@-free.
     VTerm f ts
       | (m, rest) <- T.breakOn "__" f,
         not (T.null m),
-        not (T.null rest) ->
-          CompoundTerm (Types.Qualified m (T.drop 2 rest))
+        not (T.null rest),
+        let n = T.drop 2 rest,
+        not (T.isInfixOf "__" n) ->
+          CompoundTerm (Types.Qualified m n)
             <$> traverse (valueToTerm aliases) ts
     VTerm f ts -> CompoundTerm (Types.Unqualified f) <$> traverse (valueToTerm aliases) ts
     VVar _ -> do
@@ -88,9 +109,9 @@ termToValue (VarTerm name) = do
       pure v
 termToValue (IntTerm n) = pure (VInt n)
 termToValue (FloatTerm n) = pure (VFloat n)
-termToValue (AtomTerm s) = pure (VAtom s)
 termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard
+termToValue (CompoundTerm name []) = pure (VAtom (flattenName name))
 termToValue (CompoundTerm name args) = do
   args' <- traverse termToValue args
   pure (VTerm (flattenName name) args')

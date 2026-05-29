@@ -238,13 +238,15 @@
 
   ;;; Prolog-style list helpers. After the renamer-driven flattening,
   ;;; @[]@ and @.@ are canonicalized to the @prelude__[]@ /
-  ;;; @prelude__.@ runtime functors. %nil/%cons construct the canonical
-  ;;; form; %nil?/%cons? recognise both the canonical form and the
-  ;;; legacy bare form (so values built before renaming still work).
-  (define (%nil) (make-term (string->symbol "prelude__[]") (vector)))
+  ;;; @prelude__.@ runtime functors. 0-arity compounds collapse to
+  ;;; symbols at the runtime layer (matching the Haskell-side @VAtom@
+  ;;; canonical form), so %nil is the bare symbol; %cons is a 2-ary
+  ;;; term. %nil?/%cons? also accept the legacy 0-ary term form.
+  (define (%nil) (string->symbol "prelude__[]"))
   (define (%cons h t) (make-term (string->symbol "prelude__.") (vector h t)))
   (define (%nil? v)
     (or (and (symbol? v) (eq? v (string->symbol "[]")))
+        (and (symbol? v) (eq? v (string->symbol "prelude__[]")))
         (and (term? v)
              (eq? (term-functor v) (string->symbol "prelude__[]"))
              (= (vector-length (term-args v)) 0))))
@@ -271,20 +273,27 @@
       (walk t)
       (fold-right %cons (%nil) (reverse result))))
 
-  ;;; compound_to_list
+  ;;; compound_to_list — also accepts a symbol (the runtime form of a
+  ;;; 0-arity compound), returning a singleton list.
   (define (%compound-to-list c)
-    (let ((f (term-functor c)) (a (term-args c)))
-      (let loop ((i (- (vector-length a) 1)) (acc (%nil)))
-        (if (< i 0) (%cons f acc)
-            (loop (- i 1) (%cons (vector-ref a i) acc))))))
+    (cond
+      ((symbol? c) (%cons c (%nil)))
+      (else
+       (let ((f (term-functor c)) (a (term-args c)))
+         (let loop ((i (- (vector-length a) 1)) (acc (%nil)))
+           (if (< i 0) (%cons f acc)
+               (loop (- i 1) (%cons (vector-ref a i) acc))))))))
 
-  ;;; list_to_compound
+  ;;; list_to_compound — a singleton list returns the head symbol
+  ;;; directly (matches the 0-arity collapse to 'VAtom).
   (define (%list-to-compound lst)
     (let loop ((l lst) (acc '()))
       (if (%cons? l)
           (loop (get-arg l 1) (cons (get-arg l 0) acc))
           (let ((parts (reverse acc)))
-            (make-term (car parts) (list->vector (cdr parts)))))))
+            (if (null? (cdr parts))
+                (car parts)
+                (make-term (car parts) (list->vector (cdr parts))))))))
 
   ;;; read_term_from_string: stub
   (define (%read-term-from-string s)

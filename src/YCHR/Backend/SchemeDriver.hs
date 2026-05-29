@@ -95,13 +95,21 @@ exprToScheme :: R.Expr -> Text
 exprToScheme (R.VarExpr v) = v
 exprToScheme (R.IntExpr n) = T.pack (show n)
 exprToScheme (R.FloatExpr n) = printSExpr (SFloat n)
-exprToScheme (R.AtomExpr s) = printSExpr (compileSymbol s)
 exprToScheme (R.TextExpr s) = printSExpr (SString s)
 exprToScheme R.WildcardExpr = "*wildcard*"
 -- @term(arg)@: the surface quoting form opts out of evaluation. The
 -- inner term stays as a data tree; mirror 'compileTerm' here.
 exprToScheme (R.CtorExpr (Types.Unqualified "term") [arg]) =
   termToScheme (R.exprToTerm arg)
+-- 0-arity ctors collapse to bare symbols at the runtime layer.
+-- Qualified uses the @vmName@-mangled @m__n@ form; unqualified keeps
+-- the raw name so unicode is preserved as data — mirrors the split in
+-- 'YCHR.Compile.compileExpr' so a goal-side unqualified atom matches
+-- the head-side symbol byte-for-byte.
+exprToScheme (R.CtorExpr (Types.Unqualified n) []) =
+  printSExpr (compileSymbol n)
+exprToScheme (R.CtorExpr name@(Types.Qualified _ _) []) =
+  printSExpr (compileSymbol (vmName name).unName)
 exprToScheme (R.CtorExpr name args) =
   let flat = (vmName name).unName
       argExprs = map exprToScheme args
@@ -147,7 +155,9 @@ hostBridgeName f = "host__" <> f
 termToScheme :: Term -> Text
 termToScheme (IntTerm n) = T.pack (show n)
 termToScheme (FloatTerm n) = printSExpr (SFloat n)
-termToScheme (AtomTerm s) = printSExpr (compileSymbol s)
+termToScheme (CompoundTerm (Types.Unqualified s) []) = printSExpr (compileSymbol s)
+termToScheme (CompoundTerm name@(Types.Qualified _ _) []) =
+  printSExpr (compileSymbol (vmName name).unName)
 termToScheme (TextTerm s) = printSExpr (SString s)
 termToScheme (VarTerm n) = n
 termToScheme Wildcard = "*wildcard*"

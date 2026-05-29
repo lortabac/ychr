@@ -19,7 +19,8 @@
 --   * Goals are just terms. For example, @X = Y@ is represented as
 --     @CompoundTerm "=" [VarTerm "X", VarTerm "Y"]@, and @leq(X, Z)@
 --     as @CompoundTerm "leq" [VarTerm "X", VarTerm "Z"]@.
---     The atom @true@ is represented as @AtomTerm "true"@.
+--     The atom @true@ is represented as
+--     @CompoundTerm (Unqualified "true") []@.
 module YCHR.Parsed
   ( -- * Source locations
     SourceLoc (..),

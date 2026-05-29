@@ -396,7 +396,7 @@ termTests =
     [ testCase "var produces VarTerm" $
         var "X" @?= VarTerm "X",
       testCase "atom produces AtomTerm" $
-        atom "true" @?= AtomTerm "true",
+        atom "true" @?= CompoundTerm (Unqualified "true") [],
       testCase "term produces unqualified CompoundTerm" $
         term "f" [var "X"] @?= CompoundTerm (Unqualified "f") [var "X"],
       testCase "qterm produces qualified CompoundTerm" $
@@ -426,9 +426,9 @@ termTests =
       testCase "text produces TextTerm" $
         text "hello" @?= TextTerm "hello",
       testCase "bool True maps to AtomTerm \"true\"" $
-        bool True @?= AtomTerm "true",
+        bool True @?= CompoundTerm (Unqualified "true") [],
       testCase "bool False maps to AtomTerm \"false\"" $
-        bool False @?= AtomTerm "false"
+        bool False @?= CompoundTerm (Unqualified "false") []
     ]
 
 lambdaTests :: TestTree
@@ -479,7 +479,7 @@ lambdaTests =
             (Unqualified "fun")
             [ CompoundTerm
                 (Unqualified "/")
-                [AtomTerm "factorial", IntTerm 1]
+                [CompoundTerm (Unqualified "factorial") [], IntTerm 1]
             ],
       testCase "call_ wraps args after the callable" $
         call_ (funRef "f" 2) [int 1, int 2]
@@ -572,7 +572,7 @@ integrationTests =
                         )
                     )
                     (noAnnP [])
-                    (noAnnP [AtomTerm "true"])
+                    (noAnnP [CompoundTerm (Unqualified "true") []])
                 ],
               equations = [],
               extensions = [],

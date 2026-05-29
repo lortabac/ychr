@@ -88,12 +88,12 @@ tcAtom :: Text -> Text
 tcAtom n = "typechecker__" <> n
 
 -- | A 0-arity declared constructor of the @typechecker@ module
--- (@int@, @float@, @string@, @any@) as a runtime 'Value'. Built as
--- @VTerm name []@ rather than @VAtom name@ so 'matchTerm' (which
--- only recognises 'VTerm') can dispatch on the same shape that
+-- (@int@, @float@, @string@, @any@) as a runtime 'Value'. 0-arity
+-- compounds collapse to 'VAtom' at the runtime layer; 'BMatchTerm'
+-- accepts 'VAtom' for arity-0 dispatch, so this matches the shape
 -- compiled head patterns produce.
 tcCon0 :: Text -> Value
-tcCon0 n = VTerm (tcAtom n) []
+tcCon0 n = VAtom (tcAtom n)
 
 -- ---------------------------------------------------------------------------
 -- Type-check environment and context
@@ -625,13 +625,13 @@ tellConSigs prog =
 
 -- | Encode a 'Name' as a runtime 'Value', matching the runtime
 -- representation produced by 'YCHR.Compile.compileTerm' for declared
--- constructors: every qualified name becomes a 0-arity 'VTerm' with
--- the @vmName@ encoding (@m__n@). Using 'VTerm' (rather than 'VAtom')
--- lets 'matchTerm' dispatch on the same shape that compiled head
--- patterns produce. Unqualified names stay bare 'VAtom's.
+-- constructors: every name becomes a 'VAtom' with the @vmName@
+-- encoding (@m__n@ for qualified, plain @n@ for unqualified).
+-- 'BMatchTerm' accepts 'VAtom' for arity-0 dispatch, matching the
+-- shape compiled head patterns produce.
 encodeName :: Name -> Value
 encodeName (Unqualified n) = VAtom n
-encodeName name@(Qualified _ _) = VTerm (runtimeName name) []
+encodeName name@(Qualified _ _) = VAtom (runtimeName name)
 
 -- | Encode a type constructor application: tcon(name, [arg1, arg2, ...])
 encodeTCon :: Map Text Value -> Name -> [Text] -> Value
@@ -1191,29 +1191,8 @@ typeOfTerm _ (IntTerm _) = pure (tcCon0 "int")
 typeOfTerm _ (FloatTerm _) = pure (tcCon0 "float")
 typeOfTerm _ (TextTerm _) = pure (tcCon0 "string")
 typeOfTerm _ Wildcard = chrOp newVar
-typeOfTerm cctx (AtomTerm s) =
-  typeOfAtom cctx (Unqualified s)
 typeOfTerm cctx (CompoundTerm name args) =
   typeOfTermCtor cctx name args
-
-typeOfAtom :: CheckCtx -> Name -> TC Value
-typeOfAtom cctx name = do
-  env <- ask
-  let canonical = canonicalizeConName env name
-  if knownConstructorWithArity env canonical 0
-    then do
-      resultType <- chrOp newVar
-      ctx <- freshCtxHandle cctx
-      chrOp $
-        tellConstraint
-          (Qualified "typechecker" "check_constructor_use")
-          [ VAtom (runtimeName canonical),
-            valueList [],
-            resultType,
-            ctxHandleValue ctx
-          ]
-      pure resultType
-    else pure (tcCon0 "any")
 
 -- | Type a 'Term'-shaped constructor application. Used for the
 -- 'Term'-typed positions that the desugared AST still carries: head
@@ -1256,7 +1235,6 @@ typeOfExpr cctx e = case e of
   R.IntExpr _ -> pure (tcCon0 "int")
   R.FloatExpr _ -> pure (tcCon0 "float")
   R.TextExpr _ -> pure (tcCon0 "string")
-  R.AtomExpr s -> typeOfAtom cctx (Unqualified s)
   R.WildcardExpr -> chrOp newVar
   R.CtorExpr name args -> typeOfExprCtor cctx name args
   R.CallExpr qn args -> do
@@ -1435,7 +1413,7 @@ decodeError ctxMap val = do
       code <- deref codeVal
       detail <- deref detailVal
       case code of
-        VTerm c [] | c == tcAtom "inconsistent" -> do
+        VAtom c | c == tcAtom "inconsistent" -> do
           (t1text, t2text) <- case detail of
             VTerm pf [t1, t2] | pf == tcAtom "pair" -> do
               t1' <- deref t1
@@ -1451,7 +1429,7 @@ decodeError ctxMap val = do
                     info.origin
                 )
             ]
-        VTerm c [] | c == tcAtom "no_matching_overload" -> do
+        VAtom c | c == tcAtom "no_matching_overload" -> do
           nameText <- showValue detail
           pure
             [ Diagnostic
@@ -1462,7 +1440,7 @@ decodeError ctxMap val = do
                     info.origin
                 )
             ]
-        VTerm c [] | c == tcAtom "bound_unsatisfied" -> do
+        VAtom c | c == tcAtom "bound_unsatisfied" -> do
           nameText <- showValue detail
           pure
             [ Diagnostic
@@ -1473,7 +1451,7 @@ decodeError ctxMap val = do
                     info.origin
                 )
             ]
-        VTerm c [] ->
+        VAtom c ->
           error
             ( "TypeCheck.decodeError: unknown error code "
                 <> T.unpack (displayQualifiedAtom c)
@@ -1495,11 +1473,6 @@ showValueShape VWildcard = "VWildcard"
 
 showType :: Value -> Text
 showType (VAtom a) = displayQualifiedAtom a
--- 0-arity declared constructor (e.g. @VTerm "typechecker__int" []@):
--- the runtime form 'compileTerm' produces for any qualified data
--- constructor with no fields, including the four base types
--- @int@/@float@/@string@/@any@.
-showType (VTerm functor []) = displayQualifiedAtom functor
 showType (VTerm functor [a, b])
   | functor == tcAtom "tcon" =
       let name = showTypeName a
@@ -1525,7 +1498,6 @@ showType _ = "?"
 
 showTypeName :: Value -> Text
 showTypeName (VAtom a) = displayQualifiedAtom a
-showTypeName (VTerm functor []) = displayQualifiedAtom functor
 showTypeName _ = "?"
 
 showValue :: Value -> Chr Text
@@ -1533,7 +1505,6 @@ showValue v = do
   v' <- deref v
   case v' of
     VAtom a -> pure (displayQualifiedAtom a)
-    VTerm functor [] -> pure (displayQualifiedAtom functor)
     _ -> pure "?"
 
 -- | Convert a runtime-flattened qualified atom (@m__n@) back to the
@@ -1660,7 +1631,6 @@ validateConstructorArities env prog =
     -- 'LambdaExpr' are not constructor applications: their children
     -- are walked, but the heads themselves are not subjected to the
     -- arity check.
-    exprArity (R.AtomExpr s) = checkArity (Unqualified s) 0
     exprArity (R.CtorExpr name args) =
       checkArity name (length args) <> foldMap exprArity args
     exprArity (R.CallExpr _ args) = foldMap exprArity args
@@ -1672,8 +1642,11 @@ validateConstructorArities env prog =
     -- (equation parameters). Pattern shapes that 'headTermToExpr'
     -- would otherwise round-trip through @fun(...) -> body@ /
     -- @name/arity@ are short-circuited here.
-    termArity (AtomTerm s) = checkArity (Unqualified s) 0
-    termArity (CompoundTerm (Unqualified "/") [AtomTerm _, IntTerm _]) = mempty
+    termArity
+      ( CompoundTerm
+          (Unqualified "/")
+          [CompoundTerm (Unqualified _) [], IntTerm _]
+        ) = mempty
     termArity (CompoundTerm (Unqualified "->") [CompoundTerm (Unqualified "fun") _, body]) =
       termArity body
     termArity (CompoundTerm name args) =

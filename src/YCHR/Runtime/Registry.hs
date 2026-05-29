@@ -177,9 +177,11 @@ baseHostCallRegistry =
       _ -> runtimeErrorS "term_variables: expected 1 argument"
     compoundToList = HostCallFn $ \case
       [VTerm f args] -> pure (valueList (VAtom f : args))
-      _ -> runtimeErrorS "compound_to_list: expected 1 compound term argument"
+      [v@(VAtom _)] -> pure (valueList [v])
+      _ -> runtimeErrorS "compound_to_list: expected 1 compound or atom argument"
     listToCompound = HostCallFn $ \case
       [list] -> case fromValueList list of
+        Just [VAtom f] -> pure (VAtom f)
         Just (VAtom f : args) -> pure (VTerm f args)
         _ -> runtimeErrorS "list_to_compound: expected a non-empty list with an atom head"
       _ -> runtimeErrorS "list_to_compound: expected 1 list argument"
@@ -304,7 +306,7 @@ allM p (x : xs) = do
 -- The empty list is represented as the atom @[]@, and cons cells as
 -- @.(H, T)@ compound terms.
 valueList :: [Value] -> Value
-valueList [] = VTerm "prelude__[]" []
+valueList [] = VAtom "prelude__[]"
 valueList (x : xs) = VTerm "prelude__." [x, valueList xs]
 
 -- | Decompose a Prolog-style list back into a Haskell list. Recognizes
@@ -314,7 +316,6 @@ valueList (x : xs) = VTerm "prelude__." [x, valueList xs]
 -- going through the renamer — e.g. test fixtures, the DSL).
 -- Returns 'Nothing' if the value is not a well-formed list.
 fromValueList :: Value -> Maybe [Value]
-fromValueList (VTerm "prelude__[]" []) = Just []
 fromValueList (VAtom "prelude__[]") = Just []
 fromValueList (VAtom "[]") = Just []
 fromValueList (VTerm "prelude__." [x, rest]) = (x :) <$> fromValueList rest

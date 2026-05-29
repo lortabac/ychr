@@ -253,28 +253,33 @@ termTests =
         bodyOf "c <=> f(1)."
           >>= (@?= [CompoundTerm (Unqualified "f") [IntTerm 1]]),
       testCase "bare atom in body" $
-        bodyOf "c <=> true." >>= (@?= [AtomTerm "true"]),
+        bodyOf "c <=> true." >>= (@?= [CompoundTerm (Unqualified "true") []]),
       testCase "compound term in body" $
         bodyOf "c(X) <=> f(X, a)."
-          >>= (@?= [CompoundTerm (Unqualified "f") [VarTerm "X", AtomTerm "a"]]),
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "f")
+                      [VarTerm "X", CompoundTerm (Unqualified "a") []]
+                  ]
+              ),
       testCase "quoted atom as functor" $
         bodyOf "c <=> 'hello'."
-          >>= (@?= [AtomTerm "hello"]),
+          >>= (@?= [CompoundTerm (Unqualified "hello") []]),
       testCase "quoted atom with space" $
         bodyOf "c <=> 'hello world'."
-          >>= (@?= [AtomTerm "hello world"]),
+          >>= (@?= [CompoundTerm (Unqualified "hello world") []]),
       testCase "empty quoted atom" $
         bodyOf "c <=> ''."
-          >>= (@?= [AtomTerm ""]),
+          >>= (@?= [CompoundTerm (Unqualified "") []]),
       testCase "quoted atom with '' escape (ISO Prolog)" $
         bodyOf "c <=> 'it''s'."
-          >>= (@?= [AtomTerm "it's"]),
+          >>= (@?= [CompoundTerm (Unqualified "it's") []]),
       testCase "quoted atom with \\' escape (SWI-Prolog)" $
         bodyOf "c <=> 'a\\'b'."
-          >>= (@?= [AtomTerm "a'b"]),
+          >>= (@?= [CompoundTerm (Unqualified "a'b") []]),
       testCase "quoted atom with \\\\ escape" $
         bodyOf "c <=> 'back\\\\slash'."
-          >>= (@?= [AtomTerm "back\\slash"]),
+          >>= (@?= [CompoundTerm (Unqualified "back\\slash") []]),
       testCase "zero-arity compound via quoted atom" $
         bodyOf "c <=> 'foo'(X, 1)."
           >>= (@?= [CompoundTerm (Unqualified "foo") [VarTerm "X", IntTerm 1]]),
@@ -427,7 +432,7 @@ ruleTests =
                     )
                 )
                 (noAnnP [])
-                (noAnnP [AtomTerm "true"])
+                (noAnnP [CompoundTerm (Unqualified "true") []])
             ],
       testCase "unnamed simplification" $
         (map stripRuleLoc . (.rules)) <$> p "leq(X, X) <=> true."
@@ -445,7 +450,7 @@ ruleTests =
                     )
                 )
                 (noAnnP [])
-                (noAnnP [AtomTerm "true"])
+                (noAnnP [CompoundTerm (Unqualified "true") []])
             ],
       testCase "propagation" $
         (map stripRuleLoc . (.rules)) <$> p "trans @ leq(X, Y), leq(Y, Z) ==> leq(X, Z)."
@@ -474,7 +479,7 @@ ruleTests =
                     )
                 )
                 (noAnnP [])
-                (noAnnP [AtomTerm "body"])
+                (noAnnP [CompoundTerm (Unqualified "body") []])
             ],
       testCase "rule with guard" $
         (map stripRuleLoc . (.rules)) <$> p "r @ c(X, Y) <=> g(X) | b(Y)."
@@ -496,7 +501,12 @@ ruleTests =
             ],
       testCase "multiple body goals" $
         bodyOf "c <=> a, b, c2."
-          >>= (@?= [AtomTerm "a", AtomTerm "b", AtomTerm "c2"]),
+          >>= ( @?=
+                  [ CompoundTerm (Unqualified "a") [],
+                    CompoundTerm (Unqualified "b") [],
+                    CompoundTerm (Unqualified "c2") []
+                  ]
+              ),
       testCase "zero-arity constraint in head" $
         headOf "fire <=> true."
           >>= (@?= Simplification [Constraint (Unqualified "fire") []])
@@ -644,7 +654,7 @@ moduleTests =
                             )
                         )
                         (noAnnP [])
-                        (noAnnP [AtomTerm "true"]),
+                        (noAnnP [CompoundTerm (Unqualified "true") []]),
                       Rule
                         (Just (noAnn "antisymmetry"))
                         ( noAnnP
@@ -736,7 +746,7 @@ commentTests =
                     )
                 )
                 (noAnnP [])
-                (noAnnP [AtomTerm "bar"])
+                (noAnnP [CompoundTerm (Unqualified "bar") []])
             ],
       testCase "inline comment after rule" $
         (map stripRuleLoc . (.rules)) <$> p "foo <=> bar. % comment"
@@ -752,7 +762,7 @@ commentTests =
                     )
                 )
                 (noAnnP [])
-                (noAnnP [AtomTerm "bar"])
+                (noAnnP [CompoundTerm (Unqualified "bar") []])
             ],
       testCase "only comments parses to empty module" $
         (.rules) <$> p "% just a comment\n% another"

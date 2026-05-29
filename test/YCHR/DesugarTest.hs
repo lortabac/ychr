@@ -172,7 +172,7 @@ hnfTests =
                   D.HeadVar "_hnf_0"
                 ]
             ]
-        getNode rule.guard @?= [D.GuardEqual (R.VarExpr "_hnf_0") (R.AtomExpr "foo")],
+        getNode rule.guard @?= [D.GuardMatch (R.VarExpr "_hnf_0") (Unqualified "foo") 0],
       testCase "cross-constraint duplicate variable" $ do
         let m =
               simpleModule
@@ -289,7 +289,7 @@ guardTests =
                                (noAnnP [atom "true"])
                            ]
         rule <- singleRule [m]
-        getNode rule.guard @?= [D.GuardExpr (R.AtomExpr "true")]
+        getNode rule.guard @?= [D.GuardExpr (R.CtorExpr (Unqualified "true") [])]
     ]
 
 --------------------------------------------------------------------------------
@@ -425,7 +425,7 @@ errorTests =
           Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyExpr badExpr) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "non-true atom in body produces UnexpectedBodyExpr" $ do
-        let badExpr = R.AtomExpr "foo"
+        let badExpr = R.CtorExpr (Unqualified "foo") []
             m =
               module' "M"
                 `defining` [ Rule
@@ -497,7 +497,7 @@ errorTests =
           Left errs -> errs @?= [noDiag (AnnP (NonBooleanGuard badExpr) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "non-true/false atom in guard produces NonBooleanGuard" $ do
-        let badExpr = R.AtomExpr "foo"
+        let badExpr = R.CtorExpr (Unqualified "foo") []
             m =
               module' "M"
                 `defining` [ Rule
@@ -520,7 +520,7 @@ errorTests =
                                (noAnnP [atom "true"])
                            ]
         rule <- singleRule [m]
-        getNode rule.guard @?= [D.GuardExpr (R.AtomExpr "false")]
+        getNode rule.guard @?= [D.GuardExpr (R.CtorExpr (Unqualified "false") [])]
     ]
 
 --------------------------------------------------------------------------------

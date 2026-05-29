@@ -186,11 +186,17 @@
             #f)))
 
   ;;; Term operations
+  ;; 0-arity compounds collapse to symbols at the runtime layer
+  ;; (matching the Haskell side's VAtom canonical form), so a symbol
+  ;; matches when arity is 0 and its name equals functor.
   (define (match-term v functor arity)
     (let ((d (deref v)))
-      (and (term? d)
-           (eq? (term-functor d) functor)
-           (= (vector-length (term-args d)) arity))))
+      (cond
+        ((symbol? d) (and (= arity 0) (eq? d functor)))
+        ((term? d)
+         (and (eq? (term-functor d) functor)
+              (= (vector-length (term-args d)) arity)))
+        (else #f))))
 
   (define (get-arg v idx)
     (vector-ref (term-args (deref v)) idx))
