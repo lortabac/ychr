@@ -36,6 +36,7 @@ internal error constructor to its code and human-readable message.
 | `YCHR-15012` | `MalformedBoundSig` | A bound signature is not `name(t1, ..., tn) -> tret` (or `name -> tret` for arity zero). |
 | `YCHR-15013` | `MalformedFunctionEquation` | A function equation is not `lhs [\| guard] -> rhs`. |
 | `YCHR-15014` | `MalformedTopLevel` | A top-level term is not a directive, rule (`<=>` or `==>`), or function equation (`->`). |
+| `YCHR-15015` | `DuplicateModuleHeader` | A source file contains more than one `:- module(...)` directive. A file may declare at most one module header; remove the redundant directives. |
 
 ### Resolve phase (`16xxx`)
 

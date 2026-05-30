@@ -6,35 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## Multiple `:- module(...)` directives in the same file are silently accepted; only the first takes effect
-
-**Documented claim.** `docs/reference/language.md` and
-`docs/reference/syntax.md` describe `:- module(...)` as optional and
-as "the module header". The implicit assumption is that there is at
-most one per file. No spec section addresses what happens with
-multiple.
-
-**Test.**
-
-    :- module(mm1).
-    :- module(mm2).
-    :- chr_constraint c/0.
-    c <=> true.
-
-**Expected.** Either a clear diagnostic (e.g. `MalformedTopLevel`,
-YCHR-15014, or a dedicated "duplicate module header" code), or a
-specified behavior.
-
-**Actual.** `ychr check` exits 0 silently. Probing further:
-- `ychr run -g 'mm1:c'` succeeds (first module wins).
-- `ychr run -g 'mm2:c'` fails with `YCHR-20013 Goal 'mm2:c/0' is not
-  exported by its module`.
-
-The second `:- module(...)` is silently dropped without diagnosing it.
-
-**Notes.** Behavior is undocumented; the impl silently drops the
-second header. A user mid-refactor could be surprised.
-
 ## Bare expression goals: `42` and `"hello"` produce `YCHR-15003`, not the documented `YCHR-20013`
 
 **Documented claim.** `docs/reference/errors.md` §`YCHR-20013`:

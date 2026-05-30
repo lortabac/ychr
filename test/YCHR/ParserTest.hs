@@ -80,6 +80,16 @@ directiveTests =
         (.name) <$> p ":- module(order, [])." @?= Right "order",
       testCase "module name with export list" $
         (.name) <$> p ":- module(order, [leq/2, foo/1])." @?= Right "order",
+      testCase "duplicate module header is rejected" $ do
+        -- The first header wins; each subsequent ':- module(...)' yields
+        -- one DuplicateModuleHeader error carrying its own name.
+        (.name) <$> p ":- module(a).\n:- module(b).\n:- chr_constraint c/0."
+          @?= Right "a"
+        pErrs ":- module(a).\n:- module(b).\n:- chr_constraint c/0."
+          @?= Right [DuplicateModuleHeader "b"],
+      testCase "three module headers report two duplicates" $
+        pErrs ":- module(a).\n:- module(b).\n:- module(c)."
+          @?= Right [DuplicateModuleHeader "b", DuplicateModuleHeader "c"],
       testCase "empty export list" $
         fmap (.node) . (.exports) <$> p ":- module(order, [])." @?= Right (Just []),
       testCase "export list parsed correctly" $

@@ -198,6 +198,7 @@ parseValidationErrorCode MalformedTypeDefinition = ErrorCode 15011
 parseValidationErrorCode MalformedBoundSig = ErrorCode 15012
 parseValidationErrorCode MalformedFunctionEquation = ErrorCode 15013
 parseValidationErrorCode MalformedTopLevel = ErrorCode 15014
+parseValidationErrorCode (DuplicateModuleHeader _) = ErrorCode 15015
 
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
@@ -369,6 +370,10 @@ parseValidationErrorMsg MalformedTopLevel =
   withHint
     "Invalid top-level term"
     "expected a directive, rule (<=> or ==>), or function equation (->)"
+parseValidationErrorMsg (DuplicateModuleHeader name) =
+  withHint
+    ("Duplicate ':- module(...)' header for '" ++ T.unpack name ++ "'")
+    "a source file may declare at most one module header; remove the redundant directive"
 
 instance Display (Diagnostic ResolveError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =

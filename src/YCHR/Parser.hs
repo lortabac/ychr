@@ -609,6 +609,11 @@ data ParseValidationError
   | -- | A top-level term is neither a directive, a rule
     -- (@\<=\>@/@==\>@), nor a function equation. The item is dropped.
     MalformedTopLevel
+  | -- | More than one @:- module(...)@ directive in the same file.
+    -- Only one module header is allowed per source file. The first
+    -- header is treated as authoritative; one diagnostic is emitted
+    -- per redundant header, carrying its module name.
+    DuplicateModuleHeader Text
   | -- | A @requiring@ clause appears on a @:- class@ or
     -- @:- open_class@ declaration. @requiring@ is reserved for
     -- @:- function@ / @:- open_function@; the two forms are
@@ -656,6 +661,10 @@ convertModule defaultName terms =
           [d.name | DirOpenFunctionDecl ds <- dirs, Ann d _ <- ds]
             ++ [d.name | DirOpenClassDecl ds <- dirs, Ann d _ <- ds]
       contiguityErrors = checkContiguity openNames items
+      duplicateModuleHeaderErrors =
+        [ AnnP (DuplicateModuleHeader n) l p
+        | (n, l, p, _) <- drop 1 moduleDirs
+        ]
       mod_ =
         Module
           { name = modName_,
@@ -670,7 +679,7 @@ convertModule defaultName terms =
             classExtensions = modClassExtensions_,
             exports = modExports_
           }
-   in (mod_, itemErrors ++ contiguityErrors)
+   in (mod_, itemErrors ++ contiguityErrors ++ duplicateModuleHeaderErrors)
 
 -- | Check that equations for non-open functions are contiguous.
 -- Returns an error for each function whose equations are separated by

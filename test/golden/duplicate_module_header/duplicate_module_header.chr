@@ -1,0 +1,4 @@
+:- module(mm1).
+:- module(mm2).
+:- chr_constraint c/0.
+c <=> true.
