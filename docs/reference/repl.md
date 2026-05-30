@@ -60,7 +60,10 @@ and functions exported from the loaded modules.
 Outside a live session, anything typed at the prompt is parsed as a
 goal and executed against a **fresh** constraint store. The store is
 discarded when the query returns. Resulting bindings (if any) are
-printed.
+printed. Following Prolog convention, bindings for variables whose
+name begins with `_` (e.g. `_X`, `_Y`) are omitted from the printed
+result — the leading underscore marks them as intentionally
+uninteresting. They are still bound; only the output is filtered.
 
 Unlike `ychr run -g` (which accepts only a single declared constraint
 — see [`cli.md`](cli.md)), the REPL accepts any goal: bare expressions

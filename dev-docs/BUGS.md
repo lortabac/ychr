@@ -6,35 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## Variables starting with `_` are silently suppressed from REPL output
-
-**Documented claim.** `docs/reference/syntax.md` §Identifiers and
-atoms: "Variables start with an uppercase letter or underscore, then
-letters, digits, or underscores. The bare `_` is the wildcard:
-distinct occurrences are independent." This identifies `_X` as a
-named variable, not a wildcard. The REPL doc says "Resulting bindings
-(if any) are printed."
-
-**Test.**
-
-    ychr> X = 5.
-    X = 5.
-    ychr> _X = 5.
-    ychr>
-    ychr> X = 5, _Y = 10.
-    X = 5.
-
-**Expected.** Either `_X = 5.` is printed (consistent with the doc's
-"named variable" classification) or the doc explicitly notes the
-Prolog convention that `_`-prefixed variable names are suppressed.
-
-**Actual.** `_X` and `_Y` bindings are silently omitted from the REPL
-output even though they are bound. The doc neither describes nor
-justifies this suppression.
-
-**Notes.** Doc-shaped. Either the docs should mention the suppression
-or the suppression should be removed.
-
 ## Multiple `:- module(...)` directives in the same file are silently accepted; only the first takes effect
 
 **Documented claim.** `docs/reference/language.md` and
