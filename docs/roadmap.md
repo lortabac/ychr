@@ -32,7 +32,7 @@ what is planned.
 ## Type checker
 
 - [x] Gradual type system core (see [type-system.md](reference/type-system.md))
-- [ ] Bounded polymorphism
+- [x] Bounded polymorphism
 - [ ] Simple type refinements via type predicates
 - [ ] More advanced type refinements
 
