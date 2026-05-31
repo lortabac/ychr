@@ -12,10 +12,19 @@ module YCHR.Pretty
     prettyRuleSrc,
     prettyPExprSrc,
     renderAtom,
+
+    -- * Declaration pretty-printers
+    DeclKind (..),
+    prettyQualifiedName,
+    prettyConstraintDecl,
+    prettyFunctionDecl,
+    prettyTypeDecl,
+    prettyTypeExpr,
   )
 where
 
 import Data.Char (isUpper)
+import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -24,7 +33,16 @@ import YCHR.Loc (Ann (..), noAnn)
 import YCHR.PExpr qualified as PE
 import YCHR.Parsed qualified as P
 import YCHR.Parser (builtinOps)
-import YCHR.Types (Constraint (..), Name (..), Term (..))
+import YCHR.Types
+  ( BoundSig (..),
+    Constraint (..),
+    DataConstructor (..),
+    Name (..),
+    QualifiedName (..),
+    Term (..),
+    TypeDefinition (..),
+    TypeExpr (..),
+  )
 
 -- ---------------------------------------------------------------------------
 -- Operator table for source pretty-printing
@@ -240,3 +258,155 @@ prettyQueryResult m =
 -- | Render a 'PExpr' as valid surface-language source text.
 prettyPExprSrc :: PE.PExpr -> String
 prettyPExprSrc = PE.prettyPExpr prettyOps
+
+-- ---------------------------------------------------------------------------
+-- Declaration pretty-printers (used by the REPL @:info@ command)
+-- ---------------------------------------------------------------------------
+
+-- | The four flavors a 'FunctionDef' can have, recovered by the
+-- @:info@ command from the original 'P.Declaration' kept in
+-- 'CompiledProgram.allModules'.
+data DeclKind
+  = DKFunction
+  | DKOpenFunction
+  | DKClass
+  | DKOpenClass
+  deriving (Show, Eq)
+
+declKindKeyword :: DeclKind -> String
+declKindKeyword DKFunction = "function"
+declKindKeyword DKOpenFunction = "open_function"
+declKindKeyword DKClass = "class"
+declKindKeyword DKOpenClass = "open_class"
+
+-- | Convert a 'TypeExpr' to a 'PE.PExpr' for pretty-printing. The
+-- module qualifier on 'Qualified' constructors is intentionally
+-- dropped: declaration-body rendering follows the user-facing
+-- source form where types are usually written unqualified. The
+-- qualified name is still shown on the header line of @:info@
+-- output, so no information is lost. The special case for
+-- @TypeCon (Unqualified ".") args@ preserves the surface @[H|T]@
+-- list-cons syntax.
+typeExprToPExpr :: TypeExpr -> PE.PExpr
+typeExprToPExpr (TypeVar v) = PE.Var v
+typeExprToPExpr (TypeCon (Unqualified ".") args) =
+  PE.Compound "." (map (noAnn . typeExprToPExpr) args)
+typeExprToPExpr (TypeCon name []) = PE.Atom (typeConBaseName name)
+typeExprToPExpr (TypeCon name args) =
+  PE.Compound (typeConBaseName name) (map (noAnn . typeExprToPExpr) args)
+
+typeConBaseName :: Name -> Text
+typeConBaseName (Unqualified n) = n
+typeConBaseName (Qualified _ n) = n
+
+-- | Render a 'TypeExpr' as valid surface-language source text.
+prettyTypeExpr :: TypeExpr -> String
+prettyTypeExpr = PE.prettyPExpr prettyOps . typeExprToPExpr
+
+-- | Render a 'QualifiedName' as @mod:name@ with both halves atom-quoted
+-- where necessary (so @prelude:'+'@ comes out correctly).
+prettyQualifiedName :: QualifiedName -> String
+prettyQualifiedName (QualifiedName m n) = renderAtom m ++ ":" ++ renderAtom n
+
+-- | Render a function signature @name(T1, ..., Tn) -> Tret@. The name
+-- is rendered through 'renderAtom' so operator names like @'+'@ quote
+-- correctly. Used for both standalone declarations and elements of a
+-- multi-sig @:- class@ list.
+prettyFunSig :: Text -> [TypeExpr] -> TypeExpr -> String
+prettyFunSig name argTys retTy =
+  renderAtom name
+    ++ "("
+    ++ intercalate ", " (map prettyTypeExpr argTys)
+    ++ ") -> "
+    ++ prettyTypeExpr retTy
+
+-- | Render a single bound signature in a @requiring@ clause, using
+-- the bound's base name (qualified-name module is dropped to match
+-- the surface @requiring@ form).
+prettyBoundSig :: BoundSig -> String
+prettyBoundSig b =
+  let baseName = case b.name of
+        Unqualified n -> n
+        Qualified _ n -> n
+   in prettyFunSig baseName b.argTypes b.returnType
+
+-- | Render a list of bounds as the @requiring B1, B2, ..., Bn@ trailer
+-- (no leading space, no trailing period). Empty input renders as the
+-- empty string so callers can append unconditionally.
+prettyRequiring :: [BoundSig] -> String
+prettyRequiring [] = ""
+prettyRequiring bs = " requiring " ++ intercalate ", " (map prettyBoundSig bs)
+
+-- | Render a @:- chr_constraint@ declaration. The base name (not the
+-- qualified form) is used inside the declaration body, matching the
+-- surface syntax users write. Untyped constraints use the @name/arity@
+-- form; typed constraints use the @name(T1, ..., Tn)@ form, optionally
+-- followed by a @requiring@ clause.
+prettyConstraintDecl :: QualifiedName -> Int -> Maybe [TypeExpr] -> [BoundSig] -> String
+prettyConstraintDecl qn arity mArgTys bounds = case mArgTys of
+  Nothing ->
+    ":- chr_constraint " ++ renderAtom qn.baseName ++ "/" ++ show arity ++ "."
+  Just argTys ->
+    ":- chr_constraint "
+      ++ renderAtom qn.baseName
+      ++ "("
+      ++ intercalate ", " (map prettyTypeExpr argTys)
+      ++ ")"
+      ++ prettyRequiring bounds
+      ++ "."
+
+-- | Render a function-flavored declaration (@:- function@,
+-- @:- open_function@, @:- class@, @:- open_class@). Single-signature
+-- forms stay on one line; multi-signature forms switch to the indented
+-- per-line layout used in @libraries\/prelude.chr@. A @requiring@ clause
+-- is only emitted for function-flavored kinds; it is rejected on
+-- classes by the parser, so a non-empty bound list there is silently
+-- dropped.
+prettyFunctionDecl ::
+  QualifiedName ->
+  Int ->
+  [([TypeExpr], TypeExpr)] ->
+  [BoundSig] ->
+  DeclKind ->
+  String
+prettyFunctionDecl qn arity sigs bounds kind =
+  let keyword = declKindKeyword kind
+      isFunction = kind == DKFunction || kind == DKOpenFunction
+      reqStr = if isFunction then prettyRequiring bounds else ""
+   in case sigs of
+        [] ->
+          -- An unsignatured function declaration falls back to the
+          -- @name/arity@ form. This shape is not currently produced by
+          -- the resolver but is handled here so the printer is total.
+          ":- " ++ keyword ++ " " ++ renderAtom qn.baseName ++ "/" ++ show arity ++ "."
+        [(argTys, retTy)] ->
+          ":- " ++ keyword ++ " " ++ prettyFunSig qn.baseName argTys retTy ++ reqStr ++ "."
+        _ ->
+          let oneSig (argTys, retTy) = "    (" ++ prettyFunSig qn.baseName argTys retTy ++ ")"
+           in ":- " ++ keyword ++ "\n" ++ intercalate ",\n" (map oneSig sigs) ++ reqStr ++ "."
+
+-- | Render a @:- chr_type@ declaration: the type head (with its type
+-- variables) followed by @--->@ and the list of data constructors
+-- separated by @;@. The type's base name is used unqualified, matching
+-- the surface form. Constructor rendering is routed through 'PE.PExpr'
+-- so the empty-list atom and cons-cell list constructor render with
+-- their surface @[]@ \/ @[H|T]@ syntax rather than as quoted @'[]'@ \/
+-- @'.'(H, T)@.
+prettyTypeDecl :: TypeDefinition -> String
+prettyTypeDecl td =
+  let tname = renderAtom (typeConBaseName td.name)
+      head_ = case td.typeVars of
+        [] -> tname
+        vs -> tname ++ "(" ++ intercalate ", " (map T.unpack vs) ++ ")"
+      ctors = intercalate " ; " (map ctorToString td.constructors)
+   in ":- chr_type " ++ head_ ++ " ---> " ++ ctors ++ "."
+
+ctorToString :: DataConstructor -> String
+ctorToString c =
+  let baseName = case c.conName of
+        Unqualified n -> n
+        Qualified _ n -> n
+      pexpr = case c.conArgs of
+        [] -> PE.Atom baseName
+        args -> PE.Compound baseName (map (noAnn . typeExprToPExpr) args)
+   in PE.prettyPExpr prettyOps pexpr

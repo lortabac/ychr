@@ -51,9 +51,42 @@ and functions exported from the loaded modules.
 | `:list_modules` | | List the loaded modules. |
 | `:list_declarations` | | List visible constraint and function declarations. |
 | `:list_operators` | | List defined operators (in `op(/3)` form). |
+| `:info NAME` | `:i NAME` | Show information about an identifier (see below). |
 | `:begin` | | Enter a live CHR session. End with `:end`. |
 | `:end` | | Leave the current live session. The session's store is discarded. |
 | `:quit` | `:q` | Exit the REPL. |
+
+### `:info`
+
+`:info NAME` (alias `:i NAME`) prints information about an identifier:
+the fully qualified name on the first line, then a semantically
+equivalent declaration on the next. Built-in types (`int`, `float`,
+`string`, `any`) print `built-in type`. The argument can be a bare
+name (`foo`), an operator atom (`'+'`), a `name/arity` form
+(`call/2`), a qualified name (`prelude:max`), or any combination.
+When a bare name matches multiple arities, every match is printed.
+When a bare `name/arity` is exported by more than one module the
+command refuses to guess: it reports the ambiguity and asks for a
+qualified form.
+
+```ychr-repl
+ychr> :info int
+'$typechecker':int
+built-in type
+ychr> :info '+'
+prelude:'+'
+:- class
+    ('+'(float, float) -> float),
+    ('+'(int, int) -> int).
+ychr> :info max
+prelude:max
+:- function max(T, T) -> T requiring '>='(T, T) -> bool.
+ychr> :info true
+prelude:true
+:- chr_type bool ---> true ; false.
+ychr> :info foo
+unknown identifier: foo
+```
 
 ## One-shot queries
 
