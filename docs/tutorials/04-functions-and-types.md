@@ -167,7 +167,7 @@ ychr check examples/factorial.chr
 ```
 === error ===
 examples/factorial.chr:17:19: YCHR-60001
-Type mismatch: 'typechecker:string' does not match 'typechecker:int'
+Type mismatch: 'string' does not match 'int'
 R is factorial("hello")
 ```
 

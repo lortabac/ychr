@@ -56,36 +56,8 @@ The message technically explains the dispatch failure (no
 ("equation") and tells the user nothing useful: they did not write any
 equations, they wrote `'$call'(5, 1)`. The typed `call(5, 1)` path
 catches this at the type checker with a much better message:
-`Type mismatch: 'typechecker:int' does not match 'fun(_) -> _'`.
+`Type mismatch: 'int' does not match 'fun(_) -> _'`.
 
 **Notes.** The doc explicitly carves out "calling a non-function" as a
 `YCHR-60001` case, but the message for the `'$call'` form is
 unintelligible compared to the `call` wrapper.
-
-## Error codes for type names display the internal `typechecker:` qualifier
-
-**Documented claim.** `docs/reference/type-system.md` describes the
-built-in types as `int`, `float`, `string`, `any` — no module
-qualifier. The catalog of error codes (`docs/reference/errors.md`
-§`YCHR-60001`) likewise refers to "types" abstractly.
-
-**Test.**
-
-    :- module(tm).
-    :- chr_constraint go(int).
-    go(X) <=> X = "hello".
-
-**Expected.** `Type mismatch: 'int' does not match 'string'` (or
-similar without an internal qualifier).
-
-**Actual.**
-
-    YCHR-60001
-    Type mismatch: 'typechecker:int' does not match 'typechecker:string'
-
-The internal `typechecker:` qualifier on the built-in type names is
-exposed in the user-facing diagnostic.
-
-**Notes.** Cosmetic. Either the message should strip the internal
-qualifier, or the spec should document that built-in types appear
-qualified by `typechecker:` in diagnostics.

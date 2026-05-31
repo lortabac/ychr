@@ -38,6 +38,7 @@ import Data.List qualified as List
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -78,16 +79,17 @@ import YCHR.VM qualified as VM
 runtimeName :: Name -> Text
 runtimeName name = let VM.Name t = vmName name in t
 
--- | Runtime functor name of a constructor declared in the @typechecker@
--- module — base types (@int@), record/tag constructors (@sig@), and
--- compound shapes (@tcon@, @fun@) alike. The renamer canonicalizes
--- such names to @typechecker:<n>@; the runtime functor symbol is the
--- flattened form @typechecker__<n>@. Used as the functor argument of
--- 'VTerm' values this Haskell driver builds, of any arity.
+-- | Runtime functor name of a constructor declared in the
+-- @'$typechecker'@ module — base types (@int@), record/tag
+-- constructors (@sig@), and compound shapes (@tcon@, @fun@) alike.
+-- The renamer canonicalizes such names to @$typechecker:<n>@; the
+-- runtime functor symbol is the flattened form @$typechecker__<n>@.
+-- Used as the functor argument of 'VTerm' values this Haskell driver
+-- builds, of any arity.
 tcAtom :: Text -> Text
-tcAtom n = "typechecker__" <> n
+tcAtom n = "$typechecker__" <> n
 
--- | A 0-arity declared constructor of the @typechecker@ module
+-- | A 0-arity declared constructor of the @'$typechecker'@ module
 -- (@int@, @float@, @string@, @any@) as a runtime 'Value'. 0-arity
 -- compounds collapse to 'VAtom' at the runtime layer; 'BMatchTerm'
 -- accepts 'VAtom' for arity-0 dispatch, so this matches the shape
@@ -382,7 +384,7 @@ typeCheckProgram prog = do
         ( runReaderT
             ( do
                 -- Initialize error accumulator
-                chrOp (tellConstraint (Qualified "typechecker" "errors") [valueList []])
+                chrOp (tellConstraint (Qualified "$typechecker" "errors") [valueList []])
                 -- Tell environment: constraint, function, and constructor signatures
                 tellConstraintSigs prog
                 tellFunctionSigs prog
@@ -431,7 +433,7 @@ typeCheckGoals prog loc lbl goals = do
     evalStateT
       ( runReaderT
           ( do
-              chrOp (tellConstraint (Qualified "typechecker" "errors") [valueList []])
+              chrOp (tellConstraint (Qualified "$typechecker" "errors") [valueList []])
               tellConstraintSigs prog
               tellFunctionSigs prog
               tellConSigs prog
@@ -498,7 +500,7 @@ tellConstraintSigs prog =
           let runtimeNm = runtimeName (Types.qualifiedToName name)
           chrOp $
             tellConstraint
-              (Qualified "typechecker" "constraint_sig")
+              (Qualified "$typechecker" "constraint_sig")
               [VAtom runtimeNm, valueList encodedArgs]
           case bounds of
             [] -> pure ()
@@ -506,7 +508,7 @@ tellConstraintSigs prog =
               encodedBounds <- chrOp (traverse (encodeNamedBound tvars) bounds)
               chrOp $
                 tellConstraint
-                  (Qualified "typechecker" "constraint_bounds")
+                  (Qualified "$typechecker" "constraint_bounds")
                   [VAtom runtimeNm, valueList encodedBounds]
     )
     (pure ())
@@ -533,7 +535,7 @@ tellFunctionSigs prog = mapM_ tellOne prog.functions
                   sig = VTerm (tcAtom "sig") [valueList anyArgs, tcCon0 "any"]
               chrOp $
                 tellConstraint
-                  (Qualified "typechecker" "function_sig")
+                  (Qualified "$typechecker" "function_sig")
                   [VAtom runtimeNm, sig]
             ([s], bounds@(_ : _)) -> do
               let (argTys, retTy) = s
@@ -548,23 +550,23 @@ tellFunctionSigs prog = mapM_ tellOne prog.functions
               encodedBounds <- chrOp (traverse (encodeNamedBound tvars) bounds)
               chrOp $
                 tellConstraint
-                  (Qualified "typechecker" "function_sig")
+                  (Qualified "$typechecker" "function_sig")
                   [VAtom runtimeNm, sig]
               chrOp $
                 tellConstraint
-                  (Qualified "typechecker" "function_bounds")
+                  (Qualified "$typechecker" "function_bounds")
                   [VAtom runtimeNm, valueList encodedBounds]
             ([s], []) -> do
               sig <- chrOp (encodeFunctionSig s)
               chrOp $
                 tellConstraint
-                  (Qualified "typechecker" "function_sig")
+                  (Qualified "$typechecker" "function_sig")
                   [VAtom runtimeNm, sig]
             (ss, _) -> do
               sigs <- chrOp (traverse encodeFunctionSig ss)
               chrOp $
                 tellConstraint
-                  (Qualified "typechecker" "function_sigs")
+                  (Qualified "$typechecker" "function_sigs")
                   [VAtom runtimeNm, valueList sigs]
 
 -- | Encode one declared @(arg-types, return-type)@ pair as a runtime
@@ -611,7 +613,7 @@ tellConSigs prog =
               let sig = VTerm (tcAtom "sig") [parentType, valueList encodedFields]
               chrOp $
                 tellConstraint
-                  (Qualified "typechecker" "con_sig")
+                  (Qualified "$typechecker" "con_sig")
                   [ VAtom
                       ( runtimeName
                           dc.conName
@@ -734,7 +736,7 @@ checkRule rule = do
   when hasBoundedHead $
     chrOp $
       tellConstraint
-        (Qualified "typechecker" "active_scope")
+        (Qualified "$typechecker" "active_scope")
         [scopeIdValue scopeId]
   let guardCtx =
         CheckCtx
@@ -757,7 +759,7 @@ checkRule rule = do
   when hasBoundedHead $
     chrOp $
       tellConstraint
-        (Qualified "typechecker" "end_scope")
+        (Qualified "$typechecker" "end_scope")
         [scopeIdValue scopeId]
 
 -- | Check one head constraint occurrence. Returns the ambient sigs
@@ -806,7 +808,7 @@ tellCheckUnify :: CtxHandle -> Value -> Value -> TC ()
 tellCheckUnify ctx t1 t2 =
   chrOp $
     tellConstraint
-      (Qualified "typechecker" "check_unify")
+      (Qualified "$typechecker" "check_unify")
       [t1, t2, ctxHandleValue ctx]
 
 -- | Encode one bound, tell its @ambient_sig@ (for in-scope calls to
@@ -828,11 +830,11 @@ emitAmbientAndBound scopeId ctx tvars bs = do
       runtimeNm = runtimeName bs.name
   chrOp $
     tellConstraint
-      (Qualified "typechecker" "ambient_sig")
+      (Qualified "$typechecker" "ambient_sig")
       [scopeIdValue scopeId, VAtom runtimeNm, sigVal]
   chrOp $
     tellConstraint
-      (Qualified "typechecker" "check_bound")
+      (Qualified "$typechecker" "check_bound")
       [VAtom runtimeNm, valueList encodedArgs, encodedRet, ctxHandleValue ctx]
   pure (runtimeNm, [sigVal])
 
@@ -859,7 +861,7 @@ emitConstraintUse cctx qn argTypeVars = do
   ctx <- freshCtxHandle cctx
   chrOp $
     tellConstraint
-      (Qualified "typechecker" "check_constraint_use")
+      (Qualified "$typechecker" "check_constraint_use")
       [ VAtom (runtimeName (Types.qualifiedToName qn)),
         valueList argTypeVars,
         ctxHandleValue ctx
@@ -900,7 +902,7 @@ checkGuard cctx _ (D.GuardMatch operand conName arity) = do
     ctx <- freshCtxHandle cctx
     chrOp $
       tellConstraint
-        (Qualified "typechecker" "check_constructor_use")
+        (Qualified "$typechecker" "check_constructor_use")
         [ VAtom (runtimeName canonical),
           valueList argTypeVars,
           operandType,
@@ -922,7 +924,7 @@ checkGuard cctx lastConName (D.GuardGetArg varName operand idx) = do
     ctx <- freshCtxHandle cctx
     chrOp $
       tellConstraint
-        (Qualified "typechecker" "check_guard_getarg")
+        (Qualified "$typechecker" "check_guard_getarg")
         [ resultTypeVar,
           operandType,
           VAtom (runtimeName conName),
@@ -935,7 +937,7 @@ checkGuard cctx _ (D.GuardExpr expr) = do
   ctx <- freshCtxHandle cctx
   chrOp $
     tellConstraint
-      (Qualified "typechecker" "check_guard_bool")
+      (Qualified "$typechecker" "check_guard_bool")
       [tv, ctxHandleValue ctx]
   pure Nothing
 
@@ -1019,7 +1021,7 @@ emitFunctionCall cctx name argTypeVars retTypeVar = do
     Just ambs@(_ : _) ->
       chrOp $
         tellConstraint
-          (Qualified "typechecker" "check_function_use_with_ambient")
+          (Qualified "$typechecker" "check_function_use_with_ambient")
           [ VAtom runtimeFname,
             valueList ambs,
             valueList argTypeVars,
@@ -1029,7 +1031,7 @@ emitFunctionCall cctx name argTypeVars retTypeVar = do
     _ ->
       chrOp $
         tellConstraint
-          (Qualified "typechecker" "check_function_use")
+          (Qualified "$typechecker" "check_function_use")
           [ VAtom runtimeFname,
             valueList argTypeVars,
             retTypeVar,
@@ -1082,7 +1084,7 @@ checkEquation func loc origin eq = do
       ctx <- freshCtxHandle cctx'
       chrOp $
         tellConstraint
-          (Qualified "typechecker" "check_function_use")
+          (Qualified "$typechecker" "check_function_use")
           [ VAtom (runtimeName (Types.qualifiedToName func.name)),
             valueList argTypeVars,
             retTypeVar,
@@ -1150,7 +1152,7 @@ checkSingleSigEquation func (argTys, retTy) bounds varTypes eq = do
   when hasBounds $
     chrOp $
       tellConstraint
-        (Qualified "typechecker" "active_scope")
+        (Qualified "$typechecker" "active_scope")
         [scopeIdValue scopeId]
   paramTypes <- traverse (typeOfTerm cctx . headArgToTerm) eq.params
   zipWithM_ (tellCheckUnify ctx) paramTypes encodedArgs
@@ -1161,7 +1163,7 @@ checkSingleSigEquation func (argTys, retTy) bounds varTypes eq = do
   when hasBounds $
     chrOp $
       tellConstraint
-        (Qualified "typechecker" "end_scope")
+        (Qualified "$typechecker" "end_scope")
         [scopeIdValue scopeId]
 
 -- ---------------------------------------------------------------------------
@@ -1215,7 +1217,7 @@ typeOfTermCtor cctx name args = do
       ctx <- freshCtxHandle cctx
       chrOp $
         tellConstraint
-          (Qualified "typechecker" "check_constructor_use")
+          (Qualified "$typechecker" "check_constructor_use")
           [ VAtom (runtimeName canonical),
             valueList argTypes,
             resultType,
@@ -1282,7 +1284,7 @@ typeOfExprCtor cctx name args = do
       ctx <- freshCtxHandle cctx
       chrOp $
         tellConstraint
-          (Qualified "typechecker" "check_constructor_use")
+          (Qualified "$typechecker" "check_constructor_use")
           [ VAtom (runtimeName canonical),
             valueList argTypes,
             resultType,
@@ -1377,7 +1379,7 @@ collectVarsInExpr _ = Set.empty
 collectErrors :: TC [Diagnostic TypeCheckError]
 collectErrors = do
   errVar <- chrOp newVar
-  chrOp (tellConstraint (Qualified "typechecker" "collect") [errVar])
+  chrOp (tellConstraint (Qualified "$typechecker" "collect") [errVar])
   errVal <- chrOp (deref errVar)
   store <- getStore
   chrOp (decodeErrorList store.ctxMap errVal)
@@ -1472,7 +1474,7 @@ showValueShape (VVar _) = "VVar"
 showValueShape VWildcard = "VWildcard"
 
 showType :: Value -> Text
-showType (VAtom a) = displayQualifiedAtom a
+showType (VAtom a) = displayTypeAtom a
 showType (VTerm functor [a, b])
   | functor == tcAtom "tcon" =
       let name = showTypeName a
@@ -1497,7 +1499,7 @@ showType (VInt n) = T.pack (show n)
 showType _ = "?"
 
 showTypeName :: Value -> Text
-showTypeName (VAtom a) = displayQualifiedAtom a
+showTypeName (VAtom a) = displayTypeAtom a
 showTypeName _ = "?"
 
 showValue :: Value -> Chr Text
@@ -1513,6 +1515,15 @@ showValue v = do
 -- Inverse of 'runtimeName'.
 displayQualifiedAtom :: Text -> Text
 displayQualifiedAtom = T.replace "__" ":"
+
+-- | Like 'displayQualifiedAtom', but additionally hides the internal
+-- @'$typechecker'@ module qualifier so built-in type names
+-- (@int@, @float@, @string@, @any@) render bare. User-defined types
+-- stay module-qualified.
+displayTypeAtom :: Text -> Text
+displayTypeAtom t =
+  let q = displayQualifiedAtom t
+   in fromMaybe q (T.stripPrefix "$typechecker:" q)
 
 -- ---------------------------------------------------------------------------
 -- Type definition validation (pure, Haskell-side)

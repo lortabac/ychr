@@ -1,4 +1,4 @@
-:- module(typechecker, [
+:- module('$typechecker', [
     constraint_sig/2,
     function_sig/2,
     function_sigs/2,
