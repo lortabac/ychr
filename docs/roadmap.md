@@ -58,7 +58,7 @@ what is planned.
 - [x] Prolog-style queries
 - [x] Live sessions
 - [ ] Type and info queries
-- [ ] Tracing
+- [x] Tracing
 
 ## Testing
 

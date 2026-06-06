@@ -27,10 +27,17 @@ roundtripTests :: [TestTree]
 roundtripTests =
   [ testCase "empty program" $ roundtrip (Program 0 [] 0 [] [] []),
     testCase "single empty procedure" $
-      roundtrip (Program 1 [Types.Unqualified "foo"] 0 [] [Procedure "foo" [] []] []),
+      roundtrip (Program 1 [Types.Unqualified "foo"] 0 [] [mkProcedure "foo" [] []] []),
     testCase "procedure with params" $
       roundtrip
-        (Program 1 [Types.Unqualified "leq"] 0 [] [Procedure "tell_leq2" ["X", "Y"] []] []),
+        ( Program
+            1
+            [Types.Unqualified "leq"]
+            0
+            []
+            [mkProcedure "tell_leq2" ["X", "Y"] []]
+            []
+        ),
     testCase "let-val statement" $
       roundtrip (mkProg [LetVal "x" (Lit (IntLit 42))]),
     testCase "let-id statement" $
@@ -142,7 +149,7 @@ roundtripTests =
             [Types.Unqualified "a", Types.Unqualified "b"]
             0
             []
-            [ Procedure
+            [ mkProcedure
                 "tell_a1"
                 ["X"]
                 [ LetId
@@ -156,14 +163,14 @@ roundtripTests =
                   Store (IdVar "id"),
                   ExprStmt (CallExpr "activate_a1" [AId (IdVar "id")])
                 ],
-              Procedure
+              mkProcedure
                 "activate_a1"
                 ["susp"]
                 [ LetId "id" (IdVar "susp"),
                   LetVal "X" (FieldArg (IdVar "susp") (ArgIndex 0)),
                   Return (Lit (BoolLit False))
                 ],
-              Procedure
+              mkProcedure
                 "reactivate_dispatch"
                 ["susp"]
                 [ If
@@ -205,7 +212,8 @@ formatTests =
       assertContains
         (serializeProg (mkProg [ExprStmt (Var "x")]))
         ( "(program 0 (type-names) 0 (rule-names) (evaluables) "
-            <> "(procedure \"p\" () (expr-stmt (var \"x\"))))"
+            <> "(procedure \"p\" () (reactivate-dispatch) "
+            <> "(expr-stmt (var \"x\"))))"
         ),
     testCase "literals inline without wrapper" $ do
       assertContains (serializeProg (mkProg [LetVal "x" (Lit (BoolLit True))])) "true"
@@ -261,7 +269,20 @@ serializeProg = serialize . mkVMProg
 
 -- | Build a minimal program with one procedure containing the given body.
 mkProg :: [Stmt] -> Program
-mkProg body = Program 0 [] 0 [] [Procedure "p" [] body] []
+mkProg body = Program 0 [] 0 [] [mkProcedure "p" [] body] []
+
+-- | Build a 'Procedure' with a placeholder 'procKind'. The kind tag
+-- doesn't affect serialization round-tripping or the format tests'
+-- assertions, so a single neutral value (with no payload) keeps the
+-- fixtures concise.
+mkProcedure :: Name -> [Name] -> [Stmt] -> Procedure
+mkProcedure n ps body =
+  Procedure
+    { name = n,
+      params = ps,
+      body = body,
+      procKind = PKReactivateDispatch
+    }
 
 -- | Wrap a Program into a VMProgram with empty metadata.
 mkVMProg :: Program -> VMProgram

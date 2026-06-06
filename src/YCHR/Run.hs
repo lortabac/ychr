@@ -22,6 +22,8 @@ module YCHR.Run
     -- * CHR session (re-exported from "YCHR.Runtime.Session")
     Chr,
     withCHR,
+    withCHRExtraTraced,
+    withTraceHandler,
     toSessionInput,
     tellConstraint,
 
@@ -56,6 +58,7 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ask, runReaderT)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
 import Control.Monad.Trans.Writer.CPS (runWriter)
+import Data.IORef (readIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
@@ -91,7 +94,17 @@ import YCHR.Rename (renameQueryArgs, renameQueryGoals)
 import YCHR.Resolve (ResolveError, termToExpr)
 import YCHR.Resolved qualified as R
 import YCHR.Runtime.Error (RuntimeErrorThrown (..))
-import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, callProc, deepEvalValue)
+import YCHR.Runtime.Interpreter
+  ( HostCallFn (..),
+    HostCallRegistry,
+    callProc,
+    constraintTypeLabel,
+    deepEvalValue,
+    emitTrace,
+    snapshotValue,
+    snapshotValues,
+    suspensionView,
+  )
 import YCHR.Runtime.Monad (Chr, SessionEnv (..))
 import YCHR.Runtime.Reactivation (drainQueue, enqueue)
 import YCHR.Runtime.Session
@@ -99,8 +112,11 @@ import YCHR.Runtime.Session
     toSessionInput,
     withCHR,
     withCHRExtra,
+    withCHRExtraTraced,
+    withTraceHandler,
   )
 import YCHR.Runtime.Store (aliveConstraint)
+import YCHR.Runtime.Trace (TraceEvent (..))
 import YCHR.Runtime.Types (CallVal (..), Value (..), VarId)
 import YCHR.Runtime.Var (deref, equal, getVarId, newVar, unify)
 import YCHR.TypeCheck (typeCheckGoals)
@@ -439,15 +455,16 @@ executeBodyGoal D.BodyTrue = pure ()
 executeBodyGoal (D.BodyUnify l r) = do
   v1 <- exprToValue l
   v2 <- exprToValue r
-  (ok, observers) <- lift (unify v1 v2)
-  lift (enqueue observers)
-  unless ok (lift (raiseUnifyFailure v1 v2))
-  lift drainReactivation
+  lift (queryUnify v1 v2)
 executeBodyGoal (D.BodyHostStmt f args) = do
   argVals <- traverse evalNestedExpr args
   env <- lift ask
-  _ <- lift (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
-  pure ()
+  result <- lift (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
+  lift $
+    emitTrace $ do
+      argTs <- snapshotValues argVals
+      resT <- snapshotValue result
+      pure (TECallHost f argTs resT)
 executeBodyGoal (D.BodyIs v expr) = do
   -- Mirror 'evalValExpr (EvalDeep (Var _))' in the compiled interpreter:
   -- when the RHS is syntactically a variable, walk the dereferenced
@@ -460,11 +477,7 @@ executeBodyGoal (D.BodyIs v expr) = do
     _ -> pure raw
   varMap <- get
   case Map.lookup v varMap of
-    Just existing -> do
-      (ok, observers) <- lift (unify existing result)
-      lift (enqueue observers)
-      unless ok (lift (raiseUnifyFailure existing result))
-      lift drainReactivation
+    Just existing -> lift (queryUnify existing result)
     Nothing -> modify (Map.insert v result)
 executeBodyGoal (D.BodyTell qn args) = do
   argVals <- traverse evalNestedExpr args
@@ -498,13 +511,47 @@ hostCall (Just (HostCallFn f)) _ args = f args
 hostCall Nothing name _ = error $ "Unknown host function: " ++ T.unpack name
 
 -- | Drain the reactivation queue, dispatching each constraint.
+-- Mirrors the VM's 'DrainReactivationQueue' statement, including
+-- the per-suspension 'TEReactivate' event for the tracer.
 drainReactivation :: Chr ()
 drainReactivation =
   drainQueue $ \sid -> do
     alive <- aliveConstraint sid
-    when alive $
-      void $
-        callProc (Name "reactivate_dispatch") [CId sid]
+    when alive $ do
+      emitTrace $ do
+        (ct, vs) <- suspensionView sid
+        ctName <- constraintTypeLabel ct
+        ts <- snapshotValues vs
+        pure (TEReactivate sid ctName ts)
+      void $ callProc (Name "reactivate_dispatch") [CId sid]
+
+-- | Run a query-side unification, mirroring the interpreter's
+-- 'evalBoolExpr (BUnify ...)' branch: snapshot the operand terms
+-- /before/ the unify mutates anything (only when tracing is on),
+-- run the unify, enqueue observers, emit a 'TEUnify' event on
+-- success with the number of observers reactivated, raise on
+-- failure, then drain the reactivation queue. The trace event is
+-- skipped on failure for consistency with the interpreter path.
+queryUnify :: Value -> Value -> Chr ()
+queryUnify v1 v2 = do
+  env <- ask
+  mh <- liftIO (readIORef env.traceHandler)
+  case mh of
+    Nothing -> do
+      (ok, observers) <- unify v1 v2
+      enqueue observers
+      unless ok (raiseUnifyFailure v1 v2)
+      drainReactivation
+    Just _ -> do
+      t1 <- snapshotValue v1
+      t2 <- snapshotValue v2
+      (ok, observers) <- unify v1 v2
+      enqueue observers
+      if ok
+        then do
+          emitTrace (pure (TEUnify t1 t2 (length observers)))
+          drainReactivation
+        else raiseUnifyFailure v1 v2
 
 -- | Build a runtime 'Value' from a desugared 'D.Expr' without
 -- evaluating embedded function calls. Mirrors 'termToValue' on the

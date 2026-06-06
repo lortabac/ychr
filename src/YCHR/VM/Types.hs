@@ -46,6 +46,7 @@ module YCHR.VM.Types
   ( -- * Program structure
     Program (..),
     Procedure (..),
+    ProcKind (..),
     EvaluableKey (..),
 
     -- * Statements
@@ -151,8 +152,43 @@ data Procedure = Procedure
     -- | Parameter names
     params :: [Name],
     -- | Body statements
-    body :: [Stmt]
+    body :: [Stmt],
+    -- | Structural classification of the procedure. The compiler sets
+    -- this at the (single) construction site; the interpreter reads it
+    -- to label trace events without re-parsing the mangled name.
+    -- Backends that don't care about tracing simply ignore the field.
+    procKind :: !ProcKind
   }
+  deriving (Show, Eq)
+
+-- | Structural classification of a generated 'Procedure'.
+--
+-- Used by the interpreter's tracer (`:trace` in the REPL) to label
+-- events with their ωr role without parsing the procedure's mangled
+-- name. Each constructor carries the source-level data the tracer
+-- needs to render readable output.
+--
+-- Lifted lambdas use 'PKFunction' with a name beginning with
+-- @__lambda_@; the trace formatter recognises the prefix and renders
+-- them as @lambda#N@.
+data ProcKind
+  = -- | @tell_c@: entry point for adding a constraint.
+    PKTell !ConstraintType
+  | -- | @activate_c@: try all occurrences for a constraint.
+    PKActivate !ConstraintType
+  | -- | @occurrence_c_j@: the @j@-th occurrence of constraint @c@,
+    -- belonging to the rule identified by 'RuleId'. The display name
+    -- is carried alongside so the tracer can label events without a
+    -- second lookup into 'Program.ruleNames'.
+    PKOccurrence !ConstraintType !Int !RuleId !Text
+  | -- | @reactivate_dispatch@: route a reactivated constraint to its
+    -- @activate_c@.
+    PKReactivateDispatch
+  | -- | @call_N@: dispatcher for @'$call'/N@.
+    PKCallDispatch !Int
+  | -- | A user-defined function or lifted lambda. Carries the source
+    -- qualified name and arity.
+    PKFunction !Types.QualifiedName !Int
   deriving (Show, Eq)
 
 -- | Statements (imperative, side-effecting).

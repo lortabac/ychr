@@ -24,7 +24,7 @@ tests =
 
 runHistoryEnv :: Chr a -> IO a
 runHistoryEnv action = do
-  env <- initSessionEnv [] Map.empty Map.empty Map.empty Map.empty Set.empty
+  env <- initSessionEnv [] [] Map.empty Map.empty Map.empty Map.empty Set.empty
   runChr action env
 
 emptyTests :: TestTree

@@ -186,6 +186,7 @@ library
                     , YCHR.Runtime.History
                     , YCHR.Runtime.Reactivation
                     , YCHR.Runtime.Error
+                    , YCHR.Runtime.Trace
 
     other-modules:    YCHR.LineInput
                     , YCHR.StdLib.TH

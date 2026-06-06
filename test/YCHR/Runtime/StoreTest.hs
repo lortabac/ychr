@@ -33,6 +33,7 @@ runStoreEnv action = do
   env <-
     initSessionEnv
       (replicate 100 (Unqualified ""))
+      []
       Map.empty
       Map.empty
       Map.empty

@@ -48,13 +48,13 @@ tests =
 -- give them a place to live.
 runChrEmpty :: Chr a -> IO a
 runChrEmpty action = do
-  env <- initSessionEnv [] Map.empty Map.empty Map.empty Map.empty Set.empty
+  env <- initSessionEnv [] [] Map.empty Map.empty Map.empty Map.empty Set.empty
   runChr action env
 
 -- | Like 'runChrEmpty' but with the base host-call registry available.
 runChrBase :: Chr a -> IO a
 runChrBase action = do
-  env <- initSessionEnv [] Map.empty baseHostCallRegistry Map.empty Map.empty Set.empty
+  env <- initSessionEnv [] [] Map.empty baseHostCallRegistry Map.empty Map.empty Set.empty
   runChr action env
 
 -- | Run a Chr action against the LEQ session.
@@ -63,6 +63,7 @@ runChrLeq action = do
   env <-
     initSessionEnv
       [Types.Unqualified "leq"]
+      []
       leqProcMap
       Map.empty
       Map.empty
@@ -89,8 +90,21 @@ singleProc procName params body =
       typeNames = [],
       numRules = 0,
       ruleNames = [],
-      procedures = [Procedure procName params body],
+      procedures = [mkProc procName params body],
       evaluables = []
+    }
+
+-- | Build a 'Procedure' with a placeholder 'procKind'. The kind tag
+-- isn't observable by the interpreter tests (they exercise call /
+-- store / unify behaviour, not tracing), so a single neutral
+-- 'PKReactivateDispatch' keeps the test fixtures terse.
+mkProc :: Name -> [Name] -> [Stmt] -> Procedure
+mkProc n ps body =
+  Procedure
+    { name = n,
+      params = ps,
+      body = body,
+      procKind = PKReactivateDispatch
     }
 
 errorPathTests :: TestTree
@@ -231,7 +245,7 @@ leqProcMap =
 
 tellLeq :: Procedure
 tellLeq =
-  Procedure
+  mkProc
     "tell_leq2"
     ["X", "Y"]
     [ LetId "id" (CreateConstraint leqType [Var "X", Var "Y"]),
@@ -241,7 +255,7 @@ tellLeq =
 
 activateLeq :: Procedure
 activateLeq =
-  Procedure
+  mkProc
     "activate_leq2"
     ["susp"]
     [ LetId "id" (IdVar "susp"),
@@ -268,7 +282,7 @@ activateLeq =
 
 occurrenceLeq1 :: Procedure
 occurrenceLeq1 =
-  Procedure
+  mkProc
     "occurrence_leq2_1"
     ["id", "X", "Y"]
     [ If
@@ -282,7 +296,7 @@ occurrenceLeq1 =
 
 occurrenceLeq2 :: Procedure
 occurrenceLeq2 =
-  Procedure
+  mkProc
     "occurrence_leq2_2"
     ["id", "X", "Y"]
     [ Foreach
@@ -321,7 +335,7 @@ occurrenceLeq2 =
 
 occurrenceLeq3 :: Procedure
 occurrenceLeq3 =
-  Procedure
+  mkProc
     "occurrence_leq2_3"
     ["id", "X", "Y"]
     [ Foreach
@@ -360,7 +374,7 @@ occurrenceLeq3 =
 
 occurrenceLeq4 :: Procedure
 occurrenceLeq4 =
-  Procedure
+  mkProc
     "occurrence_leq2_4"
     ["id", "X", "Y"]
     [ Foreach
@@ -394,7 +408,7 @@ occurrenceLeq4 =
 
 occurrenceLeq5 :: Procedure
 occurrenceLeq5 =
-  Procedure
+  mkProc
     "occurrence_leq2_5"
     ["id", "X", "Y"]
     [ Foreach
@@ -426,7 +440,7 @@ occurrenceLeq5 =
 
 occurrenceLeq6 :: Procedure
 occurrenceLeq6 =
-  Procedure
+  mkProc
     "occurrence_leq2_6"
     ["id", "X", "Y"]
     [ Foreach
@@ -469,7 +483,7 @@ occurrenceLeq6 =
 
 occurrenceLeq7 :: Procedure
 occurrenceLeq7 =
-  Procedure
+  mkProc
     "occurrence_leq2_7"
     ["id", "X", "Y"]
     [ Foreach
@@ -512,7 +526,7 @@ occurrenceLeq7 =
 
 reactivateDispatch :: Procedure
 reactivateDispatch =
-  Procedure
+  mkProc
     "reactivate_dispatch"
     ["susp"]
     [ If
@@ -621,7 +635,7 @@ makeCalcProc body =
       ruleNames = [],
       evaluables = [],
       procedures =
-        [ Procedure
+        [ mkProc
             "calc"
             ["x"]
             [ LetVal "y" (EvalDeep body),

@@ -24,6 +24,7 @@ module YCHR.Runtime.Store
     getAllStoredConstraints,
     isSuspAlive,
     suspArg,
+    lookupSusp,
   )
 where
 

@@ -26,7 +26,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import System.Exit (exitFailure)
-import System.IO (hPutStr, hPutStrLn, stderr)
+import System.IO (hPutStr, hPutStrLn, stderr, stdout)
 import YCHR.Compile.Pipeline (ExportResolution (..))
 import YCHR.Desugared qualified as D
 import YCHR.Display (Display (..), displayMsg)
@@ -54,7 +54,14 @@ import YCHR.Run
   )
 import YCHR.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Runtime.Monad (Chr)
-import YCHR.Runtime.Session (toSessionInput, withCHR, withCHRExtra)
+import YCHR.Runtime.Session
+  ( toSessionInput,
+    withCHR,
+    withCHRExtra,
+    withCHRExtraTraced,
+    withTraceHandler,
+  )
+import YCHR.Runtime.Trace (defaultTraceHandler)
 import YCHR.TypeCheck (typeCheckProgram)
 import YCHR.Types
   ( BoundSig,
@@ -138,6 +145,7 @@ outerLoop hostCalls quietMode werror files outerInput liveInput = go
       ":list_operators" -> showOperators prog *> go prog
       ":info" -> showInfoUsage *> go prog
       ":i" -> showInfoUsage *> go prog
+      ":trace" -> showTraceUsage *> go prog
       ":begin" -> do
         runLiveSession hostCalls liveInput quietMode werror prog
         go prog
@@ -145,6 +153,8 @@ outerLoop hostCalls quietMode werror files outerInput liveInput = go
       line
         | Just rest <- stripPrefix ":info " line -> showInfo prog rest *> go prog
         | Just rest <- stripPrefix ":i " line -> showInfo prog rest *> go prog
+        | Just rest <- stripPrefix ":trace " line ->
+            runTracedQuery hostCalls werror prog rest *> go prog
         | otherwise -> runOuterQuery hostCalls werror prog line *> go prog
     recompile prog = do
       result <- compileFiles True files
@@ -191,6 +201,41 @@ runOuterQuery hostCalls werror prog line = do
       Just err -> putStr (displayMsg (err :: Error))
       Nothing -> putStrLn ("Error: " ++ displayException exc)
 
+-- | Run a one-off query in the outer REPL with refined-operational-
+-- semantics tracing enabled. Output is the trace stream only —
+-- bindings are intentionally not printed, matching the documented
+-- @:trace@ behaviour. To see bindings, re-run the goal without
+-- @:trace@.
+runTracedQuery :: HostCallRegistry -> Bool -> CompiledProgram -> String -> IO ()
+runTracedQuery hostCalls werror prog line = do
+  prepResult <-
+    try @SomeException $
+      prepareQuery prog (T.pack line)
+  case prepResult of
+    Left exc -> reportException exc
+    Right (prep, ws) -> do
+      printWarnings ws
+      unless (werror && not (null ws)) $ do
+        execResult <-
+          try @SomeException $
+            withCHRExtraTraced
+              (toSessionInput prog)
+              hostCalls
+              prep.extraProcs
+              (defaultTraceHandler stdout)
+              (executePreparedQuery prep.liftedGoals)
+        case execResult of
+          Left exc -> reportException exc
+          Right _ -> pure ()
+  where
+    reportException exc = case fromException exc of
+      Just err -> putStr (displayMsg (err :: Error))
+      Nothing -> putStrLn ("Error: " ++ displayException exc)
+
+showTraceUsage :: IO ()
+showTraceUsage =
+  putStrLn ":trace GOAL  -- run GOAL with refined-operational-semantics tracing"
+
 -- ---------------------------------------------------------------------------
 -- Live REPL session
 -- ---------------------------------------------------------------------------
@@ -220,6 +265,21 @@ runLiveSession hostCalls liveInput quietMode werror cp =
     dispatch line
       | stripped == ":end" = pure ()
       | T.null stripped = liveLoop
+      | Just rest <- T.stripPrefix ":trace " stripped = do
+          outcome <-
+            withTraceHandler (defaultTraceHandler stdout) $
+              handleLiveQuery cp werror rest
+          case outcome of
+            QueryOk _ -> liveLoop
+            QueryRecoverable msg -> do
+              liftIO (hPutStr stderr msg)
+              liveLoop
+            QueryFatal msg -> liftIO $ do
+              hPutStr stderr msg
+              hPutStrLn stderr "live session aborted due to runtime error."
+      | stripped == ":trace" = do
+          liftIO showTraceUsage
+          liveLoop
       | otherwise = do
           outcome <- handleLiveQuery cp werror (T.pack line)
           case outcome of
@@ -313,6 +373,7 @@ commands =
     Command [":list_declarations"] "List visible declarations",
     Command [":list_operators"] "List defined operators",
     Command [":info", ":i"] "Show information about an identifier",
+    Command [":trace"] "Run a goal with refined-operational-semantics tracing",
     Command [":begin"] "Start a live CHR session (end with :end)",
     Command [":quit", ":q"] "Exit the REPL"
   ]

@@ -35,9 +35,21 @@ the semantics YCHR implements.
 > **TODO:** brief, conceptual notes on what termination and confluence
 > mean for CHR and pointers to deeper material.
 
+## Seeing ωr in action
+
+The REPL's `:trace GOAL` command runs a goal with the interpreter's
+tracer enabled, printing one indented line per ωr event (and per
+function / host-call entry). It is the easiest way to see exactly how
+a rule fires, which constraints become active, when partner
+constraints are picked up, and when reactivation kicks in. See
+[`:trace`](../reference/repl.md#trace) in the REPL reference for the
+full event list.
+
 ## See also
 
 - Reference paper: `dev-docs/chr-for-imperative-host-languages.pdf`.
 - Tutorial: [CHR primer](../tutorials/02-chr-primer.md).
 - Reference: [VM specification](../reference/vm.md) — concrete
   realization of these semantics in YCHR's abstract VM.
+- Reference: [REPL `:trace`](../reference/repl.md#trace) — interactive
+  exploration of ωr step by step.

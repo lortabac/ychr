@@ -38,7 +38,9 @@ import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Set (Set)
 import Data.Set qualified as Set
+import Data.Text (Text)
 import YCHR.Compile.Pipeline (ExportResolution)
+import YCHR.Runtime.Trace (TraceHandler)
 import YCHR.Runtime.Types (Suspension, SuspensionId, Value, VarId (..))
 import YCHR.Types qualified as Types
 import YCHR.VM (EvaluableKey, Procedure, RuleId, StackFrame)
@@ -82,6 +84,10 @@ data SessionEnv = SessionEnv
     -- | Source names parallel to 'storeByType', indexed by
     -- 'ConstraintType'.
     storeTypeNames :: !(IntMap Types.Name),
+    -- | Display names of rules, indexed by 'RuleId'. Carried so the
+    -- tracer can label 'AddHistory' / 'BNotInHistory' events
+    -- without a second lookup into the original 'Program'.
+    ruleNames :: !(IntMap Text),
     -- | Map from suspension id to the suspension record. Populated on
     -- 'createConstraint'.
     storeById :: !(IORef (IntMap Suspension)),
@@ -107,23 +113,37 @@ data SessionEnv = SessionEnv
     -- constraint names at 'tellConstraint' time.
     exportMap :: !(Map Types.UnqualifiedIdentifier ExportResolution),
     -- | The set of all qualified identifiers exported by the program.
-    exportedSet :: !(Set Types.QualifiedIdentifier)
+    exportedSet :: !(Set Types.QualifiedIdentifier),
+    -- | Optional tracing sink. When 'Just', the interpreter emits a
+    -- 'TraceEvent' at each ωr step and at function / host-call
+    -- boundaries. Stored as an 'IORef' so the REPL can swap a
+    -- handler in for the duration of one @:trace@ query inside an
+    -- otherwise-untraced live session.
+    traceHandler :: !(IORef (Maybe TraceHandler)),
+    -- | Current indentation depth for the tracer. Only meaningful
+    -- when 'traceHandler' is 'Just'; the interpreter bumps it on
+    -- entry to ωr procedures (activate / occurrence / reactivate
+    -- dispatch) and on user-function / lambda entry, via @bracket@
+    -- so 'ControlFlow' exceptions still pop.
+    traceDepth :: !(IORef Int)
   }
 
 -- | Build a fresh 'SessionEnv' for a compiled program.
 initSessionEnv ::
   [Types.Name] ->
+  [Text] ->
   ProcMap ->
   HostCallRegistry ->
   EvaluableRegistry ->
   Map Types.UnqualifiedIdentifier ExportResolution ->
   Set Types.QualifiedIdentifier ->
   IO SessionEnv
-initSessionEnv typeNames pm hc ev expMap expSet = do
+initSessionEnv typeNames rNames pm hc ev expMap expSet = do
   vc <- newIORef (VarId 0)
   let typeCount = length typeNames
       emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
       typeNameMap = IntMap.fromList (zip [0 ..] typeNames)
+      ruleNameMap = IntMap.fromList (zip [0 ..] rNames)
   bt <- newIORef emptyStore
   bi <- newIORef IntMap.empty
   ni <- newIORef 0
@@ -131,11 +151,14 @@ initSessionEnv typeNames pm hc ev expMap expSet = do
   rq <- newIORef Seq.empty
   cs <- newIORef []
   pmRef <- newIORef pm
+  th <- newIORef Nothing
+  td <- newIORef 0
   pure
     SessionEnv
       { varCounter = vc,
         storeByType = bt,
         storeTypeNames = typeNameMap,
+        ruleNames = ruleNameMap,
         storeById = bi,
         storeNextId = ni,
         history = hi,
@@ -145,7 +168,9 @@ initSessionEnv typeNames pm hc ev expMap expSet = do
         hostCalls = hc,
         evaluables = ev,
         exportMap = expMap,
-        exportedSet = expSet
+        exportedSet = expSet,
+        traceHandler = th,
+        traceDepth = td
       }
 
 -- | Run a 'Chr' action against a built 'SessionEnv'. Thin alias around

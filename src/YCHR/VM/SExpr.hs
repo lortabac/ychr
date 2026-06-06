@@ -127,8 +127,31 @@ procedureToSExpr proc =
     ( SAtom "procedure"
         : SString proc.name.unName
         : SList (map nameToSExpr proc.params)
+        : procKindToSExpr proc.procKind
         : map stmtToSExpr proc.body
     )
+
+procKindToSExpr :: ProcKind -> SExpr
+procKindToSExpr (PKTell ct) = SList [SAtom "tell", constraintTypeToSExpr ct]
+procKindToSExpr (PKActivate ct) = SList [SAtom "activate", constraintTypeToSExpr ct]
+procKindToSExpr (PKOccurrence ct n rid display) =
+  SList
+    [ SAtom "occurrence",
+      constraintTypeToSExpr ct,
+      SInt (fromIntegral n),
+      ruleIdToSExpr rid,
+      SString display
+    ]
+procKindToSExpr PKReactivateDispatch = SList [SAtom "reactivate-dispatch"]
+procKindToSExpr (PKCallDispatch arity) =
+  SList [SAtom "call-dispatch", SInt (fromIntegral arity)]
+procKindToSExpr (PKFunction qn arity) =
+  SList
+    [ SAtom "function",
+      SString qn.moduleName,
+      SString qn.baseName,
+      SInt (fromIntegral arity)
+    ]
 
 stmtToSExpr :: Stmt -> SExpr
 stmtToSExpr (LetVal n e) = SList [SAtom "let-val", nameToSExpr n, valExprToSExpr e]
@@ -325,12 +348,38 @@ textFromSExpr (SString t) = pure t
 textFromSExpr s = err ("expected name string, got: " <> printSExpr s)
 
 procedureFromSExpr :: SExpr -> Err Procedure
-procedureFromSExpr (SList (SAtom "procedure" : SString nm : SList paramSexprs : bodyExprs)) =
-  do
-    params' <- traverse nameFromSExpr paramSexprs
-    body' <- traverse stmtFromSExpr bodyExprs
-    pure Procedure {name = Name nm, params = params', body = body'}
+procedureFromSExpr
+  (SList (SAtom "procedure" : SString nm : SList paramSexprs : kindSexpr : bodyExprs)) =
+    do
+      params' <- traverse nameFromSExpr paramSexprs
+      kind' <- procKindFromSExpr kindSexpr
+      body' <- traverse stmtFromSExpr bodyExprs
+      pure
+        Procedure
+          { name = Name nm,
+            params = params',
+            body = body',
+            procKind = kind'
+          }
 procedureFromSExpr s = err ("expected (procedure ...), got: " <> printSExpr s)
+
+procKindFromSExpr :: SExpr -> Err ProcKind
+procKindFromSExpr (SList [SAtom "tell", ct]) =
+  PKTell <$> constraintTypeFromSExpr ct
+procKindFromSExpr (SList [SAtom "activate", ct]) =
+  PKActivate <$> constraintTypeFromSExpr ct
+procKindFromSExpr (SList [SAtom "occurrence", ct, SInt n, rid, SString display]) =
+  PKOccurrence
+    <$> constraintTypeFromSExpr ct
+    <*> pure (fromInteger n)
+    <*> ruleIdFromSExpr rid
+    <*> pure display
+procKindFromSExpr (SList [SAtom "reactivate-dispatch"]) = pure PKReactivateDispatch
+procKindFromSExpr (SList [SAtom "call-dispatch", SInt arity]) =
+  pure (PKCallDispatch (fromInteger arity))
+procKindFromSExpr (SList [SAtom "function", SString m, SString b, SInt arity]) =
+  pure (PKFunction (Types.QualifiedName m b) (fromInteger arity))
+procKindFromSExpr s = err ("expected proc-kind, got: " <> printSExpr s)
 
 stmtFromSExpr :: SExpr -> Err Stmt
 stmtFromSExpr (SList [SAtom "let-val", n, e]) =

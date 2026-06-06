@@ -23,16 +23,19 @@ module YCHR.Runtime.Session
     -- * Session setup
     withCHR,
     withCHRExtra,
+    withCHRExtraTraced,
+    withTraceHandler,
 
     -- * Telling constraints
     tellConstraint,
   )
 where
 
+import Control.Exception (bracket_)
 import Control.Monad (unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask)
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, writeIORef)
 import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -49,6 +52,7 @@ import YCHR.Runtime.Monad
     initSessionEnv,
     runChr,
   )
+import YCHR.Runtime.Trace (TraceHandler)
 import YCHR.Runtime.Types (CallVal (..), Value (..))
 import YCHR.Types qualified as Types
 import YCHR.VM (Name (..), Procedure (..), Program (..))
@@ -100,12 +104,56 @@ withCHRExtra si hc extraProcs action = do
   env <-
     initSessionEnv
       si.program.typeNames
+      si.program.ruleNames
       procMap
       hc
       evaluableMap
       si.exportMap
       si.exportedSet
   runChr action env
+
+-- | Like 'withCHRExtra' but also installs a trace handler so that the
+-- interpreter emits 'TraceEvent's at each canonical ωr step (plus
+-- function and host-call boundaries). Used by the REPL's @:trace@
+-- one-shot dispatch. The handler is bound for the duration of the
+-- action; the session and its mutable state are fresh, so no clear-up
+-- on the way out is needed.
+withCHRExtraTraced ::
+  SessionInput ->
+  HostCallRegistry ->
+  [Procedure] ->
+  TraceHandler ->
+  Chr a ->
+  IO a
+withCHRExtraTraced si hc extraProcs handler action =
+  withCHRExtra si hc extraProcs $ do
+    env <- ask
+    liftIO $ do
+      writeIORef env.traceHandler (Just handler)
+      writeIORef env.traceDepth 0
+    action
+
+-- | Install a trace handler around a 'Chr' action inside an existing
+-- session, restoring the previous handler (and depth) on the way out
+-- — including on exceptions. Used by the REPL's live-mode @:trace@
+-- so that one query traces without affecting subsequent untraced
+-- queries against the same persistent store.
+withTraceHandler :: TraceHandler -> Chr a -> Chr a
+withTraceHandler handler action = do
+  env <- ask
+  liftIO $ do
+    prevHandler <- readIORef env.traceHandler
+    prevDepth <- readIORef env.traceDepth
+    bracket_
+      ( do
+          writeIORef env.traceHandler (Just handler)
+          writeIORef env.traceDepth 0
+      )
+      ( do
+          writeIORef env.traceHandler prevHandler
+          writeIORef env.traceDepth prevDepth
+      )
+      (runChr action env)
 
 -- | Add a constraint to the store. The constraint name can be
 -- unqualified (resolved via the session's export map) or fully

@@ -42,7 +42,7 @@ tests =
 
 runVarEnv :: Chr a -> IO a
 runVarEnv action = do
-  env <- initSessionEnv [] Map.empty Map.empty Map.empty Map.empty Set.empty
+  env <- initSessionEnv [] [] Map.empty Map.empty Map.empty Map.empty Set.empty
   runChr action env
 
 -- | Run an action and also return the observers gathered by the final 'unify'.

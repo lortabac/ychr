@@ -113,6 +113,32 @@ REPL_TESTS = [
         "prelude:max\n"
         ":- function max(T, T) -> T requiring '>='(T, T) -> bool.\n",
     ),
+    # :trace — refined-operational-semantics tracer. The arithmetic
+    # case shows that user-function entries (`call prelude:+`), host
+    # calls (`host call +`), and returns are all visible. Bindings are
+    # intentionally not printed; the user re-runs without `:trace` to
+    # see them. The bare `:trace` form prints a usage line.
+    (
+        ":trace R is 1 + 2.",
+        "call prelude:+(1, 2)\n  host call +(1, 2) = 3\nreturn 3\n",
+    ),
+    # Query-side `=` and host-call goals go through `Run.executeBodyGoal`,
+    # which has its own trace instrumentation parallel to the
+    # interpreter's `BUnify` / `invokeHostCall` paths. A `=` against a
+    # ground RHS produces a single `unify` event with no reactivations
+    # (no constraints are watching an unbound variable yet).
+    (
+        ":trace X = 1.",
+        "unify _ = 1\n",
+    ),
+    (
+        ":trace host:print(42).",
+        "42\nhost call print(42) = '()'\n",
+    ),
+    (
+        ":trace",
+        ":trace GOAL  -- run GOAL with refined-operational-semantics tracing\n",
+    ),
 ]
 
 
@@ -174,6 +200,38 @@ def test_info_hidden_constructors(ychr_bin, tmp_path):
         "unknown identifier: info_hidden:secret\n"
         "info_hidden:partial\n"
         ":- chr_type partial ---> shown ; hidden.\n"
+    )
+    assert result.stdout == expected
+
+
+def test_trace_chr_program(ychr_bin, tmp_path):
+    """`:trace` against a CHR program shows the ωr events for a single
+    propagation rule fire: tell, store, activate, try-occurrence,
+    partner pick, fire (with constraint ids), and recursive tell.
+    Tests the core CHR scheduling events together (function/host-call
+    events are tested by the inline arithmetic case)."""
+    (tmp_path / "prop.chr").write_text(
+        ":- module(prop, [p/1, q/1]).\n"
+        ":- chr_constraint p/1.\n"
+        ":- chr_constraint q/1.\n"
+        "make_q @ p(X) ==> q(X).\n"
+    )
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet", str(tmp_path / "prop.chr")],
+        input=":trace prop:p(1).\n",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    expected = (
+        "tell prop:p(1)\n"
+        "  store c#0: prop:p(1)\n"
+        "  activate c#0: prop:p(1)\n"
+        "    try occurrence prop:p #1 (rule make_q)\n"
+        "      fire make_q [c#0]\n"
+        "      tell prop:q(1)\n"
+        "        store c#1: prop:q(1)\n"
+        "        activate c#1: prop:q(1)\n"
     )
     assert result.stdout == expected
 

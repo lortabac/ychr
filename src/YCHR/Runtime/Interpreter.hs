@@ -25,6 +25,14 @@ module YCHR.Runtime.Interpreter
     -- * Deep-eval walker (shared with the query-time evaluator)
     deepEvalValue,
 
+    -- * Tracing helpers (shared with the query-time driver)
+    emitTrace,
+    snapshotValue,
+    snapshotValues,
+    suspensionView,
+    constraintTypeLabel,
+    lookupRuleName,
+
     -- * Internal (for testing)
     callProc,
     bindParams,
@@ -42,6 +50,7 @@ import Control.Exception
     throwIO,
     try,
   )
+import Control.Monad (unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
@@ -54,8 +63,11 @@ import Data.IORef
     readIORef,
     writeIORef,
   )
+import Data.IntMap.Strict qualified as IntMap
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Sequence qualified as Seq
+import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Meta (valueToTerm)
 import YCHR.Pretty (prettyTerm)
@@ -85,9 +97,11 @@ import YCHR.Runtime.Store
     isConstraintType,
     isSuspAlive,
     killConstraint,
+    lookupSusp,
     storeConstraint,
     suspArg,
   )
+import YCHR.Runtime.Trace (TraceEvent (..))
 import YCHR.Runtime.Types (CallVal (..), SuspensionId, Value (..))
 import YCHR.Runtime.Var
   ( deref,
@@ -98,6 +112,8 @@ import YCHR.Runtime.Var
     newVar,
     unify,
   )
+import YCHR.Types (Term)
+import YCHR.Types qualified as Types
 import YCHR.VM
 
 -- ---------------------------------------------------------------------------
@@ -158,7 +174,15 @@ interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO Value
 interpret prog hostCalls entryName args = do
   let procMap = Map.fromList [(p.name, p) | p <- prog.procedures]
       evaluableMap = Map.fromList prog.evaluables
-  env <- initSessionEnv prog.typeNames procMap hostCalls evaluableMap Map.empty mempty
+  env <-
+    initSessionEnv
+      prog.typeNames
+      prog.ruleNames
+      procMap
+      hostCalls
+      evaluableMap
+      Map.empty
+      mempty
   runChr (callProc entryName (map CVal args)) env
 
 -- ---------------------------------------------------------------------------
@@ -227,12 +251,76 @@ tryControlFlow m = do
   liftIO (try (runChr m env))
 
 -- ---------------------------------------------------------------------------
+-- Tracing helpers
+-- ---------------------------------------------------------------------------
+
+-- | Emit a 'TraceEvent' if a handler is installed. The event is built
+-- lazily — when tracing is off, the action passed in is not run, so
+-- callers can place expensive snapshotValues (e.g. 'valueToTerm' walks)
+-- inside it without paying the cost when tracing is disabled.
+emitTrace :: Chr TraceEvent -> Chr ()
+emitTrace mkEv = do
+  env <- ask
+  mh <- liftIO (readIORef env.traceHandler)
+  case mh of
+    Nothing -> pure ()
+    Just h -> do
+      ev <- mkEv
+      depth <- liftIO (readIORef env.traceDepth)
+      liftIO (h depth ev)
+{-# INLINE emitTrace #-}
+
+-- | Run @action@ at depth @depth + 1@, restoring the previous depth
+-- on the way out (including on exception). No-op when tracing is off.
+withTraceDepth :: Chr a -> Chr a
+withTraceDepth action = do
+  env <- ask
+  mh <- liftIO (readIORef env.traceHandler)
+  case mh of
+    Nothing -> action
+    Just _ -> do
+      let depthRef = env.traceDepth
+      liftIO $
+        bracket
+          (atomicModifyIORef' depthRef (\d -> (d + 1, ())))
+          (\() -> atomicModifyIORef' depthRef (\d -> (d - 1, ())))
+          (\() -> runChr action env)
+
+-- | Snapshot a 'Value' as a 'Term' for inclusion in a trace event.
+-- Wraps 'valueToTerm' with an empty alias map — trace events do not
+-- need the per-query alias-class machinery; raw variable names are
+-- fine for inspection.
+snapshotValue :: Value -> Chr Term
+snapshotValue = valueToTerm Map.empty
+
+snapshotValues :: [Value] -> Chr [Term]
+snapshotValues = traverse snapshotValue
+
+-- | Look up a suspension by id and return its constraint-type and
+-- argument values. Used by trace-event builders that need both.
+suspensionView :: SuspensionId -> Chr (ConstraintType, [Value])
+suspensionView sid = do
+  susp <- lookupSusp sid
+  pure (susp.suspType, susp.args)
+
+-- | Look up a rule's display name from the session-cached
+-- 'ruleNames' table. Falls back to @__rule_N@ on miss.
+lookupRuleName :: SessionEnv -> RuleId -> Text
+lookupRuleName env (RuleId i) =
+  case IntMap.lookup i env.ruleNames of
+    Just n -> n
+    Nothing -> T.pack ("__rule_" ++ show i)
+
+-- ---------------------------------------------------------------------------
 -- Core interpreter
 -- ---------------------------------------------------------------------------
 
 -- | Call a procedure. Creates a fresh local 'Env' with parameter
 -- bindings, executes the body, and catches 'CFReturn'. Default
--- return: 'VBool False'.
+-- return: 'VBool False'. Emits trace events at entry (and on return
+-- for user functions / lambdas) when tracing is on; uses the
+-- procedure's 'procKind' tag to label the event and decide whether
+-- to bump the trace indentation.
 callProc :: Name -> [CallVal] -> Chr Value
 callProc name args = do
   mproc <- lookupProc name
@@ -242,13 +330,87 @@ callProc name args = do
       env <- case bindParams name proc.params args of
         Right e -> pure e
         Left msg -> runtimeErrorS msg
-      withSavedCallStack $ do
-        result <- tryControlFlow (withFreshEnv env (execStmts proc.body))
-        case result of
-          Right () -> pure (VBool False)
-          Left (CFReturn v) -> pure v
-          Left (CFContinue l) -> runtimeError' "callProc: uncaught Continue " l.unLabel
-          Left (CFBreak l) -> runtimeError' "callProc: uncaught Break " l.unLabel
+      traceEntry proc args
+      let runBody = withSavedCallStack $ do
+            result <- tryControlFlow (withFreshEnv env (execStmts proc.body))
+            case result of
+              Right () -> pure (VBool False)
+              Left (CFReturn v) -> pure v
+              Left (CFContinue l) -> runtimeError' "callProc: uncaught Continue " l.unLabel
+              Left (CFBreak l) -> runtimeError' "callProc: uncaught Break " l.unLabel
+      result <-
+        if bumpDepthFor proc.procKind
+          then withTraceDepth runBody
+          else runBody
+      traceExit proc.procKind result
+      pure result
+
+-- | Should entering a procedure of this kind increase trace
+-- indentation? Tells, activates, occurrences, reactivate-dispatch,
+-- and user functions/lambdas do; the @$call@ dispatcher is a thin
+-- router and would just add noise.
+bumpDepthFor :: ProcKind -> Bool
+bumpDepthFor PKTell {} = True
+bumpDepthFor PKActivate {} = True
+bumpDepthFor PKOccurrence {} = True
+bumpDepthFor PKReactivateDispatch = True
+bumpDepthFor PKFunction {} = True
+bumpDepthFor PKCallDispatch {} = False
+
+-- | Emit the entry-time event for a procedure call, if tracing is on.
+-- Reactivation events are emitted at the per-suspension boundary
+-- inside 'DrainReactivationQueue' (where the constraint id is in
+-- hand), not here.
+traceEntry :: Procedure -> [CallVal] -> Chr ()
+traceEntry proc args = case proc.procKind of
+  PKTell ct -> emitTrace $ do
+    ctName <- constraintTypeLabel ct
+    ts <- snapshotValues [v | CVal v <- args]
+    pure (TETell ctName ts)
+  PKActivate _ -> emitTrace $ do
+    let sid = activateSuspensionId args
+    (ct, vs) <- suspensionView sid
+    ctName <- constraintTypeLabel ct
+    ts <- snapshotValues vs
+    pure (TEActivate ctName sid ts)
+  PKOccurrence ct n _ display -> emitTrace $ do
+    ctName <- constraintTypeLabel ct
+    pure (TETryOccurrence ctName n display)
+  PKReactivateDispatch -> pure ()
+  PKCallDispatch _ -> pure ()
+  PKFunction qn _ -> emitTrace $ do
+    let fname = Types.flattenName (Types.qualifiedToName qn)
+    ts <- snapshotValues [v | CVal v <- args]
+    pure (TECallFunction fname ts)
+
+-- | Emit a 'TEReturn' event for procedures whose return value is
+-- user-meaningful: user functions and lambdas. The framework
+-- procedures (tell / activate / occurrence) return a boolean control
+-- flag that has no surface meaning; the depth dedent alone makes
+-- their completion visible.
+traceExit :: ProcKind -> Value -> Chr ()
+traceExit (PKFunction _ _) v = emitTrace $ do
+  t <- snapshotValue v
+  pure (TEReturn t)
+traceExit _ _ = pure ()
+
+-- | Render a 'ConstraintType' as its source name using the session's
+-- 'storeTypeNames' table. Falls back to @c#type_N@ when the type is
+-- unknown (which should never happen for compiler-generated code).
+constraintTypeLabel :: ConstraintType -> Chr Text
+constraintTypeLabel ct = do
+  env <- ask
+  let i = ct.unConstraintType
+  case IntMap.lookup i env.storeTypeNames of
+    Just name -> pure (Types.flattenName name)
+    Nothing -> pure (T.pack ("c#type_" ++ show i))
+
+-- | Pull the leading suspension id out of an activate / occurrence /
+-- reactivate-dispatch procedure's argument list. The compiler always
+-- emits the id as the first parameter.
+activateSuspensionId :: [CallVal] -> SuspensionId
+activateSuspensionId (CId s : _) = s
+activateSuspensionId _ = error "activateSuspensionId: expected leading id argument"
 
 -- | Bind procedure parameters into the appropriate environment slot
 -- based on the runtime tag of each argument.
@@ -308,13 +470,26 @@ execStmt (BoolExprStmt expr) = do
   pure ()
 execStmt (Store expr) = do
   sid <- evalIdExpr expr
-  lift (storeConstraint sid)
+  lift $ do
+    storeConstraint sid
+    emitTrace $ do
+      (ct, vs) <- suspensionView sid
+      ctName <- constraintTypeLabel ct
+      ts <- snapshotValues vs
+      pure (TEStore sid ctName ts)
 execStmt (Kill expr) = do
   sid <- evalIdExpr expr
-  lift (killConstraint sid)
+  lift $ do
+    killConstraint sid
+    emitTrace (pure (TEKill sid))
 execStmt (AddHistory ruleId exprs) = do
   sids <- traverse evalIdExpr exprs
-  lift (addHistory ruleId sids)
+  lift $ do
+    emitTrace $ do
+      env <- ask
+      let rn = lookupRuleName env ruleId
+      pure (TEFire rn sids)
+    addHistory ruleId sids
 execStmt (DrainReactivationQueue suspVar body) = do
   envRef <- ask
   lift $
@@ -322,6 +497,11 @@ execStmt (DrainReactivationQueue suspVar body) = do
       alive <- aliveConstraint sid
       if alive
         then do
+          emitTrace $ do
+            (ct, vs) <- suspensionView sid
+            ctName <- constraintTypeLabel ct
+            ts <- snapshotValues vs
+            pure (TEReactivate sid ctName ts)
           liftIO (modifyIORef' envRef (insertId suspVar sid))
           runReaderT (execStmts body) envRef
         else pure ()
@@ -353,6 +533,10 @@ execForeach lbl suspVar conditions body (susp : rest) = do
       if not ok
         then execForeach lbl suspVar conditions body rest
         else do
+          lift $ emitTrace $ do
+            ctName <- constraintTypeLabel susp.suspType
+            ts <- snapshotValues susp.args
+            pure (TEPartner ctName susp.suspId ts)
           modifyEnv (insertId suspVar susp.suspId)
           envRef <- ask
           result <- lift (tryControlFlow (runReaderT (execStmts body) envRef))
@@ -463,11 +647,30 @@ evalBoolExpr (BIsConstraintType expr cType) = do
   lift (isConstraintType sid cType)
 evalBoolExpr (BNotInHistory ruleId args) = do
   sids <- traverse evalIdExpr args
-  lift (notInHistory ruleId sids)
+  ok <- lift (notInHistory ruleId sids)
+  unless ok $
+    lift $
+      emitTrace $ do
+        env <- ask
+        let rn = lookupRuleName env ruleId
+        pure (TEHistoryHit rn sids)
+  pure ok
 evalBoolExpr (BUnify e1 e2) = do
   v1 <- evalValExpr e1
   v2 <- evalValExpr e2
-  lift (unifyOrError v1 v2)
+  lift $ do
+    env <- ask
+    mh <- liftIO (readIORef env.traceHandler)
+    case mh of
+      Nothing -> unifyOrError v1 v2
+      Just _ -> do
+        t1 <- snapshotValue v1
+        t2 <- snapshotValue v2
+        beforeLen <- liftIO (Seq.length <$> readIORef env.reactQueue)
+        ok <- unifyOrError v1 v2
+        afterLen <- liftIO (Seq.length <$> readIORef env.reactQueue)
+        emitTrace (pure (TEUnify t1 t2 (afterLen - beforeLen)))
+        pure ok
 evalBoolExpr (BFromVal expr) = do
   v <- evalValExpr expr
   case v of
@@ -519,7 +722,12 @@ invokeHostCall name argVals = do
       env <- ask
       result <- liftIO (try @SomeException (runChr (f argVals) env))
       case result of
-        Right v -> pure v
+        Right v -> do
+          emitTrace $ do
+            argTs <- snapshotValues argVals
+            resT <- snapshotValue v
+            pure (TECallHost name.unName argTs resT)
+          pure v
         Left exc
           | Just (cf :: ControlFlow) <- fromException exc ->
               liftIO (throwIO cf)

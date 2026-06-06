@@ -187,8 +187,8 @@ genConstraintProcs ::
 genConstraintProcs symTab occMap (ident, cType) = do
   let occs = lookupOccurrences ident occMap
       tellProc = genTell ident.name cType ident.arity
-      activate = genActivate ident.name ident.arity occs
-  occProcs <- traverse (genOccurrence symTab ident.name ident.arity) occs
+      activate = genActivate ident.name cType ident.arity occs
+  occProcs <- traverse (genOccurrence symTab ident.name cType ident.arity) occs
   pure (tellProc : activate : occProcs)
 
 -- ---------------------------------------------------------------------------
@@ -201,12 +201,15 @@ genTell name cType arity =
       tellName = tellProcName name arity
       activateName = activateProcName name arity
    in Procedure
-        tellName
-        params
-        [ LetId activeName (CreateConstraint cType (map Var params)),
-          Store (IdVar activeName),
-          ExprStmt (CallExpr activateName [AId (IdVar activeName)])
-        ]
+        { name = tellName,
+          params = params,
+          body =
+            [ LetId activeName (CreateConstraint cType (map Var params)),
+              Store (IdVar activeName),
+              ExprStmt (CallExpr activateName [AId (IdVar activeName)])
+            ],
+          procKind = PKTell cType
+        }
 
 -- ---------------------------------------------------------------------------
 -- activate_c
@@ -216,8 +219,8 @@ genTell name cType arity =
 -- its single parameter, extracts the constraint arguments into local
 -- variables, and tries each occurrence procedure in order (paper §5.2,
 -- Listing 2 with Early Drop from Listing 8).
-genActivate :: Types.Name -> Int -> [Occurrence] -> Procedure
-genActivate name arity occs =
+genActivate :: Types.Name -> ConstraintType -> Int -> [Occurrence] -> Procedure
+genActivate name cType arity occs =
   let activateName = activateProcName name arity
       argExtracts =
         [ LetVal (argName i) (FieldArg (IdVar activeName) (ArgIndex i))
@@ -227,7 +230,12 @@ genActivate name arity occs =
         argExtracts
           ++ concatMap genActivateCall occs
           ++ [Return (Lit (BoolLit False))]
-   in Procedure activateName [activeName] body
+   in Procedure
+        { name = activateName,
+          params = [activeName],
+          body = body,
+          procKind = PKActivate cType
+        }
   where
     occCallArgs =
       AId (IdVar activeName) : map (AVal . Var) (argNames arity)
@@ -244,15 +252,22 @@ genActivate name arity occs =
 genOccurrence ::
   SymbolTable ->
   Types.Name ->
+  ConstraintType ->
   Int ->
   Occurrence ->
   Writer [Diagnostic CompileError] Procedure
-genOccurrence symTab name arity occ = do
+genOccurrence symTab name cType arity occ = do
   let params = activeName : argNames arity
       procName' = occProcName name arity occ.number
       varMap = buildVarMap occ
   body <- genOccurrenceBody symTab varMap occ
-  pure (Procedure procName' params body)
+  pure
+    Procedure
+      { name = procName',
+        params = params,
+        body = body,
+        procKind = PKOccurrence cType occ.number.unOccurrenceNumber occ.ruleId occ.ruleDisplay
+      }
 
 -- | Map every user-written head variable in an 'Occurrence' to the
 -- generated VM variable that holds its value (an @X_i@ for the active
@@ -927,7 +942,13 @@ compileFunctionDef func = do
           func.equations.parsed
   eqStmts <- traverse (compileEquation params funcSi) func.equations.node
   let errorStmt = ExprStmt (HostCall chrErrorName [Lit (AtomLit "no_matching_equation")])
-  pure (Procedure procName' params (PushFrame frame : concat eqStmts ++ [errorStmt]))
+  pure
+    Procedure
+      { name = procName',
+        params = params,
+        body = PushFrame frame : concat eqStmts ++ [errorStmt],
+        procKind = PKFunction func.name func.arity
+      }
 
 -- | Build a VarMap for a function equation: maps each normalized parameter
 -- variable to the corresponding procedure parameter name.
@@ -1021,7 +1042,12 @@ compileFunStmt varMap si (D.FunApply f args) = do
 genReactivateDispatch :: SymbolTable -> Procedure
 genReactivateDispatch symTab =
   let body = map genDispatchBranch (symbolTableToList symTab)
-   in Procedure reactivateDispatchName [suspParamName] body
+   in Procedure
+        { name = reactivateDispatchName,
+          params = [suspParamName],
+          body = body,
+          procKind = PKReactivateDispatch
+        }
   where
     genDispatchBranch (ident, cType) =
       If
@@ -1053,9 +1079,11 @@ genCallFunDispatch functions callArity =
       lambdaBranches = concatMap (genLambdaBranch callArity argParams) functions
       errorStmt = ExprStmt (HostCall chrErrorName [Lit (AtomLit "call: no matching closure")])
    in Procedure
-        (callFunProcName callArity)
-        (closureParam : argParams)
-        (funRefBranches ++ lambdaBranches ++ [errorStmt])
+        { name = callFunProcName callArity,
+          params = closureParam : argParams,
+          body = funRefBranches ++ lambdaBranches ++ [errorStmt],
+          procKind = PKCallDispatch callArity
+        }
 
 -- | Generate a dispatch branch for a function reference (@name/arity@).
 -- Only emits a branch when the function's arity matches @callArity@.
