@@ -236,6 +236,50 @@ def test_trace_chr_program(ychr_bin, tmp_path):
     assert result.stdout == expected
 
 
+def test_trace_nested_foreach(ychr_bin, tmp_path):
+    """`:trace` on a multi-head rule shows nested `Foreach` iterations
+    indented: each inner partner sits one level deeper than the outer.
+    A 3-head propagation rule compiles to two nested Foreaches (one
+    per non-active partner); the last-told constraint activates against
+    a fully-populated store and triggers the fire."""
+    (tmp_path / "nest.chr").write_text(
+        ":- module(nest, [a/1, b/1, c/1, ok/0]).\n"
+        ":- chr_constraint a/1.\n"
+        ":- chr_constraint b/1.\n"
+        ":- chr_constraint c/1.\n"
+        ":- chr_constraint ok/0.\n"
+        "r @ a(X), b(X), c(X) ==> ok.\n"
+    )
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet", str(tmp_path / "nest.chr")],
+        input=":trace nest:a(1), nest:b(1), nest:c(1).\n",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    expected = (
+        "tell nest:a(1)\n"
+        "  store c#0: nest:a(1)\n"
+        "  activate c#0: nest:a(1)\n"
+        "    try occurrence nest:a #1 (rule r)\n"
+        "tell nest:b(1)\n"
+        "  store c#1: nest:b(1)\n"
+        "  activate c#1: nest:b(1)\n"
+        "    try occurrence nest:b #1 (rule r)\n"
+        "tell nest:c(1)\n"
+        "  store c#2: nest:c(1)\n"
+        "  activate c#2: nest:c(1)\n"
+        "    try occurrence nest:c #1 (rule r)\n"
+        "      partner c#1: nest:b(1)\n"
+        "        partner c#0: nest:a(1)\n"
+        "          fire r [c#2, c#1, c#0]\n"
+        "          tell nest:ok\n"
+        "            store c#3: nest:ok\n"
+        "            activate c#3: nest:ok\n"
+    )
+    assert result.stdout == expected
+
+
 def test_info_cross_module_ambiguity(ychr_bin, tmp_path):
     """Two modules exporting the same `(name, arity)` make `:info NAME`
     refuse to guess. The user's documented choice is to error and list

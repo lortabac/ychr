@@ -539,7 +539,7 @@ execForeach lbl suspVar conditions body (susp : rest) = do
             pure (TEPartner ctName susp.suspId ts)
           modifyEnv (insertId suspVar susp.suspId)
           envRef <- ask
-          result <- lift (tryControlFlow (runReaderT (execStmts body) envRef))
+          result <- lift (withTraceDepth (tryControlFlow (runReaderT (execStmts body) envRef)))
           case result of
             Right () -> execForeach lbl suspVar conditions body rest
             Left (CFContinue l)
