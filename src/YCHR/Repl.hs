@@ -71,6 +71,7 @@ import YCHR.Types
     Term (..),
     TypeDefinition (..),
     TypeExpr,
+    typeConstructors,
   )
 import YCHR.Types qualified as Types
 
@@ -538,7 +539,7 @@ lookupInfo prog name mArity =
               ctorEntries =
                 [ IEDataCtor td c
                 | td <- prog.desugaredProgram.typeDefinitions,
-                  c <- td.constructors,
+                  c <- typeConstructors td,
                   ctorBaseName c == n,
                   arityMatches (length c.conArgs),
                   isCtorExportedByParent prog td c
@@ -606,7 +607,7 @@ qualifiedLookup prog qn mArity =
       ctorEntries =
         [ IEDataCtor td c
         | td <- prog.desugaredProgram.typeDefinitions,
-          c <- td.constructors,
+          c <- typeConstructors td,
           ctorMatchesQN c qn,
           arityMatches (length c.conArgs),
           isCtorExportedByParent prog td c

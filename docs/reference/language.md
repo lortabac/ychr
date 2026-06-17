@@ -99,6 +99,35 @@ in a rule, guard, or expression is rejected with `YCHR-20010` when
 `green` is declared on `col` but not in `palette`'s export allowlist.
 Bare and qualified syntax see the same view of the module.
 
+### Opaque types
+
+An *opaque type* is a nominal type with no data constructors, declared
+with `:- opaque_type` and introduced or eliminated only by (host-backed)
+functions (see [type-system.md](type-system.md#opaque-types) for the
+typing rules):
+
+```
+:- module(sets, [type(set/1), set_new/0, set_member/2]).
+
+:- opaque_type set(X).
+
+:- function set_new() -> set(X).
+:- function set_member(set(X), X) -> bool.
+set_new() -> host:set_new().
+set_member(S, X) -> host:set_member(S, X).
+```
+
+Opaque types share the type namespace with algebraic types, so they are
+exported (and imported) with the same `type(Name/Arity)` form. An opaque
+type has no constructors, so the `type(Name/Arity, [...])` allowlist form
+is not useful for one (a named constructor is rejected as unknown,
+`YCHR-20008`). A `:- opaque_type` directive with a `---> ...` body is
+rejected with `YCHR-15016`. Like any type-constructor name, an opaque
+type's name is not a data constructor, so writing it in term position
+(e.g. `X = set(1)`) is a `YCHR-20101` "undeclared data constructor"
+warning and types as `any`; obtain and consume opaque values through the
+functions declared over them.
+
 ## Constraints
 
 Constraints are declared with `:- chr_constraint`. The arity-only

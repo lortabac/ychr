@@ -1,0 +1,3 @@
+% Exports an opaque type box/1.
+:- module(lib, [type(box/1)]).
+:- opaque_type box(X).

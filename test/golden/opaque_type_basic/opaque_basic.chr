@@ -1,0 +1,16 @@
+% Opaque type whose values are produced and consumed only by functions.
+% The functions are backed here by the host arithmetic primitive so the
+% example runs end-to-end; a real program would back them by a host set,
+% handle, or similar abstract value.
+:- module(opaque_basic, [compute/1]).
+
+:- opaque_type box(X).
+
+:- function box_new(X) -> box(X).
+:- function box_get(box(X)) -> X.
+box_new(X) -> host:'+'(X, 0).
+box_get(B) -> host:'+'(B, 0).
+
+:- chr_constraint compute(int).
+
+compute(R) <=> B is box_new(21), R is box_get(B).

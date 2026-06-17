@@ -106,6 +106,7 @@ builtinOps =
       ( 1180,
         [ (P.Fx, "chr_constraint"),
           (P.Fx, "chr_type"),
+          (P.Fx, "opaque_type"),
           (P.Fx, "function"),
           (P.Fx, "open_function"),
           (P.Fx, "class"),
@@ -598,6 +599,13 @@ data ParseValidationError
   | -- | A @:- chr_type@ directive does not have the expected
     -- @head ---> alts@ shape. The type definition is dropped.
     MalformedTypeDefinition
+  | -- | A @:- opaque_type@ directive carries a constructor body
+    -- (@head ---> ...@). Opaque types cannot have data constructors.
+    -- The type definition is dropped.
+    OpaqueTypeHasConstructors
+  | -- | A @:- opaque_type@ directive does not have the expected
+    -- @name@ or @name(Vars)@ head shape. The type definition is dropped.
+    MalformedOpaqueTypeDefinition
   | -- | A bound signature inside a @requiring@ clause does not have the
     -- expected @name(τ₁, …, τₙ) -> τᵣ@ shape. The enclosing declaration
     -- is dropped.
@@ -843,6 +851,15 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
     case convertTypeDefinition typeBody of
       (Just annDef, errs) -> (DirTypeDecl [annDef], errs)
       (Nothing, errs) -> (DirOther, errs)
+  -- :- opaque_type name(Vars).
+  -- Parsed as prefix op (1180): Compound "opaque_type" [head]. A
+  -- constructor body @---> ...@ (1150) nests inside as
+  -- Compound "opaque_type" [Compound "--->" [..]] and is rejected by
+  -- 'convertOpaqueTypeDefinition'.
+  Compound "opaque_type" [typeBody] ->
+    case convertOpaqueTypeDefinition typeBody of
+      (Just annDef, errs) -> (DirTypeDecl [annDef], errs)
+      (Nothing, errs) -> (DirOther, errs)
   -- Unknown directives (any other @:- name(...)@ shape).
   _ -> (DirOther, [])
 convertDirective _ = (DirOther, [])
@@ -945,6 +962,8 @@ convertExportItem (Ann pexpr loc) = case pexpr of
     | Just ty <- parseOpTypeFromPExpr tyExpr,
       Just name <- atomName nameExpr ->
         (Just (OperatorDecl (OpDecl (fromInteger fix) ty name)), [])
+  -- @type(name/arity)@ — covers both algebraic and opaque types (they
+  -- share one type namespace).
   Compound "type" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
     (Just (TypeExportDecl name (fromInteger arity) Nothing), [])
   Compound "type" [spec, conList]
@@ -1219,7 +1238,11 @@ convertTypeDefinition (Ann pexpr loc) = case pexpr of
       case partitionEithers
         (map convertDataConstructor (flattenSemicolon alts)) of
         ([], cons) ->
-          ( Just (Ann (TypeDefinition (Unqualified tname) tvars cons loc) loc),
+          ( Just
+              ( Ann
+                  (TypeDefinition (Unqualified tname) tvars (Algebraic cons) loc)
+                  loc
+              ),
             []
           )
         (errs, _) -> (Nothing, errs)
@@ -1228,6 +1251,22 @@ convertTypeDefinition (Ann pexpr loc) = case pexpr of
     typeHeadShape (Atom n) = Just (n, [])
     typeHeadShape (Compound n vars) = Just (n, [v | Ann (Var v) _ <- vars])
     typeHeadShape _ = Nothing
+
+-- | Convert the body of a @:- opaque_type@ directive to an opaque
+-- 'TypeDefinition'. An opaque type has no data constructors, so a
+-- constructor body (@---> ...@) is rejected with
+-- 'OpaqueTypeHasConstructors'; any other non-head shape is
+-- 'MalformedOpaqueTypeDefinition'.
+convertOpaqueTypeDefinition ::
+  Ann PExpr -> (Maybe (Ann TypeDefinition), [AnnP ParseValidationError])
+convertOpaqueTypeDefinition (Ann pexpr loc) = case pexpr of
+  Compound "--->" _ -> (Nothing, [AnnP OpaqueTypeHasConstructors loc pexpr])
+  Atom n -> (Just (mk n []), [])
+  Compound n vars -> (Just (mk n [v | Ann (Var v) _ <- vars]), [])
+  _ -> (Nothing, [AnnP MalformedOpaqueTypeDefinition loc pexpr])
+  where
+    mk tname tvars =
+      Ann (TypeDefinition (Unqualified tname) tvars Opaque loc) loc
 
 -- | Convert a PExpr to a 'DataConstructor'. Returns 'Left' if the
 -- constructor or any of its argument types is malformed.

@@ -1,0 +1,12 @@
+% An opaque type's name is an ordinary type-constructor name, so it
+% coexists with an unrelated data constructor of the same base name:
+% the importer pulls in the opaque type box/1 and also declares its own
+% algebraic type whose constructor is box/2, which builds and matches
+% normally.
+:- module(app, [run/1]).
+:- use_module(lib, [type(box/1)]).
+:- chr_type cell ---> box(int, int).
+:- chr_constraint run(int).
+run(R) <=> P = box(3, 4), R is get_left(P).
+:- function get_left(cell) -> int.
+get_left(box(L, _)) -> L.

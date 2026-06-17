@@ -64,9 +64,11 @@ module YCHR.DSL
 
     -- * Type definitions
     TypeDefinition,
+    TypeKind (..),
     DataConstructor,
     TypeExpr (..),
     tyDef,
+    tyOpaque,
     dataCtor,
 
     -- * Rules
@@ -339,7 +341,20 @@ tyDef n vs cs =
   TypeDefinition
     { name = Unqualified n,
       typeVars = vs,
-      constructors = cs,
+      kind = Algebraic cs,
+      loc = dummyLoc
+    }
+
+-- | Build an opaque type definition: a nominal type name with zero or
+-- more type parameters and no data constructors.
+--
+-- > tyOpaque "set" ["X"]
+tyOpaque :: Text -> [Text] -> TypeDefinition
+tyOpaque n vs =
+  TypeDefinition
+    { name = Unqualified n,
+      typeVars = vs,
+      kind = Opaque,
       loc = dummyLoc
     }
 

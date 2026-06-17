@@ -1,0 +1,7 @@
+:- module(bad, [go/1]).
+:- opaque_type box(X).
+:- function box_new(X) -> box(X).
+box_new(X) -> host:'+'(X, 0).
+:- chr_constraint go(string).
+% box(int) is not consistent with string.
+go(S) <=> S is box_new(1).

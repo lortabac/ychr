@@ -68,6 +68,7 @@ import YCHR.Types
     flattenName,
     headArgToTerm,
     headConstraintToConstraint,
+    typeConstructors,
   )
 import YCHR.Types qualified as Types
 import YCHR.VM qualified as VM
@@ -157,7 +158,7 @@ buildConMap tds =
   Map.fromList
     [ (dc.conName, (td, dc))
     | td <- tds,
-      dc <- td.constructors
+      dc <- typeConstructors td
     ]
 
 -- | Detect data constructors declared in more than one type definition.
@@ -188,7 +189,7 @@ detectDuplicateConstructors tds =
         (++)
         [ (dc.conName, [(flattenName td.name, length dc.conArgs, td.loc)])
         | td <- tds,
-          dc <- td.constructors
+          dc <- typeConstructors td
         ]
 
 -- | Build the use-site → declaration alias map, keyed by unqualified name.
@@ -203,7 +204,7 @@ buildConAlias tds =
       (++)
       [ (unqualifiedText dc.conName, [dc.conName])
       | td <- tds,
-        dc <- td.constructors
+        dc <- typeConstructors td
       ]
   where
     single [n] = Just n
@@ -621,7 +622,7 @@ tellConSigs prog =
                     sig
                   ]
           )
-          td.constructors
+          (typeConstructors td)
     )
     prog.typeDefinitions
 
@@ -1538,7 +1539,7 @@ validateTypeDefinitions tds typeMap =
 
 validateTypeDef :: Map Name TypeDefinition -> TypeDefinition -> [Diagnostic TypeCheckError]
 validateTypeDef typeMap td =
-  concatMap (validateConstructor typeMap td) td.constructors
+  concatMap (validateConstructor typeMap td) (typeConstructors td)
 
 validateConstructor ::
   Map Name TypeDefinition ->

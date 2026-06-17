@@ -37,6 +37,8 @@ internal error constructor to its code and human-readable message.
 | `YCHR-15013` | `MalformedFunctionEquation` | A function equation is not `lhs [\| guard] -> rhs`. |
 | `YCHR-15014` | `MalformedTopLevel` | A top-level term is not a directive, rule (`<=>` or `==>`), or function equation (`->`). |
 | `YCHR-15015` | `DuplicateModuleHeader` | A source file contains more than one `:- module(...)` directive. A file may declare at most one module header; remove the redundant directives. |
+| `YCHR-15016` | `OpaqueTypeHasConstructors` | A `:- opaque_type` directive carries a constructor body (`---> ...`). Opaque types have no data constructors; use `:- chr_type` for a type with constructors. |
+| `YCHR-15017` | `MalformedOpaqueTypeDefinition` | A `:- opaque_type` directive is not `name` or `name(Vars)`. |
 
 ### Resolve phase (`16xxx`)
 

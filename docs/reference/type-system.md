@@ -32,7 +32,7 @@ The type language is defined by the following grammar:
      |  string                       -- strings
      |  any                          -- the dynamic type
      |  α                            -- type variable
-     |  C(τ₁, ..., τₙ)              -- algebraic type constructor
+     |  C(τ₁, ..., τₙ)              -- algebraic or opaque type constructor
      |  fun(τ₁, ..., τₙ) -> τᵣ      -- function type
 ```
 
@@ -62,6 +62,78 @@ An algebraic type definition introduces:
 
 - A type constructor name with zero or more type parameters.
 - One or more data constructors, each with zero or more typed fields.
+
+### Opaque types
+
+An *opaque type* is a nominal type whose values are introduced and
+eliminated only by (host-backed) functions. It is declared with a
+dedicated `:- opaque_type` directive and has **no data constructors**:
+
+```prolog
+:- opaque_type set(X).
+:- opaque_type handle.
+```
+
+An opaque type definition introduces a type constructor name with zero
+or more type parameters and nothing else. Because it has no data
+constructors, a value of an opaque type cannot be built or
+pattern-matched structurally within CHR source; it can only be produced
+as the declared return of a function and consumed by passing it to a
+function whose parameter has that type:
+
+```prolog
+:- module(foo, [type(set/1)]).
+
+:- opaque_type set(X).
+
+:- function set_new() -> set(X).
+:- function set_member(set(X), X) -> bool.
+set_new() -> host:set_new().
+set_member(S, X) -> host:set_member(S, X).
+```
+
+Well-formedness of `:- opaque_type T(α₁, ..., αₙ).`:
+
+- The `αᵢ` are distinct type variables.
+- The parameters need not appear anywhere — *phantom* parameters are
+  allowed (an opaque type has no fields in which a parameter could
+  occur).
+- A constructor body (`---> ...`) is a syntax error
+  (`YCHR-15016`): opaque types cannot have data constructors.
+- `T` must not collide with a base/reserved type name or another
+  visible type.
+
+**Consistency (nominal).** An opaque type `T(τ₁, ..., τₙ)` is just a
+type constructor application, so it obeys the ordinary `[C-Con]`,
+`[C-Any-L]`, `[C-Any-R]`, and `[Inconsistency]` rules below. Concretely,
+`T` is consistent only with itself (parameters checked pairwise) and
+with `any`; it is inconsistent with every other type constructor and
+with every base or function type. This is exactly the nominal behavior
+desired: distinct opaque types never unify, and an opaque type never
+unifies with its representation.
+
+**Abstraction.** An opaque type's name `T` is a *type-constructor* name,
+not a data constructor — exactly like an algebraic type's name (`list`,
+`option`). It is meaningful only in *type-expression* position (function
+and constraint signatures, other type declarations). Writing `T(...)` in
+*term* position — `X = set(1)`, or `set(X)` in a guard, head, or equation
+pattern — is not a way to build an opaque value: `T` is an unknown data
+constructor there, so the term is typed `any` and, like every unknown
+constructor, draws an `UndeclaredDataConstructor` warning (`YCHR-20101`).
+The intended way to obtain or consume an opaque value is to call a
+function declared to return or accept `T(...)`. As with algebraic types,
+the soundness of the typed fragment rests on the gradual guarantee, not
+on a syntactic ban: a forged `set(1)` typed `any` can still flow into a
+`set`-typed position, just as a nonsensical `list(1)` can flow into a
+`list`-typed one.
+
+**Visibility.** Opaque types obey the module type-export/import rules
+(see [`language.md`](language.md)). They share the type namespace with
+algebraic types, so they are exported and imported with the same
+`type(T/n)` form (there is no separate opaque-export syntax). An opaque
+type has no constructors, so the `type(T/n, [...])` allowlist form is not
+useful for one — naming a constructor there is rejected as unknown
+(`YCHR-20008`).
 
 ### Function types
 

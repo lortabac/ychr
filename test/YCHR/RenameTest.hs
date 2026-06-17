@@ -3,6 +3,7 @@
 module YCHR.RenameTest (tests) where
 
 import Data.Map.Strict qualified as Map
+import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import YCHR.DSL
@@ -28,6 +29,11 @@ renameProgram ::
       [Diagnostic RenameWarning]
     )
 renameProgram = Rn.renameProgram defaultRenameInputs
+
+-- | Build an algebraic type definition positionally (the constructors
+-- are wrapped in the 'Algebraic' 'TypeKind').
+algebraicTD :: Name -> [Text] -> [DataConstructor] -> SourceLoc -> TypeDefinition
+algebraicTD n vs cs loc = TypeDefinition n vs (Algebraic cs) loc
 
 tests :: TestTree
 tests =
@@ -311,7 +317,7 @@ ambiguousDataConTests =
       (module' modName)
         { typeDecls =
             [ noAnn
-                ( TypeDefinition
+                ( algebraicTD
                     (Unqualified "t")
                     []
                     [DataConstructor (Unqualified ctor) argTypes]
@@ -858,7 +864,7 @@ warningTests =
               )
                 { typeDecls =
                     [ noAnn
-                        ( TypeDefinition
+                        ( algebraicTD
                             (Unqualified "t")
                             []
                             [ DataConstructor
@@ -899,7 +905,7 @@ warningTests =
               )
                 { typeDecls =
                     [ noAnn
-                        ( TypeDefinition
+                        ( algebraicTD
                             (Unqualified "t")
                             []
                             [ DataConstructor
@@ -1090,7 +1096,7 @@ warningTests =
               (module' "M")
                 { typeDecls =
                     [ noAnn
-                        ( TypeDefinition
+                        ( algebraicTD
                             (Unqualified "tree")
                             []
                             [ DataConstructor
@@ -1110,7 +1116,7 @@ warningTests =
               (module' "M")
                 { typeDecls =
                     [ noAnn
-                        ( TypeDefinition
+                        ( algebraicTD
                             (Unqualified "tree")
                             []
                             [ DataConstructor
@@ -1125,7 +1131,7 @@ warningTests =
           Right ([renamed], _) -> case renamed.typeDecls of
             [Ann td _] -> do
               td.name @?= Qualified "M" "tree"
-              case td.constructors of
+              case typeConstructors td of
                 [dc] -> dc.conName @?= Qualified "M" "leaf"
                 dcs -> assertFailure $ "expected 1 constructor, got " ++ show (length dcs)
             tds -> assertFailure $ "expected 1 type decl, got " ++ show (length tds)
@@ -1136,7 +1142,7 @@ warningTests =
               (module' "A")
                 { typeDecls =
                     [ noAnn
-                        ( TypeDefinition
+                        ( algebraicTD
                             (Unqualified "color")
                             []
                             [ DataConstructor
@@ -1151,7 +1157,7 @@ warningTests =
               (module' "B" `importing` ["A"])
                 { typeDecls =
                     [ noAnn
-                        ( TypeDefinition
+                        ( algebraicTD
                             (Unqualified "widget")
                             []
                             [ DataConstructor
@@ -1167,7 +1173,7 @@ warningTests =
                 }
         case renameProgram [modA, modB] of
           Right ([_, renamedB], _) -> case renamedB.typeDecls of
-            [Ann td _] -> case td.constructors of
+            [Ann td _] -> case typeConstructors td of
               [dc] -> case dc.conArgs of
                 [TypeCon colorName []] -> colorName @?= Qualified "A" "color"
                 args -> assertFailure $ "unexpected constructor args: " ++ show args

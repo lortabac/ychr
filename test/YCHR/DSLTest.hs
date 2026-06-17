@@ -251,10 +251,11 @@ typeDeclarationTests =
           @?= TypeDefinition
             { name = Unqualified "color",
               typeVars = [],
-              constructors =
-                [ DataConstructor (Unqualified "red") [],
-                  DataConstructor (Unqualified "green") []
-                ],
+              kind =
+                Algebraic
+                  [ DataConstructor (Unqualified "red") [],
+                    DataConstructor (Unqualified "green") []
+                  ],
               loc = dummyLoc
             },
       testCase "tyDef with type variables (parametric)" $
@@ -270,10 +271,11 @@ typeDeclarationTests =
               @?= TypeDefinition
                 { name = Unqualified "list",
                   typeVars = ["a"],
-                  constructors =
-                    [ DataConstructor (Unqualified "nil") [],
-                      DataConstructor (Unqualified "cons") [TypeVar "a", listCon]
-                    ],
+                  kind =
+                    Algebraic
+                      [ DataConstructor (Unqualified "nil") [],
+                        DataConstructor (Unqualified "cons") [TypeVar "a", listCon]
+                      ],
                   loc = dummyLoc
                 }
     ]

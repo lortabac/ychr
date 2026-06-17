@@ -226,7 +226,7 @@ buildDataConEnv visible mods =
       let key =
             DeclaredType m.name (unqualifiedText td.name) (length td.typeVars),
       Just visibleCons <- [Map.lookup key visible],
-      dc <- td.constructors,
+      dc <- typeConstructors td,
       Unqualified t <- [dc.conName],
       t `Set.member` visibleCons
     ]
@@ -247,7 +247,7 @@ buildDataConProviders visible mods =
       let key =
             DeclaredType m.name (unqualifiedText td.name) (length td.typeVars),
       Just visibleCons <- [Map.lookup key visible],
-      dc <- td.constructors,
+      dc <- typeConstructors td,
       Unqualified t <- [dc.conName],
       t `Set.member` visibleCons
     ]
@@ -264,7 +264,7 @@ buildAllDataConProviders mods =
     [ ((t, length dc.conArgs), [m.name])
     | m <- mods,
       Ann td _ <- m.typeDecls,
-      dc <- td.constructors,
+      dc <- typeConstructors td,
       Unqualified t <- [dc.conName]
     ]
 
@@ -476,7 +476,7 @@ validateExports = traverse_ validateOne
       | Ann td _ <- m.typeDecls,
         unqualifiedText td.name == n,
         length td.typeVars == a,
-        dc <- td.constructors
+        dc <- typeConstructors td
       ]
 
 -- ---------------------------------------------------------------------------
@@ -577,7 +577,7 @@ validateImportLists mods ctx =
           | Ann td _ <- m.typeDecls,
             unqualifiedText td.name == n,
             length td.typeVars == a,
-            dc <- td.constructors
+            dc <- typeConstructors td
           ]
         [] -> []
 
@@ -1020,7 +1020,7 @@ visibleDataCons mods ctx =
           a = length td.typeVars
           key = DeclaredType m.name n a
           allCons =
-            Set.fromList [unqualifiedText dc.conName | dc <- td.constructors]
+            Set.fromList [unqualifiedText dc.conName | dc <- typeConstructors td]
        in if m.name == ctx.currentModule.name
             then Just (key, allCons)
             else case ( exporterAllowance m n a allCons,
@@ -1050,7 +1050,10 @@ visibleDataCons mods ctx =
 
 -- | Check an unresolved name against data-constructor declarations.
 -- If found with matching arity: silent. If found with wrong arity: warning.
--- If not found at all: warning.
+-- If not found at all: warning. A type-constructor name used in term
+-- position (e.g. @set@ for an opaque type, or @list@ for an algebraic
+-- one) is not a declared data constructor, so it falls through to the
+-- 'UndeclaredDataConstructor' warning like any other unknown functor.
 warnUnknownDataCon :: DataConEnv -> SourceLoc -> PExpr -> Text -> Int -> Rename ()
 warnUnknownDataCon dataConEnv loc origin n arity =
   case Map.lookup n dataConEnv of
@@ -1076,7 +1079,9 @@ renameTypeDefinition ctx td =
   TypeDefinition
     { name = Qualified ctx.currentModule.name (unqualifiedText td.name),
       typeVars = td.typeVars,
-      constructors = map (renameDataConstructor ctx) td.constructors,
+      kind = case td.kind of
+        Opaque -> Opaque
+        Algebraic cs -> Algebraic (map (renameDataConstructor ctx) cs),
       loc = td.loc
     }
 

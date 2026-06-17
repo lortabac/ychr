@@ -1,0 +1,14 @@
+% The opaque type's parameter is phantom: it constrains use sites but is
+% backed by the same runtime representation regardless of instantiation.
+:- module(phantom, [demo/2]).
+
+:- opaque_type tagged(Tag).
+
+:- function tag(X) -> tagged(Tag).
+:- function untag(tagged(Tag)) -> int.
+tag(X) -> host:'+'(X, 0).
+untag(T) -> host:'+'(T, 0).
+
+:- chr_constraint demo(int, int).
+
+demo(A, B) <=> T1 is tag(3), T2 is tag(4), A is untag(T1), B is untag(T2).

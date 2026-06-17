@@ -42,6 +42,7 @@ import YCHR.Types
     Term (..),
     TypeDefinition (..),
     TypeExpr (..),
+    TypeKind (..),
   )
 
 -- ---------------------------------------------------------------------------
@@ -398,8 +399,10 @@ prettyTypeDecl td =
       head_ = case td.typeVars of
         [] -> tname
         vs -> tname ++ "(" ++ intercalate ", " (map T.unpack vs) ++ ")"
-      ctors = intercalate " ; " (map ctorToString td.constructors)
-   in ":- chr_type " ++ head_ ++ " ---> " ++ ctors ++ "."
+   in case td.kind of
+        Opaque -> ":- opaque_type " ++ head_ ++ "."
+        Algebraic cs ->
+          ":- chr_type " ++ head_ ++ " ---> " ++ intercalate " ; " (map ctorToString cs) ++ "."
 
 ctorToString :: DataConstructor -> String
 ctorToString c =

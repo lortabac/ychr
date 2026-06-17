@@ -533,7 +533,7 @@ typeTests =
     [ testCase "simple enum type" $
         typeDefsOf ":- chr_type color ---> red ; green ; blue."
           >>= ( @?=
-                  [ TypeDefinition
+                  [ algebraicTD
                       (Unqualified "color")
                       []
                       [ DataConstructor (Unqualified "red") [],
@@ -546,7 +546,7 @@ typeTests =
       testCase "type with constructor args" $
         typeDefsOf ":- chr_type tree ---> empty ; leaf(int) ; branch(tree, tree)."
           >>= ( @?=
-                  [ TypeDefinition
+                  [ algebraicTD
                       (Unqualified "tree")
                       []
                       [ DataConstructor (Unqualified "empty") [],
@@ -565,7 +565,7 @@ typeTests =
       testCase "parameterized type" $
         typeDefsOf ":- chr_type pair(A, B) ---> pair(A, B)."
           >>= ( @?=
-                  [ TypeDefinition
+                  [ algebraicTD
                       (Unqualified "pair")
                       ["A", "B"]
                       [ DataConstructor (Unqualified "pair") [TypeVar "A", TypeVar "B"]
@@ -576,7 +576,7 @@ typeTests =
       testCase "list type with list sugar" $
         typeDefsOf ":- chr_type list(T) ---> [] ; [T | list(T)]."
           >>= ( @?=
-                  [ TypeDefinition
+                  [ algebraicTD
                       (Unqualified "list")
                       ["T"]
                       [ DataConstructor (Unqualified "[]") [],
@@ -592,7 +592,7 @@ typeTests =
       testCase "type with nested type args" $
         typeDefsOf ":- chr_type nested ---> wrap(pair(int, int))."
           >>= ( @?=
-                  [ TypeDefinition
+                  [ algebraicTD
                       (Unqualified "nested")
                       []
                       [ DataConstructor
@@ -611,7 +611,7 @@ typeTests =
           Right m -> do
             map (.node) m.decls @?= [ConstraintDecl "c" 1 Nothing Nothing]
             map (normalizeTypeDefLoc . (.node)) m.typeDecls
-              @?= [ TypeDefinition
+              @?= [ algebraicTD
                       (Unqualified "t")
                       []
                       [DataConstructor (Unqualified "a") []]
@@ -620,18 +620,34 @@ typeTests =
       testCase "multiple type decls" $
         typeDefsOf ":- chr_type a ---> x.\n:- chr_type b ---> y."
           >>= ( @?=
-                  [ TypeDefinition
+                  [ algebraicTD
                       (Unqualified "a")
                       []
                       [DataConstructor (Unqualified "x") []]
                       dummyLoc,
-                    TypeDefinition
+                    algebraicTD
                       (Unqualified "b")
                       []
                       [DataConstructor (Unqualified "y") []]
                       dummyLoc
                   ]
-              )
+              ),
+      testCase "opaque type with a parameter" $
+        typeDefsOf ":- opaque_type set(X)."
+          >>= ( @?=
+                  [TypeDefinition (Unqualified "set") ["X"] Opaque dummyLoc]
+              ),
+      testCase "opaque type with no parameters" $
+        typeDefsOf ":- opaque_type handle."
+          >>= ( @?=
+                  [TypeDefinition (Unqualified "handle") [] Opaque dummyLoc]
+              ),
+      testCase "opaque type with a constructor body is rejected" $
+        pErrs ":- opaque_type set(X) ---> mk(X)."
+          @?= Right [OpaqueTypeHasConstructors],
+      testCase "opaque type exported with the shared type(...) form" $
+        fmap (.node) . (.exports) <$> p ":- module(m, [type(set/1)])."
+          @?= Right (Just [TypeExportDecl "set" 1 Nothing])
     ]
 
 -- ---------------------------------------------------------------------------
@@ -864,6 +880,11 @@ typeDefsOf src = case p src of
   Left err -> assertFailure (show err)
   Right m -> pure (map (normalizeTypeDefLoc . (.node)) m.typeDecls)
 
+-- | Build an algebraic type definition positionally (the constructors
+-- are wrapped in the 'Algebraic' 'TypeKind').
+algebraicTD :: Name -> [Text] -> [DataConstructor] -> SourceLoc -> TypeDefinition
+algebraicTD n vs cs loc = TypeDefinition n vs (Algebraic cs) loc
+
 -- | Strip the source location from a parsed 'TypeDefinition' so test
 -- expected values can omit line/column numbers.
 normalizeTypeDefLoc :: TypeDefinition -> TypeDefinition
@@ -871,7 +892,7 @@ normalizeTypeDefLoc td =
   TypeDefinition
     { name = td.name,
       typeVars = td.typeVars,
-      constructors = td.constructors,
+      kind = td.kind,
       loc = dummyLoc
     }
 

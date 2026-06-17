@@ -1,0 +1,10 @@
+% Importer uses the opaque type across the module boundary. It may pass
+% set(int) values around and call the library's functions, but cannot
+% build or inspect a set structurally. The import list names the opaque
+% type with the functor form type(set/1), parallel to type(t/n).
+:- module(main, [run/1]).
+:- use_module(sets, [type(set/1), set_singleton/1, set_peek/1]).
+
+:- chr_constraint run(int).
+
+run(R) <=> S is set_singleton(7), R is set_peek(S).

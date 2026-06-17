@@ -1,0 +1,9 @@
+% Library exporting an opaque type and the functions over it.
+:- module(sets, [type(set/1), set_singleton/1, set_peek/1]).
+
+:- opaque_type set(X).
+
+:- function set_singleton(X) -> set(X).
+:- function set_peek(set(X)) -> X.
+set_singleton(X) -> host:'+'(X, 0).
+set_peek(S) -> host:'+'(S, 0).

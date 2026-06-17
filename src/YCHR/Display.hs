@@ -195,6 +195,8 @@ parseValidationErrorCode MalformedExportItem = ErrorCode 15008
 parseValidationErrorCode MalformedTypeExpr = ErrorCode 15009
 parseValidationErrorCode MalformedDataConstructor = ErrorCode 15010
 parseValidationErrorCode MalformedTypeDefinition = ErrorCode 15011
+parseValidationErrorCode OpaqueTypeHasConstructors = ErrorCode 15016
+parseValidationErrorCode MalformedOpaqueTypeDefinition = ErrorCode 15017
 parseValidationErrorCode MalformedBoundSig = ErrorCode 15012
 parseValidationErrorCode MalformedFunctionEquation = ErrorCode 15013
 parseValidationErrorCode MalformedTopLevel = ErrorCode 15014
@@ -358,6 +360,16 @@ parseValidationErrorMsg MalformedTypeDefinition =
   withHint
     "Invalid type definition"
     "expected 'name(Vars) ---> con1 ; con2 ; ...'"
+parseValidationErrorMsg OpaqueTypeHasConstructors =
+  withHint
+    "Opaque type cannot have data constructors"
+    ( "an opaque type is declared as ':- opaque_type name(Vars).' with no"
+        ++ " '---> ...' body; use ':- chr_type' for a type with constructors"
+    )
+parseValidationErrorMsg MalformedOpaqueTypeDefinition =
+  withHint
+    "Invalid opaque type definition"
+    "expected ':- opaque_type name.' or ':- opaque_type name(Vars).'"
 parseValidationErrorMsg MalformedBoundSig =
   withHint
     "Invalid bound signature"

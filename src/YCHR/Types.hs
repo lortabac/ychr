@@ -41,6 +41,8 @@ module YCHR.Types
 
     -- * Type declarations
     TypeDefinition (..),
+    TypeKind (..),
+    typeConstructors,
     DataConstructor (..),
     TypeExpr (..),
 
@@ -189,10 +191,30 @@ headConstraintToConstraint hc =
 data TypeDefinition = TypeDefinition
   { name :: Name,
     typeVars :: [Text],
-    constructors :: [DataConstructor],
+    kind :: TypeKind,
     loc :: SourceLoc
   }
   deriving (Show, Eq)
+
+-- | The kind of a type declaration.
+--
+-- An 'Algebraic' type is declared with @:- chr_type@ and carries one or
+-- more data constructors. An 'Opaque' type is declared with
+-- @:- opaque_type@, is nominal, and has no data constructors — its
+-- values are introduced and eliminated only by (host-backed) functions.
+-- Encoding opacity as a sum makes "opaque implies no constructors"
+-- unrepresentable rather than a runtime invariant.
+data TypeKind
+  = Algebraic [DataConstructor]
+  | Opaque
+  deriving (Show, Eq)
+
+-- | The data constructors of a type definition: the declared
+-- constructors for an 'Algebraic' type, and none for an 'Opaque' type.
+typeConstructors :: TypeDefinition -> [DataConstructor]
+typeConstructors td = case td.kind of
+  Algebraic cs -> cs
+  Opaque -> []
 
 -- | A data constructor within a type declaration.
 data DataConstructor = DataConstructor

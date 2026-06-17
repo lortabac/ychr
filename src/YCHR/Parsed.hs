@@ -49,6 +49,8 @@ module YCHR.Parsed
     Constraint (..),
     Term (..),
     TypeDefinition (..),
+    TypeKind (..),
+    typeConstructors,
     DataConstructor (..),
     TypeExpr (..),
     BoundSig (..),
@@ -67,6 +69,8 @@ import YCHR.Types
     Term (..),
     TypeDefinition (..),
     TypeExpr (..),
+    TypeKind (..),
+    typeConstructors,
   )
 
 -- | A node annotated with a source location and the original 'PExpr'
@@ -164,7 +168,13 @@ data Declaration
         target :: Maybe Name
       }
   | OperatorDecl OpDecl
-  | TypeExportDecl {name :: Text, arity :: Int, conExports :: Maybe [Text]}
+  | -- | A type entry in a module's export or import list, written
+    -- @type(T/n)@ or @type(T/n, [Con, ...])@. Covers both algebraic and
+    -- opaque types: they share one type namespace, so a single export
+    -- form is used. Opaque types have no constructors, so a constructor
+    -- allowlist on one is rejected by the usual unknown-constructor
+    -- check (@YCHR-20008@).
+    TypeExportDecl {name :: Text, arity :: Int, conExports :: Maybe [Text]}
   deriving (Show, Eq)
 
 data OpDecl = OpDecl

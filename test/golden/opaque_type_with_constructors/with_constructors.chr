@@ -1,0 +1,3 @@
+:- module(bad, []).
+% Opaque types cannot have data constructors.
+:- opaque_type set(X) ---> mk(X).
