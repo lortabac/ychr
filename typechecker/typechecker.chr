@@ -575,11 +575,30 @@ tc_unify_tcon @
     tc_unify_list(Args1, Args2, Ctx).
 
 % --- function types ---
+%
+% [C-Fun] requires the same parameter count on both sides. The guarded
+% rule fires only when the argument lists have equal length and then
+% checks the field types pairwise; the unguarded fallback fires on an
+% arity mismatch and reports the two whole function types as
+% inconsistent. Without the arity guard a mismatch would reach
+% `tc_unify_list` with lists of unequal length, which matches no
+% `tc_unify_list` rule and silently stays an inert residual.
+
+:- function (same_arity(list(ty), list(ty)) -> bool).
+
+same_arity([], []) -> true.
+same_arity([_|Xs], [_|Ys]) -> same_arity(Xs, Ys).
+same_arity(_, _) -> false.
 
 tc_unify_fun @
     tc_unify(fun(A1, R1), fun(A2, R2), Ctx) <=>
+    same_arity(A1, A2) |
     tc_unify_list(A1, A2, Ctx),
     tc_unify(R1, R2, Ctx).
+
+tc_unify_fun_arity @
+    tc_unify(fun(A1, R1), fun(A2, R2), Ctx) <=>
+    report_error(Ctx, inconsistent, pair(fun(A1, R1), fun(A2, R2))).
 
 % --- rigid type variables ---
 %

@@ -132,31 +132,3 @@ correctly write `call(fun(A) -> B end, A) -> B`, and golden tests use
 formal `τ` grammar at line 36 and the declaration at line 636) is the
 out-of-sync document. Fix the grammar to show the `end` terminator, or
 accept the un-terminated form in type position.
-
-## Function-type arity is ignored in consistency checking (refs and lambdas)
-
-**Documented claim.** `docs/reference/type-system.md:203-219`, rule
-`[C-Fun]`: `fun(τ₁,...,τₙ) -> τᵣ ~ fun(σ₁,...,σₙ) -> σᵣ` requires the same
-number of parameters; line 219 lists `int ~ fun(int) -> int` as an error.
-
-**Test.** Unify function values against a function type of a different
-arity.
-
-    :- function dbl(int) -> int.   dbl(X) -> X.
-    :- chr_constraint c(fun(int, int) -> int end).
-    c(F) <=> F = fun dbl/1.                       % ref, 1 vs 2
-
-    :- chr_constraint c(fun(int) -> int end).
-    c(F) <=> F = fun(X, Y) -> X end.              % lambda, 2 vs 1
-
-**Expected.** Type error (`fun(int)->int` inconsistent with
-`fun(int,int)->int`).
-
-**Actual.** Both compile clean. An arg-/return-*type* mismatch at equal
-arity *is* caught (`F : fun(string)->string end = fun dbl/1` →
-`YCHR-60001`), so consistency checks the field types of a function type
-but not its arity.
-
-**Notes.** Direct counterexample to `[C-Fun]`/`[Inconsistency]` as
-written; lower severity since it is a missing check rather than a wrong
-result.

@@ -1,0 +1,7 @@
+:- module(tc, [c/1, fun dbl/1]).
+:- chr_constraint c(fun(int, int) -> int end).
+:- function dbl(int) -> int.
+dbl(X) -> X.
+% c/1 expects fun(int, int) -> int, but dbl/1 has type fun(int) -> int.
+% Arity 2 vs 1 must be rejected by [C-Fun].
+bad @ c(F) <=> F = fun dbl/1.

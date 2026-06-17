@@ -1,0 +1,5 @@
+:- module(tc, [c/1]).
+:- chr_constraint c(fun(int) -> int end).
+% c/1 expects fun(int) -> int, but the lambda takes two parameters.
+% Arity 2 vs 1 must be rejected by [C-Fun].
+bad @ c(F) <=> F = fun(X, Y) -> X end.
