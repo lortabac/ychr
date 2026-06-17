@@ -141,8 +141,8 @@ Function types describe first-class callable values (lambdas and
 function references):
 
 ```
-fun(int, int) -> bool
-fun(A) -> A
+fun(int, int) -> bool end
+fun(A) -> A end
 ```
 
 A function type `fun(τ₁, ..., τₙ) -> τᵣ` represents a callable
@@ -216,7 +216,7 @@ Two distinct type constructors (neither being `any`) are
 
 This applies to all constructors: base types, algebraic types, and
 function types. For example, `int ~ bool`, `option(int) ~ list(int)`,
-and `int ~ fun(int) -> int` are all errors.
+and `int ~ fun(int) -> int end` are all errors.
 
 
 ## Type Propagation and Consistency
@@ -585,7 +585,7 @@ types.
 ### Lambdas
 
 A lambda `fun(X, Y) -> expr end` gets a function type inferred from
-its context. If the lambda appears where a `fun(int, int) -> bool` is
+its context. If the lambda appears where a `fun(int, int) -> bool end` is
 expected, then `X : int`, `Y : int`, and `expr` must be consistent
 with `bool`.
 
@@ -608,7 +608,7 @@ checking). The bound check is a residual constraint: it is solved
 together with the surrounding equation's other type constraints.
 
 If `double(int) -> int` is declared (no bound), then `fun double/1`
-has type `fun(int) -> int` at every use site.
+has type `fun(int) -> int end` at every use site.
 
 If `:- function max(T, T) -> T requiring '>'(T, T) -> bool.` is
 declared, `fun max/2` is well-typed wherever the surrounding context
@@ -641,7 +641,7 @@ The prelude provides a typed wrapper for first-class function
 application:
 
 ```prolog
-:- function call(fun(A) -> B, A) -> B.
+:- function call(fun(A) -> B end, A) -> B.
 call(F, X) -> '$call'(F, X).
 ```
 
