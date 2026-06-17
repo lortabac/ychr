@@ -62,45 +62,6 @@ catches this at the type checker with a much better message:
 `YCHR-60001` case, but the message for the `'$call'` form is
 unintelligible compared to the `call` wrapper.
 
-## `term(pair(1,2))` example in type-system.md is wrong on both the typecheck and the runtime half
-
-**Documented claim.** `docs/reference/type-system.md:332-338`: "the
-inferred LHS type can still be unreachable at runtime — `R is term(pair(1,
-2))` type-checks with `R : pair(int, int)` because `term(...)` is a
-quoting form, but the runtime evaluator sees `pair/2` as a non-evaluable
-functor and raises `YCHR-60001`."
-
-**Test.** Probe both halves separately, with `pair` a real constructor.
-
-    % Typecheck half — tie R to a string via a propagating type var.
-    :- chr_type pair(A, B) ---> pair(A, B).
-    :- chr_constraint go(C).
-    go(R) <=> R is term(pair(1, 2)), R = "hello".
-
-    % Runtime half.
-    :- chr_constraint go(any).
-    go(R) <=> R is term(pair(1, 2)).
-    Goal: go(R)
-
-**Expected (per the doc).** Typecheck: `R : pair(int, int)`, so
-`R = "hello"` clashes (`pair ~ string`). Runtime: `YCHR-60001`.
-
-**Actual.** Typecheck is clean (`term(pair(1,2))` types `R` as `any`,
-not `pair(int,int)`, so no clash). The run yields `R = m:pair(1, 2)`
-with no error.
-
-**Notes.** The implementation is self-consistent and matches `PROJECT.md`
-("`term(...)` keeps the inner tree opaque"). It is the *bare* form that
-infers the constructor type — `R is pair(1, 2), R = "hello"` → `YCHR-60001
-'m:pair(_, _)' vs 'string'`; the bare form still does *not* error at
-runtime (`R is pair(1, 2)` → `R = m:pair(1, 2)`), because data
-constructors are evaluable (they build terms). The genuine non-evaluable
-`YCHR-60001` runtime case is a *function* with no matching equation, which
-`term(...)` correctly suppresses (`R is f(5)` errors; `R is term(f(5))` →
-`R = f(5)`). The note should illustrate its point with a bounded/undefined
-function call *without* `term(...)`, not `term(pair(1, 2))`. This is a
-documentation bug, not an implementation bug.
-
 ## Function-type syntax in type-system.md omits the mandatory `end`; the worked declaration at line 636 does not parse
 
 **Documented claim.** `docs/reference/type-system.md:36` (the `τ`

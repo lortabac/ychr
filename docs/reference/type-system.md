@@ -329,13 +329,21 @@ constraint argument it has type `any`, and `any` stops propagation
 does not overwrite it. Use a typed or polymorphic signature to keep
 the channel open.
 
-Note that the inferred LHS type can still be unreachable at
-runtime — `R is term(pair(1, 2))` type-checks with `R : pair(int,
-int)` because `term(...)` is a quoting form, but the runtime
-evaluator sees `pair/2` as a non-evaluable functor and raises
-`YCHR-60001`. The type checker doesn't model the runtime
-distinction between evaluable functions and data constructors; that
-distinction is only enforced at evaluation time.
+Note that a well-typed expression can still fail at runtime. A
+function call type-checks against the function's declared return
+type, but the runtime raises `YCHR-60001` if no equation matches the
+actual arguments. For example, given a partial function
+
+```prolog
+:- function half(int) -> int.
+half(0) -> 0.
+```
+
+`R is half(5)` type-checks with `R : int` (the declared return
+type), yet at runtime it raises `YCHR-60001` ("no matching
+equation") because no equation covers `5`. The type checker doesn't
+model which inputs an equation set actually covers; that is only
+enforced at evaluation time.
 
 
 ## Type Checking Procedure
