@@ -61,3 +61,138 @@ catches this at the type checker with a much better message:
 **Notes.** The doc explicitly carves out "calling a non-function" as a
 `YCHR-60001` case, but the message for the `'$call'` form is
 unintelligible compared to the `call` wrapper.
+
+## `term(pair(1,2))` example in type-system.md is wrong on both the typecheck and the runtime half
+
+**Documented claim.** `docs/reference/type-system.md:332-338`: "the
+inferred LHS type can still be unreachable at runtime — `R is term(pair(1,
+2))` type-checks with `R : pair(int, int)` because `term(...)` is a
+quoting form, but the runtime evaluator sees `pair/2` as a non-evaluable
+functor and raises `YCHR-60001`."
+
+**Test.** Probe both halves separately, with `pair` a real constructor.
+
+    % Typecheck half — tie R to a string via a propagating type var.
+    :- chr_type pair(A, B) ---> pair(A, B).
+    :- chr_constraint go(C).
+    go(R) <=> R is term(pair(1, 2)), R = "hello".
+
+    % Runtime half.
+    :- chr_constraint go(any).
+    go(R) <=> R is term(pair(1, 2)).
+    Goal: go(R)
+
+**Expected (per the doc).** Typecheck: `R : pair(int, int)`, so
+`R = "hello"` clashes (`pair ~ string`). Runtime: `YCHR-60001`.
+
+**Actual.** Typecheck is clean (`term(pair(1,2))` types `R` as `any`,
+not `pair(int,int)`, so no clash). The run yields `R = m:pair(1, 2)`
+with no error.
+
+**Notes.** The implementation is self-consistent and matches `PROJECT.md`
+("`term(...)` keeps the inner tree opaque"). It is the *bare* form that
+infers the constructor type — `R is pair(1, 2), R = "hello"` → `YCHR-60001
+'m:pair(_, _)' vs 'string'`; the bare form still does *not* error at
+runtime (`R is pair(1, 2)` → `R = m:pair(1, 2)`), because data
+constructors are evaluable (they build terms). The genuine non-evaluable
+`YCHR-60001` runtime case is a *function* with no matching equation, which
+`term(...)` correctly suppresses (`R is f(5)` errors; `R is term(f(5))` →
+`R = f(5)`). The note should illustrate its point with a bounded/undefined
+function call *without* `term(...)`, not `term(pair(1, 2))`. This is a
+documentation bug, not an implementation bug.
+
+## Function-type syntax in type-system.md omits the mandatory `end`; the worked declaration at line 636 does not parse
+
+**Documented claim.** `docs/reference/type-system.md:36` (the `τ`
+grammar) gives `fun(τ₁, ..., τₙ) -> τᵣ`, and line 636 a concrete
+declaration: `:- function call(fun(A) -> B, A) -> B.`. Every function
+type in the spec (lines 144, 145, 580, 603, 636, 1389) omits `end`.
+
+**Test.** Compile the line-636 declaration verbatim.
+
+    :- function myid(A) -> A.   myid(X) -> X.
+    :- function callit(fun(A) -> B, A) -> B.
+    callit(F, X) -> '$call'(F, X).
+
+**Expected.** Parses and type-checks (verbatim spec example).
+
+**Actual.**
+
+    YCHR-50001
+    unexpected "-"
+    expecting space, "%", "," or ")"
+
+Adding `end` inside the function type fixes it:
+`:- function callit(fun(A) -> B end, A) -> B.` compiles.
+
+**Notes.** The parser requires `end` even in *type-expression* position.
+`libraries/prelude.chr:99` and `docs/reference/prelude.md:156` both
+correctly write `call(fun(A) -> B end, A) -> B`, and golden tests use
+`fun(int) -> maybe(int) end` inside signatures. So `type-system.md` (the
+formal `τ` grammar at line 36 and the declaration at line 636) is the
+out-of-sync document. Fix the grammar to show the `end` terminator, or
+accept the un-terminated form in type position.
+
+## Bounded function *references* never discharge their `requiring` bound
+
+**Documented claim.** `docs/reference/type-system.md:605-618`: given
+`:- function max(T, T) -> T requiring '>'(T, T) -> bool.`, "In
+`apply2(fun max/2, "a", "b")`, the same mechanism produces `'>'(string,
+string) -> bool`, which has no consistent declared signature; error
+`bound_unsatisfied`."
+
+**Test.** Reproduce the §Function references `apply2` example with a
+bound function (`gt`) declared only at `int`.
+
+    :- function gt(int, int) -> bool.   gt(X, Y) -> X > Y.
+    :- function mymax(T, T) -> T requiring gt(T, T) -> bool.
+    mymax(X, Y) | gt(X, Y) -> X.
+    mymax(_, Y) -> Y.
+    :- function apply2(fun(A, A) -> A end, A, A) -> A.
+    apply2(F, X, Y) -> '$call'(F, X, Y).
+    :- chr_constraint c(any).
+    c(R) <=> R is apply2(fun mymax/2, "a", "b").
+
+**Expected.** `YCHR-60012` (`bound_unsatisfied`): the value args ground
+`A := string`, so the bound is `gt(string, string) -> bool`, which has no
+declared signature.
+
+**Actual.** Clean compile, no bound check fires.
+
+**Notes.** The bound is genuinely unsatisfiable and the direct-call path
+works: the positive control `R is mymax("a", "b")` reports `YCHR-60012`.
+Forcing the fun-ref's type fully concrete still does not fire — e.g.
+`:- chr_constraint c(fun(string, string) -> string end). c(F) <=> F = fun
+mymax/2.` compiles clean, with `T` ground to `string` (no partial-σ
+gradual escape). Fun-ref *type* checking itself works (a `fun(string) ->
+string end = fun dbl/1` with `dbl : int->int` correctly reports
+`YCHR-60001`), so only the residual bound check is missing. No golden test
+combines a `fun name/arity` reference with a `requiring` bound.
+
+## Function-type arity is ignored in consistency checking (refs and lambdas)
+
+**Documented claim.** `docs/reference/type-system.md:203-219`, rule
+`[C-Fun]`: `fun(τ₁,...,τₙ) -> τᵣ ~ fun(σ₁,...,σₙ) -> σᵣ` requires the same
+number of parameters; line 219 lists `int ~ fun(int) -> int` as an error.
+
+**Test.** Unify function values against a function type of a different
+arity.
+
+    :- function dbl(int) -> int.   dbl(X) -> X.
+    :- chr_constraint c(fun(int, int) -> int end).
+    c(F) <=> F = fun dbl/1.                       % ref, 1 vs 2
+
+    :- chr_constraint c(fun(int) -> int end).
+    c(F) <=> F = fun(X, Y) -> X end.              % lambda, 2 vs 1
+
+**Expected.** Type error (`fun(int)->int` inconsistent with
+`fun(int,int)->int`).
+
+**Actual.** Both compile clean. An arg-/return-*type* mismatch at equal
+arity *is* caught (`F : fun(string)->string end = fun dbl/1` →
+`YCHR-60001`), so consistency checks the field types of a function type
+but not its arity.
+
+**Notes.** Direct counterexample to `[C-Fun]`/`[Inconsistency]` as
+written; lower severity since it is a missing check rather than a wrong
+result.
