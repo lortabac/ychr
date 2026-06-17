@@ -133,42 +133,6 @@ formal `τ` grammar at line 36 and the declaration at line 636) is the
 out-of-sync document. Fix the grammar to show the `end` terminator, or
 accept the un-terminated form in type position.
 
-## Bounded function *references* never discharge their `requiring` bound
-
-**Documented claim.** `docs/reference/type-system.md:605-618`: given
-`:- function max(T, T) -> T requiring '>'(T, T) -> bool.`, "In
-`apply2(fun max/2, "a", "b")`, the same mechanism produces `'>'(string,
-string) -> bool`, which has no consistent declared signature; error
-`bound_unsatisfied`."
-
-**Test.** Reproduce the §Function references `apply2` example with a
-bound function (`gt`) declared only at `int`.
-
-    :- function gt(int, int) -> bool.   gt(X, Y) -> X > Y.
-    :- function mymax(T, T) -> T requiring gt(T, T) -> bool.
-    mymax(X, Y) | gt(X, Y) -> X.
-    mymax(_, Y) -> Y.
-    :- function apply2(fun(A, A) -> A end, A, A) -> A.
-    apply2(F, X, Y) -> '$call'(F, X, Y).
-    :- chr_constraint c(any).
-    c(R) <=> R is apply2(fun mymax/2, "a", "b").
-
-**Expected.** `YCHR-60012` (`bound_unsatisfied`): the value args ground
-`A := string`, so the bound is `gt(string, string) -> bool`, which has no
-declared signature.
-
-**Actual.** Clean compile, no bound check fires.
-
-**Notes.** The bound is genuinely unsatisfiable and the direct-call path
-works: the positive control `R is mymax("a", "b")` reports `YCHR-60012`.
-Forcing the fun-ref's type fully concrete still does not fire — e.g.
-`:- chr_constraint c(fun(string, string) -> string end). c(F) <=> F = fun
-mymax/2.` compiles clean, with `T` ground to `string` (no partial-σ
-gradual escape). Fun-ref *type* checking itself works (a `fun(string) ->
-string end = fun dbl/1` with `dbl : int->int` correctly reports
-`YCHR-60001`), so only the residual bound check is missing. No golden test
-combines a `fun name/arity` reference with a `requiring` bound.
-
 ## Function-type arity is ignored in consistency checking (refs and lambdas)
 
 **Documented claim.** `docs/reference/type-system.md:203-219`, rule

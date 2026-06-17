@@ -283,8 +283,14 @@ getArg v idx = do
       | otherwise -> error $ "getArg: index " ++ show idx ++ " out of bounds"
     _ -> error "getArg: not a compound term"
 
--- | Register an observer on a logical variable. If the value is not
--- an unbound variable (after dereferencing), this is a no-op.
+-- | Register an observer on every unbound variable reachable from a
+-- value. A bare unbound variable is registered directly; a compound
+-- term is traversed so that variables nested inside its arguments
+-- (e.g. the @X@ in @pair(X, 1)@ or @[X, X]@) are observed too. Without
+-- the recursion a constraint stored with such an argument would never
+-- be reactivated when the nested variable is later bound, missing an
+-- ωr /Reactivate/ step. Anything else (already bound, or a non-variable
+-- leaf) is a no-op.
 addObserver :: SuspensionId -> Value -> Chr ()
 addObserver oid v = do
   d <- deref v
@@ -294,6 +300,7 @@ addObserver oid v = do
       case st of
         Unbound vid obs -> writeVarState var (Unbound vid (oid : obs))
         Bound {} -> pure ()
+    VTerm _ args -> mapM_ (addObserver oid) args
     _ -> pure ()
 
 -- | Extract the 'VarId' of an unbound variable after dereferencing.

@@ -1,0 +1,20 @@
+:- module(reactivation_nested_var, [go_bare/2, go_nested/2]).
+:- use_module(library(prelude)).
+
+:- chr_constraint go_bare(any, any), go_nested(any, any),
+                  pb(any), qb(any), pn(any), qn(any).
+
+% Bare-variable argument (control): pb observes Y directly, so binding
+% Y in the setup body reactivates pb and `fire_bare` runs, giving R = 7.
+setup_bare @ go_bare(R, Y) <=> pb(Y), qb(R), Y = 1.
+fire_bare  @ pb(X), qb(R) <=> X == 1 | R = 7.
+
+% Variable nested several levels deep inside a compound argument
+% (a list within a list): pn must observe the nested Y so that binding
+% Y reactivates it and `fire_nested` runs. Regression test for the
+% omega-r selective-reactivation bug where a stored constraint did not
+% observe variables nested in compound arguments, leaving R unbound
+% here. The extra nesting level also exercises the recursion depth on
+% both backends.
+setup_nested @ go_nested(R, Y) <=> pn([[Y]]), qn(R), Y = 1.
+fire_nested  @ pn([[X]]), qn(R) <=> X == 1 | R = 7.

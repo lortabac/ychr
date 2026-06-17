@@ -1,0 +1,23 @@
+:- module(funref_bounded_unsatisfied, [c/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint c(any).
+
+% gt is declared only at int — there is no gt(string, string) -> bool.
+:- function gt(int, int) -> bool.
+gt(X, Y) -> X > Y.
+
+:- function mymax(T, T) -> T requiring gt(T, T) -> bool.
+mymax(X, Y) | gt(X, Y) -> X.
+mymax(_, Y) -> Y.
+
+:- function apply2(fun(A, A) -> A end, A, A) -> A.
+apply2(F, X, Y) -> '$call'(F, X, Y).
+
+% Bound unsatisfied via a function *reference*: the value args ground
+% A := string, so the discharged bound is gt(string, string) -> bool,
+% which has no declared signature. Regression test for the bug where a
+% `fun name/arity` reference never discharged its `requiring` bound
+% (the residual bound check was never reactivated once the substitution
+% type variables became ground).
+c(R) <=> R is apply2(fun mymax/2, "a", "b").

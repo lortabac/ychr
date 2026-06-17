@@ -202,10 +202,24 @@
     (vector-ref (term-args (deref v)) idx))
 
   ;;; Observer management
+  ;; Register an observer on every unbound variable reachable from a
+  ;; value: a bare unbound variable directly, and every variable nested
+  ;; inside a compound term's arguments (e.g. the X in pair(X, 1) or
+  ;; [X, X]) by recursion. Without the recursion a constraint stored
+  ;; with such an argument would never be reactivated when the nested
+  ;; variable is later bound, missing an omega-r Reactivate step.
   (define (add-observer! suspension-id v)
     (let ((d (deref v)))
-      (when (and (var? d) (eq? (var-value d) *unbound*))
-        (var-observers-set! d (cons suspension-id (var-observers d))))))
+      (cond
+        ((and (var? d) (eq? (var-value d) *unbound*))
+         (var-observers-set! d (cons suspension-id (var-observers d))))
+        ((term? d)
+         (add-observer-args! suspension-id (term-args d) 0)))))
+
+  (define (add-observer-args! suspension-id args i)
+    (when (< i (vector-length args))
+      (add-observer! suspension-id (vector-ref args i))
+      (add-observer-args! suspension-id args (+ i 1))))
 
   ;;; Var ID extraction
   (define (get-var-id v)

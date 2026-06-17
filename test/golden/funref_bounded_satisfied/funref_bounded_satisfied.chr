@@ -1,0 +1,18 @@
+:- module(funref_bounded_satisfied, [c/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint c(any).
+
+:- function gt(int, int) -> bool.
+gt(X, Y) -> X > Y.
+
+:- function mymax(T, T) -> T requiring gt(T, T) -> bool.
+mymax(X, Y) | gt(X, Y) -> X.
+mymax(_, Y) -> Y.
+
+:- function apply2(fun(A, A) -> A end, A, A) -> A.
+apply2(F, X, Y) -> '$call'(F, X, Y).
+
+% Bound satisfied via a function reference: A := int, and
+% gt(int, int) -> bool is declared, so the bound discharges silently.
+c(R) <=> R is apply2(fun mymax/2, 1, 2).

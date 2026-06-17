@@ -86,7 +86,7 @@ A VM program is a list of named procedures. Each procedure has a name, a paramet
 | `Continue label` / `Break label` | Resume the next iteration of, or exit, the named `Foreach`. Enables backjumping when a partner dies and early drop when the active constraint is killed. |
 | `Return valExpr` | Return a value from the current procedure. |
 | `ExprStmt valExpr` / `BoolExprStmt boolExpr` | Evaluate a value or boolean expression for its side effects, discarding the result. Used for procedure calls, host calls, and tell-side `BUnify` in statement position. |
-| `Store idExpr` | Add a constraint suspension to the constraint store. Also registers the constraint as an observer of its arguments for reactivation. |
+| `Store idExpr` | Add a constraint suspension to the constraint store. Also registers the constraint as an observer of every unbound variable reachable from its arguments (recursing into compound terms) for reactivation. |
 | `Kill idExpr` | Remove a constraint from the store, mark as not alive. |
 | `AddHistory ruleName [idExpr]` | Record a rule firing in the propagation history. |
 | `DrainReactivationQueue suspVar body` | Iterate over all constraints pending reactivation (populated by `BUnify`), binding each to `suspVar` and executing `body`. The body dispatches to the appropriate activate procedure. |
@@ -183,7 +183,7 @@ The distinction matters because guards must not leave half-done bindings if they
 
 Reactivation follows this flow:
 
-1. When a constraint is stored (`Store`), the runtime registers it as an observer of its arguments.
+1. When a constraint is stored (`Store`), the runtime registers it as an observer of every unbound variable reachable from its arguments. This recurses into compound terms, so a variable nested inside an argument (e.g. the `X` in `pair(X, 1)` or `[X, X]`) is observed too — otherwise binding it later would silently fail to reactivate the constraint.
 2. When `Unify` binds a variable, the runtime pushes all constraints observing that variable onto a reactivation queue.
 3. The compiler generates code using `DrainReactivationQueue` to iterate over the queue and dispatch each constraint to its `activate_c` procedure via `reactivate_dispatch`.
 

@@ -274,5 +274,21 @@ observerTests =
           (_, o) <- unify x (VInt 1)
           pure o
         assertBool "should contain s1" (SuspensionId 0 `elem` obs)
-        assertBool "should contain s2" (SuspensionId 1 `elem` obs)
+        assertBool "should contain s2" (SuspensionId 1 `elem` obs),
+      testCase "var nested in a compound arg emits SuspensionId" $ do
+        obs <- runStoreObservers $ do
+          x <- newVar
+          -- The var is nested two levels deep inside compound
+          -- arguments, not a bare top-level argument. Reactivation
+          -- must still observe it (ωr Reactivate).
+          sid <-
+            createConstraint
+              (ConstraintType 0)
+              [VTerm "pair" [VTerm "box" [x], VInt 2]]
+          storeConstraint sid
+          (_, o) <- unify x (VInt 1)
+          pure o
+        assertBool
+          "should contain the suspension id"
+          (SuspensionId 0 `elem` obs)
     ]
