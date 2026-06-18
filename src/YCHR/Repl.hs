@@ -27,6 +27,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import System.Exit (exitFailure)
 import System.IO (hPutStr, hPutStrLn, stderr, stdout)
+import YCHR.Collected (CollectedModule (..))
 import YCHR.Compile.Pipeline (ExportResolution (..))
 import YCHR.Desugared qualified as D
 import YCHR.Display (Display (..), displayMsg)
@@ -402,7 +403,7 @@ showFiles = mapM_ putStrLn
 
 showModules :: CompiledProgram -> IO ()
 showModules prog =
-  mapM_ (\(Parsed.Module {name = n}) -> putStrLn (T.unpack n)) prog.allModules
+  mapM_ (\(CollectedModule {name = n}) -> putStrLn (T.unpack n)) prog.allModules
 
 showDeclarations :: CompiledProgram -> IO ()
 showDeclarations prog = mapM_ putStrLn declLines
@@ -719,7 +720,7 @@ isCtorExportedByParent prog td c =
               (Just xs : _) -> cn `elem` xs
               [] -> False
 
-findModule :: CompiledProgram -> Text -> Maybe Parsed.Module
+findModule :: CompiledProgram -> Text -> Maybe CollectedModule
 findModule prog modName =
   case [m | m <- prog.allModules, m.name == modName] of
     (m : _) -> Just m

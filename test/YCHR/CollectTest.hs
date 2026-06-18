@@ -7,6 +7,7 @@ import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 import YCHR.Collect
+import YCHR.Collected qualified as C
 import YCHR.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
@@ -22,10 +23,14 @@ tests =
          in case resolveLibraryClosure False libs [noAnnP "foo"] of
               Right mods -> length mods @?= 1
               Left errs -> fail (show errs),
-      testCase "library imports rewritten to module imports" $
+      testCase "library imports collapse into CollectedImport, name preserved" $
         let userMod_ = userMod [noAnnP (LibraryImport "foo" Nothing)]
             rewritten = rewriteImports [userMod_]
-         in all (all (isModuleImport . (.node)) . (.imports)) rewritten @?= True,
+            -- The library/module distinction is erased at the type level
+            -- (every import is a CollectedImport); assert the conversion
+            -- preserves the source module name.
+            names = [imp.node.importModule | m <- rewritten, imp <- m.imports]
+         in names @?= ["foo"],
       testCase "transitive library imports resolved" $
         let libA = (libMod "a") {imports = [noAnnP (LibraryImport "b" Nothing)]}
             libB = libMod "b"
@@ -91,10 +96,6 @@ libMod name =
       classExtensions = [],
       exports = Nothing
     }
-
-isModuleImport :: Import -> Bool
-isModuleImport (ModuleImport _ _) = True
-isModuleImport _ = False
 
 isCircularError :: Diagnostic CollectError -> Bool
 isCircularError (Diagnostic _ (AnnP (CircularLibraryImport _) _ _)) = True

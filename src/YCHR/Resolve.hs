@@ -2,7 +2,7 @@
 
 -- | Post-rename resolution.
 --
--- Flattens @[P.Module]@ into a single 'R.Program', grouping function
+-- Flattens @[CollectedModule]@ into a single 'R.Program', grouping function
 -- equations under their declarations and verifying that declaration
 -- kinds are used consistently.
 module YCHR.Resolve
@@ -28,6 +28,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import YCHR.Collected (CollectedImport (..), CollectedModule (..))
 import YCHR.Diagnostic (Diagnostic, noDiag)
 import YCHR.PExpr qualified as PExpr
 import YCHR.Parsed (FunctionDeclKind (..))
@@ -132,7 +133,7 @@ data ResolveError
 -- 2. Group equations under their function declarations.
 -- 3. Check that no equation targets a constraint name.
 -- 4. Check that no rule head references a function name.
-resolveProgram :: [P.Module] -> Either [Diagnostic ResolveError] R.Program
+resolveProgram :: [CollectedModule] -> Either [Diagnostic ResolveError] R.Program
 resolveProgram mods =
   let constraintNames = buildConstraintNames mods
       functionNames = buildFunctionNames mods
@@ -192,7 +193,7 @@ qualifiedNameToLooseName (QualifiedName m b) = Qualified m b
 -- Declaration collection
 -- ---------------------------------------------------------------------------
 
-buildConstraintNames :: [P.Module] -> Set QualifiedIdentifier
+buildConstraintNames :: [CollectedModule] -> Set QualifiedIdentifier
 buildConstraintNames mods =
   Set.fromList
     [ QualifiedIdentifier m.name d.name d.arity
@@ -201,7 +202,7 @@ buildConstraintNames mods =
       P.ConstraintDecl {} <- [d]
     ]
 
-buildFunctionNames :: [P.Module] -> Set QualifiedName
+buildFunctionNames :: [CollectedModule] -> Set QualifiedName
 buildFunctionNames mods =
   Set.fromList
     [ QualifiedName m.name d.name
@@ -246,10 +247,10 @@ type FunVisibility = Map (Text, Int) [QualifiedName]
 -- A function declared in module @P@ is visible in module @M@ iff
 -- either @P == M@, or @M@ has a @use_module(P)@ import whose import
 -- list permits the declared @(name, arity)@ and @P@'s export list
--- (if any) includes the declaration. 'YCHR.Collect.rewriteImports'
--- rewrites every @library(...)@ import to a 'ModuleImport' before
--- 'resolveProgram' runs, so only 'ModuleImport' needs to be handled.
-buildFunctionVisibility :: [P.Module] -> Map Text FunVisibility
+-- (if any) includes the declaration. By this stage
+-- 'YCHR.Collect.rewriteImports' has collapsed every import into a
+-- 'CollectedImport', so there is only one import kind to handle.
+buildFunctionVisibility :: [CollectedModule] -> Map Text FunVisibility
 buildFunctionVisibility mods =
   Map.fromList [(m.name, perModule m) | m <- mods]
   where
@@ -273,10 +274,9 @@ buildFunctionVisibility mods =
         (matchesImport provider.name d)
         [im.node | im <- selfMod.imports]
 
-    matchesImport providerName d (P.ModuleImport mn il)
-      | mn == providerName = importListPermitsFun d il
+    matchesImport providerName d im
+      | im.importModule == providerName = importListPermitsFun d im.importItems
       | otherwise = False
-    matchesImport _ _ (P.LibraryImport _ _) = False
 
     importListPermitsFun _ Nothing = True
     importListPermitsFun d (Just decls) = any (matchesFunDecl d) decls
@@ -305,7 +305,7 @@ funVisibilityFor mv m = Map.findWithDefault Map.empty m mv
 -- goal and argument terms.
 --
 -- See Note [FunVisibility vs renamer visibility].
-buildQueryFunctionVisibility :: [P.Module] -> FunVisibility
+buildQueryFunctionVisibility :: [CollectedModule] -> FunVisibility
 buildQueryFunctionVisibility mods =
   Map.fromListWith
     (\a b -> nub (a ++ b))
@@ -327,7 +327,7 @@ buildQueryFunctionVisibility mods =
     matchesFunDecl _ _ = False
 
 -- | Map each declared function to whether its declaration is open.
-buildFunctionOpenness :: [P.Module] -> Map.Map QualifiedName Bool
+buildFunctionOpenness :: [CollectedModule] -> Map.Map QualifiedName Bool
 buildFunctionOpenness mods =
   Map.fromList
     [ (QualifiedName m.name d.name, d.isOpen)
@@ -340,7 +340,7 @@ buildFunctionOpenness mods =
 -- When the same name is declared with both kinds, an arbitrary winner
 -- is recorded here; the conflict is reported separately by
 -- 'checkMixedDeclKinds'.
-buildFunctionKinds :: [P.Module] -> Map.Map QualifiedName FunctionDeclKind
+buildFunctionKinds :: [CollectedModule] -> Map.Map QualifiedName FunctionDeclKind
 buildFunctionKinds mods =
   Map.fromList
     [ (QualifiedName m.name d.name, d.kind)
@@ -349,7 +349,7 @@ buildFunctionKinds mods =
       P.FunctionDecl {} <- [d]
     ]
 
-collectConstraintTypes :: [P.Module] -> Map.Map QualifiedName [TypeExpr]
+collectConstraintTypes :: [CollectedModule] -> Map.Map QualifiedName [TypeExpr]
 collectConstraintTypes mods =
   Map.fromList
     [ (QualifiedName m.name d.name, ts)
@@ -363,7 +363,7 @@ collectConstraintTypes mods =
 
 -- | Bounds declared on every @:- chr_constraint@ that carries a
 -- @requiring@ clause. Unbounded constraints are absent from the map.
-collectConstraintBounds :: [P.Module] -> Map.Map QualifiedName [BoundSig]
+collectConstraintBounds :: [CollectedModule] -> Map.Map QualifiedName [BoundSig]
 collectConstraintBounds mods =
   Map.fromList
     [ (QualifiedName m.name d.name, bs)
@@ -374,7 +374,7 @@ collectConstraintBounds mods =
 
 -- | Bounds declared on every @:- function@ / @:- open_function@ that
 -- carries a @requiring@ clause. Unbounded functions are absent.
-buildFunctionRequiring :: [P.Module] -> Map.Map QualifiedName [BoundSig]
+buildFunctionRequiring :: [CollectedModule] -> Map.Map QualifiedName [BoundSig]
 buildFunctionRequiring mods =
   Map.fromList
     [ (QualifiedName m.name d.name, bs)
@@ -389,7 +389,7 @@ buildFunctionRequiring mods =
 
 -- | Check that no equation targets a constraint-declared name.
 -- Reports only the first equation per name.
-checkEquations :: Set QualifiedIdentifier -> [P.Module] -> [Diagnostic ResolveError]
+checkEquations :: Set QualifiedIdentifier -> [CollectedModule] -> [Diagnostic ResolveError]
 checkEquations cNames mods = snd $ foldl go (Set.empty, []) allEqs
   where
     allEqs = [annEq | m <- mods, annEq <- m.equations]
@@ -415,7 +415,7 @@ checkEquations cNames mods = snd $ foldl go (Set.empty, []) allEqs
 -- other modules must be wrapped in @:- extend_function ...@ directives.
 -- Unknown function names are skipped here; they are reported by the
 -- renamer as YCHR-20002.
-checkOrphanEquations :: Set QualifiedName -> [P.Module] -> [Diagnostic ResolveError]
+checkOrphanEquations :: Set QualifiedName -> [CollectedModule] -> [Diagnostic ResolveError]
 checkOrphanEquations functionNames mods =
   [ noDiag
       ( P.AnnP
@@ -434,7 +434,7 @@ checkOrphanEquations functionNames mods =
 -- @:- extend_class@ directives only target open declarations.
 -- Targets unknown to the compiler are already reported by the renamer.
 checkExtendsClosed ::
-  Map.Map QualifiedName Bool -> [P.Module] -> [Diagnostic ResolveError]
+  Map.Map QualifiedName Bool -> [CollectedModule] -> [Diagnostic ResolveError]
 checkExtendsClosed funcOpenness mods =
   let declErrs =
         [ noDiag
@@ -469,7 +469,7 @@ checkExtendsClosed funcOpenness mods =
 -- Untyped declarations contribute no signature, so they are not
 -- counted. One diagnostic is emitted per group, pointing at the
 -- second offending declaration.
-checkMultiSigOnFunction :: [P.Module] -> [Diagnostic ResolveError]
+checkMultiSigOnFunction :: [CollectedModule] -> [Diagnostic ResolveError]
 checkMultiSigOnFunction mods =
   [ noDiag (P.AnnP (MultiSigOnFunction (Qualified m.name d.name)) loc (PExpr.Atom d.name))
   | (_, decls) <- groupedFunctionDecls mods,
@@ -490,7 +490,7 @@ checkMultiSigOnFunction mods =
 -- @:- function@-style and @:- class@-style keywords. One diagnostic
 -- is emitted per group, pointing at the first declaration whose kind
 -- differs from the group's first declaration.
-checkMixedDeclKinds :: [P.Module] -> [Diagnostic ResolveError]
+checkMixedDeclKinds :: [CollectedModule] -> [Diagnostic ResolveError]
 checkMixedDeclKinds mods =
   [ noDiag (P.AnnP (MixedDeclKinds (Qualified m.name d.name)) loc (PExpr.Atom d.name))
   | (_, decls@((P.FunctionDecl {kind = k0}, _, _, _) : _)) <- groupedFunctionDecls mods,
@@ -509,7 +509,7 @@ checkMixedDeclKinds mods =
 -- function-side declaration (subsequent function-side declarations of
 -- the same name are suppressed to avoid duplicate diagnostics when a
 -- name is declared as e.g. both @:- function@ and @:- class@).
-checkConstraintFunctionCollision :: [P.Module] -> [Diagnostic ResolveError]
+checkConstraintFunctionCollision :: [CollectedModule] -> [Diagnostic ResolveError]
 checkConstraintFunctionCollision mods = snd $ foldl go (Set.empty, []) entries
   where
     entries =
@@ -548,7 +548,7 @@ checkConstraintFunctionCollision mods = snd $ foldl go (Set.empty, []) entries
 -- Targets unknown to the compiler are already reported by the renamer.
 checkExtensionKinds ::
   Map.Map QualifiedName FunctionDeclKind ->
-  [P.Module] ->
+  [CollectedModule] ->
   [Diagnostic ResolveError]
 checkExtensionKinds funcKinds mods =
   classTypeErrs ++ extendFunErrs ++ extendClassErrs
@@ -594,8 +594,8 @@ checkExtensionKinds funcKinds mods =
 -- within each module), so callers that want "the first/second
 -- offending declaration" can rely on list position.
 groupedFunctionDecls ::
-  [P.Module] ->
-  [((Text, Text, Int), [(P.Declaration, P.Module, P.SourceLoc, PExpr.PExpr)])]
+  [CollectedModule] ->
+  [((Text, Text, Int), [(P.Declaration, CollectedModule, P.SourceLoc, PExpr.PExpr)])]
 groupedFunctionDecls mods =
   -- 'Map.fromListWith (++)' would build groups in *reverse* source
   -- order (right-associative accumulation). We want source order, so
@@ -620,7 +620,7 @@ groupedFunctionDecls mods =
 -- valid and are checked under the same ambient bound as the original
 -- equations.
 checkExtendsBounded ::
-  Map.Map QualifiedName [BoundSig] -> [P.Module] -> [Diagnostic ResolveError]
+  Map.Map QualifiedName [BoundSig] -> [CollectedModule] -> [Diagnostic ResolveError]
 checkExtendsBounded funcRequiring mods =
   [ noDiag
       (P.AnnP (ExtendTypeOnBoundedFunction target) loc (PExpr.Atom d.name))
@@ -650,7 +650,7 @@ checkExtendsBounded funcRequiring mods =
 -- All three checks run together so the user sees every shape of bound
 -- error in a single pass.
 checkBoundedDeclarations ::
-  Set QualifiedName -> [P.Module] -> [Diagnostic ResolveError]
+  Set QualifiedName -> [CollectedModule] -> [Diagnostic ResolveError]
 checkBoundedDeclarations functionNames mods =
   let funcBounds =
         [ (QualifiedName m.name d.name, primaryVars, bs, originForDecl m d)
@@ -800,7 +800,7 @@ typeExprVars (TypeCon _ args) = concatMap typeExprVars args
 
 -- | Check that no rule head constraint is a function-declared name.
 -- Reports only the first rule per name.
-checkRuleHeads :: Set Name -> [P.Module] -> [Diagnostic ResolveError]
+checkRuleHeads :: Set Name -> [CollectedModule] -> [Diagnostic ResolveError]
 checkRuleHeads fNames mods = snd $ foldl go (Set.empty, []) allRules
   where
     allRules = [(r, m) | m <- mods, r <- m.rules]
@@ -821,7 +821,7 @@ reservedDeclNames :: Set Text
 reservedDeclNames = Set.fromList ["term"]
 
 -- | Check that no declaration uses a reserved name.
-checkReservedNames :: [P.Module] -> [Diagnostic ResolveError]
+checkReservedNames :: [CollectedModule] -> [Diagnostic ResolveError]
 checkReservedNames mods =
   [ noDiag (P.AnnP (ReservedName (Qualified m.name d.name)) loc (PExpr.Atom ""))
   | m <- mods,
@@ -842,7 +842,7 @@ reservedModuleNames :: Set Text
 reservedModuleNames = Set.fromList ["host"]
 
 -- | Check that no module uses a reserved name.
-checkReservedModuleNames :: [P.Module] -> [Diagnostic ResolveError]
+checkReservedModuleNames :: [CollectedModule] -> [Diagnostic ResolveError]
 checkReservedModuleNames mods =
   [ noDiag (P.AnnP (ReservedModuleName m.name) m.nameLoc (PExpr.Atom ""))
   | m <- mods,
@@ -864,7 +864,7 @@ toQualId (Unqualified _) _ = Nothing
 
 resolveRules ::
   Map Text FunVisibility ->
-  [P.Module] ->
+  [CollectedModule] ->
   ([R.Rule], [Diagnostic ResolveError])
 resolveRules visMap mods =
   let raws = [(r, m) | m <- mods, r <- m.rules]
@@ -920,7 +920,7 @@ qualifyConstraint loc origin (Constraint n args) = case n of
 
 resolveFunctions ::
   Map Text FunVisibility ->
-  [P.Module] ->
+  [CollectedModule] ->
   ([R.FunctionDef], [Diagnostic ResolveError])
 resolveFunctions visMap mods =
   let -- Collect all function declarations with their module context
@@ -960,7 +960,7 @@ resolveFunctions visMap mods =
    in (defs, concat defErrss)
 
 -- | Collect type signatures from a group of declarations for the same function.
-collectSignatures :: [(P.Declaration, P.Module)] -> [([TypeExpr], TypeExpr)]
+collectSignatures :: [(P.Declaration, CollectedModule)] -> [([TypeExpr], TypeExpr)]
 collectSignatures decls =
   [ (argTys, retTy)
   | (d, _) <- decls,
@@ -972,7 +972,7 @@ collectSignatures decls =
 -- directives in any module. Only signatures whose resolved target
 -- matches the given qualified name and arity are included.
 collectExtensionSignatures ::
-  [P.Module] -> QualifiedName -> Int -> [([TypeExpr], TypeExpr)]
+  [CollectedModule] -> QualifiedName -> Int -> [([TypeExpr], TypeExpr)]
 collectExtensionSignatures mods qn ar =
   [ (argTys, retTy)
   | m <- mods,
@@ -994,8 +994,8 @@ collectExtensionSignatures mods qn ar =
 -- legitimate source for this declaration.
 gatherEquations ::
   Map Text FunVisibility ->
-  [P.Module] ->
-  P.Module ->
+  [CollectedModule] ->
+  CollectedModule ->
   P.Declaration ->
   ([P.AnnP R.FunctionEquation], [Diagnostic ResolveError])
 gatherEquations visMap mods m d =

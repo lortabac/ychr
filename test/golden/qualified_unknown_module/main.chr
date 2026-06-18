@@ -1,0 +1,3 @@
+:- module(main).
+:- chr_constraint cc/1.
+cc(X) <=> zzz:foo(X).

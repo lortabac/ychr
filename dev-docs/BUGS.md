@@ -6,60 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `YCHR-20009` claims a module "does not export" a name it *does* export when the module simply isn't imported
-
-**Documented claim.** `docs/reference/errors.md` §`YCHR-20009`
-(`NotExportedByModule`): "A qualified reference targets a module that
-does not export the named item. Check the spelling and the exporter's
-export list."
-
-**Test.** Three files compiled together. `moda` exports `aa/1`; `modc`
-imports only `modb` and writes the qualified reference `moda:aa`.
-
-    % moda.chr
-    :- module(moda, [aa/1]).
-    :- chr_constraint aa/1, marker/0.
-    aa(X) <=> marker.
-
-    % modb.chr
-    :- module(modb, [bb/1]).
-    :- use_module(moda).
-    :- chr_constraint bb/1.
-    bb(X) <=> aa(X).
-
-    % modc.chr
-    :- module(modc).
-    :- use_module(modb).
-    :- chr_constraint cc/1.
-    cc(X) <=> moda:aa(X).
-
-    ychr run -g 'cc(1)' moda.chr modb.chr modc.chr
-
-**Expected.** A diagnostic whose message reflects the real cause — that
-`modc` does not *import* `moda`. (`moda` plainly exports `aa/1`.)
-
-**Actual.**
-
-    modc.chr:4:11: YCHR-20009
-    Module 'moda' does not export 'aa/1'
-      Hint: ensure 'moda' is imported and exports 'aa/1'
-
-The message asserts something false: `moda`'s export list literally
-contains `aa/1`. The same wording also appears when the qualified module
-does not exist in the program at all (`zzz:aa` → `Module 'zzz' does not
-export 'aa/1'`).
-
-**Notes.** Controlled variants pin the cause to the missing import:
-adding `:- use_module(moda).` to `modc` makes `moda:aa` resolve and the
-program runs. A genuine "imported module lacks the export" case produces
-the *same* `YCHR-20009` text, which *is* accurate there — so one code +
-one message covers three distinct situations (imported-but-not-exported
-/ exported-but-not-imported / module-does-not-exist) and the wording is
-only correct for the first. The hint partially mitigates the
-exported-but-not-imported case. The spec is also silent on whether
-qualifying a name requires importing its module; that underlying rule
-could be documented in `language.md`.
-
 ## Guard that evaluates to a non-boolean errors with a leaked internal name and no source location
 
 **Documented claim.** `docs/reference/errors.md` §`YCHR-60001`: "Also

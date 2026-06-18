@@ -54,6 +54,14 @@ the `palette` module. If two imports both export an identifier of
 the same name and arity, an unqualified use is rejected and the user
 must disambiguate.
 
+Qualifying a name does *not* bypass the import requirement: a
+reference `m:name` is valid only if the current module imports `m`
+(via `:- use_module(m)`) and `m` exports `name`. Referencing an
+unimported but existing module is rejected as `YCHR-20014`
+(`ModuleNotImported`); referencing a module that does not exist at all
+is rejected as `YCHR-20015` (`UnknownModule`); referencing an imported
+module that lacks the export is `YCHR-20009` (`NotExportedByModule`).
+
 `:- use_module(M)` and `:- use_module(library(M))` are equivalent: the
 `library(...)` wrapper is accepted as a Prolog-source compatibility
 shim and resolves to the same module. There is no separate library

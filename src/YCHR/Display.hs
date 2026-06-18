@@ -244,6 +244,8 @@ renameErrorCode (NotExportedByModule _ _ _) = ErrorCode 20009
 renameErrorCode (NonExportedConstructor _ _ _) = ErrorCode 20010
 renameErrorCode (ConstructorNotExported _ _ _ _) = ErrorCode 20011
 renameErrorCode (AmbiguousDataConstructor _ _) = ErrorCode 20012
+renameErrorCode (ModuleNotImported _ _ _) = ErrorCode 20014
+renameErrorCode (UnknownModule _) = ErrorCode 20015
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
@@ -624,14 +626,30 @@ renameErrorMsg (NotExportedByModule modName name arity) =
         ++ show arity
         ++ "'"
     )
-    ( "ensure '"
+    ( "check the spelling and the export list of '"
         ++ T.unpack modName
-        ++ "' is imported and exports '"
+        ++ "'"
+    )
+renameErrorMsg (ModuleNotImported modName name arity) =
+  withHint
+    ( "Module '"
+        ++ T.unpack modName
+        ++ "' is not imported (referenced as '"
+        ++ T.unpack modName
+        ++ ":"
         ++ T.unpack name
         ++ "/"
         ++ show arity
-        ++ "'"
+        ++ "')"
     )
+    ( "add ':- use_module("
+        ++ T.unpack modName
+        ++ ").' to import it"
+    )
+renameErrorMsg (UnknownModule modName) =
+  withHint
+    ("No module named '" ++ T.unpack modName ++ "'")
+    "check the module name, or declare the module"
 renameErrorMsg (UnknownOperatorImport modName opName) =
   "Module '"
     ++ T.unpack modName

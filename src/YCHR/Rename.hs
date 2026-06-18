@@ -67,6 +67,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
+import YCHR.Collected (CollectedImport (..), CollectedModule (..))
 import YCHR.Diagnostic (Diagnostic, noDiag)
 import YCHR.PExpr (PExpr (Atom))
 import YCHR.Parsed
@@ -78,11 +79,20 @@ data RenameError
   | UnknownName Text Int
   | UnknownExport Text Text Int
   | UnknownImport Text Text Int
-  | -- | A qualified reference @M:n/a@ that is not in scope: either the
-    -- module is not imported, the name is not exported by it, or the
-    -- name is excluded by the import list. Carries the source module
-    -- name, the name, and the arity.
+  | -- | A qualified reference @M:n/a@ where @M@ /is/ imported by the
+    -- current module but does not export @(n, arity)@ (or the name is
+    -- excluded by a restricted import list). Carries the source module
+    -- name, the name, and the arity. See 'ModuleNotImported' and
+    -- 'UnknownModule' for the not-imported / non-existent cases.
     NotExportedByModule Text Text Int
+  | -- | A qualified reference @M:n/a@ where module @M@ exists in the
+    -- program but the current module never imports it (qualification
+    -- does not bypass the import requirement). Carries the source
+    -- module name, the name, and the arity.
+    ModuleNotImported Text Text Int
+  | -- | A qualified reference @M:n/a@ where no module named @M@ exists
+    -- anywhere in the program. Carries the unknown module name.
+    UnknownModule Text
   | -- | An @op(...)@ entry inside an import list refers to an operator
     -- that the source module does not export. Carries the source module
     -- name and the operator name.
@@ -182,7 +192,12 @@ data RenameCtx = RenameCtx
     -- module — i.e. the location of the first non-import directive.
     -- Imports beyond this location are out of order.
     currentTrailingLoc :: Maybe SourceLoc,
-    currentModule :: Module
+    -- | Every module name present in the program. Used to distinguish a
+    -- qualified reference to a real-but-unimported module
+    -- ('ModuleNotImported') from one to a non-existent module
+    -- ('UnknownModule').
+    allModuleNames :: [Text],
+    currentModule :: CollectedModule
   }
 
 -- | Inputs to 'renameProgram' beyond the module list itself. Lets the
@@ -216,7 +231,7 @@ defaultRenameInputs =
 -- supplied 'visibleDataCons' map). Constructors come from type
 -- declarations and are always 'Unqualified' at this point (the parser
 -- never produces qualified constructor names).
-buildDataConEnv :: Map DeclaredType (Set.Set Text) -> [Module] -> DataConEnv
+buildDataConEnv :: Map DeclaredType (Set.Set Text) -> [CollectedModule] -> DataConEnv
 buildDataConEnv visible mods =
   Map.fromListWith
     (++)
@@ -237,7 +252,7 @@ buildDataConEnv visible mods =
 -- to the current module, and only constructors permitted by the
 -- visibility map's value-side allowlist.
 buildDataConProviders ::
-  Map DeclaredType (Set.Set Text) -> [Module] -> DataConProviders
+  Map DeclaredType (Set.Set Text) -> [CollectedModule] -> DataConProviders
 buildDataConProviders visible mods =
   Map.fromListWith
     (++)
@@ -257,7 +272,7 @@ buildDataConProviders visible mods =
 -- modules that declare it, regardless of export allowlists or import
 -- lists. Used to distinguish "declared but hidden" from "not declared
 -- at all" when emitting diagnostics for qualified references.
-buildAllDataConProviders :: [Module] -> DataConProviders
+buildAllDataConProviders :: [CollectedModule] -> DataConProviders
 buildAllDataConProviders mods =
   Map.fromListWith
     (++)
@@ -305,7 +320,7 @@ checkAmbiguousDataCon ctx loc origin n arity =
 -- | All declared constraints and functions across all modules, indexed by
 -- @(name, arity)@. Functions and constraints share a namespace, so both
 -- kinds of declaration are included.
-buildDeclEnv :: [Module] -> DeclEnv
+buildDeclEnv :: [CollectedModule] -> DeclEnv
 buildDeclEnv mods =
   makeDeclEnv
     [ ((d.name, d.arity), [m.name])
@@ -317,7 +332,7 @@ buildDeclEnv mods =
 -- Modules without a @module@ directive (@exports = Nothing@) export
 -- everything. Operator and type export declarations are filtered out — they
 -- live in separate namespaces.
-buildExportEnv :: [Module] -> ExportEnv
+buildExportEnv :: [CollectedModule] -> ExportEnv
 buildExportEnv mods =
   makeExportEnv
     [ ((d.name, d.arity), [m.name])
@@ -328,7 +343,7 @@ buildExportEnv mods =
     ]
 
 -- | All type declarations across all modules.
-buildTypeDeclEnv :: [Module] -> DeclEnv
+buildTypeDeclEnv :: [CollectedModule] -> DeclEnv
 buildTypeDeclEnv mods =
   makeDeclEnv
     [ ((unqualifiedText td.name, length td.typeVars), [m.name])
@@ -338,7 +353,7 @@ buildTypeDeclEnv mods =
 
 -- | Only /exported/ types (for cross-module resolution). Modules without an
 -- export list export every type they declare.
-buildTypeExportEnv :: [Module] -> ExportEnv
+buildTypeExportEnv :: [CollectedModule] -> ExportEnv
 buildTypeExportEnv mods =
   makeExportEnv
     [ ((d.name, d.arity), [m.name])
@@ -383,10 +398,10 @@ unqualifiedText (Qualified _ t) = t
 -- accumulated diagnostics on failure.
 renameProgram ::
   RenameInputs ->
-  [Module] ->
+  [CollectedModule] ->
   Either
     [Diagnostic RenameError]
-    ( [Module],
+    ( [CollectedModule],
       [Diagnostic RenameWarning]
     )
 renameProgram inputs mods =
@@ -408,6 +423,7 @@ renameProgram inputs mods =
                   operatorExports = inputs.operatorExports,
                   currentTrailingLoc =
                     Map.findWithDefault Nothing m.name inputs.trailingLoc,
+                  allModuleNames = map (.name) mods,
                   currentModule = m
                 }
             visible = visibleDataCons mods ctx0
@@ -426,7 +442,7 @@ renameProgram inputs mods =
    in if null errs then Right (result, warnings) else Left errs
 
 -- | Check that every name in a module's export list is actually declared.
-validateExports :: [Module] -> Rename ()
+validateExports :: [CollectedModule] -> Rename ()
 validateExports = traverse_ validateOne
   where
     validateOne m = case m.exports of
@@ -483,7 +499,7 @@ validateExports = traverse_ validateOne
 -- Module, rule, equation, head renaming
 -- ---------------------------------------------------------------------------
 
-renameModule :: [Module] -> RenameCtx -> Rename Module
+renameModule :: [CollectedModule] -> RenameCtx -> Rename CollectedModule
 renameModule mods ctx = do
   let m = ctx.currentModule
   validateImportLists mods ctx
@@ -494,15 +510,23 @@ renameModule mods ctx = do
   let renamedTypeDecls = map (fmap (renameTypeDefinition ctx)) m.typeDecls
   renamedDecls <- traverse (renameAnnDecl ctx) m.decls
   renamedExtensionTypes <- traverse (renameAnnDecl ctx) m.extensionTypes
+  -- Explicit construction (not @m { ... }@ record update): because
+  -- 'CollectedModule' and 'Module' share field names, a record update of
+  -- the variable @m@ is ambiguous (GHC cannot tell which record type is
+  -- being updated). Naming the constructor resolves it unambiguously.
   pure
-    m
-      { rules = renamedRules,
+    CollectedModule
+      { name = m.name,
+        nameLoc = m.nameLoc,
+        imports = m.imports,
+        rules = renamedRules,
         equations = renamedEquations,
         extensions = renamedExtensions,
         classExtensions = renamedClassExtensions,
         typeDecls = renamedTypeDecls,
         decls = renamedDecls,
-        extensionTypes = renamedExtensionTypes
+        extensionTypes = renamedExtensionTypes,
+        exports = m.exports
       }
 
 -- | Validate import lists. Four checks:
@@ -515,26 +539,22 @@ renameModule mods ctx = do
 --     source module exports for that type ('UnknownExportedConstructor').
 --   * Each @use_module@ directive must appear before the first non-import
 --     directive in the file ('UseModuleOutOfOrder').
-validateImportLists :: [Module] -> RenameCtx -> Rename ()
+validateImportLists :: [CollectedModule] -> RenameCtx -> Rename ()
 validateImportLists mods ctx =
   traverse_ checkImport ctx.currentModule.imports
   where
     checkImport (AnnP imp loc origin) = do
       checkPlacement imp loc origin
-      case imp of
-        ModuleImport mn (Just decls) -> traverse_ (checkItem mn loc origin) decls
-        LibraryImport mn (Just decls) -> traverse_ (checkItem mn loc origin) decls
-        _ -> pure ()
+      case imp.importItems of
+        Just decls -> traverse_ (checkItem imp.importModule loc origin) decls
+        Nothing -> pure ()
 
     checkPlacement imp loc origin = case ctx.currentTrailingLoc of
       Just tloc
         | loc.file == tloc.file,
           locAtOrAfter loc tloc ->
-            emitError (AnnP (UseModuleOutOfOrder (importedModuleName imp)) loc origin)
+            emitError (AnnP (UseModuleOutOfOrder imp.importModule) loc origin)
       _ -> pure ()
-
-    importedModuleName (ModuleImport n _) = n
-    importedModuleName (LibraryImport n _) = n
 
     checkItem mn loc origin (OperatorDecl op) =
       when (op `notElem` Map.findWithDefault [] mn ctx.operatorExports) $
@@ -929,12 +949,20 @@ resolveName _ ctx loc origin name@(Qualified m n) arity = do
 -- renamer into 'NoResolveQuoted' mode and skips this check entirely.
 -- The @host@ pseudo-module is exempt (host calls are external).
 --
--- For a miss, the diagnostic is constructor-flavored
--- ('NonExportedConstructor', YCHR-20010) iff @M@ declares
--- @(n, arity)@ as a constructor anywhere — i.e. the user named a
--- real but hidden ctor. Otherwise we emit the existing generic
--- 'NotExportedByModule' (YCHR-20009). Callers return the
--- 'Qualified' name unchanged so traversal can continue.
+-- For a miss, the diagnostic pinpoints the actual cause:
+--
+--   * constructor-flavored ('NonExportedConstructor', YCHR-20010) iff
+--     @M@ declares @(n, arity)@ as a constructor anywhere — the user
+--     named a real but hidden ctor;
+--   * 'UnknownModule' (YCHR-20015) iff no module named @M@ exists;
+--   * 'ModuleNotImported' (YCHR-20014) iff @M@ exists but the current
+--     module never imports it (qualification does not bypass the
+--     import requirement);
+--   * 'NotExportedByModule' (YCHR-20009) otherwise — @M@ is imported
+--     but does not export @(n, arity)@ (or a restricted import list
+--     excludes it).
+--
+-- Callers return the 'Qualified' name unchanged so traversal can continue.
 validateQualified ::
   RenameCtx -> SourceLoc -> PExpr -> Text -> Text -> Int -> Rename ()
 validateQualified ctx loc origin m n arity
@@ -943,8 +971,19 @@ validateQualified ctx loc origin m n arity
   | m `elem` Map.findWithDefault [] (n, arity) ctx.dataConProviders = pure ()
   | m `elem` Map.findWithDefault [] (n, arity) ctx.allDataConProviders =
       emitError (AnnP (NonExportedConstructor m n arity) loc origin)
+  | m `notElem` ctx.allModuleNames =
+      emitError (AnnP (UnknownModule m) loc origin)
+  | m `notElem` importedModuleNames ctx =
+      emitError (AnnP (ModuleNotImported m n arity) loc origin)
   | otherwise =
       emitError (AnnP (NotExportedByModule m n arity) loc origin)
+
+-- | Every module the current module imports. Used to decide whether a
+-- qualified reference's target module is in scope at all (distinct from
+-- whether it exports the referenced name).
+importedModuleNames :: RenameCtx -> [Text]
+importedModuleNames ctx =
+  [imp.importModule | AnnP imp _ _ <- ctx.currentModule.imports]
 
 -- | All modules that can provide @(name, arity)@ to the current module:
 -- the current module itself if it declares the name, plus every imported
@@ -955,7 +994,7 @@ visibleProviders ctx n arity =
         filter
           (== ctx.currentModule.name)
           (lookupDecl (n, arity) ctx.declEnv)
-      imports = [(mn, il) | AnnP (ModuleImport mn il) _ _ <- ctx.currentModule.imports]
+      imports = [(imp.importModule, imp.importItems) | AnnP imp _ _ <- ctx.currentModule.imports]
       importProviders =
         filter
           (\mn -> any (\(imn, il) -> imn == mn && importListPermits n arity il) imports)
@@ -1003,7 +1042,7 @@ importListPermitsCons n arity allCons (Just decls) =
 -- constructor set still appears in the map: the type itself remains
 -- visible (type-level visibility is governed independently by
 -- 'resolveTypeName'), only its constructors are hidden.
-visibleDataCons :: [Module] -> RenameCtx -> Map DeclaredType (Set.Set Text)
+visibleDataCons :: [CollectedModule] -> RenameCtx -> Map DeclaredType (Set.Set Text)
 visibleDataCons mods ctx =
   Map.fromList
     [ entry
@@ -1013,7 +1052,7 @@ visibleDataCons mods ctx =
     ]
   where
     imports =
-      [(mn, il) | AnnP (ModuleImport mn il) _ _ <- ctx.currentModule.imports]
+      [(imp.importModule, imp.importItems) | AnnP imp _ _ <- ctx.currentModule.imports]
 
     entryFor m td =
       let n = unqualifiedText td.name
@@ -1189,7 +1228,7 @@ resolveTypeName ctx n arity =
         filter
           (== ctx.currentModule.name)
           (lookupDecl (n, arity) ctx.typeDeclEnv)
-      imports = [(mn, il) | AnnP (ModuleImport mn il) _ _ <- ctx.currentModule.imports]
+      imports = [(imp.importModule, imp.importItems) | AnnP imp _ _ <- ctx.currentModule.imports]
       importProviders =
         filter
           ( \mn ->
@@ -1213,7 +1252,7 @@ resolveTypeName ctx n arity =
 -- callable. Canonicalizes bare data-constructor references the same
 -- way the renamer does for head-pattern arguments.
 renameQueryArgs ::
-  [Module] ->
+  [CollectedModule] ->
   [Term] ->
   Either
     [Diagnostic RenameError]
@@ -1226,7 +1265,7 @@ renameQueryArgs mods args = renameQueryTerms mods NoResolve args
 -- scope. Each term is renamed at 'ResolveTop' level (same as rule bodies).
 -- Returns 'Left' if any rename errors occur.
 renameQueryGoals ::
-  [Module] ->
+  [CollectedModule] ->
   [Term] ->
   Either
     [Diagnostic RenameError]
@@ -1236,16 +1275,16 @@ renameQueryGoals ::
 renameQueryGoals mods goals = renameQueryTerms mods ResolveTop goals
 
 renameQueryTerms ::
-  [Module] ->
+  [CollectedModule] ->
   ResolveMode ->
   [Term] ->
   Either [Diagnostic RenameError] ([Term], [Diagnostic RenameWarning])
 renameQueryTerms mods mode terms =
   let queryMod =
-        Module
+        CollectedModule
           { name = "<query>",
             nameLoc = dummyLoc,
-            imports = [noAnnP (ModuleImport m.name Nothing) | m <- mods],
+            imports = [noAnnP (CollectedImport m.name Nothing) | m <- mods],
             decls = [],
             extensionTypes = [],
             typeDecls = [],
@@ -1266,6 +1305,7 @@ renameQueryTerms mods mode terms =
             typeExportEnv = buildTypeExportEnv mods,
             operatorExports = Map.empty,
             currentTrailingLoc = Nothing,
+            allModuleNames = map (.name) mods,
             currentModule = queryMod
           }
       visible = visibleDataCons mods ctx0

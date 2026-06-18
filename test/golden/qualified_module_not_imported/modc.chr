@@ -1,0 +1,4 @@
+:- module(modc).
+:- use_module(modb).
+:- chr_constraint cc/1.
+cc(X) <=> moda:aa(X).

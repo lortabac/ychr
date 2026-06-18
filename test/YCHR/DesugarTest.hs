@@ -7,6 +7,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
+import YCHR.Collect (rewriteImports)
 import YCHR.DSL
 import YCHR.Desugar (DesugarError (..), desugarProgram, extractSymbolTable, liftAllLambdas)
 import YCHR.Desugared qualified as D
@@ -42,7 +43,7 @@ tests =
     ]
 
 resolve :: [Module] -> IO R.Program
-resolve mods = case resolveProgram mods of
+resolve mods = case resolveProgram (rewriteImports mods) of
   Right p -> return p
   Left errs -> assertFailure $ "unexpected resolve errors: " ++ show errs
 
@@ -801,7 +802,7 @@ lambdaLiftTests =
                 dummyLoc
                 (Atom "")
             m = (module' "M") {decls = [funDecl], equations = [funEq]}
-        case resolveProgram [m] of
+        case resolveProgram (rewriteImports [m]) of
           Left errs ->
             errs
               @?= [ noDiag

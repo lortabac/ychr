@@ -30,6 +30,7 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Text.Parsec (ParseError)
 import YCHR.Collect (CollectError, addLibraryPrelude, resolveLibraryClosure, rewriteImports)
+import YCHR.Collected (CollectedModule)
 import YCHR.Compile (CompileError, compile)
 import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable, liftAllLambdas)
 import YCHR.Desugared qualified as D
@@ -136,7 +137,7 @@ data CompiledProgram = CompiledProgram
     exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
     exportedSet :: Set Types.QualifiedIdentifier,
     symbolTable :: SymbolTable,
-    allModules :: [Module],
+    allModules :: [CollectedModule],
     opTable :: OpTable,
     -- | All functions in the desugared program (for call dispatch in queries).
     allFunctions :: [D.Function],

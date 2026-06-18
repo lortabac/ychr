@@ -6,6 +6,13 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
+import YCHR.Collect (rewriteImports)
+import YCHR.Collected (CollectedModule)
+-- Brings 'CollectedModule''s field labels into scope (qualified) so that
+-- record-dot access on renamer outputs (e.g. @renamed.rules@) resolves
+-- via HasField, without their unqualified names clashing with the
+-- identically-named 'Module' labels used in parsed-module record updates.
+import YCHR.Collected qualified as C
 import YCHR.DSL
 import YCHR.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.PExpr (PExpr (Atom))
@@ -19,16 +26,19 @@ import YCHR.Rename
 import YCHR.Rename qualified as Rn
 
 -- | Test-local wrapper that forwards to 'Rn.renameProgram' with empty
--- rename inputs (no operator-export map and no trailing-loc map). The
--- module-list-only signature keeps existing tests concise.
+-- rename inputs (no operator-export map and no trailing-loc map). It
+-- also runs 'rewriteImports' so tests can build plain parsed 'Module's
+-- with the DSL while the renamer consumes 'CollectedModule's (as it
+-- does in the real pipeline). The module-list-only signature keeps
+-- existing tests concise.
 renameProgram ::
   [Module] ->
   Either
     [Diagnostic RenameError]
-    ( [Module],
+    ( [CollectedModule],
       [Diagnostic RenameWarning]
     )
-renameProgram = Rn.renameProgram defaultRenameInputs
+renameProgram = Rn.renameProgram defaultRenameInputs . rewriteImports
 
 -- | Build an algebraic type definition positionally (the constructors
 -- are wrapped in the 'Algebraic' 'TypeKind').
@@ -381,12 +391,13 @@ alreadyQualifiedTests =
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
         rule.head.node
           @?= Simplification [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"]],
-      testCase "pre-qualified undeclared constraint produces error" $ do
+      testCase "pre-qualified reference to non-existent module produces error" $ do
+        -- Module 'Order' does not exist anywhere in the program.
         let m =
               module' "M"
                 `defining` [[qterm "Order" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [m]
-          @?= Left [noDiag (AnnP (NotExportedByModule "Order" "leq" 2) dummyLoc (Atom ""))],
+          @?= Left [noDiag (AnnP (UnknownModule "Order") dummyLoc (Atom ""))],
       testCase "pre-qualified survives ambiguity" $ do
         -- Two visible providers, but the constraint is already Qualified
         let modA = module' "A" `declaring` ["leq" // 2]
@@ -412,7 +423,7 @@ alreadyQualifiedTests =
               module' "B"
                 `defining` [[qterm "A" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [modA, modB]
-          @?= Left [noDiag (AnnP (NotExportedByModule "A" "leq" 2) dummyLoc (Atom ""))],
+          @?= Left [noDiag (AnnP (ModuleNotImported "A" "leq" 2) dummyLoc (Atom ""))],
       testCase "pre-qualified reference to non-exported name is rejected" $ do
         -- A declares leq/2 and gt/2 but only exports leq/2. B imports A
         -- and tries to reach gt/2 via qualification; still hidden.
@@ -676,25 +687,11 @@ multiModuleTests =
       testCase "empty program" $
         renameProgram [] @?= Right ([], []),
       testCase "module with no rules" $
+        -- A module with no rules or equations renames to itself (modulo
+        -- the import-collapse that 'rewriteImports' performs), so the
+        -- expected output is just the collected form of the input.
         let m = module' "M" `declaring` ["leq" // 2]
-         in renameProgram [m]
-              @?= Right
-                ( [ Module
-                      { name = "M",
-                        nameLoc = dummyLoc,
-                        imports = [],
-                        decls = [noAnn (ConstraintDecl "leq" 2 Nothing Nothing)],
-                        extensionTypes = [],
-                        typeDecls = [],
-                        rules = [],
-                        equations = [],
-                        extensions = [],
-                        classExtensions = [],
-                        exports = Nothing
-                      }
-                  ],
-                  []
-                ),
+         in renameProgram [m] @?= Right (rewriteImports [m], []),
       testCase "rule name preserved" $ do
         let m =
               module' "M"
@@ -1304,7 +1301,7 @@ importListTests =
               defaultRenameInputs
                 { operatorExports = Map.fromList [("Order", [OpDecl 700 Xfx "==="])]
                 }
-        case Rn.renameProgram inputs [modOrder, modLogic] of
+        case Rn.renameProgram inputs (rewriteImports [modOrder, modLogic]) of
           Right _ -> pure ()
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs,
       testCase "operator in import list is rejected when source module does not export it" $ do
@@ -1347,7 +1344,7 @@ importListTests =
               defaultRenameInputs
                 { trailingLoc = Map.fromList [("Logic", Just (SourceLoc "test.chr" 5 1))]
                 }
-        case Rn.renameProgram inputs [modOrder, modLogic] of
+        case Rn.renameProgram inputs (rewriteImports [modOrder, modLogic]) of
           Left errs ->
             any
               ( \(Diagnostic _ (AnnP e _ _)) -> case e of

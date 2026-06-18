@@ -1,0 +1,4 @@
+:- module(modb, [bb/1]).
+:- use_module(moda).
+:- chr_constraint bb/1.
+bb(X) <=> aa(X).

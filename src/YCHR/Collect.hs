@@ -11,8 +11,10 @@
 --     seed library names, returns the reachable libraries in topological
 --     order, and reports unknown or circularly-imported libraries.
 --
---   * 'rewriteImports' rewrites every 'LibraryImport' to a 'ModuleImport'
---     so the renamer sees only one kind of import.
+--   * 'rewriteImports' converts each parsed 'Module' to a
+--     'CollectedModule', collapsing 'LibraryImport' and 'ModuleImport'
+--     into the single 'CollectedImport' so everything downstream sees
+--     only one kind of import.
 --
 --   * 'addLibraryPrelude' prepends a @prelude@ import to each library
 --     module (except the prelude itself).
@@ -29,6 +31,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import YCHR.Collected (CollectedModule, collectedFromParsed)
 import YCHR.Diagnostic (Diagnostic, noDiag)
 import YCHR.Parsed
 
@@ -124,14 +127,14 @@ libraryImports m = [AnnP n loc p | AnnP (LibraryImport n _) loc p <- m.imports]
 addLibraryPrelude :: [Module] -> [Module]
 addLibraryPrelude = map go
   where
+    go :: Module -> Module
     go m
       | m.name == "prelude" = m
       | otherwise = m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
 
--- | Rewrite every 'LibraryImport' to a 'ModuleImport'.
-rewriteImports :: [Module] -> [Module]
-rewriteImports = map rewriteOne
-  where
-    rewriteOne m = m {imports = map rewrite m.imports}
-    rewrite (AnnP (LibraryImport n il) loc p) = AnnP (ModuleImport n il) loc p
-    rewrite imp = imp
+-- | Convert each parsed 'Module' to a 'CollectedModule', collapsing both
+-- import kinds into 'CollectedImport'. After this point the
+-- library-vs-module distinction no longer exists in the types. The
+-- per-module conversion lives in "YCHR.Collected" ('collectedFromParsed').
+rewriteImports :: [Module] -> [CollectedModule]
+rewriteImports = map collectedFromParsed

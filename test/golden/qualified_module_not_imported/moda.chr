@@ -1,0 +1,3 @@
+:- module(moda, [aa/1]).
+:- chr_constraint aa/1, marker/0.
+aa(X) <=> marker.
