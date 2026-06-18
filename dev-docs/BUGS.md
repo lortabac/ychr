@@ -36,7 +36,7 @@ with the same stack-trace treatment other runtime errors get.
 No source file/line for the guard, no stack trace, and the message leaks
 the internal VM construct `BFromVal`.
 
-**Notes.** Same family as the `'$call'(5, 1)` message-quality bug above.
+**Notes.** Message-quality bug.
 Contrast a sibling `YCHR-60001` that carries full context (file:line,
 offending source, and a `=== stack trace ===` section) for a
 "no matching equation" runtime failure.
