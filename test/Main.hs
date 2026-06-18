@@ -5,6 +5,7 @@ import YCHR.CollectTest qualified
 import YCHR.CompileTest qualified
 import YCHR.DSLTest qualified
 import YCHR.DesugarTest qualified
+import YCHR.ErrorCodeTest qualified
 import YCHR.ExhaustivenessTest qualified
 import YCHR.GoldenTest qualified
 import YCHR.MetaTest qualified
@@ -36,6 +37,7 @@ main = do
         YCHR.MetaTest.tests,
         YCHR.DSLTest.tests,
         YCHR.DesugarTest.tests,
+        YCHR.ErrorCodeTest.tests,
         YCHR.ExhaustivenessTest.tests,
         YCHR.ParserTest.tests,
         YCHR.PExprTest.tests,

@@ -279,7 +279,12 @@ typeCheckErrorCode (DuplicateConstructor _ _) = ErrorCode 60007
 typeCheckErrorCode (ConstructorArityMismatch _ _ _) = ErrorCode 60008
 typeCheckErrorCode (BoundUnsatisfied _) = ErrorCode 60012
 
--- | 5xxxx — top-level errors
+-- | 5xxxx — top-level errors.
+--
+-- These standalone code constants are not attached to an enumerable error
+-- constructor, so the uniqueness guard in @test/YCHR/ErrorCodeTest.hs@
+-- cannot discover them by reflection: any new constant added below must
+-- also be listed in that test's @standaloneCodes@.
 parseErrorCode :: ErrorCode
 parseErrorCode = ErrorCode 50001
 

@@ -93,6 +93,7 @@ test-suite ychr-tests
     main-is:          Main.hs
     other-modules:    YCHR.CollectTest
                     , YCHR.CompileTest
+                    , YCHR.ErrorCodeTest
                     , YCHR.RunTest
                     , YCHR.DSLTest
                     , YCHR.DesugarTest
