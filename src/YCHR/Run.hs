@@ -41,6 +41,7 @@ module YCHR.Run
     runProgramWithGoalDSL,
     runProgramWithGoal,
     prepareGoal,
+    goalShapeConstraint,
     runPreparedGoal,
 
     -- * Multi-goal query API
@@ -87,9 +88,9 @@ import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic)
 import YCHR.Meta (valueToTerm)
 import YCHR.PExpr (PExpr (Atom))
-import YCHR.Parsed (SourceLoc (..))
-import YCHR.Parser (parseConstraintWith, parseQueryWith)
-import YCHR.Pretty (prettyTerm)
+import YCHR.Parsed (AnnP (..), SourceLoc (..))
+import YCHR.Parser (ParseValidationError (..), parseConstraintWith, parseQueryWith)
+import YCHR.Pretty (prettyPExprSrc, prettyTerm)
 import YCHR.Rename (renameQueryArgs, renameQueryGoals)
 import YCHR.Resolve (ResolveError, termToExpr)
 import YCHR.Resolved qualified as R
@@ -243,15 +244,34 @@ convertRuntimeErrorChr m = do
 prepareGoal :: CompiledProgram -> Text -> IO (Constraint, [Warning])
 prepareGoal cp src = case parseConstraintWith cp.opTable "<query>" src of
   Left err -> throwIO (ParseError "<query>" err)
-  Right (Left validErr) -> throwIO (ParseValidationErrors [validErr])
-  Right (Right (Constraint cname cargs)) -> do
-    (renamedArgs, ws) <-
-      either
-        (throwIO . RenameErrors)
-        pure
-        (renameQueryArgs cp.allModules cargs)
-    let warnings = [RenameWarnings ws | not (null ws)]
-    pure (Constraint cname renamedArgs, warnings)
+  Right parsed -> case either goalShapeConstraint Right parsed of
+    Left validErr -> throwIO (ParseValidationErrors [validErr])
+    Right (Constraint cname cargs) -> do
+      (renamedArgs, ws) <-
+        either
+          (throwIO . RenameErrors)
+          pure
+          (renameQueryArgs cp.allModules cargs)
+      let warnings = [RenameWarnings ws | not (null ws)]
+      pure (Constraint cname renamedArgs, warnings)
+
+-- | Recover a 'Constraint' from a goal-parse validation error.
+-- 'convertConstraint' rejects goals that are not constraint-shaped (a
+-- bare literal, variable, or wildcard) with 'MalformedConstraint'. For a
+-- /goal/ (unlike a rule head) this is the same failure category as
+-- @1 + 1@ or @a, b@: synthesize a 0-arity goal name from the offending
+-- term so the normal name-resolution path rejects it as
+-- 'NoSuchConstraint' (YCHR-20013) at the same stage and with the same
+-- code as other non-constraint goals — mirroring how the bare-atom goal
+-- @true@ renders as @Goal \'true\/0\'@ — instead of the YCHR-15003
+-- 'MalformedConstraint' reserved for malformed rule heads. The catch-all
+-- keeps any other validation error (none are emitted today) on its
+-- original path.
+goalShapeConstraint ::
+  AnnP ParseValidationError -> Either (AnnP ParseValidationError) Constraint
+goalShapeConstraint (AnnP MalformedConstraint _ pexpr) =
+  Right (Constraint (Types.Unqualified (T.pack (prettyPExprSrc pexpr))) [])
+goalShapeConstraint other = Left other
 
 -- | Type-check and run a previously prepared single-goal constraint.
 -- Throws 'TypeErrors' on goal-time type errors. Returns the per-query
