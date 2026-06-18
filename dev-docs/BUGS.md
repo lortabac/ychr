@@ -6,41 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## Data-constructor values from an *unnamed* module print with the diagnostic `<basename>` qualifier
-
-**Documented claim.** `docs/reference/language.md` §Modules:
-"Diagnostics refer to such a module by its file basename in angle
-brackets (`<a>` for `a.chr`)." The angle-bracket form is specified as a
-*diagnostics* convention.
-
-**Test.** Under `=` (non-evaluating), a compound whose functor names a
-function is kept as a data term and qualified by its defining module. In
-a header-less file that module is unnamed:
-
-    % eq_funcompound.chr  (no :- module header)
-    :- chr_constraint t/2.
-    :- function double/1.
-    double(X) -> X * 2.
-    t(R1, R2) <=> R1 = double(YY), R2 = YY.
-
-    ychr run -g 't(A, B)' --show-bindings eq_funcompound.chr
-
-**Expected.** A value rendering that does not embed a diagnostic-only
-name. (A `:- module(named).` header renders the same program cleanly as
-`A = named:double(_)`.)
-
-**Actual.**
-
-    A = '<eq_funcompound>':double(_)
-    B = _
-
-The `<...>` diagnostic name leaks from diagnostic space into ordinary
-`run --show-bindings` value output, yielding a non-re-parseable
-qualifier.
-
-**Notes.** Surfaces in the main user-facing output path
-(`run --show-bindings`), not just in diagnostics.
-
 ## `prelude.md` says arithmetic operators are `:- class`, but `/`, `div`, `mod`, `rem` are single-signature `:- function`
 
 **Documented claim.** `docs/reference/prelude.md` §"How the prelude is
