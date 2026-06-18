@@ -13,6 +13,7 @@ module YCHR.Display
     resolveErrorCode,
     renameErrorCode,
     renameWarningCode,
+    exhaustivenessWarningCode,
     desugarErrorCode,
     compileErrorCode,
     typeCheckErrorCode,
@@ -41,6 +42,7 @@ import YCHR.Compile (CompileError (..))
 import YCHR.Compile.Pipeline (Error (..), GoalRejection (..), Warning (..))
 import YCHR.Desugar (DesugarError (..))
 import YCHR.Diagnostic (Diagnostic (..))
+import YCHR.Exhaustiveness (ExhaustivenessWarning (..))
 import YCHR.Parsed (AnnP (..))
 import YCHR.Parsed qualified as P
 import YCHR.Parser (ParseValidationError (..))
@@ -247,6 +249,11 @@ renameErrorCode (AmbiguousDataConstructor _ _) = ErrorCode 20012
 renameWarningCode :: RenameWarning -> ErrorCode
 renameWarningCode (UndeclaredDataConstructor _) = ErrorCode 20101
 renameWarningCode (DataConstructorArityMismatch _ _) = ErrorCode 20102
+
+-- | 2x1xx — exhaustiveness warnings (a pattern-matching warning, in the
+-- same warning band as the rename warnings).
+exhaustivenessWarningCode :: ExhaustivenessWarning -> ErrorCode
+exhaustivenessWarningCode (NonExhaustiveMatch _ _) = ErrorCode 20103
 
 -- | 3xxxx — desugar phase
 desugarErrorCode :: DesugarError -> ErrorCode
@@ -720,6 +727,26 @@ renameWarningMsg (DataConstructorArityMismatch name arity) =
     ++ show arity
     ++ " argument(s) but declared with a different arity"
 
+instance Display (Diagnostic ExhaustivenessWarning) where
+  displayMsg (Diagnostic lbl (AnnP err loc origin)) =
+    displayMsgWithSrcLoc
+      (exhaustivenessWarningCode err)
+      SevWarning
+      (exhaustivenessWarningMsg err)
+      loc
+      (fmap T.unpack lbl)
+      (Just (prettyPExprSrc origin))
+
+exhaustivenessWarningMsg :: ExhaustivenessWarning -> String
+exhaustivenessWarningMsg (NonExhaustiveMatch name witness) =
+  withHint
+    ( "Non-exhaustive patterns in function '"
+        ++ T.unpack name
+        ++ "': no equation matches "
+        ++ prettyTermSrc witness
+    )
+    "add an equation for the missing case, or a catch-all variable/wildcard pattern"
+
 instance Display (Diagnostic DesugarError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
     displayMsgWithSrcLoc
@@ -865,6 +892,7 @@ displayParseError err =
 
 instance Display Warning where
   displayMsg (RenameWarnings ws) = displayErrors (map displayMsg ws)
+  displayMsg (ExhaustivenessWarnings ws) = displayErrors (map displayMsg ws)
 
 instance Display Error where
   displayMsg (ParseError _ err) = displayParseError err

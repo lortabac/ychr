@@ -128,8 +128,8 @@ sig_snd(sig(_, Y)) -> Y.
     (type_consistent(ty, ty) -> bool).
 
 all_nonvar_list([]) -> true.
-all_nonvar_list([X|Xs]) | nonvar(X) -> all_nonvar_list(Xs).
 all_nonvar_list([X|_]) | var(X) -> false.
+all_nonvar_list([_|Xs]) -> all_nonvar_list(Xs).
 
 filter_consistent([], _) -> [].
 filter_consistent([Sig|Rest], ArgTypes) | sig_args_consistent(sig_fst(Sig), ArgTypes) ->

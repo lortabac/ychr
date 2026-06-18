@@ -1,0 +1,8 @@
+:- module(exhaustive_color, [classify/1]).
+:- chr_type color ---> red ; green ; blue.
+:- chr_constraint classify/1.
+:- function rank(color) -> int.
+rank(red) -> 1.
+rank(green) -> 2.
+rank(blue) -> 3.
+classify(R) <=> R is rank(green).

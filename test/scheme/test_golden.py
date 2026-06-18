@@ -59,6 +59,8 @@ HASKELL_ONLY_CASES = {
 # for these.
 WERROR_EXEMPT = {
     "arity_overload",
+    "nonexhaustive_color",
+    "nonexhaustive_nested",
     "bare_atom_canonicalization",
     "bare_vs_qualified",
     "bare_vs_qualified_swapped",

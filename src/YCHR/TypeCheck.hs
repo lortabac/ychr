@@ -44,6 +44,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Compile.Names (vmName)
+import YCHR.Constructors (buildConAlias, buildConMap)
 import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic (..))
 import YCHR.PExpr (PExpr (Atom))
@@ -153,14 +154,6 @@ data CheckCtx = CheckCtx
     ambientSigs :: Map Text [Value]
   }
 
-buildConMap :: [TypeDefinition] -> Map Name (TypeDefinition, DataConstructor)
-buildConMap tds =
-  Map.fromList
-    [ (dc.conName, (td, dc))
-    | td <- tds,
-      dc <- typeConstructors td
-    ]
-
 -- | Detect data constructors declared in more than one type definition.
 -- Two constructors collide when they share a 'Qualified m n' after
 -- renaming, regardless of arity (the type checker keys constructor
@@ -191,26 +184,6 @@ detectDuplicateConstructors tds =
         | td <- tds,
           dc <- typeConstructors td
         ]
-
--- | Build the use-site → declaration alias map, keyed by unqualified name.
--- A name is included only when exactly one declared constructor uses it;
--- ambiguous names (same unqualified name declared in more than one module)
--- are dropped so 'canonicalizeConName' falls through and the type checker
--- treats the use site as unknown rather than guessing.
-buildConAlias :: [TypeDefinition] -> Map Text Name
-buildConAlias tds =
-  Map.mapMaybe single $
-    Map.fromListWith
-      (++)
-      [ (unqualifiedText dc.conName, [dc.conName])
-      | td <- tds,
-        dc <- typeConstructors td
-      ]
-  where
-    single [n] = Just n
-    single _ = Nothing
-    unqualifiedText (Unqualified t) = t
-    unqualifiedText (Qualified _ t) = t
 
 -- | Map a use-site constructor name to its declared, qualified form when a
 -- unique match exists. 'Qualified' names pass through unchanged;

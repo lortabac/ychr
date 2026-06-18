@@ -36,10 +36,16 @@ import YCHR.TypeCheck (typeCheckProgram)
 -- sentinel atoms as RHS of @=@ (where @term/1@ no longer strips,
 -- per the spec). Warnings emitted by these tests are part of what
 -- they exercise, not a failure mode.
+--
+-- @nonexhaustive_color@ and @nonexhaustive_nested@ deliberately define
+-- functions that do not cover every constructor of a declared algebraic
+-- type, so they emit the exhaustiveness warning (YCHR-20103) on purpose.
 expectsWarnings :: Set String
 expectsWarnings =
   Set.fromList
     [ "arity_overload",
+      "nonexhaustive_color",
+      "nonexhaustive_nested",
       "bare_atom_canonicalization",
       "bare_vs_qualified",
       "bare_vs_qualified_swapped",

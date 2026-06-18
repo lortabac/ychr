@@ -1,0 +1,8 @@
+:- module(nonexhaustive_nested, [classify/1]).
+:- chr_type color ---> red ; green ; blue.
+:- chr_type pair ---> pair(color, color).
+:- chr_constraint classify/1.
+:- function pick(pair) -> int.
+pick(pair(red, _)) -> 1.
+pick(pair(green, _)) -> 2.
+classify(R) <=> R is pick(pair(red, blue)).

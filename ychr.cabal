@@ -96,6 +96,7 @@ test-suite ychr-tests
                     , YCHR.RunTest
                     , YCHR.DSLTest
                     , YCHR.DesugarTest
+                    , YCHR.ExhaustivenessTest
                     , YCHR.GoldenTest
                     , YCHR.MetaTest
                     , YCHR.ParserTest
@@ -144,6 +145,7 @@ library
     exposed-modules:  YCHR.Backend.Scheme
                     , YCHR.Backend.SchemeDriver
                     , YCHR.Collect
+                    , YCHR.Constructors
                     , YCHR.Compile
                     , YCHR.Loc
                     , YCHR.Compile.Pipeline
@@ -152,6 +154,7 @@ library
                     , YCHR.Compile.Types
                     , YCHR.Diagnostic
                     , YCHR.Display
+                    , YCHR.Exhaustiveness
                     , YCHR.Repl
                     , YCHR.Run
                     , YCHR.Meta

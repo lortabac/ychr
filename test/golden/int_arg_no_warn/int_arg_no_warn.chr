@@ -1,0 +1,6 @@
+:- module(int_arg_no_warn, [classify/1]).
+:- chr_constraint classify/1.
+:- function describe(int) -> int.
+describe(0) -> 100.
+describe(1) -> 200.
+classify(R) <=> R is describe(0).

@@ -558,6 +558,51 @@ existing module system. If `red` is a constructor of both `color` and
 `color:red` vs `traffic_light:red`.
 
 
+## Exhaustiveness checking
+
+The compiler warns (`YCHR-20103`, severity *warning*) when a function's
+pattern-matching equations cannot match some value of a declared
+algebraic type. For example:
+
+```prolog
+:- chr_type color ---> red ; green ; blue.
+:- function rank(color) -> int.
+rank(red)   -> 1.
+rank(green) -> 2.
+```
+
+emits
+
+```
+Non-exhaustive patterns in function 'm:rank/1': no equation matches m:rank(m:blue)
+```
+
+The check is deliberately narrow:
+
+- It applies to **functions only**, never to rules.
+- A function argument is checked **only when its declared type is an
+  algebraic type**. Positions of `int`/`float`/`string`, opaque types,
+  type variables, `any`, or unknown types cannot be enumerated, so they
+  are never the source of a warning (they are treated as always
+  covered). A nested constructor field is checked under the same rule,
+  using the field's declared type.
+- Only **closed, single-signature** functions are checked. `:- open_function`
+  and `:- open_class` may gain equations in other modules, so a local
+  gap might be filled elsewhere; multi-signature `:- class` functions
+  have no single column type to enumerate.
+- An equation carrying a **user guard** does not count as covering its
+  pattern: the guard may fail at runtime, so the pattern is not
+  guaranteed to match. A variable or wildcard pattern covers a position
+  exhaustively.
+
+Exhaustiveness uses Maranget's matrix/usefulness algorithm, so it
+handles multiple arguments and nested constructor patterns, and reports
+a concrete unmatched example. Because it is a warning, a non-exhaustive
+function still compiles and runs (raising a runtime error only if an
+unmatched value actually reaches it); `--Werror` promotes it to a
+hard error.
+
+
 ## Host Calls
 
 Host language calls (`host:f(args)`) have all argument types and

@@ -33,6 +33,7 @@ what is planned.
 
 - [x] Gradual type system core (see [type-system.md](reference/type-system.md))
 - [x] Bounded polymorphism
+- [x] Exhaustiveness checking for functions over algebraic types
 - [ ] Simple type refinements via type predicates
 - [ ] More advanced type refinements
 

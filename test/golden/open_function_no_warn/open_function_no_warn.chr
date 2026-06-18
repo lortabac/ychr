@@ -1,0 +1,7 @@
+:- module(open_function_no_warn, [classify/1]).
+:- chr_type color ---> red ; green ; blue.
+:- chr_constraint classify/1.
+:- open_function rank(color) -> int.
+rank(red) -> 1.
+rank(green) -> 2.
+classify(R) <=> R is rank(red).

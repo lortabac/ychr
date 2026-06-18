@@ -10,6 +10,7 @@ module YCHR.Compile.Pipeline
     Error (..),
     GoalRejection (..),
     Warning (..),
+    ExhaustivenessWarning,
     CompiledProgram (..),
     ExportResolution (..),
     compileModules,
@@ -33,6 +34,7 @@ import YCHR.Compile (CompileError, compile)
 import YCHR.Desugar (DesugarError, desugarProgram, extractSymbolTable, liftAllLambdas)
 import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic)
+import YCHR.Exhaustiveness (ExhaustivenessWarning, checkExhaustiveness)
 import YCHR.PExpr (PExpr)
 import YCHR.Parsed (AnnP (..), Import (..), Module (..), OpDecl, SourceLoc, noAnnP)
 import YCHR.Parser
@@ -125,6 +127,7 @@ instance Exception Error
 
 data Warning
   = RenameWarnings [Diagnostic RenameWarning]
+  | ExhaustivenessWarnings [Diagnostic ExhaustivenessWarning]
   deriving (Show)
 
 -- | A compiled CHR program together with module visibility information.
@@ -285,7 +288,10 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
     [] -> pure ()
     _ -> Left (DesugarErrors liftErrs)
   let symTab = extractSymbolTable desugared'
-      warnings = [RenameWarnings renameWarnings | not (null renameWarnings)]
+      exhaustWarnings = checkExhaustiveness resolved
+      warnings =
+        [RenameWarnings renameWarnings | not (null renameWarnings)]
+          ++ [ExhaustivenessWarnings exhaustWarnings | not (null exhaustWarnings)]
   prog <- first CompileErrors (compile desugared' symTab)
   -- The query parser uses the union of every user module's operator
   -- visibility, so a query at the REPL can use any operator any user
