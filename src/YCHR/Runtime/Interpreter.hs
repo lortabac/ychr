@@ -675,7 +675,7 @@ evalBoolExpr (BFromVal expr) = do
   v <- evalValExpr expr
   case v of
     VBool b -> pure b
-    _ -> lift (runtimeErrorS "BFromVal: expected boolean")
+    _ -> lift (runtimeErrorS "guard did not evaluate to a boolean")
 evalBoolExpr (BEvalDeep expr) = evalBoolExprDeep expr
 
 -- ---------------------------------------------------------------------------
@@ -865,6 +865,6 @@ evalBoolExprDeep (BFromVal expr) = do
   v <- evalValExprDeep expr
   case v of
     VBool b -> pure b
-    _ -> lift (runtimeErrorS "BFromVal: expected boolean")
+    _ -> lift (runtimeErrorS "guard did not evaluate to a boolean")
 evalBoolExprDeep (BEvalDeep expr) = evalBoolExprDeep expr
 evalBoolExprDeep expr = evalBoolExpr expr

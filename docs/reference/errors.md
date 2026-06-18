@@ -111,7 +111,7 @@ internal error constructor to its code and human-readable message.
 
 | Code | Name | Meaning |
 |------|------|---------|
-| `YCHR-60001` | `InconsistentTypes` | Two types cannot be unified. Also used for runtime errors raised by the Haskell interpreter (e.g. arithmetic on non-numbers, calling a non-function). |
+| `YCHR-60001` | `InconsistentTypes` | Two types cannot be unified. Also used for runtime errors raised by the Haskell interpreter (e.g. arithmetic on non-numbers, calling a non-function, a guard not evaluating to a boolean). |
 | `YCHR-60004` | `UnboundTypeVar` | A type variable used in a constructor declaration is not in scope. Add it to the parameter list of the enclosing type. |
 | `YCHR-60005` | `UndefinedType` | A constructor declaration references a type that is not declared. Declare it with `:- chr_type`, or check the spelling. |
 | `YCHR-60006` | `NoMatchingOverload` | No declared signature of a class matches the argument types at this use site. Check that the argument types match one of the declared signatures. |

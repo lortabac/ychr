@@ -111,7 +111,7 @@ errorPathTests :: TestTree
 errorPathTests =
   testGroup
     "runtime error paths"
-    [ testCase "BFromVal on a non-bool value reports a type mismatch" $ do
+    [ testCase "BFromVal on a non-bool value reports a guard error" $ do
         let prog =
               singleProc
                 "p"
@@ -120,8 +120,8 @@ errorPathTests =
                   Return (Lit (BoolLit False))
                 ]
         msg <- expectRuntimeError prog "p" []
-        assertBool ("expected 'expected boolean' in: " ++ msg) $
-          "expected boolean" `isInfixOf` msg,
+        assertBool ("expected 'guard did not evaluate to a boolean' in: " ++ msg) $
+          "guard did not evaluate to a boolean" `isInfixOf` msg,
       testCase "Break with a label no enclosing Foreach catches escapes" $ do
         let prog =
               singleProc

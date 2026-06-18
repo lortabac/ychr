@@ -298,7 +298,12 @@ genOccurrenceBody ::
 genOccurrenceBody symTab varMap occ = do
   (inner, condMap) <- genGuardedFire symTab varMap occ
   let body = wrapInPartnerLoops occ condMap inner
-  pure (body ++ [Return (Lit (BoolLit False))])
+  -- Push the rule frame at procedure entry, so it is live during guard
+  -- evaluation (and the history check) as well as body execution. A guard
+  -- that errors (e.g. evaluates to a non-boolean) then reports the rule's
+  -- source location and label, just like a body error. The frame is scoped
+  -- to this call via 'withSavedCallStack', so it does not accumulate.
+  pure (PushFrame (mkRuleFrame occ) : body ++ [Return (Lit (BoolLit False))])
 
 -- | Compile the guards followed by the rule-firing block. Returns the
 -- statements that go at the innermost partner-loop position — any HNF
@@ -424,10 +429,10 @@ genFireStmts symTab varMap occ = do
             | (k, p) <- zip [PartnerIndex 0 ..] occ.partners,
               p.isKept
             ]
-      frame = mkRuleFrame occ
+      -- The rule frame is pushed at occurrence-procedure entry (see
+      -- 'genOccurrenceBody'), so it is already on the call stack here.
       coreFireStmts =
-        PushFrame frame
-          : killStmts
+        killStmts
           ++ bodyStmts
           ++ earlyDropStmts
           ++ backjumpStmts

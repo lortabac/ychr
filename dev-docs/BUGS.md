@@ -6,41 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## Guard that evaluates to a non-boolean errors with a leaked internal name and no source location
-
-**Documented claim.** `docs/reference/errors.md` §`YCHR-60001`: "Also
-used for runtime errors raised by the Haskell interpreter (e.g.
-arithmetic on non-numbers, calling a non-function)." Other runtime
-`YCHR-60001`s print a `file:line`, the offending source, and a stack
-trace.
-
-**Test.** A guard whose expression returns an `int` rather than a
-`bool`:
-
-    :- chr_constraint p/1, q/0.
-    :- function add1/1.
-    add1(X) -> X + 1.
-    p(X) <=> add1(X) | q.
-
-    ychr run -g 'p(1)'
-
-**Expected.** A `YCHR-60001` pointing at the guard (e.g. line 4), in
-user-facing terms (e.g. "guard did not evaluate to a boolean"), ideally
-with the same stack-trace treatment other runtime errors get.
-
-**Actual.**
-
-    <generated>:1:1: YCHR-60001
-    BFromVal: expected boolean
-
-No source file/line for the guard, no stack trace, and the message leaks
-the internal VM construct `BFromVal`.
-
-**Notes.** Message-quality bug.
-Contrast a sibling `YCHR-60001` that carries full context (file:line,
-offending source, and a `=== stack trace ===` section) for a
-"no matching equation" runtime failure.
-
 ## Data-constructor values from an *unnamed* module print with the diagnostic `<basename>` qualifier
 
 **Documented claim.** `docs/reference/language.md` §Modules:

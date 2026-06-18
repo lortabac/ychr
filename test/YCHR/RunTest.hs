@@ -49,6 +49,7 @@ tests =
       visibilityTests,
       queryErrorTests,
       queryBodyTests,
+      guardErrorTests,
       unicodeTests,
       arityOverloadTests
     ]
@@ -567,4 +568,47 @@ queryBodyTests =
         prog <- compileOrFail [("qbody.chr", qbodySource)]
         bindings <- runProgramWithQuery prog qbodyHostCalls "R = \"hello\"."
         Map.lookup "R" bindings @?= Just (TextTerm "hello")
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Guard runtime errors
+-- ---------------------------------------------------------------------------
+--
+-- A guard expression that evaluates to a non-boolean is a runtime error. It
+-- must render as a user-facing YCHR-60001 anchored at the rule's source
+-- location (like other runtime errors), without leaking the internal VM
+-- construct 'BFromVal'. Regression test for a fixed BUGS.md entry: the rule
+-- frame is now pushed at occurrence-procedure entry so it is live during
+-- guard evaluation.
+
+guardNonBoolSource :: Text
+guardNonBoolSource =
+  ":- module(guardbug, [p/1]).\n\
+  \:- chr_constraint p/1, q/0.\n\
+  \:- function add1/1.\n\
+  \add1(X) -> host:'+'(X, 1).\n\
+  \p(X) <=> add1(X) | q.\n"
+
+guardErrorTests :: TestTree
+guardErrorTests =
+  testGroup
+    "Guard runtime errors"
+    [ testCase "guard evaluating to a non-boolean renders a located YCHR-60001" $ do
+        prog <- compileOrFail [("guardbug.chr", guardNonBoolSource)]
+        outcome <-
+          try @SomeException (runProgramWithGoal prog fibHostCalls "guardbug:p(1)")
+        case outcome of
+          Right _ -> assertFailure "expected a runtime error, got bindings"
+          Left exc -> case fromException exc :: Maybe Error of
+            Nothing -> assertFailure ("expected a YCHR Error, got: " ++ show exc)
+            Just err -> do
+              let rendered = displayMsg err
+              assertBool ("expected YCHR-60001 in: " ++ rendered) $
+                "YCHR-60001" `isInfixOf` rendered
+              assertBool ("expected guard message in: " ++ rendered) $
+                "guard did not evaluate to a boolean" `isInfixOf` rendered
+              assertBool ("expected rule source location in: " ++ rendered) $
+                "guardbug.chr:5:" `isInfixOf` rendered
+              assertBool ("internal name BFromVal must not leak in: " ++ rendered) $
+                not ("BFromVal" `isInfixOf` rendered)
     ]
