@@ -994,7 +994,10 @@ visibleProviders ctx n arity =
         filter
           (== ctx.currentModule.name)
           (lookupDecl (n, arity) ctx.declEnv)
-      imports = [(imp.importModule, imp.importItems) | AnnP imp _ _ <- ctx.currentModule.imports]
+      imports =
+        [ (imp.importModule, imp.importItems)
+        | AnnP imp _ _ <- ctx.currentModule.imports
+        ]
       importProviders =
         filter
           (\mn -> any (\(imn, il) -> imn == mn && importListPermits n arity il) imports)
@@ -1228,7 +1231,10 @@ resolveTypeName ctx n arity =
         filter
           (== ctx.currentModule.name)
           (lookupDecl (n, arity) ctx.typeDeclEnv)
-      imports = [(imp.importModule, imp.importItems) | AnnP imp _ _ <- ctx.currentModule.imports]
+      imports =
+        [ (imp.importModule, imp.importItems)
+        | AnnP imp _ _ <- ctx.currentModule.imports
+        ]
       importProviders =
         filter
           ( \mn ->
