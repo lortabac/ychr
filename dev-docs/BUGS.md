@@ -6,34 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `'$call'(5, 1)` reports "no matching equation" instead of a type-of-target diagnostic
-
-**Documented claim.** `docs/reference/errors.md` defines `YCHR-60001`
-as covering "runtime errors raised by the Haskell interpreter (e.g.
-arithmetic on non-numbers, calling a non-function)."
-
-**Test.**
-
-    ychr> R is '$call'(5, 1).
-
-**Expected.** A `YCHR-60001` whose message names the actual problem:
-"calling a non-function" or similar.
-
-**Actual.**
-
-    YCHR-60001: CHR runtime error: no matching equation
-
-The message technically explains the dispatch failure (no
-`'$call'(int, int)` equation), but it leaks an implementation detail
-("equation") and tells the user nothing useful: they did not write any
-equations, they wrote `'$call'(5, 1)`. The typed `call(5, 1)` path
-catches this at the type checker with a much better message:
-`Type mismatch: 'int' does not match 'fun(_) -> _'`.
-
-**Notes.** The doc explicitly carves out "calling a non-function" as a
-`YCHR-60001` case, but the message for the `'$call'` form is
-unintelligible compared to the `call` wrapper.
-
 ## `YCHR-20009` claims a module "does not export" a name it *does* export when the module simply isn't imported
 
 **Documented claim.** `docs/reference/errors.md` §`YCHR-20009`
