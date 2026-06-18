@@ -19,9 +19,10 @@ without qualification — `+` resolves to `prelude:'+'`, `integer/1` to
 
 Two patterns are worth understanding before reading the tables:
 
-- **Operator overloading by signature.** Arithmetic and comparison
-  operators are declared as `:- class` with one signature per
-  concrete combination of types, e.g.
+- **Operator overloading by signature.** Operators that are genuinely
+  overloaded across `int` and `float` — `+`, `-`, `*`, `<`, `>`, `>=`,
+  `=<` — are declared as `:- class` with one signature per concrete
+  combination of types, e.g.
   ```
   :- class
       ('+'(int, int) -> int),
@@ -31,6 +32,15 @@ Two patterns are worth understanding before reading the tables:
   call. The type checker picks the matching signature based on the
   types of the actual arguments. See
   [type-system.md](type-system.md) for the resolution rules.
+
+  The remaining operators have only **one** signature each and so are
+  ordinary `:- function`s, not classes: `/`, `div`, `mod`, and `rem`
+  are each specific to one numeric type, and `==` is polymorphic
+  (`(A, A) -> bool`). With a single signature there is nothing to
+  resolve. The practical difference shows up in diagnostics: a type
+  mismatch on a class operator reports `YCHR-60006` (no matching
+  overload), while a mismatch on a single-signature function operator
+  reports `YCHR-60001` (type mismatch).
 
 - **Functions are evaluated, constraints are stored.** All prelude
   exports are *functions* or *classes* (declared with `:- function`

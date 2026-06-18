@@ -6,38 +6,6 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
-## `prelude.md` says arithmetic operators are `:- class`, but `/`, `div`, `mod`, `rem` are single-signature `:- function`
-
-**Documented claim.** `docs/reference/prelude.md` §"How the prelude is
-structured": "Operator overloading by signature. Arithmetic and
-comparison operators are declared as `:- class` with one signature per
-concrete combination of types." The Arithmetic table lists `/`, `div`,
-`mod`, `rem`.
-
-**Test.** Source inspection of `libraries/prelude.chr` plus a type
-mismatch on `/`:
-
-    :- chr_constraint t/1.
-    t(R) <=> R is 5 / 2.
-
-    ychr check
-
-**Expected.** Per the prose, `/` is a class, so a non-matching call
-should report `YCHR-60006` (`NoMatchingOverload`), as the genuinely
-multi-signature `+` does for `"a" + "b"`.
-
-**Actual.** `libraries/prelude.chr:78` declares
-`:- function ('/'(float, float) -> float), ...` — a `:- function`, not a
-`:- class`. The mismatch therefore reports the function-style
-`YCHR-60001` ("Type mismatch: 'int' does not match 'float'"), whereas
-the multi-sig `+` gives the class-style `YCHR-60006` ("No matching type
-declaration for 'prelude:+'").
-
-**Notes.** The behavior is internally correct (single-sig → function →
-`YCHR-60001`); only `prelude.md`'s blanket "declared as `:- class`" is
-inaccurate for the single-signature arithmetic operators. The signature
-*table* is accurate. This is a documentation fix, not a code fix.
-
 ## REPL one-shot query warnings show an empty `''` source snippet
 
 **Documented claim.** Implicit consistency: file-based diagnostics echo
