@@ -15,23 +15,29 @@ The system has three layers:
 CHR source (Prolog-compatible syntax)
   │
   ▼
-Parser ──▶ Rename ──▶ Resolve ──▶ Desugar ──▶ TypeCheck (optional)
-                                                  │
-                                                  ▼
-                                       CHR-to-VM Compiler (Haskell)
-                                                  │
-                                                  ▼
-                                       Abstract VM Program
-                                                  │
-                                ┌─────────────────┼─────────────────┐
-                                ▼                 ▼                 ▼
-                          JavaScript          Scheme           Haskell
-                          backend             backend          interpreter
+P-Expr Parser ──▶ Parser ──▶ Collect ──▶ Rename ──▶ Resolve ──▶ Desugar ──▶ TypeCheck (optional)
+  │
+  ▼
+CHR-to-VM Compiler (Haskell)
+  │
+  ▼
+Abstract VM Program
+  │
+  ┌──────────────┬──────────────┐
+  ▼              ▼              ▼
+  JavaScript     Scheme         Haskell
+  backend        backend        interpreter
 ```
+
+The `P-Expr Parser` is a generic, operator-table-driven Prolog term
+parser (`YCHR.PExpr`); the `Parser` converts the flat p-expr terms it
+produces into the surface AST. `Collect` resolves the library-import
+closure and rewrites every import into a uniform `CollectedModule`
+before renaming.
 
 ### Frontend
 
-Parses standard CHR with Prolog-compatible syntax. Produces an internal representation of CHR handlers: constraint declarations, rule definitions (simplification, propagation, simpagation), with heads, guards, and bodies. The frontend pipeline runs Rename → Resolve (module flattening + declaration-kind validation) → Desugar, with an optional static type-check stage on the desugared AST.
+Parses standard CHR with Prolog-compatible syntax. Produces an internal representation of CHR handlers: constraint declarations, rule definitions (simplification, propagation, simpagation), with heads, guards, and bodies. Parsing is layered: a generic, operator-table-driven Prolog term parser (`YCHR.PExpr`) reads source text into flat, dot-terminated, source-annotated p-expr terms, and the CHR parser (`YCHR.Parser`) then converts each term into the surface AST. After parsing, the Collect phase (`YCHR.Collect`) resolves the transitive library-import closure and rewrites every import into a uniform `CollectedModule`, so everything downstream sees a single kind of import. The frontend pipeline then runs Rename → Resolve (module flattening + declaration-kind validation) → Desugar, with an optional static type-check stage on the desugared AST.
 
 The Resolve phase, in addition to flattening modules, also commits to a structurally typed expression representation. The surface AST uses a uniform `Term` for everything a compound can be — a data constructor application, a user function call, a dynamic dispatch (`'$call'`), a function reference (`fun foo/2`), a lambda, or a host call. `Resolve.termToExpr` translates each `Term` in expression position into a typed `YCHR.Resolved.Expr` (`VarExpr`, `IntExpr`, `CtorExpr`, `CallExpr`, `ApplyExpr`, `FunRefExpr`, `LambdaExpr`, `HostExpr`, …). The translator consults the program's function-name set exactly once, at this boundary; the call-vs-constructor decision is then a structural property of the AST. Desugar, Compile, and TypeCheck all dispatch on `Expr` constructors without re-checking any function-name set. `Term` itself stays as the value type for the surface, the DSL, pretty-printing, the runtime/value bridge, and head/equation patterns (which match on data shapes, not values).
 
@@ -68,7 +74,7 @@ The VM is a small imperative language represented as a Haskell AST. It is the co
 
 ### Program Structure
 
-A VM program is a list of named procedures. Each procedure has a name, a parameter list, and a body consisting of a sequence of statements. The compiler generates the following kinds of procedures for each CHR handler:
+A VM program is a record bundling the list of named procedures with a little metadata: the number and source names of constraint types and rules (for store pre-allocation and runtime introspection) and an *evaluables dispatch table* mapping a `(functor, arity)` key to the procedure name of the corresponding user-defined function (consulted by `EvalIs` when `is` walks a dereferenced compound term). Each procedure has a name, a parameter list, and a body consisting of a sequence of statements. The compiler generates the following kinds of procedures for each CHR handler:
 
 - **`tell_c`**: Entry point for adding a constraint. Creates a suspension, stores it, and calls `activate_c`.
 - **`activate_c`**: Tries all occurrence procedures in order for a given constraint. Implements early drop (returns as soon as an occurrence signals the constraint was killed).
@@ -110,6 +116,7 @@ position.
 | `CallExpr name [callArg]` | Call a compiler-generated procedure, return result. |
 | `HostCall name [valExpr]` | Call a host language function. |
 | `EvalDeep valExpr` | Evaluate in deep-deref mode (variable references are dereferenced and the mode propagates). |
+| `EvalIs valExpr` | The `is`-with-variable-RHS marker: evaluate in deep-deref mode, then walk the resulting value and evaluate any compound subterm whose `(functor, arity)` names a declared evaluable. Emitted only for `R is X` where the RHS is syntactically a variable. |
 | `NewVar` | Create a fresh unbound logical variable. |
 | `MakeTerm functor [valExpr]` | Construct a compound term. |
 | `GetArg valExpr index` | Extract an argument from a compound term by 0-based index. |
@@ -148,19 +155,18 @@ position.
 
 ### Fields
 
-Constraint suspensions expose the following fields via `FieldGet`:
+A constraint suspension is referred to by its constraint identifier (an `IdExpr`, typically an `IdVar`). Its fields are read with the value expressions `FieldArg` and `FieldType`, both of which take the suspension's `IdExpr`:
 
-| Field | Description |
-|-------|-------------|
-| `FieldId` | The unique constraint identifier. |
-| `FieldArg index` | A constraint argument by 0-based index. |
-| `FieldType` | The constraint type (for reactivation dispatch). |
+| Expression | Description |
+|------------|-------------|
+| `FieldArg idExpr argIndex` | A constraint argument by 0-based index. |
+| `FieldType idExpr` | The constraint type (for reactivation dispatch). |
 
-Internal fields such as `alive`, `stored`, and `activated` are managed by the runtime and accessed only through dedicated VM instructions (`Alive`, `Store`, etc.).
+The constraint identifier itself is not a field — it is the `IdExpr` value already in hand. Internal fields such as `alive`, `stored`, and `activated` are managed by the runtime and accessed only through dedicated VM constructs (`BAlive`, `Store`, etc.).
 
 ### Literals
 
-- `IntLit Int` — integer literal
+- `IntLit Integer` — integer literal (arbitrary precision; carried as `Integer` end to end so programs cannot silently overflow)
 - `FloatLit Double` — floating-point literal
 - `AtomLit Text` — atom (symbolic constant)
 - `TextLit Text` — string literal
@@ -248,12 +254,12 @@ For each constraint, the compiler emits one `tell_c`, one `activate_c`, and one 
 Each occurrence procedure follows this pattern:
 
 1. Iterate over candidate partner constraints using `Foreach` with index conditions.
-2. Extract partner fields using `FieldGet`.
-3. Check constraint ID distinctness using `Not (IdEqual ...)`.
-4. Check guards using `Equal` (for implicit equality guards) and `HostCall` (for user-written guards).
-5. Check propagation history using `NotInHistory` (for propagation rules only).
+2. Extract partner fields using `FieldArg` / `FieldType`.
+3. Check constraint ID distinctness using `BNot (BIdEqual ...)`.
+4. Check guards using `BEqual` (for implicit equality guards) and `HostCall` (for user-written guards).
+5. Check propagation history using `BNotInHistory` (for propagation rules only).
 6. Fire the rule: `AddHistory` (propagation rules), `Kill` removed constraints, execute body.
-7. After body: check `Alive` for active constraint (early drop) and partner constraints (backjumping).
+7. After body: check `BAlive` for active constraint (early drop) and partner constraints (backjumping).
 8. Return `true` for early drop, `false` to continue to next occurrence.
 
 ### Body Execution
@@ -362,8 +368,10 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
 
 ## Already implemented
 
-- Frontend parser in `src/YCHR/Parser.hs`.
+- Generic Prolog term ("p-expr") parser in `src/YCHR/PExpr.hs`.
+- Frontend parser in `src/YCHR/Parser.hs` (converts p-expr terms to the surface AST).
 - Surface AST types in `src/YCHR/Parsed.hs`.
+- Library-import collector in `src/YCHR/Collect.hs` and `src/YCHR/Collected.hs`.
 - Desugared AST types in `src/YCHR/Desugared.hs`.
 - Renaming (qualifying constraint names) in `src/YCHR/Rename.hs`.
 - Resolution (flattens modules into a single program, validates declaration kinds) in `src/YCHR/Resolve.hs` and `src/YCHR/Resolved.hs`.
