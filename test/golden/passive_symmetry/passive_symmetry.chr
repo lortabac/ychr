@@ -1,0 +1,12 @@
+% Exercises the passive-occurrences optimization end-to-end: the
+% antisymmetry rule is a symmetric two-head simplification, so one of its
+% two occurrences is elided as passive. Telling leq(A, 1) and leq(1, A)
+% must still fire the rule through the surviving occurrence, binding A = 1.
+%
+% See docs/reference/passive-occurrences.md.
+:- module(sym, [go/1]).
+:- chr_constraint leq/2, go/1.
+
+antisymmetry @ leq(X, Y), leq(Y, X) <=> X = Y.
+
+drive @ go(A) <=> leq(A, 1), leq(1, A).

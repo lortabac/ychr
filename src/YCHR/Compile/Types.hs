@@ -102,7 +102,16 @@ data Occurrence = Occurrence
     activeArgs :: [HeadArg],
     -- | The other head constraints, in the order they will be iterated
     -- by nested 'YCHR.VM.Foreach' loops.
-    partners :: [Partner]
+    partners :: [Partner],
+    -- | Whether ωr guarantees this occurrence can never fire with the
+    -- active constraint in this role. Every occurrence is born active
+    -- ('False') in 'YCHR.Compile.Occurrences.mkOccurrence'; the passivity
+    -- pass 'YCHR.Compile.Passive.markPassive' flips it. A passive
+    -- occurrence keeps its ωr 'number' (numbering runs first) but
+    -- contributes no @occurrence_c_j@ procedure and no call from
+    -- @activate_c@. See "YCHR.Compile.Passive" and
+    -- @docs/reference/passive-occurrences.md@.
+    passive :: Bool
   }
 
 -- | One partner constraint of an 'Occurrence' — i.e. a head constraint

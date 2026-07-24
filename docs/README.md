@@ -98,6 +98,8 @@ not regression tests — for edge cases see `test/golden/`.
 - [REPL](reference/repl.md) — meta-commands and live sessions
 - [Errors](reference/errors.md) — `YCHR-NNNNN` code catalogue
 - [Abstract VM](reference/vm.md) — instruction set and runtime contract
+- [Passive occurrences](reference/passive-occurrences.md) — the
+  passive-occurrence compiler optimization
 
 ## Explanation
 

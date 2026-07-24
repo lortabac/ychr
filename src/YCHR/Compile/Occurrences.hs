@@ -22,6 +22,7 @@ import Control.Monad.Trans.Writer.CPS (Writer, tell)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Traversable (for)
+import YCHR.Compile.Passive (markPassive)
 import YCHR.Compile.Types
 import YCHR.Desugared qualified as D
 import YCHR.Diagnostic (Diagnostic (..))
@@ -60,7 +61,10 @@ collectOccurrences symTab prog = do
           )
           occMapEmpty
           allOccs
-  pure (occMapMap (assignNumbers . reverse) grouped, displayNames)
+  -- Number occurrences first (so ωr numbers are stable), then mark the
+  -- provably-passive ones. Passivity only flips a flag; it never renumbers.
+  let numbered = occMapMap (assignNumbers . reverse) grouped
+  pure (markPassive numbered, displayNames)
   where
     -- Reverse before numbering to undo the prepend-on-insert in
     -- 'occMapAppend' and restore top-down rule order.
@@ -150,7 +154,8 @@ mkOccurrence symTab rule ruleId' display combined activeIdx activeCon activeIsKe
         activeIdx = activeIdx,
         isKept = activeIsKept,
         activeArgs = activeCon.args,
-        partners = partners
+        partners = partners,
+        passive = False
       }
 
 -- | Look up a constraint type in the symbol table or report an error.

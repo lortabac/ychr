@@ -153,6 +153,7 @@ library
                     , YCHR.Compile.Pipeline
                     , YCHR.Compile.Names
                     , YCHR.Compile.Occurrences
+                    , YCHR.Compile.Passive
                     , YCHR.Compile.Types
                     , YCHR.Diagnostic
                     , YCHR.Display

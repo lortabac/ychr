@@ -6,6 +6,7 @@
 -- it through the interpreter.
 module YCHR.CompileTest (tests) where
 
+import Data.Maybe (isJust, isNothing)
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
@@ -16,7 +17,8 @@ tests :: TestTree
 tests =
   testGroup
     "YCHR.Compile"
-    [ indexConditionPushdownTests
+    [ indexConditionPushdownTests,
+      passiveOccurrencesTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -46,6 +48,25 @@ findForeach (s : rest) = case s of
 foreachConditions :: VM.Stmt -> [(VM.ArgIndex, VM.ValExpr)]
 foreachConditions (VM.Foreach _ _ _ conds _) = conds
 foreachConditions _ = error "foreachConditions: not a Foreach"
+
+-- | Whether any statement (recursively through If/Foreach and other
+-- nested bodies) calls the named procedure in value position. Sufficient
+-- for the activate procedure, whose occurrence calls are
+-- @LetVal _ (CallExpr occName ..)@.
+callsProcedure :: Text -> [VM.Stmt] -> Bool
+callsProcedure name = any go
+  where
+    want = VM.Name name
+    go (VM.LetVal _ e) = valCalls e
+    go (VM.AssignVal _ e) = valCalls e
+    go (VM.ExprStmt e) = valCalls e
+    go (VM.Return e) = valCalls e
+    go (VM.If _ t e) = callsProcedure name t || callsProcedure name e
+    go (VM.Foreach _ _ _ _ body) = callsProcedure name body
+    go (VM.DrainReactivationQueue _ body) = callsProcedure name body
+    go _ = False
+    valCalls (VM.CallExpr n _) = n == want
+    valCalls _ = False
 
 -- | Look up a procedure by name in a compiled program.
 findProcedure :: CompiledProgram -> Text -> Maybe VM.Procedure
@@ -92,29 +113,24 @@ indexConditionPushdownTests :: TestTree
 indexConditionPushdownTests =
   testGroup
     "Foreach index-condition pushdown"
-    [ testCase "leq antisymmetry: both partner args constrained to active args" $ do
+    [ testCase "leq antisymmetry: active occurrence's partner args constrained" $ do
         -- antisymmetry @ leq(X, Y), leq(Y, X) <=> X = Y.
-        -- Two occurrences (one per kept head); each must lift two
-        -- equalities into the partner Foreach's conditions.
+        -- Occurrence 3 (the second head) is elided as a passive symmetric
+        -- occurrence (see passiveOccurrencesTests); the surviving
+        -- occurrence 2 lifts both equalities into its partner Foreach.
         prog <- compileOrFail [("order.chr", leqSource)]
         assertForeachConditions
           prog
           "occurrence_order__leq2_2"
-          [(VM.ArgIndex 1, VM.Var "X_0"), (VM.ArgIndex 0, VM.Var "X_1")]
-        assertForeachConditions
-          prog
-          "occurrence_order__leq2_3"
-          [(VM.ArgIndex 0, VM.Var "X_1"), (VM.ArgIndex 1, VM.Var "X_0")],
-      testCase "leq idempotence: both partner args constrained to active args" $ do
+          [(VM.ArgIndex 1, VM.Var "X_0"), (VM.ArgIndex 0, VM.Var "X_1")],
+      testCase "leq idempotence: active occurrence's partner args constrained" $ do
         -- idempotence @ leq(X, Y) \ leq(X, Y) <=> true.
+        -- Occurrence 5 (the kept head) is elided as subsumed by the
+        -- removed head; occurrence 4 survives.
         prog <- compileOrFail [("order.chr", leqSource)]
         assertForeachConditions
           prog
           "occurrence_order__leq2_4"
-          [(VM.ArgIndex 0, VM.Var "X_0"), (VM.ArgIndex 1, VM.Var "X_1")]
-        assertForeachConditions
-          prog
-          "occurrence_order__leq2_5"
           [(VM.ArgIndex 0, VM.Var "X_0"), (VM.ArgIndex 1, VM.Var "X_1")],
       testCase "leq transitivity: single shared variable lifted" $ do
         -- transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
@@ -148,3 +164,68 @@ indexConditionPushdownTests =
     exprHasSelfEqual (VM.BEqual (VM.Var "X_1") (VM.Var "X_0")) = True
     exprHasSelfEqual (VM.BAnd a b) = exprHasSelfEqual a || exprHasSelfEqual b
     exprHasSelfEqual _ = False
+
+-- ---------------------------------------------------------------------------
+-- Passive occurrences
+-- ---------------------------------------------------------------------------
+
+-- | A non-symmetric two-head simplification: the two heads share only one
+-- variable (in different positions), so neither occurrence is passive.
+nonSymSource :: Text
+nonSymSource =
+  ":- module(m, [nsym/2]).\n\
+  \:- chr_constraint nsym/2.\n\
+  \r @ nsym(X, Y), nsym(Y, Z) <=> true.\n"
+
+passiveOccurrencesTests :: TestTree
+passiveOccurrencesTests =
+  testGroup
+    "Passive occurrences"
+    [ testCase "leq: passive occurrence procedures are elided" $ do
+        prog <- compileOrFail [("order.chr", leqSource)]
+        -- Occurrence 3 (antisymmetry, by symmetry) and occurrence 5
+        -- (idempotence, kept head subsumed by removed) are passive, so no
+        -- procedure is emitted for them.
+        assertAbsent prog "occurrence_order__leq2_3"
+        assertAbsent prog "occurrence_order__leq2_5"
+        -- Every active occurrence is still present, with its ωr number
+        -- unchanged (numbering runs before the passivity pass).
+        mapM_
+          (assertPresent prog)
+          [ "occurrence_order__leq2_1",
+            "occurrence_order__leq2_2",
+            "occurrence_order__leq2_4",
+            "occurrence_order__leq2_6",
+            "occurrence_order__leq2_7"
+          ],
+      testCase "leq: activate does not call passive occurrences" $ do
+        prog <- compileOrFail [("order.chr", leqSource)]
+        case findProcedure prog "activate_order__leq2" of
+          Nothing -> assertFailure "activate_order__leq2 not found"
+          Just p -> do
+            assertBool "activate must not call passive occurrence 3" $
+              not (callsProcedure "occurrence_order__leq2_3" p.body)
+            assertBool "activate must not call passive occurrence 5" $
+              not (callsProcedure "occurrence_order__leq2_5" p.body)
+            mapM_
+              ( \n ->
+                  assertBool ("activate must still call " ++ show n) $
+                    callsProcedure n p.body
+              )
+              [ "occurrence_order__leq2_2",
+                "occurrence_order__leq2_4",
+                "occurrence_order__leq2_6",
+                "occurrence_order__leq2_7"
+              ],
+      testCase "non-symmetric two-head rule keeps both occurrences" $ do
+        prog <- compileOrFail [("m.chr", nonSymSource)]
+        assertPresent prog "occurrence_m__nsym2_1"
+        assertPresent prog "occurrence_m__nsym2_2"
+    ]
+  where
+    assertAbsent prog n =
+      assertBool (show n ++ " should be elided (passive)") $
+        isNothing (findProcedure prog n)
+    assertPresent prog n =
+      assertBool (show n ++ " should be present") $
+        isJust (findProcedure prog n)

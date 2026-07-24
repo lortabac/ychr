@@ -185,7 +185,11 @@ genConstraintProcs ::
   ) ->
   Writer [Diagnostic CompileError] [Procedure]
 genConstraintProcs symTab occMap (ident, cType) = do
-  let occs = lookupOccurrences ident occMap
+  -- Passive occurrences (paper §5.3, marked by 'YCHR.Compile.Passive')
+  -- can never fire when this constraint is active, so we emit neither
+  -- their occurrence procedure nor the call to it from activate. They
+  -- keep their ωr numbers, so the surviving procedures' names are stable.
+  let occs = filter (not . (.passive)) (lookupOccurrences ident occMap)
       tellProc = genTell ident.name cType ident.arity
       activate = genActivate ident.name cType ident.arity occs
   occProcs <- traverse (genOccurrence symTab ident.name cType ident.arity) occs
