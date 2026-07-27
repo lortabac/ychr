@@ -39,6 +39,11 @@ benchmarkPrograms :: [String]
 benchmarkPrograms =
   [ "guard",
     "leq",
+    -- Transitive-closure leq: a store-heavy workload whose activations run
+    -- the partner searches in occurrences 2-7 rather than early-dropping on
+    -- reflexivity, so it exercises the passive-occurrences optimization
+    -- (unlike the "leq" case, whose leq(X, X) goal fires reflexivity first).
+    "leq_closure",
     "fib",
     "sum_list_test",
     "graph_test",

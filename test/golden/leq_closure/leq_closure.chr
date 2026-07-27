@@ -1,0 +1,24 @@
+% Transitive-closure leq handler used both as an end-to-end golden test
+% and as a benchmark that exercises partner search over a growing store.
+%
+% The `run/1` chain seeds leq(1,2) .. leq(N-1,N); transitivity closes it
+% into O(N^2) stored leq constraints, and every activation runs the
+% partner searches in occurrences 2-7 (they never early-drop on
+% reflexivity, since the arguments are distinct). This is the workload
+% the passive-occurrences optimization speeds up — see
+% docs/reference/passive-occurrences.md.
+:- module(leqc, [run/1, sample/1]).
+:- chr_constraint leq/2, gen/2, run/1, sample/1.
+
+reflexivity  @ leq(X, X) <=> true.
+antisymmetry @ leq(X, Y), leq(Y, X) <=> X = Y.
+idempotence  @ leq(X, Y) \ leq(X, Y) <=> true.
+transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
+
+gen(I, N) <=> I >= N | true.
+gen(I, N) <=> I <  N | leq(I, I + 1), gen(I + 1, N).
+
+run(N) <=> gen(1, N).
+
+% Small correctness case: a two-element cycle collapses via antisymmetry.
+sample(R) <=> leq(R, 5), leq(5, R).
