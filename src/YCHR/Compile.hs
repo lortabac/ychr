@@ -816,12 +816,6 @@ unifyAndReactivate l r =
       [ExprStmt (CallExpr reactivateDispatchName [AId (IdVar pendingName)])]
   ]
 
--- | Collect variables in term-construction positions: the expression
--- itself if it is a variable, or any variable reachable by descending
--- through 'CtorExpr' arguments. Stops at 'CallExpr', 'HostExpr',
--- 'ApplyExpr', 'FunRefExpr', 'LambdaExpr' — those are evaluation
--- positions whose variables must already be in scope, so a fresh name
--- there is a typo and should surface as YCHR-40002 via 'compileExpr'.
 -- | Free variables that appear in /term position/ within an
 -- expression — i.e. positions where 'compileTerm' will consume the
 -- value structurally rather than evaluating it. Under non-evaluating
