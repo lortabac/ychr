@@ -3,6 +3,7 @@ module Main (main) where
 import Test.Tasty (defaultMain, testGroup)
 import YCHR.CollectTest qualified
 import YCHR.CompileTest qualified
+import YCHR.ConvertTest qualified
 import YCHR.DSLTest qualified
 import YCHR.DesugarTest qualified
 import YCHR.ErrorCodeTest qualified
@@ -36,6 +37,7 @@ main = do
         YCHR.RunTest.tests,
         YCHR.MetaTest.tests,
         YCHR.DSLTest.tests,
+        YCHR.ConvertTest.tests,
         YCHR.DesugarTest.tests,
         YCHR.ErrorCodeTest.tests,
         YCHR.ExhaustivenessTest.tests,
