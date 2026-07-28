@@ -209,6 +209,15 @@ CHR and driven from Haskell — see
 [`how-to/embed-a-chr-module.md`](../how-to/embed-a-chr-module.md) and
 [`examples/stlc/`](../../examples/stlc/).
 
+## Registering host functions
+
+When a program calls `host:_` functions you supply, lift your Haskell
+functions with the `hostFn*` adapters — they reuse the same `ToTerm` /
+`FromTerm` classes — assemble a registry with `withDefaultHostFunctions`,
+and run with the `…WithHostCallRegistry` variants used above. See the
+[host-function reference](host-functions.md) for the adapter table and
+marshalling rules.
+
 ## Generic derivation (GHC only)
 
 Deriving `GHC.Generics.Generic` is enough to get instances for free — no

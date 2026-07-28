@@ -8,6 +8,7 @@
 module YCHR.Meta
   ( metaHostCallRegistry,
     valueToTerm,
+    termToValue,
   )
 where
 

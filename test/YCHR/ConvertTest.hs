@@ -4,15 +4,18 @@
 
 module YCHR.ConvertTest (tests) where
 
-import Data.List (sort)
+import Control.Exception (SomeException, try)
+import Control.Monad.IO.Class (liftIO)
+import Data.List (isInfixOf, sort)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
+import Data.Text qualified as T
 import GHC.Generics (Generic)
 import Hedgehog (Gen, Property, forAll, property, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
+import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import Test.Tasty.Hedgehog (testProperty)
 import YCHR.Convert
 import YCHR.Convert.Generic (genericFromTerm, genericToTerm)
@@ -20,16 +23,19 @@ import YCHR.DSL
   ( declaring,
     defining,
     exporting,
+    hostCall,
     int,
     is,
     module',
     term,
+    text,
     var,
     (.*),
     (.=.),
     (//),
     (<=>),
   )
+import YCHR.Parsed (Module)
 import YCHR.Run (compileParsedModules)
 import YCHR.Types (Name (..), Term (..))
 
@@ -41,7 +47,8 @@ tests =
       encodingTests,
       acceptanceTests,
       errorTests,
-      endToEndTests
+      endToEndTests,
+      hostFunctionTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -290,3 +297,175 @@ e2eRecord =
         (term "pair" [var "X", var "Y"])
         (\bs -> (,) <$> decodeVar "X" bs <*> decodeVar "Y" bs)
     r @?= (Right (1, 2) :: Either ConvertError (Int, Int))
+
+-- ---------------------------------------------------------------------------
+-- Custom host functions
+-- ---------------------------------------------------------------------------
+
+-- | A program exercising every adapter. Compilation does not resolve
+-- @host:@ names, so all custom functions are supplied at run time by the
+-- registry; each rule binds @R@ to the result of one host call.
+hostProgram :: Module
+hostProgram =
+  module' "conv_host"
+    `exporting` [ "compute_add" // 2,
+                  "compute_shout" // 2,
+                  "compute_eff" // 2,
+                  "compute_now" // 1,
+                  "compute_sum" // 1,
+                  "compute_add3" // 1,
+                  "compute_add3m" // 1,
+                  "compute_raw" // 2,
+                  "compute_nested" // 1,
+                  "bad_arity" // 1,
+                  "bad_type" // 1,
+                  "bad_unbound" // 2,
+                  "ov" // 1,
+                  "use_builtin" // 1
+                ]
+    `declaring` [ "compute_add" // 2,
+                  "compute_shout" // 2,
+                  "compute_eff" // 2,
+                  "compute_now" // 1,
+                  "compute_sum" // 1,
+                  "compute_add3" // 1,
+                  "compute_add3m" // 1,
+                  "compute_raw" // 2,
+                  "compute_nested" // 1,
+                  "bad_arity" // 1,
+                  "bad_type" // 1,
+                  "bad_unbound" // 2,
+                  "ov" // 1,
+                  "use_builtin" // 1
+                ]
+    `defining` [ [term "compute_add" [var "X", var "R"]]
+                   <=> [var "R" `is` hostCall "my_add" [var "X", int 3]],
+                 [term "compute_shout" [var "X", var "R"]]
+                   <=> [var "R" `is` hostCall "shout" [var "X"]],
+                 [term "compute_eff" [var "X", var "R"]]
+                   <=> [var "R" `is` hostCall "effectful_add" [var "X", int 10]],
+                 [term "compute_now" [var "R"]]
+                   <=> [var "R" `is` hostCall "now" []],
+                 [term "compute_sum" [var "R"]]
+                   <=> [var "R" `is` hostCall "sum_all" [int 1, int 2, int 3, int 4]],
+                 [term "compute_add3" [var "R"]]
+                   <=> [var "R" `is` hostCall "add3" [int 1, int 2, int 3]],
+                 [term "compute_add3m" [var "R"]]
+                   <=> [var "R" `is` hostCall "add3m" [int 1, int 2, int 3]],
+                 [term "compute_raw" [var "X", var "R"]]
+                   <=> [var "R" `is` hostCall "raw_inc" [var "X"]],
+                 [term "compute_nested" [var "R"]]
+                   <=> [ var "X" .=. int 5,
+                         var "R" `is` hostCall "echo" [term "wrap" [var "X", int 2]]
+                       ],
+                 [term "bad_arity" [var "R"]]
+                   <=> [var "R" `is` hostCall "my_add" [int 1]],
+                 [term "bad_type" [var "R"]]
+                   <=> [var "R" `is` hostCall "my_add" [text "hi", int 3]],
+                 -- Y is a head variable left unbound by the goal, so it is an
+                 -- unbound logical variable at run time (not a compile-time
+                 -- singleton), which the argument marshalling must reject.
+                 [term "bad_unbound" [var "Y", var "R"]]
+                   <=> [var "R" `is` hostCall "my_add" [var "Y", int 3]],
+                 [term "ov" [var "R"]]
+                   <=> [var "R" `is` hostCall "+" [int 1, int 1]],
+                 [term "use_builtin" [var "R"]]
+                   <=> [var "R" `is` hostCall "-" [int 10, int 3]]
+               ]
+
+-- | The default registry extended with one function per adapter kind.
+hostRegistry :: HostCallRegistry
+hostRegistry =
+  withDefaultHostFunctions
+    [ ("my_add", hostFn2 ((+) :: Int -> Int -> Int)),
+      ("shout", hostFn1 T.toUpper),
+      -- effectful (Chr / IO) binary adapter
+      ("effectful_add", hostFn2M (\a b -> liftIO (pure ((a + b) :: Int)))),
+      -- nullary effectful adapter
+      ("now", hostFn0M (liftIO (pure (7 :: Int)))),
+      -- variadic, Term-marshalled
+      ("sum_all", hostFnN sumTerms),
+      -- ternary, pure and effectful
+      ("add3", hostFn3 (\a b c -> (a + b + c) :: Int)),
+      ("add3m", hostFn3M (\a b c -> pure ((a + b + c) :: Int))),
+      -- raw escape hatch: no Term marshalling, operates on Value directly
+      ( "raw_inc",
+        hostFnValues $ \vals -> case vals of
+          [VInt n] -> pure (VInt (n + 1))
+          _ -> pure (VInt 0)
+      ),
+      -- identity over Term, to observe deep dereferencing
+      ("echo", hostFn1 (id :: Term -> Term))
+    ]
+  where
+    sumTerms :: [Term] -> Either ConvertError Term
+    sumTerms ts = toTerm . sum <$> (traverse fromTerm ts :: Either ConvertError [Int])
+
+runHost :: (FromTerm a) => HostCallRegistry -> Term -> IO (Either ConvertError a)
+runHost reg goal = runQueryWithHostCallRegistry reg [hostProgram] goal (decodeVar "R")
+
+-- | Assert that running @goal@ raises a runtime error whose message
+-- contains @needle@.
+expectHostError :: String -> Term -> IO ()
+expectHostError needle goal = do
+  outcome <- try @SomeException (runHost hostRegistry goal :: IO (Either ConvertError Term))
+  case outcome of
+    Left exc ->
+      assertBool
+        ("expected error containing " ++ show needle ++ ", got: " ++ show exc)
+        (needle `isInfixOf` show exc)
+    Right r -> assertFailure ("expected an error, got success: " ++ show r)
+
+hostFunctionTests :: TestTree
+hostFunctionTests =
+  testGroup
+    "host functions"
+    [ testCase "hostFn2: host:my_add(2, 3) -> 5" $ do
+        r <- runHost hostRegistry (term "compute_add" [int 2, var "R"])
+        r @?= (Right 5 :: Either ConvertError Int),
+      testCase "hostFn1: host:shout(\"hi\") -> \"HI\"" $ do
+        r <- runHost hostRegistry (term "compute_shout" [text "hi", var "R"])
+        r @?= (Right "HI" :: Either ConvertError Text),
+      testCase "hostFn2M: effectful binary adapter runs in Chr/IO" $ do
+        r <- runHost hostRegistry (term "compute_eff" [int 5, var "R"])
+        r @?= (Right 15 :: Either ConvertError Int),
+      testCase "hostFn0M: nullary effectful host:now() -> 7" $ do
+        r <- runHost hostRegistry (term "compute_now" [var "R"])
+        r @?= (Right 7 :: Either ConvertError Int),
+      testCase "hostFnN: variadic host:sum_all(1,2,3,4) -> 10" $ do
+        r <- runHost hostRegistry (term "compute_sum" [var "R"])
+        r @?= (Right 10 :: Either ConvertError Int),
+      testCase "hostFn3: host:add3(1,2,3) -> 6" $ do
+        r <- runHost hostRegistry (term "compute_add3" [var "R"])
+        r @?= (Right 6 :: Either ConvertError Int),
+      testCase "hostFn3M: effectful ternary adapter -> 6" $ do
+        r <- runHost hostRegistry (term "compute_add3m" [var "R"])
+        r @?= (Right 6 :: Either ConvertError Int),
+      testCase "hostFnValues: raw Value adapter host:raw_inc(41) -> 42" $ do
+        r <- runHost hostRegistry (term "compute_raw" [int 41, var "R"])
+        r @?= (Right 42 :: Either ConvertError Int),
+      testCase "arg marshalling deep-derefs a variable nested in a compound" $ do
+        r <- runHost hostRegistry (term "compute_nested" [var "R"])
+        case (r :: Either ConvertError Term) of
+          Right (CompoundTerm _ args) ->
+            assertBool
+              ("nested variable not resolved to 5: " ++ show args)
+              (IntTerm 5 `elem` args)
+          other -> assertFailure ("unexpected result: " ++ show other),
+      testCase "arity mismatch raises a runtime error" $
+        expectHostError "expected 2 argument" (term "bad_arity" [var "R"]),
+      testCase "type mismatch raises a runtime error" $
+        expectHostError "TypeMismatch" (term "bad_type" [var "R"]),
+      testCase "unbound argument raises a runtime error" $
+        expectHostError "UnboundValue" (term "bad_unbound" [var "Y", var "R"]),
+      testCase "withDefaultHostFunctions: a custom entry overrides a builtin" $ do
+        let overrideReg =
+              withDefaultHostFunctions
+                [("+", hostFn2 (\a b -> (a * 100 + b) :: Int))]
+        r <- runHost overrideReg (term "ov" [var "R"])
+        r @?= (Right 101 :: Either ConvertError Int),
+      testCase "hostFunctions <> base still resolves builtins" $ do
+        let composed = hostFunctions [] <> baseHostCallRegistry
+        r <- runHost composed (term "use_builtin" [var "R"])
+        r @?= (Right 7 :: Either ConvertError Int)
+    ]

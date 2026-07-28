@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | An ergonomic bridge between ordinary Haskell data types and CHR
@@ -49,6 +50,27 @@ module YCHR.Convert
     decodeVarMaybe,
     lookupBinding,
 
+    -- * Host functions
+    -- $hostFunctions
+    HostCallFn (..),
+    Chr,
+    Value (..),
+    hostFn0M,
+    hostFn1,
+    hostFn1M,
+    hostFn2,
+    hostFn2M,
+    hostFn3,
+    hostFn3M,
+    hostFnN,
+    hostFnValues,
+
+    -- * Host-function registries
+    HostCallRegistry,
+    baseHostCallRegistry,
+    hostFunctions,
+    withDefaultHostFunctions,
+
     -- * Typed query wrapper
     runQuery,
     runQueryWith,
@@ -63,12 +85,13 @@ module YCHR.Convert
 where
 
 import Control.Exception (throwIO)
+import Control.Monad.Trans.State.Strict (evalStateT)
 import Data.Bits (toIntegralSized)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
-import YCHR.Meta (metaHostCallRegistry)
+import YCHR.Meta (metaHostCallRegistry, termToValue, valueToTerm)
 import YCHR.Parsed (Module)
 import YCHR.Run
   ( CompiledProgram,
@@ -76,8 +99,12 @@ import YCHR.Run
     compileParsedModules,
     runProgramWithGoalDSL,
   )
-import YCHR.Runtime.Registry (HostCallRegistry, baseHostCallRegistry)
+import YCHR.Runtime.Error (runtimeErrorS)
+import YCHR.Runtime.Monad (Chr)
+import YCHR.Runtime.Registry (HostCallFn (..), HostCallRegistry, baseHostCallRegistry)
+import YCHR.Runtime.Types (Value (..))
 import YCHR.Types (Constraint (..), Name (..), Term (..))
+import YCHR.VM qualified as VM
 
 -- ---------------------------------------------------------------------------
 -- Classes
@@ -463,3 +490,141 @@ runQueryCompiledWithHostCallRegistry hostCalls cp goal decode =
 goalConstraint :: Term -> Either ConvertError Constraint
 goalConstraint (CompoundTerm n args) = Right (Constraint n args)
 goalConstraint t = Left (MalformedGoal t)
+
+-- ---------------------------------------------------------------------------
+-- Host functions
+-- ---------------------------------------------------------------------------
+
+-- $hostFunctions
+--
+-- A @host:f(args)@ call in a CHR program is dispatched through a
+-- 'HostCallRegistry'. The adapters below lift ordinary Haskell functions
+-- into 'HostCallFn' entries using the same 'ToTerm' \/ 'FromTerm' classes
+-- used for goals and results, so the common case needs no knowledge of the
+-- runtime value representation. Assemble a registry with 'hostFunctions'
+-- (or 'withDefaultHostFunctions') and pass it to
+-- 'runQueryWithHostCallRegistry' \/ 'runQueryCompiledWithHostCallRegistry'.
+
+-- | Marshal one dereferenced host-call argument 'Value' into a decoded
+-- Haskell value. 'valueToTerm' recursively dereferences, so a logical
+-- variable bound inside a compound argument is resolved; a genuinely
+-- unbound argument becomes 'Wildcard' and 'fromTerm' rejects it as an
+-- 'UnboundValue'.
+argFromValue :: (FromTerm a) => Value -> Chr (Either ConvertError a)
+argFromValue v = fromTerm <$> valueToTerm Map.empty v
+
+-- | Marshal a host-function result Haskell value back into a runtime
+-- 'Value'. Results are expected ground.
+resultToValue :: (ToTerm r) => r -> Chr Value
+resultToValue r = evalStateT (termToValue (toTerm r)) Map.empty
+
+hostArityError :: Int -> [a] -> Chr b
+hostArityError n vs =
+  runtimeErrorS
+    ("host call: expected " ++ show n ++ " argument(s), got " ++ show (length vs))
+
+hostDecodeError :: ConvertError -> Chr a
+hostDecodeError err = runtimeErrorS ("host call: " ++ show err)
+
+-- | Adapt a nullary effectful action into a host function. There is no
+-- pure @hostFn0@ because a nullary pure host function is just a constant;
+-- use this for host calls that read external state (a clock, a fresh
+-- identifier) or perform I\/O. The body runs in 'Chr' (use 'liftIO' for
+-- 'IO').
+hostFn0M :: (ToTerm r) => Chr r -> HostCallFn
+hostFn0M act = HostCallFn $ \case
+  [] -> act >>= resultToValue
+  vs -> hostArityError 0 vs
+
+-- | Adapt a pure unary Haskell function into a host function.
+--
+-- > hostFunctions [("shout", hostFn1 Data.Text.toUpper)]   -- host:shout(X)
+hostFn1 :: (FromTerm a, ToTerm r) => (a -> r) -> HostCallFn
+hostFn1 f = hostFn1M (pure . f)
+
+-- | Effectful unary adapter: the body runs in 'Chr', so it may perform
+-- I\/O (via 'liftIO'), dereference logical variables, or inspect the
+-- constraint store. Arguments and result still marshal via
+-- 'FromTerm' \/ 'ToTerm'.
+hostFn1M :: (FromTerm a, ToTerm r) => (a -> Chr r) -> HostCallFn
+hostFn1M f = HostCallFn $ \case
+  [va] -> do
+    ea <- argFromValue va
+    case ea of
+      Right a -> f a >>= resultToValue
+      Left err -> hostDecodeError err
+  vs -> hostArityError 1 vs
+
+-- | Adapt a pure binary Haskell function into a host function.
+--
+-- > hostFunctions [("my_add", hostFn2 ((+) :: Int -> Int -> Int))]  -- host:my_add(X, Y)
+hostFn2 :: (FromTerm a, FromTerm b, ToTerm r) => (a -> b -> r) -> HostCallFn
+hostFn2 f = hostFn2M (\a b -> pure (f a b))
+
+-- | Effectful binary adapter. See 'hostFn1M'.
+hostFn2M :: (FromTerm a, FromTerm b, ToTerm r) => (a -> b -> Chr r) -> HostCallFn
+hostFn2M f = HostCallFn $ \case
+  [va, vb] -> do
+    ea <- argFromValue va
+    eb <- argFromValue vb
+    case (,) <$> ea <*> eb of
+      Right (a, b) -> f a b >>= resultToValue
+      Left err -> hostDecodeError err
+  vs -> hostArityError 2 vs
+
+-- | Adapt a pure ternary Haskell function into a host function.
+hostFn3 ::
+  (FromTerm a, FromTerm b, FromTerm c, ToTerm r) =>
+  (a -> b -> c -> r) ->
+  HostCallFn
+hostFn3 f = hostFn3M (\a b c -> pure (f a b c))
+
+-- | Effectful ternary adapter. See 'hostFn1M'.
+hostFn3M ::
+  (FromTerm a, FromTerm b, FromTerm c, ToTerm r) =>
+  (a -> b -> c -> Chr r) ->
+  HostCallFn
+hostFn3M f = HostCallFn $ \case
+  [va, vb, vc] -> do
+    ea <- argFromValue va
+    eb <- argFromValue vb
+    ec <- argFromValue vc
+    case (,,) <$> ea <*> eb <*> ec of
+      Right (a, b, c) -> f a b c >>= resultToValue
+      Left err -> hostDecodeError err
+  vs -> hostArityError 3 vs
+
+-- | Variable-arity escape hatch that still marshals through 'Term'. The
+-- supplied function receives every argument already decoded to a 'Term'
+-- (recursively dereferenced) and returns the result 'Term' or a
+-- 'ConvertError'. Use it for host functions whose arity is not fixed
+-- (e.g. an n-ary sum).
+hostFnN :: ([Term] -> Either ConvertError Term) -> HostCallFn
+hostFnN g = HostCallFn $ \vs -> do
+  ts <- traverse (valueToTerm Map.empty) vs
+  case g ts of
+    Right t -> resultToValue t
+    Left err -> hostDecodeError err
+
+-- | The raw host-function escape hatch: build a 'HostCallFn' directly from
+-- @'Value' -> 'Chr' 'Value'@, with no 'Term' marshalling. Arguments arrive
+-- top-level dereferenced only (logical variables nested inside a compound
+-- argument are /not/ chased — use 'YCHR.Run.deref' as needed). This is the
+-- 'HostCallFn' constructor under a descriptive name, exposed so the raw
+-- path needs no import of the internal runtime modules.
+hostFnValues :: ([Value] -> Chr Value) -> HostCallFn
+hostFnValues = HostCallFn
+
+-- | Assemble a host-call registry from named host functions. The names are
+-- the bare functors used at the call site: an entry @("my_add", …)@ is
+-- invoked as @host:my_add(...)@ from CHR source. Composes with '<>'.
+hostFunctions :: [(Text, HostCallFn)] -> HostCallRegistry
+hostFunctions = Map.fromList . map (\(n, fn) -> (VM.Name n, fn))
+
+-- | Like 'hostFunctions', but the given functions are unioned over the full
+-- default registry (the base arithmetic \/ comparison \/ string builtins
+-- plus the meta operations), so a program can call both the built-ins and
+-- the custom functions. On a name clash the custom entry wins.
+withDefaultHostFunctions :: [(Text, HostCallFn)] -> HostCallRegistry
+withDefaultHostFunctions fns =
+  hostFunctions fns <> baseHostCallRegistry <> metaHostCallRegistry

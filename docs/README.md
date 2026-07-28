@@ -95,6 +95,8 @@ not regression tests — for edge cases see `test/golden/`.
 - [Haskell DSL](reference/dsl.md) — embedded `YCHR.DSL` for library use
 - [Haskell conversion](reference/convert.md) — `ToTerm` / `FromTerm` and
   the typed query wrappers for embedding
+- [Host functions](reference/host-functions.md) — registering custom
+  `host:_` functions from Haskell
 - [Type system](reference/type-system.md) — gradual type-system spec
 - [Prelude / standard library](reference/prelude.md)
 - [CLI](reference/cli.md) — `ychr` command

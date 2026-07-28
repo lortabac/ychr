@@ -43,14 +43,32 @@
 --     GHC-only; this umbrella and the core "YCHR.Convert" stay
 --     @Generic@-free so they remain usable on every backend.
 --
--- The queries here run with the default host-call registry. Registering
--- your own host functions (a custom 'HostCallRegistry' built from
--- 'YCHR.Runtime.Registry.HostCallFn') is an advanced path: use the
--- @…WithHostCallRegistry@ variants in "YCHR.Convert" together with
--- "YCHR.Runtime.Registry". Other lower-level entry points — the raw CHR
--- session API, the multi-goal query API, the compiler pipeline internals —
--- likewise remain available by importing "YCHR.Run", "YCHR.Convert", and
--- the internal @YCHR.*@ modules directly.
+-- = Registering host functions
+--
+-- A @host:f(args)@ call in a CHR program is resolved against a
+-- 'HostCallRegistry'. Beyond the built-ins, you can register your own by
+-- lifting ordinary Haskell functions with 'hostFn1' \/ 'hostFn2' \/ … (or
+-- their effectful @…M@ variants), assembling a registry with
+-- 'withDefaultHostFunctions', and running with the
+-- @…WithHostCallRegistry@ query variants:
+--
+-- > registry :: HostCallRegistry
+-- > registry = withDefaultHostFunctions
+-- >   [ ("my_add", hostFn2 ((+) :: Int -> Int -> Int)) ]  -- called as host:my_add(X, Y)
+-- >
+-- > main = do
+-- >   r <- runQueryCompiledWithHostCallRegistry registry cp goal "R"
+-- >   print (r :: Either ConvertError Int)
+--
+-- User entries override built-ins of the same name. Arguments and results
+-- marshal through 'ToTerm' \/ 'FromTerm'; for I\/O or logic-variable access
+-- use the @…M@ adapters (the body runs in 'Chr') or the raw 'hostFnValues'
+-- escape hatch.
+--
+-- Other lower-level entry points — the raw CHR session API, the multi-goal
+-- query API, the compiler pipeline internals — remain available by
+-- importing "YCHR.Run", "YCHR.Convert", and the internal @YCHR.*@ modules
+-- directly.
 module YCHR
   ( -- * Compiling a program
     compileFiles,
@@ -62,8 +80,10 @@ module YCHR
     -- * Typed queries
     runQuery,
     runQueryWith,
+    runQueryWithHostCallRegistry,
     runQueryCompiled,
     runQueryCompiledWith,
+    runQueryCompiledWithHostCallRegistry,
 
     -- * Raw-goal queries
     runProgramWithGoal,
@@ -86,9 +106,23 @@ module YCHR
     decodeVarMaybe,
     lookupBinding,
 
-    -- * Host-call registry
+    -- * Host functions
     HostCallRegistry,
     baseHostCallRegistry,
+    HostCallFn (..),
+    hostFunctions,
+    withDefaultHostFunctions,
+    hostFn0M,
+    hostFn1,
+    hostFn1M,
+    hostFn2,
+    hostFn2M,
+    hostFn3,
+    hostFn3M,
+    hostFnN,
+    hostFnValues,
+    Chr,
+    Value (..),
 
     -- * Core term types
     Term (..),
@@ -97,22 +131,40 @@ module YCHR
 where
 
 import YCHR.Convert
-  ( ConvertError (..),
+  ( Chr,
+    ConvertError (..),
     FromTerm (..),
+    HostCallFn (..),
+    HostCallRegistry,
     ToTerm (..),
+    Value (..),
     argAt,
     atomTerm,
+    baseHostCallRegistry,
     compound,
     decodeSum,
     decodeVar,
     decodeVarMaybe,
     ground,
+    hostFn0M,
+    hostFn1,
+    hostFn1M,
+    hostFn2,
+    hostFn2M,
+    hostFn3,
+    hostFn3M,
+    hostFnN,
+    hostFnValues,
+    hostFunctions,
     lookupBinding,
     matchCompound,
     runQuery,
     runQueryCompiled,
     runQueryCompiledWith,
+    runQueryCompiledWithHostCallRegistry,
     runQueryWith,
+    runQueryWithHostCallRegistry,
+    withDefaultHostFunctions,
   )
 import YCHR.Run
   ( CompiledProgram,
@@ -122,5 +174,4 @@ import YCHR.Run
     compileModules,
     runProgramWithGoal,
   )
-import YCHR.Runtime.Registry (HostCallRegistry, baseHostCallRegistry)
 import YCHR.Types (Name (..), Term (..))
