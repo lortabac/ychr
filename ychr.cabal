@@ -51,6 +51,7 @@ extra-doc-files:    CHANGELOG.md
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 extra-source-files:   libraries/*.chr
                     , typechecker/*.chr
+                    , examples/stlc/*.chr
 
 common warnings
     ghc-options: -Wall
@@ -85,6 +86,20 @@ executable ychr
     hs-source-dirs:   app
 
     -- Base language which the package is written in.
+    default-language: GHC2021
+
+-- End-to-end example: a Haskell program that embeds a CHR module.
+-- @examples/stlc/stlc.chr@ is a lambda-calculus type inferencer written in
+-- CHR; this driver embeds it and drives it through YCHR.Convert.
+executable stlc-typechecker
+    import:           warnings
+    main-is:          Main.hs
+    other-modules:    Embed
+    build-depends:    base ^>=4.21.0.0
+                    , ychr
+                    , template-haskell
+                    , text
+    hs-source-dirs:   examples/stlc
     default-language: GHC2021
 
 test-suite ychr-tests

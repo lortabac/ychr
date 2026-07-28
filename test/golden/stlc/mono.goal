@@ -1,0 +1,1 @@
+stlc:typecheck(term(lam("x", add(var("x"), lit_int(1)))), R)

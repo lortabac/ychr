@@ -1,0 +1,195 @@
+% A Curry-style simply-typed lambda-calculus type inferencer, written
+% entirely in CHR.
+%
+% This is the CHR half of an end-to-end embedding example: the Haskell
+% driver in examples/stlc/Main.hs encodes lambda terms as CHR terms,
+% tells `typecheck/2`, and decodes the inferred type (or the type errors)
+% back into Haskell values through YCHR.Convert.
+%
+% Type inference *is* constraint solving, so it maps directly onto CHR:
+%   - a fresh type variable is just an unbound logical variable, created
+%     for free whenever a rule body mentions a new variable;
+%   - unification of type structures is a handful of simplification rules;
+%   - the typing context and the accumulated errors live in the store.
+%
+% The object language (built by the Haskell side):
+%   var(Name)        a variable reference        (Name is a string)
+%   lam(Name, Body)  an *unannotated* lambda      (argument type inferred)
+%   app(F, X)        application
+%   lit_int(N)       an integer literal
+%   add(A, B)        integer addition             (forces both sides to int)
+%
+% The type language (`ty`, below):
+%   tint             the base type of integers
+%   arrow(S, T)      a function type
+%   tvar(N)          a numbered type variable, produced only at the very
+%                    end by `number_vars` so that a polymorphic result
+%                    such as `arrow(tvar(0), tvar(0))` can be printed and
+%                    decoded with its sharing intact.
+
+:- module(stlc, [typecheck/2]).
+:- use_module(library(prelude)).
+
+% The object language is *host-supplied data*: the Haskell driver builds
+% these compounds and passes them in (wrapped in `term/1`, so they are
+% never evaluated as calls — `var/1`, in particular, is also a prelude
+% predicate). They are matched structurally in rule heads and so are left
+% as ordinary (undeclared) functors rather than `:- chr_type` constructors:
+%   var(Name)  lam(Name, Body)  app(F, X)  lit_int(N)  add(A, B)
+% Because they are undeclared, `ychr check` reports each one as an
+% "undeclared data constructor" (YCHR-20101); that is expected here — these
+% are an opaque interchange format for the host, not types this module owns.
+%
+% The type language, by contrast, is built and matched entirely inside
+% this module, so it is a proper declared type. `tvar` is produced only by
+% `number_vars`, at the very end.
+:- chr_type ty ---> tint ; arrow(ty, ty) ; tvar(int).
+
+% The two possible results of inference (decoded on the Haskell side).
+:- chr_type tc_result ---> ok(ty) ; type_error(list(any)).
+
+% Entry point. `Result` is unified with `ok(Type)` when inference
+% succeeds, or `type_error(Errors)` when it does not.
+:- chr_constraint
+    typecheck(any, tc_result),
+    typeof(any, any, ty),
+    lookup_ty(any, any, ty),
+    unify_ty(ty, ty),
+    bind_ty(ty, ty),
+    number_vars(ty),
+    assign_tvars(any, int),
+    finish(any, ty, tc_result),
+    report_error(any),
+    errors(any),
+    collect(any).
+
+% ==========================================================================
+% Driver
+% ==========================================================================
+%
+% Seed an empty error accumulator, infer the type of the expression in the
+% empty context, then read the accumulated errors back out and build the
+% result. Body goals run to completion left-to-right, so by the time
+% `collect` fires every error `typeof` could raise has already landed in
+% `errors`.
+
+typecheck(Expr, Result) <=>
+    errors([]),
+    typeof([], Expr, T),
+    collect(Es),
+    finish(Es, T, Result).
+
+% No errors: ground the residual type variables and report the type.
+finish_ok @  finish([], T, Result) <=> number_vars(T), Result = ok(T).
+% At least one error: report them, leaving the (partial) type untouched.
+finish_err @ finish([E | Es], _, Result) <=> Result = type_error([E | Es]).
+
+% ==========================================================================
+% Typing rules: typeof(Env, Expr, T)
+% ==========================================================================
+%
+% Env is an association list of `bind(Name, Type)` cells. Each rule is a
+% simplification: the `typeof` goal is consumed and replaced by the
+% subgoals that decompose it. Variables first mentioned in a body (A, B,
+% TF, TA below) are fresh type variables.
+
+typeof_int @ typeof(_, lit_int(_), T) <=> unify_ty(T, tint).
+
+typeof_add @ typeof(Env, add(A, B), T) <=>
+    typeof(Env, A, TA),
+    typeof(Env, B, TB),
+    unify_ty(TA, tint),
+    unify_ty(TB, tint),
+    unify_ty(T, tint).
+
+typeof_var @ typeof(Env, var(X), T) <=> lookup_ty(Env, X, T).
+
+% `Env2 = [...]` introduces the fresh argument-type variable A: a bare
+% unbound variable may not first appear nested inside a constraint tell
+% (whose arguments are evaluated), but `=` is pure unification and binds
+% the new variables in its operands.
+typeof_lam @ typeof(Env, lam(X, Body), T) <=>
+    Env2 = [bind(X, A) | Env],
+    typeof(Env2, Body, B),
+    unify_ty(T, arrow(A, B)).
+
+typeof_app @ typeof(Env, app(F, Arg), T) <=>
+    typeof(Env, F, TF),
+    typeof(Env, Arg, TA),
+    unify_ty(TF, arrow(TA, T)).
+
+% ==========================================================================
+% Context lookup: lookup_ty(Env, Name, T)
+% ==========================================================================
+%
+% The three rules are tried top-to-bottom. In the first head the repeated
+% `X` becomes an implicit equality guard, so it fires only when the head
+% binding's name matches; otherwise the general second rule skips a cell.
+% Reaching the empty list means the variable was never bound.
+
+lookup_hit  @ lookup_ty([bind(X, Ty) | _], X, T) <=> unify_ty(T, Ty).
+lookup_skip @ lookup_ty([bind(_, _) | Rest], X, T) <=> lookup_ty(Rest, X, T).
+lookup_miss @ lookup_ty([], X, _) <=> report_error(term(unbound_variable(X))).
+
+% ==========================================================================
+% Type unification: unify_ty(T1, T2)
+% ==========================================================================
+%
+% A structural unifier that binds unbound type variables but *never* lets a
+% raw `=` fail: an incompatible pair of concrete types is reported as an
+% error instead of aborting the whole run. Variable cases bind directly
+% (one side is always an unbound variable, so `=` cannot fail there).
+
+unify_int   @ unify_ty(tint, tint) <=> true.
+unify_arrow @ unify_ty(arrow(A1, R1), arrow(A2, R2)) <=>
+    unify_ty(A1, A2),
+    unify_ty(R1, R2).
+
+unify_vv @ unify_ty(T1, T2) <=> var(T1), var(T2) | T1 = T2.
+unify_vt @ unify_ty(T1, T2) <=> var(T1), nonvar(T2) | bind_ty(T1, T2).
+unify_tv @ unify_ty(T1, T2) <=> nonvar(T1), var(T2) | bind_ty(T2, T1).
+unify_bad @ unify_ty(T1, T2) <=> nonvar(T1), nonvar(T2) |
+    report_error(term(mismatch(T1, T2))).
+
+% Bind a variable to a type, guarding against the infinite types that
+% self-application (`lam(x, app(var(x), var(x)))`) would otherwise create.
+bind_occurs @ bind_ty(V, Ty) <=> occurs(V, Ty) |
+    report_error(term(infinite_type(V, Ty))).
+bind_ok     @ bind_ty(V, Ty) <=> V = Ty.
+
+% ==========================================================================
+% Error accumulation
+% ==========================================================================
+%
+% Errors are prepended, so a program with several of them collects them in
+% reverse (most-recent-first) order. That is invisible here — every demo
+% raises at most one — but worth knowing before extending this.
+
+accumulate @ report_error(E), errors(Es) <=> errors([E | Es]).
+collect_es @ collect(Out), errors(Es) <=> Out = Es.
+
+% ==========================================================================
+% Helpers
+% ==========================================================================
+
+% occurs(V, Ty): does the unbound variable V appear anywhere in Ty? Only
+% ever called on pre-`number_vars` types, whose leaves are `tint` or
+% unbound variables, so the `arrow` recursion covers every compound case.
+:- function occurs/2.
+occurs(V, T) | V == T -> true.
+occurs(_, T) | var(T) -> false.
+occurs(V, arrow(A, B)) | occurs(V, A) -> true.
+occurs(V, arrow(A, B)) -> occurs(V, B).
+occurs(_, _) -> false.
+
+% number_vars(T): replace every residual (still unbound) type variable in T
+% with a distinct `tvar(N)`, numbered from 0 in first-occurrence order.
+% `term_variables` yields each variable once, and its elements are the very
+% variables inside T, so unifying them preserves sharing.
+number_vars(T) <=> Vs is term_variables(T), assign_tvars(Vs, 0).
+
+assign_nil  @ assign_tvars([], _) <=> true.
+assign_cons @ assign_tvars([V | Vs], N) <=>
+    V = tvar(N),
+    N1 is N + 1,
+    assign_tvars(Vs, N1).

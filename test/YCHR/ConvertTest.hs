@@ -30,6 +30,7 @@ import YCHR.DSL
     (//),
     (<=>),
   )
+import YCHR.Run (compileParsedModules)
 import YCHR.Types (Name (..), Term (..))
 
 tests :: TestTree
@@ -211,8 +212,29 @@ endToEndTests =
     [ e2eScalar,
       e2eList,
       e2eRecord,
-      e2eMalformedGoal
+      e2eMalformedGoal,
+      e2eCompiled
     ]
+
+-- | 'runQueryCompiled' compiles a program once and drives several
+-- independent queries against it, each decoded with 'FromTerm'.
+e2eCompiled :: TestTree
+e2eCompiled =
+  testCase "runQueryCompiled: compile once, query twice" $ do
+    let m =
+          module' "conv_double_c"
+            `exporting` ["double" // 2]
+            `declaring` ["double" // 2]
+            `defining` [ [term "double" [var "X", var "R"]]
+                           <=> [var "R" `is` (var "X" .* int 2)]
+                       ]
+    cp <- case compileParsedModules True [m] of
+      Left err -> assertFailure ("compile failed: " ++ show err)
+      Right (cp, _warnings) -> pure cp
+    r1 <- runQueryCompiled cp (term "double" [int 21, var "R"]) "R"
+    r1 @?= (Right 42 :: Either ConvertError Int)
+    r2 <- runQueryCompiled cp (term "double" [int 50, var "R"]) "R"
+    r2 @?= (Right 100 :: Either ConvertError Int)
 
 -- | A non-compound goal is reported as a 'ConvertError', not a crash.
 e2eMalformedGoal :: TestTree

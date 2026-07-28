@@ -86,12 +86,15 @@ not regression tests — for edge cases see `test/golden/`.
 - [Add types to a program](how-to/add-types.md)
 - [Call host-language functions](how-to/call-host-functions.md)
 - [Organize a program into modules](how-to/organize-modules.md)
+- [Embed a CHR module in Haskell](how-to/embed-a-chr-module.md)
 
 ## Reference
 
 - [Language](reference/language.md) — feature-level reference
 - [Syntax](reference/syntax.md) — lexical and grammatical rules
 - [Haskell DSL](reference/dsl.md) — embedded `YCHR.DSL` for library use
+- [Haskell conversion](reference/convert.md) — `ToTerm` / `FromTerm` and
+  the typed query wrappers for embedding
 - [Type system](reference/type-system.md) — gradual type-system spec
 - [Prelude / standard library](reference/prelude.md)
 - [CLI](reference/cli.md) — `ychr` command

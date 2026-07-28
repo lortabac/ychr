@@ -1,0 +1,1 @@
+R = stlc:ok(stlc:arrow(stlc:tvar(0), stlc:tvar(0)))

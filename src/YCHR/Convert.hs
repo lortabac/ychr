@@ -53,6 +53,12 @@ module YCHR.Convert
     runQuery,
     runQueryWith,
     runQueryWithHostCallRegistry,
+
+    -- * Typed query wrapper over a compiled program
+    CompiledProgram,
+    runQueryCompiled,
+    runQueryCompiledWith,
+    runQueryCompiledWithHostCallRegistry,
   )
 where
 
@@ -396,17 +402,60 @@ runQueryWithHostCallRegistry ::
   (Map Text Term -> Either ConvertError a) ->
   IO (Either ConvertError a)
 runQueryWithHostCallRegistry hostCalls modules goal decode =
+  -- Check the goal shape before compiling, so a malformed goal is reported
+  -- as data without doing (or throwing on) the compile.
   case goalConstraint goal of
     Left err -> pure (Left err)
-    Right constraint -> do
+    Right _ -> do
       cp <- compileOrThrow modules
-      bindings <- runProgramWithGoalDSL cp hostCalls constraint
-      pure (decode bindings)
+      runQueryCompiledWithHostCallRegistry hostCalls cp goal decode
 
 compileOrThrow :: [Module] -> IO CompiledProgram
 compileOrThrow modules = case compileParsedModules True modules of
   Left err -> throwIO (err :: Error)
   Right (cp, _warnings) -> pure cp
+
+-- ---------------------------------------------------------------------------
+-- Typed query wrapper over a compiled program
+-- ---------------------------------------------------------------------------
+
+-- | Like 'runQuery' but over an already-'CompiledProgram' instead of a
+-- list of source modules. Compile once (with 'YCHR.Run.compileFiles' for
+-- @.chr@ files, or 'YCHR.Run.compileParsedModules' for "YCHR.DSL"
+-- modules), then run as many typed queries as you like against the same
+-- program — each call is an independent run with a fresh store. This is
+-- the entry point for embedding a real @.chr@ module and driving it with
+-- 'ToTerm' \/ 'FromTerm'.
+runQueryCompiled ::
+  (FromTerm a) => CompiledProgram -> Term -> Text -> IO (Either ConvertError a)
+runQueryCompiled cp goal v = runQueryCompiledWith cp goal (decodeVar v)
+
+-- | Like 'runQueryWith' but over an already-'CompiledProgram'. Decodes the
+-- whole binding map, so a record can be assembled from several 'decodeVar'
+-- calls.
+runQueryCompiledWith ::
+  CompiledProgram ->
+  Term ->
+  (Map Text Term -> Either ConvertError a) ->
+  IO (Either ConvertError a)
+runQueryCompiledWith =
+  runQueryCompiledWithHostCallRegistry (baseHostCallRegistry <> metaHostCallRegistry)
+
+-- | Like 'runQueryWithHostCallRegistry' but over an
+-- already-'CompiledProgram'. Use this when the program calls custom
+-- @host:_@ functions registered by the embedder.
+runQueryCompiledWithHostCallRegistry ::
+  HostCallRegistry ->
+  CompiledProgram ->
+  Term ->
+  (Map Text Term -> Either ConvertError a) ->
+  IO (Either ConvertError a)
+runQueryCompiledWithHostCallRegistry hostCalls cp goal decode =
+  case goalConstraint goal of
+    Left err -> pure (Left err)
+    Right constraint -> do
+      bindings <- runProgramWithGoalDSL cp hostCalls constraint
+      pure (decode bindings)
 
 -- | A goal must be a compound term (a constraint occurrence). Unlike
 -- "YCHR.DSL"'s @termToConstraint@, which crashes, this reports a malformed

@@ -1,0 +1,1 @@
+R = stlc:type_error([mismatch(stlc:tint, stlc:arrow(stlc:tint, _))])

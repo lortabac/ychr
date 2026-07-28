@@ -161,6 +161,47 @@ runQueryWith [m] (term "pair" [var "X", var "Y"])
 Compilation failures are thrown as `YCHR.Run.Error` (as `runDSL` does);
 decoding failures are returned as `Left`.
 
+## Reusing a compiled program
+
+`runQuery` compiles its modules on every call. To embed a real `.chr`
+module — or to run many queries against one program — compile **once** with
+`YCHR.Run.compileFiles` (for source files) or `compileParsedModules` (for
+DSL modules), then drive the resulting `CompiledProgram` with
+`runQueryCompiled`. Each call is an independent run with a fresh store.
+
+```haskell
+runQueryCompiled
+  :: FromTerm a => CompiledProgram -> Term -> Text -> IO (Either ConvertError a)
+```
+
+```haskell
+import YCHR.Convert (runQueryCompiled)
+import YCHR.Run (compileFiles)
+
+main :: IO ()
+main = do
+  Right (cp, _warnings) <- compileFiles True ["typechecker.chr"]   -- once
+  r1 <- runQueryCompiled cp (term "typecheck" [toTerm expr1, var "R"]) "R"
+  r2 <- runQueryCompiled cp (term "typecheck" [toTerm expr2, var "R"]) "R"
+  ...
+```
+
+`runQueryCompiledWith` and `runQueryCompiledWithHostCallRegistry` are the
+whole-map and custom-registry variants, mirroring `runQueryWith` /
+`runQueryWithHostCallRegistry`.
+
+> **Passing symbolic data.** Goal arguments are *evaluated* (like any
+> tell). If you pass a compound that should stay symbolic — an
+> object-language term, say — wrap it in `term/1`
+> (`compound "term" [toTerm expr]`); otherwise a constructor whose name is
+> also a declared function is called instead of kept as data. The how-to
+> below walks through this.
+
+For a complete worked example — a lambda-calculus type inferencer written in
+CHR and driven from Haskell — see
+[`how-to/embed-a-chr-module.md`](../how-to/embed-a-chr-module.md) and
+[`examples/stlc/`](../../examples/stlc/).
+
 ## Generic derivation (GHC only)
 
 Deriving `GHC.Generics.Generic` is enough to get instances for free — no

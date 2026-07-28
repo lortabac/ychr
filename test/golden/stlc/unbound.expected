@@ -1,0 +1,1 @@
+R = stlc:type_error([unbound_variable("y")])
