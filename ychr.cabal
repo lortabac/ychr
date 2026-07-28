@@ -162,6 +162,22 @@ library
     -- Import common warning flags.
     import:           warnings
 
+    -- Public API — the supported surface for embedding YCHR as a Haskell
+    -- library. 'YCHR' is the umbrella entry point (compile + query +
+    -- marshalling); 'YCHR.DSL' builds programs in Haskell; 'YCHR.Convert'
+    -- is the value bridge (with GHC-only generic derivation in
+    -- 'YCHR.Convert.Generic', added under 'if impl(ghc)' below); 'YCHR.Run'
+    -- exposes the lower-level session and multi-goal APIs. These are the
+    -- modules covered by the package version policy.
+    exposed-modules:  YCHR
+                    , YCHR.DSL
+                    , YCHR.Convert
+                    , YCHR.Run
+                    , YCHR.Types
+
+    -- Internal — exposed for the CLI, tests, and benchmarks that live in
+    -- this package. Not part of the public API and not covered by the
+    -- package version policy; import at your own risk.
     exposed-modules:  YCHR.Backend.Scheme
                     , YCHR.Backend.SchemeDriver
                     , YCHR.Collect
@@ -178,12 +194,9 @@ library
                     , YCHR.Display
                     , YCHR.Exhaustiveness
                     , YCHR.Repl
-                    , YCHR.Run
                     , YCHR.Meta
                     , YCHR.Desugared
                     , YCHR.Desugar
-                    , YCHR.DSL
-                    , YCHR.Convert
                     , YCHR.Parser
                     , YCHR.Parsed
                     , YCHR.Parsing.Lexer
@@ -195,7 +208,6 @@ library
                     , YCHR.TypeCheck
                     , YCHR.TypeCheck.Error
                     , YCHR.TypeCheck.Compiled
-                    , YCHR.Types
                     , YCHR.Resolve
                     , YCHR.Resolved
                     , YCHR.VM

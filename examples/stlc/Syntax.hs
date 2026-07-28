@@ -10,7 +10,7 @@ module Syntax
 where
 
 import Data.Text (Text)
-import YCHR.Convert (ToTerm (..), compound)
+import YCHR (ToTerm (..), compound)
 
 -- | Unannotated lambda terms. @let x = e1 in e2@ is desugared by the
 -- parser to @(\\x. e2) e1@, so it needs no constructor of its own.

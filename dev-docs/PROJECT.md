@@ -378,6 +378,7 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
 - Desugaring in `src/YCHR/Desugar.hs`.
 - A user-friendly DSL to construct a CHR program in Haskell in `src/YCHR/DSL.hs`. See [`docs/reference/dsl.md`](../docs/reference/dsl.md) for the user-facing reference.
 - An ergonomic value-conversion interface in `src/YCHR/Convert.hs`: `ToTerm`/`FromTerm` classes bridging Haskell values and CHR `Term`s, result-decoding helpers, and a typed query wrapper (`runQuery`). Generics-free and portable; GHC-only `Generic` derivation lives in `src/ghc/YCHR/Convert/Generic.hs`. See [`docs/reference/convert.md`](../docs/reference/convert.md).
+- An umbrella entry point in `src/YCHR.hs` (module `YCHR`) that re-exports the common compile-and-query surface (compilation, typed queries, and the `ToTerm`/`FromTerm` value bridge) as a single `import YCHR`. `YCHR.DSL` (program construction) and `YCHR.Convert.Generic` (GHC-only generic derivation) stay opt-in companion imports. The library's `exposed-modules` are grouped into a supported public API (`YCHR`, `YCHR.DSL`, `YCHR.Convert`, `YCHR.Run`, `YCHR.Types`, plus GHC-only `YCHR.Convert.Generic`) and internal modules exposed only for the in-package CLI, tests, and benchmarks.
 - VM types in `src/YCHR/VM/Types.hs` (re-exported from `src/YCHR/VM.hs`).
 - CHR-to-VM compiler in `src/YCHR/Compile.hs`.
 - Optional static type checker in `src/YCHR/TypeCheck.hs` (driver) and `src/YCHR/TypeCheck/{Compiled,TH}.hs`. Implemented as a CHR program; programs without type annotations are accepted unchanged.

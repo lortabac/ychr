@@ -1,7 +1,9 @@
 # How to embed a CHR module in a Haskell program
 
 > **Goal:** compile a `.chr` module once inside a Haskell program, then
-> feed it Haskell values and decode its answers back — all through
+> feed it Haskell values and decode its answers back. The whole
+> compile-and-query surface is available from a single `import YCHR` (the
+> umbrella entry point); the value bridge itself is documented in
 > [`YCHR.Convert`](../reference/convert.md).
 
 The worked example is a Curry-style simply-typed lambda-calculus **type
@@ -128,7 +130,15 @@ result <- runQueryCompiled cp (typecheckGoal e) "Result"
   :: IO (Either ConvertError TCResult)
 ```
 
+Everything above — `compileModules`, `CompiledProgram`, `runQueryCompiled`,
+`ToTerm`/`FromTerm`, and the `compound`/`decodeSum`/`argAt` combinators —
+comes from the single umbrella import:
+
+```haskell
+import YCHR
+```
+
 `runQueryCompiled` and its variants are documented in the
 [conversion reference](../reference/convert.md#reusing-a-compiled-program).
 For a `.chr` file on disk (rather than an embedded splice), swap
-`compileModules` for `YCHR.Run.compileFiles`.
+`compileModules` for `compileFiles` (also re-exported by `YCHR`).

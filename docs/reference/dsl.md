@@ -9,6 +9,12 @@
 >
 > **Skip if** you only ever compile `.chr` files from disk.
 
+> **Note.** The DSL is program *construction* and lives in its own module:
+> `import YCHR.DSL`. It is an opt-in companion to the umbrella `YCHR`
+> module, which covers the compile-and-query path (loading `.chr` sources,
+> running goals, marshalling values) but deliberately does not re-export
+> the DSL's large combinator vocabulary.
+
 The DSL lives in [`YCHR.DSL`](../../src/YCHR/DSL.hs) and is a thin layer
 over the surface AST in [`YCHR.Parsed`](../../src/YCHR/Parsed.hs). Every
 combinator is a pure function that builds the same `Module` value the

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+* New umbrella module `YCHR`: a single `import YCHR` for the common
+  compile-and-query path when embedding YCHR as a Haskell library
+  (`compileFiles`/`compileModules`, `CompiledProgram`, `runQuery`,
+  `runQueryCompiled`, the `ToTerm`/`FromTerm` bridge and its
+  combinators). Program construction (`YCHR.DSL`) and GHC-only generic
+  derivation (`YCHR.Convert.Generic`) remain opt-in companion imports.
+  The library's `exposed-modules` are now grouped into a supported
+  public API (`YCHR`, `YCHR.DSL`, `YCHR.Convert`, `YCHR.Run`,
+  `YCHR.Types`) and internal modules exposed only for the in-package
+  CLI, tests, and benchmarks.
+
 * **Breaking:** tell-side constraint arguments — in rule bodies and
   top-level goals — are now evaluated expressions, like every other
   expression position in the language. `foo(1 + 2)` evaluates `1 + 2`

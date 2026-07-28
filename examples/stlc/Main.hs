@@ -38,15 +38,17 @@ import System.IO
     stdin,
     stdout,
   )
-import YCHR.Convert
-  ( FromTerm (..),
+import YCHR
+  ( CompiledProgram,
+    FromTerm (..),
+    Name (..),
+    Term (..),
     ToTerm (toTerm),
     argAt,
+    compileModules,
     decodeSum,
     runQueryCompiled,
   )
-import YCHR.Run (CompiledProgram, compileModules)
-import YCHR.Types (Name (..), Term (..))
 
 -- ---------------------------------------------------------------------------
 -- Decoding the result
