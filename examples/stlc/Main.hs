@@ -4,25 +4,44 @@
 -- | An end-to-end example of embedding a CHR module in a Haskell program.
 --
 -- @examples/stlc/stlc.chr@ is a Curry-style simply-typed lambda-calculus
--- type inferencer written in CHR. This driver embeds it, encodes Haskell
--- 'Expr' values into CHR terms with 'ToTerm', runs the @typecheck/2@ goal
--- with 'runQueryCompiled', and decodes the result back into a Haskell
--- 'Type' (or a type error) with 'FromTerm' — the whole round trip goes
--- through "YCHR.Convert".
+-- type inferencer written in CHR. This driver parses a small surface
+-- syntax (see "Parser"), encodes the resulting term into CHR data with
+-- 'ToTerm', runs the @typecheck/2@ goal with 'runQueryCompiled', and
+-- decodes the inferred type back into a Haskell 'Type' (or a type error)
+-- with 'FromTerm' — the whole round trip goes through "YCHR.Convert".
 --
--- Run it with:
+-- With no arguments it is a small type-inference REPL; @--demo@ prints a
+-- fixed table:
 --
--- > cabal run stlc-typechecker
+-- > cabal run stlc-typechecker            # REPL
+-- > cabal run stlc-typechecker -- --demo  # demo table
 module Main (main) where
 
+import Control.Monad (forM_, when)
+import Data.Char (isSpace)
+import Data.List (intercalate)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Embed (stlcPath, stlcSource)
+import Parser (parseExpr)
+import Syntax (Expr)
+import System.Environment (getArgs)
+import System.Exit (exitFailure)
+import System.IO
+  ( BufferMode (NoBuffering),
+    hFlush,
+    hIsTerminalDevice,
+    hPutStrLn,
+    hSetBuffering,
+    isEOF,
+    stderr,
+    stdin,
+    stdout,
+  )
 import YCHR.Convert
   ( FromTerm (..),
-    ToTerm (..),
+    ToTerm (toTerm),
     argAt,
-    compound,
     decodeSum,
     runQueryCompiled,
   )
@@ -30,29 +49,7 @@ import YCHR.Run (CompiledProgram, compileModules)
 import YCHR.Types (Name (..), Term (..))
 
 -- ---------------------------------------------------------------------------
--- The object language: unannotated lambda terms
--- ---------------------------------------------------------------------------
-
-data Expr
-  = Var Text
-  | Lam Text Expr
-  | App Expr Expr
-  | IntLit Integer
-  | Add Expr Expr
-
--- | Encode a term as the CHR data the inferencer matches on. These are
--- plain compounds (@var@, @lam@, …), which the driver passes in quoted
--- with @term/1@ (see 'typecheckGoal') so they are treated as data rather
--- than evaluated.
-instance ToTerm Expr where
-  toTerm (Var x) = compound "var" [toTerm x]
-  toTerm (Lam x body) = compound "lam" [toTerm x, toTerm body]
-  toTerm (App f a) = compound "app" [toTerm f, toTerm a]
-  toTerm (IntLit n) = compound "lit_int" [toTerm n]
-  toTerm (Add a b) = compound "add" [toTerm a, toTerm b]
-
--- ---------------------------------------------------------------------------
--- The type language and the result of inference
+-- Decoding the result
 -- ---------------------------------------------------------------------------
 
 data Type
@@ -90,9 +87,12 @@ instance FromTerm TCResult where
 
 main :: IO ()
 main = do
+  args <- getArgs
   cp <- loadInferencer
-  putStrLn "Curry-style STLC type inference (via a CHR module):\n"
-  mapM_ (runOne cp) demos
+  case args of
+    ["--demo"] -> runDemo cp
+    [] -> runRepl cp
+    _ -> hPutStrLn stderr "usage: stlc-typechecker [--demo]" >> exitFailure
 
 -- | Compile the embedded inferencer once; reuse it across every query.
 loadInferencer :: IO CompiledProgram
@@ -101,10 +101,13 @@ loadInferencer =
     Left err -> fail ("could not compile " ++ stlcPath ++ ":\n" ++ show err)
     Right (cp, _warnings) -> pure cp
 
-runOne :: CompiledProgram -> (String, Expr) -> IO ()
-runOne cp (label, e) = do
-  result <- runQueryCompiled cp (typecheckGoal e) "Result"
-  putStrLn (pad 22 label ++ " :  " ++ either show renderResult result)
+-- | Parse, type-check, and render one line of surface syntax.
+inferLine :: CompiledProgram -> String -> IO String
+inferLine cp line = case parseExpr line of
+  Left err -> pure ("parse error: " ++ firstLine err)
+  Right e -> do
+    result <- runQueryCompiled cp (typecheckGoal e) "Result"
+    pure (either show renderResult result)
 
 -- | Build the goal @typecheck(term(<expr>), Result)@. The @term/1@ quote
 -- keeps the expression symbolic: without it the argument would be
@@ -118,16 +121,61 @@ typecheckGoal e =
       VarTerm "Result"
     ]
 
-demos :: [(String, Expr)]
-demos =
-  [ ("\\x. x + 1", Lam "x" (Add (Var "x") (IntLit 1))),
-    ("\\x. x", Lam "x" (Var "x")),
-    ("(\\x. x + 1) 5", App (Lam "x" (Add (Var "x") (IntLit 1))) (IntLit 5)),
-    ("\\x. \\y. x", Lam "x" (Lam "y" (Var "x"))),
-    ("\\f. \\x. f (f x)", Lam "f" (Lam "x" (App (Var "f") (App (Var "f") (Var "x"))))),
-    ("\\x. x x", Lam "x" (App (Var "x") (Var "x"))),
-    ("1 2", App (IntLit 1) (IntLit 2)),
-    ("y", Var "y")
+-- ---------------------------------------------------------------------------
+-- REPL
+-- ---------------------------------------------------------------------------
+
+runRepl :: CompiledProgram -> IO ()
+runRepl cp = do
+  hSetBuffering stdout NoBuffering
+  interactive <- hIsTerminalDevice stdin
+  when interactive $
+    putStrLn "STLC type-inference REPL. Enter a lambda term (e.g. \\x. x + 1); :q to quit."
+  loop interactive
+  where
+    loop interactive = do
+      when interactive (putStr "stlc> ")
+      hFlush stdout
+      atEof <- isEOF
+      if atEof
+        then when interactive (putStrLn "")
+        else do
+          line <- getLine
+          keepGoing <- step interactive line
+          when keepGoing (loop interactive)
+
+    step interactive line
+      | command `elem` [":q", ":quit"] = pure False
+      | null command = pure True
+      | otherwise = do
+          when (not interactive) (putStrLn ("stlc> " ++ line))
+          inferLine cp line >>= putStrLn
+          pure True
+      where
+        command = strip line
+
+-- ---------------------------------------------------------------------------
+-- Demo table
+-- ---------------------------------------------------------------------------
+
+runDemo :: CompiledProgram -> IO ()
+runDemo cp = do
+  putStrLn "Curry-style STLC type inference (via a CHR module):\n"
+  forM_ demoInputs $ \s -> do
+    rendered <- inferLine cp s
+    putStrLn (pad 26 s ++ " :  " ++ rendered)
+
+demoInputs :: [String]
+demoInputs =
+  [ "\\x. x + 1",
+    "\\x. x",
+    "(\\x. x + 1) 5",
+    "\\x. \\y. x",
+    "\\f. \\x. f (f x)",
+    "let f = \\x. x + 1 in f 5",
+    "\\x. x x",
+    "1 2",
+    "y"
   ]
 
 -- ---------------------------------------------------------------------------
@@ -193,7 +241,10 @@ parenthesize False s = s
 pad :: Int -> String -> String
 pad w s = s ++ replicate (max 1 (w - length s)) ' '
 
-intercalate :: String -> [String] -> String
-intercalate _ [] = ""
-intercalate _ [x] = x
-intercalate sep (x : xs) = x ++ sep ++ intercalate sep xs
+strip :: String -> String
+strip = f . f where f = reverse . dropWhile isSpace
+
+-- | Collapse a multi-line parse-error message to its first non-empty line
+-- so the REPL prints one tidy line.
+firstLine :: String -> String
+firstLine = unwords . filter (not . null) . map strip . lines

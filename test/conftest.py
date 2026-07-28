@@ -25,3 +25,17 @@ def ychr_bin():
     if result.returncode != 0:
         pytest.fail(f"cabal list-bin failed: {result.stderr}")
     return result.stdout.strip()
+
+
+@pytest.fixture(scope="session")
+def stlc_bin():
+    """Return the path to the stlc-typechecker example binary."""
+    result = subprocess.run(
+        ["cabal", "list-bin", "stlc-typechecker"],
+        capture_output=True,
+        text=True,
+        cwd=PROJECT_ROOT,
+    )
+    if result.returncode != 0:
+        pytest.fail(f"cabal list-bin failed: {result.stderr}")
+    return result.stdout.strip()

@@ -95,8 +95,11 @@ executable stlc-typechecker
     import:           warnings
     main-is:          Main.hs
     other-modules:    Embed
+                    , Syntax
+                    , Parser
     build-depends:    base ^>=4.21.0.0
                     , ychr
+                    , parsec
                     , template-haskell
                     , text
     hs-source-dirs:   examples/stlc

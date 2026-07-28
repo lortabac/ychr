@@ -7,22 +7,44 @@
 The worked example is a Curry-style simply-typed lambda-calculus **type
 inferencer** written in CHR. Type inference is constraint solving, so the
 whole checker is a handful of simplification rules. The complete sources
-are in [`examples/stlc/`](../../examples/stlc/); run it with:
+are in [`examples/stlc/`](../../examples/stlc/).
+
+With no arguments it is a small type-inference REPL — each line is parsed
+(a tiny `parsec` grammar in [`Parser.hs`](../../examples/stlc/Parser.hs)),
+type-checked by the CHR module, and its inferred type printed:
+
+```
+$ cabal run stlc-typechecker
+stlc> \x. x + 1
+int -> int
+stlc> \f. \x. f (f x)
+(a -> a) -> a -> a
+stlc> let f = \x. x + 1 in f 5
+int
+stlc> 1 2
+TYPE ERROR: cannot unify int with (int -> _)
+```
+
+`--demo` prints a fixed table instead — a good self-check:
 
 ```sh
-cabal run stlc-typechecker
+cabal run stlc-typechecker -- --demo
 ```
 
 ```
-\x. x + 1              :  int -> int
-\x. x                  :  a -> a
-(\x. x + 1) 5          :  int
-\x. \y. x              :  a -> b -> a
-\f. \x. f (f x)        :  (a -> a) -> a -> a
-\x. x x                :  TYPE ERROR: cannot construct the infinite type (_ -> _)
-1 2                    :  TYPE ERROR: cannot unify int with (int -> _)
-y                      :  TYPE ERROR: unbound variable y
+\x. x + 1                  :  int -> int
+\x. x                      :  a -> a
+(\x. x + 1) 5              :  int
+\x. \y. x                  :  a -> b -> a
+\f. \x. f (f x)            :  (a -> a) -> a -> a
+let f = \x. x + 1 in f 5   :  int
+\x. x x                    :  TYPE ERROR: cannot construct the infinite type (_ -> _)
+1 2                        :  TYPE ERROR: cannot unify int with (int -> _)
+y                          :  TYPE ERROR: unbound variable y
 ```
+
+The rest of this guide is about the embedding — parsing is just the front
+end; each REPL line becomes one `runQueryCompiled` call (step 4).
 
 ## 1. The CHR module
 
