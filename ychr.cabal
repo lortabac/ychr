@@ -7,16 +7,16 @@ description:
     writing constraint solvers. A handful of rewrite rules over a multiset of
     constraints expresses solvers, type inferencers, and business logic that
     would take considerably more code to write by hand.
-    .
+
     YCHR compiles standard CHR — Prolog-compatible syntax, extended with
     Erlang-style user-defined functions and an optional gradual type system —
     to a small abstract VM, which is either interpreted directly in Haskell or
     translated to Scheme.
-    .
+
     == Using YCHR as a Haskell library
-    .
+
     The common compile-and-query path is available from a single import:
-    .
+
     > {-# LANGUAGE OverloadedStrings #-}
     > import YCHR
     >
@@ -26,26 +26,26 @@ description:
     >   r <- runQueryCompiled cp goal "R"
     >   print (r :: Either ConvertError Int)
     >   where goal = CompoundTerm (Unqualified "compute") [VarTerm "R"]
-    .
+
     Compile a @.chr@ module once, then feed it Haskell values and decode its
     answers back through the @ToTerm@ \/ @FromTerm@ bridge. Haskell functions
     can be exposed to CHR programs as host calls, and programs can be built
     in Haskell directly with the @YCHR.DSL@ combinators instead of parsed
     from source.
-    .
+
     For a worked example — a lambda-calculus type inferencer written in CHR
     and driven from Haskell — see the embedding guide:
     <https://github.com/lortabac/ychr/blob/master/docs/how-to/embed-a-chr-module.md>.
-    .
+
     == Status
-    .
+
     Early release. The Haskell interpreter and the Scheme backend work; the
     JavaScript backend and most of the optimization catalogue are not yet
     implemented. The @ychr@ command-line compiler and REPL ship with this
     package. Compiling to Scheme additionally requires the runtime from a
     source checkout. Full status in the roadmap:
     <https://github.com/lortabac/ychr/blob/master/docs/roadmap.md>.
-    .
+
     Modules under @YCHR.Internal@ are implementation details, exposed for
     documentation purposes only, and are not covered by the package version
     policy.
