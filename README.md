@@ -129,6 +129,10 @@ Contributor and design documentation lives in [`dev-docs/`](dev-docs/),
 including [PROJECT.md](dev-docs/PROJECT.md) (architecture and
 compilation scheme) and the reference paper.
 
+## AI disclosure
+
+This project has been developed with the help of large language models.
+
 ## License
 
 BSD-3-Clause

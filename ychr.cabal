@@ -50,6 +50,10 @@ description:
     documentation purposes only, and are not covered by the package version
     policy.
 
+    == AI disclosure
+
+    This project has been developed with the help of large language models.
+
 license:            BSD-3-Clause
 license-file:       LICENSE
 author:             Lorenzo Tabacchini
