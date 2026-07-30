@@ -155,7 +155,22 @@ encodingTests =
       testCase "Dot (generic nullary)" $
         toTerm Dot @?= CompoundTerm (Unqualified "dot") [],
       testCase "Circle 3 (generic product)" $
-        toTerm (Circle 3) @?= CompoundTerm (Unqualified "circle") [IntTerm 3]
+        toTerm (Circle 3) @?= CompoundTerm (Unqualified "circle") [IntTerm 3],
+      testCase "quoted wraps a Term in term/1 unchanged" $
+        quoted (compound "plus" [int 2, int 3])
+          @?= CompoundTerm
+            (Unqualified "term")
+            [CompoundTerm (Unqualified "plus") [IntTerm 2, IntTerm 3]],
+      testCase "quoted routes a non-Term through toTerm" $
+        quoted (Circle 3)
+          @?= CompoundTerm
+            (Unqualified "term")
+            [CompoundTerm (Unqualified "circle") [IntTerm 3]],
+      testCase "quoted nests" $
+        quoted (quoted (int 1))
+          @?= CompoundTerm
+            (Unqualified "term")
+            [CompoundTerm (Unqualified "term") [IntTerm 1]]
     ]
 
 -- ---------------------------------------------------------------------------

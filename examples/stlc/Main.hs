@@ -5,8 +5,9 @@
 --
 -- @examples/stlc/stlc.chr@ is a Curry-style simply-typed lambda-calculus
 -- type inferencer written in CHR. This driver parses a small surface
--- syntax (see "Parser"), encodes the resulting term into CHR data with
--- 'ToTerm', runs the @typecheck/2@ goal with 'runQueryCompiled', and
+-- syntax (see "Parser"), encodes the resulting term into CHR data with the
+-- @ToTerm@ instance in "Syntax", runs the @typecheck/2@ goal with
+-- 'runQueryCompiled', and
 -- decodes the inferred type back into a Haskell 'Type' (or a type error)
 -- with 'FromTerm' — the whole round trip goes through "YCHR.Convert".
 --
@@ -43,10 +44,11 @@ import YCHR
     FromTerm (..),
     Name (..),
     Term (..),
-    ToTerm (toTerm),
     argAt,
     compileModules,
+    compound,
     decodeSum,
+    quoted,
     runQueryCompiled,
   )
 
@@ -112,16 +114,11 @@ inferLine cp line = case parseExpr line of
     pure (either show renderResult result)
 
 -- | Build the goal @typecheck(term(<expr>), Result)@. The @term/1@ quote
--- keeps the expression symbolic: without it the argument would be
--- evaluated, and @var(\"x\")@ in particular would call the prelude's
+-- ('quoted') keeps the expression symbolic: without it the argument would
+-- be evaluated, and @var(\"x\")@ in particular would call the prelude's
 -- @var/1@ predicate instead of naming a variable node.
 typecheckGoal :: Expr -> Term
-typecheckGoal e =
-  CompoundTerm
-    (Unqualified "typecheck")
-    [ CompoundTerm (Unqualified "term") [toTerm e],
-      VarTerm "Result"
-    ]
+typecheckGoal e = compound "typecheck" [quoted e, VarTerm "Result"]
 
 -- ---------------------------------------------------------------------------
 -- REPL

@@ -942,7 +942,7 @@ warningTests =
               module' "M"
                 `declaring` ["c" // 1]
                 `defining` [ [term "c" [var "X"]]
-                               <=> [term "c" [term "term" [term "plus" [var "X", int 3]]]]
+                               <=> [term "c" [quoted (term "plus" [var "X", int 3])]]
                            ]
         ws <- warningsOf [m]
         ws @?= [],
@@ -955,7 +955,7 @@ warningTests =
                 `declaring` ["c" // 1]
                 `defining` [ [term "c" [var "X"]]
                                <=> [atom "true"]
-                               |- [term "term" [term "plus" [var "X", int 3]]]
+                               |- [quoted (term "plus" [var "X", int 3])]
                            ]
         ws <- warningsOf [m]
         ws @?= [],
@@ -969,10 +969,7 @@ warningTests =
                 `defining` [ [term "c" [var "X"]]
                                <=> [ term
                                        "c"
-                                       [ term
-                                           "term"
-                                           [term "term" [term "plus" [var "X", int 3]]]
-                                       ]
+                                       [quoted (quoted (term "plus" [var "X", int 3]))]
                                    ]
                            ]
         ws <- warningsOf [m]
@@ -988,10 +985,7 @@ warningTests =
                 `defining` [ [term "c" [var "X"]]
                                <=> [ term
                                        "c"
-                                       [ term
-                                           "term"
-                                           [term "is" [var "X", term "foo" [int 1]]]
-                                       ]
+                                       [quoted (term "is" [var "X", term "foo" [int 1]])]
                                    ]
                            ]
         ws <- warningsOf [m]
@@ -1055,7 +1049,7 @@ warningTests =
               module' "M"
                 `declaring` ["c" // 1]
                 `defining` [ [term "c" [var "X"]]
-                               <=> [term "c" [term "term" [lambda [var "Y"] (var "Y")]]]
+                               <=> [term "c" [quoted (lambda [var "Y"] (var "Y"))]]
                            ]
         ws <- warningsOf [m]
         ws @?= [],
@@ -1072,7 +1066,7 @@ warningTests =
               module' "M"
                 `declaring` ["c" // 1]
                 `defining` [ [term "c" [var "X"]]
-                               <=> [term "c" [term "term" [funRef "f" 1]]]
+                               <=> [term "c" [quoted (funRef "f" 1)]]
                            ]
         ws <- warningsOf [m]
         ws @?= [],

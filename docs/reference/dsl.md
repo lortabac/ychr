@@ -40,7 +40,7 @@ A DSL program is built from four kinds of value:
 | Module | `Module` | `module'`, then `importing`/`library`/`declaring`/`defining`/`withEquations`/`withExtensions`/`chrType`/`exporting` |
 | Declaration | `Declaration` | `(//)`, `function`, `openFunction`, `extendFunctionType`, `typeExport`, `op` |
 | Rule | `Rule` | `(<=>)`, `(==>)`, `(\\)` (with `<=>`), `(@:)`, `(\|-)` |
-| Term | `Term` | `var`, `atom`, `int`, `float`, `bool`, `text`, `wildcard`, `term`, `qterm` |
+| Term | `Term` | `var`, `atom`, `int`, `float`, `bool`, `text`, `wildcard`, `term`, `qterm`, `quoted` |
 
 The surface language doesn't distinguish a constraint occurrence
 (`leq(X, Y)`), a function call (`factorial(5)`), and a data-constructor
@@ -76,6 +76,7 @@ combined arguments.
 | `head ==> body.` | `[head] ==> [body]` |
 | `head <=> guard \| body.` | `[head] <=> [body] \|- [guard]` |
 | `R is X * 2.` | `var "R" \`is\` (var "X" .* int 2)` (or with the `Num` instance, `int 1 + var "X"`) |
+| `c(term(plus(X, 3))).` | `term "c" [quoted (term "plus" [var "X", int 3])]` |
 | `host:print(X).` | `hostCall "print" [var "X"]` |
 
 ## Rules

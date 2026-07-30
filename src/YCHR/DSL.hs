@@ -114,6 +114,7 @@ module YCHR.DSL
     Term,
     term,
     qterm,
+    quoted,
     var,
     atom,
     int,
@@ -160,6 +161,7 @@ import Control.Exception (throwIO)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Text (Text)
+import YCHR.Convert (quoted)
 import YCHR.Internal.Meta (metaHostCallRegistry)
 import YCHR.Internal.Parsed
 import YCHR.Internal.Runtime.Registry (HostCallRegistry, baseHostCallRegistry)
