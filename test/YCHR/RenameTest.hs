@@ -6,24 +6,25 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
-import YCHR.Collect (rewriteImports)
-import YCHR.Collected (CollectedModule)
 -- Brings 'CollectedModule''s field labels into scope (qualified) so that
 -- record-dot access on renamer outputs (e.g. @renamed.rules@) resolves
 -- via HasField, without their unqualified names clashing with the
 -- identically-named 'Module' labels used in parsed-module record updates.
-import YCHR.Collected qualified as C
+
 import YCHR.DSL
-import YCHR.Diagnostic (Diagnostic (..), noDiag)
-import YCHR.PExpr (PExpr (Atom))
-import YCHR.Parsed
-import YCHR.Rename
+import YCHR.Internal.Collect (rewriteImports)
+import YCHR.Internal.Collected (CollectedModule)
+import YCHR.Internal.Collected qualified as C
+import YCHR.Internal.Diagnostic (Diagnostic (..), noDiag)
+import YCHR.Internal.PExpr (PExpr (Atom))
+import YCHR.Internal.Parsed
+import YCHR.Internal.Rename
   ( RenameError (..),
     RenameInputs (..),
     RenameWarning (..),
     defaultRenameInputs,
   )
-import YCHR.Rename qualified as Rn
+import YCHR.Internal.Rename qualified as Rn
 
 -- | Test-local wrapper that forwards to 'Rn.renameProgram' with empty
 -- rename inputs (no operator-export map and no trailing-loc map). It

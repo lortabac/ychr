@@ -24,7 +24,7 @@
 :- use_module(library(lists)).
 
 % Type-representation algebraic type. Mirrors the value-level encoding
-% emitted by src/YCHR/TypeCheck.hs (encodeTypeExpr): base types are
+% emitted by src/YCHR/Internal/TypeCheck.hs (encodeTypeExpr): base types are
 % 0-arity constructors, type constructors and function types are
 % compound terms. The first field of `tcon` is `any` because a type
 % constructor name may be either an atom (`bool`) or a qualified

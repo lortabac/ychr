@@ -10,8 +10,8 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Runtime.Error (RuntimeErrorThrown (..))
-import YCHR.Runtime.Interpreter
+import YCHR.Internal.Runtime.Error (RuntimeErrorThrown (..))
+import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
     HostCallRegistry,
     baseHostCallRegistry,
@@ -19,17 +19,17 @@ import YCHR.Runtime.Interpreter
     callProc,
     interpret,
   )
-import YCHR.Runtime.Monad (Chr, initSessionEnv, runChr)
-import YCHR.Runtime.Store (getStoreSnapshot, isSuspAlive)
-import YCHR.Runtime.Types (CallVal (..), SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (equal, newVar, unify)
+import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Store (getStoreSnapshot, isSuspAlive)
+import YCHR.Internal.Runtime.Types (CallVal (..), SuspensionId (..), Value (..))
+import YCHR.Internal.Runtime.Var (equal, newVar, unify)
+import YCHR.Internal.VM
 import YCHR.Types qualified as Types
-import YCHR.VM
 
 tests :: TestTree
 tests =
   testGroup
-    "YCHR.Runtime.Interpreter"
+    "YCHR.Internal.Runtime.Interpreter"
     [ leqTests,
       evalDeepTests,
       typePredicateTests,

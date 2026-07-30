@@ -11,13 +11,13 @@ import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import Text.Parsec (ParseError)
-import YCHR.Loc (Ann (..), SourceLoc (..), noAnn)
-import YCHR.PExpr
+import YCHR.Internal.Loc (Ann (..), SourceLoc (..), noAnn)
+import YCHR.Internal.PExpr
 
 tests :: TestTree
 tests =
   testGroup
-    "YCHR.PExpr"
+    "YCHR.Internal.PExpr"
     [ atomTests,
       variableTests,
       wildcardTests,

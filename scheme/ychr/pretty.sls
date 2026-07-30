@@ -1,6 +1,6 @@
 ;;;; Pretty-printer for CHR values.
 ;;;;
-;;;; Matches the output format of prettyTerm in YCHR.Pretty (Haskell).
+;;;; Matches the output format of prettyTerm in YCHR.Internal.Pretty (Haskell).
 (library (ychr pretty)
   (export pretty-term pretty-bindings bindings->string)
   (import (rnrs) (ychr var))
@@ -188,7 +188,7 @@
   ;; Format an alist of ((symbol . value) ...) bindings as
   ;;   Name = pretty-term\n
   ;; one per line, sorted by symbol name. Matches the output of
-  ;; YCHR.Pretty.prettyBindings on the Haskell side. Returns a string.
+  ;; YCHR.Internal.Pretty.prettyBindings on the Haskell side. Returns a string.
   (define (bindings->string bs)
     (let ((sorted (list-sort
                    (lambda (a b)

@@ -5,13 +5,13 @@ module YCHR.PrettyTest (tests) where
 import Data.Map.Strict qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
-import YCHR.Pretty (prettyBindings, prettyQueryResult, prettyTerm, renderAtom)
+import YCHR.Internal.Pretty (prettyBindings, prettyQueryResult, prettyTerm, renderAtom)
 import YCHR.Types (Name (..), Term (..))
 
 tests :: TestTree
 tests =
   testGroup
-    "YCHR.Pretty"
+    "YCHR.Internal.Pretty"
     [ basicTests,
       renderAtomTests,
       listRenderingTests,

@@ -8,16 +8,16 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Runtime.Monad (Chr, initSessionEnv, runChr)
-import YCHR.Runtime.Store
-import YCHR.Runtime.Types (SuspensionId (..), Value (..))
-import YCHR.Runtime.Var (equal, newVar, unify)
+import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Store
+import YCHR.Internal.Runtime.Types (SuspensionId (..), Value (..))
+import YCHR.Internal.Runtime.Var (equal, newVar, unify)
 import YCHR.Types (ConstraintType (..), Name (..))
 
 tests :: TestTree
 tests =
   testGroup
-    "YCHR.Runtime.Store"
+    "YCHR.Internal.Runtime.Store"
     [ createTests,
       storeTests,
       killTests,

@@ -30,16 +30,16 @@ Abstract VM Program
 ```
 
 The `P-Expr Parser` is a generic, operator-table-driven Prolog term
-parser (`YCHR.PExpr`); the `Parser` converts the flat p-expr terms it
+parser (`YCHR.Internal.PExpr`); the `Parser` converts the flat p-expr terms it
 produces into the surface AST. `Collect` resolves the library-import
 closure and rewrites every import into a uniform `CollectedModule`
 before renaming.
 
 ### Frontend
 
-Parses standard CHR with Prolog-compatible syntax. Produces an internal representation of CHR handlers: constraint declarations, rule definitions (simplification, propagation, simpagation), with heads, guards, and bodies. Parsing is layered: a generic, operator-table-driven Prolog term parser (`YCHR.PExpr`) reads source text into flat, dot-terminated, source-annotated p-expr terms, and the CHR parser (`YCHR.Parser`) then converts each term into the surface AST. After parsing, the Collect phase (`YCHR.Collect`) resolves the transitive library-import closure and rewrites every import into a uniform `CollectedModule`, so everything downstream sees a single kind of import. The frontend pipeline then runs Rename → Resolve (module flattening + declaration-kind validation) → Desugar, with an optional static type-check stage on the desugared AST.
+Parses standard CHR with Prolog-compatible syntax. Produces an internal representation of CHR handlers: constraint declarations, rule definitions (simplification, propagation, simpagation), with heads, guards, and bodies. Parsing is layered: a generic, operator-table-driven Prolog term parser (`YCHR.Internal.PExpr`) reads source text into flat, dot-terminated, source-annotated p-expr terms, and the CHR parser (`YCHR.Internal.Parser`) then converts each term into the surface AST. After parsing, the Collect phase (`YCHR.Internal.Collect`) resolves the transitive library-import closure and rewrites every import into a uniform `CollectedModule`, so everything downstream sees a single kind of import. The frontend pipeline then runs Rename → Resolve (module flattening + declaration-kind validation) → Desugar, with an optional static type-check stage on the desugared AST.
 
-The Resolve phase, in addition to flattening modules, also commits to a structurally typed expression representation. The surface AST uses a uniform `Term` for everything a compound can be — a data constructor application, a user function call, a dynamic dispatch (`'$call'`), a function reference (`fun foo/2`), a lambda, or a host call. `Resolve.termToExpr` translates each `Term` in expression position into a typed `YCHR.Resolved.Expr` (`VarExpr`, `IntExpr`, `CtorExpr`, `CallExpr`, `ApplyExpr`, `FunRefExpr`, `LambdaExpr`, `HostExpr`, …). The translator consults the program's function-name set exactly once, at this boundary; the call-vs-constructor decision is then a structural property of the AST. Desugar, Compile, and TypeCheck all dispatch on `Expr` constructors without re-checking any function-name set. `Term` itself stays as the value type for the surface, the DSL, pretty-printing, the runtime/value bridge, and head/equation patterns (which match on data shapes, not values).
+The Resolve phase, in addition to flattening modules, also commits to a structurally typed expression representation. The surface AST uses a uniform `Term` for everything a compound can be — a data constructor application, a user function call, a dynamic dispatch (`'$call'`), a function reference (`fun foo/2`), a lambda, or a host call. `Resolve.termToExpr` translates each `Term` in expression position into a typed `YCHR.Internal.Resolved.Expr` (`VarExpr`, `IntExpr`, `CtorExpr`, `CallExpr`, `ApplyExpr`, `FunRefExpr`, `LambdaExpr`, `HostExpr`, …). The translator consults the program's function-name set exactly once, at this boundary; the call-vs-constructor decision is then a structural property of the AST. Desugar, Compile, and TypeCheck all dispatch on `Expr` constructors without re-checking any function-name set. `Term` itself stays as the value type for the surface, the DSL, pretty-printing, the runtime/value bridge, and head/equation patterns (which match on data shapes, not values).
 
 Tell-side constraint arguments — in rule bodies (`D.BodyTell`) and top-level goals — are *evaluated* expressions, like other expression positions in the language (function args, constructor args, `is` RHS). A compound argument whose head names a declared function becomes a `CallExpr` and runs at tell time; an unqualified bare expression like `1 + 1` evaluates via the prelude's `+` function. Users who want to pass a symbolic compound term opt out via the existing `term(...)` quoting form (`term(plus(2, 3))` keeps the inner tree opaque). An argument expression that mentions a logical variable that is still unbound at tell time runtime-errors — there is no auto-suspension or symbolic fallback.
 
@@ -220,7 +220,7 @@ The complete constraint store is a hash map whose keys are constraint type names
 - `args`: an array of argument values
 - `alive`: a boolean flag
 
-`Foreach` linearly scans the array for the given type, skipping dead entries and checking the index conditions with `Equal` semantics. This is O(n) per lookup; smarter indexing (hash- or tree-based) can be added later as a runtime change without affecting the VM or compiler. See `src/YCHR/Runtime/Store.hs` for the exact layout and iterator semantics.
+`Foreach` linearly scans the array for the given type, skipping dead entries and checking the index conditions with `Equal` semantics. This is O(n) per lookup; smarter indexing (hash- or tree-based) can be added later as a runtime change without affecting the VM or compiler. See `src/YCHR/Internal/Runtime/Store.hs` for the exact layout and iterator semantics.
 
 
 ## Compilation Scheme
@@ -368,27 +368,27 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
 
 ## Already implemented
 
-- Generic Prolog term ("p-expr") parser in `src/YCHR/PExpr.hs`.
-- Frontend parser in `src/YCHR/Parser.hs` (converts p-expr terms to the surface AST).
-- Surface AST types in `src/YCHR/Parsed.hs`.
-- Library-import collector in `src/YCHR/Collect.hs` and `src/YCHR/Collected.hs`.
-- Desugared AST types in `src/YCHR/Desugared.hs`.
-- Renaming (qualifying constraint names) in `src/YCHR/Rename.hs`.
-- Resolution (flattens modules into a single program, validates declaration kinds) in `src/YCHR/Resolve.hs` and `src/YCHR/Resolved.hs`.
-- Desugaring in `src/YCHR/Desugar.hs`.
+- Generic Prolog term ("p-expr") parser in `src/YCHR/Internal/PExpr.hs`.
+- Frontend parser in `src/YCHR/Internal/Parser.hs` (converts p-expr terms to the surface AST).
+- Surface AST types in `src/YCHR/Internal/Parsed.hs`.
+- Library-import collector in `src/YCHR/Internal/Collect.hs` and `src/YCHR/Internal/Collected.hs`.
+- Desugared AST types in `src/YCHR/Internal/Desugared.hs`.
+- Renaming (qualifying constraint names) in `src/YCHR/Internal/Rename.hs`.
+- Resolution (flattens modules into a single program, validates declaration kinds) in `src/YCHR/Internal/Resolve.hs` and `src/YCHR/Internal/Resolved.hs`.
+- Desugaring in `src/YCHR/Internal/Desugar.hs`.
 - A user-friendly DSL to construct a CHR program in Haskell in `src/YCHR/DSL.hs`. See [`docs/reference/dsl.md`](../docs/reference/dsl.md) for the user-facing reference.
 - An ergonomic value-conversion interface in `src/YCHR/Convert.hs`: `ToTerm`/`FromTerm` classes bridging Haskell values and CHR `Term`s, result-decoding helpers, and a typed query wrapper (`runQuery`). Generics-free and portable; GHC-only `Generic` derivation lives in `src/ghc/YCHR/Convert/Generic.hs`. See [`docs/reference/convert.md`](../docs/reference/convert.md).
 - An umbrella entry point in `src/YCHR.hs` (module `YCHR`) that re-exports the common compile-and-query surface (compilation, typed queries, and the `ToTerm`/`FromTerm` value bridge) as a single `import YCHR`. `YCHR.DSL` (program construction) and `YCHR.Convert.Generic` (GHC-only generic derivation) stay opt-in companion imports. The library's `exposed-modules` are grouped into a supported public API (`YCHR`, `YCHR.DSL`, `YCHR.Convert`, `YCHR.Run`, `YCHR.Types`, plus GHC-only `YCHR.Convert.Generic`) and internal modules exposed only for the in-package CLI, tests, and benchmarks.
-- VM types in `src/YCHR/VM/Types.hs` (re-exported from `src/YCHR/VM.hs`).
-- CHR-to-VM compiler in `src/YCHR/Compile.hs`.
-- Optional static type checker in `src/YCHR/TypeCheck.hs` (driver) and `src/YCHR/TypeCheck/{Compiled,TH}.hs`. Implemented as a CHR program; programs without type annotations are accepted unchanged.
-- Unification variables for the Haskell runtime in `src/YCHR/Runtime/Var.hs`.
-- Constraint store for the Haskell runtime in `src/YCHR/Runtime/Store.hs`.
-- Propagation history for the Haskell runtime in `src/YCHR/Runtime/History.hs`.
-- Reactivation queue in `src/YCHR/Runtime/Reactivation.hs`.
-- Haskell interpreter in `src/YCHR/Runtime/Interpreter.hs`.
+- VM types in `src/YCHR/Internal/VM/Types.hs` (re-exported from `src/YCHR/Internal/VM.hs`).
+- CHR-to-VM compiler in `src/YCHR/Internal/Compile.hs`.
+- Optional static type checker in `src/YCHR/Internal/TypeCheck.hs` (driver) and `src/YCHR/Internal/TypeCheck/{Compiled,TH}.hs`. Implemented as a CHR program; programs without type annotations are accepted unchanged.
+- Unification variables for the Haskell runtime in `src/YCHR/Internal/Runtime/Var.hs`.
+- Constraint store for the Haskell runtime in `src/YCHR/Internal/Runtime/Store.hs`.
+- Propagation history for the Haskell runtime in `src/YCHR/Internal/Runtime/History.hs`.
+- Reactivation queue in `src/YCHR/Internal/Runtime/Reactivation.hs`.
+- Haskell interpreter in `src/YCHR/Internal/Runtime/Interpreter.hs`.
 - User-defined functions: parsing, renaming, desugaring, compilation, and interpretation.
-- Scheme backend (`src/YCHR/Backend/Scheme.hs`) and runtime (`scheme/ychr/`).
+- Scheme backend (`src/YCHR/Internal/Backend/Scheme.hs`) and runtime (`scheme/ychr/`).
   Each generated library exports a session thunk (named after the library's
   final segment) plus two identifier aliases per exported constraint:
   qualified (`module:name/arity`, always) and short (`name/arity`, when

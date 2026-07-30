@@ -117,7 +117,7 @@
 
   ;; Prelude host-call fallback table for `deep-eval-value`. Mirrors
   ;; the bare-name entries in Haskell's `baseHostCallRegistry`
-  ;; (`src/YCHR/Runtime/Registry.hs`) so `R is term('+'(1, 1))` works
+  ;; (`src/YCHR/Internal/Runtime/Registry.hs`) so `R is term('+'(1, 1))` works
   ;; identically on both backends. Each procedure receives the
   ;; session as its first argument (uniform with user-defined
   ;; functions); host calls that don't need it ignore the parameter.
@@ -302,7 +302,7 @@
   ;;; copy_term: deep-copy a term, replacing each unbound variable with
   ;;; a fresh one. Sharing is preserved via an id->fresh-var hashtable,
   ;;; so a term like `f(X, X)` copies to `f(Y, Y)` with the two slots
-  ;;; aliased. Mirrors copyTerm in src/YCHR/Runtime/Registry.hs.
+  ;;; aliased. Mirrors copyTerm in src/YCHR/Internal/Runtime/Registry.hs.
   (define (%copy-term s v)
     (let ((cache (make-eqv-hashtable)))
       (let loop ((v v))

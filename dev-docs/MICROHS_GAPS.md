@@ -29,9 +29,9 @@ Cannot satisfy constraint: HasField "kept" _a3940 [HeadConstraint]
 Cannot satisfy constraint: Rule ~ (_a4 -> _a5)
 ```
 
-YCHR has three rule ASTs — `YCHR.Parsed.Rule`, `YCHR.Resolved.Rule`,
-`YCHR.Desugared.Rule` — each with a `head` field, and two records with
-`kept` / `removed` fields (`YCHR.Desugared.Head`, `YCHR.DSL.Simpa`).
+YCHR has three rule ASTs — `YCHR.Internal.Parsed.Rule`, `YCHR.Internal.Resolved.Rule`,
+`YCHR.Internal.Desugared.Rule` — each with a `head` field, and two records with
+`kept` / `removed` fields (`YCHR.Internal.Desugared.Head`, `YCHR.DSL.Simpa`).
 That's enough to trigger the bug pervasively.
 
 ### Root cause
@@ -50,15 +50,15 @@ body — `getField _ = get$.Rule.head` — is then ambiguous in any
 compilation unit that reaches both definitions through its import
 graph.
 
-Confirmed with `mhs -ddump-typecheck`: both `YCHR.Parsed` and
-`YCHR.Desugared` emit `get$.Rule.head` and `get$.Rule.name` with
+Confirmed with `mhs -ddump-typecheck`: both `YCHR.Internal.Parsed` and
+`YCHR.Internal.Desugared` emit `get$.Rule.head` and `get$.Rule.name` with
 identical names but different signatures.
 
 ### Workaround observation
 
-With `import YCHR.Desugared` (open import), `rule.head` works. With
-`import YCHR.Desugared qualified as D` or
-`import YCHR.Desugared (Rule)`, it fails. The unqualified open import
+With `import YCHR.Internal.Desugared` (open import), `rule.head` works. With
+`import YCHR.Internal.Desugared qualified as D` or
+`import YCHR.Internal.Desugared (Rule)`, it fails. The unqualified open import
 brings the ambiguous selector into scope unambiguously somehow; the
 qualified / selective forms leave the instance method body
 unresolvable.
@@ -66,7 +66,7 @@ unresolvable.
 ### Upstream fix sketch
 
 In `mkGetName`, qualify with the **module name** as well as the
-tycon, e.g. produce `get$.YCHR.Desugared.Rule.head`. The
+tycon, e.g. produce `get$.YCHR.Internal.Desugared.Rule.head`. The
 `HasField`/`SetField` instance bodies should reference that fully
 qualified helper. This makes per-module selectors unique and
 collision-free regardless of import style.
@@ -125,7 +125,7 @@ The expression form `e.fld { f = ... }` (record update applied to the
 result of a record-dot selector chain) fails with a parse error:
 
 ```
-src/YCHR/Desugar.hs:642:48:
+src/YCHR/Internal/Desugar.hs:642:48:
   found:    {
   expected: . LQIdent ( UQIdent [ literal _primitive @ ...
 ```
@@ -169,11 +169,11 @@ locations:
 
 | Missing  | YCHR call sites |
 |----------|------------------|
-| `all`       | `src/YCHR/PExpr.hs:275`, `src/YCHR/PExpr.hs:843`, `src/YCHR/Backend/Scheme.hs:618`, `src/YCHR/SExpr.hs:111,113` |
-| `any`       | `src/YCHR/SExpr.hs:105` |
-| `concatMap` | `src/YCHR/Compile/Names.hs:75`, `src/YCHR/SExpr.hs:69` |
-| `strip`     | `src/YCHR/Repl.hs:213` |
-| `breakOn`   | `src/YCHR/Meta.hs:54` |
+| `all`       | `src/YCHR/Internal/PExpr.hs:275`, `src/YCHR/Internal/PExpr.hs:843`, `src/YCHR/Internal/Backend/Scheme.hs:618`, `src/YCHR/Internal/SExpr.hs:111,113` |
+| `any`       | `src/YCHR/Internal/SExpr.hs:105` |
+| `concatMap` | `src/YCHR/Internal/Compile/Names.hs:75`, `src/YCHR/Internal/SExpr.hs:69` |
+| `strip`     | `src/YCHR/Internal/Repl.hs:213` |
+| `breakOn`   | `src/YCHR/Internal/Meta.hs:54` |
 
 ### Upstream fix sketch
 
@@ -202,7 +202,7 @@ hits, and the perf hit is negligible at compiler-frontend scale.
 `MicroHs/lib/Data/Either.hs` does not export `partitionEithers`. The
 function is part of `base` (since `base-4.0`).
 
-Used at `src/YCHR/Parser.hs:57` (four call sites in the same file).
+Used at `src/YCHR/Internal/Parser.hs:57` (four call sites in the same file).
 
 ### Upstream fix sketch
 
@@ -230,7 +230,7 @@ cannot build under `mcabal`.
 
 YCHR uses TH to embed `libraries/*.chr` and
 `typechecker/typechecker.chr` into the binary at compile time
-(`YCHR.StdLib.TH`, `YCHR.TypeCheck.TH`). This makes the GHC-built
+(`YCHR.Internal.StdLib.TH`, `YCHR.Internal.TypeCheck.TH`). This makes the GHC-built
 binary self-contained and cwd-independent. Without TH, mhs has no
 equivalent compile-time embedding path.
 
@@ -249,14 +249,14 @@ None viable.
 
 ### Local workaround
 
-None. `mcabal build` is expected to fail at `src/YCHR/StdLib.hs` and
-`src/YCHR/TypeCheck/Compiled.hs`. Users must build with `cabal`/GHC.
+None. `mcabal build` is expected to fail at `src/YCHR/Internal/StdLib.hs` and
+`src/YCHR/Internal/TypeCheck/Compiled.hs`. Users must build with `cabal`/GHC.
 This was a conscious trade-off taken when reverting from the runtime
 loader (the change `2142c05` was originally motivated by) back to TH
 embedding: the runtime loader had a known cwd-relative bug, and the
 GHC-only fix is the cleanest available. If future work restores mhs
 compat, the loaders will need a per-backend split (`src/ghc/` +
-`src/mhs/`, mirroring the existing `YCHR.LineInput` pattern) — but
+`src/mhs/`, mirroring the existing `YCHR.Internal.LineInput` pattern) — but
 that machinery is intentionally not added preemptively.
 
 

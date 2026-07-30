@@ -26,14 +26,14 @@ import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import Test.Tasty.Hedgehog (testProperty)
-import YCHR.Parsed qualified as P
-import YCHR.Parser (parseConstraint, parseRule, parseTerm)
-import YCHR.Pretty (prettyConstraintSrc, prettyRuleSrc, prettyTermSrc)
-import YCHR.Runtime.Monad (Chr, initSessionEnv, runChr)
-import YCHR.Runtime.Registry (HostCallFn (..), baseHostCallRegistry, valueList)
-import YCHR.Runtime.Types (Value (..))
+import YCHR.Internal.Parsed qualified as P
+import YCHR.Internal.Parser (parseConstraint, parseRule, parseTerm)
+import YCHR.Internal.Pretty (prettyConstraintSrc, prettyRuleSrc, prettyTermSrc)
+import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Registry (HostCallFn (..), baseHostCallRegistry, valueList)
+import YCHR.Internal.Runtime.Types (Value (..))
+import YCHR.Internal.VM qualified as VM
 import YCHR.Types (Constraint (..), Name (..), Term (..))
-import YCHR.VM qualified as VM
 
 -- ---------------------------------------------------------------------------
 -- Generators
@@ -199,7 +199,7 @@ prop_ruleRoundtrip = property $ do
 
 -- | Generate a runtime 'Value' compound term (including arity 0).
 -- The arity-0 base case is 'VAtom', matching the runtime collapse
--- enforced by 'YCHR.Compile.compileTerm'.
+-- enforced by 'YCHR.Internal.Compile.compileTerm'.
 genCompoundValue :: Gen Value
 genCompoundValue =
   Gen.recursive

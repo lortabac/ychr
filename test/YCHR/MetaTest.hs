@@ -7,21 +7,25 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase)
-import YCHR.Compile.Names (vmName)
-import YCHR.Meta (metaHostCallRegistry, valueToTerm)
+import YCHR.Internal.Compile.Names (vmName)
+import YCHR.Internal.Meta (metaHostCallRegistry, valueToTerm)
+import YCHR.Internal.Runtime.Interpreter
+  ( HostCallFn (..),
+    HostCallRegistry,
+    baseHostCallRegistry,
+  )
+import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Types (Value (..))
+import YCHR.Internal.Runtime.Var (deref, equal)
+import YCHR.Internal.VM (Name (..))
 import YCHR.Run (CompiledProgram (..), compileModules, runProgramWithQuery)
-import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry, baseHostCallRegistry)
-import YCHR.Runtime.Monad (Chr, initSessionEnv, runChr)
-import YCHR.Runtime.Types (Value (..))
-import YCHR.Runtime.Var (deref, equal)
 import YCHR.Types (Term (..))
 import YCHR.Types qualified as Types
-import YCHR.VM (Name (..))
 
 tests :: TestTree
 tests =
   testGroup
-    "YCHR.Meta"
+    "YCHR.Internal.Meta"
     [ readTermTests,
       vmNameRoundTripTests
     ]
@@ -147,8 +151,8 @@ endToEndReadTermTest =
           ) -> pure ()
       other -> assertFailure $ "Expected T = f(1, hello), got: " ++ show other
 
--- | Property: 'YCHR.Meta.valueToTerm' (run on a 'VAtom' whose payload
--- comes from 'YCHR.Compile.Names.vmName') recovers the original
+-- | Property: 'YCHR.Internal.Meta.valueToTerm' (run on a 'VAtom' whose payload
+-- comes from 'YCHR.Internal.Compile.Names.vmName') recovers the original
 -- 'Types.Name' as a qualified or unqualified 'CompoundTerm'. This
 -- pins the injectivity of the mangling pair @encodeText@\/@%%u@
 -- escape ↔ @decodeMangled@\/@decodeEscapes@.

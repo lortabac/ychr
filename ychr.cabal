@@ -178,57 +178,57 @@ library
     -- Internal — exposed for the CLI, tests, and benchmarks that live in
     -- this package. Not part of the public API and not covered by the
     -- package version policy; import at your own risk.
-    exposed-modules:  YCHR.Backend.Scheme
-                    , YCHR.Backend.SchemeDriver
-                    , YCHR.Collect
-                    , YCHR.Collected
-                    , YCHR.Constructors
-                    , YCHR.Compile
-                    , YCHR.Loc
-                    , YCHR.Compile.Pipeline
-                    , YCHR.Compile.Names
-                    , YCHR.Compile.Occurrences
-                    , YCHR.Compile.Passive
-                    , YCHR.Compile.Types
-                    , YCHR.Diagnostic
-                    , YCHR.Display
-                    , YCHR.Exhaustiveness
-                    , YCHR.Repl
-                    , YCHR.Meta
-                    , YCHR.Desugared
-                    , YCHR.Desugar
-                    , YCHR.Parser
-                    , YCHR.Parsed
-                    , YCHR.Parsing.Lexer
-                    , YCHR.PExpr
-                    , YCHR.Pretty
-                    , YCHR.Rename
-                    , YCHR.Rename.Types
-                    , YCHR.StdLib
-                    , YCHR.TypeCheck
-                    , YCHR.TypeCheck.Error
-                    , YCHR.TypeCheck.Compiled
-                    , YCHR.Resolve
-                    , YCHR.Resolved
-                    , YCHR.VM
-                    , YCHR.VM.Types
-                    , YCHR.VM.SExpr
-                    , YCHR.SExpr
-                    , YCHR.Runtime.Interpreter
-                    , YCHR.Runtime.Monad
-                    , YCHR.Runtime.Registry
-                    , YCHR.Runtime.Session
-                    , YCHR.Runtime.Types
-                    , YCHR.Runtime.Var
-                    , YCHR.Runtime.Store
-                    , YCHR.Runtime.History
-                    , YCHR.Runtime.Reactivation
-                    , YCHR.Runtime.Error
-                    , YCHR.Runtime.Trace
+    exposed-modules:  YCHR.Internal.Backend.Scheme
+                    , YCHR.Internal.Backend.SchemeDriver
+                    , YCHR.Internal.Collect
+                    , YCHR.Internal.Collected
+                    , YCHR.Internal.Constructors
+                    , YCHR.Internal.Compile
+                    , YCHR.Internal.Loc
+                    , YCHR.Internal.Compile.Pipeline
+                    , YCHR.Internal.Compile.Names
+                    , YCHR.Internal.Compile.Occurrences
+                    , YCHR.Internal.Compile.Passive
+                    , YCHR.Internal.Compile.Types
+                    , YCHR.Internal.Diagnostic
+                    , YCHR.Internal.Display
+                    , YCHR.Internal.Exhaustiveness
+                    , YCHR.Internal.Repl
+                    , YCHR.Internal.Meta
+                    , YCHR.Internal.Desugared
+                    , YCHR.Internal.Desugar
+                    , YCHR.Internal.Parser
+                    , YCHR.Internal.Parsed
+                    , YCHR.Internal.Parsing.Lexer
+                    , YCHR.Internal.PExpr
+                    , YCHR.Internal.Pretty
+                    , YCHR.Internal.Rename
+                    , YCHR.Internal.Rename.Types
+                    , YCHR.Internal.StdLib
+                    , YCHR.Internal.TypeCheck
+                    , YCHR.Internal.TypeCheck.Error
+                    , YCHR.Internal.TypeCheck.Compiled
+                    , YCHR.Internal.Resolve
+                    , YCHR.Internal.Resolved
+                    , YCHR.Internal.VM
+                    , YCHR.Internal.VM.Types
+                    , YCHR.Internal.VM.SExpr
+                    , YCHR.Internal.SExpr
+                    , YCHR.Internal.Runtime.Interpreter
+                    , YCHR.Internal.Runtime.Monad
+                    , YCHR.Internal.Runtime.Registry
+                    , YCHR.Internal.Runtime.Session
+                    , YCHR.Internal.Runtime.Types
+                    , YCHR.Internal.Runtime.Var
+                    , YCHR.Internal.Runtime.Store
+                    , YCHR.Internal.Runtime.History
+                    , YCHR.Internal.Runtime.Reactivation
+                    , YCHR.Internal.Runtime.Error
+                    , YCHR.Internal.Runtime.Trace
 
-    other-modules:    YCHR.LineInput
-                    , YCHR.StdLib.TH
-                    , YCHR.TypeCheck.TH
+    other-modules:    YCHR.Internal.LineInput
+                    , YCHR.Internal.StdLib.TH
+                    , YCHR.Internal.TypeCheck.TH
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -244,7 +244,7 @@ library
                     , text
                     , transformers
 
-    -- Per-compiler line-input backend. The 'YCHR.LineInput' module
+    -- Per-compiler line-input backend. The 'YCHR.Internal.LineInput' module
     -- lives in 'src/ghc/' under GHC (wraps 'haskeline') and in
     -- 'src/mhs/' under MicroHS (bare 'getLine').
     if impl(ghc)

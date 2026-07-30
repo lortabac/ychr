@@ -18,7 +18,7 @@ when a constraint of type `c` becomes active, tries every *occurrence* of
 head; occurrence numbering follows the refined operational semantics ωr:
 within a rule, removed heads are tried before kept heads, right-to-left,
 and numbering runs top-down across the whole program (see
-`YCHR.Compile.Occurrences`).
+`YCHR.Internal.Compile.Occurrences`).
 
 Trying an occurrence means searching the constraint store for partner
 constraints, checking guards, and — if everything matches — firing the

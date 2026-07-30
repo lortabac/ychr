@@ -7,9 +7,9 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
-import YCHR.Runtime.Monad (Chr, initSessionEnv, runChr)
-import YCHR.Runtime.Types (SuspensionId (..), Value (..))
-import YCHR.Runtime.Var
+import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Types (SuspensionId (..), Value (..))
+import YCHR.Internal.Runtime.Var
   ( addObserver,
     deref,
     equal,
@@ -25,7 +25,7 @@ import YCHR.Runtime.Var
 tests :: TestTree
 tests =
   testGroup
-    "YCHR.Runtime.Var"
+    "YCHR.Internal.Runtime.Var"
     [ unifyTests,
       unifiableTests,
       unifiableRollbackTests,

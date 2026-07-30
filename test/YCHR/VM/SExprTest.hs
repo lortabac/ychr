@@ -7,9 +7,9 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
+import YCHR.Internal.VM
+import YCHR.Internal.VM.SExpr (VMProgram (..), deserialize, serialize)
 import YCHR.Types qualified as Types
-import YCHR.VM
-import YCHR.VM.SExpr (VMProgram (..), deserialize, serialize)
 
 tests :: TestTree
 tests =

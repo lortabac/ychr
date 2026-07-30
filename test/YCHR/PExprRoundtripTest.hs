@@ -9,8 +9,8 @@ import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Hedgehog (testProperty)
-import YCHR.Loc (Ann (..), noAnn)
-import YCHR.PExpr
+import YCHR.Internal.Loc (Ann (..), noAnn)
+import YCHR.Internal.PExpr
 
 -- ---------------------------------------------------------------------------
 -- Operator table
@@ -271,7 +271,7 @@ prop_roundtrip ops gen = property $ do
 tests :: TestTree
 tests =
   testGroup
-    "YCHR.PExpr.Roundtrip"
+    "YCHR.Internal.PExpr.Roundtrip"
     [ testProperty "roundtrip without operators" (prop_roundtrip emptyOps genPExpr),
       testProperty "roundtrip with operators" (prop_roundtrip testOps genPExprWithOps),
       testProperty "roundtrip with full grammar" (prop_roundtrip fullOps genPExprFull)

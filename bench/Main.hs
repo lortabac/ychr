@@ -13,16 +13,16 @@ import Criterion.Main
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import System.FilePath ((<.>), (</>))
-import YCHR.Meta (metaHostCallRegistry)
-import YCHR.Parser (parseConstraint)
-import YCHR.Rename (renameQueryArgs)
+import YCHR.Internal.Meta (metaHostCallRegistry)
+import YCHR.Internal.Parser (parseConstraint)
+import YCHR.Internal.Rename (renameQueryArgs)
+import YCHR.Internal.Runtime.Interpreter (baseHostCallRegistry)
+import YCHR.Internal.Runtime.Registry (HostCallRegistry)
 import YCHR.Run
   ( CompiledProgram (..),
     compileFiles,
     runProgramWithGoalDSL,
   )
-import YCHR.Runtime.Interpreter (baseHostCallRegistry)
-import YCHR.Runtime.Registry (HostCallRegistry)
 import YCHR.Types (Constraint (..))
 
 -- | A benchmark case after all setup work is complete.

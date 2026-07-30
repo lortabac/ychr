@@ -91,20 +91,20 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
-import YCHR.Meta (metaHostCallRegistry, termToValue, valueToTerm)
-import YCHR.Parsed (Module)
+import YCHR.Internal.Meta (metaHostCallRegistry, termToValue, valueToTerm)
+import YCHR.Internal.Parsed (Module)
+import YCHR.Internal.Runtime.Error (runtimeErrorS)
+import YCHR.Internal.Runtime.Monad (Chr)
+import YCHR.Internal.Runtime.Registry (HostCallFn (..), HostCallRegistry, baseHostCallRegistry)
+import YCHR.Internal.Runtime.Types (Value (..))
+import YCHR.Internal.VM qualified as VM
 import YCHR.Run
   ( CompiledProgram,
     Error,
     compileParsedModules,
     runProgramWithGoalDSL,
   )
-import YCHR.Runtime.Error (runtimeErrorS)
-import YCHR.Runtime.Monad (Chr)
-import YCHR.Runtime.Registry (HostCallFn (..), HostCallRegistry, baseHostCallRegistry)
-import YCHR.Runtime.Types (Value (..))
 import YCHR.Types (Constraint (..), Name (..), Term (..))
-import YCHR.VM qualified as VM
 
 -- ---------------------------------------------------------------------------
 -- Classes

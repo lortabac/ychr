@@ -16,7 +16,7 @@
 > the DSL's large combinator vocabulary.
 
 The DSL lives in [`YCHR.DSL`](../../src/YCHR/DSL.hs) and is a thin layer
-over the surface AST in [`YCHR.Parsed`](../../src/YCHR/Parsed.hs). Every
+over the surface AST in [`YCHR.Internal.Parsed`](../../src/YCHR/Internal/Parsed.hs). Every
 combinator is a pure function that builds the same `Module` value the
 parser would produce from `.chr` text. Validation (undeclared constraints,
 ill-typed bodies, etc.) is deferred to the compilation pipeline, exactly

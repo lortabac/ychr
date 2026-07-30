@@ -6,14 +6,14 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
-import YCHR.Runtime.Monad (Chr, initSessionEnv, runChr)
-import YCHR.Runtime.Reactivation
-import YCHR.Runtime.Types (SuspensionId (..))
+import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Reactivation
+import YCHR.Internal.Runtime.Types (SuspensionId (..))
 
 tests :: TestTree
 tests =
   testGroup
-    "YCHR.Runtime.Reactivation"
+    "YCHR.Internal.Runtime.Reactivation"
     [ emptyTests,
       orderTests,
       reentrancyTests,

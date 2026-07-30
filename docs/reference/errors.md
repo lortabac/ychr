@@ -6,7 +6,7 @@
 YCHR diagnostics carry a numeric code of the form `YCHR-NNNNN`. The codes
 are stable across releases; user-facing messages may evolve.
 
-The source of truth lives in `src/YCHR/Display.hs`, which maps each
+The source of truth lives in `src/YCHR/Internal/Display.hs`, which maps each
 internal error constructor to its code and human-readable message.
 
 ## Catalog

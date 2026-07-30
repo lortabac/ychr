@@ -7,15 +7,20 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
-import YCHR.Collect (rewriteImports)
 import YCHR.DSL
-import YCHR.Desugar (DesugarError (..), desugarProgram, extractSymbolTable, liftAllLambdas)
-import YCHR.Desugared qualified as D
-import YCHR.Diagnostic (noDiag)
-import YCHR.PExpr (PExpr (Atom))
-import YCHR.Parsed
-import YCHR.Resolve (ResolveError (..), resolveProgram)
-import YCHR.Resolved qualified as R
+import YCHR.Internal.Collect (rewriteImports)
+import YCHR.Internal.Desugar
+  ( DesugarError (..),
+    desugarProgram,
+    extractSymbolTable,
+    liftAllLambdas,
+  )
+import YCHR.Internal.Desugared qualified as D
+import YCHR.Internal.Diagnostic (noDiag)
+import YCHR.Internal.PExpr (PExpr (Atom))
+import YCHR.Internal.Parsed
+import YCHR.Internal.Resolve (ResolveError (..), resolveProgram)
+import YCHR.Internal.Resolved qualified as R
 import YCHR.Types
   ( ConstraintType (..),
     Identifier (..),

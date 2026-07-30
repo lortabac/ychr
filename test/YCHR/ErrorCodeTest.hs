@@ -5,7 +5,7 @@
 
 -- | Guards the uniqueness of error codes (@YCHR-NNNNN@).
 --
--- Error codes are assigned by hand in "YCHR.Display": one @*ErrorCode@
+-- Error codes are assigned by hand in "YCHR.Internal.Display": one @*ErrorCode@
 -- function per error type maps each constructor to a literal 'ErrorCode',
 -- plus a handful of standalone constants for codes not tied to a
 -- constructor. Nothing in the production code stops two of those literals
@@ -35,10 +35,10 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
-import YCHR.Collect (CollectError (..))
-import YCHR.Compile (CompileError (..))
-import YCHR.Desugar (DesugarError (..))
-import YCHR.Display
+import YCHR.Internal.Collect (CollectError (..))
+import YCHR.Internal.Compile (CompileError (..))
+import YCHR.Internal.Desugar (DesugarError (..))
+import YCHR.Internal.Display
   ( ErrorCode (..),
     collectErrorCode,
     compileErrorCode,
@@ -55,12 +55,12 @@ import YCHR.Display
     runtimeErrorCode,
     typeCheckErrorCode,
   )
-import YCHR.Exhaustiveness (ExhaustivenessWarning (..))
-import YCHR.Parser (ParseValidationError (..))
-import YCHR.Rename (RenameError (..), RenameWarning (..))
-import YCHR.Resolve (ResolveError (..))
-import YCHR.Resolved qualified as R
-import YCHR.TypeCheck (TypeCheckError (..))
+import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning (..))
+import YCHR.Internal.Parser (ParseValidationError (..))
+import YCHR.Internal.Rename (RenameError (..), RenameWarning (..))
+import YCHR.Internal.Resolve (ResolveError (..))
+import YCHR.Internal.Resolved qualified as R
+import YCHR.Internal.TypeCheck (TypeCheckError (..))
 import YCHR.Types (Name, Term)
 
 -- ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ instance Data Term where
 instance Data R.Expr where
   gunfold _ _ = error "Data R.Expr: gunfold (unused)"
   toConstr _ = error "Data R.Expr: toConstr (unused)"
-  dataTypeOf _ = mkNoRepType "YCHR.Resolved.Expr"
+  dataTypeOf _ = mkNoRepType "YCHR.Internal.Resolved.Expr"
 
 deriving instance Data CollectError
 
@@ -133,7 +133,7 @@ constructorCodes =
       enumCodes typeCheckErrorCode
     ]
 
--- | Codes not attached to an enumerable constructor (see "YCHR.Display").
+-- | Codes not attached to an enumerable constructor (see "YCHR.Internal.Display").
 standaloneCodes :: [(String, Int)]
 standaloneCodes =
   [ ("parseErrorCode", n parseErrorCode),

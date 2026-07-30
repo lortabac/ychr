@@ -3,7 +3,7 @@
 -- | Shared types for CHR representations.
 --
 -- This module contains types that are identical across the surface
--- language AST ('YCHR.Parsed') and the internal AST ('YCHR.Desugared').
+-- language AST ('YCHR.Internal.Parsed') and the internal AST ('YCHR.Internal.Desugared').
 module YCHR.Types
   ( -- * Constraints
     Constraint (..),
@@ -54,7 +54,7 @@ where
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
-import YCHR.Loc (SourceLoc)
+import YCHR.Internal.Loc (SourceLoc)
 
 -- | A numeric identifier for a constraint type, assigned by the symbol table.
 newtype ConstraintType = ConstraintType {unConstraintType :: Int}
@@ -113,8 +113,8 @@ data Name
   deriving (Show, Eq, Ord)
 
 -- | A name guaranteed to be module-qualified. Established by the
--- resolve phase and propagated through 'YCHR.Resolved' and
--- 'YCHR.Desugared'. Compare with 'Name', which admits an
+-- resolve phase and propagated through 'YCHR.Internal.Resolved' and
+-- 'YCHR.Internal.Desugared'. Compare with 'Name', which admits an
 -- 'Unqualified' constructor used in the parser and renamer.
 data QualifiedName = QualifiedName
   { moduleName :: !Text,
@@ -146,7 +146,7 @@ data Constraint = Constraint
   deriving (Show, Eq)
 
 -- | A CHR constraint occurrence with a qualified head name. Used in
--- 'YCHR.Resolved' and 'YCHR.Desugared' rule heads and bodies, where
+-- 'YCHR.Internal.Resolved' and 'YCHR.Internal.Desugared' rule heads and bodies, where
 -- the resolve phase has guaranteed every constraint name is
 -- module-qualified.
 data QualifiedConstraint = QualifiedConstraint
@@ -157,8 +157,8 @@ data QualifiedConstraint = QualifiedConstraint
 
 -- | A head argument after Head Normal Form. The desugarer guarantees
 -- that every head argument is either a variable or a wildcard;
--- non-variable patterns are lifted into 'YCHR.Desugared.GuardMatch',
--- 'YCHR.Desugared.GuardGetArg', and 'YCHR.Desugared.GuardEqual' guards
+-- non-variable patterns are lifted into 'YCHR.Internal.Desugared.GuardMatch',
+-- 'YCHR.Internal.Desugared.GuardGetArg', and 'YCHR.Internal.Desugared.GuardEqual' guards
 -- and replaced with fresh variables in the head. This narrower type
 -- enforces that invariant.
 data HeadArg

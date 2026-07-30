@@ -57,7 +57,7 @@ Do not prefix field names with an abbreviation of the type (e.g. `cArgs`).
 ## Track effects with `transformers`
 
 The runtime is a single concrete monad — `type Chr = ReaderT SessionEnv IO`
-defined in `src/YCHR/Runtime/Monad.hs`. `SessionEnv` is a record of `IORef`s
+defined in `src/YCHR/Internal/Runtime/Monad.hs`. `SessionEnv` is a record of `IORef`s
 (unification counter, constraint store, propagation history, reactivation
 queue, call stack, procedure map) plus immutable session-level fields
 (host-call registry, export maps). Everything that runs against a session
@@ -107,7 +107,7 @@ The reactivation queue is FIFO so that constraints affected by the same
 Anchor a `Note [Title]` in one module and reference it from others:
 
 ```haskell
--- See Note [Reactivation queue ordering] in YCHR.Runtime.Reactivation.
+-- See Note [Reactivation queue ordering] in YCHR.Internal.Runtime.Reactivation.
 ```
 
 This keeps long-form rationale in one place and avoids the same paragraph

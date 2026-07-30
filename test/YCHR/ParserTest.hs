@@ -8,8 +8,8 @@ import Data.Text qualified as Text
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import Text.Parsec (ParseError)
-import YCHR.Parsed
-import YCHR.Parser
+import YCHR.Internal.Parsed
+import YCHR.Internal.Parser
   ( ModuleHeader (..),
     ParseValidationError (..),
     builtinOps,
@@ -22,7 +22,7 @@ import YCHR.Parser
 tests :: TestTree
 tests =
   testGroup
-    "YCHR.Parser"
+    "YCHR.Internal.Parser"
     [ directiveTests,
       termTests,
       negativeIntTests,

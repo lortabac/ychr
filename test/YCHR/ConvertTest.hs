@@ -35,7 +35,7 @@ import YCHR.DSL
     (//),
     (<=>),
   )
-import YCHR.Parsed (Module)
+import YCHR.Internal.Parsed (Module)
 import YCHR.Run (compileParsedModules)
 import YCHR.Types (Name (..), Term (..))
 

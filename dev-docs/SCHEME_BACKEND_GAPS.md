@@ -6,7 +6,7 @@ test suite. Each gap is a candidate fix; resolving one usually means removing
 an entry from `HASKELL_ONLY` or `HASKELL_ONLY_CASES` in
 `test/scheme/test_golden.py`.
 
-The scope is the Scheme backend (`src/YCHR/Backend/Scheme.hs`) plus its
+The scope is the Scheme backend (`src/YCHR/Internal/Backend/Scheme.hs`) plus its
 runtime in `scheme/ychr/`. Goals are run through `guile3.0 --r6rs` per
 `Makefile`'s `test-scheme` target.
 
@@ -21,7 +21,7 @@ runtime in `scheme/ychr/`. Goals are run through `guile3.0 --r6rs` per
 
 ## Atom pretty-printing divergences
 
-The Haskell `prettyTerm` (`src/YCHR/PExpr.hs`) quotes atoms whose text is
+The Haskell `prettyTerm` (`src/YCHR/Internal/PExpr.hs`) quotes atoms whose text is
 not a bare lowercase identifier, escaping embedded quotes — so `'hello
 world'`, `'café'`, and `'你好'` are quoted on output. The Scheme
 `pretty-term` (`scheme/ychr/pretty.sls`) emits symbols via
@@ -74,7 +74,7 @@ record of which fixes have already shipped.
   rendered as `"1000000"` because `(integer? 1000000.0)` is `#t` in
   Scheme; we now distinguish exact integers from inexact numbers.
 - **`copy_term`** — implemented as `%copy-term` in `runtime.sls`,
-  mirroring `copyTerm` in `src/YCHR/Runtime/Registry.hs` (sharing
+  mirroring `copyTerm` in `src/YCHR/Internal/Runtime/Registry.hs` (sharing
   preserved via an id→fresh-var hashtable). The backend grew a
   `sessionHostCalls` set so host calls that need the session can have
   `%s` threaded as their first argument.
@@ -83,7 +83,7 @@ record of which fixes have already shipped.
   through `equal?/chr`, and the equality fix above means flonum-flonum
   compares structurally.
 - **Qualified n-arity constructor leaked mangled name (Haskell side)**
-  — `valueToTerm` in `src/YCHR/Meta.hs` only unmangled the runtime
+  — `valueToTerm` in `src/YCHR/Internal/Meta.hs` only unmangled the runtime
   functor `m__n` back into `Qualified m n` for **0-arity** terms; any
   `VTerm "m__n" (x:_)` fell through to `Unqualified "m__n"`, so a
   qualified constructor like `just(X)` (whether produced directly by
@@ -99,7 +99,7 @@ record of which fixes have already shipped.
   `scheme/ychr/pretty.sls` now unmangles `module__name` back to
   `module:name` on output (via `unmangle-qualified`, splitting on the
   first `__` at position ≥ 1). This is safe because the lexer
-  (`src/YCHR/PExpr.hs`) rejects `__` inside any user atom, and the
+  (`src/YCHR/Internal/PExpr.hs`) rejects `__` inside any user atom, and the
   encoder (`encodeText` in `Compile/Names.hs`) emits no `__` of its
   own (non-ASCII characters use the `%%u<6 hex>` escape instead).
   Closed `HASKELL_ONLY_CASES` entries for

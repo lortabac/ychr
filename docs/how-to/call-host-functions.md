@@ -16,7 +16,7 @@ X + Y -> host:'+'(X, Y).
 
 For the built-in primitives (arithmetic, comparisons, type predicates,
 term meta, I/O, `'$call'`), see [`prelude.md`](../reference/prelude.md),
-`libraries/prelude.chr`, and `src/YCHR/Runtime/`.
+`libraries/prelude.chr`, and `src/YCHR/Internal/Runtime/`.
 
 ## Registering your own host functions
 

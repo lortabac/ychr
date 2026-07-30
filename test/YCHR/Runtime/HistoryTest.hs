@@ -7,15 +7,15 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
-import YCHR.Runtime.History
-import YCHR.Runtime.Monad (Chr, initSessionEnv, runChr)
-import YCHR.Runtime.Types (SuspensionId (..))
-import YCHR.VM (RuleId (..))
+import YCHR.Internal.Runtime.History
+import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Types (SuspensionId (..))
+import YCHR.Internal.VM (RuleId (..))
 
 tests :: TestTree
 tests =
   testGroup
-    "YCHR.Runtime.History"
+    "YCHR.Internal.Runtime.History"
     [ emptyTests,
       addTests,
       distinctionTests,

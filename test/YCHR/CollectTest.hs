@@ -6,11 +6,11 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
-import YCHR.Collect
-import YCHR.Collected qualified as C
-import YCHR.Diagnostic (Diagnostic (..), noDiag)
-import YCHR.PExpr (PExpr (Atom))
-import YCHR.Parsed
+import YCHR.Internal.Collect
+import YCHR.Internal.Collected qualified as C
+import YCHR.Internal.Diagnostic (Diagnostic (..), noDiag)
+import YCHR.Internal.PExpr (PExpr (Atom))
+import YCHR.Internal.Parsed
 
 tests :: TestTree
 tests =

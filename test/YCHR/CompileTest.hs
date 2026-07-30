@@ -1,8 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Pure compilation tests: assertions about the VM code emitted by
--- 'YCHR.Compile.compile' for representative CHR programs. These tests
--- inspect the generated 'YCHR.VM.Program' AST directly without running
+-- 'YCHR.Internal.Compile.compile' for representative CHR programs. These tests
+-- inspect the generated 'YCHR.Internal.VM.Program' AST directly without running
 -- it through the interpreter.
 module YCHR.CompileTest (tests) where
 
@@ -10,13 +10,13 @@ import Data.Maybe (isJust, isNothing)
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import YCHR.Internal.VM qualified as VM
 import YCHR.Run (CompiledProgram (..), compileModules)
-import YCHR.VM qualified as VM
 
 tests :: TestTree
 tests =
   testGroup
-    "YCHR.Compile"
+    "YCHR.Internal.Compile"
     [ indexConditionPushdownTests,
       passiveOccurrencesTests
     ]

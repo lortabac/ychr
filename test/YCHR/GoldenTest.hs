@@ -15,9 +15,11 @@ import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath (dropExtension, takeExtension, (<.>), (</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Display (Display (..))
-import YCHR.Meta (metaHostCallRegistry)
-import YCHR.Pretty (prettyBindings)
+import YCHR.Internal.Display (Display (..))
+import YCHR.Internal.Meta (metaHostCallRegistry)
+import YCHR.Internal.Pretty (prettyBindings)
+import YCHR.Internal.Runtime.Interpreter (baseHostCallRegistry)
+import YCHR.Internal.TypeCheck (typeCheckProgram)
 import YCHR.Run
   ( CompiledProgram (..),
     Error,
@@ -26,8 +28,6 @@ import YCHR.Run
     prepareGoal,
     runPreparedGoal,
   )
-import YCHR.Runtime.Interpreter (baseHostCallRegistry)
-import YCHR.TypeCheck (typeCheckProgram)
 
 -- | Test directories whose @.chr@ programs or goals deliberately
 -- reference bare atoms that the renamer cannot resolve — typically

@@ -9,14 +9,17 @@ import System.Directory (createDirectoryIfMissing)
 import System.Exit (exitFailure)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hPutStr, stderr)
-import YCHR.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
-import YCHR.Backend.SchemeDriver (generateDriver)
-import YCHR.Display (displayMsg)
-import YCHR.Meta (metaHostCallRegistry)
-import YCHR.Parser (parseConstraintWith)
-import YCHR.Pretty (prettyBindings)
-import YCHR.Rename (renameQueryArgs)
-import YCHR.Repl qualified as Repl
+import YCHR.Internal.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
+import YCHR.Internal.Backend.SchemeDriver (generateDriver)
+import YCHR.Internal.Display (displayMsg)
+import YCHR.Internal.Meta (metaHostCallRegistry)
+import YCHR.Internal.Parser (parseConstraintWith)
+import YCHR.Internal.Pretty (prettyBindings)
+import YCHR.Internal.Rename (renameQueryArgs)
+import YCHR.Internal.Repl qualified as Repl
+import YCHR.Internal.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
+import YCHR.Internal.TypeCheck (typeCheckProgram)
+import YCHR.Internal.VM.SExpr (VMProgram (..), serialize)
 import YCHR.Run
   ( CompiledProgram (..),
     Error (..),
@@ -27,10 +30,7 @@ import YCHR.Run
     resolveQueryTellOrThrow,
     runPreparedGoal,
   )
-import YCHR.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
-import YCHR.TypeCheck (typeCheckProgram)
 import YCHR.Types (Constraint (..))
-import YCHR.VM.SExpr (VMProgram (..), serialize)
 
 -- ---------------------------------------------------------------------------
 -- Command-line options

@@ -29,7 +29,7 @@
 -- >   bindings <- runDSL [orderModule] (term "leq" [var "A", var "B"])
 -- >   print bindings
 --
--- The DSL is a thin layer over 'YCHR.Parsed.Module': every combinator is a
+-- The DSL is a thin layer over 'YCHR.Internal.Parsed.Module': every combinator is a
 -- pure function that builds AST nodes the parser would otherwise produce
 -- from @.chr@ text. It does not validate the program — undeclared
 -- constraints, ill-typed bodies, etc. are caught downstream by the
@@ -131,15 +131,15 @@ import Control.Exception (throwIO)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Text (Text)
-import YCHR.Meta (metaHostCallRegistry)
-import YCHR.Parsed
+import YCHR.Internal.Meta (metaHostCallRegistry)
+import YCHR.Internal.Parsed
+import YCHR.Internal.Runtime.Registry (HostCallRegistry, baseHostCallRegistry)
 import YCHR.Run
   ( CompiledProgram,
     Warning,
     compileParsedModules,
     runProgramWithGoalDSL,
   )
-import YCHR.Runtime.Registry (HostCallRegistry, baseHostCallRegistry)
 
 -- ---------------------------------------------------------------------------
 -- Modules

@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Unit tests for the function exhaustiveness checker
--- ('YCHR.Exhaustiveness'). Each test drives the real compilation
+-- ('YCHR.Internal.Exhaustiveness'). Each test drives the real compilation
 -- pipeline on a small program and inspects the exhaustiveness warnings
 -- it returns, so the witness and function name are pinned precisely
 -- (the golden harness only asserts a warning's presence or absence).
@@ -11,11 +11,11 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
-import YCHR.Compile.Pipeline (Error, Warning (..), compileModules)
-import YCHR.Diagnostic (Diagnostic (..))
-import YCHR.Exhaustiveness (ExhaustivenessWarning (..))
-import YCHR.Parsed (AnnP (..))
-import YCHR.Pretty (prettyTermSrc)
+import YCHR.Internal.Compile.Pipeline (Error, Warning (..), compileModules)
+import YCHR.Internal.Diagnostic (Diagnostic (..))
+import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning (..))
+import YCHR.Internal.Parsed (AnnP (..))
+import YCHR.Internal.Pretty (prettyTermSrc)
 
 -- | Compile a single-module program and return the exhaustiveness
 -- warnings (function display name + rendered witness call).

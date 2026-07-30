@@ -3,12 +3,12 @@
 
 -- | Top-level orchestration: compile a program, then run goals or
 -- multi-goal queries against it. The CHR session machinery lives in
--- "YCHR.Runtime.Session"; the compilation pipeline lives in
--- "YCHR.Compile.Pipeline". This module ties the two together and
+-- "YCHR.Internal.Runtime.Session"; the compilation pipeline lives in
+-- "YCHR.Internal.Compile.Pipeline". This module ties the two together and
 -- adds the query-time goal evaluator used by 'runProgramWithQuery'
--- and the live REPL session in "YCHR.Repl".
+-- and the live REPL session in "YCHR.Internal.Repl".
 module YCHR.Run
-  ( -- * Compilation (re-exported from "YCHR.Compile.Pipeline")
+  ( -- * Compilation (re-exported from "YCHR.Internal.Compile.Pipeline")
     Error (..),
     GoalRejection (..),
     Warning (..),
@@ -19,7 +19,7 @@ module YCHR.Run
     compileFiles,
     compileParsedModules,
 
-    -- * CHR session (re-exported from "YCHR.Runtime.Session")
+    -- * CHR session (re-exported from "YCHR.Internal.Runtime.Session")
     Chr,
     withCHR,
     withCHRExtraTraced,
@@ -67,13 +67,13 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import YCHR.Compile
+import YCHR.Internal.Compile
   ( compileFunctionDef,
     funcProcName,
     genCallFunDispatches,
     vmName,
   )
-import YCHR.Compile.Pipeline
+import YCHR.Internal.Compile.Pipeline
   ( CompiledProgram (..),
     Error (..),
     ExportResolution (..),
@@ -83,19 +83,19 @@ import YCHR.Compile.Pipeline
     compileModules,
     compileParsedModules,
   )
-import YCHR.Desugar (desugarQueryGoals, liftQueryLambdas)
-import YCHR.Desugared qualified as D
-import YCHR.Diagnostic (Diagnostic)
-import YCHR.Meta (valueToTerm)
-import YCHR.PExpr (PExpr (Atom))
-import YCHR.Parsed (AnnP (..), SourceLoc (..))
-import YCHR.Parser (ParseValidationError (..), parseConstraintWith, parseQueryWith)
-import YCHR.Pretty (prettyPExprSrc, prettyTerm)
-import YCHR.Rename (renameQueryArgs, renameQueryGoals)
-import YCHR.Resolve (ResolveError, termToExpr)
-import YCHR.Resolved qualified as R
-import YCHR.Runtime.Error (RuntimeErrorThrown (..))
-import YCHR.Runtime.Interpreter
+import YCHR.Internal.Desugar (desugarQueryGoals, liftQueryLambdas)
+import YCHR.Internal.Desugared qualified as D
+import YCHR.Internal.Diagnostic (Diagnostic)
+import YCHR.Internal.Meta (valueToTerm)
+import YCHR.Internal.PExpr (PExpr (Atom))
+import YCHR.Internal.Parsed (AnnP (..), SourceLoc (..))
+import YCHR.Internal.Parser (ParseValidationError (..), parseConstraintWith, parseQueryWith)
+import YCHR.Internal.Pretty (prettyPExprSrc, prettyTerm)
+import YCHR.Internal.Rename (renameQueryArgs, renameQueryGoals)
+import YCHR.Internal.Resolve (ResolveError, termToExpr)
+import YCHR.Internal.Resolved qualified as R
+import YCHR.Internal.Runtime.Error (RuntimeErrorThrown (..))
+import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
     HostCallRegistry,
     callProc,
@@ -106,9 +106,9 @@ import YCHR.Runtime.Interpreter
     snapshotValues,
     suspensionView,
   )
-import YCHR.Runtime.Monad (Chr, SessionEnv (..))
-import YCHR.Runtime.Reactivation (drainQueue, enqueue)
-import YCHR.Runtime.Session
+import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..))
+import YCHR.Internal.Runtime.Reactivation (drainQueue, enqueue)
+import YCHR.Internal.Runtime.Session
   ( tellConstraint,
     toSessionInput,
     withCHR,
@@ -116,14 +116,14 @@ import YCHR.Runtime.Session
     withCHRExtraTraced,
     withTraceHandler,
   )
-import YCHR.Runtime.Store (aliveConstraint)
-import YCHR.Runtime.Trace (TraceEvent (..))
-import YCHR.Runtime.Types (CallVal (..), Value (..), VarId)
-import YCHR.Runtime.Var (deref, equal, getVarId, newVar, unify)
-import YCHR.TypeCheck (typeCheckGoals)
+import YCHR.Internal.Runtime.Store (aliveConstraint)
+import YCHR.Internal.Runtime.Trace (TraceEvent (..))
+import YCHR.Internal.Runtime.Types (CallVal (..), Value (..), VarId)
+import YCHR.Internal.Runtime.Var (deref, equal, getVarId, newVar, unify)
+import YCHR.Internal.TypeCheck (typeCheckGoals)
+import YCHR.Internal.VM (Name (..), Procedure (..))
 import YCHR.Types (Constraint (..), ConstraintType, Term (..))
 import YCHR.Types qualified as Types
-import YCHR.VM (Name (..), Procedure (..))
 
 -- ---------------------------------------------------------------------------
 -- Single-goal API
@@ -463,7 +463,7 @@ termToValue (CompoundTerm (Types.Qualified "prelude" "false") []) = pure (VBool 
 -- 0-arity ctors collapse to atoms at the runtime layer. Qualified
 -- 0-arity uses the @vmName@-mangled @m__n@ form; unqualified 0-arity
 -- (user-quoted atoms, undeclared bare names) keeps the raw name.
--- See 'YCHR.Compile.compileTerm' for the rationale.
+-- See 'YCHR.Internal.Compile.compileTerm' for the rationale.
 termToValue (CompoundTerm name@(Types.Qualified _ _) []) =
   pure (VAtom (vmName name).unName)
 termToValue (CompoundTerm (Types.Unqualified n) []) = pure (VAtom n)

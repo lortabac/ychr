@@ -9,7 +9,10 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Display (displayMsg)
+import YCHR.Internal.Display (displayMsg)
+import YCHR.Internal.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
+import YCHR.Internal.Runtime.Store (getStoreSnapshot, isSuspAlive)
+import YCHR.Internal.VM qualified as VM
 import YCHR.Run
   ( Chr,
     CompiledProgram (..),
@@ -27,8 +30,6 @@ import YCHR.Run
     toSessionInput,
     withCHR,
   )
-import YCHR.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
-import YCHR.Runtime.Store (getStoreSnapshot, isSuspAlive)
 import YCHR.Types
   ( Constraint (..),
     Identifier (..),
@@ -38,7 +39,6 @@ import YCHR.Types
     Term (..),
     lookupSymbol,
   )
-import YCHR.VM qualified as VM
 
 tests :: TestTree
 tests =
