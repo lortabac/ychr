@@ -35,6 +35,7 @@ module YCHR.Internal.Compile.Passive
 where
 
 import Data.List (nub)
+import Data.List qualified as List
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -148,7 +149,7 @@ headVarsOf hcs = Set.fromList [v | hc <- hcs, HeadVar v <- hc.args]
 -- equating two head variables union classes; all others are ignored here
 -- (they are rejected separately by 'allGuardsHeadEq').
 buildClasses :: Set Text -> [D.Guard] -> ClassMap
-buildClasses headVars guards = foldl' union (Map.fromSet id headVars) headEqns
+buildClasses headVars guards = List.foldl' union (Map.fromSet id headVars) headEqns
   where
     headEqns =
       [ (a, b)

@@ -2,5 +2,10 @@ packages: .
 
 tests: True
 
+-- The 'examples' flag is off by default so that 'cabal install ychr' puts
+-- only the 'ychr' compiler on a user's PATH. Development builds turn it on:
+-- 'make test' runs the stlc-typechecker example through 'test/stlc/'.
+-- This file is not part of the sdist, so it does not affect consumers.
 package ychr
   ghc-options: -Werror
+  flags: +examples

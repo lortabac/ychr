@@ -1,0 +1,26 @@
+:- module(negation, [t/2, n/2, type(tags/0), type(outcome/0)]).
+:- use_module(prelude).
+:- chr_constraint t/2.
+:- chr_type tags ---> lit_true ; lit_false ; neq_ints ; eq_ints ; not_unifiable ; guard_neg.
+:- chr_type outcome ---> fired ; not_fired.
+
+% `not/1` is the prelude's boolean negation. YCHR has no `\=` or `\==`
+% operator, so structural inequality is written as an explicit negation.
+t(lit_true, R)      <=> R is not(true).
+t(lit_false, R)     <=> R is not(false).
+t(neq_ints, R)      <=> R is not(1 == 2).
+t(eq_ints, R)       <=> R is not(2 == 2).
+t(not_unifiable, R) <=> R is not(unifiable(1, 2)).
+
+% Negation is usable in guard position, which is the case that
+% motivates having it at all.
+t(guard_neg, R)     <=> not(1 == 2) | R = fired.
+t(guard_neg, R)     <=> R = not_fired.
+
+% `n/2` takes the boolean from the *goal*, not from a literal inside the
+% rule. That exercises a different path: the goal argument has to reach
+% the runtime as a real boolean. On the Scheme backend it travels through
+% the generated driver, which has to agree with the Haskell query
+% evaluator about how `true`/`false` are represented.
+:- chr_constraint n/2.
+n(X, R) <=> R is not(X).

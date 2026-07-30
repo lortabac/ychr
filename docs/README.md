@@ -8,8 +8,10 @@ The documentation is organized into four categories, following the
 - **Reference** — information-oriented, dry facts.
 - **Explanation** — understanding-oriented, conceptual.
 
-Many pages are currently stubs. They lay out the structure; content will
-be filled in incrementally.
+The tutorials and the reference section are complete. A few how-to guides
+(the REPL, adding types, organizing modules) and two explanation pages
+(design rationale, operational semantics) are still outlines; they lay out
+the structure and are being filled in incrementally.
 
 ## Conventions
 

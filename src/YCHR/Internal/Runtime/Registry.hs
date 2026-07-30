@@ -66,6 +66,7 @@ baseHostCallRegistry =
       (Name "=<", numCmp (<=) (<=)),
       (Name ">=", numCmp (>=) (>=)),
       (Name "==", valEq),
+      (Name "not", notBool),
       (Name "float", typePred isFloat),
       (Name "int_to_float", toFloatFn),
       (Name "float_to_int", toIntFn),
@@ -136,6 +137,15 @@ baseHostCallRegistry =
       args ->
         runtimeErrorS $
           "== host call: expected 2 arguments, got " ++ show (length args)
+    notBool = HostCallFn $ \case
+      [v] -> do
+        v' <- deref v
+        case v' of
+          VBool b -> pure (VBool (not b))
+          _ -> runtimeErrorS "not: expected a boolean argument"
+      args ->
+        runtimeErrorS $
+          "not host call: expected 1 argument, got " ++ show (length args)
     stringConcat = HostCallFn $ \case
       [VText a, VText b] -> pure (VText (a <> b))
       _ -> runtimeErrorS "string_concat: expected 2 Text arguments"

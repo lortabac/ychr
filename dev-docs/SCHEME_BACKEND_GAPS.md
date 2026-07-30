@@ -17,6 +17,59 @@ runtime in `scheme/ychr/`. Goals are run through `guile3.0 --r6rs` per
 |-------------------------|--------|
 | `read_term_from_string` | Stubbed in `runtime.sls` as `(error "%read-term-from-string" "not implemented")`. The whole `read_term_test` directory is in `HASKELL_ONLY`. |
 | `write_store_to_list`   | No Scheme-side implementation; `write_store_to_list_test` is in `HASKELL_ONLY` (parallels the unimplemented `print_store`). |
+| `write_term_to_string`  | No Scheme-side implementation and no `hostCallMap` entry, so a call lowers to a bare verbatim identifier and fails as an unbound variable at load time. No golden test covers it, so it is in neither `HASKELL_ONLY` nor this file's test lists. |
+
+
+## `deep-eval` host-call lookup ignores arity
+
+Haskell's `HostCallRegistry` is keyed by name alone, so
+`deepEvalValue`'s fallback (`src/YCHR/Internal/Runtime/Interpreter.hs`,
+`Map.lookup key.functor`) discards the arity. The Scheme table
+(`*prelude-host-calls*`) keys by `(name, arity)`. Consequence, for an
+arity that no host primitive provides:
+
+    X = '-'(1), R is X.
+
+- **Haskell**: reaches the 2-ary `-` primitive and reports
+  `arithmetic host call: expected 2 numeric arguments of same type, got 1`.
+- **Scheme**: no `(- . 1)` key, so it reports the intended
+  `is: functor is not evaluable: -/1`.
+
+Scheme's message is the better one (it matches SWI Prolog's
+`type_error(evaluable, F/N)`). Fixing Haskell means keying the registry
+by `(name, arity)`, which changes a public type
+(`YCHR.Convert.HostCallRegistry`) and so is deferred past 0.1.
+
+
+## Prelude host calls missing from `*prelude-host-calls*`
+
+The table's comment says to keep it in sync with `baseHostCallRegistry`.
+`write` and `writeln` are absent, so deep-eval diverges. The fallback is
+reached only by `R is X` with `X` bound to a compound — note that `=`
+does not evaluate, and that wrapping in `term/1` would keep the outer
+functor unevaluable:
+
+    X = writeln("x"), R is X.
+
+- **Haskell**: prints `x`, then `R = '()'`.
+- **Scheme**: `is: functor is not evaluable: writeln/1`.
+
+Same for `write/1`. `__chr_error` is also absent, but `__` is reserved by
+the lexer so no source program can name it.
+
+`print` and `read_term_from_string` live in `metaHostCallRegistry` rather
+than `baseHostCallRegistry`, so their absence is by design — but the
+comment names only `baseHostCallRegistry` and so understates what
+Haskell's `is` can reach.
+
+
+## Dead `host__` bridge in the generated driver
+
+`SchemeDriver.hostBridgeName` emits `host__<f>` and claims to mirror
+`Scheme.compileHostCall`, which actually emits the `hostCallMap` name
+(`%irem`, `equal?/chr`, …). No `host__*` procedure exists anywhere in
+`scheme/`, so a goal containing a direct `host:` call generates an
+unbound identifier. No golden test passes a bare `host:` call in a goal.
 
 
 ## Atom pretty-printing divergences

@@ -59,7 +59,7 @@ what is planned.
 
 - [x] Prolog-style queries
 - [x] Live sessions
-- [ ] Type and info queries
+- [x] Info queries (`:info`, which reports the declared type)
 - [x] Tracing
 
 ## Testing

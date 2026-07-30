@@ -64,6 +64,7 @@ import Data.IORef
     writeIORef,
   )
 import Data.IntMap.Strict qualified as IntMap
+import Data.List qualified as List
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
@@ -425,7 +426,7 @@ bindParams pname params args
           ++ " params, "
           ++ show (length args)
           ++ " args"
-  | otherwise = Right (foldl' step emptyEnv (zip params args))
+  | otherwise = Right (List.foldl' step emptyEnv (zip params args))
   where
     step e (p, CVal v) = insertVal p v e
     step e (p, CId s) = insertId p s e
@@ -798,8 +799,16 @@ evalValExprDeep expr = evalValExpr expr
 -- dereferenced once and then re-walked, so a chain of bindings
 -- ending in a compound triggers full evaluation. Functors that do
 -- not name an evaluable declaration (constructors, undeclared
--- atoms, arity mismatches with the host-call registry) raise a
--- runtime error — mirroring SWI Prolog's @type_error(evaluable, F\/N)@.
+-- atoms) raise a runtime error — mirroring SWI Prolog's
+-- @type_error(evaluable, F\/N)@.
+--
+-- Caveat: the host-call fallback below looks up @key.functor@ only,
+-- discarding the arity, because 'HostCallRegistry' is keyed by name
+-- alone. So @X = '-'(1), R is X@ reports the arity mismatch from
+-- inside the @-@ primitive rather than as
+-- @is: functor is not evaluable: -\/1@. The Scheme runtime keys its
+-- equivalent table by @(name, arity)@ and so reports the latter — a
+-- known divergence, tracked in @dev-docs\/SCHEME_BACKEND_GAPS.md@.
 --
 -- 'MakeTerm' callers do /not/ funnel through this walker — the
 -- @term/1@ quoting form must continue to produce the symbolic

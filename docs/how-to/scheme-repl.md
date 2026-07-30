@@ -8,6 +8,15 @@ The umbrella `(ychr)` library bundles the runtime plus the helpers
 `open-session` and `tell`, so a typical session is three user lines
 after the imports.
 
+> **You need a source checkout.** Generated Scheme imports the YCHR
+> Scheme runtime — `(ychr runtime)`, `(ychr pretty)`, and friends — which
+> lives in [`scheme/`](../../scheme/) in the repository. That runtime is
+> **not** part of the `ychr` package on Hackage, so `cabal install ychr`
+> alone is not enough to *run* what `-t scheme` produces: you also need
+> the repository on your Scheme library path (the `PROJECT_ROOT/scheme`
+> entry in step 2). Compiling to Scheme from an installed `ychr` works;
+> only executing the result needs the checkout.
+
 ## 1. Compile the program
 
 Pass `-n NAME` to give the generated library a friendly name (the

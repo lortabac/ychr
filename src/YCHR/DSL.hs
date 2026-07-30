@@ -35,6 +35,35 @@
 -- constraints, ill-typed bodies, etc. are caught downstream by the
 -- compilation pipeline ('compileParsedModules') exactly as for parsed
 -- input.
+--
+-- = Two things to know before you start
+--
+-- __Constraint positions are partial.__ '<=>', '==>', '\\\\' and 'runDSL'
+-- expect each rule-head and goal 'Term' to be a compound or an atom — the
+-- shapes 'term', 'qterm' and 'atom' build. Handing them a bare 'var' or
+-- 'int' throws an 'error' rather than returning a diagnostic, because
+-- there is no failure channel in a pure combinator. (The equivalent
+-- mistake through "YCHR.Convert" is reported as a @MalformedGoal@
+-- 'YCHR.Convert.ConvertError' instead.) Malformed /programs/ are still
+-- reported properly by the pipeline; it is only malformed /Haskell/ that
+-- fails this way.
+--
+-- __This module defines an orphan @instance Num Term@__ so that numeric
+-- literals and '+' \/ '-' \/ '*' work in term position. It changes what
+-- arithmetic on 'Term' means anywhere both this module and 'Term' are in
+-- scope: @1 + 2 :: Term@ builds the /symbolic/ compound @+(1, 2)@, it does
+-- not evaluate to @3@. That is the intent — a DSL body is CHR source, not
+-- Haskell arithmetic — but it is worth knowing before importing this
+-- module alongside "YCHR".
+--
+-- Negative literals work: @-1 :: Term@ is @'IntTerm' (-1)@, because GHC
+-- routes them through 'negate', which folds them into the literal. But
+-- 'negate' on a /non-literal/, 'abs', and 'signum' build @-(x)@,
+-- @abs(x)@, and @sign(x)@ compounds, and the prelude declares none of
+-- those — so they only work if your own module declares @-\/1@,
+-- @abs\/1@, or @sign\/1@. Prefer '.-' and friends. There is also no
+-- 'Fractional' instance, so a fractional literal needs the explicit
+-- 'float' constructor.
 module YCHR.DSL
   ( -- * Modules
     Module,
@@ -603,6 +632,19 @@ instance Num Term where
   l + r = CompoundTerm (Unqualified "+") [l, r]
   l - r = CompoundTerm (Unqualified "-") [l, r]
   l * r = CompoundTerm (Unqualified "*") [l, r]
+
+  -- GHC desugars a negative literal through 'negate', so @-1 :: Term@
+  -- arrives here as @negate (IntTerm 1)@. Fold it into the literal: the
+  -- prelude has no unary minus, so the @-(1)@ compound these used to
+  -- build reached the runtime as a one-argument call to @-@ and died with
+  -- an arity error at tell time.
+  negate (IntTerm n) = IntTerm (negate n)
+  negate (FloatTerm x) = FloatTerm (negate x)
+  -- Non-literals keep the compound form. The functor is /unqualified/, so
+  -- it resolves against the program's own functions — a module that
+  -- declares @-\/1@, @abs\/1@, or @sign\/1@ gets a working call. Nothing
+  -- in the prelude provides them, so without such a declaration these
+  -- fail at tell time; prefer '.-' and friends, which are explicit.
   negate x = CompoundTerm (Unqualified "-") [x]
   abs x = CompoundTerm (Unqualified "abs") [x]
   signum x = CompoundTerm (Unqualified "sign") [x]

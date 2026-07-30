@@ -21,7 +21,7 @@
     ;; From (ychr reactivation)
     enqueue! drain-queue!
     ;; Helpers for generated code
-    %unify %unifiable? %nonvar? %chr-error %print %writeln %ground?
+    %unify %unifiable? %nonvar? %not %chr-error %print %writeln %ground?
     %term-variables %compound-to-list %list-to-compound
     %read-term-from-string
     %int-to-float %float-to-int
@@ -141,6 +141,7 @@
       (h '=< 2 (lambda (s a b) (<= a b)))
       (h '>= 2 (lambda (s a b) (>= a b)))
       (h '== 2 (lambda (s a b) (equal?/chr a b)))
+      (h 'not 1 (lambda (s v) (%not v)))
       ;; Numeric conversions
       (h 'int_to_float 1 (lambda (s n) (%int-to-float n)))
       (h 'float_to_int 1 (lambda (s n) (%float-to-int n)))
@@ -185,6 +186,20 @@
 
   ;;; Type predicates
   (define (%nonvar? v) (not (var? v)))
+
+  ;;; Boolean negation.
+  ;;;
+  ;;; Rejects non-booleans rather than following Scheme's "everything but
+  ;;; #f is true" rule, so that it agrees with the Haskell runtime's
+  ;;; `not` host call on untyped (`any`) arguments. Generated code reaches
+  ;;; this through `hostCallMap` in
+  ;;; `src/YCHR/Internal/Backend/Scheme.hs`; `deep-eval-value` reaches it
+  ;;; through `*prelude-host-calls*`. Both must go through here, or the
+  ;;; two paths disagree.
+  (define (%not v)
+    (if (boolean? v)
+        (not v)
+        (error '%not "not: expected a boolean argument" v)))
 
   ;;; Error
   (define (%chr-error . args) (apply error "CHR runtime error" args))

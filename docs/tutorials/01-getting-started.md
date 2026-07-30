@@ -16,7 +16,7 @@ the rule fire.
 YCHR needs a recent GHC and Cabal. Check what you have:
 
 ```sh
-ghc --version    # 9.12 or newer
+ghc --version    # 9.6 or newer
 cabal --version  # 3.4 or newer
 ```
 

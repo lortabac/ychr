@@ -19,6 +19,11 @@ module YCHR.Internal.Compile.Occurrences
 where
 
 import Control.Monad.Trans.Writer.CPS (Writer, tell)
+-- 'foldl'' is imported qualified because the Prelude only re-exports it from
+-- base 4.20 (GHC 9.10) and this package supports GHC 9.6+. An unqualified
+-- 'import Data.List (foldl'')' would be flagged redundant on newer compilers,
+-- since this module needs nothing else from "Data.List".
+import Data.List qualified as List
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Traversable (for)
@@ -55,7 +60,7 @@ collectOccurrences symTab prog = do
       displayNames = map (uncurry ruleDisplayName) indexed
   allOccs <- fmap concat (traverse (ruleOccurrences symTab) indexed)
   let grouped =
-        foldl'
+        List.foldl'
           ( \m occ ->
               occMapAppend (Identifier occ.conName occ.conArity) occ m
           )

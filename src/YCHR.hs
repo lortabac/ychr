@@ -36,7 +36,11 @@
 --   * "YCHR.DSL" — build CHR programs in Haskell (rules, functions, type
 --     declarations) without @.chr@ source, using a combinator vocabulary
 --     with operators. Import it directly when you construct programs
---     rather than load them.
+--     rather than load them. Its @Module@ values are queried with
+--     'YCHR.Convert.runQuery' \/ 'YCHR.Convert.runQueryWith' \/
+--     'YCHR.Convert.runQueryWithHostCallRegistry', which live in
+--     "YCHR.Convert" alongside the DSL rather than here — this umbrella
+--     covers the @.chr@-source path only.
 --
 --   * "YCHR.Convert.Generic" (GHC only) — @genericToTerm@ /
 --     @genericFromTerm@ for @deriving 'GHC.Generics.Generic'@ types. It is
@@ -76,11 +80,10 @@ module YCHR
     CompiledProgram,
     Error (..),
     Warning (..),
+    displayError,
+    displayWarning,
 
     -- * Typed queries
-    runQuery,
-    runQueryWith,
-    runQueryWithHostCallRegistry,
     runQueryCompiled,
     runQueryCompiledWith,
     runQueryCompiledWithHostCallRegistry,
@@ -124,6 +127,12 @@ module YCHR
     Chr,
     Value (..),
 
+    -- ** Inspecting runtime values
+    -- $runtimeValues
+    deref,
+    equal,
+    newVar,
+
     -- * Core term types
     Term (..),
     Name (..),
@@ -158,12 +167,9 @@ import YCHR.Convert
     hostFunctions,
     lookupBinding,
     matchCompound,
-    runQuery,
     runQueryCompiled,
     runQueryCompiledWith,
     runQueryCompiledWithHostCallRegistry,
-    runQueryWith,
-    runQueryWithHostCallRegistry,
     withDefaultHostFunctions,
   )
 import YCHR.Run
@@ -172,6 +178,39 @@ import YCHR.Run
     Warning (..),
     compileFiles,
     compileModules,
+    deref,
+    displayError,
+    displayWarning,
+    equal,
+    newVar,
     runProgramWithGoal,
   )
 import YCHR.Types (Name (..), Term (..))
+
+-- $runtimeValues
+-- A 'hostFnValues' handler receives raw 'Value's, which may be logical
+-- variables that are bound to something else. Inspect them with these,
+-- all of which run in 'Chr':
+--
+--   * 'deref' — follow a variable chain to the value it is bound to (or to
+--     the unbound variable at the end). Call this before pattern-matching
+--     on a 'Value' constructor, or a bound variable will look like a
+--     'VVar' rather than its binding.
+--
+--   * 'equal' — CHR's @==@ (\"ask\") semantics: structural equality that
+--     never binds, and where two distinct unbound variables compare
+--     unequal. This is the correct comparison for 'Value'; there is
+--     deliberately no 'Eq' instance, since a derived one would compare
+--     variables by reference and silently disagree with the language.
+--
+--   * 'newVar' — allocate a fresh unbound logical variable.
+--
+-- The @hostFn1@ \/ @hostFn2@ \/ … adapters dereference for you, so reach
+-- for these only with the raw 'hostFnValues' escape hatch.
+--
+-- Binding is deliberately not offered here. @unify@ (in "YCHR.Run")
+-- returns the constraints that observe the variables it bound, and the
+-- caller must hand them to the reactivation queue or those constraints
+-- silently never wake up. Returning a value from your handler and letting
+-- the generated code do the unification is the safe path; reach for
+-- "YCHR.Run" only if you are driving a session yourself.

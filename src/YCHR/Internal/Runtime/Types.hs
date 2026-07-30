@@ -39,12 +39,19 @@ data VarState
 -- this type.
 data Value
   = -- | A logical variable (possibly unbound, possibly bound).
+    -- 'YCHR.Run.deref' follows the chain to what it stands for.
     VVar !Var
-  | VInt !Integer
-  | VFloat !Double
-  | VAtom !Text
-  | VText !Text
-  | VBool !Bool
+  | -- | Arbitrary-precision integer.
+    VInt !Integer
+  | -- | Floating-point number.
+    VFloat !Double
+  | -- | Atom: a symbolic constant. Zero-arity compounds collapse to
+    -- this form at run time, unlike in the AST.
+    VAtom !Text
+  | -- | String.
+    VText !Text
+  | -- | Boolean. Guards and the prelude's comparisons produce these.
+    VBool !Bool
   | -- | Compound term: functor and arguments.
     VTerm !Text ![Value]
   | -- | Wildcard: unifies with anything without binding.

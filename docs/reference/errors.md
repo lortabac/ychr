@@ -84,6 +84,7 @@ internal error constructor to its code and human-readable message.
 | `YCHR-20015` | `UnknownModule` | A qualified reference `m:name` targets a module `m` that does not exist anywhere in the program. Check the module name, or declare/supply the module. |
 | `YCHR-20101` | `UndeclaredDataConstructor` *(warning)* | A symbol used in constructor position is not declared with `:- chr_type`. Declare it, or check the spelling. |
 | `YCHR-20102` | `DataConstructorArityMismatch` *(warning)* | A data constructor is used with a different arity than declared. |
+| `YCHR-20103` | `NonExhaustiveMatch` *(warning)* | A function's equations do not cover every constructor of an argument's algebraic type. Add an equation for the missing case, or a catch-all variable/wildcard pattern. Only reported for arguments whose type is known, so an untyped function is never flagged. |
 
 ### Desugar phase (`3xxxx`)
 

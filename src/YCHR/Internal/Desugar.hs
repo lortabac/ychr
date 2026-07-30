@@ -63,6 +63,7 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (mapAccumL)
+import Data.List qualified as List
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -341,7 +342,7 @@ decomposeCompound :: HnfState -> Text -> Name -> [Term] -> HnfState
 decomposeCompound HnfState {counter, seen, guards} parentVar cname cargs =
   let matchGuard = D.GuardMatch (R.VarExpr parentVar) cname (length cargs)
       st' = HnfState {counter, seen, guards = matchGuard : guards}
-   in foldl' (\s (i, arg) -> decomposeArg s parentVar i arg) st' (zip [0 ..] cargs)
+   in List.foldl' (\s (i, arg) -> decomposeArg s parentVar i arg) st' (zip [0 ..] cargs)
 
 -- | Decompose a single argument of a compound term.
 decomposeArg :: HnfState -> Text -> Int -> Term -> HnfState

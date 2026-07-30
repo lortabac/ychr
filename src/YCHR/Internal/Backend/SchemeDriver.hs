@@ -101,6 +101,15 @@ exprToScheme R.WildcardExpr = "*wildcard*"
 -- inner term stays as a data tree; mirror 'compileTerm' here.
 exprToScheme (R.CtorExpr (Types.Unqualified "term") [arg]) =
   termToScheme (R.exprToTerm arg)
+-- Native-bool fast path. The renamer canonicalizes source @true@ /
+-- @false@ to @prelude:true@ / @prelude:false@, and
+-- 'YCHR.Internal.Compile.compileExpr' turns those into @BoolLit@ so the
+-- runtime sees a real boolean. Without the same case here a goal-side
+-- @true@ reaches the runtime as the /atom/ @prelude__true@, which
+-- silently fails every boolean test (@boolean(X)@ answers @false@, and
+-- @not(X)@ raises).
+exprToScheme (R.CtorExpr (Types.Qualified "prelude" "true") []) = "#t"
+exprToScheme (R.CtorExpr (Types.Qualified "prelude" "false") []) = "#f"
 -- 0-arity ctors collapse to bare symbols at the runtime layer.
 -- Qualified uses the @vmName@-mangled @m__n@ form; unqualified keeps
 -- the raw name so unicode is preserved as data — mirrors the split in
@@ -155,6 +164,12 @@ hostBridgeName f = "host__" <> f
 termToScheme :: Term -> Text
 termToScheme (IntTerm n) = T.pack (show n)
 termToScheme (FloatTerm n) = printSExpr (SFloat n)
+-- Mirrors the native-bool fast path in
+-- 'YCHR.Internal.Compile.compileTerm', which maps the canonicalized
+-- @prelude:true@ \/ @prelude:false@ to a boolean literal even inside
+-- the @term\/1@ quoting form.
+termToScheme (CompoundTerm (Types.Qualified "prelude" "true") []) = "#t"
+termToScheme (CompoundTerm (Types.Qualified "prelude" "false") []) = "#f"
 termToScheme (CompoundTerm (Types.Unqualified s) []) = printSExpr (compileSymbol s)
 termToScheme (CompoundTerm name@(Types.Qualified _ _) []) =
   printSExpr (compileSymbol (vmName name).unName)

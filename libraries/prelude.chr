@@ -13,6 +13,7 @@
     fun '>='/2,
     fun '=<'/2,
     fun '=='/2,
+    fun not/1,
     fun max/2,
     fun min/2,
     fun var/1,
@@ -81,6 +82,7 @@
     ('mod'(int, int) -> int),
     ('rem'(int, int) -> int),
     ('=='(A, A) -> bool),
+    (not(bool) -> bool),
     (var(any) -> bool),
     (nonvar(any) -> bool),
     (integer(any) -> bool),
@@ -128,6 +130,10 @@ X >= Y -> host:'>='(X, Y).
 X =< Y -> host:'=<'(X, Y).
 
 X == Y -> host:'=='(X, Y).
+
+% Boolean negation. There is no `\=` / `\==` operator; write the
+% negation explicitly, e.g. `not(X == Y)` or `not(unifiable(X, Y))`.
+not(X) -> host:not(X).
 
 max(X, Y) | X >= Y -> X.
 max(_, Y) -> Y.

@@ -74,6 +74,23 @@ import YCHR.Internal.VM (Program, StackFrame)
 import YCHR.Types (SymbolTable)
 import YCHR.Types qualified as Types
 
+-- | Anything that can stop a program from compiling or running, tagged by
+-- the phase that rejected it.
+--
+-- 'compileModules' and 'compileFiles' /return/ this as a 'Left';
+-- everything downstream (the query entry points, 'YCHR.Convert', the
+-- 'YCHR.DSL' runners) throws it, since it is an 'Exception' instance. That
+-- is deliberate: a single type to catch regardless of which phase failed.
+--
+-- Render it with 'YCHR.Run.displayError', not 'show' — the derived 'Show'
+-- dumps the internal diagnostic representation, whereas 'displayError'
+-- produces the @file:line:col: YCHR-NNNNN@ form the @ychr@ CLI prints.
+--
+-- The constructors are exported so callers can tell /which/ phase failed,
+-- but their payloads are internal diagnostic types (from
+-- @YCHR.Internal.*@) with no compatibility guarantee. Treat this as a tag
+-- you may match on, plus a value you render — not a structure to
+-- destructure.
 data Error
   = ParseError FilePath ParseError
   | ParseValidationErrors [AnnP ParseValidationError]
@@ -131,6 +148,16 @@ data GoalRejection
 
 instance Exception Error
 
+-- | A non-fatal diagnostic. Compilation succeeded; something in the
+-- program is nonetheless suspicious — an undeclared data constructor, a
+-- function whose equations are not exhaustive.
+--
+-- Returned alongside the 'CompiledProgram' rather than thrown. The @ychr@
+-- CLI's @--Werror@ is simply "treat a non-empty list as failure"; an
+-- embedder decides for itself. Render with 'YCHR.Run.displayWarning'.
+--
+-- As with 'Error', the payloads are internal types; match on the
+-- constructor, render the value.
 data Warning
   = RenameWarnings [Diagnostic RenameWarning]
   | ExhaustivenessWarnings [Diagnostic ExhaustivenessWarning]
@@ -157,11 +184,31 @@ data CompiledProgram = CompiledProgram
     desugaredProgram :: D.Program
   }
 
+-- | What an unqualified name in a goal resolves to, given everything the
+-- program exports. 'AmbiguousExport' carries the competing module names so
+-- a diagnostic can list them; resolving it requires the caller to qualify.
 data ExportResolution
   = UniqueExport Types.QualifiedName
   | AmbiguousExport [Text]
   deriving (Show, Eq)
 
+-- | Compile CHR modules from in-memory source text.
+--
+-- Every module is compiled together as one program, so they may import
+-- each other in any order; the list is a set of inputs, not a sequence.
+-- The 'FilePath' of each pair is used only for diagnostics and need not
+-- exist on disk — pass a Template Haskell splice or a string literal to
+-- build a self-contained binary. Use 'compileFiles' to read from disk
+-- instead, or 'compileParsedModules' for programs built with "YCHR.DSL".
+--
+-- The 'Bool' is @includeStdlib@: pass 'True' to make the bundled
+-- libraries (@prelude@, @lists@, @strings@, @meta@) available for
+-- @:- use_module(library(…))@, which is what you almost always want —
+-- the prelude supplies arithmetic and comparison. 'False' compiles
+-- against nothing but the given modules; the CLI uses it so that a
+-- program's own diagnostics are not diluted by stdlib warnings.
+--
+-- Warnings accompany a successful compile; see 'Warning'.
 compileModules :: Bool -> [(FilePath, Text)] -> Either Error (CompiledProgram, [Warning])
 compileModules includeStdlib inputs = do
   -- Phase 1: lightweight first parse of each user file to collect the
@@ -330,6 +377,10 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
 addPreludeImport :: Module -> Module
 addPreludeImport m = m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
 
+-- | 'compileModules', reading each module's source from disk.
+--
+-- The 'Bool' is @includeStdlib@, with the same meaning as in
+-- 'compileModules'. All files are compiled together as one program.
 compileFiles :: Bool -> [FilePath] -> IO (Either Error (CompiledProgram, [Warning]))
 compileFiles includeStdlib paths = do
   contents <- mapM (\fp -> (fp,) <$> TIO.readFile fp) paths

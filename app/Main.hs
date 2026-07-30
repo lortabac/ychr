@@ -246,6 +246,7 @@ runCompile opts files = withCompiled False files $ \prog warnings -> do
       createDirectoryIfMissing True (takeDirectory outPath)
       TIO.writeFile outPath (generateScheme libName vmp)
       putStrLn outPath
+      schemeRuntimeNote
 
 runGenDriver :: GenDriverOpts -> [FilePath] -> IO ()
 runGenDriver opts files = withCompiled False files $ \prog warnings -> do
@@ -287,6 +288,7 @@ runGenDriver opts files = withCompiled False files $ \prog warnings -> do
   -- decision so a single run reports every warning before exiting.
   exitOnWerror opts.werror (warnings ++ goalWarnings)
   TIO.putStr (generateDriver (T.pack "program") qn exprs)
+  schemeRuntimeNote
 
 runCheck :: CheckOpts -> [FilePath] -> IO ()
 runCheck opts files = withCompiled False files $ \prog warnings -> do
@@ -297,6 +299,22 @@ runCheck opts files = withCompiled False files $ \prog warnings -> do
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
+
+-- | Point at the Scheme runtime after emitting Scheme.
+--
+-- Generated code imports @(ychr runtime)@ and friends, which live in
+-- @scheme\/@ in the YCHR source tree rather than in the installed
+-- package — so an installed @ychr@ can emit Scheme it cannot itself run.
+-- Written to stderr to keep stdout a clean list of generated paths (or,
+-- for @gen-driver@, the driver source).
+schemeRuntimeNote :: IO ()
+schemeRuntimeNote =
+  hPutStr stderr $
+    "Note: the generated code imports the YCHR Scheme runtime\n"
+      ++ "      ((ychr runtime) and friends). That runtime is not installed\n"
+      ++ "      with this program; it lives in scheme/ in the YCHR source\n"
+      ++ "      tree. Add that directory to your Scheme library path to run\n"
+      ++ "      the output. See docs/how-to/scheme-repl.md.\n"
 
 -- | Compile @files@ (or an empty program if @files@ is empty) and
 -- pass the resulting 'CompiledProgram' and warnings to the

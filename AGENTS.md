@@ -19,7 +19,8 @@ See @dev-docs/PROJECT.md
 
 After a task is completed:
 
-- Format the Haskell code base with `ormolu -i $(find src test -name '*.hs')`.
+- Format the Haskell code base with `make format` (ormolu over `src`,
+  `app`, `test`, `bench`, and `examples` — CI checks the same set).
 - Run the test suites with `make test`.
 - Ask a reviewer agent to review the changes.
 - Make sure the documentation and the implementation are in sync.

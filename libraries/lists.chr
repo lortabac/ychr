@@ -13,17 +13,30 @@
 ]).
 
 :- function
-    cons/2,
+    (cons(T, list(T)) -> list(T)),
+    (length(list(T)) -> int),
+    (member(T, list(T)) -> bool),
+    (append(list(T), list(T)) -> list(T)),
+    (maplist(fun(A) -> B end, list(A)) -> list(B)),
+    (foldl(fun(B, A) -> B end, B, list(A)) -> B),
+    (foldl_(fun(B, A) -> B end, list(A), B) -> B),
+    (sum_list(list(int)) -> int),
+    (product_list(list(int)) -> int).
+
+% head/1, tail/1 and nth/2 are deliberately left untyped.
+%
+% They are partial -- there is no sensible `head([])` -- and the
+% language currently offers no way to write the failing equation, since
+% raising a runtime error from source is not expressible. A `list(T)`
+% signature is what enables the exhaustiveness checker, so typing them
+% would make every module that merely imports this library emit
+% YCHR-20103, which is fatal under `--Werror`.
+%
+% Calling any of them on an empty list is a runtime error ("no matching
+% equation") either way; only the static check differs.
+:- function
     head/1,
     tail/1,
-    length/1,
-    member/2,
-    append/2,
-    maplist/2,
-    foldl/3,
-    foldl_/3,
-    sum_list/1,
-    product_list/1,
     nth/2.
 
 cons(X, Xs) -> [X|Xs].

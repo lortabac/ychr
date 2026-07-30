@@ -38,7 +38,13 @@ from the paper are not yet implemented. See the
 
 ## Install
 
-Requires GHC 9.12+ and Cabal 3.4+.
+Requires GHC 9.6+ and Cabal 3.4+.
+
+```sh
+cabal install ychr
+```
+
+To build from a checkout instead:
 
 ```sh
 make build
@@ -48,14 +54,59 @@ make install
 ## Quick start
 
 ```sh
-ychr repl file.chr           # interactive REPL (Prolog-style queries)
-ychr run -g 'constraint(args)' file # run a single constraint as the goal
-ychr check file.chr          # type-check only
-ychr compile --target=scheme -o out file.chr
+ychr repl file.chr                   # interactive REPL (Prolog-style queries)
+ychr run -g 'constraint(args)' file  # run a single constraint as the goal
+ychr check file.chr                  # type-check only
+ychr compile -t scheme -d out file.chr
 ```
 
 `make test` runs the full test suite (Haskell interpreter, Scheme
 backend, REPL, and type-checker tests).
+
+Compiling to Scheme emits code that imports the YCHR Scheme runtime
+(`(ychr runtime)` and friends). That runtime lives in [`scheme/`](scheme/)
+in this repository and is **not** shipped with the Hackage package, so
+`-t scheme` currently requires a source checkout — see the
+[Scheme REPL guide](docs/how-to/scheme-repl.md).
+
+## Using YCHR as a Haskell library
+
+YCHR is also an ordinary Haskell library: compile a `.chr` module from
+your own program, feed it Haskell values, and decode the answers back.
+
+```
+build-depends: ychr
+```
+
+```haskell
+{-# LANGUAGE OverloadedStrings #-}
+import YCHR
+
+main :: IO ()
+main = do
+  Right (cp, _warnings) <- compileFiles True ["Order.chr"]
+  r <- runQueryCompiled cp goal "R"
+  print (r :: Either ConvertError Int)
+  where
+    goal = CompoundTerm (Unqualified "compute") [VarTerm "R"]
+```
+
+A single `import YCHR` covers compiling, querying, and marshalling.
+Values cross the boundary through the `ToTerm` / `FromTerm` classes, and
+Haskell functions can be exposed to CHR programs as host calls.
+
+- [Embedding a CHR module](docs/how-to/embed-a-chr-module.md) — worked
+  example: a lambda-calculus type inferencer written in CHR, driven from
+  Haskell.
+- [Value conversion](docs/reference/convert.md) — `ToTerm` / `FromTerm`,
+  decoding, and compile-once/query-many.
+- [Host functions](docs/reference/host-functions.md) — calling Haskell
+  from CHR.
+- [Haskell DSL](docs/reference/dsl.md) — build programs as Haskell values
+  instead of parsing `.chr` source.
+
+Modules under `YCHR.Internal` are implementation details and are not
+covered by the package version policy.
 
 ## Documentation
 

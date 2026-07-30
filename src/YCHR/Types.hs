@@ -92,15 +92,24 @@ data QualifiedIdentifier = QualifiedIdentifier
 newtype SymbolTable = SymbolTable (Map Identifier ConstraintType)
   deriving (Show, Eq)
 
+-- | Build a 'SymbolTable' from identifier\/ID pairs. Later entries win on
+-- a duplicate 'Identifier', following 'Map.fromList'.
 mkSymbolTable :: [(Identifier, ConstraintType)] -> SymbolTable
 mkSymbolTable = SymbolTable . Map.fromList
 
+-- | Look up the 'ConstraintType' assigned to an identifier, or 'Nothing'
+-- if the constraint is not in the table.
 lookupSymbol :: Identifier -> SymbolTable -> Maybe ConstraintType
 lookupSymbol n (SymbolTable m) = Map.lookup n m
 
+-- | All entries, ordered by 'Identifier' (name, then arity) — /not/ by
+-- 'ConstraintType' index. Sort on the ID when index order matters.
 symbolTableToList :: SymbolTable -> [(Identifier, ConstraintType)]
 symbolTableToList (SymbolTable m) = Map.toList m
 
+-- | Number of distinct constraints in the table. Because IDs are
+-- 0-indexed and contiguous, this is also one past the largest
+-- 'ConstraintType' — the store's pre-allocation size.
 symbolTableSize :: SymbolTable -> Int
 symbolTableSize (SymbolTable m) = Map.size m
 
@@ -257,6 +266,16 @@ data BoundSig = BoundSig
 -- representation is asymmetric — zero-arity compounds become 'VAtom'
 -- for cheap allocation and comparison — but the AST keeps the
 -- compound form so pattern matching stays uniform.
+-- The 'Ord' instance carries no semantic meaning — it exists so that a
+-- 'Term' can key a 'Data.Map.Map' or inhabit a 'Data.Set.Set'. Structural
+-- CHR equality on /runtime/ values is 'YCHR.Run.equal', not this instance.
+--
+-- Caveat: it inherits 'Double''s NaN behaviour, so it is not a total
+-- order. A @'FloatTerm' nan@ (reachable from CHR — @R is 0.0 \/ 0.0@)
+-- compares unequal to itself, which breaks the 'Data.Map.Map' and
+-- 'Data.Set.Set' invariants for that one key: the term cannot be looked
+-- up again, and a set will hold duplicates of it. Filter or normalize
+-- NaN before using a 'Term' as a key if floats can reach it.
 data Term
   = VarTerm Text
   | IntTerm Integer
@@ -264,4 +283,4 @@ data Term
   | TextTerm Text
   | CompoundTerm Name [Term]
   | Wildcard
-  deriving (Show, Eq)
+  deriving (Show, Eq, Ord)

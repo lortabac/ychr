@@ -13,46 +13,58 @@ module YCHR.Run
     GoalRejection (..),
     Warning (..),
     CompiledProgram (..),
-    ExportResolution (..),
     ConstraintType,
     compileModules,
     compileFiles,
     compileParsedModules,
 
-    -- * CHR session (re-exported from "YCHR.Internal.Runtime.Session")
+    -- * Rendering diagnostics
+    displayError,
+    displayWarning,
+
+    -- * Running goals
+    runProgramWithGoal,
+    runProgramWithGoalDSL,
+    runProgramWithQuery,
+
+    -- * CHR sessions
     Chr,
     withCHR,
-    withCHRExtraTraced,
     withTraceHandler,
-    toSessionInput,
     tellConstraint,
 
-    -- * Re-exports for embedding
+    -- * Runtime values
     Value (..),
     newVar,
     deref,
     equal,
     unify,
 
-    -- * Single-goal API
+    -- * Query pipeline
+    -- $queryPipeline
+    ExportResolution (..),
     resolveQueryConstraint,
-    resolveQueryTell,
     resolveQueryTellOrThrow,
-    runProgramWithGoalDSL,
-    runProgramWithGoal,
     prepareGoal,
     goalShapeConstraint,
     runPreparedGoal,
-
-    -- * Multi-goal query API
     PreparedQuery (..),
     prepareQuery,
     executePreparedQuery,
-    runProgramWithQuery,
+    withCHRExtraTraced,
+    toSessionInput,
   )
 where
 
-import Control.Exception (handle, throwIO)
+import Control.Exception
+  ( SomeAsyncException,
+    SomeException,
+    displayException,
+    fromException,
+    handle,
+    throwIO,
+    try,
+  )
 import Control.Monad (unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
@@ -86,6 +98,7 @@ import YCHR.Internal.Compile.Pipeline
 import YCHR.Internal.Desugar (desugarQueryGoals, liftQueryLambdas)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic)
+import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Meta (valueToTerm)
 import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed (AnnP (..), SourceLoc (..))
@@ -94,7 +107,7 @@ import YCHR.Internal.Pretty (prettyPExprSrc, prettyTerm)
 import YCHR.Internal.Rename (renameQueryArgs, renameQueryGoals)
 import YCHR.Internal.Resolve (ResolveError, termToExpr)
 import YCHR.Internal.Resolved qualified as R
-import YCHR.Internal.Runtime.Error (RuntimeErrorThrown (..))
+import YCHR.Internal.Runtime.Error (RuntimeErrorThrown (..), runtimeErrorS)
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
     HostCallRegistry,
@@ -217,6 +230,47 @@ queryLoc = SourceLoc "<query>" 1 1
 
 queryOrigin :: PExpr
 queryOrigin = Atom ""
+
+-- $queryPipeline
+-- The staged internals behind 'runProgramWithGoal' and
+-- 'runProgramWithQuery': resolve a goal, prepare it, then execute it.
+-- They exist so the REPL can interleave its own work between the
+-- stages, and are exported for the same reason the @YCHR.Internal@
+-- modules are.
+--
+-- __These are not covered by the package version policy.__ Several of
+-- them mention types from @YCHR.Internal.*@ in their signatures, which
+-- is the giveaway. Use 'runProgramWithGoal', 'runProgramWithQuery', or
+-- the typed wrappers in "YCHR.Convert" unless you specifically need to
+-- drive the stages yourself.
+
+-- | Render an 'Error' the way the @ychr@ command-line tool does:
+-- @file:line:col:@ prefix, the @YCHR-NNNNN@ code, the message, and the
+-- offending source line where one is available.
+--
+-- Prefer this to 'show': the derived 'Show' instance dumps the internal
+-- diagnostic representation, whereas this is the supported, stable
+-- rendering. The @YCHR-NNNNN@ codes are covered by the package version
+-- policy and catalogued in
+-- <https://github.com/lortabac/ychr/blob/master/docs/reference/errors.md>.
+--
+-- The result is a 'String' (not 'Data.Text.Text') because it is meant to
+-- go straight to a handle:
+--
+-- > case compileModules True mods of
+-- >   Left err -> hPutStr stderr (displayError err)
+-- >   Right (cp, ws) -> mapM_ (hPutStr stderr . displayWarning) ws >> ...
+--
+-- __The result contains ANSI colour escapes__, unconditionally — there is
+-- no terminal detection and no @NO_COLOR@ handling yet. That suits a
+-- terminal, but strip them before putting the string in a log file, a JSON
+-- payload, or a test assertion.
+displayError :: Error -> String
+displayError = displayMsg
+
+-- | Render a 'Warning' in the same format as 'displayError'.
+displayWarning :: Warning -> String
+displayWarning = displayMsg
 
 -- | Re-throw 'RuntimeErrorThrown' (from the runtime layer) as the
 -- user-facing 'RuntimeError' constructor of 'Error'. Applied at the
@@ -519,16 +573,42 @@ raiseUnifyFailure :: Value -> Value -> Chr ()
 raiseUnifyFailure v1 v2 = do
   t1 <- valueToTerm Map.empty v1
   t2 <- valueToTerm Map.empty v2
-  error $
+  runtimeErrorS $
     "unification failure: cannot unify "
       ++ prettyTerm t1
       ++ " with "
       ++ prettyTerm t2
 
--- | Call a host function, failing with a clear message if not found.
+-- | Call a host function, failing with a coded runtime error if it is not
+-- registered or if it throws.
+--
+-- Mirrors 'YCHR.Internal.Runtime.Interpreter.invokeHostCall': an
+-- arbitrary exception out of a host function (an 'IOException' from a
+-- user 'YCHR.Convert.hostFnValues' handler, a parse failure inside a
+-- built-in) is re-raised through 'runtimeErrorS' so it reaches the caller
+-- as 'Error''s 'RuntimeError' with a call stack, rather than escaping raw.
+-- Async and already-coded exceptions keep their identity.
+--
+-- Unlike 'invokeHostCall' there is no @ControlFlow@ case: that exception
+-- is interpreter-internal, is caught by 'callProc' before control
+-- returns, and is not exported — so no 'HostCallFn' reachable from here,
+-- built-in or user-supplied, can raise it.
 hostCall :: Maybe HostCallFn -> Text -> [Value] -> Chr Value
-hostCall (Just (HostCallFn f)) _ args = f args
-hostCall Nothing name _ = error $ "Unknown host function: " ++ T.unpack name
+hostCall (Just (HostCallFn f)) name args = do
+  env <- ask
+  result <- liftIO (try @SomeException (runReaderT (f args) env))
+  case result of
+    Right v -> pure v
+    Left exc
+      | Just (ae :: SomeAsyncException) <- fromException exc ->
+          liftIO (throwIO ae)
+      | Just (rte :: RuntimeErrorThrown) <- fromException exc ->
+          liftIO (throwIO rte)
+      | otherwise ->
+          runtimeErrorS $
+            "host call " ++ T.unpack name ++ ": " ++ displayException exc
+hostCall Nothing name _ =
+  runtimeErrorS $ "Unknown host function: " ++ T.unpack name
 
 -- | Drain the reactivation queue, dispatching each constraint.
 -- Mirrors the VM's 'DrainReactivationQueue' statement, including

@@ -11,11 +11,71 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Keep this list in sync with the 'format' target in the Makefile
+      # and with the reminder in AGENTS.md.
       - uses: haskell-actions/run-ormolu@v17
         with:
           pattern: |
             src/**/*.hs
             app/**/*.hs
+            test/**/*.hs
+            bench/**/*.hs
+            examples/**/*.hs
+
+  # Compile-only check across the whole supported GHC range. The full test
+  # suite needs Guile and pytest, so it runs once (in 'test') on the primary
+  # compiler; this job exists to catch base-API drift on older releases.
+  # Extend 'tested-with' in ychr.cabal once this has been green for a while.
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ghc: ["9.6.6", "9.8.4", "9.10.1", "9.12.2"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: haskell-actions/setup@v2
+        id: setup-haskell
+        with:
+          ghc-version: ${{ matrix.ghc }}
+          cabal-version: "latest"
+
+      - name: Cache cabal store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.setup-haskell.outputs.cabal-store }}
+          key: ${{ runner.os }}-build-ghc-${{ matrix.ghc }}-${{ hashFiles('ychr.cabal') }}
+          restore-keys: |
+            ${{ runner.os }}-build-ghc-${{ matrix.ghc }}-
+
+      - run: cabal update
+      - run: cabal build all --enable-tests --enable-benchmarks
+
+  # Packaging gate: the package must be acceptable to Hackage, and the
+  # sdist must be self-contained enough to build and test on its own.
+  # 'test/golden/' is test data, so it has to be in extra-source-files.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: haskell-actions/setup@v2
+        with:
+          ghc-version: "9.12.2"
+          cabal-version: "latest"
+
+      - run: cabal update
+      - run: cabal check
+
+      - name: Build and test from the sdist tarball
+        run: |
+          cabal sdist
+          mkdir -p /tmp/sdist-check
+          tar xzf dist-newstyle/sdist/ychr-*.tar.gz -C /tmp/sdist-check
+          cd /tmp/sdist-check/ychr-*
+          cabal build all --enable-tests
+          cabal test --enable-tests
 
   test:
     runs-on: ubuntu-latest

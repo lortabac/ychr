@@ -520,6 +520,15 @@ numericInstanceTests =
           @?= CompoundTerm (Unqualified "*") [VarTerm "X", IntTerm 2],
       testCase "negate builds unary '-' compound" $
         negate (var "X") @?= CompoundTerm (Unqualified "-") [VarTerm "X"],
+      -- A negative literal must fold into the literal, not build a unary
+      -- '-' compound: there is no unary minus in the prelude, so the
+      -- compound form dies with an arity error at tell time.
+      testCase "negative integer literal folds into IntTerm" $
+        ((-1) :: Term) @?= IntTerm (-1),
+      testCase "negate of an integer literal folds into IntTerm" $
+        negate (int 3) @?= IntTerm (-3),
+      testCase "negate of a float literal folds into FloatTerm" $
+        negate (float 1.5) @?= FloatTerm (-1.5),
       testCase "abs builds 'abs' compound" $
         abs (var "X") @?= CompoundTerm (Unqualified "abs") [VarTerm "X"],
       testCase "signum builds 'sign' compound" $

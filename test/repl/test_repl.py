@@ -8,6 +8,20 @@ import subprocess
 
 import pytest
 
+
+def runtime_error(message):
+    """Expected stdout for a query that raises a runtime error.
+
+    Query-side runtime errors render through the same coded-diagnostic
+    envelope as errors raised from a rule body (YCHR-60001), rather than
+    a bare one-line message.
+    """
+    return (
+        "\x1b[95m=== runtime error ===\x1b[0m\n"
+        f"\x1b[1m<generated>:1:1: YCHR-60001\n{message}\n\x1b[0m"
+    )
+
+
 REPL_TESTS = [
     ("R is 1 + 1.", "R = 2.\n"),
     ("R is '$call'(fun(X) -> X end, 1).", "R = 1.\n"),
@@ -59,10 +73,10 @@ REPL_TESTS = [
     ("B is prelude:true().", "B = true.\n"),
     ("B is prelude:false().", "B = false.\n"),
     ("X = true, X == (5 == 5).", "X = true.\n"),
-    ("1 = 2.", "Error: unification failure: cannot unify 1 with 2\n"),
+    ("1 = 2.", runtime_error("unification failure: cannot unify 1 with 2")),
     (
         "[X, Y] = [1, 2, 3].",
-        "Error: unification failure: cannot unify [1, 2] with [1, 2, 3]\n",
+        runtime_error("unification failure: cannot unify [1, 2] with [1, 2, 3]"),
     ),
     # :info / :i — inspect a single identifier. Examples cover the four
     # output categories: built-in type, function (with `requiring`),

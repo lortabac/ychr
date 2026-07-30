@@ -65,6 +65,7 @@ where
 import Control.Monad (foldM)
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (nub, partition, sortOn)
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -382,7 +383,7 @@ wrapInPartnerLoops occ condMap inner =
             [ BNot (BIdEqual (IdVar (partIdName k)) (IdVar (partIdName j)))
             | j <- [PartnerIndex 0 .. k - 1]
             ]
-          distinctAll = foldl' BAnd distinctActive distinctEarlier
+          distinctAll = List.foldl' BAnd distinctActive distinctEarlier
           guarded = [If distinctAll inside []]
        in [Foreach label partner.cType suspVar conds (fieldExtracts ++ guarded)]
 
@@ -860,7 +861,7 @@ compileBodyGoal _ varMap si (D.BodyTell qn args) = do
   -- X NewVar' (shadowing the first and leaking its allocation).
   let freshVars = nub [v | R.VarExpr v <- args, notMemberVar v varMap]
       newStmts = [LetVal (Name v) NewVar | v <- freshVars]
-      varMap' = foldl' (\m v -> insertVar v (Var (Name v)) m) varMap freshVars
+      varMap' = List.foldl' (\m v -> insertVar v (Var (Name v)) m) varMap freshVars
   callArgs <- traverse (compileExpr varMap' si) args
   let tellName = tellProcName (Types.qualifiedToName qn) (length callArgs)
   pure (newStmts ++ [ExprStmt (CallExpr tellName (map AVal callArgs))], varMap')
@@ -883,7 +884,7 @@ compileBodyGoal _ varMap si (D.BodyUnify t1 t2) = do
   let freshVars =
         nub [v | v <- termPositionVars t1 ++ termPositionVars t2, notMemberVar v varMap]
       newStmts = [LetVal (Name v) NewVar | v <- freshVars]
-      varMap' = foldl' (\m v -> insertVar v (Var (Name v)) m) varMap freshVars
+      varMap' = List.foldl' (\m v -> insertVar v (Var (Name v)) m) varMap freshVars
   t1' <- compileTerm varMap' si (R.exprToTerm t1)
   t2' <- compileTerm varMap' si (R.exprToTerm t2)
   pure (newStmts ++ unifyAndReactivate t1' t2', varMap')
