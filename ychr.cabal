@@ -4,9 +4,9 @@ version:            0.1.0.0
 synopsis:           A Constraint Handling Rules compiler with multiple backends
 description:
     Constraint Handling Rules (CHR) is a declarative, rule-based language for
-    writing constraint solvers. A handful of rewrite rules over a multiset of
-    constraints expresses solvers, type inferencers, and business logic that
-    would take considerably more code to write by hand.
+    writing constraint solvers, type inferencers, and other rule-driven logic.
+    A program is a set of rules that rewrite a multiset of constraints until no
+    rule applies.
 
     YCHR compiles standard CHR — Prolog-compatible syntax, extended with
     Erlang-style user-defined functions and an optional gradual type system —
