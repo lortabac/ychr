@@ -30,9 +30,9 @@
 % constructor name may be either an atom (`bool`) or a qualified
 % atom (e.g. `prelude:bool`). Qualified type names that originate in
 % this CHR source — as opposed to being passed in by the Haskell
-% driver — must be wrapped in `term/1` so the renamer treats them as
+% driver — must be wrapped in `quote/1` so the renamer treats them as
 % opaque data rather than as cross-module references subject to
-% value-level visibility checks. See language.md §The `term/1`
+% value-level visibility checks. See language.md §The `quote/1`
 % quoting form.
 % `rigid(N)` is a *rigid* type variable: a fresh identity allocated
 % by the driver while checking a polymorphic declaration's own
@@ -248,7 +248,7 @@ ty_concrete_list(_) -> false.
 bounded_constraint_match @
     constraint_sig(Name, DeclTypes), constraint_bounds(Name, Bounds) \
         check_constraint_use(Name, ArgTypes, Ctx) <=>
-    Fresh is copy_term(term(sig(DeclTypes, Bounds))),
+    Fresh is copy_term(quote(sig(DeclTypes, Bounds))),
     FreshTypes is sig_fst(Fresh),
     FreshBounds is sig_snd(Fresh),
     check_arg_list(FreshTypes, ArgTypes, Ctx),
@@ -263,7 +263,7 @@ bounded_constraint_match @
 constraint_match @
     constraint_sig(Name, DeclTypes) \
         check_constraint_use(Name, ArgTypes, Ctx) <=>
-    FreshTypes is copy_term(term(DeclTypes)),
+    FreshTypes is copy_term(quote(DeclTypes)),
     check_arg_list(FreshTypes, ArgTypes, Ctx).
 
 % Bounded function usage: same shape as `function_match` plus a
@@ -276,7 +276,7 @@ constraint_match @
 bounded_function_match @
     function_sig(Name, Sig), function_bounds(Name, Bounds) \
         check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
-    Fresh is copy_term(term(sig(Sig, Bounds))),
+    Fresh is copy_term(quote(sig(Sig, Bounds))),
     FreshSig is sig_fst(Fresh),
     FreshBounds is sig_snd(Fresh),
     FreshArgTypes is sig_fst(FreshSig),
@@ -289,7 +289,7 @@ bounded_function_match @
 function_match @
     function_sig(Name, Sig) \
         check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
-    Fresh is copy_term(term(Sig)),
+    Fresh is copy_term(quote(Sig)),
     FreshArgTypes is sig_fst(Fresh),
     FreshRetType is sig_snd(Fresh),
     check_arg_list(FreshArgTypes, ArgTypes, Ctx),
@@ -471,7 +471,7 @@ end_scope_done @
 constructor_match @
     con_sig(ConName, Sig) \
         check_constructor_use(ConName, ArgTypes, ResultTypeVar, Ctx) <=>
-    Fresh is copy_term(term(Sig)),
+    Fresh is copy_term(quote(Sig)),
     FreshParent is sig_fst(Fresh),
     FreshFields is sig_snd(Fresh),
     check_arg_list(FreshFields, ArgTypes, Ctx),
@@ -520,12 +520,12 @@ delegate_unify @
 
 delegate_guard_bool @
     check_guard_bool(T, Ctx) <=>
-    tc_unify(T, tcon(term(prelude:bool), []), Ctx).
+    tc_unify(T, tcon(quote(prelude:bool), []), Ctx).
 
 delegate_guard_getarg @
     con_sig(ConName, Sig) \
         check_guard_getarg(ResultType, TermType, ConName, FieldIndex, Ctx) <=>
-    Fresh is copy_term(term(Sig)),
+    Fresh is copy_term(quote(Sig)),
     FreshParent is sig_fst(Fresh),
     FreshFields is sig_snd(Fresh),
     tc_unify(TermType, FreshParent, Ctx),

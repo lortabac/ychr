@@ -46,7 +46,7 @@ by `(name, arity)`, which changes a public type
 The table's comment says to keep it in sync with `baseHostCallRegistry`.
 `write` and `writeln` are absent, so deep-eval diverges. The fallback is
 reached only by `R is X` with `X` bound to a compound — note that `=`
-does not evaluate, and that wrapping in `term/1` would keep the outer
+does not evaluate, and that wrapping in `quote/1` would keep the outer
 functor unevaluable:
 
     X = writeln("x"), R is X.

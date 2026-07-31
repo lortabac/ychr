@@ -3,9 +3,9 @@
 :- open_function classify/1.
 :- chr_type colors ---> red ; green ; blue.
 
-classify(red)   -> term(color).
-classify(green) -> term(color).
-classify(blue)  -> term(color).
+classify(red)   -> quote(color).
+classify(green) -> quote(color).
+classify(blue)  -> quote(color).
 
 :- chr_constraint run/2.
 run(X, R) <=> R is classify(X).

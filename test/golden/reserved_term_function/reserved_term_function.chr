@@ -1,2 +1,0 @@
-:- function term/1.
-term(X) -> X.

@@ -31,7 +31,7 @@
 :- use_module(library(prelude)).
 
 % The object language is *host-supplied data*: the Haskell driver builds
-% these compounds and passes them in (wrapped in `term/1`, so they are
+% these compounds and passes them in (wrapped in `quote/1`, so they are
 % never evaluated as calls — `var/1`, in particular, is also a prelude
 % predicate). They are matched structurally in rule heads and so are left
 % as ordinary (undeclared) functors rather than `:- chr_type` constructors:
@@ -129,7 +129,7 @@ typeof_app @ typeof(Env, app(F, Arg), T) <=>
 
 lookup_hit  @ lookup_ty([bind(X, Ty) | _], X, T) <=> unify_ty(T, Ty).
 lookup_skip @ lookup_ty([bind(_, _) | Rest], X, T) <=> lookup_ty(Rest, X, T).
-lookup_miss @ lookup_ty([], X, _) <=> report_error(term(unbound_variable(X))).
+lookup_miss @ lookup_ty([], X, _) <=> report_error(quote(unbound_variable(X))).
 
 % ==========================================================================
 % Type unification: unify_ty(T1, T2)
@@ -149,12 +149,12 @@ unify_vv @ unify_ty(T1, T2) <=> var(T1), var(T2) | T1 = T2.
 unify_vt @ unify_ty(T1, T2) <=> var(T1), nonvar(T2) | bind_ty(T1, T2).
 unify_tv @ unify_ty(T1, T2) <=> nonvar(T1), var(T2) | bind_ty(T2, T1).
 unify_bad @ unify_ty(T1, T2) <=> nonvar(T1), nonvar(T2) |
-    report_error(term(mismatch(T1, T2))).
+    report_error(quote(mismatch(T1, T2))).
 
 % Bind a variable to a type, guarding against the infinite types that
 % self-application (`lam(x, app(var(x), var(x)))`) would otherwise create.
 bind_occurs @ bind_ty(V, Ty) <=> occurs(V, Ty) |
-    report_error(term(infinite_type(V, Ty))).
+    report_error(quote(infinite_type(V, Ty))).
 bind_ok     @ bind_ty(V, Ty) <=> V = Ty.
 
 % ==========================================================================

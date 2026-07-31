@@ -48,7 +48,7 @@ import YCHR
     compileModules,
     compound,
     decodeSum,
-    quoted,
+    quote,
     runQueryCompiled,
   )
 
@@ -113,12 +113,12 @@ inferLine cp line = case parseExpr line of
     result <- runQueryCompiled cp (typecheckGoal e) "Result"
     pure (either show renderResult result)
 
--- | Build the goal @typecheck(term(<expr>), Result)@. The @term/1@ quote
--- ('quoted') keeps the expression symbolic: without it the argument would
+-- | Build the goal @typecheck(quote(<expr>), Result)@. The @quote/1@
+-- form ('quote') keeps the expression symbolic: without it the argument would
 -- be evaluated, and @var(\"x\")@ in particular would call the prelude's
 -- @var/1@ predicate instead of naming a variable node.
 typecheckGoal :: Expr -> Term
-typecheckGoal e = compound "typecheck" [quoted e, VarTerm "Result"]
+typecheckGoal e = compound "typecheck" [quote e, VarTerm "Result"]
 
 -- ---------------------------------------------------------------------------
 -- REPL

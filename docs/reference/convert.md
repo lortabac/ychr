@@ -199,9 +199,9 @@ whole-map and custom-registry variants, mirroring `runQueryWith` /
 
 > **Passing symbolic data.** Goal arguments are *evaluated* (like any
 > tell). If you pass a compound that should stay symbolic — an
-> object-language term, say — wrap it in `term/1` with `quoted expr`;
+> object-language term, say — wrap it in `quote/1` with `quote expr`;
 > otherwise a constructor whose name is also a declared function is called
-> instead of kept as data. `quoted` takes any `ToTerm` value, so it
+> instead of kept as data. `quote` takes any `ToTerm` value, so it
 > subsumes the `toTerm` call, and it belongs at the goal-construction site
 > rather than inside a `ToTerm` instance. The how-to below walks through
 > this.

@@ -156,11 +156,11 @@ All type predicates take a value of type `any` and return `bool`.
 ychr> B is var(X).
 B = true,
 X = _.
-ychr> B is ground(term(foo(1, 2))).
+ychr> B is ground(quote(foo(1, 2))).
 B = true.
 ```
 
-`foo/2` is not a declared constructor here, so it is wrapped in `term/1` —
+`foo/2` is not a declared constructor here, so it is wrapped in `quote/1` —
 the quoting form that passes a compound as opaque data. Without the wrapper
 the query still answers `B = true`, but it also emits a `YCHR-20101`
 undeclared-constructor warning.
@@ -183,7 +183,7 @@ undeclared-constructor warning.
 | `copy_term/1` | `(A) -> A` | Fresh copy of a term with fresh variables. |
 
 ```ychr-repl
-ychr> Vs is term_variables(term(foo(X, bar(Y, X)))).
+ychr> Vs is term_variables(quote(foo(X, bar(Y, X)))).
 Vs = [_, _],
 X = _,
 Y = _.

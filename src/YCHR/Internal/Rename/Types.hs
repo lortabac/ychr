@@ -78,7 +78,7 @@ toListDecl (DeclEnv m) = Map.toList m
 -- 'YCHR.Internal.Rename.renameTerm'. This set is the fallback for shapes that don't
 -- match those cases (e.g. @is/3@).
 reservedSymbolSet :: Set Text
-reservedSymbolSet = Set.fromList ["true", "=", "is", "->", "$call", "term", "fun"]
+reservedSymbolSet = Set.fromList ["true", "=", "is", "->", "$call", "quote", "fun"]
 
 isReserved :: Text -> Bool
 isReserved t = Set.member t reservedSymbolSet

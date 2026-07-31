@@ -6,8 +6,8 @@
 :- open_function classify/1.
 
 % Equations declared in this module.
-classify(red)   -> term(color).
-classify(blue)  -> term(color).
+classify(red)   -> quote(color).
+classify(blue)  -> quote(color).
 
 run(X, R) <=>
     R is classify(X).

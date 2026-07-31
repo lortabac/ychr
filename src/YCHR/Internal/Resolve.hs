@@ -818,7 +818,7 @@ checkRuleHeads fNames mods = snd $ foldl go (Set.empty, []) allRules
 
 -- | Reserved names that cannot be used as constraint or function declarations.
 reservedDeclNames :: Set Text
-reservedDeclNames = Set.fromList ["term"]
+reservedDeclNames = Set.fromList ["quote"]
 
 -- | Check that no declaration uses a reserved name.
 checkReservedNames :: [CollectedModule] -> [Diagnostic ResolveError]
@@ -1060,7 +1060,7 @@ flattenTermComma t = case t of
 -- 'R.Expr'. The 'FunVisibility' tells us which qualified compounds
 -- are static calls — every other qualified compound is a data
 -- constructor. '$call', 'fun name/arity', lambdas, 'host:f' calls,
--- and the @term/1@ quoting form are recognized by their canonical
+-- and the @quote/1@ quoting form are recognized by their canonical
 -- post-rename shape.
 --
 -- See Note [FunVisibility vs renamer visibility] for why this pass
@@ -1112,10 +1112,10 @@ termToExpr vis loc origin = go
             p : ps -> do
               hargs <- traverse classifyParam (p :| ps)
               pure (R.LambdaExpr hargs body')
-      -- 'term(arg)' — quoting suppresses evaluation of the subtree;
+      -- 'quote(arg)' — quoting suppresses evaluation of the subtree;
       -- every compound inside is a data constructor.
-      CompoundTerm (Unqualified "term") [arg] ->
-        pure (R.CtorExpr (Unqualified "term") [quotedToExpr arg])
+      CompoundTerm (Unqualified "quote") [arg] ->
+        pure (R.CtorExpr (Unqualified "quote") [quotedToExpr arg])
       -- 'host:f(args)' — host language call.
       CompoundTerm (Qualified "host" f) args ->
         R.HostExpr f <$> traverse go args
@@ -1152,7 +1152,7 @@ termToExpr vis loc origin = go
       tell [noDiag (P.AnnP (LambdaParamError bad) loc origin)]
       pure HeadWildcard
 
--- | Translate a 'Term' that lives inside a @term/1@ quotation. No
+-- | Translate a 'Term' that lives inside a @quote/1@ quotation. No
 -- function-set lookup happens here: quoting suppresses evaluation, so
 -- every compound is a data constructor.
 quotedToExpr :: Term -> R.Expr

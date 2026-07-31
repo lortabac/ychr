@@ -104,8 +104,8 @@ module YCHR
     argAt,
     ground,
 
-    -- ** The term/1 quoting form
-    quoted,
+    -- ** The quote/1 quoting form
+    quote,
 
     -- ** Result decoding
     decodeVar,
@@ -170,7 +170,7 @@ import YCHR.Convert
     hostFunctions,
     lookupBinding,
     matchCompound,
-    quoted,
+    quote,
     runQueryCompiled,
     runQueryCompiledWith,
     runQueryCompiledWithHostCallRegistry,

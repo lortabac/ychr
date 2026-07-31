@@ -54,7 +54,7 @@ HASKELL_ONLY_CASES = {
 # bare atoms whose constructor the renamer cannot resolve — the warning
 # is part of what the test exercises (cross-module visibility,
 # canonicalization fallbacks), or the test uses bare sentinel atoms as
-# RHS of `=` (where `term/1` no longer strips, per the spec). Mirrors
+# RHS of `=` (where `quote/1` no longer strips, per the spec). Mirrors
 # `expectsWarnings` in test/YCHR/GoldenTest.hs. `--Werror` is omitted
 # for these.
 WERROR_EXEMPT = {

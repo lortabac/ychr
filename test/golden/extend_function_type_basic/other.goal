@@ -1,1 +1,1 @@
-owner:run(term(banana), R)
+owner:run(quote(banana), R)

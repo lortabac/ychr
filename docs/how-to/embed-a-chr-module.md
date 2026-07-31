@@ -82,19 +82,19 @@ instance ToTerm Expr where
   toTerm (Add a b)  = compound "add" [toTerm a, toTerm b]
 ```
 
-The goal wraps the encoded term in `term/1` — that is what `quoted` does —
+The goal wraps the encoded term in `quote/1` — that is what `quote` does —
 so it is passed as data. Without the quote, the argument would be
 *evaluated*, and `var("x")` in particular would call the prelude's `var/1`
 predicate instead of naming a variable node (see
-[the language reference](../reference/language.md) on the `term/1` quoting
+[the language reference](../reference/language.md) on the `quote/1` quoting
 form):
 
 ```haskell
 typecheckGoal :: Expr -> Term
-typecheckGoal e = compound "typecheck" [quoted e, VarTerm "Result"]
+typecheckGoal e = compound "typecheck" [quote e, VarTerm "Result"]
 ```
 
-`quoted` accepts any `ToTerm` value, so the `toTerm e` call is implicit.
+`quote` accepts any `ToTerm` value, so the `toTerm e` call is implicit.
 
 ## 3. Decode the result with `FromTerm`
 

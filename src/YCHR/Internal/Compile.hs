@@ -538,7 +538,7 @@ compileTerm _ _ Wildcard = pure (Lit WildcardLit)
 --   * 'D.CallExpr' / 'D.ApplyExpr' / 'D.HostExpr' produce 'CallExpr' /
 --     'HostCall' instructions.
 --   * 'D.CtorExpr' produces a 'MakeTerm', with its arguments recursively
---     lowered. The native-bool fast path and the @term\/1@ quoting form
+--     lowered. The native-bool fast path and the @quote\/1@ quoting form
 --     are the only structural special cases.
 --   * 'D.FunRefExpr' produces the canonical @'/'(<flatname>, <arity>)@
 --     compound that 'genCallFunDispatches' pattern-matches at runtime.
@@ -567,12 +567,12 @@ compileExpr varMap si e = case e of
     pure (Lit (BoolLit True))
   R.CtorExpr (Types.Qualified "prelude" "false") [] ->
     pure (Lit (BoolLit False))
-  -- @term\/1@ short-circuit: the subtree stays opaque (no calls are
+  -- @quote\/1@ short-circuit: the subtree stays opaque (no calls are
   -- evaluated). Delegate to 'compileTerm' on the surface 'Term' shape
-  -- of the argument; the user opts into this with @term(foo(X))@ when
+  -- of the argument; the user opts into this with @quote(foo(X))@ when
   -- they want @foo@ kept structural even if it is also a declared
   -- function.
-  R.CtorExpr (Types.Unqualified "term") [arg] ->
+  R.CtorExpr (Types.Unqualified "quote") [arg] ->
     compileTerm varMap si (R.exprToTerm arg)
   -- 0-arity ctors collapse to atom literals at runtime (see comment
   -- in 'compileTerm'). Compiler never emits @MakeTerm name []@.
@@ -869,7 +869,7 @@ compileBodyGoal _ varMap si (D.BodyUnify t1 t2) = do
   -- '=' is pure structural unification: both operands are compiled as
   -- terms, not expressions. Function-call shapes ('CallExpr',
   -- 'HostExpr', 'ApplyExpr') do not evaluate — they become symbolic
-  -- compounds via 'R.exprToTerm' + 'compileTerm'. The 'term/1' quoting
+  -- compounds via 'R.exprToTerm' + 'compileTerm'. The 'quote/1' quoting
   -- form is preserved as ordinary compound data here (no strip),
   -- matching head/equation patterns and the REPL's 'termToValue'.
   -- Mirrors the query-side 'Run.exprToValue' so '=' has the same
@@ -1208,7 +1208,7 @@ stay in expression context); 'D.CtorExpr' lowers to 'MakeTerm', with
 its arguments recursively re-entered through 'compileExpr' so a
 nested call inside @pair(foo(X), bar(Y))@ is still evaluated when
 @foo@ is a declared function. The user opts out of this with
-@term\/1@: @term(foo(X))@ delegates to 'compileTerm' on the surface
+@quote\/1@: @quote(foo(X))@ delegates to 'compileTerm' on the surface
 'Term' shape and keeps the subterm opaque regardless of whether
 @foo@ happens to be a declared function. The call-vs-constructor
 distinction was once made by a 'funSet' membership check at every
@@ -1230,34 +1230,34 @@ they would collide in the history and prevent each other from firing.
 The synthetic name uses the rule's program-wide source position, which
 is stable as long as the source order is.
 
-Semantics of @term(X)@ — the quoting operator:
+Semantics of @quote(X)@ — the quoting operator:
 
-@term@ is a reserved keyword that prevents evaluation of its argument in
+@quote@ is a reserved keyword that prevents evaluation of its argument in
 expression contexts (@is@ RHS, guard expressions, function arguments).
 Normally, 'compileExpr' recursively evaluates recognised function calls
-and host calls inside an expression; @term(E)@ instead compiles @E@ via
+and host calls inside an expression; @quote(E)@ instead compiles @E@ via
 'compileTerm', producing an opaque data term ('MakeTerm' \/ 'Lit' \/
 'Var') regardless of whether @E@ contains function or operator names.
 
 The effect is visible in three places:
 
-  1. /Renamer/ ('YCHR.Internal.Rename.renameTerm'): inside @term(...)@, the
+  1. /Renamer/ ('YCHR.Internal.Rename.renameTerm'): inside @quote(...)@, the
      argument is renamed in 'NoResolve' mode, so functor names stay
-     unqualified.  This means @term(1 + 1)@ preserves the surface-level
+     unqualified.  This means @quote(1 + 1)@ preserves the surface-level
      @+(1, 1)@ rather than producing the internal @prelude:+(1, 1)@
      representation.  Variables are still tracked (they need runtime
      bindings) but are not resolved against the module's declarations.
 
-  2. /Compiler/ ('compileExpr'): the @term\/1@ clause delegates to
+  2. /Compiler/ ('compileExpr'): the @quote\/1@ clause delegates to
      'compileTerm', which never emits 'CallExpr' or 'HostCall'.
 
   3. /REPL evaluator/ ('YCHR.Run.evalNestedExpr'): a parallel clause
      delegates to 'termToValue' instead of recursively evaluating.
 
-@term@ is forbidden as a user-defined constraint or function name
+@quote@ is forbidden as a user-defined constraint or function name
 ('YCHR.Internal.Resolve.checkReservedNames', error code YCHR-16003).
 
-Example: @R is compound_to_list(term(1 + 1))@ yields @R = [\'+\', 1, 1]@
+Example: @R is compound_to_list(quote(1 + 1))@ yields @R = [\'+\', 1, 1]@
 because @1 + 1@ is compiled as the compound term @+(1, 1)@ instead of
 being evaluated to @2@.
 

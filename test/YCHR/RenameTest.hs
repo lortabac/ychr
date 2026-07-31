@@ -933,20 +933,20 @@ warningTests =
                 `defining` [[term "c" [term "unknown" [var "X"]]] <=> [atom "true"]]
         ws <- warningsOf [m]
         ws @?= [noDiag (AnnP (UndeclaredDataConstructor "unknown") dummyLoc (Atom ""))],
-      testCase "no warning inside term(...) quoting in body position" $ do
-        -- Regression for the BUGS.md case 'store(term(plus(X, 3)))': the
-        -- term/1 quoting form should keep its argument opaque, so neither
-        -- 'term' itself nor any undeclared functor inside should produce
+      testCase "no warning inside quote(...) quoting in body position" $ do
+        -- Regression for the BUGS.md case 'store(quote(plus(X, 3)))': the
+        -- quote/1 quoting form should keep its argument opaque, so neither
+        -- 'quote' itself nor any undeclared functor inside should produce
         -- an 'UndeclaredDataConstructor' warning.
         let m =
               module' "M"
                 `declaring` ["c" // 1]
                 `defining` [ [term "c" [var "X"]]
-                               <=> [term "c" [quoted (term "plus" [var "X", int 3])]]
+                               <=> [term "c" [quote (term "plus" [var "X", int 3])]]
                            ]
         ws <- warningsOf [m]
         ws @?= [],
-      testCase "no warning inside term(...) quoting in guard position" $ do
+      testCase "no warning inside quote(...) quoting in guard position" $ do
         -- The quoting form must also stay opaque in expression-position
         -- contexts (guards, is-RHS), where the surrounding mode is
         -- 'ResolveAll' rather than 'NoResolve'.
@@ -955,12 +955,12 @@ warningTests =
                 `declaring` ["c" // 1]
                 `defining` [ [term "c" [var "X"]]
                                <=> [atom "true"]
-                               |- [quoted (term "plus" [var "X", int 3])]
+                               |- [quote (term "plus" [var "X", int 3])]
                            ]
         ws <- warningsOf [m]
         ws @?= [],
-      testCase "no warning inside nested term(term(...)) quoting" $ do
-        -- Quoting nests: the inner 'term(...)' must also fire the
+      testCase "no warning inside nested quote(quote(...)) quoting" $ do
+        -- Quoting nests: the inner 'quote(...)' must also fire the
         -- special case (childMode propagates 'NoResolveQuoted'), so no
         -- warning is emitted for the inner functor either.
         let m =
@@ -969,14 +969,14 @@ warningTests =
                 `defining` [ [term "c" [var "X"]]
                                <=> [ term
                                        "c"
-                                       [quoted (quoted (term "plus" [var "X", int 3]))]
+                                       [quote (quote (term "plus" [var "X", int 3]))]
                                    ]
                            ]
         ws <- warningsOf [m]
         ws @?= [],
-      testCase "syntactic forms stay literal inside term(...) quoting" $ do
+      testCase "syntactic forms stay literal inside quote(...) quoting" $ do
         -- 'is', lambdas, and 'fun name/arity' references are interpreted
-        -- only outside @term/1@. Inside a quoted body they must remain
+        -- only outside @quote/1@. Inside a quoted body they must remain
         -- literal compound terms — no warning for their undeclared inner
         -- functors either.
         let m =
@@ -985,7 +985,7 @@ warningTests =
                 `defining` [ [term "c" [var "X"]]
                                <=> [ term
                                        "c"
-                                       [quoted (term "is" [var "X", term "foo" [int 1]])]
+                                       [quote (term "is" [var "X", term "foo" [int 1]])]
                                    ]
                            ]
         ws <- warningsOf [m]
@@ -1039,8 +1039,8 @@ warningTests =
                            ]
         ws <- warningsOf [m]
         ws @?= [],
-      testCase "lambda inside term(...) stays opaque" $ do
-        -- Negative companion to the lambda fix: 'term(fun(X) -> X end)'
+      testCase "lambda inside quote(...) stays opaque" $ do
+        -- Negative companion to the lambda fix: 'quote(fun(X) -> X end)'
         -- must NOT be recognized as a lambda (the user has explicitly
         -- opted into raw compound shape). The relaxed lambda guard
         -- skips 'NoResolveQuoted' for exactly this reason; this case
@@ -1049,14 +1049,14 @@ warningTests =
               module' "M"
                 `declaring` ["c" // 1]
                 `defining` [ [term "c" [var "X"]]
-                               <=> [term "c" [quoted (lambda [var "Y"] (var "Y"))]]
+                               <=> [term "c" [quote (lambda [var "Y"] (var "Y"))]]
                            ]
         ws <- warningsOf [m]
         ws @?= [],
-      testCase "funref inside term(...) stays opaque" $ do
-        -- Funref counterpart to the lambda-inside-term/1 case. The
+      testCase "funref inside quote(...) stays opaque" $ do
+        -- Funref counterpart to the lambda-inside-quote/1 case. The
         -- relaxed funref guard ('mode /= NoResolveQuoted') means a
-        -- funref outside 'term/1' resolves; inside 'term/1' it must
+        -- funref outside 'quote/1' resolves; inside 'quote/1' it must
         -- remain a literal compound. 'f' is *not* declared as a
         -- function in this module, so if the funref arm fired
         -- 'resolveName' would emit an UnknownName error and the
@@ -1066,7 +1066,7 @@ warningTests =
               module' "M"
                 `declaring` ["c" // 1]
                 `defining` [ [term "c" [var "X"]]
-                               <=> [term "c" [quoted (funRef "f" 1)]]
+                               <=> [term "c" [quote (funRef "f" 1)]]
                            ]
         ws <- warningsOf [m]
         ws @?= [],

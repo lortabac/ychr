@@ -97,9 +97,9 @@ exprToScheme (R.IntExpr n) = T.pack (show n)
 exprToScheme (R.FloatExpr n) = printSExpr (SFloat n)
 exprToScheme (R.TextExpr s) = printSExpr (SString s)
 exprToScheme R.WildcardExpr = "*wildcard*"
--- @term(arg)@: the surface quoting form opts out of evaluation. The
+-- @quote(arg)@: the surface quoting form opts out of evaluation. The
 -- inner term stays as a data tree; mirror 'compileTerm' here.
-exprToScheme (R.CtorExpr (Types.Unqualified "term") [arg]) =
+exprToScheme (R.CtorExpr (Types.Unqualified "quote") [arg]) =
   termToScheme (R.exprToTerm arg)
 -- Native-bool fast path. The renamer canonicalizes source @true@ /
 -- @false@ to @prelude:true@ / @prelude:false@, and
@@ -160,14 +160,14 @@ hostBridgeName :: Text -> Text
 hostBridgeName f = "host__" <> f
 
 -- | Convert a 'Term' to a Scheme expression. Used for the
--- @term(...)@ quoting form, which keeps the inner tree opaque.
+-- @quote(...)@ quoting form, which keeps the inner tree opaque.
 termToScheme :: Term -> Text
 termToScheme (IntTerm n) = T.pack (show n)
 termToScheme (FloatTerm n) = printSExpr (SFloat n)
 -- Mirrors the native-bool fast path in
 -- 'YCHR.Internal.Compile.compileTerm', which maps the canonicalized
 -- @prelude:true@ \/ @prelude:false@ to a boolean literal even inside
--- the @term\/1@ quoting form.
+-- the @quote\/1@ quoting form.
 termToScheme (CompoundTerm (Types.Qualified "prelude" "true") []) = "#t"
 termToScheme (CompoundTerm (Types.Qualified "prelude" "false") []) = "#f"
 termToScheme (CompoundTerm (Types.Unqualified s) []) = printSExpr (compileSymbol s)

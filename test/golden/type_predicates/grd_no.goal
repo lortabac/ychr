@@ -1,1 +1,1 @@
-type_predicates:t(grd, term(p(1,X)), R)
+type_predicates:t(grd, quote(p(1,X)), R)

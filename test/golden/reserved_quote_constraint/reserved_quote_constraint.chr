@@ -1,0 +1,3 @@
+:- module(reserved_quote_constraint, [quote/1]).
+:- chr_constraint quote/1.
+quote(X) <=> true.

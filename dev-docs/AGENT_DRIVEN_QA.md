@@ -70,7 +70,7 @@ Aim adversarially. Promising categories:
   local constructor of the same name.
 - **Tell-side evaluation.** Compound arguments in rule bodies and
   top-level goals are *evaluated* — exercise the boundary between
-  evaluated expressions and quoted `term(...)` forms, especially when
+  evaluated expressions and quoted `quote(...)` forms, especially when
   variables are still unbound at tell time (should be a runtime
   error, per `PROJECT.md`).
 - **Guard vs body semantics.** `==` (ask) and `=` (tell) must not be

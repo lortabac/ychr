@@ -4,4 +4,4 @@
 
 % Second extender adds an atom overload (distinct from the string one).
 :- extend_class_type (classify(atom) -> atom).
-:- extend_class classify(red) -> term(color).
+:- extend_class classify(red) -> quote(color).

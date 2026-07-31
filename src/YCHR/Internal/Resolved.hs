@@ -170,7 +170,7 @@ data Expr
 -- of the resulting 'Term' (e.g. 'YCHR.Internal.Compile.compileTerm',
 -- 'YCHR.Run.termToValue') treats every compound as data, which
 -- matches CHR's value semantics for constraint arguments and quoted
--- @term\/1@ subtrees.
+-- @quote\/1@ subtrees.
 exprToTerm :: Expr -> Term
 exprToTerm (VarExpr v) = VarTerm v
 exprToTerm (IntExpr n) = IntTerm n

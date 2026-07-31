@@ -45,8 +45,8 @@ module YCHR.Convert
     argAt,
     ground,
 
-    -- * The term/1 quoting form
-    quoted,
+    -- * The quote/1 quoting form
+    quote,
 
     -- * Result decoding
     decodeVar,
@@ -216,22 +216,22 @@ argAt i args = case drop i args of
   [] -> Left (TypeMismatch ("positional argument #" <> Text.pack (show i)) Wildcard)
 
 -- ---------------------------------------------------------------------------
--- The term/1 quoting form
+-- The quote/1 quoting form
 -- ---------------------------------------------------------------------------
 
--- | Wrap a value in the @term\/1@ quoting form, keeping it symbolic.
+-- | Wrap a value in the @quote\/1@ quoting form, keeping it symbolic.
 --
 -- Goal and rule-body arguments are /evaluated/, so a compound whose functor
 -- is also a declared function is called rather than kept as data. Quoting
 -- opts out. Use it where you build the goal, not inside a 'ToTerm' instance:
 --
--- > compound "typecheck" [quoted expr, VarTerm "Result"]  -- here, or
--- > term     "typecheck" [quoted expr, var "Result"]      -- with "YCHR.DSL"
+-- > compound "typecheck" [quote expr, VarTerm "Result"]  -- here, or
+-- > term     "typecheck" [quote expr, var "Result"]      -- with "YCHR.DSL"
 --
 -- The argument is any 'ToTerm' value, so the 'toTerm' call is implicit;
 -- a plain 'Term' passes through unchanged.
-quoted :: (ToTerm a) => a -> Term
-quoted x = CompoundTerm (Unqualified "term") [toTerm x]
+quote :: (ToTerm a) => a -> Term
+quote x = CompoundTerm (Unqualified "quote") [toTerm x]
 
 -- | The local (unqualified) part of a name.
 nameLocal :: Name -> Text

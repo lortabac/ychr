@@ -1,1 +1,1 @@
-unicode_test:'café'(term(hello), R)
+unicode_test:'café'(quote(hello), R)

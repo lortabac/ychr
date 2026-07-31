@@ -43,7 +43,7 @@ removable when closed.
   to canonicalize bare-named functions when exactly one declared
   function shares the name (e.g. `+(2, 1)` → `CallExpr prelude:+`),
   so operator-style expressions in tell-arg position evaluate without
-  forcing the user to fully qualify. Quoting (`term(foo(X))`) is the
+  forcing the user to fully qualify. Quoting (`quote(foo(X))`) is the
   opt-out for callers who want a literal data term.
 
 - **Head Normal Form: post-HNF head args are variables or wildcards.**

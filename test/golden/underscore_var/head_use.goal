@@ -1,1 +1,1 @@
-underscore_var:head_use(term(foo), R)
+underscore_var:head_use(quote(foo), R)

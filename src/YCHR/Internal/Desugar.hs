@@ -722,7 +722,7 @@ liftExpr modName scope parentRequiring st0 expr = case expr of
         -- function-named subterms (@'+'@, @'*'@, user functions, …)
         -- still spelled out, and 'compileExpr' would otherwise
         -- eagerly evaluate them at closure-construction time. Wrap
-        -- in @term/1@ so 'compileExpr' short-circuits via
+        -- in @quote/1@ so 'compileExpr' short-circuits via
         -- 'compileTerm' on the 'R.exprToTerm' of the quoted subtree.
         --
         -- 'quoteExpr' also rewrites 'R.LambdaExpr' into a surface
@@ -734,7 +734,7 @@ liftExpr modName scope parentRequiring st0 expr = case expr of
         -- and raise 'UnboundVariable'. Atomising the parameters
         -- breaks that lookup chain.
         sourceForm =
-          R.CtorExpr (Unqualified "term") [quoteExpr expr]
+          R.CtorExpr (Unqualified "quote") [quoteExpr expr]
         closureArgs =
           R.CtorExpr (Unqualified lambdaId) [] : sourceForm : map R.VarExpr freeVars
      in (st2, R.CtorExpr (Unqualified closureFunctor) closureArgs)

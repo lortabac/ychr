@@ -2,8 +2,8 @@
 :- chr_constraint classify/2.
 :- function sign/1.
 
-sign(N) | N >= 1 -> term(positive).
-sign(0) -> term(zero).
-sign(_) -> term(negative).
+sign(N) | N >= 1 -> quote(positive).
+sign(0) -> quote(zero).
+sign(_) -> quote(negative).
 
 classify(X, R) <=> R is sign(X).

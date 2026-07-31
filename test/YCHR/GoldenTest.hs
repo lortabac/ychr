@@ -33,7 +33,7 @@ import YCHR.Run
 -- reference bare atoms that the renamer cannot resolve — typically
 -- because the test exists to verify the renamer's behaviour on
 -- unexported or unknown constructors, or because the test uses bare
--- sentinel atoms as RHS of @=@ (where @term/1@ no longer strips,
+-- sentinel atoms as RHS of @=@ (where @quote/1@ no longer strips,
 -- per the spec). Warnings emitted by these tests are part of what
 -- they exercise, not a failure mode.
 --

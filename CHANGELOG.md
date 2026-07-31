@@ -40,6 +40,11 @@ program, and as the `ychr` command-line compiler and REPL.
   compare variables by reference and disagree with CHR's `==`, which is
   what `equal` implements.
 
+* `quote` (from `YCHR`, `YCHR.Convert`, and `YCHR.DSL`) wraps any
+  `ToTerm` value in the `quote/1` quoting form, which is how a goal keeps
+  a compound argument symbolic instead of having it evaluated as a call.
+  Callers previously had to spell the wrapper out by hand.
+
 * `Term` now derives `Ord`, so it can key a `Map` or inhabit a `Set`.
 
 * A unification failure or an unregistered host function raised from a
@@ -78,7 +83,7 @@ program, and as the `ychr` command-line compiler and REPL.
   top-level goals — are now evaluated expressions, like every other
   expression position in the language. `foo(1 + 2)` evaluates `1 + 2` to
   `3` before the tell; `foo(plus(2, 3))` calls the `plus/2` function. The
-  opt-out for passing a symbolic data term is the existing `term(...)`
+  opt-out for passing a symbolic data term is the existing `quote(...)`
   quoting form. Heads and equation patterns are unchanged (they still
   match on data shapes). An argument expression that mentions an unbound
   logical variable runtime-errors at tell time. See

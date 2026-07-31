@@ -86,8 +86,8 @@
   ;; falls back to the prelude host-call table (keyed by the bare
   ;; functor name like `+`). The fallback mirrors the Haskell
   ;; interpreter's `invokeByKey`, which consults `hostCalls` after a
-  ;; miss in `evaluables`, and is what lets a user write
-  ;; `R is term('+'(1, 1))` without having to qualify the functor.
+  ;; miss in `evaluables`, and is what lets `X = '+'(1, 1), R is X.`
+  ;; evaluate to `2` without the functor having to be qualified.
   ;; A non-evaluable functor raises a runtime error.
   (define (deep-eval-value s v)
     (let ((d (deref v)))
@@ -117,8 +117,8 @@
 
   ;; Prelude host-call fallback table for `deep-eval-value`. Mirrors
   ;; the bare-name entries in Haskell's `baseHostCallRegistry`
-  ;; (`src/YCHR/Internal/Runtime/Registry.hs`) so `R is term('+'(1, 1))` works
-  ;; identically on both backends. Each procedure receives the
+  ;; (`src/YCHR/Internal/Runtime/Registry.hs`) so `X = '+'(1, 1), R is X.`
+  ;; works identically on both backends. Each procedure receives the
   ;; session as its first argument (uniform with user-defined
   ;; functions); host calls that don't need it ignore the parameter.
   ;; Keep this list in sync with `baseHostCallRegistry` when adding

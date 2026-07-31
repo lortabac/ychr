@@ -24,7 +24,7 @@ data Expr
 
 -- | Encode a term as the CHR data the inferencer matches on. These are
 -- plain compounds (@var@, @lam@, …), which the driver passes in quoted
--- with @term/1@ so they are treated as data rather than evaluated.
+-- with @quote/1@ so they are treated as data rather than evaluated.
 instance ToTerm Expr where
   toTerm (Var x) = compound "var" [toTerm x]
   toTerm (Lam x body) = compound "lam" [toTerm x, toTerm body]

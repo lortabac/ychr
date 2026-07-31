@@ -22,7 +22,7 @@ t(binary, R) <=>
 
 % identity/1 — first-class function reference returns input.
 t(identity, R) <=>
-    R is apply(fun identity/1, term(foo)).
+    R is apply(fun identity/1, quote(foo)).
 
 % Reference threaded through a local variable.
 t(via_var, R) <=>

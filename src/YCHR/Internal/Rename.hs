@@ -691,11 +691,11 @@ renameCon ctx loc origin (Constraint cname cargs) = do
 --   constructors like @.@ for lists). Unresolved names trigger a
 --   data-constructor warning.
 --
--- * 'NoResolveQuoted' — inside a @term(...)@ body. Same name policy as
+-- * 'NoResolveQuoted' — inside a @quote(...)@ body. Same name policy as
 --   'NoResolve' (functors stay unqualified, declared data constructors
 --   still get canonicalized to @Mod:name@), but the undeclared-
 --   constructor warning is suppressed because the body is intentionally
---   opaque (see the language reference §The @term/1@ quoting form).
+--   opaque (see the language reference §The @quote/1@ quoting form).
 data ResolveMode
   = NoResolve
   | NoResolveQuoted
@@ -748,7 +748,7 @@ renameTerm ctx loc origin mode t = case t of
   -- renamed in 'ResolveAll' regardless of the surrounding mode; the
   -- body may also use top-level comma sequencing (@A, B, C@), which
   -- 'renameLambdaBody' walks through without treating @,@ as a data
-  -- constructor. The explicit opt-out for opaque shape is @term/1@,
+  -- constructor. The explicit opt-out for opaque shape is @quote/1@,
   -- handled in the 'NoResolveQuoted' branch below.
   CompoundTerm
     (Unqualified "->")
@@ -763,17 +763,17 @@ renameTerm ctx loc origin mode t = case t of
               renamedBody
             ]
         )
-  -- Quoting: @term(X)@ keeps its argument opaque. Functor names inside
+  -- Quoting: @quote(X)@ keeps its argument opaque. Functor names inside
   -- stay unqualified, declared data constructors are silently
   -- canonicalized, and undeclared-data-constructor warnings are
   -- suppressed because the body is intentionally not subject to those
-  -- checks (see docs/reference/language.md §The @term/1@ quoting form).
-  -- Fires in any surrounding mode so a nested @term(...)@ behind a
+  -- checks (see docs/reference/language.md §The @quote/1@ quoting form).
+  -- Fires in any surrounding mode so a nested @quote(...)@ behind a
   -- 'NoResolve' parent (e.g. a body-position constraint argument) is
   -- also covered.
-  CompoundTerm (Unqualified "term") [arg] -> do
+  CompoundTerm (Unqualified "quote") [arg] -> do
     renamedArg <- renameTerm ctx loc origin NoResolveQuoted arg
-    pure (CompoundTerm (Unqualified "term") [renamedArg])
+    pure (CompoundTerm (Unqualified "quote") [renamedArg])
   -- Function reference: @fun name/arity@. A function reference is a
   -- first-class value, not data; @fun@ here is surface syntax for the
   -- desugarable compound @'fun'('/'(name, arity))@, never a data
@@ -784,7 +784,7 @@ renameTerm ctx loc origin mode t = case t of
   -- (errors on unknowns), which is the right behavior wherever a
   -- funref appears; the @fun@ wrapper is then stripped so downstream
   -- passes see bare @name/arity@. The explicit opt-out for opaque
-  -- shape is @term/1@.
+  -- shape is @quote/1@.
   CompoundTerm
     (Unqualified "fun")
     [ CompoundTerm
@@ -876,7 +876,7 @@ renameTerm ctx loc origin mode t = case t of
           Qualified m n -> validateQualified ctx loc origin m n (length args)
         pure (canonicalizeData ctx name (length args))
       NoResolveQuoted ->
-        -- Inside a 'term/1' quote the body is fully opaque: no
+        -- Inside a 'quote/1' quote the body is fully opaque: no
         -- visibility checks fire and qualified atoms are kept
         -- as-written. This is the supported escape hatch for
         -- constructing arbitrary qualified atoms as data (e.g. type
@@ -945,7 +945,7 @@ resolveName _ ctx loc origin name@(Qualified m n) arity = do
 -- constructor. Types are intentionally not accepted — they live in a
 -- separate namespace and cannot appear in value positions. Users who
 -- need a qualified atom as opaque data (e.g. the typechecker's
--- type-name tags) must wrap it with @term/1@, which switches the
+-- type-name tags) must wrap it with @quote/1@, which switches the
 -- renamer into 'NoResolveQuoted' mode and skips this check entirely.
 -- The @host@ pseudo-module is exempt (host calls are external).
 --

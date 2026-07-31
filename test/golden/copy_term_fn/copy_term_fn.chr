@@ -3,4 +3,4 @@
 :- chr_constraint test/2.
 
 test(X, R) <=>
-    R is copy_term(term(foo(1, X))).
+    R is copy_term(quote(foo(1, X))).

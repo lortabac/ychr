@@ -1,1 +1,1 @@
-stlc:typecheck(term(var("y")), R)
+stlc:typecheck(quote(var("y")), R)

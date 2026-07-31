@@ -1,1 +1,1 @@
-main:run(term(banana), R)
+main:run(quote(banana), R)

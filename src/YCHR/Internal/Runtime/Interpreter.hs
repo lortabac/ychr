@@ -774,7 +774,7 @@ unifyOrError v1 v2 = do
 -- value-side walk that evaluates a dereferenced compound term —
 -- it applies only when the outer 'EvalDeep' is a bare 'Var', so that
 -- @R is X@ (RHS is a variable) walks @X@'s bound term but
--- @R is copy_term(term(X))@ (RHS is a host call) leaves @X@'s bound
+-- @R is copy_term(quote(X))@ (RHS is a host call) leaves @X@'s bound
 -- compound symbolic for the host call's benefit. This intentionally
 -- mirrors the type checker's rule: only @R is X@ widens the LHS to
 -- @any@.
@@ -811,7 +811,7 @@ evalValExprDeep expr = evalValExpr expr
 -- known divergence, tracked in @dev-docs\/SCHEME_BACKEND_GAPS.md@.
 --
 -- 'MakeTerm' callers do /not/ funnel through this walker — the
--- @term/1@ quoting form must continue to produce the symbolic
+-- @quote/1@ quoting form must continue to produce the symbolic
 -- compound it was asked to build.
 deepEvalValue :: Value -> Chr Value
 deepEvalValue v = do

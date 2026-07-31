@@ -34,15 +34,15 @@ t(flt_eq, R)     <=> 1.5 == 1.5 | R = yes.
 t(flt_eq, R)     <=> R = no.
 
 % Atom equality (==).
-t(atom_eq, R)    <=> term(foo) == term(foo) | R = yes.
+t(atom_eq, R)    <=> quote(foo) == quote(foo) | R = yes.
 t(atom_eq, R)    <=> R = no.
 
-t(atom_neq, R)   <=> term(foo) == term(bar) | R = yes.
+t(atom_neq, R)   <=> quote(foo) == quote(bar) | R = yes.
 t(atom_neq, R)   <=> R = no.
 
 % Term equality (==): structural.
-t(term_eq, R)    <=> term(p(1,2)) == term(p(1,2)) | R = yes.
+t(term_eq, R)    <=> quote(p(1,2)) == quote(p(1,2)) | R = yes.
 t(term_eq, R)    <=> R = no.
 
-t(term_neq, R)   <=> term(p(1,2)) == term(p(1,3)) | R = yes.
+t(term_neq, R)   <=> quote(p(1,2)) == quote(p(1,3)) | R = yes.
 t(term_neq, R)   <=> R = no.

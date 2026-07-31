@@ -23,7 +23,7 @@ direct(N, R) <=> R = N.
 via_body(N, R) <=> relay(N + 10, R).
 relay(X, R)    <=> R = X.
 
-% 'quoted(EXPR, R)' uses term/1 to opt out of evaluation: EXPR stays as
+% 'quoted(EXPR, R)' uses quote/1 to opt out of evaluation: EXPR stays as
 % a data term. This pins the existing quoting escape hatch and ensures
 % the opt-out keeps working after the semantic change.
 quoted(N, R) <=> R = N.

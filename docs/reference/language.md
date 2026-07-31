@@ -236,8 +236,8 @@ is the degenerate case and continues to work unchanged.
 
 Comma at the top of the body is always a sequencer, even when written
 in functor form (`','(A, B)`); both surface forms parse to the same
-compound. To return a `,/2` constructor value, wrap it in `term/1`:
-`f() -> term(','(foo, bar)).`
+compound. To return a `,/2` constructor value, wrap it in `quote/1`:
+`f() -> quote(','(foo, bar)).`
 
 An `is` binding may shadow a parameter or an earlier binding of the
 same name. The RHS sees the *old* value; subsequent statements and the
@@ -321,7 +321,7 @@ constructor.
 - Rule heads and equation patterns: these match on data shapes; a
   pattern like `f(g(X))` matches a compound whose argument is itself
   a compound, regardless of what `g` resolves to.
-- Inside `term(...)` (see below).
+- Inside `quote(...)` (see below).
 
 For instance, given:
 
@@ -334,32 +334,32 @@ calling `store(1 + 2), ask(R)` stores `store(3)` (not `store(1 + 2)`),
 and the second rule then unifies `R = 3`. The same applies to
 function calls: `store(member(1, [0, 1, 2]))` stores `store(true)`.
 
-### The `term/1` quoting form
+### The `quote/1` quoting form
 
 The opt-out for users who want to pass an unevaluated data term is the
-`term(...)` quoting form:
+`quote(...)` quoting form:
 
 ```
-store(term(plus(2, 3)))   % stored as store(plus(2, 3))
+store(quote(plus(2, 3)))   % stored as store(plus(2, 3))
 ```
 
-`term` is a reserved name — you cannot declare `:- function term/1.`
-or `:- chr_constraint term/1.`. The form may appear in any
+`quote` is a reserved name — you cannot declare `:- function quote/1.`
+or `:- chr_constraint quote/1.`. The form may appear in any
 evaluating position (constraint arguments, `is` RHS, function-call
-arguments, …) and may nest: an expression inside `term(...)` is
+arguments, …) and may nest: an expression inside `quote(...)` is
 itself parsed as a surface term, and unbound logical variables inside
 become part of the resulting term value without erroring.
 
-In head and equation patterns `term(X)` is treated like any other
+In head and equation patterns `quote(X)` is treated like any other
 compound — heads never evaluate, so the quoting form has no
 additional effect there.
 
-The body of `term(...)` is also opaque to module-visibility checks:
+The body of `quote(...)` is also opaque to module-visibility checks:
 qualified atoms inside are not validated against the per-module
 constructor allowlist or any other namespace, so the form is the
 supported way to construct synthetic qualified atoms (e.g. as
 type-tag values) when no corresponding exported declaration exists.
-Outside `term(...)`, a qualified reference `M:n` must resolve to a
+Outside `quote(...)`, a qualified reference `M:n` must resolve to a
 visible value-level identifier — function, constraint, or data
 constructor — in `M` (see §Type and constructor exports).
 
@@ -370,7 +370,7 @@ fallback: an unbound logical variable flows through user-defined
 function calls as an ordinary value, but the moment something
 demands a concrete value (most commonly a host-language operation
 like arithmetic or comparison) the evaluation runtime-errors. The
-Haskell interpreter surfaces this as `YCHR-60001`. Use `term(...)`
+Haskell interpreter surfaces this as `YCHR-60001`. Use `quote(...)`
 to keep an expression symbolic until something else binds the
 variables.
 

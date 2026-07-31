@@ -664,7 +664,7 @@ exprToValue = termToValue . R.exprToTerm
 -- | Evaluate an expression in the query context (used for @is@ RHS
 -- and guard expressions). 'CallExpr', 'ApplyExpr', and 'HostExpr'
 -- evaluate their arguments and invoke the appropriate procedure;
--- 'CtorExpr' (and the @term\/1@ quoting form) build values
+-- 'CtorExpr' (and the @quote\/1@ quoting form) build values
 -- structurally without re-evaluating their children.
 evalNestedExpr :: D.Expr -> QueryM Value
 evalNestedExpr (R.IntExpr n) = pure (VInt n)
@@ -692,9 +692,9 @@ evalNestedExpr (R.HostExpr f args) = do
   argVals <- traverse evalNestedExpr args
   env <- lift ask
   lift (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
--- @term(X)@ short-circuit: build the inner value as data, no
+-- @quote(X)@ short-circuit: build the inner value as data, no
 -- nested-call evaluation. Mirrors the legacy 'termToValue arg' path.
-evalNestedExpr (R.CtorExpr (Types.Unqualified "term") [arg]) = exprToValue arg
+evalNestedExpr (R.CtorExpr (Types.Unqualified "quote") [arg]) = exprToValue arg
 -- Native-bool fast path. Mirrors 'Compile.compileExpr' for
 -- @prelude:true@/@prelude:false@: queries must produce 'VBool' just
 -- like compiled rules, so a REPL @is@ RHS or tell-side argument
