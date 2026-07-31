@@ -1,5 +1,14 @@
 # YCHR Type System Specification
 
+> **Audience:** readers annotating a program with types, and anyone
+> working on the checker itself.
+> **You will:** find the type language, the consistency rules, overload
+> resolution, and bounded polymorphism, in specification detail.
+> **Skip if:** you just want to add a few annotations — the how-to
+> [Add types to a program](../how-to/add-types.md) and tutorial
+> [Functions, types, and lambdas](../tutorials/04-functions-and-types.md)
+> cover the common cases.
+
 This document specifies the YCHR static type system: a gradual,
 consistency-based type checker for CHR programs. The type checker
 operates on the desugared AST. Types are erased at runtime; the
@@ -11,7 +20,7 @@ checker produces errors without transforming the program.
 The type system has four goals:
 
 1. Catch type inconsistencies statically, before compilation.
-2. Remain optional -- programs that omit type annotations are accepted
+2. Remain optional — programs that omit type annotations are accepted
    without errors.
 3. Provide a uniform type language for constraints and functions.
 4. Be simple enough to implement quickly, but extensible toward
@@ -38,11 +47,11 @@ The type language is defined by the following grammar:
 
 ### Built-in types
 
-- **`int`** -- arbitrary-precision integer values. Arithmetic never
+- **`int`** — arbitrary-precision integer values. Arithmetic never
   overflows; the host runtime carries integers as bignums.
-- **`float`** -- floating-point values.
-- **`string`** -- string values.
-- **`any`** -- the dynamic type. Consistent with every other type.
+- **`float`** — floating-point values.
+- **`string`** — string values.
+- **`any`** — the dynamic type. Consistent with every other type.
   Serves as the escape hatch for gradually typed code.
 
 The `bool` type is not built-in. It is an algebraic type declared in
@@ -287,7 +296,7 @@ foo(X), bar(Y), baz(Z) <=> X = Y, X = Z.
 - `X = Z`: `any ~ bool` → succeeds. `Z` remains `bool`.
 
 No error. The `any` in `foo` makes both checks involving `X`
-succeed. Note that `Y` and `Z` retain their declared types -- the
+succeed. Note that `Y` and `Z` retain their declared types — the
 `any` from `X` does not propagate to them. If the rule also
 contained `Y = Z`, the checker would report an error for
 `int ~ bool`.
@@ -516,7 +525,7 @@ The type of a compound expression is determined by its outermost form:
   The type of the call expression is the declared return type (with
   type variables instantiated by the same substitution). The
   implementation's RHS type is only checked for consistency with the
-  declaration -- callers never see through to the implementation.
+  declaration — callers never see through to the implementation.
 - **Host call**: all argument types and the return type are `any`.
 
 
@@ -1133,7 +1142,7 @@ identities and cannot collide.
 #### Worked example — polymorphic `sorted`
 
 ```prolog
-:- function ('<'(int, int) -> bool), ('<'(float, float) -> bool).
+:- class ('<'(int, int) -> bool), ('<'(float, float) -> bool).
 :- chr_constraint sorted(list(T)) requiring '<'(T, T) -> bool.
 
 sorted([]) <=> true.
@@ -1238,7 +1247,7 @@ case and share their error codes.
 **Example 1 — Polymorphic `max`.**
 
 ```prolog
-:- function ('>'(int, int) -> bool), ('>'(float, float) -> bool).
+:- class ('>'(int, int) -> bool), ('>'(float, float) -> bool).
 :- function max(T, T) -> T requiring '>'(T, T) -> bool.
 
 max(X, Y) | X > Y -> X.
@@ -1423,7 +1432,7 @@ system, given that the core is a well-understood construction. The
 key ingredients are:
 
 - The consistency relation is reflexive and symmetric (but not
-  transitive -- this is expected for gradual typing).
+  transitive — this is expected for gradual typing).
 - Consistency with `any` is absorbing: `any ~ τ` always succeeds.
 - Constraint gathering is confluent (order-independent).
 - The fully-typed fragment reduces to standard HM with algebraic
@@ -1436,7 +1445,7 @@ key ingredients are:
 |--------|----------|
 | Nature | Static, types erased at runtime |
 | Pipeline position | After desugaring, before compilation |
-| Effect on AST | None -- errors only, prevents compilation |
+| Effect on AST | None — errors only, prevents compilation |
 | Built-in types | `int`, `float`, `string`, `any` |
 | User-defined types | Algebraic types via `:- chr_type` |
 | Function types | `fun(τ₁,...,τₙ) -> τᵣ` |

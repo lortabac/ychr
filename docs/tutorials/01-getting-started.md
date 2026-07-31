@@ -47,7 +47,7 @@ You should see the available subcommands (`repl`, `run`, `compile`,
 
 We'll use a toy CHR program from this repo: a cake recipe.
 
-```chr
+```prolog
 % examples/bakery.chr
 :- module(bakery).
 
@@ -63,14 +63,13 @@ cake_recipe @
 ```
 
 A single rule says: when the constraint store contains *three* eggs,
-one each of milk, flour, sugar, **and** a `bake` trigger, replace
-them with `cake`. The `<=>` operator is **simplification**: it
-removes the matched constraints and adds the body in their place.
+one each of milk, flour, sugar, and a `bake` trigger, replace them
+with `cake`. The `<=>` operator is *simplification*: it removes the
+matched constraints and adds the body in their place.
 
-The interesting bit is that the rule head requires *three* `egg`
-constraints. CHR matches against a *multiset*: every head constraint
-must be present simultaneously, in any order, but with the right
-multiplicity.
+Note that the head requires *three* `egg` constraints. CHR matches
+against a *multiset*: every head constraint must be present
+simultaneously, in any order, but with the right multiplicity.
 
 ## 4. Try it in a live session
 
@@ -80,7 +79,7 @@ Open the REPL on this file:
 ychr repl examples/bakery.chr
 ```
 
-The prompt is `ychr> `. Enter a **live session** with `:begin` — this
+The prompt is `ychr> `. Enter a *live session* with `:begin` — this
 gives you a persistent constraint store that survives across inputs
 (outside live sessions each query starts fresh). The prompt switches
 to `ychr live> `.
@@ -113,32 +112,22 @@ ychr live> :end
 ychr>
 ```
 
-**The line that matters is `bake.`** Posting it completed the rule's
-left-hand side, so all seven head constraints were rewritten to
-`cake` immediately. The `print_store.` that follows shows the store
-*after* the firing.
+Each `egg.` and each glass added one constraint to the store. After
+the first six ingredients nothing had fired yet — `bake` was still
+missing. Posting `bake.` completed the rule's left-hand side, so all
+seven head constraints were removed at once and `cake` took their
+place. The `print_store.` that follows shows the store after the
+firing.
 
-What just happened?
+Order of insertion did not matter: the rule would have fired the same
+way with the eggs added last. And because the store is a multiset, the
+three `egg` constraints sat in it side by side until the rule consumed
+all three together.
 
-- Each `egg.` (and so on) added one constraint to the store. After
-  the first six ingredients the rule still hadn't fired — we were
-  missing `bake`.
-- `bake.` made the head finally complete. The rule fired, removed
-  *all seven* head constraints from the store, and added `cake`.
-- `print_store.` is a built-in from the meta library; it prints
-  every alive constraint in the store, qualified by module. It's
-  auto-loaded in the REPL — no `:- use_module` needed.
-
-A few things to notice:
-
-- **Order of insertion didn't matter.** We added the eggs first, but
-  the rule would have fired the same way if we'd added milk, flour,
-  sugar, then eggs, then `bake`.
-- **The store is a multiset.** Three separate `egg` constraints sat
-  in the store side by side until the rule consumed all three at
-  once.
-- **`:end` discards the live store.** The next query you type will
-  see a fresh empty store.
+Two REPL details worth knowing. `print_store.` comes from the meta
+library, which the REPL auto-loads — no `:- use_module` needed; it
+prints every alive constraint, qualified by module. And `:end`
+discards the live store, so the next query starts from an empty one.
 
 ## 5. Where to go next
 

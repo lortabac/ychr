@@ -14,20 +14,20 @@ them.
 
 ## 1. The constraint store is a multiset
 
-A CHR program's only state is the **constraint store**: a *multiset* of
+A CHR program's only state is the *constraint store*: a *multiset* of
 facts (called *constraints*). "Multiset" means duplicates count — two
 copies of `egg` are two distinct items in the store, not one. The
 bakery rule from tutorial 01 needed three `egg` constraints; if the
 store had been a set, three `egg.` inputs would have collapsed to one
 and the rule could never have fired.
 
-CHR is **forward-chaining**: the runtime starts from the constraints
+CHR is *forward-chaining*: the runtime starts from the constraints
 you put in the store and pushes the store forward by firing rules. It
 is not Prolog. There is no goal-directed search, no backtracking. Rule
-choice is **committed-choice**: once a rule fires, the runtime does not
-later "undo" that firing to try another.
+choice is *committed*: once a rule fires, the runtime does not later
+"undo" that firing to try another.
 
-A program is a list of **rules**. Each rule has a *head* (what must be
+A program is a list of *rules*. Each rule has a *head* (what must be
 in the store), an optional *guard* (extra conditions), and a *body*
 (what to do when the rule fires).
 
@@ -39,7 +39,7 @@ head constraints when they fire.
 **Simplification** (`<=>`) removes the head and replaces it with the
 body. The bakery rule from tutorial 01 was a simplification:
 
-```chr
+```prolog
 cake_recipe @
     egg, egg, egg, glass_of_milk, glass_of_flour, glass_of_sugar, bake
   <=> cake.
@@ -51,7 +51,7 @@ place.
 **Propagation** (`==>`) keeps the head and *adds* the body to the
 store. Nothing is removed.
 
-```chr
+```prolog
 transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
 ```
 
@@ -62,7 +62,7 @@ If `leq(1, 2)` and `leq(2, 3)` are both in the store, this rule adds
 to the *left* of the backslash are kept, the ones to the *right* are
 removed, and the body is added. It is the idiomatic way to deduplicate:
 
-```chr
+```prolog
 idempotence @ leq(X, Y) \ leq(X, Y) <=> true.
 ```
 
@@ -76,7 +76,7 @@ Put all three rule kinds together and you get one of the most
 well-known CHR programs: a partial-order solver for `leq` (less-or-equal).
 It lives at [`examples/leq.chr`](../../examples/leq.chr):
 
-```chr
+```prolog
 :- module(order, [leq/2]).
 :- chr_constraint leq/2.
 
@@ -86,8 +86,8 @@ idempotence   @ leq(X, Y) \ leq(X, Y) <=> true.
 transitivity  @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
 ```
 
-Four rules, one for each property of a partial order. Let's load it
-and watch the store evolve.
+Four rules, one for each property of a partial order. Load it and
+watch the store evolve.
 
 ```sh
 ychr repl examples/leq.chr
@@ -195,14 +195,13 @@ neither has a ground value, but each is bound to the other.
 ## 4. Guards
 
 A head match is not always enough to fire a rule. CHR lets you attach
-a **guard** — a boolean test that must hold for the rule to fire. The
+a *guard* — a boolean test that must hold for the rule to fire. The
 syntax is `Head <=> Guard | Body`. The companion file
 [`examples/clamp.chr`](../../examples/clamp.chr) shows two rules that
 share a head and differ only in their guards:
 
-```chr
+```prolog
 :- module(clamp, [clamp/3]).
-:- use_module(prelude).
 :- chr_constraint clamp/3.
 
 low  @ clamp(X, Lo, R) <=> X < Lo  | R = Lo.
@@ -230,10 +229,10 @@ R = 7
 For each input, only one rule's guard passes; the other rule's match
 silently fails.
 
-**Guards are pure tests.** They use comparisons like `<`, `>=`, `==`
-and host calls. They **must not bind variables** — that is what the
-body is for. The guard test for equality is `==` (structural equality,
-no mutation); the body uses `=` (unification, may bind).
+Guards are pure tests. They use comparisons like `<`, `>=`, `==` and
+host calls, and they must not bind variables — that is what the body
+is for. The guard test for equality is `==` (structural equality, no
+mutation); the body uses `=` (unification, may bind).
 
 | Position | Operator | Effect |
 |----------|----------|--------|
@@ -246,14 +245,14 @@ unbound variables is false.
 
 ## 5. Firing order and propagation history
 
-CHR's evaluation strategy is the **refined operational semantics** (ωr).
+CHR's evaluation strategy is the *refined operational semantics* (ωr).
 Two facts about it cover almost everything you'll need day to day:
 
-- **Rules are tried in source order.** When several rules could match,
-  the one that appears first in the file fires. Tutorial 03 shows this
-  in action when two recipes overlap.
-- **Propagation rules carry a history.** A propagation rule never
-  fires twice on the same combination of head constraint *identities*.
+- Rules are tried in source order. When several rules could match, the
+  one that appears first in the file fires. Tutorial 03 shows this in
+  action when two recipes overlap.
+- Propagation rules carry a history: a propagation rule never fires
+  twice on the same combination of head constraint *identities*.
   Without this, `transitivity` would loop on `leq(1, 2)` and
   `leq(2, 3)` — both are kept in the store, both still match the head,
   so the runtime would keep re-deriving `leq(1, 3)` indefinitely. The

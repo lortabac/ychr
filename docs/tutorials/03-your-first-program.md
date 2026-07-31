@@ -17,7 +17,7 @@ Create a new file `recipes.chr` next to where you'll run YCHR.
 
 Open `recipes.chr` and write:
 
-```chr
+```prolog
 :- module(recipes).
 
 :- chr_constraint
@@ -32,7 +32,7 @@ cake_recipe @
 ```
 
 This is the same program as the bakery from the previous tutorial. The
-`<=>` operator is **simplification**: it removes every constraint in
+`<=>` operator is *simplification*: it removes every constraint in
 the head and adds the body in their place. With this rule alone, three
 eggs, three glasses, and a `bake` collapse into a `cake`.
 
@@ -59,10 +59,10 @@ ychr>
 
 ## 2. A second recipe and rule selection
 
-Let's add a second simplification, with a head that *partly overlaps*
+Add a second simplification, with a head that *partly overlaps*
 the first. Edit `recipes.chr` and append:
 
-```chr
+```prolog
 :- chr_constraint butter/0, cookies/0.
 
 cookies_recipe @
@@ -78,8 +78,8 @@ declaration.)
 
 Reload from the REPL with `:recompile` (or restart it). The `cake`
 and `cookies` rules can both fire when their heads are present in the
-store. The interesting question is: what happens when *both* heads are
-satisfiable from the same store?
+store. What happens when *both* heads are satisfiable from the same
+store?
 
 First, give it a clean cookies-only run — only the cookies rule's
 head is fully present:
@@ -97,7 +97,7 @@ ychr live> :end
 ychr>
 ```
 
-Now stock the pantry with enough for **either** recipe — three eggs,
+Now stock the pantry with enough for *either* recipe — three eggs,
 butter, milk, flour, sugar, and a single `bake`:
 
 ```ychr-repl
@@ -117,11 +117,11 @@ ychr live> :end
 ychr>
 ```
 
-The cake rule won. Why? CHR uses **committed-choice** semantics: when
-`bake` becomes the active constraint, the runtime tries the rules in
-source order, finds the cake rule's head fully present, fires it, and
-commits — consuming the `bake`. With `bake` gone, the cookies rule
-can no longer fire. The leftover `butter` stays in the store.
+The cake rule won, because CHR commits to the first rule it can fire.
+When `bake` becomes the active constraint, the runtime tries the rules
+in source order, finds the cake rule's head fully present, fires it,
+and commits — consuming the `bake`. With `bake` gone, the cookies rule
+can no longer fire, and the leftover `butter` stays in the store.
 
 Source order matters when heads overlap.
 
@@ -133,14 +133,14 @@ propagation rules do. They use `==>` instead of `<=>`.
 
 Append:
 
-```chr
+```prolog
 :- chr_constraint serving_ready/0.
 
 serve @ cake ==> serving_ready.
 ```
 
 This says: whenever `cake` is in the store, also place
-`serving_ready` in the store. The `cake` itself is **kept**.
+`serving_ready` in the store. The `cake` itself is kept.
 
 Reload and bake:
 
@@ -162,7 +162,7 @@ ychr>
 
 `cake` survived, and `serving_ready` was added.
 
-A subtlety: propagation rules carry a **propagation history** that
+A subtlety: propagation rules carry a *propagation history* that
 prevents the same combination of head constraints from firing twice.
 If `serve` fired every time the runtime examined `cake`, you'd get an
 infinite loop. The history records *"serve fired with this particular
@@ -207,9 +207,9 @@ Three rules covering two of the four CHR rule kinds:
 | `cookies_recipe` | `<=>` (simplification) | yes | yes |
 | `serve` | `==>` (propagation) | no | yes |
 
-The two missing pieces — **simpagation** (`Kept \ Removed <=> ...`,
+The two missing pieces — *simpagation* (`Kept \ Removed <=> ...`,
 which keeps some head constraints while removing others) and
-**guards** (boolean tests that gate a rule firing) — show up next.
+*guards* (boolean tests that gate a rule firing) — show up next.
 
 ## 5. Where to go next
 

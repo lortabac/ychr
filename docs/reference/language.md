@@ -1,5 +1,12 @@
 # YCHR Language Reference
 
+> **Audience:** readers who know CHR and want to know where YCHR
+> departs from it.
+> **You will:** find the feature-level rules for modules, constraints,
+> functions, evaluation, and host calls.
+> **Skip if:** you are learning CHR itself — start with the
+> [CHR primer](../tutorials/02-chr-primer.md).
+
 YCHR accepts standard CHR with Prolog-compatible syntax: constraint
 declarations, simplification rules (`<=>`), propagation rules (`==>`),
 simpagation rules (`\`), guards, and rule bodies. This document
@@ -16,7 +23,7 @@ table, the rule and expression forms), see
 A YCHR program is organized into modules. A module *may* declare its
 name and its export list, and may import other modules:
 
-```
+```prolog
 :- module(order, [leq/2]).
 :- use_module(library(lists)).
 :- chr_constraint leq/2.
@@ -29,7 +36,7 @@ transitivity  @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
 
 A module may also be declared without an export list:
 
-```
+```prolog
 :- module(order).
 ```
 
@@ -72,7 +79,7 @@ search path.
 A user-defined type is declared with `:- chr_type` (see
 [type-system.md](type-system.md) for the full spec):
 
-```
+```prolog
 :- chr_type col ---> red ; green ; blue.
 ```
 
@@ -83,7 +90,7 @@ type while restricting which constructors are visible to importing
 modules, use the two-argument form
 `type(Name/Arity, [Con1, Con2, ...])`:
 
-```
+```prolog
 :- module(palette, [type(col/0)]).         % all constructors of col
 :- module(palette, [type(col/0, [red])]).  % only `red`
 :- module(palette, [type(col/0, [])]).     % type but no constructors
@@ -92,7 +99,7 @@ modules, use the two-argument form
 The same form is accepted in `use_module` import lists, where it
 intersects with the exporter's allowlist:
 
-```
+```prolog
 :- use_module(palette, [type(col/0, [red])]).
 ```
 
@@ -114,7 +121,7 @@ with `:- opaque_type` and introduced or eliminated only by (host-backed)
 functions (see [type-system.md](type-system.md#opaque-types) for the
 typing rules):
 
-```
+```prolog
 :- module(sets, [type(set/1), set_new/0, set_member/2]).
 
 :- opaque_type set(X).
@@ -141,7 +148,7 @@ functions declared over them.
 Constraints are declared with `:- chr_constraint`. The arity-only
 form is the standard CHR shape:
 
-```
+```prolog
 :- chr_constraint leq/2.
 ```
 
@@ -149,7 +156,7 @@ When the type checker is in use, the same declaration can carry
 argument types — the arity is then inferred from the number of
 positions:
 
-```
+```prolog
 :- chr_constraint leq(int, int).
 :- chr_constraint sorted(list(T)) requiring lt(T, T) -> bool.
 ```
@@ -172,7 +179,7 @@ boolean. They can call host-language procedures (see
 Functions are declared with `:- function` and defined with Erlang-style
 equations using `->`, evaluated top-to-bottom by pattern matching:
 
-```
+```prolog
 :- function member/2.
 
 member(_, [])     -> false.
@@ -191,7 +198,7 @@ Guard clauses on equations are written with `|`, and use the same
 ask-semantics as rule guards (no variable binding, comma-separated
 boolean expressions, may call any function in scope):
 
-```
+```prolog
 :- function factorial/1.
 
 factorial(0)              -> 1.
@@ -208,7 +215,7 @@ A function body may also be a comma-separated sequence. The last item
 is the return expression; earlier items run for their effect or to
 bind a value before the return is computed:
 
-```
+```prolog
 :- function factorial/1.
 
 factorial(0)         -> 1.
@@ -247,7 +254,7 @@ is well-typed even when `X` and `X + 1` have different types.
 
 Lambdas (`fun(X) -> ... end`) accept the same sequenced form:
 
-```
+```prolog
 make_doubler() -> fun(X) -> Y is X + 1, Y * 2 end.
 ```
 
@@ -256,7 +263,7 @@ make_doubler() -> fun(X) -> Y is X + 1, Y * 2 end.
 `:- function` declares a single-signature function. To overload a
 function across multiple types, use `:- class`:
 
-```
+```prolog
 :- class
     (size(int) -> int),
     (size(string) -> int).
@@ -283,7 +290,7 @@ Bounded polymorphism (`requiring`) is reserved for `:- function` and
 `:- open_function`; combining it with `:- class` / `:- open_class` is
 rejected as `RequiringOnClass` (YCHR-15005).
 
-```
+```prolog
 :- function pick(T, T) -> T requiring '>'(T, T) -> bool.
 ```
 
@@ -325,7 +332,7 @@ constructor.
 
 For instance, given:
 
-```
+```prolog
 :- chr_constraint store/1, ask/1.
 store(X), ask(R) <=> R = X.
 ```
@@ -339,7 +346,7 @@ function calls: `store(member(1, [0, 1, 2]))` stores `store(true)`.
 The opt-out for users who want to pass an unevaluated data term is the
 `quote(...)` quoting form:
 
-```
+```prolog
 store(quote(plus(2, 3)))   % stored as store(plus(2, 3))
 ```
 
@@ -383,7 +390,7 @@ either operand are unification slots: if the name is not already in
 scope it is introduced as a fresh logical variable and the unifier
 binds it.
 
-```chr
+```prolog
 test(R) <=> Y = 10, R = Y.                       % Y introduced by '='
 test(R1, R2) <=> pair(X, Y) = pair(1, 2),        % X, Y introduced under ctor
                  R1 = X, R2 = Y.
@@ -402,7 +409,7 @@ in rule bodies and queries.
 `is` is generalized to accept any expression on the RHS, including
 calls to user-defined functions and host-language functions.
 
-```
+```ychr-repl
 ychr> R is member(1, [0, 1, 2]).
 R = true.
 ```
@@ -412,7 +419,7 @@ comparison operators), YCHR's `is` and `=` sit at priority 750 (still
 `xfx`). This places them just above the comparisons, so a comparison
 on the RHS no longer needs parentheses:
 
-```
+```ychr-repl
 ychr> B is 1 < 2.
 B = true.
 ```
@@ -423,7 +430,7 @@ Anonymous functions use Erlang-style syntax with `end` delimiting the
 body, so lambdas can appear inside compound-term arguments without
 extra parentheses:
 
-```
+```prolog
 :- function apply/2.
 apply(F, X) -> call(F, X).
 
@@ -443,7 +450,7 @@ captured values are taken at the moment the lambda expression is
 evaluated, then passed as extra hidden parameters to a lifted
 top-level function):
 
-```
+```prolog
 :- function make_adder/1.
 make_adder(N) -> fun(X) -> X + N end.
 ```
@@ -456,7 +463,7 @@ Named functions are referenced by `fun name/arity` (e.g.
 The prelude exports a typed `call/N` family that is the everyday way
 to invoke a lambda or function reference:
 
-```
+```prolog
 R is call(fun(X) -> X + 1 end, 5).
 R is call(fun double/1, 10).
 ```
@@ -471,7 +478,7 @@ working below the typed `call` wrapper.
 
 YCHR programs reach into the host language with the `host:` qualifier:
 
-```
+```prolog
 X + Y -> host:'+'(X, Y).
 ```
 

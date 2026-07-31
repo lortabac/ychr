@@ -15,7 +15,6 @@
 :- module(callables,
           [by_ref/1, lambda/1, closure/1,
            fun double/1, fun make_adder/1]).
-:- use_module(prelude).
 :- chr_constraint by_ref/1, lambda/1, closure/1.
 :- function double/1.
 :- function make_adder/1.

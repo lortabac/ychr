@@ -29,11 +29,11 @@ complexity — a property most rule-based languages do not have.
 
 ## The whole language in one idea
 
-A CHR program's only state is a **multiset of constraints**, the *store*.
+A CHR program's only state is a multiset of constraints, the *store*.
 A program is a set of rules that rewrite that store. Rules fire until none
 can fire any more, and whatever is left in the store is the answer.
 
-That is genuinely the whole model. Here is Euclid's algorithm:
+That is the whole model. Here is Euclid's algorithm:
 
 ```prolog
 :- module(gcd, [gcd/1]).
@@ -66,8 +66,8 @@ works out when and how often to apply them.
 
 ## What CHR is good at
 
-CHR earns its keep wherever the problem is naturally stated as *facts plus
-rules that combine them*.
+CHR fits wherever the problem is naturally stated as *facts plus rules
+that combine them*.
 
 - **Constraint solvers.** The original use case, still the best fit.
   Interval propagation, finite-domain solving, union-find, Gaussian
@@ -87,7 +87,7 @@ rules that combine them*.
 
 Where CHR is a poor fit: problems that want *search* (CHR commits and never
 backtracks — that is the host's job), and straight-line computation with no
-interesting rule interaction, where an ordinary function is simpler.
+rule interaction, where an ordinary function is simpler.
 
 ## How it relates to other paradigms
 

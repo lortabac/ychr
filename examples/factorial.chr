@@ -7,7 +7,6 @@
 % Used by docs/tutorials/04-functions-and-types.md §1 and §3.
 
 :- module(factorial, [compute/2, fun factorial/1]).
-:- use_module(prelude).
 :- chr_constraint compute(int, int).
 :- function factorial(int) -> int.
 

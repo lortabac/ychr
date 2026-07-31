@@ -38,7 +38,7 @@ A DSL program is built from four kinds of value:
 | Kind | Type | Built by |
 |---|---|---|
 | Module | `Module` | `module'`, then `importing`/`library`/`declaring`/`defining`/`withEquations`/`withExtensions`/`chrType`/`exporting` |
-| Declaration | `Declaration` | `(//)`, `function`, `openFunction`, `extendFunctionType`, `typeExport`, `op` |
+| Declaration | `Declaration` | `(//)`, `function`, `openFunction`, `class_`, `openClass`, `extendClassType`, `typeExport`, `op` |
 | Rule | `Rule` | `(<=>)`, `(==>)`, `(\\)` (with `<=>`), `(@:)`, `(\|-)` |
 | Term | `Term` | `var`, `atom`, `int`, `float`, `bool`, `text`, `wildcard`, `term`, `qterm`, `quote` |
 

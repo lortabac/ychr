@@ -50,7 +50,7 @@ and functions exported from the loaded modules.
 | `:list_files` | | List the loaded files. |
 | `:list_modules` | | List the loaded modules. |
 | `:list_declarations` | | List visible constraint and function declarations. |
-| `:list_operators` | | List defined operators (in `op(/3)` form). |
+| `:list_operators` | | List defined operators, one `op/3` term per line. |
 | `:info NAME` | `:i NAME` | Show information about an identifier (see below). |
 | `:trace GOAL` | | Run `GOAL` with refined-operational-semantics tracing (see below). |
 | `:begin` | | Enter a live CHR session. End with `:end`. |
@@ -120,10 +120,7 @@ tell order:leq(1, 2)
   activate c#0: order:leq(1, 2)
     try occurrence order:leq #1 (rule reflexivity)
     try occurrence order:leq #2 (rule antisymmetry)
-    try occurrence order:leq #3 (rule antisymmetry)
     try occurrence order:leq #4 (rule idempotence)
-      partner c#0: order:leq(1, 2)
-    try occurrence order:leq #5 (rule idempotence)
       partner c#0: order:leq(1, 2)
     try occurrence order:leq #6 (rule transitivity)
     try occurrence order:leq #7 (rule transitivity)
@@ -132,10 +129,7 @@ tell order:leq(2, 3)
   activate c#1: order:leq(2, 3)
     try occurrence order:leq #1 (rule reflexivity)
     try occurrence order:leq #2 (rule antisymmetry)
-    try occurrence order:leq #3 (rule antisymmetry)
     try occurrence order:leq #4 (rule idempotence)
-      partner c#1: order:leq(2, 3)
-    try occurrence order:leq #5 (rule idempotence)
       partner c#1: order:leq(2, 3)
     try occurrence order:leq #6 (rule transitivity)
       partner c#0: order:leq(1, 2)
@@ -145,20 +139,21 @@ tell order:leq(2, 3)
           activate c#2: order:leq(1, 3)
             try occurrence order:leq #1 (rule reflexivity)
             try occurrence order:leq #2 (rule antisymmetry)
-            try occurrence order:leq #3 (rule antisymmetry)
             try occurrence order:leq #4 (rule idempotence)
-              partner c#2: order:leq(1, 3)
-            try occurrence order:leq #5 (rule idempotence)
               partner c#2: order:leq(1, 3)
             try occurrence order:leq #6 (rule transitivity)
             try occurrence order:leq #7 (rule transitivity)
     try occurrence order:leq #7 (rule transitivity)
 ```
 
-Note: the `partner c#N` lines that appear in the idempotence
-occurrences match the active constraint against itself; the compiled
-guard then rejects the self-match (events for those guard rejections
-are not currently traced).
+Occurrences 3 and 5 never appear: the compiler marks them passive and
+emits no procedure for them, so `activate` never calls them. See
+[passive occurrences](passive-occurrences.md#worked-example-leq) for why
+those two are redundant.
+
+The `partner c#N` line inside occurrence 4 matches the active constraint
+against itself; the compiled guard then rejects the self-match (events
+for those guard rejections are not currently traced).
 
 The events are:
 

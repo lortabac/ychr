@@ -1,5 +1,14 @@
 # Passive Occurrences
 
+> **Audience:** contributors working on the CHR-to-VM compiler, and
+> readers wondering why a compiled program has fewer occurrence
+> procedures than the rules suggest.
+> **You will:** find which occurrences the compiler elides, how it sees
+> through Head Normal Form to prove them redundant, and why that is
+> sound.
+> **Skip if:** you are writing CHR rather than compiling it — the
+> optimization changes nothing you can observe from a program.
+
 This document specifies the *passive occurrences* optimization performed
 by the CHR-to-VM compiler. It is a static analysis over the numbered
 occurrences of a desugared program: occurrences that provably can never
@@ -29,17 +38,17 @@ search is dead code.
 
 ## Definition
 
-An occurrence is **passive** if it can be derived that the rule can never
+An occurrence is *passive* if it can be derived that the rule can never
 fire with the active constraint matching that occurrence. A passive
 occurrence contributes no `occurrence_c_j` procedure and no call from
 `activate_c`; it is otherwise still *numbered* exactly as ωr requires, so
 the numbers of the remaining (active) occurrences are unchanged.
 
-The analysis is **conservative**: it marks an occurrence passive only when
+The analysis is conservative: it marks an occurrence passive only when
 soundness is guaranteed. Failing to mark a genuinely-passive occurrence
 costs a missed optimization; wrongly marking a live occurrence would drop
 firings and change program behavior. The guiding principle is therefore
-**correctness over completeness** — every predicate below is a sufficient,
+*correctness over completeness* — every predicate below is a sufficient,
 not a necessary, condition for passivity.
 
 
@@ -48,7 +57,7 @@ not a necessary, condition for passivity.
 The analysis runs *after* occurrence numbering and *after* Head Normal
 Form (HNF), so it sees head arguments already normalized to distinct
 variables with the induced equalities materialized as guards. v1 detects
-the **subsumption / symmetry** source. The paper's **never-stored** source
+the *subsumption / symmetry* source. The paper's *never-stored* source
 is deferred — as explained in [Deferred](#deferred--future-work), its only
 storage-independent criterion is vacuous until Late Storage exists.
 
@@ -80,7 +89,7 @@ antisymmetry @ leq(X, Y), leq(Y, X) <=> X = Y.
 
 The two occurrences match the same unordered pair of stored constraints,
 differing only in which matched constraint is labelled "active". One
-occurrence is therefore redundant; the **higher-numbered** one is made
+occurrence is therefore redundant; the higher-numbered one is made
 passive. (The body need not be symmetric — see [Soundness](#soundness) for
 why the ωr-earlier occurrence always preempts the later one.)
 
@@ -188,11 +197,11 @@ the compilation scheme: its soundness *relies on early drop* (paper §5.3,
 Listing 8). Two ωr facts combine to make the passive occurrence
 unreachable:
 
-1. ωr tries **removed occurrences before kept ones** (and right-to-left),
+1. ωr tries *removed occurrences before kept ones* (and right-to-left),
    so the surviving occurrence always has the lower occurrence number and
    `activate` reaches it first.
-2. Once the active constraint is **removed from the store, its remaining
-   occurrences are not tried**. This is exactly what early drop implements:
+2. Once the active constraint is *removed from the store, its remaining
+   occurrences are not tried*. This is exactly what early drop implements:
    an occurrence procedure returns `true` when the active constraint was
    killed, and `activate` stops chaining as soon as an occurrence returns
    `true`.
@@ -226,11 +235,11 @@ The following are intentionally out of scope for v1:
   that is never stored can never fire (its `Foreach` is always empty).
   However, the only *storage-independent* criterion for "never stored" — a
   constraint all of whose head occurrences are single-headed guardless
-  simplification rules — is **vacuous for partner elimination without Late
-  Storage**: to be a partner of an occurrence, a constraint must appear in
+  simplification rules — is vacuous for partner elimination without Late
+  Storage: to be a partner of an occurrence, a constraint must appear in
   a multi-headed rule head, which immediately disqualifies it from that
   criterion. The paper's useful never-stored analysis instead derives
-  "never stored" from a **Late Storage** pass (a constraint removed before
+  "never stored" from a *Late Storage* pass (a constraint removed before
   it is ever committed to the store, even though it appears in multi-headed
   rules). This source is therefore deferred until Late Storage is
   implemented.

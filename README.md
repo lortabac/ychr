@@ -60,8 +60,9 @@ ychr check file.chr                  # type-check only
 ychr compile -t scheme -d out file.chr
 ```
 
-`make test` runs the full test suite (Haskell interpreter, Scheme
-backend, REPL, and type-checker tests).
+`make test` runs the full test suite: the Haskell interpreter, the
+Scheme backend and runtime, the REPL, the type checker, the embedding
+example, and lint checks over the documentation.
 
 Compiling to Scheme emits code that imports the YCHR Scheme runtime
 (`(ychr runtime)` and friends). That runtime lives in [`scheme/`](scheme/)

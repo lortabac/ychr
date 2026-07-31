@@ -11,7 +11,7 @@
 CHR is relational: the constraint store rewrites itself by matching
 heads. Once a rule fires, though, the body often wants to *compute*
 something — multiply, look up, format a string. That's what
-**user-defined functions** are for. Functions are deterministic,
+*user-defined functions* are for. Functions are deterministic,
 pattern-matched, top-to-bottom equations callable from guards, from
 the right-hand side of `is`, and from rule body position.
 
@@ -21,9 +21,8 @@ Pattern-matching, top-to-bottom, with a guard on the second equation.
 The companion file is
 [`examples/factorial.chr`](../../examples/factorial.chr):
 
-```chr
+```prolog
 :- module(factorial, [compute/2, fun factorial/1]).
-:- use_module(prelude).
 :- chr_constraint compute(int, int).
 :- function factorial(int) -> int.
 
@@ -48,9 +47,9 @@ Five pieces of language to point out.
   more depth.
 - `:- chr_constraint compute(int, int).` similarly types the
   constraint's two arguments.
-- The two `factorial(...) -> ...` lines are **equations**. They are
+- The two `factorial(...) -> ...` lines are *equations*. They are
   tried top-to-bottom. The first one matches only when the argument is
-  literally `0`. The second one matches any `N` and uses a **guard**
+  literally `0`. The second one matches any `N` and uses a *guard*
   (`| N > 0`) to exclude negatives. Equation guards use the same `|`
   operator as rule guards.
 - `compute(N, R) <=> R is factorial(N).` is an ordinary CHR rule. The
@@ -91,9 +90,8 @@ The same pattern scales naturally to recursion across multiple
 equations. The companion file
 [`examples/fib.chr`](../../examples/fib.chr):
 
-```chr
+```prolog
 :- module(fib, [compute/2, fun fib/1]).
-:- use_module(prelude).
 :- chr_constraint compute(int, int).
 :- function fib(int) -> int.
 
@@ -129,7 +127,7 @@ written in a plain form (no types) or an annotated form (with types);
 the checker enforces consistency only on the annotated parts. The
 factorial program in §1 used the annotated form throughout:
 
-```chr
+```prolog
 :- chr_constraint compute(int, int).
 :- function factorial(int) -> int.
 ```
@@ -154,7 +152,7 @@ To see the checker work, break it on purpose. Edit
 `examples/factorial.chr` so the body calls `factorial` with a string
 instead of `N`:
 
-```chr
+```prolog
 compute(N, R) <=> R is factorial("hello").
 ```
 
@@ -166,7 +164,7 @@ ychr check examples/factorial.chr
 
 ```
 === error ===
-examples/factorial.chr:17:19: YCHR-60001
+examples/factorial.chr:16:19: YCHR-60001
 Type mismatch: 'string' does not match 'int'
 R is factorial("hello")
 ```
@@ -180,7 +178,7 @@ You can also define your own types with a list of constructors. The
 companion file [`examples/traffic.chr`](../../examples/traffic.chr)
 defines a three-valued `color` and a function over it:
 
-```chr
+```prolog
 :- module(traffic, [intensity_of/2, type(color/0, [red, green, yellow])]).
 :- chr_type color ---> red ; green ; yellow.
 :- chr_constraint intensity_of(color, int).
@@ -226,11 +224,10 @@ call them indirectly. The companion file
 [`examples/closures.chr`](../../examples/closures.chr) shows the three
 forms a callable value can take:
 
-```chr
+```prolog
 :- module(callables,
           [by_ref/1, lambda/1, closure/1,
            fun double/1, fun make_adder/1]).
-:- use_module(prelude).
 :- chr_constraint by_ref/1, lambda/1, closure/1.
 :- function double/1.
 :- function make_adder/1.
@@ -283,8 +280,8 @@ ychr run -g 'closure(R)' --show-bindings examples/closures.chr
 R = 15
 ```
 
-The third case is the interesting one. `make_adder(10)` returns
-`fun(X) -> X + N end` with `N` bound to `10` — a **closure** that
+The third case is the one to dwell on. `make_adder(10)` returns
+`fun(X) -> X + N end` with `N` bound to `10` — a *closure* that
 remembers its captured value. Calling that closure with `5` gives
 `10 + 5 = 15`. Each call to `make_adder` produces an independent
 closure with its own captured `N`.

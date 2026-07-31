@@ -12,12 +12,12 @@ I/O functions.
 
 ## How the prelude is structured
 
-The prelude is **implicitly imported** in every program: you do not
+The prelude is *implicitly imported* in every program: you do not
 need `:- use_module(library(prelude))`. Its identifiers are visible
 without qualification — `+` resolves to `prelude:'+'`, `integer/1` to
 `prelude:integer/1`, and so on.
 
-Two patterns are worth understanding before reading the tables:
+Two patterns run through the tables below:
 
 - **Operator overloading by signature.** Operators that are genuinely
   overloaded across `int` and `float` — `+`, `-`, `*`, `<`, `>`, `>=`,
@@ -33,7 +33,7 @@ Two patterns are worth understanding before reading the tables:
   types of the actual arguments. See
   [type-system.md](type-system.md) for the resolution rules.
 
-  The remaining operators have only **one** signature each and so are
+  The remaining operators have only *one* signature each and so are
   ordinary `:- function`s, not classes: `/`, `div`, `mod`, and `rem`
   are each specific to one numeric type, and `==` is polymorphic
   (`(A, A) -> bool`). With a single signature there is nothing to
@@ -127,10 +127,17 @@ true, so `not(1)` is an error.
 
 ## Aggregators
 
-| Identifier | Notes |
-|------------|-------|
-| `max/2` | Larger of two values (uses `>=`). |
-| `min/2` | Smaller of two values (uses `=<`). |
+| Identifier | Signature | Notes |
+|------------|-----------|-------|
+| `max` | `(T, T) -> T requiring '>='(T, T) -> bool` | Larger of two values. |
+| `min` | `(T, T) -> T requiring '=<'(T, T) -> bool` | Smaller of two values. |
+
+These are the prelude's only bounded declarations. Each bound names a
+prelude comparison — `>=` for `max`, `=<` for `min` — and those are
+closed classes over `int` and `float`, so `max` and `min` work at those
+two types only: `max("a", "b")` is rejected with `YCHR-60012`. See
+[type-system.md](type-system.md#bounded-polymorphism) for what a bound
+means.
 
 ```ychr-repl
 ychr> Z is max(7, 4).
@@ -210,7 +217,7 @@ evaluates them for their side effect and discards the unit return.
 | `nl/0` | `() -> any`. Print a newline. |
 | `writeln/1` | `(string) -> any`. Print the argument followed by a newline. |
 
-`write/1` and `writeln/1` take a **string**, not an arbitrary term:
+`write/1` and `writeln/1` take a *string*, not an arbitrary term:
 `write(1)` is a type error. Use `write_term_to_string/1` from `meta` to
 render a term first, or `print/1` to print one directly.
 
@@ -219,7 +226,7 @@ render a term first, or `print/1` to print one directly.
 The bundled libraries `lists`, `strings`, `meta`, and `test` ship
 alongside the prelude under [`libraries/`](../../libraries/).
 
-Unlike the prelude, these are **not** auto-loaded outside the REPL —
+Unlike the prelude, these are *not* auto-loaded outside the REPL —
 inside the REPL all of them are available; in compiled programs use
 `:- use_module(library(name)).` to import explicitly.
 

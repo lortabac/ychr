@@ -11,16 +11,16 @@ Scheme.
 A compiled CHR program is a **VM program**: a list of named procedures.
 Each procedure has parameters and a body of imperative statements.
 Statements may contain expressions. The VM is the *complete interface*
-between the compiler and the runtime -- the compiler never emits calls
+between the compiler and the runtime — the compiler never emits calls
 to runtime functions by name.
 
 There are three kinds of callable entities:
 
-1. **VM instructions** -- dedicated operations for everything the runtime
+1. **VM instructions** — dedicated operations for everything the runtime
    provides (constraint store, unification, term manipulation, etc.).
-2. **`call-expr`** -- calls to compiler-generated procedures (tell,
+2. **`call-expr`** — calls to compiler-generated procedures (tell,
    activate, occurrence procedures, etc.).
-3. **`host-call`** -- calls to host language functions (arithmetic,
+3. **`host-call`** — calls to host language functions (arithmetic,
    comparisons, user-written guards and body expressions).
 
 ### Expression kinds: values, ids, and bools
@@ -93,7 +93,7 @@ Line comments start with `;` and extend to end of line.
   value position and `BLit _` in boolean position are different IR
   constructors at different positional types.
 - **Variable-length argument lists** are trailing children within the
-  enclosing form -- the closing `)` marks the boundary.
+  enclosing form — the closing `)` marks the boundary.
 - **Fixed-length sub-lists** (e.g. then/else branches, foreach
   conditions and body) are wrapped in `(...)`.
 
@@ -110,11 +110,11 @@ program, the exported names, and the symbol table:
   (symbol-table (<name> <arity> <type-id>) ...))
 ```
 
-- **`<program>`** -- the VM program (see below).
-- **`exports`** -- the set of CHR identifiers (name + arity) visible
+- **`<program>`** — the VM program (see below).
+- **`exports`** — the set of CHR identifiers (name + arity) visible
   to external callers. Backends should generate public entry points
   (e.g. `tell_c` wrappers) for each exported identifier.
-- **`symbol-table`** -- maps each CHR identifier (name + arity) to
+- **`symbol-table`** — maps each CHR identifier (name + arity) to
   its 0-based constraint type integer. This is the authoritative
   mapping between symbolic names and the numeric type IDs used
   throughout the VM program. The same name with different arities
@@ -146,13 +146,13 @@ defining module before compilation.
   ...)
 ```
 
-- `<num-types>` -- integer, number of distinct constraint types.
-- `type-names` -- list of strings indexed by constraint type integer.
+- `<num-types>` — integer, number of distinct constraint types.
+- `type-names` — list of strings indexed by constraint type integer.
   `type-names[i]` is the flattened source name (e.g.
   `"mymodule:leq"`) of the constraint type with index `i`. Used by
   runtime introspection.
-- `<num-rules>` -- integer, number of rules in the compilation unit.
-- `rule-names` -- list of strings indexed by rule identifier integer.
+- `<num-rules>` — integer, number of rules in the compilation unit.
+- `rule-names` — list of strings indexed by rule identifier integer.
   `rule-names[i]` is the source name of the rule with id `i`, or a
   synthetic `"__rule_N"` fallback for anonymous rules. Used by
   runtime introspection.
@@ -663,7 +663,7 @@ A backend must implement the following runtime capabilities.
 
 - Creation of fresh unbound variables (`new-var`).
 - Binding via unification (`bunify`) with occurs-check optional.
-- Dereferencing (following binding chains) -- handled transparently
+- Dereferencing (following binding chains) — handled transparently
   inside `bunify`, `bequal`, and `foreach` lookups.
 - Observer lists: when a variable is bound, all constraints observing
   it are pushed onto the reactivation queue.

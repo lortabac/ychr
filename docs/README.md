@@ -20,9 +20,14 @@ Each page opens with an **Audience** / **You will** callout so readers
 can self-route. Pages may add a **Skip if** line for readers who can
 move on to a more advanced page.
 
+### Code fences
+CHR source is fenced `prolog`; interactive REPL sessions are fenced
+`ychr-repl`. Blocks that are neither — grammars, inference rules,
+generated VM s-expressions, shell output — carry no info-string or the
+obvious one (`sh`, `scheme`, `haskell`).
+
 ### REPL transcripts
-Interactive sessions are shown in code fences with the info-string
-`ychr-repl`. The REPL uses two prompts:
+The REPL uses two prompts:
 
 - `ychr> ` — normal mode.
 - `ychr live> ` — inside a `:begin … :end` live session, where the

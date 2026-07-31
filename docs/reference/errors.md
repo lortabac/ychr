@@ -92,6 +92,8 @@ internal error constructor to its code and human-readable message.
 |------|------|---------|
 | `YCHR-30001` | `UnexpectedBodyExpr` | An expression is not valid in a rule body. Rule bodies may contain constraints, function calls, unifications (`=`), `is` expressions, and `true`. |
 | `YCHR-30002` | `NonBooleanGuard` | An expression that cannot evaluate to a boolean is used as a guard. Guards must be function calls, boolean-typed variables, `true`/`false`, or a host call returning a boolean. |
+| `YCHR-30003` | `NonPreludeFunctionBodyItem` | A non-final item in a sequenced function body is not one of the permitted forms. Only `X is E`, a host call `host:f(...)`, a function call `f(...)`, and `'$call'(F, ...)` may precede the return expression. |
+| `YCHR-30004` | `NonVariableIsInFunctionBody` | The left-hand side of an `is` in a function body is not a variable. Function bodies have no unification machinery, so `is` can only bind a fresh name. |
 
 ### Compile phase (`4xxxx`)
 
