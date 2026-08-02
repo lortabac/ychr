@@ -17,18 +17,11 @@ checker produces errors without transforming the program.
 
 ## Overview
 
-The type system has four goals:
-
-1. Catch type inconsistencies statically, before compilation.
-2. Remain optional — programs that omit type annotations are accepted
-   without errors.
-3. Provide a uniform type language for constraints and functions.
-4. Be simple enough to implement quickly, but extensible toward
-   refinement types in the future.
-
-The checker takes a `Desugared.Program` and produces a list of type
-errors. It does not modify the AST. Type errors prevent compilation
-from proceeding.
+The type system catches type inconsistencies statically while
+remaining optional: programs that omit type annotations are accepted
+without errors. One uniform type language covers constraints and
+functions. The checker takes a `Desugared.Program` and produces a list
+of type errors; type errors prevent compilation from proceeding.
 
 
 ## Types
@@ -237,12 +230,8 @@ into variables from declarations (head constraints, function
 signatures) and between variables through unification and `is`
 expressions.
 
-When two types meet, the checker performs a *consistency check*:
-
-- `τ ~ τ` succeeds for identical types.
-- `C(τ⃗) ~ C(σ⃗)` succeeds if all arguments are pairwise consistent.
-- `C(...) ~ D(...)` where C ≠ D is an error.
-- `any ~ τ` always succeeds, for any `τ` (see below).
+When two types meet, the checker performs a *consistency check*, per
+the rules of the previous section.
 
 When a variable with an unknown type meets a concrete type, the
 variable acquires that type. When two variables with known concrete
@@ -411,21 +400,15 @@ The checker distinguishes two flavors of unsolved type variable:
   function-equation body that uses an overloaded operation at a
   rigid tvar must therefore resolve through an ambient signature
   contributed by the function's `requiring` clause — without one
-  the call fails with `no_matching_overload`.
+  the call fails with `NoMatchingOverload` (YCHR-60006).
 
 Rigidity applies only to **function equations**. Constraint head
 occurrences use flexible type variables, even when the constraint
-itself is polymorphic: a rule like
-`leq(X, Y), leq(Y, Z) ==> leq(X, Z).` over a polymorphic
-`:- chr_constraint leq(T, T).` relies on the T variable in each
-head occurrence being unifiable across occurrences, which rigidity
-would prevent. This is a deliberate trade-off — it leaves a
-soundness gap for unbounded polymorphic constraints whose rule
-bodies use overloaded operations at the constraint's type
-parameter (analogous to the function gap rigidity closes), but
-preserves common multi-head rule idioms. The gap can be closed
-explicitly by adding a `requiring` clause to the constraint
-declaration.
+itself is polymorphic: multi-head rules like transitivity of a
+polymorphic `leq(T, T)` rely on cross-head type-variable
+unification, which rigidity would prevent. The resulting soundness
+gap for polymorphic constraints, and why it is accepted, is
+discussed in §Soundness.
 
 Rigidity is local to the function's own equation check. At every
 use site of the same function, fresh *flexible* variables are
@@ -673,7 +656,7 @@ allows the bound to discharge:
   against the declared signature.
 - In `apply2(fun max/2, "a", "b")`, the same mechanism produces
   `'>'(string, string) -> bool`, which has no consistent declared
-  signature; error `bound_unsatisfied`.
+  signature; error `BoundUnsatisfied` (YCHR-60012).
 - In `apply2(fun max/2, X, Y)` where `X` and `Y` carry no concrete
   type information, the substitution leaves `T` free; the bound
   succeeds silently per the gradual guarantee, exactly as ordinary
@@ -712,12 +695,10 @@ The checker validates type definitions themselves:
    fields must be bound by the type definition header. For example,
    `type foo(A) ---> bar(B)` is an error because `B` is not bound.
 
-2. **Recursive types**: recursive type definitions are well-formed.
-   For example, `type list(A) ---> cons(A, list(A))` is valid.
-
-3. **Defined types**: types referenced in constructor fields must be
+2. **Defined types**: types referenced in constructor fields must be
    defined. For example, `type foo ---> bar(undefined_type)` is an
-   error.
+   error. Recursive references to the type being defined are fine:
+   `type list(A) ---> cons(A, list(A))` is valid.
 
 
 ## Signature Overloading
@@ -771,7 +752,7 @@ argument types:
   unifying argument types and propagating the return type. This is the
   "narrow when unambiguous" behavior.
 - If **no** signature is consistent: the checker reports a
-  `no_matching_overload` error.
+  `NoMatchingOverload` (YCHR-60006) error.
 - If **multiple** signatures are consistent (ambiguous): the checker
   succeeds silently without propagating type information.
 
@@ -793,7 +774,7 @@ variables and instantiation):
   themselves and `any`. If no declared signature is consistent
   with the rigid tvar — and no ambient signature contributed by a
   `requiring` clause covers it — the call fails with
-  `no_matching_overload`. This closes the soundness gap that would
+  `NoMatchingOverload` (YCHR-60006). This closes the soundness gap that would
   otherwise let `foo(T, T) -> bool` silently type-check while
   calling an overloaded `>` at `T` in its body. Rigidity applies
   only at function equations, not at constraint rule heads — see
@@ -913,7 +894,7 @@ in the enclosing declaration's signature (function or constraint),
 with the same implicit quantification. Every variable mentioned in
 the clause must also appear in the declaration's primary signature.
 A variable that appears only on the clause side is rejected as
-`unbound_bound_variable`.
+`UnboundBoundVariable` (YCHR-16008).
 
 The bound clause does not introduce its own quantifier; the bound
 signatures are not first-class types and cannot be referenced
@@ -931,7 +912,7 @@ The *bound graph* of a program has one vertex per declared function
 and constraint, and an edge from `f` to `g` whenever `g` appears in
 `f`'s `requiring` clause. Edges always point at functions. The
 bound graph must be acyclic. A cycle is rejected at declaration time
-as `bound_cycle`.
+as `BoundCycle` (YCHR-16010).
 
 ### Instances
 
@@ -982,7 +963,7 @@ clause `g₁(...) -> ρ₁, ..., gₘ(...) -> ρₘ`:
    discarded; σ is not modified by a successful bound check, even
    when exactly one candidate matches. If no declared signature of
    `gⱼ` is consistent with the substituted bound, the checker
-   reports `bound_unsatisfied`.
+   reports `BoundUnsatisfied` (YCHR-60012).
 
    When this check happens during the equation checking of an
    enclosing bounded function, "declared signature" includes the
@@ -1050,7 +1031,7 @@ force the outer type variables to a concrete instance.
 If an equation fails to type-check under this extended context, the
 failure is reported with the same error code that the ordinary
 checker would have produced (typically a constructor mismatch or
-`no_matching_overload`). No new error code is introduced for
+`NoMatchingOverload` (YCHR-60006)). No new error code is introduced for
 equation-level failures; the bound's contribution to the equation
 context simply enlarges the set of valid programs.
 
@@ -1162,7 +1143,7 @@ top-level goal): σ = (T := int); the substituted bound
 `<(int, int) -> bool` is consistent with the declared signature.
 
 Use site `sorted(["a", "b"])`: σ = (T := string); no consistent
-declared signature; error `bound_unsatisfied`.
+declared signature; error `BoundUnsatisfied` (YCHR-60012).
 
 Use site `sorted(L)` where `L : list(any)` or `L : list(α)` with `α`
 free: σ leaves `T` partial; the bound succeeds silently per the
@@ -1175,72 +1156,29 @@ bounded polymorphism at the constraint level.
 
 ### Coexistence with multi-signature overloading
 
-Multi-signature overloading lives behind the `:- class` /
-`:- open_class` keywords (see §Signature Overloading) and is
-enforced as exclusive with bounded polymorphism: `:- class` cannot
-carry a `requiring` clause (rejected as `RequiringOnClass`,
-YCHR-15005). The two forms occupy disjoint syntactic slots:
+Multi-signature overloading (`:- class` / `:- open_class`, see
+§Signature Overloading) and bounded polymorphism are exclusive:
+`:- class` cannot carry a `requiring` clause (rejected as
+`RequiringOnClass`, YCHR-15005). The two have overlapping expressive
+power for finite instance sets, but their checker behavior differs:
+a class's signatures are checked independently at use sites, and an
+equation that types under any one signature is accepted; a bounded
+function has a single parametric signature — equations are checked
+once, with the bound enlarging the available context, and use sites
+verify the bound at the inferred substitution.
 
-- `:- class` (multi-signature) `(f(int) -> int), (f(float) -> float)`
-  enumerates instances explicitly. It is the right tool when the
-  instance set is small, fixed, and unrelated, or when the
-  implementation differs perceptibly per instance.
-- `:- function ... requiring ...` (bounded single-signature)
-  `f(T) -> T requiring ...` describes an open instance set implicitly.
-  It is the right tool when the instance set is large, growing (e.g.,
-  users may declare new instances of `>` after importing `max`), or
-  naturally captured by an operation.
-
-The two forms have overlapping expressive power for finite,
-enumerated instance sets, but their checker behavior differs:
-
-- `:- class`: each declared signature is checked independently
-  at use sites; any equation that types under any one signature is
-  accepted.
-- Bounded `:- function`: the function has a single parametric
-  signature; equations are checked once, parametrically, with the
-  bound enlarging the available context; use sites verify the bound
-  at the inferred substitution.
-
-The same rule applies to constraints: a `:- chr_constraint`
-declaration may carry `requiring`, but no comma-separated
-multi-signature form for constraints exists in the surface today.
+The same applies to constraints: a `:- chr_constraint` declaration
+may carry `requiring`, but there is no multi-signature form for
+constraints.
 
 ### Errors
 
-Bounded polymorphism introduces five new error codes (final numbers
-assigned in the type-system error range during implementation). The
-first four apply uniformly to functions and constraints; the fifth
-concerns `:- extend_class_type`, which has no constraint analog:
-
-- **`unbound_bound_variable`** — a type variable appears in a `requiring`
-  clause but not in the enclosing declaration's primary signature.
-- **`unknown_bound_function`** — a `requiring` clause references a
-  function that has not been declared. Function identity is
-  name-plus-arity, so `requiring foo(int, int) -> bool` when only
-  `foo/3` is declared (or no `foo` at all) raises this error.
-- **`bound_cycle`** — the bound graph (see Bound graph) contains a
-  cycle of any length: a function that requires itself directly, or
-  any longer chain of `requiring`-clause edges that returns to its
-  starting function.
-- **`bound_unsatisfied`** — a use site of a bounded function infers
-  argument types whose substitution does not satisfy the bound:
-  for some `gⱼ`, no declared signature of `gⱼ` is consistent with
-  the substituted bound.
-- **`extend_type_on_bounded_function`** — `:- extend_class_type`
-  targets a bounded `:- open_function`. The instance set of a
-  bounded open function is determined by its bound's named
-  functions, not by enumerated extensions. Note that the
-  kind-mismatch check (`ExtendClassTypeOnFunction`, YCHR-16013)
-  also fires on this combination, since a `:- extend_class_type`
-  must target an `:- open_class`.
-
-No new error code is introduced for the equation-checking path;
-equations either type-check under the enlarged context or fail with
-existing error codes. Likewise, no new error code is introduced for
-the constraint case: the existence check, cycle detection, and
-unbound-variable check are structurally identical to the function
-case and share their error codes.
+The bounded-polymorphism error codes — `YCHR-16007` through
+`YCHR-16010` and `YCHR-60012` — are catalogued in
+[errors.md](errors.md). The equation-checking path introduces no new
+codes (equations either check under the enlarged context or fail
+with existing ones), and the constraint case shares the function
+case's codes.
 
 ### Worked examples
 
@@ -1265,7 +1203,7 @@ result type `int`; `R : int`.
 
 Use site `R is max("a", "b")`: σ = (T := string); the substituted
 bound `>(string, string) -> bool` has no consistent declared
-signature; error `bound_unsatisfied`.
+signature; error `BoundUnsatisfied` (YCHR-60012).
 
 **Example 2 — Multi-variable bound.**
 
@@ -1292,29 +1230,7 @@ result type `option(string)`.
 
 Use site `R is lookup(0.5, M)` where `M : list(pair(float, int))`
 and no `==(float, float) -> bool` has been declared: error
-`bound_unsatisfied` for the substituted bound at K := float.
-
-**Example 3 — Bounded function as a single point of truth.**
-
-```prolog
-:- function ('+'(int, int) -> int).
-:- function double(T) -> T requiring '+'(T, T) -> T.
-
-double(X) -> X + X.
-```
-
-Equation checks parametrically: `X : T`; `X + X` resolves through
-the ambient bound `+(T, T) -> T` to `T`; RHS type `T` matches return
-`T`.
-
-`double(3)` succeeds at σ = (T := int); declared `+(int, int) -> int`
-satisfies the bound. `double("hi")` fails as `bound_unsatisfied`
-because no `+(string, string) -> string` has been declared.
-
-A later module that declares `+(float, float) -> float` automatically
-extends the admissible instance set of `double` — no edit to
-`double`'s declaration is needed. This is the open-set property of
-bounded polymorphism.
+`BoundUnsatisfied` (YCHR-60012) for the substituted bound at K := float.
 
 ### Interaction with `any`
 
@@ -1352,10 +1268,8 @@ Bounded polymorphism preserves the gradual guarantee of §Soundness:
   evidence is required at runtime, because dispatch is dynamic
   (pattern matching across equations).
 
-The semi-formal paper-proof methodology described in §Soundness
-extends straightforwardly: bound checking is itself expressed as
-ordinary use-site overload resolution, and inherits those rules'
-confluence and gradual properties.
+Bound checking is expressed as ordinary use-site overload resolution
+and inherits its confluence and gradual properties.
 
 The same properties hold for bounded constraints. No new soundness
 argument is required: rule-level ambient signatures are a structural
@@ -1365,18 +1279,6 @@ ambient signatures within a single rule is sound because each
 occurrence's type variables are freshly allocated per rule
 (§Use sites), so contributed signatures cannot collide on shared
 variable identities.
-
-
-## Extensibility
-
-The type system is designed to accommodate future extensions:
-
-- **Predicate-based refinement types**: guards like `integer(X)` could
-  narrow the type of `X` from `any` to `int`.
-
-- **Advanced refinement types**: the consistency-based framework and
-  constraint-gathering approach can be extended with subtyping or
-  predicate constraints without changing the overall architecture.
 
 
 ## Soundness
@@ -1427,9 +1329,7 @@ type-safe at runtime. It catches inconsistencies where it has enough
 information, and is silent where it does not. This is the standard
 trade-off of gradual typing without runtime enforcement.
 
-A semi-formal paper proof of these properties is sufficient for this
-system, given that the core is a well-understood construction. The
-key ingredients are:
+The key ingredients behind these properties are:
 
 - The consistency relation is reflexive and symmetric (but not
   transitive — this is expected for gradual typing).
@@ -1437,26 +1337,3 @@ key ingredients are:
 - Constraint gathering is confluent (order-independent).
 - The fully-typed fragment reduces to standard HM with algebraic
   data types.
-
-
-## Summary
-
-| Aspect | Decision |
-|--------|----------|
-| Nature | Static, types erased at runtime |
-| Pipeline position | After desugaring, before compilation |
-| Effect on AST | None — errors only, prevents compilation |
-| Built-in types | `int`, `float`, `string`, `any` |
-| User-defined types | Algebraic types via `:- chr_type` |
-| Function types | `fun(τ₁,...,τₙ) -> τᵣ` |
-| Polymorphism | Parametric, implicitly quantified, no rank-n |
-| Overloading | Multi-signature overloading via `:- class` / `:- open_class` |
-| Defaults | Missing annotations default to `any` |
-| Core relation | Consistency (gradual typing) |
-| Type merging | Consistency check, `any` absorbs |
-| Solving | Constraint gathering, order-independent |
-| Inline annotations | Not supported; types only in declarations |
-| Host calls | All `any`; operators typed via library signatures |
-| Constructors | Looked up in type definitions; unknown → `any` |
-| Disambiguation | Module qualification |
-| Soundness | Gradual guarantee; paper proof sufficient |

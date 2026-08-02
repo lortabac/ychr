@@ -4,7 +4,7 @@
 % argument is the integer 0. The second matches any N and uses a guard
 % N > 0 to exclude negatives.
 %
-% Used by docs/tutorials/04-functions-and-types.md §1 and §3.
+% Used by docs/tutorials/04-functions-and-types.md §1 and §2.
 
 :- module(factorial, [compute/2, fun factorial/1]).
 :- chr_constraint compute(int, int).

@@ -11,23 +11,18 @@
 > **Skip if** the [DSL](dsl.md)'s `Term` combinators and raw
 > `Map Text Term` results are enough for you.
 
-> **Shortcut.** The compile-and-query surface described here —
-> `compileFiles`/`compileModules`, `CompiledProgram`, `runQueryCompiled`,
-> the classes, and the combinators — is re-exported from the umbrella
-> module `YCHR`, so `import YCHR` is usually all you need. The
-> compile-and-run-in-one `runQuery` family over DSL `[Module]` values is
-> the exception: it lives only in `YCHR.Convert`. `YCHR.Convert` itself is
-> the module of record for the value bridge, and `YCHR.Convert.Generic`
-> (GHC only) adds generic derivation.
+> **Shortcut.** Everything on this page lives in `YCHR.Convert` and is
+> re-exported from the umbrella module `YCHR`, so `import YCHR` is
+> usually all you need. Two exceptions: the compile-and-run-in-one
+> `runQuery` family over DSL `[Module]` values is only in
+> `YCHR.Convert`, and `Generic` derivation is in the GHC-only
+> `YCHR.Convert.Generic`.
 
 `YCHR.Convert` is a companion to [`YCHR.DSL`](dsl.md): the DSL builds CHR
 *programs*, while `YCHR.Convert` converts *values* at the program
 boundary. That boundary is entirely the pure `Term` type — a goal is a
 `Term`, and a result is a `Map Text Term` keyed by goal-variable name — so
 both classes target `Term` and never touch the runtime representation.
-
-The module carries no `Generic` dependency and works on every backend.
-Generic derivation lives in the GHC-only `YCHR.Convert.Generic`.
 
 ## The two classes
 
@@ -174,10 +169,11 @@ decoding failures are returned as `Left`.
 ## Reusing a compiled program
 
 `runQuery` compiles its modules on every call. To embed a real `.chr`
-module — or to run many queries against one program — compile **once** with
-`YCHR.Run.compileFiles` (for source files) or `compileParsedModules` (for
-DSL modules), then drive the resulting `CompiledProgram` with
-`runQueryCompiled`. Each call is an independent run with a fresh store.
+module — or to run many queries against one program — compile **once**
+with `YCHR.Run.compileFiles` (source files), `compileModules`
+(in-memory source text), or `compileParsedModules` (DSL modules), then
+drive the resulting `CompiledProgram` with `runQueryCompiled`. Each
+call is an independent run with a fresh store.
 
 ```haskell
 runQueryCompiled
@@ -196,7 +192,6 @@ main = do
     Right (cp, _warnings) -> do
       r1 <- runQueryCompiled cp (term "typecheck" [toTerm expr1, var "R"]) "R"
       r2 <- runQueryCompiled cp (term "typecheck" [toTerm expr2, var "R"]) "R"
-      ...
 ```
 
 `runQueryCompiledWith` and `runQueryCompiledWithHostCallRegistry` are the
@@ -209,11 +204,10 @@ whole-map and custom-registry variants, mirroring `runQueryWith` /
 > otherwise a constructor whose name is also a declared function is called
 > instead of kept as data. `quote` takes any `ToTerm` value, so it
 > subsumes the `toTerm` call, and it belongs at the goal-construction site
-> rather than inside a `ToTerm` instance. The how-to below walks through
-> this.
+> rather than inside a `ToTerm` instance.
 
 For a complete worked example — a lambda-calculus type inferencer written in
-CHR and driven from Haskell — see
+CHR and driven from Haskell, including the `quote` pattern above — see
 [`how-to/embed-a-chr-module.md`](../how-to/embed-a-chr-module.md) and
 [`examples/stlc/`](../../examples/stlc/).
 

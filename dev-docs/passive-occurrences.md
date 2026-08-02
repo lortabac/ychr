@@ -169,22 +169,19 @@ chains five calls instead of seven.
   their `activate` call disappear. No part of the compiler references
   another occurrence's number (the propagation history is keyed on head
   *positions*, not occurrence numbers), so eliding is local.
-- **Symmetry.** Soundness follows from ωr try-order plus early drop, *not*
-  from the body being symmetric. Both occurrences are removed heads, and
-  the survivor has the lower occurrence number, so `activate` tries it
-  first. By head symmetry, whenever the passive occurrence (active in the
-  h1 role) could match a partner, the survivor (active in the h0 role)
-  matches the *same* partner — and firing it removes the active
-  constraint, so early drop returns before the passive occurrence is ever
-  reached. The passive occurrence is therefore unreachable. Note the two
-  occurrences fire with *swapped* variable bindings (`{X=a, Y=b}` versus
-  `{X=b, Y=a}`), which is why the body need not be symmetric: the survivor
-  simply always wins the race, so its binding is the one that would have
-  been produced anyway.
-- **Idempotence.** The same preemption argument: ωr tries the removed
-  occurrence before the kept one, so whenever the kept occurrence could
-  match, the removed one has already fired (removing the active
-  constraint). The kept occurrence is dead.
+- **Preemption.** For both families, soundness follows from ωr
+  try-order plus early drop, *not* from the body being symmetric: the
+  surviving occurrence is a removed head with the lower occurrence
+  number, so `activate` tries it first, and whenever the passive
+  occurrence could match a partner, the survivor matches the *same*
+  partner — firing it removes the active constraint before the passive
+  occurrence is ever reached (see
+  [Relationship to early drop](#relationship-to-early-drop) for the
+  full argument). In the symmetry case the two occurrences fire with
+  *swapped* variable bindings (`{X=a, Y=b}` versus `{X=b, Y=a}`),
+  which is why the body need not be symmetric: the survivor always
+  wins the race, so its binding is the one that would have been
+  produced anyway.
 - **Propagation history & reactivation** are unaffected: a passive
   occurrence never fires, so it never records history and is never a
   reactivation or backjump target; the surviving occurrences fire the same

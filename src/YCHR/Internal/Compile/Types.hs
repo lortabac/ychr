@@ -110,7 +110,7 @@ data Occurrence = Occurrence
     -- occurrence keeps its ωr 'number' (numbering runs first) but
     -- contributes no @occurrence_c_j@ procedure and no call from
     -- @activate_c@. See "YCHR.Internal.Compile.Passive" and
-    -- @docs/reference/passive-occurrences.md@.
+    -- @dev-docs/passive-occurrences.md@.
     passive :: Bool
   }
 

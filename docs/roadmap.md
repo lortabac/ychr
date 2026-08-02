@@ -25,7 +25,7 @@ what is planned.
 - [ ] Guard simplification
 - [ ] Set semantics
 - [x] Passive occurrences (subsumption/symmetry; see
-      [passive-occurrences.md](reference/passive-occurrences.md))
+      [passive-occurrences.md](../dev-docs/passive-occurrences.md))
 - [ ] Propagation history elimination
 - [ ] Delay avoidance
 - [ ] Memory reuse

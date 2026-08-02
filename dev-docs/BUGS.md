@@ -28,6 +28,50 @@ the offending source line (e.g. `R = mystery(1)`).
 The italic source-context line is empty quotes (`''`) rather than the
 typed query. (The query itself still succeeds: `B = true`.)
 
+## `push-frame` serializes as bare atoms, breaking VM-dump round-trips
+
+**Documented claim.** `src/YCHR/Internal/VM/SExpr.hs:3-8` says the
+s-expression format "is designed for consumption by external backends
+… and as a compilation cache artifact", and `deserialize` is the
+inverse of `serialize`. `docs/reference/vm.md` §push-frame currently
+documents the fields as display-only *because of this bug*; update it
+when fixing.
+
+**Test.**
+
+    ychr compile -t vm mymodule.chr        # any program with ≥1 rule
+    # then feed program.vm to YCHR.Internal.VM.SExpr.deserialize
+
+**Expected.** `deserialize` returns the same `VMProgram` that
+`serialize` produced.
+
+**Actual.**
+
+    deserialize failed: "<sexpr>" (line 1, column 2469):
+    unexpected ","
+    expecting "(", "\"" or ")"
+
+**Cause.** `stmtToSExpr` (`src/YCHR/Internal/VM/SExpr.hs:183-191`)
+emits all five `push-frame` fields as `SAtom` — label, line, col,
+file, and pretty-printed source — so a frame like
+
+    (push-frame rule reflexivity 4 15 mymodule.chr leq(X, X))
+
+contains atoms with spaces, commas, and parentheses (`rule
+reflexivity`, `leq(X, X)`), which the s-expression grammar cannot
+re-read. Every program containing a rule or a user-defined function
+(including anything importing the prelude) is affected, so in practice
+no `-t vm` dump round-trips. The `push-frame` deserializer at
+`SExpr.hs:413-426` expects exactly five atoms and is unreachable on
+real output.
+
+**Fix sketch.** Emit the label, file, and source fields as `SString`
+and line/col as `SInt`, and match those constructors in the
+deserializer (the current `SAtom` patterns for line/col could never
+match re-parsed output anyway, since bare digits lex as `SInt`).
+Pre-0.1 there are no dump-compatibility constraints. Then drop the
+"display-only" caveat from `docs/reference/vm.md` §push-frame.
+
 ## Constructor arity mismatch double-reports `YCHR-20102` (warning) and `YCHR-60008` (error)
 
 **Documented claim.** `docs/reference/errors.md` lists `YCHR-20102`

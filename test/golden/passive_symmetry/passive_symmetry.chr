@@ -3,7 +3,7 @@
 % two occurrences is elided as passive. Telling leq(A, 1) and leq(1, A)
 % must still fire the rule through the surviving occurrence, binding A = 1.
 %
-% See docs/reference/passive-occurrences.md.
+% See dev-docs/passive-occurrences.md.
 :- module(sym, [go/1]).
 :- chr_constraint leq/2, go/1.
 

@@ -231,8 +231,7 @@ silently fails.
 
 Guards are pure tests. They use comparisons like `<`, `>=`, `==` and
 host calls, and they must not bind variables — that is what the body
-is for. The guard test for equality is `==` (structural equality, no
-mutation); the body uses `=` (unification, may bind).
+is for.
 
 | Position | Operator | Effect |
 |----------|----------|--------|

@@ -24,12 +24,10 @@ as for parsed input.
 
 ## When to use the DSL
 
-| Situation | Use |
-|---|---|
-| Shipping a stand-alone interpreter | `.chr` files + `compileFiles` |
-| Embedding CHR in a Haskell application | `YCHR.DSL` + `runDSL` |
-| Generating CHR programs at runtime (rule synthesis, search) | `YCHR.DSL` |
-| Library tests that exercise the full pipeline | `YCHR.DSL` |
+Programs that live on disk as `.chr` files are compiled with
+`compileFiles`; use the DSL when the program is built or generated
+from Haskell — embedding without shipping source files, runtime rule
+synthesis, or pipeline tests.
 
 ## The four building blocks
 
@@ -178,8 +176,8 @@ prelude operators in [`docs/reference/prelude.md`](prelude.md)):
 | `.>=` | `>=` |
 | `.==` | `==` |
 
-YCHR's prelude has no built-in inequality operator; for "X /= Y" write
-the negation explicitly (e.g. through a host call or a user function).
+There is no inequality operator; write the negation explicitly with
+the prelude's `not/1` (see the [prelude reference](prelude.md)).
 
 For structural unification (the `=` of CHR), use `.=.`:
 
@@ -244,23 +242,14 @@ Compilation errors and runtime errors are raised as exceptions
 - **Variables vs. atoms.** `var "X"` and `atom "x"` are different things.
   `Term` is *not* an `IsString` instance — there is no auto-coercion from
   string literals. Always use the right constructor.
-- **One constructor for compound terms.** `term` (and `qterm`) build
-  every compound shape — head constraint occurrence, body goal,
-  function call, data-constructor term. Heads in `<=>` / `==>` accept
-  `[Term]` and the DSL coerces each compound to a `Constraint`
-  internally; a bare variable in a head position is rejected with
+- **Head coercion.** Heads in `<=>` / `==>` accept `[Term]` and the DSL
+  coerces each compound to a `Constraint` internally; a bare variable
+  in a head position is rejected with
   `YCHR.DSL: term is not a valid constraint occurrence` (the
   type-system mirror of the parser's `MalformedConstraint`).
 - **`exporting` switches to an explicit export list.** A module without
   any `exporting` call (the default after `module'`) exports everything;
   calling `exporting [...]` switches it to an explicit list.
-- **Append, not replace.** All the module modifiers append. Calling
-  `\`declaring\` xs` twice is the same as calling it once with the
-  concatenation.
-- **Default host calls.** `runDSL` uses the same registry as the CLI:
-  arithmetic, comparisons, `print`, and meta primitives like
-  `copy_term/1`. If your program needs more, use
-  `runDSLWithHostCallRegistry`.
 - **Live, runnable examples.** Every code snippet on this page is taken
   from `test/YCHR/DSLTest.hs` (the `endToEnd` test group). Running
   `cabal test ychr-tests --test-options='-p endToEnd'` exercises them.

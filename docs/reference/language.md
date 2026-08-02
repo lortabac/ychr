@@ -117,31 +117,14 @@ Bare and qualified syntax see the same view of the module.
 ### Opaque types
 
 An *opaque type* is a nominal type with no data constructors, declared
-with `:- opaque_type` and introduced or eliminated only by (host-backed)
-functions (see [type-system.md](type-system.md#opaque-types) for the
-typing rules):
-
-```prolog
-:- module(sets, [type(set/1), set_new/0, set_member/2]).
-
-:- opaque_type set(X).
-
-:- function set_new() -> set(X).
-:- function set_member(set(X), X) -> bool.
-set_new() -> host:set_new().
-set_member(S, X) -> host:set_member(S, X).
-```
-
-Opaque types share the type namespace with algebraic types, so they are
-exported (and imported) with the same `type(Name/Arity)` form. An opaque
-type has no constructors, so the `type(Name/Arity, [...])` allowlist form
-is not useful for one (a named constructor is rejected as unknown,
-`YCHR-20008`). A `:- opaque_type` directive with a `---> ...` body is
-rejected with `YCHR-15016`. Like any type-constructor name, an opaque
-type's name is not a data constructor, so writing it in term position
-(e.g. `X = set(1)`) is a `YCHR-20101` "undeclared data constructor"
-warning and types as `any`; obtain and consume opaque values through the
-functions declared over them.
+with `:- opaque_type` and introduced or eliminated only by the
+functions declared over it — see
+[type-system.md](type-system.md#opaque-types) for the declaration form
+and typing rules. Opaque types share the type namespace with algebraic
+types, so they are exported (and imported) with the same
+`type(Name/Arity)` form. Since there are no constructors, the
+`type(Name/Arity, [...])` allowlist form is not useful for one (a
+named constructor is rejected as unknown, `YCHR-20008`).
 
 ## Constraints
 
@@ -260,39 +243,15 @@ make_doubler() -> fun(X) -> Y is X + 1, Y * 2 end.
 
 ### `:- function` vs `:- class`
 
-`:- function` declares a single-signature function. To overload a
-function across multiple types, use `:- class`:
-
-```prolog
-:- class
-    (size(int) -> int),
-    (size(string) -> int).
-
-size(N) | integer(N) -> N.
-size(S) | string(S) -> string_length(S).
-```
-
-Each `size` equation is part of the single shared equation set;
-top-to-bottom pattern-and-guard matching picks one at evaluation time.
-The signature list tells the type checker which `(arg-types,
-return-type)` combinations are legal; the equations are not
-partitioned per-signature.
-
-A `:- function` declaration with more than one typed signature is an
-error (`MultiSigOnFunction`, YCHR-16011); use `:- class` instead. A
-`:- class` may also carry a single signature — verbose, but legal.
-The cross-module pair `:- open_function` / `:- open_class` mirrors
-the closed forms: only `:- open_class` accepts new type signatures
-(via `:- extend_class_type`); `:- open_function` accepts only
-new equations (via `:- extend_function`).
-
-Bounded polymorphism (`requiring`) is reserved for `:- function` and
-`:- open_function`; combining it with `:- class` / `:- open_class` is
-rejected as `RequiringOnClass` (YCHR-15005).
-
-```prolog
-:- function pick(T, T) -> T requiring '>'(T, T) -> bool.
-```
+`:- function` declares a single-signature function; giving it more
+than one typed signature is rejected (YCHR-16011). To overload a name
+across several type signatures, declare it with `:- class`; the
+equations still form one shared, top-to-bottom matched set. The
+cross-module pair `:- open_function` / `:- open_class` mirrors the
+closed forms. Bounded polymorphism (`requiring`) is reserved for
+`:- function` / `:- open_function` (YCHR-15005 on a class). See
+[type-system.md](type-system.md#signature-overloading) for the
+overloading rules and examples.
 
 ### Declaration placement
 
@@ -343,8 +302,7 @@ function calls: `store(member(1, [0, 1, 2]))` stores `store(true)`.
 
 ### The `quote/1` quoting form
 
-The opt-out for users who want to pass an unevaluated data term is the
-`quote(...)` quoting form:
+`quote(...)` passes a term unevaluated:
 
 ```prolog
 store(quote(plus(2, 3)))   % stored as store(plus(2, 3))
@@ -471,7 +429,7 @@ R is call(fun double/1, 10).
 `call` is itself defined as a thin wrapper over the wired-in primitive
 `'$call'(F, A1, ..., An)`. `'$call'` is recognized directly by the
 renamer; the `'$'` prefix is not part of any naming convention and `$`
-is not reserved for other primitives. Reach for `'$call'` only when
+is not reserved for other primitives. Use `'$call'` directly only when
 working below the typed `call` wrapper.
 
 ## Host calls
@@ -496,11 +454,3 @@ used as a user module name (`YCHR-16019`).
 The prelude already wraps every host arithmetic, comparison, and
 string operation it relies on, so most programs never need to write
 `host:` directly.
-
-## Optional static type checking
-
-Programs may annotate constraints and functions with type signatures.
-The type checker is gradual: programs without annotations are accepted
-unchanged. See [type-system.md](type-system.md) for the full
-specification, including the type language, bounded polymorphism, and
-inference rules.

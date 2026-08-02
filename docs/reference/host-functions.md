@@ -37,10 +37,12 @@ representation for the common case.
 | `hostFnValues` | `[Value] -> Chr Value` | raw escape hatch, no marshalling (see [below](#the-raw-escape-hatch)) |
 
 ```haskell
-hostFn2 ((+) :: Int -> Int -> Int)   -- registered as "my_add", called host:my_add(X, Y)
-hostFn1 Data.Text.toUpper            -- Text -> Text, called host:shout(X)
-hostFn0M (liftIO getSomething)       -- host:now()
+hostFn2 ((+) :: Int -> Int -> Int)   -- Int arguments, Int result
+hostFn1 Data.Text.toUpper            -- Text -> Text
+hostFn0M (liftIO getSomething)       -- nullary, effectful
 ```
+
+The call-site name is chosen at registration, below.
 
 ## Assembling and running
 
@@ -69,14 +71,8 @@ runQueryCompiledWithHostCallRegistry
   -> (Map Text Term -> Either ConvertError a) -> IO (Either ConvertError a)
 ```
 
-```haskell
--- program:  compute_add(X, R) <=> R is host:my_add(X, 3).
--- cp comes from compileFiles / compileModules.
-r <- runQueryCompiledWithHostCallRegistry registry cp
-       (CompoundTerm (Unqualified "compute_add") [IntTerm 2, VarTerm "R"])
-       (decodeVar "R")
--- r == Right 5 :: Either ConvertError Int
-```
+For a complete compilable program built around this registry, see the
+[how-to guide](../how-to/call-host-functions.md).
 
 (For [DSL](dsl.md)-built `[Module]` values there is also a
 compile-and-run-in-one `runQueryWithHostCallRegistry`; it lives in
@@ -107,7 +103,8 @@ a unification failure), because a host call fires deep inside solving:
 | An argument the type cannot decode | runtime error: `host call: TypeMismatch …` |
 | An argument still unbound at call time | runtime error: `host call: UnboundValue …` |
 
-Results are expected to be ground.
+A result term need not be ground: each distinct `VarTerm` name in it
+becomes a fresh unbound logical variable.
 
 > **Booleans.** A boolean marshals to/from the atom `true` / `false`
 > (matching how a source-level `true` compiles), so a `hostFn2 (… :: … -> Bool)`
@@ -129,6 +126,11 @@ compound is *not* chased — use `deref`, re-exported from `YCHR`, yourself).
 This is the same
 low-level shape the built-in host functions are written in; reach for it
 only when the marshalled adapters do not fit.
+
+To compare two `Value`s, use `equal` (also re-exported from `YCHR`),
+which implements CHR's `==`. There is deliberately no `Eq Value`
+instance: a derived one would compare logical variables by reference
+and disagree with `==` on unbound variables.
 
 ## See also
 

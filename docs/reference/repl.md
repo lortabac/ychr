@@ -19,15 +19,8 @@ presents the `ychr> ` prompt. The full standard library is auto-loaded;
 no `:- use_module(library(...))` is needed for prelude or meta
 identifiers.
 
-The `--quiet` flag suppresses the prompt and warnings — useful when
-piping input from a script or test harness.
-
-The `--Werror` flag treats warnings as errors. Warnings during the
-initial load abort startup with a non-zero exit; warnings encountered
-during `:recompile` keep the previously loaded program in place
-(matching the behavior on a compile error). Warnings are still printed
-to stderr under `--Werror` even if `--quiet` is also set, so the
-failure is never silent.
+The `--quiet` and `--Werror` flags are documented in the
+[CLI reference](cli.md).
 
 ## Prompts
 
@@ -148,8 +141,8 @@ tell order:leq(2, 3)
 
 Occurrences 3 and 5 never appear: the compiler marks them passive and
 emits no procedure for them, so `activate` never calls them. See
-[passive occurrences](passive-occurrences.md#worked-example-leq) for why
-those two are redundant.
+[passive occurrences](../../dev-docs/passive-occurrences.md#worked-example-leq)
+for why those two are redundant.
 
 The `partner c#N` line inside occurrence 4 matches the active constraint
 against itself; the compiled guard then rejects the self-match (events
@@ -187,13 +180,6 @@ Unlike `ychr run -g` (which accepts only a single declared constraint
 (`1 + 1.`), equality and `is` (`X = 2.`, `X is 1 + 1.`), comma-separated
 conjunctions, and constraint calls all work.
 
-```ychr-repl
-ychr> :quit
-ychr>
-```
-
-(Empty output: the only "query" was `:quit`.)
-
 A query that adds a constraint without firing any rules will silently
 succeed; the new constraint is then thrown away with the rest of the
 store:
@@ -227,9 +213,8 @@ ychr>
 
 ## History
 
-The REPL stores a persistent line-history file at
-`$XDG_DATA_HOME/ychr/history` (typically
-`~/.local/share/ychr/history`). It survives across invocations.
+The REPL keeps a persistent line-history file across invocations; the
+path is listed in the [CLI reference](cli.md#files).
 
 ## See also
 

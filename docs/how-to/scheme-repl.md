@@ -73,8 +73,10 @@ R = 55
   parser is deliberately strict so that the common case
   (`(tell s p/2 1 'X)`) needs no ceremony.
 
-Run more tells against the same session — for constraints whose rule
-bodies modify the store, later calls see earlier calls' effects:
+Run more tells against the same session; `s` is the same store
+throughout, so anything a call leaves in the store is visible to
+later calls. (`fib` happens not to depend on prior state, so these
+two answers are independent.)
 
 ```scheme
 (tell s fib/2 5 'R)
@@ -85,9 +87,6 @@ bodies modify the store, later calls see earlier calls' effects:
 R = 5
 A = 13
 ```
-
-(fib does not share state across calls, so the two answers are
-independent — but `s` is the same store for both.)
 
 ## Constraint aliases: qualified vs short
 

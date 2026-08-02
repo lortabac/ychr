@@ -6,7 +6,7 @@
 % partner searches in occurrences 2-7 (they never early-drop on
 % reflexivity, since the arguments are distinct). This is the workload
 % the passive-occurrences optimization speeds up — see
-% docs/reference/passive-occurrences.md.
+% dev-docs/passive-occurrences.md.
 :- module(leqc, [run/1, sample/1]).
 :- chr_constraint leq/2, gen/2, run/1, sample/1.
 

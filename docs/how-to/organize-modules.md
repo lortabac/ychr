@@ -32,7 +32,7 @@ Each entry in the export list is one of:
 | Form | Meaning |
 |------|---------|
 | `name/arity` | Export the constraint `name/arity`. |
-| `fun(name/arity)` | Export the function `name/arity`. |
+| `fun name/arity` | Export the function `name/arity`. |
 | `op(Pri, Type, Name)` | Export the operator declaration. |
 | `type(name/arity)` | Export the type and all of its data constructors. |
 | `type(name/arity, [c1, ...])` | Export the type and only the listed constructors. Pass `[]` to expose the type without any constructors. |
@@ -63,11 +63,6 @@ use site rather than an import site.
 
 > **TODO:** when names need to be qualified (`module:name`) and when the
 > renamer resolves them automatically.
-
-## Library search path
-
-> **TODO:** what `library(lists)` resolves to and how to extend the
-> search path.
 
 ## See also
 

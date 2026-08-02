@@ -49,6 +49,16 @@ Two patterns run through the tables below:
   `writeln/1`) are functions too: they perform their side effect on
   evaluation and their unit return is discarded.
 
+## Types
+
+Besides functions and classes, the prelude exports two algebraic
+types:
+
+| Type | Declaration | Notes |
+|------|-------------|-------|
+| `bool` | `:- chr_type bool ---> true ; false.` | The boolean type. Not built into the type system — see [type-system.md](type-system.md#built-in-types). |
+| `list(T)` | `:- chr_type list(T) ---> [] ; [T\|list(T)].` | Prolog-style lists; `[a, b]` sugar produces this type. |
+
 ## Arithmetic
 
 Operators on numbers. Each is overloaded for `int` and `float`. `int`

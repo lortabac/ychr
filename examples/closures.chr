@@ -10,7 +10,7 @@
 %   - lambda(R):  pass an anonymous lambda.
 %   - closure(R): build a closure with make_adder, then call it.
 %
-% Used by docs/tutorials/04-functions-and-types.md §4.
+% Used by docs/tutorials/04-functions-and-types.md §3.
 
 :- module(callables,
           [by_ref/1, lambda/1, closure/1,

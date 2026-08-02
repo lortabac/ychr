@@ -7,16 +7,10 @@
 
 `host:f(args)` calls a function provided by the runtime rather than a CHR
 rule or a user-defined function. Its arguments and result are untyped
-(`any` to the type checker). The prelude's arithmetic and comparison
-operators are thin wrappers over `host:` primitives:
-
-```prolog
-X + Y -> host:'+'(X, Y).
-```
-
-For the built-in primitives (arithmetic, comparisons, type predicates,
-term meta, I/O, `'$call'`), see [`prelude.md`](../reference/prelude.md),
-`libraries/prelude.chr`, and `src/YCHR/Internal/Runtime/`.
+(`any` to the type checker). For the semantics see the
+[language reference](../reference/language.md#host-calls); for the
+built-in primitives (arithmetic, comparisons, type predicates, term
+meta, I/O), see the [prelude reference](../reference/prelude.md).
 
 ## Registering your own host functions
 
@@ -56,21 +50,24 @@ main =
       -- Right 5
 ```
 
-`withDefaultHostFunctions` keeps the built-ins available alongside your
-functions; a custom entry with the same name as a built-in overrides it.
-For an effectful implementation (I/O, dereferencing, store access), use the
-`hostFn*M` variants (their body runs in `Chr`); for a fixed-shape need
-outside the marshalling, use the raw `hostFnValues`.
-
-See the [host-function reference](../reference/host-functions.md) for the
-full adapter table, marshalling rules, and error behaviour.
+See the [host-function reference](../reference/host-functions.md) for
+the full adapter table (including the effectful `hostFn*M` variants
+and the raw `hostFnValues`), registry semantics, marshalling rules,
+and error behaviour.
 
 ## Wrapping a host call with a typed signature
 
-A `:- function` declaration narrows the types at the wrapper boundary even
-though the underlying `host:` call is untyped — the wrapper is where a
-statically-typed program regains its guarantees. See
-[Add types to a program](add-types.md).
+A `host:` call is untyped, but a `:- function` wrapper around it
+narrows the types at the boundary:
+
+```prolog
+:- function my_add(int, int) -> int.
+my_add(X, Y) -> host:my_add(X, Y).
+```
+
+Callers of `my_add/2` are now checked against `(int, int) -> int` even
+though the underlying host call is not — the wrapper is where a
+statically-typed program regains its guarantees.
 
 ## See also
 

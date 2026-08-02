@@ -30,22 +30,17 @@ The VM has three disjoint kinds of expression:
 - **Value expressions** evaluate to ordinary runtime values: integers,
   floats, atoms, strings, booleans, logical variables, compound terms,
   wildcards. They populate every position where a unifiable value is
-  expected (procedure arguments, term construction, host call
-  arguments, the right-hand side of `is`).
+  expected.
 - **Id expressions** evaluate to constraint identifiers (suspension
   references). They populate every position that operates on a stored
-  constraint (`store`, `kill`, `add-history`, `balive`, `bid-equal`,
-  `bis-constraint-type`, `bnot-in-history`, `field-arg`, `field-type`).
+  constraint.
 - **Bool expressions** evaluate to booleans. They populate every
-  boolean-position operand: the condition of `if`, the body of
+  boolean position: the condition of `if`, the body of
   `bool-expr-stmt`, and the operands of `bnot`/`band`/`bor`. The
-  syntactically-bool constructors (`bnot`, `band`, `bor`,
-  `bmatch-term`, `bequal`, `bid-equal`, `balive`,
-  `bis-constraint-type`, `bnot-in-history`, `bunify`) live here, plus
-  the explicit bridge `bfrom-val` for value expressions whose
-  boolean-ness is only known at runtime (e.g. user-defined function
-  calls in guards). The bridge carries a runtime shape check; every
-  other bool position is statically a boolean.
+  explicit bridge `bfrom-val` promotes a value expression whose
+  boolean-ness is only known at runtime (e.g. a user-defined function
+  call in a guard); it carries a runtime shape check. Every other bool
+  position is statically a boolean.
 
 Constraint identifiers cannot flow into unification or term
 construction, and value expressions cannot directly satisfy a boolean
@@ -89,9 +84,9 @@ Line comments start with `;` and extend to end of line.
 - **Argument indices** are bare integers (0-based): `0`, `1`.
 - **Boolean value literals** are bare atoms: `true`, `false`. Boolean
   expression literals (the bool-position counterpart) are bare atoms
-  `btrue` / `bfalse`. The two coexist because `Lit (BoolLit _)` in
-  value position and `BLit _` in boolean position are different IR
-  constructors at different positional types.
+  `btrue` / `bfalse`. The two coexist because value position and
+  boolean position are distinct expression kinds: `true` is a value,
+  `btrue` a boolean expression.
 - **Variable-length argument lists** are trailing children within the
   enclosing form — the closing `)` marks the boundary.
 - **Fixed-length sub-lists** (e.g. then/else branches, foreach
@@ -139,29 +134,39 @@ defining module before compilation.
 
 ```scheme
 (program <num-types>
-  (type-names "<type-name>" ...)
+  (type-names <name> ...)
   <num-rules>
   (rule-names "<rule-name>" ...)
+  (evaluables ("<functor>" <arity> "<proc-name>") ...)
   <procedure>
   ...)
 ```
 
 - `<num-types>` — integer, number of distinct constraint types.
-- `type-names` — list of strings indexed by constraint type integer.
-  `type-names[i]` is the flattened source name (e.g.
-  `"mymodule:leq"`) of the constraint type with index `i`. Used by
-  runtime introspection.
+- `type-names` — list of CHR names (see [Names](#names)) indexed by
+  constraint type integer. `type-names[i]` is the source name of the
+  constraint type with index `i` — in practice always the qualified
+  form, e.g. `(qualified "mymodule" "leq")`. Used by runtime
+  introspection.
 - `<num-rules>` — integer, number of rules in the compilation unit.
 - `rule-names` — list of strings indexed by rule identifier integer.
   `rule-names[i]` is the source name of the rule with id `i`, or a
   synthetic `"__rule_N"` fallback for anonymous rules. Used by
   runtime introspection.
+- `evaluables` — the dispatch table consulted by `eval-is` (see
+  [Value Expressions](#is-evaluation)). Each entry maps a term
+  functor and arity to the procedure that evaluates it: `<functor>`
+  is the compound term functor in its runtime encoding (module and
+  base name joined by `__`, e.g. `"prelude__+"`), `<arity>` the
+  argument count, and `<proc-name>` the mangled name of the
+  corresponding `func_*` procedure. One entry per user-defined
+  function. The list is present even when empty.
 - Zero or more procedure definitions follow.
 
 ### Procedure
 
 ```scheme
-(procedure "<name>" ("<param>" ...)
+(procedure "<name>" ("<param>" ...) <proc-kind>
   <stmt>
   ...)
 ```
@@ -172,7 +177,19 @@ corresponding argument (`arg-val` or `arg-id`). Within the body,
 references use `var` for value-bound parameters and `id-var` for
 id-bound parameters.
 
-The compiler generates these procedure kinds:
+`<proc-kind>` records what the procedure is, so a backend or tool can
+classify procedures without parsing their mangled names:
+
+| Proc-kind | Meaning |
+|-----------|---------|
+| `(tell <type>)` | Tell procedure for constraint type `<type>`. |
+| `(activate <type>)` | Activate procedure for constraint type `<type>`. |
+| `(occurrence <type> <occ> <rule-id> "<rule-name>")` | Occurrence procedure: 1-based occurrence number `<occ>` of constraint type `<type>`, belonging to rule `<rule-id>` (the string is the rule's display name). |
+| `(reactivate-dispatch)` | The reactivation dispatcher. |
+| `(call-dispatch <arity>)` | The `call_n` dispatcher for arity `<arity>`. |
+| `(function "<module>" "<name>" <arity>)` | A user-defined function, identified by its unmangled module, base name, and arity. |
+
+The roles of the generated procedures:
 
 | Procedure | Purpose | Parameter kinds |
 |-----------|---------|-----------------|
@@ -241,20 +258,15 @@ underscores) pass through unchanged.
 This encoding applies to *term functor* names used by `make-term`,
 `bmatch-term`, and runtime values. The separate identifier encoding
 used for generated procedure names (`tell_*`, `activate_*`, `func_*`)
-keeps the older `__u<hex>__` form because procedure names must be
-valid identifiers in every target language (Scheme, JavaScript),
-neither of which accept `%`.
+uses a `__u<hex>__` form instead, because procedure names must be
+valid identifiers in the target language and `%` usually is not.
 
-**Restrictions.** Two infixes are forbidden in source atom names
-(both quoted and unquoted) at the source level:
-
-- `__` — reserved as the module/base separator in mangled symbols.
-- `%%u` — reserved as the unicode-escape marker in mangled symbols.
-
-Together with the fixed-width escape (no `__` in encoded text), these
-restrictions make the mangling injective: the only `__` in a mangled
-symbol is the module separator, and the only `%%u` is the start of a
-unicode escape.
+**Restrictions.** Source atom names may not contain the infixes `__`
+or `%%u` (see the [syntax reference](syntax.md)); both are reserved
+for the mangling above. This reservation, together with the
+fixed-width escape, is what makes the mangling injective: the only
+`__` in a mangled symbol is the module separator, and the only `%%u`
+is the start of a unicode escape.
 
 **Term functor names** (used in `make-term` and `bmatch-term`) follow
 the same encoding and module separator rules but do **not** include
@@ -383,7 +395,10 @@ discarded procedure or host calls use `expr-stmt`.
 Add a constraint suspension to the constraint store. The argument is a
 constraint identifier (typically `(id-var "id")` after a `let-id` from
 `create-constraint`). This also **registers the constraint as an
-observer** of its arguments for reactivation purposes.
+observer** of every unbound variable reachable from its arguments,
+recursing into compound terms — a variable nested inside an argument
+(the `X` in `pair(X, 1)`) must be observed too, or binding it later
+would silently fail to reactivate the constraint.
 
 ### kill
 
@@ -416,6 +431,28 @@ effect of `bunify`). Each pending suspension is bound to `<susp-var>`
 as an id-bound name; the body statements are executed and reference it
 via `(id-var "<susp-var>")`. The body typically dispatches to
 `reactivate_dispatch`.
+
+### push-frame
+
+```scheme
+(push-frame <label> <line> <col> <file> <source>)
+```
+
+Push a frame onto the runtime call stack used for error stack traces.
+The compiler emits one at each occurrence-procedure entry
+(`rule <name>`, before the guard) and each function entry
+(`function <module:name/arity>`), carrying the source
+location and the pretty-printed source of the fired rule head or
+matched equation. There is no pop instruction: the runtime saves the
+stack at every procedure call and restores it when the call returns,
+so frames pushed inside a body are visible until the enclosing
+procedure exits. A backend that ignores `push-frame` loses stack
+traces in runtime errors but nothing else.
+
+Note that the five fields are emitted as raw unquoted text — a label
+or source fragment containing spaces or parentheses (which is the
+common case) does not survive re-parsing as a single atom. Treat
+`push-frame` fields as display-only.
 
 
 ## Value Expressions
@@ -486,6 +523,21 @@ for the right-hand side of `is`. Constraint identifiers do not deref;
 the mode is a no-op for `arg-id` arguments. The bool-position
 counterpart is `beval-deep` (see Bool Expressions).
 
+### is evaluation
+
+```scheme
+(eval-is <val-expr>)
+```
+
+Evaluate the nested expression in deep-deref mode (like `eval-deep`),
+then walk the resulting value and evaluate any compound subterm whose
+functor and arity appear in the program's `evaluables` table (see
+[Program](#program)), calling the procedure the table maps them to.
+The compiler emits this only for `R is X` where the right-hand side
+is syntactically a variable: the compound to evaluate is not known
+until run time, so the dispatch goes through the table instead of a
+direct `call-expr`.
+
 ### Logical variables
 
 ```scheme
@@ -552,10 +604,9 @@ arguments.
 
 ## Bool Expressions
 
-Expressions in this section evaluate to booleans. They populate the
-condition of `if`, the operand of `bool-expr-stmt`, and the operands
-of `bnot` / `band` / `bor`. The serialization uses a `b` prefix on
-each constructor to distinguish it from any value-side counterpart.
+Expressions in this section evaluate to booleans. The serialization
+uses a `b` prefix on each constructor to distinguish it from any
+value-side counterpart.
 
 ### Literals
 
@@ -687,8 +738,8 @@ Each suspension contains:
 | `alive` | Boolean flag. |
 
 A simple implementation is a hash map from constraint type to an array
-of suspensions. See the [Iterator properties](#foreach) section for
-the requirements on iteration under modification.
+of suspensions. See the [Iterator properties](#iterator-properties)
+section for the requirements on iteration under modification.
 
 ### Propagation history
 
@@ -715,52 +766,78 @@ entirely the backend's responsibility.
 ## Complete Example
 
 The `leq` (less-than-or-equal) handler with a single `reflexivity`
-rule, serialized. The constraint is `mymodule:leq/2`, so procedure
-names use the pattern `<prefix>_mymodule__leq2`:
+rule:
+
+```prolog
+:- module(mymodule, [leq/2]).
+:- chr_constraint leq/2.
+
+reflexivity @ leq(X, X) <=> true.
+```
+
+Below is the output of `ychr compile -t vm mymodule.chr`, reformatted
+with indentation. The prelude is always compiled in, so the real dump
+also contains one `evaluables` entry, one `func_*` procedure, and one
+export per prelude function, plus the `call_1` / `call_2` dispatchers;
+those are elided here (`; ...`). The constraint is `mymodule:leq/2`,
+so procedure names use the pattern `<prefix>_mymodule__leq2`:
 
 ```scheme
 (vm-program
   (program 1
-    (type-names "mymodule:leq")
+    (type-names (qualified "mymodule" "leq"))
     1
     (rule-names "reflexivity")
+    (evaluables
+      ("prelude__+" 2 "func_prelude____u2b__2")
+      ; ... one entry per prelude function elided
+      )
 
     ; tell_mymodule__leq2(X_0, X_1): create, store, activate
-    (procedure "tell_mymodule__leq2" ("X_0" "X_1")
-      (let-id "id" (create-constraint 0 (var "X_0") (var "X_1")))
-      (store (id-var "id"))
+    (procedure "tell_mymodule__leq2" ("X_0" "X_1") (tell 0)
+      (let-id "active" (create-constraint 0 (var "X_0") (var "X_1")))
+      (store (id-var "active"))
       (expr-stmt (call-expr "activate_mymodule__leq2"
-                   (arg-id (id-var "id")))))
+                   (arg-id (id-var "active")))))
 
-    ; activate_mymodule__leq2(susp): extract args, try each occurrence
-    (procedure "activate_mymodule__leq2" ("susp")
-      (let-id "id" (id-var "susp"))
-      (let-val "X_0" (field-arg (id-var "susp") 0))
-      (let-val "X_1" (field-arg (id-var "susp") 1))
-      (let-val "d" (call-expr "occurrence_mymodule__leq2_1"
-                     (arg-id (id-var "id"))
-                     (arg-val (var "X_0"))
-                     (arg-val (var "X_1"))))
-      (if (bfrom-val (var "d")) ((return true)) ())
+    ; activate_mymodule__leq2(active): extract args, try each occurrence
+    (procedure "activate_mymodule__leq2" ("active") (activate 0)
+      (let-val "X_0" (field-arg (id-var "active") 0))
+      (let-val "X_1" (field-arg (id-var "active") 1))
+      (let-val "dropped" (call-expr "occurrence_mymodule__leq2_1"
+                           (arg-id (id-var "active"))
+                           (arg-val (var "X_0"))
+                           (arg-val (var "X_1"))))
+      (if (bfrom-val (var "dropped")) ((return true)) ())
       (return false))
 
-    ; occurrence_mymodule__leq2_1:
+    ; occurrence_mymodule__leq2_1: after HNF,
     ;   reflexivity @ leq(X, X1) <=> X == X1 | true.
-    (procedure "occurrence_mymodule__leq2_1" ("id" "X_0" "X_1")
+    (procedure "occurrence_mymodule__leq2_1" ("active" "X_0" "X_1")
+               (occurrence 0 1 0 "reflexivity")
+      (push-frame rule reflexivity 4 15 mymodule.chr leq(X, X))
       (if (bequal (var "X_0") (var "X_1"))
-        ((kill (id-var "id"))
+        ((kill (id-var "active"))
          (return true))
         ())
       (return false))
 
+    ; ... prelude func_* procedures elided
+
     ; reactivate_dispatch(susp): type-based dispatch
-    (procedure "reactivate_dispatch" ("susp")
+    (procedure "reactivate_dispatch" ("susp") (reactivate-dispatch)
       (if (bis-constraint-type (id-var "susp") 0)
         ((expr-stmt (call-expr "activate_mymodule__leq2"
                       (arg-id (id-var "susp")))))
-        ())))
+        ()))
 
-  (exports ((qualified "mymodule" "leq") 2))
+    ; ... call_1 / call_2 dispatcher procedures elided
+    )
+
+  (exports
+    ((qualified "mymodule" "leq") 2)
+    ; ... prelude exports elided
+    )
 
   (symbol-table
     ((qualified "mymodule" "leq") 2 0)))

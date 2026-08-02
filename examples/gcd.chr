@@ -1,0 +1,13 @@
+% Euclid's algorithm as two CHR rules.
+%
+% Tell gcd(N) for each input number; the rules repeatedly replace the
+% larger of two numbers with their difference and drop zeros, until a
+% single gcd(G) remains in the store.
+%
+% Used by docs/explanation/what-is-chr.md.
+
+:- module(gcd, [gcd/1]).
+:- chr_constraint gcd/1.
+
+zero     @ gcd(0) <=> true.
+subtract @ gcd(N) \ gcd(M) <=> M >= N, N > 0 | gcd(M - N).

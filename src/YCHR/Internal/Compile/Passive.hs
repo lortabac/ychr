@@ -23,7 +23,7 @@
 -- occurrences are single-headed guardless simplifications) is vacuous for
 -- partner elimination — such a constraint can never be a partner, because
 -- being a partner requires appearing in a multi-headed rule. See
--- @docs/reference/passive-occurrences.md@ for the full specification and
+-- @dev-docs/passive-occurrences.md@ for the full specification and
 -- soundness argument.
 --
 -- The analysis is conservative: it marks an occurrence passive only when

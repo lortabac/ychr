@@ -4,7 +4,7 @@
 % The `intensity_of/2` constraint computes the intensity associated
 % with each color and binds it to its second argument.
 %
-% Used by docs/tutorials/04-functions-and-types.md §3.
+% Used by docs/tutorials/04-functions-and-types.md §2.
 
 :- module(traffic, [intensity_of/2, type(color/0, [red, green, yellow])]).
 :- chr_type color ---> red ; green ; yellow.

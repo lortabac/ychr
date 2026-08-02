@@ -4,10 +4,11 @@
 > and "constraint store" don't ring a bell, read the
 > [CHR primer](02-chr-primer.md) first.
 > **You will:** write a CHR program that grows from one rule to three,
-> meeting all the rule kinds along the way.
+> seeing how simplification and propagation rules interact.
 
-The bakery example you ran in the [previous tutorial](01-getting-started.md)
-had a single simplification rule. Here we'll start from a blank file
+The bakery example you ran in
+[Getting started](01-getting-started.md) had a single simplification
+rule. Here we'll start from a blank file
 and grow it into a slightly richer program — a tiny recipe book — to
 see how multiple rules interact.
 
@@ -31,31 +32,11 @@ cake_recipe @
   <=> cake.
 ```
 
-This is the same program as the bakery from the previous tutorial. The
-`<=>` operator is *simplification*: it removes every constraint in
-the head and adds the body in their place. With this rule alone, three
-eggs, three glasses, and a `bake` collapse into a `cake`.
-
-Load it and confirm:
-
-```sh
-ychr repl recipes.chr
-```
-
-```ychr-repl
-ychr> :begin
-ychr live> egg.
-ychr live> egg.
-ychr live> egg.
-ychr live> glass_of_milk.
-ychr live> glass_of_flour.
-ychr live> glass_of_sugar.
-ychr live> bake.
-ychr live> print_store.
-recipes:cake
-ychr live> :end
-ychr>
-```
+This is the bakery program from
+[Getting started](01-getting-started.md) under a new name: one
+simplification rule that collapses three eggs, the three glasses, and
+a `bake` into a `cake`. Load it with `ychr repl recipes.chr` and
+tell it the ingredients to confirm it still works as before.
 
 ## 2. A second recipe and rule selection
 
@@ -162,13 +143,11 @@ ychr>
 
 `cake` survived, and `serving_ready` was added.
 
-A subtlety: propagation rules carry a *propagation history* that
-prevents the same combination of head constraints from firing twice.
-If `serve` fired every time the runtime examined `cake`, you'd get an
-infinite loop. The history records *"serve fired with this particular
-cake"* and skips re-fires for the same combination. Different `cake`
-constraints (i.e. those produced by separate rule firings) have
-distinct identities, so each gets its own `serving_ready`:
+A subtlety: the *propagation history* (see the
+[primer](02-chr-primer.md#5-firing-order-and-propagation-history))
+keeps `serve` from firing twice on the same `cake` — otherwise this
+rule would loop forever. Different `cake` constraints have distinct
+identities, so each gets its own `serving_ready`:
 
 ```ychr-repl
 ychr> :begin
@@ -197,21 +176,12 @@ ychr>
 
 Two cakes, two notifications.
 
-## 4. What you've built
+## 4. Where to go next
 
-Three rules covering two of the four CHR rule kinds:
-
-| Rule | Operator | Removes head? | Adds body? |
-|------|----------|---------------|------------|
-| `cake_recipe` | `<=>` (simplification) | yes | yes |
-| `cookies_recipe` | `<=>` (simplification) | yes | yes |
-| `serve` | `==>` (propagation) | no | yes |
-
-The two missing pieces — *simpagation* (`Kept \ Removed <=> ...`,
-which keeps some head constraints while removing others) and
-*guards* (boolean tests that gate a rule firing) — show up next.
-
-## 5. Where to go next
+This program used simplification and propagation; the third rule kind,
+*simpagation* (`Kept \ Removed <=> ...`), and rule *guards* are
+covered in the [primer](02-chr-primer.md) and the
+[language reference](../reference/language.md).
 
 - [Functions, types, and lambdas](04-functions-and-types.md) — adding
   user-defined functions and type annotations.

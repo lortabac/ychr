@@ -4,7 +4,7 @@
 % N > 1. The constraint `compute(N, R)` binds R to fib(N) using the
 % `is` operator, which evaluates its right-hand side as an expression.
 %
-% Used by docs/tutorials/04-functions-and-types.md §2.
+% Used by docs/tutorials/04-functions-and-types.md §1.
 
 :- module(fib, [compute/2, fun fib/1]).
 :- chr_constraint compute(int, int).

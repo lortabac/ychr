@@ -43,7 +43,7 @@ Five pieces of language to point out.
   type. The name and arity live in the same namespace as constraint
   names, but the two cannot collide. The argument and return types
   here are explicit; if you write `:- function factorial/1.` instead,
-  both default to `any` and skip type-checking. §3 covers types in
+  both default to `any` and skip type-checking. §2 covers types in
   more depth.
 - `:- chr_constraint compute(int, int).` similarly types the
   constraint's two arguments.
@@ -84,43 +84,11 @@ ychr run -g 'compute(5, R)' --show-bindings examples/factorial.chr
 R = 120
 ```
 
-## 2. A function inside a rule body: fibonacci
+The pattern scales to any number of equations — see
+[`examples/fib.chr`](../../examples/fib.chr) for fibonacci with two
+base-case equations and a guarded recursive one.
 
-The same pattern scales naturally to recursion across multiple
-equations. The companion file
-[`examples/fib.chr`](../../examples/fib.chr):
-
-```prolog
-:- module(fib, [compute/2, fun fib/1]).
-:- chr_constraint compute(int, int).
-:- function fib(int) -> int.
-
-fib(0) -> 0.
-fib(1) -> 1.
-fib(N) | N > 1 -> fib(N - 1) + fib(N - 2).
-
-compute(N, R) <=> R is fib(N).
-```
-
-```sh
-ychr repl examples/fib.chr
-```
-
-```ychr-repl
-ychr> R is fib(10).
-R = 55.
-ychr> R is fib(15).
-R = 610.
-ychr>
-```
-
-Two pattern-matching equations supply the base cases; the third covers
-the recursive case under a guard. There is nothing CHR-specific here —
-it's exactly the recursion you'd write in any pattern-matching
-language. The `compute/2` constraint plays the same role as in §1: a
-CLI-friendly wrapper for `ychr run -g`.
-
-## 3. Adding types
+## 2. Adding types
 
 YCHR has an *optional* gradual type system. Every declaration can be
 written in a plain form (no types) or an annotated form (with types);
@@ -217,7 +185,7 @@ The full rules — polymorphism, overloading, gradual interaction with
 `any`, narrowing constructor imports — are in the
 [type system reference](../reference/type-system.md).
 
-## 4. Lambdas and function references
+## 3. Lambdas and function references
 
 Functions are also values. You can pass them around, return them, and
 call them indirectly. The companion file
@@ -286,7 +254,7 @@ remembers its captured value. Calling that closure with `5` gives
 `10 + 5 = 15`. Each call to `make_adder` produces an independent
 closure with its own captured `N`.
 
-## 5. Where to go next
+## 4. Where to go next
 
 - [Type system reference](../reference/type-system.md) — the full
   rules for type annotations, polymorphism, and overload resolution.

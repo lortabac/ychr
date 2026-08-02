@@ -13,47 +13,10 @@ The tutorials and the reference section are complete. A few how-to guides
 (design rationale, operational semantics) are still outlines; they lay out
 the structure and are being filled in incrementally.
 
-## Conventions
-
-### Audience banner
-Each page opens with an **Audience** / **You will** callout so readers
-can self-route. Pages may add a **Skip if** line for readers who can
-move on to a more advanced page.
-
-### Code fences
-CHR source is fenced `prolog`; interactive REPL sessions are fenced
-`ychr-repl`. Blocks that are neither — grammars, inference rules,
-generated VM s-expressions, shell output — carry no info-string or the
-obvious one (`sh`, `scheme`, `haskell`).
-
-### REPL transcripts
-The REPL uses two prompts:
-
-- `ychr> ` — normal mode.
-- `ychr live> ` — inside a `:begin … :end` live session, where the
-  constraint store persists between inputs.
-
-Both prompts appear in transcripts. Every output line is copied
-verbatim from a real REPL run; nothing is paraphrased or guessed.
-
-```
-ychr> :begin
-ychr live> egg.
-ychr live> egg.
-ychr live> print_store.
-bakery:egg
-bakery:egg
-ychr live> :end
-ychr>
-```
-
-A test harness that executes these fences will land later. Until then,
-the convention is the contract.
-
-### Examples
 Runnable, self-contained programs that the docs reference live under
-[`../examples/`](../examples/) at the repo root. They are pedagogical,
-not regression tests — for edge cases see `test/golden/`.
+[`../examples/`](../examples/) at the repo root. Every REPL transcript
+is copied verbatim from a real run; the authoring conventions are in
+[`dev-docs/DOC_CONVENTIONS.md`](../dev-docs/DOC_CONVENTIONS.md).
 
 ## Reading paths
 
@@ -105,6 +68,7 @@ not regression tests — for edge cases see `test/golden/`.
 - [Call host-language functions](how-to/call-host-functions.md)
 - [Organize a program into modules](how-to/organize-modules.md)
 - [Embed a CHR module in Haskell](how-to/embed-a-chr-module.md)
+- [Drive a compiled program from the Scheme REPL](how-to/scheme-repl.md)
 
 ## Reference
 
@@ -121,8 +85,6 @@ not regression tests — for edge cases see `test/golden/`.
 - [REPL](reference/repl.md) — meta-commands and live sessions
 - [Errors](reference/errors.md) — `YCHR-NNNNN` code catalogue
 - [Abstract VM](reference/vm.md) — instruction set and runtime contract
-- [Passive occurrences](reference/passive-occurrences.md) — the
-  passive-occurrence compiler optimization
 
 ## Explanation
 

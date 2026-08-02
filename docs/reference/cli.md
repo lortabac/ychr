@@ -55,10 +55,7 @@ Example:
 ychr run -g 'cake' examples/bakery.chr
 ```
 
-`run` exits silently on success. To execute expression goals,
-conjunctions, or function calls non-interactively, wrap them in a
-single helper constraint whose body posts them; otherwise use the
-REPL (one-shot or `:begin ... :end` live session).
+`run` exits silently on success.
 
 ### `ychr check [--Werror] [FILES...]`
 

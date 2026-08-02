@@ -33,7 +33,8 @@ A CHR program's only state is a multiset of constraints, the *store*.
 A program is a set of rules that rewrite that store. Rules fire until none
 can fire any more, and whatever is left in the store is the answer.
 
-That is the whole model. Here is Euclid's algorithm:
+That is the whole model. Here is Euclid's algorithm
+([`examples/gcd.chr`](../../examples/gcd.chr)):
 
 ```prolog
 :- module(gcd, [gcd/1]).
@@ -59,9 +60,9 @@ ychr>
 (`:begin` opens a live session, in which the store persists between
 inputs — see the [REPL reference](../reference/repl.md).)
 
-No loop, no recursion, no accumulator, no base-case plumbing. The second
-rule says "if you have two of these, replace the larger with their
-difference"; the first says "zero is not an answer, drop it". The runtime
+No loop, no recursion, no accumulator, no base-case plumbing. The first
+rule says "zero is not an answer, drop it"; the second says "if you have
+two of these, replace the larger with their difference". The runtime
 works out when and how often to apply them.
 
 ## What CHR is good at

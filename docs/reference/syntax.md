@@ -67,28 +67,28 @@ User code declares its own operators with `op(Priority, Type, Name)`
 entries inside a `:- module(...)` export list or a `:- use_module(M, ...)`
 import list. There is no top-level `:- op(...)` directive.
 
-The REPL will eventually grow an operator-introspection command; until
-then, the authoritative list of in-scope operators is whatever appears
-in `libraries/prelude.chr` plus the user modules.
+The REPL's `:list_operators` command prints the operators in scope
+for the loaded program, one `op/3` term per line — see the
+[REPL reference](repl.md).
 
 ## Directives
 
 | Directive | Purpose |
 |-----------|---------|
-| `:- module(Name, Exports).` | *Optional* module header with explicit export list. Each entry is `name/arity`, `fun name/arity`, `op(Pri, Type, Name)`, `type(name/arity)`, or `type(name/arity, [Con, ...])`. The `type(...)` form covers both algebraic and opaque types (they share one type namespace). |
+| `:- module(Name, Exports).` | *Optional* module header with explicit export list. Each entry is `name/arity`, `fun name/arity`, `op(Pri, Type, Name)`, `type(name/arity)`, or `type(name/arity, [Con, ...])`. |
 | `:- module(Name).` | *Optional* module header that exports every constraint, function, type, and operator declared in the module. A file with no header forms an unnamed module with the same export semantics; diagnostics refer to it by its file basename (e.g. `<a>` for `a.chr`). |
 | `:- use_module(M)` / `:- use_module(M, Imports).` | Import another module. Import items use the same forms as export items. The wrapper `library(Name)` is accepted as a synonym for a bare module name. All `use_module` directives must appear before the first non-import directive or rule in the file (YCHR-20007). |
 | `type(name/arity, [Con1, ...])` | Two-argument type form. Exports (or imports) the type and only the listed data constructors; `type(name/arity)` covers all of them. The arity is the number of *type parameters*. |
-| `:- chr_constraint Decls.` | Declare CHR constraints. Each `Decl` is `name/arity` (untyped) or `name(τ₁, ..., τₙ)` (typed; arity inferred). May carry a `requiring` clause when typed. A name+arity declared here cannot also be declared as a function-like form (`:- function`, `:- open_function`, `:- class`, `:- open_class`) in the same module (YCHR-16016). |
+| `:- chr_constraint Decls.` | Declare CHR constraints. Each `Decl` is `name/arity` (untyped) or `name(τ₁, ..., τₙ)` (typed; arity inferred). May carry a `requiring` clause when typed. Cannot share a name+arity with a function-like declaration in the same module (YCHR-16016). |
 | `:- chr_type T ---> Cs.` | Declare an algebraic type with named constructors. |
-| `:- opaque_type T.` / `:- opaque_type T(Vars).` | Declare a nominal opaque type with no data constructors (exported as `type(T/arity)`, like any type). Its values are obtained and consumed through the functions declared over it. A `---> ...` body is rejected (YCHR-15016). See [type-system.md](type-system.md#opaque-types). |
-| `:- function Decls.` | Declare a closed user-defined function. Single signature only — multi-signature requires `:- class` (YCHR-16011). All decls (typed or untyped) and all equations must live in the declaring module; the decls must form a contiguous block of module items (YCHR-15004) and the equations a contiguous block (YCHR-15001). May carry a `requiring` clause (bounded polymorphism). |
-| `:- open_function Decls.` | Declare an open user-defined function. Single signature only. Decls must still be in one module and contiguous, but other modules may contribute extension equations via `:- extend_function`. Type-signature extension is not available (see `:- open_class`). |
-| `:- class Decls.` | Declare a closed user-defined class. Like `:- function`, but enables multi-signature overloading: two or more typed signatures for the same name and arity. `requiring` is forbidden on `:- class` (YCHR-15005); bounded polymorphism is reserved for `:- function` / `:- open_function`. |
-| `:- open_class Decls.` | Declare an open user-defined class. Other modules may contribute extension signatures via `:- extend_class_type` and extension equations via `:- extend_class`. |
-| `:- extend_class_type (Name(Ts) -> T).` | Add an overloaded type signature to an `:- open_class` declared elsewhere. The class name resolves through the importing module's imports. Targeting a closed declaration is an error (YCHR-16005); targeting an `:- open_function` is `ExtendClassTypeOnFunction` (YCHR-16013). |
-| `:- extend_function Name(Args) [\| Guards] -> Body.` | Add an equation to an `:- open_function` declared elsewhere. Targeting an `:- open_class` is `ExtendFunctionOnClass` (YCHR-16015). Free-floating equation syntax (`name(args) -> body.`) is only allowed in the declaring module; appearing elsewhere is an error (YCHR-16006). |
-| `:- extend_class Name(Args) [\| Guards] -> Body.` | Add an equation to an `:- open_class` declared elsewhere. Targeting an `:- open_function` is `ExtendClassOnFunction` (YCHR-16014). |
+| `:- opaque_type T.` / `:- opaque_type T(Vars).` | Declare a nominal opaque type with no data constructors (exported as `type(T/arity)`). A `---> ...` body is rejected (YCHR-15016). See [type-system.md](type-system.md#opaque-types). |
+| `:- function Decls.` | Declare a closed user-defined function: single signature (YCHR-16011), declarations and equations confined to the declaring module in contiguous blocks (YCHR-15004, YCHR-15001). May carry a `requiring` clause. |
+| `:- open_function Decls.` | Like `:- function`, but other modules may add equations via `:- extend_function`. |
+| `:- class Decls.` | Like `:- function`, but with multi-signature overloading: two or more typed signatures for one name and arity. `requiring` is forbidden (YCHR-15005). |
+| `:- open_class Decls.` | Declare an open user-defined class. Other modules may add signatures via `:- extend_class_type` and equations via `:- extend_class`. |
+| `:- extend_class_type (Name(Ts) -> T).` | Add a signature to an `:- open_class` declared elsewhere; the name resolves through the importing module's imports. Wrong-target errors: YCHR-16005, YCHR-16013. |
+| `:- extend_function Name(Args) [\| Guards] -> Body.` | Add an equation to an `:- open_function` declared elsewhere. Wrong target: YCHR-16015; a free-floating equation outside the declaring module: YCHR-16006. |
+| `:- extend_class Name(Args) [\| Guards] -> Body.` | Add an equation to an `:- open_class` declared elsewhere. Wrong target: YCHR-16014. |
 
 All declaration directives accept a comma-separated list. For example,
 `:- chr_constraint fib/2, upto/1.` declares two constraints in one
