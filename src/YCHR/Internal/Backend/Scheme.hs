@@ -27,9 +27,9 @@ import Numeric (showHex)
 import YCHR.Internal.Compile (tellProcName)
 import YCHR.Internal.Compile.Names (encodeIdentifier, isIdInitialSafe)
 import YCHR.Internal.SExpr (SExpr (..), printSExpr)
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM.SExpr (VMProgram (..))
 import YCHR.Internal.VM.Types
-import YCHR.Types qualified as Types
 
 -- ---------------------------------------------------------------------------
 -- Public API

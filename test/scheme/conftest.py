@@ -15,8 +15,19 @@ def scheme_lib_dir():
 
 @pytest.fixture(scope="session")
 def guile_bin():
-    """Return the guile3.0 binary path, or skip if not available."""
-    path = shutil.which("guile3.0")
-    if path is None:
-        pytest.skip("guile3.0 not found")
-    return path
+    """Return the Guile 3 binary path, or skip if not available.
+
+    Honors the GUILE environment variable first, then falls back to the
+    common binary names (guile3.0 on Fedora, guile-3.0 on Debian/Ubuntu).
+    """
+    override = os.environ.get("GUILE")
+    if override:
+        path = shutil.which(override)
+        if path is None:
+            pytest.fail(f"GUILE={override} set but not found on PATH")
+        return path
+    for candidate in ("guile3.0", "guile-3.0", "guile"):
+        path = shutil.which(candidate)
+        if path is not None:
+            return path
+    pytest.skip("no Guile 3 binary found (tried guile3.0, guile-3.0, guile)")

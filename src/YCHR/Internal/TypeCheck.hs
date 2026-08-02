@@ -58,8 +58,7 @@ import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.Runtime.Var (deref, newVar)
 import YCHR.Internal.TypeCheck.Compiled (typeCheckerProgram)
 import YCHR.Internal.TypeCheck.Error (TypeCheckError (..))
-import YCHR.Internal.VM qualified as VM
-import YCHR.Types
+import YCHR.Internal.Types
   ( BoundSig (..),
     DataConstructor (..),
     HeadArg (..),
@@ -72,7 +71,8 @@ import YCHR.Types
     headConstraintToConstraint,
     typeConstructors,
   )
-import YCHR.Types qualified as Types
+import YCHR.Internal.Types qualified as Types
+import YCHR.Internal.VM qualified as VM
 
 -- | Flatten a 'Name' to the same single-atom form used by the runtime
 -- (see 'YCHR.Internal.Compile.Names.vmName'). Required so CHR-side constraints
@@ -493,7 +493,7 @@ tellConstraintSigs prog =
 -- @function_bounds@ using a shared type-variable map so a single
 -- @copy_term@ at the use site freshens the signature and the
 -- bound signatures consistently (see
--- 'YCHR.Types.BoundSig' and the @bounded_function_match@ rule).
+-- 'YCHR.Internal.Types.BoundSig' and the @bounded_function_match@ rule).
 tellFunctionSigs :: D.Program -> TC ()
 tellFunctionSigs prog = mapM_ tellOne prog.functions
   where

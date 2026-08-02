@@ -22,9 +22,12 @@ description:
     >
     > main :: IO ()
     > main = do
-    >   Right (cp, _warnings) <- compileFiles True ["Order.chr"]
-    >   r <- runQueryCompiled cp goal "R"
-    >   print (r :: Either ConvertError Int)
+    >   result <- compileFiles True ["Order.chr"]
+    >   case result of
+    >     Left err -> putStr (displayError err)
+    >     Right (cp, _warnings) -> do
+    >       r <- runQueryCompiled cp goal "R"
+    >       print (r :: Either ConvertError Int)
     >   where goal = CompoundTerm (Unqualified "compute") [VarTerm "R"]
 
     Compile a @.chr@ module once, then feed it Haskell values and decode its
@@ -64,10 +67,10 @@ bug-reports:        https://github.com/lortabac/ychr/issues
 category:           Language
 build-type:         Simple
 -- Only versions actually exercised are listed here. 9.6.6 and 9.12.x have
--- been built and had the test suite run against them locally; 9.8 and 9.10
--- fall inside the supported base range and are covered by the CI matrix,
--- and can be added here once that has been green.
-tested-with:        GHC == 9.6.6, GHC == 9.12.2, GHC == 9.12.4
+-- been built and had the test suite run against them locally; 9.8.4 and
+-- 9.10.1 are built (compile-only) by the CI matrix.
+tested-with:        GHC == 9.6.6, GHC == 9.8.4, GHC == 9.10.1,
+                    GHC == 9.12.2, GHC == 9.12.4
 
 extra-doc-files:      README.md
                     , CHANGELOG.md
@@ -233,6 +236,7 @@ library
                     , YCHR.Internal.Rename
                     , YCHR.Internal.Rename.Types
                     , YCHR.Internal.StdLib
+                    , YCHR.Internal.Types
                     , YCHR.Internal.TypeCheck
                     , YCHR.Internal.TypeCheck.Error
                     , YCHR.Internal.TypeCheck.Compiled

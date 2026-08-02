@@ -39,9 +39,9 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import YCHR.Internal.Desugared qualified as D
+import YCHR.Internal.Types (HeadArg, HeadConstraint, Identifier, Name, RuleId)
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (ArgIndex, BoolExpr, ConstraintType, Stmt, ValExpr)
-import YCHR.Types (HeadArg, HeadConstraint, Identifier, Name, RuleId)
-import YCHR.Types qualified as Types
 
 -- | Errors raised by any pass in the CHR-to-VM compiler. Wrapped in
 -- 'YCHR.Internal.Parsed.AnnP' at the use site to carry the source location and

@@ -45,7 +45,7 @@ import Data.Text qualified as T
 import YCHR.Internal.Compile.Types
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Parsed (AnnP (..))
-import YCHR.Types (HeadArg (..), HeadConstraint)
+import YCHR.Internal.Types (HeadArg (..), HeadConstraint)
 
 -- | Flip the 'passive' flag on every occurrence the analysis can prove
 -- can never fire. Runs after occurrence numbering, so numbers are

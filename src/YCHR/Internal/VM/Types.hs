@@ -75,8 +75,8 @@ import Data.String (IsString (..))
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Loc (SourceLoc)
-import YCHR.Types (ConstraintType (..), RuleId (..))
-import YCHR.Types qualified as Types
+import YCHR.Internal.Types (ConstraintType (..), RuleId (..))
+import YCHR.Internal.Types qualified as Types
 
 -- | A runtime call stack frame.
 --
@@ -122,7 +122,7 @@ data Program = Program
   deriving (Show, Eq)
 
 -- | Dispatch key for the @is@ deep-evaluator. Parallel in structure
--- to 'YCHR.Types.Identifier', but carries the VM-encoded form of the
+-- to 'YCHR.Internal.Types.Identifier', but carries the VM-encoded form of the
 -- functor (the same text stored on @VTerm@ values), so dispatch is
 -- a direct map lookup with no need to invert
 -- 'YCHR.Internal.Compile.Names.encodeText'.

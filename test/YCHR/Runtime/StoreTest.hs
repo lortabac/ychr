@@ -12,7 +12,7 @@ import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Store
 import YCHR.Internal.Runtime.Types (SuspensionId (..), Value (..))
 import YCHR.Internal.Runtime.Var (equal, newVar, unify)
-import YCHR.Types (ConstraintType (..), Name (..))
+import YCHR.Internal.Types (ConstraintType (..), Name (..))
 
 tests :: TestTree
 tests =

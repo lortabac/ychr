@@ -53,7 +53,7 @@ import Data.Map.Strict (Map)
 import Data.Text (Text)
 import YCHR.Internal.Parsed (AnnP)
 import YCHR.Internal.Resolved (Expr (..))
-import YCHR.Types
+import YCHR.Internal.Types
 
 data Program = Program
   { rules :: [Rule],

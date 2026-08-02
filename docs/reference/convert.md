@@ -11,12 +11,14 @@
 > **Skip if** the [DSL](dsl.md)'s `Term` combinators and raw
 > `Map Text Term` results are enough for you.
 
-> **Shortcut.** The whole compile-and-query surface described here —
-> `compileFiles`/`compileModules`, `CompiledProgram`, `runQuery`,
-> `runQueryCompiled`, the classes, and the combinators — is re-exported
-> from the umbrella module `YCHR`, so `import YCHR` is usually all you
-> need. `YCHR.Convert` itself is the module of record for the value bridge,
-> and `YCHR.Convert.Generic` (GHC only) adds generic derivation.
+> **Shortcut.** The compile-and-query surface described here —
+> `compileFiles`/`compileModules`, `CompiledProgram`, `runQueryCompiled`,
+> the classes, and the combinators — is re-exported from the umbrella
+> module `YCHR`, so `import YCHR` is usually all you need. The
+> compile-and-run-in-one `runQuery` family over DSL `[Module]` values is
+> the exception: it lives only in `YCHR.Convert`. `YCHR.Convert` itself is
+> the module of record for the value bridge, and `YCHR.Convert.Generic`
+> (GHC only) adds generic derivation.
 
 `YCHR.Convert` is a companion to [`YCHR.DSL`](dsl.md): the DSL builds CHR
 *programs*, while `YCHR.Convert` converts *values* at the program
@@ -117,8 +119,9 @@ instance FromTerm Shape where
 ```
 
 `ConvertError` is returned as data (never thrown): `TypeMismatch`,
-`ArityMismatch`, `UnknownFunctor`, `UnboundValue`, and `MissingBinding`
-(for result decoding).
+`ArityMismatch`, `UnknownFunctor`, `UnboundValue`, `MissingBinding`
+(for result decoding), and `MalformedGoal` (for a query goal that is
+not a compound term).
 
 ## Decoding query results
 
@@ -183,14 +186,17 @@ runQueryCompiled
 
 ```haskell
 import YCHR.Convert (runQueryCompiled)
-import YCHR.Run (compileFiles)
+import YCHR.Run (compileFiles, displayError)
 
 main :: IO ()
 main = do
-  Right (cp, _warnings) <- compileFiles True ["typechecker.chr"]   -- once
-  r1 <- runQueryCompiled cp (term "typecheck" [toTerm expr1, var "R"]) "R"
-  r2 <- runQueryCompiled cp (term "typecheck" [toTerm expr2, var "R"]) "R"
-  ...
+  result <- compileFiles True ["typechecker.chr"]                  -- once
+  case result of
+    Left err -> putStr (displayError err)
+    Right (cp, _warnings) -> do
+      r1 <- runQueryCompiled cp (term "typecheck" [toTerm expr1, var "R"]) "R"
+      r2 <- runQueryCompiled cp (term "typecheck" [toTerm expr2, var "R"]) "R"
+      ...
 ```
 
 `runQueryCompiledWith` and `runQueryCompiledWithHostCallRegistry` are the

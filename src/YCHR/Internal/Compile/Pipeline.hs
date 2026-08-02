@@ -70,9 +70,9 @@ import YCHR.Internal.Resolve
   )
 import YCHR.Internal.StdLib (stdlib)
 import YCHR.Internal.TypeCheck.Error (TypeCheckError)
+import YCHR.Internal.Types (SymbolTable)
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Program, StackFrame)
-import YCHR.Types (SymbolTable)
-import YCHR.Types qualified as Types
 
 -- | Anything that can stop a program from compiling or running, tagged by
 -- the phase that rejected it.

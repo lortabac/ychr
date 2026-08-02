@@ -25,7 +25,7 @@ jobs:
   # Compile-only check across the whole supported GHC range. The full test
   # suite needs Guile and pytest, so it runs once (in 'test') on the primary
   # compiler; this job exists to catch base-API drift on older releases.
-  # Extend 'tested-with' in ychr.cabal once this has been green for a while.
+  # Keep this matrix in sync with 'tested-with' in ychr.cabal.
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -76,6 +76,11 @@ jobs:
           cd /tmp/sdist-check/ychr-*
           cabal build all --enable-tests
           cabal test --enable-tests
+
+      - name: Build Haddock documentation as Hackage would
+        run: |
+          cd /tmp/sdist-check/ychr-*
+          cabal haddock --haddock-for-hackage
 
   test:
     runs-on: ubuntu-latest

@@ -123,7 +123,7 @@ one independent run per demo term:
 ```haskell
 cp <- case compileModules True [(stlcPath, embeddedSource)] of
         Right (cp, _warnings) -> pure cp
-        Left err              -> fail (show err)
+        Left err              -> fail (displayError err)
 
 result <- runQueryCompiled cp (typecheckGoal e) "Result"
   :: IO (Either ConvertError TCResult)

@@ -9,14 +9,23 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
 import YCHR.Internal.Runtime.Store (getStoreSnapshot, isSuspAlive)
+import YCHR.Internal.Types
+  ( Constraint (..),
+    ConstraintType,
+    Identifier (..),
+    Name (..),
+    QualifiedConstraint (..),
+    QualifiedName (..),
+    Term (..),
+    lookupSymbol,
+  )
 import YCHR.Internal.VM qualified as VM
 import YCHR.Run
   ( Chr,
-    CompiledProgram (..),
-    ConstraintType,
     Error (..),
     GoalRejection (..),
     Value (..),
@@ -29,15 +38,6 @@ import YCHR.Run
     tellConstraint,
     toSessionInput,
     withCHR,
-  )
-import YCHR.Types
-  ( Constraint (..),
-    Identifier (..),
-    Name (..),
-    QualifiedConstraint (..),
-    QualifiedName (..),
-    Term (..),
-    lookupSymbol,
   )
 
 tests :: TestTree

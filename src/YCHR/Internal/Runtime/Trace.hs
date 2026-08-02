@@ -27,7 +27,7 @@ import Data.Text qualified as T
 import System.IO (Handle, hPutStrLn)
 import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Types (SuspensionId (..))
-import YCHR.Types (Term)
+import YCHR.Internal.Types (Term)
 
 -- | Signature of a trace handler. Takes the current indentation depth
 -- (managed by the interpreter) plus the event, and runs whatever

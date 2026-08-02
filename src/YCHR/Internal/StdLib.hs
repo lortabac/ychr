@@ -4,7 +4,7 @@
 -- | Standard library loading.
 --
 -- The @libraries\/@ directory ships a small set of @.chr@ files
--- (@prelude@, @lists@, @strings@, @meta@, @test@) that every user
+-- (@prelude@, @lists@, @strings@, @meta@) that every user
 -- program may import via @:- use_module(library(...))@. The sources
 -- are embedded into the binary at compile time via
 -- 'YCHR.Internal.StdLib.TH.embeddedStdLibSources'; 'stdlib' parses them on

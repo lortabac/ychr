@@ -42,9 +42,9 @@ import Data.Text (Text)
 import YCHR.Internal.Compile.Pipeline (ExportResolution)
 import YCHR.Internal.Runtime.Trace (TraceHandler)
 import YCHR.Internal.Runtime.Types (Suspension, SuspensionId, Value, VarId (..))
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (EvaluableKey, Procedure, RuleId, StackFrame)
 import YCHR.Internal.VM qualified as VM
-import YCHR.Types qualified as Types
 
 -- | The runtime call stack (newest frame first), used for error reporting.
 type CallStack = [StackFrame]

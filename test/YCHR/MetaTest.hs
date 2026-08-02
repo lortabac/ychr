@@ -8,6 +8,7 @@ import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase)
 import YCHR.Internal.Compile.Names (vmName)
+import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Meta (metaHostCallRegistry, valueToTerm)
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
@@ -17,10 +18,10 @@ import YCHR.Internal.Runtime.Interpreter
 import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.Runtime.Var (deref, equal)
+import YCHR.Internal.Types (Term (..))
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Name (..))
-import YCHR.Run (CompiledProgram (..), compileModules, runProgramWithQuery)
-import YCHR.Types (Term (..))
-import YCHR.Types qualified as Types
+import YCHR.Run (compileModules, runProgramWithQuery)
 
 tests :: TestTree
 tests =

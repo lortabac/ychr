@@ -13,14 +13,14 @@ import Criterion.Main
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import System.FilePath ((<.>), (</>))
+import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Meta (metaHostCallRegistry)
 import YCHR.Internal.Parser (parseConstraint)
 import YCHR.Internal.Rename (renameQueryArgs)
 import YCHR.Internal.Runtime.Interpreter (baseHostCallRegistry)
 import YCHR.Internal.Runtime.Registry (HostCallRegistry)
 import YCHR.Run
-  ( CompiledProgram (..),
-    compileFiles,
+  ( compileFiles,
     runProgramWithGoalDSL,
   )
 import YCHR.Types (Constraint (..))

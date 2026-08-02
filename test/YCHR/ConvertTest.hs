@@ -36,8 +36,8 @@ import YCHR.DSL
     (<=>),
   )
 import YCHR.Internal.Parsed (Module)
+import YCHR.Internal.Types (Name (..), Term (..))
 import YCHR.Run (compileParsedModules)
-import YCHR.Types (Name (..), Term (..))
 
 tests :: TestTree
 tests =

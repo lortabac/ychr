@@ -60,14 +60,10 @@ registry = withDefaultHostFunctions
     sumTerms ts = toTerm . sum <$> (traverse fromTerm ts :: Either ConvertError [Int])
 ```
 
-Run with the `…WithHostCallRegistry` query variants — the registry-taking
-counterparts of `runQueryWith` / `runQueryCompiledWith`:
+Run with `runQueryCompiledWithHostCallRegistry` — the registry-taking
+counterpart of `runQueryCompiledWith`:
 
 ```haskell
-runQueryWithHostCallRegistry
-  :: HostCallRegistry -> [Module] -> Term
-  -> (Map Text Term -> Either ConvertError a) -> IO (Either ConvertError a)
-
 runQueryCompiledWithHostCallRegistry
   :: HostCallRegistry -> CompiledProgram -> Term
   -> (Map Text Term -> Either ConvertError a) -> IO (Either ConvertError a)
@@ -75,10 +71,16 @@ runQueryCompiledWithHostCallRegistry
 
 ```haskell
 -- program:  compute_add(X, R) <=> R is host:my_add(X, 3).
-r <- runQueryWithHostCallRegistry registry [prog]
-       (term "compute_add" [int 2, var "R"]) (decodeVar "R")
+-- cp comes from compileFiles / compileModules.
+r <- runQueryCompiledWithHostCallRegistry registry cp
+       (CompoundTerm (Unqualified "compute_add") [IntTerm 2, VarTerm "R"])
+       (decodeVar "R")
 -- r == Right 5 :: Either ConvertError Int
 ```
+
+(For [DSL](dsl.md)-built `[Module]` values there is also a
+compile-and-run-in-one `runQueryWithHostCallRegistry`; it lives in
+`YCHR.Convert` and is *not* re-exported from `YCHR`.)
 
 Compilation does not resolve `host:` names, so an unknown host function is a
 run-time error, not a compile error — the registry is consulted only when
@@ -123,7 +125,8 @@ hostFnValues :: ([Value] -> Chr Value) -> HostCallFn
 ```
 
 Arguments arrive **top-level dereferenced only** (a variable nested inside a
-compound is *not* chased — use `YCHR.Run.deref` yourself). This is the same
+compound is *not* chased — use `deref`, re-exported from `YCHR`, yourself).
+This is the same
 low-level shape the built-in host functions are written in; reach for it
 only when the marshalled adapters do not fit.
 

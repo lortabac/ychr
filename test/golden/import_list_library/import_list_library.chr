@@ -1,0 +1,7 @@
+:- module(import_list_library, [go/2]).
+
+:- use_module(library(lists), [length/1]).
+
+:- chr_constraint go/2.
+
+go(L, N) <=> N is length(L).

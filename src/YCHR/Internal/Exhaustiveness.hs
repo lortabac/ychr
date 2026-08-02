@@ -47,7 +47,7 @@ import YCHR.Internal.Constructors (ConEnv, buildConEnv, canonicalizeCon, lookupC
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Resolved qualified as R
-import YCHR.Types
+import YCHR.Internal.Types
   ( DataConstructor (..),
     Name,
     Term (..),

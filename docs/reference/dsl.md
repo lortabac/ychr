@@ -220,6 +220,12 @@ If you need to register custom `host:_` functions, use
 runDSLWithHostCallRegistry myHostCalls [m] (term "g" [var "R"])
 ```
 
+`YCHR.DSL` exports the `HostCallRegistry` type, but the registry
+*builders* (`hostFunctions`, `withDefaultHostFunctions`, the `hostFn*`
+adapters) live in `YCHR.Convert` — building `myHostCalls` needs an
+`import YCHR.Convert` (or `import YCHR`) alongside the DSL import. See
+the [host-function reference](host-functions.md).
+
 For finer control — multi-goal queries, reusing a compiled program
 across several runs, or inspecting warnings — call `compileParsedModules`
 directly and feed the result to `runProgramWithGoalDSL` /
@@ -253,7 +259,7 @@ Compilation errors and runtime errors are raised as exceptions
   concatenation.
 - **Default host calls.** `runDSL` uses the same registry as the CLI:
   arithmetic, comparisons, `print`, and meta primitives like
-  `copy_term/2`. If your program needs more, use
+  `copy_term/1`. If your program needs more, use
   `runDSLWithHostCallRegistry`.
 - **Live, runnable examples.** Every code snippet on this page is taken
   from `test/YCHR/DSLTest.hs` (the `endToEnd` test group). Running

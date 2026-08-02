@@ -61,7 +61,7 @@ import YCHR.Internal.Rename (RenameError (..), RenameWarning (..))
 import YCHR.Internal.Resolve (ResolveError (..))
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.TypeCheck (TypeCheckError (..))
-import YCHR.Types (Name, Term)
+import YCHR.Internal.Types (Name, Term)
 
 -- ---------------------------------------------------------------------------
 -- Opaque Data instances for the error payload types that are not already

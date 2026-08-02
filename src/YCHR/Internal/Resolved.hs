@@ -40,7 +40,7 @@ import Data.Set (Set)
 import Data.Text (Text)
 import YCHR.Internal.Loc (Ann)
 import YCHR.Internal.Parsed (AnnP)
-import YCHR.Types
+import YCHR.Internal.Types
   ( BoundSig,
     HeadArg,
     Name (..),
@@ -158,7 +158,7 @@ data Expr
 
 -- | Convert an 'Expr' back to a surface-shaped 'Term'. Used as a
 -- narrow bridge for code that still operates on 'Term' (notably the
--- @args@ field of 'YCHR.Types.QualifiedConstraint', which body-
+-- @args@ field of 'YCHR.Internal.Types.QualifiedConstraint', which body-
 -- constraint goals carry verbatim).
 --
 -- The conversion flattens every node to its surface compound shape:

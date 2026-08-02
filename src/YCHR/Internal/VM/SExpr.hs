@@ -37,8 +37,8 @@ import Data.Text qualified as T
 import Text.Read (readMaybe)
 import YCHR.Internal.Loc (SourceLoc (..))
 import YCHR.Internal.SExpr (SExpr (..), parseSExpr, printSExpr)
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM.Types
-import YCHR.Types qualified as Types
 
 -- ---------------------------------------------------------------------------
 -- VMProgram

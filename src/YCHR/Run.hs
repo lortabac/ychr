@@ -12,8 +12,7 @@ module YCHR.Run
     Error (..),
     GoalRejection (..),
     Warning (..),
-    CompiledProgram (..),
-    ConstraintType,
+    CompiledProgram,
     compileModules,
     compileFiles,
     compileParsedModules,
@@ -134,9 +133,9 @@ import YCHR.Internal.Runtime.Trace (TraceEvent (..))
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..), VarId)
 import YCHR.Internal.Runtime.Var (deref, equal, getVarId, newVar, unify)
 import YCHR.Internal.TypeCheck (typeCheckGoals)
+import YCHR.Internal.Types (Constraint (..), Term (..))
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Name (..), Procedure (..))
-import YCHR.Types (Constraint (..), ConstraintType, Term (..))
-import YCHR.Types qualified as Types
 
 -- ---------------------------------------------------------------------------
 -- Single-goal API

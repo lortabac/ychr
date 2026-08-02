@@ -11,6 +11,7 @@ import System.FilePath (takeDirectory, (</>))
 import System.IO (hPutStr, stderr)
 import YCHR.Internal.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
 import YCHR.Internal.Backend.SchemeDriver (generateDriver)
+import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Meta (metaHostCallRegistry)
 import YCHR.Internal.Parser (parseConstraintWith)
@@ -21,8 +22,7 @@ import YCHR.Internal.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry
 import YCHR.Internal.TypeCheck (typeCheckProgram)
 import YCHR.Internal.VM.SExpr (VMProgram (..), serialize)
 import YCHR.Run
-  ( CompiledProgram (..),
-    Error (..),
+  ( Error (..),
     Warning (..),
     compileFiles,
     goalShapeConstraint,

@@ -1,6 +1,6 @@
 # Revision history for ychr
 
-## 0.1.0.0 -- 2026-07-30
+## 0.1.0.0 -- 2026-08-02
 
 First release.
 
@@ -60,6 +60,16 @@ program, and as the `ychr` command-line compiler and REPL.
   `import YCHR` alone. They remain available from `YCHR.Convert`, which is
   where the DSL query path is documented.
 
+* `YCHR.Types` carries only the embedder-facing core types: `Term`,
+  `Name`, `Constraint`, and the type-declaration vocabulary used by
+  `YCHR.DSL`. The compiler-internal remainder (symbol tables,
+  qualified-name forms, post-HNF head shapes) lives in
+  `YCHR.Internal.Types`, outside the version policy.
+
+* `CompiledProgram` is exported abstractly from both `YCHR` and
+  `YCHR.Run`; its fields are compiler internals, reachable only via
+  `YCHR.Internal.Compile.Pipeline`.
+
 ### Standard library
 
 * `not/1` in the prelude: boolean negation, usable in guards. YCHR has
@@ -111,7 +121,7 @@ program, and as the `ychr` command-line compiler and REPL.
 ### Packaging
 
 * Supports GHC 9.6 through 9.12. Built and tested against 9.6.6, 9.12.2,
-  and 9.12.4.
+  and 9.12.4; 9.8.4 and 9.10.1 are built (compile-only) in CI.
 
 * The `stlc-typechecker` example driver is behind a `examples` cabal flag,
   off by default, so `cabal install ychr` installs only `ychr`.

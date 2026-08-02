@@ -38,7 +38,7 @@
 --
 -- = Two things to know before you start
 --
--- __Constraint positions are partial.__ '<=>', '==>', '\\\\' and 'runDSL'
+-- __Constraint positions are partial.__ '<=>', '==>', @\\\\@ and 'runDSL'
 -- expect each rule-head and goal 'Term' to be a compound or an atom — the
 -- shapes 'term', 'qterm' and 'atom' build. Handing them a bare 'var' or
 -- 'int' throws an 'error' rather than returning a diagnostic, because

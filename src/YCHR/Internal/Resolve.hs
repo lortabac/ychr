@@ -34,7 +34,7 @@ import YCHR.Internal.PExpr qualified as PExpr
 import YCHR.Internal.Parsed (FunctionDeclKind (..))
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Resolved qualified as R
-import YCHR.Types
+import YCHR.Internal.Types
   ( BoundSig (..),
     Constraint (..),
     HeadArg (..),

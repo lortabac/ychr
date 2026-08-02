@@ -14,12 +14,13 @@
 -- = Worked example: compile once, query many
 --
 -- > {-# LANGUAGE OverloadedStrings #-}
+-- > import System.IO (hPutStr, stderr)
 -- > import YCHR
 -- >
 -- > main :: IO ()
 -- > main =
 -- >   case compileModules True [("Order.chr", source)] of
--- >     Left err -> fail (show err)
+-- >     Left err -> hPutStr stderr (displayError err)
 -- >     Right (cp, _warnings) -> do
 -- >       -- goal is a 'Term'; decode the "R" binding as a Haskell Int
 -- >       r <- runQueryCompiled cp goal "R"
@@ -61,7 +62,7 @@
 -- >   [ ("my_add", hostFn2 ((+) :: Int -> Int -> Int)) ]  -- called as host:my_add(X, Y)
 -- >
 -- > main = do
--- >   r <- runQueryCompiledWithHostCallRegistry registry cp goal "R"
+-- >   r <- runQueryCompiledWithHostCallRegistry registry cp goal (decodeVar "R")
 -- >   print (r :: Either ConvertError Int)
 --
 -- User entries override built-ins of the same name. Arguments and results

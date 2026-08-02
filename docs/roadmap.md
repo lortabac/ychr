@@ -72,7 +72,7 @@ what is planned.
 ## Benchmarking
 
 - [x] Interpreter benchmarks
-- [x] Scheme runtime benchmarks
+- [ ] Scheme runtime benchmarks
 - [ ] JavaScript runtime benchmarks
 - [ ] Compiler benchmarks
 

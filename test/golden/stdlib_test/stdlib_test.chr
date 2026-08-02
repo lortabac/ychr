@@ -1,5 +1,7 @@
 :- module(stdlib_test, [go/2]).
-:- use_module(library(test)).
+
+:- use_module(library(lists)).
+
 :- chr_constraint go/2.
 
-go(X, Y) <=> dup(X, Y).
+go(L, N) <=> N is length(L).

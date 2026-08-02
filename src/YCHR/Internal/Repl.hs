@@ -28,7 +28,7 @@ import Data.Text qualified as T
 import System.Exit (exitFailure)
 import System.IO (hPutStr, hPutStrLn, stderr, stdout)
 import YCHR.Internal.Collected (CollectedModule (..))
-import YCHR.Internal.Compile.Pipeline (ExportResolution (..))
+import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), ExportResolution (..))
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Display (Display (..), displayMsg)
 import YCHR.Internal.LineInput (LineInput (..), LineInputSettings (..), mkLineInput)
@@ -55,16 +55,7 @@ import YCHR.Internal.Runtime.Session
   )
 import YCHR.Internal.Runtime.Trace (defaultTraceHandler)
 import YCHR.Internal.TypeCheck (typeCheckProgram)
-import YCHR.Run
-  ( CompiledProgram (..),
-    Error (..),
-    PreparedQuery (..),
-    Warning,
-    compileFiles,
-    executePreparedQuery,
-    prepareQuery,
-  )
-import YCHR.Types
+import YCHR.Internal.Types
   ( BoundSig,
     DataConstructor (..),
     Name (..),
@@ -74,7 +65,15 @@ import YCHR.Types
     TypeExpr,
     typeConstructors,
   )
-import YCHR.Types qualified as Types
+import YCHR.Internal.Types qualified as Types
+import YCHR.Run
+  ( Error (..),
+    PreparedQuery (..),
+    Warning,
+    compileFiles,
+    executePreparedQuery,
+    prepareQuery,
+  )
 
 -- ---------------------------------------------------------------------------
 -- Entry point

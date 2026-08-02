@@ -21,9 +21,9 @@ import YCHR.Internal.Compile (funcProcName)
 import YCHR.Internal.Compile.Names (vmName)
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.SExpr (SExpr (..), printSExpr)
+import YCHR.Internal.Types (HeadArg (..), QualifiedName, Term (..))
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM.Types (Name (..))
-import YCHR.Types (HeadArg (..), QualifiedName, Term (..))
-import YCHR.Types qualified as Types
 
 -- | Generate a complete Scheme driver script.
 --

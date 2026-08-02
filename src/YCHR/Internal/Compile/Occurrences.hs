@@ -34,8 +34,7 @@ import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.PExpr (PExpr)
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Parsed qualified as P
-import YCHR.Internal.VM (ConstraintType (..))
-import YCHR.Types
+import YCHR.Internal.Types
   ( HeadConstraint,
     Identifier (..),
     RuleId (..),
@@ -43,6 +42,7 @@ import YCHR.Types
     lookupSymbol,
     qualifiedToName,
   )
+import YCHR.Internal.VM (ConstraintType (..))
 
 -- | Walk every rule in the program and assemble the per-constraint
 -- 'OccurrenceMap'. Occurrences are numbered top-down within each

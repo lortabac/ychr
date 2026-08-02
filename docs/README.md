@@ -72,6 +72,17 @@ not regression tests — for edge cases see `test/golden/`.
    K.U.Leuven CHR-in-Prolog.
 4. [Prelude reference](reference/prelude.md) and [CLI](reference/cli.md) for daily use.
 
+**Embedding YCHR in a Haskell program?**
+
+1. [Embed a CHR module](how-to/embed-a-chr-module.md) — the worked
+   end-to-end example.
+2. [Value conversion](reference/convert.md) — `ToTerm` / `FromTerm` and
+   the typed query wrappers.
+3. [Host functions](reference/host-functions.md) — calling your Haskell
+   code from CHR.
+4. [Haskell DSL](reference/dsl.md) — building programs as Haskell values
+   instead of parsing `.chr` source.
+
 **Implementing a backend?**
 
 1. [VM specification](reference/vm.md) — instruction set, s-expression

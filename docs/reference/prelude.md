@@ -223,7 +223,7 @@ render a term first, or `print/1` to print one directly.
 
 ## Other libraries
 
-The bundled libraries `lists`, `strings`, `meta`, and `test` ship
+The bundled libraries `lists`, `strings`, and `meta` ship
 alongside the prelude under [`libraries/`](../../libraries/).
 
 Unlike the prelude, these are *not* auto-loaded outside the REPL —
@@ -287,11 +287,6 @@ Only `print/1` works on both backends. `read_term_from_string/1`,
 Haskell-only — the Scheme runtime either stubs them out or has no
 implementation at all, so calling them from compiled Scheme fails (see
 `dev-docs/SCHEME_BACKEND_GAPS.md`).
-
-### `test`
-
-[`libraries/test.chr`](../../libraries/test.chr) — two fixture
-constraints used by the test suite, not a test framework.
 
 ## See also
 

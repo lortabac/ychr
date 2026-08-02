@@ -22,7 +22,7 @@ def test_typecheck_stdlib(ychr_bin, project_root):
     libraries = os.path.join(project_root, "libraries")
     files = [
         os.path.join(libraries, name)
-        for name in ("lists.chr", "strings.chr", "meta.chr", "test.chr")
+        for name in ("lists.chr", "strings.chr", "meta.chr")
     ]
     result = subprocess.run(
         [ychr_bin, "check", "--Werror", *files],

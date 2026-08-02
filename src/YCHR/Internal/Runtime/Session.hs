@@ -54,8 +54,8 @@ import YCHR.Internal.Runtime.Monad
   )
 import YCHR.Internal.Runtime.Trace (TraceHandler)
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..))
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Name (..), Procedure (..), Program (..))
-import YCHR.Types qualified as Types
 
 -- | The narrow slice of a compiled program that 'withCHR' /
 -- 'withCHRExtra' need: the VM 'Program' and the export-resolution maps

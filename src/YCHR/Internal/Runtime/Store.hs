@@ -37,7 +37,7 @@ import Data.Sequence qualified as Seq
 import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..))
 import YCHR.Internal.Runtime.Types (Suspension (..), SuspensionId (..), Value (..))
 import YCHR.Internal.Runtime.Var (addObserver)
-import YCHR.Types (ConstraintType (..), Name)
+import YCHR.Internal.Types (ConstraintType (..), Name)
 
 -- ---------------------------------------------------------------------------
 -- Operations

@@ -46,7 +46,7 @@ registry = withDefaultHostFunctions
 main :: IO ()
 main =
   case compileModules True [("compute.chr", source)] of
-    Left err -> fail (show err)
+    Left err -> putStr (displayError err)
     Right (cp, _warnings) -> do
       -- 3. Run against the custom registry and decode the result.
       r <- runQueryCompiledWithHostCallRegistry registry cp

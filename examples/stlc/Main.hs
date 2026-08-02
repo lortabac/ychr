@@ -48,6 +48,7 @@ import YCHR
     compileModules,
     compound,
     decodeSum,
+    displayError,
     quote,
     runQueryCompiled,
   )
@@ -102,7 +103,7 @@ main = do
 loadInferencer :: IO CompiledProgram
 loadInferencer =
   case compileModules True [(stlcPath, $(stlcSource))] of
-    Left err -> fail ("could not compile " ++ stlcPath ++ ":\n" ++ show err)
+    Left err -> fail ("could not compile " ++ stlcPath ++ ":\n" ++ displayError err)
     Right (cp, _warnings) -> pure cp
 
 -- | Parse, type-check, and render one line of surface syntax.

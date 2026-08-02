@@ -1,1 +1,1 @@
-go(X, quote(hello))
+stdlib_test:go([1, 2, 3], N)

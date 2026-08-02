@@ -113,9 +113,9 @@ import YCHR.Internal.Runtime.Var
     newVar,
     unify,
   )
+import YCHR.Internal.Types (Term)
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
-import YCHR.Types (Term)
-import YCHR.Types qualified as Types
 
 -- ---------------------------------------------------------------------------
 -- Types

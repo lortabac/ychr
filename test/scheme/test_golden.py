@@ -3,7 +3,7 @@
 Each test directory under test/golden/ contains one or more .chr files
 (compiled together) plus one or more <case>.goal/<case>.expected pairs.
 For each case, this harness compiles the program to Scheme, generates a
-driver script for the case's goal, runs it with guile3.0, and compares
+driver script for the case's goal, runs it with Guile 3, and compares
 the output against <case>.expected.
 
 Negative tests (directories containing .error files) are skipped — the

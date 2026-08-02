@@ -23,8 +23,8 @@ import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Store (getStoreSnapshot, isSuspAlive)
 import YCHR.Internal.Runtime.Types (CallVal (..), SuspensionId (..), Value (..))
 import YCHR.Internal.Runtime.Var (equal, newVar, unify)
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
-import YCHR.Types qualified as Types
 
 tests :: TestTree
 tests =

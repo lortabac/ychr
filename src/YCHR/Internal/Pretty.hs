@@ -33,7 +33,7 @@ import YCHR.Internal.Loc (Ann (..), noAnn)
 import YCHR.Internal.PExpr qualified as PE
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Parser (builtinOps)
-import YCHR.Types
+import YCHR.Internal.Types
   ( BoundSig (..),
     Constraint (..),
     DataConstructor (..),

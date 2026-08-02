@@ -62,8 +62,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Numeric (showHex)
 import YCHR.Internal.Compile.Types (OccurrenceNumber (..), PartnerIndex (..))
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Label (..), Name (..))
-import YCHR.Types qualified as Types
 
 -- ---------------------------------------------------------------------------
 -- Source-name encoding

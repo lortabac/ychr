@@ -32,8 +32,8 @@ import YCHR.Internal.Pretty (prettyConstraintSrc, prettyRuleSrc, prettyTermSrc)
 import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), baseHostCallRegistry, valueList)
 import YCHR.Internal.Runtime.Types (Value (..))
+import YCHR.Internal.Types (Constraint (..), Name (..), Term (..))
 import YCHR.Internal.VM qualified as VM
-import YCHR.Types (Constraint (..), Name (..), Term (..))
 
 -- ---------------------------------------------------------------------------
 -- Generators

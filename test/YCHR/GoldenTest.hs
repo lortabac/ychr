@@ -15,14 +15,14 @@ import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath (dropExtension, takeExtension, (<.>), (</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (Display (..))
 import YCHR.Internal.Meta (metaHostCallRegistry)
 import YCHR.Internal.Pretty (prettyBindings)
 import YCHR.Internal.Runtime.Interpreter (baseHostCallRegistry)
 import YCHR.Internal.TypeCheck (typeCheckProgram)
 import YCHR.Run
-  ( CompiledProgram (..),
-    Error,
+  ( Error,
     Warning,
     compileFiles,
     prepareGoal,

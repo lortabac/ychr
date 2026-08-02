@@ -44,7 +44,7 @@ module YCHR.Internal.Parsed
     Head (..),
     FunctionEquation (..),
 
-    -- * Re-exports from YCHR.Types
+    -- * Re-exports from YCHR.Internal.Types
     Name (..),
     Constraint (..),
     Term (..),
@@ -61,7 +61,7 @@ import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
 import YCHR.Internal.Loc (Ann (..), SourceLoc (..), dummyLoc, noAnn)
 import YCHR.Internal.PExpr (OpType (..), PExpr (..))
-import YCHR.Types
+import YCHR.Internal.Types
   ( BoundSig (..),
     Constraint (..),
     DataConstructor (..),

@@ -1,0 +1,7 @@
+:- module(import_list_library_restricted, [go/1]).
+
+:- use_module(library(lists), []).
+
+:- chr_constraint go/1.
+
+go(X) <=> length(X).

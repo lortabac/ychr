@@ -12,7 +12,7 @@ where
 
 import Data.IORef
 import Data.Text (Text)
-import YCHR.Types (ConstraintType)
+import YCHR.Internal.Types (ConstraintType)
 
 -- | Unique identifier for a constraint suspension. Also serves as the
 -- observer key on variables for selective reactivation.

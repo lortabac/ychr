@@ -28,9 +28,9 @@ import YCHR.Internal.Runtime.Registry (HostCallFn (..), HostCallRegistry, unit, 
 import YCHR.Internal.Runtime.Store (Suspension (..), getAllStoredConstraints, isSuspAlive)
 import YCHR.Internal.Runtime.Types (Value (..), VarId)
 import YCHR.Internal.Runtime.Var (deref, getVarId, newVar)
+import YCHR.Internal.Types (Term (..), flattenName)
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Name (..))
-import YCHR.Types (Term (..), flattenName)
-import YCHR.Types qualified as Types
 
 -- | Convert a runtime 'Value' to a surface 'Term', dereferencing logical
 -- variables. An unbound variable is rendered as 'VarTerm' carrying the

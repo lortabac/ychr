@@ -27,7 +27,7 @@ where
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
-import YCHR.Types
+import YCHR.Internal.Types
   ( DataConstructor (..),
     Name (..),
     TypeDefinition (..),

@@ -1,5 +1,6 @@
 PYTEST ?= python3 -m pytest
-GUILE ?= guile3.0
+# Prefer the Fedora binary name, fall back to Debian/Ubuntu's.
+GUILE ?= $(shell command -v guile3.0 >/dev/null 2>&1 && echo guile3.0 || echo guile-3.0)
 
 .PHONY: test test-haskell test-scheme test-scheme-runtime test-repl test-stlc test-typecheck test-docs test-style bench build install format clean coverage
 
@@ -15,7 +16,7 @@ test-haskell: build
 	cabal test
 
 test-scheme: build
-	$(PYTEST) test/scheme/ -v
+	GUILE=$(GUILE) $(PYTEST) test/scheme/ -v
 
 test-scheme-runtime:
 	cd scheme/test && $(GUILE) -L .. -x .sls run-all.scm

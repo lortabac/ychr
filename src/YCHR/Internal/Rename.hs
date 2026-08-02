@@ -72,7 +72,7 @@ import YCHR.Internal.Diagnostic (Diagnostic, noDiag)
 import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed
 import YCHR.Internal.Rename.Types
-import YCHR.Types
+import YCHR.Internal.Types
 
 data RenameError
   = AmbiguousName Text Int [Text]

@@ -82,8 +82,7 @@ import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Pretty (prettyPExprSrc)
 import YCHR.Internal.Resolved qualified as R
-import YCHR.Internal.VM
-import YCHR.Types
+import YCHR.Internal.Types
   ( HeadArg (..),
     Identifier (..),
     SymbolTable,
@@ -92,7 +91,8 @@ import YCHR.Types
     symbolTableSize,
     symbolTableToList,
   )
-import YCHR.Types qualified as Types
+import YCHR.Internal.Types qualified as Types
+import YCHR.Internal.VM
 
 -- | Source location, original parsed expression, and optional context
 -- label, extracted from an 'AnnP' wrapper.

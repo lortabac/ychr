@@ -51,8 +51,8 @@ import YCHR.Internal.Rename (RenameError (..), RenameWarning (..))
 import YCHR.Internal.Resolve (ResolveError (..))
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.TypeCheck (TypeCheckError (..))
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (StackFrame (..))
-import YCHR.Types qualified as Types
 
 class Display a where
   displayMsg :: a -> String

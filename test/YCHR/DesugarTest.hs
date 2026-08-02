@@ -21,7 +21,7 @@ import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed
 import YCHR.Internal.Resolve (ResolveError (..), resolveProgram)
 import YCHR.Internal.Resolved qualified as R
-import YCHR.Types
+import YCHR.Internal.Types
   ( ConstraintType (..),
     Identifier (..),
     lookupSymbol,

@@ -1,2 +1,2 @@
 :- module(import_list_unknown, []).
-:- use_module(library(test), [nonexistent/1]).
+:- use_module(library(lists), [nonexistent/1]).

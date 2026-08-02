@@ -6,7 +6,7 @@ import Data.Map.Strict qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 import YCHR.Internal.Pretty (prettyBindings, prettyQueryResult, prettyTerm, renderAtom)
-import YCHR.Types (Name (..), Term (..))
+import YCHR.Internal.Types (Name (..), Term (..))
 
 tests :: TestTree
 tests =

@@ -10,8 +10,9 @@ import Data.Maybe (isJust, isNothing)
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.VM qualified as VM
-import YCHR.Run (CompiledProgram (..), compileModules)
+import YCHR.Run (compileModules)
 
 tests :: TestTree
 tests =
