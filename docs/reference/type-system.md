@@ -151,6 +151,12 @@ A function type `fun(τ₁, ..., τₙ) -> τᵣ` represents a callable
 taking `n` arguments of types `τ₁, ..., τₙ` and returning a value of
 type `τᵣ`.
 
+In *concrete* syntax a function type is closed by an `end` keyword —
+`fun(int, int) -> bool end` — mirroring lambda syntax; the `end`
+delimits the return type and is not part of the abstract grammar
+above. This document writes types in abstract syntax (no `end`)
+except inside program examples.
+
 ### Type variables
 
 Type variables (written as uppercase identifiers in CHR source) are
@@ -172,7 +178,11 @@ Missing type annotations default to `any`:
   all argument types and the return type defaulting to `any`.
 
 For example, `:- chr_constraint leq/2` is equivalent to
-`:- chr_constraint leq(any, any)`.
+`:- chr_constraint leq(any, any)`. The equivalence is semantic —
+type checking treats the two forms identically. For the one place
+where an untyped declaration is *not* interchangeable with its
+all-`any` form (declaration grouping for overloaded classes), see
+§Signature Overloading.
 
 
 ## Consistency
@@ -196,7 +206,7 @@ without committing to a specific choice.
 
                                                     [C-Refl]
   ────────────
-  B ~ B                       (B a base type: int, string)
+  B ~ B                       (B a base type: int, float, string)
 
   τ₁ ~ σ₁   ...   τₙ ~ σₙ                         [C-Con]
   ────────────────────────────
@@ -207,8 +217,8 @@ without committing to a specific choice.
   fun(τ₁,...,τₙ) -> τᵣ ~ fun(σ₁,...,σₙ) -> σᵣ
 ```
 
-Two distinct type constructors (neither being `any`) are
-**inconsistent**:
+Any two types with distinct outermost forms — neither being `any` or
+a type variable — are **inconsistent**:
 
 ```
   C ≠ D                                             [Inconsistency]
@@ -216,51 +226,115 @@ Two distinct type constructors (neither being `any`) are
   C(...) ~ D(...)  is an error
 ```
 
-This applies to all constructors: base types, algebraic types, and
-function types. For example, `int ~ bool`, `option(int) ~ list(int)`,
-and `int ~ fun(int) -> int end` are all errors.
+For the purposes of this rule, a base type counts as a nullary type
+constructor, and the function-type former `fun/n` counts as a type
+constructor distinct from every base type and every other
+constructor. For example, `int ~ bool`, `option(int) ~ list(int)`,
+and `int ~ fun(int) -> int` are all errors.
+
+Type variables are deliberately absent from these rules: which types
+bind them and how they interact with `any` is defined by the meet
+table in §Type states below.
 
 
 ## Type Propagation and Consistency
 
 The type checker infers types for source variables by propagating
-type information through constraints. Each source variable starts
-with an unknown type. As the checker processes the rule, types flow
-into variables from declarations (head constraints, function
-signatures) and between variables through unification and `is`
-expressions.
+type information through constraints. Types flow into variables from
+declarations (head constraints, function signatures) and between
+variables through unification and `is` expressions. When two types
+meet, the checker performs a *consistency check*, per the rules of
+the previous section.
 
-When two types meet, the checker performs a *consistency check*, per
-the rules of the previous section.
+### Type states
 
-When a variable with an unknown type meets a concrete type, the
-variable acquires that type. When two variables with known concrete
-types meet, the checker verifies they are consistent.
+Every type the checker manipulates is in exactly one of four states:
+
+- **`any`** — the dynamic type. A *variable* is typed `any` only
+  when a declaration says so (an `any`-annotated or untyped argument
+  position). Certain *expressions* are also typed `any`; the
+  complete list of `any`-introduction forms is in §Soundness.
+- **Concrete** — a base type, an algebraic or opaque constructor
+  application, or a function type.
+- **Flexible** — an unsolved unification variable. Instantiating a
+  declared signature at a use site allocates fresh flexible
+  variables for its type parameters, and a source variable with no
+  declaration-derived type is likewise typed by a fresh flexible
+  variable. There is no separate "unknown" state.
+- **Rigid** — a function's own type parameter while that function's
+  equations are checked (§Rigid and flexible type variables). A
+  rigid variable behaves as an opaque type constant (a skolem): it
+  stands for an arbitrary caller-chosen type about which nothing may
+  be assumed.
+
+When two types meet — through unification, argument checking, or any
+other consistency check — the outcome is:
+
+| Meet | Outcome |
+|------|---------|
+| flexible α, concrete τ | succeeds; **α := τ** |
+| flexible α, flexible β | succeeds; α and β are aliased |
+| flexible α, rigid T | succeeds; **α := T** (rigidity travels through the alias) |
+| flexible α, `any` | succeeds; α is **not** bound |
+| rigid T, rigid T (same) | succeeds |
+| rigid T, rigid U (distinct) | error |
+| rigid T, concrete τ | error |
+| rigid T, `any` | succeeds; nothing binds |
+| concrete τ, concrete σ | consistency check per §Consistency |
+| `any`, anything | succeeds; nothing binds |
+
+Only *solid* types — concrete types and rigid variables — bind
+flexible variables; `any` binds nothing. The single principle behind
+the table:
+
+> **`any` never binds a type variable and never propagates; it is
+> only checked against. A variable's type is `any` only when a
+> declaration says so.**
+
+A variable typed by several declaration positions keeps the most
+informative source: if any source is concrete or a type parameter,
+that source determines the variable's type and the `any` positions
+are merely checked successfully. The variable is typed `any` only
+when every source is `any`.
+
+There is one directed exception to the inertness of `any`, described
+in the next subsection: `R is e` refines an `any`-typed `R` when
+`e`'s type is concrete.
 
 ### The role of `any`
 
 The `any` type is the escape hatch for gradual typing. It is
-consistent with every other type. However, `any` does **not**
-propagate through variables the way concrete types do:
+consistent with every other type, but it is inert in propagation:
 
-- When a variable's type is determined solely by a declaration that
-  uses `any` (e.g., a constraint declared as `foo(any)`), the
-  variable acquires type `any`.
+- A variable whose declaration positions all use `any` (e.g. an
+  argument of a constraint declared `foo(any)`, or of an untyped
+  constraint) is typed `any`. If the same variable also has a
+  concrete or polymorphic declaration source, that source wins and
+  the `any` positions are merely checked (§Type states).
 - When a variable with a known concrete type meets `any` through
   unification or a consistency check, the variable **retains** its
   concrete type. The check succeeds but the concrete type is not
   replaced by `any`.
-- When `any` meets a declared type parameter (from a polymorphic
-  declaration), the type parameter is **not** bound to `any`. This
-  prevents `any` from leaking through shared type parameters and
-  masking real inconsistencies. (See the Type Variables section.)
+- When `any` meets a flexible or rigid type variable, the check
+  succeeds and the variable is **not** bound. This prevents `any`
+  from leaking through shared type parameters — or through chains of
+  local variables — and masking real inconsistencies. (See §Type
+  variables and instantiation.)
 
 The key consequence: `any` stops type propagation. A variable typed
 as `any` will not carry type information from one position to
-another, and `any` does not overwrite concrete types already
-established on other variables.
+another, and `any` never overwrites a type established elsewhere.
 
-### Example: propagation through `=`
+Exactly one construct replaces `any` with something more precise:
+`R is e`. Because `is` *evaluates* its right-hand side, the inferred
+type of `e` is authoritative for `R`'s value, so a concrete RHS type
+refines an `any`-typed `R` to that type. The reverse never happens —
+an `any`-typed RHS leaves the LHS's type untouched (an `any`-typed
+variable stays `any`; a flexible variable stays flexible). Plain
+unification (`=`) has no such power: it checks against `any` without
+binding anything (§Sources of Type Information §5).
+
+### Example: propagation through a shared variable
 
 ```prolog
 :- chr_constraint foo(int), bar/1.
@@ -298,34 +372,44 @@ contained `Y = Z`, the checker would report an error for
 rule @ result(R) <=> R is double(1).
 ```
 
+- `R : any` (from the untyped `result/1`, i.e. `result(any)`).
 - `double(1)`: argument `1` has type `int`, consistent with the
   declared parameter type. Return type is `int`.
-- `R is double(1)`: `R` acquires type `int` from the return type.
-- `result(R)`: `R` is `int`, which constrains the argument of
-  `result`.
+- `R is double(1)`: the RHS type is concrete, so the `is` refines
+  `R` from `any` to `int` (see The role of `any`).
+- `result(R)`: `R` is `int`; the declared argument type is `any`, so
+  the check succeeds trivially.
 
-`R is e` unifies `R` with the inferred type of `e` regardless of
-`e`'s syntactic shape. In particular, when `e` is a bare variable
-the LHS picks up that variable's inferred type:
+`R is e` flows the inferred type of `e` into `R` regardless of `e`'s
+syntactic shape. In particular, when `e` is a bare variable the LHS
+picks up that variable's inferred type:
 
 ```prolog
 :- chr_constraint go(A, A).
-go(R, S) <=> Sum = 1 + 1, R is Sum, S = "hello".
+go(R, S) <=> Sum is 1 + 1, R is Sum, S = "hello".
 ```
 
-- `Sum = 1 + 1`: `Sum` unifies with `int` (the inferred type of the
-  RHS, even though `=` does not evaluate it).
+- `Sum is 1 + 1`: the RHS is an evaluated position, so `1 + 1` is
+  typed by the declared signature of `+`, giving `int`. `Sum` is a
+  local variable — a fresh flexible — and binds to `int`.
 - `R is Sum`: `R` acquires type `int` from `Sum`. Because the head
   ties `R` and `S` to the same type parameter `A`, `S` is now `int`
   too.
 - `S = "hello"`: `int ~ string` fails consistency.
 
-The propagation only kicks in when the LHS variable's inferred type
-is more specific than `any`. If `R` was acquired from an untyped
-constraint argument it has type `any`, and `any` stops propagation
-(see "The role of `any`" above) — so the inferred type of the RHS
-does not overwrite it. Use a typed or polymorphic signature to keep
-the channel open.
+Note the `is`, not `=`, in the first goal. `=` is structural
+(§Expression Typing): `Sum = 1 + 1` binds `Sum` to the symbolic
+compound `prelude:+(1, 1)`, whose type *as a term* is `any` — and
+`any` does not propagate, so `Sum` would stay flexible and no error
+would be reported. Use `is` when you want the arithmetic — and the
+type.
+
+The cross-argument flow above depends on the polymorphic signature:
+if `go/2` were untyped, `R` and `S` would each independently be
+typed `any`, with no shared type parameter linking them. `R is Sum`
+would still refine `R` to `int`, but nothing would carry that type
+to `S`, and `S = "hello"` would pass. A typed or polymorphic
+signature is what keeps the cross-argument channel open.
 
 Note that a well-typed expression can still fail at runtime. A
 function call type-checks against the function's declared return
@@ -346,15 +430,59 @@ enforced at evaluation time.
 
 ## Type Checking Procedure
 
-Type checking operates on each rule and function equation
-independently. For each rule or equation, the checker:
+Type checking operates on each rule, function equation, and
+top-level goal independently. Goals are checked exactly like rule
+bodies: each constraint tell or expression in a goal is a use site,
+and bounded constraints discharge their bounds there (§Bounded
+Polymorphism). For each such unit, the checker:
 
 1. Collects type constraints from all positions (see below).
 2. Solves the constraints together using unification and consistency.
 3. Reports all inconsistencies as type errors.
 
-Constraint solving is order-independent: all constraints are gathered
-first and solved as a set.
+Constraints come in two tiers:
+
+- **Equational constraints** — unifications, `is` flows, and plain
+  consistency checks. These are solved as a set by ordinary
+  unification under the meet table of §Type states.
+- **Residual checks** — overload resolutions (§Signature Overloading
+  §Resolution) and bound checks (§Bounded Polymorphism §Use-site
+  checking). A residual check is *pending* until it can act, under
+  the following discipline:
+
+  1. A pending overload resolution **fires** — commits to a declared
+     signature, unifying argument types and propagating the return
+     type — only when all of its surviving candidate signatures are
+     equal after substitution (in the common case: exactly one
+     candidate survives). Firing adds information and may enable
+     other pending checks; solving repeats until no pending check
+     can fire.
+  2. A pending check whose candidate set becomes empty reports an
+     error (`NoMatchingOverload` for resolutions, `BoundUnsatisfied`
+     for bound checks) whenever that happens.
+  3. A pending check that is still ambiguous when solving ends
+     succeeds silently — the gradual behavior. Its result type stays
+     flexible and nothing is propagated.
+  4. A fired commitment is never retracted; if later information
+     contradicts it, the contradiction surfaces as an ordinary
+     inconsistency error.
+
+  Bound checks are the propagation-free special case: they never
+  modify the substitution, so for them "firing" is merely the
+  existence check of §Use-site checking.
+
+Solving is order-independent in the following precise sense: the set
+of accepted programs and the final type assignment do not depend on
+the order in which constraints are gathered or pending checks are
+examined; only error attribution (which check reports first) may
+vary. The reason is monotonicity: solving only ever adds
+information, so a pending check's candidate set only shrinks. A set
+can never grow back from one candidate to several, so the signature
+a check fires on is uniquely determined no matter when it fires; and
+if a check's chosen candidate would later have been eliminated,
+every examination order rejects the program — early firing surfaces
+the contradiction through the propagated types, late examination
+through an empty candidate set.
 
 ### Type variables and instantiation
 
@@ -365,9 +493,10 @@ gets independent fresh variables (`a₁, list(a₁)` and `a₂, list(a₂)`).
 
 Type variables unify normally via substitution. When a type variable
 meets `any`, the consistency check succeeds but the type variable is
-**not bound**. Only concrete types bind type variables. This prevents
-`any` from leaking through shared type variables and masking real
-inconsistencies.
+**not bound**. Only *solid* types — concrete types and rigid
+variables — bind flexible type variables; `any` binds nothing (see
+the meet table in §Type states). This prevents `any` from leaking
+through shared type variables and masking real inconsistencies.
 
 For example, given `:- chr_constraint foo(A, A).` and a use
 `foo(X, Y)` where `X : any` and `Y : int`:
@@ -394,9 +523,15 @@ The checker distinguishes two flavors of unsolved type variable:
   gradual guarantee.
 
 - A **rigid** type variable is a *function*'s own type parameter,
-  in scope while checking that function's equations. Rigid type
-  variables are consistent only with themselves and `any`; they
-  never silently match a declared concrete type. A polymorphic
+  in scope while checking that function's equations. A rigid
+  variable behaves as an opaque type constant (a skolem): it is
+  consistent with itself, with `any` (nothing binds), and with
+  flexible variables — which it *binds*, so rigidity travels through
+  intermediate flexibles (calling `id(A) -> A` at a rigid `T` yields
+  a result of type `T`, not an unconstrained variable). It is
+  inconsistent with every concrete type and with every distinct
+  rigid variable; it never silently matches a declared concrete
+  type. A polymorphic
   function-equation body that uses an overloaded operation at a
   rigid tvar must therefore resolve through an ambient signature
   contributed by the function's `requiring` clause — without one
@@ -442,18 +577,23 @@ equation must be consistent with `result`.
 ### 4. `is` expressions (RHS to LHS flow)
 
 In `R is expr`, the type of `expr` flows to `R`. This is a directed
-assignment: the return type of the RHS expression determines the type
-of the LHS variable.
+assignment: the return type of the RHS expression determines the
+type of the LHS variable. Concrete types flow; `any` does not — an
+`any`-typed RHS leaves the LHS's type unchanged. When the LHS is
+typed `any` by declaration, a concrete RHS type refines it (see The
+role of `any`).
 
 ### 5. Unification (bidirectional)
 
 In `X = Y` (body unification), type information flows
-bidirectionally. If `X` has a known concrete type and `Y` does not,
-`Y` acquires `X`'s type (and vice versa). If both have known
-concrete types, the checker verifies they are consistent. If one
-side is `any` and the other has a concrete type, the check succeeds
-and the concrete side retains its type. If one side is `any` and
-the other is unknown, the unknown side becomes `any`.
+bidirectionally, following the meet table of §Type states: a
+flexible variable binds to the other side's concrete (or rigid)
+type, two flexible variables alias, and `any` on either side is
+checked against without binding anything — a variable never becomes
+`any` through unification, and an `any`-typed variable never loses
+its `any`. If both sides have known concrete types, the checker
+verifies they are consistent. Non-variable operands are typed
+structurally (§Expression Typing).
 
 ### 6. Body constraint calls
 
@@ -495,6 +635,19 @@ constraints.
 
 ## Expression Typing
 
+Expression typing follows evaluation. Positions the runtime
+*evaluates* — function, constructor, and tell-side constraint
+arguments, `is` right-hand sides, guards — are typed by the
+signatures of the functions involved. Positions the runtime treats
+*structurally* — the operands of `=`, head and equation patterns,
+`GuardEqual` operands, `quote`d terms — are typed by constructor
+typing alone (§Constructor Typing). In a structural position, a
+compound whose functor names a declared function or class is *not* a
+call: the functor is not a data constructor, so the term is typed
+`any` (an *evaluable-headed* term; see §Constructor Typing). Thus
+`Sum = 1 + 1` binds `Sum` to a symbolic compound typed `any`, while
+`Sum is 1 + 1` gives `Sum : int`.
+
 The type of a compound expression is determined by its outermost form:
 
 - **Literal**: `3` has type `int`, `"hi"` has type `string`.
@@ -532,15 +685,29 @@ number of arguments is a type error, not a fall-through to `any`.
 ### Unknown constructors
 
 If a constructor is not found in any visible type definition, it is
-typed as `any`. This means:
+typed as `any` and an `UndeclaredDataConstructor` warning
+(`YCHR-20101`, severity *warning*) is reported. No error is
+produced:
 
 - If the context expects a concrete type, the unknown constructor is
-  consistent (because `any ~ τ` for all `τ`). No error is produced --
-  the checker cannot verify the constructor is correct, but it also
-  cannot prove it is wrong.
+  consistent (because `any ~ τ` for all `τ`) — the checker cannot
+  verify the constructor is correct, but it also cannot prove it is
+  wrong.
 - If the context expects a specific algebraic type and the constructor
   is *known to belong to a different type*, that is an error via
   normal consistency checking.
+
+### Evaluable-headed terms
+
+A compound in structural position whose functor names a declared
+function or class — e.g. `+(1, 1)` as an operand of `=` — is also
+typed `any`, but draws **no** warning: the functor is known, it is
+simply not a data constructor, and building symbolic terms over
+evaluable functors is a deliberate feature of the language. Like
+every other `any`-typed expression, such a term is an
+`any`-introduction form (§Soundness): it type-checks against any
+context, and the checker makes no promise about what happens when it
+is later consumed as a value.
 
 ### Constructor disambiguation
 
@@ -626,6 +793,14 @@ its context. If the lambda appears where a `fun(int, int) -> bool end` is
 expected, then `X : int`, `Y : int`, and `expr` must be consistent
 with `bool`.
 
+A lambda in a position where no function type is expected (for
+example, passed to an `any`-typed parameter, or unified with a fresh
+variable) is typed by inference alone: each parameter is typed by a
+fresh flexible variable, the body is checked normally, and the
+lambda's type is `fun(α₁, ..., αₙ) -> τ` where `τ` is the body's
+inferred type and the `αᵢ` are whatever those variables were bound
+to (possibly still flexible).
+
 A lambda cannot carry a `requiring` clause: `requiring` attaches only
 to `:- function` and `:- open_function` declarations. A lambda whose
 body uses bounded operations is type-checked against its expected
@@ -647,6 +822,14 @@ together with the surrounding equation's other type constraints.
 If `double(int) -> int` is declared (no bound), then `fun double/1`
 has type `fun(int) -> int end` at every use site.
 
+A reference `fun name/arity` where `name/arity` is a
+multi-signature class is itself a residual overload resolution
+(§Type Checking Procedure): the expected function type at the use
+site filters the class's signatures, and the reference commits when
+all surviving candidates are equal after substitution. If the
+resolution is still ambiguous when solving ends, it succeeds
+silently and the reference's type stays flexible.
+
 If `:- function max(T, T) -> T requiring '>'(T, T) -> bool.` is
 declared, `fun max/2` is well-typed wherever the surrounding context
 allows the bound to discharge:
@@ -667,10 +850,14 @@ propagates the bound to its callers, the enclosing declaration must
 hoist the bound onto its own signature with a `requiring` clause of
 its own (mirroring how a Haskell signature must include the
 constraint when partially applying an overloaded operator). Without
-the hoisted bound, the enclosing declaration's type-checking
-discharges the bound silently, and the bound is not visible to
-callers — the same gradual-typing tradeoff that applies elsewhere in
-this system.
+the hoisted bound, what happens depends on the enclosing
+declaration. If it is polymorphic, its type parameters are rigid
+during equation checking, so the un-hoisted residual bound finds no
+consistent candidate and fails with `BoundUnsatisfied` — hoisting is
+mandatory, exactly as the missing constraint would be an error in
+Haskell. If the enclosing position is untyped or `any`-typed, there
+are no rigid variables in play: the bound discharges silently and is
+not visible to callers — the usual gradual-typing tradeoff.
 
 ### `call`
 
@@ -693,12 +880,22 @@ The checker validates type definitions themselves:
 
 1. **Bound variables**: all type variables appearing in constructor
    fields must be bound by the type definition header. For example,
-   `type foo(A) ---> bar(B)` is an error because `B` is not bound.
+   `type foo(A) ---> bar(B)` is an error (`UnboundTypeVar`,
+   YCHR-60004) because `B` is not bound.
 
 2. **Defined types**: types referenced in constructor fields must be
    defined. For example, `type foo ---> bar(undefined_type)` is an
-   error. Recursive references to the type being defined are fine:
-   `type list(A) ---> cons(A, list(A))` is valid.
+   error (`UndefinedType`, YCHR-60005). Recursive references to the
+   type being defined are fine: `type list(A) ---> cons(A, list(A))`
+   is valid.
+
+3. **Arity**: a type reference in a constructor field must apply the
+   referenced type constructor to exactly as many arguments as its
+   declaration has parameters; `bar(list)` is an error if `list` is
+   declared as `list(A)`.
+
+Forward references and mutual recursion between type definitions are
+allowed; declaration order is irrelevant.
 
 
 ## Signature Overloading
@@ -734,13 +931,15 @@ arity are grouped into a single overloaded class definition. An
 signatures via `:- extend_class_type` and equations via
 `:- extend_class`.
 
-Untyped declarations (e.g. `:- function size/1.`) contribute no
-signature and so do not count toward the "more than one signature"
-rule that distinguishes `:- function` from `:- class`. A program
-may mix an untyped `:- function f/1.` with a typed
-`:- function f(int) -> int.` for the same name and arity without
-triggering `MultiSigOnFunction`; only two or more *typed*
-declarations would.
+An untyped declaration (e.g. `:- function size/1.`) desugars to the
+all-`any` signature for type checking (§Defaults), but — as a
+deliberate carve-out from that equivalence — it does not count as a
+*typed* signature for declaration grouping: it contributes nothing
+to the "more than one signature" rule that distinguishes
+`:- function` from `:- class`. A program may mix an untyped
+`:- function f/1.` with a typed `:- function f(int) -> int.` for the
+same name and arity without triggering `MultiSigOnFunction`; only
+two or more *typed* declarations would.
 
 ### Resolution
 
@@ -748,16 +947,27 @@ When the checker encounters a call to an overloaded class, it
 filters the declared signatures by consistency with the known
 argument types:
 
-- If **exactly one** signature is consistent: the checker applies it,
-  unifying argument types and propagating the return type. This is the
-  "narrow when unambiguous" behavior.
+- If all surviving signatures are **equal after substitution** — in
+  the common case, exactly one is consistent: the checker applies
+  that signature, unifying argument types and propagating the return
+  type. This is the "narrow when unambiguous" behavior.
 - If **no** signature is consistent: the checker reports a
   `NoMatchingOverload` (YCHR-60006) error.
-- If **multiple** signatures are consistent (ambiguous): the checker
-  succeeds silently without propagating type information.
+- If **multiple distinct** signatures are consistent (ambiguous): the
+  checker succeeds silently without propagating type information.
 
 Filtering uses consistency (not equality): an argument typed as `any`
-or an unbound type variable is consistent with any declared type.
+or an unbound *flexible* type variable is consistent with any
+declared type. Filtering considers argument types only; the call's
+expected result type never disambiguates an overload (this is
+deliberate).
+
+Resolution is a residual check in the sense of §Type Checking
+Procedure: it fires — commits to the surviving signature and
+propagates — only when all surviving candidates are equal after
+substitution, it is retried as solving adds information, a check
+that is still ambiguous when solving ends succeeds silently, and an
+empty candidate set is an error whenever it occurs.
 
 ### When arguments are not yet resolved
 
@@ -770,11 +980,11 @@ variables and instantiation):
   unannotated code produces no errors.
 
 - **Rigid** type variables (a function's own type parameters, in
-  scope while checking its equations) are consistent only with
-  themselves and `any`. If no declared signature is consistent
-  with the rigid tvar — and no ambient signature contributed by a
-  `requiring` clause covers it — the call fails with
-  `NoMatchingOverload` (YCHR-60006). This closes the soundness gap that would
+  scope while checking its equations) are inconsistent with every
+  declared concrete type (§Rigid and flexible type variables). If no
+  declared signature is consistent with the rigid tvar — and no
+  ambient signature contributed by a `requiring` clause covers it —
+  the call fails with `NoMatchingOverload` (YCHR-60006). This closes the soundness gap that would
   otherwise let `foo(T, T) -> bool` silently type-check while
   calling an overloaded `>` at `T` in its body. Rigidity applies
   only at function equations, not at constraint rule heads — see
@@ -782,9 +992,13 @@ variables and instantiation):
 
 ### Equation checking
 
-For overloaded classes, each equation is checked via the same
-overload resolution mechanism. The equation's parameter types and
-return type are matched against the set of declared signatures.
+For overloaded classes, each equation is checked against the set of
+declared signatures: the equation is accepted if it type-checks
+under at least one of them, with its parameters typed by that
+signature's argument types and its RHS checked against that
+signature's return type. An equation that type-checks under no
+declared signature is reported as `NoMatchingOverload`
+(YCHR-60006).
 
 ### Example
 
@@ -887,6 +1101,14 @@ clause. The clause shape is identical:
 
 Bounds always name *functions*, never constraints.
 
+Every function named in a `requiring` clause must be declared (or
+imported); a bound naming an undeclared function is rejected as
+`UnknownBoundFunction` (YCHR-16009). A bound may name an *untyped*
+declaration: per §Defaults it desugars to the all-`any` signature,
+so such a bound is vacuously satisfied at every substitution — it
+opts callers out of bound discipline for that function, exactly like
+an explicit `g(any, ..., any) -> any` signature.
+
 ### Type-variable scoping
 
 Type variables in a `requiring` clause refer to the same variables as
@@ -971,15 +1193,15 @@ clause `g₁(...) -> ρ₁, ..., gₘ(...) -> ρₘ`:
    (see §Equation checking).
 5. The call's result type is `σ(τᵣ)`.
 
-Bound checks are emitted as residual type constraints, not resolved
-inline with the surrounding statements. They are solved together with
-the equation's other type constraints by the order-independent solver
-(§Type Checking Procedure), so each bound discharges as soon as σ
-becomes ground enough to identify (or rule out) a consistent declared
-signature. Because a bound check does not modify σ on success
-(step 4), the discharge order of bounds relative to other constraints
-cannot affect the final type assignment — the order-independence
-claim holds without auxiliary argument.
+Bound checks are residual checks in the sense of §Type Checking
+Procedure — the propagation-free special case. They are solved
+together with the equation's other type constraints, so each bound
+discharges as soon as σ becomes ground enough to identify (or rule
+out) a consistent declared signature. Because a bound check does not
+modify σ on success (step 4), it is trivially covered by the
+order-independence argument of §Type Checking Procedure: its
+discharge order relative to other constraints cannot affect the
+final type assignment.
 
 If a bound's substitution is still partial at end of solving — that
 is, the bound contains free type variables that no other constraint
@@ -1002,8 +1224,9 @@ then runs the standard equation-checking procedure described in
 
 Concretely, for each equation:
 
-1. Fresh unification variables are allocated for each declared type
-   variable of the function.
+1. Fresh **rigid** type variables are allocated for each declared
+   type variable of the function (§Rigid and flexible type
+   variables).
 2. The equation's parameters are typed under the substituted parameter
    types and the equation's RHS under the substituted return type.
 3. Calls to bound-named functions inside the equation see the bound's
@@ -1096,22 +1319,50 @@ means the constraints in `kept ∪ removed`; both kept and removed
 head constraints contribute their bounds as ambient. Guards and body
 goals do not.
 
-Without this rule, a sensible rule like
+The rule exists because a rule body is entitled to *assume* the
+bound, exactly as a function equation is. Consider
+
+```prolog
+:- chr_constraint str(string).
+weird @ sorted([X | _]), str(S) <=> X < S | true.
+```
+
+The second head pins `S : string`, so the guard calls `<` at
+`(T, string)`. Without ambient signatures, the guard's overload
+resolution would end with an empty candidate set whenever no
+`<(string, string)` signature is declared, and report a spurious
+*rule-level* `NoMatchingOverload`. But under the bound's contract
+the rule may assume `'<'(T, T) -> bool` exists; whether it actually
+exists at `T = string` is a question about *use sites*, and
+use-site checking already answers it: `BoundUnsatisfied` at any
+ordinary use site that pins `T := string` (a use site *inside* a
+rule whose head carries the bound instead discharges against the
+ambient signature — part of the flexible-head laxity documented in
+§Soundness). With the ambient signature in scope,
+the guard resolves against `<(T, T) -> bool` (binding
+`T := string`), the rule checks under its contract, and instance
+errors fire where they belong — mirroring how a type-class method
+body defers instance selection to its callers.
+
+A secondary effect: when exactly one signature of the bound-named
+function happens to be declared, the ambient signature prevents the
+guard's resolution from silently narrowing `T` to that sole instance
+(a resolution fires only when all surviving candidates are equal,
+§Type Checking Procedure). A rule like
 
 ```prolog
 sorted([X, Y | Rest]) <=> X < Y | sorted([Y | Rest]).
 ```
 
-would force `T` to a concrete instance at the `X < Y` guard call,
-defeating the polymorphic declaration of `sorted`. With the rule,
-`X < Y` resolves against the ambient bound `<(T, T) -> bool` and
-remains polymorphic in `T`.
+is thus checked parametrically in `T` rather than at an accidental
+single declared instance.
 
 When the bounded constraint occurs in both head and body of the same
 rule (as in the recursive `sorted` case above), the body occurrence
-is still a use site and discharges its own bound. The discharge is
-trivially satisfied because the head occurrence has contributed the
-same bound's signatures as ambient.
+is still a use site and discharges its own bound. If the rule leaves
+σ partial (as here), the discharge succeeds silently per the gradual
+rule; if other constraints pin σ, it discharges against the ambient
+signature contributed by the head occurrence.
 
 When multiple bounded constraints appear in the same rule's head, all
 their bound signatures are ambient; the ambient set is the union.
@@ -1123,7 +1374,7 @@ identities and cannot collide.
 #### Worked example — polymorphic `sorted`
 
 ```prolog
-:- class ('<'(int, int) -> bool), ('<'(float, float) -> bool).
+:- open_class ('<'(int, int) -> bool), ('<'(float, float) -> bool).
 :- chr_constraint sorted(list(T)) requiring '<'(T, T) -> bool.
 
 sorted([]) <=> true.
@@ -1133,10 +1384,13 @@ sorted([X, Y | Rest]) <=> X < Y | sorted([Y | Rest]).
 
 Rule checking: each rule's head mentions `sorted`, so the bound's
 ambient signature `<(T, T) -> bool` is in scope. The third rule's
-guard `X < Y` resolves through the ambient bound and types as `bool`;
-the body tell `sorted([Y | Rest])` is a use site of `sorted` and
-discharges the bound at the same σ — trivially consistent because the
-bound's signatures are ambient.
+guard `X < Y` sees three candidate signatures — the two declared
+ones and the ambient bound — and remains ambiguous (`T` is never
+pinned in this rule), so the resolution succeeds silently and the
+guard's result type is checked against `bool` as usual. The body
+tell `sorted([Y | Rest])` is a use site of `sorted` and discharges
+its bound silently: its σ is still partial. Had the rule pinned `T`,
+the bound would have discharged against the ambient signature.
 
 Use site `sorted([1, 2, 3])` (in another rule's body, or as a
 top-level goal): σ = (T := int); the substituted bound
@@ -1149,10 +1403,13 @@ Use site `sorted(L)` where `L : list(any)` or `L : list(α)` with `α`
 free: σ leaves `T` partial; the bound succeeds silently per the
 gradual guarantee.
 
-A later module that declares `<(string, string) -> bool` automatically
+A later module that extends the open class with
+`:- extend_class_type ('<'(string, string) -> bool).` automatically
 extends the admissible instance set of `sorted` — no edit to
 `sorted`'s declaration required. This is the open-set property of
-bounded polymorphism at the constraint level.
+bounded polymorphism at the constraint level. (The bound-named class
+must be `:- open_class` for cross-module extension; a closed
+`:- class` fixes the instance set at its declaration.)
 
 ### Coexistence with multi-signature overloading
 
@@ -1192,9 +1449,11 @@ max(X, Y) | X > Y -> X.
 max(_, Y)         -> Y.
 ```
 
-Equation checking: `T` is fresh; `X : T`, `Y : T`. The guard `X > Y`
-calls `>`; the bound provides `>(T, T) -> bool` as an ambient
-signature; the call types as `bool`. The RHS `X : T` matches the
+Equation checking: `T` is rigid; `X : T`, `Y : T`. The guard `X > Y`
+calls `>`; the declared `int` and `float` signatures are
+inconsistent with the rigid `T`, so the bound's ambient signature
+`>(T, T) -> bool` is the sole surviving candidate; the resolution
+fires and the call types as `bool`. The RHS `X : T` matches the
 return type `T`. Both equations check.
 
 Use site `R is max(3, 4)`: σ = (T := int); the substituted bound
@@ -1208,7 +1467,7 @@ signature; error `BoundUnsatisfied` (YCHR-60012).
 **Example 2 — Multi-variable bound.**
 
 ```prolog
-:- function ('=='(int, int) -> bool).
+:- function '=='(int, int) -> bool.
 :- function lookup(K, list(pair(K, V))) -> option(V) requiring
     '=='(K, K) -> bool.
 
@@ -1238,9 +1497,9 @@ and no `==(float, float) -> bool` has been declared: error
 overloading:
 
 - A use site whose argument types are `any` makes σ partial; the
-  bound check succeeds silently and the call's result type
-  substitutes through to `any` or to a fresh variable, exactly as in
-  ordinary overload resolution under unresolved arguments.
+  bound check succeeds silently and the call's result type remains a
+  fresh flexible variable (the `any` arguments bind nothing), exactly
+  as in ordinary overload resolution under unresolved arguments.
 - A bound that names a function with an all-`any` declared signature
   is satisfied by every substitution: declaring `g(any, ..., any) ->
   any` opts every caller bounded by `g` out of bound discipline for
@@ -1286,10 +1545,16 @@ variable identities.
 The type system is a gradual type system in the sense of Siek & Taha.
 The relevant correctness properties are:
 
-1. **Soundness of the fully-typed fragment**: if a program uses no
-   `any` and type-checks, then at runtime no operation will receive
-   a value of an unexpected type. (Standard progress + preservation,
-   restricted to the fully-annotated sublanguage.)
+1. **Soundness of the fully-typed fragment**: if no expression in a
+   program is typed `any` and the program type-checks, then at
+   runtime no operation will receive a value of an unexpected type.
+   (Standard progress + preservation, restricted to that fragment.)
+   The *`any`-introduction forms* — an `any`-annotated or untyped
+   declaration position, a host call, an unknown constructor, an
+   evaluable-headed term in structural position (§Expression Typing)
+   — therefore delimit exactly where the guarantee stops: a program
+   that binds a symbolic `1 + 1` with `=`, calls the host, or forges
+   an unknown constructor has left the fragment at that expression.
 
 2. **The gradual guarantee**: replacing any type annotation with `any`
    (making the program less precise) never introduces new type errors.
@@ -1334,6 +1599,8 @@ The key ingredients behind these properties are:
 - The consistency relation is reflexive and symmetric (but not
   transitive — this is expected for gradual typing).
 - Consistency with `any` is absorbing: `any ~ τ` always succeeds.
-- Constraint gathering is confluent (order-independent).
+- Constraint solving is order-independent in the precise sense of
+  §Type Checking Procedure: acceptance and the final type assignment
+  do not depend on solving order; only error attribution may vary.
 - The fully-typed fragment reduces to standard HM with algebraic
   data types.
