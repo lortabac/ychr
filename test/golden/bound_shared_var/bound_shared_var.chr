@@ -1,0 +1,15 @@
+:- module(bound_shared_var, [go/1]).
+:- use_module(prelude).
+:- chr_constraint go(any).
+
+:- function (g(A, A) -> A).
+g(X, _) -> X.
+
+% f's bound substitutes to g(int, string) -> int at the call below.
+% The declared g(A, A) -> A shares A across positions, so no
+% substitution satisfies it; per-position consistency checking used
+% to discharge this bound silently.
+:- function (f(T, U) -> T) requiring (g(T, U) -> T).
+f(X, _) -> X.
+
+go(R) <=> R is f(1, "two").

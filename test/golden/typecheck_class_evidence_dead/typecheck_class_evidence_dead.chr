@@ -1,0 +1,12 @@
+:- module(typecheck_class_evidence_dead, []).
+
+:- use_module(library(prelude)).
+
+% The equation's guard contradicts BOTH declared signatures: no
+% int-typed and no float-typed value is a string. A contradiction
+% under a candidate signature is failure of that candidate rather than
+% a warning about the program (docs/reference/type-system.md §What
+% evidence does), so the equation fits no signature at all and the
+% checker reports YCHR-60006.
+:- class (conv(int) -> string), (conv(float) -> string).
+conv(X) | string(X) -> "s".

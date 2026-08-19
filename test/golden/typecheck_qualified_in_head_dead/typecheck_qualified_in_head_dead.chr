@@ -1,0 +1,18 @@
+:- module(typecheck_qualified_in_head_dead, [run/1]).
+
+:- use_module(library(prelude)).
+
+% foo's parameter is declared int, but the first equation's pattern is
+% a qualified-in-head constructor (prelude:true) of type prelude:bool.
+% The HNF `GuardMatch` is an evidence form and constructor membership
+% fails, so that equation can never be selected within the typed
+% fragment: dead code, reported as YCHR-20104 (a warning) rather than
+% a type error (docs/reference/type-system.md §Inaccessible branches).
+% The catch-all equation is what runs.
+:- function (foo(int) -> int).
+foo(prelude:true) -> 0.
+foo(_) -> 1.
+
+:- chr_constraint run(int).
+
+run(R) <=> R is foo(7).

@@ -1,0 +1,15 @@
+% A goal whose *type* is self-referential must not hang the checker.
+%
+% `[X | X]` types X's slot as alpha and, through the list
+% constructor, as list(alpha) — a type with no finite solution. The
+% occurs check on tc_unify's binding rules drops the fact instead of
+% building the cyclic term: X's slot is flexible, so the accepting
+% disposition is to leave it alone, and the goal runs.
+%
+% The sibling shape in a rule head goes through eq_unify, whose own
+% occurs check landed with the guard-evidence work; this one is the
+% expression/goal path, which reaches tc_unify via constructor_match.
+
+:- module(typecheck_cyclic_expression, [p/1]).
+
+:- chr_constraint p(any).

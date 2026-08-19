@@ -1,0 +1,10 @@
+:- module(class_arity_overload, [go/1]).
+:- use_module(prelude).
+:- chr_constraint go(any).
+
+:- class (q(int, int) -> int), (q(string, string) -> string).
+:- class (q(int) -> int), (q(float) -> float).
+q(X, _) -> X.
+q(X) -> X.
+
+go(R) <=> R is q(1, 2).

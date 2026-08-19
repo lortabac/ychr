@@ -1,0 +1,12 @@
+:- module(typecheck_match_beta_rigid, []).
+
+:- use_module(library(prelude)).
+
+% The counterpart to typecheck_match_pins_rigid: pinning the skolem
+% `T := list(B)` uses a *rigid* `B`, because the matched value's field
+% types are store-chosen and nothing downstream may assume more about
+% them than the match proved. So `H` is rigid too, and `H + 1` finds
+% no consistent signature of `+` — YCHR-60006. Were the parameters of
+% the pinned type flexible instead, this would be silently accepted.
+:- function head_plus_one(T) -> int.
+head_plus_one([H|_]) -> H + 1.

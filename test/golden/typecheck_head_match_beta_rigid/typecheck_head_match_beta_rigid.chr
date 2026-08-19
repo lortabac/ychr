@@ -1,0 +1,13 @@
+:- module(thmbr, [p/2]).
+:- use_module(library(prelude)).
+
+% A GuardMatch at a rule head's rigid scrutinee pins T := list(B)
+% with B itself RIGID: the matched value's element type is
+% store-chosen, so nothing downstream may assume more about it than
+% the match proved (spec §What evidence does). H is therefore typed
+% at the skolem B, and `H + 1` — an overloaded operation — has no
+% consistent signature there. The companion test
+% typecheck_rigid_head_evidence shows what pinning it takes.
+:- chr_constraint p(T, any).
+
+p([H | _], R) <=> R is H + 1.

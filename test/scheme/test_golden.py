@@ -48,6 +48,16 @@ HASKELL_ONLY_CASES = {
     # the bare form. The escape decoding the test exercises is shared
     # with the four passing siblings in the same directory.
     ("qualified_unicode_ctor", "pound_foo"),
+    # The Scheme runtime registers a suspension as an observer of the
+    # variables reachable at *store* time only. The Haskell runtime
+    # additionally transfers a bound variable's observers onto the
+    # variables that binding made reachable, which is what this case
+    # needs: `p(X)` is stored, `X = g(A)` binds X, and only the later
+    # `A = 1` completes the match. The `direct` case in the same
+    # directory runs the same rules without the intermediate binding
+    # and passes on both backends. Remove this entry once the Scheme
+    # runtime's unify does the same transfer.
+    ("reactivation_through_binding", "through_binding"),
 }
 
 # Test directories where the .chr program or goal deliberately uses
@@ -87,6 +97,14 @@ WERROR_EXEMPT = {
     "type_predicates",
     "typecheck_polymorphic_constraint",
     "typecheck_qualified_in_head",
+    # These pin the inaccessible-branch warning (YCHR-20104): a guard
+    # whose typing fact contradicts a known type marks a rule or
+    # equation that can never fire — dead code, not a type error.
+    "typecheck_evidence_dead_rule",
+    "typecheck_list_pattern_dead",
+    "typecheck_open_function_dead_equation",
+    "typecheck_qualified_in_head_dead",
+    "typecheck_shared_var_dead",
     "unicode_atoms_strings",
     "unifiable",
     # The lambda-calculus object language (var/lam/app/lit_int/add) is

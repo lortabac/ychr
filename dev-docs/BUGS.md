@@ -102,3 +102,154 @@ diagnostics elsewhere (the type-system spec calls out `YCHR-16013` +
 `YCHR-16007` co-firing as intentional). Flagged because the two messages
 restate the same defect at differing severities, and the warning's
 "a different arity" is vaguer than the error's exact "declared with 2".
+
+## A single-signature `:- class` is type-checked as if declared `:- function`
+
+**Documented claim.** `docs/reference/type-system.md` §Signature
+Overloading describes the class equation-checking discipline for
+`:- class` without a signature-count carve-out: each equation is
+checked per candidate signature, a guard's evidence fact that
+contradicts the candidate "counts as failure to check under that
+signature" (no warning), and an equation that checks under *no*
+signature is the `YCHR-60006` `NoMatchingOverload` error. The same
+section permits a single-signature `:- class` ("verbose but legal")
+without saying it checks differently.
+
+**Test.**
+
+    :- class (sz(int) -> int).
+    sz(N) | boolean(N) -> 0.
+
+    ychr check
+
+**Expected.** Per the class discipline: the `boolean(N)` evidence
+contradicts the only candidate signature, so the equation checks under
+no signature — error `YCHR-60006`.
+
+**Actual.** Warning `YCHR-20104` (inaccessible branch) and the program
+compiles — the single-signature-function disposition, where a
+contradicting evidence fact marks the equation dead instead of failing
+a candidate:
+
+    cls1.chr:2:1: YCHR-20104
+    <<function m:sz>>
+    This can never fire: a guard requires 'prelude:bool' where the type is 'int'
+
+With two signatures, `:- class (sz(int) -> int), (sz(string) -> int).`
+and an equation contradicting both, the same shape is the documented
+`YCHR-60006` error.
+
+**Cause.** `typeCheckProgram`
+(`src/YCHR/Internal/TypeCheck.hs:509`) partitions on
+`length f.signatures > 1`, so a 1-signature class lands in
+`plainFunctions` and is checked by `checkSingleSigEquation` instead of
+`checkClassFunction`'s per-signature attempt sessions. Use sites are
+affected the same way: `tellFunctionSigs` (`TypeCheck.hs:750`) emits
+`function_sigs` (residual overload resolution) only for 2+ signatures,
+so a 1-sig class's calls go through the unify path — in rigid corner
+cases that reports `YCHR-60001` inconsistencies where the resolution
+path reports `YCHR-60006`. The declaration kind (`:- class` vs
+`:- function`) is not consulted; only the signature count is.
+`D.Function` currently does not record the kind, so the partition has
+nothing else to look at.
+
+**Impact.** Corner-case only: programs where a 1-sig class's equation
+(or use) is rejected/warned differently than the same program with a
+second signature, or than the spec's class discipline prescribes.
+`test/golden/class_single_sig/` pins only the accept path.
+
+**Fix sketch.** Decide which side gives: either thread the declaration
+kind into `D.Function` and partition class functions by kind rather
+than signature count (making 1-sig classes take the per-signature
+path), or amend `docs/reference/type-system.md` §Signature Overloading
+to state that a single-signature class checks exactly like the
+equivalent `:- function`. Whichever way, pin the chosen behavior with
+a test (`YCHR-60006` golden, or a `TypeCheckTest` case asserting the
+warning).
+
+## Two input files may declare the same module name, silently merging
+
+**Documented claim.** Implicit: a module is declared in one place.
+`YCHR-15015` (`DuplicateModuleHeader`) rejects a second `:- module`
+directive *within one file*, but nothing rejects the same module name
+across two input files.
+
+**Test.**
+
+    % a.chr
+    :- module(m, []).
+    :- function f/1.
+    f(1) -> 1.
+
+    % b.chr
+    :- module(m, []).
+    :- function f/1.
+    f(2) -> 2.
+
+    ychr check a.chr b.chr
+
+**Expected.** An error naming the duplicate module declaration.
+
+**Actual.** Exit 0. The two files' declarations and equations are
+silently merged into one module (`resolveFunctions` groups by
+qualified name, so both files' `f/1` decls land in one group and both
+equations are gathered — one `CollectedModule` per file, same name).
+
+**Impact.** Confusing merge semantics nobody specified; and every
+grouping step keyed by qualified name silently assumes module names
+are unique. `resolveFunctions` deliberately gathers equations once per
+*distinct declaring module* (`src/YCHR/Internal/Resolve.hs`, `build`)
+so this input keeps both files' equations rather than dropping one —
+remove that accommodation when fixing this.
+
+**Fix sketch.** Reject the whole category: after Collect, group the
+collected modules by name and report a duplicate-module-name error
+(new code) naming both files. Decide whether the same *file* listed
+twice on the command line should dedup or also error.
+
+## Diagnostics for an `:- extend_function` equation blame the owner's first equation
+
+**Documented claim.** Implicit: a diagnostic points at the code that
+caused it.
+
+**Test.**
+
+    ychr check test/golden/typecheck_open_function_dead_equation/*.chr
+
+The dead equation is `classify("oops") -> 1`, written in
+`b_extender.chr` as an `:- extend_function` directive.
+
+**Expected.** The warning is anchored in `b_extender.chr`, at the
+extension directive, echoing its source line.
+
+**Actual.**
+
+    a_owner.chr:4:1: YCHR-20104
+    <<function owner:classify>>
+    This can never fire: a guard requires 'int' where the type is 'string'
+    classify(0) -> 100
+
+Wrong file, wrong line, and a source snippet showing an unrelated
+equation that is perfectly well-typed.
+
+**Cause.** `D.Function.equations` is an `AnnP [Equation]`
+(`src/YCHR/Internal/Desugared.hs:126`) — one location for the whole
+list, taken from the owning declaration. Individual `Equation`s carry
+no source of their own (`:130-139`), so `checkSingleSigEquation`
+(`src/YCHR/Internal/TypeCheck.hs:1727`) has nothing better to attribute
+to. Extension equations gathered from other modules are appended to
+that list and inherit the owner's `AnnP`. The per-unit `UnitId` work
+keeps such equations' diagnostics *apart*, but cannot place them.
+
+**Impact.** Any diagnostic from an extension equation — the warning
+above, and equally an error — sends the reader to the wrong file. It
+gets worse the more modules extend one open function. Was invisible
+before extension equations were genuinely type-checked.
+
+**Fix sketch.** Give equations their own source: change
+`equations :: AnnP [Equation]` to `[AnnP Equation]` (or add
+`loc`/`origin` fields to `Equation`) and thread the per-equation
+annotation through Resolve's `gatherEquations`, Desugar, Compile, and
+TypeCheck. `Exhaustiveness.hs` already reads `fd.equations` per
+equation and would gain the same benefit. Pin it with a negative
+golden whose `.error` file names the extending module's file.

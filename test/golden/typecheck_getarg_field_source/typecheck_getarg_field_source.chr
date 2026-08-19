@@ -1,0 +1,9 @@
+:- module(tc, [c/2, t/1]).
+:- chr_type box ---> box(int).
+:- chr_constraint c(box, any), t(string).
+% X is reached through the compound pattern box(X) AND repeated in
+% c's `any` position. HNF splits it into a GuardGetArg extraction
+% plus a GuardEqual link; the extraction's source is box's int field
+% — a solid source, so X is typed int (the most informative source
+% wins), not `any`, and the t(X) tell is a type error.
+r @ c(box(X), X) <=> t(X).

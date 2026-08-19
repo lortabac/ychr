@@ -1,0 +1,10 @@
+:- module(type_ref_arity_mismatch, []).
+
+% A type reference in a constructor field must apply the referenced
+% type at its declared arity: `wrap` is declared as wrap/1, so a bare
+% `wrap` in a field is YCHR-60013.
+%
+% The base-type shape (`int(A)`) lives in `type_ref_arity_base`, so
+% that neither shape can satisfy this directory's assertion alone.
+:- chr_type wrap(A) ---> w(A).
+:- chr_type box ---> mk(wrap).

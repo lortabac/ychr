@@ -1,0 +1,16 @@
+% The companion to `nested_any_merge_order`: when *every* declaration
+% source of a variable says `any` at a position, that position stays
+% dynamic and is only ever checked against. A list(any) may be passed
+% to a list(string) parameter and to a list(int) one in the same body
+% — narrowing it at the first use would break the gradual guarantee.
+%
+% Both goals run the rule for real, so the accept is not vacuous.
+
+:- module(nested_any_dynamic, [go/1, deep/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint p(list(any)), s(list(string)), t(list(int)), go(any).
+:- chr_constraint pd(list(list(any))), sd(list(list(string))), deep(any).
+
+go(R) <=> p(["a"]), s(["a"]), t([1]), R = 1.
+deep(R) <=> pd([["a"]]), sd([["a"]]), R = 1.

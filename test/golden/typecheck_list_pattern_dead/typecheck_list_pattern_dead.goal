@@ -1,0 +1,1 @@
+typecheck_list_pattern_dead:foo(1, R)

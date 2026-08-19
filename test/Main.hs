@@ -1,6 +1,8 @@
+{-# LANGUAGE NumericUnderscores #-}
+
 module Main (main) where
 
-import Test.Tasty (defaultMain, testGroup)
+import Test.Tasty (Timeout, defaultMain, localOption, mkTimeout, testGroup)
 import YCHR.CollectTest qualified
 import YCHR.CompileTest qualified
 import YCHR.ConvertTest qualified
@@ -22,34 +24,45 @@ import YCHR.Runtime.InterpreterTest qualified
 import YCHR.Runtime.ReactivationTest qualified
 import YCHR.Runtime.StoreTest qualified
 import YCHR.Runtime.VarTest qualified
+import YCHR.TypeCheckTest qualified
 import YCHR.VM.SExprTest qualified
+
+-- | Per-test wall-clock cap. The whole suite runs in seconds, so this
+-- only ever fires on a genuine non-termination — a type-checker rule
+-- that builds a cyclic term, say, whose deref never returns. Without
+-- it such a regression wedges the runner and reports a suite-level
+-- failure that names no test.
+testTimeout :: Timeout
+testTimeout = mkTimeout 60_000_000
 
 main :: IO ()
 main = do
   golden <- YCHR.GoldenTest.tests
   defaultMain $
-    testGroup
-      "ychr"
-      [ golden,
-        YCHR.CollectTest.tests,
-        YCHR.CompileTest.tests,
-        YCHR.PrettyTest.tests,
-        YCHR.RunTest.tests,
-        YCHR.MetaTest.tests,
-        YCHR.DSLTest.tests,
-        YCHR.ConvertTest.tests,
-        YCHR.DesugarTest.tests,
-        YCHR.ErrorCodeTest.tests,
-        YCHR.ExhaustivenessTest.tests,
-        YCHR.ParserTest.tests,
-        YCHR.PExprTest.tests,
-        YCHR.PExprRoundtripTest.tests,
-        YCHR.RoundtripTest.tests,
-        YCHR.RenameTest.tests,
-        YCHR.Runtime.VarTest.tests,
-        YCHR.Runtime.StoreTest.tests,
-        YCHR.Runtime.HistoryTest.tests,
-        YCHR.Runtime.ReactivationTest.tests,
-        YCHR.Runtime.InterpreterTest.tests,
-        YCHR.VM.SExprTest.tests
-      ]
+    localOption testTimeout $
+      testGroup
+        "ychr"
+        [ golden,
+          YCHR.CollectTest.tests,
+          YCHR.CompileTest.tests,
+          YCHR.PrettyTest.tests,
+          YCHR.RunTest.tests,
+          YCHR.MetaTest.tests,
+          YCHR.DSLTest.tests,
+          YCHR.ConvertTest.tests,
+          YCHR.DesugarTest.tests,
+          YCHR.ErrorCodeTest.tests,
+          YCHR.ExhaustivenessTest.tests,
+          YCHR.ParserTest.tests,
+          YCHR.PExprTest.tests,
+          YCHR.PExprRoundtripTest.tests,
+          YCHR.RoundtripTest.tests,
+          YCHR.RenameTest.tests,
+          YCHR.TypeCheckTest.tests,
+          YCHR.Runtime.VarTest.tests,
+          YCHR.Runtime.StoreTest.tests,
+          YCHR.Runtime.HistoryTest.tests,
+          YCHR.Runtime.ReactivationTest.tests,
+          YCHR.Runtime.InterpreterTest.tests,
+          YCHR.VM.SExprTest.tests
+        ]

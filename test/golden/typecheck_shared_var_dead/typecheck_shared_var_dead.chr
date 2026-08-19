@@ -1,0 +1,14 @@
+:- module(tc, [foo/1, bar/1, ping/1]).
+
+% X is shared between an int-typed and a string-typed head position.
+% HNF splits it into two variables joined by a `GuardEqual`, which is
+% an evidence form: ask-equality succeeds only on identical terms, so
+% the guard asserts the two positions have the same type. Within the
+% typed fragment they never do, so the rule can never fire — dead
+% code, YCHR-20104 (a warning), not a type error (see
+% docs/reference/type-system.md §Inaccessible branches). The program
+% still compiles and runs.
+:- chr_constraint foo(int), bar(string), ping(int).
+
+bad @ foo(X), bar(X) <=> true.
+live @ ping(R) <=> R = 1.

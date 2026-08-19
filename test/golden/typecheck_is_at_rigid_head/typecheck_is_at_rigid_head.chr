@@ -1,0 +1,13 @@
+:- module(tiarh, [go/2]).
+:- use_module(library(prelude)).
+
+% The spec's worked example in §The role of `any`: the head
+% occurrence of the polymorphic go(A, A) allocates a rigid T, so
+% R : T, and `R is 1 + 1` writes an int into a T position. The store
+% chose T when the matched constraint was told, so the rule is only
+% correct at T = int, which nothing enforces — an error. Declaring
+% go(int, int), or guarding the rule with integer(R), states that
+% intent and checks.
+:- chr_constraint go(A, A).
+
+go(R, _) <=> R is 1 + 1.

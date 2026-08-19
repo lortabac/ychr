@@ -1,0 +1,6 @@
+:- module(invalid_type_parameter, []).
+
+% A type parameter must be a variable; `int` is an atom. Before
+% YCHR-15018 the parameter was silently dropped, declaring pair/1
+% instead of pair/2.
+:- chr_type pair(int, V) ---> mk(V).

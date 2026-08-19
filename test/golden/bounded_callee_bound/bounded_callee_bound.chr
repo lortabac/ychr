@@ -1,0 +1,18 @@
+:- module(bounded_callee_bound, [go/1]).
+:- use_module(prelude).
+:- chr_constraint go(any).
+
+:- function (h(string) -> string).
+h(X) -> X.
+
+:- function (g(A) -> A) requiring (h(A) -> A).
+g(X) -> X.
+
+% Inside f's equation the call g(1) resolves through g's declaration
+% (the ambient g(T) does not cover an int argument), so g's own bound
+% h(int) must discharge — and no declared h signature covers int.
+% The ambient path used to drop the callee's own bound entirely.
+:- function (f(T) -> T) requiring (g(T) -> T).
+f(X) -> [X, g(1)].
+
+go(R) <=> R is f("s").

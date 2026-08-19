@@ -1,0 +1,8 @@
+:- module(arity_overload_typed, [go/0, c/1, c/2]).
+:- chr_constraint go/0, c(int), c(int, int).
+
+% c/1 and c/2 are distinct declarations. With the declaration maps
+% keyed by name only, c/2 (the later entry) shadowed c/1, so this
+% ill-typed c/1 tell was silently unchecked; with name+arity keys it
+% checks against c(int) and errors.
+go <=> c("not an int").

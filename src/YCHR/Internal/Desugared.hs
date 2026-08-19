@@ -58,12 +58,12 @@ import YCHR.Internal.Types
 data Program = Program
   { rules :: [Rule],
     functions :: [Function],
-    constraintTypes :: Map QualifiedName [TypeExpr],
+    constraintTypes :: Map ConstraintKey [TypeExpr],
     -- | Bounds declared on each @:- chr_constraint@ that carries a
     -- @requiring@ clause. See 'YCHR.Internal.Resolved.Program' for the
     -- bounded-vs-unbounded convention (constraints without bounds are
     -- absent from the map).
-    constraintBounds :: Map QualifiedName [BoundSig],
+    constraintBounds :: Map ConstraintKey [BoundSig],
     typeDefinitions :: [TypeDefinition]
   }
   deriving (Show)

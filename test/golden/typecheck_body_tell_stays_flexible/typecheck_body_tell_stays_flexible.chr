@@ -1,0 +1,8 @@
+:- module(tc, [go/0, r/1, s/1, t/1]).
+:- chr_constraint go/0, r/1, s(int), t(string).
+% r/1 is untyped, so its argument position is `any` — but a body
+% tell is a use site, not a declaration position. X therefore stays
+% flexible after r(X): s(X) binds it to int and t(X) is an error.
+% (Under the pre-spec behavior, r(X) stamped X to `any` and the rule
+% was accepted or rejected depending on the order of the tells.)
+bad @ go <=> r(X), s(X), t(X).

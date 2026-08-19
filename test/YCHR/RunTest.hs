@@ -363,6 +363,35 @@ queryErrorTests =
           "nope/1" `isInfixOf` rendered
         assertBool ("expected REPL hint in: " ++ rendered) $
           "ychr repl" `isInfixOf` rendered,
+      testCase "runProgramWithGoal: wrong-arity constructor throws TypeErrors" $ do
+        -- Goals are checked exactly like rule bodies (spec §Type
+        -- Checking Procedure): a known constructor at the wrong arity
+        -- is the YCHR-60008 type error, not a silent fall-through to
+        -- `any`. This used to slip past goal-time checking.
+        cp <-
+          compileOrFail
+            [ ( "opt.chr",
+                ":- module(opt, [out/1, type(option/1)]).\n\
+                \:- chr_type option(A) ---> none ; some(A).\n\
+                \:- chr_constraint out(any).\n"
+              )
+            ]
+        outcome <-
+          try @SomeException
+            (runProgramWithGoal cp Map.empty "opt:out(some(1, 2))")
+        case outcome of
+          Left exc -> case fromException exc :: Maybe Error of
+            Just err@(TypeErrors _) ->
+              assertBool
+                ("expected 'YCHR-60008' in: " ++ displayMsg err)
+                ("YCHR-60008" `isInfixOf` displayMsg err)
+            Just other ->
+              assertFailure $
+                "expected TypeErrors, got Error:\n" ++ displayMsg other
+            Nothing ->
+              assertFailure $
+                "expected Error, got non-Error exception: " ++ show exc
+          Right _ -> assertFailure "expected TypeErrors, got success",
       testCase "runProgramWithGoal: malformed goal throws ParseError" $ do
         cp <- compileOrFail [("pub.chr", exportedSource)]
         outcome <-

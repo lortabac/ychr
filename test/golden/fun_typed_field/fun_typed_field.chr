@@ -1,0 +1,9 @@
+:- module(fun_typed_field, [main/1]).
+:- chr_constraint main/1.
+
+% A function type is a valid constructor field (spec type grammar);
+% the validator previously mis-rejected it with two spurious
+% UndefinedType errors for '->' and 'fun'.
+:- chr_type handler ---> h((fun(int) -> int)).
+
+main(R) <=> R = 42.

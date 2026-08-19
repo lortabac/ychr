@@ -1,0 +1,17 @@
+:- module(tcp, [start/1]).
+:- use_module(library(prelude)).
+
+% `[X | X]` equates the element type with the list type. No finite
+% type satisfies that, and binding the slot would build a cyclic type
+% term that hangs every later dereference — so the equality's occurs
+% check drops the fact. It reports nothing: the slot is flexible
+% (p is untyped), the values reaching it are typed `any`, and the
+% pattern does match at run time, as the goal below shows. The
+% skolem twin of this shape reports YCHR-20104 instead; see the
+% occurs-check case in test/YCHR/TypeCheckTest.hs.
+:- chr_constraint p(any), out(any), start(any), gather(any).
+
+r @ p([X | X]) <=> out(X).
+
+start(R) <=> p([[]]), gather(R).
+gather(R), out(X) <=> R = X.

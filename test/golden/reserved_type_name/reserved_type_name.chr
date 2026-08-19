@@ -1,0 +1,6 @@
+:- module(reserved_type_name, []).
+
+% Redeclaring a base type name is rejected; before YCHR-20016 this
+% silently rewrote every use of `int` in the module to a nominal
+% user type inconsistent with the built-in int.
+:- opaque_type int.

@@ -2,14 +2,17 @@
 :- use_module(library(prelude)).
 
 % Regression: a transitivity rule over a polymorphic constraint must
-% type-check. The two head occurrences of leq(T, T) each get their
-% own fresh σ; the body goal leq(X, Z) inherits the types of X and Z
-% from the head occurrences, which the rule body unifies via the
-% shared variable Y. Under rigid σ per head occurrence this rule
-% would fail with a Type mismatch between the two head occurrences'
-% T identities; the typechecker uses *flexible* σ at constraint head
-% occurrences specifically so this idiom keeps working. See
-% §"Rigid and flexible type variables" in the type-system spec.
+% type-check. Each head occurrence of leq(T, T) is an implementation
+% site and allocates its OWN rigid T — the store may hold an
+% leq(1, 2) and an leq(a, b) side by side, so nothing lets one
+% occurrence assume the other's instance. What ties them here is the
+% shared Y: HNF renames it to leq(X, Y), leq(Y1, Z) plus the
+% synthetic GuardEqual(Y, Y1), which is an evidence form and merges
+% the two skolems. The body tell leq(X, Z) is a use site, and its
+% fresh flexible σ instantiates to the merged T from both arguments.
+% See §"Rigid and flexible type variables" and the multi-head worked
+% example in §"Guard-Derived Type Evidence" of the type-system spec;
+% the negative twin is polymorphic_constraint_unshared.
 :- chr_constraint leq(T, T), result(any).
 
 trans @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).

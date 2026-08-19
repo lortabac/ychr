@@ -606,6 +606,14 @@ data ParseValidationError
   | -- | A @:- opaque_type@ directive does not have the expected
     -- @name@ or @name(Vars)@ head shape. The type definition is dropped.
     MalformedOpaqueTypeDefinition
+  | -- | A type-definition parameter (in @:- chr_type@ or
+    -- @:- opaque_type@) is not a type variable. Atoms, compounds, and
+    -- literals are all rejected; the offending parameter is carried as
+    -- the error's source context. The type definition is dropped.
+    InvalidTypeParameter
+  | -- | The same variable appears more than once in a type
+    -- definition's parameter list. The type definition is dropped.
+    DuplicateTypeParameter Text
   | -- | A bound signature inside a @requiring@ clause does not have the
     -- expected @name(τ₁, …, τₙ) -> τᵣ@ shape. The enclosing declaration
     -- is dropped.
@@ -1234,23 +1242,45 @@ convertTypeDefinition (Ann pexpr loc) = case pexpr of
   -- name(Vars) ---> con1 ; con2 ; ...
   Compound "--->" [typeHead, alts] -> case typeHeadShape typeHead.node of
     Nothing -> (Nothing, [AnnP MalformedTypeDefinition loc pexpr])
-    Just (tname, tvars) ->
-      case partitionEithers
-        (map convertDataConstructor (flattenSemicolon alts)) of
-        ([], cons) ->
-          ( Just
-              ( Ann
-                  (TypeDefinition (Unqualified tname) tvars (Algebraic cons) loc)
-                  loc
-              ),
-            []
-          )
-        (errs, _) -> (Nothing, errs)
+    Just (tname, rawParams) -> case validateTypeParams rawParams of
+      Left errs -> (Nothing, errs)
+      Right tvars ->
+        case partitionEithers
+          (map convertDataConstructor (flattenSemicolon alts)) of
+          ([], cons) ->
+            ( Just
+                ( Ann
+                    (TypeDefinition (Unqualified tname) tvars (Algebraic cons) loc)
+                    loc
+                ),
+              []
+            )
+          (errs, _) -> (Nothing, errs)
   _ -> (Nothing, [AnnP MalformedTypeDefinition loc pexpr])
   where
     typeHeadShape (Atom n) = Just (n, [])
-    typeHeadShape (Compound n vars) = Just (n, [v | Ann (Var v) _ <- vars])
+    typeHeadShape (Compound n vars) = Just (n, vars)
     typeHeadShape _ = Nothing
+
+-- | Validate a type head's parameter list: every parameter must be a
+-- variable, and no variable may repeat. Rejecting outright keeps the
+-- declared arity equal to the written arity — the silent filter this
+-- replaces dropped malformed parameters, changing the definition's
+-- arity, and kept duplicates, silently aliasing two parameter
+-- positions to one variable.
+validateTypeParams ::
+  [Ann PExpr] -> Either [AnnP ParseValidationError] [Text]
+validateTypeParams params = case go Set.empty params of
+  [] -> Right [v | Ann (Var v) _ <- params]
+  errs -> Left errs
+  where
+    go _ [] = []
+    go seen (Ann p ploc : rest) = case p of
+      Var v
+        | Set.member v seen ->
+            AnnP (DuplicateTypeParameter v) ploc p : go seen rest
+        | otherwise -> go (Set.insert v seen) rest
+      _ -> AnnP InvalidTypeParameter ploc p : go seen rest
 
 -- | Convert the body of a @:- opaque_type@ directive to an opaque
 -- 'TypeDefinition'. An opaque type has no data constructors, so a
@@ -1262,7 +1292,9 @@ convertOpaqueTypeDefinition ::
 convertOpaqueTypeDefinition (Ann pexpr loc) = case pexpr of
   Compound "--->" _ -> (Nothing, [AnnP OpaqueTypeHasConstructors loc pexpr])
   Atom n -> (Just (mk n []), [])
-  Compound n vars -> (Just (mk n [v | Ann (Var v) _ <- vars]), [])
+  Compound n vars -> case validateTypeParams vars of
+    Left errs -> (Nothing, errs)
+    Right tvars -> (Just (mk n tvars), [])
   _ -> (Nothing, [AnnP MalformedOpaqueTypeDefinition loc pexpr])
   where
     mk tname tvars =

@@ -2,12 +2,19 @@
 :- use_module(prelude).
 :- chr_type tags ---> foo.
 
+% helper/1 is untyped, so X : any and `1 + X` resolves statically
+% against the (int, int) signature of `+` — the checker cannot prove
+% the call wrong. At runtime X is the atom foo and the host `+`
+% raises, producing the nested helper <- deep call stack this test
+% pins. (The atom must arrive through the `any`-typed parameter:
+% writing it inline in the body would be a static type error now
+% that untyped function bodies are checked.)
 :- function helper/1.
-helper(X) -> X + foo.
+helper(X) -> 1 + X.
 
 :- function deep/1.
 deep(X) -> helper(X).
 
 :- chr_constraint boom/1.
 
-go @ boom(R) <=> R is deep(1).
+go @ boom(R) <=> R is deep(foo).

@@ -1,0 +1,18 @@
+:- module(bhmt, [sorted/1, str/1]).
+:- use_module(library(prelude)).
+
+:- class (lt(int, int) -> bool), (lt(float, float) -> bool).
+lt(X, Y) -> X < Y.
+
+:- chr_constraint sorted(list(T)) requiring lt(T, T) -> bool.
+:- chr_constraint str(string).
+
+% The bound's contract covers uses at the bound's OWN type variables,
+% nothing more (spec §Rule-level ambient signatures). The sorted head
+% allocates a rigid T with X : T; the str head pins S : string, so
+% `lt(X, S)` calls lt at (T, string). The ambient lt(T, T) does not
+% cover that, and neither declared signature is consistent with a
+% skolem — NoMatchingOverload. Correctly so: the store chose T when
+% the sorted constraint was told, independently of any str. The
+% positive twin bounded_head_mixed_evidence pins T with a guard.
+weird @ sorted([X | _]), str(S) <=> lt(X, S) | true.

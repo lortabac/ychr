@@ -1,0 +1,12 @@
+:- module(trhe, [foo/3]).
+:- use_module(library(prelude)).
+
+% The positive twin of typecheck_rigid_head_overload. The same
+% polymorphic head, but the guard `integer(X)` is an evidence form:
+% the rule body runs only where X is an integer, so the fact pins the
+% head occurrence's rigid T := int. Y shares that T, and `X > Y`
+% resolves at int (spec §Guard-Derived Type Evidence §What evidence
+% does).
+:- chr_constraint foo(T, T, any).
+
+foo(X, Y, R) <=> integer(X) | R is X > Y.

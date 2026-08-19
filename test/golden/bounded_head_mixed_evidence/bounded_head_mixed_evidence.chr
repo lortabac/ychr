@@ -1,0 +1,22 @@
+:- module(bhme, [start/1]).
+:- use_module(library(prelude)).
+:- use_module(library(strings)).
+
+% An ordering usable at two element types: numeric for ints, by
+% length for strings.
+:- class (lt(int, int) -> bool), (lt(string, string) -> bool).
+lt(X, Y) | integer(X) -> X < Y.
+lt(X, Y) -> string_length(X) < string_length(Y).
+
+:- chr_constraint sorted(list(T)) requiring lt(T, T) -> bool.
+:- chr_constraint str(string), out(any), start(any), gather(any).
+
+% The positive twin of bounded_head_mixed_types. A rule that handles
+% only the string instance says so with evidence: `string(X)` runs
+% before the comparison and pins the sorted head's rigid T := string,
+% after which lt(X, S) resolves against the ambient signature at
+% (string, string) (spec §Rule-level ambient signatures).
+ok @ sorted([X | _]), str(S) <=> string(X), lt(X, S) | out(S).
+
+start(R) <=> str("bb"), sorted(["a"]), gather(R).
+gather(R), out(S) <=> R = S.

@@ -4,10 +4,10 @@
 > working on the checker itself.
 > **You will:** find the type language, the consistency rules, overload
 > resolution, and bounded polymorphism, in specification detail.
-> **Skip if:** you just want to add a few annotations — the how-to
-> [Add types to a program](../how-to/add-types.md) and tutorial
+> **Skip if:** you just want to add a few annotations — the tutorial
 > [Functions, types, and lambdas](../tutorials/04-functions-and-types.md)
-> cover the common cases.
+> covers the common cases (the how-to
+> [Add types to a program](../how-to/add-types.md) is still a stub).
 
 This document specifies the YCHR static type system: a gradual,
 consistency-based type checker for CHR programs. The type checker
@@ -20,8 +20,9 @@ checker produces errors without transforming the program.
 The type system catches type inconsistencies statically while
 remaining optional: programs that omit type annotations are accepted
 without errors. One uniform type language covers constraints and
-functions. The checker takes a `Desugared.Program` and produces a list
-of type errors; type errors prevent compilation from proceeding.
+functions. The checker takes a `Desugared.Program` and produces type
+errors and warnings; type errors prevent compilation from proceeding,
+and `--Werror` promotes the warnings to errors.
 
 
 ## Types
@@ -164,8 +165,11 @@ implicitly universally quantified over the enclosing declaration
 (constraint or function). There is no explicit quantification and no
 rank-n polymorphism.
 
-Each use of a declared constraint or function in a rule or equation
-instantiates its type variables with fresh unification variables.
+Each use of a declared constraint or function at a use site
+instantiates its type variables with fresh flexible unification
+variables; implementation sites — a function's own equations, a
+constraint's rule-head occurrences — allocate rigid variables
+instead (§Type variables and instantiation).
 
 
 ## Defaults
@@ -251,9 +255,15 @@ the previous section.
 Every type the checker manipulates is in exactly one of four states:
 
 - **`any`** — the dynamic type. A *variable* is typed `any` only
-  when a declaration says so (an `any`-annotated or untyped argument
-  position). Certain *expressions* are also typed `any`; the
-  complete list of `any`-introduction forms is in §Soundness.
+  when a declaration says so: an `any`-annotated or untyped argument
+  position **in a rule head or an equation's parameter list**, or an
+  `any`-declared constructor field reached from such a pattern
+  (§Sources of Type Information, source 8). An
+  `any` argument position at a use site (a body tell or call) is
+  only checked against and types nothing — a variable whose only
+  occurrences are use sites stays flexible. Certain *expressions*
+  are also typed `any`; the complete list of `any`-introduction
+  forms is in §Soundness.
 - **Concrete** — a base type, an algebraic or opaque constructor
   application, or a function type.
 - **Flexible** — an unsolved unification variable. Instantiating a
@@ -261,11 +271,17 @@ Every type the checker manipulates is in exactly one of four states:
   variables for its type parameters, and a source variable with no
   declaration-derived type is likewise typed by a fresh flexible
   variable. There is no separate "unknown" state.
-- **Rigid** — a function's own type parameter while that function's
-  equations are checked (§Rigid and flexible type variables). A
-  rigid variable behaves as an opaque type constant (a skolem): it
-  stands for an arbitrary caller-chosen type about which nothing may
-  be assumed.
+- **Rigid** — a declaration's own type parameter at an
+  implementation site: a function's type parameter while that
+  function's equations are checked, or a typed polymorphic
+  constraint's type parameter at a rule-head occurrence while that
+  rule is checked (§Rigid and flexible type variables) — or a fresh
+  skolem introduced by a `GuardMatch` at a rigid scrutinee
+  (§Guard-Derived Type Evidence). A rigid
+  variable behaves as an opaque type constant (a skolem): it stands
+  for an arbitrary caller- or store-chosen type about which nothing
+  may be assumed — beyond what guard-derived evidence establishes
+  (§Guard-Derived Type Evidence).
 
 When two types meet — through unification, argument checking, or any
 other consistency check — the outcome is:
@@ -297,9 +313,28 @@ that source determines the variable's type and the `any` positions
 are merely checked successfully. The variable is typed `any` only
 when every source is `any`.
 
-There is one directed exception to the inertness of `any`, described
-in the next subsection: `R is e` refines an `any`-typed `R` when
-`e`'s type is concrete.
+This is decided **position by position**, not for the variable as a
+whole. Given
+
+```prolog
+:- chr_constraint p(list(any)), q(list(int)), s(list(string)).
+p(X), q(X) <=> s(X).
+```
+
+`X` has two sources that agree on the outer `list` and disagree on
+its element: `int` is the more informative element type, so `X` is
+`list(int)` and the body's `s(X)` is an inconsistency. Writing the
+head as `q(X), p(X)` reports the same error — the rule never depends
+on the order the sources are written in. A position is `any` only
+when *every* source leaves it `any`, and then it stays dynamic:
+`p(list(any))` alone lets `X` be passed to both a `list(string)` and
+a `list(int)` parameter.
+
+The meet table governs every ordinary meet. Rigid variables admit
+one sanctioned exception, defined in §Guard-Derived Type Evidence: a
+guard whose operational success entails a typing fact may bind or
+merge rigid variables. No mechanism — not even evidence — ever
+narrows `any`.
 
 ### The role of `any`
 
@@ -325,14 +360,22 @@ The key consequence: `any` stops type propagation. A variable typed
 as `any` will not carry type information from one position to
 another, and `any` never overwrites a type established elsewhere.
 
-Exactly one construct replaces `any` with something more precise:
-`R is e`. Because `is` *evaluates* its right-hand side, the inferred
-type of `e` is authoritative for `R`'s value, so a concrete RHS type
-refines an `any`-typed `R` to that type. The reverse never happens —
-an `any`-typed RHS leaves the LHS's type untouched (an `any`-typed
-variable stays `any`; a flexible variable stays flexible). Plain
-unification (`=`) has no such power: it checks against `any` without
-binding anything (§Sources of Type Information §5).
+No construct replaces `any` with something more precise. In
+particular, `R is e` checks the RHS's inferred type against an
+`any`-typed `R` without refining it, and plain unification (`=`)
+checks against `any` without binding anything (§Sources of Type
+Information §5). Keeping the invariant unqualified is what lets the
+order-independence guarantee of §Type Checking Procedure hold with
+no carve-outs: every source of type information is part of the
+solved constraint set, and no directed narrowing step depends on the
+order in which body goals are examined.
+
+Narrowing `any` would never accept more programs — `any` already
+passes every check — it could only reject programs that run. Static
+findings about `any`-typed code (for example, a type predicate
+proving a later use doomed) therefore belong to a planned opt-in
+warning pass (see the [roadmap](../roadmap.md)), never to the
+checker's errors.
 
 ### Example: propagation through a shared variable
 
@@ -367,49 +410,53 @@ contained `Y = Z`, the checker would report an error for
 ### Example: inference through `is`
 
 ```prolog
-:- chr_constraint result/1.
-:- function double(int) -> int.
-rule @ result(R) <=> R is double(1).
+:- chr_constraint result(int).
+rule @ result(R) <=> S is R + 1, result(S).
 ```
 
-- `R : any` (from the untyped `result/1`, i.e. `result(any)`).
-- `double(1)`: argument `1` has type `int`, consistent with the
-  declared parameter type. Return type is `int`.
-- `R is double(1)`: the RHS type is concrete, so the `is` refines
-  `R` from `any` to `int` (see The role of `any`).
-- `result(R)`: `R` is `int`; the declared argument type is `any`, so
-  the check succeeds trivially.
+- `R : int` (from `result(int)` in the head).
+- `S is R + 1`: the RHS is an evaluated position, so `R + 1` is
+  typed by the declared signature of `+`, giving `int`. `S` is a
+  local variable — a fresh flexible — and binds to `int`.
+- Body `result(S)`: `S` is `int`, consistent with the declared
+  argument type.
 
-`R is e` flows the inferred type of `e` into `R` regardless of `e`'s
-syntactic shape. In particular, when `e` is a bare variable the LHS
-picks up that variable's inferred type:
+`R is e` flows the inferred type of `e` into a *flexible* LHS — this
+is the ordinary meet of §Type states, nothing special. An
+`any`-typed LHS, by contrast, is checked against and never refined:
+
+```prolog
+:- chr_constraint out/1.
+:- function double(int) -> int.
+rule @ out(R) <=> R is double(1).
+```
+
+- `R : any` (from the untyped `out/1`, i.e. `out(any)`).
+- `R is double(1)`: the RHS type `int` is checked against `any` and
+  `R` stays `any` — nothing narrows `any` (§The role of `any`).
+
+Note the `is`, not `=`, in the first rule. `=` is structural
+(§Expression Typing): `S = R + 1` binds `S` to the symbolic
+compound `prelude:+(R, 1)`, whose type *as a term* is `any` — and
+`any` does not propagate, so `S` would stay flexible and a later
+misuse of `S` would go unreported. Use `is` when you want the
+arithmetic — and the type.
+
+At a *rigid* LHS, `is` is an error, and deliberately so:
 
 ```prolog
 :- chr_constraint go(A, A).
-go(R, S) <=> Sum is 1 + 1, R is Sum, S = "hello".
+go(R, _) <=> R is 1 + 1.
 ```
 
-- `Sum is 1 + 1`: the RHS is an evaluated position, so `1 + 1` is
-  typed by the declared signature of `+`, giving `int`. `Sum` is a
-  local variable — a fresh flexible — and binds to `int`.
-- `R is Sum`: `R` acquires type `int` from `Sum`. Because the head
-  ties `R` and `S` to the same type parameter `A`, `S` is now `int`
-  too.
-- `S = "hello"`: `int ~ string` fails consistency.
-
-Note the `is`, not `=`, in the first goal. `=` is structural
-(§Expression Typing): `Sum = 1 + 1` binds `Sum` to the symbolic
-compound `prelude:+(1, 1)`, whose type *as a term* is `any` — and
-`any` does not propagate, so `Sum` would stay flexible and no error
-would be reported. Use `is` when you want the arithmetic — and the
-type.
-
-The cross-argument flow above depends on the polymorphic signature:
-if `go/2` were untyped, `R` and `S` would each independently be
-typed `any`, with no shared type parameter linking them. `R is Sum`
-would still refine `R` to `int`, but nothing would carry that type
-to `S`, and `S = "hello"` would pass. A typed or polymorphic
-signature is what keeps the cross-argument channel open.
+- `R : T` — the head occurrence of the polymorphic `go(A, A)`
+  allocates a rigid `T` (§Rigid and flexible type variables).
+- `R is 1 + 1`: the RHS type `int` meets the rigid `T` — an error.
+  The store chose `T` when the matched constraint was told; a rule
+  that writes an `int` into a `T` position is only correct at
+  `T = int`, which nothing enforces. Declaring `go(int, int)`, or
+  guarding the rule with the evidence form `integer(R)`
+  (§Guard-Derived Type Evidence), states that intent and checks.
 
 Note that a well-typed expression can still fail at runtime. A
 function call type-checks against the function's declared return
@@ -484,12 +531,25 @@ every examination order rejects the program — early firing surfaces
 the contradiction through the propagated types, late examination
 through an empty candidate set.
 
+One unit-level rule sits above the per-check discipline: a unit
+whose evidence facts contradict a known type is *inaccessible*
+(§Guard-Derived Type Evidence §Inaccessible branches). A
+contradicting fact binds nothing, so solving proceeds normally;
+after solving, the unit reports its ordinary errors if it has any,
+and the `YCHR-20104` warning only otherwise — inaccessibility is a
+warning and never suppresses an error. Both ingredients are
+properties of the gathered constraints, so the rule is itself
+order-independent.
+
 ### Type variables and instantiation
 
-When a declared constraint or function is used, the checker
-instantiates its declared type with fresh unification variables. For
-example, if `member(A, list(A))` is used twice in a rule, each use
-gets independent fresh variables (`a₁, list(a₁)` and `a₂, list(a₂)`).
+When a declared constraint or function is used at a use site (a
+call, a body tell, a goal), the checker instantiates its declared
+type with fresh flexible unification variables. For example, if
+`member(A, list(A))` is called twice in a rule, each use gets
+independent fresh variables (`a₁, list(a₁)` and `a₂, list(a₂)`).
+Implementation sites — function equations and rule-head occurrences
+— instead allocate *rigid* variables (see below).
 
 Type variables unify normally via substitution. When a type variable
 meets `any`, the consistency check succeeds but the type variable is
@@ -522,8 +582,11 @@ The checker distinguishes two flavors of unsolved type variable:
   (see §When arguments are not yet resolved), and it satisfies the
   gradual guarantee.
 
-- A **rigid** type variable is a *function*'s own type parameter,
-  in scope while checking that function's equations. A rigid
+- A **rigid** type variable is a declaration's own type parameter at
+  an *implementation site*: a function's type parameter, in scope
+  while checking that function's equations, or a typed polymorphic
+  constraint's type parameter, in scope at a rule-head occurrence
+  while checking that rule. A rigid
   variable behaves as an opaque type constant (a skolem): it is
   consistent with itself, with `any` (nothing binds), and with
   flexible variables — which it *binds*, so rigidity travels through
@@ -531,24 +594,38 @@ The checker distinguishes two flavors of unsolved type variable:
   a result of type `T`, not an unconstrained variable). It is
   inconsistent with every concrete type and with every distinct
   rigid variable; it never silently matches a declared concrete
-  type. A polymorphic
-  function-equation body that uses an overloaded operation at a
-  rigid tvar must therefore resolve through an ambient signature
-  contributed by the function's `requiring` clause — without one
-  the call fails with `NoMatchingOverload` (YCHR-60006).
+  type. (Besides declaration parameters, a `GuardMatch` at a rigid
+  scrutinee introduces fresh rigid variables for the matched
+  constructor's type parameters — §Guard-Derived Type Evidence.)
+  A body that uses an overloaded operation at a rigid tvar
+  must therefore resolve it through an ambient signature contributed
+  by a `requiring` clause (§Bounded Polymorphism) or through
+  guard-derived evidence that pins the variable (§Guard-Derived Type
+  Evidence) — without either the call fails with
+  `NoMatchingOverload` (YCHR-60006).
 
-Rigidity applies only to **function equations**. Constraint head
-occurrences use flexible type variables, even when the constraint
-itself is polymorphic: multi-head rules like transitivity of a
-polymorphic `leq(T, T)` rely on cross-head type-variable
-unification, which rigidity would prevent. The resulting soundness
-gap for polymorphic constraints, and why it is accepted, is
-discussed in §Soundness.
+Each rule-head occurrence allocates its **own** rigid variables,
+even between two occurrences of the same constraint. The store is a
+heterogeneous multiset: with `:- chr_constraint leq(T, T).`, an
+`leq(1, 2)` and an `leq(a, b)` may be stored side by side, and each
+head occurrence matches an independently chosen instance. A single
+rule-wide rigid `T` would silently assume that all matched partners
+share one instantiation, which nothing enforces. Where matching
+*does* force instances to agree — a variable shared between head
+positions — the agreement is recovered as evidence: HNF desugars the
+shared variable into an explicit `GuardEqual` (§Sources of Type
+Information §8), which is an evidence form and merges the two
+skolems. Multi-head idioms like transitivity of a polymorphic
+`leq(T, T)` therefore continue to check; see the worked example in
+§Guard-Derived Type Evidence.
 
-Rigidity is local to the function's own equation check. At every
-use site of the same function, fresh *flexible* variables are
+Rigidity is local to the implementation-site check. At every use
+site (a call, a body tell, a goal), fresh *flexible* variables are
 allocated by `copy_term`-style refresh, so callers retain the
-gradual guarantee unchanged.
+gradual guarantee unchanged. Untyped and `any`-annotated
+declarations have no type parameters to allocate as rigid — their
+argument positions stamp `any` (§Type states) — so unannotated
+programs never meet a rigid variable.
 
 
 ## Sources of Type Information
@@ -560,7 +637,11 @@ function equation:
 
 A constraint appearing in a rule head constrains its argument
 variables. If `leq(int, int)` is declared and a rule head contains
-`leq(X, Y)`, then `X : int` and `Y : int`.
+`leq(X, Y)`, then `X : int` and `Y : int`. A *polymorphic*
+constraint's head occurrence types its variables through fresh
+per-occurrence rigid parameters (§Rigid and flexible type
+variables): with `leq(T, T)` declared, the same head gives
+`X : T` and `Y : T` at that occurrence's rigid `T`.
 
 ### 2. Function equation parameters
 
@@ -576,12 +657,21 @@ equation must be consistent with `result`.
 
 ### 4. `is` expressions (RHS to LHS flow)
 
-In `R is expr`, the type of `expr` flows to `R`. This is a directed
-assignment: the return type of the RHS expression determines the
-type of the LHS variable. Concrete types flow; `any` does not — an
-`any`-typed RHS leaves the LHS's type unchanged. When the LHS is
-typed `any` by declaration, a concrete RHS type refines it (see The
-role of `any`).
+In `R is expr`, the type of `expr` flows to `R` through the
+ordinary meet of §Type states: a flexible LHS binds to the RHS's
+concrete (or rigid) type. `any` on either side is checked against
+without binding — an `any`-typed RHS leaves the LHS's type
+unchanged, and an `any`-typed LHS is never refined (§The role of
+`any`). A rigid LHS meeting a concrete RHS type is an error, like
+every rigid/concrete meet.
+
+Inside a function body, `R is expr` *rebinds* `R` rather than
+constraining it: the runtime introduces a fresh local, and the
+checker likewise gives it a fresh type slot for the statements that
+follow. A declared-`any` `R` is the exception — its rebound local
+keeps `any`, whatever the RHS evaluates to. Anything else would
+make `is` a back-door refinement of precisely the variables the
+declaration asked to leave alone (§The role of `any`).
 
 ### 5. Unification (bidirectional)
 
@@ -612,25 +702,311 @@ the body contains `R is sign(X)`, then `X` must be consistent with
 
 Head Normal Form desugaring introduces synthetic guards:
 
-- **`GuardMatch term functor arity`**: constrains `term` to be
-  consistent with the algebraic type containing the given constructor
-  (looked up via constructor typing, see below).
+- **`GuardMatch term functor arity`**: relates `term` to the
+  algebraic type containing the given constructor (looked up via
+  constructor typing, see below). An **evidence form**: a successful
+  match proves the value inhabits that type, so the fact may bind a
+  rigid scrutinee (§Guard-Derived Type Evidence).
 - **`GuardGetArg var term index`**: the extracted variable gets the
-  type of the constructor's field at the given index. A `GuardGetArg`
+  type of the constructor's field at the given index, at the
+  instantiation the preceding match determined (§Guard-Derived Type
+  Evidence §What evidence does). A `GuardGetArg`
   always follows a `GuardMatch` on the same term; the preceding match
   establishes which constructor (and therefore which field types) to
   use.
-- **`GuardEqual term1 term2`**: both terms must be consistent (like
-  body unification, via consistency check).
+- **`GuardEqual term1 term2`**: relates the two terms' types. An
+  **evidence form**: ask-equality succeeds only on structurally
+  identical terms, so the two types are equal whenever the guard
+  passes (§Guard-Derived Type Evidence).
 - **`GuardExpr term`**: a general boolean guard expression (e.g.,
   `N > 0`). The type of `term` must be consistent with
-  `prelude:bool`.
+  `prelude:bool`. A type-predicate call in this position is an
+  evidence form (§Guard-Derived Type Evidence).
 
 These guards carry the same type information as the original pattern
-the user wrote.
+the user wrote. When the fact an evidence form contributes
+contradicts a concrete type, the guard can never succeed: the
+enclosing rule or equation is dead code and — when it otherwise
+checks clean — draws the inaccessible-branch warning
+(`YCHR-20104`) rather than an error (§Guard-Derived Type
+Evidence).
 
 Body goals not listed above (such as `true`) generate no type
 constraints.
+
+
+## Guard-Derived Type Evidence
+
+Implementation sites are checked under rigid type variables: the
+body of a rule or equation must be correct for an *arbitrary*
+instantiation of each skolem (§Rigid and flexible type variables).
+Declarations provide one way to discharge an obligation at a skolem
+— a `requiring` clause (§Bounded Polymorphism). This section defines
+the other: facts established by the *operational success* of guards.
+
+### The evidence criterion
+
+> A guard form is an **evidence form** exactly when its success at
+> runtime entails a typing fact. The fact may be assumed in every
+> position that executes only after the guard has succeeded: the
+> guard conjuncts to its right, and the rule or equation body.
+
+The criterion is the soundness argument in miniature: code guarded
+by an evidence form runs only in executions where the fact holds, so
+checking that code under the fact claims nothing about executions
+that cannot happen. Evidence availability is determined purely by
+source position and is fixed when constraints are gathered; solving
+the gathered constraints remains order-independent (§Type Checking
+Procedure). The left-to-right sensitivity is operational, not an
+artifact: `integer(X), X > 0` and `X > 0, integer(X)` genuinely
+differ at runtime — in the second form `>` can receive a
+non-integer — and the checker's verdicts differ in exactly the same
+way. HNF-synthetic guards (§8) represent head matching, which
+happens before any user guard runs, so their evidence is available
+to the entire guard sequence and body.
+
+One consequence of solving being order-independent: a check that is
+*residual* when a later evidence fact is told sees that fact.
+Retries run against everything solved, evidence gathered to the
+check's right included. This does not widen the criterion — a check
+with enough information to decide at its gather position already
+decided there. In `X > 0, integer(X)` at a rigid `X : T`, the
+overload resolution finds an empty candidate set at the unpinned
+skolem and errors immediately, before the `integer` fact exists;
+only checks that were still waiting for information can be revived
+by one.
+
+### Evidence forms
+
+| Form | Fact on success |
+|------|-----------------|
+| `GuardEqual t₁ t₂` — emitted only by HNF, for a variable shared between head positions or a non-variable head argument (§8) | `type(t₁) = type(t₂)` |
+| `GuardMatch x c/n`, where `c` is a declared constructor of `D(α₁, ..., αₖ)` | `type(x)` is an application of `D` (parameter instantiation per §What evidence does) |
+| A type-predicate guard: `integer(X)`, `float(X)`, `string(X)`, `boolean(X)` | `type(X)` is `int` / `float` / `string` / `prelude:bool` respectively |
+
+A `GuardEqual` between the HNF halves of one repeated source
+variable additionally carries the declaration-source merge of §Type
+states: the two halves are one variable, so a still-flexible half
+takes the other's type — at every depth, not just at the top level.
+A half is routinely structured (matching `p([E | X])` types `X` as
+`list(α)`, and a partner `q(X)` at `q(list(int))` is what says `α`
+is `int`), and the merge reaches inside type constructors just as
+ordinary unification does. That binding is ordinary meet, not
+evidence — evidence proper stays inert at a flexible variable (§What
+evidence does), and the distinction only matters where one half has
+a solid declaration source and the other does not.
+
+Neither reading can be asserted of a variable whose two halves are
+`α` and a type *containing* `α`, as in `p([X | X])`: no finite type
+satisfies it. The fact is dropped. At a flexible half it is dropped
+silently — such a pattern still matches an improper list at run
+time, and the checker does not move in the rejecting direction on
+code it was told nothing about — while at a rigid one, where the
+declaration fixes the type, the branch is dead in the typed
+fragment and draws `YCHR-20104` like any other contradiction.
+
+Justifications. Ask-equality (`==`) succeeds only on structurally
+identical terms — including the case of the *same* still-unbound
+variable on both sides — and a constructor determines its algebraic
+type nominally, so equal structure entails equal type; identical
+variables denote the same future value, so any type describing one
+describes the other. A successful `GuardMatch` proves the value was
+built by `c`, and within the typed fragment `c`-values inhabit only
+`D` (a forged `c` compound is typed `any` and is an
+`any`-introduction form, §Soundness); how `D`'s type parameters are
+instantiated depends on the scrutinee's state — see §What evidence
+does. A type predicate succeeds only on values of
+exactly its type.
+
+The type-predicate list is **provisional**: it names prelude
+functions directly. A declaration mechanism by which a function
+declares itself a refinement predicate — so that no function names
+are wired into the checker — is planned; see the
+[roadmap](../roadmap.md).
+
+### Non-forms
+
+The criterion excludes, deliberately:
+
+- User-written `==` in a guard: it desugars to `GuardExpr` — an
+  ordinary call of the prelude function `'=='(A, A)` — not to
+  `GuardEqual`, so it contributes no evidence. Blessing selected
+  functions as evidence forms is the job of the planned
+  refinement-declaration mechanism.
+- `var(X)`, `nonvar(X)`, `ground(X)`: success entails a *boundness*
+  fact, not a type fact.
+- `atom(X)`: success entails that `X` is *some* nullary data
+  constructor, but nullary constructors inhabit many types
+  (`red : color`, `[] : list(A)`, `true : bool`) and the type
+  grammar has no unions, so no single typing fact follows.
+- Overloaded comparisons and arithmetic (`X > 0`): success does not
+  pin the operand's type — which signature ran is a runtime matter,
+  and a host-backed comparison need not reject every value its
+  static signatures would.
+- Ordinary function calls in guards: success entails only the
+  declared return type, which call typing already provides (§7).
+
+### What evidence does
+
+Evidence acts according to the *state* (§Type states) of the type it
+scrutinizes:
+
+- **Rigid** — the fact binds or merges the skolem: `type(X) = int`
+  at `X : T` binds `T := int`; `type(X) = type(Y)` at `X : T₁`,
+  `Y : T₂` merges `T₁` and `T₂`. This is the single sanctioned
+  exception to the meet table's rigid rows, and evidence is the
+  *only* mechanism that may perform it.
+- **Concrete** — the fact is checked. A mismatch means the guard can
+  never succeed within the typed fragment, so the enclosing rule or
+  equation is *dead code*. The contradicting fact binds nothing —
+  the scrutinized type is already known — so checking continues
+  with the declared types; if the unit otherwise checks clean, the
+  checker emits the **inaccessible-branch warning** (`YCHR-20104`,
+  severity *warning*) and the program still compiles. A dead unit
+  that also contains ordinary errors reports those errors and omits
+  the warning: inaccessibility is a warning and never suppresses an
+  error (§Inaccessible branches). `--Werror` promotes the warning,
+  as with exhaustiveness (§Exhaustiveness checking). (During
+  per-signature checking of a `:- class` equation, a contradiction
+  instead counts as failure under that candidate signature and
+  emits nothing — §Signature Overloading §Equation checking.)
+- **`any`** — inert. Nothing narrows `any` (§The role of `any`);
+  findings about `any`-typed code are reserved for a planned opt-in
+  warning pass.
+- **Flexible** — inert *as evidence*: type predicates and
+  `GuardEqual` contribute nothing at a flexible variable, so
+  evidence never restricts unannotated code. (`GuardMatch`'s
+  ordinary constructor-typing meet still applies and binds the
+  flexible — see the next paragraph; that is declaration-derived
+  information, not evidence. So is the merge of the two HNF halves
+  of one repeated source variable, §Evidence forms.)
+
+For `GuardMatch`, the instantiation of `D`'s type parameters follows
+the same states. At a rigid scrutinee `x : T`, the match binds
+`T := D(β₁, ..., βₖ)` with fresh **rigid** `βᵢ` — the matched
+value's field types are store-chosen, and nothing downstream may
+assume more about them than the match proved; `GuardGetArg` types
+the extracted fields at those `βᵢ`. At a scrutinee whose type is
+already known — concrete, or a constructor application such as the
+`list(T)` argument of a polymorphic `sorted` — the fact reduces to
+constructor *membership*: `c` must belong to that type (otherwise
+the branch is inaccessible, `YCHR-20104`), and `GuardGetArg` reads
+field types off the known instantiation (matching `[X | Xs]`
+against `list(T)` gives `X : T` and `Xs : list(T)`). At an `any`
+scrutinee the match says nothing about the scrutinee — nothing
+narrows `any` — while the extracted fields are typed at a fresh
+all-flexible instantiation of the constructor's declared field
+types. At a flexible scrutinee the match is the ordinary meet: the
+flexible binds to `D` at a fresh flexible instantiation.
+
+The asymmetry in this list is the design principle. At a rigid
+variable, evidence is purely *enabling*: a skolem rejects every
+concrete use, so evidence can only accept programs that were
+otherwise rejected. At `any` or a flexible variable, evidence could
+only *restrict* — `any` already passes every check — and the
+checker never moves in the rejecting direction on unannotated code.
+This is also why the gradual guarantee is unaffected: rigid
+variables exist only where a declaration introduces type
+parameters, so a program without annotations never meets evidence
+at all (§Soundness).
+
+### Worked example: multi-head rules
+
+```prolog
+:- chr_constraint leq(T, T).
+trans @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
+```
+
+HNF renames the shared `Y`, giving heads `leq(X, Y), leq(Y1, Z)`
+with the synthetic guard `GuardEqual(Y, Y1)` (§8). Checking:
+
+- First head occurrence: fresh rigid `T₁`; `X : T₁`, `Y : T₁`.
+- Second head occurrence: fresh rigid `T₂`; `Y1 : T₂`, `Z : T₂`.
+- `GuardEqual(Y, Y1)`: evidence `type(Y) = type(Y1)`, i.e.
+  `T₁ = T₂` — the two skolems merge into one `T`.
+- Body tell `leq(X, Z)`: a use site; its fresh flexible variable
+  instantiates to `T` from both arguments. The rule checks.
+
+Without the evidence step, the two skolems would stay distinct and
+the body tell would fail. The evidence recovers exactly the
+agreement that runtime matching guarantees: both occurrences matched
+the same value for `Y`, so their instantiations coincide. Contrast a
+rule whose head occurrences share nothing:
+
+```prolog
+:- chr_constraint pair(T, T), out(T, T).
+weird @ pair(X, _), pair(_, Y) ==> out(X, Y).
+```
+
+No `GuardEqual` links the occurrences, so `X : T₁` and `Y : T₂` stay
+distinct and the tell `out(X, Y)` is an error — correctly so: the
+store may hold `pair(1, 1)` and `pair("a", "b")` simultaneously,
+and firing would tell an `out` at `(int, string)`, which no
+instantiation of `out(T, T)` allows.
+
+### Worked example: type-case equations
+
+```prolog
+:- function int_to_string(int) -> string.
+:- function show(T) -> string.
+show(X) | integer(X) -> int_to_string(X).
+show(X) | string(X)  -> X.
+```
+
+`T` is rigid in each equation. The first equation's guard
+contributes `type(X) = int`, binding `T := int` for that equation;
+`int_to_string(X)` then resolves, and the RHS type is consistent
+with the declared return type. The second equation checks at
+`T := string` the same way. Called at a type neither guard accepts,
+the runtime falls through to the ordinary "no matching equation"
+error (`YCHR-60001`); no value is ever misused, which is what makes
+the per-equation assumption sound. (Multi-signature `:- class`
+declarations achieve a similar effect through per-signature equation
+checking, §Signature Overloading §Equation checking; evidence brings
+the same expressiveness to single-signature polymorphic functions.)
+
+An operation at a rigid variable can therefore be discharged two
+ways: statically, by a `requiring` clause whose ambient signature
+covers it at every instance (§Bounded Polymorphism), or dynamically,
+by an evidence guard that pins the variable on the one path where
+the operation runs. The first says "callers must supply this"; the
+second says "this branch handles exactly this case".
+
+### Inaccessible branches
+
+```prolog
+:- chr_type color ---> red ; green ; blue.
+:- chr_constraint tag(color).
+dead @ tag(X) <=> integer(X) | true.
+```
+
+`X : color` (concrete), and the guard's fact `type(X) = int`
+contradicts it: within the typed fragment no `color`-typed value is
+an integer, so the guard cannot succeed and the rule cannot fire.
+The rule otherwise checks clean, so it draws `YCHR-20104`
+(warning). The same applies to a `GuardEqual` between positions of
+incompatible concrete types — for instance a variable shared
+between an `int` and a `string` head position — and to a
+`GuardMatch` against a constructor of a type other than its
+scrutinee's: each marks a rule or equation that can never fire in
+the typed fragment. That is dead code, not a type error. A
+gradually-typed program can still reach such a rule by flowing
+`any`-typed values into it; the warning severity reflects that the
+checker's claim is limited to the typed fragment.
+
+A contradicting fact binds nothing — the scrutinized type is
+already known — so checking simply continues with the declared
+types, and whether the warning is reported is decided after
+solving: a dead unit that also contains ordinary errors reports
+those errors and omits the warning (inaccessibility is a warning,
+and a warning never suppresses an error); a dead unit that
+otherwise checks clean reports exactly `YCHR-20104`. Had the
+`dead` rule's body also misused `X` — say `Y is X + 1` — the
+resulting overload error would be reported and the warning
+dropped. Both the unit's error set and the presence of a
+contradiction are properties of the gathered constraints, not of
+any examination order, so acceptance remains order-independent
+(§Type Checking Procedure).
 
 
 ## Expression Typing
@@ -652,8 +1028,9 @@ The type of a compound expression is determined by its outermost form:
 
 - **Literal**: `3` has type `int`, `"hi"` has type `string`.
 - **Known constructor**: looked up via constructor typing (see below).
-- **Unknown constructor**: type `any`. All argument expressions are
-  also typed as `any`.
+- **Unknown constructor**: type `any`. The argument *positions* impose
+  no expected type, but each argument expression is still typed by its
+  own rules, so an error nested inside one is still reported.
 - **Variable**: determined by the constraints on that variable.
 - **Function call `f(e₁, ..., eₙ)`**: the declared type variables are
   instantiated with fresh unification variables. Each argument `eᵢ`
@@ -662,7 +1039,8 @@ The type of a compound expression is determined by its outermost form:
   type variables instantiated by the same substitution). The
   implementation's RHS type is only checked for consistency with the
   declaration — callers never see through to the implementation.
-- **Host call**: all argument types and the return type are `any`.
+- **Host call**: every argument position and the return type are
+  `any`; the argument expressions themselves are still typed.
 
 
 ## Constructor Typing
@@ -680,7 +1058,11 @@ If `some` is a constructor of `option(A)` with field type `A`, then
 A constructor's arity is part of its identity: `some/1` and `some/2`
 are not two arity-overloaded constructors, they are a duplicate
 declaration. Consequently, using a known constructor with the wrong
-number of arguments is a type error, not a fall-through to `any`.
+number of arguments is a type error
+(`ConstructorArityMismatch`, YCHR-60008), not a fall-through to
+`any`. It is distinct from the rename-phase warning of the same
+shape (`YCHR-20102`), which comes from the renamer and does not
+depend on the type checker.
 
 ### Unknown constructors
 
@@ -724,6 +1106,8 @@ pattern-matching equations cannot match some value of a declared
 algebraic type. For example:
 
 ```prolog
+:- module(m, []).
+
 :- chr_type color ---> red ; green ; blue.
 :- function rank(color) -> int.
 rank(red)   -> 1.
@@ -753,6 +1137,12 @@ The check is deliberately narrow:
   pattern: the guard may fail at runtime, so the pattern is not
   guaranteed to match. A variable or wildcard pattern covers a position
   exhaustively.
+- A gap attributable **only to non-enumerable columns** produces no
+  warning: the reported example must name at least one missing
+  constructor. `:- function f(int) -> int.` with the single equation
+  `f(0) -> 1.` is non-exhaustive in the operational sense, but the only
+  example it could report is `f(_)` — no declared type is missing a
+  case, so nothing is reported.
 
 Exhaustiveness uses Maranget's matrix/usefulness algorithm, so it
 handles multiple arguments and nested constructor patterns, and reports
@@ -761,11 +1151,18 @@ function still compiles and runs (raising a runtime error only if an
 unmatched value actually reaches it); `--Werror` promotes it to a
 hard error.
 
+The dual dead-code warning — a rule or equation that can never fire
+because its guards contradict known types — is the
+inaccessible-branch warning (`YCHR-20104`, §Guard-Derived Type
+Evidence), which follows the same severity policy.
+
 
 ## Host Calls
 
-Host language calls (`host:f(args)`) have all argument types and
-return type as `any`. The type checker does not look inside host calls.
+Host language calls (`host:f(args)`) impose no expected type on their
+arguments and have return type `any`. The type checker does not look
+inside the host function — but it does type the argument expressions,
+so an error nested in one is still reported.
 
 CHR library functions that wrap host calls (such as `+`, `-`, `>` in
 the prelude) may have declared type signatures. Type checking occurs
@@ -789,7 +1186,7 @@ types.
 ### Lambdas
 
 A lambda `fun(X, Y) -> expr end` gets a function type inferred from
-its context. If the lambda appears where a `fun(int, int) -> bool end` is
+its context. If the lambda appears where a `fun(int, int) -> bool` is
 expected, then `X : int`, `Y : int`, and `expr` must be consistent
 with `bool`.
 
@@ -801,8 +1198,9 @@ lambda's type is `fun(α₁, ..., αₙ) -> τ` where `τ` is the body's
 inferred type and the `αᵢ` are whatever those variables were bound
 to (possibly still flexible).
 
-A lambda cannot carry a `requiring` clause: `requiring` attaches only
-to `:- function` and `:- open_function` declarations. A lambda whose
+A lambda cannot carry a `requiring` clause: `requiring` attaches
+only to declarations (`:- function`, `:- open_function`,
+`:- chr_constraint`), and a lambda has none. A lambda whose
 body uses bounded operations is type-checked against its expected
 function type, and any unresolved bounds discharge through the same
 residual-constraint mechanism that handles function references
@@ -820,7 +1218,7 @@ checking). The bound check is a residual constraint: it is solved
 together with the surrounding equation's other type constraints.
 
 If `double(int) -> int` is declared (no bound), then `fun double/1`
-has type `fun(int) -> int end` at every use site.
+has type `fun(int) -> int` at every use site.
 
 A reference `fun name/arity` where `name/arity` is a
 multi-signature class is itself a residual overload resolution
@@ -828,11 +1226,18 @@ multi-signature class is itself a residual overload resolution
 site filters the class's signatures, and the reference commits when
 all surviving candidates are equal after substitution. If the
 resolution is still ambiguous when solving ends, it succeeds
-silently and the reference's type stays flexible.
+silently and the reference's type stays flexible. Note the
+asymmetry with §Resolution's "result type never disambiguates": a
+*call*'s expected result type never filters an overload, but a
+*reference* is matched against a full function type, whose return
+component participates — a reference has no argument expressions,
+so the expected type is all the checker has.
 
 If `:- function max(T, T) -> T requiring '>'(T, T) -> bool.` is
 declared, `fun max/2` is well-typed wherever the surrounding context
-allows the bound to discharge:
+allows the bound to discharge. Given
+`:- function apply2(fun(T, T) -> T end, T, T) -> T.`, which links
+the reference's expected function type to the other two arguments:
 
 - In `apply2(fun max/2, 1, 2)`, the args constrain the substitution
   to `T := int`; the residual bound `'>'(int, int) -> bool` resolves
@@ -891,8 +1296,9 @@ The checker validates type definitions themselves:
 
 3. **Arity**: a type reference in a constructor field must apply the
    referenced type constructor to exactly as many arguments as its
-   declaration has parameters; `bar(list)` is an error if `list` is
-   declared as `list(A)`.
+   declaration has parameters; `bar(list)` is an error
+   (`TypeRefArityMismatch`, YCHR-60013) if `list` is declared as
+   `list(A)`.
 
 Forward references and mutual recursion between type definitions are
 allowed; declaration order is irrelevant.
@@ -979,16 +1385,18 @@ variables and instantiation):
   check succeeds silently. This preserves the gradual guarantee:
   unannotated code produces no errors.
 
-- **Rigid** type variables (a function's own type parameters, in
-  scope while checking its equations) are inconsistent with every
-  declared concrete type (§Rigid and flexible type variables). If no
-  declared signature is consistent with the rigid tvar — and no
-  ambient signature contributed by a `requiring` clause covers it —
-  the call fails with `NoMatchingOverload` (YCHR-60006). This closes the soundness gap that would
-  otherwise let `foo(T, T) -> bool` silently type-check while
-  calling an overloaded `>` at `T` in its body. Rigidity applies
-  only at function equations, not at constraint rule heads — see
-  §Rigid and flexible type variables.
+- **Rigid** type variables (declaration type parameters at
+  implementation sites — function equations and rule-head
+  occurrences of typed polymorphic constraints) are inconsistent
+  with every declared concrete type (§Rigid and flexible type
+  variables). If no declared signature is consistent with the rigid
+  tvar — no ambient signature contributed by a `requiring` clause
+  covers it, and no guard-derived evidence has pinned it to a
+  concrete type (§Guard-Derived Type Evidence) — the call fails
+  with `NoMatchingOverload` (YCHR-60006). This closes the soundness
+  gap that would otherwise let `foo(T, T) -> bool` silently
+  type-check while calling an overloaded `>` at `T` in its body,
+  and the analogous gap for the rules of a polymorphic constraint.
 
 ### Equation checking
 
@@ -999,6 +1407,16 @@ signature's argument types and its RHS checked against that
 signature's return type. An equation that type-checks under no
 declared signature is reported as `NoMatchingOverload`
 (YCHR-60006).
+
+During a per-signature attempt, a guard's evidence fact that
+contradicts the candidate signature's types counts as failure to
+check under that signature; no inaccessible-branch warning is
+emitted for the attempt (§Guard-Derived Type Evidence). This is how
+type-predicate guards select their signature: in the example below,
+`size(N) | integer(N) -> N` fails under `size(string) -> int` and
+checks under `size(int) -> int`. An equation whose guards contradict
+*every* signature checks under none, and is the documented
+`NoMatchingOverload` error, not a warning.
 
 ### Example
 
@@ -1054,6 +1472,9 @@ is a comma-separated list of *bound signatures* of the form
 `name(τ₁, ..., τₙ) -> τᵣ`:
 
 ```prolog
+:- chr_type pair(K, V)  ---> pair(K, V).
+:- chr_type option(A)   ---> none ; some(A).
+
 :- function max(T, T) -> T requiring '>'(T, T) -> bool.
 
 :- function clamp(T, T, T) -> T requiring
@@ -1064,12 +1485,13 @@ is a comma-separated list of *bound signatures* of the form
     '=='(K, K) -> bool.
 ```
 
-The `requiring` clause is allowed on `:- function` and
-`:- open_function` declarations only. It is *not* allowed on
+The `requiring` clause is allowed on `:- function`,
+`:- open_function`, and `:- chr_constraint` declarations (for the
+constraint case see §Bounded constraints). It is *not* allowed on
 `:- class` / `:- open_class` (rejected as `RequiringOnClass`,
 YCHR-15005) and *not* allowed on `:- extend_class_type` (rejected
 as `RequiringOnExtendClassType`, YCHR-15006). The two features are
-intentionally orthogonal: `:- function` for bounded single-signature
+intentionally orthogonal: `requiring` for bounded single-signature
 declarations, `:- class` for explicit multi-signature overloading.
 
 A bounded `:- open_function` already has an extensibility story:
@@ -1275,29 +1697,31 @@ places: where use-site checking discharges, and what replaces
 
 #### Use sites
 
-A bounded constraint emits a bound check at every position in which
-it occurs: **body tell** and **rule head occurrence**. Each
-occurrence allocates its own fresh substitution σ for the
+A bounded constraint's **body tells** (and goal tells) are its use
+sites. Each tell allocates a fresh substitution σ for the
 constraint's declared type variables (per §Use-site checking step 2)
-and discharges the bound as a residual constraint over that σ. There
-is no return type, so step 5 of §Use-site checking is dropped.
+and discharges the bound as a residual constraint over that σ: σ is
+refined by unifying the tell's argument expressions against the
+constraint's declared argument types (§Use-site checking step 3),
+and the bound discharges whenever σ becomes ground enough to
+identify (or rule out) a consistent declared signature. There is no
+return type, so step 5 of §Use-site checking is dropped.
 
-- **Body tell** `... <=> ..., sorted(L).` — σ is refined by unifying
-  the tell's argument expressions against the constraint's declared
-  argument types (§Use-site checking step 3). The bound discharges
-  whenever σ becomes ground enough to identify (or rule out) a
-  consistent declared signature.
-- **Head occurrence** `sorted(L) <=> ...` — σ is refined by unifying
-  the head pattern against the constraint's declared argument types,
-  which establishes the types of the head's variables (§Sources of
-  Type Information §1). Whether σ later becomes ground enough to
-  discharge the bound depends on what other heads, guards, and body
-  goals in the same rule contribute through those variables.
+A **rule-head occurrence** is not a use site but an *implementation
+site*: it allocates rigid variables for the constraint's type
+parameters (§Rigid and flexible type variables), establishes the
+types of the head's variables through the declared argument types
+(§Sources of Type Information §1), and *assumes* the bound rather
+than discharging it — its required signatures enter the ambient
+context for the rule (next subsection). A head occurrence's rigid
+variable is pinned only by guard-derived evidence (§Guard-Derived
+Type Evidence); whether the bound holds at any particular instance
+is answered at the tells that discharge there.
 
 Each occurrence — including multiple occurrences of the same bounded
 constraint in one rule — gets its own fresh type variables.
-Order-independence and the silent-success-on-partial-σ behavior carry
-over verbatim.
+Order-independence and the silent-success-on-partial-σ behavior at
+use sites carry over verbatim.
 
 #### Rule-level ambient signatures (replacing §Equation checking)
 
@@ -1320,7 +1744,26 @@ head constraints contribute their bounds as ambient. Guards and body
 goals do not.
 
 The rule exists because a rule body is entitled to *assume* the
-bound, exactly as a function equation is. Consider
+bound, exactly as a function equation is. Consider the recursive
+rule of a polymorphic `sorted`:
+
+```prolog
+sorted([X, Y | Rest]) <=> X < Y | sorted([Y | Rest]).
+```
+
+The head allocates a rigid `T`, with `X : T` and `Y : T`. Without
+ambient signatures, the guard's call to `<` at `(T, T)` would end
+with an empty candidate set — a rigid variable is inconsistent with
+every declared concrete signature — and report a spurious
+*rule-level* `NoMatchingOverload`. Under the bound's contract the
+rule may assume `'<'(T, T) -> bool` exists: the guard resolves
+against the ambient signature, the rule is checked parametrically in
+`T`, and instance errors fire where they belong — at the tells that
+discharge the bound — mirroring how a type-class method body defers
+instance selection to its callers.
+
+The contract covers uses *at the bound's own variables*, nothing
+more:
 
 ```prolog
 :- chr_constraint str(string).
@@ -1328,41 +1771,26 @@ weird @ sorted([X | _]), str(S) <=> X < S | true.
 ```
 
 The second head pins `S : string`, so the guard calls `<` at
-`(T, string)`. Without ambient signatures, the guard's overload
-resolution would end with an empty candidate set whenever no
-`<(string, string)` signature is declared, and report a spurious
-*rule-level* `NoMatchingOverload`. But under the bound's contract
-the rule may assume `'<'(T, T) -> bool` exists; whether it actually
-exists at `T = string` is a question about *use sites*, and
-use-site checking already answers it: `BoundUnsatisfied` at any
-ordinary use site that pins `T := string` (a use site *inside* a
-rule whose head carries the bound instead discharges against the
-ambient signature — part of the flexible-head laxity documented in
-§Soundness). With the ambient signature in scope,
-the guard resolves against `<(T, T) -> bool` (binding
-`T := string`), the rule checks under its contract, and instance
-errors fire where they belong — mirroring how a type-class method
-body defers instance selection to its callers.
-
-A secondary effect: when exactly one signature of the bound-named
-function happens to be declared, the ambient signature prevents the
-guard's resolution from silently narrowing `T` to that sole instance
-(a resolution fires only when all surviving candidates are equal,
-§Type Checking Procedure). A rule like
-
-```prolog
-sorted([X, Y | Rest]) <=> X < Y | sorted([Y | Rest]).
-```
-
-is thus checked parametrically in `T` rather than at an accidental
-single declared instance.
+`(T, string)`. The ambient `'<'(T, T)` does not cover it — `string`
+is inconsistent with the rigid `T` — and the call is rejected
+(`NoMatchingOverload`). Correctly so: the store chose `T` when the
+matched `sorted` constraint was told, independently of any `str`
+constraint, so the rule would compare a `T`-typed element against a
+string at whatever `T` happens to be. A rule that genuinely handles
+only the string instance can say so with evidence: a `string(X)`
+guard before the comparison pins `T := string` (§Guard-Derived Type
+Evidence), after which `X < S` resolves against the ambient
+signature at `(string, string)`.
 
 When the bounded constraint occurs in both head and body of the same
 rule (as in the recursive `sorted` case above), the body occurrence
-is still a use site and discharges its own bound. If the rule leaves
-σ partial (as here), the discharge succeeds silently per the gradual
-rule; if other constraints pin σ, it discharges against the ambient
-signature contributed by the head occurrence.
+is still a use site and discharges its own bound. Its fresh
+variables bind to the head's rigid `T` through the shared argument
+(the meet table: a flexible binds to a rigid), and the discharge
+resolves against the ambient signature contributed by the head
+occurrence — the assume side of the contract, exactly as a bounded
+function's recursive call discharges against its own ambient
+signature (§Equation checking).
 
 When multiple bounded constraints appear in the same rule's head, all
 their bound signatures are ambient; the ambient set is the union.
@@ -1382,15 +1810,15 @@ sorted([_]) <=> true.
 sorted([X, Y | Rest]) <=> X < Y | sorted([Y | Rest]).
 ```
 
-Rule checking: each rule's head mentions `sorted`, so the bound's
-ambient signature `<(T, T) -> bool` is in scope. The third rule's
-guard `X < Y` sees three candidate signatures — the two declared
-ones and the ambient bound — and remains ambiguous (`T` is never
-pinned in this rule), so the resolution succeeds silently and the
-guard's result type is checked against `bool` as usual. The body
-tell `sorted([Y | Rest])` is a use site of `sorted` and discharges
-its bound silently: its σ is still partial. Had the rule pinned `T`,
-the bound would have discharged against the ambient signature.
+Rule checking: each rule's head mentions `sorted`, so a rigid `T` is
+allocated and the bound's ambient signature `<(T, T) -> bool` is in
+scope. The third rule's guard `X < Y` calls `<`; the two declared
+signatures are inconsistent with the rigid `T`, so the ambient bound
+is the sole surviving candidate; the resolution fires and the guard
+types as `bool`. The body tell `sorted([Y | Rest])` is a use site of
+`sorted`: its fresh variable binds to the rigid `T` through
+`[Y | Rest] : list(T)`, and its bound discharges against the ambient
+signature.
 
 Use site `sorted([1, 2, 3])` (in another rule's body, or as a
 top-level goal): σ = (T := int); the substituted bound
@@ -1467,14 +1895,22 @@ signature; error `BoundUnsatisfied` (YCHR-60012).
 **Example 2 — Multi-variable bound.**
 
 ```prolog
-:- function '=='(int, int) -> bool.
+:- chr_type pair(K, V)  ---> pair(K, V).
+:- chr_type option(A)   ---> none ; some(A).
+:- function eq(int, int) -> bool.
 :- function lookup(K, list(pair(K, V))) -> option(V) requiring
-    '=='(K, K) -> bool.
+    eq(K, K) -> bool.
 
-lookup(_, [])                            -> none.
-lookup(K, [pair(K2, V) | _]) | K == K2  -> some(V).
-lookup(K, [_ | Rest])                    -> lookup(K, Rest).
+lookup(_, [])                             -> none.
+lookup(K, [pair(K2, V) | _]) | eq(K, K2)  -> some(V).
+lookup(K, [_ | Rest])                     -> lookup(K, Rest).
 ```
+
+(The bound function is a fresh `eq/2` rather than the prelude's
+`'=='`: the prelude declares `'=='(A, A) -> bool`, a polymorphic
+signature every substituted bound is consistent with, which would
+make an `'=='` bound vacuously satisfied and the error below
+unreachable.)
 
 Equations are checked parametrically over `K` and `V`. The recursive
 call `lookup(K, Rest)` is itself a use site; the recursion's σ is
@@ -1484,11 +1920,11 @@ the bound's signatures are ambient.
 
 Use site `R is lookup(3, L)` where `L : list(pair(int, string))`:
 σ = (K := int, V := string); substituted bound
-`==(int, int) -> bool` is consistent with the declared signature;
+`eq(int, int) -> bool` is consistent with the declared signature;
 result type `option(string)`.
 
 Use site `R is lookup(0.5, M)` where `M : list(pair(float, int))`
-and no `==(float, float) -> bool` has been declared: error
+and no `eq(float, float) -> bool` has been declared: error
 `BoundUnsatisfied` (YCHR-60012) for the substituted bound at K := float.
 
 ### Interaction with `any`
@@ -1530,6 +1966,11 @@ Bounded polymorphism preserves the gradual guarantee of §Soundness:
 Bound checking is expressed as ordinary use-site overload resolution
 and inherits its confluence and gradual properties.
 
+Bounds and guard-derived evidence (§Guard-Derived Type Evidence) are
+the two discharge mechanisms for an operation at a rigid variable: a
+bound proves it statically at every caller, evidence proves it
+dynamically on the guarded path.
+
 The same properties hold for bounded constraints. No new soundness
 argument is required: rule-level ambient signatures are a structural
 mirror of equation-level ambient signatures, and the use-site
@@ -1564,29 +2005,36 @@ The relevant correctness properties are:
 
 Rigid type variables (§Type variables and instantiation §Rigid and
 flexible type variables) are what make property 1 hold for
-polymorphic *functions* whose equation bodies use overloaded
+polymorphic declarations whose implementations use overloaded
 operations: a declaration like `:- function foo(T, T) -> bool.`
 whose equation body calls an overloaded operator at the type
 variable cannot type-check without a `requiring` clause covering
-that operation. Without rigidity, such a program type-checked
-silently (every declared signature filtered as "consistent" against
-the unbound flexible variable representing T), but it could fail
-at runtime when called at a type for which no equation of the
-overloaded operator existed. Rigidity does not constrain
-unannotated programs: in code without type annotations, the
-enclosing declaration has no type variables of its own to allocate
-as rigid, so the gradual guarantee continues to hold.
+that operation or an evidence guard pinning the variable
+(§Guard-Derived Type Evidence). Without rigidity, such a program
+type-checked silently (every declared signature filtered as
+"consistent" against the unbound flexible variable representing T),
+but it could fail at runtime when called at a type for which no
+equation of the overloaded operator existed. The same holds for
+polymorphic *constraints*: rule-head occurrences allocate
+per-occurrence rigid variables, so
+`:- chr_constraint foo(T, T). foo(X, Y) <=> X > Y.` is rejected
+(`NoMatchingOverload` at the rigid `T`) unless the declaration
+carries a `requiring` clause or an evidence guard covers the
+operation. Multi-head idioms that rely on cross-occurrence
+agreement (e.g. transitivity of a polymorphic `leq(T, T)`) remain
+accepted through `GuardEqual` evidence, which assumes exactly the
+agreement that runtime matching guarantees. Rigidity does not
+constrain unannotated programs: in code without type annotations,
+the enclosing declaration has no type variables of its own to
+allocate as rigid, so the gradual guarantee continues to hold.
 
-An analogous gap remains for polymorphic *constraints* whose rule
-bodies use overloaded operations at the constraint's type
-parameter (e.g. `:- chr_constraint foo(T, T). foo(X, Y) <=> X > Y.`
-silently type-checks even though `>` is not defined at all `T`).
-The cost of closing this gap with rigidity at rule heads is
-rejecting common multi-head rule idioms that rely on cross-head
-type-variable unification (e.g. transitivity of a polymorphic
-`leq(T, T)`), so the constraint case is intentionally left lax;
-users who need stronger checking can add an explicit `requiring`
-clause to the constraint declaration.
+One corner is left open rather than claimed. Constraints are
+checked per unit (§Type Checking Procedure), and an unbound logical
+variable stored inside a constraint is constrained only
+unit-locally until it is bound; whether any unsound interleaving of
+stores and later bindings survives rigid heads is deferred to the
+planned verification work (property tests, and eventually proofs)
+rather than asserted here.
 
 Since YCHR erases types completely (no runtime casts, no blame
 tracking), the checker cannot guarantee that programs using `any` are
@@ -1602,5 +2050,12 @@ The key ingredients behind these properties are:
 - Constraint solving is order-independent in the precise sense of
   §Type Checking Procedure: acceptance and the final type assignment
   do not depend on solving order; only error attribution may vary.
+  Nothing narrows `any`, so no directed step sits outside this
+  guarantee.
+- Every evidence form satisfies the evidence criterion: its
+  operational success entails the typing fact it contributes, so
+  code checked under evidence runs only in executions where the
+  fact holds (§Guard-Derived Type Evidence).
 - The fully-typed fragment reduces to standard HM with algebraic
-  data types.
+  data types, extended with local evidence assumptions at
+  implementation sites.

@@ -1,0 +1,18 @@
+:- module(typecheck_nested_pattern_fields, [p/2, q/2]).
+
+:- use_module(library(prelude)).
+
+:- chr_constraint p(list(list(int)), list(list(int))), q(any, int).
+
+% HNF decomposes a compound depth-first, so the nested match on the
+% first element sits *between* the outer match and the extraction of
+% `Rest`: match, get 0, match, get 1. The type slot each extraction
+% reads must therefore be the one belonging to its own term — `Rest`
+% is the outer list's tail (`list(list(int))`), not the inner list's
+% (`list(int)`).
+r @ p([[_|_]|Rest], Out) <=> Out = Rest.
+
+% An `any`-typed scrutinee is inert — nothing narrows `any` — while
+% the extracted field is typed at a fresh instantiation of the
+% constructor's declared field types.
+s @ q([H|_], R) <=> R = H.

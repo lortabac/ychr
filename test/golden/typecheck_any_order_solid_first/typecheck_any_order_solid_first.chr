@@ -1,0 +1,6 @@
+:- module(tc, [foo/1, bar/1]).
+:- chr_constraint foo(any), bar(int).
+% Swapped-head twin of typecheck_any_order_any_first: the `int`
+% source is processed first here. Both orders must report the same
+% error — multi-source head typing is order-independent.
+bad @ bar(X), foo(X) <=> X = "oops".

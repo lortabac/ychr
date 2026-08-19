@@ -1,0 +1,25 @@
+% Reactivation must survive a binding that makes NEW variables
+% reachable.
+%
+% `p(X)` is stored while X is unbound, so the runtime registers the
+% suspension as an observer of X. Binding `X = g(A)` wakes it, but A is
+% still unbound and the `fire` rule does not match yet. For the later
+% `A = 1` to wake `p` again, X's observers have to have moved onto A at
+% the moment X was bound — observation is over *reachable* unbound
+% variables, and that set changes exactly then.
+%
+% `direct/1` runs the same rules with no intermediate variable, so it
+% keeps passing even when the transfer is missing: the two goals
+% together isolate the reactivation path.
+
+:- module(reactivation_through_binding, [start/1, direct/1]).
+:- use_module(library(prelude)).
+
+:- chr_type wrap ---> g(int).
+:- chr_constraint p(any), out(any), start(any), gather(any), direct(any).
+
+fire @ p(g(1)) <=> out(1).
+gather(R), out(V) <=> R = V.
+
+direct(R) <=> p(g(1)), gather(R).
+start(R) <=> p(X), X = g(A), A = 1, gather(R).

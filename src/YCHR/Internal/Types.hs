@@ -18,6 +18,7 @@ module YCHR.Internal.Types
     UnqualifiedIdentifier (..),
     Name (..),
     QualifiedName (..),
+    ConstraintKey (..),
 
     -- * Post-HNF head constraints
     HeadConstraint (..),
@@ -132,6 +133,16 @@ data Name
 data QualifiedName = QualifiedName
   { moduleName :: !Text,
     baseName :: !Text
+  }
+  deriving (Show, Eq, Ord)
+
+-- | Key of the per-constraint declaration maps (@constraintTypes@,
+-- @constraintBounds@). Constraints are arity-overloadable, so the
+-- name alone does not identify a declaration: keying by name let an
+-- arity-overloaded constraint shadow its sibling's declared types.
+data ConstraintKey = ConstraintKey
+  { name :: !QualifiedName,
+    arity :: !Int
   }
   deriving (Show, Eq, Ord)
 

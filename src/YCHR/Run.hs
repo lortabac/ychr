@@ -132,7 +132,7 @@ import YCHR.Internal.Runtime.Store (aliveConstraint)
 import YCHR.Internal.Runtime.Trace (TraceEvent (..))
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..), VarId)
 import YCHR.Internal.Runtime.Var (deref, equal, getVarId, newVar, unify)
-import YCHR.Internal.TypeCheck (typeCheckGoals)
+import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckGoals)
 import YCHR.Internal.Types (Constraint (..), Term (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Name (..), Procedure (..))
@@ -218,7 +218,11 @@ resolveQueryTellOrThrow ::
 resolveQueryTellOrThrow cp c = case resolveQueryTell cp c of
   Left rejection -> throwIO (GoalNotAConstraint c rejection)
   Right ((qn, exprs), errs)
-    | not (Map.member qn cp.desugaredProgram.constraintTypes) ->
+    | not
+        ( Map.member
+            (Types.ConstraintKey qn (length exprs))
+            cp.desugaredProgram.constraintTypes
+        ) ->
         throwIO (GoalNotAConstraint c (NotAConstraintItem qn))
     | otherwise -> do
         unless (null errs) (throwIO (ResolveErrors errs))
@@ -337,12 +341,20 @@ runPreparedGoal ::
 runPreparedGoal cp hostCalls original = do
   tcErrs <- case resolveQueryTell cp original of
     Right ((qn, exprs), errs)
-      | null errs ->
-          typeCheckGoals
-            cp.desugaredProgram
-            queryLoc
-            (Just "query")
-            [D.BodyTell qn exprs]
+      | null errs -> do
+          -- Only the errors are consumed here: this entry point has
+          -- no warning channel, and the one warning the checker can
+          -- emit (YCHR-20104) needs a guard, which a goal never has.
+          -- Should a goal-level warning ever be added, this call
+          -- needs one — 'prepareQuery', the multi-goal entry point,
+          -- already surfaces them.
+          result <-
+            typeCheckGoals
+              cp.desugaredProgram
+              queryLoc
+              (Just "query")
+              [D.BodyTell qn exprs]
+          pure result.errors
     -- Skip type-checking if name resolution failed or termToExpr
     -- raised diagnostics; the runtime path will surface the same
     -- errors with the same messages.
@@ -415,12 +427,14 @@ prepareQuery cp src = do
             constraintBounds = cdp.constraintBounds,
             typeDefinitions = cdp.typeDefinitions
           }
-  tcErrs <- typeCheckGoals progForCheck queryLoc (Just "query") lifted
-  unless (null tcErrs) (throwIO (TypeErrors tcErrs))
+  tcResult <- typeCheckGoals progForCheck queryLoc (Just "query") lifted
+  unless (null tcResult.errors) (throwIO (TypeErrors tcResult.errors))
   let allFuns = cp.allFunctions ++ lambdas
       queryProcs = compileQueryLambdas lambdas
       queryDispatches = genCallFunDispatches allFuns
-      warnings = [RenameWarnings renameWs | not (null renameWs)]
+      warnings =
+        [RenameWarnings renameWs | not (null renameWs)]
+          ++ [TypeCheckWarnings tcResult.warnings | not (null tcResult.warnings)]
   pure
     ( PreparedQuery
         { liftedGoals = lifted,

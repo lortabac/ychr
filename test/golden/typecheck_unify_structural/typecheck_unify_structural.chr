@@ -1,0 +1,14 @@
+:- module(tc, [aux/0, go/1]).
+:- use_module(prelude).
+
+% The `=` twin of is_var_propagates_type (spec §Expression Typing):
+% `=` is structural, so `Sum = 1 + 1` binds Sum to the symbolic
+% compound prelude:+(1, 1), whose type as a term is `any` — and
+% `any` does not propagate, so Sum stays flexible, `S = Sum` types
+% Sum by S rather than the other way round, and the rule
+% type-checks. Only the `is` form of the first goal is an error.
+% (The aux head keeps the rule from firing on the goal below; the
+% test pins static acceptance.)
+:- chr_constraint aux/0, go(string).
+
+w @ aux, go(S) <=> Sum = 1 + 1, S = Sum.

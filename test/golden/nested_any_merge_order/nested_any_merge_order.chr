@@ -1,0 +1,20 @@
+% A declared `any` nested inside a type must merge across a shared
+% variable exactly as a top-level one does, in either head order.
+%
+% X's two declaration sources are list(any) and list(int). Per §Type
+% states the variable keeps its most informative source, so X is
+% list(int) and passing it to s/1 is an inconsistency — whichever head
+% position comes first.
+%
+% The two rules differ only in the order of the head conjunction, so
+% they must draw the same diagnostic. `any_first` used to type-check
+% clean: the slot was bound whole to list(any) by the first head, and
+% the merge then compared an `any` that had nowhere left to go.
+
+:- module(nested_any_merge_order, []).
+:- use_module(library(prelude)).
+
+:- chr_constraint p(list(any)), q(list(int)), s(list(string)).
+
+any_first @ p(X), q(X) <=> s(X).
+int_first @ q(Y), p(Y) <=> s(Y).

@@ -1,0 +1,9 @@
+:- module(tc, [go/1]).
+:- use_module(prelude).
+:- chr_constraint go/1.
+:- function f/2.
+% Positive twin of typecheck_untyped_fn_body_bad_rhs: both params
+% are `any` (untyped f/2), so the `+` resolution stays ambiguous and
+% succeeds silently — the gradual behavior. The function still runs.
+f(X, Y) -> X + Y.
+go(R) <=> R is f(1, 2).

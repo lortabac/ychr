@@ -1,0 +1,27 @@
+:- module(typecheck_match_pins_rigid, [run/2]).
+
+:- use_module(library(prelude)).
+
+:- chr_type box(A) ---> box(A).
+
+:- function id(A) -> A.
+id(X) -> X.
+
+:- function unbox(box(A)) -> A.
+unbox(box(X)) -> X.
+
+% `T` is rigid while this equation is checked, and the pattern
+% `box(X)` is an evidence form: a successful match proves the value
+% inhabits `box`, so it pins `T := box(B)` with a *fresh rigid* `B`
+% (docs/reference/type-system.md §What evidence does). Without the
+% pin the pattern would be a rigid-versus-concrete meet and fail. `X`
+% is typed at `B`, about which nothing more may be assumed than the
+% match proved — so a polymorphic call passes and the rebuilt
+% `box(...)` still matches the declared return type `T`.
+:- function rebox(T) -> T.
+rebox(box(X)) -> box(id(X)).
+rebox(Z) -> Z.
+
+:- chr_constraint run(int, int).
+
+run(N, R) <=> R is unbox(rebox(box(N))).

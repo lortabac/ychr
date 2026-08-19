@@ -1,0 +1,14 @@
+:- module(trho, [foo/2]).
+:- use_module(library(prelude)).
+
+% A rule head is an implementation site: its body must be correct at
+% EVERY instantiation the store may hold, so the head allocates a
+% rigid T. `X > Y` is overloaded, and no declared signature of `>` is
+% consistent with a skolem — so the rule is rejected with
+% NoMatchingOverload (spec §Soundness). Discharging it takes a
+% `requiring` clause on the declaration (bounded_sorted_constraint)
+% or an evidence guard that pins T
+% (typecheck_rigid_head_evidence).
+:- chr_constraint foo(T, T).
+
+foo(X, Y) <=> X > Y.

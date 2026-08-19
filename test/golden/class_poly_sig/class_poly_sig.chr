@@ -1,0 +1,17 @@
+:- module(class_poly_sig, [go/1, type(boxed/1)]).
+:- use_module(prelude).
+:- use_module(library(strings)).
+:- chr_constraint go(any).
+:- chr_type boxed(A) ---> box(A).
+
+% A polymorphic class signature is selectable (deep consistency; the
+% shallow filter could never match a type variable in a signature
+% argument position against a concrete call type), and committing
+% copies the signature fresh, so the two calls below instantiate A
+% independently instead of the first call polluting the stored
+% signature.
+:- class (unwrap(boxed(A)) -> A), (unwrap(string) -> string).
+unwrap(box(X)) -> X.
+unwrap(S) | string(S) -> S.
+
+go(R) <=> A is unwrap(box(1)), B is unwrap(box("xy")), R is string_length(B) + A.

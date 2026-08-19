@@ -1,0 +1,19 @@
+:- module(typecheck_evidence_dead_rule, [tag/2, type(color/0)]).
+
+:- use_module(library(prelude)).
+
+% docs/reference/type-system.md §Inaccessible branches, verbatim: `X`
+% is typed `color`, and the guard's fact `type(X) = int` contradicts
+% it. No color-typed value is an integer, so within the typed fragment
+% the `dead` rule can never fire. That is dead code, not a type error:
+% the rule otherwise checks clean, so it draws YCHR-20104 (a warning),
+% the program compiles, and `fallback` is what runs.
+%
+% The module exports `type(color/0)` so the goal can build a
+% `typecheck_evidence_dead_rule:red` value.
+:- chr_type color ---> red ; green ; blue.
+
+:- chr_constraint tag(color, int).
+
+dead @ tag(X, R) <=> integer(X) | R = 1.
+fallback @ tag(_, R) <=> R = 0.

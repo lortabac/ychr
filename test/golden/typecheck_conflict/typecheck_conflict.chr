@@ -1,3 +1,0 @@
-:- module(tc, [foo/1, bar/1]).
-:- chr_constraint foo(int), bar(string).
-bad @ foo(X), bar(X) <=> true.

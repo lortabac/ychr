@@ -58,7 +58,7 @@ module YCHR.Internal.Rename
   )
 where
 
-import Control.Monad (when)
+import Control.Monad (foldM_, when)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Writer.CPS (Writer, WriterT, runWriter, runWriterT, tell)
 import Data.Foldable (traverse_)
@@ -123,6 +123,22 @@ data RenameError
     -- arity-overloadable, so the name alone identifies the clash.
     -- Carries the constructor name and the list of providers.
     AmbiguousDataConstructor Text [Text]
+  | -- | A @:- chr_type@ / @:- opaque_type@ declaration whose name is a
+    -- reserved type name: a base type (@int@, @float@, @string@,
+    -- @any@) or function-type syntax (@fun@, @->@). Declaring one
+    -- silently rewrote every use of the name in the module to a
+    -- nominal user type, breaking the built-in meaning. Carries the
+    -- type name and arity.
+    ReservedTypeName Text Int
+  | -- | The same @(name, arity)@ is declared by two type declarations
+    -- in one module. The renamer resolves type names by single
+    -- provider, so every use silently degraded to an unresolved name.
+    -- Carries the type name and arity.
+    DuplicateTypeDeclaration Text Int
+  | -- | A type declaration collides with a type of the same name and
+    -- arity visible through an import. Carries the type name, the
+    -- arity, and the providing module.
+    TypeShadowsImport Text Int Text
   deriving (Eq, Show)
 
 data RenameWarning
@@ -503,6 +519,7 @@ renameModule :: [CollectedModule] -> RenameCtx -> Rename CollectedModule
 renameModule mods ctx = do
   let m = ctx.currentModule
   validateImportLists mods ctx
+  validateTypeDecls ctx
   renamedRules <- traverse (renameRule ctx) m.rules
   renamedEquations <- traverse (traverse (renameEquation ctx)) m.equations
   renamedExtensions <- traverse (traverse (renameEquation ctx)) m.extensions
@@ -1231,22 +1248,61 @@ resolveTypeName ctx n arity =
         filter
           (== ctx.currentModule.name)
           (lookupDecl (n, arity) ctx.typeDeclEnv)
-      imports =
-        [ (imp.importModule, imp.importItems)
-        | AnnP imp _ _ <- ctx.currentModule.imports
-        ]
-      importProviders =
-        filter
-          ( \mn ->
-              any
-                (\(imn, il) -> imn == mn && importListPermitsType n arity il)
-                imports
-          )
-          (lookupExport (n, arity) ctx.typeExportEnv)
-      matches = ownProviders ++ importProviders
+      matches = ownProviders ++ typeImportProviders ctx n arity
    in case matches of
         [m] -> Qualified m n
         _ -> Unqualified n
+
+-- | Import-visible providers of type @(n, arity)@: modules the current
+-- module imports whose import list permits the type and which export
+-- it.
+typeImportProviders :: RenameCtx -> Text -> Int -> [Text]
+typeImportProviders ctx n arity =
+  let imports =
+        [ (imp.importModule, imp.importItems)
+        | AnnP imp _ _ <- ctx.currentModule.imports
+        ]
+   in filter
+        ( \mn ->
+            any
+              (\(imn, il) -> imn == mn && importListPermitsType n arity il)
+              imports
+        )
+        (lookupExport (n, arity) ctx.typeExportEnv)
+
+-- | Type names the grammar wires in: the base types plus the
+-- function-type syntax. Declaring any of them as a user type would
+-- silently rewrite every use in the module to a nominal user type.
+reservedTypeNames :: Set.Set Text
+reservedTypeNames = Set.fromList ["int", "float", "string", "any", "fun", "->"]
+
+-- | Reject type declarations whose name collides with a reserved type
+-- name, an earlier declaration in the same module, or a type visible
+-- through an import (spec §Type Definitions: the declared name "must
+-- not collide with a base/reserved type name or another visible
+-- type"). Without the check every use of a colliding name silently
+-- degraded: 'resolveTypeName' falls back to 'Unqualified' whenever
+-- the providers are not unique, turning the built-in or imported
+-- meaning into an unresolved nominal type with no diagnostic.
+validateTypeDecls :: RenameCtx -> Rename ()
+validateTypeDecls ctx = foldM_ step Set.empty ctx.currentModule.typeDecls
+  where
+    step seen (Ann td _) = do
+      let n = unqualifiedText td.name
+          arity = length td.typeVars
+          origin = Atom n
+      when (n `Set.member` reservedTypeNames) $
+        emitError (AnnP (ReservedTypeName n arity) td.loc origin)
+      when ((n, arity) `Set.member` seen) $
+        emitError (AnnP (DuplicateTypeDeclaration n arity) td.loc origin)
+      -- Module identity is name-based, so a module that shadows a
+      -- same-named library (e.g. a module `strings` importing
+      -- `library(strings)`) is indistinguishable from itself here;
+      -- skip providers carrying the current module's own name.
+      case filter (/= ctx.currentModule.name) (typeImportProviders ctx n arity) of
+        (pm : _) -> emitError (AnnP (TypeShadowsImport n arity pm) td.loc origin)
+        [] -> pure ()
+      pure (Set.insert (n, arity) seen)
 
 -- ---------------------------------------------------------------------------
 -- Query renaming
