@@ -633,6 +633,7 @@ endToEndTests =
       crossModuleEndToEnd,
       factorialEndToEnd,
       chrTypeEndToEnd,
+      chrTypeCtorGoalEndToEnd,
       guardEndToEnd
     ]
 
@@ -713,7 +714,10 @@ factorialEndToEnd =
 
 -- | Algebraic-type definition (@:- chr_type color ---> red ; green ; blue@).
 -- The constraint @paint/1@ is declared with a typed argument; the rule simply
--- removes any @paint@ to verify the typed program compiles and runs.
+-- removes any @paint@ to verify the typed program compiles and runs. The head
+-- is a variable, so this says nothing about whether the goal's @red@ matches a
+-- constructor pattern — @color@ is not on the export list, so it would not.
+-- 'chrTypeCtorGoalEndToEnd' below covers that.
 chrTypeEndToEnd :: TestTree
 chrTypeEndToEnd =
   testCase "chr_type color: typed constraint compiles and runs" $ do
@@ -731,6 +735,27 @@ chrTypeEndToEnd =
             `defining` [[term "paint" [var "C"]] <=> [bool True]]
     bindings <- runDSL [m] (term "paint" [atom "red"])
     Map.keys bindings @?= []
+
+-- | A goal argument naming a declared data constructor is canonicalized
+-- before the goal runs, so it matches the head pattern the rule was
+-- compiled from. The type is exported with 'typeExport' so its
+-- constructors are visible to the query.
+chrTypeCtorGoalEndToEnd :: TestTree
+chrTypeCtorGoalEndToEnd =
+  testCase "chr_type color: a constructor goal argument matches its head" $ do
+    let m =
+          module' "tcg"
+            `exporting` ["paint" // 2, typeExport "color" 0]
+            `declaring` ["paint" // 2]
+            `chrType` tyDef
+              "color"
+              []
+              [dataCtor "red" [], dataCtor "green" []]
+            `defining` [ [term "paint" [atom "red", var "R"]] <=> [var "R" .=. int 1],
+                         [term "paint" [atom "green", var "R"]] <=> [var "R" .=. int 2]
+                       ]
+    bindings <- runDSL [m] (term "paint" [atom "green", var "R"])
+    Map.lookup "R" bindings @?= Just (IntTerm 2)
 
 -- | Simplification with a guard built from @is@ and @(.<)@. Mirrors the
 -- @clamp@ shape of @test/golden/guard@: the low branch fires when @X < Lo@,

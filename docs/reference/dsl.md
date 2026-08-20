@@ -211,6 +211,14 @@ main = do
   -- Just (IntTerm 5)
 ```
 
+The goal's arguments are renamed against the compiled program before it
+runs, exactly as a surface-text goal is: a bare `atom "red"` or
+`term "red" []` naming a data constructor the program declares and
+exports (`typeExport`) is canonicalized to `m:red`, which is what the
+compiled head patterns match. Leave the type off the export list and its
+constructors stay unqualified in the goal, so the rules written against
+them never fire.
+
 If you need to register custom `host:_` functions, use
 `runDSLWithHostCallRegistry`:
 

@@ -1,1 +1,1 @@
-stlc:typecheck(quote(app(lit_int(1), lit_int(2))), R)
+stlc:typecheck(app(lit_int(1), lit_int(2)), R)

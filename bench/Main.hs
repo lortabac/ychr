@@ -4,7 +4,7 @@
 --
 -- Each benchmark loads a CHR program and its matching goal from
 -- @test/golden/<name>/@ once at startup, then measures only the call to
--- 'runProgramWithGoalDSL' — i.e. the actual VM execution with runtime
+-- 'runGoalConstraint' — i.e. the actual VM execution with runtime
 -- initialization, excluding parsing, renaming, desugaring, and CHR-to-VM
 -- compilation.
 module Main (main) where
@@ -16,12 +16,12 @@ import System.FilePath ((<.>), (</>))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Meta (metaHostCallRegistry)
 import YCHR.Internal.Parser (parseConstraint)
-import YCHR.Internal.Rename (renameQueryArgs)
 import YCHR.Internal.Runtime.Interpreter (baseHostCallRegistry)
 import YCHR.Internal.Runtime.Registry (HostCallRegistry)
 import YCHR.Run
   ( compileFiles,
-    runProgramWithGoalDSL,
+    prepareGoalTerm,
+    runGoalConstraint,
   )
 import YCHR.Types (Constraint (..))
 
@@ -64,18 +64,16 @@ loadCase name = do
     Left err -> fail ("compile failed for " ++ name ++ ": " ++ show err)
     Right (p, _warnings) -> pure p
   goalText <- TIO.readFile goalPath
-  Constraint cname cargs <- case parseConstraint "<bench>" (T.strip goalText) of
+  parsedGoal <- case parseConstraint "<bench>" (T.strip goalText) of
     Left err -> fail ("goal parse failed for " ++ name ++ ": " ++ show err)
     Right (Left validErr) -> fail ("goal parse failed for " ++ name ++ ": " ++ show validErr)
     Right (Right c) -> pure c
-  -- Mirror the query-side canonicalization that runProgramWithGoal does
-  -- (rename bare data-constructor references) so the goal's term shapes
-  -- match the compiled head patterns. Name resolution to a qualified
-  -- form is handled inside 'runProgramWithGoalDSL'.
-  renamedArgs <- case renameQueryArgs prog.allModules cargs of
-    Left errs -> fail ("goal rename failed for " ++ name ++ ": " ++ show errs)
-    Right (args, _warnings) -> pure args
-  pure (BenchCase name prog (Constraint cname renamedArgs))
+  -- Canonicalize the goal's arguments here, at setup time, so criterion
+  -- measures VM execution only. 'runGoalConstraint' takes the prepared
+  -- goal as-is; the convenience entry point 'runProgramWithGoalDSL'
+  -- would redo this work on every iteration.
+  (goal, _warnings) <- prepareGoalTerm prog parsedGoal
+  pure (BenchCase name prog goal)
 
 -- | The host call registry used by all benchmarks. Same combination as the
 -- golden test harness in @test/YCHR/GoldenTest.hs@.
@@ -86,7 +84,7 @@ benchHostCalls = baseHostCallRegistry <> metaHostCallRegistry
 makeBench :: BenchCase -> Benchmark
 makeBench bc =
   bench bc.name $
-    whnfIO (runProgramWithGoalDSL bc.program benchHostCalls bc.goal)
+    whnfIO (runGoalConstraint bc.program benchHostCalls bc.goal)
 
 main :: IO ()
 main = do

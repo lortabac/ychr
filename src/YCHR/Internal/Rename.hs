@@ -44,8 +44,10 @@
 module YCHR.Internal.Rename
   ( -- * Entry points
     renameProgram,
-    renameQueryGoals,
-    renameQueryArgs,
+    QueryRenameEnv,
+    buildQueryRenameEnv,
+    renameQueryGoalsWith,
+    renameQueryArgsWith,
     buildExportEnv,
 
     -- * Errors and warnings
@@ -1326,40 +1328,21 @@ validateTypeDecls ctx = foldM_ step Set.empty ctx.currentModule.typeDecls
 -- Query renaming
 -- ---------------------------------------------------------------------------
 
--- | Like 'renameQueryGoals' but uses 'NoResolve' mode — appropriate
--- for the argument terms of a single goal constraint, where each
--- term is data (constructors / atoms / variables) rather than a
--- callable. Canonicalizes bare data-constructor references the same
--- way the renamer does for head-pattern arguments.
-renameQueryArgs ::
-  [CollectedModule] ->
-  [Term] ->
-  Either
-    [Diagnostic RenameError]
-    ( [Term],
-      [Diagnostic RenameWarning]
-    )
-renameQueryArgs mods args = renameQueryTerms mods NoResolve args
+-- | The renaming environment for query terms: the whole-program
+-- name environment as seen from a synthetic @\<query\>@ module that
+-- imports every loaded module.
+--
+-- Building it walks every module (declarations, exports, type
+-- declarations, data constructors), so it is built once per compiled
+-- program and carried on
+-- 'YCHR.Internal.Compile.Pipeline.CompiledProgram' rather than
+-- rebuilt per query. Opaque on purpose: the wrapped 'RenameCtx' is an
+-- implementation detail of this module.
+newtype QueryRenameEnv = QueryRenameEnv RenameCtx
 
--- | Rename a list of query goal terms using all modules as the visible
--- scope. Each term is renamed at 'ResolveTop' level (same as rule bodies).
--- Returns 'Left' if any rename errors occur.
-renameQueryGoals ::
-  [CollectedModule] ->
-  [Term] ->
-  Either
-    [Diagnostic RenameError]
-    ( [Term],
-      [Diagnostic RenameWarning]
-    )
-renameQueryGoals mods goals = renameQueryTerms mods ResolveTop goals
-
-renameQueryTerms ::
-  [CollectedModule] ->
-  ResolveMode ->
-  [Term] ->
-  Either [Diagnostic RenameError] ([Term], [Diagnostic RenameWarning])
-renameQueryTerms mods mode terms =
+-- | Build the query-time renaming environment for a program's modules.
+buildQueryRenameEnv :: [CollectedModule] -> QueryRenameEnv
+buildQueryRenameEnv mods =
   let queryMod =
         CollectedModule
           { name = "<query>",
@@ -1389,12 +1372,47 @@ renameQueryTerms mods mode terms =
             currentModule = queryMod
           }
       visible = visibleDataCons mods ctx0
-      ctx =
+   in QueryRenameEnv
         ctx0
           { dataConEnv = buildDataConEnv visible mods,
             dataConProviders = buildDataConProviders visible mods
           }
-      ((renamed, warnings), errs) =
+
+-- | Like 'renameQueryGoalsWith' but uses 'NoResolve' mode — appropriate
+-- for the argument terms of a single goal constraint, where each
+-- term is data (constructors / atoms / variables) rather than a
+-- callable. Canonicalizes bare data-constructor references the same
+-- way the renamer does for head-pattern arguments.
+renameQueryArgsWith ::
+  QueryRenameEnv ->
+  [Term] ->
+  Either
+    [Diagnostic RenameError]
+    ( [Term],
+      [Diagnostic RenameWarning]
+    )
+renameQueryArgsWith env args = renameQueryTerms env NoResolve args
+
+-- | Rename a list of query goal terms using all modules as the visible
+-- scope. Each term is renamed at 'ResolveTop' level (same as rule bodies).
+-- Returns 'Left' if any rename errors occur.
+renameQueryGoalsWith ::
+  QueryRenameEnv ->
+  [Term] ->
+  Either
+    [Diagnostic RenameError]
+    ( [Term],
+      [Diagnostic RenameWarning]
+    )
+renameQueryGoalsWith env goals = renameQueryTerms env ResolveTop goals
+
+renameQueryTerms ::
+  QueryRenameEnv ->
+  ResolveMode ->
+  [Term] ->
+  Either [Diagnostic RenameError] ([Term], [Diagnostic RenameWarning])
+renameQueryTerms (QueryRenameEnv ctx) mode terms =
+  let ((renamed, warnings), errs) =
         runWriter
           ( runWriterT $
               traverse (renameTerm ctx dummyLoc (Atom "") mode) terms

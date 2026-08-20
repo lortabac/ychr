@@ -60,11 +60,26 @@ tvar(0))` is produced by numbering the residual type variables with
 `term_variables` at the very end.
 
 The object language (`var`, `lam`, `app`, `lit_int`, `add`) is
-**host-supplied data**, matched structurally in rule heads. It is left
-undeclared rather than given a `:- chr_type`, because a declared
-constructor is module-qualified and would not match the bare functors the
-host builds. (`ychr check` notes each as an undeclared constructor; that
-is expected here.)
+**host-supplied data**, matched structurally in rule heads. It is a
+declared type, and the module exports it:
+
+```prolog
+:- module(stlc, [typecheck/2, type(expr/0)]).
+
+:- chr_type expr ---> var(string)
+                    ; lam(string, expr)
+                    ; app(expr, expr)
+                    ; lit_int(int)
+                    ; add(expr, expr).
+```
+
+Exporting the type is what makes the embedding work: the goal arguments a
+host builds are renamed exactly like rule-head arguments, so a bare `var`
+is canonicalized to `stlc:var` — the same qualified functor the heads were
+compiled to — and matches. A type the module declares but does not export
+is invisible to the query: its bare uses stay unqualified, so the rules
+written against them never fire and the goal comes back with the result
+variable unbound.
 
 ## 2. Encode the input with `ToTerm`
 
@@ -82,19 +97,20 @@ instance ToTerm Expr where
   toTerm (Add a b)  = compound "add" [toTerm a, toTerm b]
 ```
 
-The goal wraps the encoded term in `quote/1` — that is what `quote` does —
-so it is passed as data. Without the quote, the argument would be
-*evaluated*, and `var("x")` in particular would call the prelude's `var/1`
-predicate instead of naming a variable node (see
-[the language reference](../reference/language.md) on the `quote/1` quoting
-form):
+The encoded term goes straight into the goal:
 
 ```haskell
 typecheckGoal :: Expr -> Term
-typecheckGoal e = compound "typecheck" [quote e, VarTerm "Result"]
+typecheckGoal e = compound "typecheck" [toTerm e, VarTerm "Result"]
 ```
 
-`quote` accepts any `ToTerm` value, so the `toTerm e` call is implicit.
+No quoting is needed even though goal arguments are *evaluated*: `var/1`
+resolves to this program's exported constructor, not the prelude's `var/1`
+function, so it stays data. Constructors that are **not** declared have no
+such protection — for those, wrap the argument in `quote/1` with `quote`
+(see [the conversion reference](../reference/convert.md#reusing-a-compiled-program)
+and [the language reference](../reference/language.md) on the `quote/1`
+quoting form).
 
 ## 3. Decode the result with `FromTerm`
 

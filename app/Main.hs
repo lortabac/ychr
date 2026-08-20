@@ -14,9 +14,7 @@ import YCHR.Internal.Backend.SchemeDriver (generateDriver)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Meta (metaHostCallRegistry)
-import YCHR.Internal.Parser (parseConstraintWith)
 import YCHR.Internal.Pretty (prettyBindings)
-import YCHR.Internal.Rename (renameQueryArgs)
 import YCHR.Internal.Repl qualified as Repl
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
@@ -25,12 +23,10 @@ import YCHR.Run
   ( Error (..),
     Warning (..),
     compileFiles,
-    goalShapeConstraint,
     prepareGoal,
     resolveQueryTellOrThrow,
     runPreparedGoal,
   )
-import YCHR.Types (Constraint (..))
 
 -- ---------------------------------------------------------------------------
 -- Command-line options
@@ -252,37 +248,18 @@ runGenDriver :: GenDriverOpts -> [FilePath] -> IO ()
 runGenDriver opts files = withCompiled False files $ \prog warnings -> do
   printWarnings warnings
   typeWarnings <- typeCheckOrExit prog
-  Constraint cname cargs <- case parseConstraintWith prog.opTable "<query>" opts.gdGoal of
-    Left err -> do
-      putStr (displayMsg (ParseError "<query>" err))
-      exitFailure
-    Right parsed -> case either goalShapeConstraint Right parsed of
-      Left validErr -> do
-        putStr (displayMsg (ParseValidationErrors [validErr]))
-        exitFailure
-      Right c -> pure c
-  -- Canonicalize bare data-constructor references in the goal's
-  -- arguments so they reach the runtime in the same flat-functor
-  -- form the compiled head patterns expect.
-  (renamedArgs, goalWarnings) <- case renameQueryArgs prog.allModules cargs of
-    Left errs -> do
-      putStr (displayMsg (RenameErrors errs))
-      exitFailure
-    Right (rs, ws) -> do
-      let gws = [RenameWarnings ws | not (null ws)]
-      printWarnings gws
-      pure (rs, gws)
-  outcome <-
-    try @SomeException
-      (resolveQueryTellOrThrow prog (Constraint cname renamedArgs))
+  -- 'prepareGoal' parses the goal and canonicalizes bare
+  -- data-constructor references in its arguments, so they reach the
+  -- runtime in the same flat-functor form the compiled head patterns
+  -- expect.
+  prepResult <- try @SomeException (prepareGoal prog opts.gdGoal)
+  (constraint, goalWarnings) <- case prepResult of
+    Left e -> reportGenErrorAndExit e
+    Right pair -> pure pair
+  printWarnings goalWarnings
+  outcome <- try @SomeException (resolveQueryTellOrThrow prog constraint)
   (qn, exprs) <- case outcome of
-    Left e -> case fromException e of
-      Just (err :: Error) -> do
-        putStr (displayMsg err)
-        exitFailure
-      Nothing -> do
-        hPutStr stderr ("Error: " ++ displayException e ++ "\n")
-        exitFailure
+    Left e -> reportGenErrorAndExit e
     Right pair -> pure pair
   -- Combine file-level, type-check, and goal-level warnings into a
   -- single Werror decision so a single run reports every warning
@@ -290,6 +267,12 @@ runGenDriver opts files = withCompiled False files $ \prog warnings -> do
   exitOnWerror opts.werror (warnings ++ typeWarnings ++ goalWarnings)
   TIO.putStr (generateDriver (T.pack "program") qn exprs)
   schemeRuntimeNote
+  where
+    reportGenErrorAndExit exc = do
+      case fromException exc of
+        Just err -> putStr (displayMsg (err :: Error))
+        Nothing -> hPutStr stderr ("Error: " ++ displayException exc ++ "\n")
+      exitFailure
 
 runCheck :: CheckOpts -> [FilePath] -> IO ()
 runCheck opts files = withCompiled False files $ \prog warnings -> do

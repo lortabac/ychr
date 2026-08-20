@@ -281,6 +281,79 @@ just as silently — `validateTypeDecls` already works around exactly
 this ("a module that shadows a same-named library … is
 indistinguishable from itself here", `Rename.hs:1316-1319`).
 
+## `true` / `false` in a head or equation pattern can never match
+
+**Documented claim.** `docs/reference/language.md` treats `true` and
+`false` as the constructors of the prelude's `bool` type
+(`libraries/prelude.chr:53`), with no carve-out excluding them from
+pattern position. `docs/reference/type-system.md` documents `bool` as an
+ordinary algebraic type, so `p(true, R) <=> ...` reads as a normal
+constructor pattern.
+
+**Test.**
+
+    :- module(booltest, [go/2, neg_of/2]).
+    :- chr_constraint go(bool, any), neg_of(bool, any).
+    :- function neg(bool) -> bool.
+    neg(true)  -> false.
+    neg(false) -> true.
+    go(true, R)  <=> R = "yes".
+    neg_of(X, R) <=> R is neg(X).
+
+    ychr run -g 'booltest:go(true, R)'     --show-bindings booltest.chr
+    ychr run -g 'booltest:neg_of(true, R)' --show-bindings booltest.chr
+
+**Expected.** `R = "yes"` for the rule, `R = false` for the function.
+
+**Actual.** The rule silently does not fire:
+
+    R = _
+
+and the function raises, naming the very equation that should have
+matched:
+
+    booltest.chr:4:1: YCHR-60001
+    <<function booltest:neg/1>>
+    CHR runtime error: no matching equation
+    neg(true) -> false
+
+Nested patterns fail the same way: with `type(box/0)` exported and
+`:- chr_type box ---> box(bool).`, the goal `nested(box(true), R)`
+against `nested(box(true), R) <=> R = "inner".` leaves `R` unbound.
+
+**Cause.** The value side and the pattern side disagree about the
+representation. Building a `true` value takes the native-bool fast path
+— `compileExpr` / `compileTerm`
+(`src/YCHR/Internal/Compile.hs:511-514`, `:566-570`) map the
+renamer-canonicalized `prelude:true` / `prelude:false` to
+`Lit (BoolLit …)`, which evaluates to `VBool`. Matching a `true`
+*pattern* does not: HNF emits a `D.GuardMatch` and `compileMatchGuard`
+(`src/YCHR/Internal/Compile.hs:743`) lowers it to
+`BMatchTerm operand "prelude__true" 0`, a compound/atom test. `matchTerm`
+(`src/YCHR/Internal/Runtime/Var.hs:275-281`) accepts `VAtom` and `VTerm`
+only, so a `VBool` falls through to `False`. The Scheme runtime's
+`match-term` (`scheme/ychr/var.sls:192-199`) has the identical shape, so
+both backends are affected. Bare `true` in a rule *body* is unaffected
+(it means "empty body"), and `X == true` in a guard is unaffected (it
+compiles to `BEqual` against a `BoolLit`, which `equal` handles).
+
+**Impact.** Every `true` / `false` in a rule-head or function-equation
+pattern, at any nesting depth. Rules quietly do not fire; functions
+raise `YCHR-60001` pointing at the equation that should have matched.
+Pre-dates the goal-argument canonicalization work — it reproduces on the
+surface-text path, and a host-built `atom "true"` failed the same way
+before canonicalization (as `VAtom "true"` against `"prelude__true"`).
+
+**Fix sketch.** Make the pattern side mirror the value side in the
+compiler, where the `prelude:true` / `prelude:false` mapping is already
+stated: have `compileMatchGuard` emit `BEqual operand (Lit (BoolLit b))`
+for a `GuardMatch` naming those two constructors at arity 0, instead of
+a `BMatchTerm`. Teaching `matchTerm` about `VBool` is the alternative,
+but that hard-codes the mangled `prelude__true` spelling in both
+runtimes rather than keeping the knowledge in the one layer that already
+owns it. Pin it with a golden covering all three shapes: head pattern,
+equation pattern, and nested pattern.
+
 ## Diagnostics for an `:- extend_function` equation blame the owner's first equation
 
 **Documented claim.** Implicit: a diagnostic points at the code that

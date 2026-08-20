@@ -198,16 +198,35 @@ main = do
 whole-map and custom-registry variants, mirroring `runQueryWith` /
 `runQueryWithHostCallRegistry`.
 
-> **Passing symbolic data.** Goal arguments are *evaluated* (like any
-> tell). If you pass a compound that should stay symbolic — an
-> object-language term, say — wrap it in `quote/1` with `quote expr`;
-> otherwise a constructor whose name is also a declared function is called
-> instead of kept as data. `quote` takes any `ToTerm` value, so it
-> subsumes the `toTerm` call, and it belongs at the goal-construction site
-> rather than inside a `ToTerm` instance.
+> **Passing symbolic data.** Goal arguments are renamed exactly like
+> rule-head arguments before they run: a bare reference to a data
+> constructor the program declares *and exports* is canonicalized to its
+> qualified form, which is what the compiled head patterns match. That
+> also settles the pun case — a constructor whose name is shared with a
+> visible function resolves to the constructor and stays data.
+>
+> Exporting matters: a type the program declares but does not export is
+> invisible to the query, its constructors stay unqualified, and the rules
+> written against them silently do not fire (you get an unbound result
+> variable, not an error). That case does warn — `YCHR-20101` — but these
+> wrappers have no warning channel and discard it. Use
+> `YCHR.Run.runProgramWithGoalDSLWithWarnings`, which returns
+> `(bindings, [Warning])`, when you want to see them.
+>
+> Goal arguments are still *evaluated* (like any tell), so a compound
+> whose functor names a function and nothing else is called. To pass an
+> **undeclared** compound as symbolic data, wrap it in `quote/1` with
+> `quote expr`. `quote` takes any `ToTerm` value, so it subsumes the
+> `toTerm` call, and it belongs at the goal-construction site rather than
+> inside a `ToTerm` instance.
+>
+> Renaming a goal argument can also *fail*, throwing an `Error` (not a
+> `ConvertError`): an unqualified constructor exported by two modules is
+> ambiguous (`YCHR-20012`), and a `qterm`-built qualified name must
+> actually be exported by the module it names (`YCHR-20010`).
 
 For a complete worked example — a lambda-calculus type inferencer written in
-CHR and driven from Haskell, including the `quote` pattern above — see
+CHR and driven from Haskell — see
 [`how-to/embed-a-chr-module.md`](../how-to/embed-a-chr-module.md) and
 [`examples/stlc/`](../../examples/stlc/).
 

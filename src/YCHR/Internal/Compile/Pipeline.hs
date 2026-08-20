@@ -55,10 +55,12 @@ import YCHR.Internal.Parser
     parseModuleWith,
   )
 import YCHR.Internal.Rename
-  ( RenameError,
+  ( QueryRenameEnv,
+    RenameError,
     RenameInputs (..),
     RenameWarning,
     buildExportEnv,
+    buildQueryRenameEnv,
     renameProgram,
   )
 import YCHR.Internal.Rename.Types (toListExport)
@@ -188,6 +190,13 @@ data CompiledProgram = CompiledProgram
     -- builds: every function declared by any loaded module is in scope
     -- for a query.
     queryFunctionVisibility :: FunVisibility,
+    -- | Renaming environment for query terms, mirroring the same
+    -- synthetic @\<query\>@ module. Carried here rather than rebuilt
+    -- per query: building it walks every module, and the
+    -- compile-once\/query-many entry points would otherwise pay that
+    -- cost on every goal. The field is lazy, so compile-only users
+    -- ('ychr check') never build it.
+    queryRenameEnv :: QueryRenameEnv,
     -- | The desugared program (before lambda lifting), for type checking.
     desugaredProgram :: D.Program
   }
@@ -364,16 +373,18 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
         length [() | f <- desugared'.functions, isLambdaName (Types.qualifiedToName f.name)]
   pure
     ( CompiledProgram
-        prog
-        exportMap
-        exportedSet
-        symTab
-        allMods
-        queryTable
-        desugared'.functions
-        lambdaCount
-        (buildQueryFunctionVisibility allMods)
-        desugared,
+        { program = prog,
+          exportMap = exportMap,
+          exportedSet = exportedSet,
+          symbolTable = symTab,
+          allModules = allMods,
+          opTable = queryTable,
+          allFunctions = desugared'.functions,
+          nextLambdaIndex = lambdaCount,
+          queryFunctionVisibility = buildQueryFunctionVisibility allMods,
+          queryRenameEnv = buildQueryRenameEnv allMods,
+          desugaredProgram = desugared
+        },
       warnings
     )
   where

@@ -34,6 +34,8 @@ import YCHR.Run
     newVar,
     resolveQueryConstraint,
     runProgramWithGoal,
+    runProgramWithGoalDSL,
+    runProgramWithGoalDSLWithWarnings,
     runProgramWithQuery,
     tellConstraint,
     toSessionInput,
@@ -49,6 +51,7 @@ tests =
       visibilityTests,
       queryErrorTests,
       queryBodyTests,
+      goalWarningTests,
       guardErrorTests,
       unicodeTests,
       arityOverloadTests
@@ -305,6 +308,63 @@ visibilityTests =
         case resolveQueryConstraint cp q of
           Right _ -> pure ()
           Left err -> assertFailure $ "Should succeed with qualification: " ++ show err
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Goal-argument warnings
+-- ---------------------------------------------------------------------------
+
+-- | Two @paint@ constraints over the same constructors. @exported@
+-- exports its type, so a host goal naming @red@ canonicalizes and the
+-- rule fires; @hidden@ does not, so the same goal warns and no rule
+-- matches. The pair is what makes the warning worth surfacing: it is
+-- the only signal that an otherwise successful run did nothing.
+goalWarningSource :: Text
+goalWarningSource =
+  ":- module(exported, [paint/2, type(col/0)]).\n\
+  \:- chr_type col ---> red ; green.\n\
+  \:- chr_constraint paint(col, any).\n\
+  \paint(red, R) <=> R = 1.\n"
+
+goalWarningHiddenSource :: Text
+goalWarningHiddenSource =
+  ":- module(hidden, [shade/2]).\n\
+  \:- chr_type tone ---> dark ; light.\n\
+  \:- chr_constraint shade(tone, any).\n\
+  \shade(dark, R) <=> R = 1.\n"
+
+-- | @c(Ctor, R)@ with a bare (unqualified) constructor argument, the
+-- shape a host builds.
+ctorGoal :: Text -> Text -> Constraint
+ctorGoal c ctor =
+  Constraint (Unqualified c) [CompoundTerm (Unqualified ctor) [], VarTerm "R"]
+
+paintGoal :: Text -> Constraint
+paintGoal = ctorGoal "paint"
+
+goalWarningTests :: TestTree
+goalWarningTests =
+  testGroup
+    "Goal-argument warnings"
+    [ testCase "exported constructor: rule fires, no warnings" $ do
+        cp <- compileOrFail [("exported.chr", goalWarningSource)]
+        let q = paintGoal "red"
+        (bindings, ws) <- runProgramWithGoalDSLWithWarnings cp Map.empty q
+        Map.lookup "R" bindings @?= Just (IntTerm 1)
+        assertBool ("expected no warnings, got: " ++ show (map displayMsg ws)) (null ws),
+      testCase "non-exported constructor: YCHR-20101 and no match" $ do
+        cp <- compileOrFail [("hidden.chr", goalWarningHiddenSource)]
+        let q = ctorGoal "shade" "dark"
+        (bindings, ws) <- runProgramWithGoalDSLWithWarnings cp Map.empty q
+        Map.lookup "R" bindings @?= Just Wildcard
+        assertBool
+          ("expected a YCHR-20101 warning, got: " ++ show (map displayMsg ws))
+          (any (("YCHR-20101" `isInfixOf`) . displayMsg) ws),
+      testCase "runProgramWithGoalDSL agrees on the bindings" $ do
+        cp <- compileOrFail [("exported.chr", goalWarningSource)]
+        let q = paintGoal "red"
+        bindings <- runProgramWithGoalDSL cp Map.empty q
+        Map.lookup "R" bindings @?= Just (IntTerm 1)
     ]
 
 -- ---------------------------------------------------------------------------

@@ -75,6 +75,7 @@ module YCHR.Convert
     withDefaultHostFunctions,
 
     -- * Typed query wrapper
+    -- $goalArguments
     runQuery,
     runQueryWith,
     runQueryWithHostCallRegistry,
@@ -420,14 +421,38 @@ lookupBinding = Map.lookup
 -- Typed query wrapper
 -- ---------------------------------------------------------------------------
 
+-- $goalArguments
+-- A goal's arguments are renamed before the goal runs, exactly as the
+-- arguments of a rule head are: a bare reference to a data constructor
+-- the program declares /and exports/ is canonicalized to its qualified
+-- form, which is what the compiled head patterns match. That also
+-- settles the pun case — a constructor sharing its name with a visible
+-- function resolves to the constructor and stays data.
+--
+-- A type the program declares but does not export is invisible to the
+-- query: its constructors stay unqualified and the rules written against
+-- them silently do not fire. That case warns (@YCHR-20101@), but these
+-- wrappers have nowhere to put warnings and discard them — reach for
+-- 'YCHR.Run.runProgramWithGoalDSLWithWarnings' to see them.
+--
+-- Renaming can also fail outright — an ambiguous unqualified constructor
+-- (@YCHR-20012@), or a qualified name the named module does not export
+-- (@YCHR-20010@) — and those are thrown as 'Error', not returned as a
+-- 'ConvertError'.
+--
+-- Goal arguments are still /evaluated/, so to pass an __undeclared__
+-- compound as symbolic data, wrap it with 'quote'.
+
 -- | Compile the modules, run the goal 'Term', and decode a single goal
 -- variable's binding as a Haskell value. The goal is built exactly like a
 -- rule head or "YCHR.DSL" body goal (e.g. @term \"leq\" [int 1, var \"R\"]@);
--- its 'ToTerm'-encoded arguments run at tell time.
+-- its 'ToTerm'-encoded arguments are canonicalized like rule-head
+-- arguments (see $goalArguments) and then run at tell time.
 --
--- Compilation failures are thrown as 'Error' (as 'YCHR.DSL.runDSL' does);
--- decoding failures are returned as 'Left'. Uses the base + meta host-call
--- registries and includes the standard library.
+-- Compilation failures are thrown as 'Error' (as 'YCHR.DSL.runDSL' does),
+-- as are goal-argument rename failures; decoding failures are returned as
+-- 'Left'. Uses the base + meta host-call registries and includes the
+-- standard library.
 runQuery :: (FromTerm a) => [Module] -> Term -> Text -> IO (Either ConvertError a)
 runQuery modules goal v = runQueryWith modules goal (decodeVar v)
 
@@ -473,7 +498,8 @@ compileOrThrow modules = case compileParsedModules True modules of
 -- modules), then run as many typed queries as you like against the same
 -- program — each call is an independent run with a fresh store. This is
 -- the entry point for embedding a real @.chr@ module and driving it with
--- 'ToTerm' \/ 'FromTerm'.
+-- 'ToTerm' \/ 'FromTerm'. Goal arguments are canonicalized against the
+-- compiled program's modules — see $goalArguments.
 runQueryCompiled ::
   (FromTerm a) => CompiledProgram -> Term -> Text -> IO (Either ConvertError a)
 runQueryCompiled cp goal v = runQueryCompiledWith cp goal (decodeVar v)

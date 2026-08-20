@@ -12,7 +12,7 @@
 %   - unification of type structures is a handful of simplification rules;
 %   - the typing context and the accumulated errors live in the store.
 %
-% The object language (built by the Haskell side):
+% The object language (`expr`, built by the Haskell side):
 %   var(Name)        a variable reference        (Name is a string)
 %   lam(Name, Body)  an *unannotated* lambda      (argument type inferred)
 %   app(F, X)        application
@@ -27,23 +27,32 @@
 %                    such as `arrow(tvar(0), tvar(0))` can be printed and
 %                    decoded with its sharing intact.
 
-:- module(stlc, [typecheck/2]).
+:- module(stlc, [typecheck/2, type(expr/0)]).
 :- use_module(library(prelude)).
 
 % The object language is *host-supplied data*: the Haskell driver builds
-% these compounds and passes them in (wrapped in `quote/1`, so they are
-% never evaluated as calls — `var/1`, in particular, is also a prelude
-% predicate). They are matched structurally in rule heads and so are left
-% as ordinary (undeclared) functors rather than `:- chr_type` constructors:
-%   var(Name)  lam(Name, Body)  app(F, X)  lit_int(N)  add(A, B)
-% Because they are undeclared, `ychr check` reports each one as an
-% "undeclared data constructor" (YCHR-20101); that is expected here — these
-% are an opaque interchange format for the host, not types this module owns.
-%
-% The type language, by contrast, is built and matched entirely inside
-% this module, so it is a proper declared type. `tvar` is produced only by
-% `number_vars`, at the very end.
+% these compounds and passes them in. It is a declared type, and it is
+% exported, precisely so that goal arguments built by the host are
+% canonicalized to `stlc:var`, `stlc:lam`, ... — the same qualified form
+% the rule heads below were compiled to. That also settles the `var/1`
+% pun: the prelude declares a `var/1` *function*, but a goal argument
+% that resolves to this module's `var/1` *constructor* stays data
+% instead of being called. (Inside this module the same rule applies:
+% a `var(X)` in *pattern or tell-argument* position is now this
+% constructor. The prelude's `var/1` function is still what the guards
+% below use, because guard position resolves callables first.)
+:- chr_type expr ---> var(string)
+                    ; lam(string, expr)
+                    ; app(expr, expr)
+                    ; lit_int(int)
+                    ; add(expr, expr).
+
+% The type language is built and matched entirely inside this module.
+% `tvar` is produced only by `number_vars`, at the very end.
 :- chr_type ty ---> tint ; arrow(ty, ty) ; tvar(int).
+
+% A typing-context cell. `Env` is a list of these.
+:- chr_type binding ---> bind(string, ty).
 
 % The two possible results of inference (decoded on the Haskell side).
 :- chr_type tc_result ---> ok(ty) ; type_error(list(any)).
@@ -51,9 +60,9 @@
 % Entry point. `Result` is unified with `ok(Type)` when inference
 % succeeds, or `type_error(Errors)` when it does not.
 :- chr_constraint
-    typecheck(any, tc_result),
-    typeof(any, any, ty),
-    lookup_ty(any, any, ty),
+    typecheck(expr, tc_result),
+    typeof(list(binding), expr, ty),
+    lookup_ty(list(binding), string, ty),
     unify_ty(ty, ty),
     bind_ty(ty, ty),
     number_vars(ty),

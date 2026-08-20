@@ -24,6 +24,7 @@ module YCHR.Run
     -- * Running goals
     runProgramWithGoal,
     runProgramWithGoalDSL,
+    runProgramWithGoalDSLWithWarnings,
     runProgramWithQuery,
 
     -- * CHR sessions
@@ -45,7 +46,9 @@ module YCHR.Run
     resolveQueryConstraint,
     resolveQueryTellOrThrow,
     prepareGoal,
+    prepareGoalTerm,
     goalShapeConstraint,
+    runGoalConstraint,
     runPreparedGoal,
     PreparedQuery (..),
     prepareQuery,
@@ -103,7 +106,7 @@ import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed (AnnP (..), SourceLoc (..))
 import YCHR.Internal.Parser (ParseValidationError (..), parseConstraintWith, parseQueryWith)
 import YCHR.Internal.Pretty (prettyPExprSrc, prettyTerm)
-import YCHR.Internal.Rename (renameQueryArgs, renameQueryGoals)
+import YCHR.Internal.Rename (renameQueryArgsWith, renameQueryGoalsWith)
 import YCHR.Internal.Resolve (ResolveError, termToExpr)
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Runtime.Error (RuntimeErrorThrown (..), runtimeErrorS)
@@ -187,14 +190,66 @@ resolveQueryTell cp c = do
           (traverse (termToExpr cp.queryFunctionVisibility queryLoc queryOrigin) qc.args)
   pure ((qc.name, exprs), errs)
 
--- | Run a single CHR constraint against a compiled program. Returns
--- the per-query variable bindings.
+-- | Run a single host-built CHR constraint against a compiled program.
+-- Returns the per-query variable bindings.
+--
+-- The goal's arguments are canonicalized with 'prepareGoalTerm' first,
+-- exactly as the surface-text path does: a host-built @red@ has to
+-- reach the runtime in the same qualified form (@m:red@) the compiled
+-- head patterns were compiled to, or the rule silently never fires.
+-- Rename /errors/ are thrown as 'Error', like every other failure here.
+--
+-- Goal-argument warnings are discarded, which is what the typed
+-- wrappers in "YCHR.Convert" and "YCHR.DSL" need — their result types
+-- have no warning channel. They are worth reading, though: an
+-- undeclared or non-exported constructor in a goal argument warns
+-- (@YCHR-20101@) and then quietly fails to match. Use
+-- 'runProgramWithGoalDSLWithWarnings' to see them.
 runProgramWithGoalDSL ::
   CompiledProgram ->
   HostCallRegistry ->
   Constraint ->
   IO (Map Text Term)
-runProgramWithGoalDSL cp hostCalls constraint = convertRuntimeError $ do
+runProgramWithGoalDSL cp hostCalls constraint =
+  fst <$> runProgramWithGoalDSLWithWarnings cp hostCalls constraint
+
+-- | 'runProgramWithGoalDSL', but also returning the warnings raised
+-- while canonicalizing the goal's arguments — the pair 'prepareGoal'
+-- returns for a surface-text goal, and the only way for an embedder to
+-- see them.
+--
+-- Render them with 'displayWarning'. A non-empty list is worth
+-- surfacing even when the run succeeds: @YCHR-20101@ on a goal argument
+-- means that argument did not canonicalize, so any rule matching on it
+-- did not fire.
+--
+-- > (bindings, ws) <- runProgramWithGoalDSLWithWarnings cp hostCalls goal
+-- > mapM_ (hPutStr stderr . displayWarning) ws
+runProgramWithGoalDSLWithWarnings ::
+  CompiledProgram ->
+  HostCallRegistry ->
+  Constraint ->
+  IO (Map Text Term, [Warning])
+runProgramWithGoalDSLWithWarnings cp hostCalls constraint = do
+  (prepared, ws) <- prepareGoalTerm cp constraint
+  bindings <- runGoalConstraint cp hostCalls prepared
+  pure (bindings, ws)
+
+-- | Run an already-prepared goal constraint: no renaming, no type
+-- checking. Callers that have run 'prepareGoal' \/ 'prepareGoalTerm'
+-- themselves use this so the goal is not renamed twice.
+--
+-- The goal /must/ have come from one of those: passing a raw host-built
+-- 'Constraint' here leaves its bare data-constructor references
+-- unqualified, so they do not match the compiled head patterns and the
+-- rules silently never fire. Use 'runProgramWithGoalDSL' unless you are
+-- deliberately staging the work yourself.
+runGoalConstraint ::
+  CompiledProgram ->
+  HostCallRegistry ->
+  Constraint ->
+  IO (Map Text Term)
+runGoalConstraint cp hostCalls constraint = convertRuntimeError $ do
   (qn, exprs) <- resolveQueryTellOrThrow cp constraint
   let (lifted, lambdas, liftErrs) =
         liftQueryLambdas cp.nextLambdaIndex [D.BodyTell qn exprs]
@@ -207,7 +262,7 @@ runProgramWithGoalDSL cp hostCalls constraint = convertRuntimeError $ do
     executePreparedQuery lifted
 
 -- | Resolve a goal and throw on any failure. Used by both
--- 'runProgramWithGoalDSL' and 'runPreparedGoal'.
+-- 'runGoalConstraint' and 'runPreparedGoal'.
 --
 -- A name-resolution failure (or a name that resolves to a function
 -- rather than a constraint) becomes 'GoalNotAConstraint', so the CLI's
@@ -303,14 +358,21 @@ prepareGoal cp src = case parseConstraintWith cp.opTable "<query>" src of
   Left err -> throwIO (ParseError "<query>" err)
   Right parsed -> case either goalShapeConstraint Right parsed of
     Left validErr -> throwIO (ParseValidationErrors [validErr])
-    Right (Constraint cname cargs) -> do
-      (renamedArgs, ws) <-
-        either
-          (throwIO . RenameErrors)
-          pure
-          (renameQueryArgs cp.allModules cargs)
-      let warnings = [RenameWarnings ws | not (null ws)]
-      pure (Constraint cname renamedArgs, warnings)
+    Right constraint -> prepareGoalTerm cp constraint
+
+-- | 'prepareGoal' minus the parse step: canonicalize the arguments of a
+-- goal 'Constraint' that is already in term form (built by the host
+-- through "YCHR.Convert" or "YCHR.DSL", or recovered from a parse).
+-- Throws 'RenameErrors' on failure.
+prepareGoalTerm :: CompiledProgram -> Constraint -> IO (Constraint, [Warning])
+prepareGoalTerm cp (Constraint cname cargs) = do
+  (renamedArgs, ws) <-
+    either
+      (throwIO . RenameErrors)
+      pure
+      (renameQueryArgsWith cp.queryRenameEnv cargs)
+  let warnings = [RenameWarnings ws | not (null ws)]
+  pure (Constraint cname renamedArgs, warnings)
 
 -- | Recover a 'Constraint' from a goal-parse validation error.
 -- 'convertConstraint' rejects goals that are not constraint-shaped (a
@@ -360,7 +422,9 @@ runPreparedGoal cp hostCalls original = do
     -- errors with the same messages.
     _ -> pure []
   unless (null tcErrs) (throwIO (TypeErrors tcErrs))
-  runProgramWithGoalDSL cp hostCalls original
+  -- 'original' came from 'prepareGoal', so its arguments are already
+  -- canonicalized; go straight to the runner instead of renaming again.
+  runGoalConstraint cp hostCalls original
 
 -- | Like 'runProgramWithGoalDSL' but accepts a query as surface-language 'Text'.
 runProgramWithGoal ::
@@ -403,8 +467,8 @@ prepareQuery cp src = do
     either
       (throwIO . RenameErrors)
       pure
-      ( renameQueryGoals
-          cp.allModules
+      ( renameQueryGoalsWith
+          cp.queryRenameEnv
           goals
       )
   let vis = cp.queryFunctionVisibility

@@ -37,7 +37,7 @@ import YCHR.DSL
   )
 import YCHR.Internal.Parsed (Module)
 import YCHR.Internal.Types (Name (..), Term (..))
-import YCHR.Run (compileParsedModules)
+import YCHR.Run (compileModules, compileParsedModules)
 
 tests :: TestTree
 tests =
@@ -48,6 +48,7 @@ tests =
       acceptanceTests,
       errorTests,
       endToEndTests,
+      canonicalizationTests,
       hostFunctionTests
     ]
 
@@ -312,6 +313,91 @@ e2eRecord =
         (term "pair" [var "X", var "Y"])
         (\bs -> (,) <$> decodeVar "X" bs <*> decodeVar "Y" bs)
     r @?= (Right (1, 2) :: Either ConvertError (Int, Int))
+
+-- ---------------------------------------------------------------------------
+-- Goal-argument canonicalization
+-- ---------------------------------------------------------------------------
+
+-- | A host-built goal argument is renamed exactly like a rule-head
+-- argument: a bare reference to a declared, exported data constructor is
+-- canonicalized to its qualified form, which is what the compiled head
+-- patterns were compiled to. Without that step the goal reaches the
+-- runtime as a different functor and the rule silently never fires.
+canonicalizationTests :: TestTree
+canonicalizationTests =
+  testGroup
+    "goal-argument canonicalization"
+    [ canonBareConstructor,
+      canonConstructorShadowingFunction,
+      canonQualifiedConstructor,
+      canonListArgument
+    ]
+
+-- | The program a canonicalization case is run against. @col@ is exported
+-- so its constructors are visible to the synthetic query module;
+-- @var\/1@ deliberately puns on the prelude's @var\/1@ function.
+canonSource :: Text
+canonSource =
+  T.unlines
+    [ ":- module(canon, [classify/2, describe/2, total/2,",
+      "                  type(col/0), type(node/0)]).",
+      ":- chr_type col ---> red ; green.",
+      ":- chr_type node ---> var(string) ; app(node, node).",
+      ":- chr_constraint classify(col, any), describe(node, any),",
+      "    total(list(int), int).",
+      "classify(red, R) <=> R = \"warm\".",
+      "classify(green, R) <=> R = \"cool\".",
+      "describe(var(N), R) <=> R = N.",
+      "describe(app(_, _), R) <=> R = \"application\".",
+      "total([], R) <=> R = 0.",
+      "total([X | Xs], R) <=> total(Xs, Rest), R is X + Rest."
+    ]
+
+canonProgram :: IO CompiledProgram
+canonProgram = case compileModules True [("canon.chr", canonSource)] of
+  Left err -> assertFailure ("compile failed: " ++ show err)
+  Right (cp, _warnings) -> pure cp
+
+canonBareConstructor :: TestTree
+canonBareConstructor =
+  testCase "bare constructor in a goal argument matches the head pattern" $ do
+    cp <- canonProgram
+    r <- runQueryCompiled cp (term "classify" [term "red" [], var "R"]) "R"
+    r @?= (Right "warm" :: Either ConvertError Text)
+
+-- | The STLC case: an object-language constructor whose name is also a
+-- visible function (the prelude's @var\/1@). Canonicalization resolves it
+-- to the constructor, so it stays data instead of being called.
+canonConstructorShadowingFunction :: TestTree
+canonConstructorShadowingFunction =
+  testCase "constructor sharing a prelude function's name stays data" $ do
+    cp <- canonProgram
+    r <- runQueryCompiled cp (term "describe" [term "var" [text "x"], var "R"]) "R"
+    r @?= (Right "x" :: Either ConvertError Text)
+
+-- | The everyday case: a list argument. 'toTerm' builds the bare @.@ \/
+-- @[]@ constructors, while the head patterns were compiled against the
+-- prelude's exported @list@ type, so the goal only matches once the
+-- arguments are canonicalized.
+canonListArgument :: TestTree
+canonListArgument =
+  testCase "list argument matches the prelude's list constructors" $ do
+    cp <- canonProgram
+    r <- runQueryCompiled cp (term "total" [toTerm ([1, 2, 3] :: [Int]), var "R"]) "R"
+    r @?= (Right 6 :: Either ConvertError Int)
+
+-- | A host that qualifies the constructor itself gets the same result;
+-- canonicalization leaves an already-qualified name alone.
+canonQualifiedConstructor :: TestTree
+canonQualifiedConstructor =
+  testCase "already-qualified constructor is left alone" $ do
+    cp <- canonProgram
+    r <-
+      runQueryCompiled
+        cp
+        (term "classify" [CompoundTerm (Qualified "canon" "green") [], var "R"])
+        "R"
+    r @?= (Right "cool" :: Either ConvertError Text)
 
 -- ---------------------------------------------------------------------------
 -- Custom host functions

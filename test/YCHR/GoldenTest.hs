@@ -85,11 +85,7 @@ expectsWarnings =
       "typecheck_qualified_in_head_dead",
       "typecheck_shared_var_dead",
       "unicode_atoms_strings",
-      "unifiable",
-      -- The lambda-calculus object language (var/lam/app/lit_int/add) is
-      -- host-supplied opaque data matched structurally in rule heads, so
-      -- it is intentionally left undeclared and warns as YCHR-20101.
-      "stlc"
+      "unifiable"
     ]
 
 data Case

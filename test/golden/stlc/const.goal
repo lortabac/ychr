@@ -1,1 +1,1 @@
-stlc:typecheck(quote(lam("x", lam("y", var("x")))), R)
+stlc:typecheck(lam("x", lam("y", var("x"))), R)
