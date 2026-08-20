@@ -141,6 +141,15 @@ termToValue (IntTerm n) = pure (VInt n)
 termToValue (FloatTerm n) = pure (VFloat n)
 termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard
+-- Native-bool bridge: a host-built or freshly parsed term carries the
+-- bare @true@ \/ @false@ spelling, having never met the renamer. The
+-- rest of the system represents those as 'VBool' (compiled rules,
+-- comparison results, goal arguments), so producing a 'VAtom' here
+-- would leave the host's boolean unable to match a @true@ pattern,
+-- unable to reach @not/1@, and answering 'False' to @boolean/1@.
+termToValue (CompoundTerm name [])
+  | Just b <- Types.hostBool name =
+      pure (VBool b)
 termToValue (CompoundTerm name []) = pure (VAtom (flattenName name))
 termToValue (CompoundTerm name args) = do
   args' <- traverse termToValue args

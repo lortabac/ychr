@@ -133,7 +133,10 @@ X == Y -> host:'=='(X, Y).
 
 % Boolean negation. There is no `\=` / `\==` operator; write the
 % negation explicitly, e.g. `not(X == Y)` or `not(unifiable(X, Y))`.
-not(X) -> host:not(X).
+% `bool` is an ordinary algebraic type, so this needs no host primitive:
+% the two constructors are matchable in equation patterns like any other.
+not(true) -> false.
+not(false) -> true.
 
 max(X, Y) | X >= Y -> X.
 max(_, Y) -> Y.

@@ -44,7 +44,7 @@ ground value was required.
 |---|---|
 | `Integer`, `Int` | `IntTerm` (`Int` bounds-checked on decode) |
 | `Double` | `FloatTerm` (strict: an `IntTerm` is *not* coerced) |
-| `Bool` | `true` / `false` atom |
+| `Bool` | `true` / `false` — a real boolean at run time, not an atom |
 | `Text` | `TextTerm` — the idiomatic CHR string type |
 | `Char` | one-character `TextTerm` |
 | `()` | `()` atom |
@@ -58,6 +58,12 @@ ground value was required.
 toTerm (Just (5 :: Int))
 -- CompoundTerm (Unqualified "just") [IntTerm 5]
 ```
+
+A `Bool` crosses into the runtime as the same native boolean a rule's
+`true`/`false` produces, so a host function returning `Bool` can be
+negated with `not/1`, tested with `boolean/1`, and matched by a
+`f(true) -> ...` equation. The corollary: a module that declares its own
+`true/0` constructor cannot carry it across this bridge.
 
 Decoding also accepts the `prelude`-qualified forms of `true`/`false` and
 the list cons/nil that appear in results, so a value produced by a run

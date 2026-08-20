@@ -1,0 +1,1 @@
+read_term_test:is_bool("true", R)

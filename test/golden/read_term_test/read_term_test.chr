@@ -1,7 +1,20 @@
-:- module(read_term_test, [go/2]).
+:- module(read_term_test, [go/2, is_bool/2, matches/2, type(answer/0)]).
 
 :- use_module(library(meta)).
 
 :- chr_constraint go/2.
 
 go(S, R) <=> R is read_term_from_string(S).
+
+% A parsed `true` / `false` is the boolean, not an atom that merely
+% prints like one: it has to answer `boolean/1` and match a bool head
+% pattern. Both spellings print as "true", so only these tests tell the
+% two representations apart.
+:- chr_type answer ---> yes ; no.
+:- chr_constraint is_bool(string, bool), matches(string, any), tagged(bool, any).
+
+is_bool(S, R) <=> X is read_term_from_string(S), R is boolean(X).
+
+matches(S, R) <=> X is read_term_from_string(S), tagged(X, R).
+tagged(true, R) <=> R = yes.
+tagged(false, R) <=> R = no.

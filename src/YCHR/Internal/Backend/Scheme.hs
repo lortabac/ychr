@@ -585,10 +585,6 @@ hostCallMap =
       ("rem", "%irem"),
       ("=<", "<="),
       ("==", "equal?/chr"),
-      -- Must map: bare 'not' would bind to R6RS 'not', which treats every
-      -- non-#f value as true and so disagrees with the Haskell runtime on
-      -- untyped arguments. '%not' rejects non-booleans.
-      ("not", "%not"),
       ("float", "flonum?"),
       ("int_to_float", "%int-to-float"),
       ("float_to_int", "%float-to-int"),

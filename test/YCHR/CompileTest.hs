@@ -19,7 +19,8 @@ tests =
   testGroup
     "YCHR.Internal.Compile"
     [ indexConditionPushdownTests,
-      passiveOccurrencesTests
+      passiveOccurrencesTests,
+      boolPatternTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -68,6 +69,25 @@ callsProcedure name = any go
     go _ = False
     valCalls (VM.CallExpr n _) = n == want
     valCalls _ = False
+
+-- | Every boolean expression tested by an @If@ anywhere in a statement
+-- list, flattened through nested bodies and through the @BoolExpr@
+-- connectives. Guard tests reach the VM as @If@ conditions, so this is
+-- how a test asks "what does the compiler check here?".
+ifConditions :: [VM.Stmt] -> [VM.BoolExpr]
+ifConditions = concatMap go
+  where
+    go (VM.If e t f) = flatten e ++ ifConditions t ++ ifConditions f
+    go (VM.Foreach _ _ _ _ body) = ifConditions body
+    go (VM.DrainReactivationQueue _ body) = ifConditions body
+    go _ = []
+    flatten e =
+      e : case e of
+        VM.BNot a -> flatten a
+        VM.BAnd a b -> flatten a ++ flatten b
+        VM.BOr a b -> flatten a ++ flatten b
+        VM.BEvalDeep a -> flatten a
+        _ -> []
 
 -- | Look up a procedure by name in a compiled program.
 findProcedure :: CompiledProgram -> Text -> Maybe VM.Procedure
@@ -230,3 +250,54 @@ passiveOccurrencesTests =
     assertPresent prog n =
       assertBool (show n ++ " should be present") $
         isJust (findProcedure prog n)
+
+-- ---------------------------------------------------------------------------
+-- Boolean constructors in pattern position
+-- ---------------------------------------------------------------------------
+
+-- | @true@ / @false@ in a head or equation pattern. Their /values/ are
+-- compiled to @BoolLit@, so the pattern side has to test for a boolean
+-- too: a @BMatchTerm@ against the atom @prelude__true@ would never
+-- match a @VBool@ and the rule would silently never fire.
+boolPatternSource :: Text
+boolPatternSource =
+  ":- module(m, [go/2, neg/1]).\n\
+  \:- chr_constraint go(bool, any).\n\
+  \:- function neg(bool) -> bool.\n\
+  \neg(true) -> false.\n\
+  \neg(false) -> true.\n\
+  \r @ go(true, R) <=> R = 1.\n"
+
+boolPatternTests :: TestTree
+boolPatternTests =
+  testGroup
+    "Boolean constructors in pattern position"
+    [ testCase "head pattern tests a boolean, not an atom functor" $ do
+        prog <- compileOrFail [("m.chr", boolPatternSource)]
+        assertBoolPattern prog "occurrence_m__go2_1" True,
+      testCase "equation pattern tests a boolean, not an atom functor" $ do
+        prog <- compileOrFail [("m.chr", boolPatternSource)]
+        assertBoolPattern prog "func_m__neg1" True
+        assertBoolPattern prog "func_m__neg1" False
+    ]
+  where
+    -- The scrutinee must be the pattern's operand, not just any
+    -- expression: an equality between two literals would satisfy a
+    -- looser check while leaving the argument untested.
+    testsOperand b (VM.BEqual (VM.Var _) (VM.Lit (VM.BoolLit b'))) = b' == b
+    testsOperand b (VM.BEqual (VM.FieldArg _ _) (VM.Lit (VM.BoolLit b'))) = b' == b
+    testsOperand _ _ = False
+    isBoolFunctorTest (VM.BMatchTerm _ f 0) =
+      f `elem` [VM.Name "prelude__true", VM.Name "prelude__false"]
+    isBoolFunctorTest _ = False
+    assertBoolPattern prog procName b =
+      case findProcedure prog procName of
+        Nothing -> assertFailure $ "procedure not found: " ++ show procName
+        Just p -> do
+          let conds = ifConditions p.body
+          assertBool
+            (show procName ++ ": expected its operand tested against " ++ show b)
+            (any (testsOperand b) conds)
+          assertBool
+            (show procName ++ ": bool pattern must not compile to BMatchTerm")
+            (not (any isBoolFunctorTest conds))

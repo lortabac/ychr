@@ -275,8 +275,10 @@ instance FromTerm Double where
     FloatTerm d -> Right d
     _ -> Left (TypeMismatch "Double" t)
 
--- | Encodes to the canonical @true@ \/ @false@ atom. Decoding also accepts
--- the @prelude@-qualified forms that appear in results.
+-- | Encodes to the canonical @true@ \/ @false@ compound, which the
+-- host-value bridge turns into a native boolean rather than an atom
+-- (see 'YCHR.Internal.Types.hostBool'). Decoding also accepts the
+-- @prelude@-qualified forms that appear in results.
 instance ToTerm Bool where
   toTerm True = atomTerm "true"
   toTerm False = atomTerm "false"

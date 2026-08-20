@@ -422,7 +422,9 @@ hostProgram =
                   "bad_type" // 1,
                   "bad_unbound" // 2,
                   "ov" // 1,
-                  "use_builtin" // 1
+                  "use_builtin" // 1,
+                  "bool_result" // 2,
+                  "bool_native" // 2
                 ]
     `declaring` [ "compute_add" // 2,
                   "compute_shout" // 2,
@@ -437,7 +439,9 @@ hostProgram =
                   "bad_type" // 1,
                   "bad_unbound" // 2,
                   "ov" // 1,
-                  "use_builtin" // 1
+                  "use_builtin" // 1,
+                  "bool_result" // 2,
+                  "bool_native" // 2
                 ]
     `defining` [ [term "compute_add" [var "X", var "R"]]
                    <=> [var "R" `is` hostCall "my_add" [var "X", int 3]],
@@ -471,7 +475,14 @@ hostProgram =
                  [term "ov" [var "R"]]
                    <=> [var "R" `is` hostCall "+" [int 1, int 1]],
                  [term "use_builtin" [var "R"]]
-                   <=> [var "R" `is` hostCall "-" [int 10, int 3]]
+                   <=> [var "R" `is` hostCall "-" [int 10, int 3]],
+                 [term "bool_result" [var "X", var "R"]]
+                   <=> [var "R" `is` hostCall "is_even" [var "X"]],
+                 -- Asks the runtime directly whether the Bool result is
+                 -- a native boolean: an atom-shaped @true@ answers
+                 -- @false@ here.
+                 [term "bool_native" [var "X", var "R"]]
+                   <=> [var "R" `is` hostCall "boolean" [hostCall "is_even" [var "X"]]]
                ]
 
 -- | The default registry extended with one function per adapter kind.
@@ -496,7 +507,9 @@ hostRegistry =
           _ -> pure (VInt 0)
       ),
       -- identity over Term, to observe deep dereferencing
-      ("echo", hostFn1 (id :: Term -> Term))
+      ("echo", hostFn1 (id :: Term -> Term)),
+      -- Bool result: must reach the runtime as a native boolean
+      ("is_even", hostFn1 (even :: Int -> Bool))
     ]
   where
     sumTerms :: [Term] -> Either ConvertError Term
@@ -568,5 +581,15 @@ hostFunctionTests =
       testCase "hostFunctions <> base still resolves builtins" $ do
         let composed = hostFunctions [] <> baseHostCallRegistry
         r <- runHost composed (term "use_builtin" [var "R"])
-        r @?= (Right 7 :: Either ConvertError Int)
+        r @?= (Right 7 :: Either ConvertError Int),
+      testCase "Bool result decodes as a Bool" $ do
+        r <- runHost hostRegistry (term "bool_result" [int 4, var "R"])
+        r @?= (Right True :: Either ConvertError Bool)
+        r' <- runHost hostRegistry (term "bool_result" [int 3, var "R"])
+        r' @?= (Right False :: Either ConvertError Bool),
+      testCase "Bool result is a native boolean, not an atom" $ do
+        -- Decoding alone would pass even if the result reached the
+        -- runtime as the atom @true@; @boolean/1@ tells them apart.
+        r <- runHost hostRegistry (term "bool_native" [int 4, var "R"])
+        r @?= (Right True :: Either ConvertError Bool)
     ]

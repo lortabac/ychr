@@ -1,0 +1,44 @@
+:- module(
+     bool_in_head,
+     [go/2, neg_of/2, nested/2, partner_test/2, late_test/1, type(box/0), type(answer/0)]
+   ).
+:- use_module(prelude).
+
+% `true` / `false` are the constructors of the prelude's `bool` type, so
+% they are usable as patterns like any other constructor. Their values
+% are compiled to native booleans rather than atoms, so the pattern side
+% has to test for a boolean too (see `compileMatchGuard`).
+:- chr_type box ---> box(bool).
+:- chr_type answer ---> yes ; no.
+
+:- chr_constraint go(bool, any), neg_of(bool, any), nested(box, any).
+
+% Equation patterns.
+:- function neg(bool) -> bool.
+neg(true) -> false.
+neg(false) -> true.
+
+% Head patterns.
+go(true, R) <=> R = yes.
+go(false, R) <=> R = no.
+
+neg_of(X, R) <=> R is neg(X).
+
+% Nested patterns.
+nested(box(true), R) <=> R = yes.
+nested(box(false), R) <=> R = no.
+
+% The bool pattern on a *partner* constraint, so the test lands inside
+% the partner loop rather than on the active constraint's own argument.
+:- chr_constraint partner_test(bool, any), pflag(bool), pcheck(any).
+pcheck(R), pflag(true) <=> R = yes.
+pcheck(R) <=> R = no.
+partner_test(F, R) <=> pflag(F), pcheck(R).
+
+% The bool pattern matched only after reactivation: `late` is stored
+% with an unbound argument (no rule fires yet), and binding that
+% argument afterwards has to wake the constraint up and match.
+:- chr_constraint late_test(any), late(bool, any).
+late(true, R) <=> R = yes.
+late(false, R) <=> R = no.
+late_test(R) <=> late(X, R), X = true.

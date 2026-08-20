@@ -506,17 +506,19 @@ compileTerm _ _ (FloatTerm n) = pure (Lit (FloatLit n))
 compileTerm _ _ (TextTerm s) = pure (Lit (TextLit s))
 -- Native-bool fast path: source @true@/@false@ reach @compileTerm@ only
 -- as the renamer-canonicalized @prelude:true@ / @prelude:false@ form
--- (see 'YCHR.Internal.Rename.canonicalizeDataCon'). Match the canonical compound
--- shape so the @If@ instruction can dispatch on @VBool@ without boxing.
-compileTerm _ _ (CompoundTerm (Types.Qualified "prelude" "true") []) =
-  pure (Lit (BoolLit True))
-compileTerm _ _ (CompoundTerm (Types.Qualified "prelude" "false") []) =
-  pure (Lit (BoolLit False))
+-- ('Types.preludeBool'). Match the canonical compound shape so the @If@
+-- instruction can dispatch on @VBool@ without boxing.
+compileTerm _ _ (CompoundTerm name [])
+  | Just b <- Types.preludeBool name =
+      pure (Lit (BoolLit b))
 -- 0-arity compounds normalize to atom literals: at the runtime layer
 -- the canonical form is 'VAtom' (no empty-args vector), and 'AtomLit'
 -- is the cheap VM constructor for that value. 'BMatchTerm' accepts
 -- 'VAtom' for arity-0 tests so the dispatch invariant is preserved at
 -- the matcher layer rather than via a parallel runtime representation.
+-- The two prelude booleans are the exception on both sides: they are
+-- values here, and 'compileMatchGuard' gives them a matching
+-- boolean-valued pattern test instead of a 'BMatchTerm'.
 --
 -- Qualified 0-arity uses 'vmName' for the @m__n@ mangled functor;
 -- unqualified 0-arity (user-quoted atoms, undeclared bare names)
@@ -560,13 +562,12 @@ compileExpr varMap si e = case e of
   R.TextExpr s -> pure (Lit (TextLit s))
   R.WildcardExpr -> pure (Lit WildcardLit)
   -- Native-bool fast path: the renamer canonicalizes source @true@ /
-  -- @false@ to @prelude:true@ / @prelude:false@ (see
-  -- 'YCHR.Internal.Rename.canonicalizeDataCon'). Matching them structurally
-  -- lets 'If' dispatch on 'VBool' without boxing.
-  R.CtorExpr (Types.Qualified "prelude" "true") [] ->
-    pure (Lit (BoolLit True))
-  R.CtorExpr (Types.Qualified "prelude" "false") [] ->
-    pure (Lit (BoolLit False))
+  -- @false@ to @prelude:true@ / @prelude:false@ ('Types.preludeBool').
+  -- Matching them structurally lets 'If' dispatch on 'VBool' without
+  -- boxing.
+  R.CtorExpr name []
+    | Just b <- Types.preludeBool name ->
+        pure (Lit (BoolLit b))
   -- @quote\/1@ short-circuit: the subtree stays opaque (no calls are
   -- evaluated). Delegate to 'compileTerm' on the surface 'Term' shape
   -- of the argument; the user opts into this with @quote(foo(X))@ when
@@ -735,6 +736,20 @@ compileMatchGuard ::
   ([Stmt] -> [Stmt], VarMap) ->
   D.Guard ->
   Writer [Diagnostic CompileError] ([Stmt] -> [Stmt], VarMap)
+-- The pattern side of the native-bool fast path. HNF sees @true@ /
+-- @false@ as ordinary 0-arity constructor patterns and emits a
+-- 'D.GuardMatch' for them like any other, but their values are compiled
+-- to 'BoolLit' (see 'compileTerm'), so a functor test would be asking
+-- whether a 'VBool' is the atom @prelude__true@ — always false. Lower
+-- the test to the boolean equality that matches the representation the
+-- value side produces. The arity-0 restriction matters: an explicit
+-- @prelude:true(X)@ is a different, undeclared constructor and keeps
+-- the functor test.
+compileMatchGuard si (matchWrapper, varMap) (D.GuardMatch operand name 0)
+  | Just b <- Types.preludeBool name = do
+      operandExpr <- compileExpr varMap si operand
+      let check body = [If (BEqual operandExpr (Lit (BoolLit b))) body []]
+      pure (matchWrapper . check, varMap)
 compileMatchGuard si (matchWrapper, varMap) (D.GuardMatch operand name arity) = do
   -- HNF only emits 'GuardMatch' with a 'VarExpr' operand, but
   -- 'compileExpr' handles every 'Expr' constructor structurally, so

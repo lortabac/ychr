@@ -815,7 +815,11 @@ tellConSigs prog =
 -- constructors: every name becomes a 'VAtom' with the @vmName@
 -- encoding (@m__n@ for qualified, plain @n@ for unqualified).
 -- 'BMatchTerm' accepts 'VAtom' for arity-0 dispatch, matching the
--- shape compiled head patterns produce.
+-- shape compiled head patterns produce. (The two prelude booleans are
+-- the exception on the pattern side, where the compiler lowers the
+-- match guard to a boolean equality instead — but they are encoded
+-- here as names, never matched against a compiled pattern, so the atom
+-- encoding is still the right one.)
 encodeName :: Name -> Value
 encodeName (Unqualified n) = VAtom n
 encodeName name@(Qualified _ _) = VAtom (runtimeName name)

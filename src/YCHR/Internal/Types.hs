@@ -40,6 +40,8 @@ module YCHR.Internal.Types
     flattenName,
     qualifiedToName,
     qualifiedNameToIdentifier,
+    preludeBool,
+    hostBool,
 
     -- * Terms
     Term (..),
@@ -161,6 +163,48 @@ qualifiedToName (QualifiedName m b) = Qualified m b
 -- | Build an 'Identifier' from a 'QualifiedName' and arity.
 qualifiedNameToIdentifier :: QualifiedName -> Int -> Identifier
 qualifiedNameToIdentifier qn a = Identifier (qualifiedToName qn) a
+
+-- | The two prelude data constructors that are represented as a native
+-- boolean rather than as an atom, on every backend.
+--
+-- Only the renamer-canonicalized qualified form counts: the renamer
+-- rewrites a bare @true@ \/ @false@ to @prelude:true@ \/ @prelude:false@
+-- in every position, expression and pattern alike (see
+-- 'YCHR.Internal.Rename.canonicalizeDataCon'). An @Unqualified@ spelling
+-- that survived canonicalization is an ambiguous or user-declared
+-- constructor and stays an ordinary atom.
+--
+-- This is the single statement of that correspondence for the
+-- renamed-AST consumers: both sides of the compiler (value and
+-- pattern), the query evaluator, and the Scheme driver. Keeping it in
+-- one place is what stops the two sides from disagreeing about the
+-- representation. The host-value bridges ('YCHR.Convert',
+-- 'YCHR.DSL', 'YCHR.Internal.Meta') deal in the unqualified spelling
+-- and are deliberately not covered.
+preludeBool :: Name -> Maybe Bool
+preludeBool (Qualified "prelude" "true") = Just True
+preludeBool (Qualified "prelude" "false") = Just False
+preludeBool _ = Nothing
+
+-- | The bool constructors as they arrive from /outside/ the renamer:
+-- built by a host program through "YCHR.Convert" or "YCHR.DSL", or
+-- parsed straight to a 'Term' by @read_term_from_string@. Such a term
+-- never passes through 'YCHR.Internal.Rename.canonicalizeDataCon', so
+-- it carries the bare @true@ \/ @false@ the host wrote; this accepts
+-- that spelling on top of the canonical one 'preludeBool' recognizes.
+--
+-- Use this only at the host-value bridge
+-- ('YCHR.Internal.Meta.termToValue'). Everything downstream of the
+-- renamer must use 'preludeBool' instead, because /there/ a surviving
+-- unqualified @true@ means an ambiguous or user-declared constructor
+-- and stays an atom. The corollary is a corner this cannot resolve: a
+-- module that declares its own @true\/0@ constructor cannot carry it
+-- across the bridge, since nothing in a host-built term distinguishes
+-- it from the boolean.
+hostBool :: Name -> Maybe Bool
+hostBool (Unqualified "true") = Just True
+hostBool (Unqualified "false") = Just False
+hostBool name = preludeBool name
 
 -- | A CHR constraint occurrence.
 data Constraint = Constraint

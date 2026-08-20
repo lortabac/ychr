@@ -589,8 +589,7 @@ termToValue Wildcard = pure VWildcard
 -- @prelude:true@/@prelude:false@: the @=@-operand lowering must
 -- produce 'VBool' so structural unification with comparison results
 -- (which return 'VBool' directly) succeeds.
-termToValue (CompoundTerm (Types.Qualified "prelude" "true") []) = pure (VBool True)
-termToValue (CompoundTerm (Types.Qualified "prelude" "false") []) = pure (VBool False)
+termToValue (CompoundTerm name []) | Just b <- Types.preludeBool name = pure (VBool b)
 -- 0-arity ctors collapse to atoms at the runtime layer. Qualified
 -- 0-arity uses the @vmName@-mangled @m__n@ form; unqualified 0-arity
 -- (user-quoted atoms, undeclared bare names) keeps the raw name.
@@ -776,8 +775,7 @@ evalNestedExpr (R.CtorExpr (Types.Unqualified "quote") [arg]) = exprToValue arg
 -- @prelude:true@/@prelude:false@: queries must produce 'VBool' just
 -- like compiled rules, so a REPL @is@ RHS or tell-side argument
 -- agrees with comparison results (which return 'VBool' directly).
-evalNestedExpr (R.CtorExpr (Types.Qualified "prelude" "true") []) = pure (VBool True)
-evalNestedExpr (R.CtorExpr (Types.Qualified "prelude" "false") []) = pure (VBool False)
+evalNestedExpr (R.CtorExpr name []) | Just b <- Types.preludeBool name = pure (VBool b)
 -- 0-arity ctors collapse to atoms at the runtime layer.
 evalNestedExpr (R.CtorExpr name@(Types.Qualified _ _) []) =
   pure (VAtom (vmName name).unName)
