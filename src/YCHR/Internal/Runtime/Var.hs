@@ -138,6 +138,15 @@ unify' (VVar var) v = do
     Bound {} -> error "unify': unexpected Bound after deref"
     Unbound _ obs -> do
       writeVarState var (Bound v)
+      -- Transfer the variable's observers onto every unbound
+      -- variable reachable in the term it was just bound to.
+      -- Observation is over *reachable* unbound variables, and the
+      -- reachable set changes at exactly this moment: without the
+      -- transfer, a suspension observing X stops being woken once
+      -- X := f(A) — a later binding of A silently misses the
+      -- ωr /Reactivate/ step (and a stored residual type-checker
+      -- constraint would never be retried).
+      mapM_ (\oid -> addObserver oid v) obs
       pure (True, obs)
 unify' v (VVar vr) = unify' (VVar vr) v
 unify' (VInt a) (VInt b) = pure (a == b, [])

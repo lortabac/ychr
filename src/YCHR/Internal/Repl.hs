@@ -54,7 +54,7 @@ import YCHR.Internal.Runtime.Session
     withTraceHandler,
   )
 import YCHR.Internal.Runtime.Trace (defaultTraceHandler)
-import YCHR.Internal.TypeCheck (typeCheckProgram)
+import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Internal.Types
   ( BoundSig,
     DataConstructor (..),
@@ -69,7 +69,7 @@ import YCHR.Internal.Types qualified as Types
 import YCHR.Run
   ( Error (..),
     PreparedQuery (..),
-    Warning,
+    Warning (..),
     compileFiles,
     executePreparedQuery,
     prepareQuery,
@@ -96,7 +96,7 @@ runRepl hostCalls quietMode werror files = do
       let warnsFatal = werror && not (null warnings)
       when (warnsFatal || not quietMode) (printWarnings warnings)
       when warnsFatal exitFailure
-      unless quietMode (printTypeErrors prog)
+      unless quietMode (printTypeDiagnostics prog)
       let exported = exportedNames prog
       outerInput <-
         mkLineInput
@@ -167,11 +167,11 @@ outerLoop hostCalls quietMode werror files outerInput liveInput = go
               -- Surface type errors of the rejected program too, so the
               -- user sees the full diagnostic picture before deciding
               -- what to fix; the previous program stays loaded.
-              printTypeErrors prog'
+              printTypeDiagnostics prog'
               go prog
           | otherwise -> do
               printWarnings warnings
-              printTypeErrors prog'
+              printTypeDiagnostics prog'
               go prog'
 
 -- | Run a one-off query in the outer REPL: parse, typecheck, execute
@@ -584,9 +584,9 @@ qualifiedLookup prog qn mArity =
           -- Without an arity, scan every arity the program declares
           -- for this qualified name across constraints/functions.
           let cTyArities =
-                [ length args
-                | (qn', args) <- Map.toList prog.desugaredProgram.constraintTypes,
-                  qn' == qn
+                [ key.arity
+                | key <- Map.keys prog.desugaredProgram.constraintTypes,
+                  key.name == qn
                 ]
               fArities =
                 [f.arity | f <- prog.desugaredProgram.functions, f.name == qn]
@@ -631,12 +631,17 @@ classifyQualified :: CompiledProgram -> QualifiedName -> Int -> [InfoEntry]
 classifyQualified prog qn arity =
   case [f | f <- prog.desugaredProgram.functions, f.name == qn, f.arity == arity] of
     (f : _) -> [IEFunction f (functionDeclKind prog qn arity)]
-    [] -> case Map.lookup qn prog.desugaredProgram.constraintTypes of
-      Just args
-        | length args == arity ->
-            let bs = Map.findWithDefault [] qn prog.desugaredProgram.constraintBounds
-             in [IEConstraint qn arity (Just args) bs]
-      _ -> []
+    [] ->
+      let key = Types.ConstraintKey qn arity
+       in case Map.lookup key prog.desugaredProgram.constraintTypes of
+            Just args ->
+              let bs =
+                    Map.findWithDefault
+                      []
+                      key
+                      prog.desugaredProgram.constraintBounds
+               in [IEConstraint qn arity (Just args) bs]
+            Nothing -> []
 
 -- | Recover the @function@ / @open_function@ / @class@ / @open_class@
 -- keyword for a 'D.Function' by scanning every parsed module's
@@ -793,7 +798,13 @@ exportedNames prog =
 printWarnings :: [Warning] -> IO ()
 printWarnings = mapM_ (hPutStr stderr . displayMsg)
 
-printTypeErrors :: CompiledProgram -> IO ()
-printTypeErrors prog = do
-  errs <- typeCheckProgram prog.desugaredProgram
-  mapM_ (hPutStr stderr . displayMsg) errs
+-- | Type-check the loaded program and print both its errors and its
+-- warnings. Neither aborts the REPL: type diagnostics are
+-- informational here, so @--Werror@ (which governs the /compile/
+-- warnings deciding whether a program loads at all) does not consult
+-- them.
+printTypeDiagnostics :: CompiledProgram -> IO ()
+printTypeDiagnostics prog = do
+  result <- typeCheckProgram prog.desugaredProgram
+  mapM_ (hPutStr stderr . displayMsg) result.errors
+  unless (null result.warnings) (printWarnings [TypeCheckWarnings result.warnings])

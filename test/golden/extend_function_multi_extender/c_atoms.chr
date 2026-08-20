@@ -2,6 +2,6 @@
 :- use_module(owner, [classify/1]).
 :- chr_type colors ---> red.
 
-% Second extender adds an atom overload (distinct from the string one).
-:- extend_class_type (classify(atom) -> atom).
+% Second extender adds an overload over its own algebraic type.
+:- extend_class_type (classify(colors) -> any).
 :- extend_class classify(red) -> quote(color).

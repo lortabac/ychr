@@ -19,7 +19,7 @@ import YCHR.Internal.Pretty (prettyBindings)
 import YCHR.Internal.Rename (renameQueryArgs)
 import YCHR.Internal.Repl qualified as Repl
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
-import YCHR.Internal.TypeCheck (typeCheckProgram)
+import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Internal.VM.SExpr (VMProgram (..), serialize)
 import YCHR.Run
   ( Error (..),
@@ -194,13 +194,13 @@ main = do
 runGoal :: RunOpts -> [FilePath] -> IO ()
 runGoal opts files = withCompiled False files $ \prog warnings -> do
   printWarnings warnings
-  typeCheckOrExit prog
+  typeWarnings <- typeCheckOrExit prog
   prepResult <- try @SomeException (prepareGoal prog opts.goal)
   case prepResult of
     Left exc -> reportErrorAndExit exc
     Right (constraint, goalWarnings) -> do
       printWarnings goalWarnings
-      exitOnWerror opts.werror (warnings ++ goalWarnings)
+      exitOnWerror opts.werror (warnings ++ typeWarnings ++ goalWarnings)
       outcome <- try @SomeException (runPreparedGoal prog hostCalls constraint)
       case outcome of
         Left exc -> reportErrorAndExit exc
@@ -216,8 +216,8 @@ runGoal opts files = withCompiled False files $ \prog warnings -> do
 runCompile :: CompileOpts -> [FilePath] -> IO ()
 runCompile opts files = withCompiled False files $ \prog warnings -> do
   printWarnings warnings
-  typeCheckOrExit prog
-  exitOnWerror opts.werror warnings
+  typeWarnings <- typeCheckOrExit prog
+  exitOnWerror opts.werror (warnings ++ typeWarnings)
   let vmp =
         VMProgram
           { program = prog.program,
@@ -251,7 +251,7 @@ runCompile opts files = withCompiled False files $ \prog warnings -> do
 runGenDriver :: GenDriverOpts -> [FilePath] -> IO ()
 runGenDriver opts files = withCompiled False files $ \prog warnings -> do
   printWarnings warnings
-  typeCheckOrExit prog
+  typeWarnings <- typeCheckOrExit prog
   Constraint cname cargs <- case parseConstraintWith prog.opTable "<query>" opts.gdGoal of
     Left err -> do
       putStr (displayMsg (ParseError "<query>" err))
@@ -284,17 +284,18 @@ runGenDriver opts files = withCompiled False files $ \prog warnings -> do
         hPutStr stderr ("Error: " ++ displayException e ++ "\n")
         exitFailure
     Right pair -> pure pair
-  -- Combine file-level and goal-level warnings into a single Werror
-  -- decision so a single run reports every warning before exiting.
-  exitOnWerror opts.werror (warnings ++ goalWarnings)
+  -- Combine file-level, type-check, and goal-level warnings into a
+  -- single Werror decision so a single run reports every warning
+  -- before exiting.
+  exitOnWerror opts.werror (warnings ++ typeWarnings ++ goalWarnings)
   TIO.putStr (generateDriver (T.pack "program") qn exprs)
   schemeRuntimeNote
 
 runCheck :: CheckOpts -> [FilePath] -> IO ()
 runCheck opts files = withCompiled False files $ \prog warnings -> do
   printWarnings warnings
-  typeCheckOrExit prog
-  exitOnWerror opts.werror warnings
+  typeWarnings <- typeCheckOrExit prog
+  exitOnWerror opts.werror (warnings ++ typeWarnings)
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -330,13 +331,18 @@ withCompiled stdlib files k = do
     Right (prog, warnings) -> k prog warnings
 
 -- | Type-check the compiled program. If errors are found, print them
--- to stderr and exit non-zero; otherwise return cleanly.
-typeCheckOrExit :: CompiledProgram -> IO ()
+-- to stderr and exit non-zero. Otherwise print the type-check warnings
+-- and return them, so the caller can fold them into its @--Werror@
+-- decision together with the compile-time warnings.
+typeCheckOrExit :: CompiledProgram -> IO [Warning]
 typeCheckOrExit prog = do
-  errs <- typeCheckProgram prog.desugaredProgram
-  unless (null errs) $ do
-    mapM_ (hPutStr stderr . displayMsg) errs
+  result <- typeCheckProgram prog.desugaredProgram
+  unless (null result.errors) $ do
+    mapM_ (hPutStr stderr . displayMsg) result.errors
     exitFailure
+  let ws = [TypeCheckWarnings result.warnings | not (null result.warnings)]
+  printWarnings ws
+  pure ws
 
 printWarnings :: [Warning] -> IO ()
 printWarnings = mapM_ (hPutStr stderr . displayMsg)

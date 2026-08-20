@@ -1,0 +1,16 @@
+:- module(bound_partial_ruleout, [go/1]).
+:- use_module(prelude).
+:- chr_constraint go(any).
+
+:- function (k(int, int) -> int).
+k(X, _) -> X.
+
+% At the call below the bound substitutes to k(float, B) with B still
+% free: no declared k signature can ever be consistent with a float
+% first argument, so the bound is ruled out on the partial
+% substitution (it used to stay silently residual until fully
+% ground, which never happened).
+:- function (f(A, B) -> A) requiring (k(A, B) -> A).
+f(X, _) -> X.
+
+go(R) <=> R is f(1.5, _).

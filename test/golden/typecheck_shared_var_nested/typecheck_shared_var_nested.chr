@@ -1,0 +1,14 @@
+:- module(tsvn, [p/1, q/1, takes/1]).
+:- use_module(library(prelude)).
+
+% The HNF equality of a repeated variable merges the two halves'
+% declaration sources INSIDE type constructors, not just at the top
+% level. Matching p([E | X]) at an untyped p types X as list(A) with
+% A flexible; the partner q(X) at q(list(int)) is what says A is int,
+% and E is therefore an int — so telling takes(E) at takes(string) is
+% a type error. Were the merge only top-level, A would stay flexible,
+% takes(E) would bind it to string, and the misuse would be reported
+% as an inaccessible branch (a warning) on a rule that does fire.
+:- chr_constraint p(any), q(prelude:list(int)), takes(string).
+
+r @ p([E | X]), q(X) <=> takes(E).

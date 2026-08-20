@@ -1,23 +1,26 @@
 :- module('$typechecker', [
-    constraint_sig/2,
-    function_sig/2,
-    function_sigs/2,
-    function_bounds/2,
-    constraint_bounds/2,
+    constraint_sig/3,
+    function_sig/3,
+    function_sigs/3,
+    function_bounds/3,
+    constraint_bounds/3,
     con_sig/2,
-    check_constraint_use/3,
-    check_function_use/4,
-    check_function_use_with_ambient/5,
+    check_constraint_use/5,
+    check_function_use/6,
+    check_function_use_with_ambient/7,
+    check_function_ref/7,
     check_constructor_use/4,
     check_unify/3,
     check_guard_bool/2,
+    check_guard_match/5,
     check_guard_getarg/5,
-    check_bound/4,
-    ambient_sig/3,
-    active_scope/1,
-    end_scope/1,
+    ev_unify/3,
+    eq_unify/3,
+    check_bound/6,
     errors/1,
-    collect/1
+    collect/1,
+    warnings/1,
+    collect_warnings/1
 ]).
 
 :- use_module(library(prelude)).
@@ -34,21 +37,38 @@
 % opaque data rather than as cross-module references subject to
 % value-level visibility checks. See language.md §The `quote/1`
 % quoting form.
-% `rigid(N)` is a *rigid* type variable: a fresh identity allocated
-% by the driver while checking a polymorphic declaration's own
-% equations or rule bodies. Unlike unbound CHR variables (which are
-% *flexible* and consistent with every declared type per the gradual
-% guarantee), a rigid tvar is only consistent with itself and `any`.
-% This is what closes the soundness gap where a polymorphic body
-% calling an overloaded function at its own type parameter would
+% `rigid(Cell, N)` is a *rigid* type variable: a fresh identity `N`
+% allocated by the driver while checking a polymorphic declaration's
+% own equations or rule bodies. Unlike unbound CHR variables (which
+% are *flexible* and consistent with every declared type per the
+% gradual guarantee), a rigid tvar is only consistent with itself and
+% `any`. This is what closes the soundness gap where a polymorphic
+% body calling an overloaded function at its own type parameter would
 % silently type-check without a `requiring` clause.
+%
+% `Cell` is the skolem's *pin slot*: a fresh unbound variable that
+% guard-derived evidence — and nothing else — may bind to a type
+% (docs/reference/type-system.md §Guard-Derived Type Evidence §What
+% evidence does). While the cell is unbound the tvar is *unpinned*
+% and behaves as an opaque constant; once evidence pins it, every
+% consumer below dereferences through the cell and the tvar behaves
+% as the pinned type. One binding reaches every occurrence of the
+% skolem because all occurrences share the one term.
+%
+% INVARIANT: never `copy_term` a structure containing a live unpinned
+% cell — a copy would get a *different* cell and silently stop
+% tracking the pin. This holds today because the only structures the
+% rules copy are declared signatures (whose tvars are flexible, never
+% rigid) and constructor signatures; ambient signatures, which do
+% carry the enclosing declaration's rigids, are deliberately applied
+% in place (see the `cand` type's `amb` arm).
 :- chr_type ty ---> int
                   ; float
                   ; string
                   ; any
                   ; tcon(any, list(ty))
                   ; fun(list(ty), ty)
-                  ; rigid(int).
+                  ; rigid(ty, int).
 
 % Polymorphic two-field record reused for both function signatures
 % (sig_t(list(ty), ty)) and constructor signatures
@@ -78,6 +98,20 @@
 :- chr_type error_detail ---> pair(any, any)
                             ; overloaded.
 
+% Accumulated warnings. Same shape as `error/3` — a Ctx handle, an
+% atom code, and a heterogeneous detail — but kept in a separate
+% accumulator so the driver can decide suppression after solving: a
+% unit (rule, equation, or goal) that reports an error omits its
+% warnings (docs/reference/type-system.md §Inaccessible branches).
+:- chr_type warning ---> warning(int, any, any).
+
+% Atoms used as the Code field of `warning/3`. `inaccessible` is the
+% inaccessible-branch warning YCHR-20104: an evidence fact contradicts
+% a known concrete type, so the enclosing rule or equation can never
+% fire in the typed fragment. Its Detail is `pair(T1, T2)`, the two
+% contradicting types.
+:- chr_type warning_code ---> inaccessible.
+
 % A named bound signature inside a `requiring` clause: the bound
 % function's flat-atom name together with the argument-types and
 % return-type of its required signature. The fields share logical
@@ -89,33 +123,65 @@
 % discharge rule consumes.
 :- chr_type bound_named ---> nbound(any, list(ty), ty).
 
+% A resolution candidate, tagged with its provenance. Ambient
+% signatures (contributed by an enclosing `requiring` clause) are
+% applied in place — their type variables deliberately share identity
+% with the enclosing declaration's — while declared signatures are
+% freshly renamed (`copy_term`) at commit time so no use site can
+% pollute the stored declaration. A bounded declared signature
+% additionally carries its bounds (sharing variables with the
+% signature, copied together at commit) and the candidate signature
+% lists for each bound's named function.
+:- chr_type cand
+    ---> amb(sig_t(list(ty), ty))
+       ; decl(sig_t(list(ty), ty))
+       ; decl_bounded(sig_t(list(ty), ty), list(bound_named), list(bcand)).
+
+% Candidate signatures for one bound's named function, assembled by
+% the driver at emission time (the discharge rules are pure and
+% cannot gather across the store). Ambient and declared candidates
+% are kept apart because they discharge differently: a declared
+% signature's variables are per-emission fresh and never bound, so a
+% consistent declared witness is stable; an ambient signature may
+% share still-flexible variables with the enclosing scope, so it can
+% witness success only once its own leaves are solid.
+:- chr_type bcand
+    ---> bc(any, list(sig_t(list(ty), ty)), list(sig_t(list(ty), ty))).
+
 :- chr_constraint
-    constraint_sig(any, list(ty)),
-    function_sig(any, sig_t(list(ty), ty)),
-    function_sigs(any, list(sig_t(list(ty), ty))),
-    function_bounds(any, list(bound_named)),
-    constraint_bounds(any, list(bound_named)),
+    constraint_sig(any, int, list(ty)),
+    function_sig(any, int, sig_t(list(ty), ty)),
+    function_sigs(any, int, list(sig_t(list(ty), ty))),
+    function_bounds(any, int, list(bound_named)),
+    constraint_bounds(any, int, list(bound_named)),
     con_sig(any, sig_t(ty, list(ty))),
-    check_constraint_use(any, list(ty), int),
-    check_function_use(any, list(ty), ty, int),
-    check_function_use_with_ambient(any, list(sig_t(list(ty), ty)), list(ty), ty, int),
+    check_constraint_use(any, int, list(bcand), list(ty), int),
+    check_function_use(any, int, list(bcand), list(ty), ty, int),
+    check_function_use_with_ambient(any, int, list(sig_t(list(ty), ty)), list(bcand), list(ty), ty, int),
+    check_function_ref(any, int, list(sig_t(list(ty), ty)), list(bcand), list(ty), ty, int),
+    resolve_funref(any, list(cand), list(ty), ty, int),
     check_constructor_use(any, list(ty), ty, int),
     check_unify(ty, ty, int),
     check_guard_bool(ty, int),
+    check_guard_match(ty, any, list(ty), list(ty), int),
     check_guard_getarg(ty, ty, any, int, int),
     check_arg_list(list(ty), list(ty), int),
     tc_unify(ty, ty, int),
     tc_unify_list(list(ty), list(ty), int),
-    resolve_overload(any, list(sig_t(list(ty), ty)), list(ty), ty, int),
-    check_bound(any, list(ty), ty, int),
-    discharge_bound_check(list(sig_t(list(ty), ty)), any, list(ty), ty, int),
-    emit_bounds(list(bound_named), int),
-    ambient_sig(int, any, sig_t(list(ty), ty)),
-    active_scope(int),
-    end_scope(int),
+    ev_unify(ty, ty, int),
+    ev_unify_list(list(ty), list(ty), int),
+    eq_unify(ty, ty, int),
+    eq_unify_list(list(ty), list(ty), int),
+    resolve_overload(any, list(cand), list(ty), ty, int),
+    commit_candidate(list(cand), list(ty), ty, int),
+    check_bound(any, list(sig_t(list(ty), ty)), list(sig_t(list(ty), ty)), list(ty), ty, int),
+    emit_bounds(list(bound_named), list(bcand), int),
     report_error(int, any, any),
     errors(list(error)),
-    collect(list(error)).
+    collect(list(error)),
+    report_warning(int, any, any),
+    warnings(list(warning)),
+    collect_warnings(list(warning)).
 
 :- function (sig_fst(sig_t(A, B)) -> A), (sig_snd(sig_t(A, B)) -> B).
 sig_fst(sig(X, _)) -> X.
@@ -123,28 +189,143 @@ sig_snd(sig(_, Y)) -> Y.
 
 :- function
     (all_nonvar_list(list(any)) -> bool),
-    (filter_consistent(list(sig_t(list(ty), ty)), list(ty)) -> list(sig_t(list(ty), ty))),
+    (cand_sig(cand) -> sig_t(list(ty), ty)),
+    (wrap_ambs(list(sig_t(list(ty), ty))) -> list(cand)),
+    (wrap_decls(list(sig_t(list(ty), ty))) -> list(cand)),
+    (bcand_ambs(any, list(bcand)) -> list(sig_t(list(ty), ty))),
+    (bcand_decls(any, list(bcand)) -> list(sig_t(list(ty), ty))),
+    (filter_consistent(list(cand), list(ty)) -> list(cand)),
     (sig_args_consistent(list(ty), list(ty)) -> bool),
-    (type_consistent(ty, ty) -> bool).
+    (candidates_committable(list(cand)) -> bool),
+    (cands_all_equal(sig_t(list(ty), ty), list(cand)) -> bool),
+    (no_candidate_consistent(list(cand), list(ty)) -> bool).
 
 all_nonvar_list([]) -> true.
 all_nonvar_list([X|_]) | var(X) -> false.
 all_nonvar_list([_|Xs]) -> all_nonvar_list(Xs).
 
+cand_sig(amb(Sig)) -> Sig.
+cand_sig(decl(Sig)) -> Sig.
+cand_sig(decl_bounded(Sig, _, _)) -> Sig.
+
+wrap_ambs([]) -> [].
+wrap_ambs([Sig | Rest]) -> [amb(Sig) | wrap_ambs(Rest)].
+
+wrap_decls([]) -> [].
+wrap_decls([Sig | Rest]) -> [decl(Sig) | wrap_decls(Rest)].
+
+bcand_ambs(_, []) -> [].
+bcand_ambs(N, [bc(N, Ambs, _) | _]) -> Ambs.
+bcand_ambs(N, [_ | Rest]) -> bcand_ambs(N, Rest).
+
+bcand_decls(_, []) -> [].
+bcand_decls(N, [bc(N, _, Decls) | _]) -> Decls.
+bcand_decls(N, [_ | Rest]) -> bcand_decls(N, Rest).
+
 filter_consistent([], _) -> [].
-filter_consistent([Sig|Rest], ArgTypes) | sig_args_consistent(sig_fst(Sig), ArgTypes) ->
-    [Sig | filter_consistent(Rest, ArgTypes)].
+filter_consistent([C|Rest], ArgTypes)
+    | sig_args_consistent(sig_fst(cand_sig(C)), ArgTypes) ->
+    [C | filter_consistent(Rest, ArgTypes)].
 filter_consistent([_|Rest], ArgTypes) -> filter_consistent(Rest, ArgTypes).
 
-sig_args_consistent([], []) -> true.
-sig_args_consistent([D|Ds], [A|As]) | type_consistent(D, A) -> sig_args_consistent(Ds, As).
-sig_args_consistent(_, _) -> false.
+sig_args_consistent(DeclArgs, CallArgs) ->
+    is_mok(match_ty_list(DeclArgs, CallArgs, mok([]))).
 
-type_consistent(_, A) | var(A) -> true.
-type_consistent(any, _) -> true.
-type_consistent(_, any) -> true.
-type_consistent(X, X) -> true.
-type_consistent(_, _) -> false.
+% A pending resolution fires only when every surviving candidate
+% denotes the same signature after substitution (spec §Resolution:
+% "equal after substitution" — ask-equality `==` is deref-based
+% structural equality with same-unbound-variable identity, which is
+% exactly that relation). In the common case exactly one candidate
+% survives.
+candidates_committable([]) -> false.
+candidates_committable([C | Rest]) -> cands_all_equal(cand_sig(C), Rest).
+
+cands_all_equal(_, []) -> true.
+cands_all_equal(Sig, [C | Rest]) | Sig == cand_sig(C) -> cands_all_equal(Sig, Rest).
+cands_all_equal(_, _) -> false.
+
+no_candidate_consistent(Cands, ArgTypes) ->
+    cand_list_empty(filter_consistent(Cands, ArgTypes)).
+
+% Full-type filtering for function references: unlike a call's
+% resolution, the reference's expected RETURN component participates
+% (spec §Function references — a reference has no argument
+% expressions, so the expected function type is all the checker has).
+:- function (filter_consistent_full(list(cand), list(ty), ty) -> list(cand)).
+filter_consistent_full([], _, _) -> [].
+filter_consistent_full([C|Rest], ArgTypes, RetType)
+    | sig_one_consistent(cand_sig(C), ArgTypes, RetType) ->
+    [C | filter_consistent_full(Rest, ArgTypes, RetType)].
+filter_consistent_full([_|Rest], ArgTypes, RetType) ->
+    filter_consistent_full(Rest, ArgTypes, RetType).
+
+:- function (cand_list_empty(list(cand)) -> bool).
+cand_list_empty([]) -> true.
+cand_list_empty(_) -> false.
+
+% ==========================================================================
+% Consistency matcher (pure, no var binding)
+% ==========================================================================
+%
+% The consistency relation of spec §Consistency, extended with the
+% type-variable rules of §Type variables and instantiation: deep
+% structural consistency on type constructors and function types, the
+% absorbing rules for `any`, and *unification discipline* for type
+% variables — threaded through an explicit substitution rather than
+% by binding, so the matcher never mutates solver state and is safe
+% to call from guards.
+%
+% The substitution records, for a variable on either side, the term
+% it first met (keyed by variable identity via `==`); a later
+% occurrence of the same variable must be consistent with the
+% recorded term. This is what rejects `g(A, A)` against
+% `(int, string)` — per-position independence would accept it.
+% Known approximation: the repeat check compares with
+% `existential_consistent`, which does not thread the substitution
+% further into the recorded term; nested shared variables are
+% checked leniently (in the gradual, non-rejecting direction).
+
+:- chr_type mpair ---> mp(ty, ty).
+:- chr_type msub ---> mfail ; mok(list(mpair)).
+:- chr_type mfound ---> not_found ; found(ty).
+
+:- function
+    (match_ty(ty, ty, msub) -> msub),
+    (match_ty_list(list(ty), list(ty), msub) -> msub),
+    (match_var(ty, ty, mfound, list(mpair)) -> msub),
+    (lookup_msub(ty, list(mpair)) -> mfound),
+    (is_mok(msub) -> bool).
+
+match_ty(_, _, mfail) -> mfail.
+match_ty(D, A, mok(S)) | var(D) -> match_var(D, A, lookup_msub(D, S), S).
+match_ty(D, A, mok(S)) | var(A) -> match_var(A, D, lookup_msub(A, S), S).
+match_ty(any, _, S) -> S.
+match_ty(_, any, S) -> S.
+match_ty(int, int, S) -> S.
+match_ty(float, float, S) -> S.
+match_ty(string, string, S) -> S.
+match_ty(rigid(C, N), rigid(C, N), S) -> S.
+match_ty(rigid(C, _), A, S) | nonvar(C) -> match_ty(C, A, S).
+match_ty(D, rigid(C, _), S) | nonvar(C) -> match_ty(D, C, S).
+match_ty(tcon(C, A1), tcon(C, A2), S) -> match_ty_list(A1, A2, S).
+match_ty(fun(A1, R1), fun(A2, R2), S) -> match_ty(R1, R2, match_ty_list(A1, A2, S)).
+match_ty(_, _, _) -> mfail.
+
+match_ty_list(_, _, mfail) -> mfail.
+match_ty_list([], [], S) -> S.
+match_ty_list([X|Xs], [Y|Ys], S) -> match_ty_list(Xs, Ys, match_ty(X, Y, S)).
+match_ty_list(_, _, _) -> mfail.
+
+match_var(V, T, not_found, S) -> mok([mp(V, T) | S]).
+match_var(_, T, found(T0), S) | existential_consistent(T0, T) -> mok(S).
+match_var(_, _, _, _) -> mfail.
+
+lookup_msub(_, []) -> not_found.
+lookup_msub(V, [mp(K, T) | _]) | V == K -> found(T).
+lookup_msub(V, [_ | Rest]) -> lookup_msub(V, Rest).
+
+is_mok(mok(_)) -> true.
+is_mok(mfail) -> false.
 
 % ==========================================================================
 % Bounded polymorphism helpers (pure functions, no var binding)
@@ -169,12 +350,16 @@ existential_consistent(_, any) -> true.
 existential_consistent(int, int) -> true.
 existential_consistent(float, float) -> true.
 existential_consistent(string, string) -> true.
-% Same-rigid succeeds; different-rigid (rigid(N), rigid(M) with N≠M)
-% falls through to the `(_, _) -> false` fallthrough below, so two
+% Same-rigid succeeds; different-rigid (rigid(_, N), rigid(_, M) with
+% N≠M) falls through to the `(_, _) -> false` fallthrough below, so two
 % distinct rigid identities are deliberately inconsistent. This is
-% what makes the existence-check semantics in `discharge_bound_via_ambient`
-% reject an ambient_sig that doesn't share the call site's rigid σ.
-existential_consistent(rigid(N), rigid(N)) -> true.
+% what makes `check_bound`'s existence check reject an ambient
+% candidate that doesn't share the call site's rigid σ. A *pinned*
+% rigid (evidence bound its cell) is consistent with whatever its cell
+% holds.
+existential_consistent(rigid(C, N), rigid(C, N)) -> true.
+existential_consistent(rigid(C, _), T) | nonvar(C) -> existential_consistent(C, T).
+existential_consistent(T, rigid(C, _)) | nonvar(C) -> existential_consistent(T, C).
 existential_consistent(tcon(C, A1), tcon(C, A2)) -> existential_consistent_list(A1, A2).
 existential_consistent(fun(A1, R1), fun(A2, R2))
     | existential_consistent_list(A1, A2) -> existential_consistent(R1, R2).
@@ -185,13 +370,15 @@ existential_consistent_list([X|Xs], [Y|Ys])
     | existential_consistent(X, Y) -> existential_consistent_list(Xs, Ys).
 existential_consistent_list(_, _) -> false.
 
-% A single declared signature is consistent with the substituted bound
-% when its argument list and return type are pairwise existentially
-% consistent.
-sig_one_consistent(sig(DeclArgs, DeclRet), SubArgs, SubRet)
-    | existential_consistent_list(DeclArgs, SubArgs)
-    -> existential_consistent(DeclRet, SubRet).
-sig_one_consistent(_, _, _) -> false.
+% A single declared signature is consistent with the substituted
+% bound when its argument list and return type match under one shared
+% substitution (the matcher above): a declared signature with a
+% repeated type variable, like `g(A, A)`, is NOT consistent with
+% `g(int, string)` — the first occurrence commits `A` and the second
+% must agree. Per-position independence used to accept exactly that,
+% making repeated-variable bounds vacuously satisfiable.
+sig_one_consistent(sig(DeclArgs, DeclRet), SubArgs, SubRet) ->
+    is_mok(match_ty(DeclRet, SubRet, match_ty_list(DeclArgs, SubArgs, mok([])))).
 
 % True when at least one declared signature in the list is consistent
 % with the substituted bound. Implements the existence semantics of
@@ -201,6 +388,41 @@ sig_existential([], _, _) -> false.
 sig_existential([Sig|_], SubArgs, SubRet)
     | sig_one_consistent(Sig, SubArgs, SubRet) -> true.
 sig_existential([_|Rest], SubArgs, SubRet) -> sig_existential(Rest, SubArgs, SubRet).
+
+% True when no candidate signature is consistent with the substituted
+% bound. Meaningful on a *partial* substitution too: a free variable
+% in the substitution is consistent with anything (the matcher's var
+% rules), so a ruled-out verdict cannot be un-ruled by later
+% bindings — consistency only shrinks as information is added.
+:- function (bound_ruled_out(list(sig_t(list(ty), ty)), list(ty), ty) -> bool).
+bound_ruled_out(Sigs, SubArgs, SubRet)
+    | sig_existential(Sigs, SubArgs, SubRet) -> false.
+bound_ruled_out(_, _, _) -> true.
+
+% A *stable* witness: consistent with the substituted bound AND with
+% no leaf that could still be bound (rigid counts as solid). Used
+% for ambient candidates, whose variables may be shared with a
+% still-flexible enclosing scope: an ambient that is only consistent
+% because its own variable is unbound must not discharge the bound —
+% a later binding could invalidate the witness with the check
+% already gone, making accept/reject depend on body order.
+:- function
+    (sig_existential_stable(list(sig_t(list(ty), ty)), list(ty), ty) -> bool),
+    (sig_stable_witness(sig_t(list(ty), ty), list(ty), ty) -> bool),
+    (sig_ground(sig_t(list(ty), ty)) -> bool).
+
+sig_existential_stable([], _, _) -> false.
+sig_existential_stable([Sig|_], SubArgs, SubRet)
+    | sig_stable_witness(Sig, SubArgs, SubRet) -> true.
+sig_existential_stable([_|Rest], SubArgs, SubRet) ->
+    sig_existential_stable(Rest, SubArgs, SubRet).
+
+sig_stable_witness(Sig, SubArgs, SubRet)
+    | sig_ground(Sig) -> sig_one_consistent(Sig, SubArgs, SubRet).
+sig_stable_witness(_, _, _) -> false.
+
+sig_ground(sig(Args, Ret)) | ty_concrete_list(Args) -> ty_concrete(Ret).
+sig_ground(_) -> false.
 
 % Ground-substitution check: true when every leaf of @SubArgs@ and
 % @SubRet@ is a concrete type (no free type variable). When this is
@@ -226,9 +448,10 @@ ty_concrete(fun(Args, Ret)) | ty_concrete_list(Args) -> ty_concrete(Ret).
 % even though it stands for an abstract type — the gradual guarantee
 % applies to /flexible/ unbound vars, not rigid identities. Without
 % this, `check_bound` at a rigid σ would stay residual forever and
-% the bound's discharge (`discharge_bound_via_ambient`) would never
-% fire.
-ty_concrete(rigid(_)) -> true.
+% its ambient-candidate discharge would never fire. A pinned rigid is
+% as concrete as the type its cell holds.
+ty_concrete(rigid(C, _)) | nonvar(C) -> ty_concrete(C).
+ty_concrete(rigid(_, _)) -> true.
 ty_concrete(_) -> false.
 
 ty_concrete_list([]) -> true.
@@ -246,23 +469,24 @@ ty_concrete_list(_) -> false.
 % rule is listed before `constraint_match` so the more-specific
 % three-head pattern is preferred when both rules match.
 bounded_constraint_match @
-    constraint_sig(Name, DeclTypes), constraint_bounds(Name, Bounds) \
-        check_constraint_use(Name, ArgTypes, Ctx) <=>
+    constraint_sig(Name, Arity, DeclTypes), constraint_bounds(Name, Arity, Bounds) \
+        check_constraint_use(Name, Arity, BoundCands, ArgTypes, Ctx) <=>
     Fresh is copy_term(quote(sig(DeclTypes, Bounds))),
     FreshTypes is sig_fst(Fresh),
     FreshBounds is sig_snd(Fresh),
     check_arg_list(FreshTypes, ArgTypes, Ctx),
-    emit_bounds(FreshBounds, Ctx).
+    emit_bounds(FreshBounds, BoundCands, Ctx).
 
 % Constraint usage: copy_term the declaration, check args pairwise.
 % The Haskell driver registers a constraint_sig for every constraint
 % declared in the program (including untyped ones, which default to
-% all-any), and the renamer rejects any rule referencing an undeclared
-% constraint — so every check_constraint_use always has a matching
-% constraint_sig.
+% all-any), matching by name AND arity so arity-overloaded
+% constraints each check against their own declaration, and the
+% renamer rejects any rule referencing an undeclared constraint — so
+% every check_constraint_use always has a matching constraint_sig.
 constraint_match @
-    constraint_sig(Name, DeclTypes) \
-        check_constraint_use(Name, ArgTypes, Ctx) <=>
+    constraint_sig(Name, Arity, DeclTypes) \
+        check_constraint_use(Name, Arity, _, ArgTypes, Ctx) <=>
     FreshTypes is copy_term(quote(DeclTypes)),
     check_arg_list(FreshTypes, ArgTypes, Ctx).
 
@@ -273,9 +497,14 @@ constraint_match @
 % `requiring` to :- function / :- open_function, never :- class /
 % :- open_class), so there is no bounded counterpart to
 % `overloaded_function_match`.
+% Every function fact and use-side constraint carries the arity, and
+% the rule heads pair on (Name, Arity): functions can be
+% arity-overloaded, and name-only pairing would let f/1's signature
+% (or bounds) consume a use of f/2 — silently skipping the check, or
+% attaching another arity's bounds to the wrong signature.
 bounded_function_match @
-    function_sig(Name, Sig), function_bounds(Name, Bounds) \
-        check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
+    function_sig(Name, Arity, Sig), function_bounds(Name, Arity, Bounds) \
+        check_function_use(Name, Arity, BoundCands, ArgTypes, RetTypeVar, Ctx) <=>
     Fresh is copy_term(quote(sig(Sig, Bounds))),
     FreshSig is sig_fst(Fresh),
     FreshBounds is sig_snd(Fresh),
@@ -283,33 +512,29 @@ bounded_function_match @
     FreshRetType is sig_snd(FreshSig),
     check_arg_list(FreshArgTypes, ArgTypes, Ctx),
     tc_unify(RetTypeVar, FreshRetType, Ctx),
-    emit_bounds(FreshBounds, Ctx).
+    emit_bounds(FreshBounds, BoundCands, Ctx).
 
 % Function usage: copy_term preserves arg/ret sharing
 function_match @
-    function_sig(Name, Sig) \
-        check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
+    function_sig(Name, Arity, Sig) \
+        check_function_use(Name, Arity, _, ArgTypes, RetTypeVar, Ctx) <=>
     Fresh is copy_term(quote(Sig)),
     FreshArgTypes is sig_fst(Fresh),
     FreshRetType is sig_snd(Fresh),
     check_arg_list(FreshArgTypes, ArgTypes, Ctx),
     tc_unify(RetTypeVar, FreshRetType, Ctx).
 
-% Overloaded function: filter matching sigs and resolve.
-% filter_consistent treats var args as consistent with any declared type.
-% If all args are vars, all sigs match → ambiguous → succeed silently.
-% If some args are nonvar and narrow to one sig, that sig is applied.
-% Unknown-function detection is short-circuited by the Haskell driver:
-% 'typeOfCompound' checks the function-name set before emitting
-% 'check_function_use', so this rule (and 'function_match') only fires
-% for declared functions. Residual 'check_function_use' constraints
-% from overloaded functions whose args never resolve are harmless —
-% they represent genuinely polymorphic/ambiguous usage in gradual typing.
+% Overloaded function: hand the full candidate set to the residual
+% resolution below. Multi-signature classes cannot carry `requiring`
+% (RequiringOnClass), so declared overload candidates never have
+% bounds. Unknown-function detection is short-circuited by the
+% Haskell driver: 'typeOfCompound' checks the function-name set
+% before emitting 'check_function_use', so this rule (and
+% 'function_match') only fires for declared functions.
 overloaded_function_match @
-    function_sigs(Name, Sigs) \
-        check_function_use(Name, ArgTypes, RetTypeVar, Ctx) <=>
-    Matching is filter_consistent(Sigs, ArgTypes),
-    resolve_overload(Name, Matching, ArgTypes, RetTypeVar, Ctx).
+    function_sigs(Name, Arity, Sigs) \
+        check_function_use(Name, Arity, _, ArgTypes, RetTypeVar, Ctx) <=>
+    resolve_overload(Name, wrap_decls(Sigs), ArgTypes, RetTypeVar, Ctx).
 
 % ==========================================================================
 % Bounded polymorphism: ambient signatures at call sites
@@ -320,36 +545,114 @@ overloaded_function_match @
 % named functions see the bound's required signature(s) as additional
 % candidates alongside the function's ordinary declared signatures.
 % The driver determines which calls qualify and emits
-% `check_function_use_with_ambient(Name, AmbSigs, Args, Ret, Ctx)`
-% (and the analogous body-tell form for bounded constraints) when the
-% target name has at least one ambient signature in the surrounding
-% scope. AmbSigs is the complete list of ambient signatures for that
-% name across every currently active scope; the driver computes this
-% list at call time so the rules below do not need to gather across
-% stored ambient_sig constraints.
+% `check_function_use_with_ambient(Name, AmbSigs, BoundCands, Args,
+% Ret, Ctx)` when the target name (at the call's arity) has at least
+% one ambient signature in the surrounding scope. AmbSigs is the
+% complete list of ambient signatures for that name; the driver
+% computes it at call time — there is no CHR-side ambient store.
+
+% With ambient + bounded single declared sig: the declared candidate
+% carries its bounds, so a resolution that commits to the declaration
+% discharges the callee's own bound at the resulting substitution
+% (spec §Equation checking: use-site bound checks of bounded callees
+% run under the enclosing ambient) — while a resolution that commits
+% to an ambient candidate assumes the enclosing bound and emits none.
+check_with_ambient_bounded @
+    function_sig(Name, Arity, DeclSig), function_bounds(Name, Arity, Bounds) \
+        check_function_use_with_ambient(Name, Arity, AmbSigs, BoundCands, ArgTypes, RetTypeVar, Ctx) <=>
+    Cands is append(wrap_ambs(AmbSigs), [decl_bounded(DeclSig, Bounds, BoundCands)]),
+    resolve_overload(Name, Cands, ArgTypes, RetTypeVar, Ctx).
 
 % With ambient + single declared sig: prepend ambients, treat as
 % overload candidates.
 check_with_ambient_single @
-    function_sig(Name, DeclSig) \
-        check_function_use_with_ambient(Name, AmbSigs, ArgTypes, RetTypeVar, Ctx) <=>
-    AllSigs is append(AmbSigs, [DeclSig]),
-    Matching is filter_consistent(AllSigs, ArgTypes),
-    resolve_overload(Name, Matching, ArgTypes, RetTypeVar, Ctx).
+    function_sig(Name, Arity, DeclSig) \
+        check_function_use_with_ambient(Name, Arity, AmbSigs, _, ArgTypes, RetTypeVar, Ctx) <=>
+    Cands is append(wrap_ambs(AmbSigs), [decl(DeclSig)]),
+    resolve_overload(Name, Cands, ArgTypes, RetTypeVar, Ctx).
 
 % With ambient + overloaded declared sigs.
 check_with_ambient_multi @
-    function_sigs(Name, DeclSigs) \
-        check_function_use_with_ambient(Name, AmbSigs, ArgTypes, RetTypeVar, Ctx) <=>
-    AllSigs is append(AmbSigs, DeclSigs),
-    Matching is filter_consistent(AllSigs, ArgTypes),
-    resolve_overload(Name, Matching, ArgTypes, RetTypeVar, Ctx).
+    function_sigs(Name, Arity, DeclSigs) \
+        check_function_use_with_ambient(Name, Arity, AmbSigs, _, ArgTypes, RetTypeVar, Ctx) <=>
+    Cands is append(wrap_ambs(AmbSigs), wrap_decls(DeclSigs)),
+    resolve_overload(Name, Cands, ArgTypes, RetTypeVar, Ctx).
 
 % No declared sig — the ambient sigs are the only candidates.
 check_with_ambient_only @
-    check_function_use_with_ambient(Name, AmbSigs, ArgTypes, RetTypeVar, Ctx) <=>
-    Matching is filter_consistent(AmbSigs, ArgTypes),
-    resolve_overload(Name, Matching, ArgTypes, RetTypeVar, Ctx).
+    check_function_use_with_ambient(Name, _, AmbSigs, _, ArgTypes, RetTypeVar, Ctx) <=>
+    resolve_overload(Name, wrap_ambs(AmbSigs), ArgTypes, RetTypeVar, Ctx).
+
+% ==========================================================================
+% Function references
+% ==========================================================================
+%
+% `fun name/arity` is type-checked against the expected function type
+% at its use site. Single-signature references keep unification
+% semantics: instantiate the declared signature fresh and unify with
+% the expected type (a mismatch is an ordinary inconsistency), plus
+% the bound-discharge phase for a bounded referent. A reference to a
+% multi-signature class is itself a residual overload resolution,
+% filtered against the FULL expected type — return component
+% included (spec §Function references: "a reference has no argument
+% expressions, so the expected type is all the checker has").
+
+% With ambient signatures in scope for the referenced name, even a
+% single-signature reference goes through the residual resolution:
+% inside a bounded scope, `fun g/1` must be able to resolve through
+% the ambient g at the enclosing rigid tvars exactly like the call
+% form does (mirrors check_with_ambient_bounded / _single).
+funref_ambient_bounded @
+    function_sig(Name, Arity, Sig), function_bounds(Name, Arity, Bounds) \
+        check_function_ref(Name, Arity, [A | As], BoundCands, ArgTypes, RetTypeVar, Ctx) <=>
+    Cands is append(wrap_ambs([A | As]), [decl_bounded(Sig, Bounds, BoundCands)]),
+    resolve_funref(Name, Cands, ArgTypes, RetTypeVar, Ctx).
+
+funref_ambient_single @
+    function_sig(Name, Arity, Sig) \
+        check_function_ref(Name, Arity, [A | As], _, ArgTypes, RetTypeVar, Ctx) <=>
+    Cands is append(wrap_ambs([A | As]), [decl(Sig)]),
+    resolve_funref(Name, Cands, ArgTypes, RetTypeVar, Ctx).
+
+funref_bounded @
+    function_sig(Name, Arity, Sig), function_bounds(Name, Arity, Bounds) \
+        check_function_ref(Name, Arity, _, BoundCands, ArgTypes, RetTypeVar, Ctx) <=>
+    Fresh is copy_term(quote(sig(Sig, Bounds))),
+    FreshSig is sig_fst(Fresh),
+    FreshBounds is sig_snd(Fresh),
+    check_arg_list(sig_fst(FreshSig), ArgTypes, Ctx),
+    tc_unify(RetTypeVar, sig_snd(FreshSig), Ctx),
+    emit_bounds(FreshBounds, BoundCands, Ctx).
+
+funref_single @
+    function_sig(Name, Arity, Sig) \
+        check_function_ref(Name, Arity, _, _, ArgTypes, RetTypeVar, Ctx) <=>
+    Fresh is copy_term(quote(Sig)),
+    check_arg_list(sig_fst(Fresh), ArgTypes, Ctx),
+    tc_unify(RetTypeVar, sig_snd(Fresh), Ctx).
+
+funref_multi @
+    function_sigs(Name, Arity, Sigs) \
+        check_function_ref(Name, Arity, AmbSigs, _, ArgTypes, RetTypeVar, Ctx) <=>
+    Cands is append(wrap_ambs(AmbSigs), wrap_decls(Sigs)),
+    resolve_funref(Name, Cands, ArgTypes, RetTypeVar, Ctx).
+
+% A reference at an arity with no declaration cannot match any rule
+% above and stays residual; the renamer rejects such references
+% upstream (YCHR-20002), so this is unreachable from valid programs.
+
+% Same residual discipline as resolve_overload, with the return
+% component participating in filtering.
+resolve_funref_fire @
+    resolve_funref(_, Cands, ArgTypes, RetTypeVar, Ctx) <=>
+        candidates_committable(filter_consistent_full(Cands, ArgTypes, RetTypeVar)) |
+    commit_candidate(filter_consistent_full(Cands, ArgTypes, RetTypeVar),
+                     ArgTypes, RetTypeVar, Ctx).
+
+resolve_funref_none @
+    resolve_funref(Name, Cands, ArgTypes, RetTypeVar, Ctx) <=>
+        cand_list_empty(filter_consistent_full(Cands, ArgTypes, RetTypeVar)) |
+    report_error(Ctx, no_matching_overload, Name).
 
 % ==========================================================================
 % Bounded polymorphism: bound emission and discharge
@@ -369,103 +672,52 @@ nbound_name(nbound(N, _, _)) -> N.
 nbound_args(nbound(_, A, _)) -> A.
 nbound_ret(nbound(_, _, R)) -> R.
 
-emit_bounds_done @ emit_bounds([], _) <=> true.
-emit_bounds_step @ emit_bounds([B | Rest], Ctx) <=>
+emit_bounds_done @ emit_bounds([], _, _) <=> true.
+emit_bounds_step @ emit_bounds([B | Rest], BoundCands, Ctx) <=>
     GName is nbound_name(B),
     BArgs is nbound_args(B),
     BRet is nbound_ret(B),
-    check_bound(GName, BArgs, BRet, Ctx),
-    emit_bounds(Rest, Ctx).
+    check_bound(GName, bcand_ambs(GName, BoundCands),
+                bcand_decls(GName, BoundCands), BArgs, BRet, Ctx),
+    emit_bounds(Rest, BoundCands, Ctx).
 
-% `check_bound` is a residual: it stays in the store until the
-% substitution becomes ground enough to either find a consistent
-% declared signature (discharge silently) or rule them all out
-% (`bound_unsatisfied`). The `sub_ground` guard implements the
-% "ground enough" condition; partial substitutions leave the bound
-% in place, matching the gradual-guarantee silent-success rule.
+% `check_bound` is a residual carrying its complete candidate set —
+% the ambient signatures for the bound's named function in the
+% enclosing scope plus that function's declared signatures, assembled
+% by the driver at emission time (spec §Use-site checking step 4:
+% "'declared signature' includes the ambient signatures contributed
+% by the enclosing function's bound"). Ambient candidates share
+% variable identity with the enclosing declaration's tvars by
+% construction, which is what lets an equation-time bound check
+% trivially satisfy itself under rigid type variables and keeps
+% recursive uses of a bounded function polymorphic.
 %
-% Both the single-sig and overloaded-sig variants reuse
-% `discharge_bound_check`, which is a worker constraint that
-% sees a list of candidate signatures and runs an existence check.
-
-% Per spec §Use-site checking step 4: "When this check happens during
-% the equation checking of an enclosing bounded function, 'declared
-% signature' includes the ambient signatures contributed by the
-% enclosing function's bound." An ambient_sig that is consistent with
-% the substituted bound discharges it silently — this is what keeps
-% recursive uses of a bounded function polymorphic at the enclosing
-% tvars, and what makes the equation-time bound check (emitted by the
-% driver alongside the ambient sig in `emitAmbientAndBound`)
-% trivially satisfy itself under rigid type variables.
-%
-% Listed before `discharge_bound_overloaded`/`discharge_bound_single`
-% so an ambient match takes precedence; if no ambient_sig is
-% consistent, those rules fall through to the declared-signature path.
-%
-% The `ambient_sig` head pattern intentionally ignores the scope id:
-% any active ambient_sig with the matching name is a candidate. Stale
-% ambients are removed by `end_scope` before any out-of-scope bound
-% check can fire (each `check_bound` is emitted with a scope_id that
-% gets torn down at the same end_scope call). The trivial-discharge
-% property at function equation time relies on the fact that
-% `emitAmbientAndBound` uses /one/ tvars map per call, so the
-% ambient_sig and the check_bound it emits share rigid identity by
-% construction.
-discharge_bound_via_ambient @
-    ambient_sig(_, GName, AmbSig) \ check_bound(GName, SubArgs, SubRet, Ctx) <=>
+% Two dispositions (spec §Type Checking Procedure, residual checks):
+%  - success needs a ground-enough substitution AND a *stable*
+%    consistent witness: any declared candidate (its variables are
+%    per-emission fresh and never bound, so the verdict cannot
+%    change), or an ambient candidate whose own leaves are solid.
+%    An ambient that is only consistent because it shares a
+%    still-flexible variable with the enclosing scope leaves the
+%    bound residual instead — a bound still residual at the end of
+%    solving succeeds silently per the gradual guarantee;
+%  - rule-out fires as soon as NO candidate is consistent — sound on
+%    a partial substitution because consistency only shrinks as
+%    information is added ("reports an error whenever that happens").
+discharge_bound_ok_decl @
+    check_bound(_, _, DeclSigs, SubArgs, SubRet, _) <=>
         sub_ground(SubArgs, SubRet),
-        sig_one_consistent(AmbSig, SubArgs, SubRet) | true.
+        sig_existential(DeclSigs, SubArgs, SubRet) | true.
 
-discharge_bound_overloaded @
-    function_sigs(GName, DeclSigs) \ check_bound(GName, SubArgs, SubRet, Ctx) <=>
-        sub_ground(SubArgs, SubRet) |
-    discharge_bound_check(DeclSigs, GName, SubArgs, SubRet, Ctx).
+discharge_bound_ok_amb @
+    check_bound(_, AmbSigs, _, SubArgs, SubRet, _) <=>
+        sub_ground(SubArgs, SubRet),
+        sig_existential_stable(AmbSigs, SubArgs, SubRet) | true.
 
-discharge_bound_single @
-    function_sig(GName, DeclSig) \ check_bound(GName, SubArgs, SubRet, Ctx) <=>
-        sub_ground(SubArgs, SubRet) |
-    discharge_bound_check([DeclSig], GName, SubArgs, SubRet, Ctx).
-
-% No declared signature for the bound's named function. The
-% Haskell-side `unknown_bound_function` check already rejects bounds
-% whose target is not declared, so this rule is a defensive
-% catch-all: with `sub_ground` true and no declared sig found
-% (neither single nor overloaded), the bound cannot be satisfied.
-discharge_bound_no_decl @
-    check_bound(GName, SubArgs, SubRet, Ctx) <=>
-        sub_ground(SubArgs, SubRet) |
+discharge_bound_fail @
+    check_bound(GName, AmbSigs, DeclSigs, SubArgs, SubRet, Ctx) <=>
+        bound_ruled_out(append(AmbSigs, DeclSigs), SubArgs, SubRet) |
     report_error(Ctx, bound_unsatisfied, GName).
-
-% Existence check: discharge silently if any declared signature is
-% consistent; otherwise emit `bound_unsatisfied`. Two rules with
-% mutually exclusive guards; textual order picks the success case
-% first when both could fire, matching the spec's "succeed if any
-% candidate is consistent" semantics.
-discharge_bound_check_ok @
-    discharge_bound_check(Sigs, _, SubArgs, SubRet, _) <=>
-        sig_existential(Sigs, SubArgs, SubRet) | true.
-
-discharge_bound_check_fail @
-    discharge_bound_check(_, GName, _, _, Ctx) <=>
-    report_error(Ctx, bound_unsatisfied, GName).
-
-% ==========================================================================
-% Bounded polymorphism: scope teardown
-% ==========================================================================
-%
-% When the driver finishes type-checking a bounded function's
-% equation or a rule whose head mentions a bounded constraint, it
-% tells `end_scope(S)`. These rules remove every `ambient_sig(S, _, _)`
-% and the matching `active_scope(S)` so the scope's ambient
-% signatures do not leak into subsequent equations or rules.
-end_scope_ambient @
-    end_scope(S) \ ambient_sig(S, _, _) <=> true.
-
-end_scope_active @
-    end_scope(S) \ active_scope(S) <=> true.
-
-end_scope_done @
-    end_scope(_) <=> true.
 
 % Constructor usage: copy_term preserves parent/field sharing
 constructor_match @
@@ -477,13 +729,14 @@ constructor_match @
     check_arg_list(FreshFields, ArgTypes, Ctx),
     tc_unify(ResultTypeVar, FreshParent, Ctx).
 
-% Defensive fallback: unknown constructor -> any. The Haskell driver
-% (typeOfCompound, typeOfAtom, checkGuard's GuardMatch) gates
+% Defensive fallback: unknown constructor. The Haskell driver
+% (typeOfExprCtor, typeOfTermCtor, checkGuard's GuardMatch) gates
 % check_constructor_use on the constructor being a known declaration,
 % so this rule is unreachable in practice. It is kept (and routed
 % through tc_unify rather than raw `=`) so a future driver path that
-% emits check_constructor_use for an unknown constructor is sound when
-% ResultTypeVar is already bound to a concrete type.
+% emits check_constructor_use for an unknown constructor is sound.
+% Post no-bind semantics this is a pure consistency check: a flexible
+% ResultTypeVar stays flexible (it is NOT widened to `any`).
 unknown_constructor @
     check_constructor_use(_, _, ResultTypeVar, Ctx) <=>
     tc_unify(ResultTypeVar, any, Ctx).
@@ -501,15 +754,12 @@ check_arg_nil @
     check_arg_list([], [], _) <=> true.
 
 % Note: mismatched list lengths (one side exhausted before the other)
-% are left unsolved rather than reported as errors. This can happen
-% legitimately when a constraint or function is overloaded by arity:
-% the declaration-matching rules match by name only, so a wrong-arity
-% declaration may be tried first, leaving a residual check_arg_list
-% that simply stays inert. The correct-arity declaration will match
-% separately. Constructors, which cannot be overloaded by arity, have
-% their arity checked driver-side by validateConstructorArities before
-% the CHR session runs; wrong-arity constructor uses never reach
-% check_constructor_use.
+% are left unsolved rather than reported as errors. The shape is
+% unreachable from valid programs: constraint and function facts both
+% match uses by name AND arity, constructors (which cannot be
+% overloaded by arity) have their arity checked driver-side by
+% validateConstructorArities before the CHR session runs, and the
+% renamer rejects wrong-arity calls and references upstream.
 
 % ==========================================================================
 % Delegation rules
@@ -522,6 +772,86 @@ delegate_guard_bool @
     check_guard_bool(T, Ctx) <=>
     tc_unify(T, tcon(quote(prelude:bool), []), Ctx).
 
+% --------------------------------------------------------------------------
+% Constructor matches (HNF `GuardMatch`)
+% --------------------------------------------------------------------------
+%
+% `check_guard_match(ScrutTy, Con, Betas, Slots, Ctx)` types one HNF
+% `GuardMatch`. `Betas` holds one fresh RIGID type variable per
+% parameter of `Con`'s parent type, and `Slots` one fresh slot per
+% field of `Con`; both are allocated driver-side. The following
+% `GuardGetArg`s read the field types straight out of `Slots`, so the
+% scrutinee's type is consulted exactly once, here.
+%
+% A successful match is an evidence form: it proves the value was
+% built by `Con`, and within the typed fragment `Con`-values inhabit
+% only its parent type. What follows from that depends on the
+% scrutinee's state (docs/reference/type-system.md §What evidence
+% does):
+%
+%  - unpinned rigid: the match pins the skolem to the parent type at
+%    the fresh rigid `Betas` — the matched value's field types are
+%    store-chosen, so nothing downstream may assume more about them
+%    than the match proved;
+%  - pinned rigid: re-dispatch on the pinned type;
+%  - `any`: inert on the scrutinee (nothing narrows `any`) while the
+%    fields are typed at a fresh all-flexible instantiation;
+%  - known type or flexible: the ordinary constructor-typing meet,
+%    which is declaration-derived information rather than evidence —
+%    a flexible scrutinee binds to the parent type, a known one has
+%    its instantiation read off (matching `[X | Xs]` against
+%    `list(T)` gives `X : T`, `Xs : list(T)`);
+%  - known type that does not contain `Con`: constructor membership
+%    fails, so the branch is inaccessible (YCHR-20104) and the fields
+%    stay unconstrained.
+
+:- function (tcon_args(ty) -> list(ty)).
+tcon_args(tcon(_, Args)) -> Args.
+% A data constructor's parent is always a type-constructor
+% application, so the fallback is unreachable; it keeps the function
+% total.
+tcon_args(_) -> [].
+
+guard_match_pinned @
+    check_guard_match(rigid(C, _), Con, Betas, Slots, Ctx) <=> nonvar(C) |
+    check_guard_match(C, Con, Betas, Slots, Ctx).
+
+guard_match_rigid @
+    con_sig(Con, Sig) \
+        check_guard_match(rigid(C, _), Con, Betas, Slots, Ctx) <=> var(C) |
+    Fresh is copy_term(quote(Sig)),
+    FreshParent is sig_fst(Fresh),
+    tc_unify_list(tcon_args(FreshParent), Betas, Ctx),
+    C = FreshParent,
+    tc_unify_list(Slots, sig_snd(Fresh), Ctx).
+
+guard_match_any @
+    con_sig(Con, Sig) \
+        check_guard_match(T, Con, _, Slots, Ctx) <=> nonvar(T), T == any |
+    Fresh is copy_term(quote(Sig)),
+    tc_unify_list(Slots, sig_snd(Fresh), Ctx).
+
+guard_match_meet @
+    con_sig(Con, Sig) \
+        check_guard_match(T, Con, _, Slots, Ctx) <=>
+        existential_consistent(sig_fst(Sig), T) |
+    Fresh is copy_term(quote(Sig)),
+    tc_unify(T, sig_fst(Fresh), Ctx),
+    tc_unify_list(Slots, sig_snd(Fresh), Ctx).
+
+guard_match_inaccessible @
+    con_sig(Con, Sig) \
+        check_guard_match(T, Con, _, _, Ctx) <=>
+    Fresh is copy_term(quote(Sig)),
+    report_warning(Ctx, inaccessible, pair(sig_fst(Fresh), T)).
+
+% Defensive fallback: a constructor with no `con_sig`. The Haskell
+% driver gates the emission on the constructor being declared (with a
+% matching arity), so this is unreachable in practice; leaving the
+% field slots unconstrained is the gradual disposition.
+guard_match_unknown @
+    check_guard_match(_, _, _, _, _) <=> true.
+
 delegate_guard_getarg @
     con_sig(ConName, Sig) \
         check_guard_getarg(ResultType, TermType, ConName, FieldIndex, Ctx) <=>
@@ -532,18 +862,67 @@ delegate_guard_getarg @
     FieldType is nth(FieldIndex, FreshFields),
     tc_unify(ResultType, FieldType, Ctx).
 
-% Unknown constructor in guard getarg -> result is any. Routed through
-% tc_unify so the rule is sound when ResultType is already bound to a
-% non-`any` type from an earlier constraint (strict `=` would crash).
+% Unknown constructor in guard getarg: nothing is known about the
+% extracted field, so this is a no-op consistency check. Routed
+% through tc_unify so the rule is sound when ResultType is already
+% bound to a non-`any` type from an earlier constraint; a flexible
+% ResultType stays flexible (the `any` here never binds).
 unknown_guard_getarg @
-    check_guard_getarg(ResultType, _, _, _, _) <=>
-    tc_unify(ResultType, any, 0).
+    check_guard_getarg(ResultType, _, _, _, Ctx) <=>
+    tc_unify(ResultType, any, Ctx).
+
+% ==========================================================================
+% Occurs check (shared by tc_unify, ev_unify and eq_unify)
+% ==========================================================================
+%
+% True when the variable `C` — a flexible slot, or a skolem's pin
+% cell — occurs anywhere inside `T`. Compares by variable identity
+% (ask-`==`, which is false for two distinct unbound variables) and
+% looks through already-pinned cells, so an alias chain cannot hide
+% an occurrence.
+%
+% Every relation below that BINDS a type variable guards its binding
+% rules with this. A binding whose right-hand side contains the
+% variable being bound has no finite solution and would build a
+% cyclic term, which hangs the next deref that walks it — and the
+% runtime's observer transfer walks the same terms, so a cyclic type
+% term hangs the compiler outright rather than merely producing a
+% strange type.
+
+:- function
+    (ty_occurs(ty, ty) -> bool),
+    (ty_occurs_list(ty, list(ty)) -> bool).
+
+ty_occurs(C, T) | var(T), C == T -> true.
+ty_occurs(_, T) | var(T) -> false.
+ty_occurs(C, rigid(C2, _)) | C == C2 -> true.
+ty_occurs(C, rigid(C2, _)) | nonvar(C2) -> ty_occurs(C, C2).
+ty_occurs(_, rigid(_, _)) -> false.
+ty_occurs(C, tcon(_, Args)) -> ty_occurs_list(C, Args).
+ty_occurs(C, fun(Args, _)) | ty_occurs_list(C, Args) -> true.
+ty_occurs(C, fun(_, Ret)) -> ty_occurs(C, Ret).
+ty_occurs(_, _) -> false.
+
+ty_occurs_list(_, []) -> false.
+ty_occurs_list(C, [T|_]) | ty_occurs(C, T) -> true.
+ty_occurs_list(C, [_|Rest]) -> ty_occurs_list(C, Rest).
 
 % ==========================================================================
 % tc_unify (type propagation and consistency)
 % ==========================================================================
 
 % --- any handling (must come first) ---
+%
+% Per the meet table (type-system.md §Type states): `any` is only ever
+% checked against — it never binds a type variable and never
+% propagates. All three rules below therefore succeed WITHOUT binding
+% anything. The invariant this preserves: a `ty` value equal to the
+% atom `any` in a source-variable slot can only originate from the
+% Haskell driver's declaration-position stamping (see
+% headAnyOnlyVars / paramAnyOnlyVars in TypeCheck.hs). No CHR rule
+% may bind a var to `any` — the driver relies on this to tell
+% "declared any" apart from "still flexible" (`checkFunStmt`, which
+% keeps a rebound local's `any`).
 
 % (1) Nonvar any on left -> succeed, don't touch right side
 tc_unify_any_left @
@@ -553,9 +932,12 @@ tc_unify_any_left @
 tc_unify_any_right @
     tc_unify(T1, T2, _) <=> nonvar(T1), nonvar(T2), T2 == any | true.
 
-% (3) Var on left, any on right -> bind var to any
+% (3) Var on left, any on right -> succeed, do NOT bind. The flexible
+% variable stays flexible: a later solid source may still bind it,
+% and if none does it simply remains unconstrained (spec: "flexible
+% α, any -> succeeds; α is not bound").
 tc_unify_var_any @
-    tc_unify(T1, T2, _) <=> var(T1), nonvar(T2), T2 == any | T1 = any.
+    tc_unify(T1, T2, _) <=> var(T1), nonvar(T2), T2 == any | true.
 
 % --- base types ---
 
@@ -568,27 +950,33 @@ tc_unify_float @
 tc_unify_string @
     tc_unify(string, string, _) <=> true.
 
-% --- type constructors: same name, check args ---
-
-tc_unify_tcon @
-    tc_unify(tcon(C, Args1), tcon(C, Args2), Ctx) <=>
-    tc_unify_list(Args1, Args2, Ctx).
-
-% --- function types ---
+% --- type constructors and function types: same shape, check args ---
 %
-% [C-Fun] requires the same parameter count on both sides. The guarded
-% rule fires only when the argument lists have equal length and then
-% checks the field types pairwise; the unguarded fallback fires on an
-% arity mismatch and reports the two whole function types as
-% inconsistent. Without the arity guard a mismatch would reach
+% [C-Con] and [C-Fun] require the same argument count on both sides.
+% The guarded rules fire only when the argument lists have equal
+% length and then check the component types pairwise; the unguarded
+% fallbacks fire on an arity mismatch and report the two whole types
+% as inconsistent. Without the arity guard a mismatch would reach
 % `tc_unify_list` with lists of unequal length, which matches no
-% `tc_unify_list` rule and silently stays an inert residual.
+% `tc_unify_list` rule and silently stays an inert residual. (For
+% tcon the mismatch is defensive: the renamer resolves type names by
+% name+arity, so a well-formed program never produces two same-named
+% tcons of different arity — but declaration-validation gaps can.)
 
 :- function (same_arity(list(ty), list(ty)) -> bool).
 
 same_arity([], []) -> true.
 same_arity([_|Xs], [_|Ys]) -> same_arity(Xs, Ys).
 same_arity(_, _) -> false.
+
+tc_unify_tcon @
+    tc_unify(tcon(C, Args1), tcon(C, Args2), Ctx) <=>
+    same_arity(Args1, Args2) |
+    tc_unify_list(Args1, Args2, Ctx).
+
+tc_unify_tcon_arity @
+    tc_unify(tcon(C, Args1), tcon(C, Args2), Ctx) <=>
+    report_error(Ctx, inconsistent, pair(tcon(C, Args1), tcon(C, Args2))).
 
 tc_unify_fun @
     tc_unify(fun(A1, R1), fun(A2, R2), Ctx) <=>
@@ -606,11 +994,38 @@ tc_unify_fun_arity @
 % falls through to tc_unify_error and reports an inconsistency. A
 % flexible var meeting a rigid is handled by the var rules below
 % (the flex side binds to the rigid term).
+%
+% A *pinned* rigid — one whose cell guard-derived evidence has bound
+% — is not opaque any more: the ordinary meet sees the type the cell
+% holds. This is how an evidence guard enables an operation the
+% skolem would otherwise reject (`show(X) | integer(X) -> ...`).
+% Pinning is the only sanctioned exception to the meet table's rigid
+% rows and only `ev_unify` performs it.
 
 tc_unify_rigid @
-    tc_unify(rigid(N), rigid(N), _) <=> true.
+    tc_unify(rigid(C, N), rigid(C, N), _) <=> true.
+
+tc_unify_rigid_pinned_left @
+    tc_unify(rigid(C, _), T2, Ctx) <=> nonvar(C) | tc_unify(C, T2, Ctx).
+
+tc_unify_rigid_pinned_right @
+    tc_unify(T1, rigid(C, _), Ctx) <=> nonvar(C) | tc_unify(T1, C, Ctx).
 
 % --- var rules ---
+%
+% Occurs check first, with the same accepting disposition `eq_unify`
+% uses: a slot that would be bound to a type containing itself has no
+% finite solution, so the fact is dropped and nothing is reported.
+% The slot is flexible, which means the values reaching it are typed
+% `any` somewhere upstream — rejecting here would move the checker in
+% the rejecting direction on unannotated code. The point is to not
+% build the cyclic term; see the occurs-check block above.
+
+tc_unify_occurs_left @
+    tc_unify(T1, T2, _) <=> var(T1), nonvar(T2), ty_occurs(T1, T2) | true.
+
+tc_unify_occurs_right @
+    tc_unify(T1, T2, _) <=> nonvar(T1), var(T2), ty_occurs(T2, T1) | true.
 
 tc_unify_var_nonvar @
     tc_unify(T1, T2, _) <=> var(T1), nonvar(T2) | T1 = T2.
@@ -640,27 +1055,281 @@ tc_unify_list_cons @
     tc_unify_list(T1, T2, Ctx).
 
 % ==========================================================================
+% ev_unify (guard-derived type evidence)
+% ==========================================================================
+%
+% The evidence meet of docs/reference/type-system.md §Guard-Derived
+% Type Evidence §What evidence does. `ev_unify(FactTy, SlotTy, Ctx)`
+% asserts the typing fact a guard's operational success entails: the
+% fact the guard establishes comes first, the type the position
+% already has second (the order the YCHR-20104 message reads them in;
+% for a symmetric form like `GuardEqual` either order is meaningful).
+% It differs from `tc_unify` in both directions:
+%
+%  - it is the ONLY thing that may bind a rigid tvar's pin cell
+%    (`type(X) = int` at `X : T` pins `T := int`; two unpinned
+%    skolems merge), which is what lets a guard enable an operation
+%    the skolem would otherwise reject;
+%  - it never binds a flexible variable and never narrows `any` —
+%    at those states evidence is inert, so it cannot restrict
+%    unannotated code (the asymmetry is the design principle: at a
+%    rigid variable evidence is purely enabling, elsewhere it could
+%    only reject);
+%  - it is a *residual* check, like `resolve_overload` and
+%    `check_bound`: while either side is still an unsolved variable
+%    no rule below fires, so the constraint stays in the store and is
+%    re-tried when solving binds it. Evidence acts on the type's
+%    state per the spec's model — "solve the gathered constraints,
+%    then dispatch on the state" — which is what keeps the verdict
+%    independent of the order constraints were gathered in. A fact
+%    still pending when solving ends was inert: its slot never became
+%    anything but flexible;
+%  - a contradiction is a *warning*, not an error: the guard can
+%    never succeed within the typed fragment, so the enclosing rule
+%    or equation is dead code (YCHR-20104). The contradicting fact
+%    binds nothing and checking continues with the declared types.
+
+ev_unify_any_left @
+    ev_unify(T1, _, _) <=> nonvar(T1), T1 == any | true.
+
+ev_unify_any_right @
+    ev_unify(_, T2, _) <=> nonvar(T2), T2 == any | true.
+
+% A pinned skolem is no longer opaque: the fact meets whatever the
+% cell holds (so a second, contradicting predicate on the same
+% variable reports 20104 rather than silently re-pinning).
+ev_unify_pinned_left @
+    ev_unify(rigid(C, _), T2, Ctx) <=> nonvar(C) | ev_unify(C, T2, Ctx).
+
+ev_unify_pinned_right @
+    ev_unify(T1, rigid(C, _), Ctx) <=> nonvar(C) | ev_unify(T1, C, Ctx).
+
+ev_unify_same_rigid @
+    ev_unify(rigid(C, N), rigid(C, N), _) <=> true.
+
+% Occurs check, ahead of the pinning rules. A fact that would pin a
+% skolem's cell to a type *containing* that same skolem — as
+% `f(X, X)` does at `:- function f(T, list(T)) -> ...`, whose HNF
+% GuardEqual asserts `T = list(T)` — has no solution: no type
+% satisfies it, so the guard can never succeed. Binding the cell
+% would build a cyclic term and hang every later deref, so the fact
+% binds nothing and reports the branch inaccessible instead. This
+% keeps evidence's contract ("evidence never rejects") intact: the
+% disposition is the same YCHR-20104 a contradicting fact draws.
+ev_unify_occurs_left @
+    ev_unify(rigid(C, N), T2, Ctx) <=> var(C), nonvar(T2), ty_occurs(C, T2) |
+    report_warning(Ctx, inaccessible, pair(rigid(C, N), T2)).
+
+ev_unify_occurs_right @
+    ev_unify(T1, rigid(C, N), Ctx) <=> var(C), nonvar(T1), ty_occurs(C, T1) |
+    report_warning(Ctx, inaccessible, pair(T1, rigid(C, N))).
+
+% Pinning. The `nonvar` guard is what keeps the other side solid: a
+% still-flexible partner leaves the fact residual (above) rather than
+% pinning the skolem to a variable, and `any` was disposed of already.
+% Rigid × rigid merges the two skolems by pinning one cell to the
+% other's term.
+ev_unify_pin_left @
+    ev_unify(rigid(C, _), T2, _) <=> var(C), nonvar(T2) | C = T2.
+
+ev_unify_pin_right @
+    ev_unify(T1, rigid(C, _), _) <=> var(C), nonvar(T1) | C = T1.
+
+ev_unify_int @
+    ev_unify(int, int, _) <=> true.
+
+ev_unify_float @
+    ev_unify(float, float, _) <=> true.
+
+ev_unify_string @
+    ev_unify(string, string, _) <=> true.
+
+ev_unify_tcon @
+    ev_unify(tcon(C, Args1), tcon(C, Args2), Ctx) <=>
+    same_arity(Args1, Args2) |
+    ev_unify_list(Args1, Args2, Ctx).
+
+ev_unify_fun @
+    ev_unify(fun(A1, R1), fun(A2, R2), Ctx) <=>
+    same_arity(A1, A2) |
+    ev_unify_list(A1, A2, Ctx),
+    ev_unify(R1, R2, Ctx).
+
+ev_unify_contradiction @
+    ev_unify(T1, T2, Ctx) <=> nonvar(T1), nonvar(T2) |
+    report_warning(Ctx, inaccessible, pair(T1, T2)).
+
+ev_unify_list_nil @
+    ev_unify_list([], [], _) <=> true.
+
+ev_unify_list_cons @
+    ev_unify_list([H1|T1], [H2|T2], Ctx) <=>
+    ev_unify(H1, H2, Ctx),
+    ev_unify_list(T1, T2, Ctx).
+
+% ==========================================================================
+% eq_unify (the HNF equality meet)
+% ==========================================================================
+%
+% What a `GuardEqual` asserts. HNF emits it in two situations, and it
+% carries both readings at once:
+%
+%  - a source variable repeated across head (or parameter) positions,
+%    split by HNF into two variables — so the two type slots belong
+%    to ONE source variable, and §Type states' "a variable with a
+%    concrete or type-parameter source keeps that source, and the
+%    `any` positions are merely checked" applies across the split;
+%  - a non-variable head argument (`p(0)`), where the match against
+%    the literal is a genuine run-time fact.
+%
+% Accordingly `eq_unify` binds like `tc_unify` where a slot is still
+% flexible — that is the declaration-source merge, not evidence, and
+% it neither restricts unannotated code (an `any`-stamped slot is
+% disposed of first) nor reports anything — and delegates to
+% `ev_unify` where both sides are solid, which is where the evidence
+% reading matters: two skolems merge (the multi-head idiom of a
+% polymorphic constraint), a literal pins one, and a contradiction
+% between known types marks the rule dead (YCHR-20104) rather than
+% inconsistent.
+%
+% The merge has to reach INSIDE type constructors, because a slot's
+% two halves are routinely structured: matching `p([E | X])` at an
+% untyped `p` types X as `list(alpha)` with alpha flexible, and a
+% partner `q(X)` at `q(list(int))` is what says alpha is int. So
+% `eq_unify` recurses through `tcon`/`fun` itself and hands only
+% LEAVES to `ev_unify` — delegating the whole structure would lose
+% the merge at every flexible component, since evidence is
+% deliberately inert there. Every case is disposed of here or in
+% `ev_unify`'s solid rules, so an `eq_unify` never stays residual
+% (an `ev_unify` it delegates to may, which is that relation's
+% documented behaviour).
+
+eq_unify_any_left @
+    eq_unify(T1, _, _) <=> nonvar(T1), T1 == any | true.
+
+eq_unify_any_right @
+    eq_unify(_, T2, _) <=> nonvar(T2), T2 == any | true.
+
+% Occurs check on the binding rules, ahead of them. `p([X | X])`
+% equates alpha with `list(alpha)`; binding would build a cyclic term
+% and hang every later deref. Unlike the skolem case (`ev_unify`'s
+% occurs rules) this one reports NOTHING: the slot is flexible, so
+% the values reaching it are typed `any` somewhere upstream, and an
+% improper list like `[1 | 1]` really can match the pattern at run
+% time. Dropping the fact is the accepting disposition — the checker
+% does not move in the rejecting direction on unannotated code.
+eq_unify_occurs_left @
+    eq_unify(T1, T2, _) <=> var(T1), nonvar(T2), ty_occurs(T1, T2) | true.
+
+eq_unify_occurs_right @
+    eq_unify(T1, T2, _) <=> nonvar(T1), var(T2), ty_occurs(T2, T1) | true.
+
+eq_unify_var_nonvar @
+    eq_unify(T1, T2, _) <=> var(T1), nonvar(T2) | T1 = T2.
+
+eq_unify_nonvar_var @
+    eq_unify(T1, T2, _) <=> nonvar(T1), var(T2) | T2 = T1.
+
+eq_unify_var_var @
+    eq_unify(T1, T2, _) <=> var(T1), var(T2) | T1 = T2.
+
+% Below the binding rules, so that a flexible slot meeting a skolem
+% still binds to the skolem term itself (rigidity travels through
+% flexibles) rather than to what the skolem is pinned to.
+eq_unify_pinned_left @
+    eq_unify(rigid(C, _), T2, Ctx) <=> nonvar(C) | eq_unify(C, T2, Ctx).
+
+eq_unify_pinned_right @
+    eq_unify(T1, rigid(C, _), Ctx) <=> nonvar(C) | eq_unify(T1, C, Ctx).
+
+eq_unify_tcon @
+    eq_unify(tcon(C, Args1), tcon(C, Args2), Ctx) <=>
+    same_arity(Args1, Args2) |
+    eq_unify_list(Args1, Args2, Ctx).
+
+eq_unify_fun @
+    eq_unify(fun(A1, R1), fun(A2, R2), Ctx) <=>
+    same_arity(A1, A2) |
+    eq_unify_list(A1, A2, Ctx),
+    eq_unify(R1, R2, Ctx).
+
+% Leaves, plus every mismatch: an unpinned skolem on either side, two
+% base types, a tcon meeting a fun, a same-name tcon at two arities.
+eq_unify_evidence @
+    eq_unify(T1, T2, Ctx) <=> ev_unify(T1, T2, Ctx).
+
+eq_unify_list_nil @
+    eq_unify_list([], [], _) <=> true.
+
+eq_unify_list_cons @
+    eq_unify_list([H1|T1], [H2|T2], Ctx) <=>
+    eq_unify(H1, H2, Ctx),
+    eq_unify_list(T1, T2, Ctx).
+
+% ==========================================================================
 % Overload resolution
 % ==========================================================================
+%
+% Resolution is a residual check (spec §Type Checking Procedure):
+% `resolve_overload` keeps the FULL candidate list and stays in the
+% store, re-filtering on every activation as solving adds
+% information (the runtime reactivates it whenever a variable
+% reachable from its arguments is bound; when a binding makes new
+% variables reachable — X := f(A) — the runtime transfers X's
+% observers onto them, so multi-step chains re-trigger too).
+%
+%  - It FIRES — commits to the surviving signature and propagates —
+%    only when all surviving candidates are equal after substitution
+%    (`candidates_committable`); firing may enable other pending
+%    checks, which the reactivation queue re-runs.
+%  - An empty surviving set reports `no_matching_overload` whenever
+%    it occurs (sound eagerly: with only flexible variables in play,
+%    consistency shrinks monotonically as information is added).
+%  - A resolution that never fires simply stays in the store: that
+%    IS the "still ambiguous when solving ends succeeds silently"
+%    disposition — its result type stays flexible and nothing is
+%    propagated.
+%  - A fired commitment is never retracted; if later information
+%    contradicts it, the contradiction surfaces as an ordinary
+%    inconsistency from the committed `check_arg_list`/`tc_unify`.
 
-% Exactly one matching signature: apply it
-resolve_one @
-    resolve_overload(_, [Sig], ArgTypes, RetTypeVar, Ctx) <=>
-    FreshArgs is sig_fst(Sig),
-    FreshRet is sig_snd(Sig),
-    check_arg_list(FreshArgs, ArgTypes, Ctx),
-    tc_unify(RetTypeVar, FreshRet, Ctx).
+resolve_fire @
+    resolve_overload(_, Cands, ArgTypes, RetTypeVar, Ctx) <=>
+        candidates_committable(filter_consistent(Cands, ArgTypes)) |
+    commit_candidate(filter_consistent(Cands, ArgTypes),
+                     ArgTypes, RetTypeVar, Ctx).
 
-% No matching signature: error. The function name is reported so the
-% diagnostic can identify which call site failed; "no_matching_overload"
-% with the literal name on the detail side keeps the decoder simple.
 resolve_none @
-    resolve_overload(Name, [], _, _, Ctx) <=>
+    resolve_overload(Name, Cands, ArgTypes, _, Ctx) <=>
+        no_candidate_consistent(Cands, ArgTypes) |
     report_error(Ctx, no_matching_overload, Name).
 
-% Multiple matching signatures: ambiguous, succeed silently
-resolve_ambiguous @
-    resolve_overload(_, [_, _ | _], _, _, _) <=> true.
+% Committing applies the first surviving candidate's signature per
+% its provenance: ambient signatures in place (identity sharing with
+% the enclosing declaration's tvars is the point), declared
+% signatures freshly renamed, bounded declarations copied together
+% with their bounds so the emitted bound checks carry the call site's
+% substitution. The head patterns match the non-empty list shape;
+% `resolve_fire`'s guard guarantees it.
+commit_amb @
+    commit_candidate([amb(Sig) | _], ArgTypes, RetTypeVar, Ctx) <=>
+    check_arg_list(sig_fst(Sig), ArgTypes, Ctx),
+    tc_unify(RetTypeVar, sig_snd(Sig), Ctx).
+
+commit_decl @
+    commit_candidate([decl(Sig) | _], ArgTypes, RetTypeVar, Ctx) <=>
+    Fresh is copy_term(quote(Sig)),
+    check_arg_list(sig_fst(Fresh), ArgTypes, Ctx),
+    tc_unify(RetTypeVar, sig_snd(Fresh), Ctx).
+
+commit_decl_bounded @
+    commit_candidate([decl_bounded(Sig, Bounds, BoundCands) | _], ArgTypes, RetTypeVar, Ctx) <=>
+    Fresh is copy_term(quote(sig(Sig, Bounds))),
+    FreshSig is sig_fst(Fresh),
+    FreshBounds is sig_snd(Fresh),
+    check_arg_list(sig_fst(FreshSig), ArgTypes, Ctx),
+    tc_unify(RetTypeVar, sig_snd(FreshSig), Ctx),
+    emit_bounds(FreshBounds, BoundCands, Ctx).
 
 % ==========================================================================
 % Error accumulation
@@ -672,3 +1341,21 @@ accumulate_error @
 
 collect_errors @
     collect(E), errors(Es) <=> E = Es.
+
+% ==========================================================================
+% Warning accumulation
+% ==========================================================================
+%
+% Mirrors the error accumulator. Warnings are gathered in a separate
+% store constraint because they are dispositive only after solving:
+% the driver drops every warning whose unit also reported an error
+% (docs/reference/type-system.md §Inaccessible branches). The
+% emitters are `ev_unify_contradiction`, `ev_unify_occurs_left` /
+% `_right`, and `guard_match_inaccessible`, all YCHR-20104.
+
+accumulate_warning @
+    report_warning(Ctx, Code, Detail), warnings(Ws) <=>
+    warnings([warning(Ctx, Code, Detail) | Ws]).
+
+collect_all_warnings @
+    collect_warnings(W), warnings(Ws) <=> W = Ws.

@@ -1,0 +1,19 @@
+:- module(typecheck_evidence_type_case, [run/2]).
+
+:- use_module(library(prelude)).
+
+% Guard-derived type evidence at a polymorphic function's equations
+% (docs/reference/type-system.md §Worked example: type-case
+% equations). `T` is rigid in each equation, so without the guard the
+% body's `X + 1` would be rejected — nothing may assume a skolem is an
+% int. The guard `integer(X)` succeeds only on integers, so its
+% success entails `type(X) = int`, which pins `T := int` for that
+% equation alone. The second equation checks at `T := string` the same
+% way.
+:- function describe(T) -> int.
+describe(X) | integer(X) -> X + 1.
+describe(X) | string(X) -> 0.
+
+:- chr_constraint run(any, int).
+
+run(V, R) <=> R is describe(V).

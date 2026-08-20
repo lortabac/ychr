@@ -1,0 +1,13 @@
+:- module(lambda_context, [go/1]).
+:- use_module(prelude).
+:- chr_constraint go(any).
+
+:- function (applys(fun(string) -> string end, string) -> string).
+applys(F, X) -> '$call'(F, X).
+
+% The lambda body's + is ambiguous while P is flexible; the expected
+% context fun(string) -> string then pins P to string, the pending
+% resolution is retried, and its candidate set is empty — reported
+% whenever that happens. The old one-shot resolution had already
+% discarded the check before the context arrived.
+go(R) <=> R is applys(fun(P) -> P + P end, "a").

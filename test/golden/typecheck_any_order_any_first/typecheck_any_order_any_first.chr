@@ -1,0 +1,8 @@
+:- module(tc, [foo/1, bar/1]).
+:- chr_constraint foo(any), bar(int).
+% X has two head sources: foo's `any` position and bar's `int`
+% position. The concrete source wins regardless of head order (the
+% `any` position binds nothing), so the body unification with a
+% string literal is a type error. Companion test
+% typecheck_any_order_solid_first pins the swapped head order.
+bad @ foo(X), bar(X) <=> X = "oops".

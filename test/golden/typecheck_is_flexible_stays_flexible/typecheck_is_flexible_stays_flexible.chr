@@ -1,0 +1,10 @@
+:- module(tc, [go/0]).
+:- chr_constraint go/0.
+:- function mystery/1.
+mystery(X) -> X.
+% X is a local variable — a fresh flexible — and mystery/1's return
+% type is `any`, which binds nothing: X stays flexible after the
+% `is`. The following unifications then bind X to int and fail
+% against the string. (Under the pre-spec behavior, the `is` stamped
+% X to `any` and both unifications passed silently.)
+bad @ go <=> X is mystery(1), X = 1, X = "s".

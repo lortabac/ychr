@@ -1,0 +1,32 @@
+:- module(bound_ambient_stability, [c/1]).
+:- use_module(prelude).
+
+:- function (g(string) -> string).
+g(X) -> X.
+
+:- function (s(string) -> string).
+s(X) -> X.
+
+:- function (h(A) -> A) requiring (g(A) -> A).
+h(X) -> X.
+
+% A rule head is an implementation site, so the head occurrence's T is
+% a fresh rigid identity (a skolem), not a variable the body may bind.
+% Two independent consequences, one per body goal:
+%
+%   * `h(1)` needs the callee's bound at int: g(int) -> int. The only
+%     declared signature is g(string), and the ambient candidate the
+%     head contributed is g(T#0) -> T#0 at the skolem, which is not
+%     consistent with int either. No candidate survives, so the bound
+%     is ruled out: YCHR-60012.
+%   * `s(X)` passes the skolem to a string-typed parameter: an
+%     ordinary inconsistency, YCHR-60001.
+%
+% Before rule heads became implementation sites, T was a flexible var
+% shared with X's type, and this program tested something else — that
+% an ambient candidate consistent only because its own variable was
+% still unbound must not discharge a bound early. That hazard is what
+% `sig_stable_witness` in typechecker.chr guards; it is unreachable
+% while every ambient signature is encoded at rigid tvars.
+:- chr_constraint c(T) requiring (g(T) -> T).
+c(X) <=> _Z is h(1), _W is s(X).

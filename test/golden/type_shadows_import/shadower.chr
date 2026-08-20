@@ -1,0 +1,7 @@
+:- module(shadower, []).
+:- use_module(provider).
+
+% Declaring a type that is also visible through an import is
+% rejected; before YCHR-20018 the renamer silently degraded every
+% use of `t` to an unresolved name.
+:- chr_type t ---> other.

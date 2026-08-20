@@ -1,0 +1,15 @@
+:- module(trvpr, [f/2, run/1]).
+:- use_module(library(prelude)).
+
+% A variable repeated across parameter positions is the other HNF
+% equality: the equation runs only where the two arguments are
+% identical, so their types are equal. Here the second parameter is
+% declared int, so the fact pins the equation's rigid T := int and
+% the overloaded `>` resolves. Without the equality contributing
+% evidence this equation is rejected outright.
+:- function f(T, int) -> bool.
+f(X, X) -> X > 1.
+f(_, _) -> false.
+
+:- chr_constraint run(any).
+run(R) <=> R is f(2, 2).

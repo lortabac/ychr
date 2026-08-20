@@ -1,0 +1,7 @@
+:- module(invalid_type_parameter_wildcard, []).
+
+% The anonymous variable is rejected as a type parameter too: a
+% parameter has to be nameable for a constructor field to refer to
+% it. Distinct shape from `invalid_type_parameter`, which uses an
+% atom — the validator's non-variable arm has to cover both.
+:- chr_type pair(_, V) ---> mk(V).

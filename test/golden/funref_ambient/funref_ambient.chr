@@ -1,0 +1,19 @@
+:- module(funref_ambient, [go/1]).
+:- use_module(prelude).
+:- chr_constraint go(any).
+
+:- function (g(int) -> int).
+g(X) -> X.
+
+:- function (apply1(fun(A) -> A end, A) -> A).
+apply1(F, X) -> '$call'(F, X).
+
+% A reference `fun g/1` inside f's equation sees the ambient
+% g(T) -> T as a resolution candidate at the enclosing rigid T,
+% exactly like the call form g(X) would — the single-signature
+% eager path used to ignore ambients and spuriously unify the
+% declared g(int) -> int against fun(rigid T) -> rigid T.
+:- function (f(T) -> T) requiring (g(T) -> T).
+f(X) -> apply1(fun g/1, X).
+
+go(R) <=> R is f(7).

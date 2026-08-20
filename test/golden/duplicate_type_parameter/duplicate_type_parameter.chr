@@ -1,0 +1,5 @@
+:- module(duplicate_type_parameter, []).
+
+% Type parameters must be distinct; before YCHR-15019 the duplicate
+% was kept and both positions silently aliased one variable.
+:- opaque_type both(A, A).

@@ -1,0 +1,10 @@
+:- module(type_ref_arity_base, []).
+
+% A base type takes no arguments. Applying one used to be accepted
+% silently and surfaced later as a confusing tcon inconsistency at a
+% distant use site; it is YCHR-60013 at the declaration now.
+%
+% The sibling directory `type_ref_arity_mismatch` covers the other
+% shape, a *user* type referenced at the wrong arity — kept apart so
+% that neither shape can satisfy the assertion on its own.
+:- chr_type ibox ---> imk(int(A)).

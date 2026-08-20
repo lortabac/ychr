@@ -1,0 +1,13 @@
+:- module(pcu, [pair/2, out/2]).
+:- use_module(library(prelude)).
+
+% The negative twin of polymorphic_constraint_cross_occurrence (the
+% spec's `weird` worked example, §Rigid and flexible type variables).
+% The two head occurrences share no variable, so no GuardEqual links
+% them and their rigid Ts stay distinct: X : T1, Y : T2. Telling
+% out(X, Y) would need one instantiation covering both — correctly
+% rejected, since the store may hold pair(1, 1) and pair("a", "b")
+% simultaneously and firing would tell an out at (int, string).
+:- chr_constraint pair(T, T), out(T, T).
+
+weird @ pair(X, _), pair(_, Y) ==> out(X, Y).

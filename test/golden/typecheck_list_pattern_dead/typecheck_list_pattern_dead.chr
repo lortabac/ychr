@@ -1,0 +1,15 @@
+:- module(typecheck_list_pattern_dead, [foo/2]).
+
+:- use_module(library(prelude)).
+
+% foo's first argument is declared int, but the `dead` rule's head
+% pattern matches it as a list cons. The HNF `GuardMatch` is an
+% evidence form: within the typed fragment no int-typed value is a
+% cons cell, so the guard can never succeed and the rule is dead code
+% — YCHR-20104 (a warning), not a type error (see
+% docs/reference/type-system.md §Inaccessible branches). The program
+% still compiles and runs; the `fallback` rule is what fires.
+:- chr_constraint foo(int, any).
+
+dead @ foo([H|_], R) <=> R = H.
+fallback @ foo(_, R) <=> R = 0.

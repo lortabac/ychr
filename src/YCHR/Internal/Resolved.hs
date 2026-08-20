@@ -42,6 +42,7 @@ import YCHR.Internal.Loc (Ann)
 import YCHR.Internal.Parsed (AnnP)
 import YCHR.Internal.Types
   ( BoundSig,
+    ConstraintKey,
     HeadArg,
     Name (..),
     QualifiedConstraint,
@@ -59,12 +60,12 @@ import YCHR.Internal.Types
 data Program = Program
   { rules :: [Rule],
     functions :: [FunctionDef],
-    constraintTypes :: Map QualifiedName [TypeExpr],
+    constraintTypes :: Map ConstraintKey [TypeExpr],
     -- | Bounds declared on each @:- chr_constraint@ that carries a
     -- @requiring@ clause. Constraints without bounds do not appear in
     -- this map (rather than mapping to @[]@) so a single membership
     -- check distinguishes "bounded constraint" from "unbounded".
-    constraintBounds :: Map QualifiedName [BoundSig],
+    constraintBounds :: Map ConstraintKey [BoundSig],
     functionNames :: Set QualifiedName,
     typeDefinitions :: [TypeDefinition]
   }

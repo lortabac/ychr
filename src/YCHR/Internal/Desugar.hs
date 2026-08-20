@@ -212,8 +212,8 @@ extractSymbolTable prog =
       -- user hits a raw "user error (Constraint not found)" at goal time.
       declaredIds =
         Set.fromList
-          [ qualifiedNameToIdentifier qn (length types)
-          | (qn, types) <- Map.toList prog.constraintTypes
+          [ qualifiedNameToIdentifier key.name key.arity
+          | key <- Map.keys prog.constraintTypes
           ]
       allIds = ruleIds `Set.union` declaredIds
    in mkSymbolTable (zip (Set.toList allIds) (map ConstraintType [0 ..]))
@@ -638,20 +638,19 @@ sequenceFree = go Set.empty
 -- fresh top-level 'D.Function'. Returns the updated state and the
 -- rewritten expression.
 --
--- @parentRequiring@ is the enclosing bounded declaration's
--- @requiring@ clause (or @[]@ when the lambda's parent is unbounded).
--- Every lifted lambda inherits this clause so that bound-named
--- operations inside the lambda body resolve against the same ambient
--- signatures as in the parent's equation. Nested lambdas inherit
--- recursively.
+-- Lifted lambdas carry no @requiring@ clause. The type checker runs
+-- on the pre-lift program, where the lambda body is checked in place
+-- under the enclosing equation's context — including the ambient
+-- signatures its @requiring@ clause contributes — so inheriting the
+-- parent's clause here would be dead data (and the checker's
+-- untyped-function path ignores it anyway).
 liftExpr ::
   Text ->
   Set.Set Text ->
-  [BoundSig] ->
   LiftState ->
   R.Expr ->
   (LiftState, R.Expr)
-liftExpr modName scope parentRequiring st0 expr = case expr of
+liftExpr modName scope st0 expr = case expr of
   R.LambdaExpr params body ->
     let paramsList = NE.toList params
         paramVarNames = Set.fromList [v | HeadVar v <- paramsList]
@@ -679,7 +678,7 @@ liftExpr modName scope parentRequiring st0 expr = case expr of
               [v | R.CtorExpr (Unqualified "is") [R.VarExpr v, _] <- bodyList]
         (st1, liftedBody) =
           mapAccumL
-            (liftExpr modName innerScope parentRequiring)
+            (liftExpr modName innerScope)
             st0
             bodyList
         liftedBodyNE = NE.fromList liftedBody
@@ -700,7 +699,7 @@ liftExpr modName scope parentRequiring st0 expr = case expr of
             { name = qualName,
               arity = length allParams,
               signatures = [],
-              requiring = parentRequiring,
+              requiring = [],
               equations =
                 noAnnP
                   [ D.Equation
@@ -740,20 +739,20 @@ liftExpr modName scope parentRequiring st0 expr = case expr of
      in (st2, R.CtorExpr (Unqualified closureFunctor) closureArgs)
   R.CtorExpr name args ->
     let (st1, args') =
-          mapAccumL (liftExpr modName scope parentRequiring) st0 args
+          mapAccumL (liftExpr modName scope) st0 args
      in (st1, R.CtorExpr name args')
   R.CallExpr qn args ->
     let (st1, args') =
-          mapAccumL (liftExpr modName scope parentRequiring) st0 args
+          mapAccumL (liftExpr modName scope) st0 args
      in (st1, R.CallExpr qn args')
   R.ApplyExpr f args ->
-    let (st1, f') = liftExpr modName scope parentRequiring st0 f
+    let (st1, f') = liftExpr modName scope st0 f
         (st2, args') =
-          mapAccumL (liftExpr modName scope parentRequiring) st1 args
+          mapAccumL (liftExpr modName scope) st1 args
      in (st2, R.ApplyExpr f' args')
   R.HostExpr f args ->
     let (st1, args') =
-          mapAccumL (liftExpr modName scope parentRequiring) st0 args
+          mapAccumL (liftExpr modName scope) st0 args
      in (st1, R.HostExpr f args')
   _ -> (st0, expr)
 
@@ -762,34 +761,33 @@ liftExpr modName scope parentRequiring st0 expr = case expr of
 liftBodyGoal ::
   Text ->
   Set.Set Text ->
-  [BoundSig] ->
   LiftState ->
   D.BodyGoal ->
   (LiftState, D.BodyGoal)
-liftBodyGoal modName scope parentRequiring st goal = case goal of
+liftBodyGoal modName scope st goal = case goal of
   D.BodyIs v expr ->
-    let (st', expr') = liftExpr modName scope parentRequiring st expr
+    let (st', expr') = liftExpr modName scope st expr
      in (st', D.BodyIs v expr')
   D.BodyCall qn args ->
     let (st', args') =
-          mapAccumL (liftExpr modName scope parentRequiring) st args
+          mapAccumL (liftExpr modName scope) st args
      in (st', D.BodyCall qn args')
   D.BodyApply f args ->
-    let (st', f') = liftExpr modName scope parentRequiring st f
+    let (st', f') = liftExpr modName scope st f
         (st'', args') =
-          mapAccumL (liftExpr modName scope parentRequiring) st' args
+          mapAccumL (liftExpr modName scope) st' args
      in (st'', D.BodyApply f' args')
   D.BodyTell qn args ->
     let (st', args') =
-          mapAccumL (liftExpr modName scope parentRequiring) st args
+          mapAccumL (liftExpr modName scope) st args
      in (st', D.BodyTell qn args')
   D.BodyUnify t1 t2 ->
-    let (st', t1') = liftExpr modName scope parentRequiring st t1
-        (st'', t2') = liftExpr modName scope parentRequiring st' t2
+    let (st', t1') = liftExpr modName scope st t1
+        (st'', t2') = liftExpr modName scope st' t2
      in (st'', D.BodyUnify t1' t2')
   D.BodyHostStmt f args ->
     let (st', args') =
-          mapAccumL (liftExpr modName scope parentRequiring) st args
+          mapAccumL (liftExpr modName scope) st args
      in (st', D.BodyHostStmt f args')
   D.BodyTrue -> (st, D.BodyTrue)
 
@@ -802,17 +800,16 @@ liftBodyGoal modName scope parentRequiring st goal = case goal of
 liftGuard ::
   Text ->
   Set.Set Text ->
-  [BoundSig] ->
   LiftState ->
   D.Guard ->
   (LiftState, D.Guard)
-liftGuard modName scope parentRequiring st guard_ = case guard_ of
+liftGuard modName scope st guard_ = case guard_ of
   D.GuardExpr e ->
-    let (st', e') = liftExpr modName scope parentRequiring st e
+    let (st', e') = liftExpr modName scope st e
      in (st', D.GuardExpr e')
   D.GuardEqual e1 e2 ->
-    let (st', e1') = liftExpr modName scope parentRequiring st e1
-        (st'', e2') = liftExpr modName scope parentRequiring st' e2
+    let (st', e1') = liftExpr modName scope st e1
+        (st'', e2') = liftExpr modName scope st' e2
      in (st'', D.GuardEqual e1' e2')
   _ -> (st, guard_)
 
@@ -823,46 +820,44 @@ liftGuard modName scope parentRequiring st guard_ = case guard_ of
 -- of a compound pattern like @maplist(F, [X|Xs]) -> ...@.
 liftEquation ::
   Text ->
-  [BoundSig] ->
   LiftState ->
   D.Equation ->
   (LiftState, D.Equation)
-liftEquation modName parentRequiring st eq =
+liftEquation modName st eq =
   let scope =
         Set.unions (map headArgVars eq.params)
           `Set.union` guardVars eq.guards
           `Set.union` funStmtBindings eq.prelude
       (st', guards') =
-        mapAccumL (liftGuard modName scope parentRequiring) st eq.guards
+        mapAccumL (liftGuard modName scope) st eq.guards
       (st'', prelude') =
-        mapAccumL (liftFunStmt modName scope parentRequiring) st' eq.prelude
-      (st''', rhs') = liftExpr modName scope parentRequiring st'' eq.rhs
+        mapAccumL (liftFunStmt modName scope) st' eq.prelude
+      (st''', rhs') = liftExpr modName scope st'' eq.rhs
    in (st''', eq {D.guards = guards', D.prelude = prelude', D.rhs = rhs'})
 
 -- | Lift lambdas in a function-body prelude statement.
 liftFunStmt ::
   Text ->
   Set.Set Text ->
-  [BoundSig] ->
   LiftState ->
   D.FunStmt ->
   (LiftState, D.FunStmt)
-liftFunStmt modName scope parentRequiring st stmt = case stmt of
+liftFunStmt modName scope st stmt = case stmt of
   D.FunIs v expr ->
-    let (st', expr') = liftExpr modName scope parentRequiring st expr
+    let (st', expr') = liftExpr modName scope st expr
      in (st', D.FunIs v expr')
   D.FunHostStmt f args ->
     let (st', args') =
-          mapAccumL (liftExpr modName scope parentRequiring) st args
+          mapAccumL (liftExpr modName scope) st args
      in (st', D.FunHostStmt f args')
   D.FunCall qn args ->
     let (st', args') =
-          mapAccumL (liftExpr modName scope parentRequiring) st args
+          mapAccumL (liftExpr modName scope) st args
      in (st', D.FunCall qn args')
   D.FunApply f args ->
-    let (st', f') = liftExpr modName scope parentRequiring st f
+    let (st', f') = liftExpr modName scope st f
         (st'', args') =
-          mapAccumL (liftExpr modName scope parentRequiring) st' args
+          mapAccumL (liftExpr modName scope) st' args
      in (st'', D.FunApply f' args')
 
 -- | Variables bound by a list of function-body prelude statements (only
@@ -873,15 +868,13 @@ funStmtBindings = Set.fromList . concatMap binds
     binds (D.FunIs v _) = [v]
     binds _ = []
 
--- | Lift lambdas in a function definition. The function's own
--- @requiring@ clause is the @parentRequiring@ propagated to every
--- lambda lifted out of its equations.
+-- | Lift lambdas in a function definition.
 liftFunction :: LiftState -> D.Function -> (LiftState, D.Function)
 liftFunction st func =
   let modName = func.name.moduleName
       (st', eqs') =
         mapAccumL
-          (liftEquation modName func.requiring)
+          (liftEquation modName)
           st
           func.equations.node
    in (st', func {D.equations = func.equations {node = eqs'}})
@@ -933,11 +926,7 @@ guardVars = Set.unions . map gVars
     gVars (D.GuardMatch e _ _) = exprVars e
 
 -- | Lift lambdas in a rule. The scope includes all variables from the
--- entire rule (head, guard, and body). Rules use an empty
--- @parentRequiring@: bounded constraints contribute ambient signatures
--- at type-check time through the head-occurrence mechanism, not by
--- pushing bounds onto lifted lambdas (lambdas in rule bodies that need
--- bound-named operations remain rare in practice).
+-- entire rule (head, guard, and body).
 liftRule :: LiftState -> D.Rule -> (LiftState, D.Rule)
 liftRule st rule =
   let headNode = rule.head.node
@@ -947,9 +936,9 @@ liftRule st rule =
           `Set.union` bodyGoalVars rule.body.node
       modName = ruleModName headNode
       (st', guards') =
-        mapAccumL (liftGuard modName scope []) st rule.guard.node
+        mapAccumL (liftGuard modName scope) st rule.guard.node
       (st'', body') =
-        mapAccumL (liftBodyGoal modName scope []) st' rule.body.node
+        mapAccumL (liftBodyGoal modName scope) st' rule.body.node
    in ( st'',
         rule
           { D.guard = rule.guard {node = guards'},
@@ -977,8 +966,7 @@ liftAllLambdas prog =
 -- and any generated function definitions (to be compiled on the fly).
 -- Uses @\"__query\"@ as the module name for lifted lambdas, and starts
 -- the counter high enough to avoid collisions with program lambdas.
--- Query lambdas inherit no @requiring@ clause: the top-level goal has
--- no enclosing bounded declaration whose bound could propagate.
+-- Like all lifted lambdas, query lambdas carry no @requiring@ clause.
 liftQueryLambdas ::
   Int ->
   [D.BodyGoal] ->
@@ -987,7 +975,7 @@ liftQueryLambdas startCounter goals =
   let scope = bodyGoalVars goals
       initState = LiftState startCounter [] []
       (st, goals') =
-        mapAccumL (liftBodyGoal "__query" scope []) initState goals
+        mapAccumL (liftBodyGoal "__query" scope) initState goals
    in (goals', st.liftedFunctions, st.liftErrors)
 
 {- ---------------------------------------------------------------------------

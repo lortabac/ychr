@@ -1,0 +1,10 @@
+:- module(tc, [go/1, opaque/1, takes/1]).
+:- use_module(prelude).
+:- chr_constraint go(int), opaque/1, takes(string).
+% The other half of §The role of `any`: `any` never overwrites a type
+% established elsewhere. R is declared int; `R is X` reads an
+% `any`-typed X, which is checked against R and binds nothing, so R
+% is still int at the takes(R) tell — a type error against
+% takes(string). Were the `any` to flow into R, the misuse would go
+% unreported. The positive twin is typecheck_is_keeps_any.
+p @ go(R), opaque(X) <=> R is X, takes(R).

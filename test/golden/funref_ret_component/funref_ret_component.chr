@@ -1,0 +1,18 @@
+:- module(funref_ret_component, [go/1]).
+:- use_module(prelude).
+:- chr_constraint go(any).
+
+:- class (idc(A) -> A), (idc(string) -> int).
+idc(X) -> X.
+
+% A class reference is matched against the FULL expected function
+% type. Under fun(string) -> float both signatures survive argument
+% filtering (both accept string) and both die on the return
+% component (A is pinned string; int is not float) — an empty
+% candidate set, reported whenever it occurs. A call's resolution
+% never consults the return type; the reference asymmetry is
+% deliberate (spec §Function references).
+:- function (apply_sf(fun(string) -> float end, string) -> float).
+apply_sf(F, X) -> '$call'(F, X).
+
+go(R) <=> R is apply_sf(fun idc/1, "x").

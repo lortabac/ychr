@@ -414,7 +414,32 @@ observerTests =
       testCase "addObserver on ground value is no-op" $ do
         runVarEnv $ do
           addObserver (SuspensionId 99) (VInt 42)
-          pure ()
+          pure (),
+      testCase "Observers transfer onto newly reachable vars" $ do
+        -- Observation is over the unbound variables *reachable* from a
+        -- suspension's arguments, and binding X to a term changes that
+        -- set: A becomes reachable, X stops being. Without the
+        -- transfer, binding A later would wake nobody and the omega-r
+        -- Reactivate step would be silently skipped.
+        (ok, obs) <- runVarEnv $ do
+          x <- newVar
+          a <- newVar
+          addObserver (SuspensionId 7) x
+          _ <- unify x (VTerm "g" [a])
+          unify a (VInt 1)
+        assertBool "unify succeeds" ok
+        obs @?= [SuspensionId 7],
+      testCase "Transfer reaches a var nested in a compound" $ do
+        -- The transfer walks the term it binds to, so a variable
+        -- several levels down is observed too.
+        (ok, obs) <- runVarEnv $ do
+          x <- newVar
+          a <- newVar
+          addObserver (SuspensionId 8) x
+          _ <- unify x (VTerm "outer" [VTerm "inner" [a]])
+          unify a (VInt 1)
+        assertBool "unify succeeds" ok
+        obs @?= [SuspensionId 8]
     ]
 
 derefTests :: TestTree

@@ -1,0 +1,7 @@
+:- module(duplicate_type_declaration, []).
+
+% Declaring the same type name/arity twice is rejected; before
+% YCHR-20017 the renamer silently degraded every use of `foo` to an
+% unresolved name (multiple providers -> Unqualified fallback).
+:- chr_type foo ---> a ; b.
+:- chr_type foo ---> c ; d.

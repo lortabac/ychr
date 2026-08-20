@@ -1,0 +1,16 @@
+:- module(tlpr, [f/2, run/1]).
+:- use_module(library(prelude)).
+
+% A literal parameter pattern is an evidence form: the equation runs
+% only where the argument is that literal, so its type is the
+% literal's. Here that pins the equation's rigid T := int, which is
+% what lets the overloaded `>` resolve in the RHS. The second
+% equation gets no such fact and stays parametric, so it may not use
+% an operation at T (spec §Evidence forms; the type-case idiom of
+% §Worked example: type-case equations).
+:- function f(T, T) -> bool.
+f(0, Y) -> Y > 1.
+f(_, _) -> false.
+
+:- chr_constraint run(any).
+run(R) <=> R is f(0, 2).

@@ -20,10 +20,10 @@ import YCHR.Internal.Display (Display (..))
 import YCHR.Internal.Meta (metaHostCallRegistry)
 import YCHR.Internal.Pretty (prettyBindings)
 import YCHR.Internal.Runtime.Interpreter (baseHostCallRegistry)
-import YCHR.Internal.TypeCheck (typeCheckProgram)
+import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Run
   ( Error,
-    Warning,
+    Warning (..),
     compileFiles,
     prepareGoal,
     runPreparedGoal,
@@ -72,6 +72,18 @@ expectsWarnings =
       "type_predicates",
       "typecheck_polymorphic_constraint",
       "typecheck_qualified_in_head",
+      -- These are permitted to emit the inaccessible-branch warning
+      -- (YCHR-20104): a guard whose typing fact contradicts a known
+      -- type marks a rule or equation that can never fire — dead
+      -- code, not a type error. This list is an allowlist and pins
+      -- nothing; the warnings themselves are asserted by
+      -- @test/typecheck/test_typecheck.py@ (rendered text, per
+      -- directory) and by "YCHR.TypeCheckTest" (payloads).
+      "typecheck_evidence_dead_rule",
+      "typecheck_list_pattern_dead",
+      "typecheck_open_function_dead_equation",
+      "typecheck_qualified_in_head_dead",
+      "typecheck_shared_var_dead",
       "unicode_atoms_strings",
       "unifiable",
       -- The lambda-calculus object language (var/lam/app/lit_int/add) is
@@ -214,12 +226,7 @@ runPositive spec goalFile expectedFile = do
     compileFiles False spec.chrFiles
       >>= either (assertFailure . show) pure
   checkWarnings spec "compile" ws
-  typeErrors <- typeCheckProgram prog.desugaredProgram
-  case typeErrors of
-    [] -> pure ()
-    errs ->
-      assertFailure
-        ("Type errors in " ++ spec.testName ++ ":\n" ++ unlines (map displayMsg errs))
+  typeCheckOrFail spec prog
   query <- TIO.readFile goalFile
   expected <- readFile expectedFile
   (constraint, goalWs) <- prepareGoal prog (T.strip query)
@@ -242,12 +249,7 @@ runGoalNegative spec goalFile errorFile = do
     compileFiles False spec.chrFiles
       >>= either (assertFailure . show) pure
   checkWarnings spec "compile" ws
-  typeErrors <- typeCheckProgram prog.desugaredProgram
-  case typeErrors of
-    [] -> pure ()
-    errs ->
-      assertFailure
-        ("Type errors in " ++ spec.testName ++ ":\n" ++ unlines (map displayMsg errs))
+  typeCheckOrFail spec prog
   query <- TIO.readFile goalFile
   expectedSubstrings <- nonEmptyLines <$> readFile errorFile
   (constraint, goalWs) <- prepareGoal prog (T.strip query)
@@ -295,8 +297,8 @@ runNegative spec errorFile = do
   case result of
     Left err -> assertAllPresent (displayMsg err) expectedSubstrings
     Right (prog, _ws) -> do
-      typeErrors <- typeCheckProgram prog.desugaredProgram
-      case typeErrors of
+      typeResult <- typeCheckProgram prog.desugaredProgram
+      case typeResult.errors of
         [] -> assertFailure "Expected compilation or type checking to fail, but it succeeded"
         errs -> assertAllPresent (unlines (map displayMsg errs)) expectedSubstrings
   where
@@ -309,6 +311,22 @@ runNegative spec errorFile = do
               ("Expected substring " ++ show sub ++ " in:\n" ++ msg)
               (sub `isInfixOf` msg)
         )
+
+-- | Type-check a positive test's program: any type error fails the
+-- test, and type-check warnings go through the same allowlist as
+-- compile-time warnings.
+typeCheckOrFail :: TestSpec -> CompiledProgram -> IO ()
+typeCheckOrFail spec prog = do
+  result <- typeCheckProgram prog.desugaredProgram
+  case result.errors of
+    [] -> pure ()
+    errs ->
+      assertFailure
+        ("Type errors in " ++ spec.testName ++ ":\n" ++ unlines (map displayMsg errs))
+  checkWarnings
+    spec
+    "typecheck"
+    [TypeCheckWarnings result.warnings | not (null result.warnings)]
 
 -- | Assert no warnings unless the test is on the allowlist. The
 -- @phase@ label distinguishes compile-time warnings from goal-time

@@ -1,13 +1,14 @@
-:- module(ivpt, [go/2]).
+:- module(ivpt, [go/1]).
 :- use_module(prelude).
 
-% Two arguments share the type parameter A, so the head ties R's
-% inferred type to S's. `Sum = 1 + 1` makes Sum : int; with the new
-% rule, `R is Sum` propagates int to R (and thus to A and S), so
-% unifying S with a string literal is a type error.
+% The `is` RHS is an evaluated position, so `Sum is 1 + 1` types Sum
+% as int. The plain `=` that follows then carries that int into S,
+% which the head declares string — a type error.
 %
-% Under the previous bare-variable widening, `R is Sum` set R to
-% `any` and the rule type-checked silently.
-:- chr_constraint go(A, A).
+% The `=` form of the first goal would NOT be an error: `=` is
+% structural, so `Sum = 1 + 1` binds Sum to a symbolic compound
+% typed `any`, and `any` does not propagate — see the positive twin
+% typecheck_unify_structural.
+:- chr_constraint go(string).
 
-go(R, S) <=> Sum = 1 + 1, R is Sum, S = "hello".
+go(S) <=> Sum is 1 + 1, S = Sum.

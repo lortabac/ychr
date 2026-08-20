@@ -248,8 +248,9 @@ than one typed signature is rejected (YCHR-16011). To overload a name
 across several type signatures, declare it with `:- class`; the
 equations still form one shared, top-to-bottom matched set. The
 cross-module pair `:- open_function` / `:- open_class` mirrors the
-closed forms. Bounded polymorphism (`requiring`) is reserved for
-`:- function` / `:- open_function` (YCHR-15005 on a class). See
+closed forms. Bounded polymorphism (`requiring`) is allowed on
+`:- function` / `:- open_function` / `:- chr_constraint`, but never
+on the class forms (YCHR-15005 on a class). See
 [type-system.md](type-system.md#signature-overloading) for the
 overloading rules and examples.
 

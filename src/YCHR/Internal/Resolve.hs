@@ -37,6 +37,7 @@ import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types
   ( BoundSig (..),
     Constraint (..),
+    ConstraintKey (..),
     HeadArg (..),
     Name (..),
     QualifiedConstraint (..),
@@ -349,10 +350,10 @@ buildFunctionKinds mods =
       P.FunctionDecl {} <- [d]
     ]
 
-collectConstraintTypes :: [CollectedModule] -> Map.Map QualifiedName [TypeExpr]
+collectConstraintTypes :: [CollectedModule] -> Map.Map ConstraintKey [TypeExpr]
 collectConstraintTypes mods =
   Map.fromList
-    [ (QualifiedName m.name d.name, ts)
+    [ (ConstraintKey (QualifiedName m.name d.name) d.arity, ts)
     | m <- mods,
       P.Ann d _ <- m.decls,
       P.ConstraintDecl {} <- [d],
@@ -363,10 +364,10 @@ collectConstraintTypes mods =
 
 -- | Bounds declared on every @:- chr_constraint@ that carries a
 -- @requiring@ clause. Unbounded constraints are absent from the map.
-collectConstraintBounds :: [CollectedModule] -> Map.Map QualifiedName [BoundSig]
+collectConstraintBounds :: [CollectedModule] -> Map.Map ConstraintKey [BoundSig]
 collectConstraintBounds mods =
   Map.fromList
-    [ (QualifiedName m.name d.name, bs)
+    [ (ConstraintKey (QualifiedName m.name d.name) d.arity, bs)
     | m <- mods,
       P.Ann d _ <- m.decls,
       P.ConstraintDecl {requiring = Just bs} <- [d]
@@ -923,10 +924,12 @@ resolveFunctions ::
   [CollectedModule] ->
   ([R.FunctionDef], [Diagnostic ResolveError])
 resolveFunctions visMap mods =
-  let -- Collect all function declarations with their module context
+  let -- Collect all function declarations with their module context.
+      -- Modules are tagged with their input position so 'build' can
+      -- gather equations once per distinct declaring module.
       allDecls =
-        [ (QualifiedName m.name d.name, d.arity, d, m)
-        | m <- mods,
+        [ (QualifiedName m.name d.name, d.arity, d, im, m)
+        | (im, m) <- zip [0 :: Int ..] mods,
           P.Ann d _ <- m.decls,
           P.FunctionDecl {} <- [d]
         ]
@@ -935,27 +938,37 @@ resolveFunctions visMap mods =
         Map.toList $
           Map.fromListWith
             (++)
-            [ ((qn, ar), [(d, m)])
-            | (qn, ar, d, m) <- allDecls
+            [ ((qn, ar), [(d, im, m)])
+            | (qn, ar, d, im, m) <- allDecls
             ]
       build ((qn, ar), decls) =
-        let (eqss, declErrss) =
-              unzip
-                [ gatherEquations visMap mods m d
-                | (d, m) <- decls
-                ]
+        let declPairs = [(d, m) | (d, _, m) <- decls]
+            -- 'gatherEquations' selects equations by (name, arity)
+            -- from the declaring module, and every declaration in the
+            -- group shares both — so it is gathered once per distinct
+            -- declaring module, not once per declaration (a
+            -- multi-signature @:- class@ contributes one declaration
+            -- per signature and would repeat every equation N times).
+            -- A group spans more than one module only when two input
+            -- files declare the same module name, which is currently
+            -- accepted (see dev-docs/BUGS.md); per-module gathering
+            -- keeps every file's equations in that case.
+            declModules =
+              Map.elems (Map.fromList [(im, (d, m)) | (d, im, m) <- decls])
+            (eqss, eqErrss) =
+              unzip [gatherEquations visMap mods m d | (d, m) <- declModules]
             def =
               R.FunctionDef
                 { name = qn,
                   arity = ar,
                   signatures =
-                    collectSignatures decls
+                    collectSignatures declPairs
                       ++ collectExtensionSignatures mods qn ar,
-                  isOpen = any (\(d, _) -> d.isOpen) decls,
-                  requiring = concatMap (\(d, _) -> maybe [] id d.requiring) decls,
+                  isOpen = any (\(d, _) -> d.isOpen) declPairs,
+                  requiring = concatMap (\(d, _) -> maybe [] id d.requiring) declPairs,
                   equations = concat eqss
                 }
-         in (def, concat declErrss)
+         in (def, concat eqErrss)
       (defs, defErrss) = unzip (map build grouped)
    in (defs, concat defErrss)
 

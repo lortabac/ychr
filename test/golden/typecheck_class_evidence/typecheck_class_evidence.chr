@@ -1,0 +1,18 @@
+:- module(typecheck_class_evidence, [run/2]).
+
+:- use_module(library(prelude)).
+
+% A multi-signature class's equations are checked once per declared
+% signature, and a type-predicate guard is what selects which
+% signature an equation fits: the first equation contradicts
+% `conv(string) -> int` and fits `conv(int) -> string`, the second the
+% other way round (docs/reference/type-system.md §Signature
+% Overloading §Equation checking). A contradiction counts as failure
+% of that candidate and emits nothing, so the program checks clean.
+:- class (conv(int) -> string), (conv(string) -> int).
+conv(X) | integer(X) -> "i".
+conv(X) | string(X) -> 0.
+
+:- chr_constraint run(int, string).
+
+run(N, R) <=> R is conv(N).

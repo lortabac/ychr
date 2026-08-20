@@ -1,0 +1,12 @@
+:- module(tc, [result/1, takes/1]).
+:- use_module(prelude).
+:- chr_constraint result/1, takes(string).
+:- function double(int) -> int.
+double(N) -> N * 2.
+% R is typed `any` (untyped result/1). `is` checks its RHS type
+% against R and leaves R alone: nothing narrows `any`, `is`
+% included (spec §The role of `any`). So the takes(R) tell checks
+% `any` against takes's declared string and is accepted — the
+% checker makes no claim about a value it was told nothing about.
+% Annotating result/1 is what turns this into a type error.
+r @ result(R) <=> R is double(1), takes(R).

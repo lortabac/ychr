@@ -1,0 +1,15 @@
+:- module(function_arity_overload_bounds, [go/1]).
+:- use_module(prelude).
+:- chr_constraint go(any).
+
+:- function (g(int) -> int).
+g(X) -> X.
+
+% f/1 is bounded; f/2 is a plain unbounded function with the same name.
+:- function (f(T) -> T) requiring (g(T) -> T).
+:- function (f(int, int) -> int).
+f(X) -> X.
+f(X, _) -> X.
+
+% A call to the unbounded f/2 must not pick up f/1's bounds.
+go(R) <=> R is f(1, 2).

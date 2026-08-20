@@ -24,9 +24,9 @@ internal error constructor to its code and human-readable message.
 |------|------|---------|
 | `YCHR-15001` | `DiscontiguousEquations` | Equations for a function are not contiguous in the source. Group them together, or declare the function as `:- open_function` to allow extensions from other modules. |
 | `YCHR-15002` | `MalformedImport` | A `use_module(...)` directive's argument is not a module name or `library(name)`. |
-| `YCHR-15003` | `MalformedConstraint` | A `:- chr_constraint` declaration item is not an atom or compound term. |
+| `YCHR-15003` | `MalformedConstraint` | A rule head or a query goal contains something that is not an atom or compound term (a bare variable, integer, or string). A malformed `:- chr_constraint` *declaration* item is `YCHR-15007` instead. |
 | `YCHR-15004` | `DiscontiguousFunctionDecls` | Declarations for a name are not contiguous. Group them, or use the appropriate `:- extend_*` directive from another module. |
-| `YCHR-15005` | `RequiringOnClass` | A `requiring` clause appears on `:- class` / `:- open_class`. Bounded polymorphism is reserved for `:- function` / `:- open_function`. |
+| `YCHR-15005` | `RequiringOnClass` | A `requiring` clause appears on `:- class` / `:- open_class`. Bounded polymorphism belongs on `:- function` / `:- open_function` / `:- chr_constraint`, never on the class forms. |
 | `YCHR-15006` | `RequiringOnExtendClassType` | A `requiring` clause appears on `:- extend_class_type`. Bounds belong to the original declaration; extensions cannot introduce them. |
 | `YCHR-15007` | `MalformedDeclaration` | A declaration is not `name/arity`, `name(types) -> ret`, or `sig requiring bounds`. |
 | `YCHR-15008` | `MalformedExportItem` | An export/import list item is not `name/arity`, `fun name/arity`, `type(name/arity)`, or `op(prio, type, name)`. |
@@ -39,6 +39,8 @@ internal error constructor to its code and human-readable message.
 | `YCHR-15015` | `DuplicateModuleHeader` | A source file contains more than one `:- module(...)` directive. A file may declare at most one module header; remove the redundant directives. |
 | `YCHR-15016` | `OpaqueTypeHasConstructors` | A `:- opaque_type` directive carries a constructor body (`---> ...`). Opaque types have no data constructors; use `:- chr_type` for a type with constructors. |
 | `YCHR-15017` | `MalformedOpaqueTypeDefinition` | A `:- opaque_type` directive is not `name` or `name(Vars)`. |
+| `YCHR-15018` | `InvalidTypeParameter` | A type-definition parameter (in `:- chr_type` or `:- opaque_type`) is not a type variable. The anonymous variable `_` is rejected too — a parameter has to be nameable to be referred to in a constructor field. |
+| `YCHR-15019` | `DuplicateTypeParameter` | The same variable appears more than once in a type definition's parameter list. |
 
 ### Resolve phase (`16xxx`)
 
@@ -64,7 +66,12 @@ internal error constructor to its code and human-readable message.
 | `YCHR-16018` | `EmptyLambdaParams` | A lambda has no parameters. Lambdas must declare at least one parameter; use `:- function` for a no-arg helper. |
 | `YCHR-16019` | `ReservedModuleName` | A user module is declared with a reserved name (currently `host`, which is wired in as the host-call qualifier). Rename the module. |
 
-### Rename phase (`2xxxx` errors, `2x1xx` warnings)
+### Rename phase (`2xxxx` errors) and program warnings (`2x1xx`)
+
+The warning codes share the `2xxxx` block but not the phase: `20101`
+and `20102` come from renaming, `20103` from the exhaustiveness pass,
+and `20104` from the type checker. Every `--Werror`-eligible
+diagnostic carries a `2x1xx` code.
 
 | Code | Name | Meaning |
 |------|------|---------|
@@ -79,12 +86,16 @@ internal error constructor to its code and human-readable message.
 | `YCHR-20010` | `NonExportedConstructor` | A qualified reference like `palette:green` names a data constructor that is declared on the type but excluded by the exporting module's allowlist. Add the constructor to the exporter's `type(t/n, [...])` list, or use a different one. |
 | `YCHR-20011` | `ConstructorNotExported` | A `use_module(palette, [type(col/0, [green])])` import lists a constructor that is declared on the type but excluded by the exporting module's allowlist. Same underlying condition as `YCHR-20010` but observed at the import site rather than at a use site. |
 | `YCHR-20012` | `AmbiguousDataConstructor` | An unqualified data-constructor reference is exported by more than one imported module. Qualify the constructor (`mod:ctor`) to disambiguate, or narrow the import list. Parallel to `YCHR-20001` for functions/constraints; data constructors are not arity-overloadable, so the error names only the constructor and the modules that export it. |
-| `YCHR-20013` | `GoalNotAConstraint` | `ychr run -g GOAL` was given a goal that is not a single declared constraint — a bare expression (`true`, `1 + 1`), an `is`/`=` form, a conjunction (`a, b`), a function call (`factorial(5)`), or an unknown name. Rewrite the goal as a `chr_constraint`-declared call (or wrap it in one) for the CLI, or use `ychr repl` for the broader goal syntax. |
+| `YCHR-20013` | `GoalNotAConstraint` | `ychr run -g GOAL` was given a goal that is not a single declared constraint — a bare expression (`true`, `1 + 1`), an `is`/`=` form, a conjunction (`a, b`), a function call (`factorial(5)`), or an unknown name. Also reported when the name is ambiguous (exported by more than one imported module — qualify it) or when its module declares it without exporting it. Rewrite the goal as a `chr_constraint`-declared call (or wrap it in one) for the CLI, or use `ychr repl` for the broader goal syntax. |
 | `YCHR-20014` | `ModuleNotImported` | A qualified reference `m:name` targets a module `m` that exists in the program but the current module never imports. Qualifying a name does not bypass the import requirement — add `:- use_module(m).`. |
 | `YCHR-20015` | `UnknownModule` | A qualified reference `m:name` targets a module `m` that does not exist anywhere in the program. Check the module name, or declare/supply the module. |
+| `YCHR-20016` | `ReservedTypeName` | A `:- chr_type` / `:- opaque_type` declaration redeclares a reserved type name: a base type (`int`, `float`, `string`, `any`) or function-type syntax (`fun`, `->`). The latter two only reach this check when quoted (`'fun'`, `'->'`); written bare they are reserved syntax and fail earlier, as `YCHR-50001`. |
+| `YCHR-20017` | `DuplicateTypeDeclaration` | The same type name and arity is declared more than once in one module. |
+| `YCHR-20018` | `TypeShadowsImport` | A type declaration collides with a type of the same name and arity visible through an import. |
 | `YCHR-20101` | `UndeclaredDataConstructor` *(warning)* | A symbol used in constructor position is not declared with `:- chr_type`. Declare it, or check the spelling. |
-| `YCHR-20102` | `DataConstructorArityMismatch` *(warning)* | A data constructor is used with a different arity than declared. |
-| `YCHR-20103` | `NonExhaustiveMatch` *(warning)* | A function's equations do not cover every constructor of an argument's algebraic type. Add an equation for the missing case, or a catch-all variable/wildcard pattern. Only reported for arguments whose type is known, so an untyped function is never flagged. |
+| `YCHR-20102` | `DataConstructorArityMismatch` *(warning)* | A data constructor is used with a different arity than declared. Comes from the renamer, so it does not depend on the type checker; the type checker reports the same mistake as `YCHR-60008`, naming the declared arity. One wrong use draws both. |
+| `YCHR-20103` | `NonExhaustiveMatch` *(warning)* | A function's equations do not cover every constructor of an argument's algebraic type; the message names a concrete unmatched example. Add an equation for the missing case, or a catch-all variable/wildcard pattern. The check is deliberately narrow — closed single-signature functions only, arguments of algebraic type only, and a guarded equation does not count as covering its pattern. See [the type-system reference](type-system.md) §Exhaustiveness checking for the full conditions. |
+| `YCHR-20104` | `InaccessibleBranch` *(warning)* | A rule or equation can never fire: the typing fact a guard's success would entail contradicts what is already known, so the guard cannot succeed in the typed fragment. Covers a type predicate against a known type (`integer(X)` where `X` is typed `color`), a constructor match against a type that has no such constructor, and an equality with no solution at all (matching `f(X, X)` against `:- function f(T, list(T)) -> ...`). Remove the dead rule or fix the type it disagrees with. Reported only when the rule or equation otherwise checks clean — an error in the same rule or equation is reported instead. Specified in [the type-system reference](type-system.md). |
 
 ### Desugar phase (`3xxxx`)
 
@@ -100,7 +111,7 @@ internal error constructor to its code and human-readable message.
 | Code | Name | Meaning |
 |------|------|---------|
 | `YCHR-40001` | `UnknownConstraintType` | A reference to a constraint type that is not declared. Declare it with `:- chr_constraint name/arity`. |
-| `YCHR-40002` | `UnboundVariable` | A variable used in a guard or body does not appear in the rule head. |
+| `YCHR-40002` | `UnboundVariable` | A variable used in a guard or body does not appear in the rule head — or, for a function equation, in its parameters. |
 
 ### Top-level errors (`5xxxx`)
 
@@ -117,10 +128,11 @@ internal error constructor to its code and human-readable message.
 | `YCHR-60001` | `InconsistentTypes` | Two types cannot be unified. Also used for runtime errors raised by the Haskell interpreter (e.g. arithmetic on non-numbers, calling a non-function, a guard not evaluating to a boolean). |
 | `YCHR-60004` | `UnboundTypeVar` | A type variable used in a constructor declaration is not in scope. Add it to the parameter list of the enclosing type. |
 | `YCHR-60005` | `UndefinedType` | A constructor declaration references a type that is not declared. Declare it with `:- chr_type`, or check the spelling. |
-| `YCHR-60006` | `NoMatchingOverload` | No declared signature of a class matches the argument types at this use site. Check that the argument types match one of the declared signatures. |
+| `YCHR-60006` | `NoMatchingOverload` | No declared signature of a class matches the argument types at this use site. Check that the argument types match one of the declared signatures. Also reported when the use site is inside a polymorphic declaration and the argument is one of its own type variables (`:- function f(T, T) -> bool.` with a body calling `>`): inside its own declaration a type variable is only consistent with itself and `any`, so no signature of `>` matches — add a `requiring` clause naming the operation, or a signature for a concrete type. Equally, an equation of a `:- class` that checks under none of its declared signatures. |
 | `YCHR-60007` | `DuplicateConstructor` | A data constructor is declared in multiple types. Rename one of them. |
-| `YCHR-60008` | `ConstructorArityMismatch` | A data constructor is used with a different arity than declared. |
+| `YCHR-60008` | `ConstructorArityMismatch` | A data constructor is used with a different arity than declared. The type-checker's counterpart to the renamer's `YCHR-20102` warning; this one names the declared arity, and the wrong-arity use is typed `any` rather than drawing a second, downstream mismatch. |
 | `YCHR-60012` | `BoundUnsatisfied` | No declared signature of a bound function is consistent with the substituted bound at this use site. Either widen the bound function's overload set, or call the bounded operation at a type for which a signature exists. |
+| `YCHR-60013` | `TypeRefArityMismatch` | A constructor field references a type constructor applied to a different number of arguments than its declaration has parameters (base types have zero). |
 
 ## See also
 

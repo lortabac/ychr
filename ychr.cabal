@@ -161,6 +161,7 @@ test-suite ychr-tests
                     , YCHR.PrettyTest
                     , YCHR.RenameTest
                     , YCHR.RoundtripTest
+                    , YCHR.TypeCheckTest
                     , YCHR.Runtime.VarTest
                     , YCHR.Runtime.StoreTest
                     , YCHR.Runtime.HistoryTest

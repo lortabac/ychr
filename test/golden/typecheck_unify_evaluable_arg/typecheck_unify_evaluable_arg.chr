@@ -1,0 +1,9 @@
+:- module(tc, [go/0]).
+:- chr_constraint go/0.
+:- function len(string) -> int.
+len(_) -> 0.
+% An evaluable-headed compound under `=` is a symbolic term typed
+% `any`; its arguments are structural data, not call arguments, so
+% the int argument to string-typed len/1 is not a type error here —
+% nothing is evaluated.
+w @ go <=> X = len(1).

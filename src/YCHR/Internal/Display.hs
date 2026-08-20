@@ -17,6 +17,7 @@ module YCHR.Internal.Display
     desugarErrorCode,
     compileErrorCode,
     typeCheckErrorCode,
+    typeCheckWarningCode,
     parseErrorCode,
     operatorConflictCode,
     lambdasInLiveQueryCode,
@@ -50,7 +51,7 @@ import YCHR.Internal.Pretty (prettyPExprSrc, prettyTermSrc)
 import YCHR.Internal.Rename (RenameError (..), RenameWarning (..))
 import YCHR.Internal.Resolve (ResolveError (..))
 import YCHR.Internal.Resolved qualified as R
-import YCHR.Internal.TypeCheck (TypeCheckError (..))
+import YCHR.Internal.TypeCheck (TypeCheckError (..), TypeCheckWarning (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (StackFrame (..))
 
@@ -203,6 +204,8 @@ parseValidationErrorCode MalformedBoundSig = ErrorCode 15012
 parseValidationErrorCode MalformedFunctionEquation = ErrorCode 15013
 parseValidationErrorCode MalformedTopLevel = ErrorCode 15014
 parseValidationErrorCode (DuplicateModuleHeader _) = ErrorCode 15015
+parseValidationErrorCode InvalidTypeParameter = ErrorCode 15018
+parseValidationErrorCode (DuplicateTypeParameter _) = ErrorCode 15019
 
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
@@ -246,6 +249,9 @@ renameErrorCode (ConstructorNotExported _ _ _ _) = ErrorCode 20011
 renameErrorCode (AmbiguousDataConstructor _ _) = ErrorCode 20012
 renameErrorCode (ModuleNotImported _ _ _) = ErrorCode 20014
 renameErrorCode (UnknownModule _) = ErrorCode 20015
+renameErrorCode (ReservedTypeName _ _) = ErrorCode 20016
+renameErrorCode (DuplicateTypeDeclaration _ _) = ErrorCode 20017
+renameErrorCode (TypeShadowsImport _ _ _) = ErrorCode 20018
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
@@ -256,6 +262,12 @@ renameWarningCode (DataConstructorArityMismatch _ _) = ErrorCode 20102
 -- same warning band as the rename warnings).
 exhaustivenessWarningCode :: ExhaustivenessWarning -> ErrorCode
 exhaustivenessWarningCode (NonExhaustiveMatch _ _) = ErrorCode 20103
+
+-- | 2x1xx — type-check warnings. The type checker's /errors/ live in
+-- the 6xxxx band, but its warnings join the shared warning band so
+-- every @--Werror@-eligible diagnostic carries a @2x1xx@ code.
+typeCheckWarningCode :: TypeCheckWarning -> ErrorCode
+typeCheckWarningCode (InaccessibleBranch _ _) = ErrorCode 20104
 
 -- | 3xxxx — desugar phase
 desugarErrorCode :: DesugarError -> ErrorCode
@@ -278,6 +290,7 @@ typeCheckErrorCode (NoMatchingOverload _) = ErrorCode 60006
 typeCheckErrorCode (DuplicateConstructor _ _) = ErrorCode 60007
 typeCheckErrorCode (ConstructorArityMismatch _ _ _) = ErrorCode 60008
 typeCheckErrorCode (BoundUnsatisfied _) = ErrorCode 60012
+typeCheckErrorCode (TypeRefArityMismatch _ _ _ _ _) = ErrorCode 60013
 
 -- | 5xxxx — top-level errors.
 --
@@ -400,6 +413,16 @@ parseValidationErrorMsg (DuplicateModuleHeader name) =
   withHint
     ("Duplicate ':- module(...)' header for '" ++ T.unpack name ++ "'")
     "a source file may declare at most one module header; remove the redundant directive"
+parseValidationErrorMsg InvalidTypeParameter =
+  withHint
+    "Invalid type parameter"
+    ( "type parameters must be distinct named variables"
+        ++ " (a wildcard '_' is not a usable parameter)"
+    )
+parseValidationErrorMsg (DuplicateTypeParameter v) =
+  withHint
+    ("Duplicate type parameter '" ++ T.unpack v ++ "'")
+    "type parameters must be distinct variables"
 
 instance Display (Diagnostic ResolveError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -727,6 +750,25 @@ renameErrorMsg (AmbiguousDataConstructor name candidates) =
         ++ intercalate ", " (map T.unpack candidates)
         ++ "; qualify the constructor explicitly to disambiguate"
     )
+renameErrorMsg (ReservedTypeName name arity) =
+  withHint
+    ("Type name '" ++ T.unpack name ++ "/" ++ show arity ++ "' is reserved")
+    "base types (int, float, string, any) and function-type syntax cannot be redeclared"
+renameErrorMsg (DuplicateTypeDeclaration name arity) =
+  withHint
+    ("Type '" ++ T.unpack name ++ "/" ++ show arity ++ "' is declared more than once")
+    "remove or rename one of the declarations"
+renameErrorMsg (TypeShadowsImport name arity provider) =
+  withHint
+    ( "Type '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "' collides with a type imported from '"
+        ++ T.unpack provider
+        ++ "'"
+    )
+    "rename the local type or narrow the import list"
 
 instance Display (Diagnostic RenameWarning) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -802,7 +844,7 @@ desugarErrorMsg (NonPreludeFunctionBodyItem e) =
         ++ prettyTermSrc (R.exprToTerm e)
     )
     ( "non-final items must be an 'is' binding (X is E), a host call"
-        ++ " (host:f(args)), or a function call"
+        ++ " (host:f(args)), a function call, or '$call'(F, ...)"
     )
 desugarErrorMsg (NonVariableIsInFunctionBody e) =
   withHint
@@ -829,7 +871,9 @@ compileErrorMsg (UnknownConstraintType name) =
 compileErrorMsg (UnboundVariable var) =
   withHint
     ("Unbound variable '" ++ T.unpack var ++ "'")
-    "variables used in a guard or body must also appear in the rule head"
+    ( "variables used in a guard or body must also appear in the rule"
+        ++ " head or the equation's parameters"
+    )
 
 instance Display (Diagnostic TypeCheckError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -894,6 +938,39 @@ typeCheckErrorMsg (BoundUnsatisfied boundName) =
     ( "either widen the bound function's overload set or call the bounded"
         ++ " operation at a type for which a signature exists"
     )
+typeCheckErrorMsg (TypeRefArityMismatch tyName conName refName usedArity declaredArity) =
+  "Type '"
+    ++ T.unpack refName
+    ++ "' is applied to "
+    ++ show usedArity
+    ++ " argument(s) but declared with "
+    ++ show declaredArity
+    ++ " parameter(s), in constructor '"
+    ++ T.unpack conName
+    ++ "' of type '"
+    ++ T.unpack tyName
+    ++ "'"
+
+instance Display (Diagnostic TypeCheckWarning) where
+  displayMsg (Diagnostic lbl (AnnP warn loc origin)) =
+    displayMsgWithSrcLoc
+      (typeCheckWarningCode warn)
+      SevWarning
+      (typeCheckWarningMsg warn)
+      loc
+      (fmap T.unpack lbl)
+      (Just (prettyPExprSrc origin))
+
+typeCheckWarningMsg :: TypeCheckWarning -> String
+typeCheckWarningMsg (InaccessibleBranch t1 t2) =
+  withHint
+    ( "This can never fire: a guard requires '"
+        ++ T.unpack t1
+        ++ "' where the type is '"
+        ++ T.unpack t2
+        ++ "'"
+    )
+    "remove the dead rule or equation, or fix the type it disagrees with"
 
 displayName :: Types.Name -> String
 displayName (Types.Unqualified n) = T.unpack n
@@ -916,6 +993,7 @@ displayParseError err =
 instance Display Warning where
   displayMsg (RenameWarnings ws) = displayErrors (map displayMsg ws)
   displayMsg (ExhaustivenessWarnings ws) = displayErrors (map displayMsg ws)
+  displayMsg (TypeCheckWarnings ws) = displayErrors (map displayMsg ws)
 
 instance Display Error where
   displayMsg (ParseError _ err) = displayParseError err

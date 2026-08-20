@@ -381,7 +381,8 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
 - An umbrella entry point in `src/YCHR.hs` (module `YCHR`) that re-exports the common compile-and-query surface (compilation, typed queries, and the `ToTerm`/`FromTerm` value bridge) as a single `import YCHR`. `YCHR.DSL` (program construction) and `YCHR.Convert.Generic` (GHC-only generic derivation) stay opt-in companion imports. The library's `exposed-modules` are grouped into a supported public API (`YCHR`, `YCHR.DSL`, `YCHR.Convert`, `YCHR.Run`, `YCHR.Types`, plus GHC-only `YCHR.Convert.Generic`) and internal modules exposed only for the in-package CLI, tests, and benchmarks.
 - VM types in `src/YCHR/Internal/VM/Types.hs` (re-exported from `src/YCHR/Internal/VM.hs`).
 - CHR-to-VM compiler in `src/YCHR/Internal/Compile.hs`.
-- Optional static type checker in `src/YCHR/Internal/TypeCheck.hs` (driver) and `src/YCHR/Internal/TypeCheck/{Compiled,TH}.hs`. Implemented as a CHR program; programs without type annotations are accepted unchanged.
+- Optional static type checker in `src/YCHR/Internal/TypeCheck.hs` (driver) and `src/YCHR/Internal/TypeCheck/{Compiled,Error,TH}.hs`. Implemented as a CHR program (`typechecker/typechecker.chr`); programs without type annotations are accepted unchanged. It reports errors and warnings; `--Werror` promotes the latter. See [`docs/reference/type-system.md`](../docs/reference/type-system.md).
+- Pattern-match exhaustiveness checking for functions over algebraic types in `src/YCHR/Internal/Exhaustiveness.hs` (Maranget's usefulness algorithm), reported as a warning with a concrete unmatched example.
 - Unification variables for the Haskell runtime in `src/YCHR/Internal/Runtime/Var.hs`.
 - Constraint store for the Haskell runtime in `src/YCHR/Internal/Runtime/Store.hs`.
 - Propagation history for the Haskell runtime in `src/YCHR/Internal/Runtime/History.hs`.

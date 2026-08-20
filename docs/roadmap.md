@@ -35,8 +35,16 @@ what is planned.
 - [x] Gradual type system core (see [type-system.md](reference/type-system.md))
 - [x] Bounded polymorphism
 - [x] Exhaustiveness checking for functions over algebraic types
-- [ ] Simple type refinements via type predicates
-- [ ] More advanced type refinements
+- [x] Guard-derived type evidence — rigid variables at function
+      equations and rule-head occurrences, the `GuardMatch`,
+      `GuardEqual` and type-predicate evidence forms, and the
+      inaccessible-branch warning (`YCHR-20104`); see
+      [type-system.md](reference/type-system.md)
+- [ ] Refinement-predicate declaration mechanism (replace the
+      provisional built-in type-predicate list with a user-extensible
+      declaration)
+- [ ] Opt-in warning pass flagging doomed uses of `any`-typed values
+      via type predicates (bug finding only; never errors)
 
 ## Backends
 

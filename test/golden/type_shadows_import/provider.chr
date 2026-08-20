@@ -1,0 +1,2 @@
+:- module(provider, [type(t/0)]).
+:- chr_type t ---> mk.

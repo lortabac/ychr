@@ -1,0 +1,22 @@
+:- module(residual_retry_nested, [go/1, type(box/1)]).
+:- use_module(prelude).
+:- chr_constraint go(any).
+:- chr_type box(A) ---> mkbox(A).
+
+:- function (idbox(box(A)) -> box(A)).
+idbox(X) -> X.
+
+:- function (getb(box(A)) -> A).
+getb(mkbox(X)) -> X.
+
+:- function (s(string) -> string).
+s(X) -> X.
+
+:- class (p(box(int)) -> int), (p(box(float)) -> float).
+p(_) -> 0.
+
+% p(Y) is a discarded body call: its residual observes only Y's type
+% var (flexible) and its own never-again-touched ret var. idbox then
+% binds Y's type var to box(A2); s(getb(...)) later pins A2 to
+% string, emptying p's candidate set. Expect YCHR-60006.
+go([Y | _]) <=> p(Y), _X is s(getb(idbox(Y))).

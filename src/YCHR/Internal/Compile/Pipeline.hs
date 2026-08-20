@@ -69,7 +69,7 @@ import YCHR.Internal.Resolve
     resolveProgram,
   )
 import YCHR.Internal.StdLib (stdlib)
-import YCHR.Internal.TypeCheck.Error (TypeCheckError)
+import YCHR.Internal.TypeCheck.Error (TypeCheckError, TypeCheckWarning)
 import YCHR.Internal.Types (SymbolTable)
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Program, StackFrame)
@@ -150,17 +150,25 @@ instance Exception Error
 
 -- | A non-fatal diagnostic. Compilation succeeded; something in the
 -- program is nonetheless suspicious — an undeclared data constructor, a
--- function whose equations are not exhaustive.
+-- function whose equations are not exhaustive, a rule that can never
+-- fire.
 --
 -- Returned alongside the 'CompiledProgram' rather than thrown. The @ychr@
 -- CLI's @--Werror@ is simply "treat a non-empty list as failure"; an
 -- embedder decides for itself. Render with 'YCHR.Run.displayWarning'.
+--
+-- 'TypeCheckWarnings' is the exception to "returned alongside the
+-- 'CompiledProgram'": type checking is a separate pass the caller runs
+-- on the compiled program, so those warnings come from
+-- 'YCHR.Internal.TypeCheck.typeCheckProgram' (or @typeCheckGoals@) and
+-- are wrapped by the caller to join the same channel.
 --
 -- As with 'Error', the payloads are internal types; match on the
 -- constructor, render the value.
 data Warning
   = RenameWarnings [Diagnostic RenameWarning]
   | ExhaustivenessWarnings [Diagnostic ExhaustivenessWarning]
+  | TypeCheckWarnings [Diagnostic TypeCheckWarning]
   deriving (Show)
 
 -- | A compiled CHR program together with module visibility information.

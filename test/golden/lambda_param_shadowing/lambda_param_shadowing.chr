@@ -1,0 +1,13 @@
+:- module(lambda_param_shadowing, [main/1]).
+:- use_module(prelude).
+:- chr_constraint main/1.
+
+% The lambda's parameter S shadows the enclosing equation's
+% string-typed S. Inside the lambda S is a fresh flexible variable
+% (spec §Lambdas: "each parameter is typed by a fresh flexible
+% variable"), so `S + 1` type-checks; with a shared type slot the
+% outer `string` would leak in and make it a spurious type error.
+:- function (outer(string) -> int).
+outer(S) -> '$call'(fun(S) -> S + 1 end, 41).
+
+main(R) <=> R is outer("hello").

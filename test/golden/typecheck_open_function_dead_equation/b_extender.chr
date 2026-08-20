@@ -1,0 +1,16 @@
+:- module(ext, [go/1]).
+:- use_module(owner, [classify/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint go(int).
+
+% classify is declared to take an int, but this extension equation
+% matches a string. HNF turns the literal parameter into a
+% `GuardEqual` between the declared `int` parameter position and the
+% literal's `string` type — an evidence form, so the equation can
+% never match within the typed fragment: dead code (YCHR-20104, a
+% warning), not a type error. Cross-module extension equations are
+% type-checked like any other equation; the warning is the proof.
+:- extend_function classify("oops") -> 1.
+
+run @ go(R) <=> R is owner:classify(0).

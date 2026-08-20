@@ -1,0 +1,10 @@
+:- module(tc, [r/1, s/1, t/1]).
+:- chr_constraint r/1, s(int), t(string).
+:- function mystery/1.
+mystery(X) -> X.
+% The reverse direction of the `is` flow: mystery/1 is untyped, so
+% the RHS type is not concrete and R (typed `any` from the untyped
+% r/1 head) is left untouched — it stays `any`, and both s(R) and
+% t(R) check trivially. An `any`-typed LHS is never bound to the
+% RHS's unresolved type variable.
+w @ r(R) <=> R is mystery(1), s(R), t(R).
