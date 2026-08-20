@@ -1,0 +1,2 @@
+:- module(prelude_import_list, []).
+:- use_module(library(prelude), [max/2]).

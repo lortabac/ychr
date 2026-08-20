@@ -207,6 +207,80 @@ collected modules by name and report a duplicate-module-name error
 (new code) naming both files. Decide whether the same *file* listed
 twice on the command line should dedup or also error.
 
+## A user module named `prelude` trips `YCHR-20019` with a hint that is wrong for it
+
+**Documented claim.** `docs/reference/errors.md` describes `YCHR-20019`
+(`PreludeImportList`) as firing when a `use_module` targeting *the
+prelude* carries an import list, on the grounds that "the prelude is
+imported implicitly and in full by every module". `prelude` is not a
+reserved module name — `reservedModuleNames`
+(`src/YCHR/Internal/Resolve.hs:843`) is exactly `["host"]` — so nothing
+stops a user file from declaring `:- module(prelude, ...)`, and for
+such a module the stated grounds are false.
+
+**Test.**
+
+    % prelude.chr
+    :- module(prelude, [foo/1]).
+    :- chr_constraint foo/1.
+    foo(X) <=> X = 1.
+
+    % main.chr
+    :- module(main, [go/1]).
+    :- use_module(prelude, [foo/1]).
+    :- chr_constraint go/1.
+    go(X) <=> foo(X).
+
+    ychr check prelude.chr main.chr
+
+**Expected.** Either the import list narrows normally (it names a
+user module, not the stdlib prelude), or the program is rejected for
+declaring a module named `prelude` — but not a diagnostic whose
+explanation does not apply.
+
+**Actual.**
+
+    main.chr:2:1: YCHR-20019
+    use_module(prelude) cannot carry an import list
+      Hint: the prelude is imported implicitly and in full by every module; remove the import list
+    use_module(prelude, [foo / 1])
+
+Replacing line 2 with the unrestricted `:- use_module(prelude).`
+compiles clean (exit 0), so modules named `prelude` are legal today —
+this is not an already-rejected corner.
+
+**Cause.** The check in `validateImportLists`
+(`src/YCHR/Internal/Rename.hs:582`) keys on
+`imp.importModule == "prelude"`. By the rename phase,
+`CollectedImport` has deliberately erased the library-vs-module
+distinction (`src/YCHR/Internal/Collected.hs:7-17`), so the check
+structurally cannot tell the stdlib prelude from a same-named user
+module. Relatedly, `Compile.Pipeline.addPreludeImport`
+(`src/YCHR/Internal/Compile/Pipeline.hs:393`) is unconditional, whereas
+its counterpart `Collect.addLibraryPrelude`
+(`src/YCHR/Internal/Collect.hs:138`) guards on `m.name == "prelude"` —
+so a user module named `prelude` also gets a synthetic self-import.
+
+**Impact.** Narrow: only programs that declare their own module named
+`prelude`. Nothing that previously worked is broken — the two import
+entries both name `prelude`, so the narrowing was silently widened
+before `YCHR-20019` existed. The defect is a misleading diagnostic,
+not lost functionality. More broadly, every name-keyed lookup over
+modules (`buildExportEnv`, `buildDeclEnv`) conflates the two `prelude`
+modules into one provider list, which is its own latent problem.
+
+**Fix sketch.** Add `"prelude"` to `reservedModuleNames` under a new
+`16xxx` code, making the check's premise true by construction rather
+than by assumption. This rejects programs that compile today, so it is
+a deliberate call, not a silent tightening. Filtering before the
+library/module collapse is the alternative, but fights the erasure
+that `Collected.hs` documents as intentional. Whichever way, pin it
+with a negative golden. Related: the same reasoning would cover the
+other stdlib library names (`lists`, `strings`, `meta`), which shadow
+just as silently — `validateTypeDecls` already works around exactly
+this ("a module that shadows a same-named library … is
+indistinguishable from itself here", `Rename.hs:1316-1319`).
+
 ## Diagnostics for an `:- extend_function` equation blame the owner's first equation
 
 **Documented claim.** Implicit: a diagnostic points at the code that

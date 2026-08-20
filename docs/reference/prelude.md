@@ -17,6 +17,12 @@ need `:- use_module(library(prelude))`. Its identifiers are visible
 without qualification — `+` resolves to `prelude:'+'`, `integer/1` to
 `prelude:integer/1`, and so on.
 
+The import is always the *whole* prelude, and it cannot be narrowed.
+Writing `:- use_module(library(prelude)).` explicitly is accepted but
+redundant; attaching an import list to it is an error
+([`YCHR-20019`](errors.md)). Resolve a clash with a prelude name by
+renaming your own identifier, not by adjusting imports.
+
 Two patterns run through the tables below:
 
 - **Operator overloading by signature.** Operators that are genuinely

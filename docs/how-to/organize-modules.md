@@ -56,8 +56,14 @@ use site rather than an import site.
 
 ## Restricted imports
 
-> **TODO:** `use_module(M, [name/arity, ...])` to import only specific
-> identifiers. Cross-link to relevant golden tests if useful.
+`use_module(M, [name/arity, ...])` imports only the listed identifiers
+from `M`. The prelude is the one module this does not apply to: it is
+imported implicitly and in full, and an import list on it is rejected
+with `YCHR-20019`. See the
+[prelude reference](../reference/prelude.md#how-the-prelude-is-structured).
+
+> **TODO:** worked example of a restricted import. Cross-link to
+> relevant golden tests if useful.
 
 ## Qualified vs unqualified references
 

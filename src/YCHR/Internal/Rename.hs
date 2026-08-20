@@ -139,6 +139,13 @@ data RenameError
     -- arity visible through an import. Carries the type name, the
     -- arity, and the providing module.
     TypeShadowsImport Text Int Text
+  | -- | A @use_module@ directive targeting the prelude carries an import
+    -- list. The prelude is imported implicitly and in full by every
+    -- module, so an import list on it has no effect; rather than
+    -- silently ignoring it, reject it. The unrestricted form
+    -- (@:- use_module(library(prelude)).@) is still accepted, and
+    -- redundant.
+    PreludeImportList
   deriving (Eq, Show)
 
 data RenameWarning
@@ -546,8 +553,11 @@ renameModule mods ctx = do
         exports = m.exports
       }
 
--- | Validate import lists. Four checks:
+-- | Validate import lists. Five checks:
 --
+--   * A @use_module@ targeting the prelude must not carry an import
+--     list, since the prelude is imported implicitly and in full
+--     ('PreludeImportList').
 --   * @op(...)@ entries must name an operator that the source module
 --     actually exports ('UnknownOperatorImport').
 --   * Constraint, function, and type imports must name something the
@@ -560,9 +570,17 @@ validateImportLists :: [CollectedModule] -> RenameCtx -> Rename ()
 validateImportLists mods ctx =
   traverse_ checkImport ctx.currentModule.imports
   where
+    -- The prelude import list is rejected wholesale rather than
+    -- item-by-item: reporting each item as an unknown import on top of
+    -- the real diagnostic would be pure noise. The synthetic prelude
+    -- imports added by the pipeline carry no item list, so they never
+    -- reach this arm.
     checkImport (AnnP imp loc origin) = do
       checkPlacement imp loc origin
       case imp.importItems of
+        Just _
+          | imp.importModule == "prelude" ->
+              emitError (AnnP PreludeImportList loc origin)
         Just decls -> traverse_ (checkItem imp.importModule loc origin) decls
         Nothing -> pure ()
 

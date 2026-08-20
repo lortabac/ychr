@@ -124,6 +124,12 @@ libraryImports m = [AnnP n loc p | AnnP (LibraryImport n _) loc p <- m.imports]
 
 -- | Add a prelude import to every library module that does not already
 -- declare itself to be the prelude.
+--
+-- The library-side counterpart of
+-- @YCHR.Internal.Compile.Pipeline.addPreludeImport@, and unconditional
+-- for the same reason: the prelude is imported in full, always. A
+-- library that writes a /narrowed/ prelude import is rejected by
+-- @YCHR.Internal.Rename.validateImportLists@ (YCHR-20019).
 addLibraryPrelude :: [Module] -> [Module]
 addLibraryPrelude = map go
   where

@@ -1369,5 +1369,50 @@ importListTests =
                 }
         renameProgram [modLib, modUser]
           @?= Left
-            [noDiag (AnnP (UnknownImport "Lib" "missing" 0) dummyLoc (Atom ""))]
+            [noDiag (AnnP (UnknownImport "Lib" "missing" 0) dummyLoc (Atom ""))],
+      testCase "narrowed prelude import is rejected, and only once" $ do
+        -- The prelude is imported implicitly and in full, so an import
+        -- list on it has no effect. It is rejected wholesale rather than
+        -- item-by-item: `max/2` must not also be reported as an unknown
+        -- import of a module the renamer knows nothing about.
+        let modUser =
+              (module' "User")
+                { imports =
+                    [ noAnnP
+                        ( LibraryImport
+                            "prelude"
+                            ( Just
+                                [ FunctionDecl
+                                    "max"
+                                    2
+                                    Nothing
+                                    Nothing
+                                    False
+                                    DKFunction
+                                    Nothing
+                                ]
+                            )
+                        )
+                    ]
+                }
+        renameProgram [modUser]
+          @?= Left [noDiag (AnnP PreludeImportList dummyLoc (Atom ""))],
+      testCase "narrowed prelude import is rejected without library(...)" $ do
+        -- `use_module(M)` and `use_module(library(M))` are equivalent, so
+        -- the bare spelling must be rejected too. An empty list is still
+        -- a list: it is the spelling whose silent no-op was least visible.
+        let modUser =
+              (module' "User")
+                { imports = [noAnnP (ModuleImport "prelude" (Just []))]
+                }
+        renameProgram [modUser]
+          @?= Left [noDiag (AnnP PreludeImportList dummyLoc (Atom ""))],
+      testCase "unrestricted prelude import is accepted" $ do
+        let modUser =
+              (module' "User")
+                { imports = [noAnnP (LibraryImport "prelude" Nothing)]
+                }
+        case renameProgram [modUser] of
+          Right _ -> pure ()
+          Left errs -> assertFailure $ "unexpected errors: " ++ show errs
     ]

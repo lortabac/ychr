@@ -382,6 +382,13 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
 
 -- | Prepend a synthetic @use_module(library(prelude))@ to a user module so
 -- the renamer treats prelude exports as visible.
+--
+-- Deliberately blind to any prelude import the module already writes: the
+-- prelude is imported in full, always. A module that writes its own
+-- unrestricted @use_module(library(prelude))@ just ends up with a second,
+-- equivalent import entry; one that writes a /narrowed/ prelude import is
+-- rejected by 'YCHR.Internal.Rename.validateImportLists' (YCHR-20019)
+-- rather than silently getting the full prelude anyway.
 addPreludeImport :: Module -> Module
 addPreludeImport m = m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
 

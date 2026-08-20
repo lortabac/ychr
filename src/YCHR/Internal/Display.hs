@@ -252,6 +252,7 @@ renameErrorCode (UnknownModule _) = ErrorCode 20015
 renameErrorCode (ReservedTypeName _ _) = ErrorCode 20016
 renameErrorCode (DuplicateTypeDeclaration _ _) = ErrorCode 20017
 renameErrorCode (TypeShadowsImport _ _ _) = ErrorCode 20018
+renameErrorCode PreludeImportList = ErrorCode 20019
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
@@ -692,6 +693,12 @@ renameErrorMsg (UseModuleOutOfOrder modName) =
     )
     ( "use_module directives must come immediately after the :- module"
         ++ " directive, before any other directive or rule"
+    )
+renameErrorMsg PreludeImportList =
+  withHint
+    "use_module(prelude) cannot carry an import list"
+    ( "the prelude is imported implicitly and in full by every module;"
+        ++ " remove the import list"
     )
 renameErrorMsg (UnknownExportedConstructor modName tyName tyArity conName) =
   "Module '"
