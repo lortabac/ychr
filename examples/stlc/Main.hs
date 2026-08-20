@@ -116,9 +116,9 @@ inferLine cp line = case parseExpr line of
 
 -- | Build the goal @typecheck(<expr>, Result)@. The encoded expression
 -- needs no quoting: @expr@ is a declared, exported type, so the goal's
--- bare @var@ \/ @lam@ \/ ... references are canonicalized to
--- @stlc:var@, @stlc:lam@, ... — the same form the rule heads match, and
--- data rather than a call to the prelude's @var/1@ function.
+-- bare @evar@ \/ @lam@ \/ ... references are canonicalized to
+-- @stlc:evar@, @stlc:lam@, ... — the same form the rule heads match,
+-- and data rather than function calls.
 typecheckGoal :: Expr -> Term
 typecheckGoal e = compound "typecheck" [toTerm e, VarTerm "Result"]
 

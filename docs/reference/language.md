@@ -301,6 +301,47 @@ calling `store(1 + 2), ask(R)` stores `store(3)` (not `store(1 + 2)`),
 and the second rule then unifies `R = 3`. The same applies to
 function calls: `store(member(1, [0, 1, 2]))` stores `store(true)`.
 
+### Constructor and function names must not collide
+
+A compound's head is what chooses between the two readings above — a
+function call or a constructor application — so a name may not mean
+both. Concretely:
+
+- Declaring a data constructor and a function with the same name in
+  **one module** is `ConstructorFunctionCollision` (`YCHR-16020`).
+  Both would spell as `mod:name`, so nothing could tell them apart.
+- Referring to a name that is visible as a constructor from one module
+  and as a function from another, **without qualifying it**, is
+  `ConstructorFunctionAmbiguity` (`YCHR-20020`).
+
+Arity is not part of the comparison on either side: data constructors
+are name-only in the type system, so `foo/0` the constructor clashes
+with `foo/1` the function. Every module imports the prelude in full,
+so no constructor may be referred to bare under a name the prelude
+declares as a function (`var`, `float`, `string`, `atom`, `not`, …).
+
+The cross-module case has an escape hatch — qualifying the reference
+names exactly one thing:
+
+```prolog
+:- use_module(node).   % declares the constructor leaf/1
+:- use_module(grow).   % declares the function    leaf/1
+
+build(N, R) <=> show(node:leaf(grow:leaf(N)), R).
+```
+
+Since the prelude's import cannot be narrowed (`YCHR-20019`), a clash
+with a prelude function is resolved by renaming your own constructor.
+
+A `fun name/arity` reference is not affected: that syntax names the
+callable namespace outright, so `fun leaf/1` is the function whatever
+constructors are in scope. Neither is `quote(...)`, whose contents are
+opaque data throughout.
+
+A constraint may share a name with a data constructor. Nothing is
+ambiguous there: a compound is never read as a constraint call, so the
+two never compete for the same reading.
+
 ### The `quote/1` quoting form
 
 `quote(...)` passes a term unevaluated:

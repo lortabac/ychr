@@ -1,0 +1,8 @@
+:- module(node, [type(tree/0)]).
+:- use_module(library(prelude)).
+
+% 'leaf/1' the data constructor. The sibling module 'grow' declares
+% 'leaf/1' the *function*. The two coexist: a bare 'leaf(...)' in a
+% module that sees both is YCHR-20020, but a qualified reference names
+% exactly one of them and stays legal. This test pins that.
+:- chr_type tree ---> leaf(int) ; fork(tree, tree).

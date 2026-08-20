@@ -427,9 +427,10 @@ lookupBinding = Map.lookup
 -- A goal's arguments are renamed before the goal runs, exactly as the
 -- arguments of a rule head are: a bare reference to a data constructor
 -- the program declares /and exports/ is canonicalized to its qualified
--- form, which is what the compiled head patterns match. That also
--- settles the pun case — a constructor sharing its name with a visible
--- function resolves to the constructor and stays data.
+-- form, which is what the compiled head patterns match. A bare name
+-- visible both as a constructor and as a function has no single
+-- answer and is rejected (@YCHR-20020@); qualify it, or rename one of
+-- the two.
 --
 -- A type the program declares but does not export is invisible to the
 -- query: its constructors stay unqualified and the rules written against

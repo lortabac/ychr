@@ -1,0 +1,6 @@
+:- module(grow, [leaf/1]).
+:- use_module(library(prelude)).
+
+% 'leaf/1' the function, same name and arity as node's constructor.
+:- function leaf(int) -> int.
+leaf(N) -> N * 2.

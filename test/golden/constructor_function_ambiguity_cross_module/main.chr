@@ -1,0 +1,14 @@
+:- module(main, [build/2]).
+:- use_module(library(prelude)).
+:- use_module(node).
+:- use_module(grow).
+
+:- chr_constraint build(int, any).
+
+% The negative twin of constructor_function_qualified: the very same
+% three modules, but the reference is bare. 'leaf' is a constructor
+% from 'node' and a function from 'grow', both visible here, so
+% YCHR-20020 fires — neither the prelude nor a 0-arity name is
+% involved, and the two meanings share an arity, so nothing but the
+% name-versus-namespace clash can be what triggers it.
+build(N, R) <=> R = leaf(N).

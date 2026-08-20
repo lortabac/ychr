@@ -38,6 +38,7 @@ module YCHR.Internal.Types
 
     -- * Name helpers
     flattenName,
+    unqualifiedText,
     qualifiedToName,
     qualifiedNameToIdentifier,
     preludeBool,
@@ -153,6 +154,14 @@ data ConstraintKey = ConstraintKey
 flattenName :: Name -> Text
 flattenName (Unqualified t) = t
 flattenName (Qualified m t) = m <> ":" <> t
+
+-- | The base (module-less) part of a 'Name'. Unlike 'flattenName' this
+-- discards the qualifier rather than rendering it, which is what
+-- name-keyed environments and same-name checks want: a name means the
+-- same thing to those whether or not a phase has already qualified it.
+unqualifiedText :: Name -> Text
+unqualifiedText (Unqualified t) = t
+unqualifiedText (Qualified _ t) = t
 
 -- | Lift a 'QualifiedName' back to the loose 'Name' for display,
 -- diagnostics, or compatibility with code that has not yet been

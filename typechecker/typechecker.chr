@@ -29,7 +29,17 @@
 % Type-representation algebraic type. Mirrors the value-level encoding
 % emitted by src/YCHR/Internal/TypeCheck.hs (encodeTypeExpr): base types are
 % 0-arity constructors, type constructors and function types are
-% compound terms. The first field of `tcon` is `any` because a type
+% compound terms.
+%
+% The base-type constructors carry a `ty_` prefix because a data
+% constructor may not share a bare name with a visible function
+% (YCHR-20020) and the prelude declares `float/1` and `string/1`. The
+% prefix is internal: `displayTypeAtom` in the Haskell driver strips it
+% again, so user-facing messages still read `int`, `float`, `string`,
+% `any`. All four are prefixed, not just the two that clash, so the
+% strip is one uniform rule.
+%
+% The first field of `tcon` is `any` because a type
 % constructor name may be either an atom (`bool`) or a qualified
 % atom (e.g. `prelude:bool`). Qualified type names that originate in
 % this CHR source — as opposed to being passed in by the Haskell
@@ -62,10 +72,10 @@
 % rigid) and constructor signatures; ambient signatures, which do
 % carry the enclosing declaration's rigids, are deliberately applied
 % in place (see the `cand` type's `amb` arm).
-:- chr_type ty ---> int
-                  ; float
-                  ; string
-                  ; any
+:- chr_type ty ---> ty_int
+                  ; ty_float
+                  ; ty_string
+                  ; ty_any
                   ; tcon(any, list(ty))
                   ; fun(list(ty), ty)
                   ; rigid(ty, int).
@@ -299,11 +309,11 @@ cand_list_empty(_) -> false.
 match_ty(_, _, mfail) -> mfail.
 match_ty(D, A, mok(S)) | var(D) -> match_var(D, A, lookup_msub(D, S), S).
 match_ty(D, A, mok(S)) | var(A) -> match_var(A, D, lookup_msub(A, S), S).
-match_ty(any, _, S) -> S.
-match_ty(_, any, S) -> S.
-match_ty(int, int, S) -> S.
-match_ty(float, float, S) -> S.
-match_ty(string, string, S) -> S.
+match_ty(ty_any, _, S) -> S.
+match_ty(_, ty_any, S) -> S.
+match_ty(ty_int, ty_int, S) -> S.
+match_ty(ty_float, ty_float, S) -> S.
+match_ty(ty_string, ty_string, S) -> S.
 match_ty(rigid(C, N), rigid(C, N), S) -> S.
 match_ty(rigid(C, _), A, S) | nonvar(C) -> match_ty(C, A, S).
 match_ty(D, rigid(C, _), S) | nonvar(C) -> match_ty(D, C, S).
@@ -345,11 +355,11 @@ is_mok(mfail) -> false.
 
 existential_consistent(T, _) | var(T) -> true.
 existential_consistent(_, T) | var(T) -> true.
-existential_consistent(any, _) -> true.
-existential_consistent(_, any) -> true.
-existential_consistent(int, int) -> true.
-existential_consistent(float, float) -> true.
-existential_consistent(string, string) -> true.
+existential_consistent(ty_any, _) -> true.
+existential_consistent(_, ty_any) -> true.
+existential_consistent(ty_int, ty_int) -> true.
+existential_consistent(ty_float, ty_float) -> true.
+existential_consistent(ty_string, ty_string) -> true.
 % Same-rigid succeeds; different-rigid (rigid(_, N), rigid(_, M) with
 % N≠M) falls through to the `(_, _) -> false` fallthrough below, so two
 % distinct rigid identities are deliberately inconsistent. This is
@@ -437,10 +447,10 @@ sub_ground(Args, Ret) | ty_concrete_list(Args) -> ty_concrete(Ret).
 sub_ground(_, _) -> false.
 
 ty_concrete(T) | var(T) -> false.
-ty_concrete(any) -> true.
-ty_concrete(int) -> true.
-ty_concrete(float) -> true.
-ty_concrete(string) -> true.
+ty_concrete(ty_any) -> true.
+ty_concrete(ty_int) -> true.
+ty_concrete(ty_float) -> true.
+ty_concrete(ty_string) -> true.
 ty_concrete(tcon(_, Args)) -> ty_concrete_list(Args).
 ty_concrete(fun(Args, Ret)) | ty_concrete_list(Args) -> ty_concrete(Ret).
 % A rigid tvar is treated as concrete for the purpose of
@@ -739,7 +749,7 @@ constructor_match @
 % ResultTypeVar stays flexible (it is NOT widened to `any`).
 unknown_constructor @
     check_constructor_use(_, _, ResultTypeVar, Ctx) <=>
-    tc_unify(ResultTypeVar, any, Ctx).
+    tc_unify(ResultTypeVar, ty_any, Ctx).
 
 % ==========================================================================
 % Argument list checking
@@ -827,7 +837,7 @@ guard_match_rigid @
 
 guard_match_any @
     con_sig(Con, Sig) \
-        check_guard_match(T, Con, _, Slots, Ctx) <=> nonvar(T), T == any |
+        check_guard_match(T, Con, _, Slots, Ctx) <=> nonvar(T), T == ty_any |
     Fresh is copy_term(quote(Sig)),
     tc_unify_list(Slots, sig_snd(Fresh), Ctx).
 
@@ -869,7 +879,7 @@ delegate_guard_getarg @
 % ResultType stays flexible (the `any` here never binds).
 unknown_guard_getarg @
     check_guard_getarg(ResultType, _, _, _, Ctx) <=>
-    tc_unify(ResultType, any, Ctx).
+    tc_unify(ResultType, ty_any, Ctx).
 
 % ==========================================================================
 % Occurs check (shared by tc_unify, ev_unify and eq_unify)
@@ -926,29 +936,29 @@ ty_occurs_list(C, [_|Rest]) -> ty_occurs_list(C, Rest).
 
 % (1) Nonvar any on left -> succeed, don't touch right side
 tc_unify_any_left @
-    tc_unify(T1, _, _) <=> nonvar(T1), T1 == any | true.
+    tc_unify(T1, _, _) <=> nonvar(T1), T1 == ty_any | true.
 
 % (2) Both nonvar, any on right -> succeed
 tc_unify_any_right @
-    tc_unify(T1, T2, _) <=> nonvar(T1), nonvar(T2), T2 == any | true.
+    tc_unify(T1, T2, _) <=> nonvar(T1), nonvar(T2), T2 == ty_any | true.
 
 % (3) Var on left, any on right -> succeed, do NOT bind. The flexible
 % variable stays flexible: a later solid source may still bind it,
 % and if none does it simply remains unconstrained (spec: "flexible
 % α, any -> succeeds; α is not bound").
 tc_unify_var_any @
-    tc_unify(T1, T2, _) <=> var(T1), nonvar(T2), T2 == any | true.
+    tc_unify(T1, T2, _) <=> var(T1), nonvar(T2), T2 == ty_any | true.
 
 % --- base types ---
 
 tc_unify_int @
-    tc_unify(int, int, _) <=> true.
+    tc_unify(ty_int, ty_int, _) <=> true.
 
 tc_unify_float @
-    tc_unify(float, float, _) <=> true.
+    tc_unify(ty_float, ty_float, _) <=> true.
 
 tc_unify_string @
-    tc_unify(string, string, _) <=> true.
+    tc_unify(ty_string, ty_string, _) <=> true.
 
 % --- type constructors and function types: same shape, check args ---
 %
@@ -1090,10 +1100,10 @@ tc_unify_list_cons @
 %    binds nothing and checking continues with the declared types.
 
 ev_unify_any_left @
-    ev_unify(T1, _, _) <=> nonvar(T1), T1 == any | true.
+    ev_unify(T1, _, _) <=> nonvar(T1), T1 == ty_any | true.
 
 ev_unify_any_right @
-    ev_unify(_, T2, _) <=> nonvar(T2), T2 == any | true.
+    ev_unify(_, T2, _) <=> nonvar(T2), T2 == ty_any | true.
 
 % A pinned skolem is no longer opaque: the fact meets whatever the
 % cell holds (so a second, contradicting predicate on the same
@@ -1136,13 +1146,13 @@ ev_unify_pin_right @
     ev_unify(T1, rigid(C, _), _) <=> var(C), nonvar(T1) | C = T1.
 
 ev_unify_int @
-    ev_unify(int, int, _) <=> true.
+    ev_unify(ty_int, ty_int, _) <=> true.
 
 ev_unify_float @
-    ev_unify(float, float, _) <=> true.
+    ev_unify(ty_float, ty_float, _) <=> true.
 
 ev_unify_string @
-    ev_unify(string, string, _) <=> true.
+    ev_unify(ty_string, ty_string, _) <=> true.
 
 ev_unify_tcon @
     ev_unify(tcon(C, Args1), tcon(C, Args2), Ctx) <=>
@@ -1205,10 +1215,10 @@ ev_unify_list_cons @
 % documented behaviour).
 
 eq_unify_any_left @
-    eq_unify(T1, _, _) <=> nonvar(T1), T1 == any | true.
+    eq_unify(T1, _, _) <=> nonvar(T1), T1 == ty_any | true.
 
 eq_unify_any_right @
-    eq_unify(_, T2, _) <=> nonvar(T2), T2 == any | true.
+    eq_unify(_, T2, _) <=> nonvar(T2), T2 == ty_any | true.
 
 % Occurs check on the binding rules, ahead of them. `p([X | X])`
 % equates alpha with `list(alpha)`; binding would build a cyclic term

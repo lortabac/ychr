@@ -32,6 +32,7 @@ import YCHR.Internal.Types
     Name (..),
     TypeDefinition (..),
     typeConstructors,
+    unqualifiedText,
   )
 
 -- | Constructor-resolution maps derived from a program's type
@@ -79,8 +80,6 @@ buildConAlias tds =
   where
     single [n] = Just n
     single _ = Nothing
-    unqualifiedText (Unqualified t) = t
-    unqualifiedText (Qualified _ t) = t
 
 -- | Map a use-site constructor name to its declared, qualified form when a
 -- unique match exists. 'Qualified' names pass through unchanged;

@@ -23,12 +23,12 @@ data Expr
   deriving (Eq, Show)
 
 -- | Encode a term as the CHR data the inferencer matches on. These are
--- plain compounds (@var@, @lam@, …). The inferencer declares and exports
+-- plain compounds (@evar@, @lam@, …). The inferencer declares and exports
 -- them as the @expr@ type, so the goal-building step canonicalizes each
--- one to its qualified form (@stlc:var@, …) and it reaches the rules as
+-- one to its qualified form (@stlc:evar@, …) and it reaches the rules as
 -- data.
 instance ToTerm Expr where
-  toTerm (Var x) = compound "var" [toTerm x]
+  toTerm (Var x) = compound "evar" [toTerm x]
   toTerm (Lam x body) = compound "lam" [toTerm x, toTerm body]
   toTerm (App f a) = compound "app" [toTerm f, toTerm a]
   toTerm (IntLit n) = compound "lit_int" [toTerm n]

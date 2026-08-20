@@ -125,6 +125,24 @@ data RenameError
     -- arity-overloadable, so the name alone identifies the clash.
     -- Carries the constructor name and the list of providers.
     AmbiguousDataConstructor Text [Text]
+  | -- | A bare reference to a name that is visible both as a data
+    -- constructor and as a function. The two namespaces would
+    -- otherwise be told apart by syntactic position — pattern
+    -- positions take the constructor, evaluating positions take the
+    -- function — which makes the same text mean different things in
+    -- different parts of one rule. Arity is not part of the
+    -- comparison: constructors are name-only in the type system, and
+    -- the reader cannot use arity to tell which is meant.
+    --
+    -- Qualifying the reference resolves it, since @a:foo@ and
+    -- @b:foo@ name exactly one thing each. The same clash /inside/ one
+    -- module has no such escape and is rejected at the declaration
+    -- instead ('YCHR.Internal.Resolve.ConstructorFunctionCollision',
+    -- YCHR-16020).
+    --
+    -- Carries the name, the modules declaring it as a constructor, and
+    -- the modules declaring it as a function.
+    ConstructorFunctionAmbiguity Text [Text] [Text]
   | -- | A @:- chr_type@ / @:- opaque_type@ declaration whose name is a
     -- reserved type name: a base type (@int@, @float@, @string@,
     -- @any@) or function-type syntax (@fun@, @->@). Declaring one
@@ -207,6 +225,12 @@ data RenameCtx = RenameCtx
     -- 'NonExportedConstructor'; otherwise they get 'NotExportedByModule'
     -- as before.
     allDataConProviders :: DataConProviders,
+    -- | Functions visible to the current module, keyed by base name
+    -- with no arity and with constraints excluded. Paired with
+    -- 'dataConEnv' (also name-keyed) to decide whether a bare name is
+    -- ambiguous across the two namespaces; see
+    -- 'checkConstructorFunctionAmbiguity'.
+    visibleFunNames :: Map Text [Text],
     typeDeclEnv :: DeclEnv,
     typeExportEnv :: ExportEnv,
     -- | Operators exported by each module, keyed by module name. Used to
@@ -342,6 +366,59 @@ checkAmbiguousDataCon ctx loc origin n arity =
       emitError (AnnP (AmbiguousDataConstructor n ms) loc origin)
     _ -> pure ()
 
+-- | Emit 'ConstructorFunctionAmbiguity' (YCHR-20020) when a bare name
+-- is visible both as a data constructor and as a function. Called at
+-- every leg of 'renameTerm' that has to decide which namespace an
+-- unqualified name belongs to.
+--
+-- Both sides are compared without arity, so @float/0@ the constructor
+-- clashes with @float/1@ the function.
+--
+-- Cases deliberately excluded:
+--
+--   * reserved symbols (@true@, @is@, @fun@, ...), which never reach
+--     either namespace;
+--   * a clash where the current module supplies /both/ sides. No
+--     qualified form separates those, so \"qualify it\" would be wrong
+--     advice; the resolver rejects the declaration itself instead
+--     ('YCHR.Internal.Resolve.ConstructorFunctionCollision'). Any
+--     further provider of either side is subsumed by that error.
+--   * @fun name/arity@ references, which reach 'renameTerm' through
+--     their own leg and never get here. That leg is not a decision
+--     point: the syntax names the callable namespace outright, so
+--     @fun leaf/1@ is a function reference no matter what
+--     constructors are in scope.
+--
+-- The /constraint/ namespace is outside this check because it raises
+-- no ambiguity to resolve: 'Resolve.termToExpr' never turns a
+-- compound into a constraint call, so a constraint name and a
+-- constructor name never contend for the same reading. A constraint
+-- may share a name with a data constructor. Hence this check reads
+-- only 'FunctionDecl' (see 'buildVisibleFunctionNames').
+checkConstructorFunctionAmbiguity ::
+  RenameCtx -> SourceLoc -> PExpr -> Text -> Rename ()
+checkConstructorFunctionAmbiguity ctx loc origin n
+  | isReserved n = pure ()
+  | otherwise =
+      let conMods = conProvidersAnyArity ctx n
+          funMods = Map.findWithDefault [] n ctx.visibleFunNames
+          self = ctx.currentModule.name
+          declaresBoth = self `elem` conMods && self `elem` funMods
+       in when (not (null conMods) && not (null funMods) && not declaresBoth) $
+            emitError (AnnP (ConstructorFunctionAmbiguity n conMods funMods) loc origin)
+
+-- | Every module that makes @n@ visible as a data constructor, at any
+-- arity. 'dataConEnv' supplies the arities the name is declared at and
+-- 'dataConProviders' the modules for each, both already filtered to
+-- what the current module can see.
+conProvidersAnyArity :: RenameCtx -> Text -> [Text]
+conProvidersAnyArity ctx n =
+  nub
+    [ m
+    | arity <- Map.findWithDefault [] n ctx.dataConEnv,
+      m <- Map.findWithDefault [] (n, arity) ctx.dataConProviders
+    ]
+
 -- | All declared constraints and functions across all modules, indexed by
 -- @(name, arity)@. Functions and constraints share a namespace, so both
 -- kinds of declaration are included.
@@ -401,14 +478,6 @@ isTypeExportDecl :: Declaration -> Bool
 isTypeExportDecl TypeExportDecl {} = True
 isTypeExportDecl _ = False
 
--- | Extract the unqualified base text of a 'Name', dropping any module
--- prefix. Unlike 'flattenName' this does /not/ round-trip — it is used for
--- keying environments and for type declarations whose 'Name' is always
--- 'Unqualified' at this point.
-unqualifiedText :: Name -> Text
-unqualifiedText (Unqualified t) = t
-unqualifiedText (Qualified _ t) = t
-
 -- ---------------------------------------------------------------------------
 -- Entry points
 -- ---------------------------------------------------------------------------
@@ -443,6 +512,7 @@ renameProgram inputs mods =
                   dataConEnv = Map.empty,
                   dataConProviders = Map.empty,
                   allDataConProviders = allCons,
+                  visibleFunNames = buildVisibleFunctionNames mods m,
                   typeDeclEnv = typeDeclEnv0,
                   typeExportEnv = typeExportEnv0,
                   operatorExports = inputs.operatorExports,
@@ -844,6 +914,8 @@ renameTerm ctx loc origin mode t = case t of
   -- (warn but don't error on undeclared) regardless of the surrounding
   -- 'ResolveTop'. Then fall back to data-constructor canonicalization.
   CompoundTerm (Unqualified n) [] -> do
+    when (mode /= NoResolveQuoted) $
+      checkConstructorFunctionAmbiguity ctx loc origin n
     resolved <- case mode of
       NoResolve -> do
         warnUnknownDataCon ctx.dataConEnv loc origin n 0
@@ -872,6 +944,13 @@ renameTerm ctx loc origin mode t = case t of
           NoResolveQuoted -> NoResolveQuoted
           ResolveTop -> NoResolve
           ResolveAll -> ResolveAll
+    -- Which namespace a bare compound head belongs to is decided
+    -- below, differently per mode. Ask first whether the name even
+    -- has an unambiguous answer.
+    case name of
+      Unqualified n | mode /= NoResolveQuoted -> do
+        checkConstructorFunctionAmbiguity ctx loc origin n
+      _ -> pure ()
     renamedArgs <- traverse (renameTerm ctx loc origin childMode) args
     newName <- case mode of
       NoResolve -> do
@@ -1042,6 +1121,48 @@ visibleProviders ctx n arity =
    in -- Deduplicate: multiple declarations with the same name/arity in
       -- one module (e.g., overloaded function signatures) are not ambiguous.
       nub (ownProviders ++ importProviders)
+
+-- | The modules that make each /function/ name visible to @self@,
+-- keyed by base name with the arity dropped.
+--
+-- Same visibility legs as 'visibleProviders' — the module's own
+-- declarations, plus imported modules that export the name and whose
+-- import list permits it — but restricted to 'FunctionDecl' and
+-- collapsed to a name-only key. Both restrictions matter for its one
+-- caller, 'checkConstructorFunctionAmbiguity': a constructor and a
+-- function collide by name whatever their arities, and constraints
+-- are out of scope because 'Resolve.termToExpr' never resolves a
+-- compound to a constraint call, so a constraint name never competes
+-- with a constructor inside an expression.
+--
+-- Mirrors 'YCHR.Internal.Resolve.buildFunctionVisibility', which
+-- answers the same visibility question for 'Resolve.termToExpr' but
+-- keyed by @(name, arity)@ and valued with 'QualifiedName's.
+buildVisibleFunctionNames :: [CollectedModule] -> CollectedModule -> Map Text [Text]
+buildVisibleFunctionNames mods self =
+  Map.fromListWith
+    (\a b -> nub (a ++ b))
+    [ (d.name, [provider.name])
+    | provider <- mods,
+      Ann d _ <- provider.decls,
+      FunctionDecl {} <- [d],
+      visibleTo provider d
+    ]
+  where
+    imports = [(imp.importModule, imp.importItems) | AnnP imp _ _ <- self.imports]
+
+    visibleTo provider d
+      | provider.name == self.name = True
+      | otherwise = importPermits provider d && exportPermits provider d
+
+    importPermits provider d =
+      any
+        (\(imn, il) -> imn == provider.name && importListPermits d.name d.arity il)
+        imports
+
+    exportPermits provider d = case provider.exports of
+      Nothing -> True
+      Just annExports -> importListPermits d.name d.arity (Just annExports.node)
 
 -- | Check whether a name/arity is permitted by an import list.
 -- 'Nothing' means import everything; 'Just' restricts to listed items.
@@ -1364,6 +1485,7 @@ buildQueryRenameEnv mods =
             dataConEnv = Map.empty,
             dataConProviders = Map.empty,
             allDataConProviders = buildAllDataConProviders mods,
+            visibleFunNames = buildVisibleFunctionNames mods queryMod,
             typeDeclEnv = buildTypeDeclEnv mods,
             typeExportEnv = buildTypeExportEnv mods,
             operatorExports = Map.empty,

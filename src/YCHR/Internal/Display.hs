@@ -229,6 +229,7 @@ resolveErrorCode (ExtendClassTypeOnFunction _) = ErrorCode 16013
 resolveErrorCode (ExtendClassOnFunction _) = ErrorCode 16014
 resolveErrorCode (ExtendFunctionOnClass _) = ErrorCode 16015
 resolveErrorCode (ConstraintFunctionCollision _) = ErrorCode 16016
+resolveErrorCode (ConstructorFunctionCollision _) = ErrorCode 16020
 resolveErrorCode (LambdaParamError _) = ErrorCode 16017
 resolveErrorCode EmptyLambdaParams = ErrorCode 16018
 
@@ -247,6 +248,7 @@ renameErrorCode (NotExportedByModule _ _ _) = ErrorCode 20009
 renameErrorCode (NonExportedConstructor _ _ _) = ErrorCode 20010
 renameErrorCode (ConstructorNotExported _ _ _ _) = ErrorCode 20011
 renameErrorCode (AmbiguousDataConstructor _ _) = ErrorCode 20012
+renameErrorCode (ConstructorFunctionAmbiguity _ _ _) = ErrorCode 20020
 renameErrorCode (ModuleNotImported _ _ _) = ErrorCode 20014
 renameErrorCode (UnknownModule _) = ErrorCode 20015
 renameErrorCode (ReservedTypeName _ _) = ErrorCode 20016
@@ -582,6 +584,16 @@ resolveErrorMsg (ConstraintFunctionCollision name) =
         ++ " form in the same module"
     )
     "constraints and functions share the symbol namespace; pick one form for this name"
+resolveErrorMsg (ConstructorFunctionCollision name) =
+  withHint
+    ( "'"
+        ++ displayName name
+        ++ "' is declared as both a data constructor and a function-like"
+        ++ " form in the same module"
+    )
+    ( "qualifying cannot tell them apart inside one module; rename one of"
+        ++ " them (arity does not separate them either)"
+    )
 
 instance Display (Diagnostic CollectError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
@@ -756,6 +768,33 @@ renameErrorMsg (AmbiguousDataConstructor name candidates) =
     ( "exported by: "
         ++ intercalate ", " (map T.unpack candidates)
         ++ "; qualify the constructor explicitly to disambiguate"
+    )
+renameErrorMsg (ConstructorFunctionAmbiguity name conMods funMods) =
+  withHint
+    ( "'"
+        ++ T.unpack name
+        ++ "' is both a data constructor (declared in "
+        ++ intercalate ", " (map T.unpack conMods)
+        ++ ") and a function (declared in "
+        ++ intercalate ", " (map T.unpack funMods)
+        ++ ")"
+    )
+    ( "qualify the reference ("
+        ++ intercalate
+          " or "
+          [ T.unpack m ++ ":" ++ T.unpack name
+          | m <- take 1 conMods ++ take 1 funMods
+          ]
+        ++ ") to say which you mean, or rename one of them"
+        -- The prelude is imported in full by every module and its
+        -- import list cannot be narrowed (YCHR-20019), so "rename
+        -- yours" is the only advice that applies to a prelude clash.
+        -- Say so only when the prelude is actually one of the sides.
+        ++ if "prelude" `elem` conMods ++ funMods
+          then
+            "; the prelude's import cannot be narrowed, so renaming your"
+              ++ " own constructor is the way out of a prelude clash"
+          else ""
     )
 renameErrorMsg (ReservedTypeName name arity) =
   withHint

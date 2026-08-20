@@ -59,14 +59,14 @@ accumulator instead). A polymorphic result such as `arrow(tvar(0),
 tvar(0))` is produced by numbering the residual type variables with
 `term_variables` at the very end.
 
-The object language (`var`, `lam`, `app`, `lit_int`, `add`) is
+The object language (`evar`, `lam`, `app`, `lit_int`, `add`) is
 **host-supplied data**, matched structurally in rule heads. It is a
 declared type, and the module exports it:
 
 ```prolog
 :- module(stlc, [typecheck/2, type(expr/0)]).
 
-:- chr_type expr ---> var(string)
+:- chr_type expr ---> evar(string)
                     ; lam(string, expr)
                     ; app(expr, expr)
                     ; lit_int(int)
@@ -74,8 +74,8 @@ declared type, and the module exports it:
 ```
 
 Exporting the type is what makes the embedding work: the goal arguments a
-host builds are renamed exactly like rule-head arguments, so a bare `var`
-is canonicalized to `stlc:var` — the same qualified functor the heads were
+host builds are renamed exactly like rule-head arguments, so a bare `evar`
+is canonicalized to `stlc:evar` — the same qualified functor the heads were
 compiled to — and matches. A type the module declares but does not export
 is invisible to the query: its bare uses stay unqualified, so the rules
 written against them never fire and the goal comes back with the result
@@ -90,7 +90,7 @@ Model the object language as an ordinary Haskell type and hand-write
 data Expr = Var Text | Lam Text Expr | App Expr Expr | IntLit Integer | Add Expr Expr
 
 instance ToTerm Expr where
-  toTerm (Var x)    = compound "var" [toTerm x]
+  toTerm (Var x)    = compound "evar" [toTerm x]
   toTerm (Lam x b)  = compound "lam" [toTerm x, toTerm b]
   toTerm (App f a)  = compound "app" [toTerm f, toTerm a]
   toTerm (IntLit n) = compound "lit_int" [toTerm n]
@@ -104,9 +104,11 @@ typecheckGoal :: Expr -> Term
 typecheckGoal e = compound "typecheck" [toTerm e, VarTerm "Result"]
 ```
 
-No quoting is needed even though goal arguments are *evaluated*: `var/1`
-resolves to this program's exported constructor, not the prelude's `var/1`
-function, so it stays data. Constructors that are **not** declared have no
+No quoting is needed even though goal arguments are *evaluated*: `evar/1`
+resolves to this program's exported constructor, so it stays data. The node
+is spelled `evar` rather than `var` because the prelude declares a `var/1`
+function and a constructor may not share a bare name with a visible
+function (`YCHR-20020`). Constructors that are **not** declared have no
 such protection — for those, wrap the argument in `quote/1` with `quote`
 (see [the conversion reference](../reference/convert.md#reusing-a-compiled-program)
 and [the language reference](../reference/language.md) on the `quote/1`

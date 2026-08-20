@@ -1,1 +1,1 @@
-stlc:typecheck(var("y"), R)
+stlc:typecheck(evar("y"), R)

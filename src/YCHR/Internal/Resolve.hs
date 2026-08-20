@@ -38,6 +38,7 @@ import YCHR.Internal.Types
   ( BoundSig (..),
     Constraint (..),
     ConstraintKey (..),
+    DataConstructor (..),
     HeadArg (..),
     Name (..),
     QualifiedConstraint (..),
@@ -46,6 +47,8 @@ import YCHR.Internal.Types
     Term (..),
     TypeExpr (..),
     flattenName,
+    typeConstructors,
+    unqualifiedText,
   )
 
 data ResolveError
@@ -114,6 +117,15 @@ data ResolveError
     -- and functions share the symbol namespace, so the collision is
     -- ambiguous regardless of whether the name is ever referenced.
     ConstraintFunctionCollision Name
+  | -- | The same name is declared as a data constructor (via
+    -- @:- chr_type@) and as a function-like form in a single module.
+    -- Unlike the cross-module case — which stays legal, because
+    -- @m:name@ says which namespace is meant and is reported per bare
+    -- use as @ConstructorFunctionAmbiguity@ — qualification cannot
+    -- tell these two apart: both spell as @m:name@. So the collision
+    -- is rejected at the declaration, regardless of arity and
+    -- regardless of whether the name is ever used.
+    ConstructorFunctionCollision Name
   | -- | A lambda parameter is neither a variable nor a wildcard.
     -- Lambda params must be patterns; literals and compound terms
     -- are rejected here so the resolved AST guarantees well-formed
@@ -156,6 +168,7 @@ resolveProgram mods =
       mixedKindErrors = checkMixedDeclKinds mods
       extensionKindErrors = checkExtensionKinds funcKinds mods
       collisionErrors = checkConstraintFunctionCollision mods
+      conCollisionErrors = checkConstructorFunctionCollision mods
       funVisibility = buildFunctionVisibility mods
       (resolvedRules, ruleErrs) = resolveRules funVisibility mods
       (resolvedFunctions, funErrs) = resolveFunctions funVisibility mods
@@ -172,6 +185,7 @@ resolveProgram mods =
           ++ mixedKindErrors
           ++ extensionKindErrors
           ++ collisionErrors
+          ++ conCollisionErrors
           ++ ruleErrs
           ++ funErrs
    in if null errs
@@ -535,6 +549,61 @@ checkConstraintFunctionCollision mods = snd $ foldl go (Set.empty, []) entries
                              (ConstraintFunctionCollision (Qualified m.name d.name))
                              loc
                              (PExpr.Atom d.name)
+                         )
+                     ]
+              )
+
+-- | Reject a data constructor whose name is also declared as a
+-- function-like form (@:- function@, @:- open_function@, @:- class@,
+-- @:- open_class@) in the /same/ module.
+--
+-- Arity plays no part on either side: data constructors are name-only
+-- in the type system ('YCHR.Internal.Constructors.buildConMap' keys on
+-- 'Name' alone), and a reader cannot tell which namespace @foo(X)@
+-- means from the arity anyway.
+--
+-- Constraints are not compared here, and deliberately so: nothing is
+-- ambiguous between them and constructors. 'termToExpr' never
+-- resolves a compound to a constraint call, so the two never contend
+-- for one reading, and a constraint may share a name with a data
+-- constructor. Constraint-versus-/function/ is a third question
+-- again, handled by 'checkConstraintFunctionCollision'.
+--
+-- The cross-module case is deliberately /not/ handled here. There the
+-- two names are distinguishable — @a:foo@ calls, @b:foo@ builds data —
+-- so only a bare reference is ambiguous, and the renamer reports that
+-- per use site as @ConstructorFunctionAmbiguity@ (YCHR-20020). Within
+-- one module both spell as @m:foo@ and nothing can separate them, so
+-- the declaration itself is the error.
+--
+-- One diagnostic per @(module, constructorName)@, pointed at the type
+-- declaration that introduces the constructor.
+checkConstructorFunctionCollision :: [CollectedModule] -> [Diagnostic ResolveError]
+checkConstructorFunctionCollision mods = snd $ foldl go (Set.empty, []) entries
+  where
+    entries =
+      [ (m, n, loc)
+      | m <- mods,
+        let funNames =
+              Set.fromList
+                [d.name | P.Ann d _ <- m.decls, P.FunctionDecl {} <- [d]],
+        P.Ann td loc <- m.typeDecls,
+        dc <- typeConstructors td,
+        let n = unqualifiedText dc.conName,
+        Set.member n funNames
+      ]
+    go (seen, errs) (m, n, loc) =
+      let key = (m.name, n)
+       in if Set.member key seen
+            then (seen, errs)
+            else
+              ( Set.insert key seen,
+                errs
+                  ++ [ noDiag
+                         ( P.AnnP
+                             (ConstructorFunctionCollision (Qualified m.name n))
+                             loc
+                             (PExpr.Atom n)
                          )
                      ]
               )

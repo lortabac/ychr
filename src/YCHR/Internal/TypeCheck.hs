@@ -139,13 +139,21 @@ runtimeName name = let VM.Name t = vmName name in t
 tcAtom :: Text -> Text
 tcAtom n = "$typechecker__" <> n
 
--- | A 0-arity declared constructor of the @'$typechecker'@ module
--- (@int@, @float@, @string@, @any@) as a runtime 'Value'. 0-arity
--- compounds collapse to 'VAtom' at the runtime layer; 'BMatchTerm'
--- accepts 'VAtom' for arity-0 dispatch, so this matches the shape
--- compiled head patterns produce.
+-- | A base type (@int@, @float@, @string@, @any@) as a runtime
+-- 'Value'. 0-arity compounds collapse to 'VAtom' at the runtime
+-- layer; 'BMatchTerm' accepts 'VAtom' for arity-0 dispatch, so this
+-- matches the shape compiled head patterns produce.
+--
+-- Callers pass the /source-level/ name; the @ty_@ prefix of the CHR
+-- constructor is added here and stripped again by 'displayTypeAtom',
+-- so neither side of the driver has to spell the internal name. See
+-- the @ty@ declaration in @typechecker.chr@ for why the prefix exists.
 tcCon0 :: Text -> Value
-tcCon0 n = VAtom (tcAtom n)
+tcCon0 n = VAtom (tcBaseAtom n)
+
+-- | Runtime functor name of a base-type constructor.
+tcBaseAtom :: Text -> Text
+tcBaseAtom n = tcAtom ("ty_" <> n)
 
 -- ---------------------------------------------------------------------------
 -- Type-check environment and context
@@ -1639,7 +1647,7 @@ checkBodyGoal cctx (D.BodyHostStmt _ args) = mapM_ (typeOfExpr cctx) args
 -- driver's declaration-position stamping produces such a slot — no
 -- CHR rule binds a var to @any@ (see the module header invariant).
 isAnyTy :: Value -> Bool
-isAnyTy (VAtom a) = a == tcAtom "any"
+isAnyTy (VAtom a) = a == tcBaseAtom "any"
 isAnyTy _ = False
 
 -- | Type-check a function-body prelude statement and return a 'CheckCtx'
@@ -2364,14 +2372,19 @@ showValue v = do
 displayQualifiedAtom :: Text -> Text
 displayQualifiedAtom = T.replace "__" ":"
 
--- | Like 'displayQualifiedAtom', but additionally hides the internal
--- @'$typechecker'@ module qualifier so built-in type names
--- (@int@, @float@, @string@, @any@) render bare. User-defined types
--- stay module-qualified.
+-- | Like 'displayQualifiedAtom', but additionally undoes the internal
+-- spelling of the built-in types: the @'$typechecker'@ module
+-- qualifier and the @ty_@ constructor prefix both come off, so
+-- @$typechecker__ty_int@ renders as @int@. User-defined types stay
+-- module-qualified. Inverse of 'tcBaseAtom'; this is the only place a
+-- @$typechecker@ atom becomes user-visible text, so it is the only
+-- place that has to know about the prefix.
 displayTypeAtom :: Text -> Text
 displayTypeAtom t =
   let q = displayQualifiedAtom t
-   in fromMaybe q (T.stripPrefix "$typechecker:" q)
+   in case T.stripPrefix "$typechecker:" q of
+        Nothing -> q
+        Just base -> fromMaybe base (T.stripPrefix "ty_" base)
 
 -- ---------------------------------------------------------------------------
 -- Type definition validation (pure, Haskell-side)

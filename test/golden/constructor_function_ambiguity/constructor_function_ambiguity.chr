@@ -1,0 +1,16 @@
+:- module(constructor_function_ambiguity, [go/1]).
+:- use_module(prelude).
+:- chr_constraint go(any).
+
+% 'atom' is a constructor here and a function in the prelude, which
+% every module imports. The two are distinguishable — this module's is
+% 'constructor_function_ambiguity:atom', the prelude's is
+% 'prelude:atom' — so the declaration itself is fine and only a *bare*
+% reference is ambiguous.
+%
+% The head below is such a bare reference: YCHR-20020. Arity does not
+% save it (the constructor is 0-ary, the prelude function is 1-ary):
+% constructors are name-only in the type system.
+:- chr_type shape ---> atom ; compound.
+
+go(atom) <=> true.

@@ -314,6 +314,8 @@ Equation patterns are normalized using the same Head Normal Form (HNF) machinery
 
 Function names are qualified like constraint names and cannot collide with constraint declarations in the same module (rejected as YCHR-16016, `ConstraintFunctionCollision`).
 
+A function name may not pun on a data-constructor name either, because the head of a compound is what decides between a call and a constructor application. Declaring both in one module is YCHR-16020 (`ConstructorFunctionCollision`, in `Resolve`): both spell as `mod:name`, so qualifying could not disambiguate. Across modules the two *are* distinguishable, so the declarations stand and only a bare reference is rejected, per use site, as YCHR-20020 (`ConstructorFunctionAmbiguity`, in `Rename`); `mod:name` keeps working. Arity is not part of either comparison — data constructors are name-only in the type system.
+
 ### Closed and Open Functions
 
 Functions come in two flavors. A function declared with `:- function ...`

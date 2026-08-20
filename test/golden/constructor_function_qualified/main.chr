@@ -1,0 +1,15 @@
+:- module(main, [build/2]).
+:- use_module(library(prelude)).
+:- use_module(node).
+:- use_module(grow).
+
+:- chr_constraint build(int, any), show(any, any).
+
+% Both meanings of 'leaf' are in scope here, and both appear in
+% tell-argument position — where an unqualified compound head is
+% resolved to a call or to a constructor. A bare 'leaf(...)' would be
+% YCHR-20020; each qualified form names exactly one thing, so
+% 'grow:leaf(N)' is called and 'node:leaf(...)' stays data.
+build(N, R) <=> show(node:leaf(grow:leaf(N)), R).
+
+show(T, R) <=> R = T.

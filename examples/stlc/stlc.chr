@@ -13,7 +13,7 @@
 %   - the typing context and the accumulated errors live in the store.
 %
 % The object language (`expr`, built by the Haskell side):
-%   var(Name)        a variable reference        (Name is a string)
+%   evar(Name)       a variable reference        (Name is a string)
 %   lam(Name, Body)  an *unannotated* lambda      (argument type inferred)
 %   app(F, X)        application
 %   lit_int(N)       an integer literal
@@ -33,15 +33,14 @@
 % The object language is *host-supplied data*: the Haskell driver builds
 % these compounds and passes them in. It is a declared type, and it is
 % exported, precisely so that goal arguments built by the host are
-% canonicalized to `stlc:var`, `stlc:lam`, ... — the same qualified form
-% the rule heads below were compiled to. That also settles the `var/1`
-% pun: the prelude declares a `var/1` *function*, but a goal argument
-% that resolves to this module's `var/1` *constructor* stays data
-% instead of being called. (Inside this module the same rule applies:
-% a `var(X)` in *pattern or tell-argument* position is now this
-% constructor. The prelude's `var/1` function is still what the guards
-% below use, because guard position resolves callables first.)
-:- chr_type expr ---> var(string)
+% canonicalized to `stlc:evar`, `stlc:lam`, ... — the same qualified
+% form the rule heads below were compiled to.
+%
+% The variable node is `evar`, not `var`: the prelude declares a
+% `var/1` function, and a data constructor may not share a bare name
+% with a visible function (YCHR-20020). The guards below want that
+% prelude function, so the constructor is the side that moves.
+:- chr_type expr ---> evar(string)
                     ; lam(string, expr)
                     ; app(expr, expr)
                     ; lit_int(int)
@@ -111,7 +110,7 @@ typeof_add @ typeof(Env, add(A, B), T) <=>
     unify_ty(TB, tint),
     unify_ty(T, tint).
 
-typeof_var @ typeof(Env, var(X), T) <=> lookup_ty(Env, X, T).
+typeof_var @ typeof(Env, evar(X), T) <=> lookup_ty(Env, X, T).
 
 % `Env2 = [...]` introduces the fresh argument-type variable A: a bare
 % unbound variable may not first appear nested inside a constraint tell
@@ -161,7 +160,7 @@ unify_bad @ unify_ty(T1, T2) <=> nonvar(T1), nonvar(T2) |
     report_error(quote(mismatch(T1, T2))).
 
 % Bind a variable to a type, guarding against the infinite types that
-% self-application (`lam(x, app(var(x), var(x)))`) would otherwise create.
+% self-application (`lam(x, app(evar(x), evar(x)))`) would otherwise create.
 bind_occurs @ bind_ty(V, Ty) <=> occurs(V, Ty) |
     report_error(quote(infinite_type(V, Ty))).
 bind_ok     @ bind_ty(V, Ty) <=> V = Ty.

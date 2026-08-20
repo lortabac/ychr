@@ -1,0 +1,4 @@
+:- module(node, [type(tree/0)]).
+:- use_module(library(prelude)).
+
+:- chr_type tree ---> leaf(int) ; fork(tree, tree).

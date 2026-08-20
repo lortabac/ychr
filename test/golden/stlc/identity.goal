@@ -1,1 +1,1 @@
-stlc:typecheck(lam("x", var("x")), R)
+stlc:typecheck(lam("x", evar("x")), R)

@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+Breaking: a data-constructor name may no longer pun on a function
+name. Previously the two were told apart by syntactic position —
+pattern positions took the constructor, evaluating positions took the
+function — so the same text meant different things in different parts
+of one rule, silently.
+
+- Declaring a constructor and a function with the same name in one
+  module is now `YCHR-16020` (`ConstructorFunctionCollision`). Both
+  spell as `mod:name`, so qualifying could not disambiguate.
+- A *bare* reference to a name visible as a constructor from one
+  module and as a function from another is now `YCHR-20020`
+  (`ConstructorFunctionAmbiguity`). Qualified references
+  (`node:leaf(grow:leaf(N))`) keep working and are the intended fix.
+- Arity is not part of either comparison: `foo/0` the constructor
+  collides with `foo/1` the function.
+- `fun name/arity` references and `quote(...)` contents are
+  unaffected — neither is a place where the two namespaces compete,
+  and neither is a constraint name: a constraint may still share a
+  name with a data constructor.
+
+Every module imports the prelude in full, so a constructor may not be
+referred to bare under a name the prelude declares as a function.
+Accordingly, the STLC example's object-language variable node is now
+`evar/1` rather than `var/1`.
+
 Type-checker fixes aligning the implementation with the
 [type-system specification](docs/reference/type-system.md):
 

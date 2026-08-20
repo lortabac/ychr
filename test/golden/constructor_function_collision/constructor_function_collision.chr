@@ -1,0 +1,22 @@
+:- module(constructor_function_collision, [go/0]).
+:- chr_constraint go.
+
+% Forbidden: 'foo' is declared as both a data constructor and a
+% function in the same module. Both would spell as
+% 'constructor_function_collision:foo', so qualifying a reference
+% cannot say which is meant — unlike the cross-module case, which is
+% legal and diagnosed per bare use as YCHR-20020.
+%
+% Arity does not separate them either: 'foo/0' the constructor still
+% collides with 'foo/1' the function.
+%
+% The equation below does reference 'foo', and YCHR-20020 still stays
+% quiet: its check suppresses itself whenever one module supplies both
+% sides, precisely so this error is what the user sees.
+:- chr_type t ---> foo ; bar.
+
+:- function foo/1.
+
+foo(X) -> X.
+
+go <=> true.

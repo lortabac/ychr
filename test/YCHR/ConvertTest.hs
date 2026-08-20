@@ -328,26 +328,26 @@ canonicalizationTests =
   testGroup
     "goal-argument canonicalization"
     [ canonBareConstructor,
-      canonConstructorShadowingFunction,
+      canonNestedConstructor,
       canonQualifiedConstructor,
       canonListArgument
     ]
 
--- | The program a canonicalization case is run against. @col@ is exported
--- so its constructors are visible to the synthetic query module;
--- @var\/1@ deliberately puns on the prelude's @var\/1@ function.
+-- | The program a canonicalization case is run against. @col@ and
+-- @node@ are exported so their constructors are visible to the
+-- synthetic query module.
 canonSource :: Text
 canonSource =
   T.unlines
     [ ":- module(canon, [classify/2, describe/2, total/2,",
       "                  type(col/0), type(node/0)]).",
       ":- chr_type col ---> red ; green.",
-      ":- chr_type node ---> var(string) ; app(node, node).",
+      ":- chr_type node ---> ref(string) ; app(node, node).",
       ":- chr_constraint classify(col, any), describe(node, any),",
       "    total(list(int), int).",
       "classify(red, R) <=> R = \"warm\".",
       "classify(green, R) <=> R = \"cool\".",
-      "describe(var(N), R) <=> R = N.",
+      "describe(ref(N), R) <=> R = N.",
       "describe(app(_, _), R) <=> R = \"application\".",
       "total([], R) <=> R = 0.",
       "total([X | Xs], R) <=> total(Xs, Rest), R is X + Rest."
@@ -365,14 +365,14 @@ canonBareConstructor =
     r <- runQueryCompiled cp (term "classify" [term "red" [], var "R"]) "R"
     r @?= (Right "warm" :: Either ConvertError Text)
 
--- | The STLC case: an object-language constructor whose name is also a
--- visible function (the prelude's @var\/1@). Canonicalization resolves it
--- to the constructor, so it stays data instead of being called.
-canonConstructorShadowingFunction :: TestTree
-canonConstructorShadowingFunction =
-  testCase "constructor sharing a prelude function's name stays data" $ do
+-- | The STLC case: an object-language node built by the host, whose
+-- constructor carries an argument. Canonicalization has to reach the
+-- compound head, not just bare atoms.
+canonNestedConstructor :: TestTree
+canonNestedConstructor =
+  testCase "constructor with arguments in a goal argument matches" $ do
     cp <- canonProgram
-    r <- runQueryCompiled cp (term "describe" [term "var" [text "x"], var "R"]) "R"
+    r <- runQueryCompiled cp (term "describe" [term "ref" [text "x"], var "R"]) "R"
     r @?= (Right "x" :: Either ConvertError Text)
 
 -- | The everyday case: a list argument. 'toTerm' builds the bare @.@ \/

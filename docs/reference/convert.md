@@ -207,9 +207,10 @@ whole-map and custom-registry variants, mirroring `runQueryWith` /
 > **Passing symbolic data.** Goal arguments are renamed exactly like
 > rule-head arguments before they run: a bare reference to a data
 > constructor the program declares *and exports* is canonicalized to its
-> qualified form, which is what the compiled head patterns match. That
-> also settles the pun case — a constructor whose name is shared with a
-> visible function resolves to the constructor and stays data.
+> qualified form, which is what the compiled head patterns match. A bare
+> name that is visible both as a constructor and as a function has no
+> single answer and is rejected (`YCHR-20020`) — thrown as `Error`, like
+> the other goal-renaming failures below.
 >
 > Exporting matters: a type the program declares but does not export is
 > invisible to the query, its constructors stay unqualified, and the rules

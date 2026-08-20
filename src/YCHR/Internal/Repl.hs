@@ -462,8 +462,11 @@ showOperators prog = mapM_ (putStrLn . renderOp) entries
 -- ---------------------------------------------------------------------------
 
 -- | Hard-coded set of names recognized as base types of the
--- @'$typechecker'@ module. These match the @ty@ ADT constructors
--- treated specially by 'YCHR.Internal.TypeCheck.encodeTypeExpr'.
+-- @'$typechecker'@ module. These are the /source-level/ spellings —
+-- what a user types at @:info@ and what
+-- 'YCHR.Internal.TypeCheck.encodeTypeExpr' matches on. The @ty@ ADT
+-- constructors backing them carry a @ty_@ prefix that never surfaces
+-- here (see 'YCHR.Internal.TypeCheck.tcCon0').
 builtinTypeNames :: [Text]
 builtinTypeNames = ["int", "float", "string", "any"]
 
