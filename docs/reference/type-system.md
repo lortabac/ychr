@@ -2028,13 +2028,23 @@ constrain unannotated programs: in code without type annotations,
 the enclosing declaration has no type variables of its own to
 allocate as rigid, so the gradual guarantee continues to hold.
 
-One corner is left open rather than claimed. Constraints are
-checked per unit (§Type Checking Procedure), and an unbound logical
-variable stored inside a constraint is constrained only
-unit-locally until it is bound; whether any unsound interleaving of
-stores and later bindings survives rigid heads is deferred to the
-planned verification work (property tests, and eventually proofs)
-rather than asserted here.
+Property 1 is exercised mechanically by a randomized property test
+(`test/YCHR/TypeSoundnessTest.hs`): it generates programs that are
+well-typed by construction, runs them through the real pipeline, and
+uses in-language assertions to check the runtime value of every
+variable a fired rule binds — from its head patterns and from its
+`is` / `=` bindings — against that variable's static type. The
+generated declarations are monomorphic, so what the test covers is
+the concrete fragment; the rigid-variable machinery described above
+is not yet exercised.
+
+One corner is left open rather than claimed, and is outside that
+test's scope. Constraints are checked per unit (§Type Checking
+Procedure), and an unbound logical variable stored inside a
+constraint is constrained only unit-locally until it is bound;
+whether any unsound interleaving of stores and later bindings
+survives rigid heads is deferred to the planned verification work
+(property tests, and eventually proofs) rather than asserted here.
 
 Since YCHR erases types completely (no runtime casts, no blame
 tracking), the checker cannot guarantee that programs using `any` are

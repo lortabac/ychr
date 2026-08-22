@@ -162,6 +162,7 @@ test-suite ychr-tests
                     , YCHR.RenameTest
                     , YCHR.RoundtripTest
                     , YCHR.TypeCheckTest
+                    , YCHR.TypeSoundnessTest
                     , YCHR.Runtime.VarTest
                     , YCHR.Runtime.StoreTest
                     , YCHR.Runtime.HistoryTest
