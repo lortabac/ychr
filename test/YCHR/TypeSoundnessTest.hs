@@ -242,6 +242,9 @@ generated fragment cannot fail for a reason unrelated to soundness. The
 argument rests on one invariant: every in-scope variable is ground.
 
   * Goal tells carry closed expressions, so the initial store is ground.
+    Both producers keep that so: the free arguments come from
+    `genExprRoot` under an empty environment, and the seeded ones from
+    `patInstance`, whose holes are filled by `genClosedLeaf`.
   * Head matching therefore binds head variables to ground values.
   * `BIs` and `BUnify` bind a *fresh* variable from ground inputs;
     guards bind nothing.
@@ -289,6 +292,55 @@ Termination alone is not enough for a 60s test budget, though: the
 per-level bound is quadratic in the level above, so a four-stratum
 program can in principle derive hundreds of thousands of constraints.
 'pruneTells' caps that statically — see its haddock.
+-}
+
+{- Note [Firing rates]
+
+A program whose rules never fire runs none of the assertions that carry
+the property, so it costs a test iteration and observes nothing. That is
+a runtime fact `coverShape` cannot see, so it is measured out of band:
+splice a body that always raises (`Z = 1, Z = 2` — well-typed, and a
+failed body unification is a runtime error) into the rules of interest,
+run, and count the programs that then fail. A failure means those rules
+fired.
+
+Measured across the size sweep, before and after the goal- and
+guard-seeding described at `genGuard`, `patInstance` and
+`genRuleInstance`. The program-level rows are over 200 programs in both
+columns; the per-rule rows are over the 237 rules of 100 programs
+before and the 436 rules of 200 programs after:
+
+>                              before   after
+> program fires some rule        42%     70%
+> program vacuous               23%      8%
+> individual rule fires          24%     41%
+>   single-head propagation      44%     66%
+>   two-head propagation         22%     34%
+>   single-head simplification   23%     45%
+>   two-head simplification      22%     35%
+>   simpagation                  14%     37%
+> rule with an aliased variable  12%     33%
+
+"Vacuous" means the program neither fired a rule nor carried a goal
+probe, so it observed nothing at all.
+
+The three causes the fixes addressed were, in order of size: guards that
+mentioned no variable and were therefore constant (64% of conjuncts,
+about half of them constant-false; now 6%); head positions whose pattern
+was only partly closed, which the goal-seed pool skipped entirely (38%
+of structured positions); and joins and aliases, which needed two
+independently drawn tells to coincide.
+
+Anchoring a guard on a variable introduced a constant of its own, which
+is worth knowing about before touching `genGuardOn`: the anchor was
+drawn back out for the opposite operand, giving `V == V` and `V < V` in
+15% of conjuncts. Deleting the anchor from the scope every non-anchor
+operand is drawn from took that to 0.2%.
+
+Remaining known dead weight, none of it addressed here: rules that
+remove their own partners starve later rules on the same symbol, and
+goal probes are closed expressions generated in an empty environment, so
+they never observe a value the store or a rule body produced.
 -}
 
 -- ---------------------------------------------------------------------------
@@ -588,22 +640,85 @@ genRule univ sigList ix = do
   where
     genHeads n = traverse (genHead sigList) (0 :| [1 .. n - 1])
 
--- | A rule guard: a compound boolean test, or a bare boolean head
--- variable (the @c(X) \<=\> X | …@ idiom, which is the only thing that
--- puts a plain variable in boolean position).
+-- | A rule guard, anchored on a head variable whenever one is in scope.
 --
--- What it deliberately does not generate is a bare boolean /literal/ at
--- the root: @true@ is a no-op and @false@ makes the rule
--- unconditionally dead, so neither observes anything, and a dead rule
--- costs a whole test iteration.
+-- A conjunct that mentions no variable is a compile-time constant, and a
+-- constant-false one makes the rule unconditionally dead — which costs a
+-- whole test iteration, since a rule that never fires runs none of the
+-- assertions that carry the property. Generating the guard freely gave a
+-- closed conjunct 64% of the time (guards like @is_zero(3)@), because
+-- 'genLeaf' can only reach for a variable at the type it is asked for
+-- and the head rarely binds one at every type a boolean test descends
+-- through. So the guard is built /around/ a variable instead.
+--
+-- The bare boolean head variable (the @c(X) \<=\> X | …@ idiom, the only
+-- thing that puts a plain variable in boolean position) survives as one
+-- of the 'TBool' alternatives.
+--
+-- The anchor is drawn from the variables that some predicate can /say
+-- something about/ when there are any. A generated algebraic type has no
+-- predicate over it, so its only test is an equality against a value
+-- drawn independently — which is false almost every time, and so just
+-- relocates the dead-rule problem from constant-false to
+-- improbably-true.
 genGuard :: [Ty] -> Map Text Ty -> Gen Expr
-genGuard univ env =
-  Gen.frequency
-    ( [(1, Gen.element boolVars) | not (null boolVars)]
-        ++ [(4, genNode univ env 2 TBool)]
-    )
+genGuard univ env
+  | null vars = genNode univ env 2 TBool
+  | otherwise =
+      Gen.frequency
+        ( [(4, Gen.element testable) | not (null testable)]
+            ++ [(1, Gen.element vars)]
+        )
+        >>= uncurry (genGuardOn univ env)
   where
-    boolVars = [EVar n TBool | (n, t) <- Map.toList env, t == TBool]
+    vars = Map.toList env
+    testable = [b | b@(_, t) <- vars, hasPredicate t]
+    -- Must agree with the types 'genGuardOn' gives a non-empty
+    -- @specific@ list: advertising a type here that it has no test for
+    -- would just route more anchors to the equality-only path.
+    hasPredicate t = case t of
+      TAdt def -> def == colorDef || def == shapeDef
+      _ -> True
+
+-- | A boolean test mentioning the given variable. The two equality
+-- alternatives work at every type, so each 'Ty' only adds what is
+-- interesting about it, and no case can come up empty.
+--
+-- Every alternative puts the anchor on one side and draws the other
+-- side with the anchor /out of scope/. With it in scope 'genLeaf' picks
+-- it back out often enough to matter: @V == V@ accounted for most of the
+-- variable-to-variable equalities, and @V < V@ and friends for a further
+-- 5% of conjuncts, two fifths of those constant-false. A constant guard
+-- tests nothing while still counting towards 'coverShape'\'s guard
+-- label, and a constant-false one kills the rule outright. Nothing is
+-- lost by the deletion, since the anchor already occupies one operand.
+genGuardOn :: [Ty] -> Map Text Ty -> Text -> Ty -> Gen Expr
+genGuardOn univ env n t = Gen.choice (generic ++ specific)
+  where
+    v = EVar n t
+    sub = genExpr univ (Map.delete n env) 1
+    generic = [EEq t v <$> sub t, EEq t <$> sub t <*> pure v]
+    -- Comparisons against an int-valued expression built from the
+    -- variable, in both operand orders.
+    intTests e =
+      [ ECmp <$> genCmp <*> pure e <*> sub TInt,
+        ECmp <$> genCmp <*> sub TInt <*> pure e
+      ]
+    genCmp = Gen.element [CLt, CGt, CGe, CLe]
+    specific = case t of
+      TInt ->
+        intTests v
+          ++ [ pure (ECall FnIsZero [v]),
+               (\e -> ECall FnLt [v, e]) <$> sub TInt,
+               (\e -> ECall FnLte [e, v]) <$> sub TInt,
+               (\e -> ECall FnSameInt [v, e]) <$> sub TInt
+             ]
+      TBool -> [pure v, pure (ENot v)]
+      TListInt -> pure (ECall FnIsNil [v]) : intTests (ECall FnLen [v])
+      TAdt def
+        | def == colorDef -> [pure (ECall FnIsRed [v])]
+        | def == shapeDef -> intTests (ECall FnArea [v])
+        | otherwise -> []
 
 -- | Fit a generated head list to one of the three rule shapes. A
 -- simpagation needs two heads; 'genRule' always asks for two when it
@@ -797,28 +912,44 @@ genSTerm env d ty = Gen.frequency (varAlt ++ structAlts)
           )
         ]
 
--- | 2–4 goal tells with closed arguments, plus 0–2 probes.
+-- | 2–6 goal tells with closed arguments, plus 0–2 probes.
 --
 -- A goal that lands in a gap between every head pattern makes the whole
 -- program dead weight — the rule bodies, and with them the assertions
 -- that carry the property, never run. So the goal is biased towards
--- firing something: it prefers constraint symbols some rule actually
--- heads on, and for each argument it prefers the literals and
--- constructor patterns that a head matches /at that exact position/.
--- Both candidate lists are derived from the already generated rules, so
--- the bias costs nothing in shrink quality.
+-- firing something, in two ways. Usually it instantiates one whole rule
+-- head at once ('genRuleInstance'), which is the only way a join or an
+-- aliased variable is reliably satisfied. The remaining tells are drawn
+-- freely but still prefer constraint symbols some rule heads on, and for
+-- each argument prefer an instance of a pattern a head matches /at that
+-- exact position/. Every candidate is derived from the already generated
+-- rules, so the bias costs nothing in shrink quality.
 --
 -- More than one tell also matters: most generated rules have two head
 -- constraints, and a single-constraint store can never satisfy a join.
 genGoal :: [Ty] -> NonEmpty Sig -> [Rule] -> Gen Goal
 genGoal univ sigList rs = do
+  seeded <- genSeeded
   extra <- Gen.int (Range.constant 1 3)
   t0 <- genTell
   ts <- replicateM extra genTell
   nProbes <- Gen.int (Range.constant 0 2)
   ps <- traverse genProbe [0 .. nProbes - 1]
-  pure Goal {tells = t0 :| ts, probes = ps}
+  pure Goal {tells = t0 :| (ts ++ seeded), probes = ps}
   where
+    -- The whole head of one rule, matched exactly. Dropping it
+    -- occasionally keeps the free path — and the programs where nothing
+    -- matches at all — represented.
+    -- Drawn independently of the free tells: making the free count
+    -- depend on how many seeded tells came back would mean shrinking the
+    -- seed adds free tells, which is how a shrink plateaus.
+    genSeeded
+      | null rs = pure []
+      | otherwise =
+          Gen.frequency
+            [ (4, NE.toList <$> (Gen.element rs >>= genRuleInstance)),
+              (1, pure [])
+            ]
     seeds = seedMap rs
     headSigs = [h.headSig | r <- rs, h <- ruleHeads r]
     genSigChoice =
@@ -832,50 +963,113 @@ genGoal univ sigList rs = do
         traverse (genArg s.sigName) (zip [0 ..] (NE.toList (sigArgTys s)))
       pure (s, args)
     genArg sn (i, t) = case Map.lookup (sn, i) seeds of
-      Just es@(_ : _) ->
-        Gen.frequency [(3, Gen.element es), (1, genExprRoot univ Map.empty t)]
+      Just ps@(_ : _) ->
+        Gen.frequency
+          [ (3, Gen.element ps >>= uncurry (patInstance Map.empty)),
+            (1, genExprRoot univ Map.empty t)
+          ]
       _ -> genExprRoot univ Map.empty t
     genProbe i = do
       t <- Gen.element univ
       e <- genExprRoot univ Map.empty t
       pure Probe {probeVar = "R" <> tshow i, probeTy = t, probeExpr = e}
 
--- | Closed expressions harvested from head patterns, keyed by the
+-- | Instantiate a whole rule head into goal tells that match it.
+--
+-- Every pattern variable is given its value /once/, before any head is
+-- read off, so a variable shared between two heads ('maybeAlias') comes
+-- out equal in both. Left to independent draws that agreement is a
+-- coincidence, and the rates show it: two-head rules fired 22% of the
+-- time against 33% for single-head ones, and aliased rules only 12%.
+genRuleInstance :: Rule -> Gen (NonEmpty (Sig, [Expr]))
+genRuleInstance r = do
+  binding <- traverse (\(n, t) -> (n,) <$> genClosedLeaf t) (ruleVars r)
+  traverse (headInstance (Map.fromList binding)) (ruleHeadList r.ruleHead)
+
+-- | One head of a rule, read off as a tell that matches it, under a
+-- variable binding 'genRuleInstance' has already fixed.
+headInstance :: Map Text Expr -> HeadC -> Gen (Sig, [Expr])
+headInstance env h =
+  (h.headSig,)
+    <$> traverse
+      (uncurry (patInstance env))
+      (zip (NE.toList (sigArgTys h.headSig)) (NE.toList h.pats))
+
+-- | Head patterns harvested from the generated rules, keyed by the
 -- constraint symbol and argument position they were found at.
 --
 -- Keying by position rather than by type is what makes the goal bias
 -- effective: a head like @c1(0, red)@ only matches a tell that hits
 -- /both/ positions, and a pool keyed by type alone would draw the @0@
 -- for the @red@ slot as readily as for its own.
-seedMap :: [Rule] -> Map (Text, Int) [Expr]
+--
+-- Only /structured/ patterns are collected. A bare variable or wildcard
+-- constrains nothing, so seeding from it would be the same as drawing
+-- the argument freely.
+seedMap :: [Rule] -> Map (Text, Int) [(Ty, Pat)]
 seedMap rs =
   Map.fromListWith
     (++)
-    [ ((h.headSig.sigName, i), [e])
+    [ ((h.headSig.sigName, i), [(t, p)])
     | r <- rs,
       h <- ruleHeads r,
       (i, t, p) <- zip3 [0 ..] (NE.toList (sigArgTys h.headSig)) (NE.toList h.pats),
-      Just e <- [patToClosed t p]
+      structured p
     ]
+  where
+    structured p = case p of
+      PVar _ _ -> False
+      PWild -> False
+      _ -> True
 
-patToClosed :: Ty -> Pat -> Maybe Expr
-patToClosed ty p = case p of
-  PVar _ _ -> Nothing
-  PWild -> Nothing
-  PLit l -> Just (ELit l)
-  PNil -> Just (EListLit [])
-  PCons h t -> do
-    he <- patToClosed TInt h
-    te <- patToClosed TListInt t
-    case te of
-      EListLit es -> Just (EListLit (he : es))
-      _ -> Nothing
+-- | A closed expression matching a head pattern, with each variable and
+-- wildcard hole filled by a value of the hole's own type.
+--
+-- Instantiating /partial/ patterns is what lets the goal bias reach
+-- shapes like @[7 | T]@ or @circle(R)@. Harvesting only fully-closed
+-- patterns left 38% of the structured head positions with no candidate
+-- at all, and a goal that misses one head position never fires the rule.
+--
+-- @env@ pins the variables that already have a value, so a variable
+-- repeated across a rule's heads instantiates the same way in each; a
+-- hole not in @env@ is filled independently.
+patInstance :: Map Text Expr -> Ty -> Pat -> Gen Expr
+patInstance env ty p = case p of
+  PVar n _ -> maybe (genClosedLeaf ty) pure (Map.lookup n env)
+  PWild -> genClosedLeaf ty
+  PLit l -> pure (ELit l)
+  PNil -> pure (EListLit [])
+  PCons h t -> consExpr <$> patInstance env TInt h <*> patInstance env TListInt t
   PCtor cn ps -> case ty of
-    TAdt def -> do
-      c <- findCtor def cn
-      es <- sequence (zipWith patToClosed c.fields ps)
-      pure (ECtor cn es)
-    _ -> Nothing
+    TAdt def -> case findCtor def cn of
+      Just c
+        | length c.fields == length ps ->
+            ECtor cn <$> traverse (uncurry (patInstance env)) (zip c.fields ps)
+        | otherwise -> error ("patInstance: arity mismatch for " ++ T.unpack cn)
+      Nothing ->
+        error
+          ( "patInstance: "
+              ++ T.unpack cn
+              ++ " is not a constructor of "
+              ++ T.unpack def.adtName
+          )
+    _ ->
+      error
+        ( "patInstance: constructor pattern at non-algebraic type "
+            ++ T.unpack (renderTy ty)
+        )
+
+-- | Prepend an element to a list-typed instance. Every @list(int)@
+-- instance 'patInstance' produces is an 'EListLit', so the other case
+-- cannot arise: 'PNil' and 'genClosedLeaf' both give the empty list, a
+-- nested 'PCons' is this function again, and a 'PVar' found in @env@
+-- holds a value 'genRuleInstance' built with 'genClosedLeaf' at the
+-- variable's own type. That last path is the one to re-check if the
+-- binding 'genRuleInstance' hands down ever stops being closed leaves.
+consExpr :: Expr -> Expr -> Expr
+consExpr h t = case t of
+  EListLit es -> EListLit (h : es)
+  _ -> error "consExpr: list instance is not a list literal"
 
 -- ---------------------------------------------------------------------------
 -- Instrumentation and pruning (pure, deterministic, shrink-safe)
@@ -1255,6 +1449,15 @@ prop_soundness = withTests 100 $ property $ do
 -- > probe           70% (would be 39%)   floor 45
 -- > algebraic type  66% (would be 41%)   floor 46
 --
+-- Five of these six events are decided by generators the goal- and
+-- guard-seeding of 'Note [Firing rates]' does not touch, so the rates
+-- above are as first measured. The exception is the body-tell label,
+-- which reads the /prepared/ program and so depends on how much
+-- 'pruneTells' dropped, and hence on the goal size that work widened;
+-- measured, the extra pruning is nil and the rate is unchanged.
+-- Re-measuring all six after that work reproduced them to within two
+-- points.
+--
 -- Only the body-tell floor is loose: its rate sits near 50%, where the
 -- binomial spread at @withTests 100@ is widest, so a discriminating
 -- floor would flake. The other five bind, and the degeneration trips
@@ -1262,9 +1465,9 @@ prop_soundness = withTests 100 $ property $ do
 --
 -- What these do /not/ measure is whether a rule actually fires — that
 -- is a runtime fact, and nothing observable crosses back from the CHR
--- session. It was measured out of band at roughly 42% of programs, by
--- rendering every 'BAssert' as a call to a predicate with no matching
--- equation and counting the runs that then raise. Redo that measurement
+-- session. It is measured out of band by splicing a body that always
+-- raises (@Z = 1, Z = 2@) into the rules of interest and counting the
+-- runs that then fail; see 'Note [Firing rates]'. Redo that measurement
 -- rather than trusting the labels below if the generator's firing
 -- behaviour is ever in question.
 coverShape :: Program -> PropertyT IO ()
