@@ -19,13 +19,24 @@ import YCHR.TypeSoundness.Types
 
 {- Note [Firing rates]
 
-A program whose rules never fire runs none of the assertions that carry
-the property, so it costs a test iteration and observes nothing. That is
-a runtime fact `coverShape` cannot see, so it is measured out of band:
-splice a body that always raises (`Z = 1, Z = 2` — well-typed, and a
-failed body unification is a runtime error) into the rules of interest,
-run, and count the programs that then fail. A failure means those rules
-fired.
+A program whose rules never fire runs none of the observations that
+carry the property, so it costs a test iteration and observes nothing.
+This note records why the goal- and guard-seeding below exists, and the
+measurement that justified it.
+
+The measurement predates the host observer. At the time, whether a rule
+fired was a runtime fact nothing could see from Haskell, so it was
+measured out of band with a canary: splice a body that always raises
+(`Z = 1, Z = 2` — well-typed, and a failed body unification is a runtime
+error) into the rules of interest, run, and count the programs that then
+fail. A failure means those rules fired.
+
+That method is retired. The observer's per-site hit counts make firing
+directly assertable, so `coverRuntime` in the test module now carries
+these rates as `cover` floors that CI enforces on every run, rather
+than as a number someone has to remember to re-measure. Its haddock
+records the cross-check: the observer reproduces the two program-level
+rows below from inside the run to within a few points.
 
 Measured across the size sweep, before and after the goal- and
 guard-seeding described at `genGuard`, `patInstance` and
@@ -82,7 +93,17 @@ genProgram = do
   sigList <- genSigs univ
   ruleList <- genRules univ sigList
   g <- genGoal univ sigList ruleList
-  pure Program {adts = defs, sigs = sigList, rules = ruleList, goal = g}
+  pure
+    Program
+      { adts = defs,
+        sigs = sigList,
+        rules = ruleList,
+        goal = g,
+        -- Filled by 'YCHR.TypeSoundness.Instrument.instrument', which
+        -- runs after @forAllWith@ so that shrinking sees only what the
+        -- generator drew.
+        obs = mempty
+      }
 
 -- | 0–2 algebraic types. A definition may only mention base types, the
 -- fixed types, and /earlier/ generated types, so the definition graph is

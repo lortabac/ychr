@@ -56,33 +56,18 @@ renderModule prog =
         ++ map renderRule prog.rules
     )
 
--- | A generated type declaration plus its runtime assertion predicate.
+-- | A generated type declaration.
 renderAdt :: AdtDef -> [Text]
 renderAdt def =
   [ ":- chr_type "
       <> def.adtName
       <> " ---> "
       <> T.intercalate " ; " (map renderCtorDecl (NE.toList def.ctors))
-      <> ".",
-    ":- function " <> assertFn (TAdt def) <> "(" <> def.adtName <> ") -> bool."
+      <> "."
   ]
-    ++ map renderAssertEq (NE.toList def.ctors)
     ++ [""]
   where
     renderCtorDecl c = applied c.ctorName (map renderTy c.fields)
-    renderAssertEq c =
-      let vars = ["F" <> tshow i | i <- [0 .. length c.fields - 1]]
-          checks =
-            T.intercalate
-              ", "
-              (zipWith (\t v -> assertFn t <> "(" <> v <> ")") c.fields vars)
-          guardPart = if null c.fields then "" else " | " <> checks
-       in assertFn (TAdt def)
-            <> "("
-            <> applied c.ctorName vars
-            <> ")"
-            <> guardPart
-            <> " -> true."
 
 renderConstraintDecl :: NonEmpty Sig -> Text
 renderConstraintDecl ss =
@@ -154,6 +139,7 @@ renderExpr e = case e of
   EEq _ a b -> infix_ "==" a b
   ENot a -> "not(" <> renderExpr a <> ")"
   ECall fn es -> libFnName fn <> args_ (map renderExpr es)
+  EHostObs code es -> renderObs code es
   where
     infix_ o a b = "(" <> renderExpr a <> " " <> o <> " " <> renderExpr b <> ")"
     arithOp op = case op of
@@ -179,20 +165,28 @@ renderBodyItem it = case it of
   BTell s es -> s.sigName <> args_ (map renderExpr es)
   BIs w _ e -> w <> " is " <> renderExpr e
   BUnify w _ st -> w <> " = " <> renderSTerm st
-  BAssert n ty -> assertFn ty <> "(" <> n <> ")"
+  BObs code es -> renderObs code es
 
--- | The query: the goal tells (module-qualified, as every goal in the
--- golden suite is), then each probe followed by its runtime type
--- assertion.
+-- | An observation call. @host:@ is a wired-in qualifier needing no
+-- declaration, and its result is @any@ — which is what lets the same
+-- rendering serve both guard and body position.
+renderObs :: Int -> [Expr] -> Text
+renderObs code es =
+  "host:ts_obs" <> args_ (tshow code : map renderExpr es)
+
+-- | The query: the goal tells, module-qualified as every goal in the
+-- golden suite is, then each probe.
+--
+-- Probes carry no in-language check. Their values come back to Haskell
+-- as bindings, where 'YCHR.TypeSoundness.Oracle.conforms' checks them
+-- directly — an independent look at the same claim from the other side
+-- of the runtime boundary.
 renderQuery :: Program -> Text
 renderQuery prog =
   T.intercalate ", " (map tell_ (NE.toList prog.goal.tells) ++ probeParts) <> "."
   where
     tell_ (s, es) = "gen:" <> s.sigName <> args_ (map renderExpr es)
     probeParts =
-      concat
-        [ [ p.probeVar <> " is " <> renderExpr p.probeExpr,
-            "B" <> tshow i <> " is " <> assertFn p.probeTy <> "(" <> p.probeVar <> ")"
-          ]
-        | (i, p) <- zip [0 :: Int ..] prog.goal.probes
-        ]
+      [ p.probeVar <> " is " <> renderExpr p.probeExpr
+      | p <- prog.goal.probes
+      ]

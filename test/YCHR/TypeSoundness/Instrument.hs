@@ -16,6 +16,8 @@ module YCHR.TypeSoundness.Instrument
   )
 where
 
+import Data.IntMap.Strict qualified as IntMap
+import Data.List (mapAccumL)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import YCHR.TypeSoundness.Types
@@ -46,33 +48,93 @@ program can in principle derive hundreds of thousands of constraints.
 prepare :: Program -> Program
 prepare = instrument . pruneTells
 
--- | Weave the runtime type assertions into every rule body.
+-- | Weave the observation points into every rule, and build the table
+-- the observer looks them up in.
 --
--- Each rule opens with an @assert_τ(V)@ per pattern-bound head
--- variable: that is the store-typing invariant, i.e. that head matching
--- really did deliver values of the declared argument types. Each @is@
--- or @=@ binding is followed by an assertion on the variable it just
--- bound.
+-- Three kinds of point, each answering a different question:
 --
--- Goal probes are instrumented at render time
--- ('YCHR.TypeSoundness.Render.renderQuery'), where each @R is E@ picks
--- up a @B is assert_τ(R)@ conjunct.
+--   [Head, in /guard/ position] @host:ts_obs(c, V…)@ as the first
+--     guard conjunct, over every pattern-bound head variable. This is
+--     the store-typing invariant — that head matching really did
+--     deliver values of the declared argument types — and putting it
+--     in the guard rather than the body checks it at every /candidate
+--     match/, not only at the matches that go on to fire. It doubles
+--     as the \"this rule was reached\" counter.
+--
+--   [Fired, in body position] A bare @host:ts_obs(c)@ as the first
+--     body item. The difference between this site's hit count and the
+--     head site's is exactly how often the guards rejected a match,
+--     and its hit count is what makes the firing rates of
+--     @Note [Firing rates]@ assertable with @cover@ instead of
+--     measured out of band.
+--
+--   [Binding, in body position] After each @is@ or @=@, over the
+--     variable it just bound.
+--
+-- Codes are allocated by a left-to-right numbering over the rules, so
+-- they are a deterministic function of the program and survive
+-- shrinking.
 instrument :: Program -> Program
-instrument prog = prog {rules = map instrumentRule prog.rules}
-
-instrumentRule :: Rule -> Rule
-instrumentRule r = r {body = headAsserts ++ concatMap expand r.body}
+instrument prog = prog {rules = rs, obs = IntMap.fromList (concat tables)}
   where
-    headAsserts = [BAssert n t | (n, t) <- ruleVars r]
-    expand it = case it of
-      BIs w t _ -> [it, BAssert w t]
-      BUnify w t _ -> [it, BAssert w t]
-      _ -> [it]
+    (_, annotated) = mapAccumL instrumentRule 0 prog.rules
+    rs = map fst annotated
+    tables = map snd annotated
+
+-- | Instrument one rule, threading the next free site code.
+instrumentRule :: Int -> Rule -> (Int, (Rule, [(Int, ObsSite)]))
+instrumentRule code0 r =
+  ( codeN,
+    ( r
+        { guards = EHostObs headCode headArgs : r.guards,
+          body = BObs firedCode [] : bodyItems
+        },
+      (headCode, headSite) : (firedCode, firedSite) : bindSites
+    )
+  )
+  where
+    headCode = code0
+    firedCode = code0 + 1
+    vars = ruleVars r
+    headArgs = [EVar n t | (n, t) <- vars]
+    headSite =
+      ObsSite
+        { osWhere = r.ruleName <> " head",
+          osCheck = ExpectTys (map snd vars)
+        }
+    firedSite =
+      ObsSite {osWhere = r.ruleName <> " fired", osCheck = ExpectTys []}
+    (codeN, expanded) = mapAccumL expand (code0 + 2) r.body
+    bodyItems = concatMap fst expanded
+    bindSites = concatMap snd expanded
+    expand c it = case bound it of
+      Nothing -> (c, ([it], []))
+      Just (w, t) ->
+        ( c + 1,
+          ( [it, BObs c [EVar w t]],
+            [ ( c,
+                ObsSite
+                  { osWhere = r.ruleName <> " binds " <> w,
+                    osCheck = ExpectTys [t]
+                  }
+              )
+            ]
+          )
+        )
+    bound it = case it of
+      BIs w t _ -> Just (w, t)
+      BUnify w t _ -> Just (w, t)
+      _ -> Nothing
 
 -- | Ceiling on the number of constraint instances a generated program
 -- may derive.
+--
+-- Lower than it would need to be for termination alone, because a
+-- guard-position observation runs once per candidate match: a two-head
+-- rule over an n-instance store makes O(n²) host calls, and at 200 the
+-- worst case ran into 'YCHR.TypeSoundness.Observe.obsLimit'.
 maxInstances :: Integer
-maxInstances = 200
+maxInstances = 120
 
 -- | Per-stratum saturation point, so the bound computation itself
 -- cannot produce astronomically large 'Integer's before deciding to

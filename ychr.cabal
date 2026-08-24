@@ -165,6 +165,7 @@ test-suite ychr-tests
                     , YCHR.TypeSoundnessTest
                     , YCHR.TypeSoundness.Gen
                     , YCHR.TypeSoundness.Instrument
+                    , YCHR.TypeSoundness.Observe
                     , YCHR.TypeSoundness.Oracle
                     , YCHR.TypeSoundness.Preamble
                     , YCHR.TypeSoundness.Render

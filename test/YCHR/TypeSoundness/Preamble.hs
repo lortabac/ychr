@@ -69,30 +69,24 @@ libFnName fn = case fn of
   FnArea -> "area"
 
 -- | The invariant part of every generated module: the predicate
--- library guards may call, and the runtime type assertions for the
--- non-algebraic types. @color@ and @shape@ — declaration /and/
--- assertion predicate — are rendered from 'colorDef' and 'shapeDef' by
--- 'YCHR.TypeSoundness.Render.renderAdt', the same path generated types
--- take, so the values the generator reasons with and the source it
--- emits cannot drift apart.
+-- library that guards may call. @color@ and @shape@ are rendered from
+-- 'colorDef' and 'shapeDef' by 'YCHR.TypeSoundness.Render.renderAdt',
+-- the same path generated types take, so the values the generator
+-- reasons with and the source it emits cannot drift apart.
 --
--- Each @assert_τ@ deep-checks a value against @τ@ and has /no/
--- catch-all equation, so a value outside @τ@ raises \"no matching
--- equation\" (YCHR-60001) instead of quietly passing. Field checks live
--- in equation guards, which are ask-semantics conjunctions: a nested
--- assert either returns @true@ or raises.
+-- Every predicate here is total and fully typed. That is what lets the
+-- oracle stay strict: the only partial functions a generated module
+-- could contain would be its own, and it has none, so a
+-- \"no matching equation\" at run time is a value outside every
+-- equation's pattern set rather than instrumentation noise. It is also
+-- why a generated module emits no warnings at all — the oracle treats
+-- any warning as a failure.
 --
--- The missing catch-alls are also why every generated module emits
--- non-exhaustive-pattern warnings (YCHR-20103) for the guarded
--- assertion predicates. That is by design — the partiality /is/ the
--- oracle — and the property only annotates warnings, never fails on
--- them.
---
--- The @assert_int@ leaf leans on the prelude's @integer\/1@, whose
--- signature is @any -> bool@. That is instrumentation, not part of the
--- fragment under test; the generated program proper never mentions
--- @any@, and the assertion functions themselves are declared at
--- concrete types.
+-- Runtime type checking is /not/ done here. It is done by the host
+-- observer ("YCHR.TypeSoundness.Observe"), which sees the raw runtime
+-- 'YCHR.Internal.Runtime.Types.Value' rather than having to be
+-- expressible as a CHR predicate — so it works at positions no
+-- in-language assertion could describe.
 --
 -- The signatures here are restated in 'libFnSig' \/ 'libFnName', which
 -- is what the generator consults when it emits a call. Keep the two in
@@ -119,14 +113,5 @@ preamble =
       "is_red(_) -> false.",
       ":- function area(shape) -> int.",
       "area(circle(R)) -> (R * R).",
-      "area(rect(W, H)) -> (W * H).",
-      "",
-      ":- function assert_int(int) -> bool.",
-      "assert_int(X) | integer(X) -> true.",
-      ":- function assert_bool(bool) -> bool.",
-      "assert_bool(true) -> true.",
-      "assert_bool(false) -> true.",
-      ":- function assert_list_int(list(int)) -> bool.",
-      "assert_list_int([]) -> true.",
-      "assert_list_int([X|Xs]) | assert_int(X), assert_list_int(Xs) -> true."
+      "area(rect(W, H)) -> (W * H)."
     ]

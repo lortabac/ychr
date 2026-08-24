@@ -6,21 +6,26 @@
 module YCHR.TypeSoundness.Oracle
   ( conforms,
     describeException,
+    describeBad,
   )
 where
 
 import Control.Exception (SomeException, fromException)
 import Data.Text (Text)
+import Data.Text qualified as T
 import YCHR.Internal.Display (Display (..))
 import YCHR.Internal.Types (Name (..), Term (..))
 import YCHR.Run (Error (..))
+import YCHR.TypeSoundness.Observe (Bad (..))
 import YCHR.TypeSoundness.Types
 
 {- Note [Why benign failures are impossible]
 
-The strict oracle (any exception is a failure) is only justified if the
-generated fragment cannot fail for a reason unrelated to soundness. The
-argument rests on one invariant: every in-scope variable is ground.
+The oracle is strict: any exception at all is a failure, and any
+recorded observation that is not `Inhabits` is a violation. That is
+only justified if the generated fragment cannot fail, or observe an
+absent value, for a reason unrelated to soundness. The argument rests
+on one invariant: every in-scope variable is ground.
 
   * Goal tells carry closed expressions, so the initial store is ground.
     Both producers keep that so: the free arguments come from
@@ -33,24 +38,51 @@ argument rests on one invariant: every in-scope variable is ground.
 From groundness the rest follows:
 
   * No evaluated position ever sees an unbound variable, so the
-    "unbound variable in evaluated position" runtime error cannot fire.
+    "unbound variable in evaluated position" runtime error cannot fire,
+    and no observation can come back `NotYetBound`. This is why an
+    unbound observation is a *violation* here rather than the expected
+    outcome it becomes once the generator stores unbound values on
+    purpose (see `docs/reference/type-system.md` §No mode checking for
+    the axis it belongs to).
   * `BUnify` cannot fail: its left-hand side is always a fresh variable,
     which unifies with anything. (Failed body unification *is* a runtime
     error — see `unifyOrError` in the interpreter — so this matters.)
   * Nothing observes an unbound variable, so no reactivation ever
     happens.
-  * The preamble predicates and the prelude functions used (`+ - *`,
-    `< > >= =<`, `==`, `not`, and `integer/1` under `assert_int`) are
-    total. `div`/`mod` are excluded because they are partial.
+  * Every function a generated module can call is total. The preamble
+    predicates are exhaustive, and of the prelude functions the
+    generator emits — `+ - *`, `< > >= =<`, `==`, `not` — all are
+    host-backed and total on the ground values reaching them.
+    `div`/`mod` are excluded because they are partial, and `not/1` is
+    only ever applied to a ground `bool`. So "no matching equation"
+    cannot arise at all: it is not a signal the oracle has to
+    interpret, it is a case that cannot occur.
   * No form in `Expr`/`STerm` can widen to `any`: no host calls, no
     `quote`, no undeclared constructors, no evaluable head under `=`,
     and never a bare-variable `is` right-hand side (which the spec
     widens to `any`).
 
-The only deliberately partial functions in a generated module are the
-`assert_τ` instrumentation predicates, and their "no matching equation"
-failure happens exactly when a runtime value falls outside its static
-type — that is the property violation being detected, not noise.
+The instrumentation itself introduces the one `host:` call in a
+generated module, and it is total: it records and returns `true`, so it
+can neither raise nor change the meaning of the guard it sits in. A
+message beginning `host call ts_obs:` would mean the observer *did*
+raise, which is a harness bug and is classified as a failure rather
+than quietly tolerated.
+
+What cannot masquerade as what:
+
+  * A benign event cannot look like a violation: every family above is
+    closed by construction, not by classification, so the oracle never
+    has to decide whether a given crash was "expected".
+  * A violation cannot look benign: the observer records rather than
+    raises, so a violation is a datum in the log rather than the
+    absence of one. Every branch of the property — normal return and
+    exception alike — reads the log before deciding, so a violation is
+    never lost to an unrelated failure, and always outranks it.
+  * A violation cannot be lost to short-circuiting: the head
+    observation is the *first* guard conjunct, so it runs for every
+    candidate match that survived HNF's own match and equality guards,
+    including the matches a user guard then rejects.
 -}
 
 -- | The name a runtime 'Term' carries, without its module. Answers come
@@ -61,11 +93,12 @@ baseOf n = case n of
   Unqualified t -> t
   Qualified _ t -> t
 
--- | Does a returned binding structurally inhabit its static type?
+-- | Does a returned goal binding structurally inhabit its static type?
 --
--- This is the Haskell-side half of the oracle; the in-language
--- @assert_τ@ calls are the other half. They check the same thing from
--- opposite sides of the runtime boundary.
+-- This is the Haskell-side half of the oracle. It is not subsumed by
+-- the host observer: the observer sees values *inside* a run, and this
+-- sees the bindings that come back *out* of one, which is the only
+-- look at the goal's own results.
 conforms :: Ty -> Term -> Bool
 conforms ty t = case ty of
   TInt -> case t of
@@ -84,6 +117,20 @@ conforms ty t = case ty of
       Just c -> length c.fields == length as && and (zipWith conforms c.fields as)
       Nothing -> False
     _ -> False
+
+-- | Render a recorded violation for the counterexample.
+describeBad :: Bad -> String
+describeBad b =
+  T.unpack
+    ( "violation at "
+        <> b.badWhere
+        <> " (site "
+        <> tshow b.badCode
+        <> "): "
+        <> b.badWhy
+        <> "\n  observed: "
+        <> tshow b.badSnaps
+    )
 
 -- | Classify a failure so the counterexample says which stage of the
 -- claim broke. A 'TypeErrors' here comes from the query type-check

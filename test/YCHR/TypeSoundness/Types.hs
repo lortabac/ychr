@@ -33,6 +33,10 @@ module YCHR.TypeSoundness.Types
     Goal (..),
     Program (..),
 
+    -- * Instrumentation
+    ObsSite (..),
+    ObsCheck (..),
+
     -- * Helpers
     tshow,
     renderTy,
@@ -45,10 +49,10 @@ module YCHR.TypeSoundness.Types
     headVars,
     isTell,
     ruleVars,
-    assertFn,
   )
 where
 
+import Data.IntMap.Strict (IntMap)
 import Data.List (find, nubBy)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
@@ -157,6 +161,12 @@ data Expr
   | EEq Ty Expr Expr
   | ENot Expr
   | ECall LibFn [Expr]
+  | -- | Instrumentation: @host:ts_obs(Code, V…)@. Inserted by
+    -- 'YCHR.TypeSoundness.Instrument.instrument', never generated.
+    -- Legal in guard position because a host call's result is @any@,
+    -- which is consistent with @bool@; the observer always returns
+    -- @true@, so a guard it sits in is unchanged.
+    EHostObs Int [Expr]
   deriving (Eq, Show)
 
 -- | The right-hand side of @=@. Unlike 'Expr' this is /structural/:
@@ -174,11 +184,11 @@ data BodyItem
   = BTell Sig [Expr]
   | BIs Text Ty Expr
   | BUnify Text Ty STerm
-  | -- | Instrumentation: @assert_τ(V)@ in body position, result
-    -- discarded. Inserted by
+  | -- | Instrumentation: @host:ts_obs(Code, V…)@ in body position,
+    -- result discarded. Inserted by
     -- 'YCHR.TypeSoundness.Instrument.instrument', never generated
     -- directly.
-    BAssert Text Ty
+    BObs Int [Expr]
   deriving (Eq, Show)
 
 -- ---------------------------------------------------------------------------
@@ -217,8 +227,40 @@ data Program = Program
   { adts :: [AdtDef],
     sigs :: NonEmpty Sig,
     rules :: [Rule],
-    goal :: Goal
+    goal :: Goal,
+    -- | Empty until 'YCHR.TypeSoundness.Instrument.instrument' fills
+    -- it. Keyed by the code each 'EHostObs' \/ 'BObs' carries; the
+    -- observer looks a site up by that code and applies its check to
+    -- the runtime values it was handed.
+    obs :: IntMap ObsSite
   }
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- Instrumentation
+-- ---------------------------------------------------------------------------
+
+-- | One instrumentation point.
+data ObsSite = ObsSite
+  { -- | Where it sits, for the counterexample text: @\"r3 head\"@,
+    -- @\"r3 fired\"@, @\"r3 bind W0\"@.
+    osWhere :: Text,
+    osCheck :: ObsCheck
+  }
+  deriving (Eq, Show)
+
+-- | What the observer must be able to say about the values a site
+-- hands it.
+--
+-- One constructor for now. The polymorphic stages add the checks that
+-- only make sense at a rigid position, where there is no static type
+-- to compare against and the observable fact is /agreement/ between
+-- the values sharing a skolem.
+data ObsCheck
+  = -- | Positional: the value at index @i@ must inhabit the type at
+    -- index @i@. A site with no values (a bare firing marker) carries
+    -- the empty list.
+    ExpectTys [Ty]
   deriving (Eq, Show)
 
 -- ---------------------------------------------------------------------------
@@ -302,11 +344,3 @@ isTell it = case it of
 
 ruleVars :: Rule -> [(Text, Ty)]
 ruleVars r = nubBy (\a b -> fst a == fst b) (concatMap headVars (ruleHeads r))
-
--- | Name of the runtime assertion predicate for a type.
-assertFn :: Ty -> Text
-assertFn ty = case ty of
-  TInt -> "assert_int"
-  TBool -> "assert_bool"
-  TListInt -> "assert_list_int"
-  TAdt def -> "assert_" <> def.adtName
