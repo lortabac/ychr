@@ -163,6 +163,12 @@ test-suite ychr-tests
                     , YCHR.RoundtripTest
                     , YCHR.TypeCheckTest
                     , YCHR.TypeSoundnessTest
+                    , YCHR.TypeSoundness.Gen
+                    , YCHR.TypeSoundness.Instrument
+                    , YCHR.TypeSoundness.Oracle
+                    , YCHR.TypeSoundness.Preamble
+                    , YCHR.TypeSoundness.Render
+                    , YCHR.TypeSoundness.Types
                     , YCHR.Runtime.VarTest
                     , YCHR.Runtime.StoreTest
                     , YCHR.Runtime.HistoryTest

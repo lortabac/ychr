@@ -117,11 +117,17 @@ def discover_cases():
         dir_path = os.path.join(GOLDEN_DIR, entry)
         if not os.path.isdir(dir_path):
             continue
-        # Skip negative-test directories.
-        if glob.glob(os.path.join(dir_path, "*.error")):
-            continue
+        # A positive case is a .goal paired with a .expected. Keying on
+        # the .expected is what makes mixed-mode directories work: a
+        # .goal paired with a .error instead is a goal-negative case,
+        # which this harness does not run, and a directory of bare
+        # .error files has no .goal files to find. Skipping any
+        # directory that merely *contains* a .error would drop the
+        # positive cases of a mixed directory along with them.
         for goal in sorted(glob.glob(os.path.join(dir_path, "*.goal"))):
             case_name = os.path.splitext(os.path.basename(goal))[0]
+            if not os.path.exists(os.path.join(dir_path, case_name + ".expected")):
+                continue
             cases.append((entry, case_name))
     return cases
 

@@ -1988,14 +1988,17 @@ The relevant correctness properties are:
 
 1. **Soundness of the fully-typed fragment**: if no expression in a
    program is typed `any` and the program type-checks, then at
-   runtime no operation will receive a value of an unexpected type.
-   (Standard progress + preservation, restricted to that fragment.)
-   The *`any`-introduction forms* — an `any`-annotated or untyped
-   declaration position, a host call, an unknown constructor, an
-   evaluable-headed term in structural position (§Expression Typing)
-   — therefore delimit exactly where the guarantee stops: a program
-   that binds a symbolic `1 + 1` with `=`, calls the host, or forges
-   an unknown constructor has left the fragment at that expression.
+   runtime every value that is *bound* is bound within its static
+   type. (Standard progress + preservation, restricted to that
+   fragment.) The claim is about values: a term that is still an
+   unbound logical variable holds no value yet, and falls under
+   §No mode checking below instead. The *`any`-introduction forms*
+   — an `any`-annotated or untyped declaration position, a host call,
+   an unknown constructor, an evaluable-headed term in structural
+   position (§Expression Typing) — therefore delimit exactly where
+   the guarantee stops: a program that binds a symbolic `1 + 1` with
+   `=`, calls the host, or forges an unknown constructor has left the
+   fragment at that expression.
 
 2. **The gradual guarantee**: replacing any type annotation with `any`
    (making the program less precise) never introduces new type errors.
@@ -2029,22 +2032,78 @@ the enclosing declaration has no type variables of its own to
 allocate as rigid, so the gradual guarantee continues to hold.
 
 Property 1 is exercised mechanically by a randomized property test
-(`test/YCHR/TypeSoundnessTest.hs`): it generates programs that are
+(`test/YCHR/TypeSoundnessTest.hs`, with the generator under
+`test/YCHR/TypeSoundness/`): it generates programs that are
 well-typed by construction, runs them through the real pipeline, and
 uses in-language assertions to check the runtime value of every
 variable a fired rule binds — from its head patterns and from its
-`is` / `=` bindings — against that variable's static type. The
-generated declarations are monomorphic, so what the test covers is
-the concrete fragment; the rigid-variable machinery described above
-is not yet exercised.
+`is` / `=` bindings — against that variable's static type. Two
+limits on what that covers: the generated declarations are
+monomorphic, so the fragment reached is the concrete one and the
+rigid-variable machinery described above is not yet exercised; and
+the generated goals are ground, so nothing unbound is ever stored and
+the mode axis of §No mode checking is out of scope by construction.
 
-One corner is left open rather than claimed, and is outside that
-test's scope. Constraints are checked per unit (§Type Checking
-Procedure), and an unbound logical variable stored inside a
-constraint is constrained only unit-locally until it is bound;
-whether any unsound interleaving of stores and later bindings
-survives rigid heads is deferred to the planned verification work
-(property tests, and eventually proofs) rather than asserted here.
+### No mode checking
+
+YCHR types terms; it does not track their *mode* — whether a term is
+ground, partially instantiated, or still a free variable. A
+declaration `c(int)` says that the `X` in `c(X)` is a term which,
+whenever it is bound, is an integer. It does not say that `X` is
+bound, and nothing checks the mode preconditions of the operations
+that require one.
+
+("Mode" here is the runtime instantiation state of a term, in the
+sense of Mercury. It is a different axis from the *type-variable*
+instantiation of §Type variables and instantiation, which is
+entirely static.)
+
+The store is what makes the gap reachable. A constraint may be told
+with an argument that is still unbound; another unit binds it later;
+and in between, any rule matching that constraint sees a free
+variable in a position whose declared type is `int`:
+
+```prolog
+:- chr_constraint c(int), mk(int), out(int), later(int).
+
+m @ mk(_)    <=> c(E), later(E).   % c is stored while E is unbound
+l @ later(E) <=> E = 1.
+r @ c(N)     <=> N > 0 | out(N).   % N is E, still unbound, when r is first tried
+```
+
+This type-checks with no errors and no warnings, and fails at run time
+inside `prelude:'>'/2` — not because a value of the wrong type reached
+`>`, but because no value reached it at all. The same failure is
+described from the language side in
+[Tell-time evaluation errors](language.md#tell-time-evaluation-errors):
+evaluation is eager, with no auto-suspension and no symbolic fallback.
+
+Discharging the obligation is the programmer's job, and the tool for
+it is a boundness guard:
+
+```prolog
+r @ c(N) <=> integer(N), N > 0 | out(N).
+```
+
+`integer(N)` is statically redundant here — `N` is already declared
+`int`, and as an evidence form (§Evidence forms) it contributes a fact
+the declaration already gave — but operationally it is what makes the
+rule wait. It fails on a free variable, so the rule does not fire;
+binding `E` reactivates the constraint; and the rule fires on the
+later activation with a value in hand. That a conjunct can be
+redundant for typing and load-bearing for execution is exactly the
+mark of the axis the type system does not cover.
+
+`var/1`, `nonvar/1` and `ground/1` serve the same purpose, and are
+deliberately *not* evidence forms (§Non-forms): their success entails
+a boundness fact, not a typing one — the same separation stated from
+the other side.
+
+This is a scope boundary rather than an oversight. A mode system is a
+second analysis over the same programs, with its own annotation
+burden, and in CHR a constraint argument's mode is genuinely
+flow-dependent: the same argument position can be free in one
+activation of a rule and bound in the next.
 
 Since YCHR erases types completely (no runtime casts, no blame
 tracking), the checker cannot guarantee that programs using `any` are
@@ -2069,3 +2128,6 @@ The key ingredients behind these properties are:
 - The fully-typed fragment reduces to standard HM with algebraic
   data types, extended with local evidence assumptions at
   implementation sites.
+- The guarantee is about bound values. Terms that are still free
+  variables are governed by mode, which the type system does not
+  track (§No mode checking).
