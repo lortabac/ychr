@@ -61,6 +61,22 @@ prepare = instrument . pruneTells
 --     match/, not only at the matches that go on to fire. It doubles
 --     as the \"this rule was reached\" counter.
 --
+--     Its checks come from 'ruleSkHead', not from the rule's final
+--     skolem state, and the distinction is load-bearing. A variable
+--     whose type is known only because an @integer(X)@ guard pinned it
+--     is /not/ known at this point: the guard has not run, the store is
+--     a heterogeneous multiset, and a candidate holding a value of some
+--     other instance is exactly what that guard is there to reject.
+--     Asserting the pinned type here would report a violation on a
+--     match the rule correctly declines to fire on.
+--
+--   [Evidence, in /guard/ position] After the evidence guards and
+--     before the rule's own, over just the variables those guards
+--     pinned. This is the evidence criterion made observable: the
+--     checker allows the body to assume the fact because the guard's
+--     success entails it, and this asserts that at run time it really
+--     does.
+--
 --   [Fired, in body position] A bare @host:ts_obs(c)@ as the first
 --     body item. The difference between this site's hit count and the
 --     head site's is exactly how often the guards rejected a match,
@@ -86,25 +102,51 @@ instrumentRule :: Int -> Rule -> (Int, (Rule, [(Int, ObsSite)]))
 instrumentRule code0 r =
   ( codeN,
     ( r
-        { guards = EHostObs headCode headArgs : r.guards,
+        { ruleEvidence = EHostObs headCode headArgs : r.ruleEvidence,
+          guards = evObs ++ r.guards,
           body = BObs firedCode [] : bodyItems
         },
-      (headCode, headSite) : (firedCode, firedSite) : bindSites
+      (headCode, headSite)
+        : (firedCode, firedSite)
+        : evSites
+        ++ bindSites
     )
   )
   where
     headCode = code0
     firedCode = code0 + 1
-    vars = ruleVars r
-    headArgs = [EVar n t | (n, t) <- vars]
+    evCode = code0 + 2
+    headVarsList = ruleVarsAtHead r
+    headArgs = [EVar n t | (n, t) <- headVarsList]
     headSite =
       ObsSite
         { osWhere = r.ruleName <> " head",
-          osCheck = ExpectPos (map (posCheck r.ruleSk . snd) vars)
+          osCheck = ExpectPos (map (posCheck r.ruleSkHead . snd) headVarsList)
         }
     firedSite =
       ObsSite {osWhere = r.ruleName <> " fired", osCheck = ExpectPos []}
-    (codeN, expanded) = mapAccumL expand (code0 + 2) r.body
+    -- The variables an evidence guard turned from rigid into concrete.
+    -- Only those: re-observing the rest would double the observation
+    -- volume to say nothing new.
+    pinnedVars =
+      [ (n, t)
+      | (n, t) <- ruleVars r,
+        posCheck r.ruleSkHead t == MustBeBound,
+        posCheck r.ruleSk t /= MustBeBound
+      ]
+    (evObs, evSites)
+      | null r.ruleEvidence || null pinnedVars = ([], [])
+      | otherwise =
+          ( [EHostObs evCode [EVar n t | (n, t) <- pinnedVars]],
+            [ ( evCode,
+                ObsSite
+                  { osWhere = r.ruleName <> " evidence",
+                    osCheck = ExpectPos (map (posCheck r.ruleSk . snd) pinnedVars)
+                  }
+              )
+            ]
+          )
+    (codeN, expanded) = mapAccumL expand (code0 + 3) r.body
     bodyItems = concatMap fst expanded
     bindSites = concatMap snd expanded
     expand c it = case bound it of

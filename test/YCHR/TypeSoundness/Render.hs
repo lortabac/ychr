@@ -100,8 +100,9 @@ renderRule r =
       HSimpagate ks rs -> renderHeads ks <> " \\ " <> renderHeads rs <> " <=>"
     renderHeads hs = T.intercalate ", " (map renderHeadC (NE.toList hs))
     guardText
-      | null r.guards = ""
-      | otherwise = T.intercalate ", " (map renderExpr r.guards) <> " | "
+      | null (r.ruleEvidence ++ r.guards) = ""
+      | otherwise = T.intercalate ", " (map renderExpr allGuards) <> " | "
+    allGuards = r.ruleEvidence ++ r.guards
     bodyText
       | null r.body = "true"
       | otherwise = T.intercalate ", " (map renderBodyItem r.body)
@@ -146,6 +147,7 @@ renderExpr e = case e of
   EEq _ a b -> infix_ "==" a b
   ENot a -> "not(" <> renderExpr a <> ")"
   ECall fn es -> libFnName fn <> args_ (map renderExpr es)
+  EPred pr n _ -> predName pr <> "(" <> n <> ")"
   ECopy a -> "copy_term(" <> renderExpr a <> ")"
   EHostObs code es -> renderObs code es
   where
@@ -154,6 +156,9 @@ renderExpr e = case e of
       Add -> "+"
       Sub -> "-"
       Mul -> "*"
+    predName pr = case pr of
+      PredInteger -> "integer"
+      PredBoolean -> "boolean"
     cmpOp op = case op of
       CLt -> "<"
       CGt -> ">"

@@ -6,6 +6,100 @@ snippet, repro) so they can be picked up as standalone tasks.
 
 Remove entries from this file when the underlying bug is fixed.
 
+## `GuardEqual` evidence unsoundly pins a type parameter
+
+**Severity.** Soundness. A fully-typed program that type-checks with no
+errors and no warnings binds a `bool` into an `int`-declared position,
+and an arithmetic operation then receives it. Found by the polymorphic
+type-soundness property test (`test/YCHR/TypeSoundnessTest.hs`), then
+minimised by hand.
+
+**Documented claim.** `docs/reference/type-system.md` §Evidence forms
+justifies `GuardEqual` with:
+
+> Ask-equality (`==`) succeeds only on structurally identical terms …
+> and a constructor determines its algebraic type nominally, so equal
+> structure entails equal type.
+
+That holds for the type *constructor* but not for its *parameters*. A
+nullary constructor of a parametric type inhabits every instantiation:
+`empty : box(A)` for every `A`, and `[] : list(A)` for every `A`.
+Two such values are structurally identical and differently typed, so
+their equality entails nothing about the parameters — yet the merge
+described in §What evidence does ("`type(x) = type(y)` … merges `T₁`
+and `T₂`") binds them.
+
+**Test.**
+
+    :- module(m, [go/1, gather/1]).
+    :- use_module(library(prelude)).
+
+    :- chr_type box(A) ---> empty ; full(A).
+    :- chr_constraint poly(box(A), A).
+    :- chr_constraint mono(box(int)).
+    :- chr_constraint out(int), go(int), gather(any).
+
+    % B is shared between a rigid box(A) position and a concrete
+    % box(int) one, so HNF's GuardEqual merges them and pins A := int.
+    % The body may then pass E to an int position.
+    r @ poly(B, E), mono(B) <=> out(E).
+
+    seed @ go(_) <=> poly(empty, true), mono(empty).
+    gth @ gather(R), out(V) <=> R = V.
+
+Goal `m:go(0), m:gather(R)`.
+
+**Expected.** Either a type error at `out(E)`, or `A` left rigid so the
+call is rejected with `YCHR-60006`/`YCHR-60001`.
+
+**Actual.** Type-checks clean; `R = true`. `out`, declared `out(int)`,
+was told with a boolean. Replacing the body with
+`W is E + 1, out(W)` still type-checks clean and raises `YCHR-60001`
+from `prelude:'+'/2` — an operation receiving a *bound* value of the
+wrong type, so this is the typing axis, not the mode axis of
+§No mode checking.
+
+The same happens through the built-in list: with
+`poly(list(A), A)` and `mono(list(int))`,
+`r @ poly([E | T], _), mono(T) <=> out(E).` and
+`seed @ go(_) <=> poly([true], false), mono([]).`
+
+**Scope.** Measured, not assumed — three shapes were built and run:
+
+| merge | outcome |
+|---|---|
+| rigid ~ *parametric* concrete type (`T := list(bool)`, `T := box(int)`) | **unsound**, both at the top level and through a parameter |
+| rigid ~ *non-parametric* concrete type (`T := int`) | sound; `R = 2` as it should be |
+| rigid ~ rigid (the transitivity idiom) | no witness — see below |
+
+The dividing line is whether a type's values determine it. Every `int`
+value is an `int`, and every `color` value names its constructor, so an
+equality at those types really does entail the type. A parametric
+application has values that do not: `[]` inhabits `list(tau)` for every
+`tau`, `empty` inhabits `box(tau)` for every `tau`. So the
+justification is sound for the outermost type constructor — which is
+nominally determined — and unsound for its parameters, whether they are
+reached by descending into the type (`box(T)` against `box(int)`) or
+because the whole rigid variable is bound to a parametric application
+(`T := list(bool)`).
+
+Rigid ~ rigid is unsound by the same argument — `[] == []` identifies
+two instantiations that may differ — but no exploit was found: rigidity
+blocks every downstream use. The attempt is in the session spike
+`Scope.hs` case C, and it is rejected with `YCHR-60006` at `N + M`,
+because the values only reach an overloaded operation through a
+position that is itself rigid. Whether a composition of merges can
+reach one is open. The spec blesses this case explicitly (transitivity
+of a polymorphic `leq(T, T)`, pinned by
+`test/golden/polymorphic_constraint_cross_occurrence`), so deciding
+whether the fix must reach it is part of the fix.
+
+**Note for the property test.** Until this is resolved, the generator
+in `test/YCHR/TypeSoundness/Gen.hs` (`maybeAlias`) will not pin a rigid
+variable to a parametric type application. Merges to a non-parametric
+concrete type, and rigid-to-rigid merges, are still generated. Widen it
+again when the checker is fixed — the restriction is marked there.
+
 ## REPL one-shot query warnings show an empty `''` source snippet
 
 **Documented claim.** Implicit consistency: file-based diagnostics echo

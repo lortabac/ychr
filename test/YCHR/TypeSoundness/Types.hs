@@ -20,10 +20,12 @@ module YCHR.TypeSoundness.Types
 
     -- * Skolems
     SkolemEnv (..),
+    PinSource (..),
     emptySkolems,
     freshSkolems,
     resolveSTy,
     mergeSTy,
+    pinSkolem,
     groundOf,
     substD,
     groundD,
@@ -41,6 +43,7 @@ module YCHR.TypeSoundness.Types
     ArithOp (..),
     CmpOp (..),
     LibFn (..),
+    TypePred (..),
     Expr (..),
     STerm (..),
     BodyItem (..),
@@ -73,6 +76,7 @@ module YCHR.TypeSoundness.Types
     headVars,
     isTell,
     ruleVars,
+    ruleVarsAtHead,
   )
 where
 
@@ -175,12 +179,39 @@ generator *chooses* every instantiation rather than inferring it.
 
 data SkolemEnv = SkolemEnv
   { skBind :: Map Skolem STy,
-    skNext :: Int
+    skNext :: Int,
+    -- | How each pinned skolem came to be pinned. Coverage only —
+    -- nothing in the generator dispatches on it — but the evidence
+    -- forms differ enough that a label per source is the only way to
+    -- tell which of them a run actually exercised.
+    skPinned :: Map Skolem PinSource
   }
   deriving (Eq, Show)
 
+-- | Which evidence form pinned a skolem.
+--
+-- The three that HNF emits from a head are guaranteed by matching
+-- itself, so they hold before any user guard runs. 'PinTypePred' is a
+-- user guard, so its fact holds only to the right of it — which is why
+-- the two are observed at different points (see
+-- 'YCHR.TypeSoundness.Instrument.instrument').
+data PinSource
+  = -- | A literal at a rigid position: @c(X, 5)@ at @c(T, T)@.
+    PinLit
+  | -- | A constructor or list pattern at a rigid scrutinee. Pins the
+    -- skolem to that type constructor applied at /fresh rigid/
+    -- parameters, not flexible ones.
+    PinMatch
+  | -- | A variable shared between a rigid position and a concretely
+    -- typed one, which HNF turns into a @GuardEqual@.
+    PinMergeConcrete
+  | -- | An @integer(X)@ or @boolean(X)@ guard.
+    PinTypePred
+  deriving (Eq, Ord, Show)
+
 emptySkolems :: SkolemEnv
-emptySkolems = SkolemEnv {skBind = Map.empty, skNext = 0}
+emptySkolems =
+  SkolemEnv {skBind = Map.empty, skNext = 0, skPinned = Map.empty}
 
 freshSkolems :: Int -> SkolemEnv -> ([Skolem], SkolemEnv)
 freshSkolems n env =
@@ -228,6 +259,21 @@ mergeSTy a b env0 = go (resolveSTy env0 a) (resolveSTy env0 b) env0
     foldMergeM (x : xs) (y : ys) env =
       mergeSTy x y env >>= foldMergeM xs ys
     foldMergeM _ _ _ = Nothing
+
+-- | Bind a skolem to a type by /evidence/ rather than by unification.
+--
+-- The only sanctioned exception to the meet table's rigid rows: an
+-- evidence form's operational success entails the fact, so code to its
+-- right runs only in executions where the fact holds.
+pinSkolem :: PinSource -> Skolem -> STy -> SkolemEnv -> Maybe SkolemEnv
+pinSkolem src s t env
+  | occurs env s t = Nothing
+  | otherwise =
+      Just
+        env
+          { skBind = Map.insert s t env.skBind,
+            skPinned = Map.insert s src env.skPinned
+          }
 
 occurs :: SkolemEnv -> Skolem -> STy -> Bool
 occurs env s t = case resolveSTy env t of
@@ -329,6 +375,18 @@ data LibFn
   | FnArea
   deriving (Eq, Show)
 
+-- | A prelude type predicate, which is an /evidence form/: its
+-- success at run time entails that its argument has that type
+-- (§Evidence forms). Only the two the fragment has types for;
+-- @float@ and @string@ are outside it.
+--
+-- Distinct from 'ECall' because the argument is always a variable —
+-- evidence attaches to a variable, not to an arbitrary expression —
+-- and because the generator has to know which conjuncts change what is
+-- known to their right.
+data TypePred = PredInteger | PredBoolean
+  deriving (Eq, Show)
+
 -- | An expression in an /evaluated/ position: a tell argument, an @is@
 -- right-hand side, a guard, or a goal probe.
 --
@@ -352,6 +410,9 @@ data Expr
   | EEq STy Expr Expr
   | ENot Expr
   | ECall LibFn [Expr]
+  | -- | @integer(V)@ \/ @boolean(V)@ at a rigid-typed variable. The
+    -- 'STy' is the variable's type /before/ the pin.
+    EPred TypePred Text STy
   | -- | The prelude's @copy_term(A) -> A@. The one polymorphic
     -- function available at a rigid type without a @requiring@ clause,
     -- so it is how an expression can be built at a skolem target
@@ -410,8 +471,18 @@ data RuleHead
 data Rule = Rule
   { ruleName :: Text,
     ruleHead :: RuleHead,
+    -- | Guards that establish a typing fact: a type predicate at a
+    -- rigid variable. Kept apart from 'guards' because they change
+    -- what is known /to their right/, so the observer has to be told
+    -- where they end.
+    ruleEvidence :: [Expr],
     guards :: [Expr],
     body :: [BodyItem],
+    -- | The skolem state after head matching and its HNF-synthetic
+    -- guards, before any user guard. This is what /matching alone/
+    -- guarantees, and so what may be asserted of a candidate match
+    -- that has not yet passed the rule's own guards.
+    ruleSkHead :: SkolemEnv,
     -- | The skolem state this rule's generation ended in: which
     -- skolems it allocated and what merges it performed. Read by
     -- 'YCHR.TypeSoundness.Instrument.instrument' to decide which head
@@ -590,3 +661,8 @@ isTell it = case it of
 ruleVars :: Rule -> [(Text, STy)]
 ruleVars r =
   nubBy (\a b -> fst a == fst b) (concatMap (headVars r.ruleSk) (ruleHeads r))
+
+-- | As 'ruleVars', but under the state matching alone establishes.
+ruleVarsAtHead :: Rule -> [(Text, STy)]
+ruleVarsAtHead r =
+  nubBy (\a b -> fst a == fst b) (concatMap (headVars r.ruleSkHead) (ruleHeads r))

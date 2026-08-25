@@ -35,20 +35,23 @@
 --
 -- Polymorphism /is/ generated: parametric algebraic types, polymorphic
 -- constraint declarations, per-occurrence rigid variables at every
--- head, and the skolem merge a variable shared between head positions
--- forces. Because the generator models rigidity itself and the checker
--- is the thing under test, a type error is a failure rather than a
--- discard — the two disagreeing is exactly what this stage is looking
--- for.
+-- head, the skolem merge a variable shared between head positions
+-- forces, and guard-derived evidence — a literal or constructor
+-- pattern at a rigid scrutinee, and @integer@ \/ @boolean@ guards.
+-- Because the generator models rigidity itself and the checker is the
+-- thing under test, a type error is a failure rather than a discard:
+-- the two disagreeing is exactly what these stages look for, and one
+-- such disagreement is recorded in @dev-docs\/BUGS.md@ under
+-- \"@GuardEqual@ evidence unsoundly pins a type parameter\".
+--
+-- Evidence is /positional/, and the instrumentation respects that: the
+-- head observation asserts only what matching alone guarantees, and a
+-- second observation after the evidence guards asserts what they add.
+-- See 'YCHR.TypeSoundness.Instrument.instrument'.
 --
 -- What this version deliberately leaves out, so the coverage is not
 -- overread:
 --
---   * /Guard-derived evidence/. A structured pattern at a rigid
---     scrutinee is an evidence form that pins the skolem to a
---     constructor application at fresh rigid parameters; so is a type
---     predicate. Neither is generated yet, so a rigid variable is only
---     ever merged with another, never pinned to a concrete type.
 --   * /Bounded polymorphism/. No @requiring@ clause is generated, so
 --     nothing exercises ambient signatures or bound discharge, and an
 --     overloaded operation is never reached at a rigid type.
@@ -113,7 +116,7 @@ runBudgetMicros :: Int
 runBudgetMicros = 5_000_000
 
 prop_soundness :: Property
-prop_soundness = withTests 100 $ property $ do
+prop_soundness = withTests 300 $ property $ do
   raw <- forAllWith (T.unpack . showProgram) genProgram
   let prog = prepare raw
       src = renderModule prog
@@ -209,30 +212,53 @@ coverShape prog = do
   -- rather than at some token value. Measured over 1000 programs:
   --
   -- > polymorphic constraint  85%  floor 70
-  -- > parametric type         30%  floor 15
-  -- > rigid head occurrence   72%  floor 55
-  -- > rigid merge             19%  floor  8
-  -- > tell at a rigid type    10%  floor  3
+  -- > parametric type         33%  floor 15
+  -- > rigid head occurrence   70%  floor 55
+  -- > rigid merge              7%  floor  2
+  -- > tell at a rigid type     5%  floor  1
+  -- > literal pin             18%  floor  8
+  -- > match pin               29%  floor 15
+  -- > shared-variable pin     20%  floor 10
+  -- > type-predicate pin      25%  floor 12
   --
-  -- The last two are low by construction rather than by accident. A
-  -- rigid /merge/ needs two head occurrences that both bound a
-  -- rigid-typed variable at unifiable types, and a tell /at/ a rigid
-  -- type needs a lower-stratum callee with a parameter to instantiate;
-  -- both draws are already weighted towards the rigid case (see
-  -- 'YCHR.TypeSoundness.Gen.pickTarget' and the @merging@ split in
-  -- @maybeAlias@), which took them from 4% each.
+  -- The two rigid rows are low by construction rather than by accident,
+  -- and both got lower in the evidence stage: every pin turns a rigid
+  -- variable concrete, so evidence competes for exactly the variables a
+  -- merge or a tell would otherwise use. The merge is further narrowed
+  -- by the restriction recorded in
+  -- @dev-docs\/BUGS.md@. Both draws are already weighted towards the
+  -- rigid case (see 'YCHR.TypeSoundness.Gen.pickTarget' and
+  -- @pickTellTarget@, and the @merging@ split in @maybeAlias@).
+  --
+  -- Rates near 5% are why this property runs @withTests 300@ rather
+  -- than 100: at 100 a 5% event is absent from a whole run about once
+  -- in 170, which is too flaky for a floor to be worth having, and
+  -- floors are the only thing standing between this property and going
+  -- quietly vacuous.
   cover 70 "the program declares a polymorphic constraint" anyPolySig
   cover 15 "the program declares a parametric algebraic type" anyParamTy
   cover 55 "a head occurrence allocates rigid variables" anyRigidHead
-  cover 8 "an alias merged two rigid variables" anyMerge
-  cover 3 "a body tell instantiates a parameter at a rigid type" anyTellAtRigid
+  cover 2 "an alias merged two rigid variables" anyMerge
+  cover 1 "a body tell instantiates a parameter at a rigid type" anyTellAtRigid
+  -- One label per evidence form, because they are reached by quite
+  -- different routes and a single "something was pinned" label would
+  -- hide three of them going to zero.
+  cover 8 "a literal pinned a rigid variable" (pinnedBy PinLit)
+  cover 15 "a pattern match pinned a rigid variable" (pinnedBy PinMatch)
+  cover 10 "a shared variable pinned a rigid variable" (pinnedBy PinMergeConcrete)
+  cover 12 "a type predicate pinned a rigid variable" (pinnedBy PinTypePred)
   where
     rs = prog.rules
     sigList = NE.toList prog.sigs
     anyPolySig = any (not . null . (.sigTvs)) sigList
     anyParamTy = any (not . null . (.adtParams)) prog.adts
     anyRigidHead = any (not . null . (.headSkolems)) occs
-    anyMerge = any (not . Map.null . (.skBind) . (.ruleSk)) rs
+    -- A merge proper: one rigid variable aliased to another. Counting
+    -- 'skBind' alone would also count every pin, which lands in the
+    -- same map and is a different thing.
+    anyMerge = any (any isSk . Map.elems . (.skBind) . (.ruleSk)) rs
+    pinnedBy src =
+      any ((src `elem`) . Map.elems . (.skPinned) . (.ruleSk)) rs
     anyTellAtRigid = any tellAtRigid rs
     occs = concatMap ruleHeads rs
     tellAtRigid r = any atRigid r.body
@@ -301,12 +327,18 @@ coverRuntime prog lg = do
   -- at all. Reaching a rule without firing it does not count.
   cover 80 "the program observed something" (any hit firedCodes || not (null prog.goal.probes))
   cover 28 "a rule with rigid head variables fired" (any hit rigidFiredCodes)
+  -- The evidence criterion, made observable. This site sits after the
+  -- evidence guards and asserts the type they pinned; if it never ran,
+  -- the check that guard-derived evidence holds at run time would be
+  -- theatre.
+  cover 4 "an evidence pin was checked at runtime" (any hit evidenceCodes)
   cover 99 "the observation log did not overflow" (not lg.logOverflow)
   where
     hit c = IntMap.findWithDefault 0 c lg.logHits > 0
     sites = IntMap.toList prog.obs
     codesWhere p = [c | (c, s) <- sites, p s.osWhere]
     reachedCodes = codesWhere (T.isSuffixOf " head")
+    evidenceCodes = codesWhere (T.isSuffixOf " evidence")
     firedCodes = codesWhere (T.isSuffixOf " fired")
     bindCodes = codesWhere (T.isInfixOf " binds ")
     joinNames =

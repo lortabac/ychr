@@ -21,6 +21,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hedgehog (Gen)
@@ -155,6 +156,21 @@ pickTarget ctx =
   Gen.frequency
     ( [(2, gToS <$> Gen.element ctx.ctxUniv)]
         ++ [(3, Gen.element rigid) | not (null rigid)]
+    )
+  where
+    rigid = rigidTargets ctx
+
+-- | As 'pickTarget', but for a body tell, where the rigid case is both
+-- rarer and more interesting: it is the only shape in which a value
+-- crosses two declarations without either of them learning which
+-- instance the store chose. Evidence pinning competes for the same
+-- variables, so without the extra weight the shape lands in a few
+-- percent of programs.
+pickTellTarget :: Ctx -> Gen STy
+pickTellTarget ctx =
+  Gen.frequency
+    ( [(1, gToS <$> Gen.element ctx.ctxUniv)]
+        ++ [(4, Gen.element rigid) | not (null rigid)]
     )
   where
     rigid = rigidTargets ctx
@@ -385,11 +401,15 @@ genRule univ adts sigList ix = do
     KSimpagate -> pure 2
     _ -> Gen.int (Range.constant 1 2)
   (hs, sk0) <- genHeads nHeads
-  (aliased, sk1) <- maybeAlias sk0 hs
+  (aliased, skHead) <- maybeAlias sk0 hs
   let rh = mkRuleHead kind aliased
       heads_ = ruleHeadList rh
-      scope0 = Map.fromList (concatMap (headVars sk1) (NE.toList heads_))
-      ctx0 = Ctx {ctxSk = sk1, ctxScope = scope0, ctxUniv = univ, ctxAdts = adts}
+      scope0 = Map.fromList (concatMap (headVars skHead) (NE.toList heads_))
+      ctxHead =
+        Ctx {ctxSk = skHead, ctxScope = scope0, ctxUniv = univ, ctxAdts = adts}
+  -- Evidence first: what it pins is visible to everything after it,
+  -- and to nothing before it.
+  (ev, ctx0) <- genEvidenceGuards ctxHead
   gs <- Gen.list (Range.constant 0 2) (genGuard ctx0)
   nBinds <- Gen.int (Range.constant 0 2)
   (ctx1, binds) <- foldM genBind (ctx0, []) [0 .. nBinds - 1]
@@ -399,15 +419,17 @@ genRule univ adts sigList ix = do
     Rule
       { ruleName = "r" <> tshow ix,
         ruleHead = rh,
+        ruleEvidence = ev,
         guards = gs,
         body = binds ++ tellItems,
-        ruleSk = sk1
+        ruleSkHead = skHead,
+        ruleSk = ctx1.ctxSk
       }
   where
     genHeads n =
       foldM
         ( \(acc, sk) hIx -> do
-            (h, sk') <- genHead sigList hIx sk
+            (h, sk') <- genHead adts sigList hIx sk
             pure (acc ++ [h], sk')
         )
         ([], emptySkolems)
@@ -423,15 +445,22 @@ genRule univ adts sigList ix = do
 -- two occurrences of the same constraint\" (§Rigid and flexible type
 -- variables) — because the store is a heterogeneous multiset and
 -- nothing makes two occurrences agree unless matching does.
-genHead :: NonEmpty Sig -> Int -> SkolemEnv -> Gen (HeadC, SkolemEnv)
-genHead sigList hIx sk = do
+genHead :: [AdtDef] -> NonEmpty Sig -> Int -> SkolemEnv -> Gen (HeadC, SkolemEnv)
+genHead adts sigList hIx sk = do
   sig <- Gen.element (NE.toList sigList)
-  let (sks, sk') = freshSkolems (length sig.sigTvs) sk
+  let (sks, sk0) = freshSkolems (length sig.sigTvs) sk
       sub = Map.fromList (zip sig.sigTvs (map SSk sks))
       t0 :| ts = fmap (substD sub) (sigArgDTys sig)
-  p0 <- genPat sk' 2 [0, hIx] t0
-  rest <- traverse (\(i, t) -> genPat sk' 2 [i, hIx] t) (zip [1 :: Int ..] ts)
-  pure (HeadC {headSig = sig, headSkolems = sks, pats = p0 :| rest}, sk')
+  (p0, sk1) <- genPat adts sk0 2 [0, hIx] t0
+  (rest, skN) <-
+    foldM
+      ( \(acc, skAcc) (i, t) -> do
+          (p, skAcc') <- genPat adts skAcc 2 [i, hIx] t
+          pure (acc ++ [p], skAcc')
+      )
+      ([], sk1)
+      (zip [1 :: Int ..] ts)
+  pure (HeadC {headSig = sig, headSkolems = sks, pats = p0 :| rest}, skN)
 
 -- | A head pattern for an implementation-site argument type.
 --
@@ -440,36 +469,98 @@ genHead sigList hIx sk = do
 -- unique by construction and no fresh-name counter has to be threaded
 -- through the generator.
 --
--- At a /bare rigid/ target the only patterns are a variable and a
--- wildcard. A structured pattern there would be a @GuardMatch@ at a
--- rigid scrutinee, which is an evidence form that pins the skolem to a
--- constructor application at fresh rigid parameters — real, and worth
--- generating, but it belongs with the rest of the evidence machinery
--- rather than here. At a target that is already a constructor
--- application the structured alternatives are ordinary: matching
--- @[H | R]@ at @list(T)@ reads the field types off an instantiation
--- the declaration already fixed, and pins nothing.
-genPat :: SkolemEnv -> Int -> [Int] -> STy -> Gen Pat
-genPat sk d path ty = Gen.frequency (common ++ specific)
+-- At a target that is already a constructor application the structured
+-- alternatives are ordinary: matching @[H | R]@ at @list(T)@ reads the
+-- field types off an instantiation the declaration already fixed, and
+-- pins nothing.
+--
+-- At a /bare rigid/ target they are evidence. A literal pins the
+-- skolem to that literal's type; a constructor or list pattern pins it
+-- to that type constructor applied at __fresh rigid__ parameters. The
+-- freshness and the rigidity are both load-bearing: @typecheck_match_beta_rigid@
+-- pins that the parameters a @GuardMatch@ introduces are rigid, not
+-- flexible, so a body may not then treat the field as a concrete type.
+-- Getting that wrong here is the drift this stage exists to catch, so
+-- the generator does exactly what the spec says and lets the checker
+-- disagree if it will.
+--
+-- Threads the skolem state because a pin at one argument position is
+-- visible to the next: @c(X, 5)@ at @c(T, T)@ types @X@ as @int@.
+genPat :: [AdtDef] -> SkolemEnv -> Int -> [Int] -> STy -> Gen (Pat, SkolemEnv)
+genPat adts sk d path ty = Gen.frequency (common ++ specific)
   where
-    common = [(6, pure (PVar (varName path) ty)), (1, pure PWild)]
-    sub i = genPat sk (d - 1) (i : path)
+    common =
+      [ (6, pure (PVar (varName path) ty, sk)),
+        (1, pure (PWild, sk))
+      ]
     specific = case resolveSTy sk ty of
-      SSk _ -> []
-      SCon CInt [] -> [(2, PLit . LInt <$> Gen.integral (Range.linear 0 20))]
-      SCon CBool [] -> [(2, PLit . LBool <$> Gen.bool)]
+      SSk s -> [(3, genPin s) | d > 0]
+      SCon CInt [] -> [(2, lit (PLit . LInt <$> Gen.integral (Range.linear 0 20)))]
+      SCon CBool [] -> [(2, lit (PLit . LBool <$> Gen.bool))]
       SCon CList [el] ->
-        (2, pure PNil)
-          : [(3, PCons <$> sub 0 el <*> sub 1 ty) | d > 0]
-      SCon (CAdt def) args -> [(3, genCtorPat def args) | d > 0]
+        (2, pure (PNil, sk))
+          : [(3, consPat sk el ty) | d > 0]
+      SCon (CAdt def) args -> [(3, genCtorPat sk def args) | d > 0]
       SCon _ _ -> []
-    genCtorPat def args = do
+    lit g = (,sk) <$> g
+    consPat skIn el rest = do
+      (h, sk1) <- genPat adts skIn (d - 1) (0 : path) el
+      (t, sk2) <- genPat adts sk1 (d - 1) (1 : path) rest
+      pure (PCons h t, sk2)
+    genCtorPat skIn def args = do
       c <- Gen.element (NE.toList def.adtCtors)
-      ps <-
-        traverse
-          (\(i, t) -> sub i t)
+      (ps, skN) <-
+        foldM
+          ( \(acc, skAcc) (i, t) -> do
+              (p, skAcc') <- genPat adts skAcc (d - 1) (i : path) t
+              pure (acc ++ [p], skAcc')
+          )
+          ([], skIn)
           (zip [0 :: Int ..] (ctorFieldTys def args c))
-      pure (PCtor c.ctorName ps)
+      pure (PCtor c.ctorName ps, skN)
+    -- The evidence cases: a pattern at a bare rigid scrutinee.
+    genPin s =
+      Gen.choice
+        ( [ pinTo PinLit s (SCon CInt []) (PLit . LInt <$> Gen.integral (Range.linear 0 20)),
+            pinTo PinLit s (SCon CBool []) (PLit . LBool <$> Gen.bool),
+            pinList s
+          ]
+            ++ [pinCtor s def | def <- adtsInScope]
+        )
+    pinTo src s t g = do
+      p <- g
+      pure (p, pinOrKeep src s t sk)
+    pinList s = do
+      let (betas, sk1) = freshSkolems 1 sk
+          beta = case betas of
+            (b : _) -> b
+            [] -> error "genPat: freshSkolems 1 returned none"
+          sk2 = pinOrKeep PinMatch s (SCon CList [SSk beta]) sk1
+      Gen.choice
+        [ pure (PNil, sk2),
+          do
+            (h, sk3) <- genPat adts sk2 (d - 1) (0 : path) (SSk beta)
+            (t, sk4) <- genPat adts sk3 (d - 1) (1 : path) (SCon CList [SSk beta])
+            pure (PCons h t, sk4)
+        ]
+    pinCtor s def = do
+      let (betas, sk1) = freshSkolems (length def.adtParams) sk
+          args = map SSk betas
+          sk2 = pinOrKeep PinMatch s (SCon (CAdt def) args) sk1
+      c <- Gen.element (NE.toList def.adtCtors)
+      (ps, skN) <-
+        foldM
+          ( \(acc, skAcc) (i, t) -> do
+              (p, skAcc') <- genPat adts skAcc (d - 1) (i : path) t
+              pure (acc ++ [p], skAcc')
+          )
+          ([], sk2)
+          (zip [0 :: Int ..] (ctorFieldTys def args c))
+      pure (PCtor c.ctorName ps, skN)
+    -- A pin can only fail its occurs check, which cannot happen here:
+    -- the target is built from skolems allocated a moment ago.
+    pinOrKeep src s t env = fromMaybe env (pinSkolem src s t env)
+    adtsInScope = adts
 
 varName :: [Int] -> Text
 varName path = "V" <> T.intercalate "_" (map tshow (reverse path))
@@ -485,10 +576,10 @@ varName path = "V" <> T.intercalate "_" (map tshow (reverse path))
 -- therefore performs the merge, so the rest of the rule is generated
 -- under the same identification the checker will make.
 --
--- Candidate pairs exclude the case where a rigid position would be
--- merged with a concrete one. That merge is legal and the checker
--- makes it, but it /pins/ the skolem to a concrete type, which is
--- guard-derived evidence rather than plain unification.
+-- A pair that identifies a rigid position with a concretely typed one
+-- /pins/ the skolem, and is recorded as such: the checker reaches it
+-- through the same @GuardEqual@, but the fact it contributes is
+-- evidence rather than plain unification.
 maybeAlias :: SkolemEnv -> NonEmpty HeadC -> Gen (NonEmpty HeadC, SkolemEnv)
 maybeAlias sk hs
   | null pairs = pure (hs, sk)
@@ -511,7 +602,7 @@ maybeAlias sk hs
               ( [(3, Gen.element merging) | not (null merging)]
                   ++ [(1, Gen.element plain) | not (null plain)]
               )
-          pure (fmap (renameHead drop_ keep) hs, sk')
+          pure (fmap (renameHead drop_ keep) hs, notePins sk sk')
   where
     vs = concatMap (headVars sk) (NE.toList hs)
     pairs =
@@ -519,9 +610,38 @@ maybeAlias sk hs
       | (a, ta) <- vs,
         (b, tb) <- vs,
         a < b,
-        Just sk' <- [mergeSTy ta tb sk],
-        noPin sk sk'
+        topLevel ta tb,
+        Just sk' <- [mergeSTy ta tb sk]
       ]
+    -- RESTRICTION, remove when dev-docs/BUGS.md
+    -- "`GuardEqual` evidence unsoundly pins a type parameter" is fixed.
+    --
+    -- @GuardEqual@'s fact is justified by "equal structure entails equal
+    -- type", which holds for a type constructor — nominally determined
+    -- by the value's constructor — and fails for its parameters: @[]@
+    -- inhabits @list(tau)@ for every @tau@, so @[] == []@ says nothing
+    -- about the element type. Pinning a rigid variable to a parametric
+    -- application is therefore unsound, and the checker does it anyway.
+    --
+    -- Generating that shape would leave this property red on a defect
+    -- already recorded, so a rigid variable may only be identified with
+    -- another rigid one or with a type whose values determine it. The
+    -- restriction is exactly the measured dividing line, not a guess:
+    -- see the scope table in the bug entry.
+    topLevel ta tb = case (resolveSTy sk ta, resolveSTy sk tb) of
+      (SSk _, other) -> mergeableWithRigid other
+      (other, SSk _) -> mergeableWithRigid other
+      _ -> stripSTy sk ta == stripSTy sk tb
+    mergeableWithRigid t = case stripSTy sk t of
+      SSk _ -> True
+      -- Nullary: no parameters, so nothing can be left undetermined.
+      SCon c [] -> nonParametric c
+      SCon _ _ -> False
+    nonParametric c = case c of
+      CInt -> True
+      CBool -> True
+      CList -> False
+      CAdt d -> null d.adtParams
     -- Pairs that genuinely identify two occurrences' rigid variables,
     -- as against two positions that already had the same concrete
     -- type. Drawn uniformly the latter swamp the former — there are
@@ -532,8 +652,20 @@ maybeAlias sk hs
       List.partition
         (\(_, _, sk') -> not (Map.null (Map.difference sk'.skBind sk.skBind)))
         pairs
-    noPin before after =
-      all isSk (Map.elems (Map.difference after.skBind before.skBind))
+
+-- | Record, for coverage, which of the bindings a merge added pinned a
+-- skolem to a concrete type rather than aliasing it to another skolem.
+notePins :: SkolemEnv -> SkolemEnv -> SkolemEnv
+notePins before after =
+  after
+    { skPinned =
+        Map.union
+          after.skPinned
+          (Map.map (const PinMergeConcrete) concreteBindings)
+    }
+  where
+    concreteBindings =
+      Map.filter (not . isSk) (Map.difference after.skBind before.skBind)
     isSk t = case t of
       SSk _ -> True
       _ -> False
@@ -560,6 +692,55 @@ mkRuleHead kind hs = case (kind, hs) of
 -- ---------------------------------------------------------------------------
 -- Guards
 -- ---------------------------------------------------------------------------
+
+-- | 0–2 type-predicate guards, each pinning one still-unpinned rigid
+-- variable that some in-scope variable is typed at exactly.
+--
+-- Only @integer@ and @boolean@: @float@ and @string@ are outside the
+-- fragment, and @atom@, @var@, @nonvar@ and @ground@ are explicitly
+-- /not/ evidence forms (§Non-forms) — the first because nullary
+-- constructors inhabit many types, the others because their success
+-- entails a boundness fact rather than a typing one.
+--
+-- Pinning here is what unlocks concrete and overloaded operations at
+-- that variable for the guards to the right and the whole body, so
+-- generating these /before/ the ordinary guards is load-bearing rather
+-- than cosmetic: evidence is positional.
+--
+-- The candidates are bare unpinned skolems only. A predicate at an
+-- already-concrete variable is either redundant (if it agrees) or a
+-- contradiction (if it does not), and a contradiction makes the rule
+-- dead code — YCHR-20104, which the oracle treats as a failure.
+genEvidenceGuards :: Ctx -> Gen ([Expr], Ctx)
+genEvidenceGuards ctx0
+  | null (candidates ctx0) = pure ([], ctx0)
+  | otherwise = do
+      -- Weighted towards none. Every pin turns a rigid variable
+      -- concrete, so evidence competes for exactly the variables a body
+      -- tell would otherwise instantiate a callee's parameter at; at
+      -- 2:3:1 that shape fell from 10% of programs to 2%.
+      n <- Gen.frequency [(4, pure 0), (3, pure 1), (1, pure 2)]
+      go n ([], ctx0)
+  where
+    go :: Int -> ([Expr], Ctx) -> Gen ([Expr], Ctx)
+    go 0 acc = pure acc
+    go k (gs, ctx) = case candidates ctx of
+      [] -> pure (gs, ctx)
+      cs -> do
+        (n, s) <- Gen.element cs
+        (fn, t, src) <-
+          Gen.element
+            [ (PredInteger, SCon CInt [], PinTypePred),
+              (PredBoolean, SCon CBool [], PinTypePred)
+            ]
+        let sk' = fromMaybe ctx.ctxSk (pinSkolem src s t ctx.ctxSk)
+        go (k - 1) (gs ++ [EPred fn n (SSk s)], ctx {ctxSk = sk'})
+    candidates ctx =
+      [ (n, s)
+      | (n, t) <- scopeTys ctx,
+        SSk s <- [t],
+        not (Map.member s ctx.ctxSk.skPinned)
+      ]
 
 -- | A rule guard, anchored on a head variable whenever one is in scope.
 --
@@ -683,7 +864,7 @@ genTells ctx sigList minHead
     one = do
       s <- Gen.element lower
       sub <-
-        Map.fromList <$> traverse (\v -> (v,) <$> pickTarget ctx) s.sigTvs
+        Map.fromList <$> traverse (\v -> (v,) <$> pickTellTarget ctx) s.sigTvs
       args <-
         traverse (genExprAt ctx 2 . substD sub) (NE.toList (sigArgDTys s))
       pure (BTell s sub args)
