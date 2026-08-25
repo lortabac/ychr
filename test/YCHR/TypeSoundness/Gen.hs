@@ -404,7 +404,16 @@ genRule univ adts sigList ix = do
   (aliased, skHead) <- maybeAlias sk0 hs
   let rh = mkRuleHead kind aliased
       heads_ = ruleHeadList rh
-      scope0 = Map.fromList (concatMap (headVars skHead) (NE.toList heads_))
+      -- First occurrence wins for a repeated (aliased) variable: HNF
+      -- renames the later occurrences away and keeps the first, so
+      -- the checker types the surviving name at its first position.
+      -- The occurrences' types need not resolve equal any more — a
+      -- pair meeting inside a shared constructor teaches the checker
+      -- nothing — so which one the scope records is load-bearing.
+      scope0 =
+        Map.fromListWith
+          (\_ old -> old)
+          (concatMap (headVars skHead) (NE.toList heads_))
       ctxHead =
         Ctx {ctxSk = skHead, ctxScope = scope0, ctxUniv = univ, ctxAdts = adts}
   -- Evidence first: what it pins is visible to everything after it,
@@ -579,7 +588,13 @@ varName path = "V" <> T.intercalate "_" (map tshow (reverse path))
 -- A pair that identifies a rigid position with a concretely typed one
 -- /pins/ the skolem, and is recorded as such: the checker reaches it
 -- through the same @GuardEqual@, but the fact it contributes is
--- evidence rather than plain unification.
+-- evidence rather than plain unification. What the pin may say is
+-- bounded by what value equality proves (§What evidence does): a
+-- non-parametric type pins exactly; a parametric application pins
+-- only its constructor, at fresh skolems; and a pair meeting inside
+-- a shared constructor teaches the checker nothing — the store
+-- instance is then forced to agree ('skForce') without the static
+-- model learning it.
 maybeAlias :: SkolemEnv -> NonEmpty HeadC -> Gen (NonEmpty HeadC, SkolemEnv)
 maybeAlias sk hs
   | null pairs = pure (hs, sk)
@@ -605,52 +620,36 @@ maybeAlias sk hs
           pure (fmap (renameHead drop_ keep) hs, notePins sk sk')
   where
     vs = concatMap (headVars sk) (NE.toList hs)
+    -- 'eqUnifySTy' is the checker's own @GuardEqual@ discipline —
+    -- skolem merges and pins go into the static model, parameter
+    -- identifications into the runtime forcings — so a pair it
+    -- accepts is a pair the checker accepts /and/ the instance
+    -- generator can arrange a firing for. A pair it refuses (an
+    -- outermost-constructor mismatch, a forcing conflict) is simply
+    -- not offered.
     pairs =
       [ (a, b, sk')
       | (a, ta) <- vs,
         (b, tb) <- vs,
         a < b,
-        topLevel ta tb,
-        Just sk' <- [mergeSTy ta tb sk]
+        Just sk' <- [eqUnifySTy ta tb sk]
       ]
-    -- RESTRICTION, remove when dev-docs/BUGS.md
-    -- "`GuardEqual` evidence unsoundly pins a type parameter" is fixed.
-    --
-    -- @GuardEqual@'s fact is justified by "equal structure entails equal
-    -- type", which holds for a type constructor — nominally determined
-    -- by the value's constructor — and fails for its parameters: @[]@
-    -- inhabits @list(tau)@ for every @tau@, so @[] == []@ says nothing
-    -- about the element type. Pinning a rigid variable to a parametric
-    -- application is therefore unsound, and the checker does it anyway.
-    --
-    -- Generating that shape would leave this property red on a defect
-    -- already recorded, so a rigid variable may only be identified with
-    -- another rigid one or with a type whose values determine it. The
-    -- restriction is exactly the measured dividing line, not a guess:
-    -- see the scope table in the bug entry.
-    topLevel ta tb = case (resolveSTy sk ta, resolveSTy sk tb) of
-      (SSk _, other) -> mergeableWithRigid other
-      (other, SSk _) -> mergeableWithRigid other
-      _ -> stripSTy sk ta == stripSTy sk tb
-    mergeableWithRigid t = case stripSTy sk t of
-      SSk _ -> True
-      -- Nullary: no parameters, so nothing can be left undetermined.
-      SCon c [] -> nonParametric c
-      SCon _ _ -> False
-    nonParametric c = case c of
-      CInt -> True
-      CBool -> True
-      CList -> False
-      CAdt d -> null d.adtParams
-    -- Pairs that genuinely identify two occurrences' rigid variables,
-    -- as against two positions that already had the same concrete
-    -- type. Drawn uniformly the latter swamp the former — there are
-    -- many more concrete positions — and the skolem merge, which is
-    -- what makes multi-head idioms over a polymorphic constraint check
-    -- at all, showed up in 4% of programs. Hence the split.
+    -- Pairs that genuinely constrain a rigid variable — a merge or
+    -- pin the checker performs, or a parameter forcing it
+    -- deliberately does not — as against two positions that already
+    -- had the same concrete type. Drawn uniformly the latter swamp
+    -- the former — there are many more concrete positions — and the
+    -- skolem merge, which is what makes multi-head idioms over a
+    -- polymorphic constraint check at all, showed up in 4% of
+    -- programs. Hence the split.
     (merging, plain) =
       List.partition
-        (\(_, _, sk') -> not (Map.null (Map.difference sk'.skBind sk.skBind)))
+        ( \(_, _, sk') ->
+            not
+              ( Map.null (Map.difference sk'.skBind sk.skBind)
+                  && Map.null (Map.difference sk'.skForce sk.skForce)
+              )
+        )
         pairs
 
 -- | Record, for coverage, which of the bindings a merge added pinned a
@@ -739,7 +738,11 @@ genEvidenceGuards ctx0
       [ (n, s)
       | (n, t) <- scopeTys ctx,
         SSk s <- [t],
-        not (Map.member s ctx.ctxSk.skPinned)
+        not (Map.member s ctx.ctxSk.skPinned),
+        -- A force-constrained skolem's instance is already fixed by
+        -- an alias; a predicate pin could contradict it, leaving a
+        -- guard the arranged store values never pass.
+        not (Map.member s ctx.ctxSk.skForce)
       ]
 
 -- | A rule guard, anchored on a head variable whenever one is in scope.
@@ -1152,14 +1155,21 @@ genRuleInstance univ r = do
         (ruleVars r)
   traverse (headInstance groundTy binding) (ruleHeadList r.ruleHead)
   where
+    -- Grounding resolves under the runtime view: the parameter
+    -- identifications an alias forces ('skForce') constrain which
+    -- instances can actually fire the rule, even though the checker
+    -- model deliberately does not know them. Only this function may
+    -- look through the forcings — every typing decision upstream
+    -- uses the plain env.
+    rt = runtimeView r.ruleSk
     classes =
       List.nub
         [ s
         | h <- ruleHeads r,
           t <- NE.toList (headArgTys h),
-          s <- skolemsOf r.ruleSk t
+          s <- skolemsOf rt t
         ]
-    groundWith assign t = case resolveSTy r.ruleSk t of
+    groundWith assign t = case resolveSTy rt t of
       SSk s -> Map.findWithDefault gInt s assign
       SCon c as -> GTy c (map (groundWith assign) as)
 

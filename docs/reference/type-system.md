@@ -614,9 +614,13 @@ share one instantiation, which nothing enforces. Where matching
 *does* force instances to agree — a variable shared between head
 positions — the agreement is recovered as evidence: HNF desugars the
 shared variable into an explicit `GuardEqual` (§Sources of Type
-Information §8), which is an evidence form and merges the two
-skolems. Multi-head idioms like transitivity of a polymorphic
-`leq(T, T)` therefore continue to check; see the worked example in
+Information §8), which is an evidence form and, when the variable
+occupies two whole rigid positions, merges the two skolems (a
+variable shared only *inside* a parametric type, `list(T₁)` against
+`list(T₂)`, merges nothing — a parameter-erasing value satisfies
+that equality without the instances agreeing; §What evidence does).
+Multi-head idioms like transitivity of a polymorphic `leq(T, T)`
+therefore continue to check; see the worked example in
 §Guard-Derived Type Evidence.
 
 Rigidity is local to the implementation-site check. At every use
@@ -716,8 +720,10 @@ Head Normal Form desugaring introduces synthetic guards:
   use.
 - **`GuardEqual term1 term2`**: relates the two terms' types. An
   **evidence form**: ask-equality succeeds only on structurally
-  identical terms, so the two types are equal whenever the guard
-  passes (§Guard-Derived Type Evidence).
+  identical terms, so whenever the guard passes the two types agree
+  *up to their outermost type constructors* — a value determines its
+  constructor nominally but not the constructor's parameters
+  (§Guard-Derived Type Evidence).
 - **`GuardExpr term`**: a general boolean guard expression (e.g.,
   `N > 0`). The type of `term` must be consistent with
   `prelude:bool`. A type-predicate call in this position is an
@@ -780,7 +786,7 @@ by one.
 
 | Form | Fact on success |
 |------|-----------------|
-| `GuardEqual t₁ t₂` — emitted only by HNF, for a variable shared between head positions or a non-variable head argument (§8) | `type(t₁) = type(t₂)` |
+| `GuardEqual t₁ t₂` — emitted only by HNF, for a variable shared between head positions or a non-variable head argument (§8) | `type(t₁)` and `type(t₂)` agree on their outermost type constructor; at a rigid variable the pin this induces is per §What evidence does |
 | `GuardMatch x c/n`, where `c` is a declared constructor of `D(α₁, ..., αₖ)` | `type(x)` is an application of `D` (parameter instantiation per §What evidence does) |
 | A type-predicate guard: `integer(X)`, `float(X)`, `string(X)`, `boolean(X)` | `type(X)` is `int` / `float` / `string` / `prelude:bool` respectively |
 
@@ -796,21 +802,31 @@ evidence — evidence proper stays inert at a flexible variable (§What
 evidence does), and the distinction only matters where one half has
 a solid declaration source and the other does not.
 
-Neither reading can be asserted of a variable whose two halves are
-`α` and a type *containing* `α`, as in `p([X | X])`: no finite type
-satisfies it. The fact is dropped. At a flexible half it is dropped
+The declaration-source merge cannot be asserted of a variable whose
+two halves are `α` and a type *containing* `α`, as in `p([X | X])`:
+no finite type satisfies it. At a flexible half the fact is dropped
 silently — such a pattern still matches an improper list at run
 time, and the checker does not move in the rejecting direction on
-code it was told nothing about — while at a rigid one, where the
-declaration fixes the type, the branch is dead in the typed
-fragment and draws `YCHR-20104` like any other contradiction.
+code it was told nothing about. At a rigid half no cycle arises in
+the first place: the evidence pin never copies the other side's
+parameters (§What evidence does), so `T` against `list(T)` simply
+pins `T := list(β)` with a fresh rigid `β` — satisfiable, e.g. by
+`p([[] | []])`, so nothing is reported.
 
 Justifications. Ask-equality (`==`) succeeds only on structurally
 identical terms — including the case of the *same* still-unbound
 variable on both sides — and a constructor determines its algebraic
-type nominally, so equal structure entails equal type; identical
+type nominally, so equal structure entails equal *type
+constructor*. It does not entail equal type *parameters*: a
+parametric type has values that fail to determine them — `[]`
+inhabits `list(τ)` for every `τ` and `empty` inhabits `box(τ)` for
+every `τ` — so two structurally identical values may be typed at
+different instantiations, and an equality between them proves
+nothing about the parameters. (This is the same observation that
+excludes `atom(X)` as an evidence form, §Non-forms.) Identical
 variables denote the same future value, so any type describing one
-describes the other. A successful `GuardMatch` proves the value was
+describes the other — again up to the outermost constructor. A
+successful `GuardMatch` proves the value was
 built by `c`, and within the typed fragment `c`-values inhabit only
 `D` (a forged `c` compound is typed `any` and is an
 `any`-introduction form, §Soundness); how `D`'s type parameters are
@@ -851,11 +867,35 @@ The criterion excludes, deliberately:
 Evidence acts according to the *state* (§Type states) of the type it
 scrutinizes:
 
-- **Rigid** — the fact binds or merges the skolem: `type(X) = int`
-  at `X : T` binds `T := int`; `type(X) = type(Y)` at `X : T₁`,
-  `Y : T₂` merges `T₁` and `T₂`. This is the single sanctioned
-  exception to the meet table's rigid rows, and evidence is the
-  *only* mechanism that may perform it.
+- **Rigid** — the fact binds or merges the skolem, but only to the
+  extent the underlying runtime fact determines a type. Three cases:
+  - *Rigid meets rigid, whole types*: `type(X) = type(Y)` at
+    `X : T₁`, `Y : T₂` merges `T₁` and `T₂` — the multi-head idiom
+    (§Worked example: multi-head rules).
+  - *Rigid meets a non-parametric type* (a base type or a nullary
+    constructor application): the fact pins the skolem —
+    `type(X) = int` at `X : T` binds `T := int`. Such a type is
+    determined by its values, so the pin is exactly what the guard's
+    success proves.
+  - *Rigid meets a parametric application or a function type*: the
+    fact pins only the outermost constructor, at **fresh rigid
+    parameters** — `T` against `list(int)` pins `T := list(β)` with
+    `β` fresh and *unrelated* to `int`. This is the same discipline
+    as `GuardMatch` at a rigid scrutinee (next paragraph): the
+    values witnessing the equality need not determine the
+    parameters (`[]` inhabits every `list(τ)`), so nothing
+    downstream may assume more than the constructor.
+
+  Once inside a shared constructor — the parameter positions of a
+  `GuardEqual` whose two sides are applications of the same
+  constructor, such as `box(A)` against `box(int)` — equality
+  evidence derives *nothing* about rigid variables: no pins and no
+  merges. A parameter-erasing value may account for the equality,
+  so a parameter-position fact is not entailed. (The
+  declaration-source merge at *flexible* parameter positions still
+  applies, §Evidence forms.) This rigid behavior is the single
+  sanctioned exception to the meet table's rigid rows, and evidence
+  is the *only* mechanism that may perform it.
 - **Concrete** — the fact is checked. A mismatch means the guard can
   never succeed within the typed fragment, so the enclosing rule or
   equation is *dead code*. The contradicting fact binds nothing —
@@ -984,15 +1024,19 @@ dead @ tag(X) <=> integer(X) | true.
 contradicts it: within the typed fragment no `color`-typed value is
 an integer, so the guard cannot succeed and the rule cannot fire.
 The rule otherwise checks clean, so it draws `YCHR-20104`
-(warning). The same applies to a `GuardEqual` between positions of
-incompatible concrete types — for instance a variable shared
-between an `int` and a `string` head position — and to a
-`GuardMatch` against a constructor of a type other than its
-scrutinee's: each marks a rule or equation that can never fire in
-the typed fragment. That is dead code, not a type error. A
-gradually-typed program can still reach such a rule by flowing
-`any`-typed values into it; the warning severity reflects that the
-checker's claim is limited to the typed fragment.
+(warning). The same applies to a `GuardEqual` between positions
+whose concrete types differ at the *outermost* constructor — for
+instance a variable shared between an `int` and a `string` head
+position — and to a `GuardMatch` against a constructor of a type
+other than its scrutinee's: each marks a rule or equation that can
+never fire in the typed fragment. That is dead code, not a type
+error. A gradually-typed program can still reach such a rule by
+flowing `any`-typed values into it; the warning severity reflects
+that the checker's claim is limited to the typed fragment. A
+mismatch confined to the *parameters* of a shared constructor — a
+variable linking a `box(int)` position to a `box(bool)` one — is
+**not** dead code and draws nothing: a parameter-erasing value
+(`empty`, `[]`) satisfies the equality, so the rule can fire.
 
 A contradicting fact binds nothing — the scrutinized type is
 already known — so checking simply continues with the declared
@@ -2046,9 +2090,11 @@ shared between head positions forces. Because the generator models
 rigidity itself, a program it believes well-typed that the checker
 rejects is a failure rather than a discarded sample — the two
 disagreeing is the defect the test is looking for. Two limits remain
-on what that covers: guard-derived evidence and `requiring` bounds
-are not generated, so a rigid variable is only ever merged with
-another and never pinned; and the generated goals are ground, so
+on what that covers: guard forms (type predicates, `GuardMatch`) and
+`requiring` bounds are not generated, so the only evidence a rigid
+variable meets is the `GuardEqual` of a shared head variable —
+merging it with another skolem or pinning it per §What evidence
+does; and the generated goals are ground, so
 nothing unbound is ever stored and the mode axis of §No mode checking
 is out of scope by construction.
 

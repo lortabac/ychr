@@ -25,6 +25,9 @@ module YCHR.TypeSoundness.Types
     freshSkolems,
     resolveSTy,
     mergeSTy,
+    eqUnifySTy,
+    forceSTy,
+    runtimeView,
     pinSkolem,
     groundOf,
     substD,
@@ -80,6 +83,7 @@ module YCHR.TypeSoundness.Types
   )
 where
 
+import Control.Monad (foldM)
 import Data.IntMap.Strict (IntMap)
 import Data.List (nubBy)
 import Data.List qualified as List
@@ -184,7 +188,18 @@ data SkolemEnv = SkolemEnv
     -- nothing in the generator dispatches on it — but the evidence
     -- forms differ enough that a label per source is the only way to
     -- tell which of them a run actually exercised.
-    skPinned :: Map Skolem PinSource
+    skPinned :: Map Skolem PinSource,
+    -- | Runtime-only identifications: bindings the shared /value/ of
+    -- an alias forces on skolem instances that the checker derives
+    -- nothing about — the parameter positions of a shared type
+    -- constructor, and the fresh betas of a parametric pin
+    -- (§What evidence does: at parameter depth equality evidence is
+    -- vacuous for rigid variables). 'skBind' is the checker's
+    -- knowledge and drives every typing decision downstream;
+    -- 'skForce' is consulted only when a rule instance is grounded
+    -- ('runtimeView'), so the store really holds values the alias
+    -- can match.
+    skForce :: Map Skolem STy
   }
   deriving (Eq, Show)
 
@@ -211,7 +226,12 @@ data PinSource
 
 emptySkolems :: SkolemEnv
 emptySkolems =
-  SkolemEnv {skBind = Map.empty, skNext = 0, skPinned = Map.empty}
+  SkolemEnv
+    { skBind = Map.empty,
+      skNext = 0,
+      skPinned = Map.empty,
+      skForce = Map.empty
+    }
 
 freshSkolems :: Int -> SkolemEnv -> ([Skolem], SkolemEnv)
 freshSkolems n env =
@@ -260,19 +280,135 @@ mergeSTy a b env0 = go (resolveSTy env0 a) (resolveSTy env0 b) env0
       mergeSTy x y env >>= foldMergeM xs ys
     foldMergeM _ _ _ = Nothing
 
+-- | The checker's model of a @GuardEqual@ between two head-position
+-- types (§What evidence does), plus the runtime forcing the shared
+-- value implies. What the /checker/ learns goes into 'skBind':
+--
+--   * skolem ~ skolem, whole types: the merge (alias one to the
+--     other);
+--   * skolem ~ non-parametric application: the exact pin;
+--   * skolem ~ parametric application: a pin to that constructor at
+--     __fresh__ skolems, unrelated to the partner's parameters;
+--   * inside a shared constructor: nothing — a parameter-erasing
+--     value may account for the equality.
+--
+-- What the /store/ must satisfy for the alias to actually fire — the
+-- parameter identifications the checker deliberately does not assume
+-- — goes into 'skForce' via 'forceSTy'. 'Nothing' means the
+-- generator cannot arrange a firing instance (an outermost-
+-- constructor mismatch, an occurs violation, or a forcing conflict);
+-- such a pair is simply not aliased. The checker may accept shapes
+-- the generator declines to build (a parameter mismatch is live via
+-- a parameter-erasing witness), but the generator only emits aliases
+-- whose firing it can arrange with plain value draws.
+eqUnifySTy :: STy -> STy -> SkolemEnv -> Maybe SkolemEnv
+eqUnifySTy a b env0 =
+  case (resolveSTy env0 a, resolveSTy env0 b) of
+    (SSk s, SSk s')
+      | s == s' -> Just env0
+      | otherwise -> bindStatic s (SSk s') env0
+    (SSk s, t@(SCon _ [])) -> bindStatic s t env0
+    (t@(SCon _ []), SSk s) -> bindStatic s t env0
+    (SSk s, SCon c as) -> pinParametric s c as env0
+    (SCon c as, SSk s) -> pinParametric s c as env0
+    (x@(SCon c as), y@(SCon d bs))
+      | c == d, length as == length bs -> forceSTy x y env0
+      | otherwise -> Nothing
+  where
+    bindStatic s t env
+      -- Occurs-checked under the runtime view: a cycle closed only
+      -- through a forcing would make 'runtimeView' loop just as
+      -- surely as one in 'skBind' alone.
+      | occursRt env s t = Nothing
+      | otherwise =
+          -- An earlier link may have force-constrained this skolem's
+          -- instance; the static pin narrows the same instance, so
+          -- the two must be reconcilable or no store value satisfies
+          -- both links.
+          reconcileForce s t (env {skBind = Map.insert s t env.skBind})
+    pinParametric s c as env =
+      let (betas, env1) = freshSkolems (length as) env
+          t = SCon c (map SSk betas)
+       in do
+            env2 <- bindStatic s t env1
+            foldM (\e (bta, arg) -> forceSTy (SSk bta) arg e) env2 (zip betas as)
+    reconcileForce s t env = case Map.lookup s env.skForce of
+      Nothing -> Just env
+      Just f -> forceSTy t f env
+
+-- | Runtime-only unification: identify two skolem /instances/ without
+-- teaching the checker model anything. Resolves through both maps and
+-- writes new bindings into 'skForce'. Same contract as 'mergeSTy'
+-- otherwise (occurs-checked; 'Nothing' means the two instances cannot
+-- agree).
+forceSTy :: STy -> STy -> SkolemEnv -> Maybe SkolemEnv
+forceSTy a b env0 = go (resolveRt env0 a) (resolveRt env0 b) env0
+  where
+    go x y env = case (x, y) of
+      (SSk s, SSk s') | s == s' -> Just env
+      (SSk s, _) -> bind s y env
+      (_, SSk s) -> bind s x env
+      (SCon c as, SCon d bs)
+        | c == d, length as == length bs -> foldForce as bs env
+        | otherwise -> Nothing
+    bind s t env
+      | occursRt env s t = Nothing
+      | otherwise = Just env {skForce = Map.insert s t env.skForce}
+    foldForce [] [] env = Just env
+    foldForce (x : xs) (y : ys) env =
+      forceSTy x y env >>= foldForce xs ys
+    foldForce _ _ _ = Nothing
+
+-- | Resolve through the checker bindings /and/ the runtime forcings.
+resolveRt :: SkolemEnv -> STy -> STy
+resolveRt env t = case t of
+  SSk s -> case Map.lookup s env.skBind of
+    Just t' -> resolveRt env t'
+    Nothing -> case Map.lookup s env.skForce of
+      Just t' -> resolveRt env t'
+      Nothing -> t
+  _ -> t
+
+occursRt :: SkolemEnv -> Skolem -> STy -> Bool
+occursRt env s t = case resolveRt env t of
+  SSk s' -> s == s'
+  SCon _ as -> any (occursRt env s) as
+
+-- | The environment a rule /instance/ is grounded under: the checker
+-- bindings with the runtime forcings filled in behind them. Only
+-- instance generation may look at this — every typing decision uses
+-- the plain env, or the generator would rely on facts the checker
+-- deliberately does not derive.
+runtimeView :: SkolemEnv -> SkolemEnv
+runtimeView env =
+  env
+    { skBind = Map.union env.skBind env.skForce,
+      skForce = Map.empty
+    }
+
 -- | Bind a skolem to a type by /evidence/ rather than by unification.
 --
 -- The only sanctioned exception to the meet table's rigid rows: an
 -- evidence form's operational success entails the fact, so code to its
 -- right runs only in executions where the fact holds.
+--
+-- A skolem whose instance an alias has force-constrained ('skForce')
+-- refuses a pin that the forcing cannot reconcile with: the guard
+-- would test a value the store draw already fixed at another type, so
+-- the rule could never fire.
 pinSkolem :: PinSource -> Skolem -> STy -> SkolemEnv -> Maybe SkolemEnv
 pinSkolem src s t env
-  | occurs env s t = Nothing
-  | otherwise =
+  -- Runtime-view occurs check, like 'eqUnifySTy': a cycle through a
+  -- forcing would hang instance grounding.
+  | occursRt env s t = Nothing
+  | otherwise = do
+      env' <- case Map.lookup s env.skForce of
+        Nothing -> Just env
+        Just f -> forceSTy t f env
       Just
-        env
-          { skBind = Map.insert s t env.skBind,
-            skPinned = Map.insert s src env.skPinned
+        env'
+          { skBind = Map.insert s t env'.skBind,
+            skPinned = Map.insert s src env'.skPinned
           }
 
 occurs :: SkolemEnv -> Skolem -> STy -> Bool

@@ -1,0 +1,16 @@
+:- module(gepnpl, [go/1, gather/1]).
+:- use_module(library(prelude)).
+
+% The built-in-list variant of typecheck_guard_equal_param_no_pin:
+% the tail T links list(A) to list(int) through a shared head
+% variable, but `[]` inhabits list(tau) for every tau, so A stays
+% rigid and out(E) is rejected. (Used to type-check clean with the
+% seed binding a bool into the int-declared out/1.)
+:- chr_constraint poly(list(A), A).
+:- chr_constraint mono(list(int)).
+:- chr_constraint out(int), go(int), gather(any).
+
+r @ poly([E | T], _), mono(T) <=> out(E).
+
+seed @ go(_) <=> poly([true], false), mono([]).
+gth @ gather(R), out(V) <=> R = V.

@@ -40,9 +40,11 @@
 -- pattern at a rigid scrutinee, and @integer@ \/ @boolean@ guards.
 -- Because the generator models rigidity itself and the checker is the
 -- thing under test, a type error is a failure rather than a discard:
--- the two disagreeing is exactly what these stages look for, and one
--- such disagreement is recorded in @dev-docs\/BUGS.md@ under
--- \"@GuardEqual@ evidence unsoundly pins a type parameter\".
+-- the two disagreeing is exactly what these stages look for. (This
+-- property earned its keep once already: it found the unsound
+-- parameter pinning of @GuardEqual@ evidence, fixed by the
+-- constructor-only pin discipline of §What evidence does that
+-- 'YCHR.TypeSoundness.Types.eqUnifySTy' now models.)
 --
 -- Evidence is /positional/, and the instrumentation respects that: the
 -- head observation asserts only what matching alone guarantees, and a
@@ -224,11 +226,10 @@ coverShape prog = do
   -- The two rigid rows are low by construction rather than by accident,
   -- and both got lower in the evidence stage: every pin turns a rigid
   -- variable concrete, so evidence competes for exactly the variables a
-  -- merge or a tell would otherwise use. The merge is further narrowed
-  -- by the restriction recorded in
-  -- @dev-docs\/BUGS.md@. Both draws are already weighted towards the
-  -- rigid case (see 'YCHR.TypeSoundness.Gen.pickTarget' and
-  -- @pickTellTarget@, and the @merging@ split in @maybeAlias@).
+  -- merge or a tell would otherwise use. Both draws are already
+  -- weighted towards the rigid case (see
+  -- 'YCHR.TypeSoundness.Gen.pickTarget' and @pickTellTarget@, and the
+  -- @merging@ split in @maybeAlias@).
   --
   -- Rates near 5% are why this property runs @withTests 300@ rather
   -- than 100: at 100 a 5% event is absent from a whole run about once
@@ -247,6 +248,12 @@ coverShape prog = do
   cover 15 "a pattern match pinned a rigid variable" (pinnedBy PinMatch)
   cover 10 "a shared variable pinned a rigid variable" (pinnedBy PinMergeConcrete)
   cover 12 "a type predicate pinned a rigid variable" (pinnedBy PinTypePred)
+  -- The case the GuardEqual soundness fix opened up: an alias whose
+  -- pair meets a parameter position (a parametric pin's fresh betas,
+  -- or two types meeting inside a shared constructor). The checker
+  -- derives nothing there; the instance generator carries the
+  -- identification in 'skForce'. Measured at 23% over 3000 programs.
+  cover 10 "an alias forced a parameter identification" anyForce
   where
     rs = prog.rules
     sigList = NE.toList prog.sigs
@@ -257,6 +264,7 @@ coverShape prog = do
     -- 'skBind' alone would also count every pin, which lands in the
     -- same map and is a different thing.
     anyMerge = any (any isSk . Map.elems . (.skBind) . (.ruleSk)) rs
+    anyForce = any (not . Map.null . (.skForce) . (.ruleSk)) rs
     pinnedBy src =
       any ((src `elem`) . Map.elems . (.skPinned) . (.ruleSk)) rs
     anyTellAtRigid = any tellAtRigid rs

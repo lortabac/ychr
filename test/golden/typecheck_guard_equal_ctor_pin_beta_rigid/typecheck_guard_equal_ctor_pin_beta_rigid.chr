@@ -1,0 +1,17 @@
+:- module(gecpbr, [go/1]).
+:- use_module(library(prelude)).
+
+% A whole rigid T shared with a list(int) position pins only the
+% outermost constructor: T := list(B) with B itself RIGID and
+% unrelated to int — the witnessing value may be `[]` at any element
+% type (spec §What evidence does; the same discipline as
+% typecheck_head_match_beta_rigid, reached through GuardEqual
+% instead of GuardMatch). Telling outl(Y) then meets list(int)
+% against list(B) and is rejected at B.
+:- chr_constraint p(T, T).
+:- chr_constraint q(list(int)).
+:- chr_constraint outl(list(int)), go(any).
+
+bad @ p(X, Y), q(X) <=> outl(Y).
+
+seed @ go(_) <=> p([1], [2]), q([3]).

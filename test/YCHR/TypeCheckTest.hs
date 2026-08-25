@@ -83,11 +83,12 @@ tests =
             )
         errs @?= []
         ws @?= [InaccessibleBranch "int" "string"],
-      testCase "evidence that would build a cyclic type warns" $ do
-        -- The occurs check: `f(X, X)` asserts T = list(T) at the
-        -- equation's skolem. No type satisfies it, so the equation is
-        -- dead — and the fact must bind nothing, or the cell would
-        -- hold a cyclic term and hang every later deref.
+      testCase "a self-referential equality pins the constructor, no cycle" $ do
+        -- `f(X, X)` relates T with list(T). The pin never copies the
+        -- partner's structure beyond the outermost constructor —
+        -- T := list(beta) with a fresh rigid beta — so no cyclic
+        -- term is built and nothing is reported: the equation is
+        -- satisfiable (`f([], [])` fires it from gradual code).
         (errs, ws) <-
           checkModule
             ( mod_
@@ -96,21 +97,79 @@ tests =
                 ]
             )
         errs @?= []
-        ws @?= [InaccessibleBranch "T#0" "prelude:list(T#0)"],
-      testCase "evidence that would close a cycle across two skolems warns" $ do
-        -- The occurs check has to look through an already-pinned
-        -- cell: here the first equality pins one head's T to the
-        -- other's, and only then does the second close the loop
-        -- through `list`. Before the check, this hung the checker.
+        ws @?= [],
+      testCase "a cycle-closing merge across two skolems stays finite" $ do
+        -- No-hang regression: the first equality merges the two
+        -- heads' skolems, the second then relates the merged skolem
+        -- with `list` of itself. The parametric pin uses a fresh
+        -- rigid parameter instead of the partner's structure, so no
+        -- cyclic term can be built even through the alias chain.
         (errs, ws) <-
           checkModule
             ( mod_
                 [ ":- chr_constraint a(T, T), b(T, prelude:list(T)).",
-                  "dead @ a(X, Y), b(X, Y) <=> true."
+                  "live @ a(X, Y), b(X, Y) <=> true."
                 ]
             )
         errs @?= []
-        ws @?= [InaccessibleBranch "T#1" "prelude:list(T#1)"],
+        ws @?= [],
+      testCase "a parameter-depth mismatch under a shared constructor stays live" $ do
+        -- `box(int)` and `box(bool)` positions sharing a variable
+        -- differ only inside the shared constructor, and the value
+        -- `bx0` satisfies the equality — the rule can fire, so no
+        -- inaccessible-branch warning is due. (The golden harness
+        -- cannot assert a warning's absence; this pins it.)
+        (errs, ws) <-
+          checkModule
+            ( mod_
+                [ ":- chr_type box(A) ---> bx0 ; bx(A).",
+                  ":- chr_constraint bi(box(int)), bb(box(prelude:bool)).",
+                  "live @ bi(X), bb(X) <=> true."
+                ]
+            )
+        errs @?= []
+        ws @?= [],
+      testCase "a parametric pin leaves the parameter rigid" $ do
+        -- A skolem shared with a `list(int)` position learns only
+        -- that it is a list — `T := list(beta)` with beta fresh and
+        -- rigid, unrelated to `int` — so using an element at `int`
+        -- is an error: the witnessing value may be `[]` at any
+        -- element type.
+        (errs, ws) <-
+          checkModule
+            ( mod_
+                [ ":- chr_constraint p(T, T), q(prelude:list(int)), out(int).",
+                  "bad @ p(X, [H | _]), q(X) <=> out(H)."
+                ]
+            )
+        case errs of
+          [e] | "InconsistentTypes" `T.isInfixOf` T.pack e -> pure ()
+          _ -> assertFailure ("expected one InconsistentTypes error, got: " ++ show errs)
+        ws @?= [],
+      testCase "merge and pin commute" $ do
+        -- Whether the skolem merge happens before or after one side
+        -- is pinned, the result is the same shared pin. HNF emits a
+        -- shared variable's GuardEqual at its /second/ occurrence,
+        -- so head order forces the two evidence orders: in `mf` the
+        -- X-link (skolem merge) precedes the Y-link (parametric
+        -- pin); in `pf` the Y-link (pin) precedes the X-link
+        -- (merge, now through the pin).
+        (errsMergeFirst, wsMergeFirst) <-
+          checkModule
+            ( mod_
+                [ ":- chr_constraint a(T, T), b(T, prelude:list(T)).",
+                  "mf @ a(X, Y), b(X, Y) <=> true."
+                ]
+            )
+        (errsPinFirst, wsPinFirst) <-
+          checkModule
+            ( mod_
+                [ ":- chr_constraint a(T, T), b(T, prelude:list(T)).",
+                  "pf @ b(X, Y), a(Y, X) <=> true."
+                ]
+            )
+        (errsMergeFirst, wsMergeFirst) @?= ([], [])
+        (errsPinFirst, wsPinFirst) @?= ([], []),
       testCase "a second predicate on a pinned skolem meets the pin" $ do
         -- Once evidence pins the skolem, it is no longer opaque: a
         -- second, contradicting predicate on the same variable meets
