@@ -2,9 +2,21 @@
 
 -- | The generator: random well-typed programs in the core AST of
 -- "YCHR.TypeSoundness.Types".
+--
+-- The polymorphism model in one sentence: __the generator picks every
+-- instantiation, and the checker infers it__. At a /use/ site (a body
+-- tell, a goal tell) the generator commits to a substitution for the
+-- callee's type parameters and generates arguments at the substituted
+-- types; at an /implementation/ site (a rule-head occurrence) it
+-- allocates fresh skolems and generates only what is legal at a rigid
+-- type. Nothing is inferred, so there is no constraint queue and no
+-- residual solving here — only the structural unifier of
+-- @Note [Skolems are one structural store]@, which merges skolems when
+-- HNF would emit a @GuardEqual@.
 module YCHR.TypeSoundness.Gen (genProgram) where
 
 import Control.Monad (foldM, replicateM)
+import Data.List qualified as List
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
@@ -77,6 +89,86 @@ goal probes are closed expressions generated in an empty environment, so
 they never observe a value the store or a rule body produced.
 -}
 
+-- ---------------------------------------------------------------------------
+-- Generation context
+-- ---------------------------------------------------------------------------
+
+-- | Everything expression generation needs about where it is.
+data Ctx = Ctx
+  { ctxSk :: SkolemEnv,
+    -- | In-scope variables at their implementation-site types.
+    ctxScope :: Map Text STy,
+    -- | The finite set of ground types this program's use sites draw
+    -- instantiations from.
+    ctxUniv :: [GTy],
+    ctxAdts :: [AdtDef]
+  }
+
+-- | The scope, with every type fully resolved, so comparisons do not
+-- have to chase bindings.
+scopeTys :: Ctx -> [(Text, STy)]
+scopeTys ctx = [(n, stripSTy ctx.ctxSk t) | (n, t) <- Map.toList ctx.ctxScope]
+
+varsAt :: Ctx -> STy -> [Expr]
+varsAt ctx ty = [EVar n t | (n, t) <- scopeTys ctx, t == stripSTy ctx.ctxSk ty]
+
+-- | Can a value of this type be built here at all?
+--
+-- At a bare skolem the answer is \"only if a variable of that exact
+-- rigid type is in scope\": there is no literal, no constructor and no
+-- unbounded polymorphic function that produces one out of nothing.
+-- Every caller picks its targets so that this holds, which is what
+-- keeps the alternative lists in 'genExprAt' non-empty without a
+-- filter.
+inhabited :: Ctx -> STy -> Bool
+inhabited ctx ty = case stripSTy ctx.ctxSk ty of
+  SSk s -> not (null (varsAt ctx (SSk s)))
+  SCon CInt [] -> True
+  SCon CBool [] -> True
+  SCon CList _ -> True
+  SCon (CAdt def) args ->
+    any (all (inhabited ctx) . ctorFieldTys def args) (NE.toList def.adtCtors)
+  SCon _ _ -> False
+
+-- | The rigid types this site actually holds a value of.
+--
+-- Restricting the rigid choices to types with an in-scope variable is
+-- what makes every argument type built from them inhabited, by
+-- induction over 'inhabited'.
+rigidTargets :: Ctx -> [STy]
+rigidTargets ctx = List.nub [t | (_, t) <- scopeTys ctx, isSk t]
+  where
+    isSk t = case t of
+      SSk _ -> True
+      _ -> False
+
+-- | A type to instantiate a callee's parameter at, biased towards the
+-- rigid ones.
+--
+-- Drawn uniformly, a rigid target is picked a few percent of the time:
+-- the ground universe has dozens of members and a rule holds one or
+-- two rigid types. That left "a body tell instantiates a parameter at
+-- a rigid type" at 4%, which is the shape the polymorphic fragment
+-- exists to exercise, so the draw is weighted instead.
+pickTarget :: Ctx -> Gen STy
+pickTarget ctx =
+  Gen.frequency
+    ( [(2, gToS <$> Gen.element ctx.ctxUniv)]
+        ++ [(3, Gen.element rigid) | not (null rigid)]
+    )
+  where
+    rigid = rigidTargets ctx
+
+gToS :: GTy -> STy
+gToS (GTy c as) = SCon c (map gToS as)
+
+gToD :: GTy -> DTy
+gToD (GTy c as) = DCon c (map gToD as)
+
+-- ---------------------------------------------------------------------------
+-- Top level
+-- ---------------------------------------------------------------------------
+
 -- | Generate a well-typed core program. Each stage generates /from the
 -- values/ of the earlier stages (types → signatures → rules → goal), so
 -- hedgehog's integrated shrinking re-derives the later stages whenever
@@ -89,10 +181,10 @@ genProgram :: Gen Program
 genProgram = do
   defs <- genAdts
   let allAdts = fixedAdts ++ defs
-      univ = baseTys ++ map TAdt allAdts
-  sigList <- genSigs univ
-  ruleList <- genRules univ sigList
-  g <- genGoal univ sigList ruleList
+      univ = groundUniverse allAdts
+  sigList <- genSigs univ allAdts
+  ruleList <- genRules univ allAdts sigList
+  g <- genGoal univ allAdts sigList ruleList
   pure
     Program
       { adts = defs,
@@ -105,10 +197,44 @@ genProgram = do
         obs = mempty
       }
 
--- | 0–2 algebraic types. A definition may only mention base types, the
--- fixed types, and /earlier/ generated types, so the definition graph is
--- a DAG and no depth budget is needed. Constructor names are globally
--- unique (@k0@, @k1@, …) across all generated types.
+-- | The finite set of ground types in play, closed to depth 2.
+--
+-- Explicit and finite so that every instantiation can be drawn with
+-- 'Gen.element'. Depth 2 is enough for the shapes that matter —
+-- @list(t0(int))@, @t0(list(bool))@ — without the combinatorial blowup
+-- a third level would bring.
+groundUniverse :: [AdtDef] -> [GTy]
+groundUniverse adts = List.nub (level0 ++ level1)
+  where
+    level0 = [gInt, gBool] ++ [gAdt d [] | d <- adts, null d.adtParams]
+    level1 =
+      [gList t | t <- level0]
+        ++ [ gAdt d args
+           | d <- adts,
+             let n = length d.adtParams,
+             n > 0,
+             args <- combos n level0
+           ]
+    combos 0 _ = [[]]
+    combos n xs = [x : rest | x <- xs, rest <- combos (n - 1) xs]
+
+-- ---------------------------------------------------------------------------
+-- Algebraic types
+-- ---------------------------------------------------------------------------
+
+-- | 0–2 algebraic types, each with 0–2 parameters. A definition may
+-- only mention base types, @list@, the fixed types, /earlier/
+-- generated types and its own parameters, so the definition graph is a
+-- DAG, no depth budget is needed, and 'genClosedLeafAt' terminates.
+--
+-- Constructor names are globally unique (@k0@, @k1@, …) across all
+-- generated types, and are positional so nothing has to be threaded
+-- through the generator. They must also avoid punning on a prelude
+-- function name, which the @k@ prefix guarantees.
+--
+-- A parameter no field mentions is dropped rather than kept: a phantom
+-- parameter is legal but only creates instantiations nothing can tell
+-- apart.
 genAdts :: Gen [AdtDef]
 genAdts = do
   n <- Gen.int (Range.constant 0 2)
@@ -117,157 +243,309 @@ genAdts = do
     go :: Int -> Int -> Int -> [AdtDef] -> Gen [AdtDef]
     go 0 _ _ acc = pure (reverse acc)
     go k tyIx ctorIx acc = do
-      let avail = baseTys ++ map TAdt (fixedAdts ++ reverse acc)
-      (cs, ctorIx') <- genCtors avail ctorIx
-      let def = AdtDef {adtName = "t" <> tshow tyIx, ctors = cs}
+      nParams <- Gen.frequency [(2, pure 0), (3, pure 1), (2, pure 2)]
+      let params = take nParams [TvName "A", TvName "B"]
+          earlier = fixedAdts ++ reverse acc
+      (cs, ctorIx') <- genCtors earlier params ctorIx
+      let used = [p | p <- params, any (mentionsTv p) (concatMap (.ctorFields) (NE.toList cs))]
+          def =
+            AdtDef
+              { adtName = "t" <> tshow tyIx,
+                adtParams = used,
+                adtCtors = cs
+              }
       go (k - 1) (tyIx + 1) ctorIx' (def : acc)
 
-genCtors :: [Ty] -> Int -> Gen (NonEmpty CtorDef, Int)
-genCtors avail start = do
+mentionsTv :: TvName -> DTy -> Bool
+mentionsTv v t = case t of
+  DVar w -> v == w
+  DCon _ as -> any (mentionsTv v) as
+
+genCtors :: [AdtDef] -> [TvName] -> Int -> Gen (NonEmpty CtorDef, Int)
+genCtors earlier params start = do
   extra <- Gen.int (Range.constant 0 2)
-  c0 <- genCtor avail start
-  rest <- traverse (genCtor avail) [start + 1 .. start + extra]
+  c0 <- genCtor earlier params start
+  rest <- traverse (genCtor earlier params) [start + 1 .. start + extra]
   pure (c0 :| rest, start + extra + 1)
 
-genCtor :: [Ty] -> Int -> Gen CtorDef
-genCtor avail ix = do
-  fs <- Gen.list (Range.constant 0 2) (Gen.element avail)
-  pure CtorDef {ctorName = "k" <> tshow ix, fields = fs}
+genCtor :: [AdtDef] -> [TvName] -> Int -> Gen CtorDef
+genCtor earlier params ix = do
+  fs <- Gen.list (Range.constant 0 2) (genFieldTy earlier params)
+  pure CtorDef {ctorName = "k" <> tshow ix, ctorFields = fs}
+
+-- | A constructor field's declared type: a base type, one of the
+-- definition's own parameters, a list, or an earlier definition
+-- applied at leaf types.
+genFieldTy :: [AdtDef] -> [TvName] -> Gen DTy
+genFieldTy earlier params =
+  Gen.frequency
+    ( [ (2, pure (DCon CInt [])),
+        (2, pure (DCon CBool [])),
+        (2, (\t -> DCon CList [t]) <$> genLeafTy earlier params)
+      ]
+        ++ [(4, DVar <$> Gen.element params) | not (null params)]
+        ++ [(2, genAdtApp earlier params) | not (null earlier)]
+    )
+
+genLeafTy :: [AdtDef] -> [TvName] -> Gen DTy
+genLeafTy earlier params =
+  Gen.frequency
+    ( [(2, pure (DCon CInt [])), (2, pure (DCon CBool []))]
+        ++ [(3, DVar <$> Gen.element params) | not (null params)]
+        ++ [ (2, pure (DCon (CAdt d) []))
+           | d <- earlier,
+             null d.adtParams
+           ]
+    )
+
+genAdtApp :: [AdtDef] -> [TvName] -> Gen DTy
+genAdtApp earlier params = do
+  d <- Gen.element earlier
+  DCon (CAdt d) <$> replicateM (length d.adtParams) (genLeafTy earlier params)
+
+-- ---------------------------------------------------------------------------
+-- Constraint signatures
+-- ---------------------------------------------------------------------------
 
 -- | 2–4 constraint declarations, arity 1–3. The stratum is the
 -- declaration's position, which is what 'genRule' uses to keep body
 -- tells strictly descending.
-genSigs :: [Ty] -> Gen (NonEmpty Sig)
-genSigs univ = do
+genSigs :: [GTy] -> [AdtDef] -> Gen (NonEmpty Sig)
+genSigs univ adts = do
   extra <- Gen.int (Range.constant 1 3)
-  s0 <- genSig univ 0
-  rest <- traverse (genSig univ) [1 .. extra]
+  s0 <- genSig univ adts 0
+  rest <- traverse (genSig univ adts) [1 .. extra]
   pure (s0 :| rest)
 
-genSig :: [Ty] -> Int -> Gen Sig
-genSig univ ix = do
-  a0 <- Gen.element univ
-  more <- Gen.list (Range.constant 0 2) (Gen.element univ)
+-- | One declaration, monomorphic or with 1–2 parameters.
+--
+-- Unused parameters are dropped for the same reason phantom type
+-- parameters are: they would allocate a rigid variable no argument
+-- position mentions, so nothing could observe which instance the store
+-- chose.
+genSig :: [GTy] -> [AdtDef] -> Int -> Gen Sig
+genSig univ adts ix = do
+  nTvs <- Gen.frequency [(3, pure 0), (3, pure 1), (2, pure 2)]
+  let tvs = take nTvs [TvName "A", TvName "B"]
+  a0 <- genArgDTy univ adts tvs
+  more <- Gen.list (Range.constant 0 2) (genArgDTy univ adts tvs)
+  let allArgs = a0 : more
+      used = [v | v <- tvs, any (mentionsTv v) allArgs]
   pure
     Sig
       { sigName = "c" <> tshow ix,
-        argAnns = mkAnn a0 :| map mkAnn more,
+        sigTvs = used,
+        sigArgs = mkArg a0 :| map mkArg more,
         stratum = ix
       }
   where
-    mkAnn t = Ann {declared = t, erased = False}
+    mkArg t = ArgSpec {argTy = t, argErased = False}
 
-genRules :: [Ty] -> NonEmpty Sig -> Gen [Rule]
-genRules univ sigList = do
+genArgDTy :: [GTy] -> [AdtDef] -> [TvName] -> Gen DTy
+genArgDTy univ adts tvs =
+  Gen.frequency
+    ( [(4, gToD <$> Gen.element univ)]
+        ++ [(4, DVar <$> Gen.element tvs) | not (null tvs)]
+        ++ [ (2, (\v -> DCon CList [DVar v]) <$> Gen.element tvs)
+           | not (null tvs)
+           ]
+        ++ [ (2, genParamAdtApp parametric tvs)
+           | not (null tvs),
+             not (null parametric)
+           ]
+    )
+  where
+    parametric = [d | d <- adts, not (null d.adtParams)]
+
+-- | A parametric type applied with at least one of the declaration's
+-- own parameters, so the argument's type genuinely varies with the
+-- instantiation rather than only mentioning it at the top level.
+genParamAdtApp :: [AdtDef] -> [TvName] -> Gen DTy
+genParamAdtApp parametric tvs = do
+  d <- Gen.element parametric
+  args <- replicateM (length d.adtParams) (Gen.element (map DVar tvs))
+  pure (DCon (CAdt d) args)
+
+-- ---------------------------------------------------------------------------
+-- Rules
+-- ---------------------------------------------------------------------------
+
+genRules :: [GTy] -> [AdtDef] -> NonEmpty Sig -> Gen [Rule]
+genRules univ adts sigList = do
   n <- Gen.int (Range.linear 1 6)
-  traverse (genRule univ sigList) [0 .. n - 1]
+  traverse (genRule univ adts sigList) [0 .. n - 1]
 
 -- | Which of the three CHR rule shapes to generate.
 data RuleKind = KSimplify | KPropagate | KSimpagate
 
-genRule :: [Ty] -> NonEmpty Sig -> Int -> Gen Rule
-genRule univ sigList ix = do
+genRule :: [GTy] -> [AdtDef] -> NonEmpty Sig -> Int -> Gen Rule
+genRule univ adts sigList ix = do
   kind <- Gen.element [KSimplify, KPropagate, KSimpagate]
-  hs <- case kind of
-    KSimpagate -> genHeads 2
-    _ -> Gen.int (Range.constant 1 2) >>= genHeads
-  aliased <- maybeAlias hs
+  nHeads <- case kind of
+    KSimpagate -> pure 2
+    _ -> Gen.int (Range.constant 1 2)
+  (hs, sk0) <- genHeads nHeads
+  (aliased, sk1) <- maybeAlias sk0 hs
   let rh = mkRuleHead kind aliased
       heads_ = ruleHeadList rh
-      gamma0 = Map.fromList (concatMap headVars (NE.toList heads_))
-  gs <- Gen.list (Range.constant 0 2) (genGuard univ gamma0)
+      scope0 = Map.fromList (concatMap (headVars sk1) (NE.toList heads_))
+      ctx0 = Ctx {ctxSk = sk1, ctxScope = scope0, ctxUniv = univ, ctxAdts = adts}
+  gs <- Gen.list (Range.constant 0 2) (genGuard ctx0)
   nBinds <- Gen.int (Range.constant 0 2)
-  (gamma1, binds) <- foldM (genBind univ) (gamma0, []) [0 .. nBinds - 1]
-  tellItems <- genTells univ sigList gamma1 (minimum (fmap (.headSig.stratum) heads_))
+  (ctx1, binds) <- foldM genBind (ctx0, []) [0 .. nBinds - 1]
+  tellItems <-
+    genTells ctx1 sigList (minimum (fmap (.headSig.stratum) heads_))
   pure
     Rule
       { ruleName = "r" <> tshow ix,
         ruleHead = rh,
         guards = gs,
-        body = binds ++ tellItems
+        body = binds ++ tellItems,
+        ruleSk = sk1
       }
   where
-    genHeads n = traverse (genHead sigList) (0 :| [1 .. n - 1])
-
--- | A rule guard, anchored on a head variable whenever one is in scope.
---
--- A conjunct that mentions no variable is a compile-time constant, and a
--- constant-false one makes the rule unconditionally dead — which costs a
--- whole test iteration, since a rule that never fires runs none of the
--- assertions that carry the property. Generating the guard freely gave a
--- closed conjunct 64% of the time (guards like @is_zero(3)@), because
--- 'genLeaf' can only reach for a variable at the type it is asked for
--- and the head rarely binds one at every type a boolean test descends
--- through. So the guard is built /around/ a variable instead.
---
--- The bare boolean head variable (the @c(X) \<=\> X | …@ idiom, the only
--- thing that puts a plain variable in boolean position) survives as one
--- of the 'TBool' alternatives.
---
--- The anchor is drawn from the variables that some predicate can /say
--- something about/ when there are any. A generated algebraic type has no
--- predicate over it, so its only test is an equality against a value
--- drawn independently — which is false almost every time, and so just
--- relocates the dead-rule problem from constant-false to
--- improbably-true.
-genGuard :: [Ty] -> Map Text Ty -> Gen Expr
-genGuard univ env
-  | null vars = genNode univ env 2 TBool
-  | otherwise =
-      Gen.frequency
-        ( [(4, Gen.element testable) | not (null testable)]
-            ++ [(1, Gen.element vars)]
+    genHeads n =
+      foldM
+        ( \(acc, sk) hIx -> do
+            (h, sk') <- genHead sigList hIx sk
+            pure (acc ++ [h], sk')
         )
-        >>= uncurry (genGuardOn univ env)
-  where
-    vars = Map.toList env
-    testable = [b | b@(_, t) <- vars, hasPredicate t]
-    -- Must agree with the types 'genGuardOn' gives a non-empty
-    -- @specific@ list: advertising a type here that it has no test for
-    -- would just route more anchors to the equality-only path.
-    hasPredicate t = case t of
-      TAdt def -> def == colorDef || def == shapeDef
-      _ -> True
+        ([], emptySkolems)
+        [0 .. n - 1]
+        >>= \(hsList, sk) -> case hsList of
+          (h : rest) -> pure (h :| rest, sk)
+          [] -> error "genHeads: no heads"
 
--- | A boolean test mentioning the given variable. The two equality
--- alternatives work at every type, so each 'Ty' only adds what is
--- interesting about it, and no case can come up empty.
+-- | One head occurrence.
 --
--- Every alternative puts the anchor on one side and draws the other
--- side with the anchor /out of scope/. With it in scope 'genLeaf' picks
--- it back out often enough to matter: @V == V@ accounted for most of the
--- variable-to-variable equalities, and @V < V@ and friends for a further
--- 5% of conjuncts, two fifths of those constant-false. A constant guard
--- tests nothing while still counting towards @coverShape@'s guard
--- label, and a constant-false one kills the rule outright. Nothing is
--- lost by the deletion, since the anchor already occupies one operand.
-genGuardOn :: [Ty] -> Map Text Ty -> Text -> Ty -> Gen Expr
-genGuardOn univ env n t = Gen.choice (generic ++ specific)
+-- It allocates the declaration's own rigid variables /fresh/ — \"each
+-- rule-head occurrence allocates its own rigid variables, even between
+-- two occurrences of the same constraint\" (§Rigid and flexible type
+-- variables) — because the store is a heterogeneous multiset and
+-- nothing makes two occurrences agree unless matching does.
+genHead :: NonEmpty Sig -> Int -> SkolemEnv -> Gen (HeadC, SkolemEnv)
+genHead sigList hIx sk = do
+  sig <- Gen.element (NE.toList sigList)
+  let (sks, sk') = freshSkolems (length sig.sigTvs) sk
+      sub = Map.fromList (zip sig.sigTvs (map SSk sks))
+      t0 :| ts = fmap (substD sub) (sigArgDTys sig)
+  p0 <- genPat sk' 2 [0, hIx] t0
+  rest <- traverse (\(i, t) -> genPat sk' 2 [i, hIx] t) (zip [1 :: Int ..] ts)
+  pure (HeadC {headSig = sig, headSkolems = sks, pats = p0 :| rest}, sk')
+
+-- | A head pattern for an implementation-site argument type.
+--
+-- Variable names are derived from the position path (head index,
+-- argument index, then the path down into the pattern), so they are
+-- unique by construction and no fresh-name counter has to be threaded
+-- through the generator.
+--
+-- At a /bare rigid/ target the only patterns are a variable and a
+-- wildcard. A structured pattern there would be a @GuardMatch@ at a
+-- rigid scrutinee, which is an evidence form that pins the skolem to a
+-- constructor application at fresh rigid parameters — real, and worth
+-- generating, but it belongs with the rest of the evidence machinery
+-- rather than here. At a target that is already a constructor
+-- application the structured alternatives are ordinary: matching
+-- @[H | R]@ at @list(T)@ reads the field types off an instantiation
+-- the declaration already fixed, and pins nothing.
+genPat :: SkolemEnv -> Int -> [Int] -> STy -> Gen Pat
+genPat sk d path ty = Gen.frequency (common ++ specific)
   where
-    v = EVar n t
-    sub = genExpr univ (Map.delete n env) 1
-    generic = [EEq t v <$> sub t, EEq t <$> sub t <*> pure v]
-    -- Comparisons against an int-valued expression built from the
-    -- variable, in both operand orders.
-    intTests e =
-      [ ECmp <$> genCmp <*> pure e <*> sub TInt,
-        ECmp <$> genCmp <*> sub TInt <*> pure e
+    common = [(6, pure (PVar (varName path) ty)), (1, pure PWild)]
+    sub i = genPat sk (d - 1) (i : path)
+    specific = case resolveSTy sk ty of
+      SSk _ -> []
+      SCon CInt [] -> [(2, PLit . LInt <$> Gen.integral (Range.linear 0 20))]
+      SCon CBool [] -> [(2, PLit . LBool <$> Gen.bool)]
+      SCon CList [el] ->
+        (2, pure PNil)
+          : [(3, PCons <$> sub 0 el <*> sub 1 ty) | d > 0]
+      SCon (CAdt def) args -> [(3, genCtorPat def args) | d > 0]
+      SCon _ _ -> []
+    genCtorPat def args = do
+      c <- Gen.element (NE.toList def.adtCtors)
+      ps <-
+        traverse
+          (\(i, t) -> sub i t)
+          (zip [0 :: Int ..] (ctorFieldTys def args c))
+      pure (PCtor c.ctorName ps)
+
+varName :: [Int] -> Text
+varName path = "V" <> T.intercalate "_" (map tshow (reverse path))
+
+-- | With some probability, rename one pattern variable to another —
+-- possibly in a different head. The repeated variable becomes an
+-- implicit equality once the compiler puts the rule in head normal
+-- form, which puts the rule through the checker's @GuardEqual@ path.
+--
+-- When both positions are rigid this is the skolem merge that makes
+-- multi-head idioms over a polymorphic constraint check at all —
+-- transitivity of a @leq(T, T)@ and its like. Performing the rename
+-- therefore performs the merge, so the rest of the rule is generated
+-- under the same identification the checker will make.
+--
+-- Candidate pairs exclude the case where a rigid position would be
+-- merged with a concrete one. That merge is legal and the checker
+-- makes it, but it /pins/ the skolem to a concrete type, which is
+-- guard-derived evidence rather than plain unification.
+maybeAlias :: SkolemEnv -> NonEmpty HeadC -> Gen (NonEmpty HeadC, SkolemEnv)
+maybeAlias sk hs
+  | null pairs = pure (hs, sk)
+  | otherwise = do
+      -- Aliasing is worth more when a rigid merge is on the table, so
+      -- the coin is weighted by whether one is: that is the case the
+      -- checker's GuardEqual skolem merge exists for, and it is rarer
+      -- than plain same-concrete-type aliasing.
+      doIt <-
+        Gen.frequency
+          ( if null merging
+              then [(2, pure True), (3, pure False)]
+              else [(3, pure True), (1, pure False)]
+          )
+      if not doIt
+        then pure (hs, sk)
+        else do
+          (keep, drop_, sk') <-
+            Gen.frequency
+              ( [(3, Gen.element merging) | not (null merging)]
+                  ++ [(1, Gen.element plain) | not (null plain)]
+              )
+          pure (fmap (renameHead drop_ keep) hs, sk')
+  where
+    vs = concatMap (headVars sk) (NE.toList hs)
+    pairs =
+      [ (a, b, sk')
+      | (a, ta) <- vs,
+        (b, tb) <- vs,
+        a < b,
+        Just sk' <- [mergeSTy ta tb sk],
+        noPin sk sk'
       ]
-    genCmp = Gen.element [CLt, CGt, CGe, CLe]
-    specific = case t of
-      TInt ->
-        intTests v
-          ++ [ pure (ECall FnIsZero [v]),
-               (\e -> ECall FnLt [v, e]) <$> sub TInt,
-               (\e -> ECall FnLte [e, v]) <$> sub TInt,
-               (\e -> ECall FnSameInt [v, e]) <$> sub TInt
-             ]
-      TBool -> [pure v, pure (ENot v)]
-      TListInt -> pure (ECall FnIsNil [v]) : intTests (ECall FnLen [v])
-      TAdt def
-        | def == colorDef -> [pure (ECall FnIsRed [v])]
-        | def == shapeDef -> intTests (ECall FnArea [v])
-        | otherwise -> []
+    -- Pairs that genuinely identify two occurrences' rigid variables,
+    -- as against two positions that already had the same concrete
+    -- type. Drawn uniformly the latter swamp the former — there are
+    -- many more concrete positions — and the skolem merge, which is
+    -- what makes multi-head idioms over a polymorphic constraint check
+    -- at all, showed up in 4% of programs. Hence the split.
+    (merging, plain) =
+      List.partition
+        (\(_, _, sk') -> not (Map.null (Map.difference sk'.skBind sk.skBind)))
+        pairs
+    noPin before after =
+      all isSk (Map.elems (Map.difference after.skBind before.skBind))
+    isSk t = case t of
+      SSk _ -> True
+      _ -> False
+
+renameHead :: Text -> Text -> HeadC -> HeadC
+renameHead from to h = h {pats = fmap go h.pats}
+  where
+    go p = case p of
+      PVar n t | n == from -> PVar to t
+      PCons a b -> PCons (go a) (go b)
+      PCtor c ps -> PCtor c (map go ps)
+      _ -> p
 
 -- | Fit a generated head list to one of the three rule shapes. A
 -- simpagation needs two heads; 'genRule' always asks for two when it
@@ -279,92 +557,123 @@ mkRuleHead kind hs = case (kind, hs) of
   (KSimpagate, k :| (r : rest)) -> HSimpagate (k :| []) (r :| rest)
   _ -> HSimplify hs
 
-genHead :: NonEmpty Sig -> Int -> Gen HeadC
-genHead sigList hIx = do
-  sig <- Gen.element (NE.toList sigList)
-  let (t0 :| ts) = sigArgTys sig
-  p0 <- genPat 2 [0, hIx] t0
-  rest <- traverse (\(i, t) -> genPat 2 [i, hIx] t) (zip [1 :: Int ..] ts)
-  pure HeadC {headSig = sig, pats = p0 :| rest}
+-- ---------------------------------------------------------------------------
+-- Guards
+-- ---------------------------------------------------------------------------
 
--- | A head pattern for a declared argument type. Variable names are
--- derived from the position path (head index, argument index, then the
--- path down into the pattern), so they are unique by construction and
--- no fresh-name counter has to be threaded through the generator.
-genPat :: Int -> [Int] -> Ty -> Gen Pat
-genPat d path ty = Gen.frequency (common ++ specific)
-  where
-    common = [(6, pure (PVar (varName path) ty)), (1, pure PWild)]
-    sub i = genPat (d - 1) (i : path)
-    specific = case ty of
-      TInt -> [(2, PLit . LInt <$> Gen.integral (Range.linear 0 20))]
-      TBool -> [(2, PLit . LBool <$> Gen.bool)]
-      TListInt ->
-        (2, pure PNil)
-          : [(3, PCons <$> sub 0 TInt <*> sub 1 TListInt) | d > 0]
-      TAdt def -> [(3, genCtorPat def) | d > 0]
-    genCtorPat def = do
-      c <- Gen.element (NE.toList def.ctors)
-      ps <- traverse (\(i, t) -> sub i t) (zip [0 :: Int ..] c.fields)
-      pure (PCtor c.ctorName ps)
-
-varName :: [Int] -> Text
-varName path = "V" <> T.intercalate "_" (map tshow (reverse path))
-
--- | With some probability, rename one pattern variable to another of
--- the same type — possibly in a different head. The repeated variable
--- becomes an implicit equality once the compiler puts the rule in head
--- normal form, which puts the rule through the checker's @GuardEqual@
--- path.
+-- | A rule guard, anchored on a head variable whenever one is in scope.
 --
--- Only at /concrete/ types, though: every generated declaration is
--- monomorphic, so no rigid variables are allocated and the skolem-merge
--- reading of @GuardEqual@ is not reached. Exercising that needs
--- polymorphic declarations, which v1 does not generate.
-maybeAlias :: NonEmpty HeadC -> Gen (NonEmpty HeadC)
-maybeAlias hs
-  | null pairs = pure hs
-  | otherwise = do
-      doIt <- Gen.frequency [(2, pure True), (3, pure False)]
-      if not doIt
-        then pure hs
-        else do
-          (keep, drop_) <- Gen.element pairs
-          pure (fmap (renameHead drop_ keep) hs)
+-- A conjunct that mentions no variable is a compile-time constant, and a
+-- constant-false one makes the rule unconditionally dead — which costs a
+-- whole test iteration, since a rule that never fires runs none of the
+-- observations that carry the property. Generating the guard freely gave
+-- a closed conjunct 64% of the time (guards like @is_zero(3)@), because
+-- the leaf generator can only reach for a variable at the type it is
+-- asked for and the head rarely binds one at every type a boolean test
+-- descends through. So the guard is built /around/ a variable instead.
+--
+-- The anchor is drawn from the variables that some predicate can /say
+-- something about/ when there are any. A generated algebraic type has no
+-- predicate over it, so its only test is an equality against a value
+-- drawn independently — which is false almost every time, and so just
+-- relocates the dead-rule problem from constant-false to
+-- improbably-true. A rigid-typed variable is in the same position, with
+-- the extra restriction that the opposite operand has to come from
+-- somewhere: only another variable at that same rigid type will do.
+genGuard :: Ctx -> Gen Expr
+genGuard ctx
+  | null anchors = genNonVarAt ctx 2 (gToS gBool)
+  | otherwise =
+      Gen.frequency
+        ( [(4, Gen.element testable) | not (null testable)]
+            ++ [(1, Gen.element anchors)]
+        )
+        >>= uncurry (genGuardOn ctx)
   where
-    vs = concatMap headVars (NE.toList hs)
-    pairs = [(a, b) | (a, ta) <- vs, (b, tb) <- vs, a < b, ta == tb]
+    anchors = [b | b@(n, t) <- scopeTys ctx, anchorable n t]
+    testable = [b | b@(_, t) <- anchors, hasPredicate t]
+    -- Every alternative draws the opposite operand with the anchor out
+    -- of scope, so an anchor is only usable when its own type is still
+    -- inhabited without it. Checking only the bare-rigid case is not
+    -- enough: @t0(T)@ and @list(T)@ are just as uninhabited once the
+    -- one variable carrying @T@ is gone.
+    anchorable n t = inhabited (withoutVar ctx n) t
+    hasPredicate t =
+      t
+        `elem` [ gToS gInt,
+                 gToS gBool,
+                 gToS (gList gInt),
+                 gToS (gAdt colorDef []),
+                 gToS (gAdt shapeDef [])
+               ]
 
-renameHead :: Text -> Text -> HeadC -> HeadC
-renameHead from to h = h {pats = fmap go h.pats}
+withoutVar :: Ctx -> Text -> Ctx
+withoutVar ctx n = ctx {ctxScope = Map.delete n ctx.ctxScope}
+
+-- | A boolean test mentioning the given variable.
+--
+-- Every alternative puts the anchor on one side and draws the other
+-- side with the anchor /out of scope/. With it in scope the leaf
+-- generator picks it back out often enough to matter: @V == V@
+-- accounted for most of the variable-to-variable equalities, and
+-- @V < V@ and friends for a further 5% of conjuncts, two fifths of
+-- those constant-false. Nothing is lost by the deletion, since the
+-- anchor already occupies one operand.
+genGuardOn :: Ctx -> Text -> STy -> Gen Expr
+genGuardOn ctx n t = Gen.choice (generic ++ specific)
   where
-    go p = case p of
-      PVar n t | n == from -> PVar to t
-      PCons a b -> PCons (go a) (go b)
-      PCtor c ps -> PCtor c (map go ps)
-      _ -> p
+    v = EVar n t
+    inner = withoutVar ctx n
+    sub ty = genExprAt inner 1 ty
+    generic = [EEq t v <$> sub t, EEq t <$> sub t <*> pure v]
+    intTests e =
+      [ ECmp <$> genCmp <*> pure e <*> sub (gToS gInt),
+        ECmp <$> genCmp <*> sub (gToS gInt) <*> pure e
+      ]
+    genCmp = Gen.element [CLt, CGt, CGe, CLe]
+    specific
+      | t == gToS gInt =
+          intTests v
+            ++ [ pure (ECall FnIsZero [v]),
+                 (\e -> ECall FnLt [v, e]) <$> sub (gToS gInt),
+                 (\e -> ECall FnLte [e, v]) <$> sub (gToS gInt),
+                 (\e -> ECall FnSameInt [v, e]) <$> sub (gToS gInt)
+               ]
+      | t == gToS gBool = [pure v, pure (ENot v)]
+      | t == gToS (gList gInt) =
+          pure (ECall FnIsNil [v]) : intTests (ECall FnLen [v])
+      | t == gToS (gAdt colorDef []) = [pure (ECall FnIsRed [v])]
+      | t == gToS (gAdt shapeDef []) = intTests (ECall FnArea [v])
+      | otherwise = []
+
+-- ---------------------------------------------------------------------------
+-- Body
+-- ---------------------------------------------------------------------------
 
 -- | One body binding: @W is E@ or @W = T@. Both bind a /fresh/
 -- variable, which is what keeps @=@ unfailable and the store ground.
-genBind ::
-  [Ty] ->
-  (Map Text Ty, [BodyItem]) ->
-  Int ->
-  Gen (Map Text Ty, [BodyItem])
-genBind univ (env, acc) i = do
-  t <- Gen.element univ
+genBind :: (Ctx, [BodyItem]) -> Int -> Gen (Ctx, [BodyItem])
+genBind (ctx, acc) i = do
+  t <- pickTarget ctx
   let w = "W" <> tshow i
   item <-
     Gen.choice
-      [ BIs w t <$> genExprRoot univ env t,
-        BUnify w t <$> genSTerm env 2 t
+      [ BIs w t <$> genExprRoot ctx t,
+        BUnify w t <$> genSTermAt ctx 2 t
       ]
-  pure (Map.insert w t env, acc ++ [item])
+  pure (ctx {ctxScope = Map.insert w t ctx.ctxScope}, acc ++ [item])
 
 -- | Body tells, restricted to strata strictly below every head stratum
 -- (see @Note [Termination]@ in "YCHR.TypeSoundness.Instrument").
-genTells :: [Ty] -> NonEmpty Sig -> Map Text Ty -> Int -> Gen [BodyItem]
-genTells univ sigList env minHead
+--
+-- A polymorphic callee is a /use/ site, so the generator commits to a
+-- substitution for its parameters. The interesting choice is a rigid
+-- type this rule holds a value of: the callee's fresh flexible
+-- variable then binds to the head's rigid one and the value flows
+-- across the two declarations without either ever learning what the
+-- store picked.
+genTells :: Ctx -> NonEmpty Sig -> Int -> Gen [BodyItem]
+genTells ctx sigList minHead
   | null lower = pure []
   | otherwise = do
       n <- Gen.int (Range.constant 0 2)
@@ -373,111 +682,213 @@ genTells univ sigList env minHead
     lower = [s | s <- NE.toList sigList, s.stratum < minHead]
     one = do
       s <- Gen.element lower
-      args <- traverse (genExpr univ env 2) (NE.toList (sigArgTys s))
-      pure (BTell s args)
+      sub <-
+        Map.fromList <$> traverse (\v -> (v,) <$> pickTarget ctx) s.sigTvs
+      args <-
+        traverse (genExprAt ctx 2 . substD sub) (NE.toList (sigArgDTys s))
+      pure (BTell s sub args)
 
--- | A well-typed expression of the requested type, over the variables
--- in scope.
-genExpr :: [Ty] -> Map Text Ty -> Int -> Ty -> Gen Expr
-genExpr univ env d ty
-  | d <= 0 = genLeaf env ty
-  | otherwise =
-      Gen.frequency [(2, genLeaf env ty), (3, genNode univ env d ty)]
+-- ---------------------------------------------------------------------------
+-- Expressions
+-- ---------------------------------------------------------------------------
 
-genLeaf :: Map Text Ty -> Ty -> Gen Expr
-genLeaf env ty =
-  Gen.frequency
-    ([(3, Gen.element vars) | not (null vars)] ++ [(2, genClosedLeaf ty)])
+-- | A well-typed expression at an implementation-site type.
+--
+-- PRECONDITION: @inhabited ctx ty@. Every caller draws its targets from
+-- 'instantiationTargets' or from a signature instantiated at those, so
+-- the precondition holds by construction and no alternative list here
+-- can come up empty.
+genExprAt :: Ctx -> Int -> STy -> Gen Expr
+genExprAt ctx d ty =
+  freqOr
+    ctx
+    "genExprAt"
+    ty
+    ( [(3, Gen.element vs) | not (null vs)]
+        ++ [(2, g) | g <- structAlts ctx d ty]
+        ++ [(3, g) | d > 0, g <- richAlts ctx d ty]
+    )
   where
-    vars = [EVar n t | (n, t) <- Map.toList env, t == ty]
+    vs = varsAt ctx ty
 
--- | The smallest closed expression of a type. Terminates on every
--- generated type because a constructor's fields only mention base types
--- or strictly earlier definitions.
-genClosedLeaf :: Ty -> Gen Expr
-genClosedLeaf ty = case ty of
-  TInt -> ELit . LInt <$> Gen.integral (Range.linear 0 20)
-  TBool -> ELit . LBool <$> Gen.bool
-  TListInt -> pure (EListLit [])
-  TAdt def -> do
-    c <- Gen.element (NE.toList def.ctors)
-    ECtor c.ctorName <$> traverse genClosedLeaf c.fields
+-- | 'Gen.frequency' with the precondition spelled out.
+--
+-- An empty alternative list means a caller asked for a value at a type
+-- nothing here can build — an 'inhabited' violation. Reporting the type
+-- and the scope turns that from "used with empty list" into a
+-- diagnosis, and an 'error' rather than a silent fallback is the same
+-- discipline 'patVars' uses: a fallback would quietly generate
+-- something other than what was asked for.
+freqOr :: Ctx -> String -> STy -> [(Int, Gen a)] -> Gen a
+freqOr ctx who ty alts
+  | null alts =
+      error
+        ( who
+            ++ ": no inhabitant at "
+            ++ T.unpack (renderSTy (stripSTy ctx.ctxSk ty))
+            ++ "; scope = "
+            ++ show [(n, renderSTy t) | (n, t) <- scopeTys ctx]
+        )
+  | otherwise = Gen.frequency alts
 
-genNode :: [Ty] -> Map Text Ty -> Int -> Ty -> Gen Expr
-genNode univ env d ty = case ty of
-  TInt ->
-    Gen.choice
-      [ EArith <$> Gen.element [Add, Sub, Mul] <*> sub TInt <*> sub TInt,
-        call FnLen,
-        call FnArea
-      ]
-  TBool ->
-    Gen.choice
-      [ ECmp <$> Gen.element [CLt, CGt, CGe, CLe] <*> sub TInt <*> sub TInt,
-        do
-          t <- Gen.element univ
-          EEq t <$> sub t <*> sub t,
-        ENot <$> sub TBool,
-        call FnLt,
-        call FnLte,
-        call FnSameInt,
-        call FnIsZero,
-        call FnIsNil,
-        call FnIsRed
-      ]
-  TListInt -> EListLit <$> Gen.list (Range.constant 1 3) (sub TInt)
-  TAdt def -> do
-    c <- Gen.element (NE.toList def.ctors)
-    ECtor c.ctorName <$> traverse sub c.fields
+-- | As 'genExprAt', but never a bare variable at the root.
+--
+-- Used for @is@ right-hand sides and goal probes: @R is X@ with a
+-- syntactically variable right-hand side widens to @any@ and would
+-- leave the fragment under test. At a bare rigid type the /only/
+-- non-variable form available is @copy_term@ — there is no literal and
+-- no constructor at an unknown type — which is why the prelude's one
+-- unbounded polymorphic function earns its place in the fragment.
+genExprRoot :: Ctx -> STy -> Gen Expr
+genExprRoot ctx ty = genNonVarAt ctx 2 ty
+
+genNonVarAt :: Ctx -> Int -> STy -> Gen Expr
+genNonVarAt ctx d ty =
+  freqOr
+    ctx
+    "genNonVarAt"
+    ty
+    ( [(2, g) | g <- structAlts ctx d ty]
+        ++ [(3, g) | d > 0, g <- richAlts ctx d ty]
+        ++ [(2, ECopy <$> Gen.element vs) | null (structAlts ctx d ty), not (null vs)]
+    )
   where
-    sub = genExpr univ env (d - 1)
-    call fn = ECall fn <$> traverse sub (fst (libFnSig fn))
+    vs = varsAt ctx ty
 
--- | An expression whose root is never a bare variable. Used for @is@
--- right-hand sides and goal probes: @R is X@ with a syntactically
--- variable right-hand side widens to @any@ and would leave the fragment
--- under test.
-genExprRoot :: [Ty] -> Map Text Ty -> Ty -> Gen Expr
-genExprRoot univ env ty =
-  Gen.choice [genClosedLeaf ty, genNode univ env 2 ty]
-
-genSTerm :: Map Text Ty -> Int -> Ty -> Gen STerm
-genSTerm env d ty = Gen.frequency (varAlt ++ structAlts)
-  where
-    vars = [SVar n t | (n, t) <- Map.toList env, t == ty]
-    varAlt = [(2, Gen.element vars) | not (null vars)]
-    sub = genSTerm env (d - 1)
-    structAlts = case ty of
-      TInt -> [(3, SLit . LInt <$> Gen.integral (Range.linear 0 20))]
-      TBool -> [(3, SLit . LBool <$> Gen.bool)]
-      TListInt ->
-        (2, pure SNil)
-          : [(3, SCons <$> sub TInt <*> sub TListInt) | d > 0]
-      TAdt def ->
-        [ ( 3,
-            do
-              c <- Gen.element (NE.toList def.ctors)
-              SCtor c.ctorName <$> traverse (genSTerm env (max 0 (d - 1))) c.fields
-          )
+-- | The alternatives that build a value of a type out of its own
+-- structure: a literal, a list, a constructor application. Empty at a
+-- bare rigid type, which is exactly what makes that case special.
+structAlts :: Ctx -> Int -> STy -> [Gen Expr]
+structAlts ctx d ty = case stripSTy ctx.ctxSk ty of
+  SSk _ -> []
+  SCon CInt [] -> [(ELit . LInt <$> Gen.integral (Range.linear 0 20))]
+  SCon CBool [] -> [(ELit . LBool <$> Gen.bool)]
+  SCon CList [el] ->
+    (pure (EListLit []))
+      : [ (EListLit <$> Gen.list (Range.constant 1 3) (genExprAt ctx (d - 1) el))
+        | d > 0,
+          inhabited ctx el
         ]
+  SCon (CAdt def) args ->
+    [ (genCtorExpr ctx (d - 1) def args c)
+    | c <- NE.toList def.adtCtors,
+      all (inhabited ctx) (ctorFieldTys def args c)
+    ]
+  SCon _ _ -> []
+  where
+
+genCtorExpr :: Ctx -> Int -> AdtDef -> [STy] -> CtorDef -> Gen Expr
+genCtorExpr ctx d def args c =
+  ECtor c.ctorName
+    <$> traverse (genExprAt ctx (max 0 d)) (ctorFieldTys def args c)
+
+-- | The alternatives that come from the fixed predicate library and
+-- the prelude. All monomorphic except @copy_term@, so they are
+-- available only at the types the library covers — which is the
+-- concrete part of the fragment.
+richAlts :: Ctx -> Int -> STy -> [Gen Expr]
+richAlts ctx d ty
+  | ty' == gToS gInt =
+      [ (EArith <$> Gen.element [Add, Sub, Mul] <*> sub (gToS gInt) <*> sub (gToS gInt)),
+        (call FnLen),
+        (call FnArea)
+      ]
+        ++ copyAlt
+  | ty' == gToS gBool =
+      [ (ECmp <$> Gen.element [CLt, CGt, CGe, CLe] <*> sub (gToS gInt) <*> sub (gToS gInt)),
+        eqAlt,
+        (ENot <$> sub (gToS gBool)),
+        (call FnLt),
+        (call FnLte),
+        (call FnSameInt),
+        (call FnIsZero),
+        (call FnIsNil),
+        (call FnIsRed)
+      ]
+        ++ copyAlt
+  | otherwise = copyAlt
+  where
+    ty' = stripSTy ctx.ctxSk ty
+    sub = genExprAt ctx (d - 1)
+    call fn = ECall fn <$> traverse sub (map gToS (fst (libFnSig fn)))
+    -- @copy_term(A) -> A@ at any inhabited type, which is the one way
+    -- a polymorphic function is exercised at a rigid argument without
+    -- a @requiring@ clause.
+    copyAlt = [(ECopy <$> Gen.element vs) | not (null vs)]
+    vs = varsAt ctx ty
+    eqAlt = do
+      t <- pickTarget ctx
+      EEq t <$> sub t <*> sub t
+
+genSTermAt :: Ctx -> Int -> STy -> Gen STerm
+genSTermAt ctx d ty = freqOr ctx "genSTermAt" ty (varAlt ++ structs)
+  where
+    vs = [SVar n t | (n, t) <- scopeTys ctx, t == stripSTy ctx.ctxSk ty]
+    varAlt = [(2, Gen.element vs) | not (null vs)]
+    sub = genSTermAt ctx (d - 1)
+    structs = case stripSTy ctx.ctxSk ty of
+      SSk _ -> []
+      SCon CInt [] -> [(3, SLit . LInt <$> Gen.integral (Range.linear 0 20))]
+      SCon CBool [] -> [(3, SLit . LBool <$> Gen.bool)]
+      SCon CList [el] ->
+        (2, pure SNil)
+          : [(3, SCons <$> sub el <*> sub ty) | d > 0, inhabited ctx el]
+      SCon (CAdt def) args ->
+        [ ( 3,
+            SCtor c.ctorName
+              <$> traverse (genSTermAt ctx (max 0 (d - 1))) (ctorFieldTys def args c)
+          )
+        | c <- NE.toList def.adtCtors,
+          all (inhabited ctx) (ctorFieldTys def args c)
+        ]
+      SCon _ _ -> []
+
+-- ---------------------------------------------------------------------------
+-- Ground values, for the goal
+-- ---------------------------------------------------------------------------
+
+-- | The smallest closed expression of a ground type. Terminates
+-- because a constructor's fields only mention base types, @list@, or
+-- strictly earlier definitions.
+genClosedLeafAt :: GTy -> Gen Expr
+genClosedLeafAt (GTy c as) = case c of
+  CInt -> ELit . LInt <$> Gen.integral (Range.linear 0 20)
+  CBool -> ELit . LBool <$> Gen.bool
+  CList -> pure (EListLit [])
+  CAdt def -> do
+    ctor <- Gen.element (NE.toList def.adtCtors)
+    let fieldGTys = map (groundOfUnsafe . substD sub) ctor.ctorFields
+        sub = Map.fromList (zip def.adtParams (map gToS as))
+    ECtor ctor.ctorName <$> traverse genClosedLeafAt fieldGTys
+  where
+    groundOfUnsafe t = case groundOf emptySkolems t of
+      Just g -> g
+      Nothing -> error "genClosedLeafAt: field type is not ground"
+
+-- ---------------------------------------------------------------------------
+-- The goal
+-- ---------------------------------------------------------------------------
 
 -- | 2–6 goal tells with closed arguments, plus 0–2 probes.
 --
 -- A goal that lands in a gap between every head pattern makes the whole
--- program dead weight — the rule bodies, and with them the assertions
+-- program dead weight — the rule bodies, and with them the observations
 -- that carry the property, never run. So the goal is biased towards
 -- firing something, in two ways. Usually it instantiates one whole rule
 -- head at once ('genRuleInstance'), which is the only way a join or an
 -- aliased variable is reliably satisfied. The remaining tells are drawn
--- freely but still prefer constraint symbols some rule heads on, and for
--- each argument prefer an instance of a pattern a head matches /at that
--- exact position/. Every candidate is derived from the already generated
--- rules, so the bias costs nothing in shrink quality.
+-- freely but still prefer constraint symbols some rule heads on, and
+-- for a /monomorphic/ symbol prefer an instance of a pattern a head
+-- matches at that exact position.
 --
--- More than one tell also matters: most generated rules have two head
--- constraints, and a single-constraint store can never satisfy a join.
-genGoal :: [Ty] -> NonEmpty Sig -> [Rule] -> Gen Goal
-genGoal univ sigList rs = do
+-- The position-seed pool is restricted to monomorphic symbols because
+-- a polymorphic head's pattern only makes sense at the instantiation
+-- that occurrence chose: a literal @5@ harvested from a @c(A)@ head
+-- checked at @A := int@ says nothing about a tell that instantiates
+-- @A := bool@. 'genRuleInstance', which chooses the instantiation and
+-- the pattern together, covers the polymorphic case instead.
+genGoal :: [GTy] -> [AdtDef] -> NonEmpty Sig -> [Rule] -> Gen Goal
+genGoal univ adts sigList rs = do
   seeded <- genSeeded
   extra <- Gen.int (Range.constant 1 3)
   t0 <- genTell
@@ -486,17 +897,24 @@ genGoal univ sigList rs = do
   ps <- traverse genProbe [0 .. nProbes - 1]
   pure Goal {tells = t0 :| (ts ++ seeded), probes = ps}
   where
+    goalCtx =
+      Ctx
+        { ctxSk = emptySkolems,
+          ctxScope = Map.empty,
+          ctxUniv = univ,
+          ctxAdts = adts
+        }
     -- The whole head of one rule, matched exactly. Dropping it
     -- occasionally keeps the free path — and the programs where nothing
-    -- matches at all — represented.
-    -- Drawn independently of the free tells: making the free count
-    -- depend on how many seeded tells came back would mean shrinking the
-    -- seed adds free tells, which is how a shrink plateaus.
+    -- matches at all — represented. Drawn independently of the free
+    -- tells: making the free count depend on how many seeded tells came
+    -- back would mean shrinking the seed adds free tells, which is how
+    -- a shrink plateaus.
     genSeeded
       | null rs = pure []
       | otherwise =
           Gen.frequency
-            [ (4, NE.toList <$> (Gen.element rs >>= genRuleInstance)),
+            [ (4, NE.toList <$> (Gen.element rs >>= genRuleInstance univ)),
               (1, pure [])
             ]
     seeds = seedMap rs
@@ -508,41 +926,74 @@ genGoal univ sigList rs = do
         )
     genTell = do
       s <- genSigChoice
+      sub <-
+        Map.fromList <$> traverse (\v -> (v,) <$> Gen.element univ) s.sigTvs
       args <-
-        traverse (genArg s.sigName) (zip [0 ..] (NE.toList (sigArgTys s)))
+        traverse
+          (genArg s)
+          (zip [0 ..] (map (groundD sub) (NE.toList (sigArgDTys s))))
       pure (s, args)
-    genArg sn (i, t) = case Map.lookup (sn, i) seeds of
-      Just ps@(_ : _) ->
-        Gen.frequency
-          [ (3, Gen.element ps >>= uncurry (patInstance Map.empty)),
-            (1, genExprRoot univ Map.empty t)
-          ]
-      _ -> genExprRoot univ Map.empty t
+    genArg s (i, g) = case Map.lookup (s.sigName, i) seeds of
+      Just ps@(_ : _)
+        | null s.sigTvs ->
+            Gen.frequency
+              [ (3, Gen.element ps >>= patInstance Map.empty g),
+                (1, genExprRoot goalCtx (gToS g))
+              ]
+      _ -> genExprRoot goalCtx (gToS g)
     genProbe i = do
-      t <- Gen.element univ
-      e <- genExprRoot univ Map.empty t
-      pure Probe {probeVar = "R" <> tshow i, probeTy = t, probeExpr = e}
+      g <- Gen.element univ
+      e <- genExprRoot goalCtx (gToS g)
+      pure Probe {probeVar = "R" <> tshow i, probeTy = g, probeExpr = e}
 
 -- | Instantiate a whole rule head into goal tells that match it.
 --
+-- A ground type is drawn for each of the rule's skolem /classes/, not
+-- for each skolem: 'maybeAlias' may have merged two occurrences'
+-- rigid variables, and the store must then really hold one instance
+-- for both or the rule cannot fire.
+--
 -- Every pattern variable is given its value /once/, before any head is
--- read off, so a variable shared between two heads ('maybeAlias') comes
--- out equal in both. Left to independent draws that agreement is a
--- coincidence, and the rates show it: two-head rules fired 22% of the
--- time against 33% for single-head ones, and aliased rules only 12%.
-genRuleInstance :: Rule -> Gen (NonEmpty (Sig, [Expr]))
-genRuleInstance r = do
-  binding <- traverse (\(n, t) -> (n,) <$> genClosedLeaf t) (ruleVars r)
-  traverse (headInstance (Map.fromList binding)) (ruleHeadList r.ruleHead)
+-- read off, so a variable shared between two heads comes out equal in
+-- both. Left to independent draws that agreement is a coincidence, and
+-- the rates show it: two-head rules fired 22% of the time against 33%
+-- for single-head ones, and aliased rules only 12%.
+genRuleInstance :: [GTy] -> Rule -> Gen (NonEmpty (Sig, [Expr]))
+genRuleInstance univ r = do
+  assign <-
+    Map.fromList
+      <$> traverse (\s -> (s,) <$> Gen.element univ) classes
+  let groundTy = groundWith assign
+  binding <-
+    Map.fromList
+      <$> traverse
+        (\(n, t) -> (n,) <$> genClosedLeafAt (groundTy t))
+        (ruleVars r)
+  traverse (headInstance groundTy binding) (ruleHeadList r.ruleHead)
+  where
+    classes =
+      List.nub
+        [ s
+        | h <- ruleHeads r,
+          t <- NE.toList (headArgTys h),
+          s <- skolemsOf r.ruleSk t
+        ]
+    groundWith assign t = case resolveSTy r.ruleSk t of
+      SSk s -> Map.findWithDefault gInt s assign
+      SCon c as -> GTy c (map (groundWith assign) as)
 
 -- | One head of a rule, read off as a tell that matches it, under a
--- variable binding 'genRuleInstance' has already fixed.
-headInstance :: Map Text Expr -> HeadC -> Gen (Sig, [Expr])
-headInstance env h =
+-- ground assignment and a variable binding already fixed.
+headInstance ::
+  (STy -> GTy) ->
+  Map Text Expr ->
+  HeadC ->
+  Gen (Sig, [Expr])
+headInstance groundTy binding h =
   (h.headSig,)
     <$> traverse
-      (uncurry (patInstance env))
-      (zip (NE.toList (sigArgTys h.headSig)) (NE.toList h.pats))
+      (uncurry (patInstance binding))
+      (zip (map groundTy (NE.toList (headArgTys h))) (NE.toList h.pats))
 
 -- | Head patterns harvested from the generated rules, keyed by the
 -- constraint symbol and argument position they were found at.
@@ -555,14 +1006,14 @@ headInstance env h =
 -- Only /structured/ patterns are collected. A bare variable or wildcard
 -- constrains nothing, so seeding from it would be the same as drawing
 -- the argument freely.
-seedMap :: [Rule] -> Map (Text, Int) [(Ty, Pat)]
+seedMap :: [Rule] -> Map (Text, Int) [Pat]
 seedMap rs =
   Map.fromListWith
     (++)
-    [ ((h.headSig.sigName, i), [(t, p)])
+    [ ((h.headSig.sigName, i), [p])
     | r <- rs,
       h <- ruleHeads r,
-      (i, t, p) <- zip3 [0 ..] (NE.toList (sigArgTys h.headSig)) (NE.toList h.pats),
+      (i, p) <- zip [0 ..] (NE.toList h.pats),
       structured p
     ]
   where
@@ -582,18 +1033,23 @@ seedMap rs =
 -- @env@ pins the variables that already have a value, so a variable
 -- repeated across a rule's heads instantiates the same way in each; a
 -- hole not in @env@ is filled independently.
-patInstance :: Map Text Expr -> Ty -> Pat -> Gen Expr
-patInstance env ty p = case p of
-  PVar n _ -> maybe (genClosedLeaf ty) pure (Map.lookup n env)
-  PWild -> genClosedLeaf ty
+patInstance :: Map Text Expr -> GTy -> Pat -> Gen Expr
+patInstance env g@(GTy con args) p = case p of
+  PVar n _ -> maybe (genClosedLeafAt g) pure (Map.lookup n env)
+  PWild -> genClosedLeafAt g
   PLit l -> pure (ELit l)
   PNil -> pure (EListLit [])
-  PCons h t -> consExpr <$> patInstance env TInt h <*> patInstance env TListInt t
-  PCtor cn ps -> case ty of
-    TAdt def -> case findCtor def cn of
+  PCons h t -> case (con, args) of
+    (CList, [el]) -> consExpr <$> patInstance env el h <*> patInstance env g t
+    _ -> error ("patInstance: cons pattern at " ++ T.unpack (renderGTy g))
+  PCtor cn ps -> case con of
+    CAdt def -> case findCtor def cn of
       Just c
-        | length c.fields == length ps ->
-            ECtor cn <$> traverse (uncurry (patInstance env)) (zip c.fields ps)
+        | length c.ctorFields == length ps ->
+            ECtor cn
+              <$> traverse
+                (uncurry (patInstance env))
+                (zip (map groundField (ctorFieldTys def (map gToS args) c)) ps)
         | otherwise -> error ("patInstance: arity mismatch for " ++ T.unpack cn)
       Nothing ->
         error
@@ -605,16 +1061,19 @@ patInstance env ty p = case p of
     _ ->
       error
         ( "patInstance: constructor pattern at non-algebraic type "
-            ++ T.unpack (renderTy ty)
+            ++ T.unpack (renderGTy g)
         )
+  where
+    groundField t = case groundOf emptySkolems t of
+      Just gt -> gt
+      Nothing -> error "patInstance: field type is not ground"
 
--- | Prepend an element to a list-typed instance. Every @list(int)@
--- instance 'patInstance' produces is an 'EListLit', so the other case
--- cannot arise: 'PNil' and 'genClosedLeaf' both give the empty list, a
--- nested 'PCons' is this function again, and a 'PVar' found in @env@
--- holds a value 'genRuleInstance' built with 'genClosedLeaf' at the
--- variable's own type. That last path is the one to re-check if the
--- binding 'genRuleInstance' hands down ever stops being closed leaves.
+-- | Prepend an element to a list-typed instance. Every list instance
+-- 'patInstance' produces is an 'EListLit', so the other case cannot
+-- arise: 'PNil' and 'genClosedLeafAt' both give the empty list, a
+-- nested 'PCons' is this function again, and a 'PVar' found in the
+-- binding holds a value 'genRuleInstance' built with 'genClosedLeafAt'
+-- at the variable's own type.
 consExpr :: Expr -> Expr -> Expr
 consExpr h t = case t of
   EListLit es -> EListLit (h : es)

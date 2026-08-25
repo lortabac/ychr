@@ -1,3 +1,4 @@
+{-# LANGUAGE NumericUnderscores #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The runtime half of the oracle: a host function the generated
@@ -51,6 +52,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.IORef
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Convert (hostFnValues, withDefaultHostFunctions)
@@ -118,33 +120,32 @@ data Verdict
   | Outside Text
   deriving (Eq, Show)
 
--- | Does a snapshot inhabit a type?
+-- | Does a snapshot inhabit a ground type?
 --
--- Atoms are compared on their final name component: values come back
--- with functors that may be qualified (@gen:k0@) or mangled
--- (@gen__k0@) depending on how they were built, and neither says
--- anything about typing.
-conformsSnap :: Ty -> Snap -> Verdict
-conformsSnap ty s = case s of
-  SnUnbound _ -> NotYetBound (render ty)
-  SnWild -> NotYetBound (render ty)
-  _ -> case ty of
-    TInt -> case s of
+-- Functor names are compared on their final component: values come
+-- back qualified (@gen:k0@) or mangled (@gen__k0@) depending on how
+-- they were built, and neither says anything about typing.
+conformsSnap :: GTy -> Snap -> Verdict
+conformsSnap ty@(GTy con args) s = case s of
+  SnUnbound _ -> NotYetBound (renderGTy ty)
+  SnWild -> NotYetBound (renderGTy ty)
+  _ -> case (con, args) of
+    (CInt, []) -> case s of
       SnInt _ -> Inhabits
       _ -> mismatch
-    TBool -> case s of
+    (CBool, []) -> case s of
       SnBool _ -> Inhabits
       SnAtom a | baseName a `elem` ["true", "false"] -> Inhabits
       SnTerm f [] | baseName f `elem` ["true", "false"] -> Inhabits
       _ -> mismatch
-    TListInt -> listOf TInt s
-    TAdt def -> case s of
+    (CList, [el]) -> listOf el s
+    (CAdt def, _) -> case s of
       SnAtom a -> ctor def (baseName a) []
       SnTerm f as -> ctor def (baseName f) as
       _ -> mismatch
+    _ -> mismatch
   where
-    render = renderTy
-    mismatch = Outside (render ty <> " vs " <> describe s)
+    mismatch = Outside (renderGTy ty <> " vs " <> describe s)
     listOf el x = case x of
       SnAtom a | baseName a == "[]" -> Inhabits
       SnTerm f [] | baseName f == "[]" -> Inhabits
@@ -152,18 +153,27 @@ conformsSnap ty s = case s of
         | baseName f == "." -> case conformsSnap el h of
             Inhabits -> listOf el t
             other -> other
-      SnUnbound _ -> NotYetBound (render ty)
-      SnWild -> NotYetBound (render ty)
-      _ -> Outside (render ty <> " vs " <> describe x)
+      SnUnbound _ -> NotYetBound (renderGTy ty)
+      SnWild -> NotYetBound (renderGTy ty)
+      _ -> Outside (renderGTy ty <> " vs " <> describe x)
     ctor def n as = case findCtor def n of
       Nothing -> Outside (def.adtName <> " has no constructor " <> n)
       Just c
-        | length c.fields /= length as ->
+        | length c.ctorFields /= length as ->
             Outside (n <> " applied to " <> tshow (length as) <> " arguments")
-        | otherwise -> firstNonInhabits (zipWith conformsSnap c.fields as)
+        | otherwise ->
+            firstNonInhabits
+              (zipWith conformsSnap (fieldGTys def args c) as)
     firstNonInhabits vs = case filter (/= Inhabits) vs of
       [] -> Inhabits
       (v : _) -> v
+
+-- | A constructor's field types at a ground instantiation of its
+-- type's parameters.
+fieldGTys :: AdtDef -> [GTy] -> CtorDef -> [GTy]
+fieldGTys def args c = map (groundD sub) c.ctorFields
+  where
+    sub = Map.fromList (zip def.adtParams args)
 
 -- | The final component of a possibly-qualified, possibly-mangled
 -- functor name.
@@ -230,8 +240,12 @@ emptyLog =
 -- once per /candidate match/, not once per firing, so a two-head rule
 -- over an n-instance store is quadratic; the cap keeps a pathological
 -- program from exhausting memory before the timeout catches it.
+--
+-- Raised once already: at 50 000 about 1% of polymorphic programs
+-- tripped it, and a run that overflowed has observed less than its
+-- coverage suggests.
 obsLimit :: Int
-obsLimit = 50_000
+obsLimit = 200_000
 
 -- | The registry a generated program runs under: the defaults plus
 -- @ts_obs@.
@@ -281,7 +295,13 @@ record table code snaps lg
         }
     unknownSite =
       Bad code "<unknown site>" "no site registered for this code" snaps
-    verdicts (ExpectTys tys) = zipWith conformsSnap tys snaps
+    verdicts (ExpectPos checks) = zipWith one checks snaps
+    one c v = case c of
+      MustInhabit g -> conformsSnap g v
+      MustBeBound -> case v of
+        SnUnbound _ -> NotYetBound "a rigid position"
+        SnWild -> NotYetBound "a rigid position"
+        _ -> Inhabits
     apply site acc v = case v of
       Inhabits -> acc
       NotYetBound why ->

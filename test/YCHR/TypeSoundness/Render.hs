@@ -15,18 +15,19 @@ module YCHR.TypeSoundness.Render
     renderExpr,
     renderSTerm,
     renderPat,
+    renderSkolemNote,
   )
 where
 
-import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.TypeSoundness.Preamble
 import YCHR.TypeSoundness.Types
 
-renderAnn :: Ann -> Text
-renderAnn a = if a.erased then "any" else renderTy a.declared
+renderArg :: ArgSpec -> Text
+renderArg a = if a.argErased then "any" else renderDTy a.argTy
 
 renderLit :: Lit -> Text
 renderLit l = case l of
@@ -52,7 +53,8 @@ renderModule prog =
       ]
         ++ concatMap renderAdt (fixedAdts ++ prog.adts)
         ++ [preamble]
-        ++ [renderConstraintDecl prog.sigs, ""]
+        ++ map renderConstraintDecl (NE.toList prog.sigs)
+        ++ [""]
         ++ map renderRule prog.rules
     )
 
@@ -60,22 +62,27 @@ renderModule prog =
 renderAdt :: AdtDef -> [Text]
 renderAdt def =
   [ ":- chr_type "
-      <> def.adtName
+      <> applied def.adtName [v | TvName v <- def.adtParams]
       <> " ---> "
-      <> T.intercalate " ; " (map renderCtorDecl (NE.toList def.ctors))
-      <> "."
+      <> T.intercalate " ; " (map renderCtorDecl (NE.toList def.adtCtors))
+      <> ".",
+    ""
   ]
-    ++ [""]
   where
-    renderCtorDecl c = applied c.ctorName (map renderTy c.fields)
+    renderCtorDecl c = applied c.ctorName (map renderDTy c.ctorFields)
 
-renderConstraintDecl :: NonEmpty Sig -> Text
-renderConstraintDecl ss =
+-- | One directive per constraint.
+--
+-- Not a comma-joined list: @requiring@ is an @xfx@ operator at
+-- priority 1140, looser than @,@ at 1000, so a bound clause on one
+-- declaration would swallow the declarations after it. Emitting them
+-- separately costs nothing and makes that impossible.
+renderConstraintDecl :: Sig -> Text
+renderConstraintDecl s =
   ":- chr_constraint "
-    <> T.intercalate ", " (map one (NE.toList ss))
+    <> s.sigName
+    <> args_ (map renderArg (NE.toList s.sigArgs))
     <> "."
-  where
-    one s = s.sigName <> args_ (map renderAnn (NE.toList s.argAnns))
 
 renderRule :: Rule -> Text
 renderRule r =
@@ -139,6 +146,7 @@ renderExpr e = case e of
   EEq _ a b -> infix_ "==" a b
   ENot a -> "not(" <> renderExpr a <> ")"
   ECall fn es -> libFnName fn <> args_ (map renderExpr es)
+  ECopy a -> "copy_term(" <> renderExpr a <> ")"
   EHostObs code es -> renderObs code es
   where
     infix_ o a b = "(" <> renderExpr a <> " " <> o <> " " <> renderExpr b <> ")"
@@ -162,7 +170,7 @@ renderSTerm t = case t of
 
 renderBodyItem :: BodyItem -> Text
 renderBodyItem it = case it of
-  BTell s es -> s.sigName <> args_ (map renderExpr es)
+  BTell s _ es -> s.sigName <> args_ (map renderExpr es)
   BIs w _ e -> w <> " is " <> renderExpr e
   BUnify w _ st -> w <> " = " <> renderSTerm st
   BObs code es -> renderObs code es
@@ -190,3 +198,33 @@ renderQuery prog =
       [ p.probeVar <> " is " <> renderExpr p.probeExpr
       | p <- prog.goal.probes
       ]
+
+-- | A comment block dumping each rule's skolem state: which rigid
+-- variables each head occurrence allocated, and what the merges left
+-- them bound to.
+--
+-- Appended to the counterexample because a rejected polymorphic rule
+-- is otherwise unreadable — the source shows @c0(X, Y)@ and says
+-- nothing about whether @X@ and @Y@ ended up at the same skolem.
+renderSkolemNote :: Program -> Text
+renderSkolemNote prog
+  | all (null . concatMap (.headSkolems) . ruleHeads) prog.rules = ""
+  | otherwise = T.unlines ("" : "% skolem state:" : concatMap one prog.rules)
+  where
+    one r =
+      [ "%   "
+          <> r.ruleName
+          <> ": "
+          <> T.intercalate
+            ", "
+            [ h.headSig.sigName <> " " <> tshow (map skName h.headSkolems)
+            | h <- ruleHeads r
+            ]
+      ]
+        ++ [ "%     " <> skName s <> " := " <> renderSTy t
+           | (s, t) <- Map.toList r.ruleSk.skBind
+           ]
+        ++ [ "%     " <> n <> " : " <> renderSTy (stripSTy r.ruleSk t)
+           | (n, t) <- ruleVars r
+           ]
+    skName (Skolem i) = "T#" <> tshow i

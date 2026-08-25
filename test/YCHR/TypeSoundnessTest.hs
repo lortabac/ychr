@@ -29,16 +29,29 @@
 -- fail for any reason other than a real violation.
 --
 -- The second claim (the gradual guarantee) is a separate property; the
--- core AST keeps annotations as data ('YCHR.TypeSoundness.Types.Ann')
--- so that generator can be reused by erasing annotations to @any@.
+-- core AST keeps annotations as data
+-- ('YCHR.TypeSoundness.Types.ArgSpec') so that generator can be reused
+-- by erasing annotations to @any@.
+--
+-- Polymorphism /is/ generated: parametric algebraic types, polymorphic
+-- constraint declarations, per-occurrence rigid variables at every
+-- head, and the skolem merge a variable shared between head positions
+-- forces. Because the generator models rigidity itself and the checker
+-- is the thing under test, a type error is a failure rather than a
+-- discard — the two disagreeing is exactly what this stage is looking
+-- for.
 --
 -- What this version deliberately leaves out, so the coverage is not
 -- overread:
 --
---   * /Polymorphism/. Every generated declaration is monomorphic, so
---     the rigid-variable machinery §Soundness credits for polymorphic
---     declarations — @requiring@ bounds, skolem merging — is untouched.
---     That is the most valuable next increment.
+--   * /Guard-derived evidence/. A structured pattern at a rigid
+--     scrutinee is an evidence form that pins the skolem to a
+--     constructor application at fresh rigid parameters; so is a type
+--     predicate. Neither is generated yet, so a rigid variable is only
+--     ever merged with another, never pinned to a concrete type.
+--   * /Bounded polymorphism/. No @requiring@ clause is generated, so
+--     nothing exercises ambient signatures or bound discharge, and an
+--     overloaded operation is never reached at a rigid type.
 --   * /Mode/. Goals are ground and nothing unbound is ever stored, so
 --     the axis §No mode checking describes — a free variable reaching
 --     an operation that demands a value — is out of scope by
@@ -55,6 +68,7 @@ import Control.Exception (SomeException, try)
 import Control.Monad (unless)
 import Data.IORef (newIORef, readIORef)
 import Data.IntMap.Strict qualified as IntMap
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -83,7 +97,7 @@ import YCHR.TypeSoundness.Gen (genProgram)
 import YCHR.TypeSoundness.Instrument (prepare)
 import YCHR.TypeSoundness.Observe
 import YCHR.TypeSoundness.Oracle (conforms, describeBad, describeException)
-import YCHR.TypeSoundness.Render (renderModule, renderQuery)
+import YCHR.TypeSoundness.Render (renderModule, renderQuery, renderSkolemNote)
 import YCHR.TypeSoundness.Types
 
 -- | How long one generated program may run before the property gives
@@ -140,7 +154,12 @@ prop_soundness = withTests 100 $ property $ do
     Just (Right bindings) -> mapM_ (checkProbe bindings) prog.goal.probes
   where
     showProgram p =
-      let q = prepare p in renderModule q <> "\n?- " <> renderQuery q <> "\n"
+      let q = prepare p
+       in renderModule q
+            <> "\n?- "
+            <> renderQuery q
+            <> "\n"
+            <> renderSkolemNote q
 
 -- | Assert that the generated programs are structurally rich enough for
 -- the property to mean anything.
@@ -183,8 +202,46 @@ coverShape prog = do
   cover 62 "a rule has a guard" (any (any ownGuard . (.guards)) rs)
   cover 45 "the goal has a probe" (not (null prog.goal.probes))
   cover 46 "the program declares an algebraic type" (not (null prog.adts))
+  -- Polymorphism. Without these the zero-rejection soak gate would be
+  -- satisfied just as well by a generator that had quietly stopped
+  -- emitting any, which is the failure mode they exist to catch — so
+  -- the floors sit a few standard deviations under the measured rate
+  -- rather than at some token value. Measured over 1000 programs:
+  --
+  -- > polymorphic constraint  85%  floor 70
+  -- > parametric type         30%  floor 15
+  -- > rigid head occurrence   72%  floor 55
+  -- > rigid merge             19%  floor  8
+  -- > tell at a rigid type    10%  floor  3
+  --
+  -- The last two are low by construction rather than by accident. A
+  -- rigid /merge/ needs two head occurrences that both bound a
+  -- rigid-typed variable at unifiable types, and a tell /at/ a rigid
+  -- type needs a lower-stratum callee with a parameter to instantiate;
+  -- both draws are already weighted towards the rigid case (see
+  -- 'YCHR.TypeSoundness.Gen.pickTarget' and the @merging@ split in
+  -- @maybeAlias@), which took them from 4% each.
+  cover 70 "the program declares a polymorphic constraint" anyPolySig
+  cover 15 "the program declares a parametric algebraic type" anyParamTy
+  cover 55 "a head occurrence allocates rigid variables" anyRigidHead
+  cover 8 "an alias merged two rigid variables" anyMerge
+  cover 3 "a body tell instantiates a parameter at a rigid type" anyTellAtRigid
   where
     rs = prog.rules
+    sigList = NE.toList prog.sigs
+    anyPolySig = any (not . null . (.sigTvs)) sigList
+    anyParamTy = any (not . null . (.adtParams)) prog.adts
+    anyRigidHead = any (not . null . (.headSkolems)) occs
+    anyMerge = any (not . Map.null . (.skBind) . (.ruleSk)) rs
+    anyTellAtRigid = any tellAtRigid rs
+    occs = concatMap ruleHeads rs
+    tellAtRigid r = any atRigid r.body
+    atRigid it = case it of
+      BTell _ sub _ -> any isSk (Map.elems sub)
+      _ -> False
+    isSk t = case t of
+      SSk _ -> True
+      _ -> False
     isBind it = case it of
       BIs {} -> True
       BUnify {} -> True
@@ -243,6 +300,7 @@ coverRuntime prog lg = do
   -- rule nor carries a goal probe, and has therefore observed nothing
   -- at all. Reaching a rule without firing it does not count.
   cover 80 "the program observed something" (any hit firedCodes || not (null prog.goal.probes))
+  cover 28 "a rule with rigid head variables fired" (any hit rigidFiredCodes)
   cover 99 "the observation log did not overflow" (not lg.logOverflow)
   where
     hit c = IntMap.findWithDefault 0 c lg.logHits > 0
@@ -256,11 +314,18 @@ coverRuntime prog lg = do
       | r <- prog.rules,
         length (ruleHeads r) > 1
       ]
-    joinFiredCodes =
+    joinFiredCodes = firedCodesOf joinNames
+    rigidNames =
+      [ r.ruleName
+      | r <- prog.rules,
+        any (not . null . (.headSkolems)) (ruleHeads r)
+      ]
+    rigidFiredCodes = firedCodesOf rigidNames
+    firedCodesOf names =
       [ c
       | (c, s) <- sites,
         Just n <- [T.stripSuffix " fired" s.osWhere],
-        n `elem` joinNames
+        n `elem` names
       ]
 
 checkProbe :: Map Text Term -> Probe -> PropertyT IO ()
@@ -274,7 +339,7 @@ checkProbe bindings p = case Map.lookup p.probeVar bindings of
           ( "probe "
               ++ T.unpack p.probeVar
               ++ " : "
-              ++ T.unpack (renderTy p.probeTy)
+              ++ T.unpack (renderGTy p.probeTy)
               ++ " is bound to a value outside that type: "
               ++ show t
           )

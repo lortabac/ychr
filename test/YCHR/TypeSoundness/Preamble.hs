@@ -1,8 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The invariant part of every generated module: the fixed algebraic
--- types, the predicate library guards may call, and the runtime type
--- assertions.
+-- types and the predicate library guards may call.
 --
 -- The source text and the Haskell-side tables that describe it live
 -- together here because they have to agree; see 'preamble'.
@@ -11,6 +10,10 @@ module YCHR.TypeSoundness.Preamble
     shapeDef,
     fixedAdts,
     baseTys,
+    gInt,
+    gBool,
+    gList,
+    gAdt,
     libFnSig,
     libFnName,
     preamble,
@@ -28,7 +31,9 @@ colorDef :: AdtDef
 colorDef =
   AdtDef
     { adtName = "color",
-      ctors = CtorDef "red" [] :| [CtorDef "green" [], CtorDef "blue" []]
+      adtParams = [],
+      adtCtors =
+        CtorDef "red" [] :| [CtorDef "green" [], CtorDef "blue" []]
     }
 
 -- | @shape@ from the fixed preamble.
@@ -36,26 +41,45 @@ shapeDef :: AdtDef
 shapeDef =
   AdtDef
     { adtName = "shape",
-      ctors = CtorDef "circle" [TInt] :| [CtorDef "rect" [TInt, TInt]]
+      adtParams = [],
+      adtCtors =
+        CtorDef "circle" [DCon CInt []]
+          :| [CtorDef "rect" [DCon CInt [], DCon CInt []]]
     }
 
 fixedAdts :: [AdtDef]
 fixedAdts = [colorDef, shapeDef]
 
-baseTys :: [Ty]
-baseTys = [TInt, TBool, TListInt]
+gInt :: GTy
+gInt = GTy CInt []
 
--- | Argument and result types of each library predicate.
-libFnSig :: LibFn -> ([Ty], Ty)
+gBool :: GTy
+gBool = GTy CBool []
+
+gList :: GTy -> GTy
+gList t = GTy CList [t]
+
+gAdt :: AdtDef -> [GTy] -> GTy
+gAdt def args = GTy (CAdt def) args
+
+-- | The ground types every program starts from, before the generated
+-- definitions widen the universe.
+baseTys :: [GTy]
+baseTys = [gInt, gBool, gList gInt, gAdt colorDef [], gAdt shapeDef []]
+
+-- | Argument and result types of each library predicate. Every one is
+-- monomorphic: the polymorphism under test comes from generated
+-- declarations, not from the fixture.
+libFnSig :: LibFn -> ([GTy], GTy)
 libFnSig fn = case fn of
-  FnLt -> ([TInt, TInt], TBool)
-  FnLte -> ([TInt, TInt], TBool)
-  FnSameInt -> ([TInt, TInt], TBool)
-  FnIsZero -> ([TInt], TBool)
-  FnIsNil -> ([TListInt], TBool)
-  FnLen -> ([TListInt], TInt)
-  FnIsRed -> ([TAdt colorDef], TBool)
-  FnArea -> ([TAdt shapeDef], TInt)
+  FnLt -> ([gInt, gInt], gBool)
+  FnLte -> ([gInt, gInt], gBool)
+  FnSameInt -> ([gInt, gInt], gBool)
+  FnIsZero -> ([gInt], gBool)
+  FnIsNil -> ([gList gInt], gBool)
+  FnLen -> ([gList gInt], gInt)
+  FnIsRed -> ([gAdt colorDef []], gBool)
+  FnArea -> ([gAdt shapeDef []], gInt)
 
 libFnName :: LibFn -> Text
 libFnName fn = case fn of
@@ -86,7 +110,7 @@ libFnName fn = case fn of
 -- observer ("YCHR.TypeSoundness.Observe"), which sees the raw runtime
 -- 'YCHR.Internal.Runtime.Types.Value' rather than having to be
 -- expressible as a CHR predicate — so it works at positions no
--- in-language assertion could describe.
+-- in-language assertion could describe, a rigid one above all.
 --
 -- The signatures here are restated in 'libFnSig' \/ 'libFnName', which
 -- is what the generator consults when it emits a call. Keep the two in

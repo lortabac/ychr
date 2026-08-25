@@ -11,6 +11,7 @@ module YCHR.TypeSoundness.Oracle
 where
 
 import Control.Exception (SomeException, fromException)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Display (Display (..))
@@ -99,24 +100,33 @@ baseOf n = case n of
 -- the host observer: the observer sees values *inside* a run, and this
 -- sees the bindings that come back *out* of one, which is the only
 -- look at the goal's own results.
-conforms :: Ty -> Term -> Bool
-conforms ty t = case ty of
-  TInt -> case t of
+conforms :: GTy -> Term -> Bool
+conforms ty@(GTy con args) t = case (con, args) of
+  (CInt, []) -> case t of
     IntTerm _ -> True
     _ -> False
-  TBool -> case t of
+  (CBool, []) -> case t of
     CompoundTerm n [] -> baseOf n == "true" || baseOf n == "false"
     _ -> False
-  TListInt -> case t of
+  (CList, [el]) -> case t of
     CompoundTerm n [] -> baseOf n == "[]"
     CompoundTerm n [h, tl] ->
-      baseOf n == "." && conforms TInt h && conforms TListInt tl
+      baseOf n == "." && conforms el h && conforms ty tl
     _ -> False
-  TAdt def -> case t of
+  (CAdt def, _) -> case t of
     CompoundTerm n as -> case findCtor def (baseOf n) of
-      Just c -> length c.fields == length as && and (zipWith conforms c.fields as)
+      Just c ->
+        length c.ctorFields == length as
+          && and (zipWith conforms (fieldGTys def args c) as)
       Nothing -> False
     _ -> False
+  _ -> False
+
+-- | A constructor's field types at a ground instantiation.
+fieldGTys :: AdtDef -> [GTy] -> CtorDef -> [GTy]
+fieldGTys def args c = map (groundD sub) c.ctorFields
+  where
+    sub = Map.fromList (zip def.adtParams args)
 
 -- | Render a recorded violation for the counterexample.
 describeBad :: Bad -> String

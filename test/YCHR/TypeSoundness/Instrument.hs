@@ -100,10 +100,10 @@ instrumentRule code0 r =
     headSite =
       ObsSite
         { osWhere = r.ruleName <> " head",
-          osCheck = ExpectTys (map snd vars)
+          osCheck = ExpectPos (map (posCheck r.ruleSk . snd) vars)
         }
     firedSite =
-      ObsSite {osWhere = r.ruleName <> " fired", osCheck = ExpectTys []}
+      ObsSite {osWhere = r.ruleName <> " fired", osCheck = ExpectPos []}
     (codeN, expanded) = mapAccumL expand (code0 + 2) r.body
     bodyItems = concatMap fst expanded
     bindSites = concatMap snd expanded
@@ -115,7 +115,7 @@ instrumentRule code0 r =
             [ ( c,
                 ObsSite
                   { osWhere = r.ruleName <> " binds " <> w,
-                    osCheck = ExpectTys [t]
+                    osCheck = ExpectPos [posCheck r.ruleSk t]
                   }
               )
             ]
@@ -125,6 +125,15 @@ instrumentRule code0 r =
       BIs w t _ -> Just (w, t)
       BUnify w t _ -> Just (w, t)
       _ -> Nothing
+
+-- | What the observer can be told to check at one position.
+--
+-- A position whose type still mentions a rigid variable has no static
+-- type to compare against: the store chose the instance, and the rule
+-- was checked for every instance. All that can be asserted there is
+-- that a value arrived at all.
+posCheck :: SkolemEnv -> STy -> PosCheck
+posCheck sk t = maybe MustBeBound MustInhabit (groundOf sk t)
 
 -- | Ceiling on the number of constraint instances a generated program
 -- may derive.
@@ -200,4 +209,4 @@ derivationBound prog = sum (Map.elems caps)
     firings acc r =
       product [Map.findWithDefault 0 h.headSig.stratum acc | h <- ruleHeads r]
     tellsTo r s =
-      toInteger (length [() | BTell sig _ <- r.body, sig.stratum == s])
+      toInteger (length [() | BTell sig _ _ <- r.body, sig.stratum == s])

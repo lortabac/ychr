@@ -6,14 +6,34 @@
 -- This module deliberately imports no Hedgehog: it is the vocabulary
 -- the generator, the instrumentation, the renderer and the oracle all
 -- share, and the gradual-guarantee property is meant to reuse it (see
--- 'Ann').
+-- 'ArgSpec').
 module YCHR.TypeSoundness.Types
   ( -- * Types
-    Ty (..),
-    Ann (..),
+    TvName (..),
+    Skolem (..),
+    TyCon (..),
+    GTy (..),
+    DTy (..),
+    STy (..),
     CtorDef (..),
     AdtDef (..),
+
+    -- * Skolems
+    SkolemEnv (..),
+    emptySkolems,
+    freshSkolems,
+    resolveSTy,
+    mergeSTy,
+    groundOf,
+    substD,
+    groundD,
+    skolemsOf,
+    stripSTy,
+
+    -- * Declarations
+    ArgSpec (..),
     Sig (..),
+    sigArgDTys,
 
     -- * Terms
     Lit (..),
@@ -36,15 +56,19 @@ module YCHR.TypeSoundness.Types
     -- * Instrumentation
     ObsSite (..),
     ObsCheck (..),
+    PosCheck (..),
 
     -- * Helpers
     tshow,
-    renderTy,
-    sigArgTys,
+    renderGTy,
+    renderDTy,
+    renderSTy,
     findCtor,
+    ctorFieldTys,
     ruleHeadList,
     ruleHeads,
     minHeadStratum,
+    headArgTys,
     patVars,
     headVars,
     isTell,
@@ -53,9 +77,12 @@ module YCHR.TypeSoundness.Types
 where
 
 import Data.IntMap.Strict (IntMap)
-import Data.List (find, nubBy)
+import Data.List (nubBy)
+import Data.List qualified as List
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 
@@ -63,36 +90,188 @@ import Data.Text qualified as T
 -- Types
 -- ---------------------------------------------------------------------------
 
--- | A type of the fragment under test. @float@ and @string@ are left
--- out of v1; @list(int)@ is the one recursive shape, which is enough to
--- exercise recursion without a depth budget on type definitions.
---
--- 'TAdt' carries the whole definition rather than a name, so every
--- lookup a generator or the conformance checker needs is already in
--- hand and no partial name resolution is required. Generated ADTs only
--- ever mention /earlier/ definitions, so the value is finite.
-data Ty
-  = TInt
-  | TBool
-  | TListInt
-  | TAdt AdtDef
+-- | A declaration's own type parameter, spelled as an uppercase
+-- identifier in source.
+newtype TvName = TvName Text
+  deriving (Eq, Ord, Show)
+
+-- | A rigid type variable: a declaration's type parameter at an
+-- /implementation site/, where it stands for an arbitrary
+-- store-chosen instance. Allocated fresh per rule-head occurrence,
+-- because \"each rule-head occurrence allocates its own rigid
+-- variables, even between two occurrences of the same constraint\"
+-- (§Rigid and flexible type variables).
+newtype Skolem = Skolem Int
+  deriving (Eq, Ord, Show)
+
+-- | A type constructor. 'CList' is @list\/1@; 'CAdt' carries the whole
+-- definition rather than a name, so every lookup a generator or the
+-- observer needs is already in hand and no name resolution is
+-- required. Generated types only mention /earlier/ definitions, so the
+-- value is finite.
+data TyCon
+  = CInt
+  | CBool
+  | CList
+  | CAdt AdtDef
   deriving (Eq, Show)
 
--- | A constraint-argument annotation. 'declared' is the type the
--- generator picks and reasons with throughout; 'erased' renders the
+-- | A ground type: no variables of any kind. What a /use/ site commits
+-- to, and what the observer checks a runtime value against.
+data GTy = GTy TyCon [GTy]
+  deriving (Eq, Show)
+
+-- | A declaration-level type: ground constructors over the
+-- declaration's own parameters. What a signature is written in.
+data DTy = DCon TyCon [DTy] | DVar TvName
+  deriving (Eq, Show)
+
+-- | A type at an /implementation site/: ground constructors over
+-- per-occurrence skolems. The whole polymorphism model of the
+-- generator is this type plus 'SkolemEnv'.
+data STy = SCon TyCon [STy] | SSk Skolem
+  deriving (Eq, Show)
+
+data CtorDef = CtorDef {ctorName :: Text, ctorFields :: [DTy]}
+  deriving (Eq, Show)
+
+-- | A generated or fixed algebraic type. Parameters are distinct and
+-- each is used by at least one field: an unused parameter is legal
+-- (phantom types are allowed) but only creates instantiations nothing
+-- can tell apart.
+data AdtDef = AdtDef
+  { adtName :: Text,
+    adtParams :: [TvName],
+    adtCtors :: NonEmpty CtorDef
+  }
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- Skolems
+-- ---------------------------------------------------------------------------
+
+{- Note [Skolems are one structural store]
+
+The checker's rigid variables need three operations, and they are not
+separable:
+
+  * allocate a fresh skolem per implementation site;
+  * merge two skolems when HNF emits a `GuardEqual` for a variable
+    shared between head positions — "at every depth, not just at the
+    top level" (§Evidence forms), so `list(T1)` merging with `list(T2)`
+    has to merge `T1` with `T2`;
+  * later (stage 4) pin a skolem to a constructor application whose
+    parameters are themselves *fresh skolems* — `T := list(beta)` —
+    which is what a `GuardMatch` at a rigid scrutinee does.
+
+The third is why a flat union-find plus a `Skolem -> GTy` map is the
+wrong shape: a pin creates skolems that a later merge has to reach
+through. One `Map Skolem STy`, walked with an occurs check, does all
+three, and is an ordinary structural unifier with skolems as its only
+variables. It is not a type inference engine: there is no constraint
+queue, no residual solving and no overload resolution, because the
+generator *chooses* every instantiation rather than inferring it.
+-}
+
+data SkolemEnv = SkolemEnv
+  { skBind :: Map Skolem STy,
+    skNext :: Int
+  }
+  deriving (Eq, Show)
+
+emptySkolems :: SkolemEnv
+emptySkolems = SkolemEnv {skBind = Map.empty, skNext = 0}
+
+freshSkolems :: Int -> SkolemEnv -> ([Skolem], SkolemEnv)
+freshSkolems n env =
+  ( [Skolem i | i <- [env.skNext .. env.skNext + n - 1]],
+    env {skNext = env.skNext + n}
+  )
+
+-- | Follow bindings until the head is either an 'SCon' or an unbound
+-- 'SSk'. Shallow: arguments are left alone.
+resolveSTy :: SkolemEnv -> STy -> STy
+resolveSTy env t = case t of
+  SSk s -> case Map.lookup s env.skBind of
+    Just t' -> resolveSTy env t'
+    Nothing -> t
+  _ -> t
+
+-- | Resolve at every depth, so two structurally equal types compare
+-- equal whatever bindings got them there.
+stripSTy :: SkolemEnv -> STy -> STy
+stripSTy env t = case resolveSTy env t of
+  SCon c as -> SCon c (map (stripSTy env) as)
+  other -> other
+
+-- | Structural unification with skolems as the only variables, and an
+-- occurs check.
+--
+-- 'Nothing' means the two types cannot be equal. The generator never
+-- asks for a merge that would fail — it picks candidate pairs from
+-- types it has already checked are mergeable — so a 'Nothing' reaching
+-- a caller is a bug in the generator, not a program it could emit.
+mergeSTy :: STy -> STy -> SkolemEnv -> Maybe SkolemEnv
+mergeSTy a b env0 = go (resolveSTy env0 a) (resolveSTy env0 b) env0
+  where
+    go x y env = case (x, y) of
+      (SSk s, SSk s') | s == s' -> Just env
+      (SSk s, _) -> bind s y env
+      (_, SSk s) -> bind s x env
+      (SCon c as, SCon d bs)
+        | c == d, length as == length bs -> foldMergeM as bs env
+        | otherwise -> Nothing
+    bind s t env
+      | occurs env s t = Nothing
+      | otherwise = Just env {skBind = Map.insert s t env.skBind}
+    foldMergeM [] [] env = Just env
+    foldMergeM (x : xs) (y : ys) env =
+      mergeSTy x y env >>= foldMergeM xs ys
+    foldMergeM _ _ _ = Nothing
+
+occurs :: SkolemEnv -> Skolem -> STy -> Bool
+occurs env s t = case resolveSTy env t of
+  SSk s' -> s == s'
+  SCon _ as -> any (occurs env s) as
+
+-- | Read an 'STy' back as a ground type, if nothing rigid is left.
+groundOf :: SkolemEnv -> STy -> Maybe GTy
+groundOf env t = case resolveSTy env t of
+  SSk _ -> Nothing
+  SCon c as -> GTy c <$> traverse (groundOf env) as
+
+-- | Every skolem an 'STy' still mentions, resolved.
+skolemsOf :: SkolemEnv -> STy -> [Skolem]
+skolemsOf env t = case resolveSTy env t of
+  SSk s -> [s]
+  SCon _ as -> List.nub (concatMap (skolemsOf env) as)
+
+-- | Instantiate a declaration type at an implementation site.
+substD :: Map TvName STy -> DTy -> STy
+substD sub t = case t of
+  DVar v -> Map.findWithDefault (SCon CInt []) v sub
+  DCon c as -> SCon c (map (substD sub) as)
+
+-- | Instantiate a declaration type at a use site's ground
+-- substitution.
+groundD :: Map TvName GTy -> DTy -> GTy
+groundD sub t = case t of
+  DVar v -> Map.findWithDefault (GTy CInt []) v sub
+  DCon c as -> GTy c (map (groundD sub) as)
+
+-- ---------------------------------------------------------------------------
+-- Declarations
+-- ---------------------------------------------------------------------------
+
+-- | A constraint-argument annotation. 'argTy' is the type the
+-- generator picks and reasons with throughout; 'argErased' renders the
 -- position as @any@ instead.
 --
 -- The soundness property never erases — the fragment under test is
 -- fully typed by definition — but the gradual-guarantee property works
--- by flipping exactly this field, so it is retained as data here rather
--- than collapsed into 'Ty'.
-data Ann = Ann {declared :: Ty, erased :: Bool}
-  deriving (Eq, Show)
-
-data CtorDef = CtorDef {ctorName :: Text, fields :: [Ty]}
-  deriving (Eq, Show)
-
-data AdtDef = AdtDef {adtName :: Text, ctors :: NonEmpty CtorDef}
+-- by flipping exactly this field, so it is retained as data here
+-- rather than collapsed into 'DTy'.
+data ArgSpec = ArgSpec {argTy :: DTy, argErased :: Bool}
   deriving (Eq, Show)
 
 -- | A constraint declaration. 'stratum' is the symbol's position in the
@@ -100,8 +279,19 @@ data AdtDef = AdtDef {adtName :: Text, ctors :: NonEmpty CtorDef}
 -- below every stratum in their head, which is what makes every
 -- generated program terminate (see @Note [Termination]@ in
 -- "YCHR.TypeSoundness.Instrument").
-data Sig = Sig {sigName :: Text, argAnns :: NonEmpty Ann, stratum :: Int}
+--
+-- @sigTvs@ empty means monomorphic. Every parameter listed is used by
+-- at least one argument.
+data Sig = Sig
+  { sigName :: Text,
+    sigTvs :: [TvName],
+    sigArgs :: NonEmpty ArgSpec,
+    stratum :: Int
+  }
   deriving (Eq, Show)
+
+sigArgDTys :: Sig -> NonEmpty DTy
+sigArgDTys s = fmap (.argTy) s.sigArgs
 
 -- ---------------------------------------------------------------------------
 -- Terms
@@ -111,7 +301,7 @@ data Lit = LInt Integer | LBool Bool
   deriving (Eq, Show)
 
 data Pat
-  = PVar Text Ty
+  = PVar Text STy
   | PWild
   | PLit Lit
   | PCtor Text [Pat]
@@ -143,9 +333,10 @@ data LibFn
 -- right-hand side, a guard, or a goal probe.
 --
 -- Every form here has a known result type; nothing in it can widen to
--- @any@ (no host calls, no @quote@, no unknown constructors).
+-- @any@ (no host calls, no @quote@, no unknown constructors) except
+-- 'EHostObs', which is instrumentation.
 --
--- The 'Ty' carried by 'EVar' and 'EEq' — like the one on 'PVar' and
+-- The 'STy' carried by 'EVar' and 'EEq' — like the one on 'PVar' and
 -- 'SVar' — is written but never read: with fully-typed declarations
 -- every position's type is recoverable from the signature it sits
 -- under. It is there for the gradual-guarantee property, where erased
@@ -153,14 +344,19 @@ data LibFn
 -- has to remember the type it was generated at.
 data Expr
   = ELit Lit
-  | EVar Text Ty
+  | EVar Text STy
   | EListLit [Expr]
   | ECtor Text [Expr]
   | EArith ArithOp Expr Expr
   | ECmp CmpOp Expr Expr
-  | EEq Ty Expr Expr
+  | EEq STy Expr Expr
   | ENot Expr
   | ECall LibFn [Expr]
+  | -- | The prelude's @copy_term(A) -> A@. The one polymorphic
+    -- function available at a rigid type without a @requiring@ clause,
+    -- so it is how an expression can be built at a skolem target
+    -- without being a bare variable (which @is@ would widen to @any@).
+    ECopy Expr
   | -- | Instrumentation: @host:ts_obs(Code, V…)@. Inserted by
     -- 'YCHR.TypeSoundness.Instrument.instrument', never generated.
     -- Legal in guard position because a host call's result is @any@,
@@ -174,20 +370,20 @@ data Expr
 -- a symbolic compound typed @any@ and leave the fragment.
 data STerm
   = SLit Lit
-  | SVar Text Ty
+  | SVar Text STy
   | SNil
   | SCons STerm STerm
   | SCtor Text [STerm]
   deriving (Eq, Show)
 
 data BodyItem
-  = BTell Sig [Expr]
-  | BIs Text Ty Expr
-  | BUnify Text Ty STerm
+  = -- | A body tell, with the instantiation the generator committed to
+    -- for the callee's type parameters.
+    BTell Sig (Map TvName STy) [Expr]
+  | BIs Text STy Expr
+  | BUnify Text STy STerm
   | -- | Instrumentation: @host:ts_obs(Code, V…)@ in body position,
-    -- result discarded. Inserted by
-    -- 'YCHR.TypeSoundness.Instrument.instrument', never generated
-    -- directly.
+    -- result discarded.
     BObs Int [Expr]
   deriving (Eq, Show)
 
@@ -195,7 +391,12 @@ data BodyItem
 -- Rules, goals, programs
 -- ---------------------------------------------------------------------------
 
-data HeadC = HeadC {headSig :: Sig, pats :: NonEmpty Pat}
+-- | One head occurrence, with the rigid variables /it/ allocated.
+data HeadC = HeadC
+  { headSig :: Sig,
+    headSkolems :: [Skolem],
+    pats :: NonEmpty Pat
+  }
   deriving (Eq, Show)
 
 -- | The three CHR rule shapes. Kept as a sum rather than a pair of
@@ -210,14 +411,20 @@ data Rule = Rule
   { ruleName :: Text,
     ruleHead :: RuleHead,
     guards :: [Expr],
-    body :: [BodyItem]
+    body :: [BodyItem],
+    -- | The skolem state this rule's generation ended in: which
+    -- skolems it allocated and what merges it performed. Read by
+    -- 'YCHR.TypeSoundness.Instrument.instrument' to decide which head
+    -- positions have a ground type, and dumped into the counterexample
+    -- (a rejected polymorphic rule is unreadable without it).
+    ruleSk :: SkolemEnv
   }
   deriving (Eq, Show)
 
 -- | A goal-level @R is E@ binding whose result the oracle inspects
--- directly, both in-language (an @assert_τ@ conjunct) and in Haskell
--- ('YCHR.TypeSoundness.Oracle.conforms' over the returned term).
-data Probe = Probe {probeVar :: Text, probeTy :: Ty, probeExpr :: Expr}
+-- directly, in Haskell ('YCHR.TypeSoundness.Oracle.conforms' over the
+-- returned term).
+data Probe = Probe {probeVar :: Text, probeTy :: GTy, probeExpr :: Expr}
   deriving (Eq, Show)
 
 data Goal = Goal {tells :: NonEmpty (Sig, [Expr]), probes :: [Probe]}
@@ -229,9 +436,7 @@ data Program = Program
     rules :: [Rule],
     goal :: Goal,
     -- | Empty until 'YCHR.TypeSoundness.Instrument.instrument' fills
-    -- it. Keyed by the code each 'EHostObs' \/ 'BObs' carries; the
-    -- observer looks a site up by that code and applies its check to
-    -- the runtime values it was handed.
+    -- it. Keyed by the code each 'EHostObs' \/ 'BObs' carries.
     obs :: IntMap ObsSite
   }
   deriving (Eq, Show)
@@ -243,24 +448,33 @@ data Program = Program
 -- | One instrumentation point.
 data ObsSite = ObsSite
   { -- | Where it sits, for the counterexample text: @\"r3 head\"@,
-    -- @\"r3 fired\"@, @\"r3 bind W0\"@.
+    -- @\"r3 fired\"@, @\"r3 binds W0\"@.
     osWhere :: Text,
     osCheck :: ObsCheck
   }
   deriving (Eq, Show)
 
--- | What the observer must be able to say about the values a site
--- hands it.
---
--- One constructor for now. The polymorphic stages add the checks that
--- only make sense at a rigid position, where there is no static type
--- to compare against and the observable fact is /agreement/ between
--- the values sharing a skolem.
-data ObsCheck
-  = -- | Positional: the value at index @i@ must inhabit the type at
-    -- index @i@. A site with no values (a bare firing marker) carries
-    -- the empty list.
-    ExpectTys [Ty]
+newtype ObsCheck = ExpectPos [PosCheck]
+  deriving (Eq, Show)
+
+-- | What the observer can say about the value at one position.
+data PosCheck
+  = -- | The position has a ground static type, so the value must
+    -- inhabit it.
+    MustInhabit GTy
+  | -- | The position's type is a rigid variable, so there is no static
+    -- type to compare against — the store chose the instance and the
+    -- rule was checked for /every/ instance. All that can be asserted
+    -- is that a value is there at all.
+    --
+    -- The obvious stronger check — that the values sharing one merged
+    -- skolem agree in type — is not worth its cost: a merge only
+    -- arises from a variable shared between head positions, HNF turns
+    -- that into a @GuardEqual@, and ask-equality succeeds only on
+    -- structurally /identical/ terms. So agreement of type is implied
+    -- by something strictly stronger that the runtime already
+    -- enforces before the rule can fire.
+    MustBeBound
   deriving (Eq, Show)
 
 -- ---------------------------------------------------------------------------
@@ -270,21 +484,39 @@ data ObsCheck
 tshow :: (Show a) => a -> Text
 tshow = T.pack . show
 
--- | The source-syntax name of a type. It lives here rather than in
--- "YCHR.TypeSoundness.Render" because it is the only rendering a
--- 'Ty' needs and 'patVars' reports it in its error messages.
-renderTy :: Ty -> Text
-renderTy ty = case ty of
-  TInt -> "int"
-  TBool -> "bool"
-  TListInt -> "list(int)"
-  TAdt def -> def.adtName
+renderGTy :: GTy -> Text
+renderGTy (GTy c as) = renderApp (tyConName c) (map renderGTy as)
 
-sigArgTys :: Sig -> NonEmpty Ty
-sigArgTys s = fmap (.declared) s.argAnns
+renderDTy :: DTy -> Text
+renderDTy t = case t of
+  DVar (TvName v) -> v
+  DCon c as -> renderApp (tyConName c) (map renderDTy as)
+
+renderSTy :: STy -> Text
+renderSTy t = case t of
+  SSk (Skolem i) -> "T#" <> tshow i
+  SCon c as -> renderApp (tyConName c) (map renderSTy as)
+
+tyConName :: TyCon -> Text
+tyConName c = case c of
+  CInt -> "int"
+  CBool -> "bool"
+  CList -> "list"
+  CAdt def -> def.adtName
+
+renderApp :: Text -> [Text] -> Text
+renderApp f [] = f
+renderApp f as = f <> "(" <> T.intercalate ", " as <> ")"
 
 findCtor :: AdtDef -> Text -> Maybe CtorDef
-findCtor def n = find (\c -> c.ctorName == n) (NE.toList def.ctors)
+findCtor def n = List.find (\c -> c.ctorName == n) (NE.toList def.adtCtors)
+
+-- | A constructor's field types at a given instantiation of its
+-- type's parameters.
+ctorFieldTys :: AdtDef -> [STy] -> CtorDef -> [STy]
+ctorFieldTys def args c = map (substD sub) c.ctorFields
+  where
+    sub = Map.fromList (zip def.adtParams args)
 
 ruleHeadList :: RuleHead -> NonEmpty HeadC
 ruleHeadList rh = case rh of
@@ -298,27 +530,38 @@ ruleHeads r = NE.toList (ruleHeadList r.ruleHead)
 minHeadStratum :: Rule -> Int
 minHeadStratum r = minimum [h.headSig.stratum | h <- ruleHeads r]
 
--- | Every variable bound by a pattern, with its static type, in
--- left-to-right order. Names may repeat:
+-- | The implementation-site types of one head occurrence's argument
+-- positions: the declaration's argument types at that occurrence's own
+-- rigid variables.
+headArgTys :: HeadC -> NonEmpty STy
+headArgTys h = fmap (substD sub) (sigArgDTys h.headSig)
+  where
+    sub = Map.fromList (zip h.headSig.sigTvs (map SSk h.headSkolems))
+
+-- | Every variable bound by a pattern, with its implementation-site
+-- type, in left-to-right order. Names may repeat:
 -- 'YCHR.TypeSoundness.Gen.maybeAlias' can rename one pattern variable
 -- to another, which is the point of that pass. 'ruleVars' is the
 -- deduplicating wrapper.
 --
--- The type comes from the position, not from the variable's own 'Ty'
+-- The type comes from the position, not from the variable's own 'STy'
 -- field, and an ill-shaped pattern is an 'error' rather than an empty
--- result: this is what decides which variables get an @assert_τ@, so
+-- result: this is what decides which variables get observed, so
 -- silently returning fewer would silently weaken the oracle.
-patVars :: Ty -> Pat -> [(Text, Ty)]
-patVars ty p = case p of
+patVars :: SkolemEnv -> STy -> Pat -> [(Text, STy)]
+patVars env ty p = case p of
   PVar n _ -> [(n, ty)]
   PWild -> []
   PLit _ -> []
   PNil -> []
-  PCons h t -> patVars TInt h ++ patVars TListInt t
-  PCtor cn ps -> case ty of
-    TAdt def -> case findCtor def cn of
+  PCons h t -> case resolveSTy env ty of
+    SCon CList [el] -> patVars env el h ++ patVars env ty t
+    _ -> error ("patVars: cons pattern at " ++ T.unpack (renderSTy ty))
+  PCtor cn ps -> case resolveSTy env ty of
+    SCon (CAdt def) args -> case findCtor def cn of
       Just c
-        | length c.fields == length ps -> concat (zipWith patVars c.fields ps)
+        | length c.ctorFields == length ps ->
+            concat (zipWith (patVars env) (ctorFieldTys def args c) ps)
         | otherwise -> error ("patVars: arity mismatch for " ++ T.unpack cn)
       Nothing ->
         error
@@ -330,17 +573,20 @@ patVars ty p = case p of
     _ ->
       error
         ( "patVars: constructor pattern at non-algebraic type "
-            ++ T.unpack (renderTy ty)
+            ++ T.unpack (renderSTy ty)
         )
 
-headVars :: HeadC -> [(Text, Ty)]
-headVars h =
-  concat (zipWith patVars (NE.toList (sigArgTys h.headSig)) (NE.toList h.pats))
+headVars :: SkolemEnv -> HeadC -> [(Text, STy)]
+headVars env h =
+  concat (zipWith (patVars env) (NE.toList (headArgTys h)) (NE.toList h.pats))
 
 isTell :: BodyItem -> Bool
 isTell it = case it of
-  BTell _ _ -> True
+  BTell {} -> True
   _ -> False
 
-ruleVars :: Rule -> [(Text, Ty)]
-ruleVars r = nubBy (\a b -> fst a == fst b) (concatMap headVars (ruleHeads r))
+-- | Every head-bound variable of a rule, deduplicated by name, under
+-- the rule's own final skolem state.
+ruleVars :: Rule -> [(Text, STy)]
+ruleVars r =
+  nubBy (\a b -> fst a == fst b) (concatMap (headVars r.ruleSk) (ruleHeads r))

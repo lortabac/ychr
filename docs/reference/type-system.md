@@ -2037,12 +2037,20 @@ Property 1 is exercised mechanically by a randomized property test
 well-typed by construction, runs them through the real pipeline, and
 uses in-language assertions to check the runtime value of every
 variable a fired rule binds — from its head patterns and from its
-`is` / `=` bindings — against that variable's static type. Two
-limits on what that covers: the generated declarations are
-monomorphic, so the fragment reached is the concrete one and the
-rigid-variable machinery described above is not yet exercised; and
-the generated goals are ground, so nothing unbound is ever stored and
-the mode axis of §No mode checking is out of scope by construction.
+`is` / `=` bindings — against that variable's static type.
+
+The generated declarations include polymorphic ones: parametric
+algebraic types, constraints with type parameters, per-occurrence
+rigid variables at every head, and the skolem merge that a variable
+shared between head positions forces. Because the generator models
+rigidity itself, a program it believes well-typed that the checker
+rejects is a failure rather than a discarded sample — the two
+disagreeing is the defect the test is looking for. Two limits remain
+on what that covers: guard-derived evidence and `requiring` bounds
+are not generated, so a rigid variable is only ever merged with
+another and never pinned; and the generated goals are ground, so
+nothing unbound is ever stored and the mode axis of §No mode checking
+is out of scope by construction.
 
 ### No mode checking
 
