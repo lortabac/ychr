@@ -28,6 +28,9 @@ module YCHR.Internal.Runtime.Session
 
     -- * Telling constraints
     tellConstraint,
+
+    -- * Name resolution (shared with "YCHR.Internal.Runtime.SubSession")
+    resolveByExport,
   )
 where
 

@@ -13,10 +13,10 @@ import YCHR.Internal.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
 import YCHR.Internal.Backend.SchemeDriver (generateDriver)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (displayMsg)
-import YCHR.Internal.Meta (metaHostCallRegistry)
 import YCHR.Internal.Pretty (prettyBindings)
 import YCHR.Internal.Repl qualified as Repl
-import YCHR.Internal.Runtime.Interpreter (HostCallRegistry, baseHostCallRegistry)
+import YCHR.Internal.Runtime.Interpreter (HostCallRegistry)
+import YCHR.Internal.Runtime.SubSession (defaultHostCallRegistry)
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Internal.VM.SExpr (VMProgram (..), serialize)
 import YCHR.Run
@@ -334,4 +334,4 @@ exitOnWerror :: Bool -> [Warning] -> IO ()
 exitOnWerror enabled ws = when (enabled && not (null ws)) exitFailure
 
 hostCalls :: HostCallRegistry
-hostCalls = baseHostCallRegistry <> metaHostCallRegistry
+hostCalls = defaultHostCallRegistry

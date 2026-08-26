@@ -95,11 +95,12 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as Text
-import YCHR.Internal.Meta (metaHostCallRegistry, termToValue, valueToTerm)
+import YCHR.Internal.Meta (termToValue, valueToTerm)
 import YCHR.Internal.Parsed (Module)
 import YCHR.Internal.Runtime.Error (runtimeErrorS)
 import YCHR.Internal.Runtime.Monad (Chr)
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), HostCallRegistry, baseHostCallRegistry)
+import YCHR.Internal.Runtime.SubSession (defaultHostCallRegistry)
 import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.VM qualified as VM
 import YCHR.Run
@@ -466,7 +467,7 @@ runQueryWith ::
   Term ->
   (Map Text Term -> Either ConvertError a) ->
   IO (Either ConvertError a)
-runQueryWith = runQueryWithHostCallRegistry (baseHostCallRegistry <> metaHostCallRegistry)
+runQueryWith = runQueryWithHostCallRegistry defaultHostCallRegistry
 
 -- | Like 'runQueryWith' but takes an explicit host-call registry. Use this
 -- when the program calls custom @host:_@ functions registered by the
@@ -516,7 +517,7 @@ runQueryCompiledWith ::
   (Map Text Term -> Either ConvertError a) ->
   IO (Either ConvertError a)
 runQueryCompiledWith =
-  runQueryCompiledWithHostCallRegistry (baseHostCallRegistry <> metaHostCallRegistry)
+  runQueryCompiledWithHostCallRegistry defaultHostCallRegistry
 
 -- | Like 'runQueryWithHostCallRegistry' but over an
 -- already-'CompiledProgram'. Use this when the program calls custom
@@ -677,4 +678,4 @@ hostFunctions = Map.fromList . map (\(n, fn) -> (VM.Name n, fn))
 -- the custom functions. On a name clash the custom entry wins.
 withDefaultHostFunctions :: [(Text, HostCallFn)] -> HostCallRegistry
 withDefaultHostFunctions fns =
-  hostFunctions fns <> baseHostCallRegistry <> metaHostCallRegistry
+  hostFunctions fns <> defaultHostCallRegistry

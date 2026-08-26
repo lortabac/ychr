@@ -3,7 +3,8 @@
     fun read_term_from_string/1,
     fun write_term_to_string/1,
     fun write_store_to_list/0,
-    fun print_store/0
+    fun print_store/0,
+    fun run_chr_session/1
 ]).
 
 :- function
@@ -11,7 +12,8 @@
     (print_store() -> any),
     (read_term_from_string(string) -> any),
     (write_term_to_string(any) -> string),
-    (write_store_to_list() -> list(any)).
+    (write_store_to_list() -> list(any)),
+    (run_chr_session(any) -> bool).
 
 print(X) -> host:print(X).
 
@@ -22,3 +24,15 @@ read_term_from_string(S) -> host:read_term_from_string(S).
 write_store_to_list -> host:write_store_to_list.
 
 print_store -> host:print_store.
+
+% Run a goal (a constraint term, or a list of them, wrapped in quote/1
+% to keep it symbolic) in a fresh session of the current program: own
+% store, history, and reactivation queue, same rules and functions.
+% Goal constraints must be exported; an unknown one is a caller error.
+% Returns true when the sub-session runs to quiescence, false when it
+% raises a runtime error. Unbound variables inside the goal are shared
+% with the sub-session, so bindings made there survive the call — pass
+% fresh out-variables to read results back. Reactivation does not
+% cross the boundary: a live stored constraint of one session must not
+% depend on a variable the other session binds.
+run_chr_session(G) -> host:run_chr_session(G).

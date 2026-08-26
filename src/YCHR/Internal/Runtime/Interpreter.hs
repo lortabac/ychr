@@ -82,7 +82,7 @@ import YCHR.Internal.Runtime.Monad
     initSessionEnv,
     runChr,
   )
-import YCHR.Internal.Runtime.Reactivation (drainQueue, enqueue)
+import YCHR.Internal.Runtime.Reactivation (drainQueue, enqueueObservers)
 import YCHR.Internal.Runtime.Registry
   ( baseHostCallRegistry,
     unit,
@@ -749,7 +749,7 @@ invokeHostCall name argVals = do
 unifyOrError :: Value -> Value -> Chr Bool
 unifyOrError v1 v2 = do
   (ok, observers) <- unify v1 v2
-  enqueue observers
+  enqueueObservers observers
   if ok
     then pure True
     else do

@@ -297,9 +297,44 @@ store and over terms.
 | `write_term_to_string/1` | Render a term back to text. |
 | `print_store/0` | Print the whole constraint store. |
 | `write_store_to_list/0` | Return the store as a list of terms. |
+| `run_chr_session/1` | Run a goal in a fresh session of the current program. |
+
+`run_chr_session/1` takes one constraint term — or a list of them, run
+in order — wrapped in `quote/1` to keep it symbolic. The sub-session
+has its own store, propagation history, and reactivation queue but the
+same rules, functions, and host calls; the goal's constraints are
+resolved through the program's exports, so they must be exported (an
+unknown or unexported goal constraint is a runtime error in the
+caller, not a `false` result). It returns `true` when the sub-session
+runs to quiescence and `false` when it raises a runtime error. Unbound
+variables inside the goal are shared with the sub-session, so bindings
+made there survive the call — pass fresh out-variables to read results
+back:
+
+```prolog
+probe(N, R) <=> R is N + 1.
+go(Ok, R) <=> Ok is run_chr_session(quote(probe(41, R))).
+```
+
+Running the goal `go(Ok, R)` yields:
+
+```
+Ok = true
+R = 42
+```
+
+Reactivation does not cross the boundary: binding a shared variable
+reactivates only the binding session's own stored constraints. So a
+*live* stored constraint of one session must not depend on a variable
+the other session binds — it would simply not be reactivated. In
+practice, pass only ground terms and fresh variables in, and have the
+sub-session bind its out-variables before it quiesces. See
+`test/golden/run_chr_session_test/` for worked examples, including
+nesting.
 
 Only `print/1` works on both backends. `read_term_from_string/1`,
-`write_term_to_string/1`, `write_store_to_list/0` and `print_store/0` are
+`write_term_to_string/1`, `write_store_to_list/0`, `print_store/0` and
+`run_chr_session/1` are
 Haskell-only — the Scheme runtime either stubs them out or has no
 implementation at all, so calling them from compiled Scheme fails (see
 `dev-docs/SCHEME_BACKEND_GAPS.md`).

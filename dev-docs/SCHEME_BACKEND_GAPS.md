@@ -18,6 +18,7 @@ runtime in `scheme/ychr/`. Goals are run through `guile3.0 --r6rs` per
 | `read_term_from_string` | Stubbed in `runtime.sls` as `(error "%read-term-from-string" "not implemented")`. The whole `read_term_test` directory is in `HASKELL_ONLY`. |
 | `write_store_to_list`   | No Scheme-side implementation; `write_store_to_list_test` is in `HASKELL_ONLY` (parallels the unimplemented `print_store`). |
 | `write_term_to_string`  | No Scheme-side implementation and no `hostCallMap` entry, so a call lowers to a bare verbatim identifier and fails as an unbound variable at load time. No golden test covers it, so it is in neither `HASKELL_ONLY` nor this file's test lists. |
+| `run_chr_session`       | No Scheme-side implementation — it spawns a nested interpreter session (`YCHR.Internal.Runtime.SubSession` on the Haskell side). `run_chr_session_test` is in `HASKELL_ONLY`. |
 
 
 ## `deep-eval` host-call lookup ignores arity

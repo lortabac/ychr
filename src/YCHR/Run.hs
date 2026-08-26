@@ -122,7 +122,7 @@ import YCHR.Internal.Runtime.Interpreter
     suspensionView,
   )
 import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..))
-import YCHR.Internal.Runtime.Reactivation (drainQueue, enqueue)
+import YCHR.Internal.Runtime.Reactivation (drainQueue, enqueueObservers)
 import YCHR.Internal.Runtime.Session
   ( tellConstraint,
     toSessionInput,
@@ -715,14 +715,14 @@ queryUnify v1 v2 = do
   case mh of
     Nothing -> do
       (ok, observers) <- unify v1 v2
-      enqueue observers
+      enqueueObservers observers
       unless ok (raiseUnifyFailure v1 v2)
       drainReactivation
     Just _ -> do
       t1 <- snapshotValue v1
       t2 <- snapshotValue v2
       (ok, observers) <- unify v1 v2
-      enqueue observers
+      enqueueObservers observers
       if ok
         then do
           emitTrace (pure (TEUnify t1 t2 (length observers)))

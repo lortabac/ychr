@@ -30,6 +30,9 @@ HASKELL_ONLY = {
     # Haskell runtime only; the Scheme runtime still renders aliased
     # logical variables as `_`.
     "alias_print",
+    # run_chr_session is a Haskell-only meta host call (spawns a nested
+    # interpreter session); no Scheme implementation exists yet.
+    "run_chr_session_test",
 }
 
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only

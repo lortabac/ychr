@@ -17,9 +17,8 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (Display (..))
-import YCHR.Internal.Meta (metaHostCallRegistry)
 import YCHR.Internal.Pretty (prettyBindings)
-import YCHR.Internal.Runtime.Interpreter (baseHostCallRegistry)
+import YCHR.Internal.Runtime.SubSession (defaultHostCallRegistry)
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Run
   ( Error,
@@ -227,7 +226,11 @@ runPositive spec goalFile expectedFile = do
   expected <- readFile expectedFile
   (constraint, goalWs) <- prepareGoal prog (T.strip query)
   checkWarnings spec "goal" goalWs
-  bindings <- runPreparedGoal prog (baseHostCallRegistry <> metaHostCallRegistry) constraint
+  bindings <-
+    runPreparedGoal
+      prog
+      defaultHostCallRegistry
+      constraint
   prettyBindings bindings @?= expected
 
 -- | Compile + program-typecheck must succeed; running the goal must throw
@@ -254,9 +257,7 @@ runGoalNegative spec goalFile errorFile = do
     try @SomeException $
       runPreparedGoal
         prog
-        ( baseHostCallRegistry
-            <> metaHostCallRegistry
-        )
+        defaultHostCallRegistry
         constraint
   case outcome of
     Right _ ->

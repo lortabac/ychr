@@ -9,6 +9,7 @@ module YCHR.Internal.Meta
   ( metaHostCallRegistry,
     valueToTerm,
     termToValue,
+    decodeName,
   )
 where
 

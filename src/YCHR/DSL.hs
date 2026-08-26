@@ -162,9 +162,9 @@ import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import YCHR.Convert (quote)
-import YCHR.Internal.Meta (metaHostCallRegistry)
 import YCHR.Internal.Parsed
-import YCHR.Internal.Runtime.Registry (HostCallRegistry, baseHostCallRegistry)
+import YCHR.Internal.Runtime.Registry (HostCallRegistry)
+import YCHR.Internal.Runtime.SubSession (defaultHostCallRegistry)
 import YCHR.Run
   ( CompiledProgram,
     Warning,
@@ -670,7 +670,7 @@ l .== r = CompoundTerm (Unqualified "==") [l, r]
 
 -- | Compile DSL-built modules and run a single goal against them, using
 -- the same default host-call registry as the @ychr@ CLI
--- (@baseHostCallRegistry <> metaHostCallRegistry@). Includes the stdlib.
+-- (base + meta + sub-session). Includes the stdlib.
 --
 -- The goal is built with 'term' / 'qterm' just like rule heads. Returns
 -- the final unification map for the variables mentioned in the goal.
@@ -680,7 +680,8 @@ l .== r = CompoundTerm (Unqualified "==") [l, r]
 -- >   bindings <- runDSL [orderModule] (term "leq" [var "A", var "B"])
 -- >   print bindings
 runDSL :: [Module] -> Term -> IO (Map Text Term)
-runDSL = runDSLWithHostCallRegistry (baseHostCallRegistry <> metaHostCallRegistry)
+runDSL =
+  runDSLWithHostCallRegistry defaultHostCallRegistry
 
 -- | Like 'runDSL', but takes an explicit host-call registry. Use this when
 -- the program calls custom @host:_@ functions registered by the embedder.

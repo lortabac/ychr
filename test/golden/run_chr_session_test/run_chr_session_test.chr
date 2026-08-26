@@ -1,0 +1,51 @@
+:- module(
+     run_chr_session_test,
+     [go/2, iso/2, err/1, nested/3, multi/3, probe/2, mid/2, c/1, boom/1,
+      empty_goals/1, unknown_goal/1, bad_goal/1, type(verdict/0)]
+   ).
+
+:- use_module(library(meta)).
+
+:- chr_type verdict ---> clean ; leaked.
+
+:- chr_constraint go(bool, any), probe(int, any), iso(bool, any),
+   leak_probe(any), c(int), err(bool), boom(int), nested(bool, bool, any),
+   mid(any, any), multi(bool, any, any).
+
+% Out-variable persistence: the sub-session binds R and the binding
+% survives the call.
+probe(N, R) <=> R is N + 1.
+go(Ok, R) <=> Ok is run_chr_session(quote(probe(41, R))).
+
+% Store isolation: the sub-goal stores c(1) in the sub-session's own
+% store, so the outer leak_probe finds no c/1 partner afterwards.
+c(_) \ leak_probe(R) <=> R = leaked.
+leak_probe(R) <=> R = clean.
+iso(Ok, P) <=> Ok is run_chr_session(quote(c(1))), leak_probe(P).
+
+% A runtime error inside the sub-session yields false; the outer
+% session keeps running.
+boom(X) <=> Y is X div 0.
+err(Ok) <=> Ok is run_chr_session(quote(boom(1))).
+
+% Sub-sessions nest: the sub-goal itself opens a sub-sub-session.
+mid(Ok, R) <=> Ok is run_chr_session(quote(probe(10, R))).
+nested(OkOuter, OkInner, R) <=>
+  OkOuter is run_chr_session(quote(mid(OkInner, R))).
+
+% A list argument runs several goals in order in one sub-session.
+multi(Ok, R1, R2) <=>
+  Ok is run_chr_session(quote([probe(1, R1), probe(2, R2)])).
+
+% An empty goal list runs zero goals and succeeds.
+:- chr_constraint empty_goals(bool).
+empty_goals(Ok) <=> Ok is run_chr_session(quote([])).
+
+% A misspelled (unknown) goal constraint is a loud caller error, not a
+% false result.
+:- chr_constraint unknown_goal(bool).
+unknown_goal(Ok) <=> Ok is run_chr_session(quote(probee(1, _))).
+
+% A goal that is not a constraint term at all is rejected outright.
+:- chr_constraint bad_goal(bool).
+bad_goal(Ok) <=> Ok is run_chr_session(quote(42)).
