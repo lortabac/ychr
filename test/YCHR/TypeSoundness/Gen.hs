@@ -192,13 +192,10 @@ inhabited ctx ty = case stripSTy ctx.ctxSk ty of
 -- instantiation target asks 'genExprAt' for something it cannot make.
 rigidTargets :: Ctx -> [STy]
 rigidTargets ctx =
-  List.nub [t | EVar _ t <- allUntainted, isSk t]
+  List.nub [t | EVar _ t <- allUntainted, isSkTy t]
   where
     allUntainted =
       concat [varsAt ctx t | (_, t) <- scopeTys ctx]
-    isSk t = case t of
-      SSk _ -> True
-      _ -> False
 
 -- | A type to instantiate a callee's parameter at, biased towards the
 -- rigid ones.
@@ -286,9 +283,7 @@ pickFrom cands ctx =
     )
   where
     (rigid, ground) = List.partition isRigid cands
-    isRigid t = case stripSTy ctx.ctxSk t of
-      SSk _ -> True
-      _ -> False
+    isRigid t = isSkTy (stripSTy ctx.ctxSk t)
 
 gToS :: GTy -> STy
 gToS (GTy c as) = SCon c (map gToS as)
@@ -904,10 +899,10 @@ genPat adts cls bnd sk d path ty = Gen.frequency (common ++ specific)
 varName :: [Int] -> Text
 varName path = "V" <> T.intercalate "_" (map tshow (reverse path))
 
--- | With some probability, rename one pattern variable to another —
--- possibly in a different head. The repeated variable becomes an
--- implicit equality once the compiler puts the rule in head normal
--- form, which puts the rule through the checker's @GuardEqual@ path.
+-- | Maybe rename one pattern variable to another — possibly in a
+-- different head. The repeated variable becomes an implicit equality
+-- once the compiler puts the rule in head normal form, which puts the
+-- rule through the checker's @GuardEqual@ path.
 --
 -- When both positions are rigid this is the skolem merge that makes
 -- multi-head idioms over a polymorphic constraint check at all —
@@ -925,18 +920,30 @@ varName path = "V" <> T.intercalate "_" (map tshow (reverse path))
 -- a shared constructor teaches the checker nothing — the store
 -- instance is then forced to agree ('skForce') without the static
 -- model learning it.
+--
+-- A pair that merges one skolem into /another skolem/ is taken
+-- outright rather than by coin. That merge is the case the checker's
+-- GuardEqual skolem discipline exists for, and programs offering one
+-- at all are rare — the 'skForce' split reclassified the
+-- parameter-depth pairs that used to swell the bucket, and a coin on
+-- top of that rarity left the closed property's rigid-merge coverage
+-- floor flaky. Only the top rung is deterministic: taking every
+-- /constraining/ pair outright was tried and starved the evidence
+-- guards of rigid variables, dropping the type-predicate pin toward
+-- its own floor. Everything below the top rung keeps the original
+-- weighted coin.
 maybeAlias ::
   [ClassFn] ->
   SkolemEnv ->
   NonEmpty HeadC ->
   Gen (NonEmpty HeadC, SkolemEnv)
 maybeAlias cls sk hs
+  | not (null skMerges) = alias =<< Gen.element skMerges
   | null pairs = pure (hs, sk)
   | otherwise = do
-      -- Aliasing is worth more when a rigid merge is on the table, so
-      -- the coin is weighted by whether one is: that is the case the
-      -- checker's GuardEqual skolem merge exists for, and it is rarer
-      -- than plain same-concrete-type aliasing.
+      -- Aliasing is worth more when a constraining pair is on the
+      -- table, so the coin is weighted by whether one is: pins and
+      -- forcings are rarer than plain same-concrete-type aliasing.
       doIt <-
         Gen.frequency
           ( if null merging
@@ -945,14 +952,15 @@ maybeAlias cls sk hs
           )
       if not doIt
         then pure (hs, sk)
-        else do
-          (keep, drop_, sk') <-
-            Gen.frequency
+        else
+          alias
+            =<< Gen.frequency
               ( [(3, Gen.element merging) | not (null merging)]
                   ++ [(1, Gen.element plain) | not (null plain)]
               )
-          pure (fmap (renameHead drop_ keep) hs, notePins sk sk')
   where
+    alias (keep, drop_, sk') =
+      pure (fmap (renameHead drop_ keep) hs, notePins sk sk')
     vs = concatMap (headVars sk) (NE.toList hs)
     -- 'eqUnifySTy' is the checker's own @GuardEqual@ discipline —
     -- skolem merges and pins go into the static model, parameter
@@ -993,10 +1001,9 @@ maybeAlias cls sk hs
     -- pin the checker performs, or a parameter forcing it
     -- deliberately does not — as against two positions that already
     -- had the same concrete type. Drawn uniformly the latter swamp
-    -- the former — there are many more concrete positions — and the
-    -- skolem merge, which is what makes multi-head idioms over a
-    -- polymorphic constraint check at all, showed up in 4% of
-    -- programs. Hence the split.
+    -- the former — there are many more concrete positions. The skolem
+    -- merge is taken outright above ('skMerges'); the split remains
+    -- so pins and forcings are still preferred over plain aliases.
     (merging, plain) =
       List.partition
         ( \(_, _, sk') ->
@@ -1006,6 +1013,13 @@ maybeAlias cls sk hs
               )
         )
         pairs
+    -- The top rung: pairs whose alias binds one skolem to /another
+    -- skolem/. The rest of 'merging' pins a skolem concrete or forces
+    -- a parameter identification, both of which the evidence guards
+    -- also produce in abundance.
+    skMerges = filter isSkMerge merging
+    isSkMerge (_, _, sk') =
+      any isSkTy (Map.elems (Map.difference sk'.skBind sk.skBind))
 
 -- | Record, for coverage, which of the bindings a merge added pinned a
 -- skolem to a concrete type rather than aliasing it to another skolem.
@@ -1019,10 +1033,7 @@ notePins before after =
     }
   where
     concreteBindings =
-      Map.filter (not . isSk) (Map.difference after.skBind before.skBind)
-    isSk t = case t of
-      SSk _ -> True
-      _ -> False
+      Map.filter (not . isSkTy) (Map.difference after.skBind before.skBind)
 
 renameHead :: Text -> Text -> HeadC -> HeadC
 renameHead from to h = h {pats = fmap go h.pats}

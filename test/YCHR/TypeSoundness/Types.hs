@@ -15,6 +15,7 @@ module YCHR.TypeSoundness.Types
     GTy (..),
     DTy (..),
     STy (..),
+    isSkTy,
     CtorDef (..),
     AdtDef (..),
 
@@ -151,6 +152,16 @@ data DTy = DCon TyCon [DTy] | DVar TvName
 -- generator is this type plus 'SkolemEnv'.
 data STy = SCon TyCon [STy] | SSk Skolem
   deriving (Eq, Show)
+
+-- | Is this type a bare skolem? Shallow on purpose: a constructor
+-- application over skolems is /not/ one, which is what makes this the
+-- shared test for a skolem-to-skolem merge in 'skBind' (used by the
+-- generator's alias draw, its pin bookkeeping, and the coverage
+-- labels — they must agree on it).
+isSkTy :: STy -> Bool
+isSkTy t = case t of
+  SSk _ -> True
+  SCon _ _ -> False
 
 data CtorDef = CtorDef {ctorName :: Text, ctorFields :: [DTy]}
   deriving (Eq, Show)

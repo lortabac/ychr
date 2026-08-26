@@ -262,25 +262,30 @@ coverShape mode prog = do
   -- satisfied just as well by a generator that had quietly stopped
   -- emitting any, which is the failure mode they exist to catch — so
   -- the floors sit a few standard deviations under the measured rate
-  -- rather than at some token value. Measured over 1000 programs:
+  -- rather than at some token value. Measured over 5000 programs:
   --
-  -- > polymorphic constraint  85%  floor 70
+  -- > polymorphic constraint  86%  floor 70
   -- > parametric type         33%  floor 15
-  -- > rigid head occurrence   70%  floor 55
-  -- > rigid merge              7%  floor  2
-  -- > tell at a rigid type     5%  floor  1
-  -- > literal pin             18%  floor  8
-  -- > match pin               29%  floor 15
-  -- > shared-variable pin     20%  floor 10
-  -- > type-predicate pin      25%  floor 12
+  -- > rigid head occurrence   72%  floor 55
+  -- > rigid merge              9%  floor  2
+  -- > tell at a rigid type     4%  floor  1
+  -- > literal pin             17%  floor  8
+  -- > match pin               27%  floor 15
+  -- > shared-variable pin     21%  floor 10
+  -- > type-predicate pin      20%  floor 12
   --
-  -- The two rigid rows are low by construction rather than by accident,
-  -- and both got lower in the evidence stage: every pin turns a rigid
-  -- variable concrete, so evidence competes for exactly the variables a
-  -- merge or a tell would otherwise use. Both draws are already
-  -- weighted towards the rigid case (see
-  -- 'YCHR.TypeSoundness.Gen.pickTarget' and @pickTellTarget@, and the
-  -- @merging@ split in @maybeAlias@).
+  -- The two rigid rows are low by construction rather than by accident:
+  -- every pin turns a rigid variable concrete, so evidence competes for
+  -- exactly the variables a merge or a tell would otherwise use. Both
+  -- draws are therefore biased towards the rigid case (see
+  -- 'YCHR.TypeSoundness.Gen.pickTarget' and @pickTellTarget@) — and the
+  -- merge row's history is a caution about how tight its floor can sit:
+  -- the 'YCHR.TypeSoundness.Types.skForce' split reclassified the
+  -- parameter-depth pairs that used to count as merges, quietly cutting
+  -- the rate from 7% to 3%, and the 2% floor then failed about one CI
+  -- run in seven. @maybeAlias@ now takes a skolem-to-skolem merge
+  -- outright whenever one is offered, which is what holds the row at
+  -- 9%; if it sags again, suspect that preference before the floor.
   --
   -- Rates near 5% are why this property runs @withTests 300@ rather
   -- than 100: at 100 a 5% event is absent from a whole run about once
@@ -335,7 +340,7 @@ coverShape mode prog = do
   -- pair meets a parameter position (a parametric pin's fresh betas,
   -- or two types meeting inside a shared constructor). The checker
   -- derives nothing there; the instance generator carries the
-  -- identification in 'skForce'. Measured at 23% over 3000 programs.
+  -- identification in 'skForce'. Measured at 17% over 5000 programs.
   cover 10 "an alias forced a parameter identification" anyForce
   where
     rs = prog.rules
@@ -346,7 +351,7 @@ coverShape mode prog = do
     -- A merge proper: one rigid variable aliased to another. Counting
     -- 'skBind' alone would also count every pin, which lands in the
     -- same map and is a different thing.
-    anyMerge = any (any isSk . Map.elems . (.skBind) . (.ruleSk)) rs
+    anyMerge = any (any isSkTy . Map.elems . (.skBind) . (.ruleSk)) rs
     anyForce = any (not . Map.null . (.skForce) . (.ruleSk)) rs
     pinnedBy src =
       any ((src `elem`) . Map.elems . (.skPinned) . (.ruleSk)) rs
@@ -411,18 +416,13 @@ coverShape mode prog = do
       EHostObs _ es -> any (hasAmbientCall r) es
       _ -> False
     rigidUnder r e = case e of
-      EVar _ t -> case resolveSTy r.ruleSk t of
-        SSk _ -> True
-        _ -> False
+      EVar _ t -> isSkTy (resolveSTy r.ruleSk t)
       _ -> False
     anyTellAtRigid = any tellAtRigid rs
     occs = concatMap ruleHeads rs
     tellAtRigid r = any atRigid r.body
     atRigid it = case it of
-      BTell _ sub _ -> any isSk (Map.elems sub)
-      _ -> False
-    isSk t = case t of
-      SSk _ -> True
+      BTell _ sub _ -> any isSkTy (Map.elems sub)
       _ -> False
     isBind it = case it of
       BIs {} -> True
