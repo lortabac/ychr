@@ -423,19 +423,21 @@ Golden tests verify end-to-end correctness by compiling a CHR program, running o
 A test directory contains:
 
 - One or more `.chr` files. All `.chr` files in the directory are compiled together via `compileFiles`, so a test can exercise multi-file programs (imports, exports, cross-module visibility). Goals are module-qualified, so the harness does not need to designate a "main" file.
-- Either positive cases or negative cases, but not both.
+- Any number of cases, of the three kinds below.
 
 **Positive cases** are pairs of `<case>.goal` and `<case>.expected` files. For each pair, the harness runs the goal via `runProgramWithGoal`, formats the resulting bindings with `prettyBindings`, and asserts equality with the `.expected` file (which uses `K = V` format, one binding per line, sorted alphabetically). A directory may contain any number of pairs.
 
-**Negative cases** are `<case>.error` files containing a YCHR error code (e.g., `YCHR-20002`). For each one, the harness asserts that compilation (or type-checking) fails with a message containing that code. A negative-test directory has no `.goal` files.
+**Compilation-negative cases** are bare `<case>.error` files (no matching `.goal`) containing a YCHR error code (e.g., `YCHR-20002`). For each one, the harness asserts that compilation (or type-checking) fails with a message containing that code. A directory of compilation-negative cases has no `.goal` files.
+
+**Goal-negative cases** are pairs of `<case>.goal` and `<case>.error` files: compilation and program-level type-checking must succeed, and *running the goal* must throw an error whose message contains every non-empty line of the `.error` file. The first line is conventionally the `YCHR-NNNNN` code; later lines pin a phrase from the actual error text, since a code like `YCHR-60001` covers every runtime error. This is how one directory mixes passing and failing goals over the same program — see `test/golden/mode_boundness_guard/`.
 
 Files with extensions outside `{.chr, .goal, .expected, .error}` are ignored, so per-test READMEs are fine. Subdirectories inside a test directory are ignored.
 
 Discovery rules (enforced by `test/YCHR/GoldenTest.hs`):
 
-- A directory must contain at least one `.chr` file.
-- Mixing `.goal` and `.error` files in the same directory is an error.
-- An orphan `.goal` (no matching `.expected`) or orphan `.expected` (no matching `.goal`) is an error.
+- A directory must contain at least one `.chr` file, and at least one `.goal` or `.error` file.
+- Every `.goal` must be paired with exactly one of `.expected` (positive) or `.error` (goal-negative); an unpaired `.goal` or `.expected` is an error.
+- A directory containing any `.goal` file may not also contain a bare `.error`: it could not be told apart from a compilation-negative case.
 
 Test IDs are nested: a test directory `fib/` with cases `fib.goal` and `fib_small.goal` produces `Golden.fib.fib` and `Golden.fib.fib_small` in tasty (and `test_scheme_golden[fib-fib]`, `test_scheme_golden[fib-fib_small]` in pytest).
 

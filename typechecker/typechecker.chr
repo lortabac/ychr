@@ -14,8 +14,9 @@
     check_guard_bool/2,
     check_guard_match/5,
     check_guard_getarg/5,
-    ev_unify/3,
-    eq_unify/3,
+    ev_unify/4,
+    eq_unify/4,
+    rigid_supply/1,
     check_bound/6,
     errors/1,
     collect/1,
@@ -122,6 +123,17 @@
 % contradicting types.
 :- chr_type warning_code ---> inaccessible.
 
+% Depth marker threaded through `eq_unify` / `ev_unify`. `ev_top`
+% relates two whole types; `ev_param` marks the parameter positions
+% reached by descending into a shared type constructor. The
+% distinction is load-bearing for rigid variables: value equality
+% determines a type's outermost constructor nominally, but a
+% parameter-erasing value (`[]`, `empty`) leaves the parameters
+% undetermined, so at `ev_param` equality evidence derives nothing
+% about rigid cells — no pins, no merges, no contradiction warnings
+% (docs/reference/type-system.md §What evidence does).
+:- chr_type ev_depth ---> ev_top ; ev_param.
+
 % A named bound signature inside a `requiring` clause: the bound
 % function's flat-atom name together with the argument-types and
 % return-type of its required signature. The fields share logical
@@ -178,10 +190,13 @@
     check_arg_list(list(ty), list(ty), int),
     tc_unify(ty, ty, int),
     tc_unify_list(list(ty), list(ty), int),
-    ev_unify(ty, ty, int),
-    ev_unify_list(list(ty), list(ty), int),
-    eq_unify(ty, ty, int),
-    eq_unify_list(list(ty), list(ty), int),
+    ev_unify(ty, ty, ev_depth, int),
+    ev_unify_list(list(ty), list(ty), ev_depth, int),
+    eq_unify(ty, ty, ev_depth, int),
+    eq_unify_list(list(ty), list(ty), ev_depth, int),
+    rigid_supply(int),
+    make_fresh_rigid(ty),
+    make_fresh_rigids(list(ty), list(ty)),
     resolve_overload(any, list(cand), list(ty), ty, int),
     commit_candidate(list(cand), list(ty), ty, int),
     check_bound(any, list(sig_t(list(ty), ty)), list(sig_t(list(ty), ty)), list(ty), ty, int),
@@ -1065,21 +1080,76 @@ tc_unify_list_cons @
     tc_unify_list(T1, T2, Ctx).
 
 % ==========================================================================
+% Fresh rigid supply
+% ==========================================================================
+%
+% A gensym for rigid type variables allocated from *inside* the
+% rules. The driver allocates skolems for declarations with ids
+% 0, 1, 2, ...; this supply counts DOWN from -1 so the two ranges can
+% never collide (rigid identity comparisons look at the cell and the
+% id, and negative ids surface only cosmetically, as `T#-1` in
+% messages). The driver seeds `rigid_supply(-1)` once per check
+% session.
+%
+% The pin cell of the freshly built skolem is `Cell`, a body-only
+% variable — which is exactly a fresh unbound logical variable, the
+% same thing the driver's freshRigidTypeVar allocates with newVar.
+
+make_fresh_rigid1 @
+    rigid_supply(N), make_fresh_rigid(Out) <=>
+    N1 is N - 1,
+    Out = rigid(Cell, N),
+    rigid_supply(N1).
+
+% One fresh rigid per element of the input list (only the length is
+% used; the elements are never inspected).
+make_fresh_rigids_nil @
+    make_fresh_rigids([], Out) <=> Out = [].
+
+make_fresh_rigids_cons @
+    make_fresh_rigids([_ | Rest], Out) <=>
+    make_fresh_rigid(B),
+    make_fresh_rigids(Rest, Tail),
+    Out = [B | Tail].
+
+% True for the base types, which are fully determined by their
+% values: every `int` value is an `int` and nothing else. Used by the
+% top-level pin rules; `ty_any` is deliberately not included (`any`
+% is disposed of before pinning) and neither are `tcon`/`fun`/`rigid`
+% (each has its own pin discipline).
+:- function (base_type(ty) -> bool).
+
+base_type(ty_int) -> true.
+base_type(ty_float) -> true.
+base_type(ty_string) -> true.
+base_type(_) -> false.
+
+% ==========================================================================
 % ev_unify (guard-derived type evidence)
 % ==========================================================================
 %
 % The evidence meet of docs/reference/type-system.md §Guard-Derived
-% Type Evidence §What evidence does. `ev_unify(FactTy, SlotTy, Ctx)`
+% Type Evidence §What evidence does. `ev_unify(FactTy, SlotTy, D, Ctx)`
 % asserts the typing fact a guard's operational success entails: the
 % fact the guard establishes comes first, the type the position
 % already has second (the order the YCHR-20104 message reads them in;
 % for a symmetric form like `GuardEqual` either order is meaningful).
+% `D` is the `ev_depth` of the pair: `ev_top` for two whole types,
+% `ev_param` once descent has entered a shared type constructor.
 % It differs from `tc_unify` in both directions:
 %
-%  - it is the ONLY thing that may bind a rigid tvar's pin cell
-%    (`type(X) = int` at `X : T` pins `T := int`; two unpinned
-%    skolems merge), which is what lets a guard enable an operation
-%    the skolem would otherwise reject;
+%  - it is the ONLY thing that may bind a rigid tvar's pin cell,
+%    which is what lets a guard enable an operation the skolem would
+%    otherwise reject. What the pin may say is bounded by what value
+%    equality proves: a value determines its type's outermost
+%    constructor nominally but not the constructor's parameters
+%    (`[]` inhabits `list(tau)` for every `tau`), so at `ev_top` a
+%    skolem pins to a base type or nullary constructor application
+%    exactly, to a parametric application or function type only at
+%    FRESH rigid parameters (the guard_match_rigid discipline), and
+%    merges with another skolem; at `ev_param` evidence derives
+%    nothing about rigid cells at all — a parameter-erasing value
+%    may account for the equality;
 %  - it never binds a flexible variable and never narrows `any` —
 %    at those states evidence is inert, so it cannot restrict
 %    unannotated code (the asymmetry is the design principle: at a
@@ -1094,88 +1164,159 @@ tc_unify_list_cons @
 %    independent of the order constraints were gathered in. A fact
 %    still pending when solving ends was inert: its slot never became
 %    anything but flexible;
-%  - a contradiction is a *warning*, not an error: the guard can
-%    never succeed within the typed fragment, so the enclosing rule
-%    or equation is dead code (YCHR-20104). The contradicting fact
-%    binds nothing and checking continues with the declared types.
+%  - a contradiction between two whole types is a *warning*, not an
+%    error: the guard can never succeed within the typed fragment,
+%    so the enclosing rule or equation is dead code (YCHR-20104).
+%    The contradicting fact binds nothing and checking continues
+%    with the declared types. A mismatch confined to `ev_param`
+%    positions is NOT a contradiction — `box(int)` and `box(bool)`
+%    positions can share the value `empty` — and derives nothing.
 
 ev_unify_any_left @
-    ev_unify(T1, _, _) <=> nonvar(T1), T1 == ty_any | true.
+    ev_unify(T1, _, _, _) <=> nonvar(T1), T1 == ty_any | true.
 
 ev_unify_any_right @
-    ev_unify(_, T2, _) <=> nonvar(T2), T2 == ty_any | true.
+    ev_unify(_, T2, _, _) <=> nonvar(T2), T2 == ty_any | true.
+
+ev_unify_same_rigid @
+    ev_unify(rigid(C, N), rigid(C, N), _, _) <=> true.
+
+% Parameter depth: an unpinned skolem on either side means the fact
+% is vacuous — drop it. (A *pinned* skolem is no longer opaque and
+% falls through to the deref rules below.)
+ev_unify_param_rigid_left @
+    ev_unify(rigid(C, _), _, ev_param, _) <=> var(C) | true.
+
+ev_unify_param_rigid_right @
+    ev_unify(_, rigid(C, _), ev_param, _) <=> var(C) | true.
+
+% Top level, rigid ~ rigid: merge the two skolems by pinning the
+% unpinned cell to the other side's term (the multi-head idiom of a
+% polymorphic constraint). These fire ahead of the pinned-deref rules
+% so a merge reaches THROUGH a pin: "pin then merge" and "merge then
+% pin" leave the same shared structure. The alias guards stop a
+% cyclic merge — `ty_occurs` looks through pinned cells, so a skolem
+% already reachable from the other side's alias/pin chain is the same
+% skolem and the fact is spent.
+ev_unify_rigid_alias_left @
+    ev_unify(rigid(C1, _), rigid(C2, N2), ev_top, _) <=>
+    var(C1), ty_occurs(C1, rigid(C2, N2)) | true.
+
+ev_unify_rigid_alias_right @
+    ev_unify(rigid(C1, N1), rigid(C2, _), ev_top, _) <=>
+    var(C2), ty_occurs(C2, rigid(C1, N1)) | true.
+
+ev_unify_rigid_merge_left @
+    ev_unify(rigid(C1, _), rigid(C2, N2), ev_top, _) <=>
+    var(C1) | C1 = rigid(C2, N2).
+
+ev_unify_rigid_merge_right @
+    ev_unify(rigid(C1, N1), rigid(C2, _), ev_top, _) <=>
+    var(C2) | C2 = rigid(C1, N1).
 
 % A pinned skolem is no longer opaque: the fact meets whatever the
 % cell holds (so a second, contradicting predicate on the same
 % variable reports 20104 rather than silently re-pinning).
 ev_unify_pinned_left @
-    ev_unify(rigid(C, _), T2, Ctx) <=> nonvar(C) | ev_unify(C, T2, Ctx).
+    ev_unify(rigid(C, _), T2, D, Ctx) <=> nonvar(C) | ev_unify(C, T2, D, Ctx).
 
 ev_unify_pinned_right @
-    ev_unify(T1, rigid(C, _), Ctx) <=> nonvar(C) | ev_unify(T1, C, Ctx).
+    ev_unify(T1, rigid(C, _), D, Ctx) <=> nonvar(C) | ev_unify(T1, C, D, Ctx).
 
-ev_unify_same_rigid @
-    ev_unify(rigid(C, N), rigid(C, N), _) <=> true.
+% Top-level pinning, by the shape of the solid partner. A base type
+% or a nullary constructor application is determined by its values,
+% so the pin copies it exactly. A still-flexible partner leaves the
+% fact residual (no rule fires), and `any` was disposed of already.
+ev_unify_pin_base_left @
+    ev_unify(rigid(C, _), T2, ev_top, _) <=>
+    var(C), nonvar(T2), base_type(T2) | C = T2.
 
-% Occurs check, ahead of the pinning rules. A fact that would pin a
-% skolem's cell to a type *containing* that same skolem — as
-% `f(X, X)` does at `:- function f(T, list(T)) -> ...`, whose HNF
-% GuardEqual asserts `T = list(T)` — has no solution: no type
-% satisfies it, so the guard can never succeed. Binding the cell
-% would build a cyclic term and hang every later deref, so the fact
-% binds nothing and reports the branch inaccessible instead. This
-% keeps evidence's contract ("evidence never rejects") intact: the
-% disposition is the same YCHR-20104 a contradicting fact draws.
-ev_unify_occurs_left @
-    ev_unify(rigid(C, N), T2, Ctx) <=> var(C), nonvar(T2), ty_occurs(C, T2) |
-    report_warning(Ctx, inaccessible, pair(rigid(C, N), T2)).
+ev_unify_pin_base_right @
+    ev_unify(T1, rigid(C, _), ev_top, _) <=>
+    var(C), nonvar(T1), base_type(T1) | C = T1.
 
-ev_unify_occurs_right @
-    ev_unify(T1, rigid(C, N), Ctx) <=> var(C), nonvar(T1), ty_occurs(C, T1) |
-    report_warning(Ctx, inaccessible, pair(T1, rigid(C, N))).
+ev_unify_pin_nullary_left @
+    ev_unify(rigid(C, _), tcon(Ctor, []), ev_top, _) <=>
+    var(C) | C = tcon(Ctor, []).
 
-% Pinning. The `nonvar` guard is what keeps the other side solid: a
-% still-flexible partner leaves the fact residual (above) rather than
-% pinning the skolem to a variable, and `any` was disposed of already.
-% Rigid × rigid merges the two skolems by pinning one cell to the
-% other's term.
-ev_unify_pin_left @
-    ev_unify(rigid(C, _), T2, _) <=> var(C), nonvar(T2) | C = T2.
+ev_unify_pin_nullary_right @
+    ev_unify(tcon(Ctor, []), rigid(C, _), ev_top, _) <=>
+    var(C) | C = tcon(Ctor, []).
 
-ev_unify_pin_right @
-    ev_unify(T1, rigid(C, _), _) <=> var(C), nonvar(T1) | C = T1.
+% A parametric application or function type is NOT determined by its
+% values, so the pin commits to the outermost constructor only, at
+% fresh rigid parameters unrelated to the partner's (the same
+% discipline guard_match_rigid applies at a rigid scrutinee). No
+% descent into the partner follows the pin: it would run at
+% `ev_param`, where nothing is derived, so it is a no-op by
+% construction. Every pinned value is rigid-free or built from fresh
+% skolems, so no occurs check is needed on these rules.
+ev_unify_pin_parametric_left @
+    ev_unify(rigid(C, _), tcon(Ctor, [A | As]), ev_top, _) <=>
+    var(C) |
+    make_fresh_rigids([A | As], Betas),
+    C = tcon(Ctor, Betas).
+
+ev_unify_pin_parametric_right @
+    ev_unify(tcon(Ctor, [A | As]), rigid(C, _), ev_top, _) <=>
+    var(C) |
+    make_fresh_rigids([A | As], Betas),
+    C = tcon(Ctor, Betas).
+
+ev_unify_pin_fun_left @
+    ev_unify(rigid(C, _), fun(Args, _), ev_top, _) <=>
+    var(C) |
+    make_fresh_rigids(Args, ArgBetas),
+    make_fresh_rigid(RetBeta),
+    C = fun(ArgBetas, RetBeta).
+
+ev_unify_pin_fun_right @
+    ev_unify(fun(Args, _), rigid(C, _), ev_top, _) <=>
+    var(C) |
+    make_fresh_rigids(Args, ArgBetas),
+    make_fresh_rigid(RetBeta),
+    C = fun(ArgBetas, RetBeta).
 
 ev_unify_int @
-    ev_unify(ty_int, ty_int, _) <=> true.
+    ev_unify(ty_int, ty_int, _, _) <=> true.
 
 ev_unify_float @
-    ev_unify(ty_float, ty_float, _) <=> true.
+    ev_unify(ty_float, ty_float, _, _) <=> true.
 
 ev_unify_string @
-    ev_unify(ty_string, ty_string, _) <=> true.
+    ev_unify(ty_string, ty_string, _, _) <=> true.
 
+% Descent into a shared constructor switches to `ev_param`: the
+% component facts are about parameter positions, where equality
+% evidence is vacuous for rigid cells and a mismatch is not a
+% contradiction.
 ev_unify_tcon @
-    ev_unify(tcon(C, Args1), tcon(C, Args2), Ctx) <=>
+    ev_unify(tcon(C, Args1), tcon(C, Args2), _, Ctx) <=>
     same_arity(Args1, Args2) |
-    ev_unify_list(Args1, Args2, Ctx).
+    ev_unify_list(Args1, Args2, ev_param, Ctx).
 
 ev_unify_fun @
-    ev_unify(fun(A1, R1), fun(A2, R2), Ctx) <=>
+    ev_unify(fun(A1, R1), fun(A2, R2), _, Ctx) <=>
     same_arity(A1, A2) |
-    ev_unify_list(A1, A2, Ctx),
-    ev_unify(R1, R2, Ctx).
+    ev_unify_list(A1, A2, ev_param, Ctx),
+    ev_unify(R1, R2, ev_param, Ctx).
 
 ev_unify_contradiction @
-    ev_unify(T1, T2, Ctx) <=> nonvar(T1), nonvar(T2) |
+    ev_unify(T1, T2, ev_top, Ctx) <=> nonvar(T1), nonvar(T2) |
     report_warning(Ctx, inaccessible, pair(T1, T2)).
 
+% Parameter-position mismatch: satisfiable via a parameter-erasing
+% value, so it neither warns nor binds.
+ev_unify_param_mismatch @
+    ev_unify(T1, T2, ev_param, _) <=> nonvar(T1), nonvar(T2) | true.
+
 ev_unify_list_nil @
-    ev_unify_list([], [], _) <=> true.
+    ev_unify_list([], [], _, _) <=> true.
 
 ev_unify_list_cons @
-    ev_unify_list([H1|T1], [H2|T2], Ctx) <=>
-    ev_unify(H1, H2, Ctx),
-    ev_unify_list(T1, T2, Ctx).
+    ev_unify_list([H1|T1], [H2|T2], D, Ctx) <=>
+    ev_unify(H1, H2, D, Ctx),
+    ev_unify_list(T1, T2, D, Ctx).
 
 % ==========================================================================
 % eq_unify (the HNF equality meet)
@@ -1202,79 +1343,106 @@ ev_unify_list_cons @
 % between known types marks the rule dead (YCHR-20104) rather than
 % inconsistent.
 %
-% The merge has to reach INSIDE type constructors, because a slot's
-% two halves are routinely structured: matching `p([E | X])` at an
-% untyped `p` types X as `list(alpha)` with alpha flexible, and a
-% partner `q(X)` at `q(list(int))` is what says alpha is int. So
+% The flexible merge has to reach INSIDE type constructors, because a
+% slot's two halves are routinely structured: matching `p([E | X])`
+% at an untyped `p` types X as `list(alpha)` with alpha flexible, and
+% a partner `q(X)` at `q(list(int))` is what says alpha is int. So
 % `eq_unify` recurses through `tcon`/`fun` itself and hands only
 % LEAVES to `ev_unify` — delegating the whole structure would lose
 % the merge at every flexible component, since evidence is
-% deliberately inert there. Every case is disposed of here or in
-% `ev_unify`'s solid rules, so an `eq_unify` never stays residual
-% (an `ev_unify` it delegates to may, which is that relation's
-% documented behaviour).
+% deliberately inert there. The descent switches the depth to
+% `ev_param`, which changes nothing for flexibles (they bind at every
+% depth) but makes the delegated rigid leaves vacuous: value equality
+% does not determine a shared constructor's parameters, so evidence
+% derives nothing about rigid cells there (`ev_unify`'s block
+% comment). Every case is disposed of here or in `ev_unify`'s solid
+% rules, so an `eq_unify` never stays residual (an `ev_unify` it
+% delegates to may, which is that relation's documented behaviour).
+%
+% OPEN QUESTION (inference axis, not evidence): the flexible binding
+% at `ev_param` is itself justified only by the declaration-source
+% reading — the two halves are one variable. Where a half is
+% flexible-inside-a-constructor and the other half's parameter is
+% concrete, the bound type may over-commit for a parameter-erasing
+% witness (the same argument that makes rigid parameter pins
+% unsound). No unsoundness witness through a flexible has been
+% found; revisit if the soundness property test produces one.
 
 eq_unify_any_left @
-    eq_unify(T1, _, _) <=> nonvar(T1), T1 == ty_any | true.
+    eq_unify(T1, _, _, _) <=> nonvar(T1), T1 == ty_any | true.
 
 eq_unify_any_right @
-    eq_unify(_, T2, _) <=> nonvar(T2), T2 == ty_any | true.
+    eq_unify(_, T2, _, _) <=> nonvar(T2), T2 == ty_any | true.
 
 % Occurs check on the binding rules, ahead of them. `p([X | X])`
 % equates alpha with `list(alpha)`; binding would build a cyclic term
-% and hang every later deref. Unlike the skolem case (`ev_unify`'s
-% occurs rules) this one reports NOTHING: the slot is flexible, so
-% the values reaching it are typed `any` somewhere upstream, and an
-% improper list like `[1 | 1]` really can match the pattern at run
-% time. Dropping the fact is the accepting disposition — the checker
-% does not move in the rejecting direction on unannotated code.
+% and hang every later deref. It reports NOTHING: the slot is
+% flexible, so the values reaching it are typed `any` somewhere
+% upstream, and an improper list like `[1 | 1]` really can match the
+% pattern at run time. Dropping the fact is the accepting disposition
+% — the checker does not move in the rejecting direction on
+% unannotated code. (The rigid analogue needs no occurs check at all:
+% a skolem pin never copies the other side's structure beyond the
+% outermost constructor, so no cycle can be built — `T` against
+% `list(T)` pins `T := list(beta)` with a fresh `beta`.)
 eq_unify_occurs_left @
-    eq_unify(T1, T2, _) <=> var(T1), nonvar(T2), ty_occurs(T1, T2) | true.
+    eq_unify(T1, T2, _, _) <=> var(T1), nonvar(T2), ty_occurs(T1, T2) | true.
 
 eq_unify_occurs_right @
-    eq_unify(T1, T2, _) <=> nonvar(T1), var(T2), ty_occurs(T2, T1) | true.
+    eq_unify(T1, T2, _, _) <=> nonvar(T1), var(T2), ty_occurs(T2, T1) | true.
 
 eq_unify_var_nonvar @
-    eq_unify(T1, T2, _) <=> var(T1), nonvar(T2) | T1 = T2.
+    eq_unify(T1, T2, _, _) <=> var(T1), nonvar(T2) | T1 = T2.
 
 eq_unify_nonvar_var @
-    eq_unify(T1, T2, _) <=> nonvar(T1), var(T2) | T2 = T1.
+    eq_unify(T1, T2, _, _) <=> nonvar(T1), var(T2) | T2 = T1.
 
 eq_unify_var_var @
-    eq_unify(T1, T2, _) <=> var(T1), var(T2) | T1 = T2.
+    eq_unify(T1, T2, _, _) <=> var(T1), var(T2) | T1 = T2.
+
+% A whole rigid ~ rigid pair delegates with both wrappers intact,
+% ahead of the pinned-deref rules: `ev_unify`'s merge rules reach
+% through a pin, so "pin then merge" and "merge then pin" leave the
+% same shared structure. Dereferencing first would instead re-pin the
+% unpinned side at fresh parameters, losing the sharing.
+eq_unify_rigid_pair @
+    eq_unify(rigid(C1, N1), rigid(C2, N2), D, Ctx) <=>
+    ev_unify(rigid(C1, N1), rigid(C2, N2), D, Ctx).
 
 % Below the binding rules, so that a flexible slot meeting a skolem
 % still binds to the skolem term itself (rigidity travels through
 % flexibles) rather than to what the skolem is pinned to.
 eq_unify_pinned_left @
-    eq_unify(rigid(C, _), T2, Ctx) <=> nonvar(C) | eq_unify(C, T2, Ctx).
+    eq_unify(rigid(C, _), T2, D, Ctx) <=> nonvar(C) | eq_unify(C, T2, D, Ctx).
 
 eq_unify_pinned_right @
-    eq_unify(T1, rigid(C, _), Ctx) <=> nonvar(C) | eq_unify(T1, C, Ctx).
+    eq_unify(T1, rigid(C, _), D, Ctx) <=> nonvar(C) | eq_unify(T1, C, D, Ctx).
 
+% Descent into a shared constructor switches to `ev_param` (see the
+% block comment).
 eq_unify_tcon @
-    eq_unify(tcon(C, Args1), tcon(C, Args2), Ctx) <=>
+    eq_unify(tcon(C, Args1), tcon(C, Args2), _, Ctx) <=>
     same_arity(Args1, Args2) |
-    eq_unify_list(Args1, Args2, Ctx).
+    eq_unify_list(Args1, Args2, ev_param, Ctx).
 
 eq_unify_fun @
-    eq_unify(fun(A1, R1), fun(A2, R2), Ctx) <=>
+    eq_unify(fun(A1, R1), fun(A2, R2), _, Ctx) <=>
     same_arity(A1, A2) |
-    eq_unify_list(A1, A2, Ctx),
-    eq_unify(R1, R2, Ctx).
+    eq_unify_list(A1, A2, ev_param, Ctx),
+    eq_unify(R1, R2, ev_param, Ctx).
 
 % Leaves, plus every mismatch: an unpinned skolem on either side, two
 % base types, a tcon meeting a fun, a same-name tcon at two arities.
 eq_unify_evidence @
-    eq_unify(T1, T2, Ctx) <=> ev_unify(T1, T2, Ctx).
+    eq_unify(T1, T2, D, Ctx) <=> ev_unify(T1, T2, D, Ctx).
 
 eq_unify_list_nil @
-    eq_unify_list([], [], _) <=> true.
+    eq_unify_list([], [], _, _) <=> true.
 
 eq_unify_list_cons @
-    eq_unify_list([H1|T1], [H2|T2], Ctx) <=>
-    eq_unify(H1, H2, Ctx),
-    eq_unify_list(T1, T2, Ctx).
+    eq_unify_list([H1|T1], [H2|T2], D, Ctx) <=>
+    eq_unify(H1, H2, D, Ctx),
+    eq_unify_list(T1, T2, D, Ctx).
 
 % ==========================================================================
 % Overload resolution
@@ -1360,8 +1528,8 @@ collect_errors @
 % store constraint because they are dispositive only after solving:
 % the driver drops every warning whose unit also reported an error
 % (docs/reference/type-system.md §Inaccessible branches). The
-% emitters are `ev_unify_contradiction`, `ev_unify_occurs_left` /
-% `_right`, and `guard_match_inaccessible`, all YCHR-20104.
+% emitters are `ev_unify_contradiction` and
+% `guard_match_inaccessible`, both YCHR-20104.
 
 accumulate_warning @
     report_warning(Ctx, Code, Detail), warnings(Ws) <=>

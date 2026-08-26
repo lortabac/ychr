@@ -1,0 +1,15 @@
+:- module(gecp, [go/1]).
+:- use_module(library(prelude)).
+
+% The accept side of typecheck_guard_equal_ctor_pin_beta_rigid: the
+% shared X pins T := list(B) with B rigid, and the body only moves
+% the value whole (keep is any-typed), assuming nothing about the
+% element type. The rule checks and fires.
+:- chr_constraint p(T, T).
+:- chr_constraint q(list(int)).
+:- chr_constraint keep(any), go(any), gather(any).
+
+r @ p(X, Y), q(X) <=> keep(Y).
+
+seed @ go(R) <=> p([1], [2]), q([1]), gather(R).
+gth @ gather(R), keep(V) <=> R = V.

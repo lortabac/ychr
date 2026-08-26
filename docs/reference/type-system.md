@@ -614,9 +614,13 @@ share one instantiation, which nothing enforces. Where matching
 *does* force instances to agree — a variable shared between head
 positions — the agreement is recovered as evidence: HNF desugars the
 shared variable into an explicit `GuardEqual` (§Sources of Type
-Information §8), which is an evidence form and merges the two
-skolems. Multi-head idioms like transitivity of a polymorphic
-`leq(T, T)` therefore continue to check; see the worked example in
+Information §8), which is an evidence form and, when the variable
+occupies two whole rigid positions, merges the two skolems (a
+variable shared only *inside* a parametric type, `list(T₁)` against
+`list(T₂)`, merges nothing — a parameter-erasing value satisfies
+that equality without the instances agreeing; §What evidence does).
+Multi-head idioms like transitivity of a polymorphic `leq(T, T)`
+therefore continue to check; see the worked example in
 §Guard-Derived Type Evidence.
 
 Rigidity is local to the implementation-site check. At every use
@@ -716,8 +720,10 @@ Head Normal Form desugaring introduces synthetic guards:
   use.
 - **`GuardEqual term1 term2`**: relates the two terms' types. An
   **evidence form**: ask-equality succeeds only on structurally
-  identical terms, so the two types are equal whenever the guard
-  passes (§Guard-Derived Type Evidence).
+  identical terms, so whenever the guard passes the two types agree
+  *up to their outermost type constructors* — a value determines its
+  constructor nominally but not the constructor's parameters
+  (§Guard-Derived Type Evidence).
 - **`GuardExpr term`**: a general boolean guard expression (e.g.,
   `N > 0`). The type of `term` must be consistent with
   `prelude:bool`. A type-predicate call in this position is an
@@ -780,7 +786,7 @@ by one.
 
 | Form | Fact on success |
 |------|-----------------|
-| `GuardEqual t₁ t₂` — emitted only by HNF, for a variable shared between head positions or a non-variable head argument (§8) | `type(t₁) = type(t₂)` |
+| `GuardEqual t₁ t₂` — emitted only by HNF, for a variable shared between head positions or a non-variable head argument (§8) | `type(t₁)` and `type(t₂)` agree on their outermost type constructor; at a rigid variable the pin this induces is per §What evidence does |
 | `GuardMatch x c/n`, where `c` is a declared constructor of `D(α₁, ..., αₖ)` | `type(x)` is an application of `D` (parameter instantiation per §What evidence does) |
 | A type-predicate guard: `integer(X)`, `float(X)`, `string(X)`, `boolean(X)` | `type(X)` is `int` / `float` / `string` / `prelude:bool` respectively |
 
@@ -796,21 +802,31 @@ evidence — evidence proper stays inert at a flexible variable (§What
 evidence does), and the distinction only matters where one half has
 a solid declaration source and the other does not.
 
-Neither reading can be asserted of a variable whose two halves are
-`α` and a type *containing* `α`, as in `p([X | X])`: no finite type
-satisfies it. The fact is dropped. At a flexible half it is dropped
+The declaration-source merge cannot be asserted of a variable whose
+two halves are `α` and a type *containing* `α`, as in `p([X | X])`:
+no finite type satisfies it. At a flexible half the fact is dropped
 silently — such a pattern still matches an improper list at run
 time, and the checker does not move in the rejecting direction on
-code it was told nothing about — while at a rigid one, where the
-declaration fixes the type, the branch is dead in the typed
-fragment and draws `YCHR-20104` like any other contradiction.
+code it was told nothing about. At a rigid half no cycle arises in
+the first place: the evidence pin never copies the other side's
+parameters (§What evidence does), so `T` against `list(T)` simply
+pins `T := list(β)` with a fresh rigid `β` — satisfiable, e.g. by
+`p([[] | []])`, so nothing is reported.
 
 Justifications. Ask-equality (`==`) succeeds only on structurally
 identical terms — including the case of the *same* still-unbound
 variable on both sides — and a constructor determines its algebraic
-type nominally, so equal structure entails equal type; identical
+type nominally, so equal structure entails equal *type
+constructor*. It does not entail equal type *parameters*: a
+parametric type has values that fail to determine them — `[]`
+inhabits `list(τ)` for every `τ` and `empty` inhabits `box(τ)` for
+every `τ` — so two structurally identical values may be typed at
+different instantiations, and an equality between them proves
+nothing about the parameters. (This is the same observation that
+excludes `atom(X)` as an evidence form, §Non-forms.) Identical
 variables denote the same future value, so any type describing one
-describes the other. A successful `GuardMatch` proves the value was
+describes the other — again up to the outermost constructor. A
+successful `GuardMatch` proves the value was
 built by `c`, and within the typed fragment `c`-values inhabit only
 `D` (a forged `c` compound is typed `any` and is an
 `any`-introduction form, §Soundness); how `D`'s type parameters are
@@ -851,11 +867,35 @@ The criterion excludes, deliberately:
 Evidence acts according to the *state* (§Type states) of the type it
 scrutinizes:
 
-- **Rigid** — the fact binds or merges the skolem: `type(X) = int`
-  at `X : T` binds `T := int`; `type(X) = type(Y)` at `X : T₁`,
-  `Y : T₂` merges `T₁` and `T₂`. This is the single sanctioned
-  exception to the meet table's rigid rows, and evidence is the
-  *only* mechanism that may perform it.
+- **Rigid** — the fact binds or merges the skolem, but only to the
+  extent the underlying runtime fact determines a type. Three cases:
+  - *Rigid meets rigid, whole types*: `type(X) = type(Y)` at
+    `X : T₁`, `Y : T₂` merges `T₁` and `T₂` — the multi-head idiom
+    (§Worked example: multi-head rules).
+  - *Rigid meets a non-parametric type* (a base type or a nullary
+    constructor application): the fact pins the skolem —
+    `type(X) = int` at `X : T` binds `T := int`. Such a type is
+    determined by its values, so the pin is exactly what the guard's
+    success proves.
+  - *Rigid meets a parametric application or a function type*: the
+    fact pins only the outermost constructor, at **fresh rigid
+    parameters** — `T` against `list(int)` pins `T := list(β)` with
+    `β` fresh and *unrelated* to `int`. This is the same discipline
+    as `GuardMatch` at a rigid scrutinee (next paragraph): the
+    values witnessing the equality need not determine the
+    parameters (`[]` inhabits every `list(τ)`), so nothing
+    downstream may assume more than the constructor.
+
+  Once inside a shared constructor — the parameter positions of a
+  `GuardEqual` whose two sides are applications of the same
+  constructor, such as `box(A)` against `box(int)` — equality
+  evidence derives *nothing* about rigid variables: no pins and no
+  merges. A parameter-erasing value may account for the equality,
+  so a parameter-position fact is not entailed. (The
+  declaration-source merge at *flexible* parameter positions still
+  applies, §Evidence forms.) This rigid behavior is the single
+  sanctioned exception to the meet table's rigid rows, and evidence
+  is the *only* mechanism that may perform it.
 - **Concrete** — the fact is checked. A mismatch means the guard can
   never succeed within the typed fragment, so the enclosing rule or
   equation is *dead code*. The contradicting fact binds nothing —
@@ -984,15 +1024,19 @@ dead @ tag(X) <=> integer(X) | true.
 contradicts it: within the typed fragment no `color`-typed value is
 an integer, so the guard cannot succeed and the rule cannot fire.
 The rule otherwise checks clean, so it draws `YCHR-20104`
-(warning). The same applies to a `GuardEqual` between positions of
-incompatible concrete types — for instance a variable shared
-between an `int` and a `string` head position — and to a
-`GuardMatch` against a constructor of a type other than its
-scrutinee's: each marks a rule or equation that can never fire in
-the typed fragment. That is dead code, not a type error. A
-gradually-typed program can still reach such a rule by flowing
-`any`-typed values into it; the warning severity reflects that the
-checker's claim is limited to the typed fragment.
+(warning). The same applies to a `GuardEqual` between positions
+whose concrete types differ at the *outermost* constructor — for
+instance a variable shared between an `int` and a `string` head
+position — and to a `GuardMatch` against a constructor of a type
+other than its scrutinee's: each marks a rule or equation that can
+never fire in the typed fragment. That is dead code, not a type
+error. A gradually-typed program can still reach such a rule by
+flowing `any`-typed values into it; the warning severity reflects
+that the checker's claim is limited to the typed fragment. A
+mismatch confined to the *parameters* of a shared constructor — a
+variable linking a `box(int)` position to a `box(bool)` one — is
+**not** dead code and draws nothing: a parameter-erasing value
+(`empty`, `[]`) satisfies the equality, so the rule can fire.
 
 A contradicting fact binds nothing — the scrutinized type is
 already known — so checking simply continues with the declared
@@ -1988,14 +2032,17 @@ The relevant correctness properties are:
 
 1. **Soundness of the fully-typed fragment**: if no expression in a
    program is typed `any` and the program type-checks, then at
-   runtime no operation will receive a value of an unexpected type.
-   (Standard progress + preservation, restricted to that fragment.)
-   The *`any`-introduction forms* — an `any`-annotated or untyped
-   declaration position, a host call, an unknown constructor, an
-   evaluable-headed term in structural position (§Expression Typing)
-   — therefore delimit exactly where the guarantee stops: a program
-   that binds a symbolic `1 + 1` with `=`, calls the host, or forges
-   an unknown constructor has left the fragment at that expression.
+   runtime every value that is *bound* is bound within its static
+   type. (Standard progress + preservation, restricted to that
+   fragment.) The claim is about values: a term that is still an
+   unbound logical variable holds no value yet, and falls under
+   §No mode checking below instead. The *`any`-introduction forms*
+   — an `any`-annotated or untyped declaration position, a host call,
+   an unknown constructor, an evaluable-headed term in structural
+   position (§Expression Typing) — therefore delimit exactly where
+   the guarantee stops: a program that binds a symbolic `1 + 1` with
+   `=`, calls the host, or forges an unknown constructor has left the
+   fragment at that expression.
 
 2. **The gradual guarantee**: replacing any type annotation with `any`
    (making the program less precise) never introduces new type errors.
@@ -2028,13 +2075,100 @@ constrain unannotated programs: in code without type annotations,
 the enclosing declaration has no type variables of its own to
 allocate as rigid, so the gradual guarantee continues to hold.
 
-One corner is left open rather than claimed. Constraints are
-checked per unit (§Type Checking Procedure), and an unbound logical
-variable stored inside a constraint is constrained only
-unit-locally until it is bound; whether any unsound interleaving of
-stores and later bindings survives rigid heads is deferred to the
-planned verification work (property tests, and eventually proofs)
-rather than asserted here.
+Property 1 is exercised mechanically by randomized property tests
+(`test/YCHR/TypeSoundnessTest.hs`, with the generator under
+`test/YCHR/TypeSoundness/`). They generate programs that are
+well-typed by construction, run them through the real pipeline, and
+instrument every generated rule with calls to a host function that
+snapshots the runtime values it is handed and checks them against the
+static types the generator gave those positions. Being a host call
+rather than an in-language assertion is what lets it observe a
+position typed by a *rigid* variable, where there is no static type an
+assertion could be declared at.
+
+What is generated includes the polymorphic machinery this section
+credits: parametric algebraic types, constraints with type parameters,
+per-occurrence rigid variables at every head, the skolem merge a
+shared head variable forces, guard-derived evidence in each of its
+forms, and `requiring` bounds with the ambient signatures a rule head
+contributes. Because the generator models rigidity itself, a program
+it believes well-typed that the checker rejects is a failure rather
+than a discarded sample — the two disagreeing is the defect the tests
+are looking for, and one such disagreement has already been found and
+fixed (the parameter pinning of §What evidence does).
+
+Two regimes are covered, as two properties. In the *closed* one every
+argument position is ground. In the *open* one some positions are
+declared willing to hold a term that is not bound yet, the goal stores
+query variables at them, and later rules bind those variables — so a
+value arrives from a different unit than the one that stored it. The
+open property checks the claim in its sharpest form: a query variable
+passed unbound into a declared position must, if anything binds it, be
+bound within that position's type, however many units and
+reactivations it passed through. A term still free at the end is not a
+violation — that is the mode axis below, and the generator observes
+the discipline described there.
+
+### No mode checking
+
+YCHR types terms; it does not track their *mode* — whether a term is
+ground, partially instantiated, or still a free variable. A
+declaration `c(int)` says that the `X` in `c(X)` is a term which,
+whenever it is bound, is an integer. It does not say that `X` is
+bound, and nothing checks the mode preconditions of the operations
+that require one.
+
+("Mode" here is the runtime instantiation state of a term, in the
+sense of Mercury. It is a different axis from the *type-variable*
+instantiation of §Type variables and instantiation, which is
+entirely static.)
+
+The store is what makes the gap reachable. A constraint may be told
+with an argument that is still unbound; another unit binds it later;
+and in between, any rule matching that constraint sees a free
+variable in a position whose declared type is `int`:
+
+```prolog
+:- chr_constraint c(int), mk(int), out(int), later(int).
+
+m @ mk(_)    <=> c(E), later(E).   % c is stored while E is unbound
+l @ later(E) <=> E = 1.
+r @ c(N)     <=> N > 0 | out(N).   % N is E, still unbound, when r is first tried
+```
+
+This type-checks with no errors and no warnings, and fails at run time
+inside `prelude:'>'/2` — not because a value of the wrong type reached
+`>`, but because no value reached it at all. The same failure is
+described from the language side in
+[Tell-time evaluation errors](language.md#tell-time-evaluation-errors):
+evaluation is eager, with no auto-suspension and no symbolic fallback.
+
+Discharging the obligation is the programmer's job, and the tool for
+it is a boundness guard:
+
+```prolog
+r @ c(N) <=> integer(N), N > 0 | out(N).
+```
+
+`integer(N)` is statically redundant here — `N` is already declared
+`int`, and as an evidence form (§Evidence forms) it contributes a fact
+the declaration already gave — but operationally it is what makes the
+rule wait. It fails on a free variable, so the rule does not fire;
+binding `E` reactivates the constraint; and the rule fires on the
+later activation with a value in hand. That a conjunct can be
+redundant for typing and load-bearing for execution is exactly the
+mark of the axis the type system does not cover.
+
+`var/1`, `nonvar/1` and `ground/1` serve the same purpose, and are
+deliberately *not* evidence forms (§Non-forms): their success entails
+a boundness fact, not a typing one — the same separation stated from
+the other side.
+
+This is a scope boundary rather than an oversight. A mode system is a
+second analysis over the same programs, with its own annotation
+burden, and in CHR a constraint argument's mode is genuinely
+flow-dependent: the same argument position can be free in one
+activation of a rule and bound in the next.
 
 Since YCHR erases types completely (no runtime casts, no blame
 tracking), the checker cannot guarantee that programs using `any` are
@@ -2059,3 +2193,6 @@ The key ingredients behind these properties are:
 - The fully-typed fragment reduces to standard HM with algebraic
   data types, extended with local evidence assumptions at
   implementation sites.
+- The guarantee is about bound values. Terms that are still free
+  variables are governed by mode, which the type system does not
+  track (§No mode checking).

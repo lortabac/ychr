@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+Soundness fix: `GuardEqual` evidence (the fact a shared head variable
+contributes) no longer treats value equality as full type equality. A
+value determines its type's outermost constructor nominally but not
+the constructor's parameters (`[]` inhabits `list(T)` for every `T`),
+so at a rigid type variable the evidence now pins a base type or
+nullary constructor application exactly, pins a parametric application
+or function type only at *fresh rigid* parameters (the `GuardMatch`
+discipline), and derives nothing at the parameter positions of a
+shared constructor — no pins, no merges, and no
+inaccessible-branch warning. Whole-type rigid-to-rigid merges (the
+multi-head transitivity idiom) are unchanged. Found by the
+type-soundness property test; see
+`docs/reference/type-system.md` §Guard-Derived Type Evidence.
+
+- Programs that exploited the hole now fail to check (typically
+  `YCHR-60001`): a fully-typed program could previously bind a `bool`
+  into an `int`-declared position through a constraint polymorphic in
+  a type parameter.
+- Some `YCHR-20104` warnings no longer fire, because the rules they
+  marked dead can in fact fire: a parameter-only mismatch between two
+  positions sharing a variable (`box(int)` vs `box(bool)` — live via
+  `empty`), and the self-referential equality `T` \~ `list(T)`, which
+  now pins `T := list(B)` (live via `[]`) instead of warning.
+
 Breaking: a data-constructor name may no longer pun on a function
 name. Previously the two were told apart by syntactic position —
 pattern positions took the constructor, evaluating positions took the

@@ -1,0 +1,19 @@
+:- module(gepnp, [go/1, gather/1]).
+:- use_module(library(prelude)).
+
+% A shared head variable links a rigid box(A) position to a concrete
+% box(int) one. Value equality proves nothing about a shared
+% constructor's parameters — `empty` inhabits box(tau) for every tau
+% — so the GuardEqual derives nothing about A: it stays rigid, and
+% the body's out(E) is rejected. (This is the minimised soundness
+% exploit that used to type-check clean and bind a bool into the
+% int-declared out/1; spec §What evidence does.)
+:- chr_type box(A) ---> empty ; full(A).
+:- chr_constraint poly(box(A), A).
+:- chr_constraint mono(box(int)).
+:- chr_constraint out(int), go(int), gather(any).
+
+r @ poly(B, E), mono(B) <=> out(E).
+
+seed @ go(_) <=> poly(empty, true), mono(empty).
+gth @ gather(R), out(V) <=> R = V.

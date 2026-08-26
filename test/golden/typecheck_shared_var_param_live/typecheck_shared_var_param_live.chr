@@ -1,0 +1,16 @@
+:- module(svpl, [go/1]).
+:- use_module(library(prelude)).
+
+% X links a box(int) position to a box(bool) one. The mismatch is
+% confined to the parameters of the shared constructor, and the
+% parameter-erasing value `empty` satisfies the equality — so the
+% rule is NOT dead code (no YCHR-20104; the unit test pins the
+% warning's absence) and genuinely fires at runtime.
+:- chr_type box(A) ---> empty ; full(A).
+:- chr_constraint bi(box(int)), bb(box(bool)).
+:- chr_constraint fired(int), go(any), gather(any).
+
+r @ bi(X), bb(X) <=> fired(1).
+
+seed @ go(R) <=> bi(empty), bb(empty), gather(R).
+gth @ gather(R), fired(V) <=> R = V.

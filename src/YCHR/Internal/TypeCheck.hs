@@ -45,9 +45,13 @@
 -- predicate, @check_guard_match@ for an HNF constructor match,
 -- @eq_unify@ for an HNF equality. The fact may pin a rigid type
 -- variable — the one sanctioned exception to the meet table's rigid
--- rows — and is inert at a flexible or @any@ slot, so evidence can
--- only ever accept more programs. Where it contradicts a known type
--- the guard can never succeed, and the unit draws the
+-- rows — though never beyond what the runtime fact determines: an
+-- equality pins a skolem to a parametric type only at fresh rigid
+-- parameters, and derives nothing about the parameter positions of
+-- a shared constructor (spec §What evidence does). Evidence is
+-- inert at a flexible or @any@ slot, so it can only ever accept
+-- more programs. Where it contradicts a known type at the outermost
+-- constructor the guard can never succeed, and the unit draws the
 -- inaccessible-branch warning rather than an error. Because
 -- evidence is scoped to the positions that run after the guard,
 -- 'checkGuards' is called between the head\/parameter checks and
@@ -406,7 +410,10 @@ recordHsDiags unit diags = do
 -- distinct identities; the only way two rigid tvars unify is if
 -- they share the same identity (typically via the same entry in a
 -- @tvars@ map shared between the declaration's parameter encoding
--- and its ambient bound signatures).
+-- and its ambient bound signatures). This counter hands out ids
+-- 0, 1, 2, ...; the CHR-side @rigid_supply@ gensym (the fresh
+-- parameters of a parametric evidence pin) counts down from -1, so
+-- the two ranges are disjoint by construction.
 --
 -- The first field is the skolem's /pin slot/: a fresh unbound
 -- variable that only guard-derived evidence may bind (@ev_unify@ /
@@ -528,6 +535,11 @@ runCheckSession env prog body =
           ( do
               chrOp (tellConstraint (Qualified "$typechecker" "errors") [valueList []])
               chrOp (tellConstraint (Qualified "$typechecker" "warnings") [valueList []])
+              -- Seed for the CHR-side fresh-rigid gensym (the
+              -- parametric evidence pins). It counts down from -1 so
+              -- its ids can never collide with this driver's
+              -- 0-and-up 'freshRigidTypeVar' counter.
+              chrOp (tellConstraint (Qualified "$typechecker" "rigid_supply") [VInt (-1)])
               tellConstraintSigs prog
               tellFunctionSigs prog
               tellConSigs prog
@@ -1456,21 +1468,28 @@ checkGuard gctxs matches (D.GuardEqual e1 e2) = do
   tv2 <- typeOfExprStructural cctx e2
   ctx <- freshCtxHandle cctx
   -- An evidence form (spec §Evidence forms): ask-equality succeeds
-  -- only on structurally identical terms, so the two positions have
-  -- the same type whenever the guard passes. HNF emits this for a
-  -- variable repeated across head (or parameter) positions and for a
-  -- non-variable head argument, which is what lets the shared
-  -- variable of a multi-head rule over a polymorphic constraint
-  -- merge the two occurrences' skolems, and a literal pattern pin
-  -- its equation's. @eq_unify@ carries the second reading too: the
-  -- two HNF variables of a repeated source variable are one
-  -- variable, so a still-flexible slot binds (§Type states) rather
-  -- than staying inert as evidence proper would. The relation is
-  -- symmetric, so the source order is kept.
+  -- only on structurally identical terms, so the two positions'
+  -- types agree on their outermost type constructor whenever the
+  -- guard passes — value equality determines the constructor
+  -- nominally, but not its parameters ('[]' inhabits every
+  -- @list(tau)@). HNF emits this for a variable repeated across
+  -- head (or parameter) positions and for a non-variable head
+  -- argument, which is what lets the shared variable of a
+  -- multi-head rule over a polymorphic constraint merge the two
+  -- occurrences' skolems, and a literal pattern pin its equation's
+  -- (a parametric partner pins only the constructor, at fresh rigid
+  -- parameters — spec §What evidence does). @eq_unify@ carries the
+  -- second reading too: the two HNF variables of a repeated source
+  -- variable are one variable, so a still-flexible slot binds
+  -- (§Type states) rather than staying inert as evidence proper
+  -- would. The relation is symmetric, so the source order is kept.
+  -- The two operands are whole types, so the depth starts at
+  -- @ev_top@; the CHR rules switch it to @ev_param@ when they
+  -- descend into a shared constructor.
   chrOp $
     tellConstraint
       (Qualified "$typechecker" "eq_unify")
-      [tv1, tv2, ctxHandleValue ctx]
+      [tv1, tv2, VAtom (tcAtom "ev_top"), ctxHandleValue ctx]
   pure matches
 checkGuard gctxs matches (D.GuardMatch operand conName arity) = do
   let cctx = gctxs.patternCtx
@@ -1556,17 +1575,20 @@ checkGuard gctxs matches (D.GuardExpr expr) = do
       tellEvUnify ctx fact slot
   pure matches
 
--- | Emit an @ev_unify(fact, slot, ctx)@ constraint: the evidence meet,
--- which may pin a rigid type variable and reports a contradiction as
--- the inaccessible-branch warning rather than an error. The fact the
--- guard establishes goes first and the type the position already has
--- second — the order the warning message reads them in.
+-- | Emit an @ev_unify(fact, slot, ev_top, ctx)@ constraint: the
+-- evidence meet, which may pin a rigid type variable and reports a
+-- contradiction as the inaccessible-branch warning rather than an
+-- error. The fact the guard establishes goes first and the type the
+-- position already has second — the order the warning message reads
+-- them in. The facts emitted here relate two whole types, so the
+-- depth is always @ev_top@ (parameter positions only arise when the
+-- CHR rules themselves descend into a shared constructor).
 tellEvUnify :: CtxHandle -> Value -> Value -> TC ()
 tellEvUnify ctx t1 t2 =
   chrOp $
     tellConstraint
       (Qualified "$typechecker" "ev_unify")
-      [t1, t2, ctxHandleValue ctx]
+      [t1, t2, VAtom (tcAtom "ev_top"), ctxHandleValue ctx]
 
 -- | The typing fact a type-predicate guard contributes, as
 -- @(operand variable, fact type)@.

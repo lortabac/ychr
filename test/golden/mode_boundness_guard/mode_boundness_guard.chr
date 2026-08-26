@@ -1,0 +1,27 @@
+:- module(mode_boundness_guard, [guarded/1, unguarded/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint guarded(int), unguarded(int).
+:- chr_constraint cg(int), cu(int).
+:- chr_constraint later_g(int), later_u(int).
+:- chr_constraint out(int).
+:- chr_constraint gather(int).
+
+% Both halves store a constraint whose argument is still an unbound
+% logical variable, let another rule bind it, and then compare it. They
+% differ only in whether the comparing rule guards on boundness first.
+
+% Guarded. `integer(N)` fails on a free variable, so fire_g does not
+% fire when cg is first activated; binding E reactivates cg, and the
+% rule fires on the later activation with a value in hand.
+setup_g @ guarded(R) <=> cg(E), later_g(E), gather(R).
+bind_g @ later_g(E) <=> E = 1.
+fire_g @ cg(N) <=> integer(N), N > 0 | out(N).
+
+% Unguarded. The same rules without the boundness guard: `N > 0` is
+% reached while N is still free and raises YCHR-60001.
+setup_u @ unguarded(R) <=> cu(E), later_u(E), gather(R).
+bind_u @ later_u(E) <=> E = 1.
+fire_u @ cu(N) <=> N > 0 | out(N).
+
+collect @ gather(R), out(V) <=> R = V.

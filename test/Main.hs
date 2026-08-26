@@ -25,6 +25,7 @@ import YCHR.Runtime.ReactivationTest qualified
 import YCHR.Runtime.StoreTest qualified
 import YCHR.Runtime.VarTest qualified
 import YCHR.TypeCheckTest qualified
+import YCHR.TypeSoundnessTest qualified
 import YCHR.VM.SExprTest qualified
 
 -- | Per-test wall-clock cap. The whole suite runs in seconds, so this
@@ -59,6 +60,7 @@ main = do
           YCHR.RoundtripTest.tests,
           YCHR.RenameTest.tests,
           YCHR.TypeCheckTest.tests,
+          YCHR.TypeSoundnessTest.tests,
           YCHR.Runtime.VarTest.tests,
           YCHR.Runtime.StoreTest.tests,
           YCHR.Runtime.HistoryTest.tests,
