@@ -153,19 +153,35 @@ instrumentRule code0 r =
     headSite =
       ObsSite
         { osWhere = r.ruleName <> " head",
-          osCheck = ExpectPos (map (posCheck r.ruleSkHead . snd) headVarsList)
+          osCheck =
+            ExpectPos
+              [ posCheckB (varBoundnessAtHead r n) r.ruleSkHead t
+              | (n, t) <- headVarsList
+              ]
         }
     firedSite =
       ObsSite {osWhere = r.ruleName <> " fired", osCheck = ExpectPos []}
-    -- The variables an evidence guard turned from rigid into concrete.
-    -- Only those: re-observing the rest would double the observation
-    -- volume to say nothing new.
+    -- The variables the leading guards changed something about: an
+    -- evidence guard turned rigid into concrete, or a boundness guard
+    -- cleared a possibly-unbound one. Only those — re-observing the
+    -- rest would double the observation volume to say nothing new.
+    --
+    -- This is where both guard kinds are held to their word. An
+    -- evidence guard claims a type, a boundness guard claims a value
+    -- is there, and the checker lets the body assume both because the
+    -- guards' success entails them; this asserts that at run time it
+    -- really does.
     pinnedVars =
       [ (n, t)
       | (n, t) <- ruleVars r,
-        posCheck r.ruleSkHead t == MustBeBound,
-        posCheck r.ruleSk t /= MustBeBound
+        pinnedType n t || clearedBoundness n
       ]
+    pinnedType _ t =
+      isRigidCheck (posCheck r.ruleSkHead t)
+        && not (isRigidCheck (posCheck r.ruleSk t))
+    clearedBoundness n =
+      varBoundnessAtHead r n == MayBeUnbound
+        && varBoundness r n == Ground
     (evObs, evSites)
       | null r.ruleEvidence || null pinnedVars = ([], [])
       | otherwise =
@@ -173,7 +189,11 @@ instrumentRule code0 r =
             [ ( evCode,
                 ObsSite
                   { osWhere = r.ruleName <> " evidence",
-                    osCheck = ExpectPos (map (posCheck r.ruleSk . snd) pinnedVars)
+                    osCheck =
+                      ExpectPos
+                        [ posCheckB (varBoundness r n) r.ruleSk t
+                        | (n, t) <- pinnedVars
+                        ]
                   }
               )
             ]
@@ -189,7 +209,7 @@ instrumentRule code0 r =
             [ ( c,
                 ObsSite
                   { osWhere = r.ruleName <> " binds " <> w,
-                    osCheck = ExpectPos [posCheck r.ruleSk t]
+                    osCheck = ExpectPos [posCheckB (varBoundness r w) r.ruleSk t]
                   }
               )
             ]
@@ -200,6 +220,11 @@ instrumentRule code0 r =
       BUnify w t _ -> Just (w, t)
       _ -> Nothing
 
+isRigidCheck :: PosCheck -> Bool
+isRigidCheck c = case c of
+  MustBeBound _ -> True
+  MustInhabit _ _ -> False
+
 -- | What the observer can be told to check at one position.
 --
 -- A position whose type still mentions a rigid variable has no static
@@ -207,7 +232,13 @@ instrumentRule code0 r =
 -- was checked for every instance. All that can be asserted there is
 -- that a value arrived at all.
 posCheck :: SkolemEnv -> STy -> PosCheck
-posCheck sk t = maybe MustBeBound MustInhabit (groundOf sk t)
+posCheck sk t = posCheckB Ground sk t
+
+-- | As 'posCheck', at a position whose contract allows an unbound
+-- value.
+posCheckB :: Boundness -> SkolemEnv -> STy -> PosCheck
+posCheckB bnd sk t =
+  maybe (MustBeBound bnd) (\g -> MustInhabit g bnd) (groundOf sk t)
 
 -- | Ceiling on the number of constraint instances a generated program
 -- may derive.

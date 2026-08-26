@@ -300,19 +300,38 @@ record table code snaps lg
       -- A site that must never run. Reaching it is the violation, so
       -- the verdict does not depend on the values — they are recorded
       -- anyway, because which ones got there is the whole diagnosis.
-      MustNotBeReached why -> [Outside why]
+      MustNotBeReached why -> [(Ground, Outside why)]
+    -- Paired with the position's contract, so the tolerance decision
+    -- can be made without losing the fact that a free value was seen.
     one c v = case c of
-      MustInhabit g -> conformsSnap g v
-      MustBeBound -> case v of
-        SnUnbound _ -> NotYetBound "a rigid position"
-        SnWild -> NotYetBound "a rigid position"
-        _ -> Inhabits
-    apply site acc v = case v of
+      MustInhabit g bnd -> (bnd, conformsSnap g v)
+      MustBeBound bnd ->
+        ( bnd,
+          case v of
+            SnUnbound _ -> NotYetBound "a rigid position"
+            SnWild -> NotYetBound "a rigid position"
+            _ -> Inhabits
+        )
+    apply site acc (bnd, v) = case v of
       Inhabits -> acc
+      -- The sharpened claim is about values that are /bound/. A term
+      -- holding no value yet is a statement about mode, which the type
+      -- system does not track, so it is a violation only where the
+      -- position's declared boundness said it would not happen.
+      --
+      -- Either way it is counted: 'logUnbound' is how the open
+      -- property knows a stored-unbound value actually reached a rule,
+      -- which is the difference between exercising the
+      -- store-interleaving regime and merely declaring it.
       NotYetBound why ->
-        acc
-          { logUnbound = IntMap.insertWith (+) code 1 acc.logUnbound,
-            logBad = Bad code site.osWhere ("holds no value yet: " <> why) snaps : acc.logBad
-          }
+        let acc' = acc {logUnbound = IntMap.insertWith (+) code 1 acc.logUnbound}
+         in case bnd of
+              MayBeUnbound -> acc'
+              Ground ->
+                acc'
+                  { logBad =
+                      Bad code site.osWhere ("holds no value yet: " <> why) snaps
+                        : acc.logBad
+                  }
       Outside why ->
         acc {logBad = Bad code site.osWhere why snaps : acc.logBad}

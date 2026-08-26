@@ -51,17 +51,23 @@
 -- second observation after the evidence guards asserts what they add.
 -- See 'YCHR.TypeSoundness.Instrument.instrument'.
 --
+-- Two regimes are generated, as two properties. In the /closed/ one
+-- every argument position is ground, nothing unbound is ever stored,
+-- and the oracle is at its strictest. In the /open/ one some positions
+-- are willing to hold a term that is not bound yet, so a constraint
+-- can sit in the store waiting for a later unit to bind it — the
+-- store-interleaving regime §No mode checking describes. There the
+-- claim under test is the sharpened one: __every value that is bound
+-- is bound within its static type__. A term still holding no value is
+-- a statement about mode, so it is a violation only at a position
+-- whose declared boundness said it would be ground.
+--
 -- What this version deliberately leaves out, so the coverage is not
 -- overread:
 --
 --   * /Bounded polymorphism/. No @requiring@ clause is generated, so
 --     nothing exercises ambient signatures or bound discharge, and an
 --     overloaded operation is never reached at a rigid type.
---   * /Mode/. Goals are ground and nothing unbound is ever stored, so
---     the axis §No mode checking describes — a free variable reaching
---     an operation that demands a value — is out of scope by
---     construction. The strict oracle depends on that; see
---     @Note [Why benign failures are impossible]@.
 --   * Floats, strings, lambdas and @'$call'@; rules with three or more
 --     heads; simpagations other than @1 \\ 1@; recursive generated
 --     algebraic types (@list(int)@ is the one recursive shape);
@@ -90,6 +96,7 @@ import Hedgehog
     property,
     withTests,
   )
+import Hedgehog.Internal.Property (CoverPercentage, LabelName)
 import System.Timeout (timeout)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Hedgehog (testProperty)
@@ -98,7 +105,7 @@ import YCHR.Internal.Display (Display (..))
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Internal.Types (Term (..))
 import YCHR.Run (Error (..), compileModules, runProgramWithQuery)
-import YCHR.TypeSoundness.Gen (genProgram)
+import YCHR.TypeSoundness.Gen (Mode (..), genProgramWith)
 import YCHR.TypeSoundness.Instrument (prepare)
 import YCHR.TypeSoundness.Observe
 import YCHR.TypeSoundness.Oracle (conforms, describeBad, describeException)
@@ -117,13 +124,37 @@ import YCHR.TypeSoundness.Types
 runBudgetMicros :: Int
 runBudgetMicros = 5_000_000
 
+-- | The closed regime: every argument position is 'Ground', nothing
+-- unbound is ever stored, and the oracle is at its strictest.
 prop_soundness :: Property
-prop_soundness = withTests 300 $ property $ do
-  raw <- forAllWith (T.unpack . showProgram) genProgram
+prop_soundness = withTests 300 (property (soundnessProperty Closed))
+
+-- | The open regime: some positions are willing to hold a term that is
+-- not bound yet, so a constraint can sit in the store waiting for a
+-- later unit to bind it.
+--
+-- The claim under test is the sharpened one
+-- (@docs\/reference\/type-system.md@ §Soundness): __every value that
+-- is bound is bound within its static type__. A term still holding no
+-- value is a statement about /mode/, which the type system
+-- deliberately does not track (§No mode checking), so it is a
+-- violation only at a position whose contract said it would be ground.
+--
+-- The goal's own bindings carry the sharpest form of that check: a
+-- query variable passed unbound into a declared position comes back
+-- with whatever the run eventually bound it to, and that value has to
+-- inhabit the type the declaration gave the position — however many
+-- units and reactivations it passed through in between.
+prop_soundness_open :: Property
+prop_soundness_open = withTests 300 (property (soundnessProperty Open))
+
+soundnessProperty :: Mode -> PropertyT IO ()
+soundnessProperty mode = do
+  raw <- forAllWith (T.unpack . showProgram) (genProgramWith mode)
   let prog = prepare raw
       src = renderModule prog
       query = renderQuery prog
-  coverShape prog
+  coverShape mode prog
   cp <- case compileModules False [("gen.chr", src)] of
     Left err -> annotate ("compile error: " ++ displayMsg (err :: Error)) >> failure
     Right (cp, ws) -> do
@@ -150,13 +181,22 @@ prop_soundness = withTests 300 $ property $ do
   -- The log is read before anything else is decided, so a violation is
   -- never lost to an unrelated failure or to the budget running out.
   lg <- evalIO (readIORef ref)
-  coverRuntime prog lg
+  coverRuntime mode prog lg
   mapM_ (annotate . describeBad) (reverse lg.logBad)
   unless (null lg.logBad) failure
+  -- The interleaving itself: a value the goal put into the store
+  -- without one, that some later unit bound. Everything else in the
+  -- open regime is setup for this.
+  let laterBound = case outcome of
+        Just (Right bs) -> any (wasBound bs . fst) prog.goal.unbounds
+        _ -> False
+  coverOpen mode 15 "a stored unbound value was later bound" laterBound
   case outcome of
     Nothing -> annotate "timed out" >> discard
     Just (Left exc) -> annotate (describeException exc) >> failure
-    Just (Right bindings) -> mapM_ (checkProbe bindings) prog.goal.probes
+    Just (Right bindings) -> do
+      mapM_ (checkProbe bindings) prog.goal.probes
+      mapM_ (checkUnbound bindings) prog.goal.unbounds
   where
     showProgram p =
       let q = prepare p
@@ -199,12 +239,15 @@ prop_soundness = withTests 300 $ property $ do
 -- means it also sees the instrumentation, so the guard label filters
 -- the observation conjunct back out: counting it would make the label
 -- unconditionally true and silently vacuous.
-coverShape :: Program -> PropertyT IO ()
-coverShape prog = do
+coverShape :: Mode -> Program -> PropertyT IO ()
+coverShape mode prog = do
   cover 65 "a rule joins two head constraints" (any ((> 1) . length . ruleHeads) rs)
   cover 30 "a rule body tells a constraint" (any (any isTell . (.body)) rs)
   cover 62 "a rule body binds a variable" (any (any isBind . (.body)) rs)
-  cover 62 "a rule has a guard" (any (any ownGuard . (.guards)) rs)
+  -- Lower in the open regime: a boundness guard lives in the leading
+  -- guard list, not in the rule's own, so a rule whose only condition
+  -- is @nonvar(X)@ does not count here.
+  cover (byMode mode 62 45) "a rule has a guard" (any (any ownGuard . (.guards)) rs)
   cover 45 "the goal has a probe" (not (null prog.goal.probes))
   cover 46 "the program declares an algebraic type" (not (null prog.adts))
   -- Polymorphism. Without these the zero-rejection soak gate would be
@@ -239,7 +282,7 @@ coverShape prog = do
   cover 70 "the program declares a polymorphic constraint" anyPolySig
   cover 15 "the program declares a parametric algebraic type" anyParamTy
   cover 55 "a head occurrence allocates rigid variables" anyRigidHead
-  cover 2 "an alias merged two rigid variables" anyMerge
+  cover (byMode mode 2 1) "an alias merged two rigid variables" anyMerge
   cover 1 "a body tell instantiates a parameter at a rigid type" anyTellAtRigid
   -- One label per evidence form, because they are reached by quite
   -- different routes and a single "something was pinned" label would
@@ -270,6 +313,12 @@ coverShape prog = do
   cover 6 "a variable is bound at an ambient-covered rigid type" anyAmbientVar
   cover 15 "an overloaded call is made at all" anyClassCall
   cover 3 "an overloaded call is made at a rigid type" anyAmbientCall
+  -- The open regime. Without these the open property could be green
+  -- and say nothing: a run in which nothing was ever stored unbound
+  -- exercises exactly the closed fragment over again.
+  coverOpen mode 40 "a position may hold an unbound value" anyOpenPos
+  coverOpen mode 25 "the goal stored an unbound value" (not (null prog.goal.unbounds))
+  coverOpen mode 20 "a boundness guard cleared a variable" anyModeGuard
   cover 8 "a literal pinned a rigid variable" (pinnedBy PinLit)
   cover 15 "a pattern match pinned a rigid variable" (pinnedBy PinMatch)
   cover 10 "a shared variable pinned a rigid variable" (pinnedBy PinMergeConcrete)
@@ -294,6 +343,12 @@ coverShape prog = do
     pinnedBy src =
       any ((src `elem`) . Map.elems . (.skPinned) . (.ruleSk)) rs
     anyBounded = any (not . null . (.sigBounds)) sigList
+    anyOpenPos =
+      any (any ((== MayBeUnbound) . (.argBound)) . NE.toList . (.sigArgs)) sigList
+    anyModeGuard = any (any isModeGuard . (.ruleEvidence)) rs
+    isModeGuard e = case e of
+      EModePred _ _ -> True
+      _ -> False
     anyAmbientHead =
       any (not . null . (.headSig.sigBounds)) occs
     -- A class call whose first argument is /still/ rigid under the
@@ -408,11 +463,16 @@ coverShape prog = do
 -- rate). The bind row sits near 50%, where the binomial spread at
 -- @withTests 100@ is widest, so its floor is deliberately loose for
 -- the same reason the body-tell floor is.
-coverRuntime :: Program -> ObsLog -> PropertyT IO ()
-coverRuntime prog lg = do
-  cover 85 "some rule was reached" (any hit reachedCodes)
+coverRuntime :: Mode -> Program -> ObsLog -> PropertyT IO ()
+coverRuntime mode prog lg = do
+  -- Lower in the open regime: a constraint stored holding nothing
+  -- matches fewer structured patterns, and a rule gated on @nonvar@
+  -- is not reached until something binds the value.
+  cover (byMode mode 85 65) "some rule was reached" (any hit reachedCodes)
   cover 55 "some rule fired" (any hit firedCodes)
-  cover 32 "a rule joining two heads fired" (any hit joinFiredCodes)
+  -- Lower in the open regime: a constraint holding nothing matches
+  -- fewer patterns, so a join is satisfied less often.
+  cover (byMode mode 32 18) "a rule joining two heads fired" (any hit joinFiredCodes)
   cover 30 "a rule body binding a variable ran it" (any hit bindCodes)
   -- The complement of @Note [Firing rates]@'s "vacuous" row, and so
   -- defined the same way: a program is vacuous when it neither fires a
@@ -425,7 +485,14 @@ coverRuntime prog lg = do
   -- the check that guard-derived evidence holds at run time would be
   -- theatre.
   cover 4 "an evidence pin was checked at runtime" (any hit evidenceCodes)
-  cover 99 "the observation log did not overflow" (not lg.logOverflow)
+  -- The one that says the store-interleaving regime was actually
+  -- entered, rather than merely declared: a rule was reached with a
+  -- position holding no value yet.
+  coverOpen mode 10 "an unbound value reached a rule head" (not (IntMap.null lg.logUnbound))
+  -- Lower in the open regime: an unbound value fires fewer rules, so
+  -- more candidate matches are examined and rejected, and every one of
+  -- them is observed.
+  cover (byMode mode 99 95) "the observation log did not overflow" (not lg.logOverflow)
   where
     hit c = IntMap.findWithDefault 0 c lg.logHits > 0
     sites = IntMap.toList prog.obs
@@ -470,11 +537,64 @@ checkProbe bindings p = case Map.lookup p.probeVar bindings of
           )
         failure
 
+-- | Pick a floor per regime: the closed one first.
+byMode :: Mode -> a -> a -> a
+byMode m closed open = case m of
+  Closed -> closed
+  Open -> open
+
+-- | A label that only means anything in the open regime. In the closed
+-- one the event is impossible by construction, so the floor is zero
+-- rather than the label being absent — keeping both properties on the
+-- same list makes the difference between them visible.
+coverOpen ::
+  Mode ->
+  CoverPercentage ->
+  LabelName ->
+  Bool ->
+  PropertyT IO ()
+coverOpen m pct name b = cover (byMode m 0 pct) name b
+
+-- | A query variable that went unbound into a declared position.
+--
+-- Still free at the end is fine — nothing was obliged to bind it. What
+-- is not fine is a value outside the type of the position it was
+-- stored at, whatever route it took to get there.
+checkUnbound :: Map Text Term -> (Text, GTy) -> PropertyT IO ()
+checkUnbound bindings (n, g) = case Map.lookup n bindings of
+  Nothing -> pure ()
+  Just t
+    | isStillFree t -> pure ()
+    | conforms g t -> pure ()
+    | otherwise -> do
+        annotate
+          ( "query variable "
+              ++ T.unpack n
+              ++ ", stored at a position declared "
+              ++ T.unpack (renderGTy g)
+              ++ ", was bound to a value outside that type: "
+              ++ show t
+          )
+        failure
+
+-- | Did this query variable end the run holding a value?
+wasBound :: Map Text Term -> Text -> Bool
+wasBound bindings n = maybe False (not . isStillFree) (Map.lookup n bindings)
+
+isStillFree :: Term -> Bool
+isStillFree t = case t of
+  Wildcard -> True
+  VarTerm _ -> True
+  _ -> False
+
 tests :: TestTree
 tests =
   testGroup
     "TypeSoundness"
     [ testProperty
         "fully-typed programs run without type errors"
-        prop_soundness
+        prop_soundness,
+      testProperty
+        "stored unbound values stay within their static type"
+        prop_soundness_open
     ]

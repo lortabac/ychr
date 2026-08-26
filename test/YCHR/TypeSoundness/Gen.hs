@@ -13,7 +13,7 @@
 -- residual solving here — only the structural unifier of
 -- @Note [Skolems are one structural store]@, which merges skolems when
 -- HNF would emit a @GuardEqual@.
-module YCHR.TypeSoundness.Gen (genProgram) where
+module YCHR.TypeSoundness.Gen (Mode (..), genProgram, genProgramWith) where
 
 import Control.Monad (foldM, replicateM)
 import Data.List qualified as List
@@ -22,6 +22,8 @@ import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Hedgehog (Gen)
@@ -116,16 +118,50 @@ data Ctx = Ctx
     ctxAmbients :: [(Text, STy)],
     -- | Which rigid variables carry a bound, and from which class.
     -- Every pin is gated on this; see 'pinOk'.
-    ctxBounded :: [(Skolem, Text)]
+    ctxBounded :: [(Skolem, Text)],
+    -- | Variables that may hold no value yet, because they were bound
+    -- by head matching at a 'MayBeUnbound' position.
+    --
+    -- They may appear only where a free variable is harmless: a
+    -- structural @=@ operand, an ask-equality, a boundness or type
+    -- predicate, or a bare argument at another 'MayBeUnbound'
+    -- position. Everything else evaluates, and evaluation of a free
+    -- variable is a runtime error the oracle would have to tolerate —
+    -- see @Note [Which failures are benign now]@.
+    ctxTainted :: Set Text
   }
+
+-- | Which regime a program is generated for.
+data Mode
+  = -- | Every argument position is 'Ground': nothing unbound is ever
+    -- stored, and the oracle can be at its strictest.
+    Closed
+  | -- | Some positions are 'MayBeUnbound', so a constraint may be
+    -- stored holding a term that only a later unit binds. This is the
+    -- store-interleaving regime §No mode checking describes.
+    Open
+  deriving (Eq, Show)
 
 -- | The scope, with every type fully resolved, so comparisons do not
 -- have to chase bindings.
 scopeTys :: Ctx -> [(Text, STy)]
 scopeTys ctx = [(n, stripSTy ctx.ctxSk t) | (n, t) <- Map.toList ctx.ctxScope]
 
+-- | Variables usable in an /evaluated/ position: everything in scope
+-- at that type except the possibly-unbound ones.
+--
+-- Evaluating a free variable is a runtime error, and one the oracle
+-- must not have to tolerate — so the discipline is structural rather
+-- than a classification after the fact.
 varsAt :: Ctx -> STy -> [Expr]
-varsAt ctx ty = [EVar n t | (n, t) <- scopeTys ctx, t == stripSTy ctx.ctxSk ty]
+varsAt ctx ty =
+  [e | e@(EVar n _) <- varsAtAny ctx ty, not (n `Set.member` ctx.ctxTainted)]
+
+-- | Variables usable where a free variable is harmless: a structural
+-- @=@ operand, an ask-equality, a boundness or type predicate.
+varsAtAny :: Ctx -> STy -> [Expr]
+varsAtAny ctx ty =
+  [EVar n t | (n, t) <- scopeTys ctx, t == stripSTy ctx.ctxSk ty]
 
 -- | Can a value of this type be built here at all?
 --
@@ -150,9 +186,17 @@ inhabited ctx ty = case stripSTy ctx.ctxSk ty of
 -- Restricting the rigid choices to types with an in-scope variable is
 -- what makes every argument type built from them inhabited, by
 -- induction over 'inhabited'.
+-- | Restricted to variables usable in an evaluated position, because
+-- that is what 'inhabited' will look for: a rigid type whose only
+-- carrier may hold no value yet has no inhabitant a use site could
+-- build, and offering it as an instantiation target asks
+-- 'genExprAt' for something it cannot make.
 rigidTargets :: Ctx -> [STy]
-rigidTargets ctx = List.nub [t | (_, t) <- scopeTys ctx, isSk t]
+rigidTargets ctx =
+  List.nub [t | EVar _ t <- allUntainted, isSk t]
   where
+    allUntainted =
+      concat [varsAt ctx t | (_, t) <- scopeTys ctx]
     isSk t = case t of
       SSk _ -> True
       _ -> False
@@ -267,13 +311,18 @@ gToD (GTy c as) = DCon c (map gToD as)
 -- shorten — and all names come from positional indices, so nothing
 -- needs 'Gen.filter'.
 genProgram :: Gen Program
-genProgram = do
+genProgram = genProgramWith Closed
+
+genProgramWith :: Mode -> Gen Program
+genProgramWith mode = do
   defs <- genAdts
   let allAdts = fixedAdts ++ defs
       univ = groundUniverse allAdts
   cls <- genClasses univ
-  sigList <- genSigs univ allAdts cls
-  ruleList <- genRules univ allAdts cls sigList
+  sigList <- genSigs mode univ allAdts cls
+  generated <- genRules univ allAdts cls sigList
+  planted <- genPlantedBinder mode sigList
+  let ruleList = generated ++ planted
   g <- genGoal univ allAdts cls sigList ruleList
   pure
     Program
@@ -481,11 +530,11 @@ nonParametricCon c = case c of
 -- | 2–4 constraint declarations, arity 1–3. The stratum is the
 -- declaration's position, which is what 'genRule' uses to keep body
 -- tells strictly descending.
-genSigs :: [GTy] -> [AdtDef] -> [ClassFn] -> Gen (NonEmpty Sig)
-genSigs univ adts cls = do
+genSigs :: Mode -> [GTy] -> [AdtDef] -> [ClassFn] -> Gen (NonEmpty Sig)
+genSigs mode univ adts cls = do
   extra <- Gen.int (Range.constant 1 3)
-  s0 <- genSig univ adts cls 0
-  rest <- traverse (genSig univ adts cls) [1 .. extra]
+  s0 <- genSig mode univ adts cls 0
+  rest <- traverse (genSig mode univ adts cls) [1 .. extra]
   pure (s0 :| rest)
 
 -- | One declaration, monomorphic or with 1–2 parameters.
@@ -494,8 +543,8 @@ genSigs univ adts cls = do
 -- parameters are: they would allocate a rigid variable no argument
 -- position mentions, so nothing could observe which instance the store
 -- chose.
-genSig :: [GTy] -> [AdtDef] -> [ClassFn] -> Int -> Gen Sig
-genSig univ adts cls ix = do
+genSig :: Mode -> [GTy] -> [AdtDef] -> [ClassFn] -> Int -> Gen Sig
+genSig mode univ adts cls ix = do
   nTvs <- Gen.frequency [(3, pure 0), (3, pure 1), (2, pure 2)]
   let tvs = take nTvs [TvName "A", TvName "B"]
   a0 <- genArgDTy univ adts tvs
@@ -524,16 +573,26 @@ genSig univ adts cls ix = do
                 pure [BoundSig {bsClass = c.cfName, bsTv = v}]
             )
           ]
+  -- In the open regime some positions are willing to hold a term that
+  -- is not bound yet. Something has to be, or nothing can ever be
+  -- stored unbound and the store-interleaving shapes are unreachable.
+  bnds <-
+    traverse
+      (const (if mode == Open then genBoundness else pure Ground))
+      (a0 : more)
   pure
     Sig
       { sigName = "c" <> tshow ix,
         sigTvs = used,
-        sigArgs = mkArg a0 :| map mkArg more,
+        sigArgs = case zipWith mkArg (a0 : more) bnds of
+          (x : xs) -> x :| xs
+          [] -> mkArg a0 Ground :| [],
         sigBounds = bounds,
         stratum = ix
       }
   where
-    mkArg t = ArgSpec {argTy = t, argErased = False}
+    genBoundness = Gen.frequency [(2, pure Ground), (1, pure MayBeUnbound)]
+    mkArg t b = ArgSpec {argTy = t, argErased = False, argBound = b}
 
 genArgDTy :: [GTy] -> [AdtDef] -> [TvName] -> Gen DTy
 genArgDTy univ adts tvs =
@@ -609,6 +668,23 @@ genRule univ adts cls sigList ix = do
           [ boundedSkolemsOf h.headSig h.headSkolems
           | h <- NE.toList heads_
           ]
+      -- A head variable is tainted when the position it was matched at
+      -- is willing to hold an unbound term — including one nested
+      -- inside such a position, since matching a structured pattern
+      -- against a partly instantiated value binds free variables just
+      -- as readily.
+      tainted =
+        Set.fromList
+          [ n
+          | h <- NE.toList heads_,
+            (spec, ty, p) <-
+              zip3
+                (NE.toList h.headSig.sigArgs)
+                (NE.toList (headArgTys h))
+                (NE.toList h.pats),
+            spec.argBound == MayBeUnbound,
+            (n, _) <- patVars skHead ty p
+          ]
       ctxHead =
         Ctx
           { ctxSk = skHead,
@@ -617,23 +693,30 @@ genRule univ adts cls sigList ix = do
             ctxAdts = adts,
             ctxClasses = cls,
             ctxAmbients = ambients,
-            ctxBounded = bounded
+            ctxBounded = bounded,
+            ctxTainted = tainted
           }
-  -- Evidence first: what it pins is visible to everything after it,
-  -- and to nothing before it.
-  (ev, ctx0) <- genEvidenceGuards ctxHead
+  -- Boundness first, then evidence: both establish something used to
+  -- their right and nothing to their left, and a variable has to be
+  -- known bound before a type predicate on it can succeed.
+  (modeGs, ctxM) <- genModeGuards ctxHead
+  (ev, ctx0) <- genEvidenceGuards ctxM
   gs <- Gen.list (Range.constant 0 2) (genGuard ctx0)
   nBinds <- Gen.int (Range.constant 0 2)
   (ctx1, binds) <- foldM genBind (ctx0, []) [0 .. nBinds - 1]
+  (gateGs, gateItems, ctx2) <- genGatedBind ctx1
   tellItems <-
-    genTells ctx1 sigList (minimum (fmap (.headSig.stratum) heads_))
+    genTells ctx2 sigList (minimum (fmap (.headSig.stratum) heads_))
   pure
     Rule
       { ruleName = "r" <> tshow ix,
         ruleHead = rh,
-        ruleEvidence = ev,
-        guards = gs,
-        body = binds ++ tellItems,
+        ruleEvidence = modeGs ++ ev,
+        guards = gs ++ gateGs,
+        body = binds ++ gateItems ++ tellItems,
+        ruleTaintedHead = tainted,
+        -- What is *still* possibly-unbound after the mode guards ran.
+        ruleTainted = taintedAll ctx2 ctx2.ctxTainted binds,
         ruleSkHead = skHead,
         ruleSk = ctx1.ctxSk
       }
@@ -649,6 +732,26 @@ genRule univ adts cls sigList ix = do
         >>= \(hsList, sk) -> case hsList of
           (h : rest) -> pure (h :| rest, sk)
           [] -> error "genHeads: no heads"
+
+-- | Every variable the rule may see holding no value yet: the head
+-- variables matched at a 'MayBeUnbound' position, plus any body
+-- binding that took its value structurally from one.
+--
+-- A @W is E@ cannot: an evaluated expression never mentions a
+-- possibly-unbound variable (see 'varsAt'). A @W = T@ can, because @=@
+-- is structural and passing an unbound term on is how the open regime
+-- moves one around.
+taintedAll :: Ctx -> Set Text -> [BodyItem] -> Set Text
+taintedAll ctx seed items = foldl step seed items
+  where
+    step acc it = case it of
+      BUnify w _ st | mentionsTainted acc st -> Set.insert w acc
+      _ -> acc
+    mentionsTainted acc st = case st of
+      SVar n _ -> n `Set.member` acc || n `Set.member` ctx.ctxTainted
+      SCons a b -> mentionsTainted acc a || mentionsTainted acc b
+      SCtor _ ts -> any (mentionsTainted acc) ts
+      _ -> False
 
 -- | One head occurrence.
 --
@@ -1010,6 +1113,42 @@ genEvidenceGuards ctx0
       ]
     predTys = [SCon CInt [], SCon CBool []]
 
+-- | 0–2 boundness guards, each on a variable that may hold no value
+-- yet, removing it from the taint for everything to their right.
+--
+-- This is the discipline @docs\/reference\/type-system.md@
+-- §No mode checking prescribes, and the only reason the open regime
+-- can do anything with a stored-unbound value beyond passing it on:
+-- @nonvar(X)@ fails on a free variable, so the rule simply does not
+-- fire until something binds it, and reactivation retries it then.
+--
+-- Deliberately __not__ evidence: its success entails that a term holds
+-- a value, not what type that value has, so it pins no skolem and the
+-- type model is untouched (§Non-forms).
+genModeGuards :: Ctx -> Gen ([Expr], Ctx)
+genModeGuards ctx0
+  | Set.null ctx0.ctxTainted = pure ([], ctx0)
+  | otherwise = do
+      -- Weighted towards clearing at most one. A boundness guard stops
+      -- the rule firing until something binds the value, so clearing
+      -- every tainted variable in a rule would make the rules that
+      -- could do the binding unable to run.
+      n <- Gen.frequency [(2, pure 0), (3, pure 1), (1, pure 2)]
+      go n ([], ctx0)
+  where
+    go :: Int -> ([Expr], Ctx) -> Gen ([Expr], Ctx)
+    go 0 acc = pure acc
+    go k (gs, ctx) = case Set.toList ctx.ctxTainted of
+      [] -> pure (gs, ctx)
+      cs -> do
+        v <- Gen.element cs
+        pr <- Gen.element [PredNonvar, PredGround]
+        go
+          (k - 1)
+          ( gs ++ [EModePred pr v],
+            ctx {ctxTainted = Set.delete v ctx.ctxTainted}
+          )
+
 -- | A rule guard, anchored on a head variable whenever one is in scope.
 --
 -- A conjunct that mentions no variable is a compile-time constant, and a
@@ -1040,7 +1179,12 @@ genGuard ctx
         )
         >>= uncurry (genGuardOn ctx)
   where
-    anchors = [b | b@(n, t) <- scopeTys ctx, anchorable n t]
+    anchors =
+      [ b
+      | b@(n, t) <- scopeTys ctx,
+        not (n `Set.member` ctx.ctxTainted),
+        anchorable n t
+      ]
     testable = [b | b@(_, t) <- anchors, hasPredicate t]
     -- Anchors whose type is still rigid and whose bound puts an
     -- overloaded predicate in scope. Preferred over the merely
@@ -1157,6 +1301,159 @@ genBind (ctx, acc) i = do
       ]
   pure (ctx {ctxScope = Map.insert w t ctx.ctxScope}, acc ++ [item])
 
+-- | A rule that exists only to bind a store-resident variable.
+--
+-- The gated binding inside an ordinary rule ('genGatedBind') is the
+-- faithful shape, but it lands on a rule that also has to /fire/ —
+-- match every head, pass every guard — and measured, that put the
+-- interleaving in about 2% of programs. Which is to say: the open
+-- property was green and almost never open.
+--
+-- So one rule per program is planted for the job: a single head on a
+-- constraint with a position willing to hold nothing, no guard but the
+-- @unifiable@ gate, and a body that binds. It fires as soon as the
+-- carrier is in the store, so a value the goal stored without one
+-- reliably acquires one — from a different unit than stored it, which
+-- is the whole point.
+--
+-- Simplification rather than propagation: the carrier is consumed, so
+-- the rule cannot interact with the rest of the program beyond the one
+-- binding it exists to make.
+genPlantedBinder :: Mode -> NonEmpty Sig -> Gen [Rule]
+genPlantedBinder mode sigList
+  | mode /= Open || null cands = pure []
+  | otherwise =
+      Gen.frequency
+        [ (1, pure []),
+          ( 4,
+            do
+              (sig, i, g) <- Gen.element cands
+              st <- genClosedSTermAt g
+              let (sks, sk) = freshSkolems (length sig.sigTvs) emptySkolems
+                  sub = Map.fromList (zip sig.sigTvs (map SSk sks))
+                  tys = map (substD sub) (NE.toList (sigArgDTys sig))
+                  names = ["P" <> tshow k | k <- [0 .. length tys - 1]]
+                  pats = zipWith PVar names tys
+                  target = names !! i
+                  targetTy = tys !! i
+                  taintedNames =
+                    Set.fromList
+                      [ n
+                      | (n, spec) <- zip names (NE.toList sig.sigArgs),
+                        spec.argBound == MayBeUnbound
+                      ]
+              pure
+                [ Rule
+                    { ruleName = "bind_" <> sig.sigName,
+                      ruleHead =
+                        HSimplify
+                          ( HeadC
+                              { headSig = sig,
+                                headSkolems = sks,
+                                pats = case pats of
+                                  (x : xs) -> x :| xs
+                                  [] -> PWild :| []
+                              }
+                              :| []
+                          ),
+                      ruleEvidence = [],
+                      guards =
+                        [EUnifiable (EVar target targetTy) (sTermToExpr st)],
+                      body = [BUnify target targetTy st],
+                      ruleTaintedHead = taintedNames,
+                      ruleTainted = taintedNames,
+                      ruleSkHead = sk,
+                      ruleSk = sk
+                    }
+                ]
+          )
+        ]
+  where
+    -- Only a position whose declared type is ground: a closed term has
+    -- to be built for it, and at a type parameter there is nothing to
+    -- build.
+    cands =
+      [ (sig, i, g)
+      | sig <- NE.toList sigList,
+        (i, spec) <- zip [0 ..] (NE.toList sig.sigArgs),
+        spec.argBound == MayBeUnbound,
+        Just g <- [groundDTy spec.argTy]
+      ]
+
+-- | A gated binding of a store-resident variable.
+--
+-- This is what the open regime exists to produce. A constraint was
+-- stored holding a term with no value; this rule matches it, and its
+-- body binds that very term — so the value arrives from a different
+-- unit than the one that stored it, which is the store interleaving
+-- §No mode checking describes and the reason a query variable can come
+-- back holding something at all.
+--
+-- The @unifiable@ guard is what keeps the oracle strict: a failed body
+-- @=@ is a hard runtime error, and one indistinguishable from a real
+-- fault. Guards are pure and nothing between the guard and the body
+-- runs, so the trial unification decides exactly the question the body
+-- asks. The right-hand side is a /closed/ term for the same reason:
+-- a compound mentioning a free variable would be evaluated by
+-- @unifiable@'s own argument position.
+genGatedBind :: Ctx -> Gen ([Expr], [BodyItem], Ctx)
+genGatedBind ctx
+  | null cands = pure ([], [], ctx)
+  | otherwise =
+      Gen.frequency
+        [ (1, pure ([], [], ctx)),
+          ( 4,
+            do
+              (n, t, g) <- Gen.element cands
+              st <- genClosedSTermAt g
+              -- The taint is deliberately /not/ cleared. The variable is
+              -- bound from this body item onward, but the guard-position
+              -- observations sit to its left, where it is still free —
+              -- and one taint set serves both. Leaving it tainted is
+              -- the conservative reading: it only narrows what the
+              -- items after it may do with the variable.
+              pure
+                ( [EUnifiable (EVar n t) (sTermToExpr st)],
+                  [BUnify n t st],
+                  ctx
+                )
+          )
+        ]
+  where
+    cands =
+      [ (n, t, g)
+      | (n, t) <- scopeTys ctx,
+        n `Set.member` ctx.ctxTainted,
+        Just g <- [groundOf ctx.ctxSk t]
+      ]
+
+-- | The smallest closed structural term of a ground type.
+genClosedSTermAt :: GTy -> Gen STerm
+genClosedSTermAt (GTy c as) = case c of
+  CInt -> SLit . LInt <$> Gen.integral (Range.linear 0 20)
+  CBool -> SLit . LBool <$> Gen.bool
+  CList -> pure SNil
+  CAdt def -> do
+    ctor <- Gen.element (NE.toList def.adtCtors)
+    let sub = Map.fromList (zip def.adtParams (map gToS as))
+        fieldGTys = map (groundOrInt . substD sub) ctor.ctorFields
+    SCtor ctor.ctorName <$> traverse genClosedSTermAt fieldGTys
+  where
+    groundOrInt t = fromMaybe gInt (groundOf emptySkolems t)
+
+-- | A closed structural term read as an expression. Total only because
+-- the term is closed: it mentions no variable, so nothing here has to
+-- decide whether a variable position evaluates.
+sTermToExpr :: STerm -> Expr
+sTermToExpr st = case st of
+  SLit l -> ELit l
+  SNil -> EListLit []
+  SCons h t -> case sTermToExpr t of
+    EListLit es -> EListLit (sTermToExpr h : es)
+    other -> other
+  SCtor n ts -> ECtor n (map sTermToExpr ts)
+  SVar n t -> EVar n t
+
 -- | Body tells, restricted to strata strictly below every head stratum
 -- (see @Note [Termination]@ in "YCHR.TypeSoundness.Instrument").
 --
@@ -1182,8 +1479,28 @@ genTells ctx sigList minHead
             (\v -> (v,) <$> pickBounded ctx s v)
             s.sigTvs
       args <-
-        traverse (genExprAt ctx 2 . substD sub) (NE.toList (sigArgDTys s))
+        traverse
+          (uncurry (tellArg ctx sub))
+          (zip (NE.toList s.sigArgs) [0 :: Int ..])
       pure (BTell s sub args)
+    -- A possibly-unbound variable may be passed on, but only bare and
+    -- only into a position willing to hold one: a tell argument is
+    -- evaluated, so a free variable nested inside a compound would be
+    -- a runtime error, while a bare one evaluates to itself.
+    tellArg ctx' sub spec _ =
+      let ty = substD sub spec.argTy
+          taintedVs =
+            [ e
+            | e@(EVar n _) <- varsAtAny ctx' ty,
+              n `Set.member` ctx'.ctxTainted
+            ]
+       in Gen.frequency
+            ( [(3, genExprAt ctx' 2 ty)]
+                ++ [ (2, Gen.element taintedVs)
+                   | spec.argBound == MayBeUnbound,
+                     not (null taintedVs)
+                   ]
+            )
 
 -- ---------------------------------------------------------------------------
 -- Expressions
@@ -1316,7 +1633,16 @@ richAlts ctx d ty
     vs = varsAt ctx ty
     eqAlt = do
       t <- pickTarget ctx
-      EEq t <$> sub t <*> sub t
+      -- Ask-equality never evaluates: it compares structure, and two
+      -- distinct free variables simply come back unequal. So this is
+      -- one of the few places a possibly-unbound variable may appear.
+      let anyVs = varsAtAny ctx t
+      Gen.frequency
+        ( [(3, EEq t <$> sub t <*> sub t)]
+            ++ [ (1, EEq t <$> Gen.element anyVs <*> Gen.element anyVs)
+               | length anyVs > 1
+               ]
+        )
     -- An overloaded predicate at a type the site can actually call it
     -- at. At a ground type that means a declared instance; at a rigid
     -- one it means an ambient signature, which is the whole point of a
@@ -1337,7 +1663,10 @@ richAlts ctx d ty
 genSTermAt :: Ctx -> Int -> STy -> Gen STerm
 genSTermAt ctx d ty = freqOr ctx "genSTermAt" ty (varAlt ++ structs)
   where
-    vs = [SVar n t | (n, t) <- scopeTys ctx, t == stripSTy ctx.ctxSk ty]
+    -- Structural: @=@ evaluates neither operand, so a term holding no
+    -- value yet is fine here — and passing one on is how the open
+    -- regime moves an unbound value around at all.
+    vs = [SVar n t | EVar n t <- varsAtAny ctx ty]
     varAlt = [(2, Gen.element vs) | not (null vs)]
     sub = genSTermAt ctx (d - 1)
     structs = case stripSTy ctx.ctxSk ty of
@@ -1405,11 +1734,20 @@ genGoal :: [GTy] -> [AdtDef] -> [ClassFn] -> NonEmpty Sig -> [Rule] -> Gen Goal
 genGoal univ adts cls sigList rs = do
   seeded <- genSeeded
   extra <- Gen.int (Range.constant 1 3)
-  t0 <- genTell
-  ts <- replicateM extra genTell
+  t0 <- genTell (0 :: Int)
+  ts <- traverse genTell [1 .. extra]
   nProbes <- Gen.int (Range.constant 0 2)
   ps <- traverse genProbe [0 .. nProbes - 1]
-  pure Goal {tells = t0 :| (ts ++ seeded), probes = ps}
+  let allTells = t0 : ts
+      plain = [(s, args) | (s, _, args) <- allTells] ++ seeded
+  pure
+    Goal
+      { tells = case plain of
+          (x : xs) -> x :| xs
+          [] -> error "genGoal: no tells",
+        probes = ps,
+        unbounds = concatMap unboundsOf allTells
+      }
   where
     goalCtx =
       Ctx
@@ -1419,7 +1757,8 @@ genGoal univ adts cls sigList rs = do
           ctxAdts = adts,
           ctxClasses = cls,
           ctxAmbients = [],
-          ctxBounded = []
+          ctxBounded = [],
+          ctxTainted = Set.empty
         }
     -- The whole head of one rule, matched exactly. Dropping it
     -- occasionally keeps the free path — and the programs where nothing
@@ -1453,17 +1792,47 @@ genGoal univ adts cls sigList rs = do
         ( [(3, Gen.element headSigs) | not (null headSigs)]
             ++ [(1, Gen.element (NE.toList sigList))]
         )
-    genTell = do
+    -- A query variable passed unbound into a position willing to hold
+    -- one. This is how anything gets into the store without a value:
+    -- a bare variable in a goal argument is allocated fresh by the
+    -- runtime, and whatever later binds it does so from another unit.
+    unboundsOf (s, sub, args) =
+      [ (n, groundD sub spec.argTy)
+      | (spec, e) <- zip (NE.toList s.sigArgs) args,
+        EVar n _ <- [e],
+        "U" `T.isPrefixOf` n,
+        spec.argBound == MayBeUnbound
+      ]
+    genTell tIx = do
       s <- genSigChoice
       sub <-
         Map.fromList
           <$> traverse (\v -> (v,) <$> Gen.element (goalTargets s v)) s.sigTvs
       args <-
         traverse
-          (genArg s)
-          (zip [0 ..] (map (groundD sub) (NE.toList (sigArgDTys s))))
-      pure (s, args)
-    genArg s (i, g) = case Map.lookup (s.sigName, i) seeds of
+          (genArg tIx s)
+          ( zip3
+              [0 ..]
+              (map (groundD sub) (NE.toList (sigArgDTys s)))
+              (NE.toList s.sigArgs)
+          )
+      pure (s, sub, args)
+    -- At a position willing to hold an unbound term, sometimes pass a
+    -- fresh query variable instead of a value. The runtime allocates
+    -- it, the constraint is stored holding nothing, and whatever binds
+    -- it later does so from a different unit — which is the whole
+    -- store-interleaving shape, arranged with one draw.
+    --
+    -- Names are positional so they are unique without a counter, and
+    -- the @U@ prefix is what 'unboundsOf' recognises them by.
+    genArg tIx s (i, g, spec)
+      | spec.argBound == MayBeUnbound =
+          Gen.frequency
+            [ (2, pure (EVar ("U" <> tshow tIx <> "_" <> tshow i) (gToS g))),
+              (3, genArgValue s (i, g))
+            ]
+      | otherwise = genArgValue s (i, g)
+    genArgValue s (i, g) = case Map.lookup (s.sigName, i) seeds of
       Just ps@(_ : _)
         | null s.sigTvs ->
             Gen.frequency

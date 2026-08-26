@@ -32,10 +32,12 @@ module YCHR.TypeSoundness.Types
     groundOf,
     substD,
     groundD,
+    groundDTy,
     skolemsOf,
     stripSTy,
 
     -- * Declarations
+    Boundness (..),
     ArgSpec (..),
     Sig (..),
     sigArgDTys,
@@ -52,6 +54,7 @@ module YCHR.TypeSoundness.Types
     CmpOp (..),
     LibFn (..),
     TypePred (..),
+    ModePred (..),
     Expr (..),
     STerm (..),
     BodyItem (..),
@@ -85,6 +88,8 @@ module YCHR.TypeSoundness.Types
     isTell,
     ruleVars,
     ruleVarsAtHead,
+    varBoundness,
+    varBoundnessAtHead,
   )
 where
 
@@ -96,6 +101,8 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 
@@ -439,6 +446,18 @@ substD sub t = case t of
   DVar v -> Map.findWithDefault (SCon CInt []) v sub
   DCon c as -> SCon c (map (substD sub) as)
 
+-- | A declaration type that mentions no type parameter, read as a
+-- ground type.
+--
+-- Not 'groundD' with an empty substitution: that falls back to a
+-- default for an unmapped parameter, so a position declared at a type
+-- variable would come back looking like @int@. Two call sites needed
+-- to know the difference and neither could get it from 'groundD'.
+groundDTy :: DTy -> Maybe GTy
+groundDTy t = case t of
+  DVar _ -> Nothing
+  DCon c as -> GTy c <$> traverse groundDTy as
+
 -- | Instantiate a declaration type at a use site's ground
 -- substitution.
 groundD :: Map TvName GTy -> DTy -> GTy
@@ -458,8 +477,37 @@ groundD sub t = case t of
 -- fully typed by definition — but the gradual-guarantee property works
 -- by flipping exactly this field, so it is retained as data here
 -- rather than collapsed into 'DTy'.
-data ArgSpec = ArgSpec {argTy :: DTy, argErased :: Bool}
+data ArgSpec = ArgSpec
+  { argTy :: DTy,
+    argErased :: Bool,
+    argBound :: Boundness
+  }
   deriving (Eq, Show)
+
+{- Note [Boundness is declared, not inferred]
+
+Whether the generator may emit `X + 1` depends on whether `X` can be
+unbound, which depends on the tells the generator is about to emit.
+Inferring boundness by a fixpoint over the finished program therefore
+arrives too late to steer generation.
+
+So each constraint argument position CARRIES a boundness contract,
+drawn when the signature is drawn. Generation reads it; the runtime
+observer is told it, and tolerates a term holding no value yet exactly
+where the contract allows one.
+
+This is a *mode* discipline, not a typing one — the axis
+`docs/reference/type-system.md` §No mode checking says YCHR does not
+track. A `MayBeUnbound` position is what makes the store-interleaving
+shapes reachable at all: something has to be willing to hold an unbound
+value before another unit can bind it.
+-}
+
+-- | Whether a position may hold a term that is not bound yet.
+--
+-- Ordered so 'max' is the join: 'Ground' is the stronger claim.
+data Boundness = Ground | MayBeUnbound
+  deriving (Eq, Ord, Show)
 
 -- | A list with at least two elements.
 --
@@ -584,6 +632,18 @@ data LibFn
 data TypePred = PredInteger | PredBoolean
   deriving (Eq, Show)
 
+-- | A prelude /boundness/ predicate. Deliberately __not__ an evidence
+-- form (§Non-forms): its success entails that a term holds a value,
+-- which is a mode fact, not a typing one. It contributes nothing to
+-- the skolem model and pins nothing.
+--
+-- What it does do is make the rest of the rule safe: a term the guard
+-- has established is bound may be evaluated, which is the discipline
+-- §No mode checking prescribes for a program that stores unbound
+-- values.
+data ModePred = PredNonvar | PredGround
+  deriving (Eq, Show)
+
 -- | An expression in an /evaluated/ position: a tell argument, an @is@
 -- right-hand side, a guard, or a goal probe.
 --
@@ -617,6 +677,20 @@ data Expr
   | -- | @integer(V)@ \/ @boolean(V)@ at a rigid-typed variable. The
     -- 'STy' is the variable's type /before/ the pin.
     EPred TypePred Text STy
+  | -- | @nonvar(V)@ \/ @ground(V)@. Establishes that a term is bound,
+    -- and nothing about its type.
+    EModePred ModePred Text
+  | -- | The prelude's @unifiable(any, any) -> bool@, used to gate a
+    -- body @=@ so it cannot fail.
+    --
+    -- It is a /trailed trial unification/: it performs the
+    -- unification, decides, and restores every cell it touched. So it
+    -- decides exactly the question the body item will ask, and
+    -- nothing between the guard and the body can change the answer.
+    -- Without it a failed body unification is a hard runtime error,
+    -- which the oracle would have to tolerate and could not tell from
+    -- a real fault.
+    EUnifiable Expr Expr
   | -- | The prelude's @copy_term(A) -> A@. The one polymorphic
     -- function available at a rigid type without a @requiring@ clause,
     -- so it is how an expression can be built at a skolem target
@@ -686,6 +760,17 @@ data Rule = Rule
     -- guards, before any user guard. This is what /matching alone/
     -- guarantees, and so what may be asserted of a candidate match
     -- that has not yet passed the rule's own guards.
+    -- | The variables that may hold no value yet /at head-match time/:
+    -- those matched at a 'MayBeUnbound' position. This is what the
+    -- head observation must be judged against, for the same reason it
+    -- uses 'ruleSkHead' — the boundness guards have not run yet, and a
+    -- candidate holding a free value there is exactly what they are
+    -- there to reject.
+    ruleTaintedHead :: Set Text,
+    -- | The variables that may /still/ hold no value yet after the
+    -- boundness guards: head variables no guard cleared, plus anything
+    -- a structural @=@ bound from one.
+    ruleTainted :: Set Text,
     ruleSkHead :: SkolemEnv,
     -- | The skolem state this rule's generation ended in: which
     -- skolems it allocated and what merges it performed. Read by
@@ -702,7 +787,19 @@ data Rule = Rule
 data Probe = Probe {probeVar :: Text, probeTy :: GTy, probeExpr :: Expr}
   deriving (Eq, Show)
 
-data Goal = Goal {tells :: NonEmpty (Sig, [Expr]), probes :: [Probe]}
+data Goal = Goal
+  { tells :: NonEmpty (Sig, [Expr]),
+    probes :: [Probe],
+    -- | Query variables passed unbound into a 'MayBeUnbound' position,
+    -- with the static type of the position they went into.
+    --
+    -- These come back in the goal's bindings, which makes them the
+    -- cheapest possible check on the store-interleaving path: whatever
+    -- the run eventually bound the variable to has to inhabit the type
+    -- the declaration gave that position. A variable still free at the
+    -- end is fine — that is the mode axis, not this one.
+    unbounds :: [(Text, GTy)]
+  }
   deriving (Eq, Show)
 
 data Program = Program
@@ -743,8 +840,14 @@ data ObsCheck
 -- | What the observer can say about the value at one position.
 data PosCheck
   = -- | The position has a ground static type, so the value must
-    -- inhabit it.
-    MustInhabit GTy
+    -- inhabit it — /if it is bound/. The 'Boundness' says whether a
+    -- term holding no value yet is acceptable here.
+    --
+    -- This is the sharpened claim of §Soundness: every value that is
+    -- bound is bound within its static type. A free variable is a
+    -- statement about mode, and is a violation only where the
+    -- position's contract said it would be ground.
+    MustInhabit GTy Boundness
   | -- | The position's type is a rigid variable, so there is no static
     -- type to compare against — the store chose the instance and the
     -- rule was checked for /every/ instance. All that can be asserted
@@ -757,7 +860,11 @@ data PosCheck
     -- structurally /identical/ terms. So agreement of type is implied
     -- by something strictly stronger that the runtime already
     -- enforces before the rule can fire.
-    MustBeBound
+    --
+    -- Carries its boundness for the same reason 'MustInhabit' does: at
+    -- a 'MayBeUnbound' position there may be no value yet, and that is
+    -- not a violation.
+    MustBeBound Boundness
   deriving (Eq, Show)
 
 -- ---------------------------------------------------------------------------
@@ -873,6 +980,18 @@ isTell it = case it of
 ruleVars :: Rule -> [(Text, STy)]
 ruleVars r =
   nubBy (\a b -> fst a == fst b) (concatMap (headVars r.ruleSk) (ruleHeads r))
+
+-- | Whether each of a rule's variables may hold no value yet.
+varBoundness :: Rule -> Text -> Boundness
+varBoundness r n
+  | n `Set.member` r.ruleTainted = MayBeUnbound
+  | otherwise = Ground
+
+-- | As 'varBoundness', at head-match time.
+varBoundnessAtHead :: Rule -> Text -> Boundness
+varBoundnessAtHead r n
+  | n `Set.member` r.ruleTaintedHead = MayBeUnbound
+  | otherwise = Ground
 
 -- | As 'ruleVars', but under the state matching alone establishes.
 ruleVarsAtHead :: Rule -> [(Text, STy)]

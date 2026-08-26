@@ -209,6 +209,8 @@ renderExpr e = case e of
   ECall fn es -> libFnName fn <> args_ (map renderExpr es)
   EClass n es -> n <> args_ (map renderExpr es)
   EPred pr n _ -> predName pr <> "(" <> n <> ")"
+  EModePred pr n -> modeName pr <> "(" <> n <> ")"
+  EUnifiable a b -> "unifiable" <> args_ [renderExpr a, renderExpr b]
   ECopy a -> "copy_term(" <> renderExpr a <> ")"
   EHostObs code es -> renderObs code es
   where
@@ -220,6 +222,9 @@ renderExpr e = case e of
     predName pr = case pr of
       PredInteger -> "integer"
       PredBoolean -> "boolean"
+    modeName pr = case pr of
+      PredNonvar -> "nonvar"
+      PredGround -> "ground"
     cmpOp op = case op of
       CLt -> "<"
       CGt -> ">"
