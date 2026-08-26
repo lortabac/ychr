@@ -23,41 +23,85 @@ import YCHR.TypeSoundness.Types
 {- Note [Why benign failures are impossible]
 
 The oracle is strict: any exception at all is a failure, and any
-recorded observation that is not `Inhabits` is a violation. That is
-only justified if the generated fragment cannot fail, or observe an
-absent value, for a reason unrelated to soundness. The argument rests
-on one invariant: every in-scope variable is ground.
+observation its position's contract does not tolerate is a violation.
+That is only justified if the generated fragment cannot fail, or see an
+absent value, for a reason unrelated to soundness. The two regimes earn
+it differently.
+
+CLOSED: every in-scope variable is ground.
 
   * Goal tells carry closed expressions, so the initial store is ground.
     Both producers keep that so: the free arguments come from
     `genExprRoot` under an empty environment, and the seeded ones from
-    `patInstance`, whose holes are filled by `genClosedLeaf`.
+    `patInstance`, whose holes are filled by `genClosedLeafAt`.
   * Head matching therefore binds head variables to ground values.
   * `BIs` and `BUnify` bind a *fresh* variable from ground inputs;
     guards bind nothing.
 
-From groundness the rest follows:
+From groundness the rest follows: no evaluated position sees a free
+variable, so the "unbound variable in evaluated position" error cannot
+fire and no observation can come back `NotYetBound`; `BUnify` cannot
+fail, because its left-hand side is a fresh variable and unifies with
+anything; and nothing observes a free variable, so no reactivation
+happens.
 
-  * No evaluated position ever sees an unbound variable, so the
-    "unbound variable in evaluated position" runtime error cannot fire,
-    and no observation can come back `NotYetBound`. This is why an
-    unbound observation is a *violation* here rather than the expected
-    outcome it becomes once the generator stores unbound values on
-    purpose (see `docs/reference/type-system.md` §No mode checking for
-    the axis it belongs to).
-  * `BUnify` cannot fail: its left-hand side is always a fresh variable,
-    which unifies with anything. (Failed body unification *is* a runtime
-    error — see `unifyOrError` in the interpreter — so this matters.)
-  * Nothing observes an unbound variable, so no reactivation ever
-    happens.
+OPEN: free variables exist, and are *confined*.
+
+Groundness is given up deliberately — a value has to be stored without
+one before another unit can supply it. What replaces it is a mode
+discipline, tracked as a taint (`ctxTainted`) and enforced
+structurally rather than classified after the fact:
+
+  * A variable matched at a `MayBeUnbound` position is tainted, as is
+    anything a structural `=` binds from one.
+  * `varsAt` — the variables an *evaluated* position may draw on —
+    excludes tainted ones. So arithmetic, comparison, `not`, a library
+    predicate, a class call and an `is` right-hand side can never
+    receive one.
+  * A tainted variable may appear only where a free value is harmless:
+    a structural `=` operand (which evaluates neither side), an
+    ask-equality (which compares structure and returns false on two
+    distinct free variables), a boundness or type predicate (all of
+    which are total on any value), a head pattern, and a *bare* tell
+    argument at another `MayBeUnbound` position — bare because a
+    compound argument is evaluated, while a lone variable evaluates to
+    itself.
+    Verified by mutation rather than asserted: dropping the filter
+    from `varsAt` makes the open property fail within a few hundred
+    programs, with the "comparison host call: expected 2 numeric
+    arguments" this paragraph exists to prevent.
+  * A `nonvar`/`ground` guard clears the taint for everything to its
+    right, and only then may the value be evaluated. This is the
+    discipline `docs/reference/type-system.md` §No mode checking
+    prescribes, and it is why the open regime's rules are quieter: such
+    a rule does not fire until something binds the value, and
+    reactivation retries it then.
+
+Two failure modes the closed argument ruled out by groundness are
+therefore re-argued here:
+
+  * `BUnify` may now bind a variable that is not fresh — that is the
+    binder the corner is about. Every such item is gated by a
+    `unifiable` conjunct in the same rule's guard. `unifiable` is a
+    trailed trial unification that restores every cell it touches, so
+    it decides exactly the question the body item will ask, and guards
+    are pure, so nothing between the two can change the answer. A
+    failed body unification is a hard runtime error, so this matters.
+  * Reactivation now happens. It introduces no new failure mode: a
+    rule re-runs from the start, and every activation is observed like
+    any other.
+
+BOTH regimes:
+
   * Every function a generated module can call is total. The preamble
-    predicates are exhaustive, and of the prelude functions the
-    generator emits — `+ - *`, `< > >= =<`, `==`, `not` — all are
-    host-backed and total on the ground values reaching them.
-    `div`/`mod` are excluded because they are partial, and `not/1` is
-    only ever applied to a ground `bool`. So "no matching equation"
-    cannot arise at all: it is not a signal the oracle has to
-    interpret, it is a case that cannot occur.
+    predicates are exhaustive, a generated class has a catch-all, and
+    of the prelude functions emitted — `+ - *`, `< > >= =<`, `==`,
+    `not`, `copy_term`, `unifiable`, `var`, `nonvar`, `ground`,
+    `integer`, `boolean` — all are host-backed and total on the values
+    that can reach them. `div`/`mod` are excluded because they are
+    partial, and `not/1` is only ever applied to a ground `bool`. So
+    "no matching equation" is not a signal the oracle has to interpret;
+    it is a case that cannot occur.
   * No form in `Expr`/`STerm` can widen to `any`: no host calls, no
     `quote`, no undeclared constructors, no evaluable head under `=`,
     and never a bare-variable `is` right-hand side (which the spec
@@ -80,10 +124,16 @@ What cannot masquerade as what:
     absence of one. Every branch of the property — normal return and
     exception alike — reads the log before deciding, so a violation is
     never lost to an unrelated failure, and always outranks it.
-  * A violation cannot be lost to short-circuiting: the head
+  * A free value cannot hide a violation. `NotYetBound` is tolerated
+    only where the position's declared boundness allows it, and it is
+    counted either way, so a run cannot look like it exercised the
+    open regime when it did not.
+  * A violation cannot be lost to short-circuiting. The head
     observation is the *first* guard conjunct, so it runs for every
     candidate match that survived HNF's own match and equality guards,
-    including the matches a user guard then rejects.
+    including the matches a user guard then rejects — and it is judged
+    against what matching alone establishes (`ruleSkHead`,
+    `ruleTaintedHead`), never against what a later guard adds.
 -}
 
 -- | The name a runtime 'Term' carries, without its module. Answers come

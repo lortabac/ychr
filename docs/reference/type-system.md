@@ -2075,28 +2075,39 @@ constrain unannotated programs: in code without type annotations,
 the enclosing declaration has no type variables of its own to
 allocate as rigid, so the gradual guarantee continues to hold.
 
-Property 1 is exercised mechanically by a randomized property test
+Property 1 is exercised mechanically by randomized property tests
 (`test/YCHR/TypeSoundnessTest.hs`, with the generator under
-`test/YCHR/TypeSoundness/`): it generates programs that are
-well-typed by construction, runs them through the real pipeline, and
-uses in-language assertions to check the runtime value of every
-variable a fired rule binds — from its head patterns and from its
-`is` / `=` bindings — against that variable's static type.
+`test/YCHR/TypeSoundness/`). They generate programs that are
+well-typed by construction, run them through the real pipeline, and
+instrument every generated rule with calls to a host function that
+snapshots the runtime values it is handed and checks them against the
+static types the generator gave those positions. Being a host call
+rather than an in-language assertion is what lets it observe a
+position typed by a *rigid* variable, where there is no static type an
+assertion could be declared at.
 
-The generated declarations include polymorphic ones: parametric
-algebraic types, constraints with type parameters, per-occurrence
-rigid variables at every head, and the skolem merge that a variable
-shared between head positions forces. Because the generator models
-rigidity itself, a program it believes well-typed that the checker
-rejects is a failure rather than a discarded sample — the two
-disagreeing is the defect the test is looking for. Two limits remain
-on what that covers: guard forms (type predicates, `GuardMatch`) and
-`requiring` bounds are not generated, so the only evidence a rigid
-variable meets is the `GuardEqual` of a shared head variable —
-merging it with another skolem or pinning it per §What evidence
-does; and the generated goals are ground, so
-nothing unbound is ever stored and the mode axis of §No mode checking
-is out of scope by construction.
+What is generated includes the polymorphic machinery this section
+credits: parametric algebraic types, constraints with type parameters,
+per-occurrence rigid variables at every head, the skolem merge a
+shared head variable forces, guard-derived evidence in each of its
+forms, and `requiring` bounds with the ambient signatures a rule head
+contributes. Because the generator models rigidity itself, a program
+it believes well-typed that the checker rejects is a failure rather
+than a discarded sample — the two disagreeing is the defect the tests
+are looking for, and one such disagreement has already been found and
+fixed (the parameter pinning of §What evidence does).
+
+Two regimes are covered, as two properties. In the *closed* one every
+argument position is ground. In the *open* one some positions are
+declared willing to hold a term that is not bound yet, the goal stores
+query variables at them, and later rules bind those variables — so a
+value arrives from a different unit than the one that stored it. The
+open property checks the claim in its sharpest form: a query variable
+passed unbound into a declared position must, if anything binds it, be
+bound within that position's type, however many units and
+reactivations it passed through. A term still free at the end is not a
+violation — that is the mode axis below, and the generator observes
+the discipline described there.
 
 ### No mode checking
 

@@ -23,8 +23,8 @@
 -- fire? — directly assertable ('coverRuntime').
 --
 -- The oracle is /strict/: any exception at all is a failure, as is any
--- observation that is not @Inhabits@ and any diagnostic beyond a clean
--- compile. See @Note [Why benign failures are impossible]@ in
+-- observation its position's contract does not tolerate, and any
+-- diagnostic beyond a clean compile. See @Note [Why benign failures are impossible]@ in
 -- "YCHR.TypeSoundness.Oracle" for why the generated fragment cannot
 -- fail for any reason other than a real violation.
 --
@@ -37,7 +37,11 @@
 -- constraint declarations, per-occurrence rigid variables at every
 -- head, the skolem merge a variable shared between head positions
 -- forces, and guard-derived evidence — a literal or constructor
--- pattern at a rigid scrutinee, and @integer@ \/ @boolean@ guards.
+-- pattern at a rigid scrutinee, and @integer@ \/ @boolean@ guards —
+-- and bounded polymorphism: generated @:- class@ declarations, a
+-- @requiring@ clause on a constraint, and the ambient signature a rule
+-- head contributes, which is the only route by which an overloaded
+-- operation reaches a rigid type at all.
 -- Because the generator models rigidity itself and the checker is the
 -- thing under test, a type error is a failure rather than a discard:
 -- the two disagreeing is exactly what these stages look for. (This
@@ -65,9 +69,13 @@
 -- What this version deliberately leaves out, so the coverage is not
 -- overread:
 --
---   * /Bounded polymorphism/. No @requiring@ clause is generated, so
---     nothing exercises ambient signatures or bound discharge, and an
---     overloaded operation is never reached at a rigid type.
+--   * /Bounded functions/. Only constraints carry a @requiring@
+--     clause. The constraint case is where the store interaction
+--     lives, which is what this test is uniquely able to exercise; a
+--     bounded function would need its equations checked under ambient
+--     signatures at rigid types, a second machine for the same payoff.
+--   * /The gradual guarantee/. Nothing is ever erased to @any@; see
+--     the note on 'YCHR.TypeSoundness.Types.ArgSpec' above.
 --   * Floats, strings, lambdas and @'$call'@; rules with three or more
 --     heads; simpagations other than @1 \\ 1@; recursive generated
 --     algebraic types (@list(int)@ is the one recursive shape);
