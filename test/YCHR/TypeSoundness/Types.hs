@@ -756,10 +756,6 @@ data Rule = Rule
     ruleEvidence :: [Expr],
     guards :: [Expr],
     body :: [BodyItem],
-    -- | The skolem state after head matching and its HNF-synthetic
-    -- guards, before any user guard. This is what /matching alone/
-    -- guarantees, and so what may be asserted of a candidate match
-    -- that has not yet passed the rule's own guards.
     -- | The variables that may hold no value yet /at head-match time/:
     -- those matched at a 'MayBeUnbound' position. This is what the
     -- head observation must be judged against, for the same reason it
@@ -771,6 +767,10 @@ data Rule = Rule
     -- boundness guards: head variables no guard cleared, plus anything
     -- a structural @=@ bound from one.
     ruleTainted :: Set Text,
+    -- | The skolem state after head matching and its HNF-synthetic
+    -- guards, before any user guard. This is what /matching alone/
+    -- guarantees, and so what may be asserted of a candidate match
+    -- that has not yet passed the rule's own guards.
     ruleSkHead :: SkolemEnv,
     -- | The skolem state this rule's generation ended in: which
     -- skolems it allocated and what merges it performed. Read by

@@ -185,12 +185,11 @@ inhabited ctx ty = case stripSTy ctx.ctxSk ty of
 --
 -- Restricting the rigid choices to types with an in-scope variable is
 -- what makes every argument type built from them inhabited, by
--- induction over 'inhabited'.
--- | Restricted to variables usable in an evaluated position, because
--- that is what 'inhabited' will look for: a rigid type whose only
--- carrier may hold no value yet has no inhabitant a use site could
--- build, and offering it as an instantiation target asks
--- 'genExprAt' for something it cannot make.
+-- induction over 'inhabited'. Restricted further to variables usable
+-- in an /evaluated/ position, because that is what 'inhabited' will
+-- look for: a rigid type whose only carrier may hold no value yet has
+-- no inhabitant a use site could build, and offering it as an
+-- instantiation target asks 'genExprAt' for something it cannot make.
 rigidTargets :: Ctx -> [STy]
 rigidTargets ctx =
   List.nub [t | EVar _ t <- allUntainted, isSk t]
@@ -267,15 +266,14 @@ classesAt ctx t = case stripSTy ctx.ctxSk t of
   SSk sk -> [n | (n, at) <- strippedAmbients ctx, at == SSk sk]
   g -> [c.cfName | c <- ctx.ctxClasses, g `elem` map gToS (classInstances c)]
 
--- | A body tell's instantiation for one parameter.
+-- | A body tell's instantiation for one parameter, respecting the
+-- callee's bounds.
 --
 -- The rigid case is both rarer and more interesting: it is the only
 -- shape in which a value crosses two declarations without either of
 -- them learning which instance the store chose. Evidence pinning
--- competes for the same variables, so without the extra weight the
--- shape lands in a few percent of programs.
--- | A body tell's instantiation for one parameter, respecting the
--- callee's bounds.
+-- competes for the same variables, so without the extra weight
+-- ('pickFrom') the shape lands in a few percent of programs.
 pickBounded :: Ctx -> Sig -> TvName -> Gen STy
 pickBounded ctx s v = pickFrom (boundedTargets ctx s.sigBounds v) ctx
 
@@ -1443,14 +1441,19 @@ genClosedSTermAt (GTy c as) = case c of
 
 -- | A closed structural term read as an expression. Total only because
 -- the term is closed: it mentions no variable, so nothing here has to
--- decide whether a variable position evaluates.
+-- decide whether a variable position evaluates — and a cons tail is
+-- always itself a list, so it reads back as a list literal. Anything
+-- else is an 'error' rather than a silent drop: this expression is the
+-- @unifiable@ gate for the body item built from the same term, and the
+-- two desynchronizing would turn a benign shape into a hard runtime
+-- error the oracle reports as a violation.
 sTermToExpr :: STerm -> Expr
 sTermToExpr st = case st of
   SLit l -> ELit l
   SNil -> EListLit []
   SCons h t -> case sTermToExpr t of
     EListLit es -> EListLit (sTermToExpr h : es)
-    other -> other
+    _ -> error "sTermToExpr: cons tail is not a list literal"
   SCtor n ts -> ECtor n (map sTermToExpr ts)
   SVar n t -> EVar n t
 
@@ -1777,10 +1780,20 @@ genGoal univ adts cls sigList rs = do
     -- A goal is a use site like any other, so a bounded parameter may
     -- only be instantiated where the bound is discharged. Goals are
     -- ground, so that means a declared instance of the named class.
+    -- An empty intersection would mean an unsatisfiable bound, which
+    -- is a generator bug, not a program the fragment contains (see
+    -- 'boundedTargets') — so it fails loudly rather than quietly
+    -- emitting a goal the query type-check rejects (YCHR-60012).
     goalTargets s v = case [b | b <- s.sigBounds, b.bsTv == v] of
       [] -> univ
       bs -> case foldr (intersectBy) univ (map instancesOf bs) of
-        [] -> univ
+        [] ->
+          error
+            ( "genGoal: no ground instance discharges the bounds on "
+                ++ show v
+                ++ " of "
+                ++ T.unpack s.sigName
+            )
         ts -> ts
     instancesOf b = case List.find (\c -> c.cfName == b.bsClass) cls of
       Just c -> classInstances c
@@ -1881,10 +1894,18 @@ genRuleInstance univ cls r = do
     -- a bounded parameter may only be grounded at a declared instance
     -- of the named class — otherwise the goal it builds cannot
     -- discharge the bound and the program is rejected before it runs.
+    -- No instance at all would mean an unsatisfiable bound, which is
+    -- a generator bug (see 'boundedTargets'), so it fails loudly
+    -- rather than quietly building that rejected goal.
     targetsFor sk = case [c | (s', c) <- boundedSkolems, s' == sk] of
       [] -> univ
       names -> case [t | t <- univ, all (isInstance t) names] of
-        [] -> univ
+        [] ->
+          error
+            ( "genRuleInstance: no ground instance discharges the"
+                ++ " bounds on "
+                ++ show sk
+            )
         ts -> ts
     isInstance t nm = case List.find (\c -> c.cfName == nm) cls of
       Just c -> t `elem` classInstances c
