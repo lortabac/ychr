@@ -39,6 +39,11 @@ module YCHR.TypeSoundness.Types
     ArgSpec (..),
     Sig (..),
     sigArgDTys,
+    TwoOrMore (..),
+    twoOrMoreList,
+    ClassFn (..),
+    BoundSig (..),
+    classInstances,
 
     -- * Terms
     Lit (..),
@@ -456,6 +461,57 @@ groundD sub t = case t of
 data ArgSpec = ArgSpec {argTy :: DTy, argErased :: Bool}
   deriving (Eq, Show)
 
+-- | A list with at least two elements.
+--
+-- Not a convenience: a single-signature @:- class@ is partitioned by
+-- signature /count/ rather than by declaration kind and is checked as
+-- if it were a @:- function@ (@dev-docs\/BUGS.md@), so the generator
+-- must never emit one. Making it unrepresentable is cheaper than
+-- remembering not to.
+data TwoOrMore a = TwoOrMore a a [a]
+  deriving (Eq, Show)
+
+twoOrMoreList :: TwoOrMore a -> [a]
+twoOrMoreList (TwoOrMore x y zs) = x : y : zs
+
+-- | A generated @:- class@: an overloaded predicate declared at two or
+-- more ground instance types.
+--
+-- Every generated class has the shape @cls(tau) -> bool@. Unary on
+-- purpose, and not only for brevity: a binary class needs /two/ values
+-- at the argument type, and at a rigid type the second one has to come
+-- from another variable at that same rigid type. A guard anchor is
+-- required to be usable with itself out of scope, so a binary call at
+-- a rigid anchor was excluded outright and the shape this whole
+-- mechanism exists for landed in 1% of programs. Arity adds no
+-- type-system coverage; reachability does.
+--
+-- The instance types are non-parametric so that each one can be
+-- discriminated by a type predicate or a constructor pattern,
+-- which is what makes the equations partial in exactly the declared
+-- set (see 'YCHR.TypeSoundness.Render.renderClass').
+data ClassFn = ClassFn
+  { cfName :: Text,
+    cfInstances :: TwoOrMore GTy,
+    -- | Observation code for the catch-all equation, filled by
+    -- 'YCHR.TypeSoundness.Instrument.instrument'. Reaching it means a
+    -- bound-required operation was dispatched at a type with no
+    -- declared instance, which is a violation.
+    cfObsCode :: Int
+  }
+  deriving (Eq, Show)
+
+classInstances :: ClassFn -> [GTy]
+classInstances c = twoOrMoreList c.cfInstances
+
+-- | One signature of a @requiring@ clause.
+--
+-- Always @cls(T, T) -> bool@ for one of the declaration's own type
+-- parameters, matching the shape 'ClassFn' generates. Bounds always
+-- name functions, never constraints.
+data BoundSig = BoundSig {bsClass :: Text, bsTv :: TvName}
+  deriving (Eq, Show)
+
 -- | A constraint declaration. 'stratum' is the symbol's position in the
 -- program's stratification: rule bodies may only tell strata strictly
 -- below every stratum in their head, which is what makes every
@@ -468,6 +524,11 @@ data Sig = Sig
   { sigName :: Text,
     sigTvs :: [TvName],
     sigArgs :: NonEmpty ArgSpec,
+    -- | A @requiring@ clause. Each bound makes an overloaded operation
+    -- available at the named parameter — at a rule head, as an
+    -- /ambient/ signature the body may call through; at a use site, as
+    -- an obligation the caller must discharge.
+    sigBounds :: [BoundSig],
     stratum :: Int
   }
   deriving (Eq, Show)
@@ -546,6 +607,13 @@ data Expr
   | EEq STy Expr Expr
   | ENot Expr
   | ECall LibFn [Expr]
+  | -- | A call to a generated @:- class@. Renders exactly like
+    -- 'ECall'; kept distinct because the /reason/ it type-checks
+    -- differs — at a rigid argument it resolves only through an
+    -- ambient signature contributed by a @requiring@ clause, which is
+    -- the one route by which an overloaded operation reaches a rigid
+    -- type at all.
+    EClass Text [Expr]
   | -- | @integer(V)@ \/ @boolean(V)@ at a rigid-typed variable. The
     -- 'STy' is the variable's type /before/ the pin.
     EPred TypePred Text STy
@@ -639,6 +707,7 @@ data Goal = Goal {tells :: NonEmpty (Sig, [Expr]), probes :: [Probe]}
 
 data Program = Program
   { adts :: [AdtDef],
+    classes :: [ClassFn],
     sigs :: NonEmpty Sig,
     rules :: [Rule],
     goal :: Goal,
@@ -661,7 +730,14 @@ data ObsSite = ObsSite
   }
   deriving (Eq, Show)
 
-newtype ObsCheck = ExpectPos [PosCheck]
+data ObsCheck
+  = ExpectPos [PosCheck]
+  | -- | This site must never be reached. Used for the catch-all
+    -- equation of a generated class: arriving there means a
+    -- bound-required operation was dispatched at a value whose type
+    -- has no declared instance, so the bound the checker discharged
+    -- did not hold.
+    MustNotBeReached Text
   deriving (Eq, Show)
 
 -- | What the observer can say about the value at one position.

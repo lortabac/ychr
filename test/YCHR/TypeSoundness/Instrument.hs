@@ -91,11 +91,43 @@ prepare = instrument . pruneTells
 -- they are a deterministic function of the program and survive
 -- shrinking.
 instrument :: Program -> Program
-instrument prog = prog {rules = rs, obs = IntMap.fromList (concat tables)}
+instrument prog =
+  prog
+    { rules = rs,
+      classes = cls,
+      obs = IntMap.fromList (concat tables ++ classSites)
+    }
   where
-    (_, annotated) = mapAccumL instrumentRule 0 prog.rules
+    (nextCode, annotated) = mapAccumL instrumentRule 0 prog.rules
     rs = map fst annotated
     tables = map snd annotated
+    -- One site per generated class, on its catch-all equation.
+    --
+    -- A class's equations are partial in its declared instance set, so
+    -- the catch-all runs exactly when an overloaded operation was
+    -- dispatched at a value whose type has no instance. Every use site
+    -- either instantiates the bound at a declared instance or
+    -- discharges it against an ambient, so in a ground program this
+    -- cannot happen — and if it does, the bound the checker discharged
+    -- did not hold at run time, which is the violation bounded
+    -- polymorphism exists to rule out.
+    cls =
+      [ c {cfObsCode = code}
+      | (code, c) <- zip [nextCode ..] prog.classes
+      ]
+    classSites =
+      [ ( c.cfObsCode,
+          ObsSite
+            { osWhere = c.cfName <> " catch-all",
+              osCheck =
+                MustNotBeReached
+                  ( "dispatched at a type with no declared instance of "
+                      <> c.cfName
+                  )
+            }
+        )
+      | c <- cls
+      ]
 
 -- | Instrument one rule, threading the next free site code.
 instrumentRule :: Int -> Rule -> (Int, (Rule, [(Int, ObsSite)]))

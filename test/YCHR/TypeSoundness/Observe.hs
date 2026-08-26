@@ -295,7 +295,12 @@ record table code snaps lg
         }
     unknownSite =
       Bad code "<unknown site>" "no site registered for this code" snaps
-    verdicts (ExpectPos checks) = zipWith one checks snaps
+    verdicts c = case c of
+      ExpectPos checks -> zipWith one checks snaps
+      -- A site that must never run. Reaching it is the violation, so
+      -- the verdict does not depend on the values — they are recorded
+      -- anyway, because which ones got there is the whole diagnosis.
+      MustNotBeReached why -> [Outside why]
     one c v = case c of
       MustInhabit g -> conformsSnap g v
       MustBeBound -> case v of

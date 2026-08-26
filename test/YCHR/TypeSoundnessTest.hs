@@ -244,6 +244,32 @@ coverShape prog = do
   -- One label per evidence form, because they are reached by quite
   -- different routes and a single "something was pinned" label would
   -- hide three of them going to zero.
+  -- Bounded polymorphism. The last label is the one that matters: an
+  -- overloaded call at a rigid type is the only thing a @requiring@
+  -- clause makes possible that is not possible without one — without
+  -- the ambient signature it is YCHR-60006 — and it is the route
+  -- Stage 4's finding could not take.
+  --
+  -- The four before it are the chain that has to hold for it, and they
+  -- are kept as separate labels because a zero on the last one says
+  -- nothing about which link broke. Measured over 1000 programs:
+  --
+  -- > declares a class                75%  floor 55
+  -- > declares a bounded constraint   38%  floor 22
+  -- > head contributes an ambient     28%  floor 15
+  -- > variable at the bounded rigid   14%  floor  6
+  -- > overloaded call anywhere        28%  floor 15
+  -- > overloaded call at a rigid       9%  floor  3
+  --
+  -- The last two together are what says the mechanism is exercised
+  -- rather than merely declared: most class calls land at a ground
+  -- instance type, where no bound is involved at all.
+  cover 55 "the program declares a class" (not (null prog.classes))
+  cover 22 "the program declares a bounded constraint" anyBounded
+  cover 15 "a rule head contributes an ambient signature" anyAmbientHead
+  cover 6 "a variable is bound at an ambient-covered rigid type" anyAmbientVar
+  cover 15 "an overloaded call is made at all" anyClassCall
+  cover 3 "an overloaded call is made at a rigid type" anyAmbientCall
   cover 8 "a literal pinned a rigid variable" (pinnedBy PinLit)
   cover 15 "a pattern match pinned a rigid variable" (pinnedBy PinMatch)
   cover 10 "a shared variable pinned a rigid variable" (pinnedBy PinMergeConcrete)
@@ -267,6 +293,65 @@ coverShape prog = do
     anyForce = any (not . Map.null . (.skForce) . (.ruleSk)) rs
     pinnedBy src =
       any ((src `elem`) . Map.elems . (.skPinned) . (.ruleSk)) rs
+    anyBounded = any (not . null . (.sigBounds)) sigList
+    anyAmbientHead =
+      any (not . null . (.headSig.sigBounds)) occs
+    -- A class call whose first argument is /still/ rigid under the
+    -- rule's final skolem state. Resolving matters: a variable an
+    -- evidence guard pinned still carries a skolem in the expression
+    -- the generator built, but by then the call is at a concrete type
+    -- and resolves against a declared signature rather than an
+    -- ambient. Counting those would inflate the one label that says
+    -- the bound machinery was exercised at all.
+    anyAmbientVar = any ruleHasAmbientVar rs
+    ruleHasAmbientVar r =
+      or
+        [ resolveSTy r.ruleSk t == SSk sk
+        | (_, t) <- ruleVars r,
+          h <- ruleHeads r,
+          b <- h.headSig.sigBounds,
+          (tv, sk) <- zip h.headSig.sigTvs h.headSkolems,
+          tv == b.bsTv
+        ]
+    anyClassCall = any (\r -> any anyClass (r.ruleEvidence ++ r.guards)) rs
+    anyClass e = case e of
+      EClass _ _ -> True
+      EArith _ x y -> anyClass x || anyClass y
+      ECmp _ x y -> anyClass x || anyClass y
+      EEq _ x y -> anyClass x || anyClass y
+      ENot x -> anyClass x
+      ECall _ es -> any anyClass es
+      ECtor _ es -> any anyClass es
+      EListLit es -> any anyClass es
+      ECopy x -> anyClass x
+      EHostObs _ es -> any anyClass es
+      _ -> False
+    anyAmbientCall = any ruleHasAmbientCall rs
+    ruleHasAmbientCall r =
+      any (hasAmbientCall r) (r.ruleEvidence ++ r.guards)
+        || any (bodyHasAmbientCall r) r.body
+    bodyHasAmbientCall r it = case it of
+      BTell _ _ es -> any (hasAmbientCall r) es
+      BIs _ _ e -> hasAmbientCall r e
+      BObs _ es -> any (hasAmbientCall r) es
+      _ -> False
+    hasAmbientCall r e = case e of
+      EClass _ es -> any (rigidUnder r) es || any (hasAmbientCall r) es
+      EArith _ x y -> hasAmbientCall r x || hasAmbientCall r y
+      ECmp _ x y -> hasAmbientCall r x || hasAmbientCall r y
+      EEq _ x y -> hasAmbientCall r x || hasAmbientCall r y
+      ENot x -> hasAmbientCall r x
+      ECall _ es -> any (hasAmbientCall r) es
+      ECtor _ es -> any (hasAmbientCall r) es
+      EListLit es -> any (hasAmbientCall r) es
+      ECopy x -> hasAmbientCall r x
+      EHostObs _ es -> any (hasAmbientCall r) es
+      _ -> False
+    rigidUnder r e = case e of
+      EVar _ t -> case resolveSTy r.ruleSk t of
+        SSk _ -> True
+        _ -> False
+      _ -> False
     anyTellAtRigid = any tellAtRigid rs
     occs = concatMap ruleHeads rs
     tellAtRigid r = any atRigid r.body

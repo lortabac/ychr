@@ -53,6 +53,7 @@ renderModule prog =
       ]
         ++ concatMap renderAdt (fixedAdts ++ prog.adts)
         ++ [preamble]
+        ++ concatMap renderClass prog.classes
         ++ map renderConstraintDecl (NE.toList prog.sigs)
         ++ [""]
         ++ map renderRule prog.rules
@@ -71,6 +72,55 @@ renderAdt def =
   where
     renderCtorDecl c = applied c.ctorName (map renderDTy c.ctorFields)
 
+-- | A generated class: the multi-signature declaration, one equation
+-- per instance type, and an observed catch-all.
+--
+-- The equations are deliberately partial in the declared instance set,
+-- which is what makes the catch-all meaningful. Each instance is
+-- discriminated by whatever tells its values apart from the others' —
+-- a type predicate for @int@ and @bool@, a constructor pattern for an
+-- algebraic type — so an argument outside the set falls through.
+--
+-- A class equation is accepted if it checks under /at least one/
+-- signature (§Signature Overloading), which is why an equation
+-- matching one instance may look dead under the others without
+-- drawing a warning.
+--
+-- The catch-all also makes the class total, so reaching it is an
+-- observation rather than a \"no matching equation\" the oracle would
+-- have to interpret.
+renderClass :: ClassFn -> [Text]
+renderClass c =
+  [ ":- class "
+      <> T.intercalate ", " [sigOf t | t <- classInstances c]
+      <> "."
+  ]
+    ++ concatMap eqnsFor (classInstances c)
+    ++ [ c.cfName
+           <> "(CX) -> "
+           <> renderObs c.cfObsCode [EVar "CX" dummy]
+           <> ", false.",
+         ""
+       ]
+  where
+    dummy = SCon CInt []
+    sigOf t = "(" <> c.cfName <> "(" <> renderGTy t <> ") -> bool)"
+    -- One equation per way of recognising a value of this instance
+    -- type. The body is an equality at the instance type, which is
+    -- total and well-typed under that signature.
+    eqnsFor t = case t of
+      GTy CInt [] -> [guarded "integer"]
+      GTy CBool [] -> [guarded "boolean"]
+      GTy (CAdt def) _ ->
+        [ c.cfName
+            <> "("
+            <> applied k.ctorName (replicate (length k.ctorFields) "_")
+            <> ") -> true."
+        | k <- NE.toList def.adtCtors
+        ]
+      _ -> []
+    guarded p = c.cfName <> "(CX) | " <> p <> "(CX) -> true."
+
 -- | One directive per constraint.
 --
 -- Not a comma-joined list: @requiring@ is an @xfx@ operator at
@@ -82,7 +132,17 @@ renderConstraintDecl s =
   ":- chr_constraint "
     <> s.sigName
     <> args_ (map renderArg (NE.toList s.sigArgs))
+    <> boundsText
     <> "."
+  where
+    boundsText
+      | null s.sigBounds = ""
+      | otherwise =
+          " requiring "
+            <> T.intercalate ", " (map one s.sigBounds)
+    one b =
+      let TvName v = b.bsTv
+       in b.bsClass <> "(" <> v <> ") -> bool"
 
 renderRule :: Rule -> Text
 renderRule r =
@@ -147,6 +207,7 @@ renderExpr e = case e of
   EEq _ a b -> infix_ "==" a b
   ENot a -> "not(" <> renderExpr a <> ")"
   ECall fn es -> libFnName fn <> args_ (map renderExpr es)
+  EClass n es -> n <> args_ (map renderExpr es)
   EPred pr n _ -> predName pr <> "(" <> n <> ")"
   ECopy a -> "copy_term(" <> renderExpr a <> ")"
   EHostObs code es -> renderObs code es
