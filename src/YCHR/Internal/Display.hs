@@ -184,6 +184,7 @@ sourceLocFromPos sp =
 collectErrorCode :: CollectError -> ErrorCode
 collectErrorCode (UnknownLibrary _) = ErrorCode 10001
 collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
+collectErrorCode (SelfNamedLibraryImport _) = ErrorCode 10003
 
 -- | 15xxx — parse validation phase
 parseValidationErrorCode :: ParseValidationError -> ErrorCode
@@ -613,6 +614,13 @@ collectErrorMsg (UnknownLibrary name) =
 collectErrorMsg (CircularLibraryImport names) =
   "Circular library import: "
     ++ intercalate " -> " (map T.unpack names)
+collectErrorMsg (SelfNamedLibraryImport name) =
+  withHint
+    ("Module '" ++ T.unpack name ++ "' imports a library with its own name")
+    ( "the bundled library '"
+        ++ T.unpack name
+        ++ "' is replaced by this module; rename the module or drop the import"
+    )
 
 instance Display (Diagnostic RenameError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =

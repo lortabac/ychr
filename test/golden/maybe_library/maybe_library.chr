@@ -1,0 +1,51 @@
+:- module(maybe_library, [
+    mapped/2,
+    mapped2/3,
+    bound/2,
+    chained/1,
+    predicates/2,
+    defaults/2,
+    folded/2
+]).
+
+:- use_module(library(maybe)).
+
+:- chr_constraint
+    mapped/2,
+    mapped2/3,
+    bound/2,
+    chained/1,
+    predicates/2,
+    defaults/2,
+    folded/2.
+
+mapped(A, B) <=>
+    A is map_maybe(fun(X) -> X * 3 end, just(4)),
+    B is map_maybe(fun(X) -> X * 3 end, nothing).
+
+mapped2(A, B, C) <=>
+    A is map_maybe(fun(X, Y) -> X + Y end, just(1), just(2)),
+    B is map_maybe(fun(X, Y) -> X + Y end, just(1), nothing),
+    C is map_maybe(fun(X, Y) -> X + Y end, nothing, just(2)).
+
+bound(A, B) <=>
+    A is maybe_and_then(just(2), fun(X) -> just(X + 1) end),
+    B is maybe_and_then(nothing, fun(X) -> just(X + 1) end).
+
+% The two operator spellings of `maybe_and_then/2`. Both bind tighter
+% than `is` (750), so no extra parentheses are needed.
+chained(R) <=>
+    R is just(2) >>= fun(X) -> just(X + 1) end
+                >>= fun(Y) -> just(Y * 10) end.
+
+predicates(A, B) <=>
+    A is is_just(fun(X) -> just(X) end =<< just(1)),
+    B is is_nothing(fun(X) -> just(X) end =<< nothing).
+
+defaults(A, B) <=>
+    A is from_maybe(0, just(7)),
+    B is from_maybe(0, nothing).
+
+folded(A, B) <=>
+    A is foldr_maybe(0, fun(X) -> X + 100 end, just(5)),
+    B is foldr_maybe(0, fun(X) -> X + 100 end, nothing).

@@ -1,0 +1,87 @@
+:- module(pairs, [
+    type(pair/2),
+    fun key/1,
+    fun value/1,
+    fun zip/2,
+    fun zip_exact/2,
+    fun assoc_get/2,
+    fun assoc_put/3,
+    fun assoc_update/3,
+    fun assoc_delete/2,
+    fun assoc_member/2,
+    fun assoc_keys/1,
+    fun assoc_values/1
+]).
+
+:- use_module(library(maybe)).
+
+% Key/value pairs and association lists.
+%
+% The constructor is `kv/2` rather than the Prolog-traditional `-/2`,
+% because `-` is the prelude's subtraction function and a bare reference
+% to a name that is a function in one module and a constructor in
+% another is ambiguous, hence rejected (YCHR-20020).
+:- chr_type pair(K, V) ---> kv(K, V).
+
+:- function
+    (key(pair(K, V)) -> K),
+    (value(pair(K, V)) -> V),
+    (zip(list(A), list(B)) -> list(pair(A, B))),
+    (zip_exact(list(A), list(B)) -> maybe(list(pair(A, B)))),
+    (assoc_get(K, list(pair(K, V))) -> maybe(V)),
+    (assoc_put(K, V, list(pair(K, V))) -> list(pair(K, V))),
+    (assoc_update(K, fun(V) -> V end, list(pair(K, V))) -> list(pair(K, V))),
+    (assoc_delete(K, list(pair(K, V))) -> list(pair(K, V))),
+    (assoc_member(K, list(pair(K, V))) -> bool),
+    (assoc_keys(list(pair(K, V))) -> list(K)),
+    (assoc_values(list(pair(K, V))) -> list(V)).
+
+key(kv(K, _)) -> K.
+
+value(kv(_, V)) -> V.
+
+% Pair up two lists, stopping at the shorter one.
+zip([], _) -> [].
+zip(_, []) -> [].
+zip([X|Xs], [Y|Ys]) -> [kv(X, Y)|zip(Xs, Ys)].
+
+% Pair up two lists of the same length; `nothing` if they differ.
+zip_exact([], []) -> just([]).
+zip_exact([X|Xs], [Y|Ys]) ->
+    map_maybe(fun(Rest) -> [kv(X, Y)|Rest] end, zip_exact(Xs, Ys)).
+zip_exact(_, _) -> nothing.
+
+% Association lists are plain `list(pair(K, V))` and every operation is
+% a linear scan over the first matching entry. Keys are compared with
+% `==`, which is identity rather than unification: an unbound key
+% matches an entry keyed on that same variable and nothing else, so
+% `assoc_put` with an unbound key appends instead of replacing.
+assoc_get(_, []) -> nothing.
+assoc_get(K, [kv(K2, V)|_]) | K == K2 -> just(V).
+assoc_get(K, [_|Rest]) -> assoc_get(K, Rest).
+
+% Replaces the first entry for `K` if there is one, appends otherwise.
+assoc_put(K, V, []) -> [kv(K, V)].
+assoc_put(K, V, [kv(K2, _)|Rest]) | K == K2 -> [kv(K, V)|Rest].
+assoc_put(K, V, [P|Rest]) -> [P|assoc_put(K, V, Rest)].
+
+% Applies a function to the value of the first entry for `K`. A list
+% with no entry for `K` is returned unchanged.
+assoc_update(_, _, []) -> [].
+assoc_update(K, F, [kv(K2, V)|Rest]) | K == K2 -> [kv(K2, call(F, V))|Rest].
+assoc_update(K, F, [P|Rest]) -> [P|assoc_update(K, F, Rest)].
+
+% Removes the first entry for `K`, if any.
+assoc_delete(_, []) -> [].
+assoc_delete(K, [kv(K2, _)|Rest]) | K == K2 -> Rest.
+assoc_delete(K, [P|Rest]) -> [P|assoc_delete(K, Rest)].
+
+assoc_member(_, []) -> false.
+assoc_member(K, [kv(K2, _)|_]) | K == K2 -> true.
+assoc_member(K, [_|Rest]) -> assoc_member(K, Rest).
+
+assoc_keys([]) -> [].
+assoc_keys([kv(K, _)|Rest]) -> [K|assoc_keys(Rest)].
+
+assoc_values([]) -> [].
+assoc_values([kv(_, V)|Rest]) -> [V|assoc_values(Rest)].

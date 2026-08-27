@@ -1,0 +1,14 @@
+% A user module carrying a bundled library's name. Compiling it
+% alongside a module that writes `use_module(library(lists))` puts two
+% modules named `lists` in play: this one, and the embedded library
+% pulled in by that import. Module identity is the name alone, so
+% keeping both would list two providers for every exported name and make
+% each use ambiguous (YCHR-20012). The explicitly supplied module wins.
+%
+% `length/1` deliberately disagrees with the real `lists:length/1` so the
+% goal's result shows which module was used.
+:- module(lists, [fun length/1]).
+
+:- function length(list(T)) -> int.
+
+length(_) -> 42.

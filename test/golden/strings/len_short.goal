@@ -1,1 +1,1 @@
-strings:t(len_short, R)
+strings_test:t(len_short, R)

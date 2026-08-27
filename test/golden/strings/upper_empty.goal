@@ -1,1 +1,1 @@
-strings:t(upper_empty, R)
+strings_test:t(upper_empty, R)

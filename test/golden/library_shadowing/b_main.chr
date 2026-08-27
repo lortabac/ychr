@@ -1,0 +1,7 @@
+:- module(library_shadowing, [go/1]).
+
+:- use_module(library(lists)).
+
+:- chr_constraint go/1.
+
+go(R) <=> R is length([1, 2, 3]).

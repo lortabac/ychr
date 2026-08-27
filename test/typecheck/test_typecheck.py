@@ -119,14 +119,18 @@ def test_werror_at_run(ychr_bin, project_root):
     assert "YCHR-20104" in werror.stdout + werror.stderr
 
 
+# Every library in one invocation, `prelude` included. Each library is
+# then present twice -- once as the source file on the command line, once
+# as the embedded copy another library's `use_module(library(...))` pulls
+# into the closure -- so this also pins the module deduplication in
+# YCHR.Internal.Compile.Pipeline.finalizeCompilation. Without it every
+# reference to a library's own exports is ambiguous (YCHR-20012).
 def test_typecheck_stdlib(ychr_bin, project_root):
     import subprocess
 
     libraries = os.path.join(project_root, "libraries")
-    files = [
-        os.path.join(libraries, name)
-        for name in ("lists.chr", "strings.chr", "meta.chr")
-    ]
+    files = sorted(glob.glob(os.path.join(libraries, "*.chr")))
+    assert files, "no stdlib sources found"
     result = subprocess.run(
         [ychr_bin, "check", "--Werror", *files],
         capture_output=True,

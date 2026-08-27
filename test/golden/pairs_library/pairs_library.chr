@@ -1,0 +1,94 @@
+:- module(pairs_library, [
+    zipped/1,
+    zipped_short_first/1,
+    parts/2,
+    fetched/2,
+    fetched_dup/1,
+    fetched_var/2,
+    fetched_other_var/3,
+    inserted/2,
+    inserted_empty/1,
+    inserted_var/2,
+    updated/1,
+    updated_missing/1,
+    deleted/1,
+    deleted_missing/1,
+    zipped_exact/1,
+    zipped_exact_uneven/1,
+    membership/2,
+    projected/2,
+    empties/2,
+    type(name/0)
+]).
+
+:- use_module(library(pairs)).
+
+:- chr_type name ---> a ; b ; c.
+
+:- chr_constraint
+    zipped/1,
+    zipped_short_first/1,
+    parts/2,
+    fetched/2,
+    fetched_dup/1,
+    fetched_var/2,
+    fetched_other_var/3,
+    inserted/2,
+    inserted_empty/1,
+    inserted_var/2,
+    updated/1,
+    updated_missing/1,
+    deleted/1,
+    deleted_missing/1,
+    zipped_exact/1,
+    zipped_exact_uneven/1,
+    membership/2,
+    projected/2,
+    empties/2.
+
+zipped(R) <=> R is zip([a, b, c], [1, 2]).
+
+zipped_short_first(R) <=> R is zip([a], [1, 2]).
+
+parts(K, V) <=> K is key(kv(a, 1)), V is value(kv(a, 1)).
+
+fetched(K, R) <=> R is assoc_get(K, [kv(a, 1), kv(b, 2)]).
+
+% The first entry for a repeated key wins, and only it is replaced.
+fetched_dup(R) <=> R is assoc_get(a, [kv(a, 1), kv(a, 2)]).
+
+% Keys are compared with `==`: an unbound key matches the entry keyed on
+% that same variable, but not one keyed on a different unbound variable.
+fetched_var(K, R) <=> R is assoc_get(K, [kv(K, 1), kv(b, 2)]).
+
+fetched_other_var(K, K2, R) <=> R is assoc_get(K, [kv(K2, 1), kv(b, 2)]).
+
+inserted(K, R) <=> R is assoc_put(K, 9, [kv(a, 1), kv(b, 2)]).
+
+inserted_empty(R) <=> R is assoc_put(a, 9, []).
+
+inserted_var(K, R) <=> R is assoc_put(K, 9, [kv(K, 1), kv(b, 2)]).
+
+updated(R) <=> R is assoc_update(a, fun(V) -> V * 10 end, [kv(a, 1), kv(b, 2)]).
+
+% Updating an absent key leaves the list alone.
+updated_missing(R) <=>
+    R is assoc_update(c, fun(V) -> V * 10 end, [kv(a, 1), kv(b, 2)]).
+
+deleted(R) <=> R is assoc_delete(a, [kv(a, 1), kv(b, 2)]).
+
+deleted_missing(R) <=> R is assoc_delete(c, [kv(a, 1), kv(b, 2)]).
+
+zipped_exact(R) <=> R is zip_exact([a, b], [1, 2]).
+
+zipped_exact_uneven(R) <=> R is zip_exact([a, b], [1]).
+
+membership(K, R) <=> R is assoc_member(K, [kv(a, 1), kv(b, 2)]).
+
+projected(Ks, Vs) <=>
+    Ks is assoc_keys([kv(a, 1), kv(b, 2)]),
+    Vs is assoc_values([kv(a, 1), kv(b, 2)]).
+
+empties(R, Ks) <=>
+    R is assoc_get(a, []),
+    Ks is assoc_keys([]).

@@ -21,6 +21,7 @@
 module YCHR.Internal.Collect
   ( CollectError (..),
     resolveLibraryClosure,
+    selfNamedLibraryImports,
     rewriteImports,
     addLibraryPrelude,
   )
@@ -38,6 +39,7 @@ import YCHR.Internal.Parsed
 data CollectError
   = UnknownLibrary Text
   | CircularLibraryImport [Text]
+  | SelfNamedLibraryImport Text
   deriving (Show, Eq)
 
 -- | Walk the transitive closure of library imports.
@@ -121,6 +123,27 @@ resolveAll stdlibMap visited path (ann : rest)
 -- | Extract library import names from a module.
 libraryImports :: Module -> [AnnP Text]
 libraryImports m = [AnnP n loc p | AnnP (LibraryImport n _) loc p <- m.imports]
+
+-- | Report every @use_module(library(N))@ written by a module that is
+-- itself named @N@.
+--
+-- Module identity is the name alone, so such a module /is/ the library
+-- as far as everything downstream is concerned: the bundled copy is
+-- dropped by
+-- @YCHR.Internal.Compile.Pipeline.finalizeCompilation@ and the import
+-- can never bring anything into scope. Left unreported it looks like a
+-- library that silently exports nothing.
+--
+-- Call this only once the library closure has resolved, so that a name
+-- that is not a bundled library at all has already been reported as
+-- 'UnknownLibrary'.
+selfNamedLibraryImports :: [Module] -> [Diagnostic CollectError]
+selfNamedLibraryImports mods =
+  [ noDiag (AnnP (SelfNamedLibraryImport n) loc p)
+  | m <- mods,
+    AnnP (LibraryImport n _) loc p <- m.imports,
+    n == m.name
+  ]
 
 -- | Add a prelude import to every library module that does not already
 -- declare itself to be the prelude.

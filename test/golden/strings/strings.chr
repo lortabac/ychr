@@ -1,4 +1,4 @@
-:- module(strings, [t/2, type(tags/0)]).
+:- module(strings_test, [t/2, type(tags/0)]).
 :- use_module(prelude).
 :- use_module(library(strings)).
 :- chr_constraint t/2.

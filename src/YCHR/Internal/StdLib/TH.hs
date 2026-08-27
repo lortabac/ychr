@@ -10,9 +10,11 @@
 -- 'addDependentFile' registers each embedded file with GHC's
 -- recompilation tracking. In practice cabal's higher-level cache
 -- may not consult those registrations, so editing or adding a
--- @.chr@ in @libraries\/@ does not reliably trigger a rebuild;
--- @cabal clean@ or touching this module's source is the safe
--- recipe during development.
+-- @.chr@ in @libraries\/@ does not reliably trigger a rebuild.
+-- Cabal compares file /contents/, not modification times, so
+-- @touch@ing this module does nothing: during development, edit
+-- this module (or 'YCHR.Internal.StdLib', which holds the splice)
+-- for real, or run @cabal clean@.
 module YCHR.Internal.StdLib.TH (embeddedStdLibSources) where
 
 import Data.Text (Text)

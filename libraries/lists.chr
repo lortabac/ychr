@@ -5,8 +5,16 @@
     fun length/1,
     fun member/2,
     fun append/2,
+    fun reverse/1,
     fun maplist/2,
+    fun filter/2,
     fun foldl/3,
+    fun foldr/3,
+    fun zip_with/3,
+    fun all/2,
+    fun any/2,
+    fun take/2,
+    fun drop/2,
     fun sum_list/1,
     fun product_list/1,
     fun nth/2
@@ -17,9 +25,18 @@
     (length(list(T)) -> int),
     (member(T, list(T)) -> bool),
     (append(list(T), list(T)) -> list(T)),
+    (reverse(list(T)) -> list(T)),
+    (reverse_(list(T), list(T)) -> list(T)),
     (maplist(fun(A) -> B end, list(A)) -> list(B)),
+    (filter(fun(A) -> bool end, list(A)) -> list(A)),
     (foldl(fun(B, A) -> B end, B, list(A)) -> B),
     (foldl_(fun(B, A) -> B end, list(A), B) -> B),
+    (foldr(fun(A, B) -> B end, B, list(A)) -> B),
+    (zip_with(fun(A, B) -> C end, list(A), list(B)) -> list(C)),
+    (all(fun(A) -> bool end, list(A)) -> bool),
+    (any(fun(A) -> bool end, list(A)) -> bool),
+    (take(int, list(T)) -> list(T)),
+    (drop(int, list(T)) -> list(T)),
     (sum_list(list(int)) -> int),
     (product_list(list(int)) -> int).
 
@@ -55,13 +72,50 @@ member(X, [_|Xs]) -> member(X, Xs).
 append([], Ys) -> Ys.
 append([X|Xs], Ys) -> cons(X, append(Xs, Ys)).
 
+reverse(Xs) -> reverse_(Xs, []).
+
+reverse_([], Acc) -> Acc.
+reverse_([X|Xs], Acc) -> reverse_(Xs, [X|Acc]).
+
 maplist(_, []) -> [].
-maplist(F, [X|Xs]) -> cons('$call'(F, X), maplist(F, Xs)).
+maplist(F, [X|Xs]) -> cons(call(F, X), maplist(F, Xs)).
+
+% Guards are ordinary boolean expressions, so the predicate is applied
+% in guard position and the two cons equations differ only by its result.
+filter(_, []) -> [].
+filter(F, [X|Xs]) | call(F, X) -> [X|filter(F, Xs)].
+filter(F, [_|Xs]) -> filter(F, Xs).
 
 foldl(F, Init, Xs) -> foldl_(F, Xs, Init).
 
 foldl_(F, [], Acc) -> Acc.
-foldl_(F, [X|Xs], Acc) -> foldl_(F, Xs, '$call'(F, Acc, X)).
+foldl_(F, [X|Xs], Acc) -> foldl_(F, Xs, call(F, Acc, X)).
+
+foldr(_, Init, []) -> Init.
+foldr(F, Init, [X|Xs]) -> call(F, X, foldr(F, Init, Xs)).
+
+zip_with(_, [], _) -> [].
+zip_with(_, _, []) -> [].
+zip_with(F, [X|Xs], [Y|Ys]) -> [call(F, X, Y)|zip_with(F, Xs, Ys)].
+
+all(_, []) -> true.
+all(F, [X|Xs]) | call(F, X) -> all(F, Xs).
+all(_, [_|_]) -> false.
+
+any(_, []) -> false.
+any(F, [X|_]) | call(F, X) -> true.
+any(F, [_|Xs]) -> any(F, Xs).
+
+% `take`/`drop` clamp instead of failing: the count guard comes first so
+% that every remaining equation is unguarded, which keeps the pair
+% exhaustive for the pattern-match checker.
+take(N, _) | N =< 0 -> [].
+take(_, []) -> [].
+take(N, [X|Xs]) -> [X|take(N - 1, Xs)].
+
+drop(N, Xs) | N =< 0 -> Xs.
+drop(_, []) -> [].
+drop(N, [_|Xs]) -> drop(N - 1, Xs).
 
 sum_list(Xs) -> foldl(fun '+'/2, 0, Xs).
 

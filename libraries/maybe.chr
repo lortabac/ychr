@@ -1,0 +1,65 @@
+:- module(maybe, [
+    type(maybe/1),
+    fun map_maybe/2,
+    fun map_maybe/3,
+    fun maybe_and_then/2,
+    fun '>>='/2,
+    fun '=<<'/2,
+    fun is_just/1,
+    fun is_nothing/1,
+    fun from_maybe/2,
+    fun foldr_maybe/3,
+    op(740, yfx, '>>='),
+    op(740, xfy, '=<<')
+]).
+
+% An optional value: the result of a computation that may not produce
+% one. `just(X)` carries a value, `nothing` carries none.
+:- chr_type maybe(A) ---> just(A) ; nothing.
+
+:- function
+    (map_maybe(fun(A) -> B end, maybe(A)) -> maybe(B)),
+    (map_maybe(fun(A, B) -> C end, maybe(A), maybe(B)) -> maybe(C)),
+    (maybe_and_then(maybe(A), fun(A) -> maybe(B) end) -> maybe(B)),
+    ('>>='(maybe(A), fun(A) -> maybe(B) end) -> maybe(B)),
+    ('=<<'(fun(A) -> maybe(B) end, maybe(A)) -> maybe(B)),
+    (is_just(maybe(A)) -> bool),
+    (is_nothing(maybe(A)) -> bool),
+    (from_maybe(A, maybe(A)) -> A),
+    (foldr_maybe(B, fun(A) -> B end, maybe(A)) -> B).
+
+% Apply a function to the value inside, if there is one (functor).
+map_maybe(_, nothing) -> nothing.
+map_maybe(F, just(X)) -> just(call(F, X)).
+
+% Combine two optional values with a binary function, yielding a value
+% only when both are present. The applicative lift, named for the arity
+% it maps over rather than for the abstraction, which the language does
+% not have.
+map_maybe(F, just(X), just(Y)) -> just(call(F, X, Y)).
+map_maybe(_, _, _) -> nothing.
+
+% Sequence a second optional computation after this one (monad).
+maybe_and_then(nothing, _) -> nothing.
+maybe_and_then(just(X), F) -> call(F, X).
+
+% Operator spellings of `maybe_and_then/2`, in both directions. They are
+% tighter than `is` (750) so that `R is M >>= F` parses as intended.
+M >>= F -> maybe_and_then(M, F).
+
+F =<< M -> maybe_and_then(M, F).
+
+is_just(nothing) -> false.
+is_just(just(_)) -> true.
+
+is_nothing(nothing) -> true.
+is_nothing(just(_)) -> false.
+
+% The value, or a default if there is none.
+from_maybe(D, nothing) -> D.
+from_maybe(_, just(X)) -> X.
+
+% Eliminate a `maybe` in one step: a default for `nothing`, a function
+% for `just`.
+foldr_maybe(D, _, nothing) -> D.
+foldr_maybe(_, F, just(X)) -> call(F, X).

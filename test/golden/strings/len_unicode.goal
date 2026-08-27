@@ -1,1 +1,1 @@
-strings:t(len_unicode, R)
+strings_test:t(len_unicode, R)

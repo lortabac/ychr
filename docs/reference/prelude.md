@@ -239,8 +239,8 @@ render a term first, or `print/1` to print one directly.
 
 ## Other libraries
 
-The bundled libraries `lists`, `strings`, and `meta` ship
-alongside the prelude under [`libraries/`](../../libraries/).
+The bundled libraries `lists`, `maybe`, `pairs`, `strings`, and `meta`
+ship alongside the prelude under [`libraries/`](../../libraries/).
 
 Unlike the prelude, these are *not* auto-loaded outside the REPL —
 inside the REPL all of them are available; in compiled programs use
@@ -258,8 +258,16 @@ itself rather than delegated to host calls.
 | `length(list(T)) -> int` | Number of elements. |
 | `member(T, list(T)) -> bool` | Membership test, using `==`. |
 | `append(list(T), list(T)) -> list(T)` | Concatenate two lists. |
+| `reverse(list(T)) -> list(T)` | Reverse. |
 | `maplist(fun(A) -> B end, list(A)) -> list(B)` | Apply a function to each element. |
+| `filter(fun(A) -> bool end, list(A)) -> list(A)` | Keep the elements satisfying a predicate. |
 | `foldl(fun(B, A) -> B end, B, list(A)) -> B` | Left fold with an initial accumulator. |
+| `foldr(fun(A, B) -> B end, B, list(A)) -> B` | Right fold with an initial accumulator. |
+| `zip_with(fun(A, B) -> C end, list(A), list(B)) -> list(C)` | Combine two lists element-wise, stopping at the shorter one. (To pair them up instead, see `zip/2` in [`pairs`](#pairs).) |
+| `all(fun(A) -> bool end, list(A)) -> bool` | True when every element satisfies the predicate. |
+| `any(fun(A) -> bool end, list(A)) -> bool` | True when some element does. |
+| `take(int, list(T)) -> list(T)` | The first `N` elements; the whole list if it is shorter, `[]` for `N =< 0`. |
+| `drop(int, list(T)) -> list(T)` | Everything after the first `N` elements; `[]` if the list is shorter, the whole list for `N =< 0`. |
 | `sum_list(list(int)) -> int` | Sum. Integers only — the accumulator starts at `0`. |
 | `product_list(list(int)) -> int` | Product. Integers only, starting at `1`. |
 | `nth/2` | 0-based indexing. Partial: a runtime error if the index is out of range. |
@@ -269,6 +277,89 @@ genuinely partial, and a signature is what enables the exhaustiveness
 checker — so annotating them would make every importing module emit
 `YCHR-20103`, which `--Werror` turns fatal. Their arguments are
 therefore `any` to the type checker.
+
+`take/2` and `drop/2` clamp rather than fail: an out-of-range count is
+not an error.
+
+Every function here matches on the list spine, so a *partial* list —
+one whose tail is still an unbound variable, like `[1|T]` — is a
+runtime error (`YCHR-60001`, "no matching equation"), not a suspension.
+There is no delaying: the list argument must be a proper list by the
+time the call is evaluated.
+
+### `maybe`
+
+[`libraries/maybe.chr`](../../libraries/maybe.chr). An optional value —
+the result of a computation that may not produce one.
+
+```prolog
+:- chr_type maybe(A) ---> just(A) ; nothing.
+```
+
+| Function | Description |
+|---|---|
+| `map_maybe(fun(A) -> B end, maybe(A)) -> maybe(B)` | Apply a function to the value inside, if any (functor). |
+| `map_maybe(fun(A, B) -> C end, maybe(A), maybe(B)) -> maybe(C)` | Combine two optional values, yielding one only when both are present. |
+| `maybe_and_then(maybe(A), fun(A) -> maybe(B) end) -> maybe(B)` | Sequence a second optional computation after this one (monad). |
+| `M >>= F`, `F =<< M` | Operator spellings of `maybe_and_then/2`, in both directions. |
+| `is_just(maybe(A)) -> bool`, `is_nothing(maybe(A)) -> bool` | Which case this is. |
+| `from_maybe(A, maybe(A)) -> A` | The value, or a default. |
+| `foldr_maybe(B, fun(A) -> B end, maybe(A)) -> B` | Eliminate a `maybe` in one step: a default for `nothing`, a function for `just`. |
+
+`>>=` is `yfx` and `=<<` is `xfy`, both at priority 740 — tighter than
+`is` (750), so `R is M >>= F` needs no parentheses, and looser than the
+comparisons (700).
+
+```prolog
+R is just(2) >>= fun(X) -> just(X + 1) end
+             >>= fun(Y) -> just(Y * 10) end.   % just(30)
+```
+
+`map_maybe` is named for the arity it maps over: `map_maybe/2` is the
+functor map, `map_maybe/3` the applicative lift. There is no
+`map_maybe/4` — it would need to apply a three-argument function, and
+`'$call'`, hence `call/N`, supports one and two arguments only.
+
+### `pairs`
+
+[`libraries/pairs.chr`](../../libraries/pairs.chr). Key/value pairs and
+association lists, also written in CHR. Imports [`maybe`](#maybe), which
+is what `assoc_get/2` and `zip_exact/2` return.
+
+```prolog
+:- chr_type pair(K, V) ---> kv(K, V).
+```
+
+The pair constructor is `kv/2`, not Prolog's `-/2`: `-` is the prelude's
+subtraction function, and a bare reference to a name that is a function
+in one module and a data constructor in another is ambiguous, hence
+rejected (`YCHR-20020`).
+
+| Function | Description |
+|---|---|
+| `key(pair(K, V)) -> K` | First component. |
+| `value(pair(K, V)) -> V` | Second component. |
+| `zip(list(A), list(B)) -> list(pair(A, B))` | Pair up two lists, stopping at the shorter one. |
+| `zip_exact(list(A), list(B)) -> maybe(list(pair(A, B)))` | Pair up two lists of equal length; `nothing` if the lengths differ. |
+| `assoc_get(K, list(pair(K, V))) -> maybe(V)` | Look up a key: `just(V)` or `nothing`. |
+| `assoc_put(K, V, list(pair(K, V))) -> list(pair(K, V))` | Replace the first entry for the key, or append a new one. |
+| `assoc_update(K, fun(V) -> V end, list(pair(K, V))) -> list(pair(K, V))` | Apply a function to the first entry's value. A list with no entry for the key is returned unchanged. |
+| `assoc_delete(K, list(pair(K, V))) -> list(pair(K, V))` | Remove the first entry for the key, if any. |
+| `assoc_member(K, list(pair(K, V))) -> bool` | Whether the key is present. |
+| `assoc_keys(list(pair(K, V))) -> list(K)` | The keys, in order. |
+| `assoc_values(list(pair(K, V))) -> list(V)` | The values, in order. |
+
+An association list is an ordinary `list(pair(K, V))` — there is no
+abstract map type — and every operation is a linear scan touching only
+the *first* entry for a key.
+
+Keys are compared with `==`, which is *identity*, not unification. An
+unbound key therefore matches an entry keyed on that same variable, and
+nothing else: `assoc_get(K, [kv(K, 1)])` is `just(1)`, while
+`assoc_get(K, [kv(K2, 1)])` for a different unbound `K2` is `nothing`.
+By the same rule `assoc_put` with an unbound key appends rather than
+replaces — and if that key is bound later, the list can end up holding
+two entries for it, of which only the first is ever found.
 
 ### `strings`
 

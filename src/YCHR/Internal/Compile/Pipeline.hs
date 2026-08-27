@@ -34,6 +34,7 @@ import YCHR.Internal.Collect
     addLibraryPrelude,
     resolveLibraryClosure,
     rewriteImports,
+    selfNamedLibraryImports,
   )
 import YCHR.Internal.Collected (CollectedModule)
 import YCHR.Internal.Compile (CompileError, compile)
@@ -219,7 +220,8 @@ data ExportResolution
 -- instead, or 'compileParsedModules' for programs built with "YCHR.DSL".
 --
 -- The 'Bool' is @includeStdlib@: pass 'True' to make the bundled
--- libraries (@prelude@, @lists@, @strings@, @meta@) available for
+-- libraries (@prelude@, @lists@, @pairs@, @maybe@, @strings@, @meta@)
+-- available for
 -- @:- use_module(library(…))@, which is what you almost always want —
 -- the prelude supplies arithmetic and comparison. 'False' compiles
 -- against nothing but the given modules; the CLI uses it so that a
@@ -255,7 +257,10 @@ compileModules includeStdlib inputs = do
   -- table construction and by the renamer's UnknownOperatorImport check.
   let stdlibOpExports = Map.fromList [(m.name, extractOpDecls m) | m <- libraryMods]
       userOpExports = Map.fromList [(h.modName, h.exportOps) | (_, h) <- userHeaders]
-      opExports = stdlibOpExports `Map.union` userOpExports
+      -- Left-biased, so a user module shadowing a same-named library
+      -- also supplies that name's operators — matching the module
+      -- dedup in 'finalizeCompilation'.
+      opExports = userOpExports `Map.union` stdlibOpExports
       preludeOps = Map.findWithDefault [] "prelude" opExports
   -- Build per-module operator tables and full-parse each user file with
   -- its specific table. A first conflict in any table aborts the whole
@@ -313,7 +318,8 @@ compileParsedModules includeStdlib parsed = do
       )
   let stdlibOpExports = Map.fromList [(m.name, extractOpDecls m) | m <- libraryMods]
       userOpExports = Map.fromList [(m.name, extractOpDecls m) | m <- parsed]
-      opExports = stdlibOpExports `Map.union` userOpExports
+      -- Left-biased for the same reason as in 'compileModules'.
+      opExports = userOpExports `Map.union` stdlibOpExports
   finalizeCompilation libraryMods opExports Map.empty parsed
 
 -- | Shared post-parse, post-library-resolution pipeline: rename, resolve,
@@ -332,10 +338,33 @@ finalizeCompilation ::
   [Module] ->
   Either Error (CompiledProgram, [Warning])
 finalizeCompilation libraryMods opExports trailingLocMap parsed = do
-  -- Auto-import prelude into every user module and into every library
-  -- module (except prelude itself), then rewrite all LibraryImports to
-  -- ModuleImports for the renamer.
-  let allMods = rewriteImports (addLibraryPrelude libraryMods ++ map addPreludeImport parsed)
+  -- A bundled library is dropped when a user module carries its name:
+  -- module identity is the name alone, so keeping both would list two
+  -- providers for every name the library exports and make each use
+  -- ambiguous (YCHR-20012) — even when the two are the very same source,
+  -- as in @ychr check libraries\/pairs.chr libraries\/maybe.chr@, where
+  -- @pairs@ pulls the embedded @maybe@ into the closure alongside the
+  -- one given on the command line. The explicitly supplied module wins;
+  -- 'compileModules' and 'compileParsedModules' bias the operator-export
+  -- map the same way.
+  --
+  -- This deduplicates across the two /sources/ of modules. Two user
+  -- modules that declare the same name still collide, which is a genuine
+  -- input error rather than something to resolve silently.
+  --
+  -- A module that imports the very library it replaces is rejected
+  -- first: after the dedup that import names the module itself, so it
+  -- could only ever bring in nothing.
+  case selfNamedLibraryImports parsed of
+    [] -> pure ()
+    errs -> Left (CollectErrors errs)
+  let userNames = Set.fromList [m.name | m <- parsed]
+      visibleLibraries = [m | m <- libraryMods, not (Set.member m.name userNames)]
+      -- Auto-import prelude into every user module and into every library
+      -- module (except prelude itself), then rewrite all LibraryImports to
+      -- ModuleImports for the renamer.
+      allMods =
+        rewriteImports (addLibraryPrelude visibleLibraries ++ map addPreludeImport parsed)
       exportEnv = buildExportEnv allMods
       exportMap =
         Map.fromList
@@ -400,8 +429,16 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
 -- equivalent import entry; one that writes a /narrowed/ prelude import is
 -- rejected by 'YCHR.Internal.Rename.validateImportLists' (YCHR-20019)
 -- rather than silently getting the full prelude anyway.
+--
+-- A user module /named/ @prelude@ is the one exception, mirroring
+-- 'YCHR.Internal.Collect.addLibraryPrelude': it supplies the prelude
+-- rather than importing it, and a self-import would give its own
+-- declarations a second, imported provider — enough to make @bool@ and
+-- @list@ resolve inconsistently against the built-ins.
 addPreludeImport :: Module -> Module
-addPreludeImport m = m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
+addPreludeImport m
+  | m.name == "prelude" = m
+  | otherwise = m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
 
 -- | 'compileModules', reading each module's source from disk.
 --

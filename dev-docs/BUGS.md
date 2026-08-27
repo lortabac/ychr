@@ -255,19 +255,21 @@ this is not an already-rejected corner.
 `CollectedImport` has deliberately erased the library-vs-module
 distinction (`src/YCHR/Internal/Collected.hs:7-17`), so the check
 structurally cannot tell the stdlib prelude from a same-named user
-module. Relatedly, `Compile.Pipeline.addPreludeImport`
-(`src/YCHR/Internal/Compile/Pipeline.hs:393`) is unconditional, whereas
-its counterpart `Collect.addLibraryPrelude`
-(`src/YCHR/Internal/Collect.hs:138`) guards on `m.name == "prelude"` —
-so a user module named `prelude` also gets a synthetic self-import.
+module.
+
+Two contributing defects noted here originally have since been fixed in
+`Compile/Pipeline.hs`, and neither turned out to be what produces the
+misleading message: `addPreludeImport` no longer gives a user module
+named `prelude` a synthetic self-import (it now guards on the name, like
+its counterpart `Collect.addLibraryPrelude`), and `finalizeCompilation`
+now drops a bundled library whose name a user module already carries, so
+name-keyed lookups no longer see two providers for one module name.
 
 **Impact.** Narrow: only programs that declare their own module named
 `prelude`. Nothing that previously worked is broken — the two import
 entries both name `prelude`, so the narrowing was silently widened
 before `YCHR-20019` existed. The defect is a misleading diagnostic,
-not lost functionality. More broadly, every name-keyed lookup over
-modules (`buildExportEnv`, `buildDeclEnv`) conflates the two `prelude`
-modules into one provider list, which is its own latent problem.
+not lost functionality.
 
 **Fix sketch.** Add `"prelude"` to `reservedModuleNames` under a new
 `16xxx` code, making the check's premise true by construction rather
@@ -276,10 +278,11 @@ a deliberate call, not a silent tightening. Filtering before the
 library/module collapse is the alternative, but fights the erasure
 that `Collected.hs` documents as intentional. Whichever way, pin it
 with a negative golden. Related: the same reasoning would cover the
-other stdlib library names (`lists`, `strings`, `meta`), which shadow
-just as silently — `validateTypeDecls` already works around exactly
-this ("a module that shadows a same-named library … is
-indistinguishable from itself here", `Rename.hs:1316-1319`).
+other stdlib library names (`lists`, `strings`, `meta`). Shadowing them
+is no longer silent: the bundled library is dropped in favour of the
+user module (pinned by `test/golden/library_shadowing/`), and a module
+that imports a library carrying its own name is rejected outright as
+`YCHR-10003` (`test/golden/library_self_import/`).
 
 ## Diagnostics for an `:- extend_function` equation blame the owner's first equation
 

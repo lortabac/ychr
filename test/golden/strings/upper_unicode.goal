@@ -1,1 +1,1 @@
-strings:t(upper_unicode, R)
+strings_test:t(upper_unicode, R)

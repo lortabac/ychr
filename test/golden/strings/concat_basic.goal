@@ -1,1 +1,1 @@
-strings:t(concat_basic, R)
+strings_test:t(concat_basic, R)

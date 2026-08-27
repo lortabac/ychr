@@ -1,0 +1,13 @@
+% A module named after a bundled library, importing that library.
+%
+% Module identity is the name alone, so this module *is* `lists` for
+% everything downstream and the bundled one is dropped: the import can
+% never bring anything into scope. Rejected rather than left to surface
+% as a library that mysteriously exports nothing.
+:- module(lists, [go/1]).
+
+:- use_module(library(lists)).
+
+:- chr_constraint go/1.
+
+go(R) <=> R is length([1, 2, 3]).

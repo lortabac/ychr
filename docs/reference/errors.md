@@ -17,6 +17,7 @@ internal error constructor to its code and human-readable message.
 |------|------|---------|
 | `YCHR-10001` | `UnknownLibrary` | A `:- use_module(library(name))` directive names a library that is not bundled with the compiler. Check the spelling against the built-in library list. |
 | `YCHR-10002` | `CircularLibraryImport` | The transitive `use_module(library(...))` graph contains a cycle. Break the cycle by removing or restructuring one of the imports. |
+| `YCHR-10003` | `SelfNamedLibraryImport` | A module named `N` writes `:- use_module(library(N))`. Modules are identified by name, so this module replaces the bundled library and the import names the module itself — it can bring nothing into scope. Rename the module, or drop the import. |
 
 ### Parse validation phase (`15xxx`)
 

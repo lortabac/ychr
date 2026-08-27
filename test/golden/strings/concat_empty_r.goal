@@ -1,1 +1,1 @@
-strings:t(concat_empty_r, R)
+strings_test:t(concat_empty_r, R)

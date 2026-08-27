@@ -1,0 +1,2 @@
+A = maybe:just(3)
+B = maybe:nothing
