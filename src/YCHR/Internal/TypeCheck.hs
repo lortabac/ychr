@@ -91,7 +91,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import YCHR.Internal.Compile.Names (vmName)
+import YCHR.Internal.Compile.Names (runtimeName)
 import YCHR.Internal.Constructors (buildConAlias, buildConMap)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..))
@@ -110,6 +110,15 @@ import YCHR.Internal.TypeCheck.Error
     TypeCheckResult (..),
     TypeCheckWarning (..),
   )
+import YCHR.Internal.TypeCheck.Render
+  ( TypeAtoms (..),
+    deepDerefType,
+    displayQualifiedAtom,
+    showType,
+    showValue,
+    showValueShape,
+    typeAtom,
+  )
 import YCHR.Internal.Types
   ( BoundSig (..),
     DataConstructor (..),
@@ -124,14 +133,13 @@ import YCHR.Internal.Types
     typeConstructors,
   )
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM qualified as VM
 
--- | Flatten a 'Name' to the same single-atom form used by the runtime
--- (see 'YCHR.Internal.Compile.Names.vmName'). Required so CHR-side constraints
--- emitted from this Haskell driver match what compiled CHR rules
--- produce after the renamer canonicalizes data-constructor names.
-runtimeName :: Name -> Text
-runtimeName name = let VM.Name t = vmName name in t
+-- | The naming scheme of this checker's CHR type representation: every
+-- @tcon@ \/ @fun@ \/ @rigid@ \/ @ty_*@ constructor is declared in the
+-- @'$typechecker'@ module, so the runtime functor symbols all carry
+-- that qualifier. "YCHR.Internal.TypeCheck.Render" renders against it.
+tcTypeAtoms :: TypeAtoms
+tcTypeAtoms = TypeAtoms "$typechecker"
 
 -- | Runtime functor name of a constructor declared in the
 -- @'$typechecker'@ module — base types (@int@), record/tag
@@ -141,7 +149,7 @@ runtimeName name = let VM.Name t = vmName name in t
 -- Used as the functor argument of 'VTerm' values this Haskell driver
 -- builds, of any arity.
 tcAtom :: Text -> Text
-tcAtom n = "$typechecker__" <> n
+tcAtom = typeAtom tcTypeAtoms
 
 -- | A base type (@int@, @float@, @string@, @any@) as a runtime
 -- 'Value'. 0-arity compounds collapse to 'VAtom' at the runtime
@@ -149,8 +157,9 @@ tcAtom n = "$typechecker__" <> n
 -- matches the shape compiled head patterns produce.
 --
 -- Callers pass the /source-level/ name; the @ty_@ prefix of the CHR
--- constructor is added here and stripped again by 'displayTypeAtom',
--- so neither side of the driver has to spell the internal name. See
+-- constructor is added here and stripped again by
+-- 'YCHR.Internal.TypeCheck.Render.displayTypeAtom', so neither side of
+-- the driver has to spell the internal name. See
 -- the @ty@ declaration in @typechecker.chr@ for why the prefix exists.
 tcCon0 :: Text -> Value
 tcCon0 n = VAtom (tcBaseAtom n)
@@ -2317,96 +2326,8 @@ decodeTypePair detail = case detail of
   VTerm pf [t1, t2] | pf == tcAtom "pair" -> do
     t1' <- deepDerefType t1
     t2' <- deepDerefType t2
-    pure (showType t1', showType t2')
+    pure (showType tcTypeAtoms t1', showType tcTypeAtoms t2')
   _ -> pure ("?", "?")
-
--- | Dereference a type value through every nesting level, so
--- 'showType' (a pure function) sees the solved types rather than
--- bound-variable placeholders. This is what lets a pinned rigid's
--- cell, or a solved type-constructor argument, print as its type
--- instead of @_@.
-deepDerefType :: Value -> Chr Value
-deepDerefType v = do
-  v' <- deref v
-  case v' of
-    VTerm f args -> VTerm f <$> traverse deepDerefType args
-    _ -> pure v'
-
--- | One-line description of a runtime 'Value''s outer shape, used only
--- in 'error' messages for broken-invariant cases while decoding the
--- diagnostic accumulators.
-showValueShape :: Value -> String
-showValueShape (VTerm f xs) =
-  "VTerm " <> T.unpack f <> "/" <> show (length xs)
-showValueShape (VAtom a) = "VAtom " <> T.unpack a
-showValueShape (VInt _) = "VInt"
-showValueShape (VFloat _) = "VFloat"
-showValueShape (VText _) = "VText"
-showValueShape (VBool _) = "VBool"
-showValueShape (VVar _) = "VVar"
-showValueShape VWildcard = "VWildcard"
-
-showType :: Value -> Text
-showType (VAtom a) = displayTypeAtom a
-showType (VTerm functor [a, b])
-  | functor == tcAtom "tcon" =
-      let name = showTypeName a
-       in case fromValueList b of
-            Just [] -> name
-            Just as -> name <> "(" <> T.intercalate ", " (map showType as) <> ")"
-            Nothing -> name <> "(?)"
-  | functor == tcAtom "fun" =
-      case fromValueList a of
-        Just as -> "fun(" <> T.intercalate ", " (map showType as) <> ") -> " <> showType b
-        Nothing -> "fun(?) -> " <> showType b
--- Rigid type variable: rendered with its synthetic id so distinct
--- rigids are distinguishable in inconsistency messages. The original
--- source-level tvar name (@T@, @A@, ...) is not preserved because the
--- driver does not currently maintain an id-to-name map; @T#<n>@ is
--- enough to communicate "this is a polymorphic type variable" to the
--- reader. A skolem pinned by guard-derived evidence is rendered as
--- the type it was pinned to — that is the type the reader's guard
--- established. ('decodeTypePair' deep-dereferences first, so a bound
--- cell arrives here as a concrete type rather than a variable.)
-showType (VTerm functor [cell, VInt n])
-  | functor == tcAtom "rigid" = case cell of
-      VVar _ -> "T#" <> T.pack (show n)
-      pinned -> showType pinned
-showType (VVar _) = "_"
-showType (VInt n) = T.pack (show n)
-showType _ = "?"
-
-showTypeName :: Value -> Text
-showTypeName (VAtom a) = displayTypeAtom a
-showTypeName _ = "?"
-
-showValue :: Value -> Chr Text
-showValue v = do
-  v' <- deref v
-  case v' of
-    VAtom a -> pure (displayQualifiedAtom a)
-    _ -> pure "?"
-
--- | Convert a runtime-flattened qualified atom (@m__n@) back to the
--- source-level display form (@m:n@). No-op when the atom doesn't
--- contain @__@. Used in error messages so users see familiar syntax.
--- Inverse of 'runtimeName'.
-displayQualifiedAtom :: Text -> Text
-displayQualifiedAtom = T.replace "__" ":"
-
--- | Like 'displayQualifiedAtom', but additionally undoes the internal
--- spelling of the built-in types: the @'$typechecker'@ module
--- qualifier and the @ty_@ constructor prefix both come off, so
--- @$typechecker__ty_int@ renders as @int@. User-defined types stay
--- module-qualified. Inverse of 'tcBaseAtom'; this is the only place a
--- @$typechecker@ atom becomes user-visible text, so it is the only
--- place that has to know about the prefix.
-displayTypeAtom :: Text -> Text
-displayTypeAtom t =
-  let q = displayQualifiedAtom t
-   in case T.stripPrefix "$typechecker:" q of
-        Nothing -> q
-        Just base -> fromMaybe base (T.stripPrefix "ty_" base)
 
 -- ---------------------------------------------------------------------------
 -- Type definition validation (pure, Haskell-side)

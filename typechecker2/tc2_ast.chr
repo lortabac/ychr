@@ -1,0 +1,189 @@
+% Desugared-AST vocabulary for the CHR type-checker (typechecker2).
+%
+% Every type here mirrors, one constructor per Haskell constructor, a
+% type of `src/YCHR/Internal/Desugared.hs` (and the `Resolved.Expr` /
+% `Types` vocabulary it re-exports). The encoder that produces the
+% ground terms these declarations describe is
+% `src/YCHR/Internal/TypeCheck/Encode.hs`; the two files are a matched
+% pair and must be edited together.
+%
+% Nothing is computed here. The module exists so that the renamer
+% recognizes the AST constructors in the rules of the other
+% typechecker2 modules, and so that `ychr check --Werror` can type the
+% checker itself.
+%
+% Naming conventions:
+%
+%   * Names (constraints, functions, constructors, type constructors,
+%     host functions) arrive as *runtime-mangled atoms*: `m__f` for a
+%     qualified name, the bare text for an unqualified one. That is the
+%     same spelling compiled rules produce, so a name in an encoded AST
+%     compares equal to the same name reaching the checker from any
+%     other source. Their declared type is `any` because the runtime
+%     representation of an atom is not `string`.
+%
+%   * Source-level *variable* names are atoms too, under the same
+%     `any`.
+%
+%   * Constructors carry a suffix (`_e` for expressions, `_t` for the
+%     type-expression forms) wherever the unsuffixed name would collide
+%     with a prelude function or with another AST type's constructor.
+:- module('$tc2_ast', [
+    type(loc/0),
+    type(ann/1),
+    type(ty_expr/0),
+    type(head_arg/0),
+    type(head_con/0),
+    type(rule_head/0),
+    type(expr/0),
+    type(guard/0),
+    type(body_goal/0),
+    type(fun_stmt/0),
+    type(rule/0),
+    type(fun_sig/0),
+    type(bound_sig/0),
+    type(fun_eq/0),
+    type(fun_def/0),
+    type(data_con/0),
+    type(type_kind/0),
+    type(type_def/0),
+    type(con_key/0),
+    type(program/0)
+]).
+
+:- use_module(library(maybe)).
+:- use_module(library(pairs)).
+
+% A source position: file, line, column. Mirrors
+% `YCHR.Internal.Loc.SourceLoc`; the file name is a string, not an atom.
+:- chr_type loc ---> loc(string, int, int).
+
+% An AST node with its source annotation. Mirrors
+% `YCHR.Internal.Parsed.AnnP`, minus its `parsed :: PExpr` field: the
+% p-expr is not needed for checking, only for echoing the source
+% snippet in a rendered diagnostic. The encoder keeps it on the Haskell
+% side, keyed by the integer id in the first field, and the driver looks
+% it back up when a diagnostic carrying that id comes out.
+:- chr_type ann(A) ---> ann(int, loc, A).
+
+% A source-level type expression, `YCHR.Internal.Types.TypeExpr`. This
+% is the *syntax* of a type, not the solver's `ty`: a `tvar` is still a
+% named source variable here, and turning it into a fresh flexible or
+% rigid solver variable is a job for the checking rules. `tconx` (rather
+% than `tcon`) so that a module importing both this and the solver's
+% type representation can tell them apart.
+:- chr_type ty_expr ---> tvar(any)
+                       ; tconx(any, list(ty_expr)).
+
+% A post-HNF head or parameter argument: `YCHR.Internal.Types.HeadArg`.
+% The desugarer guarantees these are the only two shapes.
+:- chr_type head_arg ---> head_var(any)
+                        ; head_wild.
+
+% A constraint occurrence in a post-HNF rule head:
+% `YCHR.Internal.Types.HeadConstraint`.
+:- chr_type head_con ---> head_con(any, list(head_arg)).
+
+% A desugared rule head, `YCHR.Internal.Desugared.Head`: the kept
+% occurrences first, then the removed ones.
+:- chr_type rule_head ---> rule_head(list(head_con), list(head_con)).
+
+% An expression, `YCHR.Internal.Resolved.Expr`. The resolver has
+% already decided, for every compound, whether it is a constructor
+% application, a static call, a dynamic dispatch, a function reference,
+% a lambda, or a host call, so each of those is its own constructor
+% here and no rule has to re-derive the distinction.
+%
+% `lambda_e` survives into the checker because lambda lifting runs
+% *after* type-checking. Its parameter and body lists are non-empty by
+% construction, which this encoding cannot express.
+:- chr_type expr ---> var_e(any)
+                    ; int_e(int)
+                    ; float_e(float)
+                    ; text_e(string)
+                    ; wild_e
+                    ; ctor_e(any, list(expr))
+                    ; call_e(any, list(expr))
+                    ; apply_e(expr, list(expr))
+                    ; funref_e(any, int)
+                    ; lambda_e(list(head_arg), list(expr))
+                    ; host_e(any, list(expr)).
+
+% A guard, `YCHR.Internal.Desugared.Guard`. `guard_equal`,
+% `guard_match` and `guard_getarg` are the HNF-synthesized forms;
+% `guard_expr` is a user-written one. The first field of
+% `guard_getarg` is the variable name the extracted argument is bound
+% to.
+:- chr_type guard ---> guard_equal(expr, expr)
+                     ; guard_match(expr, any, int)
+                     ; guard_getarg(any, expr, int)
+                     ; guard_expr(expr).
+
+% A rule-body goal, `YCHR.Internal.Desugared.BodyGoal`. The first
+% field of `body_is` is the variable name on the left of `is`.
+:- chr_type body_goal ---> body_true
+                         ; body_tell(any, list(expr))
+                         ; body_unify(expr, expr)
+                         ; body_host(any, list(expr))
+                         ; body_is(any, expr)
+                         ; body_call(any, list(expr))
+                         ; body_apply(expr, list(expr)).
+
+% A statement in non-final position of a function equation's
+% right-hand side: `YCHR.Internal.Desugared.FunStmt`.
+:- chr_type fun_stmt ---> fun_is(any, expr)
+                        ; fun_host(any, list(expr))
+                        ; fun_call(any, list(expr))
+                        ; fun_apply(expr, list(expr)).
+
+% A rule, `YCHR.Internal.Desugared.Rule`. The name is absent for an
+% unnamed rule; it is a string rather than an atom because it is only
+% ever rendered, never compared against a runtime name.
+:- chr_type rule ---> rule(maybe(string),
+                           ann(rule_head),
+                           ann(list(guard)),
+                           ann(list(body_goal))).
+
+% One declared signature of a function: argument types and return type.
+:- chr_type fun_sig ---> fun_sig(list(ty_expr), ty_expr).
+
+% A required signature from a `requiring` clause,
+% `YCHR.Internal.Types.BoundSig`: the bound function's name, its arity,
+% the argument types, the return type, and the clause's own location.
+:- chr_type bound_sig ---> bound_sig(any, int, list(ty_expr), ty_expr, loc).
+
+% A function equation, `YCHR.Internal.Desugared.Equation`: post-HNF
+% parameters, guards, prelude statements, and the result expression.
+:- chr_type fun_eq ---> fun_eq(list(head_arg), list(guard), list(fun_stmt), expr).
+
+% A function, `YCHR.Internal.Desugared.Function`: name, arity, declared
+% signatures (more than one means a class function), `requiring`
+% bounds, and the annotated equation block.
+:- chr_type fun_def ---> fun_def(any, int, list(fun_sig), list(bound_sig), ann(list(fun_eq))).
+
+% A data constructor of an algebraic type,
+% `YCHR.Internal.Types.DataConstructor`.
+:- chr_type data_con ---> data_con(any, list(ty_expr)).
+
+% What a type declaration declares, `YCHR.Internal.Types.TypeKind`: the
+% constructors of a `:- chr_type`, or nothing at all for an
+% `:- opaque_type`.
+:- chr_type type_kind ---> algebraic(list(data_con))
+                         ; opaque.
+
+% A type declaration, `YCHR.Internal.Types.TypeDefinition`: name, type
+% parameter names, kind, and location.
+:- chr_type type_def ---> type_def(any, list(any), type_kind, loc).
+
+% The key of the per-constraint declaration maps,
+% `YCHR.Internal.Types.ConstraintKey`. Constraints are
+% arity-overloadable, so the name alone does not identify one.
+:- chr_type con_key ---> con_key(any, int).
+
+% A whole desugared program, `YCHR.Internal.Desugared.Program`. The two
+% `Map ConstraintKey _` fields arrive as assoc lists sorted by key.
+:- chr_type program ---> program(list(rule),
+                                 list(fun_def),
+                                 list(pair(con_key, list(ty_expr))),
+                                 list(pair(con_key, list(bound_sig))),
+                                 list(type_def)).

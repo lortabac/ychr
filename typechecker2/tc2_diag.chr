@@ -1,0 +1,71 @@
+% Diagnostic vocabulary for the CHR type-checker (typechecker2).
+%
+% A diagnostic is a self-contained term: unlike the old checker, which
+% hands the Haskell driver an integer handle into a live context table,
+% every `error/3` and `warning/3` here carries the source position and
+% the label it should be rendered with. Decoding on the Haskell side
+% (`src/YCHR/Internal/TypeCheck/V2.hs`) therefore needs no session
+% state beyond the encoder's annotation-id map.
+%
+% Rendering stays in Haskell so that the messages stay byte-identical
+% to the old checker's: a label is a structured term here, not a
+% pre-formatted string.
+:- module('$tc2_diag', [
+    type(diag_label/0),
+    type(ctx/0),
+    type(error/0),
+    type(warning/0),
+    type(error_code/0),
+    type(warning_code/0),
+    type(error_detail/0)
+]).
+
+:- use_module('$tc2_ast').
+
+% What a diagnostic is attributed to. `label_rule` carries the rule's
+% source name, `label_function` its target's mangled name;
+% `label_text` is a caller-supplied label (goal checking), and
+% `label_none` is an unlabelled diagnostic — an unnamed rule, say.
+:- chr_type diag_label ---> label_rule(string)
+                          ; label_function(any)
+                          ; label_text(string)
+                          ; label_none.
+
+% Everything a diagnostic needs to know about where it came from:
+%
+%   * the *checking unit* — one rule, one function equation, or one
+%     top-level goal — which is what warning suppression is keyed on: a
+%     unit that reports an error omits its warnings;
+%   * the *annotation id* of the enclosing AST node, which the Haskell
+%     driver resolves back to the p-expr it echoes in the message. Ids
+%     are the ones the encoder put in the `ann/3` nodes, so they are
+%     non-negative; a diagnostic with no enclosing annotated node — a
+%     top-level goal's, say — uses **-1**, and the driver rejects any
+%     other id it cannot resolve;
+%   * the label to render;
+%   * the source position.
+:- chr_type ctx ---> ctx(int, int, diag_label, loc).
+
+% An accumulated error. `Code` is an `error_code` atom and `Detail` is
+% heterogeneous (a type pair, an atom, a name), hence `any` for both.
+:- chr_type error ---> error(ctx, any, any).
+
+% An accumulated warning. Same shape as an error, in a separate type so
+% that suppression can act on the two lists independently.
+:- chr_type warning ---> warning(ctx, any, any).
+
+% Atoms used as the `Code` field of `error/3`.
+:- chr_type error_code ---> inconsistent
+                          ; no_matching_overload
+                          ; bound_unsatisfied.
+
+% Atoms used as the `Code` field of `warning/3`. `inaccessible` is the
+% inaccessible-branch warning YCHR-20104.
+:- chr_type warning_code ---> inaccessible.
+
+% Literal values used as the `Detail` field. `tpair` holds the two
+% contradicting types of an inconsistency or an inaccessible branch;
+% it is spelled with a `t` so that it does not collide with the `pair`
+% type of `library(pairs)` in a module that imports both.
+:- chr_type error_detail ---> tpair(any, any)
+                            ; overloaded.

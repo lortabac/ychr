@@ -82,6 +82,7 @@ extra-doc-files:      README.md
 -- to be cut with the flag on.
 extra-source-files:   libraries/*.chr
                     , typechecker/*.chr
+                    , typechecker2/*.chr
                     , examples/*.chr
                     , examples/stlc/*.chr
                     , examples/stlc/*.hs
@@ -161,6 +162,7 @@ test-suite ychr-tests
                     , YCHR.PrettyTest
                     , YCHR.RenameTest
                     , YCHR.RoundtripTest
+                    , YCHR.TypeCheckDiffTest
                     , YCHR.TypeCheckTest
                     , YCHR.TypeSoundnessTest
                     , YCHR.TypeSoundness.Gen
@@ -247,7 +249,10 @@ library
                     , YCHR.Internal.StdLib
                     , YCHR.Internal.Types
                     , YCHR.Internal.TypeCheck
+                    , YCHR.Internal.TypeCheck.Encode
                     , YCHR.Internal.TypeCheck.Error
+                    , YCHR.Internal.TypeCheck.Render
+                    , YCHR.Internal.TypeCheck.V2
                     , YCHR.Internal.TypeCheck.Compiled
                     , YCHR.Internal.Resolve
                     , YCHR.Internal.Resolved

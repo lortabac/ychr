@@ -34,6 +34,7 @@ module YCHR.Internal.Compile.Names
     encodeIdentifier,
     isIdInitialSafe,
     vmName,
+    runtimeName,
 
     -- * Active-constraint argument variables
     argName,
@@ -175,6 +176,15 @@ procNameFor prefix (Types.Unqualified n) arity =
 vmName :: Types.Name -> Name
 vmName (Types.Unqualified n) = Name (encodeText n)
 vmName (Types.Qualified m n) = Name (encodeText m <> "__" <> encodeText n)
+
+-- | 'vmName' as bare 'Text': the single-atom form the runtime uses for
+-- a name. Required wherever Haskell code builds a 'Value' that has to
+-- compare equal to what compiled CHR rules produce — the type-checker
+-- drivers ("YCHR.Internal.TypeCheck",
+-- "YCHR.Internal.TypeCheck.Encode") feed names to their CHR programs
+-- this way.
+runtimeName :: Types.Name -> Text
+runtimeName name = let Name t = vmName name in t
 
 -- ---------------------------------------------------------------------------
 -- Procedure-name builders

@@ -1,0 +1,46 @@
+% Entry points of the CHR type-checker (typechecker2).
+%
+% The Haskell driver (`src/YCHR/Internal/TypeCheck/V2.hs`) encodes a
+% desugared program as one ground term and tells exactly one of these
+% constraints; everything the checker does happens in CHR from there,
+% and the driver only decodes the two diagnostic lists that come back.
+%
+% Both entry points are currently stubs that report nothing. Milestones
+% M3–M6 fill them in: declarations and pure checks, the solver port and
+% the rule walker, functions and class-function overload search, and
+% finally goal checking.
+:- module('$tc2_main', [
+    check_program/3,
+    check_goals/6
+]).
+
+:- use_module('$tc2_ast').
+:- use_module('$tc2_conform').
+:- use_module('$tc2_diag').
+
+% `check_program(Program, Errors, Warnings)`: check a whole desugared
+% program. `Errors` and `Warnings` are unbound on entry and are bound
+% to the diagnostic lists once the program has been checked.
+%
+% `check_goals(Program, Goals, Loc, Label, Errors, Warnings)`: check a
+% query's body goals against the declarations of an already-compiled
+% program. `Program` is the same encoded program term; its rules and
+% functions are ignored, only its declarations are in scope. The goals
+% share one variable scope, but each is its own checking unit.
+:- chr_constraint
+    check_program(program, list(error), list(warning)),
+    check_goals(program, list(body_goal), loc, diag_label, list(error), list(warning)).
+
+% Both stubs walk their input before answering, so that a program the
+% encoder and `tc2_ast` disagree about fails loudly instead of being
+% silently accepted. See `tc2_conform.chr`.
+check_program(Program, Errors, Warnings) <=>
+    _Nodes is ast_size(Program),
+    Errors = [],
+    Warnings = [].
+
+check_goals(Program, Goals, Loc, Label, Errors, Warnings) <=>
+    _Nodes is ast_size(Program) + body_goals_size(Goals)
+            + loc_size(Loc) + diag_label_size(Label),
+    Errors = [],
+    Warnings = [].

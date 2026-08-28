@@ -50,6 +50,30 @@ def test_typecheck_typechecker(ychr_bin, project_root):
     assert result.returncode == 0, f"type check failed:\n{result.stderr}"
 
 
+# The all-CHR type-checker under construction. Its modules are compiled
+# together as one program, so they are checked together too. Like the
+# checker above, it must be fully annotated and warning-free: the
+# embedded copy is compiled but never type-checked by the compile path,
+# so this is the only thing holding it to its own type system.
+def test_typecheck_typechecker2(ychr_bin, project_root):
+    import subprocess
+
+    directory = os.path.join(project_root, "typechecker2")
+    files = sorted(glob.glob(os.path.join(directory, "*.chr")))
+    assert files, "no typechecker2 sources found"
+    result = subprocess.run(
+        [ychr_bin, "check", "--Werror", *files],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    assert result.returncode == 0, (
+        f"typechecker2 type check failed:\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+
+
 @pytest.mark.parametrize("test_dir,message", DEAD_CODE_GOLDENS)
 def test_werror_inaccessible_branch(ychr_bin, project_root, test_dir, message):
     """`--Werror` promotes the inaccessible-branch warning to an error."""

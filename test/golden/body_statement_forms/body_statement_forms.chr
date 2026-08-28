@@ -1,0 +1,27 @@
+:- module(body_statement_forms, [go/1, dispatch/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint go(int), dispatch(int).
+
+:- function twice(int) -> int.
+twice(X) -> X * 2.
+
+% A host call in rule-body *statement* position: evaluated for its
+% effect, result discarded. Every other test calls `host:` from an
+% expression position (the right-hand side of `is`).
+go(R) <=> host:'+'(1, 2), R = 7.
+
+% Dynamic dispatch in statement position, in a rule body and again in
+% a function's non-final statement position. Both discard the result.
+%
+% The `'$call'` primitive is spelled out rather than reached through
+% the prelude's typed `call/2` wrapper, because the wrapper is an
+% ordinary function call: writing `call(...)` here would exercise the
+% static-call path, which every lambda test already covers, and never
+% reach dynamic dispatch in statement position at all.
+dispatch(R) <=> '$call'(fun twice/1, 3), R is after_call(4).
+
+:- function after_call(int) -> int.
+after_call(N) ->
+    '$call'(fun twice/1, N),
+    N + 1.
