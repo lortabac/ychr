@@ -381,6 +381,21 @@ Haskell interpreter surfaces this as `YCHR-60001`. Use `quote(...)`
 to keep an expression symbolic until something else binds the
 variables.
 
+Selecting a function equation is one such demand, and it reports the
+inconclusive case separately from a definite mismatch: a pattern test
+reached with an unbound variable at the position it inspects raises
+"argument *K* of `M:f/N` is not sufficiently instantiated to select an
+equation", where a fully instantiated argument that no equation covers
+raises "no matching equation in `M:f/N`". `'$call'` makes the same
+distinction for an unbound closure operand. Both remain hard errors;
+only the diagnosis differs. A *user-written* guard is a decision about
+values that are already in hand, so failing one — `pos(N) | N > 0` on
+`pos(0)` — is a definite mismatch.
+
+Dispatch stops at an equation's first failing test, so the argument the
+message names is the first one that blocked, not necessarily the only
+one that would have.
+
 ## The `=` operator
 
 `=` is pure structural unification — neither operand evaluates. A

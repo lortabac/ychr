@@ -1,0 +1,18 @@
+:- module(closure_dispatch_errors, [go/1, apply_ok/2, fun apply1/2, fun double/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint go/1, apply_ok/2.
+
+:- function double/1.
+double(X) -> X + X.
+
+% '$call' dispatch fails in the same two ways function-equation
+% dispatch does: the closure operand is still unbound (inconclusive),
+% or it is a value that is definitely not a callable (decided).
+:- function apply1/2.
+apply1(F, X) -> '$call'(F, X).
+
+go(_) <=> true.
+
+% A goal that succeeds, so the Scheme harness runs this directory too.
+apply_ok(X, R) <=> R is apply1(fun double/1, X).

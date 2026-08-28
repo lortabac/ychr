@@ -75,6 +75,8 @@ baseHostCallRegistry =
       (Name "string_upper", stringUpper),
       (Name "string_lower", stringLower),
       (Name "__chr_error", chrError),
+      (Name "__chr_is_unbound", typePred isVar),
+      (Name "__chr_inst_error", chrInstError),
       (Name "write", writeStr),
       (Name "writeln", writeStrLn),
       (Name "integer", typePred isInteger),
@@ -148,7 +150,27 @@ baseHostCallRegistry =
     stringLower = HostCallFn $ \case
       [VText s] -> pure (VText (T.toLower s))
       _ -> runtimeErrorS "string_lower: expected 1 Text argument"
-    chrError = HostCallFn $ \_ -> runtimeErrorS "CHR runtime error: no matching equation"
+    -- Generated dispatch code passes the message body as an atom; the
+    -- runtime only supplies the common prefix. The catch-all keeps a
+    -- malformed call from being silently swallowed.
+    chrError = HostCallFn $ \case
+      [VAtom msg] -> chrErr (T.unpack msg)
+      _ -> chrErr "no matching equation"
+    -- The insufficient-instantiation counterpart of 'chrError'. Either
+    -- the whole message body is already known at compile time, or a
+    -- label plus the runtime-computed 1-based index of the argument
+    -- that blocked dispatch (0 when the compiler could not attribute
+    -- the blocking test to a single top-level argument).
+    chrInstError = HostCallFn $ \case
+      [VAtom detail] -> chrErr (T.unpack detail)
+      [VAtom label, VInt 0] -> chrErr (T.unpack label <> notInstantiated)
+      [VAtom label, VInt n] ->
+        chrErr ("argument " <> show n <> " of " <> T.unpack label <> notInstantiated)
+      _ -> chrErr ("dispatch" <> notInstantiated)
+    notInstantiated =
+      " is not sufficiently instantiated to select an equation"
+        <> " (unbound variable at a matched position)"
+    chrErr detail = runtimeErrorS ("CHR runtime error: " <> detail)
     writeStr = HostCallFn $ \case
       [VText s] -> unit <$ liftIO (putStr (T.unpack s))
       _ -> runtimeErrorS "write: expected 1 Text argument"

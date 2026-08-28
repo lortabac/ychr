@@ -50,10 +50,14 @@ module YCHR.Internal.Compile.Names
     pendingName,
     suspParamName,
     dropResultName,
+    inconclusiveName,
+    blockedArgName,
 
     -- * Runtime entry-point names
     reactivateDispatchName,
     chrErrorName,
+    chrIsUnboundName,
+    chrInstErrorName,
   )
 where
 
@@ -270,6 +274,34 @@ suspParamName = "susp"
 dropResultName :: Name
 dropResultName = "dropped"
 
+-- | Per-procedure flag recording that equation dispatch was
+-- /inconclusive/: some structural pattern test failed because the value
+-- it looked at was an unbound logical variable rather than because it
+-- definitely mismatched. Read once, at the fall-through tail of a
+-- function procedure, to pick between the two error messages.
+--
+-- The @$@ is what keeps this name out of reach of source code, and it
+-- has to be @$@ specifically. A pattern variable compiles to a
+-- @LetVal@ under its /own/ source name (see
+-- 'YCHR.Internal.Compile.compileMatchGuard'), and the Haskell
+-- interpreter's environment is flat per invocation, so any generated
+-- local a source variable can spell is a local a source variable can
+-- clobber. The lexer's @__@ ban covers atoms only —
+-- 'YCHR.Internal.PExpr.varOrWildcardP' explicitly accepts @__Foo@ as an
+-- ordinary variable — whereas a /variable/ is @[A-Z_][A-Za-z0-9_]*@
+-- and can never contain @$@. @$@ is also a legal identifier character
+-- in both R6RS Scheme and JavaScript, so the name survives
+-- 'encodeIdentifier' and every backend.
+inconclusiveName :: Name
+inconclusiveName = "$chr_inconclusive"
+
+-- | Companion of 'inconclusiveName': the 1-based index of the function
+-- parameter that the first inconclusive test was reached through, or
+-- @0@ when the compiler could not attribute the test to a single
+-- top-level argument. Named on the same principle.
+blockedArgName :: Name
+blockedArgName = "$chr_blocked_arg"
+
 -- ---------------------------------------------------------------------------
 -- Runtime entry-point names
 -- ---------------------------------------------------------------------------
@@ -282,6 +314,33 @@ reactivateDispatchName :: Name
 reactivateDispatchName = "reactivate_dispatch"
 
 -- | Host-language error reporter, called from generated dispatch
--- procedures when no equation matches. Defined by the runtime.
+-- procedures when no equation matches. Takes one atom argument: the
+-- message body, which the runtime prefixes with @CHR runtime error: @.
+-- Defined by the runtime.
 chrErrorName :: Name
 chrErrorName = "__chr_error"
+
+-- | Internal one-argument predicate: is the (dereferenced) value an
+-- unbound logical variable or a wildcard? Used by generated dispatch
+-- code to tell an inconclusive pattern test from a definite mismatch.
+--
+-- Deliberately /not/ the prelude's @var\/1@: the Scheme backend maps
+-- @var@ to the raw @var?@ record predicate, which neither dereferences
+-- nor accepts a wildcard. This name gets a runtime procedure with the
+-- semantics the compiler actually needs on both backends.
+chrIsUnboundName :: Name
+chrIsUnboundName = "__chr_is_unbound"
+
+-- | Host-language reporter for the /insufficient instantiation/ variant
+-- of a dispatch failure. Two shapes, both prefixed with
+-- @CHR runtime error: @ by the runtime:
+--
+-- * @__chr_inst_error(Detail)@ — a message body the compiler already
+--   knows in full (closure dispatch, where the blocked position is
+--   static).
+--
+-- * @__chr_inst_error(Label, ArgIndex)@ — a function label plus the
+--   runtime-computed 1-based index of the blocking argument (@0@ when
+--   unattributable), which the runtime formats into a sentence.
+chrInstErrorName :: Name
+chrInstErrorName = "__chr_inst_error"

@@ -2143,6 +2143,14 @@ described from the language side in
 [Tell-time evaluation errors](language.md#tell-time-evaluation-errors):
 evaluation is eager, with no auto-suspension and no symbolic fallback.
 
+The runtime names the gap where it can. When a free variable reaches a
+*function equation's* pattern test rather than a host call, the
+`YCHR-60001` message reads "argument *K* of `M:f/N` is not sufficiently
+instantiated to select an equation" instead of "no matching equation in
+`M:f/N`" — the mode failure said out loud, at the one place the compiler
+can see it. It is still a hard error: naming the axis is not covering
+it.
+
 Discharging the obligation is the programmer's job, and the tool for
 it is a boundness guard:
 

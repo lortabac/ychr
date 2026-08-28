@@ -596,6 +596,8 @@ hostCallMap =
       ("string_upper", "string-upcase"),
       ("string_lower", "string-downcase"),
       ("__chr_error", "%chr-error"),
+      ("__chr_is_unbound", "%unbound?"),
+      ("__chr_inst_error", "%chr-inst-error"),
       ("integer", "integer?"),
       ("atom", "symbol?"),
       ("boolean", "boolean?"),

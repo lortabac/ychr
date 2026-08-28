@@ -67,6 +67,7 @@ import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (nub, partition, sortOn)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isJust)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -325,7 +326,7 @@ genGuardedFire symTab varMap occ = do
   let AnnP {node = guards, sourceLoc = guardLoc, parsed = guardP} = occ.rule.guard
       ruleLabel = Just ("rule " <> occ.ruleDisplay)
       guardSi = SrcInfo guardLoc guardP ruleLabel
-  compiled <- compileGuards (Just occ) varMap guardSi guards
+  compiled <- compileGuards (Just occ) Nothing varMap guardSi guards
   fireStmts <- genFireStmts symTab compiled.extendedVarMap occ
   let guarded = case compiled.residualCheck of
         Nothing -> fireStmts
@@ -709,33 +710,132 @@ classifyEqual occ a b
 -- pushdown classifier when an occurrence context is available; pass
 -- 'Nothing' (e.g. when compiling user-defined function equations) to
 -- bypass classification — no partners exist so nothing is liftable.
+--
+-- The 'Maybe' 'EqDispatch' parameter switches on /equation mode/, used
+-- when compiling a user-defined function's equations. It has two
+-- effects. First, 'D.GuardEqual' is treated as a match guard rather
+-- than a check guard: inside an equation every @GuardEqual@ is
+-- pattern-origin (HNF emits them for literal and non-linear patterns;
+-- user-written guards always desugar to 'D.GuardExpr'), so it belongs
+-- with the structural tests it accompanies. HNF emits each one
+-- immediately after the 'D.GuardGetArg' that binds its fresh variable,
+-- so in-order nesting preserves scoping. Second, every pattern test
+-- gets an else branch that records whether the test failed because the
+-- value it inspected was unbound — see 'inconclusiveElse'.
 compileGuards ::
   Maybe Occurrence ->
+  Maybe EqDispatch ->
   VarMap ->
   SrcInfo ->
   [D.Guard] ->
   Writer [Diagnostic CompileError] CompiledGuards
-compileGuards mOcc varMap si guards = do
+compileGuards mOcc mEq varMap si guards = do
   let (matchGuards, checkGuards) = partition isMatchGuard guards
-  (wrapper, varMap') <- foldM (compileMatchGuard si) (id, varMap) matchGuards
-  (condMap, checkExpr) <- compileCheckGuards mOcc varMap' si checkGuards
+      initial = MatchAcc {wrapper = id, varMap = varMap, dispatch = mEq}
+  acc <- foldM (compileMatchGuard si) initial matchGuards
+  (condMap, checkExpr) <- compileCheckGuards mOcc acc.varMap si checkGuards
   pure
     CompiledGuards
-      { matchWrapper = wrapper,
+      { matchWrapper = acc.wrapper,
         indexConditions = condMap,
         residualCheck = checkExpr,
-        extendedVarMap = varMap'
+        extendedVarMap = acc.varMap
       }
   where
     isMatchGuard (D.GuardMatch {}) = True
     isMatchGuard (D.GuardGetArg {}) = True
+    isMatchGuard (D.GuardEqual {}) = isJust mEq
     isMatchGuard _ = False
+
+-- | Equation-dispatch context: everything 'compileMatchGuard' needs to
+-- distinguish an /inconclusive/ pattern test (the inspected value was
+-- an unbound logical variable, so no verdict is possible) from a
+-- definite mismatch. Present only when compiling a user-defined
+-- function's equations; 'Nothing' at rule-occurrence sites, where the
+-- constraint store — not equation dispatch — decides what matches.
+data EqDispatch = EqDispatch
+  { -- | Boolean local set by the first inconclusive test in the
+    -- procedure.
+    flagVar :: Name,
+    -- | Integer local holding the 1-based parameter index that test was
+    -- reached through, or @0@ when unattributable.
+    blockedArgVar :: Name,
+    -- | Maps each in-scope pattern variable to the 1-based index of the
+    -- function parameter it was extracted from. Seeded from the
+    -- equation's parameters and extended by every 'D.GuardGetArg'.
+    rootArgIndex :: Map.Map Text Int
+  }
+
+-- | Accumulator threaded through the match-guard fold: the wrapper
+-- built so far, the 'VarMap' extended with the bindings the wrapper
+-- introduces, and the equation-dispatch context (whose
+-- 'rootArgIndex' grows as arguments are destructured).
+data MatchAcc = MatchAcc
+  { wrapper :: [Stmt] -> [Stmt],
+    varMap :: VarMap,
+    dispatch :: Maybe EqDispatch
+  }
+
+-- | The 1-based function parameter a pattern-test operand was reached
+-- through, or @0@ when the operand is not a variable we tracked.
+rootIndexOf :: Maybe EqDispatch -> R.Expr -> Int
+rootIndexOf (Just eq) (R.VarExpr v) = Map.findWithDefault 0 v eq.rootArgIndex
+rootIndexOf _ _ = 0
+
+-- | Else branch for a failed pattern test in equation mode: if no
+-- earlier test has already claimed the blame, and one of the values the
+-- test inspected is an unbound logical variable, mark dispatch
+-- inconclusive and remember which parameter blocked it.
+--
+-- Each scrutinee gets its own guarded assignment; because every one of
+-- them is conditional on the flag still being unset, the first unbound
+-- value encountered wins. Only variable operands are inspected — a
+-- literal cannot be unbound.
+--
+-- The flag short-circuit only helps /after/ the flag is set, which
+-- never happens on a call that eventually matches. So a call that
+-- succeeds still pays one @__chr_is_unbound@ host call per equation it
+-- had to reject — the shape of every list recursion
+-- (@f([]) -> …; f([H|T]) -> …@ rejects the nil test on every cons
+-- cell). Measured at +8% on @sum_list_test@. Lowering the test to a
+-- 'YCHR.Internal.VM.BoolExpr' primitive would remove the host-call
+-- overhead (registry lookup, argument list, exception frame, 'VBool'
+-- box) in the Haskell interpreter; that was considered and declined in
+-- favour of keeping the VM instruction set unchanged. Do not
+-- "optimize" this into a new VM constructor without revisiting that
+-- decision.
+--
+-- Outside equation mode this is empty, which is exactly the
+-- fall-through behaviour rule occurrences and pre-existing code rely
+-- on.
+inconclusiveElse :: Maybe EqDispatch -> [(ValExpr, Int)] -> [Stmt]
+inconclusiveElse Nothing _ = []
+inconclusiveElse (Just eq) scrutinees = concatMap check scrutinees
+  where
+    check (e, idx) =
+      [ If
+          ( BAnd
+              (BNot (BFromVal (Var eq.flagVar)))
+              (BFromVal (HostCall chrIsUnboundName [e]))
+          )
+          [ AssignVal eq.flagVar (Lit (BoolLit True)),
+            AssignVal eq.blockedArgVar (Lit (IntLit (fromIntegral idx)))
+          ]
+          []
+      ]
+
+-- | 'inconclusiveElse' specialized to a pattern test with a single
+-- scrutinee, attributed to the parameter its operand was reached
+-- through.
+operandElse :: MatchAcc -> R.Expr -> ValExpr -> [Stmt]
+operandElse acc operand e =
+  inconclusiveElse acc.dispatch [(e, rootIndexOf acc.dispatch operand)]
 
 compileMatchGuard ::
   SrcInfo ->
-  ([Stmt] -> [Stmt], VarMap) ->
+  MatchAcc ->
   D.Guard ->
-  Writer [Diagnostic CompileError] ([Stmt] -> [Stmt], VarMap)
+  Writer [Diagnostic CompileError] MatchAcc
 -- The pattern side of the native-bool fast path. HNF sees @true@ /
 -- @false@ as ordinary 0-arity constructor patterns and emits a
 -- 'D.GuardMatch' for them like any other, but their values are compiled
@@ -745,24 +845,50 @@ compileMatchGuard ::
 -- value side produces. The arity-0 restriction matters: an explicit
 -- @prelude:true(X)@ is a different, undeclared constructor and keeps
 -- the functor test.
-compileMatchGuard si (matchWrapper, varMap) (D.GuardMatch operand name 0)
+compileMatchGuard si acc (D.GuardMatch operand name 0)
   | Just b <- Types.preludeBool name = do
-      operandExpr <- compileExpr varMap si operand
-      let check body = [If (BEqual operandExpr (Lit (BoolLit b))) body []]
-      pure (matchWrapper . check, varMap)
-compileMatchGuard si (matchWrapper, varMap) (D.GuardMatch operand name arity) = do
+      operandExpr <- compileExpr acc.varMap si operand
+      let orElse = operandElse acc operand operandExpr
+          check body = [If (BEqual operandExpr (Lit (BoolLit b))) body orElse]
+      pure acc {wrapper = acc.wrapper . check}
+compileMatchGuard si acc (D.GuardMatch operand name arity) = do
   -- HNF only emits 'GuardMatch' with a 'VarExpr' operand, but
   -- 'compileExpr' handles every 'Expr' constructor structurally, so
   -- delegating is safe and keeps the invariant unenforced-but-honoured.
-  operandExpr <- compileExpr varMap si operand
-  let check body = [If (BMatchTerm operandExpr (vmName name) arity) body []]
-  pure (matchWrapper . check, varMap)
-compileMatchGuard si (matchWrapper, varMap) (D.GuardGetArg vname operand idx) = do
-  operandExpr <- compileExpr varMap si operand
+  operandExpr <- compileExpr acc.varMap si operand
+  let orElse = operandElse acc operand operandExpr
+      check body = [If (BMatchTerm operandExpr (vmName name) arity) body orElse]
+  pure acc {wrapper = acc.wrapper . check}
+compileMatchGuard si acc (D.GuardGetArg vname operand idx) = do
+  operandExpr <- compileExpr acc.varMap si operand
   let binding body = LetVal (Name vname) (GetArg operandExpr idx) : body
-      varMap' = insertVar vname (Var (Name vname)) varMap
-  pure (matchWrapper . binding, varMap')
+  pure
+    acc
+      { wrapper = acc.wrapper . binding,
+        varMap = insertVar vname (Var (Name vname)) acc.varMap,
+        -- The extracted variable is reached through the same top-level
+        -- parameter as the compound it came out of.
+        dispatch = inheritRootIndex vname operand <$> acc.dispatch
+      }
+-- Only reached in equation mode; rule occurrences keep routing
+-- 'D.GuardEqual' through 'compileCheckGuards' (see 'compileGuards').
+compileMatchGuard si acc (D.GuardEqual t1 t2) = do
+  e1 <- compileExpr acc.varMap si t1
+  e2 <- compileExpr acc.varMap si t2
+  let isVarExpr (R.VarExpr _) = True
+      isVarExpr _ = False
+      scrutinees =
+        [(e, rootIndexOf acc.dispatch t) | (t, e) <- [(t1, e1), (t2, e2)], isVarExpr t]
+      orElse = inconclusiveElse acc.dispatch scrutinees
+      check body = [If (BEqual e1 e2) body orElse]
+  pure acc {wrapper = acc.wrapper . check}
 compileMatchGuard _ acc _ = pure acc
+
+-- | Propagate the root-parameter attribution of a destructured operand
+-- to the variable bound to one of its arguments.
+inheritRootIndex :: Text -> R.Expr -> EqDispatch -> EqDispatch
+inheritRootIndex vname operand eq =
+  eq {rootArgIndex = Map.insert vname (rootIndexOf (Just eq) operand) eq.rootArgIndex}
 
 -- | Compile the check guards of an occurrence, classifying each one as
 -- either a liftable index condition for a partner 'YCHR.Internal.VM.Foreach' or
@@ -959,13 +1085,52 @@ compileFunctionDef func = do
           ("function " <> flattenName funcName <> "/" <> T.pack (show func.arity))
           func.equations.sourceLoc
           func.equations.parsed
-  eqStmts <- traverse (compileEquation params funcSi) func.equations.node
-  let errorStmt = ExprStmt (HostCall chrErrorName [Lit (AtomLit "no_matching_equation")])
+      -- Dispatch tracking: every equation's pattern tests record, in
+      -- two procedure-level locals, whether a test failed only because
+      -- the value it inspected was still unbound. Falling off the end
+      -- of the procedure then reports insufficient instantiation
+      -- instead of a definite mismatch — the ISO Prolog distinction,
+      -- which matters for programs (a CHR-based type checker, say)
+      -- whose data is full of unification variables.
+      --
+      -- A function whose every parameter is a plain variable or
+      -- wildcard has no pattern test that could ever be inconclusive,
+      -- so it gets neither the locals nor the branching tail. That
+      -- exempts the hot path: the prelude's arithmetic and comparison
+      -- functions, and any single-equation helper, are all in this
+      -- class.
+      tracksDispatch = any hasPatternTest func.equations.node
+  eqStmts <- traverse (compileEquation tracksDispatch params funcSi) func.equations.node
+  let fnLabel = flattenName funcName <> "/" <> T.pack (show func.arity)
+      dispatchInit
+        | tracksDispatch =
+            [ LetVal inconclusiveName (Lit (BoolLit False)),
+              LetVal blockedArgName (Lit (IntLit 0))
+            ]
+        | otherwise = []
+      noMatchStmt =
+        ExprStmt
+          ( HostCall
+              chrErrorName
+              [Lit (AtomLit ("no matching equation in " <> fnLabel))]
+          )
+      errorStmt
+        | tracksDispatch =
+            If
+              (BFromVal (Var inconclusiveName))
+              [ ExprStmt
+                  ( HostCall
+                      chrInstErrorName
+                      [Lit (AtomLit fnLabel), Var blockedArgName]
+                  )
+              ]
+              [noMatchStmt]
+        | otherwise = noMatchStmt
   pure
     Procedure
       { name = procName',
         params = params,
-        body = PushFrame frame : concat eqStmts ++ [errorStmt],
+        body = PushFrame frame : dispatchInit ++ concat eqStmts ++ [errorStmt],
         procKind = PKFunction func.name func.arity
       }
 
@@ -978,16 +1143,45 @@ buildEquationVarMap procParams normalizedArgs =
     | (p, HeadVar v) <- zip procParams normalizedArgs
     ]
 
+-- | Does this equation carry a pattern test that can fail? Guard
+-- expressions do not count: a user-written guard is a decision about
+-- values already in hand, so failing one is a definite mismatch rather
+-- than an inconclusive dispatch.
+hasPatternTest :: D.Equation -> Bool
+hasPatternTest eq = any isPatternTest eq.guards
+  where
+    isPatternTest (D.GuardMatch {}) = True
+    isPatternTest (D.GuardEqual {}) = True
+    isPatternTest _ = False
+
+-- | Compile one equation of a function into the statements that try it.
+-- The 'Bool' is 'compileFunctionDef'\'s @tracksDispatch@: when 'False'
+-- the enclosing procedure has no inconclusiveness locals, so pattern
+-- tests must not reference them.
 compileEquation ::
+  Bool ->
   [Name] ->
   SrcInfo ->
   D.Equation ->
   Writer [Diagnostic CompileError] [Stmt]
-compileEquation params si eq = do
+compileEquation tracksDispatch params si eq = do
   let varMap = buildEquationVarMap params eq.params
+      -- Attribute each pattern variable to the parameter it came from,
+      -- so a failed test can name the argument that blocked dispatch.
+      -- Wildcard parameters contribute nothing: they never fail a test.
+      eqDispatch =
+        EqDispatch
+          { flagVar = inconclusiveName,
+            blockedArgVar = blockedArgName,
+            rootArgIndex =
+              Map.fromList [(v, i) | (i, HeadVar v) <- zip [1 ..] eq.params]
+          }
+      mEqDispatch
+        | tracksDispatch = Just eqDispatch
+        | otherwise = Nothing
   -- Equations have no partners, so the index-condition pushdown
   -- classifier never fires; pass 'Nothing' to short-circuit it.
-  compiled <- compileGuards Nothing varMap si eq.guards
+  compiled <- compileGuards Nothing mEqDispatch varMap si eq.guards
   (preludeStmts, varMap1) <-
     compilePrelude compiled.extendedVarMap si eq.prelude
   rhsExpr <- compileExpr varMap1 si eq.rhs
@@ -1096,7 +1290,25 @@ genCallFunDispatch functions callArity =
       argParams = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. callArity - 1]]
       funRefBranches = concatMap (genFunRefBranch callArity argParams) functions
       lambdaBranches = concatMap (genLambdaBranch callArity argParams) functions
-      errorStmt = ExprStmt (HostCall chrErrorName [Lit (AtomLit "call: no matching closure")])
+      -- Same distinction as function-equation dispatch, but the blocked
+      -- position is static here: only the closure operand is ever
+      -- pattern-tested, so the whole message is known at compile time.
+      errorStmt =
+        If
+          (BFromVal (HostCall chrIsUnboundName [Var closureParam]))
+          [ ExprStmt
+              ( HostCall
+                  chrInstErrorName
+                  [ Lit
+                      ( AtomLit
+                          ( "'$call': closure argument is not sufficiently"
+                              <> " instantiated (unbound variable)"
+                          )
+                      )
+                  ]
+              )
+          ]
+          [ExprStmt (HostCall chrErrorName [Lit (AtomLit "call: no matching closure")])]
    in Procedure
         { name = callFunProcName callArity,
           params = closureParam : argParams,

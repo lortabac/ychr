@@ -283,9 +283,12 @@ not an error.
 
 Every function here matches on the list spine, so a *partial* list —
 one whose tail is still an unbound variable, like `[1|T]` — is a
-runtime error (`YCHR-60001`, "no matching equation"), not a suspension.
-There is no delaying: the list argument must be a proper list by the
-time the call is evaluated.
+runtime error (`YCHR-60001`, "argument 1 of … is not sufficiently
+instantiated to select an equation"), not a suspension. There is no
+delaying: the list argument must be a proper list by the time the call
+is evaluated. The message distinguishes this from a genuine mismatch
+such as `length(foo)`, which reports "no matching equation in
+`lists:length/1`".
 
 ### `maybe`
 

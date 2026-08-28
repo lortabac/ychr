@@ -21,7 +21,8 @@
     ;; From (ychr reactivation)
     enqueue! drain-queue!
     ;; Helpers for generated code
-    %unify %unifiable? %nonvar? %chr-error %print %writeln %ground?
+    %unify %unifiable? %nonvar? %unbound? %chr-error %chr-inst-error
+    %print %writeln %ground?
     %term-variables %compound-to-list %list-to-compound
     %read-term-from-string
     %int-to-float %float-to-int
@@ -186,8 +187,49 @@
   ;;; Type predicates
   (define (%nonvar? v) (not (var? v)))
 
+  ;;; Is this value an unbound logical variable (or a wildcard)?
+  ;;; Distinct from the prelude's `var/1`, which maps to the raw `var?`
+  ;;; record predicate: this one dereferences and accepts a wildcard,
+  ;;; matching the Haskell runtime's `__chr_is_unbound`. Generated
+  ;;; dispatch code uses it to tell an inconclusive pattern test (the
+  ;;; value was not instantiated enough to decide) from a definite
+  ;;; mismatch.
+  (define (%unbound? v)
+    (let ((d (deref v)))
+      (or (var? d) (wildcard? d))))
+
+  ;;; Message bodies reach the reporters below as symbols, because the
+  ;;; compiler passes them as `AtomLit`s. Rendering a symbol built from
+  ;;; a human sentence prints it escaped (`#{no matching equation \x28;`
+  ;;; …), so unwrap to a string first.
+  (define (%message->string m)
+    (if (symbol? m) (symbol->string m) m))
+
   ;;; Error
-  (define (%chr-error . args) (apply error "CHR runtime error" args))
+  (define (%chr-error . args)
+    (apply error "CHR runtime error" (map %message->string args)))
+
+  ;;; Insufficient-instantiation variant of `%chr-error`. Either the
+  ;;; whole message body is known at compile time (closure dispatch), or
+  ;;; a label plus the runtime-computed 1-based index of the argument
+  ;;; that blocked dispatch (0 when unattributable). Mirrors
+  ;;; `__chr_inst_error` in the Haskell runtime registry.
+  (define %chr-inst-error
+    (case-lambda
+      ((detail) (error "CHR runtime error" (%message->string detail)))
+      ((label idx)
+       (let* ((name (%message->string label))
+              (subject (if (and (integer? idx) (> idx 0))
+                           (string-append "argument "
+                                          (number->string idx)
+                                          " of "
+                                          name)
+                           name)))
+         (error "CHR runtime error"
+                (string-append
+                 subject
+                 " is not sufficiently instantiated to select an equation"
+                 " (unbound variable at a matched position)"))))))
 
   ;;; Print
   (define (%print v) (display v) (newline))

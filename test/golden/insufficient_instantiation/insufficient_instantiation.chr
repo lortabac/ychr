@@ -1,0 +1,77 @@
+:- module(
+       insufficient_instantiation,
+       [ go/1,
+         len_of/2,
+         fun mylen/1,
+         fun bit/1,
+         fun same/2,
+         fun pos/1,
+         fun nest/2,
+         fun over/2,
+         fun shadow/1,
+         type(pair_t/0)
+       ]
+   ).
+:- use_module(library(prelude)).
+
+:- chr_constraint go/1, len_of/2.
+:- chr_type bit_name ---> zero ; one.
+:- chr_type pair_t ---> pair(int, int).
+
+% Every goal here calls a function on a value that no equation can
+% match, and differs only in *why*: an unbound variable at a tested
+% position (dispatch is inconclusive) versus a value that definitely
+% mismatches (dispatch is decided). The two must not report the same
+% error.
+
+% Structural pattern tests: `[]` compares against a nil pattern,
+% `[_|T]` is a functor test.
+:- function mylen/1.
+mylen([]) -> 0.
+mylen([_|T]) -> 1 + mylen(T).
+
+% Literal patterns, which HNF lowers to equality tests rather than
+% functor tests.
+:- function bit/1.
+bit(0) -> zero.
+bit(1) -> one.
+
+% Non-linear pattern: HNF renames the second occurrence and emits an
+% equality test between the two parameters.
+:- function same/2.
+same(X, X) -> 1.
+
+% A user-written guard, not a pattern test. Failing it is a decision,
+% not an inconclusive result, even when the argument is unbound.
+:- function pos/1.
+pos(N) | N > 0 -> N.
+
+% Nested destructuring: the blocking test is on a value extracted from
+% argument 2, not on argument 2 itself, so the reported index has to be
+% inherited down through the `pair` decomposition.
+:- function nest/2.
+nest(0, pair(1, 2)) -> 1.
+
+% The documented over-approximation. Dispatch stops at the first
+% failing test, which is the one on argument 1; argument 2 would have
+% mismatched definitely, but that test is never reached.
+:- function over/2.
+over(1, 2) -> 3.
+
+% A pattern variable is compiled to a local under its own source name,
+% so any generated local a source variable can spell is a local a
+% source variable can clobber. The lexer's `__` ban covers atoms only —
+% `__Foo` is an ordinary variable — which is why the dispatch locals
+% are named with `$`. Falling through here must still report a
+% definite mismatch.
+:- function shadow/1.
+shadow([__chr_inconclusive, __chr_blocked_arg|_])
+    | __chr_inconclusive > 100 -> __chr_blocked_arg.
+shadow(0) -> 0.
+
+go(_) <=> true.
+
+% A goal that succeeds, so the Scheme harness runs this directory too:
+% every recursive step fails `mylen`'s `[]` test, which is what
+% exercises the runtime's unbound check on the success path.
+len_of(Xs, R) <=> R is mylen(Xs).
