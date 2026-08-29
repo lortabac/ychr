@@ -16,9 +16,11 @@ module YCHR.Internal.Runtime.Error
     CallStack,
 
     -- * Raising runtime errors
+    RuntimeErrorKind (..),
     RuntimeErrorThrown (..),
     runtimeError',
     runtimeErrorS,
+    instantiationErrorS,
   )
 where
 
@@ -30,25 +32,52 @@ import Data.Text qualified as T
 import YCHR.Internal.Runtime.Monad (CallStack, Chr, SessionEnv (..))
 import YCHR.Internal.VM (StackFrame)
 
+-- | Why a runtime error was raised. The distinction is not cosmetic:
+-- a rule guard catches 'InstantiationError' and evaluates to 'False'
+-- (see @Note [Soft guard catch safety]@ in
+-- "YCHR.Internal.Runtime.Interpreter"), while 'GeneralError'
+-- propagates out of every position alike.
+data RuntimeErrorKind
+  = -- | An ordinary failure: a definite mismatch, a type error,
+    -- division by zero, an arity mismatch. Always fatal to the query.
+    GeneralError
+  | -- | The computation demanded the value of a variable that is
+    -- still unbound, so no verdict was possible. Raised only at a
+    -- genuine demand point — never from the mere presence of an
+    -- unbound variable in an argument list.
+    InstantiationError
+  deriving (Eq, Show)
+
 -- | Exception thrown by 'runtimeError'' and 'runtimeErrorS'. Carries
--- the message and the call stack captured at the throw site (newest
--- frame first). The top-level driver catches this and lifts it into
--- 'YCHR.Run.RuntimeError' for rendering.
-data RuntimeErrorThrown = RuntimeErrorThrown String [StackFrame]
+-- the kind, the message, and the call stack captured at the throw
+-- site (newest frame first). The top-level driver catches this and
+-- lifts it into 'YCHR.Run.RuntimeError' for rendering; the kind is
+-- not part of the user-facing error, only of the runtime's own
+-- control flow.
+data RuntimeErrorThrown = RuntimeErrorThrown RuntimeErrorKind String [StackFrame]
   deriving (Show)
 
 instance Exception RuntimeErrorThrown
 
--- | Raise a runtime error with the current call stack.
+-- | Raise a general runtime error with the current call stack.
 runtimeError' :: String -> T.Text -> Chr a
-runtimeError' prefix detail = do
-  SessionEnv {callStack} <- ask
-  stack <- liftIO $ readIORef callStack
-  liftIO $ throwIO (RuntimeErrorThrown (prefix ++ T.unpack detail) stack)
+runtimeError' prefix detail = throwWithStack GeneralError (prefix ++ T.unpack detail)
 
--- | Raise a runtime error with the current call stack (String-only variant).
+-- | Raise a general runtime error with the current call stack
+-- (String-only variant).
 runtimeErrorS :: String -> Chr a
-runtimeErrorS msg = do
+runtimeErrorS = throwWithStack GeneralError
+
+-- | Raise an /instantiation/ runtime error with the current call
+-- stack: the caller reached a point that demanded the value of an
+-- unbound variable. Inside a rule guard this is caught and turned
+-- into a silent @false@; everywhere else it behaves like
+-- 'runtimeErrorS'.
+instantiationErrorS :: String -> Chr a
+instantiationErrorS = throwWithStack InstantiationError
+
+throwWithStack :: RuntimeErrorKind -> String -> Chr a
+throwWithStack kind msg = do
   SessionEnv {callStack} <- ask
   stack <- liftIO $ readIORef callStack
-  liftIO $ throwIO (RuntimeErrorThrown msg stack)
+  liftIO $ throwIO (RuntimeErrorThrown kind msg stack)

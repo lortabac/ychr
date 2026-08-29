@@ -105,6 +105,45 @@ before passing it to the constraint, so Guile rejects with
 Needs investigation before claiming a root cause.
 
 
+## Soft guard failure: unclassified host-primitive failures
+
+[Soft guard failure](../docs/reference/language.md#soft-guard-failure) turns an
+*instantiation* failure inside a rule guard into `false`, so the rule
+delays instead of aborting. The VM form (`bsoft-guard`) is implemented
+on the Scheme backend, and `%chr-inst-error` in `runtime.sls` raises a
+compound condition carrying an `&chr-inst` marker, so the failures the
+compiler routes through it — equation dispatch and `'$call'` closure
+dispatch — delay correctly.
+
+What is missing is the *classification* of host-primitive failures.
+Haskell's `Registry.hs` diagnoses an unbound argument on a strict
+primitive's failure path as an instantiation error; the Scheme
+prelude table binds those primitives to native Scheme procedures
+(`>`, `+`, `string-length`, …), which raise an untagged wrong-type
+condition. A guard blocked on one therefore aborts the query instead of
+delaying.
+
+Tests skipped on the Scheme backend for this reason:
+`("mode_boundness_guard", "unguarded")`, both `soft_guard_retry`
+cases, `("soft_guard_permanent", "run")`, and both
+`soft_guard_equation_propagation` cases.
+
+**Fix sketch:** wrap each entry in `*prelude-host-calls*` that is
+currently a bare native procedure so that it checks its arguments and
+calls `%chr-inst-error` when one derefs to an unbound variable, exactly
+as `argError` does in `Registry.hs`.
+
+A second, narrower gap in the same feature: `compileBoolExpr` lowers
+`bfrom-val` to the wrapped value expression and lets Scheme's
+truthiness decide, so an unbound variable in guard position reads as
+*true* rather than raising. `("soft_guard_var_guard", "reject")` is
+skipped for this; its `pass` sibling agrees with Haskell only because
+firing early and firing after reactivation happen to give the same
+answer there. Fixing this means emitting a boolean check at
+`bfrom-val`, splitting unbound (instantiation) from bound-non-boolean
+(general) as `boolFromValue` does in the Haskell interpreter.
+
+
 ## Closed gaps (reference)
 
 The following used to live here and are now closed. Kept as a brief

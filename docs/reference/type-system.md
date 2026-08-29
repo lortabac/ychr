@@ -2136,23 +2136,31 @@ l @ later(E) <=> E = 1.
 r @ c(N)     <=> N > 0 | out(N).   % N is E, still unbound, when r is first tried
 ```
 
-This type-checks with no errors and no warnings, and fails at run time
-inside `prelude:'>'/2` — not because a value of the wrong type reached
-`>`, but because no value reached it at all. The same failure is
-described from the language side in
+This type-checks with no errors and no warnings, and `r` reaches
+`prelude:'>'/2` with no value at all — not a value of the wrong type.
+The same situation is described from the language side in
 [Tell-time evaluation errors](language.md#tell-time-evaluation-errors):
 evaluation is eager, with no auto-suspension and no symbolic fallback.
 
-The runtime names the gap where it can. When a free variable reaches a
-*function equation's* pattern test rather than a host call, the
-`YCHR-60001` message reads "argument *K* of `M:f/N` is not sufficiently
-instantiated to select an equation" instead of "no matching equation in
-`M:f/N`" — the mode failure said out loud, at the one place the compiler
-can see it. It is still a hard error: naming the axis is not covering
-it.
+What happens next is decided at run time, not by the checker. `>`
+raises an *instantiation* failure, and the rule guard is exactly the
+position where such a failure is caught
+([Soft guard failure](language.md#soft-guard-failure)): the guard
+yields false, `r` does not fire, `l` binds `E`, the binding
+reactivates `c`, and `r` fires on the later activation with `N = 1`.
+So this program does produce `out(1)` — the mode gap is *tolerated*
+at a guard, not closed. Move the same `N > 0` into a rule body or an
+`is` expression and it is a hard `YCHR-60001`, because only guards are
+retried.
 
-Discharging the obligation is the programmer's job, and the tool for
-it is a boundness guard:
+The runtime also names the gap where it can. When a free variable
+reaches a *function equation's* pattern test rather than a host call,
+the `YCHR-60001` message reads "argument *K* of `M:f/N` is not
+sufficiently instantiated to select an equation" instead of "no
+matching equation in `M:f/N`" — the mode failure said out loud, at the
+one place the compiler can see it.
+
+A boundness guard makes the same wait explicit:
 
 ```prolog
 r @ c(N) <=> integer(N), N > 0 | out(N).
@@ -2160,10 +2168,12 @@ r @ c(N) <=> integer(N), N > 0 | out(N).
 
 `integer(N)` is statically redundant here — `N` is already declared
 `int`, and as an evidence form (§Evidence forms) it contributes a fact
-the declaration already gave — but operationally it is what makes the
-rule wait. It fails on a free variable, so the rule does not fire;
-binding `E` reactivates the constraint; and the rule fires on the
-later activation with a value in hand. That a conjunct can be
+the declaration already gave — but operationally it states the
+precondition: it fails on a free variable, so the rule does not fire
+until `E` is bound. Since soft guard failure gives the unguarded rule
+the same schedule, the conjunct is now a matter of style rather than a
+requirement: write it when the wait is part of what the rule means,
+and leave it out when the delay is incidental. That a conjunct can be
 redundant for typing and load-bearing for execution is exactly the
 mark of the axis the type system does not cover.
 
@@ -2171,6 +2181,12 @@ mark of the axis the type system does not cover.
 deliberately *not* evidence forms (§Non-forms): their success entails
 a boundness fact, not a typing one — the same separation stated from
 the other side.
+
+None of this amounts to mode *checking*. Nothing warns that `r` may be
+tried unbound, nothing proves it is ever retried — a variable no
+stored constraint observes is never bound and the rule delays for
+ever, silently. The type system's silence on the mode axis is
+unchanged; the runtime simply fails more gently at guards.
 
 This is a scope boundary rather than an oversight. A mode system is a
 second analysis over the same programs, with its own annotation

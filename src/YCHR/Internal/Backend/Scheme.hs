@@ -537,6 +537,7 @@ compileBoolExpr (BUnify a b) =
   SList [SAtom "%unify", SAtom "%s", compileValExpr a, compileValExpr b]
 compileBoolExpr (BFromVal e) = compileValExpr e
 compileBoolExpr (BEvalDeep e) = compileBoolEvalDeep e
+compileBoolExpr (BSoftGuard e) = softGuardForm (compileBoolExpr e)
 
 compileIdExpr :: IdExpr -> SExpr
 compileIdExpr (IdVar n) = SAtom (mangleName n)
@@ -682,7 +683,23 @@ compileBoolEvalDeep (BUnify a b) =
   SList [SAtom "%unify", SAtom "%s", compileEvalDeep a, compileEvalDeep b]
 compileBoolEvalDeep (BFromVal e) = compileEvalDeep e
 compileBoolEvalDeep (BEvalDeep e) = compileBoolEvalDeep e
+compileBoolEvalDeep (BSoftGuard e) = softGuardForm (compileBoolEvalDeep e)
 compileBoolEvalDeep e = compileBoolExpr e
+
+-- | Lower 'BSoftGuard' to an R6RS @guard@ that turns an
+-- insufficient-instantiation condition into @#f@ and re-raises
+-- everything else (the implicit @else@-less @guard@ re-raise).
+--
+-- The runtime tags those failures with the @&chr-inst@ condition,
+-- which @chr-inst?@ recognizes; see @%chr-inst-error@ in
+-- @scheme/ychr/runtime.sls@.
+softGuardForm :: SExpr -> SExpr
+softGuardForm inner =
+  SList
+    [ SAtom "guard",
+      SList [SAtom "%c", SList [SList [SAtom "chr-inst?", SAtom "%c"], SAtom "#f"]],
+      inner
+    ]
 
 -- ---------------------------------------------------------------------------
 -- Name mangling

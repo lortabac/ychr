@@ -1,0 +1,37 @@
+:- module(soft_guard_var_guard, [pass/1, reject/1, nonbool/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint pass(int), reject(int), nonbool(int).
+:- chr_constraint c(bool), later(bool, bool).
+:- chr_constraint gather(int), out(int).
+:- chr_constraint cb/1.
+
+% The guard here is a bare variable, so the demand for a boolean comes
+% from the guard position itself rather than from an operation inside
+% it. The two failure modes of that demand are diagnosed apart:
+%
+%   pass    — the guard variable is unbound, so no verdict is possible.
+%             The guard soft-fails; binding it to `true` reactivates `c`
+%             and the rule fires on the retry.
+%   reject  — the same delay, but the variable is bound to `false`. The
+%             retried guard is decided false, the rule never fires, and
+%             `final` reports 0. This is the case that separates "not
+%             decidable yet" from "true": treating the unbound variable
+%             as truthy would fire the rule at the first activation and
+%             give 1.
+%   nonbool — the guard variable is bound to an integer. That is a
+%             definite mistake, not a missing binding, so it stays a
+%             hard error.
+
+start_pass @ pass(R) <=> c(B), later(B, true), gather(R).
+start_reject @ reject(R) <=> c(B), later(B, false), gather(R).
+
+bind @ later(B, V) <=> B = V.
+
+fire @ c(B) <=> B | out(1).
+
+collect @ gather(R), out(V) <=> R = V.
+final @ gather(R), c(_) <=> R = 0.
+
+start_bad @ nonbool(_) <=> cb(5).
+fire_bad @ cb(B) <=> B | true.

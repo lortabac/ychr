@@ -97,7 +97,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import YCHR.Internal.Meta (termToValue, valueToTerm)
 import YCHR.Internal.Parsed (Module)
-import YCHR.Internal.Runtime.Error (runtimeErrorS)
+import YCHR.Internal.Runtime.Error (instantiationErrorS, runtimeErrorS)
 import YCHR.Internal.Runtime.Monad (Chr)
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), HostCallRegistry, baseHostCallRegistry)
 import YCHR.Internal.Runtime.SubSession (defaultHostCallRegistry)
@@ -574,7 +574,14 @@ hostArityError n vs =
   runtimeErrorS
     ("host call: expected " ++ show n ++ " argument(s), got " ++ show (length vs))
 
+-- | Report a host-call marshalling failure. 'UnboundValue' means the
+-- decoder demanded a value the argument does not have yet, so it is an
+-- instantiation failure — caught by a rule guard, which then delays
+-- until the variable is bound. Every other decode failure is a
+-- general error. A host function that wants an argument to stay
+-- symbolic should decode it as 'Term', which accepts a variable.
 hostDecodeError :: ConvertError -> Chr a
+hostDecodeError err@(UnboundValue _) = instantiationErrorS ("host call: " ++ show err)
 hostDecodeError err = runtimeErrorS ("host call: " ++ show err)
 
 -- | Adapt a nullary effectful action into a host function. There is no

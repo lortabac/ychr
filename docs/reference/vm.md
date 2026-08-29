@@ -647,6 +647,10 @@ functor and arity.
 - **`bequal`** (ask semantics, Prolog `==`): structural equality with
   no mutation. Two distinct unbound variables return `false`. Used in
   guards (guards must not leave half-done bindings on failure).
+  Guard residuals are mutation-free as a whole — no `bunify`, `store`,
+  `kill` or `add-history` is reachable from one. Beyond "no half-done
+  bindings", this is what makes `bsoft-guard` sound: a guard
+  abandoned part-way leaves nothing to undo.
 - **`bid-equal`** compares two constraint identifiers for equality.
 
 ### Constraint observation
@@ -704,6 +708,42 @@ evaluation. Mirrors `eval-deep` for booleans: any `<val-expr>` and
 `<id-expr>` payloads inside the nested expression are evaluated in
 deep-deref mode. Used for guard expressions wrapped via `bfrom-val .
 eval-deep`.
+
+### Soft guard evaluation
+
+```scheme
+(bsoft-guard <bool-expr>)
+```
+
+Evaluates the nested boolean expression with *instantiation* errors
+caught: if evaluating it raises a runtime error of instantiation kind
+— an unbound logical variable reached a point that demanded its value
+— `bsoft-guard` yields `false` instead of propagating. Runtime errors
+of any other kind propagate unchanged, as do control-flow exceptions
+(`break`, `continue`, `return`).
+
+The compiler emits this around the guard residual of a rule
+occurrence, and only there. It is the VM-level form of
+[soft guard failure](language.md#soft-guard-failure): the rule does
+not fire, no diagnostic is produced, and reactivation retries the
+occurrence once the missing variable is bound.
+
+Two conditions make catching sound, and both are properties the
+compiler maintains rather than things the instruction checks:
+
+- guard residuals do not tell (see `bequal` above): no `bunify`,
+  `store`, `kill` or `add-history` is reachable from one, so there is
+  no partial store, history or reactivation-queue state to roll back.
+  A `host-call` in the guard is outside this guarantee — but its
+  effects survive a guard that evaluates to `false` on its own just as
+  they survive an abandoned one, so the catch changes nothing there;
+- procedure calls restore the runtime call stack on the way out
+  whether they return or throw, so the frames a caught guard pushed do
+  not leak into subsequent execution.
+
+The compiler wraps a residual only when it can actually raise — in
+practice, when the residual contains a `bfrom-val`. A residual that is
+a pure `bequal` conjunction is emitted unwrapped.
 
 
 ## Runtime Contract

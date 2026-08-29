@@ -34,6 +34,7 @@ import YCHR.DSL
     (.=.),
     (//),
     (<=>),
+    (|-),
   )
 import YCHR.Internal.Parsed (Module)
 import YCHR.Internal.Types (Name (..), Term (..))
@@ -424,7 +425,9 @@ hostProgram =
                   "ov" // 1,
                   "use_builtin" // 1,
                   "bool_result" // 2,
-                  "bool_native" // 2
+                  "bool_native" // 2,
+                  "guard_unbound" // 1,
+                  "guard_never" // 1
                 ]
     `declaring` [ "compute_add" // 2,
                   "compute_shout" // 2,
@@ -441,7 +444,13 @@ hostProgram =
                   "ov" // 1,
                   "use_builtin" // 1,
                   "bool_result" // 2,
-                  "bool_native" // 2
+                  "bool_native" // 2,
+                  "guard_unbound" // 1,
+                  "guard_never" // 1,
+                  "gu_c" // 1,
+                  "gu_later" // 1,
+                  "gu_gather" // 1,
+                  "gu_out" // 1
                 ]
     `defining` [ [term "compute_add" [var "X", var "R"]]
                    <=> [var "R" `is` hostCall "my_add" [var "X", int 3]],
@@ -482,7 +491,27 @@ hostProgram =
                  -- a native boolean: an atom-shaped @true@ answers
                  -- @false@ here.
                  [term "bool_native" [var "X", var "R"]]
-                   <=> [var "R" `is` hostCall "boolean" [hostCall "is_even" [var "X"]]]
+                   <=> [var "R" `is` hostCall "boolean" [hostCall "is_even" [var "X"]]],
+                 -- Soft guard failure across the host-function boundary.
+                 -- `gu_c` is stored while its argument is unbound, so
+                 -- `is_even`'s Int marshalling reports UnboundValue --
+                 -- an instantiation failure, which a rule guard catches.
+                 [term "guard_unbound" [var "R"]]
+                   <=> [ term "gu_c" [var "E"],
+                         term "gu_later" [var "E"],
+                         term "gu_gather" [var "R"]
+                       ],
+                 -- Same, but nothing ever binds the variable.
+                 [term "guard_never" [var "R"]]
+                   <=> [term "gu_c" [var "E"], term "gu_gather" [var "R"]],
+                 [term "gu_later" [var "E"]] <=> [var "E" .=. int 4],
+                 [term "gu_c" [var "N"]]
+                   <=> [term "gu_out" [var "N"]]
+                   |- [hostCall "is_even" [var "N"]],
+                 [term "gu_gather" [var "R"], term "gu_out" [var "V"]]
+                   <=> [var "R" .=. var "V"],
+                 [term "gu_gather" [var "R"], term "gu_c" [var "_X"]]
+                   <=> [var "R" .=. int 0]
                ]
 
 -- | The default registry extended with one function per adapter kind.
@@ -572,6 +601,19 @@ hostFunctionTests =
         expectHostError "TypeMismatch" (term "bad_type" [var "R"]),
       testCase "unbound argument raises a runtime error" $
         expectHostError "UnboundValue" (term "bad_unbound" [var "Y", var "R"]),
+      -- The same UnboundValue failure, raised in a rule guard instead of
+      -- an `is`, is caught there: the rule delays rather than aborting
+      -- the query, and reactivation retries it once the variable is
+      -- bound. This is the host-function face of soft guard failure
+      -- (docs/reference/host-functions.md), and the only thing that
+      -- distinguishes it from a general failure -- which would still
+      -- abort -- is the error's kind.
+      testCase "UnboundValue in a rule guard delays, then fires on retry" $ do
+        r <- runHost hostRegistry (term "guard_unbound" [var "R"])
+        r @?= (Right 4 :: Either ConvertError Int),
+      testCase "a guard that is never decidable delays for ever, silently" $ do
+        r <- runHost hostRegistry (term "guard_never" [var "R"])
+        r @?= (Right 0 :: Either ConvertError Int),
       testCase "withDefaultHostFunctions: a custom entry overrides a builtin" $ do
         let overrideReg =
               withDefaultHostFunctions

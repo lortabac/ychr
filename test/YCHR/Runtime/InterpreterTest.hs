@@ -8,9 +8,11 @@ import Data.Foldable (toList)
 import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Internal.Runtime.Error (RuntimeErrorThrown (..))
+import YCHR.Internal.Loc (dummyLoc)
+import YCHR.Internal.Runtime.Error (RuntimeErrorKind (..), RuntimeErrorThrown (..))
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
     HostCallRegistry,
@@ -35,7 +37,9 @@ tests =
       typePredicateTests,
       univTests,
       bindParamsTests,
-      errorPathTests
+      errorPathTests,
+      errorKindTests,
+      softGuardTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -75,12 +79,25 @@ runChrLeq action = do
 -- Runtime-error trigger tests
 -- ---------------------------------------------------------------------------
 
--- | Run a single-procedure VM program and expect a 'RuntimeErrorThrown'.
+-- | Run a single-procedure VM program and expect a 'RuntimeErrorThrown',
+-- returning its message.
 expectRuntimeError :: Program -> Name -> [Value] -> IO String
-expectRuntimeError prog entry args = do
-  outcome <- try @RuntimeErrorThrown (interpret prog Map.empty entry args)
+expectRuntimeError prog entry args = snd <$> expectRuntimeErrorKind prog entry args
+
+-- | 'expectRuntimeError', also returning the error's 'RuntimeErrorKind'
+-- so a test can pin whether a failure delays a rule guard or aborts.
+expectRuntimeErrorKind ::
+  Program -> Name -> [Value] -> IO (RuntimeErrorKind, String)
+expectRuntimeErrorKind = expectRuntimeErrorKindWith Map.empty
+
+-- | 'expectRuntimeErrorKind' with a host-call registry, for programs
+-- whose failure comes from a primitive rather than the interpreter.
+expectRuntimeErrorKindWith ::
+  HostCallRegistry -> Program -> Name -> [Value] -> IO (RuntimeErrorKind, String)
+expectRuntimeErrorKindWith registry prog entry args = do
+  outcome <- try @RuntimeErrorThrown (interpret prog registry entry args)
   case outcome of
-    Left (RuntimeErrorThrown msg _stack) -> pure msg
+    Left (RuntimeErrorThrown kind msg _stack) -> pure (kind, msg)
     Right _ -> assertFailure "expected RuntimeErrorThrown, got a value"
 
 singleProc :: Name -> [Name] -> [Stmt] -> Program
@@ -111,7 +128,7 @@ errorPathTests :: TestTree
 errorPathTests =
   testGroup
     "runtime error paths"
-    [ testCase "BFromVal on a non-bool value reports a guard error" $ do
+    [ testCase "BFromVal on a bound non-bool value reports a guard error" $ do
         let prog =
               singleProc
                 "p"
@@ -180,6 +197,275 @@ errorPathTests =
         case result of
           VVar _ -> pure ()
           _ -> assertFailure "expected VVar, got something else"
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Runtime-error kind classification
+-- ---------------------------------------------------------------------------
+
+-- | Run @host(args)@ for its effect, with a fresh unbound variable
+-- available as @v@, and report the kind and message of the failure.
+hostFailure :: Name -> [ValExpr] -> IO (RuntimeErrorKind, String)
+hostFailure host args =
+  expectRuntimeErrorKindWith
+    baseHostCallRegistry
+    ( singleProc
+        "p"
+        []
+        [ LetVal "v" NewVar,
+          ExprStmt (HostCall host args),
+          Return (Lit (BoolLit False))
+        ]
+    )
+    "p"
+    []
+
+-- | Assert that a host call fails as an instantiation error — the
+-- classification a rule guard catches.
+assertInstantiation :: Name -> [ValExpr] -> IO ()
+assertInstantiation host args = do
+  (kind, msg) <- hostFailure host args
+  assertBool
+    ("expected InstantiationError from " ++ show host ++ ", got " ++ show kind ++ ": " ++ msg)
+    (kind == InstantiationError)
+
+-- | Assert that a host call fails as a general error — fatal in every
+-- position, guards included.
+assertGeneral :: Name -> [ValExpr] -> IO ()
+assertGeneral host args = do
+  (kind, msg) <- hostFailure host args
+  assertBool
+    ("expected GeneralError from " ++ show host ++ ", got " ++ show kind ++ ": " ++ msg)
+    (kind == GeneralError)
+
+-- | Assert that a host call /succeeds/ on an unbound argument with the
+-- given boolean result: the primitive is total on unbound values and
+-- must not be reclassified.
+assertTotalOnUnbound :: Name -> [ValExpr] -> Bool -> IO ()
+assertTotalOnUnbound host args expected = do
+  let prog =
+        singleProc
+          "p"
+          []
+          [ LetVal "v" NewVar,
+            Return (HostCall host args)
+          ]
+  result <- interpret prog baseHostCallRegistry "p" []
+  case result of
+    VBool b -> b @?= expected
+    _ -> assertFailure ("expected a boolean from " ++ show host)
+
+-- | The kind carried by a runtime error decides whether a rule guard
+-- delays or the query aborts, so each primitive family is pinned on
+-- both sides: an unbound argument on the failure path is an
+-- instantiation error, a bound-but-wrong argument is a general one.
+errorKindTests :: TestTree
+errorKindTests =
+  testGroup
+    "runtime error kinds"
+    [ testGroup
+        "strict primitives on an unbound argument"
+        [ testCase "numeric arithmetic" $
+            assertInstantiation "+" [Var "v", Lit (IntLit 1)],
+          testCase "integer division" $
+            assertInstantiation "div" [Var "v", Lit (IntLit 2)],
+          testCase "float division" $
+            assertInstantiation "/" [Lit (FloatLit 1.0), Var "v"],
+          testCase "numeric comparison" $
+            assertInstantiation ">" [Var "v", Lit (IntLit 0)],
+          testCase "numeric conversion" $
+            assertInstantiation "int_to_float" [Var "v"],
+          testCase "string operation" $
+            assertInstantiation "string_length" [Var "v"],
+          testCase "write" $
+            assertInstantiation "write" [Var "v"],
+          testCase "compound decomposition" $
+            assertInstantiation "compound_to_list" [Var "v"],
+          testCase "dispatch marker" $
+            assertInstantiation
+              "__chr_inst_error"
+              [Lit (AtomLit "lists:length/1"), Lit (IntLit 1)]
+        ],
+      testGroup
+        "strict primitives on a bound but wrong argument"
+        [ testCase "numeric arithmetic" $
+            assertGeneral "+" [Lit (AtomLit "a"), Lit (IntLit 1)],
+          testCase "numeric comparison" $
+            assertGeneral ">" [Lit (AtomLit "a"), Lit (IntLit 0)],
+          testCase "string operation" $
+            assertGeneral "string_length" [Lit (IntLit 1)],
+          testCase "division by zero" $
+            assertGeneral "div" [Lit (IntLit 1), Lit (IntLit 0)],
+          testCase "no matching equation" $
+            assertGeneral "__chr_error" [Lit (AtomLit "no matching equation in f/1")]
+        ],
+      testGroup
+        "primitives total on unbound values are not reclassified"
+        [ testCase "==" $
+            assertTotalOnUnbound "==" [Var "v", Lit (IntLit 1)] False,
+          testCase "unifiable" $
+            assertTotalOnUnbound "unifiable" [Var "v", Lit (IntLit 1)] True,
+          testCase "integer" $
+            assertTotalOnUnbound "integer" [Var "v"] False,
+          testCase "var" $
+            assertTotalOnUnbound "var" [Var "v"] True
+        ],
+      testGroup
+        "BFromVal"
+        [ testCase "an unbound guard result is an instantiation error" $ do
+            let prog =
+                  singleProc
+                    "p"
+                    []
+                    [ LetVal "v" NewVar,
+                      BoolExprStmt (BFromVal (Var "v")),
+                      Return (Lit (BoolLit False))
+                    ]
+            (kind, msg) <- expectRuntimeErrorKind prog "p" []
+            kind @?= InstantiationError
+            assertBool ("expected 'not sufficiently instantiated' in: " ++ msg) $
+              "not sufficiently instantiated" `isInfixOf` msg,
+          testCase "a bound non-boolean guard result is a general error" $ do
+            let prog =
+                  singleProc
+                    "p"
+                    []
+                    [ BoolExprStmt (BFromVal (Lit (IntLit 42))),
+                      Return (Lit (BoolLit False))
+                    ]
+            (kind, msg) <- expectRuntimeErrorKind prog "p" []
+            kind @?= GeneralError
+            assertBool ("expected 'did not evaluate to a boolean' in: " ++ msg) $
+              "did not evaluate to a boolean" `isInfixOf` msg,
+          testCase "a variable bound to a boolean is accepted" $ do
+            let prog =
+                  singleProc
+                    "p"
+                    []
+                    [ LetVal "v" NewVar,
+                      BoolExprStmt (BUnify (Var "v") (Lit (BoolLit True))),
+                      If (BFromVal (Var "v")) [Return (Lit (IntLit 1))] [],
+                      Return (Lit (IntLit 0))
+                    ]
+            result <- interpret prog Map.empty "p" []
+            case result of
+              VInt n -> n @?= 1
+              _ -> assertFailure "expected an integer result"
+        ]
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Soft guard failure
+-- ---------------------------------------------------------------------------
+
+-- | Run a program built around @If (BSoftGuard cond) …@ and report
+-- which branch was taken.
+softGuardBranch :: [Stmt] -> BoolExpr -> IO Bool
+softGuardBranch prelude cond = do
+  result <-
+    interpret
+      ( singleProc
+          "p"
+          []
+          ( prelude
+              ++ [ If
+                     (BSoftGuard cond)
+                     [Return (Lit (IntLit 1))]
+                     [Return (Lit (IntLit 0))]
+                 ]
+          )
+      )
+      baseHostCallRegistry
+      "p"
+      []
+  case result of
+    VInt 1 -> pure True
+    VInt 0 -> pure False
+    _ -> assertFailure "expected an integer branch marker"
+
+frame :: Text -> StackFrame
+frame label =
+  StackFrame
+    { frameLabel = label,
+      frameSourceLoc = dummyLoc,
+      frameSourceCode = label
+    }
+
+-- | 'BSoftGuard' is the VM form behind rule-guard delaying: an
+-- instantiation failure inside it becomes 'False', everything else
+-- propagates. See @Note [Soft guard catch safety]@ in the interpreter.
+softGuardTests :: TestTree
+softGuardTests =
+  testGroup
+    "BSoftGuard"
+    [ testCase "an instantiation failure evaluates to false" $ do
+        result <-
+          softGuardBranch
+            [LetVal "v" NewVar]
+            (BFromVal (HostCall ">" [Var "v", Lit (IntLit 0)]))
+        result @?= False,
+      testCase "a general failure propagates" $ do
+        let prog =
+              singleProc
+                "p"
+                []
+                [ If
+                    ( BSoftGuard
+                        (BFromVal (HostCall ">" [Lit (AtomLit "a"), Lit (IntLit 0)]))
+                    )
+                    []
+                    [],
+                  Return (Lit (IntLit 0))
+                ]
+        (kind, _) <- expectRuntimeErrorKindWith baseHostCallRegistry prog "p" []
+        kind @?= GeneralError,
+      testCase "a decidable guard is unaffected" $ do
+        yes <- softGuardBranch [] (BFromVal (HostCall ">" [Lit (IntLit 1), Lit (IntLit 0)]))
+        yes @?= True
+        no <- softGuardBranch [] (BFromVal (HostCall ">" [Lit (IntLit 0), Lit (IntLit 1)]))
+        no @?= False,
+      testCase "the catch also applies in deep-deref mode" $ do
+        result <-
+          softGuardBranch
+            [LetVal "v" NewVar]
+            (BEvalDeep (BFromVal (HostCall ">" [Var "v", Lit (IntLit 0)])))
+        result @?= False,
+      testCase "a caught failure leaves the call stack intact" $ do
+        -- @q@ pushes a frame and then fails with an instantiation
+        -- error. The soft guard swallows it; the general error raised
+        -- afterwards must report only the frame pushed by @p@, because
+        -- every procedure call restores the saved stack on the way out.
+        let prog =
+              Program
+                { numTypes = 0,
+                  typeNames = [],
+                  numRules = 0,
+                  ruleNames = [],
+                  procedures =
+                    [ mkProc
+                        "p"
+                        []
+                        [ PushFrame (frame "caller"),
+                          If (BSoftGuard (BFromVal (CallExpr "q" []))) [] [],
+                          ExprStmt (HostCall "__chr_error" [Lit (AtomLit "boom")]),
+                          Return (Lit (IntLit 0))
+                        ],
+                      mkProc
+                        "q"
+                        []
+                        [ PushFrame (frame "callee"),
+                          LetVal "v" NewVar,
+                          Return (Var "v")
+                        ]
+                    ],
+                  evaluables = []
+                }
+        outcome <-
+          try @RuntimeErrorThrown (interpret prog baseHostCallRegistry "p" [])
+        case outcome of
+          Left (RuntimeErrorThrown _ _ stack) ->
+            map (.frameLabel) stack @?= ["caller"]
+          Right _ -> assertFailure "expected RuntimeErrorThrown, got a value"
     ]
 
 bindParamsTests :: TestTree

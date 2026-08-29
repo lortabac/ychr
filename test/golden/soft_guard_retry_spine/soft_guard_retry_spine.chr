@@ -1,0 +1,29 @@
+:- module(soft_guard_retry_spine, [run/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint run(int).
+:- chr_constraint c(list(int)), seed(list(int)), later(list(int)).
+:- chr_constraint gather(int), out(int).
+
+% Soft failure raised from a *nested, recursive* call rather than from
+% the guard's outermost operation. `c` is stored holding the partial
+% list `[1|T]`, whose spine ends in an unbound variable. `mylen` walks
+% it, and the recursive step on `T` cannot pick an equation — neither
+% the nil pattern nor the cons pattern can be decided against a free
+% variable. That instantiation failure propagates up through the
+% recursion and is caught at the guard boundary just like a top-level
+% one, so the rule simply does not fire.
+%
+% `T` is an unbound variable *inside* a compound argument, so this also
+% exercises the store's recursive observer registration: binding it has
+% to reactivate `c` for the retry to happen at all.
+
+:- function mylen/1.
+mylen([]) -> 0.
+mylen([_|T]) -> 1 + mylen(T).
+
+start @ run(R) <=> seed(T), later(T), gather(R).
+seed @ seed(T) <=> c([1|T]).
+bind @ later(T) <=> T = [].
+fire @ c(Xs) <=> mylen(Xs) > 0 | out(mylen(Xs)).
+collect @ gather(R), out(V) <=> R = V.

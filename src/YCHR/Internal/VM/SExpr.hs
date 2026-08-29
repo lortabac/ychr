@@ -230,6 +230,7 @@ boolExprToSExpr (BNotInHistory rid es) =
 boolExprToSExpr (BUnify a b) = SList [SAtom "bunify", valExprToSExpr a, valExprToSExpr b]
 boolExprToSExpr (BFromVal e) = SList [SAtom "bfrom-val", valExprToSExpr e]
 boolExprToSExpr (BEvalDeep e) = SList [SAtom "beval-deep", boolExprToSExpr e]
+boolExprToSExpr (BSoftGuard e) = SList [SAtom "bsoft-guard", boolExprToSExpr e]
 
 idExprToSExpr :: IdExpr -> SExpr
 idExprToSExpr (IdVar n) = SList [SAtom "id-var", nameToSExpr n]
@@ -475,6 +476,7 @@ boolExprFromSExpr (SList [SAtom "bunify", a, b]) =
   BUnify <$> valExprFromSExpr a <*> valExprFromSExpr b
 boolExprFromSExpr (SList [SAtom "bfrom-val", e]) = BFromVal <$> valExprFromSExpr e
 boolExprFromSExpr (SList [SAtom "beval-deep", e]) = BEvalDeep <$> boolExprFromSExpr e
+boolExprFromSExpr (SList [SAtom "bsoft-guard", e]) = BSoftGuard <$> boolExprFromSExpr e
 boolExprFromSExpr s = err ("expected boolean expression, got: " <> printSExpr s)
 
 idExprFromSExpr :: SExpr -> Err IdExpr

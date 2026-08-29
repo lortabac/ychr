@@ -353,6 +353,42 @@ not visible at the type. A dedicated `KnownCtorRef` /
 `UnknownCtorRef` split, or invariants on `conMap` membership, would
 make it explicit.
 
+### Rule-guard residuals do not tell — `src/YCHR/Internal/Compile.hs` (`residualCheck`, `genGuardedFire`)
+
+The `BoolExpr` a rule guard compiles to is a `BAnd` chain of `BEqual`
+(ask) conjuncts and `BFromVal (EvalDeep …)` calls into user code.
+Nothing in the type stops a `BUnify` — or a `Store`/`Kill`/
+`AddHistory` reached through a called procedure — from appearing
+there; only the way `residualCheck` is built, and the fact that a
+compiled function body has no tell forms, keeps it out.
+
+This used to be a correctness nicety ("guards must not leave
+half-done bindings when they fail"). It is now load-bearing:
+`genGuardedFire` wraps the residual in `BSoftGuard`, which abandons a
+partly-evaluated guard on an instantiation error and continues with
+`False`. If the residual could tell, the abandoned prefix would leave
+store, history or reactivation-queue state behind with nothing to roll
+it back.
+
+**Scope, precisely.** The guarantee covers the runtime's own
+bookkeeping — constraint store, propagation history, reactivation
+queue, call stack, trace depth — and it is what the catch depends on.
+It does *not* extend to a `HostCall` in the guard. A host function
+receives the session and can bind shared logical-variable cells;
+`run_chr_session/1` (`src/YCHR/Internal/Runtime/SubSession.hs`)
+documents doing exactly that as its result channel. Such a binding
+survives whether the guard is abandoned by `BSoftGuard` or simply
+evaluates to `False` on its own, so the catch adds no exposure the
+language did not already have — but "a guard cannot mutate anything"
+is not a true statement of the invariant, and must not be relied on as
+one.
+
+A separate `GuardExpr` type (a `BoolExpr` subset with no `BUnify` and
+only calls into a guard-safe procedure set) would encode the compiled
+half; the host-call half would need a purity tag on
+`HostCallFn`. Short of either, `Note [Soft guard catch safety]` in the
+interpreter records what the catch depends on.
+
 
 ## 5. Cross-cutting compiler ↔ runtime contracts
 

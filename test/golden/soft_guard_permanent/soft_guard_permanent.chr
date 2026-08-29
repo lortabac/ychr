@@ -1,0 +1,21 @@
+:- module(soft_guard_permanent, [run/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint run(int).
+:- chr_constraint c(int).
+:- chr_constraint gather(int), out(int).
+
+% Nothing ever binds `c`'s argument, so `fire`'s guard can never be
+% decided: it soft-fails at the first activation and there is no
+% reactivation to retry it. That is not an error — a rule that delays
+% for ever is indistinguishable from a rule whose guard was simply
+% false, and the query completes normally through the other rules.
+%
+% `final` then observes the surviving `c` and binds the result, which
+% is what makes the silence checkable: had the delayed guard aborted
+% the query, or had it fired, `R` would not be 0.
+
+start @ run(R) <=> c(_), gather(R).
+fire @ c(N) <=> N > 0 | out(N).
+collect @ gather(R), out(V) <=> R = V.
+final @ gather(R), c(_) <=> R = 0.

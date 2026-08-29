@@ -39,7 +39,7 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import YCHR.Internal.Runtime.Error (runtimeErrorS)
+import YCHR.Internal.Runtime.Error (instantiationErrorS, runtimeErrorS)
 import YCHR.Internal.Runtime.Monad (Chr, HostCallFn (..), HostCallRegistry)
 import YCHR.Internal.Runtime.Types (Value (..), VarId)
 import YCHR.Internal.Runtime.Var (deref, equal, getVarId, newVar, unifiable)
@@ -96,7 +96,7 @@ baseHostCallRegistry =
       [VInt a, VInt b] -> pure (VInt (intOp a b))
       [VFloat a, VFloat b] -> pure (VFloat (floatOp a b))
       args ->
-        runtimeErrorS $
+        argError "arithmetic host call" args $
           "arithmetic host call: expected 2 numeric arguments of same type, got "
             ++ show (length args)
     intDivOp2 opName op = HostCallFn $ \case
@@ -104,30 +104,32 @@ baseHostCallRegistry =
         runtimeErrorS $ "integer " ++ opName ++ ": division by zero"
       [VInt a, VInt b] -> pure (VInt (op a b))
       args ->
-        runtimeErrorS $
+        argError "integer arithmetic host call" args $
           "integer arithmetic host call: expected 2 Int arguments, got "
             ++ show (length args)
     floatArith2 op = HostCallFn $ \case
       [VFloat a, VFloat b] -> pure (VFloat (op a b))
       args ->
-        runtimeErrorS $
+        argError "float arithmetic host call" args $
           "float arithmetic host call: expected 2 Float arguments, got "
             ++ show (length args)
     numCmp intOp floatOp = HostCallFn $ \case
       [VInt a, VInt b] -> pure (VBool (intOp a b))
       [VFloat a, VFloat b] -> pure (VBool (floatOp a b))
       args ->
-        runtimeErrorS $
+        argError "comparison host call" args $
           "comparison host call: expected 2 numeric arguments of same type, got "
             ++ show (length args)
     toFloatFn = HostCallFn $ \case
       [VInt n] -> pure (VFloat (fromIntegral n))
       [VFloat n] -> pure (VFloat n)
-      _ -> runtimeErrorS "int_to_float: expected 1 numeric argument"
+      args ->
+        argError "int_to_float" args "int_to_float: expected 1 numeric argument"
     toIntFn = HostCallFn $ \case
       [VFloat n] -> pure (VInt (truncate n))
       [VInt n] -> pure (VInt n)
-      _ -> runtimeErrorS "float_to_int: expected 1 numeric argument"
+      args ->
+        argError "float_to_int" args "float_to_int: expected 1 numeric argument"
     unifiableHost = HostCallFn $ \case
       [a, b] -> VBool <$> unifiable a b
       args ->
@@ -140,16 +142,16 @@ baseHostCallRegistry =
           "== host call: expected 2 arguments, got " ++ show (length args)
     stringConcat = HostCallFn $ \case
       [VText a, VText b] -> pure (VText (a <> b))
-      _ -> runtimeErrorS "string_concat: expected 2 Text arguments"
+      args -> argError "string_concat" args "string_concat: expected 2 Text arguments"
     stringLength = HostCallFn $ \case
       [VText s] -> pure (VInt (fromIntegral (T.length s)))
-      _ -> runtimeErrorS "string_length: expected 1 Text argument"
+      args -> argError "string_length" args "string_length: expected 1 Text argument"
     stringUpper = HostCallFn $ \case
       [VText s] -> pure (VText (T.toUpper s))
-      _ -> runtimeErrorS "string_upper: expected 1 Text argument"
+      args -> argError "string_upper" args "string_upper: expected 1 Text argument"
     stringLower = HostCallFn $ \case
       [VText s] -> pure (VText (T.toLower s))
-      _ -> runtimeErrorS "string_lower: expected 1 Text argument"
+      args -> argError "string_lower" args "string_lower: expected 1 Text argument"
     -- Generated dispatch code passes the message body as an atom; the
     -- runtime only supplies the common prefix. The catch-all keeps a
     -- malformed call from being silently swallowed.
@@ -162,21 +164,22 @@ baseHostCallRegistry =
     -- that blocked dispatch (0 when the compiler could not attribute
     -- the blocking test to a single top-level argument).
     chrInstError = HostCallFn $ \case
-      [VAtom detail] -> chrErr (T.unpack detail)
-      [VAtom label, VInt 0] -> chrErr (T.unpack label <> notInstantiated)
+      [VAtom detail] -> chrInstErr (T.unpack detail)
+      [VAtom label, VInt 0] -> chrInstErr (T.unpack label <> notInstantiated)
       [VAtom label, VInt n] ->
-        chrErr ("argument " <> show n <> " of " <> T.unpack label <> notInstantiated)
-      _ -> chrErr ("dispatch" <> notInstantiated)
+        chrInstErr ("argument " <> show n <> " of " <> T.unpack label <> notInstantiated)
+      _ -> chrInstErr ("dispatch" <> notInstantiated)
     notInstantiated =
       " is not sufficiently instantiated to select an equation"
         <> " (unbound variable at a matched position)"
     chrErr detail = runtimeErrorS ("CHR runtime error: " <> detail)
+    chrInstErr detail = instantiationErrorS ("CHR runtime error: " <> detail)
     writeStr = HostCallFn $ \case
       [VText s] -> unit <$ liftIO (putStr (T.unpack s))
-      _ -> runtimeErrorS "write: expected 1 Text argument"
+      args -> argError "write" args "write: expected 1 Text argument"
     writeStrLn = HostCallFn $ \case
       [VText s] -> unit <$ liftIO (putStrLn (T.unpack s))
-      _ -> runtimeErrorS "writeln: expected 1 Text argument"
+      args -> argError "writeln" args "writeln: expected 1 Text argument"
     typePred p = HostCallFn $ \case
       [v] -> do
         v' <- deref v
@@ -200,16 +203,42 @@ baseHostCallRegistry =
     compoundToList = HostCallFn $ \case
       [VTerm f args] -> pure (valueList (VAtom f : args))
       [v@(VAtom _)] -> pure (valueList [v])
-      _ -> runtimeErrorS "compound_to_list: expected 1 compound or atom argument"
+      args ->
+        argError
+          "compound_to_list"
+          args
+          "compound_to_list: expected 1 compound or atom argument"
     listToCompound = HostCallFn $ \case
-      [list] -> case fromValueList list of
+      args@[list] -> case fromValueList list of
         Just [VAtom f] -> pure (VAtom f)
-        Just (VAtom f : args) -> pure (VTerm f args)
-        _ -> runtimeErrorS "list_to_compound: expected a non-empty list with an atom head"
-      _ -> runtimeErrorS "list_to_compound: expected 1 list argument"
+        Just (VAtom f : fArgs) -> pure (VTerm f fArgs)
+        _ ->
+          argError
+            "list_to_compound"
+            args
+            "list_to_compound: expected a non-empty list with an atom head"
+      args -> argError "list_to_compound" args "list_to_compound: expected 1 list argument"
     copyTermHost = HostCallFn $ \case
       [v] -> copyTerm v
       _ -> runtimeErrorS "copy_term: expected 1 argument"
+    -- Report a strict primitive's failure. Each caller is a total
+    -- function of its arguments' values with no ignored positions, so
+    -- reaching the failure path with an argument that is still an
+    -- unbound variable means the value was demanded and was not there:
+    -- an instantiation failure, which a rule guard catches and turns
+    -- into a silent @false@. Any other failure (wrong type, wrong
+    -- arity) is a general error and stays fatal everywhere.
+    argError label args general = do
+      unbound <- anyUnbound args
+      if unbound
+        then
+          instantiationErrorS $
+            label ++ ": argument is not sufficiently instantiated (unbound variable)"
+        else runtimeErrorS general
+    anyUnbound [] = pure False
+    anyUnbound (v : vs) = do
+      v' <- deref v
+      if isVar v' then pure True else anyUnbound vs
 
 -- ---------------------------------------------------------------------------
 -- Utilities

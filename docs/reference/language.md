@@ -381,20 +381,200 @@ Haskell interpreter surfaces this as `YCHR-60001`. Use `quote(...)`
 to keep an expression symbolic until something else binds the
 variables.
 
+Such failures come in two kinds, and the distinction is what the next
+section builds on:
+
+- an **instantiation failure** — the computation reached a point where
+  it had to know the value of a variable that is still unbound, so no
+  verdict was possible;
+- a **general failure** — everything else: a definite mismatch, a type
+  error, division by zero, an arity mismatch.
+
 Selecting a function equation is one such demand, and it reports the
 inconclusive case separately from a definite mismatch: a pattern test
 reached with an unbound variable at the position it inspects raises
 "argument *K* of `M:f/N` is not sufficiently instantiated to select an
-equation", where a fully instantiated argument that no equation covers
-raises "no matching equation in `M:f/N`". `'$call'` makes the same
-distinction for an unbound closure operand. Both remain hard errors;
-only the diagnosis differs. A *user-written* guard is a decision about
-values that are already in hand, so failing one — `pos(N) | N > 0` on
-`pos(0)` — is a definite mismatch.
+equation" (an instantiation failure), where a fully instantiated
+argument that no equation covers raises "no matching equation in
+`M:f/N`" (a general failure). `'$call'` makes the same distinction for
+an unbound closure operand. A *user-written* equation guard that is
+decided on values already in hand is a definite mismatch — failing
+`pos(N) | N > 0` on `pos(0)` is a general mismatch, and dispatch moves
+on to the next equation.
 
 Dispatch stops at an equation's first failing test, so the argument the
 message names is the first one that blocked, not necessarily the only
 one that would have.
+
+Outside a rule guard both kinds are hard errors; only the diagnosis
+differs. Inside a rule guard an instantiation failure is caught and
+turned into a silent "not now" — see the next section.
+
+### Soft guard failure
+
+A **rule guard** — the conjunction between `|` and the rule body in a
+simplification, propagation or simpagation rule — is evaluated with
+instantiation failures caught. If evaluating the guard raises an
+instantiation failure, the guard evaluates to **false**: the rule does
+not fire for that combination of constraints, no diagnostic is
+produced, and solving carries on. When the missing variable is bound
+later, the ordinary constraint-reactivation mechanism re-activates the
+stored constraint and the occurrence is tried again — this time with a
+value in hand.
+
+```prolog
+:- chr_constraint c(int), mk(int), out(int), later(int).
+
+m @ mk(_)    <=> c(E), later(E).   % c is stored while E is unbound
+l @ later(E) <=> E = 1.
+r @ c(N)     <=> N > 0 | out(N).   % N unbound at the first activation
+```
+
+Rule `r` is tried while `N` is free. `>` demands a value, raises an
+instantiation failure, and the guard yields false — so `r` does not
+fire and `c(E)` stays stored. Rule `l` then binds `E`, which
+reactivates `c`, and `r` is retried with `N = 1`: the guard succeeds
+and `out(1)` is told.
+
+This is default-on for every rule guard; there is no opt-in or opt-out
+syntax, and no new surface form. It gives guards a logic-language-like
+delaying behaviour without a mode system.
+
+#### The demand-driven principle
+
+Instantiation failures are **demand-driven**: one is raised only when a
+computation actually demands the value of an unbound variable, never
+from the mere presence of an unbound variable in an argument list.
+
+Concretely, an unbound variable that is only carried around does not
+delay anything:
+
+- a *pass-through* function argument (`id(X) -> X.`) flows freely;
+- an *ignored* argument (`fst(pair(A, _)) -> A.` applied to
+  `pair(1, U)` with `U` unbound) flows freely;
+- data construction (`quote(...)`, constructor application, `=`)
+  never demands a value;
+- primitives that are total on unbound values — `==`, `unifiable`, the
+  type predicates (`var`, `nonvar`, `ground`, `integer`, `atom`, …),
+  `term_variables`, `copy_term` — answer normally and never raise.
+
+A demand point is one of:
+
+| Demand point | Example |
+|---|---|
+| Function-equation dispatch inspecting an unbound argument position | `length([1\|T])` with `T` unbound |
+| `'$call'` on an unbound closure operand | `'$call'(F, 1)` with `F` unbound |
+| A strict host primitive reaching its failure path with an unbound argument | `N > 0`, `X + 1`, `string_length(S)` |
+| A host function whose marshalling reports `UnboundValue` | `host:f(X)` with `X` unbound |
+| A rule guard that evaluates to an unbound variable | `c(B) <=> B \| body.` with `B` unbound |
+
+The host primitives below are strict scalar operations with no ignored
+arguments, which is why "an unbound argument on the failure path" is a
+sound reading of "the value was demanded" for them specifically:
+
+| Primitives | On an unbound argument |
+|---|---|
+| `+`, `-`, `*` | instantiation failure |
+| `div`, `mod`, `rem` | instantiation failure |
+| `/` | instantiation failure |
+| `<`, `>`, `=<`, `>=` | instantiation failure |
+| `int_to_float`, `float_to_int` | instantiation failure |
+| `string_concat`, `string_length`, `string_upper`, `string_lower` | instantiation failure |
+| `write`, `writeln` | instantiation failure |
+| `compound_to_list`, `list_to_compound` | instantiation failure |
+| `==`, `unifiable` | answers normally (never raises) |
+| `var`, `nonvar`, `ground`, `integer`, `float`, `atom`, `boolean`, `string` | answers normally (never raises) |
+| `term_variables`, `copy_term` | answers normally (never raises) |
+
+**Precedence.** When a call is both under-instantiated and ill-typed —
+`X + "foo"` with `X` unbound — the instantiation diagnosis wins. In a
+rule guard that means the rule delays; once `X` is bound, the type
+error surfaces as a hard general failure.
+
+**Unbound guard result.** A guard position demands a boolean, so a
+guard whose value is an unbound variable is an instantiation failure
+and delays:
+
+```prolog
+r @ c(B) <=> B | out(1).      % B unbound: delays; B bound to true: fires
+```
+
+A guard that evaluates to a *bound* non-boolean (an integer, say)
+is a general failure and stays a hard error ("guard did not evaluate
+to a boolean").
+
+#### The catch boundary
+
+The catch is placed at exactly one point: the rule-guard residual of a
+rule occurrence. It is not a general handler.
+
+- It is **not** applied inside function bodies. Within a function, an
+  instantiation failure raised by an equation guard, or by a nested
+  call, propagates out immediately; later equations are *not* tried.
+  Dispatch is monotonic: a definite mismatch moves to the next
+  equation, a cannot-decide aborts the call. The failure then travels
+  out to whatever demanded the function's value — and if that was a
+  rule guard, it is caught there.
+- Because the boundary is the whole guard, a failure raised deep
+  inside a recursive call is caught the same as one raised at the top
+  level. `r @ c(L) <=> length(L) > 0 | body.` on a partial list
+  `[1|T]` delays, even though the failure comes from `length`'s
+  recursive dispatch.
+- `is` expressions, rule bodies and top-level goals are *not* guard
+  positions. An instantiation failure there is a hard `YCHR-60001`.
+- `run_chr_session/1` keeps its own boundary: it runs an isolated
+  sub-session and already reports *any* failure as `false`.
+
+A guard never tells. `=`, constraint additions and the rest of the
+body forms are not guard syntax, and a function called from a guard
+cannot tell either — so abandoning a half-evaluated guard leaves the
+constraint store, the propagation history and the reactivation queue
+exactly as it found them. That is what makes catching sound.
+
+The one thing a guard can do that outlives it is call a host function
+that binds a variable it was handed — `run_chr_session/1` does this
+deliberately, as its result channel. Those bindings persist, but they
+persist equally when a guard simply evaluates to false, so this is a
+property of putting an effectful host call in a guard rather than
+anything the delaying introduces. If the distinction matters to you,
+keep effectful host calls in rule bodies, where they run once and only
+when the rule fires.
+
+#### Interaction with reactivation and the propagation history
+
+A retry is possible because of two properties of the generated code:
+
+- the propagation history is consulted *after* the guard, so a guard
+  that delayed leaves no history entry to block a later firing;
+- the active constraint is only killed inside the fire block, so a
+  delayed rule leaves the constraint stored and observing its
+  variables.
+
+A stored constraint is registered as an observer of every unbound
+variable reachable from its arguments, including variables nested
+inside compound terms, so binding the variable pushes the constraint
+onto the reactivation queue and its occurrences run again.
+
+#### Non-guarantees
+
+Soft guard failure delays a rule; it does not implement coroutining.
+In particular:
+
+- **No retry without an observer.** The retry comes from constraint
+  reactivation, so some *stored* constraint must observe the variable
+  that was missing. A guard that delays on a variable reachable only
+  from, say, a global or a value constructed inside the guard is never
+  retried.
+- **Passive occurrences are not retried.** Occurrences the compiler
+  proved can never fire are not generated, and reactivation only runs
+  the generated ones.
+- **No failure is reported.** A rule that delays for ever is
+  indistinguishable from a rule whose guard was simply false. If a
+  query silently produces fewer bindings than expected, an unbound
+  variable at a guard is a candidate explanation.
+- **A delayed rule is not fair.** The retry happens on the next
+  activation, in ordinary ωr order; there is no separate wake-up
+  queue or priority.
 
 ## The `=` operator
 

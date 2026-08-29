@@ -20,7 +20,8 @@ tests =
     "YCHR.Internal.Compile"
     [ indexConditionPushdownTests,
       passiveOccurrencesTests,
-      boolPatternTests
+      boolPatternTests,
+      softGuardWrapTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -87,6 +88,7 @@ ifConditions = concatMap go
         VM.BAnd a b -> flatten a ++ flatten b
         VM.BOr a b -> flatten a ++ flatten b
         VM.BEvalDeep a -> flatten a
+        VM.BSoftGuard a -> flatten a
         _ -> []
 
 -- | Look up a procedure by name in a compiled program.
@@ -301,3 +303,49 @@ boolPatternTests =
           assertBool
             (show procName ++ ": bool pattern must not compile to BMatchTerm")
             (not (any isBoolFunctorTest conds))
+
+-- ---------------------------------------------------------------------------
+-- Soft-guard wrapping
+-- ---------------------------------------------------------------------------
+
+softGuardSource :: Text
+softGuardSource =
+  ":- module(m, [g/1, eq/2]).\n\
+  \:- use_module(library(prelude)).\n\
+  \:- chr_constraint g(int), eq(int, int).\n\
+  \guarded @ g(N) <=> N > 0 | true.\n\
+  \nonlinear @ eq(X, X) <=> true.\n"
+
+-- | 'softenGuard' wraps a rule-occurrence guard residual in
+-- 'VM.BSoftGuard' only when the residual can actually raise — in
+-- practice, when it contains a @BFromVal@. A residual that is a pure
+-- @BEqual@ conjunction is total (ask equality answers @False@ on
+-- unbound operands) and is emitted unwrapped, so the hot path pays
+-- nothing.
+--
+-- Both halves matter and neither is covered by the golden tests: a
+-- @canRaise@ stuck at @True@ would only cost performance, and a
+-- @canRaise@ stuck at @False@ would be caught by the goldens but not
+-- explained by them.
+softGuardWrapTests :: TestTree
+softGuardWrapTests =
+  testGroup
+    "soft-guard wrapping of guard residuals"
+    [ testCase "a user-written guard is wrapped" $ do
+        prog <- compileOrFail [("m.chr", softGuardSource)]
+        assertBool
+          "expected the N > 0 residual to be wrapped in BSoftGuard"
+          (hasSoftGuard prog "occurrence_m__g1_1"),
+      testCase "an HNF equality residual is left unwrapped" $ do
+        prog <- compileOrFail [("m.chr", softGuardSource)]
+        assertBool
+          "expected an equality-only residual to be emitted unwrapped"
+          (not (hasSoftGuard prog "occurrence_m__eq2_1"))
+    ]
+  where
+    isSoftGuard (VM.BSoftGuard _) = True
+    isSoftGuard _ = False
+    hasSoftGuard prog procName =
+      case findProcedure prog procName of
+        Nothing -> error ("procedure not found: " ++ show procName)
+        Just p -> any isSoftGuard (ifConditions p.body)

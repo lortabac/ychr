@@ -330,8 +330,34 @@ genGuardedFire symTab varMap occ = do
   fireStmts <- genFireStmts symTab compiled.extendedVarMap occ
   let guarded = case compiled.residualCheck of
         Nothing -> fireStmts
-        Just gExpr -> [If gExpr fireStmts []]
+        Just gExpr -> [If (softenGuard gExpr) fireStmts []]
   pure (compiled.matchWrapper guarded, compiled.indexConditions)
+
+-- | Wrap a rule-occurrence guard residual in 'BSoftGuard', so that an
+-- instantiation failure inside it (an unbound variable reached a
+-- decision point) makes the guard evaluate to 'False' instead of
+-- aborting the query. The rule does not fire; binding the variable
+-- later reactivates the constraint and retries the occurrence.
+--
+-- The wrapper is emitted only when the residual can actually raise.
+-- A residual built purely from 'BEqual' conjuncts is ask-semantics
+-- structural equality, which is total — it answers 'False' on unbound
+-- operands rather than failing — so wrapping it would cost a catch
+-- frame on a hot path for no behavioural difference. Only 'BFromVal'
+-- (user-written guard expressions: host primitives, function calls,
+-- @'$call'@ dispatch) can raise here.
+softenGuard :: BoolExpr -> BoolExpr
+softenGuard gExpr
+  | canRaise gExpr = BSoftGuard gExpr
+  | otherwise = gExpr
+  where
+    canRaise (BFromVal _) = True
+    canRaise (BAnd a b) = canRaise a || canRaise b
+    canRaise (BOr a b) = canRaise a || canRaise b
+    canRaise (BNot a) = canRaise a
+    canRaise (BEvalDeep a) = canRaise a
+    canRaise (BSoftGuard _) = False
+    canRaise _ = False
 
 -- | Wrap a pre-built inner block in one nested 'Foreach' per partner
 -- (paper §5.2, Listing 1). For each partner @k@ this produces:

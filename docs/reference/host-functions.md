@@ -101,10 +101,21 @@ a unification failure), because a host call fires deep inside solving:
 |---|---|
 | Wrong number of arguments | runtime error: `host call: expected N argument(s), got M` |
 | An argument the type cannot decode | runtime error: `host call: TypeMismatch …` |
-| An argument still unbound at call time | runtime error: `host call: UnboundValue …` |
+| An argument still unbound at call time | runtime error: `host call: UnboundValue …` (instantiation kind) |
 
 A result term need not be ground: each distinct `VarTerm` name in it
 becomes a fresh unbound logical variable.
+
+> **`UnboundValue` in a rule guard.** The `UnboundValue` failure is
+> classified as an *instantiation* failure, so a host call in a rule
+> guard that cannot decode an unbound argument makes the guard
+> evaluate to false rather than aborting the query; binding the
+> variable reactivates the constraint and the rule is retried. See
+> [Soft guard failure](language.md#soft-guard-failure). The other two
+> rows are ordinary failures and stay hard errors everywhere. A host
+> function that wants an argument to stay symbolic should decode it as
+> `Term`, which accepts an unbound variable instead of reporting
+> `UnboundValue`.
 
 > **Booleans.** A boolean marshals to/from the atom `true` / `false`
 > (matching how a source-level `true` compiles), so a `hostFn2 (… :: … -> Bool)`

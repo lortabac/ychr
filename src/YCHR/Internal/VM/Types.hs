@@ -364,6 +364,17 @@ data BoolExpr
     -- 'ValExpr' or 'IdExpr' payloads inside the nested expression
     -- are evaluated in deep-deref mode.
     BEvalDeep BoolExpr
+  | -- | Evaluate the nested boolean expression under a soft-failure
+    -- boundary: an /instantiation/ error raised inside it (a
+    -- computation demanded the value of an unbound logical variable)
+    -- yields 'False' instead of aborting. Every other runtime error,
+    -- and all control flow, propagates unchanged.
+    --
+    -- Emitted around rule-occurrence guard residuals, so that a guard
+    -- that cannot yet be decided simply does not fire the rule; when
+    -- the offending variable is later bound, constraint reactivation
+    -- retries the occurrence.
+    BSoftGuard BoolExpr
   deriving (Show, Eq)
 
 -- | Constraint-identifier-producing expressions.

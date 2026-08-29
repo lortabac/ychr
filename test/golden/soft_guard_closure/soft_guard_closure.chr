@@ -1,0 +1,20 @@
+:- module(soft_guard_closure, [run/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint run(int).
+:- chr_constraint c/1, later/2.
+:- chr_constraint gather(int), out(int).
+
+% The demand point here is `'$call'` dispatch, not a host primitive and
+% not equation matching: `c` holds the *function* to apply, and it is
+% still unbound at the first activation. `'$call'` cannot decide what to
+% invoke, raises an instantiation failure, and the guard soft-fails.
+%
+% `later` carries the closure as an ordinary evaluated tell argument, so
+% `bind` unifies `F` with a value that is already a closure. That
+% reactivates `c`, and the retried guard applies it for real.
+
+start @ run(R) <=> c(F), later(F, fun(X) -> X > 2 end), gather(R).
+bind @ later(F, G) <=> F = G.
+fire @ c(F) <=> '$call'(F, 5) | out(1).
+collect @ gather(R), out(V) <=> R = V.

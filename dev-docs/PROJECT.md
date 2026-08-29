@@ -148,6 +148,7 @@ position.
 | `BUnify valExpr valExpr` | Unify two terms (tell semantics). Returns success. May mutate variables. Pushes affected constraints onto the reactivation queue. |
 | `BFromVal valExpr` | Bridge a value-producing expression into boolean position; runtime-checks that the wrapped `ValExpr` evaluates to `VBool`. Used at the early-drop check and for user expressions in guards. |
 | `BEvalDeep boolExpr` | Evaluate in deep-deref mode (mirrors `EvalDeep` for booleans). |
+| `BSoftGuard boolExpr` | Evaluate with *instantiation* errors caught: an unbound variable reaching a demand point yields `false` instead of aborting. Emitted around rule-occurrence guard residuals only. |
 
 #### Call arguments (`CallArg`)
 

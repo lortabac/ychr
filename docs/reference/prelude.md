@@ -282,13 +282,21 @@ therefore `any` to the type checker.
 not an error.
 
 Every function here matches on the list spine, so a *partial* list —
-one whose tail is still an unbound variable, like `[1|T]` — is a
-runtime error (`YCHR-60001`, "argument 1 of … is not sufficiently
-instantiated to select an equation"), not a suspension. There is no
-delaying: the list argument must be a proper list by the time the call
-is evaluated. The message distinguishes this from a genuine mismatch
-such as `length(foo)`, which reports "no matching equation in
-`lists:length/1`".
+one whose tail is still an unbound variable, like `[1|T]` — cannot be
+processed: dispatch reaches a spine test with nothing to inspect. This
+is an *instantiation* failure ("argument 1 of … is not sufficiently
+instantiated to select an equation"), which the message distinguishes
+from a genuine mismatch such as `length(foo)` ("no matching equation
+in `lists:length/1`").
+
+Where that leaves you depends on the position. In an `is` expression,
+a rule body or a top-level goal it is a hard runtime error
+(`YCHR-60001`): the list must be proper by the time the call is
+evaluated. In a *rule guard* it soft-fails — the guard evaluates to
+false, the rule does not fire, and binding the tail reactivates the
+constraint so the rule is retried on the completed list (see
+[Soft guard failure](language.md#soft-guard-failure)). There is still
+no suspension inside the call itself; the retry is whole-rule.
 
 ### `maybe`
 

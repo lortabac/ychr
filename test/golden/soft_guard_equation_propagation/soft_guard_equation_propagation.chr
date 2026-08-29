@@ -1,0 +1,40 @@
+:- module(soft_guard_equation_propagation, [delayed/1, decided/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint delayed(int), decided(int).
+:- chr_constraint c(int), later(int, int).
+:- chr_constraint gather(int), out(int).
+:- chr_type flag ---> a ; b.
+
+% Equation guards do not soft-fail. An instantiation failure in one
+% propagates straight out of the function; the remaining equations are
+% *not* tried. Only the rule-guard boundary catches it.
+%
+% `f` is written so that falling through would be observable: with `N`
+% unbound, equation 1's guard cannot be decided, and if that made the
+% call fall through to equation 2 the answer would be `b` — which is
+% exactly what `fire`'s guard tests for. So:
+%
+%   delayed — `N` is unbound at the first activation. Correct behaviour
+%             is for the failure to propagate out of `f`, be caught at
+%             the guard, and leave the rule unfired. `N` is then bound
+%             to 5, `f(5)` is `a`, the retried guard is false for real,
+%             and `final` reports 5. A fall-through would instead have
+%             fired the rule immediately and given 1.
+%   decided — the same program with `N` bound to 0, where equation 1's
+%             guard is genuinely false. Here falling through to
+%             equation 2 is correct, `f(0)` is `b`, and the rule fires.
+
+:- function f/1.
+f(N) | N > 0 -> a.
+f(_) -> b.
+
+start_delayed @ delayed(R) <=> c(N), later(N, 5), gather(R).
+start_decided @ decided(R) <=> c(N), later(N, 0), gather(R).
+
+bind @ later(N, V) <=> N = V.
+
+fire @ c(N) <=> f(N) == b | out(1).
+
+collect @ gather(R), out(V) <=> R = V.
+final @ gather(R), c(N) <=> R = N.

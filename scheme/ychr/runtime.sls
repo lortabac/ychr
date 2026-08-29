@@ -22,6 +22,7 @@
     enqueue! drain-queue!
     ;; Helpers for generated code
     %unify %unifiable? %nonvar? %unbound? %chr-error %chr-inst-error
+    chr-inst?
     %print %writeln %ground?
     %term-variables %compound-to-list %list-to-compound
     %read-term-from-string
@@ -209,6 +210,30 @@
   (define (%chr-error . args)
     (apply error "CHR runtime error" (map %message->string args)))
 
+  ;;; Marker condition carried by every insufficient-instantiation
+  ;;; failure. A rule guard compiled with `bsoft-guard` catches exactly
+  ;;; this condition and answers #f, so the rule does not fire and is
+  ;;; retried when the blocking variable is bound. Everything else
+  ;;; propagates.
+  (define-condition-type &chr-inst &condition
+    make-chr-inst-condition chr-inst?)
+
+  ;;; Raise the same compound condition `error` would build, plus the
+  ;;; `&chr-inst` marker, so rendering is unchanged. R6RS `error` is
+  ;;; `(error who message irritant ...)`, so `%chr-error`'s
+  ;;; `(error "CHR runtime error" detail)` puts the banner in `&who`
+  ;;; and the detail in `&message`, with no irritants — mirror that
+  ;;; exactly, or instantiation failures would print differently from
+  ;;; every other CHR runtime error.
+  (define (%raise-chr-inst detail)
+    (raise
+     (condition
+      (make-error)
+      (make-chr-inst-condition)
+      (make-who-condition "CHR runtime error")
+      (make-message-condition detail)
+      (make-irritants-condition '()))))
+
   ;;; Insufficient-instantiation variant of `%chr-error`. Either the
   ;;; whole message body is known at compile time (closure dispatch), or
   ;;; a label plus the runtime-computed 1-based index of the argument
@@ -216,7 +241,7 @@
   ;;; `__chr_inst_error` in the Haskell runtime registry.
   (define %chr-inst-error
     (case-lambda
-      ((detail) (error "CHR runtime error" (%message->string detail)))
+      ((detail) (%raise-chr-inst (%message->string detail)))
       ((label idx)
        (let* ((name (%message->string label))
               (subject (if (and (integer? idx) (> idx 0))
@@ -225,11 +250,11 @@
                                           " of "
                                           name)
                            name)))
-         (error "CHR runtime error"
-                (string-append
-                 subject
-                 " is not sufficiently instantiated to select an equation"
-                 " (unbound variable at a matched position)"))))))
+         (%raise-chr-inst
+          (string-append
+           subject
+           " is not sufficiently instantiated to select an equation"
+           " (unbound variable at a matched position)"))))))
 
   ;;; Print
   (define (%print v) (display v) (newline))

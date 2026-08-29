@@ -1,0 +1,53 @@
+:- module(
+       soft_guard_hard_positions,
+       [in_body/1, in_is/1, in_call/1, in_equation_guard/1]
+   ).
+:- use_module(library(prelude)).
+
+:- chr_constraint in_body/1, in_is/1, in_call/1, in_equation_guard/1.
+:- chr_constraint do_body/1, do_is/2, do_call/1, do_eq/1.
+:- chr_constraint out/1.
+
+% The catch is at the rule-guard boundary and nowhere else. The same
+% instantiation failure that a guard turns into "did not fire" is fatal
+% in every other position, so each goal here is expected to abort.
+%
+% Note what this directory does *not* check: every failure below is
+% raised outside any guard, so none of these cases would notice a catch
+% that was too broad in *kind* (one that swallowed general errors as
+% well as instantiation ones). That property is pinned by
+% `test/golden/soft_guard_var_guard/nonbool`, where a general error is
+% raised inside a guard and must still abort.
+%
+%   in_body            — an evaluated tell argument in a rule body.
+%   in_is              — the right-hand side of `is`.
+%   in_call            — `'$call'` dispatch on an unbound operand.
+%   in_equation_guard  — a guard *inside a function*. Equation guards do
+%                        not soft-fail: the failure propagates out of
+%                        the function instead of falling through to the
+%                        next equation, and since the call is in a body
+%                        it is fatal there. (The companion case where
+%                        the same call sits in a rule guard, and is
+%                        therefore caught, is
+%                        `test/golden/soft_guard_equation_propagation`.)
+%
+% Each goal is staged through a `do_*` constraint so that the unbound
+% variable reaches the failing position from a rule head; a body-only
+% variable in an evaluated position is a compile-time error (YCHR-40002)
+% and would not test the runtime at all.
+
+:- function f/1.
+f(N) | N > 0 -> 1.
+f(_) -> 0.
+
+body_hard @ in_body(_) <=> do_body(_).
+do_body @ do_body(N) <=> out(N + 1).
+
+is_hard @ in_is(R) <=> do_is(_, R).
+do_is @ do_is(N, R) <=> R is N + 1.
+
+call_hard @ in_call(_) <=> do_call(_).
+do_call @ do_call(F) <=> V is '$call'(F, 5), out(V).
+
+equation_hard @ in_equation_guard(_) <=> do_eq(_).
+do_eq @ do_eq(N) <=> out(f(N)).

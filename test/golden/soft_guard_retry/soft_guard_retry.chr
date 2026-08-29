@@ -1,0 +1,29 @@
+:- module(soft_guard_retry, [pass/1, reject/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint pass(int), reject(int).
+:- chr_constraint c(int), later(int, int).
+:- chr_constraint gather(int), out(int).
+
+% The canonical soft-guard cycle, over a host primitive: `c` is stored
+% while its argument is still an unbound logical variable, so `fire`'s
+% guard cannot be decided and soft-fails; the rule does not fire and
+% `c` survives. Binding the variable reactivates `c` and the guard is
+% re-evaluated with a value in hand.
+%
+% The two goals differ only in what the variable is bound to, which is
+% what separates "not decidable yet" from "decided false":
+%
+%   pass   — bound to 7, the retried guard succeeds and the rule fires.
+%   reject — bound to 3, the retried guard fails for real; `c` is never
+%            removed and the `final` fallback reports its value.
+
+start_pass @ pass(R) <=> c(N), later(N, 7), gather(R).
+start_reject @ reject(R) <=> c(N), later(N, 3), gather(R).
+
+bind @ later(N, V) <=> N = V.
+
+fire @ c(N) <=> N > 5 | out(N).
+
+collect @ gather(R), out(V) <=> R = V.
+final @ gather(R), c(N) <=> R = N.

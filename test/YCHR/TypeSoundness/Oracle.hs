@@ -68,8 +68,13 @@ structurally rather than classified after the fact:
     itself.
     Verified by mutation rather than asserted: dropping the filter
     from `varsAt` makes the open property fail within a few hundred
-    programs, with the "comparison host call: expected 2 numeric
-    arguments" this paragraph exists to prevent.
+    programs, with the "argument is not sufficiently instantiated
+    (unbound variable)" this paragraph exists to prevent. The witness
+    is an evaluated position outside a guard — a tell argument, an `is`
+    right-hand side — because a rule guard catches that failure and
+    answers false (docs/reference/language.md §Soft guard failure).
+    Confining the taint is what keeps the *unguarded* positions safe;
+    the guard boundary is a second line, not the first.
   * A `nonvar`/`ground` guard clears the taint for everything to its
     right, and only then may the value be evaluated. This is the
     discipline `docs/reference/type-system.md` §No mode checking

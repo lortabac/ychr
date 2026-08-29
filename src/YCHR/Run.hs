@@ -336,7 +336,7 @@ displayWarning = displayMsg
 -- exception type ('Error') without depending on the runtime's
 -- internal exception.
 convertRuntimeError :: IO a -> IO a
-convertRuntimeError = handle $ \(RuntimeErrorThrown msg stack) ->
+convertRuntimeError = handle $ \(RuntimeErrorThrown _kind msg stack) ->
   throwIO (RuntimeError msg stack)
 
 -- | 'Chr'-flavored version of 'convertRuntimeError', applied at the
@@ -346,7 +346,7 @@ convertRuntimeErrorChr :: Chr a -> Chr a
 convertRuntimeErrorChr m = do
   env <- ask
   liftIO $
-    handle (\(RuntimeErrorThrown msg stack) -> throwIO (RuntimeError msg stack)) $
+    handle (\(RuntimeErrorThrown _kind msg stack) -> throwIO (RuntimeError msg stack)) $
       runReaderT m env
 
 -- | Parse and rename a goal, returning the canonicalized 'Constraint'

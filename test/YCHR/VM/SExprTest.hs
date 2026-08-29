@@ -131,7 +131,8 @@ roundtripTests =
               If (BNotInHistory (RuleId 0) [IdVar "id1", IdVar "id2"]) [] [],
               BoolExprStmt (BUnify (Var "a") (Var "b")),
               If (BFromVal (Var "a")) [] [],
-              If (BEvalDeep (BLit True)) [] []
+              If (BEvalDeep (BLit True)) [] [],
+              If (BSoftGuard (BFromVal (Var "a"))) [] []
             ]
         ),
     testCase "call-expr with zero args" $

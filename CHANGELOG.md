@@ -126,6 +126,45 @@ Type-checker fixes aligning the implementation with the
   cyclic term wedged the next traversal. Such a fact now binds nothing
   and the program is accepted, as before.
 
+Rule guards now tolerate under-instantiation. A guard that cannot be
+decided — because an unbound logical variable reached a point that
+demanded its value — evaluates to false instead of aborting the query:
+the rule does not fire, and when the variable is bound later, ordinary
+constraint reactivation retries the occurrence. This is on for every
+rule guard, with no new surface syntax. See
+[§Soft guard failure](docs/reference/language.md#soft-guard-failure).
+
+- The catch is at the rule-guard boundary and nowhere else. An `is`
+  right-hand side, a rule body and a top-level goal still fail hard,
+  and an instantiation failure inside a function's equation guard
+  propagates out of the function rather than falling through to the
+  next equation.
+- Runtime errors now carry a kind internally, which is what tells the
+  two apart. Failures diagnosed as insufficient instantiation are
+  worded "… is not sufficiently instantiated (unbound variable)".
+  The strict host primitives — `+ - * / div mod rem`, `< > =< >=`,
+  `int_to_float`, `float_to_int`, the `string_*` operations, `write`,
+  `writeln`, `compound_to_list`, `list_to_compound` — report that
+  wording where an unbound argument previously produced a type-shaped
+  message. Primitives total on unbound values (`==`, `unifiable`, the
+  type predicates, `term_variables`, `copy_term`) are unaffected, and
+  no call that succeeded before fails now.
+- A host function whose argument marshalling reports `UnboundValue` is
+  classified the same way, so a guard calling one delays too. Decoding
+  the argument as `Term` opts out.
+- A guard whose value is an unbound variable delays (the guard position
+  demands a boolean); one that evaluates to a *bound* non-boolean is
+  still the hard error "guard did not evaluate to a boolean".
+- The boundness-guard idiom (`integer(N), N > 0 | …`) documented under
+  [§No mode checking](docs/reference/type-system.md) is now a matter of
+  style rather than a requirement — the unguarded rule gets the same
+  schedule.
+- New VM boolean form `bsoft-guard`; backends must implement it. On the
+  Scheme backend it is implemented, as is the tagging of the equation-
+  and closure-dispatch failures it catches, but host-primitive
+  classification is not — a guard blocked on a native numeric primitive
+  still aborts there. Tracked in `dev-docs/SCHEME_BACKEND_GAPS.md`.
+
 Runtime:
 
 - Unification now transfers a bound variable's observers onto the

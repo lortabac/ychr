@@ -72,7 +72,13 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Meta (valueToTerm)
 import YCHR.Internal.Pretty (prettyTerm)
-import YCHR.Internal.Runtime.Error (RuntimeErrorThrown, runtimeError', runtimeErrorS)
+import YCHR.Internal.Runtime.Error
+  ( RuntimeErrorKind (..),
+    RuntimeErrorThrown (..),
+    instantiationErrorS,
+    runtimeError',
+    runtimeErrorS,
+  )
 import YCHR.Internal.Runtime.History (addHistory, notInHistory)
 import YCHR.Internal.Runtime.Monad
   ( Chr,
@@ -85,6 +91,7 @@ import YCHR.Internal.Runtime.Monad
 import YCHR.Internal.Runtime.Reactivation (drainQueue, enqueueObservers)
 import YCHR.Internal.Runtime.Registry
   ( baseHostCallRegistry,
+    isVar,
     unit,
   )
 import YCHR.Internal.Runtime.Store
@@ -250,6 +257,57 @@ tryControlFlow :: Chr a -> Chr (Either ControlFlow a)
 tryControlFlow m = do
   env <- ask
   liftIO (try (runChr m env))
+
+{- Note [Soft guard catch safety]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+'catchInstantiation' turns an instantiation failure raised anywhere
+inside a rule-occurrence guard into 'False'. Swallowing an exception is
+only sound because of three properties of that position:
+
+  * Guard residuals do not tell (see dev-docs/INVARIANTS.md §4). No
+    'BUnify', 'Store', 'Kill' or 'AddHistory' is reachable from a
+    guard — not directly, and not through a called function, whose
+    body has no tell forms either. So a guard abandoned half-way
+    leaves the store, the propagation history and the reactivation
+    queue exactly as it found them. There is nothing to undo.
+
+    This covers the runtime's own bookkeeping, which is what the catch
+    depends on. It does not cover a 'HostCall' in the guard: a host
+    function gets the session and can bind shared logical-variable
+    cells, and @run_chr_session\/1@ does. But such a binding survives a
+    guard that merely evaluates to 'False' just the same, so the catch
+    adds no exposure that guard failure did not already have.
+
+  * The call stack is bracket-restored. Every 'callProc' runs its body
+    under 'withSavedCallStack', which writes the saved frames back on
+    the exceptional path too, so the frames pushed by a guard call that
+    threw are already gone by the time the handler runs.
+
+  * The propagation history is untouched. 'AddHistory' is emitted
+    inside the fire block, after the guard, so a soft-failed guard
+    leaves nothing that would block the retry after reactivation.
+
+'run_chr_session' keeps its own, wider boundary: it runs an isolated
+sub-session and maps every failure to 'False'. That is unrelated to
+this catch and unaffected by it.
+-}
+
+-- | Evaluate a boolean action under a soft-failure boundary: an
+-- 'InstantiationError' becomes 'False', every other runtime error and
+-- all control flow propagate. Backs the 'BSoftGuard' VM form; see
+-- @Note [Soft guard catch safety]@ for why the catch is sound.
+--
+-- Uses 'try' at the 'IO' layer, like 'tryControlFlow', so state
+-- changes made before the throw survive the catch.
+catchInstantiation :: Chr Bool -> Chr Bool
+catchInstantiation m = do
+  env <- ask
+  r <- liftIO (try (runChr m env))
+  case r of
+    Right b -> pure b
+    Left e@(RuntimeErrorThrown kind _ _)
+      | kind == InstantiationError -> pure False
+      | otherwise -> liftIO (throwIO e)
 
 -- ---------------------------------------------------------------------------
 -- Tracing helpers
@@ -618,6 +676,29 @@ evalValExpr (EvalIs expr) = do
 -- Bool-expression evaluator (normal mode)
 -- ---------------------------------------------------------------------------
 
+-- | The runtime check behind 'BFromVal': a value used in boolean
+-- position must be a 'VBool'.
+--
+-- The two failure modes are diagnosed apart, because a boolean
+-- position /demands/ a value. An unbound variable means the answer is
+-- not knowable yet — an instantiation failure, which a rule guard
+-- catches and retries after reactivation. A bound non-boolean (an
+-- integer, an atom) is a definite mistake and stays a general error.
+--
+-- 'BFromVal' also appears in generated dispatch code and at the
+-- early-drop check, where the wrapped expression always produces a
+-- boolean, so neither branch is reachable from those uses.
+boolFromValue :: Value -> Chr Bool
+boolFromValue v = do
+  v' <- deref v
+  case v' of
+    VBool b -> pure b
+    _
+      | isVar v' ->
+          instantiationErrorS
+            "guard is not sufficiently instantiated (unbound variable)"
+      | otherwise -> runtimeErrorS "guard did not evaluate to a boolean"
+
 -- | Evaluate a 'BoolExpr' in normal (non-deep) mode. Logical connectives
 -- short-circuit. 'BEvalDeep' delegates to 'evalBoolExprDeep'.
 evalBoolExpr :: BoolExpr -> InterpM Bool
@@ -674,10 +755,18 @@ evalBoolExpr (BUnify e1 e2) = do
         pure ok
 evalBoolExpr (BFromVal expr) = do
   v <- evalValExpr expr
-  case v of
-    VBool b -> pure b
-    _ -> lift (runtimeErrorS "guard did not evaluate to a boolean")
+  lift (boolFromValue v)
 evalBoolExpr (BEvalDeep expr) = evalBoolExprDeep expr
+evalBoolExpr (BSoftGuard expr) = softGuard (evalBoolExpr expr)
+
+-- | Run a nested boolean evaluation under the soft-guard boundary.
+-- Delegates to 'catchInstantiation' at the 'Chr' level; the local
+-- 'Env' is an 'IORef', so bindings introduced before the failure
+-- survive the catch exactly as they do for 'tryControlFlow'.
+softGuard :: InterpM Bool -> InterpM Bool
+softGuard m = do
+  ref <- ask
+  lift (catchInstantiation (runReaderT m ref))
 
 -- ---------------------------------------------------------------------------
 -- Id-expression evaluator
@@ -872,8 +961,7 @@ evalBoolExprDeep (BUnify e1 e2) = do
   lift (unifyOrError v1 v2)
 evalBoolExprDeep (BFromVal expr) = do
   v <- evalValExprDeep expr
-  case v of
-    VBool b -> pure b
-    _ -> lift (runtimeErrorS "guard did not evaluate to a boolean")
+  lift (boolFromValue v)
 evalBoolExprDeep (BEvalDeep expr) = evalBoolExprDeep expr
+evalBoolExprDeep (BSoftGuard expr) = softGuard (evalBoolExprDeep expr)
 evalBoolExprDeep expr = evalBoolExpr expr
