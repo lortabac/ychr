@@ -109,8 +109,18 @@
 % mangled atoms for the driver to render. `duplicate_constructor_d`'s
 % second field is the `(type name, arity)` of every declaration of the
 % clashing constructor, ordered by declaration position.
+%
+% `source_name` wraps a mangled name that must be rendered in its
+% *source* spelling. The two spellings differ only for a name the
+% mangling escaped — a non-ASCII one — and the old checker is
+% inconsistent about which it uses: its solver reports a bare name and
+% renders it with the escapes still in it, while the one diagnostic it
+% builds in Haskell (`checkClassFunction`'s `no_matching_overload`)
+% spells the name properly. A bare atom keeps the first behaviour; this
+% wrapper asks for the second.
 :- chr_type error_detail ---> tpair(any, any)
                             ; overloaded
+                            ; source_name(any)
                             ; undefined_type_d(any, any, any)
                             ; unbound_type_var_d(any, any, string)
                             ; type_ref_arity_d(any, any, any, int, int)

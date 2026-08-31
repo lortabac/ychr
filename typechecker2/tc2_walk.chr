@@ -1,12 +1,14 @@
-% The checking walk: declarations, then rules.
+% The checking walk: declarations, then rules, then function equations.
 %
 % Ports the parts of `src/YCHR/Internal/TypeCheck.hs` that decide *what*
 % to ask the solver — `tellConstraintSigs` / `tellFunctionSigs` /
-% `tellConSigs` for the declarations, and `checkRule` down through
-% `typeOfExpr` for the rules. The old driver is a Haskell walk over the
-% desugared AST that tells `check_*` constraints into a session; this is
-% the same walk expressed as CHR rules over the encoded AST, telling the
-% same constraints into the same solver (`tc2_solver.chr`).
+% `tellConSigs` for the declarations, `checkRule` down through
+% `typeOfExpr` for the rules, and `checkFunction` /
+% `checkSingleSigEquation` / `checkClassFunction` for the functions. The
+% old driver is a Haskell walk over the desugared AST that tells
+% `check_*` constraints into a session; this is the same walk expressed
+% as CHR rules over the encoded AST, telling the same constraints into
+% the same solver (`tc2_solver.chr`).
 %
 % Why rules and not functions: a function can neither tell a constraint
 % nor make a fresh logical variable, and the walk does both at nearly
@@ -14,11 +16,15 @@
 % the source-type encoding, the assoc-list bookkeeping — stays a pure
 % function, in this file or in `tc2_env.chr` / `tc2_skel.chr`.
 %
-% Function equations are not walked yet: they are the next milestone.
-% Their *declarations* are told here, because rule bodies call them.
+% `check_attempt` is exported not because another module calls it but
+% because `run_chr_session` resolves a goal's constraint name through
+% the export map: the class-function overload search below runs each
+% (equation x signature) attempt in a throwaway sub-session, exactly as
+% `checkClassFunction` runs each in a throwaway `runCheckSession`.
 :- module('$tc2_walk', [
     walk_program/2,
-    tell_decls/2
+    tell_decls/2,
+    check_attempt/8
 ]).
 
 :- use_module('$tc2_ast').
@@ -28,6 +34,7 @@
 :- use_module('$tc2_solver').
 :- use_module(library(lists)).
 :- use_module(library(maybe)).
+:- use_module(library(meta)).
 :- use_module(library(pairs)).
 
 % Everything a use site needs to know about the scope it sits in.
@@ -83,9 +90,11 @@ scope_var_ty(scope(_, Vars, _, _), V) -> slot_or_any(assoc_get(V, Vars)).
 slot_or_any(just(T)) -> T.
 slot_or_any(nothing) -> ty_any.
 
-% Lambda parameters shadow same-named enclosing variables, so the new
-% bindings go in front: `assoc_get` stops at the first match, which is
-% the left-biased union the Haskell takes.
+% A shadowing binding goes in front: `assoc_get` stops at the first
+% match, which is the left-biased union the Haskell takes. Two callers
+% shadow — a lambda's parameters, which must neither inherit an
+% enclosing variable's type nor leak their own back out, and a
+% function-body `is`, which rebinds its variable to a fresh slot.
 :- function scope_shadow(scope, list(pair(any, ty))) -> scope.
 scope_shadow(scope(Env, Vars, Amb, C), New) -> scope(Env, append(New, Vars), Amb, C).
 
@@ -370,6 +379,7 @@ tell_td_con_sigs_cons @
 
 :- chr_constraint
     walk_program(tc_env, program),
+    walk_rules_from(tc_env, program, list(rule)),
     walk_rules(tc_env, list(rule), int),
     walk_rule(tc_env, rule, int).
 
@@ -377,10 +387,29 @@ tell_td_con_sigs_cons @
 % errors it reports the same way. The two numberings have to agree: a
 % rule's arity error and its solver errors must land in one unit, or
 % warning suppression drops the wrong warnings.
+%
+% Rules first, then the functions, off one `decl_rigid_supply`: a rigid
+% type variable's synthetic id is user-visible as `T#n`, so the
+% allocation order is part of diagnostic parity with the old checker,
+% whose `runCheckSession` walks `prog.rules` and then the plain
+% functions off one counter.
 walk_program1 @
-    walk_program(Env, program(Rules, _, _, _, _)) <=>
+    walk_program(Env, P) <=>
     decl_rigid_supply(0),
-    walk_rules(Env, Rules, 0).
+    walk_rules_from(Env, P, program_rules(P)).
+
+% The rule list is handed on rather than recomputed: there is no `let`,
+% so a value two goals need becomes a helper's parameter.
+walk_rules_from1 @
+    walk_rules_from(Env, P, Rules) <=>
+    walk_rules(Env, Rules, 0),
+    walk_funs(Env, P, program_funs(P), length(Rules)).
+
+:- function program_rules(program) -> list(rule).
+program_rules(program(Rules, _, _, _, _)) -> Rules.
+
+:- function program_funs(program) -> list(fun_def).
+program_funs(program(_, Funs, _, _, _)) -> Funs.
 
 walk_rules_nil @
     walk_rules(_, [], _) <=> true.
@@ -1037,3 +1066,322 @@ push_bcand(N, Ambs, Decls, []) -> [bc(N, Ambs, Decls)].
 push_bcand(N, Ambs, Decls, [bc(N2, A0, D0)|Rest]) | N2 == N ->
     [bc(N2, append(A0, Ambs), append(D0, Decls))|Rest].
 push_bcand(N, Ambs, Decls, [C|Rest]) -> [C|push_bcand(N, Ambs, Decls, Rest)].
+
+% ---------------------------------------------------------------------
+% Functions
+% ---------------------------------------------------------------------
+%
+% Ports `checkFunction` / `checkEquation` / `checkSingleSigEquation`.
+% Each equation is its own checking unit, including one contributed by
+% an `:- extend_function` / `:- extend_class` directive: extension
+% equations share the owning declaration's annotation and so its source
+% location, and only the unit id keeps their diagnostics apart.
+%
+% Unit ids continue from the rules, one per equation of a *plain*
+% function; a class function's equations get none, because the old
+% checker checks them in throwaway sessions and collects what survives
+% outside any unit. `tc2_pure.chr`'s `funs_arity_errors` numbers the
+% same way, and must keep doing so: an equation's arity error and its
+% solver errors have to share a unit or suppression drops the wrong
+% warnings.
+
+:- chr_constraint
+    walk_funs(tc_env, program, list(fun_def), int),
+    walk_fun(tc_env, fun_def, int),
+    walk_fun_eqs(tc_env, any, int, loc, fun_sig, list(bound_sig),
+                 list(fun_eq), int),
+    check_equation(tc_env, any, int, loc, fun_sig, list(bound_sig), fun_eq, int),
+    check_equation_at(scope, list(pair(string, ty)), fun_sig, list(bound_sig),
+                      fun_eq),
+    tell_equation_bounds(scope, list(pair(string, ty)), list(bound_sig)),
+    check_fun_stmts(scope, list(fun_stmt), scope),
+    check_fun_stmt(scope, fun_stmt, scope),
+    fun_is_bind(scope, any, ty, scope).
+
+walk_funs_nil @
+    walk_funs(_, _, [], _) <=> true.
+
+% Two or more declared signatures is a class function: its equations are
+% checked per candidate signature in isolated sub-sessions below, and
+% consume no unit id here. `tc2_pure.chr`'s `fun_unit_count` makes the
+% same split.
+walk_funs_class @
+    walk_funs(Env, P, [F|Fs], Unit) <=> fun_sig_count(F) > 1 |
+    walk_class_fun(Env, P, F),
+    walk_funs(Env, P, Fs, Unit).
+
+walk_funs_plain @
+    walk_funs(Env, P, [F|Fs], Unit) <=>
+    walk_fun(Env, F, Unit),
+    walk_funs(Env, P, Fs, Unit + fun_eq_count(F)).
+
+:- function fun_sig_count(fun_def) -> int.
+fun_sig_count(fun_def(_, _, Sigs, _, _)) -> length(Sigs).
+
+:- function fun_eq_count(fun_def) -> int.
+fun_eq_count(fun_def(_, _, _, _, ann(_, _, Eqs))) -> length(Eqs).
+
+% The effective single signature. An untyped function checks exactly
+% like its all-`any` spelled-out form, which mentions no type variables
+% and so allocates no rigids; its bounds are dropped, mirroring
+% `checkEquation`'s `effSig` — a user-written untyped function cannot
+% carry `requiring`, and a lifted lambda's inherited clause is ignored
+% here exactly as `tell_function_decls_untyped` ignores it.
+walk_fun_untyped @
+    walk_fun(Env, fun_def(N, A, [], _, ann(EAnn, ELoc, Eqs)), Unit) <=>
+    walk_fun_eqs(Env, N, EAnn, ELoc, all_any_sig(A), [], Eqs, Unit).
+
+walk_fun_typed @
+    walk_fun(Env, fun_def(N, _, [Sig], Bounds, ann(EAnn, ELoc, Eqs)), Unit) <=>
+    walk_fun_eqs(Env, N, EAnn, ELoc, Sig, Bounds, Eqs, Unit).
+
+walk_fun_eqs_nil @
+    walk_fun_eqs(_, _, _, _, _, _, [], _) <=> true.
+
+walk_fun_eqs_cons @
+    walk_fun_eqs(Env, N, EAnn, ELoc, Sig, Bounds, [Eq|Eqs], Unit) <=>
+    check_equation(Env, N, EAnn, ELoc, Sig, Bounds, Eq, Unit),
+    walk_fun_eqs(Env, N, EAnn, ELoc, Sig, Bounds, Eqs, Unit + 1).
+
+% An equation of a single-signature function (untyped, bounded or
+% unbounded). The declared type variables become *rigid* identities
+% shared between the parameter types, the result type and any ambient
+% signatures a `requiring` clause contributes: that sharing is what
+% keeps a call resolved through an ambient signature polymorphic, and
+% what makes an unbounded polymorphic body calling an overloaded
+% operator at its own type parameter fail rather than silently pass.
+% Ports `checkSingleSigEquation`.
+check_equation1 @
+    check_equation(Env, FName, EAnn, ELoc, fun_sig(ArgTys, RetTy), Bounds, Eq, Unit) <=>
+    alloc_var_types(collect_vars_eq(Eq),
+                    param_var_skeletons(Env, eq_params(Eq), ArgTys, eq_guards(Eq)),
+                    VarTypes),
+    alloc_rigid_tvars(sort_unique_tvars(append(append(collect_ty_vars(ArgTys),
+                                                      collect_ty_vars_expr(RetTy)),
+                                               bound_sigs_vars(Bounds))),
+                      TVars),
+    check_equation_at(scope(Env, VarTypes, add_ambients([], Bounds, TVars),
+                            ctx(Unit, origin_ann(EAnn), label_function(FName), ELoc)),
+                      TVars, fun_sig(ArgTys, RetTy), Bounds, Eq).
+
+:- function eq_params(fun_eq) -> list(head_arg).
+eq_params(fun_eq(Params, _, _, _)) -> Params.
+
+:- function eq_guards(fun_eq) -> list(guard).
+eq_guards(fun_eq(_, Guards, _, _)) -> Guards.
+
+% Bounds, then parameters, then guards, then the prelude statements,
+% then the result. The order is the operational one — an equation's
+% guards run after pattern matching and before the right-hand side —
+% and it is load-bearing: a guard's typing fact must already be told
+% when the prelude's and the result's constraints are gathered.
+%
+% Parameters and guards share the equation's annotation, so the same
+% context attributes both; `check_guards` is handed it twice for that
+% reason.
+check_equation_at1 @
+    check_equation_at(S, TVars, fun_sig(ArgTys, RetTy), Bounds,
+                      fun_eq(Params, Guards, Prelude, Rhs)) <=>
+    tell_equation_bounds(S, TVars, Bounds),
+    type_of_head_args(S, Params, ParamTys),
+    unify_zip(ParamTys, encode_tys(TVars, ArgTys), scope_ctx(S)),
+    check_guards(S, S, Guards, []),
+    check_fun_stmts(S, Prelude, S2),
+    type_of_expr(S2, Rhs, RhsTy),
+    check_unify(RhsTy, encode_ty(TVars, RetTy), scope_ctx(S)).
+
+tell_equation_bounds_nil @
+    tell_equation_bounds(_, _, []) <=> true.
+
+% The equation site's own bounds.
+%
+% Each of these discharges trivially and unconditionally: the ambient
+% candidate list is the very list `add_ambients` built from these same
+% bounds at these same rigids, so `discharge_bound_ok_amb`'s existential
+% test always finds an exactly-equal witness and `discharge_bound_fail`
+% can never rule every candidate out. The check therefore cannot report
+% anything, and no golden covers it — deleting it leaves the whole
+% corpus green. It is here for parity: `tellEquationBound` emits it, the
+% discharge rules are the solver's and may grow, and a bound that stops
+% being self-satisfying should start failing in both checkers at once.
+% Ports `tellEquationBound`.
+tell_equation_bounds_cons @
+    tell_equation_bounds(S, TVars, [bound_sig(N, _, Args, Ret, _)|Bs]) <=>
+    encode_sigs(env_function_sigs(scope_env(S), N), Decls),
+    check_bound(N, scope_ambient(S, amb_key(N, length(Args))), Decls,
+                encode_tys(TVars, Args), encode_ty(TVars, Ret), scope_ctx(S)),
+    tell_equation_bounds(S, TVars, Bs).
+
+% --- Prelude statements ---------------------------------------------
+%
+% Ports `checkFunStmts` / `checkFunStmt`. Only `fun_is` changes the
+% scope: it rebinds its variable to a *fresh* slot, mirroring the
+% runtime's lexical shadowing (`compileFunStmt` emits a `LetVal`, not a
+% unification), so later statements and the result expression see the
+% new slot while the right-hand side is still typed against the old one.
+
+check_fun_stmts_nil @
+    check_fun_stmts(S, [], Out) <=> Out = S.
+
+check_fun_stmts_cons @
+    check_fun_stmts(S, [St|Sts], Out) <=>
+    check_fun_stmt(S, St, S2),
+    check_fun_stmts(S2, Sts, Out).
+
+% The right-hand side is typed first, against the scope the statement
+% starts in, and only then is the shadowing slot decided — which is the
+% order that makes `N is N + 1` check against the outer `N`.
+check_fun_stmt_is @
+    check_fun_stmt(S, fun_is(V, E), Out) <=>
+    type_of_expr(S, E, T),
+    fun_is_bind(S, V, T, Out).
+
+% Rebinding a declared-`any` local keeps `any`, whatever the right-hand
+% side evaluates to. Nothing narrows `any`, and that has to include the
+% shadowing slot: were the rebound local to take the right-hand side's
+% type, `is` would be a back-door refinement of exactly the variables
+% the declaration said to leave alone.
+fun_is_bind_any @
+    fun_is_bind(S, V, _, Out) <=> scope_var_ty(S, V) == ty_any |
+    Out is scope_shadow(S, [kv(V, ty_any)]).
+
+% The unification comes first so that the fresh slot is allocated: only
+% a top-level argument of a tell introduces a variable.
+fun_is_bind_fresh @
+    fun_is_bind(S, V, T, Out) <=>
+    check_unify(NewSlot, T, scope_ctx(S)),
+    Out is scope_shadow(S, [kv(V, NewSlot)]).
+
+check_fun_stmt_host @
+    check_fun_stmt(S, fun_host(_, Args), Out) <=>
+    type_of_exprs(S, Args, _),
+    Out = S.
+
+check_fun_stmt_call @
+    check_fun_stmt(S, fun_call(N, Args), Out) <=>
+    type_of_exprs(S, Args, ArgTys),
+    emit_function_call(S, N, ArgTys, _Ret),
+    Out = S.
+
+check_fun_stmt_apply @
+    check_fun_stmt(S, fun_apply(F, Args), Out) <=>
+    type_of_expr(S, F, _),
+    type_of_exprs(S, Args, _),
+    Out = S.
+
+% ---------------------------------------------------------------------
+% The class-function overload search
+% ---------------------------------------------------------------------
+%
+% Ports `checkClassFunction`. Each equation of a multi-signature class
+% function must check under at least one declared signature, with its
+% parameters typed by that signature's argument types and its result
+% checked against that signature's return type. Signatures are tried in
+% declaration order and the search stops at the first that fits; an
+% equation that fits none reports one `no_matching_overload`.
+%
+% Every attempt runs in its own session: CHR has no backtracking, and
+% the program-wide session has a single error accumulator. An attempt's
+% diagnostics describe the failed fit rather than the program and are
+% discarded — including its warnings, since under a candidate signature
+% a contradicting evidence fact counts as failure of that candidate and
+% emits nothing. Suppression runs inside the attempt, so a surviving
+% warning means the equation contradicted the signature without
+% erroring.
+
+% Whether one (equation x signature) attempt fitted. An attempt that
+% raised a hard error leaves the variable *unbound* — `run_chr_session`
+% answers `false` and binds nothing — which the retry rule reads as a
+% failure, so there is no third verdict. That last case is a divergence
+% worth knowing about: an error thrown inside an attempt is a bug in
+% the checker either way, but the old driver lets the exception escape
+% `typeCheckProgram` where this reports a spurious
+% `no_matching_overload`.
+:- chr_type attempt_verdict ---> attempt_ok ; attempt_failed.
+
+:- chr_constraint
+    walk_class_fun(tc_env, program, fun_def),
+    class_eqs(tc_env, program, any, int, loc, list(fun_sig), list(fun_eq)),
+    class_eq_try(tc_env, program, any, int, loc, fun_eq, list(fun_sig)),
+    class_attempt(tc_env, program, any, int, loc, fun_eq, fun_sig,
+                  attempt_verdict),
+    class_eq_next(tc_env, program, any, int, loc, fun_eq, list(fun_sig),
+                  attempt_verdict),
+    check_attempt(tc_env, program, any, int, loc, fun_sig, fun_eq,
+                  attempt_verdict).
+
+walk_class_fun1 @
+    walk_class_fun(Env, P, fun_def(N, _, Sigs, _, ann(EAnn, ELoc, Eqs))) <=>
+    class_eqs(Env, P, N, EAnn, ELoc, Sigs, Eqs).
+
+class_eqs_nil @
+    class_eqs(_, _, _, _, _, _, []) <=> true.
+
+class_eqs_cons @
+    class_eqs(Env, P, N, EAnn, ELoc, Sigs, [Eq|Eqs]) <=>
+    class_eq_try(Env, P, N, EAnn, ELoc, Eq, Sigs),
+    class_eqs(Env, P, N, EAnn, ELoc, Sigs, Eqs).
+
+% No signature left: the equation fits none of them. The diagnostic is
+% attributed to no unit — the old checker collects it outside any
+% session — so it suppresses nothing.
+%
+% The name travels wrapped in `source_name` because the old checker
+% builds this one diagnostic in Haskell and spells the name with the
+% mangling undone, unlike the `no_matching_overload`s its solver
+% reports.
+class_eq_try_none @
+    class_eq_try(_, _, FName, EAnn, ELoc, _, []) <=>
+    report_error(ctx(-1, origin_ann(EAnn), label_function(FName), ELoc),
+                 no_matching_overload, source_name(FName)).
+
+class_eq_try_sig @
+    class_eq_try(Env, P, FName, EAnn, ELoc, Eq, [Sig|Sigs]) <=>
+    class_attempt(Env, P, FName, EAnn, ELoc, Eq, Sig, Verdict),
+    class_eq_next(Env, P, FName, EAnn, ELoc, Eq, Sigs, Verdict).
+
+% `Verdict` reaches the sub-session as a shared logical variable, which
+% is how the answer comes back; everything else in the goal is ground
+% AST, so nothing carrying a live rigid pin cell crosses the boundary.
+% The variable has to be introduced by the *caller* — a variable nested
+% inside `quote/1` on the right of an `is` is not — hence this separate
+% constraint, whose head argument it is.
+class_attempt1 @
+    class_attempt(Env, P, FName, EAnn, ELoc, Eq, Sig, Verdict) <=>
+    _Ran is run_chr_session(quote(check_attempt(Env, P, FName, EAnn, ELoc,
+                                                Sig, Eq, Verdict))).
+
+class_eq_next_ok @
+    class_eq_next(_, _, _, _, _, _, _, V) <=> V == attempt_ok | true.
+
+class_eq_next_retry @
+    class_eq_next(Env, P, FName, EAnn, ELoc, Eq, Sigs, _) <=>
+    class_eq_try(Env, P, FName, EAnn, ELoc, Eq, Sigs).
+
+% One attempt, in its own session. The environment and the program term
+% are rebuilt into declaration facts here rather than shared, because
+% those facts carry fresh flexible type variables and a session may not
+% reuse another's. The environment itself is ground and travels by
+% value, which is what keeps the attempt from re-deriving it.
+%
+% The unit id is 0 and the diagnostics never leave, so neither the
+% number nor the annotation id is observable. Suppression runs for
+% parity with `runCheckSession`, whose `collectDiagnostics` an attempt
+% goes through like any other session; it cannot change the verdict,
+% since it only drops warnings when there is an error, and an error
+% already fails the attempt.
+check_attempt1 @
+    check_attempt(Env, P, FName, EAnn, ELoc, Sig, Eq, Verdict) <=>
+    errors([]),
+    warnings([]),
+    rigid_supply(-1),
+    decl_rigid_supply(0),
+    tell_decls(Env, P),
+    check_equation(Env, FName, EAnn, ELoc, Sig, [], Eq, 0),
+    collect(Errs),
+    collect_warnings(Warns),
+    Verdict is verdict_of(Errs, suppress_warnings(Errs, Warns)).
+
+:- function verdict_of(list(error), list(warning)) -> attempt_verdict.
+verdict_of([], []) -> attempt_ok.
+verdict_of(_, _) -> attempt_failed.

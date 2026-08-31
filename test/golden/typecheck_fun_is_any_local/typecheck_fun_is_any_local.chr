@@ -1,0 +1,22 @@
+:- module(typecheck_fun_is_any_local, [go/1, type(wrap/0)]).
+:- use_module(library(prelude)).
+
+:- chr_constraint go(wrap).
+
+:- chr_type wrap ---> w(string).
+
+% `X` sits in a declared-`any` parameter position, so its type slot is
+% the literal `any` type. Rebinding it with `is` keeps `any`, whatever
+% the right-hand side evaluates to: nothing narrows `any`, and that has
+% to include the shadowing slot, or `is` would be a back-door
+% refinement of exactly the variables the declaration left alone.
+%
+% So `w(X)` is accepted even though `w`'s field is declared `string`
+% and the rebound value is an int. Were the shadowing slot to take the
+% right-hand side's type, this would be an inconsistency.
+:- function (f(any) -> wrap).
+f(X) ->
+    X is 1 + 2,
+    w(X).
+
+go(R) <=> R is f(0).

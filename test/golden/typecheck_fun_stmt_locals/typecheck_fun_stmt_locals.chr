@@ -1,0 +1,37 @@
+% Variables mentioned in a function equation's prelude statements get
+% type slots.
+%
+% `A`, `B`, `C` and `D` appear nowhere but the prelude, so the only
+% collector that can give them slots is the one that walks the prelude.
+% Each is bound to a string by an `is` and then used where an int is
+% declared, once per statement form — a host call, a static call, a
+% dynamic dispatch, and a later `is`'s right-hand side — so the
+% equation reports four inconsistencies. A collector that skipped the
+% prelude would leave all four at `any`, which never narrows, and every
+% one of those errors would disappear.
+%
+% Note that the per-form arms of that collector are mutually
+% redundant here: each of these names is picked up both by the `is`
+% that introduces it and by the form that uses it, so breaking either
+% one alone changes nothing. Only dropping the prelude walk as a whole
+% is observable, and that is what this pins.
+:- module(typecheck_fun_stmt_locals, []).
+:- use_module(library(prelude)).
+
+:- function (to_str(int) -> string).
+to_str(_) -> "x".
+
+:- function (need_int(int) -> int).
+need_int(X) -> X.
+
+:- function (u(int) -> int).
+u(N) ->
+    A is to_str(N),
+    B is to_str(N),
+    C is to_str(N),
+    D is to_str(N),
+    host:'+'(need_int(A), 1),
+    need_int(B),
+    '$call'(fun need_int/1, need_int(C)),
+    E is need_int(D),
+    N.

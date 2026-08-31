@@ -27,6 +27,7 @@
 :- module('$tc2_skel', [
     type(type_skeleton/0),
     fun collect_vars_rule/3,
+    fun collect_vars_eq/1,
     fun collect_vars_guards/1,
     fun collect_vars_body_goals/1,
     fun collect_vars_exprs/1,
@@ -401,6 +402,27 @@ collect_vars_rule(Cons, Guards, Body) ->
     dedup_names(append(collect_vars_head_cons(Cons),
                 append(collect_vars_guards(Guards),
                        collect_vars_body_goals(Body)))).
+
+% The same for one function equation: parameters, guards, prelude
+% statements and the result expression. Ports `collectVarsInEq`.
+:- function collect_vars_eq(fun_eq) -> list(any).
+collect_vars_eq(fun_eq(Params, Guards, Prelude, Rhs)) ->
+    dedup_names(append(collect_vars_head_args(Params),
+                append(collect_vars_guards(Guards),
+                append(collect_vars_fun_stmts(Prelude),
+                       collect_vars_expr(Rhs))))).
+
+:- function collect_vars_fun_stmts(list(fun_stmt)) -> list(any).
+collect_vars_fun_stmts([]) -> [].
+collect_vars_fun_stmts([S|Ss]) ->
+    append(collect_vars_fun_stmt(S), collect_vars_fun_stmts(Ss)).
+
+:- function collect_vars_fun_stmt(fun_stmt) -> list(any).
+collect_vars_fun_stmt(fun_is(V, E)) -> [V|collect_vars_expr(E)].
+collect_vars_fun_stmt(fun_host(_, Args)) -> collect_vars_exprs(Args).
+collect_vars_fun_stmt(fun_call(_, Args)) -> collect_vars_exprs(Args).
+collect_vars_fun_stmt(fun_apply(F, Args)) ->
+    append(collect_vars_expr(F), collect_vars_exprs(Args)).
 
 :- function collect_vars_head_cons(list(head_con)) -> list(any).
 collect_vars_head_cons([]) -> [].

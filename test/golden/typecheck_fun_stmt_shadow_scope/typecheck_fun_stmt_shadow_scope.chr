@@ -1,0 +1,28 @@
+% A prelude `is` rebinds its variable to a *fresh* type slot, and the
+% statements after it — and the result expression — see the new slot.
+%
+% `N` starts out at the declared parameter type `int`. The first
+% prelude statement rebinds it to a string, mirroring the runtime's
+% lexical shadowing (the compiler emits a `LetVal` there, not a
+% unification). The `need_str(N)` that follows and the result `N` are
+% therefore both at `string`, and the equation checks. Were the new
+% scope not threaded on from statement to statement, both would still
+% be at `int` and each would be an inconsistency.
+:- module(typecheck_fun_stmt_shadow_scope, [go/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint go(string).
+
+:- function (to_str(int) -> string).
+to_str(_) -> "x".
+
+:- function (need_str(string) -> int).
+need_str(_) -> 0.
+
+:- function (t(int) -> string).
+t(N) ->
+    N is to_str(N),
+    need_str(N),
+    N.
+
+go(R) <=> R is t(1).

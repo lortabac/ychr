@@ -265,9 +265,14 @@ decodeError code detail = case code of
   VAtom c | c == diagAtom "inconsistent" -> do
     (t1text, t2text) <- decodeTypePair detail
     pure (InconsistentTypes t1text t2text)
-  VAtom c
-    | c == diagAtom "no_matching_overload" ->
-        NoMatchingOverload <$> showValue detail
+  -- A bare atom renders with the mangling only half undone, which is
+  -- what the old checker's solver-reported overload failures do; a
+  -- @source_name@ wrapper asks for the real inverse, which is what its
+  -- Haskell-built 'checkClassFunction' diagnostic does. The two differ
+  -- only for a name the mangling escaped.
+  VAtom c | c == diagAtom "no_matching_overload" -> case detail of
+    VTerm f [n] | f == diagAtom "source_name" -> NoMatchingOverload <$> name n
+    _ -> NoMatchingOverload <$> showValue detail
   VAtom c
     | c == diagAtom "bound_unsatisfied" ->
         BoundUnsatisfied <$> showValue detail

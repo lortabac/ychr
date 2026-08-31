@@ -1,0 +1,21 @@
+:- module(typecheck_untyped_fn_any_params, [go/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint go(int).
+
+:- function need_int(int) -> int.
+need_int(X) -> X.
+
+:- function need_string(string) -> int.
+need_string(_) -> 0.
+
+% An untyped function checks exactly like its all-`any` spelled-out
+% form: every parameter position is declared `any`, so `X`'s slot is
+% the literal `any` type, which never binds. Using `X` at `int` and
+% then at `string` is therefore accepted. Were the parameters left
+% unstamped — plain flexible slots — the first call would bind `X` to
+% `int` and the second would be an inconsistency.
+:- function both/1.
+both(X) -> need_int(X) + need_string(X).
+
+go(R) <=> R is both(1).

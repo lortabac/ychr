@@ -1,0 +1,24 @@
+:- module(typecheck_fun_stmt_args, []).
+:- use_module(library(prelude)).
+
+:- function need_int(int) -> int.
+need_int(X) -> X.
+
+:- function mk(int) -> fun(int) -> int end.
+mk(_) -> fun(X) -> X end.
+
+% The non-final statements of a function equation are type-checked like
+% any other expression position, even though their value is discarded.
+% Each statement below passes a string where an int is declared, at a
+% different one of the four places a statement can be typed: the
+% arguments of a host call, the arguments of a static call, and — the
+% two conjuncts of the one dynamic-dispatch arm — the callee of a
+% dispatch and its arguments. Four errors, one per place: dropping any
+% of them from the walker changes the count.
+:- function h(string) -> int.
+h(S) ->
+    host:'+'(need_int(S), 1),
+    need_int(S),
+    '$call'(mk(S), 1),
+    '$call'(fun need_int/1, need_int(S)),
+    1.

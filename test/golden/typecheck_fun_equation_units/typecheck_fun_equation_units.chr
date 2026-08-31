@@ -1,0 +1,42 @@
+% Checking-unit numbering for function equations.
+%
+% Each equation is its own checking unit, and a unit that reports an
+% error omits its warnings. Three things have to hold at once for the
+% right warnings to survive, and this program pins all three:
+%
+%   * equation units continue from the rules, one per equation of a
+%     *plain* function;
+%   * a class function's equations consume none, because they are
+%     checked in throwaway sub-sessions whose diagnostics are dropped;
+%   * the walker's numbering agrees, equation for equation, with the
+%     constructor-arity walk's — an arity error and the solver errors
+%     of the same equation must land in one unit.
+%
+% `cf` is the class function whose equations must not consume a unit.
+% `f`'s second equation is dead but otherwise fine, so its warning
+% survives. `g`'s first equation is dead *and* wrong, so its warning is
+% suppressed by its own error. `k`'s only equation is dead *and* uses a
+% constructor at the wrong arity, so its warning is suppressed by an
+% error that comes from the arity walk rather than from the solver —
+% which is the case that pins the two numberings against each other.
+:- module(typecheck_fun_equation_units, [go/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint go(int).
+:- chr_type box ---> b(int).
+
+:- class (cf(int) -> int), (cf(string) -> string).
+cf(N) -> N.
+
+:- function (f(int) -> int).
+f(1) -> 1.
+f("oops") -> 1.
+
+:- function (g(int) -> int).
+g("x") -> "y".
+g(N) -> N.
+
+:- function (k(int) -> int).
+k("z") -> b(1, 2).
+
+go(R) <=> R is f(1) + g(1) + k(1).

@@ -1,0 +1,23 @@
+% A class-function attempt types the equation at *rigid* type
+% variables, exactly as a single-signature equation does — and it
+% allocates them in its own sub-session, off a supply the sub-session
+% seeds for itself.
+%
+% Neither declared signature fits. Under `tw(T) -> T` the parameter
+% is a rigid `T`, and `inc` is declared only on `int`, so the call is an
+% inconsistency; `:- class` cannot carry a `requiring` clause, so no
+% ambient signature can rescue it. Under `tw(string) -> string` there is
+% no `inc` on strings. So the equation reports one YCHR-60006.
+%
+% Were the attempt's declared type variables left *flexible* — which is
+% what happens if the sub-session never seeds its rigid supply — the
+% first signature would fit by binding `T` to `int`, the attempt would
+% be accepted, and the error would vanish.
+:- module(typecheck_class_rigid_tvar, []).
+:- use_module(library(prelude)).
+
+:- function (inc(int) -> int).
+inc(X) -> X.
+
+:- class (tw(T) -> T), (tw(string) -> string).
+tw(X) -> inc(X).

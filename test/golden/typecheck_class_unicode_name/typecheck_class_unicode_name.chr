@@ -1,0 +1,20 @@
+% The name in a `no_matching_overload` reported for a class function's
+% equation is spelled as the source spells it.
+%
+% The old checker builds this one diagnostic in Haskell and renders the
+% name through the real inverse of the runtime mangling, unlike the
+% overload failures its solver reports, which keep the mangling's
+% escapes. The two spellings only ever differ for a name the mangling
+% escaped — a non-ASCII one — which is what this function's name is.
+%
+% (The equation itself fits neither signature: `inc` is declared only
+% on `int`, so it is an inconsistency at the rigid `T` of the first
+% signature and at the `string` of the second.)
+:- module(typecheck_class_unicode_name, []).
+:- use_module(library(prelude)).
+
+:- function (inc(int) -> int).
+inc(X) -> X.
+
+:- class ('café'(T) -> T), ('café'(string) -> string).
+'café'(X) -> inc(X).

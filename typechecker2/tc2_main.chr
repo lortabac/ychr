@@ -6,9 +6,8 @@
 % and the driver only decodes the two diagnostic lists that come back.
 %
 % `check_program` reports the declaration-level diagnostics and checks
-% the program's rules; `check_goals` is still a stub. Milestones M5–M6
-% fill in the rest: function equations and the class-function overload
-% search, and finally goal checking.
+% the program's rules and function equations; `check_goals` is still a
+% stub, which milestone M6 fills in.
 :- module('$tc2_main', [
     check_program/3,
     check_goals/6

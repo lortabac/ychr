@@ -1,0 +1,19 @@
+% Every equation of a class function is searched, not just the first.
+%
+% A multi-signature class function's equations are checked one by one,
+% each against the declared signatures in order until one fits. The
+% first equation here fits `c(int) -> int`. The second fits neither:
+% under `c(int) -> int` its string parameter contradicts the declared
+% one, and under `c(string) -> string` its int result contradicts the
+% declared return type. So it reports one YCHR-60006, and a walk that
+% stopped after the first equation would report nothing at all.
+:- module(typecheck_class_later_equation, [go/1]).
+:- use_module(library(prelude)).
+
+:- chr_constraint go(int).
+
+:- class (c(int) -> int), (c(string) -> string).
+c(N) -> N.
+c("a") -> 1.
+
+go(R) <=> R is c(1).

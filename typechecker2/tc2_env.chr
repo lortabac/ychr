@@ -43,7 +43,8 @@
     fun type_def_arity/1,
     fun type_def_loc/1,
     fun has_type_def/3,
-    fun base_name_arities/2
+    fun base_name_arities/2,
+    fun all_any_sig/1
 ]).
 
 :- use_module('$tc2_ast').
