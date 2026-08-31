@@ -1,0 +1,8 @@
+:- module(dupmod, []).
+:- use_module(library(prelude)).
+
+% Second half of module `dupmod`. Two files may carry the same
+% `:- module` header; the compiler merges them, so this declaration and
+% `a_first.chr`'s are two declarations of one *qualified* constructor
+% name `dupmod:nil` sitting in different files.
+:- chr_type t2 ---> nil.

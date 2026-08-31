@@ -1,0 +1,13 @@
+:- module(dup_used, [c/1]).
+:- use_module(library(prelude)).
+
+% A duplicated constructor that is also *used*. Constructor lookup is
+% keyed on name alone and built with `Map.fromList`, so the later
+% declaration wins: the arity error below must report `wrap` as
+% declared with 2 arguments (`t2`'s), not 1 (`t1`'s). Two diagnostics
+% are expected — the duplicate itself and the arity mismatch.
+:- chr_type t1 ---> wrap(int).
+:- chr_type t2 ---> wrap(int, int).
+
+:- chr_constraint c(any).
+c(X) <=> X = wrap(1).

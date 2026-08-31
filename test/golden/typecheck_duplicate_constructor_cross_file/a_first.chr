@@ -1,0 +1,11 @@
+:- module(dupmod, []).
+:- use_module(library(prelude)).
+
+% See `b_second.chr`. The duplicate-constructor diagnostic orders the
+% declarations by (file, line, col), so this one — earlier by file name
+% but *later* by line — must be reported first, and its location and
+% type name are the ones the message carries.
+
+
+
+:- chr_type t1 ---> nil.

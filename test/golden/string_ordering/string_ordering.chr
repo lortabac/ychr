@@ -1,0 +1,39 @@
+:- module(string_ordering, [t/2, m/2, type(tags/0)]).
+:- use_module(library(prelude)).
+
+% `<`, `>`, `=<` and `>=` are declared over int, float *and* string
+% (`:- class` blocks in `libraries/prelude.chr`), so ordering strings
+% needs no separate function. The order is lexicographic by code point:
+% case-sensitive, and no locale's collation rules.
+:- chr_type tags ---> lt ; lt_false ; gt ; gt_false
+                    ; le_eq ; le_lt ; ge_eq ; ge_gt
+                    ; prefix ; empty_l ; case_order ; unicode.
+
+:- chr_constraint t(tags, bool).
+
+t(lt, R)         <=> R is "abc" < "abd".
+t(lt_false, R)   <=> R is "abd" < "abc".
+t(gt, R)         <=> R is "abd" > "abc".
+t(gt_false, R)   <=> R is "abc" > "abd".
+
+% The boundary the strict operators do not reach.
+t(le_eq, R)      <=> R is "abc" =< "abc".
+t(le_lt, R)      <=> R is "abc" =< "abd".
+t(ge_eq, R)      <=> R is "abc" >= "abc".
+t(ge_gt, R)      <=> R is "abd" >= "abc".
+
+% A prefix sorts before what extends it, and the empty string before
+% everything.
+t(prefix, R)     <=> R is "ab" < "abc".
+t(empty_l, R)    <=> R is "" < "a".
+
+% Code points, so every upper-case ASCII letter precedes every
+% lower-case one — this is not a dictionary order.
+t(case_order, R) <=> R is "Z" < "a".
+t(unicode, R)    <=> R is "cafe" < "café".
+
+% `max/2` and `min/2` are `requiring '>='(T, T) -> bool`, so the new
+% signature makes them work on strings too, with no change of their own.
+:- chr_constraint m(tags, string).
+m(lt, R)         <=> R is min("pear", "apple").
+m(gt, R)         <=> R is max("pear", "apple").

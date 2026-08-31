@@ -25,8 +25,10 @@
     chr-inst?
     %print %writeln %ground?
     %term-variables %compound-to-list %list-to-compound
+    %name-base
     %read-term-from-string
     %int-to-float %float-to-int
+    %lt %gt %le %ge
     %idiv %imod %irem
     %copy-term
     %nil %cons
@@ -138,10 +140,10 @@
       (h 'mod 2 (lambda (s a b) (%imod a b)))
       (h 'rem 2 (lambda (s a b) (%irem a b)))
       ;; Comparison — return booleans
-      (h '< 2 (lambda (s a b) (< a b)))
-      (h '> 2 (lambda (s a b) (> a b)))
-      (h '=< 2 (lambda (s a b) (<= a b)))
-      (h '>= 2 (lambda (s a b) (>= a b)))
+      (h '< 2 (lambda (s a b) (%lt a b)))
+      (h '> 2 (lambda (s a b) (%gt a b)))
+      (h '=< 2 (lambda (s a b) (%le a b)))
+      (h '>= 2 (lambda (s a b) (%ge a b)))
       (h '== 2 (lambda (s a b) (equal?/chr a b)))
       ;; Numeric conversions
       (h 'int_to_float 1 (lambda (s n) (%int-to-float n)))
@@ -256,6 +258,17 @@
            " is not sufficiently instantiated to select an equation"
            " (unbound variable at a matched position)"))))))
 
+  ;;; Ordering operators. The prelude declares `<`, `>`, `=<` and `>=`
+  ;;; over int, float *and* string, so each dispatches on its
+  ;;; arguments: two strings compare lexicographically by code point,
+  ;;; which is the ordering `string<?` gives and the one Haskell's
+  ;;; `compare` on Text gives. Anything else goes to the numeric
+  ;;; operator and raises the same wrong-type condition it always did.
+  (define (%lt a b) (if (and (string? a) (string? b)) (string<? a b) (< a b)))
+  (define (%gt a b) (if (and (string? a) (string? b)) (string>? a b) (> a b)))
+  (define (%le a b) (if (and (string? a) (string? b)) (string<=? a b) (<= a b)))
+  (define (%ge a b) (if (and (string? a) (string? b)) (string>=? a b) (>= a b)))
+
   ;;; Print
   (define (%print v) (display v) (newline))
 
@@ -361,6 +374,34 @@
             (if (null? (cdr parts))
                 (car parts)
                 (make-term (car parts) (list->vector (cdr parts))))))))
+
+  ;;; name_base — the local part of a mangled name symbol. Splits at
+  ;;; the first "__", which vmName (Compile/Names.hs) reserves for the
+  ;;; module/base separator; a leading "__" (a compiler-internal name
+  ;;; like __lambda_3) is not a qualifier, so the whole symbol is the
+  ;;; base. Escapes are left in place, exactly as Haskell's
+  ;;; baseOfMangled does, so two bases compare equal iff their source
+  ;;; spellings do.
+  ;;; An unbound argument is an *instantiation* failure, not a type
+  ;;; error, so that a rule guard calling `name_base` delays rather than
+  ;;; aborting — matching the split `Meta.hs` makes on the Haskell side.
+  (define (%name-base v)
+    (when (%unbound? v)
+      (%chr-inst-error
+       "name_base: argument is not sufficiently instantiated (unbound variable)"))
+    (unless (symbol? v) (%chr-error "name_base: expected an atom"))
+    (let* ((s (symbol->string v))
+           (n (string-length s))
+           (sep (let loop ((i 0))
+                  (cond
+                    ((> (+ i 2) n) #f)
+                    ((and (char=? (string-ref s i) #\_)
+                          (char=? (string-ref s (+ i 1)) #\_))
+                     i)
+                    (else (loop (+ i 1)))))))
+      (if (or (not sep) (zero? sep))
+          v
+          (string->symbol (substring s (+ sep 2) n)))))
 
   ;;; read_term_from_string: stub
   (define (%read-term-from-string s)

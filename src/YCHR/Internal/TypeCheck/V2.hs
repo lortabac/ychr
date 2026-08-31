@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Driver for the all-CHR type checker (@typechecker2\/@).
@@ -12,9 +13,9 @@
 -- The two checkers coexist while the port is in progress: nothing
 -- user-facing calls this one yet, and @test\/YCHR\/TypeCheckDiffTest.hs@
 -- runs both over the same corpus and compares their diagnostics. The
--- CHR side is currently a stub that reports nothing (milestone M2);
--- the decoding below is complete, so filling the stub in is all that
--- later milestones change here.
+-- CHR side reports the declaration-level diagnostics so far; the ones
+-- that need the solver are still to come, so a decoder branch here may
+-- have no producer yet.
 module YCHR.Internal.TypeCheck.V2
   ( typeCheckProgramV2,
     typeCheckGoalsV2,
@@ -177,27 +178,38 @@ decodeCtx :: IntMap PExpr -> Value -> Chr CtxInfo
 decodeCtx origins val = do
   val' <- deref val
   case val' of
-    VTerm f [_unit, annVal, labelVal, locVal] | f == diagAtom "ctx" -> do
-      o <- decodeOrigin origins annVal
+    VTerm f [_unit, originVal, labelVal, locVal] | f == diagAtom "ctx" -> do
+      o <- decodeOrigin origins originVal
       lbl <- decodeLabel labelVal
       l <- decodeLoc locVal
       pure CtxInfo {label = lbl, loc = l, origin = o}
     _ -> malformed "ctx" val'
 
--- | Recover the p-expr an annotation id names. The id has to be one
--- the encoder handed out, or the documented @-1@ for a diagnostic with
--- no enclosing annotated node (a top-level goal's). Anything else means
--- a rule invented an id, which no rule may do.
+-- | Recover the source echo a diagnostic carries. An @origin_ann@ id
+-- has to be one the encoder handed out: anything else means a rule
+-- invented an id, which no rule may do. An @origin_atom@ is a
+-- synthesized origin — a declaration-level diagnostic naming its
+-- enclosing type — and unmangles to the same 'Atom' the old checker
+-- builds from @flattenName@.
 decodeOrigin :: IntMap PExpr -> Value -> Chr PExpr
 decodeOrigin origins val = do
   val' <- deref val
   case val' of
-    VInt n
-      | n < 0 -> pure (Atom "")
-      | otherwise -> case IntMap.lookup (fromInteger n) origins of
-          Just pexpr -> pure pexpr
-          Nothing -> malformed "annotation id (not one this encoding handed out)" val'
-    _ -> malformed "annotation id" val'
+    VTerm f [idVal] | f == diagAtom "origin_ann" -> do
+      annId <- deref idVal
+      case annId of
+        VInt n
+          | Just pexpr <- IntMap.lookup (fromInteger n) origins -> pure pexpr
+          | otherwise ->
+              malformed "annotation id (not one this encoding handed out)" annId
+        _ -> malformed "annotation id" annId
+    VTerm f [nameVal] | f == diagAtom "origin_atom" -> do
+      name <- deref nameVal
+      case name of
+        VAtom a -> pure (Atom (unmangleName a))
+        _ -> malformed "origin_atom payload" name
+    VAtom a | a == diagAtom "origin_none" -> pure (Atom "")
+    _ -> malformed "diag_origin" val'
 
 -- | Render a structured label. The wording is the old checker's, so
 -- that the two produce identical diagnostic headers — including the
@@ -259,7 +271,71 @@ decodeError code detail = case code of
   VAtom c
     | c == diagAtom "bound_unsatisfied" ->
         BoundUnsatisfied <$> showValue detail
+  VAtom c | c == diagAtom "undefined_type" -> case detail of
+    VTerm f [t, con, ref]
+      | f == diagAtom "undefined_type_d" ->
+          UndefinedType <$> name t <*> name con <*> name ref
+    _ -> malformed "undefined_type detail" detail
+  VAtom c | c == diagAtom "unbound_type_var" -> case detail of
+    -- The type-variable name is a source spelling the encoder passed
+    -- through unmangled, so it is read verbatim rather than unmangled.
+    VTerm f [t, con, tv]
+      | f == diagAtom "unbound_type_var_d" ->
+          UnboundTypeVar <$> name t <*> name con <*> atomText tv
+    _ -> malformed "unbound_type_var detail" detail
+  VAtom c | c == diagAtom "type_ref_arity" -> case detail of
+    VTerm f [t, con, ref, useArity, declared]
+      | f == diagAtom "type_ref_arity_d" ->
+          TypeRefArityMismatch
+            <$> name t
+            <*> name con
+            <*> name ref
+            <*> int useArity
+            <*> int declared
+    _ -> malformed "type_ref_arity detail" detail
+  VAtom c | c == diagAtom "duplicate_constructor" -> case detail of
+    VTerm f [con, decls]
+      | f == diagAtom "duplicate_constructor_d" ->
+          DuplicateConstructor <$> name con <*> decodeDeclList decls
+    _ -> malformed "duplicate_constructor detail" detail
+  VAtom c | c == diagAtom "constructor_arity" -> case detail of
+    VTerm f [con, useArity, declared]
+      | f == diagAtom "constructor_arity_d" ->
+          ConstructorArityMismatch <$> name con <*> int useArity <*> int declared
+    _ -> malformed "constructor_arity detail" detail
   _ -> malformed "error code" code
+  where
+    name v =
+      deref v >>= \case
+        VAtom a -> pure (unmangleName a)
+        v' -> malformed "name atom" v'
+    atomText v =
+      deref v >>= \case
+        VAtom a -> pure a
+        v' -> malformed "atom" v'
+    int v =
+      deref v >>= \case
+        VInt n -> pure (fromInteger n)
+        v' -> malformed "integer" v'
+
+-- | The @(type name, arity)@ of every declaration of a duplicated
+-- constructor, in the order the CHR side sorted them.
+decodeDeclList :: Value -> Chr [(Text, Int)]
+decodeDeclList val = do
+  items <- derefList val
+  case items of
+    Nothing -> malformed "duplicate-constructor declaration list" val
+    Just xs -> traverse one xs
+  where
+    one item =
+      deref item >>= \case
+        VTerm "pairs__kv" [k, v] -> do
+          k' <- deref k
+          v' <- deref v
+          case (k', v') of
+            (VAtom a, VInt n) -> pure (unmangleName a, fromInteger n)
+            _ -> malformed "declaration entry fields" item
+        item' -> malformed "declaration entry" item'
 
 decodeWarning :: Value -> Value -> Chr TypeCheckWarning
 decodeWarning code detail = case code of

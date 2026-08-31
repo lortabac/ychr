@@ -1,0 +1,9 @@
+:- module(string_ordering_mixed, [c/1]).
+:- use_module(library(prelude)).
+
+% `<` is declared over (int, int), (float, float) and (string, string)
+% — three same-type signatures, and no mixed one. Comparing a number
+% with a string therefore matches no overload (YCHR-60006) rather than
+% silently ordering across types.
+:- chr_constraint c(bool).
+c(R) <=> R is 1 < "a".

@@ -4,7 +4,8 @@
     fun write_term_to_string/1,
     fun write_store_to_list/0,
     fun print_store/0,
-    fun run_chr_session/1
+    fun run_chr_session/1,
+    fun name_base/1
 ]).
 
 :- function
@@ -13,7 +14,8 @@
     (read_term_from_string(string) -> any),
     (write_term_to_string(any) -> string),
     (write_store_to_list() -> list(any)),
-    (run_chr_session(any) -> bool).
+    (run_chr_session(any) -> bool),
+    (name_base(any) -> any).
 
 print(X) -> host:print(X).
 
@@ -36,3 +38,10 @@ print_store -> host:print_store.
 % cross the boundary: a live stored constraint of one session must not
 % depend on a variable the other session binds.
 run_chr_session(G) -> host:run_chr_session(G).
+
+% The local part of a name atom: `name_base(mod:foo)` is `foo`, and an
+% unqualified `name_base(foo)` is `foo`. Two names have the same base
+% exactly when their unqualified spellings match, which is what makes
+% this the operation for asking "is this a reference to a name declared
+% in some module?" without knowing the module. Errors on a non-atom.
+name_base(A) -> host:name_base(A).

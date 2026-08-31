@@ -12,6 +12,7 @@
 % pre-formatted string.
 :- module('$tc2_diag', [
     type(diag_label/0),
+    type(diag_origin/0),
     type(ctx/0),
     type(error/0),
     type(warning/0),
@@ -21,6 +22,7 @@
 ]).
 
 :- use_module('$tc2_ast').
+:- use_module(library(pairs)).
 
 % What a diagnostic is attributed to. `label_rule` carries the rule's
 % source name, `label_function` its target's mangled name;
@@ -31,20 +33,36 @@
                           ; label_text(string)
                           ; label_none.
 
+% What the rendered message echoes as the offending source.
+%
+%   * `origin_ann(Id)` — the p-expr of the AST node the encoder gave
+%     that annotation id. The driver resolves it through the map the
+%     encoding returned, and rejects any id the encoder did not hand
+%     out: inventing one is a checker bug, not a user error.
+%   * `origin_atom(Name)` — a *synthesized* origin, for a diagnostic
+%     that belongs to no annotated node. The declaration checks are
+%     the case: a malformed constructor field is attributed to its
+%     enclosing type declaration, which is a `TypeDefinition` and
+%     carries no `AnnP`, so the old checker echoes the bare type name.
+%     The atom is a mangled name and the driver unmangles it.
+%   * `origin_none` — nothing to echo (a top-level goal's diagnostic).
+:- chr_type diag_origin ---> origin_ann(int)
+                           ; origin_atom(any)
+                           ; origin_none.
+
 % Everything a diagnostic needs to know about where it came from:
 %
 %   * the *checking unit* — one rule, one function equation, or one
 %     top-level goal — which is what warning suppression is keyed on: a
-%     unit that reports an error omits its warnings;
-%   * the *annotation id* of the enclosing AST node, which the Haskell
-%     driver resolves back to the p-expr it echoes in the message. Ids
-%     are the ones the encoder put in the `ann/3` nodes, so they are
-%     non-negative; a diagnostic with no enclosing annotated node — a
-%     top-level goal's, say — uses **-1**, and the driver rejects any
-%     other id it cannot resolve;
+%     unit that reports an error omits its warnings. Units are numbered
+%     by position, and **-1** means "no unit": a whole-program check,
+%     or one whose diagnostics the old checker collects outside any
+%     session, suppresses nothing. Only the partition matters — the
+%     number never leaves this program;
+%   * where the message's source echo comes from;
 %   * the label to render;
 %   * the source position.
-:- chr_type ctx ---> ctx(int, int, diag_label, loc).
+:- chr_type ctx ---> ctx(int, diag_origin, diag_label, loc).
 
 % An accumulated error. `Code` is an `error_code` atom and `Detail` is
 % heterogeneous (a type pair, an atom, a name), hence `any` for both.
@@ -54,10 +72,18 @@
 % that suppression can act on the two lists independently.
 :- chr_type warning ---> warning(ctx, any, any).
 
-% Atoms used as the `Code` field of `error/3`.
+% Atoms used as the `Code` field of `error/3`. Each one pairs with the
+% `error_detail` constructor of the same name suffixed `_d`, and with a
+% branch of `decodeError` in `src/YCHR/Internal/TypeCheck/V2.hs` that
+% turns the pair into a `TypeCheckError`.
 :- chr_type error_code ---> inconsistent
                           ; no_matching_overload
-                          ; bound_unsatisfied.
+                          ; bound_unsatisfied
+                          ; undefined_type
+                          ; unbound_type_var
+                          ; type_ref_arity
+                          ; duplicate_constructor
+                          ; constructor_arity.
 
 % Atoms used as the `Code` field of `warning/3`. `inaccessible` is the
 % inaccessible-branch warning YCHR-20104.
@@ -67,5 +93,16 @@
 % contradicting types of an inconsistency or an inaccessible branch;
 % it is spelled with a `t` so that it does not collide with the `pair`
 % type of `library(pairs)` in a module that imports both.
+%
+% The `_d` constructors carry the fields of the corresponding
+% `TypeCheckError` variant, in the same order, with names left as
+% mangled atoms for the driver to render. `duplicate_constructor_d`'s
+% second field is the `(type name, arity)` of every declaration of the
+% clashing constructor, ordered by declaration position.
 :- chr_type error_detail ---> tpair(any, any)
-                            ; overloaded.
+                            ; overloaded
+                            ; undefined_type_d(any, any, any)
+                            ; unbound_type_var_d(any, any, any)
+                            ; type_ref_arity_d(any, any, any, int, int)
+                            ; duplicate_constructor_d(any, list(pair(any, int)))
+                            ; constructor_arity_d(any, int, int).

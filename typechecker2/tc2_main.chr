@@ -5,10 +5,10 @@
 % constraints; everything the checker does happens in CHR from there,
 % and the driver only decodes the two diagnostic lists that come back.
 %
-% Both entry points are currently stubs that report nothing. Milestones
-% M3–M6 fill them in: declarations and pure checks, the solver port and
-% the rule walker, functions and class-function overload search, and
-% finally goal checking.
+% `check_program` reports the declaration-level diagnostics;
+% `check_goals` is still a stub. Milestones M4–M6 fill in the rest: the
+% solver port and the rule walker, functions and class-function
+% overload search, and finally goal checking.
 :- module('$tc2_main', [
     check_program/3,
     check_goals/6
@@ -17,6 +17,7 @@
 :- use_module('$tc2_ast').
 :- use_module('$tc2_conform').
 :- use_module('$tc2_diag').
+:- use_module('$tc2_pure').
 
 % `check_program(Program, Errors, Warnings)`: check a whole desugared
 % program. `Errors` and `Warnings` are unbound on entry and are bound
@@ -31,12 +32,17 @@
     check_program(program, list(error), list(warning)),
     check_goals(program, list(body_goal), loc, diag_label, list(error), list(warning)).
 
-% Both stubs walk their input before answering, so that a program the
-% encoder and `tc2_ast` disagree about fails loudly instead of being
-% silently accepted. See `tc2_conform.chr`.
+% Both entry points walk their input before answering, so that a
+% program the encoder and `tc2_ast` disagree about fails loudly instead
+% of being silently accepted. See `tc2_conform.chr`.
+%
+% `check_program` reports the declaration-level diagnostics (M3). The
+% rest — everything that needs the solver — is still missing, which is
+% why the warning list is still empty: the only warning kind is raised
+% by the checking phase.
 check_program(Program, Errors, Warnings) <=>
     _Nodes is ast_size(Program),
-    Errors = [],
+    Errors is program_errors(Program),
     Warnings = [].
 
 check_goals(Program, Goals, Loc, Label, Errors, Warnings) <=>

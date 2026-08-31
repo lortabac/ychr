@@ -1,0 +1,47 @@
+:- module(meta_name_base, [
+    qualified/1, unqualified/1, same_base/1, distinct/1, nonatom/1, delayed/1
+]).
+:- use_module(library(prelude)).
+:- use_module(library(meta)).
+:- use_module(other).
+
+% `name_base/1` strips the module qualifier from a name atom. The point
+% of it is `same_base`: `meta_name_base:red` and `other:red` are two
+% different constructors, so they are different atoms and `==` says so
+% — but their bases agree, which is how a name can be recognized
+% without knowing which module declared it.
+:- chr_type colour ---> red ; green.
+
+:- chr_constraint qualified(any), unqualified(any).
+:- chr_constraint same_base(bool), distinct(bool), nonatom(any), delayed(bool).
+
+% `green` is a declared constructor of this module, so the renamer
+% canonicalizes it to `meta_name_base:green` and the base is `green`.
+q @ qualified(R) <=> R is name_base(green).
+
+% An atom that names nothing keeps its own spelling either way.
+u @ unqualified(R) <=> R is name_base(quote(loose)).
+
+s @ same_base(R) <=> R is name_base(meta_name_base:red) == name_base(other:red).
+
+% Quoted, because the two are of different declared types and `==` on
+% them is a type error — which is itself the point being made.
+d @ distinct(R) <=> R is not(quote(meta_name_base:red) == quote(other:red)).
+
+% A non-atom argument is a hard error. (Tested in `is` position; the
+% guard-position case is the *unbound* one below, where the two kinds
+% of failure part company.)
+n @ nonatom(R) <=> R is name_base(1).
+
+% An *unbound* argument is an instantiation failure rather than a type
+% error, so a rule guard calling `name_base` delays instead of
+% aborting: `fire` is first tried while `X` is free, does not fire,
+% and is retried after `bind` binds it. Getting this wrong on a
+% backend shows up here as an aborted query, not a wrong answer.
+:- chr_constraint seed(any), c(any), later(any), gather(bool), out(bool).
+
+start @ delayed(R) <=> seed(X), later(X), gather(R).
+mk    @ seed(X) <=> c(X).
+bind  @ later(X) <=> X = green.
+fire  @ c(N) <=> name_base(N) == name_base(green) | out(true).
+coll  @ gather(R), out(V) <=> R = V.

@@ -1932,9 +1932,14 @@ Use site `R is max(3, 4)`: σ = (T := int); the substituted bound
 `>(int, int) -> bool` is consistent with the declared signature;
 result type `int`; `R : int`.
 
-Use site `R is max("a", "b")`: σ = (T := string); the substituted
-bound `>(string, string) -> bool` has no consistent declared
-signature; error `BoundUnsatisfied` (YCHR-60012).
+Use site `R is max(red, green)`, for a declared
+`:- chr_type colour ---> red ; green`: σ = (T := colour); the
+substituted bound `>(colour, colour) -> bool` has no consistent
+declared signature; error `BoundUnsatisfied` (YCHR-60012). (The
+prelude's own `>` is declared over `string` as well as the two numeric
+types, so a *string* use site of the prelude's `max` resolves — it is
+the absence of a matching signature, not the argument being
+non-numeric, that makes a bound unsatisfiable.)
 
 **Example 2 — Multi-variable bound.**
 

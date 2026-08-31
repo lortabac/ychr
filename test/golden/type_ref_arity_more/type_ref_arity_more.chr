@@ -1,0 +1,17 @@
+:- module(type_ref_more, []).
+:- use_module(library(prelude)).
+
+% The base-type arms `type_ref_arity_base` does not cover: `int` is
+% checked there, `float`, `string` and `any` here. Each is applied to
+% an argument, and a base type takes none, so each is YCHR-60013
+% against a declared arity of zero. (`A` is a declared parameter, so
+% there is no unbound-type-variable error on top.)
+:- chr_type boxes(A) ---> b1(float(A)) ; b2(string(A)) ; b3(any(A)).
+
+% A reference that misses at its own arity *and* whose base name is
+% declared at two other arities: with no single arity to point at, the
+% fallback reports the type as undefined (YCHR-60005) rather than
+% guessing a mismatch.
+:- chr_type pair2(A, B) ---> p2(A, B).
+:- chr_type pair2(A) ---> p1(A).
+:- chr_type holder ---> hold(pair2).

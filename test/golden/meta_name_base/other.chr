@@ -1,0 +1,9 @@
+:- module(other, [type(shade/0), shade_red/1]).
+:- use_module(library(prelude)).
+
+% A constructor spelled `red` in a *different* module from the `red` of
+% `meta_name_base`. The two are distinct atoms; only their bases agree.
+:- chr_type shade ---> red ; blue.
+
+:- chr_constraint shade_red(shade).
+r @ shade_red(C) <=> C = red.

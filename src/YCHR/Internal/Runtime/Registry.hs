@@ -61,10 +61,10 @@ baseHostCallRegistry =
       (Name "mod", intDivOp2 "mod" mod),
       (Name "rem", intDivOp2 "rem" rem),
       (Name "/", floatArith2 (/)),
-      (Name "<", numCmp (<) (<)),
-      (Name ">", numCmp (>) (>)),
-      (Name "=<", numCmp (<=) (<=)),
-      (Name ">=", numCmp (>=) (>=)),
+      (Name "<", ordCmp (<) (<) (<)),
+      (Name ">", ordCmp (>) (>) (>)),
+      (Name "=<", ordCmp (<=) (<=) (<=)),
+      (Name ">=", ordCmp (>=) (>=) (>=)),
       (Name "==", valEq),
       (Name "float", typePred isFloat),
       (Name "int_to_float", toFloatFn),
@@ -113,12 +113,19 @@ baseHostCallRegistry =
         argError "float arithmetic host call" args $
           "float arithmetic host call: expected 2 Float arguments, got "
             ++ show (length args)
-    numCmp intOp floatOp = HostCallFn $ \case
+    -- The four ordering operators are declared over @int@, @float@ and
+    -- @string@ (see the @:- class@ blocks in @libraries\/prelude.chr@).
+    -- Strings order lexicographically by code point: 'Ord' on 'T.Text'
+    -- agrees with 'Ord' on 'String', so this is the same ordering
+    -- Haskell code sorting on a file name or an identifier would get.
+    ordCmp intOp floatOp textOp = HostCallFn $ \case
       [VInt a, VInt b] -> pure (VBool (intOp a b))
       [VFloat a, VFloat b] -> pure (VBool (floatOp a b))
+      [VText a, VText b] -> pure (VBool (textOp a b))
       args ->
         argError "comparison host call" args $
-          "comparison host call: expected 2 numeric arguments of same type, got "
+          "comparison host call: expected 2 int, float or string arguments"
+            ++ " of the same type, got "
             ++ show (length args)
     toFloatFn = HostCallFn $ \case
       [VInt n] -> pure (VFloat (fromIntegral n))

@@ -26,9 +26,9 @@ renaming your own identifier, not by adjusting imports.
 Two patterns run through the tables below:
 
 - **Operator overloading by signature.** Operators that are genuinely
-  overloaded across `int` and `float` — `+`, `-`, `*`, `<`, `>`, `>=`,
-  `=<` — are declared as `:- class` with one signature per concrete
-  combination of types, e.g.
+  overloaded — `+`, `-`, `*` across `int` and `float`, and `<`, `>`,
+  `>=`, `=<` across those and `string` — are declared as `:- class`
+  with one signature per concrete combination of types, e.g.
   ```
   :- class
       ('+'(int, int) -> int),
@@ -97,14 +97,18 @@ Y = 5.5.
 
 ## Comparisons and equality
 
-Each comparison is overloaded for `int` and `float` and returns `bool`.
+The four ordering operators are overloaded for `int`, `float` and
+`string`; each returns `bool`. Strings order lexicographically by
+code point — case-sensitive, and following no locale's collation
+rules, so `"Z" < "a"` is `true`. There is no mixed-type
+comparison: `1 < "a"` matches no signature (`YCHR-60006`).
 
 | Identifier | Signature(s) | Notes |
 |------------|--------------|-------|
-| `<` | `(int, int) -> bool`, `(float, float) -> bool` | |
-| `>` | `(int, int) -> bool`, `(float, float) -> bool` | |
-| `>=` | `(int, int) -> bool`, `(float, float) -> bool` | |
-| `=<` | `(int, int) -> bool`, `(float, float) -> bool` | |
+| `<` | `(int, int) -> bool`, `(float, float) -> bool`, `(string, string) -> bool` | |
+| `>` | `(int, int) -> bool`, `(float, float) -> bool`, `(string, string) -> bool` | |
+| `>=` | `(int, int) -> bool`, `(float, float) -> bool`, `(string, string) -> bool` | |
+| `=<` | `(int, int) -> bool`, `(float, float) -> bool`, `(string, string) -> bool` | |
 | `==` | `(A, A) -> bool` | Polymorphic structural equality. |
 | `not` | `(bool) -> bool` | Boolean negation. Not an operator — call it. |
 
@@ -150,8 +154,10 @@ true, so `not(1)` is an error.
 
 These are the prelude's only bounded declarations. Each bound names a
 prelude comparison — `>=` for `max`, `=<` for `min` — and those are
-closed classes over `int` and `float`, so `max` and `min` work at those
-two types only: `max("a", "b")` is rejected with `YCHR-60012`. See
+closed classes over `int`, `float` and `string`, so `max` and `min`
+work at exactly those three types: `max("pear", "apple")` is
+`"pear"`, while `max(red, green)` over a user type is rejected with
+`YCHR-60012`, there being no `>=` signature for it. See
 [type-system.md](type-system.md#bounded-polymorphism) for what a bound
 means.
 
@@ -384,7 +390,9 @@ over host primitives.
 | `string_upper(string) -> string` | Upper-case. |
 | `string_lower(string) -> string` | Lower-case. |
 
-There is no splitting, slicing, or search yet, and no conversion between
+Ordering strings needs nothing from this library: `<`, `>`, `=<` and
+`>=` carry a `(string, string) -> bool` signature alongside their
+numeric ones. There is no splitting, slicing, or search yet, and no conversion between
 strings and atoms or numbers.
 
 ### `meta`
@@ -400,6 +408,31 @@ store and over terms.
 | `print_store/0` | Print the whole constraint store. |
 | `write_store_to_list/0` | Return the store as a list of terms. |
 | `run_chr_session/1` | Run a goal in a fresh session of the current program. |
+| `name_base/1` | The local part of a name atom: `mod:foo` → `foo`. |
+
+`name_base/1` drops a name atom's module qualifier, leaving an
+unqualified atom untouched. Two names have the same base exactly when
+their unqualified spellings agree, which is how a program recognizes a
+name without knowing which module declared it. Given a module `palette`
+declaring `red` and a module `other` declaring its own `red`:
+
+```prolog
+:- module(palette, [qualified/1, same_base/1]).
+:- chr_type colour ---> red ; green.
+
+% `green` is this module's constructor, so it canonicalizes to
+% `palette:green` and its base is `green`.
+q @ qualified(R) <=> R is name_base(green).
+
+% Two `red`s from different modules: different atoms, same base.
+s @ same_base(R) <=> R is name_base(palette:red) == name_base(other:red).
+```
+
+binds `R = green` and `R = true` respectively. A non-atom argument is a
+runtime error. An *unbound* argument is an instantiation failure, so a
+rule guard calling `name_base/1` delays and is retried when the
+variable is bound, rather than aborting the query (see
+[Soft guard failure](language.md#soft-guard-failure)).
 
 `run_chr_session/1` takes one constraint term — or a list of them, run
 in order — wrapped in `quote/1` to keep it symbolic. The sub-session
@@ -434,7 +467,8 @@ sub-session bind its out-variables before it quiesces. See
 `test/golden/run_chr_session_test/` for worked examples, including
 nesting.
 
-Only `print/1` works on both backends. `read_term_from_string/1`,
+`print/1` and `name_base/1` work on both backends.
+`read_term_from_string/1`,
 `write_term_to_string/1`, `write_store_to_list/0`, `print_store/0` and
 `run_chr_session/1` are
 Haskell-only — the Scheme runtime either stubs them out or has no

@@ -584,7 +584,10 @@ hostCallMap =
     [ ("div", "%idiv"),
       ("mod", "%imod"),
       ("rem", "%irem"),
-      ("=<", "<="),
+      ("<", "%lt"),
+      (">", "%gt"),
+      ("=<", "%le"),
+      (">=", "%ge"),
       ("==", "equal?/chr"),
       ("float", "flonum?"),
       ("int_to_float", "%int-to-float"),
@@ -610,6 +613,7 @@ hostCallMap =
       ("term_variables", "%term-variables"),
       ("compound_to_list", "%compound-to-list"),
       ("list_to_compound", "%list-to-compound"),
+      ("name_base", "%name-base"),
       ("read_term_from_string", "%read-term-from-string"),
       ("copy_term", "%copy-term")
     ]

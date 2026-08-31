@@ -24,6 +24,7 @@ import Data.Text qualified as T
 import Numeric (readHex)
 import YCHR.Internal.Parser (builtinOps, parseTermWith)
 import YCHR.Internal.Pretty (prettyTerm)
+import YCHR.Internal.Runtime.Error (instantiationErrorS, runtimeErrorS)
 import YCHR.Internal.Runtime.Monad (Chr)
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), HostCallRegistry, unit, valueList)
 import YCHR.Internal.Runtime.Store (Suspension (..), getAllStoredConstraints, isSuspAlive)
@@ -91,6 +92,14 @@ decodeMangled s = case T.breakOn "__" s of
   (_, rest) | T.null rest -> Nothing
   (m, _) | T.null m -> Nothing
   (m, rest) -> Just (m, T.drop 2 rest)
+
+-- | The local part of a mangled name: the @n@ of a qualified @m__n@,
+-- and the whole thing when there is no module prefix. Escapes are left
+-- as they are, so the result stays in the same mangled alphabet as its
+-- input and two base names compare equal exactly when their source
+-- spellings do ('YCHR.Internal.Compile.Names.encodeText' is injective).
+baseOfMangled :: Text -> Text
+baseOfMangled s = maybe s snd (decodeMangled s)
 
 -- | Replace every @%%u\<6 hex digits\>@ escape in @s@ with the
 -- corresponding character (inverse of 'Compile.Names.encodeText''s
@@ -194,6 +203,20 @@ metaHostCallRegistry =
           groups <- getAllStoredConstraints
           susps <- concat <$> traverse suspsOfGroup groups
           pure (valueList susps)
+      ),
+      ( Name "name_base",
+        HostCallFn $ \case
+          [arg] -> do
+            arg' <- deref arg
+            case arg' of
+              VAtom a -> pure (VAtom (baseOfMangled a))
+              VVar _ ->
+                instantiationErrorS
+                  "name_base: argument is not sufficiently instantiated (unbound variable)"
+              _ -> runtimeErrorS "name_base: expected an atom"
+          args ->
+            runtimeErrorS $
+              "name_base: expected 1 argument, got " ++ show (length args)
       )
     ]
   where

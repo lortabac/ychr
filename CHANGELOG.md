@@ -165,6 +165,27 @@ rule guard, with no new surface syntax. See
   classification is not — a guard blocked on a native numeric primitive
   still aborts there. Tracked in `dev-docs/SCHEME_BACKEND_GAPS.md`.
 
+Stdlib additions, both implemented on both backends:
+
+- `library(meta)` gains `name_base/1`, the local part of a name atom
+  (`mod:foo` → `foo`, an unqualified name unchanged). Two names have
+  the same base exactly when their unqualified spellings agree, which
+  is how a program can recognize a name without knowing which module
+  declared it. A non-atom argument is a runtime error; an *unbound*
+  one is an instantiation failure, so a rule guard calling it delays
+  rather than aborting. See [§`meta`](docs/reference/prelude.md#meta).
+- The ordering operators `<`, `>`, `=<` and `>=` gain a
+  `(string, string) -> bool` signature alongside their `int` and
+  `float` ones, so strings compare with the ordinary operators rather
+  than a separate function. The order is lexicographic by code point:
+  case-sensitive, following no locale's collation rules. There is
+  still no mixed-type comparison — `1 < "a"` matches no signature
+  (`YCHR-60006`). Because `max/2` and `min/2` are declared
+  `requiring '>='(T, T) -> bool` / `'=<'(T, T) -> bool`, they now work
+  on strings too; `docs/reference/prelude.md`'s claim that they are
+  limited to the two numeric types is corrected accordingly. See
+  [§Comparisons](docs/reference/prelude.md#comparisons-and-equality).
+
 Runtime:
 
 - Unification now transfers a bound variable's observers onto the
