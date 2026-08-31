@@ -1,0 +1,22 @@
+:- module(typecheck_fun_skeleton, [p/1, q/1, s/1]).
+:- use_module(library(prelude)).
+
+% Declaration-position `any` stamping through a *function* type.
+%
+% `F` is declared `fun(any) -> int` in one head and
+% `fun(string) -> int` in the other. `any` never binds, so the shared
+% slot has to be pre-shaped as `fun(beta) -> gamma` and met
+% componentwise: the `any` source binds nothing, the `string` source
+% determines beta, and telling `s(F)` at `fun(float) -> int` is then
+% the inconsistency `'string'` against `'float'`.
+%
+% Allocating the whole slot flexible instead — which is what every
+% other program in the corpus gets, because none of them shares a
+% variable across two function-typed declaration positions — lets the
+% first head bind it to `fun(any) -> int` entire, and both later meets
+% pass through `any`. Nothing is then reported, and the `sk_fun` arm of
+% the skeleton computation can be deleted with the whole suite still
+% green.
+:- chr_constraint p((fun(any) -> int)), q((fun(string) -> int)), s((fun(float) -> int)).
+
+r @ p(F), q(F) <=> s(F).

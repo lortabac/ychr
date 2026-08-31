@@ -30,11 +30,18 @@
 -- what compiled CHR rules and the constructor-canonicalizing renamer
 -- produce. A name in an encoded AST therefore compares equal to the
 -- same name arriving from any other source. Everything else that is
--- spelled as an atom — source variable names, type-parameter names,
--- host-function names — goes through 'atomTerm' unmangled, because it
--- is never compared against anything the compiler produced. The two
--- are used consistently per position, so no comparison ever straddles
--- them.
+-- spelled as an atom — source variable names, host-function names —
+-- goes through 'atomTerm' unmangled, because it is never compared
+-- against anything the compiler produced. The two are used
+-- consistently per position, so no comparison ever straddles them.
+--
+-- /Type-parameter/ names are the exception among the source spellings:
+-- they are encoded as strings rather than atoms. The checker has to
+-- allocate one solver variable per distinct type parameter of a
+-- declaration, in the order @Set.toList . Set.fromList@ produces —
+-- ascending by name — because a rigid variable's synthetic id is
+-- user-visible (@T#0@) and the two checkers must agree on it. Atoms
+-- have no ordering CHR-side; strings do.
 module YCHR.Internal.TypeCheck.Encode
   ( -- * Encoding
     Encoded (..),
@@ -313,8 +320,23 @@ expr (D.HostExpr f args) = ast "host_e" [atomTerm f, exprs args]
 -- Type declarations
 -- ---------------------------------------------------------------------------
 
+-- | A source type expression. Function types are the one shape that is
+-- normalized rather than transcribed: @fun(A, B) -> C@ parses as
+-- @TypeCon \"->\" [TypeCon \"fun\" [A, B], C]@, and every consumer —
+-- @encodeTypeExpr@, @validateFieldType@, @funShape@ — re-recognizes
+-- that spelling before doing anything with it. Recognizing it once,
+-- here, means the CHR side never has to compare against the bare atoms
+-- @'->'@ and @fun@: it matches a constructor instead, which is both
+-- clearer and immune to a checker-internal declaration happening to
+-- share one of those names.
+--
+-- Only the exact two-level shape is a function type. Anything else
+-- headed by @->@ or @fun@ is an ordinary type reference and stays a
+-- 'tconx', exactly as the Haskell consumers treat it.
 typeExpr :: TypeExpr -> Term
-typeExpr (TypeVar v) = ast "tvar" [atomTerm v]
+typeExpr (TypeVar v) = ast "tvar" [TextTerm v]
+typeExpr (TypeCon (Unqualified "->") [TypeCon (Unqualified "fun") argTys, retTy]) =
+  ast "tfunx" [listTerm (map typeExpr argTys), typeExpr retTy]
 typeExpr (TypeCon n args) = ast "tconx" [nameTerm n, listTerm (map typeExpr args)]
 
 typeDef :: TypeDefinition -> Term
@@ -322,7 +344,7 @@ typeDef td =
   ast
     "type_def"
     [ nameTerm td.name,
-      listTerm (map atomTerm td.typeVars),
+      listTerm (map TextTerm td.typeVars),
       typeKind td.kind,
       encodeSourceLoc td.loc
     ]

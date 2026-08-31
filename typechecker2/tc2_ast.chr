@@ -23,7 +23,10 @@
 %     representation of an atom is not `string`.
 %
 %   * Source-level *variable* names are atoms too, under the same
-%     `any`.
+%     `any`. Type-*parameter* names are the exception: they are
+%     strings, because the checker allocates one solver variable per
+%     distinct parameter of a declaration in ascending name order and
+%     atoms have no ordering.
 %
 %   * Constructors carry a suffix (`_e` for expressions, `_t` for the
 %     type-expression forms) wherever the unsuffixed name would collide
@@ -69,11 +72,18 @@
 % A source-level type expression, `YCHR.Internal.Types.TypeExpr`. This
 % is the *syntax* of a type, not the solver's `ty`: a `tvar` is still a
 % named source variable here, and turning it into a fresh flexible or
-% rigid solver variable is a job for the checking rules. `tconx` (rather
-% than `tcon`) so that a module importing both this and the solver's
-% type representation can tell them apart.
-:- chr_type ty_expr ---> tvar(any)
-                       ; tconx(any, list(ty_expr)).
+% rigid solver variable is a job for the checking rules. `tconx` and
+% `tfunx` (rather than `tcon` and `fun`) so that a module importing
+% both this and the solver's type representation can tell them apart.
+%
+% `tfunx` is the one place the encoding normalizes rather than
+% transcribes: Haskell spells a function type as the two-level
+% application `'->'(fun(A, B), C)`, which every consumer re-recognizes
+% before using. The encoder recognizes it once, so nothing here has to
+% compare against the bare atoms `'->'` and `fun`.
+:- chr_type ty_expr ---> tvar(string)
+                       ; tconx(any, list(ty_expr))
+                       ; tfunx(list(ty_expr), ty_expr).
 
 % A post-HNF head or parameter argument: `YCHR.Internal.Types.HeadArg`.
 % The desugarer guarantees these are the only two shapes.
@@ -173,7 +183,7 @@
 
 % A type declaration, `YCHR.Internal.Types.TypeDefinition`: name, type
 % parameter names, kind, and location.
-:- chr_type type_def ---> type_def(any, list(any), type_kind, loc).
+:- chr_type type_def ---> type_def(any, list(string), type_kind, loc).
 
 % The key of the per-constraint declaration maps,
 % `YCHR.Internal.Types.ConstraintKey`. Constraints are

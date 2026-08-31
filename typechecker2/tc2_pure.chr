@@ -12,7 +12,7 @@
 % as multisets, so the only freedom is the order in which the lists are
 % concatenated.
 :- module('$tc2_pure', [
-    fun program_errors/1
+    fun program_errors/2
 ]).
 
 :- use_module('$tc2_ast').
@@ -23,10 +23,13 @@
 :- use_module(library(meta)).
 :- use_module(library(pairs)).
 
-% Every declaration-level diagnostic of one program.
-:- function program_errors(program) -> list(error).
-program_errors(program(Rules, Funs, _, _, Tds)) ->
-    all_errors(build_con_env(Tds), Rules, Funs, Tds).
+% Every declaration-level diagnostic of one program. The constructor
+% environment is passed in rather than built here: the checking walk
+% needs the same one, and building it twice is the expensive half of
+% this module.
+:- function program_errors(con_env, program) -> list(error).
+program_errors(Env, program(Rules, Funs, _, _, Tds)) ->
+    all_errors(Env, Rules, Funs, Tds).
 
 % Units are numbered by position: rule `i` is unit `i`, and the
 % equations of the plain functions continue from there. The numbering
@@ -73,15 +76,11 @@ validate_field(Td, _, tvar(V), _) | member(V, type_def_vars(Td)) -> [].
 validate_field(Td, Dc, tvar(V), _) ->
     [decl_error(Td, unbound_type_var,
                 unbound_type_var_d(type_def_name(Td), con_name(Dc), V))].
-% A function type: `fun(A, B) -> C` parses as `'->'(fun(A, B), C)`, and
-% neither head names a declared type, so only the components are
-% validated. Mirrors the same special case in `validateFieldType`. The
-% two functors are tested in the guard rather than matched literally,
-% because a bare `'->'` or `'fun'` in a pattern is an undeclared
-% constructor as far as the checker of *this* file is concerned; the
-% general `tconx` equation below picks up whatever the guard rejects.
-validate_field(Td, Dc, tconx(Arrow, [tconx(Fun, ArgTys), RetTy]), All)
-  | Arrow == quote('->'), Fun == quote('fun') ->
+% A function type names no declared type at either level, so only the
+% components are validated. Mirrors the same special case in
+% `validateFieldType`; the encoder has already recognized the
+% `'->'(fun(...), Ret)` spelling and emitted `tfunx`.
+validate_field(Td, Dc, tfunx(ArgTys, RetTy), All) ->
     validate_fields(Td, Dc, append(ArgTys, [RetTy]), All).
 validate_field(Td, Dc, tconx(N, Args), All) ->
     append(type_ref_errors(Td, Dc, N, Args, All),
@@ -251,10 +250,6 @@ rule_arity_errors(Env,
                   Unit) ->
     append(arity_diags(Unit, rule_label(Name), GAnn, GLoc, guards_arity(Env, Guards)),
            arity_diags(Unit, rule_label(Name), BAnn, BLoc, body_goals_arity(Env, Body))).
-
-:- function rule_label(maybe(string)) -> diag_label.
-rule_label(nothing) -> label_none.
-rule_label(just(N)) -> label_rule(N).
 
 % A class function's equations are checked in throwaway per-signature
 % sessions whose diagnostics are discarded, so the old checker collects

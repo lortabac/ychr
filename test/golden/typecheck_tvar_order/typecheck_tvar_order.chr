@@ -1,0 +1,20 @@
+:- module(typecheck_tvar_order, [swap/2, out/2]).
+:- use_module(library(prelude)).
+
+% A polymorphic constraint whose type parameters are *not* spelled in
+% alphabetical order.
+%
+% A rule head is an implementation site, so `swap`'s parameters are
+% allocated as fresh rigid identities — one per distinct name, in the
+% order `Set.toList . Set.fromList` produces, which is ascending. `A`
+% is therefore `T#0` and `B` is `T#1`, whatever order the declaration
+% writes them in. The two positions have unrelated rigid types, so
+% `X = Y` is an inconsistency, and the message spells both ids:
+% `'T#1'` (the type of `X`, declared `B`) against `'T#0'`.
+%
+% Every other multi-parameter declaration in the corpus already lists
+% its parameters ascending, so allocating in first-occurrence order
+% instead passes the whole suite while swapping the two ids here.
+:- chr_constraint swap(B, A), out(B, A).
+
+r @ swap(X, Y) <=> out(X, Y), X = Y.

@@ -21,9 +21,19 @@
 :- module('$tc2_env', [
     type(con_info/0),
     type(con_env/0),
+    type(amb_key/0),
+    type(tc_env/0),
     fun build_con_env/1,
+    fun build_tc_env/1,
+    fun env_cons/1,
+    fun env_constraint_types/2,
+    fun env_constraint_bounds/2,
+    fun env_function_bounds/2,
+    fun env_function_sigs/2,
     fun lookup_con/2,
     fun canonicalize_con/2,
+    fun known_con_with_arity/3,
+    fun parent_type_arity/2,
     fun con_name/1,
     fun con_args/1,
     fun con_arity/1,
@@ -152,7 +162,7 @@ type_cons(type_def(_, _, opaque, _)) -> [].
 :- function type_def_name(type_def) -> any.
 type_def_name(type_def(N, _, _, _)) -> N.
 
-:- function type_def_vars(type_def) -> list(any).
+:- function type_def_vars(type_def) -> list(string).
 type_def_vars(type_def(_, Vars, _, _)) -> Vars.
 
 :- function type_def_arity(type_def) -> int.
@@ -160,6 +170,129 @@ type_def_arity(Td) -> length(type_def_vars(Td)).
 
 :- function type_def_loc(type_def) -> loc.
 type_def_loc(type_def(_, _, _, L)) -> L.
+
+% --- Use-site lookups over the constructor environment ---------------
+
+% True when `Name` is a known data constructor declared at exactly
+% `UseArity`. Ports `knownConstructorWithArity`: a wrong-arity use is
+% diagnosed by the arity walk of `tc2_pure.chr`, and gating the
+% `check_constructor_use` emission on this is what keeps a second,
+% spurious inconsistency off the same site.
+:- function known_con_with_arity(con_env, any, int) -> bool.
+known_con_with_arity(Env, Name, UseArity) ->
+    con_arity_matches(UseArity, lookup_con(Env, Name)).
+
+:- function con_arity_matches(int, maybe(con_info)) -> bool.
+con_arity_matches(_, nothing) -> false.
+con_arity_matches(UseArity, just(Info)) -> con_arity(Info) == UseArity.
+
+% Number of type parameters of the type a data constructor belongs to.
+% Zero for an unknown constructor, whose callers gate on
+% `known_con_with_arity` anyway. Ports `parentTypeArity`.
+:- function parent_type_arity(con_env, any) -> int.
+parent_type_arity(Env, Name) -> con_info_parent_arity(lookup_con(Env, Name)).
+
+:- function con_info_parent_arity(maybe(con_info)) -> int.
+con_info_parent_arity(nothing) -> 0.
+con_info_parent_arity(just(con_info(Td, _))) -> type_def_arity(Td).
+
+% --- The whole checking environment ---------------------------------
+%
+% Ports `TypeCheckEnv` (TypeCheck.hs). Everything in it is derived from
+% the encoded program and immutable for the whole check, so it is built
+% once and passed down.
+
+% Key of the ambient-signature and function-bounds tables: functions are
+% arity-overloadable, so a bound naming `g/1` must not capture calls to
+% `g/2`. Ports `AmbientKey`.
+:- chr_type amb_key ---> amb_key(any, int).
+
+% The constructor environment, the declared argument types and bounds of
+% every constraint, the bounds of every bounded function, and the
+% declared signatures of every function.
+%
+% The last two mirror `functionBoundsEnv` and `functionSigsEnv`: bounds
+% are keyed by name *and* arity, while signatures are keyed by name
+% alone with every arity mixed together — which is what the CHR side's
+% `function_sig` / `function_sigs` facts see, and what a bound's
+% candidate list is assembled from.
+:- chr_type tc_env ---> tc_env(con_env,
+                               list(pair(con_key, list(ty_expr))),
+                               list(pair(con_key, list(bound_sig))),
+                               list(pair(amb_key, list(bound_sig))),
+                               list(pair(any, list(fun_sig)))).
+
+:- function build_tc_env(program) -> tc_env.
+build_tc_env(program(_, Funs, ConTypes, ConBounds, Tds)) ->
+    tc_env(build_con_env(Tds), ConTypes, ConBounds,
+           function_bounds_env(Funs), function_sigs_env(Funs)).
+
+:- function env_cons(tc_env) -> con_env.
+env_cons(tc_env(Cons, _, _, _, _)) -> Cons.
+
+% The declared argument types of a constraint, or `[]` for one with no
+% declaration. Mirrors `Map.findWithDefault []`.
+:- function env_constraint_types(tc_env, con_key) -> list(ty_expr).
+env_constraint_types(tc_env(_, Types, _, _, _), Key) ->
+    from_maybe([], assoc_get(Key, Types)).
+
+:- function env_constraint_bounds(tc_env, con_key) -> list(bound_sig).
+env_constraint_bounds(tc_env(_, _, Bounds, _, _), Key) ->
+    from_maybe([], assoc_get(Key, Bounds)).
+
+:- function env_function_bounds(tc_env, amb_key) -> list(bound_sig).
+env_function_bounds(tc_env(_, _, _, Bounds, _), Key) ->
+    from_maybe([], assoc_get(Key, Bounds)).
+
+:- function env_function_sigs(tc_env, any) -> list(fun_sig).
+env_function_sigs(tc_env(_, _, _, _, Sigs), Name) ->
+    from_maybe([], assoc_get(Name, Sigs)).
+
+% Only bounded functions have an entry, matching the Haskell's
+% `not (null f.requiring)` filter. The lookup is first-wins where
+% `Map.fromList` is last-wins; the two can only differ if one
+% `(name, arity)` were declared twice, which `Resolve` groups away
+% before the checker sees it.
+:- function function_bounds_env(list(fun_def)) -> list(pair(amb_key, list(bound_sig))).
+function_bounds_env([]) -> [].
+function_bounds_env([fun_def(_, _, _, [], _)|Fs]) -> function_bounds_env(Fs).
+function_bounds_env([fun_def(N, A, _, Bs, _)|Fs]) ->
+    [kv(amb_key(N, A), Bs) | function_bounds_env(Fs)].
+
+% Every function's *effective* signatures, keyed by name with the
+% arities mixed. An untyped function contributes the all-`any`
+% signature it is checked as (spec §Defaults). Entries for one name
+% accumulate in program order, as `Map.fromListWith (flip (++))` does.
+:- function function_sigs_env(list(fun_def)) -> list(pair(any, list(fun_sig))).
+function_sigs_env(Fs) -> function_sigs_acc(Fs, []).
+
+:- function function_sigs_acc(list(fun_def), list(pair(any, list(fun_sig))))
+    -> list(pair(any, list(fun_sig))).
+function_sigs_acc([], Acc) -> Acc.
+function_sigs_acc([F|Fs], Acc) ->
+    function_sigs_acc(Fs, push_sigs(fun_def_name(F), effective_sigs(F), Acc)).
+
+:- function push_sigs(any, list(fun_sig), list(pair(any, list(fun_sig))))
+    -> list(pair(any, list(fun_sig))).
+push_sigs(N, Sigs, []) -> [kv(N, Sigs)].
+push_sigs(N, Sigs, [kv(K, Old)|Rest]) | K == N -> [kv(K, append(Old, Sigs))|Rest].
+push_sigs(N, Sigs, [P|Rest]) -> [P|push_sigs(N, Sigs, Rest)].
+
+:- function fun_def_name(fun_def) -> any.
+fun_def_name(fun_def(N, _, _, _, _)) -> N.
+
+:- function effective_sigs(fun_def) -> list(fun_sig).
+effective_sigs(fun_def(_, A, [], _, _)) -> [all_any_sig(A)].
+effective_sigs(fun_def(_, _, Sigs, _, _)) -> Sigs.
+
+% The signature an untyped declaration is checked as: every argument
+% and the result `any`, spelled as the encoder spells the `any` type.
+:- function all_any_sig(int) -> fun_sig.
+all_any_sig(A) -> fun_sig(any_types(A), tconx(quote(any), [])).
+
+:- function any_types(int) -> list(ty_expr).
+any_types(N) | N =< 0 -> [].
+any_types(N) -> [tconx(quote(any), []) | any_types(N - 1)].
 
 % --- The (name, arity)-keyed type table -----------------------------
 

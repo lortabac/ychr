@@ -1,0 +1,23 @@
+:- module(typecheck_bounds_multi, [c/3, d/3]).
+:- use_module(library(prelude)).
+
+% Every other `requiring` clause in the corpus carries exactly ONE
+% bound, which leaves both merge arms of the ambient/candidate
+% assembly unexercised: dropping the accumulated entry instead of
+% appending to it passes the whole suite.
+:- function (g(string) -> string).
+g(X) -> X.
+
+:- function (k(string) -> string).
+k(X) -> X.
+
+% Two bounds with DIFFERENT names: the ambient table gains two keys
+% and the bound-candidate list two entries, so a lookup must skip
+% past the first.
+:- chr_constraint c(T, U, string) requiring (g(T) -> T), (k(U) -> U).
+c(X, Y, R) <=> R = g(X), _W is k(Y).
+
+% Two bounds with the SAME name and arity: the two signatures must
+% merge into one candidate entry rather than replace each other.
+:- chr_constraint d(T, U, string) requiring (g(T) -> T), (g(U) -> U).
+d(X, Y, R) <=> R = g(X), _W is g(Y).

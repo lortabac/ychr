@@ -1,0 +1,1 @@
+R = typecheck_struct_ctor_field:box(typecheck_struct_ctor_field:dbl("a"))

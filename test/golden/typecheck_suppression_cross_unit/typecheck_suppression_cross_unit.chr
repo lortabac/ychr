@@ -1,0 +1,14 @@
+% Per-unit warning suppression is per unit, not per program.
+%
+% `bad` reports an inconsistency; `dead` is merely dead. The second
+% rule's inaccessible-branch warning survives the first rule's error,
+% because suppression is keyed on the checking unit.
+:- module(typecheck_suppression_cross_unit, []).
+:- use_module(library(prelude)).
+
+:- chr_type color ---> red ; green ; blue.
+:- chr_constraint tag(color, int), other(color, int).
+
+bad @ other(X, R) <=> R = X.
+
+dead @ tag(X, R) <=> integer(X) | R = 1.

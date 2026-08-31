@@ -1,0 +1,1039 @@
+% The checking walk: declarations, then rules.
+%
+% Ports the parts of `src/YCHR/Internal/TypeCheck.hs` that decide *what*
+% to ask the solver — `tellConstraintSigs` / `tellFunctionSigs` /
+% `tellConSigs` for the declarations, and `checkRule` down through
+% `typeOfExpr` for the rules. The old driver is a Haskell walk over the
+% desugared AST that tells `check_*` constraints into a session; this is
+% the same walk expressed as CHR rules over the encoded AST, telling the
+% same constraints into the same solver (`tc2_solver.chr`).
+%
+% Why rules and not functions: a function can neither tell a constraint
+% nor make a fresh logical variable, and the walk does both at nearly
+% every node. Everything that needs neither — the environment lookups,
+% the source-type encoding, the assoc-list bookkeeping — stays a pure
+% function, in this file or in `tc2_env.chr` / `tc2_skel.chr`.
+%
+% Function equations are not walked yet: they are the next milestone.
+% Their *declarations* are told here, because rule bodies call them.
+:- module('$tc2_walk', [
+    walk_program/2,
+    tell_decls/2
+]).
+
+:- use_module('$tc2_ast').
+:- use_module('$tc2_diag').
+:- use_module('$tc2_env').
+:- use_module('$tc2_skel').
+:- use_module('$tc2_solver').
+:- use_module(library(lists)).
+:- use_module(library(maybe)).
+:- use_module(library(pairs)).
+
+% Everything a use site needs to know about the scope it sits in.
+% Mirrors `CheckCtx`: the unit's variable slots, the ambient signatures
+% its enclosing bounded declarations contribute, and the diagnostic
+% context its emissions are attributed to. The program-wide environment
+% rides along so that a walker constraint takes one argument instead of
+% two.
+:- chr_type scope ---> scope(tc_env,
+                             list(pair(any, ty)),
+                             list(pair(amb_key, list(sig_t(list(ty), ty)))),
+                             ctx).
+
+% Which of the two expression-typing modes a constructor application's
+% fields are recursed into with. The Haskell parameterizes
+% `typeOfCtorWith` by the typing function; a CHR constraint cannot take
+% one, so the choice is a tag.
+:- chr_type ctor_mode ---> mode_eval ; mode_struct.
+
+% What a `guard_match` leaves for the `guard_getarg`s that read the same
+% term: the canonicalized constructor name, and one slot per field at
+% the instantiation the match determined. Reading a field type out of a
+% slot rather than re-deriving it from the declaration is what makes
+% extraction work at a rigid scrutinee. The slot list is empty when the
+% match was not emitted at all (an undeclared constructor, or one used
+% at the wrong arity), which sends the following extractions down the
+% declaration path. Mirrors `MatchState`.
+:- chr_type match_state ---> match_state(any, list(ty)).
+
+:- function scope_env(scope) -> tc_env.
+scope_env(scope(Env, _, _, _)) -> Env.
+
+:- function scope_cons(scope) -> con_env.
+scope_cons(S) -> env_cons(scope_env(S)).
+
+:- function scope_ctx(scope) -> ctx.
+scope_ctx(scope(_, _, _, C)) -> C.
+
+% A source variable's pre-allocated type slot. `collect_vars_rule` walks
+% the same nodes this walk visits, so every variable has one; a miss
+% would be a collector bug, and typing the variable `any` is the
+% disposition that reports the least about it. (The Haskell `error`s
+% instead. Nothing in this language can, so a collector omission is a
+% silently *missing* diagnostic here where it is a crash there — the
+% differential harness is what would catch it.)
+%
+% The lookup is linear, so a unit's checking cost is quadratic in its
+% distinct variables; see the note in `tc2_skel.chr`'s header.
+:- function scope_var_ty(scope, any) -> ty.
+scope_var_ty(scope(_, Vars, _, _), V) -> slot_or_any(assoc_get(V, Vars)).
+
+:- function slot_or_any(maybe(ty)) -> ty.
+slot_or_any(just(T)) -> T.
+slot_or_any(nothing) -> ty_any.
+
+% Lambda parameters shadow same-named enclosing variables, so the new
+% bindings go in front: `assoc_get` stops at the first match, which is
+% the left-biased union the Haskell takes.
+:- function scope_shadow(scope, list(pair(any, ty))) -> scope.
+scope_shadow(scope(Env, Vars, Amb, C), New) -> scope(Env, append(New, Vars), Amb, C).
+
+% The ambient signatures visible for one `(name, arity)` in this scope.
+:- function scope_ambient(scope, amb_key) -> list(sig_t(list(ty), ty)).
+scope_ambient(scope(_, _, Amb, _), Key) -> from_maybe([], assoc_get(Key, Amb)).
+
+% ---------------------------------------------------------------------
+% Source types to solver types
+% ---------------------------------------------------------------------
+%
+% Ports `encodeTypeExpr`. A `tvar` resolves through the caller's map,
+% which decides whether the declaration's type parameters are flexible
+% (a use site, where `copy_term` freshens them again anyway) or rigid
+% (an implementation site). The base types are recognized by their bare
+% names applied to no arguments, exactly as the Haskell recognizes
+% `TypeCon (Unqualified "int") []`: a qualified `m:int` mangles to
+% `m__int` and correctly is not the built-in, and `int(X)` is an
+% ordinary type reference.
+
+:- function encode_ty(list(pair(string, ty)), ty_expr) -> ty.
+encode_ty(TVars, tvar(V)) -> from_maybe(ty_any, assoc_get(V, TVars)).
+encode_ty(_, tconx(N, [])) | N == quote(int) -> ty_int.
+encode_ty(_, tconx(N, [])) | N == quote(float) -> ty_float.
+encode_ty(_, tconx(N, [])) | N == quote(string) -> ty_string.
+encode_ty(_, tconx(N, [])) | N == quote(any) -> ty_any.
+encode_ty(TVars, tconx(N, Args)) -> tcon(N, encode_tys(TVars, Args)).
+encode_ty(TVars, tfunx(Args, Ret)) ->
+    fun(encode_tys(TVars, Args), encode_ty(TVars, Ret)).
+
+:- function encode_tys(list(pair(string, ty)), list(ty_expr)) -> list(ty).
+encode_tys(_, []) -> [].
+encode_tys(TVars, [T|Ts]) -> [encode_ty(TVars, T) | encode_tys(TVars, Ts)].
+
+% One `nbound` per bound of a declaration, against the declaration's
+% shared type-variable map — which is what lets a single `copy_term` at
+% the use site freshen the signature and its bounds consistently.
+% Ports `encodeNamedBound`.
+:- function encode_bounds(list(pair(string, ty)), list(bound_sig)) -> list(bound_named).
+encode_bounds(_, []) -> [].
+encode_bounds(TVars, [bound_sig(N, _, Args, Ret, _)|Bs]) ->
+    [nbound(N, encode_tys(TVars, Args), encode_ty(TVars, Ret))
+     | encode_bounds(TVars, Bs)].
+
+% --- Type variables of a declaration --------------------------------
+
+:- function collect_ty_vars(list(ty_expr)) -> list(string).
+collect_ty_vars([]) -> [].
+collect_ty_vars([T|Ts]) -> append(collect_ty_vars_expr(T), collect_ty_vars(Ts)).
+
+:- function collect_ty_vars_expr(ty_expr) -> list(string).
+collect_ty_vars_expr(tvar(V)) -> [V].
+collect_ty_vars_expr(tconx(_, Args)) -> collect_ty_vars(Args).
+collect_ty_vars_expr(tfunx(Args, Ret)) ->
+    append(collect_ty_vars(Args), collect_ty_vars_expr(Ret)).
+
+:- function bound_sigs_vars(list(bound_sig)) -> list(string).
+bound_sigs_vars([]) -> [].
+bound_sigs_vars([bound_sig(_, _, Args, Ret, _)|Bs]) ->
+    append(append(collect_ty_vars(Args), collect_ty_vars_expr(Ret)),
+           bound_sigs_vars(Bs)).
+
+% The distinct type-variable names of a declaration, ascending.
+%
+% The order is load-bearing, not cosmetic: a rigid type variable's
+% synthetic id is user-visible (`T#0` in an inconsistency message), and
+% the old driver allocates one per name in the order
+% `Set.toList . Set.fromList` produces. Flexible allocation does not
+% care, but it goes through the same sort so there is one rule to
+% remember.
+:- function sort_unique_tvars(list(string)) -> list(string).
+sort_unique_tvars([]) -> [].
+sort_unique_tvars([V|Vs]) -> insert_tvar(V, sort_unique_tvars(Vs)).
+
+:- function insert_tvar(string, list(string)) -> list(string).
+insert_tvar(V, []) -> [V].
+insert_tvar(V, [W|Ws]) | V == W -> [W|Ws].
+insert_tvar(V, [W|Ws]) | V < W -> [V, W|Ws].
+insert_tvar(V, [W|Ws]) -> [W|insert_tvar(V, Ws)].
+
+% The declaration's parameters in *declaration* order, as the parent
+% type of a constructor signature spells them. Ports `encodeTCon`.
+:- function tvar_slots(list(string), list(pair(string, ty))) -> list(ty).
+tvar_slots([], _) -> [].
+tvar_slots([V|Vs], TVars) ->
+    [from_maybe(ty_any, assoc_get(V, TVars)) | tvar_slots(Vs, TVars)].
+
+:- function all_any_slots(int) -> list(ty).
+all_any_slots(N) | N =< 0 -> [].
+all_any_slots(N) -> [ty_any | all_any_slots(N - 1)].
+
+% ---------------------------------------------------------------------
+% Allocation
+% ---------------------------------------------------------------------
+
+:- chr_constraint
+    alloc_flex_tvars(list(string), list(pair(string, ty))),
+    alloc_rigid_tvars(list(string), list(pair(string, ty))),
+    decl_rigid_supply(int),
+    make_decl_rigid(ty),
+    make_decl_rigids(int, list(ty)),
+    fresh_slots(int, list(ty)),
+    encode_one_sig(fun_sig, sig_t(list(ty), ty)),
+    encode_sigs(list(fun_sig), list(sig_t(list(ty), ty))).
+
+% A flexible slot is just an unbound variable, so there is nothing to
+% build: the pair's value stays as it was created.
+alloc_flex_tvars_nil @
+    alloc_flex_tvars([], Out) <=> Out = [].
+
+alloc_flex_tvars_cons @
+    alloc_flex_tvars([V|Vs], Out) <=>
+    alloc_flex_tvars(Vs, Rest),
+    Out = [kv(V, _Slot) | Rest].
+
+% Rigids are allocated head-first so the ids ascend with the (sorted)
+% name list, as the driver's `mapM` over `Set.toList` does.
+alloc_rigid_tvars_nil @
+    alloc_rigid_tvars([], Out) <=> Out = [].
+
+alloc_rigid_tvars_cons @
+    alloc_rigid_tvars([V|Vs], Out) <=>
+    make_decl_rigid(T),
+    alloc_rigid_tvars(Vs, Rest),
+    Out = [kv(V, T) | Rest].
+
+% The declaration-site rigid supply. It counts *up* from 0 while the
+% solver's own `rigid_supply` counts down from -1, so the two ranges
+% cannot collide — and the up-counting range is the one whose ids the
+% old checker's driver hands out, which is why they have to agree
+% number for number.
+%
+% The pin cell is a body-only variable, which is exactly the fresh
+% unbound logical variable `freshRigidTypeVar` allocates with `newVar`.
+make_decl_rigid1 @
+    decl_rigid_supply(N), make_decl_rigid(Out) <=>
+    N1 is N + 1,
+    Out = rigid(_Cell, N),
+    decl_rigid_supply(N1).
+
+make_decl_rigids_done @
+    make_decl_rigids(N, Out) <=> N =< 0 | Out = [].
+
+make_decl_rigids_step @
+    make_decl_rigids(N, Out) <=>
+    make_decl_rigid(B),
+    make_decl_rigids(N - 1, Rest),
+    Out = [B | Rest].
+
+fresh_slots_done @
+    fresh_slots(N, Out) <=> N =< 0 | Out = [].
+
+fresh_slots_step @
+    fresh_slots(N, Out) <=>
+    fresh_slots(N - 1, Rest),
+    Out = [_Slot | Rest].
+
+% One declared signature instantiated at fresh flexible variables, with
+% the variables shared between the arguments and the return type.
+% Ports `encodeFunctionSig`.
+encode_one_sig1 @
+    encode_one_sig(fun_sig(Args, Ret), Out) <=>
+    alloc_flex_tvars(sort_unique_tvars(append(collect_ty_vars(Args),
+                                              collect_ty_vars_expr(Ret))),
+                     TVars),
+    Out is sig(encode_tys(TVars, Args), encode_ty(TVars, Ret)).
+
+encode_sigs_nil @
+    encode_sigs([], Out) <=> Out = [].
+
+encode_sigs_cons @
+    encode_sigs([S|Ss], Out) <=>
+    encode_one_sig(S, Sig),
+    encode_sigs(Ss, Rest),
+    Out = [Sig | Rest].
+
+% ---------------------------------------------------------------------
+% Declaration facts
+% ---------------------------------------------------------------------
+%
+% Ports `tellConstraintSigs`, `tellFunctionSigs` and `tellConSigs`. Each
+% declaration is instantiated once, at fresh *flexible* variables; use
+% sites `copy_term` the stored fact, so nothing a use site does can
+% pollute it.
+
+:- chr_constraint
+    tell_decls(tc_env, program),
+    tell_constraint_sigs(list(pair(con_key, list(ty_expr))),
+                         list(pair(con_key, list(bound_sig)))),
+    tell_constraint_bounds(any, int, list(bound_sig), list(pair(string, ty))),
+    tell_function_decls(list(fun_def)),
+    tell_con_sigs(list(type_def)),
+    tell_td_con_sigs(type_def, list(data_con)).
+
+tell_decls1 @
+    tell_decls(_, program(_, Funs, ConTypes, ConBounds, Tds)) <=>
+    tell_constraint_sigs(ConTypes, ConBounds),
+    tell_function_decls(Funs),
+    tell_con_sigs(Tds).
+
+tell_constraint_sigs_nil @
+    tell_constraint_sigs([], _) <=> true.
+
+% The argument types and the bounds share one type-variable map, so a
+% single `copy_term` at the use site freshens both consistently.
+tell_constraint_sigs_cons @
+    tell_constraint_sigs([kv(con_key(N, A), ArgTys)|Rest], Bounds) <=>
+    Bs is from_maybe([], assoc_get(con_key(N, A), Bounds)),
+    alloc_flex_tvars(sort_unique_tvars(append(collect_ty_vars(ArgTys),
+                                              bound_sigs_vars(Bs))),
+                     TVars),
+    constraint_sig(N, A, encode_tys(TVars, ArgTys)),
+    tell_constraint_bounds(N, A, Bs, TVars),
+    tell_constraint_sigs(Rest, Bounds).
+
+tell_constraint_bounds_none @
+    tell_constraint_bounds(_, _, [], _) <=> true.
+
+tell_constraint_bounds_some @
+    tell_constraint_bounds(N, A, Bs, TVars) <=>
+    constraint_bounds(N, A, encode_bounds(TVars, Bs)).
+
+tell_function_decls_nil @
+    tell_function_decls([]) <=> true.
+
+% No annotations: the all-`any` signature, which mentions no type
+% variables. A bounded function always has one signature (the resolver
+% guarantees it), so a missing one implies no bounds.
+tell_function_decls_untyped @
+    tell_function_decls([fun_def(N, A, [], _, _)|Fs]) <=>
+    function_sig(N, A, sig(all_any_slots(A), ty_any)),
+    tell_function_decls(Fs).
+
+tell_function_decls_bounded @
+    tell_function_decls([fun_def(N, A, [fun_sig(Args, Ret)], [B|Bs], _)|Fs]) <=>
+    alloc_flex_tvars(sort_unique_tvars(append(append(collect_ty_vars(Args),
+                                                     collect_ty_vars_expr(Ret)),
+                                              bound_sigs_vars([B|Bs]))),
+                     TVars),
+    function_sig(N, A, sig(encode_tys(TVars, Args), encode_ty(TVars, Ret))),
+    function_bounds(N, A, encode_bounds(TVars, [B|Bs])),
+    tell_function_decls(Fs).
+
+tell_function_decls_single @
+    tell_function_decls([fun_def(N, A, [S], _, _)|Fs]) <=>
+    encode_one_sig(S, Sig),
+    function_sig(N, A, Sig),
+    tell_function_decls(Fs).
+
+% More than one declared signature is a class function: the candidates
+% go to the residual overload resolution, each instantiated separately.
+tell_function_decls_multi @
+    tell_function_decls([fun_def(N, A, Sigs, _, _)|Fs]) <=>
+    encode_sigs(Sigs, Encoded),
+    function_sigs(N, A, Encoded),
+    tell_function_decls(Fs).
+
+tell_con_sigs_nil @
+    tell_con_sigs([]) <=> true.
+
+tell_con_sigs_cons @
+    tell_con_sigs([Td|Tds]) <=>
+    tell_td_con_sigs(Td, type_cons(Td)),
+    tell_con_sigs(Tds).
+
+tell_td_con_sigs_nil @
+    tell_td_con_sigs(_, []) <=> true.
+
+% Parent type and field types share the declaration's type variables, so
+% `copy_term`ing the signature at a use site keeps the parent/field
+% sharing that makes `list(T)` relate its element type to `[X|Xs]`.
+tell_td_con_sigs_cons @
+    tell_td_con_sigs(type_def(TN, Vars, Kind, Loc), [data_con(CN, Fields)|Dcs]) <=>
+    alloc_flex_tvars(sort_unique_tvars(Vars), TVars),
+    con_sig(CN, sig(tcon(TN, tvar_slots(Vars, TVars)),
+                    encode_tys(TVars, Fields))),
+    tell_td_con_sigs(type_def(TN, Vars, Kind, Loc), Dcs).
+
+% ---------------------------------------------------------------------
+% Rules
+% ---------------------------------------------------------------------
+
+:- chr_constraint
+    walk_program(tc_env, program),
+    walk_rules(tc_env, list(rule), int),
+    walk_rule(tc_env, rule, int).
+
+% Rules are numbered from zero, and `tc2_pure.chr` numbers the arity
+% errors it reports the same way. The two numberings have to agree: a
+% rule's arity error and its solver errors must land in one unit, or
+% warning suppression drops the wrong warnings.
+walk_program1 @
+    walk_program(Env, program(Rules, _, _, _, _)) <=>
+    decl_rigid_supply(0),
+    walk_rules(Env, Rules, 0).
+
+walk_rules_nil @
+    walk_rules(_, [], _) <=> true.
+
+walk_rules_cons @
+    walk_rules(Env, [R|Rs], Unit) <=>
+    walk_rule(Env, R, Unit),
+    walk_rules(Env, Rs, Unit + 1).
+
+% A rule is one checking unit: head, guards and body share a unit id
+% even though each section is attributed to its own source annotation.
+% HNF-synthetic guards are attributed to the *head*, where the patterns
+% they were derived from are written — a rule with no user guard has no
+% guard text at all. Ports `checkRule`.
+walk_rule1 @
+    walk_rule(Env,
+              rule(Name,
+                   ann(HAnn, HLoc, rule_head(Kept, Removed)),
+                   ann(GAnn, GLoc, Guards),
+                   ann(BAnn, BLoc, Body)),
+              Unit) <=>
+    HeadCons is append(Kept, Removed),
+    Label is rule_label(Name),
+    HeadCtx = ctx(Unit, origin_ann(HAnn), Label, HLoc),
+    alloc_var_types(collect_vars_rule(HeadCons, Guards, Body),
+                    head_var_skeletons(Env, HeadCons, Guards),
+                    VarTypes),
+    head_cons_check(scope(Env, VarTypes, [], HeadCtx), HeadCons, [], Amb),
+    check_guards(scope(Env, VarTypes, Amb, ctx(Unit, origin_ann(GAnn), Label, GLoc)),
+                 scope(Env, VarTypes, Amb, HeadCtx),
+                 Guards, []),
+    check_body_goals(scope(Env, VarTypes, Amb, ctx(Unit, origin_ann(BAnn), Label, BLoc)),
+                     Body).
+
+% --- Head occurrences -----------------------------------------------
+
+:- chr_constraint
+    head_cons_check(scope, list(head_con),
+                    list(pair(amb_key, list(sig_t(list(ty), ty)))),
+                    list(pair(amb_key, list(sig_t(list(ty), ty))))),
+    head_con_check(scope, head_con,
+                   list(pair(amb_key, list(sig_t(list(ty), ty)))),
+                   list(pair(amb_key, list(sig_t(list(ty), ty))))),
+    type_of_head_args(scope, list(head_arg), list(ty)),
+    unify_zip(list(ty), list(ty), ctx).
+
+head_cons_check_nil @
+    head_cons_check(_, [], Amb, Out) <=> Out = Amb.
+
+head_cons_check_cons @
+    head_cons_check(S, [C|Cs], Amb, Out) <=>
+    head_con_check(S, C, Amb, Amb2),
+    head_cons_check(S, Cs, Amb2, Out).
+
+% A rule-head occurrence is an *implementation site*, not a use site: it
+% allocates the constraint's declared type parameters as fresh **rigid**
+% identities, per occurrence, and types the head's variables through the
+% declared argument types. Rigidity is what makes the body correct for
+% an arbitrary instantiation — the store is a heterogeneous multiset, so
+% two occurrences of one polymorphic constraint may match independently
+% chosen instances. Where matching does force two occurrences to agree,
+% HNF turns the sharing into a `guard_equal`, whose evidence merges the
+% two skolems. Ports `checkHeadConstraint`.
+head_con_check1 @
+    head_con_check(S, head_con(N, Args), AmbIn, Out) <=>
+    DeclTys is env_constraint_types(scope_env(S), con_key(N, length(Args))),
+    Bounds is env_constraint_bounds(scope_env(S), con_key(N, length(Args))),
+    alloc_rigid_tvars(sort_unique_tvars(append(collect_ty_vars(DeclTys),
+                                               bound_sigs_vars(Bounds))),
+                      TVars),
+    type_of_head_args(S, Args, ArgTys),
+    unify_zip(ArgTys, encode_tys(TVars, DeclTys), scope_ctx(S)),
+    Out is add_ambients(AmbIn, Bounds, TVars).
+
+type_of_head_args_nil @
+    type_of_head_args(_, [], Out) <=> Out = [].
+
+type_of_head_args_var @
+    type_of_head_args(S, [head_var(V)|As], Out) <=>
+    type_of_head_args(S, As, Rest),
+    Out is [scope_var_ty(S, V) | Rest].
+
+type_of_head_args_wild @
+    type_of_head_args(S, [head_wild|As], Out) <=>
+    type_of_head_args(S, As, Rest),
+    Out = [_Slot | Rest].
+
+% Source-variable type first, declared type second — the argument order
+% the `tc_unify` rules read. Stops at the shorter list, as `zipWithM_`
+% does.
+unify_zip_nil @
+    unify_zip([], _, _) <=> true.
+
+unify_zip_short @
+    unify_zip(_, [], _) <=> true.
+
+unify_zip_cons @
+    unify_zip([A|As], [D|Ds], Ctx) <=>
+    check_unify(A, D, Ctx),
+    unify_zip(As, Ds, Ctx).
+
+% A rule-head occurrence of a bounded constraint *assumes* its bound:
+% the required signatures enter the scope's ambient table, which every
+% use site in the rule then sees. Their type variables are the
+% occurrence's own rigids, which is what keeps a call that resolves
+% through an ambient signature polymorphic. Ports `emitAmbient`.
+%
+% Entries for one `(name, arity)` accumulate; the order among them is
+% not observable — resolution requires every surviving candidate to be
+% equal after substitution, and bound discharge is an existence check.
+:- function add_ambients(list(pair(amb_key, list(sig_t(list(ty), ty)))),
+                         list(bound_sig),
+                         list(pair(string, ty)))
+    -> list(pair(amb_key, list(sig_t(list(ty), ty)))).
+add_ambients(Acc, [], _) -> Acc.
+add_ambients(Acc, [bound_sig(N, _, Args, Ret, _)|Bs], TVars) ->
+    add_ambients(push_ambient(amb_key(N, length(Args)),
+                              sig(encode_tys(TVars, Args), encode_ty(TVars, Ret)),
+                              Acc),
+                 Bs, TVars).
+
+:- function push_ambient(amb_key, sig_t(list(ty), ty),
+                         list(pair(amb_key, list(sig_t(list(ty), ty)))))
+    -> list(pair(amb_key, list(sig_t(list(ty), ty)))).
+push_ambient(K, Sig, []) -> [kv(K, [Sig])].
+push_ambient(K, Sig, [kv(K2, Sigs)|Rest]) | K2 == K -> [kv(K2, append(Sigs, [Sig]))|Rest].
+push_ambient(K, Sig, [P|Rest]) -> [P|push_ambient(K, Sig, Rest)].
+
+% ---------------------------------------------------------------------
+% Guards
+% ---------------------------------------------------------------------
+%
+% Ports `checkGuards` / `checkGuard`. The list is processed
+% left-to-right, threading the constructor each `guard_match`
+% established into the `guard_getarg`s that read the same term. Keying
+% by operand rather than remembering the most recent match is
+% load-bearing: HNF decomposes a compound depth-first, so a nested
+% pattern's match sits *between* its parent's extractions.
+%
+% The two scopes differ only in what their diagnostics point at: user
+% guard text for `guard_expr`, the head pattern for everything HNF
+% synthesized.
+
+:- chr_constraint
+    check_guards(scope, scope, list(guard), list(pair(any, match_state))),
+    check_guard(scope, scope, guard,
+                list(pair(any, match_state)), list(pair(any, match_state))),
+    check_match(scope, expr, any, int,
+                list(pair(any, match_state)), list(pair(any, match_state))),
+    getarg_scrutinee(scope, any, expr, int, maybe(match_state)),
+    getarg_slot(scope, any, expr, int, maybe(match_state), maybe(ty)),
+    getarg_declared(scope, any, expr, int, any),
+    tell_predicate_evidence(scope, maybe(pair(any, ty))).
+
+check_guards_nil @
+    check_guards(_, _, [], _) <=> true.
+
+check_guards_cons @
+    check_guards(GS, PS, [G|Gs], M) <=>
+    check_guard(GS, PS, G, M, M2),
+    check_guards(GS, PS, Gs, M2).
+
+% An evidence form: ask-equality succeeds only on structurally identical
+% terms, so the two positions agree on their outermost type constructor
+% whenever the guard passes. `eq_unify` carries the second reading too —
+% the two HNF halves of a repeated source variable are one variable, so
+% a still-flexible half binds rather than staying inert. The operands
+% are structural positions and are typed as such; the relation is
+% symmetric, so the source order is kept.
+check_guard_equal @
+    check_guard(_, PS, guard_equal(E1, E2), M, MOut) <=>
+    type_of_expr_struct(PS, E1, T1),
+    type_of_expr_struct(PS, E2, T2),
+    eq_unify(T1, T2, ev_top, scope_ctx(PS)),
+    MOut = M.
+
+check_guard_match_g @
+    check_guard(_, PS, guard_match(Operand, Con, Arity), M, MOut) <=>
+    check_match(PS, Operand, canonicalize_con(scope_cons(PS), Con), Arity, M, MOut).
+
+check_guard_getarg_g @
+    check_guard(_, PS, guard_getarg(V, Operand, Idx), M, MOut) <=>
+    getarg_scrutinee(PS, V, Operand, Idx,
+                     match_state_for(M, guard_operand_var(Operand))),
+    MOut = M.
+
+% The ordinary call check still runs; a type-predicate guard's evidence
+% is extra information, not a replacement.
+check_guard_expr_g @
+    check_guard(GS, _, guard_expr(E), M, MOut) <=>
+    type_of_expr(GS, E, T),
+    check_guard_bool(T, scope_ctx(GS)),
+    tell_predicate_evidence(GS, type_predicate_fact(E)),
+    MOut = M.
+
+% One fresh slot per field of the matched constructor, and one fresh
+% *rigid* per parameter of its parent type. The rigids are used only at
+% a rigid scrutinee, where the match pins the skolem to the parent type
+% at these parameters: the matched value's field types are store-chosen,
+% so nothing downstream may assume more about them than the match
+% proved.
+check_match_known @
+    check_match(PS, Operand, Con, Arity, M, MOut) <=>
+    known_con_with_arity(scope_cons(PS), Con, Arity) |
+    type_of_expr(PS, Operand, OperandTy),
+    fresh_slots(Arity, FieldSlots),
+    make_decl_rigids(parent_type_arity(scope_cons(PS), Con), Betas),
+    check_guard_match(OperandTy, Con, Betas, FieldSlots, scope_ctx(PS)),
+    MOut is record_match(guard_operand_var(Operand), match_state(Con, FieldSlots), M).
+
+% An undeclared constructor, or one at the wrong arity: nothing is
+% emitted, and the empty slot list sends the following extractions down
+% the declaration path.
+check_match_unknown @
+    check_match(_, Operand, Con, _, M, MOut) <=>
+    MOut is record_match(guard_operand_var(Operand), match_state(Con, []), M).
+
+:- function record_match(maybe(any), match_state, list(pair(any, match_state)))
+    -> list(pair(any, match_state)).
+record_match(nothing, _, M) -> M.
+record_match(just(V), MS, M) -> assoc_put(V, MS, M).
+
+:- function match_state_for(list(pair(any, match_state)), maybe(any))
+    -> maybe(match_state).
+match_state_for(_, nothing) -> nothing.
+match_state_for(M, just(V)) -> assoc_get(V, M).
+
+% The scrutinee's match state is looked up once and handed on with the
+% field slot read off it; there is no `let`, so the hand-off is the
+% intermediate constraint.
+getarg_scrutinee1 @
+    getarg_scrutinee(PS, V, Operand, Idx, Scrut) <=>
+    getarg_slot(PS, V, Operand, Idx, Scrut, field_slot_at(Idx, Scrut)).
+
+% The match on this same term already resolved the field's type at the
+% instantiation it determined, so unifying against its slot avoids
+% consulting the scrutinee's type a second time — which is what breaks
+% extraction at a rigid scrutinee.
+getarg_slot_matched @
+    getarg_slot(PS, V, _, _, _, just(Slot)) <=>
+    check_unify(scope_var_ty(PS, V), Slot, scope_ctx(PS)).
+
+getarg_slot_unmatched @
+    getarg_slot(PS, V, Operand, Idx, Scrut, nothing) <=>
+    getarg_declared(PS, V, Operand, Idx, scrutinee_con(V, Scrut)).
+
+% No usable match on this term: resolve the field type from the
+% constructor declaration instead. An index past the declared arity is
+% left alone — the arity walk reports that site already.
+getarg_declared_within @
+    getarg_declared(PS, V, Operand, Idx, Con) <=>
+    within_con_arity(scope_cons(PS), Con, Idx) |
+    type_of_expr(PS, Operand, OperandTy),
+    check_guard_getarg(scope_var_ty(PS, V), OperandTy, Con, Idx, scope_ctx(PS)).
+
+getarg_declared_beyond @
+    getarg_declared(_, _, _, _, _) <=> true.
+
+:- function scrutinee_con(any, maybe(match_state)) -> any.
+scrutinee_con(VarName, nothing) -> VarName.
+scrutinee_con(_, just(match_state(Con, _))) -> Con.
+
+:- function field_slot_at(int, maybe(match_state)) -> maybe(ty).
+field_slot_at(_, nothing) -> nothing.
+field_slot_at(Idx, just(match_state(_, Slots))) -> ty_at(Idx, Slots).
+
+:- function ty_at(int, list(ty)) -> maybe(ty).
+ty_at(I, _) | I < 0 -> nothing.
+ty_at(_, []) -> nothing.
+ty_at(I, [T|_]) | I == 0 -> just(T).
+ty_at(I, [_|Ts]) -> ty_at(I - 1, Ts).
+
+% An unknown constructor is within any arity: nothing is known to
+% contradict, so the extraction goes through as a no-op consistency
+% check.
+:- function within_con_arity(con_env, any, int) -> bool.
+within_con_arity(Env, Con, Idx) -> idx_within(Idx, lookup_con(Env, Con)).
+
+:- function idx_within(int, maybe(con_info)) -> bool.
+idx_within(_, nothing) -> true.
+idx_within(Idx, just(Info)) -> Idx < con_arity(Info).
+
+% The typing fact a type-predicate guard contributes. Only a call of one
+% of the prelude type predicates on a *bare variable* qualifies: the
+% fact is about that variable's slot and the guard's success entails it
+% exactly. `atom/1` is deliberately absent — a nullary constructor
+% inhabits many types — as are `var`/`nonvar`/`ground`, whose success
+% entails boundness rather than a type.
+%
+% This list is **provisional**: it names prelude functions directly,
+% pending the declaration mechanism by which a function declares itself
+% a refinement predicate. Nothing else in the checker keys off function
+% names. Ports `typePredicateGuard`.
+:- function type_predicate_fact(expr) -> maybe(pair(any, ty)).
+type_predicate_fact(call_e(N, [var_e(V)])) | N == quote(prelude:integer) ->
+    just(kv(V, ty_int)).
+type_predicate_fact(call_e(N, [var_e(V)])) | N == quote(prelude:float) ->
+    just(kv(V, ty_float)).
+type_predicate_fact(call_e(N, [var_e(V)])) | N == quote(prelude:string) ->
+    just(kv(V, ty_string)).
+type_predicate_fact(call_e(N, [var_e(V)])) | N == quote(prelude:boolean) ->
+    just(kv(V, tcon(quote(prelude:bool), []))).
+type_predicate_fact(_) -> nothing.
+
+tell_predicate_evidence_none @
+    tell_predicate_evidence(_, nothing) <=> true.
+
+% The fact the guard establishes goes first and the type the position
+% already has second — the order the inaccessible-branch message reads
+% them in. Both are whole types, so the depth starts at `ev_top`.
+tell_predicate_evidence_some @
+    tell_predicate_evidence(S, just(kv(V, Fact))) <=>
+    ev_unify(Fact, scope_var_ty(S, V), ev_top, scope_ctx(S)).
+
+% ---------------------------------------------------------------------
+% Body goals
+% ---------------------------------------------------------------------
+%
+% Ports `checkBodyGoal`. A rule body's variable slots are fixed for the
+% whole body: nothing a goal does replaces them, because nothing narrows
+% `any` and no other state flows left to right.
+
+:- chr_constraint
+    check_body_goals(scope, list(body_goal)),
+    check_body_goal(scope, body_goal),
+    emit_constraint_use(scope, any, list(ty)).
+
+check_body_goals_nil @
+    check_body_goals(_, []) <=> true.
+
+check_body_goals_cons @
+    check_body_goals(S, [G|Gs]) <=>
+    check_body_goal(S, G),
+    check_body_goals(S, Gs).
+
+check_body_true @
+    check_body_goal(_, body_true) <=> true.
+
+% Tell-side constraint arguments are evaluated positions, like every
+% other expression position.
+check_body_tell @
+    check_body_goal(S, body_tell(N, Args)) <=>
+    type_of_exprs(S, Args, ArgTys),
+    emit_constraint_use(S, N, ArgTys).
+
+% `=` is pure structural unification: neither operand is evaluated at
+% run time, so neither is typed by evaluation here.
+check_body_unify @
+    check_body_goal(S, body_unify(E1, E2)) <=>
+    type_of_expr_struct(S, E1, T1),
+    type_of_expr_struct(S, E2, T2),
+    check_unify(T1, T2, scope_ctx(S)).
+
+% The RHS is an evaluated position, and its result meets the left-hand
+% variable's slot through the ordinary meet table. `is` has no special
+% narrowing power over `any`.
+check_body_is @
+    check_body_goal(S, body_is(V, E)) <=>
+    type_of_expr(S, E, T),
+    check_unify(scope_var_ty(S, V), T, scope_ctx(S)).
+
+check_body_call @
+    check_body_goal(S, body_call(N, Args)) <=>
+    type_of_exprs(S, Args, ArgTys),
+    emit_function_call(S, N, ArgTys, _Ret).
+
+check_body_apply @
+    check_body_goal(S, body_apply(F, Args)) <=>
+    type_of_expr(S, F, _),
+    type_of_exprs(S, Args, _).
+
+check_body_host @
+    check_body_goal(S, body_host(_, Args)) <=>
+    type_of_exprs(S, Args, _).
+
+emit_constraint_use1 @
+    emit_constraint_use(S, N, ArgTys) <=>
+    build_bound_cands(S,
+                      env_constraint_bounds(scope_env(S), con_key(N, length(ArgTys))),
+                      Cands),
+    check_constraint_use(N, length(ArgTys), Cands, ArgTys, scope_ctx(S)).
+
+% ---------------------------------------------------------------------
+% Expression typing
+% ---------------------------------------------------------------------
+%
+% Ports `typeOfExpr` and `typeOfExprStructural`. Each `expr`
+% constructor maps to one solver query; the call-versus-constructor
+% split was decided by the resolver, so nothing here re-derives it.
+%
+% An `Out` left unbound *is* the answer for the positions the Haskell
+% gives a `newVar`: a wildcard's type, and the result slot of a call or
+% a constructor application, which the solver then binds.
+
+:- chr_constraint
+    type_of_expr(scope, expr, ty),
+    type_of_exprs(scope, list(expr), list(ty)),
+    type_of_expr_struct(scope, expr, ty),
+    type_of_exprs_struct(scope, list(expr), list(ty)),
+    type_of_exprs_mode(scope, ctor_mode, list(expr), list(ty)),
+    type_of_ctor(scope, ctor_mode, any, list(expr), ty),
+    type_of_ctor_known(scope, ctor_mode, any, list(expr), ty),
+    type_lambda_body(scope, list(expr), ty),
+    alloc_lambda_params(list(head_arg), list(pair(any, ty)),
+                        list(pair(any, ty)), list(ty)),
+    emit_function_call(scope, any, list(ty), ty),
+    emit_call_form(scope, any, int, list(sig_t(list(ty), ty)), list(bcand),
+                   list(ty), ty),
+    emit_function_ref(scope, any, list(ty), ty),
+    build_bound_cands(scope, list(bound_sig), list(bcand)),
+    bound_cand_entries(scope, list(bound_sig), list(bcand), list(bcand)).
+
+type_of_expr_var @
+    type_of_expr(S, var_e(V), Out) <=> Out is scope_var_ty(S, V).
+
+type_of_expr_int @
+    type_of_expr(_, int_e(_), Out) <=> Out = ty_int.
+
+type_of_expr_float @
+    type_of_expr(_, float_e(_), Out) <=> Out = ty_float.
+
+type_of_expr_text @
+    type_of_expr(_, text_e(_), Out) <=> Out = ty_string.
+
+type_of_expr_wild @
+    type_of_expr(_, wild_e, _) <=> true.
+
+type_of_expr_ctor @
+    type_of_expr(S, ctor_e(N, Args), Out) <=>
+    type_of_ctor(S, mode_eval, N, Args, Out).
+
+type_of_expr_call @
+    type_of_expr(S, call_e(N, Args), Out) <=>
+    type_of_exprs(S, Args, ArgTys),
+    emit_function_call(S, N, ArgTys, Out).
+
+type_of_expr_apply @
+    type_of_expr(S, apply_e(F, Args), Out) <=>
+    type_of_expr(S, F, _),
+    type_of_exprs(S, Args, _),
+    Out = ty_any.
+
+type_of_expr_host @
+    type_of_expr(S, host_e(_, Args), Out) <=>
+    type_of_exprs(S, Args, _),
+    Out = ty_any.
+
+type_of_expr_funref @
+    type_of_expr(S, funref_e(N, Arity), Out) <=>
+    fresh_slots(Arity, ArgTys),
+    emit_function_ref(S, N, ArgTys, RetTy),
+    Out = fun(ArgTys, RetTy).
+
+% Lambda parameters shadow same-named enclosing variables: each name
+% gets a fresh flexible slot, so the lambda neither inherits the outer
+% variable's type nor leaks its own back out. A repeated parameter name
+% shares one slot across its positions. The lambda's value type is the
+% type of its trailing expression.
+type_of_expr_lambda @
+    type_of_expr(S, lambda_e(Params, Body), Out) <=>
+    alloc_lambda_params(Params, [], Bindings, ParamTys),
+    type_lambda_body(scope_shadow(S, Bindings), Body, BodyTy),
+    Out = fun(ParamTys, BodyTy).
+
+type_of_exprs_nil @
+    type_of_exprs(_, [], Out) <=> Out = [].
+
+type_of_exprs_cons @
+    type_of_exprs(S, [E|Es], Out) <=>
+    type_of_expr(S, E, T),
+    type_of_exprs(S, Es, Rest),
+    Out = [T | Rest].
+
+% Structural mode: the typing of the operands of `=`. The runtime treats
+% these positions structurally, so the checker must too — a compound
+% whose functor names a declared function is a symbolic term typed
+% `any`, not a call, so no use check is emitted and no warning drawn.
+% Constructor typing still applies, recursing structurally into the
+% fields. Function references and lambdas delegate to the evaluated
+% mode: under `=` they lower to callable values, not dead data.
+type_of_expr_struct_var @
+    type_of_expr_struct(S, var_e(V), Out) <=> Out is scope_var_ty(S, V).
+
+type_of_expr_struct_int @
+    type_of_expr_struct(_, int_e(_), Out) <=> Out = ty_int.
+
+type_of_expr_struct_float @
+    type_of_expr_struct(_, float_e(_), Out) <=> Out = ty_float.
+
+type_of_expr_struct_text @
+    type_of_expr_struct(_, text_e(_), Out) <=> Out = ty_string.
+
+type_of_expr_struct_wild @
+    type_of_expr_struct(_, wild_e, _) <=> true.
+
+type_of_expr_struct_ctor @
+    type_of_expr_struct(S, ctor_e(N, Args), Out) <=>
+    type_of_ctor(S, mode_struct, N, Args, Out).
+
+type_of_expr_struct_call @
+    type_of_expr_struct(S, call_e(_, Args), Out) <=>
+    type_of_exprs_struct(S, Args, _),
+    Out = ty_any.
+
+type_of_expr_struct_apply @
+    type_of_expr_struct(S, apply_e(F, Args), Out) <=>
+    type_of_expr_struct(S, F, _),
+    type_of_exprs_struct(S, Args, _),
+    Out = ty_any.
+
+type_of_expr_struct_host @
+    type_of_expr_struct(S, host_e(_, Args), Out) <=>
+    type_of_exprs_struct(S, Args, _),
+    Out = ty_any.
+
+type_of_expr_struct_funref @
+    type_of_expr_struct(S, funref_e(N, Arity), Out) <=>
+    type_of_expr(S, funref_e(N, Arity), Out).
+
+type_of_expr_struct_lambda @
+    type_of_expr_struct(S, lambda_e(Params, Body), Out) <=>
+    type_of_expr(S, lambda_e(Params, Body), Out).
+
+type_of_exprs_struct_nil @
+    type_of_exprs_struct(_, [], Out) <=> Out = [].
+
+type_of_exprs_struct_cons @
+    type_of_exprs_struct(S, [E|Es], Out) <=>
+    type_of_expr_struct(S, E, T),
+    type_of_exprs_struct(S, Es, Rest),
+    Out = [T | Rest].
+
+type_of_exprs_mode_eval @
+    type_of_exprs_mode(S, mode_eval, Es, Out) <=> type_of_exprs(S, Es, Out).
+
+type_of_exprs_mode_struct @
+    type_of_exprs_mode(S, mode_struct, Es, Out) <=> type_of_exprs_struct(S, Es, Out).
+
+type_of_ctor1 @
+    type_of_ctor(S, Mode, N, Args, Out) <=>
+    type_of_ctor_known(S, Mode, canonicalize_con(scope_cons(S), N), Args, Out).
+
+% A constructor at its declared arity emits the use check; everything
+% else — an unknown name, or a known one at the wrong arity — is typed
+% `any`, with the arguments still walked. Gating on the arity is what
+% keeps a spurious inconsistency off a site the arity walk already
+% reports.
+type_of_ctor_declared @
+    type_of_ctor_known(S, Mode, Con, Args, Out) <=>
+    known_con_with_arity(scope_cons(S), Con, length(Args)) |
+    type_of_exprs_mode(S, Mode, Args, ArgTys),
+    check_constructor_use(Con, ArgTys, Out, scope_ctx(S)).
+
+type_of_ctor_unknown @
+    type_of_ctor_known(S, Mode, _, Args, Out) <=>
+    type_of_exprs_mode(S, Mode, Args, _),
+    Out = ty_any.
+
+type_lambda_body_last @
+    type_lambda_body(S, [E], Out) <=> type_of_expr(S, E, Out).
+
+type_lambda_body_init @
+    type_lambda_body(S, [E|Es], Out) <=>
+    type_of_expr(S, E, _),
+    type_lambda_body(S, Es, Out).
+
+alloc_lambda_params_nil @
+    alloc_lambda_params([], Acc, Bindings, Tys) <=> Bindings = Acc, Tys = [].
+
+alloc_lambda_params_repeat @
+    alloc_lambda_params([head_var(V)|Ps], Acc, Bindings, Tys) <=>
+    assoc_member(V, Acc) |
+    alloc_lambda_params(Ps, Acc, Bindings, Rest),
+    Tys is [slot_or_any(assoc_get(V, Acc)) | Rest].
+
+% The unification comes first so that `T` — a slot that exists only
+% here — is allocated before the recursive call carries it into the
+% accumulator: a variable nested inside a constraint argument is not
+% introduced by the call, only a top-level one is.
+alloc_lambda_params_var @
+    alloc_lambda_params([head_var(V)|Ps], Acc, Bindings, Tys) <=>
+    Tys = [T | Rest],
+    alloc_lambda_params(Ps, [kv(V, T)|Acc], Bindings, Rest).
+
+alloc_lambda_params_wild @
+    alloc_lambda_params([head_wild|Ps], Acc, Bindings, Tys) <=>
+    alloc_lambda_params(Ps, Acc, Bindings, Rest),
+    Tys = [_Slot | Rest].
+
+% ---------------------------------------------------------------------
+% Call and reference emission
+% ---------------------------------------------------------------------
+%
+% Ports `emitFunctionCall`, `emitFunctionRef` and `buildBoundCands`. A
+% call routes through the ambient form when its target name has ambient
+% signatures in this scope — i.e. the call sits under a bounded
+% constraint's head occurrence — and through the plain form otherwise;
+% the solver handles both with the same resolution mechanism.
+
+emit_function_call1 @
+    emit_function_call(S, N, ArgTys, RetTy) <=>
+    build_bound_cands(S,
+                      env_function_bounds(scope_env(S), amb_key(N, length(ArgTys))),
+                      Cands),
+    emit_call_form(S, N, length(ArgTys),
+                   scope_ambient(S, amb_key(N, length(ArgTys))),
+                   Cands, ArgTys, RetTy).
+
+emit_call_plain @
+    emit_call_form(S, N, A, [], Cands, ArgTys, RetTy) <=>
+    check_function_use(N, A, Cands, ArgTys, RetTy, scope_ctx(S)).
+
+emit_call_ambient @
+    emit_call_form(S, N, A, Ambs, Cands, ArgTys, RetTy) <=>
+    check_function_use_with_ambient(N, A, Ambs, Cands, ArgTys, RetTy, scope_ctx(S)).
+
+% A `fun name/arity` reference is checked against the expected function
+% type at its use site; for a class referent the return component
+% participates in the residual filtering, which is why the ambient list
+% travels even when it is empty.
+emit_function_ref1 @
+    emit_function_ref(S, N, ArgTys, RetTy) <=>
+    build_bound_cands(S,
+                      env_function_bounds(scope_env(S), amb_key(N, length(ArgTys))),
+                      Cands),
+    check_function_ref(N, length(ArgTys),
+                       scope_ambient(S, amb_key(N, length(ArgTys))),
+                       Cands, ArgTys, RetTy, scope_ctx(S)).
+
+% One `bc(name, ambients, declared)` per bound-named function,
+% same-named bounds merged. The discharge rules are pure and cannot
+% gather candidates across the store, so the whole candidate set is
+% assembled here and travels by value. Ambient and declared candidates
+% are kept apart because they discharge differently.
+build_bound_cands1 @
+    build_bound_cands(S, Bounds, Out) <=> bound_cand_entries(S, Bounds, [], Out).
+
+bound_cand_entries_nil @
+    bound_cand_entries(_, [], Acc, Out) <=> Out = Acc.
+
+bound_cand_entries_cons @
+    bound_cand_entries(S, [bound_sig(N, _, Args, _, _)|Bs], Acc, Out) <=>
+    encode_sigs(env_function_sigs(scope_env(S), N), Decls),
+    bound_cand_entries(S, Bs,
+                       push_bcand(N,
+                                  scope_ambient(S, amb_key(N, length(Args))),
+                                  Decls, Acc),
+                       Out).
+
+:- function push_bcand(any, list(sig_t(list(ty), ty)), list(sig_t(list(ty), ty)),
+                       list(bcand))
+    -> list(bcand).
+push_bcand(N, Ambs, Decls, []) -> [bc(N, Ambs, Decls)].
+push_bcand(N, Ambs, Decls, [bc(N2, A0, D0)|Rest]) | N2 == N ->
+    [bc(N2, append(A0, Ambs), append(D0, Decls))|Rest].
+push_bcand(N, Ambs, Decls, [C|Rest]) -> [C|push_bcand(N, Ambs, Decls, Rest)].

@@ -35,6 +35,7 @@
 :- use_module('$tc2_diag').
 :- use_module(library(maybe)).
 :- use_module(library(pairs)).
+:- use_module(library(strings)).
 
 :- function ast_size(program) -> int.
 ast_size(program(Rules, Funs, ConTypes, ConBounds, TypeDefs)) ->
@@ -193,7 +194,7 @@ type_defs_size([T|Ts]) -> type_def_size(T) + type_defs_size(Ts).
 
 :- function type_def_size(type_def) -> int.
 type_def_size(type_def(_, Vars, Kind, Loc)) ->
-    1 + names_size(Vars) + type_kind_size(Kind) + loc_size(Loc).
+    1 + tvar_names_size(Vars) + type_kind_size(Kind) + loc_size(Loc).
 
 :- function type_kind_size(type_kind) -> int.
 type_kind_size(algebraic(Cons)) -> 1 + data_cons_size(Cons).
@@ -211,13 +212,24 @@ ty_exprs_size([]) -> 0.
 ty_exprs_size([T|Ts]) -> ty_expr_size(T) + ty_exprs_size(Ts).
 
 :- function ty_expr_size(ty_expr) -> int.
-ty_expr_size(tvar(_)) -> 1.
+% `tvar` is the encoder's other string-valued leaf, reached from a
+% different call site than a declaration's parameter list; it gets the
+% same check.
+ty_expr_size(tvar(V)) -> string_length(V).
 ty_expr_size(tconx(_, Args)) -> 1 + ty_exprs_size(Args).
+ty_expr_size(tfunx(Args, Ret)) -> 1 + ty_exprs_size(Args) + ty_expr_size(Ret).
 
-% Names arrive as opaque atoms; there is nothing below them to walk.
-:- function names_size(list(any)) -> int.
-names_size([]) -> 0.
-names_size([_|Ns]) -> 1 + names_size(Ns).
+% Type-parameter names are the one leaf the encoding spells as a
+% *string* rather than as an atom (`sort_unique_tvars` orders them, and
+% atoms have no ordering). `string_length` is what makes that a checked
+% claim: it raises on anything else. Nothing else would notice the
+% drift — `<` on two atoms only raises for a declaration with two
+% distinct parameters, and the driver reads a name back only in an
+% unbound-type-var diagnostic. The count it contributes is a length
+% rather than a node count, which is fine: the total is discarded.
+:- function tvar_names_size(list(string)) -> int.
+tvar_names_size([]) -> 0.
+tvar_names_size([V|Ns]) -> string_length(V) + tvar_names_size(Ns).
 
 :- function loc_size(loc) -> int.
 loc_size(loc(_, _, _)) -> 1.

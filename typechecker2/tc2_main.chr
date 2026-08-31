@@ -5,10 +5,10 @@
 % constraints; everything the checker does happens in CHR from there,
 % and the driver only decodes the two diagnostic lists that come back.
 %
-% `check_program` reports the declaration-level diagnostics;
-% `check_goals` is still a stub. Milestones M4–M6 fill in the rest: the
-% solver port and the rule walker, functions and class-function
-% overload search, and finally goal checking.
+% `check_program` reports the declaration-level diagnostics and checks
+% the program's rules; `check_goals` is still a stub. Milestones M5–M6
+% fill in the rest: function equations and the class-function overload
+% search, and finally goal checking.
 :- module('$tc2_main', [
     check_program/3,
     check_goals/6
@@ -17,7 +17,11 @@
 :- use_module('$tc2_ast').
 :- use_module('$tc2_conform').
 :- use_module('$tc2_diag').
+:- use_module('$tc2_env').
 :- use_module('$tc2_pure').
+:- use_module('$tc2_solver').
+:- use_module('$tc2_walk').
+:- use_module(library(lists)).
 
 % `check_program(Program, Errors, Warnings)`: check a whole desugared
 % program. `Errors` and `Warnings` are unbound on entry and are bound
@@ -36,14 +40,30 @@
 % program the encoder and `tc2_ast` disagree about fails loudly instead
 % of being silently accepted. See `tc2_conform.chr`.
 %
-% `check_program` reports the declaration-level diagnostics (M3). The
-% rest — everything that needs the solver — is still missing, which is
-% why the warning list is still empty: the only warning kind is raised
-% by the checking phase.
+% The declaration checks come first and the session's diagnostics
+% second, which is the old checker's order for those two *sources*
+% (within them it differs: a class function's constructor-arity errors
+% sit in `program_errors` here and ahead of the rule errors there).
+% Only the multiset is compared, so this is a rendering nicety, not
+% parity. Suppression sees both lists, because a unit whose only error
+% is a constructor-arity mismatch still omits its warnings.
+%
+% `rigid_supply(-1)` seeds the solver's own down-counting gensym for
+% the fresh parameters of a parametric evidence pin; the walker seeds
+% its up-counting declaration-site supply itself.
 check_program(Program, Errors, Warnings) <=>
     _Nodes is ast_size(Program),
-    Errors is program_errors(Program),
-    Warnings = [].
+    errors([]),
+    warnings([]),
+    rigid_supply(-1),
+    Env is build_tc_env(Program),
+    tell_decls(Env, Program),
+    walk_program(Env, Program),
+    collect(SolverErrors),
+    collect_warnings(SolverWarnings),
+    AllErrors is append(program_errors(env_cons(Env), Program), SolverErrors),
+    Errors = AllErrors,
+    Warnings is suppress_warnings(AllErrors, SolverWarnings).
 
 check_goals(Program, Goals, Loc, Label, Errors, Warnings) <=>
     _Nodes is ast_size(Program) + body_goals_size(Goals)

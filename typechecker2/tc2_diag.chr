@@ -18,10 +18,20 @@
     type(warning/0),
     type(error_code/0),
     type(warning_code/0),
-    type(error_detail/0)
+    type(error_detail/0),
+    report_error/3,
+    errors/1,
+    collect/1,
+    report_warning/3,
+    warnings/1,
+    collect_warnings/1,
+    fun suppress_warnings/2,
+    fun rule_label/1
 ]).
 
 :- use_module('$tc2_ast').
+:- use_module(library(lists)).
+:- use_module(library(maybe)).
 :- use_module(library(pairs)).
 
 % What a diagnostic is attributed to. `label_rule` carries the rule's
@@ -102,7 +112,74 @@
 :- chr_type error_detail ---> tpair(any, any)
                             ; overloaded
                             ; undefined_type_d(any, any, any)
-                            ; unbound_type_var_d(any, any, any)
+                            ; unbound_type_var_d(any, any, string)
                             ; type_ref_arity_d(any, any, any, int, int)
                             ; duplicate_constructor_d(any, list(pair(any, int)))
                             ; constructor_arity_d(any, int, int).
+
+% The label a rule's diagnostics are rendered with: its source name, or
+% none at all for an unnamed rule.
+:- function rule_label(maybe(string)) -> diag_label.
+rule_label(nothing) -> label_none.
+rule_label(just(N)) -> label_rule(N).
+
+% ---------------------------------------------------------------------
+% Accumulators
+% ---------------------------------------------------------------------
+%
+% The checking phase reports as it goes and the entry point drains the
+% two lists at the end, exactly as the old checker's CHR program does
+% (`errors/1` / `collect/1` in `typechecker/typechecker.chr`). The pure
+% declaration checks of `tc2_pure.chr` do not go through here: an
+% `error/3` is data, so they return their diagnostics directly and
+% `tc2_main` concatenates the two sources.
+:- chr_constraint
+    report_error(ctx, any, any),
+    errors(list(error)),
+    collect(list(error)),
+    report_warning(ctx, any, any),
+    warnings(list(warning)),
+    collect_warnings(list(warning)).
+
+accumulate_error @
+    report_error(Ctx, Code, Detail), errors(Es) <=>
+    errors([error(Ctx, Code, Detail) | Es]).
+
+collect_errors @
+    collect(E), errors(Es) <=> E = Es.
+
+accumulate_warning @
+    report_warning(Ctx, Code, Detail), warnings(Ws) <=>
+    warnings([warning(Ctx, Code, Detail) | Ws]).
+
+collect_all_warnings @
+    collect_warnings(W), warnings(Ws) <=> W = Ws.
+
+% ---------------------------------------------------------------------
+% Per-unit warning suppression
+% ---------------------------------------------------------------------
+%
+% A checking unit that reports an error omits its warnings
+% (docs/reference/type-system.md §Inaccessible branches): under a
+% contradiction the unit's types are not what the source says, so its
+% dead-branch verdicts describe the checker's recovery rather than the
+% program. Ports `collectDiagnostics` (TypeCheck.hs).
+%
+% Unit **-1** — "no unit" — is deliberately not collected: the old
+% checker's whole-program diagnostics are gathered outside the session
+% and so suppress nothing. Warnings never carry -1 today, but relying
+% on that would make a future goal-level warning silently disappear
+% behind an unrelated duplicate-constructor error.
+:- function suppress_warnings(list(error), list(warning)) -> list(warning).
+suppress_warnings(Errs, Ws) -> keep_warnings(error_units(Errs), Ws).
+
+:- function error_units(list(error)) -> list(int).
+error_units([]) -> [].
+error_units([error(ctx(U, _, _, _), _, _)|Es]) | U == -1 -> error_units(Es).
+error_units([error(ctx(U, _, _, _), _, _)|Es]) -> [U|error_units(Es)].
+
+:- function keep_warnings(list(int), list(warning)) -> list(warning).
+keep_warnings(_, []) -> [].
+keep_warnings(Us, [warning(ctx(U, _, _, _), _, _)|Ws]) | member(U, Us) ->
+    keep_warnings(Us, Ws).
+keep_warnings(Us, [W|Ws]) -> [W|keep_warnings(Us, Ws)].

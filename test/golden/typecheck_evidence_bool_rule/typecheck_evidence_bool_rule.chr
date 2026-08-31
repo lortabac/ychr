@@ -1,0 +1,16 @@
+:- module(typecheck_evidence_bool_rule, [tag/2, type(color/0)]).
+
+:- use_module(library(prelude)).
+
+% The `boolean/1` twin of `typecheck_evidence_dead_rule`. It is the one
+% type-predicate whose fact is not a base-type atom but the encoded
+% type constructor `prelude:bool`, so it is the one whose payload can
+% be spelled wrongly. The only other program that exercises it is a
+% *function equation*, which the all-CHR checker does not walk yet, so
+% without this rule-level case that spelling is unverified.
+:- chr_type color ---> red ; green ; blue.
+
+:- chr_constraint tag(color, int).
+
+dead @ tag(X, R) <=> boolean(X) | R = 1.
+fallback @ tag(_, R) <=> R = 0.

@@ -1,0 +1,19 @@
+:- module(typecheck_decl_error_keeps_warning, [tag/2]).
+:- use_module(library(prelude)).
+
+% Warning suppression is per checking unit, and a *declaration-level*
+% error belongs to no unit at all — the old checker collects those
+% outside the session, where they cannot reach `errorUnits`. So the
+% undefined type below reports its error and the dead rule still
+% reports its warning.
+%
+% Giving declaration diagnostics a real unit id instead — 0, say —
+% would swallow this rule's YCHR-20104 and nothing else in the corpus
+% would notice, because no other program pairs a declaration error with
+% a surviving warning.
+:- chr_type color ---> red ; green ; blue.
+:- chr_type wrapper ---> wrap(nosuchtype).
+
+:- chr_constraint tag(color, int).
+
+dead @ tag(X, R) <=> integer(X) | R = 1.

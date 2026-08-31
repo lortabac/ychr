@@ -1,0 +1,15 @@
+% A constructor-arity error suppresses its own unit's warning.
+%
+% Arity errors are found without the solver, so the two halves of the
+% checker have to number their checking units the same way: `dead` is
+% both dead (contradicting evidence at a `color`-typed position) and
+% wrong (`red/1` at a nullary constructor), and only the error is
+% reported. If the arity error landed in a different unit than the
+% rule's own diagnostics, the warning would survive.
+:- module(typecheck_suppression_arity_unit, []).
+:- use_module(library(prelude)).
+
+:- chr_type color ---> red ; green ; blue.
+:- chr_constraint tag(color, int), sink(any).
+
+dead @ tag(X, R) <=> integer(X) | R = 1, sink(red(1)).

@@ -277,11 +277,11 @@ decodeError code detail = case code of
           UndefinedType <$> name t <*> name con <*> name ref
     _ -> malformed "undefined_type detail" detail
   VAtom c | c == diagAtom "unbound_type_var" -> case detail of
-    -- The type-variable name is a source spelling the encoder passed
-    -- through unmangled, so it is read verbatim rather than unmangled.
+    -- The type-variable name is a source spelling the encoder carries
+    -- as a string, so it is read verbatim rather than unmangled.
     VTerm f [t, con, tv]
       | f == diagAtom "unbound_type_var_d" ->
-          UnboundTypeVar <$> name t <*> name con <*> atomText tv
+          UnboundTypeVar <$> name t <*> name con <*> text tv
     _ -> malformed "unbound_type_var detail" detail
   VAtom c | c == diagAtom "type_ref_arity" -> case detail of
     VTerm f [t, con, ref, useArity, declared]
@@ -309,10 +309,10 @@ decodeError code detail = case code of
       deref v >>= \case
         VAtom a -> pure (unmangleName a)
         v' -> malformed "name atom" v'
-    atomText v =
+    text v =
       deref v >>= \case
-        VAtom a -> pure a
-        v' -> malformed "atom" v'
+        VText t -> pure t
+        v' -> malformed "string" v'
     int v =
       deref v >>= \case
         VInt n -> pure (fromInteger n)

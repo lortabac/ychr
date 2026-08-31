@@ -1,0 +1,21 @@
+:- module(typecheck_getarg_declared_fallback, [c/1]).
+:- use_module(library(prelude)).
+
+% A wrong-arity constructor pattern in a head. HNF still emits a
+% GuardMatch plus one GuardGetArg per position, but the match is not
+% emitted (the constructor is not declared at this arity), so it
+% leaves no field slots behind. The following extraction therefore
+% falls back to resolving the field type from the *declaration* —
+% `checkGuard`'s `Nothing` branch, `getarg_declared` in the port —
+% and the constructor's declared parent type `opt(_)` contradicts the
+% declared argument type `int`.
+%
+% `typecheck_constructor_arity_head` exercises the same wrong-arity
+% pattern but declares the argument as `opt(int)`, so its fallback
+% unification succeeds and reports nothing. Without this test the
+% whole declaration-fallback branch can be deleted with nothing
+% failing. Expect YCHR-60001 alongside the arity error.
+:- chr_type opt(A) ---> none ; some(A).
+
+:- chr_constraint c(int).
+c(some(X, Y)) <=> X = Y.

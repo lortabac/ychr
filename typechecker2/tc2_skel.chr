@@ -1,0 +1,514 @@
+% Slot skeletons: what shape a checking unit's variables start out as.
+%
+% Ports the "declaration-position `any` stamping" block of
+% `src/YCHR/Internal/TypeCheck.hs` (`skeletonOf` and everything under
+% it, through `allocSkeleton`). The rule it implements is the one the
+% old driver's module header states: `any` never binds, so a *position*
+% that some declaration source leaves `any` and another makes concrete
+% has to reach the solver as a flexible variable — per position, not
+% per variable. A whole-variable slot is flexible for free; a position
+% nested inside a declared type is not, because `tc_unify` binds a
+% flexible slot to a type-constructor application as a whole. Hence the
+% pre-shaped slot.
+%
+% Everything here is a pure function except the allocation itself,
+% which needs fresh logical variables and so has to be a rule.
+%
+% Cost: the variable bookkeeping below — `dedup_names`, `components`,
+% `reach` — is quadratic in the number of distinct variables of one
+% checking unit, where the old driver is `O(V log V)` through a `Map`.
+% Measured: a single rule with 400 distinct variables costs V2 ~1.5 s
+% against the old checker's ~0.1 s, and doubling the count costs
+% ~4.4x. Rule *size* is not the axis — 800 body goals over two
+% variables costs nothing extra. This is the same assoc-lists-instead-
+% of-maps limitation `tc2_env.chr` records for the constructor count,
+% on a second axis; closing either needs a runtime map primitive, and
+% neither is reached by hand-written code.
+:- module('$tc2_skel', [
+    type(type_skeleton/0),
+    fun collect_vars_rule/3,
+    fun collect_vars_guards/1,
+    fun collect_vars_body_goals/1,
+    fun collect_vars_exprs/1,
+    fun head_var_skeletons/3,
+    fun param_var_skeletons/4,
+    fun skeleton_of/1,
+    fun guard_operand_var/1,
+    fun ty_expr_at/2,
+    alloc_var_types/3
+]).
+
+:- use_module('$tc2_ast').
+:- use_module('$tc2_env').
+:- use_module('$tc2_solver').
+:- use_module(library(lists)).
+:- use_module(library(maybe)).
+:- use_module(library(pairs)).
+
+% The shape a variable's declaration sources determine for its type
+% slot, computed position by position. Mirrors `TypeSkeleton`.
+%
+%   * `sk_any` — every source says `any` here, so the slot gets the
+%     literal `any` type, which no rule binds;
+%   * `sk_open` — at least one source says something else, so the slot
+%     gets a fresh flexible variable for that source to bind;
+%   * `sk_con` / `sk_fun` — every source applies this type constructor
+%     (or is a function type of this arity) here, so the slot is
+%     pre-shaped and the meet stays componentwise.
+:- chr_type type_skeleton ---> sk_any
+                             ; sk_open
+                             ; sk_con(any, list(type_skeleton))
+                             ; sk_fun(list(type_skeleton), type_skeleton).
+
+% ---------------------------------------------------------------------
+% Recognizing `any`
+% ---------------------------------------------------------------------
+
+% The `any` type as the encoder spells it: the bare name applied to no
+% arguments. A qualified `m:int` mangles to `m__int` and so is
+% correctly not the built-in, which is why the whole name is compared.
+:- function is_any_ty(ty_expr) -> bool.
+is_any_ty(tconx(N, [])) | N == quote(any) -> true.
+is_any_ty(_) -> false.
+
+% True when `any` appears anywhere in a type expression, at any depth.
+% Only such a source needs a shaped slot; everything else takes the
+% plain flexible slot. A function type's components are reached
+% through `tfunx`, which is what the Haskell reaches through the two
+% levels of its `'->'(fun(...), Ret)` spelling.
+:- function mentions_any(ty_expr) -> bool.
+mentions_any(T) | is_any_ty(T) -> true.
+mentions_any(tvar(_)) -> false.
+mentions_any(tconx(_, Args)) -> any_mentions_any(Args).
+mentions_any(tfunx(Args, _)) | any_mentions_any(Args) -> true.
+mentions_any(tfunx(_, Ret)) -> mentions_any(Ret).
+
+:- function any_mentions_any(list(ty_expr)) -> bool.
+any_mentions_any([]) -> false.
+any_mentions_any([T|_]) | mentions_any(T) -> true.
+any_mentions_any([_|Ts]) -> any_mentions_any(Ts).
+
+:- function all_any_ty(list(ty_expr)) -> bool.
+all_any_ty([]) -> true.
+all_any_ty([T|Ts]) | is_any_ty(T) -> all_any_ty(Ts).
+all_any_ty(_) -> false.
+
+% ---------------------------------------------------------------------
+% The skeleton of a set of declaration sources
+% ---------------------------------------------------------------------
+
+% The per-position argument lists and return types of a list of sources
+% that are all function types of one arity, and all applications of one
+% type constructor at one arity. Intermediate results of `skeleton_of`,
+% mirroring `sameFunShape` and `sameConShape`.
+:- chr_type fun_shapes ---> fun_shapes(list(list(ty_expr)), list(ty_expr)).
+:- chr_type con_shapes ---> con_shapes(any, list(list(ty_expr))).
+
+:- function skeleton_of(list(ty_expr)) -> type_skeleton.
+skeleton_of([]) -> sk_open.
+skeleton_of(Ts) | all_any_ty(Ts) -> sk_any.
+skeleton_of(Ts) | not(any_mentions_any(Ts)) -> sk_open.
+skeleton_of(Ts) -> skeleton_fun(Ts, same_fun_shape(Ts)).
+
+:- function skeleton_fun(list(ty_expr), maybe(fun_shapes)) -> type_skeleton.
+skeleton_fun(_, just(fun_shapes(Argss, Rets))) ->
+    sk_fun(skeletons_of(transpose_rows(Argss)), skeleton_of(Rets)).
+skeleton_fun(Ts, nothing) -> skeleton_con(same_con_shape(Ts)).
+
+:- function skeleton_con(maybe(con_shapes)) -> type_skeleton.
+skeleton_con(just(con_shapes(N, Argss))) ->
+    sk_con(N, skeletons_of(transpose_rows(Argss))).
+skeleton_con(nothing) -> sk_open.
+
+:- function skeletons_of(list(list(ty_expr))) -> list(type_skeleton).
+skeletons_of([]) -> [].
+skeletons_of([Ts|Rest]) -> [skeleton_of(Ts) | skeletons_of(Rest)].
+
+% Every source is a function type, and they all take the same number of
+% arguments. An empty source list is not a shape.
+:- function same_fun_shape(list(ty_expr)) -> maybe(fun_shapes).
+same_fun_shape([tfunx(As, R)|Ts]) | all_fun_arity(length(As), Ts) ->
+    just(fun_shapes([As|fun_argss(Ts)], [R|fun_rets(Ts)])).
+same_fun_shape(_) -> nothing.
+
+:- function all_fun_arity(int, list(ty_expr)) -> bool.
+all_fun_arity(_, []) -> true.
+all_fun_arity(N, [tfunx(As, _)|Ts]) | length(As) == N -> all_fun_arity(N, Ts).
+all_fun_arity(_, _) -> false.
+
+:- function fun_argss(list(ty_expr)) -> list(list(ty_expr)).
+fun_argss([tfunx(As, _)|Ts]) -> [As|fun_argss(Ts)].
+fun_argss(_) -> [].
+
+:- function fun_rets(list(ty_expr)) -> list(ty_expr).
+fun_rets([tfunx(_, R)|Ts]) -> [R|fun_rets(Ts)].
+fun_rets(_) -> [].
+
+% Every source applies the same type constructor at the same, non-zero
+% arity. Function types cannot be claimed here: the encoder gives them
+% their own constructor, which is what `funShape t == Nothing` does on
+% the Haskell side.
+:- function same_con_shape(list(ty_expr)) -> maybe(con_shapes).
+same_con_shape([tconx(N, [A|As])|Ts]) | all_con_shape(N, 1 + length(As), Ts) ->
+    just(con_shapes(N, [[A|As] | con_argss(Ts)])).
+same_con_shape(_) -> nothing.
+
+:- function all_con_shape(any, int, list(ty_expr)) -> bool.
+all_con_shape(_, _, []) -> true.
+all_con_shape(N, Ar, [tconx(N2, As)|Ts]) | N2 == N, length(As) == Ar ->
+    all_con_shape(N, Ar, Ts).
+all_con_shape(_, _, _) -> false.
+
+:- function con_argss(list(ty_expr)) -> list(list(ty_expr)).
+con_argss([tconx(_, As)|Ts]) -> [As|con_argss(Ts)].
+con_argss(_) -> [].
+
+% Transpose a rectangular list of lists. Every caller has already
+% established that the rows are the same length (`all_fun_arity` /
+% `all_con_shape`), which is the case `List.transpose` agrees with.
+:- function transpose_rows(list(list(ty_expr))) -> list(list(ty_expr)).
+transpose_rows([]) -> [].
+transpose_rows([[]|_]) -> [].
+transpose_rows(Rows) -> [row_heads(Rows) | transpose_rows(row_tails(Rows))].
+
+:- function row_heads(list(list(ty_expr))) -> list(ty_expr).
+row_heads([]) -> [].
+row_heads([[]|Rs]) -> row_heads(Rs).
+row_heads([[X|_]|Rs]) -> [X|row_heads(Rs)].
+
+:- function row_tails(list(list(ty_expr))) -> list(list(ty_expr)).
+row_tails([]) -> [].
+row_tails([[]|Rs]) -> row_tails(Rs).
+row_tails([[_|Xs]|Rs]) -> [Xs|row_tails(Rs)].
+
+% ---------------------------------------------------------------------
+% Declaration sources per variable
+% ---------------------------------------------------------------------
+
+% Given the `(variable, declared type)` occurrences of a unit's
+% declaration positions, plus the variable pairs HNF's synthetic
+% var-var equalities link, the slot skeleton of each variable.
+%
+% HNF splits a repeated surface variable into distinct variables joined
+% by `guard_equal`, so declaration sources are judged per *equivalence
+% class*, not per HNF variable. Every member of a class gets the
+% class's skeleton — as a shape, not as a shared term: the members stay
+% distinct slots, each checked against its own declaration position,
+% and `eq_unify` merges them. Two shared slots would let the first head
+% position win outright, turning a deliberate inaccessible-branch
+% warning into an inconsistency error. Ports `varSkeletons`.
+:- function var_skeletons(list(pair(any, ty_expr)), list(pair(any, any)))
+    -> list(pair(any, type_skeleton)).
+var_skeletons(Occs, Links) ->
+    comps_skeletons(components(all_linked_vars(Occs, Links), Links, []), Occs).
+
+:- function all_linked_vars(list(pair(any, ty_expr)), list(pair(any, any))) -> list(any).
+all_linked_vars(Occs, Links) ->
+    dedup_names(append(assoc_keys(Occs), link_endpoints(Links))).
+
+:- function link_endpoints(list(pair(any, any))) -> list(any).
+link_endpoints([]) -> [].
+link_endpoints([kv(A, B)|Rest]) -> [A, B|link_endpoints(Rest)].
+
+:- function dedup_names(list(any)) -> list(any).
+dedup_names([]) -> [].
+dedup_names([N|Ns]) | member(N, Ns) -> dedup_names(Ns).
+dedup_names([N|Ns]) -> [N|dedup_names(Ns)].
+
+% The connected components of the link graph, over every variable that
+% has a declaration source or appears in a link.
+:- function components(list(any), list(pair(any, any)), list(any)) -> list(list(any)).
+components([], _, _) -> [].
+components([V|Vs], Links, Seen) | member(V, Seen) -> components(Vs, Links, Seen).
+components([V|Vs], Links, Seen) -> emit_comp(reach(Links, [V], [V]), Vs, Links, Seen).
+
+% The component is passed on rather than recomputed: there is no `let`,
+% and `reach` is the expensive part.
+:- function emit_comp(list(any), list(any), list(pair(any, any)), list(any))
+    -> list(list(any)).
+emit_comp(Comp, Vs, Links, Seen) ->
+    [Comp | components(Vs, Links, append(Seen, Comp))].
+
+:- function reach(list(pair(any, any)), list(any), list(any)) -> list(any).
+reach(_, Acc, []) -> Acc.
+reach(Links, Acc, [X|Xs]) -> reach_step(Links, Acc, Xs, fresh_neighbors(neighbors(Links, X), Acc)).
+
+:- function reach_step(list(pair(any, any)), list(any), list(any), list(any)) -> list(any).
+reach_step(Links, Acc, Xs, New) -> reach(Links, append(Acc, New), append(New, Xs)).
+
+:- function neighbors(list(pair(any, any)), any) -> list(any).
+neighbors([], _) -> [].
+neighbors([kv(A, B)|Rest], X) | A == X -> [B|neighbors(Rest, X)].
+neighbors([kv(A, B)|Rest], X) | B == X -> [A|neighbors(Rest, X)].
+neighbors([_|Rest], X) -> neighbors(Rest, X).
+
+% The neighbours not already reached, each counted once. Dropping the
+% duplicates is what makes `reach` terminate.
+:- function fresh_neighbors(list(any), list(any)) -> list(any).
+fresh_neighbors([], _) -> [].
+fresh_neighbors([N|Ns], Acc) | member(N, Acc) -> fresh_neighbors(Ns, Acc).
+fresh_neighbors([N|Ns], Acc) -> [N|fresh_neighbors(Ns, [N|Acc])].
+
+:- function comps_skeletons(list(list(any)), list(pair(any, ty_expr)))
+    -> list(pair(any, type_skeleton)).
+comps_skeletons([], _) -> [].
+comps_skeletons([C|Cs], Occs) ->
+    append(comp_skeletons(C, comp_sources(C, Occs)), comps_skeletons(Cs, Occs)).
+
+% A component with no declaration source contributes nothing, so its
+% members fall through to the plain flexible slot.
+:- function comp_skeletons(list(any), list(ty_expr)) -> list(pair(any, type_skeleton)).
+comp_skeletons(_, []) -> [].
+comp_skeletons(Comp, Srcs) -> assign_skeleton(Comp, skeleton_of(Srcs)).
+
+:- function assign_skeleton(list(any), type_skeleton) -> list(pair(any, type_skeleton)).
+assign_skeleton([], _) -> [].
+assign_skeleton([V|Vs], Sk) -> [kv(V, Sk) | assign_skeleton(Vs, Sk)].
+
+:- function comp_sources(list(any), list(pair(any, ty_expr))) -> list(ty_expr).
+comp_sources(_, []) -> [].
+comp_sources(Comp, [kv(V, T)|Rest]) | member(V, Comp) -> [T|comp_sources(Comp, Rest)].
+comp_sources(Comp, [_|Rest]) -> comp_sources(Comp, Rest).
+
+% ---------------------------------------------------------------------
+% Where the declaration sources come from
+% ---------------------------------------------------------------------
+
+% The var-var links a guard list contributes: only a `guard_equal`
+% between two bare variables counts. Those are the synthetic
+% equalities HNF emits for a repeated head variable; a user's
+% ask-equality guard desugars to `guard_expr`. Ports `guardEqualLinks`.
+:- function guard_equal_links(list(guard)) -> list(pair(any, any)).
+guard_equal_links([]) -> [].
+guard_equal_links([guard_equal(var_e(A), var_e(B))|Gs]) ->
+    [kv(A, B)|guard_equal_links(Gs)].
+guard_equal_links([_|Gs]) -> guard_equal_links(Gs).
+
+% The variable an HNF guard scrutinizes. Every `guard_match` and
+% `guard_getarg` HNF emits has a bare-variable operand, so a
+% non-variable one simply records nothing.
+:- function guard_operand_var(expr) -> maybe(any).
+guard_operand_var(var_e(V)) -> just(V).
+guard_operand_var(_) -> nothing.
+
+% Field-type occurrences contributed by HNF's `guard_getarg` guards:
+% the extracted variable's declaration source is the matched
+% constructor's field type at that index. Without these, a variable
+% reached only through a compound head pattern would look sourceless
+% and could be stamped `any` even though the field type is solid.
+%
+% Which constructor each term was matched against is tracked exactly as
+% the checking walk tracks it — keyed by the scrutinized variable,
+% since a nested pattern's match interleaves with its parent's
+% extractions — including the fallback to the extracted variable's own
+% name. Ports `guardFieldOccs`.
+:- function guard_field_occs(con_env, list(guard)) -> list(pair(any, ty_expr)).
+guard_field_occs(Env, Guards) -> field_occs(Env, Guards, []).
+
+:- function field_occs(con_env, list(guard), list(pair(any, any)))
+    -> list(pair(any, ty_expr)).
+field_occs(_, [], _) -> [].
+field_occs(Env, [guard_match(Operand, Con, _)|Gs], Matched) ->
+    field_occs(Env, Gs,
+               record_match(guard_operand_var(Operand),
+                            canonicalize_con(Env, Con), Matched)).
+field_occs(Env, [guard_getarg(V, Operand, Idx)|Gs], Matched) ->
+    append(field_occ(Env, V, Idx,
+                     scrutinee_con(V, guard_operand_var(Operand), Matched)),
+           field_occs(Env, Gs, Matched)).
+field_occs(Env, [guard_equal(_, _)|Gs], Matched) -> field_occs(Env, Gs, Matched).
+field_occs(Env, [guard_expr(_)|Gs], Matched) -> field_occs(Env, Gs, Matched).
+
+:- function record_match(maybe(any), any, list(pair(any, any))) -> list(pair(any, any)).
+record_match(nothing, _, Matched) -> Matched.
+record_match(just(V), Con, Matched) -> assoc_put(V, Con, Matched).
+
+% The constructor an extraction reads a field of: the one the scrutinee
+% was matched against, or — when the operand is not a variable, or was
+% never matched — the extracted variable's own name, which is not a
+% declared constructor and so finds nothing.
+:- function scrutinee_con(any, maybe(any), list(pair(any, any))) -> any.
+scrutinee_con(VarName, nothing, _) -> VarName.
+scrutinee_con(VarName, just(V), Matched) -> from_maybe(VarName, assoc_get(V, Matched)).
+
+:- function field_occ(con_env, any, int, any) -> list(pair(any, ty_expr)).
+field_occ(Env, V, Idx, Con) -> field_occ_of(V, con_field_at(Idx, lookup_con(Env, Con))).
+
+:- function field_occ_of(any, maybe(ty_expr)) -> list(pair(any, ty_expr)).
+field_occ_of(_, nothing) -> [].
+field_occ_of(V, just(T)) -> [kv(V, T)].
+
+:- function con_field_at(int, maybe(con_info)) -> maybe(ty_expr).
+con_field_at(_, nothing) -> nothing.
+con_field_at(Idx, just(con_info(_, Dc))) -> ty_expr_at(Idx, con_args(Dc)).
+
+% Safe indexing, standing in for the Haskell's `idx < length` guard
+% followed by `!!`.
+:- function ty_expr_at(int, list(ty_expr)) -> maybe(ty_expr).
+ty_expr_at(_, []) -> nothing.
+ty_expr_at(I, [T|_]) | I =< 0 -> just(T).
+ty_expr_at(I, [_|Ts]) -> ty_expr_at(I - 1, Ts).
+
+% Slot skeletons determined by a rule head's declaration positions.
+% Head arguments are post-HNF (variables and wildcards only), so the
+% position-to-variable mapping is a static zip against the declared
+% argument types. Ports `headVarSkeletons`.
+:- function head_var_skeletons(tc_env, list(head_con), list(guard))
+    -> list(pair(any, type_skeleton)).
+head_var_skeletons(Env, Cons, Guards) ->
+    var_skeletons(append(head_occs(Env, Cons),
+                         guard_field_occs(env_cons(Env), Guards)),
+                  guard_equal_links(Guards)).
+
+:- function head_occs(tc_env, list(head_con)) -> list(pair(any, ty_expr)).
+head_occs(_, []) -> [].
+head_occs(Env, [head_con(N, Args)|Cs]) ->
+    append(arg_occs(Args, env_constraint_types(Env, con_key(N, length(Args)))),
+           head_occs(Env, Cs)).
+
+% Zip head arguments against declared types, stopping at the shorter
+% list and skipping wildcards. A constraint with no declaration has no
+% declared types and so contributes nothing.
+:- function arg_occs(list(head_arg), list(ty_expr)) -> list(pair(any, ty_expr)).
+arg_occs([], _) -> [].
+arg_occs(_, []) -> [].
+arg_occs([head_var(V)|As], [T|Ts]) -> [kv(V, T)|arg_occs(As, Ts)].
+arg_occs([head_wild|As], [_|Ts]) -> arg_occs(As, Ts).
+
+% Slot skeletons determined by a single-signature equation's parameter
+% positions. Same shape as `head_var_skeletons` for the one declaration
+% an equation has; a length mismatch between parameters and declared
+% types stamps nothing. Ports `paramVarSkeletons`.
+:- function param_var_skeletons(tc_env, list(head_arg), list(ty_expr), list(guard))
+    -> list(pair(any, type_skeleton)).
+param_var_skeletons(_, Params, DeclTys, _) | not(length(Params) == length(DeclTys)) -> [].
+param_var_skeletons(Env, Params, DeclTys, Guards) ->
+    var_skeletons(append(arg_occs(Params, DeclTys),
+                         guard_field_occs(env_cons(Env), Guards)),
+                  guard_equal_links(Guards)).
+
+% ---------------------------------------------------------------------
+% Variable collection
+% ---------------------------------------------------------------------
+%
+% Ports `collectVarsInRule` and friends. Every variable the checking
+% walk will ask for a slot has to be here, including lambda parameter
+% names, which become local bindings the checker types. Duplicates are
+% dropped so a name gets exactly one slot.
+
+:- function collect_vars_rule(list(head_con), list(guard), list(body_goal)) -> list(any).
+collect_vars_rule(Cons, Guards, Body) ->
+    dedup_names(append(collect_vars_head_cons(Cons),
+                append(collect_vars_guards(Guards),
+                       collect_vars_body_goals(Body)))).
+
+:- function collect_vars_head_cons(list(head_con)) -> list(any).
+collect_vars_head_cons([]) -> [].
+collect_vars_head_cons([head_con(_, Args)|Cs]) ->
+    append(collect_vars_head_args(Args), collect_vars_head_cons(Cs)).
+
+:- function collect_vars_head_args(list(head_arg)) -> list(any).
+collect_vars_head_args([]) -> [].
+collect_vars_head_args([head_var(V)|As]) -> [V|collect_vars_head_args(As)].
+collect_vars_head_args([head_wild|As]) -> collect_vars_head_args(As).
+
+:- function collect_vars_guards(list(guard)) -> list(any).
+collect_vars_guards([]) -> [].
+collect_vars_guards([G|Gs]) ->
+    append(collect_vars_guard(G), collect_vars_guards(Gs)).
+
+:- function collect_vars_guard(guard) -> list(any).
+collect_vars_guard(guard_equal(A, B)) ->
+    append(collect_vars_expr(A), collect_vars_expr(B)).
+collect_vars_guard(guard_match(E, _, _)) -> collect_vars_expr(E).
+collect_vars_guard(guard_getarg(V, E, _)) -> [V|collect_vars_expr(E)].
+collect_vars_guard(guard_expr(E)) -> collect_vars_expr(E).
+
+:- function collect_vars_body_goals(list(body_goal)) -> list(any).
+collect_vars_body_goals([]) -> [].
+collect_vars_body_goals([G|Gs]) ->
+    append(collect_vars_body_goal(G), collect_vars_body_goals(Gs)).
+
+:- function collect_vars_body_goal(body_goal) -> list(any).
+collect_vars_body_goal(body_true) -> [].
+collect_vars_body_goal(body_tell(_, Args)) -> collect_vars_exprs(Args).
+collect_vars_body_goal(body_unify(A, B)) ->
+    append(collect_vars_expr(A), collect_vars_expr(B)).
+collect_vars_body_goal(body_host(_, Args)) -> collect_vars_exprs(Args).
+collect_vars_body_goal(body_is(V, E)) -> [V|collect_vars_expr(E)].
+collect_vars_body_goal(body_call(_, Args)) -> collect_vars_exprs(Args).
+collect_vars_body_goal(body_apply(F, Args)) ->
+    append(collect_vars_expr(F), collect_vars_exprs(Args)).
+
+:- function collect_vars_exprs(list(expr)) -> list(any).
+collect_vars_exprs([]) -> [].
+collect_vars_exprs([E|Es]) -> append(collect_vars_expr(E), collect_vars_exprs(Es)).
+
+:- function collect_vars_expr(expr) -> list(any).
+collect_vars_expr(var_e(V)) -> [V].
+collect_vars_expr(int_e(_)) -> [].
+collect_vars_expr(float_e(_)) -> [].
+collect_vars_expr(text_e(_)) -> [].
+collect_vars_expr(wild_e) -> [].
+collect_vars_expr(funref_e(_, _)) -> [].
+collect_vars_expr(ctor_e(_, Args)) -> collect_vars_exprs(Args).
+collect_vars_expr(call_e(_, Args)) -> collect_vars_exprs(Args).
+collect_vars_expr(apply_e(F, Args)) ->
+    append(collect_vars_expr(F), collect_vars_exprs(Args)).
+collect_vars_expr(host_e(_, Args)) -> collect_vars_exprs(Args).
+collect_vars_expr(lambda_e(Params, Body)) ->
+    append(collect_vars_head_args(Params), collect_vars_exprs(Body)).
+
+% ---------------------------------------------------------------------
+% Allocation
+% ---------------------------------------------------------------------
+%
+% The only part of this module that is not a pure function: a slot is a
+% fresh logical variable, and only a rule body can make one.
+
+:- chr_constraint
+    alloc_var_types(list(any), list(pair(any, type_skeleton)), list(pair(any, ty))),
+    alloc_skeleton(type_skeleton, ty),
+    alloc_skeletons(list(type_skeleton), list(ty)).
+
+% One slot per variable. A variable with no declaration source at all
+% takes the plain flexible slot. Ports `allocVarTypes`.
+alloc_var_types_nil @
+    alloc_var_types([], _, Out) <=> Out = [].
+
+alloc_var_types_cons @
+    alloc_var_types([V|Vs], Skels, Out) <=>
+    alloc_skeleton(from_maybe(sk_open, assoc_get(V, Skels)), T),
+    alloc_var_types(Vs, Skels, Rest),
+    Out = [kv(V, T) | Rest].
+
+% Materialize one skeleton. Mirrors the source-type encoding's shapes,
+% so a shaped slot meets a declared type componentwise instead of
+% binding to it whole. Ports `allocSkeleton`.
+alloc_skeleton_any @
+    alloc_skeleton(sk_any, Out) <=> Out = ty_any.
+
+% Nothing to do: the caller passed an unbound variable, which *is* the
+% flexible slot.
+alloc_skeleton_open @
+    alloc_skeleton(sk_open, _) <=> true.
+
+alloc_skeleton_con @
+    alloc_skeleton(sk_con(N, Subs), Out) <=>
+    alloc_skeletons(Subs, Args),
+    Out = tcon(N, Args).
+
+alloc_skeleton_fun @
+    alloc_skeleton(sk_fun(ArgSks, RetSk), Out) <=>
+    alloc_skeletons(ArgSks, Args),
+    alloc_skeleton(RetSk, Ret),
+    Out = fun(Args, Ret).
+
+alloc_skeletons_nil @
+    alloc_skeletons([], Out) <=> Out = [].
+
+alloc_skeletons_cons @
+    alloc_skeletons([S|Ss], Out) <=>
+    alloc_skeleton(S, T),
+    alloc_skeletons(Ss, Rest),
+    Out = [T | Rest].

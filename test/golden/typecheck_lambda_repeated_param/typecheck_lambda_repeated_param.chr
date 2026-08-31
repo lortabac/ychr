@@ -1,0 +1,15 @@
+:- module(typecheck_lambda_repeated_param, [h/1]).
+:- use_module(library(prelude)).
+
+% A repeated lambda parameter name shares ONE type slot across its
+% positions, so the two declared parameter types must agree. Here the
+% expected type is `fun(int, string) -> int`, so the shared slot meets
+% `int` and then `string`: YCHR-60001.
+%
+% Without this test, allocating a fresh slot per position instead of
+% reusing the first passes the entire corpus.
+:- chr_type handler ---> mk((fun(int, string) -> int)).
+
+:- chr_constraint h(int), use(handler).
+
+h(_) <=> use(mk(fun(X, X) -> X end)).

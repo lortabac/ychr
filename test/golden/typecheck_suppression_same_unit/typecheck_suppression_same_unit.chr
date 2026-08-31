@@ -1,0 +1,14 @@
+% Per-unit warning suppression: a rule that is both dead and wrong.
+%
+% `integer(X)` at a `color`-typed position is contradicting evidence,
+% so the rule can never fire (YCHR-20104); `R = X` then writes a
+% `color` into an `int`-typed argument, which is an inconsistency. A
+% unit that reports an error omits its warnings, so only the error is
+% reported — see docs/reference/type-system.md §Inaccessible branches.
+:- module(typecheck_suppression_same_unit, []).
+:- use_module(library(prelude)).
+
+:- chr_type color ---> red ; green ; blue.
+:- chr_constraint tag(color, int).
+
+dead @ tag(X, R) <=> integer(X) | R = X.

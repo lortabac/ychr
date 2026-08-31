@@ -1,0 +1,18 @@
+:- module(typecheck_struct_ctor_field, [u/2]).
+:- use_module(library(prelude)).
+
+:- function (dbl(int) -> int).
+dbl(X) -> X * 2.
+
+:- chr_type box ---> box(int).
+:- chr_constraint u(string, box).
+
+% `=` is pure structural unification, so its operands are typed
+% structurally -- and a constructor application recurses into its
+% fields in the SAME mode. `dbl(S)` is therefore a symbolic compound
+% typed `any`, not a call: no `check_function_use` is emitted for it,
+% so passing a string to the `int`-typed `dbl` draws no diagnostic.
+%
+% Recursing into constructor fields in evaluated mode instead passes
+% the whole corpus while making this program report YCHR-60001.
+u(S, R) <=> R = box(dbl(S)).
