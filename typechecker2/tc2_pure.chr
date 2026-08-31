@@ -12,7 +12,8 @@
 % as multisets, so the only freedom is the order in which the lists are
 % concatenated.
 :- module('$tc2_pure', [
-    fun program_errors/2
+    fun program_errors/2,
+    fun goals_arity_errors/4
 ]).
 
 :- use_module('$tc2_ast').
@@ -248,8 +249,10 @@ rules_arity_errors(Env, [R|Rs], Unit) ->
 rule_arity_errors(Env,
                   rule(Name, ann(_, _, _), ann(GAnn, GLoc, Guards), ann(BAnn, BLoc, Body)),
                   Unit) ->
-    append(arity_diags(Unit, rule_label(Name), GAnn, GLoc, guards_arity(Env, Guards)),
-           arity_diags(Unit, rule_label(Name), BAnn, BLoc, body_goals_arity(Env, Body))).
+    append(arity_diags(Unit, rule_label(Name), origin_ann(GAnn), GLoc,
+                       guards_arity(Env, Guards)),
+           arity_diags(Unit, rule_label(Name), origin_ann(BAnn), BLoc,
+                       body_goals_arity(Env, Body))).
 
 % A class function's equations are checked in throwaway per-signature
 % sessions whose diagnostics are discarded, so the old checker collects
@@ -273,7 +276,8 @@ fun_arity_errors(Env, fun_def(FName, _, _, _, ann(A, Loc, Eqs)), Unit) ->
 :- function eqs_arity_errors(con_env, any, int, loc, list(fun_eq), int, int) -> list(error).
 eqs_arity_errors(_, _, _, _, [], _, _) -> [].
 eqs_arity_errors(Env, FName, A, Loc, [Eq|Eqs], Unit, Step) ->
-    append(arity_diags(Unit, label_function(FName), A, Loc, eq_arity(Env, Eq)),
+    append(arity_diags(Unit, label_function(FName), origin_ann(A), Loc,
+                       eq_arity(Env, Eq)),
            eqs_arity_errors(Env, FName, A, Loc, Eqs, Unit + Step, Step)).
 
 % Parameters are post-HNF head arguments and so contain no constructor
@@ -283,12 +287,33 @@ eqs_arity_errors(Env, FName, A, Loc, [Eq|Eqs], Unit, Step) ->
 eq_arity(Env, fun_eq(_, Guards, _, Rhs)) ->
     append(guards_arity(Env, Guards), expr_arity(Env, Rhs)).
 
-:- function arity_diags(int, diag_label, int, loc, list(arity_use)) -> list(error).
+:- function arity_diags(int, diag_label, diag_origin, loc, list(arity_use)) -> list(error).
 arity_diags(_, _, _, _, []) -> [].
-arity_diags(U, L, A, Loc, [arity_use(N, Use, Declared)|Rest]) ->
-    [error(ctx(U, origin_ann(A), L, Loc), constructor_arity,
+arity_diags(U, L, O, Loc, [arity_use(N, Use, Declared)|Rest]) ->
+    [error(ctx(U, O, L, Loc), constructor_arity,
            constructor_arity_d(N, Use, Declared))
-     | arity_diags(U, L, A, Loc, Rest)].
+     | arity_diags(U, L, O, Loc, Rest)].
+
+% The constructor-arity errors of a query's goals. A goal introduces no
+% declarations, so this is the *only* declaration-level check goals go
+% through: the type definitions and their constructors were validated
+% when the program was checked. Ports the `recordHsDiags` call in
+% `typeCheckGoals`.
+%
+% Goal `i` is unit `i`, matching the walk in `tc2_walk.chr`. Goals have
+% no annotated AST node — the old checker's goal context carries the
+% empty `Atom ""` as its origin — so nothing is echoed as the offending
+% source and the caller's location and label are used throughout.
+:- function goals_arity_errors(con_env, list(body_goal), diag_label, loc) -> list(error).
+goals_arity_errors(Env, Goals, Label, Loc) ->
+    goals_arity_errors_at(Env, Goals, Label, Loc, 0).
+
+:- function goals_arity_errors_at(con_env, list(body_goal), diag_label, loc, int)
+       -> list(error).
+goals_arity_errors_at(_, [], _, _, _) -> [].
+goals_arity_errors_at(Env, [G|Gs], Label, Loc, Unit) ->
+    append(arity_diags(Unit, Label, origin_none, Loc, body_goal_arity(Env, G)),
+           goals_arity_errors_at(Env, Gs, Label, Loc, Unit + 1)).
 
 % --- The walk -------------------------------------------------------
 

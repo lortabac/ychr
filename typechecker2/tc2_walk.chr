@@ -1,4 +1,5 @@
-% The checking walk: declarations, then rules, then function equations.
+% The checking walk: declarations, then rules, then function equations —
+% or, for a query, declarations and then goals.
 %
 % Ports the parts of `src/YCHR/Internal/TypeCheck.hs` that decide *what*
 % to ask the solver — `tellConstraintSigs` / `tellFunctionSigs` /
@@ -22,8 +23,9 @@
 % (equation x signature) attempt in a throwaway sub-session, exactly as
 % `checkClassFunction` runs each in a throwaway `runCheckSession`.
 :- module('$tc2_walk', [
-    walk_program/2,
-    tell_decls/2,
+    walk_program/3,
+    walk_goals/4,
+    tell_decls/3,
     check_attempt/8
 ]).
 
@@ -279,107 +281,190 @@ encode_sigs_cons @
 % declaration is instantiated once, at fresh *flexible* variables; use
 % sites `copy_term` the stored fact, so nothing a use site does can
 % pollute it.
+%
+% The facts are built as *data* first and told from the list, rather
+% than told directly at each declaration. That is what lets the
+% class-function overload search hand a whole declaration environment
+% to a throwaway sub-session (`retell_decls` below) instead of
+% re-deriving it from the AST every attempt — which was 38% of all the
+% time the checker spent on the golden corpus.
+
+% One declaration fact, as a term. One constructor per solver
+% constraint the declarations produce, with the same argument types.
+:- chr_type decl_fact ---> df_constraint_sig(any, int, list(ty))
+                         ; df_constraint_bounds(any, int, list(bound_named))
+                         ; df_function_sig(any, int, sig_t(list(ty), ty))
+                         ; df_function_sigs(any, int, list(sig_t(list(ty), ty)))
+                         ; df_function_bounds(any, int, list(bound_named))
+                         ; df_con_sig(any, sig_t(ty, list(ty))).
 
 :- chr_constraint
-    tell_decls(tc_env, program),
-    tell_constraint_sigs(list(pair(con_key, list(ty_expr))),
-                         list(pair(con_key, list(bound_sig)))),
-    tell_constraint_bounds(any, int, list(bound_sig), list(pair(string, ty))),
-    tell_function_decls(list(fun_def)),
-    tell_con_sigs(list(type_def)),
-    tell_td_con_sigs(type_def, list(data_con)).
+    tell_decls(tc_env, program, list(decl_fact)),
+    retell_decls(list(decl_fact)),
+    tell_facts(list(decl_fact)),
+    tell_fact(decl_fact),
+    build_constraint_facts(list(pair(con_key, list(ty_expr))),
+                           list(pair(con_key, list(bound_sig))),
+                           list(decl_fact)),
+    constraint_bound_facts(any, int, list(bound_sig), list(pair(string, ty)),
+                           list(decl_fact)),
+    build_function_facts(list(fun_def), list(decl_fact)),
+    build_con_facts(list(type_def), list(decl_fact)),
+    build_td_con_facts(type_def, list(data_con), list(decl_fact)).
 
 tell_decls1 @
-    tell_decls(_, program(_, Funs, ConTypes, ConBounds, Tds)) <=>
-    tell_constraint_sigs(ConTypes, ConBounds),
-    tell_function_decls(Funs),
-    tell_con_sigs(Tds).
+    tell_decls(_, program(_, Funs, ConTypes, ConBounds, Tds), Out) <=>
+    build_constraint_facts(ConTypes, ConBounds, ConFacts),
+    build_function_facts(Funs, FunFacts),
+    build_con_facts(Tds, CtorFacts),
+    Facts is append(ConFacts, append(FunFacts, CtorFacts)),
+    tell_facts(Facts),
+    Out = Facts.
 
-tell_constraint_sigs_nil @
-    tell_constraint_sigs([], _) <=> true.
+% The same declaration environment, in a session that does not have it
+% yet. Everything is copied first, so no *stored* fact shares a
+% variable with the session the list came from: an attempt runs inside
+% `run_chr_session`, where a shared logical variable is *the same
+% variable*, and a fact bound in the sub-session would corrupt the
+% outer one silently. Copying makes that impossible rather than merely
+% unlikely — and it is still far cheaper than re-deriving the facts,
+% which is O(size of every declaration in the program). (The
+% uncopied list does reach the sub-session, as this constraint's own
+% argument, so the two short-lived suspensions that carry it register
+% as observers of the outer variables. They are killed immediately and
+% each session drops foreign observer ids, so nothing comes of it.)
+%
+% The whole list is copied in ONE call, and that is load-bearing: a
+% bounded declaration contributes two facts — the signature and the
+% bounds — whose type variables are shared, and the use site pairs them
+% in a single rule head (`bounded_function_match`). Freshen them
+% independently and the bound lands at variables the call never binds,
+% so it stays residual and succeeds silently.
+% `test/golden/typecheck_class_bounded_call/` pins that.
+retell_decls1 @
+    retell_decls(Facts) <=>
+    Fresh is copy_term(quote(Facts)),
+    tell_facts(Fresh).
+
+tell_facts_nil @
+    tell_facts([]) <=> true.
+
+tell_facts_cons @
+    tell_facts([F|Fs]) <=> tell_fact(F), tell_facts(Fs).
+
+tell_fact_constraint_sig @
+    tell_fact(df_constraint_sig(N, A, Tys)) <=> constraint_sig(N, A, Tys).
+
+tell_fact_constraint_bounds @
+    tell_fact(df_constraint_bounds(N, A, Bs)) <=> constraint_bounds(N, A, Bs).
+
+tell_fact_function_sig @
+    tell_fact(df_function_sig(N, A, Sig)) <=> function_sig(N, A, Sig).
+
+tell_fact_function_sigs @
+    tell_fact(df_function_sigs(N, A, Sigs)) <=> function_sigs(N, A, Sigs).
+
+tell_fact_function_bounds @
+    tell_fact(df_function_bounds(N, A, Bs)) <=> function_bounds(N, A, Bs).
+
+tell_fact_con_sig @
+    tell_fact(df_con_sig(N, Sig)) <=> con_sig(N, Sig).
+
+build_constraint_facts_nil @
+    build_constraint_facts([], _, Out) <=> Out = [].
 
 % The argument types and the bounds share one type-variable map, so a
 % single `copy_term` at the use site freshens both consistently.
-tell_constraint_sigs_cons @
-    tell_constraint_sigs([kv(con_key(N, A), ArgTys)|Rest], Bounds) <=>
+build_constraint_facts_cons @
+    build_constraint_facts([kv(con_key(N, A), ArgTys)|Rest], Bounds, Out) <=>
     Bs is from_maybe([], assoc_get(con_key(N, A), Bounds)),
     alloc_flex_tvars(sort_unique_tvars(append(collect_ty_vars(ArgTys),
                                               bound_sigs_vars(Bs))),
                      TVars),
-    constraint_sig(N, A, encode_tys(TVars, ArgTys)),
-    tell_constraint_bounds(N, A, Bs, TVars),
-    tell_constraint_sigs(Rest, Bounds).
+    constraint_bound_facts(N, A, Bs, TVars, BoundFacts),
+    build_constraint_facts(Rest, Bounds, More),
+    Tys is encode_tys(TVars, ArgTys),
+    Tail is append(BoundFacts, More),
+    Out = [df_constraint_sig(N, A, Tys) | Tail].
 
-tell_constraint_bounds_none @
-    tell_constraint_bounds(_, _, [], _) <=> true.
+constraint_bound_facts_none @
+    constraint_bound_facts(_, _, [], _, Out) <=> Out = [].
 
-tell_constraint_bounds_some @
-    tell_constraint_bounds(N, A, Bs, TVars) <=>
-    constraint_bounds(N, A, encode_bounds(TVars, Bs)).
+constraint_bound_facts_some @
+    constraint_bound_facts(N, A, Bs, TVars, Out) <=>
+    Encoded is encode_bounds(TVars, Bs),
+    Out = [df_constraint_bounds(N, A, Encoded)].
 
-tell_function_decls_nil @
-    tell_function_decls([]) <=> true.
+build_function_facts_nil @
+    build_function_facts([], Out) <=> Out = [].
 
 % No annotations: the all-`any` signature, which mentions no type
 % variables. A bounded function always has one signature (the resolver
 % guarantees it), so a missing one implies no bounds.
-tell_function_decls_untyped @
-    tell_function_decls([fun_def(N, A, [], _, _)|Fs]) <=>
-    function_sig(N, A, sig(all_any_slots(A), ty_any)),
-    tell_function_decls(Fs).
+build_function_facts_untyped @
+    build_function_facts([fun_def(N, A, [], _, _)|Fs], Out) <=>
+    build_function_facts(Fs, More),
+    Slots is all_any_slots(A),
+    Out = [df_function_sig(N, A, sig(Slots, ty_any)) | More].
 
-tell_function_decls_bounded @
-    tell_function_decls([fun_def(N, A, [fun_sig(Args, Ret)], [B|Bs], _)|Fs]) <=>
+build_function_facts_bounded @
+    build_function_facts([fun_def(N, A, [fun_sig(Args, Ret)], [B|Bs], _)|Fs], Out) <=>
     alloc_flex_tvars(sort_unique_tvars(append(append(collect_ty_vars(Args),
                                                      collect_ty_vars_expr(Ret)),
                                               bound_sigs_vars([B|Bs]))),
                      TVars),
-    function_sig(N, A, sig(encode_tys(TVars, Args), encode_ty(TVars, Ret))),
-    function_bounds(N, A, encode_bounds(TVars, [B|Bs])),
-    tell_function_decls(Fs).
+    build_function_facts(Fs, More),
+    ArgTys is encode_tys(TVars, Args),
+    RetTy is encode_ty(TVars, Ret),
+    Encoded is encode_bounds(TVars, [B|Bs]),
+    Out = [df_function_sig(N, A, sig(ArgTys, RetTy)),
+           df_function_bounds(N, A, Encoded)
+           | More].
 
-tell_function_decls_single @
-    tell_function_decls([fun_def(N, A, [S], _, _)|Fs]) <=>
+build_function_facts_single @
+    build_function_facts([fun_def(N, A, [S], _, _)|Fs], Out) <=>
     encode_one_sig(S, Sig),
-    function_sig(N, A, Sig),
-    tell_function_decls(Fs).
+    build_function_facts(Fs, More),
+    Out = [df_function_sig(N, A, Sig) | More].
 
 % More than one declared signature is a class function: the candidates
 % go to the residual overload resolution, each instantiated separately.
-tell_function_decls_multi @
-    tell_function_decls([fun_def(N, A, Sigs, _, _)|Fs]) <=>
+build_function_facts_multi @
+    build_function_facts([fun_def(N, A, Sigs, _, _)|Fs], Out) <=>
     encode_sigs(Sigs, Encoded),
-    function_sigs(N, A, Encoded),
-    tell_function_decls(Fs).
+    build_function_facts(Fs, More),
+    Out = [df_function_sigs(N, A, Encoded) | More].
 
-tell_con_sigs_nil @
-    tell_con_sigs([]) <=> true.
+build_con_facts_nil @
+    build_con_facts([], Out) <=> Out = [].
 
-tell_con_sigs_cons @
-    tell_con_sigs([Td|Tds]) <=>
-    tell_td_con_sigs(Td, type_cons(Td)),
-    tell_con_sigs(Tds).
+build_con_facts_cons @
+    build_con_facts([Td|Tds], Out) <=>
+    build_td_con_facts(Td, type_cons(Td), Here),
+    build_con_facts(Tds, More),
+    Out is append(Here, More).
 
-tell_td_con_sigs_nil @
-    tell_td_con_sigs(_, []) <=> true.
+build_td_con_facts_nil @
+    build_td_con_facts(_, [], Out) <=> Out = [].
 
 % Parent type and field types share the declaration's type variables, so
 % `copy_term`ing the signature at a use site keeps the parent/field
 % sharing that makes `list(T)` relate its element type to `[X|Xs]`.
-tell_td_con_sigs_cons @
-    tell_td_con_sigs(type_def(TN, Vars, Kind, Loc), [data_con(CN, Fields)|Dcs]) <=>
+build_td_con_facts_cons @
+    build_td_con_facts(type_def(TN, Vars, Kind, Loc), [data_con(CN, Fields)|Dcs], Out) <=>
     alloc_flex_tvars(sort_unique_tvars(Vars), TVars),
-    con_sig(CN, sig(tcon(TN, tvar_slots(Vars, TVars)),
-                    encode_tys(TVars, Fields))),
-    tell_td_con_sigs(type_def(TN, Vars, Kind, Loc), Dcs).
+    build_td_con_facts(type_def(TN, Vars, Kind, Loc), Dcs, More),
+    Slots is tvar_slots(Vars, TVars),
+    FieldTys is encode_tys(TVars, Fields),
+    Out = [df_con_sig(CN, sig(tcon(TN, Slots), FieldTys)) | More].
 
 % ---------------------------------------------------------------------
 % Rules
 % ---------------------------------------------------------------------
 
 :- chr_constraint
-    walk_program(tc_env, program),
-    walk_rules_from(tc_env, program, list(rule)),
+    walk_program(tc_env, program, list(decl_fact)),
+    walk_rules_from(tc_env, program, list(decl_fact), list(rule)),
     walk_rules(tc_env, list(rule), int),
     walk_rule(tc_env, rule, int).
 
@@ -394,16 +479,16 @@ tell_td_con_sigs_cons @
 % whose `runCheckSession` walks `prog.rules` and then the plain
 % functions off one counter.
 walk_program1 @
-    walk_program(Env, P) <=>
+    walk_program(Env, P, Facts) <=>
     decl_rigid_supply(0),
-    walk_rules_from(Env, P, program_rules(P)).
+    walk_rules_from(Env, P, Facts, program_rules(P)).
 
 % The rule list is handed on rather than recomputed: there is no `let`,
 % so a value two goals need becomes a helper's parameter.
 walk_rules_from1 @
-    walk_rules_from(Env, P, Rules) <=>
+    walk_rules_from(Env, P, Facts, Rules) <=>
     walk_rules(Env, Rules, 0),
-    walk_funs(Env, P, program_funs(P), length(Rules)).
+    walk_funs(Env, Facts, program_funs(P), length(Rules)).
 
 :- function program_rules(program) -> list(rule).
 program_rules(program(Rules, _, _, _, _)) -> Rules.
@@ -1086,7 +1171,7 @@ push_bcand(N, Ambs, Decls, [C|Rest]) -> [C|push_bcand(N, Ambs, Decls, Rest)].
 % warnings.
 
 :- chr_constraint
-    walk_funs(tc_env, program, list(fun_def), int),
+    walk_funs(tc_env, list(decl_fact), list(fun_def), int),
     walk_fun(tc_env, fun_def, int),
     walk_fun_eqs(tc_env, any, int, loc, fun_sig, list(bound_sig),
                  list(fun_eq), int),
@@ -1106,14 +1191,14 @@ walk_funs_nil @
 % consume no unit id here. `tc2_pure.chr`'s `fun_unit_count` makes the
 % same split.
 walk_funs_class @
-    walk_funs(Env, P, [F|Fs], Unit) <=> fun_sig_count(F) > 1 |
-    walk_class_fun(Env, P, F),
-    walk_funs(Env, P, Fs, Unit).
+    walk_funs(Env, Facts, [F|Fs], Unit) <=> fun_sig_count(F) > 1 |
+    walk_class_fun(Env, Facts, F),
+    walk_funs(Env, Facts, Fs, Unit).
 
 walk_funs_plain @
-    walk_funs(Env, P, [F|Fs], Unit) <=>
+    walk_funs(Env, Facts, [F|Fs], Unit) <=>
     walk_fun(Env, F, Unit),
-    walk_funs(Env, P, Fs, Unit + fun_eq_count(F)).
+    walk_funs(Env, Facts, Fs, Unit + fun_eq_count(F)).
 
 :- function fun_sig_count(fun_def) -> int.
 fun_sig_count(fun_def(_, _, Sigs, _, _)) -> length(Sigs).
@@ -1300,27 +1385,27 @@ check_fun_stmt_apply @
 :- chr_type attempt_verdict ---> attempt_ok ; attempt_failed.
 
 :- chr_constraint
-    walk_class_fun(tc_env, program, fun_def),
-    class_eqs(tc_env, program, any, int, loc, list(fun_sig), list(fun_eq)),
-    class_eq_try(tc_env, program, any, int, loc, fun_eq, list(fun_sig)),
-    class_attempt(tc_env, program, any, int, loc, fun_eq, fun_sig,
+    walk_class_fun(tc_env, list(decl_fact), fun_def),
+    class_eqs(tc_env, list(decl_fact), any, int, loc, list(fun_sig), list(fun_eq)),
+    class_eq_try(tc_env, list(decl_fact), any, int, loc, fun_eq, list(fun_sig)),
+    class_attempt(tc_env, list(decl_fact), any, int, loc, fun_eq, fun_sig,
                   attempt_verdict),
-    class_eq_next(tc_env, program, any, int, loc, fun_eq, list(fun_sig),
+    class_eq_next(tc_env, list(decl_fact), any, int, loc, fun_eq, list(fun_sig),
                   attempt_verdict),
-    check_attempt(tc_env, program, any, int, loc, fun_sig, fun_eq,
+    check_attempt(tc_env, list(decl_fact), any, int, loc, fun_sig, fun_eq,
                   attempt_verdict).
 
 walk_class_fun1 @
-    walk_class_fun(Env, P, fun_def(N, _, Sigs, _, ann(EAnn, ELoc, Eqs))) <=>
-    class_eqs(Env, P, N, EAnn, ELoc, Sigs, Eqs).
+    walk_class_fun(Env, Facts, fun_def(N, _, Sigs, _, ann(EAnn, ELoc, Eqs))) <=>
+    class_eqs(Env, Facts, N, EAnn, ELoc, Sigs, Eqs).
 
 class_eqs_nil @
     class_eqs(_, _, _, _, _, _, []) <=> true.
 
 class_eqs_cons @
-    class_eqs(Env, P, N, EAnn, ELoc, Sigs, [Eq|Eqs]) <=>
-    class_eq_try(Env, P, N, EAnn, ELoc, Eq, Sigs),
-    class_eqs(Env, P, N, EAnn, ELoc, Sigs, Eqs).
+    class_eqs(Env, Facts, N, EAnn, ELoc, Sigs, [Eq|Eqs]) <=>
+    class_eq_try(Env, Facts, N, EAnn, ELoc, Eq, Sigs),
+    class_eqs(Env, Facts, N, EAnn, ELoc, Sigs, Eqs).
 
 % No signature left: the equation fits none of them. The diagnostic is
 % attributed to no unit — the old checker collects it outside any
@@ -1336,9 +1421,9 @@ class_eq_try_none @
                  no_matching_overload, source_name(FName)).
 
 class_eq_try_sig @
-    class_eq_try(Env, P, FName, EAnn, ELoc, Eq, [Sig|Sigs]) <=>
-    class_attempt(Env, P, FName, EAnn, ELoc, Eq, Sig, Verdict),
-    class_eq_next(Env, P, FName, EAnn, ELoc, Eq, Sigs, Verdict).
+    class_eq_try(Env, Facts, FName, EAnn, ELoc, Eq, [Sig|Sigs]) <=>
+    class_attempt(Env, Facts, FName, EAnn, ELoc, Eq, Sig, Verdict),
+    class_eq_next(Env, Facts, FName, EAnn, ELoc, Eq, Sigs, Verdict).
 
 % `Verdict` reaches the sub-session as a shared logical variable, which
 % is how the answer comes back; everything else in the goal is ground
@@ -1347,22 +1432,22 @@ class_eq_try_sig @
 % inside `quote/1` on the right of an `is` is not — hence this separate
 % constraint, whose head argument it is.
 class_attempt1 @
-    class_attempt(Env, P, FName, EAnn, ELoc, Eq, Sig, Verdict) <=>
-    _Ran is run_chr_session(quote(check_attempt(Env, P, FName, EAnn, ELoc,
+    class_attempt(Env, Facts, FName, EAnn, ELoc, Eq, Sig, Verdict) <=>
+    _Ran is run_chr_session(quote(check_attempt(Env, Facts, FName, EAnn, ELoc,
                                                 Sig, Eq, Verdict))).
 
 class_eq_next_ok @
     class_eq_next(_, _, _, _, _, _, _, V) <=> V == attempt_ok | true.
 
 class_eq_next_retry @
-    class_eq_next(Env, P, FName, EAnn, ELoc, Eq, Sigs, _) <=>
-    class_eq_try(Env, P, FName, EAnn, ELoc, Eq, Sigs).
+    class_eq_next(Env, Facts, FName, EAnn, ELoc, Eq, Sigs, _) <=>
+    class_eq_try(Env, Facts, FName, EAnn, ELoc, Eq, Sigs).
 
-% One attempt, in its own session. The environment and the program term
-% are rebuilt into declaration facts here rather than shared, because
-% those facts carry fresh flexible type variables and a session may not
-% reuse another's. The environment itself is ground and travels by
-% value, which is what keeps the attempt from re-deriving it.
+% One attempt, in its own session. Both the environment and the
+% declaration facts travel by value: the environment is ground AST, and
+% the facts are copied on arrival (`retell_decls`), so the attempt
+% starts from a complete declaration environment without re-deriving
+% one and without sharing a variable with the session it came from.
 %
 % The unit id is 0 and the diagnostics never leave, so neither the
 % number nor the annotation id is observable. Suppression runs for
@@ -1371,12 +1456,12 @@ class_eq_next_retry @
 % since it only drops warnings when there is an error, and an error
 % already fails the attempt.
 check_attempt1 @
-    check_attempt(Env, P, FName, EAnn, ELoc, Sig, Eq, Verdict) <=>
+    check_attempt(Env, Facts, FName, EAnn, ELoc, Sig, Eq, Verdict) <=>
     errors([]),
     warnings([]),
     rigid_supply(-1),
     decl_rigid_supply(0),
-    tell_decls(Env, P),
+    retell_decls(Facts),
     check_equation(Env, FName, EAnn, ELoc, Sig, [], Eq, 0),
     collect(Errs),
     collect_warnings(Warns),
@@ -1385,3 +1470,51 @@ check_attempt1 @
 :- function verdict_of(list(error), list(warning)) -> attempt_verdict.
 verdict_of([], []) -> attempt_ok.
 verdict_of(_, _) -> attempt_failed.
+
+% ---------------------------------------------------------------------
+% Goals
+% ---------------------------------------------------------------------
+%
+% Ports `typeCheckGoals`. A query's goals are checked exactly like a
+% rule body — same `check_body_goal`, same declarations — with two
+% differences the shape below spells out: the whole goal list shares one
+% variable scope, so a name two goals mention denotes one slot, and each
+% goal is nonetheless its own checking unit, so a goal's own error
+% suppresses only its own warnings.
+%
+% That second half is unobservable today and is here for parity: the
+% only warning the checker emits needs a guard, and a goal has none, so
+% no goal-level warning exists for a unit id to keep or drop.
+% Renumbering every goal to one unit leaves the whole corpus green.
+% `typeCheckGoals` gives each goal its own unit anyway (spec §Type
+% Checking Procedure), so this does too, and a goal-level warning added
+% later suppresses correctly in both checkers at once.
+%
+% There is no head and there are no guards, so nothing contributes a
+% skeleton (every slot starts flexible) and no ambient signature is in
+% scope. The caller supplies the location and the label; goals have no
+% annotated node to echo, hence `origin_none`.
+
+:- chr_constraint
+    walk_goals(tc_env, list(body_goal), loc, diag_label),
+    walk_goals_at(tc_env, list(body_goal), loc, diag_label,
+                  list(pair(any, ty)), int).
+
+% `decl_rigid_supply` is seeded even though nothing here can consume it:
+% rigids come from head occurrences, `guard_match` betas and declared
+% type parameters, none of which a goal has. Without the seed a walker
+% that grew one of those would not fail — `make_decl_rigid` would simply
+% suspend and leave the type unbound.
+walk_goals1 @
+    walk_goals(Env, Goals, Loc, Label) <=>
+    decl_rigid_supply(0),
+    alloc_var_types(collect_vars_goals(Goals), [], VarTypes),
+    walk_goals_at(Env, Goals, Loc, Label, VarTypes, 0).
+
+walk_goals_at_nil @
+    walk_goals_at(_, [], _, _, _, _) <=> true.
+
+walk_goals_at_cons @
+    walk_goals_at(Env, [G|Gs], Loc, Label, VarTypes, Unit) <=>
+    check_body_goal(scope(Env, VarTypes, [], ctx(Unit, origin_none, Label, Loc)), G),
+    walk_goals_at(Env, Gs, Loc, Label, VarTypes, Unit + 1).

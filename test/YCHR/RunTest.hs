@@ -483,6 +483,39 @@ queryErrorTests =
                 "expected Error, got non-Error exception: " ++ show exc
           Right _ ->
             assertFailure "expected an exception for unknown constraint",
+      testCase "runProgramWithQuery: one variable scope across the whole query" $ do
+        -- The goals of a query share their variable slots (spec §Type
+        -- Checking Procedure), so a name two goals mention has one
+        -- type. Neither goal below is wrong on its own; together they
+        -- demand `int` and `bool` of the same slot. Give each goal its
+        -- own scope and this query type-checks.
+        cp <-
+          compileOrFail
+            [ ( "two.chr",
+                ":- module(two, [ci/1, cb/1]).\n\
+                \:- chr_constraint ci(int).\n\
+                \:- chr_constraint cb(bool).\n\
+                \\n\
+                \ki @ ci(_) <=> true.\n\
+                \kb @ cb(_) <=> true.\n"
+              )
+            ]
+        outcome <-
+          try @SomeException
+            (runProgramWithQuery cp Map.empty "two:ci(X), two:cb(X).")
+        case outcome of
+          Left exc -> case fromException exc :: Maybe Error of
+            Just err@(TypeErrors _) ->
+              assertBool
+                ("expected 'YCHR-60001' in: " ++ displayMsg err)
+                ("YCHR-60001" `isInfixOf` displayMsg err)
+            Just other ->
+              assertFailure $
+                "expected TypeErrors, got Error:\n" ++ displayMsg other
+            Nothing ->
+              assertFailure $
+                "expected Error, got non-Error exception: " ++ show exc
+          Right _ -> assertFailure "expected TypeErrors, got success",
       testCase "runProgramWithQuery: parse error in one goal aborts the whole query" $ do
         cp <- compileOrFail [("pub.chr", exportedSource)]
         outcome <-

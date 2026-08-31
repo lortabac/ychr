@@ -49,7 +49,6 @@ import Control.Monad (unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask)
 import Data.IORef (readIORef)
-import Data.IntMap.Strict qualified as IntMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import YCHR.Internal.Compile (tellProcName)
@@ -58,7 +57,7 @@ import YCHR.Internal.Runtime.Error (RuntimeErrorThrown, runtimeErrorS)
 import YCHR.Internal.Runtime.Monad
   ( Chr,
     SessionEnv (..),
-    initSessionEnv,
+    forkSessionEnv,
     runChr,
   )
 import YCHR.Internal.Runtime.Registry
@@ -104,30 +103,13 @@ runChrSession :: [Value] -> Chr Value
 runChrSession [goalArg] = do
   goals <- goalConstraints goalArg
   env <- ask
-  pm <- liftIO (readIORef env.procMap)
-  sub <-
-    liftIO $
-      initSessionEnv
-        (IntMap.elems env.storeTypeNames)
-        (IntMap.elems env.ruleNames)
-        pm
-        env.hostCalls
-        env.evaluables
-        env.exportMap
-        env.exportedSet
-  -- Share the variable and suspension-id counters so sub-session ids
-  -- never collide with outer ones: a cross-session observer leak then
-  -- hits "unknown SuspensionId" instead of silently reactivating an
-  -- unrelated constraint that reused the id. Share the trace state so
-  -- a traced outer query (REPL @:trace@) shows sub-session steps too.
-  let sub' =
-        sub
-          { varCounter = env.varCounter,
-            storeNextId = env.storeNextId,
-            traceHandler = env.traceHandler,
-            traceDepth = env.traceDepth
-          }
-  result <- liftIO (try (runChr (mapM_ (uncurry tellConstraint) goals) sub'))
+  -- 'forkSessionEnv' is what makes this "the same program, from
+  -- scratch": fresh store, history, queue and call stack, everything
+  -- else — including the variable and suspension-id counters, and the
+  -- trace state — carried over. See its documentation for why the
+  -- counters are shared.
+  sub <- liftIO (forkSessionEnv env)
+  result <- liftIO (try (runChr (mapM_ (uncurry tellConstraint) goals) sub))
   case result of
     Left (_ :: RuntimeErrorThrown) -> pure (VBool False)
     Right () -> pure (VBool True)

@@ -6,8 +6,8 @@
 % and the driver only decodes the two diagnostic lists that come back.
 %
 % `check_program` reports the declaration-level diagnostics and checks
-% the program's rules and function equations; `check_goals` is still a
-% stub, which milestone M6 fills in.
+% the program's rules and function equations; `check_goals` checks a
+% query's goals against an already-checked program's declarations.
 :- module('$tc2_main', [
     check_program/3,
     check_goals/6
@@ -56,16 +56,31 @@ check_program(Program, Errors, Warnings) <=>
     warnings([]),
     rigid_supply(-1),
     Env is build_tc_env(Program),
-    tell_decls(Env, Program),
-    walk_program(Env, Program),
+    tell_decls(Env, Program, Facts),
+    walk_program(Env, Program, Facts),
     collect(SolverErrors),
     collect_warnings(SolverWarnings),
     AllErrors is append(program_errors(env_cons(Env), Program), SolverErrors),
     Errors = AllErrors,
     Warnings is suppress_warnings(AllErrors, SolverWarnings).
 
+% Goals are checked against the program's declarations only: they
+% introduce no type definitions and no constructors, so none of the
+% whole-program checks in `program_errors` applies. What does apply is
+% the constructor-arity walk — a goal may *use* a known constructor at
+% the wrong arity — and that runs per goal, in the goal's own unit.
 check_goals(Program, Goals, Loc, Label, Errors, Warnings) <=>
     _Nodes is ast_size(Program) + body_goals_size(Goals)
             + loc_size(Loc) + diag_label_size(Label),
-    Errors = [],
-    Warnings = [].
+    errors([]),
+    warnings([]),
+    rigid_supply(-1),
+    Env is build_tc_env(Program),
+    tell_decls(Env, Program, _Facts),
+    walk_goals(Env, Goals, Loc, Label),
+    collect(SolverErrors),
+    collect_warnings(SolverWarnings),
+    AllErrors is append(goals_arity_errors(env_cons(Env), Goals, Label, Loc),
+                        SolverErrors),
+    Errors = AllErrors,
+    Warnings is suppress_warnings(AllErrors, SolverWarnings).

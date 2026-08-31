@@ -186,6 +186,17 @@ Stdlib additions, both implemented on both backends:
   limited to the two numeric types is corrected accordingly. See
   [§Comparisons](docs/reference/prelude.md#comparisons-and-equality).
 
+Library API:
+
+- `YCHR.Run` gains `resolveQueryGoals` and the `ResolvedQuery` record
+  it returns: everything `prepareQuery` does — parse, rename, resolve,
+  desugar, lambda-lift — short of type-checking, plus the program the
+  resulting goals are to be checked against. `prepareQuery` is now
+  defined in terms of it. Use it when you want the goals themselves,
+  or want to type-check them yourself, rather than take
+  `prepareQuery`'s all-or-nothing `TypeErrors`. Like the rest of the
+  staged query pipeline it is outside the version policy.
+
 Runtime:
 
 - Unification now transfers a bound variable's observers onto the

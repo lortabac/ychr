@@ -1,0 +1,11 @@
+% Goal-level checks are per goal, and the constructor-arity walk is one
+% of them: a goal that applies a declared constructor at the wrong
+% arity is rejected before the query runs, exactly as a rule body would
+% be. `ok_pair` pins that the right arity still goes through.
+:- module(tgc, [store/1, type(pair/0)]).
+
+:- chr_type pair ---> pair(int, int).
+
+:- chr_constraint store(pair).
+
+keep @ store(_) <=> true.

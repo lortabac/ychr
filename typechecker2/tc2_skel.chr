@@ -28,6 +28,7 @@
     type(type_skeleton/0),
     fun collect_vars_rule/3,
     fun collect_vars_eq/1,
+    fun collect_vars_goals/1,
     fun collect_vars_guards/1,
     fun collect_vars_body_goals/1,
     fun collect_vars_exprs/1,
@@ -402,6 +403,13 @@ collect_vars_rule(Cons, Guards, Body) ->
     dedup_names(append(collect_vars_head_cons(Cons),
                 append(collect_vars_guards(Guards),
                        collect_vars_body_goals(Body)))).
+
+% The same for a query's goal list. The goals of one query share a
+% single variable scope, so a name mentioned by two of them gets one
+% slot — which is why the whole list is collected at once rather than
+% goal by goal. Ports `typeCheckGoals`'s `foldMap collectVarsInBodyGoal`.
+:- function collect_vars_goals(list(body_goal)) -> list(any).
+collect_vars_goals(Goals) -> dedup_names(collect_vars_body_goals(Goals)).
 
 % The same for one function equation: parameters, guards, prelude
 % statements and the result expression. Ports `collectVarsInEq`.

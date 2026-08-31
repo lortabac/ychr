@@ -50,6 +50,8 @@ module YCHR.Run
     goalShapeConstraint,
     runGoalConstraint,
     runPreparedGoal,
+    ResolvedQuery (..),
+    resolveQueryGoals,
     PreparedQuery (..),
     prepareQuery,
     executePreparedQuery,
@@ -106,7 +108,7 @@ import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed (AnnP (..), SourceLoc (..))
 import YCHR.Internal.Parser (ParseValidationError (..), parseConstraintWith, parseQueryWith)
 import YCHR.Internal.Pretty (prettyPExprSrc, prettyTerm)
-import YCHR.Internal.Rename (renameQueryArgsWith, renameQueryGoalsWith)
+import YCHR.Internal.Rename (RenameWarning, renameQueryArgsWith, renameQueryGoalsWith)
 import YCHR.Internal.Resolve (ResolveError, termToExpr)
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Runtime.Error (RuntimeErrorThrown (..), runtimeErrorS)
@@ -451,9 +453,24 @@ data PreparedQuery = PreparedQuery
     extraProcs :: [Procedure]
   }
 
--- | Parse, rename, desugar, lambda-lift, and type-check a query.
-prepareQuery :: CompiledProgram -> Text -> IO (PreparedQuery, [Warning])
-prepareQuery cp src = do
+-- | A query taken as far as it can go without type-checking it:
+-- parsed, renamed, resolved, desugared, and lambda-lifted.
+-- 'goalProgram' is the program 'liftedGoals' are to be checked
+-- against — the compiled program extended with 'queryLambdas', so that
+-- the signatures of the query's own anonymous functions are in scope.
+data ResolvedQuery = ResolvedQuery
+  { liftedGoals :: [D.BodyGoal],
+    queryLambdas :: [D.Function],
+    goalProgram :: D.Program,
+    renameWarnings :: [Diagnostic RenameWarning]
+  }
+
+-- | Everything 'prepareQuery' does except the type-check. Split out so
+-- that a caller who wants to type-check the goals itself — or not at
+-- all — can, rather than take 'prepareQuery''s all-or-nothing
+-- 'TypeErrors'.
+resolveQueryGoals :: CompiledProgram -> Text -> IO ResolvedQuery
+resolveQueryGoals cp src = do
   goals <-
     either
       (throwIO . ParseError "<query>")
@@ -483,21 +500,34 @@ prepareQuery cp src = do
   let (lifted, lambdas, liftErrs) = liftQueryLambdas cp.nextLambdaIndex bodyGoals
   unless (null liftErrs) (throwIO (DesugarErrors liftErrs))
   let cdp = cp.desugaredProgram
-      progForCheck =
-        D.Program
-          { rules = cdp.rules,
-            functions = cdp.functions ++ lambdas,
-            constraintTypes = cdp.constraintTypes,
-            constraintBounds = cdp.constraintBounds,
-            typeDefinitions = cdp.typeDefinitions
-          }
-  tcResult <- typeCheckGoals progForCheck queryLoc (Just "query") lifted
+  pure
+    ResolvedQuery
+      { liftedGoals = lifted,
+        queryLambdas = lambdas,
+        goalProgram =
+          D.Program
+            { rules = cdp.rules,
+              functions = cdp.functions ++ lambdas,
+              constraintTypes = cdp.constraintTypes,
+              constraintBounds = cdp.constraintBounds,
+              typeDefinitions = cdp.typeDefinitions
+            },
+        renameWarnings = renameWs
+      }
+
+-- | Parse, rename, desugar, lambda-lift, and type-check a query.
+prepareQuery :: CompiledProgram -> Text -> IO (PreparedQuery, [Warning])
+prepareQuery cp src = do
+  resolved <- resolveQueryGoals cp src
+  let lifted = resolved.liftedGoals
+      lambdas = resolved.queryLambdas
+  tcResult <- typeCheckGoals resolved.goalProgram queryLoc (Just "query") lifted
   unless (null tcResult.errors) (throwIO (TypeErrors tcResult.errors))
   let allFuns = cp.allFunctions ++ lambdas
       queryProcs = compileQueryLambdas lambdas
       queryDispatches = genCallFunDispatches allFuns
       warnings =
-        [RenameWarnings renameWs | not (null renameWs)]
+        [RenameWarnings resolved.renameWarnings | not (null resolved.renameWarnings)]
           ++ [TypeCheckWarnings tcResult.warnings | not (null tcResult.warnings)]
   pure
     ( PreparedQuery

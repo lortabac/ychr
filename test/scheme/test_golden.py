@@ -89,9 +89,13 @@ HASKELL_ONLY_CASES = {
 # bare atoms whose constructor the renamer cannot resolve — the warning
 # is part of what the test exercises (cross-module visibility,
 # canonicalization fallbacks), or the test uses bare sentinel atoms as
-# RHS of `=` (where `quote/1` no longer strips, per the spec). Mirrors
-# `expectsWarnings` in test/YCHR/GoldenTest.hs. `--Werror` is omitted
-# for these.
+# RHS of `=` (where `quote/1` no longer strips, per the spec).
+# `--Werror` is omitted for these.
+#
+# Mirrors `expectsWarnings` in test/YCHR/GoldenTest.hs, with one
+# difference by construction: this harness runs only *positive* cases, so
+# a directory whose warning belongs to a negative case needs no entry
+# here (`typecheck_goal_ctor_arity`).
 WERROR_EXEMPT = {
     "arity_overload",
     "nonexhaustive_color",

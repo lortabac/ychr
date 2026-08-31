@@ -39,6 +39,10 @@ import YCHR.Run
 -- @nonexhaustive_color@ and @nonexhaustive_nested@ deliberately define
 -- functions that do not cover every constructor of a declared algebraic
 -- type, so they emit the exhaustiveness warning (YCHR-20103) on purpose.
+--
+-- @typecheck_goal_ctor_arity@'s failing goal applies a declared
+-- constructor at the wrong arity, which the renamer reports as
+-- YCHR-20102 on the way to the type error the case is about.
 expectsWarnings :: Set String
 expectsWarnings =
   Set.fromList
@@ -69,6 +73,7 @@ expectsWarnings =
       "type_export_constructor_empty",
       "type_import_constructor_narrowing",
       "type_predicates",
+      "typecheck_goal_ctor_arity",
       "typecheck_polymorphic_constraint",
       "typecheck_qualified_in_head",
       -- These are permitted to emit the inaccessible-branch warning
