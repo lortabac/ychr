@@ -14,6 +14,7 @@
 module YCHR.Internal.Runtime.Error
   ( -- * Call stack
     CallStack,
+    maxCallStackDepth,
 
     -- * Raising runtime errors
     RuntimeErrorKind (..),
@@ -31,6 +32,26 @@ import Data.IORef (readIORef)
 import Data.Text qualified as T
 import YCHR.Internal.Runtime.Monad (CallStack, Chr, SessionEnv (..))
 import YCHR.Internal.VM (StackFrame)
+
+-- | Maximum number of call-stack frames carried on a runtime error.
+--
+-- Truncation happens here, at the single point where the stack is
+-- /read/, rather than on every 'YCHR.Internal.Runtime.Interpreter.pushFrame':
+-- pushing is on the hot path (once per rule fire and per function
+-- entry) and re-truncating there allocated a fresh spine every time.
+-- The reported frames are identical either way — the stack is
+-- newest-first, so taking the first @n@ of the whole thing is what
+-- truncating on the way in used to leave behind.
+--
+-- The un-truncated stack is bounded by the interpreter's call depth,
+-- because every procedure call restores the frames it found on the
+-- way out. That does make the stack O(call depth) rather than O(1):
+-- a program that nests a million activations deep now retains a
+-- million cons cells here. That is proportional to the interpreter's
+-- own IO continuation chain at the same depth, so it adds no new
+-- asymptotic class.
+maxCallStackDepth :: Int
+maxCallStackDepth = 10
 
 -- | Why a runtime error was raised. The distinction is not cosmetic:
 -- a rule guard catches 'InstantiationError' and evaluates to 'False'
@@ -80,4 +101,4 @@ throwWithStack :: RuntimeErrorKind -> String -> Chr a
 throwWithStack kind msg = do
   SessionEnv {callStack} <- ask
   stack <- liftIO $ readIORef callStack
-  liftIO $ throwIO (RuntimeErrorThrown kind msg stack)
+  liftIO $ throwIO (RuntimeErrorThrown kind msg (take maxCallStackDepth stack))

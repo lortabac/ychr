@@ -125,7 +125,7 @@ data SessionEnv = SessionEnv
     -- when 'traceHandler' is 'Just'; the interpreter bumps it on
     -- entry to ωr procedures (activate / occurrence / reactivate
     -- dispatch) and on user-function / lambda entry, via @bracket@
-    -- so 'ControlFlow' exceptions still pop.
+    -- so an unwinding runtime error still pops it.
     traceDepth :: !(IORef Int)
   }
 

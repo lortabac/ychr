@@ -75,7 +75,7 @@ import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ask, runReaderT)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
 import Control.Monad.Trans.Writer.CPS (runWriter)
-import Data.IORef (readIORef)
+import Data.IORef (readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
@@ -344,12 +344,27 @@ convertRuntimeError = handle $ \(RuntimeErrorThrown _kind msg stack) ->
 -- | 'Chr'-flavored version of 'convertRuntimeError', applied at the
 -- 'executePreparedQuery' boundary so the REPL's catch helpers see a
 -- uniform 'Error' value regardless of which path raised it.
+--
+-- Also restores the session call stack on the failure path, as
+-- defence in depth. 'YCHR.Internal.Runtime.Interpreter.withSavedCallStack'
+-- unwinds the frames it pushed only on the normal exit path, so a
+-- caught runtime error leaves them behind. Today no caller cares —
+-- every path that catches one either ends the session outright (the
+-- live REPL prints "live session aborted" and stops looping) or was
+-- running in a session of its own. This keeps the invariant true
+-- anyway, since a query boundary is the natural place to restore it
+-- and the cost is one 'IORef' write per query.
 convertRuntimeErrorChr :: Chr a -> Chr a
 convertRuntimeErrorChr m = do
   env <- ask
-  liftIO $
-    handle (\(RuntimeErrorThrown _kind msg stack) -> throwIO (RuntimeError msg stack)) $
-      runReaderT m env
+  saved <- liftIO (readIORef env.callStack)
+  liftIO
+    $ handle
+      ( \(RuntimeErrorThrown _kind msg stack) -> do
+          writeIORef env.callStack saved
+          throwIO (RuntimeError msg stack)
+      )
+    $ runReaderT m env
 
 -- | Parse and rename a goal, returning the canonicalized 'Constraint'
 -- alongside any rename warnings. Throws on parse or rename errors.
@@ -693,12 +708,9 @@ raiseUnifyFailure v1 v2 = do
 -- user 'YCHR.Convert.hostFnValues' handler, a parse failure inside a
 -- built-in) is re-raised through 'runtimeErrorS' so it reaches the caller
 -- as 'Error''s 'RuntimeError' with a call stack, rather than escaping raw.
--- Async and already-coded exceptions keep their identity.
---
--- Unlike 'invokeHostCall' there is no @ControlFlow@ case: that exception
--- is interpreter-internal, is caught by 'callProc' before control
--- returns, and is not exported — so no 'HostCallFn' reachable from here,
--- built-in or user-supplied, can raise it.
+-- Async and already-coded exceptions keep their identity. The VM's
+-- non-local jumps are not exceptions at all — the interpreter returns
+-- them as signals — so there is nothing else to let through.
 hostCall :: Maybe HostCallFn -> Text -> [Value] -> Chr Value
 hostCall (Just (HostCallFn f)) name args = do
   env <- ask

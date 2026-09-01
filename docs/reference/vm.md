@@ -441,6 +441,12 @@ as an id-bound name; the body statements are executed and reference it
 via `(id-var "<susp-var>")`. The body typically dispatches to
 `reactivate_dispatch`.
 
+The body may not jump out of the drain: `return`, `break` and
+`continue` are not permitted in it, because the drain is neither a
+labelled loop nor a value-producing position. The compiler emits only
+a single dispatch call here, so the restriction is never felt; a
+runtime is free to diagnose a violation as a runtime error.
+
 ### push-frame
 
 ```scheme
@@ -455,8 +461,10 @@ location and the pretty-printed source of the fired rule head or
 matched equation. There is no pop instruction: the runtime saves the
 stack at every procedure call and restores it when the call returns,
 so frames pushed inside a body are visible until the enclosing
-procedure exits. A backend that ignores `push-frame` loses stack
-traces in runtime errors but nothing else.
+procedure exits. Only the innermost frames are reported, so a runtime
+that truncates does so where the stack is read, not where it is
+pushed. A backend that ignores `push-frame` loses stack traces in
+runtime errors but nothing else.
 
 Note that the five fields are emitted as raw unquoted text — a label
 or source fragment containing spaces or parentheses (which is the
@@ -728,7 +736,7 @@ Evaluates the nested boolean expression with *instantiation* errors
 caught: if evaluating it raises a runtime error of instantiation kind
 — an unbound logical variable reached a point that demanded its value
 — `bsoft-guard` yields `false` instead of propagating. Runtime errors
-of any other kind propagate unchanged, as do control-flow exceptions
+of any other kind propagate unchanged, as do the non-local jumps
 (`break`, `continue`, `return`).
 
 The compiler emits this around the guard residual of a rule
@@ -746,9 +754,10 @@ compiler maintains rather than things the instruction checks:
   A `host-call` in the guard is outside this guarantee — but its
   effects survive a guard that evaluates to `false` on its own just as
   they survive an abandoned one, so the catch changes nothing there;
-- procedure calls restore the runtime call stack on the way out
-  whether they return or throw, so the frames a caught guard pushed do
-  not leak into subsequent execution.
+- the runtime call stack is restored at the `bsoft-guard` boundary, so
+  the frames a caught guard pushed do not leak into subsequent
+  execution. (A backend that ignores `push-frame` has nothing to do
+  here.)
 
 The compiler wraps a residual only when it can actually raise — in
 practice, when the residual contains a `bfrom-val`. A residual that is

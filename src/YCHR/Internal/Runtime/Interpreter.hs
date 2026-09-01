@@ -9,12 +9,15 @@
 -- propagation history, reactivation queue, unification-variable
 -- counter, interpreter call stack, the procedure map and the host-call
 -- registry. Per-procedure-call local variables ('Env') live in a
--- mutable 'IORef' read through a thin 'ReaderT' layer so exception-driven
--- non-local jumps preserve state across catches.
+-- mutable 'IORef' read through a thin 'ReaderT' layer so state changes
+-- survive the exception-driven catches that remain ('BSoftGuard').
 --
 -- Non-local control flow ('Return', labelled 'Continue', 'Break') is
--- implemented with real 'Control.Exception' exceptions thrown in 'IO':
--- 'try' delimits each procedure invocation and each 'Foreach' body.
+-- implemented /without/ exceptions: statement execution returns an
+-- explicit 'Signal', 'execStmts' short-circuits on a non-'SFall'
+-- signal, 'execForeach' consumes the labels it owns, and 'callProc'
+-- consumes 'SRet'. Only genuine errors ('RuntimeErrorThrown') and
+-- asynchronous exceptions still unwind through 'IO'.
 module YCHR.Internal.Runtime.Interpreter
   ( -- * Public API
     interpret,
@@ -41,8 +44,7 @@ module YCHR.Internal.Runtime.Interpreter
 where
 
 import Control.Exception
-  ( Exception,
-    SomeAsyncException,
+  ( SomeAsyncException,
     SomeException,
     bracket,
     displayException,
@@ -54,7 +56,7 @@ import Control.Monad (unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
-import Data.Foldable (toList, traverse_)
+import Data.Foldable (toList)
 import Data.IORef
   ( IORef,
     atomicModifyIORef',
@@ -145,30 +147,25 @@ insertVal n v e = e {envValues = Map.insert n v e.envValues}
 insertId :: Name -> SuspensionId -> Env -> Env
 insertId n s e = e {envIds = Map.insert n s e.envIds}
 
--- | Maximum number of call stack frames to keep.
-maxCallStackDepth :: Int
-maxCallStackDepth = 10
-
--- | Non-local control flow signals. Thrown as exceptions to escape
--- the current procedure or 'Foreach' loop and caught at the matching
--- boundary. 'CFReturn' is caught by 'callProc'; 'CFContinue' / 'CFBreak'
--- by 'execForeach' on its labelled loop.
-data ControlFlow
-  = CFReturn Value
-  | CFContinue Label
-  | CFBreak Label
-
-instance Show ControlFlow where
-  show (CFReturn _) = "CFReturn <val>"
-  show (CFContinue l) = "CFContinue " ++ T.unpack l.unLabel
-  show (CFBreak l) = "CFBreak " ++ T.unpack l.unLabel
-
-instance Exception ControlFlow
+-- | How a statement (or a statement list) finished.
+--
+-- 'SFall' means "fell through to the next statement"; the other three
+-- are the VM's non-local jumps. They are returned, not thrown:
+-- 'execStmts' stops at the first non-'SFall' signal and hands it
+-- outwards, 'execForeach' consumes the 'SCont' / 'SBrk' carrying its
+-- own label, and 'callProc' consumes 'SRet'. A signal that reaches
+-- 'callProc' without an owner is a compiler bug and becomes a runtime
+-- error.
+data Signal
+  = SFall
+  | SRet !Value
+  | SCont !Label
+  | SBrk !Label
 
 -- | The interpreter's local stack: an 'IORef Env' threaded above 'Chr'.
--- Using a ref lets exception-driven jumps preserve any state changes
--- made before the jump, matching the original effectful-static-Local
--- 'runError'-with-outer-state semantics.
+-- Using a ref lets the state changes made before a 'BSoftGuard'
+-- failure survive the catch, matching the original
+-- effectful-static-Local 'runError'-with-outer-state semantics.
 type InterpM = ReaderT (IORef Env) Chr
 
 -- ---------------------------------------------------------------------------
@@ -227,36 +224,42 @@ lookupHostCall name = do
   SessionEnv {hostCalls} <- ask
   pure (Map.lookup name hostCalls)
 
+-- | Push a frame onto the session call stack. Deliberately does /not/
+-- truncate: see 'maxCallStackDepth', which is applied where the stack
+-- is read instead.
 pushFrame :: StackFrame -> Chr ()
 pushFrame frame = do
   SessionEnv {callStack} <- ask
-  liftIO $
-    atomicModifyIORef' callStack $ \stack ->
-      (take maxCallStackDepth (frame : stack), ())
+  liftIO $ modifyIORef' callStack (frame :)
 
 -- | Save the call stack, run @action@, and restore the saved frames
--- on the way out — whether @action@ returns normally or throws. The
--- restore-on-throw matters because the REPL's outer @try@ may catch
--- a 'RuntimeErrorThrown' that escapes a procedure call; without
--- bracketing, frames pushed during the failed call would leak into
--- the next operation that observes the same 'SessionEnv'.
+-- on the normal exit path.
+--
+-- The restore is /not/ exception-safe, on purpose: a @bracket@ here
+-- costs a mask plus a handler frame on every single procedure call,
+-- which is the interpreter's hottest path. What matters instead is
+-- that every place which catches a 'RuntimeErrorThrown' and keeps
+-- using the same 'SessionEnv' restores the stack itself:
+--
+--   * 'catchInstantiation' (backing 'BSoftGuard') snapshots and
+--     restores around its own @try@. This is the only catch that
+--     genuinely resumes execution in the same session, so it is the
+--     only one where the restore is load-bearing.
+--   * @YCHR.Run.convertRuntimeErrorChr@ restores at the query
+--     boundary, as defence in depth — see its own note.
+--   * @YCHR.Internal.Runtime.SubSession.runChrSession@ needs nothing:
+--     the forked session has its own @callStack@ ref.
+--
+-- Everywhere else a caught runtime error ends the session outright.
+-- An asynchronous exception may leave frames behind, but the
+-- computation it interrupts is dying anyway.
 withSavedCallStack :: Chr a -> Chr a
 withSavedCallStack action = do
-  env@SessionEnv {callStack} <- ask
-  liftIO $
-    bracket
-      (readIORef callStack)
-      (writeIORef callStack)
-      (\_ -> runChr action env)
-
--- | Catch a 'ControlFlow' exception thrown inside a 'Chr' action.
--- Uses 'try' at the 'IO' layer so the action's state changes (in
--- 'SessionEnv' refs and in any 'InterpM' env ref currently in scope)
--- survive the catch.
-tryControlFlow :: Chr a -> Chr (Either ControlFlow a)
-tryControlFlow m = do
-  env <- ask
-  liftIO (try (runChr m env))
+  SessionEnv {callStack} <- ask
+  saved <- liftIO (readIORef callStack)
+  r <- action
+  liftIO (writeIORef callStack saved)
+  pure r
 
 {- Note [Soft guard catch safety]
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -278,10 +281,10 @@ only sound because of three properties of that position:
     guard that merely evaluates to 'False' just the same, so the catch
     adds no exposure that guard failure did not already have.
 
-  * The call stack is bracket-restored. Every 'callProc' runs its body
-    under 'withSavedCallStack', which writes the saved frames back on
-    the exceptional path too, so the frames pushed by a guard call that
-    threw are already gone by the time the handler runs.
+  * The call stack is restored. 'withSavedCallStack' only restores on
+    the normal exit path, so 'catchInstantiation' snapshots and
+    restores the stack around its own @try@; the frames pushed by a
+    guard call that threw are gone by the time the handler returns.
 
   * The propagation history is untouched. 'AddHistory' is emitted
     inside the fire block, after the guard, so a soft-failed guard
@@ -293,20 +296,25 @@ this catch and unaffected by it.
 -}
 
 -- | Evaluate a boolean action under a soft-failure boundary: an
--- 'InstantiationError' becomes 'False', every other runtime error and
--- all control flow propagate. Backs the 'BSoftGuard' VM form; see
+-- 'InstantiationError' becomes 'False' and every other runtime error
+-- propagates. Backs the 'BSoftGuard' VM form; see
 -- @Note [Soft guard catch safety]@ for why the catch is sound.
 --
--- Uses 'try' at the 'IO' layer, like 'tryControlFlow', so state
--- changes made before the throw survive the catch.
+-- Uses 'try' at the 'IO' layer so state changes made before the throw
+-- survive the catch. The call stack is snapshotted and restored here,
+-- because this is the one catch that resumes in the same session and
+-- 'withSavedCallStack' does not restore on the exceptional path.
 catchInstantiation :: Chr Bool -> Chr Bool
 catchInstantiation m = do
   env <- ask
+  saved <- liftIO (readIORef env.callStack)
   r <- liftIO (try (runChr m env))
   case r of
     Right b -> pure b
     Left e@(RuntimeErrorThrown kind _ _)
-      | kind == InstantiationError -> pure False
+      | kind == InstantiationError -> do
+          liftIO (writeIORef env.callStack saved)
+          pure False
       | otherwise -> liftIO (throwIO e)
 
 -- ---------------------------------------------------------------------------
@@ -330,7 +338,10 @@ emitTrace mkEv = do
 {-# INLINE emitTrace #-}
 
 -- | Run @action@ at depth @depth + 1@, restoring the previous depth
--- on the way out (including on exception). No-op when tracing is off.
+-- on the way out (including on exception — 'RuntimeErrorThrown' still
+-- unwinds through here, and a soft guard may resume afterwards). The
+-- bracket costs nothing when tracing is off, which is the only case
+-- that matters for throughput: the whole function is a no-op then.
 withTraceDepth :: Chr a -> Chr a
 withTraceDepth action = do
   env <- ask
@@ -375,7 +386,7 @@ lookupRuleName env (RuleId i) =
 -- ---------------------------------------------------------------------------
 
 -- | Call a procedure. Creates a fresh local 'Env' with parameter
--- bindings, executes the body, and catches 'CFReturn'. Default
+-- bindings, executes the body, and consumes its 'SRet' signal. Default
 -- return: 'VBool False'. Emits trace events at entry (and on return
 -- for user functions / lambdas) when tracing is on; uses the
 -- procedure's 'procKind' tag to label the event and decide whether
@@ -391,18 +402,32 @@ callProc name args = do
         Left msg -> runtimeErrorS msg
       traceEntry proc args
       let runBody = withSavedCallStack $ do
-            result <- tryControlFlow (withFreshEnv env (execStmts proc.body))
-            case result of
-              Right () -> pure (VBool False)
-              Left (CFReturn v) -> pure v
-              Left (CFContinue l) -> runtimeError' "callProc: uncaught Continue " l.unLabel
-              Left (CFBreak l) -> runtimeError' "callProc: uncaught Break " l.unLabel
+            sig <- withFreshEnv env (execStmts proc.body)
+            case sig of
+              SFall -> pure (VBool False)
+              SRet v -> pure v
+              _ -> uncaughtSignal "callProc" sig
       result <-
         if bumpDepthFor proc.procKind
           then withTraceDepth runBody
           else runBody
       traceExit proc.procKind result
       pure result
+
+-- | Report a jump signal that reached a boundary with no owner: a
+-- 'Continue' or 'Break' whose label names no enclosing 'Foreach' in
+-- the same procedure, or any jump out of a 'DrainReactivationQueue'
+-- body. The compiler never emits either, so this is a compiler bug
+-- surfaced as a runtime error.
+--
+-- The 'SFall' arm exists only to keep the match total: both callers
+-- handle 'SFall' before delegating here.
+uncaughtSignal :: String -> Signal -> Chr a
+uncaughtSignal ctx = \case
+  SFall -> runtimeErrorS (ctx ++ ": uncaught fall-through")
+  SRet _ -> runtimeErrorS (ctx ++ ": uncaught Return")
+  SCont l -> runtimeError' (ctx ++ ": uncaught Continue ") l.unLabel
+  SBrk l -> runtimeError' (ctx ++ ": uncaught Break ") l.unLabel
 
 -- | Should entering a procedure of this kind increase trace
 -- indentation? Tells, activates, occurrences, reactivate-dispatch,
@@ -489,26 +514,37 @@ bindParams pname params args
     step e (p, CVal v) = insertVal p v e
     step e (p, CId s) = insertId p s e
 
--- | Execute a list of statements sequentially.
-execStmts :: [Stmt] -> InterpM ()
-execStmts = traverse_ execStmt
+-- | Execute a list of statements sequentially, stopping at the first
+-- statement that signals a non-local jump and handing that signal to
+-- the caller.
+execStmts :: [Stmt] -> InterpM Signal
+execStmts [] = pure SFall
+execStmts (s : rest) = do
+  sig <- execStmt s
+  case sig of
+    SFall -> execStmts rest
+    _ -> pure sig
 
 -- | Execute a single statement. Mutates the local 'Env' for binders,
--- delegates control-flow stmts to the throw-and-catch machinery, and
--- routes store / history / reactivation effects through 'Chr'.
-execStmt :: Stmt -> InterpM ()
+-- returns the 'Signal' produced by control-flow stmts, and routes
+-- store / history / reactivation effects through 'Chr'.
+execStmt :: Stmt -> InterpM Signal
 execStmt (LetVal name expr) = do
   v <- evalValExpr expr
   modifyEnv (insertVal name v)
+  pure SFall
 execStmt (LetId name expr) = do
   s <- evalIdExpr expr
   modifyEnv (insertId name s)
+  pure SFall
 execStmt (AssignVal name expr) = do
   v <- evalValExpr expr
   modifyEnv (insertVal name v)
+  pure SFall
 execStmt (AssignId name expr) = do
   s <- evalIdExpr expr
   modifyEnv (insertId name s)
+  pure SFall
 execStmt (If cond thenBranch elseBranch) = do
   b <- evalBoolExpr cond
   if b then execStmts thenBranch else execStmts elseBranch
@@ -516,17 +552,15 @@ execStmt (Foreach lbl cType suspVar conditions body) = do
   snapshot <- lift (getStoreSnapshot cType)
   let susps = toList snapshot
   execForeach lbl suspVar conditions body susps
-execStmt (Continue lbl) = liftIO (throwIO (CFContinue lbl))
-execStmt (Break lbl) = liftIO (throwIO (CFBreak lbl))
-execStmt (Return expr) = do
-  v <- evalValExpr expr
-  liftIO (throwIO (CFReturn v))
+execStmt (Continue lbl) = pure (SCont lbl)
+execStmt (Break lbl) = pure (SBrk lbl)
+execStmt (Return expr) = SRet <$> evalValExpr expr
 execStmt (ExprStmt expr) = do
   _ <- evalValExpr expr
-  pure ()
+  pure SFall
 execStmt (BoolExprStmt expr) = do
   _ <- evalBoolExpr expr
-  pure ()
+  pure SFall
 execStmt (Store expr) = do
   sid <- evalIdExpr expr
   lift $ do
@@ -539,11 +573,13 @@ execStmt (Store expr) = do
       ctName <- constraintTypeLabel ct
       ts <- snapshotValues vs
       pure (TEStore sid ctName ts)
+  pure SFall
 execStmt (Kill expr) = do
   sid <- evalIdExpr expr
   lift $ do
     killConstraint sid
     emitTrace (pure (TEKill sid))
+  pure SFall
 execStmt (AddHistory ruleId exprs) = do
   sids <- traverse evalIdExpr exprs
   lift $ do
@@ -552,6 +588,7 @@ execStmt (AddHistory ruleId exprs) = do
       let rn = lookupRuleName env ruleId
       pure (TEFire rn sids)
     addHistory ruleId sids
+  pure SFall
 execStmt (DrainReactivationQueue suspVar body) = do
   envRef <- ask
   lift $
@@ -565,9 +602,19 @@ execStmt (DrainReactivationQueue suspVar body) = do
             ts <- snapshotValues vs
             pure (TEReactivate sid ctName ts)
           liftIO (modifyIORef' envRef (insertId suspVar sid))
-          runReaderT (execStmts body) envRef
+          -- The compiler fixes this body to a single dispatch call
+          -- ('ExprStmt'), which cannot jump; anything else would have
+          -- no owner here, since the drain is not a labelled loop and
+          -- 'drainQueue' has no way to return a value.
+          sig <- runReaderT (execStmts body) envRef
+          case sig of
+            SFall -> pure ()
+            _ -> uncaughtSignal "DrainReactivationQueue" sig
         else pure ()
-execStmt (PushFrame frame) = lift (pushFrame frame)
+  pure SFall
+execStmt (PushFrame frame) = do
+  lift (pushFrame frame)
+  pure SFall
 
 -- ---------------------------------------------------------------------------
 -- Foreach implementation
@@ -575,17 +622,17 @@ execStmt (PushFrame frame) = lift (pushFrame frame)
 
 -- | Iterate the body of a 'Foreach' over a snapshot of candidate
 -- suspensions. Dead suspensions and suspensions failing the index
--- conditions are skipped without entering the body. Labelled
--- 'CFContinue' / 'CFBreak' are caught here; non-matching labels and
--- 'CFReturn' propagate to the next outer handler.
+-- conditions are skipped without entering the body. An 'SCont' /
+-- 'SBrk' carrying /this/ loop's label is consumed here; every other
+-- signal (a foreign label, an 'SRet') is handed further out.
 execForeach ::
   Label ->
   Name ->
   [(ArgIndex, ValExpr)] ->
   [Stmt] ->
   [Suspension] ->
-  InterpM ()
-execForeach _ _ _ _ [] = pure ()
+  InterpM Signal
+execForeach _ _ _ _ [] = pure SFall
 execForeach lbl suspVar conditions body (susp : rest) = do
   alive <- lift (isSuspAlive susp)
   if not alive
@@ -601,16 +648,14 @@ execForeach lbl suspVar conditions body (susp : rest) = do
             pure (TEPartner ctName susp.suspId ts)
           modifyEnv (insertId suspVar susp.suspId)
           envRef <- ask
-          result <- lift (withTraceDepth (tryControlFlow (runReaderT (execStmts body) envRef)))
-          case result of
-            Right () -> execForeach lbl suspVar conditions body rest
-            Left (CFContinue l)
+          sig <- lift (withTraceDepth (runReaderT (execStmts body) envRef))
+          case sig of
+            SFall -> execForeach lbl suspVar conditions body rest
+            SCont l
               | l == lbl -> execForeach lbl suspVar conditions body rest
-              | otherwise -> liftIO (throwIO (CFContinue l))
-            Left (CFBreak l)
-              | l == lbl -> pure ()
-              | otherwise -> liftIO (throwIO (CFBreak l))
-            Left cf@(CFReturn _) -> liftIO (throwIO cf)
+            SBrk l
+              | l == lbl -> pure SFall
+            _ -> pure sig
 
 checkConditions :: Suspension -> [(ArgIndex, ValExpr)] -> InterpM Bool
 checkConditions _ [] = pure True
@@ -765,7 +810,7 @@ evalBoolExpr (BSoftGuard expr) = softGuard (evalBoolExpr expr)
 -- | Run a nested boolean evaluation under the soft-guard boundary.
 -- Delegates to 'catchInstantiation' at the 'Chr' level; the local
 -- 'Env' is an 'IORef', so bindings introduced before the failure
--- survive the catch exactly as they do for 'tryControlFlow'.
+-- survive the catch.
 softGuard :: InterpM Bool -> InterpM Bool
 softGuard m = do
   ref <- ask
@@ -800,13 +845,13 @@ evalCallArg (AId e) = CId <$> evalIdExpr e
 -- Host call dispatch
 -- ---------------------------------------------------------------------------
 
--- | Dispatch a host call by name. Only synchronous, non-control-flow
--- exceptions thrown by the host body get wrapped as runtime errors:
--- 'ControlFlow' (interpreter-internal: Return/Continue/Break) and
--- async exceptions (Ctrl+C, thread kill) must keep their identity so
--- they reach their intended handler; 'RuntimeErrorThrown' is re-thrown
+-- | Dispatch a host call by name. Synchronous exceptions thrown by the
+-- host body get wrapped as runtime errors, with two exceptions: async
+-- exceptions (Ctrl+C, thread kill) must keep their identity so they
+-- reach their intended handler, and 'RuntimeErrorThrown' is re-thrown
 -- verbatim so nested host calls preserve the original message and
--- stack frames.
+-- stack frames. The VM's own non-local jumps never appear here — they
+-- are 'Signal' values returned by 'execStmt', not exceptions.
 invokeHostCall :: Name -> [Value] -> Chr Value
 invokeHostCall name argVals = do
   mfn <- lookupHostCall name
@@ -822,8 +867,6 @@ invokeHostCall name argVals = do
             pure (TECallHost name.unName argTs resT)
           pure v
         Left exc
-          | Just (cf :: ControlFlow) <- fromException exc ->
-              liftIO (throwIO cf)
           | Just (ae :: SomeAsyncException) <- fromException exc ->
               liftIO (throwIO ae)
           | Just (rte :: RuntimeErrorThrown) <- fromException exc ->

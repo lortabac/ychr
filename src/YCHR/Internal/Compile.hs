@@ -320,7 +320,8 @@ genOccurrenceBody symTab varMap occ = do
   -- evaluation (and the history check) as well as body execution. A guard
   -- that errors (e.g. evaluates to a non-boolean) then reports the rule's
   -- source location and label, just like a body error. The frame is scoped
-  -- to this call via 'withSavedCallStack', so it does not accumulate.
+  -- to this call: the interpreter restores the frames it found when the
+  -- call returns, so it does not accumulate.
   pure (PushFrame (mkRuleFrame occ) : body ++ [Return (Lit (BoolLit False))])
 
 -- | Compile the guards followed by the rule-firing block. Returns the
