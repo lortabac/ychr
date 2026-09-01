@@ -238,8 +238,9 @@ The following are intentionally out of scope for v1:
   criterion. The paper's useful never-stored analysis instead derives
   "never stored" from a *Late Storage* pass (a constraint removed before
   it is ever committed to the store, even though it appears in multi-headed
-  rules). This source is therefore deferred until Late Storage is
-  implemented.
+  rules). Late Storage is implemented now (`Store` moved out of
+  `tell_c` into fired kept occurrences and the end of `activate_c`),
+  so this analysis is unblocked — but it remains future work.
 - **General subsumption / guard simplification.** Full subsumption
   analysis compares arbitrary occurrences modulo guards and partner
   constraints, and benefits from guard simplification (replacing redundant

@@ -50,7 +50,7 @@ import Control.Exception
     throwIO,
     try,
   )
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
@@ -530,8 +530,11 @@ execStmt (BoolExprStmt expr) = do
 execStmt (Store expr) = do
   sid <- evalIdExpr expr
   lift $ do
-    storeConstraint sid
-    emitTrace $ do
+    didStore <- storeConstraint sid
+    -- 'Store' is idempotent and, under Late Storage, reachable more
+    -- than once for the same suspension; only the one that took
+    -- effect is a trace event.
+    when didStore $ emitTrace $ do
       (ct, vs) <- suspensionView sid
       ctName <- constraintTypeLabel ct
       ts <- snapshotValues vs

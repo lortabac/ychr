@@ -64,19 +64,33 @@ createConstraint cType cArgs = do
     writeIORef storeNextId (n + 1)
     pure (SuspensionId n)
   aliveRef <- liftIO $ newIORef True
-  let susp = Suspension sid cType cArgs aliveRef
+  storedRef <- liftIO $ newIORef False
+  let susp = Suspension sid cType cArgs aliveRef storedRef
   liftIO $ modifyIORef' storeById (IntMap.insert (let SuspensionId n = sid in n) susp)
   pure sid
 
 -- | Add a constraint to the type-indexed store and register it as an
--- observer on each of its variable arguments.
-storeConstraint :: SuspensionId -> Chr ()
+-- observer on each of its variable arguments. Idempotent: under Late
+-- Storage the compiler emits a reachable 'YCHR.Internal.VM.Store' both
+-- per fired kept occurrence and at the end of every activation, and
+-- only the first may take effect — a second append would make the
+-- constraint match twice as a partner, and a second registration would
+-- reactivate it twice per binding. Returns whether this call stored
+-- the constraint, so the interpreter's trace reports only stores that
+-- took effect.
+storeConstraint :: SuspensionId -> Chr Bool
 storeConstraint sid = do
   susp <- lookupSusp sid
-  SessionEnv {storeByType} <- ask
-  let Suspension {suspType = ConstraintType idx, args = sargs} = susp
-  liftIO $ modifyIORef' storeByType (IntMap.adjust (Seq.|> susp) idx)
-  mapM_ (addObserver sid) sargs
+  alreadyStored <- liftIO $ readIORef susp.stored
+  if alreadyStored
+    then pure False
+    else do
+      liftIO $ writeIORef susp.stored True
+      SessionEnv {storeByType} <- ask
+      let ConstraintType idx = susp.suspType
+      liftIO $ modifyIORef' storeByType (IntMap.adjust (Seq.|> susp) idx)
+      mapM_ (addObserver sid) susp.args
+      pure True
 
 -- | Kill a constraint (set alive to False).
 killConstraint :: SuspensionId -> Chr ()

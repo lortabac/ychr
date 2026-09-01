@@ -201,6 +201,12 @@ genConstraintProcs symTab occMap (ident, cType) = do
 -- tell_c
 -- ---------------------------------------------------------------------------
 
+-- | Generate the @tell_c@ procedure. Allocates the suspension and hands
+-- it straight to @activate_c@ — deliberately without a 'Store': storage
+-- is postponed to the latest point that could observe the constraint
+-- (Late Storage, paper §5.3). A constraint whose activation removes it
+-- is never stored at all, skipping the store append and the observer
+-- registration walk over its arguments.
 genTell :: Types.Name -> ConstraintType -> Int -> Procedure
 genTell name cType arity =
   let params = argNames arity
@@ -211,7 +217,6 @@ genTell name cType arity =
           params = params,
           body =
             [ LetId activeName (CreateConstraint cType (map Var params)),
-              Store (IdVar activeName),
               ExprStmt (CallExpr activateName [AId (IdVar activeName)])
             ],
           procKind = PKTell cType
@@ -232,10 +237,17 @@ genActivate name cType arity occs =
         [ LetVal (argName i) (FieldArg (IdVar activeName) (ArgIndex i))
         | i <- [0 .. arity - 1]
         ]
+      -- Late Storage (paper §5.3): a constraint that survives every
+      -- occurrence must be in the store — findable as a partner and
+      -- observing its variables — before activation returns. 'Store' is
+      -- idempotent, so re-activation of an already-stored constraint
+      -- (via @reactivate_dispatch@) passes through here harmlessly. The
+      -- early-drop returns above skip this on purpose: a dropped
+      -- constraint is dead and dead constraints are never stored.
       body =
         argExtracts
           ++ concatMap genActivateCall occs
-          ++ [Return (Lit (BoolLit False))]
+          ++ [Store (IdVar activeName), Return (Lit (BoolLit False))]
    in Procedure
         { name = activateName,
           params = [activeName],
@@ -461,10 +473,24 @@ genFireStmts symTab varMap occ = do
             | (k, p) <- zip [PartnerIndex 0 ..] occ.partners,
               p.isKept
             ]
+      -- Late Storage (paper §5.3): a kept active constraint must be in
+      -- the store before a non-empty body runs — the body may tell
+      -- constraints that need it as a partner, or unify variables it
+      -- must be reactivated on. A removed active was just killed, and
+      -- an empty body observes nothing, so both leave storage to the
+      -- end of @activate_c@. Sound only because guard residuals do not
+      -- tell (dev-docs/INVARIANTS.md): nothing can mutate the store or
+      -- bind variables while the constraint is alive but unstored.
+      -- (The store can still be *read* in that window — a guard
+      -- reaching @write_store_to_list@ through a host call will not
+      -- list the active constraint; see INVARIANTS.md §Scope.)
+      storeStmts =
+        [Store (IdVar activeName) | not activeIsRemoved, not (null bodyStmts)]
       -- The rule frame is pushed at occurrence-procedure entry (see
       -- 'genOccurrenceBody'), so it is already on the call stack here.
       coreFireStmts =
         killStmts
+          ++ storeStmts
           ++ bodyStmts
           ++ earlyDropStmts
           ++ backjumpStmts

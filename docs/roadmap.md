@@ -20,7 +20,7 @@ what is planned.
 - [x] VM serialization
 - [ ] Loop-invariant code motion
 - [ ] Join ordering
-- [ ] Late storage
+- [x] Late storage
 - [ ] Late allocation
 - [ ] Guard simplification
 - [ ] Set semantics

@@ -46,12 +46,17 @@
       (vector-set! s n value)
       (growable-count-set! g (+ n 1))))
 
-  ;;; Suspensions
+  ;;; Suspensions. The stored flag makes store-constraint idempotent:
+  ;;; under Late Storage the compiled code may reach a Store for the
+  ;;; same suspension more than once (per fired kept occurrence, and at
+  ;;; the end of every activation), and only the first may append to
+  ;;; the store and register observers.
   (define-record-type (suspension %make-suspension suspension?)
     (fields (immutable id suspension-id)
             (immutable type suspension-type)
             (immutable args suspension-args)
-            (mutable alive suspension-alive? suspension-alive-set!)))
+            (mutable alive suspension-alive? suspension-alive-set!)
+            (mutable stored suspension-stored? suspension-stored-set!)))
 
   (define (suspension-arg susp idx)
     (vector-ref (suspension-args susp) idx))
@@ -67,17 +72,19 @@
   (define (create-constraint s ctype args)
     (let ((id (session-store-next-id s)))
       (session-store-next-id-set! s (+ id 1))
-      (%make-suspension id ctype args #t)))
+      (%make-suspension id ctype args #t #f)))
 
   (define (store-constraint s susp)
-    (let ((g (vector-ref (session-store-by-type s) (suspension-type susp)))
-          (a (suspension-args susp)))
-      (growable-push! g susp)
-      (let ((len (vector-length a)))
-        (let loop ((i 0))
-          (when (< i len)
-            (add-observer! susp (vector-ref a i))
-            (loop (+ i 1)))))))
+    (unless (suspension-stored? susp)
+      (suspension-stored-set! susp #t)
+      (let ((g (vector-ref (session-store-by-type s) (suspension-type susp)))
+            (a (suspension-args susp)))
+        (growable-push! g susp)
+        (let ((len (vector-length a)))
+          (let loop ((i 0))
+            (when (< i len)
+              (add-observer! susp (vector-ref a i))
+              (loop (+ i 1))))))))
 
   (define (kill-constraint susp)
     (suspension-alive-set! susp #f))

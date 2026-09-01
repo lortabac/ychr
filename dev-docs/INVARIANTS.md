@@ -363,12 +363,22 @@ there; only the way `residualCheck` is built, and the fact that a
 compiled function body has no tell forms, keeps it out.
 
 This used to be a correctness nicety ("guards must not leave
-half-done bindings when they fail"). It is now load-bearing:
-`genGuardedFire` wraps the residual in `BSoftGuard`, which abandons a
-partly-evaluated guard on an instantiation error and continues with
-`False`. If the residual could tell, the abandoned prefix would leave
-store, history or reactivation-queue state behind with nothing to roll
-it back.
+half-done bindings when they fail"). It is now load-bearing twice
+over. First, `genGuardedFire` wraps the residual in `BSoftGuard`,
+which abandons a partly-evaluated guard on an instantiation error and
+continues with `False`. If the residual could tell, the abandoned
+prefix would leave store, history or reactivation-queue state behind
+with nothing to roll it back. Second, Late Storage leaves the active
+constraint alive-but-unstored throughout guard evaluation and partner
+search: sound only because no in-session `BUnify` can run in that
+window, so there is no reactivation event for the unobserved
+constraint to miss and no nested activation that could need it as a
+partner before it is stored. Note the guarantee is about *mutation*:
+the store can still be read in that window — a guard reaching
+`write_store_to_list` / `print_store` through a host call will not
+list the alive-but-unstored active constraint, where eager storage
+would have. Nothing in the corpus exercises this; it is the one
+observable divergence Late Storage introduces.
 
 **Scope, precisely.** The guarantee covers the runtime's own
 bookkeeping — constraint store, propagation history, reactivation
@@ -424,13 +434,18 @@ resolves a name and arity through the export map and calls
 exactly that procedure. Failure surfaces at query time, not compile
 time.
 
-### `Store` linearly follows `CreateConstraint`
+### `Store` reaches every surviving suspension
 
-Runtime observer registration in `Store.hs:136-143` is correct only
-for a freshly-created suspension. The VM's IR is structured so
-`Store` always follows `CreateConstraint` for the same id, but that
-linear order is not encoded — a sufficiently exotic compiler output
-could break the runtime silently.
+Under Late Storage, `Store` no longer follows `CreateConstraint`
+directly: the compiler emits it before a non-empty kept-active rule
+body and at the end of `activate_c`, and `storeConstraint` is
+idempotent (a `stored` flag gates the append and the observer
+registration). What the IR structure now guarantees — without
+encoding it — is that every suspension still alive when its
+activation returns has passed through a `Store`. A compiler output
+that dropped the end-of-activate `Store` would leave a live
+constraint invisible to `Foreach` and unobserved by reactivation,
+silently.
 
 ### Effect-stack ordering — `src/YCHR/Internal/Runtime/Session.hs:126-134`
 

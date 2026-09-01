@@ -68,9 +68,15 @@ data CallVal
 -- | A constraint suspension in the store. The 'alive' flag is mutable so
 -- that 'killConstraint' is O(1) and copies of the suspension obtained
 -- before the kill see the updated state without an explicit lookup.
+-- The 'stored' flag makes 'YCHR.Internal.Runtime.Store.storeConstraint'
+-- idempotent: under Late Storage the compiler may emit more than one
+-- reachable 'Store' for the same suspension (per fired kept occurrence,
+-- and at the end of every activation, including re-activations), and
+-- only the first may append to the store and register observers.
 data Suspension = Suspension
   { suspId :: !SuspensionId,
     suspType :: !ConstraintType,
     args :: ![Value],
-    alive :: !(IORef Bool)
+    alive :: !(IORef Bool),
+    stored :: !(IORef Bool)
   }

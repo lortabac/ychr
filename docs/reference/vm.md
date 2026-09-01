@@ -193,8 +193,8 @@ The roles of the generated procedures:
 
 | Procedure | Purpose | Parameter kinds |
 |-----------|---------|-----------------|
-| `tell_c(X_0, ..., X_n)` | Creates a constraint suspension, stores it, calls `activate_c`. | all values |
-| `activate_c(susp)` | Extracts arguments from the suspension, tries each occurrence in order. Returns `false` if the constraint survives all occurrences. | id |
+| `tell_c(X_0, ..., X_n)` | Creates a constraint suspension and calls `activate_c`. Storage happens later (Late Storage): inside a fired occurrence that keeps the constraint, or at the end of `activate_c`. | all values |
+| `activate_c(susp)` | Extracts arguments from the suspension, tries each occurrence in order. If the constraint survives all occurrences, stores it and returns `false`. | id |
 | `occurrence_c_j(id, X_0, ..., X_n)` | Handles the j-th occurrence of constraint c. Iterates over partner constraints, checks guards, fires rules. Returns `true` (early drop) or `false`. | id, then values |
 | `reactivate_dispatch(susp)` | Checks the suspension's constraint type and calls the appropriate `activate_c`. | id |
 | `func_f(arg_0, ..., arg_n)` | Evaluates a user-defined function. | all values |
@@ -399,6 +399,15 @@ observer** of every unbound variable reachable from its arguments,
 recursing into compound terms — a variable nested inside an argument
 (the `X` in `pair(X, 1)`) must be observed too, or binding it later
 would silently fail to reactivate the constraint.
+
+`store` is **idempotent**: a suspension that is already stored is left
+untouched. The compiler relies on this — under Late Storage it emits a
+reachable `store` for the same suspension both inside fired kept
+occurrences and at the end of every activation (including
+re-activations via `reactivate_dispatch`), and only the first may
+append to the store and register observers. `store` no longer
+necessarily follows `create-constraint` directly: a constraint removed
+during its own activation is never stored at all.
 
 ### kill
 

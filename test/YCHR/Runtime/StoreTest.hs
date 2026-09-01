@@ -76,23 +76,23 @@ storeTests =
     [ testCase "appears in snapshot" $ do
         runStoreEnv $ do
           sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
-          storeConstraint sid
+          _ <- storeConstraint sid
           snap <- getStoreSnapshot (ConstraintType 0)
           liftIO $ length snap @?= 1,
       testCase "multiple same type" $ do
         runStoreEnv $ do
           s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
-          storeConstraint s1
-          storeConstraint s2
+          _ <- storeConstraint s1
+          _ <- storeConstraint s2
           snap <- getStoreSnapshot (ConstraintType 0)
           liftIO $ length snap @?= 2,
       testCase "different types" $ do
         runStoreEnv $ do
           s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           s2 <- createConstraint (ConstraintType 1) [VInt 5]
-          storeConstraint s1
-          storeConstraint s2
+          _ <- storeConstraint s1
+          _ <- storeConstraint s2
           snapLeq <- getStoreSnapshot (ConstraintType 0)
           snapGcd <- getStoreSnapshot (ConstraintType 1)
           liftIO $ length snapLeq @?= 1
@@ -100,7 +100,17 @@ storeTests =
       testCase "empty snapshot for unknown type" $ do
         runStoreEnv $ do
           snap <- getStoreSnapshot (ConstraintType 99)
-          liftIO $ length snap @?= 0
+          liftIO $ length snap @?= 0,
+      -- Late Storage emits a reachable Store per fired kept occurrence
+      -- and at the end of every activation, so a suspension can be
+      -- stored more than once; only the first may append.
+      testCase "idempotent" $ do
+        runStoreEnv $ do
+          sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
+          _ <- storeConstraint sid
+          _ <- storeConstraint sid
+          snap <- getStoreSnapshot (ConstraintType 0)
+          liftIO $ length snap @?= 1
     ]
 
 killTests :: TestTree
@@ -110,14 +120,14 @@ killTests =
     [ testCase "alive becomes False" $ do
         runStoreEnv $ do
           sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
-          storeConstraint sid
+          _ <- storeConstraint sid
           killConstraint sid
           alive <- aliveConstraint sid
           liftIO $ alive @?= False,
       testCase "still in snapshot after kill" $ do
         runStoreEnv $ do
           sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
-          storeConstraint sid
+          _ <- storeConstraint sid
           killConstraint sid
           snap <- getStoreSnapshot (ConstraintType 0)
           liftIO $ length snap @?= 1,
@@ -125,8 +135,8 @@ killTests =
         runStoreEnv $ do
           s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
-          storeConstraint s1
-          storeConstraint s2
+          _ <- storeConstraint s1
+          _ <- storeConstraint s2
           killConstraint s1
           a1 <- aliveConstraint s1
           a2 <- aliveConstraint s2
@@ -179,8 +189,8 @@ iterationTests =
         runStoreEnv $ do
           s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
-          storeConstraint s1
-          storeConstraint s2
+          _ <- storeConstraint s1
+          _ <- storeConstraint s2
           killConstraint s1
           snap <- getStoreSnapshot (ConstraintType 0)
           alive <- countAlive (toList snap)
@@ -188,10 +198,10 @@ iterationTests =
       testCase "new constraints invisible to captured snapshot" $ do
         runStoreEnv $ do
           s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
-          storeConstraint s1
+          _ <- storeConstraint s1
           snap <- getStoreSnapshot (ConstraintType 0)
           s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
-          storeConstraint s2
+          _ <- storeConstraint s2
           liftIO $ length snap @?= 1
           snap2 <- getStoreSnapshot (ConstraintType 0)
           liftIO $ length snap2 @?= 2,
@@ -199,8 +209,8 @@ iterationTests =
         runStoreEnv $ do
           s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
-          storeConstraint s1
-          storeConstraint s2
+          _ <- storeConstraint s1
+          _ <- storeConstraint s2
           snap <- getStoreSnapshot (ConstraintType 0)
           killConstraint s1
           (susp1, susp2) <- liftIO $ case toList snap of
@@ -215,9 +225,9 @@ iterationTests =
           s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
           s3 <- createConstraint (ConstraintType 0) [VInt 1, VInt 5]
-          storeConstraint s1
-          storeConstraint s2
-          storeConstraint s3
+          _ <- storeConstraint s1
+          _ <- storeConstraint s2
+          _ <- storeConstraint s3
           snap <- getStoreSnapshot (ConstraintType 0)
           let susps = toList snap
           matches <- filterByArg 0 (VInt 1) susps
@@ -225,7 +235,7 @@ iterationTests =
       testCase "suspArg pure access" $ do
         runStoreEnv $ do
           sid <- createConstraint (ConstraintType 0) [VInt 10, VAtom "y"]
-          storeConstraint sid
+          _ <- storeConstraint sid
           snap <- getStoreSnapshot (ConstraintType 0)
           s <- liftIO $ case toList snap of
             (s : _) -> pure s
@@ -253,7 +263,7 @@ observerTests =
         obs <- runStoreObservers $ do
           x <- newVar
           sid <- createConstraint (ConstraintType 0) [x, VInt 2]
-          storeConstraint sid
+          _ <- storeConstraint sid
           (_, o) <- unify x (VInt 1)
           pure o
         assertBool
@@ -262,15 +272,15 @@ observerTests =
       testCase "ground args produce no observer" $ do
         runStoreEnv $ do
           sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
-          storeConstraint sid
+          _ <- storeConstraint sid
           pure (),
       testCase "multiple constraints on same variable" $ do
         obs <- runStoreObservers $ do
           x <- newVar
           s1 <- createConstraint (ConstraintType 0) [x, VInt 2]
           s2 <- createConstraint (ConstraintType 1) [x]
-          storeConstraint s1
-          storeConstraint s2
+          _ <- storeConstraint s1
+          _ <- storeConstraint s2
           (_, o) <- unify x (VInt 1)
           pure o
         assertBool "should contain s1" (SuspensionId 0 `elem` obs)
@@ -285,7 +295,7 @@ observerTests =
             createConstraint
               (ConstraintType 0)
               [VTerm "pair" [VTerm "box" [x], VInt 2]]
-          storeConstraint sid
+          _ <- storeConstraint sid
           (_, o) <- unify x (VInt 1)
           pure o
         assertBool

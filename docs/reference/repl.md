@@ -101,41 +101,38 @@ call prelude:+(1, 2)
 return 3
 ```
 
-A small CHR example showing tell, store, activate, try-occurrence,
-partner pick, fire, and recursive activation. The first `leq(1, 2)`
+A small CHR example showing tell, activate, try-occurrence, partner
+pick, fire, store, and recursive activation. The first `leq(1, 2)`
 finds no partners (the store is empty when it activates); the second
 `leq(2, 3)` finds `c#0` as a transitivity partner and the rule fires:
 
 ```ychr-repl
 ychr> :trace order:leq(1, 2), order:leq(2, 3).
 tell order:leq(1, 2)
-  store c#0: order:leq(1, 2)
   activate c#0: order:leq(1, 2)
     try occurrence order:leq #1 (rule reflexivity)
     try occurrence order:leq #2 (rule antisymmetry)
     try occurrence order:leq #4 (rule idempotence)
-      partner c#0: order:leq(1, 2)
     try occurrence order:leq #6 (rule transitivity)
     try occurrence order:leq #7 (rule transitivity)
+    store c#0: order:leq(1, 2)
 tell order:leq(2, 3)
-  store c#1: order:leq(2, 3)
   activate c#1: order:leq(2, 3)
     try occurrence order:leq #1 (rule reflexivity)
     try occurrence order:leq #2 (rule antisymmetry)
     try occurrence order:leq #4 (rule idempotence)
-      partner c#1: order:leq(2, 3)
     try occurrence order:leq #6 (rule transitivity)
       partner c#0: order:leq(1, 2)
         fire transitivity [c#1, c#0]
+        store c#1: order:leq(2, 3)
         tell order:leq(1, 3)
-          store c#2: order:leq(1, 3)
           activate c#2: order:leq(1, 3)
             try occurrence order:leq #1 (rule reflexivity)
             try occurrence order:leq #2 (rule antisymmetry)
             try occurrence order:leq #4 (rule idempotence)
-              partner c#2: order:leq(1, 3)
             try occurrence order:leq #6 (rule transitivity)
             try occurrence order:leq #7 (rule transitivity)
+            store c#2: order:leq(1, 3)
     try occurrence order:leq #7 (rule transitivity)
 ```
 
@@ -144,16 +141,23 @@ emits no procedure for them, so `activate` never calls them. See
 [passive occurrences](../../dev-docs/passive-occurrences.md#worked-example-leq)
 for why those two are redundant.
 
-The `partner c#N` line inside occurrence 4 matches the active constraint
-against itself; the compiled guard then rejects the self-match (events
-for those guard rejections are not currently traced).
+Note where the `store` events sit. Constraints are stored *late*: a
+constraint enters the store on the first rule fire that keeps it (the
+`store c#1` just before transitivity's body runs), or when its
+activation ends without dropping it (the `store c#0` after the last
+occurrence). A constraint removed during its own activation is never
+stored at all. One visible consequence: during its *initial*
+activation a constraint never appears as its own partner — it is not
+in the store yet. (A *reactivated* constraint is already stored, so a
+self-`partner` line can appear there before the compiled guard
+rejects the self-match.)
 
 The events are:
 
 | Event | Meaning |
 |-------|---------|
 | `tell C(...)` | A constraint is being added. |
-| `store c#N: C(...)` | The constraint has been added to the store with id `c#N`. |
+| `store c#N: C(...)` | The constraint has been added to the store with id `c#N` (late: on the first fire that keeps it, or when its activation ends). |
 | `activate c#N: C(...)` | The constraint becomes the active constraint. |
 | `try occurrence T #J (rule R)` | Entering the `J`-th occurrence of constraint `T` (in rule `R`). |
 | `partner c#N: C(...)` | A partner constraint matched in a head loop. |

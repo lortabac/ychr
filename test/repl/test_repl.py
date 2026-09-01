@@ -220,10 +220,13 @@ def test_info_hidden_constructors(ychr_bin, tmp_path):
 
 def test_trace_chr_program(ychr_bin, tmp_path):
     """`:trace` against a CHR program shows the ωr events for a single
-    propagation rule fire: tell, store, activate, try-occurrence,
-    partner pick, fire (with constraint ids), and recursive tell.
+    propagation rule fire: tell, activate, try-occurrence, partner
+    pick, fire (with constraint ids), store, and recursive tell.
     Tests the core CHR scheduling events together (function/host-call
-    events are tested by the inline arithmetic case)."""
+    events are tested by the inline arithmetic case). Store events
+    appear where Late Storage actually stores: before the body of a
+    fired rule that keeps the constraint, or at the end of an
+    activation the constraint survived — never right after the tell."""
     (tmp_path / "prop.chr").write_text(
         ":- module(prop, [p/1, q/1]).\n"
         ":- chr_constraint p/1.\n"
@@ -239,13 +242,13 @@ def test_trace_chr_program(ychr_bin, tmp_path):
     assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
     expected = (
         "tell prop:p(1)\n"
-        "  store c#0: prop:p(1)\n"
         "  activate c#0: prop:p(1)\n"
         "    try occurrence prop:p #1 (rule make_q)\n"
         "      fire make_q [c#0]\n"
+        "      store c#0: prop:p(1)\n"
         "      tell prop:q(1)\n"
-        "        store c#1: prop:q(1)\n"
         "        activate c#1: prop:q(1)\n"
+        "          store c#1: prop:q(1)\n"
     )
     assert result.stdout == expected
 
@@ -273,23 +276,23 @@ def test_trace_nested_foreach(ychr_bin, tmp_path):
     assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
     expected = (
         "tell nest:a(1)\n"
-        "  store c#0: nest:a(1)\n"
         "  activate c#0: nest:a(1)\n"
         "    try occurrence nest:a #1 (rule r)\n"
+        "    store c#0: nest:a(1)\n"
         "tell nest:b(1)\n"
-        "  store c#1: nest:b(1)\n"
         "  activate c#1: nest:b(1)\n"
         "    try occurrence nest:b #1 (rule r)\n"
+        "    store c#1: nest:b(1)\n"
         "tell nest:c(1)\n"
-        "  store c#2: nest:c(1)\n"
         "  activate c#2: nest:c(1)\n"
         "    try occurrence nest:c #1 (rule r)\n"
         "      partner c#1: nest:b(1)\n"
         "        partner c#0: nest:a(1)\n"
         "          fire r [c#2, c#1, c#0]\n"
+        "          store c#2: nest:c(1)\n"
         "          tell nest:ok\n"
-        "            store c#3: nest:ok\n"
         "            activate c#3: nest:ok\n"
+        "              store c#3: nest:ok\n"
     )
     assert result.stdout == expected
 

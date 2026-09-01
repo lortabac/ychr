@@ -78,7 +78,7 @@ The VM is a small imperative language represented as a Haskell AST. It is the co
 
 A VM program is a record bundling the list of named procedures with a little metadata: the number and source names of constraint types and rules (for store pre-allocation and runtime introspection) and an *evaluables dispatch table* mapping a `(functor, arity)` key to the procedure name of the corresponding user-defined function (consulted by `EvalIs` when `is` walks a dereferenced compound term). Each procedure has a name, a parameter list, and a body consisting of a sequence of statements. The compiler generates the following kinds of procedures for each CHR handler:
 
-- **`tell_c`**: Entry point for adding a constraint. Creates a suspension, stores it, and calls `activate_c`.
+- **`tell_c`**: Entry point for adding a constraint. Creates a suspension and calls `activate_c`. The suspension is *not* stored here: storage is postponed to the latest point that could observe the constraint (Late Storage, paper §5.3) — before a non-empty rule body that keeps the active constraint, or at the end of `activate_c` if it survives every occurrence. A constraint removed during its own activation is never stored at all.
 - **`activate_c`**: Tries all occurrence procedures in order for a given constraint. Implements early drop (returns as soon as an occurrence signals the constraint was killed).
 - **`occurrence_c_j`**: Handles the j-th occurrence of constraint c. Contains nested iterations over candidate partner constraints, guard checking, history checking, and rule firing (kill + body execution). Returns a boolean: `true` if the active constraint was dropped (early drop), `false` to continue with further occurrences.
 - **`reactivate_dispatch`**: Dispatches reactivation by examining the constraint type of a suspension and calling the appropriate `activate_c`.
@@ -287,7 +287,7 @@ The paper describes numerous optimizations. Each should be considered individual
 | Early Drop | Stop handling active constraint once killed. | CHR-to-VM compiler |
 | Backjumping | Resume outer loop when partner dies. | CHR-to-VM compiler (via Continue) |
 | Non-Robust Iterators | Use cheaper iterators when robustness not needed. | Runtime |
-| Late Storage | Postpone storing until necessary. | CHR-to-VM compiler |
+| Late Storage | Postpone storing until necessary. **Implemented**: `Store` is emitted before a non-empty kept-active rule body and at the end of `activate_c`; `Store` is idempotent in both runtimes. | CHR-to-VM compiler |
 | Late Allocation | Postpone suspension creation until necessary. | CHR-to-VM compiler |
 | Propagation History Maintenance | Garbage collect stale history entries. | Runtime |
 | Propagation History Elimination | Remove history when not needed. | CHR-to-VM compiler |
