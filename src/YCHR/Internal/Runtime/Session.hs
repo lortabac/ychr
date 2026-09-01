@@ -67,6 +67,11 @@ import YCHR.Internal.VM (Name (..), Procedure (..), Program (..))
 -- pre-compiled type-checker bundle is a 'SessionInput' directly.
 data SessionInput = SessionInput
   { program :: Program,
+    -- | 'program''s procedures, keyed by name. Taken from the
+    -- 'CompiledProgram' rather than rebuilt here, so that every
+    -- session run against one compiled program shares the table
+    -- instead of paying for it per query.
+    procIndex :: Map Name Procedure,
     exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
     exportedSet :: Set Types.QualifiedIdentifier
   }
@@ -78,6 +83,7 @@ toSessionInput :: CompiledProgram -> SessionInput
 toSessionInput cp =
   SessionInput
     { program = cp.program,
+      procIndex = cp.procIndex,
       exportMap = cp.exportMap,
       exportedSet = cp.exportedSet
     }
@@ -99,10 +105,8 @@ withCHRExtra ::
   Chr a ->
   IO a
 withCHRExtra si hc extraProcs action = do
-  let baseProcMap =
-        Map.fromList [(p.name, p) | p <- si.program.procedures]
-      extraProcMap = Map.fromList [(p.name, p) | p <- extraProcs]
-      procMap = extraProcMap `Map.union` baseProcMap
+  let extraProcMap = Map.fromList [(p.name, p) | p <- extraProcs]
+      procMap = extraProcMap `Map.union` si.procIndex
   let evaluableMap = Map.fromList si.program.evaluables
   env <-
     initSessionEnv

@@ -75,7 +75,8 @@ import YCHR.Internal.StdLib (stdlib)
 import YCHR.Internal.TypeCheck.Error (TypeCheckError, TypeCheckWarning)
 import YCHR.Internal.Types (SymbolTable)
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (Program, StackFrame)
+import YCHR.Internal.VM (Procedure (..), Program (..), StackFrame)
+import YCHR.Internal.VM qualified as VM
 
 -- | Anything that can stop a program from compiling or running, tagged by
 -- the phase that rejected it.
@@ -177,6 +178,15 @@ data Warning
 -- | A compiled CHR program together with module visibility information.
 data CompiledProgram = CompiledProgram
   { program :: Program,
+    -- | 'program''s procedures, keyed by name — the lookup table the
+    -- interpreter runs against. Carried here for the same reason as
+    -- 'queryRenameEnv': a session used to rebuild it from
+    -- @program.procedures@ on every query, which costs
+    -- @O(n log n)@ in the size of the whole program (prelude
+    -- included) before a short goal has done any work at all.
+    -- The field is lazy, so compile-only users ('ychr check', the
+    -- Scheme backend) never build it.
+    procIndex :: Map VM.Name Procedure,
     exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
     exportedSet :: Set Types.QualifiedIdentifier,
     symbolTable :: SymbolTable,
@@ -403,6 +413,7 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
   pure
     ( CompiledProgram
         { program = prog,
+          procIndex = Map.fromList [(p.name, p) | p <- prog.procedures],
           exportMap = exportMap,
           exportedSet = exportedSet,
           symbolTable = symTab,
