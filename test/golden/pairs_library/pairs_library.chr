@@ -18,6 +18,8 @@
     membership/2,
     projected/2,
     empties/2,
+    combined/1,
+    combined_new/1,
     type(name/0)
 ]).
 
@@ -44,7 +46,9 @@
     zipped_exact_uneven/1,
     membership/2,
     projected/2,
-    empties/2.
+    empties/2,
+    combined/1,
+    combined_new/1.
 
 zipped(R) <=> R is zip([a, b, c], [1, 2]).
 
@@ -92,3 +96,12 @@ projected(Ks, Vs) <=>
 empties(R, Ks) <=>
     R is assoc_get(a, []),
     Ks is assoc_keys([]).
+
+% The combining function sees the new value first and the existing one
+% second, as `Map.insertWith` does -- hence 9 - 1, not 1 - 9.
+combined(R) <=>
+    R is assoc_put_with(fun(New, Old) -> New - Old end, a, 9, [kv(a, 1), kv(b, 2)]).
+
+% A key with no entry is appended with the new value uncombined.
+combined_new(R) <=>
+    R is assoc_put_with(fun(New, Old) -> New - Old end, c, 9, [kv(a, 1)]).

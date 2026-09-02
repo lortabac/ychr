@@ -255,7 +255,8 @@ inside the REPL all of them are available; in compiled programs use
 ### `lists`
 
 [`libraries/lists.chr`](../../libraries/lists.chr). Written in CHR
-itself rather than delegated to host calls.
+itself rather than delegated to host calls. Imports
+[`maybe`](#maybe), which is what `nth_maybe/2` returns.
 
 | Function | Description |
 |---|---|
@@ -264,8 +265,10 @@ itself rather than delegated to host calls.
 | `length(list(T)) -> int` | Number of elements. |
 | `member(T, list(T)) -> bool` | Membership test, using `==`. |
 | `append(list(T), list(T)) -> list(T)` | Concatenate two lists. |
+| `concat(list(list(T))) -> list(T)` | Flatten one level of nesting. |
 | `reverse(list(T)) -> list(T)` | Reverse. |
 | `maplist(fun(A) -> B end, list(A)) -> list(B)` | Apply a function to each element. |
+| `concat_map(fun(A) -> list(B) end, list(A)) -> list(B)` | Apply a list-valued function to each element and concatenate the results. |
 | `filter(fun(A) -> bool end, list(A)) -> list(A)` | Keep the elements satisfying a predicate. |
 | `foldl(fun(B, A) -> B end, B, list(A)) -> B` | Left fold with an initial accumulator. |
 | `foldr(fun(A, B) -> B end, B, list(A)) -> B` | Right fold with an initial accumulator. |
@@ -274,18 +277,32 @@ itself rather than delegated to host calls.
 | `any(fun(A) -> bool end, list(A)) -> bool` | True when some element does. |
 | `take(int, list(T)) -> list(T)` | The first `N` elements; the whole list if it is shorter, `[]` for `N =< 0`. |
 | `drop(int, list(T)) -> list(T)` | Everything after the first `N` elements; `[]` if the list is shorter, the whole list for `N =< 0`. |
+| `replicate(int, T) -> list(T)` | `N` copies of one element; `[]` for `N =< 0`. |
+| `distinct(list(T)) -> list(T)` | The elements in order, with every repeat of an earlier one dropped. Uses `==`; keeps the *first* occurrence. |
+| `sort_by(fun(A, A) -> bool end, list(A)) -> list(A)` | Sort under a caller-supplied strict less-than. Stable. |
 | `sum_list(list(int)) -> int` | Sum. Integers only — the accumulator starts at `0`. |
 | `product_list(list(int)) -> int` | Product. Integers only, starting at `1`. |
 | `nth/2` | 0-based indexing. Partial: a runtime error if the index is out of range. |
+| `nth_maybe(int, list(T)) -> maybe(T)` | 0-based indexing, total: `nothing` for an index that is negative or past the end. |
 
 `head/1`, `tail/1` and `nth/2` carry no type signature. They are
 genuinely partial, and a signature is what enables the exhaustiveness
 checker — so annotating them would make every importing module emit
 `YCHR-20103`, which `--Werror` turns fatal. Their arguments are
-therefore `any` to the type checker.
+therefore `any` to the type checker. `nth_maybe/2` is the typed,
+total alternative to `nth/2`.
 
-`take/2` and `drop/2` clamp rather than fail: an out-of-range count is
-not an error.
+`take/2`, `drop/2` and `replicate/2` clamp rather than fail: an
+out-of-range count is not an error.
+
+`sort_by/2` takes a *strict* less-than — a comparison that answers
+`false` for two elements it considers equal. Stability follows: ties
+keep their input order, so sorting twice under two orderings refines
+rather than scrambles.
+
+```prolog
+R is sort_by(fun(A, B) -> A < B end, [3, 1, 2]).   % [1, 2, 3]
+```
 
 Every function here matches on the list spine, so a *partial* list —
 one whose tail is still an unbound variable, like `[1|T]` — cannot be
@@ -360,6 +377,7 @@ rejected (`YCHR-20020`).
 | `zip_exact(list(A), list(B)) -> maybe(list(pair(A, B)))` | Pair up two lists of equal length; `nothing` if the lengths differ. |
 | `assoc_get(K, list(pair(K, V))) -> maybe(V)` | Look up a key: `just(V)` or `nothing`. |
 | `assoc_put(K, V, list(pair(K, V))) -> list(pair(K, V))` | Replace the first entry for the key, or append a new one. |
+| `assoc_put_with(fun(V, V) -> V end, K, V, list(pair(K, V))) -> list(pair(K, V))` | The same, except that an existing value is *combined* with the new one instead of overwritten. The function takes the new value first and the existing one second, as `Map.insertWith` does. |
 | `assoc_update(K, fun(V) -> V end, list(pair(K, V))) -> list(pair(K, V))` | Apply a function to the first entry's value. A list with no entry for the key is returned unchanged. |
 | `assoc_delete(K, list(pair(K, V))) -> list(pair(K, V))` | Remove the first entry for the key, if any. |
 | `assoc_member(K, list(pair(K, V))) -> bool` | Whether the key is present. |

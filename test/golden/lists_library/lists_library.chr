@@ -11,7 +11,14 @@
     quantified_flipped/2,
     empties/3,
     taken/2,
-    dropped/2
+    dropped/2,
+    concatenated/1,
+    concat_mapped/1,
+    replicated/2,
+    distincted/1,
+    sorted/1,
+    sorted_ties/1,
+    indexed/2
 ]).
 
 :- use_module(library(lists)).
@@ -29,7 +36,14 @@
     quantified_flipped/2,
     empties/3,
     taken/2,
-    dropped/2.
+    dropped/2,
+    concatenated/1,
+    concat_mapped/1,
+    replicated/2,
+    distincted/1,
+    sorted/1,
+    sorted_ties/1,
+    indexed/2.
 
 mapped(R) <=> R is maplist(fun(X) -> X * 2 end, [1, 2, 3]).
 
@@ -65,3 +79,21 @@ empties(A, B, C) <=>
 taken(N, R) <=> R is take(N, [1, 2, 3]).
 
 dropped(N, R) <=> R is drop(N, [1, 2, 3]).
+
+concatenated(R) <=> R is concat([[1, 2], [], [3]]).
+
+concat_mapped(R) <=> R is concat_map(fun(X) -> [X, X * 10] end, [1, 2]).
+
+replicated(N, R) <=> R is replicate(N, 7).
+
+% `==` decides what counts as a repeat, and the first occurrence is the
+% one kept.
+distincted(R) <=> R is distinct([3, 1, 3, 2, 1]).
+
+sorted(R) <=> R is sort_by(fun(A, B) -> A < B end, [3, 1, 2]).
+
+% An ordering that puts nothing strictly before anything leaves the
+% input order untouched -- which is what stability means.
+sorted_ties(R) <=> R is sort_by(fun(_, _) -> false end, [3, 1, 2]).
+
+indexed(N, R) <=> R is nth_maybe(N, [1, 2, 3]).

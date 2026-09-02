@@ -6,6 +6,7 @@
     fun zip_exact/2,
     fun assoc_get/2,
     fun assoc_put/3,
+    fun assoc_put_with/4,
     fun assoc_update/3,
     fun assoc_delete/2,
     fun assoc_member/2,
@@ -30,6 +31,8 @@
     (zip_exact(list(A), list(B)) -> maybe(list(pair(A, B)))),
     (assoc_get(K, list(pair(K, V))) -> maybe(V)),
     (assoc_put(K, V, list(pair(K, V))) -> list(pair(K, V))),
+    (assoc_put_with(fun(V, V) -> V end, K, V, list(pair(K, V)))
+        -> list(pair(K, V))),
     (assoc_update(K, fun(V) -> V end, list(pair(K, V))) -> list(pair(K, V))),
     (assoc_delete(K, list(pair(K, V))) -> list(pair(K, V))),
     (assoc_member(K, list(pair(K, V))) -> bool),
@@ -64,6 +67,17 @@ assoc_get(K, [_|Rest]) -> assoc_get(K, Rest).
 assoc_put(K, V, []) -> [kv(K, V)].
 assoc_put(K, V, [kv(K2, _)|Rest]) | K == K2 -> [kv(K, V)|Rest].
 assoc_put(K, V, [P|Rest]) -> [P|assoc_put(K, V, Rest)].
+
+% Like `assoc_put`, except that an existing entry's value is combined
+% with the new one instead of being overwritten. The combining function
+% takes the *new* value first and the existing one second, matching
+% Haskell's `Map.insertWith`, so `assoc_put_with(fun append/2, ...)`
+% prepends the newcomer's contribution and
+% `assoc_put_with(fun(New, Old) -> append(Old, New) end, ...)` appends
+% it.
+assoc_put_with(_, K, V, []) -> [kv(K, V)].
+assoc_put_with(F, K, V, [kv(K2, Old)|Rest]) | K == K2 -> [kv(K2, call(F, V, Old))|Rest].
+assoc_put_with(F, K, V, [P|Rest]) -> [P|assoc_put_with(F, K, V, Rest)].
 
 % Applies a function to the value of the first entry for `K`. A list
 % with no entry for `K` is returned unchanged.

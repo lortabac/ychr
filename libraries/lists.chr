@@ -5,8 +5,10 @@
     fun length/1,
     fun member/2,
     fun append/2,
+    fun concat/1,
     fun reverse/1,
     fun maplist/2,
+    fun concat_map/2,
     fun filter/2,
     fun foldl/3,
     fun foldr/3,
@@ -15,19 +17,27 @@
     fun any/2,
     fun take/2,
     fun drop/2,
+    fun replicate/2,
+    fun distinct/1,
+    fun sort_by/2,
     fun sum_list/1,
     fun product_list/1,
-    fun nth/2
+    fun nth/2,
+    fun nth_maybe/2
 ]).
+
+:- use_module(library(maybe)).
 
 :- function
     (cons(T, list(T)) -> list(T)),
     (length(list(T)) -> int),
     (member(T, list(T)) -> bool),
     (append(list(T), list(T)) -> list(T)),
+    (concat(list(list(T))) -> list(T)),
     (reverse(list(T)) -> list(T)),
     (reverse_(list(T), list(T)) -> list(T)),
     (maplist(fun(A) -> B end, list(A)) -> list(B)),
+    (concat_map(fun(A) -> list(B) end, list(A)) -> list(B)),
     (filter(fun(A) -> bool end, list(A)) -> list(A)),
     (foldl(fun(B, A) -> B end, B, list(A)) -> B),
     (foldl_(fun(B, A) -> B end, list(A), B) -> B),
@@ -37,8 +47,14 @@
     (any(fun(A) -> bool end, list(A)) -> bool),
     (take(int, list(T)) -> list(T)),
     (drop(int, list(T)) -> list(T)),
+    (replicate(int, T) -> list(T)),
+    (distinct(list(T)) -> list(T)),
+    (distinct_(list(T), list(T)) -> list(T)),
+    (sort_by(fun(A, A) -> bool end, list(A)) -> list(A)),
+    (insert_by(fun(A, A) -> bool end, A, list(A)) -> list(A)),
     (sum_list(list(int)) -> int),
-    (product_list(list(int)) -> int).
+    (product_list(list(int)) -> int),
+    (nth_maybe(int, list(T)) -> maybe(T)).
 
 % head/1, tail/1 and nth/2 are deliberately left untyped.
 %
@@ -72,6 +88,10 @@ member(X, [_|Xs]) -> member(X, Xs).
 append([], Ys) -> Ys.
 append([X|Xs], Ys) -> cons(X, append(Xs, Ys)).
 
+% Flatten one level of nesting.
+concat([]) -> [].
+concat([Xs|Xss]) -> append(Xs, concat(Xss)).
+
 reverse(Xs) -> reverse_(Xs, []).
 
 reverse_([], Acc) -> Acc.
@@ -79,6 +99,12 @@ reverse_([X|Xs], Acc) -> reverse_(Xs, [X|Acc]).
 
 maplist(_, []) -> [].
 maplist(F, [X|Xs]) -> cons(call(F, X), maplist(F, Xs)).
+
+% Map a list-valued function over a list and concatenate the results.
+% Written directly rather than as `concat(maplist(F, Xs))` so that the
+% intermediate list of lists is never built.
+concat_map(_, []) -> [].
+concat_map(F, [X|Xs]) -> append(call(F, X), concat_map(F, Xs)).
 
 % Guards are ordinary boolean expressions, so the predicate is applied
 % in guard position and the two cons equations differ only by its result.
@@ -117,9 +143,40 @@ drop(N, Xs) | N =< 0 -> Xs.
 drop(_, []) -> [].
 drop(N, [_|Xs]) -> drop(N - 1, Xs).
 
+% `N` copies of one element; `[]` for a count that is not positive, so
+% that the pair of equations stays exhaustive.
+replicate(N, _) | N =< 0 -> [].
+replicate(N, X) -> [X|replicate(N - 1, X)].
+
+% The elements in order, with every repeat of an earlier one dropped.
+% Comparison is `==`, as `member/2`'s is, and the *first* occurrence is
+% the one kept. Quadratic: the accumulator is a plain list.
+distinct(Xs) -> distinct_(Xs, []).
+
+distinct_([], _) -> [].
+distinct_([X|Xs], Seen) | member(X, Seen) -> distinct_(Xs, Seen).
+distinct_([X|Xs], Seen) -> [X|distinct_(Xs, [X|Seen])].
+
+% Insertion sort under a caller-supplied strict less-than. Stable: an
+% element is inserted after every element the ordering puts strictly
+% before it and before every element it ties with, and the elements it
+% ties with are the ones that preceded it in the input.
+sort_by(_, []) -> [].
+sort_by(F, [X|Xs]) -> insert_by(F, X, sort_by(F, Xs)).
+
+insert_by(F, X, [Y|Ys]) | call(F, Y, X) -> [Y|insert_by(F, X, Ys)].
+insert_by(_, X, Ys) -> [X|Ys].
+
 sum_list(Xs) -> foldl(fun '+'/2, 0, Xs).
 
 product_list(Xs) -> foldl(fun '*'/2, 1, Xs).
 
 nth(0, [X|_]) -> X.
 nth(N, [_|Xs]) | N > 0 -> nth(N - 1, Xs).
+
+% 0-based indexing, total: `nothing` for an index that is negative or
+% past the end. The typed counterpart of the partial `nth/2`.
+nth_maybe(N, _) | N < 0 -> nothing.
+nth_maybe(_, []) -> nothing.
+nth_maybe(0, [X|_]) -> just(X).
+nth_maybe(N, [_|Xs]) -> nth_maybe(N - 1, Xs).
