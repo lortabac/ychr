@@ -128,9 +128,9 @@ is_base_type(N) ->
 
 % A declaration-level diagnostic: no checking unit, so it suppresses no
 % warnings, and the source echo is the enclosing type's own name.
-:- function decl_error(type_def, any, any) -> error.
+:- function decl_error(type_def, error_code, error_detail) -> error.
 decl_error(Td, Code, Detail) ->
-    error(ctx(-1, origin_atom(type_def_name(Td)), label_none, type_def_loc(Td)),
+    error(ctx(no_unit, origin_atom(type_def_name(Td)), label_none, type_def_loc(Td)),
           Code, Detail).
 
 % ---------------------------------------------------------------------
@@ -185,7 +185,7 @@ dup_errors(Groups) ->
 dup_error_for(_, []) -> [].
 dup_error_for(_, [_]) -> [].
 dup_error_for(N, [con_decl(TName, A, L), D2|Ds]) ->
-    [error(ctx(-1, origin_atom(TName), label_none, L),
+    [error(ctx(no_unit, origin_atom(TName), label_none, L),
            duplicate_constructor,
            duplicate_constructor_d(N,
              maplist(fun decl_pair/1, [con_decl(TName, A, L), D2|Ds])))].
@@ -227,15 +227,20 @@ decl_before(_, _) -> false.
 % it was applied at, and the arity it was declared with.
 :- chr_type arity_use ---> arity_use(any, int, int).
 
+% The positional counters below stay `int` and are wrapped into a
+% `unit_id` where a `ctx` is built: every diagnostic they number
+% belongs to a real unit. `eqs_arity_errors` is the one exception —
+% see there.
 :- function rules_arity_errors(con_env, list(rule), int) -> list(error).
 rules_arity_errors(_, [], _) -> [].
 rules_arity_errors(Env, [R|Rs], Unit) ->
-    append(rule_arity_errors(Env, R, Unit), rules_arity_errors(Env, Rs, Unit + 1)).
+    append(rule_arity_errors(Env, R, unit(Unit)),
+           rules_arity_errors(Env, Rs, Unit + 1)).
 
 % The head contributes nothing: after HNF every head argument is a
 % variable or a wildcard, so a pattern's constructors have already
 % become `guard_match` conjuncts and are found there.
-:- function rule_arity_errors(con_env, rule, int) -> list(error).
+:- function rule_arity_errors(con_env, rule, unit_id) -> list(error).
 rule_arity_errors(Env,
                   rule(Name, ann(_, _, _), ann(GAnn, GLoc, Guards), ann(BAnn, BLoc, Body)),
                   Unit) ->
@@ -259,16 +264,23 @@ fun_unit_count(fun_def(_, _, _, _, ann(_, _, Eqs))) -> length(Eqs).
 
 :- function fun_arity_errors(con_env, fun_def, int) -> list(error).
 fun_arity_errors(Env, fun_def(FName, _, Sigs, _, ann(A, Loc, Eqs)), _) | length(Sigs) > 1 ->
-    eqs_arity_errors(Env, FName, A, Loc, Eqs, -1, 0).
+    eqs_arity_errors(Env, FName, A, Loc, Eqs, no_unit).
 fun_arity_errors(Env, fun_def(FName, _, _, _, ann(A, Loc, Eqs)), Unit) ->
-    eqs_arity_errors(Env, FName, A, Loc, Eqs, Unit, 1).
+    eqs_arity_errors(Env, FName, A, Loc, Eqs, unit(Unit)).
 
-:- function eqs_arity_errors(con_env, any, int, loc, list(fun_eq), int, int) -> list(error).
-eqs_arity_errors(_, _, _, _, [], _, _) -> [].
-eqs_arity_errors(Env, FName, A, Loc, [Eq|Eqs], Unit, Step) ->
+% The one walk that mixes the two cases, and so is the one that carries
+% a `unit_id` rather than an `int`: one unit per equation of a plain
+% function, and no unit at all for every equation of a class function.
+% Both fall out of `bump_unit`, which leaves `no_unit` alone — hence no
+% step parameter to hold the counter still, which the old
+% sentinel-integer form needed.
+:- function eqs_arity_errors(con_env, any, int, loc, list(fun_eq), unit_id)
+       -> list(error).
+eqs_arity_errors(_, _, _, _, [], _) -> [].
+eqs_arity_errors(Env, FName, A, Loc, [Eq|Eqs], Unit) ->
     append(arity_diags(Unit, label_function(FName), origin_ann(A), Loc,
                        eq_arity(Env, Eq)),
-           eqs_arity_errors(Env, FName, A, Loc, Eqs, Unit + Step, Step)).
+           eqs_arity_errors(Env, FName, A, Loc, Eqs, bump_unit(Unit))).
 
 % Parameters are post-HNF head arguments and so contain no constructor
 % application. The prelude statements are deliberately not walked:
@@ -280,7 +292,8 @@ eq_arity(Env, fun_eq(_, Guards, _, Rhs)) ->
 % Every use site of one section shares a diagnostic context, so it is
 % built once and handed on; there is no `let`, so the hoist is a
 % helper's parameter.
-:- function arity_diags(int, diag_label, diag_origin, loc, list(arity_use)) -> list(error).
+:- function arity_diags(unit_id, diag_label, diag_origin, loc, list(arity_use))
+       -> list(error).
 arity_diags(U, L, O, Loc, Uses) -> arity_diags_at(ctx(U, O, L, Loc), Uses).
 
 :- function arity_diags_at(ctx, list(arity_use)) -> list(error).
@@ -308,7 +321,8 @@ goals_arity_errors(Env, Goals, Label, Loc) ->
        -> list(error).
 goals_arity_errors_at(_, [], _, _, _) -> [].
 goals_arity_errors_at(Env, [G|Gs], Label, Loc, Unit) ->
-    append(arity_diags(Unit, Label, origin_none, Loc, body_goal_arity(Env, G)),
+    append(arity_diags(unit(Unit), Label, origin_none, Loc,
+                       body_goal_arity(Env, G)),
            goals_arity_errors_at(Env, Gs, Label, Loc, Unit + 1)).
 
 % --- The walk -------------------------------------------------------

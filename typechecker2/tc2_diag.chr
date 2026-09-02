@@ -13,6 +13,7 @@
 :- module('$tc2_diag', [
     type(diag_label/0),
     type(diag_origin/0),
+    type(unit_id/0),
     type(ctx/0),
     type(error/0),
     type(warning/0),
@@ -26,7 +27,8 @@
     warnings/1,
     collect_warnings/1,
     fun suppress_warnings/2,
-    fun rule_label/1
+    fun rule_label/1,
+    fun bump_unit/1
 ]).
 
 :- use_module('$tc2_ast').
@@ -60,32 +62,77 @@
                            ; origin_atom(any)
                            ; origin_none.
 
+% The *checking unit* a diagnostic belongs to — one rule, one function
+% equation, or one top-level goal — which is what warning suppression
+% is keyed on: a unit that reports an error omits its warnings. Units
+% are numbered by position; only the partition matters, and the number
+% never leaves this program. `no_unit` is a diagnostic that belongs to
+% no unit — a whole-program check, or one whose diagnostics the old
+% checker collects outside any session — and suppresses nothing.
+:- chr_type unit_id ---> no_unit ; unit(int).
+
+% Advance a positional unit counter. `no_unit` never advances: a walk
+% that is outside any checking unit stays outside one however many
+% items it steps over.
+:- function bump_unit(unit_id) -> unit_id.
+bump_unit(no_unit) -> no_unit.
+bump_unit(unit(U)) -> unit(U + 1).
+
 % Everything a diagnostic needs to know about where it came from:
 %
-%   * the *checking unit* — one rule, one function equation, or one
-%     top-level goal — which is what warning suppression is keyed on: a
-%     unit that reports an error omits its warnings. Units are numbered
-%     by position, and **-1** means "no unit": a whole-program check,
-%     or one whose diagnostics the old checker collects outside any
-%     session, suppresses nothing. Only the partition matters — the
-%     number never leaves this program;
+%   * the checking unit it is attributed to;
 %   * where the message's source echo comes from;
 %   * the label to render;
 %   * the source position.
-:- chr_type ctx ---> ctx(int, diag_origin, diag_label, loc).
+:- chr_type ctx ---> ctx(unit_id, diag_origin, diag_label, loc).
 
-% An accumulated error. `Code` is an `error_code` atom and `Detail` is
-% heterogeneous (a type pair, an atom, a name), hence `any` for both.
-:- chr_type error ---> error(ctx, any, any).
+% An accumulated error: where it came from, which `TypeCheckError`
+% variant it is, and that variant's payload.
+%
+% Both fields are declared rather than `any`, but be precise about what
+% that buys, because the two halves differ:
+%
+%   * the *code* is checked. It is a literal atom at every report site,
+%     so `ychr check --Werror` on this program rejects a site that
+%     invents one, or that hands an `error_code` to `report_warning`;
+%   * the *detail* is checked only when its type is statically known.
+%     A concrete term of some other type (`label_none`, say) is
+%     rejected, but the solver's names arrive as `any`-typed variables
+%     from `resolve_overload` / `check_bound`, and `any` is consistent
+%     with everything under the gradual guarantee — so an unwrapped
+%     bare name still passes. Nor is the code↔detail *pairing*
+%     checked: the two are independent sums, so
+%     `error(_, bound_unsatisfied, tpair(...))` type-checks.
+%
+% What actually rejects a malformed detail is `decodeError`
+% (`src/YCHR/Internal/TypeCheck/V2.hs`), which pattern-matches the
+% detail per code and calls `malformed` otherwise. That is why the
+% solver wraps its bare names in `mangled_name` — for the decoder, not
+% for the type-checker. See the `error_payload` note below for the
+% shape that would close the gap.
+:- chr_type error ---> error(ctx, error_code, error_detail).
 
 % An accumulated warning. Same shape as an error, in a separate type so
-% that suppression can act on the two lists independently.
-:- chr_type warning ---> warning(ctx, any, any).
+% that suppression can act on the two lists independently, and so that
+% `warning_code` and `error_code` cannot be confused. The detail
+% vocabulary is shared with errors, which is wider than it needs to be:
+% a warning's detail is always a `tpair`.
+:- chr_type warning ---> warning(ctx, warning_code, error_detail).
 
-% Atoms used as the `Code` field of `error/3`. Each one pairs with the
-% `error_detail` constructor of the same name suffixed `_d`, and with a
+% A shape worth remembering, not a TODO: collapsing `error_code` and
+% `error_detail` into one payload sum — `error(ctx, error_payload)`
+% with `error_payload ---> inconsistent(any, any) ;
+% bound_unsatisfied(any) ; …` — would make a wrong pairing
+% unrepresentable and `decodeError` total by construction. It costs the
+% uniform `f(Ctx, Code, Detail)` shape that `decodeDiagnostics` walks
+% for errors and warnings alike, so it is a trade, not a free win.
+
+% Atoms used as the `Code` field of `error/3`. Each one pairs with a
 % branch of `decodeError` in `src/YCHR/Internal/TypeCheck/V2.hs` that
-% turns the pair into a `TypeCheckError`.
+% turns the `(code, detail)` pair into a `TypeCheckError`. Five of the
+% eight take an `error_detail` constructor named after them and
+% suffixed `_d`; the other three are `inconsistent` (a `tpair`),
+% `no_matching_overload` and `bound_unsatisfied` (a wrapped name).
 :- chr_type error_code ---> inconsistent
                           ; no_matching_overload
                           ; bound_unsatisfied
@@ -110,16 +157,16 @@
 % second field is the `(type name, arity)` of every declaration of the
 % clashing constructor, ordered by declaration position.
 %
-% `source_name` wraps a mangled name that must be rendered in its
-% *source* spelling. The two spellings differ only for a name the
-% mangling escaped — a non-ASCII one — and the old checker is
-% inconsistent about which it uses: its solver reports a bare name and
-% renders it with the escapes still in it, while the one diagnostic it
-% builds in Haskell (`checkClassFunction`'s `no_matching_overload`)
-% spells the name properly. A bare atom keeps the first behaviour; this
-% wrapper asks for the second.
+% `mangled_name` and `source_name` both wrap a name; they differ in the
+% spelling the driver renders it with. The two spellings differ only
+% for a name the mangling escaped — a non-ASCII one — and the old
+% checker is inconsistent about which it uses: its solver reports a
+% name and renders it with the escapes still in it, while the one
+% diagnostic it builds in Haskell (`checkClassFunction`'s
+% `no_matching_overload`) spells the name properly. `mangled_name`
+% keeps the first behaviour, `source_name` asks for the second.
 :- chr_type error_detail ---> tpair(any, any)
-                            ; overloaded
+                            ; mangled_name(any)
                             ; source_name(any)
                             ; undefined_type_d(any, any, any)
                             ; unbound_type_var_d(any, any, string)
@@ -144,10 +191,10 @@ rule_label(just(N)) -> label_rule(N).
 % `error/3` is data, so they return their diagnostics directly and
 % `tc2_main` concatenates the two sources.
 :- chr_constraint
-    report_error(ctx, any, any),
+    report_error(ctx, error_code, error_detail),
     errors(list(error)),
     collect(list(error)),
-    report_warning(ctx, any, any),
+    report_warning(ctx, warning_code, error_detail),
     warnings(list(warning)),
     collect_warnings(list(warning)).
 
@@ -175,20 +222,20 @@ collect_all_warnings @
 % dead-branch verdicts describe the checker's recovery rather than the
 % program. Ports `collectDiagnostics` (TypeCheck.hs).
 %
-% Unit **-1** — "no unit" — is deliberately not collected: the old
-% checker's whole-program diagnostics are gathered outside the session
-% and so suppress nothing. Warnings never carry -1 today, but relying
+% `no_unit` is deliberately not collected: the old checker's
+% whole-program diagnostics are gathered outside the session and so
+% suppress nothing. Warnings never carry `no_unit` today, but relying
 % on that would make a future goal-level warning silently disappear
 % behind an unrelated duplicate-constructor error.
 :- function suppress_warnings(list(error), list(warning)) -> list(warning).
 suppress_warnings(Errs, Ws) -> keep_warnings(error_units(Errs), Ws).
 
-:- function error_units(list(error)) -> list(int).
+:- function error_units(list(error)) -> list(unit_id).
 error_units([]) -> [].
-error_units([error(ctx(U, _, _, _), _, _)|Es]) | U == -1 -> error_units(Es).
+error_units([error(ctx(no_unit, _, _, _), _, _)|Es]) -> error_units(Es).
 error_units([error(ctx(U, _, _, _), _, _)|Es]) -> [U|error_units(Es)].
 
-:- function keep_warnings(list(int), list(warning)) -> list(warning).
+:- function keep_warnings(list(unit_id), list(warning)) -> list(warning).
 keep_warnings(_, []) -> [].
 keep_warnings(Us, [warning(ctx(U, _, _, _), _, _)|Ws]) | member(U, Us) ->
     keep_warnings(Us, Ws).

@@ -3,12 +3,11 @@
 % A fork of `typechecker/typechecker.chr`, rule for rule. The old
 % checker's Haskell driver walks the AST and tells the `check_*`
 % constraints below; here `tc2_walk.chr` does, and the two solvers are
-% otherwise the same program — same relations, same dispositions, same
-% comments. Keep them in step: a change to the meet table, to
-% resolution, or to the evidence rules belongs in both until the old
-% checker is retired.
+% otherwise the same program — same relations, same dispositions.
+% Keep them in step: a change to the meet table, to resolution, or to
+% the evidence rules belongs in both until the old checker is retired.
 %
-% Four deliberate differences from the original, and nothing else —
+% Five deliberate differences from the original, and nothing else —
 % `diff typechecker/typechecker.chr typechecker2/tc2_solver.chr` should
 % show only these:
 %
@@ -20,13 +19,32 @@
 %     integer handle into a driver-side table. The rules pass it
 %     opaquely, so nothing below reads it;
 %   * the diagnostic vocabulary — the accumulators, `error/3`,
-%     `warning/3` and the code and detail atoms — lives in
-%     `'$tc2_diag'`, which the declaration checks share. The detail
-%     pair is spelled `tpair` there, so as not to collide with
-%     `library(pairs)`;
+%     `warning/3` and the code and detail types — lives in
+%     `'$tc2_diag'`, which the declaration checks share, and is
+%     declared rather than `any`: the detail pair is spelled `tpair`
+%     there, so as not to collide with `library(pairs)`, and a
+%     detail that is a bare name travels wrapped in `mangled_name`
+%     where the original passes the atom itself;
 %   * the export list. The old module's clients are Haskell, which
 %     builds the type terms itself; this one's are other CHR modules,
-%     which need the types exported by name.
+%     which need the types exported by name;
+%   * comments that name the driver, since here the driver is CHR.
+%     The `rigid_supply` block below is the one such rewrite: the
+%     declaration-site skolem supply it has to distinguish itself
+%     from lives in `tc2_walk.chr`, not in Haskell.
+%
+% Two renames are owed to this module and deliberately not made, so
+% that the diff above stays readable. Do them at switchover, when the
+% old checker retires and there is nothing left to stay in step with:
+%
+%   * split `sig_t/2` (and `sig_fst`/`sig_snd`) into two types. One
+%     carries a function signature and should read `args`/`ret`; the
+%     other carries a constructor signature and should read
+%     `parent`/`fields`. Sharing one polymorphic pair makes both call
+%     sites say less than they could, and `sig_fst` means something
+%     different depending on which one it is applied to;
+%   * spell out the matcher's `mok` / `mfail` / `mp` — the `msub`
+%     result and its substitution pairs.
 :- module('$tc2_solver', [
     type(ty/0),
     type(sig_t/2),
@@ -117,12 +135,17 @@
 % (sig_t(ty, list(ty))).
 :- chr_type sig_t(A, B) ---> sig(A, B).
 
-% The diagnostic vocabulary — `error/3`, `warning/3`, the code atoms
-% and the `tpair/2` detail — is declared in `'$tc2_diag'`, together
-% with the accumulators `report_error/3` and `report_warning/3` that
-% the rules below emit into. It is shared with the declaration checks
-% of `tc2_pure.chr`, which produce the same `error/3` terms without
-% going through a solver at all.
+% The diagnostic vocabulary — `error/3`, `warning/3`, the `error_code`
+% and `warning_code` atoms and the `error_detail` payloads — is
+% declared in `'$tc2_diag'`, together with the accumulators
+% `report_error/3` and `report_warning/3` that the rules below emit
+% into. It is shared with the declaration checks of `tc2_pure.chr`,
+% which produce the same `error/3` terms without going through a
+% solver at all. Both accumulators are declared over those types, so
+% `ychr check --Werror` rejects a report site here that invents a
+% code — but not one that hands a code the wrong detail; see the
+% `error/3` declaration there for exactly what the typing does and
+% does not catch, and why the names below are wrapped.
 %
 % `bound_unsatisfied` is emitted from `check_bound` when no declared
 % signature of the bound's named function is consistent with the
@@ -679,7 +702,7 @@ resolve_funref_fire @
 resolve_funref_none @
     resolve_funref(Name, Cands, ArgTypes, RetTypeVar, Ctx) <=>
         cand_list_empty(filter_consistent_full(Cands, ArgTypes, RetTypeVar)) |
-    report_error(Ctx, no_matching_overload, Name).
+    report_error(Ctx, no_matching_overload, mangled_name(Name)).
 
 % ==========================================================================
 % Bounded polymorphism: bound emission and discharge
@@ -744,7 +767,7 @@ discharge_bound_ok_amb @
 discharge_bound_fail @
     check_bound(GName, AmbSigs, DeclSigs, SubArgs, SubRet, Ctx) <=>
         bound_ruled_out(append(AmbSigs, DeclSigs), SubArgs, SubRet) |
-    report_error(Ctx, bound_unsatisfied, GName).
+    report_error(Ctx, bound_unsatisfied, mangled_name(GName)).
 
 % Constructor usage: copy_term preserves parent/field sharing
 constructor_match @
@@ -1487,7 +1510,7 @@ resolve_fire @
 resolve_none @
     resolve_overload(Name, Cands, ArgTypes, _, Ctx) <=>
         no_candidate_consistent(Cands, ArgTypes) |
-    report_error(Ctx, no_matching_overload, Name).
+    report_error(Ctx, no_matching_overload, mangled_name(Name)).
 
 % Committing applies the first surviving candidate's signature per
 % its provenance: ambient signatures in place (identity sharing with

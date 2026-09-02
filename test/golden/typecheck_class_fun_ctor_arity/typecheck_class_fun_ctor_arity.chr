@@ -1,0 +1,29 @@
+% A class function's constructor-arity errors belong to no checking
+% unit — and are still reported.
+%
+% A `:- class` function's equations are checked in throwaway
+% per-signature sub-sessions whose diagnostics are dropped, so their
+% constructor-arity errors are collected at program level instead,
+% outside any unit, where they suppress no warnings. That is the
+% "no unit" arm of the equation walk (`fun_arity_errors` in
+% `typechecker2/tc2_pure.chr`, `functionConstructorArities` in
+% `src/YCHR/Internal/TypeCheck.hs`), and nothing else in the corpus
+% reaches it: `typecheck_fun_equation_units` is the one other directory
+% pairing `:- class` with a wrong-arity constructor, and there the bad
+% use sits in a plain function, so the class function's own walk
+% returns nothing.
+%
+% `cf`'s equation applies `b/1` at arity 2. Both halves matter: the
+% error has to survive the sub-session that discards the equation's
+% other diagnostics, and it has to stay out of unit 0, which belongs
+% to the rule below.
+:- module(typecheck_class_fun_ctor_arity, [go/1]).
+:- use_module(library(prelude)).
+
+:- chr_type box ---> b(int).
+:- chr_constraint go(box).
+
+:- class (cf(int) -> box), (cf(string) -> box).
+cf(_) -> b(1, 2).
+
+go(R) <=> R is cf(1).

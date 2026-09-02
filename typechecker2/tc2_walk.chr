@@ -515,15 +515,17 @@ walk_rule1 @
               Unit) <=>
     HeadCons is append(Kept, Removed),
     Label is rule_label(Name),
-    HeadCtx = ctx(Unit, origin_ann(HAnn), Label, HLoc),
+    HeadCtx = ctx(unit(Unit), origin_ann(HAnn), Label, HLoc),
     alloc_var_types(collect_vars_rule(HeadCons, Guards, Body),
                     head_var_skeletons(Env, HeadCons, Guards),
                     VarTypes),
     head_cons_check(scope(Env, VarTypes, [], HeadCtx), HeadCons, [], Amb),
-    check_guards(scope(Env, VarTypes, Amb, ctx(Unit, origin_ann(GAnn), Label, GLoc)),
+    check_guards(scope(Env, VarTypes, Amb,
+                       ctx(unit(Unit), origin_ann(GAnn), Label, GLoc)),
                  scope(Env, VarTypes, Amb, HeadCtx),
                  Guards, []),
-    check_body_goals(scope(Env, VarTypes, Amb, ctx(Unit, origin_ann(BAnn), Label, BLoc)),
+    check_body_goals(scope(Env, VarTypes, Amb,
+                           ctx(unit(Unit), origin_ann(BAnn), Label, BLoc)),
                      Body).
 
 % --- Head occurrences -----------------------------------------------
@@ -1239,7 +1241,8 @@ check_equation1 @
                                                bound_sigs_vars(Bounds))),
                       TVars),
     check_equation_at(scope(Env, VarTypes, add_ambients([], Bounds, TVars),
-                            ctx(Unit, origin_ann(EAnn), label_function(FName), ELoc)),
+                            ctx(unit(Unit), origin_ann(EAnn),
+                                label_function(FName), ELoc)),
                       TVars, fun_sig(ArgTys, RetTy), Bounds, Eq).
 
 :- function eq_params(fun_eq) -> list(head_arg).
@@ -1410,7 +1413,7 @@ class_eqs_cons @
 % reports.
 class_eq_try_none @
     class_eq_try(_, _, FName, EAnn, ELoc, _, []) <=>
-    report_error(ctx(-1, origin_ann(EAnn), label_function(FName), ELoc),
+    report_error(ctx(no_unit, origin_ann(EAnn), label_function(FName), ELoc),
                  no_matching_overload, source_name(FName)).
 
 class_eq_try_sig @
@@ -1509,5 +1512,6 @@ walk_goals_at_nil @
 
 walk_goals_at_cons @
     walk_goals_at(Env, [G|Gs], Loc, Label, VarTypes, Unit) <=>
-    check_body_goal(scope(Env, VarTypes, [], ctx(Unit, origin_none, Label, Loc)), G),
+    check_body_goal(scope(Env, VarTypes, [], ctx(unit(Unit), origin_none, Label, Loc)),
+                    G),
     walk_goals_at(Env, Gs, Loc, Label, VarTypes, Unit + 1).
