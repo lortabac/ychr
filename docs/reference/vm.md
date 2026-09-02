@@ -714,6 +714,14 @@ errors otherwise. Used wherever the compiler cannot statically prove
 the operand is a boolean — typically user-defined function calls in
 guards, and the early-drop result variable read at the boundary.
 
+The check must distinguish the two ways it can fail, because an
+enclosing `bsoft-guard` treats them differently: an operand that
+dereferences to an *unbound* variable is an instantiation failure —
+the guard cannot be decided yet — while a bound non-boolean is a
+general one. A backend must not let host truthiness stand in for the
+check; in a host where an unbound variable is a truthy value, doing so
+reads an undecidable guard as `true`.
+
 ### Deep deref-aware evaluation
 
 ```scheme

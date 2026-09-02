@@ -61,28 +61,6 @@ HASKELL_ONLY_CASES = {
     # and passes on both backends. Remove this entry once the Scheme
     # runtime's unify does the same transfer.
     ("reactivation_through_binding", "through_binding"),
-    # Soft guard failure: the Scheme runtime does not classify
-    # host-primitive failures. `%chr-inst-error` (equation and closure
-    # dispatch) carries the `&chr-inst` marker that `bsoft-guard`
-    # catches, but the arithmetic and comparison primitives are native
-    # Scheme procedures that raise an untagged wrong-type condition, so
-    # a guard blocked on one aborts instead of delaying. Every case
-    # below is guarded by such a primitive. Remove these once the
-    # Scheme runtime wraps its numeric primitives; see
-    # dev-docs/SCHEME_BACKEND_GAPS.md.
-    ("mode_boundness_guard", "unguarded"),
-    ("soft_guard_retry", "pass"),
-    ("soft_guard_retry", "reject"),
-    ("soft_guard_permanent", "run"),
-    ("soft_guard_equation_propagation", "delayed"),
-    ("soft_guard_equation_propagation", "decided"),
-    # Same feature, different gap: the Scheme backend compiles
-    # `bfrom-val` to the wrapped value expression and lets Scheme's
-    # truthiness decide, so an unbound variable in guard position reads
-    # as true instead of raising an instantiation failure. The rule then
-    # fires at the first activation rather than delaying. Remove once
-    # the Scheme runtime checks for a boolean there.
-    ("soft_guard_var_guard", "reject"),
 }
 
 # Test directories where the .chr program or goal deliberately uses

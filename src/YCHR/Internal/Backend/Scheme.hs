@@ -503,10 +503,15 @@ compileValExpr (FieldArg e (ArgIndex i)) =
 compileValExpr (FieldType e) =
   SList [SAtom "constraint-type", compileIdExpr e]
 
--- | Compile a 'BoolExpr' to a Scheme boolean expression. Scheme is
--- dynamically typed, so 'BFromVal' is identical to compiling the
--- wrapped 'ValExpr' — the runtime accepts whatever truthy value the
--- underlying value produces.
+-- | Compile a 'BoolExpr' to a Scheme boolean expression.
+--
+-- 'BFromVal' cannot be compiled away even though Scheme is
+-- dynamically typed: an unbound logical variable is a record, and so
+-- truthy, which would read a guard that cannot yet be decided as
+-- /true/. It goes through @%bool-from-value@, which mirrors
+-- 'YCHR.Internal.Runtime.Interpreter.boolFromValue' in splitting an
+-- unbound operand (an instantiation failure the enclosing
+-- 'BSoftGuard' catches) from a bound non-boolean (a fatal mistake).
 compileBoolExpr :: BoolExpr -> SExpr
 compileBoolExpr (BLit True) = SAtom "#t"
 compileBoolExpr (BLit False) = SAtom "#f"
@@ -535,7 +540,8 @@ compileBoolExpr (BNotInHistory (RuleId rid) es) =
     ]
 compileBoolExpr (BUnify a b) =
   SList [SAtom "%unify", SAtom "%s", compileValExpr a, compileValExpr b]
-compileBoolExpr (BFromVal e) = compileValExpr e
+compileBoolExpr (BFromVal e) =
+  SList [SAtom "%bool-from-value", compileValExpr e]
 compileBoolExpr (BEvalDeep e) = compileBoolEvalDeep e
 compileBoolExpr (BSoftGuard e) = softGuardForm (compileBoolExpr e)
 
@@ -581,7 +587,11 @@ compileSymbol s
 hostCallMap :: Map.Map Text Text
 hostCallMap =
   Map.fromList
-    [ ("div", "%idiv"),
+    [ ("+", "%add"),
+      ("-", "%sub"),
+      ("*", "%mul"),
+      ("/", "%fdiv"),
+      ("div", "%idiv"),
       ("mod", "%imod"),
       ("rem", "%irem"),
       ("<", "%lt"),
@@ -592,13 +602,13 @@ hostCallMap =
       ("float", "flonum?"),
       ("int_to_float", "%int-to-float"),
       ("float_to_int", "%float-to-int"),
-      ("write", "display"),
+      ("write", "%write"),
       ("writeln", "%writeln"),
       ("print", "%print"),
-      ("string_concat", "string-append"),
-      ("string_length", "string-length"),
-      ("string_upper", "string-upcase"),
-      ("string_lower", "string-downcase"),
+      ("string_concat", "%str-concat"),
+      ("string_length", "%str-length"),
+      ("string_upper", "%str-upper"),
+      ("string_lower", "%str-lower"),
       ("__chr_error", "%chr-error"),
       ("__chr_is_unbound", "%unbound?"),
       ("__chr_inst_error", "%chr-inst-error"),
@@ -685,7 +695,8 @@ compileBoolEvalDeep (BEqual a b) =
   SList [SAtom "equal?/chr", compileEvalDeep a, compileEvalDeep b]
 compileBoolEvalDeep (BUnify a b) =
   SList [SAtom "%unify", SAtom "%s", compileEvalDeep a, compileEvalDeep b]
-compileBoolEvalDeep (BFromVal e) = compileEvalDeep e
+compileBoolEvalDeep (BFromVal e) =
+  SList [SAtom "%bool-from-value", compileEvalDeep e]
 compileBoolEvalDeep (BEvalDeep e) = compileBoolEvalDeep e
 compileBoolEvalDeep (BSoftGuard e) = softGuardForm (compileBoolEvalDeep e)
 compileBoolEvalDeep e = compileBoolExpr e

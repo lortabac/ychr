@@ -482,6 +482,7 @@ sound reading of "the value was demanded" for them specifically:
 | `string_concat`, `string_length`, `string_upper`, `string_lower` | instantiation failure |
 | `write`, `writeln` | instantiation failure |
 | `compound_to_list`, `list_to_compound` | instantiation failure |
+| `name_base` | instantiation failure |
 | `==`, `unifiable` | answers normally (never raises) |
 | `var`, `nonvar`, `ground`, `integer`, `float`, `atom`, `boolean`, `string` | answers normally (never raises) |
 | `term_variables`, `copy_term` | answers normally (never raises) |

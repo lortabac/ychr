@@ -105,43 +105,30 @@ before passing it to the constraint, so Guile rejects with
 Needs investigation before claiming a root cause.
 
 
-## Soft guard failure: unclassified host-primitive failures
+## Numeric primitives accept more than Haskell's
 
-[Soft guard failure](../docs/reference/language.md#soft-guard-failure) turns an
-*instantiation* failure inside a rule guard into `false`, so the rule
-delays instead of aborting. The VM form (`bsoft-guard`) is implemented
-on the Scheme backend, and `%chr-inst-error` in `runtime.sls` raises a
-compound condition carrying an `&chr-inst` marker, so the failures the
-compiler routes through it — equation dispatch and `'$call'` closure
-dispatch — delay correctly.
+Orthogonal to which *failures* are classified (that gap is closed
+below): the Scheme numeric primitives succeed on operand combinations
+the Haskell registry rejects. Long-standing, and deliberately left
+alone when the classification wrappers went in, because tightening it
+can move golden output and is a separate question.
 
-What is missing is the *classification* of host-primitive failures.
-Haskell's `Registry.hs` diagnoses an unbound argument on a strict
-primitive's failure path as an instantiation error; the Scheme
-prelude table binds those primitives to native Scheme procedures
-(`>`, `+`, `string-length`, …), which raise an untagged wrong-type
-condition. A guard blocked on one therefore aborts the query instead of
-delaying.
+| Call | Haskell | Scheme |
+|---|---|---|
+| `1 + 1.0` | `arithmetic host call: expected 2 numeric arguments of same type` | `2.0` |
+| `1 < 2.0` | `comparison host call: … of the same type` | `true` |
+| `5.0 div 2.0` | `integer arithmetic host call: expected 2 Int arguments` | `2` |
 
-Tests skipped on the Scheme backend for this reason:
-`("mode_boundness_guard", "unguarded")`, both `soft_guard_retry`
-cases, `("soft_guard_permanent", "run")`, and both
-`soft_guard_equation_propagation` cases.
+A type-checked program cannot reach any of these — the prelude's
+`:- class` signatures are same-type — so this is only visible from
+untyped code and `host:` calls.
 
-**Fix sketch:** wrap each entry in `*prelude-host-calls*` that is
-currently a bare native procedure so that it checks its arguments and
-calls `%chr-inst-error` when one derefs to an unbound variable, exactly
-as `argError` does in `Registry.hs`.
-
-A second, narrower gap in the same feature: `compileBoolExpr` lowers
-`bfrom-val` to the wrapped value expression and lets Scheme's
-truthiness decide, so an unbound variable in guard position reads as
-*true* rather than raising. `("soft_guard_var_guard", "reject")` is
-skipped for this; its `pass` sibling agrees with Haskell only because
-firing early and firing after reactivation happen to give the same
-answer there. Fixing this means emitting a boolean check at
-`bfrom-val`, splitting unbound (instantiation) from bound-non-boolean
-(general) as `boolFromValue` does in the Haskell interpreter.
+One consequence does touch soft guards. `%add`/`%sub`/`%mul`/`%fdiv`
+are strictly 2-ary where the native `+ - * /` they replaced were
+variadic, so `host:'+'(X, 1, 2)` raises an untagged `&assertion` and
+aborts a guard, where Haskell's `numArith2` reaches `argError`, sees
+the unbound `X`, and delays. Wrong-arity host calls to a prelude
+primitive are the only way in.
 
 
 ## Closed gaps (reference)
@@ -149,6 +136,29 @@ answer there. Fixing this means emitting a boolean check at
 The following used to live here and are now closed. Kept as a brief
 record of which fixes have already shipped.
 
+- **[Soft guard failure](../docs/reference/language.md#soft-guard-failure)**
+  — the `bsoft-guard` VM form was implemented, but the failures it is
+  meant to catch were not all tagged. Two halves, both now fixed.
+  *Host-primitive classification*: the strict primitives were bare
+  native Scheme procedures raising an untagged wrong-type condition, so
+  a guard blocked on one aborted instead of delaying. Each now routes
+  its failure through `%arg-error` in `runtime.sls`, which raises
+  `%chr-inst-error` when an argument derefs to an unbound variable and
+  `%chr-error` otherwise — the same failure-path split `argError` makes
+  in `src/YCHR/Internal/Runtime/Registry.hs`, so a correct program pays
+  nothing. `hostCallMap` grew entries for `+ - * /`, the `string_*`
+  operations and `write`, which previously lowered to native procedures
+  the runtime never saw. *`bfrom-val`*: it lowered to the bare value
+  expression and let Scheme truthiness decide, so an unbound variable
+  in guard position read as *true*; it now goes through
+  `%bool-from-value`, mirroring `boolFromValue`. Closed
+  `HASKELL_ONLY_CASES` entries for `("mode_boundness_guard",
+  "unguarded")`, both `soft_guard_retry` cases,
+  `("soft_guard_permanent", "run")`, both
+  `soft_guard_equation_propagation` cases, and
+  `("soft_guard_var_guard", "reject")`. The classification itself is
+  pinned directly by `scheme/test/test-runtime.scm`, since the golden
+  harness runs positive cases only.
 - **`==` on compound terms** — was `eqv?` (atomic identity); now
   `equal?/chr` (structural). Fixed a latent bug in `equal*` where
   flonums fell through to `#f` (covered by widening the integer case to

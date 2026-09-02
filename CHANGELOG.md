@@ -159,11 +159,24 @@ rule guard, with no new surface syntax. See
   [§No mode checking](docs/reference/type-system.md) is now a matter of
   style rather than a requirement — the unguarded rule gets the same
   schedule.
-- New VM boolean form `bsoft-guard`; backends must implement it. On the
-  Scheme backend it is implemented, as is the tagging of the equation-
-  and closure-dispatch failures it catches, but host-primitive
-  classification is not — a guard blocked on a native numeric primitive
-  still aborts there. Tracked in `dev-docs/SCHEME_BACKEND_GAPS.md`.
+- New VM boolean form `bsoft-guard`; backends must implement it. Both
+  backends do, and agree on every golden case: the Scheme runtime tags
+  its strict primitives' failures the same way, and lowers `bfrom-val`
+  through a boolean check rather than letting Scheme truthiness decide
+  (an unbound variable is a record, hence truthy, and would have read
+  as *true*).
+
+Two Scheme-backend conformance fixes found while classifying the above,
+both cases where the backend accepted what the Haskell runtime rejects:
+
+- `list_to_compound` now rejects an improper tail and a non-atom head,
+  not just an empty list. `list_to_compound([f, x | T])` quietly
+  returned `f(x)`, and `list_to_compound([1, 2])` built a term whose
+  functor was a number — which then escaped as a raw wrong-type
+  condition from the pretty-printer rather than as a CHR error.
+- `write` and `writeln` now require a string, as their prelude
+  signatures already declare and as the Haskell runtime already
+  enforced. Previously any bound value was displayed.
 
 Stdlib additions, both implemented on both backends:
 

@@ -22,14 +22,16 @@
     enqueue! drain-queue!
     ;; Helpers for generated code
     %unify %unifiable? %nonvar? %unbound? %chr-error %chr-inst-error
-    chr-inst?
-    %print %writeln %ground?
+    chr-inst? %bool-from-value
+    %print %write %writeln %ground?
     %term-variables %compound-to-list %list-to-compound
     %name-base
     %read-term-from-string
     %int-to-float %float-to-int
+    %add %sub %mul %fdiv
     %lt %gt %le %ge
     %idiv %imod %irem
+    %str-concat %str-length %str-upper %str-lower
     %copy-term
     %nil %cons
     ;; Deep-eval dispatch table for the @is@ operator
@@ -132,10 +134,10 @@
       (define (h functor arity proc)
         (hashtable-set! t (make-evaluable-key functor arity) proc))
       ;; Arithmetic — return numeric values
-      (h '+ 2 (lambda (s a b) (+ a b)))
-      (h '- 2 (lambda (s a b) (- a b)))
-      (h '* 2 (lambda (s a b) (* a b)))
-      (h '/ 2 (lambda (s a b) (/ a b)))
+      (h '+ 2 (lambda (s a b) (%add a b)))
+      (h '- 2 (lambda (s a b) (%sub a b)))
+      (h '* 2 (lambda (s a b) (%mul a b)))
+      (h '/ 2 (lambda (s a b) (%fdiv a b)))
       (h 'div 2 (lambda (s a b) (%idiv a b)))
       (h 'mod 2 (lambda (s a b) (%imod a b)))
       (h 'rem 2 (lambda (s a b) (%irem a b)))
@@ -159,10 +161,10 @@
       (h 'unifiable 2 (lambda (s a b) (%unifiable? a b)))
       (h 'ground 1 (lambda (s v) (%ground? v)))
       ;; Strings
-      (h 'string_concat 2 (lambda (s a b) (string-append a b)))
-      (h 'string_length 1 (lambda (s v) (string-length v)))
-      (h 'string_upper 1 (lambda (s v) (string-upcase v)))
-      (h 'string_lower 1 (lambda (s v) (string-downcase v)))
+      (h 'string_concat 2 (lambda (s a b) (%str-concat a b)))
+      (h 'string_length 1 (lambda (s v) (%str-length v)))
+      (h 'string_upper 1 (lambda (s v) (%str-upper v)))
+      (h 'string_lower 1 (lambda (s v) (%str-lower v)))
       ;; Meta
       (h 'term_variables 1 (lambda (s v) (%term-variables v)))
       (h 'compound_to_list 1 (lambda (s v) (%compound-to-list v)))
@@ -258,41 +260,178 @@
            " is not sufficiently instantiated to select an equation"
            " (unbound variable at a matched position)"))))))
 
+  ;;; Report a strict primitive's failure, splitting an *instantiation*
+  ;;; failure from a general one. Mirrors `argError` in
+  ;;; `src/YCHR/Internal/Runtime/Registry.hs`: every caller below is a
+  ;;; total function of its arguments' values with no ignored
+  ;;; positions, so reaching the failure path with an argument that is
+  ;;; still an unbound variable means the value was demanded and was
+  ;;; not there. That is what a rule guard catches and turns into a
+  ;;; silent `#f`; any other failure (wrong type, division by zero)
+  ;;; stays fatal everywhere.
+  ;;;
+  ;;; The check is on the failure path only, so a correct program never
+  ;;; pays for it.
+  ;;;
+  ;;; Invariant: every caller receives *dereferenced* arguments —
+  ;;; `compileHostCallWith` wraps each one in `deref`, and
+  ;;; `deep-eval-value` derefs as it walks. `%unbound?` derefs again,
+  ;;; so classification is right either way, but a caller that skipped
+  ;;; the deref would fail the type test on a *bound* variable and
+  ;;; report a general error where the value was there all along.
+  (define (%arg-error label args general)
+    (if (exists %unbound? args)
+        (%chr-inst-error
+         (string-append label
+                        ": argument is not sufficiently instantiated"
+                        " (unbound variable)"))
+        (%chr-error general)))
+
+  ;;; The `bfrom-val` bridge: a value expression used in boolean
+  ;;; position. Mirrors `boolFromValue` in the Haskell interpreter — an
+  ;;; unbound variable here means the guard could not be decided (an
+  ;;; instantiation failure, which the enclosing `bsoft-guard` turns
+  ;;; into `#f`), while a bound non-boolean is a definite mistake and
+  ;;; stays fatal. Scheme truthiness must not decide this: an unbound
+  ;;; variable is a record, hence truthy, and would read as *true*.
+  (define (%bool-from-value v)
+    (let ((d (deref v)))
+      (cond
+        ((boolean? d) d)
+        ((%unbound? d)
+         (%chr-inst-error
+          "guard is not sufficiently instantiated (unbound variable)"))
+        (else (%chr-error "guard did not evaluate to a boolean")))))
+
+  ;;; Arithmetic. Haskell's `numArith2` additionally requires both
+  ;;; operands to have the *same* numeric type; Scheme has always
+  ;;; accepted mixed exact/inexact here and tightening that is a
+  ;;; separate question, so the accept set is left as it was and only
+  ;;; the failure path is classified.
+  (define (%arith2 op a b)
+    (if (and (number? a) (number? b))
+        (op a b)
+        (%arg-error "arithmetic host call" (list a b)
+                    (string-append "arithmetic host call: expected 2"
+                                   " numeric arguments of same type, got 2"))))
+  (define (%add a b) (%arith2 + a b))
+  (define (%sub a b) (%arith2 - a b))
+  (define (%mul a b) (%arith2 * a b))
+  (define (%fdiv a b)
+    (if (and (number? a) (number? b))
+        (/ a b)
+        (%arg-error "float arithmetic host call" (list a b)
+                    (string-append "float arithmetic host call: expected 2"
+                                   " Float arguments, got 2"))))
+
   ;;; Ordering operators. The prelude declares `<`, `>`, `=<` and `>=`
   ;;; over int, float *and* string, so each dispatches on its
   ;;; arguments: two strings compare lexicographically by code point,
   ;;; which is the ordering `string<?` gives and the one Haskell's
-  ;;; `compare` on Text gives. Anything else goes to the numeric
-  ;;; operator and raises the same wrong-type condition it always did.
-  (define (%lt a b) (if (and (string? a) (string? b)) (string<? a b) (< a b)))
-  (define (%gt a b) (if (and (string? a) (string? b)) (string>? a b) (> a b)))
-  (define (%le a b) (if (and (string? a) (string? b)) (string<=? a b) (<= a b)))
-  (define (%ge a b) (if (and (string? a) (string? b)) (string>=? a b) (>= a b)))
+  ;;; `compare` on Text gives.
+  ;;;
+  ;;; Same accept-set caveat as `%arith2`: `ordCmp` requires both
+  ;;; operands to have the same type, where this accepts any two
+  ;;; numbers, so `1 < 2.0` answers here and is a type error there.
+  (define (%cmp2 sop nop a b)
+    (cond
+      ((and (string? a) (string? b)) (sop a b))
+      ((and (number? a) (number? b)) (nop a b))
+      (else
+       (%arg-error "comparison host call" (list a b)
+                   (string-append "comparison host call: expected 2 int,"
+                                  " float or string arguments of the same"
+                                  " type, got 2")))))
+  (define (%lt a b) (%cmp2 string<? < a b))
+  (define (%gt a b) (%cmp2 string>? > a b))
+  (define (%le a b) (%cmp2 string<=? <= a b))
+  (define (%ge a b) (%cmp2 string>=? >= a b))
+
+  ;;; Strings
+  (define (%str-concat a b)
+    (if (and (string? a) (string? b))
+        (string-append a b)
+        (%arg-error "string_concat" (list a b)
+                    "string_concat: expected 2 Text arguments")))
+  (define (%str-length v)
+    (if (string? v)
+        (string-length v)
+        (%arg-error "string_length" (list v)
+                    "string_length: expected 1 Text argument")))
+  (define (%str-upper v)
+    (if (string? v)
+        (string-upcase v)
+        (%arg-error "string_upper" (list v)
+                    "string_upper: expected 1 Text argument")))
+  (define (%str-lower v)
+    (if (string? v)
+        (string-downcase v)
+        (%arg-error "string_lower" (list v)
+                    "string_lower: expected 1 Text argument")))
 
   ;;; Print
   (define (%print v) (display v) (newline))
 
-  ;;; Writeln (display + newline; `write` itself maps directly to `display`)
-  (define (%writeln s) (display s) (newline))
+  ;;; Write / writeln. `display` accepts any value, so on its own it
+  ;;; has no failure path to classify; `writeStr`/`writeStrLn` in the
+  ;;; Haskell registry match `[VText s]` and so reject a bound
+  ;;; non-string as well as diagnosing an unbound one. Demanding a
+  ;;; string here is what makes the two agree — and what keeps the
+  ;;; general message reachable rather than dead. `prelude.chr`
+  ;;; declares `write(string)`, so only untyped and `host:` call paths
+  ;;; could reach the rejection at all.
+  (define (%write v)
+    (if (string? v)
+        (display v)
+        (%arg-error "write" (list v) "write: expected 1 Text argument")))
+  (define (%writeln v)
+    (if (string? v)
+        (begin (display v) (newline))
+        (%arg-error "writeln" (list v) "writeln: expected 1 Text argument")))
 
   ;;; Numeric conversions. `inexact` is the r6rs replacement for
   ;;; `exact->inexact`; `(exact (truncate x))` truncates toward zero,
   ;;; matching Haskell `truncate :: Double -> Int`.
-  (define (%int-to-float n) (inexact n))
-  (define (%float-to-int x) (exact (truncate x)))
+  (define (%int-to-float n)
+    (if (number? n)
+        (inexact n)
+        (%arg-error "int_to_float" (list n)
+                    "int_to_float: expected 1 numeric argument")))
+  (define (%float-to-int x)
+    (if (number? x)
+        (exact (truncate x))
+        (%arg-error "float_to_int" (list x)
+                    "float_to_int: expected 1 numeric argument")))
+
+  ;;; The integer division family. The numeric test comes before the
+  ;;; division-by-zero test, because `zero?` on an unbound variable
+  ;;; record would raise an untagged wrong-type condition and lose the
+  ;;; instantiation diagnosis. Division by zero itself is a *general*
+  ;;; error and stays fatal inside a guard, as in `intDivOp2`.
+  ;;;
+  ;;; The accept set is unchanged and so still wider than Haskell's:
+  ;;; `intDivOp2` requires two `VInt`s where this accepts any two
+  ;;; numbers, so `5.0 div 2.0` is 2 here and a type error there.
+  ;;; Same caveat as `%arith2` — see `SCHEME_BACKEND_GAPS.md`.
+  (define (%intdiv2 who op n d)
+    (cond
+      ((not (and (number? n) (number? d)))
+       (%arg-error "integer arithmetic host call" (list n d)
+                   (string-append "integer arithmetic host call: expected 2"
+                                  " Int arguments, got 2")))
+      ((zero? d)
+       (%chr-error (string-append "integer " who ": division by zero")))
+      (else (op n d))))
 
   ;;; Floor integer division, matching Haskell `div`. r6rs `div` is
   ;;; Euclidean (remainder always non-negative), which disagrees on
   ;;; cases like `20 div -3` where the result must round toward
-  ;;; negative infinity.
-  (define (%idiv n d)
-    (if (zero? d)
-        (error '%idiv "integer div: division by zero")
-        (exact (floor (/ n d)))))
+  ;;; negative infinity. `mod` is defined from it so the pair stays
+  ;;; consistent: the remainder takes the divisor's sign.
+  (define (%floor-div n d) (exact (floor (/ n d))))
+  (define (%idiv n d) (%intdiv2 "div" %floor-div n d))
   (define (%imod n d)
-    (if (zero? d)
-        (error '%imod "integer mod: division by zero")
-        (- n (* (%idiv n d) d))))
+    (%intdiv2 "mod" (lambda (n d) (- n (* (%floor-div n d) d))) n d))
 
   ;;; Truncated remainder, matching Haskell `rem`: the result takes
   ;;; the sign of the dividend. r6rs `mod0` is balanced (result in
@@ -300,9 +439,7 @@
   ;;; visible from `(rnrs)` inside a library in Guile, so we compute
   ;;; it explicitly from `truncate`.
   (define (%irem n d)
-    (if (zero? d)
-        (error '%irem "integer rem: division by zero")
-        (- n (* (exact (truncate (/ n d))) d))))
+    (%intdiv2 "rem" (lambda (n d) (- n (* (exact (truncate (/ n d))) d))) n d))
 
   ;;; Groundness check
   (define (%ground? v)
@@ -358,22 +495,45 @@
   (define (%compound-to-list c)
     (cond
       ((symbol? c) (%cons c (%nil)))
-      (else
+      ((term? c)
        (let ((f (term-functor c)) (a (term-args c)))
          (let loop ((i (- (vector-length a) 1)) (acc (%nil)))
            (if (< i 0) (%cons f acc)
-               (loop (- i 1) (%cons (vector-ref a i) acc))))))))
+               (loop (- i 1) (%cons (vector-ref a i) acc))))))
+      (else
+       (%arg-error "compound_to_list" (list c)
+                   (string-append "compound_to_list: expected 1 compound"
+                                  " or atom argument")))))
 
   ;;; list_to_compound — a singleton list returns the head symbol
   ;;; directly (matches the 0-arity collapse to 'VAtom).
+  ;;; All three rejections mirror `listToCompound` in the Haskell
+  ;;; registry, where `fromValueList` returning `Nothing` and the
+  ;;; `Just (VAtom f : _)` pattern between them rule out an improper
+  ;;; tail, an empty list and a non-atom head. Checking only the
+  ;;; length would let `[f, x | T]` build `f(x)` and `[1, 2]` build a
+  ;;; term whose functor is a number — the latter escaping as a raw
+  ;;; wrong-type condition from the pretty-printer rather than as a
+  ;;; CHR error.
   (define (%list-to-compound lst)
+    ;; Every rejection is diagnosed against the top-level argument,
+    ;; never against the offending sub-part: `argError` is handed the
+    ;; host call's argument list, so `[f, x | T]` with `T` unbound is
+    ;; a *general* error on both backends — the list itself is bound.
+    (define (reject)
+      (%arg-error "list_to_compound" (list lst)
+                  (string-append "list_to_compound: expected a"
+                                 " non-empty list with an atom head")))
     (let loop ((l lst) (acc '()))
       (if (%cons? l)
           (loop (get-arg l 1) (cons (get-arg l 0) acc))
           (let ((parts (reverse acc)))
-            (if (null? (cdr parts))
-                (car parts)
-                (make-term (car parts) (list->vector (cdr parts))))))))
+            (cond
+              ((not (%nil? l)) (reject))
+              ((null? parts) (reject))
+              ((not (symbol? (car parts))) (reject))
+              ((null? (cdr parts)) (car parts))
+              (else (make-term (car parts) (list->vector (cdr parts)))))))))
 
   ;;; name_base — the local part of a mangled name symbol. Splits at
   ;;; the first "__", which vmName (Compile/Names.hs) reserves for the
