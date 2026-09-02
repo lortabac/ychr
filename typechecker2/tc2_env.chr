@@ -13,11 +13,16 @@
 % differential harness compares diagnostics:
 %
 %   * `conMap` is a `Map.fromList`, so a constructor declared twice is
-%     the *last* declaration — hence `lookup_con` returns the last
-%     match, not the first;
+%     the *last* declaration — hence `con_env_from` stores the entries
+%     reversed, which is what makes a plain first-match `assoc_get`
+%     mean "the last declaration wins";
 %   * `conAlias` keeps a bare name only when exactly one declared
 %     constructor *occurrence* uses it, so two declarations of the same
 %     qualified name drop the alias rather than agreeing on it.
+%
+% The list traversals here go through `library(lists)` rather than
+% hand-rolled recursion; the cost of that is recorded once, in
+% `tc2_skel.chr`'s header.
 :- module('$tc2_env', [
     type(con_info/0),
     type(con_env/0),
@@ -66,18 +71,22 @@
 :- function build_con_env(list(type_def)) -> con_env.
 build_con_env(Tds) -> con_env_from(con_entries(Tds)).
 
+% The lookup table is stored *reversed*, so that the first entry
+% `assoc_get` finds is the last one declared — the `Map.fromList` rule
+% the header records. The alias table sees the entries in declaration
+% order, which it does not care about: it keeps only names carried by
+% exactly one entry.
 :- function con_env_from(list(pair(any, con_info))) -> con_env.
-con_env_from(Entries) -> con_env(Entries, build_con_alias(Entries)).
+con_env_from(Entries) -> con_env(reverse(Entries), build_con_alias(Entries)).
 
 % --- Constructor entries --------------------------------------------
 
 :- function con_entries(list(type_def)) -> list(pair(any, con_info)).
-con_entries([]) -> [].
-con_entries([Td|Tds]) -> append(td_entries(Td, type_cons(Td)), con_entries(Tds)).
+con_entries(Tds) -> concat_map(fun td_entries/1, Tds).
 
-:- function td_entries(type_def, list(data_con)) -> list(pair(any, con_info)).
-td_entries(_, []) -> [].
-td_entries(Td, [Dc|Dcs]) -> [kv(con_name(Dc), con_info(Td, Dc)) | td_entries(Td, Dcs)].
+:- function td_entries(type_def) -> list(pair(any, con_info)).
+td_entries(Td) ->
+    maplist(fun(Dc) -> kv(con_name(Dc), con_info(Td, Dc)) end, type_cons(Td)).
 
 % --- The bare-name alias table --------------------------------------
 
@@ -94,30 +103,24 @@ td_entries(Td, [Dc|Dcs]) -> [kv(con_name(Dc), con_info(Td, Dc)) | td_entries(Td,
 % host call, and pairing it with its name here keeps the quadratic
 % scan below to plain atom comparisons.
 :- function build_con_alias(list(pair(any, con_info))) -> list(pair(any, any)).
-build_con_alias(Entries) -> unique_bases_of(based_names(Entries)).
+build_con_alias(Entries) -> unique_bases(based_names(Entries)).
 
-% The list has to be passed to itself, and there is no `let`, so the
-% hoist is a helper's parameter — writing `based_names` twice would
+% The list has to be filtered against itself, and there is no `let`, so
+% the hoist is a helper's parameter — writing `based_names` twice would
 % compute it, and its host calls, twice.
-:- function unique_bases_of(list(pair(any, any))) -> list(pair(any, any)).
-unique_bases_of(Based) -> unique_bases(Based, Based).
+:- function unique_bases(list(pair(any, any))) -> list(pair(any, any)).
+unique_bases(Based) ->
+    filter(fun(Entry) -> count_base(key(Entry), Based) == 1 end, Based).
 
 % Each constructor name paired with its own base, `kv(Base, Name)`.
 :- function based_names(list(pair(any, con_info))) -> list(pair(any, any)).
-based_names([]) -> [].
-based_names([kv(N, _)|Rest]) -> [kv(name_base(N), N)|based_names(Rest)].
+based_names(Entries) -> maplist(fun based_name/1, Entries).
 
-:- function unique_bases(list(pair(any, any)), list(pair(any, any)))
-    -> list(pair(any, any)).
-unique_bases([], _) -> [].
-unique_bases([kv(B, N)|Ns], All) | count_base(B, All) == 1 ->
-    [kv(B, N) | unique_bases(Ns, All)].
-unique_bases([_|Ns], All) -> unique_bases(Ns, All).
+:- function based_name(pair(any, con_info)) -> pair(any, any).
+based_name(kv(N, _)) -> kv(name_base(N), N).
 
 :- function count_base(any, list(pair(any, any))) -> int.
-count_base(_, []) -> 0.
-count_base(B, [kv(B2, _)|Ns]) | B2 == B -> 1 + count_base(B, Ns).
-count_base(B, [_|Ns]) -> count_base(B, Ns).
+count_base(B, Ns) -> length(filter(fun(Entry) -> key(Entry) == B end, Ns)).
 
 % --- Lookups --------------------------------------------------------
 
@@ -126,24 +129,16 @@ count_base(B, [_|Ns]) -> count_base(B, Ns).
 % qualified exactly when its base differs from the whole, since the
 % module part of `m__n` is never empty and `n` can never contain `__`.
 :- function canonicalize_con(con_env, any) -> any.
-canonicalize_con(con_env(_, _), N) | not(name_base(N) == N) -> N.
+canonicalize_con(_, N) | not(name_base(N) == N) -> N.
 canonicalize_con(con_env(_, Alias), N) -> from_maybe(N, assoc_get(N, Alias)).
 
-% The *last* matching entry, mirroring `Map.fromList`, whose later
-% duplicate wins. Only reachable for a program that also reports a
-% duplicate-constructor error, but the two checkers have to agree on
-% which declaration the arity check then reads.
+% The *last* declaration of a name, mirroring `Map.fromList`, whose
+% later duplicate wins — the entries are stored reversed, so first match
+% is last declaration. Duplicates are only reachable for a program that
+% also reports a duplicate-constructor error, but the two checkers have
+% to agree on which declaration the arity check then reads.
 :- function lookup_con(con_env, any) -> maybe(con_info).
-lookup_con(con_env(Entries, _), N) -> lookup_last(N, Entries).
-
-:- function lookup_last(any, list(pair(any, con_info))) -> maybe(con_info).
-lookup_last(_, []) -> nothing.
-lookup_last(K, [kv(K2, V)|Rest]) | K2 == K -> prefer_later(lookup_last(K, Rest), V).
-lookup_last(K, [_|Rest]) -> lookup_last(K, Rest).
-
-:- function prefer_later(maybe(con_info), con_info) -> maybe(con_info).
-prefer_later(nothing, V) -> just(V).
-prefer_later(just(W), _) -> just(W).
+lookup_con(con_env(Entries, _), N) -> assoc_get(N, Entries).
 
 % --- Accessors ------------------------------------------------------
 
@@ -265,19 +260,16 @@ function_bounds_env([fun_def(N, A, _, Bs, _)|Fs]) ->
 % signature it is checked as (spec §Defaults). Entries for one name
 % accumulate in program order, as `Map.fromListWith (flip (++))` does.
 :- function function_sigs_env(list(fun_def)) -> list(pair(any, list(fun_sig))).
-function_sigs_env(Fs) -> function_sigs_acc(Fs, []).
+function_sigs_env(Fs) ->
+    foldl(fun(Acc, F) -> push_sigs(fun_def_name(F), effective_sigs(F), Acc) end,
+          [], Fs).
 
-:- function function_sigs_acc(list(fun_def), list(pair(any, list(fun_sig))))
-    -> list(pair(any, list(fun_sig))).
-function_sigs_acc([], Acc) -> Acc.
-function_sigs_acc([F|Fs], Acc) ->
-    function_sigs_acc(Fs, push_sigs(fun_def_name(F), effective_sigs(F), Acc)).
-
+% `Map.fromListWith (flip (++))`: an existing entry keeps its own
+% signatures in front of the newcomer's.
 :- function push_sigs(any, list(fun_sig), list(pair(any, list(fun_sig))))
     -> list(pair(any, list(fun_sig))).
-push_sigs(N, Sigs, []) -> [kv(N, Sigs)].
-push_sigs(N, Sigs, [kv(K, Old)|Rest]) | K == N -> [kv(K, append(Old, Sigs))|Rest].
-push_sigs(N, Sigs, [P|Rest]) -> [P|push_sigs(N, Sigs, Rest)].
+push_sigs(N, Sigs, Acc) ->
+    assoc_put_with(fun(New, Old) -> append(Old, New) end, N, Sigs, Acc).
 
 :- function fun_def_name(fun_def) -> any.
 fun_def_name(fun_def(N, _, _, _, _)) -> N.
@@ -289,11 +281,7 @@ effective_sigs(fun_def(_, _, Sigs, _, _)) -> Sigs.
 % The signature an untyped declaration is checked as: every argument
 % and the result `any`, spelled as the encoder spells the `any` type.
 :- function all_any_sig(int) -> fun_sig.
-all_any_sig(A) -> fun_sig(any_types(A), tconx(quote(any), [])).
-
-:- function any_types(int) -> list(ty_expr).
-any_types(N) | N =< 0 -> [].
-any_types(N) -> [tconx(quote(any), []) | any_types(N - 1)].
+all_any_sig(A) -> fun_sig(replicate(A, tconx(quote(any), [])), tconx(quote(any), [])).
 
 % --- The (name, arity)-keyed type table -----------------------------
 
@@ -308,15 +296,9 @@ has_type_def(N, A, [_|Tds]) -> has_type_def(N, A, Tds).
 % The distinct arities of every declaration whose *base* name matches,
 % which is how a reference that missed the table at its own arity is
 % told apart from one that names nothing at all. Only the singleton
-% case is acted on, so the order of the distinct arities does not
-% matter (Haskell's `List.nub` keeps first occurrences; this keeps
-% last).
+% case is acted on, so the order does not matter; `distinct` keeps
+% first occurrences, as Haskell's `List.nub` does.
 :- function base_name_arities(any, list(type_def)) -> list(int).
-base_name_arities(_, []) -> [].
-base_name_arities(B, [Td|Tds]) | name_base(type_def_name(Td)) == B ->
-    add_new(type_def_arity(Td), base_name_arities(B, Tds)).
-base_name_arities(B, [_|Tds]) -> base_name_arities(B, Tds).
-
-:- function add_new(int, list(int)) -> list(int).
-add_new(A, As) | member(A, As) -> As.
-add_new(A, As) -> [A|As].
+base_name_arities(B, Tds) ->
+    distinct(maplist(fun type_def_arity/1,
+                     filter(fun(Td) -> name_base(type_def_name(Td)) == B end, Tds))).

@@ -11,6 +11,10 @@
 % differential harness compares payloads, labels, locations and origins
 % as multisets, so the only freedom is the order in which the lists are
 % concatenated.
+%
+% The list traversals here go through `library(lists)` rather than
+% hand-rolled recursion; the cost of that is recorded once, in
+% `tc2_skel.chr`'s header.
 :- module('$tc2_pure', [
     fun program_errors/2,
     fun goals_arity_errors/4
@@ -39,10 +43,10 @@ program_errors(Env, program(Rules, Funs, _, _, Tds)) ->
 % one.
 :- function all_errors(con_env, list(rule), list(fun_def), list(type_def)) -> list(error).
 all_errors(Env, Rules, Funs, Tds) ->
-    append(validate_type_defs(Tds),
-      append(duplicate_constructors(Tds),
-        append(rules_arity_errors(Env, Rules, 0),
-               funs_arity_errors(Env, Funs, length(Rules))))).
+    concat([validate_type_defs(Tds),
+            duplicate_constructors(Tds),
+            rules_arity_errors(Env, Rules, 0),
+            funs_arity_errors(Env, Funs, length(Rules))]).
 
 % ---------------------------------------------------------------------
 % Type-definition validation
@@ -57,19 +61,16 @@ all_errors(Env, Rules, Funs, Tds) ->
 validate_type_defs(Tds) -> validate_tds(Tds, Tds).
 
 :- function validate_tds(list(type_def), list(type_def)) -> list(error).
-validate_tds([], _) -> [].
-validate_tds([Td|Rest], All) ->
-    append(validate_cons(Td, type_cons(Td), All), validate_tds(Rest, All)).
+validate_tds(Tds, All) ->
+    concat_map(fun(Td) -> validate_cons(Td, type_cons(Td), All) end, Tds).
 
 :- function validate_cons(type_def, list(data_con), list(type_def)) -> list(error).
-validate_cons(_, [], _) -> [].
-validate_cons(Td, [Dc|Dcs], All) ->
-    append(validate_fields(Td, Dc, con_args(Dc), All), validate_cons(Td, Dcs, All)).
+validate_cons(Td, Dcs, All) ->
+    concat_map(fun(Dc) -> validate_fields(Td, Dc, con_args(Dc), All) end, Dcs).
 
 :- function validate_fields(type_def, data_con, list(ty_expr), list(type_def)) -> list(error).
-validate_fields(_, _, [], _) -> [].
-validate_fields(Td, Dc, [T|Ts], All) ->
-    append(validate_field(Td, Dc, T, All), validate_fields(Td, Dc, Ts, All)).
+validate_fields(Td, Dc, Ts, All) ->
+    concat_map(fun(T) -> validate_field(Td, Dc, T, All) end, Ts).
 
 :- function validate_field(type_def, data_con, ty_expr, list(type_def)) -> list(error).
 % A type variable must be one of the enclosing declaration's parameters.
@@ -122,11 +123,8 @@ arity_ref_error(Td, Dc, N, UseArity, Declared) ->
 % atom, so a qualified `m:int` is correctly not one of them — the
 % Haskell's explicit `Qualified _ _ -> False` arm needs no counterpart.
 :- function is_base_type(any) -> bool.
-is_base_type(N) | N == quote(int) -> true.
-is_base_type(N) | N == quote(float) -> true.
-is_base_type(N) | N == quote(string) -> true.
-is_base_type(N) | N == quote(any) -> true.
-is_base_type(_) -> false.
+is_base_type(N) ->
+    member(N, [quote(int), quote(float), quote(string), quote(any)]).
 
 % A declaration-level diagnostic: no checking unit, so it suppresses no
 % warnings, and the source echo is the enclosing type's own name.
@@ -150,36 +148,38 @@ decl_error(Td, Code, Detail) ->
 % One grouping pass, then one diagnostic per group of more than one.
 % The old checker's `Map.fromListWith (++)` is reproduced by
 % `push_decl`, which prepends: each group ends up in reverse encounter
-% order, which is what the *stable* sort below then sees.
+% order, which is what `dup_errors`' stable `sort_by` then sees.
 :- function duplicate_constructors(list(type_def)) -> list(error).
-duplicate_constructors(Tds) -> dup_errors(group_decls(Tds, [])).
+duplicate_constructors(Tds) -> dup_errors(group_decls(Tds)).
 
-:- function group_decls(list(type_def), list(pair(any, list(con_decl))))
-    -> list(pair(any, list(con_decl))).
-group_decls([], Groups) -> Groups.
-group_decls([Td|Tds], Groups) ->
-    group_decls(Tds, td_decls(Td, type_cons(Td), Groups)).
+:- function group_decls(list(type_def)) -> list(pair(any, list(con_decl))).
+group_decls(Tds) ->
+    foldl(fun(Groups, Td) -> td_decls(Td, type_cons(Td), Groups) end, [], Tds).
 
 :- function td_decls(type_def, list(data_con), list(pair(any, list(con_decl))))
     -> list(pair(any, list(con_decl))).
-td_decls(_, [], Groups) -> Groups.
-td_decls(Td, [Dc|Dcs], Groups) ->
-    td_decls(Td, Dcs,
-             push_decl(con_name(Dc),
-                       con_decl(type_def_name(Td), length(con_args(Dc)),
-                                type_def_loc(Td)),
-                       Groups)).
+td_decls(Td, Dcs, Groups) ->
+    foldl(fun(Acc, Dc) -> td_decl(Td, Acc, Dc) end, Groups, Dcs).
+
+:- function td_decl(type_def, list(pair(any, list(con_decl))), data_con)
+    -> list(pair(any, list(con_decl))).
+td_decl(Td, Groups, Dc) ->
+    push_decl(con_name(Dc),
+              con_decl(type_def_name(Td), length(con_args(Dc)), type_def_loc(Td)),
+              Groups).
 
 :- function push_decl(any, con_decl, list(pair(any, list(con_decl))))
     -> list(pair(any, list(con_decl))).
-push_decl(N, D, []) -> [kv(N, [D])].
-push_decl(N, D, [kv(K, Ds)|Rest]) | K == N -> [kv(K, [D|Ds])|Rest].
-push_decl(N, D, [G|Rest]) -> [G|push_decl(N, D, Rest)].
+push_decl(N, D, Groups) ->
+    assoc_put_with(fun(New, Old) -> append(New, Old) end, N, [D], Groups).
 
 :- function dup_errors(list(pair(any, list(con_decl)))) -> list(error).
-dup_errors([]) -> [].
-dup_errors([kv(N, Ds)|Rest]) ->
-    append(dup_error_for(N, sort_decls(Ds)), dup_errors(Rest)).
+dup_errors(Groups) ->
+    concat_map(fun(Group) ->
+                   dup_error_for(key(Group),
+                                 sort_by(fun decl_before/2, value(Group)))
+               end,
+               Groups).
 
 :- function dup_error_for(any, list(con_decl)) -> list(error).
 dup_error_for(_, []) -> [].
@@ -187,31 +187,21 @@ dup_error_for(_, [_]) -> [].
 dup_error_for(N, [con_decl(TName, A, L), D2|Ds]) ->
     [error(ctx(-1, origin_atom(TName), label_none, L),
            duplicate_constructor,
-           duplicate_constructor_d(N, decl_pairs([con_decl(TName, A, L), D2|Ds])))].
+           duplicate_constructor_d(N,
+             maplist(fun decl_pair/1, [con_decl(TName, A, L), D2|Ds])))].
 
-:- function decl_pairs(list(con_decl)) -> list(pair(any, int)).
-decl_pairs([]) -> [].
-decl_pairs([con_decl(TName, A, _)|Ds]) -> [kv(TName, A)|decl_pairs(Ds)].
+:- function decl_pair(con_decl) -> pair(any, int).
+decl_pair(con_decl(TName, A, _)) -> kv(TName, A).
 
-% Stable insertion sort by source position, on `(file, line, col)` —
-% the same key `List.sortOn` uses. Two files may carry the same
+% Strictly earlier by source position, on `(file, line, col)` — the same
+% key `List.sortOn` uses, and the strict less-than `sort_by` sorts a
+% group of declarations under. Two files may carry the same
 % `:- module` header and are merged, so two declarations of one
 % *qualified* constructor name really can sit in different files, and
 % the file has to be part of the key: without it the reported
 % declaration order, source location and origin all diverge from the
 % old checker's. `<` on two strings is lexicographic by code point,
 % which is the ordering `Ord String` gives.
-:- function sort_decls(list(con_decl)) -> list(con_decl).
-sort_decls([]) -> [].
-sort_decls([D|Ds]) -> insert_decl(D, sort_decls(Ds)).
-
-:- function insert_decl(con_decl, list(con_decl)) -> list(con_decl).
-insert_decl(D, []) -> [D].
-insert_decl(D, [E|Es]) | decl_before(E, D) -> [E|insert_decl(D, Es)].
-insert_decl(D, [E|Es]) -> [D, E|Es].
-
-% Strictly earlier, so that an insertion stops at the first element the
-% newcomer does not follow — which is what keeps the sort stable.
 :- function decl_before(con_decl, con_decl) -> bool.
 decl_before(con_decl(_, _, loc(F1, _, _)), con_decl(_, _, loc(F2, _, _)))
   | F1 < F2 -> true.
@@ -287,12 +277,18 @@ eqs_arity_errors(Env, FName, A, Loc, [Eq|Eqs], Unit, Step) ->
 eq_arity(Env, fun_eq(_, Guards, _, Rhs)) ->
     append(guards_arity(Env, Guards), expr_arity(Env, Rhs)).
 
+% Every use site of one section shares a diagnostic context, so it is
+% built once and handed on; there is no `let`, so the hoist is a
+% helper's parameter.
 :- function arity_diags(int, diag_label, diag_origin, loc, list(arity_use)) -> list(error).
-arity_diags(_, _, _, _, []) -> [].
-arity_diags(U, L, O, Loc, [arity_use(N, Use, Declared)|Rest]) ->
-    [error(ctx(U, O, L, Loc), constructor_arity,
-           constructor_arity_d(N, Use, Declared))
-     | arity_diags(U, L, O, Loc, Rest)].
+arity_diags(U, L, O, Loc, Uses) -> arity_diags_at(ctx(U, O, L, Loc), Uses).
+
+:- function arity_diags_at(ctx, list(arity_use)) -> list(error).
+arity_diags_at(Ctx, Uses) -> maplist(fun(Use) -> arity_diag(Ctx, Use) end, Uses).
+
+:- function arity_diag(ctx, arity_use) -> error.
+arity_diag(Ctx, arity_use(N, Use, Declared)) ->
+    error(Ctx, constructor_arity, constructor_arity_d(N, Use, Declared)).
 
 % The constructor-arity errors of a query's goals. A goal introduces no
 % declarations, so this is the *only* declaration-level check goals go
@@ -318,8 +314,7 @@ goals_arity_errors_at(Env, [G|Gs], Label, Loc, Unit) ->
 % --- The walk -------------------------------------------------------
 
 :- function guards_arity(con_env, list(guard)) -> list(arity_use).
-guards_arity(_, []) -> [].
-guards_arity(Env, [G|Gs]) -> append(guard_arity(Env, G), guards_arity(Env, Gs)).
+guards_arity(Env, Gs) -> concat_map(fun(G) -> guard_arity(Env, G) end, Gs).
 
 :- function guard_arity(con_env, guard) -> list(arity_use).
 guard_arity(Env, guard_equal(A, B)) -> append(expr_arity(Env, A), expr_arity(Env, B)).
@@ -329,9 +324,7 @@ guard_arity(Env, guard_getarg(_, E, _)) -> expr_arity(Env, E).
 guard_arity(Env, guard_expr(E)) -> expr_arity(Env, E).
 
 :- function body_goals_arity(con_env, list(body_goal)) -> list(arity_use).
-body_goals_arity(_, []) -> [].
-body_goals_arity(Env, [G|Gs]) ->
-    append(body_goal_arity(Env, G), body_goals_arity(Env, Gs)).
+body_goals_arity(Env, Gs) -> concat_map(fun(G) -> body_goal_arity(Env, G) end, Gs).
 
 :- function body_goal_arity(con_env, body_goal) -> list(arity_use).
 body_goal_arity(_, body_true) -> [].
@@ -345,8 +338,7 @@ body_goal_arity(Env, body_apply(F, Args)) ->
     append(expr_arity(Env, F), exprs_arity(Env, Args)).
 
 :- function exprs_arity(con_env, list(expr)) -> list(arity_use).
-exprs_arity(_, []) -> [].
-exprs_arity(Env, [E|Es]) -> append(expr_arity(Env, E), exprs_arity(Env, Es)).
+exprs_arity(Env, Es) -> concat_map(fun(E) -> expr_arity(Env, E) end, Es).
 
 % Only `ctor_e` is a constructor application. The heads of the other
 % compounds name a function, a closure or a host call, so their

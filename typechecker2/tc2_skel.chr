@@ -2,7 +2,10 @@
 %
 % Ports the "declaration-position `any` stamping" block of
 % `src/YCHR/Internal/TypeCheck.hs` (`skeletonOf` and everything under
-% it, through `allocSkeleton`). The rule it implements is the one the
+% it, through `allocSkeleton`). Its spec home is
+% `docs/reference/type-system.md` §Type states, whose meet is defined
+% position by position — which is exactly why a slot has to be shaped
+% before the solver sees it. The rule it implements is the one the
 % old driver's module header states: `any` never binds, so a *position*
 % that some declaration source leaves `any` and another makes concrete
 % has to reach the solver as a flexible variable — per position, not
@@ -14,16 +17,28 @@
 % Everything here is a pure function except the allocation itself,
 % which needs fresh logical variables and so has to be a rule.
 %
-% Cost: the variable bookkeeping below — `dedup_names`, `components`,
-% `reach` — is quadratic in the number of distinct variables of one
-% checking unit, where the old driver is `O(V log V)` through a `Map`.
-% Measured: a single rule with 400 distinct variables costs V2 ~1.5 s
-% against the old checker's ~0.1 s, and doubling the count costs
-% ~4.4x. Rule *size* is not the axis — 800 body goals over two
-% variables costs nothing extra. This is the same assoc-lists-instead-
-% of-maps limitation `tc2_env.chr` records for the constructor count,
-% on a second axis; closing either needs a runtime map primitive, and
+% Cost: the variable bookkeeping below — `components` and `reach`, and
+% the `distinct` that feeds them — is quadratic in the number of
+% distinct variables of one checking unit, where the old driver is
+% `O(V log V)` through a `Map`. Measured on a rule whose head takes 400
+% declared arguments at 400 distinct variables: V2 ~3.9 s against the
+% old checker's ~22 ms, and doubling the variable count costs ~4.5x.
+% Rule *size* is not the axis — 800 body goals over two variables costs
+% nothing extra. This is the same assoc-lists-instead-of-maps
+% limitation `tc2_env.chr` records for the constructor count, on a
+% second axis; closing either needs a runtime map primitive, and
 % neither is reached by hand-written code.
+%
+% The list traversals here and in `tc2_env` / `tc2_pure` / `tc2_walk`
+% go through `library(lists)` rather than hand-rolled recursion, which
+% *adds* about 80% to the checker's runtime over the golden corpus —
+% roughly 2-3x per list element at every site. All of it is `'$call'`
+% dispatch, which is a linear scan over every same-arity function in
+% the program; that was measured and accepted deliberately, and the fix
+% belongs in the compiler (see `dev-docs/PROJECT.md`, Work Remaining:
+% keyed `'$call'` dispatch). On the quadratic path above
+% it costs more than the corpus average: the same 400-variable rule was
+% ~1.6 s before the stdlib adoption.
 :- module('$tc2_skel', [
     type(type_skeleton/0),
     fun collect_vars_rule/3,
@@ -36,7 +51,6 @@
     fun param_var_skeletons/4,
     fun skeleton_of/1,
     fun guard_operand_var/1,
-    fun ty_expr_at/2,
     alloc_var_types/3
 ]).
 
@@ -81,19 +95,9 @@ is_any_ty(_) -> false.
 :- function mentions_any(ty_expr) -> bool.
 mentions_any(T) | is_any_ty(T) -> true.
 mentions_any(tvar(_)) -> false.
-mentions_any(tconx(_, Args)) -> any_mentions_any(Args).
-mentions_any(tfunx(Args, _)) | any_mentions_any(Args) -> true.
+mentions_any(tconx(_, Args)) -> any(fun mentions_any/1, Args).
+mentions_any(tfunx(Args, _)) | any(fun mentions_any/1, Args) -> true.
 mentions_any(tfunx(_, Ret)) -> mentions_any(Ret).
-
-:- function any_mentions_any(list(ty_expr)) -> bool.
-any_mentions_any([]) -> false.
-any_mentions_any([T|_]) | mentions_any(T) -> true.
-any_mentions_any([_|Ts]) -> any_mentions_any(Ts).
-
-:- function all_any_ty(list(ty_expr)) -> bool.
-all_any_ty([]) -> true.
-all_any_ty([T|Ts]) | is_any_ty(T) -> all_any_ty(Ts).
-all_any_ty(_) -> false.
 
 % ---------------------------------------------------------------------
 % The skeleton of a set of declaration sources
@@ -108,24 +112,27 @@ all_any_ty(_) -> false.
 
 :- function skeleton_of(list(ty_expr)) -> type_skeleton.
 skeleton_of([]) -> sk_open.
-skeleton_of(Ts) | all_any_ty(Ts) -> sk_any.
-skeleton_of(Ts) | not(any_mentions_any(Ts)) -> sk_open.
+skeleton_of(Ts) | all(fun is_any_ty/1, Ts) -> sk_any.
+skeleton_of(Ts) | not(any(fun mentions_any/1, Ts)) -> sk_open.
 skeleton_of(Ts) -> skeleton_fun(Ts, same_fun_shape(Ts)).
 
 :- function skeleton_fun(list(ty_expr), maybe(fun_shapes)) -> type_skeleton.
 skeleton_fun(_, just(fun_shapes(Argss, Rets))) ->
-    sk_fun(skeletons_of(transpose_rows(Argss)), skeleton_of(Rets)).
+    sk_fun(maplist(fun skeleton_of/1, transpose_rows(Argss)), skeleton_of(Rets)).
 skeleton_fun(Ts, nothing) -> skeleton_con(same_con_shape(Ts)).
 
 :- function skeleton_con(maybe(con_shapes)) -> type_skeleton.
 skeleton_con(just(con_shapes(N, Argss))) ->
-    sk_con(N, skeletons_of(transpose_rows(Argss))).
+    sk_con(N, maplist(fun skeleton_of/1, transpose_rows(Argss))).
 skeleton_con(nothing) -> sk_open.
 
-:- function skeletons_of(list(list(ty_expr))) -> list(type_skeleton).
-skeletons_of([]) -> [].
-skeletons_of([Ts|Rest]) -> [skeleton_of(Ts) | skeletons_of(Rest)].
-
+% The six shape helpers below stay hand-rolled recursions where the
+% rest of the file uses `library(lists)`: each destructures a `tfunx`
+% or `tconx` *in the pattern* and falls through to a default when the
+% element is neither, and a lambda cannot pattern-match. Expressing
+% them as `all`/`maplist` would need a total element function apiece —
+% the same two equations moved, not fewer.
+%
 % Every source is a function type, and they all take the same number of
 % arguments. An empty source list is not a shape.
 :- function same_fun_shape(list(ty_expr)) -> maybe(fun_shapes).
@@ -206,16 +213,8 @@ var_skeletons(Occs, Links) ->
 
 :- function all_linked_vars(list(pair(any, ty_expr)), list(pair(any, any))) -> list(any).
 all_linked_vars(Occs, Links) ->
-    dedup_names(append(assoc_keys(Occs), link_endpoints(Links))).
-
-:- function link_endpoints(list(pair(any, any))) -> list(any).
-link_endpoints([]) -> [].
-link_endpoints([kv(A, B)|Rest]) -> [A, B|link_endpoints(Rest)].
-
-:- function dedup_names(list(any)) -> list(any).
-dedup_names([]) -> [].
-dedup_names([N|Ns]) | member(N, Ns) -> dedup_names(Ns).
-dedup_names([N|Ns]) -> [N|dedup_names(Ns)].
+    distinct(append(assoc_keys(Occs),
+                    concat_map(fun(Link) -> [key(Link), value(Link)] end, Links))).
 
 % The connected components of the link graph, over every variable that
 % has a declaration source or appears in a link.
@@ -253,9 +252,9 @@ fresh_neighbors([N|Ns], Acc) -> [N|fresh_neighbors(Ns, [N|Acc])].
 
 :- function comps_skeletons(list(list(any)), list(pair(any, ty_expr)))
     -> list(pair(any, type_skeleton)).
-comps_skeletons([], _) -> [].
-comps_skeletons([C|Cs], Occs) ->
-    append(comp_skeletons(C, comp_sources(C, Occs)), comps_skeletons(Cs, Occs)).
+comps_skeletons(Comps, Occs) ->
+    concat_map(fun(Comp) -> comp_skeletons(Comp, comp_sources(Comp, Occs)) end,
+               Comps).
 
 % A component with no declaration source contributes nothing, so its
 % members fall through to the plain flexible slot.
@@ -263,14 +262,14 @@ comps_skeletons([C|Cs], Occs) ->
 comp_skeletons(_, []) -> [].
 comp_skeletons(Comp, Srcs) -> assign_skeleton(Comp, skeleton_of(Srcs)).
 
+% The component's members all get the component's skeleton — as a
+% shape, not as a shared term; see `var_skeletons` above.
 :- function assign_skeleton(list(any), type_skeleton) -> list(pair(any, type_skeleton)).
-assign_skeleton([], _) -> [].
-assign_skeleton([V|Vs], Sk) -> [kv(V, Sk) | assign_skeleton(Vs, Sk)].
+assign_skeleton(Comp, Sk) -> maplist(fun(V) -> kv(V, Sk) end, Comp).
 
 :- function comp_sources(list(any), list(pair(any, ty_expr))) -> list(ty_expr).
-comp_sources(_, []) -> [].
-comp_sources(Comp, [kv(V, T)|Rest]) | member(V, Comp) -> [T|comp_sources(Comp, Rest)].
-comp_sources(Comp, [_|Rest]) -> comp_sources(Comp, Rest).
+comp_sources(Comp, Occs) ->
+    assoc_values(filter(fun(Occ) -> member(key(Occ), Comp) end, Occs)).
 
 % ---------------------------------------------------------------------
 % Where the declaration sources come from
@@ -340,16 +339,14 @@ field_occ(Env, V, Idx, Con) -> field_occ_of(V, con_field_at(Idx, lookup_con(Env,
 field_occ_of(_, nothing) -> [].
 field_occ_of(V, just(T)) -> [kv(V, T)].
 
+% `nth_maybe` is the Haskell's `idx < length` guard followed by `!!`,
+% in one total step — and total in the other direction too, where the
+% Haskell's guard passes and `!!` then crashes. That extra arm is
+% unreachable: the index comes from a `guard_getarg`, which HNF only
+% ever emits at a non-negative field position.
 :- function con_field_at(int, maybe(con_info)) -> maybe(ty_expr).
 con_field_at(_, nothing) -> nothing.
-con_field_at(Idx, just(con_info(_, Dc))) -> ty_expr_at(Idx, con_args(Dc)).
-
-% Safe indexing, standing in for the Haskell's `idx < length` guard
-% followed by `!!`.
-:- function ty_expr_at(int, list(ty_expr)) -> maybe(ty_expr).
-ty_expr_at(_, []) -> nothing.
-ty_expr_at(I, [T|_]) | I =< 0 -> just(T).
-ty_expr_at(I, [_|Ts]) -> ty_expr_at(I - 1, Ts).
+con_field_at(Idx, just(con_info(_, Dc))) -> nth_maybe(Idx, con_args(Dc)).
 
 % Slot skeletons determined by a rule head's declaration positions.
 % Head arguments are post-HNF (variables and wildcards only), so the
@@ -363,10 +360,11 @@ head_var_skeletons(Env, Cons, Guards) ->
                   guard_equal_links(Guards)).
 
 :- function head_occs(tc_env, list(head_con)) -> list(pair(any, ty_expr)).
-head_occs(_, []) -> [].
-head_occs(Env, [head_con(N, Args)|Cs]) ->
-    append(arg_occs(Args, env_constraint_types(Env, con_key(N, length(Args)))),
-           head_occs(Env, Cs)).
+head_occs(Env, Cs) -> concat_map(fun(C) -> head_con_occs(Env, C) end, Cs).
+
+:- function head_con_occs(tc_env, head_con) -> list(pair(any, ty_expr)).
+head_con_occs(Env, head_con(N, Args)) ->
+    arg_occs(Args, env_constraint_types(Env, con_key(N, length(Args)))).
 
 % Zip head arguments against declared types, stopping at the shorter
 % list and skipping wildcards. A constraint with no declaration has no
@@ -400,30 +398,28 @@ param_var_skeletons(Env, Params, DeclTys, Guards) ->
 
 :- function collect_vars_rule(list(head_con), list(guard), list(body_goal)) -> list(any).
 collect_vars_rule(Cons, Guards, Body) ->
-    dedup_names(append(collect_vars_head_cons(Cons),
-                append(collect_vars_guards(Guards),
-                       collect_vars_body_goals(Body)))).
+    distinct(concat([collect_vars_head_cons(Cons),
+                     collect_vars_guards(Guards),
+                     collect_vars_body_goals(Body)])).
 
 % The same for a query's goal list. The goals of one query share a
 % single variable scope, so a name mentioned by two of them gets one
 % slot — which is why the whole list is collected at once rather than
 % goal by goal. Ports `typeCheckGoals`'s `foldMap collectVarsInBodyGoal`.
 :- function collect_vars_goals(list(body_goal)) -> list(any).
-collect_vars_goals(Goals) -> dedup_names(collect_vars_body_goals(Goals)).
+collect_vars_goals(Goals) -> distinct(collect_vars_body_goals(Goals)).
 
 % The same for one function equation: parameters, guards, prelude
 % statements and the result expression. Ports `collectVarsInEq`.
 :- function collect_vars_eq(fun_eq) -> list(any).
 collect_vars_eq(fun_eq(Params, Guards, Prelude, Rhs)) ->
-    dedup_names(append(collect_vars_head_args(Params),
-                append(collect_vars_guards(Guards),
-                append(collect_vars_fun_stmts(Prelude),
-                       collect_vars_expr(Rhs))))).
+    distinct(concat([collect_vars_head_args(Params),
+                     collect_vars_guards(Guards),
+                     collect_vars_fun_stmts(Prelude),
+                     collect_vars_expr(Rhs)])).
 
 :- function collect_vars_fun_stmts(list(fun_stmt)) -> list(any).
-collect_vars_fun_stmts([]) -> [].
-collect_vars_fun_stmts([S|Ss]) ->
-    append(collect_vars_fun_stmt(S), collect_vars_fun_stmts(Ss)).
+collect_vars_fun_stmts(Ss) -> concat_map(fun collect_vars_fun_stmt/1, Ss).
 
 :- function collect_vars_fun_stmt(fun_stmt) -> list(any).
 collect_vars_fun_stmt(fun_is(V, E)) -> [V|collect_vars_expr(E)].
@@ -433,9 +429,10 @@ collect_vars_fun_stmt(fun_apply(F, Args)) ->
     append(collect_vars_expr(F), collect_vars_exprs(Args)).
 
 :- function collect_vars_head_cons(list(head_con)) -> list(any).
-collect_vars_head_cons([]) -> [].
-collect_vars_head_cons([head_con(_, Args)|Cs]) ->
-    append(collect_vars_head_args(Args), collect_vars_head_cons(Cs)).
+collect_vars_head_cons(Cs) -> concat_map(fun collect_vars_head_con/1, Cs).
+
+:- function collect_vars_head_con(head_con) -> list(any).
+collect_vars_head_con(head_con(_, Args)) -> collect_vars_head_args(Args).
 
 :- function collect_vars_head_args(list(head_arg)) -> list(any).
 collect_vars_head_args([]) -> [].
@@ -443,9 +440,7 @@ collect_vars_head_args([head_var(V)|As]) -> [V|collect_vars_head_args(As)].
 collect_vars_head_args([head_wild|As]) -> collect_vars_head_args(As).
 
 :- function collect_vars_guards(list(guard)) -> list(any).
-collect_vars_guards([]) -> [].
-collect_vars_guards([G|Gs]) ->
-    append(collect_vars_guard(G), collect_vars_guards(Gs)).
+collect_vars_guards(Gs) -> concat_map(fun collect_vars_guard/1, Gs).
 
 :- function collect_vars_guard(guard) -> list(any).
 collect_vars_guard(guard_equal(A, B)) ->
@@ -455,9 +450,7 @@ collect_vars_guard(guard_getarg(V, E, _)) -> [V|collect_vars_expr(E)].
 collect_vars_guard(guard_expr(E)) -> collect_vars_expr(E).
 
 :- function collect_vars_body_goals(list(body_goal)) -> list(any).
-collect_vars_body_goals([]) -> [].
-collect_vars_body_goals([G|Gs]) ->
-    append(collect_vars_body_goal(G), collect_vars_body_goals(Gs)).
+collect_vars_body_goals(Gs) -> concat_map(fun collect_vars_body_goal/1, Gs).
 
 :- function collect_vars_body_goal(body_goal) -> list(any).
 collect_vars_body_goal(body_true) -> [].
@@ -471,8 +464,7 @@ collect_vars_body_goal(body_apply(F, Args)) ->
     append(collect_vars_expr(F), collect_vars_exprs(Args)).
 
 :- function collect_vars_exprs(list(expr)) -> list(any).
-collect_vars_exprs([]) -> [].
-collect_vars_exprs([E|Es]) -> append(collect_vars_expr(E), collect_vars_exprs(Es)).
+collect_vars_exprs(Es) -> concat_map(fun collect_vars_expr/1, Es).
 
 :- function collect_vars_expr(expr) -> list(any).
 collect_vars_expr(var_e(V)) -> [V].

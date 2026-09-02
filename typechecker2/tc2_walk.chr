@@ -22,6 +22,10 @@
 % the export map: the class-function overload search below runs each
 % (equation x signature) attempt in a throwaway sub-session, exactly as
 % `checkClassFunction` runs each in a throwaway `runCheckSession`.
+%
+% The list traversals here go through `library(lists)` rather than
+% hand-rolled recursion; the cost of that is recorded once, in
+% `tc2_skel.chr`'s header.
 :- module('$tc2_walk', [
     walk_program/3,
     walk_goals/4,
@@ -50,11 +54,16 @@
                              list(pair(amb_key, list(sig_t(list(ty), ty)))),
                              ctx).
 
-% Which of the two expression-typing modes a constructor application's
-% fields are recursed into with. The Haskell parameterizes
+% Which kind of position a constructor application's fields are
+% recursed into as (docs/reference/type-system.md §Expression Typing:
+% an evaluated position is typed by what it evaluates to, a structural
+% one by the term it denotes). The Haskell parameterizes
 % `typeOfCtorWith` by the typing function; a CHR constraint cannot take
 % one, so the choice is a tag.
-:- chr_type ctor_mode ---> mode_eval ; mode_struct.
+%
+% Not to be confused with a *mode* in the instantiation sense, which the
+% checker does not track at all (§No mode checking).
+:- chr_type arg_position ---> evaluated_position ; structural_position.
 
 % What a `guard_match` leaves for the `guard_getarg`s that read the same
 % term: the canonicalized constructor name, and one slot per field at
@@ -128,24 +137,23 @@ encode_ty(TVars, tfunx(Args, Ret)) ->
     fun(encode_tys(TVars, Args), encode_ty(TVars, Ret)).
 
 :- function encode_tys(list(pair(string, ty)), list(ty_expr)) -> list(ty).
-encode_tys(_, []) -> [].
-encode_tys(TVars, [T|Ts]) -> [encode_ty(TVars, T) | encode_tys(TVars, Ts)].
+encode_tys(TVars, Ts) -> maplist(fun(T) -> encode_ty(TVars, T) end, Ts).
 
 % One `nbound` per bound of a declaration, against the declaration's
 % shared type-variable map — which is what lets a single `copy_term` at
 % the use site freshen the signature and its bounds consistently.
 % Ports `encodeNamedBound`.
 :- function encode_bounds(list(pair(string, ty)), list(bound_sig)) -> list(bound_named).
-encode_bounds(_, []) -> [].
-encode_bounds(TVars, [bound_sig(N, _, Args, Ret, _)|Bs]) ->
-    [nbound(N, encode_tys(TVars, Args), encode_ty(TVars, Ret))
-     | encode_bounds(TVars, Bs)].
+encode_bounds(TVars, Bs) -> maplist(fun(B) -> encode_bound(TVars, B) end, Bs).
+
+:- function encode_bound(list(pair(string, ty)), bound_sig) -> bound_named.
+encode_bound(TVars, bound_sig(N, _, Args, Ret, _)) ->
+    nbound(N, encode_tys(TVars, Args), encode_ty(TVars, Ret)).
 
 % --- Type variables of a declaration --------------------------------
 
 :- function collect_ty_vars(list(ty_expr)) -> list(string).
-collect_ty_vars([]) -> [].
-collect_ty_vars([T|Ts]) -> append(collect_ty_vars_expr(T), collect_ty_vars(Ts)).
+collect_ty_vars(Ts) -> concat_map(fun collect_ty_vars_expr/1, Ts).
 
 :- function collect_ty_vars_expr(ty_expr) -> list(string).
 collect_ty_vars_expr(tvar(V)) -> [V].
@@ -154,10 +162,11 @@ collect_ty_vars_expr(tfunx(Args, Ret)) ->
     append(collect_ty_vars(Args), collect_ty_vars_expr(Ret)).
 
 :- function bound_sigs_vars(list(bound_sig)) -> list(string).
-bound_sigs_vars([]) -> [].
-bound_sigs_vars([bound_sig(_, _, Args, Ret, _)|Bs]) ->
-    append(append(collect_ty_vars(Args), collect_ty_vars_expr(Ret)),
-           bound_sigs_vars(Bs)).
+bound_sigs_vars(Bs) -> concat_map(fun bound_sig_vars/1, Bs).
+
+:- function bound_sig_vars(bound_sig) -> list(string).
+bound_sig_vars(bound_sig(_, _, Args, Ret, _)) ->
+    append(collect_ty_vars(Args), collect_ty_vars_expr(Ret)).
 
 % The distinct type-variable names of a declaration, ascending.
 %
@@ -168,25 +177,13 @@ bound_sigs_vars([bound_sig(_, _, Args, Ret, _)|Bs]) ->
 % care, but it goes through the same sort so there is one rule to
 % remember.
 :- function sort_unique_tvars(list(string)) -> list(string).
-sort_unique_tvars([]) -> [].
-sort_unique_tvars([V|Vs]) -> insert_tvar(V, sort_unique_tvars(Vs)).
-
-:- function insert_tvar(string, list(string)) -> list(string).
-insert_tvar(V, []) -> [V].
-insert_tvar(V, [W|Ws]) | V == W -> [W|Ws].
-insert_tvar(V, [W|Ws]) | V < W -> [V, W|Ws].
-insert_tvar(V, [W|Ws]) -> [W|insert_tvar(V, Ws)].
+sort_unique_tvars(Vs) -> sort_by(fun(A, B) -> A < B end, distinct(Vs)).
 
 % The declaration's parameters in *declaration* order, as the parent
 % type of a constructor signature spells them. Ports `encodeTCon`.
 :- function tvar_slots(list(string), list(pair(string, ty))) -> list(ty).
-tvar_slots([], _) -> [].
-tvar_slots([V|Vs], TVars) ->
-    [from_maybe(ty_any, assoc_get(V, TVars)) | tvar_slots(Vs, TVars)].
-
-:- function all_any_slots(int) -> list(ty).
-all_any_slots(N) | N =< 0 -> [].
-all_any_slots(N) -> [ty_any | all_any_slots(N - 1)].
+tvar_slots(Vs, TVars) ->
+    maplist(fun(V) -> from_maybe(ty_any, assoc_get(V, TVars)) end, Vs).
 
 % ---------------------------------------------------------------------
 % Allocation
@@ -404,7 +401,7 @@ build_function_facts_nil @
 build_function_facts_untyped @
     build_function_facts([fun_def(N, A, [], _, _)|Fs], Out) <=>
     build_function_facts(Fs, More),
-    Slots is all_any_slots(A),
+    Slots is replicate(A, ty_any),
     Out = [df_function_sig(N, A, sig(Slots, ty_any)) | More].
 
 build_function_facts_bounded @
@@ -609,19 +606,18 @@ unify_zip_cons @
                          list(bound_sig),
                          list(pair(string, ty)))
     -> list(pair(amb_key, list(sig_t(list(ty), ty)))).
-add_ambients(Acc, [], _) -> Acc.
-add_ambients(Acc, [bound_sig(N, _, Args, Ret, _)|Bs], TVars) ->
-    add_ambients(push_ambient(amb_key(N, length(Args)),
-                              sig(encode_tys(TVars, Args), encode_ty(TVars, Ret)),
-                              Acc),
-                 Bs, TVars).
+add_ambients(Acc, Bounds, TVars) ->
+    foldl(fun(Table, Bound) -> add_ambient(Table, Bound, TVars) end, Acc, Bounds).
 
-:- function push_ambient(amb_key, sig_t(list(ty), ty),
-                         list(pair(amb_key, list(sig_t(list(ty), ty)))))
+:- function add_ambient(list(pair(amb_key, list(sig_t(list(ty), ty)))),
+                        bound_sig,
+                        list(pair(string, ty)))
     -> list(pair(amb_key, list(sig_t(list(ty), ty)))).
-push_ambient(K, Sig, []) -> [kv(K, [Sig])].
-push_ambient(K, Sig, [kv(K2, Sigs)|Rest]) | K2 == K -> [kv(K2, append(Sigs, [Sig]))|Rest].
-push_ambient(K, Sig, [P|Rest]) -> [P|push_ambient(K, Sig, Rest)].
+add_ambient(Acc, bound_sig(N, _, Args, Ret, _), TVars) ->
+    assoc_put_with(fun(New, Old) -> append(Old, New) end,
+                   amb_key(N, length(Args)),
+                   [sig(encode_tys(TVars, Args), encode_ty(TVars, Ret))],
+                   Acc).
 
 % ---------------------------------------------------------------------
 % Guards
@@ -634,9 +630,10 @@ push_ambient(K, Sig, [P|Rest]) -> [P|push_ambient(K, Sig, Rest)].
 % load-bearing: HNF decomposes a compound depth-first, so a nested
 % pattern's match sits *between* its parent's extractions.
 %
-% The two scopes differ only in what their diagnostics point at: user
-% guard text for `guard_expr`, the head pattern for everything HNF
-% synthesized.
+% The two scopes differ only in what their diagnostics point at, and are
+% named for it: `UserS` attributes to the user's guard text, which is
+% where a `guard_expr` is written, and `SynthS` to the head pattern,
+% which is where everything HNF synthesized came from.
 
 :- chr_constraint
     check_guards(scope, scope, list(guard), list(pair(any, match_state))),
@@ -653,9 +650,9 @@ check_guards_nil @
     check_guards(_, _, [], _) <=> true.
 
 check_guards_cons @
-    check_guards(GS, PS, [G|Gs], M) <=>
-    check_guard(GS, PS, G, M, M2),
-    check_guards(GS, PS, Gs, M2).
+    check_guards(UserS, SynthS, [G|Gs], M) <=>
+    check_guard(UserS, SynthS, G, M, M2),
+    check_guards(UserS, SynthS, Gs, M2).
 
 % An evidence form: ask-equality succeeds only on structurally identical
 % terms, so the two positions agree on their outermost type constructor
@@ -665,29 +662,30 @@ check_guards_cons @
 % are structural positions and are typed as such; the relation is
 % symmetric, so the source order is kept.
 check_guard_equal @
-    check_guard(_, PS, guard_equal(E1, E2), M, MOut) <=>
-    type_of_expr_struct(PS, E1, T1),
-    type_of_expr_struct(PS, E2, T2),
-    eq_unify(T1, T2, ev_top, scope_ctx(PS)),
+    check_guard(_, SynthS, guard_equal(E1, E2), M, MOut) <=>
+    type_of_expr_struct(SynthS, E1, T1),
+    type_of_expr_struct(SynthS, E2, T2),
+    eq_unify(T1, T2, ev_top, scope_ctx(SynthS)),
     MOut = M.
 
 check_guard_match_g @
-    check_guard(_, PS, guard_match(Operand, Con, Arity), M, MOut) <=>
-    check_match(PS, Operand, canonicalize_con(scope_cons(PS), Con), Arity, M, MOut).
+    check_guard(_, SynthS, guard_match(Operand, Con, Arity), M, MOut) <=>
+    check_match(SynthS, Operand, canonicalize_con(scope_cons(SynthS), Con),
+                Arity, M, MOut).
 
 check_guard_getarg_g @
-    check_guard(_, PS, guard_getarg(V, Operand, Idx), M, MOut) <=>
-    getarg_scrutinee(PS, V, Operand, Idx,
+    check_guard(_, SynthS, guard_getarg(V, Operand, Idx), M, MOut) <=>
+    getarg_scrutinee(SynthS, V, Operand, Idx,
                      match_state_for(M, guard_operand_var(Operand))),
     MOut = M.
 
 % The ordinary call check still runs; a type-predicate guard's evidence
 % is extra information, not a replacement.
 check_guard_expr_g @
-    check_guard(GS, _, guard_expr(E), M, MOut) <=>
-    type_of_expr(GS, E, T),
-    check_guard_bool(T, scope_ctx(GS)),
-    tell_predicate_evidence(GS, type_predicate_fact(E)),
+    check_guard(UserS, _, guard_expr(E), M, MOut) <=>
+    type_of_expr(UserS, E, T),
+    check_guard_bool(T, scope_ctx(UserS)),
+    tell_predicate_evidence(UserS, type_predicate_fact(E)),
     MOut = M.
 
 % One fresh slot per field of the matched constructor, and one fresh
@@ -697,12 +695,12 @@ check_guard_expr_g @
 % so nothing downstream may assume more about them than the match
 % proved.
 check_match_known @
-    check_match(PS, Operand, Con, Arity, M, MOut) <=>
-    known_con_with_arity(scope_cons(PS), Con, Arity) |
-    type_of_expr(PS, Operand, OperandTy),
+    check_match(SynthS, Operand, Con, Arity, M, MOut) <=>
+    known_con_with_arity(scope_cons(SynthS), Con, Arity) |
+    type_of_expr(SynthS, Operand, OperandTy),
     fresh_slots(Arity, FieldSlots),
-    make_decl_rigids(parent_type_arity(scope_cons(PS), Con), Betas),
-    check_guard_match(OperandTy, Con, Betas, FieldSlots, scope_ctx(PS)),
+    make_decl_rigids(parent_type_arity(scope_cons(SynthS), Con), Betas),
+    check_guard_match(OperandTy, Con, Betas, FieldSlots, scope_ctx(SynthS)),
     MOut is record_match(guard_operand_var(Operand), match_state(Con, FieldSlots), M).
 
 % An undeclared constructor, or one at the wrong arity: nothing is
@@ -726,29 +724,29 @@ match_state_for(M, just(V)) -> assoc_get(V, M).
 % field slot read off it; there is no `let`, so the hand-off is the
 % intermediate constraint.
 getarg_scrutinee1 @
-    getarg_scrutinee(PS, V, Operand, Idx, Scrut) <=>
-    getarg_slot(PS, V, Operand, Idx, Scrut, field_slot_at(Idx, Scrut)).
+    getarg_scrutinee(SynthS, V, Operand, Idx, Scrut) <=>
+    getarg_slot(SynthS, V, Operand, Idx, Scrut, field_slot_at(Idx, Scrut)).
 
 % The match on this same term already resolved the field's type at the
 % instantiation it determined, so unifying against its slot avoids
 % consulting the scrutinee's type a second time — which is what breaks
 % extraction at a rigid scrutinee.
 getarg_slot_matched @
-    getarg_slot(PS, V, _, _, _, just(Slot)) <=>
-    check_unify(scope_var_ty(PS, V), Slot, scope_ctx(PS)).
+    getarg_slot(SynthS, V, _, _, _, just(Slot)) <=>
+    check_unify(scope_var_ty(SynthS, V), Slot, scope_ctx(SynthS)).
 
 getarg_slot_unmatched @
-    getarg_slot(PS, V, Operand, Idx, Scrut, nothing) <=>
-    getarg_declared(PS, V, Operand, Idx, scrutinee_con(V, Scrut)).
+    getarg_slot(SynthS, V, Operand, Idx, Scrut, nothing) <=>
+    getarg_declared(SynthS, V, Operand, Idx, scrutinee_con(V, Scrut)).
 
 % No usable match on this term: resolve the field type from the
 % constructor declaration instead. An index past the declared arity is
 % left alone — the arity walk reports that site already.
 getarg_declared_within @
-    getarg_declared(PS, V, Operand, Idx, Con) <=>
-    within_con_arity(scope_cons(PS), Con, Idx) |
-    type_of_expr(PS, Operand, OperandTy),
-    check_guard_getarg(scope_var_ty(PS, V), OperandTy, Con, Idx, scope_ctx(PS)).
+    getarg_declared(SynthS, V, Operand, Idx, Con) <=>
+    within_con_arity(scope_cons(SynthS), Con, Idx) |
+    type_of_expr(SynthS, Operand, OperandTy),
+    check_guard_getarg(scope_var_ty(SynthS, V), OperandTy, Con, Idx, scope_ctx(SynthS)).
 
 getarg_declared_beyond @
     getarg_declared(_, _, _, _, _) <=> true.
@@ -759,13 +757,7 @@ scrutinee_con(_, just(match_state(Con, _))) -> Con.
 
 :- function field_slot_at(int, maybe(match_state)) -> maybe(ty).
 field_slot_at(_, nothing) -> nothing.
-field_slot_at(Idx, just(match_state(_, Slots))) -> ty_at(Idx, Slots).
-
-:- function ty_at(int, list(ty)) -> maybe(ty).
-ty_at(I, _) | I < 0 -> nothing.
-ty_at(_, []) -> nothing.
-ty_at(I, [T|_]) | I == 0 -> just(T).
-ty_at(I, [_|Ts]) -> ty_at(I - 1, Ts).
+field_slot_at(Idx, just(match_state(_, Slots))) -> nth_maybe(Idx, Slots).
 
 % An unknown constructor is within any arity: nothing is known to
 % contradict, so the extraction goes through as a no-op consistency
@@ -894,9 +886,9 @@ emit_constraint_use1 @
     type_of_exprs(scope, list(expr), list(ty)),
     type_of_expr_struct(scope, expr, ty),
     type_of_exprs_struct(scope, list(expr), list(ty)),
-    type_of_exprs_mode(scope, ctor_mode, list(expr), list(ty)),
-    type_of_ctor(scope, ctor_mode, any, list(expr), ty),
-    type_of_ctor_known(scope, ctor_mode, any, list(expr), ty),
+    type_of_exprs_at(scope, arg_position, list(expr), list(ty)),
+    type_of_ctor(scope, arg_position, any, list(expr), ty),
+    type_of_ctor_known(scope, arg_position, any, list(expr), ty),
     type_lambda_body(scope, list(expr), ty),
     alloc_lambda_params(list(head_arg), list(pair(any, ty)),
                         list(pair(any, ty)), list(ty)),
@@ -924,7 +916,7 @@ type_of_expr_wild @
 
 type_of_expr_ctor @
     type_of_expr(S, ctor_e(N, Args), Out) <=>
-    type_of_ctor(S, mode_eval, N, Args, Out).
+    type_of_ctor(S, evaluated_position, N, Args, Out).
 
 type_of_expr_call @
     type_of_expr(S, call_e(N, Args), Out) <=>
@@ -968,13 +960,13 @@ type_of_exprs_cons @
     type_of_exprs(S, Es, Rest),
     Out = [T | Rest].
 
-% Structural mode: the typing of the operands of `=`. The runtime treats
-% these positions structurally, so the checker must too — a compound
-% whose functor names a declared function is a symbolic term typed
-% `any`, not a call, so no use check is emitted and no warning drawn.
-% Constructor typing still applies, recursing structurally into the
-% fields. Function references and lambdas delegate to the evaluated
-% mode: under `=` they lower to callable values, not dead data.
+% Structural positions: the operands of `=`. The runtime treats these
+% positions structurally, so the checker must too — a compound whose
+% functor names a declared function is a symbolic term typed `any`, not
+% a call, so no use check is emitted and no warning drawn. Constructor
+% typing still applies, recursing structurally into the fields.
+% Function references and lambdas delegate to the evaluated typing:
+% under `=` they lower to callable values, not dead data.
 type_of_expr_struct_var @
     type_of_expr_struct(S, var_e(V), Out) <=> Out is scope_var_ty(S, V).
 
@@ -992,7 +984,7 @@ type_of_expr_struct_wild @
 
 type_of_expr_struct_ctor @
     type_of_expr_struct(S, ctor_e(N, Args), Out) <=>
-    type_of_ctor(S, mode_struct, N, Args, Out).
+    type_of_ctor(S, structural_position, N, Args, Out).
 
 type_of_expr_struct_call @
     type_of_expr_struct(S, call_e(_, Args), Out) <=>
@@ -1027,15 +1019,16 @@ type_of_exprs_struct_cons @
     type_of_exprs_struct(S, Es, Rest),
     Out = [T | Rest].
 
-type_of_exprs_mode_eval @
-    type_of_exprs_mode(S, mode_eval, Es, Out) <=> type_of_exprs(S, Es, Out).
+type_of_exprs_at_evaluated @
+    type_of_exprs_at(S, evaluated_position, Es, Out) <=> type_of_exprs(S, Es, Out).
 
-type_of_exprs_mode_struct @
-    type_of_exprs_mode(S, mode_struct, Es, Out) <=> type_of_exprs_struct(S, Es, Out).
+type_of_exprs_at_structural @
+    type_of_exprs_at(S, structural_position, Es, Out) <=>
+    type_of_exprs_struct(S, Es, Out).
 
 type_of_ctor1 @
-    type_of_ctor(S, Mode, N, Args, Out) <=>
-    type_of_ctor_known(S, Mode, canonicalize_con(scope_cons(S), N), Args, Out).
+    type_of_ctor(S, Pos, N, Args, Out) <=>
+    type_of_ctor_known(S, Pos, canonicalize_con(scope_cons(S), N), Args, Out).
 
 % A constructor at its declared arity emits the use check; everything
 % else — an unknown name, or a known one at the wrong arity — is typed
@@ -1043,14 +1036,14 @@ type_of_ctor1 @
 % keeps a spurious inconsistency off a site the arity walk already
 % reports.
 type_of_ctor_declared @
-    type_of_ctor_known(S, Mode, Con, Args, Out) <=>
+    type_of_ctor_known(S, Pos, Con, Args, Out) <=>
     known_con_with_arity(scope_cons(S), Con, length(Args)) |
-    type_of_exprs_mode(S, Mode, Args, ArgTys),
+    type_of_exprs_at(S, Pos, Args, ArgTys),
     check_constructor_use(Con, ArgTys, Out, scope_ctx(S)).
 
 type_of_ctor_unknown @
-    type_of_ctor_known(S, Mode, _, Args, Out) <=>
-    type_of_exprs_mode(S, Mode, Args, _),
+    type_of_ctor_known(S, Pos, _, Args, Out) <=>
+    type_of_exprs_at(S, Pos, Args, _),
     Out = ty_any.
 
 type_lambda_body_last @
