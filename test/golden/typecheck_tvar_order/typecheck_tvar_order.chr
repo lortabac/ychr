@@ -5,8 +5,8 @@
 % alphabetical order.
 %
 % A rule head is an implementation site, so `swap`'s parameters are
-% allocated as fresh rigid identities — one per distinct name, in the
-% order `Set.toList . Set.fromList` produces, which is ascending. `A`
+% allocated as fresh rigid identities — one per distinct name, in
+% ascending name order rather than order of appearance. `A`
 % is therefore `T#0` and `B` is `T#1`, whatever order the declaration
 % writes them in. The two positions have unrelated rigid types, so
 % `X = Y` is an inconsistency, and the message spells both ids:

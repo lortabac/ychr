@@ -55,7 +55,9 @@ and functions exported from the loaded modules.
 `:info NAME` (alias `:i NAME`) prints information about an identifier:
 the fully qualified name on the first line, then a semantically
 equivalent declaration on the next. Built-in types (`int`, `float`,
-`string`, `any`) print `built-in type`. The argument can be a bare
+`string`, `any`) print `built-in type`, qualified by the type
+checker's own internal module rather than by a module you can import.
+The argument can be a bare
 name (`foo`), an operator atom (`'+'`), a `name/arity` form
 (`call/2`), a qualified name (`prelude:max`), or any combination.
 When a bare name matches multiple arities, every match is printed.

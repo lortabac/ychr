@@ -1,6 +1,6 @@
 % Entry points of the CHR type-checker (typechecker2).
 %
-% The Haskell driver (`src/YCHR/Internal/TypeCheck/V2.hs`) encodes a
+% The Haskell driver (`src/YCHR/Internal/TypeCheck.hs`) encodes a
 % desugared program as one ground term and tells exactly one of these
 % constraints; everything the checker does happens in CHR from there,
 % and the driver only decodes the two diagnostic lists that come back.
@@ -14,7 +14,6 @@
 ]).
 
 :- use_module('$tc2_ast').
-:- use_module('$tc2_conform').
 :- use_module('$tc2_diag').
 :- use_module('$tc2_env').
 :- use_module('$tc2_pure').
@@ -35,23 +34,16 @@
     check_program(program, list(error), list(warning)),
     check_goals(program, list(body_goal), loc, diag_label, list(error), list(warning)).
 
-% Both entry points walk their input before answering, so that a
-% program the encoder and `tc2_ast` disagree about fails loudly instead
-% of being silently accepted. See `tc2_conform.chr`.
-%
 % The declaration checks come first and the session's diagnostics
-% second, which is the old checker's order for those two *sources*
-% (within them it differs: a class function's constructor-arity errors
-% sit in `program_errors` here and ahead of the rule errors there).
-% Only the multiset is compared, so this is a rendering nicety, not
-% parity. Suppression sees both lists, because a unit whose only error
-% is a constructor-arity mismatch still omits its warnings.
+% second, which is the order a caller renders them in. Within each of
+% the two it is whatever the checks happen to produce, and nothing pins
+% it. Suppression sees both lists, because a unit whose only error is a
+% constructor-arity mismatch still omits its warnings.
 %
 % `rigid_supply(-1)` seeds the solver's own down-counting gensym for
 % the fresh parameters of a parametric evidence pin; the walker seeds
 % its up-counting declaration-site supply itself.
 check_program(Program, Errors, Warnings) <=>
-    _Nodes is ast_size(Program),
     errors([]),
     warnings([]),
     rigid_supply(-1),
@@ -70,8 +62,6 @@ check_program(Program, Errors, Warnings) <=>
 % the constructor-arity walk — a goal may *use* a known constructor at
 % the wrong arity — and that runs per goal, in the goal's own unit.
 check_goals(Program, Goals, Loc, Label, Errors, Warnings) <=>
-    _Nodes is ast_size(Program) + body_goals_size(Goals)
-            + loc_size(Loc) + diag_label_size(Label),
     errors([]),
     warnings([]),
     rigid_supply(-1),

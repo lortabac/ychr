@@ -1,41 +1,28 @@
 % The solver core of the CHR type-checker (typechecker2).
 %
-% A fork of `typechecker/typechecker.chr`, rule for rule. The old
-% checker's Haskell driver walks the AST and tells the `check_*`
-% constraints below; here `tc2_walk.chr` does, and the two solvers are
-% otherwise the same program — same relations, same dispositions.
-% Keep them in step: a change to the meet table, to resolution, or to
-% the evidence rules belongs in both until the old checker is retired.
+% `tc2_walk.chr` walks the encoded AST and tells the `check_*`
+% constraints below; everything here is the solving itself — the type
+% representation, the meet table, overload resolution, bound discharge
+% and the guard-derived-evidence rules.
 %
-% Five deliberate differences from the original, and nothing else —
-% `diff typechecker/typechecker.chr typechecker2/tc2_solver.chr` should
-% show only these:
+% Three things about its interfaces, all load-bearing:
 %
 %   * the module name. The type representation below is what
-%     diagnostics render, and `V2.tc2TypeAtoms` strips the
-%     `'$tc2_solver'` qualifier, so this module may not be renamed
-%     without renaming that too;
-%   * `Ctx` is the structured `ctx/4` of `'$tc2_diag'` rather than an
-%     integer handle into a driver-side table. The rules pass it
-%     opaquely, so nothing below reads it;
+%     diagnostics render, and `typeModule` in
+%     `src/YCHR/Internal/TypeCheck/Render.hs` strips the
+%     `'$tc2_solver'` qualifier off a type atom on the way out, so this
+%     module may not be renamed without renaming that too;
+%   * `Ctx` is the structured `ctx/4` of `'$tc2_diag'`, carrying a
+%     diagnostic's checking unit, origin, label and location. The rules
+%     pass it opaquely, so nothing below reads it;
 %   * the diagnostic vocabulary — the accumulators, `error/3`,
 %     `warning/3` and the code and detail types — lives in
 %     `'$tc2_diag'`, which the declaration checks share, and is
 %     declared rather than `any`: the detail pair is spelled `tpair`
 %     there, so as not to collide with `library(pairs)`, and a
-%     detail that is a bare name travels wrapped in `mangled_name`
-%     where the original passes the atom itself;
-%   * the export list. The old module's clients are Haskell, which
-%     builds the type terms itself; this one's are other CHR modules,
-%     which need the types exported by name;
-%   * comments that name the driver, since here the driver is CHR.
-%     The `rigid_supply` block below is the one such rewrite: the
-%     declaration-site skolem supply it has to distinguish itself
-%     from lives in `tc2_walk.chr`, not in Haskell.
+%     detail that is a bare name travels wrapped in `mangled_name`.
 %
-% Two renames are owed to this module and deliberately not made, so
-% that the diff above stays readable. Do them at switchover, when the
-% old checker retires and there is nothing left to stay in step with:
+% Two renames are owed to this module and not yet made:
 %
 %   * split `sig_t/2` (and `sig_fst`/`sig_snd`) into two types. One
 %     carries a function signature and should read `args`/`ret`; the
@@ -76,29 +63,30 @@
 :- use_module(library(prelude)).
 :- use_module(library(lists)).
 
-% Type-representation algebraic type. Mirrors the value-level encoding
-% emitted by src/YCHR/Internal/TypeCheck.hs (encodeTypeExpr): base types are
-% 0-arity constructors, type constructors and function types are
-% compound terms.
+% Type-representation algebraic type. `encode_ty` in `tc2_walk.chr`
+% builds these out of a source `ty_expr`: base types are 0-arity
+% constructors, type constructors and function types are compound
+% terms.
 %
 % The base-type constructors carry a `ty_` prefix because a data
 % constructor may not share a bare name with a visible function
 % (YCHR-20020) and the prelude declares `float/1` and `string/1`. The
-% prefix is internal: `displayTypeAtom` in the Haskell driver strips it
-% again, so user-facing messages still read `int`, `float`, `string`,
+% prefix is internal: `displayTypeAtom` in
+% `src/YCHR/Internal/TypeCheck/Render.hs` strips it again, so
+% user-facing messages still read `int`, `float`, `string`,
 % `any`. All four are prefixed, not just the two that clash, so the
 % strip is one uniform rule.
 %
 % The first field of `tcon` is `any` because a type
 % constructor name may be either an atom (`bool`) or a qualified
 % atom (e.g. `prelude:bool`). Qualified type names that originate in
-% this CHR source — as opposed to being passed in by the Haskell
-% driver — must be wrapped in `quote/1` so the renamer treats them as
+% this CHR source — as opposed to arriving inside an encoded program —
+% must be wrapped in `quote/1` so the renamer treats them as
 % opaque data rather than as cross-module references subject to
 % value-level visibility checks. See language.md §The `quote/1`
 % quoting form.
 % `rigid(Cell, N)` is a *rigid* type variable: a fresh identity `N`
-% allocated by the driver while checking a polymorphic declaration's
+% allocated by the walker while checking a polymorphic declaration's
 % own equations or rule bodies. Unlike unbound CHR variables (which
 % are *flexible* and consistent with every declared type per the
 % gradual guarantee), a rigid tvar is only consistent with itself and
@@ -191,7 +179,7 @@
        ; decl_bounded(sig_t(list(ty), ty), list(bound_named), list(bcand)).
 
 % Candidate signatures for one bound's named function, assembled by
-% the driver at emission time (the discharge rules are pure and
+% `tc2_walk.chr` at emission time (the discharge rules are pure and
 % cannot gather across the store). Ambient and declared candidates
 % are kept apart because they discharge differently: a declared
 % signature's variables are per-emission fresh and never bound, so a
@@ -528,7 +516,7 @@ bounded_constraint_match @
     emit_bounds(FreshBounds, BoundCands, Ctx).
 
 % Constraint usage: copy_term the declaration, check args pairwise.
-% The Haskell driver registers a constraint_sig for every constraint
+% `tc2_walk.chr` tells a `constraint_sig` for every constraint
 % declared in the program (including untyped ones, which default to
 % all-any), matching by name AND arity so arity-overloaded
 % constraints each check against their own declaration, and the
@@ -577,10 +565,10 @@ function_match @
 % Overloaded function: hand the full candidate set to the residual
 % resolution below. Multi-signature classes cannot carry `requiring`
 % (RequiringOnClass), so declared overload candidates never have
-% bounds. Unknown-function detection is short-circuited by the
-% Haskell driver: 'typeOfCompound' checks the function-name set
-% before emitting 'check_function_use', so this rule (and
-% 'function_match') only fires for declared functions.
+% bounds. Unknown-function detection happens upstream: the resolver
+% has already decided that a compound is a call rather than a
+% constructor application, so this rule (and `function_match`) only
+% fires for declared functions.
 overloaded_function_match @
     function_sigs(Name, Arity, Sigs) \
         check_function_use(Name, Arity, _, ArgTypes, RetTypeVar, Ctx) <=>
@@ -594,11 +582,11 @@ overloaded_function_match @
 % rule whose head mentions a bounded constraint), calls to the bound's
 % named functions see the bound's required signature(s) as additional
 % candidates alongside the function's ordinary declared signatures.
-% The driver determines which calls qualify and emits
+% `tc2_walk.chr` determines which calls qualify and emits
 % `check_function_use_with_ambient(Name, AmbSigs, BoundCands, Args,
 % Ret, Ctx)` when the target name (at the call's arity) has at least
 % one ambient signature in the surrounding scope. AmbSigs is the
-% complete list of ambient signatures for that name; the driver
+% complete list of ambient signatures for that name; the walker
 % computes it at call time — there is no CHR-side ambient store.
 
 % With ambient + bounded single declared sig: the declared candidate
@@ -734,7 +722,7 @@ emit_bounds_step @ emit_bounds([B | Rest], BoundCands, Ctx) <=>
 % `check_bound` is a residual carrying its complete candidate set —
 % the ambient signatures for the bound's named function in the
 % enclosing scope plus that function's declared signatures, assembled
-% by the driver at emission time (spec §Use-site checking step 4:
+% by `tc2_walk.chr` at emission time (spec §Use-site checking step 4:
 % "'declared signature' includes the ambient signatures contributed
 % by the enclosing function's bound"). Ambient candidates share
 % variable identity with the enclosing declaration's tvars by
@@ -779,12 +767,12 @@ constructor_match @
     check_arg_list(FreshFields, ArgTypes, Ctx),
     tc_unify(ResultTypeVar, FreshParent, Ctx).
 
-% Defensive fallback: unknown constructor. The Haskell driver
-% (typeOfExprCtor, typeOfTermCtor, checkGuard's GuardMatch) gates
-% check_constructor_use on the constructor being a known declaration,
-% so this rule is unreachable in practice. It is kept (and routed
-% through tc_unify rather than raw `=`) so a future driver path that
-% emits check_constructor_use for an unknown constructor is sound.
+% Defensive fallback: unknown constructor. Every site in
+% `tc2_walk.chr` that emits check_constructor_use — the two expression
+% walks and the `guard_match` case — gates it on the constructor being
+% a known declaration, so this rule is unreachable in practice. It is
+% kept (and routed through tc_unify rather than raw `=`) so a future
+% emitter that does not gate is still sound.
 % Post no-bind semantics this is a pure consistency check: a flexible
 % ResultTypeVar stays flexible (it is NOT widened to `any`).
 unknown_constructor @
@@ -807,9 +795,9 @@ check_arg_nil @
 % are left unsolved rather than reported as errors. The shape is
 % unreachable from valid programs: constraint and function facts both
 % match uses by name AND arity, constructors (which cannot be
-% overloaded by arity) have their arity checked driver-side by
-% validateConstructorArities before the CHR session runs, and the
-% renamer rejects wrong-arity calls and references upstream.
+% overloaded by arity) have their arity checked by `tc2_pure.chr`'s
+% arity walk, and the renamer rejects wrong-arity calls and references
+% upstream.
 
 % ==========================================================================
 % Delegation rules
@@ -829,7 +817,7 @@ delegate_guard_bool @
 % `check_guard_match(ScrutTy, Con, Betas, Slots, Ctx)` types one HNF
 % `GuardMatch`. `Betas` holds one fresh RIGID type variable per
 % parameter of `Con`'s parent type, and `Slots` one fresh slot per
-% field of `Con`; both are allocated driver-side. The following
+% field of `Con`; both are allocated by the walker. The following
 % `GuardGetArg`s read the field types straight out of `Slots`, so the
 % scrutinee's type is consulted exactly once, here.
 %
@@ -895,8 +883,8 @@ guard_match_inaccessible @
     Fresh is copy_term(quote(Sig)),
     report_warning(Ctx, inaccessible, tpair(sig_fst(Fresh), T)).
 
-% Defensive fallback: a constructor with no `con_sig`. The Haskell
-% driver gates the emission on the constructor being declared (with a
+% Defensive fallback: a constructor with no `con_sig`. `tc2_walk.chr`
+% gates the emission on the constructor being declared (with a
 % matching arity), so this is unreachable in practice; leaving the
 % field slots unconstrained is the gradual disposition.
 guard_match_unknown @
@@ -968,11 +956,11 @@ ty_occurs_list(C, [_|Rest]) -> ty_occurs_list(C, Rest).
 % propagates. All three rules below therefore succeed WITHOUT binding
 % anything. The invariant this preserves: a `ty` value equal to the
 % atom `any` in a source-variable slot can only originate from the
-% Haskell driver's declaration-position stamping (see
-% headAnyOnlyVars / paramAnyOnlyVars in TypeCheck.hs). No CHR rule
-% may bind a var to `any` — the driver relies on this to tell
-% "declared any" apart from "still flexible" (`checkFunStmt`, which
-% keeps a rebound local's `any`).
+% declaration-position stamping in `tc2_skel.chr` (`skeleton_of`,
+% allocated by `alloc_var_types`). No CHR rule may bind a var to
+% `any` — `tc2_walk.chr`'s `check_fun_stmt` relies on this to tell
+% "declared any" apart from "still flexible", since it keeps a rebound
+% local's `any`.
 
 % (1) Nonvar any on left -> succeed, don't touch right side
 tc_unify_any_left @
@@ -1110,20 +1098,21 @@ tc_unify_list_cons @
 %
 % A gensym for rigid type variables allocated from *inside* the
 % rules. Declaration-site skolems get ids 0, 1, 2, ... — from
-% `decl_rigid_supply` in `tc2_walk.chr`, where the old checker's
-% Haskell driver had `freshRigidTypeVar` — and this supply counts DOWN
+% `decl_rigid_supply` in `tc2_walk.chr` — and this supply counts DOWN
 % from -1 so the two ranges can never collide (rigid identity
 % comparisons look at the cell and the id, and negative ids surface
 % only cosmetically, as `T#-1` in messages). `tc2_main.chr` seeds
 % `rigid_supply(-1)` once per check.
 %
-% Both ranges are user-visible, so both are part of diagnostic parity
-% with the old checker: the ids and the *order* they are handed out in
-% have to agree.
+% Both ranges are user-visible — an unpinned skolem renders as `T#n`
+% — so the ids and the *order* they are handed out in are part of what
+% a diagnostic says. `sort_unique_tvars` and `make_decl_rigid` in
+% `tc2_walk.chr` fix the declaration-site order;
+% `test/golden/typecheck_tvar_order/` covers it.
 %
 % The pin cell of the freshly built skolem is `Cell`, a body-only
-% variable — which is exactly a fresh unbound logical variable, the
-% same thing the driver's freshRigidTypeVar allocates with newVar.
+% variable — which is exactly a fresh unbound logical variable, so the
+% pin rules can fill it in later.
 
 make_fresh_rigid1 @
     rigid_supply(N), make_fresh_rigid(Out) <=>

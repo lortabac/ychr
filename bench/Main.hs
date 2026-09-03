@@ -19,7 +19,6 @@ import YCHR.Internal.Parser (parseConstraint)
 import YCHR.Internal.Runtime.Interpreter (baseHostCallRegistry)
 import YCHR.Internal.Runtime.Registry (HostCallRegistry)
 import YCHR.Internal.TypeCheck (typeCheckProgram)
-import YCHR.Internal.TypeCheck.V2 (typeCheckProgramV2)
 import YCHR.Run
   ( compileFiles,
     prepareGoalTerm,
@@ -88,22 +87,19 @@ makeBench bc =
   bench bc.name $
     whnfIO (runGoalConstraint bc.program benchHostCalls bc.goal)
 
--- | The program the type-checker benchmarks run over: library-heavy, so
+-- | The program the type-checker benchmark runs over: library-heavy, so
 -- the declaration environment (prelude + pairs) dominates, which is the
--- workload the checkers spend their time on across the golden corpus.
+-- workload the checker spends its time on across the golden corpus.
 typeCheckProgramName :: String
 typeCheckProgramName = "pairs_library"
 
--- | Benchmark both type checkers over one compiled program. Compilation
+-- | Benchmark the type checker over one compiled program. Compilation
 -- happens once at startup; each iteration measures a whole checking
--- session, exactly what @ychr check@ (V1) or the V2 driver pays per
--- program.
+-- session, exactly what @ychr check@ pays per program.
 makeTypeCheckBenches :: CompiledProgram -> [Benchmark]
 makeTypeCheckBenches prog =
   [ bench ("typecheck/" ++ typeCheckProgramName) $
-      whnfIO (typeCheckProgram prog.desugaredProgram),
-    bench ("typecheck-v2/" ++ typeCheckProgramName) $
-      whnfIO (typeCheckProgramV2 prog.desugaredProgram)
+      whnfIO (typeCheckProgram prog.desugaredProgram)
   ]
 
 loadTypeCheckProgram :: IO CompiledProgram

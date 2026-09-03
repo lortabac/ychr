@@ -5,9 +5,8 @@
 % per-signature sub-sessions whose diagnostics are dropped, so their
 % constructor-arity errors are collected at program level instead,
 % outside any unit, where they suppress no warnings. That is the
-% "no unit" arm of the equation walk (`fun_arity_errors` in
-% `typechecker2/tc2_pure.chr`, `functionConstructorArities` in
-% `src/YCHR/Internal/TypeCheck.hs`), and nothing else in the corpus
+% "no unit" arm of the equation walk (`funs_arity_errors` in
+% `typechecker2/tc2_pure.chr`), and nothing else in the corpus
 % reaches it: `typecheck_fun_equation_units` is the one other directory
 % pairing `:- class` with a wrong-arity constructor, and there the bad
 % use sits in a plain function, so the class function's own walk

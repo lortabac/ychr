@@ -24,7 +24,6 @@ module YCHR.Internal.Types
     HeadConstraint (..),
     HeadArg (..),
     headArgToTerm,
-    headConstraintToConstraint,
 
     -- * Rules
     RuleId (..),
@@ -252,17 +251,11 @@ data HeadConstraint = HeadConstraint
   deriving (Show, Eq)
 
 -- | Lossless conversion from a 'HeadArg' to a 'Term'. Used at the
--- boundary with code that operates uniformly on terms (the
--- typechecker, pretty-printers).
+-- boundary with code that operates uniformly on terms
+-- (pretty-printers, the lambda spelling in "YCHR.Internal.Resolved").
 headArgToTerm :: HeadArg -> Term
 headArgToTerm (HeadVar v) = VarTerm v
 headArgToTerm HeadWildcard = Wildcard
-
--- | Lossless conversion from a 'HeadConstraint' to a
--- 'QualifiedConstraint'.
-headConstraintToConstraint :: HeadConstraint -> QualifiedConstraint
-headConstraintToConstraint hc =
-  QualifiedConstraint hc.name (map headArgToTerm hc.args)
 
 -- | A CHR type declaration.
 data TypeDefinition = TypeDefinition

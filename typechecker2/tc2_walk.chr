@@ -1,15 +1,11 @@
 % The checking walk: declarations, then rules, then function equations —
 % or, for a query, declarations and then goals.
 %
-% Ports the parts of `src/YCHR/Internal/TypeCheck.hs` that decide *what*
-% to ask the solver — `tellConstraintSigs` / `tellFunctionSigs` /
-% `tellConSigs` for the declarations, `checkRule` down through
-% `typeOfExpr` for the rules, and `checkFunction` /
-% `checkSingleSigEquation` / `checkClassFunction` for the functions. The
-% old driver is a Haskell walk over the desugared AST that tells
-% `check_*` constraints into a session; this is the same walk expressed
-% as CHR rules over the encoded AST, telling the same constraints into
-% the same solver (`tc2_solver.chr`).
+% This module decides *what* to ask the solver: it walks the encoded
+% AST and tells `check_*` constraints into `tc2_solver.chr`. The
+% declarations come first (`tell_decls`), then each rule, then each
+% function's equations, and a class function's equations are tried
+% against its signatures one attempt at a time.
 %
 % Why rules and not functions: a function can neither tell a constraint
 % nor make a fresh logical variable, and the walk does both at nearly
@@ -20,8 +16,7 @@
 % `check_attempt` is exported not because another module calls it but
 % because `run_chr_session` resolves a goal's constraint name through
 % the export map: the class-function overload search below runs each
-% (equation x signature) attempt in a throwaway sub-session, exactly as
-% `checkClassFunction` runs each in a throwaway `runCheckSession`.
+% (equation x signature) attempt in a throwaway sub-session.
 %
 % The list traversals here go through `library(lists)` rather than
 % hand-rolled recursion; the cost of that is recorded once, in
@@ -57,9 +52,9 @@
 % Which kind of position a constructor application's fields are
 % recursed into as (docs/reference/type-system.md §Expression Typing:
 % an evaluated position is typed by what it evaluates to, a structural
-% one by the term it denotes). The Haskell parameterizes
-% `typeOfCtorWith` by the typing function; a CHR constraint cannot take
-% one, so the choice is a tag.
+% one by the term it denotes). A CHR constraint cannot take the typing
+% function as a parameter, so the choice travels as a tag and each
+% arm dispatches on it.
 %
 % Not to be confused with a *mode* in the instantiation sense, which the
 % checker does not track at all (§No mode checking).
@@ -87,10 +82,10 @@ scope_ctx(scope(_, _, _, C)) -> C.
 % A source variable's pre-allocated type slot. `collect_vars_rule` walks
 % the same nodes this walk visits, so every variable has one; a miss
 % would be a collector bug, and typing the variable `any` is the
-% disposition that reports the least about it. (The Haskell `error`s
-% instead. Nothing in this language can, so a collector omission is a
-% silently *missing* diagnostic here where it is a crash there — the
-% differential harness is what would catch it.)
+% disposition that reports the least about it. Nothing in this language
+% can raise a diagnostic error from source, so a collector omission
+% shows up as a silently *missing* diagnostic rather than as a crash:
+% add a golden whenever the collector learns a new node.
 %
 % The lookup is linear, so a unit's checking cost is quadratic in its
 % distinct variables; see the note in `tc2_skel.chr`'s header.
@@ -102,7 +97,7 @@ slot_or_any(just(T)) -> T.
 slot_or_any(nothing) -> ty_any.
 
 % A shadowing binding goes in front: `assoc_get` stops at the first
-% match, which is the left-biased union the Haskell takes. Two callers
+% match, so prepending is a left-biased union. Two callers
 % shadow — a lambda's parameters, which must neither inherit an
 % enclosing variable's type nor leak their own back out, and a
 % function-body `is`, which rebinds its variable to a fresh slot.
@@ -117,14 +112,12 @@ scope_ambient(scope(_, _, Amb, _), Key) -> from_maybe([], assoc_get(Key, Amb)).
 % Source types to solver types
 % ---------------------------------------------------------------------
 %
-% Ports `encodeTypeExpr`. A `tvar` resolves through the caller's map,
-% which decides whether the declaration's type parameters are flexible
-% (a use site, where `copy_term` freshens them again anyway) or rigid
-% (an implementation site). The base types are recognized by their bare
-% names applied to no arguments, exactly as the Haskell recognizes
-% `TypeCon (Unqualified "int") []`: a qualified `m:int` mangles to
-% `m__int` and correctly is not the built-in, and `int(X)` is an
-% ordinary type reference.
+% A `tvar` resolves through the caller's map, which decides whether the
+% declaration's type parameters are flexible (a use site, where
+% `copy_term` freshens them again anyway) or rigid (an implementation
+% site). The base types are recognized by their bare names applied to
+% no arguments: a qualified `m:int` mangles to `m__int` and correctly is
+% not the built-in, and `int(X)` is an ordinary type reference.
 
 :- function encode_ty(list(pair(string, ty)), ty_expr) -> ty.
 encode_ty(TVars, tvar(V)) -> from_maybe(ty_any, assoc_get(V, TVars)).
@@ -142,7 +135,6 @@ encode_tys(TVars, Ts) -> maplist(fun(T) -> encode_ty(TVars, T) end, Ts).
 % One `nbound` per bound of a declaration, against the declaration's
 % shared type-variable map — which is what lets a single `copy_term` at
 % the use site freshen the signature and its bounds consistently.
-% Ports `encodeNamedBound`.
 :- function encode_bounds(list(pair(string, ty)), list(bound_sig)) -> list(bound_named).
 encode_bounds(TVars, Bs) -> maplist(fun(B) -> encode_bound(TVars, B) end, Bs).
 
@@ -172,15 +164,15 @@ bound_sig_vars(bound_sig(_, _, Args, Ret, _)) ->
 %
 % The order is load-bearing, not cosmetic: a rigid type variable's
 % synthetic id is user-visible (`T#0` in an inconsistency message), and
-% the old driver allocates one per name in the order
-% `Set.toList . Set.fromList` produces. Flexible allocation does not
-% care, but it goes through the same sort so there is one rule to
-% remember.
+% one id is allocated per distinct name in this order — ascending, not
+% order of appearance (`test/golden/typecheck_tvar_order/`). Flexible
+% allocation does not care, but it goes through the same sort so there
+% is one rule to remember.
 :- function sort_unique_tvars(list(string)) -> list(string).
 sort_unique_tvars(Vs) -> sort_by(fun(A, B) -> A < B end, distinct(Vs)).
 
 % The declaration's parameters in *declaration* order, as the parent
-% type of a constructor signature spells them. Ports `encodeTCon`.
+% type of a constructor signature spells them.
 :- function tvar_slots(list(string), list(pair(string, ty))) -> list(ty).
 tvar_slots(Vs, TVars) ->
     maplist(fun(V) -> from_maybe(ty_any, assoc_get(V, TVars)) end, Vs).
@@ -210,7 +202,7 @@ alloc_flex_tvars_cons @
     Out = [kv(V, _Slot) | Rest].
 
 % Rigids are allocated head-first so the ids ascend with the (sorted)
-% name list, as the driver's `mapM` over `Set.toList` does.
+% name list.
 alloc_rigid_tvars_nil @
     alloc_rigid_tvars([], Out) <=> Out = [].
 
@@ -222,12 +214,11 @@ alloc_rigid_tvars_cons @
 
 % The declaration-site rigid supply. It counts *up* from 0 while the
 % solver's own `rigid_supply` counts down from -1, so the two ranges
-% cannot collide — and the up-counting range is the one whose ids the
-% old checker's driver hands out, which is why they have to agree
-% number for number.
+% cannot collide — and this is the range a reader actually sees, since
+% every polymorphic declaration's own parameters are allocated from it.
 %
-% The pin cell is a body-only variable, which is exactly the fresh
-% unbound logical variable `freshRigidTypeVar` allocates with `newVar`.
+% The pin cell is a body-only variable, i.e. a fresh unbound logical
+% variable, so guard-derived evidence can pin it later.
 make_decl_rigid1 @
     decl_rigid_supply(N), make_decl_rigid(Out) <=>
     N1 is N + 1,
@@ -253,7 +244,6 @@ fresh_slots_step @
 
 % One declared signature instantiated at fresh flexible variables, with
 % the variables shared between the arguments and the return type.
-% Ports `encodeFunctionSig`.
 encode_one_sig1 @
     encode_one_sig(fun_sig(Args, Ret), Out) <=>
     alloc_flex_tvars(sort_unique_tvars(append(collect_ty_vars(Args),
@@ -274,10 +264,9 @@ encode_sigs_cons @
 % Declaration facts
 % ---------------------------------------------------------------------
 %
-% Ports `tellConstraintSigs`, `tellFunctionSigs` and `tellConSigs`. Each
-% declaration is instantiated once, at fresh *flexible* variables; use
-% sites `copy_term` the stored fact, so nothing a use site does can
-% pollute it.
+% Each declaration is instantiated once, at fresh *flexible*
+% variables; use sites `copy_term` the stored fact, so nothing a use
+% site does can pollute it.
 %
 % The facts are built as *data* first and told from the list, rather
 % than told directly at each declaration. That is what lets the
@@ -330,6 +319,11 @@ tell_decls1 @
 % argument, so the two short-lived suspensions that carry it register
 % as observers of the outer variables. They are killed immediately and
 % each session drops foreign observer ids, so nothing comes of it.)
+%
+% Only the *sharing* half of this is tested. Deleting the `copy_term`
+% leaves the whole suite green, because no solver rule today unifies
+% against a stored declaration fact without freshening it first; if one
+% is ever added, the cross-session corruption is silent. Keep the copy.
 %
 % The whole list is copied in ONE call, and that is load-bearing: a
 % bounded declaration contributes two facts — the signature and the
@@ -472,9 +466,8 @@ build_td_con_facts_cons @
 %
 % Rules first, then the functions, off one `decl_rigid_supply`: a rigid
 % type variable's synthetic id is user-visible as `T#n`, so the
-% allocation order is part of diagnostic parity with the old checker,
-% whose `runCheckSession` walks `prog.rules` and then the plain
-% functions off one counter.
+% allocation order is part of what a diagnostic says, and one counter
+% across both keeps it stated in one place.
 walk_program1 @
     walk_program(Env, P, Facts) <=>
     decl_rigid_supply(0),
@@ -505,7 +498,7 @@ walk_rules_cons @
 % even though each section is attributed to its own source annotation.
 % HNF-synthetic guards are attributed to the *head*, where the patterns
 % they were derived from are written — a rule with no user guard has no
-% guard text at all. Ports `checkRule`.
+% guard text at all.
 walk_rule1 @
     walk_rule(Env,
               rule(Name,
@@ -556,7 +549,7 @@ head_cons_check_cons @
 % two occurrences of one polymorphic constraint may match independently
 % chosen instances. Where matching does force two occurrences to agree,
 % HNF turns the sharing into a `guard_equal`, whose evidence merges the
-% two skolems. Ports `checkHeadConstraint`.
+% two skolems.
 head_con_check1 @
     head_con_check(S, head_con(N, Args), AmbIn, Out) <=>
     DeclTys is env_constraint_types(scope_env(S), con_key(N, length(Args))),
@@ -599,7 +592,7 @@ unify_zip_cons @
 % the required signatures enter the scope's ambient table, which every
 % use site in the rule then sees. Their type variables are the
 % occurrence's own rigids, which is what keeps a call that resolves
-% through an ambient signature polymorphic. Ports `emitAmbient`.
+% through an ambient signature polymorphic.
 %
 % Entries for one `(name, arity)` accumulate; the order among them is
 % not observable — resolution requires every surviving candidate to be
@@ -625,7 +618,7 @@ add_ambient(Acc, bound_sig(N, _, Args, Ret, _), TVars) ->
 % Guards
 % ---------------------------------------------------------------------
 %
-% Ports `checkGuards` / `checkGuard`. The list is processed
+% The list is processed
 % left-to-right, threading the constructor each `guard_match`
 % established into the `guard_getarg`s that read the same term. Keying
 % by operand rather than remembering the most recent match is
@@ -781,7 +774,7 @@ idx_within(Idx, just(Info)) -> Idx < con_arity(Info).
 % This list is **provisional**: it names prelude functions directly,
 % pending the declaration mechanism by which a function declares itself
 % a refinement predicate. Nothing else in the checker keys off function
-% names. Ports `typePredicateGuard`.
+% names.
 :- function type_predicate_fact(expr) -> maybe(pair(any, ty)).
 type_predicate_fact(call_e(N, [var_e(V)])) | N == quote(prelude:integer) ->
     just(kv(V, ty_int)).
@@ -807,7 +800,7 @@ tell_predicate_evidence_some @
 % Body goals
 % ---------------------------------------------------------------------
 %
-% Ports `checkBodyGoal`. A rule body's variable slots are fixed for the
+% A rule body's variable slots are fixed for the
 % whole body: nothing a goal does replaces them, because nothing narrows
 % `any` and no other state flows left to right.
 
@@ -875,13 +868,13 @@ emit_constraint_use1 @
 % Expression typing
 % ---------------------------------------------------------------------
 %
-% Ports `typeOfExpr` and `typeOfExprStructural`. Each `expr`
+% Each `expr`
 % constructor maps to one solver query; the call-versus-constructor
 % split was decided by the resolver, so nothing here re-derives it.
 %
-% An `Out` left unbound *is* the answer for the positions the Haskell
-% gives a `newVar`: a wildcard's type, and the result slot of a call or
-% a constructor application, which the solver then binds.
+% An `Out` left unbound *is* the answer wherever the type is not known
+% before the solver runs: a wildcard's type, and the result slot of a
+% call or a constructor application, which the solver then binds.
 
 :- chr_constraint
     type_of_expr(scope, expr, ty),
@@ -1083,10 +1076,10 @@ alloc_lambda_params_wild @
 % Call and reference emission
 % ---------------------------------------------------------------------
 %
-% Ports `emitFunctionCall`, `emitFunctionRef` and `buildBoundCands`. A
-% call routes through the ambient form when its target name has ambient
-% signatures in this scope — i.e. the call sits under a bounded
-% constraint's head occurrence — and through the plain form otherwise;
+% A call routes through the ambient form when its target name has
+% ambient signatures in this scope — i.e. the call sits under a
+% bounded constraint's head occurrence — and through the plain form
+% otherwise;
 % the solver handles both with the same resolution mechanism.
 
 emit_function_call1 @
@@ -1151,7 +1144,7 @@ push_bcand(N, Ambs, Decls, [C|Rest]) -> [C|push_bcand(N, Ambs, Decls, Rest)].
 % Functions
 % ---------------------------------------------------------------------
 %
-% Ports `checkFunction` / `checkEquation` / `checkSingleSigEquation`.
+% Checking a plain function's equations.
 % Each equation is its own checking unit, including one contributed by
 % an `:- extend_function` / `:- extend_class` directive: extension
 % equations share the owning declaration's annotation and so its source
@@ -1203,10 +1196,10 @@ fun_eq_count(fun_def(_, _, _, _, ann(_, _, Eqs))) -> length(Eqs).
 
 % The effective single signature. An untyped function checks exactly
 % like its all-`any` spelled-out form, which mentions no type variables
-% and so allocates no rigids; its bounds are dropped, mirroring
-% `checkEquation`'s `effSig` — a user-written untyped function cannot
-% carry `requiring`, and a lifted lambda's inherited clause is ignored
-% here exactly as `tell_function_decls_untyped` ignores it.
+% and so allocates no rigids; its bounds are dropped, since a
+% user-written untyped function cannot carry `requiring`, and a lifted
+% lambda's inherited clause is ignored here exactly as
+% `tell_function_decls_untyped` ignores it.
 walk_fun_untyped @
     walk_fun(Env, fun_def(N, A, [], _, ann(EAnn, ELoc, Eqs)), Unit) <=>
     walk_fun_eqs(Env, N, EAnn, ELoc, all_any_sig(A), [], Eqs, Unit).
@@ -1230,7 +1223,7 @@ walk_fun_eqs_cons @
 % keeps a call resolved through an ambient signature polymorphic, and
 % what makes an unbounded polymorphic body calling an overloaded
 % operator at its own type parameter fail rather than silently pass.
-% Ports `checkSingleSigEquation`.
+% One equation against the function's single declared signature.
 check_equation1 @
     check_equation(Env, FName, EAnn, ELoc, fun_sig(ArgTys, RetTy), Bounds, Eq, Unit) <=>
     alloc_var_types(collect_vars_eq(Eq),
@@ -1282,10 +1275,10 @@ tell_equation_bounds_nil @
 % test always finds an exactly-equal witness and `discharge_bound_fail`
 % can never rule every candidate out. The check therefore cannot report
 % anything, and no golden covers it — deleting it leaves the whole
-% corpus green. It is here for parity: `tellEquationBound` emits it, the
-% discharge rules are the solver's and may grow, and a bound that stops
-% being self-satisfying should start failing in both checkers at once.
-% Ports `tellEquationBound`.
+% corpus green. It is kept because the emission is uniform — every
+% equation of a bounded function tells its own function's bounds — and
+% because the discharge rules are the solver's and may grow: a bound
+% that stops being self-satisfying should start failing here.
 tell_equation_bounds_cons @
     tell_equation_bounds(S, TVars, [bound_sig(N, _, Args, Ret, _)|Bs]) <=>
     encode_sigs(env_function_sigs(scope_env(S), N), Decls),
@@ -1295,8 +1288,8 @@ tell_equation_bounds_cons @
 
 % --- Prelude statements ---------------------------------------------
 %
-% Ports `checkFunStmts` / `checkFunStmt`. Only `fun_is` changes the
-% scope: it rebinds its variable to a *fresh* slot, mirroring the
+% Only `fun_is` changes the scope: it rebinds its variable to a
+% *fresh* slot, mirroring the
 % runtime's lexical shadowing (`compileFunStmt` emits a `LetVal`, not a
 % unification), so later statements and the result expression see the
 % new slot while the right-hand side is still typed against the old one.
@@ -1354,8 +1347,8 @@ check_fun_stmt_apply @
 % The class-function overload search
 % ---------------------------------------------------------------------
 %
-% Ports `checkClassFunction`. Each equation of a multi-signature class
-% function must check under at least one declared signature, with its
+% Each equation of a multi-signature class function must check under
+% at least one declared signature, with its
 % parameters typed by that signature's argument types and its result
 % checked against that signature's return type. Signatures are tried in
 % declaration order and the search stops at the first that fits; an
@@ -1373,11 +1366,10 @@ check_fun_stmt_apply @
 % Whether one (equation x signature) attempt fitted. An attempt that
 % raised a hard error leaves the variable *unbound* — `run_chr_session`
 % answers `false` and binds nothing — which the retry rule reads as a
-% failure, so there is no third verdict. That last case is a divergence
-% worth knowing about: an error thrown inside an attempt is a bug in
-% the checker either way, but the old driver lets the exception escape
-% `typeCheckProgram` where this reports a spurious
-% `no_matching_overload`.
+% failure, so there is no third verdict. Worth knowing when reading a
+% surprising report: an error thrown inside an attempt is a bug in the
+% checker, and it surfaces as a spurious `no_matching_overload` rather
+% than as itself.
 :- chr_type attempt_verdict ---> attempt_ok ; attempt_failed.
 
 :- chr_constraint
@@ -1404,13 +1396,17 @@ class_eqs_cons @
     class_eqs(Env, Facts, N, EAnn, ELoc, Sigs, Eqs).
 
 % No signature left: the equation fits none of them. The diagnostic is
-% attributed to no unit — the old checker collects it outside any
-% session — so it suppresses nothing.
+% attributed to no unit — it belongs to the function as a whole rather
+% than to one of its equations' checking units — so it suppresses
+% nothing.
 %
-% The name travels wrapped in `source_name` because the old checker
-% builds this one diagnostic in Haskell and spells the name with the
-% mangling undone, unlike the `no_matching_overload`s its solver
-% reports.
+% The name travels wrapped in `source_name`, which asks the decoder for
+% the real inverse of the mangling; the `no_matching_overload`s the
+% solver reports travel as `mangled_name` and render with it only half
+% undone. The two spellings differ only for a name the mangling
+% escaped, and both are user-visible, so they are kept apart rather
+% than unified. See `decodeError` in
+% `src/YCHR/Internal/TypeCheck.hs`.
 class_eq_try_none @
     class_eq_try(_, _, FName, EAnn, ELoc, _, []) <=>
     report_error(ctx(no_unit, origin_ann(EAnn), label_function(FName), ELoc),
@@ -1446,11 +1442,10 @@ class_eq_next_retry @
 % one and without sharing a variable with the session it came from.
 %
 % The unit id is 0 and the diagnostics never leave, so neither the
-% number nor the annotation id is observable. Suppression runs for
-% parity with `runCheckSession`, whose `collectDiagnostics` an attempt
-% goes through like any other session; it cannot change the verdict,
-% since it only drops warnings when there is an error, and an error
-% already fails the attempt.
+% number nor the annotation id is observable. Suppression runs because
+% an attempt is an ordinary session and drains its accumulators like
+% one; it cannot change the verdict, since it only drops warnings when
+% there is an error, and an error already fails the attempt.
 check_attempt1 @
     check_attempt(Env, Facts, FName, EAnn, ELoc, Sig, Eq, Verdict) <=>
     errors([]),
@@ -1471,20 +1466,20 @@ verdict_of(_, _) -> attempt_failed.
 % Goals
 % ---------------------------------------------------------------------
 %
-% Ports `typeCheckGoals`. A query's goals are checked exactly like a
-% rule body — same `check_body_goal`, same declarations — with two
+% A query's goals are checked exactly like a rule body — same
+% `check_body_goal`, same declarations — with two
 % differences the shape below spells out: the whole goal list shares one
 % variable scope, so a name two goals mention denotes one slot, and each
 % goal is nonetheless its own checking unit, so a goal's own error
 % suppresses only its own warnings.
 %
-% That second half is unobservable today and is here for parity: the
-% only warning the checker emits needs a guard, and a goal has none, so
-% no goal-level warning exists for a unit id to keep or drop.
-% Renumbering every goal to one unit leaves the whole corpus green.
-% `typeCheckGoals` gives each goal its own unit anyway (spec §Type
-% Checking Procedure), so this does too, and a goal-level warning added
-% later suppresses correctly in both checkers at once.
+% That second half is unobservable today: the only warning the checker
+% emits needs a guard, and a goal has none, so no goal-level warning
+% exists for a unit id to keep or drop. Renumbering every goal to one
+% unit leaves the whole corpus green. It is per goal because that is
+% what the spec says the unit is (§Type Checking Procedure), and so
+% that a goal-level warning added later suppresses correctly without
+% anyone having to notice this.
 %
 % There is no head and there are no guards, so nothing contributes a
 % skeleton (every slot starts flexible) and no ambient signature is in

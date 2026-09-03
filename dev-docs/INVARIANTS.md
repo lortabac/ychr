@@ -52,10 +52,9 @@ removable when closed.
   `removed`, `Desugared.Equation.params`,
   `Compile.Types.Occurrence.activeArgs`, and
   `Compile.Types.Partner.constraint` to the new types.
-  `Desugar.normalizeArg` is the producer; the boundary helpers
-  `headArgToTerm` and `headConstraintToConstraint` (in
-  `YCHR.Types`) are used at the few sites in `TypeCheck.hs` that walk
-  desugared heads through generic `Term` machinery. The list-
+  `Desugar.normalizeArg` is the producer; the boundary helper
+  `headArgToTerm` (in `YCHR.Types`) survives for the one place that
+  still needs a `Term`, the lambda spelling in `Resolved.hs`. The list-
   comprehension drops in `Compile.buildVarMap` /
   `buildEquationVarMap` are now exhaustive matches on
   `HeadVar`/`HeadWildcard` instead of silent wide-`Term` filters.
@@ -277,15 +276,18 @@ Maybe OccurrenceNumber` (or starting from `1` only) would enforce it.
 Both are reversed exactly once, by discipline. A `newtype Reverse a =
 Reverse [a]` (or `Data.Sequence`) makes the order visible.
 
-### `tc_unify` argument order — `src/YCHR/Internal/TypeCheck.hs:11-26`
+### `tc_unify` argument order — `typechecker2/tc2_solver.chr`
 
-The module header documents that source-variable types must be on the
-left and declared types on the right when calling `tc_unify` from CHR.
-Today, this is enforced by routing every cross-comparison through
-named helpers (`check_constraint_use`, `check_function_use`,
-`check_constructor_use`). A `newtype SourceTypeVar` / `newtype
-DeclaredTypeVar` wrapper around `Value` would make the `tellConstraint`
-call site total.
+Source-variable types must be on the left of `tc_unify` and declared
+types on the right. Every rule has an explicit mirror, so the *verdict*
+does not depend on the order; what does is `tc_unify_error`'s
+`tpair(T1, T2)`, i.e. which of the two types the message presents as
+the one required and which as the one found. A swapped call renders
+backwards. Today this is enforced by routing every cross-comparison
+through named helpers (`check_constraint_use`, `check_function_use`,
+`check_constructor_use`), which put the operands in place themselves.
+Two distinct `ty`-like types — one for each side — would make an
+emitter's call total, at the cost of a conversion at every helper.
 
 ### Reactivation observer list is LIFO — `src/YCHR/Internal/Runtime/Var.hs:327`
 
@@ -337,21 +339,22 @@ every call site. Today `Compile.hs` builds it consistently, but no
 type insists. A `Set SuspensionId` (where order doesn't matter) or a
 sorted `Vector` would close it.
 
-### Symbol-table lookup for unknown constructor falls through to `any` — `src/YCHR/Internal/TypeCheck.hs:587-591`
+### Symbol-table lookup for unknown constructor falls through to `any` — `typechecker2/tc2_walk.chr` (`idx_within`)
 
-```haskell
-let withinArity =
-      case Map.lookup conName env.conMap of
-        Just (_, dc) -> idx < length dc.conArgs
-        Nothing -> True -- unknown constructor → unknown_guard_getarg handles it
+```
+idx_within(_, nothing) -> true.
+idx_within(Idx, just(Info)) -> Idx < con_arity(Info).
 ```
 
-The check phase silently skips out-of-range indices on unknown
-constructors, on the assumption that a separate pre-pass
-(`validateConstructorArities`) reported the error. That coupling is
-not visible at the type. A dedicated `KnownCtorRef` /
-`UnknownCtorRef` split, or invariants on `conMap` membership, would
-make it explicit.
+An unknown constructor answers `true`, so the extraction is emitted
+anyway and the solver's `unknown_guard_getarg` unifies the result with
+`ty_any` — which, under the no-bind rule for `any`, leaves a flexible
+slot flexible rather than typing it. An out-of-range index on a *known*
+constructor is skipped
+silently on the assumption that the constructor-arity walk
+(`tc2_pure.chr`) reported it. Neither coupling is visible in the types:
+a `known_con` / `unknown_con` split, or an invariant on constructor-map
+membership, would make it explicit.
 
 ### Rule-guard residuals do not tell — `src/YCHR/Internal/Compile.hs` (`residualCheck`, `genGuardedFire`)
 

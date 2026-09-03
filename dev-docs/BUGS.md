@@ -139,17 +139,16 @@ With two signatures, `:- class (sz(int) -> int), (sz(string) -> int).`
 and an equation contradicting both, the same shape is the documented
 `YCHR-60006` error.
 
-**Cause.** `typeCheckProgram`
-(`src/YCHR/Internal/TypeCheck.hs:509`) partitions on
-`length f.signatures > 1`, so a 1-signature class lands in
-`plainFunctions` and is checked by `checkSingleSigEquation` instead of
-`checkClassFunction`'s per-signature attempt sessions. Use sites are
-affected the same way: `tellFunctionSigs` (`TypeCheck.hs:750`) emits
-`function_sigs` (residual overload resolution) only for 2+ signatures,
-so a 1-sig class's calls go through the unify path — in rigid corner
-cases that reports `YCHR-60001` inconsistencies where the resolution
-path reports `YCHR-60006`. The declaration kind (`:- class` vs
-`:- function`) is not consulted; only the signature count is.
+**Cause.** `walk_funs` (`typechecker2/tc2_walk.chr`) partitions on
+`fun_sig_count(F) > 1`, so a 1-signature class goes down the plain-
+function path (`check_equation`) instead of the per-signature attempt
+sessions of `walk_class_fun`. Use sites are affected the same way:
+`build_function_facts` emits `function_sigs` (residual overload
+resolution) only for 2+ signatures, so a 1-sig class's calls go through
+the unify path — in rigid corner cases that reports `YCHR-60001`
+inconsistencies where the resolution path reports `YCHR-60006`. The
+declaration kind (`:- class` vs `:- function`) is not consulted; only
+the signature count is.
 `D.Function` currently does not record the kind, so the partition has
 nothing else to look at.
 
@@ -312,11 +311,12 @@ equation that is perfectly well-typed.
 **Cause.** `D.Function.equations` is an `AnnP [Equation]`
 (`src/YCHR/Internal/Desugared.hs:126`) — one location for the whole
 list, taken from the owning declaration. Individual `Equation`s carry
-no source of their own (`:130-139`), so `checkSingleSigEquation`
-(`src/YCHR/Internal/TypeCheck.hs:1727`) has nothing better to attribute
-to. Extension equations gathered from other modules are appended to
-that list and inherit the owner's `AnnP`. The per-unit `UnitId` work
-keeps such equations' diagnostics *apart*, but cannot place them.
+no source of their own (`:130-139`), so `check_equation`
+(`typechecker2/tc2_walk.chr`), which carries the function's `ann` block
+into every equation's `ctx`, has nothing better to attribute to.
+Extension equations gathered from other modules are appended to that
+list and inherit the owner's `AnnP`. Per-equation `unit_id`s keep such
+equations' diagnostics *apart*, but cannot place them.
 
 **Impact.** Any diagnostic from an extension equation — the warning
 above, and equally an error — sends the reader to the wrong file. It

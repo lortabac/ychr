@@ -69,9 +69,12 @@ plain transformers — `StateT`, `ReaderT`, `WriterT` from `Control.Monad.Trans.
 **Use the CPS variant** `Control.Monad.Trans.Writer.CPS` for `Writer` —
 the strict and lazy variants leak space.
 
-Multiple layers stack concretely (no mtl): e.g. the type-checker uses
-`type TC = ReaderT TypeCheckEnv (StateT CtxStore Chr)`, with a small
-`chrOp = lift . lift` helper to lift `Chr` actions into `TC`.
+Multiple layers stack concretely (no mtl): e.g. the renamer stacks two
+`Writer`s, one for warnings over one for errors
+(`Rename` in `src/YCHR/Internal/Rename.hs`), with `emitWarning` writing
+to the outer layer and `emitError` lifting past it to the inner one.
+Give the stack a type alias and one named helper per lift you need,
+rather than sprinkling `lift`s at use sites.
 
 If a function is genuinely pure, leave it pure — wrapping pure
 computations in a monad for uniformity adds noise without payoff.

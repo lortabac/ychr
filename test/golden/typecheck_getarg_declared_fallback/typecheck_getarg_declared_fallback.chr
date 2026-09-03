@@ -6,7 +6,7 @@
 % emitted (the constructor is not declared at this arity), so it
 % leaves no field slots behind. The following extraction therefore
 % falls back to resolving the field type from the *declaration* —
-% `checkGuard`'s `Nothing` branch, `getarg_declared` in the port —
+% `getarg_declared` in `typechecker2/tc2_walk.chr` —
 % and the constructor's declared parent type `opt(_)` contradicts the
 % declared argument type `int`.
 %

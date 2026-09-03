@@ -1,0 +1,25 @@
+% Goal arguments are evaluated expressions, so a goal is type-checked
+% by the same solver a rule body is — overload resolution included.
+% `size` has no signature taking a `color`, so `bad_arg` is rejected
+% before the query runs, and `ok_arg` pins that a call the overload set
+% does cover still goes through and still evaluates.
+%
+% Together with `typecheck_goal_bound/` (YCHR-60012) and
+% `typecheck_goal_{arg_type,ctor_arity}/` (YCHR-60001, YCHR-60008) this
+% covers every diagnostic the goal path can reach.
+:- module(tgo, [measure/2, fun size/1, type(color/0)]).
+:- use_module(library(prelude)).
+:- use_module(library(strings)).
+
+:- chr_type color ---> red ; green.
+
+:- chr_constraint measure(any, any).
+
+:- class
+    (size(int) -> int),
+    (size(string) -> int).
+
+size(N) | integer(N) -> N.
+size(S) | string(S) -> string_length(S).
+
+measured @ measure(X, R) <=> R = X.

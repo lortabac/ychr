@@ -228,8 +228,8 @@ MicroHs is a combinator-based compiler with no staged compilation.
 The `TemplateHaskell` extension is not recognised; modules using it
 cannot build under `mcabal`.
 
-YCHR uses TH to embed `libraries/*.chr` and
-`typechecker/typechecker.chr` into the binary at compile time
+YCHR uses TH to embed `libraries/*.chr` and the type checker's
+`typechecker2/*.chr` into the binary at compile time
 (`YCHR.Internal.StdLib.TH`, `YCHR.Internal.TypeCheck.TH`). This makes the GHC-built
 binary self-contained and cwd-independent. Without TH, mhs has no
 equivalent compile-time embedding path.

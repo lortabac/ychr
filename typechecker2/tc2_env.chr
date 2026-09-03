@@ -1,16 +1,18 @@
 % Declaration environment derived from an encoded program.
 %
-% The old checker builds three Haskell maps before it checks anything —
-% `conMap` and `conAlias` (`src/YCHR/Internal/Constructors.hs`) and the
-% `(name, arity)`-keyed type map of `validateTypeDefinitions` — and
-% every lookup below is the CHR counterpart of one of them. The
+% Three lookup tables are built before anything is checked: a
+% constructor map and a bare-name alias map — the counterparts of
+% `conMap` and `conAlias` in `src/YCHR/Internal/Constructors.hs`, which
+% the rest of the compiler uses — and a `(name, arity)`-keyed type map
+% for type-definition validation. The
 % representation is an assoc list rather than a map: lookups are linear,
 % which is irrelevant at the scale of one program's declarations, and it
 % keeps the whole environment an ordinary value that pure functions can
 % take and return.
 %
-% Two Haskell details this file has to reproduce exactly, because the
-% differential harness compares diagnostics:
+% Two details it shares with `Constructors.hs`, and has to agree with
+% exactly, because the two decide the same questions about the same
+% program:
 %
 %   * `conMap` is a `Map.fromList`, so a constructor declared twice is
 %     the *last* declaration — hence `con_env_from` stores the entries
@@ -59,8 +61,8 @@
 :- use_module(library(pairs)).
 
 % A data constructor together with the type declaration that introduced
-% it. Mirrors the `(TypeDefinition, DataConstructor)` value of Haskell's
-% `conMap`.
+% it — the value side of the constructor map, matching the
+% `(TypeDefinition, DataConstructor)` pair `Constructors.hs` stores.
 :- chr_type con_info ---> con_info(type_def, data_con).
 
 % The constructor environment: every declared constructor keyed by its
@@ -95,9 +97,10 @@ td_entries(Td) ->
 % site is treated as unknown rather than guessed at. `count_base`
 % counts *occurrences*, matching `buildConAlias`'s `single [n]`: a name
 % declared twice is ambiguous with itself and loses its alias too.
-% (Faithful to the Haskell, but note that no corpus program tells the
-% two readings apart: an ambiguous *bare* use site is already rejected
-% by the renamer, so nothing reaches a wrongly-kept alias.)
+% (No corpus program tells the two readings apart: an ambiguous *bare*
+% use site is already rejected by the renamer, so nothing reaches a
+% wrongly-kept alias. The arm is here to agree with `Constructors.hs`,
+% not because a test demands it.)
 %
 % The base of each name is computed once, up front: `name_base` is a
 % host call, and pairing it with its name here keeps the quadratic
@@ -132,11 +135,12 @@ count_base(B, Ns) -> length(filter(fun(Entry) -> key(Entry) == B end, Ns)).
 canonicalize_con(_, N) | not(name_base(N) == N) -> N.
 canonicalize_con(con_env(_, Alias), N) -> from_maybe(N, assoc_get(N, Alias)).
 
-% The *last* declaration of a name, mirroring `Map.fromList`, whose
-% later duplicate wins — the entries are stored reversed, so first match
-% is last declaration. Duplicates are only reachable for a program that
-% also reports a duplicate-constructor error, but the two checkers have
-% to agree on which declaration the arity check then reads.
+% The *last* declaration of a name, matching the `Map.fromList` of
+% `Constructors.hs`, whose later duplicate wins — the entries are stored
+% reversed, so first match is last declaration. Duplicates are only
+% reachable for a program that also reports a duplicate-constructor
+% error, but the arity check still has to read the same declaration the
+% rest of the compiler would.
 :- function lookup_con(con_env, any) -> maybe(con_info).
 lookup_con(con_env(Entries, _), N) -> assoc_get(N, Entries).
 
@@ -170,7 +174,7 @@ type_def_loc(type_def(_, _, _, L)) -> L.
 % --- Use-site lookups over the constructor environment ---------------
 
 % True when `Name` is a known data constructor declared at exactly
-% `UseArity`. Ports `knownConstructorWithArity`: a wrong-arity use is
+% `UseArity`: a wrong-arity use is
 % diagnosed by the arity walk of `tc2_pure.chr`, and gating the
 % `check_constructor_use` emission on this is what keeps a second,
 % spurious inconsistency off the same site.
@@ -184,7 +188,7 @@ con_arity_matches(UseArity, just(Info)) -> con_arity(Info) == UseArity.
 
 % Number of type parameters of the type a data constructor belongs to.
 % Zero for an unknown constructor, whose callers gate on
-% `known_con_with_arity` anyway. Ports `parentTypeArity`.
+% `known_con_with_arity` anyway.
 :- function parent_type_arity(con_env, any) -> int.
 parent_type_arity(Env, Name) -> con_info_parent_arity(lookup_con(Env, Name)).
 
@@ -194,20 +198,20 @@ con_info_parent_arity(just(con_info(Td, _))) -> type_def_arity(Td).
 
 % --- The whole checking environment ---------------------------------
 %
-% Ports `TypeCheckEnv` (TypeCheck.hs). Everything in it is derived from
-% the encoded program and immutable for the whole check, so it is built
-% once and passed down.
+% The whole environment one checking session needs. Everything in it
+% is derived from the encoded program and immutable for the whole
+% check, so it is built once and passed down.
 
 % Key of the ambient-signature and function-bounds tables: functions are
 % arity-overloadable, so a bound naming `g/1` must not capture calls to
-% `g/2`. Ports `AmbientKey`.
+% `g/2`.
 :- chr_type amb_key ---> amb_key(any, int).
 
 % The constructor environment, the declared argument types and bounds of
 % every constraint, the bounds of every bounded function, and the
 % declared signatures of every function.
 %
-% The last two mirror `functionBoundsEnv` and `functionSigsEnv`: bounds
+% The last two are keyed differently on purpose: bounds
 % are keyed by name *and* arity, while signatures are keyed by name
 % alone with every arity mixed together — which is what the CHR side's
 % `function_sig` / `function_sigs` facts see, and what a bound's
@@ -244,9 +248,9 @@ env_function_bounds(tc_env(_, _, _, Bounds, _), Key) ->
 env_function_sigs(tc_env(_, _, _, _, Sigs), Name) ->
     from_maybe([], assoc_get(Name, Sigs)).
 
-% Only bounded functions have an entry, matching the Haskell's
-% `not (null f.requiring)` filter. The lookup is first-wins where
-% `Map.fromList` is last-wins; the two can only differ if one
+% Only bounded functions have an entry — an unbounded one contributes
+% nothing to look up. The lookup is first-wins where a
+% `Map.fromList` would be last-wins; the two can only differ if one
 % `(name, arity)` were declared twice, which `Resolve` groups away
 % before the checker sees it.
 :- function function_bounds_env(list(fun_def)) -> list(pair(amb_key, list(bound_sig))).
@@ -297,7 +301,7 @@ has_type_def(N, A, [_|Tds]) -> has_type_def(N, A, Tds).
 % which is how a reference that missed the table at its own arity is
 % told apart from one that names nothing at all. Only the singleton
 % case is acted on, so the order does not matter; `distinct` keeps
-% first occurrences, as Haskell's `List.nub` does.
+% first occurrences.
 :- function base_name_arities(any, list(type_def)) -> list(int).
 base_name_arities(B, Tds) ->
     distinct(maplist(fun type_def_arity/1,

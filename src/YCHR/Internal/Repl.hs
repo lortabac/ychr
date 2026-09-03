@@ -461,14 +461,22 @@ showOperators prog = mapM_ (putStrLn . renderOp) entries
 -- :info / :i — identifier inspection
 -- ---------------------------------------------------------------------------
 
--- | Hard-coded set of names recognized as base types of the
--- @'$typechecker'@ module. These are the /source-level/ spellings —
--- what a user types at @:info@ and what
--- 'YCHR.Internal.TypeCheck.encodeTypeExpr' matches on. The @ty@ ADT
--- constructors backing them carry a @ty_@ prefix that never surfaces
--- here (see 'YCHR.Internal.TypeCheck.tcCon0').
+-- | Hard-coded set of names recognized as the type checker's base
+-- types. These are the /source-level/ spellings — what a user types at
+-- @:info@ and what @encode_ty@ (@typechecker2\/tc2_walk.chr@) matches
+-- on. The @ty@ constructors backing them carry a @ty_@ prefix that
+-- never surfaces here; @displayTypeAtom@
+-- ("YCHR.Internal.TypeCheck.Render") strips it on the way out.
 builtinTypeNames :: [Text]
 builtinTypeNames = ["int", "float", "string", "any"]
+
+-- | The module qualifier @:info@ shows a built-in type under. It is a
+-- label, not a lookup: nothing resolves it, and the type checker's own
+-- module ('YCHR.Internal.TypeCheck.Render'@.typeModule@) is currently
+-- spelled differently. Pinned by @docs\/reference\/repl.md@ and
+-- @test\/repl\/test_repl.py@.
+builtinTypeModule :: Text
+builtinTypeModule = "$typechecker"
 
 showInfoUsage :: IO ()
 showInfoUsage = putStrLn "usage: :info <identifier>"
@@ -527,7 +535,7 @@ lookupInfo prog name mArity =
         Right qn -> qualifiedLookup prog qn mArity
         Left n ->
           let builtinEntries =
-                [ IEBuiltinType (QualifiedName "$typechecker" n)
+                [ IEBuiltinType (QualifiedName builtinTypeModule n)
                 | n `elem` builtinTypeNames,
                   arityMatches 0
                 ]
@@ -617,7 +625,7 @@ qualifiedLookup prog qn mArity =
         ]
       builtinEntries =
         [ IEBuiltinType qn
-        | qn.moduleName == "$typechecker",
+        | qn.moduleName == builtinTypeModule,
           qn.baseName `elem` builtinTypeNames,
           arityMatches 0
         ]

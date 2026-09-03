@@ -4,7 +4,8 @@
 
 % Same wrong-arity error but in a head pattern position. Patterns are
 % desugared into GuardMatch + GuardGetArg, so this exercises the
-% pattern path of validateConstructorArities. Expect YCHR-60008.
+% guard arm of the constructor-arity walk (`rule_arity_errors` in
+% `typechecker2/tc2_pure.chr`). Expect YCHR-60008.
 :- chr_type opt(A) ---> none ; some(A).
 
 :- chr_constraint c(opt(int)).

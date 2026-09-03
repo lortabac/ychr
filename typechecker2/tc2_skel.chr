@@ -1,28 +1,25 @@
 % Slot skeletons: what shape a checking unit's variables start out as.
 %
-% Ports the "declaration-position `any` stamping" block of
-% `src/YCHR/Internal/TypeCheck.hs` (`skeletonOf` and everything under
-% it, through `allocSkeleton`). Its spec home is
+% Declaration-position `any` stamping. Its spec home is
 % `docs/reference/type-system.md` §Type states, whose meet is defined
 % position by position — which is exactly why a slot has to be shaped
-% before the solver sees it. The rule it implements is the one the
-% old driver's module header states: `any` never binds, so a *position*
-% that some declaration source leaves `any` and another makes concrete
-% has to reach the solver as a flexible variable — per position, not
-% per variable. A whole-variable slot is flexible for free; a position
-% nested inside a declared type is not, because `tc_unify` binds a
-% flexible slot to a type-constructor application as a whole. Hence the
-% pre-shaped slot.
+% before the solver sees it. The rule: `any` never binds, so a
+% *position* that some declaration source leaves `any` and another
+% makes concrete has to reach the solver as a flexible variable — per
+% position, not per variable. A whole-variable slot is flexible for
+% free; a position nested inside a declared type is not, because
+% `tc_unify` binds a flexible slot to a type-constructor application as
+% a whole. Hence the pre-shaped slot.
 %
 % Everything here is a pure function except the allocation itself,
 % which needs fresh logical variables and so has to be a rule.
 %
 % Cost: the variable bookkeeping below — `components` and `reach`, and
 % the `distinct` that feeds them — is quadratic in the number of
-% distinct variables of one checking unit, where the old driver is
-% `O(V log V)` through a `Map`. Measured on a rule whose head takes 400
-% declared arguments at 400 distinct variables: V2 ~3.9 s against the
-% old checker's ~22 ms, and doubling the variable count costs ~4.5x.
+% distinct variables of one checking unit, where an assoc list is
+% standing in for a map. Measured on a rule whose head takes 400
+% declared arguments at 400 distinct variables: ~3.9 s, and doubling
+% the variable count costs ~4.5x.
 % Rule *size* is not the axis — 800 body goals over two variables costs
 % nothing extra. This is the same assoc-lists-instead-of-maps
 % limitation `tc2_env.chr` records for the constructor count, on a
@@ -62,7 +59,7 @@
 :- use_module(library(pairs)).
 
 % The shape a variable's declaration sources determine for its type
-% slot, computed position by position. Mirrors `TypeSkeleton`.
+% slot, computed position by position.
 %
 %   * `sk_any` — every source says `any` here, so the slot gets the
 %     literal `any` type, which no rule binds;
@@ -89,9 +86,9 @@ is_any_ty(_) -> false.
 
 % True when `any` appears anywhere in a type expression, at any depth.
 % Only such a source needs a shaped slot; everything else takes the
-% plain flexible slot. A function type's components are reached
-% through `tfunx`, which is what the Haskell reaches through the two
-% levels of its `'->'(fun(...), Ret)` spelling.
+% plain flexible slot. A function type's components are reached through
+% `tfunx`, the encoder's one-level spelling of what source writes as
+% `'->'(fun(...), Ret)`.
 :- function mentions_any(ty_expr) -> bool.
 mentions_any(T) | is_any_ty(T) -> true.
 mentions_any(tvar(_)) -> false.
@@ -105,8 +102,8 @@ mentions_any(tfunx(_, Ret)) -> mentions_any(Ret).
 
 % The per-position argument lists and return types of a list of sources
 % that are all function types of one arity, and all applications of one
-% type constructor at one arity. Intermediate results of `skeleton_of`,
-% mirroring `sameFunShape` and `sameConShape`.
+% type constructor at one arity. Intermediate results of `skeleton_of`:
+% `same_fun_shape` and `same_con_shape` below produce them.
 :- chr_type fun_shapes ---> fun_shapes(list(list(ty_expr)), list(ty_expr)).
 :- chr_type con_shapes ---> con_shapes(any, list(list(ty_expr))).
 
@@ -155,8 +152,8 @@ fun_rets(_) -> [].
 
 % Every source applies the same type constructor at the same, non-zero
 % arity. Function types cannot be claimed here: the encoder gives them
-% their own constructor, which is what `funShape t == Nothing` does on
-% the Haskell side.
+% their own constructor (`tfunx`), so they never look like a `tconx`
+% application.
 :- function same_con_shape(list(ty_expr)) -> maybe(con_shapes).
 same_con_shape([tconx(N, [A|As])|Ts]) | all_con_shape(N, 1 + length(As), Ts) ->
     just(con_shapes(N, [[A|As] | con_argss(Ts)])).
@@ -205,7 +202,7 @@ row_tails([[_|Xs]|Rs]) -> [Xs|row_tails(Rs)].
 % distinct slots, each checked against its own declaration position,
 % and `eq_unify` merges them. Two shared slots would let the first head
 % position win outright, turning a deliberate inaccessible-branch
-% warning into an inconsistency error. Ports `varSkeletons`.
+% warning into an inconsistency error.
 :- function var_skeletons(list(pair(any, ty_expr)), list(pair(any, any)))
     -> list(pair(any, type_skeleton)).
 var_skeletons(Occs, Links) ->
@@ -278,7 +275,7 @@ comp_sources(Comp, Occs) ->
 % The var-var links a guard list contributes: only a `guard_equal`
 % between two bare variables counts. Those are the synthetic
 % equalities HNF emits for a repeated head variable; a user's
-% ask-equality guard desugars to `guard_expr`. Ports `guardEqualLinks`.
+% ask-equality guard desugars to `guard_expr`.
 :- function guard_equal_links(list(guard)) -> list(pair(any, any)).
 guard_equal_links([]) -> [].
 guard_equal_links([guard_equal(var_e(A), var_e(B))|Gs]) ->
@@ -302,7 +299,7 @@ guard_operand_var(_) -> nothing.
 % the checking walk tracks it — keyed by the scrutinized variable,
 % since a nested pattern's match interleaves with its parent's
 % extractions — including the fallback to the extracted variable's own
-% name. Ports `guardFieldOccs`.
+% name.
 :- function guard_field_occs(con_env, list(guard)) -> list(pair(any, ty_expr)).
 guard_field_occs(Env, Guards) -> field_occs(Env, Guards, []).
 
@@ -339,11 +336,10 @@ field_occ(Env, V, Idx, Con) -> field_occ_of(V, con_field_at(Idx, lookup_con(Env,
 field_occ_of(_, nothing) -> [].
 field_occ_of(V, just(T)) -> [kv(V, T)].
 
-% `nth_maybe` is the Haskell's `idx < length` guard followed by `!!`,
-% in one total step — and total in the other direction too, where the
-% Haskell's guard passes and `!!` then crashes. That extra arm is
-% unreachable: the index comes from a `guard_getarg`, which HNF only
-% ever emits at a non-negative field position.
+% `nth_maybe` answers `nothing` for an index past the end and for a
+% negative one, in one total step. The negative arm is unreachable: the
+% index comes from a `guard_getarg`, which HNF only ever emits at a
+% non-negative field position.
 :- function con_field_at(int, maybe(con_info)) -> maybe(ty_expr).
 con_field_at(_, nothing) -> nothing.
 con_field_at(Idx, just(con_info(_, Dc))) -> nth_maybe(Idx, con_args(Dc)).
@@ -351,7 +347,7 @@ con_field_at(Idx, just(con_info(_, Dc))) -> nth_maybe(Idx, con_args(Dc)).
 % Slot skeletons determined by a rule head's declaration positions.
 % Head arguments are post-HNF (variables and wildcards only), so the
 % position-to-variable mapping is a static zip against the declared
-% argument types. Ports `headVarSkeletons`.
+% argument types.
 :- function head_var_skeletons(tc_env, list(head_con), list(guard))
     -> list(pair(any, type_skeleton)).
 head_var_skeletons(Env, Cons, Guards) ->
@@ -378,7 +374,7 @@ arg_occs([head_wild|As], [_|Ts]) -> arg_occs(As, Ts).
 % Slot skeletons determined by a single-signature equation's parameter
 % positions. Same shape as `head_var_skeletons` for the one declaration
 % an equation has; a length mismatch between parameters and declared
-% types stamps nothing. Ports `paramVarSkeletons`.
+% types stamps nothing.
 :- function param_var_skeletons(tc_env, list(head_arg), list(ty_expr), list(guard))
     -> list(pair(any, type_skeleton)).
 param_var_skeletons(_, Params, DeclTys, _) | not(length(Params) == length(DeclTys)) -> [].
@@ -391,7 +387,7 @@ param_var_skeletons(Env, Params, DeclTys, Guards) ->
 % Variable collection
 % ---------------------------------------------------------------------
 %
-% Ports `collectVarsInRule` and friends. Every variable the checking
+% Every variable the checking
 % walk will ask for a slot has to be here, including lambda parameter
 % names, which become local bindings the checker types. Duplicates are
 % dropped so a name gets exactly one slot.
@@ -405,12 +401,12 @@ collect_vars_rule(Cons, Guards, Body) ->
 % The same for a query's goal list. The goals of one query share a
 % single variable scope, so a name mentioned by two of them gets one
 % slot — which is why the whole list is collected at once rather than
-% goal by goal. Ports `typeCheckGoals`'s `foldMap collectVarsInBodyGoal`.
+% goal by goal.
 :- function collect_vars_goals(list(body_goal)) -> list(any).
 collect_vars_goals(Goals) -> distinct(collect_vars_body_goals(Goals)).
 
 % The same for one function equation: parameters, guards, prelude
-% statements and the result expression. Ports `collectVarsInEq`.
+% statements and the result expression.
 :- function collect_vars_eq(fun_eq) -> list(any).
 collect_vars_eq(fun_eq(Params, Guards, Prelude, Rhs)) ->
     distinct(concat([collect_vars_head_args(Params),
@@ -494,7 +490,7 @@ collect_vars_expr(lambda_e(Params, Body)) ->
     alloc_skeletons(list(type_skeleton), list(ty)).
 
 % One slot per variable. A variable with no declaration source at all
-% takes the plain flexible slot. Ports `allocVarTypes`.
+% takes the plain flexible slot.
 alloc_var_types_nil @
     alloc_var_types([], _, Out) <=> Out = [].
 
@@ -506,7 +502,7 @@ alloc_var_types_cons @
 
 % Materialize one skeleton. Mirrors the source-type encoding's shapes,
 % so a shaped slot meets a declared type componentwise instead of
-% binding to it whole. Ports `allocSkeleton`.
+% binding to it whole.
 alloc_skeleton_any @
     alloc_skeleton(sk_any, Out) <=> Out = ty_any.
 

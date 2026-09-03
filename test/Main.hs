@@ -24,7 +24,6 @@ import YCHR.Runtime.InterpreterTest qualified
 import YCHR.Runtime.ReactivationTest qualified
 import YCHR.Runtime.StoreTest qualified
 import YCHR.Runtime.VarTest qualified
-import YCHR.TypeCheckDiffTest qualified
 import YCHR.TypeCheckTest qualified
 import YCHR.TypeSoundnessTest qualified
 import YCHR.VM.SExprTest qualified
@@ -40,7 +39,6 @@ testTimeout = mkTimeout 60_000_000
 main :: IO ()
 main = do
   golden <- YCHR.GoldenTest.tests
-  typeCheckDiff <- YCHR.TypeCheckDiffTest.tests
   defaultMain $
     localOption testTimeout $
       testGroup
@@ -62,7 +60,6 @@ main = do
           YCHR.RoundtripTest.tests,
           YCHR.RenameTest.tests,
           YCHR.TypeCheckTest.tests,
-          typeCheckDiff,
           YCHR.TypeSoundnessTest.tests,
           YCHR.Runtime.VarTest.tests,
           YCHR.Runtime.StoreTest.tests,

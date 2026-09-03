@@ -1091,9 +1091,9 @@ compileBodyGoal _ varMap si (D.BodyIs v expr) = do
   -- be walked at runtime: emit 'EvalIs' to trigger 'deepEvalValue'.
   -- Any other RHS shape (host call, user function call, term ctor)
   -- already returns an evaluated value from its outer operation;
-  -- 'EvalDeep' (deep-deref only) is sufficient. Mirrors the
-  -- syntactic gate in 'checkBodyGoal' for the type checker — same
-  -- pattern, same widening rule.
+  -- 'EvalDeep' (deep-deref only) is sufficient. The type checker gates
+  -- on the same syntactic shape (@body_is@ in
+  -- @typechecker2\/tc2_walk.chr@) — same pattern, same widening rule.
   let rhs = case expr of
         R.VarExpr _ -> EvalIs expr'
         _ -> EvalDeep expr'

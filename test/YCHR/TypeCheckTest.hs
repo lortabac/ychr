@@ -223,11 +223,12 @@ tests =
             )
         length errs @?= 1
         ws @?= [InaccessibleBranch "int" "m:color"],
-      testCase "a Haskell-side error suppresses its unit's warning too" $ do
-        -- Constructor-arity errors are found in Haskell, not by a CHR
-        -- rule, and are recorded against the unit being checked
-        -- ('recordHsDiags'). Suppression has to see them: this rule
-        -- is both dead and wrong, so only the error is reported.
+      testCase "a declaration-check error suppresses its unit's warning too" $ do
+        -- Constructor-arity errors come from the declaration checks
+        -- (@tc2_pure.chr@), not from a solver rule, and are recorded
+        -- against the unit being checked. Suppression has to see them:
+        -- this rule is both dead and wrong, so only the error is
+        -- reported.
         (errs, ws) <-
           checkModule
             ( mod_

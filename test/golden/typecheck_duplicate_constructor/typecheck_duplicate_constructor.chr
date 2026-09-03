@@ -5,7 +5,7 @@
 % Two type definitions in this module both declare the constructor
 % `nil`. The renamer qualifies both as `Qualified m "nil"`, and the
 % type checker keys constructor lookups by name only (no arity), so
-% these two collide. detectDuplicateConstructors must catch this and
+% these two collide. The duplicate-constructor check must catch this and
 % emit YCHR-60007.
 :- chr_type t1 ---> nil.
 :- chr_type t2 ---> nil.

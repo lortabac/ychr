@@ -7,6 +7,27 @@
 % `src/YCHR/Internal/TypeCheck/Encode.hs`; the two files are a matched
 % pair and must be edited together.
 %
+% How a mismatch between them is caught, now that the conformance walk
+% that used to visit every node is gone: most constructors below are
+% destructured by a *total function* somewhere in `tc2_skel`,
+% `tc2_pure`, `tc2_env` or `tc2_walk`, and a function with no matching
+% equation raises YCHR-60001 naming the term that did not fit. (Inside
+% a class-function attempt even that is muffled: `run_chr_session`
+% answers `false`, so the raise surfaces as a spurious
+% `no_matching_overload` — see the attempt block in `tc2_walk.chr`.)
+%
+% Three nodes are matched by CHR *rules* only — `rule_head/2`,
+% `con_key/2` and `fun_sig/2` — where a miss is a silent suspend, not
+% an error. What catches drift there is the corpus: the rule walk or
+% the equation walk stops firing, and a large part of `test/golden/`
+% expects diagnostics from them.
+%
+% `loc/3` is checked on the way out, by the Haskell decoder
+% ("YCHR.Internal.TypeCheck", `malformed loc`) — so a program that
+% reports nothing would not notice. The `diag_label` constructors
+% cannot drift against the encoder at all: they are built and read on
+% the Haskell side and never come from `Encode.hs`.
+%
 % Nothing is computed here. The module exists so that the renamer
 % recognizes the AST constructors in the rules of the other
 % typechecker2 modules, and so that `ychr check --Werror` can type the

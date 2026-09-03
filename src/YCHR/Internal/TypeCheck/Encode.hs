@@ -322,9 +322,9 @@ expr (D.HostExpr f args) = ast "host_e" [atomTerm f, exprs args]
 
 -- | A source type expression. Function types are the one shape that is
 -- normalized rather than transcribed: @fun(A, B) -> C@ parses as
--- @TypeCon \"->\" [TypeCon \"fun\" [A, B], C]@, and every consumer —
--- @encodeTypeExpr@, @validateFieldType@, @funShape@ — re-recognizes
--- that spelling before doing anything with it. Recognizing it once,
+-- @TypeCon \"->\" [TypeCon \"fun\" [A, B], C]@, and every consumer has
+-- to re-recognize that spelling before doing anything with it.
+-- Recognizing it once,
 -- here, means the CHR side never has to compare against the bare atoms
 -- @'->'@ and @fun@: it matches a constructor instead, which is both
 -- clearer and immune to a checker-internal declaration happening to

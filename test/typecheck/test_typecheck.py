@@ -42,24 +42,11 @@ DEAD_CODE_GOLDENS = [
 ]
 
 
-def test_typecheck_typechecker(ychr_bin, project_root):
-    import subprocess
-
-    program = os.path.join(project_root, "typechecker", "typechecker.chr")
-    result = subprocess.run(
-        [ychr_bin, "check", "--Werror", program],
-        capture_output=True,
-        text=True,
-        cwd=project_root,
-    )
-    assert result.returncode == 0, f"type check failed:\n{result.stderr}"
-
-
-# The all-CHR type-checker under construction. Its modules are compiled
-# together as one program, so they are checked together too. Like the
-# checker above, it must be fully annotated and warning-free: the
-# embedded copy is compiled but never type-checked by the compile path,
-# so this is the only thing holding it to its own type system.
+# The type-checker checking itself. Its modules are compiled together
+# as one program, so they are checked together too, and they must be
+# fully annotated and warning-free: the embedded copy is compiled but
+# never type-checked by the compile path, so this is the only thing
+# holding the checker to its own type system.
 def test_typecheck_typechecker2(ychr_bin, project_root):
     import subprocess
 

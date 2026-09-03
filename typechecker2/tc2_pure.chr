@@ -1,16 +1,14 @@
 % The checks that need no solver.
 %
-% Three of the old checker's diagnostics are computed by pure Haskell
-% over the declarations alone, never reaching CHR at all:
-% `detectDuplicateConstructors`, `validateTypeDefinitions` and the
-% constructor-arity walk (`ruleConstructorArities` and friends), all in
-% `src/YCHR/Internal/TypeCheck.hs`. They port to ordinary functions
-% here — an `error/3` term is data, so nothing has to be told.
+% Three of the checker's diagnostics need no solver at all — duplicate
+% constructors, type-definition validation, and the constructor-arity
+% walk — and are decided here, over the declarations alone. They are
+% ordinary functions rather than rules: an `error/3` term is data, so
+% nothing has to be told.
 %
-% The port is meant to be diagnostic-for-diagnostic identical; the
-% differential harness compares payloads, labels, locations and origins
-% as multisets, so the only freedom is the order in which the lists are
-% concatenated.
+% What is variable here is only the order in which the lists are
+% concatenated; a diagnostic's payload, label, location and origin are
+% all fixed by the report site.
 %
 % The list traversals here go through `library(lists)` rather than
 % hand-rolled recursion; the cost of that is recorded once, in
@@ -37,10 +35,11 @@ program_errors(Env, program(Rules, Funs, _, _, Tds)) ->
     all_errors(Env, Rules, Funs, Tds).
 
 % Units are numbered by position: rule `i` is unit `i`, and the
-% equations of the plain functions continue from there. The numbering
-% need not match the old checker's — a unit id never leaves this
-% program, and warning suppression only cares which diagnostics share
-% one.
+% equations of the plain functions continue from there. The absolute
+% numbers do not matter — a unit id never leaves this program, and
+% warning suppression only cares which diagnostics share one — but
+% `tc2_walk.chr` has to number the same way, or an arity error and the
+% solver errors of the same rule land in different units.
 :- function all_errors(con_env, list(rule), list(fun_def), list(type_def)) -> list(error).
 all_errors(Env, Rules, Funs, Tds) ->
     concat([validate_type_defs(Tds),
@@ -52,7 +51,7 @@ all_errors(Env, Rules, Funs, Tds) ->
 % Type-definition validation
 % ---------------------------------------------------------------------
 %
-% Ports `validateTypeDefinitions` (TypeCheck.hs). Every constructor
+% Every constructor
 % field of every declaration is walked; a field may only mention the
 % enclosing declaration's own type parameters, and every type it
 % references must be declared at the arity it is applied at.
@@ -79,9 +78,9 @@ validate_field(Td, Dc, tvar(V), _) ->
     [decl_error(Td, unbound_type_var,
                 unbound_type_var_d(type_def_name(Td), con_name(Dc), V))].
 % A function type names no declared type at either level, so only the
-% components are validated. Mirrors the same special case in
-% `validateFieldType`; the encoder has already recognized the
-% `'->'(fun(...), Ret)` spelling and emitted `tfunx`.
+% components are validated. The encoder has already recognized the
+% `'->'(fun(...), Ret)` spelling and emitted `tfunx`, so there is no
+% two-level application to see through here.
 validate_field(Td, Dc, tfunx(ArgTys, RetTy), All) ->
     validate_fields(Td, Dc, append(ArgTys, [RetTy]), All).
 validate_field(Td, Dc, tconx(N, Args), All) ->
@@ -120,8 +119,8 @@ arity_ref_error(Td, Dc, N, UseArity, Declared) ->
 
 % The four built-in base types, which have no declaration to find and
 % take no parameters. The comparison is against the whole mangled
-% atom, so a qualified `m:int` is correctly not one of them — the
-% Haskell's explicit `Qualified _ _ -> False` arm needs no counterpart.
+% atom, so a qualified `m:int` is correctly not one of them and needs
+% no arm of its own.
 :- function is_base_type(any) -> bool.
 is_base_type(N) ->
     member(N, [quote(int), quote(float), quote(string), quote(any)]).
@@ -137,7 +136,7 @@ decl_error(Td, Code, Detail) ->
 % Duplicate constructors
 % ---------------------------------------------------------------------
 %
-% Ports `detectDuplicateConstructors`. Constructor lookups are keyed on
+% Constructor lookups are keyed on
 % name alone, so two declarations of one name collide whatever their
 % arities, and the later would silently shadow the earlier.
 
@@ -146,9 +145,9 @@ decl_error(Td, Code, Detail) ->
 :- chr_type con_decl ---> con_decl(any, int, loc).
 
 % One grouping pass, then one diagnostic per group of more than one.
-% The old checker's `Map.fromListWith (++)` is reproduced by
-% `push_decl`, which prepends: each group ends up in reverse encounter
-% order, which is what `dup_errors`' stable `sort_by` then sees.
+% `push_decl` prepends, so each group ends up in reverse encounter
+% order, which is what `dup_errors`' stable `sort_by` then sees — the
+% sort is what fixes the reported order, not the grouping.
 :- function duplicate_constructors(list(type_def)) -> list(error).
 duplicate_constructors(Tds) -> dup_errors(group_decls(Tds)).
 
@@ -199,9 +198,9 @@ decl_pair(con_decl(TName, A, _)) -> kv(TName, A).
 % `:- module` header and are merged, so two declarations of one
 % *qualified* constructor name really can sit in different files, and
 % the file has to be part of the key: without it the reported
-% declaration order, source location and origin all diverge from the
-% old checker's. `<` on two strings is lexicographic by code point,
-% which is the ordering `Ord String` gives.
+% declaration order, source location and origin all depend on which of
+% the two files happened to be encoded first. `<` on two strings is
+% lexicographic by code point.
 :- function decl_before(con_decl, con_decl) -> bool.
 decl_before(con_decl(_, _, loc(F1, _, _)), con_decl(_, _, loc(F2, _, _)))
   | F1 < F2 -> true.
@@ -217,7 +216,7 @@ decl_before(_, _) -> false.
 % Constructor arity
 % ---------------------------------------------------------------------
 %
-% Ports `ruleConstructorArities` / `functionConstructorArities`. A known
+% A known
 % constructor used at the wrong arity is reported directly rather than
 % left to surface as a downstream type inconsistency, because the
 % checking phase treats such a site as `any` and would otherwise say
@@ -250,8 +249,8 @@ rule_arity_errors(Env,
                        body_goals_arity(Env, Body))).
 
 % A class function's equations are checked in throwaway per-signature
-% sessions whose diagnostics are discarded, so the old checker collects
-% their arity errors at program level instead — outside any unit.
+% sessions whose diagnostics are discarded, so their arity errors are
+% collected here, at program level, outside any unit.
 :- function funs_arity_errors(con_env, list(fun_def), int) -> list(error).
 funs_arity_errors(_, [], _) -> [].
 funs_arity_errors(Env, [F|Fs], Unit) ->
@@ -283,8 +282,11 @@ eqs_arity_errors(Env, FName, A, Loc, [Eq|Eqs], Unit) ->
            eqs_arity_errors(Env, FName, A, Loc, Eqs, bump_unit(Unit))).
 
 % Parameters are post-HNF head arguments and so contain no constructor
-% application. The prelude statements are deliberately not walked:
-% `eqArity` does not walk them either.
+% application. The prelude statements are not walked, and nothing else
+% reports them either: a wrong-arity constructor in a `fun_is` right
+% side draws the renamer's YCHR-20102 warning but no YCHR-60008, where
+% the same term in the equation's result expression errors. A known
+% gap, left as it is.
 :- function eq_arity(con_env, fun_eq) -> list(arity_use).
 eq_arity(Env, fun_eq(_, Guards, _, Rhs)) ->
     append(guards_arity(Env, Guards), expr_arity(Env, Rhs)).
@@ -306,13 +308,12 @@ arity_diag(Ctx, arity_use(N, Use, Declared)) ->
 % The constructor-arity errors of a query's goals. A goal introduces no
 % declarations, so this is the *only* declaration-level check goals go
 % through: the type definitions and their constructors were validated
-% when the program was checked. Ports the `recordHsDiags` call in
-% `typeCheckGoals`.
+% when the program was checked.
 %
 % Goal `i` is unit `i`, matching the walk in `tc2_walk.chr`. Goals have
-% no annotated AST node — the old checker's goal context carries the
-% empty `Atom ""` as its origin — so nothing is echoed as the offending
-% source and the caller's location and label are used throughout.
+% no annotated AST node, so their origin is `origin_none` — nothing is
+% echoed as the offending source, and the caller's location and label
+% are used throughout.
 :- function goals_arity_errors(con_env, list(body_goal), diag_label, loc) -> list(error).
 goals_arity_errors(Env, Goals, Label, Loc) ->
     goals_arity_errors_at(Env, Goals, Label, Loc, 0).

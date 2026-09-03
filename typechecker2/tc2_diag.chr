@@ -1,14 +1,14 @@
 % Diagnostic vocabulary for the CHR type-checker (typechecker2).
 %
-% A diagnostic is a self-contained term: unlike the old checker, which
-% hands the Haskell driver an integer handle into a live context table,
-% every `error/3` and `warning/3` here carries the source position and
-% the label it should be rendered with. Decoding on the Haskell side
-% (`src/YCHR/Internal/TypeCheck/V2.hs`) therefore needs no session
-% state beyond the encoder's annotation-id map.
+% A diagnostic is a self-contained term: every `error/3` and
+% `warning/3` carries the source position and the label it should be
+% rendered with, rather than a handle into a table the reporter would
+% have to keep alive. Decoding on the Haskell side
+% (`src/YCHR/Internal/TypeCheck.hs`) therefore needs no session state
+% beyond the encoder's annotation-id map.
 %
-% Rendering stays in Haskell so that the messages stay byte-identical
-% to the old checker's: a label is a structured term here, not a
+% Rendering stays in Haskell, where the rest of the compiler's
+% diagnostics are formatted: a label is a structured term here, not a
 % pre-formatted string.
 :- module('$tc2_diag', [
     type(diag_label/0),
@@ -55,8 +55,8 @@
 %     that belongs to no annotated node. The declaration checks are
 %     the case: a malformed constructor field is attributed to its
 %     enclosing type declaration, which is a `TypeDefinition` and
-%     carries no `AnnP`, so the old checker echoes the bare type name.
-%     The atom is a mangled name and the driver unmangles it.
+%     carries no `AnnP`, so what is echoed is the bare type name. The
+%     atom is a mangled name and the Haskell side unmangles it.
 %   * `origin_none` — nothing to echo (a top-level goal's diagnostic).
 :- chr_type diag_origin ---> origin_ann(int)
                            ; origin_atom(any)
@@ -105,7 +105,7 @@ bump_unit(unit(U)) -> unit(U + 1).
 %     `error(_, bound_unsatisfied, tpair(...))` type-checks.
 %
 % What actually rejects a malformed detail is `decodeError`
-% (`src/YCHR/Internal/TypeCheck/V2.hs`), which pattern-matches the
+% (`src/YCHR/Internal/TypeCheck.hs`), which pattern-matches the
 % detail per code and calls `malformed` otherwise. That is why the
 % solver wraps its bare names in `mangled_name` — for the decoder, not
 % for the type-checker. See the `error_payload` note below for the
@@ -128,7 +128,7 @@ bump_unit(unit(U)) -> unit(U + 1).
 % for errors and warnings alike, so it is a trade, not a free win.
 
 % Atoms used as the `Code` field of `error/3`. Each one pairs with a
-% branch of `decodeError` in `src/YCHR/Internal/TypeCheck/V2.hs` that
+% branch of `decodeError` in `src/YCHR/Internal/TypeCheck.hs` that
 % turns the `(code, detail)` pair into a `TypeCheckError`. Five of the
 % eight take an `error_detail` constructor named after them and
 % suffixed `_d`; the other three are `inconsistent` (a `tpair`),
@@ -153,18 +153,19 @@ bump_unit(unit(U)) -> unit(U + 1).
 %
 % The `_d` constructors carry the fields of the corresponding
 % `TypeCheckError` variant, in the same order, with names left as
-% mangled atoms for the driver to render. `duplicate_constructor_d`'s
-% second field is the `(type name, arity)` of every declaration of the
-% clashing constructor, ordered by declaration position.
+% mangled atoms for the Haskell side to render.
+% `duplicate_constructor_d`'s second field is the `(type name, arity)`
+% of every declaration of the clashing constructor, ordered by
+% declaration position.
 %
 % `mangled_name` and `source_name` both wrap a name; they differ in the
-% spelling the driver renders it with. The two spellings differ only
-% for a name the mangling escaped — a non-ASCII one — and the old
-% checker is inconsistent about which it uses: its solver reports a
-% name and renders it with the escapes still in it, while the one
-% diagnostic it builds in Haskell (`checkClassFunction`'s
-% `no_matching_overload`) spells the name properly. `mangled_name`
-% keeps the first behaviour, `source_name` asks for the second.
+% spelling the Haskell side renders it with. The two differ only for a
+% name the mangling escaped — a non-ASCII one — and which wrapper a
+% report site uses is not uniform: the solver's `no_matching_overload`
+% leaves the escapes in (`mangled_name`), while the one the
+% class-function search reports for an equation that fits no signature
+% spells the name properly (`source_name`). Both spellings are
+% user-visible, so the asymmetry is kept rather than unified.
 :- chr_type error_detail ---> tpair(any, any)
                             ; mangled_name(any)
                             ; source_name(any)
@@ -185,8 +186,7 @@ rule_label(just(N)) -> label_rule(N).
 % ---------------------------------------------------------------------
 %
 % The checking phase reports as it goes and the entry point drains the
-% two lists at the end, exactly as the old checker's CHR program does
-% (`errors/1` / `collect/1` in `typechecker/typechecker.chr`). The pure
+% two lists at the end. The pure
 % declaration checks of `tc2_pure.chr` do not go through here: an
 % `error/3` is data, so they return their diagnostics directly and
 % `tc2_main` concatenates the two sources.
@@ -220,13 +220,13 @@ collect_all_warnings @
 % (docs/reference/type-system.md §Inaccessible branches): under a
 % contradiction the unit's types are not what the source says, so its
 % dead-branch verdicts describe the checker's recovery rather than the
-% program. Ports `collectDiagnostics` (TypeCheck.hs).
+% program.
 %
-% `no_unit` is deliberately not collected: the old checker's
-% whole-program diagnostics are gathered outside the session and so
-% suppress nothing. Warnings never carry `no_unit` today, but relying
-% on that would make a future goal-level warning silently disappear
-% behind an unrelated duplicate-constructor error.
+% `no_unit` is deliberately not collected: a whole-program diagnostic
+% belongs to no checking unit and so suppresses nothing. Warnings never
+% carry `no_unit` today, but relying on that would make a future
+% goal-level warning silently disappear behind an unrelated
+% duplicate-constructor error.
 :- function suppress_warnings(list(error), list(warning)) -> list(warning).
 suppress_warnings(Errs, Ws) -> keep_warnings(error_units(Errs), Ws).
 

@@ -1,0 +1,23 @@
+% A `requiring` bound is discharged at the use site, and a goal
+% argument is a use site like any other: `bad_bound` instantiates
+% `pick_max` at `string`, where no declared `gt` signature can satisfy
+% the bound, and is rejected before the query runs. `ok_bound` pins
+% that an instantiation the bound does cover still goes through.
+%
+% The companion of `typecheck_goal_overload/`: the two together are the
+% goal path's coverage of YCHR-60012 and YCHR-60006.
+:- module(tgb, [keep/2, fun pick_max/2, fun gt/2]).
+:- use_module(library(prelude)).
+
+:- chr_constraint keep(any, any).
+
+% Only int and float overloads — no string variant.
+:- class (gt(int, int) -> bool), (gt(float, float) -> bool).
+gt(X, Y) -> X > Y.
+
+:- function pick_max(T, T) -> T requiring gt(T, T) -> bool.
+
+pick_max(X, Y) | gt(X, Y) -> X.
+pick_max(_, Y) -> Y.
+
+kept @ keep(X, R) <=> R = X.
