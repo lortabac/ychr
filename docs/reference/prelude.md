@@ -263,6 +263,7 @@ itself rather than delegated to host calls. Imports
 | `cons(T, list(T)) -> list(T)` | Prepend an element. |
 | `head/1`, `tail/1` | First element / everything after it. Partial: a runtime error on `[]`. |
 | `length(list(T)) -> int` | Number of elements. |
+| `same_length(list(A), list(B)) -> bool` | Whether two lists have the same number of elements, without counting either. |
 | `member(T, list(T)) -> bool` | Membership test, using `==`. |
 | `append(list(T), list(T)) -> list(T)` | Concatenate two lists. |
 | `concat(list(list(T))) -> list(T)` | Flatten one level of nesting. |
@@ -274,6 +275,7 @@ itself rather than delegated to host calls. Imports
 | `foldr(fun(A, B) -> B end, B, list(A)) -> B` | Right fold with an initial accumulator. |
 | `zip_with(fun(A, B) -> C end, list(A), list(B)) -> list(C)` | Combine two lists element-wise, stopping at the shorter one. (To pair them up instead, see `zip/2` in [`pairs`](#pairs).) |
 | `all(fun(A) -> bool end, list(A)) -> bool` | True when every element satisfies the predicate. |
+| `all2(fun(A, B) -> bool end, list(A), list(B)) -> bool` | Pairwise `all`: the predicate holds of every pair at the same position, and the lengths agree. `false` on a length mismatch. |
 | `any(fun(A) -> bool end, list(A)) -> bool` | True when some element does. |
 | `take(int, list(T)) -> list(T)` | The first `N` elements; the whole list if it is shorter, `[]` for `N =< 0`. |
 | `drop(int, list(T)) -> list(T)` | Everything after the first `N` elements; `[]` if the list is shorter, the whole list for `N =< 0`. |

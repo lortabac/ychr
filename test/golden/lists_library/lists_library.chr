@@ -9,6 +9,8 @@
     zipped_short_first/1,
     quantified/2,
     quantified_flipped/2,
+    same_lengths/3,
+    pairwise/5,
     empties/3,
     taken/2,
     dropped/2,
@@ -34,6 +36,8 @@
     zipped_short_first/1,
     quantified/2,
     quantified_flipped/2,
+    same_lengths/3,
+    pairwise/5,
     empties/3,
     taken/2,
     dropped/2,
@@ -97,3 +101,20 @@ sorted(R) <=> R is sort_by(fun(A, B) -> A < B end, [3, 1, 2]).
 sorted_ties(R) <=> R is sort_by(fun(_, _) -> false end, [3, 1, 2]).
 
 indexed(N, R) <=> R is nth_maybe(N, [1, 2, 3]).
+
+same_lengths(A, B, C) <=>
+    A is same_length([1, 2], ["a", "b"]),
+    B is same_length([1], ["a", "b"]),
+    C is same_length([1, 2, 3], ["a", "b"]).
+
+% `all2` is the conjunction of a length check and a pointwise one: a
+% predicate that fails and a length mismatch are both `false`. Both
+% directions of the mismatch are covered, because they exit through
+% different equations: a short first list runs out at the `[]`/`[_|_]`
+% pair, a short second one at `[_|_]`/`[]`.
+pairwise(A, B, C, D, E) <=>
+    A is all2(fun(X, Y) -> X < Y end, [1, 2], [10, 20]),
+    B is all2(fun(X, Y) -> X < Y end, [1, 2], [10, 0]),
+    C is all2(fun(X, Y) -> X < Y end, [1], [10, 20]),
+    D is all2(fun(X, Y) -> X < Y end, [1, 2], [10]),
+    E is all2(fun(X, Y) -> X < Y end, [], []).

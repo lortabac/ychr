@@ -5,6 +5,10 @@
 % representation, the meet table, overload resolution, bound discharge
 % and the guard-derived-evidence rules.
 %
+% The list traversals here go through `library(lists)` and
+% `library(pairs)` rather than hand-rolled recursion; the cost of that
+% is recorded once, in `skel.chr`'s header.
+%
 % Three things about its interfaces, all load-bearing:
 %
 %   * the module name. The type representation below is what
@@ -30,6 +34,8 @@
     type(ev_depth/0),
     type(bound_named/0),
     type(bcand/0),
+    fun bc_ambs/1,
+    fun bc_decls/1,
     constraint_sig/3,
     function_sig/3,
     function_sigs/3,
@@ -54,6 +60,7 @@
 :- use_module('$tc_diag').
 :- use_module(library(prelude)).
 :- use_module(library(lists)).
+:- use_module(library(maybe)).
 :- use_module(library(pairs)).
 
 % Type-representation algebraic type. `encode_ty` in `walk.chr`
@@ -150,8 +157,8 @@
 % (docs/reference/type-system.md §What evidence does).
 :- chr_type ev_depth ---> ev_top ; ev_param.
 
-% A named bound signature inside a `requiring` clause: the bound
-% function's flat-atom name together with the argument-types and
+% One signature inside a `requiring` clause: the *bound-named
+% function*'s flat-atom name together with the argument-types and
 % return-type of its required signature. The fields share logical
 % variables with the enclosing declaration's primary signature; both
 % are bundled in `function_bounds` / `constraint_bounds` so a single
@@ -168,12 +175,12 @@
 % freshly renamed (`copy_term`) at commit time so no use site can
 % pollute the stored declaration. A bounded declared signature
 % additionally carries its bounds (sharing variables with the
-% signature, copied together at commit) and the candidate signature
-% lists for each bound's named function.
+% signature, copied together at commit) and the candidate signatures
+% for its bounds, keyed on the bound-named function.
 :- chr_type cand
     ---> amb(fun_sig_t)
        ; decl(fun_sig_t)
-       ; decl_bounded(fun_sig_t, list(bound_named), list(bcand)).
+       ; decl_bounded(fun_sig_t, list(bound_named), list(pair(any, bcand))).
 
 % Candidate signatures for one bound's named function, assembled by
 % `walk.chr` at emission time (the discharge rules are pure and
@@ -183,8 +190,20 @@
 % consistent declared witness is stable; an ambient signature may
 % share still-flexible variables with the enclosing scope, so it can
 % witness success only once its own leaves are solid.
+%
+% The candidate sets for a whole `requiring` clause travel as an
+% association list keyed on the bound-named function's flat-atom name
+% (`list(pair(any, bcand))`), so `emit_bounds` reaches a bound's
+% candidates with one `assoc_get`.
 :- chr_type bcand
-    ---> bc(any, list(fun_sig_t), list(fun_sig_t)).
+    ---> bc(list(fun_sig_t), list(fun_sig_t)).
+
+:- function
+    (bc_ambs(bcand) -> list(fun_sig_t)),
+    (bc_decls(bcand) -> list(fun_sig_t)).
+
+bc_ambs(bc(Ambs, _)) -> Ambs.
+bc_decls(bc(_, Decls)) -> Decls.
 
 :- chr_constraint
     constraint_sig(any, int, list(ty)),
@@ -193,10 +212,12 @@
     function_bounds(any, int, list(bound_named)),
     constraint_bounds(any, int, list(bound_named)),
     con_sig(any, con_sig_t),
-    check_constraint_use(any, int, list(bcand), list(ty), ctx),
-    check_function_use(any, int, list(bcand), list(ty), ty, ctx),
-    check_function_use_with_ambient(any, int, list(fun_sig_t), list(bcand), list(ty), ty, ctx),
-    check_function_ref(any, int, list(fun_sig_t), list(bcand), list(ty), ty, ctx),
+    check_constraint_use(any, int, list(pair(any, bcand)), list(ty), ctx),
+    check_function_use(any, int, list(pair(any, bcand)), list(ty), ty, ctx),
+    check_function_use_with_ambient(any, int, list(fun_sig_t),
+                                    list(pair(any, bcand)), list(ty), ty, ctx),
+    check_function_ref(any, int, list(fun_sig_t), list(pair(any, bcand)),
+                       list(ty), ty, ctx),
     resolve_funref(any, list(cand), list(ty), ty, ctx),
     check_constructor_use(any, list(ty), ty, ctx),
     check_unify(ty, ty, ctx),
@@ -216,7 +237,7 @@
     resolve_overload(any, list(cand), list(ty), ty, ctx),
     commit_candidate(list(cand), list(ty), ty, ctx),
     check_bound(any, list(fun_sig_t), list(fun_sig_t), list(ty), ty, ctx),
-    emit_bounds(list(bound_named), list(bcand), ctx).
+    emit_bounds(list(bound_named), list(pair(any, bcand)), ctx).
 
 :- function
     (sig_args(fun_sig_t) -> list(ty)),
@@ -231,45 +252,24 @@ sig_parent(csig(Parent, _)) -> Parent.
 sig_fields(csig(_, Fields)) -> Fields.
 
 :- function
-    (all_nonvar_list(list(any)) -> bool),
     (cand_sig(cand) -> fun_sig_t),
     (wrap_ambs(list(fun_sig_t)) -> list(cand)),
     (wrap_decls(list(fun_sig_t)) -> list(cand)),
-    (bcand_ambs(any, list(bcand)) -> list(fun_sig_t)),
-    (bcand_decls(any, list(bcand)) -> list(fun_sig_t)),
     (filter_consistent(list(cand), list(ty)) -> list(cand)),
     (sig_args_consistent(list(ty), list(ty)) -> bool),
-    (candidates_committable(list(cand)) -> bool),
-    (cands_all_equal(fun_sig_t, list(cand)) -> bool),
-    (no_candidate_consistent(list(cand), list(ty)) -> bool).
-
-all_nonvar_list([]) -> true.
-all_nonvar_list([X|_]) | var(X) -> false.
-all_nonvar_list([_|Xs]) -> all_nonvar_list(Xs).
+    (candidates_committable(list(cand)) -> bool).
 
 cand_sig(amb(Sig)) -> Sig.
 cand_sig(decl(Sig)) -> Sig.
 cand_sig(decl_bounded(Sig, _, _)) -> Sig.
 
-wrap_ambs([]) -> [].
-wrap_ambs([Sig | Rest]) -> [amb(Sig) | wrap_ambs(Rest)].
+wrap_ambs(Sigs) -> maplist(fun(Sig) -> amb(Sig) end, Sigs).
 
-wrap_decls([]) -> [].
-wrap_decls([Sig | Rest]) -> [decl(Sig) | wrap_decls(Rest)].
+wrap_decls(Sigs) -> maplist(fun(Sig) -> decl(Sig) end, Sigs).
 
-bcand_ambs(_, []) -> [].
-bcand_ambs(N, [bc(N, Ambs, _) | _]) -> Ambs.
-bcand_ambs(N, [_ | Rest]) -> bcand_ambs(N, Rest).
-
-bcand_decls(_, []) -> [].
-bcand_decls(N, [bc(N, _, Decls) | _]) -> Decls.
-bcand_decls(N, [_ | Rest]) -> bcand_decls(N, Rest).
-
-filter_consistent([], _) -> [].
-filter_consistent([C|Rest], ArgTypes)
-    | sig_args_consistent(sig_args(cand_sig(C)), ArgTypes) ->
-    [C | filter_consistent(Rest, ArgTypes)].
-filter_consistent([_|Rest], ArgTypes) -> filter_consistent(Rest, ArgTypes).
+filter_consistent(Cands, ArgTypes) ->
+    filter(fun(C) -> sig_args_consistent(sig_args(cand_sig(C)), ArgTypes) end,
+           Cands).
 
 sig_args_consistent(DeclArgs, CallArgs) ->
     is_match_ok(match_ty_list(DeclArgs, CallArgs, match_ok([]))).
@@ -281,30 +281,16 @@ sig_args_consistent(DeclArgs, CallArgs) ->
 % exactly that relation). In the common case exactly one candidate
 % survives.
 candidates_committable([]) -> false.
-candidates_committable([C | Rest]) -> cands_all_equal(cand_sig(C), Rest).
-
-cands_all_equal(_, []) -> true.
-cands_all_equal(Sig, [C | Rest]) | Sig == cand_sig(C) -> cands_all_equal(Sig, Rest).
-cands_all_equal(_, _) -> false.
-
-no_candidate_consistent(Cands, ArgTypes) ->
-    cand_list_empty(filter_consistent(Cands, ArgTypes)).
+candidates_committable([C | Rest]) ->
+    all(fun(C2) -> cand_sig(C) == cand_sig(C2) end, Rest).
 
 % Full-type filtering for function references: unlike a call's
 % resolution, the reference's expected RETURN component participates
 % (spec §Function references — a reference has no argument
 % expressions, so the expected function type is all the checker has).
 :- function (filter_consistent_full(list(cand), list(ty), ty) -> list(cand)).
-filter_consistent_full([], _, _) -> [].
-filter_consistent_full([C|Rest], ArgTypes, RetType)
-    | sig_one_consistent(cand_sig(C), ArgTypes, RetType) ->
-    [C | filter_consistent_full(Rest, ArgTypes, RetType)].
-filter_consistent_full([_|Rest], ArgTypes, RetType) ->
-    filter_consistent_full(Rest, ArgTypes, RetType).
-
-:- function (cand_list_empty(list(cand)) -> bool).
-cand_list_empty([]) -> true.
-cand_list_empty(_) -> false.
+filter_consistent_full(Cands, ArgTypes, RetType) ->
+    filter(fun(C) -> sig_consistent(cand_sig(C), ArgTypes, RetType) end, Cands).
 
 % ==========================================================================
 % Consistency matcher (pure, no var binding)
@@ -318,63 +304,70 @@ cand_list_empty(_) -> false.
 % by binding, so the matcher never mutates solver state and is safe
 % to call from guards.
 %
-% The substitution records, for a variable on either side, the term
-% it first met (keyed by variable identity via `==`); a later
-% occurrence of the same variable must be consistent with the
-% recorded term. This is what rejects `g(A, A)` against
-% `(int, string)` — per-position independence would accept it.
+% The substitution is an association list from a type variable to the
+% term it first met, keyed by variable identity — which is exactly
+% what `library(pairs)`' `assoc_get` means by a key, since it compares
+% with `==` and an unbound key therefore matches that same variable
+% and nothing else. A later occurrence of the same variable must be
+% consistent with the recorded term. This is what rejects `g(A, A)`
+% against `(int, string)` — per-position independence would accept it.
 % Known approximation: the repeat check compares with
-% `existential_consistent`, which does not thread the substitution
+% `ty_consistent`, which does not thread the substitution
 % further into the recorded term; nested shared variables are
 % checked leniently (in the gradual, non-rejecting direction).
 
-% One entry of the trial substitution: a type variable, and the type it
-% was first matched against.
-:- chr_type match_entry ---> maps_to(ty, ty).
-
 % What the matcher returns: either the two types are inconsistent, or
 % they match under the accumulated substitution.
-:- chr_type match_result ---> match_failed ; match_ok(list(match_entry)).
-
-% The outcome of looking a variable up in the substitution.
-:- chr_type match_lookup ---> not_found ; found(ty).
+:- chr_type match_result ---> match_failed ; match_ok(list(pair(ty, ty))).
 
 :- function
     (match_ty(ty, ty, match_result) -> match_result),
     (match_ty_list(list(ty), list(ty), match_result) -> match_result),
-    (match_var(ty, ty, match_lookup, list(match_entry)) -> match_result),
-    (lookup_match_entry(ty, list(match_entry)) -> match_lookup),
+    (match_var(ty, ty, maybe(ty), list(pair(ty, ty))) -> match_result),
     (is_match_ok(match_result) -> bool).
 
+% A failed match absorbs, and this first equation is where: it matches
+% on the incoming result alone, so no later equation ever sees
+% `match_failed`. That is what lets `match_ty_list` fold over the whole
+% pair list without a short-circuit — the remaining elements each cost
+% one call that returns immediately.
 match_ty(_, _, match_failed) -> match_failed.
-match_ty(D, A, match_ok(S)) | var(D) ->
-    match_var(D, A, lookup_match_entry(D, S), S).
-match_ty(D, A, match_ok(S)) | var(A) ->
-    match_var(A, D, lookup_match_entry(A, S), S).
+% §Type variables and instantiation, ahead of the structural rules: a
+% variable on either side is resolved through the substitution.
+match_ty(D, A, match_ok(S)) | var(D) -> match_var(D, A, assoc_get(D, S), S).
+match_ty(D, A, match_ok(S)) | var(A) -> match_var(A, D, assoc_get(A, S), S).
+% [C-Any-L] / [C-Any-R].
 match_ty(ty_any, _, S) -> S.
 match_ty(_, ty_any, S) -> S.
+% [C-Refl] over the base types.
 match_ty(ty_int, ty_int, S) -> S.
 match_ty(ty_float, ty_float, S) -> S.
 match_ty(ty_string, ty_string, S) -> S.
+% A rigid tvar is consistent with itself; a pinned one is consistent
+% with whatever its cell holds.
 match_ty(rigid(C, N), rigid(C, N), S) -> S.
 match_ty(rigid(C, _), A, S) | nonvar(C) -> match_ty(C, A, S).
 match_ty(D, rigid(C, _), S) | nonvar(C) -> match_ty(D, C, S).
+% [C-Con] and [C-Fun].
 match_ty(tcon(C, A1), tcon(C, A2), S) -> match_ty_list(A1, A2, S).
 match_ty(fun(A1, R1), fun(A2, R2), S) -> match_ty(R1, R2, match_ty_list(A1, A2, S)).
 match_ty(_, _, _) -> match_failed.
 
-match_ty_list(_, _, match_failed) -> match_failed.
-match_ty_list([], [], S) -> S.
-match_ty_list([X|Xs], [Y|Ys], S) -> match_ty_list(Xs, Ys, match_ty(X, Y, S)).
-match_ty_list(_, _, _) -> match_failed.
+% [C-Con] / [C-Fun] both require equal argument counts, so this is
+% `zip_exact` rather than `zip`: a length mismatch is an inconsistency,
+% not a match over the common prefix. Pairing and length-checking in
+% the one traversal matters — this is the innermost step of every
+% consistency check.
+match_ty_list(Xs, Ys, S) ->
+    foldr_maybe(match_failed,
+                fun(Ps) ->
+                    foldl(fun(S1, P) -> match_ty(key(P), value(P), S1) end, S, Ps)
+                end,
+                zip_exact(Xs, Ys)).
 
-match_var(V, T, not_found, S) -> match_ok([maps_to(V, T) | S]).
-match_var(_, T, found(T0), S) | existential_consistent(T0, T) -> match_ok(S).
+match_var(V, T, nothing, S) -> match_ok([kv(V, T) | S]).
+match_var(_, T, just(T0), S) | ty_consistent(T0, T) -> match_ok(S).
 match_var(_, _, _, _) -> match_failed.
-
-lookup_match_entry(_, []) -> not_found.
-lookup_match_entry(V, [maps_to(K, T) | _]) | V == K -> found(T).
-lookup_match_entry(V, [_ | Rest]) -> lookup_match_entry(V, Rest).
 
 is_match_ok(match_ok(_)) -> true.
 is_match_ok(match_failed) -> false.
@@ -383,25 +376,28 @@ is_match_ok(match_failed) -> false.
 % Bounded polymorphism helpers (pure functions, no var binding)
 % ==========================================================================
 
-% Existential consistency: deep, non-binding consistency between two
-% type-structures. Unlike `tc_unify` this never binds any variable,
-% so it is safe to call from `check_bound`'s discharge guard when we
-% need to know "does any candidate signature exist that is consistent
-% with the substituted bound?" without modifying the surrounding
-% solver state.
+% The consistency relation of spec §Consistency (τ₁ ~ τ₂), extended
+% with the type-variable rules of §Type variables and instantiation:
+% deep structural consistency between two type-structures, decided
+% position by position with no shared substitution. That last part is
+% what distinguishes it from the matcher above, which threads one —
+% both are equally non-binding.
+% Unlike `tc_unify` it never binds any variable, so it is safe to call
+% from `check_bound`'s discharge guard when we need to know "does any
+% candidate signature exist that is consistent with the substituted
+% bound?" without modifying the surrounding solver state.
 :- function
-    (existential_consistent(ty, ty) -> bool),
-    (existential_consistent_list(list(ty), list(ty)) -> bool),
-    (sig_one_consistent(fun_sig_t, list(ty), ty) -> bool),
-    (sig_existential(list(fun_sig_t), list(ty), ty) -> bool).
+    (ty_consistent(ty, ty) -> bool),
+    (sig_consistent(fun_sig_t, list(ty), ty) -> bool),
+    (any_sig_consistent(list(fun_sig_t), list(ty), ty) -> bool).
 
-existential_consistent(T, _) | var(T) -> true.
-existential_consistent(_, T) | var(T) -> true.
-existential_consistent(ty_any, _) -> true.
-existential_consistent(_, ty_any) -> true.
-existential_consistent(ty_int, ty_int) -> true.
-existential_consistent(ty_float, ty_float) -> true.
-existential_consistent(ty_string, ty_string) -> true.
+ty_consistent(T, _) | var(T) -> true.
+ty_consistent(_, T) | var(T) -> true.
+ty_consistent(ty_any, _) -> true.
+ty_consistent(_, ty_any) -> true.
+ty_consistent(ty_int, ty_int) -> true.
+ty_consistent(ty_float, ty_float) -> true.
+ty_consistent(ty_string, ty_string) -> true.
 % Same-rigid succeeds; different-rigid (rigid(_, N), rigid(_, M) with
 % N≠M) falls through to the `(_, _) -> false` fallthrough below, so two
 % distinct rigid identities are deliberately inconsistent. This is
@@ -409,18 +405,13 @@ existential_consistent(ty_string, ty_string) -> true.
 % candidate that doesn't share the call site's rigid σ. A *pinned*
 % rigid (evidence bound its cell) is consistent with whatever its cell
 % holds.
-existential_consistent(rigid(C, N), rigid(C, N)) -> true.
-existential_consistent(rigid(C, _), T) | nonvar(C) -> existential_consistent(C, T).
-existential_consistent(T, rigid(C, _)) | nonvar(C) -> existential_consistent(T, C).
-existential_consistent(tcon(C, A1), tcon(C, A2)) -> existential_consistent_list(A1, A2).
-existential_consistent(fun(A1, R1), fun(A2, R2))
-    | existential_consistent_list(A1, A2) -> existential_consistent(R1, R2).
-existential_consistent(_, _) -> false.
-
-existential_consistent_list([], []) -> true.
-existential_consistent_list([X|Xs], [Y|Ys])
-    | existential_consistent(X, Y) -> existential_consistent_list(Xs, Ys).
-existential_consistent_list(_, _) -> false.
+ty_consistent(rigid(C, N), rigid(C, N)) -> true.
+ty_consistent(rigid(C, _), T) | nonvar(C) -> ty_consistent(C, T).
+ty_consistent(T, rigid(C, _)) | nonvar(C) -> ty_consistent(T, C).
+ty_consistent(tcon(C, A1), tcon(C, A2)) -> all2(fun ty_consistent/2, A1, A2).
+ty_consistent(fun(A1, R1), fun(A2, R2))
+    | all2(fun ty_consistent/2, A1, A2) -> ty_consistent(R1, R2).
+ty_consistent(_, _) -> false.
 
 % A single declared signature is consistent with the substituted
 % bound when its argument list and return type match under one shared
@@ -429,19 +420,17 @@ existential_consistent_list(_, _) -> false.
 % `g(int, string)` — the first occurrence commits `A` and the second
 % must agree. Per-position independence used to accept exactly that,
 % making repeated-variable bounds vacuously satisfiable.
-sig_one_consistent(fsig(DeclArgs, DeclRet), SubArgs, SubRet) ->
+sig_consistent(fsig(DeclArgs, DeclRet), SubArgs, SubRet) ->
     is_match_ok(
         match_ty(DeclRet, SubRet,
                  match_ty_list(DeclArgs, SubArgs, match_ok([])))).
 
-% True when at least one declared signature in the list is consistent
-% with the substituted bound. Implements the existence semantics of
-% `check_bound`: any matching candidate discharges the bound, without
-% committing to a particular candidate.
-sig_existential([], _, _) -> false.
-sig_existential([Sig|_], SubArgs, SubRet)
-    | sig_one_consistent(Sig, SubArgs, SubRet) -> true.
-sig_existential([_|Rest], SubArgs, SubRet) -> sig_existential(Rest, SubArgs, SubRet).
+% The spec's *existence check* (§Bounded Polymorphism §Use-site
+% checking): true when at least one declared signature in the list is
+% consistent with the substituted bound. Any matching candidate
+% discharges the bound, without committing to a particular candidate.
+any_sig_consistent(Sigs, SubArgs, SubRet) ->
+    any(fun(Sig) -> sig_consistent(Sig, SubArgs, SubRet) end, Sigs).
 
 % True when no candidate signature is consistent with the substituted
 % bound. Meaningful on a *partial* substitution too: a free variable
@@ -449,9 +438,8 @@ sig_existential([_|Rest], SubArgs, SubRet) -> sig_existential(Rest, SubArgs, Sub
 % rules), so a ruled-out verdict cannot be un-ruled by later
 % bindings — consistency only shrinks as information is added.
 :- function (bound_ruled_out(list(fun_sig_t), list(ty), ty) -> bool).
-bound_ruled_out(Sigs, SubArgs, SubRet)
-    | sig_existential(Sigs, SubArgs, SubRet) -> false.
-bound_ruled_out(_, _, _) -> true.
+bound_ruled_out(Sigs, SubArgs, SubRet) ->
+    not(any_sig_consistent(Sigs, SubArgs, SubRet)).
 
 % A *stable* witness: consistent with the substituted bound AND with
 % no leaf that could still be bound (rigid counts as solid). Used
@@ -461,21 +449,25 @@ bound_ruled_out(_, _, _) -> true.
 % a later binding could invalidate the witness with the check
 % already gone, making accept/reject depend on body order.
 :- function
-    (sig_existential_stable(list(fun_sig_t), list(ty), ty) -> bool),
+    (any_sig_stable_witness(list(fun_sig_t), list(ty), ty) -> bool),
     (sig_stable_witness(fun_sig_t, list(ty), ty) -> bool),
     (sig_ground(fun_sig_t) -> bool).
 
-sig_existential_stable([], _, _) -> false.
-sig_existential_stable([Sig|_], SubArgs, SubRet)
-    | sig_stable_witness(Sig, SubArgs, SubRet) -> true.
-sig_existential_stable([_|Rest], SubArgs, SubRet) ->
-    sig_existential_stable(Rest, SubArgs, SubRet).
+any_sig_stable_witness(Sigs, SubArgs, SubRet) ->
+    any(fun(Sig) -> sig_stable_witness(Sig, SubArgs, SubRet) end, Sigs).
 
 sig_stable_witness(Sig, SubArgs, SubRet)
-    | sig_ground(Sig) -> sig_one_consistent(Sig, SubArgs, SubRet).
+    | sig_ground(Sig) -> sig_consistent(Sig, SubArgs, SubRet).
 sig_stable_witness(_, _, _) -> false.
 
-sig_ground(fsig(Args, Ret)) | ty_concrete_list(Args) -> ty_concrete(Ret).
+% A signature is ground exactly when its own argument list and return
+% type are — the same check `sub_ground` applies to a substitution.
+% The wildcard equation is not reachable through the `fun_sig_t` type
+% (`fsig` is its only constructor); it is what makes an unbound
+% argument answer `false` instead of raising, so that a candidate the
+% checker knows nothing about is merely skipped by
+% `any_sig_stable_witness` rather than aborting the scan.
+sig_ground(fsig(Args, Ret)) -> sub_ground(Args, Ret).
 sig_ground(_) -> false.
 
 % Ground-substitution check: true when every leaf of @SubArgs@ and
@@ -484,10 +476,9 @@ sig_ground(_) -> false.
 % that lacks the information to fail is not a failure.
 :- function
     (sub_ground(list(ty), ty) -> bool),
-    (ty_concrete(ty) -> bool),
-    (ty_concrete_list(list(ty)) -> bool).
+    (ty_concrete(ty) -> bool).
 
-sub_ground(Args, Ret) | ty_concrete_list(Args) -> ty_concrete(Ret).
+sub_ground(Args, Ret) | all(fun ty_concrete/1, Args) -> ty_concrete(Ret).
 sub_ground(_, _) -> false.
 
 ty_concrete(T) | var(T) -> false.
@@ -495,8 +486,8 @@ ty_concrete(ty_any) -> true.
 ty_concrete(ty_int) -> true.
 ty_concrete(ty_float) -> true.
 ty_concrete(ty_string) -> true.
-ty_concrete(tcon(_, Args)) -> ty_concrete_list(Args).
-ty_concrete(fun(Args, Ret)) | ty_concrete_list(Args) -> ty_concrete(Ret).
+ty_concrete(tcon(_, Args)) -> all(fun ty_concrete/1, Args).
+ty_concrete(fun(Args, Ret)) | all(fun ty_concrete/1, Args) -> ty_concrete(Ret).
 % A rigid tvar is treated as concrete for the purpose of
 % `sub_ground`. It is structurally ground (a fully-specified term)
 % even though it stands for an abstract type — the gradual guarantee
@@ -507,10 +498,6 @@ ty_concrete(fun(Args, Ret)) | ty_concrete_list(Args) -> ty_concrete(Ret).
 ty_concrete(rigid(C, _)) | nonvar(C) -> ty_concrete(C).
 ty_concrete(rigid(_, _)) -> true.
 ty_concrete(_) -> false.
-
-ty_concrete_list([]) -> true.
-ty_concrete_list([T|Rest]) | ty_concrete(T) -> ty_concrete_list(Rest).
-ty_concrete_list(_) -> false.
 
 % ==========================================================================
 % Declaration matching
@@ -710,7 +697,7 @@ resolve_funref_fire @
 
 resolve_funref_none @
     resolve_funref(Name, Cands, ArgTypes, RetTypeVar, Ctx) <=>
-        cand_list_empty(filter_consistent_full(Cands, ArgTypes, RetTypeVar)) |
+        filter_consistent_full(Cands, ArgTypes, RetTypeVar) == [] |
     report_error(Ctx, no_matching_overload, mangled_name(Name)).
 
 % ==========================================================================
@@ -723,21 +710,14 @@ resolve_funref_none @
 % surrounding match rule copy_term'd them together with the function's
 % signature), so the discharge rules see a substitution that is
 % consistent with the call.
-:- function
-    (nbound_name(bound_named) -> any),
-    (nbound_args(bound_named) -> list(ty)),
-    (nbound_ret(bound_named) -> ty).
-nbound_name(nbound(N, _, _)) -> N.
-nbound_args(nbound(_, A, _)) -> A.
-nbound_ret(nbound(_, _, R)) -> R.
-
+%
+% `BoundCands` is keyed on the bound-named function, so each entry
+% costs one `assoc_get`; a bound whose name has no entry (no ambient
+% and no declared candidate) discharges against two empty lists.
 emit_bounds_done @ emit_bounds([], _, _) <=> true.
-emit_bounds_step @ emit_bounds([B | Rest], BoundCands, Ctx) <=>
-    GName is nbound_name(B),
-    BArgs is nbound_args(B),
-    BRet is nbound_ret(B),
-    check_bound(GName, bcand_ambs(GName, BoundCands),
-                bcand_decls(GName, BoundCands), BArgs, BRet, Ctx),
+emit_bounds_step @ emit_bounds([nbound(GName, BArgs, BRet) | Rest], BoundCands, Ctx) <=>
+    BC is from_maybe(bc([], []), assoc_get(GName, BoundCands)),
+    check_bound(GName, bc_ambs(BC), bc_decls(BC), BArgs, BRet, Ctx),
     emit_bounds(Rest, BoundCands, Ctx).
 
 % `check_bound` is a residual carrying its complete candidate set —
@@ -766,12 +746,12 @@ emit_bounds_step @ emit_bounds([B | Rest], BoundCands, Ctx) <=>
 discharge_bound_ok_decl @
     check_bound(_, _, DeclSigs, SubArgs, SubRet, _) <=>
         sub_ground(SubArgs, SubRet),
-        sig_existential(DeclSigs, SubArgs, SubRet) | true.
+        any_sig_consistent(DeclSigs, SubArgs, SubRet) | true.
 
 discharge_bound_ok_amb @
     check_bound(_, AmbSigs, _, SubArgs, SubRet, _) <=>
         sub_ground(SubArgs, SubRet),
-        sig_existential_stable(AmbSigs, SubArgs, SubRet) | true.
+        any_sig_stable_witness(AmbSigs, SubArgs, SubRet) | true.
 
 discharge_bound_fail @
     check_bound(GName, AmbSigs, DeclSigs, SubArgs, SubRet, Ctx) <=>
@@ -893,7 +873,7 @@ guard_match_any @
 guard_match_meet @
     con_sig(Con, Sig) \
         check_guard_match(T, Con, _, Slots, Ctx) <=>
-        existential_consistent(sig_parent(Sig), T) |
+        ty_consistent(sig_parent(Sig), T) |
     Fresh is copy_term(quote(Sig)),
     tc_unify(T, sig_parent(Fresh), Ctx),
     tc_unify_list(Slots, sig_fields(Fresh), Ctx).
@@ -948,27 +928,27 @@ unknown_guard_getarg @
 % term hangs the compiler outright rather than merely producing a
 % strange type.
 
-:- function
-    (ty_occurs(ty, ty) -> bool),
-    (ty_occurs_list(ty, list(ty)) -> bool).
+:- function (ty_occurs(ty, ty) -> bool).
 
 ty_occurs(C, T) | var(T), C == T -> true.
 ty_occurs(_, T) | var(T) -> false.
 ty_occurs(C, rigid(C2, _)) | C == C2 -> true.
 ty_occurs(C, rigid(C2, _)) | nonvar(C2) -> ty_occurs(C, C2).
 ty_occurs(_, rigid(_, _)) -> false.
-ty_occurs(C, tcon(_, Args)) -> ty_occurs_list(C, Args).
-ty_occurs(C, fun(Args, _)) | ty_occurs_list(C, Args) -> true.
+ty_occurs(C, tcon(_, Args)) -> any(fun(T) -> ty_occurs(C, T) end, Args).
+ty_occurs(C, fun(Args, _)) | any(fun(T) -> ty_occurs(C, T) end, Args) -> true.
 ty_occurs(C, fun(_, Ret)) -> ty_occurs(C, Ret).
 ty_occurs(_, _) -> false.
-
-ty_occurs_list(_, []) -> false.
-ty_occurs_list(C, [T|_]) | ty_occurs(C, T) -> true.
-ty_occurs_list(C, [_|Rest]) -> ty_occurs_list(C, Rest).
 
 % ==========================================================================
 % tc_unify (type propagation and consistency)
 % ==========================================================================
+%
+% The meet table of docs/reference/type-system.md §Type states, rule
+% for rule: what each pair of type states does to the two slots, and
+% what it reports when the pair has no meet. The rules below are
+% ordered by that table's rows — `any` first, then the solid forms,
+% then the rigid rows, then the flexible ones.
 
 % --- any handling (must come first) ---
 %
@@ -1022,15 +1002,9 @@ tc_unify_string @
 % name+arity, so a well-formed program never produces two same-named
 % tcons of different arity — but declaration-validation gaps can.)
 
-:- function (same_arity(list(ty), list(ty)) -> bool).
-
-same_arity([], []) -> true.
-same_arity([_|Xs], [_|Ys]) -> same_arity(Xs, Ys).
-same_arity(_, _) -> false.
-
 tc_unify_tcon @
     tc_unify(tcon(C, Args1), tcon(C, Args2), Ctx) <=>
-    same_arity(Args1, Args2) |
+    same_length(Args1, Args2) |
     tc_unify_list(Args1, Args2, Ctx).
 
 tc_unify_tcon_arity @
@@ -1039,7 +1013,7 @@ tc_unify_tcon_arity @
 
 tc_unify_fun @
     tc_unify(fun(A1, R1), fun(A2, R2), Ctx) <=>
-    same_arity(A1, A2) |
+    same_length(A1, A2) |
     tc_unify_list(A1, A2, Ctx),
     tc_unify(R1, R2, Ctx).
 
@@ -1332,12 +1306,12 @@ ev_unify_string @
 % contradiction.
 ev_unify_tcon @
     ev_unify(tcon(C, Args1), tcon(C, Args2), _, Ctx) <=>
-    same_arity(Args1, Args2) |
+    same_length(Args1, Args2) |
     ev_unify_list(Args1, Args2, ev_param, Ctx).
 
 ev_unify_fun @
     ev_unify(fun(A1, R1), fun(A2, R2), _, Ctx) <=>
-    same_arity(A1, A2) |
+    same_length(A1, A2) |
     ev_unify_list(A1, A2, ev_param, Ctx),
     ev_unify(R1, R2, ev_param, Ctx).
 
@@ -1462,12 +1436,12 @@ eq_unify_pinned_right @
 % block comment).
 eq_unify_tcon @
     eq_unify(tcon(C, Args1), tcon(C, Args2), _, Ctx) <=>
-    same_arity(Args1, Args2) |
+    same_length(Args1, Args2) |
     eq_unify_list(Args1, Args2, ev_param, Ctx).
 
 eq_unify_fun @
     eq_unify(fun(A1, R1), fun(A2, R2), _, Ctx) <=>
-    same_arity(A1, A2) |
+    same_length(A1, A2) |
     eq_unify_list(A1, A2, ev_param, Ctx),
     eq_unify(R1, R2, ev_param, Ctx).
 
@@ -1519,7 +1493,7 @@ resolve_fire @
 
 resolve_none @
     resolve_overload(Name, Cands, ArgTypes, _, Ctx) <=>
-        no_candidate_consistent(Cands, ArgTypes) |
+        filter_consistent(Cands, ArgTypes) == [] |
     report_error(Ctx, no_matching_overload, mangled_name(Name)).
 
 % Committing applies the first surviving candidate's signature per

@@ -886,10 +886,12 @@ emit_constraint_use1 @
     alloc_lambda_params(list(head_arg), list(pair(any, ty)),
                         list(pair(any, ty)), list(ty)),
     emit_function_call(scope, any, list(ty), ty),
-    emit_call_form(scope, any, int, list(fun_sig_t), list(bcand), list(ty), ty),
+    emit_call_form(scope, any, int, list(fun_sig_t), list(pair(any, bcand)),
+                   list(ty), ty),
     emit_function_ref(scope, any, list(ty), ty),
-    build_bound_cands(scope, list(bound_sig), list(bcand)),
-    bound_cand_entries(scope, list(bound_sig), list(bcand), list(bcand)).
+    build_bound_cands(scope, list(bound_sig), list(pair(any, bcand))),
+    bound_cand_entries(scope, list(bound_sig), list(pair(any, bcand)),
+                       list(pair(any, bcand))).
 
 type_of_expr_var @
     type_of_expr(S, var_e(V), Out) <=> Out is scope_var_ty(S, V).
@@ -1109,11 +1111,11 @@ emit_function_ref1 @
                        scope_ambient(S, amb_key(N, length(ArgTys))),
                        Cands, ArgTys, RetTy, scope_ctx(S)).
 
-% One `bc(name, ambients, declared)` per bound-named function,
-% same-named bounds merged. The discharge rules are pure and cannot
-% gather candidates across the store, so the whole candidate set is
-% assembled here and travels by value. Ambient and declared candidates
-% are kept apart because they discharge differently.
+% One `bc(ambients, declared)` per bound-named function, keyed on that
+% name and with same-named bounds merged. The discharge rules are pure
+% and cannot gather candidates across the store, so the whole candidate
+% set is assembled here and travels by value. Ambient and declared
+% candidates are kept apart because they discharge differently.
 build_bound_cands1 @
     build_bound_cands(S, Bounds, Out) <=> bound_cand_entries(S, Bounds, [], Out).
 
@@ -1124,17 +1126,20 @@ bound_cand_entries_cons @
     bound_cand_entries(S, [bound_sig(N, _, Args, _, _)|Bs], Acc, Out) <=>
     encode_sigs(env_function_sigs(scope_env(S), N), Decls),
     bound_cand_entries(S, Bs,
-                       push_bcand(N,
-                                  scope_ambient(S, amb_key(N, length(Args))),
-                                  Decls, Acc),
+                       assoc_put_with(fun merge_bc/2, N,
+                                      bc(scope_ambient(S,
+                                                       amb_key(N, length(Args))),
+                                         Decls),
+                                      Acc),
                        Out).
 
-:- function push_bcand(any, list(fun_sig_t), list(fun_sig_t), list(bcand))
-    -> list(bcand).
-push_bcand(N, Ambs, Decls, []) -> [bc(N, Ambs, Decls)].
-push_bcand(N, Ambs, Decls, [bc(N2, A0, D0)|Rest]) | N2 == N ->
-    [bc(N2, append(A0, Ambs), append(D0, Decls))|Rest].
-push_bcand(N, Ambs, Decls, [C|Rest]) -> [C|push_bcand(N, Ambs, Decls, Rest)].
+% The combining function `assoc_put_with` calls with the newcomer
+% first: an existing entry keeps its position in the list and its
+% candidates keep precedence over the ones being merged in, which is
+% the order the discharge rules search.
+:- function merge_bc(bcand, bcand) -> bcand.
+merge_bc(New, Old) -> bc(append(bc_ambs(Old), bc_ambs(New)),
+                         append(bc_decls(Old), bc_decls(New))).
 
 % ---------------------------------------------------------------------
 % Functions

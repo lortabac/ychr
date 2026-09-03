@@ -3,6 +3,7 @@
     fun head/1,
     fun tail/1,
     fun length/1,
+    fun same_length/2,
     fun member/2,
     fun append/2,
     fun concat/1,
@@ -14,6 +15,7 @@
     fun foldr/3,
     fun zip_with/3,
     fun all/2,
+    fun all2/3,
     fun any/2,
     fun take/2,
     fun drop/2,
@@ -31,6 +33,7 @@
 :- function
     (cons(T, list(T)) -> list(T)),
     (length(list(T)) -> int),
+    (same_length(list(A), list(B)) -> bool),
     (member(T, list(T)) -> bool),
     (append(list(T), list(T)) -> list(T)),
     (concat(list(list(T))) -> list(T)),
@@ -44,6 +47,7 @@
     (foldr(fun(A, B) -> B end, B, list(A)) -> B),
     (zip_with(fun(A, B) -> C end, list(A), list(B)) -> list(C)),
     (all(fun(A) -> bool end, list(A)) -> bool),
+    (all2(fun(A, B) -> bool end, list(A), list(B)) -> bool),
     (any(fun(A) -> bool end, list(A)) -> bool),
     (take(int, list(T)) -> list(T)),
     (drop(int, list(T)) -> list(T)),
@@ -80,6 +84,14 @@ tail([_|Xs]) -> Xs.
 
 length([]) -> 0.
 length([_|Xs]) -> length(Xs) + 1.
+
+% Whether two lists have the same number of elements, without counting
+% either one: the recursion stops at the first list to run out. The
+% elements themselves are never inspected, so the two lists may have
+% unrelated element types.
+same_length([], []) -> true.
+same_length([_|Xs], [_|Ys]) -> same_length(Xs, Ys).
+same_length(_, _) -> false.
 
 member(_, []) -> false.
 member(X, [X|_]) -> true.
@@ -127,6 +139,15 @@ zip_with(F, [X|Xs], [Y|Ys]) -> [call(F, X, Y)|zip_with(F, Xs, Ys)].
 all(_, []) -> true.
 all(F, [X|Xs]) | call(F, X) -> all(F, Xs).
 all(_, [_|_]) -> false.
+
+% The pairwise `all`: true when the two lists have the same length and
+% the predicate holds of every pair of elements at the same position.
+% Lists of different lengths are `false` rather than "true as far as
+% they go", so `all2` is a conjunction of the length check and the
+% pointwise one -- `zip_with`'s clamping would silently accept a prefix.
+all2(_, [], []) -> true.
+all2(F, [X|Xs], [Y|Ys]) | call(F, X, Y) -> all2(F, Xs, Ys).
+all2(_, _, _) -> false.
 
 any(_, []) -> false.
 any(F, [X|_]) | call(F, X) -> true.

@@ -26,16 +26,22 @@
 % second axis; closing either needs a runtime map primitive, and
 % neither is reached by hand-written code.
 %
-% The list traversals here and in `env.chr` / `pure.chr` / `walk.chr`
-% go through `library(lists)` rather than hand-rolled recursion, which
-% *adds* about 80% to the checker's runtime over the golden corpus —
-% roughly 2-3x per list element at every site. All of it is `'$call'`
-% dispatch, which is a linear scan over every same-arity function in
-% the program; that was measured and accepted deliberately, and the fix
-% belongs in the compiler (see `dev-docs/PROJECT.md`, Work Remaining:
-% keyed `'$call'` dispatch). On the quadratic path above
-% it costs more than the corpus average: the same 400-variable rule was
-% ~1.6 s before the stdlib adoption.
+% The list traversals here and in `env.chr` / `pure.chr` / `walk.chr` /
+% `solver.chr` go through `library(lists)` and `library(pairs)` rather
+% than hand-rolled recursion — roughly 2-3x per list element at every
+% site. All of it is `'$call'` dispatch, which is a linear scan over
+% every same-arity function in the program; that was measured and
+% accepted deliberately, and the fix belongs in the compiler (see
+% `dev-docs/PROJECT.md`, Work Remaining: keyed `'$call'` dispatch).
+%
+% The two conversions were measured separately, on different
+% workloads, so the figures do not add up to a single total. This
+% file, `env.chr`, `pure.chr` and `walk.chr` went first, and cost
+% about +80% of the checker's runtime over the golden corpus; on the
+% quadratic path above it is worse than that average, the same
+% 400-variable rule having been ~1.6 s before. `solver.chr` followed
+% later and cost +8% of `cabal bench`'s `typecheck/pairs_library`
+% (180.6 ms -> 195.3 ms, 2026-09-03).
 :- module('$tc_skel', [
     type(type_skeleton/0),
     fun collect_vars_rule/3,
