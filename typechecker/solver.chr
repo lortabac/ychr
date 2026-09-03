@@ -23,20 +23,10 @@
 %     declared rather than `any`: the detail pair is spelled `tpair`
 %     there, so as not to collide with `library(pairs)`, and a
 %     detail that is a bare name travels wrapped in `mangled_name`.
-%
-% Two renames are owed to this module and not yet made:
-%
-%   * split `sig_t/2` (and `sig_fst`/`sig_snd`) into two types. One
-%     carries a function signature and should read `args`/`ret`; the
-%     other carries a constructor signature and should read
-%     `parent`/`fields`. Sharing one polymorphic pair makes both call
-%     sites say less than they could, and `sig_fst` means something
-%     different depending on which one it is applied to;
-%   * spell out the matcher's `mok` / `mfail` / `mp` — the `msub`
-%     result and its substitution pairs.
 :- module('$typechecker', [
     type(ty/0),
-    type(sig_t/2),
+    type(fun_sig_t/0),
+    type(con_sig_t/0),
     type(ev_depth/0),
     type(bound_named/0),
     type(bcand/0),
@@ -64,6 +54,7 @@
 :- use_module('$tc_diag').
 :- use_module(library(prelude)).
 :- use_module(library(lists)).
+:- use_module(library(pairs)).
 
 % Type-representation algebraic type. `encode_ty` in `walk.chr`
 % builds these out of a source `ty_expr`: base types are 0-arity
@@ -120,10 +111,14 @@
                   ; fun(list(ty), ty)
                   ; rigid(ty, int).
 
-% Polymorphic two-field record reused for both function signatures
-% (sig_t(list(ty), ty)) and constructor signatures
-% (sig_t(ty, list(ty))).
-:- chr_type sig_t(A, B) ---> sig(A, B).
+% A function's signature: the types of its arguments and the type it
+% returns. Read with `sig_args` / `sig_ret`.
+:- chr_type fun_sig_t ---> fsig(list(ty), ty).
+
+% A data constructor's signature: the type it constructs (always a
+% `tcon` application, at the parent type's parameters) and the types of
+% its fields. Read with `sig_parent` / `sig_fields`.
+:- chr_type con_sig_t ---> csig(ty, list(ty)).
 
 % The diagnostic vocabulary — `error/3`, `warning/3`, the `error_code`
 % and `warning_code` atoms and the `error_detail` payloads — is
@@ -161,8 +156,8 @@
 % variables with the enclosing declaration's primary signature; both
 % are bundled in `function_bounds` / `constraint_bounds` so a single
 % `copy_term` freshens them consistently at each use site. Storing
-% the args/ret flat (rather than wrapped in `sig_t`) keeps the type
-% checker's pattern inference simple, and matches the shape the
+% the args/ret flat (rather than wrapped in a `fun_sig_t`) keeps the
+% type checker's pattern inference simple, and matches the shape the
 % discharge rule consumes.
 :- chr_type bound_named ---> nbound(any, list(ty), ty).
 
@@ -176,9 +171,9 @@
 % signature, copied together at commit) and the candidate signature
 % lists for each bound's named function.
 :- chr_type cand
-    ---> amb(sig_t(list(ty), ty))
-       ; decl(sig_t(list(ty), ty))
-       ; decl_bounded(sig_t(list(ty), ty), list(bound_named), list(bcand)).
+    ---> amb(fun_sig_t)
+       ; decl(fun_sig_t)
+       ; decl_bounded(fun_sig_t, list(bound_named), list(bcand)).
 
 % Candidate signatures for one bound's named function, assembled by
 % `walk.chr` at emission time (the discharge rules are pure and
@@ -189,19 +184,19 @@
 % share still-flexible variables with the enclosing scope, so it can
 % witness success only once its own leaves are solid.
 :- chr_type bcand
-    ---> bc(any, list(sig_t(list(ty), ty)), list(sig_t(list(ty), ty))).
+    ---> bc(any, list(fun_sig_t), list(fun_sig_t)).
 
 :- chr_constraint
     constraint_sig(any, int, list(ty)),
-    function_sig(any, int, sig_t(list(ty), ty)),
-    function_sigs(any, int, list(sig_t(list(ty), ty))),
+    function_sig(any, int, fun_sig_t),
+    function_sigs(any, int, list(fun_sig_t)),
     function_bounds(any, int, list(bound_named)),
     constraint_bounds(any, int, list(bound_named)),
-    con_sig(any, sig_t(ty, list(ty))),
+    con_sig(any, con_sig_t),
     check_constraint_use(any, int, list(bcand), list(ty), ctx),
     check_function_use(any, int, list(bcand), list(ty), ty, ctx),
-    check_function_use_with_ambient(any, int, list(sig_t(list(ty), ty)), list(bcand), list(ty), ty, ctx),
-    check_function_ref(any, int, list(sig_t(list(ty), ty)), list(bcand), list(ty), ty, ctx),
+    check_function_use_with_ambient(any, int, list(fun_sig_t), list(bcand), list(ty), ty, ctx),
+    check_function_ref(any, int, list(fun_sig_t), list(bcand), list(ty), ty, ctx),
     resolve_funref(any, list(cand), list(ty), ty, ctx),
     check_constructor_use(any, list(ty), ty, ctx),
     check_unify(ty, ty, ctx),
@@ -220,24 +215,32 @@
     make_fresh_rigids(list(ty), list(ty)),
     resolve_overload(any, list(cand), list(ty), ty, ctx),
     commit_candidate(list(cand), list(ty), ty, ctx),
-    check_bound(any, list(sig_t(list(ty), ty)), list(sig_t(list(ty), ty)), list(ty), ty, ctx),
+    check_bound(any, list(fun_sig_t), list(fun_sig_t), list(ty), ty, ctx),
     emit_bounds(list(bound_named), list(bcand), ctx).
 
-:- function (sig_fst(sig_t(A, B)) -> A), (sig_snd(sig_t(A, B)) -> B).
-sig_fst(sig(X, _)) -> X.
-sig_snd(sig(_, Y)) -> Y.
+:- function
+    (sig_args(fun_sig_t) -> list(ty)),
+    (sig_ret(fun_sig_t) -> ty),
+    (sig_parent(con_sig_t) -> ty),
+    (sig_fields(con_sig_t) -> list(ty)).
+
+sig_args(fsig(Args, _)) -> Args.
+sig_ret(fsig(_, Ret)) -> Ret.
+
+sig_parent(csig(Parent, _)) -> Parent.
+sig_fields(csig(_, Fields)) -> Fields.
 
 :- function
     (all_nonvar_list(list(any)) -> bool),
-    (cand_sig(cand) -> sig_t(list(ty), ty)),
-    (wrap_ambs(list(sig_t(list(ty), ty))) -> list(cand)),
-    (wrap_decls(list(sig_t(list(ty), ty))) -> list(cand)),
-    (bcand_ambs(any, list(bcand)) -> list(sig_t(list(ty), ty))),
-    (bcand_decls(any, list(bcand)) -> list(sig_t(list(ty), ty))),
+    (cand_sig(cand) -> fun_sig_t),
+    (wrap_ambs(list(fun_sig_t)) -> list(cand)),
+    (wrap_decls(list(fun_sig_t)) -> list(cand)),
+    (bcand_ambs(any, list(bcand)) -> list(fun_sig_t)),
+    (bcand_decls(any, list(bcand)) -> list(fun_sig_t)),
     (filter_consistent(list(cand), list(ty)) -> list(cand)),
     (sig_args_consistent(list(ty), list(ty)) -> bool),
     (candidates_committable(list(cand)) -> bool),
-    (cands_all_equal(sig_t(list(ty), ty), list(cand)) -> bool),
+    (cands_all_equal(fun_sig_t, list(cand)) -> bool),
     (no_candidate_consistent(list(cand), list(ty)) -> bool).
 
 all_nonvar_list([]) -> true.
@@ -264,12 +267,12 @@ bcand_decls(N, [_ | Rest]) -> bcand_decls(N, Rest).
 
 filter_consistent([], _) -> [].
 filter_consistent([C|Rest], ArgTypes)
-    | sig_args_consistent(sig_fst(cand_sig(C)), ArgTypes) ->
+    | sig_args_consistent(sig_args(cand_sig(C)), ArgTypes) ->
     [C | filter_consistent(Rest, ArgTypes)].
 filter_consistent([_|Rest], ArgTypes) -> filter_consistent(Rest, ArgTypes).
 
 sig_args_consistent(DeclArgs, CallArgs) ->
-    is_mok(match_ty_list(DeclArgs, CallArgs, mok([]))).
+    is_match_ok(match_ty_list(DeclArgs, CallArgs, match_ok([]))).
 
 % A pending resolution fires only when every surviving candidate
 % denotes the same signature after substitution (spec §Resolution:
@@ -325,20 +328,29 @@ cand_list_empty(_) -> false.
 % further into the recorded term; nested shared variables are
 % checked leniently (in the gradual, non-rejecting direction).
 
-:- chr_type mpair ---> mp(ty, ty).
-:- chr_type msub ---> mfail ; mok(list(mpair)).
-:- chr_type mfound ---> not_found ; found(ty).
+% One entry of the trial substitution: a type variable, and the type it
+% was first matched against.
+:- chr_type match_entry ---> maps_to(ty, ty).
+
+% What the matcher returns: either the two types are inconsistent, or
+% they match under the accumulated substitution.
+:- chr_type match_result ---> match_failed ; match_ok(list(match_entry)).
+
+% The outcome of looking a variable up in the substitution.
+:- chr_type match_lookup ---> not_found ; found(ty).
 
 :- function
-    (match_ty(ty, ty, msub) -> msub),
-    (match_ty_list(list(ty), list(ty), msub) -> msub),
-    (match_var(ty, ty, mfound, list(mpair)) -> msub),
-    (lookup_msub(ty, list(mpair)) -> mfound),
-    (is_mok(msub) -> bool).
+    (match_ty(ty, ty, match_result) -> match_result),
+    (match_ty_list(list(ty), list(ty), match_result) -> match_result),
+    (match_var(ty, ty, match_lookup, list(match_entry)) -> match_result),
+    (lookup_match_entry(ty, list(match_entry)) -> match_lookup),
+    (is_match_ok(match_result) -> bool).
 
-match_ty(_, _, mfail) -> mfail.
-match_ty(D, A, mok(S)) | var(D) -> match_var(D, A, lookup_msub(D, S), S).
-match_ty(D, A, mok(S)) | var(A) -> match_var(A, D, lookup_msub(A, S), S).
+match_ty(_, _, match_failed) -> match_failed.
+match_ty(D, A, match_ok(S)) | var(D) ->
+    match_var(D, A, lookup_match_entry(D, S), S).
+match_ty(D, A, match_ok(S)) | var(A) ->
+    match_var(A, D, lookup_match_entry(A, S), S).
 match_ty(ty_any, _, S) -> S.
 match_ty(_, ty_any, S) -> S.
 match_ty(ty_int, ty_int, S) -> S.
@@ -349,23 +361,23 @@ match_ty(rigid(C, _), A, S) | nonvar(C) -> match_ty(C, A, S).
 match_ty(D, rigid(C, _), S) | nonvar(C) -> match_ty(D, C, S).
 match_ty(tcon(C, A1), tcon(C, A2), S) -> match_ty_list(A1, A2, S).
 match_ty(fun(A1, R1), fun(A2, R2), S) -> match_ty(R1, R2, match_ty_list(A1, A2, S)).
-match_ty(_, _, _) -> mfail.
+match_ty(_, _, _) -> match_failed.
 
-match_ty_list(_, _, mfail) -> mfail.
+match_ty_list(_, _, match_failed) -> match_failed.
 match_ty_list([], [], S) -> S.
 match_ty_list([X|Xs], [Y|Ys], S) -> match_ty_list(Xs, Ys, match_ty(X, Y, S)).
-match_ty_list(_, _, _) -> mfail.
+match_ty_list(_, _, _) -> match_failed.
 
-match_var(V, T, not_found, S) -> mok([mp(V, T) | S]).
-match_var(_, T, found(T0), S) | existential_consistent(T0, T) -> mok(S).
-match_var(_, _, _, _) -> mfail.
+match_var(V, T, not_found, S) -> match_ok([maps_to(V, T) | S]).
+match_var(_, T, found(T0), S) | existential_consistent(T0, T) -> match_ok(S).
+match_var(_, _, _, _) -> match_failed.
 
-lookup_msub(_, []) -> not_found.
-lookup_msub(V, [mp(K, T) | _]) | V == K -> found(T).
-lookup_msub(V, [_ | Rest]) -> lookup_msub(V, Rest).
+lookup_match_entry(_, []) -> not_found.
+lookup_match_entry(V, [maps_to(K, T) | _]) | V == K -> found(T).
+lookup_match_entry(V, [_ | Rest]) -> lookup_match_entry(V, Rest).
 
-is_mok(mok(_)) -> true.
-is_mok(mfail) -> false.
+is_match_ok(match_ok(_)) -> true.
+is_match_ok(match_failed) -> false.
 
 % ==========================================================================
 % Bounded polymorphism helpers (pure functions, no var binding)
@@ -380,8 +392,8 @@ is_mok(mfail) -> false.
 :- function
     (existential_consistent(ty, ty) -> bool),
     (existential_consistent_list(list(ty), list(ty)) -> bool),
-    (sig_one_consistent(sig_t(list(ty), ty), list(ty), ty) -> bool),
-    (sig_existential(list(sig_t(list(ty), ty)), list(ty), ty) -> bool).
+    (sig_one_consistent(fun_sig_t, list(ty), ty) -> bool),
+    (sig_existential(list(fun_sig_t), list(ty), ty) -> bool).
 
 existential_consistent(T, _) | var(T) -> true.
 existential_consistent(_, T) | var(T) -> true.
@@ -417,8 +429,10 @@ existential_consistent_list(_, _) -> false.
 % `g(int, string)` — the first occurrence commits `A` and the second
 % must agree. Per-position independence used to accept exactly that,
 % making repeated-variable bounds vacuously satisfiable.
-sig_one_consistent(sig(DeclArgs, DeclRet), SubArgs, SubRet) ->
-    is_mok(match_ty(DeclRet, SubRet, match_ty_list(DeclArgs, SubArgs, mok([])))).
+sig_one_consistent(fsig(DeclArgs, DeclRet), SubArgs, SubRet) ->
+    is_match_ok(
+        match_ty(DeclRet, SubRet,
+                 match_ty_list(DeclArgs, SubArgs, match_ok([])))).
 
 % True when at least one declared signature in the list is consistent
 % with the substituted bound. Implements the existence semantics of
@@ -434,7 +448,7 @@ sig_existential([_|Rest], SubArgs, SubRet) -> sig_existential(Rest, SubArgs, Sub
 % in the substitution is consistent with anything (the matcher's var
 % rules), so a ruled-out verdict cannot be un-ruled by later
 % bindings — consistency only shrinks as information is added.
-:- function (bound_ruled_out(list(sig_t(list(ty), ty)), list(ty), ty) -> bool).
+:- function (bound_ruled_out(list(fun_sig_t), list(ty), ty) -> bool).
 bound_ruled_out(Sigs, SubArgs, SubRet)
     | sig_existential(Sigs, SubArgs, SubRet) -> false.
 bound_ruled_out(_, _, _) -> true.
@@ -447,9 +461,9 @@ bound_ruled_out(_, _, _) -> true.
 % a later binding could invalidate the witness with the check
 % already gone, making accept/reject depend on body order.
 :- function
-    (sig_existential_stable(list(sig_t(list(ty), ty)), list(ty), ty) -> bool),
-    (sig_stable_witness(sig_t(list(ty), ty), list(ty), ty) -> bool),
-    (sig_ground(sig_t(list(ty), ty)) -> bool).
+    (sig_existential_stable(list(fun_sig_t), list(ty), ty) -> bool),
+    (sig_stable_witness(fun_sig_t, list(ty), ty) -> bool),
+    (sig_ground(fun_sig_t) -> bool).
 
 sig_existential_stable([], _, _) -> false.
 sig_existential_stable([Sig|_], SubArgs, SubRet)
@@ -461,7 +475,7 @@ sig_stable_witness(Sig, SubArgs, SubRet)
     | sig_ground(Sig) -> sig_one_consistent(Sig, SubArgs, SubRet).
 sig_stable_witness(_, _, _) -> false.
 
-sig_ground(sig(Args, Ret)) | ty_concrete_list(Args) -> ty_concrete(Ret).
+sig_ground(fsig(Args, Ret)) | ty_concrete_list(Args) -> ty_concrete(Ret).
 sig_ground(_) -> false.
 
 % Ground-substitution check: true when every leaf of @SubArgs@ and
@@ -508,12 +522,17 @@ ty_concrete_list(_) -> false.
 % `check_bound` per bound at the freshly-renamed substitution. This
 % rule is listed before `constraint_match` so the more-specific
 % three-head pattern is preferred when both rules match.
+%
+% The `kv` is the plain pair of `library(pairs)`, used here and in the
+% three other bounded rules purely as a vehicle for copying two
+% structures in one `copy_term`. It is not a signature and carries no
+% meaning of its own.
 bounded_constraint_match @
     constraint_sig(Name, Arity, DeclTypes), constraint_bounds(Name, Arity, Bounds) \
         check_constraint_use(Name, Arity, BoundCands, ArgTypes, Ctx) <=>
-    Fresh is copy_term(quote(sig(DeclTypes, Bounds))),
-    FreshTypes is sig_fst(Fresh),
-    FreshBounds is sig_snd(Fresh),
+    Fresh is copy_term(quote(kv(DeclTypes, Bounds))),
+    FreshTypes is key(Fresh),
+    FreshBounds is value(Fresh),
     check_arg_list(FreshTypes, ArgTypes, Ctx),
     emit_bounds(FreshBounds, BoundCands, Ctx).
 
@@ -545,11 +564,11 @@ constraint_match @
 bounded_function_match @
     function_sig(Name, Arity, Sig), function_bounds(Name, Arity, Bounds) \
         check_function_use(Name, Arity, BoundCands, ArgTypes, RetTypeVar, Ctx) <=>
-    Fresh is copy_term(quote(sig(Sig, Bounds))),
-    FreshSig is sig_fst(Fresh),
-    FreshBounds is sig_snd(Fresh),
-    FreshArgTypes is sig_fst(FreshSig),
-    FreshRetType is sig_snd(FreshSig),
+    Fresh is copy_term(quote(kv(Sig, Bounds))),
+    FreshSig is key(Fresh),
+    FreshBounds is value(Fresh),
+    FreshArgTypes is sig_args(FreshSig),
+    FreshRetType is sig_ret(FreshSig),
     check_arg_list(FreshArgTypes, ArgTypes, Ctx),
     tc_unify(RetTypeVar, FreshRetType, Ctx),
     emit_bounds(FreshBounds, BoundCands, Ctx).
@@ -559,8 +578,8 @@ function_match @
     function_sig(Name, Arity, Sig) \
         check_function_use(Name, Arity, _, ArgTypes, RetTypeVar, Ctx) <=>
     Fresh is copy_term(quote(Sig)),
-    FreshArgTypes is sig_fst(Fresh),
-    FreshRetType is sig_snd(Fresh),
+    FreshArgTypes is sig_args(Fresh),
+    FreshRetType is sig_ret(Fresh),
     check_arg_list(FreshArgTypes, ArgTypes, Ctx),
     tc_unify(RetTypeVar, FreshRetType, Ctx).
 
@@ -657,19 +676,19 @@ funref_ambient_single @
 funref_bounded @
     function_sig(Name, Arity, Sig), function_bounds(Name, Arity, Bounds) \
         check_function_ref(Name, Arity, _, BoundCands, ArgTypes, RetTypeVar, Ctx) <=>
-    Fresh is copy_term(quote(sig(Sig, Bounds))),
-    FreshSig is sig_fst(Fresh),
-    FreshBounds is sig_snd(Fresh),
-    check_arg_list(sig_fst(FreshSig), ArgTypes, Ctx),
-    tc_unify(RetTypeVar, sig_snd(FreshSig), Ctx),
+    Fresh is copy_term(quote(kv(Sig, Bounds))),
+    FreshSig is key(Fresh),
+    FreshBounds is value(Fresh),
+    check_arg_list(sig_args(FreshSig), ArgTypes, Ctx),
+    tc_unify(RetTypeVar, sig_ret(FreshSig), Ctx),
     emit_bounds(FreshBounds, BoundCands, Ctx).
 
 funref_single @
     function_sig(Name, Arity, Sig) \
         check_function_ref(Name, Arity, _, _, ArgTypes, RetTypeVar, Ctx) <=>
     Fresh is copy_term(quote(Sig)),
-    check_arg_list(sig_fst(Fresh), ArgTypes, Ctx),
-    tc_unify(RetTypeVar, sig_snd(Fresh), Ctx).
+    check_arg_list(sig_args(Fresh), ArgTypes, Ctx),
+    tc_unify(RetTypeVar, sig_ret(Fresh), Ctx).
 
 funref_multi @
     function_sigs(Name, Arity, Sigs) \
@@ -764,8 +783,8 @@ constructor_match @
     con_sig(ConName, Sig) \
         check_constructor_use(ConName, ArgTypes, ResultTypeVar, Ctx) <=>
     Fresh is copy_term(quote(Sig)),
-    FreshParent is sig_fst(Fresh),
-    FreshFields is sig_snd(Fresh),
+    FreshParent is sig_parent(Fresh),
+    FreshFields is sig_fields(Fresh),
     check_arg_list(FreshFields, ArgTypes, Ctx),
     tc_unify(ResultTypeVar, FreshParent, Ctx).
 
@@ -860,30 +879,30 @@ guard_match_rigid @
     con_sig(Con, Sig) \
         check_guard_match(rigid(C, _), Con, Betas, Slots, Ctx) <=> var(C) |
     Fresh is copy_term(quote(Sig)),
-    FreshParent is sig_fst(Fresh),
+    FreshParent is sig_parent(Fresh),
     tc_unify_list(tcon_args(FreshParent), Betas, Ctx),
     C = FreshParent,
-    tc_unify_list(Slots, sig_snd(Fresh), Ctx).
+    tc_unify_list(Slots, sig_fields(Fresh), Ctx).
 
 guard_match_any @
     con_sig(Con, Sig) \
         check_guard_match(T, Con, _, Slots, Ctx) <=> nonvar(T), T == ty_any |
     Fresh is copy_term(quote(Sig)),
-    tc_unify_list(Slots, sig_snd(Fresh), Ctx).
+    tc_unify_list(Slots, sig_fields(Fresh), Ctx).
 
 guard_match_meet @
     con_sig(Con, Sig) \
         check_guard_match(T, Con, _, Slots, Ctx) <=>
-        existential_consistent(sig_fst(Sig), T) |
+        existential_consistent(sig_parent(Sig), T) |
     Fresh is copy_term(quote(Sig)),
-    tc_unify(T, sig_fst(Fresh), Ctx),
-    tc_unify_list(Slots, sig_snd(Fresh), Ctx).
+    tc_unify(T, sig_parent(Fresh), Ctx),
+    tc_unify_list(Slots, sig_fields(Fresh), Ctx).
 
 guard_match_inaccessible @
     con_sig(Con, Sig) \
         check_guard_match(T, Con, _, _, Ctx) <=>
     Fresh is copy_term(quote(Sig)),
-    report_warning(Ctx, inaccessible, tpair(sig_fst(Fresh), T)).
+    report_warning(Ctx, inaccessible, tpair(sig_parent(Fresh), T)).
 
 % Defensive fallback: a constructor with no `con_sig`. `walk.chr`
 % gates the emission on the constructor being declared (with a
@@ -896,8 +915,8 @@ delegate_guard_getarg @
     con_sig(ConName, Sig) \
         check_guard_getarg(ResultType, TermType, ConName, FieldIndex, Ctx) <=>
     Fresh is copy_term(quote(Sig)),
-    FreshParent is sig_fst(Fresh),
-    FreshFields is sig_snd(Fresh),
+    FreshParent is sig_parent(Fresh),
+    FreshFields is sig_fields(Fresh),
     tc_unify(TermType, FreshParent, Ctx),
     FieldType is nth(FieldIndex, FreshFields),
     tc_unify(ResultType, FieldType, Ctx).
@@ -1512,20 +1531,20 @@ resolve_none @
 % `resolve_fire`'s guard guarantees it.
 commit_amb @
     commit_candidate([amb(Sig) | _], ArgTypes, RetTypeVar, Ctx) <=>
-    check_arg_list(sig_fst(Sig), ArgTypes, Ctx),
-    tc_unify(RetTypeVar, sig_snd(Sig), Ctx).
+    check_arg_list(sig_args(Sig), ArgTypes, Ctx),
+    tc_unify(RetTypeVar, sig_ret(Sig), Ctx).
 
 commit_decl @
     commit_candidate([decl(Sig) | _], ArgTypes, RetTypeVar, Ctx) <=>
     Fresh is copy_term(quote(Sig)),
-    check_arg_list(sig_fst(Fresh), ArgTypes, Ctx),
-    tc_unify(RetTypeVar, sig_snd(Fresh), Ctx).
+    check_arg_list(sig_args(Fresh), ArgTypes, Ctx),
+    tc_unify(RetTypeVar, sig_ret(Fresh), Ctx).
 
 commit_decl_bounded @
     commit_candidate([decl_bounded(Sig, Bounds, BoundCands) | _], ArgTypes, RetTypeVar, Ctx) <=>
-    Fresh is copy_term(quote(sig(Sig, Bounds))),
-    FreshSig is sig_fst(Fresh),
-    FreshBounds is sig_snd(Fresh),
-    check_arg_list(sig_fst(FreshSig), ArgTypes, Ctx),
-    tc_unify(RetTypeVar, sig_snd(FreshSig), Ctx),
+    Fresh is copy_term(quote(kv(Sig, Bounds))),
+    FreshSig is key(Fresh),
+    FreshBounds is value(Fresh),
+    check_arg_list(sig_args(FreshSig), ArgTypes, Ctx),
+    tc_unify(RetTypeVar, sig_ret(FreshSig), Ctx),
     emit_bounds(FreshBounds, BoundCands, Ctx).

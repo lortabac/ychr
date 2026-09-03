@@ -46,7 +46,7 @@
 % two.
 :- chr_type scope ---> scope(tc_env,
                              list(pair(any, ty)),
-                             list(pair(amb_key, list(sig_t(list(ty), ty)))),
+                             list(pair(amb_key, list(fun_sig_t))),
                              ctx).
 
 % Which kind of position a constructor application's fields are
@@ -105,7 +105,7 @@ slot_or_any(nothing) -> ty_any.
 scope_shadow(scope(Env, Vars, Amb, C), New) -> scope(Env, append(New, Vars), Amb, C).
 
 % The ambient signatures visible for one `(name, arity)` in this scope.
-:- function scope_ambient(scope, amb_key) -> list(sig_t(list(ty), ty)).
+:- function scope_ambient(scope, amb_key) -> list(fun_sig_t).
 scope_ambient(scope(_, _, Amb, _), Key) -> from_maybe([], assoc_get(Key, Amb)).
 
 % ---------------------------------------------------------------------
@@ -188,8 +188,8 @@ tvar_slots(Vs, TVars) ->
     make_decl_rigid(ty),
     make_decl_rigids(int, list(ty)),
     fresh_slots(int, list(ty)),
-    encode_one_sig(fun_sig, sig_t(list(ty), ty)),
-    encode_sigs(list(fun_sig), list(sig_t(list(ty), ty))).
+    encode_one_sig(fun_sig, fun_sig_t),
+    encode_sigs(list(fun_sig), list(fun_sig_t)).
 
 % A flexible slot is just an unbound variable, so there is nothing to
 % build: the pair's value stays as it was created.
@@ -249,7 +249,7 @@ encode_one_sig1 @
     alloc_flex_tvars(sort_unique_tvars(append(collect_ty_vars(Args),
                                               collect_ty_vars_expr(Ret))),
                      TVars),
-    Out is sig(encode_tys(TVars, Args), encode_ty(TVars, Ret)).
+    Out is fsig(encode_tys(TVars, Args), encode_ty(TVars, Ret)).
 
 encode_sigs_nil @
     encode_sigs([], Out) <=> Out = [].
@@ -279,10 +279,10 @@ encode_sigs_cons @
 % constraint the declarations produce, with the same argument types.
 :- chr_type decl_fact ---> df_constraint_sig(any, int, list(ty))
                          ; df_constraint_bounds(any, int, list(bound_named))
-                         ; df_function_sig(any, int, sig_t(list(ty), ty))
-                         ; df_function_sigs(any, int, list(sig_t(list(ty), ty)))
+                         ; df_function_sig(any, int, fun_sig_t)
+                         ; df_function_sigs(any, int, list(fun_sig_t))
                          ; df_function_bounds(any, int, list(bound_named))
-                         ; df_con_sig(any, sig_t(ty, list(ty))).
+                         ; df_con_sig(any, con_sig_t).
 
 :- chr_constraint
     tell_decls(tc_env, program, list(decl_fact)),
@@ -396,7 +396,7 @@ build_function_facts_untyped @
     build_function_facts([fun_def(N, A, [], _, _)|Fs], Out) <=>
     build_function_facts(Fs, More),
     Slots is replicate(A, ty_any),
-    Out = [df_function_sig(N, A, sig(Slots, ty_any)) | More].
+    Out = [df_function_sig(N, A, fsig(Slots, ty_any)) | More].
 
 build_function_facts_bounded @
     build_function_facts([fun_def(N, A, [fun_sig(Args, Ret)], [B|Bs], _)|Fs], Out) <=>
@@ -408,7 +408,7 @@ build_function_facts_bounded @
     ArgTys is encode_tys(TVars, Args),
     RetTy is encode_ty(TVars, Ret),
     Encoded is encode_bounds(TVars, [B|Bs]),
-    Out = [df_function_sig(N, A, sig(ArgTys, RetTy)),
+    Out = [df_function_sig(N, A, fsig(ArgTys, RetTy)),
            df_function_bounds(N, A, Encoded)
            | More].
 
@@ -447,7 +447,7 @@ build_td_con_facts_cons @
     build_td_con_facts(type_def(TN, Vars, Kind, Loc), Dcs, More),
     Slots is tvar_slots(Vars, TVars),
     FieldTys is encode_tys(TVars, Fields),
-    Out = [df_con_sig(CN, sig(tcon(TN, Slots), FieldTys)) | More].
+    Out = [df_con_sig(CN, csig(tcon(TN, Slots), FieldTys)) | More].
 
 % ---------------------------------------------------------------------
 % Rules
@@ -525,11 +525,11 @@ walk_rule1 @
 
 :- chr_constraint
     head_cons_check(scope, list(head_con),
-                    list(pair(amb_key, list(sig_t(list(ty), ty)))),
-                    list(pair(amb_key, list(sig_t(list(ty), ty))))),
+                    list(pair(amb_key, list(fun_sig_t))),
+                    list(pair(amb_key, list(fun_sig_t)))),
     head_con_check(scope, head_con,
-                   list(pair(amb_key, list(sig_t(list(ty), ty)))),
-                   list(pair(amb_key, list(sig_t(list(ty), ty))))),
+                   list(pair(amb_key, list(fun_sig_t))),
+                   list(pair(amb_key, list(fun_sig_t)))),
     type_of_head_args(scope, list(head_arg), list(ty)),
     unify_zip(list(ty), list(ty), ctx).
 
@@ -597,21 +597,19 @@ unify_zip_cons @
 % Entries for one `(name, arity)` accumulate; the order among them is
 % not observable — resolution requires every surviving candidate to be
 % equal after substitution, and bound discharge is an existence check.
-:- function add_ambients(list(pair(amb_key, list(sig_t(list(ty), ty)))),
-                         list(bound_sig),
-                         list(pair(string, ty)))
-    -> list(pair(amb_key, list(sig_t(list(ty), ty)))).
+:- function add_ambients(list(pair(amb_key, list(fun_sig_t))),
+                         list(bound_sig), list(pair(string, ty)))
+    -> list(pair(amb_key, list(fun_sig_t))).
 add_ambients(Acc, Bounds, TVars) ->
     foldl(fun(Table, Bound) -> add_ambient(Table, Bound, TVars) end, Acc, Bounds).
 
-:- function add_ambient(list(pair(amb_key, list(sig_t(list(ty), ty)))),
-                        bound_sig,
-                        list(pair(string, ty)))
-    -> list(pair(amb_key, list(sig_t(list(ty), ty)))).
+:- function add_ambient(list(pair(amb_key, list(fun_sig_t))),
+                        bound_sig, list(pair(string, ty)))
+    -> list(pair(amb_key, list(fun_sig_t))).
 add_ambient(Acc, bound_sig(N, _, Args, Ret, _), TVars) ->
     assoc_put_with(fun(New, Old) -> append(Old, New) end,
                    amb_key(N, length(Args)),
-                   [sig(encode_tys(TVars, Args), encode_ty(TVars, Ret))],
+                   [fsig(encode_tys(TVars, Args), encode_ty(TVars, Ret))],
                    Acc).
 
 % ---------------------------------------------------------------------
@@ -888,8 +886,7 @@ emit_constraint_use1 @
     alloc_lambda_params(list(head_arg), list(pair(any, ty)),
                         list(pair(any, ty)), list(ty)),
     emit_function_call(scope, any, list(ty), ty),
-    emit_call_form(scope, any, int, list(sig_t(list(ty), ty)), list(bcand),
-                   list(ty), ty),
+    emit_call_form(scope, any, int, list(fun_sig_t), list(bcand), list(ty), ty),
     emit_function_ref(scope, any, list(ty), ty),
     build_bound_cands(scope, list(bound_sig), list(bcand)),
     bound_cand_entries(scope, list(bound_sig), list(bcand), list(bcand)).
@@ -1132,8 +1129,7 @@ bound_cand_entries_cons @
                                   Decls, Acc),
                        Out).
 
-:- function push_bcand(any, list(sig_t(list(ty), ty)), list(sig_t(list(ty), ty)),
-                       list(bcand))
+:- function push_bcand(any, list(fun_sig_t), list(fun_sig_t), list(bcand))
     -> list(bcand).
 push_bcand(N, Ambs, Decls, []) -> [bc(N, Ambs, Decls)].
 push_bcand(N, Ambs, Decls, [bc(N2, A0, D0)|Rest]) | N2 == N ->
