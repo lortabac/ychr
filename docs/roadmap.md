@@ -29,6 +29,17 @@ what is planned.
 - [ ] Propagation history elimination
 - [ ] Delay avoidance
 - [ ] Memory reuse
+- [ ] Keyed `'$call'` dispatch (a callables dispatch table plus a
+      closure-apply VM construct, mirroring the evaluables table used
+      by `EvalIs`)
+- [ ] Known-closure `'$call'` specialization (compile a syntactically
+      known lambda or `fun name/arity` argument to a direct procedure
+      call)
+- [ ] Function inlining
+- [ ] Rule unfolding (investigation: the correctness conditions of
+      Tacchella, Gabbrielli, Meo, 2007, *Unfolding in CHR* are stated
+      for the abstract semantics and need adaptation to the refined
+      semantics — occurrence order and propagation history)
 
 ## Type checker
 
@@ -53,6 +64,9 @@ what is planned.
 - [x] Scheme runtime
 - [ ] JavaScript backend
 - [ ] JavaScript runtime
+- [ ] Native closure representation (represent closures as host
+      closures behind the closure-apply VM construct, removing the
+      dispatch-table lookup)
 
 ## Runtime (Haskell)
 
