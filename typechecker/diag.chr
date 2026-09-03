@@ -1,4 +1,4 @@
-% Diagnostic vocabulary for the CHR type-checker (typechecker2).
+% Diagnostic vocabulary for the CHR type-checker (typechecker).
 %
 % A diagnostic is a self-contained term: every `error/3` and
 % `warning/3` carries the source position and the label it should be
@@ -10,7 +10,7 @@
 % Rendering stays in Haskell, where the rest of the compiler's
 % diagnostics are formatted: a label is a structured term here, not a
 % pre-formatted string.
-:- module('$tc2_diag', [
+:- module('$tc_diag', [
     type(diag_label/0),
     type(diag_origin/0),
     type(unit_id/0),
@@ -31,7 +31,7 @@
     fun bump_unit/1
 ]).
 
-:- use_module('$tc2_ast').
+:- use_module('$tc_ast').
 :- use_module(library(lists)).
 :- use_module(library(maybe)).
 :- use_module(library(pairs)).
@@ -186,10 +186,9 @@ rule_label(just(N)) -> label_rule(N).
 % ---------------------------------------------------------------------
 %
 % The checking phase reports as it goes and the entry point drains the
-% two lists at the end. The pure
-% declaration checks of `tc2_pure.chr` do not go through here: an
-% `error/3` is data, so they return their diagnostics directly and
-% `tc2_main` concatenates the two sources.
+% two lists at the end. The pure declaration checks of `pure.chr` do
+% not go through here: an `error/3` is data, so they return their
+% diagnostics directly and `main.chr` concatenates the two sources.
 :- chr_constraint
     report_error(ctx, error_code, error_detail),
     errors(list(error)),

@@ -1,4 +1,4 @@
-% Entry points of the CHR type-checker (typechecker2).
+% Entry points of the CHR type-checker (typechecker).
 %
 % The Haskell driver (`src/YCHR/Internal/TypeCheck.hs`) encodes a
 % desugared program as one ground term and tells exactly one of these
@@ -8,17 +8,17 @@
 % `check_program` reports the declaration-level diagnostics and checks
 % the program's rules and function equations; `check_goals` checks a
 % query's goals against an already-checked program's declarations.
-:- module('$tc2_main', [
+:- module('$tc_main', [
     check_program/3,
     check_goals/6
 ]).
 
-:- use_module('$tc2_ast').
-:- use_module('$tc2_diag').
-:- use_module('$tc2_env').
-:- use_module('$tc2_pure').
-:- use_module('$tc2_solver').
-:- use_module('$tc2_walk').
+:- use_module('$tc_ast').
+:- use_module('$tc_diag').
+:- use_module('$tc_env').
+:- use_module('$tc_pure').
+:- use_module('$tc_walk').
+:- use_module('$typechecker').
 :- use_module(library(lists)).
 
 % `check_program(Program, Errors, Warnings)`: check a whole desugared

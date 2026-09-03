@@ -55,6 +55,7 @@ import YCHR.Internal.Runtime.Session
   )
 import YCHR.Internal.Runtime.Trace (defaultTraceHandler)
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
+import YCHR.Internal.TypeCheck.Render (typeModule)
 import YCHR.Internal.Types
   ( BoundSig,
     DataConstructor (..),
@@ -463,20 +464,21 @@ showOperators prog = mapM_ (putStrLn . renderOp) entries
 
 -- | Hard-coded set of names recognized as the type checker's base
 -- types. These are the /source-level/ spellings — what a user types at
--- @:info@ and what @encode_ty@ (@typechecker2\/tc2_walk.chr@) matches
+-- @:info@ and what @encode_ty@ (@typechecker\/walk.chr@) matches
 -- on. The @ty@ constructors backing them carry a @ty_@ prefix that
 -- never surfaces here; @displayTypeAtom@
 -- ("YCHR.Internal.TypeCheck.Render") strips it on the way out.
 builtinTypeNames :: [Text]
 builtinTypeNames = ["int", "float", "string", "any"]
 
--- | The module qualifier @:info@ shows a built-in type under. It is a
--- label, not a lookup: nothing resolves it, and the type checker's own
--- module ('YCHR.Internal.TypeCheck.Render'@.typeModule@) is currently
--- spelled differently. Pinned by @docs\/reference\/repl.md@ and
--- @test\/repl\/test_repl.py@.
+-- | The module qualifier @:info@ shows a built-in type under. No
+-- module of the /user's/ program is ever spelled this way; the name is
+-- the checker's own CHR module, which is where the type
+-- representation really lives — hence the reuse of 'typeModule'
+-- rather than a second literal. Pinned by @docs\/reference\/repl.md@
+-- and @test\/repl\/test_repl.py@.
 builtinTypeModule :: Text
-builtinTypeModule = "$typechecker"
+builtinTypeModule = typeModule
 
 showInfoUsage :: IO ()
 showInfoUsage = putStrLn "usage: :info <identifier>"

@@ -1,6 +1,6 @@
-% The solver core of the CHR type-checker (typechecker2).
+% The solver core of the CHR type-checker (typechecker).
 %
-% `tc2_walk.chr` walks the encoded AST and tells the `check_*`
+% `walk.chr` walks the encoded AST and tells the `check_*`
 % constraints below; everything here is the solving itself — the type
 % representation, the meet table, overload resolution, bound discharge
 % and the guard-derived-evidence rules.
@@ -10,14 +10,16 @@
 %   * the module name. The type representation below is what
 %     diagnostics render, and `typeModule` in
 %     `src/YCHR/Internal/TypeCheck/Render.hs` strips the
-%     `'$tc2_solver'` qualifier off a type atom on the way out, so this
-%     module may not be renamed without renaming that too;
-%   * `Ctx` is the structured `ctx/4` of `'$tc2_diag'`, carrying a
+%     `'$typechecker'` qualifier off a type atom on the way out, so
+%     this module may not be renamed without renaming that too. The
+%     REPL's `:info` prints built-in types under the same qualifier
+%     (`builtinTypeModule` in `src/YCHR/Internal/Repl.hs`);
+%   * `Ctx` is the structured `ctx/4` of `'$tc_diag'`, carrying a
 %     diagnostic's checking unit, origin, label and location. The rules
 %     pass it opaquely, so nothing below reads it;
 %   * the diagnostic vocabulary — the accumulators, `error/3`,
 %     `warning/3` and the code and detail types — lives in
-%     `'$tc2_diag'`, which the declaration checks share, and is
+%     `'$tc_diag'`, which the declaration checks share, and is
 %     declared rather than `any`: the detail pair is spelled `tpair`
 %     there, so as not to collide with `library(pairs)`, and a
 %     detail that is a bare name travels wrapped in `mangled_name`.
@@ -32,7 +34,7 @@
 %     different depending on which one it is applied to;
 %   * spell out the matcher's `mok` / `mfail` / `mp` — the `msub`
 %     result and its substitution pairs.
-:- module('$tc2_solver', [
+:- module('$typechecker', [
     type(ty/0),
     type(sig_t/2),
     type(ev_depth/0),
@@ -59,11 +61,11 @@
     check_bound/6
 ]).
 
-:- use_module('$tc2_diag').
+:- use_module('$tc_diag').
 :- use_module(library(prelude)).
 :- use_module(library(lists)).
 
-% Type-representation algebraic type. `encode_ty` in `tc2_walk.chr`
+% Type-representation algebraic type. `encode_ty` in `walk.chr`
 % builds these out of a source `ty_expr`: base types are 0-arity
 % constructors, type constructors and function types are compound
 % terms.
@@ -125,9 +127,9 @@
 
 % The diagnostic vocabulary — `error/3`, `warning/3`, the `error_code`
 % and `warning_code` atoms and the `error_detail` payloads — is
-% declared in `'$tc2_diag'`, together with the accumulators
+% declared in `'$tc_diag'`, together with the accumulators
 % `report_error/3` and `report_warning/3` that the rules below emit
-% into. It is shared with the declaration checks of `tc2_pure.chr`,
+% into. It is shared with the declaration checks of `pure.chr`,
 % which produce the same `error/3` terms without going through a
 % solver at all. Both accumulators are declared over those types, so
 % `ychr check --Werror` rejects a report site here that invents a
@@ -179,7 +181,7 @@
        ; decl_bounded(sig_t(list(ty), ty), list(bound_named), list(bcand)).
 
 % Candidate signatures for one bound's named function, assembled by
-% `tc2_walk.chr` at emission time (the discharge rules are pure and
+% `walk.chr` at emission time (the discharge rules are pure and
 % cannot gather across the store). Ambient and declared candidates
 % are kept apart because they discharge differently: a declared
 % signature's variables are per-emission fresh and never bound, so a
@@ -516,7 +518,7 @@ bounded_constraint_match @
     emit_bounds(FreshBounds, BoundCands, Ctx).
 
 % Constraint usage: copy_term the declaration, check args pairwise.
-% `tc2_walk.chr` tells a `constraint_sig` for every constraint
+% `walk.chr` tells a `constraint_sig` for every constraint
 % declared in the program (including untyped ones, which default to
 % all-any), matching by name AND arity so arity-overloaded
 % constraints each check against their own declaration, and the
@@ -582,7 +584,7 @@ overloaded_function_match @
 % rule whose head mentions a bounded constraint), calls to the bound's
 % named functions see the bound's required signature(s) as additional
 % candidates alongside the function's ordinary declared signatures.
-% `tc2_walk.chr` determines which calls qualify and emits
+% `walk.chr` determines which calls qualify and emits
 % `check_function_use_with_ambient(Name, AmbSigs, BoundCands, Args,
 % Ret, Ctx)` when the target name (at the call's arity) has at least
 % one ambient signature in the surrounding scope. AmbSigs is the
@@ -722,7 +724,7 @@ emit_bounds_step @ emit_bounds([B | Rest], BoundCands, Ctx) <=>
 % `check_bound` is a residual carrying its complete candidate set —
 % the ambient signatures for the bound's named function in the
 % enclosing scope plus that function's declared signatures, assembled
-% by `tc2_walk.chr` at emission time (spec §Use-site checking step 4:
+% by `walk.chr` at emission time (spec §Use-site checking step 4:
 % "'declared signature' includes the ambient signatures contributed
 % by the enclosing function's bound"). Ambient candidates share
 % variable identity with the enclosing declaration's tvars by
@@ -768,7 +770,7 @@ constructor_match @
     tc_unify(ResultTypeVar, FreshParent, Ctx).
 
 % Defensive fallback: unknown constructor. Every site in
-% `tc2_walk.chr` that emits check_constructor_use — the two expression
+% `walk.chr` that emits check_constructor_use — the two expression
 % walks and the `guard_match` case — gates it on the constructor being
 % a known declaration, so this rule is unreachable in practice. It is
 % kept (and routed through tc_unify rather than raw `=`) so a future
@@ -795,7 +797,7 @@ check_arg_nil @
 % are left unsolved rather than reported as errors. The shape is
 % unreachable from valid programs: constraint and function facts both
 % match uses by name AND arity, constructors (which cannot be
-% overloaded by arity) have their arity checked by `tc2_pure.chr`'s
+% overloaded by arity) have their arity checked by `pure.chr`'s
 % arity walk, and the renamer rejects wrong-arity calls and references
 % upstream.
 
@@ -883,7 +885,7 @@ guard_match_inaccessible @
     Fresh is copy_term(quote(Sig)),
     report_warning(Ctx, inaccessible, tpair(sig_fst(Fresh), T)).
 
-% Defensive fallback: a constructor with no `con_sig`. `tc2_walk.chr`
+% Defensive fallback: a constructor with no `con_sig`. `walk.chr`
 % gates the emission on the constructor being declared (with a
 % matching arity), so this is unreachable in practice; leaving the
 % field slots unconstrained is the gradual disposition.
@@ -956,9 +958,9 @@ ty_occurs_list(C, [_|Rest]) -> ty_occurs_list(C, Rest).
 % propagates. All three rules below therefore succeed WITHOUT binding
 % anything. The invariant this preserves: a `ty` value equal to the
 % atom `any` in a source-variable slot can only originate from the
-% declaration-position stamping in `tc2_skel.chr` (`skeleton_of`,
+% declaration-position stamping in `skel.chr` (`skeleton_of`,
 % allocated by `alloc_var_types`). No CHR rule may bind a var to
-% `any` — `tc2_walk.chr`'s `check_fun_stmt` relies on this to tell
+% `any` — `walk.chr`'s `check_fun_stmt` relies on this to tell
 % "declared any" apart from "still flexible", since it keeps a rebound
 % local's `any`.
 
@@ -1098,16 +1100,16 @@ tc_unify_list_cons @
 %
 % A gensym for rigid type variables allocated from *inside* the
 % rules. Declaration-site skolems get ids 0, 1, 2, ... — from
-% `decl_rigid_supply` in `tc2_walk.chr` — and this supply counts DOWN
+% `decl_rigid_supply` in `walk.chr` — and this supply counts DOWN
 % from -1 so the two ranges can never collide (rigid identity
 % comparisons look at the cell and the id, and negative ids surface
-% only cosmetically, as `T#-1` in messages). `tc2_main.chr` seeds
+% only cosmetically, as `T#-1` in messages). `main.chr` seeds
 % `rigid_supply(-1)` once per check.
 %
 % Both ranges are user-visible — an unpinned skolem renders as `T#n`
 % — so the ids and the *order* they are handed out in are part of what
 % a diagnostic says. `sort_unique_tvars` and `make_decl_rigid` in
-% `tc2_walk.chr` fix the declaration-site order;
+% `walk.chr` fix the declaration-site order;
 % `test/golden/typecheck_tvar_order/` covers it.
 %
 % The pin cell of the freshly built skolem is `Cell`, a body-only

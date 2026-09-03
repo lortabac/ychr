@@ -139,7 +139,7 @@ With two signatures, `:- class (sz(int) -> int), (sz(string) -> int).`
 and an equation contradicting both, the same shape is the documented
 `YCHR-60006` error.
 
-**Cause.** `walk_funs` (`typechecker2/tc2_walk.chr`) partitions on
+**Cause.** `walk_funs` (`typechecker/walk.chr`) partitions on
 `fun_sig_count(F) > 1`, so a 1-signature class goes down the plain-
 function path (`check_equation`) instead of the per-signature attempt
 sessions of `walk_class_fun`. Use sites are affected the same way:
@@ -312,7 +312,7 @@ equation that is perfectly well-typed.
 (`src/YCHR/Internal/Desugared.hs:126`) — one location for the whole
 list, taken from the owning declaration. Individual `Equation`s carry
 no source of their own (`:130-139`), so `check_equation`
-(`typechecker2/tc2_walk.chr`), which carries the function's `ann` block
+(`typechecker/walk.chr`), which carries the function's `ann` block
 into every equation's `ctx`, has nothing better to attribute to.
 Extension equations gathered from other modules are appended to that
 list and inherit the owner's `AnnP`. Per-equation `unit_id`s keep such

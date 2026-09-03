@@ -22,11 +22,11 @@
 % the variable count costs ~4.5x.
 % Rule *size* is not the axis — 800 body goals over two variables costs
 % nothing extra. This is the same assoc-lists-instead-of-maps
-% limitation `tc2_env.chr` records for the constructor count, on a
+% limitation `env.chr` records for the constructor count, on a
 % second axis; closing either needs a runtime map primitive, and
 % neither is reached by hand-written code.
 %
-% The list traversals here and in `tc2_env` / `tc2_pure` / `tc2_walk`
+% The list traversals here and in `env.chr` / `pure.chr` / `walk.chr`
 % go through `library(lists)` rather than hand-rolled recursion, which
 % *adds* about 80% to the checker's runtime over the golden corpus —
 % roughly 2-3x per list element at every site. All of it is `'$call'`
@@ -36,7 +36,7 @@
 % keyed `'$call'` dispatch). On the quadratic path above
 % it costs more than the corpus average: the same 400-variable rule was
 % ~1.6 s before the stdlib adoption.
-:- module('$tc2_skel', [
+:- module('$tc_skel', [
     type(type_skeleton/0),
     fun collect_vars_rule/3,
     fun collect_vars_eq/1,
@@ -51,9 +51,9 @@
     alloc_var_types/3
 ]).
 
-:- use_module('$tc2_ast').
-:- use_module('$tc2_env').
-:- use_module('$tc2_solver').
+:- use_module('$tc_ast').
+:- use_module('$tc_env').
+:- use_module('$typechecker').
 :- use_module(library(lists)).
 :- use_module(library(maybe)).
 :- use_module(library(pairs)).

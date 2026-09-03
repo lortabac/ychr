@@ -1,4 +1,4 @@
-% Desugared-AST vocabulary for the CHR type-checker (typechecker2).
+% Desugared-AST vocabulary for the CHR type-checker (typechecker).
 %
 % Every type here mirrors, one constructor per Haskell constructor, a
 % type of `src/YCHR/Internal/Desugared.hs` (and the `Resolved.Expr` /
@@ -9,12 +9,12 @@
 %
 % How a mismatch between them is caught, now that the conformance walk
 % that used to visit every node is gone: most constructors below are
-% destructured by a *total function* somewhere in `tc2_skel`,
-% `tc2_pure`, `tc2_env` or `tc2_walk`, and a function with no matching
+% destructured by a *total function* somewhere in `skel.chr`,
+% `pure.chr`, `env.chr` or `walk.chr`, and a function with no matching
 % equation raises YCHR-60001 naming the term that did not fit. (Inside
 % a class-function attempt even that is muffled: `run_chr_session`
 % answers `false`, so the raise surfaces as a spurious
-% `no_matching_overload` — see the attempt block in `tc2_walk.chr`.)
+% `no_matching_overload` — see the attempt block in `walk.chr`.)
 %
 % Three nodes are matched by CHR *rules* only — `rule_head/2`,
 % `con_key/2` and `fun_sig/2` — where a miss is a silent suspend, not
@@ -30,7 +30,7 @@
 %
 % Nothing is computed here. The module exists so that the renamer
 % recognizes the AST constructors in the rules of the other
-% typechecker2 modules, and so that `ychr check --Werror` can type the
+% typechecker modules, and so that `ychr check --Werror` can type the
 % checker itself.
 %
 % Naming conventions:
@@ -52,7 +52,7 @@
 %   * Constructors carry a suffix (`_e` for expressions, `_t` for the
 %     type-expression forms) wherever the unsuffixed name would collide
 %     with a prelude function or with another AST type's constructor.
-:- module('$tc2_ast', [
+:- module('$tc_ast', [
     type(loc/0),
     type(ann/1),
     type(ty_expr/0),

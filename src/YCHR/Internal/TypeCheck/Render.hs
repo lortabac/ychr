@@ -13,6 +13,7 @@ module YCHR.Internal.TypeCheck.Render
     showType,
     showValue,
     showValueShape,
+    typeModule,
 
     -- * Dereferencing
     deepDerefType,
@@ -28,9 +29,12 @@ import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.Runtime.Var (deref)
 
 -- | The CHR module the type representation is declared in, by its
--- source module name. Renaming that module means changing this.
+-- source module name (@typechecker\/solver.chr@). Renaming that
+-- module means changing this. Exported because the REPL shows
+-- built-in types under the same qualifier
+-- ("YCHR.Internal.Repl"@.builtinTypeModule@).
 typeModule :: Text
-typeModule = "$tc2_solver"
+typeModule = "$typechecker"
 
 -- | Runtime functor name of a constructor declared in the solver's
 -- type module — the flattened @m__n@ form the renamer produces.
@@ -46,7 +50,7 @@ displayQualifiedAtom = T.replace "__" ":"
 
 -- | Like 'displayQualifiedAtom', but additionally undoes the internal
 -- spelling of the built-in types: the solver's module qualifier and
--- the @ty_@ constructor prefix both come off, so @$tc2_solver__ty_int@
+-- the @ty_@ constructor prefix both come off, so @$typechecker__ty_int@
 -- renders as @int@. User-defined types stay module-qualified. This is
 -- the only place a checker-internal atom becomes user-visible text, so
 -- it is the only place that has to know about the prefix.

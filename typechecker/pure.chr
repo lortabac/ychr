@@ -12,15 +12,15 @@
 %
 % The list traversals here go through `library(lists)` rather than
 % hand-rolled recursion; the cost of that is recorded once, in
-% `tc2_skel.chr`'s header.
-:- module('$tc2_pure', [
+% `skel.chr`'s header.
+:- module('$tc_pure', [
     fun program_errors/2,
     fun goals_arity_errors/4
 ]).
 
-:- use_module('$tc2_ast').
-:- use_module('$tc2_diag').
-:- use_module('$tc2_env').
+:- use_module('$tc_ast').
+:- use_module('$tc_diag').
+:- use_module('$tc_env').
 :- use_module(library(lists)).
 :- use_module(library(maybe)).
 :- use_module(library(meta)).
@@ -38,7 +38,7 @@ program_errors(Env, program(Rules, Funs, _, _, Tds)) ->
 % equations of the plain functions continue from there. The absolute
 % numbers do not matter — a unit id never leaves this program, and
 % warning suppression only cares which diagnostics share one — but
-% `tc2_walk.chr` has to number the same way, or an arity error and the
+% `walk.chr` has to number the same way, or an arity error and the
 % solver errors of the same rule land in different units.
 :- function all_errors(con_env, list(rule), list(fun_def), list(type_def)) -> list(error).
 all_errors(Env, Rules, Funs, Tds) ->
@@ -310,7 +310,7 @@ arity_diag(Ctx, arity_use(N, Use, Declared)) ->
 % through: the type definitions and their constructors were validated
 % when the program was checked.
 %
-% Goal `i` is unit `i`, matching the walk in `tc2_walk.chr`. Goals have
+% Goal `i` is unit `i`, matching the walk in `walk.chr`. Goals have
 % no annotated AST node, so their origin is `origin_none` — nothing is
 % echoed as the offending source, and the caller's location and label
 % are used throughout.

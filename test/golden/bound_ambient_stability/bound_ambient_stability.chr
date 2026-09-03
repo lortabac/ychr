@@ -26,7 +26,7 @@ h(X) -> X.
 % shared with X's type, and this program tested something else — that
 % an ambient candidate consistent only because its own variable was
 % still unbound must not discharge a bound early. That hazard is what
-% `sig_stable_witness` in `typechecker2/tc2_solver.chr` guards; it is unreachable
+% `sig_stable_witness` in `typechecker/solver.chr` guards; it is unreachable
 % while every ambient signature is encoded at rigid tvars.
 :- chr_constraint c(T) requiring (g(T) -> T).
 c(X) <=> _Z is h(1), _W is s(X).

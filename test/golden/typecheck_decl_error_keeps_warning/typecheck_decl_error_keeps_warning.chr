@@ -3,7 +3,7 @@
 
 % Warning suppression is per checking unit, and a *declaration-level*
 % error belongs to no unit at all: it carries `no_unit`, which
-% `error_units` (`typechecker2/tc2_diag.chr`) never collects. So the
+% `error_units` (`typechecker/diag.chr`) never collects. So the
 % undefined type below reports its error and the dead rule still
 % reports its warning.
 %

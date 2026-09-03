@@ -81,7 +81,7 @@ extra-doc-files:      README.md
 -- Without this the tarball would only carry them when the release happened
 -- to be cut with the flag on.
 extra-source-files:   libraries/*.chr
-                    , typechecker2/*.chr
+                    , typechecker/*.chr
                     , examples/*.chr
                     , examples/stlc/*.chr
                     , examples/stlc/*.hs

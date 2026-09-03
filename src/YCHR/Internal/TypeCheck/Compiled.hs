@@ -5,8 +5,8 @@
 --
 -- The type-checker is itself a CHR program. Its sources are embedded
 -- into the binary at compile time via
--- 'YCHR.Internal.TypeCheck.TH.embeddedTypeChecker2Sources'; the first
--- reader of 'typeChecker2Program' pays the compile cost, everyone
+-- 'YCHR.Internal.TypeCheck.TH.embeddedTypeCheckerSources'; the first
+-- reader of 'typeCheckerProgram' pays the compile cost, everyone
 -- after gets the memoized 'SessionInput'.
 --
 -- 'compileTypeCheckerModules' is the underlying pure function;
@@ -18,14 +18,14 @@ module YCHR.Internal.TypeCheck.Compiled
     compileTypeCheckerModules,
 
     -- * Default value (compiled lazily on first demand)
-    typeChecker2Program,
+    typeCheckerProgram,
   )
 where
 
 import Data.Text (Text)
 import YCHR.Internal.Compile.Pipeline (Error, compileModules)
 import YCHR.Internal.Runtime.Session (SessionInput, toSessionInput)
-import YCHR.Internal.TypeCheck.TH (embeddedTypeChecker2Sources)
+import YCHR.Internal.TypeCheck.TH (embeddedTypeCheckerSources)
 
 -- | Compile the YCHR type-checker from its CHR sources — all of them
 -- compiled together as one program. Pure; the @True@ flag passed to
@@ -37,11 +37,11 @@ compileTypeCheckerModules inputs =
     Left err -> Left err
     Right (cp, _warnings) -> Right (toSessionInput cp)
 
--- | The default compiled type-checker (@typechecker2\/@). The sources
+-- | The default compiled type-checker (@typechecker\/@). The sources
 -- are embedded at compile time; compilation runs once on first demand.
-typeChecker2Program :: SessionInput
-typeChecker2Program =
-  case compileTypeCheckerModules $(embeddedTypeChecker2Sources) of
+typeCheckerProgram :: SessionInput
+typeCheckerProgram =
+  case compileTypeCheckerModules $(embeddedTypeCheckerSources) of
     Left err ->
-      error ("Failed to compile embedded typechecker2: " ++ show err)
+      error ("Failed to compile embedded typechecker: " ++ show err)
     Right si -> si

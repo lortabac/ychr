@@ -2,7 +2,7 @@
 % or, for a query, declarations and then goals.
 %
 % This module decides *what* to ask the solver: it walks the encoded
-% AST and tells `check_*` constraints into `tc2_solver.chr`. The
+% AST and tells `check_*` constraints into `solver.chr`. The
 % declarations come first (`tell_decls`), then each rule, then each
 % function's equations, and a class function's equations are tried
 % against its signatures one attempt at a time.
@@ -11,7 +11,7 @@
 % nor make a fresh logical variable, and the walk does both at nearly
 % every node. Everything that needs neither — the environment lookups,
 % the source-type encoding, the assoc-list bookkeeping — stays a pure
-% function, in this file or in `tc2_env.chr` / `tc2_skel.chr`.
+% function, in this file or in `env.chr` / `skel.chr`.
 %
 % `check_attempt` is exported not because another module calls it but
 % because `run_chr_session` resolves a goal's constraint name through
@@ -20,19 +20,19 @@
 %
 % The list traversals here go through `library(lists)` rather than
 % hand-rolled recursion; the cost of that is recorded once, in
-% `tc2_skel.chr`'s header.
-:- module('$tc2_walk', [
+% `skel.chr`'s header.
+:- module('$tc_walk', [
     walk_program/3,
     walk_goals/4,
     tell_decls/3,
     check_attempt/8
 ]).
 
-:- use_module('$tc2_ast').
-:- use_module('$tc2_diag').
-:- use_module('$tc2_env').
-:- use_module('$tc2_skel').
-:- use_module('$tc2_solver').
+:- use_module('$tc_ast').
+:- use_module('$tc_diag').
+:- use_module('$tc_env').
+:- use_module('$tc_skel').
+:- use_module('$typechecker').
 :- use_module(library(lists)).
 :- use_module(library(maybe)).
 :- use_module(library(meta)).
@@ -88,7 +88,7 @@ scope_ctx(scope(_, _, _, C)) -> C.
 % add a golden whenever the collector learns a new node.
 %
 % The lookup is linear, so a unit's checking cost is quadratic in its
-% distinct variables; see the note in `tc2_skel.chr`'s header.
+% distinct variables; see the note in `skel.chr`'s header.
 :- function scope_var_ty(scope, any) -> ty.
 scope_var_ty(scope(_, Vars, _, _), V) -> slot_or_any(assoc_get(V, Vars)).
 
@@ -459,7 +459,7 @@ build_td_con_facts_cons @
     walk_rules(tc_env, list(rule), int),
     walk_rule(tc_env, rule, int).
 
-% Rules are numbered from zero, and `tc2_pure.chr` numbers the arity
+% Rules are numbered from zero, and `pure.chr` numbers the arity
 % errors it reports the same way. The two numberings have to agree: a
 % rule's arity error and its solver errors must land in one unit, or
 % warning suppression drops the wrong warnings.
@@ -1153,7 +1153,7 @@ push_bcand(N, Ambs, Decls, [C|Rest]) -> [C|push_bcand(N, Ambs, Decls, Rest)].
 % Unit ids continue from the rules, one per equation of a *plain*
 % function; a class function's equations get none, because the old
 % checker checks them in throwaway sessions and collects what survives
-% outside any unit. `tc2_pure.chr`'s `funs_arity_errors` numbers the
+% outside any unit. `pure.chr`'s `funs_arity_errors` numbers the
 % same way, and must keep doing so: an equation's arity error and its
 % solver errors have to share a unit or suppression drops the wrong
 % warnings.
@@ -1176,7 +1176,7 @@ walk_funs_nil @
 
 % Two or more declared signatures is a class function: its equations are
 % checked per candidate signature in isolated sub-sessions below, and
-% consume no unit id here. `tc2_pure.chr`'s `fun_unit_count` makes the
+% consume no unit id here. `pure.chr`'s `fun_unit_count` makes the
 % same split.
 walk_funs_class @
     walk_funs(Env, Facts, [F|Fs], Unit) <=> fun_sig_count(F) > 1 |

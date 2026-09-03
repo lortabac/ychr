@@ -3,7 +3,7 @@
 
 -- | Haskell side of the YCHR type checker.
 --
--- The checker itself is a CHR program (@typechecker2\/@). This module
+-- The checker itself is a CHR program (@typechecker\/@). This module
 -- is everything around it: it hands a desugared program over as one
 -- ground term ("YCHR.Internal.TypeCheck.Encode"), tells one of the two
 -- CHR entry points, and decodes the two diagnostic lists that come
@@ -18,10 +18,10 @@
 -- The two rules that shape the implementation most are documented
 -- where they are implemented: declaration positions stamping @any@ (a
 -- per-/position/ judgement, which is why a unit's variable slots are
--- shaped before the solver sees them) in @typechecker2\/tc2_skel.chr@,
+-- shaped before the solver sees them) in @typechecker\/skel.chr@,
 -- and guard-derived evidence — a guard whose operational success
 -- entails a typing fact tells that fact, and may pin a rigid type
--- variable — in @typechecker2\/tc2_solver.chr@.
+-- variable — in @typechecker\/solver.chr@.
 module YCHR.Internal.TypeCheck
   ( TypeCheckError (..),
     TypeCheckWarning (..),
@@ -46,7 +46,7 @@ import YCHR.Internal.Runtime.Session (tellConstraint, withCHR)
 import YCHR.Internal.Runtime.SubSession (defaultHostCallRegistry)
 import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.Runtime.Var (deref, newVar)
-import YCHR.Internal.TypeCheck.Compiled (typeChecker2Program)
+import YCHR.Internal.TypeCheck.Compiled (typeCheckerProgram)
 import YCHR.Internal.TypeCheck.Encode
   ( Encoded (..),
     astAtom,
@@ -69,9 +69,9 @@ import YCHR.Internal.TypeCheck.Render
   )
 import YCHR.Internal.Types (Name (..), Term (..), flattenName)
 
--- | Runtime functor name of a constructor declared in @'$tc2_diag'@.
+-- | Runtime functor name of a constructor declared in @'$tc_diag'@.
 diagAtom :: Text -> Text
-diagAtom n = "$tc2_diag__" <> n
+diagAtom n = "$tc_diag__" <> n
 
 -- ---------------------------------------------------------------------------
 -- Entry points
@@ -84,7 +84,7 @@ typeCheckProgram :: D.Program -> IO TypeCheckResult
 typeCheckProgram prog =
   runChecker enc.origins $ \errorsVar warningsVar ->
     tellConstraint
-      (Qualified "$tc2_main" "check_program")
+      (Qualified "$tc_main" "check_program")
       [encodedToValue enc.term, errorsVar, warningsVar]
   where
     enc = encodeProgram prog
@@ -107,7 +107,7 @@ typeCheckGoals ::
 typeCheckGoals prog loc lbl goals =
   runChecker enc.origins $ \errorsVar warningsVar ->
     tellConstraint
-      (Qualified "$tc2_main" "check_goals")
+      (Qualified "$tc_main" "check_goals")
       [ encodedToValue enc.term,
         encodedToValue (encodeBodyGoals goals),
         encodedToValue (encodeSourceLoc loc),
@@ -127,7 +127,7 @@ labelValue (Just t) = VTerm (diagAtom "label_text") [VText t]
 -- entry constraint, and decode what it bound them to.
 runChecker :: IntMap PExpr -> (Value -> Value -> Chr ()) -> IO TypeCheckResult
 runChecker origins enter =
-  withCHR typeChecker2Program defaultHostCallRegistry $ do
+  withCHR typeCheckerProgram defaultHostCallRegistry $ do
     errorsVar <- newVar
     warningsVar <- newVar
     enter errorsVar warningsVar
@@ -150,7 +150,7 @@ data CtxInfo = CtxInfo
 
 -- | Decode one accumulator. Errors and warnings have the same
 -- @f(Ctx, Code, Detail)@ shape; @constructor@ names the expected
--- @'$tc2_diag'@ one and @decodeBody@ turns the @(Code, Detail)@ pair
+-- @'$tc_diag'@ one and @decodeBody@ turns the @(Code, Detail)@ pair
 -- into the diagnostic payload.
 decodeDiagnostics ::
   IntMap PExpr ->
@@ -388,7 +388,7 @@ intOf (VInt n) = Just (fromInteger n)
 intOf _ = Nothing
 
 -- | A shape the CHR checker is not allowed to produce. Every one of
--- these is a bug in @typechecker2\/@ or in this decoder, never
+-- these is a bug in @typechecker\/@ or in this decoder, never
 -- something a user program can trigger.
 malformed :: Text -> Value -> Chr a
 malformed what val =

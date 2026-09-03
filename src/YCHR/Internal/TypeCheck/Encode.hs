@@ -2,13 +2,13 @@
 
 -- | Encoding of the desugared AST as a ground CHR term.
 --
--- The all-CHR type-checker (@typechecker2\/@) receives the whole
+-- The all-CHR type-checker (@typechecker\/@) receives the whole
 -- program as one value and does every check itself, so this module is
 -- the entire Haskell side of the input boundary: no walking, no
 -- per-node constraint emission, no live handle table.
 --
 -- The shape of the encoding is declared, one constructor per Haskell
--- constructor, in @typechecker2\/tc2_ast.chr@. That file and this one
+-- constructor, in @typechecker\/ast.chr@. That file and this one
 -- are a matched pair; changing either without the other silently
 -- produces terms no rule matches.
 --
@@ -111,12 +111,12 @@ type Enc = State EncState
 -- ---------------------------------------------------------------------------
 
 -- | Runtime functor name of a constructor declared in the
--- @'$tc2_ast'@ module. Every term this module builds is headed by one
+-- @'$tc_ast'@ module. Every term this module builds is headed by one
 -- of these.
 astAtom :: Text -> Text
-astAtom n = "$tc2_ast__" <> n
+astAtom n = "$tc_ast__" <> n
 
--- | An @'$tc2_ast'@ compound. Zero arguments yields an atom once
+-- | An @'$tc_ast'@ compound. Zero arguments yields an atom once
 -- converted to a 'Value'.
 ast :: Text -> [Term] -> Term
 ast n args = CompoundTerm (Unqualified (astAtom n)) args

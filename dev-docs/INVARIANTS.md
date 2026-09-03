@@ -276,7 +276,7 @@ Maybe OccurrenceNumber` (or starting from `1` only) would enforce it.
 Both are reversed exactly once, by discipline. A `newtype Reverse a =
 Reverse [a]` (or `Data.Sequence`) makes the order visible.
 
-### `tc_unify` argument order — `typechecker2/tc2_solver.chr`
+### `tc_unify` argument order — `typechecker/solver.chr`
 
 Source-variable types must be on the left of `tc_unify` and declared
 types on the right. Every rule has an explicit mirror, so the *verdict*
@@ -339,7 +339,7 @@ every call site. Today `Compile.hs` builds it consistently, but no
 type insists. A `Set SuspensionId` (where order doesn't matter) or a
 sorted `Vector` would close it.
 
-### Symbol-table lookup for unknown constructor falls through to `any` — `typechecker2/tc2_walk.chr` (`idx_within`)
+### Symbol-table lookup for unknown constructor falls through to `any` — `typechecker/walk.chr` (`idx_within`)
 
 ```
 idx_within(_, nothing) -> true.
@@ -352,7 +352,7 @@ anyway and the solver's `unknown_guard_getarg` unifies the result with
 slot flexible rather than typing it. An out-of-range index on a *known*
 constructor is skipped
 silently on the assumption that the constructor-arity walk
-(`tc2_pure.chr`) reported it. Neither coupling is visible in the types:
+(`pure.chr`) reported it. Neither coupling is visible in the types:
 a `known_con` / `unknown_con` split, or an invariant on constructor-map
 membership, would make it explicit.
 

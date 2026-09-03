@@ -2,7 +2,7 @@
 
 -- | Compile-time embedding of the type-checker sources.
 --
--- The @typechecker2\/*.chr@ modules are read by GHC at build time and
+-- The @typechecker\/*.chr@ modules are read by GHC at build time and
 -- spliced into 'YCHR.Internal.TypeCheck.Compiled'. The resulting
 -- binary is self-contained: no @YCHR_TC_PATH@ env var, no cwd-relative
 -- path.
@@ -13,12 +13,12 @@
 -- rather than modification times, so @touch@ing this module does
 -- nothing: during development, edit this module (or
 -- 'YCHR.Internal.TypeCheck.Compiled', which holds the splice) for
--- real, or run @cabal clean@. Adding or removing a @typechecker2@
+-- real, or run @cabal clean@. Adding or removing a @typechecker@
 -- module is the same problem one level up — the directory listing
 -- itself is not a dependency, so nothing notices a file that did not
 -- exist at the last splice.
 module YCHR.Internal.TypeCheck.TH
-  ( embeddedTypeChecker2Sources,
+  ( embeddedTypeCheckerSources,
   )
 where
 
@@ -34,23 +34,23 @@ import System.FilePath (takeExtension, (</>))
 -- package root (GHC runs splices with the cabal package directory as
 -- cwd). A new module needs no registration here: every @.chr@ in the
 -- directory is picked up.
-typeChecker2Dir :: FilePath
-typeChecker2Dir = "typechecker2"
+typeCheckerDir :: FilePath
+typeCheckerDir = "typechecker"
 
 -- | Splice yielding @[(FilePath, Text)]@: every
--- @typechecker2\/*.chr@ file paired with its UTF-8 contents, in
+-- @typechecker\/*.chr@ file paired with its UTF-8 contents, in
 -- filename order so the compiled program does not depend on directory
 -- listing order.
-embeddedTypeChecker2Sources :: Q Exp
-embeddedTypeChecker2Sources = do
+embeddedTypeCheckerSources :: Q Exp
+embeddedTypeCheckerSources = do
   files <-
     runIO
-      (sort . filter ((== ".chr") . takeExtension) <$> listDirectory typeChecker2Dir)
+      (sort . filter ((== ".chr") . takeExtension) <$> listDirectory typeCheckerDir)
   pairs <- mapM readOne files
   lift (pairs :: [(FilePath, Text)])
   where
     readOne f = do
-      let path = typeChecker2Dir </> f
+      let path = typeCheckerDir </> f
       addDependentFile path
       contents <- runIO (TIO.readFile path)
       pure (path, contents)

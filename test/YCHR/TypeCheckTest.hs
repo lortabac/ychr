@@ -225,7 +225,7 @@ tests =
         ws @?= [InaccessibleBranch "int" "m:color"],
       testCase "a declaration-check error suppresses its unit's warning too" $ do
         -- Constructor-arity errors come from the declaration checks
-        -- (@tc2_pure.chr@), not from a solver rule, and are recorded
+        -- (@pure.chr@), not from a solver rule, and are recorded
         -- against the unit being checked. Suppression has to see them:
         -- this rule is both dead and wrong, so only the error is
         -- reported.

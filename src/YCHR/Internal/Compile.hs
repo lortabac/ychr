@@ -1093,7 +1093,7 @@ compileBodyGoal _ varMap si (D.BodyIs v expr) = do
   -- already returns an evaluated value from its outer operation;
   -- 'EvalDeep' (deep-deref only) is sufficient. The type checker gates
   -- on the same syntactic shape (@body_is@ in
-  -- @typechecker2\/tc2_walk.chr@) — same pattern, same widening rule.
+  -- @typechecker\/walk.chr@) — same pattern, same widening rule.
   let rhs = case expr of
         R.VarExpr _ -> EvalIs expr'
         _ -> EvalDeep expr'

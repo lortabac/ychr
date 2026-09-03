@@ -47,12 +47,12 @@ DEAD_CODE_GOLDENS = [
 # fully annotated and warning-free: the embedded copy is compiled but
 # never type-checked by the compile path, so this is the only thing
 # holding the checker to its own type system.
-def test_typecheck_typechecker2(ychr_bin, project_root):
+def test_typecheck_typechecker(ychr_bin, project_root):
     import subprocess
 
-    directory = os.path.join(project_root, "typechecker2")
+    directory = os.path.join(project_root, "typechecker")
     files = sorted(glob.glob(os.path.join(directory, "*.chr")))
-    assert files, "no typechecker2 sources found"
+    assert files, "no typechecker sources found"
     result = subprocess.run(
         [ychr_bin, "check", "--Werror", *files],
         capture_output=True,
@@ -60,7 +60,7 @@ def test_typecheck_typechecker2(ychr_bin, project_root):
         cwd=project_root,
     )
     assert result.returncode == 0, (
-        f"typechecker2 type check failed:\n"
+        f"typechecker type check failed:\n"
         f"stdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
     )
