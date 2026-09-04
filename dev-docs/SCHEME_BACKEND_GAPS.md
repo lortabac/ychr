@@ -21,6 +21,38 @@ runtime in `scheme/ychr/`. Goals are run through `guile3.0 --r6rs` per
 | `run_chr_session`       | No Scheme-side implementation — it spawns a nested interpreter session (`YCHR.Internal.Runtime.SubSession` on the Haskell side). `run_chr_session_test` is in `HASKELL_ONLY`. |
 
 
+## `library(search)`
+
+No Scheme-side implementation of `solve/1`, `find_all/2` or `fail/0`.
+The search driver needs three things the Scheme runtime does not have:
+a session fork (as `run_chr_session` above), a snapshot of the store /
+suspension-map / history / reactivation-queue references, and an undo
+trail hooked into every variable-cell and suspension-flag write
+(`src/YCHR/Internal/Runtime/{Search,Trail}.hs`). `search_basic` and
+`search_nested` are in `HASKELL_ONLY`.
+
+Compilation itself succeeds. The library wrappers become ordinary
+compiled procedures (`func_search__solve1`, `func_search__fail0`, …),
+but the `host:` call inside each has no `hostCallMap` entry, so
+`Scheme.compileHostCall` lowers it to a bare verbatim identifier —
+`(solve (deref arg_0))`, `(fail)`. Importing the generated library
+still succeeds under Guile, which resolves free identifiers lazily;
+the failure comes when a search is first *called*:
+
+    ERROR: In procedure %resolve-variable:
+    Unbound variable: solve
+
+`choose/2` and `try_unify/2` need nothing special — they are ordinary
+CHR and compile and run fine; a program that only tells `choose/2`
+without ever calling `solve/1` behaves identically on both backends
+(the choice just sits in the store).
+
+Note that the Haskell driver deliberately does *not* reuse the trail
+for anything outside a search: `SessionEnv.trail` is `Nothing` at the
+top level, so a Scheme implementation would not have to pay for the
+hook in ordinary programs either.
+
+
 ## `deep-eval` host-call lookup ignores arity
 
 Haskell's `HostCallRegistry` is keyed by name alone, so

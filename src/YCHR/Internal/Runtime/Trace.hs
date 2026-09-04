@@ -9,12 +9,20 @@
 -- events for function calls, lambda calls, and host calls so the
 -- whole picture — not just the CHR scheduling — is visible.
 --
+-- The search driver ("YCHR.Internal.Runtime.Search") emits its own
+-- five: entering and leaving a search, selecting a choice point,
+-- trying an alternative, and backtracking. Without them a trace of a
+-- search reads as a @kill@ followed by an unexplained @reactivate@ of
+-- the same constraint, with nothing to say the branch in between was
+-- abandoned and its state rolled back.
+--
 -- 'SessionEnv' carries a @Maybe (TraceEvent -> IO ())@ handler; when
 -- @Nothing@, the cost of tracing is a single pointer test inside the
 -- interpreter's emission helper. The REPL's @:trace@ command installs
 -- 'defaultTraceHandler' for the duration of one query.
 module YCHR.Internal.Runtime.Trace
   ( TraceEvent (..),
+    BacktrackReason (..),
     TraceHandler,
     defaultTraceHandler,
     formatEvent,
@@ -74,7 +82,49 @@ data TraceEvent
     -- primitives, etc.). Emitted once per call with both inputs and
     -- result.
     TECallHost {hname :: !Text, args :: ![Term], result :: !Term}
+  | -- | Entering a search ('YCHR.Internal.Runtime.Search'). @sname@ is
+    -- the driving host call, @solve@ or @find_all@.
+    TESearchEnter {sname :: !Text}
+  | -- | A choice point was selected at quiescence: the @choose\/2@
+    -- suspension the driver took, the variable it will bind, and its
+    -- alternatives in the order they will be tried.
+    TEChoice {sid :: !SuspensionId, choiceVar :: !Term, alts :: ![Term]}
+  | -- | Trying one alternative of the current choice point.
+    -- @altNum@ is 1-based, @altCount@ the total.
+    TETryAlt {altNum :: !Int, altCount :: !Int, value :: !Term}
+  | -- | The current branch was abandoned. Everything it did — bindings,
+    -- store, history, reactivation queue — has been undone by the time
+    -- this is emitted, which is what the surrounding @kill@ and
+    -- @reactivate@ events would otherwise leave unsaid.
+    TEBacktrack {reason :: !BacktrackReason}
+  | -- | Quiescence with no choice point left: the current state is a
+    -- solution.
+    TESolution
+  | -- | A search finished. 'True' when it committed to a solution
+    -- ('solve'), 'False' when the space was exhausted and everything
+    -- was undone.
+    TESearchExit {sname :: !Text, committed :: !Bool}
   deriving (Show)
+
+-- | Why a search branch was abandoned. Reported by 'TEBacktrack'.
+--
+-- The first three are exactly the three ways the specification says a
+-- branch can fail. The fourth is not a failure at all — it is
+-- @find_all@ recording a solution and asking for the next one — and it
+-- is distinguished precisely so that a trace never shows a successful
+-- branch being reported as exhausted.
+data BacktrackReason
+  = -- | @search:fail\/0@ was called.
+    BRFail
+  | -- | The driver's own @X = Alt@ did not unify, so this alternative
+    -- is not a candidate. Only reachable when the variable was already
+    -- bound, where @choose\/2@ acts as a membership test.
+    BRNoMatch
+  | -- | Every alternative of the choice point has been tried.
+    BRExhausted
+  | -- | A solution was reached and the caller asked to keep searching.
+    BRMoreWanted
+  deriving (Show, Eq)
 
 -- | The default trace handler: formats the event with two-space
 -- indentation per level and writes a line to the given handle.
@@ -118,10 +168,32 @@ formatEvent depth ev = indent ++ body
         "return " ++ prettyTerm v
       TECallHost f as r ->
         "host call " ++ T.unpack f ++ argList as ++ " = " ++ prettyTerm r
+      TESearchEnter s ->
+        "search " ++ T.unpack s
+      TEChoice s v as ->
+        "choice " ++ showSid s ++ ": " ++ prettyTerm v ++ " in " ++ termList as
+      TETryAlt n total v ->
+        "try alt " ++ show n ++ "/" ++ show total ++ " = " ++ prettyTerm v
+      TEBacktrack r ->
+        "backtrack (" ++ backtrackReason r ++ ")"
+      TESolution -> "solution"
+      TESearchExit s committed ->
+        "end search "
+          ++ T.unpack s
+          ++ (if committed then " (committed)" else " (exhausted)")
 
 argList :: [Term] -> String
 argList [] = ""
 argList ts = "(" ++ intercalate ", " (map prettyTerm ts) ++ ")"
+
+termList :: [Term] -> String
+termList ts = "[" ++ intercalate ", " (map prettyTerm ts) ++ "]"
+
+backtrackReason :: BacktrackReason -> String
+backtrackReason BRFail = "fail"
+backtrackReason BRNoMatch = "no match"
+backtrackReason BRExhausted = "alternatives exhausted"
+backtrackReason BRMoreWanted = "more solutions wanted"
 
 sidList :: [SuspensionId] -> String
 sidList ss = "[" ++ intercalate ", " (map showSid ss) ++ "]"

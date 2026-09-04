@@ -61,15 +61,13 @@ module YCHR.Run
 where
 
 import Control.Exception
-  ( SomeAsyncException,
-    SomeException,
+  ( SomeException,
     displayException,
-    fromException,
     handle,
     throwIO,
     try,
   )
-import Control.Monad (unless, void, when)
+import Control.Monad (unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ask, runReaderT)
@@ -111,29 +109,31 @@ import YCHR.Internal.Pretty (prettyPExprSrc, prettyTerm)
 import YCHR.Internal.Rename (RenameWarning, renameQueryArgsWith, renameQueryGoalsWith)
 import YCHR.Internal.Resolve (ResolveError, termToExpr)
 import YCHR.Internal.Resolved qualified as R
-import YCHR.Internal.Runtime.Error (RuntimeErrorThrown (..), runtimeErrorS)
+import YCHR.Internal.Runtime.Error
+  ( RuntimeErrorThrown (..),
+    isControlException,
+    runtimeErrorS,
+  )
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
     HostCallRegistry,
     callProc,
-    constraintTypeLabel,
     deepEvalValue,
     emitTrace,
     snapshotValue,
     snapshotValues,
-    suspensionView,
   )
 import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..))
-import YCHR.Internal.Runtime.Reactivation (drainQueue, enqueueObservers)
+import YCHR.Internal.Runtime.Reactivation (enqueueObservers)
 import YCHR.Internal.Runtime.Session
-  ( tellConstraint,
+  ( drainReactivation,
+    tellConstraint,
     toSessionInput,
     withCHR,
     withCHRExtra,
     withCHRExtraTraced,
     withTraceHandler,
   )
-import YCHR.Internal.Runtime.Store (aliveConstraint)
 import YCHR.Internal.Runtime.Trace (TraceEvent (..))
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..), VarId)
 import YCHR.Internal.Runtime.Var (deref, equal, getVarId, newVar, unify)
@@ -708,9 +708,10 @@ raiseUnifyFailure v1 v2 = do
 -- user 'YCHR.Convert.hostFnValues' handler, a parse failure inside a
 -- built-in) is re-raised through 'runtimeErrorS' so it reaches the caller
 -- as 'Error''s 'RuntimeError' with a call stack, rather than escaping raw.
--- Async and already-coded exceptions keep their identity. The VM's
--- non-local jumps are not exceptions at all — the interpreter returns
--- them as signals — so there is nothing else to let through.
+-- Async exceptions, already-coded errors, and search branch failures
+-- keep their identity ('isControlException'). The VM's non-local jumps
+-- are not exceptions at all — the interpreter returns them as signals
+-- — so there is nothing else to let through.
 hostCall :: Maybe HostCallFn -> Text -> [Value] -> Chr Value
 hostCall (Just (HostCallFn f)) name args = do
   env <- ask
@@ -718,30 +719,12 @@ hostCall (Just (HostCallFn f)) name args = do
   case result of
     Right v -> pure v
     Left exc
-      | Just (ae :: SomeAsyncException) <- fromException exc ->
-          liftIO (throwIO ae)
-      | Just (rte :: RuntimeErrorThrown) <- fromException exc ->
-          liftIO (throwIO rte)
+      | isControlException exc -> liftIO (throwIO exc)
       | otherwise ->
           runtimeErrorS $
             "host call " ++ T.unpack name ++ ": " ++ displayException exc
 hostCall Nothing name _ =
   runtimeErrorS $ "Unknown host function: " ++ T.unpack name
-
--- | Drain the reactivation queue, dispatching each constraint.
--- Mirrors the VM's 'DrainReactivationQueue' statement, including
--- the per-suspension 'TEReactivate' event for the tracer.
-drainReactivation :: Chr ()
-drainReactivation =
-  drainQueue $ \sid -> do
-    alive <- aliveConstraint sid
-    when alive $ do
-      emitTrace $ do
-        (ct, vs) <- suspensionView sid
-        ctName <- constraintTypeLabel ct
-        ts <- snapshotValues vs
-        pure (TEReactivate sid ctName ts)
-      void $ callProc (Name "reactivate_dispatch") [CId sid]
 
 -- | Run a query-side unification, mirroring the interpreter's
 -- 'evalBoolExpr (BUnify ...)' branch: snapshot the operand terms

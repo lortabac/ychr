@@ -16,8 +16,25 @@ ychr repl [--quiet] [--Werror] [FILES...]
 The REPL loads the given files (or none, falling back to the bundled
 prelude alone), prints any warnings and type-check messages, and
 presents the `ychr> ` prompt. The full standard library is auto-loaded;
-no `:- use_module(library(...))` is needed for prelude or meta
-identifiers.
+no `:- use_module(library(...))` is needed for prelude, meta, or
+search identifiers.
+
+Because a *query* resolves against every auto-loaded library, a bare
+name that a loaded file also exports is ambiguous at the prompt even
+though the same name inside a module body would resolve locally. With
+a file that exports its own `fail/0`:
+
+```
+ychr> fail.
+=== error ===
+<generated>:1:1: YCHR-20001
+Ambiguous name 'fail/0'
+  Hint: could be: lib_a, search; qualify the name explicitly to disambiguate
+```
+
+Qualify it — `lib_a:fail` — as the hint says. The names
+`library(search)` brings into query scope are `choose/2`,
+`try_unify/2`, `fail/0`, `solve/1` and `find_all/2`.
 
 The `--quiet` and `--Werror` flags are documented in the
 [CLI reference](cli.md).

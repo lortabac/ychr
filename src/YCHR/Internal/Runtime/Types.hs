@@ -7,6 +7,12 @@ module YCHR.Internal.Runtime.Types
     Value (..),
     CallVal (..),
     Suspension (..),
+
+    -- * Search trail
+    TrailEntry (..),
+    TrailState (..),
+    Trail (..),
+    TrailMark (..),
   )
 where
 
@@ -87,3 +93,52 @@ data Suspension = Suspension
     alive :: !(IORef Bool),
     stored :: !(IORef Bool)
   }
+
+-- ---------------------------------------------------------------------------
+-- Search trail
+-- ---------------------------------------------------------------------------
+
+-- | One undoable write, paired with the value the cell held /before/
+-- it. Replaying an entry restores that value.
+--
+-- The trail covers exactly the mutable cells that a snapshot of the
+-- session's 'Data.IORef.IORef's cannot reach. The store, the
+-- propagation history and the reactivation queue all hold persistent
+-- structures behind a single reference, so "undo" for them is a
+-- pointer write ("YCHR.Internal.Runtime.Search"). Variable cells and
+-- suspension flags are individual references reachable only by
+-- walking, and are shared across session forks besides, so they need
+-- a log.
+data TrailEntry
+  = -- | A logical-variable cell and its previous 'VarState'. Covers
+    -- bindings, observer-list updates, and the writes 'deref' makes
+    -- for path compression — which have to be here: a cell compressed
+    -- to point past a variable the branch bound must be restored
+    -- alongside it.
+    TrailVar !Var !VarState
+  | -- | A suspension's @alive@ or @stored@ flag and its previous
+    -- value. The two flags are the only mutable part of a
+    -- 'Suspension'.
+    TrailFlag !(IORef Bool) !Bool
+
+-- | Trail contents plus its length. Bundled in one cell so a trailed
+-- write costs a single 'Data.IORef.modifyIORef''; the length is what
+-- makes a 'TrailMark' an @Int@ rather than something that has to be
+-- compared against the list.
+data TrailState = TrailState
+  { entries :: ![TrailEntry],
+    length :: !Int
+  }
+
+-- | The undo log of the outermost search: one trail is
+-- installed by the outermost 'YCHR.Internal.Runtime.Search' entry and
+-- shared by every session forked underneath it, so that a nested
+-- search which commits still leaves its writes undoable by the
+-- enclosing one. Entries are newest-first.
+newtype Trail = Trail (IORef TrailState)
+
+-- | A position on a 'Trail', taken before a branch and unwound to
+-- when it is abandoned. Just the trail length at the time it was
+-- taken.
+newtype TrailMark = TrailMark Int
+  deriving (Eq, Ord, Show)

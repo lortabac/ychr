@@ -1,0 +1,111 @@
+:- module(search_basic, [
+    first_pair/3, all_pairs/3, no_pair/3,
+    empty_alts/1, bound_pick/2,
+    unify_ok/1, unify_clash/1,
+    bad_alts/1, outside/1, error_escapes/1,
+    prop_rollback/2, killed_choice/2, no_solutions/2, tu_var/3,
+    type(tag/0),
+    % Goal constraints have to be exported: solve/1 and find_all/2
+    % resolve them through the program's exports, in the caller.
+    pair/3, pick_nothing/1, pick3/1, unify_two/2, pick_from/2,
+    divide_by_zero/1, prop_label/2, pick_or_decide/1, tu_pick/2
+]).
+
+:- use_module(library(search)).
+
+:- chr_type tag ---> one ; two ; nine.
+
+:- chr_constraint
+   first_pair(any, any, any), all_pairs(any, any, any), no_pair(any, any, any),
+   pair(any, any, any), sum_is(any, any, any),
+   empty_alts(any), pick_nothing(any),
+   bound_pick(any, any), pick3(any),
+   unify_ok(any), unify_clash(any), unify_two(any, any),
+   bad_alts(any), pick_from(any, any),
+   outside(any),
+   error_escapes(any), divide_by_zero(any),
+   prop_rollback(any, any), prop_label(any, any),
+   marker(any), seen(any), sink(any),
+   killed_choice(any, any), decided(any), pick_or_decide(any),
+   no_solutions(any, any),
+   tu_var(any, any, any), tu_pick(any, any), tu_check(any, any).
+
+% Label two variables, then prune with a guard that can only decide
+% once both are bound. The guard delays while X or Y is unbound, so
+% `sum_is` stays stored until labeling reaches it and reactivation
+% retries it.
+pair(X, Y, S) <=> choose(X, [1, 2, 3]), choose(Y, [1, 2, 3]), sum_is(X, Y, S).
+sum_is(X, Y, S) <=> not(X + Y == S) | fail.
+
+% solve/1 commits: the first solution's bindings survive the call.
+first_pair(X, Y, Ok) <=> Ok is solve(quote(pair(X, Y, 5))).
+
+% find_all/2 undoes everything: only the copies survive. X and Y are
+% threaded through the head because a rule body may only mention
+% variables the head binds (YCHR-40002) — unlike Prolog's findall/3,
+% the goal's variables are not local to the call.
+all_pairs(X, Y, Ss) <=> Ss is find_all([X, Y], quote(pair(X, Y, 5))).
+
+% No sum of two labels reaches 99, so every branch fails.
+no_pair(X, Y, Ok) <=> Ok is solve(quote(pair(X, Y, 99))).
+
+% Zero alternatives is immediate exhaustion, not an error.
+pick_nothing(X) <=> choose(X, []).
+empty_alts(Ok) <=> Ok is solve(quote(pick_nothing(_))).
+
+% choose/2 on an already-bound variable is a membership test: only the
+% matching alternative is a live branch.
+pick3(X) <=> choose(X, [1, 2, 3]).
+bound_pick(X, Ss) <=> X = 2, Ss is find_all(X, quote(pick3(X))).
+
+% try_unify/2 is Prolog's `=`: it fails the branch instead of erroring.
+unify_two(X, Y) <=> try_unify(X, Y).
+unify_ok(Ok) <=> Ok is solve(quote(unify_two(a, a))).
+unify_clash(Ok) <=> Ok is solve(quote(unify_two(a, b))).
+
+% Alternatives that are not a proper list are a malformed choice
+% point: a runtime error, not a dead end. The list is passed through an
+% `any` parameter so the mistake survives type checking.
+pick_from(X, Alts) <=> choose(X, Alts).
+bad_alts(Ok) <=> Ok is solve(quote(pick_from(_, 7))).
+
+% fail/0 with no enclosing search is a runtime error.
+outside(R) <=> fail, R = 1.
+
+% A runtime error inside a branch escapes the whole search rather than
+% failing the branch.
+divide_by_zero(X) <=> X is 1 div 0.
+error_escapes(Ok) <=> Ok is solve(quote(divide_by_zero(_))).
+
+% The propagation history is rolled back with everything else. `seen/1`
+% is derived by a *propagation* rule from a `marker` that outlives the
+% choice point, so if the history survived a failed branch the rule
+% would refuse to fire a second time on the same marker and `sink`
+% would never be reached. Branch X = 1 fires it and then fails; branch
+% X = 2 must fire it afresh. Without the rollback this binds M = _.
+prop_rollback(X, M) <=> solve(quote(prop_label(X, M))).
+prop_label(X, M) <=> choose(X, [1, 2]), marker(X), sink(M).
+marker(X) ==> X > 0 | seen(X).
+seen(1) <=> fail.
+seen(2), sink(M) <=> M = two.
+
+% A `choose` that a rule removes before quiescence never reaches the
+% driver, so the goal quiesces with no choice point at all: one
+% solution, and the variable stays unbound.
+killed_choice(X, Ok) <=> Ok is solve(quote(pick_or_decide(X))).
+pick_or_decide(X) <=> choose(X, [1, 2]), decided(X).
+decided(X) \ choose(X, _) <=> true.
+
+% find_all over an empty space is [], not a failure.
+no_solutions(X, Ss) <=> Ss is find_all(X, quote(pick_nothing(X))).
+
+% try_unify/2 on variables rather than ground atoms. The heads below
+% match only once labeling has bound X, so each runs inside its own
+% branch: X = 1 unifies a still-unbound Y (branch lives), X = 2 binds Y
+% and then contradicts it (branch fails on a *variable*, which is the
+% case ground operands cannot reach), X = 3 fails on ground operands.
+tu_var(X, Y, Ss) <=> Ss is find_all([X, Y], quote(tu_pick(X, Y))).
+tu_pick(X, Y) <=> choose(X, [1, 2, 3]), tu_check(X, Y).
+tu_check(1, Y) <=> try_unify(Y, one).
+tu_check(2, Y) <=> try_unify(Y, two), try_unify(Y, nine).
+tu_check(3, _) <=> try_unify(3, 9).

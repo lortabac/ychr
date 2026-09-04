@@ -245,8 +245,9 @@ render a term first, or `print/1` to print one directly.
 
 ## Other libraries
 
-The bundled libraries `lists`, `maybe`, `pairs`, `strings`, and `meta`
-ship alongside the prelude under [`libraries/`](../../libraries/).
+The bundled libraries `lists`, `maybe`, `pairs`, `strings`, `meta`, and
+`search` ship alongside the prelude under
+[`libraries/`](../../libraries/).
 
 Unlike the prelude, these are *not* auto-loaded outside the REPL —
 inside the REPL all of them are available; in compiled programs use
@@ -460,11 +461,12 @@ has its own store, propagation history, and reactivation queue but the
 same rules, functions, and host calls; the goal's constraints are
 resolved through the program's exports, so they must be exported (an
 unknown or unexported goal constraint is a runtime error in the
-caller, not a `false` result). It returns `true` when the sub-session
-runs to quiescence and `false` when it raises a runtime error. Unbound
-variables inside the goal are shared with the sub-session, so bindings
-made there survive the call — pass fresh out-variables to read results
-back:
+caller, not a `false` result). It returns `true` if and only if the
+sub-session runs to quiescence, and `false` otherwise — a runtime
+error, or (inside a search branch) a `search:fail/0`. Bindings the
+sub-session made before failing are not rolled back. Unbound variables
+inside the goal are shared with the sub-session, so bindings made there
+survive the call — pass fresh out-variables to read results back:
 
 ```prolog
 probe(N, R) <=> R is N + 1.
@@ -495,9 +497,50 @@ Haskell-only — the Scheme runtime either stubs them out or has no
 implementation at all, so calling them from compiled Scheme fails (see
 `dev-docs/SCHEME_BACKEND_GAPS.md`).
 
+### `search`
+
+[`libraries/search.chr`](../../libraries/search.chr). Opt-in search:
+explore alternative bindings and undo the ones that do not work out.
+Nothing here affects a program that does not import it.
+
+| Name | Kind | Description |
+|---|---|---|
+| `choose/2` | constraint | `choose(X, Alts)` marks a pending choice. It has no rules — it sits in the store until the driver reaches it. |
+| `solve/1` | `(any) -> bool` | Run a goal, stop at its first solution and keep its bindings. `false` when the space is exhausted, with everything undone. |
+| `find_all/2` | `(any, any) -> list(any)` | Every solution of a goal, as a list of copies of a template. Fully undone afterwards. |
+| `fail/0` | `() -> any` | Fail the current branch. Outside a search, a runtime error. |
+| `try_unify/2` | constraint | Prolog's `=`: unify, or fail the branch instead of erroring. |
+
+The model is *choice at quiescence*: run the goal to a fixpoint, take
+the oldest `choose` left in the store, bind its variable to each
+alternative in turn, propagate again, and undo a branch that fails.
+
+```prolog
+:- use_module(library(search)).
+:- chr_constraint pair(any, any, any), sum_is(any, any, any).
+
+pair(X, Y, S) <=> choose(X, [1, 2, 3]), choose(Y, [1, 2, 3]), sum_is(X, Y, S).
+sum_is(X, Y, S) <=> not(X + Y == S) | fail.
+```
+
+With that program, `solve(quote(pair(X, Y, 5)))` is `true` with
+`X = 2, Y = 3`, and `find_all([X, Y], quote(pair(X, Y, 5)))` is
+`[[2, 3], [3, 2]]` with `X` and `Y` left unbound.
+
+Failure is not error: a runtime error inside a branch propagates out of
+the search rather than failing the branch, and body `=` still errors on
+a mismatch — write `try_unify/2` where a mismatch is a dead end. Goals
+run in a fresh sub-session, so the caller's store is not searched. The
+whole library is Haskell-only.
+
+For the full contract — commit and undo rules, nesting, the ωr
+interaction, and every edge case — see the
+[search specification](search.md).
+
 ## See also
 
 - [Language reference](language.md).
+- [Search](search.md) — the `search` library's specification.
 - [Type system](type-system.md) — how the overloaded signatures are
   resolved.
 - [How-to: call host functions](../how-to/call-host-functions.md).

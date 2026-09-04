@@ -80,6 +80,8 @@ is copied verbatim from a real run; the authoring conventions are in
 - [Host functions](reference/host-functions.md) — registering custom
   `host:_` functions from Haskell
 - [Type system](reference/type-system.md) — gradual type-system spec
+- [Search](reference/search.md) — `library(search)` spec: choice points,
+  commit and undo, failure vs error
 - [Prelude / standard library](reference/prelude.md)
 - [CLI](reference/cli.md) — `ychr` command
 - [REPL](reference/repl.md) — meta-commands and live sessions

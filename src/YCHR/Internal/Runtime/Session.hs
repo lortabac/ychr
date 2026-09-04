@@ -20,6 +20,9 @@ module YCHR.Internal.Runtime.Session
     SessionInput (..),
     toSessionInput,
 
+    -- * Reactivation
+    drainReactivation,
+
     -- * Session setup
     withCHR,
     withCHRExtra,
@@ -35,7 +38,7 @@ module YCHR.Internal.Runtime.Session
 where
 
 import Control.Exception (bracket_)
-import Control.Monad (unless)
+import Control.Monad (unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask)
 import Data.IORef (readIORef, writeIORef)
@@ -46,16 +49,26 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import YCHR.Internal.Compile (tellProcName)
+import YCHR.Internal.Compile.Names (reactivateDispatchName)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), ExportResolution (..))
 import YCHR.Internal.Runtime.Error (runtimeErrorS)
-import YCHR.Internal.Runtime.Interpreter (HostCallRegistry, callProc)
+import YCHR.Internal.Runtime.Interpreter
+  ( HostCallRegistry,
+    callProc,
+    constraintTypeLabel,
+    emitTrace,
+    snapshotValues,
+    suspensionView,
+  )
 import YCHR.Internal.Runtime.Monad
   ( Chr,
     SessionEnv (..),
     initSessionEnv,
     runChr,
   )
-import YCHR.Internal.Runtime.Trace (TraceHandler)
+import YCHR.Internal.Runtime.Reactivation (drainQueue)
+import YCHR.Internal.Runtime.Store (aliveConstraint)
+import YCHR.Internal.Runtime.Trace (TraceEvent (..), TraceHandler)
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Name (..), Procedure (..), Program (..))
@@ -161,6 +174,29 @@ withTraceHandler handler action = do
           writeIORef env.traceDepth prevDepth
       )
       (runChr action env)
+
+-- | Drain the reactivation queue, dispatching each live constraint to
+-- @reactivate_dispatch@ and emitting the per-suspension
+-- 'TEReactivate' event for the tracer.
+--
+-- This is the host-side mirror of the VM's
+-- 'YCHR.Internal.VM.DrainReactivationQueue' statement, for the two
+-- drivers that have to do the same work outside compiled code: the
+-- query-time evaluator after a goal unification ("YCHR.Run"), and the
+-- search driver after binding a choice point
+-- ("YCHR.Internal.Runtime.Search"). It lives here because this is the
+-- lowest module both of them already import.
+drainReactivation :: Chr ()
+drainReactivation =
+  drainQueue $ \sid -> do
+    alive <- aliveConstraint sid
+    when alive $ do
+      emitTrace $ do
+        (ct, vs) <- suspensionView sid
+        ctName <- constraintTypeLabel ct
+        ts <- snapshotValues vs
+        pure (TEReactivate sid ctName ts)
+      void (callProc reactivateDispatchName [CId sid])
 
 -- | Add a constraint to the store. The constraint name can be
 -- unqualified (resolved via the session's export map) or fully

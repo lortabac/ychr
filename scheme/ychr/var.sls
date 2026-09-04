@@ -54,6 +54,25 @@
                 result)))
         v))
 
+  ;;; Dereferencing without path compression.
+  ;;;
+  ;;; Only unifiable? uses this, and it must. That check's own writes
+  ;;; are hypothetical and rolled back from a private trail, but a
+  ;;; compression write made *through* one of them touches a different
+  ;;; cell, is not on that trail, and would survive the rollback --
+  ;;; leaving a variable bound to a value the check merely supposed.
+  ;;; For W aliased to V: the check tentatively binds V to 1, then
+  ;;; dereferences W, walks W -> V -> 1, and compresses W to 1.
+  ;;; Restoring V then leaves W bound to 1 and the alias destroyed,
+  ;;; whatever the check answered.
+  (define (deref/no-compress v)
+    (if (var? v)
+        (let ((val (var-value v)))
+          (if (eq? val *unbound*)
+              v
+              (deref/no-compress val)))
+        v))
+
   ;;; Unification (tell semantics, Prolog =)
   (define (unify v1 v2)
     (let ((observers '()))
@@ -110,13 +129,16 @@
   ;;; Unifiability check: does unify succeed, without mutating any
   ;;; bindings? Mirrors unify*/unify-args but uses a trail list to roll
   ;;; back every mutation before returning. Observers are never touched.
+  ;;;
+  ;;; The walk uses deref/no-compress rather than deref, so that the
+  ;;; trail is the only writer; see there.
   (define (unifiable? v1 v2)
     (let ((trail '()))
       (define (trail! v)
         ;; Record the current var-value so it can be restored later.
         (set! trail (cons (cons v (var-value v)) trail)))
       (define (uni a b)
-        (uni* (deref a) (deref b)))
+        (uni* (deref/no-compress a) (deref/no-compress b)))
       (define (uni* d1 d2)
         (cond
           ((wildcard? d1) #t)

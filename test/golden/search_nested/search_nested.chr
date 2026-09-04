@@ -1,0 +1,75 @@
+:- module(search_nested, [
+    track/3, rtrack/3, contained/2, deep/3, error_rollback/2,
+    erroring/1, bind_then_boom/1, boom/1,
+    labelled/2, rlabelled/2, step/2, rstep/2, setb/2,
+    subfail/1, just_fail/0, outer_pick/2, inner_pick/1
+]).
+
+:- use_module(library(search)).
+:- use_module(library(meta)).
+
+:- chr_constraint
+   track(any, any, any), labelled(any, any), step(any, any), setb(any, any),
+   rtrack(any, any, any), rlabelled(any, any), rstep(any, any),
+   contained(any, any), subfail(any), just_fail,
+   deep(any, any, any), outer_pick(any, any), inner_pick(any),
+   error_rollback(any, any), erroring(any), bind_then_boom(any), boom(any).
+
+% ---------------------------------------------------------------------
+% Trail sharing across nested searches.
+%
+% The outer search labels A. Each branch runs an *inner* search that
+% commits a binding to B — a variable shared all the way out to the
+% query. Branch A = 1 is then rejected.
+%
+% The inner search committed, so it unwound nothing itself; its trail
+% entries have to remain on the shared trail for the outer driver to
+% undo. If they did not, B would still be bound to `first` when the
+% A = 2 branch runs, and `B = second` would be a unification failure —
+% a loud runtime error rather than a quietly wrong answer.
+track(A, B, Ok) <=> Ok is solve(quote(labelled(A, B))).
+labelled(A, B) <=> choose(A, [1, 2]), step(A, B).
+
+% These heads match only once A is bound, so each is reached by
+% reactivation after the choice rather than when `step` is told.
+step(1, B) <=> solve(quote(setb(B, first))), fail.
+step(2, B) <=> solve(quote(setb(B, second))).
+
+setb(B, V) <=> B = V.
+
+% ---------------------------------------------------------------------
+% Same shape, but the inner session is a plain run_chr_session/1 rather
+% than a search. Its writes to shared variables land on the enclosing
+% search's trail too, because a plain fork inherits the trail field.
+rtrack(A, B, Ok) <=> Ok is solve(quote(rlabelled(A, B))).
+rlabelled(A, B) <=> choose(A, [1, 2]), rstep(A, B).
+
+rstep(1, B) <=> run_chr_session(quote(setb(B, first))), fail.
+rstep(2, B) <=> run_chr_session(quote(setb(B, second))).
+
+% ---------------------------------------------------------------------
+% A branch failure inside a run_chr_session/1 goal is contained by the
+% sub-session boundary: false, and the enclosing search survives to
+% reach quiescence.
+contained(Ok, Sub) <=> Ok is solve(quote(subfail(Sub))).
+subfail(Sub) <=> Sub is run_chr_session(quote(just_fail)).
+just_fail <=> fail.
+
+% ---------------------------------------------------------------------
+% A choice point told inside a branch nests under it: every outer
+% alternative is paired with every inner one, in search order.
+deep(X, P, Ss) <=> Ss is find_all([X, P], quote(outer_pick(X, P))).
+outer_pick(X, P) <=> choose(X, [10, 20]), inner_pick(P).
+inner_pick(P) <=> choose(P, [7, 8]).
+
+% ---------------------------------------------------------------------
+% A runtime error escaping a search unwinds to the search's base mark
+% before it propagates (ISO catch/3-style), so a caller that catches it
+% resumes with the variables it had rather than with the half-made
+% bindings of the branch that died. Here the catcher is
+% run_chr_session/1, which maps the error to false; X must come back
+% unbound even though the branch bound it before erroring.
+error_rollback(X, R) <=> R is run_chr_session(quote(erroring(X))).
+erroring(X) <=> solve(quote(bind_then_boom(X))).
+bind_then_boom(X) <=> X = 1, boom(_).
+boom(Y) <=> Y is 1 div 0.

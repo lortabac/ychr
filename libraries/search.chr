@@ -1,0 +1,55 @@
+:- module(search, [
+    choose/2,
+    try_unify/2,
+    fun fail/0,
+    fun solve/1,
+    fun find_all/2
+]).
+
+:- chr_constraint choose(any, list(any)), try_unify(any, any).
+
+:- function
+    (fail() -> any),
+    (solve(any) -> bool),
+    (find_all(any, any) -> list(any)).
+
+% `choose(X, Alts)` marks a pending choice and has deliberately no
+% rules: telling it simply leaves it in the store, where the search
+% driver finds it once the goal has propagated to quiescence. It is
+% still an ordinary constraint, so a rule of yours may inspect or
+% remove one before the driver ever sees it.
+%
+% The driver takes the oldest live `choose` at each quiescence and
+% tries its alternatives in list order, unifying X with each in turn
+% and propagating again. If X is already bound the unification is a
+% membership test, and alternatives that do not match are skipped.
+
+% Abandon the current branch. Outside a search there is no branch to
+% abandon, and this is a runtime error rather than a silent success.
+fail -> host:fail.
+
+% Run a goal (a constraint term, or a list of them, wrapped in quote/1
+% to keep it symbolic) in a fresh session of the current program, and
+% stop at its first solution: true, with the bindings of that solution
+% left in place. False when the search space is exhausted, with every
+% binding it made undone. Runtime errors propagate — unlike
+% run_chr_session/1, a search does not turn a bug into a false.
+solve(G) -> host:solve(G).
+
+% Every solution of a goal, as a list of copies of Template in search
+% order. The copies are all that survives: the search is fully unwound
+% afterwards, so no binding it made is visible to the caller. An empty
+% list means no solutions; find_all never fails.
+find_all(Template, G) -> host:find_all(Template, G).
+
+% Prolog's `=`: unify, or fail the branch. YCHR's own `=` raises a
+% runtime error when the two sides cannot be unified, on the grounds
+% that a body unification which can never succeed is a bug in the rule
+% rather than a dead end. Use this where a mismatch really is a dead
+% end.
+%
+% `unifiable/2` binds nothing, so a guard that says no leaves no
+% half-done binding behind, and an unbound operand answers "yes, these
+% can unify" rather than raising an instantiation error.
+try_unify(X, Y) <=> unifiable(X, Y) | X = Y.
+try_unify(_, _) <=> fail.

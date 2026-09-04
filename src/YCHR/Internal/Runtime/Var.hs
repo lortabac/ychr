@@ -37,6 +37,7 @@ import Control.Monad.Trans.Reader (ask)
 import Data.IORef
 import Data.Text (Text)
 import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..))
+import YCHR.Internal.Runtime.Trail (recordVarWrite)
 import YCHR.Internal.Runtime.Types
   ( SuspensionId,
     Value (..),
@@ -52,8 +53,14 @@ import YCHR.Internal.Runtime.Types
 readVarState :: Var -> Chr VarState
 readVarState (Var ref) = liftIO $ readIORef ref
 
+-- | The single choke point for writing a variable cell, and therefore
+-- where search records the old contents on its undo trail. Every
+-- binding, every observer-list update, and every path-compression
+-- write goes through here.
 writeVarState :: Var -> VarState -> Chr ()
-writeVarState (Var ref) st = liftIO $ writeIORef ref st
+writeVarState var@(Var ref) st = do
+  recordVarWrite var
+  liftIO $ writeIORef ref st
 
 newVarRef :: VarState -> Chr Var
 newVarRef st = liftIO $ Var <$> newIORef st
@@ -205,14 +212,44 @@ unifyArgs (a : as) (b : bs) = do
     else pure (False, obs)
 unifyArgs _ _ = pure (False, [])
 
+-- | Follow a binding chain to what it stands for, /without/ writing
+-- the result back.
+--
+-- 'deref' path-compresses, and 'unifiable' cannot afford that. Its own
+-- writes are hypothetical, reverted from a private trail before it
+-- returns; but a compression write made /through/ one of those
+-- hypothetical bindings is a different cell, is not on that trail, and
+-- would survive the revert — leaving a variable bound to a value the
+-- check merely supposed.
+--
+-- Concretely, for @W@ aliased to @V@: the check tentatively binds
+-- @V := 1@, then dereferences @W@, walks @W → V → 1@, and compresses
+-- @W := 1@. Reverting @V@ leaves @W@ bound to @1@ and the @V@\/@W@
+-- alias destroyed, whatever the check answered.
+--
+-- Losing compression for the duration of the walk is the price of the
+-- guarantee, and it is the right trade: the walk is bounded by the
+-- chains that already exist, and this is a predicate, not a hot path.
+derefNoCompress :: Value -> Chr Value
+derefNoCompress val@(VVar var) = do
+  st <- readVarState var
+  case st of
+    Unbound {} -> pure val
+    Bound v -> derefNoCompress v
+derefNoCompress val = pure val
+
 -- | Check whether two values can be unified, without committing any
 -- bindings. Returns 'True' iff 'unify' would succeed.
 --
--- Mutations made to variable cells during the check are recorded on a
--- local trail and rolled back before returning, so the operation is
--- observably pure with respect to variable bindings. Path compression
--- performed by 'deref' is preserved (it is semantically invisible).
--- Observer lists are never modified.
+-- Every mutation made during the check is recorded on a local trail
+-- and rolled back before returning, so the operation is observably
+-- pure with respect to variable bindings — on both answers. That is
+-- what makes it usable as a guard (a guard that says "no" must leave
+-- nothing behind) and what @search:try_unify\/2@ is built on.
+--
+-- The walk uses 'derefNoCompress' rather than 'deref' precisely so
+-- that the trail is the /only/ writer; see that function for the leak
+-- this avoids. Observer lists are never modified.
 unifiable :: Value -> Value -> Chr Bool
 unifiable a b = do
   trailRef <- liftIO $ newIORef []
@@ -230,8 +267,8 @@ unifiable a b = do
       writeIORef ref newSt
 
     uni trailRef v1 v2 = do
-      d1 <- deref v1
-      d2 <- deref v2
+      d1 <- derefNoCompress v1
+      d2 <- derefNoCompress v2
       uni' trailRef d1 d2
 
     -- Unlike 'unify'', this never needs the cell's contents: it only

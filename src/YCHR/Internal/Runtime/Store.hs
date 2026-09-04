@@ -35,6 +35,7 @@ import Data.IntMap.Strict qualified as IntMap
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..))
+import YCHR.Internal.Runtime.Trail (recordFlagWrite)
 import YCHR.Internal.Runtime.Types (Suspension (..), SuspensionId (..), Value (..))
 import YCHR.Internal.Runtime.Var (addObserver)
 import YCHR.Internal.Types (ConstraintType (..), Name)
@@ -85,6 +86,16 @@ storeConstraint sid = do
   if alreadyStored
     then pure False
     else do
+      -- Defensive rather than load-bearing, unlike the 'alive' write
+      -- in 'killConstraint'. A search choice point only happens at
+      -- quiescence, when no activation is in progress, and 'stored'
+      -- can only flip inside the activation that created the
+      -- suspension — so a suspension whose flag flips inside a branch
+      -- is also absent from that branch's 'storeById' snapshot and
+      -- disappears wholesale on restore. Trailing it anyway keeps the
+      -- invariant statable as "suspension flags are trailed" instead
+      -- of resting on that argument.
+      recordFlagWrite susp.stored
       liftIO $ writeIORef susp.stored True
       SessionEnv {storeByType} <- ask
       let ConstraintType idx = susp.suspType
@@ -96,6 +107,7 @@ storeConstraint sid = do
 killConstraint :: SuspensionId -> Chr ()
 killConstraint sid = do
   Suspension {alive} <- lookupSusp sid
+  recordFlagWrite alive
   liftIO $ writeIORef alive False
 
 -- | Check if a constraint is still alive.

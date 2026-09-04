@@ -100,6 +100,10 @@ what is planned.
 
 ## Extensions
 
+- [x] Opt-in search (`library(search)`): `choose/2` choice points
+      resolved at quiescence, with `solve/1`, `find_all/2`, `fail/0`
+      and `try_unify/2`. Haskell runtime only; no VM changes. See the
+      [search specification](reference/search.md).
 - [ ] Aggregates, as described in Sneyers, Van Weert, Schrijvers,
       Demoen, 2007. *Aggregates in CHR*.
 - [ ] Rule priorities

@@ -20,6 +20,7 @@ module YCHR.Internal.Runtime.Monad
     SessionEnv (..),
     initSessionEnv,
     forkSessionEnv,
+    forkSearchSessionEnv,
 
     -- * Auxiliary types
     CallStack,
@@ -42,7 +43,14 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import YCHR.Internal.Compile.Pipeline (ExportResolution)
 import YCHR.Internal.Runtime.Trace (TraceHandler)
-import YCHR.Internal.Runtime.Types (Suspension, SuspensionId, Value, VarId (..))
+import YCHR.Internal.Runtime.Types
+  ( Suspension,
+    SuspensionId,
+    Trail (..),
+    TrailState (..),
+    Value,
+    VarId (..),
+  )
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (EvaluableKey, Procedure, RuleId, StackFrame)
 import YCHR.Internal.VM qualified as VM
@@ -121,6 +129,16 @@ data SessionEnv = SessionEnv
     -- handler in for the duration of one @:trace@ query inside an
     -- otherwise-untraced live session.
     traceHandler :: !(IORef (Maybe TraceHandler)),
+    -- | Undo log for search, or 'Nothing' when no search is active —
+    -- which is the case at the top level and stays the case for a
+    -- program that never calls @solve@ or @find_all@. While it is
+    -- 'Nothing' nothing is recorded, so the cost to an ordinary
+    -- session is one field read per variable and flag write.
+    --
+    -- Installed by 'forkSearchSessionEnv' and shared, not copied, by
+    -- every fork underneath it; see 'Trail' for why one trail must
+    -- span nested searches.
+    trail :: !(Maybe Trail),
     -- | Current indentation depth for the tracer. Only meaningful
     -- when 'traceHandler' is 'Just'; the interpreter bumps it on
     -- entry to ωr procedures (activate / occurrence / reactivate
@@ -170,6 +188,7 @@ initSessionEnv typeNames rNames pm hc ev expMap expSet = do
         evaluables = ev,
         exportMap = expMap,
         exportedSet = expSet,
+        trail = Nothing,
         traceHandler = th,
         traceDepth = td
       }
@@ -191,6 +210,13 @@ initSessionEnv typeNames rNames pm hc ev expMap expSet = do
 -- lists — which matters because a fork can be per-iteration work
 -- (@run_chr_session@ in the type-checker's overload search runs one
 -- per candidate signature).
+--
+-- The search 'trail' is inherited as it stands, and that is
+-- deliberate: a sub-session opened inside a search branch shares the
+-- caller's logical variables, so the writes it makes to them must
+-- land on the enclosing search's trail or backtracking would not
+-- undo them. At the top level the field is 'Nothing' and nothing is
+-- recorded. Use 'forkSearchSessionEnv' to /start/ a search.
 forkSessionEnv :: SessionEnv -> IO SessionEnv
 forkSessionEnv env = do
   pm <- readIORef env.procMap
@@ -209,6 +235,24 @@ forkSessionEnv env = do
         callStack = cs,
         procMap = pmRef
       }
+
+-- | 'forkSessionEnv' for a session that is about to run a search: as
+-- that fork, but with a trail guaranteed to be installed.
+--
+-- A fresh trail is installed only when the parent has none. A nested
+-- search /shares/ its parent's, so that entries an inner search
+-- commits stay visible to the outer driver: variable cells are shared
+-- across forks even though store references are not, and an outer
+-- branch that later fails must be able to undo bindings an inner
+-- search made. Marks, not trails, are what delimit an undo.
+forkSearchSessionEnv :: SessionEnv -> IO SessionEnv
+forkSearchSessionEnv env = do
+  sub <- forkSessionEnv env
+  case sub.trail of
+    Just _ -> pure sub
+    Nothing -> do
+      t <- newIORef (TrailState {entries = [], length = 0})
+      pure sub {trail = Just (Trail t)}
 
 -- | Run a 'Chr' action against a built 'SessionEnv'. Thin alias around
 -- 'runReaderT' so callers don't need to import the transformer module.

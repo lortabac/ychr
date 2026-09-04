@@ -44,19 +44,19 @@ module YCHR.Internal.Runtime.SubSession
   )
 where
 
-import Control.Exception (try)
-import Control.Monad (unless)
+import Control.Exception (SomeException, fromException, throwIO, try)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask)
-import Data.IORef (readIORef)
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
-import YCHR.Internal.Compile (tellProcName)
-import YCHR.Internal.Meta (decodeName, metaHostCallRegistry)
-import YCHR.Internal.Runtime.Error (RuntimeErrorThrown, runtimeErrorS)
+import YCHR.Internal.Meta (metaHostCallRegistry)
+import YCHR.Internal.Runtime.Error
+  ( RuntimeErrorThrown,
+    SearchFailure,
+    runtimeErrorS,
+  )
+import YCHR.Internal.Runtime.Goal (goalConstraints)
 import YCHR.Internal.Runtime.Monad
   ( Chr,
-    SessionEnv (..),
     forkSessionEnv,
     runChr,
   )
@@ -65,11 +65,9 @@ import YCHR.Internal.Runtime.Registry
     HostCallRegistry,
     baseHostCallRegistry,
   )
-import YCHR.Internal.Runtime.Session (resolveByExport, tellConstraint)
+import YCHR.Internal.Runtime.Search (searchHostCallRegistry)
+import YCHR.Internal.Runtime.Session (tellConstraint)
 import YCHR.Internal.Runtime.Types (Value (..))
-import YCHR.Internal.Runtime.Var (deref)
-import YCHR.Internal.Types (Term (..))
-import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Name (..))
 
 -- | Registry providing @run_chr_session/1@. Part of
@@ -81,19 +79,41 @@ subSessionHostCallRegistry =
   Map.fromList [(Name "run_chr_session", HostCallFn runChrSession)]
 
 -- | The default host-call registry — base builtins, the @meta@
--- library's host calls, and @run_chr_session@. This is what the
--- @ychr@ CLI and the default 'YCHR.Convert' / 'YCHR.DSL' entry points
--- use. Defined here rather than in "YCHR.Internal.Meta" because this
--- is the topmost of the three component modules.
+-- library's host calls, @run_chr_session@, and @library(search)@. This
+-- is what the @ychr@ CLI and the default 'YCHR.Convert' / 'YCHR.DSL'
+-- entry points use. Defined here rather than in "YCHR.Internal.Meta"
+-- because this is the topmost of the component modules.
 defaultHostCallRegistry :: HostCallRegistry
 defaultHostCallRegistry =
-  baseHostCallRegistry <> metaHostCallRegistry <> subSessionHostCallRegistry
+  baseHostCallRegistry
+    <> metaHostCallRegistry
+    <> subSessionHostCallRegistry
+    <> searchHostCallRegistry
 
 -- | @run_chr_session(Goal)@: @Goal@ is a single constraint term or a
 -- list of them. Each is told into a fresh session of the current
--- program, in order. Returns @true@ when the sub-session runs to
--- quiescence, @false@ when it raises a runtime error. Results flow
--- back through out-variables shared with the goal.
+-- program, in order. Returns @true@ if and only if the sub-session
+-- runs to quiescence, and @false@ otherwise. Results flow back through
+-- out-variables shared with the goal.
+--
+-- \"Otherwise\" is two things: a runtime error, and — when the call
+-- happens inside a search branch — a branch failure raised by
+-- @search:fail\/0@. Catching both is what makes the sub-session
+-- boundary total, so that a @fail@ inside the goal is contained here
+-- rather than escaping to fail the enclosing search branch. For a
+-- program that never searches the behaviour is unchanged, since a
+-- 'SearchFailure' cannot arise without a search.
+--
+-- The cost is that @false@ does not distinguish a bug in the goal from
+-- a deliberate failure. That conflation was already this call's
+-- contract for errors, and it is bounded by the caller getting a
+-- boolean it has to test — unlike search itself, where the same
+-- conflation would silently turn a bug into a dead end.
+--
+-- Bindings the sub-session made before failing are not rolled back:
+-- there is no choice point here and no mark to unwind to. Running the
+-- sub-session inside a search branch is what puts it under an
+-- enclosing driver's marks.
 --
 -- Goal constraint names are resolved (and their tell procedures
 -- looked up) in the calling session before the sub-session starts, so
@@ -101,82 +121,29 @@ defaultHostCallRegistry =
 -- a @false@ result.
 runChrSession :: [Value] -> Chr Value
 runChrSession [goalArg] = do
-  goals <- goalConstraints goalArg
+  goals <- goalConstraints "run_chr_session" goalArg
   env <- ask
   -- 'forkSessionEnv' is what makes this "the same program, from
   -- scratch": fresh store, history, queue and call stack, everything
-  -- else — including the variable and suspension-id counters, and the
-  -- trace state — carried over. See its documentation for why the
-  -- counters are shared.
+  -- else — including the variable and suspension-id counters, the
+  -- search trail, and the trace state — carried over. See its
+  -- documentation for why the counters and the trail are shared.
   sub <- liftIO (forkSessionEnv env)
   result <- liftIO (try (runChr (mapM_ (uncurry tellConstraint) goals) sub))
   case result of
-    Left (_ :: RuntimeErrorThrown) -> pure (VBool False)
     Right () -> pure (VBool True)
+    Left e
+      | quiescenceNotReached e -> pure (VBool False)
+      | otherwise -> liftIO (throwIO e)
 runChrSession _ = runtimeErrorS "run_chr_session: expected 1 argument"
 
--- | Decompose the goal argument into constraint tells, resolving each
--- name against the session's exports up front. A list value means
--- several goals in order; anything else is a single goal.
-goalConstraints :: Value -> Chr [(Types.Name, [Value])]
-goalConstraints v = do
-  elems <- listElems v
-  case elems of
-    Just gs -> traverse goalConstraint gs
-    Nothing -> (: []) <$> goalConstraint v
-
--- | One goal: a compound or atom whose (mangled) functor names an
--- exported constraint. Arguments are passed through untouched so
--- unbound out-variables reach the sub-session live.
-goalConstraint :: Value -> Chr (Types.Name, [Value])
-goalConstraint v = do
-  v' <- deref v
-  case v' of
-    VAtom f | not (isListFunctor f) -> resolveGoal f []
-    VTerm f args | not (isListFunctor f) -> resolveGoal f args
-    _ ->
-      runtimeErrorS
-        "run_chr_session: goal must be a constraint term or a list of them"
-
--- | Resolve a goal functor to its qualified constraint name and check
--- that the tell procedure exists, in the calling session, mirroring
--- 'tellConstraint'. Failing here (rather than inside the sub-session)
--- keeps "unknown constraint" a caller error instead of a @false@.
-resolveGoal :: T.Text -> [Value] -> Chr (Types.Name, [Value])
-resolveGoal f args = do
-  SessionEnv {procMap, exportMap, exportedSet} <- ask
-  resolved <- case resolveByExport exportMap exportedSet (functorName f) arity of
-    Left err -> runtimeErrorS ("run_chr_session: " ++ err)
-    Right qname -> pure qname
-  pm <- liftIO (readIORef procMap)
-  unless (Map.member (tellProcName resolved arity) pm) $
-    runtimeErrorS
-      ("run_chr_session: constraint not found: " ++ T.unpack f)
-  pure (resolved, args)
-  where
-    arity = length args
-    functorName mangled = case decodeName mangled [] of
-      CompoundTerm name _ -> name
-      -- 'decodeName' always yields a compound for a functor text.
-      _ -> Types.Unqualified mangled
-
--- | Is this mangled functor the list constructor or the empty list?
--- A goal must never be one: a cons cell here means an improper list
--- slipped past 'listElems', which should fail as a malformed goal,
--- not resolve as a constraint named @.@.
-isListFunctor :: T.Text -> Bool
-isListFunctor f =
-  f == "prelude__." || f == "." || f == "prelude__[]" || f == "[]"
-
--- | Walk a (possibly nested-under-variables) runtime list. 'Nothing'
--- when the value is not a list at all. A deref-aware variant of
--- 'YCHR.Internal.Runtime.Registry.fromValueList'.
-listElems :: Value -> Chr (Maybe [Value])
-listElems v = do
-  v' <- deref v
-  case v' of
-    VAtom a | a == "prelude__[]" || a == "[]" -> pure (Just [])
-    VTerm f [h, t]
-      | f == "prelude__." || f == "." ->
-          fmap (h :) <$> listElems t
-    _ -> pure Nothing
+-- | Did this exception mean "the goal did not run to quiescence", as
+-- opposed to something the sub-session boundary has no business
+-- swallowing (an asynchronous exception, say)?
+quiescenceNotReached :: SomeException -> Bool
+quiescenceNotReached e =
+  case fromException e :: Maybe RuntimeErrorThrown of
+    Just _ -> True
+    Nothing -> case fromException e :: Maybe SearchFailure of
+      Just _ -> True
+      Nothing -> False

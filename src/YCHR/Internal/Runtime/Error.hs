@@ -22,13 +22,24 @@ module YCHR.Internal.Runtime.Error
     runtimeError',
     runtimeErrorS,
     instantiationErrorS,
+
+    -- * Control-flow exceptions
+    SearchFailure (..),
+    isControlException,
   )
 where
 
-import Control.Exception (Exception, throwIO)
+import Control.Exception
+  ( Exception,
+    SomeAsyncException,
+    SomeException,
+    fromException,
+    throwIO,
+  )
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask)
 import Data.IORef (readIORef)
+import Data.Maybe (isJust)
 import Data.Text qualified as T
 import YCHR.Internal.Runtime.Monad (CallStack, Chr, SessionEnv (..))
 import YCHR.Internal.VM (StackFrame)
@@ -102,3 +113,34 @@ throwWithStack kind msg = do
   SessionEnv {callStack} <- ask
   stack <- liftIO $ readIORef callStack
   liftIO $ throwIO (RuntimeErrorThrown kind msg (take maxCallStackDepth stack))
+
+-- | Thrown by @search:fail\/0@ to abandon the current search branch,
+-- and caught only by the search driver
+-- ("YCHR.Internal.Runtime.Search").
+--
+-- Deliberately /not/ a 'RuntimeErrorThrown'. A branch failure is
+-- ordinary control flow and an error is a bug; conflating them is what
+-- makes generate-and-test programs undebuggable, so they are separate
+-- types caught in separate places. It lives here, next to the error it
+-- is not, because the host-call boundary below has to know about both
+-- and sits underneath the module that raises this one.
+data SearchFailure = SearchFailure
+  deriving (Show)
+
+instance Exception SearchFailure
+
+-- | Does this exception carry control flow that a host-call boundary
+-- must let through untouched, rather than wrapping into a
+-- @host call X: …@ runtime error?
+--
+-- Three kinds qualify: asynchronous exceptions (the computation is
+-- being killed), runtime errors (already carrying their own message
+-- and captured stack — rewrapping would bury both), and search branch
+-- failures (whose whole point is to reach the enclosing driver).
+-- Everything else is a genuine host-side exception that the boundary
+-- should turn into a runtime error naming the host call.
+isControlException :: SomeException -> Bool
+isControlException e =
+  isJust (fromException e :: Maybe SomeAsyncException)
+    || isJust (fromException e :: Maybe RuntimeErrorThrown)
+    || isJust (fromException e :: Maybe SearchFailure)

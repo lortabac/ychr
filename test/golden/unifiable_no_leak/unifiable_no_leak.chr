@@ -1,0 +1,24 @@
+:- module(unifiable_no_leak, [no/3, yes/3, hold/1, probe/1, probe_same/1]).
+
+:- chr_type p ---> mkp(any, any).
+
+:- chr_constraint no(any, any, any), yes(any, any, any),
+   hold(any), probe(any), probe_same(any).
+
+% `unifiable/2` must leave no binding behind, whichever answer it
+% gives. Both cases below make it walk an alias chain W -> V and
+% tentatively bind V; the check then reverts. If that tentative binding
+% survived — directly, or as a path compression made *through* it —
+% W would come out bound to the hypothesised value and the V/W alias
+% would be gone. Instead W still stands for V, so binding V afterwards
+% shows through as W.
+
+hold(T) \ probe(R) <=> R is unifiable(T, mkp(1, 2)).
+hold(T) \ probe_same(R) <=> R is unifiable(T, mkp(1, 1)).
+
+% Answers false: mkp(V, V) cannot be mkp(1, 2).
+no(V, W, R) <=> hold(mkp(V, W)), W = V, probe(R), V = 9.
+
+% Answers true: mkp(V, V) can be mkp(1, 1). Succeeding is not a licence
+% to keep the bindings that made it succeed.
+yes(V, W, R) <=> hold(mkp(V, W)), W = V, probe_same(R), V = 9.

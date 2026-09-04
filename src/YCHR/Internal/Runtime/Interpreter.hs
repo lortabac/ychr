@@ -44,11 +44,9 @@ module YCHR.Internal.Runtime.Interpreter
 where
 
 import Control.Exception
-  ( SomeAsyncException,
-    SomeException,
+  ( SomeException,
     bracket,
     displayException,
-    fromException,
     throwIO,
     try,
   )
@@ -78,6 +76,7 @@ import YCHR.Internal.Runtime.Error
   ( RuntimeErrorKind (..),
     RuntimeErrorThrown (..),
     instantiationErrorS,
+    isControlException,
     runtimeError',
     runtimeErrorS,
   )
@@ -867,10 +866,7 @@ invokeHostCall name argVals = do
             pure (TECallHost name.unName argTs resT)
           pure v
         Left exc
-          | Just (ae :: SomeAsyncException) <- fromException exc ->
-              liftIO (throwIO ae)
-          | Just (rte :: RuntimeErrorThrown) <- fromException exc ->
-              liftIO (throwIO rte)
+          | isControlException exc -> liftIO (throwIO exc)
           | otherwise ->
               runtimeErrorS $
                 "host call " ++ T.unpack name.unName ++ ": " ++ displayException exc

@@ -31,8 +31,9 @@ print_store -> host:print_store.
 % to keep it symbolic) in a fresh session of the current program: own
 % store, history, and reactivation queue, same rules and functions.
 % Goal constraints must be exported; an unknown one is a caller error.
-% Returns true when the sub-session runs to quiescence, false when it
-% raises a runtime error. Unbound variables inside the goal are shared
+% Returns true if and only if the sub-session runs to quiescence, and
+% false otherwise -- a runtime error, or (inside a search branch) a
+% search:fail/0. Bindings made before the failure are not rolled back. Unbound variables inside the goal are shared
 % with the sub-session, so bindings made there survive the call — pass
 % fresh out-variables to read results back. Reactivation does not
 % cross the boundary: a live stored constraint of one session must not
