@@ -24,6 +24,7 @@ import Control.Monad.Trans.Writer.CPS (Writer, tell)
 -- 'import Data.List (foldl'')' would be flagged redundant on newer compilers,
 -- since this module needs nothing else from "Data.List".
 import Data.List qualified as List
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Traversable (for)
@@ -107,12 +108,16 @@ ruleOccurrences symTab (ruleIdx, rule) = do
           ++ [(i, c, True) | (i, c) <- zip [HeadPosition (length removed) ..] (reverse kept)]
       ruleId' = RuleId ruleIdx
       display = ruleDisplayName ruleIdx rule
-  for orderedOccurrences $ \(idx, con, isKept) ->
+  fmap catMaybes $ for orderedOccurrences $ \(idx, con, isKept) ->
     mkOccurrence symTab rule ruleId' display orderedOccurrences idx con isKept
 
 -- | Build a single 'Occurrence' record for the active head constraint
 -- at @activeIdx@. The other entries in @combined@ become the partner
 -- list.
+--
+-- Returns 'Nothing' when a partner's constraint type is not in the
+-- symbol table: 'lookupCType' has already reported the miss, and an
+-- occurrence with an unresolvable partner cannot be compiled.
 mkOccurrence ::
   SymbolTable ->
   D.Rule ->
@@ -122,7 +127,7 @@ mkOccurrence ::
   HeadPosition ->
   HeadConstraint ->
   Bool ->
-  Writer [Diagnostic CompileError] Occurrence
+  Writer [Diagnostic CompileError] (Maybe Occurrence)
 mkOccurrence symTab rule ruleId' display combined activeIdx activeCon activeIsKept = do
   let partners' = [(idx, con, isKept) | (idx, con, isKept) <- combined, idx /= activeIdx]
       headLoc = rule.head.sourceLoc
@@ -141,40 +146,47 @@ mkOccurrence symTab rule ruleId' display combined activeIdx activeCon activeIsKe
                 con.args
             )
         )
+    pure $ do
+      cType <- ct
+      pure
+        Partner
+          { idx = idx,
+            constraint = con,
+            isKept = isKept,
+            cType = cType
+          }
+  pure $ do
+    resolvedPartners <- sequence partners
     pure
-      Partner
-        { idx = idx,
-          constraint = con,
-          isKept = isKept,
-          cType = ct
+      Occurrence
+        { conName = qualifiedToName activeCon.name,
+          conArity = length activeCon.args,
+          number = OccurrenceNumber 0,
+          rule = rule,
+          ruleId = ruleId',
+          ruleDisplay = display,
+          activeIdx = activeIdx,
+          isKept = activeIsKept,
+          activeArgs = activeCon.args,
+          partners = resolvedPartners,
+          passive = False
         }
-  pure
-    Occurrence
-      { conName = qualifiedToName activeCon.name,
-        conArity = length activeCon.args,
-        number = OccurrenceNumber 0,
-        rule = rule,
-        ruleId = ruleId',
-        ruleDisplay = display,
-        activeIdx = activeIdx,
-        isKept = activeIsKept,
-        activeArgs = activeCon.args,
-        partners = partners,
-        passive = False
-      }
 
--- | Look up a constraint type in the symbol table or report an error.
--- Returns a placeholder 'ConstraintType' on failure so that the rest
--- of the pass can keep going and collect more diagnostics.
+-- | Look up a constraint type in the symbol table, reporting an error
+-- and returning 'Nothing' on a miss. The caller drops the occurrence
+-- so that the rest of the pass can keep going and collect more
+-- diagnostics; 'YCHR.Internal.Compile.compile' aborts as soon as any
+-- diagnostic was emitted, so nothing downstream ever observes the
+-- shortened occurrence list.
 lookupCType ::
   SymbolTable ->
   P.SourceLoc ->
   PExpr ->
   Maybe Text ->
   Identifier ->
-  Writer [Diagnostic CompileError] ConstraintType
+  Writer [Diagnostic CompileError] (Maybe ConstraintType)
 lookupCType symTab loc p label ident = case lookupSymbol ident symTab of
-  Just ct -> pure ct
+  Just ct -> pure (Just ct)
   Nothing -> do
     tell [Diagnostic label (AnnP (UnknownConstraintType ident.name) loc p)]
-    pure (ConstraintType (-1))
+    pure Nothing

@@ -96,7 +96,7 @@ A VM program is a record bundling the list of named procedures with a little met
 | `ExprStmt valExpr` / `BoolExprStmt boolExpr` | Evaluate a value or boolean expression for its side effects, discarding the result. Used for procedure calls, host calls, and tell-side `BUnify` in statement position. |
 | `Store idExpr` | Add a constraint suspension to the constraint store. Also registers the constraint as an observer of every unbound variable reachable from its arguments (recursing into compound terms) for reactivation. |
 | `Kill idExpr` | Remove a constraint from the store, mark as not alive. |
-| `AddHistory ruleName [idExpr]` | Record a rule firing in the propagation history. |
+| `AddHistory ruleName historyIds` | Record a rule firing in the propagation history. The operand is a `HistoryIds`: the matched constraint identifiers as a head-position-indexed tuple. Its constructor is private; `mkHistoryIds` takes position-tagged ids and establishes the order, so the same match keys to the same entry whichever occurrence is active. It is a tuple and not a set on purpose — for `leq(X,Y), leq(Y,Z) ==> leq(X,Z)` the matches `(c1,c2)` and `(c2,c1)` are distinct firings and both must happen. |
 | `DrainReactivationQueue suspVar body` | Iterate over all constraints pending reactivation (populated by `BUnify`), binding each to `suspVar` and executing `body`. The body dispatches to the appropriate activate procedure. |
 | `PushFrame frame` | Push a runtime call-stack frame (source location + pretty-printed source). Emitted at rule fires and function entries; used for stack traces. |
 
@@ -144,7 +144,7 @@ position.
 | `BIdEqual idExpr idExpr` | Compare two constraint identifiers for equality. |
 | `BAlive idExpr` | Check if a constraint is still alive. |
 | `BIsConstraintType idExpr cType` | Check if a suspension has the given constraint type. Used for dispatch in reactivation. |
-| `BNotInHistory ruleName [idExpr]` | Check that a rule has not fired with this combination of constraint identifiers. |
+| `BNotInHistory ruleName historyIds` | Check that a rule has not fired with this combination of constraint identifiers. Same `HistoryIds` operand as `AddHistory`. |
 | `BUnify valExpr valExpr` | Unify two terms (tell semantics). Returns success. May mutate variables. Pushes affected constraints onto the reactivation queue. |
 | `BFromVal valExpr` | Bridge a value-producing expression into boolean position; runtime-checks that the wrapped `ValExpr` evaluates to `VBool`. Used at the early-drop check and for user expressions in guards. |
 | `BEvalDeep boolExpr` | Evaluate in deep-deref mode (mirrors `EvalDeep` for booleans). |

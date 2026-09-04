@@ -581,7 +581,7 @@ execStmt (Kill expr) = do
     emitTrace (pure (TEKill sid))
   pure SFall
 execStmt (AddHistory ruleId exprs) = do
-  sids <- traverse evalIdExpr exprs
+  sids <- traverse evalIdExpr (historyIdsList exprs)
   lift $ do
     emitTrace $ do
       env <- ask
@@ -776,7 +776,7 @@ evalBoolExpr (BIsConstraintType expr cType) = do
   sid <- evalIdExpr expr
   lift (isConstraintType sid cType)
 evalBoolExpr (BNotInHistory ruleId args) = do
-  sids <- traverse evalIdExpr args
+  sids <- traverse evalIdExpr (historyIdsList args)
   ok <- lift (notInHistory ruleId sids)
   unless ok $
     lift $

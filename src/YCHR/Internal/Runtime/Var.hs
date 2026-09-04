@@ -16,7 +16,6 @@ module YCHR.Internal.Runtime.Var
   ( -- * Types (re-exported from YCHR.Internal.Runtime.Types)
     VarId (..),
     Var (..),
-    VarState (..),
     Value (..),
 
     -- * Operations
@@ -95,6 +94,34 @@ deref val@(VVar var@(Var ref)) = do
       pure v'
 deref val = pure val
 
+-- | Read the cell behind a 'VVar' that 'deref' has just returned, and
+-- pass its contents to @onUnbound@.
+--
+-- 'deref' promises such a cell is unbound, but the promise lives
+-- outside the types: every consumer that needed the cell's contents
+-- used to read the 'VarState' itself and dismiss the 'Bound' arm with
+-- a panic. This is that promise made structural. The caller never sees
+-- a 'VarState', so there is no impossible arm for it to write, and
+-- @onBound@ is an ordinary handler — passed the value the cell turned
+-- out to hold — rather than a crash site.
+--
+-- Continuation-passing rather than a returned sum type on purpose:
+-- unification reaches this at every variable of every term it walks,
+-- and reifying the result would allocate a box per call. Inlined,
+-- this form compiles to the same @case@ the panicking version had, so
+-- the safety costs nothing.
+withUnboundVar ::
+  Var ->
+  (VarId -> [SuspensionId] -> Chr a) ->
+  (Value -> Chr a) ->
+  Chr a
+withUnboundVar var onUnbound onBound = do
+  st <- readVarState var
+  case st of
+    Unbound vid obs -> onUnbound vid obs
+    Bound v -> onBound v
+{-# INLINE withUnboundVar #-}
+
 -- | Unify two values (tell semantics, Prolog @=@).
 --
 -- Returns @(success, observers)@: the boolean indicates whether
@@ -115,39 +142,46 @@ unify v1 v2 = do
   d2 <- deref v2
   unify' d1 d2
 
+-- | Unify two /already dereferenced/ values. The @onBound@ handlers
+-- below are unreachable — 'deref' has just been applied to both
+-- operands — and simply re-enter 'unify' on what the cell held, which
+-- is what unification of that cell means.
 unify' :: Value -> Value -> Chr (Bool, [SuspensionId])
 unify' VWildcard _ = pure (True, [])
 unify' _ VWildcard = pure (True, [])
 unify' (VVar (Var ref1)) (VVar (Var ref2))
   | ref1 == ref2 = pure (True, [])
-unify' (VVar var1) v2@(VVar var2) = do
-  st1 <- readVarState var1
-  case st1 of
-    Bound {} -> error "unify': unexpected Bound after deref"
-    Unbound _ obs1 -> do
-      st2 <- readVarState var2
-      case st2 of
-        Unbound vid2 obs2 -> do
-          writeVarState var1 (Bound v2)
-          writeVarState var2 (Unbound vid2 (obs1 ++ obs2))
-          pure (True, obs1)
-        Bound {} -> error "unify': unexpected Bound after deref"
-unify' (VVar var) v = do
-  st <- readVarState var
-  case st of
-    Bound {} -> error "unify': unexpected Bound after deref"
-    Unbound _ obs -> do
-      writeVarState var (Bound v)
-      -- Transfer the variable's observers onto every unbound
-      -- variable reachable in the term it was just bound to.
-      -- Observation is over *reachable* unbound variables, and the
-      -- reachable set changes at exactly this moment: without the
-      -- transfer, a suspension observing X stops being woken once
-      -- X := f(A) — a later binding of A silently misses the
-      -- ωr /Reactivate/ step (and a stored residual type-checker
-      -- constraint would never be retried).
-      mapM_ (\oid -> addObserver oid v) obs
-      pure (True, obs)
+unify' (VVar var1) v2@(VVar var2) =
+  withUnboundVar
+    var1
+    ( \_ obs1 ->
+        withUnboundVar
+          var2
+          ( \vid2 obs2 -> do
+              writeVarState var1 (Bound v2)
+              writeVarState var2 (Unbound vid2 (obs1 ++ obs2))
+              pure (True, obs1)
+          )
+          (\b2 -> unify (VVar var1) b2)
+    )
+    (\b1 -> unify b1 v2)
+unify' (VVar var) v =
+  withUnboundVar
+    var
+    ( \_ obs -> do
+        writeVarState var (Bound v)
+        -- Transfer the variable's observers onto every unbound
+        -- variable reachable in the term it was just bound to.
+        -- Observation is over *reachable* unbound variables, and the
+        -- reachable set changes at exactly this moment: without the
+        -- transfer, a suspension observing X stops being woken once
+        -- X := f(A) — a later binding of A silently misses the
+        -- ωr /Reactivate/ step (and a stored residual type-checker
+        -- constraint would never be retried).
+        mapM_ (\oid -> addObserver oid v) obs
+        pure (True, obs)
+    )
+    (\b -> unify b v)
 unify' v (VVar vr) = unify' (VVar vr) v
 unify' (VInt a) (VInt b) = pure (a == b, [])
 unify' (VFloat a) (VFloat b) = pure (a == b, [])
@@ -200,24 +234,20 @@ unifiable a b = do
       d2 <- deref v2
       uni' trailRef d1 d2
 
+    -- Unlike 'unify'', this never needs the cell's contents: it only
+    -- overwrites the cell (through the trail) and never merges
+    -- observer lists. The variable arms therefore read no 'VarState'
+    -- at all, so there is no 'Bound' case to rule out.
     uni' _ VWildcard _ = pure True
     uni' _ _ VWildcard = pure True
     uni' _ (VVar (Var ref1)) (VVar (Var ref2))
       | ref1 == ref2 = pure True
     uni' trailRef (VVar var1) v2@(VVar _) = do
-      st1 <- readVarState var1
-      case st1 of
-        Bound {} -> error "unifiable: unexpected Bound after deref"
-        Unbound _ _ -> do
-          trailWrite trailRef var1 (Bound v2)
-          pure True
+      trailWrite trailRef var1 (Bound v2)
+      pure True
     uni' trailRef (VVar var) v = do
-      st <- readVarState var
-      case st of
-        Bound {} -> error "unifiable: unexpected Bound after deref"
-        Unbound _ _ -> do
-          trailWrite trailRef var (Bound v)
-          pure True
+      trailWrite trailRef var (Bound v)
+      pure True
     uni' trailRef v (VVar vr) = uni' trailRef (VVar vr) v
     uni' _ (VInt x) (VInt y) = pure (x == y)
     uni' _ (VFloat x) (VFloat y) = pure (x == y)
@@ -304,11 +334,11 @@ addObserver :: SuspensionId -> Value -> Chr ()
 addObserver oid v = do
   d <- deref v
   case d of
-    VVar var -> do
-      st <- readVarState var
-      case st of
-        Unbound vid obs -> writeVarState var (Unbound vid (oid : obs))
-        Bound {} -> pure ()
+    VVar var ->
+      withUnboundVar
+        var
+        (\vid obs -> writeVarState var (Unbound vid (oid : obs)))
+        (\_ -> pure ())
     VTerm _ args -> mapM_ (addObserver oid) args
     _ -> pure ()
 
@@ -318,9 +348,5 @@ getVarId :: Value -> Chr (Maybe VarId)
 getVarId v = do
   d <- deref v
   case d of
-    VVar var -> do
-      st <- readVarState var
-      case st of
-        Unbound vid _ -> pure (Just vid)
-        Bound {} -> pure Nothing
+    VVar var -> withUnboundVar var (\vid _ -> pure (Just vid)) (\_ -> pure Nothing)
     _ -> pure Nothing

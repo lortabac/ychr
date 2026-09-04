@@ -21,6 +21,10 @@ module YCHR.Internal.VM
     -- * Supporting types
     ConstraintType (..),
     RuleId (..),
+    HistoryIds,
+    mkHistoryIds,
+    historyIdsList,
+    historyIdsFromSerialized,
     Literal (..),
     ArgIndex (..),
     Name (..),

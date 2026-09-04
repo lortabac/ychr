@@ -62,10 +62,13 @@ where
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, modify)
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
+import Data.Foldable (toList)
 import Data.List (mapAccumL)
 import Data.List qualified as List
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
+import Data.Sequence (Seq, (|>))
+import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -271,11 +274,16 @@ flattenHeadKind h = case h of
 
 -- | Threaded state for HNF: a fresh-variable counter, the set of
 -- variable names already seen in the head so far (so that duplicates
--- can be detected), and the list of guards accumulated in reverse order.
+-- can be detected), and the guards emitted so far.
+--
+-- The guards are a 'Seq' so that they accumulate in the order they
+-- are emitted: a list would have to be prepended to and reversed
+-- exactly once at each consumer, which is an invariant no type
+-- enforces.
 data HnfState = HnfState
   { counter :: !Int,
     seen :: Set.Set Text,
-    guards :: [D.Guard] -- accumulated in reverse
+    guards :: Seq D.Guard
   }
 
 -- | Normalize the kept and removed constraints of a head. Kept is
@@ -284,10 +292,10 @@ data HnfState = HnfState
 -- of this module).
 normalizeHead :: [QualifiedConstraint] -> [QualifiedConstraint] -> ([D.Guard], D.Head)
 normalizeHead kept removed =
-  let initState = HnfState 0 Set.empty []
+  let initState = HnfState 0 Set.empty Seq.empty
       (st1, kept') = mapAccumL normalizeConstraint initState kept
       (st2, removed') = mapAccumL normalizeConstraint st1 removed
-   in (reverse st2.guards, D.Head kept' removed')
+   in (toList st2.guards, D.Head kept' removed')
 
 -- | Normalize the arguments of one head constraint, narrowing them
 -- from raw 'Term's to 'HeadArg's.
@@ -306,7 +314,7 @@ normalizeArg HnfState {counter, seen, guards} (VarTerm v)
        in ( HnfState
               { counter = counter + 1,
                 seen,
-                guards = D.GuardEqual (R.VarExpr v) (R.VarExpr fresh) : guards
+                guards = guards |> D.GuardEqual (R.VarExpr v) (R.VarExpr fresh)
               },
             HeadVar fresh
           )
@@ -327,7 +335,7 @@ normalizeArg HnfState {counter, seen, guards} term =
    in ( HnfState
           { counter = counter + 1,
             seen,
-            guards = D.GuardEqual (R.VarExpr fresh) (headTermToExpr term) : guards
+            guards = guards |> D.GuardEqual (R.VarExpr fresh) (headTermToExpr term)
           },
         HeadVar fresh
       )
@@ -341,7 +349,7 @@ normalizeArg HnfState {counter, seen, guards} term =
 decomposeCompound :: HnfState -> Text -> Name -> [Term] -> HnfState
 decomposeCompound HnfState {counter, seen, guards} parentVar cname cargs =
   let matchGuard = D.GuardMatch (R.VarExpr parentVar) cname (length cargs)
-      st' = HnfState {counter, seen, guards = matchGuard : guards}
+      st' = HnfState {counter, seen, guards = guards |> matchGuard}
    in List.foldl' (\s (i, arg) -> decomposeArg s parentVar i arg) st' (zip [0 ..] cargs)
 
 -- | Decompose a single argument of a compound term.
@@ -355,7 +363,7 @@ decomposeArg HnfState {counter, seen, guards} parentVar i (VarTerm v)
        in HnfState
             { counter = counter + 1,
               seen,
-              guards = eqGuard : getGuard : guards
+              guards = guards |> getGuard |> eqGuard
             }
   | otherwise =
       -- First occurrence: extract and bind
@@ -363,7 +371,7 @@ decomposeArg HnfState {counter, seen, guards} parentVar i (VarTerm v)
        in HnfState
             { counter,
               seen = Set.insert v seen,
-              guards = getGuard : guards
+              guards = guards |> getGuard
             }
 decomposeArg st _ _ Wildcard = st
 decomposeArg HnfState {counter, seen, guards} parentVar i (CompoundTerm cname cargs) =
@@ -374,7 +382,7 @@ decomposeArg HnfState {counter, seen, guards} parentVar i (CompoundTerm cname ca
         HnfState
           { counter = counter + 1,
             seen,
-            guards = getGuard : guards
+            guards = guards |> getGuard
           }
    in decomposeCompound st' fresh cname cargs
 decomposeArg HnfState {counter, seen, guards} parentVar i term =
@@ -385,7 +393,7 @@ decomposeArg HnfState {counter, seen, guards} parentVar i term =
    in HnfState
         { counter = counter + 1,
           seen,
-          guards = eqGuard : getGuard : guards
+          guards = guards |> getGuard |> eqGuard
         }
 
 -- | Desugar a resolved function definition: HNF-normalize its equation
@@ -412,9 +420,9 @@ desugarResolvedEquation annEq = desugarEquation' annEq.node
 
 desugarEquation' :: R.FunctionEquation -> Writer [Diagnostic DesugarError] D.Equation
 desugarEquation' eq = do
-  let initState = HnfState 0 Set.empty []
+  let initState = HnfState 0 Set.empty Seq.empty
       (st, normalizedArgs) = mapAccumL normalizeArg initState eq.args
-      guards = reverse st.guards
+      guards = toList st.guards
   userGuards <- traverse (desugarGuard eq.guard.sourceLoc eq.guard.parsed) eq.guard.node
   (prelude, returnExpr) <-
     classifyFunctionBody eq.rhs.sourceLoc eq.rhs.parsed eq.rhs.node
@@ -581,14 +589,21 @@ desugarBodyGoal label loc origin e = case e of
 -- ---------------------------------------------------------------------------
 
 -- | Threaded state for the lambda-lifter: a counter that supplies fresh
--- @__lambda_N@ names, the list of top-level functions that have already
--- been lifted out (in reverse discovery order), and an error accumulator
--- for lambda-body classification failures discovered during the lift.
+-- @__lambda_N@ names, the top-level functions that have already been
+-- lifted out (in discovery order), and an error accumulator for
+-- lambda-body classification failures discovered during the lift.
 -- Errors here mirror the diagnostics 'desugarEquation'' emits for the
 -- top-level RHS sequence of an equation.
+--
+-- 'liftedFunctions' is a 'Seq' for the same reason 'HnfState.guards'
+-- is: appending keeps the accumulator in the order it was built,
+-- rather than leaving reverse discovery order to leak into
+-- 'D.Program.functions'. Nothing downstream depends on the order —
+-- the lifted functions are looked up by name — so the switch is
+-- observable only in generated-procedure emission order.
 data LiftState = LiftState
   { counter :: !Int,
-    liftedFunctions :: [D.Function],
+    liftedFunctions :: Seq D.Function,
     liftErrors :: [Diagnostic DesugarError]
   }
 
@@ -713,7 +728,7 @@ liftExpr modName scope st0 expr = case expr of
         st2 =
           st1'
             { counter = idx + 1,
-              liftedFunctions = func : st1'.liftedFunctions
+              liftedFunctions = st1'.liftedFunctions |> func
             }
         lambdaId = modName <> "__" <> lambdaName
         -- The quoted source form is for pretty-printing only and must
@@ -952,11 +967,11 @@ liftRule st rule =
 -- with the rest of the pipeline's errors.
 liftAllLambdas :: D.Program -> (D.Program, [Diagnostic DesugarError])
 liftAllLambdas prog =
-  let initState = LiftState 0 [] []
+  let initState = LiftState 0 Seq.empty []
       (st1, functions') = mapAccumL liftFunction initState prog.functions
       (st2, rules') = mapAccumL liftRule st1 prog.rules
    in ( prog
-          { D.functions = functions' ++ st2.liftedFunctions,
+          { D.functions = functions' ++ toList st2.liftedFunctions,
             D.rules = rules'
           },
         st2.liftErrors
@@ -973,10 +988,10 @@ liftQueryLambdas ::
   ([D.BodyGoal], [D.Function], [Diagnostic DesugarError])
 liftQueryLambdas startCounter goals =
   let scope = bodyGoalVars goals
-      initState = LiftState startCounter [] []
+      initState = LiftState startCounter Seq.empty []
       (st, goals') =
         mapAccumL (liftBodyGoal "__query" scope) initState goals
-   in (goals', st.liftedFunctions, st.liftErrors)
+   in (goals', toList st.liftedFunctions, st.liftErrors)
 
 {- ---------------------------------------------------------------------------
 Notes

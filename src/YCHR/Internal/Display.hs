@@ -21,6 +21,7 @@ module YCHR.Internal.Display
     parseErrorCode,
     operatorConflictCode,
     lambdasInLiveQueryCode,
+    lambdasInSchemeDriverCode,
     runtimeErrorCode,
     goalNotAConstraintCode,
   )
@@ -310,6 +311,9 @@ operatorConflictCode = ErrorCode 50002
 
 lambdasInLiveQueryCode :: ErrorCode
 lambdasInLiveQueryCode = ErrorCode 50003
+
+lambdasInSchemeDriverCode :: ErrorCode
+lambdasInSchemeDriverCode = ErrorCode 50004
 
 -- | 20013 — @ychr run -g GOAL@ received a goal that is not a single
 -- declared constraint (bare expression, conjunction, function call,
@@ -1090,6 +1094,23 @@ instance Display Error where
       loc
       (Just "live session")
       (Just (prettyPExprSrc origin))
+  displayMsg (LambdasInSchemeDriver lam) =
+    displayMsgWithSrcLoc
+      lambdasInSchemeDriverCode
+      SevError
+      ( withHint
+          ( "Anonymous lambdas (fun(...) -> ... end) are not supported"
+              ++ " in goal arguments to `ychr gen-driver`"
+          )
+          ( "the driver only imports an already-generated library, which"
+              ++ " has no procedure for this lambda: lift it into a named"
+              ++ " :- function declaration in the program and pass"
+              ++ " `fun name/arity` instead"
+          )
+      )
+      P.dummyLoc
+      (Just "<query>")
+      (Just (prettyTermSrc lam))
   displayMsg (GoalNotAConstraint c reason) =
     displayMsgWithSrcLoc
       goalNotAConstraintCode

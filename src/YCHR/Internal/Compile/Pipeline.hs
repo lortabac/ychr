@@ -129,6 +129,13 @@ data Error
     -- Carries the original 'Types.Constraint' (for name+arity in the
     -- message) and a tag distinguishing the rejection mode.
     GoalNotAConstraint Types.Constraint GoalRejection
+  | -- | A @ychr gen-driver@ goal argument contains an anonymous lambda.
+    -- The driver is a standalone script over an /already generated/
+    -- Scheme library: it cannot add the lifted @__lambda_N@ procedure
+    -- the lambda needs, nor extend that library's @call_N@ dispatch
+    -- chain to reach it. Carries the offending lambda in its surface
+    -- @fun(...) -> body@ shape, for the message.
+    LambdasInSchemeDriver Types.Term
   deriving (Show)
 
 -- | Why a goal was rejected as not-a-constraint. Used by the

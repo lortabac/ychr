@@ -19,6 +19,7 @@ import Data.Text qualified as T
 import YCHR.Internal.Backend.Scheme (compileSymbol, qualifiedAliasIdentifier)
 import YCHR.Internal.Compile (funcProcName)
 import YCHR.Internal.Compile.Names (vmName)
+import YCHR.Internal.Compile.Pipeline (Error (..))
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.SExpr (SExpr (..), printSExpr)
 import YCHR.Internal.Types (HeadArg (..), QualifiedName, Term (..))
@@ -34,57 +35,67 @@ import YCHR.Internal.VM.Types (Name (..))
 -- tell-side expression: 'CallExpr' triggers a function call,
 -- 'HostExpr' a host call, 'CtorExpr' builds a compound term, and so
 -- on.
-generateDriver :: Text -> QualifiedName -> [R.Expr] -> Text
+--
+-- Fails with 'LambdasInSchemeDriver' when a goal argument contains an
+-- anonymous lambda: the driver imports a library that was generated
+-- without knowledge of this goal, so the lifted procedure the lambda
+-- would compile to does not exist there and the library's @call_N@
+-- dispatch chain has no arm that could reach it. See 'exprToScheme'.
+generateDriver :: Text -> QualifiedName -> [R.Expr] -> Either Error Text
+generateDriver _moduleName _qn args
+  | (lam : _) <- concatMap exprLambdas args =
+      Left (LambdasInSchemeDriver (R.exprToTerm lam))
 generateDriver moduleName qn args =
-  let arity = length args
-      -- Use the exported friendly alias (e.g. @mod:name/2@) emitted by
-      -- the Scheme backend, not the internal mangled @tell_*@ — the
-      -- mangled procedures are no longer exported by generated
-      -- libraries. 'qualifiedAliasIdentifier' is total: it encodes any
-      -- constraint name into a well-formed Scheme identifier.
-      tellAlias = qualifiedAliasIdentifier (Types.qualifiedToName qn) arity
-      varNames = nub (concatMap exprVars args)
-      sortedVars = sort varNames
-      argExprs = map exprToScheme args
-      tellCall = "(" <> tellAlias <> " %s " <> T.intercalate " " argExprs <> ")"
-      bindingsCall = case sortedVars of
-        [] -> []
-        vs ->
-          [ "(pretty-bindings (list "
-              <> T.intercalate
-                " "
-                ["(cons (quote " <> v <> ") " <> v <> ")" | v <- vs]
-              <> "))"
+  Right $
+    let arity = length args
+        -- Use the exported friendly alias (e.g. @mod:name/2@) emitted by
+        -- the Scheme backend, not the internal mangled @tell_*@ — the
+        -- mangled procedures are no longer exported by generated
+        -- libraries. 'qualifiedAliasIdentifier' is total: it encodes any
+        -- constraint name into a well-formed Scheme identifier.
+        tellAlias = qualifiedAliasIdentifier (Types.qualifiedToName qn) arity
+        varNames = nub (concatMap exprVars args)
+        sortedVars = sort varNames
+        argExprs = map exprToScheme args
+        tellCall = "(" <> tellAlias <> " %s " <> T.intercalate " " argExprs <> ")"
+        bindingsCall = case sortedVars of
+          [] -> []
+          vs ->
+            [ "(pretty-bindings (list "
+                <> T.intercalate
+                  " "
+                  ["(cons (quote " <> v <> ") " <> v <> ")" | v <- vs]
+                <> "))"
+            ]
+        body = map ("    " <>) (tellCall : bindingsCall)
+        -- The generated library's program-info binding is a thunk named
+        -- after the library's final segment; calling it creates a fresh
+        -- session.
+        openSession = "(let ((%s (" <> moduleName <> ")))"
+     in T.unlines $
+          [ "(import (rnrs) (ychr runtime) (ychr pretty)",
+            "        (ychr generated " <> moduleName <> "))",
+            ""
           ]
-      body = map ("    " <>) (tellCall : bindingsCall)
-      -- The generated library's program-info binding is a thunk named
-      -- after the library's final segment; calling it creates a fresh
-      -- session.
-      openSession = "(let ((%s (" <> moduleName <> ")))"
-   in T.unlines $
-        [ "(import (rnrs) (ychr runtime) (ychr pretty)",
-          "        (ychr generated " <> moduleName <> "))",
-          ""
-        ]
-          ++ case varNames of
-            [] ->
-              [openSession]
-                ++ body
-                ++ [")"]
-            _ ->
-              [ openSession,
-                "  (let* ("
-                  <> T.intercalate
-                    "\n         "
-                    [ "("
-                        <> v
-                        <> " (make-var %s))"
-                    | v <- varNames
-                    ]
-                  <> ")"
-              ]
-                ++ body
-                ++ ["))"]
+            ++ case varNames of
+              [] ->
+                [openSession]
+                  ++ body
+                  ++ [")"]
+              _ ->
+                [ openSession,
+                  "  (let* ("
+                    <> T.intercalate
+                      "\n         "
+                      [ "("
+                          <> v
+                          <> " (make-var %s))"
+                      | v <- varNames
+                      ]
+                    <> ")"
+                ]
+                  ++ body
+                  ++ ["))"]
 
 -- | Convert an 'R.Expr' to a Scheme expression. Mirrors the dispatch
 -- in 'YCHR.Internal.Compile.compileExpr' / 'YCHR.Internal.Backend.Scheme.compileValExpr':
@@ -150,10 +161,25 @@ exprToScheme (R.FunRefExpr qn arity) =
         <> " "
         <> T.pack (show arity)
         <> "))"
+-- 'generateDriver' rejects a goal containing a lambda with
+-- 'LambdasInSchemeDriver' before any of it reaches here, so this arm
+-- is an internal invariant, not a user-facing gap. It is the same
+-- shape as the two @LambdaExpr survived lambda lifting@ panics in
+-- 'YCHR.Run' and 'YCHR.Internal.Compile', and closes with them when
+-- 'R.Expr' grows a phase index.
 exprToScheme (R.LambdaExpr _ _) =
-  error
-    "SchemeDriver.exprToScheme: lambdas in goal arguments \
-    \are not supported in the Scheme driver"
+  error "SchemeDriver.exprToScheme: goal lambda not rejected by generateDriver"
+
+-- | Every anonymous lambda in an expression tree, outermost first.
+-- Used by 'generateDriver' to reject a goal it cannot compile; the
+-- first one found is what the diagnostic points at.
+exprLambdas :: R.Expr -> [R.Expr]
+exprLambdas e@(R.LambdaExpr _ body) = e : concatMap exprLambdas (NE.toList body)
+exprLambdas (R.CtorExpr _ args) = concatMap exprLambdas args
+exprLambdas (R.CallExpr _ args) = concatMap exprLambdas args
+exprLambdas (R.ApplyExpr f args) = exprLambdas f ++ concatMap exprLambdas args
+exprLambdas (R.HostExpr _ args) = concatMap exprLambdas args
+exprLambdas _ = []
 
 -- | Host-call bridge name. Mirrors the encoding used by
 -- 'YCHR.Internal.Backend.Scheme.compileHostCall'.
@@ -200,8 +226,8 @@ termToScheme (CompoundTerm (Types.Unqualified n) ts) =
 -- | Collect every variable name mentioned anywhere in an expression
 -- tree, so each can be declared as a logical variable in the
 -- surrounding @let*@ block. Lambda parameter names are excluded
--- (they are bound locally), though lambdas are not actually supported
--- in this path — see 'exprToScheme'.
+-- (they are bound locally), though a goal containing a lambda never
+-- gets this far — see 'generateDriver'.
 exprVars :: R.Expr -> [Text]
 exprVars (R.VarExpr v) = [v]
 exprVars (R.CtorExpr _ args) = concatMap exprVars args

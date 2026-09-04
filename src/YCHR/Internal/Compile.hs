@@ -506,17 +506,18 @@ genFireStmts symTab varMap occ = do
       else coreFireStmts
 
 -- | Collect constraint identifiers for the propagation history tuple.
--- IDs are sorted by head position so that the same rule with the same
--- partner combination always produces an identical tuple regardless of
--- which occurrence is active (paper §5.2, Listing 1, line 14).
-buildHistoryIds :: Occurrence -> [IdExpr]
+-- Each id is tagged with its head position and handed to
+-- 'mkHistoryIds', which orders them, so that the same rule with the
+-- same partner combination always produces an identical tuple
+-- regardless of which occurrence is active (paper §5.2, Listing 1,
+-- line 14).
+buildHistoryIds :: Occurrence -> HistoryIds
 buildHistoryIds occ =
-  let positions =
-        (occ.activeIdx, IdVar activeName)
-          : [ (p.idx, IdVar (partIdName k))
-            | (k, p) <- zip [PartnerIndex 0 ..] occ.partners
-            ]
-   in map snd (sortOn fst positions)
+  mkHistoryIds $
+    (occ.activeIdx, IdVar activeName)
+      : [ (p.idx, IdVar (partIdName k))
+        | (k, p) <- zip [PartnerIndex 0 ..] occ.partners
+        ]
 
 -- | Build a 'StackFrame' for a rule firing.
 mkRuleFrame :: Occurrence -> StackFrame

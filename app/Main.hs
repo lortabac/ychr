@@ -265,8 +265,13 @@ runGenDriver opts files = withCompiled False files $ \prog warnings -> do
   -- single Werror decision so a single run reports every warning
   -- before exiting.
   exitOnWerror opts.werror (warnings ++ typeWarnings ++ goalWarnings)
-  TIO.putStr (generateDriver (T.pack "program") qn exprs)
-  schemeRuntimeNote
+  case generateDriver (T.pack "program") qn exprs of
+    Left err -> do
+      putStr (displayMsg err)
+      exitFailure
+    Right driver -> do
+      TIO.putStr driver
+      schemeRuntimeNote
   where
     reportGenErrorAndExit exc = do
       case fromException exc of

@@ -111,6 +111,11 @@ singleProc procName params body =
       evaluables = []
     }
 
+-- | A propagation-history tuple in head-position order, the way
+-- 'YCHR.Internal.Compile.buildHistoryIds' builds one.
+histIds :: [IdExpr] -> HistoryIds
+histIds ids = mkHistoryIds (zip [0 :: Int ..] ids)
+
 -- | Build a 'Procedure' with a placeholder 'procKind'. The kind tag
 -- isn't observable by the interpreter tests (they exercise call /
 -- store / unify behaviour, not tracing), so a single neutral
@@ -744,8 +749,8 @@ occurrenceLeq6 =
                 [ If
                     (BEqual (Var "pA1") (Var "X"))
                     [ If
-                        (BNotInHistory (RuleId 0) [IdVar "pId", IdVar "id"])
-                        [ AddHistory (RuleId 0) [IdVar "pId", IdVar "id"],
+                        (BNotInHistory (RuleId 0) (histIds [IdVar "pId", IdVar "id"]))
+                        [ AddHistory (RuleId 0) (histIds [IdVar "pId", IdVar "id"]),
                           ExprStmt
                             ( CallExpr
                                 "tell_leq2"
@@ -787,8 +792,8 @@ occurrenceLeq7 =
                 [ If
                     (BEqual (Var "pA0") (Var "Y"))
                     [ If
-                        (BNotInHistory (RuleId 0) [IdVar "id", IdVar "pId"])
-                        [ AddHistory (RuleId 0) [IdVar "id", IdVar "pId"],
+                        (BNotInHistory (RuleId 0) (histIds [IdVar "id", IdVar "pId"]))
+                        [ AddHistory (RuleId 0) (histIds [IdVar "id", IdVar "pId"]),
                           ExprStmt
                             ( CallExpr
                                 "tell_leq2"

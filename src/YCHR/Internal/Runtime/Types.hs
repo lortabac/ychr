@@ -27,6 +27,13 @@ newtype VarId = VarId Int
 newtype Var = Var (IORef VarState)
 
 -- | The state of a logical variable.
+--
+-- The constructors are exported only because 'Value', 'Var' and
+-- 'VarState' are mutually recursive and so cannot be split across
+-- modules. "YCHR.Internal.Runtime.Var" is the only module that may
+-- read or write them; everything else goes through that module's
+-- operations, and in particular sees a dereferenced cell as its
+-- @Deref@ view rather than as a raw 'VarState'.
 data VarState
   = -- | Not yet bound. Carries a unique ID and a list of observer IDs
     -- (constraints watching this variable for reactivation).

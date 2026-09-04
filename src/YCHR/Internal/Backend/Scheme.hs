@@ -357,14 +357,16 @@ compileStmt (Store e) =
   SList [SAtom "store-constraint", SAtom "%s", compileIdExpr e]
 compileStmt (Kill e) =
   SList [SAtom "kill-constraint", compileIdExpr e]
-compileStmt (AddHistory (RuleId rid) es) =
+compileStmt (AddHistory (RuleId rid) ids) =
   SList
     [ SAtom "add-history!",
       SAtom "%s",
       SInt (fromIntegral rid),
       SList
         ( SAtom "list"
-            : map (\e -> SList [SAtom "constraint-id", compileIdExpr e]) es
+            : map
+              (\e -> SList [SAtom "constraint-id", compileIdExpr e])
+              (historyIdsList ids)
         )
     ]
 compileStmt (PushFrame _) =
@@ -528,14 +530,16 @@ compileBoolExpr (BAlive e) =
   SList [SAtom "alive-constraint?", compileIdExpr e]
 compileBoolExpr (BIsConstraintType e (ConstraintType ct)) =
   SList [SAtom "is-constraint-type?", compileIdExpr e, SInt (fromIntegral ct)]
-compileBoolExpr (BNotInHistory (RuleId rid) es) =
+compileBoolExpr (BNotInHistory (RuleId rid) ids) =
   SList
     [ SAtom "not-in-history?",
       SAtom "%s",
       SInt (fromIntegral rid),
       SList
         ( SAtom "list"
-            : map (\e -> SList [SAtom "constraint-id", compileIdExpr e]) es
+            : map
+              (\e -> SList [SAtom "constraint-id", compileIdExpr e])
+              (historyIdsList ids)
         )
     ]
 compileBoolExpr (BUnify a b) =

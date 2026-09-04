@@ -177,7 +177,7 @@ stmtToSExpr (BoolExprStmt e) = SList [SAtom "bool-expr-stmt", boolExprToSExpr e]
 stmtToSExpr (Store e) = SList [SAtom "store", idExprToSExpr e]
 stmtToSExpr (Kill e) = SList [SAtom "kill", idExprToSExpr e]
 stmtToSExpr (AddHistory rid es) =
-  SList (SAtom "add-history" : ruleIdToSExpr rid : map idExprToSExpr es)
+  SList (SAtom "add-history" : ruleIdToSExpr rid : map idExprToSExpr (historyIdsList es))
 stmtToSExpr (DrainReactivationQueue sv body) =
   SList (SAtom "drain-reactivation-queue" : nameToSExpr sv : map stmtToSExpr body)
 stmtToSExpr (PushFrame frame) =
@@ -226,7 +226,7 @@ boolExprToSExpr (BAlive e) = SList [SAtom "balive", idExprToSExpr e]
 boolExprToSExpr (BIsConstraintType e ct) =
   SList [SAtom "bis-constraint-type", idExprToSExpr e, constraintTypeToSExpr ct]
 boolExprToSExpr (BNotInHistory rid es) =
-  SList (SAtom "bnot-in-history" : ruleIdToSExpr rid : map idExprToSExpr es)
+  SList (SAtom "bnot-in-history" : ruleIdToSExpr rid : map idExprToSExpr (historyIdsList es))
 boolExprToSExpr (BUnify a b) = SList [SAtom "bunify", valExprToSExpr a, valExprToSExpr b]
 boolExprToSExpr (BFromVal e) = SList [SAtom "bfrom-val", valExprToSExpr e]
 boolExprToSExpr (BEvalDeep e) = SList [SAtom "beval-deep", boolExprToSExpr e]
@@ -408,7 +408,9 @@ stmtFromSExpr (SList [SAtom "bool-expr-stmt", e]) = BoolExprStmt <$> boolExprFro
 stmtFromSExpr (SList [SAtom "store", e]) = Store <$> idExprFromSExpr e
 stmtFromSExpr (SList [SAtom "kill", e]) = Kill <$> idExprFromSExpr e
 stmtFromSExpr (SList (SAtom "add-history" : rid : es)) =
-  AddHistory <$> ruleIdFromSExpr rid <*> traverse idExprFromSExpr es
+  AddHistory
+    <$> ruleIdFromSExpr rid
+    <*> fmap historyIdsFromSerialized (traverse idExprFromSExpr es)
 stmtFromSExpr (SList (SAtom "drain-reactivation-queue" : sv : body)) =
   DrainReactivationQueue <$> nameFromSExpr sv <*> traverse stmtFromSExpr body
 stmtFromSExpr
@@ -471,7 +473,9 @@ boolExprFromSExpr (SList [SAtom "balive", e]) = BAlive <$> idExprFromSExpr e
 boolExprFromSExpr (SList [SAtom "bis-constraint-type", e, ct]) =
   BIsConstraintType <$> idExprFromSExpr e <*> constraintTypeFromSExpr ct
 boolExprFromSExpr (SList (SAtom "bnot-in-history" : rid : es)) =
-  BNotInHistory <$> ruleIdFromSExpr rid <*> traverse idExprFromSExpr es
+  BNotInHistory
+    <$> ruleIdFromSExpr rid
+    <*> fmap historyIdsFromSerialized (traverse idExprFromSExpr es)
 boolExprFromSExpr (SList [SAtom "bunify", a, b]) =
   BUnify <$> valExprFromSExpr a <*> valExprFromSExpr b
 boolExprFromSExpr (SList [SAtom "bfrom-val", e]) = BFromVal <$> valExprFromSExpr e

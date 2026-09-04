@@ -124,6 +124,7 @@ diagnostic carries a `2x1xx` code.
 | `YCHR-50001` | parse error | The lexer or parser failed to recognize the input. The message includes parsec's expected/unexpected tokens. |
 | `YCHR-50002` | `OperatorConflict` | An operator is declared with a fixity or associativity that conflicts with an existing declaration. Re-export the existing declaration instead of redeclaring it, or rename. |
 | `YCHR-50003` | `LambdasInLiveQuery` | Anonymous lambdas (`fun(...) -> ... end`) appear in a live REPL session. Lift the lambda into a named `:- function` declaration in a file and reload the session. |
+| `YCHR-50004` | `LambdasInSchemeDriver` | A goal argument passed to `ychr gen-driver` contains an anonymous lambda (`fun(...) -> ... end`). The driver only imports an already-generated Scheme library, which has no procedure for the lambda. Lift it into a named `:- function` declaration in the program and pass `fun name/arity` instead. |
 
 ### Type-check phase (`6xxxx`)
 

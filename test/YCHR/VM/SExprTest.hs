@@ -88,7 +88,7 @@ roundtripTests =
     testCase "store and kill" $
       roundtrip (mkProg [Store (IdVar "id"), Kill (IdVar "id")]),
     testCase "add-history" $
-      roundtrip (mkProg [AddHistory (RuleId 0) [IdVar "id1", IdVar "id2"]]),
+      roundtrip (mkProg [AddHistory (RuleId 0) (histIds [IdVar "id1", IdVar "id2"])]),
     testCase "drain-reactivation-queue" $
       roundtrip
         ( mkProg
@@ -128,7 +128,7 @@ roundtripTests =
               If (BIdEqual (IdVar "id1") (IdVar "id2")) [] [],
               If (BAlive (IdVar "id")) [] [],
               If (BIsConstraintType (IdVar "s") (ConstraintType 1)) [] [],
-              If (BNotInHistory (RuleId 0) [IdVar "id1", IdVar "id2"]) [] [],
+              If (BNotInHistory (RuleId 0) (histIds [IdVar "id1", IdVar "id2"])) [] [],
               BoolExprStmt (BUnify (Var "a") (Var "b")),
               If (BFromVal (Var "a")) [] [],
               If (BEvalDeep (BLit True)) [] [],
@@ -267,6 +267,11 @@ serializeProg = serialize . mkVMProg
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
+
+-- | A propagation-history tuple in head-position order, the way
+-- 'YCHR.Internal.Compile.buildHistoryIds' builds one.
+histIds :: [IdExpr] -> HistoryIds
+histIds ids = mkHistoryIds (zip [0 :: Int ..] ids)
 
 -- | Build a minimal program with one procedure containing the given body.
 mkProg :: [Stmt] -> Program

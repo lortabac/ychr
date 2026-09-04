@@ -46,6 +46,7 @@ import YCHR.Internal.Display
     exhaustivenessWarningCode,
     goalNotAConstraintCode,
     lambdasInLiveQueryCode,
+    lambdasInSchemeDriverCode,
     operatorConflictCode,
     parseErrorCode,
     parseValidationErrorCode,
@@ -139,6 +140,7 @@ standaloneCodes =
   [ ("parseErrorCode", n parseErrorCode),
     ("operatorConflictCode", n operatorConflictCode),
     ("lambdasInLiveQueryCode", n lambdasInLiveQueryCode),
+    ("lambdasInSchemeDriverCode", n lambdasInSchemeDriverCode),
     ("goalNotAConstraintCode", n goalNotAConstraintCode),
     ("runtimeErrorCode", n runtimeErrorCode)
   ]

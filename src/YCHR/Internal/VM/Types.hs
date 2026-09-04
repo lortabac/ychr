@@ -64,6 +64,10 @@ module YCHR.Internal.VM.Types
     -- * Supporting types
     ConstraintType (..),
     RuleId (..),
+    HistoryIds,
+    mkHistoryIds,
+    historyIdsList,
+    historyIdsFromSerialized,
     Literal (..),
     ArgIndex (..),
     Name (..),
@@ -71,6 +75,7 @@ module YCHR.Internal.VM.Types
   )
 where
 
+import Data.List (sortOn)
 import Data.String (IsString (..))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -246,7 +251,7 @@ data Stmt
     -- | Record that a rule has fired with the given combination
     -- of constraint identifiers, to prevent redundant re-firing
     -- of propagation rules.
-    AddHistory RuleId [IdExpr]
+    AddHistory RuleId HistoryIds
   | -- Reactivation
 
     -- | Process all constraints pending reactivation.
@@ -347,7 +352,7 @@ data BoolExpr
     BIsConstraintType IdExpr ConstraintType
   | -- | Check that a rule has not previously fired with the given
     -- combination of constraint identifiers.
-    BNotInHistory RuleId [IdExpr]
+    BNotInHistory RuleId HistoryIds
   | -- | Unify two terms (tell semantics). Returns a boolean indicating
     -- success. May mutate logical variables as a side effect. On
     -- success, also pushes affected constraints onto the reactivation
@@ -422,6 +427,47 @@ data Literal
 -- | Zero-based index into a constraint's argument list.
 newtype ArgIndex = ArgIndex Int
   deriving (Show, Eq)
+
+-- | The constraint identifiers a propagation-history entry is keyed
+-- on, in canonical order.
+--
+-- This is a /head-position-indexed tuple/, not a set. For
+-- @leq(X,Y), leq(Y,Z) ==> leq(X,Z)@ the matches @(c1,c2)@ and
+-- @(c2,c1)@ are distinct firings and both must happen, so collapsing
+-- the two into one key would silently suppress a firing. What must be
+-- canonical is something weaker: every occurrence procedure of the
+-- same rule has to spell the same match with the ids in the same
+-- order — head position 0 first, then 1, and so on — or the same
+-- match reached from a different active occurrence would key to a
+-- different entry and the rule would fire twice.
+--
+-- That ordering used to be maintained by discipline at the one place
+-- the list was built. 'mkHistoryIds' is now the only ordinary way to
+-- make one, and it establishes the order from the caller's position
+-- keys; consumers read the tuple back with 'historyIdsList'.
+newtype HistoryIds = HistoryIds [IdExpr]
+  deriving (Show, Eq)
+
+-- | Build a 'HistoryIds' from position-tagged constraint identifiers.
+-- The compiler passes head positions as the keys; the result is
+-- ordered by them.
+mkHistoryIds :: (Ord k) => [(k, IdExpr)] -> HistoryIds
+mkHistoryIds = HistoryIds . map snd . sortOn fst
+
+-- | The constraint identifiers, in canonical head-position order.
+historyIdsList :: HistoryIds -> [IdExpr]
+historyIdsList (HistoryIds ids) = ids
+
+-- | Rebuild a 'HistoryIds' from an already-canonical list.
+--
+-- This is the deserialization trust boundary and its only intended
+-- caller is "YCHR.Internal.VM.SExpr": a VM program read back from its
+-- S-expression form was written by a compiler that had already
+-- ordered the tuple, and the head positions the order came from are
+-- not part of the serialized form. Use 'mkHistoryIds' to build a
+-- fresh tuple.
+historyIdsFromSerialized :: [IdExpr] -> HistoryIds
+historyIdsFromSerialized = HistoryIds
 
 -- | Variable or procedure name.
 newtype Name = Name {unName :: Text}
