@@ -1030,6 +1030,29 @@ termPositionVars (R.ApplyExpr f args) =
   termPositionVars f ++ concatMap termPositionVars args
 termPositionVars _ = []
 
+-- | Free variables inside a @quote(...)@ subtree of an /evaluated/
+-- expression. A quote is a term position nested in an evaluating one:
+-- 'compileExpr' hands the quoted subtree straight to 'compileTerm',
+-- which consumes it structurally and raises @YCHR-40002@ on a name it
+-- has not seen. A tell argument may therefore introduce a variable
+-- under a quote, the way an '=' operand may introduce one anywhere —
+-- and 'YCHR.Internal.Desugar.Disjunction' relies on it, since a
+-- variable local to one branch first appears inside the quoted
+-- disjunct call.
+--
+-- Deliberately narrower than 'termPositionVars': only what a quote
+-- covers, and (at the call site) only for tell arguments. An unbound
+-- name in an evaluated position elsewhere stays the error it is.
+quotedTermVars :: R.Expr -> [Text]
+quotedTermVars (R.CtorExpr (Types.Unqualified "quote") [arg]) =
+  termPositionVars arg
+quotedTermVars (R.CtorExpr _ args) = concatMap quotedTermVars args
+quotedTermVars (R.CallExpr _ args) = concatMap quotedTermVars args
+quotedTermVars (R.HostExpr _ args) = concatMap quotedTermVars args
+quotedTermVars (R.ApplyExpr f args) =
+  quotedTermVars f ++ concatMap quotedTermVars args
+quotedTermVars _ = []
+
 -- | Compile a single body goal, returning the generated statements and
 -- an updated 'VarMap'. The VarMap may grow when a goal introduces new
 -- variables (e.g. @is@ binding a fresh variable, or a constraint whose
@@ -1041,6 +1064,13 @@ compileBodyGoal ::
   D.BodyGoal ->
   Writer [Diagnostic CompileError] ([Stmt], VarMap)
 compileBodyGoal _ varMap _ D.BodyTrue = pure ([], varMap)
+-- 'YCHR.Internal.Desugar.Disjunction.lowerDisjunctions' runs in the
+-- pipeline before this, and rewrites every 'D.BodyOr' into a tell of
+-- @search:alt@; a query rejects @;@ outright. Reaching one here means
+-- the lowering pass was skipped, not that the user wrote something the
+-- compiler should diagnose.
+compileBodyGoal _ _ _ (D.BodyOr _) =
+  error "Compile.compileBodyGoal: BodyOr survived lowerDisjunctions"
 compileBodyGoal _ varMap si (D.BodyTell qn args) = do
   -- A top-level bare 'VarExpr' in a tell argument refers to a logical
   -- variable that may not yet exist (e.g. 'foo(X)' on its first
@@ -1054,7 +1084,12 @@ compileBodyGoal _ varMap si (D.BodyTell qn args) = do
   -- 'nub' guards against repeated top-level 'VarExpr's like
   -- 'foo(X, X)' that would otherwise emit two consecutive 'LetVal
   -- X NewVar' (shadowing the first and leaking its allocation).
-  let freshVars = nub [v | R.VarExpr v <- args, notMemberVar v varMap]
+  let freshVars =
+        nub
+          [ v
+          | v <- [v' | R.VarExpr v' <- args] ++ concatMap quotedTermVars args,
+            notMemberVar v varMap
+          ]
       newStmts = [LetVal (Name v) NewVar | v <- freshVars]
       varMap' = List.foldl' (\m v -> insertVar v (Var (Name v)) m) varMap freshVars
   callArgs <- traverse (compileExpr varMap' si) args

@@ -1,0 +1,35 @@
+% The other half of an A/B pair with `search_label`: the identical
+% search, with `choose/2` spelled out as the `alt/1` it is defined as.
+% Same solutions, same order, same number of choice points.
+%
+% What the difference measures is the cost of `choose` being derived
+% rather than recognized by the driver: per choice point, one rule
+% firing, a `maplist` over the values with a closure call each, and a
+% `cons` per alternative. `docs/reference/search.md` notes that the
+% driver may take `choose` as a fast path later; this pair is how that
+% would be judged worth doing. Keep the two programs in step.
+
+:- module(search_label_alt, [search_label_alt/4, triple/3]).
+:- use_module(library(search)).
+
+:- chr_constraint
+   search_label_alt(any, any, any, any), triple(any, any, any),
+   sum_is_ten(any, any, any).
+
+search_label_alt(X, Y, Z, Ss) <=>
+    Ss is find_all([X, Y, Z], quote(triple(X, Y, Z))).
+
+triple(X, Y, Z) <=>
+    alt([quote(try_unify(X, 1)), quote(try_unify(X, 2)), quote(try_unify(X, 3)),
+         quote(try_unify(X, 4)), quote(try_unify(X, 5)), quote(try_unify(X, 6))]),
+    alt([quote(try_unify(Y, 1)), quote(try_unify(Y, 2)), quote(try_unify(Y, 3)),
+         quote(try_unify(Y, 4)), quote(try_unify(Y, 5)), quote(try_unify(Y, 6))]),
+    alt([quote(try_unify(Z, 1)), quote(try_unify(Z, 2)), quote(try_unify(Z, 3)),
+         quote(try_unify(Z, 4)), quote(try_unify(Z, 5)), quote(try_unify(Z, 6))]),
+    sum_is_ten(X, Y, Z).
+
+% Delays until labeling has bound all three, then kills the branch
+% unless they sum to ten. A branch that survives leaves this stored,
+% which is quiescence and therefore a solution.
+sum_is_ten(X, Y, Z) <=>
+    integer(X), integer(Y), integer(Z), not(X + Y + Z == 10) | fail.

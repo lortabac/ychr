@@ -1,0 +1,10 @@
+% `;` compiles to a `search:alt/1` choice point, so the module that
+% writes one has to import the module that declares it. The reference
+% is generated rather than written, so qualifying is not an escape.
+
+:- module(search_disj_no_import, [pick/1]).
+
+:- chr_constraint pick(any), set(any, any).
+
+set(V, N) <=> V = N.
+pick(X) <=> (set(X, 1) ; set(X, 2)).

@@ -14,10 +14,9 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import System.FilePath ((<.>), (</>))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
-import YCHR.Internal.Meta (metaHostCallRegistry)
 import YCHR.Internal.Parser (parseConstraint)
-import YCHR.Internal.Runtime.Interpreter (baseHostCallRegistry)
 import YCHR.Internal.Runtime.Registry (HostCallRegistry)
+import YCHR.Internal.Runtime.SubSession (defaultHostCallRegistry)
 import YCHR.Internal.TypeCheck (typeCheckProgram)
 import YCHR.Run
   ( compileFiles,
@@ -48,7 +47,16 @@ benchmarkPrograms =
     "fib",
     "sum_list_test",
     "graph_test",
-    "lambda_test"
+    "lambda_test",
+    -- The two search shapes, measured separately because they cost
+    -- different things. "search_label" is `choose/2` labeling, which is
+    -- now derived: a rule firing, a `maplist` over the values, and a
+    -- `try_unify` tell per alternative, on top of the choice point
+    -- itself. "search_generate" is the `;` path, one lifted disjunct
+    -- and one `alt` per level of a recursive generator.
+    "search_label",
+    "search_generate",
+    "search_label_alt"
   ]
 
 goldenDir :: FilePath
@@ -76,10 +84,12 @@ loadCase name = do
   (goal, _warnings) <- prepareGoalTerm prog parsedGoal
   pure (BenchCase name prog goal)
 
--- | The host call registry used by all benchmarks. Same combination as the
--- golden test harness in @test/YCHR/GoldenTest.hs@.
+-- | The host call registry used by all benchmarks. The same registry
+-- the golden test harness uses (@test/YCHR/GoldenTest.hs@), which is
+-- the base and meta calls plus @run_chr_session\/1@ and the
+-- @library(search)@ drivers — the search benchmarks need the latter.
 benchHostCalls :: HostCallRegistry
-benchHostCalls = baseHostCallRegistry <> metaHostCallRegistry
+benchHostCalls = defaultHostCallRegistry
 
 -- | Build one criterion benchmark for a loaded case.
 makeBench :: BenchCase -> Benchmark

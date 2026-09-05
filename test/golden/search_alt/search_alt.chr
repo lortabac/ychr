@@ -1,0 +1,95 @@
+% `alt/1` is the primitive choice point: a list of alternative *goals*,
+% not of values. This directory covers the goal shapes it accepts and
+% the two ways a choice point can be malformed. `choose/2`, which is
+% library CHR over `alt` and `try_unify`, is covered by
+% `test/golden/search_basic`.
+
+:- module(search_alt, [
+    lists_as_alts/3,
+    pick_list/2,
+    set/2,
+    add_one/2,
+    unexported_alt/2,
+    pick_hidden/1,
+    solve_unexported/2,
+    empty_alt/1,
+    pick_none/0,
+    nested_alt/2,
+    outer/1,
+    inner/2,
+    disj_goal/2,
+    disj_nested/2,
+    dpick/1,
+    bad_alt_arg/1,
+    alt_of/1,
+    bad_alternative/1,
+    pick_int/0
+]).
+:- use_module(library(search)).
+
+:- chr_constraint
+   lists_as_alts(any, any, any), pick_list(any, any),
+   unexported_alt(any, any), pick_hidden(any), hidden(any, any),
+   solve_unexported(any, any),
+   empty_alt(any), pick_none,
+   nested_alt(any, any), outer(any), inner(any, any),
+   disj_goal(any, any),
+   disj_nested(any, any), dpick(any),
+   bad_alt_arg(any), alt_of(any),
+   bad_alternative(any), pick_int,
+   set(any, any), add_one(any, any).
+
+% The workhorse of the file: bind a variable to a value, as a goal.
+set(V, N) <=> V = N.
+add_one(V, N) <=> M is N + 1, V = M.
+
+% --- An alternative may be a list of goals, told in order. -----------
+lists_as_alts(X, Y, Ss) <=> Ss is find_all([X, Y], quote(pick_list(X, Y))).
+pick_list(X, Y) <=> alt([quote([set(X, 1), set(Y, 2)]), quote(set(X, 9))]).
+
+% --- An alternative may name a constraint no module exports. ---------
+%
+% Alternatives are resolved when the choice fires, and a qualified one
+% is taken at its word — no export check. That is what lets the
+% disjuncts the compiler lifts out of a `;` be reached at all, since
+% they are module-internal and exported by nobody. `hidden/2` stands in
+% for one: declared here, absent from the export list.
+unexported_alt(X, Ss) <=> Ss is find_all(X, quote(pick_hidden(X))).
+pick_hidden(X) <=>
+    alt([quote(search_alt:hidden(X, 1)), quote(search_alt:hidden(X, 2))]).
+hidden(X, N) <=> X = N.
+
+% The identical spelling as a *top-level* goal is still a caller error:
+% a goal the caller wrote goes through the export list.
+solve_unexported(X, Ok) <=> Ok is solve(quote(search_alt:hidden(X, 1))).
+
+% --- Zero alternatives is immediate exhaustion. ----------------------
+empty_alt(Ok) <=> Ok is solve(quote(pick_none)).
+pick_none <=> alt([]).
+
+% --- An alt told inside a branch nests under it. ---------------------
+nested_alt(X, Ss) <=> Ss is find_all(X, quote(outer(X))).
+outer(X) <=> alt([quote(inner(X, 10)), quote(inner(X, 20))]).
+inner(X, N) <=> alt([quote(set(X, N)), quote(add_one(X, N))]).
+
+% --- `;` inside a quoted goal is a choice point too. -----------------
+%
+% `;` is xfy, so a three-way disjunction flattens to three
+% alternatives rather than nesting.
+disj_goal(X, Ss) <=>
+    Ss is find_all(X, quote((set(X, 1) ; set(X, 2) ; set(X, 3)))).
+
+% ... and a `;` may itself be one alternative of an `alt`.
+disj_nested(X, Ss) <=> Ss is find_all(X, quote(dpick(X))).
+dpick(X) <=> alt([quote((set(X, 1) ; set(X, 2))), quote(set(X, 3))]).
+
+% --- Malformed choice points are errors, not dead ends. --------------
+%
+% Both mistakes are caught at the choice point, since that is where an
+% `alt` is read. The goal is routed through an `any` parameter so the
+% non-list survives type checking.
+bad_alt_arg(Ok) <=> Ok is solve(quote(alt_of(7))).
+alt_of(Gs) <=> alt(Gs).
+
+bad_alternative(Ok) <=> Ok is solve(quote(pick_int)).
+pick_int <=> alt([7]).

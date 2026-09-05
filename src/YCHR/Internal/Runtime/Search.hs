@@ -11,19 +11,24 @@
 --
 -- == Choice at quiescence
 --
--- Search here is /labeling/, not continuation capture. @choose\/2@ is
--- an ordinary CHR constraint with no rules, so telling it just leaves
--- it in the store. The driver forks a session, tells the goal, and
--- runs it to quiescence under the ordinary refined semantics; at
--- quiescence it looks for an alive @search:choose@ suspension. None
--- means the state is a solution. Otherwise it takes the oldest one
--- and, for each alternative in turn, kills the choice, unifies, drains
--- reactivation, and recurses.
+-- Search here is /labeling/, not continuation capture. @alt\/1@ is an
+-- ordinary CHR constraint with no rules, so telling it just leaves it
+-- in the store. The driver forks a session, tells the goal, and runs
+-- it to quiescence under the ordinary refined semantics; at quiescence
+-- it looks for an alive @search:alt@ suspension. None means the state
+-- is a solution. Otherwise it takes the oldest one and, for each
+-- alternative in turn, kills the choice, tells that alternative's
+-- goal, and recurses.
+--
+-- Each alternative is a /goal/, not a value: the choice is between
+-- computations. Binding a variable is one computation among others,
+-- which is why @choose\/2@ is library CHR over @alt@ and @try_unify@
+-- rather than a second thing the runtime knows about.
 --
 -- Nothing needs to be captured because the continuation after a choice
--- is always "propagate to quiescence", which the driver invokes
--- itself. That is what keeps the 'Chr' monad, the interpreter and the
--- VM untouched by this feature.
+-- is always "tell this goal and propagate to quiescence", which the
+-- driver invokes itself. That is what keeps the 'Chr' monad, the
+-- interpreter and the VM untouched by this feature.
 --
 -- == Undo
 --
@@ -62,7 +67,12 @@ import YCHR.Internal.Runtime.Error
     SearchFailure (..),
     runtimeErrorS,
   )
-import YCHR.Internal.Runtime.Goal (goalConstraints, listElems)
+import YCHR.Internal.Runtime.Goal
+  ( altGoalConstraints,
+    altName,
+    goalConstraints,
+    listElems,
+  )
 import YCHR.Internal.Runtime.Interpreter
   ( emitTrace,
     snapshotValue,
@@ -75,14 +85,13 @@ import YCHR.Internal.Runtime.Monad
     forkSearchSessionEnv,
     runChr,
   )
-import YCHR.Internal.Runtime.Reactivation (enqueueObservers)
 import YCHR.Internal.Runtime.Registry
   ( HostCallFn (..),
     HostCallRegistry,
     copyTerm,
     valueList,
   )
-import YCHR.Internal.Runtime.Session (drainReactivation, tellConstraint)
+import YCHR.Internal.Runtime.Session (tellResolvedConstraint)
 import YCHR.Internal.Runtime.Store
   ( Suspension (..),
     getStoreSnapshot,
@@ -96,9 +105,7 @@ import YCHR.Internal.Runtime.Types
     TrailMark,
     Value (..),
   )
-import YCHR.Internal.Runtime.Var (unify)
 import YCHR.Internal.Types (ConstraintType (..))
-import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Name (..), RuleId)
 
 -- | Registry providing @solve\/1@, @find_all\/2@ and @fail\/0@. Part
@@ -197,33 +204,23 @@ restoreBranchState st = do
 
 -- | What the driver needs at every level of the recursion.
 data SearchCtx = SearchCtx
-  { -- | Store indices holding @search:choose@ constraints. Resolved
+  { -- | Store indices holding @search:alt@ constraints. Resolved
     -- once per search rather than per quiescence. Empty when the
-    -- program never declares @choose\/2@, in which case the goal
-    -- simply has no choice points and quiescence is a solution.
-    chooseTypes :: ![ConstraintType],
+    -- program never declares @alt\/1@, in which case the goal simply
+    -- has no choice points and quiescence is a solution.
+    altTypes :: ![ConstraintType],
     -- | Called at each solution. 'True' stops the search and commits
     -- the current bindings; 'False' asks for the next solution, which
     -- backtracks out of this one.
     onSolution :: Chr Bool
   }
 
--- | A choice point read out of the store.
+-- | A choice point read out of the store: the @alt\/1@ suspension and
+-- the alternative goals it offers, in the order they will be tried.
 data Choice = Choice
   { sid :: !SuspensionId,
-    var :: !Value,
-    alts :: ![Value]
+    goals :: ![Value]
   }
-
--- | The qualified name the runtime keys choice points on.
---
--- One wired-in name, in the spirit of @'$call'@. This is provisional:
--- when a library gains a way to nominate a constraint to the runtime
--- (the VM already carries an evaluables dispatch table shaped much
--- like it), this becomes a lookup and the name stops being special.
--- The arity is pinned by the two-element pattern in 'findChoice'.
-chooseName :: Types.Name
-chooseName = Types.Qualified "search" "choose"
 
 -- | Explore from the current, quiescent state.
 --
@@ -241,10 +238,9 @@ searchFrom ctx =
       pure (if stop then AltStopped else AltFailed BRMoreWanted)
     Just choice -> do
       emitTrace $ do
-        v <- snapshotValue choice.var
-        as <- snapshotValues choice.alts
-        pure (TEChoice choice.sid v as)
-      tryAlternatives ctx choice (zip [1 ..] choice.alts)
+        gs <- snapshotValues choice.goals
+        pure (TEChoice choice.sid gs)
+      tryAlternatives ctx choice (zip [1 ..] choice.goals)
 
 -- | How one alternative turned out.
 data AltOutcome
@@ -261,33 +257,26 @@ data AltOutcome
 -- which fails whatever branch contains it.
 tryAlternatives :: SearchCtx -> Choice -> [(Int, Value)] -> Chr AltOutcome
 tryAlternatives _ _ [] = pure (AltFailed BRExhausted)
-tryAlternatives ctx choice ((altNum, alt) : rest) = do
+tryAlternatives ctx choice ((altNum, goal) : rest) = do
   saved <- saveBranchState
   emitTrace $ do
-    v <- snapshotValue alt
-    pure (TETryAlt altNum (length choice.alts) v)
+    g <- snapshotValue goal
+    pure (TETryAlt altNum (length choice.goals) g)
   outcome <- withoutFailure $ do
     -- Taking the choice consumes it: an alternative must not
     -- rediscover its own choice point and recurse forever. The kill is
     -- trailed like any other flag write, so the constraint is alive
     -- again if this alternative is abandoned.
     killConstraint choice.sid
-    (ok, observers) <- unify choice.var alt
-    if not ok
-      then
-        -- The one place in YCHR where a failed unification is a
-        -- failure rather than an error. This is the choice mechanism
-        -- itself, not a user-written '=': when propagation has already
-        -- narrowed the variable, 'choose' is a membership test and a
-        -- non-member alternative is simply not a candidate. A
-        -- unification that failed part-way through a compound left
-        -- bindings behind; they are on the trail and go back with the
-        -- rest.
-        pure (AltFailed BRNoMatch)
-      else do
-        enqueueObservers observers
-        drainReactivation
-        searchFrom ctx
+    -- Resolved here, inside the branch, and without the export check:
+    -- a lifted disjunct is a module-internal constraint, so the check
+    -- that guards a caller-supplied goal would reject exactly the
+    -- goals the compiler generated. A name that resolves to nothing is
+    -- still a runtime error and escapes the search — 'withoutFailure'
+    -- catches 'SearchFailure' and nothing else.
+    tells <- altGoalConstraints "alt" goal
+    mapM_ (uncurry tellResolvedConstraint) tells
+    searchFrom ctx
   case outcome of
     AltStopped -> pure AltStopped
     AltFailed reason -> do
@@ -312,7 +301,7 @@ withoutFailure act = do
 -- current state is a solution. Store sequences are append-ordered, so
 -- \"oldest\" is just the first match.
 findChoice :: SearchCtx -> Chr (Maybe Choice)
-findChoice ctx = go ctx.chooseTypes
+findChoice ctx = go ctx.altTypes
   where
     go [] = pure Nothing
     go (ct : cts) =
@@ -324,28 +313,28 @@ findChoice ctx = go ctx.chooseTypes
     firstAlive (s : ss) = do
       alive <- isSuspAlive s
       case (alive, s.args) of
-        (True, [x, altsVal]) -> Just <$> readChoice s.suspId x altsVal
+        (True, [goalsVal]) -> Just <$> readChoice s.suspId goalsVal
         _ -> firstAlive ss
 
--- | Read @choose(X, Alts)@. A second argument that is not a proper
--- list is a runtime error, not a failure: it is a malformed choice
--- point rather than a dead end.
-readChoice :: SuspensionId -> Value -> Value -> Chr Choice
-readChoice sid x altsVal =
-  listElems altsVal >>= \case
-    Just alts ->
-      pure (Choice {sid = sid, var = x, alts = alts})
+-- | Read @alt(Goals)@. An argument that is not a proper list is a
+-- runtime error, not a failure: it is a malformed choice point rather
+-- than a dead end.
+readChoice :: SuspensionId -> Value -> Chr Choice
+readChoice sid goalsVal =
+  listElems goalsVal >>= \case
+    Just goals ->
+      pure (Choice {sid = sid, goals = goals})
     Nothing ->
       runtimeErrorS
-        "choose/2: second argument must be a proper list of alternatives"
+        "alt/1: argument must be a proper list of alternative goals"
 
 -- | Resolve the store indices that hold choice points, by inverting
 -- the session's constraint-type names.
-chooseTypesOf :: SessionEnv -> [ConstraintType]
-chooseTypesOf env =
+altTypesOf :: SessionEnv -> [ConstraintType]
+altTypesOf env =
   [ ConstraintType i
   | (i, n) <- IntMap.toAscList env.storeTypeNames,
-    n == chooseName
+    n == altName
   ]
 
 -- ---------------------------------------------------------------------------
@@ -370,14 +359,14 @@ runSearch who goalArg onSolution = do
   sub <- liftIO (forkSearchSessionEnv env)
   let ctx =
         SearchCtx
-          { chooseTypes = chooseTypesOf sub,
+          { altTypes = altTypesOf sub,
             onSolution = onSolution
           }
       label = T.pack who
       body = do
         emitTrace (pure (TESearchEnter label))
         outcome <- withoutFailure $ do
-          mapM_ (uncurry tellConstraint) goals
+          mapM_ (uncurry tellResolvedConstraint) goals
           searchFrom ctx
         let committed = case outcome of
               AltStopped -> True

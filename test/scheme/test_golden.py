@@ -37,7 +37,12 @@ HASKELL_ONLY = {
     # host calls. The search driver needs a session fork, a snapshot of
     # the store references and an undo trail hooked into variable and
     # suspension-flag writes; the Scheme runtime has none of that yet.
+    "search_alt",
     "search_basic",
+    "search_disj",
+    "search_generate",
+    "search_label",
+    "search_label_alt",
     "search_nested",
 }
 

@@ -357,6 +357,18 @@ arguments, …) and may nest: an expression inside `quote(...)` is
 itself parsed as a surface term, and unbound logical variables inside
 become part of the resulting term value without erroring.
 
+In a *tell* argument, a quoted subtree may also introduce a variable
+the enclosing rule has not bound, exactly as an `=` operand does:
+
+```prolog
+h(X) <=> store(quote(pair(X, Y))).   % Y is a fresh logical variable
+```
+
+A tell argument is where a term is built to be stored, so a name
+appearing in one for the first time is a new slot rather than a
+mistake. Elsewhere — an `is` right-hand side, a function-call
+argument, a guard — an unbound name is still `YCHR-40002`.
+
 In head and equation patterns `quote(X)` is treated like any other
 compound — heads never evaluate, so the quoting form has no
 additional effect there.
@@ -576,6 +588,30 @@ In particular:
 - **A delayed rule is not fair.** The retry happens on the next
   activation, in ordinary ωr order; there is no separate wake-up
   queue or priority.
+
+## Disjunction in rule bodies
+
+`;` separates two alternative body conjunctions. It is an infix
+operator at priority 1100, `xfy`, so it binds looser than `,`:
+
+```prolog
+h(X) <=> p(X), (b(X) ; c(Y), d(X, Y)), q(X).
+```
+
+The module must import `library(search)`; otherwise the disjunction is
+rejected as `YCHR-20021`. `;` records a choice point rather than
+branching where it is written — in the rule above, `q(X)` is told
+before either alternative is picked, and the choice is made at
+quiescence by the search driver.
+
+`;` is a rule-body form only. In a guard, an `is` right-hand side, or a
+function body it is rejected (`YCHR-20022`), and at the top level of a
+query it is rejected (`YCHR-30006`). Inside `quote/1` it stays ordinary
+data, and the search driver reads it as a choice at run time.
+
+The full semantics — how disjuncts are lifted, which variables they
+share, and why `=` inside a disjunct is still a hard error — are in
+[the search reference](search.md#disjunction-).
 
 ## The `=` operator
 

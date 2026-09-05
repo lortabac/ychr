@@ -505,15 +505,17 @@ Nothing here affects a program that does not import it.
 
 | Name | Kind | Description |
 |---|---|---|
-| `choose/2` | constraint | `choose(X, Alts)` marks a pending choice. It has no rules — it sits in the store until the driver reaches it. |
+| `alt/1` | constraint | `alt(Goals)` marks a pending choice between goals. It has no rules — it sits in the store until the driver reaches it. |
+| `choose/2` | constraint | `choose(X, Alts)` binds `X` to one of a list of values. One rule over `alt/1` and `try_unify/2`. |
 | `solve/1` | `(any) -> bool` | Run a goal, stop at its first solution and keep its bindings. `false` when the space is exhausted, with everything undone. |
-| `find_all/2` | `(any, any) -> list(any)` | Every solution of a goal, as a list of copies of a template. Fully undone afterwards. |
+| `find_all/2` | `(T, any) -> list(T)` | Every solution of a goal, as a list of copies of a template. Fully undone afterwards. |
 | `fail/0` | `() -> any` | Fail the current branch. Outside a search, a runtime error. |
 | `try_unify/2` | constraint | Prolog's `=`: unify, or fail the branch instead of erroring. |
 
 The model is *choice at quiescence*: run the goal to a fixpoint, take
-the oldest `choose` left in the store, bind its variable to each
-alternative in turn, propagate again, and undo a branch that fails.
+the oldest `alt` left in the store, tell each of its goals in turn,
+propagate again, and undo a branch that fails. The disjunction
+operator `;` in a rule body is surface syntax for an `alt`.
 
 ```prolog
 :- use_module(library(search)).

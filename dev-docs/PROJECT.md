@@ -390,13 +390,34 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
 - The CHR side is: `ast.chr` (the encoded AST's declarations — a matched pair with `Encode.hs`, and its header records how a mismatch between the two is caught), `diag.chr` (the diagnostic vocabulary — `error/3` and `warning/3` are declared over `error_code`/`warning_code` and `error_detail` rather than `any`, so `ychr check --Werror` on the checker's own source rejects a report site that invents a code; the code↔detail pairing is not statically checked and is enforced instead by `decodeError` — plus the accumulators and per-unit warning suppression, keyed on a `unit_id` that spells "outside any checking unit" as `no_unit` instead of a sentinel integer), `env.chr` (the declaration environment), `pure.chr` (the checks that need no solver — duplicate constructors, type-definition validation, constructor arity), `solver.chr` (the solver core: the type representation, the meet table, overload resolution, bound discharge and the guard-derived-evidence rules, every diagnostic carrying a structured `ctx`), `skel.chr` (slot skeletons and variable collection), `walk.chr` (the declaration facts, the rule walk, the function-equation walk, the class-function overload search — which runs each attempt in a `run_chr_session` sub-session — and the goal walk), and `main.chr` (the two entry points). Every module — `env.chr`, `pure.chr`, `skel.chr`, `walk.chr` and `solver.chr` — expresses its list traversals with `library(lists)` / `library(pairs)` higher-order functions (`maplist`, `concat_map`, `foldl`, `filter`, `all`, `any`, `all2`, `same_length`, `assoc_get`, `assoc_put_with`, …) instead of hand-rolled recursion, and the solver's trial substitution and per-bound candidate sets are plain association lists rather than bespoke pair types. That is a deliberate readability-over-speed choice, taken with the cost measured, in two steps. The first four modules were worth about +80% of the checker's runtime over the golden corpus (13.4 s → 24.4 s for the corpus's programs plus their rule bodies as goal lists), spread over about 55 call sites at roughly 2–3x per list element. `solver.chr` came last — it had been left as a rule-for-rule mirror of the Haskell solver it replaced so the two could be read side by side while that port was in progress, and was converted once that reason lapsed — for +8% of `cabal bench`'s `typecheck/pairs_library` (180.6 ms → 195.3 ms, measured 2026-09-03). The two figures are over different workloads and do not sum. Neither step has a hot spot to reclaim: the cost is closure dispatch through `'$call'`, not wrapper overhead (see Work Remaining: keyed `'$call'` dispatch). The declaration facts a session needs are built as data before being told, so the overload search can hand a whole declaration environment to a sub-session (`retell_decls`, which `copy_term`s it first so no variable is shared across the boundary) instead of re-deriving it from the AST on every attempt. Checking one golden program cost ~47 ms on average and checking a query's goals ~13 ms when last measured over the whole corpus (2026-09-02, before the conformance walk was removed); nearly all of the goal figure is per-program work the query repeats (encode, `build_tc_env`, `tell_decls`), and caching that across queries is left to a general mechanism rather than a per-caller one. `cabal bench`'s `typecheck/pairs_library` is the standing single-program measurement.
 - Pattern-match exhaustiveness checking for functions over algebraic types in `src/YCHR/Internal/Exhaustiveness.hs` (Maranget's usefulness algorithm), reported as a warning with a concrete unmatched example.
 - Opt-in search for the Haskell runtime: `libraries/search.chr` plus
-  `src/YCHR/Internal/Runtime/{Search,Trail}.hs`. `choose/2` is an
-  ordinary CHR constraint with no rules, so it sits inert in the store;
-  the driver forks a session, runs the goal to quiescence, takes the
-  oldest live `search:choose` suspension, and tries its alternatives in
-  order. The continuation after a choice is always "propagate to
-  quiescence", which the driver invokes itself, so nothing has to be
-  captured and neither the VM nor the `Chr` monad changes. Undo is a
+  `src/YCHR/Internal/Runtime/{Search,Trail}.hs`. `alt/1` is an ordinary
+  CHR constraint with no rules, so it sits inert in the store; the
+  driver forks a session, runs the goal to quiescence, takes the oldest
+  live `search:alt` suspension, and tells each of its alternative goals
+  in turn. The continuation after a choice is always "tell this goal
+  and propagate to quiescence", which the driver invokes itself, so
+  nothing has to be captured and neither the VM nor the `Chr` monad
+  changes.
+  Because an alternative is a *goal*, `choose/2` is not primitive: it
+  is one library rule, `choose(X, Alts) <=> alt(maplist(fun(A) ->
+  quote(try_unify(X, A)) end, Alts))`. The surface disjunction operator
+  `;` is the other way in, lowered by
+  `src/YCHR/Internal/Desugar/Disjunction.hs` — a pass shaped like
+  lambda lifting, run after it and after the type checker has seen each
+  branch in the rule it was written in, which lifts every disjunct into
+  its own arity-only constraint and rewrites the node into an `alt`
+  tell.
+  What deriving `choose` costs is measured by the standing A/B pair
+  `test/golden/search_label` (216 labeling branches through `choose`)
+  and `test/golden/search_label_alt` (the same search with the `alt`
+  written out): 2.13 ms against 2.00 ms, and 2.12 ms against 1.97 ms,
+  in two `cabal bench` rounds on 2026-09-05 — about 7–8%, or ~0.65 µs
+  per choice point for the rule firing, the `maplist` with a closure
+  call per value, and the extra tell. `test/golden/search_generate`
+  (36.0 ms) is the `;` path on its own, a recursive generator walked to
+  depth 150. Recognizing `choose` in the driver as a fast path is the
+  optimization those numbers exist to judge; it is not done.
+  Undo is a
   snapshot of the four store references (persistent structures behind
   one `IORef` each, so undo is a pointer write) plus a trail for the
   cells a snapshot cannot reach — variable cells and the

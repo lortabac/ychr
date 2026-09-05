@@ -31,6 +31,7 @@ module YCHR.Internal.Runtime.Session
 
     -- * Telling constraints
     tellConstraint,
+    tellResolvedConstraint,
 
     -- * Name resolution (shared with "YCHR.Internal.Runtime.SubSession")
     resolveByExport,
@@ -203,12 +204,21 @@ drainReactivation =
 -- qualified.
 tellConstraint :: Types.Name -> [Value] -> Chr ()
 tellConstraint name args = do
-  SessionEnv {procMap, exportMap, exportedSet} <- ask
-  let arity = length args
-  resolved <- case resolveByExport exportMap exportedSet name arity of
+  SessionEnv {exportMap, exportedSet} <- ask
+  resolved <- case resolveByExport exportMap exportedSet name (length args) of
     Left err -> runtimeErrorS err
     Right qname -> pure qname
-  let tellName = tellProcName resolved arity
+  tellResolvedConstraint resolved args
+
+-- | 'tellConstraint' for a name that has already been resolved —
+-- \"YCHR.Internal.Runtime.Goal\" resolves a goal in the calling
+-- session, before the fork, and the search driver resolves a choice
+-- point's alternatives without the export check. Re-resolving here
+-- would undo both.
+tellResolvedConstraint :: Types.Name -> [Value] -> Chr ()
+tellResolvedConstraint name args = do
+  SessionEnv {procMap} <- ask
+  let tellName = tellProcName name (length args)
   pm <- liftIO (readIORef procMap)
   unless (Map.member tellName pm) $
     runtimeErrorS ("Constraint not found: " ++ T.unpack tellName.unName)

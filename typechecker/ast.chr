@@ -152,13 +152,18 @@
 
 % A rule-body goal, `YCHR.Internal.Desugared.BodyGoal`. The first
 % field of `body_is` is the variable name on the left of `is`.
+%
+% `body_or` is the surface `;`: its field is the list of branches, each
+% a body conjunction. The checker sees it before lowering, so every
+% branch is still in the enclosing rule's scope and is checked there.
 :- chr_type body_goal ---> body_true
                          ; body_tell(any, list(expr))
                          ; body_unify(expr, expr)
                          ; body_host(any, list(expr))
                          ; body_is(any, expr)
                          ; body_call(any, list(expr))
-                         ; body_apply(expr, list(expr)).
+                         ; body_apply(expr, list(expr))
+                         ; body_or(list(list(body_goal))).
 
 % A statement in non-final position of a function equation's
 % right-hand side: `YCHR.Internal.Desugared.FunStmt`.

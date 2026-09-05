@@ -28,8 +28,8 @@ The search driver needs three things the Scheme runtime does not have:
 a session fork (as `run_chr_session` above), a snapshot of the store /
 suspension-map / history / reactivation-queue references, and an undo
 trail hooked into every variable-cell and suspension-flag write
-(`src/YCHR/Internal/Runtime/{Search,Trail}.hs`). `search_basic` and
-`search_nested` are in `HASKELL_ONLY`.
+(`src/YCHR/Internal/Runtime/{Search,Trail}.hs`). `search_alt`,
+`search_basic` and `search_nested` are in `HASKELL_ONLY`.
 
 Compilation itself succeeds. The library wrappers become ordinary
 compiled procedures (`func_search__solve1`, `func_search__fail0`, …),
@@ -42,10 +42,10 @@ the failure comes when a search is first *called*:
     ERROR: In procedure %resolve-variable:
     Unbound variable: solve
 
-`choose/2` and `try_unify/2` need nothing special — they are ordinary
-CHR and compile and run fine; a program that only tells `choose/2`
-without ever calling `solve/1` behaves identically on both backends
-(the choice just sits in the store).
+`alt/1`, `choose/2` and `try_unify/2` need nothing special — they are
+ordinary CHR and compile and run fine; a program that only tells a
+choice point without ever calling `solve/1` behaves identically on both
+backends (the choice just sits in the store).
 
 Note that the Haskell driver deliberately does *not* reuse the trail
 for anything outside a search: `SessionEnv.trail` is `Nothing` at the

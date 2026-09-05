@@ -288,6 +288,11 @@ bodyGoal (D.BodyHostStmt f args) = ast "body_host" [atomTerm f, exprs args]
 bodyGoal (D.BodyIs v e) = ast "body_is" [atomTerm v, expr e]
 bodyGoal (D.BodyCall n args) = ast "body_call" [qnameTerm n, exprs args]
 bodyGoal (D.BodyApply f args) = ast "body_apply" [expr f, exprs args]
+bodyGoal (D.BodyOr branches) =
+  ast "body_or" [listTerm (map bodyGoals (NE.toList branches))]
+
+bodyGoals :: [D.BodyGoal] -> Term
+bodyGoals = listTerm . map bodyGoal
 
 funStmt :: D.FunStmt -> Term
 funStmt (D.FunIs v e) = ast "fun_is" [atomTerm v, expr e]

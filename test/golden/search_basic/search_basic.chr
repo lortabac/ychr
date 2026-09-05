@@ -26,7 +26,7 @@
    error_escapes(any), divide_by_zero(any),
    prop_rollback(any, any), prop_label(any, any),
    marker(any), seen(any), sink(any),
-   killed_choice(any, any), decided(any), pick_or_decide(any),
+   killed_choice(any, any), decided, pick_or_decide(any),
    no_solutions(any, any),
    tu_var(any, any, any), tu_pick(any, any), tu_check(any, any).
 
@@ -63,9 +63,12 @@ unify_two(X, Y) <=> try_unify(X, Y).
 unify_ok(Ok) <=> Ok is solve(quote(unify_two(a, a))).
 unify_clash(Ok) <=> Ok is solve(quote(unify_two(a, b))).
 
-% Alternatives that are not a proper list are a malformed choice
-% point: a runtime error, not a dead end. The list is passed through an
-% `any` parameter so the mistake survives type checking.
+% Alternatives that are not a proper list are a runtime error, not a
+% dead end. `choose/2` builds its alternative goals with `maplist`, so
+% the mistake is caught at tell time, before anything is stored. The
+% list is passed through an `any` parameter so it survives type
+% checking. (`alt/1` catches the same mistake at the choice point
+% instead — see `search_alt/bad_alt_arg`.)
 pick_from(X, Alts) <=> choose(X, Alts).
 bad_alts(Ok) <=> Ok is solve(quote(pick_from(_, 7))).
 
@@ -89,12 +92,16 @@ marker(X) ==> X > 0 | seen(X).
 seen(1) <=> fail.
 seen(2), sink(M) <=> M = two.
 
-% A `choose` that a rule removes before quiescence never reaches the
-% driver, so the goal quiesces with no choice point at all: one
+% A choice point that a rule removes before quiescence never reaches
+% the driver, so the goal quiesces with no choice point at all: one
 % solution, and the variable stays unbound.
+%
+% The rule matches `alt/1`, not `choose/2`: `choose` is rewritten to an
+% `alt` at tell time and never reaches the store, so it is the `alt`
+% that is interceptable.
 killed_choice(X, Ok) <=> Ok is solve(quote(pick_or_decide(X))).
-pick_or_decide(X) <=> choose(X, [1, 2]), decided(X).
-decided(X) \ choose(X, _) <=> true.
+pick_or_decide(X) <=> choose(X, [1, 2]), decided.
+decided \ alt(_) <=> true.
 
 % find_all over an empty space is [], not a failure.
 no_solutions(X, Ss) <=> Ss is find_all(X, quote(pick_nothing(X))).

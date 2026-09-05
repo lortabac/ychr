@@ -1,0 +1,12 @@
+% A disjunct is type-checked in the rule it is written in, before it is
+% lifted out. The lifted constraints are declared arity-only, so if the
+% check did not happen here it would not happen at all.
+
+:- module(search_disj_type_error, [pick/1]).
+:- use_module(library(search)).
+
+:- chr_constraint pick(int), want(int), other(string).
+
+pick(N) <=> (want(N) ; other(N)).
+want(_) <=> true.
+other(_) <=> true.

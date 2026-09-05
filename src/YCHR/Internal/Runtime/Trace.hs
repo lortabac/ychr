@@ -10,8 +10,8 @@
 -- whole picture — not just the CHR scheduling — is visible.
 --
 -- The search driver ("YCHR.Internal.Runtime.Search") emits its own
--- five: entering and leaving a search, selecting a choice point,
--- trying an alternative, and backtracking. Without them a trace of a
+-- six: entering and leaving a search, selecting a choice point,
+-- trying an alternative, reaching a solution, and backtracking. Without them a trace of a
 -- search reads as a @kill@ followed by an unexplained @reactivate@ of
 -- the same constraint, with nothing to say the branch in between was
 -- abandoned and its state rolled back.
@@ -85,13 +85,14 @@ data TraceEvent
   | -- | Entering a search ('YCHR.Internal.Runtime.Search'). @sname@ is
     -- the driving host call, @solve@ or @find_all@.
     TESearchEnter {sname :: !Text}
-  | -- | A choice point was selected at quiescence: the @choose\/2@
-    -- suspension the driver took, the variable it will bind, and its
-    -- alternatives in the order they will be tried.
-    TEChoice {sid :: !SuspensionId, choiceVar :: !Term, alts :: ![Term]}
-  | -- | Trying one alternative of the current choice point.
-    -- @altNum@ is 1-based, @altCount@ the total.
-    TETryAlt {altNum :: !Int, altCount :: !Int, value :: !Term}
+  | -- | A choice point was selected at quiescence: the @alt\/1@
+    -- suspension the driver took, and the alternative goals in the
+    -- order they will be tried.
+    TEChoice {sid :: !SuspensionId, alts :: ![Term]}
+  | -- | Trying one alternative of the current choice point. @altNum@
+    -- is 1-based, @altCount@ the total, and @goal@ the goal about to
+    -- be told.
+    TETryAlt {altNum :: !Int, altCount :: !Int, goal :: !Term}
   | -- | The current branch was abandoned. Everything it did — bindings,
     -- store, history, reactivation queue — has been undone by the time
     -- this is emitted, which is what the surrounding @kill@ and
@@ -114,12 +115,9 @@ data TraceEvent
 -- is distinguished precisely so that a trace never shows a successful
 -- branch being reported as exhausted.
 data BacktrackReason
-  = -- | @search:fail\/0@ was called.
+  = -- | @search:fail\/0@ was called. This covers @try_unify\/2@, and
+    -- therefore @choose\/2@, both of which fail through it.
     BRFail
-  | -- | The driver's own @X = Alt@ did not unify, so this alternative
-    -- is not a candidate. Only reachable when the variable was already
-    -- bound, where @choose\/2@ acts as a membership test.
-    BRNoMatch
   | -- | Every alternative of the choice point has been tried.
     BRExhausted
   | -- | A solution was reached and the caller asked to keep searching.
@@ -170,10 +168,10 @@ formatEvent depth ev = indent ++ body
         "host call " ++ T.unpack f ++ argList as ++ " = " ++ prettyTerm r
       TESearchEnter s ->
         "search " ++ T.unpack s
-      TEChoice s v as ->
-        "choice " ++ showSid s ++ ": " ++ prettyTerm v ++ " in " ++ termList as
-      TETryAlt n total v ->
-        "try alt " ++ show n ++ "/" ++ show total ++ " = " ++ prettyTerm v
+      TEChoice s as ->
+        "choice " ++ showSid s ++ ": " ++ termList as
+      TETryAlt n total g ->
+        "try alt " ++ show n ++ "/" ++ show total ++ ": " ++ prettyTerm g
       TEBacktrack r ->
         "backtrack (" ++ backtrackReason r ++ ")"
       TESolution -> "solution"
@@ -191,7 +189,6 @@ termList ts = "[" ++ intercalate ", " (map prettyTerm ts) ++ "]"
 
 backtrackReason :: BacktrackReason -> String
 backtrackReason BRFail = "fail"
-backtrackReason BRNoMatch = "no match"
 backtrackReason BRExhausted = "alternatives exhausted"
 backtrackReason BRMoreWanted = "more solutions wanted"
 

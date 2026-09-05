@@ -95,6 +95,8 @@ diagnostic carries a `2x1xx` code.
 | `YCHR-20017` | `DuplicateTypeDeclaration` | The same type name and arity is declared more than once in one module. |
 | `YCHR-20018` | `TypeShadowsImport` | A type declaration collides with a type of the same name and arity visible through an import. |
 | `YCHR-20019` | `PreludeImportList` | A `use_module(...)` directive targeting the prelude carries an import list. The prelude is imported implicitly and in full by every module, so the list has no effect — remove it. The unrestricted forms `:- use_module(prelude).` and `:- use_module(library(prelude)).` are accepted (and redundant). |
+| `YCHR-20021` | `DisjunctionWithoutSearch` | A rule body uses the disjunction operator `;` in a module that does not import `library(search)`. `;` compiles to a `search:alt/1` choice point, and the reference is generated rather than written, so qualifying it is not an escape. Add `:- use_module(library(search)).` |
+| `YCHR-20022` | `DisjunctionNotInRuleBody` | The disjunction operator `;` appears where a body goal cannot: a guard, an `is` right-hand side, or a function body. `;` chooses between goals, and only a rule body has goals in it. Inside `quote/1` it stays ordinary data and is not affected. |
 | `YCHR-20020` | `ConstructorFunctionAmbiguity` | A bare reference names something that is visible both as a data constructor and as a function. Without this check the two would be told apart by syntactic position — pattern positions take the constructor, evaluating positions take the function — so the same text would mean different things in different parts of one rule. Arity is not part of the comparison. Qualify the reference (`mod:name`) to say which you mean, or rename one of them; the prelude's import cannot be narrowed, so rename your own constructor when the clash is with the prelude. Parallel to `YCHR-20012`, which is the same question within the constructor namespace alone. |
 | `YCHR-20101` | `UndeclaredDataConstructor` *(warning)* | A symbol used in constructor position is not declared with `:- chr_type`. Declare it, or check the spelling. |
 | `YCHR-20102` | `DataConstructorArityMismatch` *(warning)* | A data constructor is used with a different arity than declared. Comes from the renamer, so it does not depend on the type checker; the type checker reports the same mistake as `YCHR-60008`, naming the declared arity. One wrong use draws both. |
@@ -109,13 +111,14 @@ diagnostic carries a `2x1xx` code.
 | `YCHR-30002` | `NonBooleanGuard` | An expression that cannot evaluate to a boolean is used as a guard. Guards must be function calls, boolean-typed variables, `true`/`false`, or a host call returning a boolean. |
 | `YCHR-30003` | `NonPreludeFunctionBodyItem` | A non-final item in a sequenced function body is not one of the permitted forms. Only `X is E`, a host call `host:f(...)`, a function call `f(...)`, and `'$call'(F, ...)` may precede the return expression. |
 | `YCHR-30004` | `NonVariableIsInFunctionBody` | The left-hand side of an `is` in a function body is not a variable. Function bodies have no unification machinery, so `is` can only bind a fresh name. |
+| `YCHR-30006` | `DisjunctionInQuery` | The disjunction operator `;` appears at the top level of a query. A query is not a rule body and has no place to lift a disjunct to. Wrap it in a goal instead: `Ok is solve(quote((A ; B)))`. |
 
 ### Compile phase (`4xxxx`)
 
 | Code | Name | Meaning |
 |------|------|---------|
 | `YCHR-40001` | `UnknownConstraintType` | A reference to a constraint type that is not declared. Declare it with `:- chr_constraint name/arity`. |
-| `YCHR-40002` | `UnboundVariable` | A variable used in a guard or body does not appear in the rule head — or, for a function equation, in its parameters. |
+| `YCHR-40002` | `UnboundVariable` | A variable used in an *evaluated* position does not appear in the rule head — or, for a function equation, in its parameters. Evaluated positions are guards, tell arguments, `is` right-hand sides, and function-call arguments. A variable that occurs only in a *term* position is not affected: the operands of `=` are structural, so `X = f(Y)` introduces `Y` as a fresh logical variable, and so does a `quote/1` subtree of a tell argument. See [the language reference](language.md#the--operator); `test/golden/soft_guard_hard_positions` enumerates the evaluated positions. |
 
 ### Top-level errors (`5xxxx`)
 

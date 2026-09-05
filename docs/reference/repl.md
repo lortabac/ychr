@@ -33,7 +33,7 @@ Ambiguous name 'fail/0'
 ```
 
 Qualify it — `lib_a:fail` — as the hint says. The names
-`library(search)` brings into query scope are `choose/2`,
+`library(search)` brings into query scope are `alt/1`, `choose/2`,
 `try_unify/2`, `fail/0`, `solve/1` and `find_all/2`.
 
 The `--quiet` and `--Werror` flags are documented in the

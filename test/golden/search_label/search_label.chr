@@ -1,0 +1,27 @@
+% Labeling through `choose/2`: three variables over a six-value domain,
+% pruned by a sum constraint. This is the shape a finite-domain solver
+% has, and it is also the benchmark that measures what `choose` costs
+% now that it is derived — one rule firing, a `maplist` over the
+% values, and a `try_unify` tell per alternative.
+
+:- module(search_label, [search_label/4, triple/3]).
+:- use_module(library(search)).
+
+:- chr_constraint
+   search_label(any, any, any, any), triple(any, any, any),
+   sum_is_ten(any, any, any).
+
+search_label(X, Y, Z, Ss) <=>
+    Ss is find_all([X, Y, Z], quote(triple(X, Y, Z))).
+
+triple(X, Y, Z) <=>
+    choose(X, [1, 2, 3, 4, 5, 6]),
+    choose(Y, [1, 2, 3, 4, 5, 6]),
+    choose(Z, [1, 2, 3, 4, 5, 6]),
+    sum_is_ten(X, Y, Z).
+
+% Delays until labeling has bound all three, then kills the branch
+% unless they sum to ten. A branch that survives leaves this stored,
+% which is quiescence and therefore a solution.
+sum_is_ten(X, Y, Z) <=>
+    integer(X), integer(Y), integer(Z), not(X + Y + Z == 10) | fail.

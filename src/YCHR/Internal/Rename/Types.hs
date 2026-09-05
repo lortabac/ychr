@@ -70,15 +70,17 @@ toListDecl :: DeclEnv -> [((Text, Int), [Text])]
 toListDecl (DeclEnv m) = Map.toList m
 
 -- | Names that must stay 'YCHR.Types.Unqualified' even in resolving
--- contexts. These are desugaring-level keywords (@true@, @=@, @is@, @->@,
--- @$call@) that the desugarer matches by name; qualifying them
--- would break that dispatch.
+-- contexts. These are desugaring-level keywords (@true@, @=@, @is@,
+-- @->@, @;@, @$call@) that the desugarer matches by name; qualifying
+-- them would break that dispatch. @;@ is here for the runtime too: the
+-- search driver recognizes a disjunctive goal by the bare functor
+-- (\"YCHR.Internal.Runtime.Goal\").
 --
 -- Most of these forms are handled by dedicated shape-matching cases in
 -- 'YCHR.Internal.Rename.renameTerm'. This set is the fallback for shapes that don't
 -- match those cases (e.g. @is/3@).
 reservedSymbolSet :: Set Text
-reservedSymbolSet = Set.fromList ["true", "=", "is", "->", "$call", "quote", "fun"]
+reservedSymbolSet = Set.fromList ["true", "=", "is", "->", ";", "$call", "quote", "fun"]
 
 isReserved :: Text -> Bool
 isReserved t = Set.member t reservedSymbolSet

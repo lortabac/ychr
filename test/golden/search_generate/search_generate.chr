@@ -1,0 +1,27 @@
+% A generator written with `;`: `nat/1` enumerates 0, 1, 2, ... by
+% choosing, at each step, between stopping and recursing. The space is
+% infinite, so something has to prune — `min_val/2` fails every branch
+% below the bound, which makes the first solution the bound itself and
+% the search a walk of that many nested choice points.
+%
+% This is the benchmark for the `;` path: one lifted disjunct rule and
+% one `alt` per level, with no `choose`, `maplist` or `try_unify`
+% overhead except at the base case.
+
+:- module(search_generate, [search_generate/3, nat/1, min_val/2]).
+:- use_module(library(search)).
+
+:- chr_constraint
+   search_generate(any, any, any), nat(any), succ_of(any, any),
+   min_val(any, any).
+
+search_generate(K, N, Ok) <=> Ok is solve(quote([nat(N), min_val(N, K)])).
+
+nat(N) <=> (try_unify(N, 0) ; nat(M), succ_of(M, N)).
+
+% Delays until the inner choice has bound M: the second branch tells
+% `nat(M)` and `succ_of(M, N)` together, and the choice that binds M is
+% not made until the next quiescence.
+succ_of(M, N) <=> integer(M) | N is M + 1.
+
+min_val(N, K) <=> integer(N), N < K | fail.

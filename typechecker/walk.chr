@@ -805,6 +805,7 @@ tell_predicate_evidence_some @
 :- chr_constraint
     check_body_goals(scope, list(body_goal)),
     check_body_goal(scope, body_goal),
+    check_body_branches(scope, list(list(body_goal))),
     emit_constraint_use(scope, any, list(ty)).
 
 check_body_goals_nil @
@@ -854,6 +855,23 @@ check_body_apply @
 check_body_host @
     check_body_goal(S, body_host(_, Args)) <=>
     type_of_exprs(S, Args, _).
+
+% A disjunction is checked branch by branch, all in the enclosing
+% rule's scope: the variable slots are the rule's, so a variable a
+% branch binds is the same slot the rest of the body sees. Lowering
+% happens after this, and lifts each branch into its own constraint
+% declared arity-only, so nothing here has a second chance to run.
+check_body_or @
+    check_body_goal(S, body_or(Branches)) <=>
+    check_body_branches(S, Branches).
+
+check_body_branches_nil @
+    check_body_branches(_, []) <=> true.
+
+check_body_branches_cons @
+    check_body_branches(S, [B|Bs]) <=>
+    check_body_goals(S, B),
+    check_body_branches(S, Bs).
 
 emit_constraint_use1 @
     emit_constraint_use(S, N, ArgTys) <=>

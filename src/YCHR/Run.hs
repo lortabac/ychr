@@ -647,6 +647,10 @@ termToValue (CompoundTerm name ts) = VTerm (vmName name).unName <$> traverse ter
 -- | Execute a single desugared body goal in the query context.
 executeBodyGoal :: D.BodyGoal -> QueryM ()
 executeBodyGoal D.BodyTrue = pure ()
+-- Rejected by 'YCHR.Internal.Desugar.desugarQueryGoals' (YCHR-30006):
+-- a query has no enclosing rule to lift a disjunct out of.
+executeBodyGoal (D.BodyOr _) =
+  error "Run.executeBodyGoal: a query disjunction should have been rejected"
 executeBodyGoal (D.BodyUnify l r) = do
   v1 <- exprToValue l
   v2 <- exprToValue r

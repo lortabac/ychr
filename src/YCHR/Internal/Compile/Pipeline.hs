@@ -39,6 +39,7 @@ import YCHR.Internal.Collect
 import YCHR.Internal.Collected (CollectedModule)
 import YCHR.Internal.Compile (CompileError, compile)
 import YCHR.Internal.Desugar (DesugarError, desugarProgram, extractSymbolTable, liftAllLambdas)
+import YCHR.Internal.Desugar.Disjunction (lowerDisjunctions)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic)
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning, checkExhaustiveness)
@@ -399,11 +400,16 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
   (renamed, renameWarnings) <- first RenameErrors (renameProgram renameInputs allMods)
   resolved <- first ResolveErrors (resolveProgram renamed)
   desugared <- first DesugarErrors (desugarProgram resolved)
-  let (desugared', liftErrs) = liftAllLambdas desugared
+  let (desugaredLifted, liftErrs) = liftAllLambdas desugared
   case liftErrs of
     [] -> pure ()
     _ -> Left (DesugarErrors liftErrs)
-  let symTab = extractSymbolTable desugared'
+  -- After lambda lifting, so a lambda inside a disjunct is already a
+  -- closure over the enclosing scope by the time the branch moves out.
+  -- 'desugaredProgram' below keeps the /pre/-lowering AST, because the
+  -- type checker has to see each branch in the rule it was written in.
+  let desugared' = lowerDisjunctions desugaredLifted
+      symTab = extractSymbolTable desugared'
       exhaustWarnings = checkExhaustiveness resolved
       warnings =
         [RenameWarnings renameWarnings | not (null renameWarnings)]

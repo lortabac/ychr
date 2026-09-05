@@ -1,4 +1,5 @@
 :- module(search, [
+    alt/1,
     choose/2,
     try_unify/2,
     fun fail/0,
@@ -6,32 +7,47 @@
     fun find_all/2
 ]).
 
-:- chr_constraint choose(any, list(any)), try_unify(any, any).
+:- use_module(library(lists)).
+
+:- chr_constraint alt(list(any)), choose(any, list(any)),
+                  try_unify(any, any).
 
 :- function
     (fail() -> any),
     (solve(any) -> bool),
-    (find_all(any, any) -> list(any)).
+    (find_all(T, any) -> list(T)).
 
-% `choose(X, Alts)` marks a pending choice and has deliberately no
-% rules: telling it simply leaves it in the store, where the search
-% driver finds it once the goal has propagated to quiescence. It is
-% still an ordinary constraint, so a rule of yours may inspect or
-% remove one before the driver ever sees it.
+% `alt(Goals)` marks a pending choice and has deliberately no rules:
+% telling it simply leaves it in the store, where the search driver
+% finds it once the goal has propagated to quiescence. It is still an
+% ordinary constraint, so a rule of yours may inspect or remove one
+% before the driver ever sees it.
 %
-% The driver takes the oldest live `choose` at each quiescence and
-% tries its alternatives in list order, unifying X with each in turn
-% and propagating again. If X is already bound the unification is a
-% membership test, and alternatives that do not match are skipped.
+% The driver takes the oldest live `alt` at each quiescence and tries
+% its goals in list order: kill the `alt`, tell one goal, propagate to
+% quiescence again. Each goal is a constraint term, a list of them, or
+% a `;` disjunction — the same shapes `solve/1` accepts — so a choice
+% is between computations rather than between values. The disjunction
+% operator `;` in a rule body compiles to exactly this.
+
+% Bind X to one of the values in Alts. Labeling, expressed over the
+% goal-level primitive: each alternative becomes the goal "unify X with
+% this value, or fail". If X is already bound this is a membership
+% test, and alternatives that do not match fail individually.
+%
+% Note that a `choose` never reaches the store — this rule fires at
+% tell time and what is stored is the `alt`.
+choose(X, Alts) <=>
+    alt(maplist(fun(A) -> quote(try_unify(X, A)) end, Alts)).
 
 % Abandon the current branch. Outside a search there is no branch to
 % abandon, and this is a runtime error rather than a silent success.
 fail -> host:fail.
 
-% Run a goal (a constraint term, or a list of them, wrapped in quote/1
-% to keep it symbolic) in a fresh session of the current program, and
-% stop at its first solution: true, with the bindings of that solution
-% left in place. False when the search space is exhausted, with every
+% Run a goal (a constraint term, a list of them, or a `;` disjunction,
+% wrapped in quote/1 to keep it symbolic) in a fresh session of the
+% current program, and stop at its first solution: true, with the
+% bindings of that solution left in place. False when the search space is exhausted, with every
 % binding it made undone. Runtime errors propagate — unlike
 % run_chr_session/1, a search does not turn a bug into a false.
 solve(G) -> host:solve(G).

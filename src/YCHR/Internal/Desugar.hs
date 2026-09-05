@@ -54,6 +54,10 @@ module YCHR.Internal.Desugar
     SymbolTable,
     extractSymbolTable,
 
+    -- * Variable scopes
+    bodyGoalVars,
+    guardVars,
+
     -- * Errors
     DesugarError (..),
   )
@@ -73,7 +77,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Desugared qualified as D
-import YCHR.Internal.Diagnostic (Diagnostic (..))
+import YCHR.Internal.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed (AnnP (..), noAnnP)
 import YCHR.Internal.Parsed qualified as P
@@ -100,6 +104,13 @@ data DesugarError
     -- supported in a function body (function bodies have no unification
     -- machinery).
     NonVariableIsInFunctionBody R.Expr
+  | -- | A query used the disjunction operator @;@ at its top level. A
+    -- query is not a rule body: there is no enclosing rule to lift a
+    -- disjunct out of, and no compiled program to add the lifted
+    -- constraint to. The goal-level form works instead
+    -- (@solve(quote((A ; B)))@), where the driver reads the @;@ at run
+    -- time.
+    DisjunctionInQuery
   deriving (Eq, Show)
 
 -- | Prefix for fresh variables introduced by the Head Normal Form
@@ -516,7 +527,21 @@ desugarQueryGoals goals =
   let (results, errs) =
         runWriter $
           desugarBodyGoals Nothing P.dummyLoc (Atom "") goals
-   in if null errs then Right results else Left errs
+      -- A query has no enclosing rule to lift a disjunct out of, and
+      -- the program it runs against is already compiled, so there is
+      -- nowhere to put the lifted constraint either. Rejected here
+      -- rather than in the renamer so the goal-level @;@ inside
+      -- @quote/1@, which the search driver reads at run time, keeps
+      -- working.
+      disjErrs =
+        [ noDiag (AnnP DisjunctionInQuery P.dummyLoc (Atom ""))
+        | any isDisjunction results
+        ]
+      allErrs = errs ++ disjErrs
+   in if null allErrs then Right results else Left allErrs
+  where
+    isDisjunction (D.BodyOr _) = True
+    isDisjunction _ = False
 
 -- ---------------------------------------------------------------------------
 -- VarNameSupply: fresh variable generation for desugaring
@@ -554,9 +579,10 @@ desugarBodyGoals label loc origin exprs =
 -- 4. 'R.HostExpr' -> 'D.BodyHostStmt'
 -- 5. 'R.CallExpr' -> 'D.BodyCall'
 -- 6. 'R.ApplyExpr' -> 'D.BodyApply'
--- 7. Constructor with a 'Qualified' name -> 'D.BodyTell'
--- 8. @true@ in any spelling -> 'D.BodyTrue'
--- 9. Anything else -> error
+-- 7. @A ; B@ -> 'D.BodyOr'
+-- 8. Constructor with a 'Qualified' name -> 'D.BodyTell'
+-- 9. @true@ in any spelling -> 'D.BodyTrue'
+-- 10. Anything else -> error
 desugarBodyGoal ::
   Maybe Text ->
   P.SourceLoc ->
@@ -578,11 +604,36 @@ desugarBodyGoal label loc origin e = case e of
   R.CtorExpr (Unqualified "true") [] -> pure [D.BodyTrue]
   R.CallExpr qn args -> pure [D.BodyCall qn args]
   R.ApplyExpr f args -> pure [D.BodyApply f args]
+  -- Disjunction. The parser nests @;@ to the right, so the branches of
+  -- @(a ; b ; c)@ are read off the right spine; a left-nested
+  -- @((a ; b) ; c)@ keeps its left operand as one branch, which is
+  -- itself a disjunction and nests. Each branch is a body conjunction,
+  -- so its own top-level commas are flattened the same way the rule
+  -- body's were.
+  R.CtorExpr (Unqualified ";") [_, _] -> do
+    branches <-
+      traverse
+        (fmap concat . traverse (desugarBodyGoal label loc origin) . conjuncts)
+        (disjuncts e)
+    pure [D.BodyOr (NE.fromList branches)]
   R.CtorExpr (Qualified m b) args ->
     pure [D.BodyTell (QualifiedName m b) args]
   _ -> do
     lift (tell [Diagnostic label (AnnP (UnexpectedBodyExpr e) loc origin)])
     pure [D.BodyTrue]
+
+-- | The branches of a disjunction, read off the right spine. Always at
+-- least two, because the caller has already matched a @;@ compound.
+disjuncts :: R.Expr -> [R.Expr]
+disjuncts (R.CtorExpr (Unqualified ";") [l, r]) = l : disjuncts r
+disjuncts e = [e]
+
+-- | The goals of one body conjunction. @,@ at the top of a disjunct is
+-- the same sequencer it is at the top of a rule body, which the parser
+-- has already flattened there.
+conjuncts :: R.Expr -> [R.Expr]
+conjuncts (R.CtorExpr (Unqualified ",") [l, r]) = conjuncts l ++ conjuncts r
+conjuncts e = [e]
 
 -- ---------------------------------------------------------------------------
 -- Lambda lifting
@@ -804,6 +855,15 @@ liftBodyGoal modName scope st goal = case goal of
     let (st', args') =
           mapAccumL (liftExpr modName scope) st args
      in (st', D.BodyHostStmt f args')
+  -- Every branch is lifted in the same scope: a disjunct sees exactly
+  -- the variables the enclosing rule body sees.
+  D.BodyOr branches ->
+    let (st', branches') =
+          mapAccumL
+            (mapAccumL (liftBodyGoal modName scope))
+            st
+            branches
+     in (st', D.BodyOr branches')
   D.BodyTrue -> (st, D.BodyTrue)
 
 -- | Lift lambdas in a guard. 'GuardExpr' and 'GuardEqual' carry
@@ -929,6 +989,8 @@ bodyGoalVars = Set.unions . map goalVars
     goalVars (D.BodyTell _ args) = Set.unions (map exprVars args)
     goalVars (D.BodyUnify e1 e2) = exprVars e1 `Set.union` exprVars e2
     goalVars (D.BodyHostStmt _ args) = Set.unions (map exprVars args)
+    goalVars (D.BodyOr branches) =
+      Set.unions (map bodyGoalVars (NE.toList branches))
     goalVars D.BodyTrue = Set.empty
 
 -- | Collect all variables from a list of guards.

@@ -351,6 +351,8 @@ body_goal_arity(Env, body_is(_, E)) -> expr_arity(Env, E).
 body_goal_arity(Env, body_call(_, Args)) -> exprs_arity(Env, Args).
 body_goal_arity(Env, body_apply(F, Args)) ->
     append(expr_arity(Env, F), exprs_arity(Env, Args)).
+body_goal_arity(Env, body_or(Branches)) ->
+    concat_map(fun(B) -> body_goals_arity(Env, B) end, Branches).
 
 :- function exprs_arity(con_env, list(expr)) -> list(arity_use).
 exprs_arity(Env, Es) -> concat_map(fun(E) -> expr_arity(Env, E) end, Es).

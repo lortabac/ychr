@@ -257,6 +257,8 @@ renameErrorCode (ReservedTypeName _ _) = ErrorCode 20016
 renameErrorCode (DuplicateTypeDeclaration _ _) = ErrorCode 20017
 renameErrorCode (TypeShadowsImport _ _ _) = ErrorCode 20018
 renameErrorCode PreludeImportList = ErrorCode 20019
+renameErrorCode DisjunctionWithoutSearch = ErrorCode 20021
+renameErrorCode DisjunctionNotInRuleBody = ErrorCode 20022
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
@@ -280,6 +282,7 @@ desugarErrorCode (UnexpectedBodyExpr _) = ErrorCode 30001
 desugarErrorCode (NonBooleanGuard _) = ErrorCode 30002
 desugarErrorCode (NonPreludeFunctionBodyItem _) = ErrorCode 30003
 desugarErrorCode (NonVariableIsInFunctionBody _) = ErrorCode 30004
+desugarErrorCode DisjunctionInQuery = ErrorCode 30006
 
 -- | 4xxxx — compile phase
 compileErrorCode :: CompileError -> ErrorCode
@@ -724,6 +727,19 @@ renameErrorMsg PreludeImportList =
     ( "the prelude is imported implicitly and in full by every module;"
         ++ " remove the import list"
     )
+renameErrorMsg DisjunctionWithoutSearch =
+  withHint
+    "the disjunction operator ';' needs library(search)"
+    ( "';' compiles to a search:alt/1 choice point; add"
+        ++ " :- use_module(library(search))."
+    )
+renameErrorMsg DisjunctionNotInRuleBody =
+  withHint
+    "the disjunction operator ';' is only valid in a rule body"
+    ( "';' chooses between goals, and a guard, an 'is' right-hand side"
+        ++ " and a function body have none; use quote/1 to write a ';'"
+        ++ " term as data"
+    )
 renameErrorMsg (UnknownExportedConstructor modName tyName tyArity conName) =
   "Module '"
     ++ T.unpack modName
@@ -903,6 +919,12 @@ desugarErrorMsg (NonPreludeFunctionBodyItem e) =
     )
     ( "non-final items must be an 'is' binding (X is E), a host call"
         ++ " (host:f(args)), a function call, or '$call'(F, ...)"
+    )
+desugarErrorMsg DisjunctionInQuery =
+  withHint
+    "the disjunction operator ';' is not valid at the top level of a query"
+    ( "a query has no rule to lift a disjunct out of; run it as a goal"
+        ++ " instead, as in solve(quote((A ; B)))"
     )
 desugarErrorMsg (NonVariableIsInFunctionBody e) =
   withHint

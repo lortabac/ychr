@@ -49,6 +49,7 @@ module YCHR.Internal.Desugared
   )
 where
 
+import Data.List.NonEmpty (NonEmpty)
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import YCHR.Internal.Parsed (AnnP)
@@ -106,6 +107,16 @@ data Guard
 --
 -- 'BodyCall' replaces the legacy @BodyFunctionCall@ for static calls
 -- and 'BodyApply' replaces it for dynamic dispatch ('$call').
+--
+-- 'BodyOr' is the surface @;@ operator: a choice between two or more
+-- body conjunctions, flattened out of the right-nested @;@ the parser
+-- produces. It survives only as far as
+-- \"YCHR.Internal.Desugar.Disjunction\", which lifts each branch into
+-- its own constraint and rewrites the node into a @search:alt@ tell;
+-- the type checker sees the pre-lowering form, where each branch is
+-- still in the enclosing rule's scope. The 'NonEmpty' is the parser's
+-- guarantee made structural: a @;@ has at least two branches, and a
+-- node with none would silently mean \"fail\".
 data BodyGoal
   = BodyTrue
   | BodyTell QualifiedName [Expr]
@@ -114,6 +125,7 @@ data BodyGoal
   | BodyIs Text Expr
   | BodyCall QualifiedName [Expr]
   | BodyApply Expr [Expr]
+  | BodyOr (NonEmpty [BodyGoal])
   deriving (Show, Eq)
 
 data Function = Function

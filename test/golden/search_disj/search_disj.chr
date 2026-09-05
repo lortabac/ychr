@@ -1,0 +1,90 @@
+% The disjunction operator `;`: a choice between goals, written in the
+% rule body. Each disjunct is lifted into its own constraint and the
+% node becomes a `search:alt` choice point, so everything here is the
+% `search_alt` machinery reached through surface syntax.
+
+:- module(search_disj, [
+    two/2,
+    pick2/1,
+    three/2,
+    pick3/1,
+    nested/2,
+    pickn/1,
+    branch_var/3,
+    pickb/2,
+    after/3,
+    pick_after/2,
+    first_at_least/3,
+    nat/1,
+    min_val/2,
+    hard_unify/2,
+    clash/1
+]).
+:- use_module(library(search)).
+
+:- chr_constraint
+   two(any, any), pick2(any),
+   three(any, any), pick3(any),
+   nested(any, any), pickn(any),
+   branch_var(any, any, any), pickb(any, any),
+   after(any, any, any), pick_after(any, any), doubled(any, any),
+   first_at_least(any, any, any), nat(any), succ_of(any, any),
+   min_val(any, any),
+   hard_unify(any, any), clash(any), set_one(any), set_two(any),
+   set(any, any), plus_one(any, any).
+
+set(V, N) <=> V = N.
+plus_one(V, N) <=> M is N + 1, V = M.
+
+% --- Two and three branches. ------------------------------------------
+two(X, Ss) <=> Ss is find_all(X, quote(pick2(X))).
+pick2(X) <=> (set(X, 1) ; set(X, 2)).
+
+% `;` is xfy, so three branches flatten rather than nest.
+three(X, Ss) <=> Ss is find_all(X, quote(pick3(X))).
+pick3(X) <=> (set(X, 1) ; set(X, 2) ; set(X, 3)).
+
+% An explicitly nested `;` gives the same solutions in the same order:
+% the inner choice point is told inside the chosen branch and reached
+% at that branch's next quiescence.
+nested(X, Ss) <=> Ss is find_all(X, quote(pickn(X))).
+pickn(X) <=> (set(X, 1) ; (set(X, 2) ; set(X, 3))).
+
+% --- A variable local to one branch. ----------------------------------
+%
+% `Z` occurs only in the first branch, but it is a variable of the rule
+% body, so it is allocated once before the choice and passed to the
+% disjunct that mentions it. `X` is shared and visible afterwards.
+branch_var(X, Y, Ss) <=> Ss is find_all([X, Y], quote(pickb(X, Y))).
+pickb(X, Y) <=> (set(Z, 10), plus_one(X, Z) ; set(X, 99)), set(Y, X).
+
+% --- Choice happens at quiescence, not at the `;`. --------------------
+%
+% `doubled/2` is told before either branch is picked, so its guard
+% finds `X` unbound and it delays. Labeling binds `X`; reactivation
+% retries the guard. Writing it without the guard would reach `X * 2`
+% with `X` unbound and abort.
+after(X, R, Ss) <=> Ss is find_all(R, quote(pick_after(X, R))).
+pick_after(X, R) <=> (set(X, 1) ; set(X, 2)), doubled(X, R).
+doubled(X, R) <=> integer(X) | R is X * 2.
+
+% --- A generator. -----------------------------------------------------
+%
+% `nat/1` enumerates 0, 1, 2, ... — an infinite space, which is fine as
+% long as something prunes. `min_val/2` fails every branch below the
+% bound, so the first solution is the bound itself. `find_all` over
+% `nat/1` alone would not terminate.
+first_at_least(K, N, Ok) <=> Ok is solve(quote([nat(N), min_val(N, K)])).
+nat(N) <=> (try_unify(N, 0) ; nat(M), succ_of(M, N)).
+succ_of(M, N) <=> integer(M) | N is M + 1.
+min_val(N, K) <=> integer(N), N < K | fail.
+
+% --- `=` inside a disjunct is still strict. ---------------------------
+%
+% A branch is not a place where a failing body unification becomes a
+% dead end: `X` is already 2, so the first branch aborts the whole
+% search rather than backtracking. `try_unify/2` is the opt-in.
+hard_unify(X, Ok) <=> X = 2, Ok is solve(quote(clash(X))).
+clash(X) <=> (set_one(X) ; set_two(X)).
+set_one(X) <=> X = 1.
+set_two(X) <=> X = 2.

@@ -166,6 +166,18 @@ data RenameError
     -- (@:- use_module(library(prelude)).@) is still accepted, and
     -- redundant.
     PreludeImportList
+  | -- | A rule body uses the disjunction operator @;@ in a module that
+    -- does not import @library(search)@. @;@ lowers to a
+    -- @search:alt\/1@ choice point, so the module that writes one has
+    -- to import the module that declares it — qualification is not an
+    -- escape here, because the reference is generated rather than
+    -- written.
+    DisjunctionWithoutSearch
+  | -- | The disjunction operator @;@ appears where a body goal cannot:
+    -- a guard, an @is@ right-hand side, or a function body. @;@ is a
+    -- choice between /goals/, and only a rule body has goals in it.
+    -- Inside @quote\/1@ it stays ordinary data and is not affected.
+    DisjunctionNotInRuleBody
   deriving (Eq, Show)
 
 data RenameWarning
@@ -838,6 +850,34 @@ renameLambdaBody ctx loc origin t = case t of
     pure (CompoundTerm (Unqualified ",") [l', r'])
   _ -> renameTerm ctx loc origin ResolveAll t
 
+-- | Rename one branch of a disjunction. A branch is a body
+-- conjunction, so walk the top-level commas and rename each item the
+-- way a rule-body item is renamed. Mirrors 'renameLambdaBody'.
+renameBodySeq :: RenameCtx -> SourceLoc -> PExpr -> Term -> Rename Term
+renameBodySeq ctx loc origin t = case t of
+  CompoundTerm (Unqualified ",") [l, r] -> do
+    l' <- renameBodySeq ctx loc origin l
+    r' <- renameBodySeq ctx loc origin r
+    pure (CompoundTerm (Unqualified ",") [l', r'])
+  _ -> renameTerm ctx loc origin ResolveTop t
+
+-- | @;@ lowers to a tell of @search:alt\/1@, a name the module never
+-- writes itself. Require the import that makes it visible, so a module
+-- does not silently depend on some /other/ module having imported
+-- @library(search)@.
+requireSearchImport :: RenameCtx -> SourceLoc -> PExpr -> Rename ()
+requireSearchImport ctx loc origin =
+  when
+    ( ctx.currentModule.name /= searchModuleName
+        && searchModuleName `notElem` importedModuleNames ctx
+    )
+    (emitError (AnnP DisjunctionWithoutSearch loc origin))
+
+-- | The module that declares the choice-point constraint @;@ compiles
+-- to. Matches 'YCHR.Internal.Runtime.Goal.altName'.
+searchModuleName :: Text
+searchModuleName = "search"
+
 renameTerm :: RenameCtx -> SourceLoc -> PExpr -> ResolveMode -> Term -> Rename Term
 renameTerm ctx loc origin mode t = case t of
   -- Special case: @is@ LHS is a pattern (no resolution), RHS is an expression.
@@ -845,6 +885,26 @@ renameTerm ctx loc origin mode t = case t of
     renamedLhs <- renameTerm ctx loc origin NoResolve lhs
     renamedRhs <- renameTerm ctx loc origin ResolveAll rhs
     pure (CompoundTerm (Unqualified "is") [renamedLhs, renamedRhs])
+  -- Disjunction: @(A ; B)@ in a rule body. Both operands are body
+  -- conjunctions rather than data, so each is renamed the way a body
+  -- item is — 'renameBodySeq' walks the top-level commas the way
+  -- 'renameLambdaBody' does for a lambda. Falling through to the
+  -- generic compound arm would rename them 'NoResolve' and quietly
+  -- turn every goal in the branch into a data term.
+  --
+  -- 'ResolveAll' is every other evaluating position (a guard, an @is@
+  -- right-hand side, a function body), none of which has goals in it.
+  -- @;@ is reserved, so without this arm it would fall through to the
+  -- generic case and become a silent @';'\/2@ data compound.
+  CompoundTerm (Unqualified ";") [l, r]
+    | mode == ResolveTop -> do
+        requireSearchImport ctx loc origin
+        l' <- renameBodySeq ctx loc origin l
+        r' <- renameBodySeq ctx loc origin r
+        pure (CompoundTerm (Unqualified ";") [l', r'])
+    | mode == ResolveAll -> do
+        emitError (AnnP DisjunctionNotInRuleBody loc origin)
+        pure t
   -- Lambda: @fun(params) -> body end@. A lambda is a first-class value,
   -- not data; @'->'@ and @fun@ are surface syntax for the desugarable
   -- compound @'->'(fun(params), body)@, never data constructors. The
