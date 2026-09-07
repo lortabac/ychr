@@ -33,8 +33,12 @@ Ambiguous name 'fail/0'
 ```
 
 Qualify it — `lib_a:fail` — as the hint says. The names
-`library(search)` brings into query scope are `alt/1`, `choose/2`,
-`try_unify/2`, `fail/0`, `solve/1` and `find_all/2`.
+`library(search)` brings into query scope are the constraints `alt/1`,
+`choose/2` and `try_unify/2`; the functions `fail/0`, `solve/1`,
+`find_all/2`, `fold_solutions/4`, `forall/3` and `find_n/3`; and the
+type `step/1` with its constructors `continue/1`, `stop/1` and
+`commit/1`. Those last three are ordinary generic names, so a bare
+`continue(1)` in a query resolves to `search:continue(1)`.
 
 The `--quiet` and `--Werror` flags are documented in the
 [CLI reference](cli.md).

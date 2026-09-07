@@ -1,0 +1,173 @@
+% fold_solutions/4 and the two library derivations over it: forall/3
+% and find_n/3. Each rule threads the template variable through its
+% head, since a rule body may only mention variables the head binds and
+% the goal's variables are not local to the call.
+
+:- module(search_fold, [
+    sum_solutions/2, count_solutions/2, first_two/2, take_more/2,
+    commit_first/2, stop_first/2, skip_two/2,
+    all_positive/2, has_negative/2, vacuous/2, all_nats/2,
+    bad_step/2, error_in_step/2,
+    first_nats/3, none_at_all/3,
+    copied/2, aliased/2, wider_template/3,
+    committing_inner/3, outer_fold/3, no_choice/2,
+    % Goal constraints have to be exported: the search entry points
+    % resolve them through the program's exports, in the caller.
+    pick/1, pick_signed/1, pick_nothing/1, pick_pair/2, pick_ten/2,
+    nat/1, exploding/1, deterministic/1, inner_commit/2
+]).
+
+:- use_module(library(search)).
+:- use_module(library(lists)).
+
+:- chr_constraint
+   sum_solutions(any, any), count_solutions(any, any),
+   first_two(any, any), take_more(any, any),
+   commit_first(any, any), stop_first(any, any), skip_two(any, any),
+   all_positive(any, any), has_negative(any, any), vacuous(any, any),
+   all_nats(any, any),
+   bad_step(any, any), error_in_step(any, any),
+   first_nats(any, any, any), none_at_all(any, any, any),
+   copied(any, any), aliased(any, any), wider_template(any, any, any),
+   committing_inner(any, any, any), outer_fold(any, any, any),
+   no_choice(any, any),
+   pick(any), pick_signed(any), pick_nothing(any), pick_pair(any, any),
+   pick_ten(any, any), inner_commit(any, any),
+   nat(any), succ_of(any, any), exploding(any), deterministic(any).
+
+pick(X) <=> choose(X, [1, 2, 3]).
+pick_signed(X) <=> choose(X, [1, -2, 3]).
+pick_nothing(X) <=> choose(X, []).
+pick_pair(X, Y) <=> choose(X, [1, 2]), choose(Y, [10, 20]).
+pick_ten(X, Y) <=> choose(Y, [X, 99]).
+
+% Raises if it is ever entered, which is how the find_n/3 cases below
+% show that a non-positive bound short-circuits before running the goal.
+exploding(X) <=> X is 1 div 0.
+
+% A goal with no choice point at all: one solution, reached without the
+% driver ever taking an alternative.
+deterministic(X) <=> X = 7.
+
+% `continue` all the way to exhaustion: the fold sees every solution in
+% search order, and the search is fully unwound afterwards, so X is
+% unbound again.
+sum_solutions(X, S) <=>
+    S is fold_solutions(X, quote(pick(X)), fun(C, A) -> continue(A + C) end, 0).
+
+% The witness is a copy, and the step function may ignore it.
+count_solutions(X, N) <=>
+    N is fold_solutions(X, quote(pick(X)), fun(_, A) -> continue(A + 1) end, 0).
+
+% `stop` ends the fold and unwinds everything, which is what makes
+% find_n/3 usable where find_all/2 would not terminate.
+first_two(X, Xs) <=> Xs is find_n(2, X, quote(pick(X))).
+
+% Asking for more solutions than the space holds is not an error.
+take_more(X, Xs) <=> Xs is find_n(10, X, quote(pick(X))).
+
+% A non-positive bound returns [] without running the goal at all: if it
+% ran, `exploding/1` would raise.
+none_at_all(N, X, Xs) <=> Xs is find_n(N, X, quote(exploding(X))).
+
+% `commit` ends the fold and keeps the solution's bindings, as solve/1
+% does: X stays bound to the first solution.
+commit_first(X, R) <=>
+    R is fold_solutions(X, quote(pick(X)), fun(C, _) -> commit(C) end, 0).
+
+% The same fold with `stop` instead: the accumulator survives, the
+% bindings do not.
+stop_first(X, R) <=>
+    R is fold_solutions(X, quote(pick(X)), fun(C, _) -> stop(C) end, 0).
+
+% fail/0 inside the step function fails the branch, which is exactly a
+% `continue` with the accumulator untouched: 1 + 3, with 2 skipped.
+skip_two(X, S) <=>
+    S is fold_solutions(X, quote(pick(X)), fun(C, A) -> skip_two_step(C, A) end, 0).
+
+:- function (skip_two_step(int, int) -> step(int)).
+skip_two_step(2, _) -> fail.
+skip_two_step(C, A) -> continue(A + C).
+
+% What the accumulator may carry. `copied` folds in the witness, which
+% is a copy and survives the undo. `aliased` folds in the goal's own
+% variable, whose cell every branch reverts on the way out, so the fold
+% reports none of the three solutions it visited. That is documented
+% behaviour, not a bug — see docs/reference/search.md, "What the fold
+% may carry" — and it is pinned here because it is silent.
+copied(X, Xs) <=>
+    Xs is fold_solutions(X, quote(pick(X)), fun(C, A) -> continue([C|A]) end, []).
+aliased(X, Xs) <=>
+    Xs is fold_solutions(X, quote(pick(X)), fun(_, A) -> continue([X|A]) end, []).
+
+% A template may be any term, so a fold over several of the goal's
+% variables copies them together.
+wider_template(X, Y, Xs) <=>
+    Xs is fold_solutions([X, Y], quote(pick_pair(X, Y)),
+                         fun(C, A) -> continue([C|A]) end, []).
+
+% Nesting, outward: each branch of an outer search runs an inner fold
+% that *commits*, so the inner search unwinds nothing itself and leaves
+% its trail entries for the outer driver to undo.
+%
+% The inner choice is over [X, 99], which makes the case discriminating:
+% Y commits to the outer branch's own X, so the answer is [[1,1],[2,2],
+% [3,3]]. If the inner commit's binding survived into the next outer
+% branch, the second branch would choose over [2, 99] with Y already 1,
+% both alternatives would fail, and the branch would vanish from the
+% result. A fixed inner list would not tell the two apart.
+committing_inner(X, Y, Ss) <=> Ss is find_all([X, Y], quote(inner_commit(X, Y))).
+inner_commit(X, Y) <=>
+    choose(X, [1, 2, 3]),
+    _ is fold_solutions(Y, quote(pick_ten(X, Y)), fun(C, _) -> commit(C) end, 0).
+
+% Nesting, inward: a search started from inside the step function. Each
+% of the three solutions folds in its own value plus the first solution
+% of a fresh inner search, so this is (1+1) + (2+1) + (3+1). Y, the
+% inner template, is shared across all three step calls; the inner
+% find_n unwinds, so each call sees it unbound. (The sum alone does not
+% discriminate that — committing_inner above is what pins it.)
+outer_fold(X, Y, S) <=>
+    S is fold_solutions(X, quote(pick(X)),
+                        fun(C, A) -> continue(A + C + first_of_inner(Y)) end, 0).
+
+:- function (first_of_inner(int) -> int).
+first_of_inner(Y) -> head(find_n(1, Y, quote(pick(Y)))).
+
+% A solution reached with no choice point at all: the fold runs once, at
+% the top level rather than inside an alternative.
+no_choice(X, R) <=>
+    R is fold_solutions(X, quote(deterministic(X)),
+                        fun(C, A) -> continue(A + C) end, 0).
+
+% forall/3 stops at the first counterexample and unwinds either way. A
+% goal with no solutions at all is vacuously true.
+all_positive(X, Ok) <=> Ok is forall(X, quote(pick(X)), fun(C) -> C > 0 end).
+has_negative(X, Ok) <=> Ok is forall(X, quote(pick_signed(X)), fun(C) -> C > 0 end).
+vacuous(X, Ok) <=> Ok is forall(X, quote(pick_nothing(X)), fun(C) -> C > 0 end).
+
+% The short circuit is the whole point: over the infinite generator
+% below, a forall that did not stop at the first counterexample would
+% never return.
+all_nats(X, Ok) <=> Ok is forall(X, quote(nat(X)), fun(C) -> C < 3 end).
+
+% A step function that returns something that is not a `step` has no
+% way to say what to do next: a runtime error, not a silent stop.
+bad_step(X, R) <=>
+    R is fold_solutions(X, quote(pick(X)), fun(_, A) -> A end, 0).
+
+% A runtime error inside the step function propagates out of the
+% search, after everything is unwound.
+error_in_step(X, R) <=>
+    R is fold_solutions(X, quote(pick(X)),
+                        fun(C, A) -> continue(A + (C div 0)) end, 0).
+
+% The point of find_n/3: an infinite generator, bounded. `nat/1`
+% enumerates 0, 1, 2, ... by choosing at each step between stopping and
+% recursing, so find_all/2 over it would not terminate.
+first_nats(N, X, Xs) <=> Xs is find_n(N, X, quote(nat(X))).
+
+nat(N) <=> (try_unify(N, 0) ; nat(M), succ_of(M, N)).
+
+% Delays until the inner choice has bound M.
+succ_of(M, N) <=> integer(M) | N is M + 1.

@@ -33,13 +33,15 @@ HASKELL_ONLY = {
     # run_chr_session is a Haskell-only meta host call (spawns a nested
     # interpreter session); no Scheme implementation exists yet.
     "run_chr_session_test",
-    # library(search) — solve/1, find_all/2 and fail/0 are Haskell-only
-    # host calls. The search driver needs a session fork, a snapshot of
-    # the store references and an undo trail hooked into variable and
-    # suspension-flag writes; the Scheme runtime has none of that yet.
+    # library(search) — solve/1, find_all/2, fold_solutions/4 and
+    # fail/0 are Haskell-only host calls. The search driver needs a
+    # session fork, a snapshot of the store references and an undo
+    # trail hooked into variable and suspension-flag writes; the Scheme
+    # runtime has none of that yet.
     "search_alt",
     "search_basic",
     "search_disj",
+    "search_fold",
     "search_generate",
     "search_label",
     "search_label_alt",

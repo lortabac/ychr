@@ -6,8 +6,8 @@
 -- Several host calls take "a goal" — a constraint term, a list of them
 -- run in order, or a @;@ disjunction of either — kept symbolic with
 -- @quote\/1@, and run it in a forked session: @run_chr_session\/1@
--- ("YCHR.Internal.Runtime.SubSession") and @solve\/1@ \/
--- @find_all\/2@ ("YCHR.Internal.Runtime.Search"). The search driver
+-- ("YCHR.Internal.Runtime.SubSession") and the search entry points
+-- ("YCHR.Internal.Runtime.Search"). The search driver
 -- reads the alternatives of a choice point the same way. This module
 -- is the decoding they share.
 --

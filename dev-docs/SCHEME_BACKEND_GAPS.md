@@ -23,13 +23,20 @@ runtime in `scheme/ychr/`. Goals are run through `guile3.0 --r6rs` per
 
 ## `library(search)`
 
-No Scheme-side implementation of `solve/1`, `find_all/2` or `fail/0`.
+No Scheme-side implementation of `solve/1`, `find_all/2`,
+`fold_solutions/4` or `fail/0` (`forall/3` and `find_n/3` are derived
+in CHR and need nothing of their own).
 The search driver needs three things the Scheme runtime does not have:
 a session fork (as `run_chr_session` above), a snapshot of the store /
 suspension-map / history / reactivation-queue references, and an undo
 trail hooked into every variable-cell and suspension-flag write
-(`src/YCHR/Internal/Runtime/{Search,Trail}.hs`). `search_alt`,
-`search_basic` and `search_nested` are in `HASKELL_ONLY`.
+(`src/YCHR/Internal/Runtime/{Search,Trail}.hs`). Every `search_*`
+directory with runnable goals is in `HASKELL_ONLY`: `search_alt`,
+`search_basic`, `search_disj`, `search_fold`, `search_generate`,
+`search_label`, `search_label_alt` and `search_nested`. The two
+compilation-negative directories, `search_disj_no_import` and
+`search_disj_type_error`, need no entry: the Scheme harness discovers
+cases from `.goal` files and they have none.
 
 Compilation itself succeeds. The library wrappers become ordinary
 compiled procedures (`func_search__solve1`, `func_search__fail0`, …),

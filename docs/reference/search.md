@@ -184,7 +184,7 @@ alternative naming a constraint the module keeps to itself has to be
 spelled `mod:name`:
 
 ```prolog
-pick(X) <=> alt([quote(mine:hidden(X, 1)), quote(mine:hidden(X, 2))]).
+pick_hidden(X) <=> alt([quote(mine:hidden(X, 1)), quote(mine:hidden(X, 2))]).
 ```
 
 Either way, a name that resolves to no tell procedure is a runtime
@@ -582,16 +582,61 @@ Making the shorter name the undoing one is deliberate: committing
 inside a fold is the surprising outcome, so it is the one you have to
 name.
 
-Three properties keep the fold sound across backtracking:
+Two properties keep the fold itself intact across backtracking:
 
-- **`F` is an expression function.** It cannot tell constraints and
-  cannot bind logical variables, so the accumulator it returns cannot
-  hold a binding that a later backtrack would undo underneath it.
 - **The witness is a copy.** `copy_term` gives the accumulator a
   snapshot with fresh variables, structurally independent of the
   branch it came from.
 - **The accumulator is host state.** It lives in the driver, not in
   the store or on the trail, so backtracking does not touch it.
+
+### What the fold may carry
+
+Those two cover the accumulator's *reference*, not everything
+reachable through it. `F` can return a value that *points at* a
+variable the branch bound, and the driver stores the accumulator
+exactly as it comes back. When the branch is undone the cell reverts,
+and so does what the accumulator shows.
+
+**Carry the witness.** It is the whole reason `fold_solutions` hands
+`F` a copy rather than letting it read the goal's variables directly.
+Both folds below are over `pick(X) <=> choose(X, [1, 2, 3])`:
+
+```prolog
+% Correct: the witness is a copy and survives the undo.
+Xs is fold_solutions(X, quote(pick(X)), fun(C, A) -> continue([C|A]) end, [])
+% Xs = [3, 2, 1]
+
+% Wrong: X is the goal's own variable, and every branch that bound it
+% has been undone by the time the fold returns.
+Xs is fold_solutions(X, quote(pick(X)), fun(_, A) -> continue([X|A]) end, [])
+% Xs = [_, _, _]
+```
+
+There is no error and no warning: the second fold visits all three
+solutions and reports none of them.
+
+`F` is an expression function, so it cannot tell constraints into the
+caller's store and has no `=`. It can still bind one of the caller's
+variables indirectly, by calling a search entry point that commits —
+`solve/1`, or a nested `fold_solutions` whose step answers `commit`.
+Such a binding is undone by the enclosing backtrack like any other, so
+the rule below covers it too.
+
+If you need something from the branch that the witness does not
+carry, make the template carry it — `fold_solutions([X, Y], …)` copies
+both — or copy it yourself with `copy_term`:
+
+```prolog
+Xs is fold_solutions(X, quote(pick(X)),
+                     fun(_, A) -> continue([copy_term(X)|A]) end, [])
+% Xs = [3, 2, 1]
+```
+
+The driver does not copy the accumulator for you. Doing so would cost
+a full traversal per solution, which is quadratic for a fold that
+builds a list, and would leave `fold_solutions` slower than
+`find_all/2` at `find_all`'s own job.
 
 Two error cases: `fail/0` inside `F` fails the current branch, which
 behaves exactly like `continue` with the accumulator unchanged, and a
@@ -679,9 +724,12 @@ reaching a solution, and backtracking.
 
 Abridged from `:trace bound_pick(X, Ss).` over
 `test/golden/search_basic`, where `X` is bound to 2 before a
-`choose(X, [1, 2, 3])`, so labeling is a membership test. The elisions
-are `choose`'s `maplist` building its three goals, and the ordinary
-activation of each `try_unify`.
+`choose(X, [1, 2, 3])`, so labeling is a membership test. Elided:
+the frames outside the search, `choose`'s `maplist` building its three
+goals, the ordinary activation of each `try_unify`, the occurrence
+`alt/1` is tried at (`search_basic` has its own `decided \ alt(_)`
+rule; a program that does not put `alt/1` in a head shows no such
+line), and the alternative list where it repeats as an argument.
 
 ```
       call search:find_all(2, pick3(2))

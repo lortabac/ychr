@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+New: opt-in search, `library(search)`. Explore alternative bindings and
+undo the ones that do not work out. Nothing here affects a program that
+does not import it, and there are no VM changes; the Haskell runtime is
+the only backend that implements it. See the
+[search specification](docs/reference/search.md).
+
+- The primitive is `alt/1`, an ordinary CHR constraint with no rules.
+  Telling it leaves it in the store; at quiescence the driver takes the
+  oldest live one and tries its goals in list order, undoing the branch
+  between attempts. An alternative is a *goal*, not a value, so a
+  choice is between computations.
+- The disjunction operator `;` is surface syntax for an `alt`, `xfy`
+  at priority 1100, and is available in a rule body once the module
+  imports `library(search)`. Each disjunct is lifted into its own
+  constraint, the way a lambda is lifted. Choice is still made at
+  quiescence, so in `p, (a ; b), q` the goal `q` is told before a
+  branch is picked.
+- `choose(X, Alts)` labels a variable and is one library rule over
+  `alt/1` and `try_unify/2`, not a runtime primitive.
+- Solutions are fetched with `solve/1` (first solution, bindings
+  kept), `find_all/2` (all of them, everything undone) or
+  `fold_solutions/4`, a fold over the solution sequence with early
+  exit. `forall/3` and `find_n/3` are derived over the fold; `find_n`
+  terminates on an infinite space, where `find_all` would not.
+- `fail/0` abandons a branch, and `try_unify/2` is Prolog's `=`:
+  unify, or fail rather than raise.
+- Three new error codes: `YCHR-20021` (`;` without importing
+  `library(search)`), `YCHR-20022` (`;` outside a rule body — in a
+  guard, an `is` right-hand side or a function body) and `YCHR-30006`
+  (`;` at the top level of a query).
+- A `quote/1` argument in a *tell* position may now introduce a fresh
+  variable, as an `=` operand may. An unbound name in an `is`
+  right-hand side or a call argument is still `YCHR-40002`.
+
 Soundness fix: `GuardEqual` evidence (the fact a shared head variable
 contributes) no longer treats value equality as full type equality. A
 value determines its type's outermost constructor nominally but not

@@ -509,6 +509,10 @@ Nothing here affects a program that does not import it.
 | `choose/2` | constraint | `choose(X, Alts)` binds `X` to one of a list of values. One rule over `alt/1` and `try_unify/2`. |
 | `solve/1` | `(any) -> bool` | Run a goal, stop at its first solution and keep its bindings. `false` when the space is exhausted, with everything undone. |
 | `find_all/2` | `(T, any) -> list(T)` | Every solution of a goal, as a list of copies of a template. Fully undone afterwards. |
+| `fold_solutions/4` | `(T, any, fun(T, A) -> step(A) end, A) -> A` | Fold a function over the solutions, in search order, with early exit. |
+| `forall/3` | `(T, any, fun(T) -> bool end) -> bool` | Does every solution satisfy a predicate? Stops at the first counterexample. |
+| `find_n/3` | `(int, T, any) -> list(T)` | The first *N* solutions. Terminates where `find_all` would not. |
+| `step/1` | type | `continue(A) ; stop(A) ; commit(A)` — what a fold's step function answers at a solution. |
 | `fail/0` | `() -> any` | Fail the current branch. Outside a search, a runtime error. |
 | `try_unify/2` | constraint | Prolog's `=`: unify, or fail the branch instead of erroring. |
 

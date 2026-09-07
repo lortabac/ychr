@@ -23,6 +23,7 @@
 module YCHR.Internal.Runtime.Trace
   ( TraceEvent (..),
     BacktrackReason (..),
+    SearchOutcome (..),
     TraceHandler,
     defaultTraceHandler,
     formatEvent,
@@ -83,7 +84,7 @@ data TraceEvent
     -- result.
     TECallHost {hname :: !Text, args :: ![Term], result :: !Term}
   | -- | Entering a search ('YCHR.Internal.Runtime.Search'). @sname@ is
-    -- the driving host call, @solve@ or @find_all@.
+    -- the driving host call: @solve@, @find_all@ or @fold_solutions@.
     TESearchEnter {sname :: !Text}
   | -- | A choice point was selected at quiescence: the @alt\/1@
     -- suspension the driver took, and the alternative goals in the
@@ -101,11 +102,27 @@ data TraceEvent
   | -- | Quiescence with no choice point left: the current state is a
     -- solution.
     TESolution
-  | -- | A search finished. 'True' when it committed to a solution
-    -- ('solve'), 'False' when the space was exhausted and everything
-    -- was undone.
-    TESearchExit {sname :: !Text, committed :: !Bool}
+  | -- | A search finished, with the outcome that ended it.
+    TESearchExit {sname :: !Text, outcome :: !SearchOutcome}
   deriving (Show)
+
+-- | How a search ended. Reported by 'TESearchExit', and the result the
+-- driver hands back to the host call that started the search.
+--
+-- 'SearchCommitted' and 'SearchStopped' both stop at a solution and
+-- differ only in what happens to its bindings; that difference is the
+-- whole distinction between @commit@ and @stop@ in a
+-- @fold_solutions\/4@ step, and between @solve\/1@ and the rest.
+data SearchOutcome
+  = -- | Stopped at a solution and kept its bindings: nothing is
+    -- undone. What @solve\/1@ and a @commit@ step produce.
+    SearchCommitted
+  | -- | Stopped at a solution and unwound everything to the base
+    -- mark. What a @stop@ step produces.
+    SearchStopped
+  | -- | The search space ran out. Everything is undone.
+    SearchExhausted
+  deriving (Show, Eq)
 
 -- | Why a search branch was abandoned. Reported by 'TEBacktrack'.
 --
@@ -175,10 +192,8 @@ formatEvent depth ev = indent ++ body
       TEBacktrack r ->
         "backtrack (" ++ backtrackReason r ++ ")"
       TESolution -> "solution"
-      TESearchExit s committed ->
-        "end search "
-          ++ T.unpack s
-          ++ (if committed then " (committed)" else " (exhausted)")
+      TESearchExit s o ->
+        "end search " ++ T.unpack s ++ " (" ++ searchOutcome o ++ ")"
 
 argList :: [Term] -> String
 argList [] = ""
@@ -186,6 +201,11 @@ argList ts = "(" ++ intercalate ", " (map prettyTerm ts) ++ ")"
 
 termList :: [Term] -> String
 termList ts = "[" ++ intercalate ", " (map prettyTerm ts) ++ "]"
+
+searchOutcome :: SearchOutcome -> String
+searchOutcome SearchCommitted = "committed"
+searchOutcome SearchStopped = "stopped"
+searchOutcome SearchExhausted = "exhausted"
 
 backtrackReason :: BacktrackReason -> String
 backtrackReason BRFail = "fail"

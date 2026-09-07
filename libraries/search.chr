@@ -1,10 +1,14 @@
 :- module(search, [
+    type(step/1),
     alt/1,
     choose/2,
     try_unify/2,
     fun fail/0,
     fun solve/1,
-    fun find_all/2
+    fun find_all/2,
+    fun fold_solutions/4,
+    fun forall/3,
+    fun find_n/3
 ]).
 
 :- use_module(library(lists)).
@@ -12,10 +16,23 @@
 :- chr_constraint alt(list(any)), choose(any, list(any)),
                   try_unify(any, any).
 
+% What a fold's step function answers at a solution. `continue(A)` asks
+% for the next solution; `stop(A)` ends the search and undoes
+% everything, back to the state before the goal ran; `commit(A)` ends
+% it and keeps the solution's bindings, as solve/1 does. `stop` is the
+% one you want unless you specifically need the witness — committing
+% inside a fold is the surprising outcome, so it is the one you name.
+:- chr_type step(A) ---> continue(A) ; stop(A) ; commit(A).
+
 :- function
     (fail() -> any),
     (solve(any) -> bool),
-    (find_all(T, any) -> list(T)).
+    (find_all(T, any) -> list(T)),
+    (fold_solutions(T, any, fun(T, A) -> step(A) end, A) -> A),
+    (forall(T, any, fun(T) -> bool end) -> bool),
+    (forall_step(bool) -> step(bool)),
+    (find_n(int, T, any) -> list(T)),
+    (find_n_step(int, list(T)) -> step(list(T))).
 
 % `alt(Goals)` marks a pending choice and has deliberately no rules:
 % telling it simply leaves it in the store, where the search driver
@@ -57,6 +74,61 @@ solve(G) -> host:solve(G).
 % afterwards, so no binding it made is visible to the caller. An empty
 % list means no solutions; find_all never fails.
 find_all(Template, G) -> host:find_all(Template, G).
+
+% Fold F over the solutions of a goal, in search order. At each
+% solution the driver evaluates `call(F, copy_term(Template), Acc)`
+% with that solution's bindings still live and nothing yet undone, and
+% F answers with a `step` saying what to do next. Exhausting the space
+% undoes everything and returns the accumulator as it stands.
+%
+% The witness F is handed is a copy with fresh variables, and the
+% accumulator lives in the driver rather than in the store, so
+% backtracking touches neither.
+%
+% That covers the accumulator's reference, not everything reachable
+% through it. F can return a value pointing at a variable the branch
+% bound, and the driver stores the accumulator as it comes back — so
+% when the branch is undone, what the accumulator shows changes with
+% it. Carry the witness. If you need something else from the branch,
+% put it in the template or copy it with copy_term/1.
+%
+% solve/1 and find_all/2 are expressible here — `commit(true)` at the
+% first solution, and `continue` accumulating copies to exhaustion —
+% and stay host calls only because they are already there and pay no
+% closure call per solution.
+fold_solutions(Template, G, F, Acc0) ->
+    host:fold_solutions(Template, G, F, Acc0).
+
+% Does every solution of a goal satisfy P? Stops at the first
+% counterexample. Everything is unwound either way, and a goal with no
+% solutions at all is vacuously true.
+forall(Template, G, P) ->
+    fold_solutions(Template, G, fun(C, _) -> forall_step(call(P, C)) end,
+                   true).
+
+forall_step(true) -> continue(true).
+forall_step(false) -> stop(false).
+
+% The first N solutions, as copies of Template in search order:
+% find_all with a bound, and therefore usable on an infinite space
+% where find_all would not terminate. Fewer than N if the space is
+% smaller; [] when N is zero or negative, without running the goal at
+% all.
+%
+% The fold ends with `stop`, so everything is unwound: like find_all,
+% the copies are all that survives.
+find_n(N, _, _) | N =< 0 -> [].
+find_n(N, Template, G) ->
+    reverse(fold_solutions(Template, G,
+                           fun(C, Acc) -> find_n_step(N, [C|Acc]) end,
+                           [])).
+
+% The accumulator is built in reverse and re-counted at every solution,
+% which is O(N) per solution. N is the bound the caller asked for and
+% is small, so this stays cheaper to read than carrying a length
+% alongside the list.
+find_n_step(N, Acc) | length(Acc) >= N -> stop(Acc).
+find_n_step(_, Acc) -> continue(Acc).
 
 % Prolog's `=`: unify, or fail the branch. YCHR's own `=` raises a
 % runtime error when the two sides cannot be unified, on the grounds

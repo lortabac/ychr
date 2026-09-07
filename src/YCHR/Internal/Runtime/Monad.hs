@@ -131,7 +131,7 @@ data SessionEnv = SessionEnv
     traceHandler :: !(IORef (Maybe TraceHandler)),
     -- | Undo log for search, or 'Nothing' when no search is active —
     -- which is the case at the top level and stays the case for a
-    -- program that never calls @solve@ or @find_all@. While it is
+    -- program that never enters a search. While it is
     -- 'Nothing' nothing is recorded, so the cost to an ordinary
     -- session is one field read per variable and flag write.
     --

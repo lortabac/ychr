@@ -100,9 +100,14 @@ what is planned.
 
 ## Extensions
 
-- [x] Opt-in search (`library(search)`): `choose/2` choice points
-      resolved at quiescence, with `solve/1`, `find_all/2`, `fail/0`
-      and `try_unify/2`. Haskell runtime only; no VM changes. See the
+- [x] Opt-in search (`library(search)`): choice points resolved at
+      quiescence over the `alt/1` primitive, reached from a rule body
+      through the disjunction operator `;` or through `choose/2`.
+      Solutions are fetched with `solve/1`, `find_all/2` or the
+      iterator `fold_solutions/4`, over which `forall/3` and `find_n/3`
+      are derived; `fail/0` abandons a branch, and `try_unify/2` is
+      Prolog's `=`, which fails one rather than raising. Haskell
+      runtime only; no VM changes. See the
       [search specification](reference/search.md).
 - [ ] Aggregates, as described in Sneyers, Van Weert, Schrijvers,
       Demoen, 2007. *Aggregates in CHR*.

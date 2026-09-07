@@ -417,6 +417,38 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
   (36.0 ms) is the `;` path on its own, a recursive generator walked to
   depth 150. Recognizing `choose` in the driver as a fast path is the
   optimization those numbers exist to judge; it is not done.
+  Solutions are fetched by three host calls over one driver. The
+  driver's per-solution callback answers `continue` / `stop` /
+  `commit`, and only `commit` skips the unwind to the base mark taken
+  when the search was entered; `solve/1` and `find_all/2` are the
+  constant functions `commit` and `continue`, and `fold_solutions/4`
+  runs the user's step function to decide. `forall/3` and `find_n/3`
+  are derived over `fold_solutions` in CHR rather than added to the
+  driver, which costs one `call_2` dispatch branch each for every
+  program that imports the library (see Work Remaining: keyed `'$call'`
+  dispatch) and one `length/1` per solution in `find_n`, over a list
+  bounded by the N the caller asked for. Both costs are paid only by a
+  program that imports the library. Measured 2026-09-07 by interleaving
+  three `cabal bench` rounds against a clean worktree at the parent
+  commit: the three search benchmarks (`search_label`,
+  `search_label_alt`, `search_generate`) do not move outside their
+  run-to-run spread, and `typecheck/pairs_library` is 227.3 ms against
+  223.3 ms, +1.8%, slower in 3 of 3 rounds with each side's own spread
+  under 0.4%. That last one is *unexplained* and is not the dispatch
+  branches: the type checker does not import `library(search)`, and a
+  compiled `typechecker/*.chr` contains no reference to it. It is
+  within this benchmark's documented run-to-run range, and smaller than
+  the 3.4% of drift between the 230.8 ms recorded for it on 2026-09-04
+  and the 223.3 ms recorded for the same code here.
+  The accumulator lives in an `IORef` the driver owns, so backtracking
+  does not roll it back — and, deliberately, does not copy it either.
+  A step function can return a value *pointing at* a variable the
+  branch bound, which reverts when the branch is undone; copying would
+  cost `O(|acc|)` per solution, quadratic for a
+  list-building fold, and leave `fold_solutions` slower than
+  `find_all/2` at `find_all`'s own job. So the witness is copied, the
+  accumulator is not, and the contract is documented and pinned by the
+  golden pair `test/golden/search_fold/{copied,aliased}`.
   Undo is a
   snapshot of the four store references (persistent structures behind
   one `IORef` each, so undo is a pointer write) plus a trail for the
