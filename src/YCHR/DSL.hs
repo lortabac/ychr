@@ -670,7 +670,7 @@ l .== r = CompoundTerm (Unqualified "==") [l, r]
 
 -- | Compile DSL-built modules and run a single goal against them, using
 -- the same default host-call registry as the @ychr@ CLI
--- (base + meta + sub-session). Includes the stdlib.
+-- (base + meta + sub-session + search). Includes the stdlib.
 --
 -- The goal is built with 'term' / 'qterm' just like rule heads. Returns
 -- the final unification map for the variables mentioned in the goal.

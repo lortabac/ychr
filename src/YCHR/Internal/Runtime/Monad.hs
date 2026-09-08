@@ -218,8 +218,8 @@ initSessionEnv typeNames rNames inert pm hc ev expMap expSet = do
 -- Unlike building one from scratch with 'initSessionEnv', this reuses
 -- the program-level maps as they are instead of rebuilding them from
 -- lists — which matters because a fork can be per-iteration work
--- (@run_chr_session@ in the type-checker's overload search runs one
--- per candidate signature).
+-- ('forkSearchSessionEnv' below reuses this, and the type-checker's
+-- overload search opens one search per function equation).
 --
 -- The search 'trail' is inherited as it stands, and that is
 -- deliberate: a sub-session opened inside a search branch shares the

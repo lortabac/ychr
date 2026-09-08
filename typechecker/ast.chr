@@ -11,10 +11,11 @@
 % that used to visit every node is gone: most constructors below are
 % destructured by a *total function* somewhere in `skel.chr`,
 % `pure.chr`, `env.chr` or `walk.chr`, and a function with no matching
-% equation raises YCHR-60001 naming the term that did not fit. (Inside
-% a class-function attempt even that is muffled: `run_chr_session`
-% answers `false`, so the raise surfaces as a spurious
-% `no_matching_overload` — see the attempt block in `walk.chr`.)
+% equation raises YCHR-60001 naming the term that did not fit. That
+% holds inside a class-function attempt too: a search branch does not
+% catch runtime errors, so the raise propagates out of the checker as
+% itself rather than surfacing as a spurious `no_matching_overload` —
+% see the attempt block in `walk.chr`.
 %
 % Three nodes are matched by CHR *rules* only — `rule_head/2`,
 % `con_key/2` and `fun_sig/2` — where a miss is a silent suspend, not

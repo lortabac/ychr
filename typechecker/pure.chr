@@ -249,8 +249,8 @@ rule_arity_errors(Env,
                        body_goals_arity(Env, Body))).
 
 % A class function's equations are checked in throwaway per-signature
-% sessions whose diagnostics are discarded, so their arity errors are
-% collected here, at program level, outside any unit.
+% search branches whose diagnostics are discarded, so their arity
+% errors are collected here, at program level, outside any unit.
 :- function funs_arity_errors(con_env, list(fun_def), int) -> list(error).
 funs_arity_errors(_, [], _) -> [].
 funs_arity_errors(Env, [F|Fs], Unit) ->

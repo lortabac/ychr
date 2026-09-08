@@ -7,7 +7,8 @@
 %   * equation units continue from the rules, one per equation of a
 %     *plain* function;
 %   * a class function's equations consume none, because they are
-%     checked in throwaway sub-sessions whose diagnostics are dropped;
+%     checked in throwaway search branches whose diagnostics are
+%     dropped;
 %   * the walker's numbering agrees, equation for equation, with the
 %     constructor-arity walk's — an arity error and the solver errors
 %     of the same equation must land in one unit.

@@ -1,8 +1,8 @@
 % A `:- class` equation that calls a `requiring`-bounded function.
 %
 % Each (equation x signature) attempt of a class function is checked in
-% a throwaway sub-session, which is handed the declaration facts rather
-% than re-deriving them. A bounded function contributes *two* facts —
+% a throwaway search branch, which is handed the declaration facts
+% rather than re-deriving them. A bounded function contributes *two* facts —
 % its signature and its bounds — that share type variables, and the
 % discharge only lands at the call's instantiation if that sharing
 % survives the trip. Freshen the two facts independently and the bound

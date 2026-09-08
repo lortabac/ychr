@@ -142,7 +142,7 @@ and an equation contradicting both, the same shape is the documented
 **Cause.** `walk_funs` (`typechecker/walk.chr`) partitions on
 `fun_sig_count(F) > 1`, so a 1-signature class goes down the plain-
 function path (`check_equation`) instead of the per-signature attempt
-sessions of `walk_class_fun`. Use sites are affected the same way:
+branches of `walk_class_fun`. Use sites are affected the same way:
 `build_function_facts` emits `function_sigs` (residual overload
 resolution) only for 2+ signatures, so a 1-sig class's calls go through
 the unify path — in rigid corner cases that reports `YCHR-60001`

@@ -13,10 +13,9 @@
 % the source-type encoding, the assoc-list bookkeeping — stays a pure
 % function, in this file or in `env.chr` / `skel.chr`.
 %
-% `check_attempt` is exported not because another module calls it but
-% because `run_chr_session` resolves a goal's constraint name through
-% the export map: the class-function overload search below runs each
-% (equation x signature) attempt in a throwaway sub-session.
+% `class_eq_search` is exported not because another module calls it but
+% because a search resolves an unqualified goal name through the export
+% map: the class-function overload search below hands it to `solve/1`.
 %
 % The list traversals here go through `library(lists)` rather than
 % hand-rolled recursion; the cost of that is recorded once, in
@@ -25,7 +24,7 @@
     walk_program/3,
     walk_goals/4,
     tell_decls/3,
-    check_attempt/8
+    class_eq_search/7
 ]).
 
 :- use_module('$tc_ast').
@@ -37,6 +36,7 @@
 :- use_module(library(maybe)).
 :- use_module(library(meta)).
 :- use_module(library(pairs)).
+:- use_module(library(search)).
 
 % Everything a use site needs to know about the scope it sits in.
 % Mirrors `CheckCtx`: the unit's variable slots, the ambient signatures
@@ -271,9 +271,9 @@ encode_sigs_cons @
 % The facts are built as *data* first and told from the list, rather
 % than told directly at each declaration. That is what lets the
 % class-function overload search hand a whole declaration environment
-% to a throwaway sub-session (`retell_decls` below) instead of
-% re-deriving it from the AST every attempt — which was 38% of all the
-% time the checker spent on the golden corpus.
+% to each attempt (`retell_decls` below) instead of re-deriving it from
+% the AST every attempt — which was 38% of all the time the checker
+% spent on the golden corpus.
 
 % One declaration fact, as a term. One constructor per solver
 % constraint the declarations produce, with the same argument types.
@@ -310,15 +310,18 @@ tell_decls1 @
 % The same declaration environment, in a session that does not have it
 % yet. Everything is copied first, so no *stored* fact shares a
 % variable with the session the list came from: an attempt runs inside
-% `run_chr_session`, where a shared logical variable is *the same
-% variable*, and a fact bound in the sub-session would corrupt the
-% outer one silently. Copying makes that impossible rather than merely
-% unlikely — and it is still far cheaper than re-deriving the facts,
-% which is O(size of every declaration in the program). (The
-% uncopied list does reach the sub-session, as this constraint's own
-% argument, so the two short-lived suspensions that carry it register
-% as observers of the outer variables. They are killed immediately and
-% each session drops foreign observer ids, so nothing comes of it.)
+% a search branch, where a shared logical variable is *the same
+% variable*, and a fact bound in the attempt would corrupt the outer
+% one silently. The attempt that fits is *committed* — that is what
+% `solve` means — so its bindings stay, and the copy is the only thing
+% keeping them off the caller's facts; only a failed attempt is undone
+% by the trail. Copying makes that impossible rather than merely unlikely —
+% and it is still far cheaper than re-deriving the facts, which is
+% O(size of every declaration in the program). (The uncopied list does
+% reach the search's session, as this constraint's own argument, so the
+% two short-lived suspensions that carry it register as observers of the
+% outer variables. They are killed immediately and each session drops
+% foreign observer ids, so nothing comes of it.)
 %
 % Only the *sharing* half of this is tested. Deleting the `copy_term`
 % leaves the whole suite green, because no solver rule today unifies
@@ -1170,9 +1173,9 @@ merge_bc(New, Old) -> bc(append(bc_ambs(Old), bc_ambs(New)),
 % location, and only the unit id keeps their diagnostics apart.
 %
 % Unit ids continue from the rules, one per equation of a *plain*
-% function; a class function's equations get none, because the old
-% checker checks them in throwaway sessions and collects what survives
-% outside any unit. `pure.chr`'s `funs_arity_errors` numbers the
+% function; a class function's equations get none, because their
+% signature search checks them in throwaway branches and reports what
+% survives outside any unit. `pure.chr`'s `funs_arity_errors` numbers the
 % same way, and must keep doing so: an equation's arity error and its
 % solver errors have to share a unit or suppression drops the wrong
 % warnings.
@@ -1194,8 +1197,8 @@ walk_funs_nil @
     walk_funs(_, _, [], _) <=> true.
 
 % Two or more declared signatures is a class function: its equations are
-% checked per candidate signature in isolated sub-sessions below, and
-% consume no unit id here. `pure.chr`'s `fun_unit_count` makes the
+% checked per candidate signature in the search below, one branch each,
+% and consume no unit id here. `pure.chr`'s `fun_unit_count` makes the
 % same split.
 walk_funs_class @
     walk_funs(Env, Facts, [F|Fs], Unit) <=> fun_sig_count(F) > 1 |
@@ -1373,34 +1376,47 @@ check_fun_stmt_apply @
 % declaration order and the search stops at the first that fits; an
 % equation that fits none reports one `no_matching_overload`.
 %
-% Every attempt runs in its own session: CHR has no backtracking, and
-% the program-wide session has a single error accumulator. An attempt's
-% diagnostics describe the failed fit rather than the program and are
-% discarded — including its warnings, since under a candidate signature
-% a contradicting evidence fact counts as failure of that candidate and
+% That is a search, and it is written as one: `solve/1` per equation
+% over a `;` chain of attempts (`library(search)`), where an attempt
+% that does not fit ends in `fail/0` and the driver undoes everything
+% it did — its diagnostics, its bindings, its rigid pins — before
+% trying the next signature. An attempt's diagnostics describe the
+% failed fit rather than the program and never leave the search;
+% that includes its warnings, since under a candidate signature a
+% contradicting evidence fact counts as failure of that candidate and
 % emits nothing. Suppression runs inside the attempt, so a surviving
 % warning means the equation contradicted the signature without
 % erroring.
+%
+% A runtime error inside an attempt is *not* a failed fit. Search lets
+% it propagate, so a bug in the checker surfaces as itself and reaches
+% the caller of `ychr check` as YCHR-60001, rather than as a spurious
+% `no_matching_overload`. That matters here more than it looks: the
+% walkers are deliberately partial, and a function with no matching
+% equation is the net that catches a drift between them and the
+% encoder (see `ast.chr`'s header). The net now escapes.
+%
+% A failed attempt's bindings to variables it shares with the caller
+% are rolled back with the branch. Nothing here relies on that — the
+% environment is ground AST and the declaration facts are copied on
+% arrival — but it is what makes the copy the only thing standing
+% between an attempt and the caller's facts, rather than one of two.
 
-% Whether one (equation x signature) attempt fitted. An attempt that
-% raised a hard error leaves the variable *unbound* — `run_chr_session`
-% answers `false` and binds nothing — which the retry rule reads as a
-% failure, so there is no third verdict. Worth knowing when reading a
-% surprising report: an error thrown inside an attempt is a bug in the
-% checker, and it surfaces as a spurious `no_matching_overload` rather
-% than as itself.
+% Whether one (equation x signature) attempt fitted. The verdict is
+% local to the attempt: `attempt_ok` lets the branch reach quiescence,
+% which is the solution `solve` commits to, and `attempt_failed` fails
+% the branch.
 :- chr_type attempt_verdict ---> attempt_ok ; attempt_failed.
 
 :- chr_constraint
     walk_class_fun(tc_env, list(decl_fact), fun_def),
     class_eqs(tc_env, list(decl_fact), any, int, loc, list(fun_sig), list(fun_eq)),
     class_eq_try(tc_env, list(decl_fact), any, int, loc, fun_eq, list(fun_sig)),
-    class_attempt(tc_env, list(decl_fact), any, int, loc, fun_eq, fun_sig,
-                  attempt_verdict),
-    class_eq_next(tc_env, list(decl_fact), any, int, loc, fun_eq, list(fun_sig),
-                  attempt_verdict),
-    check_attempt(tc_env, list(decl_fact), any, int, loc, fun_sig, fun_eq,
-                  attempt_verdict).
+    class_eq_result(any, int, loc, bool),
+    class_eq_search(tc_env, list(decl_fact), any, int, loc, fun_eq,
+                    list(fun_sig)),
+    class_attempt(tc_env, list(decl_fact), any, int, loc, fun_eq, fun_sig),
+    attempt_result(attempt_verdict).
 
 walk_class_fun1 @
     walk_class_fun(Env, Facts, fun_def(N, _, Sigs, _, ann(EAnn, ELoc, Eqs))) <=>
@@ -1414,10 +1430,24 @@ class_eqs_cons @
     class_eq_try(Env, Facts, N, EAnn, ELoc, Eq, Sigs),
     class_eqs(Env, Facts, N, EAnn, ELoc, Sigs, Eqs).
 
-% No signature left: the equation fits none of them. The diagnostic is
-% attributed to no unit — it belongs to the function as a whole rather
-% than to one of its equations' checking units — so it suppresses
-% nothing.
+% One equation. The search runs in its own session — `solve` forks one,
+% the way `run_chr_session` does — so the attempts cannot see the
+% program-wide error accumulator, and the winning attempt's diagnostics
+% die with the fork. What crosses back out is the boolean and whatever
+% the committed branch bound in the caller's variables.
+class_eq_try1 @
+    class_eq_try(Env, Facts, FName, EAnn, ELoc, Eq, Sigs) <=>
+    Fits is solve(quote(class_eq_search(Env, Facts, FName, EAnn, ELoc,
+                                        Eq, Sigs))),
+    class_eq_result(FName, EAnn, ELoc, Fits).
+
+class_eq_result_fitted @
+    class_eq_result(_, _, _, true) <=> true.
+
+% The whole search failed: the equation fits none of the signatures.
+% The diagnostic is attributed to no unit — it belongs to the function
+% as a whole rather than to one of its equations' checking units — so
+% it suppresses nothing.
 %
 % The name travels wrapped in `source_name`, which asks the decoder for
 % the real inverse of the mangling; the `no_matching_overload`s the
@@ -1426,47 +1456,51 @@ class_eqs_cons @
 % escaped, and both are user-visible, so they are kept apart rather
 % than unified. See `decodeError` in
 % `src/YCHR/Internal/TypeCheck.hs`.
-class_eq_try_none @
-    class_eq_try(_, _, FName, EAnn, ELoc, _, []) <=>
+class_eq_result_none @
+    class_eq_result(FName, EAnn, ELoc, false) <=>
     report_error(ctx(no_unit, origin_ann(EAnn), label_function(FName), ELoc),
                  no_matching_overload, source_name(FName)).
 
-class_eq_try_sig @
-    class_eq_try(Env, Facts, FName, EAnn, ELoc, Eq, [Sig|Sigs]) <=>
-    class_attempt(Env, Facts, FName, EAnn, ELoc, Eq, Sig, Verdict),
-    class_eq_next(Env, Facts, FName, EAnn, ELoc, Eq, Sigs, Verdict).
+% Inside the search: declaration order, stop at the first fit. The
+% choice is written with `;` rather than a flat `alt` list because that
+% is the sentence the spec states — tried in declaration order, first
+% fit wins. What it costs against the flat form, at the two or three
+% signatures a class function has, is the nesting (one choice point per
+% remaining suffix instead of one for the whole list) and one extra
+% branch per equation for the empty tail below.
+%
+% The `alt` each choice builds carries `Facts`, which is *not* ground:
+% a declaration's type parameters are variables. That is only harmless
+% because `search:alt` is an inert constraint type and so registers no
+% observers (see PROJECT.md, Delay Avoidance). Give `alt` a rule
+% anywhere in the merged program and every choice point here becomes an
+% observer of every declared type parameter in the program.
+class_eq_search_none @
+    class_eq_search(_, _, _, _, _, _, []) <=> fail.
 
-% `Verdict` reaches the sub-session as a shared logical variable, which
-% is how the answer comes back; everything else in the goal is ground
-% AST, so nothing carrying a live rigid pin cell crosses the boundary.
-% The variable has to be introduced by the *caller* — a variable nested
-% inside `quote/1` on the right of an `is` is not — hence this separate
-% constraint, whose head argument it is.
-class_attempt1 @
-    class_attempt(Env, Facts, FName, EAnn, ELoc, Eq, Sig, Verdict) <=>
-    _Ran is run_chr_session(quote(check_attempt(Env, Facts, FName, EAnn, ELoc,
-                                                Sig, Eq, Verdict))).
+class_eq_search_sig @
+    class_eq_search(Env, Facts, FName, EAnn, ELoc, Eq, [Sig|Sigs]) <=>
+    ( class_attempt(Env, Facts, FName, EAnn, ELoc, Eq, Sig)
+    ; class_eq_search(Env, Facts, FName, EAnn, ELoc, Eq, Sigs) ).
 
-class_eq_next_ok @
-    class_eq_next(_, _, _, _, _, _, _, V) <=> V == attempt_ok | true.
-
-class_eq_next_retry @
-    class_eq_next(Env, Facts, FName, EAnn, ELoc, Eq, Sigs, _) <=>
-    class_eq_try(Env, Facts, FName, EAnn, ELoc, Eq, Sigs).
-
-% One attempt, in its own session. Both the environment and the
+% One attempt, in its own branch. Both the environment and the
 % declaration facts travel by value: the environment is ground AST, and
 % the facts are copied on arrival (`retell_decls`), so the attempt
 % starts from a complete declaration environment without re-deriving
 % one and without sharing a variable with the session it came from.
 %
+% The accumulators and the rigid supplies are seeded here, inside the
+% branch, so they are part of the branch's store and vanish with it —
+% the next signature's attempt starts from an empty accumulator without
+% anything having to clear one.
+%
 % The unit id is 0 and the diagnostics never leave, so neither the
 % number nor the annotation id is observable. Suppression runs because
-% an attempt is an ordinary session and drains its accumulators like
-% one; it cannot change the verdict, since it only drops warnings when
-% there is an error, and an error already fails the attempt.
-check_attempt1 @
-    check_attempt(Env, Facts, FName, EAnn, ELoc, Sig, Eq, Verdict) <=>
+% a branch drains its accumulators like any other computation; it
+% cannot change the verdict, since it only drops warnings when there is
+% an error, and an error already fails the attempt.
+class_attempt1 @
+    class_attempt(Env, Facts, FName, EAnn, ELoc, Eq, Sig) <=>
     errors([]),
     warnings([]),
     rigid_supply(-1),
@@ -1475,7 +1509,17 @@ check_attempt1 @
     check_equation(Env, FName, EAnn, ELoc, Sig, [], Eq, 0),
     collect(Errs),
     collect_warnings(Warns),
-    Verdict is verdict_of(Errs, suppress_warnings(Errs, Warns)).
+    attempt_result(verdict_of(Errs, suppress_warnings(Errs, Warns))).
+
+% A fitting attempt just stops: the branch reaches quiescence with no
+% `alt` left alive, which is what makes it the solution `solve` commits
+% to. A failing one abandons the branch, and the driver moves on to the
+% next signature.
+attempt_result_ok @
+    attempt_result(attempt_ok) <=> true.
+
+attempt_result_failed @
+    attempt_result(attempt_failed) <=> fail.
 
 :- function verdict_of(list(error), list(warning)) -> attempt_verdict.
 verdict_of([], []) -> attempt_ok.

@@ -2,7 +2,7 @@
 % unit — and are still reported.
 %
 % A `:- class` function's equations are checked in throwaway
-% per-signature sub-sessions whose diagnostics are dropped, so their
+% per-signature search branches whose diagnostics are dropped, so their
 % constructor-arity errors are collected at program level instead,
 % outside any unit, where they suppress no warnings. That is the
 % "no unit" arm of the equation walk (`funs_arity_errors` in
@@ -13,7 +13,7 @@
 % returns nothing.
 %
 % `cf`'s equation applies `b/1` at arity 2. Both halves matter: the
-% error has to survive the sub-session that discards the equation's
+% error has to survive the search that discards the equation's
 % other diagnostics, and it has to stay out of unit 0, which belongs
 % to the rule below.
 :- module(typecheck_class_fun_ctor_arity, [go/1]).

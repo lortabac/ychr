@@ -1462,6 +1462,12 @@ checks under `size(int) -> int`. An equation whose guards contradict
 *every* signature checks under none, and is the documented
 `NoMatchingOverload` error, not a warning.
 
+Failing to check under a signature is the *only* thing that moves the
+search on. An attempt that raises a runtime error — which means a bug
+in the checker, not in the program — aborts the check and surfaces as
+that error, rather than being read as one more signature that did not
+fit.
+
 ### Example
 
 ```prolog

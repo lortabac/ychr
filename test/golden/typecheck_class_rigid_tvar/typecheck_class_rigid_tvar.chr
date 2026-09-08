@@ -1,6 +1,6 @@
 % A class-function attempt types the equation at *rigid* type
 % variables, exactly as a single-signature equation does — and it
-% allocates them in its own sub-session, off a supply the sub-session
+% allocates them in its own search branch, off a supply the branch
 % seeds for itself.
 %
 % Neither declared signature fits. Under `tw(T) -> T` the parameter
@@ -10,7 +10,7 @@
 % no `inc` on strings. So the equation reports one YCHR-60006.
 %
 % Were the attempt's declared type variables left *flexible* — which is
-% what happens if the sub-session never seeds its rigid supply — the
+% what happens if the branch never seeds its rigid supply — the
 % first signature would fit by binding `T` to `int`, the attempt would
 % be accepted, and the error would vanish.
 :- module(typecheck_class_rigid_tvar, []).

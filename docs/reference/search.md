@@ -17,14 +17,15 @@ module `search` and implemented in the Haskell runtime. Search is
 executes exactly as it does today, under the refined operational
 semantics (ωr), with no VM changes and no per-step bookkeeping.
 
-Search generalizes a pattern YCHR already relies on: try a candidate,
-keep it if the computation survives, otherwise discard everything it
-did and try the next one. The type checker's resolution of overloaded
-signatures does exactly that today, one throwaway sub-session
-(`run_chr_session/1`) per candidate signature, with no way to undo a
-binding it made. One possible further use is a finite-domain solver:
-propagate to quiescence, label one variable, propagate again,
-backtrack on failure.
+Search generalizes a pattern YCHR already relied on before it existed:
+try a candidate, keep it if the computation survives, otherwise
+discard everything it did and try the next one. The type checker's
+resolution of overloaded signatures hand-rolled exactly that, one
+throwaway sub-session (`run_chr_session/1`) per candidate signature,
+with no way to undo a binding it made; it is written over `solve/1`
+now. One possible further use is a finite-domain solver: propagate to
+quiescence, label one variable, propagate again, backtrack on
+failure.
 
 **Availability.** Haskell interpreter only. The Scheme backend does
 not implement the search host calls; a program that uses them fails to

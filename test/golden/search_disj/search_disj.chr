@@ -18,7 +18,11 @@
     nat/1,
     min_val/2,
     hard_unify/2,
-    clash/1
+    clash/1,
+    late_error/1,
+    late/1,
+    undone/2,
+    pickd/1
 ]).
 :- use_module(library(search)).
 
@@ -31,6 +35,8 @@
    first_at_least(any, any, any), nat(any), succ_of(any, any),
    min_val(any, any),
    hard_unify(any, any), clash(any), set_one(any), set_two(any),
+   late_error(any), late(any), dead(any), boom(any),
+   undone(any, any), pickd(any), reject,
    set(any, any), plus_one(any, any).
 
 set(V, N) <=> V = N.
@@ -88,3 +94,31 @@ hard_unify(X, Ok) <=> X = 2, Ok is solve(quote(clash(X))).
 clash(X) <=> (set_one(X) ; set_two(X)).
 set_one(X) <=> X = 1.
 set_two(X) <=> X = 2.
+
+% --- A runtime error in a *later* branch. -----------------------------
+%
+% The first branch fails cleanly, the driver moves on, and the second
+% raises. Failure and error stay different outcomes even when one is
+% reached through the other: the error escapes the whole search rather
+% than being read as one more dead end. `hard_unify` above pins the
+% same thing for the *first* branch, where no backtrack has happened
+% yet.
+%
+% This is the shape the type-checker's overload search runs in, where
+% a raise means a bug in the checker and has to surface as itself
+% rather than as a spurious `no_matching_overload`.
+late_error(Ok) <=> Ok is solve(quote(late(_))).
+late(X) <=> (dead(X) ; boom(X)).
+dead(_) <=> fail.
+boom(X) <=> X is 1 div 0.
+
+% --- A failed branch's bindings are undone before the next one. -------
+%
+% `V` belongs to the caller, and the first branch binds it before
+% failing. The trail has to take that binding back: `=` in a rule body
+% is strict, so if it survived, the second branch's `set(V, 2)` would
+% be a unification failure and a loud error rather than the answer
+% below.
+undone(V, Ok) <=> Ok is solve(quote(pickd(V))).
+pickd(V) <=> (set(V, 1), reject ; set(V, 2)).
+reject <=> fail.
