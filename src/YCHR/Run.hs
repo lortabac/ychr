@@ -67,7 +67,7 @@ import Control.Exception
     throwIO,
     try,
   )
-import Control.Monad (unless)
+import Control.Monad (unless, void)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ask, runReaderT)
@@ -744,17 +744,17 @@ queryUnify v1 v2 = do
   case mh of
     Nothing -> do
       (ok, observers) <- unify v1 v2
-      enqueueObservers observers
+      void (enqueueObservers observers)
       unless ok (raiseUnifyFailure v1 v2)
       drainReactivation
     Just _ -> do
       t1 <- snapshotValue v1
       t2 <- snapshotValue v2
       (ok, observers) <- unify v1 v2
-      enqueueObservers observers
+      enqueued <- enqueueObservers observers
       if ok
         then do
-          emitTrace (pure (TEUnify t1 t2 (length observers)))
+          emitTrace (pure (TEUnify t1 t2 enqueued))
           drainReactivation
         else raiseUnifyFailure v1 v2
 

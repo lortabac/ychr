@@ -563,10 +563,11 @@ A retry is possible because of two properties of the generated code:
   delayed rule leaves the constraint stored and observing its
   variables.
 
-A stored constraint is registered as an observer of every unbound
-variable reachable from its arguments, including variables nested
-inside compound terms, so binding the variable pushes the constraint
-onto the reactivation queue and its occurrences run again.
+A stored constraint that has occurrences to run is registered as an
+observer of every unbound variable reachable from its arguments,
+including variables nested inside compound terms, so binding the
+variable pushes the constraint onto the reactivation queue and its
+occurrences run again.
 
 #### Non-guarantees
 

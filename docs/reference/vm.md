@@ -138,6 +138,7 @@ defining module before compilation.
   <num-rules>
   (rule-names "<rule-name>" ...)
   (evaluables ("<functor>" <arity> "<proc-name>") ...)
+  (inert-types <constraint-type> ...)
   <procedure>
   ...)
 ```
@@ -161,6 +162,17 @@ defining module before compilation.
   argument count, and `<proc-name>` the mangled name of the
   corresponding `func_*` procedure. One entry per user-defined
   function. The list is present even when empty.
+- `inert-types` — the constraint types whose activation runs no
+  occurrence procedure, because the type has no occurrences at all or
+  only passive ones. Reactivating such a constraint can only re-store
+  it, and `store` is idempotent, so a runtime may skip registering
+  these suspensions as observers of the variables in their arguments
+  (see [Store](#store)). This is the trivial instance of *Delay
+  Avoidance*. Honoring the entry changes no result, only the
+  reactivation traffic, so a backend may ignore it; the Scheme
+  backend does. The entry is optional on read — a program written
+  before it existed declares no inert type — and is present, possibly
+  empty, in everything the compiler emits.
 - Zero or more procedure definitions follow.
 
 ### Procedure
@@ -399,6 +411,10 @@ observer** of every unbound variable reachable from its arguments,
 recursing into compound terms — a variable nested inside an argument
 (the `X` in `pair(X, 1)`) must be observed too, or binding it later
 would silently fail to reactivate the constraint.
+
+A constraint whose type is listed in the program's `inert-types` is
+exempt from the registration: its activation runs no occurrence
+procedure, so a reactivation could do nothing.
 
 `store` is **idempotent**: a suspension that is already stored is left
 untouched. The compiler relies on this — under Late Storage it emits a
@@ -783,7 +799,9 @@ A backend must implement the following runtime capabilities.
 - Dereferencing (following binding chains) — handled transparently
   inside `bunify`, `bequal`, and `foreach` lookups.
 - Observer lists: when a variable is bound, all constraints observing
-  it are pushed onto the reactivation queue.
+  it are pushed onto the reactivation queue. A runtime may drop dead
+  observers at that point; the drain checks liveness regardless, since
+  a constraint can die between being enqueued and being reached.
 
 ### Compound terms
 
@@ -858,6 +876,7 @@ so procedure names use the pattern `<prefix>_mymodule__leq2`:
       ("prelude__+" 2 "func_prelude____u2b__2")
       ; ... one entry per prelude function elided
       )
+    (inert-types)
 
     ; tell_mymodule__leq2(X_0, X_1): create, store, activate
     (procedure "tell_mymodule__leq2" ("X_0" "X_1") (tell 0)

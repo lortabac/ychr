@@ -52,13 +52,13 @@ tests =
 -- give them a place to live.
 runChrEmpty :: Chr a -> IO a
 runChrEmpty action = do
-  env <- initSessionEnv [] [] Map.empty Map.empty Map.empty Map.empty Set.empty
+  env <- initSessionEnv [] [] [] Map.empty Map.empty Map.empty Map.empty Set.empty
   runChr action env
 
 -- | Like 'runChrEmpty' but with the base host-call registry available.
 runChrBase :: Chr a -> IO a
 runChrBase action = do
-  env <- initSessionEnv [] [] Map.empty baseHostCallRegistry Map.empty Map.empty Set.empty
+  env <- initSessionEnv [] [] [] Map.empty baseHostCallRegistry Map.empty Map.empty Set.empty
   runChr action env
 
 -- | Run a Chr action against the LEQ session.
@@ -67,6 +67,7 @@ runChrLeq action = do
   env <-
     initSessionEnv
       [Types.Unqualified "leq"]
+      []
       []
       leqProcMap
       Map.empty
@@ -108,7 +109,8 @@ singleProc procName params body =
       numRules = 0,
       ruleNames = [],
       procedures = [mkProc procName params body],
-      evaluables = []
+      evaluables = [],
+      inertTypes = []
     }
 
 -- | A propagation-history tuple in head-position order, the way
@@ -463,7 +465,8 @@ softGuardTests =
                           Return (Var "v")
                         ]
                     ],
-                  evaluables = []
+                  evaluables = [],
+                  inertTypes = []
                 }
         outcome <-
           try @RuntimeErrorThrown (interpret prog baseHostCallRegistry "p" [])
@@ -516,6 +519,7 @@ leqProgram =
       numRules = 1,
       ruleNames = ["transitivity"],
       evaluables = [],
+      inertTypes = [],
       procedures =
         [ tellLeq,
           activateLeq,
@@ -925,6 +929,7 @@ makeCalcProc body =
       numRules = 0,
       ruleNames = [],
       evaluables = [],
+      inertTypes = [],
       procedures =
         [ mkProc
             "calc"

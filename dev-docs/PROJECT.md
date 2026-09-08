@@ -76,7 +76,7 @@ The VM is a small imperative language represented as a Haskell AST. It is the co
 
 ### Program Structure
 
-A VM program is a record bundling the list of named procedures with a little metadata: the number and source names of constraint types and rules (for store pre-allocation and runtime introspection) and an *evaluables dispatch table* mapping a `(functor, arity)` key to the procedure name of the corresponding user-defined function (consulted by `EvalIs` when `is` walks a dereferenced compound term). Each procedure has a name, a parameter list, and a body consisting of a sequence of statements. The compiler generates the following kinds of procedures for each CHR handler:
+A VM program is a record bundling the list of named procedures with a little metadata: the number and source names of constraint types and rules (for store pre-allocation and runtime introspection), an *evaluables dispatch table* mapping a `(functor, arity)` key to the procedure name of the corresponding user-defined function (consulted by `EvalIs` when `is` walks a dereferenced compound term), and the list of *inert* constraint types — those whose `activate_c` runs no occurrence procedure, because the type has no occurrences at all or only passive ones. A runtime may skip registering an inert constraint as an observer of the variables in its arguments, since reactivating it could do nothing; honoring the list changes no result, so a backend may ignore it, and the Scheme backend does. Each procedure has a name, a parameter list, and a body consisting of a sequence of statements. The compiler generates the following kinds of procedures for each CHR handler:
 
 - **`tell_c`**: Entry point for adding a constraint. Creates a suspension and calls `activate_c`. The suspension is *not* stored here: storage is postponed to the latest point that could observe the constraint (Late Storage, paper §5.3) — before a non-empty rule body that keeps the active constraint, or at the end of `activate_c` if it survives every occurrence. A constraint removed during its own activation is never stored at all.
 - **`activate_c`**: Tries all occurrence procedures in order for a given constraint. Implements early drop (returns as soon as an occurrence signals the constraint was killed).
@@ -94,7 +94,7 @@ A VM program is a record bundling the list of named procedures with a little met
 | `Continue label` / `Break label` | Resume the next iteration of, or exit, the named `Foreach`. Enables backjumping when a partner dies and early drop when the active constraint is killed. |
 | `Return valExpr` | Return a value from the current procedure. |
 | `ExprStmt valExpr` / `BoolExprStmt boolExpr` | Evaluate a value or boolean expression for its side effects, discarding the result. Used for procedure calls, host calls, and tell-side `BUnify` in statement position. |
-| `Store idExpr` | Add a constraint suspension to the constraint store. Also registers the constraint as an observer of every unbound variable reachable from its arguments (recursing into compound terms) for reactivation. |
+| `Store idExpr` | Add a constraint suspension to the constraint store. Unless the constraint's type is inert (see Program Structure), this also registers the constraint as an observer of every unbound variable reachable from its arguments (recursing into compound terms) for reactivation. |
 | `Kill idExpr` | Remove a constraint from the store, mark as not alive. |
 | `AddHistory ruleName historyIds` | Record a rule firing in the propagation history. The operand is a `HistoryIds`: the matched constraint identifiers as a head-position-indexed tuple. Its constructor is private; `mkHistoryIds` takes position-tagged ids and establishes the order, so the same match keys to the same entry whichever occurrence is active. It is a tuple and not a set on purpose — for `leq(X,Y), leq(Y,Z) ==> leq(X,Z)` the matches `(c1,c2)` and `(c2,c1)` are distinct firings and both must happen. |
 | `DrainReactivationQueue suspVar body` | Iterate over all constraints pending reactivation (populated by `BUnify`), binding each to `suspVar` and executing `body`. The body dispatches to the appropriate activate procedure. |
@@ -192,8 +192,8 @@ The distinction matters because guards must not leave half-done bindings if they
 
 Reactivation follows this flow:
 
-1. When a constraint is stored (`Store`), the runtime registers it as an observer of every unbound variable reachable from its arguments. This recurses into compound terms, so a variable nested inside an argument (e.g. the `X` in `pair(X, 1)` or `[X, X]`) is observed too — otherwise binding it later would silently fail to reactivate the constraint.
-2. When `Unify` binds a variable, the runtime pushes all constraints observing that variable onto a reactivation queue.
+1. When a constraint of a non-inert type is stored (`Store`), the runtime registers it as an observer of every unbound variable reachable from its arguments. This recurses into compound terms, so a variable nested inside an argument (e.g. the `X` in `pair(X, 1)` or `[X, X]`) is observed too — otherwise binding it later would silently fail to reactivate the constraint. An *inert* type is one whose `activate_c` runs no occurrence procedure, so its reactivation could do nothing; the program header lists them (see Program Structure).
+2. When `Unify` binds a variable, the runtime pushes the constraints observing that variable onto a reactivation queue, skipping any that are already dead. Nothing removes an id from an observer list, so without that filter a variable would keep enqueueing every constraint that ever observed it. The drain checks liveness again, since a constraint can die between being enqueued and being reached.
 3. The compiler generates code using `DrainReactivationQueue` to iterate over the queue and dispatch each constraint to its `activate_c` procedure via `reactivate_dispatch`.
 
 This is the *Selective Constraint Reactivation* optimization (paper §5.3). The blanket `reactivate_all` procedure used for the modification problem (paper §5.1–5.2) is intentionally not generated.
@@ -294,7 +294,7 @@ The paper describes numerous optimizations. Each should be considered individual
 | Guard Simplification | Remove redundant guard conjuncts. | CHR-to-VM compiler |
 | Passive Occurrences | Skip occurrences that can never fire. | CHR-to-VM compiler |
 | Selective Constraint Reactivation | Reactivate only affected constraints. | Runtime (observer pattern) |
-| Delay Avoidance | Skip reactivation when modifications cannot affect guards. | CHR-to-VM compiler |
+| Delay Avoidance | Skip reactivation when modifications cannot affect guards. **Partly implemented**: the trivial instance, an *inert* constraint type (no occurrence procedure to run), is computed by the compiler and listed in the program header; the Haskell runtime registers no observers for one. | CHR-to-VM compiler |
 | Memory Reuse | Reuse suspension memory for replaced constraints. | Runtime / Backend |
 | Recursion Optimizations | Trampoline, explicit stack. | Backend |
 
@@ -414,8 +414,8 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
   in two `cabal bench` rounds on 2026-09-05 — about 7–8%, or ~0.65 µs
   per choice point for the rule firing, the `maplist` with a closure
   call per value, and the extra tell. `test/golden/search_generate`
-  (36.0 ms) is the `;` path on its own, a recursive generator walked to
-  depth 150. Recognizing `choose` in the driver as a fast path is the
+  (36.0 ms then, 32.8 ms since the search-driver fix below) is the `;`
+  path on its own, a recursive generator walked to depth 150. Recognizing `choose` in the driver as a fast path is the
   optimization those numbers exist to judge; it is not done.
   Solutions are fetched by three host calls over one driver. The
   driver's per-solution callback answers `continue` / `stop` /
@@ -476,6 +476,46 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
   lands. The hook cannot simply skip `deref`'s path-compression writes,
   which are the bulk of them: a cell compressed to point past a
   variable the branch bound has to be restored alongside it.
+  The driver used to be quadratic in the depth of a search path, for
+  two reasons that were both runtime representation costs rather than
+  anything in the spec. A killed constraint stays on the observer
+  lists of every variable its arguments reach, so a path of depth `k`
+  left `k` dead choice points observing the search variable and
+  binding it enqueued all of them; and dead choice points stay in the
+  store sequence, so `findChoice` rescanned the whole consumed prefix
+  at every quiescence. Three changes fix it: `enqueueObservers` drops
+  ids whose suspension is dead, `search:alt` is an *inert* constraint
+  type and so registers no observers at all (see the Delay Avoidance
+  row and Program Structure), and `findChoice` scans from a per-branch
+  cursor — the index of the choice the branch was entered on, plus
+  one, which is sound because a flag only goes back to alive by trail
+  undo and an undo restores a state whose cursor was already at most
+  that index. Measured on `test/golden/search_deep` (an
+  O(1)-per-solution generator under `forall` to a bound, so every
+  solution adds one choice point to the path), wall clock less the
+  ~0.5 s of compilation, on 2026-09-07: at a bound of 10000, 15.0 s
+  before, 0.83 s with the two observer changes, 0.19 s with the cursor
+  as well. A bound of 100000 was over 300 s before and takes 2.1 s
+  now. The two observer changes leave the shape quadratic — at bounds
+  of 10000, 20000 and 40000 they cost 0.83 s, 3.4 s and 13.6 s — and
+  it is the cursor that makes it linear.
+  What this costs a program that never searches is at or below this
+  machine's run-to-run spread. Over three `cabal bench` rounds
+  interleaved against the parent commit, every micro-benchmark moves
+  by under 4%; `sum_list_test` and `lambda_test` are slower in 3 of 3
+  rounds by about 2% and 3%, which is where the per-store set
+  membership test and the per-observer flag read land, and
+  `typecheck/pairs_library` stays inside its documented ±10–15%. The
+  three existing search benchmarks are all faster in 3 of 3 rounds:
+  `search_generate` by 10% (36.5 ms → 32.8 ms), `search_label_alt` by
+  3.5% and `search_label` by 2.5%.
+  The remaining known O(depth) case is a constraint *with* rules that
+  is created and killed once per level: it still leaves one dead
+  observer per level, now costing a map lookup and a flag read rather
+  than queue traffic. The asymptotic answer there is amortized
+  compaction of a variable's observer list, which needs `Var.hs` to
+  reach an alive flag through a `SuspensionId`; no measured program
+  shows the pattern, so it is not built.
   Haskell runtime only. See
   [`docs/reference/search.md`](../docs/reference/search.md).
 - Unification variables for the Haskell runtime in `src/YCHR/Internal/Runtime/Var.hs`.

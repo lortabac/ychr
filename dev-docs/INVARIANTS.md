@@ -661,9 +661,9 @@ If you want a roughly-ordered list of the most actionable wins:
   opaque handle issuable only by `createConstraint` would be a false
   guarantee: sub-sessions legitimately carry *foreign* ids. A
   variable's observer list can name suspensions belonging to another
-  session, and `Reactivation.enqueueObservers`
-  (`src/YCHR/Internal/Runtime/Reactivation.hs:33-47`) exists
-  precisely to filter them out. An id being well-formed says nothing
+  session, and `Reactivation.enqueueObservers` filters them out —
+  along with the ids of constraints that have since been killed, which
+  an observer list also never sheds. An id being well-formed says nothing
   about it being resolvable *here*. A real fix needs session-scoped
   phantom tags, not plain opacity.
 - **A `Set`-keyed propagation history** (§4). Wrong — it would

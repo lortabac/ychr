@@ -126,6 +126,7 @@ withCHRExtra si hc extraProcs action = do
     initSessionEnv
       si.program.typeNames
       si.program.ruleNames
+      si.program.inertTypes
       procMap
       hc
       evaluableMap

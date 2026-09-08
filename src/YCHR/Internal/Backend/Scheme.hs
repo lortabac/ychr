@@ -237,6 +237,11 @@ programInfoSExpr infoName vmp =
             ]
         ]
       registrations = map evaluableRegistration vmp.program.evaluables
+      -- 'inertTypes' is deliberately not emitted. It only lets a
+      -- runtime skip observer registration that could never lead to a
+      -- useful reactivation, so honoring it changes no result, and
+      -- the Scheme runtime has no search driver for which the saving
+      -- would matter.
       -- The let body is the session itself, returned to the caller.
       letBody = SAtom "%s"
    in SList

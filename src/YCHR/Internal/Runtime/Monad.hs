@@ -35,6 +35,8 @@ import Control.Monad.Trans.Reader (ReaderT, runReaderT)
 import Data.IORef
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
+import Data.IntSet (IntSet)
+import Data.IntSet qualified as IntSet
 import Data.Map.Strict (Map)
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
@@ -93,6 +95,12 @@ data SessionEnv = SessionEnv
     -- | Source names parallel to 'storeByType', indexed by
     -- 'ConstraintType'.
     storeTypeNames :: !(IntMap Types.Name),
+    -- | The constraint types the compiler marked inert
+    -- ('YCHR.Internal.VM.Program'.'inertTypes'), as the set of their
+    -- 'Types.ConstraintType' indices. A suspension of one of these
+    -- types is not registered as an observer of the variables in its
+    -- arguments, because reactivating it could do nothing.
+    inertTypes :: !IntSet,
     -- | Display names of rules, indexed by 'RuleId'. Carried so the
     -- tracer can label 'AddHistory' / 'BNotInHistory' events
     -- without a second lookup into the original 'Program'.
@@ -151,13 +159,14 @@ data SessionEnv = SessionEnv
 initSessionEnv ::
   [Types.Name] ->
   [Text] ->
+  [Types.ConstraintType] ->
   ProcMap ->
   HostCallRegistry ->
   EvaluableRegistry ->
   Map Types.UnqualifiedIdentifier ExportResolution ->
   Set Types.QualifiedIdentifier ->
   IO SessionEnv
-initSessionEnv typeNames rNames pm hc ev expMap expSet = do
+initSessionEnv typeNames rNames inert pm hc ev expMap expSet = do
   vc <- newIORef (VarId 0)
   let typeCount = length typeNames
       emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
@@ -177,6 +186,7 @@ initSessionEnv typeNames rNames pm hc ev expMap expSet = do
       { varCounter = vc,
         storeByType = bt,
         storeTypeNames = typeNameMap,
+        inertTypes = IntSet.fromList [i | Types.ConstraintType i <- inert],
         ruleNames = ruleNameMap,
         storeById = bi,
         storeNextId = ni,

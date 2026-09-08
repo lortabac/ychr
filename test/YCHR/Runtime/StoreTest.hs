@@ -34,6 +34,7 @@ runStoreEnv action = do
     initSessionEnv
       (replicate 100 (Unqualified ""))
       []
+      []
       Map.empty
       Map.empty
       Map.empty
@@ -45,6 +46,23 @@ runStoreEnv action = do
 -- by the final 'unify' (or an empty list if no 'unify' happened).
 runStoreObservers :: Chr [SuspensionId] -> IO [SuspensionId]
 runStoreObservers = runStoreEnv
+
+-- | As 'runStoreEnv', but with 'ConstraintType' 1 declared inert, so
+-- one type in the session skips observer registration and its
+-- neighbours do not.
+runInertStoreEnv :: Chr a -> IO a
+runInertStoreEnv action = do
+  env <-
+    initSessionEnv
+      (replicate 100 (Unqualified ""))
+      []
+      [ConstraintType 1]
+      Map.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Set.empty
+  runChr action env
 
 countAlive :: [Suspension] -> Chr Int
 countAlive [] = pure 0
@@ -285,6 +303,25 @@ observerTests =
           pure o
         assertBool "should contain s1" (SuspensionId 0 `elem` obs)
         assertBool "should contain s2" (SuspensionId 1 `elem` obs),
+      -- An inert type is one whose activation runs no occurrence
+      -- procedure, so a reactivation could do nothing and the
+      -- registration is skipped. The non-inert constraint in the same
+      -- session is what shows the variable was observable at all.
+      testCase "inert type registers no observer" $ do
+        (inertSid, liveSid, obs) <- runInertStoreEnv $ do
+          x <- newVar
+          inertSid <- createConstraint (ConstraintType 1) [x]
+          liveSid <- createConstraint (ConstraintType 0) [x]
+          _ <- storeConstraint inertSid
+          _ <- storeConstraint liveSid
+          (_, o) <- unify x (VInt 1)
+          pure (inertSid, liveSid, o)
+        assertBool
+          "should not contain the inert constraint"
+          (inertSid `notElem` obs)
+        assertBool
+          "should contain the non-inert constraint"
+          (liveSid `elem` obs),
       testCase "var nested in a compound arg emits SuspensionId" $ do
         obs <- runStoreObservers $ do
           x <- newVar

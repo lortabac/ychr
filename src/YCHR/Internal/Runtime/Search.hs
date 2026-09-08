@@ -59,7 +59,9 @@ import Data.IORef
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.Map.Strict qualified as Map
+import Data.Maybe (listToMaybe)
 import Data.Sequence (Seq)
+import Data.Sequence qualified as Seq
 import Data.Set (Set)
 import Data.Text qualified as T
 import YCHR.Internal.Compile.Names (callFunProcName, runtimeName)
@@ -215,12 +217,15 @@ restoreBranchState st = do
 -- ---------------------------------------------------------------------------
 
 -- | What the driver needs at every level of the recursion.
+--
+-- The scan cursor is deliberately /not/ in here: it is per branch, not
+-- per search, so it is a parameter of 'searchFrom' instead.
 data SearchCtx = SearchCtx
-  { -- | Store indices holding @search:alt@ constraints. Resolved
-    -- once per search rather than per quiescence. Empty when the
+  { -- | The store index holding @search:alt@ constraints. Resolved
+    -- once per search rather than per quiescence. 'Nothing' when the
     -- program never declares @alt\/1@, in which case the goal simply
     -- has no choice points and quiescence is a solution.
-    altTypes :: ![ConstraintType],
+    altType :: !(Maybe ConstraintType),
     -- | Called at each solution, with the solution's bindings still
     -- live and nothing yet undone. Its answer decides whether the
     -- search goes on, and if not, what happens to those bindings.
@@ -238,14 +243,31 @@ data SolutionStep
   | -- | End the search and keep this solution's bindings.
     StepCommit
 
--- | A choice point read out of the store: the @alt\/1@ suspension and
--- the alternative goals it offers, in the order they will be tried.
+-- | 0-based position in a constraint type's store sequence. Those
+-- sequences are append-only, and 'restoreStoreSnapshot' only ever puts
+-- back a prefix of the current one, so an index names the same
+-- suspension for as long as the driver holds it.
+newtype StoreIndex = StoreIndex Int
+  deriving (Show, Eq, Ord)
+
+-- | The index one past a given one, where a subtree's scan begins.
+afterIndex :: StoreIndex -> StoreIndex
+afterIndex (StoreIndex i) = StoreIndex (i + 1)
+
+-- | A choice point read out of the store: the @alt\/1@ suspension, its
+-- position in that type's store sequence, and the alternative goals it
+-- offers, in the order they will be tried.
 data Choice = Choice
   { sid :: !SuspensionId,
+    -- | Where 'findChoice' found it. Everything at a lower index is
+    -- dead, which is what lets the subtree below this choice skip
+    -- them; see 'findChoice'.
+    index :: !StoreIndex,
     goals :: ![Value]
   }
 
--- | Explore from the current, quiescent state.
+-- | Explore from the current, quiescent state, looking for choice
+-- points from @cursor@ onwards in the @alt@ type's store sequence.
 --
 -- 'AltDone' means 'onSolution' ended the search, one way or the
 -- other. 'AltFailed' means
@@ -253,9 +275,9 @@ data Choice = Choice
 -- reports and a nesting caller propagates, so the reason a trace shows
 -- is the one that actually happened at the bottom rather than a
 -- summary invented on the way up.
-searchFrom :: SearchCtx -> Chr AltOutcome
-searchFrom ctx =
-  findChoice ctx >>= \case
+searchFrom :: SearchCtx -> StoreIndex -> Chr AltOutcome
+searchFrom ctx cursor =
+  findChoice ctx cursor >>= \case
     Nothing -> do
       emitTrace (pure TESolution)
       ctx.onSolution >>= \case
@@ -317,7 +339,12 @@ tryAlternatives ctx choice ((altNum, goal) : rest) = do
     -- catches 'SearchFailure' and nothing else.
     tells <- altGoalConstraints "alt" goal
     mapM_ (uncurry tellResolvedConstraint) tells
-    searchFrom ctx
+    -- Past this choice, not from the front: this one is killed just
+    -- above, and everything before it is already dead — see
+    -- 'findChoice' for why. Each alternative gets the same starting
+    -- point, because 'restoreBranchState' puts the sequence back
+    -- exactly as it was.
+    searchFrom ctx (afterIndex choice.index)
   case outcome of
     AltDone o -> pure (AltDone o)
     AltFailed reason -> do
@@ -338,45 +365,60 @@ withoutFailure act = do
     Right o -> pure o
     Left SearchFailure -> pure (AltFailed BRFail)
 
--- | The oldest alive choice point in the store, or 'Nothing' when the
--- current state is a solution. Store sequences are append-ordered, so
--- \"oldest\" is just the first match.
-findChoice :: SearchCtx -> Chr (Maybe Choice)
-findChoice ctx = go ctx.altTypes
+-- | The oldest alive choice point at or after @cursor@, or 'Nothing'
+-- when the current state is a solution. Store sequences are
+-- append-ordered, so \"oldest\" is just the first match.
+--
+-- Skipping the prefix is not an optimization the caller may get wrong.
+-- The invariant is that at every quiescence in the subtree entered on
+-- the choice at index @i@, every entry below @i + 1@ is dead: the ones
+-- in @[cursor, i)@ because this scan read them dead, the ones below
+-- @cursor@ by the same property one level up, and @i@ itself because
+-- taking the choice kills it. Nothing in that subtree can revive one.
+-- A suspension\'s @alive@ flag only goes back to 'True' by trail undo,
+-- and every undo reachable from inside the subtree is to a mark taken
+-- at or after it was entered. So the subtree may start at @i + 1@ —
+-- which is what keeps a path of depth @k@ from rescanning @k@ dead
+-- choice points at every quiescence.
+--
+-- A nested search forks a fresh store, so its sequence is its own and
+-- so is its driver's cursor.
+findChoice :: SearchCtx -> StoreIndex -> Chr (Maybe Choice)
+findChoice ctx cursor@(StoreIndex from) = case ctx.altType of
+  Nothing -> pure Nothing
+  Just ct -> do
+    susps <- getStoreSnapshot ct
+    firstAlive cursor (toList (Seq.drop from susps))
   where
-    go [] = pure Nothing
-    go (ct : cts) =
-      getStoreSnapshot ct >>= firstAlive . toList >>= \case
-        Just c -> pure (Just c)
-        Nothing -> go cts
-
-    firstAlive [] = pure Nothing
-    firstAlive (s : ss) = do
+    firstAlive _ [] = pure Nothing
+    firstAlive i (s : ss) = do
       alive <- isSuspAlive s
       case (alive, s.args) of
-        (True, [goalsVal]) -> Just <$> readChoice s.suspId goalsVal
-        _ -> firstAlive ss
+        (True, [goalsVal]) -> Just <$> readChoice s.suspId i goalsVal
+        _ -> firstAlive (afterIndex i) ss
 
 -- | Read @alt(Goals)@. An argument that is not a proper list is a
 -- runtime error, not a failure: it is a malformed choice point rather
 -- than a dead end.
-readChoice :: SuspensionId -> Value -> Chr Choice
-readChoice sid goalsVal =
+readChoice :: SuspensionId -> StoreIndex -> Value -> Chr Choice
+readChoice sid idx goalsVal =
   listElems goalsVal >>= \case
     Just goals ->
-      pure (Choice {sid = sid, goals = goals})
+      pure (Choice {sid = sid, index = idx, goals = goals})
     Nothing ->
       runtimeErrorS
         "alt/1: argument must be a proper list of alternative goals"
 
--- | Resolve the store indices that hold choice points, by inverting
--- the session's constraint-type names.
-altTypesOf :: SessionEnv -> [ConstraintType]
-altTypesOf env =
-  [ ConstraintType i
-  | (i, n) <- IntMap.toAscList env.storeTypeNames,
-    n == altName
-  ]
+-- | Resolve the store index that holds choice points, by inverting the
+-- session's constraint-type names. 'Nothing' when the program never
+-- declares @alt\/1@.
+altTypeOf :: SessionEnv -> Maybe ConstraintType
+altTypeOf env =
+  listToMaybe
+    [ ConstraintType i
+    | (i, n) <- IntMap.toAscList env.storeTypeNames,
+      n == altName
+    ]
 
 -- ---------------------------------------------------------------------------
 -- Entry points
@@ -401,7 +443,7 @@ runSearch who goalArg onSolution = do
   sub <- liftIO (forkSearchSessionEnv env)
   let ctx =
         SearchCtx
-          { altTypes = altTypesOf sub,
+          { altType = altTypeOf sub,
             onSolution = onSolution
           }
       label = T.pack who
@@ -409,7 +451,7 @@ runSearch who goalArg onSolution = do
         emitTrace (pure (TESearchEnter label))
         outcome <- withoutFailure $ do
           mapM_ (uncurry tellResolvedConstraint) goals
-          searchFrom ctx
+          searchFrom ctx (StoreIndex 0)
         let exit = case outcome of
               AltDone StopKeeping -> SearchCommitted
               AltDone StopUndoing -> SearchStopped

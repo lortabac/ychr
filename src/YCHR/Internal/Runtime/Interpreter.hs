@@ -67,7 +67,6 @@ import Data.IntMap.Strict qualified as IntMap
 import Data.List qualified as List
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Sequence qualified as Seq
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Meta (valueToTerm)
@@ -182,6 +181,7 @@ interpret prog hostCalls entryName args = do
     initSessionEnv
       prog.typeNames
       prog.ruleNames
+      prog.inertTypes
       procMap
       hostCalls
       evaluableMap
@@ -791,14 +791,12 @@ evalBoolExpr (BUnify e1 e2) = do
     env <- ask
     mh <- liftIO (readIORef env.traceHandler)
     case mh of
-      Nothing -> unifyOrError v1 v2
+      Nothing -> fst <$> unifyOrError v1 v2
       Just _ -> do
         t1 <- snapshotValue v1
         t2 <- snapshotValue v2
-        beforeLen <- liftIO (Seq.length <$> readIORef env.reactQueue)
-        ok <- unifyOrError v1 v2
-        afterLen <- liftIO (Seq.length <$> readIORef env.reactQueue)
-        emitTrace (pure (TEUnify t1 t2 (afterLen - beforeLen)))
+        (ok, enqueued) <- unifyOrError v1 v2
+        emitTrace (pure (TEUnify t1 t2 enqueued))
         pure ok
 evalBoolExpr (BFromVal expr) = do
   v <- evalValExpr expr
@@ -877,12 +875,18 @@ invokeHostCall name argVals = do
 -- on failure, where partial bindings may still have produced
 -- observers worth reactivating. Raises a runtime error with both
 -- operands pretty-printed when unification fails.
-unifyOrError :: Value -> Value -> Chr Bool
+--
+-- Also returns how many constraints the enqueue actually queued,
+-- which is the number the tracer reports for a unification. Reading
+-- it back off the queue would be a second derivation of the same
+-- figure, and one that quietly stops matching if anything else ever
+-- touches the queue in between.
+unifyOrError :: Value -> Value -> Chr (Bool, Int)
 unifyOrError v1 v2 = do
   (ok, observers) <- unify v1 v2
-  enqueueObservers observers
+  enqueued <- enqueueObservers observers
   if ok
-    then pure True
+    then pure (True, enqueued)
     else do
       t1 <- valueToTerm Map.empty v1
       t2 <- valueToTerm Map.empty v2
@@ -1000,7 +1004,7 @@ evalBoolExprDeep (BEqual e1 e2) = do
 evalBoolExprDeep (BUnify e1 e2) = do
   v1 <- evalValExprDeep e1
   v2 <- evalValExprDeep e2
-  lift (unifyOrError v1 v2)
+  lift (fst <$> unifyOrError v1 v2)
 evalBoolExprDeep (BFromVal expr) = do
   v <- evalValExprDeep expr
   lift (boolFromValue v)

@@ -122,7 +122,17 @@ data Program = Program
     -- the runtime's host-call registry, which is bare-functor
     -- keyed). Used by the runtime to call into user-defined
     -- functions when @is@ walks a dereferenced compound term.
-    evaluables :: ![(EvaluableKey, Name)]
+    evaluables :: ![(EvaluableKey, Name)],
+    -- | The constraint types that are /inert/: types whose
+    -- activation runs no occurrence procedure, because the type has
+    -- no occurrences at all or only passive ones. Reactivating such
+    -- a constraint can do nothing but re-store it, and @Store@ is
+    -- idempotent, so a runtime may skip registering these
+    -- suspensions as observers of the variables in their arguments.
+    -- This is the trivial instance of the paper's /Delay Avoidance/
+    -- optimization. Backends are free to ignore the field: honoring
+    -- it changes no result, only the reactivation traffic.
+    inertTypes :: ![ConstraintType]
   }
   deriving (Show, Eq)
 

@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module YCHR.Runtime.ReactivationTest (tests) where
 
 import Control.Monad.IO.Class (liftIO)
@@ -8,7 +10,9 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Reactivation
-import YCHR.Internal.Runtime.Types (SuspensionId (..))
+import YCHR.Internal.Runtime.Store (createConstraint, killConstraint)
+import YCHR.Internal.Runtime.Types (SuspensionId (..), Value (..))
+import YCHR.Internal.Types (ConstraintType (..), Name (..))
 
 tests :: TestTree
 tests =
@@ -17,12 +21,31 @@ tests =
     [ emptyTests,
       orderTests,
       reentrancyTests,
+      observerTests,
       miscTests
     ]
 
 runReactEnv :: Chr a -> IO a
 runReactEnv action = do
-  env <- initSessionEnv [] [] Map.empty Map.empty Map.empty Map.empty Set.empty
+  env <- initSessionEnv [] [] [] Map.empty Map.empty Map.empty Map.empty Set.empty
+  runChr action env
+
+-- | A session with one constraint-type slot, so 'createConstraint' has
+-- somewhere to put a suspension. 'enqueueObservers' reads the
+-- id-indexed map, which 'createConstraint' populates on its own, so
+-- nothing here has to be stored.
+runReactStoreEnv :: Chr a -> IO a
+runReactStoreEnv action = do
+  env <-
+    initSessionEnv
+      [Unqualified ""]
+      []
+      []
+      Map.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Set.empty
   runChr action env
 
 -- | Drain the queue, collecting all IDs in order.
@@ -89,6 +112,42 @@ reentrancyTests =
               else pure ()
           liftIO $ reverse <$> readIORef ref
         ids @?= [SuspensionId 0, SuspensionId 1, SuspensionId 2, SuspensionId 3]
+    ]
+
+-- | 'enqueueObservers' keeps only the ids naming a live suspension of
+-- this session, and reports how many it kept. A variable's observer
+-- list is never pruned, so both the foreign ids of another session and
+-- the stale ids of killed constraints reach it.
+observerTests :: TestTree
+observerTests =
+  testGroup
+    "enqueueObservers"
+    [ testCase "live ids are enqueued in order" $ do
+        (ids, n) <- runReactStoreEnv $ do
+          a <- createConstraint (ConstraintType 0) [VInt 1]
+          b <- createConstraint (ConstraintType 0) [VInt 2]
+          n <- enqueueObservers [a, b]
+          ids <- drainCollect
+          pure (ids, n)
+        ids @?= [SuspensionId 0, SuspensionId 1]
+        n @?= 2,
+      testCase "a killed constraint is dropped" $ do
+        (ids, n) <- runReactStoreEnv $ do
+          dead <- createConstraint (ConstraintType 0) [VInt 1]
+          live <- createConstraint (ConstraintType 0) [VInt 2]
+          killConstraint dead
+          n <- enqueueObservers [dead, live]
+          ids <- drainCollect
+          pure (ids, n)
+        ids @?= [SuspensionId 1]
+        n @?= 1,
+      testCase "an id from another session is dropped" $ do
+        (ids, n) <- runReactStoreEnv $ do
+          n <- enqueueObservers [SuspensionId 99]
+          ids <- drainCollect
+          pure (ids, n)
+        ids @?= []
+        n @?= 0
     ]
 
 miscTests :: TestTree

@@ -16,7 +16,8 @@ tests =
   testGroup
     "VM.SExpr"
     [ testGroup "roundtrip" roundtripTests,
-      testGroup "format" formatTests
+      testGroup "format" formatTests,
+      testGroup "legacy" legacyProgramTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -25,9 +26,9 @@ tests =
 
 roundtripTests :: [TestTree]
 roundtripTests =
-  [ testCase "empty program" $ roundtrip (Program 0 [] 0 [] [] []),
+  [ testCase "empty program" $ roundtrip (Program 0 [] 0 [] [] [] []),
     testCase "single empty procedure" $
-      roundtrip (Program 1 [Types.Unqualified "foo"] 0 [] [mkProcedure "foo" [] []] []),
+      roundtrip (Program 1 [Types.Unqualified "foo"] 0 [] [mkProcedure "foo" [] []] [] []),
     testCase "procedure with params" $
       roundtrip
         ( Program
@@ -36,6 +37,7 @@ roundtripTests =
             0
             []
             [mkProcedure "tell_leq2" ["X", "Y"] []]
+            []
             []
         ),
     testCase "let-val statement" $
@@ -184,6 +186,7 @@ roundtripTests =
                 ]
             ]
             []
+            [ConstraintType 1]
         )
   ]
 
@@ -212,7 +215,7 @@ formatTests =
   [ testCase "var serialization" $
       assertContains
         (serializeProg (mkProg [ExprStmt (Var "x")]))
-        ( "(program 0 (type-names) 0 (rule-names) (evaluables) "
+        ( "(program 0 (type-names) 0 (rule-names) (evaluables) (inert-types) "
             <> "(procedure \"p\" () (reactivate-dispatch) "
             <> "(expr-stmt (var \"x\"))))"
         ),
@@ -234,6 +237,7 @@ formatTests =
                     2
                     [Types.Qualified "M" "leq", Types.Unqualified "gcd"]
                     0
+                    []
                     []
                     []
                     [],
@@ -264,6 +268,24 @@ formatTests =
 serializeProg :: Program -> Text
 serializeProg = serialize . mkVMProg
 
+-- | A program header written before @inert-types@ existed still
+-- loads, and declares no inert type. The entry is an optimization
+-- hint no result depends on, so an older @.vm@ file must not be
+-- rejected for lacking it.
+legacyProgramTests :: [TestTree]
+legacyProgramTests =
+  [ testCase "program without inert-types entry loads" $
+      case deserialize legacyProgramText of
+        Left e -> assertBool ("deserialization failed: " <> T.unpack e) False
+        Right vmp' -> vmp' @?= mkVMProg (mkProg [ExprStmt (Var "x")])
+  ]
+
+legacyProgramText :: Text
+legacyProgramText =
+  "(vm-program (program 0 (type-names) 0 (rule-names) (evaluables) "
+    <> "(procedure \"p\" () (reactivate-dispatch) "
+    <> "(expr-stmt (var \"x\")))) (exports) (symbol-table))"
+
 -- ---------------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------------
@@ -275,7 +297,7 @@ histIds ids = mkHistoryIds (zip [0 :: Int ..] ids)
 
 -- | Build a minimal program with one procedure containing the given body.
 mkProg :: [Stmt] -> Program
-mkProg body = Program 0 [] 0 [] [mkProcedure "p" [] body] []
+mkProg body = Program 0 [] 0 [] [mkProcedure "p" [] body] [] []
 
 -- | Build a 'Procedure' with a placeholder 'procKind'. The kind tag
 -- doesn't affect serialization round-tripping or the format tests'

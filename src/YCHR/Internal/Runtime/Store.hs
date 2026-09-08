@@ -5,8 +5,11 @@
 -- Manages constraint suspensions: creation, storage, killing, liveness
 -- checking, field access, and snapshot-based iteration. Integrates with
 -- the observer/reactivation mechanism in "YCHR.Internal.Runtime.Var": when a
--- constraint is stored, it registers as an observer on its variable
--- arguments so that future unification triggers reactivation.
+-- constraint of a non-inert type is stored, it registers as an observer
+-- on its variable arguments so that future unification triggers
+-- reactivation. Constraints of an inert type — one with no occurrence
+-- procedure to run — register nothing, since their reactivation would
+-- be a no-op; see 'storeConstraint'.
 module YCHR.Internal.Runtime.Store
   ( -- * Types
     Suspension (..),
@@ -28,10 +31,12 @@ module YCHR.Internal.Runtime.Store
   )
 where
 
+import Control.Monad (unless)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask)
 import Data.IORef
 import Data.IntMap.Strict qualified as IntMap
+import Data.IntSet qualified as IntSet
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..))
@@ -70,15 +75,25 @@ createConstraint cType cArgs = do
   liftIO $ modifyIORef' storeById (IntMap.insert (let SuspensionId n = sid in n) susp)
   pure sid
 
--- | Add a constraint to the type-indexed store and register it as an
--- observer on each of its variable arguments. Idempotent: under Late
--- Storage the compiler emits a reachable 'YCHR.Internal.VM.Store' both
+-- | Add a constraint to the type-indexed store and, unless its type
+-- is inert, register it as an observer on each of its variable
+-- arguments. Idempotent: under Late Storage the compiler emits a
+-- reachable 'YCHR.Internal.VM.Store' both
 -- per fired kept occurrence and at the end of every activation, and
 -- only the first may take effect — a second append would make the
 -- constraint match twice as a partner, and a second registration would
 -- reactivate it twice per binding. Returns whether this call stored
 -- the constraint, so the interpreter's trace reports only stores that
 -- took effect.
+--
+-- An /inert/ type (see 'YCHR.Internal.VM.Program'.'inertTypes') is one
+-- whose activation runs no occurrence procedure, so reactivating one
+-- of its constraints can only re-store it, which 'storeConstraint'
+-- already refuses. Registering it as an observer would therefore buy
+-- nothing and cost one enqueue-and-discard per binding of every
+-- variable it mentions. @search:alt\/1@ is the case that motivates
+-- this: a search path of depth @k@ would otherwise leave @k@ dead
+-- choice points observing the search variables.
 storeConstraint :: SuspensionId -> Chr Bool
 storeConstraint sid = do
   susp <- lookupSusp sid
@@ -97,10 +112,10 @@ storeConstraint sid = do
       -- of resting on that argument.
       recordFlagWrite susp.stored
       liftIO $ writeIORef susp.stored True
-      SessionEnv {storeByType} <- ask
+      SessionEnv {storeByType, inertTypes} <- ask
       let ConstraintType idx = susp.suspType
       liftIO $ modifyIORef' storeByType (IntMap.adjust (Seq.|> susp) idx)
-      mapM_ (addObserver sid) susp.args
+      unless (IntSet.member idx inertTypes) $ mapM_ (addObserver sid) susp.args
       pure True
 
 -- | Kill a constraint (set alive to False).

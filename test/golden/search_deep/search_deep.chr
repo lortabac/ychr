@@ -1,0 +1,39 @@
+% A generator whose every solution costs one more choice point on the
+% path: `nat_from(I, N)` either binds N to I or recurses at I + 1. The
+% work per solution is O(1), so anything the runtime does per *dead*
+% choice point along the path — a stale observer enqueued at every
+% binding, a dead store entry rescanned at every quiescence — turns the
+% whole search quadratic in the bound.
+%
+% The `deep_forall` case is the one `bench/Main.hs` measures, and the
+% benchmark is where a returning quadratic would show: at this bound
+% the search is a few tens of milliseconds, so a regression is a
+% multiple rather than a rounding error. The golden case itself only
+% pins the answer. `deep_count` uses a much smaller bound because
+% `find_n/3` is quadratic in its own bound by construction — it calls
+% `length/1` on the accumulator per solution — which would swamp what
+% this program is about.
+
+:- module(search_deep, [
+    deep_count/3, deep_forall/3,
+    % The goal constraint has to be exported: the search entry points
+    % resolve it through the program's exports, in the caller.
+    nat_from/2
+]).
+:- use_module(library(search)).
+:- use_module(library(lists)).
+
+:- chr_constraint
+   deep_count(any, any, any), deep_forall(any, any, any),
+   nat_from(any, any).
+
+nat_from(I, N) <=> (try_unify(N, I) ; nat_from(I + 1, N)).
+
+% The first K solutions, counted rather than listed: the list itself
+% says nothing this test is about.
+deep_count(K, X, N) <=> N is length(find_n(K, X, quote(nat_from(0, X)))).
+
+% Runs to the first counterexample, which is the value K itself, so the
+% path is K choice points deep when the search stops.
+deep_forall(K, X, Ok) <=>
+    Ok is forall(X, quote(nat_from(0, X)), fun(C) -> C < K end).

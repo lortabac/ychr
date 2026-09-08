@@ -56,7 +56,13 @@ benchmarkPrograms =
     -- and one `alt` per level of a recursive generator.
     "search_label",
     "search_generate",
-    "search_label_alt"
+    "search_label_alt",
+    -- A path that grows by one choice point per solution, which is
+    -- what makes per-dead-choice-point work show up as a quadratic in
+    -- the bound. The other three searches are flat or shallow, so
+    -- this is the one that moves when the driver's per-level costs
+    -- change.
+    "search_deep"
   ]
 
 goldenDir :: FilePath

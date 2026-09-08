@@ -188,7 +188,7 @@ The events are:
 | `fire R [c#…]` | The rule `R` is firing with the listed constraints. |
 | `kill c#N` | The constraint has been removed from the store. |
 | `reactivate c#N: C(...)` | A stored constraint is being re-activated because a variable it observes was bound. |
-| `unify L = R (K constraints reactivated)` | An ask-side unification succeeded, enqueueing `K` constraints for reactivation. |
+| `unify L = R (K constraints reactivated)` | A tell-side unification succeeded, enqueueing `K` constraints for reactivation. |
 | `call F(...)` / `return V` | A user-defined function or lambda was called and returned. |
 | `host call F(...) = V` | A host primitive was called. |
 

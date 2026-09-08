@@ -114,6 +114,7 @@ programToSExpr prog =
         : SInt (fromIntegral prog.numRules)
         : SList (SAtom "rule-names" : map SString prog.ruleNames)
         : SList (SAtom "evaluables" : map evaluableEntryToSExpr prog.evaluables)
+        : SList (SAtom "inert-types" : map constraintTypeToSExpr prog.inertTypes)
         : map procedureToSExpr prog.procedures
     )
 
@@ -319,12 +320,19 @@ programFromSExpr
           : SInt nr
           : SList (SAtom "rule-names" : rnSexprs)
           : SList (SAtom "evaluables" : evSexprs)
-          : procs
+          : rest
         )
     ) = do
     tns <- traverse chrNameFromSExpr tnSexprs
     rns <- traverse textFromSExpr rnSexprs
     evs <- traverse evaluableEntryFromSExpr evSexprs
+    -- The inert-types entry is optional on read: a program written
+    -- before the field existed simply declares no inert type, and
+    -- honoring the field is an optimization no result depends on.
+    let (itSexprs, procs) = case rest of
+          SList (SAtom "inert-types" : its) : ps -> (its, ps)
+          ps -> ([], ps)
+    its <- traverse constraintTypeFromSExpr itSexprs
     ps <- traverse procedureFromSExpr procs
     pure
       Program
@@ -333,6 +341,7 @@ programFromSExpr
           numRules = fromInteger nr,
           ruleNames = rns,
           evaluables = evs,
+          inertTypes = its,
           procedures = ps
         }
 programFromSExpr s = err ("expected (program ...), got: " <> printSExpr s)

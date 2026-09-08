@@ -67,7 +67,7 @@ import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (nub, partition, sortOn)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -121,9 +121,9 @@ compile prog symTab =
   let ( (occMap, ruleDisplayNames),
         occErrs
         ) = runWriter (collectOccurrences symTab prog)
-      (procs, procErrs) = runWriter $ do
-        fmap concat $
-          traverse (genConstraintProcs symTab occMap) (symbolTableToList symTab)
+      (constraintProcs, procErrs) = runWriter $ do
+        traverse (genConstraintProcs symTab occMap) (symbolTableToList symTab)
+      procs = concatMap (.constraintProcedures) constraintProcs
       (funProcs, funErrs) = runWriter $ do
         traverse compileFunctionDef prog.functions
       dispatch = genReactivateDispatch symTab
@@ -138,7 +138,8 @@ compile prog symTab =
                 numRules = length ruleDisplayNames,
                 ruleNames = ruleDisplayNames,
                 procedures = procs ++ funProcs ++ [dispatch] ++ callFunDispatches,
-                evaluables = buildEvaluables prog.functions
+                evaluables = buildEvaluables prog.functions,
+                inertTypes = sortOn ctIndex (mapMaybe (.inertType) constraintProcs)
               }
         else Left allErrs
 
@@ -172,12 +173,33 @@ buildTypeNames symTab =
   [ ident.name
   | (ident, _) <- sortOn (ctIndex . snd) (symbolTableToList symTab)
   ]
-  where
-    ctIndex (Types.ConstraintType i) = i
+
+-- | The integer a 'Types.ConstraintType' wraps, for ordering the
+-- index-keyed lists in the program header.
+ctIndex :: ConstraintType -> Int
+ctIndex (ConstraintType i) = i
 
 -- ---------------------------------------------------------------------------
 -- Procedure generation for each constraint type
 -- ---------------------------------------------------------------------------
+
+-- | What compiling one constraint type contributes to the program.
+data ConstraintProcs = ConstraintProcs
+  { -- | Its @tell@, @activate@ and occurrence procedures.
+    constraintProcedures :: [Procedure],
+    -- | The type itself when it is inert, i.e. when it has no
+    -- occurrence procedure to run — see 'Program'.'inertTypes'.
+    --
+    -- Today that is only ever the zero-occurrence case. The other
+    -- half of the definition, "all of its occurrences are passive",
+    -- cannot arise under the current analysis: both passivity sources
+    -- ("YCHR.Internal.Compile.Passive") require the two heads to have
+    -- the same type and leave the ωr-earlier occurrence of that type
+    -- non-passive. A future source that does not could produce one,
+    -- and it would still be inert by the same argument — an
+    -- activation with no occurrence procedure to call.
+    inertType :: Maybe ConstraintType
+  }
 
 genConstraintProcs ::
   SymbolTable ->
@@ -185,7 +207,7 @@ genConstraintProcs ::
   ( Identifier,
     ConstraintType
   ) ->
-  Writer [Diagnostic CompileError] [Procedure]
+  Writer [Diagnostic CompileError] ConstraintProcs
 genConstraintProcs symTab occMap (ident, cType) = do
   -- Passive occurrences (paper §5.3, marked by 'YCHR.Internal.Compile.Passive')
   -- can never fire when this constraint is active, so we emit neither
@@ -195,7 +217,14 @@ genConstraintProcs symTab occMap (ident, cType) = do
       tellProc = genTell ident.name cType ident.arity
       activate = genActivate ident.name cType ident.arity occs
   occProcs <- traverse (genOccurrence symTab ident.name cType ident.arity) occs
-  pure (tellProc : activate : occProcs)
+  pure
+    ConstraintProcs
+      { constraintProcedures = tellProc : activate : occProcs,
+        -- An activation with nothing to try is a no-op beyond the
+        -- 'Store' that ends it, so nothing observes a binding of this
+        -- constraint's arguments.
+        inertType = if null occs then Just cType else Nothing
+      }
 
 -- ---------------------------------------------------------------------------
 -- tell_c
