@@ -31,13 +31,23 @@ print_store -> host:print_store.
 % to keep it symbolic) in a fresh session of the current program: own
 % store, history, and reactivation queue, same rules and functions.
 % Goal constraints must be exported; an unknown one is a caller error.
-% Returns true if and only if the sub-session runs to quiescence, and
-% false otherwise -- a runtime error, or (inside a search branch) a
-% search:fail/0. Bindings made before the failure are not rolled back. Unbound variables inside the goal are shared
-% with the sub-session, so bindings made there survive the call — pass
-% fresh out-variables to read results back. Reactivation does not
-% cross the boundary: a live stored constraint of one session must not
-% depend on a variable the other session binds.
+%
+% This is search:solve/1 made total. Same fork, same first-solution
+% commit: a choice point told by the goal is explored, and the first
+% solution's bindings are kept. The one difference is that a runtime
+% error inside the goal yields false instead of propagating, which
+% makes this the language's only error catcher.
+%
+% Returns true if and only if the goal reaches a solution, and false
+% otherwise -- a runtime error, a search:fail/0, or an exhausted
+% search space. Every false is rolled back: the sub-session's bindings
+% are undone before the call returns.
+%
+% Unbound variables inside the goal are shared with the sub-session,
+% so bindings made there survive a true — pass fresh out-variables to
+% read results back. Reactivation does not cross the boundary: a live
+% stored constraint of one session must not depend on a variable the
+% other session binds.
 run_chr_session(G) -> host:run_chr_session(G).
 
 % The local part of a name atom: `name_base(mod:foo)` is `foo`, and an

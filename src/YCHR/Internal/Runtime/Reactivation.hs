@@ -37,7 +37,7 @@ enqueue ids = do
 --
 -- Two kinds of id are dropped. An id with no suspension in this
 -- session's store is /foreign/: logical variables are shared across
--- sub-sessions ("YCHR.Internal.Runtime.SubSession") while suspension
+-- forked sessions ("YCHR.Internal.Runtime.Search") while suspension
 -- ids are globally unique, so a variable's observer list may carry
 -- ids that belong to a different session — which this session cannot
 -- reactivate. An id whose suspension is dead is /stale/: a kill only

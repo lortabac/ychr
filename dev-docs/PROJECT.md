@@ -537,6 +537,27 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
   compaction of a variable's observer list, which needs `Var.hs` to
   reach an alive flag through a `SuspensionId`; no measured program
   shows the pattern, so it is not built.
+  `run_chr_session/1` (`library(meta)`) is the same driver: it
+  predated the search and had become a near-duplicate of `solve/1`, so
+  it is now `hostRunChrSession` in `Search.hs` — same fork, same base
+  mark, same commit on the first solution, with one runtime-error
+  catch around it. That is its one distinct job, and the reason it
+  cannot be written as `run_chr_session(G) -> solve(G)` in CHR: the
+  language has no catch form. The merge also gives it two behaviours
+  it did not have. A `false` is now rolled back to the base mark
+  rather than leaving the sub-session's bindings in place, and a
+  choice point the goal tells is explored rather than sitting inert —
+  a goal that tells `alt` is a search whichever entry point runs it.
+  Goal resolution stays outside the catch, so a misspelled or
+  unexported goal constraint is still a loud caller error and not a
+  `false`. `forkSessionEnv` and `forkSearchSessionEnv` collapsed into
+  the latter, since every fork now belongs to a search.
+  The cost is that a sub-session's writes are trailed even when no
+  enclosing search is running. That is not measured: no benchmark
+  calls `run_chr_session/1`, and the one hot caller that used to — the
+  type checker's overload resolution — migrated to `solve/1` in
+  8082a26. The per-write cost itself is the one recorded above for the
+  trail hook.
   Haskell runtime only. See
   [`docs/reference/search.md`](../docs/reference/search.md).
 - Unification variables for the Haskell runtime in `src/YCHR/Internal/Runtime/Var.hs`.

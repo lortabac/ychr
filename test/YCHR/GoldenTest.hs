@@ -18,7 +18,7 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (Display (..))
 import YCHR.Internal.Pretty (prettyBindings)
-import YCHR.Internal.Runtime.SubSession (defaultHostCallRegistry)
+import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Run
   ( Error,

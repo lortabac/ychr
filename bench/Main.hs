@@ -16,7 +16,7 @@ import System.FilePath ((<.>), (</>))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Parser (parseConstraint)
 import YCHR.Internal.Runtime.Registry (HostCallRegistry)
-import YCHR.Internal.Runtime.SubSession (defaultHostCallRegistry)
+import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
 import YCHR.Internal.TypeCheck (typeCheckProgram)
 import YCHR.Run
   ( compileFiles,

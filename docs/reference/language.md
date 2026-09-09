@@ -536,7 +536,8 @@ rule occurrence. It is not a general handler.
 - `is` expressions, rule bodies and top-level goals are *not* guard
   positions. An instantiation failure there is a hard `YCHR-60001`.
 - `run_chr_session/1` keeps its own boundary: it runs an isolated
-  sub-session and already reports *any* failure as `false`.
+  sub-session and already reports *any* failure as `false`, rolling
+  the sub-session back as it does.
 
 A guard never tells. `=`, constraint additions and the rest of the
 body forms are not guard syntax, and a function called from a guard

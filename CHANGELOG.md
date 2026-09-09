@@ -56,6 +56,15 @@ inert type. See the [VM specification](docs/reference/vm.md).
   and a per-branch cursor in the search driver, makes a search path
   linear in its depth where it was quadratic: a path of ten thousand
   choice points went from about 15 s to under 0.2 s.
+- `run_chr_session/1` is now the same driver: `solve/1` made total.
+  Same fork, same commit on the first solution, with a runtime error
+  in the goal reported as `false` instead of propagating — its one
+  distinct job, and the language's only error catcher. Two changes in
+  behaviour: a `false` result is now fully rolled back, where the
+  sub-session's bindings used to be left in place, and a choice point
+  the goal tells is explored instead of sitting inert. A misspelled or
+  unexported goal constraint is still a loud caller error, not a
+  `false`.
 
 Soundness fix: `GuardEqual` evidence (the fact a shared head variable
 contributes) no longer treats value equality as full type equality. A

@@ -19,7 +19,6 @@ module YCHR.Internal.Runtime.Monad
     -- * Session environment
     SessionEnv (..),
     initSessionEnv,
-    forkSessionEnv,
     forkSearchSessionEnv,
 
     -- * Auxiliary types
@@ -203,11 +202,16 @@ initSessionEnv typeNames rNames inert pm hc ev expMap expSet = do
         traceDepth = td
       }
 
--- | A fresh session of the same program: same procedures, constraint
--- types, rule names, host calls and exports, but its own store,
--- history, reactivation queue and call stack. The procedure map is
+-- | A fresh session of the same program, ready to run a search: same
+-- procedures, constraint types, rule names, host calls and exports,
+-- but its own store, history, reactivation queue and call stack, and
+-- with a trail guaranteed to be installed. The procedure map is
 -- copied into a new 'IORef', so the fork may add procedures without
 -- the original seeing them.
+--
+-- Every fork goes through here, because every entry point that opens
+-- one — @solve\/1@, @find_all\/2@, @fold_solutions\/4@ and
+-- @run_chr_session\/1@ — is the search driver.
 --
 -- The variable and suspension-id counters are /shared/, so a fork's
 -- ids never collide with its parent's: a cross-session observer leak
@@ -217,37 +221,9 @@ initSessionEnv typeNames rNames inert pm hc ev expMap expSet = do
 --
 -- Unlike building one from scratch with 'initSessionEnv', this reuses
 -- the program-level maps as they are instead of rebuilding them from
--- lists — which matters because a fork can be per-iteration work
--- ('forkSearchSessionEnv' below reuses this, and the type-checker's
--- overload search opens one search per function equation).
---
--- The search 'trail' is inherited as it stands, and that is
--- deliberate: a sub-session opened inside a search branch shares the
--- caller's logical variables, so the writes it makes to them must
--- land on the enclosing search's trail or backtracking would not
--- undo them. At the top level the field is 'Nothing' and nothing is
--- recorded. Use 'forkSearchSessionEnv' to /start/ a search.
-forkSessionEnv :: SessionEnv -> IO SessionEnv
-forkSessionEnv env = do
-  pm <- readIORef env.procMap
-  bt <- newIORef (IntMap.map (const Seq.empty) env.storeTypeNames)
-  bi <- newIORef IntMap.empty
-  hi <- newIORef Set.empty
-  rq <- newIORef Seq.empty
-  cs <- newIORef []
-  pmRef <- newIORef pm
-  pure
-    env
-      { storeByType = bt,
-        storeById = bi,
-        history = hi,
-        reactQueue = rq,
-        callStack = cs,
-        procMap = pmRef
-      }
-
--- | 'forkSessionEnv' for a session that is about to run a search: as
--- that fork, but with a trail guaranteed to be installed.
+-- lists — which matters because a fork can be per-iteration work (the
+-- type-checker's overload search opens one search per function
+-- equation).
 --
 -- A fresh trail is installed only when the parent has none. A nested
 -- search /shares/ its parent's, so that entries an inner search
@@ -257,12 +233,26 @@ forkSessionEnv env = do
 -- search made. Marks, not trails, are what delimit an undo.
 forkSearchSessionEnv :: SessionEnv -> IO SessionEnv
 forkSearchSessionEnv env = do
-  sub <- forkSessionEnv env
-  case sub.trail of
-    Just _ -> pure sub
-    Nothing -> do
-      t <- newIORef (TrailState {entries = [], length = 0})
-      pure sub {trail = Just (Trail t)}
+  pm <- readIORef env.procMap
+  bt <- newIORef (IntMap.map (const Seq.empty) env.storeTypeNames)
+  bi <- newIORef IntMap.empty
+  hi <- newIORef Set.empty
+  rq <- newIORef Seq.empty
+  cs <- newIORef []
+  pmRef <- newIORef pm
+  tr <- case env.trail of
+    Just t -> pure (Just t)
+    Nothing -> Just . Trail <$> newIORef (TrailState {entries = [], length = 0})
+  pure
+    env
+      { storeByType = bt,
+        storeById = bi,
+        history = hi,
+        reactQueue = rq,
+        callStack = cs,
+        procMap = pmRef,
+        trail = tr
+      }
 
 -- | Run a 'Chr' action against a built 'SessionEnv'. Thin alias around
 -- 'runReaderT' so callers don't need to import the transformer module.

@@ -262,7 +262,6 @@ library
                     , YCHR.Internal.Runtime.Monad
                     , YCHR.Internal.Runtime.Registry
                     , YCHR.Internal.Runtime.Session
-                    , YCHR.Internal.Runtime.SubSession
                     , YCHR.Internal.Runtime.Goal
                     , YCHR.Internal.Runtime.Search
                     , YCHR.Internal.Runtime.Trail

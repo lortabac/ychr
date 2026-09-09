@@ -4,10 +4,35 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- | The search driver: @solve\/1@, @find_all\/2@, @fold_solutions\/4@
--- and @fail\/0@, the host calls behind @library(search)@.
+-- and @fail\/0@, the host calls behind @library(search)@ — and
+-- @run_chr_session\/1@, which is 'hostSolve' made total.
 --
 -- See @docs\/reference\/search.md@ for the user-facing contract. This
 -- module implements it.
+--
+-- == Variable sharing across a fork
+--
+-- Logical variables are 'Data.IORef.IORef' cells, so a variable
+-- reachable from the goal is /the same variable/ inside the forked
+-- session: bindings made there are visible to the caller once the
+-- search commits. This is the result channel — pass fresh unbound
+-- out-variables in the goal and read them afterwards.
+--
+-- Reactivation does NOT cross the boundary. A shared variable's
+-- observer list may carry suspension ids from both sessions; ids are
+-- globally unique (the id supply is shared, like the variable
+-- counter), and each session drops foreign ids at enqueue
+-- ("YCHR.Internal.Runtime.Reactivation"). So binding a shared
+-- variable reactivates only the binding session's own observers. The
+-- common benign case is the calling rule's already-killed head
+-- constraint observing an out-variable — nothing to reactivate. The
+-- case to avoid is a /live/ stored constraint of one session
+-- observing a variable the other session binds: the observer is
+-- simply not reactivated, which can leave the observing session
+-- incomplete (a rule that should have fired on the new binding does
+-- not). In practice: pass only ground terms and fresh variables in,
+-- and have the forked session bind its out-variables before
+-- quiescence.
 --
 -- == Choice at quiescence
 --
@@ -46,10 +71,15 @@
 --
 -- The variable and suspension-id counters are deliberately /not/ part
 -- of either: they stay monotonic across backtracking, so an id burned
--- in an abandoned branch is never handed out again. That preserves the
--- property 'YCHR.Internal.Runtime.Monad.forkSessionEnv' documents,
--- that a stale observer id can only ever miss, never collide.
-module YCHR.Internal.Runtime.Search (searchHostCallRegistry) where
+-- in an abandoned branch is never handed out again. That preserves
+-- the property 'YCHR.Internal.Runtime.Monad.forkSearchSessionEnv'
+-- documents, that a stale observer id can only ever miss, never
+-- collide.
+module YCHR.Internal.Runtime.Search
+  ( searchHostCallRegistry,
+    defaultHostCallRegistry,
+  )
+where
 
 import Control.Exception (throwIO, try)
 import Control.Monad.IO.Class (liftIO)
@@ -65,6 +95,7 @@ import Data.Sequence qualified as Seq
 import Data.Set (Set)
 import Data.Text qualified as T
 import YCHR.Internal.Compile.Names (callFunProcName, runtimeName)
+import YCHR.Internal.Meta (metaHostCallRegistry)
 import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error
   ( RuntimeErrorThrown,
@@ -93,6 +124,7 @@ import YCHR.Internal.Runtime.Monad
 import YCHR.Internal.Runtime.Registry
   ( HostCallFn (..),
     HostCallRegistry,
+    baseHostCallRegistry,
     copyTerm,
     valueList,
   )
@@ -121,18 +153,31 @@ import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Name (..), RuleId)
 
 -- | Registry providing @solve\/1@, @find_all\/2@, @fold_solutions\/4@
--- and @fail\/0@. Part of
--- 'YCHR.Internal.Runtime.SubSession.defaultHostCallRegistry'; union it
--- in explicitly when assembling a custom registry that should support
--- @library(search)@.
+-- and @fail\/0@, plus the @meta@ library's @run_chr_session\/1@,
+-- which is the same driver. Part of 'defaultHostCallRegistry'; union
+-- it in explicitly when assembling a custom registry that should
+-- support @library(search)@ or @run_chr_session@.
 searchHostCallRegistry :: HostCallRegistry
 searchHostCallRegistry =
   Map.fromList
     [ (Name "solve", HostCallFn hostSolve),
       (Name "find_all", HostCallFn hostFindAll),
       (Name "fold_solutions", HostCallFn hostFoldSolutions),
-      (Name "fail", HostCallFn hostFail)
+      (Name "fail", HostCallFn hostFail),
+      (Name "run_chr_session", HostCallFn hostRunChrSession)
     ]
+
+-- | The default host-call registry — base builtins, the @meta@
+-- library's host calls, and the search driver (which also provides
+-- @run_chr_session@). This is what the @ychr@ CLI and the default
+-- 'YCHR.Convert' / 'YCHR.DSL' entry points use. Defined here rather
+-- than in "YCHR.Internal.Meta" because this is the topmost of the
+-- component modules.
+defaultHostCallRegistry :: HostCallRegistry
+defaultHostCallRegistry =
+  baseHostCallRegistry
+    <> metaHostCallRegistry
+    <> searchHostCallRegistry
 
 -- ---------------------------------------------------------------------------
 -- Failure
@@ -424,21 +469,34 @@ altTypeOf env =
 -- Entry points
 -- ---------------------------------------------------------------------------
 
--- | Fork a search session, tell the goal, and drive it.
+-- | Resolve the goal, then drive it: 'runSearch' is 'driveSearch'
+-- with the goal decoded in the /calling/ session, before the fork
+-- exists, so an unknown goal constraint is a caller error and never a
+-- failed branch.
+runSearch :: String -> Value -> Chr SolutionStep -> Chr SearchOutcome
+runSearch who goalArg onSolution = do
+  goals <- goalConstraints who goalArg
+  driveSearch who goals onSolution
+
+-- | Fork a search session, tell the already-resolved goal, and drive
+-- it.
 --
 -- Returns how the search ended. 'SearchCommitted' is the one outcome
 -- that leaves the search's writes in place; on every other exit —
 -- a @stop@ step, exhaustion, or an escaping runtime error — the search
 -- is unwound to the mark taken here before returning or rethrowing. A
--- caller that catches the error (an enclosing @run_chr_session@, which
--- turns it into @false@) therefore resumes with the bindings it had,
--- the way ISO @catch\/3@ does.
-runSearch :: String -> Value -> Chr SolutionStep -> Chr SearchOutcome
-runSearch who goalArg onSolution = do
-  -- Resolved in the *calling* session, before the fork exists, so an
-  -- unknown goal constraint is a caller error and never a failed
-  -- branch.
-  goals <- goalConstraints who goalArg
+-- caller that catches the error ('hostRunChrSession', which turns it
+-- into @false@) therefore resumes with the bindings it had, the way
+-- ISO @catch\/3@ does.
+--
+-- Split from 'runSearch' so 'hostRunChrSession' can resolve the goal
+-- outside the @try@ that swallows runtime errors.
+driveSearch ::
+  String ->
+  [(Types.Name, [Value])] ->
+  Chr SolutionStep ->
+  Chr SearchOutcome
+driveSearch who goals onSolution = do
   env <- ask
   sub <- liftIO (forkSearchSessionEnv env)
   let ctx =
@@ -478,6 +536,45 @@ hostSolve :: [Value] -> Chr Value
 hostSolve [goalArg] =
   VBool . (== SearchCommitted) <$> runSearch "solve" goalArg (pure StepCommit)
 hostSolve _ = runtimeErrorS "solve: expected 1 argument"
+
+-- | @run_chr_session(Goal)@: 'hostSolve' made total.
+--
+-- Same fork, same base mark, same commit-on-first-solution — the one
+-- difference is that a runtime error escaping @Goal@ becomes @false@
+-- instead of propagating. That makes this the language's only error
+-- catcher, which is the whole reason it is a host call rather than
+-- @run_chr_session(G) -> solve(G)@ in CHR.
+--
+-- Every @false@ is fully rolled back: 'driveSearch' unwinds to its
+-- base mark before rethrowing an error and before reporting
+-- exhaustion, so a failed sub-session leaves no half-made bindings
+-- behind.
+--
+-- The cost of the one distinct behaviour is that @false@ does not
+-- distinguish a bug in the goal from a deliberate failure. That was
+-- already this call's contract, and it is bounded by the caller
+-- getting a boolean it has to test — unlike search itself, where the
+-- same conflation would silently turn a bug into a dead end.
+--
+-- Only 'RuntimeErrorThrown' is caught. A 'SearchFailure' — from
+-- @search:fail\/0@ in the goal, or from an exhausted choice point —
+-- never reaches here: 'withoutFailure' inside 'driveSearch' absorbs
+-- it into 'SearchExhausted', which is @false@ by the same rule.
+hostRunChrSession :: [Value] -> Chr Value
+hostRunChrSession [goalArg] = do
+  -- Resolved here rather than inside 'driveSearch', so that it happens
+  -- outside the 'try' below: a misspelled or unexported goal
+  -- constraint stays a loud caller error instead of being swallowed
+  -- into a @false@ result.
+  goals <- goalConstraints "run_chr_session" goalArg
+  env <- ask
+  let search = driveSearch "run_chr_session" goals (pure StepCommit)
+  outcome <- liftIO (try (runChr search env))
+  pure . VBool $ case outcome of
+    Right SearchCommitted -> True
+    Right _ -> False
+    Left (_ :: RuntimeErrorThrown) -> False
+hostRunChrSession _ = runtimeErrorS "run_chr_session: expected 1 argument"
 
 -- | @find_all(Template, Goal)@: every solution of @Goal@, as a list of
 -- copies of @Template@ in search order.

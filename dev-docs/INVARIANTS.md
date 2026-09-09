@@ -536,7 +536,7 @@ bookkeeping — constraint store, propagation history, reactivation
 queue, call stack, trace depth — and it is what the catch depends on.
 It does *not* extend to a `HostCall` in the guard. A host function
 receives the session and can bind shared logical-variable cells;
-`run_chr_session/1` (`src/YCHR/Internal/Runtime/SubSession.hs`)
+`run_chr_session/1` (`src/YCHR/Internal/Runtime/Search.hs`)
 documents doing exactly that as its result channel. Such a binding
 survives whether the guard is abandoned by `BSoftGuard` or simply
 evaluates to `False` on its own, so the catch adds no exposure the

@@ -5,11 +5,11 @@
 --
 -- Several host calls take "a goal" — a constraint term, a list of them
 -- run in order, or a @;@ disjunction of either — kept symbolic with
--- @quote\/1@, and run it in a forked session: @run_chr_session\/1@
--- ("YCHR.Internal.Runtime.SubSession") and the search entry points
--- ("YCHR.Internal.Runtime.Search"). The search driver
--- reads the alternatives of a choice point the same way. This module
--- is the decoding they share.
+-- @quote\/1@, and run it in a forked session: the search entry points
+-- and @run_chr_session\/1@, all of which live in
+-- "YCHR.Internal.Runtime.Search". The search driver reads the
+-- alternatives of a choice point the same way. This module is the
+-- decoding they share.
 --
 -- Names are resolved, and their tell procedures looked up, before the
 -- tell happens. For a caller-supplied goal that is done in the

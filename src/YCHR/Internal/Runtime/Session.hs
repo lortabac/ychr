@@ -33,7 +33,7 @@ module YCHR.Internal.Runtime.Session
     tellConstraint,
     tellResolvedConstraint,
 
-    -- * Name resolution (shared with "YCHR.Internal.Runtime.SubSession")
+    -- * Name resolution (shared with "YCHR.Internal.Runtime.Goal")
     resolveByExport,
   )
 where

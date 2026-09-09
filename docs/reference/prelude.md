@@ -461,12 +461,21 @@ has its own store, propagation history, and reactivation queue but the
 same rules, functions, and host calls; the goal's constraints are
 resolved through the program's exports, so they must be exported (an
 unknown or unexported goal constraint is a runtime error in the
-caller, not a `false` result). It returns `true` if and only if the
-sub-session runs to quiescence, and `false` otherwise — a runtime
-error, or (inside a search branch) a `search:fail/0`. Bindings the
-sub-session made before failing are not rolled back. Unbound variables
-inside the goal are shared with the sub-session, so bindings made there
-survive the call — pass fresh out-variables to read results back:
+caller, not a `false` result).
+
+It is [`solve/1`](search.md) made total. Same fork, same
+first-solution commit: a choice point the goal tells is explored, and
+the bindings of the first solution are kept. The one difference is
+that a runtime error inside the goal yields `false` instead of
+propagating, which makes this the language's only error catcher.
+
+It returns `true` if and only if the goal reaches a solution, and
+`false` otherwise — a runtime error, a `search:fail/0`, or an
+exhausted search space. Every `false` is rolled back: the bindings the
+sub-session made are undone before the call returns. Unbound variables
+inside the goal are shared with the sub-session, so bindings made
+there survive a `true` — pass fresh out-variables to read results
+back:
 
 ```prolog
 probe(N, R) <=> R is N + 1.

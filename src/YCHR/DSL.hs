@@ -164,7 +164,7 @@ import Data.Text (Text)
 import YCHR.Convert (quote)
 import YCHR.Internal.Parsed
 import YCHR.Internal.Runtime.Registry (HostCallRegistry)
-import YCHR.Internal.Runtime.SubSession (defaultHostCallRegistry)
+import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
 import YCHR.Run
   ( CompiledProgram,
     Warning,

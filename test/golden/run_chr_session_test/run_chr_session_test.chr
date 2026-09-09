@@ -1,10 +1,12 @@
 :- module(
      run_chr_session_test,
      [go/2, iso/2, err/1, nested/3, multi/3, probe/2, mid/2, c/1, boom/1,
-      empty_goals/1, unknown_goal/1, bad_goal/1, type(verdict/0)]
+      empty_goals/1, unknown_goal/1, bad_goal/1, rollback/2,
+      bind_then_boom/1, choice/2, pick/1, check/1, type(verdict/0)]
    ).
 
 :- use_module(library(meta)).
+:- use_module(library(search)).
 
 :- chr_type verdict ---> clean ; leaked.
 
@@ -49,3 +51,18 @@ unknown_goal(Ok) <=> Ok is run_chr_session(quote(probee(1, _))).
 % A goal that is not a constraint term at all is rejected outright.
 :- chr_constraint bad_goal(bool).
 bad_goal(Ok) <=> Ok is run_chr_session(quote(42)).
+
+% A false result is rolled back: the goal binds X before erroring, and
+% X comes back unbound.
+:- chr_constraint rollback(bool, any), bind_then_boom(any).
+bind_then_boom(X) <=> X = 1, boom(_).
+rollback(Ok, X) <=> Ok is run_chr_session(quote(bind_then_boom(X))).
+
+% Choice points in the goal are explored, like solve/1: the first
+% alternative fails, so the search backtracks and the second solution
+% is the one committed.
+:- chr_constraint choice(bool, any), pick(any), check(any).
+pick(X) <=> choose(X, [1, 2]), check(X).
+check(1) <=> fail.
+check(2) <=> true.
+choice(Ok, X) <=> Ok is run_chr_session(quote(pick(X))).

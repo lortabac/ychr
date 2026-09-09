@@ -100,7 +100,7 @@ import YCHR.Internal.Parsed (Module)
 import YCHR.Internal.Runtime.Error (instantiationErrorS, runtimeErrorS)
 import YCHR.Internal.Runtime.Monad (Chr)
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), HostCallRegistry, baseHostCallRegistry)
-import YCHR.Internal.Runtime.SubSession (defaultHostCallRegistry)
+import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
 import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.VM qualified as VM
 import YCHR.Run

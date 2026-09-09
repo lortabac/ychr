@@ -246,8 +246,8 @@ pushFrame frame = do
 --     only one where the restore is load-bearing.
 --   * @YCHR.Run.convertRuntimeErrorChr@ restores at the query
 --     boundary, as defence in depth — see its own note.
---   * @YCHR.Internal.Runtime.SubSession.runChrSession@ needs nothing:
---     the forked session has its own @callStack@ ref.
+--   * @YCHR.Internal.Runtime.Search.hostRunChrSession@ needs
+--     nothing: the forked session has its own @callStack@ ref.
 --
 -- Everywhere else a caught runtime error ends the session outright.
 -- An asynchronous exception may leave frames behind, but the
@@ -290,8 +290,8 @@ only sound because of three properties of that position:
     leaves nothing that would block the retry after reactivation.
 
 'run_chr_session' keeps its own, wider boundary: it runs an isolated
-sub-session and maps every failure to 'False'. That is unrelated to
-this catch and unaffected by it.
+sub-session and maps every failure to 'False', rolling the sub-session
+back as it does. That is unrelated to this catch and unaffected by it.
 -}
 
 -- | Evaluate a boolean action under a soft-failure boundary: an

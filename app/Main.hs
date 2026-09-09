@@ -16,7 +16,7 @@ import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Pretty (prettyBindings)
 import YCHR.Internal.Repl qualified as Repl
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry)
-import YCHR.Internal.Runtime.SubSession (defaultHostCallRegistry)
+import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Internal.VM.SExpr (VMProgram (..), serialize)
 import YCHR.Run

@@ -23,9 +23,11 @@ discard everything it did and try the next one. The type checker's
 resolution of overloaded signatures hand-rolled exactly that, one
 throwaway sub-session (`run_chr_session/1`) per candidate signature,
 with no way to undo a binding it made; it is written over `solve/1`
-now. One possible further use is a finite-domain solver: propagate to
-quiescence, label one variable, propagate again, backtrack on
-failure.
+now, and `run_chr_session/1` is itself the search driver these days
+(see [`run_chr_session/1` is `solve/1` made
+total](#run_chr_session1-is-solve1-made-total)). One possible further
+use is a finite-domain solver: propagate to quiescence, label one
+variable, propagate again, backtrack on failure.
 
 **Availability.** Haskell interpreter only. The Scheme backend does
 not implement the search host calls; a program that uses them fails to
@@ -49,6 +51,7 @@ Search is built from these pieces:
 | `fold_solutions/4` | function | Folds a function over the solutions, in search order, with early exit. |
 | `forall/3` | function | Derived from `fold_solutions`: does every solution satisfy a predicate? |
 | `find_n/3` | function | Derived from `fold_solutions`: the first *N* solutions. Terminates on an infinite space. |
+| `run_chr_session/1` | function, in `library(meta)` | `solve/1` made total: a runtime error in the goal is `false` rather than propagating. |
 
 The execution model is *choice at quiescence* (labeling), not
 continuation capture:
@@ -105,12 +108,13 @@ defined in the library itself.
 
 ## Scope: search runs in a sub-session
 
-`solve(quote(Goal))`, `find_all(Template, quote(Goal))` and
-`fold_solutions(Template, quote(Goal), F, Acc0)` run `Goal` in a
-**fresh session of the current program** — its own constraint store,
-propagation history, reactivation queue, and call stack, with the same
-rules, functions, host calls, and exports. This is exactly
-`run_chr_session/1`'s fork, and it inherits that model verbatim:
+`solve(quote(Goal))`, `find_all(Template, quote(Goal))`,
+`fold_solutions(Template, quote(Goal), F, Acc0)` and
+`run_chr_session(quote(Goal))` run `Goal` in a **fresh session of the
+current program** — its own constraint store, propagation history,
+reactivation queue, and call stack, with the same rules, functions,
+host calls, and exports. There is one fork, shared by every entry
+point:
 
 - **The caller's store is not searched.** Constraints already stored
   in the calling session are invisible to the goal, and constraints
@@ -351,7 +355,9 @@ expression.
 
 Calling `fail` when **no search is active** is a runtime error
 (`YCHR-60001`, message `fail/0 outside a search`) — loud, not silent
-success and not a stuck query.
+success and not a stuck query. A `run_chr_session/1` goal counts as a
+search, so `fail/0` inside one fails that sub-session's branch and is
+reported as `false`.
 
 ### Runtime errors propagate
 
@@ -360,7 +366,9 @@ failing body unification, no matching equation — is **not** a branch
 failure. It unwinds out of the search entirely and reaches the caller
 unchanged. This is deliberately *unlike* `run_chr_session/1`, which
 maps every error to `false`: conflating a bug with a dead end is
-exactly what makes generate-and-test programs undebuggable.
+exactly what makes generate-and-test programs undebuggable, so the
+total variant is a separate entry point rather than a flag on this
+one.
 
 Bindings are still rolled back to the search's base mark before the
 error propagates (ISO `catch/3`-style rollback), so a caller that
@@ -416,30 +424,29 @@ search** is the same error as calling `fail/0` outside a search. The
 message names `fail/0` rather than `try_unify/2`; the call stack on
 the error identifies the rule.
 
-### Interaction with `run_chr_session/1`
+### `run_chr_session/1` is `solve/1` made total
 
-A branch failure is **contained** by a `run_chr_session/1` boundary:
-the sub-session returns `false`, and the enclosing search branch
-carries on. Failure does not escape a sub-session any more than a
-runtime error does.
+`run_chr_session/1` (in `library(meta)`, spelled out in
+[the prelude reference](prelude.md)) is the same driver as `solve/1`:
+same fork, same base mark, same commit on the first solution. A choice
+point the goal tells is explored exactly as it would be under
+`solve/1`, and the first solution's bindings are kept.
 
-This makes `run_chr_session`'s contract total, and simpler than it was
-before search existed: it returns **`true` if and only if the goal ran
-to quiescence**, and `false` otherwise — runtime error or branch
-failure alike. For a program that never uses search the behaviour is
-unchanged, since a branch failure cannot arise without one.
+The one difference is at the top of this section: a runtime error
+raised inside the goal becomes `false` instead of propagating. That
+makes `run_chr_session/1` the language's only error catcher, and is
+why it is a host call rather than one line of CHR — there is no catch
+form to write it with.
 
-The cost is that `false` no longer distinguishes "the goal hit a bug"
-from "the goal deliberately failed". That is the conflation
-`run_chr_session` already made for errors, and it is bounded here in a
-way it is not for search itself: the caller gets a boolean it must
-test, rather than a computation that silently continues.
+It is therefore **total**: `true` if and only if the goal reaches a
+solution, and `false` otherwise — runtime error, branch failure, or
+exhausted search space alike. Every `false` unwinds to the base mark,
+so a failed sub-session leaves no bindings behind.
 
-Bindings the sub-session made before failing are **not** rolled back,
-exactly as they are not when it errors. `run_chr_session` has no
-choice point and takes no mark; a caller that needs the bindings
-undone should run the sub-session inside a search branch, where the
-enclosing driver's marks cover it.
+The cost is that `false` does not distinguish "the goal hit a bug"
+from "the goal deliberately failed". That is bounded in a way it is
+not for search itself: the caller gets a boolean it must test, rather
+than a computation that silently continues.
 
 
 ## Commit and undo
@@ -478,12 +485,11 @@ alternative would run against contaminated state.
 
 The rules:
 
-- **Fork inheritance.** A search fork installs a fresh trail only when
-  there is no trail already; otherwise it shares the enclosing one.
-  A plain `run_chr_session/1` fork inherits the field as it is — so a
-  sub-session's writes to shared variables, made inside a search
-  branch, are undone when that branch is undone. At the top level
-  there is no trail and nothing is recorded.
+- **Fork inheritance.** A fork installs a fresh trail only when there
+  is no trail already; otherwise it shares the enclosing one. So a
+  sub-session's writes to shared variables, made inside an enclosing
+  search branch, are undone when that branch is undone. Outside every
+  entry point there is no trail and nothing is recorded.
 - **Marks delimit undo, not forks.** The driver takes a *base mark* on
   entry and a mark per alternative. A failed branch unwinds to that
   alternative's mark. Exhaustion, and any ending that does not commit,
@@ -509,6 +515,10 @@ unwound to the base mark and `solve` returns `false`.
 `solve` is itself running inside a search branch, its trail entries
 remain on the shared trail and are undone if *that* branch is later
 abandoned.
+
+`run_chr_session/1` is this entry point with a runtime-error catch
+around it; see [`run_chr_session/1` is `solve/1` made
+total](#run_chr_session1-is-solve1-made-total).
 
 ### `find_all/2`
 
@@ -689,7 +699,8 @@ the one shared trail:
   leaving the outer branch's state alone;
 - an inner **error** unwinds to the inner base mark and then keeps
   propagating outward, unwinding each enclosing driver to *its* base
-  mark in turn.
+  mark in turn — until it reaches a `run_chr_session/1`, which stops
+  it and reports `false`.
 
 `alt/1` constraints belong to the store of the session that told them,
 so an inner search never sees an outer search's pending choices.
@@ -785,6 +796,9 @@ backtracked out of:
 | `more solutions wanted` | A solution was reached and the caller asked to keep going. This is `find_all`'s normal mode, and is *not* a failure. |
 
 `end search` reports `(committed)`, `(stopped)` or `(exhausted)`.
+The label after `search` is the entry point, so a
+`run_chr_session/1` call traces as `search run_chr_session` and
+`end search run_chr_session` like any other.
 
 
 ## Worked example
