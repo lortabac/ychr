@@ -4,8 +4,8 @@
 
 New: opt-in search, `library(search)`. Explore alternative bindings and
 undo the ones that do not work out. Nothing here affects a program that
-does not import it, and there are no VM changes; the Haskell runtime is
-the only backend that implements it. See the
+does not import it, and there are no new VM instructions; the Haskell
+runtime is the only backend that implements it. See the
 [search specification](docs/reference/search.md).
 
 - The primitive is `alt/1`, an ordinary CHR constraint with no rules.
@@ -35,6 +35,27 @@ the only backend that implements it. See the
 - A `quote/1` argument in a *tell* position may now introduce a fresh
   variable, as an `=` operand may. An unbound name in an `is`
   right-hand side or a call argument is still `YCHR-40002`.
+- The type checker's resolution of overloaded class-function
+  signatures now runs on this library — one `solve/1` per equation
+  over a `;` chain of attempts — instead of one throwaway
+  `run_chr_session/1` fork per candidate signature. Verdicts are
+  unchanged. One difference in kind: a runtime error inside an
+  attempt now aborts the check and surfaces as that error, rather
+  than reading as one more signature that did not fit.
+
+VM program header: a new optional `inert-types` entry lists the
+constraint types whose activation runs no occurrence procedure
+(no occurrences, or only passive ones). A runtime may skip registering
+such a constraint as an observer of the variables in its arguments;
+honoring the entry changes no result, only the reactivation traffic.
+The Haskell runtime honors it, the Scheme backend ignores it. A
+program serialized before the entry existed still reads, declaring no
+inert type. See the [VM specification](docs/reference/vm.md).
+
+- This, together with an enqueue-time liveness filter on observers
+  and a per-branch cursor in the search driver, makes a search path
+  linear in its depth where it was quadratic: a path of ten thousand
+  choice points went from about 15 s to under 0.2 s.
 
 Soundness fix: `GuardEqual` evidence (the fact a shared head variable
 contributes) no longer treats value equality as full type equality. A
