@@ -59,7 +59,7 @@ import YCHR.Internal.Display
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning (..))
 import YCHR.Internal.Parser (ParseValidationError (..))
 import YCHR.Internal.Rename (RenameError (..), RenameWarning (..))
-import YCHR.Internal.Resolve (ResolveError (..))
+import YCHR.Internal.Resolve (RefiningViolation (..), ResolveError (..))
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.TypeCheck (TypeCheckError (..))
 import YCHR.Internal.Types (Name, Term)
@@ -92,6 +92,8 @@ deriving instance Data CollectError
 deriving instance Data ParseValidationError
 
 deriving instance Data ResolveError
+
+deriving instance Data RefiningViolation
 
 deriving instance Data RenameError
 

@@ -421,6 +421,7 @@ desugarFunctionDef fdef = do
         arity = fdef.arity,
         signatures = fdef.signatures,
         requiring = fdef.requiring,
+        refining = fdef.refining,
         equations = AnnP desugaredEqs loc parsed
       }
 
@@ -766,6 +767,7 @@ liftExpr modName scope st0 expr = case expr of
               arity = length allParams,
               signatures = [],
               requiring = [],
+              refining = Nothing,
               equations =
                 noAnnP
                   [ D.Equation

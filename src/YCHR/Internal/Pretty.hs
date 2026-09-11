@@ -338,6 +338,13 @@ prettyRequiring :: [BoundSig] -> String
 prettyRequiring [] = ""
 prettyRequiring bs = " requiring " ++ intercalate ", " (map prettyBoundSig bs)
 
+-- | Render a refinement type as the @refining T@ trailer (no leading
+-- space, no trailing period). 'Nothing' renders as the empty string so
+-- callers can append unconditionally.
+prettyRefining :: Maybe TypeExpr -> String
+prettyRefining Nothing = ""
+prettyRefining (Just t) = " refining " ++ prettyTypeExpr t
+
 -- | Render a @:- chr_constraint@ declaration. The base name (not the
 -- qualified form) is used inside the declaration body, matching the
 -- surface syntax users write. Untyped constraints use the @name/arity@
@@ -362,18 +369,22 @@ prettyConstraintDecl qn arity mArgTys bounds = case mArgTys of
 -- per-line layout used in @libraries\/prelude.chr@. A @requiring@ clause
 -- is only emitted for function-flavored kinds; it is rejected on
 -- classes by the parser, so a non-empty bound list there is silently
--- dropped.
+-- dropped. A @refining@ clause is only valid on a closed
+-- single-signature @:- function@, which is the only place it is
+-- emitted.
 prettyFunctionDecl ::
   QualifiedName ->
   Int ->
   [([TypeExpr], TypeExpr)] ->
   [BoundSig] ->
+  Maybe TypeExpr ->
   DeclKind ->
   String
-prettyFunctionDecl qn arity sigs bounds kind =
+prettyFunctionDecl qn arity sigs bounds refined kind =
   let keyword = declKindKeyword kind
       isFunction = kind == DKFunction || kind == DKOpenFunction
       reqStr = if isFunction then prettyRequiring bounds else ""
+      refStr = if kind == DKFunction then prettyRefining refined else ""
    in case sigs of
         [] ->
           -- An unsignatured function declaration falls back to the
@@ -381,7 +392,13 @@ prettyFunctionDecl qn arity sigs bounds kind =
           -- the resolver but is handled here so the printer is total.
           ":- " ++ keyword ++ " " ++ renderAtom qn.baseName ++ "/" ++ show arity ++ "."
         [(argTys, retTy)] ->
-          ":- " ++ keyword ++ " " ++ prettyFunSig qn.baseName argTys retTy ++ reqStr ++ "."
+          ":- "
+            ++ keyword
+            ++ " "
+            ++ prettyFunSig qn.baseName argTys retTy
+            ++ reqStr
+            ++ refStr
+            ++ "."
         _ ->
           let oneSig (argTys, retTy) = "    (" ++ prettyFunSig qn.baseName argTys retTy ++ ")"
            in ":- " ++ keyword ++ "\n" ++ intercalate ",\n" (map oneSig sigs) ++ reqStr ++ "."

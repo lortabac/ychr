@@ -254,6 +254,18 @@ cross-module counterparts. `requiring` is allowed on `:- function`,
 (YCHR-15005). Overloading rules:
 [type-system.md](type-system.md#signature-overloading).
 
+### Refinement predicates
+
+A closed `:- function` with the signature `name(any) -> bool` may
+carry a `refining` clause naming the type a successful call proves of
+its argument, as in `:- function is_list(any) -> bool refining
+list(A)`. A guard calling it on a bare variable then types that
+variable. The clause is an axiom the checker trusts. On any other
+function-like declaration it is YCHR-16021, on a `:- chr_constraint`
+YCHR-15020, and combining it with `requiring` does not parse.
+Rules and rationale:
+[type-system.md](type-system.md#refinement-predicates).
+
 ### Declaration placement
 
 All declarations of one name live in one module, and the declaration
@@ -617,8 +629,8 @@ B = true.
 ```
 
 The operator table is a built-in core (the directive keywords, `=`,
-`is`, the rule operators, `requiring`, …) plus the prelude's `op/3`
-exports. `:list_operators` in the REPL prints it.
+`is`, the rule operators, `requiring`, `refining`, …) plus the
+prelude's `op/3` exports. `:list_operators` in the REPL prints it.
 
 ## Lambdas and function references
 

@@ -1,0 +1,3 @@
+YCHR-15020
+'refining' is not allowed on ':- chr_constraint'
+only a function can be a refinement predicate

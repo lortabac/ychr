@@ -94,13 +94,18 @@ builtinOps =
       (1105, [(P.Xfy, "|")]),
       (1110, [(P.Xfy, "->")]),
       (1100, [(P.Xfy, ";"), (P.Xfx, "\\")]),
-      -- Bounded polymorphism: @sig requiring bound1, bound2, ...@.
-      -- Looser than @->@ (1110) so the bound clause sits outside the
+      -- Bounded polymorphism: @sig requiring bound1, bound2, ...@,
+      -- and refinement predicates: @sig refining type@.
+      -- Looser than @->@ (1110) so the clause sits outside the
       -- signature's arrow, tighter than the directive prefix at 1180
-      -- so a @requiring@ clause stays inside the @:- function@ arg.
+      -- so the clause stays inside the @:- function@ arg.
       -- Comma (1000) is also tighter, so the bound list on the right
       -- is a comma chain consumed as a single argument here.
-      (1140, [(P.Xfx, "requiring")]),
+      -- Both are @xfx@ at the /same/ priority, so they cannot chain:
+      -- @sig requiring B refining T@ (and the reverse) is a syntax
+      -- error, which is how the two clauses are kept mutually
+      -- exclusive without a dedicated check.
+      (1140, [(P.Xfx, "requiring"), (P.Xfx, "refining")]),
       (1150, [(P.Xfx, "--->")]),
       (1180, [(P.Xfx, "<=>"), (P.Xfx, "==>")]),
       ( 1180,
@@ -640,6 +645,10 @@ data ParseValidationError
     -- extension cannot introduce them. Carries the extension target's
     -- name.
     RequiringOnExtendClassType Text
+  | -- | A @refining@ clause appears on a @:- chr_constraint@
+    -- declaration. Only a function can be a refinement predicate. The
+    -- declaration is dropped.
+    RefiningOnConstraint
   deriving (Eq, Show)
 
 -- | Convert a list of top-level PExpr terms to a 'Module', along with
@@ -961,6 +970,7 @@ convertExportItem (Ann pexpr loc) = case pexpr of
             False
             DKFunction
             Nothing
+            Nothing
         ),
       []
     )
@@ -1019,6 +1029,13 @@ convertConstraintDecl (Ann pexpr loc) = case pexpr of
   -- Untyped: name/arity
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
     (Just (Ann (ConstraintDecl name (fromInteger arity) Nothing Nothing) loc), [])
+  -- @refining@ is an operator word, so @c(any) refining int@ parses as
+  -- a compound named @refining@ at arity 2 — indistinguishable from a
+  -- constraint literally named @refining@ with two arguments. Only a
+  -- function can be a refinement predicate, so the shape is rejected
+  -- before the generic arm below, which would otherwise declare it.
+  -- Any other arity cannot come from the operator and is left alone.
+  Compound "refining" [_, _] -> (Nothing, [AnnP RefiningOnConstraint loc pexpr])
   -- Typed: name(type, ...)
   Compound name args -> case partitionEithers (map convertTypeExpr args) of
     ([], argTypes) ->
@@ -1110,69 +1127,54 @@ convertFunctionDeclWith ::
   (Maybe (Ann Declaration), [AnnP ParseValidationError])
 convertFunctionDeclWith open kind (Ann pexpr loc) = case pexpr of
   -- @name(types) -> ret requiring bound, ...@
-  Compound "requiring" [sig, bounds] -> case sig.node of
-    Compound "->" [Ann (Compound name args) _, ret] ->
-      let (argErrs, argTypes) = partitionEithers (map convertTypeExpr args)
-          retResult = convertTypeExpr ret
-          (boundErrs, bs) =
-            partitionEithers (map convertBoundSig (flattenComma bounds))
-       in case (argErrs, retResult, boundErrs) of
-            ([], Right retType, []) ->
-              ( Just
-                  ( Ann
-                      ( FunctionDecl
-                          name
-                          (length args)
-                          (Just argTypes)
-                          (Just retType)
-                          open
-                          kind
-                          (Just bs)
-                      )
-                      loc
-                  ),
-                []
+  Compound "requiring" [sig, bounds] ->
+    let (boundErrs, bs) =
+          partitionEithers (map convertBoundSig (flattenComma bounds))
+     in case typedCore sig of
+          Left errs -> (Nothing, errs ++ boundErrs)
+          Right mk
+            | null boundErrs -> (Just (Ann (mk (Just bs) Nothing) loc), [])
+            | otherwise -> (Nothing, boundErrs)
+  -- @name(any) -> bool refining type@. The untyped core is accepted
+  -- here so that Resolve can reject it as an invalid @refining@ clause
+  -- (YCHR-16021) rather than a bare syntax error.
+  Compound "refining" [core, ty] ->
+    let tyResult = convertTypeExpr ty
+     in case (anyCore core, tyResult) of
+          (Left errs, _) -> (Nothing, errs ++ leftToList tyResult)
+          (Right _, Left err) -> (Nothing, [err])
+          (Right mk, Right t) -> (Just (Ann (mk Nothing (Just t)) loc), [])
+  _ -> case anyCore (Ann pexpr loc) of
+    Left errs -> (Nothing, errs)
+    Right mk -> (Just (Ann (mk Nothing Nothing) loc), [])
+  where
+    malformed = [AnnP MalformedDeclaration loc pexpr]
+
+    -- The typed spelling @name(type, ...) -> type@, partially applied
+    -- up to the two optional trailing clauses.
+    typedCore sig = case sig.node of
+      Compound "->" [Ann (Compound name args) _, ret] ->
+        case ( partitionEithers (map convertTypeExpr args),
+               convertTypeExpr ret
+             ) of
+          (([], argTypes), Right retType) ->
+            Right
+              ( FunctionDecl
+                  name
+                  (length args)
+                  (Just argTypes)
+                  (Just retType)
+                  open
+                  kind
               )
-            _ -> (Nothing, argErrs ++ leftToList retResult ++ boundErrs)
-    _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
-  -- Untyped: name/arity
-  Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    ( Just
-        ( Ann
-            ( FunctionDecl
-                name
-                (fromInteger arity)
-                Nothing
-                Nothing
-                open
-                kind
-                Nothing
-            )
-            loc
-        ),
-      []
-    )
-  -- Typed: name(type, ...) -> type
-  Compound "->" [Ann (Compound name args) _, ret] ->
-    case (partitionEithers (map convertTypeExpr args), convertTypeExpr ret) of
-      (([], argTypes), Right retType) ->
-        ( Just
-            ( Ann
-                ( FunctionDecl
-                    name
-                    (length args)
-                    (Just argTypes)
-                    (Just retType)
-                    open
-                    kind
-                    Nothing
-                )
-                loc
-            ),
-          []
-        )
-      ((argErrs, _), retE) -> (Nothing, argErrs ++ leftToList retE)
-  _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
+          ((argErrs, _), retE) -> Left (argErrs ++ leftToList retE)
+      _ -> Left malformed
+
+    -- Either spelling: the untyped @name/arity@ or the typed one.
+    anyCore core = case core.node of
+      Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
+        Right (FunctionDecl name (fromInteger arity) Nothing Nothing open kind)
+      _ -> typedCore core
 
 -- | Lift a single 'Left' into a singleton list of errors, dropping the
 -- 'Right' case. Used when threading 'Either'-based sub-conversion

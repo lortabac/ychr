@@ -1,0 +1,10 @@
+:- module(refining_with_requiring, []).
+
+:- use_module(library(prelude)).
+
+% `requiring` and `refining` are both xfx operators at the same
+% priority, so they cannot chain: writing both on one signature is a
+% syntax error rather than a dedicated check. The reverse order fails
+% the same way.
+:- function pred(any) -> bool requiring '>='(A, A) -> bool refining int.
+pred(_) -> true.

@@ -3,7 +3,7 @@
 :- use_module(library(prelude)).
 
 % The `boolean/1` twin of `typecheck_evidence_dead_rule`. It is the one
-% type-predicate whose fact is not a base-type atom but the encoded
+% refinement predicate whose fact is not a base-type atom but the encoded
 % type constructor `prelude:bool`, so it is the one whose payload can
 % be spelled wrongly. The only other program that exercises it is a
 % *function equation*, which the all-CHR checker does not walk yet, so

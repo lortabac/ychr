@@ -681,7 +681,7 @@ validateImportLists mods ctx =
     checkItem mn loc origin (ConstraintDecl n a _ _) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
-    checkItem mn loc origin (FunctionDecl n a _ _ _ _ _) =
+    checkItem mn loc origin (FunctionDecl n a _ _ _ _ _ _) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
     checkItem _ _ _ ExtendClassTypeDecl {} = pure ()
@@ -1231,7 +1231,7 @@ importListPermits _ _ Nothing = True
 importListPermits n arity (Just decls) = any match decls
   where
     match (ConstraintDecl dn da _ _) = dn == n && da == arity
-    match (FunctionDecl dn da _ _ _ _ _) = dn == n && da == arity
+    match (FunctionDecl dn da _ _ _ _ _ _) = dn == n && da == arity
     match _ = False
 
 -- | Check whether a type name/arity is permitted by an import list.
@@ -1371,7 +1371,7 @@ renameDeclaration ctx loc (ConstraintDecl n a argTypes requiring) = do
 renameDeclaration
   ctx
   loc
-  (FunctionDecl n a argTypes returnType isOpen kind requiring) = do
+  (FunctionDecl n a argTypes returnType isOpen kind requiring refining) = do
     requiring' <- traverse (traverse (renameBoundSig ctx loc)) requiring
     pure
       FunctionDecl
@@ -1381,7 +1381,8 @@ renameDeclaration
           returnType = fmap (renameTypeExpr ctx) returnType,
           isOpen = isOpen,
           kind = kind,
-          requiring = requiring'
+          requiring = requiring',
+          refining = fmap (renameTypeExpr ctx) refining
         }
 renameDeclaration ctx loc d@ExtendClassTypeDecl {name, arity, argTypes, returnType} = do
   resolved <- resolveName ResolveTop ctx loc (Atom name) (Unqualified name) arity

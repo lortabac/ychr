@@ -757,7 +757,8 @@ lambdaLiftTests =
                     returnType = Nothing,
                     isOpen = False,
                     kind = DKFunction,
-                    requiring = Nothing
+                    requiring = Nothing,
+                    refining = Nothing
                   }
             funEq =
               noAnnP
@@ -795,7 +796,9 @@ lambdaLiftTests =
                   TextTerm "world"
                 ]
             funDecl =
-              Ann (FunctionDecl "f" 1 Nothing Nothing False DKFunction Nothing) dummyLoc
+              Ann
+                (FunctionDecl "f" 1 Nothing Nothing False DKFunction Nothing Nothing)
+                dummyLoc
             funEq =
               AnnP
                 FunctionEquation

@@ -1,0 +1,2 @@
+YCHR-16021
+Invalid 'refining' clause on 'refining_invalid:binary_pred': a refinement predicate must be unary, but this one has arity 2

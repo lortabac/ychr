@@ -219,8 +219,20 @@
 
 % A whole desugared program, `YCHR.Internal.Desugared.Program`. The two
 % `Map ConstraintKey _` fields arrive as assoc lists sorted by key.
+%
+% The last field is the program's refinement predicates: the declared
+% refined type of every function carrying a `refining` clause, keyed by
+% the function's name. A `refining` clause is unary-only, so the name
+% alone identifies the declaration and no arity is needed.
+%
+% It is a side table rather than a sixth `fun_def` field on purpose:
+% `program` has five pattern sites across this directory and `fun_def`
+% has sixteen, and the environment passes the list through without
+% walking it. The cost is the name-only key, whose soundness rests on
+% the unary-only rule `Resolve` enforces.
 :- chr_type program ---> program(list(rule),
                                  list(fun_def),
                                  list(pair(con_key, list(ty_expr))),
                                  list(pair(con_key, list(bound_sig))),
-                                 list(type_def)).
+                                 list(type_def),
+                                 list(pair(any, ty_expr))).

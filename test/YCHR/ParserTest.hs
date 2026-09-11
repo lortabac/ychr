@@ -213,6 +213,21 @@ directiveTests =
                 False
                 DKFunction
                 Nothing
+                Nothing
+            ],
+      testCase "function typed with refining" $
+        (map (.node) . (.decls))
+          <$> p ":- function integer(any) -> bool refining int."
+          @?= Right
+            [ FunctionDecl
+                "integer"
+                1
+                (Just [TypeCon (Unqualified "any") []])
+                (Just (TypeCon (Unqualified "bool") []))
+                False
+                DKFunction
+                Nothing
+                (Just (TypeCon (Unqualified "int") []))
             ],
       testCase "function typed multiple args" $
         (map (.node) . (.decls)) <$> p ":- function add(int, int) -> int."
@@ -225,10 +240,12 @@ directiveTests =
                 False
                 DKFunction
                 Nothing
+                Nothing
             ],
       testCase "function untyped" $
         (map (.node) . (.decls)) <$> p ":- function foo/2."
-          @?= Right [FunctionDecl "foo" 2 Nothing Nothing False DKFunction Nothing]
+          @?= Right
+            [FunctionDecl "foo" 2 Nothing Nothing False DKFunction Nothing Nothing]
     ]
 
 -- ---------------------------------------------------------------------------

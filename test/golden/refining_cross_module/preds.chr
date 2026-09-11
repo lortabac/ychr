@@ -1,0 +1,8 @@
+:- module(preds, [fun is_list/1]).
+
+:- use_module(library(prelude)).
+
+:- function is_list(any) -> bool refining list(A).
+is_list([]) -> true.
+is_list([_|_]) -> true.
+is_list(_) -> false.

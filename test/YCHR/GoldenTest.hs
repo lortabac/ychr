@@ -83,6 +83,7 @@ expectsWarnings =
       -- nothing; the warnings themselves are asserted by
       -- @test/typecheck/test_typecheck.py@ (rendered text, per
       -- directory) and by "YCHR.TypeCheckTest" (payloads).
+      "refining_user_dead_rule",
       "typecheck_evidence_bool_rule",
       "typecheck_evidence_dead_rule",
       "typecheck_list_pattern_dead",

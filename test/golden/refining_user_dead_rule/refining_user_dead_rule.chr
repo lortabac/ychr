@@ -1,0 +1,22 @@
+:- module(refining_user_dead_rule, [tag/2, type(color/0)]).
+
+:- use_module(library(prelude)).
+
+% `typecheck_evidence_dead_rule` with the prelude's `integer/1` replaced
+% by a user-declared refinement predicate: the inaccessible-branch
+% warning (YCHR-20104) is reached through the declaration, not through
+% a name the checker knows. `X` is typed `color`, the guard's fact says
+% `type(X) = list(A)`, and no color-typed value is a list — so the
+% `dead` rule can never fire, the program still compiles, and
+% `fallback` is what runs.
+:- chr_type color ---> red ; green ; blue.
+
+:- function is_list(any) -> bool refining list(A).
+is_list([]) -> true.
+is_list([_|_]) -> true.
+is_list(_) -> false.
+
+:- chr_constraint tag(color, int).
+
+dead @ tag(X, R) <=> is_list(X) | R = 1.
+fallback @ tag(_, R) <=> R = 0.

@@ -1,0 +1,24 @@
+:- module(refining_user_predicate, [run/2]).
+
+:- use_module(library(prelude)).
+:- use_module(library(lists)).
+
+% A user-declared refinement predicate. The `refining` clause is an
+% axiom: the checker never inspects the equations below, it only takes
+% the declaration's word that a successful call proves its argument is
+% a list.
+:- function is_list(any) -> bool refining list(A).
+is_list([]) -> true.
+is_list([_|_]) -> true.
+is_list(_) -> false.
+
+% `T` is rigid at this equation, so `length(X)` would be rejected
+% without the guard's fact — which pins `T` to `list(B)` at a fresh
+% flexible `B`, exactly as the prelude's `integer/1` pins `int`.
+:- function size(T) -> int.
+size(X) | is_list(X) -> length(X).
+size(_) -> 1.
+
+:- chr_constraint run(any, int).
+
+run(V, R) <=> R is size(V).

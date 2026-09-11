@@ -1,0 +1,2 @@
+YCHR-16021
+Invalid 'refining' clause on 'refining_invalid:ret_pred': the return type must be 'bool'

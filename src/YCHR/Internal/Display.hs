@@ -50,7 +50,7 @@ import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Parser (ParseValidationError (..))
 import YCHR.Internal.Pretty (prettyPExprSrc, prettyTermSrc)
 import YCHR.Internal.Rename (RenameError (..), RenameWarning (..))
-import YCHR.Internal.Resolve (ResolveError (..))
+import YCHR.Internal.Resolve (RefiningViolation (..), ResolveError (..))
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.TypeCheck (TypeCheckError (..), TypeCheckWarning (..))
 import YCHR.Internal.Types qualified as Types
@@ -208,6 +208,7 @@ parseValidationErrorCode MalformedTopLevel = ErrorCode 15014
 parseValidationErrorCode (DuplicateModuleHeader _) = ErrorCode 15015
 parseValidationErrorCode InvalidTypeParameter = ErrorCode 15018
 parseValidationErrorCode (DuplicateTypeParameter _) = ErrorCode 15019
+parseValidationErrorCode RefiningOnConstraint = ErrorCode 15020
 
 -- | 16xxx — resolve phase (post-rename, pre-desugar)
 resolveErrorCode :: ResolveError -> ErrorCode
@@ -232,6 +233,7 @@ resolveErrorCode (ExtendClassOnFunction _) = ErrorCode 16014
 resolveErrorCode (ExtendFunctionOnClass _) = ErrorCode 16015
 resolveErrorCode (ConstraintFunctionCollision _) = ErrorCode 16016
 resolveErrorCode (ConstructorFunctionCollision _) = ErrorCode 16020
+resolveErrorCode (InvalidRefining _ _) = ErrorCode 16021
 resolveErrorCode (LambdaParamError _) = ErrorCode 16017
 resolveErrorCode EmptyLambdaParams = ErrorCode 16018
 
@@ -378,10 +380,18 @@ parseValidationErrorMsg (RequiringOnExtendClassType name) =
         ++ "')"
     )
     "bounds belong to the original declaration; an extension cannot introduce them"
+parseValidationErrorMsg RefiningOnConstraint =
+  withHint
+    "'refining' is not allowed on ':- chr_constraint'"
+    ( "only a function can be a refinement predicate; declare it with"
+        ++ " ':- function name(any) -> bool refining type'"
+    )
 parseValidationErrorMsg MalformedDeclaration =
   withHint
     "Invalid declaration"
-    "expected name/arity, name(types) -> ret, or sig requiring bounds"
+    ( "expected name/arity, name(types) -> ret, sig requiring bounds,"
+        ++ " or sig refining type"
+    )
 parseValidationErrorMsg MalformedExportItem =
   withHint
     "Invalid export/import list item"
@@ -514,6 +524,18 @@ resolveErrorMsg (UnboundBoundVariable declName var) =
     ( "every variable in 'requiring' must also appear in the"
         ++ " declaration's argument or return types"
     )
+resolveErrorMsg (InvalidRefining declName violation) =
+  withHint
+    ( "Invalid 'refining' clause on '"
+        ++ T.unpack declName
+        ++ "': "
+        ++ refiningViolationMsg violation
+    )
+    ( "'refining' is allowed only on a closed ':- function' with a single"
+        ++ " typed signature 'name(any) -> bool', and the refined type must"
+        ++ " be a base type or a type constructor applied to distinct type"
+        ++ " variables"
+    )
 resolveErrorMsg (UnknownBoundFunction declName boundName arity) =
   withHint
     ( "'"
@@ -602,6 +624,39 @@ resolveErrorMsg (ConstructorFunctionCollision name) =
     ( "qualifying cannot tell them apart inside one module; rename one of"
         ++ " them (arity does not separate them either)"
     )
+
+-- | The specific problem with a 'refining' clause, as a sentence
+-- fragment following the declaration's name.
+refiningViolationMsg :: RefiningViolation -> String
+refiningViolationMsg RefiningOnClass =
+  "':- class' and ':- open_class' cannot carry one"
+refiningViolationMsg RefiningOnOpenDeclaration =
+  "an open declaration cannot carry one"
+refiningViolationMsg RefiningOnUntyped =
+  "the untyped 'name/arity' form cannot carry one"
+refiningViolationMsg (RefiningArity n) =
+  "a refinement predicate must be unary, but this one has arity " ++ show n
+refiningViolationMsg RefiningArgNotAny =
+  "the argument type must be 'any'"
+refiningViolationMsg RefiningReturnNotBool =
+  "the return type must be 'bool'"
+refiningViolationMsg RefiningBareVariable =
+  "the refined type must not be a bare type variable, which says nothing"
+refiningViolationMsg RefiningAny =
+  "the refined type must not be 'any', which says nothing"
+refiningViolationMsg RefiningFunctionType =
+  "the refined type must not be a function type"
+refiningViolationMsg RefiningConcreteParameter =
+  ( "the refined type must be a base type or a type constructor applied"
+      ++ " to distinct type variables (a parameter is a concrete type; only"
+      ++ " the outermost constructor is proved)"
+  )
+refiningViolationMsg (RefiningRepeatedParameter v) =
+  ( "the refined type must be a base type or a type constructor applied"
+      ++ " to distinct type variables (parameter '"
+      ++ T.unpack v
+      ++ "' is repeated)"
+  )
 
 instance Display (Diagnostic CollectError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =

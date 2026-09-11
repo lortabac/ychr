@@ -8,6 +8,7 @@
 module YCHR.Internal.Resolve
   ( -- * Errors
     ResolveError (..),
+    RefiningViolation (..),
 
     -- * Resolution
     resolveProgram,
@@ -24,6 +25,7 @@ import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -126,6 +128,11 @@ data ResolveError
     -- is rejected at the declaration, regardless of arity and
     -- regardless of whether the name is ever used.
     ConstructorFunctionCollision Name
+  | -- | A @refining@ clause appears on a declaration that cannot
+    -- carry one, or names a type that is not a valid refinement.
+    -- Carries the declaration's flattened name and one violation; a
+    -- declaration with several gets one error per violation.
+    InvalidRefining Text RefiningViolation
   | -- | A lambda parameter is neither a variable nor a wildcard.
     -- Lambda params must be patterns; literals and compound terms
     -- are rejected here so the resolved AST guarantees well-formed
@@ -138,6 +145,40 @@ data ResolveError
     -- list is 'NonEmpty', so the resolver substitutes a single
     -- wildcard for recovery.
     EmptyLambdaParams
+  deriving (Eq, Show)
+
+-- | Why a @refining@ clause is rejected. A @refining@ clause is
+-- permitted only on a closed @:- function@ carrying a single typed
+-- signature of the exact shape @name(any) -> bool@, and the refined
+-- type must be a base type or a type constructor applied to distinct
+-- type variables. 'YCHR.Internal.Display' owns the wording.
+data RefiningViolation
+  = -- | Written on @:- class@ / @:- open_class@.
+    RefiningOnClass
+  | -- | Written on an open declaration (@:- open_function@ or
+    -- @:- open_class@).
+    RefiningOnOpenDeclaration
+  | -- | Written on the untyped @name\/arity@ spelling.
+    RefiningOnUntyped
+  | -- | The declared arity is not 1. Carries the declared arity.
+    RefiningArity Int
+  | -- | The single argument type is not @any@.
+    RefiningArgNotAny
+  | -- | The return type is not @bool@.
+    RefiningReturnNotBool
+  | -- | The refined type is a bare type variable, which says nothing.
+    RefiningBareVariable
+  | -- | The refined type is @any@, which says nothing.
+    RefiningAny
+  | -- | The refined type is a function type.
+    RefiningFunctionType
+  | -- | A parameter of the refined type constructor is not a type
+    -- variable. The solver pins only the outermost constructor, so
+    -- @refining list(int)@ would silently mean @refining list(A)@.
+    RefiningConcreteParameter
+  | -- | A parameter variable of the refined type constructor occurs
+    -- more than once. Carries the repeated variable's name.
+    RefiningRepeatedParameter Text
   deriving (Eq, Show)
 
 -- | Flatten modules into a single resolved program.
@@ -164,6 +205,7 @@ resolveProgram mods =
       extendsClosedErrors = checkExtendsClosed funcOpenness mods
       extendsBoundedErrors = checkExtendsBounded funcRequiring mods
       boundedDeclErrors = checkBoundedDeclarations functionNames mods
+      refiningDeclErrors = checkRefiningDeclarations mods
       multiSigErrors = checkMultiSigOnFunction mods
       mixedKindErrors = checkMixedDeclKinds mods
       extensionKindErrors = checkExtensionKinds funcKinds mods
@@ -181,6 +223,7 @@ resolveProgram mods =
           ++ extendsClosedErrors
           ++ extendsBoundedErrors
           ++ boundedDeclErrors
+          ++ refiningDeclErrors
           ++ multiSigErrors
           ++ mixedKindErrors
           ++ extensionKindErrors
@@ -779,6 +822,82 @@ checkBoundedDeclarations functionNames mods =
         False
     originForDecl m d = PExpr.Atom (m.name <> ":" <> d.name)
 
+-- | Validate every @refining@ clause in the program.
+--
+-- A @refining@ clause is an /axiom/: it promises that a successful
+-- call of the function on a bare variable proves that variable's type,
+-- and the checker never inspects the equations. The declaration's
+-- shape is therefore all that can be enforced. It must be a closed
+-- @:- function@ carrying a single typed signature of the exact shape
+-- @name(any) -> bool@, and the refined type must be a base type or a
+-- type constructor applied to distinct type variables — the solver
+-- pins only the outermost constructor, so @refining list(int)@ could
+-- only ever mean @refining list(A)@ and is rejected rather than
+-- silently widened.
+--
+-- Every violation of a single declaration is reported, so one
+-- compilation shows the user all of them.
+checkRefiningDeclarations :: [CollectedModule] -> [Diagnostic ResolveError]
+checkRefiningDeclarations mods =
+  [ noDiag (P.AnnP (InvalidRefining declText v) loc origin)
+  | m <- mods,
+    P.Ann d loc <- m.decls,
+    P.FunctionDecl {refining = Just refined} <- [d],
+    let declText =
+          flattenName (qualifiedNameToLooseName (QualifiedName m.name d.name)),
+    let origin = PExpr.Atom (m.name <> ":" <> d.name),
+    v <- declViolations d ++ refinedTypeViolations refined
+  ]
+  where
+    declViolations d =
+      [RefiningOnClass | d.kind == DKClass]
+        ++ [RefiningOnOpenDeclaration | d.isOpen]
+        ++ [RefiningArity d.arity | d.arity /= 1]
+        ++ case (d.argTypes, d.returnType) of
+          (Just [argTy], Just retTy) ->
+            [RefiningArgNotAny | not (isAnyType argTy)]
+              ++ [RefiningReturnNotBool | not (isBoolType retTy)]
+          -- The arity is already reported; the return type is still
+          -- worth checking on its own.
+          (Just _, Just retTy) -> [RefiningReturnNotBool | not (isBoolType retTy)]
+          _ -> [RefiningOnUntyped]
+
+    refinedTypeViolations (TypeVar _) = [RefiningBareVariable]
+    refinedTypeViolations t
+      | isAnyType t = [RefiningAny]
+      | isFunctionType t = [RefiningFunctionType]
+    refinedTypeViolations (TypeCon _ params) =
+      [RefiningConcreteParameter | any (not . isTypeVar) params]
+        ++ [RefiningRepeatedParameter v | v <- repeatedVars params]
+
+    repeatedVars params =
+      let vs = [v | TypeVar v <- params]
+       in nub [v | v <- vs, length (filter (== v) vs) > 1]
+
+    isTypeVar (TypeVar _) = True
+    isTypeVar _ = False
+
+    -- At any arity: @any(A)@ is not a type constructor the checker
+    -- knows, and it would slip past the parameter rules below while
+    -- proving no more than bare @any@ does.
+    isAnyType (TypeCon (Unqualified "any") _) = True
+    isAnyType _ = False
+
+    -- The two-level spelling 'Encode.typeExpr' reads as a function
+    -- type. Anything else headed by @->@ is an ordinary type
+    -- reference, as it is everywhere else.
+    isFunctionType
+      (TypeCon (Unqualified "->") [TypeCon (Unqualified "fun") _, _]) = True
+    isFunctionType _ = False
+
+    -- The prelude import is unconditional, so after renaming @bool@
+    -- resolves to the prelude's declaration. The unqualified spelling
+    -- is accepted as well, which is what an undeclared type would
+    -- leave behind.
+    isBoolType (TypeCon (Qualified "prelude" "bool") []) = True
+    isBoolType (TypeCon (Unqualified "bool") []) = True
+    isBoolType _ = False
+
 {- Note [Bound graph cycle detection]
 
 Vertices of the bound graph are the qualified names of bounded
@@ -1035,6 +1154,14 @@ resolveFunctions visMap mods =
                       ++ collectExtensionSignatures mods qn ar,
                   isOpen = any (\(d, _) -> d.isOpen) declPairs,
                   requiring = concatMap (\(d, _) -> maybe [] id d.requiring) declPairs,
+                  -- At most one declaration of the group can carry
+                  -- one: 'checkRefiningDeclarations' rejects it on
+                  -- everything but a single-signature @:- function@,
+                  -- and 'checkMultiSigOnFunction' rejects a second
+                  -- signature for the same name and arity.
+                  refining =
+                    listToMaybe
+                      [t | (d, _) <- declPairs, Just t <- [d.refining]],
                   equations = concat eqss
                 }
          in (def, concat eqErrss)

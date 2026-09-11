@@ -1,0 +1,9 @@
+:- module(refining_on_constraint, []).
+
+:- use_module(library(prelude)).
+
+% `refining` is an operator word, so this parses as a compound named
+% `refining`. Without a dedicated rejection it would silently declare a
+% constraint `refining/2`; constraints cannot be refinement predicates,
+% so it is a malformed declaration instead.
+:- chr_constraint c(any) refining int.

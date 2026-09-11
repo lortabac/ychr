@@ -299,7 +299,7 @@ encode_sigs_cons @
     build_td_con_facts(type_def, list(data_con), list(decl_fact)).
 
 tell_decls1 @
-    tell_decls(_, program(_, Funs, ConTypes, ConBounds, Tds), Out) <=>
+    tell_decls(_, program(_, Funs, ConTypes, ConBounds, Tds, _), Out) <=>
     build_constraint_facts(ConTypes, ConBounds, ConFacts),
     build_function_facts(Funs, FunFacts),
     build_con_facts(Tds, CtorFacts),
@@ -484,10 +484,10 @@ walk_rules_from1 @
     walk_funs(Env, Facts, program_funs(P), length(Rules)).
 
 :- function program_rules(program) -> list(rule).
-program_rules(program(Rules, _, _, _, _)) -> Rules.
+program_rules(program(Rules, _, _, _, _, _)) -> Rules.
 
 :- function program_funs(program) -> list(fun_def).
-program_funs(program(_, Funs, _, _, _)) -> Funs.
+program_funs(program(_, Funs, _, _, _, _)) -> Funs.
 
 walk_rules_nil @
     walk_rules(_, [], _) <=> true.
@@ -640,7 +640,8 @@ add_ambient(Acc, bound_sig(N, _, Args, Ret, _), TVars) ->
     getarg_scrutinee(scope, any, expr, int, maybe(match_state)),
     getarg_slot(scope, any, expr, int, maybe(match_state), maybe(ty)),
     getarg_declared(scope, any, expr, int, any),
-    tell_predicate_evidence(scope, maybe(pair(any, ty))).
+    tell_refinement_evidence(scope, expr),
+    tell_refinement_fact(scope, any, maybe(ty_expr)).
 
 check_guards_nil @
     check_guards(_, _, [], _) <=> true.
@@ -675,13 +676,13 @@ check_guard_getarg_g @
                      match_state_for(M, guard_operand_var(Operand))),
     MOut = M.
 
-% The ordinary call check still runs; a type-predicate guard's evidence
+% The ordinary call check still runs; a refinement guard's evidence
 % is extra information, not a replacement.
 check_guard_expr_g @
     check_guard(UserS, _, guard_expr(E), M, MOut) <=>
     type_of_expr(UserS, E, T),
     check_guard_bool(T, scope_ctx(UserS)),
-    tell_predicate_evidence(UserS, type_predicate_fact(E)),
+    tell_refinement_evidence(UserS, E),
     MOut = M.
 
 % One fresh slot per field of the matched constructor, and one fresh
@@ -765,37 +766,39 @@ within_con_arity(Env, Con, Idx) -> idx_within(Idx, lookup_con(Env, Con)).
 idx_within(_, nothing) -> true.
 idx_within(Idx, just(Info)) -> Idx < con_arity(Info).
 
-% The typing fact a type-predicate guard contributes. Only a call of one
-% of the prelude type predicates on a *bare variable* qualifies: the
-% fact is about that variable's slot and the guard's success entails it
-% exactly. `atom/1` is deliberately absent — a nullary constructor
-% inhabits many types — as are `var`/`nonvar`/`ground`, whose success
-% entails boundness rather than a type.
-%
-% This list is **provisional**: it names prelude functions directly,
-% pending the declaration mechanism by which a function declares itself
-% a refinement predicate. Nothing else in the checker keys off function
-% names.
-:- function type_predicate_fact(expr) -> maybe(pair(any, ty)).
-type_predicate_fact(call_e(N, [var_e(V)])) | N == quote(prelude:integer) ->
-    just(kv(V, ty_int)).
-type_predicate_fact(call_e(N, [var_e(V)])) | N == quote(prelude:float) ->
-    just(kv(V, ty_float)).
-type_predicate_fact(call_e(N, [var_e(V)])) | N == quote(prelude:string) ->
-    just(kv(V, ty_string)).
-type_predicate_fact(call_e(N, [var_e(V)])) | N == quote(prelude:boolean) ->
-    just(kv(V, tcon(quote(prelude:bool), []))).
-type_predicate_fact(_) -> nothing.
+% A guard calling a refinement predicate on a *bare variable*
+% contributes the fact its declaration promises: the variable's slot is
+% the declared type, at fresh flexible parameters, instantiated the way
+% `encode_one_sig` instantiates a signature. The declaration is an
+% axiom — the equations are never inspected, and a host call could not
+% be inspected at all. Any other call shape contributes nothing, and
+% nothing here keys off a function name: the lookup goes through the
+% program's declared refinements.
+tell_refinement_evidence_call @
+    tell_refinement_evidence(S, call_e(N, [var_e(V)])) <=>
+    tell_refinement_fact(S, V, env_refinement(scope_env(S), N)).
 
-tell_predicate_evidence_none @
-    tell_predicate_evidence(_, nothing) <=> true.
+tell_refinement_evidence_other @
+    tell_refinement_evidence(_, _) <=> true.
+
+tell_refinement_fact_none @
+    tell_refinement_fact(_, _, nothing) <=> true.
 
 % The fact the guard establishes goes first and the type the position
 % already has second — the order the inaccessible-branch message reads
 % them in. Both are whole types, so the depth starts at `ev_top`.
-tell_predicate_evidence_some @
-    tell_predicate_evidence(S, just(kv(V, Fact))) <=>
-    ev_unify(Fact, scope_var_ty(S, V), ev_top, scope_ctx(S)).
+%
+% The parameter slots are allocated flexible for uniformity with
+% `encode_one_sig`, not because anything downstream reads them: at a
+% flexible target evidence is inert, and at a rigid one `ev_unify`
+% pins the skolem to the outermost constructor at parameters it
+% chooses itself. Building them here keeps one rule for how a
+% declaration's type variables become slots.
+tell_refinement_fact_some @
+    tell_refinement_fact(S, V, just(TE)) <=>
+    alloc_flex_tvars(sort_unique_tvars(collect_ty_vars_expr(TE)), TVars),
+    ev_unify(encode_ty(TVars, TE), scope_var_ty(S, V), ev_top,
+             scope_ctx(S)).
 
 % ---------------------------------------------------------------------
 % Body goals

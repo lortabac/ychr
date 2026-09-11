@@ -106,6 +106,11 @@ data FunctionDef = FunctionDef
     -- | Bounds declared on this function via @requiring@. Empty when
     -- the function is unbounded.
     requiring :: [BoundSig],
+    -- | The refinement type declared via @refining@, trusted as an
+    -- axiom: a successful call of this function on a bare variable
+    -- proves that variable has this type. 'Nothing' for an ordinary
+    -- function.
+    refining :: Maybe TypeExpr,
     equations :: [AnnP FunctionEquation]
   }
   deriving (Show)

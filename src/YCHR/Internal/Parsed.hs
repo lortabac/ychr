@@ -122,9 +122,9 @@ data Module = Module
 
 -- | Whether a function-like declaration was written with the
 -- @:- function@ / @:- open_function@ keyword (single signature
--- only, may carry @requiring@) or the @:- class@ / @:- open_class@
--- keyword (overloaded signatures permitted, never carries
--- @requiring@). The two forms produce the same downstream
+-- only, may carry @requiring@ or @refining@) or the @:- class@ /
+-- @:- open_class@ keyword (overloaded signatures permitted, never
+-- carries either clause). The two forms produce the same downstream
 -- 'YCHR.Internal.Resolved.FunctionDef'; the kind only affects source-level
 -- validation.
 data FunctionDeclKind = DKFunction | DKClass
@@ -153,7 +153,15 @@ data Declaration
         -- the @:- function@ / @:- open_function@ forms (i.e. with
         -- @kind == DKFunction@). The parser rejects @requiring@ on
         -- @:- class@ / @:- open_class@ declarations.
-        requiring :: Maybe [BoundSig]
+        requiring :: Maybe [BoundSig],
+        -- | Refinement predicate: a non-'Nothing' value carries the
+        -- @refining@ clause's refined type. Permitted only on a
+        -- closed @:- function@ whose single typed signature has the
+        -- shape @name(any) -> bool@; the refined type must be a base
+        -- type or a type constructor applied to distinct type
+        -- variables. Resolve validates all of this and reports
+        -- @YCHR-16021@.
+        refining :: Maybe TypeExpr
       }
   | -- | Adds an overloaded type signature to an @:- open_class@
     -- declared in another module. The renamer fills in @target@ with

@@ -1,0 +1,2 @@
+YCHR-16021
+Invalid 'refining' clause on 'refining_invalid:class_pred': ':- class' and ':- open_class' cannot carry one

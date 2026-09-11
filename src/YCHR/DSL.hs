@@ -228,7 +228,8 @@ function name arity =
       returnType = Nothing,
       isOpen = False,
       kind = DKFunction,
-      requiring = Nothing
+      requiring = Nothing,
+      refining = Nothing
     }
 
 -- | Open-function declaration: @:- open_function name/arity@ (extensible
@@ -242,7 +243,8 @@ openFunction name arity =
       returnType = Nothing,
       isOpen = True,
       kind = DKFunction,
-      requiring = Nothing
+      requiring = Nothing,
+      refining = Nothing
     }
 
 -- | Class declaration: @:- class name/arity@ (multi-signature overloading).
@@ -255,7 +257,8 @@ class_ name arity =
       returnType = Nothing,
       isOpen = False,
       kind = DKClass,
-      requiring = Nothing
+      requiring = Nothing,
+      refining = Nothing
     }
 
 -- | Open-class declaration: @:- open_class name/arity@ (extensible with
@@ -269,7 +272,8 @@ openClass name arity =
       returnType = Nothing,
       isOpen = True,
       kind = DKClass,
-      requiring = Nothing
+      requiring = Nothing,
+      refining = Nothing
     }
 
 -- | @:- extend_class_type (name(args) -> ret)@: adds a signature to an

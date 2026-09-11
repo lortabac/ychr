@@ -3,7 +3,7 @@
 :- use_module(library(prelude)).
 
 % A multi-signature class's equations are checked once per declared
-% signature, and a type-predicate guard is what selects which
+% signature, and a refinement-predicate guard is what selects which
 % signature an equation fits: the first equation contradicts
 % `conv(string) -> int` and fits `conv(int) -> string`, the second the
 % other way round (docs/reference/type-system.md §Signature

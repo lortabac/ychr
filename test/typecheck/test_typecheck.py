@@ -14,6 +14,11 @@ import pytest
 # deliberately not asserted.
 DEAD_CODE_GOLDENS = [
     (
+        "refining_user_dead_rule",
+        "a guard requires 'prelude:list(_)' where the type is"
+        " 'refining_user_dead_rule:color'",
+    ),
+    (
         "typecheck_evidence_bool_rule",
         "a guard requires 'prelude:bool' where the type is"
         " 'typecheck_evidence_bool_rule:color'",

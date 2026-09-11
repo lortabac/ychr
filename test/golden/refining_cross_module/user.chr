@@ -1,0 +1,25 @@
+:- module(user, [run/2, pair_up/3]).
+
+:- use_module(library(prelude)).
+:- use_module(library(lists)).
+:- use_module(preds).
+
+% The refinement lives in another module. The encoded refinement table
+% is keyed by the function's *qualified* name, so a guard here has to
+% find `preds:is_list` through the same key the call site produces.
+:- function size(T) -> int.
+size(X) | is_list(X) -> length(X).
+size(_) -> 1.
+
+:- chr_constraint run(any, int).
+
+run(V, R) <=> R is size(V).
+
+% Two guards over the same parametric refinement, at two different
+% instantiations: the declaration says `list(A)`, and this constraint
+% wants `A` to be `int` for one argument and `string` for the other.
+% Neither guard may narrow what the other's argument can hold.
+:- chr_constraint pair_up(list(int), list(string), int).
+
+pair_up(X, Y, R) <=> is_list(X), is_list(Y) | R is length(X) + length(Y).
+pair_up(_, _, R) <=> R = 0.

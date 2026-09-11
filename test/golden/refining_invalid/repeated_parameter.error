@@ -1,0 +1,2 @@
+YCHR-16021
+Invalid 'refining' clause on 'refining_invalid:repeat_pred': the refined type must be a base type or a type constructor applied to distinct type variables (parameter 'A' is repeated)

@@ -92,6 +92,12 @@
     ('=<'(float, float) -> bool),
     ('=<'(string, string) -> bool).
 
+% The four `refining` clauses below declare refinement predicates: a
+% guard calling one on a bare variable types that variable (see
+% docs/reference/type-system.md). `atom/1` deliberately has none — a
+% nullary constructor inhabits many types (`red`, `[]`, `true`) and the
+% type grammar has no unions — and neither do `var`/`nonvar`/`ground`,
+% whose success entails boundness rather than a type.
 :- function
     ('/'(float, float) -> float),
     ('div'(int, int) -> int),
@@ -101,11 +107,11 @@
     (not(bool) -> bool),
     (var(any) -> bool),
     (nonvar(any) -> bool),
-    (integer(any) -> bool),
-    (float(any) -> bool),
+    (integer(any) -> bool refining int),
+    (float(any) -> bool refining float),
     (atom(any) -> bool),
-    (boolean(any) -> bool),
-    (string(any) -> bool),
+    (boolean(any) -> bool refining bool),
+    (string(any) -> bool refining string),
     (ground(any) -> bool),
     (int_to_float(int) -> float),
     (float_to_int(float) -> int),

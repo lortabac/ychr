@@ -79,16 +79,20 @@ REPL_TESTS = [
         runtime_error("unification failure: cannot unify [1, 2] with [1, 2, 3]"),
     ),
     # :info / :i — inspect a single identifier. Examples cover the four
-    # output categories: built-in type, function (with `requiring`),
-    # data constructor (rendered as the parent type's declaration),
-    # the unknown-name fallback, and arity disambiguation. The bare
-    # `call` case asserts that omitting the arity emits both blocks
-    # blank-line separated.
+    # output categories: built-in type, function (with `requiring` or
+    # `refining`), data constructor (rendered as the parent type's
+    # declaration), the unknown-name fallback, and arity
+    # disambiguation. The bare `call` case asserts that omitting the
+    # arity emits both blocks blank-line separated.
     (":info int", "'$typechecker':int\nbuilt-in type\n"),
     (
         ":info max",
         "prelude:max\n"
         ":- function max(T, T) -> T requiring '>='(T, T) -> bool.\n",
+    ),
+    (
+        ":info integer",
+        "prelude:integer\n:- function integer(any) -> bool refining int.\n",
     ),
     (
         ":info true",

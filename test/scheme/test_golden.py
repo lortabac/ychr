@@ -121,6 +121,7 @@ WERROR_EXEMPT = {
     # These pin the inaccessible-branch warning (YCHR-20104): a guard
     # whose typing fact contradicts a known type marks a rule or
     # equation that can never fire — dead code, not a type error.
+    "refining_user_dead_rule",
     "typecheck_evidence_bool_rule",
     "typecheck_evidence_dead_rule",
     "typecheck_list_pattern_dead",

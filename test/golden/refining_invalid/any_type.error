@@ -1,0 +1,2 @@
+YCHR-16021
+Invalid 'refining' clause on 'refining_invalid:any_pred': the refined type must not be 'any'

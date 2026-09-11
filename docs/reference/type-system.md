@@ -339,8 +339,8 @@ narrowing step depends on the order body goals are examined in.
 
 Narrowing `any` would never accept more programs — `any` already
 passes every check — only reject programs that run. Static findings
-about `any`-typed code (a type predicate proving a later use doomed,
-say) therefore belong to a planned opt-in warning pass
+about `any`-typed code (a refinement predicate proving a later use
+doomed, say) therefore belong to a planned opt-in warning pass
 ([roadmap](../roadmap.md)), never to the checker's errors.
 
 ### Example: propagation through a shared variable
@@ -672,8 +672,9 @@ Head Normal Form desugaring introduces synthetic guards:
   constructor nominally but not the constructor's parameters
   (§Guard-Derived Type Evidence).
 - **`GuardExpr term`**: a general boolean guard expression (`N > 0`);
-  `term` must be consistent with `prelude:bool`. A type-predicate call
-  here is an evidence form (§Guard-Derived Type Evidence).
+  `term` must be consistent with `prelude:bool`. A call of a
+  refinement predicate on a bare variable here is an evidence form
+  (§Guard-Derived Type Evidence).
 
 These guards carry the same type information as the pattern the user
 wrote. When an evidence form's fact contradicts a concrete type, the
@@ -731,7 +732,7 @@ information can be revived by one.
 |------|-----------------|
 | `GuardEqual t₁ t₂` — emitted only by HNF, for a variable shared between head positions or a non-variable head argument (§8) | `type(t₁)` and `type(t₂)` agree on their outermost type constructor; at a rigid variable the pin this induces is per §What evidence does |
 | `GuardMatch x c/n`, where `c` is a declared constructor of `D(α₁, ..., αₖ)` | `type(x)` is an application of `D` (parameter instantiation per §What evidence does) |
-| A type-predicate guard: `integer(X)`, `float(X)`, `string(X)`, `boolean(X)` | `type(X)` is `int` / `float` / `string` / `prelude:bool` respectively |
+| A call `p(X)` on a bare variable, where `p` is declared `refining τ` | `type(X)` is `τ` (parameter instantiation per §What evidence does) |
 
 A `GuardEqual` between the HNF halves of one repeated source variable
 additionally carries the declaration-source merge of §Type states: the
@@ -771,13 +772,63 @@ successful `GuardMatch` proves the value was built by `c`, and within
 the typed fragment `c`-values inhabit only `D` (a forged `c` compound
 is typed `any`, an `any`-introduction form, §Soundness); how `D`'s
 type parameters are instantiated depends on the scrutinee's state
-(§What evidence does). A type predicate succeeds only on values of
-exactly its type.
+(§What evidence does). A refinement predicate's fact is not justified
+but *declared*: see below.
 
-The type-predicate list is **provisional**: it names prelude functions
-directly. A declaration mechanism by which a function declares itself
-a refinement predicate — so no function names are wired into the
-checker — is planned ([roadmap](../roadmap.md)).
+#### Refinement predicates
+
+A function declares itself a refinement predicate with a `refining`
+clause on its signature:
+
+```prolog
+:- function integer(any) -> bool refining int.
+:- function is_list(any) -> bool refining list(A).
+```
+
+The clause is an **axiom**. The equations are type-checked like any
+others, but nothing checks them *against* the clause — and for the
+usual case, a predicate backed by a host call whose argument and
+result are typed `any`, there would be nothing at that boundary to
+check. The declaration is a promise that a successful call proves its
+argument has the refined type, and it is the author's to keep
+(§Soundness).
+
+Only a guard call of the form `p(X)`, on a *bare* variable, in a rule
+guard or a function-equation guard, contributes a fact. A call on a
+compound argument, a call in a body, and a call on the right of `is`
+contribute nothing.
+
+The clause is permitted only on a closed `:- function` carrying a
+single typed signature of the exact shape `name(any) -> bool`. It is
+rejected on `:- open_function`, on `:- class` and `:- open_class`, on
+the untyped `name/arity` spelling, at any arity other than 1, and when
+the argument is not `any` or the return is not `bool`. Combining it
+with `requiring` is rejected by the grammar rather than by a check:
+the two are operators of equal priority, so they cannot chain in
+either order. Every other violation is `YCHR-16021`, and one on a
+`:- chr_constraint` is `YCHR-15020`.
+
+The refined type must be a base type (`int`, `float`, `string`) or a
+type constructor applied to *distinct type variables*. A nullary
+constructor is the zero-parameter case, so `refining bool` and
+`refining color` are fine.
+
+The parameters must be named variables; a wildcard (`refining
+list(_)`) is not a type expression and is rejected earlier, as
+`YCHR-15009`.
+
+The parameters carry the restriction. Evidence pins only the outermost
+constructor, at fresh parameters (§What evidence does), so `refining
+list(int)` could only ever mean `refining list(A)`: the concrete
+parameter is rejected rather than silently widened, and a parameter
+repeated as in `pair(A, A)` for the same reason. A bare type variable
+and `any` are rejected at the other end — they constrain nothing, so
+the clause would buy the caller no evidence — and a function type
+because a refinement predicate tests a value, not a callable.
+
+The prelude declares four: `integer/1`, `float/1`, `string/1` and
+`boolean/1`. `atom/1`, `var/1`, `nonvar/1` and `ground/1` deliberately
+do not (§Non-forms).
 
 ### Non-forms
 
@@ -785,9 +836,11 @@ The criterion excludes, deliberately:
 
 - User-written `==` in a guard: it desugars to `GuardExpr` — an
   ordinary call of the prelude function `'=='(A, A)` — not to
-  `GuardEqual`, so it contributes no evidence. Blessing selected
-  functions as evidence forms is the planned refinement-declaration
-  mechanism's job.
+  `GuardEqual`, so it contributes no evidence. A `refining` clause
+  cannot express it either: the fact `==` would establish is
+  *relational* (its two operands agree), and a refinement predicate
+  states a type of one argument. The `GuardEqual` form above is the
+  relational reading, and HNF is the only thing that emits it.
 - `var(X)`, `nonvar(X)`, `ground(X)`: success entails a *boundness*
   fact, not a type fact.
 - `atom(X)`: success entails that `X` is *some* nullary data
@@ -851,8 +904,8 @@ scrutinizes:
 - **`any`** — inert. Nothing narrows `any` (§The role of `any`);
   findings about `any`-typed code are reserved for a planned opt-in
   warning pass.
-- **Flexible** — inert *as evidence*: type predicates and `GuardEqual`
-  contribute nothing at a flexible variable, so evidence never
+- **Flexible** — inert *as evidence*: refinement predicates and
+  `GuardEqual` contribute nothing at a flexible variable, so evidence never
   restricts unannotated code. (`GuardMatch`'s ordinary
   constructor-typing meet still applies and binds the flexible — next
   paragraph — but that is declaration-derived information, not
@@ -1370,8 +1423,8 @@ none is `NoMatchingOverload` (YCHR-60006).
 During a per-signature attempt, a guard's evidence fact that
 contradicts the candidate signature's types counts as failure under
 that signature, and no inaccessible-branch warning is emitted for the
-attempt (§Guard-Derived Type Evidence). This is how type-predicate
-guards select their signature: below, `size(N) | integer(N) -> N`
+attempt (§Guard-Derived Type Evidence). This is how a
+refinement-predicate guard selects its signature: below, `size(N) | integer(N) -> N`
 fails under `size(string) -> int` and checks under `size(int) -> int`.
 An equation whose guards contradict *every* signature checks under
 none — the `NoMatchingOverload` error, not a warning.
@@ -1410,6 +1463,10 @@ signature is satisfied by an existing declaration.
 This section describes the mechanism for functions; §Bounded
 constraints collects the adaptations for `:- chr_constraint`
 declarations.
+
+`requiring` and `refining` (§Refinement predicates) are mutually
+exclusive: they are operators of equal priority, so a signature
+carrying both is a syntax error in either order.
 
 This is ad-hoc polymorphism without elaboration: the checker verifies
 that the required operations exist at the inferred type but never
@@ -1891,6 +1948,14 @@ correctness properties:
    Typing) — delimit exactly where the guarantee stops: a program that
    binds a symbolic `1 + 1` with `=`, calls the host, or forges an
    unknown constructor has left the fragment at that expression.
+
+   A `refining` clause is a second trusted boundary, alongside a host
+   call's declared signature (§Refinement predicates). The checker
+   takes the declaration's word that a successful call proves its
+   argument's type; nothing checks that against the equations, and for
+   a host-backed predicate there would be nothing to check it against.
+   A wrong `refining` clause is a wrong axiom, and property 1 holds
+   only up to the ones the program declares.
 
 2. **The gradual guarantee**: replacing any type annotation with `any`
    (making the program less precise) never introduces new type errors;

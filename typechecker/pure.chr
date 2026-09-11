@@ -31,7 +31,7 @@
 % needs the same one, and building it twice is the expensive half of
 % this module.
 :- function program_errors(con_env, program) -> list(error).
-program_errors(Env, program(Rules, Funs, _, _, Tds)) ->
+program_errors(Env, program(Rules, Funs, _, _, Tds, _)) ->
     all_errors(Env, Rules, Funs, Tds).
 
 % Units are numbered by position: rule `i` is unit `i`, and the

@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+New: refinement-predicate declarations. A closed `:- function` with the
+signature `name(any) -> bool` may carry a `refining` clause naming the
+type a successful call proves of its argument:
+
+```prolog
+:- function is_list(any) -> bool refining list(A).
+```
+
+A guard calling such a function on a bare variable then contributes the
+declared type as guard-derived evidence, exactly as the prelude's
+`integer/1` did before. This replaces the hard-coded list of four
+prelude type predicates, and nothing in the type checker keys off a
+function name any more. See the
+[type system reference](docs/reference/type-system.md).
+
+- The prelude's `integer/1`, `float/1`, `string/1` and `boolean/1` now
+  carry the clause; `atom/1`, `var/1`, `nonvar/1` and `ground/1`
+  deliberately do not.
+- The refined type must be a base type or a type constructor applied to
+  distinct type variables. Evidence pins only the outermost
+  constructor, so `refining list(int)` could only mean `refining
+  list(A)` and is rejected rather than silently widened.
+- Two new error codes. `YCHR-16021` covers a clause on a declaration
+  that cannot carry one (open function, class, untyped, wrong arity,
+  argument not `any`, return not `bool`) and a refined type that is not
+  a valid refinement. `YCHR-15020` rejects one on a
+  `:- chr_constraint`.
+- `refining` is now an operator word, `xfx` at priority 1140 — the same
+  row as `requiring`, so the two cannot be combined on one signature.
+  Bare `refining` atoms are unaffected, in patterns and in terms alike.
+  The one source change this forces is a *typed* constraint
+  declaration at arity 2 named `refining`: write it as the untyped
+  `:- chr_constraint refining/2` instead.
+
 New: opt-in search, `library(search)`. Explore alternative bindings and
 undo the ones that do not work out. Nothing here affects a program that
 does not import it, and there are no new VM instructions; the Haskell

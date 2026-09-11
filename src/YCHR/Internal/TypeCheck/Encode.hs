@@ -190,7 +190,15 @@ program prog = do
           listTerm fs,
           assocTerm (listTerm . map typeExpr) prog.constraintTypes,
           assocTerm (listTerm . map boundSig) prog.constraintBounds,
-          listTerm (map typeDef prog.typeDefinitions)
+          listTerm (map typeDef prog.typeDefinitions),
+          -- Refinement predicates, as an assoc list keyed by function
+          -- name alone: a @refining@ clause is unary-only, so the name
+          -- identifies the declaration.
+          listTerm
+            [ kvTerm (qnameTerm f.name) (typeExpr t)
+            | f <- prog.functions,
+              Just t <- [f.refining]
+            ]
         ]
     )
 

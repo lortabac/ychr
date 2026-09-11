@@ -52,9 +52,9 @@ data TypeCheckError
 -- @docs\/reference\/type-system.md@ §Inaccessible branches).
 data TypeCheckWarning
   = -- | The unit can never fire in the typed fragment: an evidence
-    -- form (a type-predicate guard, a @GuardMatch@, or an ask-equality
-    -- between head positions) contributes a typing fact that
-    -- contradicts an already-known concrete type. Carries the two
+    -- form (a refinement-predicate guard, a @GuardMatch@, or an
+    -- ask-equality between head positions) contributes a typing fact
+    -- that contradicts an already-known concrete type. Carries the two
     -- contradicting types, rendered. That is dead code rather than a
     -- type error, because a gradually-typed program can still reach
     -- the unit by flowing @any@-typed values into it.

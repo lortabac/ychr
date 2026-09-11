@@ -546,7 +546,7 @@ twoOrMoreList (TwoOrMore x y zs) = x : y : zs
 -- type-system coverage; reachability does.
 --
 -- The instance types are non-parametric so that each one can be
--- discriminated by a type predicate or a constructor pattern,
+-- discriminated by a refinement predicate or a constructor pattern,
 -- which is what makes the equations partial in exactly the declared
 -- set (see 'YCHR.TypeSoundness.Render.renderClass').
 data ClassFn = ClassFn
@@ -631,10 +631,10 @@ data LibFn
   | FnArea
   deriving (Eq, Show)
 
--- | A prelude type predicate, which is an /evidence form/: its
--- success at run time entails that its argument has that type
--- (§Evidence forms). Only the two the fragment has types for;
--- @float@ and @string@ are outside it.
+-- | A prelude refinement predicate, which is an /evidence form/: the
+-- prelude declares it @refining@ that type, so its success at run time
+-- entails that its argument has it (§Evidence forms). Only the two
+-- the fragment has types for; @float@ and @string@ are outside it.
 --
 -- Distinct from 'ECall' because the argument is always a variable —
 -- evidence attaches to a variable, not to an arbitrary expression —
@@ -760,7 +760,7 @@ data RuleHead
 data Rule = Rule
   { ruleName :: Text,
     ruleHead :: RuleHead,
-    -- | Guards that establish a typing fact: a type predicate at a
+    -- | Guards that establish a typing fact: a refinement predicate at a
     -- rigid variable. Kept apart from 'guards' because they change
     -- what is known /to their right/, so the observer has to be told
     -- where they end.

@@ -48,14 +48,14 @@ what is planned.
 - [x] Exhaustiveness checking for functions over algebraic types
 - [x] Guard-derived type evidence — rigid variables at function
       equations and rule-head occurrences, the `GuardMatch`,
-      `GuardEqual` and type-predicate evidence forms, and the
+      `GuardEqual` and refinement-predicate evidence forms, and the
       inaccessible-branch warning (`YCHR-20104`); see
       [type-system.md](reference/type-system.md)
-- [ ] Refinement-predicate declaration mechanism (replace the
-      provisional built-in type-predicate list with a user-extensible
-      declaration)
+- [x] Refinement-predicate declaration mechanism — the `refining`
+      clause on a function signature; nothing in the checker keys off
+      a function name any more
 - [ ] Opt-in warning pass flagging doomed uses of `any`-typed values
-      via type predicates (bug finding only; never errors)
+      via refinement predicates (bug finding only; never errors)
 
 ## Backends
 

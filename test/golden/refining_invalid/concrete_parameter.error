@@ -1,0 +1,2 @@
+YCHR-16021
+Invalid 'refining' clause on 'refining_invalid:concrete_pred': the refined type must be a base type or a type constructor applied to distinct type variables (a parameter is a concrete type; only the outermost constructor is proved)

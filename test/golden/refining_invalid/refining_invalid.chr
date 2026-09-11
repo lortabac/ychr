@@ -1,0 +1,45 @@
+:- module(refining_invalid, []).
+
+:- use_module(library(prelude)).
+
+% Every way a `refining` clause can be rejected (YCHR-16021), one per
+% function. Resolve reports them all in one pass, so a single module
+% covers every case and each `.error` file pins one violation's wording.
+
+% Only a closed `:- function` may carry one.
+:- open_function open_pred(any) -> bool refining int.
+open_pred(_) -> true.
+
+:- class class_pred(any) -> bool refining int.
+class_pred(_) -> true.
+
+% The signature must be typed, unary, `any`-argued and `bool`-returning.
+:- function untyped_pred/1 refining int.
+untyped_pred(_) -> true.
+
+:- function binary_pred(any, any) -> bool refining int.
+binary_pred(_, _) -> true.
+
+:- function arg_pred(int) -> bool refining int.
+arg_pred(_) -> true.
+
+:- function ret_pred(any) -> int refining int.
+ret_pred(_) -> 1.
+
+% The refined type must say something, and must not be a function type.
+:- function bare_pred(any) -> bool refining A.
+bare_pred(_) -> true.
+
+:- function any_pred(any) -> bool refining any.
+any_pred(_) -> true.
+
+:- function fun_pred(any) -> bool refining (fun(int) -> int).
+fun_pred(_) -> true.
+
+% Only the outermost constructor is proved, so a concrete or repeated
+% parameter would silently mean something weaker than it reads.
+:- function concrete_pred(any) -> bool refining list(int).
+concrete_pred(_) -> true.
+
+:- function repeat_pred(any) -> bool refining pair(A, A).
+repeat_pred(_) -> true.

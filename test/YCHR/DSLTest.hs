@@ -175,7 +175,8 @@ functionDeclarationTests =
               returnType = Nothing,
               isOpen = False,
               kind = DKFunction,
-              requiring = Nothing
+              requiring = Nothing,
+              refining = Nothing
             },
       testCase "openFunction produces FunctionDecl with isOpen = True" $
         openFunction "show" 1
@@ -186,7 +187,8 @@ functionDeclarationTests =
               returnType = Nothing,
               isOpen = True,
               kind = DKFunction,
-              requiring = Nothing
+              requiring = Nothing,
+              refining = Nothing
             },
       testCase "class_ produces FunctionDecl with kind = DKClass" $
         class_ "size" 1
@@ -197,7 +199,8 @@ functionDeclarationTests =
               returnType = Nothing,
               isOpen = False,
               kind = DKClass,
-              requiring = Nothing
+              requiring = Nothing,
+              refining = Nothing
             },
       testCase "openClass produces FunctionDecl with kind = DKClass and isOpen = True" $
         openClass "show" 1
@@ -208,7 +211,8 @@ functionDeclarationTests =
               returnType = Nothing,
               isOpen = True,
               kind = DKClass,
-              requiring = Nothing
+              requiring = Nothing,
+              refining = Nothing
             },
       testCase "extendClassType arity matches argTypes length" $
         let intCon = TypeCon (Unqualified "int") []
