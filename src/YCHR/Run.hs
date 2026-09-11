@@ -1,12 +1,10 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Top-level orchestration: compile a program, then run goals or
--- multi-goal queries against it. The CHR session machinery lives in
--- "YCHR.Internal.Runtime.Session"; the compilation pipeline lives in
--- "YCHR.Internal.Compile.Pipeline". This module ties the two together and
--- adds the query-time goal evaluator used by 'runProgramWithQuery'
--- and the live REPL session in "YCHR.Internal.Repl".
+-- | Compile a program, then run goals or multi-goal queries against it.
+-- Ties "YCHR.Internal.Compile.Pipeline" to "YCHR.Internal.Runtime.Session"
+-- and adds the query-time goal evaluator behind 'runProgramWithQuery' and
+-- the REPL.
 module YCHR.Run
   ( -- * Compilation (re-exported from "YCHR.Internal.Compile.Pipeline")
     Error (..),
@@ -146,15 +144,9 @@ import YCHR.Internal.VM (Name (..), Procedure (..))
 -- Single-goal API
 -- ---------------------------------------------------------------------------
 
--- | Resolve a query constraint against the export map. The resolved
--- form is a 'Types.QualifiedConstraint' since name resolution always
--- produces a fully-qualified name. On failure, returns a structured
--- 'GoalRejection' so 'resolveQueryTellOrThrow' can surface a
--- @YCHR-NNNNN@-coded diagnostic. The rejection only covers
--- name-resolution failures; the post-resolution check that the
--- resolved name actually refers to a constraint (and not a function)
--- lives in 'resolveQueryTellOrThrow', which has the desugared program
--- in hand.
+-- | Resolve a query constraint's name against the export map. Covers
+-- name resolution only; that the name is a constraint and not a function
+-- is checked by 'resolveQueryTellOrThrow'.
 resolveQueryConstraint ::
   CompiledProgram ->
   Constraint ->
@@ -174,13 +166,9 @@ resolveQueryConstraint cp (Constraint cname cargs) = case cname of
           then Right (Types.QualifiedConstraint (Types.QualifiedName m n) cargs)
           else Left (ConstraintNotExported (Types.QualifiedName m n))
 
--- | Resolve a query constraint to its qualified name and 'Expr'-typed
--- arguments. The arguments are lifted from the surface 'Term' shape via
--- 'termToExpr', so they are evaluated like any other tell-side
--- argument when the goal runs. The outer 'Either' carries
--- name-resolution failures (in the same string format as
--- 'resolveQueryConstraint'); the inner diagnostic list collects any
--- non-fatal resolve errors emitted while typing the arguments.
+-- | 'resolveQueryConstraint' plus 'termToExpr' over the arguments, so they
+-- evaluate like any tell-side argument; the inner list is the resolve
+-- diagnostics from typing them.
 resolveQueryTell ::
   CompiledProgram ->
   Constraint ->
@@ -192,21 +180,10 @@ resolveQueryTell cp c = do
           (traverse (termToExpr cp.queryFunctionVisibility queryLoc queryOrigin) qc.args)
   pure ((qc.name, exprs), errs)
 
--- | Run a single host-built CHR constraint against a compiled program.
--- Returns the per-query variable bindings.
---
--- The goal's arguments are canonicalized with 'prepareGoalTerm' first,
--- exactly as the surface-text path does: a host-built @red@ has to
--- reach the runtime in the same qualified form (@m:red@) the compiled
--- head patterns were compiled to, or the rule silently never fires.
--- Rename /errors/ are thrown as 'Error', like every other failure here.
---
--- Goal-argument warnings are discarded, which is what the typed
--- wrappers in "YCHR.Convert" and "YCHR.DSL" need — their result types
--- have no warning channel. They are worth reading, though: an
--- undeclared or non-exported constructor in a goal argument warns
--- (@YCHR-20101@) and then quietly fails to match. Use
--- 'runProgramWithGoalDSLWithWarnings' to see them.
+-- | Run one host-built constraint; returns the goal's variable bindings.
+-- Arguments are canonicalized by 'prepareGoalTerm' first (rename errors
+-- thrown as 'Error', warnings discarded). See Note [Goal argument
+-- canonicalization] in "YCHR.Convert".
 runProgramWithGoalDSL ::
   CompiledProgram ->
   HostCallRegistry ->
@@ -215,18 +192,9 @@ runProgramWithGoalDSL ::
 runProgramWithGoalDSL cp hostCalls constraint =
   fst <$> runProgramWithGoalDSLWithWarnings cp hostCalls constraint
 
--- | 'runProgramWithGoalDSL', but also returning the warnings raised
--- while canonicalizing the goal's arguments — the pair 'prepareGoal'
--- returns for a surface-text goal, and the only way for an embedder to
--- see them.
---
--- Render them with 'displayWarning'. A non-empty list is worth
--- surfacing even when the run succeeds: @YCHR-20101@ on a goal argument
--- means that argument did not canonicalize, so any rule matching on it
--- did not fire.
---
--- > (bindings, ws) <- runProgramWithGoalDSLWithWarnings cp hostCalls goal
--- > mapM_ (hPutStr stderr . displayWarning) ws
+-- | 'runProgramWithGoalDSL' plus the canonicalization warnings — the only
+-- way an embedder sees @YCHR-20101@; render them with 'displayWarning'.
+-- See Note [Goal argument canonicalization] in "YCHR.Convert".
 runProgramWithGoalDSLWithWarnings ::
   CompiledProgram ->
   HostCallRegistry ->
@@ -237,15 +205,10 @@ runProgramWithGoalDSLWithWarnings cp hostCalls constraint = do
   bindings <- runGoalConstraint cp hostCalls prepared
   pure (bindings, ws)
 
--- | Run an already-prepared goal constraint: no renaming, no type
--- checking. Callers that have run 'prepareGoal' \/ 'prepareGoalTerm'
--- themselves use this so the goal is not renamed twice.
---
--- The goal /must/ have come from one of those: passing a raw host-built
--- 'Constraint' here leaves its bare data-constructor references
--- unqualified, so they do not match the compiled head patterns and the
--- rules silently never fire. Use 'runProgramWithGoalDSL' unless you are
--- deliberately staging the work yourself.
+-- | Run a goal with no renaming and no type checking. The goal /must/ come
+-- from 'prepareGoal' \/ 'prepareGoalTerm': a raw host-built 'Constraint'
+-- keeps its constructor references unqualified, so rules silently never
+-- fire. Use 'runProgramWithGoalDSL' unless staging the work yourself.
 runGoalConstraint ::
   CompiledProgram ->
   HostCallRegistry ->
@@ -263,13 +226,9 @@ runGoalConstraint cp hostCalls constraint = convertRuntimeError $ do
   withCHRExtra (toSessionInput cp) hostCalls extraProcs $
     executePreparedQuery lifted
 
--- | Resolve a goal and throw on any failure. Used by both
--- 'runGoalConstraint' and 'runPreparedGoal'.
---
--- A name-resolution failure (or a name that resolves to a function
--- rather than a constraint) becomes 'GoalNotAConstraint', so the CLI's
--- single-constraint goal surface surfaces a @YCHR-20013@ diagnostic
--- with a hint pointing at the REPL.
+-- | Resolve a goal's name and arguments, throwing. A name that does not
+-- resolve, or resolves to a function, is 'GoalNotAConstraint'
+-- (@YCHR-20013@).
 resolveQueryTellOrThrow ::
   CompiledProgram -> Constraint -> IO (Types.QualifiedName, [R.Expr])
 resolveQueryTellOrThrow cp c = case resolveQueryTell cp c of
@@ -292,68 +251,40 @@ queryOrigin :: PExpr
 queryOrigin = Atom ""
 
 -- $queryPipeline
--- The staged internals behind 'runProgramWithGoal' and
--- 'runProgramWithQuery': resolve a goal, prepare it, then execute it.
--- They exist so the REPL can interleave its own work between the
--- stages, and are exported for the same reason the @YCHR.Internal@
--- modules are.
+-- The stages behind 'runProgramWithGoal' and 'runProgramWithQuery':
+-- resolve, prepare, execute.
 --
--- __These are not covered by the package version policy.__ Several of
--- them mention types from @YCHR.Internal.*@ in their signatures, which
--- is the giveaway. Use 'runProgramWithGoal', 'runProgramWithQuery', or
--- the typed wrappers in "YCHR.Convert" unless you specifically need to
--- drive the stages yourself.
+-- __Not covered by the package version policy__ (several signatures
+-- mention @YCHR.Internal.*@ types). Use 'runProgramWithGoal',
+-- 'runProgramWithQuery', or "YCHR.Convert" unless you need to drive the
+-- stages yourself.
 
--- | Render an 'Error' the way the @ychr@ command-line tool does:
--- @file:line:col:@ prefix, the @YCHR-NNNNN@ code, the message, and the
--- offending source line where one is available.
+-- | Render an 'Error' as the @ychr@ CLI does (@file:line:col:@, the
+-- @YCHR-NNNNN@ code, message, source line). Prefer it to 'show', which
+-- dumps the internal representation. The codes are covered by the package
+-- version policy and catalogued in
+-- <https://github.com/lortabac/ychr/blob/master/src/YCHR/Internal/Display.hs>.
 --
--- Prefer this to 'show': the derived 'Show' instance dumps the internal
--- diagnostic representation, whereas this is the supported, stable
--- rendering. The @YCHR-NNNNN@ codes are covered by the package version
--- policy and catalogued in
--- <https://github.com/lortabac/ychr/blob/master/docs/reference/errors.md>.
---
--- The result is a 'String' (not 'Data.Text.Text') because it is meant to
--- go straight to a handle:
---
--- > case compileModules True mods of
--- >   Left err -> hPutStr stderr (displayError err)
--- >   Right (cp, ws) -> mapM_ (hPutStr stderr . displayWarning) ws >> ...
---
--- __The result contains ANSI colour escapes__, unconditionally — there is
--- no terminal detection and no @NO_COLOR@ handling yet. That suits a
--- terminal, but strip them before putting the string in a log file, a JSON
--- payload, or a test assertion.
+-- __Contains ANSI colour escapes__, unconditionally (no terminal
+-- detection, no @NO_COLOR@): strip them before logging, serializing, or
+-- asserting on the string.
 displayError :: Error -> String
 displayError = displayMsg
 
--- | Render a 'Warning' in the same format as 'displayError'.
+-- | 'displayError' for a 'Warning'.
 displayWarning :: Warning -> String
 displayWarning = displayMsg
 
--- | Re-throw 'RuntimeErrorThrown' (from the runtime layer) as the
--- user-facing 'RuntimeError' constructor of 'Error'. Applied at the
--- top-level IO entry points so callers can pattern-match a single
--- exception type ('Error') without depending on the runtime's
--- internal exception.
+-- | Re-throw the runtime's 'RuntimeErrorThrown' as the 'RuntimeError'
+-- constructor of 'Error', so callers match one exception type.
 convertRuntimeError :: IO a -> IO a
 convertRuntimeError = handle $ \(RuntimeErrorThrown _kind msg stack) ->
   throwIO (RuntimeError msg stack)
 
--- | 'Chr'-flavored version of 'convertRuntimeError', applied at the
--- 'executePreparedQuery' boundary so the REPL's catch helpers see a
--- uniform 'Error' value regardless of which path raised it.
---
--- Also restores the session call stack on the failure path, as
--- defence in depth. 'YCHR.Internal.Runtime.Interpreter.withSavedCallStack'
--- unwinds the frames it pushed only on the normal exit path, so a
--- caught runtime error leaves them behind. Today no caller cares —
--- every path that catches one either ends the session outright (the
--- live REPL prints "live session aborted" and stops looping) or was
--- running in a session of its own. This keeps the invariant true
--- anyway, since a query boundary is the natural place to restore it
--- and the cost is one 'IORef' write per query.
+-- | 'convertRuntimeError' in 'Chr', at the 'executePreparedQuery'
+-- boundary. Also restores the session call stack on failure, which
+-- 'YCHR.Internal.Runtime.Interpreter.withSavedCallStack' unwinds only on
+-- normal exit.
 convertRuntimeErrorChr :: Chr a -> Chr a
 convertRuntimeErrorChr m = do
   env <- ask
@@ -366,10 +297,9 @@ convertRuntimeErrorChr m = do
       )
     $ runReaderT m env
 
--- | Parse and rename a goal, returning the canonicalized 'Constraint'
--- alongside any rename warnings. Throws on parse or rename errors.
--- Splitting this out lets the CLI surface goal-argument warnings before
--- the goal runs (notably for @--Werror@).
+-- | Parse and canonicalize a goal, with its rename warnings. Throws on
+-- parse or rename errors. Separate from running so the CLI can honour
+-- @--Werror@ before the goal runs.
 prepareGoal :: CompiledProgram -> Text -> IO (Constraint, [Warning])
 prepareGoal cp src = case parseConstraintWith cp.opTable "<query>" src of
   Left err -> throwIO (ParseError "<query>" err)
@@ -377,10 +307,8 @@ prepareGoal cp src = case parseConstraintWith cp.opTable "<query>" src of
     Left validErr -> throwIO (ParseValidationErrors [validErr])
     Right constraint -> prepareGoalTerm cp constraint
 
--- | 'prepareGoal' minus the parse step: canonicalize the arguments of a
--- goal 'Constraint' that is already in term form (built by the host
--- through "YCHR.Convert" or "YCHR.DSL", or recovered from a parse).
--- Throws 'RenameErrors' on failure.
+-- | 'prepareGoal' minus the parse: canonicalize a goal already in term
+-- form. Throws 'RenameErrors'.
 prepareGoalTerm :: CompiledProgram -> Constraint -> IO (Constraint, [Warning])
 prepareGoalTerm cp (Constraint cname cargs) = do
   (renamedArgs, ws) <-
@@ -391,27 +319,18 @@ prepareGoalTerm cp (Constraint cname cargs) = do
   let warnings = [RenameWarnings ws | not (null ws)]
   pure (Constraint cname renamedArgs, warnings)
 
--- | Recover a 'Constraint' from a goal-parse validation error.
--- 'convertConstraint' rejects goals that are not constraint-shaped (a
--- bare literal, variable, or wildcard) with 'MalformedConstraint'. For a
--- /goal/ (unlike a rule head) this is the same failure category as
--- @1 + 1@ or @a, b@: synthesize a 0-arity goal name from the offending
--- term so the normal name-resolution path rejects it as
--- 'NoSuchConstraint' (YCHR-20013) at the same stage and with the same
--- code as other non-constraint goals — mirroring how the bare-atom goal
--- @true@ renders as @Goal \'true\/0\'@ — instead of the YCHR-15003
--- 'MalformedConstraint' reserved for malformed rule heads. The catch-all
--- keeps any other validation error (none are emitted today) on its
--- original path.
+-- | Turn a 'MalformedConstraint' goal (bare literal, variable, wildcard)
+-- into a 0-arity goal named after the term, so name resolution rejects it
+-- as YCHR-20013 like any other non-constraint goal, not as the rule-head
+-- code YCHR-15003. Other validation errors pass through.
 goalShapeConstraint ::
   AnnP ParseValidationError -> Either (AnnP ParseValidationError) Constraint
 goalShapeConstraint (AnnP MalformedConstraint _ pexpr) =
   Right (Constraint (Types.Unqualified (T.pack (prettyPExprSrc pexpr))) [])
 goalShapeConstraint other = Left other
 
--- | Type-check and run a previously prepared single-goal constraint.
--- Throws 'TypeErrors' on goal-time type errors. Returns the per-query
--- variable bindings.
+-- | Type-check and run a goal from 'prepareGoal' \/ 'prepareGoalTerm'.
+-- Throws 'TypeErrors'.
 runPreparedGoal ::
   CompiledProgram ->
   HostCallRegistry ->
@@ -421,12 +340,9 @@ runPreparedGoal cp hostCalls original = do
   tcErrs <- case resolveQueryTell cp original of
     Right ((qn, exprs), errs)
       | null errs -> do
-          -- Only the errors are consumed here: this entry point has
-          -- no warning channel, and the one warning the checker can
-          -- emit (YCHR-20104) needs a guard, which a goal never has.
-          -- Should a goal-level warning ever be added, this call
-          -- needs one — 'prepareQuery', the multi-goal entry point,
-          -- already surfaces them.
+          -- Errors only: no warning channel here, and the checker's one
+          -- warning (YCHR-20104) needs a guard, which a goal never has.
+          -- 'prepareQuery' surfaces warnings if one is ever added.
           result <-
             typeCheckGoals
               cp.desugaredProgram
@@ -434,16 +350,13 @@ runPreparedGoal cp hostCalls original = do
               (Just "query")
               [D.BodyTell qn exprs]
           pure result.errors
-    -- Skip type-checking if name resolution failed or termToExpr
-    -- raised diagnostics; the runtime path will surface the same
-    -- errors with the same messages.
+    -- Resolution failed: the runtime path raises the same errors.
     _ -> pure []
   unless (null tcErrs) (throwIO (TypeErrors tcErrs))
-  -- 'original' came from 'prepareGoal', so its arguments are already
-  -- canonicalized; go straight to the runner instead of renaming again.
+  -- Already canonicalized by 'prepareGoal'; do not rename again.
   runGoalConstraint cp hostCalls original
 
--- | Like 'runProgramWithGoalDSL' but accepts a query as surface-language 'Text'.
+-- | 'runProgramWithGoalDSL' for a goal given as surface-language 'Text'.
 runProgramWithGoal ::
   CompiledProgram ->
   HostCallRegistry ->
@@ -457,22 +370,17 @@ runProgramWithGoal cp hostCalls src = do
 -- Multi-goal query API
 -- ---------------------------------------------------------------------------
 
--- | Result of parsing, desugaring, lambda-lifting, and type-checking
--- a query — everything that can be done before entering the CHR effect
--- stack. 'queryLambdas' is non-empty iff the query introduced anonymous
--- @fun(...) -> ... end@ expressions; 'extraProcs' must be added to the
--- 'ProcMap' before executing the query.
+-- | A query parsed, desugared, lambda-lifted, and type-checked.
+-- 'extraProcs' (the lifted lambdas and their dispatchers) must be added
+-- to the session's procedures before 'executePreparedQuery'.
 data PreparedQuery = PreparedQuery
   { liftedGoals :: [D.BodyGoal],
     queryLambdas :: [D.Function],
     extraProcs :: [Procedure]
   }
 
--- | A query taken as far as it can go without type-checking it:
--- parsed, renamed, resolved, desugared, and lambda-lifted.
--- 'goalProgram' is the program 'liftedGoals' are to be checked
--- against — the compiled program extended with 'queryLambdas', so that
--- the signatures of the query's own anonymous functions are in scope.
+-- | 'PreparedQuery' minus the type check. 'goalProgram' is the program to
+-- check 'liftedGoals' against: the compiled one plus 'queryLambdas'.
 data ResolvedQuery = ResolvedQuery
   { liftedGoals :: [D.BodyGoal],
     queryLambdas :: [D.Function],
@@ -480,10 +388,8 @@ data ResolvedQuery = ResolvedQuery
     renameWarnings :: [Diagnostic RenameWarning]
   }
 
--- | Everything 'prepareQuery' does except the type-check. Split out so
--- that a caller who wants to type-check the goals itself — or not at
--- all — can, rather than take 'prepareQuery''s all-or-nothing
--- 'TypeErrors'.
+-- | 'prepareQuery' without the type check, for callers that check
+-- themselves or not at all.
 resolveQueryGoals :: CompiledProgram -> Text -> IO ResolvedQuery
 resolveQueryGoals cp src = do
   goals <-
@@ -553,10 +459,9 @@ prepareQuery cp src = do
       warnings
     )
 
--- | Execute the lifted goals of a 'PreparedQuery' inside an existing CHR
--- session. Opens its own per-query variable scope and returns the
--- resulting bindings. The host-call registry is read from the ambient
--- 'SessionEnv'; the action only needs the goals.
+-- | Run the 'liftedGoals' of a 'PreparedQuery' in the current session, in
+-- a fresh per-query variable scope; the host-call registry comes from
+-- the ambient 'SessionEnv'.
 executePreparedQuery :: [D.BodyGoal] -> Chr (Map Text Term)
 executePreparedQuery lifted =
   convertRuntimeErrorChr $
@@ -572,10 +477,7 @@ executePreparedQuery lifted =
       )
       (Map.empty :: Map Text Value)
 
--- | Group the user-visible query variables by their underlying
--- 'VarId'. Each class is non-empty by construction: a fresh class
--- starts as a one-element 'NonEmpty', and subsequent variables sharing
--- the same 'VarId' are appended.
+-- | Group user-visible query variables (not @_@-prefixed) by 'VarId'.
 buildAliasClasses :: Map Text Value -> Chr (Map VarId (NonEmpty Text))
 buildAliasClasses varMap = do
   pairs <- traverse vidOf (Map.toAscList varMap)
@@ -587,11 +489,9 @@ buildAliasClasses varMap = do
           mvid <- getVarId v
           pure (k, mvid)
 
--- | Build the 'VarId' → display name map that 'valueToTerm' should
--- use when printing the binding for surface variable @k@. A singleton
--- alias class contributes nothing (no aliasing); otherwise we pick the
--- name that follows @k@ in the class, wrapping back to the canonical
--- (head) name if @k@ is at the end of, or absent from, the class.
+-- | The 'VarId' → display-name map for printing variable @k@'s binding:
+-- each aliased class shows as the name after @k@ in it, wrapping to the
+-- head name; singleton classes contribute nothing.
 perKeyAliases :: Map VarId (NonEmpty Text) -> Text -> Map VarId Text
 perKeyAliases classes k = Map.mapMaybe pick classes
   where
@@ -614,9 +514,8 @@ runProgramWithQuery cp hostCalls src = do
 
 type QueryM = StateT (Map Text Value) Chr
 
--- | Resolve a surface 'Term' to a 'Value' inside the per-query
--- variable scope, allocating a fresh logical variable for each new
--- 'VarTerm' the query introduces.
+-- | Surface 'Term' to 'Value' in the per-query scope, allocating a fresh
+-- variable per new 'VarTerm'.
 termToValue :: Term -> QueryM Value
 termToValue (VarTerm n) = do
   varMap <- get
@@ -630,15 +529,11 @@ termToValue (IntTerm n) = pure (VInt n)
 termToValue (FloatTerm n) = pure (VFloat n)
 termToValue (TextTerm s) = pure (VText s)
 termToValue Wildcard = pure VWildcard
--- Native-bool fast path. Mirrors 'Compile.compileTerm' for
--- @prelude:true@/@prelude:false@: the @=@-operand lowering must
--- produce 'VBool' so structural unification with comparison results
--- (which return 'VBool' directly) succeeds.
+-- Mirrors 'Compile.compileTerm': @=@ operands must lower to 'VBool' so
+-- they unify with comparison results.
 termToValue (CompoundTerm name []) | Just b <- Types.preludeBool name = pure (VBool b)
--- 0-arity ctors collapse to atoms at the runtime layer. Qualified
--- 0-arity uses the @vmName@-mangled @m__n@ form; unqualified 0-arity
--- (user-quoted atoms, undeclared bare names) keeps the raw name.
--- See 'YCHR.Internal.Compile.compileTerm' for the rationale.
+-- 0-arity ctors are atoms at runtime: qualified in the @vmName@-mangled
+-- form, unqualified as the raw name. See 'YCHR.Internal.Compile.compileTerm'.
 termToValue (CompoundTerm name@(Types.Qualified _ _) []) =
   pure (VAtom (vmName name).unName)
 termToValue (CompoundTerm (Types.Unqualified n) []) = pure (VAtom n)
@@ -693,7 +588,7 @@ executeBodyGoal (D.BodyApply f args) = do
   _ <- lift (callProc dispatchName (map CVal fAndArgVals))
   pure ()
 
--- | Raise a runtime error describing a failed unification.
+-- | Runtime error for a failed unification.
 raiseUnifyFailure :: Value -> Value -> Chr ()
 raiseUnifyFailure v1 v2 = do
   t1 <- valueToTerm Map.empty v1
@@ -704,18 +599,10 @@ raiseUnifyFailure v1 v2 = do
       ++ " with "
       ++ prettyTerm t2
 
--- | Call a host function, failing with a coded runtime error if it is not
--- registered or if it throws.
---
--- Mirrors 'YCHR.Internal.Runtime.Interpreter.invokeHostCall': an
--- arbitrary exception out of a host function (an 'IOException' from a
--- user 'YCHR.Convert.hostFnValues' handler, a parse failure inside a
--- built-in) is re-raised through 'runtimeErrorS' so it reaches the caller
--- as 'Error''s 'RuntimeError' with a call stack, rather than escaping raw.
--- Async exceptions, already-coded errors, and search branch failures
--- keep their identity ('isControlException'). The VM's non-local jumps
--- are not exceptions at all — the interpreter returns them as signals
--- — so there is nothing else to let through.
+-- | Call a host function. As in
+-- 'YCHR.Internal.Runtime.Interpreter.invokeHostCall', an unregistered
+-- name or any exception it throws becomes a 'RuntimeError' with a call
+-- stack; control exceptions ('isControlException') pass through.
 hostCall :: Maybe HostCallFn -> Text -> [Value] -> Chr Value
 hostCall (Just (HostCallFn f)) name args = do
   env <- ask
@@ -730,13 +617,9 @@ hostCall (Just (HostCallFn f)) name args = do
 hostCall Nothing name _ =
   runtimeErrorS $ "Unknown host function: " ++ T.unpack name
 
--- | Run a query-side unification, mirroring the interpreter's
--- 'evalBoolExpr (BUnify ...)' branch: snapshot the operand terms
--- /before/ the unify mutates anything (only when tracing is on),
--- run the unify, enqueue observers, emit a 'TEUnify' event on
--- success with the number of observers reactivated, raise on
--- failure, then drain the reactivation queue. The trace event is
--- skipped on failure for consistency with the interpreter path.
+-- | Query-side unification, mirroring the interpreter's @BUnify@: unify,
+-- enqueue observers, trace on success (operands snapshotted before the
+-- unify), raise on failure, drain the reactivation queue.
 queryUnify :: Value -> Value -> Chr ()
 queryUnify v1 v2 = do
   env <- ask
@@ -758,19 +641,13 @@ queryUnify v1 v2 = do
           drainReactivation
         else raiseUnifyFailure v1 v2
 
--- | Build a runtime 'Value' from a desugared 'D.Expr' without
--- evaluating embedded function calls. Mirrors 'termToValue' on the
--- typed side by round-tripping through the surface 'Term' shape via
--- 'R.exprToTerm', so query-time value construction stays bit-for-bit
--- compatible with the pre-refactor behaviour.
+-- | 'termToValue' for a 'D.Expr': builds the value structurally, no call
+-- evaluation.
 exprToValue :: D.Expr -> QueryM Value
 exprToValue = termToValue . R.exprToTerm
 
--- | Evaluate an expression in the query context (used for @is@ RHS
--- and guard expressions). 'CallExpr', 'ApplyExpr', and 'HostExpr'
--- evaluate their arguments and invoke the appropriate procedure;
--- 'CtorExpr' (and the @quote\/1@ quoting form) build values
--- structurally without re-evaluating their children.
+-- | Evaluate an expression in the query context: calls run, constructors
+-- build structurally (children still evaluated), @quote\/1@ is opaque.
 evalNestedExpr :: D.Expr -> QueryM Value
 evalNestedExpr (R.IntExpr n) = pure (VInt n)
 evalNestedExpr (R.FloatExpr n) = pure (VFloat n)
@@ -797,33 +674,25 @@ evalNestedExpr (R.HostExpr f args) = do
   argVals <- traverse evalNestedExpr args
   env <- lift ask
   lift (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
--- @quote(X)@ short-circuit: build the inner value as data, no
--- nested-call evaluation. Mirrors the legacy 'termToValue arg' path.
+-- @quote(X)@: inner value as data, no nested-call evaluation.
 evalNestedExpr (R.CtorExpr (Types.Unqualified "quote") [arg]) = exprToValue arg
--- Native-bool fast path. Mirrors 'Compile.compileExpr' for
--- @prelude:true@/@prelude:false@: queries must produce 'VBool' just
--- like compiled rules, so a REPL @is@ RHS or tell-side argument
--- agrees with comparison results (which return 'VBool' directly).
+-- Mirrors 'Compile.compileExpr': 'VBool', as compiled rules produce.
 evalNestedExpr (R.CtorExpr name []) | Just b <- Types.preludeBool name = pure (VBool b)
 -- 0-arity ctors collapse to atoms at the runtime layer.
 evalNestedExpr (R.CtorExpr name@(Types.Qualified _ _) []) =
   pure (VAtom (vmName name).unName)
 evalNestedExpr (R.CtorExpr (Types.Unqualified n) []) = pure (VAtom n)
 evalNestedExpr (R.CtorExpr name args) =
-  -- Recurse with 'evalNestedExpr' (not 'exprToValue'): a 'CtorExpr'
-  -- can contain nested 'CallExpr' / 'HostExpr' children that must
-  -- evaluate before the surrounding compound is built. Mirrors the
-  -- compiled path in 'Compile.compileExpr' for 'CtorExpr'.
+  -- 'evalNestedExpr', not 'exprToValue': nested calls must evaluate
+  -- before the compound is built, as in 'Compile.compileExpr'.
   VTerm (vmName name).unName <$> traverse evalNestedExpr args
 evalNestedExpr e@(R.FunRefExpr _ _) = exprToValue e
 evalNestedExpr (R.LambdaExpr _ _) =
   error "Run.evalNestedExpr: LambdaExpr survived lambda lifting"
 
--- | Compile lifted query lambdas into VM procedures. Discards the
--- error channel: by the time this runs, 'prepareQuery' has already
--- lifted these lambdas from a desugared program that compiled
--- cleanly and has type-checked them, so any error here would
--- indicate a compiler bug rather than a user problem.
+-- | Compile lifted query lambdas. The error channel is dropped: the
+-- lambdas were lifted from a program that compiled and type-checked, so
+-- an error here is a compiler bug.
 compileQueryLambdas :: [D.Function] -> [Procedure]
 compileQueryLambdas lambdas =
   let (procs, _errs) = runWriter $ traverse compileFunctionDef lambdas

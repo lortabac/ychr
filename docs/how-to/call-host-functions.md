@@ -1,23 +1,16 @@
 # How to call host-language functions
 
-> **Goal:** invoke a host primitive from a YCHR program, and register your
-> own host functions from Haskell when embedding YCHR as a library.
+`host:f(args)` calls a function the runtime provides, not a CHR rule
+or a `:- function`. Arguments and result are `any` to the type
+checker. Semantics: [language reference](../reference/language.md#host-calls).
+Built-in primitives (arithmetic, comparisons, type predicates, term
+meta, I/O): [`libraries/prelude.chr`](../../libraries/prelude.chr).
 
-## The `host:` namespace
+## Register your own
 
-`host:f(args)` calls a function provided by the runtime rather than a CHR
-rule or a user-defined function. Its arguments and result are untyped
-(`any` to the type checker). For the semantics see the
-[language reference](../reference/language.md#host-calls); for the
-built-in primitives (arithmetic, comparisons, type predicates, term
-meta, I/O), see the [prelude reference](../reference/prelude.md).
-
-## Registering your own host functions
-
-When you embed YCHR as a Haskell library, you can back a `host:` call with
-your own Haskell code. Lift a plain function with the `hostFn*` adapters,
-collect the entries into a registry, and run with a `…WithHostCallRegistry`
-query variant. The YCHR names below all come from a single `import YCHR`.
+Lift a Haskell function with a `hostFn*` adapter, put it in a
+registry, run with a `…WithHostCallRegistry` query. Every name below
+comes from `import YCHR`.
 
 ```haskell
 {-# LANGUAGE OverloadedStrings #-}
@@ -50,27 +43,21 @@ main =
       -- Right 5
 ```
 
-See the [host-function reference](../reference/host-functions.md) for
-the full adapter table (including the effectful `hostFn*M` variants
-and the raw `hostFnValues`), registry semantics, marshalling rules,
-and error behaviour.
+Adapter table, registry semantics, marshalling and errors:
+[convert.md §Registering host functions](../reference/convert.md#registering-host-functions).
 
-## Wrapping a host call with a typed signature
+## Give it a type
 
-A `host:` call is untyped, but a `:- function` wrapper around it
-narrows the types at the boundary:
+A `host:` call is untyped. A `:- function` wrapper types the boundary:
 
 ```prolog
 :- function my_add(int, int) -> int.
 my_add(X, Y) -> host:my_add(X, Y).
 ```
 
-Callers of `my_add/2` are now checked against `(int, int) -> int` even
-though the underlying host call is not — the wrapper is where a
-statically-typed program regains its guarantees.
+Callers of `my_add/2` are now checked against `(int, int) -> int`.
 
 ## See also
 
-- [Host-function reference](../reference/host-functions.md).
-- [Prelude reference](../reference/prelude.md).
-- [Embed a CHR module in Haskell](embed-a-chr-module.md).
+- [Haskell conversion reference](../reference/convert.md)
+- [Embed a CHR module in Haskell](embed-a-chr-module.md)

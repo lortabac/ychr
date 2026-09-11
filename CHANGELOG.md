@@ -250,7 +250,7 @@ Stdlib additions, both implemented on both backends:
   is how a program can recognize a name without knowing which module
   declared it. A non-atom argument is a runtime error; an *unbound*
   one is an instantiation failure, so a rule guard calling it delays
-  rather than aborting. See [§`meta`](docs/reference/prelude.md#meta).
+  rather than aborting. See [`libraries/meta.chr`](libraries/meta.chr).
 - The ordering operators `<`, `>`, `=<` and `>=` gain a
   `(string, string) -> bool` signature alongside their `int` and
   `float` ones, so strings compare with the ordinary operators rather
@@ -259,9 +259,9 @@ Stdlib additions, both implemented on both backends:
   still no mixed-type comparison — `1 < "a"` matches no signature
   (`YCHR-60006`). Because `max/2` and `min/2` are declared
   `requiring '>='(T, T) -> bool` / `'=<'(T, T) -> bool`, they now work
-  on strings too; `docs/reference/prelude.md`'s claim that they are
+  on strings too; the prelude reference's claim that they were
   limited to the two numeric types is corrected accordingly. See
-  [§Comparisons](docs/reference/prelude.md#comparisons-and-equality).
+  [`libraries/prelude.chr`](libraries/prelude.chr).
 
 Library API:
 

@@ -1,24 +1,11 @@
 # Functions, Types, and Lambdas
 
-> **Audience:** readers who finished
-> [Your first YCHR program](03-your-first-program.md) and want
-> deterministic computation, optional type checking, and first-class
-> functions.
-> **You will:** write user-defined functions, add type annotations and
-> watch `ychr check` catch a mismatch, and pass lambdas and function
-> references around as values.
-
-CHR is relational: the constraint store rewrites itself by matching
-heads. Once a rule fires, though, the body often wants to *compute*
-something — multiply, look up, format a string. That's what
-*user-defined functions* are for. Functions are deterministic,
-pattern-matched, top-to-bottom equations callable from guards, from
-the right-hand side of `is`, and from rule body position.
+Rule bodies often need to *compute*. User-defined functions are
+pattern-matched equations, tried top-to-bottom, callable from guards,
+from the right-hand side of `is`, and in body position.
 
 ## 1. A first function: factorial
 
-Pattern-matching, top-to-bottom, with a guard on the second equation.
-The companion file is
 [`examples/factorial.chr`](../../examples/factorial.chr):
 
 ```prolog
@@ -32,32 +19,20 @@ factorial(N) | N > 0 -> N * factorial(N - 1).
 compute(N, R) <=> R is factorial(N).
 ```
 
-Five pieces of language to point out.
-
-- `:- module(factorial, [compute/2, fun factorial/1]).` declares the
-  module and its exports. Functions are exported with the `fun
-  name/arity` form; constraints are exported as plain `name/arity`.
-  Names that aren't exported cannot be referenced from outside the
-  module — including from a REPL goal.
-- `:- function factorial(int) -> int.` declares the function and its
-  type. The name and arity live in the same namespace as constraint
-  names, but the two cannot collide. The argument and return types
-  here are explicit; if you write `:- function factorial/1.` instead,
-  both default to `any` and skip type-checking. §2 covers types in
-  more depth.
-- `:- chr_constraint compute(int, int).` similarly types the
-  constraint's two arguments.
-- The two `factorial(...) -> ...` lines are *equations*. They are
-  tried top-to-bottom. The first one matches only when the argument is
-  literally `0`. The second one matches any `N` and uses a *guard*
-  (`| N > 0`) to exclude negatives. Equation guards use the same `|`
-  operator as rule guards.
-- `compute(N, R) <=> R is factorial(N).` is an ordinary CHR rule. The
-  body uses `is` — the same operator Prolog uses to evaluate
-  arithmetic — to compute the right-hand side and unify the result with
-  the left-hand side.
-
-Load the file in the REPL and call the function directly:
+- `:- module(factorial, [compute/2, fun factorial/1]).` — functions
+  are exported as `fun name/arity`, constraints as `name/arity`.
+  Unexported names are invisible outside the module, REPL goals
+  included.
+- `:- function factorial(int) -> int.` declares the function with its
+  type; `:- function factorial/1.` would leave everything at `any`
+  (§2). Function and constraint names share a namespace and may not
+  collide.
+- `:- chr_constraint compute(int, int).` types the constraint's
+  arguments.
+- The `factorial(...) -> ...` lines are *equations*, tried
+  top-to-bottom. `| N > 0` is a guard, the same `|` as in rules.
+- `R is factorial(N)` evaluates the right-hand side and unifies the
+  result with `R`.
 
 ```sh
 ychr repl examples/factorial.chr
@@ -71,10 +46,10 @@ R = 3628800.
 ychr>
 ```
 
-The `compute/2` constraint in the file isn't needed in the REPL — `is`
-works at the top level. It's there because `ychr run -g` only accepts a
-single constraint as its goal, so calling a function from the CLI
-requires a constraint wrapper:
+`is` works at the REPL top level, so `compute/2` is not needed there.
+It exists because `ychr run -g` only accepts a single declared
+constraint as its goal, so calling a function from the CLI needs a
+constraint wrapper:
 
 ```sh
 ychr run -g 'compute(5, R)' --show-bindings examples/factorial.chr
@@ -84,27 +59,15 @@ ychr run -g 'compute(5, R)' --show-bindings examples/factorial.chr
 R = 120
 ```
 
-The pattern scales to any number of equations — see
-[`examples/fib.chr`](../../examples/fib.chr) for fibonacci with two
-base-case equations and a guarded recursive one.
+[`examples/fib.chr`](../../examples/fib.chr) has two base-case
+equations and a guarded recursive one.
 
 ## 2. Adding types
 
-YCHR has an *optional* gradual type system. Every declaration can be
-written in a plain form (no types) or an annotated form (with types);
-the checker enforces consistency only on the annotated parts. The
-factorial program in §1 used the annotated form throughout:
-
-```prolog
-:- chr_constraint compute(int, int).
-:- function factorial(int) -> int.
-```
-
-The plain forms `:- chr_constraint compute/2.` and
-`:- function factorial/1.` mean the same thing operationally, except
-they leave every argument and return at the catch-all type `any` —
-the checker accepts anything for them. Annotating commits you to a
-shape that the checker will police.
+Types are optional. `:- chr_constraint compute/2.` and
+`:- function factorial/1.` run the same as the annotated forms above
+but leave every argument and result at `any`, which the checker never
+rejects. Annotate, and the checker polices the shape.
 
 ### Running the checker
 
@@ -112,19 +75,15 @@ shape that the checker will police.
 ychr check examples/factorial.chr
 ```
 
-No output, exit status 0 — the program is well-typed.
+No output, exit status 0: well-typed.
 
 ### Catching a mismatch
 
-To see the checker work, break it on purpose. Edit
-`examples/factorial.chr` so the body calls `factorial` with a string
-instead of `N`:
+Change the rule body to call `factorial` with a string:
 
 ```prolog
 compute(N, R) <=> R is factorial("hello").
 ```
-
-Now rerun the checker:
 
 ```sh
 ychr check examples/factorial.chr
@@ -137,14 +96,11 @@ Type mismatch: 'string' does not match 'int'
 R is factorial("hello")
 ```
 
-The checker rejects the program and points at the offending call.
-Revert the change before continuing.
+Revert before continuing.
 
 ### Algebraic types
 
-You can also define your own types with a list of constructors. The
-companion file [`examples/traffic.chr`](../../examples/traffic.chr)
-defines a three-valued `color` and a function over it:
+[`examples/traffic.chr`](../../examples/traffic.chr):
 
 ```prolog
 :- module(traffic, [intensity_of/2, type(color/0, [red, green, yellow])]).
@@ -159,13 +115,10 @@ intensity(green)  -> 20.
 intensity_of(C, R) <=> R is intensity(C).
 ```
 
-`:- chr_type color ---> red ; green ; yellow.` declares a sum type with
-three nullary constructors. The function pattern-matches on them.
-
-The export form `type(color/0, [red, green, yellow])` exports the
-`color` type along with all three constructors — without this, the
-constructors stay private to the declaring module. Load the file in
-the REPL and call the constraint with bare constructor names:
+`:- chr_type color ---> red ; green ; yellow.` is a sum type with three
+nullary constructors. The export form
+`type(color/0, [red, green, yellow])` exports the type with its
+constructors; without it they stay private to the module.
 
 ```sh
 ychr repl examples/traffic.chr
@@ -181,16 +134,13 @@ R = 60.
 ychr>
 ```
 
-The full rules — polymorphism, overloading, gradual interaction with
-`any`, narrowing constructor imports — are in the
-[type system reference](../reference/type-system.md).
+Polymorphism, overloading, `any`, narrowed constructor imports: [type
+system reference](../reference/type-system.md).
 
 ## 3. Lambdas and function references
 
-Functions are also values. You can pass them around, return them, and
-call them indirectly. The companion file
-[`examples/closures.chr`](../../examples/closures.chr) shows the three
-forms a callable value can take:
+Functions are values. [`examples/closures.chr`](../../examples/closures.chr)
+shows the three forms a callable can take:
 
 ```prolog
 :- module(callables,
@@ -209,20 +159,12 @@ lambda(R)  <=> R is call(fun(X) -> X * X end, 7).
 closure(R) <=> Add10 is make_adder(10), R is call(Add10, 5).
 ```
 
-Three pieces of syntax:
-
-- **`fun name/arity`** — a reference to an existing top-level function.
-  `fun double/1` is the value "the `double` function".
-- **`fun(X) -> Body end`** — an anonymous function (Erlang-style). The
-  `end` keyword delimits the body so lambdas can appear inside other
-  expressions without needing extra parentheses.
-- **`call(F, X)`** — apply a callable value (function reference,
-  lambda, or closure) to an argument. It's a typed prelude function;
-  `call(F, X, Y)` is the two-argument variant, and so on for higher
-  arities.
-
-The three example constraints each invoke `call` with a different kind
-of callable:
+- `fun name/arity` — a reference to a top-level function.
+- `fun(X) -> Body end` — an anonymous function. `end` delimits the
+  body, so a lambda can sit inside an argument list without extra
+  parentheses.
+- `call(F, X)` — apply a callable (reference, lambda, or closure). A
+  prelude function; `call(F, X, Y)` and up for higher arities.
 
 ```sh
 ychr run -g 'by_ref(R)' --show-bindings examples/closures.chr
@@ -248,18 +190,12 @@ ychr run -g 'closure(R)' --show-bindings examples/closures.chr
 R = 15
 ```
 
-The third case is the one to dwell on. `make_adder(10)` returns
-`fun(X) -> X + N end` with `N` bound to `10` — a *closure* that
-remembers its captured value. Calling that closure with `5` gives
-`10 + 5 = 15`. Each call to `make_adder` produces an independent
-closure with its own captured `N`.
+`make_adder(10)` returns a closure with `N` captured as `10`. Each call
+to `make_adder` makes an independent closure.
 
 ## 4. Where to go next
 
-- [Type system reference](../reference/type-system.md) — the full
-  rules for type annotations, polymorphism, and overload resolution.
-- [Prelude reference](../reference/prelude.md) — the built-in
-  functions and constraints (`is`, arithmetic, comparisons, list
-  primitives, `call/N`) that this tutorial drew on.
-- [Language reference](../reference/language.md) — the precise spec
-  for everything introduced in tutorials 01–04.
+- [Type system reference](../reference/type-system.md) — annotations,
+  polymorphism, overload resolution.
+- [`libraries/prelude.chr`](../../libraries/prelude.chr) — the built-in
+  functions and operators.

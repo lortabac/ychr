@@ -1,30 +1,21 @@
 # REPL Reference
 
-> **Audience:** anyone using `ychr repl`.
-> **You will:** find the REPL prompts, meta-commands, and the
-> difference between one-shot queries and live sessions.
-
-For a guided walk-through, see
-[how-to/use-the-repl.md](../how-to/use-the-repl.md).
-
 ## Starting the REPL
 
 ```sh
 ychr repl [--quiet] [--Werror] [FILES...]
 ```
 
-The REPL loads the given files (or none, falling back to the bundled
-prelude alone), prints any warnings and type-check messages, and
-presents the `ychr> ` prompt. The full standard library is auto-loaded;
-no `:- use_module(library(...))` is needed for prelude, meta, or
-search identifiers.
+Loads the files (or none), prints warnings and type-check messages,
+shows the `ychr> ` prompt. The full standard library is auto-loaded;
+no `:- use_module(library(...))` is needed for prelude, meta or search
+names.
 
-Because a *query* resolves against every auto-loaded library, a bare
-name that a loaded file also exports is ambiguous at the prompt even
-though the same name inside a module body would resolve locally. With
-a file that exports its own `fail/0`:
+A query resolves against every auto-loaded library, so a bare name a
+loaded file also exports is ambiguous at the prompt (inside a module
+body it would resolve locally). With a file exporting its own `fail/0`:
 
-```
+```ychr-repl
 ychr> fail.
 === error ===
 <generated>:1:1: YCHR-20001
@@ -32,16 +23,19 @@ Ambiguous name 'fail/0'
   Hint: could be: lib_a, search; qualify the name explicitly to disambiguate
 ```
 
-Qualify it — `lib_a:fail` — as the hint says. The names
-`library(search)` brings into query scope are the constraints `alt/1`,
-`choose/2` and `try_unify/2`; the functions `fail/0`, `solve/1`,
-`find_all/2`, `fold_solutions/4`, `forall/3` and `find_n/3`; and the
-type `step/1` with its constructors `continue/1`, `stop/1` and
-`commit/1`. Those last three are ordinary generic names, so a bare
-`continue(1)` in a query resolves to `search:continue(1)`.
+Qualify it: `lib_a:fail`. `library(search)` puts in query scope the
+constraints `alt/1`, `choose/2`, `try_unify/2`; the functions
+`fail/0`, `solve/1`, `find_all/2`, `fold_solutions/4`, `forall/3`,
+`find_n/3`; and the type `step/1` with constructors `continue/1`,
+`stop/1`, `commit/1` — so a bare `continue(1)` is
+`search:continue(1)`.
 
-The `--quiet` and `--Werror` flags are documented in the
-[CLI reference](cli.md).
+`--quiet` drops the prompt, the warnings and the type-check report,
+except under `--Werror`,
+where warnings are still printed. Under `--Werror` a warning on the
+initial load aborts startup; on `:recompile` it keeps the previous
+program; while renaming a query's arguments it aborts that query and
+leaves the store alone.
 
 ## Prompts
 
@@ -50,10 +44,9 @@ The `--quiet` and `--Werror` flags are documented in the
 | `ychr> ` | Normal mode. Each query runs against a fresh, empty store. |
 | `ychr live> ` | Live session (between `:begin` and `:end`). Queries share a persistent store. |
 
-## Tab completion
-
-Tab completion offers the meta-commands plus the names of constraints
-and functions exported from the loaded modules.
+Tab completion offers the constraint and function names exported from
+the loaded modules, plus the meta-commands at the outer prompt (only
+`:end` inside a live session).
 
 ## Meta-commands
 
@@ -73,18 +66,13 @@ and functions exported from the loaded modules.
 
 ### `:info`
 
-`:info NAME` (alias `:i NAME`) prints information about an identifier:
-the fully qualified name on the first line, then a semantically
-equivalent declaration on the next. Built-in types (`int`, `float`,
-`string`, `any`) print `built-in type`, qualified by the type
-checker's own internal module rather than by a module you can import.
-The argument can be a bare
-name (`foo`), an operator atom (`'+'`), a `name/arity` form
-(`call/2`), a qualified name (`prelude:max`), or any combination.
-When a bare name matches multiple arities, every match is printed.
-When a bare `name/arity` is exported by more than one module the
-command refuses to guess: it reports the ambiguity and asks for a
-qualified form.
+`:info NAME` prints the fully qualified name, then an equivalent
+declaration. Built-in types (`int`, `float`, `string`, `any`) print
+`built-in type`, qualified by the type checker's internal module.
+`NAME` may be bare (`foo`), an operator atom (`'+'`), `name/arity`
+(`call/2`), qualified (`prelude:max`), or any combination. A bare name
+matching several arities prints all of them; a bare `name/arity`
+exported by more than one module is reported as ambiguous — qualify it.
 
 ```ychr-repl
 ychr> :info int
@@ -107,15 +95,11 @@ unknown identifier: foo
 
 ### `:trace`
 
-`:trace GOAL` runs `GOAL` with the interpreter's tracer enabled,
-printing one event per step of the refined operational semantics (ωr)
-plus entries for user-function calls, lambda calls, and host calls.
-Indentation reflects nesting. The output is the trace only — final
-bindings are not printed; re-run the goal without `:trace` to see them.
-
-`:trace` works at the outer prompt (against a fresh store) and inside
-a live session (the trace handler is installed for the duration of
-one query, leaving subsequent untraced queries unaffected).
+`:trace GOAL` runs `GOAL` printing one event per step of the refined
+operational semantics (ωr) plus user-function, lambda and host calls,
+indented by nesting. Only the trace is printed; re-run without
+`:trace` for the bindings. Works at the outer prompt and inside a live
+session (the handler lasts one query).
 
 ```ychr-repl
 ychr> :trace R is 1 + 2.
@@ -124,10 +108,10 @@ call prelude:+(1, 2)
 return 3
 ```
 
-A small CHR example showing tell, activate, try-occurrence, partner
-pick, fire, store, and recursive activation. The first `leq(1, 2)`
-finds no partners (the store is empty when it activates); the second
-`leq(2, 3)` finds `c#0` as a transitivity partner and the rule fires:
+The next transcript shows tell, activate, try-occurrence, partner,
+fire, store and recursive activation. The first `leq(1, 2)` finds no
+partner (the store is empty); the second finds `c#0` and transitivity
+fires:
 
 ```ychr-repl
 ychr> :trace order:leq(1, 2), order:leq(2, 3).
@@ -159,23 +143,18 @@ tell order:leq(2, 3)
     try occurrence order:leq #7 (rule transitivity)
 ```
 
-Occurrences 3 and 5 never appear: the compiler marks them passive and
-emits no procedure for them, so `activate` never calls them. See
-[passive occurrences](../../dev-docs/passive-occurrences.md#worked-example-leq)
-for why those two are redundant.
+Occurrences 3 and 5 are passive: the compiler emits no procedure for
+them ([passive occurrences](../../dev-docs/passive-occurrences.md#worked-example-leq)).
 
-Note where the `store` events sit. Constraints are stored *late*: a
-constraint enters the store on the first rule fire that keeps it (the
-`store c#1` just before transitivity's body runs), or when its
-activation ends without dropping it (the `store c#0` after the last
-occurrence). A constraint removed during its own activation is never
-stored at all. One visible consequence: during its *initial*
-activation a constraint never appears as its own partner — it is not
-in the store yet. (A *reactivated* constraint is already stored, so a
-self-`partner` line can appear there before the compiled guard
-rejects the self-match.)
+Storage is late: a constraint enters the store on the first fire that
+keeps it (`store c#1` before transitivity's body) or when its
+activation ends without dropping it (`store c#0`); one removed during
+its own activation is never stored. So during its initial activation a
+constraint never appears as its own partner — it is not in the store
+yet. A reactivated one is already stored and can, until the guard
+rejects the self-match.
 
-The events are:
+Events:
 
 | Event | Meaning |
 |-------|---------|
@@ -194,22 +173,19 @@ The events are:
 
 ## One-shot queries
 
-Outside a live session, anything typed at the prompt is parsed as a
-goal and executed against a **fresh** constraint store. The store is
-discarded when the query returns. Resulting bindings (if any) are
-printed. Following Prolog convention, bindings for variables whose
-name begins with `_` (e.g. `_X`, `_Y`) are omitted from the printed
-result — the leading underscore marks them as intentionally
-uninteresting. They are still bound; only the output is filtered.
+Outside a live session each input is a goal run against a fresh
+store, discarded when the query returns. Bindings are printed, except
+for variables whose name starts with `_` (`_X`) — Prolog convention;
+they are still bound, only the output is filtered.
 
-Unlike `ychr run -g` (which accepts only a single declared constraint
-— see [`cli.md`](cli.md)), the REPL accepts any goal: bare expressions
-(`1 + 1.`), equality and `is` (`X = 2.`, `X is 1 + 1.`), comma-separated
-conjunctions, and constraint calls all work.
+`ychr run -g GOAL` takes exactly one declared constraint (`cake`,
+`compute(5, R)`, `bakery:egg`); a bare expression, an `is`/`=` form, a
+conjunction or a function call is `YCHR-20013`. `--show-bindings`
+prints the bindings one per line, sorted. The REPL accepts any goal:
+`1 + 1.`, `X = 2.`, `X is 1 + 1.`, conjunctions, constraint calls.
 
-A query that adds a constraint without firing any rules will silently
-succeed; the new constraint is then thrown away with the rest of the
-store:
+A query that adds a constraint and fires nothing succeeds silently;
+the constraint goes with the store:
 
 ```ychr-repl
 ychr> egg.
@@ -218,32 +194,12 @@ ychr>
 
 ## Live sessions
 
-Inside `:begin … :end`, the store **persists** between inputs. Each
-line is a goal that adds to (or fires rules against) the running
-store. `:end` discards the session's store and returns to normal mode.
-
-The `print_store/0` function from the meta library prints every
-alive constraint in the store, qualified by module:
-
-```ychr-repl
-ychr> :begin
-ychr live> egg.
-ychr live> egg.
-ychr live> print_store.
-bakery:egg
-bakery:egg
-ychr live> :end
-ychr>
-```
-
-(Captured against [`examples/bakery.chr`](../../examples/bakery.chr).)
+Inside `:begin … :end` the store persists between inputs; `:end`
+discards it. A live query may not contain a lambda (`YCHR-50003`); put
+it in a `:- function` in a file. `print_store/0` (meta library) prints
+every alive constraint, module-qualified. Transcript:
+[Getting started §4](../tutorials/01-getting-started.md#4-try-it-in-a-live-session).
 
 ## History
 
-The REPL keeps a persistent line-history file across invocations; the
-path is listed in the [CLI reference](cli.md#files).
-
-## See also
-
-- [How-to: use the REPL](../how-to/use-the-repl.md).
-- [CLI reference](cli.md).
+`$XDG_DATA_HOME/ychr/history` (usually `~/.local/share/ychr/history`).

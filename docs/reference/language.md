@@ -1,27 +1,63 @@
 # YCHR Language Reference
 
-> **Audience:** readers who know CHR and want to know where YCHR
-> departs from it.
-> **You will:** find the feature-level rules for modules, constraints,
-> functions, evaluation, and host calls.
-> **Skip if:** you are learning CHR itself — start with the
-> [CHR primer](../tutorials/02-chr-primer.md).
-
 YCHR accepts standard CHR with Prolog-compatible syntax: constraint
-declarations, simplification rules (`<=>`), propagation rules (`==>`),
-simpagation rules (`\`), guards, and rule bodies. This document
-describes the ways YCHR diverges from the K.U.Leuven CHR-in-Prolog
-dialect.
+declarations, simplification (`<=>`), propagation (`==>`) and
+simpagation (`\`) rules, guards, bodies. Below: where YCHR diverges
+from the K.U.Leuven CHR-in-Prolog dialect. The optional
+static type checker is specified in [type-system.md](type-system.md).
 
-For the surface grammar (lexical conventions, the full directive
-table, the rule and expression forms), see
-[syntax.md](syntax.md). For the optional static type checker see
-[type-system.md](type-system.md).
+## Lexical syntax
+
+- Comments: `%` to end of line. No block comments.
+- Atoms: a lowercase letter, then letters, digits, `_`. `__` is
+  reserved (the compiled-name separator). Prefix word operators
+  (`chr_constraint`, `function`, `class`, …) must be quoted to be used
+  as atoms. Quoted atoms are `'…'`: `''` for a quote, escapes `\\`,
+  `\'`, `\n`, `\t`; any other `\c` is `c`. `__` and `%%u` are rejected
+  inside quotes too.
+- A bare atom and a 0-arity data constructor are the same value.
+- Variables: an uppercase letter or `_`, then letters, digits, `_`.
+  `_` alone is the wildcard; each occurrence is distinct.
+- Integers: decimal digits, optional `-`, arbitrary precision. No `_`
+  separators, no hex/octal/binary.
+- Floats: `digits.digits`, optional `-`. No exponent.
+- Strings: `"…"`, escapes `\"`, `\\`, `\n`, `\t`. Type `string`, not
+  code lists.
+- `:` qualifies a name with its module: `lists:append`.
+- `[]`, `[a, b]`, `[H | T]` are `'.'/2` cells.
+
+## Directives
+
+| Directive | See |
+|---|---|
+| `:- module(Name, Exports).` / `:- module(Name).` | [Modules](#modules) |
+| `:- use_module(M).` / `:- use_module(M, Imports).` | [Modules](#modules) |
+| `:- chr_constraint Decls.` | [Constraints](#constraints) |
+| `:- chr_type T ---> Cs.` / `:- opaque_type T.` | [Type and constructor exports](#type-and-constructor-exports), [type-system.md](type-system.md) |
+| `:- function` / `:- open_function` / `:- class` / `:- open_class` | [Functions](#functions) |
+| `:- extend_function` / `:- extend_class` / `:- extend_class_type` | [Declaration placement](#declaration-placement) |
+
+Declaration directives take comma-separated lists:
+`:- chr_constraint a/1, b/2.` Unknown directives are dropped silently
+(Prolog-source compatibility, not an extension point).
+
+## Rules
+
+```
+[Name @] Head <=> [Guard |] Body.            % simplification
+[Name @] Head ==> [Guard |] Body.            % propagation
+[Name @] Kept \ Removed <=> [Guard |] Body.  % simpagation
+```
+
+Heads are comma-separated constraint applications. Guards are
+comma-separated boolean expressions with ask semantics (no binding);
+they are expressions, not Prolog predicates, and may call
+[host functions](#host-calls) or user-defined functions. Bodies are
+comma-separated tells.
 
 ## Modules
 
-A YCHR program is organized into modules. A module *may* declare its
-name and its export list, and may import other modules:
+A module may declare its name, its exports and its imports:
 
 ```prolog
 :- module(order, [leq/2]).
@@ -34,61 +70,55 @@ idempotence   @ leq(X, Y) \ leq(X, Y) <=> true.
 transitivity  @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).
 ```
 
-A module may also be declared without an export list:
+Without an export list:
 
 ```prolog
 :- module(order).
 ```
 
-This form exports every constraint, function, type, and operator
-declared in the module. It does not re-export imports.
+This exports every constraint, function, type and operator the module
+declares, and re-exports no imports. A file with no `:- module` header
+is an *unnamed* module with the same visibility; diagnostics call it
+`<a>` for `a.chr`. Several header-less files may be combined, but an
+unqualified reference to a name declared in more than one of them is
+ambiguous and rejected.
 
-The `:- module(...)` directive itself is optional. A file with no
-module header forms an *unnamed* module that exports every constraint,
-function, type, and operator it declares — the same visibility rule
-as `:- module(Name).` without the name. Diagnostics refer to such a
-module by its file basename in angle brackets (`<a>` for `a.chr`).
-This form is intended for single-file programs and ad-hoc scripts;
-combining multiple header-less files in one program is supported,
-but unqualified references to a name declared in more than one
-unnamed module are ambiguous and rejected.
+Names are qualified with their defining module; unqualified references
+resolve through the module's imports. Data constructors and atoms are
+qualified the same way: `palette:red`. If two imports export the same
+name and arity, an unqualified use is rejected (`YCHR-20001`;
+`YCHR-20012` for a data constructor). Qualify it, or, when the clash is
+with the prelude, rename yours.
 
-Constraint and function names are qualified with their defining
-module; unqualified references in source are resolved against the
-module's imports. The same qualification applies to data
-constructors and atoms: `palette:red` names the `red` constructor of
-the `palette` module. If two imports both export an identifier of
-the same name and arity, an unqualified use is rejected and the user
-must disambiguate.
+Qualifying does not bypass imports: `m:name` is valid only if the
+current module imports `m` and `m` exports `name`. Unimported module:
+`YCHR-20014` (`ModuleNotImported`). Unknown module: `YCHR-20015`
+(`UnknownModule`). Imported module without that export: `YCHR-20009`
+(`NotExportedByModule`).
 
-Qualifying a name does *not* bypass the import requirement: a
-reference `m:name` is valid only if the current module imports `m`
-(via `:- use_module(m)`) and `m` exports `name`. Referencing an
-unimported but existing module is rejected as `YCHR-20014`
-(`ModuleNotImported`); referencing a module that does not exist at all
-is rejected as `YCHR-20015` (`UnknownModule`); referencing an imported
-module that lacks the export is `YCHR-20009` (`NotExportedByModule`).
+`:- use_module(M)` and `:- use_module(library(M))` are equivalent;
+there is no library search path. `:- use_module` directives come
+before everything else in the file (`YCHR-20007`). The bundled
+libraries `lists`, `maybe`, `pairs`, `strings`, `meta` and `search`
+([`libraries/`](../../libraries/)) need an explicit import outside the
+REPL. The prelude is always imported, in full; an import list on it is
+rejected (`YCHR-20019`).
 
-`:- use_module(M)` and `:- use_module(library(M))` are equivalent: the
-`library(...)` wrapper is accepted as a Prolog-source compatibility
-shim and resolves to the same module. There is no separate library
-search path.
+Operators are declared with `op(Priority, Type, Name)` entries in an
+export or import list. There is no `:- op` directive.
 
 ### Type and constructor exports
 
-A user-defined type is declared with `:- chr_type` (see
-[type-system.md](type-system.md) for the full spec):
+A user-defined type is declared with `:- chr_type`
+([type-system.md](type-system.md)):
 
 ```prolog
 :- chr_type col ---> red ; green ; blue.
 ```
 
-The type is exported with `type(Name/Arity)`, where *Arity* is the
-number of type parameters (not the number of constructors). By default
-this also exports every data constructor of the type. To export the
-type while restricting which constructors are visible to importing
-modules, use the two-argument form
-`type(Name/Arity, [Con1, Con2, ...])`:
+Export it with `type(Name/Arity)`, where *Arity* counts type
+parameters, not constructors. That exports every constructor too;
+`type(Name/Arity, [Con1, Con2, ...])` restricts which are visible:
 
 ```prolog
 :- module(palette, [type(col/0)]).         % all constructors of col
@@ -96,71 +126,55 @@ modules, use the two-argument form
 :- module(palette, [type(col/0, [])]).     % type but no constructors
 ```
 
-The same form is accepted in `use_module` import lists, where it
-intersects with the exporter's allowlist:
+The same form in a `use_module` import list intersects with the
+exporter's allowlist:
 
 ```prolog
 :- use_module(palette, [type(col/0, [red])]).
 ```
 
-If a constructor named in either list is not declared on the type, the
-program is rejected with `YCHR-20008`. On the import side, a constructor
-that is declared on the type but excluded by the exporter's allowlist is
-rejected with `YCHR-20011` (a separate code so users can distinguish
-"misspelled or unknown" from "declared but not visible").
-
-The allowlist also governs qualified references: writing `palette:green`
-in a rule, guard, or expression is rejected with `YCHR-20010` when
-`green` is declared on `col` but not in `palette`'s export allowlist.
-Bare and qualified syntax see the same view of the module.
+A constructor named in either list but not declared on the type:
+`YCHR-20008`. On the import side, a constructor declared on the type
+but excluded by the exporter's allowlist: `YCHR-20011` ("declared but
+not visible", distinct from "unknown"). A qualified reference
+`palette:green` to a constructor outside `palette`'s allowlist:
+`YCHR-20010`. Bare and qualified syntax see the same view of the module.
 
 ### Opaque types
 
-An *opaque type* is a nominal type with no data constructors, declared
-with `:- opaque_type` and introduced or eliminated only by the
-functions declared over it — see
-[type-system.md](type-system.md#opaque-types) for the declaration form
-and typing rules. Opaque types share the type namespace with algebraic
-types, so they are exported (and imported) with the same
-`type(Name/Arity)` form. Since there are no constructors, the
-`type(Name/Arity, [...])` allowlist form is not useful for one (a
-named constructor is rejected as unknown, `YCHR-20008`).
+`:- opaque_type` declares a nominal type with no data constructors,
+introduced and eliminated only by the functions declared over it
+([type-system.md](type-system.md#opaque-types)). Opaque types share
+the type namespace with algebraic types and use the same
+`type(Name/Arity)` export/import form. Naming a constructor in the
+allowlist form is `YCHR-20008`.
 
 ## Constraints
 
-Constraints are declared with `:- chr_constraint`. The arity-only
-form is the standard CHR shape:
+The arity-only form is standard CHR:
 
 ```prolog
 :- chr_constraint leq/2.
 ```
 
-When the type checker is in use, the same declaration can carry
-argument types — the arity is then inferred from the number of
-positions:
+With the type checker, the declaration may carry argument types; the
+arity is then the number of positions:
 
 ```prolog
 :- chr_constraint leq(int, int).
 :- chr_constraint sorted(list(T)) requiring lt(T, T) -> bool.
 ```
 
-The `requiring` clause attaches *bounds* — required function
-signatures that must be in scope at the concrete instantiation of a
-type variable. See [type-system.md](type-system.md) for what bounds
-mean and when they are discharged.
-
-Multiple declarations may share one directive:
-`:- chr_constraint a/1, b/2.`
+`requiring` attaches *bounds*: function signatures that must be in
+scope at the concrete instantiation of a type variable
+([type-system.md](type-system.md)). A constraint may not share name
+and arity with a function-like declaration in the same module
+(`YCHR-16016`).
 
 ## Functions
 
-When CHR is embedded in Prolog, guards rely on predicate success or
-failure. In YCHR, guards are functional expressions that return a
-boolean. They can call host-language procedures (see
-[Host calls](#host-calls) below) or user-defined *functions*.
-
-Functions are declared with `:- function` and defined with Erlang-style
-equations using `->`, evaluated top-to-bottom by pattern matching:
+A function is declared with `:- function` and defined by Erlang-style
+`->` equations, tried top-to-bottom:
 
 ```prolog
 :- function member/2.
@@ -170,16 +184,13 @@ member(X, [X|_])  -> true.
 member(X, [_|Xs]) -> member(X, Xs).
 ```
 
-Equation patterns match exactly like rule heads: the same
-head-normal-form machinery normalizes both. Repeated variables become
-implicit equality guards, nested compound patterns and literal
-patterns become explicit match-and-extract steps. A pattern with
-literal `0` matches only the integer 0; a pattern with `[X | Xs]`
-matches only a non-empty cons cell.
+Equation patterns match exactly like rule heads (the same
+head-normal-form machinery): repeated variables become equality
+guards, literal and compound patterns become match-and-extract steps.
+`0` matches only the integer 0; `[X | Xs]` only a non-empty cons cell.
 
-Guard clauses on equations are written with `|`, and use the same
-ask-semantics as rule guards (no variable binding, comma-separated
-boolean expressions, may call any function in scope):
+Equation guards follow `|` and have rule-guard ask semantics: no
+binding, comma-separated booleans, any function in scope:
 
 ```prolog
 :- function factorial/1.
@@ -188,15 +199,14 @@ factorial(0)              -> 1.
 factorial(N) | N > 0      -> N * factorial(N - 1).
 ```
 
-Functions are callable everywhere an expression evaluates — see
-[Tell-side evaluation](#tell-side-evaluation) for the full list. If
-no equation matches, a runtime error is raised.
+Functions are callable in every evaluating position
+([Tell-side evaluation](#tell-side-evaluation)). No matching equation
+is a runtime error.
 
 ### Sequencing in function bodies
 
-A function body may also be a comma-separated sequence. The last item
-is the return expression; earlier items run for their effect or to
-bind a value before the return is computed:
+A body may be a comma-separated sequence. The last item is the result;
+earlier items run strictly left-to-right, for effect or to bind:
 
 ```prolog
 :- function factorial/1.
@@ -208,34 +218,27 @@ factorial(N) | N > 0 ->
     N * Prev.
 ```
 
-Items are evaluated strictly left-to-right. A non-final item must be
-one of:
+A non-final item must be one of:
 
-- An `is` binding `X is E`. The left-hand side must be a variable
-  (function bodies have no unification machinery); a non-variable LHS
-  is rejected (`NonVariableIsInFunctionBody`, YCHR-30004).
-- A host call `host:f(args)`. Its return value is discarded.
-- A function call `f(args)` or `'$call'(F, args)`. The return value
-  is discarded.
+- `X is E`. The LHS must be a variable (function bodies have no
+  unification); otherwise `NonVariableIsInFunctionBody`, YCHR-30004.
+- A host call `host:f(args)`; the result is discarded.
+- A function call `f(args)` or `'$call'(F, args)`; the result is
+  discarded.
 
-Anything else — including `=` unification, a CHR tell, `true`, or a
-bare expression like `(A, B)` — is rejected
-(`NonPreludeFunctionBodyItem`, YCHR-30003) with a hint pointing at the
-offending item. The single-expression body (the form without commas)
-is the degenerate case and continues to work unchanged.
+Anything else — `=`, a CHR tell, `true`, a bare `(A, B)` — is
+`NonPreludeFunctionBodyItem`, YCHR-30003, with a hint at the item. A
+single-expression body is the degenerate case.
 
-Comma at the top of the body is always a sequencer, even when written
-in functor form (`','(A, B)`); both surface forms parse to the same
-compound. To return a `,/2` constructor value, wrap it in `quote/1`:
-`f() -> quote(','(foo, bar)).`
+A top-level comma is always a sequencer, in functor form `','(A, B)`
+too. To return a `,/2` value, quote it: `f() -> quote(','(foo, bar)).`
 
-An `is` binding may shadow a parameter or an earlier binding of the
-same name. The RHS sees the *old* value; subsequent statements and the
-return expression see the new one. This is lexical shadowing — there
-is no unification with the previous slot — so `f(X) -> X is X + 1, X.`
-is well-typed even when `X` and `X + 1` have different types.
+An `is` binding may shadow a parameter or an earlier binding. The RHS
+sees the old value; later items and the result see the new one. This
+is lexical shadowing, not unification, so `f(X) -> X is X + 1, X.` is
+well-typed even when `X` and `X + 1` differ in type.
 
-Lambdas (`fun(X) -> ... end`) accept the same sequenced form:
+Lambdas accept the same form:
 
 ```prolog
 make_doubler() -> fun(X) -> Y is X + 1, Y * 2 end.
@@ -243,85 +246,99 @@ make_doubler() -> fun(X) -> Y is X + 1, Y * 2 end.
 
 ### `:- function` vs `:- class`
 
-`:- function` declares a single-signature function; giving it more
-than one typed signature is rejected (YCHR-16011). To overload a name
-across several type signatures, declare it with `:- class`; the
-equations still form one shared, top-to-bottom matched set. The
-cross-module pair `:- open_function` / `:- open_class` mirrors the
-closed forms. Bounded polymorphism (`requiring`) is allowed on
-`:- function` / `:- open_function` / `:- chr_constraint`, but never
-on the class forms (YCHR-15005 on a class). See
-[type-system.md](type-system.md#signature-overloading) for the
-overloading rules and examples.
+`:- function` takes one typed signature; more is YCHR-16011. `:- class`
+overloads a name across several signatures; the equations still form
+one top-to-bottom set. `:- open_function` / `:- open_class` are the
+cross-module counterparts. `requiring` is allowed on `:- function`,
+`:- open_function` and `:- chr_constraint`, never on a class form
+(YCHR-15005). Overloading rules:
+[type-system.md](type-system.md#signature-overloading).
 
 ### Declaration placement
 
-All declarations for one name must live in a single module, and the
-declaration group plus its equations must be a contiguous block of
-module items. Splitting declarations across the module is
-`DiscontiguousFunctionDecls` (YCHR-15004); interleaving equations
-with unrelated items is `DiscontiguousEquations` (YCHR-15001). For
-extension across modules, use `:- open_function` / `:- open_class`
-plus `:- extend_function` / `:- extend_class` / `:- extend_class_type`.
+All declarations of one name live in one module, and the declaration
+group plus its equations form a contiguous block of module items.
+Split declarations: `DiscontiguousFunctionDecls`, YCHR-15004.
+Equations interleaved with unrelated items: `DiscontiguousEquations`,
+YCHR-15001. To extend across modules, use `:- open_function` /
+`:- open_class` with `:- extend_function` / `:- extend_class` /
+`:- extend_class_type`. Extending a closed declaration is YCHR-16005;
+the wrong kind, YCHR-16013/16014/16015; a free-floating equation
+outside the declaring module, YCHR-16006.
+
+## Expression forms
+
+Every expression position parses the same terms; what a term *means* is
+decided at resolution (see [Tell-side evaluation](#tell-side-evaluation)).
+
+| Form | Meaning |
+|---|---|
+| `42`, `-3`, `3.14`, `"text"`, `foo`, `'a-b'` | Literals. |
+| `X`, `_Tail`, `_` | Variable; `_` is the wildcard. |
+| `f(A, B)` | Function call, constructor, or tell, depending on what `f` resolves to. |
+| `[a, b]`, `[H \| T]`, `[]` | Lists. |
+| `M:name`, `M:name(A)` | Module-qualified reference. |
+| `host:name(A)` | [Host call](#host-calls). |
+| `quote(E)` | `E` as data, unevaluated ([`quote/1`](#the-quote1-quoting-form)). |
+| `fun(X, Y) -> Body end` | Lambda; parameters are variables or wildcards. |
+| `fun name/arity` | Function reference. |
+| `'$call'(F, A1, A2)` | Wired-in dynamic call; prefer the prelude's `call/N`. |
+| `X is E`, `X = E`, `A == B` | Evaluation, unification (tell), structural equality (ask). |
+| `A ; B` | [Disjunction](#disjunction-in-rule-bodies) in a rule body. |
 
 ## Tell-side evaluation
 
-YCHR evaluates expressions in many positions that standard CHR
-treats symbolically. A compound term whose head names a declared
-function becomes a function call and runs at that point; a compound
-term whose head names a data constructor becomes a value of that
+Many positions that standard CHR treats symbolically are evaluated. A
+compound whose head names a declared function is a call and runs
+there; one whose head names a data constructor is a value of that
 constructor.
 
-**Evaluating positions:**
+Evaluating positions:
 
-- Rule body constraints (tell-side): `c(1 + 2)` stores `c(3)`.
-- Top-level goals.
-- Function and constructor arguments inside any of the above.
-- The right-hand side of `is`.
-- Rule guards and equation guards.
-- Function equation right-hand sides.
+- rule-body constraint arguments (tell-side): `c(1 + 2)` stores `c(3)`;
+- top-level goals;
+- function and constructor arguments inside the above;
+- the right-hand side of `is`;
+- rule guards and equation guards;
+- equation right-hand sides.
 
-**Non-evaluating positions:**
+Non-evaluating positions:
 
-- Operands of `=` — `=` is pure structural unification; see
-  [The `=` operator](#the--operator).
-- Rule heads and equation patterns: these match on data shapes; a
-  pattern like `f(g(X))` matches a compound whose argument is itself
-  a compound, regardless of what `g` resolves to.
-- Inside `quote(...)` (see below).
+- operands of `=` ([The `=` operator](#the--operator));
+- rule heads and equation patterns, which match on shape: `f(g(X))`
+  matches a compound with a compound argument whatever `g` resolves to;
+- inside `quote(...)`.
 
-For instance, given:
+A variable in an evaluating position must be bound by the rule head or
+the equation's parameters (`YCHR-40002`);
+`test/golden/soft_guard_hard_positions` enumerates the positions.
 
 ```prolog
 :- chr_constraint store/1, ask/1.
 store(X), ask(R) <=> R = X.
 ```
 
-calling `store(1 + 2), ask(R)` stores `store(3)` (not `store(1 + 2)`),
-and the second rule then unifies `R = 3`. The same applies to
-function calls: `store(member(1, [0, 1, 2]))` stores `store(true)`.
+`store(1 + 2), ask(R)` stores `store(3)`, then binds `R = 3`.
+`store(member(1, [0, 1, 2]))` stores `store(true)`.
 
 ### Constructor and function names must not collide
 
-A compound's head is what chooses between the two readings above — a
-function call or a constructor application — so a name may not mean
-both. Concretely:
+A compound's head decides between call and constructor, so a name may
+not mean both:
 
-- Declaring a data constructor and a function with the same name in
-  **one module** is `ConstructorFunctionCollision` (`YCHR-16020`).
-  Both would spell as `mod:name`, so nothing could tell them apart.
-- Referring to a name that is visible as a constructor from one module
-  and as a function from another, **without qualifying it**, is
-  `ConstructorFunctionAmbiguity` (`YCHR-20020`).
+- A data constructor and a function of the same name in **one module**:
+  `ConstructorFunctionCollision`, `YCHR-16020`. Both spell `mod:name`.
+- An **unqualified** reference to a name that is a constructor in one
+  import and a function in another: `ConstructorFunctionAmbiguity`,
+  `YCHR-20020`.
 
-Arity is not part of the comparison on either side: data constructors
-are name-only in the type system, so `foo/0` the constructor clashes
-with `foo/1` the function. Every module imports the prelude in full,
-so no constructor may be referred to bare under a name the prelude
-declares as a function (`var`, `float`, `string`, `atom`, `not`, …).
+Arity is not compared: constructors are name-only in the type system,
+so constructor `foo/0` clashes with function `foo/1`. The prelude is
+imported in full, so no constructor may be used bare under a prelude
+function name (`var`, `float`, `string`, `atom`, `not`, …); the prelude
+import cannot be narrowed (`YCHR-20019`), so rename the constructor.
 
-The cross-module case has an escape hatch — qualifying the reference
-names exactly one thing:
+Across modules, qualifying names exactly one thing:
 
 ```prolog
 :- use_module(node).   % declares the constructor leaf/1
@@ -330,17 +347,9 @@ names exactly one thing:
 build(N, R) <=> show(node:leaf(grow:leaf(N)), R).
 ```
 
-Since the prelude's import cannot be narrowed (`YCHR-20019`), a clash
-with a prelude function is resolved by renaming your own constructor.
-
-A `fun name/arity` reference is not affected: that syntax names the
-callable namespace outright, so `fun leaf/1` is the function whatever
-constructors are in scope. Neither is `quote(...)`, whose contents are
-opaque data throughout.
-
-A constraint may share a name with a data constructor. Nothing is
-ambiguous there: a compound is never read as a constraint call, so the
-two never compete for the same reading.
+`fun name/arity` always names the function, and `quote(...)` contents
+are opaque data, so neither is affected. A constraint may share a name
+with a constructor: a compound is never read as a constraint call.
 
 ### The `quote/1` quoting form
 
@@ -350,88 +359,69 @@ two never compete for the same reading.
 store(quote(plus(2, 3)))   % stored as store(plus(2, 3))
 ```
 
-`quote` is a reserved name — you cannot declare `:- function quote/1.`
-or `:- chr_constraint quote/1.`. The form may appear in any
-evaluating position (constraint arguments, `is` RHS, function-call
-arguments, …) and may nest: an expression inside `quote(...)` is
-itself parsed as a surface term, and unbound logical variables inside
-become part of the resulting term value without erroring.
+`quote` is reserved: `:- function quote/1.` and
+`:- chr_constraint quote/1.` are rejected. The form is allowed in every
+evaluating position and nests; its contents parse as a surface term,
+and unbound logical variables inside become part of the value.
 
-In a *tell* argument, a quoted subtree may also introduce a variable
-the enclosing rule has not bound, exactly as an `=` operand does:
+In a *tell* argument a quoted subtree may introduce a variable the rule
+has not bound, exactly like an `=` operand:
 
 ```prolog
 h(X) <=> store(quote(pair(X, Y))).   % Y is a fresh logical variable
 ```
 
-A tell argument is where a term is built to be stored, so a name
-appearing in one for the first time is a new slot rather than a
-mistake. Elsewhere — an `is` right-hand side, a function-call
-argument, a guard — an unbound name is still `YCHR-40002`.
+Elsewhere — an `is` right-hand side, a function argument, a guard — an
+unbound name is still `YCHR-40002`. In heads and equation patterns
+`quote(X)` is an ordinary compound.
 
-In head and equation patterns `quote(X)` is treated like any other
-compound — heads never evaluate, so the quoting form has no
-additional effect there.
-
-The body of `quote(...)` is also opaque to module-visibility checks:
-qualified atoms inside are not validated against the per-module
-constructor allowlist or any other namespace, so the form is the
-supported way to construct synthetic qualified atoms (e.g. as
-type-tag values) when no corresponding exported declaration exists.
-Outside `quote(...)`, a qualified reference `M:n` must resolve to a
-visible value-level identifier — function, constraint, or data
-constructor — in `M` (see §Type and constructor exports).
+Quoted contents skip module-visibility checks: qualified atoms inside
+are not validated against any allowlist or namespace, which is the
+supported way to build synthetic qualified atoms (type tags, say) with
+no exported declaration. Outside `quote(...)`, `M:n` must resolve to a
+visible function, constraint or data constructor of `M`
+(§Type and constructor exports).
 
 ### Tell-time evaluation errors
 
-Evaluation is eager. There is no auto-suspension or symbolic
-fallback: an unbound logical variable flows through user-defined
-function calls as an ordinary value, but the moment something
-demands a concrete value (most commonly a host-language operation
-like arithmetic or comparison) the evaluation runtime-errors. The
-Haskell interpreter surfaces this as `YCHR-60001`. Use `quote(...)`
-to keep an expression symbolic until something else binds the
-variables.
+Evaluation is eager; there is no auto-suspension or symbolic fallback.
+An unbound logical variable flows through user-defined function calls
+as an ordinary value, but the moment something demands a concrete
+value (typically a host operation such as arithmetic or comparison)
+evaluation fails — `YCHR-60001` on the Haskell interpreter. Use
+`quote(...)` to keep an expression symbolic.
 
-Such failures come in two kinds, and the distinction is what the next
-section builds on:
+Failures come in two kinds:
 
-- an **instantiation failure** — the computation reached a point where
-  it had to know the value of a variable that is still unbound, so no
-  verdict was possible;
+- an **instantiation failure** — a value was demanded of a variable
+  that is still unbound, so no verdict was possible;
 - a **general failure** — everything else: a definite mismatch, a type
   error, division by zero, an arity mismatch.
 
-Selecting a function equation is one such demand, and it reports the
-inconclusive case separately from a definite mismatch: a pattern test
-reached with an unbound variable at the position it inspects raises
-"argument *K* of `M:f/N` is not sufficiently instantiated to select an
-equation" (an instantiation failure), where a fully instantiated
-argument that no equation covers raises "no matching equation in
-`M:f/N`" (a general failure). `'$call'` makes the same distinction for
-an unbound closure operand. A *user-written* equation guard that is
-decided on values already in hand is a definite mismatch — failing
-`pos(N) | N > 0` on `pos(0)` is a general mismatch, and dispatch moves
-on to the next equation.
+Equation selection is such a demand and reports the two separately: a
+pattern test that meets an unbound variable at the position it
+inspects raises "argument *K* of `M:f/N` is not sufficiently
+instantiated to select an equation" (instantiation); a fully
+instantiated argument no equation covers raises "no matching equation
+in `M:f/N`" (general). `'$call'` does the same for an unbound closure
+operand. A user-written equation guard decided on values in hand is a
+definite mismatch: `pos(N) | N > 0` on `pos(0)` fails generally and
+dispatch moves to the next equation.
 
-Dispatch stops at an equation's first failing test, so the argument the
-message names is the first one that blocked, not necessarily the only
-one that would have.
+Dispatch stops at the first failing test, so the argument named is the
+first that blocked, not necessarily the only one that would have.
 
 Outside a rule guard both kinds are hard errors; only the diagnosis
-differs. Inside a rule guard an instantiation failure is caught and
-turned into a silent "not now" — see the next section.
+differs. Inside one, an instantiation failure is caught — next section.
 
 ### Soft guard failure
 
-A **rule guard** — the conjunction between `|` and the rule body in a
+A **rule guard** — the conjunction between `|` and the body of a
 simplification, propagation or simpagation rule — is evaluated with
-instantiation failures caught. If evaluating the guard raises an
-instantiation failure, the guard evaluates to **false**: the rule does
-not fire for that combination of constraints, no diagnostic is
-produced, and solving carries on. When the missing variable is bound
-later, the ordinary constraint-reactivation mechanism re-activates the
-stored constraint and the occurrence is tried again — this time with a
+instantiation failures caught. Such a failure makes the guard
+**false**: the rule does not fire for that combination of constraints,
+nothing is reported, and solving continues. When the missing variable
+is bound later, constraint reactivation retries the occurrence with a
 value in hand.
 
 ```prolog
@@ -442,33 +432,26 @@ l @ later(E) <=> E = 1.
 r @ c(N)     <=> N > 0 | out(N).   % N unbound at the first activation
 ```
 
-Rule `r` is tried while `N` is free. `>` demands a value, raises an
-instantiation failure, and the guard yields false — so `r` does not
-fire and `c(E)` stays stored. Rule `l` then binds `E`, which
-reactivates `c`, and `r` is retried with `N = 1`: the guard succeeds
-and `out(1)` is told.
+`r` is tried while `N` is free: `>` raises an instantiation failure,
+the guard is false, `c(E)` stays stored. `l` binds `E`, which
+reactivates `c`; `r` is retried with `N = 1` and tells `out(1)`.
 
-This is default-on for every rule guard; there is no opt-in or opt-out
-syntax, and no new surface form. It gives guards a logic-language-like
-delaying behaviour without a mode system.
+This holds for every rule guard. There is no opt-in or opt-out syntax.
 
 #### The demand-driven principle
 
-Instantiation failures are **demand-driven**: one is raised only when a
-computation actually demands the value of an unbound variable, never
-from the mere presence of an unbound variable in an argument list.
+An instantiation failure is raised only when a computation demands the
+value of an unbound variable, never from an unbound variable merely
+being present in an argument list. A variable that is only carried
+does not delay:
 
-Concretely, an unbound variable that is only carried around does not
-delay anything:
-
-- a *pass-through* function argument (`id(X) -> X.`) flows freely;
-- an *ignored* argument (`fst(pair(A, _)) -> A.` applied to
-  `pair(1, U)` with `U` unbound) flows freely;
-- data construction (`quote(...)`, constructor application, `=`)
-  never demands a value;
-- primitives that are total on unbound values — `==`, `unifiable`, the
-  type predicates (`var`, `nonvar`, `ground`, `integer`, `atom`, …),
-  `term_variables`, `copy_term` — answer normally and never raise.
+- a *pass-through* argument (`id(X) -> X.`);
+- an *ignored* argument (`fst(pair(A, _)) -> A.` on `pair(1, U)`, `U`
+  unbound);
+- data construction (`quote(...)`, constructor application, `=`);
+- primitives total on unbound values — `==`, `unifiable`, the type
+  predicates (`var`, `nonvar`, `ground`, `integer`, `atom`, …),
+  `term_variables`, `copy_term`.
 
 A demand point is one of:
 
@@ -481,8 +464,8 @@ A demand point is one of:
 | A rule guard that evaluates to an unbound variable | `c(B) <=> B \| body.` with `B` unbound |
 
 The host primitives below are strict scalar operations with no ignored
-arguments, which is why "an unbound argument on the failure path" is a
-sound reading of "the value was demanded" for them specifically:
+arguments, so for them "an unbound argument on the failure path" means
+"the value was demanded":
 
 | Primitives | On an unbound argument |
 |---|---|
@@ -499,130 +482,109 @@ sound reading of "the value was demanded" for them specifically:
 | `var`, `nonvar`, `ground`, `integer`, `float`, `atom`, `boolean`, `string` | answers normally (never raises) |
 | `term_variables`, `copy_term` | answers normally (never raises) |
 
-**Precedence.** When a call is both under-instantiated and ill-typed —
-`X + "foo"` with `X` unbound — the instantiation diagnosis wins. In a
-rule guard that means the rule delays; once `X` is bound, the type
-error surfaces as a hard general failure.
+**Precedence.** Under-instantiated *and* ill-typed — `X + "foo"` with
+`X` unbound — the instantiation diagnosis wins. In a rule guard the
+rule delays; once `X` is bound, the type error is a hard general
+failure.
 
-**Unbound guard result.** A guard position demands a boolean, so a
-guard whose value is an unbound variable is an instantiation failure
-and delays:
+**Unbound guard result.** A guard demands a boolean, so a guard whose
+value is an unbound variable is an instantiation failure and delays:
 
 ```prolog
 r @ c(B) <=> B | out(1).      % B unbound: delays; B bound to true: fires
 ```
 
-A guard that evaluates to a *bound* non-boolean (an integer, say)
-is a general failure and stays a hard error ("guard did not evaluate
-to a boolean").
+A guard that evaluates to a *bound* non-boolean is a general failure
+and stays a hard error ("guard did not evaluate to a boolean").
 
 #### The catch boundary
 
-The catch is placed at exactly one point: the rule-guard residual of a
-rule occurrence. It is not a general handler.
+The catch sits at exactly one point: the rule-guard residual of a rule
+occurrence. It is not a general handler.
 
-- It is **not** applied inside function bodies. Within a function, an
-  instantiation failure raised by an equation guard, or by a nested
-  call, propagates out immediately; later equations are *not* tried.
-  Dispatch is monotonic: a definite mismatch moves to the next
-  equation, a cannot-decide aborts the call. The failure then travels
-  out to whatever demanded the function's value — and if that was a
-  rule guard, it is caught there.
-- Because the boundary is the whole guard, a failure raised deep
-  inside a recursive call is caught the same as one raised at the top
-  level. `r @ c(L) <=> length(L) > 0 | body.` on a partial list
-  `[1|T]` delays, even though the failure comes from `length`'s
-  recursive dispatch.
-- `is` expressions, rule bodies and top-level goals are *not* guard
+- **Not inside function bodies.** There, an instantiation failure from
+  an equation guard or a nested call propagates out at once; later
+  equations are not tried. Dispatch is monotonic: a definite mismatch
+  moves to the next equation, a cannot-decide aborts the call. The
+  failure reaches whatever demanded the function's value; if that was
+  a rule guard, it is caught there.
+- The boundary is the whole guard, so a failure deep inside a
+  recursive call is caught like one at the top level:
+  `r @ c(L) <=> length(L) > 0 | body.` on the partial list `[1|T]`
+  delays even though `length`'s recursive dispatch raised it.
+- `is` expressions, rule bodies and top-level goals are not guard
   positions. An instantiation failure there is a hard `YCHR-60001`.
 - `run_chr_session/1` keeps its own boundary: it runs an isolated
-  sub-session and already reports *any* failure as `false`, rolling
-  the sub-session back as it does.
+  sub-session and reports *any* failure as `false`, rolling the
+  sub-session back as it does.
 
-A guard never tells. `=`, constraint additions and the rest of the
-body forms are not guard syntax, and a function called from a guard
-cannot tell either — so abandoning a half-evaluated guard leaves the
-constraint store, the propagation history and the reactivation queue
-exactly as it found them. That is what makes catching sound.
+A guard never tells. `=`, constraint additions and the other body forms
+are not guard syntax, and a function called from a guard cannot tell
+either, so abandoning a half-evaluated guard leaves the store, the
+propagation history and the reactivation queue as it found them. That
+is what makes the catch sound.
 
-The one thing a guard can do that outlives it is call a host function
-that binds a variable it was handed — `run_chr_session/1` does this
-deliberately, as its result channel. Those bindings persist, but they
-persist equally when a guard simply evaluates to false, so this is a
-property of putting an effectful host call in a guard rather than
-anything the delaying introduces. If the distinction matters to you,
-keep effectful host calls in rule bodies, where they run once and only
-when the rule fires.
+The one thing that outlives a guard is a host function that binds a
+variable it was handed — `run_chr_session/1` does this as its result
+channel. Those bindings persist, but equally when the guard
+evaluates to false, so this is a property of effectful host calls in
+guards, not of the delaying. If it matters, keep effectful host calls
+in rule bodies, where they run once and only when the rule fires.
 
 #### Interaction with reactivation and the propagation history
 
-A retry is possible because of two properties of the generated code:
+A retry is possible because:
 
-- the propagation history is consulted *after* the guard, so a guard
-  that delayed leaves no history entry to block a later firing;
-- the active constraint is only killed inside the fire block, so a
-  delayed rule leaves the constraint stored and observing its
-  variables.
+- the propagation history is consulted *after* the guard, so a delayed
+  guard leaves no history entry to block a later firing;
+- the active constraint is killed only inside the fire block, so a
+  delayed rule leaves it stored and observing its variables.
 
-A stored constraint that has occurrences to run is registered as an
-observer of every unbound variable reachable from its arguments,
-including variables nested inside compound terms, so binding the
-variable pushes the constraint onto the reactivation queue and its
-occurrences run again.
+A stored constraint with occurrences to run observes every unbound
+variable reachable from its arguments, including variables nested
+inside compound terms; binding one pushes the constraint onto the
+reactivation queue and its occurrences run again.
 
 #### Non-guarantees
 
-Soft guard failure delays a rule; it does not implement coroutining.
-In particular:
+Soft guard failure delays a rule; it is not coroutining.
 
-- **No retry without an observer.** The retry comes from constraint
-  reactivation, so some *stored* constraint must observe the variable
-  that was missing. A guard that delays on a variable reachable only
-  from, say, a global or a value constructed inside the guard is never
-  retried.
+- **No retry without an observer.** Some *stored* constraint must
+  observe the missing variable. A guard that delays on a variable
+  reachable only from, say, a global or a value built inside the guard
+  is never retried.
 - **Passive occurrences are not retried.** Occurrences the compiler
-  proved can never fire are not generated, and reactivation only runs
-  the generated ones.
-- **No failure is reported.** A rule that delays for ever is
-  indistinguishable from a rule whose guard was simply false. If a
-  query silently produces fewer bindings than expected, an unbound
-  variable at a guard is a candidate explanation.
+  proved can never fire are not generated, and reactivation runs only
+  generated ones.
+- **No failure is reported.** A rule that delays for ever looks like a
+  rule whose guard was false. A query with fewer bindings than
+  expected: suspect an unbound variable at a guard.
 - **A delayed rule is not fair.** The retry happens on the next
-  activation, in ordinary ωr order; there is no separate wake-up
-  queue or priority.
+  activation, in ordinary ωr order; there is no wake-up queue or
+  priority.
 
 ## Disjunction in rule bodies
 
-`;` separates two alternative body conjunctions. It is an infix
-operator at priority 1100, `xfy`, so it binds looser than `,`:
+`;` separates two alternative body conjunctions: infix, priority 1100,
+`xfy`, looser than `,`:
 
 ```prolog
 h(X) <=> p(X), (b(X) ; c(Y), d(X, Y)), q(X).
 ```
 
-The module must import `library(search)`; otherwise the disjunction is
-rejected as `YCHR-20021`. `;` records a choice point rather than
-branching where it is written — in the rule above, `q(X)` is told
-before either alternative is picked, and the choice is made at
-quiescence by the search driver.
-
-`;` is a rule-body form only. In a guard, an `is` right-hand side, or a
-function body it is rejected (`YCHR-20022`), and at the top level of a
-query it is rejected (`YCHR-30006`). Inside `quote/1` it stays ordinary
-data, and the search driver reads it as a choice at run time.
-
-The full semantics — how disjuncts are lifted, which variables they
-share, and why `=` inside a disjunct is still a hard error — are in
-[the search reference](search.md#disjunction-).
+The module must import `library(search)` (`YCHR-20021`). `;` is a
+rule-body form only: in a guard, an `is` right-hand side or a function
+body it is `YCHR-20022`; at the top level of a query, `YCHR-30006`.
+Semantics — choice points, lifting, shared variables, `quote/1` — are in
+[search.md](search.md#disjunction-).
 
 ## The `=` operator
 
-`=` is pure structural unification — neither operand evaluates. A
-compound on either side is treated as data, even when its head names
-a declared function or host call. Variables appearing anywhere in
-either operand are unification slots: if the name is not already in
-scope it is introduced as a fresh logical variable and the unifier
-binds it.
+`=` is pure structural unification; neither operand evaluates. A
+compound on either side is data, even when its head names a declared
+function or host call. Every variable in either operand is a
+unification slot; a name not yet in scope becomes a fresh logical
+variable.
 
 ```prolog
 test(R) <=> Y = 10, R = Y.                       % Y introduced by '='
@@ -633,36 +595,35 @@ test(R) <=> R = double(YY).                      % R bound to compound 'double(Y
                                                  % YY allocated as a fresh var
 ```
 
-Use `is` when you want to evaluate arithmetic, call a function for
-its return value, or otherwise reduce an expression — see
-[The `is` operator](#the-is-operator). The same `=` policy applies
-in rule bodies and queries.
+Use [`is`](#the-is-operator) to evaluate. The same policy applies in
+rule bodies and queries.
 
 ## The `is` operator
 
-`is` is generalized to accept any expression on the RHS, including
-calls to user-defined functions and host-language functions.
+`is` accepts any expression on the RHS, including user-defined and
+host function calls.
 
 ```ychr-repl
 ychr> R is member(1, [0, 1, 2]).
 R = true.
 ```
 
-Unlike standard Prolog (where `is` shares priority 700 with the
-comparison operators), YCHR's `is` and `=` sit at priority 750 (still
-`xfx`). This places them just above the comparisons, so a comparison
-on the RHS no longer needs parentheses:
+`is` and `=` sit at priority 750, `xfx` (Prolog: 700, shared with the
+comparisons), so a comparison on the RHS needs no parentheses:
 
 ```ychr-repl
 ychr> B is 1 < 2.
 B = true.
 ```
 
+The operator table is a built-in core (the directive keywords, `=`,
+`is`, the rule operators, `requiring`, …) plus the prelude's `op/3`
+exports. `:list_operators` in the REPL prints it.
+
 ## Lambdas and function references
 
-Anonymous functions use Erlang-style syntax with `end` delimiting the
-body, so lambdas can appear inside compound-term arguments without
-extra parentheses:
+Lambdas are Erlang-style, delimited by `end`, so one fits inside a
+compound argument without parentheses:
 
 ```prolog
 :- function apply/2.
@@ -671,62 +632,59 @@ apply(F, X) -> call(F, X).
 result(R) <=> R is apply(fun(X) -> X + 1 end, 5).
 ```
 
-Lambda parameters are restricted to variables and wildcards. Pattern
-matching on lambda arguments is not supported; if you need pattern
-dispatch, use a named function declared with `:- function` and
-multiple equations. A lambda must declare at least one parameter;
-use `:- function` for a no-arg helper.
+Parameters are variables and wildcards only; no pattern matching. Use
+a named function with several equations for that. A lambda needs at
+least one parameter; use `:- function` for a no-arg helper.
 
-Lambdas are first-class values: they can be passed as arguments,
-returned from functions, and called via the prelude's `call/N`. They
-capture free variables from the enclosing scope *by value* (the
-captured values are taken at the moment the lambda expression is
-evaluated, then passed as extra hidden parameters to a lifted
-top-level function):
+Lambdas are first-class: passed as arguments, returned, called via the
+prelude's `call/N`. Free variables are captured *by value* when the
+lambda expression is evaluated, then passed as hidden parameters to a
+lifted top-level function:
 
 ```prolog
 :- function make_adder/1.
 make_adder(N) -> fun(X) -> X + N end.
 ```
 
-Named functions are referenced by `fun name/arity` (e.g.
-`fun member/2`) and become first-class values the same way.
+`fun name/arity` (`fun member/2`) makes a named function a first-class
+value the same way.
 
 ### `call` and `'$call'`
 
-The prelude exports a typed `call/N` family that is the everyday way
-to invoke a lambda or function reference:
+The prelude's typed `call/N` family is the everyday way to invoke a
+lambda or function reference:
 
 ```prolog
 R is call(fun(X) -> X + 1 end, 5).
 R is call(fun double/1, 10).
 ```
 
-`call` is itself defined as a thin wrapper over the wired-in primitive
-`'$call'(F, A1, ..., An)`. `'$call'` is recognized directly by the
-renamer; the `'$'` prefix is not part of any naming convention and `$`
-is not reserved for other primitives. Use `'$call'` directly only when
-working below the typed `call` wrapper.
+`call` is a thin wrapper over the wired-in primitive
+`'$call'(F, A1, ..., An)`, which the renamer recognizes directly. The
+`'$'` prefix is not a naming convention and `$` is not reserved for
+other primitives. Use `'$call'` only below the typed wrapper.
 
 ## Host calls
 
-YCHR programs reach into the host language with the `host:` qualifier:
+`host:` reaches into the host language:
 
 ```prolog
 X + Y -> host:'+'(X, Y).
 ```
 
-`host:` is a wired-in qualifier, not a real module; the resolver
-intercepts it and dispatches to whatever host-language function the
-name denotes. Host calls may appear in any evaluating position —
-function equation bodies (as above), `is` right-hand sides, guards,
-and constraint arguments. Argument values are evaluated normally
-before they reach the host; the host return value flows back as an
-ordinary YCHR value.
+`host:` is a wired-in qualifier, not a module; the resolver dispatches
+it to the host function the name denotes. Host calls are allowed in
+every evaluating position: equation bodies, `is` right-hand sides,
+guards, constraint arguments. Arguments are evaluated before the call;
+the result flows back as an ordinary value. `host` is reserved and
+cannot name a user module (`YCHR-16019`).
 
-Because `host:` is wired in, `host` itself is reserved and cannot be
-used as a user module name (`YCHR-16019`).
+The prelude wraps every host arithmetic, comparison and string
+operation it relies on, so most programs never write `host:`.
 
-The prelude already wraps every host arithmetic, comparison, and
-string operation it relies on, so most programs never need to write
-`host:` directly.
+## Scheme backend portability
+
+`print/1` and `name_base/1` work on both backends. Haskell-only:
+`read_term_from_string/1`, `write_term_to_string/1`,
+`write_store_to_list/0`, `print_store/0`, `run_chr_session/1`, and all
+of `library(search)`. Details in `dev-docs/SCHEME_BACKEND_GAPS.md`.

@@ -1,39 +1,19 @@
 # How to embed a CHR module in a Haskell program
 
-> **Goal:** compile a `.chr` module once inside a Haskell program, then
-> feed it Haskell values and decode its answers back. The whole
-> compile-and-query surface is available from a single `import YCHR` (the
-> umbrella entry point); the value bridge itself is documented in
-> [`YCHR.Convert`](../reference/convert.md).
-
-The worked example is a Curry-style simply-typed lambda-calculus **type
-inferencer** written in CHR. Type inference is constraint solving, so the
-whole checker is a handful of simplification rules. The complete sources
-are in [`examples/stlc/`](../../examples/stlc/).
-
-With no arguments it is a small type-inference REPL — each line is parsed
-(a tiny `parsec` grammar in [`Parser.hs`](../../examples/stlc/Parser.hs)),
-type-checked by the CHR module, and its inferred type printed:
-
-```
-$ cabal run stlc-typechecker
-stlc> \x. x + 1
-int -> int
-stlc> \f. \x. f (f x)
-(a -> a) -> a -> a
-stlc> let f = \x. x + 1 in f 5
-int
-stlc> 1 2
-TYPE ERROR: cannot unify int with (int -> _)
-```
-
-`--demo` prints a fixed table instead — a good self-check:
+Worked example: a Curry-style simply-typed lambda-calculus type
+inferencer written in CHR, driven from Haskell. Sources:
+[`examples/stlc/`](../../examples/stlc/). With no arguments it is a
+REPL — each line is parsed by a tiny `parsec` grammar
+([`Parser.hs`](../../examples/stlc/Parser.hs)) and becomes one
+`runQueryCompiled` call. `--demo` prints a fixed table:
 
 ```sh
 cabal run stlc-typechecker -- --demo
 ```
 
 ```
+Curry-style STLC type inference (via a CHR module):
+
 \x. x + 1                  :  int -> int
 \x. x                      :  a -> a
 (\x. x + 1) 5              :  int
@@ -45,23 +25,11 @@ let f = \x. x + 1 in f 5   :  int
 y                          :  TYPE ERROR: unbound variable y
 ```
 
-The rest of this guide is about the embedding — parsing is just the front
-end; each REPL line becomes one `runQueryCompiled` call (step 4).
-
 ## 1. The CHR module
 
-[`examples/stlc/stlc.chr`](../../examples/stlc/stlc.chr) exports a single
-entry constraint, `typecheck/2`. It infers the type of a lambda term by
-threading a fresh logical variable through the term and unifying type
-structures with a small custom `unify_ty` constraint (a raw `=` failure
-would abort the whole run, so type errors are *reported* into an
-accumulator instead). A polymorphic result such as `arrow(tvar(0),
-tvar(0))` is produced by numbering the residual type variables with
-`term_variables` at the very end.
-
-The object language (`evar`, `lam`, `app`, `lit_int`, `add`) is
-**host-supplied data**, matched structurally in rule heads. It is a
-declared type, and the module exports it:
+[`stlc.chr`](../../examples/stlc/stlc.chr) exports one entry
+constraint, `typecheck/2`, and the object language as a declared,
+exported type:
 
 ```prolog
 :- module(stlc, [typecheck/2, type(expr/0)]).
@@ -73,18 +41,21 @@ declared type, and the module exports it:
                     ; add(expr, expr).
 ```
 
-Exporting the type is what makes the embedding work: the goal arguments a
-host builds are renamed exactly like rule-head arguments, so a bare `evar`
-is canonicalized to `stlc:evar` — the same qualified functor the heads were
-compiled to — and matches. A type the module declares but does not export
-is invisible to the query: its bare uses stay unqualified, so the rules
-written against them never fire and the goal comes back with the result
-variable unbound.
+Export the type. Goal arguments are renamed like rule-head arguments,
+so a bare `evar` becomes `stlc:evar` and matches the compiled heads.
+An unexported type stays unqualified in the goal, its rules never
+fire, and the result variable comes back unbound
+(`Note [Goal argument canonicalization]` in
+[`src/YCHR/Convert.hs`](../../src/YCHR/Convert.hs)).
+
+Type errors are *reported* into an accumulator through a custom
+`unify_ty` constraint — a raw `=` failure would abort the run.
+Residual type variables are numbered with `term_variables` at the
+end, so `\x. x` comes back as `arrow(tvar(0), tvar(0))`.
 
 ## 2. Encode the input with `ToTerm`
 
-Model the object language as an ordinary Haskell type and hand-write
-`ToTerm` — one `compound` per constructor:
+One `compound` per constructor:
 
 ```haskell
 data Expr = Var Text | Lam Text Expr | App Expr Expr | IntLit Integer | Add Expr Expr
@@ -97,28 +68,23 @@ instance ToTerm Expr where
   toTerm (Add a b)  = compound "add" [toTerm a, toTerm b]
 ```
 
-The encoded term goes straight into the goal:
-
 ```haskell
 typecheckGoal :: Expr -> Term
 typecheckGoal e = compound "typecheck" [toTerm e, VarTerm "Result"]
 ```
 
-No quoting is needed even though goal arguments are *evaluated*: `evar/1`
-resolves to this program's exported constructor, so it stays data. The node
-is spelled `evar` rather than `var` because the prelude declares a `var/1`
-function and a constructor may not share a bare name with a visible
-function (`YCHR-20020`). Constructors that are **not** declared have no
-such protection — for those, wrap the argument in `quote/1` with `quote`
-(see [the conversion reference](../reference/convert.md#reusing-a-compiled-program)
-and [the language reference](../reference/language.md) on the `quote/1`
-quoting form).
+Goal arguments are evaluated, but `evar/1` resolves to an exported
+constructor, so it stays data — no `quote` needed. It is `evar`, not
+`var`, because the prelude has a `var/1` function and a bare
+constructor may not share a name with a visible function
+(`YCHR-20020`). Undeclared compounds have no such protection: wrap
+them in `quote` ([reusing a compiled
+program](../reference/convert.md#reusing-a-compiled-program)).
 
 ## 3. Decode the result with `FromTerm`
 
-The inferencer answers with `ok(Type)` or `type_error(Errors)`. `decodeSum`
-dispatches on the functor's local name, so the module-qualified `stlc:arrow`
-that comes back still decodes:
+The answer is `ok(Type)` or `type_error(Errors)`. `decodeSum`
+dispatches on the local functor name, so `stlc:arrow` decodes:
 
 ```haskell
 data Type = TInt | TArrow Type Type | TVar Int
@@ -133,10 +99,9 @@ instance FromTerm Type where
 
 ## 4. Compile once, query many
 
-[`Main.hs`](../../examples/stlc/Main.hs) embeds the `.chr` source at build
-time (a Template Haskell splice, so the binary is self-contained), compiles
-it once into a `CompiledProgram`, and drives it with `runQueryCompiled` —
-one independent run per demo term:
+[`Main.hs`](../../examples/stlc/Main.hs) embeds the `.chr` source with
+a Template Haskell splice, compiles it once, and runs one
+`runQueryCompiled` per term:
 
 ```haskell
 cp <- case compileModules True [(stlcPath, embeddedSource)] of
@@ -147,15 +112,7 @@ result <- runQueryCompiled cp (typecheckGoal e) "Result"
   :: IO (Either ConvertError TCResult)
 ```
 
-Everything above — `compileModules`, `CompiledProgram`, `runQueryCompiled`,
-`ToTerm`/`FromTerm`, and the `compound`/`decodeSum`/`argAt` combinators —
-comes from the single umbrella import:
-
-```haskell
-import YCHR
-```
-
-`runQueryCompiled` and its variants are documented in the
-[conversion reference](../reference/convert.md#reusing-a-compiled-program).
-For a `.chr` file on disk (rather than an embedded splice), swap
-`compileModules` for `compileFiles` (also re-exported by `YCHR`).
+All of it — `compileModules`, `CompiledProgram`, `runQueryCompiled`,
+`ToTerm`/`FromTerm`, `compound`/`decodeSum`/`argAt` — is one
+`import YCHR`. For a `.chr` file on disk use `compileFiles`. Variants:
+[convert.md §Reusing a compiled program](../reference/convert.md#reusing-a-compiled-program).

@@ -35,7 +35,8 @@ map_maybe(F, just(X)) -> just(call(F, X)).
 % Combine two optional values with a binary function, yielding a value
 % only when both are present. The applicative lift, named for the arity
 % it maps over rather than for the abstraction, which the language does
-% not have.
+% not have. There is no `map_maybe/4`: `'$call'` takes one or two
+% arguments.
 map_maybe(F, just(X), just(Y)) -> just(call(F, X, Y)).
 map_maybe(_, _, _) -> nothing.
 

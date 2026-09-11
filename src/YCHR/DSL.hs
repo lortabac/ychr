@@ -1,69 +1,37 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
--- | A Haskell-embedded DSL for building CHR programs without going through
--- @.chr@ source files. Use it when @ychr@ is embedded as a library: build
--- one or more 'Module' values, then compile and run them with 'runDSL'.
+-- | Build CHR programs in Haskell instead of @.chr@ source: assemble
+-- 'Module' values, then compile and run them with 'runDSL'. Reference and
+-- examples:
+-- <https://github.com/lortabac/ychr/blob/master/docs/reference/dsl.md>.
 --
--- = Worked example: less-than-or-equal
---
--- > {-# LANGUAGE OverloadedStrings #-}
--- > import YCHR.DSL
--- >
--- > orderModule :: Module
--- > orderModule =
--- >   module' "Order"
--- >     `declaring` ["leq" // 2]
--- >     `defining`
--- >       [ "refl" @: [term "leq" [var "X", var "X"]] <=> [bool True]
--- >       , "antisymm"
--- >           @: [term "leq" [var "X", var "Y"]] \\\\ [term "leq" [var "Y", var "X"]]
--- >             <=> [var "X" .=. var "Y"]
--- >       , "trans"
--- >           @: [term "leq" [var "X", var "Y"], term "leq" [var "Y", var "Z"]]
--- >             ==> [term "leq" [var "X", var "Z"]]
--- >       ]
--- >
--- > main :: IO ()
--- > main = do
--- >   bindings <- runDSL [orderModule] (term "leq" [var "A", var "B"])
--- >   print bindings
---
--- The DSL is a thin layer over 'YCHR.Internal.Parsed.Module': every combinator is a
--- pure function that builds AST nodes the parser would otherwise produce
--- from @.chr@ text. It does not validate the program — undeclared
--- constraints, ill-typed bodies, etc. are caught downstream by the
--- compilation pipeline ('compileParsedModules') exactly as for parsed
--- input.
+-- Every combinator is a pure function producing the
+-- 'YCHR.Internal.Parsed.Module' AST the parser would produce from text.
+-- Nothing is validated here: undeclared constraints, ill-typed bodies,
+-- etc. are caught downstream by 'compileParsedModules', as for parsed input.
 --
 -- = Two things to know before you start
 --
 -- __Constraint positions are partial.__ '<=>', '==>', @\\\\@ and 'runDSL'
 -- expect each rule-head and goal 'Term' to be a compound or an atom — the
--- shapes 'term', 'qterm' and 'atom' build. Handing them a bare 'var' or
--- 'int' throws an 'error' rather than returning a diagnostic, because
--- there is no failure channel in a pure combinator. (The equivalent
--- mistake through "YCHR.Convert" is reported as a @MalformedGoal@
--- 'YCHR.Convert.ConvertError' instead.) Malformed /programs/ are still
--- reported properly by the pipeline; it is only malformed /Haskell/ that
--- fails this way.
+-- shapes 'term', 'qterm' and 'atom' build. A bare 'var' or 'int' there
+-- throws an 'error': a pure combinator has no failure channel. (The same
+-- mistake through "YCHR.Convert" is a @MalformedGoal@
+-- 'YCHR.Convert.ConvertError'.) Malformed /programs/ are still reported by
+-- the pipeline; only malformed /Haskell/ fails this way.
 --
--- __This module defines an orphan @instance Num Term@__ so that numeric
--- literals and '+' \/ '-' \/ '*' work in term position. It changes what
--- arithmetic on 'Term' means anywhere both this module and 'Term' are in
--- scope: @1 + 2 :: Term@ builds the /symbolic/ compound @+(1, 2)@, it does
--- not evaluate to @3@. That is the intent — a DSL body is CHR source, not
--- Haskell arithmetic — but it is worth knowing before importing this
--- module alongside "YCHR".
+-- __This module defines an orphan @instance Num Term@__ so numeric
+-- literals and @+@ \/ @-@ \/ @*@ work in term position. Anywhere both this
+-- module and 'Term' are in scope, @1 + 2 :: Term@ builds the /symbolic/
+-- compound @+(1, 2)@; it does not evaluate to @3@.
 --
--- Negative literals work: @-1 :: Term@ is @'IntTerm' (-1)@, because GHC
--- routes them through 'negate', which folds them into the literal. But
--- 'negate' on a /non-literal/, 'abs', and 'signum' build @-(x)@,
--- @abs(x)@, and @sign(x)@ compounds, and the prelude declares none of
--- those — so they only work if your own module declares @-\/1@,
--- @abs\/1@, or @sign\/1@. Prefer '.-' and friends. There is also no
--- 'Fractional' instance, so a fractional literal needs the explicit
--- 'float' constructor.
+-- Negative literals work (@-1 :: Term@ is @'IntTerm' (-1)@: GHC routes
+-- them through 'negate', which folds them into the literal). 'negate' on a
+-- /non-literal/, 'abs', and 'signum' build @-(x)@, @abs(x)@, @sign(x)@,
+-- which the prelude does not declare — they work only if your module
+-- declares @-\/1@, @abs\/1@, @sign\/1@. Prefer '.-' and friends. There is
+-- no 'Fractional' instance; use 'float' for fractional literals.
 module YCHR.DSL
   ( -- * Modules
     Module,
@@ -193,26 +161,20 @@ module' name =
       exports = Nothing
     }
 
--- | Append plain @use_module(M)@ imports to a module.
+-- | Append plain @use_module(M)@ imports.
 --
 -- > module' "Logic" `importing` ["Order", "Util"]
---
--- Note: this combinator appends to any imports already present.
 importing :: Module -> [Text] -> Module
 importing m imps =
   m {imports = m.imports ++ map (noAnnP . (`ModuleImport` Nothing)) imps}
 
--- | Append a single @use_module(library(L))@ import (a stdlib library or
--- bundled library, as opposed to a user-written sibling module).
---
--- > module' "MyApp" `library` "lists" `library` "math"
+-- | Append one @use_module(library(L))@ import (a stdlib or bundled
+-- library, as opposed to a user-written sibling module).
 library :: Module -> Text -> Module
 library m libName =
   m {imports = m.imports ++ [noAnnP (LibraryImport libName Nothing)]}
 
 -- | Append constraint, function, operator, or type-export declarations.
---
--- > module' "M" `declaring` ["leq" // 2, function "factorial" 1]
 declaring :: Module -> [Declaration] -> Module
 declaring m ds = m {decls = m.decls ++ map noAnn ds}
 
@@ -220,29 +182,18 @@ declaring m ds = m {decls = m.decls ++ map noAnn ds}
 defining :: Module -> [Rule] -> Module
 defining m rls = m {rules = m.rules ++ rls}
 
--- | Append function-definition equations to a module.
---
--- > module' "M"
--- >   `declaring` [function "factorial" 1]
--- >   `withEquations`
--- >     [ equation "factorial" [int 0]    [] (int 1)
--- >     , equation "factorial" [var "N"]  [var "N" .> int 0]
--- >         (var "N" .* call_ (funRef "factorial" 1) [var "N" .- int 1])
--- >     ]
+-- | Append function-definition equations.
 withEquations :: Module -> [FunctionEquation] -> Module
 withEquations m eqs = m {equations = m.equations ++ map noAnnP eqs}
 
--- | Append function-equation /extensions/ to a module. Mirrors
--- @:- extend_function name(args) -> body@ directives in source
--- form: the equations contribute to an open function declared in
--- another module (resolved through this module's imports).
+-- | Append @:- extend_function name(args) -> body@ equations: they extend
+-- an open function declared in another module, resolved through this
+-- module's imports.
 withExtensions :: Module -> [FunctionEquation] -> Module
 withExtensions m eqs = m {extensions = m.extensions ++ map noAnnP eqs}
 
--- | Append class-equation /extensions/ to a module. Mirrors
--- @:- extend_class name(args) -> body@ directives in source form:
--- the equations contribute to an open class declared in another
--- module (resolved through this module's imports).
+-- | Append @:- extend_class name(args) -> body@ equations; the open-class
+-- counterpart of 'withExtensions'.
 withClassExtensions :: Module -> [FunctionEquation] -> Module
 withClassExtensions m eqs =
   m {classExtensions = m.classExtensions ++ map noAnnP eqs}
@@ -251,12 +202,8 @@ withClassExtensions m eqs =
 chrType :: Module -> TypeDefinition -> Module
 chrType m ty = m {typeDecls = m.typeDecls ++ [noAnn ty]}
 
--- | Replace the export list of a module.
---
--- An absent export list (the default after 'module'') means the
--- module exports everything by name. Calling 'exporting' switches the
--- module to an explicit export list. Subsequent calls /append/ to that
--- list rather than replacing it.
+-- | Set the export list; further calls append. Without one (the default
+-- after 'module'') the module exports everything.
 exporting :: Module -> [Declaration] -> Module
 exporting m ds = case m.exports of
   Nothing -> m {exports = Just (noAnnP ds)}
@@ -267,9 +214,7 @@ exporting m ds = case m.exports of
 -- Declarations
 -- ---------------------------------------------------------------------------
 
--- | Constraint declaration. Mirrors @:- chr_constraint name/arity@.
---
--- > "leq" // 2
+-- | Constraint declaration: @:- chr_constraint name/arity@.
 (//) :: Text -> Int -> Declaration
 (//) name arity = ConstraintDecl name arity Nothing Nothing
 
@@ -286,8 +231,8 @@ function name arity =
       requiring = Nothing
     }
 
--- | Open-function declaration: @:- open_function name/arity@. Open functions
--- can be extended with new equations from other modules.
+-- | Open-function declaration: @:- open_function name/arity@ (extensible
+-- from other modules via 'withExtensions').
 openFunction :: Text -> Int -> Declaration
 openFunction name arity =
   FunctionDecl
@@ -300,8 +245,7 @@ openFunction name arity =
       requiring = Nothing
     }
 
--- | Class declaration: @:- class name/arity@. A class enables
--- multi-signature overloading.
+-- | Class declaration: @:- class name/arity@ (multi-signature overloading).
 class_ :: Text -> Int -> Declaration
 class_ name arity =
   FunctionDecl
@@ -314,8 +258,8 @@ class_ name arity =
       requiring = Nothing
     }
 
--- | Open-class declaration: @:- open_class name/arity@. Open classes
--- can be extended with new signatures and equations from other modules.
+-- | Open-class declaration: @:- open_class name/arity@ (extensible with
+-- signatures and equations from other modules).
 openClass :: Text -> Int -> Declaration
 openClass name arity =
   FunctionDecl
@@ -328,10 +272,9 @@ openClass name arity =
       requiring = Nothing
     }
 
--- | Extension type declaration: @:- extend_class_type (name(args) -> ret)@.
--- Adds an overloaded signature to an open class declared in another
--- module. The renamer resolves the class name through the importing
--- module's imports.
+-- | @:- extend_class_type (name(args) -> ret)@: adds a signature to an
+-- open class declared in another module, resolved through this module's
+-- imports.
 extendClassType :: Text -> [TypeExpr] -> TypeExpr -> Declaration
 extendClassType name argTypes returnType =
   ExtendClassTypeDecl
@@ -342,21 +285,17 @@ extendClassType name argTypes returnType =
       target = Nothing
     }
 
--- | Type-export declaration: @:- module(m, [type(name/arity)])@. Exports
--- the type and all of its data constructors.
+-- | @:- module(m, [type(name/arity)])@: exports the type and all its
+-- constructors.
 typeExport :: Text -> Int -> Declaration
 typeExport n a = TypeExportDecl n a Nothing
 
--- | Type-export declaration with a constructor allowlist:
--- @:- module(m, [type(name/arity, [c1, c2])])@. Exports the type and only
--- the listed constructors. Pass @[]@ to export the type without any
--- constructors.
+-- | @:- module(m, [type(name/arity, [c1, c2])])@: exports the type and
+-- only the listed constructors; @[]@ exports the type alone.
 typeExportWith :: Text -> Int -> [Text] -> Declaration
 typeExportWith n a cs = TypeExportDecl n a (Just cs)
 
--- | Operator declaration. Mirrors @:- op(Fixity, OpType, Name)@.
---
--- > op 700 Xfx "is"
+-- | Operator declaration: @:- op(Fixity, OpType, Name)@.
 op :: Int -> OpType -> Text -> Declaration
 op fixity opType opName = OperatorDecl OpDecl {fixity, opType, opName}
 
@@ -364,9 +303,7 @@ op fixity opType opName = OperatorDecl OpDecl {fixity, opType, opName}
 -- Type definitions
 -- ---------------------------------------------------------------------------
 
--- | Build a type definition: name, type variables, constructors.
---
--- > tyDef "color" [] [dataCtor "red" [], dataCtor "green" [], dataCtor "blue" []]
+-- | Algebraic type definition: name, type variables, constructors.
 tyDef :: Text -> [Text] -> [DataConstructor] -> TypeDefinition
 tyDef n vs cs =
   TypeDefinition
@@ -376,10 +313,8 @@ tyDef n vs cs =
       loc = dummyLoc
     }
 
--- | Build an opaque type definition: a nominal type name with zero or
--- more type parameters and no data constructors.
---
--- > tyOpaque "set" ["X"]
+-- | Opaque type definition: a nominal name with type parameters and no
+-- constructors.
 tyOpaque :: Text -> [Text] -> TypeDefinition
 tyOpaque n vs =
   TypeDefinition
@@ -389,9 +324,7 @@ tyOpaque n vs =
       loc = dummyLoc
     }
 
--- | Build a data constructor: name and argument types.
---
--- > dataCtor "cons" [TypeVar "a", TypeCon (Unqualified "list") [TypeVar "a"]]
+-- | Data constructor: name and argument types.
 dataCtor :: Text -> [TypeExpr] -> DataConstructor
 dataCtor n args = DataConstructor {conName = Unqualified n, conArgs = args}
 
@@ -399,16 +332,13 @@ dataCtor n args = DataConstructor {conName = Unqualified n, conArgs = args}
 -- Rules
 -- ---------------------------------------------------------------------------
 
--- | A simpagation kept/removed pair, awaiting a body via '<=>'.
---
--- Produced by '\\'; consumed by '<=>' through 'IsRuleHead'.
+-- | A simpagation kept/removed pair from '\\', awaiting a body via '<=>'.
 data Simpa = Simpa
   { kept :: [Term],
     removed :: [Term]
   }
 
--- | The left-hand side of a '<=>': either a list of terms (simplification)
--- or a 'Simpa' (simpagation).
+-- | LHS of '<=>': a term list (simplification) or a 'Simpa' (simpagation).
 class IsRuleHead h where
   toRuleHead :: h -> Head
 
@@ -419,10 +349,8 @@ instance IsRuleHead Simpa where
   toRuleHead s =
     Simpagation (map termToConstraint s.kept) (map termToConstraint s.removed)
 
--- | Convert a 'Term' built by 'term' / 'qterm' / 'atom' into a head
--- 'Constraint' occurrence. Compound and atom terms map to a constraint;
--- anything else (a bare variable, integer, etc.) is rejected with the
--- same shape of error the parser raises for a 'MalformedConstraint'.
+-- | Head-constraint occurrence from a compound or atom 'Term'; anything
+-- else throws (see the module header).
 termToConstraint :: Term -> Constraint
 termToConstraint (CompoundTerm n args) = Constraint n args
 termToConstraint t =
@@ -430,24 +358,16 @@ termToConstraint t =
     "YCHR.DSL: term is not a valid constraint occurrence: " <> show t
 
 -- | Attach a name to a rule.
---
--- > "trans" @: [term "leq" [var "X", var "Y"], ...] ==> [...]
 (@:) :: Text -> Rule -> Rule
 n @: (Rule _ h g b) = Rule (Just (noAnn n)) h g b
 
--- | Simplification rule (@head \<=\> body@) or simpagation rule
--- (@kept \\ removed \<=\> body@), depending on the LHS.
---
--- > [term "p" []]                <=> [bool True]   -- simplification
--- > [term "k" []] \\ [term "r" []] <=> [bool True] -- simpagation
+-- | Simplification rule (@head \<=\> body@), or simpagation when the LHS is
+-- a @kept \\\\ removed@ 'Simpa'.
 (<=>) :: (IsRuleHead h) => h -> [Term] -> Rule
 h <=> body =
   Rule Nothing (noAnnP (toRuleHead h)) (noAnnP []) (noAnnP body)
 
 -- | Propagation rule (@head ==\> body@).
---
--- > [term "leq" [var "X", var "Y"], term "leq" [var "Y", var "Z"]]
--- >   ==> [term "leq" [var "X", var "Z"]]
 (==>) :: [Term] -> [Term] -> Rule
 lhs ==> rhs =
   Rule
@@ -456,13 +376,11 @@ lhs ==> rhs =
     (noAnnP [])
     (noAnnP rhs)
 
--- | Simpagation split: @kept \\ removed@. Followed by '<=>' body.
+-- | Simpagation split @kept \\\\ removed@; follow with '<=>'.
 (\\) :: [Term] -> [Term] -> Simpa
 k \\ r = Simpa {kept = k, removed = r}
 
--- | Attach a guard to a rule.
---
--- > [term "p" [var "X"]] <=> [bool True] |- [var "X" .> int 0]
+-- | Attach a guard to a rule (binds looser than '<=>' \/ '==>').
 (|-) :: Rule -> [Term] -> Rule
 r |- g = let Rule n h _ b = r in Rule n h (noAnnP g) b
 
@@ -488,29 +406,21 @@ infixr 0 @:
 -- Terms
 -- ---------------------------------------------------------------------------
 
--- | Compound term with an unqualified functor.
---
--- The same constructor serves for constraint occurrences (in rule heads
--- or as body goals), function calls, and data-constructor terms — the
--- surface language draws no distinction between them, so the DSL doesn't
--- either. Classification happens later, in the renamer and desugarer.
---
--- > term "leq" [var "X", var "Y"]
+-- | Compound term with an unqualified functor. Serves for constraint
+-- occurrences, function calls, and data constructors alike; the renamer
+-- and desugarer classify it.
 term :: Text -> [Term] -> Term
 term n args = CompoundTerm (Unqualified n) args
 
--- | Compound term with a fully-qualified functor.
---
--- > qterm "Order" "leq" [var "X", var "Y"]
+-- | Compound term with a module-qualified functor.
 qterm :: Text -> Text -> [Term] -> Term
 qterm m n args = CompoundTerm (Qualified m n) args
 
--- | Variable term: 'var' \"X\" produces the same AST as the surface @X@.
+-- | Variable term (surface @X@).
 var :: Text -> Term
 var = VarTerm
 
--- | Atom term. Surface atoms are represented as 0-arity unqualified
--- compounds in the AST; the runtime collapses them to 'VAtom'.
+-- | Atom term: a 0-arity unqualified compound, as in the parsed AST.
 atom :: Text -> Term
 atom s = CompoundTerm (Unqualified s) []
 
@@ -522,8 +432,7 @@ int = IntTerm
 float :: Double -> Term
 float = FloatTerm
 
--- | Boolean literal — produces the canonical @true@ / @false@ atom term
--- the renamer expects. Equivalent to @atom \"true\"@ / @atom \"false\"@.
+-- | The @true@ \/ @false@ atom the renamer expects (same as 'atom').
 bool :: Bool -> Term
 bool True = CompoundTerm (Unqualified "true") []
 bool False = CompoundTerm (Unqualified "false") []
@@ -544,15 +453,11 @@ wildcard = Wildcard
 (.=.) :: Term -> Term -> Term
 l .=. r = CompoundTerm (Unqualified "=") [l, r]
 
--- | Arithmetic-evaluation goal: @V is Expr@.
---
--- > var "X" `is` (int 1 .+ var "Y")
+-- | Arithmetic-evaluation goal @V is Expr@.
 is :: Term -> Term -> Term
 is v e = CompoundTerm (Unqualified "is") [v, e]
 
--- | Host-language call, written @host:f(args)@ in the surface language.
---
--- > hostCall "print" [var "X"]
+-- | Host-language call @host:f(args)@.
 hostCall :: Text -> [Term] -> Term
 hostCall f args = CompoundTerm (Qualified "host" f) args
 
@@ -560,19 +465,14 @@ hostCall f args = CompoundTerm (Qualified "host" f) args
 -- Function equations and lambdas
 -- ---------------------------------------------------------------------------
 
--- | A single function-defining equation with a single-expression body.
--- Use 'equationSeq' for a sequenced body (@A1, A2, ..., Return@).
---
--- > equation "factorial" [int 0]   [] (int 1)
--- > equation "factorial" [var "N"] [var "N" .> int 0]
--- >   (var "N" .* call_ (funRef "factorial" 1) [var "N" .- int 1])
+-- | Function equation: name, patterns, guards, single-expression body.
+-- 'equationSeq' takes a sequenced body.
 equation :: Text -> [Term] -> [Term] -> Term -> FunctionEquation
 equation n args guard rhs = equationSeq n args guard (NE.singleton rhs)
 
--- | A function-defining equation whose body is a non-empty sequence of
--- terms. The last term is the return expression; earlier terms must be
--- either an @is@ binding or an IO action (host call / discardable function
--- call). Validated in the desugarer.
+-- | 'equation' with a sequenced body @A1, …, Return@: the last term is the
+-- result; earlier terms must be @is@ bindings or actions (host call,
+-- discardable function call). Validated by the desugarer.
 equationSeq ::
   Text -> [Term] -> [Term] -> NE.NonEmpty Term -> FunctionEquation
 equationSeq n args guard rhs =
@@ -583,20 +483,16 @@ equationSeq n args guard rhs =
       rhs = noAnnP rhs
     }
 
--- | An anonymous function (lambda) term. Mirrors @fun(args) -> body end@.
--- Internally a lambda is the compound @'->'(fun(args), body)@; lambda lifting
--- happens during desugaring.
---
--- > lambda [var "X"] (var "X" .+ int 1)
+-- | Lambda @fun(args) -> body end@: the compound @\'->\'(fun(args), body)@,
+-- lifted during desugaring.
 lambda :: [Term] -> Term -> Term
 lambda args body =
   CompoundTerm
     (Unqualified "->")
     [CompoundTerm (Unqualified "fun") args, body]
 
--- | Reference a named function as a first-class value: @fun name/arity@.
---
--- The surface syntax @fun foo/2@ produces the AST below, callable via 'call_'.
+-- | First-class reference to a named function, @fun name/arity@; call it
+-- with 'call_'.
 funRef :: Text -> Int -> Term
 funRef n arity =
   CompoundTerm
@@ -606,8 +502,7 @@ funRef n arity =
         [CompoundTerm (Unqualified n) [], IntTerm (fromIntegral arity)]
     ]
 
--- | Call a first-class function value (a 'lambda' or 'funRef') with the
--- given arguments. Mirrors the surface @'$call'(F, A1, A2, ...)@.
+-- | Call a 'lambda' or 'funRef' value: @'$call'(F, A1, …)@.
 call_ :: Term -> [Term] -> Term
 call_ f args = CompoundTerm (Unqualified "$call") (f : args)
 
@@ -617,17 +512,9 @@ call_ f args = CompoundTerm (Unqualified "$call") (f : args)
 
 -- $numericSugar
 --
--- The 'Term' type is an instance of 'Num' so integer literals can be
--- written without 'int' and the standard arithmetic operators
--- (@+@, @-@, @*@, 'negate') compile to the corresponding compound terms
--- the surface language recognises.
---
--- > var "X" `is` (1 + 2 * var "Y")
---
--- For users who prefer to keep the AST literal-explicit, the prefixed
--- operators ('.+', '.-', '.*', './') do the same job without the
--- 'Num' machinery, and the comparison operators ('.<', '.<=', '.>',
--- '.>=', '.==') build comparison goals usable in guards.
+-- 'Term' is a 'Num' instance, so @var "X" `is` (1 + 2 * var "Y")@ works
+-- without 'int' (caveats in the module header). The dotted operators build
+-- the same compounds explicitly; the comparison ones build guard goals.
 
 instance Num Term where
   fromInteger n = IntTerm n
@@ -635,18 +522,14 @@ instance Num Term where
   l - r = CompoundTerm (Unqualified "-") [l, r]
   l * r = CompoundTerm (Unqualified "*") [l, r]
 
-  -- GHC desugars a negative literal through 'negate', so @-1 :: Term@
-  -- arrives here as @negate (IntTerm 1)@. Fold it into the literal: the
-  -- prelude has no unary minus, so the @-(1)@ compound these used to
-  -- build reached the runtime as a one-argument call to @-@ and died with
-  -- an arity error at tell time.
+  -- @-1 :: Term@ arrives as @negate (IntTerm 1)@; fold it into the literal,
+  -- since the prelude has no unary minus and a @-(1)@ compound dies with an
+  -- arity error at tell time.
   negate (IntTerm n) = IntTerm (negate n)
   negate (FloatTerm x) = FloatTerm (negate x)
-  -- Non-literals keep the compound form. The functor is /unqualified/, so
-  -- it resolves against the program's own functions — a module that
-  -- declares @-\/1@, @abs\/1@, or @sign\/1@ gets a working call. Nothing
-  -- in the prelude provides them, so without such a declaration these
-  -- fail at tell time; prefer '.-' and friends, which are explicit.
+  -- Non-literals keep the compound form with an /unqualified/ functor, so
+  -- they work only if the program declares @-\/1@, @abs\/1@, @sign\/1@;
+  -- otherwise they fail at tell time.
   negate x = CompoundTerm (Unqualified "-") [x]
   abs x = CompoundTerm (Unqualified "abs") [x]
   signum x = CompoundTerm (Unqualified "sign") [x]
@@ -668,23 +551,14 @@ l .== r = CompoundTerm (Unqualified "==") [l, r]
 -- Compiling and running
 -- ---------------------------------------------------------------------------
 
--- | Compile DSL-built modules and run a single goal against them, using
--- the same default host-call registry as the @ychr@ CLI
--- (base + meta + sub-session + search). Includes the stdlib.
---
--- The goal is built with 'term' / 'qterm' just like rule heads. Returns
--- the final unification map for the variables mentioned in the goal.
--- Compilation or runtime errors are raised as exceptions.
---
--- > main = do
--- >   bindings <- runDSL [orderModule] (term "leq" [var "A", var "B"])
--- >   print bindings
+-- | Compile the modules (stdlib included) and run one goal with the CLI's
+-- default host-call registry. Returns the bindings of the goal's
+-- variables. Compilation and runtime errors are thrown as 'YCHR.Run.Error'.
 runDSL :: [Module] -> Term -> IO (Map Text Term)
 runDSL =
   runDSLWithHostCallRegistry defaultHostCallRegistry
 
--- | Like 'runDSL', but takes an explicit host-call registry. Use this when
--- the program calls custom @host:_@ functions registered by the embedder.
+-- | 'runDSL' with an explicit host-call registry.
 runDSLWithHostCallRegistry ::
   HostCallRegistry -> [Module] -> Term -> IO (Map Text Term)
 runDSLWithHostCallRegistry hostCalls modules goal = do

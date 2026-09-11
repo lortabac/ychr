@@ -7,33 +7,22 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
--- | GHC-only Generic derivation for the "YCHR.Convert" classes.
---
--- Deriving 'GHC.Generics.Generic' on a data type is enough to get
--- 'YCHR.Convert.ToTerm' / 'YCHR.Convert.FromTerm' instances via the two
--- helpers here — no hand-written instance body required:
---
--- > import GHC.Generics (Generic)
--- > import YCHR.Convert (ToTerm (..), FromTerm (..))
--- > import YCHR.Convert.Generic (genericToTerm, genericFromTerm)
--- >
--- > data Color = Red | Green | Blue deriving (Show, Generic)
--- >
--- > instance ToTerm   Color where toTerm   = genericToTerm    -- Red -> atom "red"
--- > instance FromTerm Color where fromTerm = genericFromTerm
+-- | GHC-only 'GHC.Generics.Generic' derivation for the "YCHR.Convert"
+-- classes: @instance ToTerm T where toTerm = genericToTerm@ (and likewise
+-- 'genericFromTerm') is a complete instance for any type deriving
+-- 'GHC.Generics.Generic'. Example: section /Generic derivation (GHC only)/
+-- of <https://github.com/lortabac/ychr/blob/master/docs/reference/convert.md>.
 --
 -- = Encoding
 --
 -- A constructor becomes a compound whose functor is the constructor name
--- with its first character lowercased (Haskell constructors are uppercase;
--- CHR functor atoms are lowercase). Fields become positional arguments in
--- declaration order; a nullary constructor becomes an atom. Record field
--- names are ignored (positional encoding), so a generic-derived instance
--- agrees with a hand-written one.
+-- with its first character lowercased (CHR functor atoms are lowercase).
+-- Fields become positional arguments in declaration order; a nullary
+-- constructor becomes an atom. Record field names are ignored, so a
+-- derived instance agrees with a hand-written positional one.
 --
--- This module depends on "GHC.Generics", which MicroHS cannot compile, so
--- it is built only under GHC (see @if impl(ghc)@ in @ychr.cabal@). The core
--- "YCHR.Convert" is Generics-free and works on every backend.
+-- Needs "GHC.Generics", which MicroHS cannot compile, so this module is
+-- built only under GHC (@if impl(ghc)@ in @ychr.cabal@).
 module YCHR.Convert.Generic
   ( genericToTerm,
     genericFromTerm,
@@ -54,19 +43,16 @@ import YCHR.Convert
   )
 import YCHR.Types (Term)
 
--- | Encode any 'Generic' value as a 'Term'. See the module header for the
--- constructor-to-functor convention.
+-- | Encode a 'Generic' value as a 'Term' (encoding: module header).
 genericToTerm :: (Generic a, GToTerm (Rep a)) => a -> Term
 genericToTerm = gToTerm . from
 
--- | Decode a 'Term' into any 'Generic' value. The inverse of
--- 'genericToTerm': dispatches on functor and arity across the type's
--- constructors.
+-- | Inverse of 'genericToTerm': dispatches on functor and arity across the
+-- type's constructors.
 genericFromTerm :: forall a. (Generic a, GFromTerm (Rep a)) => Term -> Either ConvertError a
 genericFromTerm t = to <$> decodeSum (gRows @(Rep a)) t
 
--- | The functor atom for a constructor name: lowercase the first character
--- only. @Red -> "red"@, @MkPoint -> "mkPoint"@.
+-- | Lowercase the first character only: @Red -> "red"@, @MkPoint -> "mkPoint"@.
 functorName :: String -> Text
 functorName [] = ""
 functorName (c : cs) = Text.pack (toLower c : cs)
@@ -75,12 +61,11 @@ functorName (c : cs) = Text.pack (toLower c : cs)
 -- ToTerm side
 -- ---------------------------------------------------------------------------
 
--- | Encode a generic representation as a whole 'Term' (datatype, sum, and
--- constructor levels).
+-- | Datatype, sum, and constructor levels of the encoding.
 class GToTerm f where
   gToTerm :: f p -> Term
 
--- | Encode a generic product as a positional argument list.
+-- | Product level: positional argument list.
 class GProdTo f where
   gProdTo :: f p -> [Term]
 
@@ -110,12 +95,12 @@ instance GProdTo U1 where
 -- FromTerm side
 -- ---------------------------------------------------------------------------
 
--- | Rows describing each constructor of a generic representation:
--- @(functor, arity, build-from-args)@. Fed to 'decodeSum'.
+-- | One @(functor, arity, build-from-args)@ row per constructor, fed to
+-- 'decodeSum'.
 class GFromTerm f where
   gRows :: [(Text, Int, [Term] -> Either ConvertError (f p))]
 
--- | Build a generic product from a positional argument list, and report how
+-- | Product level: build from a positional argument list; 'gArity' is how
 -- many arguments it consumes.
 class GProdFrom f where
   gArity :: Int

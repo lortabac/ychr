@@ -1,34 +1,15 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | An ergonomic bridge between ordinary Haskell data types and CHR
--- terms. Use it when @ychr@ is embedded as a library and you would rather
--- pass and receive Haskell values than hand-build and pattern-match
--- 'Term's.
+-- | Pass and receive Haskell values at the CHR boundary instead of
+-- hand-building 'Term's. The boundary is the pure 'Term' type — a goal is
+-- a 'Term', a result is a @'Map' 'Text' 'Term'@ keyed by goal-variable
+-- name — so both classes target 'Term' and never see runtime values.
+-- Reference and examples:
+-- <https://github.com/lortabac/ychr/blob/master/docs/reference/convert.md>.
 --
--- This module is a companion to "YCHR.DSL": the DSL builds CHR /programs/,
--- while this module converts /values/ at the program boundary. The library
--- boundary is entirely the pure 'Term' type — a goal is a 'Term', and a
--- result is a @'Map' 'Text' 'Term'@ keyed by goal-variable name — so both
--- classes target 'Term' and never touch the runtime value representation.
---
--- = Worked example
---
--- > {-# LANGUAGE OverloadedStrings #-}
--- > import YCHR.Convert
--- > import YCHR.DSL (module', declaring, defining, term, var, int, (@:), (<=>), (|-))
--- >
--- > -- run a program and decode the "R" binding as a Haskell Int
--- > main = do
--- >   r <- runQuery [myModule] (term "compute" [var "R"]) "R"
--- >   print (r :: Either ConvertError Int)
---
--- = Generic derivation
---
--- Hand-writing instances is optional. Under GHC, "YCHR.Convert.Generic"
--- provides @genericToTerm@ / @genericFromTerm@ so a @deriving 'GHC.Generics.Generic'@
--- type gets instances for free. That module is GHC-only; this one carries
--- no @Generic@ dependency and provides the hand-written path.
+-- Under GHC, "YCHR.Convert.Generic" derives both classes for
+-- @deriving 'GHC.Generics.Generic'@ types; this module stays @Generic@-free.
 module YCHR.Convert
   ( -- * Classes
     ToTerm (..),
@@ -75,7 +56,6 @@ module YCHR.Convert
     withDefaultHostFunctions,
 
     -- * Typed query wrapper
-    -- $goalArguments
     runQuery,
     runQueryWith,
     runQueryWithHostCallRegistry,
@@ -115,13 +95,12 @@ import YCHR.Types (Constraint (..), Name (..), Term (..))
 -- Classes
 -- ---------------------------------------------------------------------------
 
--- | Encode a Haskell value as a CHR 'Term'. Total: encoding never fails.
+-- | Encode a Haskell value as a 'Term'. Total.
 class ToTerm a where
   toTerm :: a -> Term
 
--- | Decode a CHR 'Term' into a Haskell value. Fallible: the term may have
--- the wrong shape, or be an unbound variable where a ground value was
--- required. Failures are returned as data (a 'ConvertError'), never thrown.
+-- | Decode a 'Term'. Wrong shape or an unbound variable where a ground
+-- value is needed is a 'ConvertError', never a throw.
 class FromTerm a where
   fromTerm :: Term -> Either ConvertError a
 
@@ -129,25 +108,19 @@ class FromTerm a where
 -- Errors
 -- ---------------------------------------------------------------------------
 
--- | Why a 'Term' could not be decoded into a Haskell value.
---
--- The constructors are positional rather than record-shaped because the
--- \"what was found\" payload differs across cases ('Term' vs 'Name'), which a
--- single record could not share.
+-- | Why a 'Term' could not be decoded.
 data ConvertError
-  = -- | Wrong shape: a description of what was expected, and the term found.
+  = -- | Wrong shape: what was expected, and the term found.
     TypeMismatch Text Term
   | -- | Right functor, wrong argument count: functor, expected arity, found arity.
     ArityMismatch Name Int Int
-  | -- | A compound whose functor matched none of a sum type's constructors:
-    -- the accepted functor names, and the functor actually found.
+  | -- | Functor matched none of a sum type's rows: accepted names, found.
     UnknownFunctor [Text] Name
   | -- | A ground value was required but the term was a variable or wildcard.
     UnboundValue Term
   | -- | Result-map decoding: the requested goal variable is absent.
     MissingBinding Text
-  | -- | A typed query was given a goal that is not a compound term (a
-    -- constraint occurrence). Carries the offending goal term.
+  | -- | A typed query's goal is not a compound term (a constraint occurrence).
     MalformedGoal Term
   deriving (Show, Eq)
 
@@ -155,29 +128,27 @@ data ConvertError
 -- Combinators for hand-written instances
 -- ---------------------------------------------------------------------------
 
--- | Build an unqualified compound term (the same shape as "YCHR.DSL"'s
--- @term@). Handy in 'ToTerm' instances.
+-- | Unqualified compound term (the shape "YCHR.DSL"'s @term@ builds).
 compound :: Text -> [Term] -> Term
 compound n = CompoundTerm (Unqualified n)
 
--- | Build a nullary atom (an unqualified 0-arity compound).
+-- | Nullary atom: an unqualified 0-arity compound.
 atomTerm :: Text -> Term
 atomTerm n = CompoundTerm (Unqualified n) []
 
--- | Wrap a decoder so that an unbound variable or wildcard is reported as
--- 'UnboundValue' before the decoder runs. Every scalar 'FromTerm' instance
--- uses this so \"decode a value from an unbound variable\" fails uniformly.
+-- | Wrap a decoder so an unbound variable or wildcard is 'UnboundValue'
+-- before it runs. Every scalar 'FromTerm' instance uses it, so that
+-- failure is uniform; use it in yours.
 ground :: (Term -> Either ConvertError a) -> Term -> Either ConvertError a
 ground _ t@(VarTerm _) = Left (UnboundValue t)
 ground _ t@Wildcard = Left (UnboundValue t)
 ground f t = f t
 
--- | Decode a compound with the given (local) functor name and exact arity,
--- returning its argument terms. Rejects variables/wildcards
--- ('UnboundValue'), a different functor ('UnknownFunctor'), a wrong arity
--- ('ArityMismatch'), and non-compound terms ('TypeMismatch'). The functor is
--- matched on its local part, so a result that comes back module-qualified
--- still decodes.
+-- | The arguments of a compound with this functor and exact arity.
+-- Variables\/wildcards are 'UnboundValue', another functor
+-- 'UnknownFunctor', wrong arity 'ArityMismatch', non-compounds
+-- 'TypeMismatch'. Only the local part of the functor is compared, so a
+-- module-qualified result still decodes.
 matchCompound :: Text -> Int -> Term -> Either ConvertError [Term]
 matchCompound n arity = ground $ \t -> case t of
   CompoundTerm name args
@@ -188,10 +159,10 @@ matchCompound n arity = ground $ \t -> case t of
     | otherwise -> Left (UnknownFunctor [n] name)
   _ -> Left (TypeMismatch n t)
 
--- | Decode a sum type: dispatch on a compound's functor and arity against a
--- table of @(functor, arity, handler)@ rows. Produces 'UnknownFunctor' when
--- no row's functor matches and 'ArityMismatch' when the functor matches but
--- the arity does not.
+-- | Decode a sum type by dispatching on functor and arity over
+-- @(functor, arity, handler)@ rows. No matching functor is
+-- 'UnknownFunctor'; matching functor with the wrong arity is
+-- 'ArityMismatch'. Local-part matching as in 'matchCompound'.
 decodeSum ::
   [(Text, Int, [Term] -> Either ConvertError a)] ->
   Term ->
@@ -209,9 +180,8 @@ decodeSum rows = ground $ \t -> case t of
     lookupRow k =
       foldr (\(fn, ar, h) acc -> if fn == k then Just (ar, h) else acc) Nothing rows
 
--- | Decode the argument at a 0-based position with 'fromTerm'. Intended for
--- use on the argument list returned by 'matchCompound' \/ 'decodeSum', where
--- the arity has already been checked.
+-- | 'fromTerm' on the argument at a 0-based position, for the list
+-- 'matchCompound' \/ 'decodeSum' return (arity already checked).
 argAt :: (FromTerm a) => Int -> [Term] -> Either ConvertError a
 argAt i args = case drop i args of
   (t : _) -> fromTerm t
@@ -221,17 +191,14 @@ argAt i args = case drop i args of
 -- The quote/1 quoting form
 -- ---------------------------------------------------------------------------
 
--- | Wrap a value in the @quote\/1@ quoting form, keeping it symbolic.
+-- | Wrap a value in @quote\/1@ so it stays symbolic. Goal and rule-body
+-- arguments are /evaluated/: a compound whose functor names a declared
+-- function is called, not kept as data; quoting opts out. Apply it where
+-- the goal is built, not inside a 'ToTerm' instance:
 --
--- Goal and rule-body arguments are /evaluated/, so a compound whose functor
--- is also a declared function is called rather than kept as data. Quoting
--- opts out. Use it where you build the goal, not inside a 'ToTerm' instance:
+-- > compound "typecheck" [quote expr, VarTerm "Result"]
 --
--- > compound "typecheck" [quote expr, VarTerm "Result"]  -- here, or
--- > term     "typecheck" [quote expr, var "Result"]      -- with "YCHR.DSL"
---
--- The argument is any 'ToTerm' value, so the 'toTerm' call is implicit;
--- a plain 'Term' passes through unchanged.
+-- 'toTerm' is applied implicitly; a plain 'Term' passes through.
 quote :: (ToTerm a) => a -> Term
 quote x = CompoundTerm (Unqualified "quote") [toTerm x]
 
@@ -266,8 +233,7 @@ instance FromTerm Int where
     IntTerm n -> maybe (Left (TypeMismatch "Int" t)) Right (toIntegralSized n)
     _ -> Left (TypeMismatch "Int" t)
 
--- | Strict: an 'IntTerm' is /not/ coerced to a 'Double'. Use 'Integer' \/
--- 'Int' for integral results.
+-- | Strict: an 'IntTerm' is /not/ coerced to 'Double'.
 instance ToTerm Double where
   toTerm = FloatTerm
 
@@ -276,10 +242,9 @@ instance FromTerm Double where
     FloatTerm d -> Right d
     _ -> Left (TypeMismatch "Double" t)
 
--- | Encodes to the canonical @true@ \/ @false@ compound, which the
--- host-value bridge turns into a native boolean rather than an atom
--- (see 'YCHR.Internal.Types.hostBool'). Decoding also accepts the
--- @prelude@-qualified forms that appear in results.
+-- | The canonical @true@ \/ @false@ atom, which the host-value bridge turns
+-- into a native boolean. Decoding also accepts the @prelude@-qualified
+-- forms that appear in results.
 instance ToTerm Bool where
   toTerm True = atomTerm "true"
   toTerm False = atomTerm "false"
@@ -292,7 +257,7 @@ instance FromTerm Bool where
     CompoundTerm (Qualified "prelude" "false") [] -> Right False
     _ -> Left (TypeMismatch "Bool" t)
 
--- | The idiomatic CHR string type: encodes to 'TextTerm'.
+-- | The CHR string type: 'TextTerm'.
 instance ToTerm Text where
   toTerm = TextTerm
 
@@ -301,9 +266,8 @@ instance FromTerm Text where
     TextTerm s -> Right s
     _ -> Left (TypeMismatch "Text" t)
 
--- | A single-character 'TextTerm'. Note that @String = [Char]@ therefore
--- round-trips as a /list/ of one-character 'TextTerm's; prefer 'Text' when
--- you want a single 'TextTerm'.
+-- | A one-character 'TextTerm'. Hence @String = [Char]@ round-trips as a
+-- /list/ of one-character 'TextTerm's; use 'Text' for a single string.
 instance ToTerm Char where
   toTerm c = TextTerm (Text.singleton c)
 
@@ -312,7 +276,7 @@ instance FromTerm Char where
     TextTerm s | Text.length s == 1 -> Right (Text.head s)
     _ -> Left (TypeMismatch "Char" t)
 
--- | Encodes to the @()@ atom (matching the runtime's unit value).
+-- | The @()@ atom, the runtime's unit value.
 instance ToTerm () where
   toTerm () = atomTerm "()"
 
@@ -369,9 +333,9 @@ instance (FromTerm a, FromTerm b, FromTerm c, FromTerm d) => FromTerm (a, b, c, 
     as <- matchCompound "tuple" 4 t
     (,,,) <$> argAt 0 as <*> argAt 1 as <*> argAt 2 as <*> argAt 3 as
 
--- | Prolog list encoding: cons is @.\/2@, nil is @[]@. Interoperates with
--- the @lists@ library. Decoding also accepts the @prelude@-qualified and
--- mangled cons\/nil forms that can appear in results.
+-- | Prolog list: cons @.\/2@, nil @[]@, as @library(lists)@ expects.
+-- Decoding also accepts the @prelude@-qualified and mangled cons\/nil
+-- forms that appear in results.
 instance (ToTerm a) => ToTerm [a] where
   toTerm = foldr (\x acc -> compound "." [toTerm x, acc]) (atomTerm "[]")
 
@@ -401,22 +365,20 @@ instance (FromTerm a) => FromTerm [a] where
 -- Result decoding
 -- ---------------------------------------------------------------------------
 
--- | Decode a single goal variable's binding by name. 'MissingBinding' when
--- the variable is absent from the result map; otherwise delegates to
--- 'fromTerm'.
+-- | 'fromTerm' on one goal variable's binding; 'MissingBinding' if absent.
 decodeVar :: (FromTerm a) => Text -> Map Text Term -> Either ConvertError a
 decodeVar k m = case Map.lookup k m of
   Nothing -> Left (MissingBinding k)
   Just t -> fromTerm t
 
--- | Like 'decodeVar' but yields 'Nothing' for an absent variable instead of
--- failing. A present-but-undecodable binding still fails.
+-- | 'decodeVar' with 'Nothing' for an absent variable. A present but
+-- undecodable binding still fails.
 decodeVarMaybe :: (FromTerm a) => Text -> Map Text Term -> Either ConvertError (Maybe a)
 decodeVarMaybe k m = case Map.lookup k m of
   Nothing -> Right Nothing
   Just t -> Just <$> fromTerm t
 
--- | Raw lookup escape hatch: the bound 'Term' for a goal variable, if any.
+-- | The raw bound 'Term' for a goal variable, if any.
 lookupBinding :: Text -> Map Text Term -> Maybe Term
 lookupBinding = Map.lookup
 
@@ -424,44 +386,41 @@ lookupBinding = Map.lookup
 -- Typed query wrapper
 -- ---------------------------------------------------------------------------
 
--- $goalArguments
--- A goal's arguments are renamed before the goal runs, exactly as the
--- arguments of a rule head are: a bare reference to a data constructor
--- the program declares /and exports/ is canonicalized to its qualified
--- form, which is what the compiled head patterns match. A bare name
--- visible both as a constructor and as a function has no single
--- answer and is rejected (@YCHR-20020@); qualify it, or rename one of
--- the two.
---
--- A type the program declares but does not export is invisible to the
--- query: its constructors stay unqualified and the rules written against
--- them silently do not fire. That case warns (@YCHR-20101@), but these
--- wrappers have nowhere to put warnings and discard them — reach for
--- 'YCHR.Run.runProgramWithGoalDSLWithWarnings' to see them.
---
--- Renaming can also fail outright — an ambiguous unqualified constructor
--- (@YCHR-20012@), or a qualified name the named module does not export
--- (@YCHR-20010@) — and those are thrown as 'Error', not returned as a
--- 'ConvertError'.
---
--- Goal arguments are still /evaluated/, so to pass an __undeclared__
--- compound as symbolic data, wrap it with 'quote'.
+{- Note [Goal argument canonicalization]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+A goal's arguments are renamed before the goal runs, exactly like the
+arguments of a rule head: a bare reference to a data constructor the
+program declares *and exports* becomes its qualified form, which is
+what the compiled head patterns match.
 
--- | Compile the modules, run the goal 'Term', and decode a single goal
--- variable's binding as a Haskell value. The goal is built exactly like a
--- rule head or "YCHR.DSL" body goal (e.g. @term \"leq\" [int 1, var \"R\"]@);
--- its 'ToTerm'-encoded arguments are canonicalized like rule-head
--- arguments (see $goalArguments) and then run at tell time.
---
--- Compilation failures are thrown as 'Error' (as 'YCHR.DSL.runDSL' does),
--- as are goal-argument rename failures; decoding failures are returned as
--- 'Left'. Uses the base + meta host-call registries and includes the
--- standard library.
+  * A type the program declares but does not export is invisible to
+    the query: its constructors stay unqualified and rules written
+    against them silently never fire. That warns (YCHR-20101), but the
+    typed wrappers have no warning channel and discard it. Use
+    YCHR.Run.runProgramWithGoalDSLWithWarnings to see it.
+
+  * Renaming can fail: a bare name visible both as a constructor and
+    as a function (YCHR-20020), an ambiguous unqualified constructor
+    (YCHR-20012), or a qualified name its module does not export
+    (YCHR-20010). Those are thrown as Error, not returned as a
+    ConvertError.
+
+  * Goal arguments are still evaluated, like any tell. Wrap an
+    undeclared compound in 'quote' to pass it as symbolic data.
+-}
+
+-- | Compile the modules (stdlib included), run the goal with the default
+-- host-call registry, decode one goal variable's binding. The goal is a
+-- compound built like a rule head; its arguments are canonicalized and
+-- evaluated at tell time, so a constructor of a type the program does not
+-- export never matches a rule — see Note [Goal argument canonicalization].
+-- Compilation and rename failures are thrown as 'Error'; decoding failures
+-- come back as 'Left'.
 runQuery :: (FromTerm a) => [Module] -> Term -> Text -> IO (Either ConvertError a)
 runQuery modules goal v = runQueryWith modules goal (decodeVar v)
 
--- | Like 'runQuery' but takes an explicit decoder over the whole binding
--- map, so a record can be assembled from several 'decodeVar' calls.
+-- | 'runQuery' with a decoder over the whole binding map (assemble a
+-- record from several 'decodeVar's).
 runQueryWith ::
   [Module] ->
   Term ->
@@ -469,9 +428,7 @@ runQueryWith ::
   IO (Either ConvertError a)
 runQueryWith = runQueryWithHostCallRegistry defaultHostCallRegistry
 
--- | Like 'runQueryWith' but takes an explicit host-call registry. Use this
--- when the program calls custom @host:_@ functions registered by the
--- embedder.
+-- | 'runQueryWith' with an explicit host-call registry.
 runQueryWithHostCallRegistry ::
   HostCallRegistry ->
   [Module] ->
@@ -479,8 +436,8 @@ runQueryWithHostCallRegistry ::
   (Map Text Term -> Either ConvertError a) ->
   IO (Either ConvertError a)
 runQueryWithHostCallRegistry hostCalls modules goal decode =
-  -- Check the goal shape before compiling, so a malformed goal is reported
-  -- as data without doing (or throwing on) the compile.
+  -- Goal shape first, so a malformed goal is reported as data without
+  -- compiling (or throwing).
   case goalConstraint goal of
     Left err -> pure (Left err)
     Right _ -> do
@@ -496,21 +453,16 @@ compileOrThrow modules = case compileParsedModules True modules of
 -- Typed query wrapper over a compiled program
 -- ---------------------------------------------------------------------------
 
--- | Like 'runQuery' but over an already-'CompiledProgram' instead of a
--- list of source modules. Compile once (with 'YCHR.Run.compileFiles' for
--- @.chr@ files, or 'YCHR.Run.compileParsedModules' for "YCHR.DSL"
--- modules), then run as many typed queries as you like against the same
--- program — each call is an independent run with a fresh store. This is
--- the entry point for embedding a real @.chr@ module and driving it with
--- 'ToTerm' \/ 'FromTerm'. Goal arguments are canonicalized against the
--- compiled program's modules — see $goalArguments.
+-- | 'runQuery' over a 'CompiledProgram' ('YCHR.Run.compileFiles' or
+-- 'YCHR.Run.compileParsedModules'): compile once, query many. Each call
+-- is an independent run with a fresh store. A constructor of a type the
+-- program does not export never matches a rule; see Note [Goal argument
+-- canonicalization].
 runQueryCompiled ::
   (FromTerm a) => CompiledProgram -> Term -> Text -> IO (Either ConvertError a)
 runQueryCompiled cp goal v = runQueryCompiledWith cp goal (decodeVar v)
 
--- | Like 'runQueryWith' but over an already-'CompiledProgram'. Decodes the
--- whole binding map, so a record can be assembled from several 'decodeVar'
--- calls.
+-- | 'runQueryWith' over a 'CompiledProgram'.
 runQueryCompiledWith ::
   CompiledProgram ->
   Term ->
@@ -519,9 +471,7 @@ runQueryCompiledWith ::
 runQueryCompiledWith =
   runQueryCompiledWithHostCallRegistry defaultHostCallRegistry
 
--- | Like 'runQueryWithHostCallRegistry' but over an
--- already-'CompiledProgram'. Use this when the program calls custom
--- @host:_@ functions registered by the embedder.
+-- | 'runQueryWithHostCallRegistry' over a 'CompiledProgram'.
 runQueryCompiledWithHostCallRegistry ::
   HostCallRegistry ->
   CompiledProgram ->
@@ -535,9 +485,8 @@ runQueryCompiledWithHostCallRegistry hostCalls cp goal decode =
       bindings <- runProgramWithGoalDSL cp hostCalls constraint
       pure (decode bindings)
 
--- | A goal must be a compound term (a constraint occurrence). Unlike
--- "YCHR.DSL"'s @termToConstraint@, which crashes, this reports a malformed
--- goal as a 'ConvertError' so it flows through the errors-as-data query API.
+-- | A goal must be a compound (a constraint occurrence); otherwise
+-- 'MalformedGoal', as data — unlike "YCHR.DSL", which throws.
 goalConstraint :: Term -> Either ConvertError Constraint
 goalConstraint (CompoundTerm n args) = Right (Constraint n args)
 goalConstraint t = Left (MalformedGoal t)
@@ -548,24 +497,20 @@ goalConstraint t = Left (MalformedGoal t)
 
 -- $hostFunctions
 --
--- A @host:f(args)@ call in a CHR program is dispatched through a
--- 'HostCallRegistry'. The adapters below lift ordinary Haskell functions
--- into 'HostCallFn' entries using the same 'ToTerm' \/ 'FromTerm' classes
--- used for goals and results, so the common case needs no knowledge of the
--- runtime value representation. Assemble a registry with 'hostFunctions'
--- (or 'withDefaultHostFunctions') and pass it to
--- 'runQueryWithHostCallRegistry' \/ 'runQueryCompiledWithHostCallRegistry'.
+-- A @host:f(args)@ call dispatches through a 'HostCallRegistry'. These
+-- adapters lift Haskell functions into 'HostCallFn' entries, marshalling
+-- through 'ToTerm' \/ 'FromTerm'. Assemble with 'hostFunctions' or
+-- 'withDefaultHostFunctions'; pass to a @…WithHostCallRegistry@ query.
+-- Walkthrough: section /Registering host functions/ of
+-- <https://github.com/lortabac/ychr/blob/master/docs/reference/convert.md>.
 
--- | Marshal one dereferenced host-call argument 'Value' into a decoded
--- Haskell value. 'valueToTerm' recursively dereferences, so a logical
--- variable bound inside a compound argument is resolved; a genuinely
--- unbound argument becomes 'Wildcard' and 'fromTerm' rejects it as an
+-- | Decode one host-call argument. 'valueToTerm' dereferences recursively;
+-- an unbound variable becomes 'Wildcard', which 'fromTerm' rejects as
 -- 'UnboundValue'.
 argFromValue :: (FromTerm a) => Value -> Chr (Either ConvertError a)
 argFromValue v = fromTerm <$> valueToTerm Map.empty v
 
--- | Marshal a host-function result Haskell value back into a runtime
--- 'Value'. Results are expected ground.
+-- | Encode a host-function result. Results are expected ground.
 resultToValue :: (ToTerm r) => r -> Chr Value
 resultToValue r = evalStateT (termToValue (toTerm r)) Map.empty
 
@@ -574,36 +519,28 @@ hostArityError n vs =
   runtimeErrorS
     ("host call: expected " ++ show n ++ " argument(s), got " ++ show (length vs))
 
--- | Report a host-call marshalling failure. 'UnboundValue' means the
--- decoder demanded a value the argument does not have yet, so it is an
--- instantiation failure — caught by a rule guard, which then delays
--- until the variable is bound. Every other decode failure is a
--- general error. A host function that wants an argument to stay
--- symbolic should decode it as 'Term', which accepts a variable.
+-- | 'UnboundValue' is an instantiation failure: a rule guard catches it
+-- and delays until the variable is bound. Any other decode failure is a
+-- runtime error. Decode as 'Term' to accept a variable.
 hostDecodeError :: ConvertError -> Chr a
 hostDecodeError err@(UnboundValue _) = instantiationErrorS ("host call: " ++ show err)
 hostDecodeError err = runtimeErrorS ("host call: " ++ show err)
 
--- | Adapt a nullary effectful action into a host function. There is no
--- pure @hostFn0@ because a nullary pure host function is just a constant;
--- use this for host calls that read external state (a clock, a fresh
--- identifier) or perform I\/O. The body runs in 'Chr' (use 'liftIO' for
--- 'IO').
+-- | Nullary effectful host function (a clock, a fresh id). No pure
+-- @hostFn0@: that would be a constant. The body runs in 'Chr';
+-- 'Control.Monad.IO.Class.liftIO' for 'IO'.
 hostFn0M :: (ToTerm r) => Chr r -> HostCallFn
 hostFn0M act = HostCallFn $ \case
   [] -> act >>= resultToValue
   vs -> hostArityError 0 vs
 
--- | Adapt a pure unary Haskell function into a host function.
---
--- > hostFunctions [("shout", hostFn1 Data.Text.toUpper)]   -- host:shout(X)
+-- | Pure unary host function.
 hostFn1 :: (FromTerm a, ToTerm r) => (a -> r) -> HostCallFn
 hostFn1 f = hostFn1M (pure . f)
 
--- | Effectful unary adapter: the body runs in 'Chr', so it may perform
--- I\/O (via 'liftIO'), dereference logical variables, or inspect the
--- constraint store. Arguments and result still marshal via
--- 'FromTerm' \/ 'ToTerm'.
+-- | Effectful unary host function: the body runs in 'Chr'
+-- ('Control.Monad.IO.Class.liftIO' for I\/O); arguments and result still
+-- marshal via 'FromTerm' \/ 'ToTerm'.
 hostFn1M :: (FromTerm a, ToTerm r) => (a -> Chr r) -> HostCallFn
 hostFn1M f = HostCallFn $ \case
   [va] -> do
@@ -613,13 +550,11 @@ hostFn1M f = HostCallFn $ \case
       Left err -> hostDecodeError err
   vs -> hostArityError 1 vs
 
--- | Adapt a pure binary Haskell function into a host function.
---
--- > hostFunctions [("my_add", hostFn2 ((+) :: Int -> Int -> Int))]  -- host:my_add(X, Y)
+-- | Pure binary host function.
 hostFn2 :: (FromTerm a, FromTerm b, ToTerm r) => (a -> b -> r) -> HostCallFn
 hostFn2 f = hostFn2M (\a b -> pure (f a b))
 
--- | Effectful binary adapter. See 'hostFn1M'.
+-- | Effectful binary host function; see 'hostFn1M'.
 hostFn2M :: (FromTerm a, FromTerm b, ToTerm r) => (a -> b -> Chr r) -> HostCallFn
 hostFn2M f = HostCallFn $ \case
   [va, vb] -> do
@@ -630,14 +565,14 @@ hostFn2M f = HostCallFn $ \case
       Left err -> hostDecodeError err
   vs -> hostArityError 2 vs
 
--- | Adapt a pure ternary Haskell function into a host function.
+-- | Pure ternary host function.
 hostFn3 ::
   (FromTerm a, FromTerm b, FromTerm c, ToTerm r) =>
   (a -> b -> c -> r) ->
   HostCallFn
 hostFn3 f = hostFn3M (\a b c -> pure (f a b c))
 
--- | Effectful ternary adapter. See 'hostFn1M'.
+-- | Effectful ternary host function; see 'hostFn1M'.
 hostFn3M ::
   (FromTerm a, FromTerm b, FromTerm c, ToTerm r) =>
   (a -> b -> c -> Chr r) ->
@@ -652,11 +587,9 @@ hostFn3M f = HostCallFn $ \case
       Left err -> hostDecodeError err
   vs -> hostArityError 3 vs
 
--- | Variable-arity escape hatch that still marshals through 'Term'. The
--- supplied function receives every argument already decoded to a 'Term'
--- (recursively dereferenced) and returns the result 'Term' or a
--- 'ConvertError'. Use it for host functions whose arity is not fixed
--- (e.g. an n-ary sum).
+-- | Variable-arity host function over 'Term's: arguments arrive
+-- recursively dereferenced; a 'Left' 'UnboundValue' is an instantiation
+-- failure (a guard delays), any other 'ConvertError' a runtime error.
 hostFnN :: ([Term] -> Either ConvertError Term) -> HostCallFn
 hostFnN g = HostCallFn $ \vs -> do
   ts <- traverse (valueToTerm Map.empty) vs
@@ -664,25 +597,19 @@ hostFnN g = HostCallFn $ \vs -> do
     Right t -> resultToValue t
     Left err -> hostDecodeError err
 
--- | The raw host-function escape hatch: build a 'HostCallFn' directly from
--- @'Value' -> 'Chr' 'Value'@, with no 'Term' marshalling. Arguments arrive
--- top-level dereferenced only (logical variables nested inside a compound
--- argument are /not/ chased — use 'YCHR.Run.deref' as needed). This is the
--- 'HostCallFn' constructor under a descriptive name, exposed so the raw
--- path needs no import of the internal runtime modules.
+-- | Raw host function over runtime 'Value's, no 'Term' marshalling.
+-- Arguments are dereferenced at top level only: variables nested inside
+-- a compound are /not/ chased ('YCHR.Run.deref' them yourself).
 hostFnValues :: ([Value] -> Chr Value) -> HostCallFn
 hostFnValues = HostCallFn
 
--- | Assemble a host-call registry from named host functions. The names are
--- the bare functors used at the call site: an entry @("my_add", …)@ is
--- invoked as @host:my_add(...)@ from CHR source. Composes with '<>'.
+-- | Registry from named host functions: entry @("my_add", …)@ is called as
+-- @host:my_add(...)@. Composes with '<>'.
 hostFunctions :: [(Text, HostCallFn)] -> HostCallRegistry
 hostFunctions = Map.fromList . map (\(n, fn) -> (VM.Name n, fn))
 
--- | Like 'hostFunctions', but the given functions are unioned over the full
--- default registry (the base arithmetic \/ comparison \/ string builtins
--- plus the meta operations), so a program can call both the built-ins and
--- the custom functions. On a name clash the custom entry wins.
+-- | 'hostFunctions' unioned over the default registry (builtins, meta and
+-- search host calls). On a name clash the custom entry wins.
 withDefaultHostFunctions :: [(Text, HostCallFn)] -> HostCallRegistry
 withDefaultHostFunctions fns =
   hostFunctions fns <> defaultHostCallRegistry

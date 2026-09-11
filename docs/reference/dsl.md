@@ -1,37 +1,14 @@
 # Haskell DSL Reference
 
-> **Audience.** Haskell developers who want to embed YCHR as a library —
-> build CHR programs from Haskell code, compile and run them in-process,
-> without writing or shipping `.chr` files.
->
-> **You will** learn how the combinators in `YCHR.DSL` map to the surface
-> language, and how to compile and run a DSL-built program.
->
-> **Skip if** you only ever compile `.chr` files from disk.
+`import YCHR.DSL` builds CHR *programs* as Haskell values. It is an
+opt-in companion to the umbrella `YCHR` module, which does not
+re-export it. Every combinator builds the same `Module` value the
+parser produces from `.chr` text; validation (undeclared constraints,
+ill-typed bodies) happens in the compilation pipeline, as for parsed
+input. Use it when the program is built or generated from Haskell;
+`.chr` files on disk go through `compileFiles`.
 
-> **Note.** The DSL is program *construction* and lives in its own module:
-> `import YCHR.DSL`. It is an opt-in companion to the umbrella `YCHR`
-> module, which covers the compile-and-query path (loading `.chr` sources,
-> running goals, marshalling values) but deliberately does not re-export
-> the DSL's large combinator vocabulary.
-
-The DSL lives in [`YCHR.DSL`](../../src/YCHR/DSL.hs) and is a thin layer
-over the surface AST in [`YCHR.Internal.Parsed`](../../src/YCHR/Internal/Parsed.hs). Every
-combinator is a pure function that builds the same `Module` value the
-parser would produce from `.chr` text. Validation (undeclared constraints,
-ill-typed bodies, etc.) is deferred to the compilation pipeline, exactly
-as for parsed input.
-
-## When to use the DSL
-
-Programs that live on disk as `.chr` files are compiled with
-`compileFiles`; use the DSL when the program is built or generated
-from Haskell — embedding without shipping source files, runtime rule
-synthesis, or pipeline tests.
-
-## The four building blocks
-
-A DSL program is built from four kinds of value:
+## Building blocks
 
 | Kind | Type | Built by |
 |---|---|---|
@@ -40,18 +17,11 @@ A DSL program is built from four kinds of value:
 | Rule | `Rule` | `(<=>)`, `(==>)`, `(\\)` (with `<=>`), `(@:)`, `(\|-)` |
 | Term | `Term` | `var`, `atom`, `int`, `float`, `bool`, `text`, `wildcard`, `term`, `qterm`, `quote` |
 
-The surface language doesn't distinguish a constraint occurrence
-(`leq(X, Y)`), a function call (`factorial(5)`), and a data-constructor
-term (`cons(H, T)`) — they're all the same compound-term shape, and the
-renamer/desugarer classifies them by what's been declared. The DSL
-matches that: there is a single `term` (and qualified `qterm`)
-constructor for compound terms, used for rule-head occurrences,
-body goals, and arbitrary terms alike.
-
-All append-style modifiers (`importing`, `declaring`, `defining`,
-`withEquations`, `chrType`, `library`) accumulate; calling them more than
-once on the same module is the same as calling them once with the
-combined arguments.
+Constraint occurrences, function calls and data-constructor terms are
+all compound terms, classified by what is declared; `term` (qualified:
+`qterm`) builds all of them. Append-style modifiers (`importing`,
+`declaring`, `defining`, `withEquations`, `chrType`, `library`)
+accumulate across calls.
 
 ## Mapping from `.chr` to DSL
 
@@ -73,14 +43,11 @@ combined arguments.
 | `kept \ removed <=> body.` | `[kept] \\ [removed] <=> [body]` |
 | `head ==> body.` | `[head] ==> [body]` |
 | `head <=> guard \| body.` | `[head] <=> [body] \|- [guard]` |
-| `R is X * 2.` | `var "R" \`is\` (var "X" .* int 2)` (or with the `Num` instance, `int 1 + var "X"`) |
+| `R is X * 2.` | `var "R" \`is\` (var "X" .* int 2)` (or with the `Num` instance, `var "X" * 2`) |
 | `c(quote(plus(X, 3))).` | `term "c" [quote (term "plus" [var "X", int 3])]` |
 | `host:print(X).` | `hostCall "print" [var "X"]` |
 
 ## Rules
-
-All four rule combinators produce the same `Rule` AST node the parser
-emits, so they go through the same renaming, desugaring, and type-checking.
 
 ### Simplification
 
@@ -88,8 +55,7 @@ emits, so they go through the same renaming, desugaring, and type-checking.
 [term "leq" [var "X", var "X"]] <=> [bool True]
 ```
 
-The body `[bool True]` is the canonical empty body — it desugars to
-nothing, exactly like the surface `... <=> true.`.
+`[bool True]` is the empty body (`... <=> true.`).
 
 ### Propagation
 
@@ -98,10 +64,6 @@ nothing, exactly like the surface `... <=> true.`.
   ==> [term "leq" [var "X", var "Z"]]
 ```
 
-The same `term` constructor builds head occurrences and body goals;
-the desugarer classifies a compound-term goal whose name resolves to a
-declared constraint as a body constraint call.
-
 ### Simpagation
 
 ```haskell
@@ -109,8 +71,7 @@ declared constraint as a body constraint call.
   <=> [bool True]
 ```
 
-`\\` produces an intermediate `Simpa` value; the same `<=>` operator
-consumes it via the `IsRuleHead` typeclass.
+`\\` yields a `Simpa` that the same `<=>` consumes (`IsRuleHead`).
 
 ### Naming and guards
 
@@ -120,14 +81,12 @@ consumes it via the `IsRuleHead` typeclass.
         |- [var "X" .< var "Lo"]
 ```
 
-`@:` (loosest, `infixr 0`) wraps a finished rule with a name. `|-`
-(`infixl 1`) attaches a guard list. The fixities are chosen so that
-chained CHR-like notation parses without parentheses.
+`@:` (`infixr 0`) names a finished rule; `|-` (`infixl 1`) attaches a
+guard list. The chained form needs no parentheses.
 
 ## Functions and types
 
-Function equations are appended to a module with `withEquations`; type
-definitions with `chrType`.
+Equations go in with `withEquations`, type definitions with `chrType`:
 
 ```haskell
 module' "fact"
@@ -144,29 +103,26 @@ module' "fact"
     ]
 ```
 
-`call_ f args` builds the surface `'$call'(F, A...)`; `funRef "f" 2`
-builds the surface `fun f/2`.
-
-Anonymous functions use `lambda`:
+`call_ f args` is `'$call'(F, A...)`; `funRef "f" 2` is `fun f/2`.
+Lambdas:
 
 ```haskell
 lambda [var "X"] (var "X" .+ int 1)
 ```
 
-which corresponds to the surface `fun(X) -> X + 1 end`.
+is `fun(X) -> X + 1 end`.
 
 ## Numeric and comparison sugar
 
-`Term` is an instance of `Num`, so integer literals and the standard
-arithmetic operators compile to the corresponding surface compounds:
+`Term` is a `Num` instance:
 
 ```haskell
 var "R" `is` (1 + var "X" * 2)        -- with the Num instance
 var "R" `is` (int 1 .+ var "X" .* int 2)  -- explicit, equivalent
 ```
 
-For comparisons in guards, use the prefixed operators (mapping to the
-prelude operators in [`docs/reference/prelude.md`](prelude.md)):
+Comparisons use the prefixed operators, mapping to the operators
+declared in [`libraries/prelude.chr`](../../libraries/prelude.chr):
 
 | DSL | Surface |
 |---|---|
@@ -176,10 +132,8 @@ prelude operators in [`docs/reference/prelude.md`](prelude.md)):
 | `.>=` | `>=` |
 | `.==` | `==` |
 
-There is no inequality operator; write the negation explicitly with
-the prelude's `not/1` (see the [prelude reference](prelude.md)).
-
-For structural unification (the `=` of CHR), use `.=.`:
+No inequality operator: negate with the prelude's `not/1`. Structural
+unification (CHR's `=`) is `.=.`:
 
 ```haskell
 var "X" .=. var "Y"
@@ -187,9 +141,8 @@ var "X" .=. var "Y"
 
 ## Compiling and running
 
-The simplest path is `runDSL`. It compiles the given modules with the
-stdlib and runs a single goal using the same default host-call registry
-the `ychr` CLI uses (`baseHostCallRegistry <> metaHostCallRegistry`).
+`runDSL` compiles the modules with the stdlib and runs one goal with
+the CLI's default registry (builtins, meta and search host calls):
 
 ```haskell
 import YCHR.DSL
@@ -211,53 +164,48 @@ main = do
   -- Just (IntTerm 5)
 ```
 
-The goal's arguments are renamed against the compiled program before it
-runs, exactly as a surface-text goal is: a bare `atom "red"` or
-`term "red" []` naming a data constructor the program declares and
-exports (`typeExport`) is canonicalized to `m:red`, which is what the
-compiled head patterns match. Leave the type off the export list and its
-constructors stay unqualified in the goal, so the rules written against
-them never fire.
+Goal arguments are renamed like a surface-text goal's: a bare
+`atom "red"` or `term "red" []` naming an exported constructor
+(`typeExport`) becomes `m:red`, which the compiled heads match; an
+unexported one stays bare and its rules never fire
+(`Note [Goal argument canonicalization]` in
+[`src/YCHR/Convert.hs`](../../src/YCHR/Convert.hs)).
 
-If you need to register custom `host:_` functions, use
-`runDSLWithHostCallRegistry`:
+Custom `host:` functions:
 
 ```haskell
 runDSLWithHostCallRegistry myHostCalls [m] (term "g" [var "R"])
 ```
 
-`YCHR.DSL` exports the `HostCallRegistry` type, but the registry
-*builders* (`hostFunctions`, `withDefaultHostFunctions`, the `hostFn*`
-adapters) live in `YCHR.Convert` — building `myHostCalls` needs an
-`import YCHR.Convert` (or `import YCHR`) alongside the DSL import. See
-the [host-function reference](host-functions.md).
+`YCHR.DSL` exports `HostCallRegistry`; the builders (`hostFunctions`,
+`withDefaultHostFunctions`, `hostFn*`) need `import YCHR.Convert` or
+`import YCHR` — see
+[convert.md §Registering host functions](convert.md#registering-host-functions).
 
-For finer control — multi-goal queries, reusing a compiled program
-across several runs, or inspecting warnings — call `compileParsedModules`
-directly and feed the result to `runProgramWithGoalDSL` /
-`runProgramWithQuery` (re-exported from `YCHR.Run`).
-
-`compileParsedModules True modules` is the equivalent of `compileFiles
-True paths` for DSL-built modules: it runs the same pipeline minus the
-parsing step. Pass `False` for `includeStdlib` if you want to compile
-without auto-importing stdlib libraries.
-
-Compilation errors and runtime errors are raised as exceptions
-(`YCHR.Run.Error` and the runtime's standard error types).
+Finer control (several goals, one compiled program for many runs,
+warnings): `compileParsedModules True modules` is `compileFiles True
+paths` minus parsing (`False` skips the stdlib); feed the result to
+`runProgramWithGoalDSL` / `runProgramWithQuery` (re-exported from
+`YCHR.Run`). Compilation and runtime errors are exceptions
+(`YCHR.Run.Error` and the runtime's error types).
 
 ## Pitfalls
 
-- **Variables vs. atoms.** `var "X"` and `atom "x"` are different things.
-  `Term` is *not* an `IsString` instance — there is no auto-coercion from
-  string literals. Always use the right constructor.
-- **Head coercion.** Heads in `<=>` / `==>` accept `[Term]` and the DSL
-  coerces each compound to a `Constraint` internally; a bare variable
-  in a head position is rejected with
-  `YCHR.DSL: term is not a valid constraint occurrence` (the
-  type-system mirror of the parser's `MalformedConstraint`).
-- **`exporting` switches to an explicit export list.** A module without
-  any `exporting` call (the default after `module'`) exports everything;
-  calling `exporting [...]` switches it to an explicit list.
-- **Live, runnable examples.** Every code snippet on this page is taken
-  from `test/YCHR/DSLTest.hs` (the `endToEnd` test group). Running
-  `cabal test ychr-tests --test-options='-p endToEnd'` exercises them.
+- **Variables vs. atoms.** `var "X"` and `atom "x"` are different
+  things. `Term` is not an `IsString` instance; there is no coercion
+  from string literals.
+- **Head coercion.** `<=>` / `==>` / `\\` / `runDSL` accept `[Term]`
+  and coerce each compound to a `Constraint`; a bare variable or
+  literal in head or goal position throws
+  `YCHR.DSL: term is not a valid constraint occurrence` (an `error`,
+  not a diagnostic — the mirror of the parser's `MalformedConstraint`).
+- **Orphan `Num Term`.** `1 + 2 :: Term` is the symbolic compound
+  `+(1, 2)` wherever `YCHR.DSL` and `Term` are both in scope. `negate`
+  on a non-literal, `abs` and `signum` build `-/1`, `abs/1`, `sign/1`
+  compounds the prelude does not declare; prefer `.-` and friends. No
+  `Fractional` instance: use `float`.
+- **`exporting` switches to an explicit export list.** Without it a
+  module exports everything; further `exporting` calls append.
+- **Runnable.** Every snippet here is from `test/YCHR/DSLTest.hs`
+  (`endToEnd` group):
+  `cabal test ychr-tests --test-options='-p endToEnd'`.

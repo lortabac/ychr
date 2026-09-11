@@ -74,7 +74,7 @@ Pre-0.1 there are no dump-compatibility constraints. Then drop the
 
 ## Constructor arity mismatch double-reports `YCHR-20102` (warning) and `YCHR-60008` (error)
 
-**Documented claim.** `docs/reference/errors.md` lists `YCHR-20102`
+**Documented claim.** `docs/reference/errors.md` (since removed) lists `YCHR-20102`
 (`DataConstructorArityMismatch`, *warning*, rename phase) and
 `YCHR-60008` (`ConstructorArityMismatch`, *error*, type-check phase) as
 separate codes.
@@ -208,7 +208,7 @@ twice on the command line should dedup or also error.
 
 ## A user module named `prelude` trips `YCHR-20019` with a hint that is wrong for it
 
-**Documented claim.** `docs/reference/errors.md` describes `YCHR-20019`
+**Documented claim.** `docs/reference/errors.md` (since removed) describes `YCHR-20019`
 (`PreludeImportList`) as firing when a `use_module` targeting *the
 prelude* carries an import list, on the grounds that "the prelude is
 imported implicitly and in full by every module". `prelude` is not a

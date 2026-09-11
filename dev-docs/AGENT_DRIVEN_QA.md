@@ -33,16 +33,15 @@ hundred minor variations on the tutorials.
 
 In rough priority order:
 
-1. `docs/reference/language.md` — feature-level reference.
-2. `docs/reference/syntax.md` — lexical and grammatical rules.
-3. `docs/reference/type-system.md` — gradual type-system spec.
-4. `docs/reference/prelude.md` — built-in functions and constraints.
-5. `docs/reference/repl.md` and `docs/reference/cli.md` — invocation
-   surface.
-6. `docs/reference/errors.md` — promised diagnostics.
-7. `docs/how-to/*.md` and `docs/explanation/*.md` — secondary claims,
+1. `docs/reference/language.md` — feature-level reference, including
+   the lexical and grammatical rules.
+2. `docs/reference/type-system.md` — gradual type-system spec.
+3. `libraries/*.chr` — built-in functions and constraints.
+4. `docs/reference/repl.md` and `ychr --help` — invocation surface.
+5. `src/YCHR/Internal/Display.hs` — promised diagnostics.
+6. `docs/how-to/*.md` and `docs/explanation/*.md` — secondary claims,
    often more specific than the reference.
-8. `docs/tutorials/*.md` — only as a quick map of features; tutorials
+7. `docs/tutorials/*.md` — only as a quick map of features; tutorials
    describe happy paths and are not the test target.
 
 Skim `examples/` and `test/golden/` to learn the *idiom* but not for
@@ -80,7 +79,7 @@ Aim adversarially. Promising categories:
   later rule only if the reactivation queue is drained in the
   documented order.
 - **Error codes.** For every `YCHR-NNNNN` code mentioned in
-  `docs/reference/errors.md` or `PROJECT.md`, build the smallest
+  `src/YCHR/Internal/Display.hs` or `PROJECT.md`, build the smallest
   program that should provoke it, and confirm the actual diagnostic
   matches. Wrong code, missing code, or a successful compile when an
   error was promised all count as divergences.

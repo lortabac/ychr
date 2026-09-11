@@ -1,22 +1,9 @@
 # Your First YCHR Program
 
-> **Audience:** comfortable with CHR or Prolog basics. If "rule head"
-> and "constraint store" don't ring a bell, read the
-> [CHR primer](02-chr-primer.md) first.
-> **You will:** write a CHR program that grows from one rule to three,
-> seeing how simplification and propagation rules interact.
-
-The bakery example you ran in
-[Getting started](01-getting-started.md) had a single simplification
-rule. Here we'll start from a blank file
-and grow it into a slightly richer program — a tiny recipe book — to
-see how multiple rules interact.
-
-Create a new file `recipes.chr` next to where you'll run YCHR.
+Start from a blank `recipes.chr` and grow the bakery program from
+[Getting started](01-getting-started.md) into a small recipe book.
 
 ## 1. The first recipe
-
-Open `recipes.chr` and write:
 
 ```prolog
 :- module(recipes).
@@ -32,16 +19,11 @@ cake_recipe @
   <=> cake.
 ```
 
-This is the bakery program from
-[Getting started](01-getting-started.md) under a new name: one
-simplification rule that collapses three eggs, the three glasses, and
-a `bake` into a `cake`. Load it with `ychr repl recipes.chr` and
-tell it the ingredients to confirm it still works as before.
+`ychr repl recipes.chr`, then add the ingredients as in tutorial 01.
 
 ## 2. A second recipe and rule selection
 
-Add a second simplification, with a head that *partly overlaps*
-the first. Edit `recipes.chr` and append:
+Append a rule whose head overlaps the first:
 
 ```prolog
 :- chr_constraint butter/0, cookies/0.
@@ -53,17 +35,10 @@ cookies_recipe @
   <=> cookies.
 ```
 
-(For brevity we add `butter/0` and `cookies/0` as new constraints
-inline; in a finished program you'd merge them into the top
-declaration.)
+(Declaring `butter/0` and `cookies/0` inline is fine; merge them into
+the top declaration when you tidy up.) Reload with `:recompile`.
 
-Reload from the REPL with `:recompile` (or restart it). The `cake`
-and `cookies` rules can both fire when their heads are present in the
-store. What happens when *both* heads are satisfiable from the same
-store?
-
-First, give it a clean cookies-only run — only the cookies rule's
-head is fully present:
+Cookies alone:
 
 ```ychr-repl
 ychr> :begin
@@ -78,8 +53,7 @@ ychr live> :end
 ychr>
 ```
 
-Now stock the pantry with enough for *either* recipe — three eggs,
-butter, milk, flour, sugar, and a single `bake`:
+Now stock enough for either recipe, with one `bake`:
 
 ```ychr-repl
 ychr> :begin
@@ -98,21 +72,13 @@ ychr live> :end
 ychr>
 ```
 
-The cake rule won, because CHR commits to the first rule it can fire.
-When `bake` becomes the active constraint, the runtime tries the rules
-in source order, finds the cake rule's head fully present, fires it,
-and commits — consuming the `bake`. With `bake` gone, the cookies rule
-can no longer fire, and the leftover `butter` stays in the store.
-
-Source order matters when heads overlap.
+Rules are tried in source order. `bake` completes both heads; the cake
+rule comes first, fires, and consumes the `bake`, so cookies can no
+longer fire and `butter` is left over.
 
 ## 3. Propagation: announce the bake
 
-The two recipes consume their inputs. Sometimes you want a rule to
-*derive a new fact without removing the existing ones* — that is what
-propagation rules do. They use `==>` instead of `<=>`.
-
-Append:
+`==>` adds the body and keeps the head. Append:
 
 ```prolog
 :- chr_constraint serving_ready/0.
@@ -120,11 +86,6 @@ Append:
 serve @ cake ==> serving_ready.
 ```
 
-This says: whenever `cake` is in the store, also place
-`serving_ready` in the store. The `cake` itself is kept.
-
-Reload and bake:
-
 ```ychr-repl
 ychr> :begin
 ychr live> egg.
@@ -141,13 +102,10 @@ ychr live> :end
 ychr>
 ```
 
-`cake` survived, and `serving_ready` was added.
-
-A subtlety: the *propagation history* (see the
-[primer](02-chr-primer.md#5-firing-order-and-propagation-history))
-keeps `serve` from firing twice on the same `cake` — otherwise this
-rule would loop forever. Different `cake` constraints have distinct
-identities, so each gets its own `serving_ready`:
+The [propagation
+history](02-chr-primer.md#5-firing-order-and-propagation-history)
+stops `serve` firing twice on one `cake`. A second `cake` is a new
+identity and gets its own `serving_ready`:
 
 ```ychr-repl
 ychr> :begin
@@ -173,19 +131,9 @@ recipes:serving_ready
 ychr live> :end
 ychr>
 ```
-
-Two cakes, two notifications.
 
 ## 4. Where to go next
 
-This program used simplification and propagation; the third rule kind,
-*simpagation* (`Kept \ Removed <=> ...`), and rule *guards* are
-covered in the [primer](02-chr-primer.md) and the
-[language reference](../reference/language.md).
-
-- [Functions, types, and lambdas](04-functions-and-types.md) — adding
-  user-defined functions and type annotations.
-- [How-to: use the REPL](../how-to/use-the-repl.md) — `:recompile`,
-  meta-commands, and other live-session conveniences.
-- [Language reference](../reference/language.md) — the formal feature
-  list, including simpagation and guard semantics.
+- [Functions, types, and lambdas](04-functions-and-types.md).
+- [REPL reference](../reference/repl.md) — `:recompile`, meta-commands,
+  live sessions.

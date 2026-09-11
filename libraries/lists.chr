@@ -1,3 +1,10 @@
+% Written in CHR. Every function matches on the list spine, so a partial
+% list (`[1|T]` with `T` unbound) cannot be processed: "argument 1 of
+% ... is not sufficiently instantiated to select an equation". In `is`, a
+% body or a goal that is a hard YCHR-60001; in a rule guard the rule
+% delays and is retried once the tail is bound (language.md, Soft guard
+% failure).
+
 :- module(lists, [
     fun cons/2,
     fun head/1,

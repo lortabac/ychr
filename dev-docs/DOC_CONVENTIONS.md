@@ -2,12 +2,6 @@
 
 Author-facing conventions for the user documentation under `docs/`.
 
-## Audience banner
-
-Each page opens with an **Audience** / **You will** callout so readers
-can self-route. Pages may add a **Skip if** line for readers who can
-move on to a more advanced page.
-
 ## Code fences
 
 CHR source is fenced `prolog`; interactive REPL sessions are fenced

@@ -605,7 +605,7 @@ hostFunctionTests =
       -- an `is`, is caught there: the rule delays rather than aborting
       -- the query, and reactivation retries it once the variable is
       -- bound. This is the host-function face of soft guard failure
-      -- (docs/reference/host-functions.md), and the only thing that
+      -- (docs/reference/convert.md), and the only thing that
       -- distinguishes it from a general failure -- which would still
       -- abort -- is the error's kind.
       testCase "UnboundValue in a rule guard delays, then fires on retry" $ do

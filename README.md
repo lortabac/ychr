@@ -75,8 +75,8 @@ in this repository and is **not** shipped with the Hackage package, so
 
 ## Using YCHR as a Haskell library
 
-YCHR is also an ordinary Haskell library: compile a `.chr` module from
-your own program, feed it Haskell values, and decode the answers back.
+Compile a `.chr` module from your own program, feed it Haskell values,
+decode the answers back.
 
 ```
 build-depends: ychr
@@ -99,52 +99,41 @@ main = do
     goal = CompoundTerm (Unqualified "compute") [VarTerm "R"]
 ```
 
-A single `import YCHR` covers compiling, querying, and marshalling.
-Values cross the boundary through the `ToTerm` / `FromTerm` classes, and
-Haskell functions can be exposed to CHR programs as host calls.
+Compile once, query `cp` as often as you like. `import YCHR` covers
+compiling, querying and marshalling (`ToTerm` / `FromTerm`); Haskell
+functions are exposed to CHR as host calls.
 
 - [Embedding a CHR module](https://github.com/lortabac/ychr/blob/master/docs/how-to/embed-a-chr-module.md) —
-  worked example: a lambda-calculus type inferencer written in CHR,
-  driven from Haskell.
+  worked example: a lambda-calculus type inferencer in CHR, driven from
+  Haskell.
 - [Value conversion](https://github.com/lortabac/ychr/blob/master/docs/reference/convert.md) —
-  `ToTerm` / `FromTerm`, decoding, and compile-once/query-many.
-- [Host functions](https://github.com/lortabac/ychr/blob/master/docs/reference/host-functions.md) —
+  `ToTerm` / `FromTerm`, typed queries.
+- [Host functions](https://github.com/lortabac/ychr/blob/master/docs/reference/convert.md#registering-host-functions) —
   calling Haskell from CHR.
 - [Haskell DSL](https://github.com/lortabac/ychr/blob/master/docs/reference/dsl.md) —
   build programs as Haskell values instead of parsing `.chr` source.
 
-Modules under `YCHR.Internal` are implementation details and are not
-covered by the package version policy.
+Modules under `YCHR.Internal` are not covered by the package version
+policy.
 
 ## Documentation
 
-User-facing documentation lives in
-[`docs/`](https://github.com/lortabac/ychr/tree/master/docs) and follows
-the [Diátaxis](https://diataxis.fr/) structure:
+[`docs/`](https://github.com/lortabac/ychr/tree/master/docs) follows
+[Diátaxis](https://diataxis.fr/):
+[tutorials](https://github.com/lortabac/ychr/tree/master/docs/tutorials),
+[how-to guides](https://github.com/lortabac/ychr/tree/master/docs/how-to),
+[reference](https://github.com/lortabac/ychr/tree/master/docs/reference)
+(language, type system, search, REPL, DSL, conversion, abstract VM) and
+[explanation](https://github.com/lortabac/ychr/tree/master/docs/explanation).
+Index: [`docs/README.md`](https://github.com/lortabac/ychr/blob/master/docs/README.md).
+Status: [`docs/roadmap.md`](https://github.com/lortabac/ychr/blob/master/docs/roadmap.md).
+Standard library: [`libraries/`](https://github.com/lortabac/ychr/tree/master/libraries).
 
-- [Tutorials](https://github.com/lortabac/ychr/tree/master/docs/tutorials) —
-  getting started, CHR primer, your first program.
-- [How-to guides](https://github.com/lortabac/ychr/tree/master/docs/how-to) —
-  REPL, types, host calls, modules.
-- [Reference](https://github.com/lortabac/ychr/tree/master/docs/reference) —
-  language, syntax, type system, prelude, CLI, REPL, errors, abstract VM.
-- [Explanation](https://github.com/lortabac/ychr/tree/master/docs/explanation) —
-  what CHR is, operational semantics, design rationale.
-
-The tutorials and reference are complete; a few how-to guides and
-explanation pages are still outlines.
-
-See [`docs/README.md`](https://github.com/lortabac/ychr/blob/master/docs/README.md)
-for a full index with reading paths for newcomers and existing
-CHR/Prolog users, and
-[`docs/roadmap.md`](https://github.com/lortabac/ychr/blob/master/docs/roadmap.md)
-for implementation status.
-
-Contributor and design documentation lives in
+Contributor docs:
 [`dev-docs/`](https://github.com/lortabac/ychr/tree/master/dev-docs),
-including
+starting with
 [PROJECT.md](https://github.com/lortabac/ychr/blob/master/dev-docs/PROJECT.md)
-(architecture and compilation scheme) and the reference paper.
+(architecture and compilation scheme).
 
 ## AI disclosure
 

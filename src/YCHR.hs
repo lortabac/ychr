@@ -1,79 +1,39 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | The entry point for embedding YCHR as a Haskell library.
+-- | The entry point for embedding YCHR as a Haskell library: compile a
+-- CHR program (from @.chr@ files or in-memory sources), run goals against
+-- it, and marshal Haskell values in and out with 'ToTerm' \/ 'FromTerm'.
+-- @import YCHR@ is all most embedders need.
 --
--- This umbrella module gathers the common /compile-and-query/ surface into
--- a single import: compile a CHR program (from @.chr@ files or in-memory
--- sources), run goals against it, and marshal ordinary Haskell values in
--- and out with 'ToTerm' / 'FromTerm'. For most embedders,
---
--- > import YCHR
---
--- is all that is needed.
---
--- = Worked example: compile once, query many
---
--- > {-# LANGUAGE OverloadedStrings #-}
--- > import System.IO (hPutStr, stderr)
--- > import YCHR
--- >
--- > main :: IO ()
--- > main =
--- >   case compileModules True [("Order.chr", source)] of
--- >     Left err -> hPutStr stderr (displayError err)
--- >     Right (cp, _warnings) -> do
--- >       -- goal is a 'Term'; decode the "R" binding as a Haskell Int
--- >       r <- runQueryCompiled cp goal "R"
--- >       print (r :: Either ConvertError Int)
--- >   where
--- >     source = "..."               -- CHR source text
--- >     goal   = CompoundTerm (Unqualified "compute") [VarTerm "R"]
+-- Worked examples:
+-- <https://github.com/lortabac/ychr/blob/master/README.md#using-ychr-as-a-haskell-library>
+-- and
+-- <https://github.com/lortabac/ychr/blob/master/docs/how-to/embed-a-chr-module.md>.
 --
 -- = Opt-in companions
 --
--- Two capabilities live in their own modules and are intentionally /not/
--- re-exported here:
+-- Not re-exported here:
 --
---   * "YCHR.DSL" — build CHR programs in Haskell (rules, functions, type
---     declarations) without @.chr@ source, using a combinator vocabulary
---     with operators. Import it directly when you construct programs
---     rather than load them. Its @Module@ values are queried with
---     'YCHR.Convert.runQuery' \/ 'YCHR.Convert.runQueryWith' \/
---     'YCHR.Convert.runQueryWithHostCallRegistry', which live in
---     "YCHR.Convert" alongside the DSL rather than here — this umbrella
---     covers the @.chr@-source path only.
+--   * "YCHR.DSL" — build programs in Haskell instead of loading @.chr@
+--     source. Its @Module@ values are queried with 'YCHR.Convert.runQuery'
+--     and friends, which live in "YCHR.Convert"; this umbrella covers the
+--     @.chr@-source path only.
 --
---   * "YCHR.Convert.Generic" (GHC only) — @genericToTerm@ /
---     @genericFromTerm@ for @deriving 'GHC.Generics.Generic'@ types. It is
---     GHC-only; this umbrella and the core "YCHR.Convert" stay
---     @Generic@-free so they remain usable on every backend.
+--   * "YCHR.Convert.Generic" (GHC only) — @genericToTerm@ \/
+--     @genericFromTerm@ for @deriving 'GHC.Generics.Generic'@ types. Kept
+--     separate so this module and "YCHR.Convert" stay @Generic@-free.
 --
 -- = Registering host functions
 --
--- A @host:f(args)@ call in a CHR program is resolved against a
--- 'HostCallRegistry'. Beyond the built-ins, you can register your own by
--- lifting ordinary Haskell functions with 'hostFn1' \/ 'hostFn2' \/ … (or
--- their effectful @…M@ variants), assembling a registry with
--- 'withDefaultHostFunctions', and running with the
--- @…WithHostCallRegistry@ query variants:
+-- A @host:f(args)@ call resolves against a 'HostCallRegistry'. Lift Haskell
+-- functions with 'hostFn1' \/ 'hostFn2' \/ … (or the effectful @…M@
+-- variants), assemble with 'withDefaultHostFunctions', run with a
+-- @…WithHostCallRegistry@ query variant. User entries override built-ins
+-- of the same name. See
+-- <https://github.com/lortabac/ychr/blob/master/docs/how-to/call-host-functions.md>.
 --
--- > registry :: HostCallRegistry
--- > registry = withDefaultHostFunctions
--- >   [ ("my_add", hostFn2 ((+) :: Int -> Int -> Int)) ]  -- called as host:my_add(X, Y)
--- >
--- > main = do
--- >   r <- runQueryCompiledWithHostCallRegistry registry cp goal (decodeVar "R")
--- >   print (r :: Either ConvertError Int)
---
--- User entries override built-ins of the same name. Arguments and results
--- marshal through 'ToTerm' \/ 'FromTerm'; for I\/O or logic-variable access
--- use the @…M@ adapters (the body runs in 'Chr') or the raw 'hostFnValues'
--- escape hatch.
---
--- Other lower-level entry points — the raw CHR session API, the multi-goal
--- query API, the compiler pipeline internals — remain available by
--- importing "YCHR.Run", "YCHR.Convert", and the internal @YCHR.*@ modules
--- directly.
+-- Lower-level entry points (raw sessions, multi-goal queries, pipeline
+-- stages) are in "YCHR.Run", "YCHR.Convert", and the @YCHR.Internal.*@ modules.
 module YCHR
   ( -- * Compiling a program
     compileFiles,
@@ -193,29 +153,23 @@ import YCHR.Run
 import YCHR.Types (Name (..), Term (..))
 
 -- $runtimeValues
--- A 'hostFnValues' handler receives raw 'Value's, which may be logical
--- variables that are bound to something else. Inspect them with these,
--- all of which run in 'Chr':
+-- A 'hostFnValues' handler receives raw 'Value's, possibly bound logical
+-- variables. All of these run in 'Chr':
 --
---   * 'deref' — follow a variable chain to the value it is bound to (or to
---     the unbound variable at the end). Call this before pattern-matching
---     on a 'Value' constructor, or a bound variable will look like a
---     'VVar' rather than its binding.
+--   * 'deref' — follow a variable chain to its binding (or the unbound
+--     variable at the end). Call it before pattern-matching on a 'Value',
+--     or a bound variable looks like a 'VVar'.
 --
---   * 'equal' — CHR's @==@ (\"ask\") semantics: structural equality that
---     never binds, and where two distinct unbound variables compare
---     unequal. This is the correct comparison for 'Value'; there is
---     deliberately no 'Eq' instance, since a derived one would compare
---     variables by reference and silently disagree with the language.
+--   * 'equal' — CHR @==@ (ask): structural, never binds, two distinct
+--     unbound variables are unequal. There is deliberately no 'Eq'
+--     instance: a derived one would compare variables by reference.
 --
---   * 'newVar' — allocate a fresh unbound logical variable.
+--   * 'newVar' — a fresh unbound logical variable.
 --
--- The @hostFn1@ \/ @hostFn2@ \/ … adapters dereference for you, so reach
--- for these only with the raw 'hostFnValues' escape hatch.
+-- The 'hostFn1' \/ 'hostFn2' \/ … adapters dereference for you; these
+-- matter only with 'hostFnValues'.
 --
--- Binding is deliberately not offered here. @unify@ (in "YCHR.Run")
--- returns the constraints that observe the variables it bound, and the
--- caller must hand them to the reactivation queue or those constraints
--- silently never wake up. Returning a value from your handler and letting
--- the generated code do the unification is the safe path; reach for
--- "YCHR.Run" only if you are driving a session yourself.
+-- Binding is not offered here. @unify@ ("YCHR.Run") returns the
+-- constraints observing the variables it bound, and the caller must
+-- enqueue them for reactivation or they silently never wake up. Return a
+-- value and let the generated code unify instead.

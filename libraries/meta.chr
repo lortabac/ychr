@@ -48,11 +48,14 @@ print_store -> host:print_store.
 % read results back. Reactivation does not cross the boundary: a live
 % stored constraint of one session must not depend on a variable the
 % other session binds.
+%
+% Worked examples, including nesting: test/golden/run_chr_session_test/.
 run_chr_session(G) -> host:run_chr_session(G).
 
 % The local part of a name atom: `name_base(mod:foo)` is `foo`, and an
 % unqualified `name_base(foo)` is `foo`. Two names have the same base
 % exactly when their unqualified spellings match, which is what makes
 % this the operation for asking "is this a reference to a name declared
-% in some module?" without knowing the module. Errors on a non-atom.
+% in some module?" without knowing the module. Errors on a non-atom; an
+% unbound argument is an instantiation failure (a guard delays).
 name_base(A) -> host:name_base(A).

@@ -1,62 +1,55 @@
 # YCHR Virtual Machine Specification
 
-This document specifies the YCHR abstract VM: its instruction set,
-s-expression serialization format, and the runtime contract that
-backends must implement. The intended audience is backend implementors
-targeting languages such as Erlang, Python, Clojure, JavaScript, or
-Scheme.
+For backend implementors (Erlang, Python, Clojure, JavaScript,
+Scheme, …): the VM's instruction set, its s-expression serialization,
+and the runtime contract a backend must implement.
 
 ## Overview
 
-A compiled CHR program is a **VM program**: a list of named procedures.
-Each procedure has parameters and a body of imperative statements.
-Statements may contain expressions. The VM is the *complete interface*
-between the compiler and the runtime — the compiler never emits calls
-to runtime functions by name.
+A compiled CHR program is a **VM program**: a list of named procedures,
+each with parameters and a body of imperative statements containing
+expressions. The VM is the *complete interface* between the compiler
+and the runtime — the compiler never emits calls to runtime functions
+by name.
 
-There are three kinds of callable entities:
-
-1. **VM instructions** — dedicated operations for everything the runtime
-   provides (constraint store, unification, term manipulation, etc.).
-2. **`call-expr`** — calls to compiler-generated procedures (tell,
-   activate, occurrence procedures, etc.).
-3. **`host-call`** — calls to host language functions (arithmetic,
-   comparisons, user-written guards and body expressions).
+Everything the runtime provides (constraint store, unification, term
+manipulation) is a dedicated VM instruction; `call-expr` calls a
+compiler-generated procedure and `host-call` a host language function
+([Procedure and host calls](#procedure-and-host-calls)). Every
+expression has one of the three kinds below.
 
 ### Expression kinds: values, ids, and bools
 
 The VM has three disjoint kinds of expression:
 
-- **Value expressions** evaluate to ordinary runtime values: integers,
-  floats, atoms, strings, booleans, logical variables, compound terms,
-  wildcards. They populate every position where a unifiable value is
-  expected.
+- **Value expressions** evaluate to ordinary runtime values —
+  integers, floats, atoms, strings, booleans, logical variables,
+  compound terms, wildcards — and fill every position that expects a
+  unifiable value.
 - **Id expressions** evaluate to constraint identifiers (suspension
-  references). They populate every position that operates on a stored
+  references) and fill every position that operates on a stored
   constraint.
-- **Bool expressions** evaluate to booleans. They populate every
-  boolean position: the condition of `if`, the body of
-  `bool-expr-stmt`, and the operands of `bnot`/`band`/`bor`. The
-  explicit bridge `bfrom-val` promotes a value expression whose
-  boolean-ness is only known at runtime (e.g. a user-defined function
-  call in a guard); it carries a runtime shape check. Every other bool
-  position is statically a boolean.
+- **Bool expressions** evaluate to booleans and fill every boolean
+  position: the condition of `if`, the body of `bool-expr-stmt`, the
+  operands of `bnot`/`band`/`bor`. The bridge `bfrom-val` promotes a
+  value expression whose boolean-ness is only known at runtime (e.g. a
+  user-defined function call in a guard), with a runtime shape check;
+  every other bool position is statically a boolean.
 
 Constraint identifiers cannot flow into unification or term
-construction, and value expressions cannot directly satisfy a boolean
-position — they must be wrapped in `bfrom-val`. The three kinds are
-physically distinct in the IR. A backend can keep one runtime
-representation for ids and the suspension they refer to (the Haskell
-and Scheme runtimes do — a suspension reference *is* its identifier)
-but the IR statically distinguishes the positions.
+construction, and a value expression satisfies a boolean position only
+wrapped in `bfrom-val`. The three kinds are physically distinct in the
+IR; a backend may still use one runtime representation for an id and
+the suspension it refers to (the Haskell and Scheme runtimes do — a
+suspension reference *is* its identifier).
 
-A handful of forms are explicitly heterogeneous: procedures that take
-a mix of value and id parameters use the `arg-val` / `arg-id` wrapper
-at the call boundary (see `call-expr`). Variable references split into
-`var` (value-bound) and `id-var` (id-bound). There is no `bool-var`:
-the only place a boolean is bound to a name in compiler-generated code
-is the early-drop result, which is bound as a value (`let-val` /
-`var`) and bridged at the read site with `bfrom-val`.
+Procedures taking a mix of value and id parameters tag each argument
+with `arg-val` / `arg-id` at the call boundary (see `call-expr`);
+variable references split into `var` (value-bound) and `id-var`
+(id-bound). There is no `bool-var`: the only boolean that
+compiler-generated code binds to a name is the early-drop result,
+bound as a value (`let-val` / `var`) and bridged at the read site with
+`bfrom-val`.
 
 
 ## S-Expression Format
@@ -82,15 +75,13 @@ Line comments start with `;` and extend to end of line.
 - **Constraint types** are bare integers (0-based indices): `0`, `1`.
 - **Rule identifiers** are bare integers (0-based indices): `0`, `1`.
 - **Argument indices** are bare integers (0-based): `0`, `1`.
-- **Boolean value literals** are bare atoms: `true`, `false`. Boolean
-  expression literals (the bool-position counterpart) are bare atoms
-  `btrue` / `bfalse`. The two coexist because value position and
-  boolean position are distinct expression kinds: `true` is a value,
-  `btrue` a boolean expression.
-- **Variable-length argument lists** are trailing children within the
-  enclosing form — the closing `)` marks the boundary.
-- **Fixed-length sub-lists** (e.g. then/else branches, foreach
-  conditions and body) are wrapped in `(...)`.
+- **Boolean literals** are bare atoms: `true` / `false` in value
+  position, `btrue` / `bfalse` in bool position — two spellings
+  because the two positions are distinct expression kinds.
+- **Variable-length argument lists** are trailing children of the
+  enclosing form, ended by its closing `)`.
+- **Fixed-length sub-lists** (then/else branches, foreach conditions
+  and body) are wrapped in `(...)`.
 
 
 ## Top-Level Structure
@@ -106,28 +97,25 @@ program, the exported names, and the symbol table:
 ```
 
 - **`<program>`** — the VM program (see below).
-- **`exports`** — the set of CHR identifiers (name + arity) visible
-  to external callers. Backends should generate public entry points
-  (e.g. `tell_c` wrappers) for each exported identifier.
-- **`symbol-table`** — maps each CHR identifier (name + arity) to
-  its 0-based constraint type integer. This is the authoritative
-  mapping between symbolic names and the numeric type IDs used
-  throughout the VM program. The same name with different arities
-  gets distinct type IDs (e.g. `foo/1` and `foo/2` are separate
-  constraint types).
+- **`exports`** — the CHR identifiers (name + arity) visible to
+  external callers; backends should generate a public entry point
+  (e.g. a `tell_c` wrapper) for each.
+- **`symbol-table`** — the authoritative map from each CHR identifier
+  (name + arity) to the 0-based constraint type integer used
+  throughout the VM program. Different arities of one name are
+  distinct types (`foo/1` and `foo/2`).
 
 ### Names
 
-CHR names appear in the exports list and symbol table. The
-serialization format supports two forms:
+CHR names (in `exports` and `symbol-table`) take two forms:
 
 - **Qualified**: `(qualified "<module>" "<name>")`, e.g.
   `(qualified "order" "leq")`.
 - **Unqualified**: a bare string, e.g. `"gcd"`.
 
-In practice, all names in the symbol table and exports are qualified,
-since the renaming pass resolves every constraint and function to its
-defining module before compilation.
+In practice every name there is qualified: the renaming pass resolves
+every constraint and function to its defining module before
+compilation.
 
 
 ## Program
@@ -144,35 +132,30 @@ defining module before compilation.
 ```
 
 - `<num-types>` — integer, number of distinct constraint types.
-- `type-names` — list of CHR names (see [Names](#names)) indexed by
-  constraint type integer. `type-names[i]` is the source name of the
-  constraint type with index `i` — in practice always the qualified
-  form, e.g. `(qualified "mymodule" "leq")`. Used by runtime
-  introspection.
+- `type-names` — CHR names (see [Names](#names)) indexed by
+  constraint type: `type-names[i]` is the source name of type `i`, in
+  practice always qualified, e.g. `(qualified "mymodule" "leq")`.
+  Used by runtime introspection.
 - `<num-rules>` — integer, number of rules in the compilation unit.
-- `rule-names` — list of strings indexed by rule identifier integer.
-  `rule-names[i]` is the source name of the rule with id `i`, or a
-  synthetic `"__rule_N"` fallback for anonymous rules. Used by
-  runtime introspection.
-- `evaluables` — the dispatch table consulted by `eval-is` (see
-  [Value Expressions](#is-evaluation)). Each entry maps a term
-  functor and arity to the procedure that evaluates it: `<functor>`
-  is the compound term functor in its runtime encoding (module and
-  base name joined by `__`, e.g. `"prelude__+"`), `<arity>` the
-  argument count, and `<proc-name>` the mangled name of the
-  corresponding `func_*` procedure. One entry per user-defined
-  function. The list is present even when empty.
-- `inert-types` — the constraint types whose activation runs no
-  occurrence procedure, because the type has no occurrences at all or
-  only passive ones. Reactivating such a constraint can only re-store
-  it, and `store` is idempotent, so a runtime may skip registering
-  these suspensions as observers of the variables in their arguments
-  (see [Store](#store)). This is the trivial instance of *Delay
-  Avoidance*. Honoring the entry changes no result, only the
-  reactivation traffic, so a backend may ignore it; the Scheme
-  backend does. The entry is optional on read — a program written
-  before it existed declares no inert type — and is present, possibly
-  empty, in everything the compiler emits.
+- `rule-names` — strings indexed by rule id: `rule-names[i]` is the
+  source name of rule `i`, or a synthetic `"__rule_N"` for an
+  anonymous rule. Used by runtime introspection.
+- `evaluables` — the dispatch table `eval-is` consults (see
+  [is evaluation](#is-evaluation)), one entry per user-defined
+  function: `<functor>` is the term functor in its runtime encoding
+  (module and base name joined by `__`, e.g. `"prelude__+"`),
+  `<arity>` the argument count, `<proc-name>` the mangled name of the
+  `func_*` procedure. Present even when empty.
+- `inert-types` — constraint types whose activation runs no
+  occurrence procedure (no occurrences, or only passive ones).
+  Reactivating one can only re-store it, and `store` is idempotent,
+  so a runtime may skip registering such suspensions as observers of
+  their argument variables (see [Store](#store)) — the trivial
+  instance of *Delay Avoidance*. Honoring the entry changes only
+  reactivation traffic, never a result, so a backend may ignore it;
+  the Scheme backend does. Optional on read (a program written before
+  it existed declares no inert type); present, possibly empty, in
+  everything the compiler emits.
 - Zero or more procedure definitions follow.
 
 ### Procedure
@@ -183,14 +166,12 @@ defining module before compilation.
   ...)
 ```
 
-Procedure parameters are positional. Each parameter's kind (value or
-constraint id) is determined by how the caller's `call-expr` tags the
-corresponding argument (`arg-val` or `arg-id`). Within the body,
-references use `var` for value-bound parameters and `id-var` for
-id-bound parameters.
+Parameters are positional. Each one's kind (value or constraint id)
+is whatever the caller's `call-expr` tags the argument (`arg-val` /
+`arg-id`); the body references it with `var` or `id-var` accordingly.
 
-`<proc-kind>` records what the procedure is, so a backend or tool can
-classify procedures without parsing their mangled names:
+`<proc-kind>` says what the procedure is, so a backend or tool can
+classify it without parsing its mangled name:
 
 | Proc-kind | Meaning |
 |-----------|---------|
@@ -215,13 +196,11 @@ The roles of the generated procedures:
 
 ### Procedure Naming
 
-Procedure names are generated deterministically from the constraint or
-function name, module qualifier, and arity. The scheme guarantees
-injectivity: distinct identifiers always produce distinct procedure
-names.
-
-All constraints and functions are fully qualified by the renaming
-pass, so procedure names always include a module component.
+Procedure names are generated deterministically from the constraint
+or function name, module qualifier, and arity, and injectively:
+distinct identifiers always produce distinct procedure names. The
+renaming pass fully qualifies every constraint and function, so a
+procedure name always includes a module component.
 
 **Format:**
 
@@ -229,9 +208,9 @@ pass, so procedure names always include a module component.
 <prefix>_<module>__<name><arity>
 ```
 
-Where `<prefix>` is one of `tell`, `activate`, `occurrence`, or
-`func`. The double underscore (`__`) separates the module from the
-name. Arity is appended as a plain decimal integer with no separator.
+`<prefix>` is `tell`, `activate`, `occurrence`, or `func`; `__`
+separates module from name; arity is a plain decimal integer with no
+separator.
 
 Occurrence procedures append the 1-based occurrence number after an
 additional underscore:
@@ -255,45 +234,41 @@ For a function `math:factorial/1`:
 |-----------|------|
 | func | `func_math__factorial1` |
 
-The `reactivate_dispatch` procedure is unique and not parameterized by
-constraint name. The `call_n` dispatchers (`call_1`, `call_2`, ...)
-are likewise unique per call arity.
+`reactivate_dispatch` is unique and not parameterized by constraint
+name; the `call_n` dispatchers (`call_1`, `call_2`, ...) are unique
+per call arity.
 
-**Non-ASCII encoding.** Characters outside the ASCII range are encoded
-as `%%u<hex>` where `<hex>` is the Unicode code point in lowercase
-hexadecimal, padded to exactly six digits. There is no closing
-delimiter — the escape is always 9 characters long. For example, a
-constraint named `café` produces the encoded component
-`caf%%u0000e9`. ASCII characters (including punctuation and
-underscores) pass through unchanged.
+**Non-ASCII encoding.** A character outside ASCII is encoded as
+`%%u<hex>`, `<hex>` being the Unicode code point in lowercase
+hexadecimal padded to exactly six digits; there is no closing
+delimiter, so the escape is always 9 characters long. A constraint
+named `café` gives the component `caf%%u0000e9`. ASCII characters,
+punctuation and underscores included, pass through unchanged.
 
-This encoding applies to *term functor* names used by `make-term`,
-`bmatch-term`, and runtime values. The separate identifier encoding
-used for generated procedure names (`tell_*`, `activate_*`, `func_*`)
-uses a `__u<hex>__` form instead, because procedure names must be
-valid identifiers in the target language and `%` usually is not.
+This applies to *term functor* names (`make-term`, `bmatch-term`,
+runtime values). Generated procedure names (`tell_*`, `activate_*`,
+`func_*`) use `__u<hex>__` instead, because they must be valid
+identifiers in the target language and `%` usually is not.
 
 **Restrictions.** Source atom names may not contain the infixes `__`
-or `%%u` (see the [syntax reference](syntax.md)); both are reserved
-for the mangling above. This reservation, together with the
+or `%%u` ([language.md §Lexical syntax](language.md#lexical-syntax));
+both are reserved for the mangling above. That reservation, with the
 fixed-width escape, is what makes the mangling injective: the only
 `__` in a mangled symbol is the module separator, and the only `%%u`
-is the start of a unicode escape.
+starts a unicode escape.
 
-**Term functor names** (used in `make-term` and `bmatch-term`) follow
-the same encoding and module separator rules but do **not** include
-arity, since the arity is already explicit in those instructions.
+**Term functor names** (`make-term`, `bmatch-term`) follow the same
+encoding and separator rules but carry **no** arity, which those
+instructions state explicitly.
 
 
 ## Statements
 
-Each `let`/`assign` form comes in two variants: one for binding values,
-one for binding constraint identifiers. Statements that operate on
-stored constraints (`store`, `kill`, `add-history`) take an
-*id-expression*. The condition of `if` and the operand of
-`bool-expr-stmt` take a *bool-expression*. Other statements
-(`return`, `expr-stmt`, `foreach` index conditions) take a
-*value-expression*.
+`let` and `assign` each come in a value variant and a constraint-id
+variant. `store`, `kill` and `add-history` take an *id-expression*;
+the condition of `if` and the operand of `bool-expr-stmt` take a
+*bool-expression*; `return`, `expr-stmt` and `foreach` index
+conditions take a *value-expression*.
 
 ### let-val / let-id
 
@@ -302,9 +277,9 @@ stored constraints (`store`, `kill`, `add-history`) take an
 (let-id  "<name>" <id-expr>)
 ```
 
-Bind a local variable to the result of an expression. The two variants
-differ only by the kind they bind. References to the bound name use
-`var` (after `let-val`) or `id-var` (after `let-id`).
+Bind a local variable; the variants differ only by the kind bound.
+Reference the name with `var` after `let-val`, `id-var` after
+`let-id`.
 
 ### assign-val / assign-id
 
@@ -322,10 +297,9 @@ Mutate an existing variable. Same kind discipline as `let-val` /
 (if <bool-expr> (<then-stmt> ...) (<else-stmt> ...))
 ```
 
-Conditional execution. The condition is a boolean expression. To
-condition on a value expression whose boolean-ness is only known at
-runtime, wrap it with `bfrom-val`. Both branches are always present
-(the else branch may be an empty list `()`).
+The condition is a boolean expression; wrap a value expression whose
+boolean-ness is only known at runtime in `bfrom-val`. Both branches
+are always present (the else branch may be the empty list `()`).
 
 ### foreach
 
@@ -335,25 +309,22 @@ runtime, wrap it with `bfrom-val`. Both branches are always present
   (<body-stmt> ...))
 ```
 
-Labeled loop over the constraint store. Iterates over all **alive**
-stored constraints of the given type that satisfy the index conditions.
+Labeled loop over all **alive** stored constraints of the given type
+that satisfy the index conditions.
 
-Each condition is `(<arg-index> <val-expr>)` and requires that the
-constraint's argument at the given position is structurally equal to
-the value expression (Prolog `==` ask semantics, identical to
-`bequal`).
+Each condition `(<arg-index> <val-expr>)` requires the argument at
+that position to be structurally equal to the value (Prolog `==` ask
+semantics, identical to `bequal`).
 
-The current constraint suspension is bound to `<susp-var>` on each
-iteration. Inside the body, reference it as `(id-var "<susp-var>")` —
-the suspension is an id-bound name.
+Each iteration binds the current suspension to `<susp-var>`, an
+id-bound name referenced in the body as `(id-var "<susp-var>")`.
 
 #### Iterator properties
 
 The runtime's iterator must satisfy:
 
-- **Robustness**: if constraints are added or removed during a
-  suspended iteration, iteration can resume from the point where it
-  was suspended.
+- **Robustness**: iteration resumes where it was suspended even if
+  constraints were added or removed meanwhile.
 - **Correctness**: only alive constraint suspensions are returned.
 - **Completeness**: all constraints that were stored at the moment of
   the iterator's creation are returned at least once.
@@ -366,8 +337,8 @@ The runtime's iterator must satisfy:
 (continue "<label>")
 ```
 
-Jump to the next iteration of the named `foreach` loop. Used for
-backjumping when a partner constraint dies.
+Next iteration of the named `foreach`; used for backjumping when a
+partner constraint dies.
 
 ### break
 
@@ -383,8 +354,8 @@ Exit the named `foreach` loop.
 (return <val-expr>)
 ```
 
-Return a value from the current procedure. Procedures always return a
-value (never a constraint identifier).
+Return from the current procedure. Procedures always return a value,
+never a constraint identifier.
 
 ### expr-stmt / bool-expr-stmt
 
@@ -393,10 +364,9 @@ value (never a constraint identifier).
 (bool-expr-stmt <bool-expr>)
 ```
 
-Evaluate an expression for its side effects; discard the result. The
-two variants differ only by the kind of expression they wrap. Tell-side
-unification (`bunify`) in body position uses `bool-expr-stmt`; ordinary
-discarded procedure or host calls use `expr-stmt`.
+Evaluate for side effects and discard the result; the variants differ
+only by kind. Tell-side `bunify` in body position uses
+`bool-expr-stmt`; discarded procedure or host calls use `expr-stmt`.
 
 ### store
 
@@ -404,26 +374,24 @@ discarded procedure or host calls use `expr-stmt`.
 (store <id-expr>)
 ```
 
-Add a constraint suspension to the constraint store. The argument is a
-constraint identifier (typically `(id-var "id")` after a `let-id` from
-`create-constraint`). This also **registers the constraint as an
+Add a suspension (typically `(id-var "id")` after a `let-id` from
+`create-constraint`) to the constraint store, and **register it as an
 observer** of every unbound variable reachable from its arguments,
-recursing into compound terms — a variable nested inside an argument
-(the `X` in `pair(X, 1)`) must be observed too, or binding it later
-would silently fail to reactivate the constraint.
+recursing into compound terms: the `X` in `pair(X, 1)` must be
+observed too, or binding it later would silently fail to reactivate
+the constraint.
 
-A constraint whose type is listed in the program's `inert-types` is
-exempt from the registration: its activation runs no occurrence
-procedure, so a reactivation could do nothing.
+A type listed in the program's `inert-types` is exempt from the
+registration: its activation runs no occurrence procedure, so a
+reactivation could do nothing.
 
-`store` is **idempotent**: a suspension that is already stored is left
+`store` is **idempotent**: an already-stored suspension is left
 untouched. The compiler relies on this — under Late Storage it emits a
 reachable `store` for the same suspension both inside fired kept
-occurrences and at the end of every activation (including
-re-activations via `reactivate_dispatch`), and only the first may
-append to the store and register observers. `store` no longer
-necessarily follows `create-constraint` directly: a constraint removed
-during its own activation is never stored at all.
+occurrences and at the end of every activation (re-activations via
+`reactivate_dispatch` included), and only the first may append and
+register observers. `store` need not follow `create-constraint` at
+all: a constraint removed during its own activation is never stored.
 
 ### kill
 
@@ -431,7 +399,7 @@ during its own activation is never stored at all.
 (kill <id-expr>)
 ```
 
-Remove a constraint from the store and mark it as no longer alive.
+Remove a constraint from the store and mark it not alive.
 
 ### add-history
 
@@ -439,10 +407,9 @@ Remove a constraint from the store and mark it as no longer alive.
 (add-history <rule-id> <id-expr> ...)
 ```
 
-Record that a rule has fired with the given combination of constraint
-identifiers. Used to prevent redundant re-firing of propagation rules.
-`<rule-id>` is the rule's integer identifier (see the program's
-`rule-names` table for the corresponding source name).
+Record that rule `<rule-id>` (its integer identifier; `rule-names`
+gives the source name) has fired with this combination of constraint
+identifiers, so a propagation rule does not re-fire on it.
 
 ### drain-reactivation-queue
 
@@ -451,17 +418,15 @@ identifiers. Used to prevent redundant re-firing of propagation rules.
   <body-stmt> ...)
 ```
 
-Iterate over all constraints pending reactivation (populated as a side
-effect of `bunify`). Each pending suspension is bound to `<susp-var>`
-as an id-bound name; the body statements are executed and reference it
-via `(id-var "<susp-var>")`. The body typically dispatches to
+Iterate over the constraints pending reactivation (enqueued by
+`bunify`), binding each to the id-bound name `<susp-var>` —
+`(id-var "<susp-var>")` in the body, which typically dispatches to
 `reactivate_dispatch`.
 
-The body may not jump out of the drain: `return`, `break` and
-`continue` are not permitted in it, because the drain is neither a
-labelled loop nor a value-producing position. The compiler emits only
-a single dispatch call here, so the restriction is never felt; a
-runtime is free to diagnose a violation as a runtime error.
+`return`, `break` and `continue` are not permitted in the body: the
+drain is neither a labelled loop nor a value-producing position. The
+compiler emits only a single dispatch call here, so the restriction is
+never felt; a runtime may diagnose a violation as a runtime error.
 
 ### push-frame
 
@@ -469,23 +434,22 @@ runtime is free to diagnose a violation as a runtime error.
 (push-frame <label> <line> <col> <file> <source>)
 ```
 
-Push a frame onto the runtime call stack used for error stack traces.
-The compiler emits one at each occurrence-procedure entry
-(`rule <name>`, before the guard) and each function entry
-(`function <module:name/arity>`), carrying the source
-location and the pretty-printed source of the fired rule head or
-matched equation. There is no pop instruction: the runtime saves the
-stack at every procedure call and restores it when the call returns,
-so frames pushed inside a body are visible until the enclosing
-procedure exits. Only the innermost frames are reported, so a runtime
-that truncates does so where the stack is read, not where it is
-pushed. A backend that ignores `push-frame` loses stack traces in
-runtime errors but nothing else.
+Push a frame onto the call stack used for error stack traces. The
+compiler emits one at each occurrence-procedure entry (`rule <name>`,
+before the guard) and each function entry
+(`function <module:name/arity>`), with the source location and the
+pretty-printed source of the fired rule head or matched equation.
+There is no pop: the runtime saves the stack at every procedure call
+and restores it on return, so frames pushed inside a body are visible
+until the enclosing procedure exits. Only the innermost frames are
+reported, so a runtime that truncates does so where the stack is
+read, not where it is pushed. A backend that ignores `push-frame`
+loses stack traces in runtime errors and nothing else.
 
-Note that the five fields are emitted as raw unquoted text — a label
-or source fragment containing spaces or parentheses (which is the
-common case) does not survive re-parsing as a single atom. Treat
-`push-frame` fields as display-only.
+The five fields are emitted as raw unquoted text — a label or source
+fragment containing spaces or parentheses (the common case) does not
+survive re-parsing as a single atom. Treat `push-frame` fields as
+display-only.
 
 
 ## Value Expressions
@@ -513,8 +477,7 @@ false
 wildcard
 ```
 
-Literals are serialized directly without a `lit` wrapper. `true`,
-`false`, and `wildcard` are bare atoms.
+No `lit` wrapper; `true`, `false`, and `wildcard` are bare atoms.
 
 ### Procedure and host calls
 
@@ -523,12 +486,10 @@ Literals are serialized directly without a `lit` wrapper. `true`,
 (host-call "<func-name>" <val-expr> ...)
 ```
 
-- `call-expr` calls a compiler-generated procedure. Each argument is a
-  `<call-arg>` that explicitly tags the kind of value being passed
-  (see below).
-- `host-call` calls a host language function. Host functions take and
-  return values only — arguments are plain value expressions, with no
-  wrapper.
+- `call-expr` calls a compiler-generated procedure; each argument is
+  a kind-tagged `<call-arg>` (below).
+- `host-call` calls a host language function, which takes and returns
+  values only; arguments are plain value expressions, unwrapped.
 
 ### Call arguments
 
@@ -538,9 +499,8 @@ Literals are serialized directly without a `lit` wrapper. `true`,
 ```
 
 A `<call-arg>` is one of these two forms. The wrapper is required at
-every `call-expr` argument position so the procedure boundary stays
-explicit about which arguments are values and which are constraint
-identifiers.
+every `call-expr` argument, so the procedure boundary states which
+arguments are values and which are constraint identifiers.
 
 ### Deep deref-aware evaluation
 
@@ -548,13 +508,12 @@ identifiers.
 (eval-deep <val-expr>)
 ```
 
-Switches the nested value expression into deep deref-aware evaluation:
-variable references are dereferenced (following binding chains) before
-use, and this mode propagates recursively into sub-expressions
-(`call-expr` arguments wrapped in `arg-val`, `make-term`, etc.). Used
-for the right-hand side of `is`. Constraint identifiers do not deref;
-the mode is a no-op for `arg-id` arguments. The bool-position
-counterpart is `beval-deep` (see Bool Expressions).
+Evaluates the nested value expression in deep deref-aware mode:
+variable references are dereferenced (following binding chains)
+before use, recursively through sub-expressions (`arg-val` arguments
+of `call-expr`, `make-term`, etc.). Used for the right-hand side of
+`is`. Constraint identifiers do not deref, so the mode is a no-op for
+`arg-id`. The bool-position counterpart is `beval-deep`.
 
 ### is evaluation
 
@@ -562,14 +521,12 @@ counterpart is `beval-deep` (see Bool Expressions).
 (eval-is <val-expr>)
 ```
 
-Evaluate the nested expression in deep-deref mode (like `eval-deep`),
-then walk the resulting value and evaluate any compound subterm whose
-functor and arity appear in the program's `evaluables` table (see
-[Program](#program)), calling the procedure the table maps them to.
-The compiler emits this only for `R is X` where the right-hand side
-is syntactically a variable: the compound to evaluate is not known
-until run time, so the dispatch goes through the table instead of a
-direct `call-expr`.
+Evaluate as `eval-deep`, then walk the result and evaluate every
+compound subterm whose functor and arity appear in the program's
+`evaluables` table (see [Program](#program)), calling the procedure
+it maps to. Emitted only for `R is X` with a syntactically variable
+right-hand side: the compound is not known until run time, so
+dispatch goes through the table instead of a direct `call-expr`.
 
 ### Logical variables
 
@@ -577,8 +534,7 @@ direct `call-expr`.
 new-var
 ```
 
-Creates a fresh unbound logical variable. Serialized as a bare atom
-(no parentheses).
+A fresh unbound logical variable. A bare atom, no parentheses.
 
 ### Term operations
 
@@ -590,8 +546,7 @@ Creates a fresh unbound logical variable. Serialized as a bare atom
 - `make-term` constructs a compound term.
 - `get-arg` extracts an argument by 0-based index.
 
-The structural-match predicate `bmatch-term` is a bool expression; see
-Bool Expressions.
+The structural-match predicate `bmatch-term` is a bool expression.
 
 ### Suspension field access
 
@@ -600,13 +555,12 @@ Bool Expressions.
 (field-type <id-expr>)
 ```
 
-- `field-arg` extracts the constraint argument at 0-based index `<i>`.
-  Returns a value (the suspension's stored argument).
-- `field-type` extracts the constraint type tag. Returns an integer.
+- `field-arg` returns the stored argument at 0-based index `<i>`.
+- `field-type` returns the constraint type tag, an integer.
 
-There is no separate `field-id` form: a suspension *is* its constraint
-identifier in the runtime, so the corresponding extraction is just a
-reference to the id-bound name itself (`(id-var "<susp>")`).
+There is no `field-id`: a suspension *is* its constraint identifier in
+the runtime, so that extraction is a reference to the id-bound name
+itself, `(id-var "<susp>")`.
 
 
 ## Id Expressions
@@ -629,17 +583,15 @@ binding, or the suspension binder of a `foreach` /
 (create-constraint <type> <val-expr> ...)
 ```
 
-Allocates a new suspension with a fresh unique identifier and
-`alive = true`. Does **not** add it to the store; use `store` for
-that. The arguments are values that become the constraint's stored
-arguments.
+Allocates a suspension with a fresh unique identifier, `alive = true`,
+and the given values as its stored arguments. Does **not** add it to
+the store; `store` does.
 
 
 ## Bool Expressions
 
-Expressions in this section evaluate to booleans. The serialization
-uses a `b` prefix on each constructor to distinguish it from any
-value-side counterpart.
+Expressions in this section evaluate to booleans; each constructor
+carries a `b` prefix to distinguish it from a value-side counterpart.
 
 ### Literals
 
@@ -648,8 +600,8 @@ btrue
 bfalse
 ```
 
-Boolean literals in bool position. Bare atoms, no parentheses.
-Distinct from the value-side `true` / `false` literals.
+Bare atoms, no parentheses; distinct from the value-side `true` /
+`false`.
 
 ### Logical operations
 
@@ -667,8 +619,7 @@ Distinct from the value-side `true` / `false` literals.
 (bmatch-term <val-expr> "<functor>" <arity>)
 ```
 
-Checks whether the value evaluates to a compound term with the given
-functor and arity.
+Whether the value is a compound term with the given functor and arity.
 
 ### Equality
 
@@ -677,13 +628,13 @@ functor and arity.
 (bid-equal <id-expr>  <id-expr>)
 ```
 
-- **`bequal`** (ask semantics, Prolog `==`): structural equality with
-  no mutation. Two distinct unbound variables return `false`. Used in
-  guards (guards must not leave half-done bindings on failure).
-  Guard residuals are mutation-free as a whole — no `bunify`, `store`,
-  `kill` or `add-history` is reachable from one. Beyond "no half-done
-  bindings", this is what makes `bsoft-guard` sound: a guard
-  abandoned part-way leaves nothing to undo.
+- **`bequal`** (ask semantics, Prolog `==`): structural equality, no
+  mutation; two distinct unbound variables give `false`. Used in
+  guards, which must not leave half-done bindings on failure. Guard
+  residuals are mutation-free as a whole — no `bunify`, `store`,
+  `kill` or `add-history` is reachable from one — which is also what
+  makes `bsoft-guard` sound: a guard abandoned part-way leaves
+  nothing to undo.
 - **`bid-equal`** compares two constraint identifiers for equality.
 
 ### Constraint observation
@@ -693,8 +644,8 @@ functor and arity.
 (bis-constraint-type <id-expr> <type>)
 ```
 
-- `balive` checks the alive flag of a suspension.
-- `bis-constraint-type` checks whether a suspension has the given type.
+- `balive`: the suspension's alive flag.
+- `bis-constraint-type`: whether the suspension has the given type.
 
 ### Propagation history
 
@@ -702,10 +653,9 @@ functor and arity.
 (bnot-in-history <rule-id> <id-expr> ...)
 ```
 
-Returns `true` if the rule has not previously fired with the given
-combination of constraint identifiers. `<rule-id>` is the rule's
-integer identifier (see the program's `rule-names` table for the
-corresponding source name).
+`true` if rule `<rule-id>` (its integer identifier; `rule-names` gives
+the source name) has not previously fired with this combination of
+constraint identifiers.
 
 ### Unification
 
@@ -713,10 +663,10 @@ corresponding source name).
 (bunify <val-expr> <val-expr>)
 ```
 
-Tell-side unification (Prolog `=`): binds variables, returns boolean.
-As a side effect, pushes affected constraints onto the reactivation
-queue. Used in rule bodies, typically wrapped in `bool-expr-stmt`
-because the result is discarded.
+Tell-side unification (Prolog `=`): binds variables, returns success,
+and pushes the affected constraints onto the reactivation queue. Used
+in rule bodies, typically under `bool-expr-stmt` since the result is
+discarded.
 
 ### Value-to-bool bridge
 
@@ -724,19 +674,18 @@ because the result is discarded.
 (bfrom-val <val-expr>)
 ```
 
-Promotes a value expression into bool position. The wrapped expression
-must evaluate to a boolean value (`VBool`); the runtime checks this and
-errors otherwise. Used wherever the compiler cannot statically prove
-the operand is a boolean — typically user-defined function calls in
-guards, and the early-drop result variable read at the boundary.
+Promotes a value expression into bool position. It must evaluate to a
+boolean value (`VBool`); the runtime checks and errors otherwise. Used
+wherever the compiler cannot statically prove the operand boolean —
+user-defined function calls in guards, and the early-drop result
+variable read at the boundary.
 
-The check must distinguish the two ways it can fail, because an
-enclosing `bsoft-guard` treats them differently: an operand that
-dereferences to an *unbound* variable is an instantiation failure —
-the guard cannot be decided yet — while a bound non-boolean is a
-general one. A backend must not let host truthiness stand in for the
-check; in a host where an unbound variable is a truthy value, doing so
-reads an undecidable guard as `true`.
+The check must distinguish its two failures, because an enclosing
+`bsoft-guard` treats them differently: an operand dereferencing to an
+*unbound* variable is an instantiation failure (the guard cannot be
+decided yet); a bound non-boolean is a general one. A backend must not
+let host truthiness stand in for the check: where an unbound variable
+is truthy, that reads an undecidable guard as `true`.
 
 ### Deep deref-aware evaluation
 
@@ -744,11 +693,9 @@ reads an undecidable guard as `true`.
 (beval-deep <bool-expr>)
 ```
 
-Switches the nested boolean expression into deep deref-aware
-evaluation. Mirrors `eval-deep` for booleans: any `<val-expr>` and
-`<id-expr>` payloads inside the nested expression are evaluated in
-deep-deref mode. Used for guard expressions wrapped via `bfrom-val .
-eval-deep`.
+`eval-deep` for booleans: every `<val-expr>` and `<id-expr>` payload
+inside the nested expression is evaluated in deep-deref mode. Used for
+guard expressions wrapped via `bfrom-val . eval-deep`.
 
 ### Soft guard evaluation
 
@@ -757,35 +704,33 @@ eval-deep`.
 ```
 
 Evaluates the nested boolean expression with *instantiation* errors
-caught: if evaluating it raises a runtime error of instantiation kind
-— an unbound logical variable reached a point that demanded its value
-— `bsoft-guard` yields `false` instead of propagating. Runtime errors
-of any other kind propagate unchanged, as do the non-local jumps
-(`break`, `continue`, `return`).
+caught: if an unbound logical variable reaches a point that demands
+its value, `bsoft-guard` yields `false` instead of propagating the
+error. Runtime errors of any other kind propagate unchanged, as do the
+non-local jumps (`break`, `continue`, `return`).
 
-The compiler emits this around the guard residual of a rule
-occurrence, and only there. It is the VM-level form of
+Emitted around the guard residual of a rule occurrence, and only
+there. It is the VM-level form of
 [soft guard failure](language.md#soft-guard-failure): the rule does
 not fire, no diagnostic is produced, and reactivation retries the
 occurrence once the missing variable is bound.
 
-Two conditions make catching sound, and both are properties the
-compiler maintains rather than things the instruction checks:
+Catching is sound under two conditions, both maintained by the
+compiler rather than checked by the instruction:
 
-- guard residuals do not tell (see `bequal` above): no `bunify`,
-  `store`, `kill` or `add-history` is reachable from one, so there is
-  no partial store, history or reactivation-queue state to roll back.
-  A `host-call` in the guard is outside this guarantee — but its
-  effects survive a guard that evaluates to `false` on its own just as
-  they survive an abandoned one, so the catch changes nothing there;
+- guard residuals do not tell (see `bequal`): no `bunify`, `store`,
+  `kill` or `add-history` is reachable from one, so there is no
+  partial store, history or reactivation-queue state to roll back. A
+  `host-call` in the guard is outside this guarantee, but its effects
+  survive a guard that evaluates to `false` just as they survive an
+  abandoned one, so the catch changes nothing there;
 - the runtime call stack is restored at the `bsoft-guard` boundary, so
-  the frames a caught guard pushed do not leak into subsequent
-  execution. (A backend that ignores `push-frame` has nothing to do
-  here.)
+  frames a caught guard pushed do not leak into subsequent execution.
+  (A backend that ignores `push-frame` has nothing to do here.)
 
-The compiler wraps a residual only when it can actually raise — in
-practice, when the residual contains a `bfrom-val`. A residual that is
-a pure `bequal` conjunction is emitted unwrapped.
+A residual is wrapped only when it can actually raise — in practice,
+when it contains a `bfrom-val`; a pure `bequal` conjunction is emitted
+unwrapped.
 
 
 ## Runtime Contract
@@ -794,21 +739,20 @@ A backend must implement the following runtime capabilities.
 
 ### Logical variables
 
-- Creation of fresh unbound variables (`new-var`).
-- Binding via unification (`bunify`) with occurs-check optional.
-- Dereferencing (following binding chains) — handled transparently
-  inside `bunify`, `bequal`, and `foreach` lookups.
-- Observer lists: when a variable is bound, all constraints observing
-  it are pushed onto the reactivation queue. A runtime may drop dead
-  observers at that point; the drain checks liveness regardless, since
-  a constraint can die between being enqueued and being reached.
+- Creation (`new-var`); binding by unification (`bunify`), occurs
+  check optional.
+- Dereferencing (following binding chains), transparently inside
+  `bunify`, `bequal`, and `foreach` lookups.
+- Observer lists: binding a variable pushes every constraint observing
+  it onto the reactivation queue. A runtime may drop dead observers
+  there; the drain checks liveness regardless, since a constraint can
+  die between being enqueued and being reached.
 
 ### Compound terms
 
 - Construction (`make-term`), structural matching (`bmatch-term`),
-  argument extraction (`get-arg`).
-- Representation is backend-specific (e.g. tagged arrays, objects,
-  tuples).
+  argument extraction (`get-arg`); representation is backend-specific
+  (tagged arrays, objects, tuples).
 
 ### Constraint store
 
@@ -822,29 +766,27 @@ Each suspension contains:
 | `alive` | Boolean flag. |
 
 A simple implementation is a hash map from constraint type to an array
-of suspensions. See the [Iterator properties](#iterator-properties)
-section for the requirements on iteration under modification.
+of suspensions; [Iterator properties](#iterator-properties) gives the
+requirements on iteration under modification.
 
 ### Propagation history
 
-A set of tuples `(rule-id, id_1, ..., id_n)`, where `rule-id` is the
-integer identifier assigned to the rule at compile time. Must
-support:
+A set of tuples `(rule-id, id_1, ..., id_n)`, `rule-id` being the
+integer assigned to the rule at compile time. Must support:
 
 - `add-history`: insert a tuple.
 - `bnot-in-history`: membership test.
 
 ### Reactivation queue
 
-A queue of constraint suspensions populated by `bunify` when a
-variable is bound. Drained by `drain-reactivation-queue`.
+A queue of suspensions, filled by `bunify` when a variable is bound
+and drained by `drain-reactivation-queue`.
 
 ### Recursion management
 
-The VM uses plain procedure calls. Backends targeting languages
-without tail-call optimization must implement trampolining or an
-explicit continuation stack to prevent call-stack overflow. This is
-entirely the backend's responsibility.
+The VM uses plain procedure calls. A backend targeting a language
+without tail-call optimization must prevent call-stack overflow
+itself, by trampolining or an explicit continuation stack.
 
 
 ## Complete Example
@@ -859,12 +801,12 @@ rule:
 reflexivity @ leq(X, X) <=> true.
 ```
 
-Below is the output of `ychr compile -t vm mymodule.chr`, reformatted
-with indentation. The prelude is always compiled in, so the real dump
-also contains one `evaluables` entry, one `func_*` procedure, and one
-export per prelude function, plus the `call_1` / `call_2` dispatchers;
-those are elided here (`; ...`). The constraint is `mymodule:leq/2`,
-so procedure names use the pattern `<prefix>_mymodule__leq2`:
+The output of `ychr compile -t vm mymodule.chr`, reindented. The
+prelude is always compiled in, so the real dump also has one
+`evaluables` entry, one `func_*` procedure and one export per prelude
+function, plus the `call_1` / `call_2` dispatchers — elided here
+(`; ...`). The constraint is `mymodule:leq/2`, so procedure names
+follow `<prefix>_mymodule__leq2`:
 
 ```scheme
 (vm-program

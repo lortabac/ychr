@@ -1,3 +1,7 @@
+% Imported implicitly and in full by every module. An import list on
+% `use_module(library(prelude))` is rejected (YCHR-20019); resolve a
+% clash with a prelude name by renaming your own identifier.
+
 :- module(prelude, [
     type(bool/0),
     type(list/1),
@@ -54,6 +58,14 @@
 
 :- chr_type list(T) ---> [] ; [T|list(T)].
 
+% The overloaded operators are classes with one signature per type;
+% `/`, `div`, `mod`, `rem` and `==` have one signature and are plain
+% functions. A type mismatch on a class is YCHR-60006 (no matching
+% overload), on a function YCHR-60001.
+%
+% `int` is arbitrary precision; `float` is the host's IEEE-754 double.
+% Strings order by code point, case-sensitive, no locale. There is no
+% mixed-type comparison: `1 < "a"` matches no signature (YCHR-60006).
 :- class
     ('+'(int, int) -> int),
     ('+'(float, float) -> float).
@@ -108,6 +120,8 @@
     (nl() -> any),
     (writeln(string) -> any).
 
+% Bounded: `>=` / `=<` are closed classes over int, float and string, so
+% `max`/`min` work at exactly those types. A user type is YCHR-60012.
 :- function max(T, T) -> T requiring '>='(T, T) -> bool.
 :- function min(T, T) -> T requiring '=<'(T, T) -> bool.
 
@@ -135,8 +149,10 @@ X =< Y -> host:'=<'(X, Y).
 
 X == Y -> host:'=='(X, Y).
 
-% Boolean negation. There is no `\=` / `\==` operator; write the
-% negation explicitly, e.g. `not(X == Y)` or `not(unifiable(X, Y))`.
+% Boolean negation; `not(1)` matches no equation (YCHR-60001). There is
+% no `\=` / `\==`
+% operator: write `not(X == Y)` or `not(unifiable(X, Y))`. `==` never
+% binds, and two distinct unbound variables are not `==`.
 % `bool` is an ordinary algebraic type, so this needs no host primitive:
 % the two constructors are matchable in equation patterns like any other.
 not(true) -> false.
@@ -148,6 +164,9 @@ max(_, Y) -> Y.
 min(X, Y) | X =< Y -> X.
 min(_, Y) -> Y.
 
+% Type predicates take `any` and never raise on an unbound argument.
+% `atom/1` is true for a bare atom and for a 0-arity constructor (they
+% are the same value); `ground/1` means no unbound variable anywhere.
 var(X) -> host:var(X).
 
 nonvar(X) -> host:nonvar(X).
@@ -168,22 +187,30 @@ string(X) -> host:string(X).
 
 ground(X) -> host:ground(X).
 
+% Whether the two terms could unify. Binds nothing.
 unifiable(X, Y) -> host:unifiable(X, Y).
 
+% The unbound variables in a term, as a list.
 term_variables(T) -> host:term_variables(T).
 
+% `[Functor, Arg1, ...]`; `list_to_compound/1` is the inverse.
 compound_to_list(C) -> host:compound_to_list(C).
 
 list_to_compound(Xs) -> host:list_to_compound(Xs).
 
+% `write`/`writeln` take a string: `write(1)` is a type error (a runtime
+% error untyped). Render a term with meta's `write_term_to_string/1`, or
+% use `print/1`.
 write(S) -> host:write(S).
 
 nl -> host:write("\n").
 
 writeln(S) -> host:writeln(S).
 
+% A copy with fresh variables.
 copy_term(T) -> host:copy_term(T).
 
+% Typed wrappers over the wired-in `'$call'`.
 call(F, X) -> '$call'(F, X).
 
 call(F, X, Y) -> '$call'(F, X, Y).

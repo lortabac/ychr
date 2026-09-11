@@ -1,3 +1,7 @@
+% Thin wrappers over host primitives. Ordering needs nothing from here:
+% `<`, `>`, `=<`, `>=` accept strings. No splitting, slicing, search, or
+% conversion to atoms and numbers yet.
+
 :- module(strings, [
     fun string_concat/2,
     fun string_length/1,
