@@ -3,10 +3,13 @@
 % ... is not sufficiently instantiated to select an equation". In `is`, a
 % body or a goal that is a hard YCHR-60001; in a rule guard the rule
 % delays and is retried once the tail is bound (language.md, Soft guard
-% failure).
+% failure). `is_list/1` is the one exception: its catch-all equation
+% answers `false` where the others run out of equations, so a partial
+% list gets an answer rather than an error.
 
 :- module(lists, [
     fun cons/2,
+    fun is_list/1,
     fun head/1,
     fun tail/1,
     fun length/1,
@@ -39,6 +42,7 @@
 
 :- function
     (cons(T, list(T)) -> list(T)),
+    (is_list(any) -> bool refining list(A)),
     (length(list(T)) -> int),
     (same_length(list(A), list(B)) -> bool),
     (member(T, list(T)) -> bool),
@@ -84,6 +88,23 @@
     nth/2.
 
 cons(X, Xs) -> [X|Xs].
+
+% Whether a value is a proper list: a spine of cons cells ending in
+% `[]`. The elements are never inspected, which is what lets the
+% `refining` clause promise `list(A)` for a fresh `A` -- a promise the
+% checker takes on trust, and the reason the walk goes all the way down
+% rather than stopping at the first cons cell: `[1|foo]` has to answer
+% `false`. A guard calling this on a bare variable types that variable
+% (docs/reference/type-system.md).
+%
+% The catch-all is what makes this total where the rest of the library
+% is partial: a tail that is neither `[]` nor a cons cell answers
+% `false` instead of raising, and so does an unbound one -- a variable
+% is not a list yet. That answer is not final. A rule whose guard it
+% blocked is retried when the variable is bound, and then sees a list.
+is_list([]) -> true.
+is_list([_|Xs]) -> is_list(Xs).
+is_list(_) -> false.
 
 head([X|_]) -> X.
 

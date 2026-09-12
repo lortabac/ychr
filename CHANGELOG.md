@@ -29,6 +29,13 @@ function name any more. See the
   argument not `any`, return not `bool`) and a refined type that is not
   a valid refinement. `YCHR-15020` rejects one on a
   `:- chr_constraint`.
+- `library(lists)` exports `is_list/1`, refining `list(A)`, and
+  `library(maybe)` exports `is_maybe/1`, refining `maybe(A)`. Both take
+  `any`, so unlike `is_just/1` they answer over values of any type; an
+  argument that is not (yet) one of theirs, an unbound variable
+  included, is `false` rather than an error. A module that imports one
+  of those libraries and declares a function of the same name now has
+  an ambiguous name; rename one of the two.
 - `refining` is now an operator word, `xfx` at priority 1140 — the same
   row as `requiring`, so the two cannot be combined on one signature.
   Bare `refining` atoms are unaffected, in patterns and in terms alike.

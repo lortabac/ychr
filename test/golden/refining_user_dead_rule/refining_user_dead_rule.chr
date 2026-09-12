@@ -13,7 +13,7 @@
 
 :- function is_list(any) -> bool refining list(A).
 is_list([]) -> true.
-is_list([_|_]) -> true.
+is_list([_|Xs]) -> is_list(Xs).
 is_list(_) -> false.
 
 :- chr_constraint tag(color, int).

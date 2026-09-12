@@ -6,9 +6,11 @@
 
 % The refinement lives in another module. The encoded refinement table
 % is keyed by the function's *qualified* name, so a guard here has to
-% find `preds:is_list` through the same key the call site produces.
+% find `preds:is_seq` through the same key the call site produces. The
+% name avoids `library(lists)`'s own `is_list/1`, which is imported
+% here too and would otherwise be ambiguous.
 :- function size(T) -> int.
-size(X) | is_list(X) -> length(X).
+size(X) | is_seq(X) -> length(X).
 size(_) -> 1.
 
 :- chr_constraint run(any, int).
@@ -21,5 +23,5 @@ run(V, R) <=> R is size(V).
 % Neither guard may narrow what the other's argument can hold.
 :- chr_constraint pair_up(list(int), list(string), int).
 
-pair_up(X, Y, R) <=> is_list(X), is_list(Y) | R is length(X) + length(Y).
+pair_up(X, Y, R) <=> is_seq(X), is_seq(Y) | R is length(X) + length(Y).
 pair_up(_, _, R) <=> R = 0.

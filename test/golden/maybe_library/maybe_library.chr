@@ -5,7 +5,9 @@
     chained/1,
     predicates/2,
     defaults/2,
-    folded/2
+    folded/2,
+    maybeness/4,
+    presence/2
 ]).
 
 :- use_module(library(maybe)).
@@ -17,7 +19,18 @@
     chained/1,
     predicates/2,
     defaults/2,
-    folded/2.
+    folded/2,
+    maybeness/4,
+    presence/2.
+
+% The `refining` clause at work. `T` is rigid at this equation, so
+% `is_just(X)` -- which demands a `maybe(A)` -- would be rejected
+% without the guard, whose fact supplies exactly that. An unbound
+% argument takes the second equation, because `is_maybe/1` answers
+% `false` rather than raising on one.
+:- function present(T) -> bool.
+present(X) | is_maybe(X) -> is_just(X).
+present(_) -> false.
 
 mapped(A, B) <=>
     A is map_maybe(fun(X) -> X * 3 end, just(4)),
@@ -49,3 +62,13 @@ defaults(A, B) <=>
 folded(A, B) <=>
     A is foldr_maybe(0, fun(X) -> X + 100 end, just(5)),
     B is foldr_maybe(0, fun(X) -> X + 100 end, nothing).
+
+% `is_maybe/1` takes `any`, so unlike `is_just/1` and `is_nothing/1` it
+% answers over values that are not `maybe`s at all.
+maybeness(A, B, C, D) <=>
+    A is is_maybe(just(1)),
+    B is is_maybe(nothing),
+    C is is_maybe(7),
+    D is is_maybe([1]).
+
+presence(V, R) <=> R is present(V).

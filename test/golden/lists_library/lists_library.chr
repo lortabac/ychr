@@ -20,7 +20,9 @@
     distincted/1,
     sorted/1,
     sorted_ties/1,
-    indexed/2
+    indexed/2,
+    listness/4,
+    sized/2
 ]).
 
 :- use_module(library(lists)).
@@ -47,7 +49,17 @@
     distincted/1,
     sorted/1,
     sorted_ties/1,
-    indexed/2.
+    indexed/2,
+    listness/4,
+    sized/2.
+
+% The `refining` clause at work. `T` is rigid at this equation, so
+% `length(X)` would be rejected without the guard, whose fact pins `T`
+% to a list. An unbound argument takes the second equation, because
+% `is_list/1` answers `false` rather than raising on one.
+:- function size(T) -> int.
+size(X) | is_list(X) -> length(X).
+size(_) -> 1.
 
 mapped(R) <=> R is maplist(fun(X) -> X * 2 end, [1, 2, 3]).
 
@@ -118,3 +130,16 @@ pairwise(A, B, C, D, E) <=>
     C is all2(fun(X, Y) -> X < Y end, [1], [10, 20]),
     D is all2(fun(X, Y) -> X < Y end, [1, 2], [10]),
     E is all2(fun(X, Y) -> X < Y end, [], []).
+
+% `is_list/1` takes `any`, so it answers over values that are not lists
+% at all: a string is not a list here, and neither is a spine that ends
+% in something other than `[]`. The improper list has to be quoted --
+% it is not a well-typed term, which is exactly why a predicate that
+% walks only the first cons cell would get it wrong.
+listness(A, B, C, D) <=>
+    A is is_list([1, 2]),
+    B is is_list([]),
+    C is is_list("ab"),
+    D is is_list(quote([1|foo])).
+
+sized(V, R) <=> R is size(V).

@@ -5,6 +5,7 @@
     fun maybe_and_then/2,
     fun '>>='/2,
     fun '=<<'/2,
+    fun is_maybe/1,
     fun is_just/1,
     fun is_nothing/1,
     fun from_maybe/2,
@@ -23,6 +24,7 @@
     (maybe_and_then(maybe(A), fun(A) -> maybe(B) end) -> maybe(B)),
     ('>>='(maybe(A), fun(A) -> maybe(B) end) -> maybe(B)),
     ('=<<'(fun(A) -> maybe(B) end, maybe(A)) -> maybe(B)),
+    (is_maybe(any) -> bool refining maybe(A)),
     (is_just(maybe(A)) -> bool),
     (is_nothing(maybe(A)) -> bool),
     (from_maybe(A, maybe(A)) -> A),
@@ -49,6 +51,18 @@ maybe_and_then(just(X), F) -> call(F, X).
 M >>= F -> maybe_and_then(M, F).
 
 F =<< M -> maybe_and_then(M, F).
+
+% Whether a value is one of the two `maybe` constructors. Unlike
+% `is_just/1` and `is_nothing/1` below, which already take a `maybe(A)`
+% and so leave a guard nothing to learn, this one takes `any`: its
+% `refining` clause types a variable it guards
+% (docs/reference/type-system.md). The payload of a `just` is never
+% inspected, which is what lets that promise be `maybe(A)` for a fresh
+% `A`. An unbound argument is `false` -- a variable is not a `maybe`
+% yet -- and a rule whose guard that blocked is retried once it is.
+is_maybe(nothing) -> true.
+is_maybe(just(_)) -> true.
+is_maybe(_) -> false.
 
 is_just(nothing) -> false.
 is_just(just(_)) -> true.

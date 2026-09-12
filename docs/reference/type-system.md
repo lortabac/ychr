@@ -828,7 +828,11 @@ because a refinement predicate tests a value, not a callable.
 
 The prelude declares four: `integer/1`, `float/1`, `string/1` and
 `boolean/1`. `atom/1`, `var/1`, `nonvar/1` and `ground/1` deliberately
-do not (§Non-forms).
+do not (§Non-forms). Two more ship in the libraries: `is_list/1` in
+`library(lists)`, refining `list(A)`, and `is_maybe/1` in
+`library(maybe)`, refining `maybe(A)`. Both answer `false` where a
+type predicate has nothing to stand on — an unbound argument included,
+since a variable that may yet be bound to a list is not a list.
 
 ### Non-forms
 
