@@ -240,7 +240,7 @@ Each of these crashes if the documented runtime invariant is violated.
 A stronger type or a checked smart constructor would turn the runtime
 panic into a compile-time error.
 
-### `getArg` operand and bounds — `src/YCHR/Internal/Runtime/Var.hs:322-323`
+### `getArg` operand and bounds — `src/YCHR/Internal/Runtime/Var.hs:359-360`
 
 ```haskell
 | otherwise -> error $ "getArg: index " ++ show idx ++ " out of bounds"
@@ -251,7 +251,7 @@ _ -> error "getArg: not a compound term"
 guarantee both, but neither is enforced. A typed term-projection API
 keyed on a verified `(VTerm functor arity)` handle would close it.
 
-### `lookupSusp` — `src/YCHR/Internal/Runtime/Store.hs:55`
+### `lookupSusp` — `src/YCHR/Internal/Runtime/Store.hs:61`
 
 ```haskell
 Nothing -> error $ "lookupSusp: unknown SuspensionId " ++ show sid
@@ -263,7 +263,7 @@ invariant violation, not a user-facing failure" — exactly the case for
 a typed handle (e.g. an opaque newtype that can only be created by the
 allocation API).
 
-### `getConstraintArg` bounds — `src/YCHR/Internal/Runtime/Store.hs:113`
+### `getConstraintArg` bounds — `src/YCHR/Internal/Runtime/Store.hs:140`
 
 ```haskell
 else error $ "getConstraintArg: index " ++ show idx ++ " out of bounds"
@@ -274,7 +274,7 @@ in-range `ArgIndex` values; a smart-constructor for `ArgIndex` keyed
 on the constraint type's arity (or a `Vector` of fixed length in the
 suspension) would push the check up.
 
-### `suspArg` has no bounds check at all — `src/YCHR/Internal/Runtime/Store.hs:158-159`
+### `suspArg` has no bounds check at all — `src/YCHR/Internal/Runtime/Store.hs:185-186`
 
 ```haskell
 suspArg :: Suspension -> Int -> Value
@@ -284,7 +284,7 @@ suspArg Suspension {args = sargs} idx = sargs !! idx
 `getConstraintArg`'s undocumented twin: the same projection, reached
 from a different direction, with the bounds check omitted rather than
 turned into a named `error`. The caller is `checkConditions`
-(`src/YCHR/Internal/Runtime/Interpreter.hs:660-668`), which evaluates
+(`src/YCHR/Internal/Runtime/Interpreter.hs:659-663`), which evaluates
 a `Foreach`'s index conditions — so an out-of-range `ArgIndex` pushed
 down into a `Foreach` surfaces as a bare `Prelude.!!` failure with no
 context. Closed by the same `ArgIndex` fix.
@@ -296,16 +296,43 @@ name-resolution invariants rather than shape invariants:
 
 | Site                                | Required precondition          |
 |-------------------------------------|--------------------------------|
-| `callProc` (unknown name), `:398`   | name resolves in `procMap`     |
-| `evalValExpr (Var name)`, `:682`    | name in `envValues`            |
-| `invokeHostCall` (unknown), `:877`  | name in registry               |
+| `callProc` (unknown name), `:397`   | name resolves in `procMap`     |
+| `evalValExpr (Var name)`, `:677`    | name in `envValues`            |
+| `invokeHostCall` (unknown), `:871`  | name in registry               |
 
 Closure checks at compile time (see §5 "Closed procedure-name set")
 would close the first; an opaque `IdExpr`/`ValExpr` constructor that
 can only be made by the binder would close the second; a typed
 `HostCallRef` issued by the registry would close the third.
 
-### `R.LambdaExpr` survives lambda lifting — `src/YCHR/Run.hs:833`, `src/YCHR/Internal/Compile.hs:664`, `src/YCHR/Internal/Backend/SchemeDriver.hs:170`
+### Panics this catalogue missed
+
+A re-grep of `error` at the current revision turns up sites the
+original audit did not list. None is known-reachable from a
+well-formed program, but the inventory above is therefore not
+exhaustive:
+
+| Site                                                     | Kind                                        |
+|----------------------------------------------------------|---------------------------------------------|
+| `src/YCHR/Internal/Runtime/Interpreter.hs:496` (`activateSuspensionId`) | leading-id shape check |
+| `src/YCHR/Run.hs:548` (`executeBodyGoal`, `BodyOr`)       | query disjunction should have been rejected (YCHR-30006) |
+| `src/YCHR/Internal/Compile.hs:1104` (`compileBodyGoal`, `BodyOr`) | `lowerDisjunctions` should have run first |
+| `src/YCHR/Internal/Desugar.hs:983` (`ruleModName`)        | non-empty head                             |
+| `src/YCHR/Internal/Desugar/Disjunction.hs:101,204`        | lifted rule is a simplification; non-empty head |
+| `src/YCHR/Internal/Backend/Scheme.hs:214` (`programInfoBindingName`) | non-empty library name          |
+| `src/YCHR/Internal/Meta.hs:184,190,192`                   | host-call arity / parse result (`write_term_to_string`, `read_term_from_string`) |
+
+The two `BodyOr` sites are phase invariants of the same family as
+the `LambdaExpr` case below: the constructor survives in the type and
+each pass asserts it was already lowered. A phase index on
+`Desugared.BodyGoal` (or a post-lowering type without `BodyOr`) would
+discharge both. The `Meta.hs` sites are the mildest — `invokeHostCall`
+wraps the host function in `try @SomeException`
+(`Interpreter.hs:858`), so they surface as an ordinary runtime error
+rather than a process abort; they are nonetheless `error` rather than
+`runtimeErrorS` for a difficulty that is really just arity.
+
+### `R.LambdaExpr` survives lambda lifting — `src/YCHR/Run.hs:691`, `src/YCHR/Internal/Compile.hs:695`, `src/YCHR/Internal/Backend/SchemeDriver.hs:171`
 
 ```haskell
 -- Run.hs
@@ -337,52 +364,104 @@ separately.
 
 ## 2. Data types that admit invalid states
 
-### `VarState` admits orphan observers — `src/YCHR/Internal/Runtime/Types.hs:37-42`
+### `VarState` orphans — `src/YCHR/Internal/Runtime/Types.hs:43-48`
 
 ```haskell
 data VarState = Unbound !VarId ![SuspensionId] | Bound !Value
 ```
 
-Observer lists are meaningful only on `Unbound`; once a variable is
-bound, the observers are emitted and the list is moot. Today nothing
-prevents a hypothetical caller from constructing a `Bound` value with
-a stale observer list. A small accessor module that hides the
-constructors and only exposes "bind (drains observers)" / "register
-observer (only on Unbound)" would lock this down.
+The invariant is "binding a variable emits (or transfers) its
+observer list before the cell becomes `Bound`". An earlier revision of
+this entry framed it as "a `Bound` value can carry a stale observer
+list". That is **not representable**: `Bound !Value` has no list slot,
+so the data shape already rules out the stated hazard. What remains is
+a control-flow obligation — `unify'` must go through the observer
+emit/transfer path (`Var.hs:159-192`) and not blind-write
+`Bound` — and the suggested constructor-hiding accessor module would
+not encode it either: hiding the constructors centralizes the write
+but still permits `writeVarState var (Bound v)` with `obs`
+discarded.
 
-Narrowed but not closed by `withUnboundVar` (see "Already closed"):
-the constructors are now reachable only from `Var.hs`, so the set of
-places that could build an orphan is one module rather than the whole
-runtime — but within that module nothing stops it.
+The real defence is already in place and structural: `withUnboundVar`
+(`Var.hs:120-130`) means every reader of the cell that needs its
+contents goes through a continuation that is *given* the observers,
+so there is no arm in which they can be silently dropped. Treat this
+entry as narrowed to "the drain/transfer discipline is a `Var.hs`
+convention, not a type", and do not expect a cheap type fix. The
+honest low-hanging item is a different §2 entry: the redundant
+`Occurrence.conArity` field below.
 
 ### Compiler IR carries unchecked arity fields — `src/YCHR/Internal/Compile/Types.hs`
 
-- `Occurrence { conArity :: Int, activeArgs :: [Term] }` — nothing
-  enforces `conArity == length activeArgs`. Generated `FieldArg`
-  indices are derived from `conArity`; if it disagreed with
-  `activeArgs`, the runtime would silently access wrong fields.
-- `Partner { constraint :: QualifiedConstraint }` — `length
-  constraint.args` is assumed to match the symbol table's recorded
-  arity; not cross-checked.
+- **`Occurrence.conArity :: Int` is a redundant field — the cheapest
+  win in this document.** `activeArgs` is already
+  `[HeadArg]` (superseded by the HNF entry under "Already closed"),
+  and `Desugar.normalizeArg` (`Desugar.hs:321-352`) maps every head
+  term to exactly one `HeadArg`, so `conArity == length activeArgs`
+  holds by construction at the single birth site: both fields are
+  literally `activeCon.args` (`Occurrences.hs:163,170`). Nothing
+  cross-checks them afterwards. There are exactly two readers —
+  `Identifier occ.conName occ.conArity` as the occurrence-map key
+  (`Occurrences.hs:66`) and `argNames occ.conArity` for guard scoping
+  (`Compile.hs:736`) — and no test constructs an `Occurrence`.
+
+  **Fix: delete the field and derive arity from `activeArgs`** (inline
+  `length occ.activeArgs`, or a one-line `occurrenceArity = length .
+  activeArgs`). That makes future drift unrepresentable rather than
+  merely unchecked, which is stronger than the smart-constructor
+  route below and costs ~5 lines. No behavioural change: the renamer
+  already rejects an arity-mismatched head constraint
+  (`YCHR-20002`), so head arity and symbol-table arity agree.
+
+  Related, same "derive instead of store" shape: `VM.Program`
+  (`src/YCHR/Internal/VM/Types.hs:103,110`) stores `numTypes` next to
+  `typeNames` and `numRules` next to `ruleNames`, with the invariants
+  `numTypes == length typeNames` and `numRules == length ruleNames`
+  never checked. `Compile.hs:138-141` derives both pairs from the same
+  symbol table / rule list today. Lower value than `conArity`: the
+  counts are read by SExpr serialization and the Scheme backend's
+  `%make-session`, so removal is a wider edit.
+
+- `Partner { constraint :: HeadConstraint }` — note the type is
+  `HeadConstraint`, not `QualifiedConstraint` (that narrowing is the
+  same HNF change). `length constraint.args` is assumed to match the
+  symbol table's recorded arity; not cross-checked. Harder to encode
+  here than for `Occurrence`, because the symbol-table arity is not a
+  field of `Partner` and `cType` is already the resolved form.
+
 - `IndexCondition { argIndex :: ArgIndex, ... }` — `argIndex` is not
   bounds-checked against the partner's arity at construction. The
-  compiler trusts itself.
+  compiler trusts itself, but the trust is currently *justified*: see
+  the `classifyEqual` entry in §4 — the only producer enumerates the
+  partner's argument positions, so no out-of-range value can be built
+  today. Encoding it would be belt-and-braces rather than closing a
+  live hole.
 
-A common fix: make arity a `newtype` and have a smart constructor for
-`Occurrence`/`Partner`/`IndexCondition` that reconciles or rejects
-mismatches.
+A common fix for the latter two: make arity a `newtype` and have a
+smart constructor for `Partner`/`IndexCondition` that reconciles or
+rejects mismatches. Do `conArity` first; it is the one that needs no
+new type at all.
 
 ### VM IR `Int`/`ArgIndex` slots accept negatives — `src/YCHR/Internal/VM/Types.hs`
 
-- `BMatchTerm ValExpr Name Int` (line 340) — arity slot.
-- `GetArg ValExpr Int` (line 314) — index slot.
-- `FieldArg IdExpr ArgIndex` (line 318) — `ArgIndex` is `newtype
-  ArgIndex = ArgIndex Int`, so any signed value fits.
+- `BMatchTerm ValExpr Name Int` (line 350) — arity slot.
+- `GetArg ValExpr Int` (line 324) — index slot.
+- `FieldArg IdExpr ArgIndex` (line 328) — `ArgIndex` is `newtype
+  ArgIndex = ArgIndex Int` (line 438), so any signed value fits.
 
 None of these use smart constructors. Switching to `Word` (or a
-specialized non-negative newtype) is mechanical. The payoff is
-largest at the `VM.SExpr` deserialization boundary, which currently
-reconstructs each slot from an arbitrary integer with no check.
+specialized non-negative newtype) is mechanical in the IR, **but it is
+not the whole fix at the boundary**. `VM.SExpr`'s deserializer rebuilds
+each slot with `fromInteger` with no range check
+(`SExpr.hs:460,462,476,507` for `GetArg`, `FieldArg`, `BMatchTerm`, and
+`Foreach` conditions). Under `Word`, `fromInteger (-1)` wraps to
+`maxBound` silently, so the type change alone converts a raw negative
+into a huge positive. The boundary needs an explicit
+`parseNonNegative`/`Maybe` and an `Err` on failure; the type change is
+the prerequisite that forces it to be written, not the check itself.
+Two further wrinkles: `sargs !! idx` (`Store.hs:139,186`) takes `Int`,
+so `suspArg`/`getConstraintArg` need a `Word -> Int` conversion, and
+`matchTerm` compares against `length args` (`Var.hs:342-348`).
 
 
 ## 3. Documented invariants worth promoting into types
@@ -400,7 +479,13 @@ Note that the real defect here is not `assignNumbers` but the
 `OccurrenceNumber 0` an `Occurrence` is born with in `mkOccurrence`
 (`Occurrences.hs:164`) — a placeholder that is always overwritten
 moments later, and the only value a 1-based smart constructor would
-have to reject. Low value; deferred.
+have to reject. Low value; deferred. The structural alternative is a
+`NumberedOccurrence` wrapper (an unnumbered `Occurrence` becomes a
+numbered one in the pass), which removes the placeholder instead of
+validating it, at the cost of touching the three `number` readers
+(`Compile.hs:318`, `Occurrences.hs:77`, `Names.hs:205-208`). Still a
+worse ratio than deleting `Occurrence.conArity` in §2 — same module,
+same redundant-field shape, but that one needs no new type.
 
 ### `tc_unify` argument order — `typechecker/solver.chr`
 
@@ -415,7 +500,7 @@ through named helpers (`check_constraint_use`, `check_function_use`,
 Two distinct `ty`-like types — one for each side — would make an
 emitter's call total, at the cost of a conversion at every helper.
 
-### Reactivation observer list is LIFO — `src/YCHR/Internal/Runtime/Var.hs:340`
+### Reactivation observer list is LIFO — `src/YCHR/Internal/Runtime/Var.hs:377`
 
 ```haskell
 (\vid obs -> writeVarState var (Unbound vid (oid : obs)))
@@ -451,7 +536,7 @@ did the same. The §5 procedure-name closure check remains worthwhile for
 the rest of the `CallExpr` namespace, but there is no longer a `$call`
 arity cap for it to subsume.
 
-### `partArity` derived from desugared head matches runtime constraint shape — `src/YCHR/Internal/Compile.hs:404`
+### `partArity` derived from desugared head matches runtime constraint shape — `src/YCHR/Internal/Compile.hs:435`
 
 ```haskell
 partArity = length partner.constraint.args
@@ -467,14 +552,27 @@ of producing one with a bogus type, so the remaining exposure is a
 genuine arity *disagreement* between the symbol table and the
 desugared head, not a lookup failure.
 
-### `classifyEqual` returns an unbounded `ArgIndex` — `src/YCHR/Internal/Compile.hs:718-745`
+### `classifyEqual` / `IndexCondition` — the bounds worry is overstated — `src/YCHR/Internal/Compile.hs:766-778`
 
-`asPartnerArg` produces an `(ArgIndex, …)` pair that is baked into an
-`IndexCondition` without any bounds check against the partner
-constraint's arity. Same fix shape as §2's `IndexCondition` entry —
-construct via a smart constructor that takes the partner's arity.
+The earlier statement of this entry ("`asPartnerArg` produces an
+`(ArgIndex, …)` pair that is baked into an `IndexCondition` without
+any bounds check") is technically true of the type but overstates the
+exposure. `asPartnerArg` (`Compile.hs:749-758`) *generates* the index
+by enumerating the partner's argument positions:
 
-### `History` keys assume canonical `SuspensionId` ordering — `src/YCHR/Internal/Runtime/History.hs:22-31`
+```haskell
+j <- [0 .. length p.constraint.args - 1]
+```
+
+so every `ArgIndex` it can return is in `[0, arity-1]` by
+construction, and it is the only producer `classifyEqual` uses. There
+is no live path to an out-of-range `IndexCondition.argIndex`. The
+tighter type (a smart constructor that takes the partner's arity)
+would be belt-and-braces; it is not worth ranking with the §2 items.
+The same enumeration pattern makes `wrapInPartnerLoops`'s `FieldArg`
+indices (`Compile.hs:441-445`) in range by construction.
+
+### `History` keys assume canonical `SuspensionId` ordering — `src/YCHR/Internal/Runtime/History.hs:22-32`
 
 History is keyed by `(RuleId, [SuspensionId])`. Equality is on the
 list shape; the caller must build the list in a canonical order at
@@ -513,7 +611,7 @@ silently on the assumption that the constructor-arity walk
 a `known_con` / `unknown_con` split, or an invariant on constructor-map
 membership, would make it explicit.
 
-### Rule-guard residuals do not tell — `src/YCHR/Internal/Compile.hs:333-350` (`residualCheck`, `genGuardedFire`)
+### Rule-guard residuals do not tell — `src/YCHR/Internal/Compile.hs:364-377, 826` (`residualCheck`, `genGuardedFire`)
 
 The `BoolExpr` a rule guard compiles to is a `BAnd` chain of `BEqual`
 (ask) conjuncts and `BFromVal (EvalDeep …)` calls into user code.
@@ -571,7 +669,7 @@ that they agree.
 Every `CallExpr` name (`tell_<c>/<n>`, `activate_<c>/<n>`,
 `occurrence_<c>_<n>_<j>`, `func_<…>`, `call_N`,
 `reactivate_dispatch`) must exist in the generated `procMap`. The
-interpreter (`Interpreter.hs:398`) errors at runtime if any name is
+interpreter (`Interpreter.hs:397`) errors at runtime if any name is
 missing. There is no whole-program closure check.
 
 A post-compilation pass (or a typed `ProcRef` issued only by the
@@ -592,7 +690,7 @@ rather than an error. A typed dispatch table (parameterised by the
 
 ### `tell_<c>/N` must exist for every constraint a query can ask for
 
-`Session.tellConstraint` (`src/YCHR/Internal/Runtime/Session.hs:168-181`)
+`Session.tellConstraint` (`src/YCHR/Internal/Runtime/Session.hs:206-212`)
 resolves a name and arity through the export map and calls
 `tellProcName resolved arity`. The compiler must have generated
 exactly that procedure. `tellConstraint` does check the procedure map
@@ -612,7 +710,7 @@ that dropped the end-of-activate `Store` would leave a live
 constraint invisible to `Foreach` and unobserved by reactivation,
 silently.
 
-### Session construction — `src/YCHR/Internal/Runtime/Session.hs:105-119`
+### Session construction — `src/YCHR/Internal/Runtime/Session.hs:121-135`
 
 This entry described a layered effect stack (`runCHR` building
 Unify → CHRStore → PropHistory → ReactQueue → Writer → CallStack →
@@ -645,22 +743,39 @@ host-language boundary.
 
 If you want a roughly-ordered list of the most actionable wins:
 
-1. **`ArgIndex` / `BMatchTerm` arity / `GetArg` index to a
-   non-negative representation** (§2). Mechanical — about 35 sites
-   across `src` — and it pays off most at the `VM.SExpr`
-   deserialization boundary, which today rebuilds each slot from an
-   arbitrary integer with no check. Closes both `Store.hs` bounds
-   entries in §1, including `suspArg`, which has no check at all.
-2. **Procedure-name closure check** (§5). A post-compile pass that
+1. **Delete `Occurrence.conArity`** (§2). The cheapest item in the
+   document by a wide margin: ~5 lines, no new type, no behavioural
+   change, no test churn. The field is redundant with
+   `length activeArgs` at its only birth site, so deriving it makes
+   future drift unrepresentable. The invariant it encodes is exactly
+   the one §2 previously asked for a smart constructor to enforce.
+2. **`suspArg` bounds check** (§1, `Store.hs:185-186`). One line, not
+   a type change: the same projection as `getConstraintArg` with the
+   check omitted. Its only caller passes in-range indices, so this is
+   robustness rather than a live bug.
+3. **`ArgIndex` / `BMatchTerm` arity / `GetArg` index to a
+   non-negative representation** (§2). Still worth doing, but not the
+   mechanical swap an earlier revision called it: the `VM.SExpr`
+   boundary rebuilds each slot with `fromInteger`
+   (`SExpr.hs:460,462,476,507`), which wraps rather than rejects once
+   the slot is `Word`, so a checked parser is required; `sargs !! idx`
+   and `matchTerm`'s `length` comparison need `Int` conversions. Budget
+   ~30 sites. Doing it closes both `Store.hs` bounds entries in §1 in
+   the sense that the compiler can no longer produce a negative index,
+   and makes the boundary check meaningful.
+4. **Procedure-name closure check** (§5). A post-compile pass that
    verifies every `CallExpr` resolves in the procedure map. Catches a
    whole class of compiler bugs at compile time. Must run against the
    *unioned* map — `Run.hs` adds query-time procedures that the
    compiled program's map does not contain.
-3. **Phase-indexed `Expr`** (§1, `R.LambdaExpr`). The larger
+5. **Phase-indexed `Expr`** (§1, `R.LambdaExpr`; and the two `BodyOr`
+   sites in "Panics this catalogue missed"). The larger
    follow-up: a trees-that-grow field on `LambdaExpr` (or an `Expr
    'PreLift` / `Expr 'PostLift` index) removes the constructor after
    lifting, closing all three `LambdaExpr` panics at once and
-   retiring `generateDriver`'s guard in favour of a type.
+   retiring `generateDriver`'s guard in favour of a type. A
+   `BodyGoal 'PreLower` / `'PostLower` index would do the same for
+   `Run.executeBodyGoal` and `Compile.compileBodyGoal`.
 
 ### Considered and deliberately not done
 
