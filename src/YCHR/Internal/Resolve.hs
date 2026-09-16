@@ -145,6 +145,15 @@ data ResolveError
     -- list is 'NonEmpty', so the resolver substitutes a single
     -- wildcard for recovery.
     EmptyLambdaParams
+  | -- | A @'$call'@ was used at an unsupported arity: zero (a missing
+    -- callee or a callee with no arguments) or more than
+    -- 'R.maxCallArity'. Carries the number of call arguments, so a
+    -- bare @'$call'@ and @'$call'(F)@ both report zero. The compiler
+    -- emits a dispatcher only for arities in @1 .. 'R.maxCallArity'@,
+    -- so such a call could never resolve at runtime; it is rejected
+    -- here, where the @'$call'@ shape is recognized, so that
+    -- programs, queries and generated drivers all see the error.
+    UnsupportedCallArity Int
   deriving (Eq, Show)
 
 -- | Why a @refining@ clause is rejected. A @refining@ clause is
@@ -1296,8 +1305,22 @@ termToExpr vis loc origin = go
       Wildcard -> pure R.WildcardExpr
       -- '$call'(F, A1..An) — surface dynamic dispatch. The callee is
       -- the first argument; the rest are the call's actual arguments.
-      CompoundTerm (Unqualified "$call") (f : args)
-        | not (null args) -> R.ApplyExpr <$> go f <*> traverse go args
+      -- The compiler generates a dispatcher only for arities in
+      -- @1 .. 'R.maxCallArity'@, so any other shape of the reserved
+      -- @'$call'@ symbol is rejected here rather than lowering to a
+      -- nonexistent @call_N@ procedure or silently becoming a data
+      -- term. That includes @'$call'(F)@ (no arguments), a bare
+      -- @'$call'@ atom, and @'$call'/11@ or wider. Traversal still
+      -- yields an 'ApplyExpr' so later checks see the call's operands.
+      CompoundTerm (Unqualified "$call") args -> do
+        let callee = case args of
+              f : _ -> f
+              [] -> Wildcard
+            callArity = max 0 (length args - 1)
+        if callArity < 1 || callArity > R.maxCallArity
+          then tell [noDiag (P.AnnP (UnsupportedCallArity callArity) loc origin)]
+          else pure ()
+        R.ApplyExpr <$> go callee <*> traverse go (drop 1 args)
       -- 'fun name/arity' — canonicalized by the renamer to a single
       -- 0-arity compound holding the flat 'module:name'.
       CompoundTerm

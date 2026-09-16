@@ -428,19 +428,28 @@ named `Note [Observer registration order]` so it can't drift.
 
 ## 4. Undocumented invariants the implementation relies on
 
-### `$call/N` only supports N ∈ {1, 2} — `src/YCHR/Internal/Compile.hs:1337-1342`
+### `$call/N` supports N ∈ {1, …, 10}, enforced at resolution — `src/YCHR/Internal/Resolved.hs`
 
-The compiler hardcodes `genCallFunDispatches` for `[1, 2]`. A user
-program with `$call/3` or higher produces a `CallExpr` whose name
-never resolves at runtime. There is no compile-time diagnostic.
+`maxCallArity = 10` in `YCHR.Internal.Resolved` is the single source of
+truth for the supported dynamic-call arity. `Compile.genCallFunDispatches`
+emits one `call_N` dispatcher per arity in `[1 .. maxCallArity]`, and
+`Resolve.termToExpr` rejects a surface `'$call'` outside that range —
+including zero, i.e. `'$call'(F)` and a bare `'$call'` — with
+`UnsupportedCallArity` (YCHR-16022) while it recognizes the `'$call'`
+shape.
 
-Either widen the supported set (cheap) or add a
-`UnsupportedCallArity` `CompileError` and fail early. The general
-procedure-name closure check in §5 subsumes this: `call_3` is just a
-`CallExpr` name with no procedure. A closure check has to run against
-the *unioned* procedure map, though — `YCHR.Run` adds query-time
-procedures (lifted query lambdas and regenerated `call_N` dispatches)
-that are not in the compiled program's map.
+Resolving rather than compiling is what makes the check total: programs,
+queries and generated drivers all reach the compiler only through
+`Resolve.termToExpr`, so none of them can produce an `ApplyExpr` whose
+`call_N` procedure does not exist. The compiler's arity-generic
+`callFunProcName` sites therefore do not need their own guard; they only
+ever see an in-range arity.
+
+This replaced a silent gap: `$call/3` … `$call/10` used to compile to a
+`call_N` name with no procedure and fail at runtime, and `$call/11`+
+did the same. The §5 procedure-name closure check remains worthwhile for
+the rest of the `CallExpr` namespace, but there is no longer a `$call`
+arity cap for it to subsume.
 
 ### `partArity` derived from desugared head matches runtime constraint shape — `src/YCHR/Internal/Compile.hs:404`
 
@@ -571,8 +580,7 @@ before runtime. Such a pass must run against the *unioned* procedure
 map: `Run.hs` merges query-time procedures (lifted query lambdas and
 regenerated `call_N` dispatches) into the map via
 `Session.withCHRExtra`, so a check over the compiled program's map
-alone would reject valid query-time calls. Doing this subsumes the
-`$call/N` arity gap in §4.
+alone would reject valid query-time calls.
 
 ### `reactivate_dispatch` covers every constraint type
 
@@ -645,10 +653,9 @@ If you want a roughly-ordered list of the most actionable wins:
    entries in §1, including `suspArg`, which has no check at all.
 2. **Procedure-name closure check** (§5). A post-compile pass that
    verifies every `CallExpr` resolves in the procedure map. Catches a
-   whole class of compiler bugs at compile time, and subsumes §4's
-   `$call/N` arity gap. Must run against the *unioned* map — `Run.hs`
-   adds query-time procedures that the compiled program's map does
-   not contain.
+   whole class of compiler bugs at compile time. Must run against the
+   *unioned* map — `Run.hs` adds query-time procedures that the
+   compiled program's map does not contain.
 3. **Phase-indexed `Expr`** (§1, `R.LambdaExpr`). The larger
    follow-up: a trees-that-grow field on `LambdaExpr` (or an `Expr
    'PreLift` / `Expr 'PostLift` index) removes the constructor after

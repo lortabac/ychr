@@ -51,6 +51,7 @@ module YCHR.Internal.Compile
 
     -- * Call dispatch
     genCallFunDispatches,
+    maxCallArity,
 
     -- * Re-exported name builders (see "YCHR.Internal.Compile.Names")
     funcProcName,
@@ -82,6 +83,7 @@ import YCHR.Internal.PExpr (PExpr)
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Pretty (prettyPExprSrc)
+import YCHR.Internal.Resolved (maxCallArity)
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types
   ( HeadArg (..),
@@ -1395,12 +1397,13 @@ genReactivateDispatch symTab =
 -- call dispatch
 -- ---------------------------------------------------------------------------
 
--- | Generate @call_1@ and @call_2@ dispatch procedures.
+-- | Generate one @call_N@ dispatcher for every arity in
+-- @1 .. 'maxCallArity'@.
 -- Each procedure pattern-matches on the closure/function-reference term
 -- and dispatches to the appropriate compiled function.
 genCallFunDispatches :: [D.Function] -> [Procedure]
 genCallFunDispatches functions =
-  [genCallFunDispatch functions callArity | callArity <- [1, 2]]
+  [genCallFunDispatch functions callArity | callArity <- [1 .. maxCallArity]]
 
 genCallFunDispatch :: [D.Function] -> Int -> Procedure
 genCallFunDispatch functions callArity =
@@ -1467,9 +1470,17 @@ genFunRefBranch callArity argParams func
 -- The first two arguments are the lambda identifier and the quoted
 -- source form (for pretty-printing); captured variables start at
 -- index 2, hence the @+ 2@ offset in 'captureBinds' below.
+--
+-- Only one call arity can ever match a given closure: the closure's
+-- arity is @captures + 2@, while this branch tests
+-- @(func.arity - callArity) + 2@, and @func.arity@ is @captures@ plus
+-- the source lambda's declared parameters. Requiring @callArity@ to
+-- equal that declared arity keeps the other arities' branches (dead
+-- code) out of the dispatcher.
 genLambdaBranch :: Int -> [Name] -> D.Function -> [Stmt]
 genLambdaBranch callArity argParams func
   | not (isLambdaFunc func) = []
+  | Just declaredArity <- func.lambdaArity, callArity /= declaredArity = []
   | numCaptures < 0 = []
   | otherwise =
       let funcName = Types.qualifiedToName func.name

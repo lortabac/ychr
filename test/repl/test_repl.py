@@ -27,6 +27,12 @@ REPL_TESTS = [
     ("R is '$call'(fun(X) -> X end, 1).", "R = 1.\n"),
     ("R is '$call'(fun(X) -> X + 1 end, 1).", "R = 2.\n"),
     ("R is '$call'(fun(X, _) -> X end, 1, _).", "R = 1.\n"),
+    ("R is '$call'(fun(X, Y, Z) -> X + Y + Z end, 1, 2, 3).", "R = 6.\n"),
+    ("R is call(fun(A, B, C, D) -> A + B + C + D end, 1, 2, 3, 4).", "R = 10.\n"),
+    (
+        "R is call(fun(A, B, C, D, E, F, G, H, I, J) -> A + B + C + D + E + F + G + H + I + J end, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10).",
+        "R = 55.\n",
+    ),
     ("R is var(_).", "R = true.\n"),
     ("R is var(1).", "R = false.\n"),
     ("R is integer(1).", "R = true.\n"),
@@ -108,12 +114,43 @@ REPL_TESTS = [
         "prelude:call\n:- function call(fun(A, B) -> C end, A, B) -> C.\n",
     ),
     (
+        ":info call/11",
+        "prelude:call\n"
+        ":- function call(fun(A, B, C, D, E, F, G, H, I, J) -> K end,"
+        " A, B, C, D, E, F, G, H, I, J) -> K.\n",
+    ),
+    (
         ":info call",
         "prelude:call\n"
         ":- function call(fun(A) -> B end, A) -> B.\n"
         "\n"
         "prelude:call\n"
-        ":- function call(fun(A, B) -> C end, A, B) -> C.\n",
+        ":- function call(fun(A, B) -> C end, A, B) -> C.\n"
+        "\n"
+        "prelude:call\n"
+        ":- function call(fun(A, B, C) -> D end, A, B, C) -> D.\n"
+        "\n"
+        "prelude:call\n"
+        ":- function call(fun(A, B, C, D) -> E end, A, B, C, D) -> E.\n"
+        "\n"
+        "prelude:call\n"
+        ":- function call(fun(A, B, C, D, E) -> F end, A, B, C, D, E) -> F.\n"
+        "\n"
+        "prelude:call\n"
+        ":- function call(fun(A, B, C, D, E, F) -> G end, A, B, C, D, E, F) -> G.\n"
+        "\n"
+        "prelude:call\n"
+        ":- function call(fun(A, B, C, D, E, F, G) -> H end, A, B, C, D, E, F, G) -> H.\n"
+        "\n"
+        "prelude:call\n"
+        ":- function call(fun(A, B, C, D, E, F, G, H) -> I end, A, B, C, D, E, F, G, H) -> I.\n"
+        "\n"
+        "prelude:call\n"
+        ":- function call(fun(A, B, C, D, E, F, G, H, I) -> J end, A, B, C, D, E, F, G, H, I) -> J.\n"
+        "\n"
+        "prelude:call\n"
+        ":- function call(fun(A, B, C, D, E, F, G, H, I, J) -> K end,"
+        " A, B, C, D, E, F, G, H, I, J) -> K.\n",
     ),
     (
         ":i nl",
@@ -170,6 +207,34 @@ def test_repl(query, expected, ychr_bin):
     )
     assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
     assert result.stdout == expected
+
+
+def test_repl_unsupported_call_arity(ychr_bin):
+    """A query whose `$call` is outside the supported 1..10 arity range
+    is rejected by the resolver (YCHR-16022) rather than becoming a data
+    term (zero) or a runtime miss on a `call_11` procedure the compiler
+    never emits (over ten)."""
+    for query, given in [
+        # One argument is the callee, so this applies it to nothing.
+        ("R is '$call'(fun(A) -> A end).", 0),
+        (
+            "R is '$call'(fun(A, B, C, D, E, F, G, H, I, J, K) -> A end,"
+            " 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11).",
+            11,
+        ),
+    ]:
+        result = subprocess.run(
+            [ychr_bin, "repl", "--quiet"],
+            input=query + "\n",
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+        assert "YCHR-16022" in result.stdout, result.stdout
+        assert (
+            f"'$call' takes between 1 and 10 arguments, but was given {given}"
+            in result.stdout
+        ), result.stdout
 
 
 def test_info_hidden_constructors(ychr_bin, tmp_path):

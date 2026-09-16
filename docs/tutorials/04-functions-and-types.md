@@ -163,8 +163,10 @@ closure(R) <=> Add10 is make_adder(10), R is call(Add10, 5).
 - `fun(X) -> Body end` — an anonymous function. `end` delimits the
   body, so a lambda can sit inside an argument list without extra
   parentheses.
-- `call(F, X)` — apply a callable (reference, lambda, or closure). A
-  prelude function; `call(F, X, Y)` and up for higher arities.
+- `call(F, X)` — apply a callable (reference, lambda, or closure). The
+  prelude's typed `call/N` family covers `call/2` through `call/11`
+  (unary through ten-argument application); the wired-in
+  `'$call'(F, A1, …, An)` is the untyped primitive underneath.
 
 ```sh
 ychr run -g 'by_ref(R)' --show-bindings examples/closures.chr

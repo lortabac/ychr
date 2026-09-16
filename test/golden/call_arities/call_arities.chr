@@ -1,0 +1,38 @@
+:- module(call_arities, [result/2, fun ref3/3, fun ref4/4, fun ref5/5, fun ref6/6, fun ref7/7, fun ref8/8, fun ref9/9, fun ref10/10]).
+:- chr_constraint result/2.
+
+:- function ref3/3, ref4/4, ref5/5, ref6/6, ref7/7, ref8/8, ref9/9, ref10/10.
+
+% One function reference per arity 3..10. Each sums its arguments, so
+% the expected result is 1 + ... + N no matter which closure kind ran.
+ref3(A, B, C) -> A + B + C.
+ref4(A, B, C, D) -> A + B + C + D.
+ref5(A, B, C, D, E) -> A + B + C + D + E.
+ref6(A, B, C, D, E, F) -> A + B + C + D + E + F.
+ref7(A, B, C, D, E, F, G) -> A + B + C + D + E + F + G.
+ref8(A, B, C, D, E, F, G, H) -> A + B + C + D + E + F + G + H.
+ref9(A, B, C, D, E, F, G, H, I) -> A + B + C + D + E + F + G + H + I.
+ref10(A, B, C, D, E, F, G, H, I, J) -> A + B + C + D + E + F + G + H + I + J.
+
+% Each rule applies a same-arity reference and a same-arity lambda to
+% 1..N and collects both results in one list, so a single goal covers
+% both closure kinds at that arity.
+result(3, R) <=> R is ['$call'(fun ref3/3, 1, 2, 3), '$call'(fun(A, B, C) -> A + B + C end, 1, 2, 3)].
+result(4, R) <=> R is ['$call'(fun ref4/4, 1, 2, 3, 4), '$call'(fun(A, B, C, D) -> A + B + C + D end, 1, 2, 3, 4)].
+result(5, R) <=> R is ['$call'(fun ref5/5, 1, 2, 3, 4, 5), '$call'(fun(A, B, C, D, E) -> A + B + C + D + E end, 1, 2, 3, 4, 5)].
+result(6, R) <=> R is ['$call'(fun ref6/6, 1, 2, 3, 4, 5, 6), '$call'(fun(A, B, C, D, E, F) -> A + B + C + D + E + F end, 1, 2, 3, 4, 5, 6)].
+result(7, R) <=> R is ['$call'(fun ref7/7, 1, 2, 3, 4, 5, 6, 7), '$call'(fun(A, B, C, D, E, F, G) -> A + B + C + D + E + F + G end, 1, 2, 3, 4, 5, 6, 7)].
+result(8, R) <=> R is ['$call'(fun ref8/8, 1, 2, 3, 4, 5, 6, 7, 8), '$call'(fun(A, B, C, D, E, F, G, H) -> A + B + C + D + E + F + G + H end, 1, 2, 3, 4, 5, 6, 7, 8)].
+result(9, R) <=> R is ['$call'(fun ref9/9, 1, 2, 3, 4, 5, 6, 7, 8, 9), '$call'(fun(A, B, C, D, E, F, G, H, I) -> A + B + C + D + E + F + G + H + I end, 1, 2, 3, 4, 5, 6, 7, 8, 9)].
+result(10, R) <=> R is ['$call'(fun ref10/10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10), '$call'(fun(A, B, C, D, E, F, G, H, I, J) -> A + B + C + D + E + F + G + H + I + J end, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)].
+
+% A capturing lambda follows the same dispatcher path but carries its
+% free variables in the closure term, so the branch matches a wider
+% @__closure@ and prepends the captures to the call's arguments. Cover
+% it at a low and at the highest arity.
+result(11, R) <=> N is 100, R is '$call'(fun(X, Y, Z) -> N + X + Y + Z end, 1, 2, 3).
+result(12, R) <=> N is 1, R is '$call'(fun(A, B, C, D, E, F, G, H, I, J) -> N + A + B + C + D + E + F + G + H + I + J end, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10).
+
+% A closure can capture more than one free variable; the dispatcher
+% unpacks each capture in turn before prepending them to the arguments.
+result(13, R) <=> N is 10, M is 20, R is '$call'(fun(A, B, C, D, E) -> N + M + A + B + C + D + E end, 1, 2, 3, 4, 5).

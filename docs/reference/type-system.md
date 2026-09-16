@@ -1300,7 +1300,13 @@ call(F, X) -> '$call'(F, X).
 ```
 
 The internal `$call` primitive is a host-level operation typed `any`;
-checking happens at the `call` boundary, not at `$call`.
+checking happens at the `call` boundary, not at `$call`. The prelude
+declares one `call/N` overload per supported arity — `call/2` through
+`call/11`, every one of them typed
+`call(fun(A, …) -> R end, A, …) -> R` — so first-class application is
+checked up to ten arguments. The primitive itself accepts one to ten
+arguments; any other arity, including zero, is `YCHR-16022`, raised
+during resolution.
 
 
 ## Type Definition Validation

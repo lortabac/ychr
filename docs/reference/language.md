@@ -294,7 +294,7 @@ decided at resolution (see [Tell-side evaluation](#tell-side-evaluation)).
 | `quote(E)` | `E` as data, unevaluated ([`quote/1`](#the-quote1-quoting-form)). |
 | `fun(X, Y) -> Body end` | Lambda; parameters are variables or wildcards. |
 | `fun name/arity` | Function reference. |
-| `'$call'(F, A1, A2)` | Wired-in dynamic call; prefer the prelude's `call/N`. |
+| `'$call'(F, A1, …, An)` | Wired-in dynamic call, 1–10 arguments; prefer the prelude's `call/N`. |
 | `X is E`, `X = E`, `A == B` | Evaluation, unification (tell), structural equality (ask). |
 | `A ; B` | [Disjunction](#disjunction-in-rule-bodies) in a rule body. |
 
@@ -671,10 +671,20 @@ R is call(fun(X) -> X + 1 end, 5).
 R is call(fun double/1, 10).
 ```
 
+One wrapper covers each supported arity: `call/N` applies its first
+argument to `N-1` further arguments, so the family spans `call/2`
+(unary application) through `call/11` (ten arguments), with a
+polymorphic signature per arity. For example, `call/4` is typed
+`call(fun(A, B, C) -> D end, A, B, C) -> D`.
+
 `call` is a thin wrapper over the wired-in primitive
 `'$call'(F, A1, ..., An)`, which the renamer recognizes directly. The
 `'$'` prefix is not a naming convention and `$` is not reserved for
-other primitives. Use `'$call'` only below the typed wrapper.
+other primitives. `'$call'` accepts one to ten arguments; any other
+arity, including zero, is `YCHR-16022`, raised during resolution
+because the compiler generates a dispatcher only for that range.
+Prefer `call/N` and reserve `'$call'` for the layer below the typed
+wrapper.
 
 ## Host calls
 

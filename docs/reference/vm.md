@@ -235,8 +235,11 @@ For a function `math:factorial/1`:
 | func | `func_math__factorial1` |
 
 `reactivate_dispatch` is unique and not parameterized by constraint
-name; the `call_n` dispatchers (`call_1`, `call_2`, ...) are unique
-per call arity.
+name; the `call_n` dispatchers (`call_1` … `call_10`) are unique
+per call arity. A dispatcher carries a branch for each function
+reference at that arity and for each lifted lambda whose source lambda
+declared that arity; other lambda arities cannot match the closure and
+are not emitted.
 
 **Non-ASCII encoding.** A character outside ASCII is encoded as
 `%%u<hex>`, `<hex>` being the Unicode code point in lowercase
@@ -804,7 +807,7 @@ reflexivity @ leq(X, X) <=> true.
 The output of `ychr compile -t vm mymodule.chr`, reindented. The
 prelude is always compiled in, so the real dump also has one
 `evaluables` entry, one `func_*` procedure and one export per prelude
-function, plus the `call_1` / `call_2` dispatchers — elided here
+function, plus the `call_1` … `call_10` dispatchers — elided here
 (`; ...`). The constraint is `mymodule:leq/2`, so procedure names
 follow `<prefix>_mymodule__leq2`:
 
@@ -858,7 +861,7 @@ follow `<prefix>_mymodule__leq2`:
                       (arg-id (id-var "susp")))))
         ()))
 
-    ; ... call_1 / call_2 dispatcher procedures elided
+    ; ... call_1 … call_10 dispatcher procedures elided
     )
 
   (exports

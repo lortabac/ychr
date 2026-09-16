@@ -8,8 +8,10 @@ module YCHR.CompileTest (tests) where
 
 import Data.Maybe (isJust, isNothing)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import Test.Tasty.HUnit (assertBool, assertEqual, assertFailure, testCase, (@?=))
+import YCHR.Internal.Compile (maxCallArity)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.VM qualified as VM
 import YCHR.Run (compileModules)
@@ -21,7 +23,8 @@ tests =
     [ indexConditionPushdownTests,
       passiveOccurrencesTests,
       boolPatternTests,
-      softGuardWrapTests
+      softGuardWrapTests,
+      callDispatchTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -349,3 +352,81 @@ softGuardWrapTests =
       case findProcedure prog procName of
         Nothing -> error ("procedure not found: " ++ show procName)
         Just p -> any isSoftGuard (ifConditions p.body)
+
+-- ---------------------------------------------------------------------------
+-- Call dispatcher arities
+-- ---------------------------------------------------------------------------
+
+-- | The compiler emits one @call_N@ dispatcher for every arity in
+-- @1 .. 'maxCallArity'@, whether or not the program happens to define a
+-- function at that arity. This pins the promised set and the parameter
+-- shape (the closure plus the N arguments); the golden @call_arities@
+-- test exercises the runtime behaviour the shape encodes.
+--
+-- It also pins which of those dispatchers a lifted lambda contributes a
+-- branch to. A closure only ever matches the arity its source lambda
+-- declared, so the other arities' branches are dead code and must not
+-- be emitted.
+callDispatchTests :: TestTree
+callDispatchTests =
+  testGroup
+    "Call dispatch arities"
+    [ testCase "the supported ceiling is 10" $
+        maxCallArity @?= 10,
+      testCase "a dispatcher is emitted for every arity in 1..maxCallArity" $ do
+        prog <- compileOrFail [("order.chr", leqSource)]
+        mapM_ (assertDispatcher prog) [1 .. maxCallArity],
+      testCase "no dispatcher is emitted above maxCallArity" $ do
+        prog <- compileOrFail [("order.chr", leqSource)]
+        assertBool
+          ("call_" ++ show (maxCallArity + 1) ++ " must not exist")
+          (isNothing (findProcedure prog (callProcName (maxCallArity + 1)))),
+      testCase "a lambda contributes a branch only to its declared arity" $ do
+        prog <- compileOrFail [("m.chr", lambdaSource)]
+        assertEqual
+          "call_3 closure branches (captures + 2)"
+          [4]
+          (closureArities prog 3)
+        mapM_
+          ( \n ->
+              assertEqual
+                ("call_" ++ show n ++ " closure branches")
+                []
+                (closureArities prog n)
+          )
+          [1, 2, 4, 5, 6, 7, 8, 9, 10]
+    ]
+  where
+    callProcName :: Int -> Text
+    callProcName n = "call_" <> T.pack (show n)
+    assertDispatcher :: CompiledProgram -> Int -> IO ()
+    assertDispatcher prog n =
+      case findProcedure prog (callProcName n) of
+        Nothing -> assertFailure ("missing dispatcher " ++ show (callProcName n))
+        Just p ->
+          assertEqual
+            ("call_" ++ show n ++ ": closure parameter plus one per argument")
+            (n + 1)
+            (length p.params)
+    closureArities :: CompiledProgram -> Int -> [Int]
+    closureArities prog n =
+      case findProcedure prog (callProcName n) of
+        Nothing -> []
+        Just p ->
+          [ arity
+          | VM.BMatchTerm _ (VM.Name "__closure") arity <- ifConditions p.body
+          ]
+
+-- | A module whose only lambda takes three parameters and captures two
+-- free variables, so the lifted function has arity 5 and its closure
+-- arity is 4. Importing no higher-order library keeps this the only
+-- lambda in the program, which is what lets the test attribute every
+-- closure branch to it.
+lambdaSource :: Text
+lambdaSource =
+  ":- module(m, [go/3, mk/2]).\n\
+  \:- use_module(library(prelude)).\n\
+  \:- chr_constraint go(any, any, any).\n\
+  \:- function mk/2.\n\
+  \mk(X, Y) -> fun(A, B, C) -> X + Y + A + B + C end.\n\
+  \r @ go(X, Y, R) <=> F is mk(X, Y), R is '$call'(F, 1, 2, 3).\n"

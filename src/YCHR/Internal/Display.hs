@@ -236,6 +236,7 @@ resolveErrorCode (ConstructorFunctionCollision _) = ErrorCode 16020
 resolveErrorCode (InvalidRefining _ _) = ErrorCode 16021
 resolveErrorCode (LambdaParamError _) = ErrorCode 16017
 resolveErrorCode EmptyLambdaParams = ErrorCode 16018
+resolveErrorCode (UnsupportedCallArity _) = ErrorCode 16022
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 was previously used for OperatorInImportList; now reserved
@@ -606,6 +607,17 @@ resolveErrorMsg EmptyLambdaParams =
   withHint
     "Lambda has no parameters"
     "lambdas must declare at least one parameter; use ':- function' for a no-arg helper"
+resolveErrorMsg (UnsupportedCallArity arity) =
+  withHint
+    ( "'$call' takes between 1 and "
+        ++ show R.maxCallArity
+        ++ " arguments, but was given "
+        ++ show arity
+    )
+    ( "apply the callable to between 1 and "
+        ++ show R.maxCallArity
+        ++ " arguments"
+    )
 resolveErrorMsg (ConstraintFunctionCollision name) =
   withHint
     ( "'"

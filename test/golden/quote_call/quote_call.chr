@@ -1,0 +1,10 @@
+:- module(quote_call, [t/2]).
+:- use_module(library(prelude)).
+:- chr_constraint t(any, any).
+
+% `quote/1` is the opt-out: a `$call` inside it is data, so neither the
+% zero-argument form nor a bare atom is an arity error. Comparing the
+% quoted term with itself keeps the pinned output backend-independent
+% (the two backends differ only in whether they quote the `$call` atom).
+t(1, R) <=> R is (quote('$call'(1)) == quote('$call'(1))).
+t(2, R) <=> R is (quote('$call') == quote('$call')).

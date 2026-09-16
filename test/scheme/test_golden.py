@@ -214,3 +214,27 @@ def test_scheme_golden(test_dir, case_name, ychr_bin, guile_bin, scheme_lib_dir,
 
     # 4. Compare output
     assert result.stdout == expected
+
+
+def test_gen_driver_over_arity_goal(ychr_bin, project_root, tmp_path):
+    """`gen-driver` resolves its goal through the shared resolver, so an
+    over-arity `$call` in the goal is rejected with YCHR-16022 there too,
+    not generated into a driver that misses a `call_11` procedure."""
+    program = tmp_path / "gd.chr"
+    program.write_text(
+        ":- module(gd, [go/1]).\n"
+        ":- use_module(library(prelude)).\n"
+        ":- chr_constraint go(any).\n"
+    )
+    goal = (
+        "go('$call'(fun(A, B, C, D, E, F, G, H, I, J, K) -> A end,"
+        " 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11))"
+    )
+    result = subprocess.run(
+        [ychr_bin, "gen-driver", "-g", goal, str(program)],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    assert result.returncode != 0
+    assert "YCHR-16022" in result.stdout + result.stderr

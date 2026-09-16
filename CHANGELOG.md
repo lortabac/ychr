@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+New: first-class application now covers arities 1 through 10. The
+wired-in dynamic call primitive `'$call'` previously dispatched only
+arities 1 and 2; the compiler now emits `call_1` … `call_10`
+dispatchers, and the prelude's typed family grows to match, adding
+`call/4` … `call/11` (one overload per arity, so `'$call'` no longer
+has to be reached for directly).
+
+- The prelude is imported in full by every module, so a module that
+  declares its own `call/4` … `call/11` now collides with the prelude
+  (`YCHR-20001`), exactly as any other prelude name would.
+- A `'$call'` outside the supported range is rejected during
+  resolution with `YCHR-16022` instead of lowering to a `call_N`
+  procedure the compiler never emits. That covers both ends: a callee
+  applied to no arguments (or a bare `'$call'`) is no longer silently
+  treated as a data term, and a call wider than ten arguments is no
+  longer deferred to a runtime miss. This covers programs, queries and
+  generated drivers, since all of them translate surface `'$call'`
+  through the same resolver.
+- Lambdas no longer contribute dead dispatch branches. A closure can
+  only be invoked at the arity its source lambda declared, so
+  `genLambdaBranch` emits one branch for that arity instead of one per
+  arity up to the lifted function's total (captures included) arity.
+  This keeps the extra dispatchers from multiplying the size of
+  lambda-heavy VM programs.
+- See the [language reference](docs/reference/language.md).
+
 New: refinement-predicate declarations. A closed `:- function` with the
 signature `name(any) -> bool` may carry a `refining` clause naming the
 type a successful call proves of its argument:

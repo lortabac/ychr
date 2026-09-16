@@ -1,0 +1,31 @@
+:- module(call_wrappers, [result/2, fun ref1/1, fun ref2/2, fun ref3/3, fun ref4/4, fun ref5/5, fun ref6/6, fun ref7/7, fun ref8/8, fun ref9/9, fun ref10/10]).
+:- chr_constraint result/2.
+
+:- function ref1/1, ref2/2, ref3/3, ref4/4, ref5/5, ref6/6, ref7/7, ref8/8, ref9/9, ref10/10.
+
+% One function reference per arity 1..10. Each sums its arguments.
+ref1(A) -> A.
+ref2(A, B) -> A + B.
+ref3(A, B, C) -> A + B + C.
+ref4(A, B, C, D) -> A + B + C + D.
+ref5(A, B, C, D, E) -> A + B + C + D + E.
+ref6(A, B, C, D, E, F) -> A + B + C + D + E + F.
+ref7(A, B, C, D, E, F, G) -> A + B + C + D + E + F + G.
+ref8(A, B, C, D, E, F, G, H) -> A + B + C + D + E + F + G + H.
+ref9(A, B, C, D, E, F, G, H, I) -> A + B + C + D + E + F + G + H + I.
+ref10(A, B, C, D, E, F, G, H, I, J) -> A + B + C + D + E + F + G + H + I + J.
+
+% Each rule applies a same-arity reference and a same-arity lambda
+% through the prelude's typed `call/N` wrapper (never the wired-in
+% `'$call'`), collecting both results so one goal covers both closure
+% kinds at that arity.
+result(1, R) <=> R is [call(fun ref1/1, 1), call(fun(A) -> A end, 1)].
+result(2, R) <=> R is [call(fun ref2/2, 1, 2), call(fun(A, B) -> A + B end, 1, 2)].
+result(3, R) <=> R is [call(fun ref3/3, 1, 2, 3), call(fun(A, B, C) -> A + B + C end, 1, 2, 3)].
+result(4, R) <=> R is [call(fun ref4/4, 1, 2, 3, 4), call(fun(A, B, C, D) -> A + B + C + D end, 1, 2, 3, 4)].
+result(5, R) <=> R is [call(fun ref5/5, 1, 2, 3, 4, 5), call(fun(A, B, C, D, E) -> A + B + C + D + E end, 1, 2, 3, 4, 5)].
+result(6, R) <=> R is [call(fun ref6/6, 1, 2, 3, 4, 5, 6), call(fun(A, B, C, D, E, F) -> A + B + C + D + E + F end, 1, 2, 3, 4, 5, 6)].
+result(7, R) <=> R is [call(fun ref7/7, 1, 2, 3, 4, 5, 6, 7), call(fun(A, B, C, D, E, F, G) -> A + B + C + D + E + F + G end, 1, 2, 3, 4, 5, 6, 7)].
+result(8, R) <=> R is [call(fun ref8/8, 1, 2, 3, 4, 5, 6, 7, 8), call(fun(A, B, C, D, E, F, G, H) -> A + B + C + D + E + F + G + H end, 1, 2, 3, 4, 5, 6, 7, 8)].
+result(9, R) <=> R is [call(fun ref9/9, 1, 2, 3, 4, 5, 6, 7, 8, 9), call(fun(A, B, C, D, E, F, G, H, I) -> A + B + C + D + E + F + G + H + I end, 1, 2, 3, 4, 5, 6, 7, 8, 9)].
+result(10, R) <=> R is [call(fun ref10/10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10), call(fun(A, B, C, D, E, F, G, H, I, J) -> A + B + C + D + E + F + G + H + I + J end, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10)].

@@ -138,6 +138,16 @@ data Function = Function
     -- | The refinement type declared via @refining@, trusted as an
     -- axiom by the type checker. 'Nothing' for an ordinary function.
     refining :: Maybe TypeExpr,
+    -- | For a lambda lifted by the desugarer (@__lambda_N@), the
+    -- number of parameters the source lambda declared. The lifted
+    -- function's 'arity' counts those parameters /plus/ the captured
+    -- free variables the lifter prepends, and the closure term it
+    -- builds has the captures as its only payload. A closure can
+    -- therefore only be invoked with exactly this many arguments;
+    -- 'YCHR.Internal.Compile.genLambdaBranch' uses that to skip
+    -- dispatch branches no call can reach. 'Nothing' for an ordinary
+    -- function.
+    lambdaArity :: Maybe Int,
     equations :: AnnP [Equation]
   }
   deriving (Show)

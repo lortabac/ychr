@@ -28,6 +28,9 @@ module YCHR.Internal.Resolved
     FunctionEquation (..),
     Expr (..),
 
+    -- * Limits
+    maxCallArity,
+
     -- * Operations
     exprToTerm,
   )
@@ -161,6 +164,15 @@ data Expr
   | LambdaExpr (NonEmpty HeadArg) (NonEmpty Expr)
   | HostExpr Text [Expr]
   deriving (Show, Eq)
+
+-- | The largest number of arguments an 'ApplyExpr' (surface
+-- @'$call'(F, A1, …, An)@) may carry. The compiler emits one @call_N@
+-- dispatcher for every arity in @1 .. maxCallArity@, so the resolver
+-- rejects @'$call'@ beyond this limit with 'UnsupportedCallArity'
+-- rather than letting it fail at runtime; see the @$call\/N@ entry in
+-- @dev-docs\/INVARIANTS.md@.
+maxCallArity :: Int
+maxCallArity = 10
 
 -- | Convert an 'Expr' back to a surface-shaped 'Term'. Used as a
 -- narrow bridge for code that still operates on 'Term' (notably the

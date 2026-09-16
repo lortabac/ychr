@@ -40,6 +40,14 @@
     fun writeln/1,
     fun call/2,
     fun call/3,
+    fun call/4,
+    fun call/5,
+    fun call/6,
+    fun call/7,
+    fun call/8,
+    fun call/9,
+    fun call/10,
+    fun call/11,
     op(500, yfx, '+'),
     op(500, yfx, '-'),
     op(400, yfx, '*'),
@@ -122,6 +130,14 @@
     (list_to_compound(list(any)) -> any),
     (call(fun(A) -> B end, A) -> B),
     (call(fun(A, B) -> C end, A, B) -> C),
+    (call(fun(A, B, C) -> D end, A, B, C) -> D),
+    (call(fun(A, B, C, D) -> E end, A, B, C, D) -> E),
+    (call(fun(A, B, C, D, E) -> F end, A, B, C, D, E) -> F),
+    (call(fun(A, B, C, D, E, F) -> G end, A, B, C, D, E, F) -> G),
+    (call(fun(A, B, C, D, E, F, G) -> H end, A, B, C, D, E, F, G) -> H),
+    (call(fun(A, B, C, D, E, F, G, H) -> I end, A, B, C, D, E, F, G, H) -> I),
+    (call(fun(A, B, C, D, E, F, G, H, I) -> J end, A, B, C, D, E, F, G, H, I) -> J),
+    (call(fun(A, B, C, D, E, F, G, H, I, J) -> K end, A, B, C, D, E, F, G, H, I, J) -> K),
     (write(string) -> any),
     (nl() -> any),
     (writeln(string) -> any).
@@ -216,7 +232,17 @@ writeln(S) -> host:writeln(S).
 % A copy with fresh variables.
 copy_term(T) -> host:copy_term(T).
 
-% Typed wrappers over the wired-in `'$call'`.
-call(F, X) -> '$call'(F, X).
-
-call(F, X, Y) -> '$call'(F, X, Y).
+% Typed wrappers over the wired-in `'$call'`. One per supported call
+% arity: `call/N` applies a callable to N-1 arguments, so the family
+% spans `call/2` through `call/11` (one to ten arguments). The callable
+% is named `Fn` so the argument names can run `A`..`K` without a clash.
+call(Fn, A) -> '$call'(Fn, A).
+call(Fn, A, B) -> '$call'(Fn, A, B).
+call(Fn, A, B, C) -> '$call'(Fn, A, B, C).
+call(Fn, A, B, C, D) -> '$call'(Fn, A, B, C, D).
+call(Fn, A, B, C, D, E) -> '$call'(Fn, A, B, C, D, E).
+call(Fn, A, B, C, D, E, F) -> '$call'(Fn, A, B, C, D, E, F).
+call(Fn, A, B, C, D, E, F, G) -> '$call'(Fn, A, B, C, D, E, F, G).
+call(Fn, A, B, C, D, E, F, G, H) -> '$call'(Fn, A, B, C, D, E, F, G, H).
+call(Fn, A, B, C, D, E, F, G, H, I) -> '$call'(Fn, A, B, C, D, E, F, G, H, I).
+call(Fn, A, B, C, D, E, F, G, H, I, J) -> '$call'(Fn, A, B, C, D, E, F, G, H, I, J).
