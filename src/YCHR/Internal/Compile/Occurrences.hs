@@ -63,7 +63,7 @@ collectOccurrences symTab prog = do
   let grouped =
         List.foldl'
           ( \m occ ->
-              occMapAppend (Identifier occ.conName occ.conArity) occ m
+              occMapAppend (Identifier occ.conName (occurrenceArity occ)) occ m
           )
           occMapEmpty
           allOccs
@@ -160,7 +160,6 @@ mkOccurrence symTab rule ruleId' display combined activeIdx activeCon activeIsKe
     pure
       Occurrence
         { conName = qualifiedToName activeCon.name,
-          conArity = length activeCon.args,
           number = OccurrenceNumber 0,
           rule = rule,
           ruleId = ruleId',

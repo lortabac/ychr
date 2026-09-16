@@ -233,6 +233,21 @@ removable when closed.
   user-facing gap, and it closes with the other two `LambdaExpr`
   panics when `R.Expr` grows a phase index (see §1).
 
+- **`Occurrence.conArity` is derived, not stored.** Deleted the
+  redundant `Int` field and replaced it with `occurrenceArity ::
+  Occurrence -> Int` (`Compile.Types`), defined as `length
+  occ.activeArgs`. `Desugar.normalizeArg` maps every head term to
+  exactly one `HeadArg`, so at the field's single birth site
+  (`mkOccurrence`) it was literally `length activeCon.args` —
+  identical to `activeArgs` — and nothing ever cross-checked the two.
+  The two readers (the occurrence-map key in `collectOccurrences` and
+  `argNames` in `Compile.inScopeBeforeLoop`) now go through the
+  accessor, so drift between the stored arity and the argument list is
+  unrepresentable. No behavioural change: the renamer already rejects
+  an arity-mismatched head constraint (`YCHR-20002`). The §2 entry
+  "Compiler IR carries unchecked arity fields" retains the `Partner`
+  and `IndexCondition` items.
+
 
 ## 1. `error` / `runtimeErrorS` for "can't happen" cases
 
@@ -387,47 +402,17 @@ The real defence is already in place and structural: `withUnboundVar`
 contents goes through a continuation that is *given* the observers,
 so there is no arm in which they can be silently dropped. Treat this
 entry as narrowed to "the drain/transfer discipline is a `Var.hs`
-convention, not a type", and do not expect a cheap type fix. The
-honest low-hanging item is a different §2 entry: the redundant
-`Occurrence.conArity` field below.
+convention, not a type", and do not expect a cheap type fix.
 
 ### Compiler IR carries unchecked arity fields — `src/YCHR/Internal/Compile/Types.hs`
-
-- **`Occurrence.conArity :: Int` is a redundant field — the cheapest
-  win in this document.** `activeArgs` is already
-  `[HeadArg]` (superseded by the HNF entry under "Already closed"),
-  and `Desugar.normalizeArg` (`Desugar.hs:321-352`) maps every head
-  term to exactly one `HeadArg`, so `conArity == length activeArgs`
-  holds by construction at the single birth site: both fields are
-  literally `activeCon.args` (`Occurrences.hs:163,170`). Nothing
-  cross-checks them afterwards. There are exactly two readers —
-  `Identifier occ.conName occ.conArity` as the occurrence-map key
-  (`Occurrences.hs:66`) and `argNames occ.conArity` for guard scoping
-  (`Compile.hs:736`) — and no test constructs an `Occurrence`.
-
-  **Fix: delete the field and derive arity from `activeArgs`** (inline
-  `length occ.activeArgs`, or a one-line `occurrenceArity = length .
-  activeArgs`). That makes future drift unrepresentable rather than
-  merely unchecked, which is stronger than the smart-constructor
-  route below and costs ~5 lines. No behavioural change: the renamer
-  already rejects an arity-mismatched head constraint
-  (`YCHR-20002`), so head arity and symbol-table arity agree.
-
-  Related, same "derive instead of store" shape: `VM.Program`
-  (`src/YCHR/Internal/VM/Types.hs:103,110`) stores `numTypes` next to
-  `typeNames` and `numRules` next to `ruleNames`, with the invariants
-  `numTypes == length typeNames` and `numRules == length ruleNames`
-  never checked. `Compile.hs:138-141` derives both pairs from the same
-  symbol table / rule list today. Lower value than `conArity`: the
-  counts are read by SExpr serialization and the Scheme backend's
-  `%make-session`, so removal is a wider edit.
 
 - `Partner { constraint :: HeadConstraint }` — note the type is
   `HeadConstraint`, not `QualifiedConstraint` (that narrowing is the
   same HNF change). `length constraint.args` is assumed to match the
   symbol table's recorded arity; not cross-checked. Harder to encode
-  here than for `Occurrence`, because the symbol-table arity is not a
-  field of `Partner` and `cType` is already the resolved form.
+  here than the (now deleted) `Occurrence.conArity`, because the
+  symbol-table arity is not a field of `Partner` and `cType` is
+  already the resolved form.
 
 - `IndexCondition { argIndex :: ArgIndex, ... }` — `argIndex` is not
   bounds-checked against the partner's arity at construction. The
@@ -437,10 +422,18 @@ honest low-hanging item is a different §2 entry: the redundant
   today. Encoding it would be belt-and-braces rather than closing a
   live hole.
 
-A common fix for the latter two: make arity a `newtype` and have a
-smart constructor for `Partner`/`IndexCondition` that reconciles or
-rejects mismatches. Do `conArity` first; it is the one that needs no
-new type at all.
+A common fix for these two: make arity a `newtype` and have a smart
+constructor for `Partner`/`IndexCondition` that reconciles or rejects
+mismatches.
+
+Related, same "derive instead of store" shape: `VM.Program`
+(`src/YCHR/Internal/VM/Types.hs:103,110`) stores `numTypes` next to
+`typeNames` and `numRules` next to `ruleNames`, with the invariants
+`numTypes == length typeNames` and `numRules == length ruleNames`
+never checked. `Compile.hs:138-141` derives both pairs from the same
+symbol table / rule list today. The counts are read by SExpr
+serialization and the Scheme backend's `%make-session`, so removal is
+a wider edit.
 
 ### VM IR `Int`/`ArgIndex` slots accept negatives — `src/YCHR/Internal/VM/Types.hs`
 
@@ -477,15 +470,13 @@ is unconstrained; a smart constructor `mkOccurrenceNumber :: Int ->
 Maybe OccurrenceNumber` (or starting from `1` only) would enforce it.
 Note that the real defect here is not `assignNumbers` but the
 `OccurrenceNumber 0` an `Occurrence` is born with in `mkOccurrence`
-(`Occurrences.hs:164`) — a placeholder that is always overwritten
+(`Occurrences.hs:163`) — a placeholder that is always overwritten
 moments later, and the only value a 1-based smart constructor would
 have to reject. Low value; deferred. The structural alternative is a
 `NumberedOccurrence` wrapper (an unnumbered `Occurrence` becomes a
 numbered one in the pass), which removes the placeholder instead of
 validating it, at the cost of touching the three `number` readers
-(`Compile.hs:318`, `Occurrences.hs:77`, `Names.hs:205-208`). Still a
-worse ratio than deleting `Occurrence.conArity` in §2 — same module,
-same redundant-field shape, but that one needs no new type.
+(`Compile.hs:318`, `Occurrences.hs:77`, `Names.hs:205-208`).
 
 ### `tc_unify` argument order — `typechecker/solver.chr`
 
@@ -743,17 +734,11 @@ host-language boundary.
 
 If you want a roughly-ordered list of the most actionable wins:
 
-1. **Delete `Occurrence.conArity`** (§2). The cheapest item in the
-   document by a wide margin: ~5 lines, no new type, no behavioural
-   change, no test churn. The field is redundant with
-   `length activeArgs` at its only birth site, so deriving it makes
-   future drift unrepresentable. The invariant it encodes is exactly
-   the one §2 previously asked for a smart constructor to enforce.
-2. **`suspArg` bounds check** (§1, `Store.hs:185-186`). One line, not
+1. **`suspArg` bounds check** (§1, `Store.hs:185-186`). One line, not
    a type change: the same projection as `getConstraintArg` with the
    check omitted. Its only caller passes in-range indices, so this is
    robustness rather than a live bug.
-3. **`ArgIndex` / `BMatchTerm` arity / `GetArg` index to a
+2. **`ArgIndex` / `BMatchTerm` arity / `GetArg` index to a
    non-negative representation** (§2). Still worth doing, but not the
    mechanical swap an earlier revision called it: the `VM.SExpr`
    boundary rebuilds each slot with `fromInteger`
@@ -763,12 +748,12 @@ If you want a roughly-ordered list of the most actionable wins:
    ~30 sites. Doing it closes both `Store.hs` bounds entries in §1 in
    the sense that the compiler can no longer produce a negative index,
    and makes the boundary check meaningful.
-4. **Procedure-name closure check** (§5). A post-compile pass that
+3. **Procedure-name closure check** (§5). A post-compile pass that
    verifies every `CallExpr` resolves in the procedure map. Catches a
    whole class of compiler bugs at compile time. Must run against the
    *unioned* map — `Run.hs` adds query-time procedures that the
    compiled program's map does not contain.
-5. **Phase-indexed `Expr`** (§1, `R.LambdaExpr`; and the two `BodyOr`
+4. **Phase-indexed `Expr`** (§1, `R.LambdaExpr`; and the two `BodyOr`
    sites in "Panics this catalogue missed"). The larger
    follow-up: a trees-that-grow field on `LambdaExpr` (or an `Expr
    'PreLift` / `Expr 'PostLift` index) removes the constructor after

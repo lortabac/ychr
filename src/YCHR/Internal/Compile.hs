@@ -733,7 +733,7 @@ freeVars = goV
 -- in scope at any 'Foreach' evaluation point.
 inScopeBeforeLoop :: Occurrence -> PartnerIndex -> Set Name
 inScopeBeforeLoop occ k =
-  let activeNames = Set.fromList (argNames occ.conArity)
+  let activeNames = Set.fromList (argNames (occurrenceArity occ))
       earlierPartnerNames =
         Set.fromList
           [ partArgName k' j

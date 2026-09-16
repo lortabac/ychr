@@ -12,6 +12,7 @@ module YCHR.Internal.Compile.Types
 
     -- * Data types
     Occurrence (..),
+    occurrenceArity,
     Partner (..),
     IndexCondition (..),
     CompiledGuards (..),
@@ -73,8 +74,6 @@ newtype PartnerIndex = PartnerIndex {unPartnerIndex :: Int}
 data Occurrence = Occurrence
   { -- | Source name of the constraint this occurrence belongs to.
     conName :: Name,
-    -- | Arity of the constraint (used for procedure-name encoding).
-    conArity :: Int,
     -- | 1-based position within the constraint's occurrence list.
     -- Assigned top-down in 'YCHR.Internal.Compile.collectOccurrences'.
     number :: OccurrenceNumber,
@@ -113,6 +112,14 @@ data Occurrence = Occurrence
     -- @dev-docs/passive-occurrences.md@.
     passive :: Bool
   }
+
+-- | Arity of an occurrence's active constraint, derived from
+-- 'activeArgs'. This is a function rather than a stored field so the
+-- two can never drift: 'YCHR.Internal.Desugar.normalizeArg' maps every
+-- head term to exactly one 'HeadArg', so the active constraint's arity
+-- always equals the length of 'activeArgs'.
+occurrenceArity :: Occurrence -> Int
+occurrenceArity occ = length occ.activeArgs
 
 -- | One partner constraint of an 'Occurrence' — i.e. a head constraint
 -- of the same rule that is /not/ the active one.
