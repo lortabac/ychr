@@ -181,6 +181,10 @@ getAllStoredConstraints = do
 isSuspAlive :: Suspension -> Chr Bool
 isSuspAlive Suspension {alive} = liftIO $ readIORef alive
 
--- | Get a suspension argument by 0-based index. Pure.
+-- | Get a suspension argument by 0-based index. Pure. Calls 'error' on an
+-- out-of-range index, mirroring 'getConstraintArg'; an out-of-range index is
+-- a runtime invariant violation, not a user-facing failure.
 suspArg :: Suspension -> Int -> Value
-suspArg Suspension {args = sargs} idx = sargs !! idx
+suspArg Suspension {args = sargs} idx
+  | idx >= 0 && idx < length sargs = sargs !! idx
+  | otherwise = error $ "suspArg: index " ++ show idx ++ " out of bounds"

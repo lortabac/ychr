@@ -2,8 +2,10 @@
 
 module YCHR.Runtime.StoreTest (tests) where
 
+import Control.Exception (SomeException, evaluate, try)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (toList)
+import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
@@ -259,7 +261,23 @@ iterationTests =
             (s : _) -> pure s
             [] -> assertFailure "expected at least 1 suspension in store"
           liftIO $ case suspArg s 0 of VInt 10 -> pure (); _ -> assertBool "arg 0" False
-          liftIO $ case suspArg s 1 of VAtom "y" -> pure (); _ -> assertBool "arg 1" False
+          liftIO $ case suspArg s 1 of VAtom "y" -> pure (); _ -> assertBool "arg 1" False,
+      testCase "suspArg out-of-range index errors" $ do
+        runStoreEnv $ do
+          sid <- createConstraint (ConstraintType 0) [VInt 10, VAtom "y"]
+          _ <- storeConstraint sid
+          snap <- getStoreSnapshot (ConstraintType 0)
+          s <- liftIO $ case toList snap of
+            (s : _) -> pure s
+            [] -> assertFailure "expected at least 1 suspension in store"
+          liftIO $
+            expectErrorContaining
+              "suspArg: index 2 out of bounds"
+              (evaluate (suspArg s 2))
+          liftIO $
+            expectErrorContaining
+              "suspArg: index -1 out of bounds"
+              (evaluate (suspArg s (-1)))
     ]
   where
     filterByArg :: Int -> Value -> [Suspension] -> Chr [Suspension]
@@ -272,6 +290,19 @@ iterationTests =
           rest <- filterByArg idx val ss
           pure $ if eq then s : rest else rest
         else filterByArg idx val ss
+
+-- | Assert that forcing the given action throws an exception whose
+-- message contains the given substring.
+expectErrorContaining :: String -> IO a -> IO ()
+expectErrorContaining needle act = do
+  outcome <- try @SomeException act
+  case outcome of
+    Left exc ->
+      assertBool
+        ("expected exception message to contain " ++ show needle ++ ", got: " ++ show exc)
+        (needle `isInfixOf` show exc)
+    Right _ ->
+      assertFailure ("expected exception containing " ++ show needle ++ ", got success")
 
 observerTests :: TestTree
 observerTests =

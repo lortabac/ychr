@@ -248,6 +248,15 @@ removable when closed.
   "Compiler IR carries unchecked arity fields" retains the `Partner`
   and `IndexCondition` items.
 
+- **`suspArg` bounds are checked, mirroring `getConstraintArg`.** The
+  pure projection in `Store.hs` did `sargs !! idx` with no guard, so an
+  out-of-range `ArgIndex` pushed into a `Foreach` and read by
+  `checkConditions` (`Interpreter.hs`) surfaced as a bare `Prelude.!!`
+  failure with no context. It now raises the same style of named
+  `"suspArg: index N out of bounds"` error as its monadic twin. The
+  index is still an `Int`; the `ArgIndex` / non-negative
+  representation work in §2 remains the structural fix.
+
 
 ## 1. `error` / `runtimeErrorS` for "can't happen" cases
 
@@ -288,21 +297,6 @@ Same shape as `getArg`. The compiler is responsible for emitting only
 in-range `ArgIndex` values; a smart-constructor for `ArgIndex` keyed
 on the constraint type's arity (or a `Vector` of fixed length in the
 suspension) would push the check up.
-
-### `suspArg` has no bounds check at all — `src/YCHR/Internal/Runtime/Store.hs:185-186`
-
-```haskell
-suspArg :: Suspension -> Int -> Value
-suspArg Suspension {args = sargs} idx = sargs !! idx
-```
-
-`getConstraintArg`'s undocumented twin: the same projection, reached
-from a different direction, with the bounds check omitted rather than
-turned into a named `error`. The caller is `checkConditions`
-(`src/YCHR/Internal/Runtime/Interpreter.hs:659-663`), which evaluates
-a `Foreach`'s index conditions — so an out-of-range `ArgIndex` pushed
-down into a `Foreach` surfaces as a bare `Prelude.!!` failure with no
-context. Closed by the same `ArgIndex` fix.
 
 ### Remaining interpreter shape checks — `src/YCHR/Internal/Runtime/Interpreter.hs`
 
@@ -452,7 +446,7 @@ each slot with `fromInteger` with no range check
 into a huge positive. The boundary needs an explicit
 `parseNonNegative`/`Maybe` and an `Err` on failure; the type change is
 the prerequisite that forces it to be written, not the check itself.
-Two further wrinkles: `sargs !! idx` (`Store.hs:139,186`) takes `Int`,
+Two further wrinkles: `sargs !! idx` (`Store.hs:139,189`) takes `Int`,
 so `suspArg`/`getConstraintArg` need a `Word -> Int` conversion, and
 `matchTerm` compares against `length args` (`Var.hs:342-348`).
 
@@ -734,26 +728,23 @@ host-language boundary.
 
 If you want a roughly-ordered list of the most actionable wins:
 
-1. **`suspArg` bounds check** (§1, `Store.hs:185-186`). One line, not
-   a type change: the same projection as `getConstraintArg` with the
-   check omitted. Its only caller passes in-range indices, so this is
-   robustness rather than a live bug.
-2. **`ArgIndex` / `BMatchTerm` arity / `GetArg` index to a
+1. **`ArgIndex` / `BMatchTerm` arity / `GetArg` index to a
    non-negative representation** (§2). Still worth doing, but not the
    mechanical swap an earlier revision called it: the `VM.SExpr`
    boundary rebuilds each slot with `fromInteger`
    (`SExpr.hs:460,462,476,507`), which wraps rather than rejects once
    the slot is `Word`, so a checked parser is required; `sargs !! idx`
    and `matchTerm`'s `length` comparison need `Int` conversions. Budget
-   ~30 sites. Doing it closes both `Store.hs` bounds entries in §1 in
-   the sense that the compiler can no longer produce a negative index,
-   and makes the boundary check meaningful.
-3. **Procedure-name closure check** (§5). A post-compile pass that
+   ~30 sites. Doing it closes the remaining `Store.hs` bounds entry in
+   §1 (`getConstraintArg`; `suspArg` is already checked) in the sense
+   that the compiler can no longer produce a negative index, and makes
+   the boundary check meaningful.
+2. **Procedure-name closure check** (§5). A post-compile pass that
    verifies every `CallExpr` resolves in the procedure map. Catches a
    whole class of compiler bugs at compile time. Must run against the
    *unioned* map — `Run.hs` adds query-time procedures that the
    compiled program's map does not contain.
-4. **Phase-indexed `Expr`** (§1, `R.LambdaExpr`; and the two `BodyOr`
+3. **Phase-indexed `Expr`** (§1, `R.LambdaExpr`; and the two `BodyOr`
    sites in "Panics this catalogue missed"). The larger
    follow-up: a trees-that-grow field on `LambdaExpr` (or an `Expr
    'PreLift` / `Expr 'PostLift` index) removes the constructor after
