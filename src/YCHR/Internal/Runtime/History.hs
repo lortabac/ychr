@@ -5,7 +5,8 @@
 -- Tracks which rule has fired with which combination of constraint
 -- identifiers, to prevent redundant re-firing of propagation rules.
 module YCHR.Internal.Runtime.History
-  ( addHistory,
+  ( -- * Operations
+    addHistory,
     notInHistory,
   )
 where

@@ -21,11 +21,16 @@
 -- interpreter's emission helper. The REPL's @:trace@ command installs
 -- 'defaultTraceHandler' for the duration of one query.
 module YCHR.Internal.Runtime.Trace
-  ( TraceEvent (..),
+  ( -- * Events
+    TraceEvent (..),
     BacktrackReason (..),
     SearchOutcome (..),
+
+    -- * Handlers
     TraceHandler,
     defaultTraceHandler,
+
+    -- * Rendering
     formatEvent,
   )
 where

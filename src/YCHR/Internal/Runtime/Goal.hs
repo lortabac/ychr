@@ -17,9 +17,14 @@
 -- misspelled or unexported constraint a loud caller error rather than
 -- a @false@ result or a failed search branch.
 module YCHR.Internal.Runtime.Goal
-  ( goalConstraints,
+  ( -- * Decoding goals
+    goalConstraints,
     altGoalConstraints,
+
+    -- * Choice points
     altName,
+
+    -- * Lists
     listElems,
   )
 where

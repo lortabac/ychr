@@ -89,7 +89,6 @@ data SessionInput = SessionInput
     exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
     exportedSet :: Set Types.QualifiedIdentifier
   }
-  deriving ()
 
 -- | Project a 'CompiledProgram' down to the slice 'withCHR' /
 -- 'withCHRExtra' actually read.

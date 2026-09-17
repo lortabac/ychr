@@ -76,7 +76,8 @@
 -- documents, that a stale observer id can only ever miss, never
 -- collide.
 module YCHR.Internal.Runtime.Search
-  ( searchHostCallRegistry,
+  ( -- * Registry
+    searchHostCallRegistry,
     defaultHostCallRegistry,
   )
 where

@@ -9,7 +9,8 @@
 -- iteration so that IDs enqueued by reentrant unifications during the
 -- callback are picked up.
 module YCHR.Internal.Runtime.Reactivation
-  ( enqueue,
+  ( -- * Operations
+    enqueue,
     enqueueObservers,
     drainQueue,
   )

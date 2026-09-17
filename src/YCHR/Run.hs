@@ -469,8 +469,8 @@ executePreparedQuery lifted =
       ( do
           mapM_ executeBodyGoal lifted
           varMap <- get
-          classes <- lift (buildAliasClasses varMap)
-          lift $
+          classes <- liftChr (buildAliasClasses varMap)
+          liftChr $
             Map.traverseWithKey
               (\k v -> valueToTerm (perKeyAliases classes k) v)
               varMap
@@ -514,6 +514,12 @@ runProgramWithQuery cp hostCalls src = do
 
 type QueryM = StateT (Map Text Value) Chr
 
+-- | Run a 'Chr' action in 'QueryM'. The single lift this stack needs;
+-- named so call sites read as "do this in the session".
+liftChr :: Chr a -> QueryM a
+liftChr = lift
+{-# INLINE liftChr #-}
+
 -- | Surface 'Term' to 'Value' in the per-query scope, allocating a fresh
 -- variable per new 'VarTerm'.
 termToValue :: Term -> QueryM Value
@@ -522,7 +528,7 @@ termToValue (VarTerm n) = do
   case Map.lookup n varMap of
     Just v -> pure v
     Nothing -> do
-      v <- lift newVar
+      v <- liftChr newVar
       modify (Map.insert n v)
       pure v
 termToValue (IntTerm n) = pure (VInt n)
@@ -549,12 +555,12 @@ executeBodyGoal (D.BodyOr _) =
 executeBodyGoal (D.BodyUnify l r) = do
   v1 <- exprToValue l
   v2 <- exprToValue r
-  lift (queryUnify v1 v2)
+  liftChr (queryUnify v1 v2)
 executeBodyGoal (D.BodyHostStmt f args) = do
   argVals <- traverse evalNestedExpr args
-  env <- lift ask
-  result <- lift (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
-  lift $
+  env <- liftChr ask
+  result <- liftChr (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
+  liftChr $
     emitTrace $ do
       argTs <- snapshotValues argVals
       resT <- snapshotValue result
@@ -567,25 +573,25 @@ executeBodyGoal (D.BodyIs v expr) = do
   -- result of the outer typed operation is already final.
   raw <- evalNestedExpr expr
   result <- case expr of
-    R.VarExpr _ -> lift (deepEvalValue raw)
+    R.VarExpr _ -> liftChr (deepEvalValue raw)
     _ -> pure raw
   varMap <- get
   case Map.lookup v varMap of
-    Just existing -> lift (queryUnify existing result)
+    Just existing -> liftChr (queryUnify existing result)
     Nothing -> modify (Map.insert v result)
 executeBodyGoal (D.BodyTell qn args) = do
   argVals <- traverse evalNestedExpr args
-  lift (tellConstraint (Types.qualifiedToName qn) argVals)
+  liftChr (tellConstraint (Types.qualifiedToName qn) argVals)
 executeBodyGoal (D.BodyCall qn args) = do
   argVals <- traverse evalNestedExpr args
   let funcName = Types.qualifiedToName qn
-  _ <- lift (callProc (funcProcName funcName (length argVals)) (map CVal argVals))
+  _ <- liftChr (callProc (funcProcName funcName (length argVals)) (map CVal argVals))
   pure ()
 executeBodyGoal (D.BodyApply f args) = do
   fAndArgVals <- traverse evalNestedExpr (f : args)
   let n = length args
       dispatchName = Name ("call_" <> T.pack (show n))
-  _ <- lift (callProc dispatchName (map CVal fAndArgVals))
+  _ <- liftChr (callProc dispatchName (map CVal fAndArgVals))
   pure ()
 
 -- | Runtime error for a failed unification.
@@ -656,24 +662,24 @@ evalNestedExpr R.WildcardExpr = pure VWildcard
 evalNestedExpr (R.VarExpr v) = do
   varMap <- get
   case Map.lookup v varMap of
-    Just val -> lift (deref val)
+    Just val -> liftChr (deref val)
     Nothing -> do
-      fresh <- lift newVar
+      fresh <- liftChr newVar
       modify (Map.insert v fresh)
       pure fresh
 evalNestedExpr (R.CallExpr qn args) = do
   argVals <- traverse evalNestedExpr args
   let funcName = Types.qualifiedToName qn
-  lift (callProc (funcProcName funcName (length argVals)) (map CVal argVals))
+  liftChr (callProc (funcProcName funcName (length argVals)) (map CVal argVals))
 evalNestedExpr (R.ApplyExpr f args) = do
   fAndArgVals <- traverse evalNestedExpr (f : args)
   let n = length args
       dispatchName = Name ("call_" <> T.pack (show n))
-  lift (callProc dispatchName (map CVal fAndArgVals))
+  liftChr (callProc dispatchName (map CVal fAndArgVals))
 evalNestedExpr (R.HostExpr f args) = do
   argVals <- traverse evalNestedExpr args
-  env <- lift ask
-  lift (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
+  env <- liftChr ask
+  liftChr (hostCall (Map.lookup (Name f) env.hostCalls) f argVals)
 -- @quote(X)@: inner value as data, no nested-call evaluation.
 evalNestedExpr (R.CtorExpr (Types.Unqualified "quote") [arg]) = exprToValue arg
 -- Mirrors 'Compile.compileExpr': 'VBool', as compiled rules produce.

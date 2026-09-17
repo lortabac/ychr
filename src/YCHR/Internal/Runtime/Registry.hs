@@ -6,6 +6,10 @@
 -- Provides a base registry of host language functions (arithmetic,
 -- comparisons, string operations, type predicates) and generic helpers
 -- for building custom host calls.
+--
+-- The value predicates below do not dereference: they inspect the
+-- 'Value' they are given, so callers pass an already-dereferenced
+-- value (the registry's own @typePred@ does).
 module YCHR.Internal.Runtime.Registry
   ( -- * Types (re-exported from "YCHR.Internal.Runtime.Monad")
     HostCallFn (..),
@@ -259,31 +263,38 @@ unit = VAtom "()"
 -- Value predicates
 -- ---------------------------------------------------------------------------
 
+-- | Is the value an integer literal ('VInt')?
 isInteger :: Value -> Bool
 isInteger (VInt _) = True
 isInteger _ = False
 
+-- | Is the value a float literal ('VFloat')?
 isFloat :: Value -> Bool
 isFloat (VFloat _) = True
 isFloat _ = False
 
+-- | Is the value an atom ('VAtom')?
 isAtom :: Value -> Bool
 isAtom (VAtom _) = True
 isAtom _ = False
 
+-- | Is the value a boolean ('VBool')?
 isBoolean :: Value -> Bool
 isBoolean (VBool _) = True
 isBoolean _ = False
 
+-- | Is the value a string ('VText')?
 isString :: Value -> Bool
 isString (VText _) = True
 isString _ = False
 
+-- | Is the value a variable — a 'VVar' or a 'VWildcard'?
 isVar :: Value -> Bool
 isVar (VVar _) = True
 isVar VWildcard = True
 isVar _ = False
 
+-- | Is the value not a variable? The negation of 'isVar'.
 isNonvar :: Value -> Bool
 isNonvar = not . isVar
 

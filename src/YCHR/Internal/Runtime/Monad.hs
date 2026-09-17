@@ -83,8 +83,11 @@ newtype HostCallFn = HostCallFn
 
 -- | The mutable session state plus the immutable program-level lookups
 -- the runtime needs. All long-lived state lives here; per-procedure
--- locals (e.g. 'Env') stay layered in a 'StateT' above 'Chr' where
--- they belong.
+-- locals live above 'Chr' in the interpreter's own 'ReaderT' over an
+-- 'IORef' holding its per-call environment record, which is what lets
+-- the writes made before a soft-guard failure survive the catch. See
+-- @Note [Soft guard catch safety]@ in
+-- "YCHR.Internal.Runtime.Interpreter".
 data SessionEnv = SessionEnv
   { -- | Counter for fresh logical-variable IDs.
     varCounter :: !(IORef VarId),

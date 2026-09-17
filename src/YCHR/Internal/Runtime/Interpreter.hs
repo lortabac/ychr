@@ -50,7 +50,7 @@ import Control.Exception
     throwIO,
     try,
   )
-import Control.Monad (unless, when)
+import Control.Monad (unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
@@ -165,6 +165,16 @@ data Signal
 -- failure survive the catch, matching the original
 -- effectful-static-Local 'runError'-with-outer-state semantics.
 type InterpM = ReaderT (IORef Env) Chr
+
+-- ---------------------------------------------------------------------------
+-- Lifting
+-- ---------------------------------------------------------------------------
+
+-- | Run a 'Chr' action in 'InterpM'. The single lift this stack needs;
+-- named so call sites read as "do this in the session".
+liftChr :: Chr a -> InterpM a
+liftChr = lift
+{-# INLINE liftChr #-}
 
 -- ---------------------------------------------------------------------------
 -- Public API
@@ -362,6 +372,7 @@ withTraceDepth action = do
 snapshotValue :: Value -> Chr Term
 snapshotValue = valueToTerm Map.empty
 
+-- | 'snapshotValue' over a list of values, in order.
 snapshotValues :: [Value] -> Chr [Term]
 snapshotValues = traverse snapshotValue
 
@@ -548,7 +559,7 @@ execStmt (If cond thenBranch elseBranch) = do
   b <- evalBoolExpr cond
   if b then execStmts thenBranch else execStmts elseBranch
 execStmt (Foreach lbl cType suspVar conditions body) = do
-  snapshot <- lift (getStoreSnapshot cType)
+  snapshot <- liftChr (getStoreSnapshot cType)
   let susps = toList snapshot
   execForeach lbl suspVar conditions body susps
 execStmt (Continue lbl) = pure (SCont lbl)
@@ -562,7 +573,7 @@ execStmt (BoolExprStmt expr) = do
   pure SFall
 execStmt (Store expr) = do
   sid <- evalIdExpr expr
-  lift $ do
+  liftChr $ do
     didStore <- storeConstraint sid
     -- 'Store' is idempotent and, under Late Storage, reachable more
     -- than once for the same suspension; only the one that took
@@ -575,13 +586,13 @@ execStmt (Store expr) = do
   pure SFall
 execStmt (Kill expr) = do
   sid <- evalIdExpr expr
-  lift $ do
+  liftChr $ do
     killConstraint sid
     emitTrace (pure (TEKill sid))
   pure SFall
 execStmt (AddHistory ruleId exprs) = do
   sids <- traverse evalIdExpr (historyIdsList exprs)
-  lift $ do
+  liftChr $ do
     emitTrace $ do
       env <- ask
       let rn = lookupRuleName env ruleId
@@ -590,7 +601,7 @@ execStmt (AddHistory ruleId exprs) = do
   pure SFall
 execStmt (DrainReactivationQueue suspVar body) = do
   envRef <- ask
-  lift $
+  liftChr $
     drainQueue $ \sid -> do
       alive <- aliveConstraint sid
       if alive
@@ -612,7 +623,7 @@ execStmt (DrainReactivationQueue suspVar body) = do
         else pure ()
   pure SFall
 execStmt (PushFrame frame) = do
-  lift (pushFrame frame)
+  liftChr (pushFrame frame)
   pure SFall
 
 -- ---------------------------------------------------------------------------
@@ -633,7 +644,7 @@ execForeach ::
   InterpM Signal
 execForeach _ _ _ _ [] = pure SFall
 execForeach lbl suspVar conditions body (susp : rest) = do
-  alive <- lift (isSuspAlive susp)
+  alive <- liftChr (isSuspAlive susp)
   if not alive
     then execForeach lbl suspVar conditions body rest
     else do
@@ -641,13 +652,13 @@ execForeach lbl suspVar conditions body (susp : rest) = do
       if not ok
         then execForeach lbl suspVar conditions body rest
         else do
-          lift $ emitTrace $ do
+          liftChr $ emitTrace $ do
             ctName <- constraintTypeLabel susp.suspType
             ts <- snapshotValues susp.args
             pure (TEPartner ctName susp.suspId ts)
           modifyEnv (insertId suspVar susp.suspId)
           envRef <- ask
-          sig <- lift (withTraceDepth (runReaderT (execStmts body) envRef))
+          sig <- liftChr (withTraceDepth (runReaderT (execStmts body) envRef))
           case sig of
             SFall -> execForeach lbl suspVar conditions body rest
             SCont l
@@ -661,7 +672,7 @@ checkConditions _ [] = pure True
 checkConditions susp ((ArgIndex i, expr) : rest) = do
   v <- evalValExpr expr
   let argVal = suspArg susp i
-  eq <- lift (equal v argVal)
+  eq <- liftChr (equal v argVal)
   if eq
     then checkConditions susp rest
     else pure False
@@ -678,7 +689,7 @@ evalValExpr (Var name) = do
   env <- getEnv
   case Map.lookup name env.envValues of
     Just v -> pure v
-    Nothing -> lift (runtimeError' "evalValExpr: unbound variable " name.unName)
+    Nothing -> liftChr (runtimeError' "evalValExpr: unbound variable " name.unName)
 evalValExpr (Lit (IntLit n)) = pure (VInt n)
 evalValExpr (Lit (FloatLit n)) = pure (VFloat n)
 evalValExpr (Lit (AtomLit s)) = pure (VAtom s)
@@ -687,24 +698,24 @@ evalValExpr (Lit (BoolLit b)) = pure (VBool b)
 evalValExpr (Lit WildcardLit) = pure VWildcard
 evalValExpr (CallExpr name args) = do
   argVals <- traverse evalCallArg args
-  lift (callProc name argVals)
+  liftChr (callProc name argVals)
 evalValExpr (HostCall name args) = do
   argVals <- traverse evalValExpr args
-  derefedVals <- lift (traverse deref argVals)
-  lift (invokeHostCall name derefedVals)
-evalValExpr NewVar = lift newVar
+  derefedVals <- liftChr (traverse deref argVals)
+  liftChr (invokeHostCall name derefedVals)
+evalValExpr NewVar = liftChr newVar
 evalValExpr (MakeTerm functor args) = do
   argVals <- traverse evalValExpr args
   pure $ makeTerm functor.unName argVals
 evalValExpr (GetArg expr idx) = do
   v <- evalValExpr expr
-  lift (getArg v idx)
+  liftChr (getArg v idx)
 evalValExpr (FieldArg expr (ArgIndex i)) = do
   sid <- evalIdExpr expr
-  lift (getConstraintArg sid i)
+  liftChr (getConstraintArg sid i)
 evalValExpr (FieldType expr) = do
   sid <- evalIdExpr expr
-  ct <- lift (getConstraintType sid)
+  ct <- liftChr (getConstraintType sid)
   pure (VInt (fromIntegral ct.unConstraintType))
 evalValExpr (EvalDeep expr) = evalValExprDeep expr
 -- 'EvalIs' is the @is@-with-variable-RHS marker. The compiler only
@@ -717,7 +728,7 @@ evalValExpr (EvalDeep expr) = evalValExprDeep expr
 -- RHSes) do not invoke the walker.
 evalValExpr (EvalIs expr) = do
   v <- evalValExprDeep expr
-  lift (deepEvalValue v)
+  liftChr (deepEvalValue v)
 
 -- ---------------------------------------------------------------------------
 -- Bool-expression evaluator (normal mode)
@@ -759,26 +770,26 @@ evalBoolExpr (BOr e1 e2) = do
   if b1 then pure True else evalBoolExpr e2
 evalBoolExpr (BMatchTerm expr functor arity) = do
   v <- evalValExpr expr
-  lift (matchTerm v functor.unName arity)
+  liftChr (matchTerm v functor.unName arity)
 evalBoolExpr (BEqual e1 e2) = do
   v1 <- evalValExpr e1
   v2 <- evalValExpr e2
-  lift (equal v1 v2)
+  liftChr (equal v1 v2)
 evalBoolExpr (BIdEqual e1 e2) = do
   s1 <- evalIdExpr e1
   s2 <- evalIdExpr e2
   pure (idEqual s1 s2)
 evalBoolExpr (BAlive expr) = do
   sid <- evalIdExpr expr
-  lift (aliveConstraint sid)
+  liftChr (aliveConstraint sid)
 evalBoolExpr (BIsConstraintType expr cType) = do
   sid <- evalIdExpr expr
-  lift (isConstraintType sid cType)
+  liftChr (isConstraintType sid cType)
 evalBoolExpr (BNotInHistory ruleId args) = do
   sids <- traverse evalIdExpr (historyIdsList args)
-  ok <- lift (notInHistory ruleId sids)
+  ok <- liftChr (notInHistory ruleId sids)
   unless ok $
-    lift $
+    liftChr $
       emitTrace $ do
         env <- ask
         let rn = lookupRuleName env ruleId
@@ -787,20 +798,22 @@ evalBoolExpr (BNotInHistory ruleId args) = do
 evalBoolExpr (BUnify e1 e2) = do
   v1 <- evalValExpr e1
   v2 <- evalValExpr e2
-  lift $ do
+  liftChr $ do
     env <- ask
     mh <- liftIO (readIORef env.traceHandler)
     case mh of
-      Nothing -> fst <$> unifyOrError v1 v2
+      Nothing -> void (unifyOrError v1 v2)
       Just _ -> do
         t1 <- snapshotValue v1
         t2 <- snapshotValue v2
-        (ok, enqueued) <- unifyOrError v1 v2
+        enqueued <- unifyOrError v1 v2
         emitTrace (pure (TEUnify t1 t2 enqueued))
-        pure ok
+    -- 'unifyOrError' raises on failure, so a 'BUnify' that reaches this
+    -- point has succeeded: the boolean position is always true.
+    pure True
 evalBoolExpr (BFromVal expr) = do
   v <- evalValExpr expr
-  lift (boolFromValue v)
+  liftChr (boolFromValue v)
 evalBoolExpr (BEvalDeep expr) = evalBoolExprDeep expr
 evalBoolExpr (BSoftGuard expr) = softGuard (evalBoolExpr expr)
 
@@ -811,7 +824,7 @@ evalBoolExpr (BSoftGuard expr) = softGuard (evalBoolExpr expr)
 softGuard :: InterpM Bool -> InterpM Bool
 softGuard m = do
   ref <- ask
-  lift (catchInstantiation (runReaderT m ref))
+  liftChr (catchInstantiation (runReaderT m ref))
 
 -- ---------------------------------------------------------------------------
 -- Id-expression evaluator
@@ -825,10 +838,10 @@ evalIdExpr (IdVar name) = do
   env <- getEnv
   case Map.lookup name env.envIds of
     Just s -> pure s
-    Nothing -> lift (runtimeError' "evalIdExpr: unbound id variable " name.unName)
+    Nothing -> liftChr (runtimeError' "evalIdExpr: unbound id variable " name.unName)
 evalIdExpr (CreateConstraint cType args) = do
   argVals <- traverse evalValExpr args
-  lift (createConstraint cType argVals)
+  liftChr (createConstraint cType argVals)
 
 -- ---------------------------------------------------------------------------
 -- Call-arg evaluator
@@ -874,19 +887,20 @@ invokeHostCall name argVals = do
 -- observers of any variables affected by the unification — including
 -- on failure, where partial bindings may still have produced
 -- observers worth reactivating. Raises a runtime error with both
--- operands pretty-printed when unification fails.
+-- operands pretty-printed when unification fails, so returning at all
+-- means success.
 --
--- Also returns how many constraints the enqueue actually queued,
+-- Returns how many constraints the enqueue actually queued,
 -- which is the number the tracer reports for a unification. Reading
 -- it back off the queue would be a second derivation of the same
 -- figure, and one that quietly stops matching if anything else ever
 -- touches the queue in between.
-unifyOrError :: Value -> Value -> Chr (Bool, Int)
+unifyOrError :: Value -> Value -> Chr Int
 unifyOrError v1 v2 = do
   (ok, observers) <- unify v1 v2
   enqueued <- enqueueObservers observers
   if ok
-    then pure (True, enqueued)
+    then pure enqueued
     else do
       t1 <- valueToTerm Map.empty v1
       t2 <- valueToTerm Map.empty v2
@@ -916,13 +930,13 @@ unifyOrError v1 v2 = do
 evalValExprDeep :: ValExpr -> InterpM Value
 evalValExprDeep (Var name) = do
   v <- evalValExpr (Var name)
-  lift (deref v)
+  liftChr (deref v)
 evalValExprDeep (HostCall name args) = do
   argVals <- traverse evalValExprDeep args
-  lift (invokeHostCall name argVals)
+  liftChr (invokeHostCall name argVals)
 evalValExprDeep (CallExpr name args) = do
   argVals <- traverse evalCallArgDeep args
-  lift (callProc name argVals)
+  liftChr (callProc name argVals)
 evalValExprDeep (MakeTerm functor args) = do
   argVals <- traverse evalValExprDeep args
   pure $ makeTerm functor.unName argVals
@@ -996,18 +1010,19 @@ evalBoolExprDeep (BOr e1 e2) = do
   if b1 then pure True else evalBoolExprDeep e2
 evalBoolExprDeep (BMatchTerm expr functor arity) = do
   v <- evalValExprDeep expr
-  lift (matchTerm v functor.unName arity)
+  liftChr (matchTerm v functor.unName arity)
 evalBoolExprDeep (BEqual e1 e2) = do
   v1 <- evalValExprDeep e1
   v2 <- evalValExprDeep e2
-  lift (equal v1 v2)
+  liftChr (equal v1 v2)
 evalBoolExprDeep (BUnify e1 e2) = do
   v1 <- evalValExprDeep e1
   v2 <- evalValExprDeep e2
-  lift (fst <$> unifyOrError v1 v2)
+  liftChr (void (unifyOrError v1 v2))
+  pure True
 evalBoolExprDeep (BFromVal expr) = do
   v <- evalValExprDeep expr
-  lift (boolFromValue v)
+  liftChr (boolFromValue v)
 evalBoolExprDeep (BEvalDeep expr) = evalBoolExprDeep expr
 evalBoolExprDeep (BSoftGuard expr) = softGuard (evalBoolExprDeep expr)
 evalBoolExprDeep expr = evalBoolExpr expr
