@@ -253,7 +253,7 @@ compileModules includeStdlib inputs = do
   -- location at which header parsing stopped.
   userHeaders <-
     first (\(fp, e) -> ParseError fp e) $
-      traverse (\(fp, src) -> (fp,) <$> first' (fp,) (collectModuleHeader fp src)) inputs
+      traverse (\(fp, src) -> (fp,) <$> first (fp,) (collectModuleHeader fp src)) inputs
   -- Resolve the transitive closure of library imports starting from the
   -- libraries each user header asks for (plus prelude as an implicit
   -- seed, and every stdlib library if includeStdlib is True).
@@ -300,9 +300,6 @@ compileModules includeStdlib inputs = do
   let trailingLoc =
         Map.fromList [(h.modName, h.trailingLoc) | (_, h) <- userHeaders]
   finalizeCompilation libraryMods opExports trailingLoc parsed
-  where
-    first' f (Left e) = Left (f e)
-    first' _ (Right x) = Right x
 
 -- | Compile already-parsed modules. This is the entry point used by
 -- "YCHR.DSL" callers that build 'Module' values in Haskell rather than

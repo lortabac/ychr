@@ -325,7 +325,7 @@ exhaustive:
 |----------------------------------------------------------|---------------------------------------------|
 | `src/YCHR/Internal/Runtime/Interpreter.hs:496` (`activateSuspensionId`) | leading-id shape check |
 | `src/YCHR/Run.hs:548` (`executeBodyGoal`, `BodyOr`)       | query disjunction should have been rejected (YCHR-30006) |
-| `src/YCHR/Internal/Compile.hs:1104` (`compileBodyGoal`, `BodyOr`) | `lowerDisjunctions` should have run first |
+| `src/YCHR/Internal/Compile.hs:1122` (`compileBodyGoal`, `BodyOr`) | `lowerDisjunctions` should have run first |
 | `src/YCHR/Internal/Desugar.hs:983` (`ruleModName`)        | non-empty head                             |
 | `src/YCHR/Internal/Desugar/Disjunction.hs:101,204`        | lifted rule is a simplification; non-empty head |
 | `src/YCHR/Internal/Backend/Scheme.hs:214` (`programInfoBindingName`) | non-empty library name          |
@@ -341,7 +341,7 @@ wraps the host function in `try @SomeException`
 rather than a process abort; they are nonetheless `error` rather than
 `runtimeErrorS` for a difficulty that is really just arity.
 
-### `R.LambdaExpr` survives lambda lifting — `src/YCHR/Run.hs:691`, `src/YCHR/Internal/Compile.hs:695`, `src/YCHR/Internal/Backend/SchemeDriver.hs:171`
+### `R.LambdaExpr` survives lambda lifting — `src/YCHR/Run.hs:691`, `src/YCHR/Internal/Compile.hs:709`, `src/YCHR/Internal/Backend/SchemeDriver.hs:171`
 
 ```haskell
 -- Run.hs
@@ -424,7 +424,7 @@ Related, same "derive instead of store" shape: `VM.Program`
 (`src/YCHR/Internal/VM/Types.hs:103,110`) stores `numTypes` next to
 `typeNames` and `numRules` next to `ruleNames`, with the invariants
 `numTypes == length typeNames` and `numRules == length ruleNames`
-never checked. `Compile.hs:138-141` derives both pairs from the same
+never checked. `Compile.hs:140-143` derives both pairs from the same
 symbol table / rule list today. The counts are read by SExpr
 serialization and the Scheme backend's `%make-session`, so removal is
 a wider edit.
@@ -453,7 +453,7 @@ so `suspArg`/`getConstraintArg` need a `Word -> Int` conversion, and
 
 ## 3. Documented invariants worth promoting into types
 
-### Occurrence numbering is 1-based — `src/YCHR/Internal/Compile/Occurrences.hs:77`
+### Occurrence numbering is 1-based — `src/YCHR/Internal/Compile/Occurrences.hs:83`
 
 ```haskell
 assignNumbers = zipWith (\n o -> o {number = n}) [OccurrenceNumber 1 ..]
@@ -464,13 +464,13 @@ is unconstrained; a smart constructor `mkOccurrenceNumber :: Int ->
 Maybe OccurrenceNumber` (or starting from `1` only) would enforce it.
 Note that the real defect here is not `assignNumbers` but the
 `OccurrenceNumber 0` an `Occurrence` is born with in `mkOccurrence`
-(`Occurrences.hs:163`) — a placeholder that is always overwritten
+(`Occurrences.hs:170`) — a placeholder that is always overwritten
 moments later, and the only value a 1-based smart constructor would
 have to reject. Low value; deferred. The structural alternative is a
 `NumberedOccurrence` wrapper (an unnumbered `Occurrence` becomes a
 numbered one in the pass), which removes the placeholder instead of
 validating it, at the cost of touching the three `number` readers
-(`Compile.hs:318`, `Occurrences.hs:77`, `Names.hs:205-208`).
+(`Compile.hs:325`, `Occurrences.hs:83`, `Names.hs:205-208`).
 
 ### `tc_unify` argument order — `typechecker/solver.chr`
 
@@ -521,7 +521,7 @@ did the same. The §5 procedure-name closure check remains worthwhile for
 the rest of the `CallExpr` namespace, but there is no longer a `$call`
 arity cap for it to subsume.
 
-### `partArity` derived from desugared head matches runtime constraint shape — `src/YCHR/Internal/Compile.hs:435`
+### `partArity` derived from desugared head matches runtime constraint shape — `src/YCHR/Internal/Compile.hs:442`
 
 ```haskell
 partArity = length partner.constraint.args
@@ -537,12 +537,12 @@ of producing one with a bogus type, so the remaining exposure is a
 genuine arity *disagreement* between the symbol table and the
 desugared head, not a lookup failure.
 
-### `classifyEqual` / `IndexCondition` — the bounds worry is overstated — `src/YCHR/Internal/Compile.hs:766-778`
+### `classifyEqual` / `IndexCondition` — the bounds worry is overstated — `src/YCHR/Internal/Compile.hs:780-792`
 
 The earlier statement of this entry ("`asPartnerArg` produces an
 `(ArgIndex, …)` pair that is baked into an `IndexCondition` without
 any bounds check") is technically true of the type but overstates the
-exposure. `asPartnerArg` (`Compile.hs:749-758`) *generates* the index
+exposure. `asPartnerArg` (`Compile.hs:763-772`) *generates* the index
 by enumerating the partner's argument positions:
 
 ```haskell
@@ -555,7 +555,7 @@ is no live path to an out-of-range `IndexCondition.argIndex`. The
 tighter type (a smart constructor that takes the partner's arity)
 would be belt-and-braces; it is not worth ranking with the §2 items.
 The same enumeration pattern makes `wrapInPartnerLoops`'s `FieldArg`
-indices (`Compile.hs:441-445`) in range by construction.
+indices (`Compile.hs:448-452`) in range by construction.
 
 ### `History` keys assume canonical `SuspensionId` ordering — `src/YCHR/Internal/Runtime/History.hs:22-32`
 
@@ -596,7 +596,7 @@ silently on the assumption that the constructor-arity walk
 a `known_con` / `unknown_con` split, or an invariant on constructor-map
 membership, would make it explicit.
 
-### Rule-guard residuals do not tell — `src/YCHR/Internal/Compile.hs:364-377, 826` (`residualCheck`, `genGuardedFire`)
+### Rule-guard residuals do not tell — `src/YCHR/Internal/Compile.hs:371-384, 840` (`residualCheck`, `genGuardedFire`)
 
 The `BoolExpr` a rule guard compiles to is a `BAnd` chain of `BEqual`
 (ask) conjuncts and `BFromVal (EvalDeep …)` calls into user code.

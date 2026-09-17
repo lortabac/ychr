@@ -1,5 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-
 -- | Internal types for the CHR-to-VM compiler.
 module YCHR.Internal.Compile.Types
   ( -- * Errors
@@ -16,6 +14,7 @@ module YCHR.Internal.Compile.Types
     Partner (..),
     IndexCondition (..),
     CompiledGuards (..),
+    CheckGuards (..),
 
     -- * Partner index conditions
     PartnerCondMap,
@@ -26,6 +25,7 @@ module YCHR.Internal.Compile.Types
     occMapAppend,
     occMapMap,
     lookupOccurrences,
+    CollectedOccurrences (..),
 
     -- * Variable map
     VarMap,
@@ -176,19 +176,48 @@ data CompiledGuards = CompiledGuards
     extendedVarMap :: VarMap
   }
 
+-- | Result of compiling an occurrence's check guards: the index
+-- conditions lifted onto partner loops, and the residual boolean
+-- check that stays at the innermost guard position.
+data CheckGuards = CheckGuards
+  { indexConditions :: PartnerCondMap,
+    residualCheck :: Maybe BoolExpr
+  }
+
+-- | Occurrences grouped by the constraint identifier they belong to
+-- (constraint name and arity), in the order they were collected.
 newtype OccurrenceMap = OccurrenceMap (Map.Map Identifier [Occurrence])
 
+-- | The empty occurrence map.
 occMapEmpty :: OccurrenceMap
 occMapEmpty = OccurrenceMap Map.empty
 
+-- | Add one occurrence to the list for its constraint identifier.
+-- 'Data.Map.Strict.insertWith' prepends, so within a key the list is in
+-- reverse insertion order until
+-- 'YCHR.Internal.Compile.Occurrences.collectOccurrences' reverses and
+-- numbers it.
 occMapAppend :: Identifier -> Occurrence -> OccurrenceMap -> OccurrenceMap
 occMapAppend k occ (OccurrenceMap m) = OccurrenceMap (Map.insertWith (++) k [occ] m)
 
+-- | Map a function over every constraint's occurrence list.
 occMapMap :: ([Occurrence] -> [Occurrence]) -> OccurrenceMap -> OccurrenceMap
 occMapMap f (OccurrenceMap m) = OccurrenceMap (Map.map f m)
 
+-- | The occurrences recorded for a constraint identifier, or the empty
+-- list when the type has none.
 lookupOccurrences :: Identifier -> OccurrenceMap -> [Occurrence]
 lookupOccurrences k (OccurrenceMap m) = Map.findWithDefault [] k m
+
+-- | Result of 'YCHR.Internal.Compile.Occurrences.collectOccurrences':
+-- occurrences grouped by constraint type, plus the per-rule display
+-- names used to populate 'YCHR.Internal.VM.Program''s @ruleNames@.
+data CollectedOccurrences = CollectedOccurrences
+  { -- | Occurrences grouped by constraint type and numbered in ωr order.
+    occurrenceMap :: OccurrenceMap,
+    -- | Display name of each rule, indexed by its 'RuleId'.
+    ruleDisplayNames :: [Text]
+  }
 
 -- | Map from source-level variable names to the 'ValExpr' that holds
 -- their value. The compiler stores only value bindings here; constraint
@@ -196,14 +225,20 @@ lookupOccurrences k (OccurrenceMap m) = Map.findWithDefault [] k m
 -- generated names directly via 'YCHR.Internal.VM.IdVar' and never enter the map.
 newtype VarMap = VarMap (Map.Map Text ValExpr)
 
+-- | Build a 'VarMap' from source-variable/value pairs. A later
+-- duplicate wins, as in 'Data.Map.Strict.fromList'.
 varMapFromList :: [(Text, ValExpr)] -> VarMap
 varMapFromList = VarMap . Map.fromList
 
+-- | The 'ValExpr' bound to a source variable, if any.
 lookupVar :: Text -> VarMap -> Maybe ValExpr
 lookupVar k (VarMap m) = Map.lookup k m
 
+-- | Bind a source variable to a 'ValExpr', replacing any existing
+-- binding.
 insertVar :: Text -> ValExpr -> VarMap -> VarMap
 insertVar k v (VarMap m) = VarMap (Map.insert k v m)
 
+-- | Whether a source variable is unbound in the map.
 notMemberVar :: Text -> VarMap -> Bool
 notMemberVar k (VarMap m) = Map.notMember k m

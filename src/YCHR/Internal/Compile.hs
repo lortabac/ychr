@@ -1,4 +1,3 @@
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- |
@@ -37,8 +36,8 @@
 -- observer pattern in 'YCHR.Internal.Runtime.Reactivation') — this pass only emits
 -- 'DrainReactivationQueue' calls after each tell-side @Unify@.
 --
--- Non-obvious design choices are documented in the \"Notes\" block at the
--- bottom of this file.
+-- Non-obvious design choices are documented in the @Note [...]@ blocks at
+-- the bottom of this file; definitions reference them by title.
 module YCHR.Internal.Compile
   ( -- * Errors
     CompileError (..),
@@ -118,11 +117,14 @@ data SrcInfo = SrcInfo
 -- accumulated errors. Errors from every sub-pass are collected before
 -- the function decides to fail, so callers see as much detail as
 -- possible in one go.
+--
+-- See Note [extractSymbolTable placement] for why the symbol table is
+-- built by the desugarer rather than here.
 compile :: D.Program -> SymbolTable -> Either [Diagnostic CompileError] Program
 compile prog symTab =
-  let ( (occMap, ruleDisplayNames),
-        occErrs
-        ) = runWriter (collectOccurrences symTab prog)
+  let (collected, occErrs) = runWriter (collectOccurrences symTab prog)
+      occMap = collected.occurrenceMap
+      ruleDisplayNames = collected.ruleDisplayNames
       (constraintProcs, procErrs) = runWriter $ do
         traverse (genConstraintProcs symTab occMap) (symbolTableToList symTab)
       procs = concatMap (.constraintProcedures) constraintProcs
@@ -203,6 +205,9 @@ data ConstraintProcs = ConstraintProcs
     inertType :: Maybe ConstraintType
   }
 
+-- | Generate the procedures for one constraint type: its @tell@, its
+-- @activate@, and one occurrence procedure per non-passive occurrence.
+-- The type is reported as inert when it has no occurrence to run.
 genConstraintProcs ::
   SymbolTable ->
   OccurrenceMap ->
@@ -298,6 +303,8 @@ genActivate name cType arity occs =
 -- occurrence_c_j
 -- ---------------------------------------------------------------------------
 
+-- | Generate the @occurrence_c_j@ procedure for one occurrence of a
+-- constraint type.
 genOccurrence ::
   SymbolTable ->
   Types.Name ->
@@ -322,7 +329,7 @@ genOccurrence symTab name cType arity occ = do
 -- generated VM variable that holds its value (an @X_i@ for the active
 -- constraint, a @pArg_k_j@ for partner @k@). 'HeadWildcard' arguments
 -- contribute no binding: wildcards are never referenced from guards
--- or bodies. See the \"Notes\" block at the bottom of this file.
+-- or bodies. See Note [Head variable extraction].
 buildVarMap :: Occurrence -> VarMap
 buildVarMap occ =
   let activeBindings =
@@ -462,6 +469,9 @@ wrapInPartnerLoops occ condMap inner =
 -- Fire: history check + kill + body + early drop + backjumping
 -- ---------------------------------------------------------------------------
 
+-- | Compile a rule firing: the history check and kills for a
+-- propagation rule, Late Storage, the body goals, early drop, and
+-- backjumping.
 genFireStmts ::
   SymbolTable ->
   VarMap ->
@@ -486,12 +496,8 @@ genFireStmts symTab varMap occ = do
       -- partner's liveness outermost-first.  If a partner died (e.g.
       -- killed by a rule fired during body execution), Continue to its
       -- Foreach loop to skip useless inner iterations.
-      --
-      -- Removed partners are omitted: they were explicitly killed by
-      -- killStmts above, so they are guaranteed dead and the check
-      -- would always succeed.  The outermost removed partner's Continue
-      -- would be unconditional, making all subsequent checks unreachable
-      -- (paper §5.3, "all following alive tests thus becomes redundant").
+      -- See Note [Backjumping skips removed partners] for why removed
+      -- partners are omitted from these checks.
       --
       -- When activeIsRemoved the early drop is an unconditional Return,
       -- so backjumps are unreachable.
@@ -565,6 +571,9 @@ mkFrame label loc pexpr =
       frameSourceCode = T.pack (prettyPExprSrc pexpr)
     }
 
+-- | Kill the constraint suspensions a firing removes: every removed
+-- partner and, when the active constraint is removed, the active
+-- constraint itself.
 genKillStmts :: Occurrence -> [Stmt]
 genKillStmts occ =
   let -- Kill removed partners
@@ -581,6 +590,9 @@ genKillStmts occ =
 -- Compile terms
 -- ---------------------------------------------------------------------------
 
+-- | Lower a surface 'Term' to a VM 'ValExpr' in /term position/: no
+-- function call is evaluated, so a compound becomes a 'MakeTerm' (or a
+-- literal when it has arity 0).
 compileTerm :: VarMap -> SrcInfo -> Term -> Writer [Diagnostic CompileError] ValExpr
 compileTerm varMap si (VarTerm v) = case lookupVar v varMap of
   Just expr -> pure expr
@@ -632,6 +644,8 @@ compileTerm _ _ Wildcard = pure (Lit WildcardLit)
 --     compound that 'genCallFunDispatches' pattern-matches at runtime.
 --   * 'D.LambdaExpr' is removed by lambda lifting before compilation
 --     and is therefore unreachable here.
+--
+-- See Note [Compound expression compilation] and Note [Quoting].
 compileExpr ::
   VarMap ->
   SrcInfo ->
@@ -758,23 +772,23 @@ asPartnerArg occ (Var n) = Map.lookup n partArgs
 asPartnerArg _ _ = Nothing
 
 -- | Try to lift an @Equal a b@ check to an index condition on a partner
--- 'YCHR.Internal.VM.Foreach'. Returns @Just (k, j, other)@ when exactly one side
--- is partner @k@'s @j@-th argument and the other side's free variables
--- are all in scope at loop @k@'s evaluation point. Returns @Nothing@ if
--- neither side qualifies — in which case the equality stays in the
--- residual check expression.
+-- 'YCHR.Internal.VM.Foreach'. Returns @Just (k, cond)@ when exactly one
+-- side is partner @k@'s argument @cond.argIndex@ and the other side's
+-- free variables are all in scope at loop @k@'s evaluation point.
+-- Returns @Nothing@ if neither side qualifies — in which case the
+-- equality stays in the residual check expression.
 classifyEqual ::
   Occurrence ->
   ValExpr ->
   ValExpr ->
-  Maybe (PartnerIndex, ArgIndex, ValExpr)
+  Maybe (PartnerIndex, IndexCondition)
 classifyEqual occ a b
   | Just (k, j) <- asPartnerArg occ a,
     freeVars b `Set.isSubsetOf` inScopeBeforeLoop occ k =
-      Just (k, j, b)
+      Just (k, IndexCondition {argIndex = j, expectedValue = b})
   | Just (k, j) <- asPartnerArg occ b,
     freeVars a `Set.isSubsetOf` inScopeBeforeLoop occ k =
-      Just (k, j, a)
+      Just (k, IndexCondition {argIndex = j, expectedValue = a})
   | otherwise = Nothing
 
 -- | Compile a guard conjunction. Guards are split into two groups:
@@ -818,12 +832,12 @@ compileGuards mOcc mEq varMap si guards = do
   let (matchGuards, checkGuards) = partition isMatchGuard guards
       initial = MatchAcc {wrapper = id, varMap = varMap, dispatch = mEq}
   acc <- foldM (compileMatchGuard si) initial matchGuards
-  (condMap, checkExpr) <- compileCheckGuards mOcc acc.varMap si checkGuards
+  checks <- compileCheckGuards mOcc acc.varMap si checkGuards
   pure
     CompiledGuards
       { matchWrapper = acc.wrapper,
-        indexConditions = condMap,
-        residualCheck = checkExpr,
+        indexConditions = checks.indexConditions,
+        residualCheck = checks.residualCheck,
         extendedVarMap = acc.varMap
       }
   where
@@ -916,6 +930,9 @@ operandElse :: MatchAcc -> R.Expr -> ValExpr -> [Stmt]
 operandElse acc operand e =
   inconclusiveElse acc.dispatch [(e, rootIndexOf acc.dispatch operand)]
 
+-- | Compile one match guard into a wrapper that nests the enclosing
+-- block inside the structural test it introduces. See 'compileGuards'
+-- and 'EqDispatch'.
 compileMatchGuard ::
   SrcInfo ->
   MatchAcc ->
@@ -988,13 +1005,13 @@ compileCheckGuards ::
   VarMap ->
   SrcInfo ->
   [D.Guard] ->
-  Writer [Diagnostic CompileError] (PartnerCondMap, Maybe BoolExpr)
+  Writer [Diagnostic CompileError] CheckGuards
 compileCheckGuards mOcc varMap si guards = do
   (condMap, residuals) <- foldM step (Map.empty, []) guards
   let residual = case residuals of
         [] -> Nothing
         r : rest -> Just (foldl BAnd r rest)
-  pure (condMap, residual)
+  pure CheckGuards {indexConditions = condMap, residualCheck = residual}
   where
     classify e1 e2 = case mOcc of
       Just occ -> classifyEqual occ e1 e2
@@ -1003,9 +1020,8 @@ compileCheckGuards mOcc varMap si guards = do
       e1 <- compileExpr varMap si t1
       e2 <- compileExpr varMap si t2
       case classify e1 e2 of
-        Just (k, j, other) ->
-          let cond = IndexCondition {argIndex = j, expectedValue = other}
-           in pure (Map.insertWith (flip (++)) k [cond] cm, rs)
+        Just (k, cond) ->
+          pure (Map.insertWith (flip (++)) k [cond] cm, rs)
         Nothing ->
           pure (cm, rs ++ [BEqual e1 e2])
     step (cm, rs) (D.GuardExpr expr) = do
@@ -1017,6 +1033,8 @@ compileCheckGuards mOcc varMap si guards = do
 -- Compile body goals
 -- ---------------------------------------------------------------------------
 
+-- | Compile a rule-body goal list in order, threading the 'VarMap' so
+-- later goals see the variables earlier ones bind.
 compileBodyGoals ::
   SymbolTable ->
   VarMap ->
@@ -1185,6 +1203,10 @@ compileBodyGoal _ varMap si (D.BodyApply f args) = do
 -- Compile function definitions
 -- ---------------------------------------------------------------------------
 
+-- | Compile one user-defined function into a VM procedure: one
+-- equation-trying block per equation, in source order, followed by the
+-- fall-through error when none matches. Also used by 'YCHR.Run' to
+-- compile the query-time lifted lambdas.
 compileFunctionDef ::
   D.Function ->
   Writer [Diagnostic CompileError] Procedure
@@ -1331,6 +1353,9 @@ compilePrelude varMap si = foldM step ([], varMap)
       (stmts, vm') <- compileFunStmt vm si stmt
       pure (acc ++ stmts, vm')
 
+-- | Compile one function-body prelude statement, threading the
+-- 'VarMap'. Mirrors 'compileBodyGoal' without the reactivation-on-rebind
+-- path: a function has no constraint store to reactivate against.
 compileFunStmt ::
   VarMap ->
   SrcInfo ->
@@ -1405,6 +1430,9 @@ genCallFunDispatches :: [D.Function] -> [Procedure]
 genCallFunDispatches functions =
   [genCallFunDispatch functions callArity | callArity <- [1 .. maxCallArity]]
 
+-- | Generate the @call_N@ dispatcher for one call arity: one branch per
+-- same-arity function reference, then one per lifted lambda, then the
+-- no-match error.
 genCallFunDispatch :: [D.Function] -> Int -> Procedure
 genCallFunDispatch functions callArity =
   let closureParam = Name "closure"
@@ -1519,90 +1547,106 @@ genLambdaBranch callArity argParams func
 isLambdaFunc :: D.Function -> Bool
 isLambdaFunc func = T.isPrefixOf "__lambda_" func.name.baseName
 
-{- ---------------------------------------------------------------------------
-Notes
------------------------------------------------------------------------------
+{- Note [Occurrence numbering order]
 
-Why occurrences are reversed before numbering: 'collectOccurrences' folds
-each rule's occurrences into the 'OccurrenceMap' with 'occMapAppend',
-which is implemented on top of @Map.insertWith (++)@ and therefore
-prepends. Reversing the resulting list before 'assignNumbers' restores
-top-down rule order so that occurrence number 1 is the textually first
-occurrence of the constraint, matching the convention in the paper's
-Listings.
+'collectOccurrences' folds each rule's occurrences into the
+'OccurrenceMap' with 'occMapAppend', which is implemented on top of
+@Map.insertWith (++)@ and therefore prepends. Reversing the resulting
+list before 'assignNumbers' restores top-down rule order so that
+occurrence number 1 is the textually first occurrence of the
+constraint, matching the convention in the paper's Listings.
 
-Why partner ordering is "removed first, right-to-left" inside
-'ruleOccurrences': this is the ωr refined operational semantics from
+Partner ordering inside 'ruleOccurrences' is "removed first,
+right-to-left": this is the ωr refined operational semantics from
 Duck et al. (2004) and the paper §2.2, Fig. 2. Removed occurrences are
 tried before kept ones so that simplifications fire eagerly, and within
 each group the rightmost head constraint gets the lowest occurrence
 number so that join order matches a left-to-right scan of the body when
 the rule is read as a Horn clause.
+-}
 
-Why 'buildVarMap' only inspects 'HeadVar' arguments: occurrence head
+{- Note [Head variable extraction]
+
+'buildVarMap' only inspects 'HeadVar' arguments: occurrence head
 arguments are 'HeadArg', so the only two cases are 'HeadVar' (binds a
 name) and 'HeadWildcard' (contributes nothing). Non-variable patterns
 have been lifted into 'D.GuardMatch' and 'D.GuardGetArg' guards by the
-desugarer ('YCHR.Internal.Desugar.normalizeHead') and replaced with fresh
-'HeadVar's in the head — the type-level narrowing makes that
+desugarer ('YCHR.Internal.Desugar.normalizeHead') and replaced with
+fresh 'HeadVar's in the head — the type-level narrowing makes that
 invariant explicit instead of trusted by discipline.
+-}
 
-Why the active constraint is called @active@ everywhere: at runtime
+{- Note [Active constraint naming]
+
+The active constraint is called @active@ everywhere: at runtime
 "constraint identifier" and "constraint suspension" are the same value
-(a pointer to a heap-allocated 'YCHR.Internal.Runtime.Types.Suspension'). The
-compiler picks the paper's terminology — "active constraint" — and uses
-'activeName' as the single local-variable name in @tell_c@, @activate_c@,
-and inside every @occurrence_c_j@ procedure. The only places that still
-talk about a "suspension" are @reactivate_dispatch@ ('suspParamName')
-and 'DrainReactivationQueue' ('pendingName'), where the value really is
+(a pointer to a heap-allocated
+'YCHR.Internal.Runtime.Types.Suspension'). The compiler picks the
+paper's terminology — "active constraint" — and uses 'activeName' as
+the single local-variable name in @tell_c@, @activate_c@, and inside
+every @occurrence_c_j@ procedure. The only places that still talk about
+a "suspension" are @reactivate_dispatch@ ('suspParamName') and
+'DrainReactivationQueue' ('pendingName'), where the value really is
 "a suspension we received from somewhere else".
+-}
 
-How 'compileExpr' handles compound forms: each 'D.Expr' constructor
-maps to one runtime behavior. 'D.CallExpr' / 'D.ApplyExpr' /
-'D.HostExpr' lower to 'CallExpr' / 'HostCall' (and their arguments
-stay in expression context); 'D.CtorExpr' lowers to 'MakeTerm', with
-its arguments recursively re-entered through 'compileExpr' so a
-nested call inside @pair(foo(X), bar(Y))@ is still evaluated when
-@foo@ is a declared function. The user opts out of this with
-@quote\/1@: @quote(foo(X))@ delegates to 'compileTerm' on the surface
-'Term' shape and keeps the subterm opaque regardless of whether
+{- Note [Compound expression compilation]
+
+Each 'D.Expr' constructor maps to one runtime behavior. 'D.CallExpr' /
+'D.ApplyExpr' / 'D.HostExpr' lower to 'CallExpr' / 'HostCall' (and their
+arguments stay in expression context); 'D.CtorExpr' lowers to
+'MakeTerm', with its arguments recursively re-entered through
+'compileExpr' so a nested call inside @pair(foo(X), bar(Y))@ is still
+evaluated when @foo@ is a declared function. The user opts out of this
+with @quote\/1@: @quote(foo(X))@ delegates to 'compileTerm' on the
+surface 'Term' shape and keeps the subterm opaque regardless of whether
 @foo@ happens to be a declared function. The call-vs-constructor
 distinction was once made by a 'funSet' membership check at every
 compound; it is now structural at the 'D.Expr' level
-('YCHR.Internal.Resolve' commits to it once, in 'YCHR.Internal.Resolve.termToExpr').
+('YCHR.Internal.Resolve' commits to it once, in
+'YCHR.Internal.Resolve.termToExpr').
+-}
 
-Why 'genFireStmts' skips the alive check for removed partners during
-backjumping: 'genKillStmts' has just emitted an unconditional 'Kill' for
-every removed partner, so they are guaranteed dead by the time the body
-runs. Emitting an alive check for them would always fail and the
+{- Note [Backjumping skips removed partners]
+
+'genFireStmts' skips the alive check for removed partners during
+backjumping: 'genKillStmts' has just emitted an unconditional 'Kill'
+for every removed partner, so they are guaranteed dead by the time the
+body runs. Emitting an alive check for them would always fail and the
 resulting unconditional 'Continue' would make every later check
 unreachable (paper §5.3, "all following alive tests thus becomes
 redundant"). Backjumping is only useful for kept partners.
+-}
 
-Why anonymous rules get a synthetic @__rule_N@ name in 'ruleOccurrences':
+{- Note [Anonymous rule names]
+
+Anonymous rules get a synthetic @__rule_N@ name in 'ruleOccurrences':
 the propagation history is keyed on (rule name, constraint id tuple).
 If two anonymous propagation rules shared a single placeholder name,
 they would collide in the history and prevent each other from firing.
 The synthetic name uses the rule's program-wide source position, which
 is stable as long as the source order is.
+-}
 
-Semantics of @quote(X)@ — the quoting operator:
+{- Note [Quoting]
 
-@quote@ is a reserved keyword that prevents evaluation of its argument in
-expression contexts (@is@ RHS, guard expressions, function arguments).
-Normally, 'compileExpr' recursively evaluates recognised function calls
-and host calls inside an expression; @quote(E)@ instead compiles @E@ via
-'compileTerm', producing an opaque data term ('MakeTerm' \/ 'Lit' \/
-'Var') regardless of whether @E@ contains function or operator names.
+@quote@ is a reserved keyword that prevents evaluation of its argument
+in expression contexts (@is@ RHS, guard expressions, function
+arguments). Normally, 'compileExpr' recursively evaluates recognised
+function calls and host calls inside an expression; @quote(E)@ instead
+compiles @E@ via 'compileTerm', producing an opaque data term
+('MakeTerm' \/ 'Lit' \/ 'Var') regardless of whether @E@ contains
+function or operator names.
 
 The effect is visible in three places:
 
-  1. /Renamer/ ('YCHR.Internal.Rename.renameTerm'): inside @quote(...)@, the
-     argument is renamed in 'NoResolve' mode, so functor names stay
-     unqualified.  This means @quote(1 + 1)@ preserves the surface-level
-     @+(1, 1)@ rather than producing the internal @prelude:+(1, 1)@
-     representation.  Variables are still tracked (they need runtime
-     bindings) but are not resolved against the module's declarations.
+  1. /Renamer/ ('YCHR.Internal.Rename.renameTerm'): inside @quote(...)@,
+     the argument is renamed in 'NoResolve' mode, so functor names stay
+     unqualified.  This means @quote(1 + 1)@ preserves the
+     surface-level @+(1, 1)@ rather than producing the internal
+     @prelude:+(1, 1)@ representation.  Variables are still tracked
+     (they need runtime bindings) but are not resolved against the
+     module's declarations.
 
   2. /Compiler/ ('compileExpr'): the @quote\/1@ clause delegates to
      'compileTerm', which never emits 'CallExpr' or 'HostCall'.
@@ -1613,14 +1657,17 @@ The effect is visible in three places:
 @quote@ is forbidden as a user-defined constraint or function name
 ('YCHR.Internal.Resolve.checkReservedNames', error code YCHR-16003).
 
-Example: @R is compound_to_list(quote(1 + 1))@ yields @R = [\'+\', 1, 1]@
-because @1 + 1@ is compiled as the compound term @+(1, 1)@ instead of
-being evaluated to @2@.
+Example: @R is compound_to_list(quote(1 + 1))@ yields
+@R = [\'+\', 1, 1]@ because @1 + 1@ is compiled as the compound term
+@+(1, 1)@ instead of being evaluated to @2@.
+-}
 
-Why 'extractSymbolTable' lives in 'YCHR.Internal.Desugar' rather than here: the
-constraint-type indices it produces are needed both by this module and
-by 'YCHR.Internal.Compile.compile', but they are derivable from the desugared
-program's rule heads together with its 'constraintTypes' map.
+{- Note [extractSymbolTable placement]
+
+'extractSymbolTable' lives in 'YCHR.Internal.Desugar' rather than here:
+the constraint-type indices it produces are needed both by this module
+and by 'YCHR.Internal.Compile.compile', but they are derivable from the
+desugared program's rule heads together with its 'constraintTypes' map.
 Computing them in the desugarer keeps the compilation pipeline
 single-pass over the desugared AST.
---------------------------------------------------------------------------- -}
+-}

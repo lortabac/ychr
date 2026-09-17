@@ -263,7 +263,7 @@ partLabel k = Label ("L" <> T.pack (show (k.unPartnerIndex + 1)))
 -- | The active constraint of an occurrence procedure (paper
 -- terminology). At runtime "constraint identifier" and "constraint
 -- suspension" are the same value, so this single name covers both
--- roles. See the \"Notes\" block in 'YCHR.Internal.Compile'.
+-- roles. See Note [Active constraint naming] in "YCHR.Internal.Compile".
 activeName :: Name
 activeName = "active"
 

@@ -1,4 +1,3 @@
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- |
@@ -11,8 +10,9 @@
 -- operational semantics ωr (paper §2.2, Fig. 2). The result is a single
 -- 'OccurrenceMap' that the rest of 'YCHR.Internal.Compile' consumes.
 --
--- See the \"Notes\" block in 'YCHR.Internal.Compile' for the rationale behind the
--- ordering and numbering choices.
+-- See Note [Occurrence numbering order] and Note [Anonymous rule names]
+-- in "YCHR.Internal.Compile" for the rationale behind the ordering and
+-- numbering choices.
 module YCHR.Internal.Compile.Occurrences
   ( collectOccurrences,
   )
@@ -50,12 +50,14 @@ import YCHR.Internal.VM (ConstraintType (..))
 -- constraint type so that occurrence number 1 is the textually first
 -- occurrence (paper §5.2, Listings 1 and 2).
 --
--- Also returns the list of per-rule display names, indexed by the
+-- The result also carries the per-rule display names, indexed by the
 -- rule's 'RuleId' (which mirrors its program-wide source index).
+--
+-- See Note [Occurrence numbering order] in "YCHR.Internal.Compile".
 collectOccurrences ::
   SymbolTable ->
   D.Program ->
-  Writer [Diagnostic CompileError] (OccurrenceMap, [Text])
+  Writer [Diagnostic CompileError] CollectedOccurrences
 collectOccurrences symTab prog = do
   let indexed = zip [0 ..] prog.rules
       displayNames = map (uncurry ruleDisplayName) indexed
@@ -70,7 +72,11 @@ collectOccurrences symTab prog = do
   -- Number occurrences first (so ωr numbers are stable), then mark the
   -- provably-passive ones. Passivity only flips a flag; it never renumbers.
   let numbered = occMapMap (assignNumbers . reverse) grouped
-  pure (markPassive numbered, displayNames)
+  pure
+    CollectedOccurrences
+      { occurrenceMap = markPassive numbered,
+        ruleDisplayNames = displayNames
+      }
   where
     -- Reverse before numbering to undo the prepend-on-insert in
     -- 'occMapAppend' and restore top-down rule order.
@@ -80,6 +86,7 @@ collectOccurrences symTab prog = do
 -- synthetic @__rule_N@ name whose index matches the rule's
 -- program-wide source position. The double-underscore prefix avoids
 -- clashes with user-defined names.
+-- See Note [Anonymous rule names] in "YCHR.Internal.Compile".
 ruleDisplayName :: Int -> D.Rule -> Text
 ruleDisplayName ruleIdx rule = case rule.name of
   Just n -> n
