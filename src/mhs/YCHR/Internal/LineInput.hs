@@ -16,7 +16,8 @@ import System.IO (hFlush, stdout)
 
 -- | Configuration for a line-input session. Both fields are ignored
 -- by this backend; they exist for source compatibility with the GHC
--- backend.
+-- backend. Because this backend never touches a history file, it can
+-- never report an unusable history either.
 data LineInputSettings = LineInputSettings
   { historyFile :: Maybe FilePath,
     completionCandidates :: [String]

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Fix: `ychr repl` no longer aborts when the history file is unusable. If
+the XDG data directory cannot be created, or the history file is not
+writable or not readable (or is a directory), the REPL starts with
+history disabled and reports `REPL history not available` on stderr
+(`--quiet` suppresses it). See the
+[REPL reference](docs/reference/repl.md#history).
+
 New: first-class application now covers arities 1 through 10. The
 wired-in dynamic call primitive `'$call'` previously dispatched only
 arities 1 and 2; the compiler now emits `call_1` … `call_10`

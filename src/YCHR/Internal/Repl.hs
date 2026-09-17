@@ -15,7 +15,7 @@ module YCHR.Internal.Repl
   )
 where
 
-import Control.Exception (SomeException, displayException, fromException, try)
+import Control.Exception (IOException, SomeException, displayException, fromException, try)
 import Control.Monad (unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask, runReaderT)
@@ -99,19 +99,35 @@ runRepl hostCalls quietMode werror files = do
       when warnsFatal exitFailure
       unless quietMode (printTypeDiagnostics prog)
       let exported = exportedNames prog
-      outerInput <-
-        mkLineInput
-          LineInputSettings
-            { historyFile = Just "ychr/history",
-              completionCandidates = commandNames ++ exported
-            }
-      liveInput <-
-        mkLineInput
-          LineInputSettings
-            { historyFile = Just "ychr/history",
-              completionCandidates = ":end" : exported
-            }
+      (outerInput, liveInput) <- mkReplInputs quietMode exported
       outerLoop hostCalls quietMode werror files outerInput liveInput prog
+
+-- | Build the outer and live line inputs, which share one history file.
+-- If that file cannot be used — its parent directory is not creatable,
+-- or the file itself is read-only, unreadable, or a directory — the
+-- REPL starts in degraded mode with history disabled and says so once
+-- on stderr instead of aborting startup. @--quiet@ drops the notice,
+-- matching how it drops compile warnings. Tab completion, prompts and
+-- the rest of the session are unaffected.
+mkReplInputs :: Bool -> [String] -> IO (LineInput, LineInput)
+mkReplInputs quietMode exported = do
+  attempt <-
+    try @IOException $
+      (,)
+        <$> withHistory (commandNames ++ exported)
+        <*> withHistory (":end" : exported)
+  case attempt of
+    Right inputs -> pure inputs
+    Left _ -> do
+      unless quietMode (hPutStrLn stderr "REPL history not available")
+      (,)
+        <$> withoutHistory (commandNames ++ exported)
+        <*> withoutHistory (":end" : exported)
+  where
+    settings mhist cands =
+      LineInputSettings {historyFile = mhist, completionCandidates = cands}
+    withHistory = mkLineInput . settings (Just "ychr/history")
+    withoutHistory = mkLineInput . settings Nothing
 
 -- ---------------------------------------------------------------------------
 -- Outer REPL loop

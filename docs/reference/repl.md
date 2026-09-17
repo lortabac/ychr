@@ -203,3 +203,11 @@ every alive constraint, module-qualified. Transcript:
 ## History
 
 `$XDG_DATA_HOME/ychr/history` (usually `~/.local/share/ychr/history`).
+
+If that history file cannot be used — the data directory is not
+writable, so it cannot be created, or the file itself is read-only,
+unreadable, or a directory — the REPL starts with history disabled
+rather than failing to start. It reports `REPL history not available` on
+stderr; `--quiet` suppresses the report, as it does compile warnings.
+Everything else about the session (queries, prompts, live sessions, tab
+completion) is unaffected.

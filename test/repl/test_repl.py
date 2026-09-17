@@ -1,9 +1,11 @@
 """REPL integration tests.
 
-Each test pipes a query into ``ychr repl --quiet`` and checks stdout.
-To add a new test, append a (query, expected_output) tuple to REPL_TESTS.
+Most tests pipe a query into ``ychr repl --quiet`` and check stdout; a
+few drive other modes and check stderr. To add a new test, append a
+(query, expected_output) tuple to REPL_TESTS.
 """
 
+import os
 import subprocess
 
 import pytest
@@ -381,3 +383,74 @@ def test_info_cross_module_ambiguity(ychr_bin, tmp_path):
     assert "ambiguous identifier: twin/1 is exported by" in result.stdout
     assert "amb1" in result.stdout and "amb2" in result.stdout
     assert "amb1:twin\n:- chr_constraint twin(any).\n" in result.stdout
+
+
+def test_repl_history_unavailable_degrades(ychr_bin, tmp_path):
+    """An unusable history location must not abort startup. The REPL runs
+    with history disabled and reports it once on stderr; `--quiet` drops
+    the report but still runs. Three unusable layouts are exercised: the
+    data directory cannot be created, the history path is itself a
+    directory, and the history file is read-only. The first two are
+    root-proof, so only the read-only file case is skipped for root."""
+    notice = "REPL history not available"
+
+    def run(data_dir, *args):
+        return subprocess.run(
+            [ychr_bin, "repl", *args],
+            input="R is 1 + 1.\n",
+            capture_output=True,
+            text=True,
+            env={**os.environ, "XDG_DATA_HOME": str(data_dir)},
+        )
+
+    # The data directory cannot be created: XDG_DATA_HOME points below a
+    # regular file, so createDirectoryIfMissing fails with ENOTDIR.
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory")
+    loud = run(blocker / "sub")
+    assert loud.returncode == 0, f"repl failed:\n{loud.stdout}\n{loud.stderr}"
+    assert loud.stderr.count(notice) == 1, loud.stderr
+    assert notice not in loud.stdout
+    assert "R = 2." in loud.stdout
+
+    quiet = run(blocker / "sub", "--quiet")
+    assert quiet.returncode == 0, f"repl failed:\n{quiet.stdout}\n{quiet.stderr}"
+    assert quiet.stderr == ""
+    assert quiet.stdout == "R = 2.\n"
+
+    # The history path is a directory: its parent is fine, but the probe
+    # cannot open the path for writing.
+    as_dir = tmp_path / "as_dir"
+    (as_dir / "ychr" / "history").mkdir(parents=True)
+    dir_loud = run(as_dir)
+    assert dir_loud.returncode == 0, f"repl failed:\n{dir_loud.stdout}\n{dir_loud.stderr}"
+    assert dir_loud.stderr.count(notice) == 1, dir_loud.stderr
+    assert notice not in dir_loud.stdout
+    assert "R = 2." in dir_loud.stdout
+
+    # Permission-bit layouts. Root bypasses them, so these cases are
+    # skipped when running as root. The read-only file fails the
+    # AppendMode probe; the write-only file passes it and fails the
+    # ReadMode probe, so both halves of `ensureUsable` are exercised.
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        for label, mode in [("read_only", 0o444), ("write_only", 0o200)]:
+            case = tmp_path / label
+            (case / "ychr").mkdir(parents=True)
+            history = case / "ychr" / "history"
+            history.write_text("")
+            os.chmod(history, mode)
+            result = run(case)
+            assert result.returncode == 0, (
+                f"{label}: repl failed:\n{result.stdout}\n{result.stderr}"
+            )
+            assert result.stderr.count(notice) == 1, result.stderr
+            assert notice not in result.stdout
+            assert "R = 2." in result.stdout
+
+    # A usable location reports nothing on stderr and creates the file.
+    data = tmp_path / "data"
+    writable = run(data)
+    assert writable.returncode == 0, f"repl failed:\n{writable.stdout}\n{writable.stderr}"
+    assert writable.stderr == ""
+    assert "R = 2." in writable.stdout
+    assert (data / "ychr" / "history").exists()
