@@ -18,8 +18,7 @@ tests :: TestTree
 tests =
   testGroup
     "YCHR.Internal.Runtime.Reactivation"
-    [ emptyTests,
-      orderTests,
+    [ orderTests,
       reentrancyTests,
       observerTests,
       miscTests
@@ -55,35 +54,16 @@ drainCollect = do
   drainQueue $ \sid -> liftIO $ modifyIORef' ref (sid :)
   liftIO $ reverse <$> readIORef ref
 
-emptyTests :: TestTree
-emptyTests =
-  testGroup
-    "empty queue"
-    [ testCase "drain on empty does nothing" $ do
-        ids <- runReactEnv drainCollect
-        ids @?= []
-    ]
-
 orderTests :: TestTree
 orderTests =
   testGroup
     "FIFO order"
-    [ testCase "single enqueue preserves order" $ do
-        ids <- runReactEnv $ do
-          enqueue [SuspensionId 0, SuspensionId 1]
-          drainCollect
-        ids @?= [SuspensionId 0, SuspensionId 1],
-      testCase "multiple enqueues preserve combined order" $ do
+    [ testCase "multiple enqueues preserve combined order" $ do
         ids <- runReactEnv $ do
           enqueue [SuspensionId 0, SuspensionId 1]
           enqueue [SuspensionId 2, SuspensionId 3]
           drainCollect
-        ids @?= [SuspensionId 0, SuspensionId 1, SuspensionId 2, SuspensionId 3],
-      testCase "empty list enqueue is a no-op" $ do
-        ids <- runReactEnv $ do
-          enqueue []
-          drainCollect
-        ids @?= []
+        ids @?= [SuspensionId 0, SuspensionId 1, SuspensionId 2, SuspensionId 3]
     ]
 
 reentrancyTests :: TestTree

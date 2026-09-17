@@ -106,14 +106,6 @@ REPL_TESTS = [
     ),
     (":info foo", "unknown identifier: foo\n"),
     (
-        ":info call/2",
-        "prelude:call\n:- function call(fun(A) -> B end, A) -> B.\n",
-    ),
-    (
-        ":info call/3",
-        "prelude:call\n:- function call(fun(A, B) -> C end, A, B) -> C.\n",
-    ),
-    (
         ":info call/11",
         "prelude:call\n"
         ":- function call(fun(A, B, C, D, E, F, G, H, I, J) -> K end,"

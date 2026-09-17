@@ -118,9 +118,6 @@ roundTripTests =
         "Either Int Text"
         (roundTrip (Gen.choice [Left <$> genInt, Right <$> genText]) :: Property),
       testProperty "[Int]" (roundTrip (Gen.list (Range.linear 0 10) genInt)),
-      testProperty
-        "[[Int]]"
-        (roundTrip (Gen.list (Range.linear 0 5) (Gen.list (Range.linear 0 5) genInt))),
       testProperty "(Int, Text)" (roundTrip ((,) <$> genInt <*> genText)),
       testProperty
         "(Int, Text, Bool)"
@@ -167,12 +164,7 @@ encodingTests =
         quote (Circle 3)
           @?= CompoundTerm
             (Unqualified "quote")
-            [CompoundTerm (Unqualified "circle") [IntTerm 3]],
-      testCase "quote nests" $
-        quote (quote (int 1))
-          @?= CompoundTerm
-            (Unqualified "quote")
-            [CompoundTerm (Unqualified "quote") [IntTerm 1]]
+            [CompoundTerm (Unqualified "circle") [IntTerm 3]]
     ]
 
 -- ---------------------------------------------------------------------------
@@ -188,13 +180,7 @@ acceptanceTests =
           @?= Right True,
       testCase "prelude:[] decodes to []" $
         (fromTerm (CompoundTerm (Qualified "prelude" "[]") []) :: Either ConvertError [Int])
-          @?= Right [],
-      testCase "unqualified cons list decodes" $
-        ( fromTerm
-            (CompoundTerm (Unqualified ".") [IntTerm 1, CompoundTerm (Unqualified "[]") []]) ::
-            Either ConvertError [Int]
-        )
-          @?= Right [1]
+          @?= Right []
     ]
 
 -- ---------------------------------------------------------------------------

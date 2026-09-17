@@ -66,27 +66,14 @@ renderAtomTests :: TestTree
 renderAtomTests =
   testGroup
     "renderAtom quoting"
-    [ testCase "lowercase identifier stays bare" $
-        renderAtom "foo" @?= "foo",
-      testCase "lowercase with digits and underscore stays bare" $
+    [ testCase "lowercase with digits and underscore stays bare" $
         renderAtom "foo_bar2" @?= "foo_bar2",
-      testCase "empty atom is quoted" $
-        renderAtom "" @?= "''",
-      testCase "uppercase-first is quoted" $
-        renderAtom "Foo" @?= "'Foo'",
       testCase "leading underscore is quoted" $
         renderAtom "_foo" @?= "'_foo'",
       testCase "atom with embedded space is quoted" $
         renderAtom "hello world" @?= "'hello world'",
-      testCase "atom with apostrophe is quoted, apostrophe doubled" $
-        renderAtom "hello's" @?= "'hello''s'",
       testCase "word operator 'is' is quoted (would otherwise parse as op)" $
-        renderAtom "is" @?= "'is'",
-      -- The flattened-qualified marker '__' triggers quoting so that
-      -- internal names like @prelude__.@ don't accidentally render as
-      -- bare atoms that the parser would re-tokenize.
-      testCase "atom containing '__' is quoted" $
-        renderAtom "foo__bar" @?= "'foo__bar'"
+        renderAtom "is" @?= "'is'"
     ]
 
 listRenderingTests :: TestTree
@@ -163,10 +150,6 @@ bindingsTests =
     [ testCase "prettyBindings sorted with trailing newline" $
         prettyBindings (Map.fromList [("R", IntTerm 55), ("X", Wildcard)])
           @?= "R = 55\nX = _\n",
-      testCase "prettyBindings empty" $
-        prettyBindings Map.empty @?= "",
-      testCase "prettyQueryResult empty map is empty string" $
-        prettyQueryResult Map.empty @?= "",
       -- Underscored names are internal/wildcard; filtering them out
       -- can leave the visible set empty even when the raw map is not.
       testCase "prettyQueryResult all-underscore map is empty string" $

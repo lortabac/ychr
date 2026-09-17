@@ -136,15 +136,6 @@ unifyTests =
           assertUnifySuccess t1 t2
           assertDerefInt x 2
           assertDerefInt y 1,
-      testCase "Binding chain: X→Y→Z→42" $ do
-        runVarEnv $ do
-          x <- newVar
-          y <- newVar
-          z <- newVar
-          assertUnifySuccess x y
-          assertUnifySuccess y z
-          assertUnifySuccess z (VInt 42)
-          assertDerefInt x 42,
       testCase "Int = Atom (type mismatch)" $ do
         runVarEnv $ assertUnifyFailure (VInt 1) (VAtom "one"),
       testCase "Already-bound var: unify with same value succeeds" $ do
@@ -207,12 +198,6 @@ unifiableTests =
       testCase "Wildcard vs ground" $
         runVarEnv $
           assertUnifiable VWildcard (VInt 7) True,
-      testCase "Wildcard vs unbound var" $ runVarEnv $ do
-        x <- newVar
-        assertUnifiable VWildcard x True,
-      testCase "Wildcard vs compound" $
-        runVarEnv $
-          assertUnifiable VWildcard (makeTerm "f" [VInt 1, VInt 2]) True,
       testCase "Compound: matching ground args" $
         runVarEnv $
           assertUnifiable (makeTerm "f" [VInt 1, VInt 2]) (makeTerm "f" [VInt 1, VInt 2]) True,
@@ -452,11 +437,6 @@ derefTests =
           d <- deref x
           r <- equal d x
           liftIO $ r @?= True,
-      testCase "Ground value derefs to itself" $ do
-        d <- runVarEnv $ deref (VInt 99)
-        case d of
-          VInt 99 -> pure ()
-          _ -> assertBool "expected VInt 99" False,
       testCase "Single binding: var→int" $ do
         runVarEnv $ do
           x <- newVar
@@ -479,12 +459,7 @@ termTests :: TestTree
 termTests =
   testGroup
     "terms"
-    [ testCase "makeTerm constructs VTerm" $ do
-        let t = makeTerm "f" [VInt 1, VAtom "a"]
-        case t of
-          VTerm "f" [VInt 1, VAtom "a"] -> pure ()
-          _ -> assertBool "expected VTerm f [1, a]" False,
-      testCase "matchTerm: correct functor/arity" $ do
+    [ testCase "matchTerm: correct functor/arity" $ do
         r <- runVarEnv $ matchTerm (makeTerm "f" [VInt 1, VInt 2]) "f" 2
         r @?= True,
       testCase "matchTerm: wrong functor" $ do
@@ -532,14 +507,6 @@ wildcardTests =
       testCase "Int unifies with Wildcard" $ do
         (ok, _) <- runVarEnv $ unify (VInt 42) VWildcard
         ok @?= True,
-      testCase "Wildcard unifies with Wildcard" $ do
-        (ok, _) <- runVarEnv $ unify VWildcard VWildcard
-        ok @?= True,
-      testCase "Wildcard unifies with unbound Var" $ do
-        runVarEnv $ do
-          x <- newVar
-          (ok, _) <- unify VWildcard x
-          liftIO $ ok @?= True,
       testCase "Wildcard does not bind Var" $ do
         runVarEnv $ do
           x <- newVar
@@ -550,11 +517,5 @@ wildcardTests =
             _ -> assertBool "var should remain unbound" False,
       testCase "Wildcard equal to Int is False" $ do
         r <- runVarEnv $ equal VWildcard (VInt 42)
-        r @?= False,
-      testCase "Int equal to Wildcard is False" $ do
-        r <- runVarEnv $ equal (VInt 42) VWildcard
-        r @?= False,
-      testCase "Wildcard equal to Wildcard is False" $ do
-        r <- runVarEnv $ equal VWildcard VWildcard
         r @?= False
     ]

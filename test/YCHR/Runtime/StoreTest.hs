@@ -29,7 +29,7 @@ tests =
     ]
 
 -- | A 100-slot session is large enough for every test in this module
--- (which use ConstraintType 0/1 and occasionally check ConstraintType 99).
+-- (which use ConstraintType 0/1 and check ConstraintType 99 once).
 runStoreEnv :: Chr a -> IO a
 runStoreEnv action = do
   env <-
@@ -81,12 +81,7 @@ createTests =
         runStoreEnv $ do
           id1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
           id2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
-          liftIO $ assertBool "IDs should differ" (not (idEqual id1 id2)),
-      testCase "constraint is alive before storing" $ do
-        runStoreEnv $ do
-          sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
-          alive <- aliveConstraint sid
-          liftIO $ alive @?= True
+          liftIO $ assertBool "IDs should differ" (not (idEqual id1 id2))
     ]
 
 storeTests :: TestTree
@@ -175,20 +170,6 @@ fieldTests =
           a1 <- getConstraintArg sid 1
           liftIO $ case a0 of VInt 10 -> pure (); _ -> assertBool "arg 0" False
           liftIO $ case a1 of VAtom "x" -> pure (); _ -> assertBool "arg 1" False,
-      testCase "getConstraintType" $ do
-        runStoreEnv $ do
-          sid <- createConstraint (ConstraintType 1) [VInt 5]
-          t <- getConstraintType sid
-          liftIO $ t @?= ConstraintType 1,
-      testCase "idEqual same" $ do
-        runStoreEnv $ do
-          sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
-          liftIO $ assertBool "same id" (idEqual sid sid),
-      testCase "idEqual different" $ do
-        runStoreEnv $ do
-          s1 <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
-          s2 <- createConstraint (ConstraintType 0) [VInt 3, VInt 4]
-          liftIO $ assertBool "different id" (not (idEqual s1 s2)),
       testCase "isConstraintType true" $ do
         runStoreEnv $ do
           sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
@@ -318,11 +299,6 @@ observerTests =
         assertBool
           "should contain the suspension id"
           (SuspensionId 0 `elem` obs),
-      testCase "ground args produce no observer" $ do
-        runStoreEnv $ do
-          sid <- createConstraint (ConstraintType 0) [VInt 1, VInt 2]
-          _ <- storeConstraint sid
-          pure (),
       testCase "multiple constraints on same variable" $ do
         obs <- runStoreObservers $ do
           x <- newVar

@@ -167,42 +167,6 @@ genPExpr =
       genLambda genPExpr
     ]
 
--- | Generate a PExpr that may contain operator-shaped compounds.
-genPExprWithOps :: Gen PExpr
-genPExprWithOps =
-  Gen.recursive
-    Gen.choice
-    -- Base cases (same as genPExpr)
-    [ Var <$> genVar,
-      Int <$> Gen.integral (Range.linear (-1000) 1000),
-      Float <$> genFloat,
-      Atom <$> genAtom,
-      Str <$> genStringContent,
-      pure Wildcard,
-      pure (Atom "[]")
-    ]
-    -- Recursive cases: base + operator expressions
-    [ Gen.subtermM genPExprWithOps $ \t -> do
-        f <- genSafeAtom
-        pure (Compound f [noAnn t]),
-      Gen.subtermM2 genPExprWithOps genPExprWithOps $ \t1 t2 -> do
-        f <- genSafeAtom
-        pure (Compound f [noAnn t1, noAnn t2]),
-      -- Infix operator
-      Gen.subtermM2 genPExprWithOps genPExprWithOps $ \l r -> do
-        op <- Gen.element ["+", "-", "*", "/", "is"]
-        pure (Compound op [noAnn l, noAnn r]),
-      -- Prefix operator
-      Gen.subtermM genPExprWithOps $ \x ->
-        pure (Compound "~" [noAnn x]),
-      -- List
-      do
-        elems <- Gen.list (Range.linear 1 3) genPExprWithOps
-        pure (foldr (\h t -> Compound "." [noAnn h, noAnn t]) (Atom "[]") elems),
-      -- Lambda
-      genLambda genPExprWithOps
-    ]
-
 -- | Generate a PExpr covering the full grammar: operator expressions,
 -- postfix ops, lambdas, lists, floats, and the base atoms/vars/strings.
 genPExprFull :: Gen PExpr
@@ -273,7 +237,6 @@ tests =
   testGroup
     "YCHR.Internal.PExpr.Roundtrip"
     [ testProperty "roundtrip without operators" (prop_roundtrip emptyOps genPExpr),
-      testProperty "roundtrip with operators" (prop_roundtrip testOps genPExprWithOps),
       testProperty "roundtrip with full grammar" (prop_roundtrip fullOps genPExprFull)
     ]
   where

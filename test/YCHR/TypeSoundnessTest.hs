@@ -127,7 +127,7 @@ import YCHR.TypeSoundness.Types
 -- 'YCHR.TypeSoundness.Instrument.pruneTells' bounds its size, so in the
 -- ground fragment this should never fire; it is here so that a
 -- generator change which breaks that assumption degrades into a
--- discard rather than into the suite-wide 60s tasty timeout, which
+-- discard rather than into the suite-wide tasty timeout, which
 -- takes the whole run down with it.
 runBudgetMicros :: Int
 runBudgetMicros = 5_000_000

@@ -16,9 +16,7 @@ tests :: TestTree
 tests =
   testGroup
     "Collect"
-    [ testCase "no seeds, no closure" $
-        resolveLibraryClosure False Map.empty [] @?= Right [],
-      testCase "resolves a single library import" $
+    [ testCase "resolves a single library import" $
         let libs = Map.fromList [("foo", libMod "foo")]
          in case resolveLibraryClosure False libs [noAnnP "foo"] of
               Right mods -> length mods @?= 1

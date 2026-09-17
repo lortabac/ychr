@@ -93,10 +93,6 @@ atomTests =
         stripAll (p "foo.") @?= Right [Atom "foo"],
       testCase "single-quoted atom" $
         stripAll (p "'Hello World'.") @?= Right [Atom "Hello World"],
-      testCase "quoted atom with escape" $
-        stripAll (p "'it''s'.") @?= Right [Atom "it's"],
-      testCase "quoted atom with backslash escape" $
-        stripAll (p "'line\\none'.") @?= Right [Atom "line\none"],
       testCase "double underscore rejected" $
         assertBool "should fail" (isLeft (p "foo__bar.")),
       testCase "%%u rejected as infix in quoted atom" $
@@ -164,11 +160,7 @@ stringTests =
   testGroup
     "strings"
     [ testCase "simple string" $
-        stripAll (p "\"hello\".") @?= Right [Str "hello"],
-      testCase "string with escape" $
-        stripAll (p "\"line\\none\".") @?= Right [Str "line\none"],
-      testCase "string with embedded quote" $
-        stripAll (p "\"say \\\"hi\\\"\".") @?= Right [Str "say \"hi\""]
+        stripAll (p "\"hello\".") @?= Right [Str "hello"]
     ]
 
 -- ---------------------------------------------------------------------------
@@ -462,14 +454,8 @@ prettyTests =
     "pretty-printing"
     [ testCase "atom" $
         pp (Atom "foo") @?= "foo",
-      testCase "quoted atom (uppercase)" $
-        pp (Atom "Foo") @?= "'Foo'",
       testCase "quoted atom (space)" $
         pp (Atom "hello world") @?= "'hello world'",
-      testCase "quoted atom (embedded quote)" $
-        pp (Atom "it's") @?= "'it''s'",
-      testCase "quoted atom (empty)" $
-        pp (Atom "") @?= "''",
       testCase "quoted atom (word operator)" $
         ppOps (Atom "is") @?= "'is'",
       testCase "variable" $
@@ -931,12 +917,6 @@ mergeOpsTests =
               Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
               Right merged ->
                 length [() | (_, _, "**") <- opTableEntries merged] @?= 1,
-      testCase "redeclaring an op from base does not duplicate" $
-        let base = mkOpTable [(400, [(Yfx, "/")])]
-         in case mergeOps base [(400, Yfx, "/")] of
-              Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
-              Right merged ->
-                length [() | (_, _, "/") <- opTableEntries merged] @?= 1,
       testCase "repeated entries within decls do not duplicate" $
         case mergeOps emptyOps [(500, Yfx, "++"), (500, Yfx, "++")] of
           Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)

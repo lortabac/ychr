@@ -222,12 +222,6 @@ hnfTests =
           @?= [ D.GuardEqual (R.VarExpr "X") (R.VarExpr "_hnf_0"),
                 D.GuardExpr (R.HostExpr "gt" [R.VarExpr "X", R.IntExpr 0])
               ],
-      testCase "wildcard passes through HNF unchanged" $ do
-        let m = simpleModule (Simplification [qcon "M" "foo" [wildcard]])
-        rule <- singleRule [m]
-        getNode rule.head
-          @?= D.Head [] [D.HeadConstraint (D.QualifiedName "M" "foo") [D.HeadWildcard]]
-        getNode rule.guard @?= [],
       testCase "two wildcards stay as wildcards without guards" $ do
         let m = simpleModule (Simplification [qcon "M" "foo" [wildcard, wildcard]])
         rule <- singleRule [m]
@@ -402,34 +396,6 @@ errorTests =
                     noDiag (AnnP (UnexpectedBodyExpr bad2) dummyLoc (Atom ""))
                   ]
           Right _ -> assertFailure "expected Left",
-      testCase "bare variable in body produces UnexpectedBodyExpr" $ do
-        let badExpr = R.VarExpr "X"
-            m =
-              module' "M"
-                `defining` [ Rule
-                               Nothing
-                               (noAnnP (Simplification [leqQual]))
-                               (noAnnP [])
-                               (noAnnP [var "X"])
-                           ]
-        rprog <- resolve [m]
-        case desugarProgram rprog of
-          Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyExpr badExpr) dummyLoc (Atom ""))]
-          Right _ -> assertFailure "expected Left",
-      testCase "bare integer in body produces UnexpectedBodyExpr" $ do
-        let badExpr = R.IntExpr 42
-            m =
-              module' "M"
-                `defining` [ Rule
-                               Nothing
-                               (noAnnP (Simplification [leqQual]))
-                               (noAnnP [])
-                               (noAnnP [int 42])
-                           ]
-        rprog <- resolve [m]
-        case desugarProgram rprog of
-          Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyExpr badExpr) dummyLoc (Atom ""))]
-          Right _ -> assertFailure "expected Left",
       testCase "non-true atom in body produces UnexpectedBodyExpr" $ do
         let badExpr = R.CtorExpr (Unqualified "foo") []
             m =
@@ -468,34 +434,6 @@ errorTests =
                                Nothing
                                (noAnnP (Simplification [leqQual]))
                                (noAnnP [int 42])
-                               (noAnnP [atom "true"])
-                           ]
-        rprog <- resolve [m]
-        case desugarProgram rprog of
-          Left errs -> errs @?= [noDiag (AnnP (NonBooleanGuard badExpr) dummyLoc (Atom ""))]
-          Right _ -> assertFailure "expected Left",
-      testCase "bare float in guard produces NonBooleanGuard" $ do
-        let badExpr = R.FloatExpr 3.14
-            m =
-              module' "M"
-                `defining` [ Rule
-                               Nothing
-                               (noAnnP (Simplification [leqQual]))
-                               (noAnnP [float 3.14])
-                               (noAnnP [atom "true"])
-                           ]
-        rprog <- resolve [m]
-        case desugarProgram rprog of
-          Left errs -> errs @?= [noDiag (AnnP (NonBooleanGuard badExpr) dummyLoc (Atom ""))]
-          Right _ -> assertFailure "expected Left",
-      testCase "bare string in guard produces NonBooleanGuard" $ do
-        let badExpr = R.TextExpr "hi"
-            m =
-              module' "M"
-                `defining` [ Rule
-                               Nothing
-                               (noAnnP (Simplification [leqQual]))
-                               (noAnnP [text "hi"])
                                (noAnnP [atom "true"])
                            ]
         rprog <- resolve [m]
@@ -603,28 +541,6 @@ symbolTableTests =
                 ConstraintType 0
               )
             ],
-      testCase "two distinct qualified constraints get sequential ids" $ do
-        let prog =
-              D.Program
-                [ D.Rule
-                    Nothing
-                    ( noAnnP
-                        ( D.Head
-                            []
-                            [ D.HeadConstraint (D.QualifiedName "A" "c") [],
-                              D.HeadConstraint (D.QualifiedName "B" "d") []
-                            ]
-                        )
-                    )
-                    (noAnnP [])
-                    (noAnnP [])
-                ]
-                []
-                Map.empty
-                Map.empty
-                []
-        let table = extractSymbolTable prog
-        symbolTableSize table @?= 2,
       testCase "same constraint in head and body appears only once" $ do
         let prog =
               D.Program

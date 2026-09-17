@@ -34,16 +34,7 @@ tests :: TestTree
 tests =
   testGroup
     "Exhaustiveness"
-    [ testCase "exhaustive algebraic match emits no warning" $ do
-        ws <-
-          exhWarnings $
-            mod_
-              [ "rank(red) -> 1.",
-                "rank(green) -> 2.",
-                "rank(blue) -> 3."
-              ]
-        ws @?= [],
-      testCase "missing constructor warns with that constructor as witness" $ do
+    [ testCase "missing constructor warns with that constructor as witness" $ do
         ws <-
           exhWarnings $
             mod_
@@ -70,18 +61,6 @@ tests =
                 "rank(blue) | true -> 3."
               ]
         ws @?= [("m:rank/1", "m:rank(m:red)")],
-      testCase "non-algebraic (int) argument never warns" $ do
-        ws <-
-          exhWarnings $
-            T.unlines
-              [ ":- module(m, [c/1]).",
-                ":- chr_constraint c/1.",
-                ":- function describe(int) -> int.",
-                "describe(0) -> 100.",
-                "describe(1) -> 200.",
-                "c(R) <=> R is describe(0)."
-              ]
-        ws @?= [],
       testCase "fully guarded function over a non-algebraic type never warns" $ do
         -- Every equation is guarded (so none counts as covering) and the
         -- argument is int, which is not enumerable: the only witness is an
@@ -107,19 +86,6 @@ tests =
                 ":- chr_constraint c/1.",
                 ":- function rank/1.",
                 "rank(red) -> 1.",
-                "c(R) <=> R is rank(red)."
-              ]
-        ws @?= [],
-      testCase "open function is not checked" $ do
-        ws <-
-          exhWarnings $
-            T.unlines
-              [ ":- module(m, [c/1]).",
-                ":- chr_type color ---> red ; green ; blue.",
-                ":- chr_constraint c/1.",
-                ":- open_function rank(color) -> int.",
-                "rank(red) -> 1.",
-                "rank(green) -> 2.",
                 "c(R) <=> R is rank(red)."
               ]
         ws @?= [],

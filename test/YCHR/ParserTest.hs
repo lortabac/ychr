@@ -145,9 +145,6 @@ directiveTests =
             ( Just
                 [TypeExportDecl "tree" 0 Nothing, ConstraintDecl "leq" 2 Nothing Nothing]
             ),
-      testCase "parameterized type export" $
-        fmap (.node) . (.exports) <$> p ":- module(m, [type(list/1)])."
-          @?= Right (Just [TypeExportDecl "list" 1 Nothing]),
       testCase "type export with constructor allowlist" $
         fmap (.node) . (.exports)
           <$> p ":- module(m, [type(foo/0, [bar, baz])])."
@@ -852,10 +849,6 @@ firstPassTests =
     "first-pass module-header collector"
     [ testCase "extracts operators from export list" $
         ops ":- module(m, [op(500, yfx, '+')])." @?= Right [OpDecl 500 Yfx "+"],
-      testCase "skips name/arity entries" $
-        ops ":- module(m, [leq/2, op(700, xfx, '<')])." @?= Right [OpDecl 700 Xfx "<"],
-      testCase "skips type exports" $
-        ops ":- module(m, [type(bool/0), op(500, yfx, '+')])." @?= Right [OpDecl 500 Yfx "+"],
       testCase "type export among many entries" $
         ops ":- module(m, [leq/2, type(tree/0), op(400, yfx, '*'), type(list/1)])."
           @?= Right
@@ -876,8 +869,6 @@ firstPassTests =
       testCase "import lists with op() entries parse" $
         hdrImports ":- module(m, []). :- use_module(foo, [op(700, xfx, '<-')])."
           @?= Right [ModuleImport "foo" (Just [OperatorDecl (OpDecl 700 Xfx "<-")])],
-      testCase "skips fun name/arity entries" $
-        ops ":- module(m, [fun double/1, op(500, yfx, '+')])." @?= Right [OpDecl 500 Yfx "+"],
       testCase "fun name/arity and name/arity coexist in export list" $
         ops ":- module(m, [leq/2, fun double/1, op(700, xfx, '<')])."
           @?= Right

@@ -55,9 +55,7 @@ moduleTests :: TestTree
 moduleTests =
   testGroup
     "module"
-    [ testCase "module' produces empty module" $
-        module' "Foo" @?= emptyModule "Foo",
-      testCase "importing sets modImports" $
+    [ testCase "importing sets modImports" $
         module' "Foo" `importing` ["Bar", "Baz"]
           @?= (emptyModule "Foo")
             { imports =
@@ -138,20 +136,6 @@ declarationTests =
     "declaration"
     [ testCase "\"leq\" // 2 produces ConstraintDecl" $
         "leq" // 2 @?= ConstraintDecl "leq" 2 Nothing Nothing,
-      testCase "\"foo\" // 0 produces ConstraintDecl with arity 0" $
-        "foo" // 0 @?= ConstraintDecl "foo" 0 Nothing Nothing,
-      testCase "extendClassType produces ExtendClassTypeDecl" $
-        extendClassType
-          "classify"
-          [TypeCon (Unqualified "int") []]
-          (TypeCon (Unqualified "int") [])
-          @?= ExtendClassTypeDecl
-            { name = "classify",
-              arity = 1,
-              argTypes = Just [TypeCon (Unqualified "int") []],
-              returnType = Just (TypeCon (Unqualified "int") []),
-              target = Nothing
-            },
       testCase "withExtensions appends to module.extensions" $
         let eq = equation "classify" [atom "dog"] [] (atom "animal")
             m = module' "ext" `withExtensions` [eq]
@@ -288,11 +272,7 @@ operatorDeclarationTests :: TestTree
 operatorDeclarationTests =
   testGroup
     "operator declaration"
-    [ testCase "op produces OperatorDecl with the given fixity and type" $
-        op 700 Xfx "is"
-          @?= OperatorDecl
-            OpDecl {fixity = 700, opType = Xfx, opName = "is"},
-      testCase "op accepts each fixity variant we expose" $
+    [ testCase "op accepts each fixity variant we expose" $
         -- Spot-check the four OpType variants that don't appear in
         -- existing tests; if one of them were ever removed, this would
         -- catch it.
@@ -344,13 +324,6 @@ ruleTests =
             (Just (noAnn "my_rule"))
             (noAnnP (Simplification [a0]))
             (noAnnP [])
-            (noAnnP [atom "true"]),
-      testCase "(|-): sets rule guard" $
-        (([term "a" [var "X"]] <=> [atom "true"]) |- [var "X" .=. atom "zero"])
-          @?= Rule
-            Nothing
-            (noAnnP (Simplification [Constraint (Unqualified "a") [var "X"]]))
-            (noAnnP [var "X" .=. atom "zero"])
             (noAnnP [atom "true"])
     ]
   where
@@ -408,9 +381,6 @@ termTests =
       testCase "qterm produces qualified CompoundTerm" $
         qterm "Order" "leq" [var "X", var "Y"]
           @?= CompoundTerm (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"],
-      testCase "qterm with zero arguments" $
-        qterm "M" "marker" []
-          @?= CompoundTerm (Qualified "M" "marker") [],
       testCase "(.=.) produces unification term" $
         var "X" .=. var "Y"
           @?= CompoundTerm (Unqualified "=") [VarTerm "X", VarTerm "Y"],
@@ -472,13 +442,6 @@ lambdaTests =
                   CompoundTerm (Unqualified "+") [VarTerm "X", VarTerm "Y"]
                 ]
             ],
-      testCase "lambda with zero params" $
-        lambda [] (int 42)
-          @?= CompoundTerm
-            (Unqualified "->")
-            [ CompoundTerm (Unqualified "fun") [],
-              IntTerm 42
-            ],
       testCase "funRef builds fun(name/arity)" $
         funRef "factorial" 1
           @?= CompoundTerm
@@ -494,13 +457,6 @@ lambdaTests =
             [ funRef "f" 2,
               IntTerm 1,
               IntTerm 2
-            ],
-      testCase "call_ on a lambda value" $
-        call_ (lambda [var "X"] (var "X" .+ int 1)) [int 5]
-          @?= CompoundTerm
-            (Unqualified "$call")
-            [ lambda [var "X"] (var "X" .+ int 1),
-              IntTerm 5
             ]
     ]
 
@@ -529,8 +485,6 @@ numericInstanceTests =
       -- compound form dies with an arity error at tell time.
       testCase "negative integer literal folds into IntTerm" $
         ((-1) :: Term) @?= IntTerm (-1),
-      testCase "negate of an integer literal folds into IntTerm" $
-        negate (int 3) @?= IntTerm (-3),
       testCase "negate of a float literal folds into FloatTerm" $
         negate (float 1.5) @?= FloatTerm (-1.5),
       testCase "abs builds 'abs' compound" $

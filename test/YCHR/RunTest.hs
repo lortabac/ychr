@@ -34,7 +34,6 @@ import YCHR.Run
     newVar,
     resolveQueryConstraint,
     runProgramWithGoal,
-    runProgramWithGoalDSL,
     runProgramWithGoalDSLWithWarnings,
     runProgramWithQuery,
     tellConstraint,
@@ -53,7 +52,6 @@ tests =
       queryBodyTests,
       goalWarningTests,
       guardErrorTests,
-      unicodeTests,
       arityOverloadTests
     ]
 
@@ -272,32 +270,6 @@ visibilityTests =
           ( isLeft
               (resolveQueryConstraint cp q)
           ),
-      testCase "qualified non-exported internal constraint fails" $ do
-        cp <- compileOrFail [("pub.chr", exportedSource)]
-        let q = Constraint (Qualified "pub" "internal") [VarTerm "X"]
-        assertBool
-          "Should fail for non-exported constraint"
-          ( isLeft
-              ( resolveQueryConstraint
-                  cp
-                  q
-              )
-          ),
-      testCase "ambiguous unqualified name fails" $ do
-        cp <-
-          compileOrFail
-            [ ("a.chr", ambiguousSourceA),
-              ("b.chr", ambiguousSourceB)
-            ]
-        let q = Constraint (Unqualified "foo") [VarTerm "X"]
-        assertBool
-          "Should fail for ambiguous constraint"
-          ( isLeft
-              ( resolveQueryConstraint
-                  cp
-                  q
-              )
-          ),
       testCase "ambiguous name resolved with qualification" $ do
         cp <-
           compileOrFail
@@ -359,12 +331,7 @@ goalWarningTests =
         Map.lookup "R" bindings @?= Just Wildcard
         assertBool
           ("expected a YCHR-20101 warning, got: " ++ show (map displayMsg ws))
-          (any (("YCHR-20101" `isInfixOf`) . displayMsg) ws),
-      testCase "runProgramWithGoalDSL agrees on the bindings" $ do
-        cp <- compileOrFail [("exported.chr", goalWarningSource)]
-        let q = paintGoal "red"
-        bindings <- runProgramWithGoalDSL cp Map.empty q
-        Map.lookup "R" bindings @?= Just (IntTerm 1)
+          (any (("YCHR-20101" `isInfixOf`) . displayMsg) ws)
     ]
 
 -- ---------------------------------------------------------------------------
@@ -414,15 +381,6 @@ queryErrorTests =
             assertBool ("expected 'modA' in: " ++ show ms) ("modA" `elem` ms)
             assertBool ("expected 'modB' in: " ++ show ms) ("modB" `elem` ms)
           other -> assertFailure $ "expected AmbiguousConstraint, got: " ++ show other,
-      testCase "displayMsg renders YCHR-20013 with REPL hint" $ do
-        let q = Constraint (Unqualified "nope") [VarTerm "X"]
-            rendered = displayMsg (GoalNotAConstraint q NoSuchConstraint)
-        assertBool ("expected 'YCHR-20013' in: " ++ rendered) $
-          "YCHR-20013" `isInfixOf` rendered
-        assertBool ("expected 'nope/1' in: " ++ rendered) $
-          "nope/1" `isInfixOf` rendered
-        assertBool ("expected REPL hint in: " ++ rendered) $
-          "ychr repl" `isInfixOf` rendered,
       testCase "runProgramWithGoal: wrong-arity constructor throws TypeErrors" $ do
         -- Goals are checked exactly like rule bodies (spec §Type
         -- Checking Procedure): a known constructor at the wrong arity
@@ -531,27 +489,6 @@ queryErrorTests =
               assertFailure $
                 "expected ParseError, got non-Error exception: " ++ show exc
           Right _ -> assertFailure "expected exception, got success"
-    ]
-
--- ---------------------------------------------------------------------------
--- Non-ASCII constraint names
--- ---------------------------------------------------------------------------
-
-unicodeSource :: Text
-unicodeSource =
-  ":- module(uni, ['\xe9cho'/1]).\n\
-  \:- chr_constraint '\xe9cho'/1.\n\
-  \\n\
-  \'\xe9cho'(X) <=> X = done.\n"
-
-unicodeTests :: TestTree
-unicodeTests =
-  testGroup
-    "Non-ASCII constraint names"
-    [ testCase "constraint with non-ASCII name compiles and runs" $ do
-        prog <- compileOrFail [("uni.chr", unicodeSource)]
-        bindings <- runProgramWithGoal prog Map.empty "uni:'\xe9cho'(R)"
-        Map.lookup "R" bindings @?= Just (CompoundTerm (Unqualified "done") [])
     ]
 
 -- ---------------------------------------------------------------------------

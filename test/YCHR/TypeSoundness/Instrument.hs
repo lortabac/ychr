@@ -38,7 +38,7 @@ simpagation rule at most once per tuple as well, since each firing
 consumes one of the tuple's members. So stratum k receives finitely many
 instances, and the induction goes through.
 
-Termination alone is not enough for a 60s test budget, though: the
+Termination alone is not enough for a time-bounded test, though: the
 per-level bound is quadratic in the level above, so a four-stratum
 program can in principle derive hundreds of thousands of constraints.
 'pruneTells' caps that statically — see its haddock.
@@ -261,7 +261,7 @@ capLimit = 1_000_000
 -- Stratification (see @Note [Termination]@) guarantees termination but
 -- not speed: each stratum can hold up to the /product/ of the instance
 -- counts of the strata above it, so a four-stratum program can derive
--- six figures' worth of constraints and blow the 60s per-test budget.
+-- six figures' worth of constraints and blow the per-test budget.
 --
 -- 'derivationBound' computes that recurrence exactly (it is a genuine
 -- upper bound: a rule fires at most once per tuple of head instances,

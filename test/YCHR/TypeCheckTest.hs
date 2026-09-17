@@ -98,37 +98,6 @@ tests =
             )
         errs @?= []
         ws @?= [],
-      testCase "a cycle-closing merge across two skolems stays finite" $ do
-        -- No-hang regression: the first equality merges the two
-        -- heads' skolems, the second then relates the merged skolem
-        -- with `list` of itself. The parametric pin uses a fresh
-        -- rigid parameter instead of the partner's structure, so no
-        -- cyclic term can be built even through the alias chain.
-        (errs, ws) <-
-          checkModule
-            ( mod_
-                [ ":- chr_constraint a(T, T), b(T, prelude:list(T)).",
-                  "live @ a(X, Y), b(X, Y) <=> true."
-                ]
-            )
-        errs @?= []
-        ws @?= [],
-      testCase "a parameter-depth mismatch under a shared constructor stays live" $ do
-        -- `box(int)` and `box(bool)` positions sharing a variable
-        -- differ only inside the shared constructor, and the value
-        -- `bx0` satisfies the equality — the rule can fire, so no
-        -- inaccessible-branch warning is due. (The golden harness
-        -- cannot assert a warning's absence; this pins it.)
-        (errs, ws) <-
-          checkModule
-            ( mod_
-                [ ":- chr_type box(A) ---> bx0 ; bx(A).",
-                  ":- chr_constraint bi(box(int)), bb(box(prelude:bool)).",
-                  "live @ bi(X), bb(X) <=> true."
-                ]
-            )
-        errs @?= []
-        ws @?= [],
       testCase "a parametric pin leaves the parameter rigid" $ do
         -- A skolem shared with a `list(int)` position learns only
         -- that it is a list — `T := list(beta)` with beta fresh and

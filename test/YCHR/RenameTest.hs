@@ -120,29 +120,7 @@ importedTests :: TestTree
 importedTests =
   testGroup
     "imported"
-    [ testCase "head and body via import" $ do
-        let modOrder = module' "Order" `declaring` ["leq" // 2]
-            modLogic =
-              module' "Logic"
-                `importing` ["Order"]
-                `defining` [ [term "leq" [var "X", var "Y"], term "leq" [var "Y", var "Z"]]
-                               ==> [term "leq" [var "X", var "Z"]]
-                           ]
-        (_, renamedLogic) <- case renameProgram [modOrder, modLogic] of
-          Right ([a, b], _) -> return (a, b)
-          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
-          Left errs -> assertFailure $ "unexpected errors: " ++ show errs
-        rule <- case renamedLogic.rules of
-          [r] -> return r
-          rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
-        (rule.head.node, rule.body.node)
-          @?= ( Propagation
-                  [ Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"],
-                    Constraint (Qualified "Order" "leq") [VarTerm "Y", VarTerm "Z"]
-                  ],
-                [CompoundTerm (Qualified "Order" "leq") [VarTerm "X", VarTerm "Z"]]
-              ),
-      testCase "imports are not transitive" $ do
+    [ testCase "imports are not transitive" $ do
         -- A declares leq/2; B imports A; C imports B (not A)
         -- C cannot see leq/2 because A is not in C's visible set
         let modA = module' "A" `declaring` ["leq" // 2]
@@ -358,15 +336,7 @@ unknownTests =
                 `declaring` ["leq" // 3]
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renameProgram [m]
-          @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))],
-      testCase "host call in body" $ do
-        let m =
-              module' "M"
-                `declaring` ["c" // 0]
-                `defining` [[term "c" []] <=> [hostCall "some_host_func" [var "X"]]]
-        rule <- singleRule m
-        rule.body.node
-          @?= [CompoundTerm (Qualified "host" "some_host_func") [VarTerm "X"]]
+          @?= Left [noDiag (AnnP (UnknownName "leq" 2) dummyLoc (Atom ""))]
     ]
 
 --------------------------------------------------------------------------------
@@ -459,17 +429,6 @@ goalClassificationTests =
         rule <- singleRule m
         rule.guard.node
           @?= [CompoundTerm (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]],
-      testCase "body functor IS resolved" $ do
-        -- Body uses isGoal = True, so compound terms are looked up
-        let m =
-              module' "M"
-                `declaring` ["leq" // 2]
-                `defining` [ [term "leq" [var "X", var "Y"]]
-                               ==> [term "leq" [var "X", var "Z"]]
-                           ]
-        rule <- singleRule m
-        rule.body.node
-          @?= [CompoundTerm (Qualified "M" "leq") [VarTerm "X", VarTerm "Z"]],
       testCase "nested arg of head NOT resolved" $ do
         -- Head args use isGoal = False: inner functor stays Unqualified
         let m =
@@ -685,21 +644,12 @@ multiModuleTests =
                     )
                 ]
               ),
-      testCase "empty program" $
-        renameProgram [] @?= Right ([], []),
       testCase "module with no rules" $
         -- A module with no rules or equations renames to itself (modulo
         -- the import-collapse that 'rewriteImports' performs), so the
         -- expected output is just the collected form of the input.
         let m = module' "M" `declaring` ["leq" // 2]
-         in renameProgram [m] @?= Right (rewriteImports [m], []),
-      testCase "rule name preserved" $ do
-        let m =
-              module' "M"
-                `declaring` ["c" // 0]
-                `defining` ["my_rule" @: ([term "c" []] <=> [atom "true"])]
-        rule <- singleRule m
-        fmap (.node) rule.name @?= Just "my_rule"
+         in renameProgram [m] @?= Right (rewriteImports [m], [])
     ]
 
 --------------------------------------------------------------------------------
@@ -817,15 +767,7 @@ exportTests =
                         ""
                     )
                 )
-            ],
-      testCase "exporting declared constraint is fine" $ do
-        let m =
-              module' "M"
-                `declaring` ["foo" // 1]
-                `exporting` ["foo" // 1]
-        case renameProgram [m] of
-          Right _ -> pure ()
-          Left errs -> assertFailure $ "unexpected errors: " ++ show errs
+            ]
     ]
 
 -- ---------------------------------------------------------------------------

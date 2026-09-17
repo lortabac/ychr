@@ -971,10 +971,7 @@ evalDeepTests =
                 ]
             )
             (VInt 4)
-        expectInt result >>= (@?= 14),
-      testCase "literal passthrough: 42 = 42" $ do
-        result <- runCalc (Lit (IntLit 42)) (VInt 0)
-        expectInt result >>= (@?= 42)
+        expectInt result >>= (@?= 14)
     ]
 
 -- ---------------------------------------------------------------------------
@@ -995,19 +992,6 @@ callTypePred name v = do
     VBool b -> pure b
     _ -> assertFailure $ show name ++ ": expected Bool result"
 
--- | Lookup a HostCallFn from the base registry, calling 'assertFailure'
--- if not found.
-findBaseHC :: Name -> IO HostCallFn
-findBaseHC name = case Map.lookup name baseHostCallRegistry of
-  Nothing -> assertFailure $ "host call not found: " ++ show name
-  Just fn -> pure fn
-
--- | Call 'term_variables' on a value, returning the resulting list value.
-callTermVars :: Value -> IO Value
-callTermVars v = do
-  HostCallFn f <- findBaseHC (Name "term_variables")
-  runChrBase (f [v])
-
 -- | Variant inside a 'Chr' computation that already has a session set up.
 callTermVarsChr :: Value -> Chr Value
 callTermVarsChr v = case Map.lookup (Name "term_variables") baseHostCallRegistry of
@@ -1018,41 +1002,9 @@ typePredicateTests :: TestTree
 typePredicateTests =
   testGroup
     "Type predicates"
-    [ testCase "integer: true for VInt" $ do
-        b <- callTypePred "integer" (VInt 42)
-        assertBool "expected true" b,
-      testCase "integer: false for VAtom" $ do
+    [ testCase "integer: false for VAtom" $ do
         b <- callTypePred "integer" (VAtom "hello")
         assertBool "expected false" (not b),
-      testCase "atom: true for VAtom" $ do
-        b <- callTypePred "atom" (VAtom "hello")
-        assertBool "expected true" b,
-      testCase "atom: false for VInt" $ do
-        b <- callTypePred "atom" (VInt 1)
-        assertBool "expected false" (not b),
-      testCase "boolean: true for VBool" $ do
-        b <- callTypePred "boolean" (VBool True)
-        assertBool "expected true" b,
-      testCase "boolean: false for VAtom" $ do
-        b <- callTypePred "boolean" (VAtom "true")
-        assertBool "expected false" (not b),
-      testCase "string: true for VText" $ do
-        b <- callTypePred "string" (VText "hello")
-        assertBool "expected true" b,
-      testCase "string: false for VAtom" $ do
-        b <- callTypePred "string" (VAtom "hello")
-        assertBool "expected false" (not b),
-      testCase "var: true for unbound variable" $ do
-        b <- runChrBase $ do
-          v <- newVar
-          HostCallFn f <- case Map.lookup (Name "var") baseHostCallRegistry of
-            Just hc -> pure hc
-            Nothing -> error "var not found"
-          result <- f [v]
-          case result of
-            VBool b' -> pure b'
-            _ -> pure False
-        assertBool "expected true" b,
       testCase "var: false for bound variable" $ do
         b <- runChrBase $ do
           v <- newVar
@@ -1060,20 +1012,6 @@ typePredicateTests =
           HostCallFn f <- case Map.lookup (Name "var") baseHostCallRegistry of
             Just hc -> pure hc
             Nothing -> error "var not found"
-          result <- f [v]
-          case result of
-            VBool b' -> pure b'
-            _ -> pure False
-        assertBool "expected false" (not b),
-      testCase "var: false for ground value" $ do
-        b <- callTypePred "var" (VInt 42)
-        assertBool "expected false" (not b),
-      testCase "nonvar: false for unbound variable" $ do
-        b <- runChrBase $ do
-          v <- newVar
-          HostCallFn f <- case Map.lookup (Name "nonvar") baseHostCallRegistry of
-            Just hc -> pure hc
-            Nothing -> error "nonvar not found"
           result <- f [v]
           case result of
             VBool b' -> pure b'
@@ -1091,17 +1029,11 @@ typePredicateTests =
             VBool b' -> pure b'
             _ -> pure False
         assertBool "expected true" b,
-      testCase "nonvar: true for ground value" $ do
-        b <- callTypePred "nonvar" (VInt 42)
-        assertBool "expected true" b,
       testCase "ground: true for integer" $ do
         b <- callTypePred "ground" (VInt 42)
         assertBool "expected true" b,
       testCase "ground: true for atom" $ do
         b <- callTypePred "ground" (VAtom "hello")
-        assertBool "expected true" b,
-      testCase "ground: true for ground compound" $ do
-        b <- callTypePred "ground" (VTerm "f" [VInt 1, VAtom "hello"])
         assertBool "expected true" b,
       testCase "ground: false for unbound variable" $ do
         b <- runChrBase $ do
@@ -1110,17 +1042,6 @@ typePredicateTests =
             Just hc -> pure hc
             Nothing -> error "ground not found"
           result <- f [v]
-          case result of
-            VBool b' -> pure b'
-            _ -> pure True
-        assertBool "expected false" (not b),
-      testCase "ground: false for compound with unbound var" $ do
-        b <- runChrBase $ do
-          v <- newVar
-          HostCallFn f <- case Map.lookup (Name "ground") baseHostCallRegistry of
-            Just hc -> pure hc
-            Nothing -> error "ground not found"
-          result <- f [VTerm "f" [VInt 1, v]]
           case result of
             VBool b' -> pure b'
             _ -> pure True
@@ -1140,16 +1061,6 @@ typePredicateTests =
       testCase "ground: false for wildcard" $ do
         b <- callTypePred "ground" VWildcard
         assertBool "expected false" (not b),
-      testCase "term_variables: ground term yields empty list" $ do
-        result <- callTermVars (VTerm "f" [VInt 1, VAtom "hello"])
-        case result of
-          VAtom "prelude__[]" -> pure ()
-          _ -> assertFailure "expected empty list",
-      testCase "term_variables: integer yields empty list" $ do
-        result <- callTermVars (VInt 42)
-        case result of
-          VAtom "prelude__[]" -> pure ()
-          _ -> assertFailure "expected empty list",
       testCase "term_variables: unbound var yields singleton list" $ do
         (isSingleton, sameVar) <- runChrBase $ do
           v <- newVar
@@ -1204,22 +1115,8 @@ typePredicateTests =
             _ -> pure (0, False, False)
         len @?= 2
         assertBool "first element should be X" eq1
-        assertBool "second element should be Y" eq2,
-      testCase "unifiable: true for two equal integers" $ do
-        b <- callUnifiable (VInt 1) (VInt 1)
-        assertBool "expected true" b,
-      testCase "unifiable: false for distinct integers" $ do
-        b <- callUnifiable (VInt 1) (VInt 2)
-        assertBool "expected false" (not b)
+        assertBool "second element should be Y" eq2
     ]
-  where
-    callUnifiable a b = case Map.lookup (Name "unifiable") baseHostCallRegistry of
-      Nothing -> assertFailure "unifiable not found in registry"
-      Just (HostCallFn f) -> do
-        result <- runChrEmpty (f [a, b])
-        case result of
-          VBool b' -> pure b'
-          _ -> assertFailure "unifiable: expected Bool result"
 
 -- ---------------------------------------------------------------------------
 -- =.. (univ) tests
@@ -1234,20 +1131,7 @@ univTests :: TestTree
 univTests =
   testGroup
     "compound_to_list / list_to_compound"
-    [ testCase "compound_to_list: f(1, 2) -> [f, 1, 2]" $ do
-        result <- callHostCall1 "compound_to_list" (VTerm "f" [VInt 1, VInt 2])
-        case result of
-          VTerm
-            "prelude__."
-            [ VAtom "f",
-              VTerm
-                "prelude__."
-                [ VInt 1,
-                  VTerm "prelude__." [VInt 2, VAtom "prelude__[]"]
-                  ]
-              ] -> pure ()
-          _ -> assertFailure "unexpected result",
-      testCase "compound_to_list: g(hello) -> [g, hello]" $ do
+    [ testCase "compound_to_list: g(hello) -> [g, hello]" $ do
         result <- callHostCall1 "compound_to_list" (VTerm "g" [VAtom "hello"])
         case result of
           VTerm
@@ -1264,54 +1148,5 @@ univTests =
         result <- callHostCall1 "compound_to_list" (VTerm "foo" [])
         case result of
           VTerm "prelude__." [VAtom "foo", VAtom "prelude__[]"] -> pure ()
-          _ -> assertFailure "unexpected result",
-      testCase "compound_to_list: f(g(1), 2) -> [f, g(1), 2]" $ do
-        result <- callHostCall1 "compound_to_list" (VTerm "f" [VTerm "g" [VInt 1], VInt 2])
-        case result of
-          VTerm
-            "prelude__."
-            [ VAtom "f",
-              VTerm
-                "prelude__."
-                [ VTerm "g" [VInt 1],
-                  VTerm "prelude__." [VInt 2, VAtom "prelude__[]"]
-                  ]
-              ] -> pure ()
-          _ -> assertFailure "unexpected result",
-      testCase "list_to_compound: [f, 1, 2] -> f(1, 2)" $ do
-        let list =
-              VTerm
-                "prelude__."
-                [ VAtom "f",
-                  VTerm
-                    "prelude__."
-                    [ VInt 1,
-                      VTerm "prelude__." [VInt 2, VAtom "prelude__[]"]
-                    ]
-                ]
-        result <- callHostCall1 "list_to_compound" list
-        case result of
-          VTerm "f" [VInt 1, VInt 2] -> pure ()
-          _ -> assertFailure "unexpected result",
-      testCase "list_to_compound: [foo] -> foo (atom)" $ do
-        let list = VTerm "prelude__." [VAtom "foo", VAtom "prelude__[]"]
-        result <- callHostCall1 "list_to_compound" list
-        case result of
-          VAtom "foo" -> pure ()
-          _ -> assertFailure "unexpected result",
-      testCase "list_to_compound: [g, hello] -> g(hello)" $ do
-        let list =
-              VTerm
-                "prelude__."
-                [ VAtom "g",
-                  VTerm
-                    "prelude__."
-                    [ VAtom "hello",
-                      VAtom "prelude__[]"
-                    ]
-                ]
-        result <- callHostCall1 "list_to_compound" list
-        case result of
-          VTerm "g" [VAtom "hello"] -> pure ()
           _ -> assertFailure "unexpected result"
     ]

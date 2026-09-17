@@ -613,7 +613,7 @@ Discovery rules (enforced by `test/YCHR/GoldenTest.hs`):
 - Every `.goal` must be paired with exactly one of `.expected` (positive) or `.error` (goal-negative); an unpaired `.goal` or `.expected` is an error.
 - A directory containing any `.goal` file may not also contain a bare `.error`: it could not be told apart from a compilation-negative case.
 
-Test IDs are nested: a test directory `fib/` with cases `fib.goal` and `fib_small.goal` produces `Golden.fib.fib` and `Golden.fib.fib_small` in tasty (and `test_scheme_golden[fib-fib]`, `test_scheme_golden[fib-fib_small]` in pytest).
+Test IDs are nested: a test directory `strings/` with cases `concat_basic.goal` and `len_basic.goal` produces `Golden.strings.concat_basic` and `Golden.strings.len_basic` in tasty (and `test_scheme_golden[strings-concat_basic]`, `test_scheme_golden[strings-len_basic]` in pytest).
 
 Golden tests run on both the Haskell interpreter (`cabal test`) and the Scheme backend (`python3 -m pytest test/scheme/`). The Scheme harness only runs positive cases. Run both with `make test`.
 

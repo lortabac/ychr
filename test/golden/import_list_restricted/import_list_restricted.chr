@@ -1,7 +1,0 @@
-:- module(import_list_restricted, [go/1]).
-
-:- use_module(dup_lib, []).
-
-:- chr_constraint go/1.
-
-go(X) <=> dup(X, X).

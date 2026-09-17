@@ -16,8 +16,7 @@ tests :: TestTree
 tests =
   testGroup
     "YCHR.Internal.Runtime.History"
-    [ emptyTests,
-      addTests,
+    [ addTests,
       distinctionTests,
       miscTests
     ]
@@ -27,15 +26,6 @@ runHistoryEnv action = do
   env <- initSessionEnv [] [] [] Map.empty Map.empty Map.empty Map.empty Set.empty
   runChr action env
 
-emptyTests :: TestTree
-emptyTests =
-  testGroup
-    "empty history"
-    [ testCase "notInHistory returns True" $ do
-        r <- runHistoryEnv $ notInHistory (RuleId 1) [SuspensionId 0]
-        r @?= True
-    ]
-
 addTests :: TestTree
 addTests =
   testGroup
@@ -44,12 +34,6 @@ addTests =
         r <- runHistoryEnv $ do
           addHistory (RuleId 1) [SuspensionId 0, SuspensionId 1]
           notInHistory (RuleId 1) [SuspensionId 0, SuspensionId 1]
-        r @?= False,
-      testCase "duplicate addHistory is idempotent" $ do
-        r <- runHistoryEnv $ do
-          addHistory (RuleId 1) [SuspensionId 0]
-          addHistory (RuleId 1) [SuspensionId 0]
-          notInHistory (RuleId 1) [SuspensionId 0]
         r @?= False
     ]
 

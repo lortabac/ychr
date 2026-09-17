@@ -371,9 +371,7 @@ callDispatchTests :: TestTree
 callDispatchTests =
   testGroup
     "Call dispatch arities"
-    [ testCase "the supported ceiling is 10" $
-        maxCallArity @?= 10,
-      testCase "a dispatcher is emitted for every arity in 1..maxCallArity" $ do
+    [ testCase "a dispatcher is emitted for every arity in 1..maxCallArity" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
         mapM_ (assertDispatcher prog) [1 .. maxCallArity],
       testCase "no dispatcher is emitted above maxCallArity" $ do

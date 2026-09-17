@@ -28,13 +28,21 @@ import YCHR.TypeCheckTest qualified
 import YCHR.TypeSoundnessTest qualified
 import YCHR.VM.SExprTest qualified
 
--- | Per-test wall-clock cap. The whole suite runs in seconds, so this
--- only ever fires on a genuine non-termination — a type-checker rule
--- that builds a cyclic term, say, whose deref never returns. Without
--- it such a regression wedges the runner and reports a suite-level
--- failure that names no test.
+-- | Per-test wall-clock cap. Most of the suite runs in milliseconds, so
+-- this only ever fires on a genuine non-termination — a type-checker
+-- rule that builds a cyclic term, say, whose deref never returns.
+-- Without it such a regression wedges the runner and reports a
+-- suite-level failure that names no test.
+--
+-- The cap is deliberately generous: "YCHR.TypeSoundness" runs two
+-- 300-case hedgehog properties that take roughly 85s of CPU each (the
+-- pair overlaps to about that wall-clock when the two run in parallel),
+-- and when the "Golden" group saturates every CPU they legitimately
+-- take over a minute. A 60s cap turned that contention into a false
+-- timeout for both properties; 300s leaves ample headroom while still
+-- catching a real hang.
 testTimeout :: Timeout
-testTimeout = mkTimeout 60_000_000
+testTimeout = mkTimeout 300_000_000
 
 main :: IO ()
 main = do
