@@ -1,0 +1,12 @@
+:- module(driver_host_call, [go/2, copy/2]).
+:- use_module(library(prelude)).
+
+:- chr_constraint go(any, any), copy(any, any).
+
+% A `host:` call in *goal argument* position is compiled by the driver,
+% not by the generated library, so these cases exercise
+% `SchemeDriver.exprToScheme` rather than `Scheme.compileHostCall`.
+% The rule bodies only echo the argument back into the goal variable.
+
+go(X, R) <=> R = X.
+copy(X, R) <=> R = X.

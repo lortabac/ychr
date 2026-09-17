@@ -16,7 +16,12 @@ import Data.List (nub, sort)
 import Data.List.NonEmpty qualified as NE
 import Data.Text (Text)
 import Data.Text qualified as T
-import YCHR.Internal.Backend.Scheme (compileSymbol, qualifiedAliasIdentifier)
+import YCHR.Internal.Backend.Scheme
+  ( HostCallTarget (..),
+    compileSymbol,
+    hostCallTarget,
+    qualifiedAliasIdentifier,
+  )
 import YCHR.Internal.Compile (funcProcName)
 import YCHR.Internal.Compile.Names (vmName)
 import YCHR.Internal.Compile.Pipeline (Error (..))
@@ -99,8 +104,9 @@ generateDriver moduleName qn args =
 
 -- | Convert an 'R.Expr' to a Scheme expression. Mirrors the dispatch
 -- in 'YCHR.Internal.Compile.compileExpr' / 'YCHR.Internal.Backend.Scheme.compileValExpr':
--- 'CallExpr' becomes a function call, 'HostExpr' a host bridge,
--- 'CtorExpr' a 'make-term', and so on. Variables are referenced by
+-- 'CallExpr' becomes a function call, 'HostExpr' a call to the runtime
+-- procedure 'YCHR.Internal.Backend.Scheme.hostCallTarget' resolves it
+-- to, 'CtorExpr' a 'make-term', and so on. Variables are referenced by
 -- their declared name in the surrounding @let*@ block.
 exprToScheme :: R.Expr -> Text
 exprToScheme (R.VarExpr v) = v
@@ -144,8 +150,12 @@ exprToScheme (R.CallExpr qn args) =
       argExprs = map exprToScheme args
    in "(" <> funcName.unName <> " %s " <> T.intercalate " " argExprs <> ")"
 exprToScheme (R.HostExpr f args) =
-  let argExprs = map exprToScheme args
-   in "(" <> hostBridgeName f <> " " <> T.intercalate " " argExprs <> ")"
+  let target = hostCallTarget f
+      argExprs = ["(deref " <> exprToScheme a <> ")" | a <- args]
+      allArgs
+        | target.takesSession = "%s" : argExprs
+        | otherwise = argExprs
+   in "(" <> target.procedure <> T.concat (map (" " <>) allArgs) <> ")"
 exprToScheme (R.ApplyExpr f args) =
   let n = length args
       dispatch = "call_" <> T.pack (show n)
@@ -180,11 +190,6 @@ exprLambdas (R.CallExpr _ args) = concatMap exprLambdas args
 exprLambdas (R.ApplyExpr f args) = exprLambdas f ++ concatMap exprLambdas args
 exprLambdas (R.HostExpr _ args) = concatMap exprLambdas args
 exprLambdas _ = []
-
--- | Host-call bridge name. Mirrors the encoding used by
--- 'YCHR.Internal.Backend.Scheme.compileHostCall'.
-hostBridgeName :: Text -> Text
-hostBridgeName f = "host__" <> f
 
 -- | A native Scheme boolean literal.
 schemeBool :: Bool -> Text

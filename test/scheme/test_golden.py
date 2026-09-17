@@ -238,3 +238,45 @@ def test_gen_driver_over_arity_goal(ychr_bin, project_root, tmp_path):
     )
     assert result.returncode != 0
     assert "YCHR-16022" in result.stdout + result.stderr
+
+
+def test_gen_driver_host_call_mapping(ychr_bin, project_root, tmp_path):
+    """A `host:` call in a goal argument must lower to the runtime
+    procedure the compiled library would use — not to a `host__*`
+    identifier, which no Scheme module defines — with the session
+    threaded for session host calls.
+
+    This pins the driver text without Guile, so the mapping stays shared
+    with `Scheme.compileHostCall` even when the golden suite is skipped.
+    """
+    program = tmp_path / "gdhc.chr"
+    program.write_text(
+        ":- module(gdhc, [go/2]).\n"
+        ":- use_module(library(prelude)).\n"
+        ":- chr_constraint go(any, any).\n"
+    )
+
+    def driver(goal):
+        result = subprocess.run(
+            [ychr_bin, "gen-driver", "-g", goal, str(program)],
+            capture_output=True,
+            text=True,
+            cwd=project_root,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return result.stdout
+
+    arith = driver("gdhc:go(host:'+'(1, 2), R)")
+    assert "host__" not in arith
+    assert "(%add (deref 1) (deref 2))" in arith
+
+    # `copy_term` needs the session threaded as the procedure's first
+    # argument; without it the driver calls `%copy-term` at arity 1.
+    session = driver("gdhc:go(host:copy_term(1), R)")
+    assert "(%copy-term %s (deref 1))" in session
+
+    # An unmapped name passes through verbatim, exactly as the compiled
+    # library emits it.
+    unmapped = driver("gdhc:go(host:my_add(1, 2), R)")
+    assert "(my_add (deref 1) (deref 2))" in unmapped
+

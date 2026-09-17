@@ -103,15 +103,6 @@ comment names only `baseHostCallRegistry` and so understates what
 Haskell's `is` can reach.
 
 
-## Dead `host__` bridge in the generated driver
-
-`SchemeDriver.hostBridgeName` emits `host__<f>` and claims to mirror
-`Scheme.compileHostCall`, which actually emits the `hostCallMap` name
-(`%irem`, `equal?/chr`, …). No `host__*` procedure exists anywhere in
-`scheme/`, so a goal containing a direct `host:` call generates an
-unbound identifier. No golden test passes a bare `host:` call in a goal.
-
-
 ## Atom pretty-printing divergences
 
 The Haskell `prettyTerm` (`src/YCHR/Internal/PExpr.hs`) quotes atoms whose text is
@@ -247,3 +238,14 @@ record of which fixes have already shipped.
   Closed `HASKELL_ONLY_CASES` entries for
   `type_export_constructor_allowlist` and
   `type_import_constructor_narrowing`.
+- **Dead `host__` bridge in the generated driver** — `ychr gen-driver`
+  compiled a `host:` call in a goal argument to `(host__<f> …)`, a name
+  no Scheme module defines, because `SchemeDriver.hostBridgeName`
+  invented its own mangling instead of mirroring
+  `Scheme.compileHostCall`. The procedure name and the session predicate
+  now come from a shared `Scheme.hostCallTarget`, so driver and library
+  emit `(%add (deref …) …)` / `(%copy-term %s …)` identically; the
+  driver arm derefs its arguments too, and no longer leaves the stray
+  space `(host__now )` on a zero-arity call. Pinned by
+  `test/golden/driver_host_call/` (three cases, run on both backends)
+  and by `test/scheme/test_golden.py::test_gen_driver_host_call_mapping`.

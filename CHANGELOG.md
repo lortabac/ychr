@@ -9,6 +9,14 @@ history disabled and reports `REPL history not available` on stderr
 (`--quiet` suppresses it). See the
 [REPL reference](docs/reference/repl.md#history).
 
+Fix: `ychr gen-driver` compiles a `host:` call in a goal argument to the
+same runtime procedure the compiled library uses. It previously emitted
+a `host__<name>` identifier that no Scheme module defines, so a driver
+generated from a goal such as `go(host:'+'(1, 2), R)` failed under Guile
+with `Unbound variable: host__+`; it now emits `(%add (deref 1)
+(deref 2))` and threads the session for `copy_term`, matching the
+compiled-library path.
+
 New: first-class application now covers arities 1 through 10. The
 wired-in dynamic call primitive `'$call'` previously dispatched only
 arities 1 and 2; the compiler now emits `call_1` … `call_10`

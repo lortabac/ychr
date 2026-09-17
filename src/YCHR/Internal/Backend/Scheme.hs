@@ -14,6 +14,8 @@ module YCHR.Internal.Backend.Scheme
     compileSymbol,
     isValidSchemeIdentifier,
     qualifiedAliasIdentifier,
+    HostCallTarget (..),
+    hostCallTarget,
   )
 where
 
@@ -641,6 +643,30 @@ hostCallMap =
 sessionHostCalls :: Set.Set Text
 sessionHostCalls = Set.fromList ["copy_term"]
 
+-- | Where a @host:@ call lands in the Scheme runtime: the procedure to
+-- call and whether that procedure takes the current session as an extra
+-- leading argument.
+--
+-- Single source of truth for the name mapping and the session
+-- predicate. The two emitters that need it — 'compileHostCallWith' for
+-- compiled libraries and
+-- 'YCHR.Internal.Backend.SchemeDriver.exprToScheme' for generated
+-- drivers — each still wrap arguments in @deref@ themselves.
+data HostCallTarget = HostCallTarget
+  { procedure :: Text,
+    takesSession :: Bool
+  }
+
+-- | Resolve a host-call name. A name absent from 'hostCallMap' passes
+-- through unchanged: the generated code resolves it in its own import
+-- environment (Guile R6RS resolves free identifiers lazily).
+hostCallTarget :: Text -> HostCallTarget
+hostCallTarget n =
+  HostCallTarget
+    { procedure = Map.findWithDefault n n hostCallMap,
+      takesSession = Set.member n sessionHostCalls
+    }
+
 -- | Compile a host call. Arguments are dereferenced before calling.
 -- Calls listed in 'sessionHostCalls' get the session @%s@ threaded as
 -- their first argument (before the user-visible arguments).
@@ -651,21 +677,20 @@ compileHostCall = compileHostCallWith compileValExpr
 -- compiled. 'compileEvalDeep' reuses this with itself as the inner
 -- compiler so deep-deref propagates into host-call arguments.
 --
--- Names in 'hostCallMap' are rewritten to the corresponding runtime
--- procedure (e.g. @rem@ → @%irem@). Names not in the map are emitted
--- verbatim and resolve to whatever procedure is in scope in the
--- generated library's import environment — the YCHR runtime, R6RS
--- builtins, or anything the user has wired in. Guile R6RS resolves
--- top-level identifiers lazily at call time, so an unknown host name
--- only errors if it is actually invoked at runtime.
+-- The procedure name and session threading come from 'hostCallTarget'.
+-- Names not in the map are emitted verbatim and resolve to whatever
+-- procedure is in scope in the generated library's import environment —
+-- the YCHR runtime, R6RS builtins, or anything the user has wired in.
+-- Guile R6RS resolves top-level identifiers lazily at call time, so an
+-- unknown host name only errors if it is actually invoked at runtime.
 compileHostCallWith :: (ValExpr -> SExpr) -> Name -> [ValExpr] -> SExpr
 compileHostCallWith compile (Name n) args =
-  let fn = Map.findWithDefault n n hostCallMap
+  let target = hostCallTarget n
       derefedArgs = map (\a -> SList [SAtom "deref", compile a]) args
       allArgs
-        | Set.member n sessionHostCalls = SAtom "%s" : derefedArgs
+        | target.takesSession = SAtom "%s" : derefedArgs
         | otherwise = derefedArgs
-   in SList (SAtom fn : allArgs)
+   in SList (SAtom target.procedure : allArgs)
 
 -- | Compile an EvalDeep expression. Like the standard expression
 -- compiler, but Var references are dereferenced (following binding
