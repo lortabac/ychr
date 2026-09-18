@@ -80,7 +80,6 @@ data Snap
   | SnText Text
   | SnTerm Text [Snap]
   | SnUnbound Int
-  | SnWild
   deriving (Eq, Show)
 
 snapshot :: Value -> Chr Snap
@@ -93,7 +92,6 @@ snapshot v = do
     VAtom a -> pure (SnAtom a)
     VText t -> pure (SnText t)
     VTerm f as -> SnTerm f <$> traverse snapshot as
-    VWildcard -> pure SnWild
     VVar _ -> do
       mvid <- getVarId d
       pure (SnUnbound (maybe (-1) (\(VarId i) -> i) mvid))
@@ -128,7 +126,6 @@ data Verdict
 conformsSnap :: GTy -> Snap -> Verdict
 conformsSnap ty@(GTy con args) s = case s of
   SnUnbound _ -> NotYetBound (renderGTy ty)
-  SnWild -> NotYetBound (renderGTy ty)
   _ -> case (con, args) of
     (CInt, []) -> case s of
       SnInt _ -> Inhabits
@@ -154,7 +151,6 @@ conformsSnap ty@(GTy con args) s = case s of
             Inhabits -> listOf el t
             other -> other
       SnUnbound _ -> NotYetBound (renderGTy ty)
-      SnWild -> NotYetBound (renderGTy ty)
       _ -> Outside (renderGTy ty <> " vs " <> describe x)
     ctor def n as = case findCtor def n of
       Nothing -> Outside (def.adtName <> " has no constructor " <> n)
@@ -195,7 +191,6 @@ describe s = case s of
   SnText t -> "string " <> tshow t
   SnTerm f as -> "compound " <> f <> "/" <> tshow (length as)
   SnUnbound i -> "unbound _" <> tshow i
-  SnWild -> "wildcard"
 
 -- ---------------------------------------------------------------------------
 -- The log
@@ -309,7 +304,6 @@ record table code snaps lg
         ( bnd,
           case v of
             SnUnbound _ -> NotYetBound "a rigid position"
-            SnWild -> NotYetBound "a rigid position"
             _ -> Inhabits
         )
     apply site acc (bnd, v) = case v of

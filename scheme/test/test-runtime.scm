@@ -122,13 +122,6 @@
        (test-equal (car entry) 'general (failure-kind (caddr entry)))))
    strict-primitives))
 
-;;; A wildcard is unbound too: `%unbound?` accepts it and Haskell's
-;;; `isVar` covers `VWildcard` alongside `VVar`.
-(test-group "a wildcard argument is an instantiation failure"
-  (test-equal "+" 'inst (failure-kind (lambda () (%add *wildcard* 1))))
-  (test-equal "compound_to_list" 'inst
-              (failure-kind (lambda () (%compound-to-list *wildcard*)))))
-
 ;;; language.md §Soft guard failure: "When a call is both
 ;;; under-instantiated and ill-typed ... the instantiation diagnosis
 ;;; wins." In a guard that means the rule delays; once the variable is
@@ -231,9 +224,6 @@
   (test-equal "bound non-boolean is a general failure"
               'general
               (failure-kind (lambda () (%bool-from-value 5))))
-  (test-equal "wildcard is an instantiation failure"
-              'inst
-              (failure-kind (lambda () (%bool-from-value *wildcard*))))
   (let* ((s (fresh-session))
          (x (make-var s)))
     (%unify s x #t)

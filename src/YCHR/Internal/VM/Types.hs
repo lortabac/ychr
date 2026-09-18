@@ -430,8 +430,6 @@ data Literal
     TextLit Text
   | -- | Boolean literal.
     BoolLit Bool
-  | -- | Wildcard literal: evaluates to 'VWildcard'.
-    WildcardLit
   deriving (Show, Eq)
 
 -- | Zero-based index into a constraint's argument list.

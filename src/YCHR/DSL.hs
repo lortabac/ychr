@@ -445,7 +445,9 @@ bool False = CompoundTerm (Unqualified "false") []
 text :: Text -> Term
 text = TextTerm
 
--- | Wildcard pattern: matches anything without binding.
+-- | The anonymous term @_@. In a rule head or equation pattern it is a
+-- pattern wildcard: it matches anything and binds nothing. In a tell or
+-- goal argument it is a fresh logical variable, one per occurrence.
 wildcard :: Term
 wildcard = Wildcard
 

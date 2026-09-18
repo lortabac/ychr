@@ -249,7 +249,6 @@ literalToSExpr (AtomLit s) = SList [SAtom "atom", SString s]
 literalToSExpr (TextLit s) = SList [SAtom "text", SString s]
 literalToSExpr (BoolLit True) = SAtom "true"
 literalToSExpr (BoolLit False) = SAtom "false"
-literalToSExpr WildcardLit = SAtom "wildcard"
 
 nameToSExpr :: Name -> SExpr
 nameToSExpr (Name t) = SString t
@@ -446,7 +445,6 @@ valExprFromSExpr (SList [SAtom "atom", SString s]) = pure (Lit (AtomLit s))
 valExprFromSExpr (SList [SAtom "text", SString s]) = pure (Lit (TextLit s))
 valExprFromSExpr (SAtom "true") = pure (Lit (BoolLit True))
 valExprFromSExpr (SAtom "false") = pure (Lit (BoolLit False))
-valExprFromSExpr (SAtom "wildcard") = pure (Lit WildcardLit)
 valExprFromSExpr (SList (SAtom "call-expr" : n : es)) =
   CallExpr <$> nameFromSExpr n <*> traverse callArgFromSExpr es
 valExprFromSExpr (SList (SAtom "host-call" : n : es)) =

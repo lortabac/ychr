@@ -109,7 +109,6 @@ roundtripTests =
               LetVal "d" (Lit (TextLit "hello world")),
               LetVal "e" (Lit (BoolLit True)),
               LetVal "f" (Lit (BoolLit False)),
-              LetVal "g" (Lit WildcardLit),
               LetVal "h" (CallExpr "proc" [AVal (Var "a"), AVal (Var "b")]),
               LetVal "i" (HostCall "+" [Var "a", Var "b"]),
               LetVal "j" (EvalDeep (Var "expr")),
@@ -222,7 +221,6 @@ formatTests =
     testCase "literals inline without wrapper" $ do
       assertContains (serializeProg (mkProg [LetVal "x" (Lit (BoolLit True))])) "true"
       assertContains (serializeProg (mkProg [LetVal "x" (Lit (BoolLit False))])) "false"
-      assertContains (serializeProg (mkProg [LetVal "x" (Lit WildcardLit)])) "wildcard"
       assertContains (serializeProg (mkProg [LetVal "x" (Lit (IntLit 7))])) "(int 7)"
       assertContains
         (serializeProg (mkProg [LetVal "x" (Lit (AtomLit "foo"))]))

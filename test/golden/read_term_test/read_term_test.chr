@@ -1,4 +1,4 @@
-:- module(read_term_test, [go/2, is_bool/2, matches/2, type(answer/0)]).
+:- module(read_term_test, [go/2, is_bool/2, matches/2, observed/1, type(answer/0)]).
 
 :- use_module(library(meta)).
 
@@ -18,3 +18,17 @@ is_bool(S, R) <=> X is read_term_from_string(S), R is boolean(X).
 matches(S, R) <=> X is read_term_from_string(S), tagged(X, R).
 tagged(true, R) <=> R = yes.
 tagged(false, R) <=> R = no.
+
+% A parsed `_` is a fresh logical variable, exactly as in source: the
+% constraint told with it observes it, so `f`'s own `N = 1` binding
+% sticks and `chk(1)` fires. Were `read_term_from_string("_")` still the
+% non-binding wildcard value, `N = 1` would be a silent no-op and
+% `chk(1)` would never be told, leaving `R` unbound.
+:- chr_constraint observed/1, f/1, chk/1, out/1, gather/1.
+
+observed(R) <=> T is read_term_from_string("_"), f(T), gather(R).
+
+f(N) <=> N = 1, chk(N).
+chk(1) <=> out(1).
+
+gather(R), out(V) <=> R = V.

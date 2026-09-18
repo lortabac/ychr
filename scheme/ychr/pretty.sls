@@ -141,8 +141,6 @@
       (cond
         ;; Unbound variable
         ((var? d) "_")
-        ;; Wildcard
-        ((wildcard? d) "_")
         ;; Boolean (Scheme #t/#f → "true"/"false")
         ((boolean? d) (if d "true" "false"))
         ;; Exact integer. Negative literals are parenthesized to match

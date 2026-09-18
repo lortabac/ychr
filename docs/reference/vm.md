@@ -24,7 +24,7 @@ The VM has three disjoint kinds of expression:
 
 - **Value expressions** evaluate to ordinary runtime values —
   integers, floats, atoms, strings, booleans, logical variables,
-  compound terms, wildcards — and fill every position that expects a
+  compound terms — and fill every position that expects a
   unifiable value.
 - **Id expressions** evaluate to constraint identifiers (suspension
   references) and fill every position that operates on a stored
@@ -477,10 +477,15 @@ binding).
 (text "<value>")
 true
 false
-wildcard
 ```
 
-No `lit` wrapper; `true`, `false`, and `wildcard` are bare atoms.
+No `lit` wrapper; `true` and `false` are bare atoms. There is no
+wildcard literal: source `_` compiles to `new-var` (one fresh logical
+variable per occurrence), because in every position the compiler sees it
+in — term and evaluating positions alike — it is an ordinary anonymous
+variable. In a rule head, an equation pattern, or a lambda parameter —
+all HNF'd pattern positions — `_` never reaches the VM at all; HNF
+consumes it.
 
 ### Procedure and host calls
 

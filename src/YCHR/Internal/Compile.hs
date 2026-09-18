@@ -590,15 +590,24 @@ genKillStmts occ =
 -- Compile terms
 -- ---------------------------------------------------------------------------
 
+-- | Placeholder for the value of an expression that already produced a
+-- diagnostic. Compilation deliberately keeps collecting errors from
+-- every sub-pass before it aborts, so this is only a well-formed
+-- stand-in for a value that no successfully compiled program can
+-- contain. (The query path in "YCHR.Run" drops the compile diagnostic
+-- channel, so this is not a claim that no code path could ever read it.)
+unreachableValue :: ValExpr
+unreachableValue = Lit (AtomLit "")
+
 -- | Lower a surface 'Term' to a VM 'ValExpr' in /term position/: no
 -- function call is evaluated, so a compound becomes a 'MakeTerm' (or a
--- literal when it has arity 0).
+-- literal when it has arity 0). See Note [Anonymous variables].
 compileTerm :: VarMap -> SrcInfo -> Term -> Writer [Diagnostic CompileError] ValExpr
 compileTerm varMap si (VarTerm v) = case lookupVar v varMap of
   Just expr -> pure expr
   Nothing -> do
     tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed)]
-    pure (Lit WildcardLit)
+    pure unreachableValue
 compileTerm _ _ (IntTerm n) = pure (Lit (IntLit n))
 compileTerm _ _ (FloatTerm n) = pure (Lit (FloatLit n))
 compileTerm _ _ (TextTerm s) = pure (Lit (TextLit s))
@@ -630,7 +639,7 @@ compileTerm _ _ (CompoundTerm (Types.Unqualified n) []) =
 compileTerm varMap si (CompoundTerm name args) = do
   args' <- traverse (compileTerm varMap si) args
   pure (MakeTerm (vmName name) args')
-compileTerm _ _ Wildcard = pure (Lit WildcardLit)
+compileTerm _ _ Wildcard = pure NewVar
 
 -- | Lower a typed 'D.Expr' to a VM 'ValExpr'. Each constructor maps to
 -- exactly one runtime behavior:
@@ -656,11 +665,14 @@ compileExpr varMap si e = case e of
     Just expr -> pure expr
     Nothing -> do
       tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed)]
-      pure (Lit WildcardLit)
+      pure unreachableValue
   R.IntExpr n -> pure (Lit (IntLit n))
   R.FloatExpr n -> pure (Lit (FloatLit n))
   R.TextExpr s -> pure (Lit (TextLit s))
-  R.WildcardExpr -> pure (Lit WildcardLit)
+  -- See Note [Anonymous variables]: @_@ is an anonymous logical
+  -- variable, so it lowers to a fresh 'NewVar' rather than to a
+  -- non-binding wildcard value.
+  R.WildcardExpr -> pure NewVar
   -- Native-bool fast path: the renamer canonicalizes source @true@ /
   -- @false@ to @prelude:true@ / @prelude:false@ ('Types.preludeBool').
   -- Matching them structurally lets 'If' dispatch on 'VBool' without
@@ -1588,6 +1600,25 @@ every @occurrence_c_j@ procedure. The only places that still talk about
 a "suspension" are @reactivate_dispatch@ ('suspParamName') and
 'DrainReactivationQueue' ('pendingName'), where the value really is
 "a suspension we received from somewhere else".
+-}
+
+{- Note [Anonymous variables]
+
+Source @_@ is the anonymous variable: outside a pattern position it is a
+fresh logical variable, one per occurrence. HNF has already removed
+every wildcard from a rule head or equation pattern before this pass
+('Desugar.normalizeArg' / 'Desugar.decomposeArg' emit no operand for
+one), so the only @_@ the compiler sees is in a term or evaluating
+position — an @=@ operand, the contents of @quote(...)@, a tell
+argument, a guard, or an @is@ right-hand side.
+
+Both lowerings therefore allocate a variable rather than the
+non-binding wildcard value the VM once carried: 'compileTerm' and
+'compileExpr' emit 'NewVar' for each occurrence. The distinction is not
+cosmetic. A constraint told with a real variable is registered as an
+observer of it, so binding that variable later reactivates the
+constraint; a non-binding wildcard value has no cell to observe and left
+the constraint asleep for ever.
 -}
 
 {- Note [Compound expression compilation]

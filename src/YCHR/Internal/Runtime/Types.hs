@@ -67,8 +67,6 @@ data Value
     VBool !Bool
   | -- | Compound term: functor and arguments.
     VTerm !Text ![Value]
-  | -- | Wildcard: unifies with anything without binding.
-    VWildcard
 
 -- | Procedure-call argument at runtime. Procedures take a heterogeneous
 -- mix of value and id parameters; this wrapper carries the kind across

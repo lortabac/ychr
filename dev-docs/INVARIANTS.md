@@ -38,8 +38,11 @@ removable when closed.
   shapes. `Compile.compileBodyGoal`'s `BodyTell` arm pre-walks top-
   level `VarExpr` args to lift fresh logical variables (preserving
   the `foo(X)` convenience), then routes the args through `compileExpr`
-  — the same path used by `is` RHS and `=` operands. The interpreter
-  mirrors this via `Run.evalNestedExpr`. `Resolve.termToExpr` learns
+  — the same path used by `is` RHS. (`=` is the deliberate exception:
+  its operands are non-evaluating, so `BodyUnify` routes them through
+  `R.exprToTerm` and `compileTerm`, mirroring the query-side
+  `Run.exprToValue`.) The interpreter mirrors the evaluated path via
+  `Run.evalNestedExpr`. `Resolve.termToExpr` learns
   to canonicalize bare-named functions when exactly one declared
   function shares the name (e.g. `+(2, 1)` → `CallExpr prelude:+`),
   so operator-style expressions in tell-arg position evaluate without

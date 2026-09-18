@@ -331,13 +331,13 @@ chrErrorName :: Name
 chrErrorName = "__chr_error"
 
 -- | Internal one-argument predicate: is the (dereferenced) value an
--- unbound logical variable or a wildcard? Used by generated dispatch
--- code to tell an inconclusive pattern test from a definite mismatch.
+-- unbound logical variable? Used by generated dispatch code to tell an
+-- inconclusive pattern test from a definite mismatch.
 --
 -- Deliberately /not/ the prelude's @var\/1@: the Scheme backend maps
--- @var@ to the raw @var?@ record predicate, which neither dereferences
--- nor accepts a wildcard. This name gets a runtime procedure with the
--- semantics the compiler actually needs on both backends.
+-- @var@ to the raw @var?@ record predicate, which does not dereference.
+-- This name gets a runtime procedure with the semantics the compiler
+-- actually needs on both backends.
 chrIsUnboundName :: Name
 chrIsUnboundName = "__chr_is_unbound"
 

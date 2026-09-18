@@ -154,8 +154,6 @@ unify v1 v2 = do
 -- operands — and simply re-enter 'unify' on what the cell held, which
 -- is what unification of that cell means.
 unify' :: Value -> Value -> Chr (Bool, [SuspensionId])
-unify' VWildcard _ = pure (True, [])
-unify' _ VWildcard = pure (True, [])
 unify' (VVar (Var ref1)) (VVar (Var ref2))
   | ref1 == ref2 = pure (True, [])
 unify' (VVar var1) v2@(VVar var2) =
@@ -275,8 +273,6 @@ unifiable a b = do
     -- overwrites the cell (through the trail) and never merges
     -- observer lists. The variable arms therefore read no 'VarState'
     -- at all, so there is no 'Bound' case to rule out.
-    uni' _ VWildcard _ = pure True
-    uni' _ _ VWildcard = pure True
     uni' _ (VVar (Var ref1)) (VVar (Var ref2))
       | ref1 == ref2 = pure True
     uni' trailRef (VVar var1) v2@(VVar _) = do

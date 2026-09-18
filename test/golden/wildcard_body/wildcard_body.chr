@@ -1,0 +1,26 @@
+:- module(
+       wildcard_body,
+       [start/1, eq_operand/1, f/1, p/1, chk/1, out/1, gather/1]
+   ).
+
+:- chr_constraint start/1, eq_operand/1, f/1, p/1, chk/1, out/1, gather/1.
+
+% An anonymous `_` in a rule body's tell argument must be a fresh logical
+% variable, not the non-binding runtime wildcard. `r` matches the told
+% `f(_)` and binds its argument, so `N = 1` has to stick: only then does
+% the body's `chk(N)` reduce to `chk(1)` and tell `out(1)`. Before the
+% change `N = 1` was a silent no-op on the wildcard value, so `chk` was
+% told the wildcard and never matched.
+start(R) <=> f(_), gather(R).
+
+% The same at the other lowering. `_` as an operand of `=` is a term
+% position, so it goes through `compileTerm` rather than `compileExpr`:
+% `X = f(_)` has to build `f(V)` around a fresh `V`. `p(f(Y))` then
+% matches that compound and binds `Y` to the same cell, so `Y = 1` sticks.
+eq_operand(R) <=> X = f(_), p(X), gather(R).
+
+r @ f(N) <=> N = 1, chk(N).
+p(f(Y)) <=> Y = 1, chk(Y).
+c @ chk(1) <=> out(1).
+
+g @ gather(R), out(V) <=> R = V.

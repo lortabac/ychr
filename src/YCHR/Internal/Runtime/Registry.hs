@@ -203,7 +203,6 @@ baseHostCallRegistry =
       v' <- deref v
       case v' of
         VVar _ -> pure False
-        VWildcard -> pure False
         VTerm _ args -> allM isGround args
         _ -> pure True
     termVariablesPred = HostCallFn $ \case
@@ -288,10 +287,9 @@ isString :: Value -> Bool
 isString (VText _) = True
 isString _ = False
 
--- | Is the value a variable — a 'VVar' or a 'VWildcard'?
+-- | Is the value an unbound logical variable (a 'VVar')?
 isVar :: Value -> Bool
 isVar (VVar _) = True
-isVar VWildcard = True
 isVar _ = False
 
 -- | Is the value not a variable? The negation of 'isVar'.
@@ -320,9 +318,6 @@ copyTerm val = fst <$> go Map.empty val
                 fresh <- newVar
                 pure (fresh, Map.insert vid fresh cache)
             Nothing -> pure (v', cache)
-        VWildcard -> do
-          fresh <- newVar
-          pure (fresh, cache)
         VTerm f args -> do
           (args', cache') <- goMany cache args
           pure (VTerm f args', cache')
@@ -335,8 +330,8 @@ copyTerm val = fst <$> go Map.empty val
       pure (x' : xs', cache'')
 
 -- | Collect all unique unbound variables in a term, traversing into
--- compound term arguments. Wildcards are replaced with fresh variables.
--- Returns the collected variables and the updated set of seen 'VarId's.
+-- compound term arguments. Returns the collected variables and the
+-- updated set of seen 'VarId's.
 collectVars ::
   Set.Set VarId ->
   Value ->
@@ -351,9 +346,6 @@ collectVars seen v = do
           | Set.member vid seen -> pure ([], seen)
           | otherwise -> pure ([v'], Set.insert vid seen)
         Nothing -> pure ([], seen)
-    VWildcard -> do
-      fresh <- newVar
-      pure ([fresh], seen)
     VTerm _ args -> collectVarsMany seen args
     _ -> pure ([], seen)
   where

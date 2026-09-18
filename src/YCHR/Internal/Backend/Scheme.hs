@@ -581,7 +581,6 @@ compileLiteral (AtomLit s) = compileSymbol s
 compileLiteral (TextLit s) = SString s
 compileLiteral (BoolLit True) = SAtom "#t"
 compileLiteral (BoolLit False) = SAtom "#f"
-compileLiteral WildcardLit = SAtom "*wildcard*"
 
 -- | Compile a text to a Scheme symbol expression.
 -- Uses @(quote sym)@ for valid identifiers, @(string->symbol "...")@ otherwise.

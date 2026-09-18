@@ -17,7 +17,9 @@ static type checker is specified in [type-system.md](type-system.md).
   inside quotes too.
 - A bare atom and a 0-arity data constructor are the same value.
 - Variables: an uppercase letter or `_`, then letters, digits, `_`.
-  `_` alone is the wildcard; each occurrence is distinct.
+  `_` alone is the anonymous variable; each occurrence is distinct. In a
+  rule head or equation pattern it is the wildcard: it matches anything
+  and binds nothing. Everywhere else it is an ordinary fresh variable.
 - Integers: decimal digits, optional `-`, arbitrary precision. No `_`
   separators, no hex/octal/binary.
 - Floats: `digits.digits`, optional `-`. No exponent.
@@ -286,7 +288,7 @@ decided at resolution (see [Tell-side evaluation](#tell-side-evaluation)).
 | Form | Meaning |
 |---|---|
 | `42`, `-3`, `3.14`, `"text"`, `foo`, `'a-b'` | Literals. |
-| `X`, `_Tail`, `_` | Variable; `_` is the wildcard. |
+| `X`, `_Tail`, `_` | Variable; `_` is the anonymous variable. |
 | `f(A, B)` | Function call, constructor, or tell, depending on what `f` resolves to. |
 | `[a, b]`, `[H \| T]`, `[]` | Lists. |
 | `M:name`, `M:name(A)` | Module-qualified reference. |
@@ -324,6 +326,16 @@ Non-evaluating positions:
 A variable in an evaluating position must be bound by the rule head or
 the equation's parameters (`YCHR-40002`);
 `test/golden/soft_guard_hard_positions` enumerates the positions.
+
+An anonymous `_` is a fresh logical variable outside a rule head or
+equation pattern, distinct per occurrence: `c(_)` is `c(V)` for a fresh
+`V`, and a constraint told with one observes it, so binding `V` later
+reactivates the constraint (see
+[Interaction with reactivation](#interaction-with-reactivation-and-the-propagation-history)).
+This holds whether the `_` was written in a rule body, in a goal
+argument, or reached through `read_term_from_string/1`. In a head or
+equation pattern the same spelling is the wildcard: it matches anything
+and binds nothing.
 
 ```prolog
 :- chr_constraint store/1, ask/1.

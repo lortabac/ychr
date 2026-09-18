@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+Breaking: the wildcard is gone from the runtime. `YCHR.Run.Value` no
+longer has a `VWildcard` constructor, the VM `Literal` type no longer
+has `WildcardLit`, the serialized `.vm` format no longer accepts a
+`wildcard` atom, and the Scheme runtime no longer exports `*wildcard*`
+or `wildcard?`. `read_term_from_string("_")` now produces a fresh
+logical variable instead of that non-binding value, and so does
+`YCHR.Convert.resultToValue` applied to a `Wildcard` term. The change is
+safe to make because nothing legitimate produced one: `_` is an
+anonymous variable (see the fix below), and a value that matches
+everything while binding nothing has no place in an evaluated position.
+
+Fix: an anonymous `_` written outside a rule head or equation pattern is
+now a fresh logical variable, one per occurrence, instead of the
+non-binding wildcard value. A constraint told with it is registered as
+an observer and reactivated when the variable is later bound, so
+`m @ go(X) <=> f(X), X = 1.` with `r @ f(N) <=> N == 1 | out(ok).` now
+tells `out(ok)` for `go(_)` exactly as it does for `go(_X)` and
+`go(Y)`; it previously left `f` stranded and asleep. The lowered form is
+`new-var`/`(make-var %s)` — see the
+[language reference](docs/reference/language.md#tell-side-evaluation)
+and the [VM reference](docs/reference/vm.md#literals).
+
 Fix: `ychr repl` no longer aborts when the history file is unusable. If
 the XDG data directory cannot be created, or the history file is not
 writable or not readable (or is a directory), the REPL starts with

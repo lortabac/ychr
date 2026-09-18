@@ -4,9 +4,9 @@ Pins the diagnostic distinction between the two ways function dispatch
 can fail to select an equation:
 
 - **Insufficient instantiation** — a structural pattern test was reached
-  with an unbound logical variable (or a wildcard) at the position it
-  inspects, so no verdict is possible; a later binding could still make
-  an equation match.
+  with an unbound logical variable at the position it inspects, so no
+  verdict is possible; a later binding could still make an equation
+  match.
 - **Definite mismatch** — every equation was ruled out on values that
   are already instantiated.
 
@@ -14,7 +14,7 @@ Both are hard `YCHR-60001` runtime errors; only the message differs.
 
 | case | reports | why |
 |------|---------|-----|
-| `mylen_partial_tail`, `mylen_unbound`, `mylen_wildcard_tail` | insufficient | functor and nil tests on a partial list, a free variable, and a wildcard tail |
+| `mylen_partial_tail`, `mylen_unbound`, `mylen_wildcard_tail` | insufficient | functor and nil tests on a partial list, a free variable, and a tail spelled `_` (an anonymous variable, so also free) |
 | `bit_unbound` | insufficient | HNF lowers a literal pattern to an equality test |
 | `same_unbound` | insufficient, argument 2 | HNF's non-linear-pattern equality test, which has two scrutinees |
 | `nest_inherited_index` | insufficient, argument 2 | the blocking test is on a value *extracted from* argument 2, so the reported index is inherited through the `pair` decomposition |

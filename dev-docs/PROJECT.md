@@ -174,7 +174,11 @@ The constraint identifier itself is not a field — it is the `IdExpr` value alr
 - `AtomLit Text` — atom (symbolic constant)
 - `TextLit Text` — string literal
 - `BoolLit Bool` — boolean literal
-- `WildcardLit` — anonymous placeholder, matches any value in patterns
+
+There is no wildcard literal. Source `_` is an anonymous logical
+variable outside a rule head or equation pattern, so it lowers to
+`NewVar`; in a head or equation pattern HNF consumes it before
+compilation and no VM operand is emitted at all.
 
 
 ## Key Design Decisions

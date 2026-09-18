@@ -1058,9 +1058,6 @@ typePredicateTests =
             VBool b' -> pure b'
             _ -> pure True
         assertBool "expected true" b,
-      testCase "ground: false for wildcard" $ do
-        b <- callTypePred "ground" VWildcard
-        assertBool "expected false" (not b),
       testCase "term_variables: unbound var yields singleton list" $ do
         (isSingleton, sameVar) <- runChrBase $ do
           v <- newVar
@@ -1097,11 +1094,6 @@ typePredicateTests =
         len @?= 2
         assertBool "first element should be X" eq1
         assertBool "second element should be Y" eq2,
-      testCase "term_variables: wildcard produces fresh var" $ do
-        result <- runChrBase $ callTermVarsChr VWildcard
-        case result of
-          VTerm "prelude__." [_, VAtom "prelude__[]"] -> pure ()
-          _ -> assertFailure "expected singleton list",
       testCase "term_variables: nested compound" $ do
         (len, eq1, eq2) <- runChrBase $ do
           x <- newVar

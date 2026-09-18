@@ -1,0 +1,20 @@
+:- module(wildcard_goal, [go/2, f/1, chk/1, out/1, gather/1]).
+
+:- chr_constraint go/2, f/1, chk/1, out/1, gather/1.
+
+% An anonymous `_` handed to a named head variable must be a fresh
+% logical variable, exactly like `_X` or `Y`. `f(X)` is told while `X` is
+% still unbound, so `r`'s guard cannot decide yet and `f` is stored; the
+% later `X = 1` has to reactivate it through the observer `f` registered
+% on `X`. Written as `_` the value was the non-binding runtime wildcard:
+% it registered no observer, `X = 1` was a silent no-op, and `f` stayed
+% asleep, so `out(1)` was never told. The `named` case is the control,
+% spelling the same thing with a name.
+m @ go(X, R) <=> f(X), X = 1, gather(R).
+
+% `r`'s guard delays on the unbound `N` and is retried only when the
+% binding reactivates `f`, which is the path this directory pins.
+r @ f(N) <=> N == 1 | chk(N).
+c @ chk(1) <=> out(1).
+
+g @ gather(R), out(V) <=> R = V.

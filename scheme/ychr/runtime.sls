@@ -7,7 +7,6 @@
     make-var var? var-id deref unify unifiable? equal?/chr
     make-term term? term-functor term-args
     match-term get-arg add-observer! get-var-id
-    *wildcard* wildcard?
     ;; From (ychr store)
     make-store-by-type create-constraint store-constraint
     kill-constraint alive-constraint?
@@ -192,16 +191,14 @@
   ;;; Type predicates
   (define (%nonvar? v) (not (var? v)))
 
-  ;;; Is this value an unbound logical variable (or a wildcard)?
+  ;;; Is this value an unbound logical variable?
   ;;; Distinct from the prelude's `var/1`, which maps to the raw `var?`
-  ;;; record predicate: this one dereferences and accepts a wildcard,
-  ;;; matching the Haskell runtime's `__chr_is_unbound`. Generated
-  ;;; dispatch code uses it to tell an inconclusive pattern test (the
-  ;;; value was not instantiated enough to decide) from a definite
-  ;;; mismatch.
+  ;;; record predicate: this one dereferences, matching the Haskell
+  ;;; runtime's `__chr_is_unbound`. Generated dispatch code uses it to
+  ;;; tell an inconclusive pattern test (the value was not instantiated
+  ;;; enough to decide) from a definite mismatch.
   (define (%unbound? v)
-    (let ((d (deref v)))
-      (or (var? d) (wildcard? d))))
+    (var? (deref v)))
 
   ;;; Message bodies reach the reporters below as symbols, because the
   ;;; compiler passes them as `AtomLit`s. Rendering a symbol built from
@@ -583,7 +580,6 @@
                    (let ((fresh (make-var s)))
                      (hashtable-set! cache id fresh)
                      fresh))))
-            ((wildcard? d) (make-var s))
             ((term? d)
              (let* ((args (term-args d))
                     (n (vector-length args))

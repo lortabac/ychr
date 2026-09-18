@@ -331,66 +331,6 @@ TypeCheck. `Exhaustiveness.hs` already reads `fd.equations` per
 equation and would gain the same benefit. Pin it with a negative
 golden whose `.error` file names the extending module's file.
 
-## A wildcard goal argument does not wake the constraints told from it
-
-**Documented claim.** `docs/reference/language.md` §Soft guard failure,
-"Interaction with reactivation and the propagation history": "A stored
-constraint with occurrences to run observes every unbound variable
-reachable from its arguments … binding one pushes the constraint onto the
-reactivation queue and its occurrences run again." The same section's
-worked example is `m @ mk(_) <=> c(E), later(E).` /
-`l @ later(E) <=> E = 1.` / `r @ c(N) <=> N > 0 | out(N).` §Lexical
-syntax: "`_` alone is the wildcard; each occurrence is distinct."
-
-**Test.** One program; only the goal argument differs.
-
-    :- module(wildcard, [go/1, f/1, out/1]).
-    :- chr_type tag ---> ok.
-    :- chr_constraint go/1, f/1, out/1.
-
-    m @ go(X) <=> f(X), X = 1.
-    r @ f(N) <=> N == 1 | out(ok).
-
-    ychr run -g 'wildcard:go(Y)'  --show-bindings wildcard.chr
-    ychr run -g 'wildcard:go(_X)' --show-bindings wildcard.chr
-    ychr run -g 'wildcard:go(_)'  --show-bindings wildcard.chr
-
-**Expected.** All three bind the rule's `X` to `1`; `f(X)` observes that
-variable, `X = 1` reactivates it, the guard `N == 1` succeeds and
-`out(ok)` is told.
-
-**Actual.**
-
-    wildcard:go(Y)   -> Y = 1          (out(ok) told)
-    wildcard:go(_X)  -> _X = 1         (out(ok) told)
-    wildcard:go(_)   -> <no output>    (out(ok) never told)
-
-A live session shows the stranded state directly — the constraint is
-stored and asleep after the binding that should have woken it:
-
-    ychr live> wildcard:go(_).
-    ychr live> print_store.
-    wildcard:f(_)
-
-A constraint told from a rule body is not registered as an observer of a
-variable the head received through an anonymous wildcard, so the later
-binding never enqueues it. Reproduces through an intermediate rule
-(`go(X) <=> mid(X)`, `mid(X) <=> f(X), X = 1`), through a second
-constraint (`go(X) <=> f(X), bind(X)` with `bind(L) <=> L = 1`), and in a
-propagation body (`mk(X) ==> f(X)`).
-
-**Notes.** `_X` (a named variable that merely starts with `_`) is
-observed correctly, so this is specific to the anonymous `_`. `_` is an
-ordinary runtime variable — `R is term_variables(_)` yields `R = 1` — so
-this is not "the wildcard is not a variable". The golden test
-`test/golden/reactivation_nested_var` covers the same shape with a
-*named* query variable and passes, which is why CI misses it.
-
-**Fix sketch.** The tell-from-body path must register the suspension as
-an observer of the variable the head bound from an anonymous wildcard,
-exactly as it does for a named one. Pin both spellings: a golden whose
-goal uses `_` and one using `_X` over the `mk`/`c`/`later` shape.
-
 ## `docs/reference/language.md:99` documents a `use_module` equivalence that the rest of the docs and the implementation both contradict
 
 **Documented claim.** `docs/reference/language.md` §Modules (line 99):

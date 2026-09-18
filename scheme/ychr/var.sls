@@ -14,15 +14,9 @@
           match-term
           get-arg
           add-observer!
-          get-var-id
-          *wildcard*
-          wildcard?)
+          get-var-id)
   (import (rnrs)
           (ychr session))
-
-  ;;; Wildcard sentinel
-  (define *wildcard* (list 'wildcard))
-  (define (wildcard? v) (eq? v *wildcard*))
 
   ;;; Logical variables
   (define *unbound* (list 'unbound))
@@ -83,8 +77,6 @@
 
   (define (unify* d1 d2 emit!)
     (cond
-      ((wildcard? d1) #t)
-      ((wildcard? d2) #t)
       ((and (var? d1) (var? d2) (eq? d1 d2)) #t)
       ((and (var? d1) (var? d2))
        (let ((obs1 (var-observers d1))
@@ -141,8 +133,6 @@
         (uni* (deref/no-compress a) (deref/no-compress b)))
       (define (uni* d1 d2)
         (cond
-          ((wildcard? d1) #t)
-          ((wildcard? d2) #t)
           ((and (var? d1) (var? d2) (eq? d1 d2)) #t)
           ((var? d1)
            (trail! d1)

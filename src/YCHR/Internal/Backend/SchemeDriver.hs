@@ -113,7 +113,11 @@ exprToScheme (R.VarExpr v) = v
 exprToScheme (R.IntExpr n) = T.pack (show n)
 exprToScheme (R.FloatExpr n) = printSExpr (SFloat n)
 exprToScheme (R.TextExpr s) = printSExpr (SString s)
-exprToScheme R.WildcardExpr = "*wildcard*"
+-- An anonymous @_@ is a fresh logical variable, one per occurrence. The
+-- driver binds the session to @%s@, so @make-var@ allocates it inline:
+-- no name enters the surrounding @let*@ or @pretty-bindings@. Mirrors
+-- 'YCHR.Internal.Compile.compileExpr'.
+exprToScheme R.WildcardExpr = "(make-var %s)"
 -- @quote(arg)@: the surface quoting form opts out of evaluation. The
 -- inner term stays as a data tree; mirror 'compileTerm' here.
 exprToScheme (R.CtorExpr (Types.Unqualified "quote") [arg]) =
@@ -212,7 +216,8 @@ termToScheme (CompoundTerm name@(Types.Qualified _ _) []) =
   printSExpr (compileSymbol (vmName name).unName)
 termToScheme (TextTerm s) = printSExpr (SString s)
 termToScheme (VarTerm n) = n
-termToScheme Wildcard = "*wildcard*"
+-- See 'exprToScheme': a quoted @_@ is a fresh logical variable too.
+termToScheme Wildcard = "(make-var %s)"
 termToScheme (CompoundTerm (Types.Unqualified ".") [h, t]) =
   "(%cons " <> termToScheme h <> " " <> termToScheme t <> ")"
 termToScheme (CompoundTerm name@(Types.Qualified _ _) ts) =

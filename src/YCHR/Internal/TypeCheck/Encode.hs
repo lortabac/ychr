@@ -382,11 +382,17 @@ dataCon dc = ast "data_con" [nameTerm dc.conName, listTerm (map typeExpr dc.conA
 -- atom the checker's constructor tables are keyed on. There are no
 -- variables to allocate either, since the encoding is ground, so this
 -- is a plain fold.
+--
+-- A source wildcard is encoded as the @wild_e@ \/ @head_wild@ compound
+-- (see 'expr' and 'headArg'), never as a bare 'Wildcard', so the
+-- 'Wildcard' and 'VarTerm' arms are unreachable and only keep the fold
+-- total over 'Term'.
 encodedToValue :: Term -> Value
 encodedToValue (IntTerm n) = VInt n
 encodedToValue (FloatTerm d) = VFloat d
 encodedToValue (TextTerm t) = VText t
-encodedToValue Wildcard = VWildcard
+encodedToValue Wildcard =
+  error "TypeCheck.Encode.encodedToValue: encoded terms are ground, got wildcard"
 encodedToValue (CompoundTerm n []) = VAtom (flattenName n)
 encodedToValue (CompoundTerm n args) = VTerm (flattenName n) (map encodedToValue args)
 encodedToValue (VarTerm v) =

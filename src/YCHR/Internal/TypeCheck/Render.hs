@@ -123,7 +123,6 @@ showValueShape (VFloat _) = "VFloat"
 showValueShape (VText _) = "VText"
 showValueShape (VBool _) = "VBool"
 showValueShape (VVar _) = "VVar"
-showValueShape VWildcard = "VWildcard"
 
 -- | Dereference a type value through every nesting level, so
 -- 'showType' (a pure function) sees the solved types rather than

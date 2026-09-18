@@ -236,7 +236,6 @@ groundEq (VInt a) (VInt b) = a == b
 groundEq (VAtom a) (VAtom b) = a == b
 groundEq (VText a) (VText b) = a == b
 groundEq (VBool a) (VBool b) = a == b
-groundEq VWildcard VWildcard = True
 groundEq (VTerm f1 as1) (VTerm f2 as2) =
   f1 == f2 && length as1 == length as2 && and (zipWith groundEq as1 as2)
 groundEq _ _ = False
@@ -248,7 +247,6 @@ showGroundValue (VFloat n) = "VFloat " ++ show n
 showGroundValue (VAtom a) = "VAtom " ++ show a
 showGroundValue (VText t) = "VText " ++ show t
 showGroundValue (VBool b) = "VBool " ++ show b
-showGroundValue VWildcard = "VWildcard"
 showGroundValue (VTerm f args) =
   "VTerm " ++ show f ++ " [" ++ intercalate ", " (map showGroundValue args) ++ "]"
 showGroundValue (VVar _) = "VVar <opaque>"

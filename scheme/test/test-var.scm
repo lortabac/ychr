@@ -195,21 +195,6 @@
         (test-assert "fails" (not ok))))))
 
 ;;; --------------------------------------------------------------------------
-;;; Unify — wildcard
-;;; --------------------------------------------------------------------------
-
-(test-group "unify-wildcard"
-  (let ((s (fresh)))
-    (let-values (((ok obs) (unify *wildcard* 42)))
-      (test-assert "wildcard unifies with int" ok))
-    (let-values (((ok obs) (unify 'a *wildcard*)))
-      (test-assert "symbol unifies with wildcard" ok))
-    (let ((x (make-var s)))
-      (let-values (((ok obs) (unify *wildcard* x)))
-        (test-assert "wildcard unifies with var" ok)
-        (test-assert "var still unbound" (var? (deref x)))))))
-
-;;; --------------------------------------------------------------------------
 ;;; Equal (ask semantics)
 ;;; --------------------------------------------------------------------------
 
@@ -353,10 +338,6 @@
     (test-eq "same atom"     #t (unifiable? 'a 'a))
     (test-eq "distinct atom" #f (unifiable? 'a 'b))
     (test-eq "type mismatch" #f (unifiable? 1 'a)))
-
-  (test-group "wildcard"
-    (test-eq "wildcard vs int" #t (unifiable? *wildcard* 42))
-    (test-eq "int vs wildcard" #t (unifiable? 42 *wildcard*)))
 
   (test-group "unbound var vs ground leaves var unbound"
     (let* ((s (fresh)) (x (make-var s)))

@@ -47,7 +47,6 @@ valueToTerm aliases v = do
     VText s -> pure (TextTerm s)
     VBool True -> pure (CompoundTerm (Types.Unqualified "true") [])
     VBool False -> pure (CompoundTerm (Types.Unqualified "false") [])
-    VWildcard -> pure Wildcard
     -- 'VAtom' is the runtime form of every 0-arity value (atoms and
     -- declared 0-arity ctors collapse to it; see 'Compile.compileTerm').
     -- Recover the surface name from the mangled functor produced by
@@ -137,7 +136,8 @@ prettyValue v = prettyTerm <$> valueToTerm Map.empty v
 
 -- | Convert a parsed 'Term' to a runtime 'Value', creating fresh logical
 -- variables. The same variable name within a term maps to the same fresh
--- variable (tracked via 'StateT').
+-- variable (tracked via 'StateT'). An anonymous @_@ is a fresh variable
+-- too — one per occurrence, since it carries no name to share.
 termToValue :: Term -> StateT (Map.Map Text Value) Chr Value
 termToValue (VarTerm name) = do
   existing <- gets (Map.lookup name)
@@ -150,7 +150,7 @@ termToValue (VarTerm name) = do
 termToValue (IntTerm n) = pure (VInt n)
 termToValue (FloatTerm n) = pure (VFloat n)
 termToValue (TextTerm s) = pure (VText s)
-termToValue Wildcard = pure VWildcard
+termToValue Wildcard = lift newVar
 -- Native-bool bridge: a host-built or freshly parsed term carries the
 -- bare @true@ \/ @false@ spelling, having never met the renamer. The
 -- rest of the system represents those as 'VBool' (compiled rules,

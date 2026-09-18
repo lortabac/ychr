@@ -695,7 +695,6 @@ evalValExpr (Lit (FloatLit n)) = pure (VFloat n)
 evalValExpr (Lit (AtomLit s)) = pure (VAtom s)
 evalValExpr (Lit (TextLit s)) = pure (VText s)
 evalValExpr (Lit (BoolLit b)) = pure (VBool b)
-evalValExpr (Lit WildcardLit) = pure VWildcard
 evalValExpr (CallExpr name args) = do
   argVals <- traverse evalCallArg args
   liftChr (callProc name argVals)

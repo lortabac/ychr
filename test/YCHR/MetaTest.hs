@@ -79,11 +79,18 @@ readTermTests =
         case v of
           VText "hello" -> pure ()
           _ -> assertFailure "expected VText hello",
-      testCase "wildcard" $ do
+      testCase "wildcard is a fresh unbound var" $ do
         v <- readTerm "_"
-        case v of
-          VWildcard -> pure ()
-          _ -> assertFailure "expected VWildcard",
+        v' <- runChrBase (deref v)
+        case v' of
+          VVar _ -> pure ()
+          _ -> assertFailure "expected unbound variable",
+      testCase "each wildcard occurrence is distinct" $ do
+        v <- readTerm "f(_, _)"
+        eq <- runChrBase $ case v of
+          VTerm "f" [a, b] -> equal a b
+          _ -> pure True
+        assertBool "the two _ args should be different variables" (not eq),
       testCase "compound term" $ do
         v <- readTerm "f(1, hello)"
         case v of

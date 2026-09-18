@@ -32,8 +32,7 @@ tests =
       equalTests,
       observerTests,
       derefTests,
-      termTests,
-      wildcardTests
+      termTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -195,9 +194,6 @@ unifiableTests =
       testCase "Ground vs unbound var" $ runVarEnv $ do
         x <- newVar
         assertUnifiable (VInt 42) x True,
-      testCase "Wildcard vs ground" $
-        runVarEnv $
-          assertUnifiable VWildcard (VInt 7) True,
       testCase "Compound: matching ground args" $
         runVarEnv $
           assertUnifiable (makeTerm "f" [VInt 1, VInt 2]) (makeTerm "f" [VInt 1, VInt 2]) True,
@@ -495,27 +491,4 @@ termTests =
           liftIO $ case a of
             VInt 5 -> pure ()
             _ -> assertBool "expected VInt 5" False
-    ]
-
-wildcardTests :: TestTree
-wildcardTests =
-  testGroup
-    "wildcard"
-    [ testCase "Wildcard unifies with Int" $ do
-        (ok, _) <- runVarEnv $ unify VWildcard (VInt 42)
-        ok @?= True,
-      testCase "Int unifies with Wildcard" $ do
-        (ok, _) <- runVarEnv $ unify (VInt 42) VWildcard
-        ok @?= True,
-      testCase "Wildcard does not bind Var" $ do
-        runVarEnv $ do
-          x <- newVar
-          _ <- unify VWildcard x
-          d <- deref x
-          liftIO $ case d of
-            VVar _ -> pure ()
-            _ -> assertBool "var should remain unbound" False,
-      testCase "Wildcard equal to Int is False" $ do
-        r <- runVarEnv $ equal VWildcard (VInt 42)
-        r @?= False
     ]

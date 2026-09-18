@@ -521,7 +521,10 @@ liftChr = lift
 {-# INLINE liftChr #-}
 
 -- | Surface 'Term' to 'Value' in the per-query scope, allocating a fresh
--- variable per new 'VarTerm'.
+-- variable per new 'VarTerm'. An anonymous @_@ is a fresh variable too,
+-- one per occurrence: it is never entered in the scope map, so it cannot
+-- collide with a named goal variable and never appears in the bindings
+-- a query reports.
 termToValue :: Term -> QueryM Value
 termToValue (VarTerm n) = do
   varMap <- get
@@ -534,7 +537,7 @@ termToValue (VarTerm n) = do
 termToValue (IntTerm n) = pure (VInt n)
 termToValue (FloatTerm n) = pure (VFloat n)
 termToValue (TextTerm s) = pure (VText s)
-termToValue Wildcard = pure VWildcard
+termToValue Wildcard = liftChr newVar
 -- Mirrors 'Compile.compileTerm': @=@ operands must lower to 'VBool' so
 -- they unify with comparison results.
 termToValue (CompoundTerm name []) | Just b <- Types.preludeBool name = pure (VBool b)
@@ -658,7 +661,7 @@ evalNestedExpr :: D.Expr -> QueryM Value
 evalNestedExpr (R.IntExpr n) = pure (VInt n)
 evalNestedExpr (R.FloatExpr n) = pure (VFloat n)
 evalNestedExpr (R.TextExpr s) = pure (VText s)
-evalNestedExpr R.WildcardExpr = pure VWildcard
+evalNestedExpr R.WildcardExpr = liftChr newVar
 evalNestedExpr (R.VarExpr v) = do
   varMap <- get
   case Map.lookup v varMap of

@@ -23,6 +23,10 @@ all compound terms, classified by what is declared; `term` (qualified:
 `declaring`, `defining`, `withEquations`, `chrType`, `library`)
 accumulate across calls.
 
+`wildcard` is the anonymous `_`: in a rule head or equation pattern it
+matches anything and binds nothing, while in a tell or goal argument it
+is a fresh logical variable, one per occurrence.
+
 ## Mapping from `.chr` to DSL
 
 | Surface CHR | DSL |
