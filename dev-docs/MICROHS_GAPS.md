@@ -17,82 +17,99 @@ local workaround. For the format, see `SCHEME_BACKEND_GAPS.md` —
 terse, fix-shaped, removable when closed.
 
 
-## 1. Cross-module collision of generated record selectors
+## 1. `OverloadedRecordDot` rejects a field name that is already bound
 
-The biggest blocker. Causes every YCHR module that uses
-`OverloadedRecordDot` on a record type whose field name is shared with
-a record in another transitively-imported module to fail with errors
-like:
-
-```
-Cannot satisfy constraint: HasField "kept" _a3940 [HeadConstraint]
-Cannot satisfy constraint: Rule ~ (_a4 -> _a5)
-```
-
-YCHR has three rule ASTs — `YCHR.Internal.Parsed.Rule`, `YCHR.Internal.Resolved.Rule`,
-`YCHR.Internal.Desugared.Rule` — each with a `head` field, and two records with
-`kept` / `removed` fields (`YCHR.Internal.Desugared.Head`, `YCHR.DSL.Simpa`).
-That's enough to trigger the bug pervasively.
-
-### Root cause
-
-`MicroHs/src/MicroHs/Deriving.hs`, `genHasField`:
+A blocker. `e.fld` is a field access only when `isLabel fld` says so
+(`MicroHs/src/MicroHs/TypeCheck.hs:2180`):
 
 ```haskell
-getName = mkGetName tycon fld
-mkGetName tycon fld = qualIdent (mkIdent "get$") $ qualIdent tycon fld
+isLabel i = do
+  env <- gets valueTable
+  case stLookup "" i env of
+    Left _ -> return True
+    Right (Entry (EVar g) t) ->
+      return $ isInfixOf "get$." (unIdent g) || countArrows t == 0
 ```
 
-`tycon` is the **unqualified** local type-constructor identifier, so
-two modules that each declare `data Rule { head :: ... }` both emit a
-top-level helper called `get$.Rule.head`. The corresponding instance
-body — `getField _ = get$.Rule.head` — is then ambiguous in any
-compilation unit that reaches both definitions through its import
-graph.
+`stLookup "" i` is an **unqualified** lookup, and `isLabel` reads `Left`
+— which `stLookup` returns both for "undefined" and for "ambiguous" —
+as "yes, a label". So a field is rejected exactly when its name alone
+resolves to one non-selector binding: at least one arrow, and no `get$.`
+in the name. `Prelude.head` is such a binding. The lookup finds
+`Data.List.head` uniquely, `isLabel` returns `False`, and the
+typechecker rewrites the `ESelect` to composition. `r.head` becomes
+`r . head`, which surfaces as:
 
-Confirmed with `mhs -ddump-typecheck`: both `YCHR.Internal.Parsed` and
-`YCHR.Internal.Desugared` emit `get$.Rule.head` and `get$.Rule.name` with
-identical names but different signatures.
+```
+Cannot satisfy constraint: Rule ~ (_a6 -> _a7)
+```
 
-### Workaround observation
+Reproduced on `mhs` 0.15.10.0 (MicroHs `3322c60a`):
 
-With `import YCHR.Internal.Desugared` (open import), `rule.head` works. With
-`import YCHR.Internal.Desugared qualified as D` or
-`import YCHR.Internal.Desugared (Rule)`, it fails. The unqualified open import
-brings the ambiguous selector into scope unambiguously somehow; the
-qualified / selective forms leave the instance method body
-unresolvable.
+```haskell
+-- R.hs
+{-# LANGUAGE DuplicateRecordFields, NoFieldSelectors #-}
+module R where
+data Rule = Rule { head :: Int, kept :: Int }
+
+-- Main.hs
+{-# LANGUAGE OverloadedRecordDot #-}
+module Main where
+import qualified R
+main :: IO ()
+main = print ((R.Rule 1 2).head)
+```
+
+| use site | result |
+|---|---|
+| `import R` (open) | compiles |
+| `import qualified R` | fails (`Rule ~ (_a -> _b)`) |
+| `import R (Rule(..))` | compiles |
+| `import R (Rule)` (type only) | fails (`Rule ~ (_a -> _b)`) |
+| `import Prelude hiding (head)` + qualified `R` | compiles |
+| `.kept` (a name not in `Prelude`), any import style | compiles |
+
+The open-import column works only by accident: the import puts the
+record's label `head` in scope next to `Data.List.head`, so the lookup
+is ambiguous between `Data.List.head` and `R.get$.Rule.head` — the same
+`Left` `isLabel` mistakes for a label.
+
+### Impact on YCHR
+
+YCHR's `Parsed`, `Resolved` and `Desugared` all have a `head` field,
+and several `Compile/*` modules import `YCHR.Internal.Desugared` /
+`YCHR.Internal.Parsed` qualified. A `.head` use site in a module with
+no open import of a `head`-defining module fails as above; a module
+that open-imports one does not. Whether the full build trips has not
+been confirmed end-to-end: reaching the affected modules needs `parsec`
+installed under `mcabal`, and gap 6 blocks the build independently.
 
 ### Upstream fix sketch
 
-In `mkGetName`, qualify with the **module name** as well as the
-tycon, e.g. produce `get$.YCHR.Internal.Desugared.Rule.head`. The
-`HasField`/`SetField` instance bodies should reference that fully
-qualified helper. This makes per-module selectors unique and
-collision-free regardless of import style.
+Make `isLabel` decide from an explicit field-label table rather than
+from an unqualified value lookup: register the label when the record is
+declared, and treat ambiguity as a real ambiguity (or resolve it
+against the expected type) instead of as a label. The `get$.`-prefix
+heuristic on the resolved global name is what ties this to gap 2.
 
 ### Local workaround
 
-At every call site that triggers the failure, replace `r.fld` (or
-chained `r.fld1.fld2`) with explicit record-pattern destructuring at
-the top of the function, then use plain bindings:
+Add `import Prelude hiding (head)` at the `.head` use sites (it also
+hides the list function there). Importing the field's own module
+**unqualified** (open) also works, but only through the accidental
+ambiguity above, and it is not viable where `Parsed` and `Desugared`
+are needed together (their `Rule`/`Head` types collide). Fields whose
+name is not otherwise bound (e.g. `kept`) need nothing.
 
-```haskell
--- before
-foo r = ... r.head.sourceLoc ... r.head.node.kept ...
+### History
 
--- after
-foo r =
-  let D.Rule {head = headAnn} = r
-      AnnP {node = headNode, sourceLoc = headLoc} = headAnn
-      D.Head {kept = keptHC} = headNode
-  in ... headLoc ... keptHC ...
-```
-
-The destructure pattern carries enough type information for MicroHs
-to commit to a single `HasField` instance. This is the workaround
-most likely to bloat the codebase — flag it as the canary for the
-"give up on MicroHs compatibility" decision.
+This entry previously diagnosed a cross-module collision of the
+generated selectors and prescribed qualifying `mkGetName`
+(`Deriving.hs:171`) with the module name. MicroHs already does that
+later, via `extValETop` (`TypeCheck.hs:872`) — the emitted name is
+`R.get$.Rule.head` — so that diagnosis no longer reproduces (nor does
+the `HasField "kept" _a3940` error); only the `Rule ~ (_a -> _b)` error
+above survives, from `isLabel`.
 
 
 ## 2. `NoFieldSelectors` is silently ignored
@@ -100,22 +117,31 @@ most likely to bloat the codebase — flag it as the canary for the
 `MicroHs/src/MicroHs/Deriving.hs` unconditionally emits the field
 selector function for every record (`Sign [getName]` + `Fcn getName`).
 There is no check for the `NoFieldSelectors` extension; the pragma is
-accepted by the parser but has no effect on code generation.
+silently dropped by the lexer (`Lex.hs`, `pragma`) and has no effect on
+code generation.
 
-This is what makes gap 1 observable in YCHR: GHC under
-`NoFieldSelectors` only generates `HasField` instances, not top-level
-selectors, so the collision can't arise. MicroHs generates both.
+This is what ties it to gap 1. Despite `NoFieldSelectors`, MicroHs
+registers each field's own name (`head`) as a label for the generated
+selector, and `isLabel`'s `get$.` heuristic exists to recognise exactly
+that; GHC never introduces the name, so the unqualified lookup cannot
+land on it. Suppressing the selector alone is not the fix, though: the
+lookup would still find `Prelude.head`, which is why gap 1's fix
+belongs in `isLabel`.
 
 ### Upstream fix sketch
 
 Honour `NoFieldSelectors` in `expandField` — when enabled, skip the
 `Sign [getName]` / `Fcn getName` pair and inline the case-match
-directly into the `HasField` instance method. (Or: still keep the
-helper but make it private to the module — see gap 1.)
+directly into the `HasField` instance method. The label registration in
+`addValueType` / `addField` (`TypeCheck.hs:1557-1563`) looks the
+selector up and errors when it is absent, so that has to change with
+it. This is not on its own a fix for gap 1 either: `isLabel` must stop
+deciding from an unqualified value lookup, or `.head` has no reliable
+way to resolve at all.
 
 ### Local workaround
 
-None directly — this gap is only observable as gap 1, and its
+None directly — this gap is observable only through gap 1, and its
 workaround is the same.
 
 
