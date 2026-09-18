@@ -330,3 +330,474 @@ annotation through Resolve's `gatherEquations`, Desugar, Compile, and
 TypeCheck. `Exhaustiveness.hs` already reads `fd.equations` per
 equation and would gain the same benefit. Pin it with a negative
 golden whose `.error` file names the extending module's file.
+
+## A wildcard goal argument does not wake the constraints told from it
+
+**Documented claim.** `docs/reference/language.md` §Soft guard failure,
+"Interaction with reactivation and the propagation history": "A stored
+constraint with occurrences to run observes every unbound variable
+reachable from its arguments … binding one pushes the constraint onto the
+reactivation queue and its occurrences run again." The same section's
+worked example is `m @ mk(_) <=> c(E), later(E).` /
+`l @ later(E) <=> E = 1.` / `r @ c(N) <=> N > 0 | out(N).` §Lexical
+syntax: "`_` alone is the wildcard; each occurrence is distinct."
+
+**Test.** One program; only the goal argument differs.
+
+    :- module(wildcard, [go/1, f/1, out/1]).
+    :- chr_type tag ---> ok.
+    :- chr_constraint go/1, f/1, out/1.
+
+    m @ go(X) <=> f(X), X = 1.
+    r @ f(N) <=> N == 1 | out(ok).
+
+    ychr run -g 'wildcard:go(Y)'  --show-bindings wildcard.chr
+    ychr run -g 'wildcard:go(_X)' --show-bindings wildcard.chr
+    ychr run -g 'wildcard:go(_)'  --show-bindings wildcard.chr
+
+**Expected.** All three bind the rule's `X` to `1`; `f(X)` observes that
+variable, `X = 1` reactivates it, the guard `N == 1` succeeds and
+`out(ok)` is told.
+
+**Actual.**
+
+    wildcard:go(Y)   -> Y = 1          (out(ok) told)
+    wildcard:go(_X)  -> _X = 1         (out(ok) told)
+    wildcard:go(_)   -> <no output>    (out(ok) never told)
+
+A live session shows the stranded state directly — the constraint is
+stored and asleep after the binding that should have woken it:
+
+    ychr live> wildcard:go(_).
+    ychr live> print_store.
+    wildcard:f(_)
+
+A constraint told from a rule body is not registered as an observer of a
+variable the head received through an anonymous wildcard, so the later
+binding never enqueues it. Reproduces through an intermediate rule
+(`go(X) <=> mid(X)`, `mid(X) <=> f(X), X = 1`), through a second
+constraint (`go(X) <=> f(X), bind(X)` with `bind(L) <=> L = 1`), and in a
+propagation body (`mk(X) ==> f(X)`).
+
+**Notes.** `_X` (a named variable that merely starts with `_`) is
+observed correctly, so this is specific to the anonymous `_`. `_` is an
+ordinary runtime variable — `R is term_variables(_)` yields `R = 1` — so
+this is not "the wildcard is not a variable". The golden test
+`test/golden/reactivation_nested_var` covers the same shape with a
+*named* query variable and passes, which is why CI misses it.
+
+**Fix sketch.** The tell-from-body path must register the suspension as
+an observer of the variable the head bound from an anonymous wildcard,
+exactly as it does for a named one. Pin both spellings: a golden whose
+goal uses `_` and one using `_X` over the `mk`/`c`/`later` shape.
+
+## `docs/reference/language.md:99` documents a `use_module` equivalence that the rest of the docs and the implementation both contradict
+
+**Documented claim.** `docs/reference/language.md` §Modules (line 99):
+"`:- use_module(M)` and `:- use_module(library(M))` are equivalent; there
+is no library search path."
+
+**Test.**
+
+    :- module(i1, [go/2]).          % and i2 with the other spelling
+    :- use_module(lists).
+    :- chr_constraint go/2.
+    go(X, R) <=> R is length(X).
+
+    ychr run -g 'i1:go([1,2],R)' --show-bindings i1.chr      # bare
+    ychr run -g 'i2:go([1,2],R)' --show-bindings i2.chr      # library(lists)
+
+**Expected.** Per line 99, identical results.
+
+**Actual.**
+
+    use_module(lists)           -> YCHR-20101 'length' undeclared; R = length([1, 2])
+    use_module(library(lists))  -> R = 2
+
+**Notes.** This entry is a *documentation* defect, filed here because the
+line's consequence is severe: a reader who follows it gets a silently
+wrong value rather than an error. Line 99 is the only text promising the
+equivalence. Everywhere else says the opposite — `docs/README.md:29`
+("the others need `:- use_module(library(name))`"),
+`docs/reference/dsl.md:41` (bare `use_module(other)` maps to the DSL's
+`importing`, `library(lists)` to `library`),
+`docs/reference/language.md:64` and `:587`, and all of `search.md`. The
+implementation draws the same distinction:
+`use_module(M)` names a *user module* supplied to the compile,
+`library(M)` names a *bundled library*;
+`resolveLibraryClosure` looks bare `library(...)` names up in the stdlib
+map and reports `YCHR-10001` for an unknown one
+(`src/YCHR/Internal/Collect.hs:105-112`), and `compileModules` documents
+the split (`src/YCHR/Internal/Compile/Pipeline.hs:242-246`).
+
+**Fix sketch.** Amend line 99 to say that bundled libraries are reached
+only through `library(name)`, and drop the "equivalent" claim.
+
+## An unknown bare `use_module(M)` is silently ignored
+
+**Documented claim.** `docs/reference/language.md` §Modules (lines
+93–97): a qualified name "is valid only if the current module imports `m`
+and `m` exports `name`. Unimported module: `YCHR-20014` … Unknown
+module: `YCHR-20015`." The import surface is elsewhere documented as
+validated (`YCHR-20005`, `YCHR-20007`, `YCHR-20019`, `YCHR-10001`), and
+the DSL separates `importing` (user modules) from `library` (bundled)
+(`docs/reference/dsl.md:40-41`).
+
+**Test.**
+
+    :- module(bare, [go/2]).
+    :- use_module(nosuchmodule).
+    :- chr_constraint go/2.
+    go(X, R) <=> R is length(X).
+
+    ychr check bare.chr
+    ychr run -g 'bare:go([1,2],R)' --show-bindings bare.chr
+
+**Expected.** A diagnostic naming `nosuchmodule`, or at least a warning
+that the import brought nothing into scope.
+`use_module(library(nosuchmodule))` correctly gives
+`YCHR-10001 Unknown library 'nosuchmodule'`, so the `library(...)` form
+*is* validated.
+
+**Actual.**
+
+    === warning ===
+    bare.chr:4:14: YCHR-20101
+    Undeclared data constructor 'length'
+      Hint: declare it with :- chr_type, or check the spelling
+    R is length(X)
+    R = length([1, 2])
+    check exit=0, run exit=0
+
+Nothing mentions `nosuchmodule`. `length` degrades to an opaque
+constructor, `is` returns the unevaluated compound, and the query
+"succeeds" with the wrong value. A control declaring a local `len/1`
+gives `R = 2`, so only the import is bogus. The same silent path swallows
+`use_module(lists)`, `use_module(prelude)`, and any other bare name that
+is not one of the supplied user modules.
+
+**Notes.** `compileModules` takes its user modules from the command line,
+so "the module does not exist" is partly a property of the invocation and
+a host embedding may supply the module separately — that is the argument
+for treating this as a design question rather than a plain defect. The
+counter-argument is the failure mode: a typo yields a wrong *value*, and
+the `library(...)` form gets exactly the validation the bare form lacks.
+
+**Fix sketch.** After Collect, reject a bare import whose name is neither
+a supplied module nor a bundled library name; reuse `YCHR-20015`
+(`UnknownModule`) if that is the intended code, or add one. Add the bare
+counterpart of `test/golden/unknown_library`.
+
+## The REPL does not accept `%` comments
+
+**Documented claim.** `docs/reference/language.md` §Lexical syntax (line
+11): "Comments: `%` to end of line. No block comments."
+`docs/reference/repl.md` §One-shot queries: "Outside a live session each
+input is a goal run against a fresh store." Nothing scopes comments to
+files.
+
+**Test.**
+
+    printf 'X = 1. %% trailing comment\n:quit\n' | ychr repl --quiet
+    printf '%% only a comment\nX = 1.\n:quit\n' | ychr repl --quiet
+
+**Expected.** The comment is stripped to end of line; the goal runs and a
+comment-only line is a no-op.
+
+**Actual.**
+
+    === error ===
+    <query>:1:6: YCHR-50001
+    unexpected '.'
+    expecting digit, space, "%", lowercase letter or end of input
+
+    === error ===
+    <query>:1:17: YCHR-50001
+    unexpected end of input
+    expecting space, "%", uppercase letter, "_", "-", digit, "\"", "[", "fun", "(", lowercase letter or "'"
+
+The reader strips a period only when the line ends with one and never
+strips a comment, so the goal text reaches the parser intact. The parse
+error even lists `%` among the expected tokens, so the grammar accepts
+comments and the REPL reader does not. Comments work in files (control: a
+file containing only `% c` checks with exit 0). A goal split over two
+lines fails the same way, because only the first line is sent.
+
+**Notes.** Affects every REPL input, including live sessions. The related
+reader bug is that a period is stripped only when it is last: for
+`X = 1. % c` the period is fed to the parser too.
+
+**Fix sketch.** Strip the comment (and any trailing whitespace) from each
+REPL line before reading it as a goal, as the file path already does.
+Cover a trailing comment, a comment-only line, and a comment inside a
+string literal (which must stay literal).
+
+## A CRLF line ending corrupts the following REPL input
+
+**Documented claim.** `docs/reference/repl.md` §Starting the REPL and
+§One-shot queries: the REPL reads "each input" as a goal; no line-ending
+restriction is documented, and `%` to end of line
+(`docs/reference/language.md` line 11) implies the terminator is
+consumed.
+
+**Test.**
+
+    printf 'X = 1.\r\n:quit\r\n' | ychr repl --quiet
+
+**Expected.** `X = 1.` runs, then `:quit` exits.
+
+**Actual.**
+
+    X = 1.
+    === error ===
+    <query>:1:2: YCHR-50001
+    unexpected "q"
+    expecting digit, space, "%", lowercase letter or end of input
+
+The reader splits on `\n` and leaves the `\r`, so the *next* input becomes
+`:quit\r` and is read as a goal starting with `:`. The `\r` on the first
+line is tolerated, which makes the error look like it belongs to the
+following line.
+
+**Notes.** CRLF files are normal on Windows. If the REPL is deliberately
+LF-only, the reference should say so; as written, the behaviour is
+undefined and the failure lands on the wrong line.
+
+**Fix sketch.** Trim `\r` (or split on either terminator) in the REPL
+reader, alongside the comment stripping above.
+
+## `ychr run --show-bindings` does not filter `_`-prefixed variables
+
+**Documented claim.** `docs/reference/repl.md` §One-shot queries
+(lines 174–184): "Bindings are printed, except for variables whose name
+starts with `_` (`_X`) — Prolog convention; they are still bound, only
+the output is filtered." The same section describes `--show-bindings` as
+printing "the bindings one per line, sorted" without restating the
+filter.
+
+**Test.**
+
+    :- module(filt, [go/1]).
+    :- chr_constraint go/1.
+    go(_X) <=> _X = 1.
+
+    ychr run -g 'filt:go(_X)' --show-bindings filt.chr
+    printf 'filt:go(_X).\n:quit\n' | ychr repl --quiet filt.chr
+
+**Expected.** Either no `_X` line (the filter is a property of binding
+printing) or a line (the filter is REPL-only). The documentation does not
+settle it, which is the point of the entry.
+
+**Actual.** `run` prints `_X = 1`; the REPL prints nothing. Two variables
+behave the same way: `run` prints `_A = 1` and `_B = 2`, the REPL prints
+neither.
+
+**Notes.** The filtering sentence sits in the REPL section, so the doc
+does not clearly bind `--show-bindings`. Either way the two surfaces
+should not disagree on the same convention. Non-underscore variables
+print in both, and sorting is correct.
+
+**Fix sketch.** Decide which surface the convention belongs to and pin it
+in the spec; if the filter is meant for both, route `--show-bindings`
+through the same printer as the REPL.
+
+## A module-qualified name in a `requiring` bound is parsed as `:/2`
+
+**Documented claim.** `docs/reference/type-system.md` §Declaration syntax
+(1497–1512) defines a bound as `name(τ₁, …, τₙ) -> τᵣ`.
+`docs/reference/language.md` §Modules (lines 93–97) defines what `m:name`
+means in every other position. Nothing says whether a bound name may be
+qualified.
+
+**Test.**
+
+    :- module(useq, [foo/2]).
+    :- use_module(lib).                       % lib declares gt/2
+    :- chr_constraint foo(T, T) requiring lib:gt(T, T) -> bool.
+    foo(X, Y) <=> gt(X, Y).
+
+    ychr check lib.chr useq.chr
+
+**Expected.** A qualified bound resolves, or is rejected with a message
+that names the qualifier problem.
+
+**Actual.**
+
+    === error ===
+    useq.chr:3:39: YCHR-16009
+    'useq:foo' requires ':/2' but no such function is declared
+      Hint: declare ':- function :/2.' (or import a module that does)
+
+The qualifier is dropped and the bound name becomes the operator `:`. The
+same happens for `prelude:'>'(T, T) -> bool` and for a library function
+(`strings:string_length(T) -> int`). Unqualified bounds, including
+imported ones, work.
+
+**Notes.** The error and the hint are both unusable: `:- function :/2.`
+does not parse. If qualification is not meant to be supported, the
+diagnostic should say that instead of naming `:/2`.
+
+**Fix sketch.** Either parse the qualified name as a qualified bound
+target, or reject it with a diagnostic that quotes the qualifier. Pin
+whichever with a golden.
+
+## A type declared but not exported is reported in a constructor field with a self-contradictory `YCHR-60013`
+
+**Documented claim.** `docs/reference/type-system.md` §Type Definition
+Validation: an undefined type in a constructor field is `YCHR-60005`
+(`UndefinedType`); `YCHR-60013` is the *arity* error for a type applied
+to the wrong number of arguments. `docs/reference/language.md` §Type and
+constructor exports: a type is exported with `type(Name/Arity)`;
+§Modules (lines 93–97) gives `YCHR-20009` for a reference to something
+the defining module does not export.
+
+**Test.** Two exporters differing *only* in the export list, and one
+consumer used with each.
+
+    % exp_none.chr                        | exp_type.chr
+    :- module(exp_none, [mkcol/0]).       | :- module(exp_type, [type(col/0), mkcol/0]).
+    :- chr_type col ---> red ; green.     | :- chr_type col ---> red ; green.
+    :- function mkcol/0.                  | :- function mkcol/0.
+    mkcol() -> red.                       | mkcol() -> red.
+
+    :- module(cons, []).
+    :- use_module(exp_none).        % or exp_type
+    :- chr_type box ---> bx(col).
+
+    ychr check exp_none.chr cons_exp_none.chr
+    ychr check exp_type.chr cons_exp_type.chr
+
+**Expected.** Either the reference is accepted, or it is rejected with an
+undefined-type / visibility diagnostic (`YCHR-60005` or an export code).
+An arity complaint is not available here: `col` is nullary and is written
+with zero arguments.
+
+**Actual.**
+
+    === error ===
+    cons_exp_none.chr:3:13: YCHR-60013
+    Type 'col' is applied to 0 argument(s) but declared with 0 parameter(s), in constructor 'cons_exp_none:bx' of type 'cons_exp_none:box'
+    exit=1
+
+The exported-type control is exit 0 with no output. The message
+contradicts itself: applying a name to zero arguments cannot mismatch a
+declared arity of zero. If the importer also names the type in its import
+list the case is caught earlier and correctly —
+`use_module(exp_none, [type(col/0)])` gives `YCHR-20005`, while the same
+import against `exp_type` is clean.
+
+**Notes.** The defect is the *diagnostic*, not the visibility rule: the
+implausible `60013` should be the documented `60005` (or a visibility
+error). The repro is a controlled A/B on the export list, with no value
+flow and no zero-arity *call* involved.
+
+**Fix sketch.** In the field-type validation path, distinguish "known but
+not visible here" from "known with a different arity" and report the
+former as `YCHR-60005` or the applicable export code. Pin the A/B above
+as a golden.
+
+## An unimported module's exported constructor reports `YCHR-20010` with a false message, not `YCHR-20014`
+
+**Documented claim.** `docs/reference/language.md` §Modules (lines
+93–97): an unimported module is `YCHR-20014` (`ModuleNotImported`).
+§Type and constructor exports (lines 140–141) reserves `YCHR-20010` for a
+constructor outside the *exporter's* allowlist.
+
+**Test.**
+
+    % palette.chr
+    :- module(palette, [type(col/0, [red, green])]).
+    :- chr_type col ---> red ; green ; blue.
+
+    % main.chr
+    :- module(main, [go/2]).
+    :- chr_constraint go/2.
+    go(X, R) <=> R = palette:red.
+
+    ychr check main.chr palette.chr
+
+**Expected.** `YCHR-20014 ModuleNotImported` — `main` never imports
+`palette`.
+
+**Actual.**
+
+    === error ===
+    main.chr:3:14: YCHR-20010
+    Module 'palette' does not export data constructor 'red/0'
+      Hint: add 'red' to the type's constructor export list in 'palette' (e.g. type(t/n, [red, ...]))
+    exit=1
+
+Both the code and the message are wrong: `palette` *does* export `red`;
+the defect is the missing import. The function analogue
+(`opslib:'<>>'(3,4)` without importing `opslib`) correctly gives
+`YCHR-20014`, so the divergence is constructor-specific.
+
+**Notes.** Importing `palette` makes the same reference compile clean,
+and importing it with `red` excluded from the allowlist correctly gives
+`20010`. `src/YCHR/Internal/Rename.hs:1147-1155` checks a program-wide
+constructor provider map before the module-import checks, which is
+consistent with the observed precedence.
+
+**Fix sketch.** Order the constructor checks as the function checks are
+ordered: unknown module, then not imported, then not exported by that
+module, then outside its allowlist. `YCHR-20010`'s message should only
+fire when the *exporter* excludes the constructor.
+
+## `ychr compile -t vm -d DIR` fails when `DIR` does not exist
+
+**Documented claim.** `docs/how-to/scheme-repl.md` §1 (line 18) shows
+`ychr compile -t scheme -n fib -d /tmp/fib-repl test/golden/fib/fib.chr`
+with the expected output "→ /tmp/fib-repl/ychr/generated/fib.sls", i.e.
+the output directory is created; line 97 repeats the pattern with
+`-d build/`. Neither `--help` nor the reference states whether `-d`
+creates the directory.
+
+**Test.**
+
+    ychr compile -t vm -d no_such_dir c.chr
+    ychr compile -t scheme -d no_such_dir2 c.chr
+
+**Expected.** The two targets agree, and the how-to's example works as
+written.
+
+**Actual.**
+
+    ychr: Uncaught exception ghc-internal:GHC.Internal.IO.Exception.IOException:
+    no_such_dir/program.vm: withFile: does not exist (No such file or directory)
+
+for `-t vm`; `-t scheme` *does* create its nested directory. So the
+targets disagree, and the `-t vm` failure is an uncaught host exception
+with an internal backtrace rather than a diagnostic.
+
+**Fix sketch.** Create the output directory in the `-t vm` writer (the
+scheme target already does), or document the requirement and replace the
+exception with a diagnostic.
+
+## The global `--quiet` before a subcommand is treated as a file name
+
+**Documented claim.** `ychr --help` shows
+`ychr [COMMAND | [--quiet] [--Werror] [FILES...]]`, which reads as though
+the two global flags may precede a subcommand;
+`docs/reference/repl.md` documents `--quiet` for the REPL.
+
+**Test.**
+
+    ychr --quiet repl w.chr
+    ychr --quiet check w.chr
+
+**Actual.**
+
+    ychr: Uncaught exception ghc-internal:GHC.Internal.IO.Exception.IOException:
+    repl: openFile: does not exist (No such file or directory)
+
+`--quiet` is swallowed, `repl`/`check` is parsed as an input file, and
+the command fails on a missing file; `ychr --quiet repl` exits 0.
+`ychr repl --quiet` (flag after the subcommand) works as documented.
+
+**Notes.** Per-subcommand `--help` correctly omits `--quiet`
+(`ychr check --help`), so `ychr check --quiet` being rejected is
+consistent; only the global placement misbehaves.
+
+**Fix sketch.** Either accept the global flags before a subcommand and
+apply them to it, or reword the usage line so the flags are shown only
+where they are honoured.
