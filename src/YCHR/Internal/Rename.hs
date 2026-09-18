@@ -29,9 +29,10 @@
 --    resolved to a callable depends on where it appears (head argument
 --    vs. rule body vs. guard or @is@-RHS). See 'ResolveMode'.
 --
--- 6. /Special cases in 'renameTerm'/: @is@, lambdas (@fun(...) -> ...@),
---    function references (@name\/arity@), and zero-arity atom promotion
---    each have their own branch.
+-- 6. /Special cases in 'renameTerm'/: @is@, disjunction (@;@), lambdas
+--    (@fun(...) -> ...@), function references (@name\/arity@),
+--    @quote\/1@, and zero-arity atom promotion each have their own
+--    branch.
 --
 -- 7. /Data-constructor warnings/: unresolved names in expression contexts
 --    emit a warning unless they match a declared data constructor.
@@ -76,11 +77,25 @@ import YCHR.Internal.Parsed
 import YCHR.Internal.Rename.Types
 import YCHR.Internal.Types
 
+-- | Errors raised while resolving and qualifying surface names. Most
+-- constructors carry the offending surface name (with its arity where
+-- relevant) and/or the modules involved; the three nullary ones carry no
+-- payload.
 data RenameError
-  = AmbiguousName Text Int [Text]
-  | UnknownName Text Int
-  | UnknownExport Text Text Int
-  | UnknownImport Text Text Int
+  = -- | An unqualified name that several visible modules provide at the
+    -- same arity (YCHR-20001). Carries the name, arity, and providers;
+    -- qualifying the reference resolves it.
+    AmbiguousName Text Int [Text]
+  | -- | An unqualified name that no visible declaration provides, in a
+    -- position that requires a callable (YCHR-20002). Carries the name
+    -- and arity.
+    UnknownName Text Int
+  | -- | A name in a module's own export list that the module does not
+    -- declare (YCHR-20003). Carries the module, name, and arity.
+    UnknownExport Text Text Int
+  | -- | A name in a @use_module@ import list that the source module does
+    -- not export (YCHR-20005). Carries the source module, name, and arity.
+    UnknownImport Text Text Int
   | -- | A qualified reference @M:n/a@ where @M@ /is/ imported by the
     -- current module but does not export @(n, arity)@ (or the name is
     -- excluded by a restricted import list). Carries the source module
@@ -180,9 +195,15 @@ data RenameError
     DisjunctionNotInRuleBody
   deriving (Eq, Show)
 
+-- | Non-fatal warnings about data-constructor references the renamer could
+-- not fully validate.
 data RenameWarning
-  = UndeclaredDataConstructor Text
-  | DataConstructorArityMismatch Text Int
+  = -- | A functor used in a data position that matches no declared data
+    -- constructor (YCHR-20101). Carries the name.
+    UndeclaredDataConstructor Text
+  | -- | A declared data constructor used with the wrong number of
+    -- arguments (YCHR-20102). Carries the name and the arity used.
+    DataConstructorArityMismatch Text Int
   deriving (Eq, Show)
 
 -- | Maps data constructor names to their declared arities (from type
@@ -219,7 +240,8 @@ emitWarning :: AnnP RenameWarning -> Rename ()
 emitWarning w = tell [noDiag w]
 
 -- | Global environments consulted while renaming one module. Bundled
--- into a record so recursive helpers don't have to thread six parameters.
+-- into a record so recursive helpers don't have to thread every
+-- environment as a separate parameter.
 --
 -- @currentModule@ is the module currently being renamed; it provides the
 -- import list against which imported-name references are validated, and
@@ -678,14 +700,14 @@ validateImportLists mods ctx =
     checkItem mn loc origin (OperatorDecl op) =
       when (op `notElem` Map.findWithDefault [] mn ctx.operatorExports) $
         emitError (AnnP (UnknownOperatorImport mn op.opName) loc origin)
-    checkItem mn loc origin (ConstraintDecl n a _ _) =
+    checkItem mn loc origin (ConstraintDecl {name = n, arity = a}) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
-    checkItem mn loc origin (FunctionDecl n a _ _ _ _ _ _) =
+    checkItem mn loc origin (FunctionDecl {name = n, arity = a}) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
     checkItem _ _ _ ExtendClassTypeDecl {} = pure ()
-    checkItem mn loc origin (TypeExportDecl n a cs) =
+    checkItem mn loc origin (TypeExportDecl {name = n, arity = a, conExports = cs}) =
       if mn `notElem` lookupExport (n, a) ctx.typeExportEnv
         then emitError (AnnP (UnknownImport mn n a) loc origin)
         else checkImportedCons mn loc origin n a cs
@@ -1230,8 +1252,8 @@ importListPermits :: Text -> Int -> Maybe [Declaration] -> Bool
 importListPermits _ _ Nothing = True
 importListPermits n arity (Just decls) = any match decls
   where
-    match (ConstraintDecl dn da _ _) = dn == n && da == arity
-    match (FunctionDecl dn da _ _ _ _ _ _) = dn == n && da == arity
+    match (ConstraintDecl {name = dn, arity = da}) = dn == n && da == arity
+    match (FunctionDecl {name = dn, arity = da}) = dn == n && da == arity
     match _ = False
 
 -- | Check whether a type name/arity is permitted by an import list.
@@ -1239,7 +1261,7 @@ importListPermitsType :: Text -> Int -> Maybe [Declaration] -> Bool
 importListPermitsType _ _ Nothing = True
 importListPermitsType n arity (Just decls) = any match decls
   where
-    match (TypeExportDecl tn ta _) = tn == n && ta == arity
+    match (TypeExportDecl {name = tn, arity = ta}) = tn == n && ta == arity
     match _ = False
 
 -- | The set of constructor names a single import-list entry permits for
@@ -1330,7 +1352,7 @@ warnUnknownDataCon dataConEnv loc origin n arity =
 -- with the declaring module, and resolve type references in constructor
 -- arguments.
 --
--- Pure (not in 'Eff'): type renaming never fails — unknown types simply
+-- Pure (not in 'Rename'): type renaming never fails — unknown types simply
 -- stay 'Unqualified' so the interpreter can decide what to do with them
 -- (e.g. built-in @int@). If type errors are introduced later this will
 -- need to move into 'Rename'.
@@ -1629,7 +1651,7 @@ arm in 'renameTerm' canonicalizes it to the qualified form before the
 warning path runs.
 
 Why 'renameTypeDefinition' is pure while the rule/equation helpers live in
-'Eff': type renaming currently emits no errors or warnings (unknown types
+'Rename': type renaming currently emits no errors or warnings (unknown types
 fall through as 'Unqualified'). If type checking is introduced later,
 these helpers will need to move into 'Rename'.
 --------------------------------------------------------------------------- -}
