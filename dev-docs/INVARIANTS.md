@@ -453,6 +453,40 @@ Two further wrinkles: `sargs !! idx` (`Store.hs:139,189`) takes `Int`,
 so `suspArg`/`getConstraintArg` need a `Word -> Int` conversion, and
 `matchTerm` compares against `length args` (`Var.hs:342-348`).
 
+### Import-placement checking fails open on a missing `trailingLoc` key — `src/YCHR/Internal/Rename.hs:274`, `:532`
+
+```haskell
+-- RenameInputs
+trailingLoc :: Map Text (Maybe SourceLoc)
+-- RenameCtx
+currentTrailingLoc = Map.findWithDefault Nothing m.name inputs.trailingLoc
+```
+
+`checkPlacement` (`Rename.hs:671-676`) emits `UseModuleOutOfOrder`
+(YCHR-20007) only when the lookup yields `Just`. The map has to
+distinguish three states and has room for two: a module exempt from the
+check (bundled libraries, absent from `trailingLoc` but present in
+`allMods`), a user module with no non-import directive (`Parser.hs:357`
+records `Nothing`), and a caller that forgot the module. The third reads
+as the first, so the diagnostic silently disappears.
+
+No live hole today: `compileModules` keys the map by every parsed user
+header (`Pipeline.hs:300-301`), and the empty-map paths —
+`compileParsedModules` (`Pipeline.hs:338`) and query renaming
+(`defaultRenameInputs`) — are deliberate, because programmatically built
+input has no source order to violate (`Pipeline.hs:312-316`). The
+exposure is a future caller or path that omits a module. The record's
+two fields also disagree on what a missing key means: the sibling
+`operatorExports :: Map Text [OpDecl]` (`Rename.hs:270`) already uses
+plain absence as a valid state.
+
+Fix: encode "exempt" instead of overloading absence —
+`data Placement = Checked SourceLoc | Exempt` with
+`trailingLoc :: Map Text Placement`. A missing key then means only
+"caller forgot" and can be reported. A `RenameInputs` smart constructor
+that cross-checks the key set against the module list would catch it
+with no type change.
+
 
 ## 3. Documented invariants worth promoting into types
 
