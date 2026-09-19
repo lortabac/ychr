@@ -83,6 +83,8 @@ import YCHR.Internal.Parsed (AnnP (..), noAnnP)
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types
+-- Hidden so '.head' resolves under MicroHs (dev-docs/MICROHS_GAPS.md, gap 1).
+import Prelude hiding (head)
 
 -- | Errors produced by the desugaring pass.
 data DesugarError

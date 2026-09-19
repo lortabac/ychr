@@ -44,6 +44,8 @@ import YCHR.Internal.Types
     TypeExpr (..),
     TypeKind (..),
   )
+-- Hidden so '.head' resolves under MicroHs (dev-docs/MICROHS_GAPS.md, gap 1).
+import Prelude hiding (head)
 
 -- ---------------------------------------------------------------------------
 -- Operator table for source pretty-printing

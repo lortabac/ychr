@@ -20,11 +20,13 @@ terse, fix-shaped, removable when closed.
 
 Re-verified against MicroHs `3322c60a` (the checkout's HEAD) and the
 installed `mhs` 0.16.6.0. Six gaps remain open; one has closed and been
-removed from this document.
+removed from this document. Gap 1's local workaround is applied to
+`src/`; a build still stops well before it — see "Local workaround
+(applied)" below.
 
 | # | Gap | State |
 |---|---|---|
-| 1 | `OverloadedRecordDot` rejects an already-bound field name | open — and broader than first recorded (five field names, ~68 sites) |
+| 1 | `OverloadedRecordDot` rejects an already-bound field name | open — workaround applied to `src/` (see below) |
 | 2 | `NoFieldSelectors` silently ignored | open |
 | 3 | Record update on a record-dot expression doesn't parse | open — four sites |
 | 4 | Missing `Data.Text` functions | open — contents changed: `breakOn`, `concatMap`, `breakOnEnd`, `last` |
@@ -45,6 +47,9 @@ changed, if anything, since it was written.
 > and considerably broader than this entry first recorded: the trigger is
 > *any* field name that also resolves to a non-selector binding, not just
 > `head`. See "Breadth" below.
+>
+> The workaround below is applied to `src/`; what remains open is the
+> MicroHs side (`isLabel`).
 
 A blocker. `e.fld` is a field access only when `isLabel fld` says so
 (`MicroHs/src/MicroHs/TypeCheck.hs:2180`):
@@ -104,7 +109,7 @@ is ambiguous between `Data.List.head` and `R.get$.Rule.head` — the same
 ### Impact on YCHR
 
 Confirmed directly. Compiling the library under `mhs` fails first at
-`src/YCHR/Internal/Pretty.hs:121` (`r.head.node`) with
+`src/YCHR/Internal/Pretty.hs:123` (`r.head.node`) with
 
 ```
 Cannot satisfy constraint: Head ~ ([_a7169] -> _a7170)
@@ -148,8 +153,9 @@ f r = r.length + r.guard + r.index + r.functions
 Two variants defeat the `hiding` workaround outright:
 
 - **The colliding name is a local function, not an import.** In
-  `src/YCHR/Internal/TypeCheck/Encode.hs`, the module defines its own
-  `guard :: D.Guard -> Term` (`:285`), and `r.guard` (`:228`) fails with
+  `src/YCHR/Internal/TypeCheck/Encode.hs`, the module defined its own
+  `guard :: D.Guard -> Term` (renamed `guardTerm` by the workaround
+  below), and `r.guard` (`:230`) failed with
   `Rule ~ (Term -> [Guard])`. There is nothing to `hide` — the name is in
   scope because the module defined it.
 - **Both the field and the function are needed.** In
@@ -157,6 +163,23 @@ Two variants defeat the `hiding` workaround outright:
   and the module also calls the list function; hiding the import is not an
   option. Qualifying the call (`List.length`) works, but it is a per-site
   rewrite.
+
+The table above is an upper bound, not a site list: a name only breaks a
+use site when it is uniquely in scope *there* as a non-selector value,
+which the open-import accident can prevent. Sweeping `src/` module by
+module against `mhs` 0.16.6.0 leaves three real collisions:
+
+| collision | where | why |
+|---|---|---|
+| `head`     | 21 `.head` uses, 8 modules | `Prelude.head` is the unique non-selector binding: the declaring module is imported qualified, or with a list that omits `Rule`, so no field label competes |
+| `length`   | `Runtime/Monad.hs:176` | the module imports `TrailState (..)`, putting the selector and the list function in scope together |
+| `guard`    | `TypeCheck/Encode.hs:230` | the module defined its own top-level `guard` |
+
+`functions` and `index` never collide: no unqualified binding of either
+name is ever in scope at a `.functions`/`.index` use. Two further cases
+compile untouched, through the open-import ambiguity described above:
+`Rename.hs` (its `Parsed` import is open) and the `.length` use in
+`Runtime/Trail.hs` (the open `TrailState (..)` import).
 
 #### Chained selectors report a misleading downstream error
 
@@ -169,8 +192,8 @@ Cannot satisfy constraint: HasField "removed" (AnnP Head) [_a315]
 ```
 
 This is the same gap, not a separate one. It is what
-`src/YCHR/Internal/Compile/Occurrences.hs:106-107` and
-`src/YCHR/Internal/Compile.hs:483` report once `head` has been hidden; the
+`src/YCHR/Internal/Compile/Occurrences.hs:107-108` and
+`src/YCHR/Internal/Compile.hs:484` report once `head` has been hidden; the
 chain still fails because the earlier link is misresolved. Expect to see
 both error shapes while working through a build.
 
@@ -200,6 +223,45 @@ or bind the record through a non-colliding path). The earlier note that
 "a module that open-imports one does not [fail]" still holds, but the
 practical conclusion is the opposite of reassuring: the workaround is
 per-site, not per-module, and does not compose.
+
+### Local workaround (applied)
+
+Applied to `src/`:
+
+| edit | sites |
+|---|---|
+| `import Prelude hiding (head)` | `Compile.hs`, `Compile/Occurrences.hs`, `Compile/Passive.hs`, `Desugar.hs`, `Desugar/Disjunction.hs`, `Pretty.hs`, `Resolve.hs`, `TypeCheck/Encode.hs` |
+| local `guard` renamed to `guardTerm` | `TypeCheck/Encode.hs` |
+| `length` qualified as `List.length` | `Runtime/Monad.hs:176` |
+
+Hiding the list function is safe in all eight modules: none of them calls
+it. `Rename.hs` and `Runtime/Trail.hs` are left alone (see "Breadth"
+above).
+
+Two error shapes the sweep produced that belong to this gap and are not
+listed above:
+
+- `undefined value: node` (or `removed`) — the *first* link of a chain
+  misresolves, so the next selector is read as a value;
+- `ambiguous value: length [Data.List.length, ...get$.TrailState.length]`
+  — a bare call to the list function while a same-named selector is in
+  scope; the message names both candidates.
+
+Verified module by module with `mhs -fno-code` on a scratch copy of
+`src/`: with the edits above, `Compile/Passive.hs`,
+`Compile/Occurrences.hs`, `Compile.hs`, `Pretty.hs`, `Resolve.hs` and
+`TypeCheck/Encode.hs` compile. `Desugar.hs` and
+`Desugar/Disjunction.hs` clear the gap-1 error and then stop on gap-3
+sites (`func.equations {node = …}`, `ctx.bodyAnn {node = …}`), not on
+this gap; `Runtime/Monad.hs` sits behind them through
+`Compile.Pipeline`, so its call was checked with the equivalent
+`TrailState` reproducer instead (`ambiguous value: length […]` without
+the qualification, accepted with it). There is no end-to-end check:
+gap 5 still fails dependency resolution before any module is compiled.
+The test component is out of reach as well (`tasty` and `hedgehog` are
+not in the MicroHs package set), so
+`test/YCHR/RoundtripTest.hs:159` — the same `.head` collision, on a
+qualified `Parsed` — keeps it and is left as is.
 
 ### History
 
@@ -277,9 +339,9 @@ one `mhs` reaches, not the only one:
 
 | site | expression |
 |---|---|
-| `src/YCHR/Internal/Desugar.hs:959` | `func { D.equations = func.equations { node = eqs' } }` |
-| `src/YCHR/Internal/Desugar.hs:1025-1026` | `rule { D.guard = rule.guard { node = guards' }, ... }` |
-| `src/YCHR/Internal/Desugar/Disjunction.hs:107` | `rule { D.body = rule.body { node = goals } }` |
+| `src/YCHR/Internal/Desugar.hs:961` | `func { D.equations = func.equations { node = eqs' } }` |
+| `src/YCHR/Internal/Desugar.hs:1027-1028` | `rule { D.guard = rule.guard { node = guards' }, ... }` |
+| `src/YCHR/Internal/Desugar/Disjunction.hs:108` | `rule { D.body = rule.body { node = goals } }` |
 | `src/YCHR/Internal/Desugar/Disjunction.hs:154-162` | `ctx.headAnn { node = ... }`, `ctx.bodyAnn { node = ... }` |
 
 Note the trigger is not exactly "a selector chain": `ctx.headAnn { ... }`
@@ -323,7 +385,7 @@ locations (line numbers current as of this revision):
 
 | Missing  | YCHR call sites |
 |----------|------------------|
-| `breakOn`    | `src/YCHR/Internal/Runtime/Trace.hs:231`, `src/YCHR/Internal/Resolve.hs:1405`, `src/YCHR/Internal/Meta.hs:90` |
+| `breakOn`    | `src/YCHR/Internal/Runtime/Trace.hs:231`, `src/YCHR/Internal/Resolve.hs:1407`, `src/YCHR/Internal/Meta.hs:90` |
 | `concatMap`  | `src/YCHR/Internal/Compile/Names.hs:110`, `src/YCHR/Internal/Compile/Names.hs:135`, `src/YCHR/Internal/SExpr.hs:69` |
 | `breakOnEnd` | `test/YCHR/TypeSoundness/Observe.hs:178,181` |
 | `last`       | `src/YCHR/Internal/Parser.hs:256` |
@@ -454,7 +516,7 @@ f bs = let (s, bs') = mapAccumL (\a x -> (a + x, x)) 0 bs
 -- Cannot satisfy constraint: NonEmpty ~ []
 ```
 
-Reproduced at `src/YCHR/Internal/Desugar.hs:865-870`, where
+Reproduced at `src/YCHR/Internal/Desugar.hs:866-872`, where
 `D.BodyOr` holds a `NE.NonEmpty` and the body is folded with
 `mapAccumL`.
 

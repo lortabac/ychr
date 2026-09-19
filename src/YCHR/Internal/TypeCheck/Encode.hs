@@ -86,6 +86,8 @@ import YCHR.Internal.Types
     flattenName,
     qualifiedToName,
   )
+-- Hidden so '.head' resolves under MicroHs (dev-docs/MICROHS_GAPS.md, gap 1).
+import Prelude hiding (head)
 
 -- | A program encoded for the CHR checker.
 data Encoded = Encoded
@@ -225,7 +227,7 @@ ann f a = do
 rule :: D.Rule -> Enc Term
 rule r = do
   h <- ann ruleHead r.head
-  g <- ann (listTerm . map guard) r.guard
+  g <- ann (listTerm . map guardTerm) r.guard
   b <- ann (listTerm . map bodyGoal) r.body
   pure (ast "rule" [maybeTerm (TextTerm <$> r.name), h, g, b])
 
@@ -262,7 +264,7 @@ equation eq =
   ast
     "fun_eq"
     [ listTerm (map headArg eq.params),
-      listTerm (map guard eq.guards),
+      listTerm (map guardTerm eq.guards),
       listTerm (map funStmt eq.prelude),
       expr eq.rhs
     ]
@@ -282,11 +284,13 @@ boundSig b =
 -- Goals, guards, expressions
 -- ---------------------------------------------------------------------------
 
-guard :: D.Guard -> Term
-guard (D.GuardEqual a b) = ast "guard_equal" [expr a, expr b]
-guard (D.GuardMatch e n i) = ast "guard_match" [expr e, nameTerm n, intTerm i]
-guard (D.GuardGetArg v e i) = ast "guard_getarg" [atomTerm v, expr e, intTerm i]
-guard (D.GuardExpr e) = ast "guard_expr" [expr e]
+-- Named 'guardTerm' rather than 'guard': a top-level 'guard' would capture
+-- MicroHs's '.guard' resolution (dev-docs/MICROHS_GAPS.md, gap 1).
+guardTerm :: D.Guard -> Term
+guardTerm (D.GuardEqual a b) = ast "guard_equal" [expr a, expr b]
+guardTerm (D.GuardMatch e n i) = ast "guard_match" [expr e, nameTerm n, intTerm i]
+guardTerm (D.GuardGetArg v e i) = ast "guard_getarg" [atomTerm v, expr e, intTerm i]
+guardTerm (D.GuardExpr e) = ast "guard_expr" [expr e]
 
 bodyGoal :: D.BodyGoal -> Term
 bodyGoal D.BodyTrue = ast "body_true" []

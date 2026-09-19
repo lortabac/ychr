@@ -44,6 +44,8 @@ import YCHR.Internal.Types
     qualifiedToName,
   )
 import YCHR.Internal.VM (ConstraintType (..))
+-- Hidden so '.head' resolves under MicroHs (dev-docs/MICROHS_GAPS.md, gap 1).
+import Prelude hiding (head)
 
 -- | Walk every rule in the program and assemble the per-constraint
 -- 'OccurrenceMap'. Occurrences are numbered top-down within each

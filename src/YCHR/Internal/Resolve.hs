@@ -52,6 +52,8 @@ import YCHR.Internal.Types
     typeConstructors,
     unqualifiedText,
   )
+-- Hidden so '.head' resolves under MicroHs (dev-docs/MICROHS_GAPS.md, gap 1).
+import Prelude hiding (head)
 
 data ResolveError
   = -- | A name declared as a constraint has function equations.

@@ -95,6 +95,8 @@ import YCHR.Internal.Types
   )
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
+-- Hidden so '.head' resolves under MicroHs (dev-docs/MICROHS_GAPS.md, gap 1).
+import Prelude hiding (head)
 
 -- | Source location, original parsed expression, and optional context
 -- label, extracted from an 'AnnP' wrapper.

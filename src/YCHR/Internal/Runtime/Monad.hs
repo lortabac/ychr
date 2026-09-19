@@ -36,6 +36,9 @@ import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
+-- Qualified because 'TrailState (..)' is imported, putting its 'length'
+-- selector in scope next to the list function (dev-docs/MICROHS_GAPS.md, gap 1).
+import Data.List qualified as List
 import Data.Map.Strict (Map)
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
@@ -170,7 +173,7 @@ initSessionEnv ::
   IO SessionEnv
 initSessionEnv typeNames rNames inert pm hc ev expMap expSet = do
   vc <- newIORef (VarId 0)
-  let typeCount = length typeNames
+  let typeCount = List.length typeNames
       emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
       typeNameMap = IntMap.fromList (zip [0 ..] typeNames)
       ruleNameMap = IntMap.fromList (zip [0 ..] rNames)

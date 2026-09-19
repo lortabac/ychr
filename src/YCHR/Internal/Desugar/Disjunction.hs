@@ -53,6 +53,8 @@ import YCHR.Internal.Types
     QualifiedName (..),
     TypeExpr (..),
   )
+-- Hidden so '.head' resolves under MicroHs (dev-docs/MICROHS_GAPS.md, gap 1).
+import Prelude hiding (head)
 
 -- | The argument type a lifted constraint is declared with. Arity-only
 -- declarations spell every position @any@; see 'lowerDisjunctions' on
