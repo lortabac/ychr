@@ -20,16 +20,16 @@ terse, fix-shaped, removable when closed.
 
 Re-verified against MicroHs `3322c60a` (the checkout's HEAD) and the
 installed `mhs` 0.16.6.0. Six gaps remain open; one has closed and been
-removed from this document. Gap 1's local workaround is applied to
-`src/`; a build still stops well before it — see "Local workaround
-(applied)" below.
+removed from this document. The local workarounds for gaps 1 and 4 are
+applied (gap 4 also touches one test module); a build still stops well
+before them — see the "Local workaround (applied)" sections below.
 
 | # | Gap | State |
 |---|---|---|
 | 1 | `OverloadedRecordDot` rejects an already-bound field name | open — workaround applied to `src/` (see below) |
 | 2 | `NoFieldSelectors` silently ignored | open |
 | 3 | Record update on a record-dot expression doesn't parse | open — four sites |
-| 4 | Missing `Data.Text` functions | open — contents changed: `breakOn`, `concatMap`, `breakOnEnd`, `last` |
+| 4 | Missing `Data.Text` functions | open — workaround applied (`Data.Text.Shim`) |
 | 5 | No `TemplateHaskell` support | open — no workaround |
 | 6 | `mapAccumL` is list-only | open |
 
@@ -378,6 +378,9 @@ parser fix.
 > YCHR has dropped the `unpack`-threading workarounds and now calls them
 > directly. The remaining gaps are a *different* set: `breakOn`,
 > `concatMap`, `breakOnEnd` and `last`.
+>
+> The shim workaround below is applied to `src/` and to one test module;
+> what remains open is the MicroHs side.
 
 `MicroHs/lib/Data/Text.hs` is still missing several functions exported
 by the `text` package on Hackage. YCHR uses each of these in the listed
@@ -385,13 +388,13 @@ locations (line numbers current as of this revision):
 
 | Missing  | YCHR call sites |
 |----------|------------------|
-| `breakOn`    | `src/YCHR/Internal/Runtime/Trace.hs:231`, `src/YCHR/Internal/Resolve.hs:1407`, `src/YCHR/Internal/Meta.hs:90` |
-| `concatMap`  | `src/YCHR/Internal/Compile/Names.hs:110`, `src/YCHR/Internal/Compile/Names.hs:135`, `src/YCHR/Internal/SExpr.hs:69` |
-| `breakOnEnd` | `test/YCHR/TypeSoundness/Observe.hs:178,181` |
-| `last`       | `src/YCHR/Internal/Parser.hs:256` |
+| `breakOn`    | `src/YCHR/Internal/Runtime/Trace.hs:233`, `src/YCHR/Internal/Resolve.hs:1409`, `src/YCHR/Internal/Meta.hs:92` |
+| `concatMap`  | `src/YCHR/Internal/Compile/Names.hs:112`, `src/YCHR/Internal/Compile/Names.hs:137`, `src/YCHR/Internal/SExpr.hs:71` |
+| `breakOnEnd` | `test/YCHR/TypeSoundness/Observe.hs:180,183` |
+| `last`       | `src/YCHR/Internal/Parser.hs:258` |
 
 The first failure a build hits is `Text.last`
-(`Parser.hs:256`, `Text.last trimmed`), reported as
+(`Parser.hs:258`, `Text.last trimmed`), reported as
 `undefined value: Text.last`. `last` and `breakOnEnd` were not in the
 original list; `all`, `any` and `strip` no longer belong in it.
 
@@ -413,7 +416,8 @@ Each call site rewrites to a `Data.List` equivalent threaded through
 - `T.concatMap f t`   → `T.concat (map f (T.unpack t))`
 - `T.last t`          → `last (T.unpack t)`
 - `T.breakOn sep t`   → `T.splitOn`, or a local `breakOnT` helper
-- `T.breakOnEnd sep t`→ as `breakOn`, searching from the right
+- `T.breakOnEnd sep t`→ `breakOn (reverse sep) (reverse t)`, reversing
+  both components back — reversing only the haystack is wrong, see below
 
 Two points learned the hard way while applying these:
 
@@ -427,6 +431,55 @@ Two points learned the hard way while applying these:
 
 These all evaluate equivalently on the input ranges YCHR actually
 hits, and the perf hit is negligible at compiler-frontend scale.
+
+### Local workaround (applied)
+
+Applied as one shim module rather than a per-call-site rewrite:
+`src/Data/Text/Shim.hs` (module `Data.Text.Shim`) offers the whole
+`Data.Text` surface plus the four missing functions, implemented over
+`Data.List`. Each importer treats it as a drop-in for `Data.Text`:
+
+| edit | sites |
+|---|---|
+| `import Data.Text.Shim qualified as …` | `Compile/Names.hs`, `SExpr.hs`, `Parser.hs`, `Resolve.hs`, `Meta.hs`, `Runtime/Trace.hs`, `test/YCHR/TypeSoundness/Observe.hs` |
+
+The shim deliberately replaces the native implementations under GHC too:
+one implementation then serves both compilers, and the GHC test suite
+(`YCHR.TextShimTest`) pins the shim to `Data.Text` over an exhaustive
+small corpus, so it exercises the code `mhs` will run. Points learned
+while writing it:
+
+- `breakOnEnd` reverses the **pattern as well as the haystack**. A first
+  cut that reversed only the haystack agreed with `Data.Text` on every
+  single-character pattern and failed on `breakOnEnd "a:b" "a:b:c"`.
+- The not-found results are asymmetric, as in `Data.Text`: `breakOn`
+  gives `(src, "")`, `breakOnEnd` gives `("", src)`.
+- The partial cases keep `Data.Text`'s behaviour, including *when* they
+  throw: `breakOn` rejects an empty pattern at the tuple, while
+  `breakOnEnd` rejects it only once a component is forced, hence the
+  lazy pattern binding there. `last` rejects an empty text.
+- Eta-expansion still applies: `reverseText` and `concatMap` are written
+  with explicit arguments.
+- Under GHC the module needs `import Prelude hiding (concatMap, last)`,
+  or its export-list entries are ambiguous with `Prelude`'s. MicroHs
+  silently ignores hidden names it does not export, so the same source
+  works on both compilers.
+
+Verified with `mhs -fno-code -i src`: `Data.Text.Shim` itself plus
+`SExpr.hs`, `Compile/Names.hs`, `Parser.hs`, `Resolve.hs` and
+`Runtime/Trace.hs` compile (`No code generated`); before the shim, each
+stopped on `undefined value: T.concatMap` / `Text.last` / `T.breakOn`.
+`Meta.hs` now gets past gap 4 as well, and stops on gap 3's first site
+(`Desugar.hs:961`), reached through `Compile.Pipeline`. There is still
+no end-to-end check: gap 5 fails dependency resolution before any
+module is compiled.
+
+Deleting `src/Data/Text/Shim.hs`, the importers' `Data.Text.Shim` import
+lines, `test/YCHR/TextShimTest.hs` and its wiring (the shim's
+`exposed-modules` entry and the test's `other-modules` entry in
+`ychr.cabal`, plus the import and group entry in `test/Main.hs`)
+restores plain `Data.Text` imports; that is the intended cleanup once
+MicroHs exports the four functions.
 
 
 ## 5. No `TemplateHaskell` support

@@ -37,7 +37,9 @@ where
 
 import Data.List (intercalate)
 import Data.Text (Text)
-import Data.Text qualified as T
+-- MicroHs's 'Data.Text' lacks 'breakOn'; the shim supplies it
+-- (dev-docs/MICROHS_GAPS.md, gap 4).
+import Data.Text.Shim qualified as T
 import System.IO (Handle, hPutStrLn)
 import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Types (SuspensionId (..))

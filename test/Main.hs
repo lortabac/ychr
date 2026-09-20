@@ -24,6 +24,7 @@ import YCHR.Runtime.InterpreterTest qualified
 import YCHR.Runtime.ReactivationTest qualified
 import YCHR.Runtime.StoreTest qualified
 import YCHR.Runtime.VarTest qualified
+import YCHR.TextShimTest qualified
 import YCHR.TypeCheckTest qualified
 import YCHR.TypeSoundnessTest qualified
 import YCHR.VM.SExprTest qualified
@@ -67,6 +68,7 @@ main = do
           YCHR.PExprRoundtripTest.tests,
           YCHR.RoundtripTest.tests,
           YCHR.RenameTest.tests,
+          YCHR.TextShimTest.tests,
           YCHR.TypeCheckTest.tests,
           YCHR.TypeSoundnessTest.tests,
           YCHR.Runtime.VarTest.tests,

@@ -23,7 +23,9 @@ where
 
 import Data.Char (isAlpha, isAlphaNum)
 import Data.Text (Text)
-import Data.Text qualified as T
+-- MicroHs's 'Data.Text' lacks 'concatMap'; the shim supplies it
+-- (dev-docs/MICROHS_GAPS.md, gap 4).
+import Data.Text.Shim qualified as T
 import Text.Parsec (Parsec, between, choice, eof, many, parse, try)
 import Text.Parsec qualified as P
 import Text.Parsec.Char (char, satisfy)

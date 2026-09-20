@@ -61,7 +61,9 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
-import Data.Text qualified as Text
+-- MicroHs's 'Data.Text' lacks 'last'; the shim supplies it
+-- (dev-docs/MICROHS_GAPS.md, gap 4).
+import Data.Text.Shim qualified as Text
 import System.FilePath (takeBaseName)
 import Text.Parsec (ParseError)
 import YCHR.Internal.PExpr (PExpr (Atom, Compound, Str, Var))

@@ -64,7 +64,9 @@ where
 
 import Data.Char (isAlpha, isAscii, isDigit, ord)
 import Data.Text (Text)
-import Data.Text qualified as T
+-- MicroHs's 'Data.Text' lacks 'concatMap'; the shim supplies it
+-- (dev-docs/MICROHS_GAPS.md, gap 4).
+import Data.Text.Shim qualified as T
 import Numeric (showHex)
 import YCHR.Internal.Compile.Types (OccurrenceNumber (..), PartnerIndex (..))
 import YCHR.Internal.Types qualified as Types

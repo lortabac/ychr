@@ -20,7 +20,9 @@ import Data.Char (chr)
 import Data.Foldable (toList)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text, pack)
-import Data.Text qualified as T
+-- MicroHs's 'Data.Text' lacks 'breakOn'; the shim supplies it
+-- (dev-docs/MICROHS_GAPS.md, gap 4).
+import Data.Text.Shim qualified as T
 import Numeric (readHex)
 import YCHR.Internal.Parser (builtinOps, parseTermWith)
 import YCHR.Internal.Pretty (prettyTerm)
