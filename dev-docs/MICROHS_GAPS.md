@@ -20,9 +20,11 @@ terse, fix-shaped, removable when closed.
 
 Re-verified against MicroHs `3322c60a` (the checkout's HEAD) and the
 installed `mhs` 0.16.6.0. Six gaps remain open; one has closed and been
-removed from this document. The local workarounds for gaps 1 and 4 are
-applied (gap 4 also touches one test module); a build still stops well
-before them — see the "Local workaround (applied)" sections below.
+removed from this document. The local workarounds for gaps 1, 4 and 6
+are applied (gap 4 also touches one test module); a build still stops
+before gap 6 is reached — on gap 3's parse error — so that one was
+checked on a scratch copy, see its "Local workaround (applied)" section
+below.
 
 | # | Gap | State |
 |---|---|---|
@@ -31,7 +33,7 @@ before them — see the "Local workaround (applied)" sections below.
 | 3 | Record update on a record-dot expression doesn't parse | open — four sites |
 | 4 | Missing `Data.Text` functions | open — workaround applied (`Data.Text.Shim`) |
 | 5 | No `TemplateHaskell` support | open — no workaround |
-| 6 | `mapAccumL` is list-only | open |
+| 6 | `mapAccumL` is list-only | open — workaround applied to `src/` (see below) |
 
 `Data.Either.partitionEithers` (formerly gap 5) is now exported by
 MicroHs (`lib/Data/Either.hs:51`) and used directly by
@@ -339,8 +341,8 @@ one `mhs` reaches, not the only one:
 
 | site | expression |
 |---|---|
-| `src/YCHR/Internal/Desugar.hs:961` | `func { D.equations = func.equations { node = eqs' } }` |
-| `src/YCHR/Internal/Desugar.hs:1027-1028` | `rule { D.guard = rule.guard { node = guards' }, ... }` |
+| `src/YCHR/Internal/Desugar.hs:965` | `func { D.equations = func.equations { node = eqs' } }` |
+| `src/YCHR/Internal/Desugar.hs:1031-1032` | `rule { D.guard = rule.guard { node = guards' }, ... }` |
 | `src/YCHR/Internal/Desugar/Disjunction.hs:108` | `rule { D.body = rule.body { node = goals } }` |
 | `src/YCHR/Internal/Desugar/Disjunction.hs:154-162` | `ctx.headAnn { node = ... }`, `ctx.bodyAnn { node = ... }` |
 
@@ -470,7 +472,7 @@ Verified with `mhs -fno-code -i src`: `Data.Text.Shim` itself plus
 `Runtime/Trace.hs` compile (`No code generated`); before the shim, each
 stopped on `undefined value: T.concatMap` / `Text.last` / `T.breakOn`.
 `Meta.hs` now gets past gap 4 as well, and stops on gap 3's first site
-(`Desugar.hs:961`), reached through `Compile.Pipeline`. There is still
+(`Desugar.hs:965`), reached through `Compile.Pipeline`. There is still
 no end-to-end check: gap 5 fails dependency resolution before any
 module is compiled.
 
@@ -539,6 +541,14 @@ that machinery is intentionally not added preemptively.
 
 ## 6. `Data.List.mapAccumL` and friends are list-only, not `Foldable`
 
+> **Re-verified.** Still open upstream; the workaround is now applied to
+> `src/`. It is a single site, and the round trip is free: `NonEmpty a`
+> is `a :| [a]`, and `NE.toList` / `NE.fromList` are lazy O(1) views.
+> The stock tree cannot reach that site under `mhs` — `Desugar.hs` is
+> rejected by a gap-3 *parse* error (`line 965`) before it is ever
+> typechecked — so the `mhs` check for this entry ran on a scratch copy
+> with gap 3's four hoists applied; see "Local workaround (applied)".
+
 Found while working past gaps 1–5; not previously recorded.
 
 GHC's `Data.List.mapAccumL` is `Traversable`-polymorphic:
@@ -569,7 +579,7 @@ f bs = let (s, bs') = mapAccumL (\a x -> (a + x, x)) 0 bs
 -- Cannot satisfy constraint: NonEmpty ~ []
 ```
 
-Reproduced at `src/YCHR/Internal/Desugar.hs:866-872`, where
+Reproduced at `src/YCHR/Internal/Desugar.hs:870-876`, where
 `D.BodyOr` holds a `NE.NonEmpty` and the body is folded with
 `mapAccumL`.
 
@@ -580,19 +590,51 @@ Widen `mapAccumL` / `mapAccumR` to `Traversable t` (or host the
 exists; only the signature and body of `Data.List`'s versions need to
 change.
 
-### Local workaround
+### Local workaround (applied)
 
-Thread through the list representation, which is what the rest of YCHR
-already does (`NE.toList` / `NE.fromList`):
+Applied to `src/YCHR/Internal/Desugar.hs`, `liftBodyGoal`'s `D.BodyOr`
+arm — the only `mapAccumL` in the tree applied to a `NonEmpty`. Every
+other call site already threads lists (`Desugar/Disjunction.hs:137`
+converts with `NE.toList`); `mapAccumR` has the same list-only
+signature upstream, but YCHR does not call it. The outer accumulation
+converts to a list, and the result converts back:
 
 ```haskell
-let (st', branches') =
-      mapAccumL
-        (mapAccumL (liftBodyGoal modName scope))
-        st
-        (NE.toList branches)
- in (st', D.BodyOr (NE.fromList branches'))
+D.BodyOr branches ->
+  let (st', branches') =
+        mapAccumL
+          (mapAccumL (liftBodyGoal modName scope))
+          st
+          (NE.toList branches)
+   in (st', D.BodyOr (NE.fromList branches'))
 ```
+
+The round trip is free: MicroHs's `NonEmpty a` is `a :| [a]`, with
+`toList ~(a :| as) = a : as` and `fromList (a : as) = a :| as`
+(`lib/Data/List/NonEmpty.hs:282-288`), so both directions are lazy O(1)
+and no element is traversed an extra time. `NE.fromList` cannot fail
+here: `disjuncts` always yields at least two branches
+(`Desugar.hs:611-622`).
+
+Verified:
+
+- GHC: `make format` clean and `make test` green. Both forms typecheck
+  under GHC, so the test suite cannot pin this gap; it only rules out a
+  behaviour change.
+- Isolated reproducer: a `Main` module using the `NonEmpty` form fails
+  with `Cannot satisfy constraint: NonEmpty ~ []`; the same module with
+  `NE.toList` compiles (`No code generated`).
+- Scratch copy: a copy of `src/` with gap 3's four hoists applied *and*
+  this change typechecks fully under `mhs -fno-code` (`No code
+  generated`, exit 0). Reverting only this change in that copy brings
+  the error back at the `D.BodyOr` arm (`Cannot satisfy constraint:
+  NonEmpty ~ []`).
+
+Invocation detail: the include path must be attached (`-i<dir>`, not
+`-i <dir>`); the separate form is read as a module name and surfaces as
+`undefined export: main`. With `-isrc`, a library module is checked
+directly — `mhs -fno-code -isrc YCHR.Internal.Desugar` reports the
+gap-3 parse error at `Desugar.hs:965`.
 
 Cheap, but it means every `NonEmpty` crossing a `Traversable`-generic
 helper needs an explicit conversion pair, and a mistake shows up as the

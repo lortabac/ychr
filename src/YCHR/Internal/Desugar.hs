@@ -863,13 +863,17 @@ liftBodyGoal modName scope st goal = case goal of
      in (st', D.BodyHostStmt f args')
   -- Every branch is lifted in the same scope: a disjunct sees exactly
   -- the variables the enclosing rule body sees.
+  --
+  -- MicroHs's 'Data.List.mapAccumL' is list-only, so the branches are
+  -- threaded through the list representation
+  -- (dev-docs/MICROHS_GAPS.md, gap 6).
   D.BodyOr branches ->
     let (st', branches') =
           mapAccumL
             (mapAccumL (liftBodyGoal modName scope))
             st
-            branches
-     in (st', D.BodyOr branches')
+            (NE.toList branches)
+     in (st', D.BodyOr (NE.fromList branches'))
   D.BodyTrue -> (st, D.BodyTrue)
 
 -- | Lift lambdas in a guard. 'GuardExpr' and 'GuardEqual' carry
