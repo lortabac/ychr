@@ -83,7 +83,9 @@
 --     stratification that gives termination).
 module YCHR.TypeSoundnessTest (tests) where
 
-import Control.Exception (SomeException, try)
+-- 'try' comes from the shim so its type variables keep GHC's order
+-- (dev-docs/MICROHS_GAPS.md, gap 7).
+import Control.Exception.Shim (SomeException, try)
 import Control.Monad (unless)
 import Data.IORef (newIORef, readIORef)
 import Data.IntMap.Strict qualified as IntMap

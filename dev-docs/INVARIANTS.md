@@ -340,7 +340,7 @@ each pass asserts it was already lowered. A phase index on
 `Desugared.BodyGoal` (or a post-lowering type without `BodyOr`) would
 discharge both. The `Meta.hs` sites are the mildest — `invokeHostCall`
 wraps the host function in `try @SomeException`
-(`Interpreter.hs:858`), so they surface as an ordinary runtime error
+(`Interpreter.hs:872`), so they surface as an ordinary runtime error
 rather than a process abort; they are nonetheless `error` rather than
 `runtimeErrorS` for a difficulty that is really just arity.
 

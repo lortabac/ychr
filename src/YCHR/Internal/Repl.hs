@@ -15,7 +15,15 @@ module YCHR.Internal.Repl
   )
 where
 
-import Control.Exception (IOException, SomeException, displayException, fromException, try)
+-- 'try' comes from the shim so its type variables keep GHC's order
+-- (dev-docs/MICROHS_GAPS.md, gap 7).
+import Control.Exception.Shim
+  ( IOException,
+    SomeException,
+    displayException,
+    fromException,
+    try,
+  )
 import Control.Monad (unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask, runReaderT)

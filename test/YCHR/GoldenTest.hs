@@ -2,7 +2,9 @@
 
 module YCHR.GoldenTest (tests) where
 
-import Control.Exception (SomeException, fromException, try)
+-- 'try' comes from the shim so its type variables keep GHC's order
+-- (dev-docs/MICROHS_GAPS.md, gap 7).
+import Control.Exception.Shim (SomeException, fromException, try)
 import Control.Monad (filterM)
 import Data.Char (isSpace)
 import Data.Foldable (traverse_)

@@ -82,7 +82,9 @@ module YCHR.Internal.Runtime.Search
   )
 where
 
-import Control.Exception (throwIO, try)
+-- 'try' comes from the shim so its type variables keep GHC's order
+-- (dev-docs/MICROHS_GAPS.md, gap 7).
+import Control.Exception.Shim (throwIO, try)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask)
 import Data.Foldable (toList)
