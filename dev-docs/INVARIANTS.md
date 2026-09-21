@@ -329,8 +329,8 @@ exhaustive:
 | `src/YCHR/Internal/Runtime/Interpreter.hs:496` (`activateSuspensionId`) | leading-id shape check |
 | `src/YCHR/Run.hs:548` (`executeBodyGoal`, `BodyOr`)       | query disjunction should have been rejected (YCHR-30006) |
 | `src/YCHR/Internal/Compile.hs:1122` (`compileBodyGoal`, `BodyOr`) | `lowerDisjunctions` should have run first |
-| `src/YCHR/Internal/Desugar.hs:983` (`ruleModName`)        | non-empty head                             |
-| `src/YCHR/Internal/Desugar/Disjunction.hs:101,204`        | lifted rule is a simplification; non-empty head |
+| `src/YCHR/Internal/Desugar.hs:987` (`ruleModName`)        | non-empty head                             |
+| `src/YCHR/Internal/Desugar/Disjunction.hs:101,206`        | lifted rule is a simplification; non-empty head |
 | `src/YCHR/Internal/Backend/Scheme.hs:214` (`programInfoBindingName`) | non-empty library name          |
 | `src/YCHR/Internal/Meta.hs:184,190,192`                   | host-call arity / parse result (`write_term_to_string`, `read_term_from_string`) |
 

@@ -19,23 +19,26 @@ terse, fix-shaped, removable when closed.
 ## Status
 
 Re-verified against MicroHs `3322c60a` (the checkout's HEAD) and the
-installed `mhs` 0.16.6.0. Six gaps remain open; one has closed and been
-removed from this document. The local workarounds for gaps 1, 4 and 6
-are applied (gap 4 also touches one test module), and gap 5's
+installed `mhs` 0.16.6.0. Eight gaps are recorded; one has closed and
+been removed from this document. The local workarounds for gaps 1, 3, 4
+and 6 are applied (gap 4 also touches one test module), and gap 5's
 library-side workaround is applied too: no Template Haskell remains in
 `library ychr` and no unconditional `template-haskell` dependency
-remains in `ychr.cabal` (see gap 5). A build still stops before gap 6 is
-reached — on gap 3's parse error — so that one was checked on a scratch
-copy, see its "Local workaround (applied)" section below.
+remains in `ychr.cabal` (see gap 5). With gap 3's parse error gone,
+`mcabal build` gets past dependency resolution and compiles the library
+up to `Runtime/Interpreter.hs:870`, where gap 7 stops it; gaps 7 and 8
+were found in that state and are recorded below.
 
 | # | Gap | State |
 |---|---|---|
 | 1 | `OverloadedRecordDot` rejects an already-bound field name | open — workaround applied to `src/` (see below) |
 | 2 | `NoFieldSelectors` silently ignored | open |
-| 3 | Record update on a record-dot expression doesn't parse | open — four sites |
+| 3 | Record update on a record-dot expression doesn't parse | open — workaround applied to `src/` (see below) |
 | 4 | Missing `Data.Text` functions | open — workaround applied (`Data.Text.Shim`) |
 | 5 | No `TemplateHaskell` support | open upstream — TH kept out of `library ychr`; the mhs-side resources provider is missing (see below) |
 | 6 | `mapAccumL` is list-only | open — workaround applied to `src/` (see below) |
+| 7 | `Control.Exception.try` orders its type variables differently from GHC | open — no workaround |
+| 8 | `Data.List` functions lack their fixity declarations | open — no workaround |
 
 `Data.Either.partitionEithers` (formerly gap 5) is now exported by
 MicroHs (`lib/Data/Either.hs:51`) and used directly by
@@ -255,13 +258,14 @@ Verified module by module with `mhs -fno-code` on a scratch copy of
 `src/`: with the edits above, `Compile/Passive.hs`,
 `Compile/Occurrences.hs`, `Compile.hs`, `Pretty.hs`, `Resolve.hs` and
 `TypeCheck/Encode.hs` compile. `Desugar.hs` and
-`Desugar/Disjunction.hs` clear the gap-1 error and then stop on gap-3
-sites (`func.equations {node = …}`, `ctx.bodyAnn {node = …}`), not on
-this gap; `Runtime/Monad.hs` sits behind them through
+`Desugar/Disjunction.hs` cleared the gap-1 error and then stopped on
+gap-3 sites (`func.equations {node = …}`, `ctx.bodyAnn {node = …}`),
+not on this gap; those now compile as well, since gap 3's workaround
+landed. `Runtime/Monad.hs` sits behind them through
 `Compile.Pipeline`, so its call was checked with the equivalent
 `TrailState` reproducer instead (`ambiguous value: length […]` without
-the qualification, accepted with it). There is no end-to-end check:
-gap 5 still fails dependency resolution before any module is compiled.
+the qualification, accepted with it). There is still no end-to-end
+check: the library now stops on gap 7 before the CLI is reached.
 The test component is out of reach as well (`tasty` and `hedgehog` are
 not in the MicroHs package set), so
 `test/YCHR/RoundtripTest.hs:159` — the same `.head` collision, on a
@@ -317,15 +321,20 @@ workaround is the same.
 
 ## 3. Record update on a record-dot expression doesn't parse
 
-> **Re-verified.** Still open. The doc recorded one site; there are four.
+> **Re-verified.** Still open upstream; the workaround is now applied to
+> `src/`. The doc recorded one site; there are four, all in the
+> desugaring passes. With them hoisted, `mhs -fno-code -isrc
+> YCHR.Internal.Desugar` and `…YCHR.Internal.Desugar.Disjunction` report
+> `No code generated`.
 
 The expression form `e.fld { f = ... }` (record update applied to the
-result of a record-dot selector chain) fails with a parse error:
+result of a record-dot selector chain) fails with a parse error — the
+line numbers are from before the workaround below:
 
 ```
-src/YCHR/Internal/Desugar.hs:642:48:
+mhs: uncaught exception: error: "src/YCHR/Internal/Desugar.hs": line 965, col 48:
   found:    {
-  expected: . LQIdent ( UQIdent [ literal _primitive @ ...
+  expected: . LQIdent ( UQIdent [ QualString literal _primitive @ (# \ case let if QualDo do mdo QSymOper ` :: ∷ , }
 ```
 
 Trigger:
@@ -339,14 +348,16 @@ A `let` binding to name `func.equations` first works around it. GHC
 accepts the inline form.
 
 The same shape recurs three more times; the recorded site is the first
-one `mhs` reaches, not the only one:
+one `mhs` reaches, not the only one. Line numbers and updates below are
+the current (post-workaround) code; each `…Ann` binding holds the
+selector that used to be written inline:
 
-| site | expression |
+| site | update |
 |---|---|
-| `src/YCHR/Internal/Desugar.hs:965` | `func { D.equations = func.equations { node = eqs' } }` |
-| `src/YCHR/Internal/Desugar.hs:1031-1032` | `rule { D.guard = rule.guard { node = guards' }, ... }` |
-| `src/YCHR/Internal/Desugar/Disjunction.hs:108` | `rule { D.body = rule.body { node = goals } }` |
-| `src/YCHR/Internal/Desugar/Disjunction.hs:154-162` | `ctx.headAnn { node = ... }`, `ctx.bodyAnn { node = ... }` |
+| `src/YCHR/Internal/Desugar.hs:966` | `func {D.equations = eqsAnn {node = eqs'}}` |
+| `src/YCHR/Internal/Desugar.hs:1034-1035` | `rule {D.guard = guardAnn {node = guards'}, D.body = bodyAnn {node = body'}}` |
+| `src/YCHR/Internal/Desugar/Disjunction.hs:109` | `rule {D.body = bodyAnn {node = goals}}` |
+| `src/YCHR/Internal/Desugar/Disjunction.hs:157,164-165` | `headAnn {node = ...}`, `bodyAnn {node = ...}` |
 
 Note the trigger is not exactly "a selector chain": `ctx.headAnn { ... }`
 is a single field of a local record and still fails, while a direct
@@ -361,15 +372,31 @@ whatever the selector's depth.
 `pUpdate` / `pSelect` to interleave (`many (Right <$> pUpdate <|>
 Left <$> pSelect)`) would match GHC's behaviour.
 
-### Local workaround
+### Local workaround (applied)
 
-Hoist the selector chain to a local `let` binding, then update that:
+Applied to `src/` as a hoist of the selector into a local binding:
+
+| site | hoist |
+|---|---|
+| `Desugar.hs` `liftFunction` | `eqsAnn = func.equations` |
+| `Desugar.hs` `liftRule` | `guardAnn = rule.guard`, `bodyAnn = rule.body` |
+| `Disjunction.hs` `lowerRule` | `bodyAnn = rule.body` |
+| `Disjunction.hs` `liftBranch` | `headAnn = ctx.headAnn`, `bodyAnn = ctx.bodyAnn` |
 
 ```haskell
 let eqsAnn = func.equations
     newEqs = eqsAnn { node = eqs' }
 in func { D.equations = newEqs }
 ```
+
+Parenthesizing the selector parses too — `(func.equations) { node = eqs' }`
+is accepted by `mhs`, which puts the update inside `many pUpdate` after a
+`pAExpr'` atom — but the hoist is preferred: the parentheses read as
+redundant and would invite deletion, while the binding is
+self-documenting. It also removes a repeated selector at every site. A
+pattern sweep over `src/`, `app/`, `test/`, `bench/` and
+`examples/` finds no other update-on-selector site; the modules behind
+gap 7 were checked with gap 7's sites bypassed.
 
 Cheap and rare. Comfortable to keep even if MicroHs never grows the
 parser fix.
@@ -469,14 +496,14 @@ while writing it:
   silently ignores hidden names it does not export, so the same source
   works on both compilers.
 
-Verified with `mhs -fno-code -i src`: `Data.Text.Shim` itself plus
+Verified with `mhs -fno-code -isrc`: `Data.Text.Shim` itself plus
 `SExpr.hs`, `Compile/Names.hs`, `Parser.hs`, `Resolve.hs` and
 `Runtime/Trace.hs` compile (`No code generated`); before the shim, each
 stopped on `undefined value: T.concatMap` / `Text.last` / `T.breakOn`.
-`Meta.hs` now gets past gap 4 as well, and stops on gap 3's first site
-(`Desugar.hs:965`), reached through `Compile.Pipeline`. There is still
-no end-to-end check: gap 5 fails dependency resolution before any
-module is compiled.
+`Meta.hs` and `Compile.Pipeline` now get past gaps 3 and 4 as well.
+There is still no end-to-end check: the library stops on gap 8 in
+`Display.hs`, one step behind gap 7, and gap 5's resources provider is
+missing for the CLI.
 
 Deleting `src/Data/Text/Shim.hs`, the importers' `Data.Text.Shim` import
 lines, `test/YCHR/TextShimTest.hs` and its wiring (the shim's
@@ -553,9 +580,10 @@ the library but not the CLI.
 Verified on this revision:
 
 - `mcabal build` no longer aborts during dependency resolution. It
-  resolves the package and starts on `library ychr`, stopping on gap 3's
-  parse error in `Desugar.hs:965` — the first failure is now a known,
-  unrelated gap rather than `dependency not installed: template-haskell`.
+  resolves the package and starts on `library ychr`, stopping on gap 7 in
+  `Runtime/Interpreter.hs:870` — with gap 3 applied, the first failure
+  has moved on again, and it is a known, unrelated gap rather than
+  `dependency not installed: template-haskell`.
 - `mhs -fno-code -isrc YCHR.Internal.StdLib` prints "No code generated":
   the new `StdLib` newtype and `parseStdLib` are mhs-clean.
 - The four embedding components are GHC-only: their `template-haskell`
@@ -569,10 +597,9 @@ Verified on this revision:
 > **Re-verified.** Still open upstream; the workaround is now applied to
 > `src/`. It is a single site, and the round trip is free: `NonEmpty a`
 > is `a :| [a]`, and `NE.toList` / `NE.fromList` are lazy O(1) views.
-> The stock tree cannot reach that site under `mhs` — `Desugar.hs` is
-> rejected by a gap-3 *parse* error (`line 965`) before it is ever
-> typechecked — so the `mhs` check for this entry ran on a scratch copy
-> with gap 3's four hoists applied; see "Local workaround (applied)".
+> The tree now carries gap 3's hoists, so the module that holds the site
+> — `YCHR.Internal.Desugar` — is checked directly rather than on a
+> scratch copy; see "Local workaround (applied)".
 
 Found while working past gaps 1–5; not previously recorded.
 
@@ -619,7 +646,7 @@ change.
 
 Applied to `src/YCHR/Internal/Desugar.hs`, `liftBodyGoal`'s `D.BodyOr`
 arm — the only `mapAccumL` in the tree applied to a `NonEmpty`. Every
-other call site already threads lists (`Desugar/Disjunction.hs:137`
+other call site already threads lists (`Desugar/Disjunction.hs:138`
 converts with `NE.toList`); `mapAccumR` has the same list-only
 signature upstream, but YCHR does not call it. The outer accumulation
 converts to a list, and the result converts back:
@@ -649,21 +676,128 @@ Verified:
 - Isolated reproducer: a `Main` module using the `NonEmpty` form fails
   with `Cannot satisfy constraint: NonEmpty ~ []`; the same module with
   `NE.toList` compiles (`No code generated`).
-- Scratch copy: a copy of `src/` with gap 3's four hoists applied *and*
-  this change typechecks fully under `mhs -fno-code` (`No code
-  generated`, exit 0). Reverting only this change in that copy brings
-  the error back at the `D.BodyOr` arm (`Cannot satisfy constraint:
-  NonEmpty ~ []`).
+- Direct check: `mhs -fno-code -isrc YCHR.Internal.Desugar` reports "No
+  code generated" on the stock tree, since gap 3's hoists are now in it.
+  The earlier "typechecks fully" claim for a scratch copy should have
+  been scoped to this module: a whole-library check passes
+  `Compile.Pipeline`, `Meta`, `VM` and `Backend.SchemeDriver` but stops
+  on gaps 7 and 8 in `Runtime/Interpreter.hs` and `Display.hs`, both of
+  which predate this change and are unrelated to it. Reverting only this
+  change in a scratch copy brings the error back at the `D.BodyOr` arm
+  (`Cannot satisfy constraint: NonEmpty ~ []`).
 
 Invocation detail: the include path must be attached (`-i<dir>`, not
 `-i <dir>`); the separate form is read as a module name and surfaces as
 `undefined export: main`. With `-isrc`, a library module is checked
-directly — `mhs -fno-code -isrc YCHR.Internal.Desugar` reports the
-gap-3 parse error at `Desugar.hs:965`.
+directly — `mhs -fno-code -isrc YCHR.Internal.Desugar` reports "No code
+generated" (before gap 3's workaround it reported the parse error at
+`Desugar.hs:965`). The mhs-only overlay needs `-isrc/mhs` as well.
 
 Cheap, but it means every `NonEmpty` crossing a `Traversable`-generic
 helper needs an explicit conversion pair, and a mistake shows up as the
 opaque `NonEmpty ~ []` rather than a missing-name error.
+
+
+## 7. `Control.Exception.try` orders its type variables differently from GHC
+
+> **Re-verified.** Open. Found while working past gap 3; not previously
+> recorded. This is the first failure a build now reaches:
+> `mcabal build` stops on it in `Runtime/Interpreter.hs:870`.
+
+MicroHs declares (`MicroHs/lib/Control/Exception.hs:106`):
+
+```haskell
+try :: forall a e . Exception e => IO a -> IO (Either e a)
+```
+
+GHC 9.12's `base` binds the exception type first, so `try @SomeException`
+means `e` there and `a` here. A visible type application therefore
+selects the wrong variable:
+
+```haskell
+-- mhs: Cannot satisfy constraint: SomeException ~ ()
+-- GHC 9.12: accepts (Right ())
+try @SomeException (pure ())
+```
+
+No positional form is portable: `try @_ @SomeException` typechecks on
+`mhs` and fails on GHC 9.12 with `SomeException ~ ()`.
+
+Sites in the library:
+
+| site | call |
+|---|---|
+| `src/YCHR/Internal/Runtime/Interpreter.hs:870` | `try @SomeException` |
+| `src/YCHR/Run.hs:637` | `try @SomeException` |
+| `src/YCHR/Internal/Repl.hs:121` | `try @IOException` |
+| `src/YCHR/Internal/Repl.hs:211,219,239,247,351,367` | `try @SomeException` |
+| `src/mhs/YCHR/Internal/LineInput.hs:37` | `try @IOException` |
+
+The last one is the mhs-only line-input overlay, which has never compiled
+under `mhs`; that is why the pattern went unnoticed there. The same shape
+appears in `app/Main.hs:196,203,258,263` and in the tests
+(`Runtime/StoreTest.hs`, `Runtime/InterpreterTest.hs`,
+`TextShimTest.hs`), which `mhs` cannot reach yet.
+
+### Upstream fix sketch
+
+Order `try`'s type variables the way GHC's `base` does (drop the
+explicit `forall a e`, or write it `forall e a`), and audit the
+neighbours (`tryJust`, `catch`, `handle`, `bracket`) for the same
+divergence.
+
+### Local workaround
+
+None applied. A partial-application helper avoids the type application
+on both compilers:
+
+```haskell
+trySomeException :: IO a -> IO (Either SomeException a)
+trySomeException = try
+```
+
+plus an `IOException` twin; `YCHR.Internal.Runtime.Error` is the natural
+home, since it already exports `isControlException`. A per-site result
+annotation (`try act :: IO (Either SomeException a)`) also works but is
+verbose at the multi-line `Repl.hs` sites.
+
+
+## 8. `Data.List` functions lack their fixity declarations
+
+> **Re-verified.** Open. Found while working past gap 3; not previously
+> recorded. It is the next failure after gap 7: bypassing gap 7's sites
+> moves the library failure here, to `Display.hs:888`.
+
+`MicroHs/lib/Data/List.hs` declares fixities only for `\\`, `!!` and
+`!?` (lines 473, 486, 497). Everything else that `base` gives a fixity
+declaration falls back to the Haskell default `infixl 9`, so a backticked
+use binds tighter than it does under GHC:
+
+```haskell
+"prelude" `elem` conMods ++ funMods
+-- mhs parses ("prelude" `elem` conMods) ++ funMods:
+--   Cannot satisfy constraint: Bool ~ [Text]
+-- GHC parses "prelude" `elem` (conMods ++ funMods)
+```
+
+The one site in the library is `src/YCHR/Internal/Display.hs:888`.
+`elem` is not special here: `notElem`, `union`, `intersect`,
+`isPrefixOf` and the rest are in the same position.
+
+### Upstream fix sketch
+
+Add the standard fixity declarations to `MicroHs/lib/Data/List.hs`
+(`infix 4 \`elem\``, `infix 4 \`notElem\``, `infixl 5 \`union\``, …),
+and check the `Prelude` re-exports.
+
+### Local workaround
+
+None applied. Parenthesize the operand whose precedence is being relied
+on: `"prelude" \`elem\` (conMods ++ funMods)`. Verified with
+`mhs -fno-code`; a whole-library check with the workarounds for gaps 3
+and 7 in place and this one applied finds no second site, but `app/`,
+`test/` and `bench/` are outside `mhs`'s reach, so the sweep is not
+exhaustive.
 
 
 ## Out of scope (not gaps, just noted)

@@ -957,12 +957,13 @@ funStmtBindings = Set.fromList . concatMap binds
 liftFunction :: LiftState -> D.Function -> (LiftState, D.Function)
 liftFunction st func =
   let modName = func.name.moduleName
+      eqsAnn = func.equations
       (st', eqs') =
         mapAccumL
           (liftEquation modName)
           st
-          func.equations.node
-   in (st', func {D.equations = func.equations {node = eqs'}})
+          eqsAnn.node
+   in (st', func {D.equations = eqsAnn {node = eqs'}})
 
 -- | Variables introduced by a single 'HeadArg'. Wildcards contribute
 -- nothing.
@@ -1017,19 +1018,21 @@ guardVars = Set.unions . map gVars
 liftRule :: LiftState -> D.Rule -> (LiftState, D.Rule)
 liftRule st rule =
   let headNode = rule.head.node
+      guardAnn = rule.guard
+      bodyAnn = rule.body
       scope =
         ruleHeadVars headNode
-          `Set.union` guardVars rule.guard.node
-          `Set.union` bodyGoalVars rule.body.node
+          `Set.union` guardVars guardAnn.node
+          `Set.union` bodyGoalVars bodyAnn.node
       modName = ruleModName headNode
       (st', guards') =
-        mapAccumL (liftGuard modName scope) st rule.guard.node
+        mapAccumL (liftGuard modName scope) st guardAnn.node
       (st'', body') =
-        mapAccumL (liftBodyGoal modName scope) st' rule.body.node
+        mapAccumL (liftBodyGoal modName scope) st' bodyAnn.node
    in ( st'',
         rule
-          { D.guard = rule.guard {node = guards'},
-            D.body = rule.body {node = body'}
+          { D.guard = guardAnn {node = guards'},
+            D.body = bodyAnn {node = body'}
           }
       )
 
