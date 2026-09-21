@@ -21,14 +21,16 @@ terse, fix-shaped, removable when closed.
 Re-verified against MicroHs `3322c60a` (the checkout's HEAD) and the
 installed `mhs` 0.16.6.0. Eight gaps are recorded; one has closed and
 been removed from this document. The local workarounds for gaps 1, 3, 4,
-6 and 7 are applied (gaps 4 and 7 also touch the importers, tests
-included), and gap 5's library-side workaround is applied too: no
-Template Haskell remains in `library ychr` and no unconditional
-`template-haskell` dependency remains in `ychr.cabal` (see gap 5). With
-gaps 3 and 7 out of the way, `mcabal build` gets past dependency
-resolution and compiles the library past `Runtime/Interpreter.hs:872`,
-stopping on gap 8 in `Display.hs:888`; gaps 7 and 8 were found on the way
-to that point and are recorded below.
+6, 7 and 8 are applied (gaps 4 and 7 also touch the importers, tests
+included; gap 8 is one pair of parentheses), and gap 5's library-side
+workaround is applied too: no Template Haskell remains in `library ychr`
+and no unconditional `template-haskell` dependency remains in
+`ychr.cabal` (see gap 5). With gaps 3, 7 and 8 out of the way,
+`mcabal build` gets past dependency resolution and compiles `library
+ychr` to completion, stopping in the `ychr` executable on gap 5:
+`embed/YCHR/Embedded/StdLib.hs:29` cannot find `Language.Haskell.TH`,
+which is the missing mhs-side resources provider recorded there. Gaps 7
+and 8 were found on the way to that point and are recorded below.
 
 | # | Gap | State |
 |---|---|---|
@@ -39,7 +41,7 @@ to that point and are recorded below.
 | 5 | No `TemplateHaskell` support | open upstream — TH kept out of `library ychr`; the mhs-side resources provider is missing (see below) |
 | 6 | `mapAccumL` is list-only | open — workaround applied to `src/` (see below) |
 | 7 | `Control.Exception.try` orders its type variables differently from GHC | open — workaround applied (`Control.Exception.Shim`) |
-| 8 | `Data.List` functions lack their fixity declarations | open — no workaround |
+| 8 | `Data.List` functions lack their fixity declarations | open — workaround applied to `src/` (see below) |
 
 `Data.Either.partitionEithers` (formerly gap 5) is now exported by
 MicroHs (`lib/Data/Either.hs:51`) and used directly by
@@ -586,8 +588,9 @@ Verified on this revision:
   resolves the package and starts on `library ychr`, stopping on gap 7 in
   `Runtime/Interpreter.hs:870` — with gap 3 applied, the first failure
   has moved on again, and it is a known, unrelated gap rather than
-  `dependency not installed: template-haskell`. (Gap 7 has since been
-  worked around; the library now stops on gap 8.)
+  `dependency not installed: template-haskell`. (Gaps 7 and 8 have since
+  been worked around: the library now compiles, and the build stops in
+  the `ychr` executable on the missing provider described above.)
 - `mhs -fno-code -isrc YCHR.Internal.StdLib` prints "No code generated":
   the new `StdLib` newtype and `parseStdLib` are mhs-clean.
 - The four embedding components are GHC-only: their `template-haskell`
@@ -686,8 +689,9 @@ Verified:
   been scoped to this module: a whole-library check passes
   `Compile.Pipeline`, `Meta`, `VM` and `Backend.SchemeDriver` but stops
   on gaps 7 and 8 in `Runtime/Interpreter.hs` and `Display.hs`, both of
-  which predate this change and are unrelated to it. Reverting only this
-  change in a scratch copy brings the error back at the `D.BodyOr` arm
+  which predate this change and are unrelated to it (both have since
+  been worked around). Reverting only this change in a scratch copy
+  brings the error back at the `D.BodyOr` arm
   (`Cannot satisfy constraint: NonEmpty ~ []`).
 
 Invocation detail: the include path must be attached (`-i<dir>`, not
@@ -819,8 +823,9 @@ Verified on this revision:
   `try @Int` with `Cannot satisfy constraint: Exception Int` — i.e. the
   type application binds the exception variable on both.
 - `mcabal build`: gets past `Runtime/Interpreter.hs:872` and stops on
-  gap 8 in `Display.hs:888` (`Cannot satisfy constraint: Bool ~ [Text]`),
-  as recorded in the Status section.
+  gap 8 in `Display.hs:888` (`Cannot satisfy constraint: Bool ~ [Text]`).
+  Gap 8 has since been worked around, so the build now compiles the
+  library and moves on to the executable; see the Status section.
 
 Delete the module (and revert the 13 imports) once MicroHs orders `try`
 the way `base` does.
@@ -828,14 +833,17 @@ the way `base` does.
 
 ## 8. `Data.List` functions lack their fixity declarations
 
-> **Re-verified.** Open. Found while working past gap 3; not previously
-> recorded. It is the next failure after gap 7: with gap 7's workaround
-> in place the library failure lands here, at `Display.hs:888`.
+> **Re-verified.** Still open upstream; the workaround is now applied to
+> `src/`, at the single site below. Found while working past gap 3; not
+> previously recorded. It was the next failure after gap 7: with gap 7's
+> workaround in place the library failure landed here, at
+> `Display.hs:888` (the `elem` is now at `:891`, after the comment added
+> with the fix), and the library now compiles past it.
 
 `MicroHs/lib/Data/List.hs` declares fixities only for `\\`, `!!` and
-`!?` (lines 473, 486, 497). Everything else that `base` gives a fixity
-declaration falls back to the Haskell default `infixl 9`, so a backticked
-use binds tighter than it does under GHC:
+`!?` (lines 473, 486, 497). The names it leaves bare fall back to the
+Haskell default `infixl 9`; where `base` declares a tighter fixity, a
+backticked use therefore binds tighter than it does under GHC:
 
 ```haskell
 "prelude" `elem` conMods ++ funMods
@@ -844,24 +852,75 @@ use binds tighter than it does under GHC:
 -- GHC parses "prelude" `elem` (conMods ++ funMods)
 ```
 
-The one site in the library is `src/YCHR/Internal/Display.hs:888`.
-`elem` is not special here: `notElem`, `union`, `intersect`,
-`isPrefixOf` and the rest are in the same position.
+The failing name is the list-specific `Data.List.elem`
+(`lib/Data/List.hs:414`), which `Prelude` re-exports (`lib/Prelude.hs:72`).
+It is a different binding from `Data.Foldable.elem`, whose fixity *is*
+declared — `infix 4` for `elem` and `notElem` at
+`lib/Data/Foldable.hs:69` — so a module that imports `Data.Foldable`'s
+`elem` instead compiles the unparenthesised form. `elem` and `notElem`
+are the affected pair: `base`'s versions (the `Foldable` methods) are
+`infix 4`, while MicroHs's `Data.List` copies carry no declaration.
+`union`, `intersect`, `isPrefixOf`, `isSuffixOf`, `isInfixOf` and
+`isSubsequenceOf` have no fixity in `base` either (`ghci :i` prints no
+`infix` line for them), so both compilers default them to `infixl 9` and
+they cannot diverge.
+
+The one site is `src/YCHR/Internal/Display.hs:891`. Ordinary operators
+are not affected either: MicroHs declares the fixities of `++` and `:`
+(`lib/Data/List_Type.hs:5,11`), `$` and `.` (`lib/Data/Function.hs`),
+`&&`/`||`, the comparisons, `<>`, and also `div`/`mod`/`quot`/`rem`,
+`on` and `seq`.
 
 ### Upstream fix sketch
 
-Add the standard fixity declarations to `MicroHs/lib/Data/List.hs`
-(`infix 4 \`elem\``, `infix 4 \`notElem\``, `infixl 5 \`union\``, …),
-and check the `Prelude` re-exports.
+Add ``infix 4 `elem`, `notElem` `` to `MicroHs/lib/Data/List.hs`, where
+`elem` and `notElem` are list-specific bindings
+(`lib/Data/List.hs:414,417`) rather than the `Foldable` methods that
+already carry the declaration (`lib/Data/Foldable.hs:69`), and check the
+`Prelude` re-exports.
 
-### Local workaround
+### Local workaround (applied)
 
-None applied. Parenthesize the operand whose precedence is being relied
-on: `"prelude" \`elem\` (conMods ++ funMods)`. Verified with
-`mhs -fno-code`; a whole-library check with the workarounds for gaps 3
-and 7 in place and this one applied finds no second site, but `app/`,
-`test/` and `bench/` are outside `mhs`'s reach, so the sweep is not
-exhaustive.
+Applied to `src/YCHR/Internal/Display.hs:891`, the `elem` in
+`renameErrorMsg`'s `ConstructorFunctionAmbiguity` arm:
+
+```haskell
+++ if "prelude" `elem` (conMods ++ funMods)
+```
+
+Under GHC the parentheses are redundant: `base`'s `elem` is `infix 4`,
+so `++` (`infixr 5`) already binds tighter and the tree is the one GHC
+built before the change. They are load-bearing only under MicroHs, where
+the absent fixity defaulted `elem` to `infixl 9` and made it bind
+*tighter* than `++`. The site carries a comment pointing here.
+
+Verified:
+
+- GHC: `make format` clean and `make test` green. The parenthesised form
+  is the tree GHC already built, so no test can distinguish the two; the
+  suite only rules out an accidental edit.
+- Reproducer: `mhs -fno-code -isrc -isrc/mhs YCHR.Internal.Display`
+  failed at `Display.hs:888:26` with
+  `Cannot satisfy constraint: Bool ~ [Text]` before the change, and
+  prints "No code generated" after it.
+- Sweep: every backticked `elem` and `notElem` — the only names in this
+  position that `base` fixes — was inspected across `src/`, `app/`,
+  `test/`, `bench/`, `examples/` and `embed/`. `Display.hs:891` is the
+  only one next to an operator whose precedence lies between the
+  function's real fixity and the default 9 (here `++` at `infixr 5`,
+  against `elem`'s `infix 4`). The others sit inside parentheses
+  (``filter (`elem` xs)``), under a guard or comprehension bar, in a
+  different branch (``if '.' `elem` s then s else s ++ ".0"``), or next
+  to `&&`/`||`/`$`, which sit at or below `infix 4`, so both compilers
+  build the same tree. Unlike the first sweep, this one covers `app/`,
+  `test/`, `bench/` and `embed/`.
+- `mcabal build` now compiles `library ychr` to completion and moves on
+  to the `ychr` executable, where it stops on gap 5's missing resources
+  provider (`embed/YCHR/Embedded/StdLib.hs:29` cannot find
+  `Language.Haskell.TH`) rather than on a fixity site.
+
+Remove the parentheses once MicroHs declares the fixity for
+`Data.List.elem`; the comment can go with them.
 
 
 ## Out of scope (not gaps, just noted)
