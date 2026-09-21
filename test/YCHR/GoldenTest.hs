@@ -15,6 +15,7 @@ import System.Directory (doesDirectoryExist, listDirectory)
 import System.FilePath (dropExtension, takeExtension, (<.>), (</>))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import YCHR.Embedded (stdlib, typeCheckerProgram)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (Display (..))
 import YCHR.Internal.Pretty (prettyBindings)
@@ -225,7 +226,7 @@ makeCase spec c = case c of
 runPositive :: TestSpec -> FilePath -> FilePath -> IO ()
 runPositive spec goalFile expectedFile = do
   (prog, ws) <-
-    compileFiles False spec.chrFiles
+    compileFiles stdlib False spec.chrFiles
       >>= either (assertFailure . show) pure
   checkWarnings spec "compile" ws
   typeCheckOrFail spec prog
@@ -235,6 +236,7 @@ runPositive spec goalFile expectedFile = do
   checkWarnings spec "goal" goalWs
   bindings <-
     runPreparedGoal
+      typeCheckerProgram
       prog
       defaultHostCallRegistry
       constraint
@@ -252,7 +254,7 @@ runPositive spec goalFile expectedFile = do
 runGoalNegative :: TestSpec -> FilePath -> FilePath -> IO ()
 runGoalNegative spec goalFile errorFile = do
   (prog, ws) <-
-    compileFiles False spec.chrFiles
+    compileFiles stdlib False spec.chrFiles
       >>= either (assertFailure . show) pure
   checkWarnings spec "compile" ws
   typeCheckOrFail spec prog
@@ -263,6 +265,7 @@ runGoalNegative spec goalFile errorFile = do
   outcome <-
     try @SomeException $
       runPreparedGoal
+        typeCheckerProgram
         prog
         defaultHostCallRegistry
         constraint
@@ -296,12 +299,12 @@ runGoalNegative spec goalFile errorFile = do
 
 runNegative :: TestSpec -> FilePath -> IO ()
 runNegative spec errorFile = do
-  result <- compileFiles False spec.chrFiles
+  result <- compileFiles stdlib False spec.chrFiles
   expectedSubstrings <- nonEmptyLines <$> readFile errorFile
   case result of
     Left err -> assertAllPresent (displayMsg err) expectedSubstrings
     Right (prog, _ws) -> do
-      typeResult <- typeCheckProgram prog.desugaredProgram
+      typeResult <- typeCheckProgram typeCheckerProgram prog.desugaredProgram
       case typeResult.errors of
         [] -> assertFailure "Expected compilation or type checking to fail, but it succeeded"
         errs -> assertAllPresent (unlines (map displayMsg errs)) expectedSubstrings
@@ -321,7 +324,7 @@ runNegative spec errorFile = do
 -- compile-time warnings.
 typeCheckOrFail :: TestSpec -> CompiledProgram -> IO ()
 typeCheckOrFail spec prog = do
-  result <- typeCheckProgram prog.desugaredProgram
+  result <- typeCheckProgram typeCheckerProgram prog.desugaredProgram
   case result.errors of
     [] -> pure ()
     errs ->

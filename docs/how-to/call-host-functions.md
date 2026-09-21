@@ -32,7 +32,7 @@ registry = withDefaultHostFunctions
 
 main :: IO ()
 main =
-  case compileModules True [("compute.chr", source)] of
+  case compileModules stdlib True [("compute.chr", source)] of
     Left err -> putStr (displayError err)
     Right (cp, _warnings) -> do
       -- 3. Run against the custom registry and decode the result.
@@ -42,6 +42,10 @@ main =
       print (r :: Either ConvertError Int)
       -- Right 5
 ```
+
+(`stdlib` is the parsed standard library — an explicit input of every
+compilation. See
+[embed-a-chr-module.md §Supplying the resources](embed-a-chr-module.md#5-supplying-the-resources).)
 
 Adapter table, registry semantics, marshalling and errors:
 [convert.md §Registering host functions](../reference/convert.md#registering-host-functions).

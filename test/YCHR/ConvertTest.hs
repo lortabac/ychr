@@ -36,6 +36,7 @@ import YCHR.DSL
     (<=>),
     (|-),
   )
+import YCHR.Embedded (stdlib)
 import YCHR.Internal.Parsed (Module)
 import YCHR.Internal.Types (Name (..), Term (..))
 import YCHR.Run (compileModules, compileParsedModules)
@@ -238,7 +239,7 @@ e2eCompiled =
             `defining` [ [term "double" [var "X", var "R"]]
                            <=> [var "R" `is` (var "X" .* int 2)]
                        ]
-    cp <- case compileParsedModules True [m] of
+    cp <- case compileParsedModules stdlib True [m] of
       Left err -> assertFailure ("compile failed: " ++ show err)
       Right (cp, _warnings) -> pure cp
     r1 <- runQueryCompiled cp (term "double" [int 21, var "R"]) "R"
@@ -251,7 +252,7 @@ e2eMalformedGoal :: TestTree
 e2eMalformedGoal =
   testCase "runQuery: non-compound goal -> Left MalformedGoal" $ do
     let m = module' "conv_noop" `declaring` ["p" // 1]
-    r <- runQuery [m] (int 5) "R"
+    r <- runQuery stdlib [m] (int 5) "R"
     r @?= (Left (MalformedGoal (IntTerm 5)) :: Either ConvertError Int)
 
 -- | A numeric result decoded as an 'Int'.
@@ -265,7 +266,7 @@ e2eScalar =
             `defining` [ [term "double" [var "X", var "R"]]
                            <=> [var "R" `is` (var "X" .* int 2)]
                        ]
-    r <- runQuery [m] (term "double" [int 21, var "R"]) "R"
+    r <- runQuery stdlib [m] (term "double" [int 21, var "R"]) "R"
     r @?= (Right 42 :: Either ConvertError Int)
 
 -- | A structural list result decoded as @[Int]@. The list term built by
@@ -280,7 +281,7 @@ e2eList =
             `defining` [ [term "pack" [var "R"]]
                            <=> [var "R" .=. toTerm ([1, 2, 3] :: [Int])]
                        ]
-    r <- runQuery [m] (term "pack" [var "R"]) "R"
+    r <- runQuery stdlib [m] (term "pack" [var "R"]) "R"
     r @?= (Right [1, 2, 3] :: Either ConvertError [Int])
 
 -- | 'runQueryWith' decoding several goal variables into a tuple.
@@ -296,6 +297,7 @@ e2eRecord =
                        ]
     r <-
       runQueryWith
+        stdlib
         [m]
         (term "pair" [var "X", var "Y"])
         (\bs -> (,) <$> decodeVar "X" bs <*> decodeVar "Y" bs)
@@ -341,7 +343,7 @@ canonSource =
     ]
 
 canonProgram :: IO CompiledProgram
-canonProgram = case compileModules True [("canon.chr", canonSource)] of
+canonProgram = case compileModules stdlib True [("canon.chr", canonSource)] of
   Left err -> assertFailure ("compile failed: " ++ show err)
   Right (cp, _warnings) -> pure cp
 
@@ -531,7 +533,7 @@ hostRegistry =
     sumTerms ts = toTerm . sum <$> (traverse fromTerm ts :: Either ConvertError [Int])
 
 runHost :: (FromTerm a) => HostCallRegistry -> Term -> IO (Either ConvertError a)
-runHost reg goal = runQueryWithHostCallRegistry reg [hostProgram] goal (decodeVar "R")
+runHost reg goal = runQueryWithHostCallRegistry stdlib reg [hostProgram] goal (decodeVar "R")
 
 -- | Assert that running @goal@ raises a runtime error whose message
 -- contains @needle@.

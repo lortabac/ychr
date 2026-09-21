@@ -52,6 +52,7 @@ import YCHR
     runQueryCompiled,
     toTerm,
   )
+import YCHR.Embedded (stdlib)
 
 -- ---------------------------------------------------------------------------
 -- Decoding the result
@@ -102,7 +103,7 @@ main = do
 -- | Compile the embedded inferencer once; reuse it across every query.
 loadInferencer :: IO CompiledProgram
 loadInferencer =
-  case compileModules True [(stlcPath, $(stlcSource))] of
+  case compileModules stdlib True [(stlcPath, $(stlcSource))] of
     Left err -> fail ("could not compile " ++ stlcPath ++ ":\n" ++ displayError err)
     Right (cp, _warnings) -> pure cp
 

@@ -2,10 +2,17 @@
 
 -- | Compile-time embedding of the standard library sources.
 --
--- The @libraries/*.chr@ files are read by GHC at build time and
--- spliced into 'YCHR.Internal.StdLib' as a list of @(path, source)@ pairs.
--- The resulting binary is self-contained: no runtime directory
+-- The @libraries\/*.chr@ files are read by GHC at build time and
+-- spliced into @YCHR.Embedded@ as a list of @(path, source)@ pairs. The
+-- resulting binary is self-contained: no runtime directory
 -- lookup, no @YCHR_LIB_DIR@ env var, no cwd-relative path.
+--
+-- This module lives in the shared @embed\/@ source directory, compiled
+-- into the components that want that self-containment — the @ychr@
+-- executable, the test suite, the benchmark and the @stlc@ example —
+-- rather than into the @ychr@ library, which takes the parsed library
+-- as an explicit @YCHR.Internal.StdLib.StdLib@ input instead. See
+-- @dev-docs\/MICROHS_GAPS.md@, gap 5.
 --
 -- 'addDependentFile' registers each embedded file with GHC's
 -- recompilation tracking. In practice cabal's higher-level cache
@@ -13,9 +20,9 @@
 -- @.chr@ in @libraries\/@ does not reliably trigger a rebuild.
 -- Cabal compares file /contents/, not modification times, so
 -- @touch@ing this module does nothing: during development, edit
--- this module (or 'YCHR.Internal.StdLib', which holds the splice)
--- for real, or run @cabal clean@.
-module YCHR.Internal.StdLib.TH (embeddedStdLibSources) where
+-- this module (or @YCHR.Embedded@, which holds the splice) for real,
+-- or run @cabal clean@.
+module YCHR.Embedded.StdLib (embeddedStdLibSources) where
 
 import Data.Text (Text)
 import Data.Text.IO qualified as TIO

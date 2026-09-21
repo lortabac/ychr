@@ -46,7 +46,7 @@ coverage:
 	@find dist-newstyle -path '*/hpc/vanilla/html/hpc_index.html' -print -quit
 
 format:
-	ormolu -i $$(find src app test bench examples -name '*.hs')
+	ormolu -i $$(find src embed app test bench examples -name '*.hs')
 
 clean:
 	cabal clean

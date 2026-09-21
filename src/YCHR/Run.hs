@@ -5,12 +5,18 @@
 -- Ties "YCHR.Internal.Compile.Pipeline" to "YCHR.Internal.Runtime.Session"
 -- and adds the query-time goal evaluator behind 'runProgramWithQuery' and
 -- the REPL.
+--
+-- The bundled standard library ('StdLib') and the compiled type-checker
+-- ('SessionInput') are explicit inputs of the entry points that need
+-- them: the library embeds nothing at compile time. See
+-- @docs\/how-to\/embed-a-chr-module.md#5-supplying-the-resources@.
 module YCHR.Run
   ( -- * Compilation (re-exported from "YCHR.Internal.Compile.Pipeline")
     Error (..),
     GoalRejection (..),
     Warning (..),
     CompiledProgram,
+    StdLib,
     compileModules,
     compileFiles,
     compileParsedModules,
@@ -27,6 +33,7 @@ module YCHR.Run
 
     -- * CHR sessions
     Chr,
+    SessionInput (..),
     withCHR,
     withTraceHandler,
     tellConstraint,
@@ -124,7 +131,8 @@ import YCHR.Internal.Runtime.Interpreter
 import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..))
 import YCHR.Internal.Runtime.Reactivation (enqueueObservers)
 import YCHR.Internal.Runtime.Session
-  ( drainReactivation,
+  ( SessionInput (..),
+    drainReactivation,
     tellConstraint,
     toSessionInput,
     withCHR,
@@ -135,6 +143,7 @@ import YCHR.Internal.Runtime.Session
 import YCHR.Internal.Runtime.Trace (TraceEvent (..))
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..), VarId)
 import YCHR.Internal.Runtime.Var (deref, equal, getVarId, newVar, unify)
+import YCHR.Internal.StdLib (StdLib)
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckGoals)
 import YCHR.Internal.Types (Constraint (..), Term (..))
 import YCHR.Internal.Types qualified as Types
@@ -331,12 +340,17 @@ goalShapeConstraint other = Left other
 
 -- | Type-check and run a goal from 'prepareGoal' \/ 'prepareGoalTerm'.
 -- Throws 'TypeErrors'.
+--
+-- The 'SessionInput' is the compiled type-checker, an explicit input
+-- because the @ychr@ library embeds nothing at compile time; build it
+-- once and reuse it across goals.
 runPreparedGoal ::
+  SessionInput ->
   CompiledProgram ->
   HostCallRegistry ->
   Constraint ->
   IO (Map Text Term)
-runPreparedGoal cp hostCalls original = do
+runPreparedGoal typeChecker cp hostCalls original = do
   tcErrs <- case resolveQueryTell cp original of
     Right ((qn, exprs), errs)
       | null errs -> do
@@ -345,6 +359,7 @@ runPreparedGoal cp hostCalls original = do
           -- 'prepareQuery' surfaces warnings if one is ever added.
           result <-
             typeCheckGoals
+              typeChecker
               cp.desugaredProgram
               queryLoc
               (Just "query")
@@ -358,13 +373,14 @@ runPreparedGoal cp hostCalls original = do
 
 -- | 'runProgramWithGoalDSL' for a goal given as surface-language 'Text'.
 runProgramWithGoal ::
+  SessionInput ->
   CompiledProgram ->
   HostCallRegistry ->
   Text ->
   IO (Map Text Term)
-runProgramWithGoal cp hostCalls src = do
+runProgramWithGoal typeChecker cp hostCalls src = do
   (constraint, _ws) <- prepareGoal cp src
-  runPreparedGoal cp hostCalls constraint
+  runPreparedGoal typeChecker cp hostCalls constraint
 
 -- ---------------------------------------------------------------------------
 -- Multi-goal query API
@@ -436,13 +452,14 @@ resolveQueryGoals cp src = do
         renameWarnings = renameWs
       }
 
--- | Parse, rename, desugar, lambda-lift, and type-check a query.
-prepareQuery :: CompiledProgram -> Text -> IO (PreparedQuery, [Warning])
-prepareQuery cp src = do
+-- | Parse, rename, desugar, lambda-lift, and type-check a query. The
+-- 'SessionInput' is the compiled type-checker; see 'runPreparedGoal'.
+prepareQuery :: SessionInput -> CompiledProgram -> Text -> IO (PreparedQuery, [Warning])
+prepareQuery typeChecker cp src = do
   resolved <- resolveQueryGoals cp src
   let lifted = resolved.liftedGoals
       lambdas = resolved.queryLambdas
-  tcResult <- typeCheckGoals resolved.goalProgram queryLoc (Just "query") lifted
+  tcResult <- typeCheckGoals typeChecker resolved.goalProgram queryLoc (Just "query") lifted
   unless (null tcResult.errors) (throwIO (TypeErrors tcResult.errors))
   let allFuns = cp.allFunctions ++ lambdas
       queryProcs = compileQueryLambdas lambdas
@@ -501,10 +518,12 @@ perKeyAliases classes k = Map.mapMaybe pick classes
       (_, [_]) -> canonical
       (_, []) -> canonical
 
--- | Run a multi-goal query against a compiled program.
-runProgramWithQuery :: CompiledProgram -> HostCallRegistry -> Text -> IO (Map Text Term)
-runProgramWithQuery cp hostCalls src = do
-  (prep, _ws) <- prepareQuery cp src
+-- | Run a multi-goal query against a compiled program. The
+-- 'SessionInput' is the compiled type-checker; see 'runPreparedGoal'.
+runProgramWithQuery ::
+  SessionInput -> CompiledProgram -> HostCallRegistry -> Text -> IO (Map Text Term)
+runProgramWithQuery typeChecker cp hostCalls src = do
+  (prep, _ws) <- prepareQuery typeChecker cp src
   withCHRExtra (toSessionInput cp) hostCalls prep.extraProcs $
     executePreparedQuery prep.liftedGoals
 

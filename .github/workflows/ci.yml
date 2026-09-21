@@ -17,6 +17,7 @@ jobs:
         with:
           pattern: |
             src/**/*.hs
+            embed/**/*.hs
             app/**/*.hs
             test/**/*.hs
             bench/**/*.hs

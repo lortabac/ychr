@@ -119,6 +119,7 @@ module YCHR.DSL
     (.==),
 
     -- * Compiling and running
+    StdLib,
     runDSL,
     runDSLWithHostCallRegistry,
     HostCallRegistry,
@@ -133,6 +134,7 @@ import YCHR.Convert (quote)
 import YCHR.Internal.Parsed
 import YCHR.Internal.Runtime.Registry (HostCallRegistry)
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
+import YCHR.Internal.StdLib (StdLib)
 import YCHR.Run
   ( CompiledProgram,
     Warning,
@@ -560,18 +562,21 @@ l .== r = CompoundTerm (Unqualified "==") [l, r]
 -- | Compile the modules (stdlib included) and run one goal with the CLI's
 -- default host-call registry. Returns the bindings of the goal's
 -- variables. Compilation and runtime errors are thrown as 'YCHR.Run.Error'.
-runDSL :: [Module] -> Term -> IO (Map Text Term)
-runDSL =
-  runDSLWithHostCallRegistry defaultHostCallRegistry
+--
+-- The 'StdLib' is an explicit input: the @ychr@ library embeds nothing at
+-- compile time. See 'YCHR.Internal.StdLib.parseStdLib'.
+runDSL :: StdLib -> [Module] -> Term -> IO (Map Text Term)
+runDSL stdlib =
+  runDSLWithHostCallRegistry stdlib defaultHostCallRegistry
 
 -- | 'runDSL' with an explicit host-call registry.
 runDSLWithHostCallRegistry ::
-  HostCallRegistry -> [Module] -> Term -> IO (Map Text Term)
-runDSLWithHostCallRegistry hostCalls modules goal = do
-  cp <- compileOrThrow modules
+  StdLib -> HostCallRegistry -> [Module] -> Term -> IO (Map Text Term)
+runDSLWithHostCallRegistry stdlib hostCalls modules goal = do
+  cp <- compileOrThrow stdlib modules
   runProgramWithGoalDSL cp hostCalls (termToConstraint goal)
 
-compileOrThrow :: [Module] -> IO CompiledProgram
-compileOrThrow modules = case compileParsedModules True modules of
+compileOrThrow :: StdLib -> [Module] -> IO CompiledProgram
+compileOrThrow stdlib modules = case compileParsedModules stdlib True modules of
   Left err -> throwIO err
   Right (cp, _warnings :: [Warning]) -> pure cp

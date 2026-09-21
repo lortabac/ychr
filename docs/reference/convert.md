@@ -117,7 +117,9 @@ lookupBinding  :: Text -> Map Text Term -> Maybe Term
 
 `runQuery` compiles the modules (stdlib, default host-call registry),
 runs a goal, and decodes one goal variable. The goal is built like a
-DSL body goal.
+DSL body goal. The `StdLib` is an explicit first argument, because the
+`ychr` library embeds nothing at compile time — see
+[Supplying the resources](../how-to/embed-a-chr-module.md#5-supplying-the-resources).
 
 ```haskell
 import YCHR.Convert
@@ -133,16 +135,16 @@ doubleModule =
 
 main :: IO ()
 main = do
-  r <- runQuery [doubleModule] (term "double" [int 21, var "R"]) "R"
+  r <- runQuery stdlib [doubleModule] (term "double" [int 21, var "R"]) "R"
   print (r :: Either ConvertError Int)
   -- Right 42
 ```
 
 `runQueryWith` decodes the whole map; `runQueryWithHostCallRegistry`
-takes a custom registry:
+takes a custom registry (both take the `StdLib` first):
 
 ```haskell
-runQueryWith [m] (term "pair" [var "X", var "Y"])
+runQueryWith stdlib [m] (term "pair" [var "X", var "Y"])
   (\bs -> (,) <$> decodeVar "X" bs <*> decodeVar "Y" bs)
 ```
 
@@ -155,7 +157,8 @@ does); decoding failures come back as `Left`.
 `YCHR.Run.compileFiles` (source files), `compileModules` (in-memory
 source text) or `compileParsedModules` (DSL modules), then run
 `runQueryCompiled` on the `CompiledProgram`. Each call is an
-independent run with a fresh store.
+independent run with a fresh store, and none of the four type-checks a
+goal, so no type-checker input is needed.
 
 ```haskell
 runQueryCompiled

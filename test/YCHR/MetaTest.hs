@@ -7,6 +7,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase)
+import YCHR.Embedded (stdlib, typeCheckerProgram)
 import YCHR.Internal.Compile.Names (vmName)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Meta (metaHostCallRegistry, valueToTerm)
@@ -46,7 +47,7 @@ readTerm s = case Map.lookup (Name "read_term_from_string") metaHostCallRegistry
   Just (HostCallFn f) -> runChrBase (f [VText s])
 
 compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
-compileOrFail inputs = case compileModules False inputs of
+compileOrFail inputs = case compileModules stdlib False inputs of
   Left err -> assertFailure $ show err
   Right (cp, _) -> pure cp
 
@@ -148,6 +149,7 @@ endToEndReadTermTest =
     prog <- compileOrFail [("m.chr", src)]
     bindings <-
       runProgramWithQuery
+        typeCheckerProgram
         prog
         hostCalls
         "T is host:read_term_from_string(\"f(1, hello)\"), check(T, f(1, hello))."

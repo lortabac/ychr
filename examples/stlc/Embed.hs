@@ -3,7 +3,7 @@
 -- | Compile-time embedding of the inferencer source, so the example
 -- binary is self-contained (no cwd-relative @.chr@ path at run time).
 -- Mirrors the pattern used by the built-in type checker in
--- "YCHR.Internal.TypeCheck.TH".
+-- @embed\/YCHR\/Embedded\/TypeCheck.hs@.
 module Embed
   ( stlcPath,
     stlcSource,

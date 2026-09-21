@@ -43,10 +43,9 @@ import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Runtime.Monad (Chr)
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
-import YCHR.Internal.Runtime.Session (tellConstraint, withCHR)
+import YCHR.Internal.Runtime.Session (SessionInput, tellConstraint, withCHR)
 import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.Runtime.Var (deref, newVar)
-import YCHR.Internal.TypeCheck.Compiled (typeCheckerProgram)
 import YCHR.Internal.TypeCheck.Encode
   ( Encoded (..),
     astAtom,
@@ -80,9 +79,14 @@ diagAtom n = "$tc_diag__" <> n
 -- | Type-check a desugared program. An empty error list means the
 -- program is well-typed (or carries no type annotations, which is the
 -- same thing to a gradual checker).
-typeCheckProgram :: D.Program -> IO TypeCheckResult
-typeCheckProgram prog =
-  runChecker enc.origins $ \errorsVar warningsVar ->
+--
+-- The 'SessionInput' is the compiled type-checker, an explicit input
+-- because the @ychr@ library embeds nothing at compile time. Build it
+-- once with 'YCHR.Internal.TypeCheck.Compiled.compileTypeCheckerModules'
+-- and reuse it: nothing here memoizes it.
+typeCheckProgram :: SessionInput -> D.Program -> IO TypeCheckResult
+typeCheckProgram typeChecker prog =
+  runChecker typeChecker enc.origins $ \errorsVar warningsVar ->
     tellConstraint
       (Qualified "$tc_main" "check_program")
       [encodedToValue enc.term, errorsVar, warningsVar]
@@ -99,13 +103,14 @@ typeCheckProgram prog =
 -- deliberately left to a general mechanism rather than a per-caller
 -- one.
 typeCheckGoals ::
+  SessionInput ->
   D.Program ->
   SourceLoc ->
   Maybe Text ->
   [D.BodyGoal] ->
   IO TypeCheckResult
-typeCheckGoals prog loc lbl goals =
-  runChecker enc.origins $ \errorsVar warningsVar ->
+typeCheckGoals typeChecker prog loc lbl goals =
+  runChecker typeChecker enc.origins $ \errorsVar warningsVar ->
     tellConstraint
       (Qualified "$tc_main" "check_goals")
       [ encodedToValue enc.term,
@@ -125,9 +130,9 @@ labelValue (Just t) = VTerm (diagAtom "label_text") [VText t]
 
 -- | Run one checking session: allocate the two out-variables, tell the
 -- entry constraint, and decode what it bound them to.
-runChecker :: IntMap PExpr -> (Value -> Value -> Chr ()) -> IO TypeCheckResult
-runChecker origins enter =
-  withCHR typeCheckerProgram defaultHostCallRegistry $ do
+runChecker :: SessionInput -> IntMap PExpr -> (Value -> Value -> Chr ()) -> IO TypeCheckResult
+runChecker typeChecker origins enter =
+  withCHR typeChecker defaultHostCallRegistry $ do
     errorsVar <- newVar
     warningsVar <- newVar
     enter errorsVar warningsVar

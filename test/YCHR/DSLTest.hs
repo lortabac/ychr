@@ -6,6 +6,7 @@ import Data.Map.Strict qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 import YCHR.DSL
+import YCHR.Embedded (stdlib)
 import YCHR.Internal.Parsed
 
 tests :: TestTree
@@ -617,7 +618,7 @@ leqEndToEnd =
                            @: [term "leq" [var "X", var "Y"], term "leq" [var "Y", var "Z"]]
                            ==> [term "leq" [var "X", var "Z"]]
                        ]
-    bindings <- runDSL [m] (term "leq" [var "X", var "X"])
+    bindings <- runDSL stdlib [m] (term "leq" [var "X", var "X"])
     Map.keys bindings @?= ["X"]
 
 -- | Two-module program. The library module @cross_lib@ exports a @double@
@@ -643,7 +644,7 @@ crossModuleEndToEnd =
                                  term "double" [var "Y", var "R"]
                                ]
                        ]
-    bindings <- runDSL [lib, main_] (term "quadruple" [int 7, var "R"])
+    bindings <- runDSL stdlib [lib, main_] (term "quadruple" [int 7, var "R"])
     Map.lookup "R" bindings @?= Just (IntTerm 28)
 
 -- | Function definition with multiple equations and recursion. Driven via a
@@ -667,7 +668,7 @@ factorialEndToEnd =
             `defining` [ [term "compute" [var "R"]]
                            <=> [var "R" `is` call_ (funRef "factorial" 1) [int 5]]
                        ]
-    bindings <- runDSL [m] (term "compute" [var "R"])
+    bindings <- runDSL stdlib [m] (term "compute" [var "R"])
     Map.lookup "R" bindings @?= Just (IntTerm 120)
 
 -- | Algebraic-type definition (@:- chr_type color ---> red ; green ; blue@).
@@ -691,7 +692,7 @@ chrTypeEndToEnd =
                 dataCtor "blue" []
               ]
             `defining` [[term "paint" [var "C"]] <=> [bool True]]
-    bindings <- runDSL [m] (term "paint" [atom "red"])
+    bindings <- runDSL stdlib [m] (term "paint" [atom "red"])
     Map.keys bindings @?= []
 
 -- | A goal argument naming a declared data constructor is canonicalized
@@ -712,7 +713,7 @@ chrTypeCtorGoalEndToEnd =
             `defining` [ [term "paint" [atom "red", var "R"]] <=> [var "R" .=. int 1],
                          [term "paint" [atom "green", var "R"]] <=> [var "R" .=. int 2]
                        ]
-    bindings <- runDSL [m] (term "paint" [atom "green", var "R"])
+    bindings <- runDSL stdlib [m] (term "paint" [atom "green", var "R"])
     Map.lookup "R" bindings @?= Just (IntTerm 2)
 
 -- | Simplification with a guard built from @is@ and @(.<)@. Mirrors the
@@ -734,5 +735,5 @@ guardEndToEnd =
                            <=> [var "R" .=. var "X"]
                            |- [var "X" .>= var "Lo"]
                        ]
-    bindings <- runDSL [m] (term "clamp" [int 3, int 5, var "R"])
+    bindings <- runDSL stdlib [m] (term "clamp" [int 3, int 5, var "R"])
     Map.lookup "R" bindings @?= Just (IntTerm 5)

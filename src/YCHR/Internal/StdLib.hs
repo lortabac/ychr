@@ -1,21 +1,23 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 -- | Standard library loading.
 --
 -- The @libraries\/@ directory ships a small set of @.chr@ files
 -- (@prelude@, @lists@, @pairs@, @maybe@, @strings@, @meta@, @search@)
--- that every user program may import via @:- use_module(library(...))@. The sources
--- are embedded into the binary at compile time via
--- 'YCHR.Internal.StdLib.TH.embeddedStdLibSources'; 'stdlib' parses them on
--- first demand.
+-- that every user program may import via @:- use_module(library(...))@.
+-- 'parseStdLib' turns their sources into the 'StdLib' value the compiler
+-- takes as an explicit input. Where the sources come from is the
+-- caller's business: the @ychr@ executable embeds them at compile time
+-- (see @embed\/YCHR\/Embedded.hs@), while a library embedder or the
+-- MicroHs build reads them from disk. See
+-- @docs\/how-to\/embed-a-chr-module.md@.
 module YCHR.Internal.StdLib
-  ( -- * Pure API
+  ( -- * Types
+    StdLib (..),
     StdLibError (..),
-    parseStdLib,
 
-    -- * Default value (parsed lazily on first demand)
-    stdlib,
+    -- * Pure API
+    parseStdLib,
   )
 where
 
@@ -33,7 +35,13 @@ import YCHR.Internal.Parser
     mergeOps,
     parseModuleWith,
   )
-import YCHR.Internal.StdLib.TH (embeddedStdLibSources)
+
+-- | The parsed standard library: every bundled library, keyed by its
+-- bare library name (the name a @:- use_module(library(name))@ import
+-- spells). Produced by 'parseStdLib' and passed explicitly to every
+-- entry point that compiles or type-checks, so the library itself
+-- carries no compile-time embedding.
+newtype StdLib = StdLib (Map Text Module)
 
 -- | Errors that can arise while parsing the standard library.
 data StdLibError
@@ -50,7 +58,7 @@ data StdLibError
 
 -- | Parse a list of @(path, source)@ pairs as the standard library.
 -- Pure: any IO required to get the sources is the caller's problem.
-parseStdLib :: [(FilePath, Text)] -> Either StdLibError (Map Text Module)
+parseStdLib :: [(FilePath, Text)] -> Either StdLibError StdLib
 parseStdLib sources = do
   hdrs <-
     traverse
@@ -64,7 +72,7 @@ parseStdLib sources = do
     Left conflict -> Left (StdLibOpConflict conflict)
     Right t -> Right t
   entries <- mapM (parseLib table) sources
-  pure (Map.fromList entries)
+  pure (StdLib (Map.fromList entries))
 
 parseLib :: OpTable -> (FilePath, Text) -> Either StdLibError (Text, Module)
 parseLib table (path, src) =
@@ -74,10 +82,3 @@ parseLib table (path, src) =
         Right (m, errs)
           | not (null errs) -> Left (StdLibValidationError path (show errs))
           | otherwise -> Right (name, m)
-
--- | The default standard library, parsed once on first demand from
--- the sources embedded at compile time by 'embeddedStdLibSources'.
-stdlib :: Map Text Module
-stdlib = case parseStdLib $(embeddedStdLibSources) of
-  Right m -> m
-  Left err -> error ("Failed to parse embedded standard library: " ++ show err)

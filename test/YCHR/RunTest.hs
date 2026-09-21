@@ -9,6 +9,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import YCHR.Embedded (stdlib, typeCheckerProgram)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
@@ -60,7 +61,7 @@ tests =
 -- ---------------------------------------------------------------------------
 
 compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
-compileOrFail inputs = case compileModules False inputs of
+compileOrFail inputs = case compileModules stdlib False inputs of
   Left err -> assertFailure $ show err
   Right (cp, _) -> pure cp
 
@@ -198,7 +199,7 @@ fibTests =
     "Fibonacci (from surface language)"
     [ testCase "fib 10 = 55" $ do
         prog <- compileOrFail [("fib.chr", fibSource)]
-        bindings <- runProgramWithGoal prog fibHostCalls "fib:fib(10, R)"
+        bindings <- runProgramWithGoal typeCheckerProgram prog fibHostCalls "fib:fib(10, R)"
         Map.lookup "R" bindings @?= Just (IntTerm 55)
     ]
 
@@ -396,7 +397,7 @@ queryErrorTests =
             ]
         outcome <-
           try @SomeException
-            (runProgramWithGoal cp Map.empty "opt:out(some(1, 2))")
+            (runProgramWithGoal typeCheckerProgram cp Map.empty "opt:out(some(1, 2))")
         case outcome of
           Left exc -> case fromException exc :: Maybe Error of
             Just err@(TypeErrors _) ->
@@ -414,7 +415,7 @@ queryErrorTests =
         cp <- compileOrFail [("pub.chr", exportedSource)]
         outcome <-
           try @SomeException
-            (runProgramWithGoal cp Map.empty "this is not a valid goal")
+            (runProgramWithGoal typeCheckerProgram cp Map.empty "this is not a valid goal")
         case outcome of
           Left exc -> case fromException exc :: Maybe Error of
             Just (ParseError _ _) -> pure ()
@@ -428,7 +429,7 @@ queryErrorTests =
       testCase "runProgramWithGoal: undeclared constraint → GoalNotAConstraint" $ do
         cp <- compileOrFail [("pub.chr", exportedSource)]
         outcome <-
-          try @SomeException (runProgramWithGoal cp Map.empty "nope(X)")
+          try @SomeException (runProgramWithGoal typeCheckerProgram cp Map.empty "nope(X)")
         case outcome of
           Left exc -> case fromException exc :: Maybe Error of
             Just (GoalNotAConstraint _ NoSuchConstraint) -> pure ()
@@ -460,7 +461,7 @@ queryErrorTests =
             ]
         outcome <-
           try @SomeException
-            (runProgramWithQuery cp Map.empty "two:ci(X), two:cb(X).")
+            (runProgramWithQuery typeCheckerProgram cp Map.empty "two:ci(X), two:cb(X).")
         case outcome of
           Left exc -> case fromException exc :: Maybe Error of
             Just err@(TypeErrors _) ->
@@ -478,7 +479,7 @@ queryErrorTests =
         cp <- compileOrFail [("pub.chr", exportedSource)]
         outcome <-
           try @SomeException
-            (runProgramWithQuery cp Map.empty "visible(X), !!bogus!!.")
+            (runProgramWithQuery typeCheckerProgram cp Map.empty "visible(X), !!bogus!!.")
         case outcome of
           Left exc -> case fromException exc :: Maybe Error of
             Just (ParseError _ _) -> pure ()
@@ -509,11 +510,11 @@ arityOverloadTests =
     "Arity overloading"
     [ testCase "foo/1 and foo/2 are distinct constraints" $ do
         prog <- compileOrFail [("m.chr", arityOverloadSource)]
-        bindings1 <- runProgramWithGoal prog Map.empty "m:foo(R)"
+        bindings1 <- runProgramWithGoal typeCheckerProgram prog Map.empty "m:foo(R)"
         Map.lookup "R" bindings1 @?= Just (CompoundTerm (Unqualified "one") []),
       testCase "foo/2 fires its own rule" $ do
         prog <- compileOrFail [("m.chr", arityOverloadSource)]
-        bindings2 <- runProgramWithGoal prog Map.empty "m:foo(R1, R2)"
+        bindings2 <- runProgramWithGoal typeCheckerProgram prog Map.empty "m:foo(R1, R2)"
         Map.lookup "R1" bindings2 @?= Just (CompoundTerm (Unqualified "two") [])
         Map.lookup "R2" bindings2 @?= Just (CompoundTerm (Unqualified "args") [])
     ]
@@ -572,37 +573,53 @@ queryBodyTests =
     "Query body forms"
     [ testCase "BodyTrue: 'true, R = 1' binds R" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
-        bindings <- runProgramWithQuery prog qbodyHostCalls "true, R = 1."
+        bindings <- runProgramWithQuery typeCheckerProgram prog qbodyHostCalls "true, R = 1."
         Map.lookup "R" bindings @?= Just (IntTerm 1),
       testCase "BodyUnify chain: X = 1, Y = X, R = Y" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
-        bindings <- runProgramWithQuery prog qbodyHostCalls "X = 1, Y = X, R = Y."
+        bindings <-
+          runProgramWithQuery
+            typeCheckerProgram
+            prog
+            qbodyHostCalls
+            "X = 1, Y = X, R = Y."
         Map.lookup "R" bindings @?= Just (IntTerm 1),
       testCase "BodyUnify failure: 1 = 2 raises 'unification failure'" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
         expectErrorContaining "unification failure" $
-          runProgramWithQuery prog qbodyHostCalls "1 = 2.",
+          runProgramWithQuery typeCheckerProgram prog qbodyHostCalls "1 = 2.",
       testCase "BodyIs re-bind with matching value succeeds" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
-        bindings <- runProgramWithQuery prog qbodyHostCalls "R is 1, R is 1."
+        bindings <-
+          runProgramWithQuery
+            typeCheckerProgram
+            prog
+            qbodyHostCalls
+            "R is 1, R is 1."
         Map.lookup "R" bindings @?= Just (IntTerm 1),
       testCase "BodyIs re-bind with conflicting value raises 'unification failure'" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
         expectErrorContaining "unification failure" $
-          runProgramWithQuery prog qbodyHostCalls "R is 1, R is 2.",
+          runProgramWithQuery typeCheckerProgram prog qbodyHostCalls "R is 1, R is 2.",
       testCase "BodyHostStmt: host:'+'(1, 2) as statement runs and is discarded" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
         bindings <-
-          runProgramWithQuery prog qbodyHostCalls "host:'+'(1, 2), R = ok."
+          runProgramWithQuery typeCheckerProgram prog qbodyHostCalls "host:'+'(1, 2), R = ok."
         Map.lookup "R" bindings @?= Just (CompoundTerm (Unqualified "ok") []),
       testCase "BodyCall: triple(5) as statement runs and is discarded" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
-        bindings <- runProgramWithQuery prog qbodyHostCalls "triple(5), R = ok."
+        bindings <-
+          runProgramWithQuery
+            typeCheckerProgram
+            prog
+            qbodyHostCalls
+            "triple(5), R = ok."
         Map.lookup "R" bindings @?= Just (CompoundTerm (Unqualified "ok") []),
       testCase "BodyApply: '$call'(F, X) as statement runs and is discarded" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
         bindings <-
           runProgramWithQuery
+            typeCheckerProgram
             prog
             qbodyHostCalls
             "F = fun(X) -> X end, '$call'(F, 1), R = ok."
@@ -611,6 +628,7 @@ queryBodyTests =
         prog <- compileOrFail [("qbody.chr", qbodySource)]
         bindings <-
           runProgramWithQuery
+            typeCheckerProgram
             prog
             qbodyHostCalls
             "R is '$call'(fun triple/1, 4)."
@@ -618,14 +636,14 @@ queryBodyTests =
       testCase "unknown host function raises 'Unknown host function'" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
         expectErrorContaining "Unknown host function" $
-          runProgramWithQuery prog qbodyHostCalls "R is host:nope(1).",
+          runProgramWithQuery typeCheckerProgram prog qbodyHostCalls "R is host:nope(1).",
       testCase "BodyUnify with FloatExpr RHS binds R to FloatTerm" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
-        bindings <- runProgramWithQuery prog qbodyHostCalls "R = 1.5."
+        bindings <- runProgramWithQuery typeCheckerProgram prog qbodyHostCalls "R = 1.5."
         Map.lookup "R" bindings @?= Just (FloatTerm 1.5),
       testCase "BodyUnify with TextExpr RHS binds R to TextTerm" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
-        bindings <- runProgramWithQuery prog qbodyHostCalls "R = \"hello\"."
+        bindings <- runProgramWithQuery typeCheckerProgram prog qbodyHostCalls "R = \"hello\"."
         Map.lookup "R" bindings @?= Just (TextTerm "hello")
     ]
 
@@ -655,7 +673,8 @@ guardErrorTests =
     [ testCase "guard evaluating to a non-boolean renders a located YCHR-60001" $ do
         prog <- compileOrFail [("guardbug.chr", guardNonBoolSource)]
         outcome <-
-          try @SomeException (runProgramWithGoal prog fibHostCalls "guardbug:p(1)")
+          try @SomeException
+            (runProgramWithGoal typeCheckerProgram prog fibHostCalls "guardbug:p(1)")
         case outcome of
           Right _ -> assertFailure "expected a runtime error, got bindings"
           Left exc -> case fromException exc :: Maybe Error of

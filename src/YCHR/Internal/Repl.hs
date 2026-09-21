@@ -47,13 +47,15 @@ import YCHR.Internal.Pretty
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Internal.Runtime.Monad (Chr)
 import YCHR.Internal.Runtime.Session
-  ( toSessionInput,
+  ( SessionInput,
+    toSessionInput,
     withCHR,
     withCHRExtra,
     withCHRExtraTraced,
     withTraceHandler,
   )
 import YCHR.Internal.Runtime.Trace (defaultTraceHandler)
+import YCHR.Internal.StdLib (StdLib)
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
 import YCHR.Internal.TypeCheck.Render (typeModule)
 import YCHR.Internal.Types
@@ -86,9 +88,13 @@ import YCHR.Run
 -- session continues until the user types @:quit@ or hits EOF. When
 -- @werror@ is set, warnings during the initial load abort startup;
 -- during @:recompile@ they keep the previous program loaded.
-runRepl :: HostCallRegistry -> Bool -> Bool -> [FilePath] -> IO ()
-runRepl hostCalls quietMode werror files = do
-  result <- compileFiles True files
+--
+-- The 'StdLib' and the compiled type-checker are explicit inputs: the
+-- @ychr@ library embeds nothing at compile time. The CLI passes the two
+-- values its embedding component provides.
+runRepl :: StdLib -> SessionInput -> HostCallRegistry -> Bool -> Bool -> [FilePath] -> IO ()
+runRepl stdlib typeChecker hostCalls quietMode werror files = do
+  result <- compileFiles stdlib True files
   case result of
     Left err -> do
       putStr (displayMsg err)
@@ -97,10 +103,10 @@ runRepl hostCalls quietMode werror files = do
       let warnsFatal = werror && not (null warnings)
       when (warnsFatal || not quietMode) (printWarnings warnings)
       when warnsFatal exitFailure
-      unless quietMode (printTypeDiagnostics prog)
+      unless quietMode (printTypeDiagnostics typeChecker prog)
       let exported = exportedNames prog
       (outerInput, liveInput) <- mkReplInputs quietMode exported
-      outerLoop hostCalls quietMode werror files outerInput liveInput prog
+      outerLoop stdlib typeChecker hostCalls quietMode werror files outerInput liveInput prog
 
 -- | Build the outer and live line inputs, which share one history file.
 -- If that file cannot be used — its parent directory is not creatable,
@@ -134,6 +140,8 @@ mkReplInputs quietMode exported = do
 -- ---------------------------------------------------------------------------
 
 outerLoop ::
+  StdLib ->
+  SessionInput ->
   HostCallRegistry ->
   Bool ->
   Bool ->
@@ -142,7 +150,7 @@ outerLoop ::
   LineInput ->
   CompiledProgram ->
   IO ()
-outerLoop hostCalls quietMode werror files outerInput liveInput = go
+outerLoop stdlib typeChecker hostCalls quietMode werror files outerInput liveInput = go
   where
     prompt = if quietMode then "" else "ychr> "
     go prog = do
@@ -165,17 +173,17 @@ outerLoop hostCalls quietMode werror files outerInput liveInput = go
       ":i" -> showInfoUsage *> go prog
       ":trace" -> showTraceUsage *> go prog
       ":begin" -> do
-        runLiveSession hostCalls liveInput quietMode werror prog
+        runLiveSession typeChecker hostCalls liveInput quietMode werror prog
         go prog
       "" -> go prog
       line
         | Just rest <- stripPrefix ":info " line -> showInfo prog rest *> go prog
         | Just rest <- stripPrefix ":i " line -> showInfo prog rest *> go prog
         | Just rest <- stripPrefix ":trace " line ->
-            runTracedQuery hostCalls werror prog rest *> go prog
-        | otherwise -> runOuterQuery hostCalls werror prog line *> go prog
+            runTracedQuery typeChecker hostCalls werror prog rest *> go prog
+        | otherwise -> runOuterQuery typeChecker hostCalls werror prog line *> go prog
     recompile prog = do
-      result <- compileFiles True files
+      result <- compileFiles stdlib True files
       case result of
         Left err -> putStr (displayMsg err) *> go prog
         Right (prog', warnings)
@@ -184,11 +192,11 @@ outerLoop hostCalls quietMode werror files outerInput liveInput = go
               -- Surface type errors of the rejected program too, so the
               -- user sees the full diagnostic picture before deciding
               -- what to fix; the previous program stays loaded.
-              printTypeDiagnostics prog'
+              printTypeDiagnostics typeChecker prog'
               go prog
           | otherwise -> do
               printWarnings warnings
-              printTypeDiagnostics prog'
+              printTypeDiagnostics typeChecker prog'
               go prog'
 
 -- | Run a one-off query in the outer REPL: parse, typecheck, execute
@@ -197,11 +205,11 @@ outerLoop hostCalls quietMode werror files outerInput liveInput = go
 -- @"Error: " ++ displayException@. Under @--Werror@, query-rename
 -- warnings short-circuit before execution; the constraint store is
 -- untouched (one-shot queries get a fresh store anyway).
-runOuterQuery :: HostCallRegistry -> Bool -> CompiledProgram -> String -> IO ()
-runOuterQuery hostCalls werror prog line = do
+runOuterQuery :: SessionInput -> HostCallRegistry -> Bool -> CompiledProgram -> String -> IO ()
+runOuterQuery typeChecker hostCalls werror prog line = do
   prepResult <-
     try @SomeException $
-      prepareQuery prog (T.pack line)
+      prepareQuery typeChecker prog (T.pack line)
   case prepResult of
     Left exc -> reportException exc
     Right (prep, ws) -> do
@@ -224,11 +232,12 @@ runOuterQuery hostCalls werror prog line = do
 -- bindings are intentionally not printed, matching the documented
 -- @:trace@ behaviour. To see bindings, re-run the goal without
 -- @:trace@.
-runTracedQuery :: HostCallRegistry -> Bool -> CompiledProgram -> String -> IO ()
-runTracedQuery hostCalls werror prog line = do
+runTracedQuery ::
+  SessionInput -> HostCallRegistry -> Bool -> CompiledProgram -> String -> IO ()
+runTracedQuery typeChecker hostCalls werror prog line = do
   prepResult <-
     try @SomeException $
-      prepareQuery prog (T.pack line)
+      prepareQuery typeChecker prog (T.pack line)
   case prepResult of
     Left exc -> reportException exc
     Right (prep, ws) -> do
@@ -264,13 +273,14 @@ showTraceUsage =
 -- @ychr live>@ prompt. The session ends when the user types @:end@,
 -- hits EOF, or a runtime error aborts execution.
 runLiveSession ::
+  SessionInput ->
   HostCallRegistry ->
   LineInput ->
   Bool ->
   Bool ->
   CompiledProgram ->
   IO ()
-runLiveSession hostCalls liveInput quietMode werror cp =
+runLiveSession typeChecker hostCalls liveInput quietMode werror cp =
   withCHR (toSessionInput cp) hostCalls liveLoop
   where
     prompt = if quietMode then "" else "ychr live> "
@@ -286,7 +296,7 @@ runLiveSession hostCalls liveInput quietMode werror cp =
       | Just rest <- T.stripPrefix ":trace " stripped = do
           outcome <-
             withTraceHandler (defaultTraceHandler stdout) $
-              handleLiveQuery cp werror rest
+              handleLiveQuery typeChecker cp werror rest
           case outcome of
             QueryOk _ -> liveLoop
             QueryRecoverable msg -> do
@@ -299,7 +309,7 @@ runLiveSession hostCalls liveInput quietMode werror cp =
           liftIO showTraceUsage
           liveLoop
       | otherwise = do
-          outcome <- handleLiveQuery cp werror (T.pack line)
+          outcome <- handleLiveQuery typeChecker cp werror (T.pack line)
           case outcome of
             QueryOk bindings -> do
               liftIO (putStr (prettyQueryResult bindings))
@@ -332,12 +342,13 @@ data QueryOutcome
 -- to stderr and the query is treated as recoverable, leaving the
 -- session's constraint store untouched.
 handleLiveQuery ::
+  SessionInput ->
   CompiledProgram ->
   Bool ->
   Text ->
   Chr QueryOutcome
-handleLiveQuery cp werror src = do
-  prepResult <- liftIO (try @SomeException (prepareQuery cp src))
+handleLiveQuery typeChecker cp werror src = do
+  prepResult <- liftIO (try @SomeException (prepareQuery typeChecker cp src))
   case prepResult of
     Left exc -> pure (classifyAsRecoverable exc)
     Right (prep, ws) -> do
@@ -832,8 +843,8 @@ printWarnings = mapM_ (hPutStr stderr . displayMsg)
 -- informational here, so @--Werror@ (which governs the /compile/
 -- warnings deciding whether a program loads at all) does not consult
 -- them.
-printTypeDiagnostics :: CompiledProgram -> IO ()
-printTypeDiagnostics prog = do
-  result <- typeCheckProgram prog.desugaredProgram
+printTypeDiagnostics :: SessionInput -> CompiledProgram -> IO ()
+printTypeDiagnostics typeChecker prog = do
+  result <- typeCheckProgram typeChecker prog.desugaredProgram
   mapM_ (hPutStr stderr . displayMsg) result.errors
   unless (null result.warnings) (printWarnings [TypeCheckWarnings result.warnings])

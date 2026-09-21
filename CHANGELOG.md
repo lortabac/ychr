@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+Breaking: the `ychr` library no longer embeds anything at compile time,
+and the two resources it used to bake in are now explicit arguments.
+The bundled standard library is a `StdLib` — a newtype over the parsed
+`libraries/*.chr` modules in `YCHR.Internal.StdLib`, produced by
+`parseStdLib` (whose return type changed from `Map Text Module`) — and
+every public entry point that compiles takes it first: `compileFiles`,
+`compileModules`, `compileParsedModules`, `YCHR.Convert.runQuery` /
+`runQueryWith` / `runQueryWithHostCallRegistry`, `YCHR.DSL.runDSL` /
+`runDSLWithHostCallRegistry`. The compiled type-checker is a
+`SessionInput` — built by `YCHR.Internal.TypeCheck.Compiled`'s
+`compileTypeCheckerModules`, which now takes the `StdLib`, and no longer
+a `typeCheckerProgram` CAF — and every public entry point that
+type-checks takes it first: `typeCheckProgram`, `typeCheckGoals`,
+`prepareQuery`, `runPreparedGoal`, `runProgramWithGoal`,
+`runProgramWithQuery`. The `GoalDSL` runners and `runQueryCompiled*`
+never type-check and keep their signatures.
+`YCHR.Internal.StdLib.stdlib` and
+`YCHR.Internal.TypeCheck.Compiled.typeCheckerProgram` are gone; the
+`ychr` executable, tests, benchmark and `stlc` example build the values
+they need from the Template Haskell embedding in the new shared `embed/`
+source directory (`YCHR.Embedded`), so `library ychr` no longer depends
+on `template-haskell`. See
+[the embedding guide](docs/how-to/embed-a-chr-module.md#5-supplying-the-resources).
+
 Breaking: the wildcard is gone from the runtime. `YCHR.Run.Value` no
 longer has a `VWildcard` constructor, the VM `Literal` type no longer
 has `WildcardLit`, the serialized `.vm` format no longer accepts a

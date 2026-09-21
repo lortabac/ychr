@@ -11,17 +11,18 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
-import YCHR.Internal.Compile.Pipeline (Error, Warning (..), compileModules)
+import YCHR.Embedded (stdlib)
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning (..))
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Pretty (prettyTermSrc)
+import YCHR.Run (Error, Warning (..), compileModules)
 
 -- | Compile a single-module program and return the exhaustiveness
 -- warnings (function display name + rendered witness call).
 exhWarnings :: Text -> IO [(Text, String)]
 exhWarnings src =
-  case compileModules False [("test.chr", src)] of
+  case compileModules stdlib False [("test.chr", src)] of
     Left err -> assertFailure ("unexpected compile error: " ++ show (err :: Error))
     Right (_, ws) ->
       pure

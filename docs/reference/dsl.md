@@ -146,7 +146,10 @@ var "X" .=. var "Y"
 ## Compiling and running
 
 `runDSL` compiles the modules with the stdlib and runs one goal with
-the CLI's default registry (builtins, meta and search host calls):
+the CLI's default registry (builtins, meta and search host calls). The
+`StdLib` is an explicit first argument, because the `ychr` library
+embeds nothing at compile time — see
+[Supplying the resources](../how-to/embed-a-chr-module.md#5-supplying-the-resources):
 
 ```haskell
 import YCHR.DSL
@@ -163,7 +166,7 @@ main = do
               , "high" @: [term "clamp" [var "X", var "Lo", var "R"]]
                           <=> [var "R" .=. var "X" ] |- [var "X" .>= var "Lo"]
               ]
-  bindings <- runDSL [m] (term "clamp" [int 3, int 5, var "R"])
+  bindings <- runDSL stdlib [m] (term "clamp" [int 3, int 5, var "R"])
   print (Map.lookup "R" bindings)
   -- Just (IntTerm 5)
 ```
@@ -175,23 +178,27 @@ unexported one stays bare and its rules never fire
 (`Note [Goal argument canonicalization]` in
 [`src/YCHR/Convert.hs`](../../src/YCHR/Convert.hs)).
 
-Custom `host:` functions:
+Custom `host:` functions (the registry comes second):
 
 ```haskell
-runDSLWithHostCallRegistry myHostCalls [m] (term "g" [var "R"])
+runDSLWithHostCallRegistry stdlib myHostCalls [m] (term "g" [var "R"])
 ```
 
-`YCHR.DSL` exports `HostCallRegistry`; the builders (`hostFunctions`,
-`withDefaultHostFunctions`, `hostFn*`) need `import YCHR.Convert` or
-`import YCHR` — see
+`YCHR.DSL` exports `HostCallRegistry` and `StdLib`; the builders
+(`hostFunctions`, `withDefaultHostFunctions`, `hostFn*`) need
+`import YCHR.Convert` or `import YCHR` — see
 [convert.md §Registering host functions](convert.md#registering-host-functions).
 
 Finer control (several goals, one compiled program for many runs,
-warnings): `compileParsedModules True modules` is `compileFiles True
-paths` minus parsing (`False` skips the stdlib); feed the result to
-`runProgramWithGoalDSL` / `runProgramWithQuery` (re-exported from
-`YCHR.Run`). Compilation and runtime errors are exceptions
-(`YCHR.Run.Error` and the runtime's error types).
+warnings): `compileParsedModules stdlib True modules` is
+`compileFiles stdlib True paths` minus parsing (`False` skips the
+stdlib); feed the result to `runProgramWithGoalDSL` /
+`runProgramWithQuery` (re-exported from `YCHR.Run`). The goal-running
+entry points that type-check (`runProgramWithGoal`, `runProgramWithQuery`,
+`prepareQuery`, `runPreparedGoal`) take the compiled type-checker as
+their first argument as well; the `GoalDSL` ones do not. Compilation and
+runtime errors are exceptions (`YCHR.Run.Error` and the runtime's error
+types).
 
 ## Pitfalls
 

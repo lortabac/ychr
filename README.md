@@ -84,12 +84,13 @@ build-depends: ychr
 
 ```haskell
 {-# LANGUAGE OverloadedStrings #-}
+import Resources (stdlib) -- the embedded resources, see below
 import System.IO (hPutStr, stderr)
 import YCHR
 
 main :: IO ()
 main = do
-  result <- compileFiles True ["Order.chr"]
+  result <- compileFiles stdlib True ["Order.chr"]
   case result of
     Left err -> hPutStr stderr (displayError err)
     Right (cp, _warnings) -> do
@@ -98,6 +99,13 @@ main = do
   where
     goal = CompoundTerm (Unqualified "compute") [VarTerm "R"]
 ```
+
+`stdlib` is the parsed standard library, and it is an explicit input:
+the library embeds nothing at compile time. A build that wants the
+bundled libraries supplies their sources — see
+[the embedding guide](https://github.com/lortabac/ychr/blob/master/docs/how-to/embed-a-chr-module.md#5-supplying-the-resources)
+for a ready-made `Resources.hs`. The type-checker is the other explicit
+input, needed only by programs that type-check.
 
 Compile once, query `cp` as often as you like. `import YCHR` covers
 compiling, querying and marshalling (`ToTerm` / `FromTerm`); Haskell

@@ -21,10 +21,12 @@ terse, fix-shaped, removable when closed.
 Re-verified against MicroHs `3322c60a` (the checkout's HEAD) and the
 installed `mhs` 0.16.6.0. Six gaps remain open; one has closed and been
 removed from this document. The local workarounds for gaps 1, 4 and 6
-are applied (gap 4 also touches one test module); a build still stops
-before gap 6 is reached — on gap 3's parse error — so that one was
-checked on a scratch copy, see its "Local workaround (applied)" section
-below.
+are applied (gap 4 also touches one test module), and gap 5's
+library-side workaround is applied too: no Template Haskell remains in
+`library ychr` and no unconditional `template-haskell` dependency
+remains in `ychr.cabal` (see gap 5). A build still stops before gap 6 is
+reached — on gap 3's parse error — so that one was checked on a scratch
+copy, see its "Local workaround (applied)" section below.
 
 | # | Gap | State |
 |---|---|---|
@@ -32,7 +34,7 @@ below.
 | 2 | `NoFieldSelectors` silently ignored | open |
 | 3 | Record update on a record-dot expression doesn't parse | open — four sites |
 | 4 | Missing `Data.Text` functions | open — workaround applied (`Data.Text.Shim`) |
-| 5 | No `TemplateHaskell` support | open — no workaround |
+| 5 | No `TemplateHaskell` support | open upstream — TH kept out of `library ychr`; the mhs-side resources provider is missing (see below) |
 | 6 | `mapAccumL` is list-only | open — workaround applied to `src/` (see below) |
 
 `Data.Either.partitionEithers` (formerly gap 5) is now exported by
@@ -486,30 +488,25 @@ MicroHs exports the four functions.
 
 ## 5. No `TemplateHaskell` support
 
-> **Re-verified.** Still open, and it is the one gap with no workaround.
->
-> Correcting a detail in the original entry: a `mcabal build` does not
-> reach `StdLib.hs`. It aborts earlier, during dependency resolution:
-
-```
-mcabal: uncaught exception: error: "../MicroCabal/src/MicroCabal/Main.hs",389:7:
-  dependency not installed: template-haskell
-```
-
-> `template-haskell` is absent from the installed package set, and no
-> `-f-examples` / `flags: -examples` setting avoids it. Independently,
-> TH syntax is a hard parse error, not merely an ignored pragma:
-> `$( ... )` yields `found: $` / `expected: - LQIdent ...`.
+> **Re-verified.** Still open upstream — mhs has no staged compilation
+> and never will (see "Root cause"). The YCHR side has changed since the
+> original entry: the `ychr` *library* no longer uses TH at all (its
+> workaround is applied, below). TH is confined to the shared `embed/`
+> source directory, which only the components that want a self-contained
+> GHC binary compile: the `ychr` executable, the test suite, the
+> benchmark and the `stlc` example. What mhs still lacks is a provider
+> for the two resources those components embed.
 
 MicroHs is a combinator-based compiler with no staged compilation.
 The `TemplateHaskell` extension is not recognised; modules using it
 cannot build under `mcabal`.
 
-YCHR uses TH to embed `libraries/*.chr` and the type checker's
-`typechecker/*.chr` into the binary at compile time
-(`YCHR.Internal.StdLib.TH`, `YCHR.Internal.TypeCheck.TH`). This makes the GHC-built
-binary self-contained and cwd-independent. Without TH, mhs has no
-equivalent compile-time embedding path.
+YCHR used TH inside the library to embed `libraries/*.chr` and the type
+checker's `typechecker/*.chr` into the binary at compile time. That made
+the GHC-built binary self-contained and cwd-independent — but it also
+made `template-haskell` an unconditional dependency of `library ychr`, so
+`mcabal` stopped during dependency resolution, before compiling
+anything.
 
 ### Root cause
 
@@ -524,19 +521,47 @@ is a non-goal for MicroHs by design.
 
 None viable.
 
-### Local workaround
+### Local workaround (applied)
 
-None. `mcabal build` fails during dependency resolution, before it
-reaches `src/YCHR/Internal/StdLib.hs` or
-`src/YCHR/Internal/TypeCheck/Compiled.hs` (those would fail next, on the
-TH pragmas). Users must build with `cabal`/GHC.
-This was a conscious trade-off taken when reverting from the runtime
-loader (the change `2142c05` was originally motivated by) back to TH
-embedding: the runtime loader had a known cwd-relative bug, and the
-GHC-only fix is the cleanest available. If future work restores mhs
-compat, the loaders will need a per-backend split (`src/ghc/` +
-`src/mhs/`, mirroring the existing `YCHR.Internal.LineInput` pattern) — but
-that machinery is intentionally not added preemptively.
+The embedding moved out of the library into the shared `embed/` source
+directory, and the two resources it produces are explicit inputs of the
+library's API:
+
+| file | role |
+|---|---|
+| `embed/YCHR/Embedded/StdLib.hs` | splice of `libraries/*.chr`, moved from `YCHR.Internal.StdLib.TH` |
+| `embed/YCHR/Embedded/TypeCheck.hs` | splice of `typechecker/*.chr`, moved from `YCHR.Internal.TypeCheck.TH` |
+| `embed/YCHR/Embedded.hs` | applies both splices; exports `stdlib :: StdLib` and `typeCheckerProgram :: SessionInput` |
+
+`embed/` is listed in the `hs-source-dirs` of `exe:ychr`,
+`exe:stlc-typechecker`, `test:ychr-tests` and `bench:ychr-bench`; those
+four components carry the `template-haskell` dependency (under
+`if impl(ghc)`, so at least dependency resolution no longer sees it) and
+list the three modules in `other-modules`. `library ychr` has neither
+the dependency nor the modules: it takes the parsed standard library
+(`StdLib`, built by `parseStdLib`) and the compiled type-checker
+(`SessionInput`, built by `compileTypeCheckerModules`) as explicit
+arguments — see
+`docs/how-to/embed-a-chr-module.md#5-supplying-the-resources`.
+
+What remains for mhs is the *provider* for those two values: with no TH,
+a component must read `libraries/` and `typechecker/` from disk and feed
+`parseStdLib` / `compileTypeCheckerModules`, and the executable must
+depend on that provider instead of on `embed/`. Until then mhs can build
+the library but not the CLI.
+
+Verified on this revision:
+
+- `mcabal build` no longer aborts during dependency resolution. It
+  resolves the package and starts on `library ychr`, stopping on gap 3's
+  parse error in `Desugar.hs:965` — the first failure is now a known,
+  unrelated gap rather than `dependency not installed: template-haskell`.
+- `mhs -fno-code -isrc YCHR.Internal.StdLib` prints "No code generated":
+  the new `StdLib` newtype and `parseStdLib` are mhs-clean.
+- The four embedding components are GHC-only: their `template-haskell`
+  dependency sits under `if impl(ghc)`, so nothing in the mhs dependency
+  graph pulls TH in. The library's own module list no longer mentions
+  the former `YCHR.Internal.StdLib.TH` / `YCHR.Internal.TypeCheck.TH`.
 
 
 ## 6. `Data.List.mapAccumL` and friends are list-only, not `Foldable`

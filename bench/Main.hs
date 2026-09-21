@@ -13,6 +13,7 @@ import Criterion.Main
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import System.FilePath ((<.>), (</>))
+import YCHR.Embedded (stdlib, typeCheckerProgram)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Parser (parseConstraint)
 import YCHR.Internal.Runtime.Registry (HostCallRegistry)
@@ -74,7 +75,7 @@ loadCase :: String -> IO BenchCase
 loadCase name = do
   let chrPath = goldenDir </> name </> name <.> "chr"
       goalPath = goldenDir </> name </> name <.> "goal"
-  result <- compileFiles False [chrPath]
+  result <- compileFiles stdlib False [chrPath]
   prog <- case result of
     Left err -> fail ("compile failed for " ++ name ++ ": " ++ show err)
     Right (p, _warnings) -> pure p
@@ -115,14 +116,14 @@ typeCheckProgramName = "pairs_library"
 makeTypeCheckBenches :: CompiledProgram -> [Benchmark]
 makeTypeCheckBenches prog =
   [ bench ("typecheck/" ++ typeCheckProgramName) $
-      whnfIO (typeCheckProgram prog.desugaredProgram)
+      whnfIO (typeCheckProgram typeCheckerProgram prog.desugaredProgram)
   ]
 
 loadTypeCheckProgram :: IO CompiledProgram
 loadTypeCheckProgram = do
   let chrPath =
         goldenDir </> typeCheckProgramName </> typeCheckProgramName <.> "chr"
-  result <- compileFiles False [chrPath]
+  result <- compileFiles stdlib False [chrPath]
   case result of
     Left err ->
       fail ("compile failed for " ++ typeCheckProgramName ++ ": " ++ show err)

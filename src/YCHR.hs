@@ -5,6 +5,11 @@
 -- it, and marshal Haskell values in and out with 'ToTerm' \/ 'FromTerm'.
 -- @import YCHR@ is all most embedders need.
 --
+-- The bundled standard library ('StdLib') and the compiled type-checker
+-- ('SessionInput') are explicit inputs of the entry points that need
+-- them — the library embeds nothing at compile time. See
+-- @docs\/how-to\/embed-a-chr-module.md#5-supplying-the-resources@.
+--
 -- Worked examples:
 -- <https://github.com/lortabac/ychr/blob/master/README.md#using-ychr-as-a-haskell-library>
 -- and
@@ -39,6 +44,7 @@ module YCHR
     compileFiles,
     compileModules,
     CompiledProgram,
+    StdLib,
     Error (..),
     Warning (..),
     displayError,
@@ -89,6 +95,7 @@ module YCHR
     hostFnN,
     hostFnValues,
     Chr,
+    SessionInput (..),
     Value (..),
 
     -- ** Inspecting runtime values
@@ -140,6 +147,8 @@ import YCHR.Convert
 import YCHR.Run
   ( CompiledProgram,
     Error (..),
+    SessionInput (..),
+    StdLib,
     Warning (..),
     compileFiles,
     compileModules,

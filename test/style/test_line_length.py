@@ -18,7 +18,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Roots under which Haskell sources are checked.
-SOURCE_ROOTS = ("src", "test", "app", "bench")
+SOURCE_ROOTS = ("src", "embed", "test", "app", "bench")
 
 # Hard limit. The style guide phrases the rule as "roughly 90
 # characters"; the test allows a small margin so authors are not nagged

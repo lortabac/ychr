@@ -9,6 +9,7 @@ import System.Directory (createDirectoryIfMissing)
 import System.Exit (exitFailure)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hPutStr, stderr)
+import YCHR.Embedded (stdlib, typeCheckerProgram)
 import YCHR.Internal.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
 import YCHR.Internal.Backend.SchemeDriver (generateDriver)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
@@ -177,7 +178,8 @@ main :: IO ()
 main = do
   cmd <- execParser (info (commandParser <**> helper) (fullDesc <> progDesc "CHR compiler"))
   case cmd of
-    Repl opts files -> Repl.runRepl hostCalls opts.quiet opts.werror files
+    Repl opts files ->
+      Repl.runRepl stdlib typeCheckerProgram hostCalls opts.quiet opts.werror files
     Run opts files -> runGoal opts files
     Compile opts files -> runCompile opts files
     GenDriver opts files -> runGenDriver opts files
@@ -197,7 +199,8 @@ runGoal opts files = withCompiled False files $ \prog warnings -> do
     Right (constraint, goalWarnings) -> do
       printWarnings goalWarnings
       exitOnWerror opts.werror (warnings ++ typeWarnings ++ goalWarnings)
-      outcome <- try @SomeException (runPreparedGoal prog hostCalls constraint)
+      outcome <-
+        try @SomeException (runPreparedGoal typeCheckerProgram prog hostCalls constraint)
       case outcome of
         Left exc -> reportErrorAndExit exc
         Right bindings ->
@@ -309,22 +312,26 @@ schemeRuntimeNote =
 -- pass the resulting 'CompiledProgram' and warnings to the
 -- continuation. On compilation failure, print the diagnostic to
 -- stdout and exit non-zero — the continuation does not run.
+--
+-- The 'Bool' is @includeStdlib@; 'stdlib' is the embedded standard
+-- library supplied to every compile (see "YCHR.Embedded").
 withCompiled :: Bool -> [FilePath] -> (CompiledProgram -> [Warning] -> IO ()) -> IO ()
-withCompiled stdlib files k = do
-  result <- compileFiles stdlib files
+withCompiled includeStdlib files k = do
+  result <- compileFiles stdlib includeStdlib files
   case result of
     Left err -> do
       putStr (displayMsg err)
       exitFailure
     Right (prog, warnings) -> k prog warnings
 
--- | Type-check the compiled program. If errors are found, print them
--- to stderr and exit non-zero. Otherwise print the type-check warnings
--- and return them, so the caller can fold them into its @--Werror@
--- decision together with the compile-time warnings.
+-- | Type-check the compiled program with the embedded type-checker. If
+-- errors are found, print them to stderr and exit non-zero. Otherwise
+-- print the type-check warnings and return them, so the caller can
+-- fold them into its @--Werror@ decision together with the compile-time
+-- warnings.
 typeCheckOrExit :: CompiledProgram -> IO [Warning]
 typeCheckOrExit prog = do
-  result <- typeCheckProgram prog.desugaredProgram
+  result <- typeCheckProgram typeCheckerProgram prog.desugaredProgram
   unless (null result.errors) $ do
     mapM_ (hPutStr stderr . displayMsg) result.errors
     exitFailure

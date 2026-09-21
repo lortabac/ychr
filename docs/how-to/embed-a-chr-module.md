@@ -104,7 +104,7 @@ a Template Haskell splice, compiles it once, and runs one
 `runQueryCompiled` per term:
 
 ```haskell
-cp <- case compileModules True [(stlcPath, embeddedSource)] of
+cp <- case compileModules stdlib True [(stlcPath, embeddedSource)] of
         Right (cp, _warnings) -> pure cp
         Left err              -> fail (displayError err)
 
@@ -116,3 +116,72 @@ All of it — `compileModules`, `CompiledProgram`, `runQueryCompiled`,
 `ToTerm`/`FromTerm`, `compound`/`decodeSum`/`argAt` — is one
 `import YCHR`. For a `.chr` file on disk use `compileFiles`. Variants:
 [convert.md §Reusing a compiled program](../reference/convert.md#reusing-a-compiled-program).
+
+## 5. Supplying the resources
+
+The `ychr` library embeds nothing at compile time. Its two
+compile-time resources are explicit arguments, because they are needed
+at different points and a MicroHs build has no Template Haskell to bake
+them in:
+
+| resource | type | who needs it |
+|---|---|---|
+| the standard library | `StdLib` (`YCHR.Internal.StdLib`) | every entry point that compiles: `compileModules`, `compileFiles`, `compileParsedModules`, `compileTypeCheckerModules`, the three `runQuery*` variants and the two `runDSL*` variants |
+| the type-checker | `SessionInput` (`YCHR.Internal.Runtime.Session`) | every entry point that type-checks: `typeCheckProgram`, `typeCheckGoals`, `prepareQuery`, `runPreparedGoal`, `runProgramWithGoal`, `runProgramWithQuery` |
+
+`YCHR.Internal.Repl.runRepl` takes both, since it compiles the inputs and
+prints type diagnostics on load.
+
+Each is built once, from the bundled sources, and reused. A minimal
+`Resources.hs` for a GHC embedder that wants a self-contained binary:
+
+```haskell
+{-# LANGUAGE TemplateHaskell #-}
+
+module Resources (stdlib, typeCheckerProgram) where
+
+import Data.List (sort)
+import Data.Text (Text)
+import Data.Text.IO qualified as TIO
+import Language.Haskell.TH (Exp, Q)
+import Language.Haskell.TH.Syntax (lift, runIO)
+import System.Directory (listDirectory)
+import System.FilePath (takeExtension, (</>))
+import YCHR.Internal.Runtime.Session (SessionInput)
+import YCHR.Internal.StdLib (StdLib, parseStdLib)
+import YCHR.Internal.TypeCheck.Compiled (compileTypeCheckerModules)
+
+-- Every *.chr in a directory, sorted, paired with its path and contents.
+chrDirSources :: FilePath -> Q Exp
+chrDirSources dir = do
+  files <-
+    runIO (sort . filter ((== ".chr") . takeExtension) <$> listDirectory dir)
+  pairs <-
+    mapM
+      (\f -> let p = dir </> f in runIO ((p,) <$> TIO.readFile p))
+      files
+  lift (pairs :: [(FilePath, Text)])
+
+stdlib :: StdLib
+stdlib = case parseStdLib $(chrDirSources "libraries") of
+  Right m -> m
+  Left err -> error ("Failed to parse embedded standard library: " ++ show err)
+
+typeCheckerProgram :: SessionInput
+typeCheckerProgram =
+  case compileTypeCheckerModules stdlib $(chrDirSources "typechecker") of
+    Right si -> si
+    Left err -> error ("Failed to compile embedded typechecker: " ++ show err)
+```
+
+(The repository's own copies — one generator module per directory, plus
+[`embed/YCHR/Embedded.hs`](../../embed/YCHR/Embedded.hs) for the two
+splices — also register each file for recompilation with
+`addDependentFile`.)
+
+Without Template Haskell, read the same two directories at run time and
+hand the lists to `parseStdLib` / `compileTypeCheckerModules`. That is
+the path a MicroHs build takes; leave the type-checker binding lazy if
+the program never type-checks (`SessionInput` is only forced on first
+use), and note that the standard library is always needed: the prelude
+is seeded into every compilation.

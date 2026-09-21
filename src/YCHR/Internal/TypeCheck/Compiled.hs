@@ -1,13 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell #-}
 
--- | The pre-compiled YCHR type-checker as a 'SessionInput'.
+-- | Compiling the YCHR type-checker into a 'SessionInput'.
 --
--- The type-checker is itself a CHR program. Its sources are embedded
--- into the binary at compile time via
--- 'YCHR.Internal.TypeCheck.TH.embeddedTypeCheckerSources'; the first
--- reader of 'typeCheckerProgram' pays the compile cost, everyone
--- after gets the memoized 'SessionInput'.
+-- The type-checker is itself a CHR program. Its sources, and the
+-- standard library it imports, are explicit arguments: the @ychr@
+-- library embeds nothing at compile time. The @ychr@ executable's
+-- embedding component (@embed\/YCHR\/Embedded.hs@) splices the two
+-- source lists in and compiles once, lazily, on first demand.
 --
 -- 'compileTypeCheckerModules' is the underlying pure function;
 -- embedders that want explicit control over when (or whether) the
@@ -16,32 +15,20 @@
 module YCHR.Internal.TypeCheck.Compiled
   ( -- * Pure API
     compileTypeCheckerModules,
-
-    -- * Default value (compiled lazily on first demand)
-    typeCheckerProgram,
   )
 where
 
 import Data.Text (Text)
 import YCHR.Internal.Compile.Pipeline (Error, compileModules)
 import YCHR.Internal.Runtime.Session (SessionInput, toSessionInput)
-import YCHR.Internal.TypeCheck.TH (embeddedTypeCheckerSources)
+import YCHR.Internal.StdLib (StdLib)
 
 -- | Compile the YCHR type-checker from its CHR sources — all of them
 -- compiled together as one program. Pure; the @True@ flag passed to
 -- 'compileModules' bundles the standard library (the checker imports
--- @library(lists)@ and friends).
-compileTypeCheckerModules :: [(FilePath, Text)] -> Either Error SessionInput
-compileTypeCheckerModules inputs =
-  case compileModules True inputs of
+-- @library(lists)@ and friends), so the 'StdLib' is required too.
+compileTypeCheckerModules :: StdLib -> [(FilePath, Text)] -> Either Error SessionInput
+compileTypeCheckerModules stdlib inputs =
+  case compileModules stdlib True inputs of
     Left err -> Left err
     Right (cp, _warnings) -> Right (toSessionInput cp)
-
--- | The default compiled type-checker (@typechecker\/@). The sources
--- are embedded at compile time; compilation runs once on first demand.
-typeCheckerProgram :: SessionInput
-typeCheckerProgram =
-  case compileTypeCheckerModules $(embeddedTypeCheckerSources) of
-    Left err ->
-      error ("Failed to compile embedded typechecker: " ++ show err)
-    Right si -> si

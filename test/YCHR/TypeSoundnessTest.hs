@@ -108,6 +108,7 @@ import Hedgehog.Internal.Property (CoverPercentage, LabelName)
 import System.Timeout (timeout)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Hedgehog (testProperty)
+import YCHR.Embedded (stdlib, typeCheckerProgram)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (Display (..))
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
@@ -163,7 +164,7 @@ soundnessProperty mode = do
       src = renderModule prog
       query = renderQuery prog
   coverShape mode prog
-  cp <- case compileModules False [("gen.chr", src)] of
+  cp <- case compileModules stdlib False [("gen.chr", src)] of
     Left err -> annotate ("compile error: " ++ displayMsg (err :: Error)) >> failure
     Right (cp, ws) -> do
       -- A generated module contains no partial function and no
@@ -173,7 +174,7 @@ soundnessProperty mode = do
       mapM_ (annotate . ("compile warning: " ++) . displayMsg) ws
       unless (null ws) failure
       pure cp
-  tc <- evalIO (typeCheckProgram cp.desugaredProgram)
+  tc <- evalIO (typeCheckProgram typeCheckerProgram cp.desugaredProgram)
   mapM_ (annotate . ("typecheck warning: " ++) . displayMsg) tc.warnings
   mapM_ (annotate . ("type error: " ++) . displayMsg) tc.errors
   unless (null tc.warnings && null tc.errors) failure
@@ -183,7 +184,7 @@ soundnessProperty mode = do
       ( timeout
           runBudgetMicros
           ( try @SomeException
-              (runProgramWithQuery cp (observerRegistry prog.obs ref) query)
+              (runProgramWithQuery typeCheckerProgram cp (observerRegistry prog.obs ref) query)
           )
       )
   -- The log is read before anything else is decided, so a violation is

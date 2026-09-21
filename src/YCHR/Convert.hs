@@ -56,6 +56,7 @@ module YCHR.Convert
     withDefaultHostFunctions,
 
     -- * Typed query wrapper
+    StdLib,
     runQuery,
     runQueryWith,
     runQueryWithHostCallRegistry,
@@ -82,6 +83,7 @@ import YCHR.Internal.Runtime.Monad (Chr)
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), HostCallRegistry, baseHostCallRegistry)
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
 import YCHR.Internal.Runtime.Types (Value (..))
+import YCHR.Internal.StdLib (StdLib)
 import YCHR.Internal.VM qualified as VM
 import YCHR.Run
   ( CompiledProgram,
@@ -416,36 +418,41 @@ what the compiled head patterns match.
 -- export never matches a rule — see Note [Goal argument canonicalization].
 -- Compilation and rename failures are thrown as 'Error'; decoding failures
 -- come back as 'Left'.
-runQuery :: (FromTerm a) => [Module] -> Term -> Text -> IO (Either ConvertError a)
-runQuery modules goal v = runQueryWith modules goal (decodeVar v)
+--
+-- The 'StdLib' is an explicit input: the @ychr@ library embeds nothing at
+-- compile time. See 'YCHR.Internal.StdLib.parseStdLib'.
+runQuery :: (FromTerm a) => StdLib -> [Module] -> Term -> Text -> IO (Either ConvertError a)
+runQuery stdlib modules goal v = runQueryWith stdlib modules goal (decodeVar v)
 
 -- | 'runQuery' with a decoder over the whole binding map (assemble a
 -- record from several 'decodeVar's).
 runQueryWith ::
+  StdLib ->
   [Module] ->
   Term ->
   (Map Text Term -> Either ConvertError a) ->
   IO (Either ConvertError a)
-runQueryWith = runQueryWithHostCallRegistry defaultHostCallRegistry
+runQueryWith stdlib = runQueryWithHostCallRegistry stdlib defaultHostCallRegistry
 
 -- | 'runQueryWith' with an explicit host-call registry.
 runQueryWithHostCallRegistry ::
+  StdLib ->
   HostCallRegistry ->
   [Module] ->
   Term ->
   (Map Text Term -> Either ConvertError a) ->
   IO (Either ConvertError a)
-runQueryWithHostCallRegistry hostCalls modules goal decode =
+runQueryWithHostCallRegistry stdlib hostCalls modules goal decode =
   -- Goal shape first, so a malformed goal is reported as data without
   -- compiling (or throwing).
   case goalConstraint goal of
     Left err -> pure (Left err)
     Right _ -> do
-      cp <- compileOrThrow modules
+      cp <- compileOrThrow stdlib modules
       runQueryCompiledWithHostCallRegistry hostCalls cp goal decode
 
-compileOrThrow :: [Module] -> IO CompiledProgram
-compileOrThrow modules = case compileParsedModules True modules of
+compileOrThrow :: StdLib -> [Module] -> IO CompiledProgram
+compileOrThrow stdlib modules = case compileParsedModules stdlib True modules of
   Left err -> throwIO (err :: Error)
   Right (cp, _warnings) -> pure cp
 

@@ -11,6 +11,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, assertFailure, testCase, (@?=))
+import YCHR.Embedded (stdlib)
 import YCHR.Internal.Compile (maxCallArity)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.VM qualified as VM
@@ -32,7 +33,7 @@ tests =
 -- ---------------------------------------------------------------------------
 
 compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
-compileOrFail inputs = case compileModules False inputs of
+compileOrFail inputs = case compileModules stdlib False inputs of
   Left err -> assertFailure $ show err
   Right (cp, _) -> pure cp
 

@@ -12,7 +12,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
-import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), Error, compileModules)
+import YCHR.Embedded (stdlib, typeCheckerProgram)
+import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.TypeCheck (typeCheckProgram)
@@ -20,15 +21,16 @@ import YCHR.Internal.TypeCheck.Error
   ( TypeCheckResult (..),
     TypeCheckWarning (..),
   )
+import YCHR.Run (Error, compileModules)
 
 -- | Compile a single-module program and type-check it, returning the
 -- error payloads' rendered shapes and the warning payloads.
 checkModule :: Text -> IO ([String], [TypeCheckWarning])
 checkModule src =
-  case compileModules False [("test.chr", src)] of
+  case compileModules stdlib False [("test.chr", src)] of
     Left err -> assertFailure ("unexpected compile error: " ++ show (err :: Error))
     Right (prog, _) -> do
-      result <- typeCheckProgram prog.desugaredProgram
+      result <- typeCheckProgram typeCheckerProgram prog.desugaredProgram
       pure
         ( [show payload | Diagnostic _ (AnnP payload _ _) <- result.errors],
           [payload | Diagnostic _ (AnnP payload _ _) <- result.warnings]
