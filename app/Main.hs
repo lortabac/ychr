@@ -11,13 +11,14 @@ import System.Directory (createDirectoryIfMissing)
 import System.Exit (exitFailure)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hPutStr, stderr)
-import YCHR.Embedded (stdlib, typeCheckerProgram)
+import YCHR.Embedded (loadResources)
 import YCHR.Internal.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
 import YCHR.Internal.Backend.SchemeDriver (generateDriver)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Pretty (prettyBindings)
 import YCHR.Internal.Repl qualified as Repl
+import YCHR.Internal.Resources (Resources (..))
 import YCHR.Internal.Runtime.Interpreter (HostCallRegistry)
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckProgram)
@@ -178,31 +179,61 @@ commandParser =
 
 main :: IO ()
 main = do
-  cmd <- execParser (info (commandParser <**> helper) (fullDesc <> progDesc "CHR compiler"))
+  -- Parse before loading: '--help' and usage errors must not need a
+  -- resource tree, which under MicroHs would otherwise fail a bare
+  -- @ychr --help@ run from outside a YCHR source tree
+  -- (dev-docs/MICROHS_GAPS.md, gap 5).
+  --
+  -- No 'fullDesc' modifier: it has been an effect-free modifier since
+  -- optparse-applicative 0.8, and the post-0.19 source MicroHs builds
+  -- from has dropped it (dev-docs/MICROHS_GAPS.md, gap 9).
+  cmd <- execParser (info (commandParser <**> helper) (progDesc "CHR compiler"))
+  resources <- loadResourcesOrExit
   case cmd of
     Repl opts files ->
-      Repl.runRepl stdlib typeCheckerProgram hostCalls opts.quiet opts.werror files
-    Run opts files -> runGoal opts files
-    Compile opts files -> runCompile opts files
-    GenDriver opts files -> runGenDriver opts files
-    Check opts files -> runCheck opts files
+      Repl.runRepl
+        resources.stdlib
+        resources.typeCheckerProgram
+        hostCalls
+        opts.quiet
+        opts.werror
+        files
+    Run opts files -> runGoal resources opts files
+    Compile opts files -> runCompile resources opts files
+    GenDriver opts files -> runGenDriver resources opts files
+    Check opts files -> runCheck resources opts files
+
+-- | Load the two resources the CLI runs on. Under GHC they are the
+-- values embedded at build time and this cannot fail; under MicroHs they
+-- are read from disk once the command line has been parsed
+-- (@dev-docs\/MICROHS_GAPS.md@, gap 5), so a misconfigured
+-- 'YCHR_LIB_DIR' is reported here, before the command runs.
+loadResourcesOrExit :: IO Resources
+loadResourcesOrExit = do
+  result <- loadResources
+  case result of
+    Left err -> do
+      hPutStr stderr ("Error: " ++ T.unpack err ++ "\n")
+      exitFailure
+    Right resources -> pure resources
 
 -- ---------------------------------------------------------------------------
 -- Subcommands
 -- ---------------------------------------------------------------------------
 
-runGoal :: RunOpts -> [FilePath] -> IO ()
-runGoal opts files = withCompiled False files $ \prog warnings -> do
+runGoal :: Resources -> RunOpts -> [FilePath] -> IO ()
+runGoal resources opts files = withCompiled resources False files $ \prog warnings -> do
   printWarnings warnings
-  typeWarnings <- typeCheckOrExit prog
+  typeWarnings <- typeCheckOrExit resources prog
   prepResult <- try @SomeException (prepareGoal prog opts.goal)
   case prepResult of
     Left exc -> reportErrorAndExit exc
     Right (constraint, goalWarnings) -> do
       printWarnings goalWarnings
       exitOnWerror opts.werror (warnings ++ typeWarnings ++ goalWarnings)
+      let typeChecker = resources.typeCheckerProgram
       outcome <-
-        try @SomeException (runPreparedGoal typeCheckerProgram prog hostCalls constraint)
+        try @SomeException (runPreparedGoal typeChecker prog hostCalls constraint)
       case outcome of
         Left exc -> reportErrorAndExit exc
         Right bindings ->
@@ -214,10 +245,10 @@ runGoal opts files = withCompiled False files $ \prog warnings -> do
         Nothing -> hPutStr stderr ("Error: " ++ displayException exc ++ "\n")
       exitFailure
 
-runCompile :: CompileOpts -> [FilePath] -> IO ()
-runCompile opts files = withCompiled False files $ \prog warnings -> do
+runCompile :: Resources -> CompileOpts -> [FilePath] -> IO ()
+runCompile resources opts files = withCompiled resources False files $ \prog warnings -> do
   printWarnings warnings
-  typeWarnings <- typeCheckOrExit prog
+  typeWarnings <- typeCheckOrExit resources prog
   exitOnWerror opts.werror (warnings ++ typeWarnings)
   let vmp =
         VMProgram
@@ -249,10 +280,10 @@ runCompile opts files = withCompiled False files $ \prog warnings -> do
       putStrLn outPath
       schemeRuntimeNote
 
-runGenDriver :: GenDriverOpts -> [FilePath] -> IO ()
-runGenDriver opts files = withCompiled False files $ \prog warnings -> do
+runGenDriver :: Resources -> GenDriverOpts -> [FilePath] -> IO ()
+runGenDriver resources opts files = withCompiled resources False files $ \prog warnings -> do
   printWarnings warnings
-  typeWarnings <- typeCheckOrExit prog
+  typeWarnings <- typeCheckOrExit resources prog
   -- 'prepareGoal' parses the goal and canonicalizes bare
   -- data-constructor references in its arguments, so they reach the
   -- runtime in the same flat-functor form the compiled head patterns
@@ -284,10 +315,10 @@ runGenDriver opts files = withCompiled False files $ \prog warnings -> do
         Nothing -> hPutStr stderr ("Error: " ++ displayException exc ++ "\n")
       exitFailure
 
-runCheck :: CheckOpts -> [FilePath] -> IO ()
-runCheck opts files = withCompiled False files $ \prog warnings -> do
+runCheck :: Resources -> CheckOpts -> [FilePath] -> IO ()
+runCheck resources opts files = withCompiled resources False files $ \prog warnings -> do
   printWarnings warnings
-  typeWarnings <- typeCheckOrExit prog
+  typeWarnings <- typeCheckOrExit resources prog
   exitOnWerror opts.werror (warnings ++ typeWarnings)
 
 -- ---------------------------------------------------------------------------
@@ -315,25 +346,30 @@ schemeRuntimeNote =
 -- continuation. On compilation failure, print the diagnostic to
 -- stdout and exit non-zero — the continuation does not run.
 --
--- The 'Bool' is @includeStdlib@; 'stdlib' is the embedded standard
--- library supplied to every compile (see "YCHR.Embedded").
-withCompiled :: Bool -> [FilePath] -> (CompiledProgram -> [Warning] -> IO ()) -> IO ()
-withCompiled includeStdlib files k = do
-  result <- compileFiles stdlib includeStdlib files
+-- The 'Bool' is @includeStdlib@; 'resources' supplies the standard
+-- library and the type-checker (see "YCHR.Embedded").
+withCompiled ::
+  Resources ->
+  Bool ->
+  [FilePath] ->
+  (CompiledProgram -> [Warning] -> IO ()) ->
+  IO ()
+withCompiled resources includeStdlib files k = do
+  result <- compileFiles resources.stdlib includeStdlib files
   case result of
     Left err -> do
       putStr (displayMsg err)
       exitFailure
     Right (prog, warnings) -> k prog warnings
 
--- | Type-check the compiled program with the embedded type-checker. If
+-- | Type-check the compiled program with the loaded type-checker. If
 -- errors are found, print them to stderr and exit non-zero. Otherwise
 -- print the type-check warnings and return them, so the caller can
 -- fold them into its @--Werror@ decision together with the compile-time
 -- warnings.
-typeCheckOrExit :: CompiledProgram -> IO [Warning]
-typeCheckOrExit prog = do
-  result <- typeCheckProgram typeCheckerProgram prog.desugaredProgram
+typeCheckOrExit :: Resources -> CompiledProgram -> IO [Warning]
+typeCheckOrExit resources prog = do
+  result <- typeCheckProgram resources.typeCheckerProgram prog.desugaredProgram
   unless (null result.errors) $ do
     mapM_ (hPutStr stderr . displayMsg) result.errors
     exitFailure

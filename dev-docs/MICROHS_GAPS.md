@@ -19,18 +19,22 @@ terse, fix-shaped, removable when closed.
 ## Status
 
 Re-verified against MicroHs `3322c60a` (the checkout's HEAD) and the
-installed `mhs` 0.16.6.0. Eight gaps are recorded; one has closed and
+installed `mhs` 0.16.6.0. Ten gaps are recorded; one has closed and
 been removed from this document. The local workarounds for gaps 1, 3, 4,
-6, 7 and 8 are applied (gaps 4 and 7 also touch the importers, tests
-included; gap 8 is one pair of parentheses), and gap 5's library-side
-workaround is applied too: no Template Haskell remains in `library ychr`
-and no unconditional `template-haskell` dependency remains in
-`ychr.cabal` (see gap 5). With gaps 3, 7 and 8 out of the way,
-`mcabal build` gets past dependency resolution and compiles `library
-ychr` to completion, stopping in the `ychr` executable on gap 5:
-`embed/YCHR/Embedded/StdLib.hs:29` cannot find `Language.Haskell.TH`,
-which is the missing mhs-side resources provider recorded there. Gaps 7
-and 8 were found on the way to that point and are recorded below.
+5, 6, 7, 8 and 9 are applied (gaps 4 and 7 also touch the importers,
+tests included; gap 5 is the run-time resources provider described below;
+gaps 8 and 9 are one pair of parentheses and one no-op modifier
+respectively). Gap 10 has no YCHR-side workaround: it breaks the
+MicroHs-built executable's help screens only. No Template Haskell remains
+in `library ychr`, and the `ychr` executable has a MicroHs twin of the
+compile-time embedder, so `mcabal build` now completes: it builds
+`library ychr` and `exe:ychr`, and the binary reads `libraries/*.chr` and
+`typechecker/*.chr` from `$YCHR_LIB_DIR` (or the current directory) at
+run time. `mcabal build` does not build the test suite, the benchmark or
+the `stlc` example (they need `tasty`/`hedgehog`/`criterion`, which the
+MicroHs package set lacks, and the `examples` flag defaults off), so
+those remain GHC-only. Gaps 7, 8, 9 and 10 were found on the way to that
+point and are recorded below.
 
 | # | Gap | State |
 |---|---|---|
@@ -38,10 +42,12 @@ and 8 were found on the way to that point and are recorded below.
 | 2 | `NoFieldSelectors` silently ignored | open |
 | 3 | Record update on a record-dot expression doesn't parse | open — workaround applied to `src/` (see below) |
 | 4 | Missing `Data.Text` functions | open — workaround applied (`Data.Text.Shim`) |
-| 5 | No `TemplateHaskell` support | open upstream — TH kept out of `library ychr`; the mhs-side resources provider is missing (see below) |
+| 5 | No `TemplateHaskell` support | open upstream — workaround applied: no TH in `library ychr`, and the MicroHs `ychr` loads both resources at run time (see below) |
 | 6 | `mapAccumL` is list-only | open — workaround applied to `src/` (see below) |
 | 7 | `Control.Exception.try` orders its type variables differently from GHC | open — workaround applied (`Control.Exception.Shim`) |
 | 8 | `Data.List` functions lack their fixity declarations | open — workaround applied to `src/` (see below) |
+| 9 | `optparse-applicative`'s `fullDesc` is missing from the MicroHs package | open — workaround applied to `app/Main.hs` (see below) |
+| 10 | `Data.Text.replicate` rejects a zero multiplier | open upstream — no YCHR-side workaround; the MicroHs `ychr` cannot render help (see below) |
 
 `Data.Either.partitionEithers` (formerly gap 5) is now exported by
 MicroHs (`lib/Data/Either.hs:51`) and used directly by
@@ -267,9 +273,11 @@ not on this gap; those now compile as well, since gap 3's workaround
 landed. `Runtime/Monad.hs` sits behind them through
 `Compile.Pipeline`, so its call was checked with the equivalent
 `TrailState` reproducer instead (`ambiguous value: length […]` without
-the qualification, accepted with it). There is still no end-to-end
-check: the library stops on gap 8 before the CLI is reached (gap 7 was
-worked around after this sweep — see gap 7).
+the qualification, accepted with it). There was still no end-to-end
+check at the time: the library stopped on gap 8 before the CLI was
+reached (gap 7 was worked around after this sweep — see gap 7). Both
+have since been closed, and `mcabal build` now builds the CLI too (see
+the Status section).
 The test component is out of reach as well (`tasty` and `hedgehog` are
 not in the MicroHs package set), so
 `test/YCHR/RoundtripTest.hs:159` — the same `.head` collision, on a
@@ -506,9 +514,11 @@ Verified with `mhs -fno-code -isrc`: `Data.Text.Shim` itself plus
 `Runtime/Trace.hs` compile (`No code generated`); before the shim, each
 stopped on `undefined value: T.concatMap` / `Text.last` / `T.breakOn`.
 `Meta.hs` and `Compile.Pipeline` now get past gaps 3 and 4 as well.
-There is still no end-to-end check: the library stops on gap 8 in
-`Display.hs` (gap 7 has since been worked around — see gap 7), and gap
-5's resources provider is missing for the CLI.
+There was still no end-to-end check at the time: the library stopped on
+gap 8 in `Display.hs` (gap 7 has since been worked around — see gap 7),
+and gap 5's resources provider was missing for the CLI. Since closed:
+`mcabal build` now builds both the library and the executable (see the
+Status section).
 
 Deleting `src/Data/Text/Shim.hs`, the importers' `Data.Text.Shim` import
 lines, `test/YCHR/TextShimTest.hs` and its wiring (the shim's
@@ -520,14 +530,14 @@ MicroHs exports the four functions.
 
 ## 5. No `TemplateHaskell` support
 
-> **Re-verified.** Still open upstream — mhs has no staged compilation
-> and never will (see "Root cause"). The YCHR side has changed since the
-> original entry: the `ychr` *library* no longer uses TH at all (its
-> workaround is applied, below). TH is confined to the shared `embed/`
-> source directory, which only the components that want a self-contained
-> GHC binary compile: the `ychr` executable, the test suite, the
-> benchmark and the `stlc` example. What mhs still lacks is a provider
-> for the two resources those components embed.
+> **Re-verified, and now closed on the YCHR side.** Still open upstream —
+> mhs has no staged compilation and never will (see "Root cause"). The
+> `ychr` *library* uses no TH at all, and the `ychr` *executable* has a
+> MicroHs twin of its compile-time embedder, so `mcabal build` now
+> completes and the resulting binary reads both resources from disk at
+> run time. TH is confined to the shared `embed/` source directory, which
+> only the components that want a self-contained GHC binary compile: the
+> `ychr` executable, the test suite, the benchmark and the `stlc` example.
 
 MicroHs is a combinator-based compiler with no staged compilation.
 The `TemplateHaskell` extension is not recognised; modules using it
@@ -576,24 +586,67 @@ the dependency nor the modules: it takes the parsed standard library
 arguments — see
 `docs/how-to/embed-a-chr-module.md#5-supplying-the-resources`.
 
-What remains for mhs is the *provider* for those two values: with no TH,
-a component must read `libraries/` and `typechecker/` from disk and feed
-`parseStdLib` / `compileTypeCheckerModules`, and the executable must
-depend on that provider instead of on `embed/`. Until then mhs can build
-the library but not the CLI.
+The mhs side is the *provider* for those two values:
+`src/mhs/YCHR/Embedded.hs` is the MicroHs twin of
+`embed/YCHR/Embedded.hs`, switched in by the executable's
+`hs-source-dirs` under `if impl(mhs)`. It re-exports a loader that lives
+in the library, so the disk-reading logic is compiler-independent and the
+GHC test suite exercises it:
+
+| file | role |
+|---|---|
+| `src/YCHR/Internal/Resources.hs` | loader: `resourceRoot` (the `YCHR_LIB_DIR` policy), `readChrDir`, `loadResourcesAt`, `loadResources`, and the `Resources` record |
+| `src/mhs/YCHR/Embedded.hs` | re-exports `YCHR.Internal.Resources.loadResources` as the executable's `YCHR.Embedded.loadResources` |
+| `embed/YCHR/Embedded.hs` | GHC twin: `loadResources` returns the compile-time-embedded `stdlib` / `typeCheckerProgram`, and never touches the filesystem |
+
+The executable imports only `YCHR.Embedded (loadResources)` and threads
+the returned `Resources` through its subcommands, so `app/Main.hs` is one
+source file for both compilers. Resources are loaded after the command
+line is parsed, so `--help` and usage errors work without a source tree.
+Under MicroHs a load failure — a bad `YCHR_LIB_DIR`, or a root without
+`libraries/` or `typechecker/` — is printed and exits non-zero before
+that command runs.
+
+The root is `$YCHR_LIB_DIR` when set and non-empty, and the current
+directory otherwise, so running the binary from a YCHR source tree works
+with no configuration. The standard library is parsed eagerly (every
+compilation needs it, and a bad root should be reported before any work
+starts); the type-checker is compiled lazily, exactly as the GHC
+embedder's thunk is. That laziness buys the CLI nothing in practice —
+`run`, `compile`, `gen-driver` and `check` all type-check the program,
+and the REPL does so on load, or on the first query in quiet mode — but
+it keeps both providers' failure modes identical, and an embedder that
+never type-checks (the `stlc` example) still never pays for it. A
+type-checker that fails to compile surfaces as a Haskell `error` when
+first forced, exactly as the GHC embedder does. `readChrDir` filters and
+sorts `.chr`, and reports a directory that is missing, holds no `.chr`
+sources, cannot be listed, or holds an unreadable source as a plain
+error.
 
 Verified on this revision:
 
-- `mcabal build` no longer aborts during dependency resolution. It
-  resolves the package and starts on `library ychr`, stopping on gap 7 in
-  `Runtime/Interpreter.hs:870` — with gap 3 applied, the first failure
-  has moved on again, and it is a known, unrelated gap rather than
-  `dependency not installed: template-haskell`. (Gaps 7 and 8 have since
-  been worked around: the library now compiles, and the build stops in
-  the `ychr` executable on the missing provider described above.)
-- `mhs -fno-code -isrc YCHR.Internal.StdLib` prints "No code generated":
-  the new `StdLib` newtype and `parseStdLib` are mhs-clean.
-- The four embedding components are GHC-only: their `template-haskell`
+- `mcabal build` completes: it builds `library ychr` and `exe:ychr`. The
+  executable is compiled with `-iapp -isrc/mhs` (not `-iembed`), so
+  `Language.Haskell.TH` is never reached.
+- `dist-mcabal/bin/mhs/ychr run --show-bindings -g 'order:leq(X, X)'
+  test/golden/leq/leq.chr` prints `X = _`, both with `YCHR_LIB_DIR=$PWD`
+  and, from the repo root, with the variable unset. `repl`, `compile`,
+  `gen-driver` and `check` work too; `--help` and usage-error screens
+  trip gap 10, which is unrelated to the resources.
+- A wrong root is reported:
+  `YCHR_LIB_DIR=/nonexistent … ychr check …` prints
+  `Error: resource directory not found: /nonexistent/libraries (set
+  YCHR_LIB_DIR to the YCHR source tree, or run ychr from it)` and exits
+  non-zero.
+- GHC is unchanged: `cabal build all` (`-Werror`) and `make test` are
+  green, and `YCHR.ResourcesTest` compares the modules the run-time
+  loader parses with the ones the embedder baked in, so the half of the
+  MicroHs path that is compiler-independent is covered by the GHC suite.
+  `mhs -fno-code -isrc YCHR.Internal.StdLib` still prints "No code
+  generated"; the new library module adds only `Data.Text.IO`,
+  `System.Directory`, `System.Environment` and `System.FilePath` to the
+  imports the library already compiles under mhs.
+- The executable's TH modules are GHC-only: their `template-haskell`
   dependency sits under `if impl(ghc)`, so nothing in the mhs dependency
   graph pulls TH in. The library's own module list no longer mentions
   the former `YCHR.Internal.StdLib.TH` / `YCHR.Internal.TypeCheck.TH`.
@@ -822,10 +875,10 @@ Verified on this revision:
   with `try @SomeException` and `try @IOException`, and both reject
   `try @Int` with `Cannot satisfy constraint: Exception Int` — i.e. the
   type application binds the exception variable on both.
-- `mcabal build`: gets past `Runtime/Interpreter.hs:872` and stops on
+- `mcabal build`: got past `Runtime/Interpreter.hs:872` and stopped on
   gap 8 in `Display.hs:888` (`Cannot satisfy constraint: Bool ~ [Text]`).
-  Gap 8 has since been worked around, so the build now compiles the
-  library and moves on to the executable; see the Status section.
+  Gap 8 has since been worked around, and gap 5's provider has landed
+  too, so the build now completes; see the Status section.
 
 Delete the module (and revert the 13 imports) once MicroHs orders `try`
 the way `base` does.
@@ -914,13 +967,133 @@ Verified:
   to `&&`/`||`/`$`, which sit at or below `infix 4`, so both compilers
   build the same tree. Unlike the first sweep, this one covers `app/`,
   `test/`, `bench/` and `embed/`.
-- `mcabal build` now compiles `library ychr` to completion and moves on
-  to the `ychr` executable, where it stops on gap 5's missing resources
+- `mcabal build` then compiled `library ychr` to completion and moved on
+  to the `ychr` executable, where it stopped on gap 5's missing resources
   provider (`embed/YCHR/Embedded/StdLib.hs:29` cannot find
-  `Language.Haskell.TH`) rather than on a fixity site.
+  `Language.Haskell.TH`) rather than on a fixity site. Since closed:
+  gap 5's provider is in place and the build completes (see the Status
+  section).
 
 Remove the parentheses once MicroHs declares the fixity for
 `Data.List.elem`; the comment can go with them.
+
+
+## 9. `optparse-applicative`'s `fullDesc` is missing from the MicroHs package
+
+> **New; found while making the `ychr` executable build under MicroHs.**
+> The workaround is applied to `app/Main.hs`; what remains open is the
+> package the MicroHs package set ships.
+
+`mcabal build` reaches the CLI once gaps 1–8 are worked around, and then
+stops on the first line of `app/Main.hs`'s `main`:
+
+```
+mhs: uncaught exception: error: "app/Main.hs": line 183, col 56:
+  undefined value: fullDesc
+```
+
+`Options.Applicative` is in the MicroHs package set as
+`optparse-applicative-0.19.0.0`, but the source behind it is a git
+checkout of the branch that became 0.20 (`~/.mcabal/packages/…` is a
+`.git` clone whose `CHANGELOG.md` already carries the 0.20.0.0 entry
+"Remove `fullDesc` and `briefDesc` builder modifiers – they have not had
+an effect since version 0.8", while its `.cabal` file still says
+`version: 0.19.0.0`). The *released* 0.19.0.0 that GHC builds against
+still exports both names, which is why the GHC build compiles unchanged.
+
+### Upstream fix sketch
+
+Point the package-set entry at the released 0.19.0.0 rather than a branch
+checkout (or bump it once 0.20.0.0 is released). Both names are no-ops,
+so either way the two sides agree.
+
+### Local workaround (applied)
+
+`app/Main.hs` writes the `ParserInfo` without the modifier:
+
+```haskell
+cmd <- execParser (info (commandParser <**> helper) (progDesc "CHR compiler"))
+```
+
+`fullDesc` is an effect-free `InfoMod`: the CHANGELOG above records that
+it has had no effect since 0.8, and the next release removes it outright,
+so dropping it is a no-op under GHC: the help output is unchanged.
+
+Verified:
+
+- Reproducer: `mhs -fno-code` on a module importing `fullDesc` from
+  either `Options.Applicative` or `Options.Applicative.Builder` fails
+  with `not exported: fullDesc`; the same module without it prints
+  "No code generated". ([Hackage's 0.19.0.0
+  `Options.Applicative.Builder`](https://hackage-content.haskell.org/package/optparse-applicative-0.19.0.0/docs/src/Options.Applicative.Builder.html)
+  does list `fullDesc` and `briefDesc`, so this is the package set's
+  checkout, not the release.)
+- `mcabal build` gets past `app/Main.hs` once the modifier is gone.
+- GHC: `cabal build all` (`-Werror`) and `make test` are green, so the
+  dropped no-op changed no behaviour.
+
+
+## 10. `Data.Text.replicate` rejects a zero multiplier
+
+> **New; found while smoke-testing the first working MicroHs-built
+> `ychr`.** No YCHR-side workaround: it breaks help rendering only.
+
+The MicroHs-built `ychr` runs `repl`, `run`, `compile`, `gen-driver` and
+`check`, but every help or usage screen dies after its first line:
+
+```
+$ YCHR_LIB_DIR=$PWD dist-mcabal/bin/mhs/ychr --help
+Usage: dist-mcabal/bin/mhs/ychr [COMMAND | [--quiet] [--Werror] [FILES...]]
+
+dist-mcabal/bin/mhs/ychr: uncaught exception: error: "./Data/Monoid/Internal.hs",260:19:
+  stimes: positive multiplier expected
+```
+
+MicroHs defines `Data.Text.replicate` as `stimes`
+(`MicroHs/lib/Data/Text.hs:134`), and its `Semigroup Text` instance
+(`:83`) keeps the class default, which rejects a non-positive multiplier
+(`lib/Data/Monoid/Internal.hs:259-260`). GHC's `Data.Text.replicate`
+returns `""` for `n <= 0` instead. optparse-applicative renders help
+through prettyprinter-ansi-terminal, whose terminal renderer indents
+every line with `T.replicate i " "`
+(`prettyprinter-ansi-terminal/src/Prettyprinter/Render/Terminal/Internal.hs:151,207`),
+and an unindented line has `i = 0` — so the first unindented line after
+the usage header throws. `ychr --bogus` fails the same way while
+rendering the error screen.
+
+Reproducer:
+
+```haskell
+import Data.Text qualified as T
+
+main = print (T.replicate 0 (T.pack "ab"), T.replicate 2 (T.pack "ab"))
+-- mhs: uncaught exception: error: stimes: positive multiplier expected
+-- GHC: ("","abab")
+```
+
+### Upstream fix sketch
+
+Make `replicate n t` return `empty` for `n <= 0`, as GHC's `text` does,
+or give `Semigroup Text` a `stimes` that handles a zero multiplier —
+`stimesMonoid`, already used elsewhere in `Data/Monoid/Internal.hs:239`,
+has the `EQ -> mempty` case. `Data.Text.Lazy` has the same shape
+(`lib/Data/Text/Lazy.hs:146-147`) but only errors for a negative count,
+so the strict `Text` is the one to fix.
+
+### Local workaround
+
+None. The call is inside optparse-applicative's help renderer, which YCHR
+cannot reach or replace, and shadowing mhs's `Data.Text` from the package
+would be worse than the bug. The commands themselves do not render help,
+so the CLI is usable; only `--help` (top-level or per-subcommand) and
+usage-error screens are affected.
+
+Verified:
+
+- Reproducer above; the same module prints `("","abab")` under GHC.
+- `YCHR_LIB_DIR=$PWD dist-mcabal/bin/mhs/ychr run --show-bindings -g
+  'order:leq(X, X)' test/golden/leq/leq.chr` prints `X = _`, and
+  `repl --quiet` on EOF exits 0; neither renders help.
 
 
 ## Out of scope (not gaps, just noted)

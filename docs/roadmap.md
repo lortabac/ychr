@@ -120,4 +120,7 @@ what is planned.
 
 ## Development
 
-- [ ] MicroHs compatibility
+- [ ] MicroHs compatibility. `mcabal build` now builds the library and
+      the `ychr` CLI, and the binary's commands run against resources
+      read at run time; the divergences that remain are tracked in
+      [dev-docs/MICROHS_GAPS.md](../dev-docs/MICROHS_GAPS.md).

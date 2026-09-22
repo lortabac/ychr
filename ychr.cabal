@@ -125,21 +125,32 @@ common deps
 executable ychr
     import:           warnings, deps
     main-is:          Main.hs
-    -- The shared 'embed/' sources hold the Template Haskell embedding of
-    -- libraries/*.chr and typechecker/*.chr. They are deliberately not
-    -- part of the 'ychr' library, which takes the parsed standard
-    -- library and the compiled type-checker as explicit inputs instead
-    -- (see dev-docs/MICROHS_GAPS.md, gap 5).
+    -- 'YCHR.Embedded' is this component's resources provider. It has one
+    -- implementation per compiler, switched by 'hs-source-dirs':
+    --
+    --  * GHC compiles 'embed/YCHR/Embedded.hs', which splices
+    --    libraries/*.chr and typechecker/*.chr into the binary with
+    --    Template Haskell (self-contained, no run-time lookup);
+    --  * MicroHs has no Template Haskell (dev-docs/MICROHS_GAPS.md,
+    --    gap 5), so it compiles 'src/mhs/YCHR/Embedded.hs' instead:
+    --    the same 'loadResources' entry point, backed by the library's
+    --    'YCHR.Internal.Resources' reading $YCHR_LIB_DIR (or the current
+    --    directory) at run time.
+    --
+    -- 'app/Main.hs' imports only 'loadResources', so it is one source
+    -- file for both compilers.
     other-modules:    YCHR.Embedded
-                    , YCHR.Embedded.StdLib
-                    , YCHR.Embedded.TypeCheck
     build-depends:    ychr
                     , directory >=1.3 && <1.4
                     , optparse-applicative >=0.17 && <0.20
     hs-source-dirs:   app
-                    , embed
     if impl(ghc)
-        build-depends: template-haskell >=2.20 && <2.24
+        hs-source-dirs:   embed
+        other-modules:    YCHR.Embedded.StdLib
+                        , YCHR.Embedded.TypeCheck
+        build-depends:    template-haskell >=2.20 && <2.24
+    if impl(mhs)
+        hs-source-dirs:   src/mhs
     default-language: GHC2021
 
 -- End-to-end example: a Haskell program that embeds a CHR module.
@@ -184,6 +195,7 @@ test-suite ychr-tests
                     , YCHR.PExprTest
                     , YCHR.PrettyTest
                     , YCHR.RenameTest
+                    , YCHR.ResourcesTest
                     , YCHR.RoundtripTest
                     , YCHR.TextShimTest
                     , YCHR.TypeCheckTest
@@ -300,6 +312,7 @@ library
                     , YCHR.Internal.TypeCheck.Compiled
                     , YCHR.Internal.Resolve
                     , YCHR.Internal.Resolved
+                    , YCHR.Internal.Resources
                     , YCHR.Internal.VM
                     , YCHR.Internal.VM.Types
                     , YCHR.Internal.VM.SExpr
@@ -328,9 +341,12 @@ library
 
     hs-source-dirs:   src
 
-    -- Per-compiler line-input backend. The 'YCHR.Internal.LineInput' module
-    -- lives in 'src/ghc/' under GHC (wraps 'haskeline') and in
-    -- 'src/mhs/' under MicroHs (bare 'getLine').
+    -- Per-compiler sources. Under GHC, 'src/ghc/' supplies the
+    -- haskeline-backed 'YCHR.Internal.LineInput' and the Generic-derivation
+    -- helpers; under MicroHs, 'src/mhs/' supplies the bare-'getLine'
+    -- 'YCHR.Internal.LineInput'. The executable's own MicroHs overlay
+    -- ('src/mhs/YCHR/Embedded.hs', the run-time resources provider) lives
+    -- there too and is listed in its stanza below.
     if impl(ghc)
         hs-source-dirs:   src/ghc
         build-depends:    haskeline >=0.8 && <0.9

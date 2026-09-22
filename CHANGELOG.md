@@ -26,6 +26,23 @@ source directory (`YCHR.Embedded`), so `library ychr` no longer depends
 on `template-haskell`. See
 [the embedding guide](docs/how-to/embed-a-chr-module.md#5-supplying-the-resources).
 
+The `ychr` executable now builds and runs under MicroHs, where the last
+Template Haskell holdout on its path has a run-time twin. `YCHR.Embedded`
+gained `loadResources :: IO (Either Text Resources)`, implemented two ways
+and switched by `hs-source-dirs` in `ychr.cabal`: GHC keeps the splice and
+returns the compile-time values, while MicroHs compiles the new
+`src/mhs/YCHR/Embedded.hs`, which re-exports the loader in the new library
+module `YCHR.Internal.Resources`. That loader reads `libraries/*.chr` and
+`typechecker/*.chr` under `$YCHR_LIB_DIR`, or the current directory when
+the variable is unset or empty, so a MicroHs-built `ychr` must run from a
+YCHR source tree or be pointed at one. The CLI loads its resources once,
+after parsing its command line (so `--help` needs no source tree), and
+threads them through its subcommands; the GHC binary still consults no
+directory at run time. Under MicroHs the commands work, but help and
+usage screens still trip an unrelated MicroHs bug in
+`Data.Text.replicate` (dev-docs/MICROHS_GAPS.md, gap 10). See
+[the embedding guide](docs/how-to/embed-a-chr-module.md#5-supplying-the-resources).
+
 Breaking: the wildcard is gone from the runtime. `YCHR.Run.Value` no
 longer has a `VWildcard` constructor, the VM `Literal` type no longer
 has `WildcardLit`, the serialized `.vm` format no longer accepts a

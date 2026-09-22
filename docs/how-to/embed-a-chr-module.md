@@ -180,8 +180,17 @@ splices — also register each file for recompilation with
 `addDependentFile`.)
 
 Without Template Haskell, read the same two directories at run time and
-hand the lists to `parseStdLib` / `compileTypeCheckerModules`. That is
-the path a MicroHs build takes; leave the type-checker binding lazy if
-the program never type-checks (`SessionInput` is only forced on first
-use), and note that the standard library is always needed: the prelude
-is seeded into every compilation.
+hand the lists to `parseStdLib` / `compileTypeCheckerModules`. The
+library ships that loop as
+[`YCHR.Internal.Resources`](../../src/YCHR/Internal/Resources.hs):
+`loadResources` looks the sources up under `$YCHR_LIB_DIR`, or the
+current directory when that variable is unset or empty — point it at a
+YCHR source tree (the directory holding `libraries/` and `typechecker/`).
+This is the path the MicroHs build takes: the `ychr` executable's
+`YCHR.Embedded` has a MicroHs twin
+([`src/mhs/YCHR/Embedded.hs`](../../src/mhs/YCHR/Embedded.hs)) that
+re-exports `loadResources`, while the GHC one returns the values its
+splice baked in and touches no filesystem. Keep the type-checker binding
+lazy if the program never type-checks (`SessionInput` is only forced on
+first use), and note that the standard library is always needed: the
+prelude is seeded into every compilation.
