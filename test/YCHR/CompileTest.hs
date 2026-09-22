@@ -23,6 +23,7 @@ tests =
     "YCHR.Internal.Compile"
     [ indexConditionPushdownTests,
       passiveOccurrencesTests,
+      distinctnessElisionTests,
       boolPatternTests,
       softGuardWrapTests,
       callDispatchTests
@@ -258,6 +259,49 @@ passiveOccurrencesTests =
         isJust (findProcedure prog n)
 
 -- ---------------------------------------------------------------------------
+-- Constraint-id distinctness elision
+-- ---------------------------------------------------------------------------
+
+-- | Two rules, one across constraint types and one within a single type.
+-- @cross@'s partner can never be the same suspension as its active
+-- constraint, so the generated distinctness test is statically true and
+-- must be dropped; @same@'s partner can be, so its test must survive.
+distinctnessSource :: Text
+distinctnessSource =
+  ":- module(m, [p/1, q/1, r/2]).\n\
+  \:- chr_constraint p/1, q/1, r/2.\n\
+  \cross @ p(X), q(Y) <=> true.\n\
+  \same  @ r(X, Y), r(Y, Z) <=> true.\n"
+
+distinctnessElisionTests :: TestTree
+distinctnessElisionTests =
+  testGroup
+    "Constraint-id distinctness elision"
+    [ testCase "a partner of a different constraint type needs no test" $ do
+        prog <- compileOrFail [("m.chr", distinctnessSource)]
+        assertBool "occurrence_m__p1_1 must not test id distinctness" $
+          not (hasIdEqual prog "occurrence_m__p1_1")
+        assertBool "occurrence_m__q1_1 must not test id distinctness" $
+          not (hasIdEqual prog "occurrence_m__q1_1"),
+      testCase "a partner of the same constraint type keeps its test" $ do
+        prog <- compileOrFail [("m.chr", distinctnessSource)]
+        -- Reciprocal to the test above: if the compiler ever stopped
+        -- emitting distinctness tests altogether, the previous case
+        -- would still pass and this one would fail.
+        assertBool "occurrence_m__r2_1 must test id distinctness" $
+          hasIdEqual prog "occurrence_m__r2_1"
+        assertBool "occurrence_m__r2_2 must test id distinctness" $
+          hasIdEqual prog "occurrence_m__r2_2"
+    ]
+  where
+    hasIdEqual prog procName =
+      case findProcedure prog procName of
+        Nothing -> error ("procedure not found: " ++ show procName)
+        Just p -> any isIdEqual (ifConditions p.body)
+    isIdEqual (VM.BIdEqual _ _) = True
+    isIdEqual _ = False
+
+-- ---------------------------------------------------------------------------
 -- Boolean constructors in pattern position
 -- ---------------------------------------------------------------------------
 
@@ -393,7 +437,22 @@ callDispatchTests =
                 []
                 (closureArities prog n)
           )
-          [1, 2, 4, 5, 6, 7, 8, 9, 10]
+          [1, 2, 4, 5, 6, 7, 8, 9, 10],
+      testCase "each function-reference shape test is hoisted once" $ do
+        -- Every fun-ref branch in call_2 used to re-test the
+        -- '/'(Name, Arity) shape and re-test the arity. Both are now one
+        -- shared guard wrapping the whole fun-ref block, so exactly one
+        -- "/" shape test survives in the dispatcher. This is what keeps
+        -- the per-'$call' cost from growing with the number of
+        -- same-arity functions.
+        prog <- compileOrFail [("order.chr", leqSource)]
+        case findProcedure prog "call_2" of
+          Nothing -> assertFailure "call_2 not found"
+          Just p ->
+            assertEqual
+              "call_2: one hoisted '/' shape test"
+              1
+              (length [() | VM.BMatchTerm _ (VM.Name "/") 2 <- ifConditions p.body])
     ]
   where
     callProcName :: Int -> Text

@@ -104,6 +104,19 @@ has to be reached for directly).
   arity up to the lifted function's total (captures included) arity.
   This keeps the extra dispatchers from multiplying the size of
   lambda-heavy VM programs.
+- A `call_N` dispatcher no longer re-tests the closure shape and arity
+  in every function-reference branch. Every function reference has the
+  form `'/'(Name, Arity)`, so the branches shared those two tests and
+  differed only in `Name`; they are now hoisted into one guard around
+  the whole function-reference block, and the name is extracted once,
+  leaving a single comparison per branch. Over five interleaved
+  `cabal bench` rounds `typecheck/pairs_library` is 185 ms against a
+  252 ms baseline, with the gains concentrated in the `'$call'`-heavy
+  programs (`sum_list_test` 34.0 µs → 26.6 µs, `lambda_test`
+  10.2 µs → 8.3 µs, `search_deep` 69.0 ms → 51.7 ms). The scan over
+  same-arity function names is still linear; keying the dispatch on
+  `(Name, Arity)` remains the asymptotic fix (see the roadmap in
+  `dev-docs/PROJECT.md`).
 - See the [language reference](docs/reference/language.md).
 
 New: refinement-predicate declarations. A closed `:- function` with the

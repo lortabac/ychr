@@ -318,7 +318,7 @@ genOccurrence symTab name cType arity occ = do
   let params = activeName : argNames arity
       procName' = occProcName name arity occ.number
       varMap = buildVarMap occ
-  body <- genOccurrenceBody symTab varMap occ
+  body <- genOccurrenceBody symTab cType varMap occ
   pure
     Procedure
       { name = procName',
@@ -350,12 +350,13 @@ buildVarMap occ =
 -- then append the trailing @Return false@ that signals "no early drop".
 genOccurrenceBody ::
   SymbolTable ->
+  ConstraintType ->
   VarMap ->
   Occurrence ->
   Writer [Diagnostic CompileError] [Stmt]
-genOccurrenceBody symTab varMap occ = do
+genOccurrenceBody symTab cType varMap occ = do
   (inner, condMap) <- genGuardedFire symTab varMap occ
-  let body = wrapInPartnerLoops occ condMap inner
+  let body = wrapInPartnerLoops cType occ condMap inner
   -- Push the rule frame at procedure entry, so it is live during guard
   -- evaluation (and the history check) as well as body execution. A guard
   -- that errors (e.g. evaluates to a non-boolean) then reports the rule's
@@ -429,14 +430,23 @@ softenGuard gExpr
 -- skips candidates whose argument values do not match without ever
 -- entering the loop body.
 --
+-- The @if@ guard holds only the distinctness tests that can actually
+-- fail: a test comparing the partner with a constraint of a different
+-- type is statically true and is dropped. See @wrapOne@ below.
+--
 -- When @occ@ has no partners the inner block is returned unchanged.
-wrapInPartnerLoops :: Occurrence -> PartnerCondMap -> [Stmt] -> [Stmt]
-wrapInPartnerLoops occ condMap inner =
+wrapInPartnerLoops :: ConstraintType -> Occurrence -> PartnerCondMap -> [Stmt] -> [Stmt]
+wrapInPartnerLoops activeCType occ condMap inner =
   -- Loops are built innermost-first by folding from the right, so the
   -- partner with the highest index ends up as the innermost loop and
   -- partner 0 as the outermost — matching the source order of the head.
   foldr wrapOne inner (zip [PartnerIndex 0 ..] occ.partners)
   where
+    partnerTypes = [(k, p.cType) | (k, p) <- zip [PartnerIndex 0 ..] occ.partners]
+
+    partnerCType :: PartnerIndex -> Maybe ConstraintType
+    partnerCType j = lookup j partnerTypes
+
     wrapOne :: (PartnerIndex, Partner) -> [Stmt] -> [Stmt]
     wrapOne (k, partner) inside =
       let label = partLabel k
@@ -458,13 +468,30 @@ wrapInPartnerLoops occ condMap inner =
           -- Foreach iterator guarantees yielded partners are alive, and
           -- the active constraint's liveness is verified after body
           -- execution (early drop / backjumping in 'genFireStmts').
-          distinctActive = BNot (BIdEqual (IdVar (partIdName k)) (IdVar activeName))
+          --
+          -- Each test compares two suspension identifiers, and a
+          -- suspension has exactly one identity: 'createConstraint' in
+          -- both runtimes allocates ids from a monotone counter that
+          -- backtracking does not rewind and that search forks share, so
+          -- no two live suspensions — of the same type or not — ever
+          -- share one. A test whose two sides are of *different*
+          -- constraint types is therefore statically true and is not
+          -- emitted at all. (When every test drops out the enclosing
+          -- @if@ goes with them.) The surviving tests are exactly the
+          -- same-type pairs, the only case where one suspension could be
+          -- mistaken for another.
+          distinctActive =
+            [ BNot (BIdEqual (IdVar (partIdName k)) (IdVar activeName))
+            | partner.cType == activeCType
+            ]
           distinctEarlier =
             [ BNot (BIdEqual (IdVar (partIdName k)) (IdVar (partIdName j)))
-            | j <- [PartnerIndex 0 .. k - 1]
+            | j <- [PartnerIndex 0 .. k - 1],
+              partnerCType j == Just partner.cType
             ]
-          distinctAll = List.foldl' BAnd distinctActive distinctEarlier
-          guarded = [If distinctAll inside []]
+          guarded = case distinctActive ++ distinctEarlier of
+            [] -> inside
+            c : cs -> [If (List.foldl' BAnd c cs) inside []]
        in [Foreach label partner.cType suspVar conds (fieldExtracts ++ guarded)]
 
 -- ---------------------------------------------------------------------------
@@ -1447,12 +1474,41 @@ genCallFunDispatches functions =
 -- | Generate the @call_N@ dispatcher for one call arity: one branch per
 -- same-arity function reference, then one per lifted lambda, then the
 -- no-match error.
+--
+-- Every function-reference branch in a given dispatcher tests the same
+-- closure shape (@'\/'(Name, Arity)@) and the same arity, so those two
+-- tests are hoisted into a single guard around the whole function-
+-- reference block, and the closure's name argument is extracted once
+-- into 'closureFunctorName'. What remains per branch is one name
+-- comparison. Without the hoist a @call_N@ is a flat chain in which every
+-- branch re-tests the shape and re-extracts the arity — O(branches) work
+-- per @'$call'@ on a program with many same-arity functions, which is the
+-- shape the type checker's stdlib-heavy workload spends its time in. The
+-- hoist is a pure reordering of tests, not a semantic change: the shared
+-- guard is a necessary condition of every function-reference branch, so a
+-- closure that fails it would have failed each of them in turn, and then
+-- falls through to the lambda branches exactly as before. Branch order —
+-- and so which branch wins for a given closure — is unchanged.
 genCallFunDispatch :: [D.Function] -> Int -> Procedure
 genCallFunDispatch functions callArity =
   let closureParam = Name "closure"
       argParams = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. callArity - 1]]
       funRefBranches = concatMap (genFunRefBranch callArity argParams) functions
       lambdaBranches = concatMap (genLambdaBranch callArity argParams) functions
+      funRefBlock
+        | null funRefBranches = []
+        | otherwise =
+            [ If
+                ( BAnd
+                    (BMatchTerm (Var closureParam) (Name "/") 2)
+                    ( BEqual
+                        (GetArg (Var closureParam) 1)
+                        (Lit (IntLit (fromIntegral callArity)))
+                    )
+                )
+                (LetVal closureFunctorName (GetArg (Var closureParam) 0) : funRefBranches)
+                []
+            ]
       -- Same distinction as function-equation dispatch, but the blocked
       -- position is static here: only the closure operand is ever
       -- pattern-tested, so the whole message is known at compile time.
@@ -1475,12 +1531,23 @@ genCallFunDispatch functions callArity =
    in Procedure
         { name = callFunProcName callArity,
           params = closureParam : argParams,
-          body = funRefBranches ++ lambdaBranches ++ [errorStmt],
+          body = funRefBlock ++ lambdaBranches ++ [errorStmt],
           procKind = PKCallDispatch callArity
         }
 
+-- | Local bound by a @call_N@ dispatcher to the closure's first argument
+-- (the function's flattened name, or a lifted lambda's identifier),
+-- extracted once after the shared shape/arity guard instead of once per
+-- branch. Not a source-spellable name concern: a dispatcher has no source
+-- variables in scope, only its own @closure@ and @arg_i@ parameters.
+closureFunctorName :: Name
+closureFunctorName = Name "closure_name"
+
 -- | Generate a dispatch branch for a function reference (@name/arity@).
--- Only emits a branch when the function's arity matches @callArity@.
+-- Only emits a branch when the function's arity matches @callArity@. The
+-- shared shape/arity test and the name extraction are emitted by
+-- 'genCallFunDispatch'; this branch only compares the already-extracted
+-- name against the function's.
 genFunRefBranch :: Int -> [Name] -> D.Function -> [Stmt]
 genFunRefBranch callArity argParams func
   | func.arity /= callArity = []
@@ -1488,16 +1555,7 @@ genFunRefBranch callArity argParams func
       let funcName = Types.qualifiedToName func.name
           flatName = flattenName funcName
           pName = funcProcName funcName func.arity
-          condition =
-            BAnd
-              (BMatchTerm (Var (Name "closure")) (Name "/") 2)
-              ( BAnd
-                  (BEqual (GetArg (Var (Name "closure")) 0) (Lit (AtomLit flatName)))
-                  ( BEqual
-                      (GetArg (Var (Name "closure")) 1)
-                      (Lit (IntLit (fromIntegral func.arity)))
-                  )
-              )
+          condition = BEqual (Var closureFunctorName) (Lit (AtomLit flatName))
        in [ If
               condition
               [Return (CallExpr pName (map (AVal . Var) argParams))]

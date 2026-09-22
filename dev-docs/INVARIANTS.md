@@ -558,7 +558,7 @@ did the same. The §5 procedure-name closure check remains worthwhile for
 the rest of the `CallExpr` namespace, but there is no longer a `$call`
 arity cap for it to subsume.
 
-### `partArity` derived from desugared head matches runtime constraint shape — `src/YCHR/Internal/Compile.hs:442`
+### `partArity` derived from desugared head matches runtime constraint shape — `src/YCHR/Internal/Compile.hs:454`
 
 ```haskell
 partArity = length partner.constraint.args
@@ -574,12 +574,12 @@ of producing one with a bogus type, so the remaining exposure is a
 genuine arity *disagreement* between the symbol table and the
 desugared head, not a lookup failure.
 
-### `classifyEqual` / `IndexCondition` — the bounds worry is overstated — `src/YCHR/Internal/Compile.hs:780-792`
+### `classifyEqual` / `IndexCondition` — the bounds worry is overstated — `src/YCHR/Internal/Compile.hs:820-832`
 
 The earlier statement of this entry ("`asPartnerArg` produces an
 `(ArgIndex, …)` pair that is baked into an `IndexCondition` without
 any bounds check") is technically true of the type but overstates the
-exposure. `asPartnerArg` (`Compile.hs:763-772`) *generates* the index
+exposure. `asPartnerArg` (`Compile.hs:803-812`) *generates* the index
 by enumerating the partner's argument positions:
 
 ```haskell
@@ -592,7 +592,7 @@ is no live path to an out-of-range `IndexCondition.argIndex`. The
 tighter type (a smart constructor that takes the partner's arity)
 would be belt-and-braces; it is not worth ranking with the §2 items.
 The same enumeration pattern makes `wrapInPartnerLoops`'s `FieldArg`
-indices (`Compile.hs:448-452`) in range by construction.
+indices (`Compile.hs:460-464`) in range by construction.
 
 ### `History` keys assume canonical `SuspensionId` ordering — `src/YCHR/Internal/Runtime/History.hs:22-32`
 
