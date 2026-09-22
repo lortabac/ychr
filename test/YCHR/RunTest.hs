@@ -31,10 +31,14 @@ import YCHR.Run
   ( Chr,
     Error (..),
     GoalRejection (..),
+    PreparedQuery (..),
     Value (..),
+    Warning (..),
     compileModules,
     equal,
     newVar,
+    prepareQuery,
+    prepareQueryUnchecked,
     resolveQueryConstraint,
     runProgramWithGoal,
     runProgramWithGoalDSLWithWarnings,
@@ -55,7 +59,8 @@ tests =
       queryBodyTests,
       goalWarningTests,
       guardErrorTests,
-      arityOverloadTests
+      arityOverloadTests,
+      uncheckedQueryTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -691,4 +696,46 @@ guardErrorTests =
                 "guardbug.chr:5:" `isInfixOf` rendered
               assertBool ("internal name BFromVal must not leak in: " ++ rendered) $
                 not ("BFromVal" `isInfixOf` rendered)
+    ]
+
+-- ---------------------------------------------------------------------------
+-- Unchecked query preparation
+-- ---------------------------------------------------------------------------
+
+-- | A program whose declaration accepts a 'color' argument, so a goal
+-- passing an 'int' is a goal-level type error (YCHR-60001) but a
+-- perfectly ordinary runtime constraint. 'prepareQuery' and
+-- 'prepareQueryUnchecked' must disagree about it.
+uncheckedQuerySource :: Text
+uncheckedQuerySource =
+  ":- module(unchecked, [paint/1, type(color/0)]).\n\
+  \:- chr_type color ---> red ; green ; blue.\n\
+  \:- chr_constraint paint(color).\n\
+  \paint_rule @ paint(_) <=> true.\n"
+
+uncheckedQueryTests :: TestTree
+uncheckedQueryTests =
+  testGroup
+    "Unchecked query preparation"
+    [ testCase "prepareQueryUnchecked prepares a goal prepareQuery rejects" $ do
+        cp <- compileOrFail [("unchecked.chr", uncheckedQuerySource)]
+        checked <-
+          try @SomeException (prepareQuery typeCheckerProgram cp "unchecked:paint(42)")
+        case checked of
+          Right _ -> assertFailure "expected prepareQuery to reject the goal"
+          Left exc -> case fromException exc :: Maybe Error of
+            Just (TypeErrors _) -> pure ()
+            Just other ->
+              assertFailure $ "expected TypeErrors, got Error:\n" ++ displayMsg other
+            Nothing ->
+              assertFailure $ "expected Error, got non-Error exception: " ++ show exc
+        unchecked <- try @SomeException (prepareQueryUnchecked cp "unchecked:paint(42)")
+        case unchecked of
+          Left exc ->
+            assertFailure $
+              "expected prepareQueryUnchecked to prepare the goal, got: " ++ show exc
+          Right (prepared, ws) -> do
+            assertBool "expected the query to be prepared" (not (null prepared.liftedGoals))
+            assertBool "expected no type-check warnings" $
+              null [() | TypeCheckWarnings _ <- ws]
     ]

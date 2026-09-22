@@ -112,7 +112,11 @@ R = 55
 (`-t scheme` for a Scheme library, `-d DIR` for the directory).
 `ychr check` type-checks and is silent on success. `run`, `check`,
 `compile` and `gen-driver` take `--Werror`, which exits non-zero on a
-warning before the goal runs or the file is written.
+warning before the goal runs or the file is written. `run`, `compile`,
+`gen-driver` and `repl` also take `--no-check`, which skips the optional
+type checker entirely — the program check and the goal/query check —
+so a program with type errors still runs or compiles; `check`, which
+exists to type-check, never skips.
 
 ## 6. Where to go next
 

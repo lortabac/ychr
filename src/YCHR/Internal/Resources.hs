@@ -54,10 +54,10 @@ import YCHR.Internal.TypeCheck.Compiled (compileTypeCheckerModules)
 -- 'typeCheckerProgram' is a lazy binding: it is 'error' when the checker
 -- fails to compile, exactly like the compile-time embedder's, and an
 -- embedder that never type-checks (the @stlc@ example) never forces it.
--- The @ychr@ CLI forces it anyway — every subcommand type-checks the
--- program, and the REPL does so on load (or on the first query in quiet
--- mode) — so the laziness buys the CLI nothing, but it keeps both
--- providers' failure modes identical.
+-- The @ychr@ CLI forces it for every command except one run with
+-- @--no-check@, which never compiles the checker — so the laziness buys
+-- the CLI little in practice, but it keeps both providers' failure modes
+-- identical.
 data Resources = Resources
   { -- | The parsed standard library, seeded into every compilation.
     stdlib :: StdLib,

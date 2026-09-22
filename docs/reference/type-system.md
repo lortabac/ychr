@@ -11,7 +11,10 @@ The type system catches inconsistencies statically and stays optional:
 programs without type annotations are accepted. One type language
 covers constraints and functions. The checker takes a
 `Desugared.Program` and produces errors and warnings; errors stop
-compilation, and `--Werror` promotes warnings to errors.
+compilation, and `--Werror` promotes warnings to errors. The CLI's
+`--no-check` goes further than "no annotations": it skips the checker
+altogether, for the program and for each goal or query, so type errors
+surface (if at all) only at run time.
 
 
 ## Types

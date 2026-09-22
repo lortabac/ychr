@@ -84,11 +84,13 @@ Aim adversarially. Promising categories:
   matches. Wrong code, missing code, or a successful compile when an
   error was promised all count as divergences.
 - **REPL contracts.** The REPL prompt strings (`ychr> ` vs
-  `ychr live> `), the `--quiet` and `--Werror` flag behaviors, and
+  `ychr live> `), the `--quiet`, `--Werror` and `--no-check` flag
+  behaviors, and
   the `:begin … :end` store-persistence contract are all documented.
 - **CLI contracts.** `ychr run` accepts exactly one goal; `ychr
   check` exits silently on success; `--Werror` interactions with
-  `--quiet`. Each is a claim that can be falsified.
+  `--quiet`; `--no-check` on `run`/`compile`/`gen-driver`/`repl` (and
+  its absence from `check`). Each is a claim that can be falsified.
 - **Backend parity.** When the Haskell and Scheme backends both
   support a feature, run the same program through each and compare —
   but consult `SCHEME_BACKEND_GAPS.md` first to filter known gaps.

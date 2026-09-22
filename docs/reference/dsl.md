@@ -196,7 +196,9 @@ stdlib); feed the result to `runProgramWithGoalDSL` /
 `runProgramWithQuery` (re-exported from `YCHR.Run`). The goal-running
 entry points that type-check (`runProgramWithGoal`, `runProgramWithQuery`,
 `prepareQuery`, `runPreparedGoal`) take the compiled type-checker as
-their first argument as well; the `GoalDSL` ones do not. Compilation and
+their first argument as well; the `GoalDSL` ones do not.
+`prepareQueryUnchecked` is `prepareQuery` minus the type check — the
+REPL's `--no-check` path. Compilation and
 runtime errors are exceptions (`YCHR.Run.Error` and the runtime's error
 types).
 

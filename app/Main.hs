@@ -29,6 +29,7 @@ import YCHR.Run
     compileFiles,
     prepareGoal,
     resolveQueryTellOrThrow,
+    runGoalConstraint,
     runPreparedGoal,
   )
 
@@ -39,7 +40,8 @@ import YCHR.Run
 data RunOpts = RunOpts
   { goal :: T.Text,
     showBindings :: Bool,
-    werror :: Bool
+    werror :: Bool,
+    noCheck :: Bool
   }
 
 data Target = TargetVM | TargetScheme
@@ -48,17 +50,20 @@ data CompileOpts = CompileOpts
   { outputDir :: FilePath,
     baseName :: Maybe String,
     target :: Target,
-    werror :: Bool
+    werror :: Bool,
+    noCheck :: Bool
   }
 
 data GenDriverOpts = GenDriverOpts
   { gdGoal :: T.Text,
-    werror :: Bool
+    werror :: Bool,
+    noCheck :: Bool
   }
 
 data ReplOpts = ReplOpts
   { quiet :: Bool,
-    werror :: Bool
+    werror :: Bool,
+    noCheck :: Bool
   }
 
 data CheckOpts = CheckOpts
@@ -78,12 +83,20 @@ filesArg = many (argument str (metavar "FILES..."))
 werrorFlag :: Parser Bool
 werrorFlag = switch (long "Werror" <> help "Treat warnings as errors")
 
+-- | @--no-check@: skip the optional type checker entirely, both the
+-- whole-program check and the per-goal \/ per-query check. Compilation
+-- itself is unchanged — parse, rename, resolve and compile errors still
+-- fail — and so is @--Werror@ over the warnings that remain.
+noCheckFlag :: Parser Bool
+noCheckFlag = switch (long "no-check" <> help "Skip type checking (program and goal checks)")
+
 replParser :: Parser Command
 replParser =
   Repl
     <$> ( ReplOpts
             <$> switch (long "quiet" <> help "Suppress prompt and warnings")
             <*> werrorFlag
+            <*> noCheckFlag
         )
     <*> filesArg
 
@@ -94,6 +107,7 @@ runParser =
             <$> fmap T.pack (strOption (short 'g' <> metavar "GOAL" <> help "Goal to execute"))
             <*> switch (long "show-bindings" <> help "Print variable bindings")
             <*> werrorFlag
+            <*> noCheckFlag
         )
     <*> filesArg
 
@@ -130,6 +144,7 @@ compileParser =
                   <> value TargetVM
               )
             <*> werrorFlag
+            <*> noCheckFlag
         )
     <*> filesArg
 
@@ -139,6 +154,7 @@ genDriverParser =
     <$> ( GenDriverOpts
             <$> fmap T.pack (strOption (short 'g' <> metavar "GOAL" <> help "Goal to execute"))
             <*> werrorFlag
+            <*> noCheckFlag
         )
     <*> filesArg
 
@@ -193,7 +209,7 @@ main = do
     Repl opts files ->
       Repl.runRepl
         resources.stdlib
-        resources.typeCheckerProgram
+        (if opts.noCheck then Nothing else Just resources.typeCheckerProgram)
         hostCalls
         opts.quiet
         opts.werror
@@ -224,16 +240,21 @@ loadResourcesOrExit = do
 runGoal :: Resources -> RunOpts -> [FilePath] -> IO ()
 runGoal resources opts files = withCompiled resources False files $ \prog warnings -> do
   printWarnings warnings
-  typeWarnings <- typeCheckOrExit resources prog
+  typeWarnings <- typeCheckUnless opts.noCheck resources prog
   prepResult <- try @SomeException (prepareGoal prog opts.goal)
   case prepResult of
     Left exc -> reportErrorAndExit exc
     Right (constraint, goalWarnings) -> do
       printWarnings goalWarnings
       exitOnWerror opts.werror (warnings ++ typeWarnings ++ goalWarnings)
-      let typeChecker = resources.typeCheckerProgram
+      -- Without the checker the goal runs through 'runGoalConstraint',
+      -- the same unchecked entry point the library exposes; with it,
+      -- 'runPreparedGoal' type-checks the goal first.
       outcome <-
-        try @SomeException (runPreparedGoal typeChecker prog hostCalls constraint)
+        try @SomeException $
+          if opts.noCheck
+            then runGoalConstraint prog hostCalls constraint
+            else runPreparedGoal resources.typeCheckerProgram prog hostCalls constraint
       case outcome of
         Left exc -> reportErrorAndExit exc
         Right bindings ->
@@ -248,7 +269,7 @@ runGoal resources opts files = withCompiled resources False files $ \prog warnin
 runCompile :: Resources -> CompileOpts -> [FilePath] -> IO ()
 runCompile resources opts files = withCompiled resources False files $ \prog warnings -> do
   printWarnings warnings
-  typeWarnings <- typeCheckOrExit resources prog
+  typeWarnings <- typeCheckUnless opts.noCheck resources prog
   exitOnWerror opts.werror (warnings ++ typeWarnings)
   let vmp =
         VMProgram
@@ -283,7 +304,7 @@ runCompile resources opts files = withCompiled resources False files $ \prog war
 runGenDriver :: Resources -> GenDriverOpts -> [FilePath] -> IO ()
 runGenDriver resources opts files = withCompiled resources False files $ \prog warnings -> do
   printWarnings warnings
-  typeWarnings <- typeCheckOrExit resources prog
+  typeWarnings <- typeCheckUnless opts.noCheck resources prog
   -- 'prepareGoal' parses the goal and canonicalizes bare
   -- data-constructor references in its arguments, so they reach the
   -- runtime in the same flat-functor form the compiled head patterns
@@ -361,6 +382,15 @@ withCompiled resources includeStdlib files k = do
       putStr (displayMsg err)
       exitFailure
     Right (prog, warnings) -> k prog warnings
+
+-- | Type-check @prog@ and return the warnings to fold into the caller's
+-- @--Werror@ decision, unless @--no-check@ was given — in which case the
+-- checker does not run at all and there are no type warnings. The
+-- @--no-check@ case still compiles and still reports compile warnings.
+typeCheckUnless :: Bool -> Resources -> CompiledProgram -> IO [Warning]
+typeCheckUnless noCheck resources prog
+  | noCheck = pure []
+  | otherwise = typeCheckOrExit resources prog
 
 -- | Type-check the compiled program with the loaded type-checker. If
 -- errors are found, print them to stderr and exit non-zero. Otherwise

@@ -59,6 +59,7 @@ module YCHR.Run
     resolveQueryGoals,
     PreparedQuery (..),
     prepareQuery,
+    prepareQueryUnchecked,
     executePreparedQuery,
     withCHRExtraTraced,
     toSessionInput,
@@ -459,24 +460,48 @@ resolveQueryGoals cp src = do
 prepareQuery :: SessionInput -> CompiledProgram -> Text -> IO (PreparedQuery, [Warning])
 prepareQuery typeChecker cp src = do
   resolved <- resolveQueryGoals cp src
-  let lifted = resolved.liftedGoals
-      lambdas = resolved.queryLambdas
-  tcResult <- typeCheckGoals typeChecker resolved.goalProgram queryLoc (Just "query") lifted
+  tcResult <-
+    typeCheckGoals
+      typeChecker
+      resolved.goalProgram
+      queryLoc
+      (Just "query")
+      resolved.liftedGoals
   unless (null tcResult.errors) (throwIO (TypeErrors tcResult.errors))
-  let allFuns = cp.allFunctions ++ lambdas
-      queryProcs = compileQueryLambdas lambdas
-      queryDispatches = genCallFunDispatches allFuns
-      warnings =
-        [RenameWarnings resolved.renameWarnings | not (null resolved.renameWarnings)]
-          ++ [TypeCheckWarnings tcResult.warnings | not (null tcResult.warnings)]
   pure
-    ( PreparedQuery
-        { liftedGoals = lifted,
-          queryLambdas = lambdas,
-          extraProcs = queryProcs ++ queryDispatches
-        },
-      warnings
+    ( prepareResolved cp resolved,
+      [RenameWarnings resolved.renameWarnings | not (null resolved.renameWarnings)]
+        ++ [TypeCheckWarnings tcResult.warnings | not (null tcResult.warnings)]
     )
+
+-- | 'prepareQuery' without the type check: parse, rename, desugar and
+-- lambda-lift the query, and report its rename warnings, but do not run
+-- the checker over its goals. This is what @ychr repl --no-check@ uses,
+-- and what an embedder that does not want the optional type system uses
+-- in place of 'prepareQuery'.
+--
+-- Only the checker is skipped: parse, rename, resolve and desugar errors
+-- still throw, exactly as in 'prepareQuery'.
+prepareQueryUnchecked :: CompiledProgram -> Text -> IO (PreparedQuery, [Warning])
+prepareQueryUnchecked cp src = do
+  resolved <- resolveQueryGoals cp src
+  pure
+    ( prepareResolved cp resolved,
+      [RenameWarnings resolved.renameWarnings | not (null resolved.renameWarnings)]
+    )
+
+-- | Finish preparing a resolved query: compile its lifted lambdas and
+-- their call dispatchers into the extra procedures the session needs.
+-- Shared by 'prepareQuery' and 'prepareQueryUnchecked'.
+prepareResolved :: CompiledProgram -> ResolvedQuery -> PreparedQuery
+prepareResolved cp resolved =
+  PreparedQuery
+    { liftedGoals = resolved.liftedGoals,
+      queryLambdas = resolved.queryLambdas,
+      extraProcs =
+        compileQueryLambdas resolved.queryLambdas
+          ++ genCallFunDispatches (cp.allFunctions ++ resolved.queryLambdas)
+    }
 
 -- | Run the 'liftedGoals' of a 'PreparedQuery' in the current session, in
 -- a fresh per-query variable scope; the host-call registry comes from

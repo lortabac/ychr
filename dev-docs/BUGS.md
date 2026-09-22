@@ -716,8 +716,8 @@ exception with a diagnostic.
 ## The global `--quiet` before a subcommand is treated as a file name
 
 **Documented claim.** `ychr --help` shows
-`ychr [COMMAND | [--quiet] [--Werror] [FILES...]]`, which reads as though
-the two global flags may precede a subcommand;
+`ychr [COMMAND | [--quiet] [--Werror] [--no-check] [FILES...]]`, which
+reads as though the global flags may precede a subcommand;
 `docs/reference/repl.md` documents `--quiet` for the REPL.
 
 **Test.**

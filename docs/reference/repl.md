@@ -3,7 +3,7 @@
 ## Starting the REPL
 
 ```sh
-ychr repl [--quiet] [--Werror] [FILES...]
+ychr repl [--quiet] [--no-check] [--Werror] [FILES...]
 ```
 
 Loads the files (or none), prints warnings and type-check messages,
@@ -36,6 +36,14 @@ where warnings are still printed. Under `--Werror` a warning on the
 initial load aborts startup; on `:recompile` it keeps the previous
 program; while renaming a query's arguments it aborts that query and
 leaves the store alone.
+
+`--no-check` skips the type checker entirely: no type-check report on
+startup or `:recompile`, and every query runs unchecked, so a goal the
+checker would reject reaches the runtime instead. Compilation errors —
+parse, collect, rename, resolve, desugar — still fail, and `--Werror`
+still treats the remaining compile and rename warnings as fatal.
+`ychr check` — whose whole purpose is type checking — does not accept
+the flag.
 
 ## Prompts
 

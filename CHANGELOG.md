@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+The `ychr` CLI accepts `--no-check` on `run`, `compile`, `gen-driver`
+and `repl`. It skips the optional type checker entirely — the
+whole-program check and the per-goal / per-query check — so a program
+with type errors still runs, compiles or generates a driver, and no
+`2x1xx` type warnings are reported. Type errors then surface as runtime
+errors, if at all. Compilation errors (parse, collect, rename, resolve,
+desugar, compile) still fail, and `--Werror` still treats the remaining
+compile and rename warnings as fatal. `ychr check` keeps checking
+unconditionally and does not accept the flag.
+
+The library gains `YCHR.Run.prepareQueryUnchecked` — `prepareQuery`
+without the type check, the function behind the REPL's `--no-check`
+path, and the missing companion to the existing checker-free
+`runGoalConstraint` / `resolveQueryGoals`. `YCHR.Internal.Repl.runRepl`
+now takes its checker as `Maybe SessionInput`, with `Nothing` meaning
+"do not check" (the CLI passes `Nothing` under `--no-check`); its other
+arguments are unchanged. See
+[the type system reference](docs/reference/type-system.md) and
+[the REPL reference](docs/reference/repl.md).
+
 Breaking: the `ychr` library no longer embeds anything at compile time,
 and the two resources it used to bake in are now explicit arguments.
 The bundled standard library is a `StdLib` — a newtype over the parsed

@@ -61,6 +61,9 @@ ychr check file.chr                  # type-check only
 ychr compile -t scheme -d out file.chr
 ```
 
+`run`, `compile`, `gen-driver` and `repl` take `--no-check` to skip the
+optional type checker (program and goal checks); `check` always checks.
+
 `make test` runs the full test suite: the Haskell interpreter, the
 Scheme backend and runtime, the REPL, the type checker, the embedding
 example, and lint checks over the documentation. Besides GHC it needs

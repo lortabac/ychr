@@ -129,8 +129,10 @@ them in:
 | the standard library | `StdLib` (`YCHR.Internal.StdLib`) | every entry point that compiles: `compileModules`, `compileFiles`, `compileParsedModules`, `compileTypeCheckerModules`, the three `runQuery*` variants and the two `runDSL*` variants |
 | the type-checker | `SessionInput` (`YCHR.Internal.Runtime.Session`) | every entry point that type-checks: `typeCheckProgram`, `typeCheckGoals`, `prepareQuery`, `runPreparedGoal`, `runProgramWithGoal`, `runProgramWithQuery` |
 
-`YCHR.Internal.Repl.runRepl` takes both, since it compiles the inputs and
-prints type diagnostics on load.
+`YCHR.Run.prepareQueryUnchecked` is the checker-free companion of
+`prepareQuery` (the REPL's `--no-check` path uses it), and
+`YCHR.Internal.Repl.runRepl` takes the checker as a `Maybe`: `Nothing`
+skips the checker the way `--no-check` does.
 
 Each is built once, from the bundled sources, and reused. A minimal
 `Resources.hs` for a GHC embedder that wants a self-contained binary:

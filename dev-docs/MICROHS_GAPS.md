@@ -612,12 +612,14 @@ directory otherwise, so running the binary from a YCHR source tree works
 with no configuration. The standard library is parsed eagerly (every
 compilation needs it, and a bad root should be reported before any work
 starts); the type-checker is compiled lazily, exactly as the GHC
-embedder's thunk is. That laziness buys the CLI nothing in practice —
+embedder's thunk is. That laziness buys the CLI little in practice —
 `run`, `compile`, `gen-driver` and `check` all type-check the program,
-and the REPL does so on load, or on the first query in quiet mode — but
-it keeps both providers' failure modes identical, and an embedder that
-never type-checks (the `stlc` example) still never pays for it. A
-type-checker that fails to compile surfaces as a Haskell `error` when
+the REPL does so on load and on every query, and only `--no-check` never
+compiles the checker (under MicroHs its sources are still read, because
+the loader reads both directories) — but it keeps both providers'
+failure modes identical, and an embedder that never type-checks (the
+`stlc` example) still never pays for it. A type-checker that fails to
+compile surfaces as a Haskell `error` when
 first forced, exactly as the GHC embedder does. `readChrDir` filters and
 sorts `.chr`, and reports a directory that is missing, holds no `.chr`
 sources, cannot be listed, or holds an unreadable source as a plain
@@ -1043,7 +1045,7 @@ The MicroHs-built `ychr` runs `repl`, `run`, `compile`, `gen-driver` and
 
 ```
 $ YCHR_LIB_DIR=$PWD dist-mcabal/bin/mhs/ychr --help
-Usage: dist-mcabal/bin/mhs/ychr [COMMAND | [--quiet] [--Werror] [FILES...]]
+Usage: dist-mcabal/bin/mhs/ychr [COMMAND | [--quiet] [--Werror] [--no-check] [FILES...]]
 
 dist-mcabal/bin/mhs/ychr: uncaught exception: error: "./Data/Monoid/Internal.hs",260:19:
   stimes: positive multiplier expected
