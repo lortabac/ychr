@@ -7,13 +7,17 @@
           session-history session-history-set!
           session-queue-front session-queue-front-set!
           session-queue-back session-queue-back-set!
-          session-evaluables)
+          session-evaluables
+          session-callables)
   (import (rnrs))
 
   ;; `evaluables` holds the deep-eval dispatch table for the @is@
-  ;; operator (functor + arity → procedure). It is populated once at
-  ;; library load time via `register-evaluable!` and never mutated
-  ;; after; hence immutable in the record.
+  ;; operator (functor + arity → procedure). `callables` holds the
+  ;; closure-apply dispatch table for `$call` (closure functor +
+  ;; identity + arity → procedure). Both are populated once at library
+  ;; load time, via `register-evaluable!` and `register-callable!`
+  ;; respectively, and never mutated after; hence immutable in the
+  ;; record.
   (define-record-type (session make-session session?)
     (fields (mutable var-id session-var-id session-var-id-set!)
             (mutable store-by-type session-store-by-type session-store-by-type-set!)
@@ -21,5 +25,6 @@
             (mutable history session-history session-history-set!)
             (mutable queue-front session-queue-front session-queue-front-set!)
             (mutable queue-back session-queue-back session-queue-back-set!)
-            (immutable evaluables session-evaluables)))
+            (immutable evaluables session-evaluables)
+            (immutable callables session-callables)))
 )

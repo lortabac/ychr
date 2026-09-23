@@ -97,7 +97,7 @@ import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Set (Set)
 import Data.Text qualified as T
-import YCHR.Internal.Compile.Names (callFunProcName, runtimeName)
+import YCHR.Internal.Compile.Names (runtimeName)
 import YCHR.Internal.Meta (metaHostCallRegistry)
 import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error
@@ -112,7 +112,7 @@ import YCHR.Internal.Runtime.Goal
     listElems,
   )
 import YCHR.Internal.Runtime.Interpreter
-  ( callProc,
+  ( applyClosure,
     emitTrace,
     snapshotValue,
     snapshotValues,
@@ -145,8 +145,7 @@ import YCHR.Internal.Runtime.Trace
   )
 import YCHR.Internal.Runtime.Trail (trailMark, unwindTo)
 import YCHR.Internal.Runtime.Types
-  ( CallVal (..),
-    SuspensionId,
+  ( SuspensionId,
     TrailMark,
     Value (..),
   )
@@ -634,7 +633,7 @@ hostFoldSolutions [template, goalArg, f, acc0] = do
         -- 'SearchFailure' and is caught by the enclosing
         -- 'withoutFailure', which backtracks with the accumulator
         -- untouched — exactly a 'StepContinue'.
-        result <- callProc (callFunProcName 2) [CVal f, CVal copied, CVal acc]
+        result <- applyClosure f [copied, acc]
         (step, acc') <- readStep result
         liftIO (writeIORef accRef acc')
         pure step

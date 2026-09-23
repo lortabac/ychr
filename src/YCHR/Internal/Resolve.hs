@@ -152,11 +152,11 @@ data ResolveError
   | -- | A @'$call'@ was used at an unsupported arity: zero (a missing
     -- callee or a callee with no arguments) or more than
     -- 'R.maxCallArity'. Carries the number of call arguments, so a
-    -- bare @'$call'@ and @'$call'(F)@ both report zero. The compiler
-    -- emits a dispatcher only for arities in @1 .. 'R.maxCallArity'@,
-    -- so such a call could never resolve at runtime; it is rejected
-    -- here, where the @'$call'@ shape is recognized, so that
-    -- programs, queries and generated drivers all see the error.
+    -- bare @'$call'@ and @'$call'(F)@ both report zero. That range is
+    -- the surface language's supported dynamic-call arity, so an
+    -- out-of-range call is rejected here, where the @'$call'@ shape is
+    -- recognized, so that programs, queries and generated drivers all
+    -- see the error.
     UnsupportedCallArity Int
   deriving (Eq, Show)
 
@@ -1309,11 +1309,12 @@ termToExpr vis loc origin = go
       Wildcard -> pure R.WildcardExpr
       -- '$call'(F, A1..An) — surface dynamic dispatch. The callee is
       -- the first argument; the rest are the call's actual arguments.
-      -- The compiler generates a dispatcher only for arities in
-      -- @1 .. 'R.maxCallArity'@, so any other shape of the reserved
-      -- @'$call'@ symbol is rejected here rather than lowering to a
-      -- nonexistent @call_N@ procedure or silently becoming a data
-      -- term. That includes @'$call'(F)@ (no arguments), a bare
+      -- The supported dynamic-call arities are @1 .. 'R.maxCallArity'@
+      -- (a surface-language limit aligned with the prelude's
+      -- @call\/N@ family), so any other shape of the reserved
+      -- @'$call'@ symbol is rejected here rather than silently
+      -- becoming a data term. That includes @'$call'(F)@ (no
+      -- arguments), a bare
       -- @'$call'@ atom, and @'$call'/11@ or wider. Traversal still
       -- yields an 'ApplyExpr' so later checks see the call's operands.
       CompoundTerm (Unqualified "$call") args -> do

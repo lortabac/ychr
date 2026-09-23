@@ -6,14 +6,16 @@
 -- it through the interpreter.
 module YCHR.CompileTest (tests) where
 
+import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, assertFailure, testCase, (@?=))
 import YCHR.Embedded (stdlib)
-import YCHR.Internal.Compile (maxCallArity)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
+import YCHR.Internal.Desugared qualified as D
+import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM qualified as VM
 import YCHR.Run (compileModules)
 
@@ -26,7 +28,7 @@ tests =
       distinctnessElisionTests,
       boolPatternTests,
       softGuardWrapTests,
-      callDispatchTests
+      callablesDispatchTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -399,87 +401,159 @@ softGuardWrapTests =
         Just p -> any isSoftGuard (ifConditions p.body)
 
 -- ---------------------------------------------------------------------------
--- Call dispatcher arities
+-- Callables dispatch table
 -- ---------------------------------------------------------------------------
 
--- | The compiler emits one @call_N@ dispatcher for every arity in
--- @1 .. 'maxCallArity'@, whether or not the program happens to define a
--- function at that arity. This pins the promised set and the parameter
--- shape (the closure plus the N arguments); the golden @call_arities@
--- test exercises the runtime behaviour the shape encodes.
+-- | The compiler emits a /table/ for dynamic calls, not a set of
+-- @call_N@ dispatcher procedures: one entry per user-defined function
+-- and per lifted lambda, keyed by the shape of the closure value that
+-- designates it, and every @'$call'@ compiles to the closure-apply
+-- construct that consults it.
 --
--- It also pins which of those dispatchers a lifted lambda contributes a
--- branch to. A closure only ever matches the arity its source lambda
--- declared, so the other arities' branches are dead code and must not
--- be emitted.
-callDispatchTests :: TestTree
-callDispatchTests =
+-- These tests pin the table's shape and the absence of the old
+-- dispatchers. The behavior the table encodes is exercised at run time
+-- by @RunTest@ and the @closure_dispatch_errors@ / @lambda_test@ golden
+-- directories, on both backends.
+callablesDispatchTests :: TestTree
+callablesDispatchTests =
   testGroup
-    "Call dispatch arities"
-    [ testCase "a dispatcher is emitted for every arity in 1..maxCallArity" $ do
+    "Callables dispatch"
+    [ testCase "one entry per function, with no duplicate keys" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
-        mapM_ (assertDispatcher prog) [1 .. maxCallArity],
-      testCase "no dispatcher is emitted above maxCallArity" $ do
-        prog <- compileOrFail [("order.chr", leqSource)]
-        assertBool
-          ("call_" ++ show (maxCallArity + 1) ++ " must not exist")
-          (isNothing (findProcedure prog (callProcName (maxCallArity + 1)))),
-      testCase "a lambda contributes a branch only to its declared arity" $ do
-        prog <- compileOrFail [("m.chr", lambdaSource)]
         assertEqual
-          "call_3 closure branches (captures + 2)"
-          [4]
-          (closureArities prog 3)
+          "one callables entry per function"
+          (length prog.allFunctions)
+          (length prog.program.callables)
+        -- The runtime builds a Map, which keeps the last entry for a
+        -- repeated key silently; the table must not rely on that.
+        assertEqual
+          "distinct callables keys"
+          (length prog.program.callables)
+          (Map.size (Map.fromList prog.program.callables)),
+      testCase "a function reference is keyed by flat name and arity" $ do
+        prog <- compileOrFail [("order.chr", leqSource)]
+        assertEqual
+          "prelude:call/2 entry"
+          (Just "func_prelude__call2")
+          (lookupCallable prog (funRefKey "prelude:call" 2)),
+      testCase "a lifted lambda is keyed by its identity and declared arity" $ do
+        prog <- compileOrFail [("m.chr", lambdaSource)]
+        case filter isLiftedLambda prog.allFunctions of
+          [func] -> do
+            -- The lifted function is arity 5 (three declared parameters
+            -- plus two captures) and lives in module @m@, so its
+            -- procedure is @func_m____lambda_05@ and its closure
+            -- identity is @m____lambda_0@: the VM encoding the
+            -- desugarer bakes into the closure term.
+            assertEqual
+              "lifted lambda qualified name"
+              (Types.QualifiedName "m" "__lambda_0")
+              func.name
+            assertEqual
+              "lifted lambda callables entry"
+              (Just "func_m____lambda_05")
+              ( lookupCallable
+                  prog
+                  (lambdaKey (VM.Name "m____lambda_0") 3)
+              )
+          _ -> assertFailure "expected exactly one lifted lambda",
+      testCase "no call_N dispatcher is emitted for any arity" $ do
+        prog <- compileOrFail [("order.chr", leqSource)]
         mapM_
           ( \n ->
-              assertEqual
-                ("call_" ++ show n ++ " closure branches")
-                []
-                (closureArities prog n)
+              assertBool
+                ("call_" ++ show n ++ " must not exist")
+                (isNothing (findProcedure prog ("call_" <> T.pack (show n))))
           )
-          [1, 2, 4, 5, 6, 7, 8, 9, 10],
-      testCase "each function-reference shape test is hoisted once" $ do
-        -- Every fun-ref branch in call_2 used to re-test the
-        -- '/'(Name, Arity) shape and re-test the arity. Both are now one
-        -- shared guard wrapping the whole fun-ref block, so exactly one
-        -- "/" shape test survives in the dispatcher. This is what keeps
-        -- the per-'$call' cost from growing with the number of
-        -- same-arity functions.
-        prog <- compileOrFail [("order.chr", leqSource)]
-        case findProcedure prog "call_2" of
-          Nothing -> assertFailure "call_2 not found"
-          Just p ->
-            assertEqual
-              "call_2: one hoisted '/' shape test"
-              1
-              (length [() | VM.BMatchTerm _ (VM.Name "/") 2 <- ifConditions p.body])
+          [1 .. 12 :: Int],
+      testCase "a dynamic call compiles to the closure-apply construct" $ do
+        prog <- compileOrFail [("m.chr", lambdaSource)]
+        assertBool
+          "expected an ApplyClosure in some procedure body"
+          (any (hasApplyClosure . (.body)) prog.program.procedures)
     ]
   where
-    callProcName :: Int -> Text
-    callProcName n = "call_" <> T.pack (show n)
-    assertDispatcher :: CompiledProgram -> Int -> IO ()
-    assertDispatcher prog n =
-      case findProcedure prog (callProcName n) of
-        Nothing -> assertFailure ("missing dispatcher " ++ show (callProcName n))
-        Just p ->
-          assertEqual
-            ("call_" ++ show n ++ ": closure parameter plus one per argument")
-            (n + 1)
-            (length p.params)
-    closureArities :: CompiledProgram -> Int -> [Int]
-    closureArities prog n =
-      case findProcedure prog (callProcName n) of
-        Nothing -> []
-        Just p ->
-          [ arity
-          | VM.BMatchTerm _ (VM.Name "__closure") arity <- ifConditions p.body
-          ]
+    funRefKey identity arity =
+      VM.CallableKey
+        { functor = VM.funRefFunctor,
+          identity = identity,
+          arity = arity
+        }
+    lambdaKey identity arity =
+      VM.CallableKey
+        { functor = VM.lambdaClosureFunctor,
+          identity = identity,
+          arity = arity
+        }
+    lookupCallable :: CompiledProgram -> VM.CallableKey -> Maybe Text
+    lookupCallable prog key =
+      case lookup key prog.program.callables of
+        Just (VM.Name n) -> Just n
+        Nothing -> Nothing
+    isLiftedLambda :: D.Function -> Bool
+    isLiftedLambda func = T.isPrefixOf "__lambda_" func.name.baseName
+
+-- | Does any expression in these statements contain the closure-apply
+-- construct? A dynamic call site that still compiled to a @call_N@
+-- reference would leave the table unconsumed.
+hasApplyClosure :: [VM.Stmt] -> Bool
+hasApplyClosure = any goStmt
+  where
+    goStmt s = case s of
+      VM.LetVal _ e -> goVal e
+      VM.LetId _ e -> goId e
+      VM.AssignVal _ e -> goVal e
+      VM.AssignId _ e -> goId e
+      VM.If c ts es -> goBool c || any goStmt ts || any goStmt es
+      VM.Foreach _ _ _ conds body ->
+        any (goVal . snd) conds || any goStmt body
+      VM.Continue _ -> False
+      VM.Break _ -> False
+      VM.Return e -> goVal e
+      VM.ExprStmt e -> goVal e
+      VM.BoolExprStmt e -> goBool e
+      VM.Store e -> goId e
+      VM.Kill e -> goId e
+      VM.AddHistory _ _ -> False
+      VM.DrainReactivationQueue _ body -> any goStmt body
+      VM.PushFrame _ -> False
+    goVal e = case e of
+      VM.ApplyClosure {} -> True
+      VM.Var _ -> False
+      VM.Lit _ -> False
+      VM.CallExpr _ args -> any goArg args
+      VM.HostCall _ es -> any goVal es
+      VM.EvalDeep e' -> goVal e'
+      VM.EvalIs e' -> goVal e'
+      VM.NewVar -> False
+      VM.MakeTerm _ es -> any goVal es
+      VM.GetArg e' _ -> goVal e'
+      VM.FieldArg e' _ -> goId e'
+      VM.FieldType e' -> goId e'
+    goArg (VM.AVal e) = goVal e
+    goArg (VM.AId e) = goId e
+    goBool b = case b of
+      VM.BLit _ -> False
+      VM.BNot e -> goBool e
+      VM.BAnd a b' -> goBool a || goBool b'
+      VM.BOr a b' -> goBool a || goBool b'
+      VM.BMatchTerm e _ _ -> goVal e
+      VM.BEqual a b' -> goVal a || goVal b'
+      VM.BIdEqual a b' -> goId a || goId b'
+      VM.BAlive e -> goId e
+      VM.BIsConstraintType e _ -> goId e
+      VM.BNotInHistory _ ids -> any goId (VM.historyIdsList ids)
+      VM.BUnify a b' -> goVal a || goVal b'
+      VM.BFromVal e -> goVal e
+      VM.BEvalDeep e -> goBool e
+      VM.BSoftGuard e -> goBool e
+    goId e = case e of
+      VM.IdVar _ -> False
+      VM.CreateConstraint _ es -> any goVal es
 
 -- | A module whose only lambda takes three parameters and captures two
 -- free variables, so the lifted function has arity 5 and its closure
--- arity is 4. Importing no higher-order library keeps this the only
--- lambda in the program, which is what lets the test attribute every
--- closure branch to it.
+-- arity is 4.
 lambdaSource :: Text
 lambdaSource =
   ":- module(m, [go/3, mk/2]).\n\

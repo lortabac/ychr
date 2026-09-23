@@ -224,6 +224,8 @@ programInfoBindingName libName = case reverse libName of
 -- >   (let ((%s (%make-session N)))
 -- >     (register-evaluable! %s 'functor1 arity1 proc1)
 -- >     ...
+-- >     (register-callable! %s '/ "prelude:double" 1 proc2)
+-- >     ...
 -- >     %s))
 --
 -- @(open-session NAME)@ in the REPL library simply invokes this thunk;
@@ -238,7 +240,9 @@ programInfoSExpr infoName vmp =
               SList [SAtom "%make-session", SInt (fromIntegral vmp.program.numTypes)]
             ]
         ]
-      registrations = map evaluableRegistration vmp.program.evaluables
+      registrations =
+        map evaluableRegistration vmp.program.evaluables
+          ++ map callableRegistration vmp.program.callables
       -- 'inertTypes' is deliberately not emitted. It only lets a
       -- runtime skip observer registration that could never lead to a
       -- useful reactivation, so honoring it changes no result, and
@@ -262,6 +266,24 @@ evaluableRegistration (key, procName) =
     [ SAtom "register-evaluable!",
       SAtom "%s",
       compileSymbol key.functor.unName,
+      SInt (fromIntegral key.arity),
+      SAtom procName.unName
+    ]
+
+-- | Emit @(register-callable! %s 'functor 'identity arity procedure)@
+-- for a single entry of the program's callables table. The identity is
+-- emitted as a symbol (via 'compileSymbol', which falls back to
+-- @string->symbol@ for names like @prelude:double@ that are not valid
+-- identifiers of their own), matching the atom a closure term carries
+-- at run time. The procedure identifier is the same mangled name bound
+-- by 'compileProcedure'.
+callableRegistration :: (CallableKey, Name) -> SExpr
+callableRegistration (key, procName) =
+  SList
+    [ SAtom "register-callable!",
+      SAtom "%s",
+      compileSymbol key.functor.unName,
+      compileSymbol key.identity.unName,
       SInt (fromIntegral key.arity),
       SAtom procName.unName
     ]
@@ -497,6 +519,16 @@ compileValExpr (EvalIs e) =
       SAtom "%s",
       compileEvalDeep e
     ]
+compileValExpr (ApplyClosure f args) =
+  -- Resolve the closure through the session's callables table and call
+  -- the procedure it maps to. Mirrors 'applyClosure' in the Haskell
+  -- interpreter, including which failure raises which kind of error.
+  SList
+    ( SAtom "%apply-closure"
+        : SAtom "%s"
+        : compileValExpr f
+        : map compileValExpr args
+    )
 compileValExpr NewVar =
   SList [SAtom "make-var", SAtom "%s"]
 compileValExpr (MakeTerm (Name f) args) =
@@ -702,6 +734,13 @@ compileEvalDeep (Var n) = SList [SAtom "deref", SAtom (mangleName n)]
 compileEvalDeep (HostCall n args) = compileHostCallWith compileEvalDeep n args
 compileEvalDeep (CallExpr n args) =
   SList (SAtom (mangleName n) : SAtom "%s" : map compileCallArgDeep args)
+compileEvalDeep (ApplyClosure f args) =
+  SList
+    ( SAtom "%apply-closure"
+        : SAtom "%s"
+        : compileEvalDeep f
+        : map compileEvalDeep args
+    )
 compileEvalDeep (MakeTerm (Name f) args) =
   SList
     [ SAtom "make-term",

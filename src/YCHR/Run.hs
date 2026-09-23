@@ -90,9 +90,9 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Compile
-  ( compileFunctionDef,
+  ( buildCallables,
+    compileFunctionDef,
     funcProcName,
-    genCallFunDispatches,
     vmName,
   )
 import YCHR.Internal.Compile.Pipeline
@@ -125,6 +125,7 @@ import YCHR.Internal.Runtime.Error
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
     HostCallRegistry,
+    applyClosure,
     callProc,
     deepEvalValue,
     emitTrace,
@@ -150,7 +151,7 @@ import YCHR.Internal.StdLib (StdLib)
 import YCHR.Internal.TypeCheck (TypeCheckResult (..), typeCheckGoals)
 import YCHR.Internal.Types (Constraint (..), Term (..))
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (Name (..), Procedure (..))
+import YCHR.Internal.VM (CallableKey, Name (..), Procedure (..))
 
 -- ---------------------------------------------------------------------------
 -- Single-goal API
@@ -232,10 +233,9 @@ runGoalConstraint cp hostCalls constraint = convertRuntimeError $ do
         liftQueryLambdas cp.nextLambdaIndex [D.BodyTell qn exprs]
   unless (null liftErrs) (throwIO (DesugarErrors liftErrs))
   let queryProcs = compileQueryLambdas lambdas
-      allFuns = cp.allFunctions ++ lambdas
-      queryDispatches = genCallFunDispatches allFuns
-      extraProcs = queryProcs ++ queryDispatches
-  withCHRExtra (toSessionInput cp) hostCalls extraProcs $
+      extraProcs = queryProcs
+      extraCallables = buildCallables lambdas
+  withCHRExtra (toSessionInput cp) hostCalls extraProcs extraCallables $
     executePreparedQuery lifted
 
 -- | Resolve a goal's name and arguments, throwing. A name that does not
@@ -390,12 +390,14 @@ runProgramWithGoal typeChecker cp hostCalls src = do
 -- ---------------------------------------------------------------------------
 
 -- | A query parsed, desugared, lambda-lifted, and type-checked.
--- 'extraProcs' (the lifted lambdas and their dispatchers) must be added
--- to the session's procedures before 'executePreparedQuery'.
+-- 'extraProcs' and 'extraCallables' (the lifted lambdas and their
+-- dispatch entries) must be added to the session before
+-- 'executePreparedQuery'.
 data PreparedQuery = PreparedQuery
   { liftedGoals :: [D.BodyGoal],
     queryLambdas :: [D.Function],
-    extraProcs :: [Procedure]
+    extraProcs :: [Procedure],
+    extraCallables :: [(CallableKey, Name)]
   }
 
 -- | 'PreparedQuery' minus the type check. 'goalProgram' is the program to
@@ -469,7 +471,7 @@ prepareQuery typeChecker cp src = do
       resolved.liftedGoals
   unless (null tcResult.errors) (throwIO (TypeErrors tcResult.errors))
   pure
-    ( prepareResolved cp resolved,
+    ( prepareResolved resolved,
       [RenameWarnings resolved.renameWarnings | not (null resolved.renameWarnings)]
         ++ [TypeCheckWarnings tcResult.warnings | not (null tcResult.warnings)]
     )
@@ -486,21 +488,25 @@ prepareQueryUnchecked :: CompiledProgram -> Text -> IO (PreparedQuery, [Warning]
 prepareQueryUnchecked cp src = do
   resolved <- resolveQueryGoals cp src
   pure
-    ( prepareResolved cp resolved,
+    ( prepareResolved resolved,
       [RenameWarnings resolved.renameWarnings | not (null resolved.renameWarnings)]
     )
 
 -- | Finish preparing a resolved query: compile its lifted lambdas and
--- their call dispatchers into the extra procedures the session needs.
+-- their callables dispatch entries into the extras the session needs.
 -- Shared by 'prepareQuery' and 'prepareQueryUnchecked'.
-prepareResolved :: CompiledProgram -> ResolvedQuery -> PreparedQuery
-prepareResolved cp resolved =
+--
+-- The extras are only the query's own lambdas. A callable the query
+-- reaches through a compiled function is already in the session's
+-- table, which is built from the program; nothing has to be
+-- regenerated per query any more.
+prepareResolved :: ResolvedQuery -> PreparedQuery
+prepareResolved resolved =
   PreparedQuery
     { liftedGoals = resolved.liftedGoals,
       queryLambdas = resolved.queryLambdas,
-      extraProcs =
-        compileQueryLambdas resolved.queryLambdas
-          ++ genCallFunDispatches (cp.allFunctions ++ resolved.queryLambdas)
+      extraProcs = compileQueryLambdas resolved.queryLambdas,
+      extraCallables = buildCallables resolved.queryLambdas
     }
 
 -- | Run the 'liftedGoals' of a 'PreparedQuery' in the current session, in
@@ -551,8 +557,12 @@ runProgramWithQuery ::
   SessionInput -> CompiledProgram -> HostCallRegistry -> Text -> IO (Map Text Term)
 runProgramWithQuery typeChecker cp hostCalls src = do
   (prep, _ws) <- prepareQuery typeChecker cp src
-  withCHRExtra (toSessionInput cp) hostCalls prep.extraProcs $
-    executePreparedQuery prep.liftedGoals
+  withCHRExtra
+    (toSessionInput cp)
+    hostCalls
+    prep.extraProcs
+    prep.extraCallables
+    (executePreparedQuery prep.liftedGoals)
 
 -- ---------------------------------------------------------------------------
 -- Query goal evaluator (internal)
@@ -637,10 +647,9 @@ executeBodyGoal (D.BodyCall qn args) = do
   _ <- liftChr (callProc (funcProcName funcName (length argVals)) (map CVal argVals))
   pure ()
 executeBodyGoal (D.BodyApply f args) = do
-  fAndArgVals <- traverse evalNestedExpr (f : args)
-  let n = length args
-      dispatchName = Name ("call_" <> T.pack (show n))
-  _ <- liftChr (callProc dispatchName (map CVal fAndArgVals))
+  fVal <- evalNestedExpr f
+  argVals <- traverse evalNestedExpr args
+  _ <- liftChr (applyClosure fVal argVals)
   pure ()
 
 -- | Runtime error for a failed unification.
@@ -721,10 +730,9 @@ evalNestedExpr (R.CallExpr qn args) = do
   let funcName = Types.qualifiedToName qn
   liftChr (callProc (funcProcName funcName (length argVals)) (map CVal argVals))
 evalNestedExpr (R.ApplyExpr f args) = do
-  fAndArgVals <- traverse evalNestedExpr (f : args)
-  let n = length args
-      dispatchName = Name ("call_" <> T.pack (show n))
-  liftChr (callProc dispatchName (map CVal fAndArgVals))
+  fVal <- evalNestedExpr f
+  argVals <- traverse evalNestedExpr args
+  liftChr (applyClosure fVal argVals)
 evalNestedExpr (R.HostExpr f args) = do
   argVals <- traverse evalNestedExpr args
   env <- liftChr ask

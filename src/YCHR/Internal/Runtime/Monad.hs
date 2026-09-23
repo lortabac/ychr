@@ -27,6 +27,7 @@ module YCHR.Internal.Runtime.Monad
     HostCallFn (..),
     HostCallRegistry,
     EvaluableRegistry,
+    CallableRegistry,
   )
 where
 
@@ -56,7 +57,7 @@ import YCHR.Internal.Runtime.Types
     VarId (..),
   )
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (EvaluableKey, Procedure, RuleId, StackFrame)
+import YCHR.Internal.VM (CallableKey, EvaluableKey, Procedure, RuleId, StackFrame)
 import YCHR.Internal.VM qualified as VM
 
 -- | The runtime call stack (newest frame first), used for error reporting.
@@ -73,6 +74,12 @@ type HostCallRegistry = Map VM.Name HostCallFn
 -- to the mangled 'ProcMap' key that resolves the corresponding
 -- compiled procedure.
 type EvaluableRegistry = Map EvaluableKey VM.Name
+
+-- | Registry of first-class callables the closure-apply construct can
+-- invoke. Maps the 'CallableKey' of a closure value (its functor,
+-- identity field and declared arity) to the mangled 'ProcMap' key that
+-- resolves the corresponding compiled procedure.
+type CallableRegistry = Map CallableKey VM.Name
 
 -- | The host-side runtime monad.
 type Chr = ReaderT SessionEnv IO
@@ -131,6 +138,10 @@ data SessionEnv = SessionEnv
     -- Populated from the compiler's user-defined-function list at
     -- session init.
     evaluables :: !EvaluableRegistry,
+    -- | Closure-apply dispatch table for @'$call'@. Populated from the
+    -- program's callables table at session init, plus any query-time
+    -- lifted lambdas the caller merges in.
+    callables :: !CallableRegistry,
     -- | Export map from the compiler — used to resolve unqualified
     -- constraint names at 'tellConstraint' time.
     exportMap :: !(Map Types.UnqualifiedIdentifier ExportResolution),
@@ -168,10 +179,11 @@ initSessionEnv ::
   ProcMap ->
   HostCallRegistry ->
   EvaluableRegistry ->
+  CallableRegistry ->
   Map Types.UnqualifiedIdentifier ExportResolution ->
   Set Types.QualifiedIdentifier ->
   IO SessionEnv
-initSessionEnv typeNames rNames inert pm hc ev expMap expSet = do
+initSessionEnv typeNames rNames inert pm hc ev cl expMap expSet = do
   vc <- newIORef (VarId 0)
   let typeCount = List.length typeNames
       emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
@@ -201,6 +213,7 @@ initSessionEnv typeNames rNames inert pm hc ev expMap expSet = do
         procMap = pmRef,
         hostCalls = hc,
         evaluables = ev,
+        callables = cl,
         exportMap = expMap,
         exportedSet = expSet,
         trail = Nothing,

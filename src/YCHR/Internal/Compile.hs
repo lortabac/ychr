@@ -26,9 +26,11 @@
 --    based on a suspension's constraint type (paper §5.3, "Selective
 --    Constraint Reactivation").
 --
--- 5. /@$call@ dispatch/: 'genCallFunDispatches' emits one
---    @call_N@ procedure per supported call arity to dispatch first-class
---    function values (function references and lifted lambda closures).
+-- 5. /@$call@ dispatch/: 'buildCallables' emits the program's callables
+--    dispatch table — one entry per user-defined function and per lifted
+--    lambda, keyed by the shape of the closure value that designates it.
+--    Dynamic calls compile to the 'ApplyClosure' construct, which the
+--    runtime resolves through that table in one lookup.
 --
 -- The basic compilation scheme is from paper §5.2; the Early Drop and
 -- Backjumping optimizations are from §5.3 (Listing 8). Selective
@@ -49,8 +51,7 @@ module YCHR.Internal.Compile
     compileFunctionDef,
 
     -- * Call dispatch
-    genCallFunDispatches,
-    maxCallArity,
+    buildCallables,
 
     -- * Re-exported name builders (see "YCHR.Internal.Compile.Names")
     funcProcName,
@@ -82,7 +83,6 @@ import YCHR.Internal.PExpr (PExpr)
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Pretty (prettyPExprSrc)
-import YCHR.Internal.Resolved (maxCallArity)
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types
   ( HeadArg (..),
@@ -133,7 +133,6 @@ compile prog symTab =
       (funProcs, funErrs) = runWriter $ do
         traverse compileFunctionDef prog.functions
       dispatch = genReactivateDispatch symTab
-      callFunDispatches = genCallFunDispatches prog.functions
       allErrs = occErrs ++ procErrs ++ funErrs
    in if null allErrs
         then
@@ -143,8 +142,9 @@ compile prog symTab =
                 typeNames = buildTypeNames symTab,
                 numRules = length ruleDisplayNames,
                 ruleNames = ruleDisplayNames,
-                procedures = procs ++ funProcs ++ [dispatch] ++ callFunDispatches,
+                procedures = procs ++ funProcs ++ [dispatch],
                 evaluables = buildEvaluables prog.functions,
+                callables = buildCallables prog.functions,
                 inertTypes = sortOn ctIndex (mapMaybe (.inertType) constraintProcs)
               }
         else Left allErrs
@@ -170,6 +170,57 @@ buildEvaluables functions =
   | func <- functions,
     let funcName = Types.qualifiedToName func.name
   ]
+
+-- | Build the dispatch table consumed by the runtime's closure-apply
+-- construct. Each user-defined function contributes one entry mapping
+-- the 'CallableKey' of its closure value — the term functor and
+-- identity field the compiler bakes into @fun name\/arity@ and into a
+-- lifted lambda's closure, plus the arity the callable was declared at
+-- — to the mangled 'funcProcName' that resolves the compiled
+-- procedure.
+--
+-- Ordinary functions and lifted lambdas need different keys because
+-- their closures have different shapes (see 'CallableKey'): a function
+-- reference identifies itself by its flattened source name and records
+-- its arity, while a lambda closure identifies itself by the lifted
+-- function's VM name and leaves its declared arity to the table. The
+-- two identity encodings cannot collide: a flattened name always
+-- contains @:@, which a lifted name never does.
+--
+-- The key is unique by construction. Function names and arities are
+-- unique per declaration, and a lambda's VM name is unique per lambda.
+buildCallables :: [D.Function] -> [(CallableKey, Name)]
+buildCallables functions =
+  [ (key, funcProcName funcName func.arity)
+  | func <- functions,
+    let funcName = Types.qualifiedToName func.name,
+    Just key <- [callableKey funcName func]
+  ]
+  where
+    -- A lifted lambda whose 'lambdaArity' is unset contributes no
+    -- entry: the runtime keys a lambda on the arity its source lambda
+    -- declared, and only 'lambdaArity' records that. The desugarer sets
+    -- it on every lambda it lifts, so this arm is unreachable; the old
+    -- dispatchers could fall back to the closure's own field count
+    -- instead, because they tested the closure term at run time, which
+    -- a table built before any closure exists cannot do.
+    callableKey funcName func
+      | isLambdaFunc func =
+          ( \declaredArity ->
+              CallableKey
+                { functor = lambdaClosureFunctor,
+                  identity = vmName funcName,
+                  arity = declaredArity
+                }
+          )
+            <$> func.lambdaArity
+      | otherwise =
+          Just
+            CallableKey
+              { functor = funRefFunctor,
+                identity = Name (flattenName funcName),
+                arity = func.arity
+              }
 
 -- | Build the list of constraint type source names, indexed by
 -- 'Types.ConstraintType'. The list is ordered by the constraint type's
@@ -673,13 +724,15 @@ compileTerm _ _ Wildcard = pure NewVar
 -- | Lower a typed 'D.Expr' to a VM 'ValExpr'. Each constructor maps to
 -- exactly one runtime behavior:
 --
---   * 'D.CallExpr' / 'D.ApplyExpr' / 'D.HostExpr' produce 'CallExpr' /
---     'HostCall' instructions.
+--   * 'D.CallExpr' produces a 'CallExpr'; 'D.HostExpr' a 'HostCall';
+--     'D.ApplyExpr' an 'ApplyClosure', which resolves the closure
+--     through the program's callables table at runtime.
 --   * 'D.CtorExpr' produces a 'MakeTerm', with its arguments recursively
 --     lowered. The native-bool fast path and the @quote\/1@ quoting form
 --     are the only structural special cases.
 --   * 'D.FunRefExpr' produces the canonical @'/'(<flatname>, <arity>)@
---     compound that 'genCallFunDispatches' pattern-matches at runtime.
+--     compound that 'buildCallables' keys the function-reference
+--     entries on and the runtime reads back at a dynamic-call site.
 --   * 'D.LambdaExpr' is removed by lambda lifting before compilation
 --     and is therefore unreachable here.
 --
@@ -733,8 +786,9 @@ compileExpr varMap si e = case e of
     let funcName = Types.qualifiedToName qn
     pure (CallExpr (funcProcName funcName (length args')) (map AVal args'))
   R.ApplyExpr f args -> do
-    fAndArgs <- traverse (compileExpr varMap si) (f : args)
-    pure (CallExpr (callFunProcName (length args)) (map AVal fAndArgs))
+    f' <- compileExpr varMap si f
+    args' <- traverse (compileExpr varMap si) args
+    pure (ApplyClosure f' args')
   R.HostExpr f args -> do
     args' <- traverse (compileExpr varMap si) args
     pure (HostCall (Name f) args')
@@ -769,6 +823,7 @@ freeVars = goV
     goV (HostCall _ es) = Set.unions (map goV es)
     goV (EvalDeep e) = goV e
     goV (EvalIs e) = goV e
+    goV (ApplyClosure f es) = Set.union (goV f) (Set.unions (map goV es))
     goV (MakeTerm _ es) = Set.unions (map goV es)
     goV (GetArg e _) = goV e
     goV (FieldArg e _) = goI e
@@ -1237,8 +1292,9 @@ compileBodyGoal _ varMap si (D.BodyCall qn args) = do
   let funcName = Types.qualifiedToName qn
   pure ([ExprStmt (CallExpr (funcProcName funcName (length args')) (map AVal args'))], varMap)
 compileBodyGoal _ varMap si (D.BodyApply f args) = do
-  fAndArgs <- traverse (compileExpr varMap si) (f : args)
-  pure ([ExprStmt (CallExpr (callFunProcName (length args)) (map AVal fAndArgs))], varMap)
+  f' <- compileExpr varMap si f
+  args' <- traverse (compileExpr varMap si) args
+  pure ([ExprStmt (ApplyClosure f' args')], varMap)
 
 -- ---------------------------------------------------------------------------
 -- Compile function definitions
@@ -1420,9 +1476,10 @@ compileFunStmt varMap si (D.FunCall qn args) = do
       varMap
     )
 compileFunStmt varMap si (D.FunApply f args) = do
-  fAndArgs <- traverse (compileExpr varMap si) (f : args)
+  f' <- compileExpr varMap si f
+  args' <- traverse (compileExpr varMap si) args
   pure
-    ( [ExprStmt (CallExpr (callFunProcName (length args)) (map AVal fAndArgs))],
+    ( [ExprStmt (ApplyClosure f' args')],
       varMap
     )
 
@@ -1458,162 +1515,6 @@ genReactivateDispatch symTab =
             )
         ]
         []
-
--- ---------------------------------------------------------------------------
--- call dispatch
--- ---------------------------------------------------------------------------
-
--- | Generate one @call_N@ dispatcher for every arity in
--- @1 .. 'maxCallArity'@.
--- Each procedure pattern-matches on the closure/function-reference term
--- and dispatches to the appropriate compiled function.
-genCallFunDispatches :: [D.Function] -> [Procedure]
-genCallFunDispatches functions =
-  [genCallFunDispatch functions callArity | callArity <- [1 .. maxCallArity]]
-
--- | Generate the @call_N@ dispatcher for one call arity: one branch per
--- same-arity function reference, then one per lifted lambda, then the
--- no-match error.
---
--- Every function-reference branch in a given dispatcher tests the same
--- closure shape (@'\/'(Name, Arity)@) and the same arity, so those two
--- tests are hoisted into a single guard around the whole function-
--- reference block, and the closure's name argument is extracted once
--- into 'closureFunctorName'. What remains per branch is one name
--- comparison. Without the hoist a @call_N@ is a flat chain in which every
--- branch re-tests the shape and re-extracts the arity — O(branches) work
--- per @'$call'@ on a program with many same-arity functions, which is the
--- shape the type checker's stdlib-heavy workload spends its time in. The
--- hoist is a pure reordering of tests, not a semantic change: the shared
--- guard is a necessary condition of every function-reference branch, so a
--- closure that fails it would have failed each of them in turn, and then
--- falls through to the lambda branches exactly as before. Branch order —
--- and so which branch wins for a given closure — is unchanged.
-genCallFunDispatch :: [D.Function] -> Int -> Procedure
-genCallFunDispatch functions callArity =
-  let closureParam = Name "closure"
-      argParams = [Name ("arg_" <> T.pack (show i)) | i <- [0 .. callArity - 1]]
-      funRefBranches = concatMap (genFunRefBranch callArity argParams) functions
-      lambdaBranches = concatMap (genLambdaBranch callArity argParams) functions
-      funRefBlock
-        | null funRefBranches = []
-        | otherwise =
-            [ If
-                ( BAnd
-                    (BMatchTerm (Var closureParam) (Name "/") 2)
-                    ( BEqual
-                        (GetArg (Var closureParam) 1)
-                        (Lit (IntLit (fromIntegral callArity)))
-                    )
-                )
-                (LetVal closureFunctorName (GetArg (Var closureParam) 0) : funRefBranches)
-                []
-            ]
-      -- Same distinction as function-equation dispatch, but the blocked
-      -- position is static here: only the closure operand is ever
-      -- pattern-tested, so the whole message is known at compile time.
-      errorStmt =
-        If
-          (BFromVal (HostCall chrIsUnboundName [Var closureParam]))
-          [ ExprStmt
-              ( HostCall
-                  chrInstErrorName
-                  [ Lit
-                      ( AtomLit
-                          ( "'$call': closure argument is not sufficiently"
-                              <> " instantiated (unbound variable)"
-                          )
-                      )
-                  ]
-              )
-          ]
-          [ExprStmt (HostCall chrErrorName [Lit (AtomLit "call: no matching closure")])]
-   in Procedure
-        { name = callFunProcName callArity,
-          params = closureParam : argParams,
-          body = funRefBlock ++ lambdaBranches ++ [errorStmt],
-          procKind = PKCallDispatch callArity
-        }
-
--- | Local bound by a @call_N@ dispatcher to the closure's first argument
--- (the function's flattened name, or a lifted lambda's identifier),
--- extracted once after the shared shape/arity guard instead of once per
--- branch. Not a source-spellable name concern: a dispatcher has no source
--- variables in scope, only its own @closure@ and @arg_i@ parameters.
-closureFunctorName :: Name
-closureFunctorName = Name "closure_name"
-
--- | Generate a dispatch branch for a function reference (@name/arity@).
--- Only emits a branch when the function's arity matches @callArity@. The
--- shared shape/arity test and the name extraction are emitted by
--- 'genCallFunDispatch'; this branch only compares the already-extracted
--- name against the function's.
-genFunRefBranch :: Int -> [Name] -> D.Function -> [Stmt]
-genFunRefBranch callArity argParams func
-  | func.arity /= callArity = []
-  | otherwise =
-      let funcName = Types.qualifiedToName func.name
-          flatName = flattenName funcName
-          pName = funcProcName funcName func.arity
-          condition = BEqual (Var closureFunctorName) (Lit (AtomLit flatName))
-       in [ If
-              condition
-              [Return (CallExpr pName (map (AVal . Var) argParams))]
-              []
-          ]
-
--- | Generate a dispatch branch for a lifted lambda closure.
--- Only emits a branch for functions whose name starts with @__lambda_@.
---
--- Closures are self-describing terms of the form
--- @__closure(LambdaId, SourceForm, Cap1, …, CapN)@.
--- The first two arguments are the lambda identifier and the quoted
--- source form (for pretty-printing); captured variables start at
--- index 2, hence the @+ 2@ offset in 'captureBinds' below.
---
--- Only one call arity can ever match a given closure: the closure's
--- arity is @captures + 2@, while this branch tests
--- @(func.arity - callArity) + 2@, and @func.arity@ is @captures@ plus
--- the source lambda's declared parameters. Requiring @callArity@ to
--- equal that declared arity keeps the other arities' branches (dead
--- code) out of the dispatcher.
-genLambdaBranch :: Int -> [Name] -> D.Function -> [Stmt]
-genLambdaBranch callArity argParams func
-  | not (isLambdaFunc func) = []
-  | Just declaredArity <- func.lambdaArity, callArity /= declaredArity = []
-  | numCaptures < 0 = []
-  | otherwise =
-      let funcName = Types.qualifiedToName func.name
-          Name lambdaVmText = vmName funcName
-          pName = funcProcName funcName func.arity
-          -- The closure has 2 header fields (lambdaId, sourceForm) followed
-          -- by the captured free variables, so its total arity is
-          -- numCaptures + 2.
-          condition =
-            BAnd
-              (BMatchTerm (Var (Name "closure")) (Name "__closure") (numCaptures + 2))
-              (BEqual (GetArg (Var (Name "closure")) 0) (Lit (AtomLit lambdaVmText)))
-          -- Captures are stored after the 2 header fields (lambdaId at
-          -- index 0, sourceForm at index 1), so capture i lives at
-          -- index i + 2.
-          captureBinds =
-            [ LetVal
-                (Name ("cap_" <> T.pack (show i)))
-                (GetArg (Var (Name "closure")) (i + 2))
-            | i <- [0 .. numCaptures - 1]
-            ]
-          captureVars =
-            [Var (Name ("cap_" <> T.pack (show i))) | i <- [0 .. numCaptures - 1]]
-          allArgs = captureVars ++ map Var argParams
-       in [ If
-              condition
-              ( captureBinds
-                  ++ [Return (CallExpr pName (map AVal allArgs))]
-              )
-              []
-          ]
-  where
-    numCaptures = func.arity - callArity
 
 -- | Check if a function was generated by lambda lifting.
 isLambdaFunc :: D.Function -> Bool

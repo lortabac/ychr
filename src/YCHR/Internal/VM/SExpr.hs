@@ -114,6 +114,7 @@ programToSExpr prog =
         : SInt (fromIntegral prog.numRules)
         : SList (SAtom "rule-names" : map SString prog.ruleNames)
         : SList (SAtom "evaluables" : map evaluableEntryToSExpr prog.evaluables)
+        : SList (SAtom "callables" : map callableEntryToSExpr prog.callables)
         : SList (SAtom "inert-types" : map constraintTypeToSExpr prog.inertTypes)
         : map procedureToSExpr prog.procedures
     )
@@ -121,6 +122,15 @@ programToSExpr prog =
 evaluableEntryToSExpr :: (EvaluableKey, Name) -> SExpr
 evaluableEntryToSExpr (key, procName) =
   SList [nameToSExpr key.functor, SInt (fromIntegral key.arity), nameToSExpr procName]
+
+callableEntryToSExpr :: (CallableKey, Name) -> SExpr
+callableEntryToSExpr (key, procName) =
+  SList
+    [ nameToSExpr key.functor,
+      nameToSExpr key.identity,
+      SInt (fromIntegral key.arity),
+      nameToSExpr procName
+    ]
 
 procedureToSExpr :: Procedure -> SExpr
 procedureToSExpr proc =
@@ -144,8 +154,6 @@ procKindToSExpr (PKOccurrence ct n rid display) =
       SString display
     ]
 procKindToSExpr PKReactivateDispatch = SList [SAtom "reactivate-dispatch"]
-procKindToSExpr (PKCallDispatch arity) =
-  SList [SAtom "call-dispatch", SInt (fromIntegral arity)]
 procKindToSExpr (PKFunction qn arity) =
   SList
     [ SAtom "function",
@@ -200,6 +208,8 @@ valExprToSExpr (HostCall n es) =
   SList (SAtom "host-call" : nameToSExpr n : map valExprToSExpr es)
 valExprToSExpr (EvalDeep e) = SList [SAtom "eval-deep", valExprToSExpr e]
 valExprToSExpr (EvalIs e) = SList [SAtom "eval-is", valExprToSExpr e]
+valExprToSExpr (ApplyClosure f es) =
+  SList (SAtom "apply-closure" : valExprToSExpr f : map valExprToSExpr es)
 valExprToSExpr NewVar = SAtom "new-var"
 valExprToSExpr (MakeTerm n es) =
   SList (SAtom "make-term" : nameToSExpr n : map valExprToSExpr es)
@@ -325,10 +335,23 @@ programFromSExpr
     tns <- traverse chrNameFromSExpr tnSexprs
     rns <- traverse textFromSExpr rnSexprs
     evs <- traverse evaluableEntryFromSExpr evSexprs
-    -- The inert-types entry is optional on read: a program written
-    -- before the field existed simply declares no inert type, and
-    -- honoring the field is an optimization no result depends on.
-    let (itSexprs, procs) = case rest of
+    -- Both @callables@ and @inert-types@ are optional on read, so a
+    -- program that simply lacks either header entry still loads: an
+    -- absent @callables@ is an empty dispatch table, and an absent
+    -- @inert-types@ is a hint no result depends on.
+    --
+    -- This is not a general back-compatibility promise for older text.
+    -- A program written before keyed @'$call'@ dispatch also carries
+    -- the ten @(call-dispatch N)@ procedures the compiler used to
+    -- emit, and that proc-kind is gone, so such text is rejected at
+    -- its procedure kinds. The format is a compiler *output* that
+    -- nothing reads back, so what that costs is that a stale dump
+    -- cannot be re-read by a newer compiler.
+    let (clSexprs, rest') = case rest of
+          SList (SAtom "callables" : cls) : rs -> (cls, rs)
+          rs -> ([], rs)
+    cls <- traverse callableEntryFromSExpr clSexprs
+    let (itSexprs, procs) = case rest' of
           SList (SAtom "inert-types" : its) : ps -> (its, ps)
           ps -> ([], ps)
     its <- traverse constraintTypeFromSExpr itSexprs
@@ -340,6 +363,7 @@ programFromSExpr
           numRules = fromInteger nr,
           ruleNames = rns,
           evaluables = evs,
+          callables = cls,
           inertTypes = its,
           procedures = ps
         }
@@ -351,6 +375,21 @@ evaluableEntryFromSExpr (SList [fSexpr, SInt arity, pSexpr]) = do
   procName <- nameFromSExpr pSexpr
   pure (EvaluableKey {functor = functor, arity = fromInteger arity}, procName)
 evaluableEntryFromSExpr s = err ("expected evaluable entry, got: " <> printSExpr s)
+
+callableEntryFromSExpr :: SExpr -> Err (CallableKey, Name)
+callableEntryFromSExpr (SList [fSexpr, iSexpr, SInt arity, pSexpr]) = do
+  functor <- nameFromSExpr fSexpr
+  identity <- nameFromSExpr iSexpr
+  procName <- nameFromSExpr pSexpr
+  pure
+    ( CallableKey
+        { functor = functor,
+          identity = identity,
+          arity = fromInteger arity
+        },
+      procName
+    )
+callableEntryFromSExpr s = err ("expected callable entry, got: " <> printSExpr s)
 
 textFromSExpr :: SExpr -> Err Text
 textFromSExpr (SString t) = pure t
@@ -384,8 +423,6 @@ procKindFromSExpr (SList [SAtom "occurrence", ct, SInt n, rid, SString display])
     <*> ruleIdFromSExpr rid
     <*> pure display
 procKindFromSExpr (SList [SAtom "reactivate-dispatch"]) = pure PKReactivateDispatch
-procKindFromSExpr (SList [SAtom "call-dispatch", SInt arity]) =
-  pure (PKCallDispatch (fromInteger arity))
 procKindFromSExpr (SList [SAtom "function", SString m, SString b, SInt arity]) =
   pure (PKFunction (Types.QualifiedName m b) (fromInteger arity))
 procKindFromSExpr s = err ("expected proc-kind, got: " <> printSExpr s)
@@ -451,6 +488,8 @@ valExprFromSExpr (SList (SAtom "host-call" : n : es)) =
   HostCall <$> nameFromSExpr n <*> traverse valExprFromSExpr es
 valExprFromSExpr (SList [SAtom "eval-deep", e]) = EvalDeep <$> valExprFromSExpr e
 valExprFromSExpr (SList [SAtom "eval-is", e]) = EvalIs <$> valExprFromSExpr e
+valExprFromSExpr (SList (SAtom "apply-closure" : f : es)) =
+  ApplyClosure <$> valExprFromSExpr f <*> traverse valExprFromSExpr es
 valExprFromSExpr (SAtom "new-var") = pure NewVar
 valExprFromSExpr (SList (SAtom "make-term" : n : es)) =
   MakeTerm <$> nameFromSExpr n <*> traverse valExprFromSExpr es

@@ -26,9 +26,9 @@ tests =
 
 roundtripTests :: [TestTree]
 roundtripTests =
-  [ testCase "empty program" $ roundtrip (Program 0 [] 0 [] [] [] []),
+  [ testCase "empty program" $ roundtrip (Program 0 [] 0 [] [] [] [] []),
     testCase "single empty procedure" $
-      roundtrip (Program 1 [Types.Unqualified "foo"] 0 [] [mkProcedure "foo" [] []] [] []),
+      roundtrip (Program 1 [Types.Unqualified "foo"] 0 [] [mkProcedure "foo" [] []] [] [] []),
     testCase "procedure with params" $
       roundtrip
         ( Program
@@ -37,6 +37,7 @@ roundtripTests =
             0
             []
             [mkProcedure "tell_leq2" ["X", "Y"] []]
+            []
             []
             []
         ),
@@ -112,6 +113,8 @@ roundtripTests =
               LetVal "h" (CallExpr "proc" [AVal (Var "a"), AVal (Var "b")]),
               LetVal "i" (HostCall "+" [Var "a", Var "b"]),
               LetVal "j" (EvalDeep (Var "expr")),
+              LetVal "k" (EvalIs (Var "expr")),
+              LetVal "l" (ApplyClosure (Var "f") [Var "a", Var "b"]),
               LetVal "n" NewVar,
               LetVal "o" (MakeTerm "f" [Var "a", Var "b"]),
               LetVal "q" (GetArg (Var "x") 0),
@@ -185,6 +188,7 @@ roundtripTests =
                 ]
             ]
             []
+            []
             [ConstraintType 1]
         )
   ]
@@ -214,10 +218,21 @@ formatTests =
   [ testCase "var serialization" $
       assertContains
         (serializeProg (mkProg [ExprStmt (Var "x")]))
-        ( "(program 0 (type-names) 0 (rule-names) (evaluables) (inert-types) "
+        ( "(program 0 (type-names) 0 (rule-names) (evaluables) (callables) "
+            <> "(inert-types) "
             <> "(procedure \"p\" () (reactivate-dispatch) "
             <> "(expr-stmt (var \"x\"))))"
         ),
+    testCase "callables entry serialization" $
+      assertContains
+        ( serializeProg
+            (mkProgWithCallables [(funRefKey "prelude:double" 1, "func_prelude__double1")])
+        )
+        "(callables (\"/\" \"prelude:double\" 1 \"func_prelude__double1\"))",
+    testCase "apply-closure serialization" $
+      assertContains
+        (serializeProg (mkProg [ExprStmt (ApplyClosure (Var "f") [Var "a"])]))
+        "(apply-closure (var \"f\") (var \"a\"))",
     testCase "literals inline without wrapper" $ do
       assertContains (serializeProg (mkProg [LetVal "x" (Lit (BoolLit True))])) "true"
       assertContains (serializeProg (mkProg [LetVal "x" (Lit (BoolLit False))])) "false"
@@ -235,6 +250,7 @@ formatTests =
                     2
                     [Types.Qualified "M" "leq", Types.Unqualified "gcd"]
                     0
+                    []
                     []
                     []
                     []
@@ -266,14 +282,24 @@ formatTests =
 serializeProg :: Program -> Text
 serializeProg = serialize . mkVMProg
 
--- | A program header written before @inert-types@ existed still
--- loads, and declares no inert type. The entry is an optimization
--- hint no result depends on, so an older @.vm@ file must not be
--- rejected for lacking it.
+-- | A program header without the @callables@ and @inert-types@ entries
+-- still loads, and declares no callable and no inert type: an absent
+-- table is an empty one, and an absent hint changes no result.
+--
+-- This is a header-shape test, not a general back-compatibility
+-- promise. The fixture below is a hand-written minimal program; one
+-- written by a compiler before keyed @'$call'@ dispatch would also
+-- carry @(call-dispatch N)@ procedures, a proc-kind the reader no
+-- longer knows.
 legacyProgramTests :: [TestTree]
 legacyProgramTests =
-  [ testCase "program without inert-types entry loads" $
+  [ testCase "a header without the callables and inert-types entries loads" $
       case deserialize legacyProgramText of
+        Left e -> assertBool ("deserialization failed: " <> T.unpack e) False
+        Right vmp' -> vmp' @?= mkVMProg (mkProg [ExprStmt (Var "x")]),
+    testCase "an explicit empty callables entry reads the same" $
+      case deserialize
+        (T.replace "(evaluables)" "(evaluables) (callables)" legacyProgramText) of
         Left e -> assertBool ("deserialization failed: " <> T.unpack e) False
         Right vmp' -> vmp' @?= mkVMProg (mkProg [ExprStmt (Var "x")])
   ]
@@ -295,7 +321,18 @@ histIds ids = mkHistoryIds (zip [0 :: Int ..] ids)
 
 -- | Build a minimal program with one procedure containing the given body.
 mkProg :: [Stmt] -> Program
-mkProg body = Program 0 [] 0 [] [mkProcedure "p" [] body] [] []
+mkProg body = Program 0 [] 0 [] [mkProcedure "p" [] body] [] [] []
+
+-- | 'mkProg' with a non-empty callables table.
+mkProgWithCallables :: [(CallableKey, Name)] -> Program
+mkProgWithCallables callables =
+  Program 0 [] 0 [] [mkProcedure "p" [] []] [] callables []
+
+-- | A function-reference callables key, the shape
+-- 'YCHR.Internal.Compile.buildCallables' mints for @fun name\/arity@.
+funRefKey :: Name -> Int -> CallableKey
+funRefKey identity arity =
+  CallableKey {functor = funRefFunctor, identity = identity, arity = arity}
 
 -- | Build a 'Procedure' with a placeholder 'procKind'. The kind tag
 -- doesn't affect serialization round-tripping or the format tests'

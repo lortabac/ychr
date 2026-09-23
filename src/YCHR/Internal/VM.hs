@@ -5,6 +5,9 @@ module YCHR.Internal.VM
     Procedure (..),
     ProcKind (..),
     EvaluableKey (..),
+    CallableKey (..),
+    funRefFunctor,
+    lambdaClosureFunctor,
 
     -- * Statements
     Stmt (..),

@@ -14,8 +14,10 @@ by name.
 
 Everything the runtime provides (constraint store, unification, term
 manipulation) is a dedicated VM instruction; `call-expr` calls a
-compiler-generated procedure and `host-call` a host language function
-([Procedure and host calls](#procedure-and-host-calls)). Every
+compiler-generated procedure, `host-call` a host language function
+([Procedure and host calls](#procedure-and-host-calls)) and
+`apply-closure` a first-class callable the program's callables table
+resolves ([Closure application](#closure-application)). Every
 expression has one of the three kinds below.
 
 ### Expression kinds: values, ids, and bools
@@ -126,6 +128,7 @@ compilation.
   <num-rules>
   (rule-names "<rule-name>" ...)
   (evaluables ("<functor>" <arity> "<proc-name>") ...)
+  (callables ("<functor>" "<identity>" <arity> "<proc-name>") ...)
   (inert-types <constraint-type> ...)
   <procedure>
   ...)
@@ -146,6 +149,16 @@ compilation.
   (module and base name joined by `__`, e.g. `"prelude__+"`),
   `<arity>` the argument count, `<proc-name>` the mangled name of the
   `func_*` procedure. Present even when empty.
+- `callables` — the dispatch table `apply-closure` consults (see
+  [closure application](#closure-application)), one entry per
+  user-defined function and per lifted lambda. `<functor>` is the
+  closure term's functor (`"/"` for a function reference, `__closure`
+  for a lifted lambda), `<identity>` its first field (a flattened
+  function name like `"prelude:double"`, or a lambda identifier),
+  `<arity>` the arity the callable was declared at, and `<proc-name>`
+  the mangled name of the `func_*` procedure. Present, possibly empty,
+  in everything the compiler emits; optional on read, like
+  `inert-types`.
 - `inert-types` — constraint types whose activation runs no
   occurrence procedure (no occurrences, or only passive ones).
   Reactivating one can only re-store it, and `store` is idempotent,
@@ -179,7 +192,6 @@ classify it without parsing its mangled name:
 | `(activate <type>)` | Activate procedure for constraint type `<type>`. |
 | `(occurrence <type> <occ> <rule-id> "<rule-name>")` | Occurrence procedure: 1-based occurrence number `<occ>` of constraint type `<type>`, belonging to rule `<rule-id>` (the string is the rule's display name). |
 | `(reactivate-dispatch)` | The reactivation dispatcher. |
-| `(call-dispatch <arity>)` | The `call_n` dispatcher for arity `<arity>`. |
 | `(function "<module>" "<name>" <arity>)` | A user-defined function, identified by its unmangled module, base name, and arity. |
 
 The roles of the generated procedures:
@@ -191,7 +203,10 @@ The roles of the generated procedures:
 | `occurrence_c_j(id, X_0, ..., X_n)` | Handles the j-th occurrence of constraint c. Iterates over partner constraints, checks guards, fires rules. Returns `true` (early drop) or `false`. | id, then values |
 | `reactivate_dispatch(susp)` | Checks the suspension's constraint type and calls the appropriate `activate_c`. | id |
 | `func_f(arg_0, ..., arg_n)` | Evaluates a user-defined function. | all values |
-| `call_n(closure, arg_0, ..., arg_{n-1})` | Dispatches a first-class function value to its compiled procedure. | all values |
+
+There is no dispatcher procedure for a dynamic call: `'$call'` lowers to
+`apply-closure`, which resolves the callee through the `callables` table
+(see [closure application](#closure-application)).
 
 
 ### Procedure Naming
@@ -235,11 +250,8 @@ For a function `math:factorial/1`:
 | func | `func_math__factorial1` |
 
 `reactivate_dispatch` is unique and not parameterized by constraint
-name; the `call_n` dispatchers (`call_1` … `call_10`) are unique
-per call arity. A dispatcher carries a branch for each function
-reference at that arity and for each lifted lambda whose source lambda
-declared that arity; other lambda arities cannot match the closure and
-are not emitted.
+name. Dynamic calls add no procedure name of their own: a `'$call'` is
+an `apply-closure`, resolved through the `callables` table.
 
 **Non-ASCII encoding.** A character outside ASCII is encoded as
 `%%u<hex>`, `<hex>` being the Unicode code point in lowercase
@@ -536,6 +548,47 @@ it maps to. Emitted only for `R is X` with a syntactically variable
 right-hand side: the compound is not known until run time, so
 dispatch goes through the table instead of a direct `call-expr`.
 
+### Closure application
+
+```scheme
+(apply-closure <val-expr> <val-expr> ...)
+```
+
+Apply a first-class callable to the arguments that follow it: the
+whole of `'$call'(F, A1, …, An)`, and the only form a dynamic call
+takes. Evaluate the closure operand, dereference it, and read a key off
+its shape:
+
+| Closure | Key `<functor>` `<identity>` `<arity>` |
+|---------|----------------------------------------|
+| `/(Identity, Arity)` — a function reference `fun name/arity` | `"/"`, the closure's first field (a flattened source name, `module:name`), the arity in its second field |
+| `__closure(Identity, SourceForm, Capture …)` — a lifted lambda | `"__closure"`, the closure's first field, the arity it is *applied* at |
+
+The key is looked up in the program's `callables` table (see
+[Program](#program)) and the procedure it maps to is called with the
+closure's captured values — the fields after `SourceForm` for a lambda,
+none for a function reference — followed by the arguments. The functor
+is part of the key so an ordinary data term whose first argument
+happens to be a function name is not mistaken for a callable.
+
+Two failures, with distinct kinds:
+
+- an *unbound* closure is an insufficient-instantiation error, so a
+  rule guard soft-fails and retries the occurrence after reactivation;
+- anything else — a non-callable, a function reference applied at an
+  arity other than the one it records, or a lambda applied at an arity
+  other than the one its source lambda declared — is a general
+  `call: no matching closure` error.
+
+The declared-arity check is load-bearing: one identity can name several
+functions (`call/2` and `call/3`), so a key of functor and identity
+alone would redirect an application of `fun call/2` to `call/3`.
+
+A lambda closure's field count is not itself validated: the captures
+are simply the fields after the header, so a malformed `__closure`
+term — something no compiler emits — surfaces as an argument-count
+mismatch inside the callee rather than as `call: no matching closure`.
+
 ### Logical variables
 
 ```scheme
@@ -811,10 +864,10 @@ reflexivity @ leq(X, X) <=> true.
 
 The output of `ychr compile -t vm mymodule.chr`, reindented. The
 prelude is always compiled in, so the real dump also has one
-`evaluables` entry, one `func_*` procedure and one export per prelude
-function, plus the `call_1` … `call_10` dispatchers — elided here
-(`; ...`). The constraint is `mymodule:leq/2`, so procedure names
-follow `<prefix>_mymodule__leq2`:
+`evaluables` entry, one `callables` entry, one `func_*` procedure and
+one export per prelude function — elided here (`; ...`). The constraint
+is `mymodule:leq/2`, so procedure names follow
+`<prefix>_mymodule__leq2`:
 
 ```scheme
 (vm-program
@@ -825,6 +878,10 @@ follow `<prefix>_mymodule__leq2`:
     (evaluables
       ("prelude__+" 2 "func_prelude____u2b__2")
       ; ... one entry per prelude function elided
+      )
+    (callables
+      ("/" "prelude:+" 2 "func_prelude____u2b__2")
+      ; ... one entry per prelude function and lifted lambda elided
       )
     (inert-types)
 
@@ -865,8 +922,6 @@ follow `<prefix>_mymodule__leq2`:
         ((expr-stmt (call-expr "activate_mymodule__leq2"
                       (arg-id (id-var "susp")))))
         ()))
-
-    ; ... call_1 … call_10 dispatcher procedures elided
     )
 
   (exports

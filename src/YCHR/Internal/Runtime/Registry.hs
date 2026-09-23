@@ -43,7 +43,11 @@ import Control.Monad.IO.Class (liftIO)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import YCHR.Internal.Runtime.Error (instantiationErrorS, runtimeErrorS)
+import YCHR.Internal.Runtime.Error
+  ( chrRuntimeErrorPrefix,
+    instantiationErrorS,
+    runtimeErrorS,
+  )
 import YCHR.Internal.Runtime.Monad (Chr, HostCallFn (..), HostCallRegistry)
 import YCHR.Internal.Runtime.Types (Value (..), VarId)
 import YCHR.Internal.Runtime.Var (deref, equal, getVarId, newVar, unifiable)
@@ -183,8 +187,8 @@ baseHostCallRegistry =
     notInstantiated =
       " is not sufficiently instantiated to select an equation"
         <> " (unbound variable at a matched position)"
-    chrErr detail = runtimeErrorS ("CHR runtime error: " <> detail)
-    chrInstErr detail = instantiationErrorS ("CHR runtime error: " <> detail)
+    chrErr detail = runtimeErrorS (chrRuntimeErrorPrefix <> detail)
+    chrInstErr detail = instantiationErrorS (chrRuntimeErrorPrefix <> detail)
     writeStr = HostCallFn $ \case
       [VText s] -> unit <$ liftIO (putStr (T.unpack s))
       args -> argError "write" args "write: expected 1 Text argument"

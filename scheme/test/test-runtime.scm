@@ -229,4 +229,96 @@
     (%unify s x #t)
     (test-assert "derefs through a binding" (%bool-from-value x))))
 
+;;; --------------------------------------------------------------------------
+;;; %apply-closure — the `'$call'` dispatch construct
+;;;
+;;; Mirrors `applyClosure` in the Haskell interpreter. A closure resolves
+;;; through the session's callables table by (functor, identity, declared
+;;; arity); a function reference is looked up at the arity it records, a
+;;; lifted lambda at the arity it is applied at, captured values are
+;;; passed before the application arguments, an unbound closure is an
+;;; instantiation failure, and everything else is a definite mismatch.
+;;;
+;;; The identities are built with `string->symbol` because a flattened
+;;; function name contains `:`, which R6RS does not admit as a subsequent
+;;; identifier character even though Guile reads it.
+;;; --------------------------------------------------------------------------
+
+(define prelude-double (string->symbol "prelude:double"))
+(define prelude-nope (string->symbol "prelude:nope"))
+
+;; A session with three callables registered: a function reference at
+;; two arities (so a key of functor and identity alone would resolve the
+;; unary reference to the binary procedure — the declared-arity check is
+;; what stops it) and a unary lifted lambda carrying one capture.
+(define (closure-session)
+  (let ((s (fresh-session)))
+    (register-callable! s '/ prelude-double 1 (lambda (s a) (* 2 a)))
+    (register-callable! s '/ prelude-double 2 (lambda (s a b) (+ a b)))
+    (register-callable! s '__closure 'm__lambda_0 1 (lambda (s cap a) (+ cap a)))
+    s))
+
+;; The closure value a `fun name/arity` reference produces.
+(define (funref-closure identity arity)
+  (make-term '/ (vector identity arity)))
+
+(test-group "%apply-closure"
+  (test-equal "function reference dispatches"
+              10
+              (%apply-closure (closure-session)
+                              (funref-closure prelude-double 1)
+                              5))
+  (test-equal "arity mismatch is a general failure"
+              'general
+              (failure-kind
+               (lambda ()
+                 (%apply-closure (closure-session)
+                                 (funref-closure prelude-double 1)
+                                 5 6))))
+  ;; The same identity *is* registered at arity 2, so this fails only
+  ;; because the lookup uses the arity the closure records. Dropping that
+  ;; check would resolve it to the binary procedure and answer 11.
+  (test-equal "the arity the closure records selects the procedure"
+              11
+              (%apply-closure (closure-session)
+                              (funref-closure prelude-double 2)
+                              5 6))
+  (test-equal "lifted lambda dispatches with its captures"
+              15
+              (%apply-closure (closure-session)
+                              (make-term '__closure (vector 'm__lambda_0 'src 10))
+                              5))
+  ;; The generated dispatchers read the header fields through `deref`
+  ;; (their `equal?/chr` comparisons did), so a bound header field
+  ;; still dispatches.
+  (let* ((s (closure-session))
+         (ident (make-var s))
+         (arity (make-var s)))
+    (%unify s ident prelude-double)
+    (%unify s arity 1)
+    (test-equal "a bound header field still dispatches"
+                10
+                (%apply-closure s (make-term '/ (vector ident arity)) 5)))
+  (test-equal "unknown identity is a general failure"
+              'general
+              (failure-kind
+               (lambda ()
+                 (%apply-closure (closure-session)
+                                 (funref-closure prelude-nope 1)
+                                 5))))
+  (test-equal "unbound closure is an instantiation failure"
+              'inst
+              (failure-kind
+               (lambda () (%apply-closure (closure-session) (fresh-var) 5))))
+  (test-equal "a non-closure is a general failure"
+              'general
+              (failure-kind (lambda () (%apply-closure (closure-session) 5 1))))
+  (test-equal "a data term with a closure-looking field is not a closure"
+              'general
+              (failure-kind
+               (lambda ()
+                 (%apply-closure (closure-session)
+                                 (make-term 'pair (vector prelude-double 1))
+                                 5)))))
+
 (test-end "runtime")

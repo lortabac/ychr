@@ -1,0 +1,1 @@
+closure_dispatch_errors:go(apply2(fun scale/1, 1, 2))

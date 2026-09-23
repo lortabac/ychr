@@ -219,7 +219,7 @@ def test_scheme_golden(test_dir, case_name, ychr_bin, guile_bin, scheme_lib_dir,
 def test_gen_driver_over_arity_goal(ychr_bin, project_root, tmp_path):
     """`gen-driver` resolves its goal through the shared resolver, so an
     over-arity `$call` in the goal is rejected with YCHR-16022 there too,
-    not generated into a driver that misses a `call_11` procedure."""
+    rather than generated into a driver."""
     program = tmp_path / "gd.chr"
     program.write_text(
         ":- module(gd, [go/1]).\n"
@@ -279,4 +279,41 @@ def test_gen_driver_host_call_mapping(ychr_bin, project_root, tmp_path):
     # library emits it.
     unmapped = driver("gdhc:go(host:my_add(1, 2), R)")
     assert "(my_add (deref 1) (deref 2))" in unmapped
+
+
+def test_gen_driver_dynamic_call_mapping(ychr_bin, project_root, tmp_path):
+    """A `'$call'` in a goal must lower to the runtime's `%apply-closure`
+    — which resolves the closure through the session's callables table —
+    not to a `call_N` identifier that no generated library defines any
+    more.
+
+    The callee here is a goal variable. A function reference *as the
+    callee* does not resolve today (`fun double/1` under `'$call'` is
+    reported as an unknown name), a separate, pre-existing gap in the
+    query renamer; the reachable function-reference path — one passed to
+    a declared function — is pinned end to end by the `driver_funref`
+    golden case. This test pins the driver text without Guile.
+    """
+    program = tmp_path / "gdc.chr"
+    program.write_text(
+        ":- module(gdc, [go/2]).\n"
+        ":- use_module(library(prelude)).\n"
+        ":- chr_constraint go(any, any).\n"
+    )
+    result = subprocess.run(
+        [
+            ychr_bin,
+            "gen-driver",
+            "-g",
+            "gdc:go('$call'(F, 1), R)",
+            str(program),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    driver_text = result.stdout
+    assert "call_" not in driver_text
+    assert "(%apply-closure %s F 1)" in driver_text
 

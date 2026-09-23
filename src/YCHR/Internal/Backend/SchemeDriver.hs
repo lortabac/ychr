@@ -27,7 +27,7 @@ import YCHR.Internal.Compile.Names (vmName)
 import YCHR.Internal.Compile.Pipeline (Error (..))
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.SExpr (SExpr (..), printSExpr)
-import YCHR.Internal.Types (HeadArg (..), QualifiedName, Term (..))
+import YCHR.Internal.Types (HeadArg (..), QualifiedName, Term (..), flattenName)
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM.Types (Name (..))
 
@@ -44,8 +44,8 @@ import YCHR.Internal.VM.Types (Name (..))
 -- Fails with 'LambdasInSchemeDriver' when a goal argument contains an
 -- anonymous lambda: the driver imports a library that was generated
 -- without knowledge of this goal, so the lifted procedure the lambda
--- would compile to does not exist there and the library's @call_N@
--- dispatch chain has no arm that could reach it. See 'exprToScheme'.
+-- would compile to does not exist there and the library's callables
+-- table has no entry that could reach it. See 'exprToScheme'.
 generateDriver :: Text -> QualifiedName -> [R.Expr] -> Either Error Text
 generateDriver _moduleName _qn args
   | (lam : _) <- concatMap exprLambdas args =
@@ -161,13 +161,19 @@ exprToScheme (R.HostExpr f args) =
         | otherwise = argExprs
    in "(" <> target.procedure <> T.concat (map (" " <>) allArgs) <> ")"
 exprToScheme (R.ApplyExpr f args) =
-  let n = length args
-      dispatch = "call_" <> T.pack (show n)
-      fAndArgs = map exprToScheme (f : args)
-   in "(" <> dispatch <> " %s " <> T.intercalate " " fAndArgs <> ")"
+  -- Dynamic dispatch goes through the session's callables table, like
+  -- the compiled library's own `apply-closure` instructions. The
+  -- driver's session comes from the library, so the table is the
+  -- library's.
+  let fAndArgs = map exprToScheme (f : args)
+   in "(%apply-closure %s " <> T.intercalate " " fAndArgs <> ")"
 exprToScheme (R.FunRefExpr qn arity) =
-  -- Mirrors 'compileExpr's encoding for first-class function refs.
-  let flat = (vmName (Types.qualifiedToName qn)).unName
+  -- Mirrors 'compileExpr's encoding for first-class function refs:
+  -- the identity is the *flattened* source name (`module:name`), which
+  -- is what the callables table is keyed on and what the compiled
+  -- dispatcher used to compare against. Encoding it with 'vmName'
+  -- instead would mint `module__name`, an identity nothing matches.
+  let flat = flattenName (Types.qualifiedToName qn)
    in "(make-term "
         <> printSExpr (compileSymbol "/")
         <> " (vector "

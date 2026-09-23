@@ -206,8 +206,8 @@ def test_repl(query, expected, ychr_bin):
 def test_repl_unsupported_call_arity(ychr_bin):
     """A query whose `$call` is outside the supported 1..10 arity range
     is rejected by the resolver (YCHR-16022) rather than becoming a data
-    term (zero) or a runtime miss on a `call_11` procedure the compiler
-    never emits (over ten)."""
+    term. The range is the surface-language limit, aligned with the
+    prelude's `call/N` family."""
     for query, given in [
         # One argument is the callee, so this applies it to nothing.
         ("R is '$call'(fun(A) -> A end).", 0),

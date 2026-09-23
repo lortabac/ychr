@@ -210,8 +210,8 @@ removable when closed.
   got wrong: `liftedFunctions` was never reversed at all, so reverse
   discovery order leaked into `D.Program.functions` (and a nested
   lambda came out after its enclosing one). Downstream is
-  order-insensitive — `buildEvaluables` keys by name,
-  `genCallFunDispatches` arms are mutually exclusive, and
+  order-insensitive — `buildEvaluables` and `buildCallables` key by
+  name, and
   `checkExhaustiveness` runs on the pre-lift program — so what shifts
   is presentation: generated-procedure emission order, and the
   relative order of type-check diagnostics coming from two different
@@ -230,8 +230,8 @@ removable when closed.
   `... -> Either Error Text`. Lifting the lambda instead is not
   available here: the driver is a standalone script over an
   *already generated* library, so it can neither add the lifted
-  `__lambda_N` procedure nor extend that library's `call_N` dispatch
-  chain to reach it. `exprToScheme`'s lambda arm remains an `error`,
+  `__lambda_N` procedure nor add an entry for it to that library's
+  callables table. `exprToScheme`'s lambda arm remains an `error`,
   but it is now an internal invariant behind that check rather than a
   user-facing gap, and it closes with the other two `LambdaExpr`
   panics when `R.Expr` grows a phase index (see §1).
@@ -538,19 +538,21 @@ named `Note [Observer registration order]` so it can't drift.
 ### `$call/N` supports N ∈ {1, …, 10}, enforced at resolution — `src/YCHR/Internal/Resolved.hs`
 
 `maxCallArity = 10` in `YCHR.Internal.Resolved` is the single source of
-truth for the supported dynamic-call arity. `Compile.genCallFunDispatches`
-emits one `call_N` dispatcher per arity in `[1 .. maxCallArity]`, and
-`Resolve.termToExpr` rejects a surface `'$call'` outside that range —
-including zero, i.e. `'$call'(F)` and a bare `'$call'` — with
-`UnsupportedCallArity` (YCHR-16022) while it recognizes the `'$call'`
-shape.
+truth for the supported dynamic-call arity. `Resolve.termToExpr`
+rejects a surface `'$call'` outside that range — including zero, i.e.
+`'$call'(F)` and a bare `'$call'` — with `UnsupportedCallArity`
+(YCHR-16022) while it recognizes the `'$call'` shape.
 
 Resolving rather than compiling is what makes the check total: programs,
 queries and generated drivers all reach the compiler only through
-`Resolve.termToExpr`, so none of them can produce an `ApplyExpr` whose
-`call_N` procedure does not exist. The compiler's arity-generic
-`callFunProcName` sites therefore do not need their own guard; they only
-ever see an in-range arity.
+`Resolve.termToExpr`, so an out-of-range arity cannot reach the backend.
+The limit is now a property of the surface language rather than of the
+compiler's shape: it used to be forced by the one-dispatcher-per-arity
+code generator (`genCallFunDispatches`), which keyed `'$call'` dispatch
+has removed. The compiler's `ApplyClosure` sites are arity-generic and
+would work at any arity; the cap is kept deliberately, aligned with the
+prelude's `call/N` wrapper family, and lifting it would be a separate
+language change with its own documentation and tests.
 
 This replaced a silent gap: `$call/3` … `$call/10` used to compile to a
 `call_N` name with no procedure and fail at runtime, and `$call/11`+
@@ -689,18 +691,25 @@ that they agree.
 ### Closed procedure-name set
 
 Every `CallExpr` name (`tell_<c>/<n>`, `activate_<c>/<n>`,
-`occurrence_<c>_<n>_<j>`, `func_<…>`, `call_N`,
+`occurrence_<c>_<n>_<j>`, `func_<…>`,
 `reactivate_dispatch`) must exist in the generated `procMap`. The
 interpreter (`Interpreter.hs:397`) errors at runtime if any name is
 missing. There is no whole-program closure check.
+
+Every name in the program's *callables* table must likewise exist in the
+`procMap`: nothing checks that the table's entries and the generated
+procedures agree. The compiler derives both from the same function list
+in one pass (`buildCallables` and `compileFunctionDef`), so they cannot
+drift today — but a backend or a future pass that rewrites procedure
+names would have to keep the table in step.
 
 A post-compilation pass (or a typed `ProcRef` issued only by the
 generator that introduces the procedure) would catch missing names
 before runtime. Such a pass must run against the *unioned* procedure
 map: `Run.hs` merges query-time procedures (lifted query lambdas and
-regenerated `call_N` dispatches) into the map via
-`Session.withCHRExtra`, so a check over the compiled program's map
-alone would reject valid query-time calls.
+their callables entries) into the map via `Session.withCHRExtra`, so a
+check over the compiled program's map alone would reject valid
+query-time calls.
 
 ### `reactivate_dispatch` covers every constraint type
 

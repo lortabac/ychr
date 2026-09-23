@@ -48,6 +48,9 @@ module YCHR.Internal.VM.Types
     Procedure (..),
     ProcKind (..),
     EvaluableKey (..),
+    CallableKey (..),
+    funRefFunctor,
+    lambdaClosureFunctor,
 
     -- * Statements
     Stmt (..),
@@ -123,6 +126,15 @@ data Program = Program
     -- keyed). Used by the runtime to call into user-defined
     -- functions when @is@ walks a dereferenced compound term.
     evaluables :: ![(EvaluableKey, Name)],
+    -- | Dispatch table for the @'$call'@ closure-apply construct. Maps
+    -- a closure's 'CallableKey' (the shape of the closure value itself:
+    -- its functor, its identity field, and its declared arity) to the
+    -- mangled name of the procedure that implements it in
+    -- 'procedures'. One entry per user-defined function — every
+    -- function reference a program can build — plus one per lifted
+    -- lambda. Consulted by 'ApplyClosure'; the runtime never scans a
+    -- chain of branches to resolve a callable.
+    callables :: ![(CallableKey, Name)],
     -- | The constraint types that are /inert/: types whose
     -- activation runs no occurrence procedure, because the type has
     -- no occurrences at all or only passive ones. Reactivating such
@@ -146,6 +158,48 @@ data EvaluableKey = EvaluableKey
     arity :: !Int
   }
   deriving (Show, Eq, Ord)
+
+-- | Dispatch key for the @'$call'@ closure-apply construct: the key
+-- derived from the shape of a closure value applied at a given arity.
+--
+-- A closure value is a compound term whose functor says which kind of
+-- callable it is and whose first field is an atom identifying the
+-- function or lambda:
+--
+--   * @'\/'(Identity, Arity)@ — a function reference @fun name\/arity@.
+--     The identity is the flattened source name (@module:name@); the
+--     declared arity is the second field, and the closure records it
+--     because one identity can name several functions of different
+--     arities (@call\/2@ and @call\/3@).
+--
+--   * @__closure(Identity, SourceForm, Capture…)@ — a lifted lambda.
+--     The identity is the lifted function's VM name. The closure does
+--     not record the arity its source lambda declared, so the arity it
+--     is applied at is used instead; the table only holds an entry at
+--     the declared arity, so any other arity misses.
+--
+-- The functor is part of the key so that an ordinary data term whose
+-- first argument happens to be a function name (e.g. @pair(double, 1)@)
+-- is not mistaken for a callable.
+data CallableKey = CallableKey
+  { -- | The closure term's functor: 'funRefFunctor' or
+    -- 'lambdaClosureFunctor'.
+    functor :: !Name,
+    -- | The closure's identity field (argument 0).
+    identity :: !Name,
+    -- | The arity the callable was declared at, as described above.
+    arity :: !Int
+  }
+  deriving (Show, Eq, Ord)
+
+-- | The functor of a function-reference closure term, @fun name\/arity@.
+funRefFunctor :: Name
+funRefFunctor = Name (T.pack "/")
+
+-- | The functor of a lifted-lambda closure term, as built by
+-- 'YCHR.Internal.Desugar.liftExpr'.
+lambdaClosureFunctor :: Name
+lambdaClosureFunctor = Name (T.pack "__closure")
 
 -- | A named procedure with parameters and a body.
 --
@@ -199,8 +253,6 @@ data ProcKind
   | -- | @reactivate_dispatch@: route a reactivated constraint to its
     -- @activate_c@.
     PKReactivateDispatch
-  | -- | @call_N@: dispatcher for @'$call'/N@.
-    PKCallDispatch !Int
   | -- | A user-defined function or lifted lambda. Carries the source
     -- qualified name and arity.
     PKFunction !Types.QualifiedName !Int
@@ -303,6 +355,23 @@ data ValExpr
     -- sub-expressions ('CallExpr', 'MakeTerm', etc.). Used for guard
     -- expressions and the non-'Var' right-hand sides of @is@.
     EvalDeep ValExpr
+  | -- | Apply a first-class callable (a function reference or a lifted
+    -- lambda closure) to arguments: @ApplyClosure closure args@.
+    --
+    -- The runtime resolves the closure through the program's
+    -- 'Program'.'callables' table — one map lookup keyed by the
+    -- closure's 'CallableKey' — and calls the procedure it maps to
+    -- with any captured values the closure carries, followed by the
+    -- arguments. This is the whole of @'$call'(F, A1, …, An)@; the
+    -- compiler no longer emits a per-arity dispatcher procedure to
+    -- scan.
+    --
+    -- Failures match the dispatcher's, in kind and message: an unbound
+    -- closure is an instantiation error (so a rule guard soft-fails
+    -- and retries after reactivation), and any other value — or a
+    -- closure applied at an arity other than the one it was declared
+    -- at — is a general @call: no matching closure@ error.
+    ApplyClosure ValExpr [ValExpr]
   | -- | The @is@-with-variable-RHS case: evaluate the nested expression
     -- in deep-deref mode and then walk the resulting 'Value',
     -- evaluating any compound subterm whose @(functor, arity)@ names

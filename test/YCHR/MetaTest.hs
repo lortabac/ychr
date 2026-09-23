@@ -37,7 +37,17 @@ hostCalls = baseHostCallRegistry <> metaHostCallRegistry
 
 runChrBase :: Chr a -> IO a
 runChrBase action = do
-  env <- initSessionEnv [] [] [] Map.empty baseHostCallRegistry Map.empty Map.empty Set.empty
+  env <-
+    initSessionEnv
+      []
+      []
+      []
+      Map.empty
+      baseHostCallRegistry
+      Map.empty
+      Map.empty
+      Map.empty
+      Set.empty
   runChr action env
 
 -- | Invoke the read_term_from_string host call directly and return the Value.

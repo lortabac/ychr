@@ -241,8 +241,12 @@ runOuterQuery mtypeChecker hostCalls werror prog line = do
       unless (werror && not (null ws)) $ do
         execResult <-
           try @SomeException $
-            withCHRExtra (toSessionInput prog) hostCalls prep.extraProcs $
-              executePreparedQuery prep.liftedGoals
+            withCHRExtra
+              (toSessionInput prog)
+              hostCalls
+              prep.extraProcs
+              prep.extraCallables
+              (executePreparedQuery prep.liftedGoals)
         case execResult of
           Left exc -> reportException exc
           Right bindings -> putStr (prettyQueryResult bindings)
@@ -273,6 +277,7 @@ runTracedQuery mtypeChecker hostCalls werror prog line = do
               (toSessionInput prog)
               hostCalls
               prep.extraProcs
+              prep.extraCallables
               (defaultTraceHandler stdout)
               (executePreparedQuery prep.liftedGoals)
         case execResult of

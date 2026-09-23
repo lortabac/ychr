@@ -35,6 +35,8 @@
     %nil %cons
     ;; Deep-eval dispatch table for the @is@ operator
     register-evaluable! deep-eval-value
+    ;; Closure-apply dispatch table for @'$call'@
+    register-callable! %apply-closure
     ;; Session initialization
     %make-session)
   (import (rnrs)
@@ -58,7 +60,13 @@
                   ;; procedures the deep-evaluator calls when @is@
                   ;; walks a @VTerm@ matching the key. Generated
                   ;; libraries fill this in via @register-evaluable!@.
-                  (make-hashtable evaluable-key-hash evaluable-key-eq?)))
+                  (make-hashtable evaluable-key-hash evaluable-key-eq?)
+                  ;; Closure-apply dispatch table: keys are
+                  ;; (functor identity arity) lists; values are the
+                  ;; procedures `%apply-closure` calls for that
+                  ;; closure. Generated libraries fill this in via
+                  ;; @register-callable!@.
+                  (make-hashtable equal-hash equal?)))
 
   ;;; --- Deep-eval dispatch for the @is@ operator ---
 
@@ -119,6 +127,99 @@
                                  "/"
                                  (number->string n)))))))
         (else d))))
+
+  ;;; --- Closure-apply dispatch for `'$call'` ---
+
+  ;; A key identifies a callable by the shape of the closure value that
+  ;; designates it: the closure term's functor, its identity field (a
+  ;; flattened function name for a function reference, a lambda
+  ;; identifier for a lifted lambda) and the arity the callable was
+  ;; declared at. Keys are `(functor identity arity)` lists, hashed with
+  ;; `equal-hash`/`equal?` — symbols compare by name under both, so a
+  ;; key built here matches one built by `register-callable!`. Mirrors
+  ;; the Haskell runtime's `CallableKey` table
+  ;; (`YCHR.Internal.Runtime.Monad.CallableRegistry`).
+  (define (make-callable-key functor identity arity)
+    (list functor identity arity))
+
+  ;; Register a procedure to invoke when `%apply-closure` is handed a
+  ;; closure whose key matches. The procedure must accept
+  ;; (session arg1 ... argN) — the same calling convention used by
+  ;; generated user-function procedures — and is called with the
+  ;; closure's captured values before the application arguments.
+  (define (register-callable! s functor identity arity proc)
+    (hashtable-set! (session-callables s)
+                    (make-callable-key functor identity arity)
+                    proc))
+
+  ;; Apply a first-class callable to arguments: the whole of
+  ;; `'$call'(F, A1, ..., An)`. Mirrors `applyClosure` in the Haskell
+  ;; interpreter, including which failure raises which kind of error.
+  ;;
+  ;; A closure value is a compound term whose functor says which kind of
+  ;; callable it is and whose first field identifies it:
+  ;;
+  ;;   * `/`(Identity, Arity) — a function reference. The identity is
+  ;;     the flattened source name (`module:name`); the declared arity
+  ;;     is the second field, and an application at any other arity is
+  ;;     a definite mismatch (not a redirect to a same-named function
+  ;;     of that arity).
+  ;;   * `__closure`(Identity, SourceForm, Capture ...) — a lifted
+  ;;     lambda. The arity is the one it is applied at, because the
+  ;;     closure does not record the arity its source lambda declared;
+  ;;     the table only holds that declared arity, so any other arity
+  ;;     misses. Captures are the fields after the quoted source form.
+  (define (%apply-closure s closure . args)
+    (let* ((d (deref closure))
+           (n (length args))
+           (hit (and (term? d) (callable-invocation d n))))
+      (cond
+        (hit
+         (let* ((key (car hit))
+                (captures (cdr hit))
+                (proc (hashtable-ref (session-callables s) key #f)))
+           (if proc
+               (apply proc s (append captures args))
+               (%chr-error "call: no matching closure"))))
+        ((%unbound? d)
+         (%chr-inst-error
+          (string-append
+           "'$call': closure argument is not sufficiently instantiated"
+           " (unbound variable)")))
+        (else (%chr-error "call: no matching closure")))))
+
+  ;; The dispatch key of a closure value applied at `n` arguments,
+  ;; paired with the captured values to pass before those arguments —
+  ;; or #f when the value is not a closure applied at a valid arity.
+  ;;
+  ;; The two header fields are read through `deref`, the way the
+  ;; generated dispatchers' `equal?/chr` comparisons were: a function
+  ;; reference whose name or declared-arity field is a bound variable
+  ;; still dispatches. Captures (everything after the header) are left
+  ;; alone, exactly as `get-arg` handed them to the callee.
+  (define (callable-invocation d n)
+    (let ((functor (term-functor d))
+          (fields (term-args d)))
+      (cond
+        ((and (eq? functor '/)
+              (= (vector-length fields) 2))
+         (let ((ident (deref (vector-ref fields 0)))
+               (arity (deref (vector-ref fields 1))))
+           ;; `exact-integer?` is R7RS; this runtime is R6RS.
+           (if (and (symbol? ident)
+                    (integer? arity)
+                    (exact? arity)
+                    (= arity n))
+               (cons (make-callable-key functor ident n) '())
+               #f)))
+        ((and (eq? functor '__closure)
+              (>= (vector-length fields) 2))
+         (let ((ident (deref (vector-ref fields 0))))
+           (if (symbol? ident)
+               (cons (make-callable-key functor ident n)
+                     (list-tail (vector->list fields) 2))
+               #f)))
+        (else #f))))
 
   ;; Prelude host-call fallback table for `deep-eval-value`. Mirrors
   ;; the bare-name entries in Haskell's `baseHostCallRegistry`

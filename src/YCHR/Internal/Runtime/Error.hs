@@ -22,6 +22,9 @@ module YCHR.Internal.Runtime.Error
     runtimeError',
     runtimeErrorS,
     instantiationErrorS,
+    chrRuntimeErrorPrefix,
+    closureUnboundError,
+    closureNoMatchError,
 
     -- * Control-flow exceptions
     SearchFailure (..),
@@ -107,6 +110,35 @@ runtimeErrorS = throwWithStack GeneralError
 -- 'runtimeErrorS'.
 instantiationErrorS :: String -> Chr a
 instantiationErrorS = throwWithStack InstantiationError
+
+-- | The banner every CHR runtime error carries before its detail. The
+-- host-call reporters in "YCHR.Internal.Runtime.Registry" and the
+-- runtime's own raises share it, so the two cannot drift apart.
+chrRuntimeErrorPrefix :: String
+chrRuntimeErrorPrefix = "CHR runtime error: "
+
+-- | @'$call'@ dispatch, first failure mode: the closure operand is
+-- still an unbound logical variable, so no dispatch is decidable. An
+-- /instantiation/ error, not a general one — a rule guard catches it
+-- and retries the occurrence once reactivation binds the variable.
+--
+-- The message is the one the generated @call_N@ dispatchers used to
+-- raise, kept byte-for-byte so guards, golden tests and both backends
+-- keep reporting it identically.
+closureUnboundError :: Chr a
+closureUnboundError =
+  instantiationErrorS $
+    chrRuntimeErrorPrefix
+      <> "'$call': closure argument is not sufficiently instantiated"
+      <> " (unbound variable)"
+
+-- | @'$call'@ dispatch, second failure mode: the operand is an
+-- instantiated value that is not a callable — or a callable applied at
+-- an arity other than the one it was declared at. Both are definite
+-- mismatches, so both are general errors.
+closureNoMatchError :: Chr a
+closureNoMatchError =
+  runtimeErrorS (chrRuntimeErrorPrefix <> "call: no matching closure")
 
 throwWithStack :: RuntimeErrorKind -> String -> Chr a
 throwWithStack kind msg = do

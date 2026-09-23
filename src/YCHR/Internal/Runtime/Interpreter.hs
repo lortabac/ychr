@@ -28,6 +28,9 @@ module YCHR.Internal.Runtime.Interpreter
     -- * Deep-eval walker (shared with the query-time evaluator)
     deepEvalValue,
 
+    -- * Closure application (shared with the query-time driver)
+    applyClosure,
+
     -- * Tracing helpers (shared with the query-time driver)
     emitTrace,
     snapshotValue,
@@ -76,6 +79,8 @@ import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error
   ( RuntimeErrorKind (..),
     RuntimeErrorThrown (..),
+    closureNoMatchError,
+    closureUnboundError,
     instantiationErrorS,
     isControlException,
     runtimeError',
@@ -189,6 +194,7 @@ interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO Value
 interpret prog hostCalls entryName args = do
   let procMap = Map.fromList [(p.name, p) | p <- prog.procedures]
       evaluableMap = Map.fromList prog.evaluables
+      callableMap = Map.fromList prog.callables
   env <-
     initSessionEnv
       prog.typeNames
@@ -197,6 +203,7 @@ interpret prog hostCalls entryName args = do
       procMap
       hostCalls
       evaluableMap
+      callableMap
       Map.empty
       mempty
   runChr (callProc entryName (map CVal args)) env
@@ -443,15 +450,13 @@ uncaughtSignal ctx = \case
 
 -- | Should entering a procedure of this kind increase trace
 -- indentation? Tells, activates, occurrences, reactivate-dispatch,
--- and user functions/lambdas do; the @$call@ dispatcher is a thin
--- router and would just add noise.
+-- and user functions/lambdas do.
 bumpDepthFor :: ProcKind -> Bool
 bumpDepthFor PKTell {} = True
 bumpDepthFor PKActivate {} = True
 bumpDepthFor PKOccurrence {} = True
 bumpDepthFor PKReactivateDispatch = True
 bumpDepthFor PKFunction {} = True
-bumpDepthFor PKCallDispatch {} = False
 
 -- | Emit the entry-time event for a procedure call, if tracing is on.
 -- Reactivation events are emitted at the per-suspension boundary
@@ -473,7 +478,6 @@ traceEntry proc args = case proc.procKind of
     ctName <- constraintTypeLabel ct
     pure (TETryOccurrence ctName n display)
   PKReactivateDispatch -> pure ()
-  PKCallDispatch _ -> pure ()
   PKFunction qn _ -> emitTrace $ do
     let fname = Types.flattenName (Types.qualifiedToName qn)
     ts <- snapshotValues [v | CVal v <- args]
@@ -730,6 +734,10 @@ evalValExpr (EvalDeep expr) = evalValExprDeep expr
 evalValExpr (EvalIs expr) = do
   v <- evalValExprDeep expr
   liftChr (deepEvalValue v)
+evalValExpr (ApplyClosure f args) = do
+  fv <- evalValExpr f
+  argVals <- traverse evalValExpr args
+  liftChr (applyClosure fv argVals)
 
 -- ---------------------------------------------------------------------------
 -- Bool-expression evaluator (normal mode)
@@ -938,6 +946,10 @@ evalValExprDeep (HostCall name args) = do
 evalValExprDeep (CallExpr name args) = do
   argVals <- traverse evalCallArgDeep args
   liftChr (callProc name argVals)
+evalValExprDeep (ApplyClosure f args) = do
+  fv <- evalValExprDeep f
+  argVals <- traverse evalValExprDeep args
+  liftChr (applyClosure fv argVals)
 evalValExprDeep (MakeTerm functor args) = do
   argVals <- traverse evalValExprDeep args
   pure $ makeTerm functor.unName argVals
@@ -994,6 +1006,106 @@ invokeByKey key args = do
 evalCallArgDeep :: CallArg -> InterpM CallVal
 evalCallArgDeep (AVal e) = CVal <$> evalValExprDeep e
 evalCallArgDeep (AId e) = CId <$> evalIdExpr e
+
+-- ---------------------------------------------------------------------------
+-- Closure application
+-- ---------------------------------------------------------------------------
+
+-- | Apply a first-class callable to arguments: the whole of
+-- @'$call'(F, A1, …, An)@.
+--
+-- The closure is dereferenced and turned into a 'CallableKey' by
+-- 'closureKey'; the key selects a procedure from the session's
+-- callables table, and that procedure is called with any captured
+-- values the closure carries, followed by the arguments. One map
+-- lookup replaces the per-arity dispatcher chain this used to be,
+-- whose length grew with the number of same-arity functions and
+-- lifted lambdas the program defines.
+--
+-- The failure modes, and their kinds, are the dispatchers': an unbound
+-- closure is an instantiation error, so a rule guard soft-fails and
+-- retries the occurrence once reactivation binds the variable;
+-- everything else is a general error.
+applyClosure :: Value -> [Value] -> Chr Value
+applyClosure closure args = do
+  v <- deref closure
+  v' <- derefClosureHeader v
+  case closureKey (length args) v' of
+    Just (key, captures) -> do
+      SessionEnv {callables} <- ask
+      case Map.lookup key callables of
+        Just procName -> callProc procName (map CVal (captures <> args))
+        Nothing -> closureNoMatchError
+    Nothing
+      | isVar v -> closureUnboundError
+      | otherwise -> closureNoMatchError
+
+-- | Read a closure's two header fields through their bindings.
+--
+-- The generated dispatchers compared those fields with @BEqual@, which
+-- dereferences its operands, so a function-reference term whose name or
+-- declared-arity field was a /bound variable/ still dispatched. Reading
+-- them here keeps that behaviour. Only the header is read: the captures
+-- are handed to the callee exactly as @GetArg@ handed them, so a
+-- capture that is an unbound variable stays the very cell the callee
+-- observes.
+--
+-- The common case — both header fields already literals, which is what
+-- the compiler's @MakeTerm@ produces — returns the value untouched and
+-- allocates nothing. This runs on every dynamic call, so it has to be
+-- cheap on the path that matters.
+derefClosureHeader :: Value -> Chr Value
+derefClosureHeader (VTerm f (field0 : field1 : rest))
+  | isVar field0 || isVar field1 = do
+      field0' <- deref field0
+      field1' <- deref field1
+      pure (VTerm f (field0' : field1' : rest))
+derefClosureHeader v = pure v
+
+-- | The dispatch key of a closure value applied at @n@ arguments,
+-- together with the captured values to pass before those arguments.
+--
+-- See 'CallableKey' for the shape a closure value has and why the key
+-- is what it is. Two details preserve the old dispatchers' behaviour:
+--
+--   * a function reference is looked up at the arity it records, and
+--     an application at any other arity is a mismatch. Without that
+--     check @'$call'('fun call\/2', 1, 2, 3)@ would resolve to
+--     @call\/3@, which is a different function;
+--   * a lifted lambda is looked up at the arity it is /applied/ at,
+--     because its closure does not record the arity its source lambda
+--     declared. The table holds only the declared arity, so any other
+--     arity misses the lookup.
+--
+-- Captures are the closure's fields after the two header fields
+-- (identity and quoted source form), passed through un-dereferenced —
+-- exactly what @GetArg@ handed the dispatched procedure. The header
+-- itself is dereferenced before this runs (see 'derefClosureHeader').
+closureKey :: Int -> Value -> Maybe (CallableKey, [Value])
+closureKey n v = case v of
+  VTerm f (VAtom ident : rest)
+    | f == funRefFunctor.unName,
+      [VInt declared] <- rest,
+      fromIntegral declared == n ->
+        Just
+          ( CallableKey
+              { functor = funRefFunctor,
+                identity = Name ident,
+                arity = fromIntegral declared
+              },
+            []
+          )
+    | f == lambdaClosureFunctor.unName,
+      _sourceForm : captures <- rest ->
+        Just
+          ( CallableKey
+              { functor = lambdaClosureFunctor,
+                identity = Name ident,
+                arity = n
+              },
+            captures
+          )
+  _ -> Nothing
 
 -- ---------------------------------------------------------------------------
 -- Bool-expression evaluator (deep deref mode)

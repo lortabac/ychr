@@ -26,7 +26,7 @@ tests =
 
 runReactEnv :: Chr a -> IO a
 runReactEnv action = do
-  env <- initSessionEnv [] [] [] Map.empty Map.empty Map.empty Map.empty Set.empty
+  env <- initSessionEnv [] [] [] Map.empty Map.empty Map.empty Map.empty Map.empty Set.empty
   runChr action env
 
 -- | A session with one constraint-type slot, so 'createConstraint' has
@@ -40,6 +40,7 @@ runReactStoreEnv action = do
       [Unqualified ""]
       []
       []
+      Map.empty
       Map.empty
       Map.empty
       Map.empty

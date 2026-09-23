@@ -693,10 +693,11 @@ polymorphic signature per arity. For example, `call/4` is typed
 `'$call'(F, A1, ..., An)`, which the renamer recognizes directly. The
 `'$'` prefix is not a naming convention and `$` is not reserved for
 other primitives. `'$call'` accepts one to ten arguments; any other
-arity, including zero, is `YCHR-16022`, raised during resolution
-because the compiler generates a dispatcher only for that range.
-Prefer `call/N` and reserve `'$call'` for the layer below the typed
-wrapper.
+arity, including zero, is `YCHR-16022`, raised during resolution. The
+limit is a property of the surface language, aligned with the `call/N`
+family above: that family is the supported way to apply a callable, and
+every arity it covers is reachable through it. Prefer `call/N` and
+reserve `'$call'` for the layer below the typed wrapper.
 
 ## Host calls
 

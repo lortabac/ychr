@@ -1,0 +1,1 @@
+closure_dispatch_errors:go(apply2(fun(X) -> X + 1 end, 1, 2))

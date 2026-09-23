@@ -8,7 +8,7 @@
 -- 'YCHR.Internal.VM.Program'. Two flavours of name live here:
 --
 -- * /Procedure-name builders/ ('tellProcName', 'activateProcName',
---   'occProcName', 'funcProcName', 'callFunProcName'): pure functions
+--   'occProcName', 'funcProcName'): pure functions
 --   from a source name + arity (or other identifying data) to a 'Name'.
 --   Backends and tests that need to predict the name of a generated
 --   procedure should import this module rather than re-deriving the
@@ -27,7 +27,6 @@ module YCHR.Internal.Compile.Names
     activateProcName,
     occProcName,
     funcProcName,
-    callFunProcName,
 
     -- * Source-name encoding
     encodeText,
@@ -213,12 +212,6 @@ occProcName name arity num =
 -- the given source name and arity.
 funcProcName :: Types.Name -> Int -> Name
 funcProcName = procNameFor "func"
-
--- | Name of the @call_N@ dispatch procedure for a call with @N@
--- arguments (i.e. an @N+1@-ary @call(F, arg_1, …, arg_N)@). Each
--- supported call arity gets its own dispatch procedure.
-callFunProcName :: Int -> Name
-callFunProcName n = Name ("call_" <> T.pack (show n))
 
 -- ---------------------------------------------------------------------------
 -- Active-constraint argument variables

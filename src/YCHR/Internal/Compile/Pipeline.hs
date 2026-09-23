@@ -133,8 +133,8 @@ data Error
   | -- | A @ychr gen-driver@ goal argument contains an anonymous lambda.
     -- The driver is a standalone script over an /already generated/
     -- Scheme library: it cannot add the lifted @__lambda_N@ procedure
-    -- the lambda needs, nor extend that library's @call_N@ dispatch
-    -- chain to reach it. Carries the offending lambda in its surface
+    -- the lambda needs, nor an entry for it in that library's
+    -- callables table. Carries the offending lambda in its surface
     -- @fun(...) -> body@ shape, for the message.
     LambdasInSchemeDriver Types.Term
   deriving (Show)

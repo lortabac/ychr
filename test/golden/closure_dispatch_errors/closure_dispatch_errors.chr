@@ -1,18 +1,35 @@
-:- module(closure_dispatch_errors, [go/1, apply_ok/2, fun apply1/2, fun double/1]).
+:- module(
+       closure_dispatch_errors,
+       [go/1, apply_ok/2, scale_ok/3,
+        fun apply1/2, fun apply2/3, fun double/1,
+        fun scale/1, fun scale/2]
+   ).
 :- use_module(library(prelude)).
 
-:- chr_constraint go/1, apply_ok/2.
+:- chr_constraint go/1, apply_ok/2, scale_ok/3.
 
 :- function double/1.
 double(X) -> X + X.
 
+% Two functions sharing a name at different arities. This is the sharp
+% case for the declared-arity half of the callables dispatch key: a
+% `$call` on `fun scale/1` with two arguments must not reach `scale/2`,
+% which a key of (functor, identity) alone would dispatch to.
+:- function scale/1, scale/2.
+scale(X)    -> X + 1.
+scale(X, Y) -> X + Y.
+
 % '$call' dispatch fails in the same two ways function-equation
 % dispatch does: the closure operand is still unbound (inconclusive),
-% or it is a value that is definitely not a callable (decided).
-:- function apply1/2.
-apply1(F, X) -> '$call'(F, X).
+% or it is a value that is definitely not a callable (decided). A
+% closure applied at an arity it was not declared at is the second
+% failure, not a redirect.
+:- function apply1/2, apply2/3.
+apply1(F, X)    -> '$call'(F, X).
+apply2(F, X, Y) -> '$call'(F, X, Y).
 
 go(_) <=> true.
 
-% A goal that succeeds, so the Scheme harness runs this directory too.
-apply_ok(X, R) <=> R is apply1(fun double/1, X).
+% Goals that succeed, so the Scheme harness runs this directory too.
+apply_ok(X, R)      <=> R is apply1(fun double/1, X).
+scale_ok(X, Y, R)   <=> R is apply2(fun scale/2, X, Y).

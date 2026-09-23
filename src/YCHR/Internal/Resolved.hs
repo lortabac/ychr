@@ -166,11 +166,15 @@ data Expr
   deriving (Show, Eq)
 
 -- | The largest number of arguments an 'ApplyExpr' (surface
--- @'$call'(F, A1, …, An)@) may carry. The compiler emits one @call_N@
--- dispatcher for every arity in @1 .. maxCallArity@, so the resolver
--- rejects @'$call'@ beyond this limit with 'UnsupportedCallArity'
--- rather than letting it fail at runtime; see the @$call\/N@ entry in
--- @dev-docs\/INVARIANTS.md@.
+-- @'$call'(F, A1, …, An)@) may carry. The resolver rejects @'$call'@
+-- beyond this limit with 'UnsupportedCallArity'; see the @$call\/N@
+-- entry in @dev-docs\/INVARIANTS.md@.
+--
+-- The limit is a surface-language choice, aligned with the prelude's
+-- @call\/N@ wrapper family. It is no longer forced by the backend:
+-- keyed @'$call'@ dispatch compiles a dynamic call to the arity-generic
+-- 'YCHR.Internal.VM.ApplyClosure' construct, which would work at any
+-- arity.
 maxCallArity :: Int
 maxCallArity = 10
 

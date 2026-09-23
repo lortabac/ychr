@@ -72,7 +72,7 @@ import YCHR.Internal.Runtime.Store (aliveConstraint)
 import YCHR.Internal.Runtime.Trace (TraceEvent (..), TraceHandler)
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..))
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (Name (..), Procedure (..), Program (..))
+import YCHR.Internal.VM (CallableKey, Name (..), Procedure (..), Program (..))
 
 -- | The narrow slice of a compiled program that 'withCHR' /
 -- 'withCHRExtra' need: the VM 'Program' and the export-resolution maps
@@ -106,21 +106,28 @@ toSessionInput cp =
 -- queue, unification variables, call stack) is initialised and
 -- persists for the duration of the computation.
 withCHR :: SessionInput -> HostCallRegistry -> Chr a -> IO a
-withCHR si hc action = withCHRExtra si hc [] action
+withCHR si hc action = withCHRExtra si hc [] [] action
 
--- | Like 'withCHR' but merges extra procedures (e.g. query-time lambda
--- compilations and updated call dispatches) into the procedure map
--- visible to the action.
+-- | Like 'withCHR' but merges extra procedures and extra callables
+-- (e.g. query-time lambda compilations and the dispatch entries for
+-- them) into the tables visible to the action.
 withCHRExtra ::
   SessionInput ->
   HostCallRegistry ->
   [Procedure] ->
+  [(CallableKey, Name)] ->
   Chr a ->
   IO a
-withCHRExtra si hc extraProcs action = do
+withCHRExtra si hc extraProcs extraCallables action = do
   let extraProcMap = Map.fromList [(p.name, p) | p <- extraProcs]
       procMap = extraProcMap `Map.union` si.procIndex
   let evaluableMap = Map.fromList si.program.evaluables
+  -- Extras win, as in the procedure map: a query-time lambda can never
+  -- collide with a compiled one (its lifted name is fresh), but the
+  -- two merges then follow the same rule.
+  let callableMap =
+        Map.fromList extraCallables
+          `Map.union` Map.fromList si.program.callables
   env <-
     initSessionEnv
       si.program.typeNames
@@ -129,6 +136,7 @@ withCHRExtra si hc extraProcs action = do
       procMap
       hc
       evaluableMap
+      callableMap
       si.exportMap
       si.exportedSet
   runChr action env
@@ -143,11 +151,12 @@ withCHRExtraTraced ::
   SessionInput ->
   HostCallRegistry ->
   [Procedure] ->
+  [(CallableKey, Name)] ->
   TraceHandler ->
   Chr a ->
   IO a
-withCHRExtraTraced si hc extraProcs handler action =
-  withCHRExtra si hc extraProcs $ do
+withCHRExtraTraced si hc extraProcs extraCallables handler action =
+  withCHRExtra si hc extraProcs extraCallables $ do
     env <- ask
     liftIO $ do
       writeIORef env.traceHandler (Just handler)

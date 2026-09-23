@@ -29,7 +29,7 @@ what is planned.
 - [ ] Propagation history elimination
 - [ ] Delay avoidance
 - [ ] Memory reuse
-- [ ] Keyed `'$call'` dispatch (a callables dispatch table plus a
+- [x] Keyed `'$call'` dispatch (a callables dispatch table plus a
       closure-apply VM construct, mirroring the evaluables table used
       by `EvalIs`)
 - [ ] Known-closure `'$call'` specialization (compile a syntactically

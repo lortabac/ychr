@@ -43,6 +43,7 @@ runStoreEnv action = do
       Map.empty
       Map.empty
       Map.empty
+      Map.empty
       Set.empty
   runChr action env
 
@@ -61,6 +62,7 @@ runInertStoreEnv action = do
       (replicate 100 (Unqualified ""))
       []
       [ConstraintType 1]
+      Map.empty
       Map.empty
       Map.empty
       Map.empty

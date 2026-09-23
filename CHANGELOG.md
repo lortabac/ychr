@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+Breaking: `'$call'` no longer compiles to a per-arity `call_N` dispatcher
+procedure. A dynamic call — `'$call'(F, A1, …, An)`, and so the prelude's
+`call/N` family and every first-class function value — now compiles to
+the new `ApplyClosure` VM construct, which the runtime resolves in one
+lookup through a new *callables* dispatch table on the VM `Program`,
+mirroring the *evaluables* table the `is` deep-evaluator already
+consults. The table maps a closure's `(functor, identity field, declared
+arity)` to the `func_*` procedure that implements it: `"/"` plus the
+flattened source name (`module:name`) plus the recorded arity for a
+function reference, `__closure` plus the lifted lambda's identifier plus
+the arity it is applied at for a lambda closure. Per-`'$call'` cost no
+longer grows with the number of functions and lifted lambdas the program
+(including every imported library) defines. Semantics are unchanged,
+including both failure modes — an unbound closure is still an
+instantiation error a rule guard can catch and retry, and a non-callable
+or a wrong-arity application still raises `call: no matching closure` —
+and `'$call'` still accepts one to ten arguments (`YCHR-16022`), a limit
+that is now a surface-language choice rather than an implementation
+artifact. `YCHR.Internal.Compile.genCallFunDispatches`, `callFunProcName`,
+`PKCallDispatch` and the `(call-dispatch …)` serialization tag are gone;
+`Compile.buildCallables` replaces them. `Program` gains a `callables`
+field, serialized after `evaluables` and optional on read like
+`inert-types`, and `ValExpr` gains `ApplyClosure`. Measured on this
+machine by interleaving the benchmark binary against one built from the
+parent commit, `typecheck/pairs_library` drops from a 178.4 ms median to
+155.0 ms (−13%; a second five-round comparison gives 183.2 ms to
+157.1 ms, −14%; the new binary is faster in all ten pairs), and the two
+most `'$call'`-heavy micro-benchmarks move with it: `sum_list_test` by
+48% and `lambda_test` by 33%.
+
+Runtime API changes that go with it: `YCHR.Internal.Runtime.Monad.initSessionEnv`
+takes the callables registry, `SessionEnv` gains a `callables` field,
+`YCHR.Internal.Runtime.Session.withCHRExtra` / `withCHRExtraTraced` take
+an extra callables argument, and `YCHR.Run.PreparedQuery` gains an
+`extraCallables` field — all because a query's lifted lambdas now
+contribute table entries instead of regenerated dispatch procedures. The
+Scheme runtime gains `register-callable!` and `%apply-closure`, and its
+session record gains an immutable `callables` field (a breaking change
+for direct `make-session` callers). `ychr gen-driver` emits
+`%apply-closure` for a `'$call'` in a goal instead of a `call_N`
+identifier, and encodes a goal-side function reference with the
+flattened `module:name` identity the table is keyed on, correcting an
+encoding that could never have matched. See
+[the VM reference](docs/reference/vm.md#closure-application).
+
 The `ychr` CLI accepts `--no-check` on `run`, `compile`, `gen-driver`
 and `repl`. It skips the optional type checker entirely — the
 whole-program check and the per-goal / per-query check — so a program
