@@ -308,10 +308,12 @@ The paper describes numerous optimizations. Each should be considered individual
 
 The optimizations in the table above come from the paper and live at the
 algorithmic level. The four items below come from profiling the Haskell
-interpreter itself and are implementation-level. None of them is
-implemented yet; they are recorded here, with the evidence that
-motivates them, so that whoever picks them up does not have to
-re-derive it.
+interpreter itself and are implementation-level. The first was
+implemented, measured and discarded: what it removes does not show up in
+the benchmarks, and it costs a second AST for the interpreter to
+maintain. The other three are unimplemented. All four are recorded here,
+with the evidence that motivates them and the measurements that settled
+the first, so that whoever picks them up does not have to re-derive it.
 
 The measurements are from the workload used to profile the interpreter
 here — the CHR type checker running over its own sources:
@@ -348,7 +350,7 @@ Two cautions about reading a profile of this build:
   8.35 s (5.5%), with 679 MB copied, so this workload is
   allocation-bound in the mutator rather than GC-bound.
 
-**1. Intern names, and key the hot maps by the interned id.**
+**1. Intern names, and key the hot maps by the interned id. — tried and discarded.**
 
 `Name` is `newtype Name = Name {unName :: Text}`
 (`src/YCHR/Internal/VM/Types.hs`) with a derived `Ord`, so every step of
@@ -359,17 +361,61 @@ run, from 92.9 M entries of the former — and attributes essentially all
 of it to four callers: the `Var` case of `evalValExpr`, `lookupProc`,
 `insertVal`, and `lookupHostCall`.
 
-Give `Name`, or a runtime-only key type, a compact integer id assigned
-at compile time and an `Eq`/`Ord` that compares it. Every map keyed by a
-`Name` or by a record carrying one —
-`src/YCHR/Internal/Runtime/Monad.hs`'s `ProcMap`, `HostCallRegistry`,
-`EvaluableRegistry` and `CallableRegistry`, and the interpreter's `Env`
-(item 2 below) — then compares integers. Constraints to respect: the id
-must be assigned deterministically per program, because a VM program's
-S-expression form is a serialization boundary and must stay text-only;
-`Show` and every error message keep the source text; and if ids are
-minted per compilation unit, `src/YCHR/Internal/Compile/Names.hs` is
-where that belongs.
+The obvious change — give `Name`, or a runtime-only key type, a compact
+integer id assigned at compile time, and key every map by it — was
+implemented and measured. It was built as its own stage rather than as a
+field on `Name`: the compiler's IR keeps text names (that same value is
+what the s-expression serializer writes and what the Scheme backend
+reads, so the serialized form stays text-only), one total walk assigns
+the ids in order of first appearance and interns the names into a program
+type the interpreter alone reads, and the session's tables — the
+procedure map, a call's local environment — are `IntMap`s over the
+resulting ids. The source text rides along on every interned name, so
+diagnostics, the call stack and trace events are unchanged. The invariant
+is enforced rather than documented: an interned name can only come from
+the interner, so a key that names nothing cannot be written down.
+
+It did remove the comparisons. On the fine profile (both trees built with
+`cabal build exe:ychr --ghc-options=-fprof-auto`, run over
+`typechecker/*.chr`), `$fOrdText_$ccompare` falls from 9.7% of individual
+time and `Ord Name`'s `compare` from 3.5% to neither appearing in the
+report at all, the `Data.Map` rebalancing those lookups feed (`balanceL`
+1.1%, `balanceR` 1.2%) goes with them, `insertVal` halves from 4.1% to
+2.1%, and the run goes from 8.75 s to 7.87 s with allocation down from
+18.04 GB to 17.30 GB.
+
+It was discarded because that win does not survive to where the project
+measures it. On `make bench`, interleaved rounds against a worktree at the
+parent commit put every benchmark inside run-to-run noise:
+`typecheck/pairs_library`, the benchmark this section names as the proxy,
+moved by −0.9%, the micro-benchmarks by a few percent either way, against
+a same-tree inter-round spread of 3–10%. So the ~10% the fine profile
+shows over the checker's own sources — a workload where the interpreter
+loop really is ~92% of the time — is not visible in the benchmark that
+stands in for it, and two costs weighed against it:
+
+- **A second AST.** The interpreter's program type mirrors the VM's
+  constructors and fields. It fails loudly rather than silently (a new VM
+  constructor or field makes the walk non-exhaustive, which is an error
+  under `-Wall -Werror`), but it is a second place to edit and review for
+  every VM change, and the stage moved `ProcMap`, `SessionInput`,
+  `CompiledProgram` and `initSessionEnv` with it.
+- **The scope shrank once measured.** Interned host-call dispatch was part
+  of the attempt and had to be given back: interning the registry's ~50
+  keys at every session init is a search of the whole program table per
+  key — a fixed ~9 µs per session, which no long workload notices and
+  every short one pays. In the same interleaved setup `guard` went
+  12.5 µs → 21.4 µs, `leq` 7.2 µs → 15.3 µs and `sum_list_test`
+  43.4 µs → 52.2 µs, while `fib`, `leq_closure` and the search benchmarks
+  moved by under 2%. What is left after that is the compiler's own names,
+  for the environment and the procedure map.
+
+If it is ever picked up again, the two numbers to beat are the ones above,
+and the cheaper shape to try first is a cached comparison key on `Name`
+itself — an `Ord` that compares a text-derived integer and falls back to
+the text on a tie — which needs no second AST and no API movement, at the
+price of a small portable hash and an `Ord Name` whose order is no longer
+text order.
 
 **2. Slot-indexed locals instead of the name-keyed `Env`.**
 
@@ -382,8 +428,10 @@ allocation, `insertVal` at 3.8 / 3.3 over 11.8 M calls — about half of
 them one-per-parameter from `bindParams`, the rest from statements —
 `balanceL` plus `balanceR` at 1.5 / 4.8, and the `Map.lookup` inside
 `evalValExpr`'s `Var` case (`evalValExpr.\`) at 3.5 / 2.6: about 13% of
-the time and 15% of the allocation, before counting the share of item
-1's comparisons that these operations generate.
+the time and 15% of the allocation. The discarded item 1 would have taken
+the `Text` comparisons out of two of those lookups; the arity check, the
+`zip`, the rebalancing and the per-statement insert would all have stayed,
+which is this item's point.
 
 The compiler already knows each procedure's parameters and locals, so
 it can emit slot indices in their place: `ValExpr`'s `Var`, `IdExpr`'s
@@ -409,7 +457,7 @@ catch (`Note [Soft guard catch safety]`); a fixed-size array keeps that
 property by being written in place. Slots must therefore also be
 assigned for query-time procedures, which
 `src/YCHR/Internal/Runtime/Session.hs` merges into `procMap` after the
-program is loaded. Like items 1 and 3, the change reaches the IR, its
+program is loaded. Like item 3, the change reaches the IR, its
 S-expression form, and the Scheme backend, which reads the same
 statements.
 
@@ -429,9 +477,10 @@ extension), so its index can only be assigned when the session is
 initialised, against whatever registry it was given. The `EvaluableKey`
 and `CallableKey` lookups behind `is` and `'$call'` are already one map
 lookup each — that part is done — but those keys carry a `Name` into a
-`Text`-keyed map, so they take the comparison win from item 1 and the
-index treatment too if the keys are interned. The compatibility surface
-is the serialization format plus the Scheme backend and driver, which
+`Text`-keyed map: they are worth the index treatment this item describes,
+and item 1's measurements say they are not worth interning. The
+compatibility surface is the serialization format plus the Scheme backend
+and driver, which
 resolve by name today; and the index space has to stay open, because
 query-time lambdas are added to the procedure map at run time.
 
@@ -458,13 +507,14 @@ value is dereferenced once and the argument list walked once.
 `deepEvalValue` and `applyClosure` take `length args` for the same
 reason and can share the fix.
 
-The relative sizes say what order to take these in. Items 1 and 2 are
-the same change seen from two sides — both are "stop looking local
-variables up by text" — and between them they cover most of the 12.8%
-spent comparing names and the ~15% spent maintaining the environment;
-item 3 applies that to the procedure and host-call tables and to the
-keys behind `is` and `'$call'`; item 4 is local and independent of the
-rest.
+The relative sizes say what order to take these in. Item 1 is out — see
+its entry above — which leaves item 2 as the way to stop looking local
+variables up by text. It is also the better one: it removes the arity
+check, the `zip` and the per-statement insert rather than only the
+comparisons, so it stands for the whole ~15% spent maintaining the
+environment. Item 3 applies the index treatment to the procedure and
+host-call tables and to the keys behind `is` and `'$call'`; item 4 is
+local and independent of the rest.
 
 The same profile lists three smaller candidates that are not scheduled
 here: the `try` wrapped around every host call (`invokeHostCall`,
