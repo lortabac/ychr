@@ -304,6 +304,182 @@ The paper describes numerous optimizations. Each should be considered individual
 | Recursion Optimizations | Trampoline, explicit stack. | Backend |
 
 
+### Haskell Interpreter Performance
+
+The optimizations in the table above come from the paper and live at the
+algorithmic level. The four items below come from profiling the Haskell
+interpreter itself and are implementation-level. None of them is
+implemented yet; they are recorded here, with the evidence that
+motivates them, so that whoever picks them up does not have to
+re-derive it.
+
+The measurements are from the workload used to profile the interpreter
+here — the CHR type checker running over its own sources:
+
+```
+ychr check typechecker/*.chr +RTS -p
+```
+
+On 2026-09-23 that run took 7.1 s and allocated 18.0 GB (profiler
+figures). Parsing and CHR-to-VM compilation account for 4.3% of the
+time and 4.5% of the allocation; 91.8% of the time and 89.8% of the
+allocation are the interpreter running the compiled program. Under the
+finer instrumentation described below, the same workload makes 2.74 M
+procedure calls, 29.8 M value expression evaluations and 22.4 M
+statement executions.
+
+Two cautions about reading a profile of this build:
+
+- The `ychr` package is instrumented with cost centres on exported
+  bindings only, so the report charges the rest of the interpreter loop
+  to `callProc` (73.0% individual time, 66.0% allocation) and never
+  mentions `execStmts`, `evalValExpr` or `lookupProc` at all. (Exported
+  hot-path helpers — `bindParams`, `matchTerm`, `getArg`, `deref`,
+  `equal` — do keep their own cost centres, and the dependencies carry
+  theirs.) Rebuilding the local package with
+  `cabal build exe:ychr --ghc-options=-fprof-auto` (this rebuilds no
+  dependencies) splits it up, and the per-function figures quoted below
+  are from that run. The extra cost centres are not free — that run
+  reports 11.3 s and 22.1 GB, because they also inhibit inlining — so
+  use it for shares, not for absolute costs.
+- A profiled build is not the shipping build. `+RTS -s` on the same
+  binary reports 30.0 GB allocated where the profiler reports 18.0 GB,
+  because the profiler excludes its own overhead. GC is 0.46 s of
+  8.35 s (5.5%), with 679 MB copied, so this workload is
+  allocation-bound in the mutator rather than GC-bound.
+
+**1. Intern names, and key the hot maps by the interned id.**
+
+`Name` is `newtype Name = Name {unName :: Text}`
+(`src/YCHR/Internal/VM/Types.hs`) with a derived `Ord`, so every step of
+a `Data.Map` lookup or insertion on a `Name`-keyed map is a `Text`
+comparison. The fine profile puts 9.4% of individual time in
+`$fOrdText_$ccompare` and 3.4% in `Ord Name`'s `compare` — 12.8% of the
+run, from 92.9 M entries of the former — and attributes essentially all
+of it to four callers: the `Var` case of `evalValExpr`, `lookupProc`,
+`insertVal`, and `lookupHostCall`.
+
+Give `Name`, or a runtime-only key type, a compact integer id assigned
+at compile time and an `Eq`/`Ord` that compares it. Every map keyed by a
+`Name` or by a record carrying one —
+`src/YCHR/Internal/Runtime/Monad.hs`'s `ProcMap`, `HostCallRegistry`,
+`EvaluableRegistry` and `CallableRegistry`, and the interpreter's `Env`
+(item 2 below) — then compares integers. Constraints to respect: the id
+must be assigned deterministically per program, because a VM program's
+S-expression form is a serialization boundary and must stay text-only;
+`Show` and every error message keep the source text; and if ids are
+minted per compilation unit, `src/YCHR/Internal/Compile/Names.hs` is
+where that belongs.
+
+**2. Slot-indexed locals instead of the name-keyed `Env`.**
+
+`Env` is a pair of `Map Name _`
+(`src/YCHR/Internal/Runtime/Interpreter.hs`), rebuilt on every procedure
+call by `bindParams` (an arity check that walks both lists, a `zip`, and
+a `foldl'`) and mutated by every `LetVal`/`AssignVal` through
+`insertVal`. The fine profile puts `bindParams` at 4.1% time / 4.7%
+allocation, `insertVal` at 3.8 / 3.3 over 11.8 M calls — about half of
+them one-per-parameter from `bindParams`, the rest from statements —
+`balanceL` plus `balanceR` at 1.5 / 4.8, and the `Map.lookup` inside
+`evalValExpr`'s `Var` case (`evalValExpr.\`) at 3.5 / 2.6: about 13% of
+the time and 15% of the allocation, before counting the share of item
+1's comparisons that these operations generate.
+
+The compiler already knows each procedure's parameters and locals, so
+it can emit slot indices in their place: `ValExpr`'s `Var`, `IdExpr`'s
+`IdVar`, and the `Let*`/`Assign*` statements carry a slot, and a call's
+environment becomes a fixed-size array built once per call — an
+`IORef (SmallArray Value)` plus a second array, or one array of a tagged
+union, for ids — with no search and no rebalancing. A flat array or
+vector means adding a dependency (`primitive`, `vector` or `array`);
+none of the three is in `build-depends` today. `Env` is already split by
+kind and the IR guarantees a name is bound in only one of the two maps,
+so slots can be numbered independently per kind.
+
+If the VM shape should stay as it is, there is a cheaper intermediate: a
+load-time pass that rewrites `Var`/`IdVar`/`Let*`/`Assign*` to `Int`
+slots against a per-procedure `IntMap`-backed environment. Keeping the
+names in the IR and consulting a `Name -> Int` table at each access
+would not help: that lookup is the `Text` comparison the slot exists to
+remove.
+
+The awkward part is mutability. The interpreter threads `Env` through an
+`IORef` so that bindings made before a `BSoftGuard` failure survive the
+catch (`Note [Soft guard catch safety]`); a fixed-size array keeps that
+property by being written in place. Slots must therefore also be
+assigned for query-time procedures, which
+`src/YCHR/Internal/Runtime/Session.hs` merges into `procMap` after the
+program is loaded. Like items 1 and 3, the change reaches the IR, its
+S-expression form, and the Scheme backend, which reads the same
+statements.
+
+**3. Resolve call targets at compile time.**
+
+`CallExpr` and `HostCall` carry a `Name` that the runtime looks up on
+every call: `lookupProc` (2.74 M calls per run — an `IORef` read plus a
+`Map Name Procedure` search, 1.1% of time, and 0.8 points of `Ord Name`'s
+`compare` before its share of the `Text` comparisons underneath) and
+`lookupHostCall` (1.83 M calls, 0.4 points of `compare`). A `CallExpr`
+target is known to the compiler, so the VM can carry a procedure index
+and the runtime index a vector, keeping the name only for diagnostics
+and the call stack. A `HostCall` target is not: the registry is a
+runtime argument of `interpret` and callers hand in different ones
+(`defaultHostCallRegistry`, the search driver's, a host-built
+extension), so its index can only be assigned when the session is
+initialised, against whatever registry it was given. The `EvaluableKey`
+and `CallableKey` lookups behind `is` and `'$call'` are already one map
+lookup each — that part is done — but those keys carry a `Name` into a
+`Text`-keyed map, so they take the comparison win from item 1 and the
+index treatment too if the keys are interned. The compatibility surface
+is the serialization format plus the Scheme backend and driver, which
+resolve by name today; and the index space has to stay open, because
+query-time lambdas are added to the procedure map at run time.
+
+**4. One traversal, not two, in the argument-access primitives.**
+
+`getArg` (`src/YCHR/Internal/Runtime/Var.hs`), and `getConstraintArg`
+and `suspArg` (`src/YCHR/Internal/Runtime/Store.hs`), each check
+`idx >= 0 && idx < length args` and then apply `!!`: two traversals of a
+list that is usually two or three elements long, for an index the
+compiler fixed when it emitted the instruction. `matchTerm` walks the
+same list to check `length args == arity`. The fine profile counts 4.7 M `$w!!`
+applications, all of them in those three functions (`getArg` 3.29 M
+calls, `suspArg` 1.11 M, `getConstraintArg` 335 K), and 40.7 M
+`$wlenAcc` steps in total, of which about 23 M come from those three
+plus `matchTerm` (3.64 M calls) and the rest from `bindParams`' arity
+check (item 2). Together they are about 2.1% of the time, and none of
+that work is necessary.
+
+Two independent changes: index in one pass (walk the spine once, or
+store a term's and a suspension's arguments in an `Array`/`Vector`,
+which turns the arity check into a field read); and fuse `BMatchTerm`
+with the `GetArg` that usually follows it in compiled output, so the
+value is dereferenced once and the argument list walked once.
+`deepEvalValue` and `applyClosure` take `length args` for the same
+reason and can share the fix.
+
+The relative sizes say what order to take these in. Items 1 and 2 are
+the same change seen from two sides — both are "stop looking local
+variables up by text" — and between them they cover most of the 12.8%
+spent comparing names and the ~15% spent maintaining the environment;
+item 3 applies that to the procedure and host-call tables and to the
+keys behind `is` and `'$call'`; item 4 is local and independent of the
+rest.
+
+The same profile lists three smaller candidates that are not scheduled
+here: the `try` wrapped around every host call (`invokeHostCall`,
+1.83 M calls), `execForeach`'s `toList` of a store snapshot on every
+loop entry, and the per-statement allocation in `execStmts`/`execStmt`
+(11.4% and 6.4% of allocation).
+
+Judge any of this with `make bench` and re-profile as described above.
+The relevant benchmark is `typecheck/pairs_library`, which drives the
+same CHR type checker over a different unit than the profile did, so
+use it as a proxy; the numbers in this section come from a profiled
+build over the checker's own sources and are indicative, not a
+baseline.
+
+
 ## User-Defined Functions
 
 The language supports user-defined functions: pattern-matching, top-to-bottom evaluated equations with optional guard clauses. Functions are declared with `:- function` directives and defined with Erlang-style equations using `->`:
@@ -594,7 +770,7 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
 
 The following components have not yet been implemented:
 
-- **Optimizations**: Implement the optimizations listed above, at the appropriate stage.
+- **Optimizations**: Implement the optimizations listed above, at the appropriate stage. The profiling-driven interpreter items under "Haskell Interpreter Performance" are separate from the paper's catalogue and are also still open.
 - **JavaScript backend**: Translate VM programs to JavaScript code.
 - **JavaScript runtime**: Implement logical variables, compound terms, constraint store, propagation history, reactivation queue, and iterators in JavaScript.
 - **Testing**: Test suite covering individual components and end-to-end execution of standard CHR programs (leq, Fibonacci, Dijkstra, RAM simulator, etc.).
