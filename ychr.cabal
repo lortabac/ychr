@@ -122,8 +122,24 @@ common deps
                     , filepath >=1.4 && <1.6
                     , text >=2.0 && <2.2
 
+-- Components that compile the @embed/@ splices must tell Cabal they use
+-- Template Haskell, even though each spliced module already carries the
+-- @LANGUAGE TemplateHaskell@ pragma. Cabal never reads source pragmas, and
+-- 'other-extensions' is the field that informs it without also enabling the
+-- extension in every module. Cabal uses that information to build the
+-- component's dynamic way as well, which a profiled build needs because
+-- GHC's splice interpreter cannot load the profiled @.p_o@ objects; without
+-- it the build dies with
+-- @cannot find object file ... .dyn_o while linking an interpreted
+-- expression@ (haskell/cabal#5961). Unlike 'default-extensions' the
+-- declaration is not passed to GHC, so 'TemplateHaskell' stays scoped to
+-- the modules that opt into it.
+common th-embed
+    if impl(ghc)
+        other-extensions: TemplateHaskell
+
 executable ychr
-    import:           warnings, deps
+    import:           warnings, deps, th-embed
     main-is:          Main.hs
     -- 'YCHR.Embedded' is this component's resources provider. It has one
     -- implementation per compiler, switched by 'hs-source-dirs':
@@ -157,7 +173,7 @@ executable ychr
 -- @examples/stlc/stlc.chr@ is a lambda-calculus type inferencer written in
 -- CHR; this driver embeds it and drives it through YCHR.Convert.
 executable stlc-typechecker
-    import:           warnings, deps
+    import:           warnings, deps, th-embed
     main-is:          Main.hs
     if !flag(examples)
         buildable:    False
@@ -177,7 +193,7 @@ executable stlc-typechecker
     default-language: GHC2021
 
 test-suite ychr-tests
-    import:           warnings, deps
+    import:           warnings, deps, th-embed
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
     other-modules:    YCHR.CollectTest
@@ -230,7 +246,7 @@ test-suite ychr-tests
     default-language: GHC2021
 
 benchmark ychr-bench
-    import:           warnings, deps
+    import:           warnings, deps, th-embed
     type:             exitcode-stdio-1.0
     main-is:          Main.hs
     other-modules:    YCHR.Embedded

@@ -181,6 +181,15 @@ typeCheckerProgram =
 splices — also register each file for recompilation with
 `addDependentFile`.)
 
+Declare `other-extensions: TemplateHaskell` in the `.cabal` stanza of the
+component that holds the splices. The `LANGUAGE` pragma is not enough:
+Cabal never reads source pragmas, and `other-extensions` is what tells it
+to build the component the way GHC's splice interpreter can load. Without
+it a `profiling: true` build fails with `cannot find object file …
+.dyn_o while linking an interpreted expression` — the reason the
+repository's own four components import the `th-embed` common stanza in
+[`ychr.cabal`](../../ychr.cabal).
+
 Without Template Haskell, read the same two directories at run time and
 hand the lists to `parseStdLib` / `compileTypeCheckerModules`. The
 library ships that loop as

@@ -108,6 +108,19 @@ usage screens still trip an unrelated MicroHs bug in
 `Data.Text.replicate` (dev-docs/MICROHS_GAPS.md, gap 10). See
 [the embedding guide](docs/how-to/embed-a-chr-module.md#5-supplying-the-resources).
 
+Fix: a build with `profiling: true` in `cabal.project.local` now links.
+The four components that compile the `embed/` splices declare
+`other-extensions: TemplateHaskell` (through the new `th-embed` common
+stanza in `ychr.cabal`). Cabal never reads `LANGUAGE` pragmas; it reads
+`other-extensions` to decide which build ways a component needs, and that
+is what makes it also build those components the way GHC's splice
+interpreter can load them. Without it the profiled build died with
+`cannot find object file ... .dyn_o while linking an interpreted
+expression` ([haskell/cabal#5961](https://github.com/haskell/cabal/issues/5961)).
+Unlike `default-extensions` the declaration is not passed to GHC, so it
+does not enable `TemplateHaskell` in modules that do not already opt into
+it.
+
 Breaking: the wildcard is gone from the runtime. `YCHR.Run.Value` no
 longer has a `VWildcard` constructor, the VM `Literal` type no longer
 has `WildcardLit`, the serialized `.vm` format no longer accepts a
