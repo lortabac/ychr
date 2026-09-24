@@ -18,9 +18,7 @@
 -- (dev-docs/MICROHS_GAPS.md, gap 4).
 module YCHR.TextShimTest (tests) where
 
--- 'try' comes from the shim so its type variables keep GHC's order
--- (dev-docs/MICROHS_GAPS.md, gap 7).
-import Control.Exception.Shim (SomeException, evaluate, try)
+import Control.Exception (SomeException, evaluate, try)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Shim qualified as Shim

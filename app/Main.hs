@@ -1,8 +1,6 @@
 module Main where
 
--- 'try' comes from the shim so its type variables keep GHC's order
--- (dev-docs/MICROHS_GAPS.md, gap 7).
-import Control.Exception.Shim (SomeException, displayException, fromException, try)
+import Control.Exception (SomeException, displayException, fromException, try)
 import Control.Monad (unless, when)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -202,7 +200,7 @@ main = do
   --
   -- No 'fullDesc' modifier: it has been an effect-free modifier since
   -- optparse-applicative 0.8, and the post-0.19 source MicroHs builds
-  -- from has dropped it (dev-docs/MICROHS_GAPS.md, gap 9).
+  -- from has dropped it (dev-docs/MICROHS_GAPS.md, gap 8).
   cmd <- execParser (info (commandParser <**> helper) (progDesc "CHR compiler"))
   resources <- loadResourcesOrExit
   case cmd of

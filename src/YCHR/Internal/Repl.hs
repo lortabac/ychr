@@ -15,9 +15,7 @@ module YCHR.Internal.Repl
   )
 where
 
--- 'try' comes from the shim so its type variables keep GHC's order
--- (dev-docs/MICROHS_GAPS.md, gap 7).
-import Control.Exception.Shim
+import Control.Exception
   ( IOException,
     SomeException,
     displayException,

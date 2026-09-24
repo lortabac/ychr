@@ -11,9 +11,7 @@ module YCHR.Internal.LineInput
   )
 where
 
--- 'try' comes from the shim so its type variables keep GHC's order
--- (dev-docs/MICROHS_GAPS.md, gap 7).
-import Control.Exception.Shim (IOException, try)
+import Control.Exception (IOException, try)
 import System.IO (hFlush, stdout)
 
 -- | Configuration for a line-input session. Both fields are ignored

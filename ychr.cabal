@@ -278,13 +278,10 @@ library
                     , YCHR.Run
                     , YCHR.Types
 
-    -- Provisional MicroHs shims. "Data.Text.Shim" supplies the "Data.Text"
-    -- functions gap 4 lists; "Control.Exception.Shim" restores GHC's
-    -- type-variable order for 'try' (gap 7). Exposed (like the YCHR.Internal
-    -- modules) so the CLI and the tests can import them. Delete each with
-    -- its source file.
-    exposed-modules:  Control.Exception.Shim
-                    , Data.Text.Shim
+    -- Provisional MicroHs shim. "Data.Text.Shim" supplies the "Data.Text"
+    -- functions gap 4 lists. Exposed (like the YCHR.Internal modules) so the
+    -- CLI and the tests can import it. Delete it with its source file.
+    exposed-modules:  Data.Text.Shim
 
     -- Internal. These are implementation details: they carry no
     -- compatibility guarantee and are not covered by the package version

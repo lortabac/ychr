@@ -887,7 +887,7 @@ renameErrorMsg (ConstructorFunctionAmbiguity name conMods funMods) =
         -- Say so only when the prelude is actually one of the sides.
         -- MicroHs's 'Data.List.elem' lacks a fixity declaration and
         -- defaults to 'infixl 9'; the parentheses pin the 'infix 4'
-        -- parse that base already produces (dev-docs/MICROHS_GAPS.md, gap 8).
+        -- parse that base already produces (dev-docs/MICROHS_GAPS.md, gap 7).
         ++ if "prelude" `elem` (conMods ++ funMods)
           then
             "; the prelude's import cannot be narrowed, so renaming your"

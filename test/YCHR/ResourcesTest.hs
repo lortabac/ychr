@@ -25,10 +25,8 @@
 -- @cabal clean@.
 module YCHR.ResourcesTest (tests) where
 
--- "Control.Exception.Shim" is the tree's stand-in for "Control.Exception"
--- (dev-docs/MICROHS_GAPS.md, gap 7); 'evaluate' forces the lazy
--- type-checker binding, 'try' is not used here.
-import Control.Exception.Shim (evaluate)
+-- 'evaluate' forces the lazy type-checker binding; 'try' is not used here.
+import Control.Exception (evaluate)
 import Data.List (sort)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map

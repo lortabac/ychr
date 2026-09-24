@@ -18,23 +18,23 @@ terse, fix-shaped, removable when closed.
 
 ## Status
 
-Re-verified against MicroHs `3322c60a` (the checkout's HEAD) and the
-installed `mhs` 0.16.6.0. Ten gaps are recorded; one has closed and
-been removed from this document. The local workarounds for gaps 1, 3, 4,
-5, 6, 7, 8 and 9 are applied (gaps 4 and 7 also touch the importers,
-tests included; gap 5 is the run-time resources provider described below;
-gaps 8 and 9 are one pair of parentheses and one no-op modifier
-respectively). Gap 10 has no YCHR-side workaround: it breaks the
-MicroHs-built executable's help screens only. No Template Haskell remains
-in `library ychr`, and the `ychr` executable has a MicroHs twin of the
-compile-time embedder, so `mcabal build` now completes: it builds
-`library ychr` and `exe:ychr`, and the binary reads `libraries/*.chr` and
-`typechecker/*.chr` from `$YCHR_LIB_DIR` (or the current directory) at
-run time. `mcabal build` does not build the test suite, the benchmark or
-the `stlc` example (they need `tasty`/`hedgehog`/`criterion`, which the
-MicroHs package set lacks, and the `examples` flag defaults off), so
-those remain GHC-only. Gaps 7, 8, 9 and 10 were found on the way to that
-point and are recorded below.
+Re-verified against MicroHs `f65d3c65` (the checkout's HEAD, which
+includes `0a1c3095`, the `try` fix) and its `base` package rebuilt from
+it. Nine gaps are recorded; two have closed and been removed from this
+document. The local workarounds for gaps 1, 3, 4, 5, 6, 7 and 8 are
+applied (gap 4 also touches the importers, tests included; gap 5 is the
+run-time resources provider described below; gaps 7 and 8 are one pair of
+parentheses and one no-op modifier respectively). Gap 9 has no YCHR-side
+workaround: it breaks the MicroHs-built executable's help screens only.
+No Template Haskell remains in `library ychr`, and the `ychr` executable
+has a MicroHs twin of the compile-time embedder, so `mcabal build` now
+completes: it builds `library ychr` and `exe:ychr`, and the binary reads
+`libraries/*.chr` and `typechecker/*.chr` from `$YCHR_LIB_DIR` (or the
+current directory) at run time. `mcabal build` does not build the test
+suite, the benchmark or the `stlc` example (they need
+`tasty`/`hedgehog`/`criterion`, which the MicroHs package set lacks, and
+the `examples` flag defaults off), so those remain GHC-only. Gaps 7, 8
+and 9 were found on the way to that point and are recorded below.
 
 | # | Gap | State |
 |---|---|---|
@@ -44,14 +44,18 @@ point and are recorded below.
 | 4 | Missing `Data.Text` functions | open — workaround applied (`Data.Text.Shim`) |
 | 5 | No `TemplateHaskell` support | open upstream — workaround applied: no TH in `library ychr`, and the MicroHs `ychr` loads both resources at run time (see below) |
 | 6 | `mapAccumL` is list-only | open — workaround applied to `src/` (see below) |
-| 7 | `Control.Exception.try` orders its type variables differently from GHC | open — workaround applied (`Control.Exception.Shim`) |
-| 8 | `Data.List` functions lack their fixity declarations | open — workaround applied to `src/` (see below) |
-| 9 | `optparse-applicative`'s `fullDesc` is missing from the MicroHs package | open — workaround applied to `app/Main.hs` (see below) |
-| 10 | `Data.Text.replicate` rejects a zero multiplier | open upstream — no YCHR-side workaround; the MicroHs `ychr` cannot render help (see below) |
+| 7 | `Data.List` functions lack their fixity declarations | open — workaround applied to `src/` (see below) |
+| 8 | `optparse-applicative`'s `fullDesc` is missing from the MicroHs package | open — workaround applied to `app/Main.hs` (see below) |
+| 9 | `Data.Text.replicate` rejects a zero multiplier | open upstream — no YCHR-side workaround; the MicroHs `ychr` cannot render help (see below) |
 
 `Data.Either.partitionEithers` (formerly gap 5) is now exported by
 MicroHs (`lib/Data/Either.hs:51`) and used directly by
 `src/YCHR/Internal/Parser.hs`; that entry is gone.
+
+`Control.Exception.try` (formerly gap 7) now orders its type variables
+the way `base` does (`MicroHs/lib/Control/Exception.hs:106`, upstream
+`0a1c3095`); `Control.Exception.Shim` is deleted and its importers
+reverted.
 
 Each entry below opens with a **Re-verified** note recording what
 changed, if anything, since it was written.
@@ -274,10 +278,10 @@ landed. `Runtime/Monad.hs` sits behind them through
 `Compile.Pipeline`, so its call was checked with the equivalent
 `TrailState` reproducer instead (`ambiguous value: length […]` without
 the qualification, accepted with it). There was still no end-to-end
-check at the time: the library stopped on gap 8 before the CLI was
-reached (gap 7 was worked around after this sweep — see gap 7). Both
-have since been closed, and `mcabal build` now builds the CLI too (see
-the Status section).
+check at the time: the library stopped on gap 7 before the CLI was
+reached, and the `try` gap — since closed — was worked around only after
+this sweep. Both have since been closed, and `mcabal build` now builds
+the CLI too (see the Status section).
 The test component is out of reach as well (`tasty` and `hedgehog` are
 not in the MicroHs package set), so
 `test/YCHR/RoundtripTest.hs:159` — the same `.head` collision, on a
@@ -408,8 +412,8 @@ redundant and would invite deletion, while the binding is
 self-documenting. It also removes a repeated selector at every site. A
 pattern sweep over `src/`, `app/`, `test/`, `bench/` and
 `examples/` finds no other update-on-selector site; the modules behind
-gap 7 were checked with gap 7's sites bypassed (that sweep predates the
-gap-7 workaround).
+the `try` gap were checked with its sites bypassed (that sweep predates
+the shim, which is since deleted).
 
 Cheap and rare. Comfortable to keep even if MicroHs never grows the
 parser fix.
@@ -515,8 +519,9 @@ Verified with `mhs -fno-code -isrc`: `Data.Text.Shim` itself plus
 stopped on `undefined value: T.concatMap` / `Text.last` / `T.breakOn`.
 `Meta.hs` and `Compile.Pipeline` now get past gaps 3 and 4 as well.
 There was still no end-to-end check at the time: the library stopped on
-gap 8 in `Display.hs` (gap 7 has since been worked around — see gap 7),
-and gap 5's resources provider was missing for the CLI. Since closed:
+gap 7 in `Display.hs` (the `try` gap, since closed, had been worked
+around by then), and gap 5's resources provider was missing for the
+CLI. Since closed:
 `mcabal build` now builds both the library and the executable (see the
 Status section).
 
@@ -634,7 +639,7 @@ Verified on this revision:
   test/golden/leq/leq.chr` prints `X = _`, both with `YCHR_LIB_DIR=$PWD`
   and, from the repo root, with the variable unset. `repl`, `compile`,
   `gen-driver` and `check` work too; `--help` and usage-error screens
-  trip gap 10, which is unrelated to the resources.
+  trip gap 9, which is unrelated to the resources.
 - A wrong root is reported:
   `YCHR_LIB_DIR=/nonexistent … ychr check …` prints
   `Error: resource directory not found: /nonexistent/libraries (set
@@ -743,10 +748,10 @@ Verified:
   The earlier "typechecks fully" claim for a scratch copy should have
   been scoped to this module: a whole-library check passes
   `Compile.Pipeline`, `Meta`, `VM` and `Backend.SchemeDriver` but stops
-  on gaps 7 and 8 in `Runtime/Interpreter.hs` and `Display.hs`, both of
-  which predate this change and are unrelated to it (both have since
-  been worked around). Reverting only this change in a scratch copy
-  brings the error back at the `D.BodyOr` arm
+  on the `try` gap (since closed) in `Runtime/Interpreter.hs` and gap 7
+  in `Display.hs`, both of which predate this change and are unrelated to
+  it (both have since been worked around). Reverting only this change in a
+  scratch copy brings the error back at the `D.BodyOr` arm
   (`Cannot satisfy constraint: NonEmpty ~ []`).
 
 Invocation detail: the include path must be attached (`-i<dir>`, not
@@ -761,139 +766,14 @@ helper needs an explicit conversion pair, and a mistake shows up as the
 opaque `NonEmpty ~ []` rather than a missing-name error.
 
 
-## 7. `Control.Exception.try` orders its type variables differently from GHC
-
-> **Re-verified.** Still open upstream; the workaround is now applied to
-> `src/`, `app/` and `test/`. Found while working past gap 3; not
-> previously recorded. It was the first failure a build reached:
-> `mcabal build` stopped on it in `Runtime/Interpreter.hs:870`. With the
-> shim below, the library compiles past it and the next failure is gap 8.
-
-MicroHs declares (`MicroHs/lib/Control/Exception.hs:106`):
-
-```haskell
-try :: forall a e . Exception e => IO a -> IO (Either e a)
-```
-
-GHC 9.12's `base` binds the exception type first, so `try @SomeException`
-means `e` there and `a` here. A visible type application therefore
-selects the wrong variable:
-
-```haskell
--- mhs: Cannot satisfy constraint: SomeException ~ ()
--- GHC 9.12: accepts (Right ())
-try @SomeException (pure ())
-```
-
-No positional form is portable: `try @_ @SomeException` typechecks on
-`mhs` and fails on GHC 9.12 with `SomeException ~ ()`.
-
-Sites in the library (line numbers after the shim imports below):
-
-| site | call |
-|---|---|
-| `src/YCHR/Internal/Runtime/Interpreter.hs:872` | `try @SomeException` |
-| `src/YCHR/Run.hs:639` | `try @SomeException` |
-| `src/YCHR/Internal/Repl.hs:129` | `try @IOException` |
-| `src/YCHR/Internal/Repl.hs:219,227,247,255,359,375` | `try @SomeException` |
-| `src/mhs/YCHR/Internal/LineInput.hs:39` | `try @IOException` |
-
-The last one is the mhs-only line-input overlay, which had never compiled
-under `mhs`; that is why the pattern went unnoticed there. The same shape
-appears in `app/Main.hs:198,205,260,265` and in the tests
-(`Runtime/StoreTest.hs`, `Runtime/InterpreterTest.hs`,
-`TextShimTest.hs`, `ConvertTest.hs`, `TypeSoundnessTest.hs`,
-`GoldenTest.hs`, `RunTest.hs`). All of them are converted: the shim makes
-that an import swap, so leaving the out-of-reach files behind would only
-keep the trap alive for a later sweep.
-
-### Upstream fix sketch
-
-Order `try`'s type variables the way GHC's `base` does (drop the
-explicit `forall a e`, or write it `forall e a`). The point of the audit
-below is how far the reordering has to reach; measured against `mhs`
-0.16.6.0 it stops at `try`:
-
-- `catch` (declared `forall e a` in `Control.Exception.Internal`) and
-  the inferred `handle` / `tryJust` accept `@SomeException` as the
-  exception variable on both compilers;
-- `bracket`, `finally` and `onException` diverge for a second reason —
-  MicroHs's *inferred* order for them is not GHC's, so GHC's
-  `bracket @Int @Bool @Char` and `finally @Int @Char` are rejected by
-  `mhs` — but YCHR never type-applies them;
-- `throwIO` is declared `forall a e` in MicroHs against GHC's
-  `forall e a`, and is never type-applied in YCHR either.
-
-Nothing outside `try` needs work today; a site that starts type-applying
-one of the others needs a wrapper with an explicit GHC-ordered `forall`
-added to the shim.
-
-### Local workaround (applied)
-
-`src/Control/Exception/Shim.hs` re-exports `Control.Exception` with `try`
-replaced by a version whose signature spells out GHC's order:
-
-```haskell
-try :: forall e a. Exception e => IO a -> IO (Either e a)
-try = E.try
-```
-
-Both compilers honour the *declared* order for a visible type
-application, so `try @SomeException` selects `e` under `mhs` as it does
-under GHC. This is the shape `Data.Text.Shim` already uses for gap 4: a
-module that mirrors the upstream surface, swapped in at the import line,
-so the 29 call sites read exactly as before. The helper form sketched
-earlier (`trySomeException = try`) would have meant editing all 29 and
-adding a third twin for the tests' `RuntimeErrorThrown`; the shim is one
-module plus an import swap per importer.
-
-| edit | sites |
-|---|---|
-| `import Control.Exception` → `.Shim` | `Run.hs`, `Runtime/Interpreter.hs`, `Runtime/Search.hs`, `Internal/Repl.hs`, `src/mhs/YCHR/Internal/LineInput.hs`, `app/Main.hs`, and the test modules `Runtime/StoreTest.hs`, `Runtime/InterpreterTest.hs`, `TextShimTest.hs`, `ConvertTest.hs`, `TypeSoundnessTest.hs`, `GoldenTest.hs`, `RunTest.hs` — 13 files |
-| `exposed-modules: Control.Exception.Shim` | `ychr.cabal`, in the provisional-shim stanza |
-
-`Runtime/Search.hs` has no type application (it uses `try` bare); it is
-swapped so that every `try` in the tree comes from the shim. The
-`Text.Parsec.try` imports (`PExpr.hs`, `SExpr.hs`) are unrelated and
-untouched.
-
-Verified on this revision:
-
-- GHC: `make format` clean, `cabal build all` (`-Werror`) and `make test`
-  green. The call sites pin the shim against the obvious mistake: a
-  `forall a e` signature would make `try @SomeException (prepareGoal …)`
-  fail to compile, because the action is not `IO SomeException`. (Nothing
-  on GHC catches the /absence/ of the explicit `forall` — inferred, GHC
-  already picks `e` first; that half of the shim is MicroHs-only.)
-- Reproducers: before, `mhs -fno-code -isrc -isrc/mhs
-  YCHR.Internal.Runtime.Interpreter` failed at `Interpreter.hs:870` with
-  `Cannot satisfy constraint: SomeException ~ Value`, and the same
-  invocation on `YCHR.Internal.LineInput` failed at `LineInput.hs:37`
-  with `Cannot satisfy constraint: Exception _a77`. After, the overlay
-  reports "No code generated" — its first successful `mhs` check — and
-  the interpreter module no longer fails on gap 7.
-- Scratch reproducer: a module declaring `try :: forall e a. Exception e
-  => IO a -> IO (Either e a)` compiles and runs under both `mhs` and GHC
-  with `try @SomeException` and `try @IOException`, and both reject
-  `try @Int` with `Cannot satisfy constraint: Exception Int` — i.e. the
-  type application binds the exception variable on both.
-- `mcabal build`: got past `Runtime/Interpreter.hs:872` and stopped on
-  gap 8 in `Display.hs:888` (`Cannot satisfy constraint: Bool ~ [Text]`).
-  Gap 8 has since been worked around, and gap 5's provider has landed
-  too, so the build now completes; see the Status section.
-
-Delete the module (and revert the 13 imports) once MicroHs orders `try`
-the way `base` does.
-
-
-## 8. `Data.List` functions lack their fixity declarations
+## 7. `Data.List` functions lack their fixity declarations
 
 > **Re-verified.** Still open upstream; the workaround is now applied to
 > `src/`, at the single site below. Found while working past gap 3; not
-> previously recorded. It was the next failure after gap 7: with gap 7's
-> workaround in place the library failure landed here, at
-> `Display.hs:888` (the `elem` is now at `:891`, after the comment added
-> with the fix), and the library now compiles past it.
+> previously recorded. It was the next failure after the `try` gap (since
+> closed): with that workaround in place the library failure landed here,
+> at `Display.hs:888` (the `elem` is now at `:891`, after the comment
+> added with the fix), and the library now compiles past it.
 
 `MicroHs/lib/Data/List.hs` declares fixities only for `\\`, `!!` and
 `!?` (lines 473, 486, 497). The names it leaves bare fall back to the
@@ -980,13 +860,13 @@ Remove the parentheses once MicroHs declares the fixity for
 `Data.List.elem`; the comment can go with them.
 
 
-## 9. `optparse-applicative`'s `fullDesc` is missing from the MicroHs package
+## 8. `optparse-applicative`'s `fullDesc` is missing from the MicroHs package
 
 > **New; found while making the `ychr` executable build under MicroHs.**
 > The workaround is applied to `app/Main.hs`; what remains open is the
 > package the MicroHs package set ships.
 
-`mcabal build` reaches the CLI once gaps 1–8 are worked around, and then
+`mcabal build` reaches the CLI once gaps 1–7 are worked around, and then
 stops on the first line of `app/Main.hs`'s `main`:
 
 ```
@@ -1035,7 +915,7 @@ Verified:
   dropped no-op changed no behaviour.
 
 
-## 10. `Data.Text.replicate` rejects a zero multiplier
+## 9. `Data.Text.replicate` rejects a zero multiplier
 
 > **New; found while smoke-testing the first working MicroHs-built
 > `ychr`.** No YCHR-side workaround: it breaks help rendering only.

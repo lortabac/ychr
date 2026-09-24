@@ -36,7 +36,7 @@ module YCHR.Internal.Resources
   )
 where
 
-import Control.Exception.Shim (IOException, try)
+import Control.Exception (IOException, try)
 import Data.List (sort)
 import Data.Text (Text)
 import Data.Text qualified as T

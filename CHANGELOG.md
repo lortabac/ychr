@@ -105,7 +105,7 @@ after parsing its command line (so `--help` needs no source tree), and
 threads them through its subcommands; the GHC binary still consults no
 directory at run time. Under MicroHs the commands work, but help and
 usage screens still trip an unrelated MicroHs bug in
-`Data.Text.replicate` (dev-docs/MICROHS_GAPS.md, gap 10). See
+`Data.Text.replicate` (dev-docs/MICROHS_GAPS.md, gap 9). See
 [the embedding guide](docs/how-to/embed-a-chr-module.md#5-supplying-the-resources).
 
 Fix: a build with `profiling: true` in `cabal.project.local` now links.

@@ -2,9 +2,7 @@
 
 module YCHR.Runtime.InterpreterTest (tests) where
 
--- 'try' comes from the shim so its type variables keep GHC's order
--- (dev-docs/MICROHS_GAPS.md, gap 7).
-import Control.Exception.Shim (try)
+import Control.Exception (try)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (toList)
 import Data.List (isInfixOf)

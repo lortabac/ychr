@@ -4,9 +4,7 @@
 
 module YCHR.ConvertTest (tests) where
 
--- 'try' comes from the shim so its type variables keep GHC's order
--- (dev-docs/MICROHS_GAPS.md, gap 7).
-import Control.Exception.Shim (SomeException, try)
+import Control.Exception (SomeException, try)
 import Control.Monad.IO.Class (liftIO)
 import Data.List (isInfixOf, sort)
 import Data.Map.Strict qualified as Map
