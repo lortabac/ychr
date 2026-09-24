@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | The search driver: @solve\/1@, @find_all\/2@, @fold_solutions\/4@
+-- | The search driver: @solve\/1@, @findall\/2@, @fold_solutions\/4@
 -- and @fail\/0@, the host calls behind @library(search)@ — and
 -- @run_chr_session\/1@, which is 'hostSolve' made total.
 --
@@ -152,7 +152,7 @@ import YCHR.Internal.Types (ConstraintType (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Name (..), RuleId)
 
--- | Registry providing @solve\/1@, @find_all\/2@, @fold_solutions\/4@
+-- | Registry providing @solve\/1@, @findall\/2@, @fold_solutions\/4@
 -- and @fail\/0@, plus the @meta@ library's @run_chr_session\/1@,
 -- which is the same driver. Part of 'defaultHostCallRegistry'; union
 -- it in explicitly when assembling a custom registry that should
@@ -161,7 +161,7 @@ searchHostCallRegistry :: HostCallRegistry
 searchHostCallRegistry =
   Map.fromList
     [ (Name "solve", HostCallFn hostSolve),
-      (Name "find_all", HostCallFn hostFindAll),
+      (Name "findall", HostCallFn hostFindAll),
       (Name "fold_solutions", HostCallFn hostFoldSolutions),
       (Name "fail", HostCallFn hostFail),
       (Name "run_chr_session", HostCallFn hostRunChrSession)
@@ -279,7 +279,7 @@ data SearchCtx = SearchCtx
 
 -- | What a caller wants done at a solution. The three cases are the
 -- three @step@ constructors of @library(search)@, and @solve\/1@ and
--- @find_all\/2@ are the constant functions @commit@ and @continue@.
+-- @findall\/2@ are the constant functions @commit@ and @continue@.
 data SolutionStep
   = -- | Ask for the next solution, backtracking out of this one.
     StepContinue
@@ -576,7 +576,7 @@ hostRunChrSession [goalArg] = do
     Left (_ :: RuntimeErrorThrown) -> False
 hostRunChrSession _ = runtimeErrorS "run_chr_session: expected 1 argument"
 
--- | @find_all(Template, Goal)@: every solution of @Goal@, as a list of
+-- | @findall(Template, Goal)@: every solution of @Goal@, as a list of
 -- copies of @Template@ in search order.
 --
 -- The copies are what survive: the search is fully unwound afterwards,
@@ -593,9 +593,9 @@ hostFindAll [template, goalArg] = do
         -- Never stop: asking for the next solution backtracks out of
         -- this one.
         pure StepContinue
-  _ <- runSearch "find_all" goalArg onSolution
+  _ <- runSearch "findall" goalArg onSolution
   valueList . reverse <$> liftIO (readIORef acc)
-hostFindAll _ = runtimeErrorS "find_all: expected 2 arguments"
+hostFindAll _ = runtimeErrorS "findall: expected 2 arguments"
 
 -- | @fold_solutions(Template, Goal, F, Acc0)@: fold @F@ over the
 -- solutions of @Goal@, in search order, with the fold in control of
@@ -616,8 +616,8 @@ hostFindAll _ = runtimeErrorS "find_all: expected 2 arguments"
 -- branch is undone the cell reverts and the accumulator's contents
 -- change underneath it. Copying here would fix that at @O(|acc|)@ per
 -- solution, which is quadratic for the fold that accumulates a list
--- and would make this strictly slower than @find_all\/2@ at
--- @find_all@'s own job. So the witness is copied and the accumulator
+-- and would make this strictly slower than @findall\/2@ at
+-- @findall@'s own job. So the witness is copied and the accumulator
 -- is not, and the contract — carry the witness, or widen the template
 -- or @copy_term@ anything else you take from the branch — is stated in
 -- @docs\/reference\/search.md@ and in @libraries\/search.chr@.

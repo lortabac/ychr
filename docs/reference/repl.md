@@ -25,7 +25,7 @@ Ambiguous name 'fail/0'
 
 Qualify it: `lib_a:fail`. `library(search)` puts in query scope the
 constraints `alt/1`, `choose/2`, `try_unify/2`; the functions
-`fail/0`, `solve/1`, `find_all/2`, `fold_solutions/4`, `forall/3`,
+`fail/0`, `solve/1`, `findall/2`, `fold_solutions/4`, `forall/3`,
 `find_n/3`; and the type `step/1` with constructors `continue/1`,
 `stop/1`, `commit/1` — so a bare `continue(1)` is
 `search:continue(1)`.

@@ -652,7 +652,7 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
   Solutions are fetched by three host calls over one driver. The
   driver's per-solution callback answers `continue` / `stop` /
   `commit`, and only `commit` skips the unwind to the base mark taken
-  when the search was entered; `solve/1` and `find_all/2` are the
+  when the search was entered; `solve/1` and `findall/2` are the
   constant functions `commit` and `continue`, and `fold_solutions/4`
   runs the user's step function to decide. `forall/3` and `find_n/3`
   are derived over `fold_solutions` in CHR rather than added to the
@@ -682,7 +682,7 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
   branch bound, which reverts when the branch is undone; copying would
   cost `O(|acc|)` per solution, quadratic for a
   list-building fold, and leave `fold_solutions` slower than
-  `find_all/2` at `find_all`'s own job. So the witness is copied, the
+  `findall/2` at `findall`'s own job. So the witness is copied, the
   accumulator is not, and the contract is documented and pinned by the
   golden pair `test/golden/search_fold/{copied,aliased}`.
   Undo is a

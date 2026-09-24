@@ -229,7 +229,7 @@ initSessionEnv typeNames rNames inert pm hc ev cl expMap expSet = do
 -- the original seeing them.
 --
 -- Every fork goes through here, because every entry point that opens
--- one — @solve\/1@, @find_all\/2@, @fold_solutions\/4@ and
+-- one — @solve\/1@, @findall\/2@, @fold_solutions\/4@ and
 -- @run_chr_session\/1@ — is the search driver.
 --
 -- The variable and suspension-id counters are /shared/, so a fork's

@@ -60,7 +60,7 @@ count_solutions(X, N) <=>
     N is fold_solutions(X, quote(pick(X)), fun(_, A) -> continue(A + 1) end, 0).
 
 % `stop` ends the fold and unwinds everything, which is what makes
-% find_n/3 usable where find_all/2 would not terminate.
+% find_n/3 usable where findall/2 would not terminate.
 first_two(X, Xs) <=> Xs is find_n(2, X, quote(pick(X))).
 
 % Asking for more solutions than the space holds is not an error.
@@ -116,7 +116,7 @@ wider_template(X, Y, Xs) <=>
 % branch, the second branch would choose over [2, 99] with Y already 1,
 % both alternatives would fail, and the branch would vanish from the
 % result. A fixed inner list would not tell the two apart.
-committing_inner(X, Y, Ss) <=> Ss is find_all([X, Y], quote(inner_commit(X, Y))).
+committing_inner(X, Y, Ss) <=> Ss is findall([X, Y], quote(inner_commit(X, Y))).
 inner_commit(X, Y) <=>
     choose(X, [1, 2, 3]),
     _ is fold_solutions(Y, quote(pick_ten(X, Y)), fun(C, _) -> commit(C) end, 0).
@@ -164,7 +164,7 @@ error_in_step(X, R) <=>
 
 % The point of find_n/3: an infinite generator, bounded. `nat/1`
 % enumerates 0, 1, 2, ... by choosing at each step between stopping and
-% recursing, so find_all/2 over it would not terminate.
+% recursing, so findall/2 over it would not terminate.
 first_nats(N, X, Xs) <=> Xs is find_n(N, X, quote(nat(X))).
 
 nat(N) <=> (try_unify(N, 0) ; nat(M), succ_of(M, N)).

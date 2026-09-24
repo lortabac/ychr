@@ -23,7 +23,7 @@ runtime in `scheme/ychr/`. Goals are run through `guile3.0 --r6rs` per
 
 ## `library(search)`
 
-No Scheme-side implementation of `solve/1`, `find_all/2`,
+No Scheme-side implementation of `solve/1`, `findall/2`,
 `fold_solutions/4` or `fail/0` (`forall/3` and `find_n/3` are derived
 in CHR and need nothing of their own).
 The search driver needs three things the Scheme runtime does not have:

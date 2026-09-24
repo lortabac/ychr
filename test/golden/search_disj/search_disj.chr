@@ -43,17 +43,17 @@ set(V, N) <=> V = N.
 plus_one(V, N) <=> M is N + 1, V = M.
 
 % --- Two and three branches. ------------------------------------------
-two(X, Ss) <=> Ss is find_all(X, quote(pick2(X))).
+two(X, Ss) <=> Ss is findall(X, quote(pick2(X))).
 pick2(X) <=> (set(X, 1) ; set(X, 2)).
 
 % `;` is xfy, so three branches flatten rather than nest.
-three(X, Ss) <=> Ss is find_all(X, quote(pick3(X))).
+three(X, Ss) <=> Ss is findall(X, quote(pick3(X))).
 pick3(X) <=> (set(X, 1) ; set(X, 2) ; set(X, 3)).
 
 % An explicitly nested `;` gives the same solutions in the same order:
 % the inner choice point is told inside the chosen branch and reached
 % at that branch's next quiescence.
-nested(X, Ss) <=> Ss is find_all(X, quote(pickn(X))).
+nested(X, Ss) <=> Ss is findall(X, quote(pickn(X))).
 pickn(X) <=> (set(X, 1) ; (set(X, 2) ; set(X, 3))).
 
 % --- A variable local to one branch. ----------------------------------
@@ -61,7 +61,7 @@ pickn(X) <=> (set(X, 1) ; (set(X, 2) ; set(X, 3))).
 % `Z` occurs only in the first branch, but it is a variable of the rule
 % body, so it is allocated once before the choice and passed to the
 % disjunct that mentions it. `X` is shared and visible afterwards.
-branch_var(X, Y, Ss) <=> Ss is find_all([X, Y], quote(pickb(X, Y))).
+branch_var(X, Y, Ss) <=> Ss is findall([X, Y], quote(pickb(X, Y))).
 pickb(X, Y) <=> (set(Z, 10), plus_one(X, Z) ; set(X, 99)), set(Y, X).
 
 % --- Choice happens at quiescence, not at the `;`. --------------------
@@ -70,7 +70,7 @@ pickb(X, Y) <=> (set(Z, 10), plus_one(X, Z) ; set(X, 99)), set(Y, X).
 % finds `X` unbound and it delays. Labeling binds `X`; reactivation
 % retries the guard. Writing it without the guard would reach `X * 2`
 % with `X` unbound and abort.
-after(X, R, Ss) <=> Ss is find_all(R, quote(pick_after(X, R))).
+after(X, R, Ss) <=> Ss is findall(R, quote(pick_after(X, R))).
 pick_after(X, R) <=> (set(X, 1) ; set(X, 2)), doubled(X, R).
 doubled(X, R) <=> integer(X) | R is X * 2.
 
@@ -78,7 +78,7 @@ doubled(X, R) <=> integer(X) | R is X * 2.
 %
 % `nat/1` enumerates 0, 1, 2, ... — an infinite space, which is fine as
 % long as something prunes. `min_val/2` fails every branch below the
-% bound, so the first solution is the bound itself. `find_all` over
+% bound, so the first solution is the bound itself. `findall` over
 % `nat/1` alone would not terminate.
 first_at_least(K, N, Ok) <=> Ok is solve(quote([nat(N), min_val(N, K)])).
 nat(N) <=> (try_unify(N, 0) ; nat(M), succ_of(M, N)).

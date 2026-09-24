@@ -91,7 +91,7 @@ data TraceEvent
     -- result.
     TECallHost {hname :: !Text, args :: ![Term], result :: !Term}
   | -- | Entering a search ('YCHR.Internal.Runtime.Search'). @sname@ is
-    -- the driving host call: @solve@, @find_all@ or @fold_solutions@.
+    -- the driving host call: @solve@, @findall@ or @fold_solutions@.
     TESearchEnter {sname :: !Text}
   | -- | A choice point was selected at quiescence: the @alt\/1@
     -- suspension the driver took, and the alternative goals in the
@@ -135,7 +135,7 @@ data SearchOutcome
 --
 -- The first three are exactly the three ways the specification says a
 -- branch can fail. The fourth is not a failure at all — it is
--- @find_all@ recording a solution and asking for the next one — and it
+-- @findall@ recording a solution and asking for the next one — and it
 -- is distinguished precisely so that a trace never shows a successful
 -- branch being reported as exhausted.
 data BacktrackReason

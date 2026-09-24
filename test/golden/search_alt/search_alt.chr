@@ -44,7 +44,7 @@ set(V, N) <=> V = N.
 add_one(V, N) <=> M is N + 1, V = M.
 
 % --- An alternative may be a list of goals, told in order. -----------
-lists_as_alts(X, Y, Ss) <=> Ss is find_all([X, Y], quote(pick_list(X, Y))).
+lists_as_alts(X, Y, Ss) <=> Ss is findall([X, Y], quote(pick_list(X, Y))).
 pick_list(X, Y) <=> alt([quote([set(X, 1), set(Y, 2)]), quote(set(X, 9))]).
 
 % --- An alternative may name a constraint no module exports. ---------
@@ -54,7 +54,7 @@ pick_list(X, Y) <=> alt([quote([set(X, 1), set(Y, 2)]), quote(set(X, 9))]).
 % disjuncts the compiler lifts out of a `;` be reached at all, since
 % they are module-internal and exported by nobody. `hidden/2` stands in
 % for one: declared here, absent from the export list.
-unexported_alt(X, Ss) <=> Ss is find_all(X, quote(pick_hidden(X))).
+unexported_alt(X, Ss) <=> Ss is findall(X, quote(pick_hidden(X))).
 pick_hidden(X) <=>
     alt([quote(search_alt:hidden(X, 1)), quote(search_alt:hidden(X, 2))]).
 hidden(X, N) <=> X = N.
@@ -68,7 +68,7 @@ empty_alt(Ok) <=> Ok is solve(quote(pick_none)).
 pick_none <=> alt([]).
 
 % --- An alt told inside a branch nests under it. ---------------------
-nested_alt(X, Ss) <=> Ss is find_all(X, quote(outer(X))).
+nested_alt(X, Ss) <=> Ss is findall(X, quote(outer(X))).
 outer(X) <=> alt([quote(inner(X, 10)), quote(inner(X, 20))]).
 inner(X, N) <=> alt([quote(set(X, N)), quote(add_one(X, N))]).
 
@@ -77,10 +77,10 @@ inner(X, N) <=> alt([quote(set(X, N)), quote(add_one(X, N))]).
 % `;` is xfy, so a three-way disjunction flattens to three
 % alternatives rather than nesting.
 disj_goal(X, Ss) <=>
-    Ss is find_all(X, quote((set(X, 1) ; set(X, 2) ; set(X, 3)))).
+    Ss is findall(X, quote((set(X, 1) ; set(X, 2) ; set(X, 3)))).
 
 % ... and a `;` may itself be one alternative of an `alt`.
-disj_nested(X, Ss) <=> Ss is find_all(X, quote(dpick(X))).
+disj_nested(X, Ss) <=> Ss is findall(X, quote(dpick(X))).
 dpick(X) <=> alt([quote((set(X, 1) ; set(X, 2))), quote(set(X, 3))]).
 
 % --- Malformed choice points are errors, not dead ends. --------------

@@ -17,7 +17,7 @@
    sum_is_ten(any, any, any).
 
 search_label_alt(X, Y, Z, Ss) <=>
-    Ss is find_all([X, Y, Z], quote(triple(X, Y, Z))).
+    Ss is findall([X, Y, Z], quote(triple(X, Y, Z))).
 
 triple(X, Y, Z) <=>
     alt([quote(try_unify(X, 1)), quote(try_unify(X, 2)), quote(try_unify(X, 3)),

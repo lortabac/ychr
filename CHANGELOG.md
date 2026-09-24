@@ -258,10 +258,13 @@ runtime is the only backend that implements it. See the
 - `choose(X, Alts)` labels a variable and is one library rule over
   `alt/1` and `try_unify/2`, not a runtime primitive.
 - Solutions are fetched with `solve/1` (first solution, bindings
-  kept), `find_all/2` (all of them, everything undone) or
+  kept), `findall/2` (all of them, everything undone) or
   `fold_solutions/4`, a fold over the solution sequence with early
   exit. `forall/3` and `find_n/3` are derived over the fold; `find_n`
-  terminates on an infinite space, where `find_all` would not.
+  terminates on an infinite space, where `findall` would not.
+- The collector is spelled `findall/2`, not `find_all/2`, matching
+  Prolog's `findall/3`; the `host:findall` call behind it is renamed
+  with it. The rest of the module keeps its names.
 - `fail/0` abandons a branch, and `try_unify/2` is Prolog's `=`:
   unify, or fail rather than raise.
 - Three new error codes: `YCHR-20021` (`;` without importing

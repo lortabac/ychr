@@ -33,7 +33,7 @@ Search is built from these pieces:
 | `fail/0` | function | Fails the current branch. |
 | `try_unify/2` | CHR constraint | Prolog's `=`: unify, or fail the branch. |
 | `solve/1` | function | Runs a goal; commits to its first solution. |
-| `find_all/2` | function | Runs a goal; collects a copy of a template per solution, then undoes everything. |
+| `findall/2` | function | Runs a goal; collects a copy of a template per solution, then undoes everything. |
 | `fold_solutions/4` | function | Folds a function over the solutions, in search order, with early exit. |
 | `forall/3` | function | Derived from `fold_solutions`: does every solution satisfy a predicate? |
 | `find_n/3` | function | Derived from `fold_solutions`: the first *N* solutions. Terminates on an infinite space. |
@@ -76,7 +76,7 @@ exports
 :- function
     (fail() -> any),
     (solve(any) -> bool),
-    (find_all(T, any) -> list(T)),
+    (findall(T, any) -> list(T)),
     (fold_solutions(T, any, fun(T, A) -> step(A) end, A) -> A),
     (forall(T, any, fun(T) -> bool end) -> bool),
     (find_n(int, T, any) -> list(T)).
@@ -92,7 +92,7 @@ is ordinary CHR and ordinary functions, defined in the library itself.
 
 ## Scope: search runs in a sub-session
 
-`solve(quote(Goal))`, `find_all(Template, quote(Goal))`,
+`solve(quote(Goal))`, `findall(Template, quote(Goal))`,
 `fold_solutions(Template, quote(Goal), F, Acc0)` and
 `run_chr_session(quote(Goal))` run `Goal` in a **fresh session of the
 current program** — its own constraint store, propagation history,
@@ -489,9 +489,9 @@ trail, and they are undone if *that* branch is later abandoned.
 around it; see [`run_chr_session/1` is `solve/1` made
 total](#run_chr_session1-is-solve1-made-total).
 
-### `find_all/2`
+### `findall/2`
 
-`Solutions is find_all(Template, quote(Goal))`
+`Solutions is findall(Template, quote(Goal))`
 
 Explores the **whole** search space and returns the list of solutions,
 in search order. At each solution `Template` is copied with
@@ -502,7 +502,7 @@ contains — and appended to the result.
 When the search finishes, **everything is unwound to the base mark**:
 the list of copies is all that survives, and no binding made during
 the search is visible afterwards. An empty search space gives `[]`,
-`find_all`'s way of saying "no solutions" — it never fails and never
+`findall`'s way of saying "no solutions" — it never fails and never
 returns `false`. Exploring the whole space, it does not terminate on
 an infinite one; use `find_n/3`.
 
@@ -514,11 +514,11 @@ to bind it (`YCHR-40002`):
 
 ```prolog
 % Rejected: X and Y appear in an evaluated position without being bound.
-all_pairs(Ss) <=> Ss is find_all([X, Y], quote(pair(X, Y, 5))).
+all_pairs(Ss) <=> Ss is findall([X, Y], quote(pair(X, Y, 5))).
 
 % Accepted: the head binds them. They are left unbound afterwards,
-% since find_all unwinds everything.
-all_pairs(X, Y, Ss) <=> Ss is find_all([X, Y], quote(pair(X, Y, 5))).
+% since findall unwinds everything.
+all_pairs(X, Y, Ss) <=> Ss is findall([X, Y], quote(pair(X, Y, 5))).
 ```
 
 This is unlike Prolog's `findall/3`, where the goal's variables are
@@ -527,7 +527,7 @@ local to the call.
 
 ## Iterating over solutions
 
-`solve` and `find_all` are the two extremes: stop at the first
+`solve` and `findall` are the two extremes: stop at the first
 solution, or collect them all. `fold_solutions/4` is the general form:
 a fold over the solution sequence, in search order, with early exit
 and the driver in control of the iteration.
@@ -611,7 +611,7 @@ Xs is fold_solutions(X, quote(pick(X)),
 
 The driver does not copy the accumulator for you: that would cost a
 full traversal per solution — quadratic for a fold that builds a list
-— and leave `fold_solutions` slower than `find_all/2` at `find_all`'s
+— and leave `fold_solutions` slower than `findall/2` at `findall`'s
 own job.
 
 Two error cases: `fail/0` inside `F` fails the current branch, which
@@ -620,7 +620,7 @@ return value that is not a `step` is a runtime error. Runtime errors
 raised by `F` propagate out of the search, after unwinding to the base
 mark, like any other error in a branch.
 
-`solve` and `find_all` are expressible over `fold_solutions` —
+`solve` and `findall` are expressible over `fold_solutions` —
 `commit(true)` at the first solution, and `continue` accumulating
 copies to exhaustion — and stay host calls only because they are
 already there and pay no `'$call'` per solution.
@@ -642,11 +642,11 @@ Xs is find_n(N, Template, quote(Goal))
 ```
 
 The first `N` solutions, as copies of `Template` in search order —
-`find_all` with a bound. Fewer than `N` if the space is smaller;
+`findall` with a bound. Fewer than `N` if the space is smaller;
 `[]` when `N` is zero or negative, without running the goal at all.
 `find_n` stops with `stop`, so **everything is unwound** and, as with
-`find_all`, the copies are all that survives — which is what makes it
-usable on an infinite generator, where `find_all` would not terminate.
+`findall`, the copies are all that survives — which is what makes it
+usable on an infinite generator, where `findall` would not terminate.
 
 
 ## Nesting
@@ -707,8 +707,8 @@ rule; a program that does not put `alt/1` in a head shows no such
 line), and the alternative list where it repeats as an argument.
 
 ```
-      call search:find_all(2, pick3(2))
-        search find_all
+      call search:findall(2, pick3(2))
+        search findall
         tell search_basic:pick3(2)
           activate c#1: search_basic:pick3(2)
             try occurrence search_basic:pick3 #1 (rule __rule_10)
@@ -738,8 +738,8 @@ line), and the alternative list where it repeats as an argument.
           ...
               call search:fail
         backtrack (fail)
-        end search find_all (exhausted)
-        host call find_all(2, pick3(2)) = [2]
+        end search findall (exhausted)
+        host call findall(2, pick3(2)) = [2]
 ```
 
 The `choose` layer is what the derived form costs in a trace: a rule
@@ -756,7 +756,7 @@ backtracked out of:
 |---|---|
 | `fail` | `fail/0` was called. |
 | `alternatives exhausted` | Every alternative of the choice point has been tried. |
-| `more solutions wanted` | A solution was reached and the caller asked to keep going. This is `find_all`'s normal mode, and is *not* a failure. |
+| `more solutions wanted` | A solution was reached and the caller asked to keep going. This is `findall`'s normal mode, and is *not* a failure. |
 
 `end search` reports `(committed)`, `(stopped)` or `(exhausted)`.
 The label after `search` is the entry point, so `run_chr_session/1`
@@ -787,7 +787,7 @@ sum_is(X, Y, S) <=> not(X + Y == S) | fail.
 
 `Ok is solve(quote(pair(X, Y, 5)))` binds `X = 2`, `Y = 3` — the first
 pair in search order that survives the check — and
-`Ss is find_all([X, Y], quote(pair(X, Y, 5)))` yields
+`Ss is findall([X, Y], quote(pair(X, Y, 5)))` yields
 `Ss = [[2, 3], [3, 2]]` with `X` and `Y` left unbound.
 
 Written with `;`, the choice is between goals rather than values —
@@ -809,7 +809,7 @@ unbound argument is the ordinary way to write a rule that has to wait
 for a choice.
 
 `Ns is find_n(5, N, quote(nat(N)))` yields `Ns = [0, 1, 2, 3, 4]`.
-`find_all` on the same goal would not terminate.
+`findall` on the same goal would not terminate.
 
 Complete, runnable programs live in `test/golden/search_*/`.
 

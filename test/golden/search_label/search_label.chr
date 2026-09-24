@@ -12,7 +12,7 @@
    sum_is_ten(any, any, any).
 
 search_label(X, Y, Z, Ss) <=>
-    Ss is find_all([X, Y, Z], quote(triple(X, Y, Z))).
+    Ss is findall([X, Y, Z], quote(triple(X, Y, Z))).
 
 triple(X, Y, Z) <=>
     choose(X, [1, 2, 3, 4, 5, 6]),

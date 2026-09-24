@@ -58,7 +58,7 @@ just_fail <=> fail.
 % ---------------------------------------------------------------------
 % A choice point told inside a branch nests under it: every outer
 % alternative is paired with every inner one, in search order.
-deep(X, P, Ss) <=> Ss is find_all([X, P], quote(outer_pick(X, P))).
+deep(X, P, Ss) <=> Ss is findall([X, P], quote(outer_pick(X, P))).
 outer_pick(X, P) <=> choose(X, [10, 20]), inner_pick(P).
 inner_pick(P) <=> choose(P, [7, 8]).
 
