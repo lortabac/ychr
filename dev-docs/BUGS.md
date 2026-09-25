@@ -69,7 +69,9 @@ real output.
 and line/col as `SInt`, and match those constructors in the
 deserializer (the current `SAtom` patterns for line/col could never
 match re-parsed output anyway, since bare digits lex as `SInt`).
-Pre-0.1 there are no dump-compatibility constraints. Then drop the
+This is now a format change: the s-expression form carries a VM
+version (`YCHR.Internal.VM.SExpr.vmVersion`), so the fix must bump it,
+and dumps written at the old version stop being readable. Then drop the
 "display-only" caveat from `docs/reference/vm.md` §push-frame.
 
 ## Constructor arity mismatch double-reports `YCHR-20102` (warning) and `YCHR-60008` (error)

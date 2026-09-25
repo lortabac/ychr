@@ -57,6 +57,8 @@ bound as a value (`let-val` / `var`) and bridged at the read site with
 ## S-Expression Format
 
 VM programs are serialized as s-expressions with kebab-case identifiers.
+Every serialized unit opens with a format-version header; see
+[Top-Level Structure](#top-level-structure).
 The grammar:
 
 ```
@@ -89,15 +91,26 @@ Line comments start with `;` and extend to end of line.
 ## Top-Level Structure
 
 A serialized compilation unit is a `vm-program` containing the VM
-program, the exported names, and the symbol table:
+format version, the VM program, the exported names, and the symbol
+table:
 
 ```scheme
 (vm-program
+  (version <n>)
   <program>
   (exports (<name> <arity>) ...)
   (symbol-table (<name> <arity> <type-id>) ...))
 ```
 
+- **`<version>`** — the VM format version, a non-negative integer, and
+  the first child of `vm-program`; a `version` anywhere else is a
+  malformed header. Each YCHR release supports exactly one VM version;
+  the compiler always writes it and a reader accepts only it. Version 0
+  is reserved for the pre-versioning format — a unit with no `version`
+  header at all, anything written before VM version numbers existed;
+  an explicit `(version 0)` is rejected as well. Such a unit is
+  rejected by any version-aware binary, because only a binary predating
+  VM version numbers knows that format. The current version is 1.
 - **`<program>`** — the VM program (see below).
 - **`exports`** — the CHR identifiers (name + arity) visible to
   external callers; backends should generate a public entry point
@@ -157,8 +170,8 @@ compilation.
   function name like `"prelude:double"`, or a lambda identifier),
   `<arity>` the arity the callable was declared at, and `<proc-name>`
   the mangled name of the `func_*` procedure. Present, possibly empty,
-  in everything the compiler emits; optional on read, like
-  `inert-types`.
+  in everything the compiler emits; optional on read (an absent table
+  is an empty one), like `inert-types`.
 - `inert-types` — constraint types whose activation runs no
   occurrence procedure (no occurrences, or only passive ones).
   Reactivating one can only re-store it, and `store` is idempotent,
@@ -166,9 +179,11 @@ compilation.
   their argument variables (see [Store](#store)) — the trivial
   instance of *Delay Avoidance*. Honoring the entry changes only
   reactivation traffic, never a result, so a backend may ignore it;
-  the Scheme backend does. Optional on read (a program written before
-  it existed declares no inert type); present, possibly empty, in
-  everything the compiler emits.
+  the Scheme backend does. Optional on read within a supported
+  version: an absent entry declares no inert type, which changes no
+  result. Present, possibly empty, in everything the compiler emits.
+  (A dump that predates the entry is version 0 and is rejected by the
+  version header before the shape matters.)
 - Zero or more procedure definitions follow.
 
 ### Procedure
@@ -871,6 +886,7 @@ is `mymodule:leq/2`, so procedure names follow
 
 ```scheme
 (vm-program
+  (version 1)
   (program 1
     (type-names (qualified "mymodule" "leq"))
     1

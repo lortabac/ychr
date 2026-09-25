@@ -9,7 +9,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
-import YCHR.Internal.VM.SExpr (VMProgram (..), deserialize, serialize)
+import YCHR.Internal.VM.SExpr (VMProgram (..), deserialize, serialize, vmVersion)
 
 tests :: TestTree
 tests =
@@ -17,7 +17,7 @@ tests =
     "VM.SExpr"
     [ testGroup "roundtrip" roundtripTests,
       testGroup "format" formatTests,
-      testGroup "legacy" legacyProgramTests
+      testGroup "version" versionTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -198,6 +198,7 @@ roundtrip :: Program -> IO ()
 roundtrip prog = do
   let vmp = mkVMProg prog
       text = serialize vmp
+  assertContains text ("(vm-program (version " <> T.pack (show vmVersion) <> ") ")
   case deserialize text of
     Left e ->
       assertBool
@@ -215,7 +216,13 @@ roundtrip prog = do
 
 formatTests :: [TestTree]
 formatTests =
-  [ testCase "var serialization" $
+  [ testCase "version header serialization" $
+      assertContains
+        (serializeProg (mkProg []))
+        ( "(vm-program (version 1) (program 0 (type-names) 0 (rule-names) "
+            <> "(evaluables) (callables) (inert-types) "
+        ),
+    testCase "var serialization" $
       assertContains
         (serializeProg (mkProg [ExprStmt (Var "x")]))
         ( "(program 0 (type-names) 0 (rule-names) (evaluables) (callables) "
@@ -282,30 +289,71 @@ formatTests =
 serializeProg :: Program -> Text
 serializeProg = serialize . mkVMProg
 
--- | A program header without the @callables@ and @inert-types@ entries
--- still loads, and declares no callable and no inert type: an absent
--- table is an empty one, and an absent hint changes no result.
---
--- This is a header-shape test, not a general back-compatibility
--- promise. The fixture below is a hand-written minimal program; one
--- written by a compiler before keyed @'$call'@ dispatch would also
--- carry @(call-dispatch N)@ procedures, a proc-kind the reader no
--- longer knows.
-legacyProgramTests :: [TestTree]
-legacyProgramTests =
-  [ testCase "a header without the callables and inert-types entries loads" $
-      case deserialize legacyProgramText of
+-- | The @(version N)@ header gates deserialization: this binary writes
+-- and accepts only version 1, and a unit with no header is version 0 —
+-- the pre-versioning format, which only a binary predating VM version
+-- numbers could read.
+versionTests :: [TestTree]
+versionTests =
+  [ testCase "a version-1 program without the callables and inert-types entries loads" $
+      case deserialize versionedProgramText of
         Left e -> assertBool ("deserialization failed: " <> T.unpack e) False
         Right vmp' -> vmp' @?= mkVMProg (mkProg [ExprStmt (Var "x")]),
     testCase "an explicit empty callables entry reads the same" $
       case deserialize
-        (T.replace "(evaluables)" "(evaluables) (callables)" legacyProgramText) of
+        (T.replace "(evaluables)" "(evaluables) (callables)" versionedProgramText) of
         Left e -> assertBool ("deserialization failed: " <> T.unpack e) False
-        Right vmp' -> vmp' @?= mkVMProg (mkProg [ExprStmt (Var "x")])
+        Right vmp' -> vmp' @?= mkVMProg (mkProg [ExprStmt (Var "x")]),
+    testCase "a version-less program is rejected as version 0" $
+      assertRejected versionlessProgramText "version 0",
+    testCase "an explicit version 0 is rejected" $
+      assertRejected
+        (T.replace "(version 1)" "(version 0)" versionedProgramText)
+        "version 0",
+    testCase "a newer version is rejected" $
+      assertRejected
+        (T.replace "(version 1)" "(version 2)" versionedProgramText)
+        "version 2",
+    testCase "the version is checked before the program body" $
+      assertRejected
+        "(vm-program (version 2) (bogus) (exports) (symbol-table))"
+        "version 2",
+    testCase "a supported version with a malformed body is a shape error" $
+      assertRejected
+        "(vm-program (version 1) (bogus) (exports) (symbol-table))"
+        "expected (program ...)",
+    testCase "a negative version is rejected" $
+      assertRejected
+        (T.replace "(version 1)" "(version -1)" versionedProgramText)
+        "invalid VM version",
+    testCase "a malformed version is rejected" $
+      assertRejected
+        (T.replace "(version 1)" "(version \"one\")" versionedProgramText)
+        "expected (version N)",
+    testCase "a version header with no argument is rejected" $
+      assertRejected
+        (T.replace "(version 1)" "(version)" versionedProgramText)
+        "expected (version N)",
+    testCase "a misplaced version header is rejected" $
+      assertRejected
+        ( "(vm-program (program 0 (type-names) 0 (rule-names) (evaluables))"
+            <> " (version 1) (exports) (symbol-table))"
+        )
+        "must be the first child",
+    testCase "a duplicate version header is rejected" $
+      assertRejected
+        (T.replace "(version 1)" "(version 1) (version 1)" versionedProgramText)
+        "duplicate (version N) header"
   ]
 
-legacyProgramText :: Text
-legacyProgramText =
+versionedProgramText :: Text
+versionedProgramText =
+  "(vm-program (version 1) (program 0 (type-names) 0 (rule-names) (evaluables) "
+    <> "(procedure \"p\" () (reactivate-dispatch) "
+    <> "(expr-stmt (var \"x\")))) (exports) (symbol-table))"
+
+versionlessProgramText :: Text
+versionlessProgramText =
   "(vm-program (program 0 (type-names) 0 (rule-names) (evaluables) "
     <> "(procedure \"p\" () (reactivate-dispatch) "
     <> "(expr-stmt (var \"x\")))) (exports) (symbol-table))"
@@ -361,3 +409,15 @@ assertContains haystack needle =
   assertBool
     ("expected " <> show needle <> " in:\n" <> T.unpack haystack)
     (needle `T.isInfixOf` haystack)
+
+-- | Assert that deserialization fails with a message mentioning the
+-- given fragment.
+assertRejected :: Text -> Text -> IO ()
+assertRejected text fragment =
+  case deserialize text of
+    Left e ->
+      assertBool
+        ("expected an error mentioning " <> show fragment <> ", got: " <> T.unpack e)
+        (fragment `T.isInfixOf` e)
+    Right _ ->
+      assertBool ("expected deserialization to fail:\n" <> T.unpack text) False

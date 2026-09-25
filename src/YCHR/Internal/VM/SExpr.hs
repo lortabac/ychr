@@ -16,9 +16,15 @@
 --     (store (id-var "id"))
 --     (expr-stmt (call-expr "activate_leq" (arg-id (id-var "id"))))))
 -- @
+--
+-- A serialized unit opens with a @(version N)@ header naming the VM
+-- format it was written in; see 'vmVersion'.
 module YCHR.Internal.VM.SExpr
   ( -- * VMProgram
     VMProgram (..),
+
+    -- * Format version
+    vmVersion,
 
     -- * High-level API
     serialize,
@@ -53,14 +59,39 @@ data VMProgram = VMProgram
   deriving (Show, Eq)
 
 -- ---------------------------------------------------------------------------
+-- Format version
+-- ---------------------------------------------------------------------------
+
+-- | The single VM version this binary writes and accepts.
+--
+-- The number identifies the s-expression format, not the YCHR release:
+-- every YCHR release supports exactly one VM version, and
+-- 'deserialize' accepts only that one.  A serialized unit carries it
+-- in a @(version N)@ header, the first child of @vm-program@.
+--
+-- Version 0 is reserved for text without a version header — anything
+-- written before VM version numbers existed.  Since this binary's
+-- version is 'vmVersion', a headerless dump is rejected rather than
+-- read: its format is not this one, and only a binary predating VM
+-- version numbers could have known it.
+vmVersion :: Int
+vmVersion = 1
+
+-- ---------------------------------------------------------------------------
 -- High-level API
 -- ---------------------------------------------------------------------------
 
 -- | Serialize a VM program to s-expression text.
+--
+-- The output always carries the @(version 'vmVersion')@ header.
 serialize :: VMProgram -> Text
 serialize = printSExpr . vmProgramToSExpr
 
 -- | Deserialize a VM program from s-expression text.
+--
+-- The text must declare 'vmVersion'; a unit with any other version,
+-- including one with no @version@ header at all (version 0), is
+-- rejected.
 deserialize :: Text -> Either Text VMProgram
 deserialize input = case parseSExpr input of
   Left e -> Left (T.pack e)
@@ -74,6 +105,7 @@ vmProgramToSExpr :: VMProgram -> SExpr
 vmProgramToSExpr vmp =
   SList
     [ SAtom "vm-program",
+      SList [SAtom "version", SInt (fromIntegral vmVersion)],
       programToSExpr vmp.program,
       SList (SAtom "exports" : map identToSExpr (Set.toAscList vmp.exportedSet)),
       symbolTableToSExpr vmp.symbolTable
@@ -282,19 +314,91 @@ err :: Text -> Err a
 err = Left
 
 vmProgramFromSExpr :: SExpr -> Err VMProgram
-vmProgramFromSExpr
-  ( SList
-      [ SAtom "vm-program",
-        progS,
-        SList (SAtom "exports" : exportSexprs),
-        stS
-        ]
-    ) = do
-    prog <- programFromSExpr progS
-    exports <- traverse identFromSExpr exportSexprs
-    st <- symbolTableFromSExpr stS
-    pure VMProgram {program = prog, exportedSet = Set.fromList exports, symbolTable = st}
+vmProgramFromSExpr (SList (SAtom "vm-program" : rest)) = do
+  (version, body) <- headerVersion rest
+  -- Check the version before descending.  A unit written in a format
+  -- this reader does not know has to be diagnosed as that, not by
+  -- whatever unknown construct it happens to hit first.
+  checkVMVersion version
+  case body of
+    [progS, SList (SAtom "exports" : exportSexprs), stS] -> do
+      prog <- programFromSExpr progS
+      exports <- traverse identFromSExpr exportSexprs
+      st <- symbolTableFromSExpr stS
+      pure VMProgram {program = prog, exportedSet = Set.fromList exports, symbolTable = st}
+    _ -> case firstVersionHeader body of
+      Just v -> err ("duplicate (version N) header in vm-program: " <> printSExpr v)
+      Nothing ->
+        err
+          ( "expected (vm-program (version N) <program>"
+              <> " (exports ...) (symbol-table ...)), got: "
+              <> printSExpr (SList (SAtom "vm-program" : rest))
+          )
 vmProgramFromSExpr s = err ("expected (vm-program ...), got: " <> printSExpr s)
+
+-- | Peel the optional @(version N)@ header off a @vm-program@'s
+-- children.  @Nothing@ means no header at all, which is version 0: the
+-- pre-versioning format, which no version-aware binary supports.  A
+-- @(version ...)@ that is present but not first is a malformed header
+-- rather than an absent one, and says so.
+headerVersion :: [SExpr] -> Err (Maybe Integer, [SExpr])
+headerVersion (SList (SAtom "version" : args) : rest) = case args of
+  [SInt n] -> pure (Just n, rest)
+  _ -> err ("expected (version N), got: " <> printSExpr (SList (SAtom "version" : args)))
+headerVersion rest = case firstVersionHeader rest of
+  Just v ->
+    err
+      ( "the (version N) header must be the first child of vm-program, got: "
+          <> printSExpr v
+      )
+  Nothing -> pure (Nothing, rest)
+
+-- | The first @(version ...)@ among a @vm-program@'s children, if any.
+firstVersionHeader :: [SExpr] -> Maybe SExpr
+firstVersionHeader rest = case [v | v@(SList (SAtom "version" : _)) <- rest] of
+  (v : _) -> Just v
+  [] -> Nothing
+
+-- | Accept only 'vmVersion'; name the offending number otherwise.
+-- @Nothing@ is a unit that never carried a header.
+checkVMVersion :: Maybe Integer -> Err ()
+checkVMVersion Nothing =
+  err
+    ( "unsupported VM version 0: this program has no version field, so it"
+        <> " predates VM version numbers; this binary supports only VM"
+        <> " version "
+        <> shown vmVersion
+    )
+checkVMVersion (Just n)
+  | n == toInteger vmVersion = pure ()
+  | n < 0 = err ("invalid VM version " <> shown n)
+  | n == 0 =
+      err
+        ( "unsupported VM version 0, which is reserved for the pre-versioning"
+            <> " format, and which this binary does not read; this binary"
+            <> " supports only VM version "
+            <> shown vmVersion
+        )
+  | n > toInteger vmVersion =
+      err
+        ( "unsupported VM version "
+            <> shown n
+            <> ": this program declares a newer VM version than this binary,"
+            <> " which supports only VM version "
+            <> shown vmVersion
+        )
+  | otherwise =
+      -- An older positive version.  Unreachable while 'vmVersion' is 1,
+      -- but this is the arm a future version bump lands in.
+      err
+        ( "unsupported VM version "
+            <> shown n
+            <> ": this binary supports only VM version "
+            <> shown vmVersion
+        )
+
+shown :: (Show a) => a -> Text
+shown = T.pack . show
 
 symbolTableFromSExpr :: SExpr -> Err Types.SymbolTable
 symbolTableFromSExpr (SList (SAtom "symbol-table" : entries)) = do
@@ -341,12 +445,11 @@ programFromSExpr
     -- @inert-types@ is a hint no result depends on.
     --
     -- This is not a general back-compatibility promise for older text.
-    -- A program written before keyed @'$call'@ dispatch also carries
-    -- the ten @(call-dispatch N)@ procedures the compiler used to
-    -- emit, and that proc-kind is gone, so such text is rejected at
-    -- its procedure kinds. The format is a compiler *output* that
-    -- nothing reads back, so what that costs is that a stale dump
-    -- cannot be re-read by a newer compiler.
+    -- A stale dump is fenced off before the reader gets here: the
+    -- @(version N)@ header is checked first, so any unit not written in
+    -- 'vmVersion' — including one predating keyed @'$call'@ dispatch,
+    -- with its @(call-dispatch N)@ procedures and their gone proc-kind
+    -- — is rejected at the version gate, not at a construct.
     let (clSexprs, rest') = case rest of
           SList (SAtom "callables" : cls) : rs -> (cls, rs)
           rs -> ([], rs)

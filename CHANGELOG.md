@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+Breaking: the serialized VM program now carries a VM format version.
+`serialize` writes `(version 1)` as the first child of `vm-program`, and
+`deserialize` accepts only that version: a unit declaring any other
+`version`, or none at all — version 0, the pre-versioning format — is
+rejected with an error naming the version it found. The version is
+checked before the program body, so a dump from an unknown format fails
+as a version mismatch rather than as whatever unknown construct it would
+have hit first. This makes a stale `.vm` dump fail loudly instead of
+being half-read, and matches the rule that each YCHR release supports
+exactly one VM version. `YCHR.Internal.VM.SExpr` exports the new
+`vmVersion` constant; the `callables` and `inert-types` entries remain
+optional on read within a supported version. See
+[the VM reference](docs/reference/vm.md#top-level-structure).
+
 Breaking: `'$call'` no longer compiles to a per-arity `call_N` dispatcher
 procedure. A dynamic call — `'$call'(F, A1, …, An)`, and so the prelude's
 `call/N` family and every first-class function value — now compiles to
