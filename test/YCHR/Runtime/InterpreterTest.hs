@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module YCHR.Runtime.InterpreterTest (tests) where
@@ -23,6 +24,7 @@ import YCHR.Internal.Runtime.Interpreter
     interpret,
   )
 import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Slots (SlotProc, SlotProgram (..), lowerProgram)
 import YCHR.Internal.Runtime.Store (getStoreSnapshot, isSuspAlive)
 import YCHR.Internal.Runtime.Types (CallVal (..), SuspensionId (..), Value (..))
 import YCHR.Internal.Runtime.Var (equal, newVar, unify)
@@ -509,11 +511,11 @@ bindParamsTests =
   testGroup
     "bindParams"
     [ testCase "matching arity returns Right" $
-        case bindParams "p" ["x", "y"] [CVal (VInt 1), CVal (VInt 2)] of
+        case bindParams "p" 2 [CVal (VInt 1), CVal (VInt 2)] of
           Right _ -> pure ()
           Left msg -> assertFailure ("expected Right, got Left: " ++ msg),
       testCase "too few args returns Left with proc name" $
-        case bindParams "myProc" ["x", "y"] [CVal (VInt 1)] of
+        case bindParams "myProc" 2 [CVal (VInt 1)] of
           Left msg -> do
             assertBool ("missing arity-mismatch text in: " ++ msg) $
               "arity mismatch" `isInfixOf` msg
@@ -521,13 +523,13 @@ bindParamsTests =
               "myProc" `isInfixOf` msg
           Right _ -> assertFailure "expected Left",
       testCase "too many args returns Left" $
-        case bindParams "p" ["x"] [CVal (VInt 1), CVal (VInt 2)] of
+        case bindParams "p" 1 [CVal (VInt 1), CVal (VInt 2)] of
           Left msg ->
             assertBool ("missing arity-mismatch text in: " ++ msg) $
               "arity mismatch" `isInfixOf` msg
           Right _ -> assertFailure "expected Left",
       testCase "mixed-kind args bind by tag" $
-        case bindParams "p" ["v", "i"] [CVal (VInt 7), CId (SuspensionId 3)] of
+        case bindParams "p" 2 [CVal (VInt 7), CId (SuspensionId 3)] of
           Right _ -> pure ()
           Left msg -> assertFailure ("expected Right, got Left: " ++ msg)
     ]
@@ -563,9 +565,9 @@ leqProgram =
         ]
     }
 
-leqProcMap :: Map.Map Name Procedure
+leqProcMap :: Map.Map Name SlotProc
 leqProcMap =
-  Map.fromList [(p.name, p) | p <- leqProgram.procedures]
+  (lowerProgram leqProgram).slotProcedures
 
 tellLeq :: Procedure
 tellLeq =

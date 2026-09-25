@@ -2,6 +2,71 @@
 
 ## Unreleased
 
+The Haskell interpreter no longer runs the VM AST. It runs a second,
+interpreter-owned AST — the new `YCHR.Internal.Runtime.Slots` — in which
+every local variable is a per-procedure integer slot, and its local
+environment is an `IntMap` keyed by that slot instead of a `Map` keyed by
+`Name`. The VM identifies a local by name because that is what the code
+generation backends need: `YCHR.Internal.Backend.Scheme` emits a
+target-language binder per local (`let (mangle-name n) …`, and a `let`
+for a `Foreach` loop variable), where the target's own lexical
+addressing already does what a slot does and where the emitted
+identifier has to be a name anyway; the planned JavaScript backend is a
+code generator too. A tree-walking interpreter is the one backend that
+maintains a per-call environment itself, and it was paying a `Text`
+comparison and a `Map` rebalance for every variable access and every
+binding.
+
+The phase is total and structure-preserving: every VM `Stmt`, `ValExpr`,
+`BoolExpr`, `IdExpr` and `CallArg` constructor has exactly one
+counterpart, and the lowering rewrites nothing but the local-variable
+references and binders. A VM constructor added without its counterpart
+makes the lowering non-exhaustive — a compile error under
+`-Wall -Werror` — which is what keeps the phase from going silently
+stale. A name the walk cannot place gets a fresh slot that nothing
+binds, so the interpreter still reports its own "unbound variable"
+runtime error rather than the phase failing. Slots are numbered from one
+counter per procedure, shared by both kinds, because a parameter is
+heterogeneous at run time: `bindParams` binds by the runtime tag of the
+argument it is handed, so parameter *i* must be slot *i* whether the
+value lands in the value map or the id map.
+
+The phase is derived once at compilation and carried lazily on
+`CompiledProgram.slotProgram`, in the same place as `indexPositions` and
+for the reason those lazily derived fields exist: a session is created per goal, and the
+compiled type-checker is 901 procedures (856 KB of serialized VM), so
+lowering per session would rewrite the program before a short goal had
+done any work. `SessionInput` gains `slotProgram` in place of its
+procedure table, and query-time lifted lambdas are lowered with
+`lowerProcedure` before they are merged into the session's procedure
+map. `YCHR.Internal.Runtime.Monad`'s `ProcMap` is now
+`Map Name SlotProc`, and `YCHR.Internal.Runtime.Interpreter.bindParams`
+takes the callee's arity rather than its parameter-name list.
+
+Measured on this machine by interleaving the benchmark binary against
+one built from the parent commit, three rounds a side (the same setup
+`dev-docs/PROJECT.md` describes; each side's own spread is under 2.5%):
+every benchmark is faster and none is slower. `typecheck/pairs_library`
+372.8 ms → 324.0 ms median, **−13.1%**; `leq_closure` 17.89 → 16.16 ms
+(−9.7%); `fib` 1.103 → 0.981 ms (−11.1%); `graph_test` 124.2 → 108.2 µs
+(−12.9%); `sum_list_test` 33.86 → 29.41 µs (−13.1%); the four search
+benchmarks −5% to −6%; `guard` −3.9% and `leq` −0.8%. The fine profile
+(`ychr check typechecker/*.chr +RTS -p`, `-fprof-auto`) goes from 25.33 s
+and 20.93 GB to 18.16 s and 19.30 GB, with `Text` comparison down from
+9.3% of individual time to 4.7%, `bindParams` 4.0% → 1.8%, `insertVal`
+3.8% → 1.8%, and `Map`'s `balanceL`/`balanceR` gone from the report.
+
+No change to the emitted VM, its serialization or its format version, and
+no change to the Scheme backend or its runtime: the phase is a private
+view the Haskell interpreter owns. This is the one compiler-to-runtime
+import edge in the tree — `YCHR.Internal.Compile.Pipeline` imports the
+phase to derive it — and the phase module is a leaf (data types and
+total pure functions over the VM types, with no monad, `IORef` or IO), so
+the edge carries no runtime machinery. Breaking: `CompiledProgram` and
+`SessionInput` no longer carry `procIndex`; the slot phase replaces it.
+See [the design notes](dev-docs/PROJECT.md#haskell-interpreter-performance)
+and [the invariants](dev-docs/INVARIANTS.md).
+
 The Haskell runtime now implements the paper's *Indexing* optimization
 (§5.3). The compiler was already emitting the `Foreach` index conditions
 its guard equalities imply — `leq(X, Y), leq(Y, Z) ==> leq(X, Z)` iterates
@@ -65,10 +130,11 @@ positions next to the inert types, `StoreSnapshot` carries the index so a
 search restores it with the store, and
 `YCHR.Internal.Runtime.Search`'s private `StoreIndex` newtype — a store
 slot — is renamed `StoreSlot` to free the name. `CompiledProgram` and
-`SessionInput` gain a lazily computed `indexPositions` field, for the same
-reason `procIndex` is there: deriving the set walks every procedure of the
-program, prelude included, and a session is created per goal, so
-recomputing it per session costs a short goal several percent. See
+`SessionInput` gain a lazily computed `indexPositions` field, in the same
+place as the interpreter's procedure table: deriving the set walks every
+procedure of the program, prelude included, and a session is created per
+goal, so recomputing it per session costs a short goal several percent.
+See
 [the design notes](dev-docs/PROJECT.md#constraint-store-implementation).
 
 Breaking: the serialized VM program now carries a VM format version.

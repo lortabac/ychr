@@ -72,7 +72,9 @@ removable when closed.
   and `AssignVal`/`AssignId`. The interpreter splits `evalExpr` into
   `evalValExpr :: ValExpr -> Eff es Value` and `evalIdExpr :: IdExpr ->
   Eff es SuspensionId`, and the local environment splits into
-  `envValues :: Map Name Value` and `envIds :: Map Name SuspensionId`.
+  `envValues` and `envIds`, keyed by the locals' slots rather than
+  their names since the interpreter moved to its own slot phase (see
+  "The interpreter's slot phase mirrors the VM AST" below).
   `RuntimeVal` is removed; cross-procedure args use `Runtime.Types.CallVal`
   (`CVal Value | CId SuspensionId`). `HostCallFn` narrows to
   `[Value] -> Eff es Value`. Closes seven interpreter `runtimeErrorS`
@@ -308,9 +310,9 @@ name-resolution invariants rather than shape invariants:
 
 | Site                                | Required precondition          |
 |-------------------------------------|--------------------------------|
-| `callProc` (unknown name), `:397`   | name resolves in `procMap`     |
-| `evalValExpr (Var name)`, `:677`    | name in `envValues`            |
-| `invokeHostCall` (unknown), `:871`  | name in registry               |
+| `callProc` (unknown name)           | name resolves in `procMap`     |
+| `evalValExpr (SVar slot name)`      | slot in `envValues`            |
+| `invokeHostCall` (unknown)          | name in registry               |
 
 Closure checks at compile time (see §5 "Closed procedure-name set")
 would close the first; an opaque `IdExpr`/`ValExpr` constructor that
@@ -796,10 +798,72 @@ CHR) that no longer exists: `Chr` is a `ReaderT SessionEnv IO`, and
 record. The ordering invariant went away with the stack.
 
 What is left is weaker and lives in `withCHRExtra`: the procedure map
-is `extraProcMap \`Map.union\` si.procIndex`, i.e. query-time
-procedures deliberately *shadow* compiled ones on a name collision.
-`Map.union` is left-biased, so swapping the operands silently
-reverses that. Nothing but the argument order says which side wins.
+is `extraProcMap \`Map.union\` si.slotProgram.slotProcedures`, i.e.
+query-time procedures deliberately *shadow* compiled ones on a name
+collision. `Map.union` is left-biased, so swapping the operands
+silently reverses that. Nothing but the argument order says which side
+wins. Extras are lowered with `lowerProcedure` before the merge, so
+every entry in the map is in the same phase as the compiled ones.
+
+### The interpreter's slot phase mirrors the VM AST — `src/YCHR/Internal/Runtime/Slots.hs`
+
+The Haskell interpreter does not run the VM AST. It runs a second,
+interpreter-owned AST in which every local variable is a per-procedure
+integer slot (`YCHR.Internal.Runtime.Slots`), produced once at
+compilation and carried on `CompiledProgram.slotProgram`. Two
+invariants make that duplication safe, and neither is encoded in a
+type:
+
+- **The phase is total and structure-preserving.** Every VM `Stmt`,
+  `ValExpr`, `BoolExpr`, `IdExpr` and `CallArg` constructor has exactly
+  one counterpart, and the lowering only rewrites the local-variable
+  slots. A VM constructor added without its counterpart makes the
+  lowering's pattern matches non-exhaustive, which is a compile error
+  under `-Wall -Werror`; that is the mechanism that keeps the phase
+  from going silently stale. `test/YCHR/Runtime/SlotsTest.hs` pins the
+  slot numbering the interpreter depends on.
+- **A slot is read from the map its kind binds it in, and a name the
+  phase never saw in scope lowers to a slot nothing binds.** Slots are
+  numbered from one counter per procedure, shared by both kinds,
+  because a parameter is heterogeneous at run time: `bindParams` binds
+  by the runtime tag of the argument it is handed, so parameter *i*
+  must be slot *i* whether the value lands in `envValues` or `envIds`.
+  The IR guarantees a name is bound in only one of the two maps; the
+  interpreter therefore reads a value reference (`SVar`) from
+  `envValues` and an id reference (`SIdVar`) from `envIds`, and a
+  reference with no binder in scope reaches the existing "unbound
+  variable" runtime error rather than a wrong slot.
+
+What is deliberately *not* an invariant: that a binder's slot matches a
+particular lexical scope. The interpreter's environment is one mutable
+map per call, so a binding made inside an `If` branch is visible after
+it and a `Foreach` body sees the bindings made earlier in the same
+body; the lowering walks the body left to right and allocates a fresh
+slot per binder.
+
+Two properties of emitted code are what make that reading sound, and
+both are assumptions on the compiler rather than consequences of the
+walk:
+
+- **Every read is preceded on its execution path by the binder the walk
+  selected for it.** Names are *not* unique within a procedure —
+  `genActivate` emits one `LetVal "dropped"` per occurrence, and an
+  equation chain binds the same pattern variable once per equation — but
+  each read sits in the segment that follows its own binder, so the
+  fresh slot is the one that read should see. A read textually before
+  its binder in a loop body relies on the flat map surviving an earlier
+  iteration, and would resolve to the slot that binder takes, which is
+  what the flat map would have read too.
+- **No emitted `If` binds a name in its else arm.** The then arm carries
+  the rule body or the equation and the else arm is either empty or
+  `inconclusiveElse`, which only `AssignVal`s a binder introduced
+  outside the `If`. A hand-built program that bound one name in *both*
+  arms and read it after the `If` would see the walk resolve that read
+  to the else arm's slot, so a then-arm execution would leave it unbound
+  where the flat map succeeded.
+
+The second is pinned by a case in `test/YCHR/Runtime/SlotsTest.hs`, so a
+change to the reading has to be deliberate.
 
 ### Scheme runtime ABI
 

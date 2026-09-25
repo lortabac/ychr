@@ -70,6 +70,7 @@ import YCHR.Internal.Runtime.Monad
     runChr,
   )
 import YCHR.Internal.Runtime.Reactivation (drainQueue)
+import YCHR.Internal.Runtime.Slots (SlotProgram (..), lowerProcedure)
 import YCHR.Internal.Runtime.Store (aliveConstraint)
 import YCHR.Internal.Runtime.Trace (TraceEvent (..), TraceHandler)
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..))
@@ -83,11 +84,13 @@ import YCHR.Internal.VM (CallableKey, Name (..), Procedure (..), Program (..))
 -- pre-compiled type-checker bundle is a 'SessionInput' directly.
 data SessionInput = SessionInput
   { program :: Program,
-    -- | 'program''s procedures, keyed by name. Taken from the
-    -- 'CompiledProgram' rather than rebuilt here, so that every
-    -- session run against one compiled program shares the table
-    -- instead of paying for it per query.
-    procIndex :: Map Name Procedure,
+    -- | 'program' in the interpreter's slot phase, taken from the
+    -- 'CompiledProgram' rather than lowered here, so that every session
+    -- run against one compiled program shares the table instead of
+    -- paying for it per query. Lowering is a full rewrite of the program
+    -- — the compiled type-checker is 901 procedures — and a session is
+    -- created per goal.
+    slotProgram :: SlotProgram,
     -- | The argument positions 'program' looks up through an index
     -- condition, taken from the 'CompiledProgram' for the same reason:
     -- deriving them walks every procedure of the program, prelude
@@ -103,7 +106,7 @@ toSessionInput :: CompiledProgram -> SessionInput
 toSessionInput cp =
   SessionInput
     { program = cp.program,
-      procIndex = cp.procIndex,
+      slotProgram = cp.slotProgram,
       indexPositions = cp.indexPositions,
       exportMap = cp.exportMap,
       exportedSet = cp.exportedSet
@@ -127,8 +130,11 @@ withCHRExtra ::
   Chr a ->
   IO a
 withCHRExtra si hc extraProcs extraCallables action = do
-  let extraProcMap = Map.fromList [(p.name, p) | p <- extraProcs]
-      procMap = extraProcMap `Map.union` si.procIndex
+  -- Query-time lambdas are compiled by the same CHR-to-VM compiler, so
+  -- they arrive in the VM phase and are lowered here, once per session
+  -- and only for the handful a query actually lifts.
+  let extraProcMap = Map.fromList [(p.name, lowerProcedure p) | p <- extraProcs]
+      procMap = extraProcMap `Map.union` si.slotProgram.slotProcedures
   let evaluableMap = Map.fromList si.program.evaluables
   -- Extras win, as in the procedure map: a query-time lambda can never
   -- collide with a compiled one (its lifted name is fresh), but the

@@ -416,49 +416,72 @@ the text on a tie — which needs no second AST and no API movement, at the
 price of a small portable hash and an `Ord Name` whose order is no longer
 text order.
 
-**2. Slot-indexed locals instead of the name-keyed `Env`.**
+**2. Slot-indexed locals instead of the name-keyed `Env`. — implemented.**
 
-`Env` is a pair of `Map Name _`
-(`src/YCHR/Internal/Runtime/Interpreter.hs`), rebuilt on every procedure
-call by `bindParams` (an arity check that walks both lists, a `zip`, and
-a `foldl'`) and mutated by every `LetVal`/`AssignVal` through
-`insertVal`. The fine profile puts `bindParams` at 4.1% time / 4.7%
-allocation, `insertVal` at 3.8 / 3.3 over 11.8 M calls — about half of
-them one-per-parameter from `bindParams`, the rest from statements —
-`balanceL` plus `balanceR` at 1.5 / 4.8, and the `Map.lookup` inside
-`evalValExpr`'s `Var` case (`evalValExpr.\`) at 3.5 / 2.6: about 13% of
-the time and 15% of the allocation. The discarded item 1 would have taken
-the `Text` comparisons out of two of those lookups; the arity check, the
-`zip`, the rebalancing and the per-statement insert would all have stayed,
-which is this item's point.
+The interpreter no longer runs the VM AST. It runs a second,
+interpreter-owned AST in which every local variable is a per-procedure
+integer slot (`YCHR.Internal.Runtime.Slots`), and its environment is
+`Env { envValues :: IntMap Value, envIds :: IntMap SuspensionId }`
+keyed by that slot rather than by `Name`. The phase is derived once per
+compiled program, lazily, and carried on `CompiledProgram.slotProgram`;
+`YCHR.Internal.Runtime.Session` copies it into `SessionInput`, the
+interpreter reads it out of `SessionEnv.procMap`, and query-time lifted
+lambdas are lowered with `lowerProcedure` before they are merged in.
 
-The compiler already knows each procedure's parameters and locals, so
-it can emit slot indices in their place: `ValExpr`'s `Var`, `IdExpr`'s
-`IdVar`, and the `Let*`/`Assign*` statements carry a slot, and a call's
-environment becomes a fixed-size array built once per call — an
-`IORef (SmallArray Value)` plus a second array, or one array of a tagged
-union, for ids — with no search and no rebalancing. A flat array or
-vector means adding a dependency (`primitive`, `vector` or `array`);
-none of the three is in `build-depends` today. `Env` is already split by
-kind and the IR guarantees a name is bound in only one of the two maps,
-so slots can be numbered independently per kind.
+Why a second AST rather than a compiler-emitted slot: the code
+generation backends want names. `YCHR.Internal.Backend.Scheme` emits a
+target-language binder per local (`let (mangle-name n) …`, and a `let`
+for a `Foreach` loop variable), where the target's own lexical
+addressing already does what a slot does and where the emitted
+identifier has to be a name anyway; the planned JavaScript backend is a
+code generator too, and PROJECT.md's list of what "each backend ships a
+runtime" for deliberately excludes local-variable representation. So
+the VM stays the compiler-to-runtime interface and the phase stays in
+the interpreter's namespace — but it is derived at compile time all the
+same, the way `indexPositions` is, because a session is created per goal and the compiled type-checker is 901 procedures: a
+per-session lowering would rewrite 856 KB of VM before a short goal had
+done any work. The cost of that ownership is the one compiler-to-runtime
+import edge in the tree (`Compile.Pipeline` imports
+`Runtime.Slots`); the phase module is a leaf — data types and total
+pure functions over the VM types, with no monad, `IORef` or IO — so the
+edge carries no runtime machinery, and if a second consumer ever
+appears the module lifts to a shared namespace with a rename.
 
-If the VM shape should stay as it is, there is a cheaper intermediate: a
-load-time pass that rewrites `Var`/`IdVar`/`Let*`/`Assign*` to `Int`
-slots against a per-procedure `IntMap`-backed environment. Keeping the
-names in the IR and consulting a `Name -> Int` table at each access
-would not help: that lookup is the `Text` comparison the slot exists to
-remove.
+The phase is total and structure-preserving: every VM `Stmt`,
+`ValExpr`, `BoolExpr`, `IdExpr` and `CallArg` constructor has exactly
+one counterpart, so a VM constructor added without one makes the
+lowering non-exhaustive — a compile error under `-Wall -Werror` — and
+every name the walk cannot place gets a fresh slot that nothing binds,
+so the interpreter still reports its own "unbound variable" runtime
+error instead of the phase failing. Slots are numbered from one counter
+per procedure, shared by both kinds, because a parameter is
+heterogeneous at run time and must occupy the same slot number whether
+it lands in `envValues` or `envIds`. See
+`dev-docs/INVARIANTS.md` for what is and is not an invariant here.
 
-The awkward part is mutability. The interpreter threads `Env` through an
-`IORef` so that bindings made before a `BSoftGuard` failure survive the
-catch (`Note [Soft guard catch safety]`); a fixed-size array keeps that
-property by being written in place. Slots must therefore also be
-assigned for query-time procedures, which
-`src/YCHR/Internal/Runtime/Session.hs` merges into `procMap` after the
-program is loaded. Like item 3, the change reaches the IR, its
-S-expression form, and the Scheme backend, which reads the same
-statements.
+What it removes is visible in the fine profile (both trees built with
+`cabal build exe:ychr --ghc-options=-fprof-auto`, run over
+`typechecker/*.chr`): the run goes from 25.33 s / 20.93 GB to 18.16 s /
+19.30 GB; `$fOrdText_$ccompare` falls from 9.3% of individual time to
+4.7% and `Ord Name`'s `compare` from 3.2% to 1.1%; `bindParams` from
+4.0% to 1.8% and `insertVal` from 3.8% to 1.8%; and `balanceL` plus
+`balanceR` (1.5% and 0.7%) leave the report entirely, their place taken
+by the `IntMap` insert at 1.8% / 4.6%.
+
+`make bench` is the authority and it agrees, by more than those
+shares suggested: measured by interleaving the benchmark binary against
+one built from the parent commit, three rounds a side, every benchmark
+is faster and none is slower. `typecheck/pairs_library` — the benchmark
+that stands in for the checker — goes from a 372.8 ms median (377.8,
+370.9, 372.8 ms) to 324.0 ms (319.0, 326.3, 324.0 ms), **−13.1%**;
+`leq_closure` 17.89 ms → 16.16 ms (−9.7%), `fib` 1.103 → 0.981 ms
+(−11.1%), `graph_test` 124.2 → 108.2 µs (−12.9%), `sum_list_test`
+33.86 → 29.41 µs (−13.1%), the four search benchmarks −5% to −6%, and
+the two smallest cases −3.9% (`guard`) and −0.8% (`leq`). Each side's
+own three-round spread is under 2.5%, so the effect is well outside it.
+For contrast with the discarded item 1: interning removed *all* the
+`Text` comparisons and did not move this benchmark; removing the
+environment along with them does.
 
 **3. Resolve call targets at compile time.**
 

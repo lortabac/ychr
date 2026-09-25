@@ -48,6 +48,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import YCHR.Internal.Compile.Pipeline (ExportResolution)
 import YCHR.Internal.Runtime.Index (StoreIndex, emptyStoreIndex)
+import YCHR.Internal.Runtime.Slots (SlotProc)
 import YCHR.Internal.Runtime.Trace (TraceHandler)
 import YCHR.Internal.Runtime.Types
   ( Suspension,
@@ -58,14 +59,17 @@ import YCHR.Internal.Runtime.Types
     VarId (..),
   )
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (CallableKey, EvaluableKey, Procedure, RuleId, StackFrame)
+import YCHR.Internal.VM (CallableKey, EvaluableKey, RuleId, StackFrame)
 import YCHR.Internal.VM qualified as VM
 
 -- | The runtime call stack (newest frame first), used for error reporting.
 type CallStack = [StackFrame]
 
--- | Map from procedure name to its VM definition.
-type ProcMap = Map VM.Name Procedure
+-- | Map from procedure name to its definition in the interpreter's slot
+-- phase ("YCHR.Internal.Runtime.Slots"). Query-time procedures are
+-- lowered with 'YCHR.Internal.Runtime.Slots.lowerProcedure' before being
+-- merged in, so every entry is in the same phase as the compiled ones.
+type ProcMap = Map VM.Name SlotProc
 
 -- | Registry of host-language functions callable from compiled code.
 type HostCallRegistry = Map VM.Name HostCallFn
@@ -145,8 +149,10 @@ data SessionEnv = SessionEnv
     reactQueue :: !(IORef (Seq SuspensionId)),
     -- | Interpreter call stack (newest first), capped in length.
     callStack :: !(IORef CallStack),
-    -- | All known procedures. Mutable so query-time lambdas can be
-    -- inserted without rebuilding the env.
+    -- | All known procedures, lowered to the interpreter's slot phase.
+    -- A ref only because a search fork copies the table into a fresh
+    -- one; nothing writes to it after 'initSessionEnv', which already
+    -- merges the query-time lambdas.
     procMap :: !(IORef ProcMap),
     -- | Host-call registry.
     hostCalls :: !HostCallRegistry,

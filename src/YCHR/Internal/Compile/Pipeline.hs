@@ -74,12 +74,12 @@ import YCHR.Internal.Resolve
     buildQueryFunctionVisibility,
     resolveProgram,
   )
+import YCHR.Internal.Runtime.Slots (SlotProgram, lowerProgram)
 import YCHR.Internal.StdLib (StdLib (..))
 import YCHR.Internal.TypeCheck.Error (TypeCheckError, TypeCheckWarning)
 import YCHR.Internal.Types (SymbolTable)
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (Procedure (..), Program (..), StackFrame)
-import YCHR.Internal.VM qualified as VM
+import YCHR.Internal.VM (Program (..), StackFrame)
 import YCHR.Internal.VM.Index (indexablePositions)
 
 -- | Anything that can stop a program from compiling or running, tagged by
@@ -189,20 +189,22 @@ data Warning
 -- | A compiled CHR program together with module visibility information.
 data CompiledProgram = CompiledProgram
   { program :: Program,
-    -- | 'program''s procedures, keyed by name — the lookup table the
-    -- interpreter runs against. Carried here for the same reason as
-    -- 'queryRenameEnv': a session used to rebuild it from
-    -- @program.procedures@ on every query, which costs
-    -- @O(n log n)@ in the size of the whole program (prelude
-    -- included) before a short goal has done any work at all.
-    -- The field is lazy, so compile-only users ('ychr check', the
-    -- Scheme backend) never build it.
-    procIndex :: Map VM.Name Procedure,
+    -- | 'program' in the Haskell interpreter's slot phase
+    -- ('YCHR.Internal.Runtime.Slots'): the same procedures with every
+    -- local variable resolved to a per-procedure integer slot, which is
+    -- the lookup table the interpreter runs against. Carried here for
+    -- the same reason as 'queryRenameEnv': building it per session
+    -- rewrites the whole program — the compiled type-checker is 901
+    -- procedures — before a goal has done any work at all. The field is
+    -- lazy twice over: never forced by compile-only users ('ychr check',
+    -- the Scheme backend), and within the phase each procedure's body is
+    -- a thunk until that procedure is first called.
+    slotProgram :: SlotProgram,
     -- | The @(constraint type, argument position)@ pairs the program
     -- looks up through a 'Foreach' index condition
     -- ('YCHR.Internal.VM.Index.indexablePositions'), which is what the
     -- runtime's per-argument store indexes are built for. Carried here
-    -- for the same reason as 'procIndex', and lazy for the same reason:
+    -- for the same reason as 'slotProgram', and lazy for the same reason:
     -- the walk covers every procedure of the program, prelude included,
     -- so rebuilding it per session is visible on a short goal, while
     -- compile-only users never need it.
@@ -443,7 +445,7 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
   pure
     ( CompiledProgram
         { program = prog,
-          procIndex = Map.fromList [(p.name, p) | p <- prog.procedures],
+          slotProgram = lowerProgram prog,
           indexPositions = indexablePositions prog,
           exportMap = exportMap,
           exportedSet = exportedSet,

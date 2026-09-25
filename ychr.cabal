@@ -226,6 +226,7 @@ test-suite ychr-tests
                     , YCHR.Runtime.VarTest
                     , YCHR.Runtime.StoreTest
                     , YCHR.Runtime.IndexTest
+                    , YCHR.Runtime.SlotsTest
                     , YCHR.Runtime.HistoryTest
                     , YCHR.Runtime.ReactivationTest
                     , YCHR.Runtime.InterpreterTest
@@ -344,6 +345,7 @@ library
                     , YCHR.Internal.Runtime.Store
                     , YCHR.Internal.Runtime.History
                     , YCHR.Internal.Runtime.Index
+                    , YCHR.Internal.Runtime.Slots
                     , YCHR.Internal.Runtime.Reactivation
                     , YCHR.Internal.Runtime.Error
                     , YCHR.Internal.Runtime.Trace

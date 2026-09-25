@@ -66,11 +66,11 @@ import Data.IORef
     readIORef,
     writeIORef,
   )
+import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.List qualified as List
-import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -101,6 +101,17 @@ import YCHR.Internal.Runtime.Registry
   ( baseHostCallRegistry,
     isVar,
     unit,
+  )
+import YCHR.Internal.Runtime.Slots
+  ( Slot,
+    SlotBoolExpr (..),
+    SlotCallArg (..),
+    SlotIdExpr (..),
+    SlotProc (..),
+    SlotProgram (..),
+    SlotStmt (..),
+    SlotValExpr (..),
+    lowerProgram,
   )
 import YCHR.Internal.Runtime.Store
   ( Suspension (..),
@@ -140,21 +151,23 @@ import YCHR.Internal.VM
 -- ---------------------------------------------------------------------------
 
 -- | Local variable environment for a procedure call. Split by kind:
--- value-bound names live in 'envValues', id-bound names in 'envIds'.
--- The IR ensures each name appears in only one map.
+-- value-bound slots live in 'envValues', id-bound slots in 'envIds'.
+-- The VM IR guarantees a local is bound in only one of the two, and the
+-- slot phase ("YCHR.Internal.Runtime.Slots") numbers both kinds from one
+-- per-procedure counter, so the two maps are keyed by the same space.
 data Env = Env
-  { envValues :: !(Map Name Value),
-    envIds :: !(Map Name SuspensionId)
+  { envValues :: !(IntMap Value),
+    envIds :: !(IntMap SuspensionId)
   }
 
 emptyEnv :: Env
-emptyEnv = Env Map.empty Map.empty
+emptyEnv = Env IntMap.empty IntMap.empty
 
-insertVal :: Name -> Value -> Env -> Env
-insertVal n v e = e {envValues = Map.insert n v e.envValues}
+insertVal :: Slot -> Value -> Env -> Env
+insertVal slot v e = e {envValues = IntMap.insert slot v e.envValues}
 
-insertId :: Name -> SuspensionId -> Env -> Env
-insertId n s e = e {envIds = Map.insert n s e.envIds}
+insertId :: Slot -> SuspensionId -> Env -> Env
+insertId slot s e = e {envIds = IntMap.insert slot s e.envIds}
 
 -- | How a statement (or a statement list) finished.
 --
@@ -194,9 +207,15 @@ liftChr = lift
 -- | Interpret a VM program by calling a named procedure with the given
 -- value arguments. Builds a fresh 'SessionEnv' for the program and
 -- runs the call inside it.
+--
+-- The program is lowered into the interpreter's slot phase here. Entry
+-- points that go through 'YCHR.Internal.Runtime.Session.withCHR' lower
+-- once per compiled program instead ('CompiledProgram.slotProgram');
+-- this one lowers per call, which is what the test-facing signature
+-- buys and what a hand-built 'Program' in a test expects.
 interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO Value
 interpret prog hostCalls entryName args = do
-  let procMap = Map.fromList [(p.name, p) | p <- prog.procedures]
+  let procMap = (lowerProgram prog).slotProcedures
       evaluableMap = Map.fromList prog.evaluables
       callableMap = Map.fromList prog.callables
   env <-
@@ -236,7 +255,7 @@ withFreshEnv env action = do
 -- Session helpers
 -- ---------------------------------------------------------------------------
 
-lookupProc :: Name -> Chr (Maybe Procedure)
+lookupProc :: Name -> Chr (Maybe SlotProc)
 lookupProc name = do
   SessionEnv {procMap} <- ask
   pm <- liftIO (readIORef procMap)
@@ -421,21 +440,21 @@ callProc name args = do
   case mproc of
     Nothing -> runtimeError' "callProc: unknown procedure " name.unName
     Just proc -> do
-      env <- case bindParams name proc.params args of
+      env <- case bindParams name proc.slotProcArity args of
         Right e -> pure e
         Left msg -> runtimeErrorS msg
       traceEntry proc args
       let runBody = withSavedCallStack $ do
-            sig <- withFreshEnv env (execStmts proc.body)
+            sig <- withFreshEnv env (execStmts proc.slotProcBody)
             case sig of
               SFall -> pure (VBool False)
               SRet v -> pure v
               _ -> uncaughtSignal "callProc" sig
       result <-
-        if bumpDepthFor proc.procKind
+        if bumpDepthFor proc.slotProcKind
           then withTraceDepth runBody
           else runBody
-      traceExit proc.procKind result
+      traceExit proc.slotProcKind result
       pure result
 
 -- | Report a jump signal that reached a boundary with no owner: a
@@ -467,8 +486,8 @@ bumpDepthFor PKFunction {} = True
 -- Reactivation events are emitted at the per-suspension boundary
 -- inside 'DrainReactivationQueue' (where the constraint id is in
 -- hand), not here.
-traceEntry :: Procedure -> [CallVal] -> Chr ()
-traceEntry proc args = case proc.procKind of
+traceEntry :: SlotProc -> [CallVal] -> Chr ()
+traceEntry proc args = case proc.slotProcKind of
   PKTell ct -> emitTrace $ do
     ctName <- constraintTypeLabel ct
     ts <- snapshotValues [v | CVal v <- args]
@@ -517,28 +536,33 @@ activateSuspensionId :: [CallVal] -> SuspensionId
 activateSuspensionId (CId s : _) = s
 activateSuspensionId _ = error "activateSuspensionId: expected leading id argument"
 
--- | Bind procedure parameters into the appropriate environment slot
--- based on the runtime tag of each argument.
-bindParams :: Name -> [Name] -> [CallVal] -> Either String Env
-bindParams pname params args
-  | length params /= length args =
+-- | Bind procedure arguments into the environment slot they were
+-- declared at, based on the runtime tag of each argument. Parameters
+-- occupy slots @0 .. arity - 1@ in declaration order
+-- ("YCHR.Internal.Runtime.Slots"), so this is a single walk of the
+-- argument list with no name lookup and no rebalancing. The count is
+-- the callee's, since the slot phase carries an arity rather than a
+-- parameter-name list.
+bindParams :: Name -> Int -> [CallVal] -> Either String Env
+bindParams pname arity args
+  | arity /= length args =
       Left $
         "bindParams: arity mismatch in "
           ++ T.unpack pname.unName
           ++ ": "
-          ++ show (length params)
+          ++ show arity
           ++ " params, "
           ++ show (length args)
           ++ " args"
-  | otherwise = Right (List.foldl' step emptyEnv (zip params args))
+  | otherwise = Right (List.foldl' step emptyEnv (zip [0 ..] args))
   where
-    step e (p, CVal v) = insertVal p v e
-    step e (p, CId s) = insertId p s e
+    step e (slot, CVal v) = insertVal slot v e
+    step e (slot, CId s) = insertId slot s e
 
 -- | Execute a list of statements sequentially, stopping at the first
 -- statement that signals a non-local jump and handing that signal to
 -- the caller.
-execStmts :: [Stmt] -> InterpM Signal
+execStmts :: [SlotStmt] -> InterpM Signal
 execStmts [] = pure SFall
 execStmts (s : rest) = do
   sig <- execStmt s
@@ -549,39 +573,39 @@ execStmts (s : rest) = do
 -- | Execute a single statement. Mutates the local 'Env' for binders,
 -- returns the 'Signal' produced by control-flow stmts, and routes
 -- store / history / reactivation effects through 'Chr'.
-execStmt :: Stmt -> InterpM Signal
-execStmt (LetVal name expr) = do
+execStmt :: SlotStmt -> InterpM Signal
+execStmt (SLetVal slot expr) = do
   v <- evalValExpr expr
-  modifyEnv (insertVal name v)
+  modifyEnv (insertVal slot v)
   pure SFall
-execStmt (LetId name expr) = do
+execStmt (SLetId slot expr) = do
   s <- evalIdExpr expr
-  modifyEnv (insertId name s)
+  modifyEnv (insertId slot s)
   pure SFall
-execStmt (AssignVal name expr) = do
+execStmt (SAssignVal slot expr) = do
   v <- evalValExpr expr
-  modifyEnv (insertVal name v)
+  modifyEnv (insertVal slot v)
   pure SFall
-execStmt (AssignId name expr) = do
+execStmt (SAssignId slot expr) = do
   s <- evalIdExpr expr
-  modifyEnv (insertId name s)
+  modifyEnv (insertId slot s)
   pure SFall
-execStmt (If cond thenBranch elseBranch) = do
+execStmt (SIf cond thenBranch elseBranch) = do
   b <- evalBoolExpr cond
   if b then execStmts thenBranch else execStmts elseBranch
-execStmt (Foreach lbl cType suspVar conditions body) = do
+execStmt (SForeach lbl cType suspSlot conditions body) = do
   susps <- foreachCandidates cType conditions
-  execForeach lbl suspVar conditions body susps
-execStmt (Continue lbl) = pure (SCont lbl)
-execStmt (Break lbl) = pure (SBrk lbl)
-execStmt (Return expr) = SRet <$> evalValExpr expr
-execStmt (ExprStmt expr) = do
+  execForeach lbl suspSlot conditions body susps
+execStmt (SContinue lbl) = pure (SCont lbl)
+execStmt (SBreak lbl) = pure (SBrk lbl)
+execStmt (SReturn expr) = SRet <$> evalValExpr expr
+execStmt (SExprStmt expr) = do
   _ <- evalValExpr expr
   pure SFall
-execStmt (BoolExprStmt expr) = do
+execStmt (SBoolExprStmt expr) = do
   _ <- evalBoolExpr expr
   pure SFall
-execStmt (Store expr) = do
+execStmt (SStore expr) = do
   sid <- evalIdExpr expr
   liftChr $ do
     didStore <- storeConstraint sid
@@ -594,14 +618,14 @@ execStmt (Store expr) = do
       ts <- snapshotValues vs
       pure (TEStore sid ctName ts)
   pure SFall
-execStmt (Kill expr) = do
+execStmt (SKill expr) = do
   sid <- evalIdExpr expr
   liftChr $ do
     killConstraint sid
     emitTrace (pure (TEKill sid))
   pure SFall
-execStmt (AddHistory ruleId exprs) = do
-  sids <- traverse evalIdExpr (historyIdsList exprs)
+execStmt (SAddHistory ruleId exprs) = do
+  sids <- traverse evalIdExpr exprs
   liftChr $ do
     emitTrace $ do
       env <- ask
@@ -609,7 +633,7 @@ execStmt (AddHistory ruleId exprs) = do
       pure (TEFire rn sids)
     addHistory ruleId sids
   pure SFall
-execStmt (DrainReactivationQueue suspVar body) = do
+execStmt (SDrainReactivationQueue suspSlot body) = do
   envRef <- ask
   liftChr $
     drainQueue $ \sid -> do
@@ -621,7 +645,7 @@ execStmt (DrainReactivationQueue suspVar body) = do
             ctName <- constraintTypeLabel ct
             ts <- snapshotValues vs
             pure (TEReactivate sid ctName ts)
-          liftIO (modifyIORef' envRef (insertId suspVar sid))
+          liftIO (modifyIORef' envRef (insertId suspSlot sid))
           -- The compiler fixes this body to a single dispatch call
           -- ('ExprStmt'), which cannot jump; anything else would have
           -- no owner here, since the drain is not a labelled loop and
@@ -632,7 +656,7 @@ execStmt (DrainReactivationQueue suspVar body) = do
             _ -> uncaughtSignal "DrainReactivationQueue" sig
         else pure ()
   pure SFall
-execStmt (PushFrame frame) = do
+execStmt (SPushFrame frame) = do
   liftChr (pushFrame frame)
   pure SFall
 
@@ -650,7 +674,7 @@ execStmt (PushFrame frame) = do
 -- the narrowed list is still a superset of the matches; 'driverKey'
 -- holds the two guards that keep the narrowing invisible to a
 -- program's behaviour.
-foreachCandidates :: ConstraintType -> [(ArgIndex, ValExpr)] -> InterpM [Suspension]
+foreachCandidates :: ConstraintType -> [(ArgIndex, SlotValExpr)] -> InterpM [Suspension]
 foreachCandidates cType conditions = do
   mIndexed <- liftChr (indexedPositionsFor cType)
   case mIndexed of
@@ -675,7 +699,7 @@ foreachCandidates cType conditions = do
 -- compound term holding an unbound variable — falls through to the
 -- unindexed path, which evaluates the condition per candidate exactly
 -- as before.
-driverKey :: IntSet -> [(ArgIndex, ValExpr)] -> InterpM (Maybe (Int, GroundKey))
+driverKey :: IntSet -> [(ArgIndex, SlotValExpr)] -> InterpM (Maybe (Int, GroundKey))
 driverKey _ [] = pure Nothing
 driverKey indexed ((ArgIndex pos, expr) : rest)
   | nonRaising expr,
@@ -706,11 +730,11 @@ driverKey indexed ((ArgIndex pos, expr) : rest)
 -- nothing else. A future compiler that lifted an allocating or
 -- effectful expression here would make the loop-entry evaluation pay
 -- something the per-candidate one only paid when a candidate existed.
-nonRaising :: ValExpr -> Bool
-nonRaising (Var _) = True
-nonRaising (Lit _) = True
-nonRaising NewVar = True
-nonRaising (MakeTerm _ args) = all nonRaising args
+nonRaising :: SlotValExpr -> Bool
+nonRaising (SVar _ _) = True
+nonRaising (SLit _) = True
+nonRaising SNewVar = True
+nonRaising (SMakeTerm _ args) = all nonRaising args
 nonRaising _ = False
 
 -- | Iterate the body of a 'Foreach' over a snapshot of candidate
@@ -720,37 +744,37 @@ nonRaising _ = False
 -- signal (a foreign label, an 'SRet') is handed further out.
 execForeach ::
   Label ->
-  Name ->
-  [(ArgIndex, ValExpr)] ->
-  [Stmt] ->
+  Slot ->
+  [(ArgIndex, SlotValExpr)] ->
+  [SlotStmt] ->
   [Suspension] ->
   InterpM Signal
 execForeach _ _ _ _ [] = pure SFall
-execForeach lbl suspVar conditions body (susp : rest) = do
+execForeach lbl suspSlot conditions body (susp : rest) = do
   alive <- liftChr (isSuspAlive susp)
   if not alive
-    then execForeach lbl suspVar conditions body rest
+    then execForeach lbl suspSlot conditions body rest
     else do
       ok <- checkConditions susp conditions
       if not ok
-        then execForeach lbl suspVar conditions body rest
+        then execForeach lbl suspSlot conditions body rest
         else do
           liftChr $ emitTrace $ do
             ctName <- constraintTypeLabel susp.suspType
             ts <- snapshotValues susp.args
             pure (TEPartner ctName susp.suspId ts)
-          modifyEnv (insertId suspVar susp.suspId)
+          modifyEnv (insertId suspSlot susp.suspId)
           envRef <- ask
           sig <- liftChr (withTraceDepth (runReaderT (execStmts body) envRef))
           case sig of
-            SFall -> execForeach lbl suspVar conditions body rest
+            SFall -> execForeach lbl suspSlot conditions body rest
             SCont l
-              | l == lbl -> execForeach lbl suspVar conditions body rest
+              | l == lbl -> execForeach lbl suspSlot conditions body rest
             SBrk l
               | l == lbl -> pure SFall
             _ -> pure sig
 
-checkConditions :: Suspension -> [(ArgIndex, ValExpr)] -> InterpM Bool
+checkConditions :: Suspension -> [(ArgIndex, SlotValExpr)] -> InterpM Bool
 checkConditions _ [] = pure True
 checkConditions susp ((ArgIndex i, expr) : rest) = do
   v <- evalValExpr expr
@@ -764,54 +788,54 @@ checkConditions susp ((ArgIndex i, expr) : rest) = do
 -- Value-expression evaluator (normal mode)
 -- ---------------------------------------------------------------------------
 
--- | Evaluate a 'ValExpr' in normal (non-deep) mode. Variable references
--- return whatever value is currently bound; chains are not followed.
--- 'EvalDeep' delegates to 'evalValExprDeep'.
-evalValExpr :: ValExpr -> InterpM Value
-evalValExpr (Var name) = do
+-- | Evaluate a 'SlotValExpr' in normal (non-deep) mode. Variable
+-- references return whatever value is currently bound; chains are not
+-- followed. 'SEvalDeep' delegates to 'evalValExprDeep'.
+evalValExpr :: SlotValExpr -> InterpM Value
+evalValExpr (SVar slot name) = do
   env <- getEnv
-  case Map.lookup name env.envValues of
+  case IntMap.lookup slot env.envValues of
     Just v -> pure v
     Nothing -> liftChr (runtimeError' "evalValExpr: unbound variable " name.unName)
-evalValExpr (Lit (IntLit n)) = pure (VInt n)
-evalValExpr (Lit (FloatLit n)) = pure (VFloat n)
-evalValExpr (Lit (AtomLit s)) = pure (VAtom s)
-evalValExpr (Lit (TextLit s)) = pure (VText s)
-evalValExpr (Lit (BoolLit b)) = pure (VBool b)
-evalValExpr (CallExpr name args) = do
+evalValExpr (SLit (IntLit n)) = pure (VInt n)
+evalValExpr (SLit (FloatLit n)) = pure (VFloat n)
+evalValExpr (SLit (AtomLit s)) = pure (VAtom s)
+evalValExpr (SLit (TextLit s)) = pure (VText s)
+evalValExpr (SLit (BoolLit b)) = pure (VBool b)
+evalValExpr (SCallExpr name args) = do
   argVals <- traverse evalCallArg args
   liftChr (callProc name argVals)
-evalValExpr (HostCall name args) = do
+evalValExpr (SHostCall name args) = do
   argVals <- traverse evalValExpr args
   derefedVals <- liftChr (traverse deref argVals)
   liftChr (invokeHostCall name derefedVals)
-evalValExpr NewVar = liftChr newVar
-evalValExpr (MakeTerm functor args) = do
+evalValExpr SNewVar = liftChr newVar
+evalValExpr (SMakeTerm functor args) = do
   argVals <- traverse evalValExpr args
   pure $ makeTerm functor.unName argVals
-evalValExpr (GetArg expr idx) = do
+evalValExpr (SGetArg expr idx) = do
   v <- evalValExpr expr
   liftChr (getArg v idx)
-evalValExpr (FieldArg expr (ArgIndex i)) = do
+evalValExpr (SFieldArg expr (ArgIndex i)) = do
   sid <- evalIdExpr expr
   liftChr (getConstraintArg sid i)
-evalValExpr (FieldType expr) = do
+evalValExpr (SFieldType expr) = do
   sid <- evalIdExpr expr
   ct <- liftChr (getConstraintType sid)
   pure (VInt (fromIntegral ct.unConstraintType))
-evalValExpr (EvalDeep expr) = evalValExprDeep expr
--- 'EvalIs' is the @is@-with-variable-RHS marker. The compiler only
+evalValExpr (SEvalDeep expr) = evalValExprDeep expr
+-- 'SEvalIs' is the @is@-with-variable-RHS marker. The compiler only
 -- emits it for @R is X@ where @X@ is syntactically a variable; the
--- inner expression is therefore always a 'Var'. We evaluate that
--- 'Var', dereference, and then walk the resulting value with
+-- inner expression is therefore always a 'SVar'. We evaluate that
+-- reference, dereference, and then walk the resulting value with
 -- 'deepEvalValue' so a bound compound whose functor is a declared
 -- function actually evaluates (matching SWI Prolog's @is@ on a
--- variable). Other 'EvalDeep' use sites (guards, non-variable @is@
+-- variable). Other 'SEvalDeep' use sites (guards, non-variable @is@
 -- RHSes) do not invoke the walker.
-evalValExpr (EvalIs expr) = do
+evalValExpr (SEvalIs expr) = do
   v <- evalValExprDeep expr
   liftChr (deepEvalValue v)
-evalValExpr (ApplyClosure f args) = do
+evalValExpr (SApplyClosure f args) = do
   fv <- evalValExpr f
   argVals <- traverse evalValExpr args
   liftChr (applyClosure fv argVals)
@@ -843,36 +867,37 @@ boolFromValue v = do
             "guard is not sufficiently instantiated (unbound variable)"
       | otherwise -> runtimeErrorS "guard did not evaluate to a boolean"
 
--- | Evaluate a 'BoolExpr' in normal (non-deep) mode. Logical connectives
--- short-circuit. 'BEvalDeep' delegates to 'evalBoolExprDeep'.
-evalBoolExpr :: BoolExpr -> InterpM Bool
-evalBoolExpr (BLit b) = pure b
-evalBoolExpr (BNot e) = not <$> evalBoolExpr e
-evalBoolExpr (BAnd e1 e2) = do
+-- | Evaluate a 'SlotBoolExpr' in normal (non-deep) mode. Logical
+-- connectives short-circuit. 'SBEvalDeep' delegates to
+-- 'evalBoolExprDeep'.
+evalBoolExpr :: SlotBoolExpr -> InterpM Bool
+evalBoolExpr (SBLit b) = pure b
+evalBoolExpr (SBNot e) = not <$> evalBoolExpr e
+evalBoolExpr (SBAnd e1 e2) = do
   b1 <- evalBoolExpr e1
   if b1 then evalBoolExpr e2 else pure False
-evalBoolExpr (BOr e1 e2) = do
+evalBoolExpr (SBOr e1 e2) = do
   b1 <- evalBoolExpr e1
   if b1 then pure True else evalBoolExpr e2
-evalBoolExpr (BMatchTerm expr functor arity) = do
+evalBoolExpr (SBMatchTerm expr functor arity) = do
   v <- evalValExpr expr
   liftChr (matchTerm v functor.unName arity)
-evalBoolExpr (BEqual e1 e2) = do
+evalBoolExpr (SBEqual e1 e2) = do
   v1 <- evalValExpr e1
   v2 <- evalValExpr e2
   liftChr (equal v1 v2)
-evalBoolExpr (BIdEqual e1 e2) = do
+evalBoolExpr (SBIdEqual e1 e2) = do
   s1 <- evalIdExpr e1
   s2 <- evalIdExpr e2
   pure (idEqual s1 s2)
-evalBoolExpr (BAlive expr) = do
+evalBoolExpr (SBAlive expr) = do
   sid <- evalIdExpr expr
   liftChr (aliveConstraint sid)
-evalBoolExpr (BIsConstraintType expr cType) = do
+evalBoolExpr (SBIsConstraintType expr cType) = do
   sid <- evalIdExpr expr
   liftChr (isConstraintType sid cType)
-evalBoolExpr (BNotInHistory ruleId args) = do
-  sids <- traverse evalIdExpr (historyIdsList args)
+evalBoolExpr (SBNotInHistory ruleId args) = do
+  sids <- traverse evalIdExpr args
   ok <- liftChr (notInHistory ruleId sids)
   unless ok $
     liftChr $
@@ -881,7 +906,7 @@ evalBoolExpr (BNotInHistory ruleId args) = do
         let rn = lookupRuleName env ruleId
         pure (TEHistoryHit rn sids)
   pure ok
-evalBoolExpr (BUnify e1 e2) = do
+evalBoolExpr (SBUnify e1 e2) = do
   v1 <- evalValExpr e1
   v2 <- evalValExpr e2
   liftChr $ do
@@ -894,14 +919,14 @@ evalBoolExpr (BUnify e1 e2) = do
         t2 <- snapshotValue v2
         enqueued <- unifyOrError v1 v2
         emitTrace (pure (TEUnify t1 t2 enqueued))
-    -- 'unifyOrError' raises on failure, so a 'BUnify' that reaches this
-    -- point has succeeded: the boolean position is always true.
+    -- 'unifyOrError' raises on failure, so a 'SBUnify' that reaches
+    -- this point has succeeded: the boolean position is always true.
     pure True
-evalBoolExpr (BFromVal expr) = do
+evalBoolExpr (SBFromVal expr) = do
   v <- evalValExpr expr
   liftChr (boolFromValue v)
-evalBoolExpr (BEvalDeep expr) = evalBoolExprDeep expr
-evalBoolExpr (BSoftGuard expr) = softGuard (evalBoolExpr expr)
+evalBoolExpr (SBEvalDeep expr) = evalBoolExprDeep expr
+evalBoolExpr (SBSoftGuard expr) = softGuard (evalBoolExpr expr)
 
 -- | Run a nested boolean evaluation under the soft-guard boundary.
 -- Delegates to 'catchInstantiation' at the 'Chr' level; the local
@@ -916,16 +941,16 @@ softGuard m = do
 -- Id-expression evaluator
 -- ---------------------------------------------------------------------------
 
--- | Evaluate an 'IdExpr' to a 'SuspensionId': either a lookup in the
--- id slot of the local 'Env', or a fresh suspension created from a
--- 'CreateConstraint' (not yet 'Store'd).
-evalIdExpr :: IdExpr -> InterpM SuspensionId
-evalIdExpr (IdVar name) = do
+-- | Evaluate a 'SlotIdExpr' to a 'SuspensionId': either a lookup in
+-- the id slot of the local 'Env', or a fresh suspension created from a
+-- 'SCreateConstraint' (not yet 'Store'd).
+evalIdExpr :: SlotIdExpr -> InterpM SuspensionId
+evalIdExpr (SIdVar slot name) = do
   env <- getEnv
-  case Map.lookup name env.envIds of
+  case IntMap.lookup slot env.envIds of
     Just s -> pure s
     Nothing -> liftChr (runtimeError' "evalIdExpr: unbound id variable " name.unName)
-evalIdExpr (CreateConstraint cType args) = do
+evalIdExpr (SCreateConstraint cType args) = do
   argVals <- traverse evalValExpr args
   liftChr (createConstraint cType argVals)
 
@@ -933,9 +958,9 @@ evalIdExpr (CreateConstraint cType args) = do
 -- Call-arg evaluator
 -- ---------------------------------------------------------------------------
 
-evalCallArg :: CallArg -> InterpM CallVal
-evalCallArg (AVal e) = CVal <$> evalValExpr e
-evalCallArg (AId e) = CId <$> evalIdExpr e
+evalCallArg :: SlotCallArg -> InterpM CallVal
+evalCallArg (SCallVal e) = CVal <$> evalValExpr e
+evalCallArg (SCallId e) = CId <$> evalIdExpr e
 
 -- ---------------------------------------------------------------------------
 -- Host call dispatch
@@ -1013,21 +1038,21 @@ unifyOrError v1 v2 = do
 -- compound symbolic for the host call's benefit. This intentionally
 -- mirrors the type checker's rule: only @R is X@ widens the LHS to
 -- @any@.
-evalValExprDeep :: ValExpr -> InterpM Value
-evalValExprDeep (Var name) = do
-  v <- evalValExpr (Var name)
+evalValExprDeep :: SlotValExpr -> InterpM Value
+evalValExprDeep (SVar slot name) = do
+  v <- evalValExpr (SVar slot name)
   liftChr (deref v)
-evalValExprDeep (HostCall name args) = do
+evalValExprDeep (SHostCall name args) = do
   argVals <- traverse evalValExprDeep args
   liftChr (invokeHostCall name argVals)
-evalValExprDeep (CallExpr name args) = do
+evalValExprDeep (SCallExpr name args) = do
   argVals <- traverse evalCallArgDeep args
   liftChr (callProc name argVals)
-evalValExprDeep (ApplyClosure f args) = do
+evalValExprDeep (SApplyClosure f args) = do
   fv <- evalValExprDeep f
   argVals <- traverse evalValExprDeep args
   liftChr (applyClosure fv argVals)
-evalValExprDeep (MakeTerm functor args) = do
+evalValExprDeep (SMakeTerm functor args) = do
   argVals <- traverse evalValExprDeep args
   pure $ makeTerm functor.unName argVals
 evalValExprDeep expr = evalValExpr expr
@@ -1080,9 +1105,9 @@ invokeByKey key args = do
             "is: functor is not evaluable: "
             (key.functor.unName <> "/" <> T.pack (show key.arity))
 
-evalCallArgDeep :: CallArg -> InterpM CallVal
-evalCallArgDeep (AVal e) = CVal <$> evalValExprDeep e
-evalCallArgDeep (AId e) = CId <$> evalIdExpr e
+evalCallArgDeep :: SlotCallArg -> InterpM CallVal
+evalCallArgDeep (SCallVal e) = CVal <$> evalValExprDeep e
+evalCallArgDeep (SCallId e) = CId <$> evalIdExpr e
 
 -- ---------------------------------------------------------------------------
 -- Closure application
@@ -1188,31 +1213,32 @@ closureKey n v = case v of
 -- Bool-expression evaluator (deep deref mode)
 -- ---------------------------------------------------------------------------
 
--- | Deep-deref evaluation for 'BoolExpr'. Mirrors 'evalValExprDeep':
--- propagates deep mode into 'ValExpr' and 'IdExpr' payloads.
-evalBoolExprDeep :: BoolExpr -> InterpM Bool
-evalBoolExprDeep (BNot e) = not <$> evalBoolExprDeep e
-evalBoolExprDeep (BAnd e1 e2) = do
+-- | Deep-deref evaluation for 'SlotBoolExpr'. Mirrors
+-- 'evalValExprDeep': propagates deep mode into the value and id
+-- payloads.
+evalBoolExprDeep :: SlotBoolExpr -> InterpM Bool
+evalBoolExprDeep (SBNot e) = not <$> evalBoolExprDeep e
+evalBoolExprDeep (SBAnd e1 e2) = do
   b1 <- evalBoolExprDeep e1
   if b1 then evalBoolExprDeep e2 else pure False
-evalBoolExprDeep (BOr e1 e2) = do
+evalBoolExprDeep (SBOr e1 e2) = do
   b1 <- evalBoolExprDeep e1
   if b1 then pure True else evalBoolExprDeep e2
-evalBoolExprDeep (BMatchTerm expr functor arity) = do
+evalBoolExprDeep (SBMatchTerm expr functor arity) = do
   v <- evalValExprDeep expr
   liftChr (matchTerm v functor.unName arity)
-evalBoolExprDeep (BEqual e1 e2) = do
+evalBoolExprDeep (SBEqual e1 e2) = do
   v1 <- evalValExprDeep e1
   v2 <- evalValExprDeep e2
   liftChr (equal v1 v2)
-evalBoolExprDeep (BUnify e1 e2) = do
+evalBoolExprDeep (SBUnify e1 e2) = do
   v1 <- evalValExprDeep e1
   v2 <- evalValExprDeep e2
   liftChr (void (unifyOrError v1 v2))
   pure True
-evalBoolExprDeep (BFromVal expr) = do
+evalBoolExprDeep (SBFromVal expr) = do
   v <- evalValExprDeep expr
   liftChr (boolFromValue v)
-evalBoolExprDeep (BEvalDeep expr) = evalBoolExprDeep expr
-evalBoolExprDeep (BSoftGuard expr) = softGuard (evalBoolExprDeep expr)
+evalBoolExprDeep (SBEvalDeep expr) = evalBoolExprDeep expr
+evalBoolExprDeep (SBSoftGuard expr) = softGuard (evalBoolExprDeep expr)
 evalBoolExprDeep expr = evalBoolExpr expr

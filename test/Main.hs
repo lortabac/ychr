@@ -24,6 +24,7 @@ import YCHR.Runtime.HistoryTest qualified
 import YCHR.Runtime.IndexTest qualified
 import YCHR.Runtime.InterpreterTest qualified
 import YCHR.Runtime.ReactivationTest qualified
+import YCHR.Runtime.SlotsTest qualified
 import YCHR.Runtime.StoreTest qualified
 import YCHR.Runtime.VarTest qualified
 import YCHR.TextShimTest qualified
@@ -77,6 +78,7 @@ main = do
           YCHR.Runtime.VarTest.tests,
           YCHR.Runtime.StoreTest.tests,
           YCHR.Runtime.IndexTest.tests,
+          YCHR.Runtime.SlotsTest.tests,
           YCHR.Runtime.HistoryTest.tests,
           YCHR.Runtime.ReactivationTest.tests,
           YCHR.Runtime.InterpreterTest.tests,
