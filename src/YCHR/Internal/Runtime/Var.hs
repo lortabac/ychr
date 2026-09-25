@@ -28,6 +28,8 @@ module YCHR.Internal.Runtime.Var
     matchTerm,
     getArg,
     addObserver,
+    addObserverAndKey,
+    groundKey,
     getVarId,
   )
 where
@@ -36,6 +38,7 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask)
 import Data.IORef
 import Data.Text (Text)
+import YCHR.Internal.Runtime.Index (GroundKey (..), floatKey)
 import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..))
 import YCHR.Internal.Runtime.Trail (recordVarWrite)
 import YCHR.Internal.Runtime.Types
@@ -374,6 +377,60 @@ addObserver oid v = do
         (\_ -> pure ())
     VTerm _ args -> mapM_ (addObserver oid) args
     _ -> pure ()
+
+-- | One traversal with the two jobs a constraint argument needs when it
+-- is stored: register @oid@ as an observer on every unbound variable
+-- reachable from @v@ (exactly what 'addObserver' does), and return @v@'s
+-- 'GroundKey' when @v@ is fully ground.
+--
+-- The jobs share a traversal because they inspect the same term in the
+-- same way; a store that indexes a position would otherwise walk each of
+-- its arguments twice. Meeting an unbound variable does not stop the
+-- walk — the variables behind it still need observing — it only
+-- discards the key.
+addObserverAndKey :: SuspensionId -> Value -> Chr (Maybe GroundKey)
+addObserverAndKey oid = go
+  where
+    go v = do
+      d <- deref v
+      case d of
+        VVar var -> do
+          withUnboundVar
+            var
+            (\vid obs -> writeVarState var (Unbound vid (oid : obs)))
+            (\_ -> pure ())
+          pure Nothing
+        VTerm f args -> do
+          keys <- mapM go args
+          pure (KTerm f <$> sequence keys)
+        _ -> pure (leafKey d)
+    leafKey d = case d of
+      VInt i -> Just (KInt i)
+      VFloat x -> Just (floatKey x)
+      VAtom a -> Just (KAtom a)
+      VText t -> Just (KText t)
+      VBool b -> Just (KBool b)
+      _ -> Nothing
+
+-- | The 'GroundKey' of a value, or 'Nothing' when an unbound logical
+-- variable occurs anywhere inside it.
+--
+-- The cases mirror 'equal''s walk, so that key equality is never finer
+-- than ask-equality; see "YCHR.Internal.Runtime.Index" for why that is
+-- the direction a candidate-narrowing index needs.
+groundKey :: Value -> Chr (Maybe GroundKey)
+groundKey v = do
+  d <- deref v
+  case d of
+    VVar _ -> pure Nothing
+    VInt i -> pure (Just (KInt i))
+    VFloat x -> pure (Just (floatKey x))
+    VAtom a -> pure (Just (KAtom a))
+    VText t -> pure (Just (KText t))
+    VBool b -> pure (Just (KBool b))
+    VTerm f args -> do
+      keys <- mapM groundKey args
+      pure (KTerm f <$> sequence keys)
 
 -- | Extract the 'VarId' of an unbound variable after dereferencing.
 -- Returns 'Nothing' if the value is not an unbound variable.

@@ -47,6 +47,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import YCHR.Internal.Compile.Pipeline (ExportResolution)
+import YCHR.Internal.Runtime.Index (StoreIndex, emptyStoreIndex)
 import YCHR.Internal.Runtime.Trace (TraceHandler)
 import YCHR.Internal.Runtime.Types
   ( Suspension,
@@ -104,9 +105,24 @@ data SessionEnv = SessionEnv
     -- | Type-indexed store: one append-only sequence per constraint
     -- type, keyed by the integer wrapped in 'ConstraintType'.
     storeByType :: !(IORef (IntMap (Seq Suspension))),
+    -- | Per-argument indexes over 'storeByType': the /Indexing/
+    -- optimization of the paper (§5.3), see
+    -- "YCHR.Internal.Runtime.Index". A persistent structure behind one
+    -- reference, so a search snapshot restores it with the store it
+    -- describes.
+    storeIndex :: !(IORef StoreIndex),
     -- | Source names parallel to 'storeByType', indexed by
     -- 'ConstraintType'.
     storeTypeNames :: !(IntMap Types.Name),
+    -- | The (constraint type, argument position) pairs the program's
+    -- 'YCHR.Internal.VM.Foreach' index conditions refer to, as the set
+    -- of positions per 'Types.ConstraintType' index — derived from the
+    -- program by 'YCHR.Internal.Runtime.Index.indexablePositions'.
+    -- Only these positions are recorded in 'storeIndex', and only these
+    -- may be looked up in it; anything else falls back to the scan.
+    -- Named differently from that function so a call to it stays
+    -- unambiguous.
+    indexPositions :: !(IntMap IntSet),
     -- | The constraint types the compiler marked inert
     -- ('YCHR.Internal.VM.Program'.'inertTypes'), as the set of their
     -- 'Types.ConstraintType' indices. A suspension of one of these
@@ -172,10 +188,16 @@ data SessionEnv = SessionEnv
   }
 
 -- | Build a fresh 'SessionEnv' for a compiled program.
+--
+-- The indexable positions come from
+-- 'YCHR.Internal.Runtime.Index.indexablePositions' applied to the same
+-- program; a caller that has no program in hand (a unit test building a
+-- session by hand) passes 'IntMap.empty' and gets an unindexed store.
 initSessionEnv ::
   [Types.Name] ->
   [Text] ->
   [Types.ConstraintType] ->
+  IntMap IntSet ->
   ProcMap ->
   HostCallRegistry ->
   EvaluableRegistry ->
@@ -183,13 +205,14 @@ initSessionEnv ::
   Map Types.UnqualifiedIdentifier ExportResolution ->
   Set Types.QualifiedIdentifier ->
   IO SessionEnv
-initSessionEnv typeNames rNames inert pm hc ev cl expMap expSet = do
+initSessionEnv typeNames rNames inert indexable pm hc ev cl expMap expSet = do
   vc <- newIORef (VarId 0)
   let typeCount = List.length typeNames
       emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
       typeNameMap = IntMap.fromList (zip [0 ..] typeNames)
       ruleNameMap = IntMap.fromList (zip [0 ..] rNames)
   bt <- newIORef emptyStore
+  sx <- newIORef emptyStoreIndex
   bi <- newIORef IntMap.empty
   ni <- newIORef 0
   hi <- newIORef Set.empty
@@ -202,7 +225,9 @@ initSessionEnv typeNames rNames inert pm hc ev cl expMap expSet = do
     SessionEnv
       { varCounter = vc,
         storeByType = bt,
+        storeIndex = sx,
         storeTypeNames = typeNameMap,
+        indexPositions = indexable,
         inertTypes = IntSet.fromList [i | Types.ConstraintType i <- inert],
         ruleNames = ruleNameMap,
         storeById = bi,
@@ -254,6 +279,7 @@ forkSearchSessionEnv :: SessionEnv -> IO SessionEnv
 forkSearchSessionEnv env = do
   pm <- readIORef env.procMap
   bt <- newIORef (IntMap.map (const Seq.empty) env.storeTypeNames)
+  sx <- newIORef emptyStoreIndex
   bi <- newIORef IntMap.empty
   hi <- newIORef Set.empty
   rq <- newIORef Seq.empty
@@ -265,6 +291,7 @@ forkSearchSessionEnv env = do
   pure
     env
       { storeByType = bt,
+        storeIndex = sx,
         storeById = bi,
         history = hi,
         reactQueue = rq,

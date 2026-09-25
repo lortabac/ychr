@@ -4,6 +4,7 @@
 -- right-inverses of the parser.
 module YCHR.RoundtripTest (tests) where
 
+import Data.IntMap.Strict qualified as IntMap
 import Data.List (intercalate)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -259,7 +260,18 @@ lookupHostCall name = case Map.lookup name baseHostCallRegistry of
 
 runChrEmpty :: Chr a -> IO a
 runChrEmpty action = do
-  env <- initSessionEnv [] [] [] Map.empty Map.empty Map.empty Map.empty Map.empty Set.empty
+  env <-
+    initSessionEnv
+      []
+      []
+      []
+      IntMap.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Set.empty
   runChr action env
 
 prop_compoundToListRoundtrip :: Property

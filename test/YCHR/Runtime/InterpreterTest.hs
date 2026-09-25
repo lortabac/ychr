@@ -5,6 +5,7 @@ module YCHR.Runtime.InterpreterTest (tests) where
 import Control.Exception (try)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (toList)
+import Data.IntMap.Strict qualified as IntMap
 import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -53,7 +54,18 @@ tests =
 -- give them a place to live.
 runChrEmpty :: Chr a -> IO a
 runChrEmpty action = do
-  env <- initSessionEnv [] [] [] Map.empty Map.empty Map.empty Map.empty Map.empty Set.empty
+  env <-
+    initSessionEnv
+      []
+      []
+      []
+      IntMap.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Set.empty
   runChr action env
 
 -- | Like 'runChrEmpty' but with the base host-call registry available.
@@ -64,6 +76,7 @@ runChrBase action = do
       []
       []
       []
+      IntMap.empty
       Map.empty
       baseHostCallRegistry
       Map.empty
@@ -80,6 +93,7 @@ runChrLeq action = do
       [Types.Unqualified "leq"]
       []
       []
+      IntMap.empty
       leqProcMap
       Map.empty
       Map.empty

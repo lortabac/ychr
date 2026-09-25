@@ -67,6 +67,8 @@ import Data.IORef
     writeIORef,
   )
 import Data.IntMap.Strict qualified as IntMap
+import Data.IntSet (IntSet)
+import Data.IntSet qualified as IntSet
 import Data.List qualified as List
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -85,6 +87,7 @@ import YCHR.Internal.Runtime.Error
     runtimeErrorS,
   )
 import YCHR.Internal.Runtime.History (addHistory, notInHistory)
+import YCHR.Internal.Runtime.Index (GroundKey, indexablePositions)
 import YCHR.Internal.Runtime.Monad
   ( Chr,
     HostCallFn (..),
@@ -102,11 +105,13 @@ import YCHR.Internal.Runtime.Registry
 import YCHR.Internal.Runtime.Store
   ( Suspension (..),
     aliveConstraint,
+    candidateSuspensions,
     createConstraint,
     getConstraintArg,
     getConstraintType,
     getStoreSnapshot,
     idEqual,
+    indexedPositionsFor,
     isConstraintType,
     isSuspAlive,
     killConstraint,
@@ -120,6 +125,7 @@ import YCHR.Internal.Runtime.Var
   ( deref,
     equal,
     getArg,
+    groundKey,
     makeTerm,
     matchTerm,
     newVar,
@@ -198,6 +204,7 @@ interpret prog hostCalls entryName args = do
       prog.typeNames
       prog.ruleNames
       prog.inertTypes
+      (indexablePositions prog)
       procMap
       hostCalls
       evaluableMap
@@ -563,8 +570,7 @@ execStmt (If cond thenBranch elseBranch) = do
   b <- evalBoolExpr cond
   if b then execStmts thenBranch else execStmts elseBranch
 execStmt (Foreach lbl cType suspVar conditions body) = do
-  snapshot <- liftChr (getStoreSnapshot cType)
-  let susps = toList snapshot
+  susps <- foreachCandidates cType conditions
   execForeach lbl suspVar conditions body susps
 execStmt (Continue lbl) = pure (SCont lbl)
 execStmt (Break lbl) = pure (SBrk lbl)
@@ -633,6 +639,79 @@ execStmt (PushFrame frame) = do
 -- ---------------------------------------------------------------------------
 -- Foreach implementation
 -- ---------------------------------------------------------------------------
+
+-- | The candidate suspension list for a 'Foreach' loop.
+--
+-- The default is the whole type bucket, which is what this was before
+-- the store grew indexes. When one of the loop's index conditions can
+-- drive a store index, the list narrows to what that condition could
+-- select: the bucket for the condition's value plus the position's
+-- non-ground fallback set. See "YCHR.Internal.Runtime.Index" for why
+-- the narrowed list is still a superset of the matches; 'driverKey'
+-- holds the two guards that keep the narrowing invisible to a
+-- program's behaviour.
+foreachCandidates :: ConstraintType -> [(ArgIndex, ValExpr)] -> InterpM [Suspension]
+foreachCandidates cType conditions = do
+  mIndexed <- liftChr (indexedPositionsFor cType)
+  case mIndexed of
+    Nothing -> liftChr (toList <$> getStoreSnapshot cType)
+    Just indexed -> do
+      mDriver <- driverKey indexed conditions
+      case mDriver of
+        Nothing -> liftChr (toList <$> getStoreSnapshot cType)
+        Just (pos, key) -> liftChr (candidateSuspensions cType pos key)
+
+-- | The first index condition that can drive the store index, as its
+-- argument position together with the ground key of the condition's
+-- value.
+--
+-- Two guards make the narrowing both sound and unobservable. The
+-- condition's value must be /non-raising/ by construction
+-- ('nonRaising'), so moving its evaluation to loop entry cannot fail
+-- where evaluating it per candidate would have succeeded — today a loop
+-- with no candidates evaluates no condition at all. And the value must
+-- dereference to a fully ground term, because only a ground value's key
+-- is stable for the loop's duration. Anything else — including a
+-- compound term holding an unbound variable — falls through to the
+-- unindexed path, which evaluates the condition per candidate exactly
+-- as before.
+driverKey :: IntSet -> [(ArgIndex, ValExpr)] -> InterpM (Maybe (Int, GroundKey))
+driverKey _ [] = pure Nothing
+driverKey indexed ((ArgIndex pos, expr) : rest)
+  | nonRaising expr,
+    IntSet.member pos indexed = do
+      value <- evalValExpr expr
+      mkey <- liftChr (groundKey value)
+      case mkey of
+        Just key -> pure (Just (pos, key))
+        Nothing -> driverKey indexed rest
+  | otherwise = driverKey indexed rest
+
+-- | Whether evaluating an expression is total.
+--
+-- A store index is consulted once, before the loop body runs, so a
+-- condition it drives must not be able to raise: an index-driven lookup
+-- that evaluated one eagerly could turn a working query into an
+-- instantiation error where the old code, having no candidate to check,
+-- never evaluated it. The constructors below are what the compiler
+-- emits for a guard's expected value — a head variable, a literal, or a
+-- compound built from them. Everything else (a host call, a user
+-- function, @is@, a field or term accessor) is left to the per-candidate
+-- check.
+--
+-- The set is deliberately narrow, and it is the compiler's business to
+-- keep it so: 'classifyEqual' only lifts the operands of a @GuardEqual@
+-- that HNF produced, which are a head variable or a literal, so a
+-- condition this accepts is a variable read or a term construction and
+-- nothing else. A future compiler that lifted an allocating or
+-- effectful expression here would make the loop-entry evaluation pay
+-- something the per-candidate one only paid when a candidate existed.
+nonRaising :: ValExpr -> Bool
+nonRaising (Var _) = True
+nonRaising (Lit _) = True
+nonRaising NewVar = True
+nonRaising (MakeTerm _ args) = all nonRaising args
+nonRaising _ = False
 
 -- | Iterate the body of a 'Foreach' over a snapshot of candidate
 -- suspensions. Dead suspensions and suspensions failing the index

@@ -43,6 +43,8 @@ import Control.Monad (unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask)
 import Data.IORef (readIORef, writeIORef)
+import Data.IntMap.Strict (IntMap)
+import Data.IntSet (IntSet)
 import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -86,6 +88,11 @@ data SessionInput = SessionInput
     -- session run against one compiled program shares the table
     -- instead of paying for it per query.
     procIndex :: Map Name Procedure,
+    -- | The argument positions 'program' looks up through an index
+    -- condition, taken from the 'CompiledProgram' for the same reason:
+    -- deriving them walks every procedure of the program, prelude
+    -- included, and a session is created per goal.
+    indexPositions :: IntMap IntSet,
     exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
     exportedSet :: Set Types.QualifiedIdentifier
   }
@@ -97,6 +104,7 @@ toSessionInput cp =
   SessionInput
     { program = cp.program,
       procIndex = cp.procIndex,
+      indexPositions = cp.indexPositions,
       exportMap = cp.exportMap,
       exportedSet = cp.exportedSet
     }
@@ -133,6 +141,7 @@ withCHRExtra si hc extraProcs extraCallables action = do
       si.program.typeNames
       si.program.ruleNames
       si.program.inertTypes
+      si.indexPositions
       procMap
       hc
       evaluableMap

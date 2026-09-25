@@ -215,20 +215,19 @@ The VM uses plain procedure calls (`CallExpr`) and does not include trampoline o
 
 Indexing is delegated entirely to the runtime. The VM's `Foreach` specifies a constraint type and a set of argument conditions, and the runtime is responsible for finding matching constraints. This keeps the compiler simple and avoids baking indexing strategies into the VM.
 
-The initial implementation uses a simple data structure:
-
-```
-HashMap<ConstraintType, Array<Suspension>>
-```
-
-The complete constraint store is a hash map whose keys are constraint type names and whose values are arrays of suspensions. Each suspension contains:
+The store is a map from constraint type to an append-only sequence of suspensions. Each suspension contains:
 
 - `type`: the constraint type name
 - `id`: a unique constraint identifier
 - `args`: an array of argument values
 - `alive`: a boolean flag
+- `stored`: a boolean flag (Late Storage makes `Store` idempotent)
 
-`Foreach` linearly scans the array for the given type, skipping dead entries and checking the index conditions with `Equal` semantics. This is O(n) per lookup; smarter indexing (hash- or tree-based) can be added later as a runtime change without affecting the VM or compiler. See `src/YCHR/Internal/Runtime/Store.hs` for the exact layout and iterator semantics.
+A `Foreach` whose conditions name a position the program indexes is answered from that index instead of a scan (`YCHR.Internal.Runtime.Index`); everything else — including a `Foreach` with no conditions, and a condition whose value is not fully ground — linearly scans the type's sequence, skipping dead entries and checking each condition with `Equal` semantics. The index is built from the program by `indexablePositions` (`YCHR.Internal.VM.Index`), which reads off exactly the `(constraint type, argument position)` pairs some `Foreach` condition refers to, so a program with no such conditions pays nothing. That set is carried on `CompiledProgram`/`SessionInput` as a lazily computed field, since the walk covers every procedure of the program — prelude included — and a session is created per goal.
+
+A suspension is filed under a ground key only when the indexed argument was fully ground when it was stored; every other one goes into that position's non-ground fallback set, which every lookup for that position scans. The resulting candidate list is therefore a *superset* of the matches, in store order, and the per-candidate condition check remains the decision procedure — see "YCHR.Internal.Runtime.Index" for why that is the safe direction. The index is a persistent structure restored by the same search snapshot as the store it describes.
+
+Indexing is on demand, so a store that is too small to profit pays nothing. A type is not indexed until its bucket reaches `indexThreshold`, at which point the existing bucket is filed in one pass; a lookup for a type that is not indexed yet is the scan it was before. Two fallbacks keep the index a win-or-neutral change: an unindexed type, and a candidate set that would not be smaller than the whole bucket. See `src/YCHR/Internal/Runtime/Store.hs` for the exact layout and iterator semantics.
 
 
 ## Compilation Scheme
@@ -286,7 +285,7 @@ The paper describes numerous optimizations. Each should be considered individual
 | Optimization | Description | Stage |
 |-------------|-------------|-------|
 | Loop-Invariant Code Motion | Schedule guard tests as early as possible to avoid trashing. | CHR-to-VM compiler |
-| Indexing | Use hash/tree indexes for efficient partner lookup. | Runtime (via Foreach index conditions) |
+| Indexing | Use hash/tree indexes for efficient partner lookup. **Implemented**: the Haskell runtime records a per-argument index for every position a `Foreach` condition names (derived from the program), and answers such a lookup from a key bucket plus the position's non-ground fallback set. See `YCHR.Internal.Runtime.Index`. The Scheme runtime still scans. | Runtime (via Foreach index conditions) |
 | Join Ordering | Reorder partner lookups to maximize index usage. | CHR-to-VM compiler |
 | Set Semantics | Replace iteration with single lookup when at most one match exists. | CHR-to-VM compiler (may need VM support) |
 | Early Drop | Stop handling active constraint once killed. | CHR-to-VM compiler |

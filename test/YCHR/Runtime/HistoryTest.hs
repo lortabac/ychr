@@ -3,6 +3,7 @@
 module YCHR.Runtime.HistoryTest (tests) where
 
 import Control.Monad.IO.Class (liftIO)
+import Data.IntMap.Strict qualified as IntMap
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
@@ -23,7 +24,18 @@ tests =
 
 runHistoryEnv :: Chr a -> IO a
 runHistoryEnv action = do
-  env <- initSessionEnv [] [] [] Map.empty Map.empty Map.empty Map.empty Map.empty Set.empty
+  env <-
+    initSessionEnv
+      []
+      []
+      []
+      IntMap.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Set.empty
   runChr action env
 
 addTests :: TestTree

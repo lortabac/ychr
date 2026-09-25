@@ -109,6 +109,7 @@ import YCHR.Internal.Runtime.Goal
     goalConstraints,
     listElems,
   )
+import YCHR.Internal.Runtime.Index (StoreIndex)
 import YCHR.Internal.Runtime.Interpreter
   ( applyClosure,
     emitTrace,
@@ -203,11 +204,15 @@ hostFail _ = runtimeErrorS "fail: expected 0 arguments"
 -- Snapshots
 -- ---------------------------------------------------------------------------
 
--- | The four session references a branch may change and whose undo is
--- a pointer write, captured at a choice point.
+-- | The session references a branch may change and whose undo is a
+-- pointer write, captured at a choice point. The store index is in here
+-- with the store it describes: both are persistent structures, and
+-- restoring one without the other would leave the iterator answering
+-- from entries the restored store no longer has.
 data StoreSnapshot = StoreSnapshot
   { byType :: !(IntMap (Seq Suspension)),
     byId :: !(IntMap Suspension),
+    indexes :: !StoreIndex,
     history :: !(Set (RuleId, [SuspensionId])),
     queue :: !(Seq SuspensionId)
   }
@@ -219,6 +224,7 @@ takeStoreSnapshot = do
     StoreSnapshot
       <$> readIORef env.storeByType
       <*> readIORef env.storeById
+      <*> readIORef env.storeIndex
       <*> readIORef env.history
       <*> readIORef env.reactQueue
 
@@ -228,6 +234,7 @@ restoreStoreSnapshot snap = do
   liftIO $ do
     writeIORef env.storeByType snap.byType
     writeIORef env.storeById snap.byId
+    writeIORef env.storeIndex snap.indexes
     writeIORef env.history snap.history
     writeIORef env.reactQueue snap.queue
 
@@ -292,12 +299,12 @@ data SolutionStep
 -- sequences are append-only, and 'restoreStoreSnapshot' only ever puts
 -- back a prefix of the current one, so an index names the same
 -- suspension for as long as the driver holds it.
-newtype StoreIndex = StoreIndex Int
+newtype StoreSlot = StoreSlot Int
   deriving (Show, Eq, Ord)
 
 -- | The index one past a given one, where a subtree's scan begins.
-afterIndex :: StoreIndex -> StoreIndex
-afterIndex (StoreIndex i) = StoreIndex (i + 1)
+afterIndex :: StoreSlot -> StoreSlot
+afterIndex (StoreSlot i) = StoreSlot (i + 1)
 
 -- | A choice point read out of the store: the @alt\/1@ suspension, its
 -- position in that type's store sequence, and the alternative goals it
@@ -307,7 +314,7 @@ data Choice = Choice
     -- | Where 'findChoice' found it. Everything at a lower index is
     -- dead, which is what lets the subtree below this choice skip
     -- them; see 'findChoice'.
-    index :: !StoreIndex,
+    index :: !StoreSlot,
     goals :: ![Value]
   }
 
@@ -320,7 +327,7 @@ data Choice = Choice
 -- reports and a nesting caller propagates, so the reason a trace shows
 -- is the one that actually happened at the bottom rather than a
 -- summary invented on the way up.
-searchFrom :: SearchCtx -> StoreIndex -> Chr AltOutcome
+searchFrom :: SearchCtx -> StoreSlot -> Chr AltOutcome
 searchFrom ctx cursor =
   findChoice ctx cursor >>= \case
     Nothing -> do
@@ -428,8 +435,8 @@ withoutFailure act = do
 --
 -- A nested search forks a fresh store, so its sequence is its own and
 -- so is its driver's cursor.
-findChoice :: SearchCtx -> StoreIndex -> Chr (Maybe Choice)
-findChoice ctx cursor@(StoreIndex from) = case ctx.altType of
+findChoice :: SearchCtx -> StoreSlot -> Chr (Maybe Choice)
+findChoice ctx cursor@(StoreSlot from) = case ctx.altType of
   Nothing -> pure Nothing
   Just ct -> do
     susps <- getStoreSnapshot ct
@@ -445,7 +452,7 @@ findChoice ctx cursor@(StoreIndex from) = case ctx.altType of
 -- | Read @alt(Goals)@. An argument that is not a proper list is a
 -- runtime error, not a failure: it is a malformed choice point rather
 -- than a dead end.
-readChoice :: SuspensionId -> StoreIndex -> Value -> Chr Choice
+readChoice :: SuspensionId -> StoreSlot -> Value -> Chr Choice
 readChoice sid idx goalsVal =
   listElems goalsVal >>= \case
     Just goals ->
@@ -509,7 +516,7 @@ driveSearch who goals onSolution = do
         emitTrace (pure (TESearchEnter label))
         outcome <- withoutFailure $ do
           mapM_ (uncurry tellResolvedConstraint) goals
-          searchFrom ctx (StoreIndex 0)
+          searchFrom ctx (StoreSlot 0)
         let exit = case outcome of
               AltDone StopKeeping -> SearchCommitted
               AltDone StopUndoing -> SearchStopped

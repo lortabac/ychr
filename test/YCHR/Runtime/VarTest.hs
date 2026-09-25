@@ -3,6 +3,7 @@
 module YCHR.Runtime.VarTest (tests) where
 
 import Control.Monad.IO.Class (liftIO)
+import Data.IntMap.Strict qualified as IntMap
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
@@ -41,7 +42,18 @@ tests =
 
 runVarEnv :: Chr a -> IO a
 runVarEnv action = do
-  env <- initSessionEnv [] [] [] Map.empty Map.empty Map.empty Map.empty Map.empty Set.empty
+  env <-
+    initSessionEnv
+      []
+      []
+      []
+      IntMap.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Set.empty
   runChr action env
 
 -- | Run an action and also return the observers gathered by the final 'unify'.

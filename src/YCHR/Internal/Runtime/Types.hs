@@ -100,10 +100,11 @@ data Suspension = Suspension
 -- it. Replaying an entry restores that value.
 --
 -- The trail covers exactly the mutable cells that a snapshot of the
--- session's 'Data.IORef.IORef's cannot reach. The store, the
--- propagation history and the reactivation queue all hold persistent
--- structures behind a single reference, so "undo" for them is a
--- pointer write ("YCHR.Internal.Runtime.Search"). Variable cells and
+-- session's 'Data.IORef.IORef's cannot reach. The store, its
+-- per-argument indexes, the propagation history and the reactivation
+-- queue all hold persistent structures behind a single reference, so
+-- "undo" for them is a pointer write
+-- ("YCHR.Internal.Runtime.Search"). Variable cells and
 -- suspension flags are individual references reachable only by
 -- walking, and are shared across session forks besides, so they need
 -- a log.

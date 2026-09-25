@@ -2,6 +2,7 @@
 
 module YCHR.MetaTest (tests) where
 
+import Data.IntMap.Strict qualified as IntMap
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -42,6 +43,7 @@ runChrBase action = do
       []
       []
       []
+      IntMap.empty
       Map.empty
       baseHostCallRegistry
       Map.empty

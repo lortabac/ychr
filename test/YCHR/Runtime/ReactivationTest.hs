@@ -4,6 +4,7 @@ module YCHR.Runtime.ReactivationTest (tests) where
 
 import Control.Monad.IO.Class (liftIO)
 import Data.IORef
+import Data.IntMap.Strict qualified as IntMap
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
@@ -26,7 +27,18 @@ tests =
 
 runReactEnv :: Chr a -> IO a
 runReactEnv action = do
-  env <- initSessionEnv [] [] [] Map.empty Map.empty Map.empty Map.empty Map.empty Set.empty
+  env <-
+    initSessionEnv
+      []
+      []
+      []
+      IntMap.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Map.empty
+      Set.empty
   runChr action env
 
 -- | A session with one constraint-type slot, so 'createConstraint' has
@@ -40,6 +52,7 @@ runReactStoreEnv action = do
       [Unqualified ""]
       []
       []
+      IntMap.empty
       Map.empty
       Map.empty
       Map.empty

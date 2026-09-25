@@ -1,0 +1,43 @@
+% The Indexing optimization's ground-key fallback.
+%
+% `step` looks up its `q` partner by the repeated head variable X, which
+% the compiler lifts into an index condition on q's first argument — the
+% store index's business. That index is built on demand, from the store
+% that takes the type's bucket to `indexThreshold` (16) constraints, so
+% each goal tells fifteen padding `q/2`s before the `q` it is about: one
+% less than the threshold, which is exactly enough for the target `q` to
+% be the store that crosses it. Keep the count in step with that
+% constant, or these goals go back to exercising the plain scan. As a
+% correctness guard that is all this directory can be: the index may
+% narrow a lookup but never change its answer, so the expected binding is
+% the same either way.
+%
+% The two goals differ only in the target `q`'s first argument:
+%
+%   * `run` stores `q(X, 1)` while X is still unbound, so the suspension
+%     lands in the position's non-ground fallback set rather than a key
+%     bucket — and binding X afterwards does not move it. The lookup in
+%     `step` must still reach it, or the rule would not fire and
+%     `done/1` would never be told.
+%
+%   * `sample` stores `q(2, 2)` ground, so its key bucket answers the
+%     lookup.
+:- module(index_ground_fallback, [run/1, sample/1]).
+
+:- chr_constraint p/1, q/2, done/1, rd/1, run/1, sample/1.
+
+step @ p(X), q(X, Y) ==> done(Y).
+
+done(Y), rd(R) <=> R = Y.
+
+run(R) <=>
+    q(101, 0), q(102, 0), q(103, 0), q(104, 0), q(105, 0),
+    q(106, 0), q(107, 0), q(108, 0), q(109, 0), q(110, 0),
+    q(111, 0), q(112, 0), q(113, 0), q(114, 0), q(115, 0),
+    q(X, 1), X = 1, p(1), rd(R).
+
+sample(R) <=>
+    q(101, 0), q(102, 0), q(103, 0), q(104, 0), q(105, 0),
+    q(106, 0), q(107, 0), q(108, 0), q(109, 0), q(110, 0),
+    q(111, 0), q(112, 0), q(113, 0), q(114, 0), q(115, 0),
+    q(2, 2), p(2), rd(R).

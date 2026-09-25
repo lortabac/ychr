@@ -267,7 +267,7 @@ Each of these crashes if the documented runtime invariant is violated.
 A stronger type or a checked smart constructor would turn the runtime
 panic into a compile-time error.
 
-### `getArg` operand and bounds — `src/YCHR/Internal/Runtime/Var.hs:359-360`
+### `getArg` operand and bounds — `src/YCHR/Internal/Runtime/Var.hs:358-359`
 
 ```haskell
 | otherwise -> error $ "getArg: index " ++ show idx ++ " out of bounds"
@@ -278,7 +278,7 @@ _ -> error "getArg: not a compound term"
 guarantee both, but neither is enforced. A typed term-projection API
 keyed on a verified `(VTerm functor arity)` handle would close it.
 
-### `lookupSusp` — `src/YCHR/Internal/Runtime/Store.hs:61`
+### `lookupSusp` — `src/YCHR/Internal/Runtime/Store.hs:66`
 
 ```haskell
 Nothing -> error $ "lookupSusp: unknown SuspensionId " ++ show sid
@@ -290,7 +290,7 @@ invariant violation, not a user-facing failure" — exactly the case for
 a typed handle (e.g. an opaque newtype that can only be created by the
 allocation API).
 
-### `getConstraintArg` bounds — `src/YCHR/Internal/Runtime/Store.hs:140`
+### `getConstraintArg` bounds — `src/YCHR/Internal/Runtime/Store.hs:214`
 
 ```haskell
 else error $ "getConstraintArg: index " ++ show idx ++ " out of bounds"
@@ -326,7 +326,7 @@ exhaustive:
 
 | Site                                                     | Kind                                        |
 |----------------------------------------------------------|---------------------------------------------|
-| `src/YCHR/Internal/Runtime/Interpreter.hs:496` (`activateSuspensionId`) | leading-id shape check |
+| `src/YCHR/Internal/Runtime/Interpreter.hs:516` (`activateSuspensionId`) | leading-id shape check |
 | `src/YCHR/Run.hs:548` (`executeBodyGoal`, `BodyOr`)       | query disjunction should have been rejected (YCHR-30006) |
 | `src/YCHR/Internal/Compile.hs:1122` (`compileBodyGoal`, `BodyOr`) | `lowerDisjunctions` should have run first |
 | `src/YCHR/Internal/Desugar.hs:987` (`ruleModName`)        | non-empty head                             |
@@ -340,7 +340,7 @@ each pass asserts it was already lowered. A phase index on
 `Desugared.BodyGoal` (or a post-lowering type without `BodyOr`) would
 discharge both. The `Meta.hs` sites are the mildest — `invokeHostCall`
 wraps the host function in `try @SomeException`
-(`Interpreter.hs:872`), so they surface as an ordinary runtime error
+(`Interpreter.hs:951`), so they surface as an ordinary runtime error
 rather than a process abort; they are nonetheless `error` rather than
 `runtimeErrorS` for a difficulty that is really just arity.
 
@@ -388,14 +388,14 @@ this entry framed it as "a `Bound` value can carry a stale observer
 list". That is **not representable**: `Bound !Value` has no list slot,
 so the data shape already rules out the stated hazard. What remains is
 a control-flow obligation — `unify'` must go through the observer
-emit/transfer path (`Var.hs:159-192`) and not blind-write
+emit/transfer path (`Var.hs:162-195`) and not blind-write
 `Bound` — and the suggested constructor-hiding accessor module would
 not encode it either: hiding the constructors centralizes the write
 but still permits `writeVarState var (Bound v)` with `obs`
 discarded.
 
 The real defence is already in place and structural: `withUnboundVar`
-(`Var.hs:120-130`) means every reader of the cell that needs its
+(`Var.hs:123-133`) means every reader of the cell that needs its
 contents goes through a continuation that is *given* the observers,
 so there is no arm in which they can be silently dropped. Treat this
 entry as narrowed to "the drain/transfer discipline is a `Var.hs`
@@ -449,9 +449,9 @@ each slot with `fromInteger` with no range check
 into a huge positive. The boundary needs an explicit
 `parseNonNegative`/`Maybe` and an `Err` on failure; the type change is
 the prerequisite that forces it to be written, not the check itself.
-Two further wrinkles: `sargs !! idx` (`Store.hs:139,189`) takes `Int`,
+Two further wrinkles: `sargs !! idx` (`Store.hs:218,323`) takes `Int`,
 so `suspArg`/`getConstraintArg` need a `Word -> Int` conversion, and
-`matchTerm` compares against `length args` (`Var.hs:342-348`).
+`matchTerm` compares against `length args` (`Var.hs:341-347`).
 
 ### Import-placement checking fails open on a missing `trailingLoc` key — `src/YCHR/Internal/Rename.hs:274`, `:532`
 
@@ -522,7 +522,7 @@ through named helpers (`check_constraint_use`, `check_function_use`,
 Two distinct `ty`-like types — one for each side — would make an
 emitter's call total, at the cost of a conversion at every helper.
 
-### Reactivation observer list is LIFO — `src/YCHR/Internal/Runtime/Var.hs:377`
+### Reactivation observer list is LIFO — `src/YCHR/Internal/Runtime/Var.hs:376`
 
 ```haskell
 (\vid obs -> writeVarState var (Unbound vid (oid : obs)))
@@ -693,7 +693,7 @@ that they agree.
 Every `CallExpr` name (`tell_<c>/<n>`, `activate_<c>/<n>`,
 `occurrence_<c>_<n>_<j>`, `func_<…>`,
 `reactivate_dispatch`) must exist in the generated `procMap`. The
-interpreter (`Interpreter.hs:397`) errors at runtime if any name is
+interpreter (`Interpreter.hs:422`) errors at runtime if any name is
 missing. There is no whole-program closure check.
 
 Every name in the program's *callables* table must likewise exist in the
@@ -721,7 +721,7 @@ rather than an error. A typed dispatch table (parameterised by the
 
 ### `tell_<c>/N` must exist for every constraint a query can ask for
 
-`Session.tellConstraint` (`src/YCHR/Internal/Runtime/Session.hs:206-212`)
+`Session.tellConstraint` (`src/YCHR/Internal/Runtime/Session.hs:223-229`)
 resolves a name and arity through the export map and calls
 `tellProcName resolved arity`. The compiler must have generated
 exactly that procedure. `tellConstraint` does check the procedure map
@@ -741,7 +741,53 @@ that dropped the end-of-activate `Store` would leave a live
 constraint invisible to `Foreach` and unobserved by reactivation,
 silently.
 
-### Session construction — `src/YCHR/Internal/Runtime/Session.hs:121-135`
+### Store index agrees with the store it describes — `src/YCHR/Internal/Runtime/Store.hs`
+
+The store's per-argument indexes (`YCHR.Internal.Runtime.Index`, the
+paper's *Indexing* optimization, fed by
+`YCHR.Internal.VM.Index.indexablePositions`) are a /narrowing/ of what
+`Foreach` would otherwise scan, so four couplings are load-bearing and
+none is encoded:
+
+- **Every append to `storeByType` records its index entries, and only
+  `storeConstraint` appends.** `candidateSuspensions` answers from the
+  index whenever it has one for the type — its fallback is the *whole
+  bucket*, never an empty answer from an index that was not built — so
+  a path that appended without recording would make a stored suspension
+  *invisible* to every indexed lookup. Today the only `Seq.|>` on a type
+  bucket is in `storeConstraint`, and the index is written there, on the
+  same first-store branch as the `stored` flag.
+- **The index is consulted only for a `(type, position)` pair
+  `indexablePositions` reports.** A position the store was never told
+  to index has no entries, so asking for it would answer `IntSet.empty`
+  — every candidate lost — rather than the scan it deserves. The
+  interpreter asks `indexedPositionsFor`, which answers for exactly the
+  positions a *currently indexed* type has.
+- **The index is restored by the same snapshot as the store.**
+  `StoreSnapshot` carries both, and `forkSearchSessionEnv` starts both
+  empty; restoring one without the other would leave the iterator
+  answering from slots the restored store does not have (or missing
+  entries for the suspensions it does have). Both are persistent values
+  behind one `IORef` each, so the undo stays a pointer write and the
+  undo trail never sees them.
+- **A type is indexed from the store that crosses `indexThreshold`, and
+  that store files the whole bucket.** On-demand indexing means a type
+  can be unindexed while it already holds suspensions, so the crossing
+  store must file them from the bucket rather than from a
+  per-store record it does not have — and a lookup whose type is not
+  indexed (`typeIndexed` is false) must scan, not read the empty index.
+  Getting the first wrong leaves every suspension stored below the
+  threshold unfindable; getting the second wrong loses every candidate.
+
+What is *deliberately* not trimmed: a kill leaves the index entry in
+place (the iterator's liveness check filters it, exactly as it does for
+a scan), and a suspension whose indexed argument was not fully ground
+when it was stored stays in the fallback set for good even after that
+argument is bound. Both cost memory, never correctness, and both keep
+the index append-only — which is what makes it cheap enough to be worth
+having.
+
+### Session construction — `src/YCHR/Internal/Runtime/Session.hs:122-151`
 
 This entry described a layered effect stack (`runCHR` building
 Unify → CHRStore → PropHistory → ReactQueue → Writer → CallStack →

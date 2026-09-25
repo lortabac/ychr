@@ -2,6 +2,75 @@
 
 ## Unreleased
 
+The Haskell runtime now implements the paper's *Indexing* optimization
+(§5.3). The compiler was already emitting the `Foreach` index conditions
+its guard equalities imply — `leq(X, Y), leq(Y, Z) ==> leq(X, Z)` iterates
+`leq` with `arg 1 == X`, and so on — but the runtime answered each of them
+by scanning the whole type bucket. It now keeps a per-argument index for
+exactly the `(constraint type, argument position)` pairs some `Foreach`
+condition names, derived from the program by the new
+`YCHR.Internal.VM.Index.indexablePositions`, and answers such a lookup
+from a key bucket plus the position's non-ground fallback set.
+
+The index may only narrow the iterator, never lose a candidate: the
+per-candidate condition check (`checkConditions`) is still the decision
+procedure. A suspension is filed under a ground key only when the indexed
+argument was fully ground when it was stored — a suspension stored with an
+unbound argument goes to the fallback set, which every lookup for that
+position scans — and candidate lists stay in store order, so rule-firing
+order is unchanged. Key equality is deliberately never finer than
+ask-equality (`equal`), which is why `-0.0` and `0.0` share a key and
+every NaN shares one. A lookup whose condition value is not fully ground
+at loop entry, or whose expression could raise, falls back to today's
+scan, unchanged: an index cannot hold a key that a later binding would
+move.
+
+Indexing is also on demand, so the change is win-or-neutral rather than a
+small tax on small stores. A type is not indexed until its bucket reaches
+`YCHR.Internal.Runtime.Index.indexThreshold`, at which point the whole
+existing bucket is filed in one pass; a lookup for a type that is not
+indexed yet, or whose candidate set would not be smaller than the bucket,
+is exactly the scan it was before. Two store-side costs made this
+necessary on the benchmark suite rather than merely prudent: an entry is
+filed per store whether or not anything looks it up — the cost that fell
+on `graph_test`, +13% with the index from the first store — and deriving
+the lookup key per loop entry is wasted when the type has no index.
+
+Measured on this machine by interleaving the benchmark binary against one
+built from the parent commit, three rounds a side (the same setup
+`dev-docs/PROJECT.md` describes; run-to-run spread is a few percent):
+`leq_closure`, the store-heavy transitive closure whose `leq` bucket
+reaches the hundreds, falls from a 38.2 ms median (39.1, 38.2, 37.3 ms) to
+19.0 ms (18.9, 19.0, 19.1 ms) — **−50%**. Everything else moves within the
+spread: `typecheck/pairs_library` 387.0 ms → 387.0 ms (its type arguments
+are mostly not ground when stored, so the index has little to prune),
+`graph_test` 125.2 → 127.1 µs, `leq` 7.19 → 7.04 µs, `fib` 1.135 → 1.135 ms,
+`sum_list_test` 36.4 → 34.3 µs, and the four search benchmarks by 0–3%.
+
+No change to the emitted VM, its serialization or its format version: the
+index is a runtime-only implementation of the `Foreach` interface, and
+`docs/reference/vm.md` is untouched. The compiler does change in one
+respect — see the `CompiledProgram` field below — but only by exposing a
+derived fact about the program it was already producing. The Scheme
+runtime keeps scanning, as it does for
+`inert-types`. New modules `YCHR.Internal.Runtime.Index` (the keys and the
+index state) and `YCHR.Internal.VM.Index` (which positions a program looks
+up through an index condition, over the IR, so the compiler can compute
+it); `YCHR.Internal.Runtime.Store` gains `indexedPositionsFor` and
+`candidateSuspensions`, and `YCHR.Internal.Runtime.Var` gains `groundKey`
+and `addObserverAndKey` (one traversal per stored argument now registers
+the observers *and* computes an indexed argument's key). `SessionEnv` gains
+`storeIndex` and `indexPositions`, `initSessionEnv` takes the indexable
+positions next to the inert types, `StoreSnapshot` carries the index so a
+search restores it with the store, and
+`YCHR.Internal.Runtime.Search`'s private `StoreIndex` newtype — a store
+slot — is renamed `StoreSlot` to free the name. `CompiledProgram` and
+`SessionInput` gain a lazily computed `indexPositions` field, for the same
+reason `procIndex` is there: deriving the set walks every procedure of the
+program, prelude included, and a session is created per goal, so
+recomputing it per session costs a short goal several percent. See
+[the design notes](dev-docs/PROJECT.md#constraint-store-implementation).
+
 Breaking: the serialized VM program now carries a VM format version.
 `serialize` writes `(version 1)` as the first child of `vm-program`, and
 `deserialize` accepts only that version: a unit declaring any other

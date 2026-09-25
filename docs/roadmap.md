@@ -72,6 +72,10 @@ what is planned.
 
 - [x] Logical variables with unification
 - [x] Constraint store
+- [x] Per-argument store indexes for `Foreach` index conditions —
+      the paper's *Indexing* optimization, built on demand per
+      constraint type; see
+      [PROJECT.md](../dev-docs/PROJECT.md#constraint-store-implementation)
 - [x] Propagation history
 - [x] Reactivation queue
 - [x] Store introspection capabilities

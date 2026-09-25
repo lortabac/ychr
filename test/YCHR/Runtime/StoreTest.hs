@@ -5,6 +5,7 @@ module YCHR.Runtime.StoreTest (tests) where
 import Control.Exception (SomeException, evaluate, try)
 import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (toList)
+import Data.IntMap.Strict qualified as IntMap
 import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -37,6 +38,7 @@ runStoreEnv action = do
       (replicate 100 (Unqualified ""))
       []
       []
+      IntMap.empty
       Map.empty
       Map.empty
       Map.empty
@@ -60,6 +62,7 @@ runInertStoreEnv action = do
       (replicate 100 (Unqualified ""))
       []
       [ConstraintType 1]
+      IntMap.empty
       Map.empty
       Map.empty
       Map.empty

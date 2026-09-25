@@ -21,6 +21,8 @@ where
 
 import Control.Exception (Exception)
 import Data.Bifunctor (first)
+import Data.IntMap.Strict (IntMap)
+import Data.IntSet (IntSet)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -78,6 +80,7 @@ import YCHR.Internal.Types (SymbolTable)
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Procedure (..), Program (..), StackFrame)
 import YCHR.Internal.VM qualified as VM
+import YCHR.Internal.VM.Index (indexablePositions)
 
 -- | Anything that can stop a program from compiling or running, tagged by
 -- the phase that rejected it.
@@ -195,6 +198,15 @@ data CompiledProgram = CompiledProgram
     -- The field is lazy, so compile-only users ('ychr check', the
     -- Scheme backend) never build it.
     procIndex :: Map VM.Name Procedure,
+    -- | The @(constraint type, argument position)@ pairs the program
+    -- looks up through a 'Foreach' index condition
+    -- ('YCHR.Internal.VM.Index.indexablePositions'), which is what the
+    -- runtime's per-argument store indexes are built for. Carried here
+    -- for the same reason as 'procIndex', and lazy for the same reason:
+    -- the walk covers every procedure of the program, prelude included,
+    -- so rebuilding it per session is visible on a short goal, while
+    -- compile-only users never need it.
+    indexPositions :: IntMap IntSet,
     exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
     exportedSet :: Set Types.QualifiedIdentifier,
     symbolTable :: SymbolTable,
@@ -432,6 +444,7 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
     ( CompiledProgram
         { program = prog,
           procIndex = Map.fromList [(p.name, p) | p <- prog.procedures],
+          indexPositions = indexablePositions prog,
           exportMap = exportMap,
           exportedSet = exportedSet,
           symbolTable = symTab,
