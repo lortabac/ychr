@@ -21,12 +21,16 @@
 --
 -- == Ownership
 --
--- The phase is interpreter-specific and lives in the runtime namespace
--- for that reason. The code-generation backends do not want it: they
--- emit a target-language binder per local (@let@ in Scheme, and the same
--- shape in JavaScript), where the target's own lexical addressing
--- already does what a slot does, and where the emitted identifier has to
--- be a name anyway. A future interpreter in another host language would
+-- The phase is owned by the Haskell interpreter and lives in the
+-- interpreter's namespace ('YCHR.Internal.Interpreter') for that reason:
+-- it is neither runtime machinery — it imports no monad, no @IORef@ and
+-- no IO, and knows nothing about a session, a store or a trail — nor
+-- part of the target-independent VM IR that "YCHR.Internal.VM" holds,
+-- because the code-generation backends do not want it. They emit a
+-- target-language binder per local (@let@ in Scheme, and the same shape
+-- in JavaScript), where the target's own lexical addressing already does
+-- what a slot does, and where the emitted identifier has to be a name
+-- anyway. A future interpreter in another host language would
 -- reimplement the idea in that host rather than reuse this AST.
 --
 -- Two properties are what keep a second consumer cheap if one ever
@@ -82,7 +86,7 @@
 -- slot while the other arm wrote a different one. A hand-built 'Program'
 -- that bound one name in both arms and read it afterwards would observe
 -- the difference; this is pinned by a case in
--- @test/YCHR/Runtime/SlotsTest.hs@.
+-- @test/YCHR/Interpreter/SlotsTest.hs@.
 --
 -- The walk is deliberately total rather than failing on a name it cannot
 -- place. A reference or an assignment to a name with no binder in scope
@@ -92,7 +96,7 @@
 -- recoverable error into a Haskell 'error'. (An assignment does bind its
 -- slot — the interpreter's @insertVal@ inserts — so what it lacks is a
 -- prior value, not a place to put one.)
-module YCHR.Internal.Runtime.Slots
+module YCHR.Internal.Interpreter.Slots
   ( -- * The phase
     Slot,
     SlotProgram (..),

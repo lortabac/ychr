@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Tests for the interpreter's slot phase
--- ("YCHR.Internal.Runtime.Slots").
+-- ("YCHR.Internal.Interpreter.Slots").
 --
 -- The properties under test are the ones the interpreter's environment
 -- depends on: parameters take the first slots in order, every other
@@ -11,12 +11,12 @@
 -- is not in scope lowers to a slot nothing binds, so the runtime still
 -- reports its own "unbound variable" error rather than the phase
 -- failing.
-module YCHR.Runtime.SlotsTest (tests) where
+module YCHR.Interpreter.SlotsTest (tests) where
 
 import Data.Map.Strict qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
-import YCHR.Internal.Runtime.Slots
+import YCHR.Internal.Interpreter.Slots
 import YCHR.Internal.Types (ConstraintType (..), RuleId (..))
 import YCHR.Internal.VM
   ( ArgIndex (..),
@@ -36,7 +36,7 @@ import YCHR.Internal.VM
 tests :: TestTree
 tests =
   testGroup
-    "YCHR.Internal.Runtime.Slots"
+    "YCHR.Internal.Interpreter.Slots"
     [ slotTests,
       scopeTests,
       totalityTests,

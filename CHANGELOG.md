@@ -3,7 +3,7 @@
 ## Unreleased
 
 The Haskell interpreter no longer runs the VM AST. It runs a second,
-interpreter-owned AST — the new `YCHR.Internal.Runtime.Slots` — in which
+interpreter-owned AST — the new `YCHR.Internal.Interpreter.Slots` — in which
 every local variable is a per-procedure integer slot, and its local
 environment is an `IntMap` keyed by that slot instead of a `Map` keyed by
 `Name`. The VM identifies a local by name because that is what the code

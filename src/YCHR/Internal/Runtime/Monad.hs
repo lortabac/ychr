@@ -47,8 +47,8 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import YCHR.Internal.Compile.Pipeline (ExportResolution)
+import YCHR.Internal.Interpreter.Slots (SlotProc)
 import YCHR.Internal.Runtime.Index (StoreIndex, emptyStoreIndex)
-import YCHR.Internal.Runtime.Slots (SlotProc)
 import YCHR.Internal.Runtime.Trace (TraceHandler)
 import YCHR.Internal.Runtime.Types
   ( Suspension,
@@ -66,8 +66,8 @@ import YCHR.Internal.VM qualified as VM
 type CallStack = [StackFrame]
 
 -- | Map from procedure name to its definition in the interpreter's slot
--- phase ("YCHR.Internal.Runtime.Slots"). Query-time procedures are
--- lowered with 'YCHR.Internal.Runtime.Slots.lowerProcedure' before being
+-- phase ("YCHR.Internal.Interpreter.Slots"). Query-time procedures are
+-- lowered with 'YCHR.Internal.Interpreter.Slots.lowerProcedure' before being
 -- merged in, so every entry is in the same phase as the compiled ones.
 type ProcMap = Map VM.Name SlotProc
 

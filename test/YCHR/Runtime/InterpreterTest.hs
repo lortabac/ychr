@@ -13,6 +13,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import YCHR.Internal.Interpreter.Slots (SlotProc, SlotProgram (..), lowerProgram)
 import YCHR.Internal.Loc (dummyLoc)
 import YCHR.Internal.Runtime.Error (RuntimeErrorKind (..), RuntimeErrorThrown (..))
 import YCHR.Internal.Runtime.Interpreter
@@ -24,7 +25,6 @@ import YCHR.Internal.Runtime.Interpreter
     interpret,
   )
 import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
-import YCHR.Internal.Runtime.Slots (SlotProc, SlotProgram (..), lowerProgram)
 import YCHR.Internal.Runtime.Store (getStoreSnapshot, isSuspAlive)
 import YCHR.Internal.Runtime.Types (CallVal (..), SuspensionId (..), Value (..))
 import YCHR.Internal.Runtime.Var (equal, newVar, unify)

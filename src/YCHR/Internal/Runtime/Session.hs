@@ -54,6 +54,7 @@ import Data.Text qualified as T
 import YCHR.Internal.Compile (tellProcName)
 import YCHR.Internal.Compile.Names (reactivateDispatchName)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), ExportResolution (..))
+import YCHR.Internal.Interpreter.Slots (SlotProgram (..), lowerProcedure)
 import YCHR.Internal.Runtime.Error (runtimeErrorS)
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallRegistry,
@@ -70,7 +71,6 @@ import YCHR.Internal.Runtime.Monad
     runChr,
   )
 import YCHR.Internal.Runtime.Reactivation (drainQueue)
-import YCHR.Internal.Runtime.Slots (SlotProgram (..), lowerProcedure)
 import YCHR.Internal.Runtime.Store (aliveConstraint)
 import YCHR.Internal.Runtime.Trace (TraceEvent (..), TraceHandler)
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..))

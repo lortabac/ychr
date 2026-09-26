@@ -420,7 +420,7 @@ text order.
 
 The interpreter no longer runs the VM AST. It runs a second,
 interpreter-owned AST in which every local variable is a per-procedure
-integer slot (`YCHR.Internal.Runtime.Slots`), and its environment is
+integer slot (`YCHR.Internal.Interpreter.Slots`), and its environment is
 `Env { envValues :: IntMap Value, envIds :: IntMap SuspensionId }`
 keyed by that slot rather than by `Name`. The phase is derived once per
 compiled program, lazily, and carried on `CompiledProgram.slotProgram`;
@@ -436,15 +436,21 @@ addressing already does what a slot does and where the emitted
 identifier has to be a name anyway; the planned JavaScript backend is a
 code generator too, and PROJECT.md's list of what "each backend ships a
 runtime" for deliberately excludes local-variable representation. So
-the VM stays the compiler-to-runtime interface and the phase stays in
-the interpreter's namespace — but it is derived at compile time all the
-same, the way `indexPositions` is, because a session is created per goal and the compiled type-checker is 901 procedures: a
-per-session lowering would rewrite 856 KB of VM before a short goal had
-done any work. The cost of that ownership is the one compiler-to-runtime
-import edge in the tree (`Compile.Pipeline` imports
-`Runtime.Slots`); the phase module is a leaf — data types and total
-pure functions over the VM types, with no monad, `IORef` or IO — so the
-edge carries no runtime machinery, and if a second consumer ever
+the VM stays the compiler-to-runtime interface and the phase lives in
+the interpreter's namespace (`YCHR.Internal.Interpreter.Slots`) — but it
+is derived at compile time all the same, the way `indexPositions` is,
+because a session is created per goal and the compiled type-checker is
+901 procedures: a per-session lowering would rewrite 856 KB of VM before
+a short goal had done any work. It is a pure static phase, not runtime
+machinery, and it is interpreter-specific, so neither `Runtime` (the
+dynamic layer: monad, session, store, variables, trail, the interpreter
+loop) nor `VM` (the target-independent IR: types, serialization,
+`Index`) is its home. The move leaves one compiler-to-interpreter import
+edge (`Compile.Pipeline` imports `Interpreter.Slots`), which was the
+compiler layer's only import of `Runtime`, so the compiler now reaches
+no runtime machinery at all; the phase module is a leaf — data types and
+total pure functions over the VM types, with no monad, `IORef` or IO —
+so the edge carries no runtime machinery, and if a second consumer ever
 appears the module lifts to a shared namespace with a rename.
 
 The phase is total and structure-preserving: every VM `Stmt`,

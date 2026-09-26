@@ -74,6 +74,17 @@ import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
+import YCHR.Internal.Interpreter.Slots
+  ( Slot,
+    SlotBoolExpr (..),
+    SlotCallArg (..),
+    SlotIdExpr (..),
+    SlotProc (..),
+    SlotProgram (..),
+    SlotStmt (..),
+    SlotValExpr (..),
+    lowerProgram,
+  )
 import YCHR.Internal.Meta (valueToTerm)
 import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error
@@ -101,17 +112,6 @@ import YCHR.Internal.Runtime.Registry
   ( baseHostCallRegistry,
     isVar,
     unit,
-  )
-import YCHR.Internal.Runtime.Slots
-  ( Slot,
-    SlotBoolExpr (..),
-    SlotCallArg (..),
-    SlotIdExpr (..),
-    SlotProc (..),
-    SlotProgram (..),
-    SlotStmt (..),
-    SlotValExpr (..),
-    lowerProgram,
   )
 import YCHR.Internal.Runtime.Store
   ( Suspension (..),
@@ -153,7 +153,7 @@ import YCHR.Internal.VM
 -- | Local variable environment for a procedure call. Split by kind:
 -- value-bound slots live in 'envValues', id-bound slots in 'envIds'.
 -- The VM IR guarantees a local is bound in only one of the two, and the
--- slot phase ("YCHR.Internal.Runtime.Slots") numbers both kinds from one
+-- slot phase ("YCHR.Internal.Interpreter.Slots") numbers both kinds from one
 -- per-procedure counter, so the two maps are keyed by the same space.
 data Env = Env
   { envValues :: !(IntMap Value),
@@ -539,7 +539,7 @@ activateSuspensionId _ = error "activateSuspensionId: expected leading id argume
 -- | Bind procedure arguments into the environment slot they were
 -- declared at, based on the runtime tag of each argument. Parameters
 -- occupy slots @0 .. arity - 1@ in declaration order
--- ("YCHR.Internal.Runtime.Slots"), so this is a single walk of the
+-- ("YCHR.Internal.Interpreter.Slots"), so this is a single walk of the
 -- argument list with no name lookup and no rebalancing. The count is
 -- the callee's, since the slot phase carries an arity rather than a
 -- parameter-name list.

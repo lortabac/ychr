@@ -805,11 +805,11 @@ silently reverses that. Nothing but the argument order says which side
 wins. Extras are lowered with `lowerProcedure` before the merge, so
 every entry in the map is in the same phase as the compiled ones.
 
-### The interpreter's slot phase mirrors the VM AST — `src/YCHR/Internal/Runtime/Slots.hs`
+### The interpreter's slot phase mirrors the VM AST — `src/YCHR/Internal/Interpreter/Slots.hs`
 
 The Haskell interpreter does not run the VM AST. It runs a second,
 interpreter-owned AST in which every local variable is a per-procedure
-integer slot (`YCHR.Internal.Runtime.Slots`), produced once at
+integer slot (`YCHR.Internal.Interpreter.Slots`), produced once at
 compilation and carried on `CompiledProgram.slotProgram`. Two
 invariants make that duplication safe, and neither is encoded in a
 type:
@@ -820,7 +820,7 @@ type:
   slots. A VM constructor added without its counterpart makes the
   lowering's pattern matches non-exhaustive, which is a compile error
   under `-Wall -Werror`; that is the mechanism that keeps the phase
-  from going silently stale. `test/YCHR/Runtime/SlotsTest.hs` pins the
+  from going silently stale. `test/YCHR/Interpreter/SlotsTest.hs` pins the
   slot numbering the interpreter depends on.
 - **A slot is read from the map its kind binds it in, and a name the
   phase never saw in scope lowers to a slot nothing binds.** Slots are
@@ -862,7 +862,7 @@ walk:
   to the else arm's slot, so a then-arm execution would leave it unbound
   where the flat map succeeded.
 
-The second is pinned by a case in `test/YCHR/Runtime/SlotsTest.hs`, so a
+The second is pinned by a case in `test/YCHR/Interpreter/SlotsTest.hs`, so a
 change to the reading has to be deliberate.
 
 ### Scheme runtime ABI

@@ -45,6 +45,7 @@ import YCHR.Internal.Desugar.Disjunction (lowerDisjunctions)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic)
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning, checkExhaustiveness)
+import YCHR.Internal.Interpreter.Slots (SlotProgram, lowerProgram)
 import YCHR.Internal.PExpr (PExpr)
 import YCHR.Internal.Parsed (AnnP (..), Import (..), Module (..), OpDecl, SourceLoc, noAnnP)
 import YCHR.Internal.Parser
@@ -74,7 +75,6 @@ import YCHR.Internal.Resolve
     buildQueryFunctionVisibility,
     resolveProgram,
   )
-import YCHR.Internal.Runtime.Slots (SlotProgram, lowerProgram)
 import YCHR.Internal.StdLib (StdLib (..))
 import YCHR.Internal.TypeCheck.Error (TypeCheckError, TypeCheckWarning)
 import YCHR.Internal.Types (SymbolTable)
@@ -190,7 +190,7 @@ data Warning
 data CompiledProgram = CompiledProgram
   { program :: Program,
     -- | 'program' in the Haskell interpreter's slot phase
-    -- ('YCHR.Internal.Runtime.Slots'): the same procedures with every
+    -- ('YCHR.Internal.Interpreter.Slots'): the same procedures with every
     -- local variable resolved to a per-procedure integer slot, which is
     -- the lookup table the interpreter runs against. Carried here for
     -- the same reason as 'queryRenameEnv': building it per session
