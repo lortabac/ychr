@@ -307,12 +307,18 @@ The paper describes numerous optimizations. Each should be considered individual
 
 The optimizations in the table above come from the paper and live at the
 algorithmic level. The four items below come from profiling the Haskell
-interpreter itself and are implementation-level. The first was
-implemented, measured and discarded: what it removes does not show up in
-the benchmarks, and it costs a second AST for the interpreter to
-maintain. The other three are unimplemented. All four are recorded here,
-with the evidence that motivates them and the measurements that settled
-the first, so that whoever picks them up does not have to re-derive it.
+interpreter itself and are implementation-level. Three of them have been
+settled by measurement. The first was implemented and discarded — what
+it removes does not show up in the benchmarks, and it costs a second AST
+for the interpreter to maintain. The second was implemented and kept.
+The fourth's first change was implemented and discarded too: it is
+slower than the code it replaces, by about 5% on the one benchmark that
+exercises it, because the profile that motivated it was built with
+`-fprof-auto`, which stops the `length` and `!!` it removes from
+inlining; its second change was not attempted. The third is the only one
+still unimplemented. All four are recorded here, with the evidence that
+motivates them and the measurements that settled the others, so that
+whoever picks them up does not have to re-derive it.
 
 The measurements are from the workload used to profile the interpreter
 here — the CHR type checker running over its own sources:
@@ -512,7 +518,7 @@ and driver, which
 resolve by name today; and the index space has to stay open, because
 query-time lambdas are added to the procedure map at run time.
 
-**4. One traversal, not two, in the argument-access primitives.**
+**4. One traversal, not two, in the argument-access primitives. — first change tried and discarded.**
 
 `getArg` (`src/YCHR/Internal/Runtime/Var.hs`), and `getConstraintArg`
 and `suspArg` (`src/YCHR/Internal/Runtime/Store.hs`), each check
@@ -524,31 +530,57 @@ applications, all of them in those three functions (`getArg` 3.29 M
 calls, `suspArg` 1.11 M, `getConstraintArg` 335 K), and 40.7 M
 `$wlenAcc` steps in total, of which about 23 M come from those three
 plus `matchTerm` (3.64 M calls) and the rest from `bindParams`' arity
-check (item 2). Together they are about 2.1% of the time, and none of
-that work is necessary.
+check (the check item 4's first change tried to fuse). Together they are
+about 2.1% of the time, and none of that work is necessary.
 
-Two independent changes: index in one pass (walk the spine once, or
-store a term's and a suspension's arguments in an `Array`/`Vector`,
-which turns the arity check into a field read); and fuse `BMatchTerm`
-with the `GetArg` that usually follows it in compiled output, so the
-value is dereferenced once and the argument list walked once.
-`deepEvalValue` and `applyClosure` take `length args` for the same
-reason and can share the fix.
+Its first proposed change — index in one pass — was implemented and
+does not pay off. The accessors became one walk of the spine, returning
+the element itself (no `Maybe`, no closure on the success path, the
+out-of-range case raising the same named error), and `bindParams` fused
+its arity check with the binding and dropped the `zip [0 ..] args` the
+old `foldl'` consumed. On `make bench` the code it replaces is faster,
+not slower. `sum_list_test` is the benchmark that shows it — its library
+function matches on list spines, so it is the one that spends its time
+in these two spots — and with the `bindParams` change alone the original
+is consistently **~5% quicker** over six alternating rounds a side
+against a worktree at the parent commit: per-round criterion medians of
+11.3–11.8 µs against 11.8–12.2 µs, each side's own min-to-max span under
+3.6% and the two sets not interleaving. Each half regresses on its own
+(the accessors by ~6%, `bindParams` by ~4.9%), and
+`typecheck/pairs_library` is flat either way. The absolute times are not
+comparable with item 2's for the same benchmark — those came from an
+earlier session and a differently configured build.
 
-The relative sizes say what order to take these in. Item 1 is out — see
-its entry above — which leaves item 2 as the way to stop looking local
-variables up by text. It is also the better one: it removes the arity
-check, the `zip` and the per-statement insert rather than only the
-comparisons, so it stands for the whole ~15% spent maintaining the
-environment. Item 3 applies the index treatment to the procedure and
-host-call tables and to the keys behind `is` and `'$call'`; item 4 is
-local and independent of the rest.
+The cause is the first caution above, applied to the profile itself:
+`-fprof-auto` puts a cost centre on `length` and `!!`, which stops them
+inlining, so the report charges the interpreter for list work the
+shipping `-O1` build does not do — two short walks become one tight loop
+once `length` and `!!` inline, and `foldl'` over `zip [0 ..]` is a shape
+GHC fuses into a counted loop with no intermediate list. The 2.1% share
+is a property of the profiled build, and a hand-written walk gives the
+optimizer less to work with than the library functions it replaces.
+The second change — fusing `BMatchTerm` with the `GetArg` that usually
+follows it in compiled output, so the value is dereferenced once and the
+argument list walked once — was not attempted. It changes the compiler's
+output rather than the runtime's helpers, but the measurement above is a
+reason to expect little from it, and the same holds for the
+`deepEvalValue` and `applyClosure` `length args` this item wanted to
+fold in.
 
 The same profile lists three smaller candidates that are not scheduled
 here: the `try` wrapped around every host call (`invokeHostCall`,
 1.83 M calls), `execForeach`'s `toList` of a store snapshot on every
 loop entry, and the per-statement allocation in `execStmts`/`execStmt`
 (11.4% and 6.4% of allocation).
+
+That leaves item 3, the one item still unimplemented. The evidence the
+other three accumulated is worth carrying to it, because the relative
+shares in the profile have not predicted the benchmarks: item 1 removed
+every `Text` comparison and moved nothing, item 2 removed the local
+environment and moved everything, and item 4's first change removed two
+list walks and moved backwards. Item 3 is item 1's remaining scope — the
+procedure and host-call tables and the keys behind `is` and `'$call'` —
+so the experiment that settled item 1 is already evidence about it.
 
 Judge any of this with `make bench` and re-profile as described above.
 The relevant benchmark is `typecheck/pairs_library`, which drives the
@@ -848,7 +880,7 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
 
 The following components have not yet been implemented:
 
-- **Optimizations**: Implement the optimizations listed above, at the appropriate stage. The profiling-driven interpreter items under "Haskell Interpreter Performance" are separate from the paper's catalogue and are also still open.
+- **Optimizations**: Implement the optimizations listed above, at the appropriate stage. Of the profiling-driven interpreter items under "Haskell Interpreter Performance", item 2 was kept while items 1 and 4 were tried and discarded on measurement; item 3 is the only one still open, and its evidence base is item 1's experiment.
 - **JavaScript backend**: Translate VM programs to JavaScript code.
 - **JavaScript runtime**: Implement logical variables, compound terms, constraint store, propagation history, reactivation queue, and iterators in JavaScript.
 - **Testing**: Test suite covering individual components and end-to-end execution of standard CHR programs (leq, Fibonacci, Dijkstra, RAM simulator, etc.).
