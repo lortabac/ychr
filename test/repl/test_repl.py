@@ -6,6 +6,7 @@ few drive other modes and check stderr. To add a new test, append a
 """
 
 import os
+import re
 import subprocess
 
 import pytest
@@ -454,3 +455,53 @@ def test_repl_history_unavailable_degrades(ychr_bin, tmp_path):
     assert writable.stderr == ""
     assert "R = 2." in writable.stdout
     assert (data / "ychr" / "history").exists()
+
+
+def test_repl_time(ychr_bin):
+    """`:time` prints the query's execution time before the bindings.
+    The value is nondeterministic, so only its shape is asserted: the
+    literal label and unit, six decimals, microseconds resolution. The
+    bare form prints a usage line, like `:trace`."""
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet"],
+        input=":time R is 1 + 2.\n:time\n",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    assert re.fullmatch(
+        r"Time: \d+\.\d{6}s\n"
+        r"R = 3\.\n"
+        r":time GOAL  -- run GOAL and print its execution time in seconds\n",
+        result.stdout,
+    ), result.stdout
+
+
+def test_repl_time_failure(ychr_bin):
+    """The timing line's placement relative to failures. A runtime
+    error follows the timing line, because execution started and was
+    measured; a query rejected during preparation (here an unknown
+    predicate, YCHR-30001) prints no timing line, because nothing was
+    executed."""
+    runtime = subprocess.run(
+        [ychr_bin, "repl", "--quiet"],
+        input=":time 1 = 2.\n",
+        capture_output=True,
+        text=True,
+    )
+    assert runtime.returncode == 0, f"repl failed:\n{runtime.stdout}\n{runtime.stderr}"
+    assert re.fullmatch(
+        r"Time: \d+\.\d{6}s\n"
+        + re.escape(runtime_error("unification failure: cannot unify 1 with 2")),
+        runtime.stdout,
+    ), runtime.stdout
+
+    prep = subprocess.run(
+        [ychr_bin, "repl", "--quiet"],
+        input=":time no_such_constraint.\n",
+        capture_output=True,
+        text=True,
+    )
+    assert prep.returncode == 0, f"repl failed:\n{prep.stdout}\n{prep.stderr}"
+    assert "YCHR-30001" in prep.stdout, prep.stdout
+    assert "Time:" not in prep.stdout, prep.stdout

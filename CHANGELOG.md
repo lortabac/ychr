@@ -651,6 +651,15 @@ Stdlib additions, both implemented on both backends:
   limited to the two numeric types is corrected accordingly. See
   [`libraries/prelude.chr`](libraries/prelude.chr).
 
+New: the REPL gains a `:time GOAL` meta-command. It runs `GOAL` like any
+other one-shot query but prints `Time: <seconds>s` (CPU time, microsecond
+resolution) before the bindings. The number covers query execution,
+including the fresh session a one-shot query builds, and not the query's
+parsing and type-checking, so a query rejected before execution prints no
+timing line; a runtime error prints the timing line first. It is
+available at the outer prompt only, not inside a live session. See the
+[REPL reference](docs/reference/repl.md#time).
+
 Library API:
 
 - `YCHR.Run` gains `resolveQueryGoals` and the `ResolvedQuery` record

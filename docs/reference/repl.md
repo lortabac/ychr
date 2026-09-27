@@ -68,6 +68,7 @@ the loaded modules, plus the meta-commands at the outer prompt (only
 | `:list_operators` | | List defined operators, one `op/3` term per line. |
 | `:info NAME` | `:i NAME` | Show information about an identifier (see below). |
 | `:trace GOAL` | | Run `GOAL` with refined-operational-semantics tracing (see below). |
+| `:time GOAL` | | Run `GOAL` and print its execution time in seconds, then the bindings (see below). |
 | `:begin` | | Enter a live CHR session. End with `:end`. |
 | `:end` | | Leave the current live session. The session's store is discarded. |
 | `:quit` | `:q` | Exit the REPL. |
@@ -178,6 +179,29 @@ Events:
 | `unify L = R (K constraints reactivated)` | A tell-side unification succeeded, enqueueing `K` constraints for reactivation. |
 | `call F(...)` / `return V` | A user-defined function or lambda was called and returned. |
 | `host call F(...) = V` | A host primitive was called. |
+
+### `:time`
+
+`:time GOAL` runs `GOAL` like an ordinary one-shot query, but prints
+its execution time before the result:
+
+```ychr-repl
+ychr> :time R is 1 + 2.
+Time: 0.000038s
+R = 3.
+```
+
+The number is CPU time in seconds with microsecond resolution (six
+decimals). It covers query execution — including the fresh session a
+one-shot query builds — and not preparation: parsing, renaming,
+resolution, desugaring, lambda-lifting and type-checking of the query
+itself are all excluded. A query rejected before execution (a parse,
+rename, resolution or desugar error, a type error, a `--Werror`
+warning) prints no timing line, because nothing ran; a query that fails
+at run time prints the timing line before the diagnostic — after
+whatever the query itself printed. Available at the outer prompt only:
+inside a live session `:time GOAL` is not a meta-command and is read as
+a query.
 
 ## One-shot queries
 

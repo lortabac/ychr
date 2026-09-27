@@ -31,6 +31,8 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Numeric (showFFloat)
+import System.CPUTime (getCPUTime)
 import System.Exit (exitFailure)
 import System.IO (hPutStr, hPutStrLn, stderr, stdout)
 import YCHR.Internal.Collected (CollectedModule (..))
@@ -188,6 +190,7 @@ outerLoop stdlib mtypeChecker hostCalls quietMode werror files outerInput liveIn
       ":info" -> showInfoUsage *> go prog
       ":i" -> showInfoUsage *> go prog
       ":trace" -> showTraceUsage *> go prog
+      ":time" -> showTimeUsage *> go prog
       ":begin" -> do
         runLiveSession mtypeChecker hostCalls liveInput quietMode werror prog
         go prog
@@ -197,6 +200,8 @@ outerLoop stdlib mtypeChecker hostCalls quietMode werror files outerInput liveIn
         | Just rest <- stripPrefix ":i " line -> showInfo prog rest *> go prog
         | Just rest <- stripPrefix ":trace " line ->
             runTracedQuery mtypeChecker hostCalls werror prog rest *> go prog
+        | Just rest <- stripPrefix ":time " line ->
+            runTimedOuterQuery mtypeChecker hostCalls werror prog rest *> go prog
         | otherwise -> runOuterQuery mtypeChecker hostCalls werror prog line *> go prog
     recompile prog = do
       result <- compileFiles stdlib True files
@@ -228,7 +233,33 @@ runOuterQuery ::
   CompiledProgram ->
   String ->
   IO ()
-runOuterQuery mtypeChecker hostCalls werror prog line = do
+runOuterQuery = runOuterQueryWith False
+
+-- | Like 'runOuterQuery', but as @:time@: print the query's execution
+-- time — 'formatElapsed' of the CPU time spent running it — before its
+-- result. The span covers execution, including the fresh session a
+-- one-shot query builds, and excludes preparation (parse, rename,
+-- resolve, desugar, type-check), so a query rejected before execution
+-- prints no timing line. A runtime error still prints one, since
+-- execution started.
+runTimedOuterQuery ::
+  Maybe SessionInput ->
+  HostCallRegistry ->
+  Bool ->
+  CompiledProgram ->
+  String ->
+  IO ()
+runTimedOuterQuery = runOuterQueryWith True
+
+runOuterQueryWith ::
+  Bool ->
+  Maybe SessionInput ->
+  HostCallRegistry ->
+  Bool ->
+  CompiledProgram ->
+  String ->
+  IO ()
+runOuterQueryWith timed mtypeChecker hostCalls werror prog line = do
   prepResult <-
     try @SomeException $
       prepareQueryWith mtypeChecker prog (T.pack line)
@@ -237,6 +268,7 @@ runOuterQuery mtypeChecker hostCalls werror prog line = do
     Right (prep, ws) -> do
       printWarnings ws
       unless (werror && not (null ws)) $ do
+        start <- getCPUTime
         execResult <-
           try @SomeException $
             withCHRExtra
@@ -245,6 +277,8 @@ runOuterQuery mtypeChecker hostCalls werror prog line = do
               prep.extraProcs
               prep.extraCallables
               (executePreparedQuery prep.liftedGoals)
+        end <- getCPUTime
+        when timed (putStrLn (formatElapsed (end - start)))
         case execResult of
           Left exc -> reportException exc
           Right bindings -> putStr (prettyQueryResult bindings)
@@ -252,6 +286,15 @@ runOuterQuery mtypeChecker hostCalls werror prog line = do
     reportException exc = case fromException exc of
       Just err -> putStr (displayMsg (err :: Error))
       Nothing -> putStrLn ("Error: " ++ displayException exc)
+
+-- | Render an elapsed CPU time, in picoseconds, as seconds with
+-- microsecond resolution: @0.000123s@. Six decimals is the resolution
+-- the REPL reports; a platform whose clock is finer has the extra
+-- digits rounded away rather than shown.
+formatElapsed :: Integer -> String
+formatElapsed ps = "Time: " ++ showFFloat (Just 6) seconds "s"
+  where
+    seconds = fromIntegral ps / 1e12 :: Double
 
 -- | Run a one-off query in the outer REPL with refined-operational-
 -- semantics tracing enabled. Output is the trace stream only —
@@ -289,6 +332,10 @@ runTracedQuery mtypeChecker hostCalls werror prog line = do
 showTraceUsage :: IO ()
 showTraceUsage =
   putStrLn ":trace GOAL  -- run GOAL with refined-operational-semantics tracing"
+
+showTimeUsage :: IO ()
+showTimeUsage =
+  putStrLn ":time GOAL  -- run GOAL and print its execution time in seconds"
 
 -- ---------------------------------------------------------------------------
 -- Live REPL session
@@ -430,6 +477,7 @@ commands =
     Command [":list_operators"] "List defined operators",
     Command [":info", ":i"] "Show information about an identifier",
     Command [":trace"] "Run a goal with refined-operational-semantics tracing",
+    Command [":time"] "Run a goal and print its execution time",
     Command [":begin"] "Start a live CHR session (end with :end)",
     Command [":quit", ":q"] "Exit the REPL"
   ]
