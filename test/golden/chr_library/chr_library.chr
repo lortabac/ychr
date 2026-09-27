@@ -1,0 +1,12 @@
+% A module whose only use of the Prolog CHR import is the standard
+% `:- use_module(library(chr)).` line compiles and runs unchanged: the
+% bundled `chr` library is empty, so the import brings nothing into
+% scope and the program's own constraints supply everything it uses.
+
+:- module(chr_library, [go/1]).
+
+:- use_module(library(chr)).
+
+:- chr_constraint go/1.
+
+go(R) <=> R is 1 + 1.

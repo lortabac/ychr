@@ -101,10 +101,15 @@ current module imports `m` and `m` exports `name`. Unimported module:
 `:- use_module(M)` and `:- use_module(library(M))` are equivalent;
 there is no library search path. `:- use_module` directives come
 before everything else in the file (`YCHR-20007`). The bundled
-libraries `lists`, `maybe`, `pairs`, `strings`, `meta` and `search`
-([`libraries/`](../../libraries/)) need an explicit import outside the
-REPL. The prelude is always imported, in full; an import list on it is
-rejected (`YCHR-20019`).
+libraries `lists`, `maybe`, `pairs`, `strings`, `meta`, `search` and
+`chr` ([`libraries/`](../../libraries/)) need an explicit import
+outside the REPL. The prelude is always imported, in full; an import
+list on it is rejected (`YCHR-20019`).
+
+`chr` is an empty compatibility module: it declares and exports
+nothing. It exists so that a Prolog module carrying
+`:- use_module(library(chr)).` compiles unchanged, as long as the rest
+of the module is Prolog-compatible.
 
 Operators are declared with `op(Priority, Type, Name)` entries in an
 export or import list. There is no `:- op` directive.

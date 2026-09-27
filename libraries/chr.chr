@@ -1,0 +1,10 @@
+% Prolog compatibility shim. In Prolog, `library(chr)` is the runtime
+% that CHR programs are written against. In YCHR, CHR is the language
+% itself -- `chr_constraint`, `chr_type` and the rule syntax are built
+% in -- so this module is deliberately empty and exports nothing.
+%
+% It exists so that a Prolog module whose only YCHR-incompatible line is
+% `:- use_module(library(chr)).` compiles unchanged, as long as the rest
+% of the module is Prolog-compatible.
+
+:- module(chr, []).

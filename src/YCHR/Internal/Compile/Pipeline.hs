@@ -258,8 +258,8 @@ data ExportResolution
 -- (@embed\/YCHR\/Embedded.hs@) does exactly that.
 --
 -- The 'Bool' is @includeStdlib@: pass 'True' to make the bundled
--- libraries (@prelude@, @lists@, @pairs@, @maybe@, @strings@, @meta@)
--- available for
+-- libraries (@prelude@, @lists@, @pairs@, @maybe@, @strings@, @meta@,
+-- @search@, @chr@) available for
 -- @:- use_module(library(…))@, which is what you almost always want —
 -- the prelude supplies arithmetic and comparison. 'False' compiles
 -- against nothing but the given modules; the CLI uses it so that a

@@ -650,6 +650,12 @@ Stdlib additions, both implemented on both backends:
   on strings too; the prelude reference's claim that they were
   limited to the two numeric types is corrected accordingly. See
   [`libraries/prelude.chr`](libraries/prelude.chr).
+- `library(chr)` is a new bundled empty module: it declares and exports
+  nothing, because in YCHR CHR is the language itself, so Prolog's
+  `library(chr)` has no runtime to contribute. It exists so that a
+  Prolog module carrying `:- use_module(library(chr)).` compiles
+  unchanged, as long as the rest of the module is Prolog-compatible.
+  See [`libraries/chr.chr`](libraries/chr.chr).
 
 New: the REPL gains a `:time GOAL` meta-command. It runs `GOAL` like any
 other one-shot query but prints `Time: <seconds>s` (CPU time, microsecond

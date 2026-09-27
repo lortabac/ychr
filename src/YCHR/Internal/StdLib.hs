@@ -3,8 +3,9 @@
 -- | Standard library loading.
 --
 -- The @libraries\/@ directory ships a small set of @.chr@ files
--- (@prelude@, @lists@, @pairs@, @maybe@, @strings@, @meta@, @search@)
--- that every user program may import via @:- use_module(library(...))@.
+-- (@prelude@, @lists@, @pairs@, @maybe@, @strings@, @meta@, @search@,
+-- @chr@) that every user program may import via
+-- @:- use_module(library(...))@.
 -- 'parseStdLib' turns their sources into the 'StdLib' value the compiler
 -- takes as an explicit input. Where the sources come from is the
 -- caller's business: the @ychr@ executable embeds them at compile time
