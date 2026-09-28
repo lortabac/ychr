@@ -14,14 +14,14 @@
 -- instead. See @dev-docs\/MICROHS_GAPS.md@, gap 5.
 --
 -- 'addDependentFile' registers each embedded file with GHC's
--- recompilation tracking. In practice cabal's higher-level cache may
--- not consult those registrations, and it compares file /contents/
--- rather than modification times, so @touch@ing this module does
--- nothing: during development, edit this module (or @YCHR.Embedded@,
--- which holds the splice) for real, or run @cabal clean@. Adding or
--- removing a @typechecker@ module is the same problem one level up —
--- the directory listing itself is not a dependency, so nothing notices
--- a file that did not exist at the last splice.
+-- recompilation tracking, but the directory listing itself is not a
+-- dependency: a @typechecker@ module added since the last splice changes
+-- no file Cabal tracks, so nothing reruns and the module stays out of the
+-- binary until a @cabal clean@. (Contrast @YCHR.Embedded.StdLib@, which
+-- names its sources so that an addition is a tracked change.) Cabal
+-- compares file /contents/, not modification times, so @touch@ing this
+-- module does nothing: during development, edit this module (or
+-- @YCHR.Embedded@, which holds the splice) for real.
 module YCHR.Embedded.TypeCheck
   ( embeddedTypeCheckerSources,
   )

@@ -179,7 +179,18 @@ typeCheckerProgram =
 (The repository's own copies — one generator module per directory, plus
 [`embed/YCHR/Embedded.hs`](../../embed/YCHR/Embedded.hs) for the two
 splices — also register each file for recompilation with
-`addDependentFile`.)
+`addDependentFile`, and list the directories in `extra-source-files` so
+Cabal watches them.)
+
+Listing the directory is convenient but does not make Cabal notice a
+`.chr` file *added* after the last configure: Cabal expands the
+`extra-source-files` glob once, so a file that did not exist then is in
+neither the set it watches nor the set of dependent files GHC recorded,
+and the splice never reruns. The repository's standard-library embedder
+therefore names its sources explicitly
+([`embed/YCHR/Embedded/StdLib.hs`](../../embed/YCHR/Embedded/StdLib.hs)),
+which turns an addition into an ordinary source change. Do the same, or
+accept a `cabal clean` after adding a file.
 
 Declare `other-extensions: TemplateHaskell` in the `.cabal` stanza of the
 component that holds the splices. The `LANGUAGE` pragma is not enough:

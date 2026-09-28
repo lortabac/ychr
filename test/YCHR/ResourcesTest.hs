@@ -19,10 +19,10 @@
 -- different root (the @YCHR_LIB_DIR@ tests) can only be compared by
 -- library name, because the parsed module carries the path it came from.
 -- A content mismatch can also mean a stale Template Haskell embed rather
--- than a loader bug: cabal does not reliably rebuild the splice when a
--- @libraries\/*.chr@ file changes (see @embed\/YCHR\/Embedded\/StdLib.hs@),
--- so a failure here after editing a library source may need a
--- @cabal clean@.
+-- than a loader bug. The embedder names every library in
+-- @embed\/YCHR\/Embedded\/StdLib.hs@, so adding one is a source change
+-- and Cabal rebuilds the splice; a mismatch after a build that predates
+-- the change is a stale binary and needs a @cabal clean@.
 module YCHR.ResourcesTest (tests) where
 
 -- 'evaluate' forces the lazy type-checker binding; 'try' is not used here.
