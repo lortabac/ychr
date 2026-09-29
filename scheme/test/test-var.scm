@@ -4,10 +4,10 @@
         (ychr var))
 
 ;; Helper: create a fresh session (var counter starts at 0)
-;; Mirrors %make-session's empty dispatch tables so this low-level test
-;; doesn't depend on the runtime entry point.
+;; Mirrors %make-session's empty dispatch tables and empty store index so
+;; this low-level test doesn't depend on the runtime entry point.
 (define (fresh)
-  (make-session 0 (vector) 0 #f '() '()
+  (make-session 0 (vector) (vector) (vector) 0 #f '() '()
                 (make-hashtable equal-hash equal?)
                 (make-hashtable equal-hash equal?)))
 

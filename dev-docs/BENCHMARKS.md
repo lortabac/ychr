@@ -84,29 +84,37 @@ only, so no runtime list or atom has to be encoded into Scheme by hand.
 
 | case | goal | exercises | Guile ms | Chez ms |
 |------|------|-----------|----------|---------|
-| `session` | — | session creation | 0.09 | 0.01 |
-| `guard` | `guard:clamp(3,5,R)` | guards, arithmetic | 0.07 | 0.01 |
-| `graph` | `graph_test:run(R1,R2,R3)` | partner search, removal | 0.56 | 0.01 |
-| `fib` | `fib:fib(20,R)` | recursion, trail | 729 | 1.98 |
-| `leq_closure` | `leqc:run(20)` | store growth, history, reactivation | 256 | 2.07 |
-| `list_sum` | `bench_list:go(500,R)` | lists, `is` deep eval | 58 | 0.08 |
-| `maplist` | `bench_maplist:go(500,R)` | `'$call'` dispatch | 152 | 0.14 |
+| `session` | — | session creation | 0.05 | 0.01 |
+| `guard` | `guard:clamp(3,5,R)` | guards, arithmetic | 0.06 | 0.01 |
+| `graph` | `graph_test:run(R1,R2,R3)` | partner search, removal | 0.31 | 0.01 |
+| `fib` | `fib:fib(20,R)` | recursion, trail | 531 | 1.66 |
+| `leq_closure` | `leqc:run(20)` | store growth, history, reactivation, **store index** | 71 | 0.69 |
+| `list_sum` | `bench_list:go(500,R)` | lists, `is` deep eval | 46 | 0.08 |
+| `maplist` | `bench_maplist:go(500,R)` | `'$call'` dispatch | 97 | 0.13 |
 
 `session` is the cost every other case pays a *library-specific* part of: a
 library that registers many evaluables and callables costs more to open than
 `bench_fib` does, so subtracting this row from another case is only a rough
 indication.
 
-The medians are one default run on the development machine (Guile 3.0.9,
-Chez Scheme 10.3.0). They are machine- and implementation-specific and are
-**not** golden-tested; only the result checks are asserted, and every case has
-one: `session` must return a session, `guard` 5, `fib(20)` 6765, `list_sum`
-124750, `maplist` 41541750, `graph` the three expected `found`/`none` results,
-and `leq_closure` the 190 live `leq` constraints the 20-node closure must
-leave. A case that has silently stopped doing its work fails its check rather
-than posting a suspiciously good time. Case sizes are tuned for the slower
-implementation — the same size is reused on Chez, where the budget simply buys
-many more iterations.
+`leq_closure` is the case that exercises the store index: its `leq` bucket
+grows past `indexThreshold`, so its partner searches are answered from the
+index. It was ~200 ms (Guile) / 1.81 ms (Chez) before the Scheme runtime
+gained the index. `graph`'s buckets stay below the threshold, so it is the
+case that measures the *cost* of having the optimization available — one
+type-index check per `Foreach` execution, ≈20 µs here.
+
+The medians are the median of three default runs on the development machine
+(Guile 3.0.9, Chez Scheme 10.3.0), interleaved round by round against the
+build being compared where that mattered. They are machine- and
+implementation-specific and are **not** golden-tested; only the result checks
+are asserted, and every case has one: `session` must return a session,
+`guard` 5, `fib(20)` 6765, `list_sum` 124750, `maplist` 41541750, `graph` the
+three expected `found`/`none` results, and `leq_closure` the 190 live `leq`
+constraints the 20-node closure must leave. A case that has silently stopped
+doing its work fails its check rather than posting a suspiciously good time.
+Case sizes are tuned for the slower implementation — the same size is reused
+on Chez, where the budget simply buys many more iterations.
 
 ### Adding a case
 

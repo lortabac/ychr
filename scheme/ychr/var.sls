@@ -14,6 +14,8 @@
           match-term
           get-arg
           add-observer!
+          add-observer-and-key
+          ground-key
           get-var-id)
   (import (rnrs)
           (ychr session))
@@ -232,6 +234,85 @@
     (when (< i (vector-length args))
       (add-observer! suspension-id (vector-ref args i))
       (add-observer-args! suspension-id args (+ i 1))))
+
+  ;;; Ground keys
+  ;;;
+  ;;; The key of a constraint argument, for the store's per-argument
+  ;;; indexes (the paper's Indexing optimization; see store.sls). It
+  ;;; mirrors `groundKey`/`addObserverAndKey` in
+  ;;; src/YCHR/Internal/Runtime/Var.hs.
+  ;;;
+  ;;; A key is ordinary Scheme data, compared with `equal?` (which uses
+  ;;; `eqv?` on numbers, so an exact 1 and an inexact 1.0 stay
+  ;;; distinct, exactly as `equal?/chr` keeps them):
+  ;;;
+  ;;;   (num . n)       a number, with `number-key` normalization below
+  ;;;   (atom . s)      a symbol
+  ;;;   (text . s)      a string
+  ;;;   (bool . b)      a boolean
+  ;;;   (term f k ...)  a compound: functor plus one key per argument
+  ;;;
+  ;;; `#f` means "not ground": an unbound variable, a compound holding
+  ;;; one, or any value `equal?/chr` never equates with anything. Such
+  ;;; an argument goes to its position's non-ground fallback set, which
+  ;;; every lookup for that position scans, so the index may only ever
+  ;;; narrow a lookup to a superset of the matches. Key equality is
+  ;;; deliberately never finer than `equal?/chr`: `number-key` collapses
+  ;;; 0.0 and -0.0 (which `eqv?` distinguishes) and every NaN, which
+  ;;; only ever yields extra candidates for the per-candidate check to
+  ;;; reject.
+  (define (ground-key v) (value-key v #f))
+
+  ;;; One traversal with the two jobs an indexed constraint argument
+  ;;; needs: register `suspension-id` as an observer on every unbound
+  ;;; variable reachable from `v` — exactly what `add-observer!` does —
+  ;;; and return `v`'s ground key. They share a traversal because they
+  ;;; inspect the same term the same way; a store that indexes a
+  ;;; position would otherwise walk each of its arguments twice.
+  ;;;
+  ;;; Meeting an unbound variable does not stop the walk — the variables
+  ;;; behind it still need observing — it only discards the key, so the
+  ;;; whole argument is always visited. An observer id of `#f` (never a
+  ;;; valid suspension) means "compute the key only", which is what
+  ;;; `ground-key` and the store's on-demand backlog pass need.
+  (define (add-observer-and-key suspension-id v)
+    (value-key v suspension-id))
+
+  ;;; The normalized key payload of a number. The `flonum?` guard is what
+  ;;; makes the test total: `nan?` raises on a non-real complex, which
+  ;;; `equal?/chr` would have compared with `eqv?` quite happily, so an
+  ;;; unguarded test could make a store that used to work raise once its
+  ;;; type crossed the index threshold. `zero?` is total on every number,
+  ;;; and an exact non-integer (a rational, which only a
+  ;;; wider-than-Haskell host call can produce) passes through and keeps
+  ;;; `eqv?`'s exact/inexact distinction because `equal?` on numbers is
+  ;;; `eqv?`.
+  (define (number-key x)
+    (cond ((and (flonum? x) (nan? x)) 'nan)
+          ((zero? x) 0)
+          (else x)))
+
+  (define (value-key v oid)
+    (let ((d (deref v)))
+      (cond
+        ((and (var? d) (eq? (var-value d) *unbound*))
+         (when oid
+           (var-observers-set! d (cons oid (var-observers d))))
+         #f)
+        ((number? d) (cons 'num (number-key d)))
+        ((symbol? d) (cons 'atom d))
+        ((string? d) (cons 'text d))
+        ((boolean? d) (cons 'bool d))
+        ((term? d)
+         (let* ((args (term-args d))
+                (n (vector-length args)))
+           (let loop ((i 0) (keys '()) (ground? #t))
+             (if (= i n)
+                 (and ground?
+                      (cons 'term (cons (term-functor d) (reverse keys))))
+                 (let ((k (value-key (vector-ref args i) oid)))
+                   (loop (+ i 1) (cons k keys) (and ground? (if k #t #f))))))))
+        (else #f))))
 
   ;;; Var ID extraction
   (define (get-var-id v)

@@ -730,12 +730,25 @@ driverKey indexed ((ArgIndex pos, expr) : rest)
 -- nothing else. A future compiler that lifted an allocating or
 -- effectful expression here would make the loop-entry evaluation pay
 -- something the per-candidate one only paid when a candidate existed.
+--
+-- The counterpart over the VM expression type, for code generators, is
+-- 'YCHR.Internal.VM.Index.nonRaising'; keep the two in step. Like it,
+-- this gives every constructor an arm and no catch-all, so a constructor
+-- added to the slot AST fails to compile here rather than being
+-- silently classified.
 nonRaising :: SlotValExpr -> Bool
 nonRaising (SVar _ _) = True
 nonRaising (SLit _) = True
 nonRaising SNewVar = True
 nonRaising (SMakeTerm _ args) = all nonRaising args
-nonRaising _ = False
+nonRaising (SCallExpr _ _) = False
+nonRaising (SHostCall _ _) = False
+nonRaising (SEvalDeep _) = False
+nonRaising (SApplyClosure _ _) = False
+nonRaising (SEvalIs _) = False
+nonRaising (SGetArg _ _) = False
+nonRaising (SFieldArg _ _) = False
+nonRaising (SFieldType _) = False
 
 -- | Iterate the body of a 'Foreach' over a snapshot of candidate
 -- suspensions. Dead suspensions and suspensions failing the index

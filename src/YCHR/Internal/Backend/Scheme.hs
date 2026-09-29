@@ -20,6 +20,8 @@ module YCHR.Internal.Backend.Scheme
 where
 
 import Data.Char (isAlpha, isAlphaNum, ord)
+import Data.IntMap.Strict qualified as IntMap
+import Data.IntSet qualified as IntSet
 import Data.Map.Strict qualified as Map
 import Data.Maybe (maybeToList)
 import Data.Set qualified as Set
@@ -30,6 +32,7 @@ import YCHR.Internal.Compile (tellProcName)
 import YCHR.Internal.Compile.Names (encodeIdentifier, isIdInitialSafe)
 import YCHR.Internal.SExpr (SExpr (..), printSExpr)
 import YCHR.Internal.Types qualified as Types
+import YCHR.Internal.VM.Index (indexablePositions, nonRaising)
 import YCHR.Internal.VM.SExpr (VMProgram (..))
 import YCHR.Internal.VM.Types
 
@@ -237,7 +240,11 @@ programInfoSExpr infoName vmp =
   let bindings =
         [ SList
             [ SAtom "%s",
-              SList [SAtom "%make-session", SInt (fromIntegral vmp.program.numTypes)]
+              SList
+                [ SAtom "%make-session",
+                  SInt (fromIntegral vmp.program.numTypes),
+                  indexPositionsSExpr (indexablePositions vmp.program)
+                ]
             ]
         ]
       registrations =
@@ -255,6 +262,27 @@ programInfoSExpr infoName vmp =
           SList [SAtom infoName],
           SList ([SAtom "let", SList bindings] ++ registrations ++ [letBody])
         ]
+
+-- | The @(constraint type, argument position)@ pairs a session should
+-- index, as the alist @%make-session@'s second argument takes: one
+-- @(cons TYPE (list POS …))@ per type, ascending, and only for the types
+-- the program looks up through an index condition
+-- ('YCHR.Internal.VM.Index.indexablePositions'). A program with no such
+-- conditions emits @(list)@, which is the unindexed store every
+-- hand-built test session also gets.
+indexPositionsSExpr :: IntMap.IntMap IntSet.IntSet -> SExpr
+indexPositionsSExpr positions =
+  SList
+    ( SAtom "list"
+        : [ SList
+              [ SAtom "cons",
+                SInt (fromIntegral tidx),
+                SList
+                  (SAtom "list" : map (SInt . fromIntegral) (IntSet.toAscList ps))
+              ]
+          | (tidx, ps) <- IntMap.toAscList positions
+          ]
+    )
 
 -- | Emit @(register-evaluable! %s 'functor arity procedure)@ for a
 -- single entry of the program's evaluables table. The procedure
@@ -425,6 +453,19 @@ compileBody stmts = compileStmts stmts
 -- Foreach compilation
 -- ---------------------------------------------------------------------------
 
+-- | Compile a 'Foreach' loop.
+--
+-- The candidate list is 'store-snapshot' — the whole type bucket — unless
+-- one of the loop's index conditions can drive the store index. Which one
+-- may is a run-time question ('indexed-positions-for' answers for a type
+-- the store is currently indexing), so the emitted code binds each
+-- eligible condition's ground key at loop entry and hands the first one to
+-- 'candidate-suspensions'. A condition is eligible when evaluating it is
+-- total ('nonRaising'), which is what makes moving its evaluation to loop
+-- entry safe, and @indexed-positions-for@ returning @#f@ short-circuits
+-- the key bindings, so an unindexed type evaluates no condition and scans
+-- exactly as before. A loop with no eligible condition emits the old
+-- @store-snapshot@ call unchanged.
 compileForeach :: Label -> Int -> Name -> [(ArgIndex, ValExpr)] -> [Stmt] -> SExpr
 compileForeach (Label lbl) ct (Name sv) conds body =
   SList
@@ -437,7 +478,7 @@ compileForeach (Label lbl) ct (Name sv) conds body =
               SList
                 [ SList
                     [ SList [SAtom "%vec", SAtom "%count"],
-                      SList [SAtom "store-snapshot", SAtom "%s", SInt (fromIntegral ct)]
+                      candidatesExpr
                     ]
                 ],
               SList
@@ -467,6 +508,60 @@ compileForeach (Label lbl) ct (Name sv) conds body =
             ]
         ]
     ]
+  where
+    typeArg = SInt (fromIntegral ct)
+    snapshot = SList [SAtom "store-snapshot", SAtom "%s", typeArg]
+    -- Only a total expression may be evaluated eagerly at loop entry; see
+    -- 'nonRaising'. The conditions that stay are the only ones an index
+    -- could ever be driven by.
+    eligible = [(i, e) | (ArgIndex i, e) <- conds, nonRaising e]
+    candidatesExpr = case eligible of
+      [] -> snapshot
+      _ ->
+        SList
+          [ SAtom "let*",
+            SList (ipBinding : concat (zipWith keyBinding [0 :: Int ..] eligible)),
+            SList
+              ( SAtom "cond"
+                  : map keyClause (zip [0 :: Int ..] eligible)
+                  ++ [fallbackClause]
+              )
+          ]
+    ipBinding =
+      SList [SAtom ipName, SList [SAtom "indexed-positions-for", SAtom "%s", typeArg]]
+    -- The key of one eligible condition, evaluated only when the store is
+    -- indexing its position. A key found earlier wins: the `not` conjunct
+    -- keeps a later condition from being evaluated at all, matching the
+    -- interpreter's 'driverKey'.
+    keyBinding n (i, e) =
+      [ SList
+          [ SAtom (keyName n),
+            SList
+              ( SAtom "and"
+                  : priorKey
+                  ++ [ SAtom ipName,
+                       SList [SAtom "memv", SInt (fromIntegral i), SAtom ipName],
+                       SList [SAtom "ground-key", compileValExpr e]
+                     ]
+              )
+          ]
+      ]
+      where
+        priorKey = [SList [SAtom "not", SAtom (keyName (n - 1))] | n > 0]
+    keyClause (n, (i, _)) =
+      SList
+        [ SAtom (keyName n),
+          SList
+            [ SAtom "candidate-suspensions",
+              SAtom "%s",
+              typeArg,
+              SInt (fromIntegral i),
+              SAtom (keyName n)
+            ]
+        ]
+    fallbackClause = SList [SAtom "else", snapshot]
+    ipName = "%ip-" <> lbl
+    keyName n = "%key-" <> lbl <> "-" <> T.pack (show n)
 
 foreachInner :: Text -> Text -> [(ArgIndex, ValExpr)] -> [Stmt] -> SExpr
 foreachInner lbl sv conds body =

@@ -31,6 +31,7 @@
 
 (load "test-var.scm")
 (load "test-store.scm")
+(load "test-index.scm")
 (load "test-history.scm")
 (load "test-reactivation.scm")
 (load "test-runtime.scm")

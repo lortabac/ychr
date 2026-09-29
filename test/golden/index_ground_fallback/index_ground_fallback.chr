@@ -12,7 +12,7 @@
 % narrow a lookup but never change its answer, so the expected binding is
 % the same either way.
 %
-% The two goals differ only in the target `q`'s first argument:
+% The three goals differ only in the target `q`'s first argument:
 %
 %   * `run` stores `q(X, 1)` while X is still unbound, so the suspension
 %     lands in the position's non-ground fallback set rather than a key
@@ -22,9 +22,15 @@
 %
 %   * `sample` stores `q(2, 2)` ground, so its key bucket answers the
 %     lookup.
-:- module(index_ground_fallback, [run/1, sample/1]).
+%
+%   * `compound` stores `q([1, 2], 7)`, so the lookup is keyed by a
+%     ground compound rather than a scalar. Key equality has to be
+%     structural — `equal?/chr` reaches matching constraints by functor
+%     and arguments, and both runtimes' keys must never be finer than
+%     that, or the bucket would not find the suspension.
+:- module(index_ground_fallback, [run/1, sample/1, compound/1]).
 
-:- chr_constraint p/1, q/2, done/1, rd/1, run/1, sample/1.
+:- chr_constraint p/1, q/2, done/1, rd/1, run/1, sample/1, compound/1.
 
 step @ p(X), q(X, Y) ==> done(Y).
 
@@ -41,3 +47,9 @@ sample(R) <=>
     q(106, 0), q(107, 0), q(108, 0), q(109, 0), q(110, 0),
     q(111, 0), q(112, 0), q(113, 0), q(114, 0), q(115, 0),
     q(2, 2), p(2), rd(R).
+
+compound(R) <=>
+    q(101, 0), q(102, 0), q(103, 0), q(104, 0), q(105, 0),
+    q(106, 0), q(107, 0), q(108, 0), q(109, 0), q(110, 0),
+    q(111, 0), q(112, 0), q(113, 0), q(114, 0), q(115, 0),
+    q([1, 2], 7), p([1, 2]), rd(R).

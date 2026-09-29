@@ -2,6 +2,78 @@
 
 ## Unreleased
 
+The Scheme backend now implements the paper's *Indexing* optimization
+(§5.3), the same one the Haskell runtime gained earlier, with the same
+interface and the same on-demand threshold. The compiler was already
+emitting the `Foreach` index conditions its guard equalities imply; a
+generated loop now answers such a condition from a key bucket plus the
+position's non-ground fallback set instead of scanning the whole type
+bucket, exactly as the interpreter does. The compiler emits the
+`(constraint type, argument position)` pairs the program looks up through
+an index condition (`YCHR.Internal.VM.Index.indexablePositions`) as a
+second argument to `%make-session`; the session files every store whose
+type has such a position once the type's bucket reaches `indexThreshold`,
+and a `Foreach` whose condition can drive the index is compiled to a
+loop-entry lookup that hands the first usable key to
+`candidate-suspensions`.
+
+The index may only narrow the iterator, never lose a candidate. A
+suspension is filed under a key only when its indexed argument was fully
+ground when it was stored — a suspension stored with an unbound argument
+goes to the position's fallback set, which every lookup for that position
+scans, and binding that argument later does not move it — and candidates
+stay in ascending store order, so rule-firing order is unchanged. A
+lookup whose type has not reached the threshold, whose condition names a
+position the store does not index, or whose candidate set would not be
+smaller than the whole bucket is the `store-snapshot` scan it was before.
+A condition may only be evaluated eagerly at loop entry if it is total:
+`nonRaising` moves to `YCHR.Internal.VM.Index` for this (the interpreter
+keeps the same predicate over its slot AST, and the build's exhaustiveness
+checks keep the two in step), and the generated code short-circuits the
+key bindings on the type's index state, so an unindexed type evaluates no
+condition at all.
+
+Keys are ordinary Scheme data compared with `equal?` — `(num . n)`,
+`(atom . s)`, `(text . s)`, `(bool . b)`, and a structural
+`(term functor key …)` — normalized so that key equality is never finer
+than ask-equality (`equal?/chr`): `0.0` and `-0.0` share a key even though
+`eqv?` distinguishes them, and every NaN shares one. Terms are keyed by
+functor and arguments, never by identity: `equal?` on a record would
+compare by identity, and a bucket keyed that way could never be found.
+The Scheme runtime has no search driver, so unlike the Haskell index it
+has no snapshot or undo counterpart; `dev-docs/INVARIANTS.md` records that
+one must capture and restore it with the store if a search driver ever
+lands.
+
+Measured on this machine by interleaving three default rounds of the Guile
+suite against a build of the parent commit (min ms, median of the three
+rounds): `leq_closure`, the store-heavy transitive closure whose `leq`
+bucket reaches the hundreds, falls from 199.8 ms to 70.3 ms — **−65%**
+(medians 200.0 → 70.6 ms). Everything else is within the suite's
+run-to-run spread except `graph`, a sub-millisecond case whose types stay
+below the threshold: it pays the one per-loop type-index check and goes
+0.29 → 0.31 ms median (≈20 µs, +7%) — nothing measurable on Chez — while
+the case that does index saves ≈130 ms per iteration. On Chez Scheme the same rounds give `leq_closure`
+1.81 → 0.69 ms (**−62%**) with every other case unmoved. The Haskell
+suite is unchanged: the VM and the interpreter are untouched apart from
+the shared `nonRaising` move.
+
+No change to the emitted VM, its serialization or its format version: the
+index is a runtime-only implementation of the `Foreach` interface. The
+Scheme runtime gains `scheme/ychr/store.sls`'s index
+(`index-threshold`, `make-index-positions`, `make-store-index`,
+`indexed-positions-for`, `candidate-suspensions`) and
+`scheme/ychr/var.sls`'s `ground-key` / `add-observer-and-key` (one
+traversal per stored argument registers the observers *and* computes an
+indexed argument's key). `%make-session` gains an optional second
+argument — the compiler-emitted position alist — with a one-argument
+`case-lambda` clause so hand-built sessions (the unit tests) keep working
+and simply do not index; the session record gains `index-positions` and
+`store-index`. `test/golden/index_ground_fallback` gains a `compound`
+goal (a lookup keyed by a ground compound) and now exercises the indexed
+path on the Scheme backend too, and `scheme/test/test-index.scm` pins the
+candidate lists and key normalization directly.
+
 The Haskell interpreter no longer runs the VM AST. It runs a second,
 interpreter-owned AST — the new `YCHR.Internal.Interpreter.Slots` — in which
 every local variable is a per-procedure integer slot, and its local

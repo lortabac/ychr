@@ -789,6 +789,56 @@ argument is bound. Both cost memory, never correctness, and both keep
 the index append-only — which is what makes it cheap enough to be worth
 having.
 
+### Scheme store index agrees with the store it describes — `scheme/ychr/store.sls`
+
+The same optimization, with the same couplings, in the Scheme runtime.
+The index is session state — `session-index-positions` (the positions the
+generated `Foreach` loops may be answered for, emitted by the compiler)
+and `session-store-index` (the index itself) — so the four couplings that
+matter are:
+
+- **Every append to a type's growable records its index entries, and only
+  `store-constraint` appends.** `candidate-suspensions` answers from the
+  index whenever the type has one — its fallback is the *whole bucket*,
+  never an empty answer from an index that was not built — so a path that
+  pushed without filing would make a stored suspension *invisible* to
+  every indexed lookup.
+- **A lookup is only made for a position `indexed-positions-for`
+  reports.** That is exactly a position in
+  `session-index-positions` of a type whose `session-store-index` entry
+  is set. Asking for a position of an unindexed type would answer the
+  empty candidate set, not the scan it deserves.
+- **A type is indexed from the store that crosses `index-threshold`, and
+  that store files the whole existing bucket.** On-demand indexing means
+  a type can hold suspensions while unindexed, so the crossing store must
+  file them from the growable (`file-backlog!`); a lookup whose type is
+  not indexed yet must scan, not read the empty index.
+- **The index is state of *this* session and has no snapshot or undo
+  counterpart, because the Scheme runtime has no search driver.** Unlike
+  the Haskell runtime, there is nothing to restore it from, so nothing
+  keeps it in step with a fork. A future search driver
+  (`dev-docs/SCHEME_BACKEND_GAPS.md`, `library(search)`) must capture and
+  restore it together with the store and the history, or a branch will
+  answer from slots the restored store no longer has.
+
+What is deliberately not trimmed is the same as on the Haskell side: a
+kill leaves the bucket entry in place (the iterator's liveness check
+filters it, exactly as for a scan), and a suspension whose indexed
+argument was not fully ground when it was stored stays in the position's
+fallback list for good. Both cost memory, never correctness.
+
+Key equality is the other half, and it is defended in
+`scheme/ychr/var.sls`: a key must never be finer than ask-equality
+(`equal?/chr`), or a lookup would drop a candidate. Numbers are
+normalized (`number-key`): `0.0` and `-0.0` share a key although `eqv?`
+distinguishes them, and every NaN shares one. Terms are keyed
+structurally, functor plus one key per argument — never by object
+identity, which is what `equal?` would do for a record. The key walk is
+also total: it must never raise where the old scan answered, so its
+NaN test is guarded by `flonum?` (`nan?` raises on a non-real complex,
+which `eqv?` compares happily) and every value `equal?/chr` cannot
+equate simply has no key and lands in the fallback set.
+
 ### Session construction — `src/YCHR/Internal/Runtime/Session.hs:122-151`
 
 This entry described a layered effect stack (`runCHR` building

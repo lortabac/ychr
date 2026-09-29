@@ -6,7 +6,7 @@
     ;; From (ychr var)
     make-var var? var-id deref unify unifiable? equal?/chr
     make-term term? term-functor term-args
-    match-term get-arg add-observer! get-var-id
+    match-term get-arg add-observer! ground-key get-var-id
     ;; From (ychr store)
     make-store-by-type create-constraint store-constraint
     kill-constraint alive-constraint?
@@ -15,6 +15,9 @@
     store-snapshot snapshot-length snapshot-ref
     suspension? suspension-alive? suspension-arg
     suspension-id suspension-type
+    ;; Store index (used by generated `Foreach` code)
+    indexed-positions-for candidate-suspensions
+    index-threshold
     ;; From (ychr history)
     add-history! not-in-history?
     ;; From (ychr reactivation)
@@ -48,25 +51,43 @@
           (ychr pretty))
 
   ;;; Session initialization: creates a fully initialized session
-  (define (%make-session num-types)
-    (make-session 0
-                  (make-store-by-type num-types)
-                  0
-                  (make-hashtable equal-hash equal?)
-                  '()
-                  '()
-                  ;; Deep-eval dispatch table: keys are
-                  ;; (functor-symbol . arity) pairs; values are the
-                  ;; procedures the deep-evaluator calls when @is@
-                  ;; walks a @VTerm@ matching the key. Generated
-                  ;; libraries fill this in via @register-evaluable!@.
-                  (make-hashtable evaluable-key-hash evaluable-key-eq?)
-                  ;; Closure-apply dispatch table: keys are
-                  ;; (functor identity arity) lists; values are the
-                  ;; procedures `%apply-closure` calls for that
-                  ;; closure. Generated libraries fill this in via
-                  ;; @register-callable!@.
-                  (make-hashtable equal-hash equal?)))
+  (define %make-session
+    (case-lambda
+      ;; A session with no store index. Hand-built sessions (the unit
+      ;; tests) and any caller that does not know the program's index
+      ;; positions take this clause; the store then scans, exactly as it
+      ;; did before the index existed.
+      ((num-types)
+       (%make-session num-types '()))
+      ;; `positions` is the compiler-emitted alist of the (constraint
+      ;; type, argument position) pairs the program looks a partner up
+      ;; through an index condition: one `(cons TYPE (list POS ...))` per
+      ;; type, built by `Scheme.hs`'s `indexPositionsSExpr` from
+      ;; `YCHR.Internal.VM.Index.indexablePositions`. Only those
+      ;; positions are recorded in the store index, and only those may be
+      ;; looked up in it; anything else falls back to the scan.
+      ((num-types positions)
+       (make-session
+        0
+        (make-store-by-type num-types)
+        (make-index-positions num-types positions)
+        (make-store-index num-types)
+        0
+        (make-hashtable equal-hash equal?)
+        '()
+        '()
+        ;; Deep-eval dispatch table: keys are
+        ;; (functor-symbol . arity) pairs; values are the
+        ;; procedures the deep-evaluator calls when @is@
+        ;; walks a @VTerm@ matching the key. Generated
+        ;; libraries fill this in via @register-evaluable!@.
+        (make-hashtable evaluable-key-hash evaluable-key-eq?)
+        ;; Closure-apply dispatch table: keys are
+        ;; (functor identity arity) lists; values are the
+        ;; procedures `%apply-closure` calls for that
+        ;; closure. Generated libraries fill this in via
+        ;; @register-callable!@.
+        (make-hashtable equal-hash equal?)))))
 
   ;;; --- Deep-eval dispatch for the @is@ operator ---
 

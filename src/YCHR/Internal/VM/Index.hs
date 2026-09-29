@@ -12,8 +12,20 @@
 --
 -- See "YCHR.Internal.Runtime.Index" for what the runtime does with the
 -- result.
+--
+-- 'nonRaising' is the second fact a runtime needs about the conditions
+-- 'indexablePositions' points at: whether a condition may be evaluated
+-- eagerly, at loop entry, as an index-driven lookup does. The Haskell
+-- interpreter is not a consumer of the VM expression type — it runs the
+-- slot phase ('YCHR.Internal.Interpreter.Slots') — so it keeps the same
+-- predicate over its own 'SlotValExpr' in
+-- "YCHR.Internal.Runtime.Interpreter". Each is written without a
+-- catch-all arm, so the build forces a constructor added to either AST
+-- to be classified in the matching predicate; that the two give the same
+-- answer is the shared convention the mirroring invariant describes.
 module YCHR.Internal.VM.Index
   ( indexablePositions,
+    nonRaising,
   )
 where
 
@@ -23,7 +35,13 @@ import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
 import Data.List qualified as List
 import YCHR.Internal.Types (ConstraintType (..))
-import YCHR.Internal.VM.Types (ArgIndex (..), Procedure (..), Program (..), Stmt (..))
+import YCHR.Internal.VM.Types
+  ( ArgIndex (..),
+    Procedure (..),
+    Program (..),
+    Stmt (..),
+    ValExpr (..),
+  )
 
 -- | The argument positions the program ever looks up through an index
 -- condition, per constraint type index.
@@ -59,3 +77,44 @@ indexablePositions prog = List.foldl' addProc IntMap.empty prog.procedures
     addCond cType acc (ArgIndex pos, _) =
       let ConstraintType tidx = cType
        in IntMap.insertWith IntSet.union tidx (IntSet.singleton pos) acc
+
+-- | Whether evaluating an expression is total.
+--
+-- A store index is consulted once, before a loop body runs, so a
+-- condition it drives must not be able to raise: an index-driven lookup
+-- that evaluated one eagerly could turn a working query into an
+-- instantiation error where the old code, having no candidate to check,
+-- never evaluated it. The constructors below are what the compiler
+-- emits for a guard's expected value — a head variable, a literal, or a
+-- compound built from them. Everything else (a host call, a user
+-- function, @is@, a field or term accessor) is left to the per-candidate
+-- check.
+--
+-- The set is deliberately narrow, and it is the compiler's business to
+-- keep it so: 'YCHR.Internal.Compile.classifyEqual' only lifts the
+-- operands of a @GuardEqual@ that HNF produced, which are a head
+-- variable or a literal, so a condition this accepts is a variable read
+-- or a term construction and nothing else. A future compiler that
+-- lifted an allocating or effectful expression here would make the
+-- loop-entry evaluation pay something the per-candidate one only paid
+-- when a candidate existed.
+--
+-- Every constructor has an arm, with no catch-all, and the interpreter's
+-- counterpart over 'SlotValExpr' is written the same way. A constructor
+-- added to the VM therefore fails to compile here (and, once its slot
+-- counterpart exists, fails there too), which is what keeps the two
+-- predicates from going stale; keeping the *answers* identical is still
+-- a convention these two functions share.
+nonRaising :: ValExpr -> Bool
+nonRaising (Var _) = True
+nonRaising (Lit _) = True
+nonRaising NewVar = True
+nonRaising (MakeTerm _ args) = all nonRaising args
+nonRaising (CallExpr _ _) = False
+nonRaising (HostCall _ _) = False
+nonRaising (EvalDeep _) = False
+nonRaising (EvalIs _) = False
+nonRaising (ApplyClosure _ _) = False
+nonRaising (GetArg _ _) = False
+nonRaising (FieldArg _ _) = False
+nonRaising (FieldType _) = False
