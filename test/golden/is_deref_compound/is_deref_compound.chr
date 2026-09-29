@@ -12,8 +12,10 @@ arith(R) <=> X = 1 + 1, R is X.
 % Same idea with a user-defined function as the bound functor.
 ufun(R) <=> Y = tenfold(3), R is Y.
 
-% Bare-functor unification: VTerm carries the unqualified `+` atom.
-% The deep-evaluator's prelude host-call fallback (parallel to Haskell's
-% `hostCalls` lookup in `invokeByKey`) handles this case identically
-% on both backends.
+% Bare-functor unification. The renamer canonicalizes the surface atom
+% `+` to the qualified `prelude__+`, so this term is answered by the
+% evaluables table like `arith/1` above; the host-call tiers are not
+% involved. (A bare `+` that never went through canonicalization — a
+% `quote`d atom built into a compound — is answered by the host table's
+% raw-name tier; see test/golden/is_evaluable_bare_host_name/.)
 bare_quoted(R) <=> X = '+'(1, 1), R is X.

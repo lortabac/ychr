@@ -262,6 +262,161 @@
 (define (funref-closure identity arity)
   (make-term '/ (vector identity arity)))
 
+;;; --------------------------------------------------------------------------
+;;; `deep-eval-value` dispatch for `host:` terms
+;;;
+;;; A `host:` call in data position keeps the vmName `host__F` as its
+;;; functor, while `*prelude-host-calls*` is keyed by the bare name `F`.
+;;; The walker decodes the functor before the host-call fallback and
+;;; reports the decoded name in its diagnostic, mirroring the Haskell
+;;; interpreter's `invokeByKey`. Pinned here because the golden harness
+;;; runs positive cases only, and because the arity-mismatch diagnostic
+;;; differs between the backends (see dev-docs/SCHEME_BACKEND_GAPS.md).
+;;; --------------------------------------------------------------------------
+
+;; The message carried by the runtime error `thunk` raises, or #f when
+;; it returns normally.
+(define (error-message thunk)
+  (guard (c ((error? c) (condition-message c)))
+    (thunk)
+    #f))
+
+;; The unit atom both `%write` and `%writeln` return, Haskell's
+;; `VAtom "()"`.
+(define unit-atom (string->symbol "()"))
+
+(test-group "host functor deep-eval"
+  (test-equal "host__+/2 evaluates"
+              2
+              (deep-eval-value (fresh-session)
+                               (make-term 'host__+ (vector 1 1))))
+  (test-equal "a nested host call evaluates"
+              7
+              (deep-eval-value (fresh-session)
+                               (make-term 'host__+
+                                          (vector (make-term 'host__*
+                                                             (vector 2 3))
+                                                  1))))
+  ;; Arity is part of the prelude key, so the unary shape misses even
+  ;; though `-` is registered at arity 2; Haskell reaches the binary
+  ;; primitive instead (the recorded divergence).
+  (test-equal "an arity no primitive provides is not evaluable"
+              "is: functor is not evaluable: host:-/1"
+              (error-message
+               (lambda ()
+                 (deep-eval-value (fresh-session)
+                                  (make-term 'host__- (vector 3))))))
+  ;; The message names the decoded functor, not the vmName.
+  (test-equal "a non-evaluable functor is named in decoded form"
+              "is: functor is not evaluable: m:pair/2"
+              (error-message
+               (lambda ()
+                 (deep-eval-value (fresh-session)
+                                  (make-term 'm__pair (vector 1 2))))))
+  (test-equal "an undeclared functor is named as-is"
+              "is: functor is not evaluable: pair/2"
+              (error-message
+               (lambda ()
+                 (deep-eval-value (fresh-session)
+                                  (make-term 'pair (vector 1 2))))))
+  ;; The raw-functor tier: a bare host name that the compiler never
+  ;; canonicalized (a `quote`d atom, say) is answered directly.
+  (test-equal "a bare host name evaluates"
+              1
+              (deep-eval-value (fresh-session)
+                               (make-term 'copy_term (vector 1))))
+  ;; Arity is part of the prelude key, so the wrong arity misses the
+  ;; table and is reported as not-evaluable. Haskell's name-only
+  ;; registry reaches the primitive and reports *its* arity error
+  ;; instead — the same divergence as `host:'-'(3)`, recorded in
+  ;; dev-docs/SCHEME_BACKEND_GAPS.md.
+  (test-equal "a bare host name at a wrong arity is not evaluable"
+              "is: functor is not evaluable: copy_term/2"
+              (error-message
+               (lambda ()
+                 (deep-eval-value (fresh-session)
+                                  (make-term 'copy_term (vector 1 2))))))
+  ;; The `host:` shape is matched on the raw vmName `host__F`, never on
+  ;; a decoded `host:` prefix, so an unqualified atom is not promoted
+  ;; to a host call by spelling alone: `host__no_such` starts with the
+  ;; `host__` text but carries no module split, and decodes to the
+  ;; unqualified `host:no_such`.
+  (test-equal "an unqualified host-looking name is not a host call"
+              "is: functor is not evaluable: host:no_such/1"
+              (error-message
+               (lambda ()
+                 (deep-eval-value (fresh-session)
+                                  (make-term 'host__no_such (vector "x"))))))
+  ;; `write`/`writeln` print and then yield the unit atom, as the
+  ;; Haskell registry's `writeStr`/`writeStrLn` do.
+  (test-equal "host__write prints and returns unit"
+              unit-atom
+              (deep-eval-value (fresh-session)
+                               (make-term 'host__write (vector "x"))))
+  (test-equal "host__writeln prints and returns unit"
+              unit-atom
+              (deep-eval-value (fresh-session)
+                               (make-term 'host__writeln (vector "x")))))
+
+;;; --------------------------------------------------------------------------
+;;; `deep-eval-value` arguments: declared calls evaluate, data stays data
+;;;
+;;; An argument is dispatched only when its own functor is evaluable.
+;;; Before the split, the walker dispatched arguments before checking
+;;; the outer functor, so a list argument to a declared call stopped at
+;;; the cons cell. The data walk still dereferences variables, so the
+;;; data carries current bindings.
+;;; --------------------------------------------------------------------------
+
+;; A session with one unary identity function registered, so a compound
+;; can be passed through a declared call unchanged.
+(define (identity-session)
+  (let ((s (fresh-session)))
+    (register-evaluable! s 'user__id 1 (lambda (s a) a))
+    s))
+
+(test-group "host functor deep-eval arguments"
+  ;; The list argument is a constructor term, so it stays data; the
+  ;; answer is the term itself, not an error about `prelude__.`.
+  (test-assert "a constructor argument stays data"
+               (term? (deep-eval-value
+                       (identity-session)
+                       (make-term 'user__id
+                                  (vector (%cons 1 (%cons 2 (%nil))))))))
+  ;; A registered call in argument position is evaluated. `host__+`
+  ;; rather than `prelude__+`: the latter's evaluables entry is
+  ;; registered by a generated program, which `fresh-session` does not
+  ;; build, while the prelude host-call table is always present.
+  (test-equal "a declared call argument is evaluated"
+              2
+              (deep-eval-value (identity-session)
+                               (make-term 'user__id
+                                          (vector (make-term 'host__+
+                                                             (vector 1 1))))))
+  ;; A bound variable inside a data argument is dereferenced, but what
+  ;; it is bound to is not dispatched.
+  (let* ((s (identity-session))
+         (x (make-var s)))
+    (%unify s x 7)
+    (test-equal "a variable inside a data argument is dereferenced"
+                7
+                (get-arg (deep-eval-value
+                          s
+                          (make-term 'user__id
+                                     (vector (make-term 'pair (vector x 2)))))
+                         0)))
+  ;; The outermost compound is still required to be evaluable.
+  (test-equal "an outer constructor is still a not-evaluable error"
+              "is: functor is not evaluable: pair/2"
+              (error-message
+               (lambda ()
+                 (deep-eval-value (fresh-session)
+                                  (make-term 'pair (vector 1 2)))))))
+
+;;; --------------------------------------------------------------------------
+;;; `%apply-closure`
+;;; --------------------------------------------------------------------------
+
 (test-group "%apply-closure"
   (test-equal "function reference dispatches"
               10

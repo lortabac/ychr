@@ -62,40 +62,64 @@ hook in ordinary programs either.
 
 ## `deep-eval` host-call lookup ignores arity
 
-Haskell's `HostCallRegistry` is keyed by name alone, so
-`deepEvalValue`'s fallback (`src/YCHR/Internal/Runtime/Interpreter.hs`,
-`Map.lookup key.functor`) discards the arity. The Scheme table
-(`*prelude-host-calls*`) keys by `(name, arity)`. Consequence, for an
-arity that no host primitive provides:
+Both deep evaluators dispatch in the same three tiers: the evaluables
+table, the host-call registry under the raw functor (a bare name built
+by `quote`), and the host-call registry under the bare name of a
+`host:` term. The last tier matches the /mangled/ functor
+structurally — the vmName `host__F` — so an unqualified atom that
+merely reads `host:F` is never promoted to a host call
+(`Interpreter.hostCallName` on the Haskell side, `host-bare-name`
+plus `evaluable-key-proc` in `scheme/ychr/runtime.sls`).
 
-    X = '-'(1), R is X.
+What remains divergent is what happens when the *arity* is not one a
+primitive provides. Haskell's `HostCallRegistry` is keyed by name
+alone, so once a name is registered the primitive itself reports the
+mismatch; the Scheme table (`*prelude-host-calls*`) keys by
+`(name, arity)`, so it reports the intended not-evaluable error. Both
+a `host:` term and a bare name hit this:
 
-- **Haskell**: reaches the 2-ary `-` primitive and reports
-  `arithmetic host call: expected 2 numeric arguments of same type, got 1`.
-- **Scheme**: no `(- . 1)` key, so it reports the intended
-  `is: functor is not evaluable: -/1`.
+    X = host:'-'(3), R is X.
+    X is list_to_compound(quote([copy_term, 1, 2])), R is X.
+
+- **Haskell**: reaches the primitive and reports its own arity error —
+  `arithmetic host call: expected 2 numeric arguments of same type, got 1`
+  for the first, `copy_term: expected 1 argument` for the second.
+  The first is pinned by `test/golden/host_term_wrong_arity/`.
+- **Scheme**: no `(- . 1)` / `(copy_term . 2)` key, so it reports
+  `is: functor is not evaluable: host:-/1` and `…: copy_term/2`.
 
 Scheme's message is the better one (it matches SWI Prolog's
 `type_error(evaluable, F/N)`). Fixing Haskell means keying the registry
 by `(name, arity)`, which changes a public type
-(`YCHR.Convert.HostCallRegistry`) and so is deferred past 0.1.
+(`YCHR.Convert.HostCallRegistry`) and so is deferred past 0.1. The
+mixed-arity case is therefore the one golden directory in the Scheme
+harness's `HASKELL_ONLY` list that pins a divergence rather than a
+missing primitive.
 
+Both backends do agree on the *decoded* name in the diagnostic: a
+not-evaluable functor prints as `host:-/1` / `m:pair/2` / `pair/2`,
+never as the vmName `host__-/2`. Locked by the Haskell golden cases in
+`test/golden/is_evaluable_host_term/` and
+`test/golden/is_non_evaluable_error/`, and on the Scheme side by
+`scheme/test/test-runtime.scm`'s `host functor deep-eval` group.
 
 ## Prelude host calls missing from `*prelude-host-calls*`
 
 The table's comment says to keep it in sync with `baseHostCallRegistry`.
-`write` and `writeln` are absent, so deep-eval diverges. The fallback is
-reached only by `R is X` with `X` bound to a compound — note that `=`
-does not evaluate, and that wrapping in `quote/1` would keep the outer
-functor unevaluable:
+`write` and `writeln` were absent, so this used to diverge:
 
     X = writeln("x"), R is X.
 
 - **Haskell**: prints `x`, then `R = '()'`.
-- **Scheme**: `is: functor is not evaluable: writeln/1`.
+- **Scheme**: used to be `is: functor is not evaluable: writeln/1`.
 
-Same for `write/1`. `__chr_error` is also absent, but `__` is reserved by
-the lexer so no source program can name it.
+Both names are now registered with arity 1, and `%write`/`%writeln`
+return the unit atom `()` so the bound result is the same value on both
+backends. Pinned by `scheme/test/test-runtime.scm`'s `host functor
+deep-eval` group.
+
+`__chr_error` remains absent by design: `__` is reserved by the lexer,
+so no source program can name it.
 
 `print` and `read_term_from_string` live in `metaHostCallRegistry` rather
 than `baseHostCallRegistry`, so their absence is by design — but the
@@ -249,3 +273,16 @@ record of which fixes have already shipped.
   space `(host__now )` on a zero-arity call. Pinned by
   `test/golden/driver_host_call/` (three cases, run on both backends)
   and by `test/scheme/test_golden.py::test_gen_driver_host_call_mapping`.
+- **`host:` terms in data position were not deep-evaluable** — a
+  `host:` call stored in a term keeps the vmName `host__F` as its
+  functor, and both runtimes looked that raw functor up in a registry
+  keyed by the bare name `F`, so `T = host:'+'(1, 1), R is T.` raised
+  `is: functor is not evaluable: host__+/2`. The Haskell
+  `invokeByKey` and the Scheme `deep-eval-value` now decode the functor
+  before the fallback, and both render the diagnostic from the decoded
+  name. `write/1` and `writeln/1` were also added to
+  `*prelude-host-calls*` (and made to return the unit atom), closing
+  the `writeln/1` divergence above. Pinned by
+  `test/golden/is_evaluable_host_term/` (two cases, run on both
+  backends) and by the `host functor deep-eval` group in
+  `scheme/test/test-runtime.scm`.

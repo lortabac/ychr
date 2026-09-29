@@ -93,15 +93,43 @@
   ;; Walk a runtime value, evaluating any compound subterm whose
   ;; (functor, arity) names a registered evaluable. Atomic values
   ;; pass through; bound variables are dereferenced and the
-  ;; recursion continues on the dereferenced value. The lookup first
-  ;; checks the session's evaluables table (user-defined functions,
-  ;; keyed by the fully-qualified VM functor like `prelude__+`), then
-  ;; falls back to the prelude host-call table (keyed by the bare
-  ;; functor name like `+`). The fallback mirrors the Haskell
-  ;; interpreter's `invokeByKey`, which consults `hostCalls` after a
-  ;; miss in `evaluables`, and is what lets `X = '+'(1, 1), R is X.`
-  ;; evaluate to `2` without the functor having to be qualified.
-  ;; A non-evaluable functor raises a runtime error.
+  ;; recursion continues on the dereferenced value. Dispatch is
+  ;; `evaluable-key-proc`, which tries the session's evaluables table
+  ;; and then the prelude host-call table (see its comment for the
+  ;; three tiers).
+  ;;
+  ;; A term built from a `host:` call in data position keeps `host__F`
+  ;; as its functor, exactly as a declared function keeps its
+  ;; qualified vmName. The evaluables table holds neither, so the
+  ;; functor is decoded (`host__F` -> `host:F` -> `F`) and retried
+  ;; against the host table. That is what makes
+  ;; `T = host:'+'(1, 1), R is T.` evaluate to 2 rather than
+  ;; reporting `host__+/2`.
+  ;;
+  ;; `X = '+'(1, 1), R is X.` does *not* go through that decode: the
+  ;; compiler canonicalizes the surface `+` to the qualified
+  ;; `prelude__+`, which the evaluables table answers directly. The
+  ;; host table's bare `+` entry is reached only by a functor that
+  ;; never went through canonicalization — a `quote`d atom, say.
+  ;;
+  ;; A non-evaluable functor raises a runtime error that names it in
+  ;; decoded surface form (`host:-/1`, `pair/2`), matching the Haskell
+  ;; interpreter's message.
+  ;;
+  ;; Arguments are walked by `deep-argument`. The rule there follows
+  ;; the split the direct path already makes: the arguments of a
+  ;; /declared/ call are expressions that get evaluated, while a
+  ;; constructor is data and keeps its shape — though a variable inside
+  ;; it is still dereferenced, so the data carries the most recent
+  ;; bindings. That is what makes `T = member(1, [0, 1, 2]), R is T`
+  ;; (with `library(lists)` imported) work: the list argument stays
+  ;; data instead of being dispatched as a call, exactly as it behaves
+  ;; when the call is written inline (`R is member(1, [0, 1, 2])`).
+  ;; Walking the arguments with `deep-eval-value` used to dispatch the
+  ;; cons cell and report `is: functor is not evaluable: prelude:./2`.
+  ;; The /outermost/ compound is still required to be evaluable: the
+  ;; not-evaluable error is raised for it, so `T = pair(1, 2), R is T`
+  ;; keeps failing as before.
   (define (deep-eval-value s v)
     (let ((d (deref v)))
       (cond
@@ -109,24 +137,121 @@
          (let* ((functor (term-functor d))
                 (args (term-args d))
                 (n (vector-length args))
-                (eval-args (make-vector n)))
-           (do ((i 0 (+ i 1))) ((= i n))
-             (vector-set! eval-args i
-                          (deep-eval-value s (vector-ref args i))))
-           (let* ((key (make-evaluable-key functor n))
-                  (proc (or (hashtable-ref (session-evaluables s) key #f)
-                            (hashtable-ref *prelude-host-calls* key #f))))
-             (if proc
-                 (apply proc s (vector->list eval-args))
-                 ;; Match the Haskell interpreter's message format:
-                 ;; "is: functor is not evaluable: <functor>/<arity>"
-                 ;; (single concatenated string, no separate detail).
-                 (%chr-error
-                  (string-append "is: functor is not evaluable: "
-                                 (symbol->string functor)
-                                 "/"
-                                 (number->string n)))))))
+                (proc (evaluable-key-proc s functor n)))
+           (if proc
+               (let ((eval-args (make-vector n)))
+                 (do ((i 0 (+ i 1))) ((= i n))
+                   (vector-set! eval-args i
+                                (deep-argument s (vector-ref args i))))
+                 (apply proc s (vector->list eval-args)))
+               ;; Match the Haskell interpreter's message format:
+               ;; "is: functor is not evaluable: <functor>/<arity>"
+               ;; (single concatenated string, no separate detail).
+               (%chr-error
+                (string-append "is: functor is not evaluable: "
+                               (decode-mangled-name
+                                (symbol->string functor))
+                               "/"
+                               (number->string n))))))
         (else d))))
+
+  ;; Walk one argument of a deep-evaluated call: dereference it, then
+  ;; evaluate it if its functor names a call. A compound that is not a
+  ;; call is data: it is kept as-is, with its own subterms walked by
+  ;; `deep-data` so that bound variables inside it are still resolved.
+  (define (deep-argument s v)
+    (let ((d (deref v)))
+      (cond
+        ((term? d)
+         (let* ((functor (term-functor d))
+                (args (term-args d))
+                (n (vector-length args))
+                (proc (evaluable-key-proc s functor n)))
+           (if proc
+               (let ((eval-args (make-vector n)))
+                 (do ((i 0 (+ i 1))) ((= i n))
+                   (vector-set! eval-args i
+                                (deep-argument s (vector-ref args i))))
+                 (apply proc s (vector->list eval-args)))
+               (deep-data s d))))
+        (else d))))
+
+  ;; Walk a data compound — one whose functor is not a call. Its shape
+  ;; is preserved and its subterms are never dispatched, but variables
+  ;; reachable through it are dereferenced so the data reflects current
+  ;; bindings.
+  (define (deep-data s v)
+    (let ((d (deref v)))
+      (cond
+        ((term? d)
+         (let* ((args (term-args d))
+                (n (vector-length args))
+                (out (make-vector n)))
+           (do ((i 0 (+ i 1))) ((= i n))
+             (vector-set! out i (deep-data s (vector-ref args i))))
+           (make-term (term-functor d) out)))
+        (else d))))
+
+  ;; The procedure the deep evaluator calls for a (functor, arity)
+  ;; pair, or #f when the pair is not evaluable. Three tiers, in the
+  ;; same order the Haskell interpreter's `invokeByKey` uses:
+  ;;
+  ;;   1. the session's evaluables table — user-defined functions and
+  ;;      the prelude's CHR functions, keyed by the fully-qualified VM
+  ;;      functor (`prelude__+`);
+  ;;   2. the prelude host-call table under the raw functor — a bare
+  ;;      host name (`copy_term`) as built by `quote`, or by a source
+  ;;      atom that was never canonicalized;
+  ;;   3. the prelude host-call table under the bare name of a `host:`
+  ;;      functor (`host__F`), since its (name, arity) key is not the
+  ;;      raw one.
+  ;;
+  ;; The decoded `host:F` form is matched structurally as the vmName
+  ;; `host__F`, never as a decoded string: an unqualified atom may
+  ;; itself read `host:…` (a source atom `'host:write'` encodes to
+  ;; `host:write` — ASCII passes through the encoder — and only
+  ;; /decodes/ to the same text a `host__write` functor does), and only
+  ;; the mangled shape — module `host`, separator, base free of any
+  ;; further separator — is a host call.
+  (define (evaluable-key-proc s functor n)
+    (let ((key (make-evaluable-key functor n))
+          (raw (symbol->string functor)))
+      (or (hashtable-ref (session-evaluables s) key #f)
+          (hashtable-ref *prelude-host-calls* key #f)
+          (let ((bare (host-bare-name raw)))
+            (and bare
+                 (hashtable-ref *prelude-host-calls*
+                                (make-evaluable-key bare n)
+                                #f))))))
+
+  ;; The bare name of a `host:` functor, or #f when the functor is not
+  ;; one. The argument is the /raw/ mangled functor text, because the
+  ;; mangling is what carries the module split: `host__F` is a host
+  ;; call. An unqualified source atom spelled `'host:F'` stays
+  ;; unqualified (`host:F`, no separator) and is therefore not one;
+  ;; every unqualified name has no separator of its own, since the
+  ;; lexer rejects `__` inside a source atom.
+  (define (host-bare-name raw)
+    (let ((sep (find-double-underscore raw)))
+      (and sep
+           (> sep 0)
+           (not (find-double-underscore (substring raw (+ sep 2)
+                                                  (string-length raw))))
+           (string=? (decode-mangled-name (substring raw 0 sep)) "host")
+           (string->symbol
+            (decode-mangled-name (substring raw (+ sep 2)
+                                            (string-length raw)))))))
+
+  ;; Find the first occurrence of "__" in `s`, or #f.
+  (define (find-double-underscore s)
+    (let ((n (string-length s)))
+      (let loop ((i 0))
+        (cond
+          ((> (+ i 2) n) #f)
+          ((and (char=? (string-ref s i) #\_)
+                (char=? (string-ref s (+ i 1)) #\_))
+           i)
+          (else (loop (+ i 1)))))))
 
   ;;; --- Closure-apply dispatch for `'$call'` ---
 
@@ -221,14 +346,16 @@
                #f)))
         (else #f))))
 
-  ;; Prelude host-call fallback table for `deep-eval-value`. Mirrors
-  ;; the bare-name entries in Haskell's `baseHostCallRegistry`
-  ;; (`src/YCHR/Internal/Runtime/Registry.hs`) so `X = '+'(1, 1), R is X.`
-  ;; works identically on both backends. Each procedure receives the
-  ;; session as its first argument (uniform with user-defined
-  ;; functions); host calls that don't need it ignore the parameter.
-  ;; Keep this list in sync with `baseHostCallRegistry` when adding
-  ;; new bare-name host calls.
+  ;; Prelude host-call table for `deep-eval-value`. Mirrors the
+  ;; bare-name entries in Haskell's `baseHostCallRegistry`
+  ;; (`src/YCHR/Internal/Runtime/Registry.hs`). It is consulted both
+  ;; under the raw functor and under the bare name decoded out of a
+  ;; `host:` functor (`evaluable-key-proc`); the raw route is what
+  ;; answers a bare atom that no canonicalization qualified, such as
+  ;; one built by `quote`. Each procedure receives the session as its
+  ;; first argument (uniform with user-defined functions); host calls
+  ;; that don't need it ignore the parameter. Keep this list in sync
+  ;; with `baseHostCallRegistry` when adding new bare-name host calls.
   (define *prelude-host-calls*
     (let ((t (make-hashtable evaluable-key-hash evaluable-key-eq?)))
       (define (h functor arity proc)
@@ -265,6 +392,13 @@
       (h 'string_length 1 (lambda (s v) (%str-length v)))
       (h 'string_upper 1 (lambda (s v) (%str-upper v)))
       (h 'string_lower 1 (lambda (s v) (%str-lower v)))
+      ;; Output. `%write`/`%writeln` classify a bound non-string the
+      ;; same way `writeStr`/`writeStrLn` do in
+      ;; `src/YCHR/Internal/Runtime/Registry.hs`, so a `host:` term in
+      ;; data position (`T = host:writeln("x"), R is T.`) behaves
+      ;; identically on both backends.
+      (h 'write 1 (lambda (s v) (%write v)))
+      (h 'writeln 1 (lambda (s v) (%writeln v)))
       ;; Meta
       (h 'term_variables 1 (lambda (s v) (%term-variables v)))
       (h 'compound_to_list 1 (lambda (s v) (%compound-to-list v)))
@@ -478,14 +612,24 @@
   ;;; general message reachable rather than dead. `prelude.chr`
   ;;; declares `write(string)`, so only untyped and `host:` call paths
   ;;; could reach the rejection at all.
+  ;;
+  ;;; Both return the unit atom `()`, as `unit` in
+  ;;; `src/YCHR/Internal/Runtime/Registry.hs` does. The `write`/`writeln`
+  ;;; prelude wrappers are declared `-> any`, so the value is otherwise
+  ;;; discarded; returning it keeps a `host:` term used as data
+  ;;; (`T = host:writeln("x"), R is T.`) from yielding the host
+  ;;; language's unspecified value on one backend only.
   (define (%write v)
     (if (string? v)
-        (display v)
+        (begin (display v) (%unit))
         (%arg-error "write" (list v) "write: expected 1 Text argument")))
   (define (%writeln v)
     (if (string? v)
-        (begin (display v) (newline))
+        (begin (display v) (newline) (%unit))
         (%arg-error "writeln" (list v) "writeln: expected 1 Text argument")))
+
+  ;;; The unit value: the atom `()`, Haskell's `VAtom "()"`.
+  (define (%unit) (string->symbol "()"))
 
   ;;; Numeric conversions. `inexact` is the r6rs replacement for
   ;;; `exact->inexact`; `(exact (truncate x))` truncates toward zero,

@@ -685,6 +685,27 @@ Runtime:
   variable is bound later. Affects the Haskell runtime; the Scheme
   runtime still registers observers at store time only.
 
+- `is` now evaluates a term built from a `host:` call. A `host:` call
+  in data position carries the vmName `host__F` as its functor, which
+  the host-call registry (keyed by the bare name `F`) did not match, so
+  `T = host:'+'(1, 1), R is T.` reported `is: functor is not evaluable:
+  host__+/2` on both backends. Both deep evaluators now dispatch a
+  compound's functor in the same three tiers — the evaluables table, the
+  host-call registry under the raw functor, then under the bare name of a
+  `host:` term — and diagnose a non-evaluable functor with its decoded
+  name (`host:-/1`, `m:pair/2`, `pair/2`) rather than the encoded
+  vmName. Because the decoded `host__F` shape is matched structurally,
+  an unqualified atom that merely reads `host:F` is not promoted to a
+  host call. `write/1` and `writeln/1` join the Scheme
+  prelude host-call table and both now return the unit atom, so a bound
+  `host:writeln("x")` prints once and yields `'()'` on either backend.
+  The deep evaluator also stops dispatching a call's arguments before
+  checking the call itself: the arguments of a declared call are
+  evaluated, while a constructor argument stays data, so
+  `T = member(1, [0, 1, 2]), R is T.` (with `library(lists)`) evaluates
+  instead of failing on the list's cons cell.
+  See [the `is` operator](docs/reference/language.md#the-is-operator).
+
 ## 0.1.0.0 -- 2026-08-02
 
 First release. See the

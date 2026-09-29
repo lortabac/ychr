@@ -1,0 +1,35 @@
+:- module(host_term_wrong_arity, [go/1, bare/1]).
+:- use_module(library(prelude)).
+
+% Host calls at an arity no primitive provides, evaluated through the
+% deep evaluator. Both take the term-building route (`=` builds data;
+% the later `R is T` walks it), so the failure comes from the walker
+% rather than from a direct expression call.
+%
+% `go/1` uses a `host:` term: the functor is the vmName `host__-`, the
+% decoded bare name `-` *is* a registered host call, so the fallback
+% reaches the binary primitive with one argument.
+%
+% `bare/1` uses a host name the compiler never canonicalized —
+% `quote([copy_term, 1, 2])` keeps the bare atom `copy_term`, and
+% `list_to_compound/1` builds the compound — so the raw-functor tier
+% answers it and the primitive reports the arity.
+%
+% Both pin the current Haskell diagnostic: the primitive's own arity
+% error rather than `is: functor is not evaluable: …`. `HostCallRegistry`
+% is keyed by name alone, so the evaluator cannot tell "registered,
+% wrong arity" from "registered at this arity". The Scheme prelude
+% table is keyed by (name, arity), so the Scheme backend reports
+% not-evaluable instead; the residual divergence is recorded in
+% dev-docs/SCHEME_BACKEND_GAPS.md and this directory is Haskell-only in
+% the Scheme harness (see test/scheme/test_golden.py).
+%
+% The evaluable counterpart, where both backends agree, is
+% test/golden/is_evaluable_host_term, and the raw-functor tier has a
+% positive case in test/golden/is_evaluable_bare_host_name.
+
+:- chr_constraint go(any), bare(any).
+
+go(R) <=> T = host:'-'(3), R is T.
+
+bare(R) <=> X is host:list_to_compound(quote([copy_term, 1, 2])), R is X.

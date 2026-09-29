@@ -2,7 +2,7 @@
 ;;;;
 ;;;; Matches the output format of prettyTerm in YCHR.Internal.Pretty (Haskell).
 (library (ychr pretty)
-  (export pretty-term pretty-bindings bindings->string)
+  (export pretty-term pretty-bindings bindings->string decode-mangled-name)
   (import (rnrs) (ychr var))
 
   ;; Escape a string for display (matching Haskell renderString).
@@ -131,6 +131,14 @@
          (string-append (decode-escapes-range s 0 sep)
                         ":"
                         (decode-escapes-range s (+ sep 2) n))))))
+
+  ;; Inverse of vmName as the runtime needs it: a mangled functor
+  ;; string in, its decoded surface name out ("host:+", "m:f", "pair").
+  ;; Public so the runtime can render the same name in diagnostics
+  ;; (the not-evaluable message) that the pretty-printer shows for a
+  ;; value. Haskell's counterpart is `decodeName` in
+  ;; YCHR.Internal.Meta.
+  (define (decode-mangled-name s) (unmangle-qualified s))
 
   (define (pretty-symbol sym)
     (unmangle-qualified (symbol->string sym)))

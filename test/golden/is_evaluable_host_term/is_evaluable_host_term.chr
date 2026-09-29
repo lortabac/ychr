@@ -1,0 +1,39 @@
+:- module(is_evaluable_host_term, [go/2, user_value/2]).
+:- use_module(library(prelude)).
+
+% Regression test: `is` on a *bound* compound evaluates it when the
+% compound's functor names a declared function or a host call. A
+% `host:` call in data position stores the vmName `host__F` as its
+% functor, which the host-call registry (keyed by the bare name `F`)
+% did not match, so `R is X` reported `is: functor is not evaluable:
+% host__+/2` on both backends. The deep evaluator now decodes the
+% functor before the host-call fallback, and both backends agree.
+%
+% The rule bodies evaluate the argument through the `is`-on-a-variable
+% path (`SEvalIs` / `deep-eval-value`), which is the path under test:
+% a bare `R is host:'+'(1, 2)` would be compiled as a direct host call
+% and never reach the walker.
+%
+% The argument-shaped cases cover a declared call's arguments: one is
+% dispatched when its own functor is evaluable (a nested host call, a
+% prelude operation) and a constructor argument stays data. The
+% discriminating case for the argument-walk fix is the list in
+% test/golden/is_evaluable_host_term_args/, whose cons cell the old
+% walker dispatched before checking the enclosing `member/2`.
+%
+% The `user_value` case pins the first tier: a declared function's
+% functor is qualified (`is_evaluable_host_term__user_value`), so the
+% evaluables table answers it and no host-registry tier is consulted.
+% Dropping that table lookup fails the case; the host tiers cannot
+% match the qualified functor, so reordering alone would not.
+
+:- chr_constraint go(any, any).
+
+go(X, R) <=> R is X.
+
+:- function user_value/2.
+
+% A user function at the arity of the prelude addition. Its own
+% arguments are ignored, so the result distinguishes it from the host
+% call it stands in for.
+user_value(_, _) -> 99.

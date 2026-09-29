@@ -33,6 +33,16 @@ HASKELL_ONLY = {
     # run_chr_session is a Haskell-only meta host call (spawns a nested
     # interpreter session); no Scheme implementation exists yet.
     "run_chr_session_test",
+    # `host:'-'(3)` is a host call at an arity no primitive provides.
+    # The Haskell registry is keyed by name alone, so it reaches the
+    # binary primitive and reports that primitive's arity error; the
+    # Scheme prelude table is keyed by (name, arity) and reports
+    # `is: functor is not evaluable: host:-/1`. The directory holds only
+    # a .goal/.error pair, so the harness would not collect it today;
+    # the entry keeps it out if an .expected is ever added, and records
+    # the divergence (dev-docs/SCHEME_BACKEND_GAPS.md). The evaluable
+    # counterpart, `is_evaluable_host_term`, runs on both backends.
+    "host_term_wrong_arity",
     # library(search) — solve/1, findall/2, fold_solutions/4 and
     # fail/0 are Haskell-only host calls. The search driver needs a
     # session fork, a snapshot of the store references and an undo

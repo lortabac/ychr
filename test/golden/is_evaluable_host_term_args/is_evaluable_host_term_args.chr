@@ -1,0 +1,25 @@
+:- module(is_evaluable_host_term_args, [go/1]).
+:- use_module(library(prelude)).
+:- use_module(library(lists)).
+
+% Argument-walking regression run as a *rule body*: `T` must hold the
+% call before the shared term is deep-evaluated, and the goal argument
+% cannot express that (`T = ...` in a goal argument is data, not a
+% binding).
+%
+% The point is the list argument. `[0, 1, 2]` is a chain of cons
+% cells, whose functor is not evaluable, so the walker must leave it
+% as data while still reaching `member/2` underneath. Before the split
+% the walker dispatched arguments before checking the outer functor
+% and stopped at the first cons cell with `is: functor is not
+% evaluable: prelude:./2`. With the fix this is `true` — the same
+% answer as the inline `R is member(1, [0, 1, 2])`.
+%
+% Both backends run this. The sibling directory
+% `is_evaluable_host_term` covers the goal-driven shapes: arithmetic
+% and nested host calls, a declared-function argument, a bare host
+% name built by `quote`, and the two-tier precedence rule.
+
+:- chr_constraint go(any).
+
+go(R) <=> T = member(1, [0, 1, 2]), R is T.
