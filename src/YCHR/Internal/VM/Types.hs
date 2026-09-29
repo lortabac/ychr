@@ -121,10 +121,17 @@ data Program = Program
     -- | Dispatch table for the @is@ deep-evaluator. Maps a
     -- @(functor, arity)@ key (as found on a @VTerm@) to the
     -- mangled procedure name in 'procedures'. One entry per
-    -- user-defined function (prelude host calls are handled by
-    -- the runtime's host-call registry, which is bare-functor
-    -- keyed). Used by the runtime to call into user-defined
-    -- functions when @is@ walks a dereferenced compound term.
+    -- user-defined function. Used by the runtime to call into
+    -- user-defined functions when @is@ walks a dereferenced
+    -- compound term.
+    --
+    -- Host calls are not listed here. A @host:@ term in data
+    -- position carries @host__F@ as its functor, so the runtime
+    -- decodes that functor to the bare name @F@ and consults its
+    -- host-call registry — the same two-tier lookup a declared
+    -- function takes first. See 'deepEvalValue' \/
+    -- 'invokeByKey' in @YCHR.Internal.Runtime.Interpreter@ and
+    -- @deep-eval-value@ in @scheme\/ychr\/runtime.sls@.
     evaluables :: ![(EvaluableKey, Name)],
     -- | Dispatch table for the @'$call'@ closure-apply construct. Maps
     -- a closure's 'CallableKey' (the shape of the closure value itself:

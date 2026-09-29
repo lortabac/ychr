@@ -1,0 +1,27 @@
+:- module(is_evaluable_bare_host_name, [go/1]).
+:- use_module(library(prelude)).
+
+% A bare host name reached deep evaluation without going through the
+% compiler's canonicalization: `quote([copy_term, 1])` keeps the atom
+% `copy_term`, and `list_to_compound/1` builds the compound, so the
+% functor is neither `prelude__copy_term` nor `host__copy_term`. The
+% host-call registry is keyed by the bare name, so the raw-functor
+% tier answers it. Without that tier the functor is reported as
+% `copy_term/1` not evaluable — and, because the Scheme runtime kept
+% the tier, the two backends disagree.
+%
+% `X` is bound through the `is`-on-a-variable path: `host:` is written
+% explicitly because a goal or rule operand does not resolve
+% `list_to_compound` to its prelude wrapper, and `is` accepts any
+% expression on the right-hand side.
+%
+% The source atom `'host:write'` is a different case: it is
+% unqualified (`host:write`, no `__`), so the raw-functor tier does not
+% answer it and it is reported as not evaluable. A `host:write` call
+% instead produces the vmName `host__write`; both /decode/ to the same
+% text, which is why the walker matches the mangled shape rather than a
+% decoded prefix. Pinned in scheme/test/test-runtime.scm.
+
+:- chr_constraint go(any).
+
+go(R) <=> X is host:list_to_compound(quote([copy_term, 1])), R is X.
