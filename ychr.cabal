@@ -92,6 +92,9 @@ extra-source-files:   libraries/*.chr
                     , examples/*.chr
                     , examples/stlc/*.chr
                     , examples/stlc/*.hs
+                    , bench/scheme/*.chr
+                    , bench/scheme/*.scm
+                    , bench/scheme/bench/*.sls
                     , test/golden/**/*.chr
                     , test/golden/**/*.goal
                     , test/golden/**/*.expected

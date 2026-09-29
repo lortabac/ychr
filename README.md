@@ -69,6 +69,12 @@ Scheme backend and runtime, the REPL, the type checker, the embedding
 example, and lint checks over the documentation. Besides GHC it needs
 `python3` with `pytest`, and Guile 3.
 
+`make bench` runs the Haskell interpreter benchmarks and then the
+in-process Scheme benchmarks (Guile 3). The same Scheme programs run
+under Chez Scheme with `make bench-scheme-chez`, or both with
+`make bench-scheme-all` — see the
+[benchmarks guide](https://github.com/lortabac/ychr/blob/master/dev-docs/BENCHMARKS.md).
+
 Compiling to Scheme emits code that imports the YCHR Scheme runtime
 (`(ychr runtime)` and friends). That runtime lives in
 [`scheme/`](https://github.com/lortabac/ychr/tree/master/scheme)

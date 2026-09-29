@@ -1,0 +1,24 @@
+% Benchmark program: list construction and folding, exercised by
+% `bench/scheme/bench/harness.sls` through the `list_sum` case.
+%
+% `range(N)` builds `[N-1, ..., 1, 0]` by recursion and `sum_list` folds
+% it, so the case covers list spine matching, user-function dispatch and
+% the `is` deep evaluator in one workload. The result is
+% N*(N-1)/2: 124750 at N = 500, which is the value the harness checks.
+%
+% The `:- function range(int) -> list(int).` signature form matters: the
+% bare `range(N) -> list(int).` is parsed as an equation whose body is a
+% call to a `list` constructor, and `sum_list` then fails at run time
+% with "no matching equation in lists:foldl_/3". Do not "simplify" it.
+:- module(bench_list, [go/2]).
+
+:- use_module(library(lists)).
+
+:- chr_constraint go/2.
+
+:- function range(int) -> list(int).
+
+range(0) -> [].
+range(N) -> [N - 1 | range(N - 1)].
+
+go(N, R) <=> R is sum_list(range(N)).

@@ -706,6 +706,32 @@ Runtime:
   instead of failing on the list's cons cell.
   See [the `is` operator](docs/reference/language.md#the-is-operator).
 
+Benchmarks:
+
+The Scheme backend has a benchmark suite of its own. `make bench` now runs
+the criterion interpreter benchmarks and then the Scheme suite;
+`make bench-scheme-chez` runs the same suite under Chez Scheme, and
+`make bench-scheme-all` runs both. The harness measures in process — each
+timed iteration creates a fresh session and runs one workload (a goal, or
+for the first case session creation alone), mirroring what
+`runGoalConstraint` measures, and excluding compilation, process startup and
+library loading — because wrapping an interpreter invocation would put 2 ms
+(Chez) to 10 ms (Guile) of startup in front of cases as small as 10 µs. One
+shared R6RS library (`bench/scheme/bench/harness.sls`) holds the programs, the
+sampling policy and the reporting; `run-guile.scm` and `run-chez.scm` are the
+only implementation-specific files, each supplying its own clock. Iteration
+counts are adaptive (a wall-clock budget with minimum and maximum bounds)
+because Chez is two to three orders of magnitude faster than Guile on these
+workloads: `fib(20)` has a 1.98 ms median there against 729 ms under Guile,
+and `leq_closure` 2.07 ms against 256 ms. Seven cases cover session creation,
+guard evaluation, partner search, rule recursion, store growth with
+propagation history and reactivation, list/`is` evaluation, and `'$call'`
+dispatch. Four reuse golden programs, two are scaled benchmark-only programs,
+and one (`session`) is a synthetic baseline; every case checks its result —
+including the store size the transitive closure must leave behind — so a
+benchmark cannot silently stop doing work. See
+[dev-docs/BENCHMARKS.md](dev-docs/BENCHMARKS.md).
+
 ## 0.1.0.0 -- 2026-08-02
 
 First release. See the

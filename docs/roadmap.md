@@ -98,7 +98,8 @@ what is planned.
 ## Benchmarking
 
 - [x] Interpreter benchmarks
-- [ ] Scheme runtime benchmarks
+- [x] Scheme runtime benchmarks (in-process, on both Guile 3 and Chez
+      Scheme; see [BENCHMARKS.md](../dev-docs/BENCHMARKS.md))
 - [ ] JavaScript runtime benchmarks
 - [ ] Compiler benchmarks
 

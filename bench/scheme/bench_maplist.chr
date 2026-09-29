@@ -1,0 +1,26 @@
+% Benchmark program: higher-order list mapping with a closure,
+% exercised by `bench/scheme/bench/harness.sls` through the `maplist`
+% case.
+%
+% `maplist(fun(X) -> X * X end, ...)` invokes the lifted lambda once per
+% element through the runtime's closure/`$call` dispatch table, so this
+% case measures keyed callable dispatch on top of the list and `is`
+% costs the `list_sum` case covers. The result is the sum of the squares
+% of 0..N-1: 41541750 at N = 500, which is the value the harness checks.
+%
+% The `:- function range(int) -> list(int).` signature form matters: the
+% bare `range(N) -> list(int).` is parsed as an equation whose body is a
+% call to a `list` constructor, and `maplist` then fails at run time.
+% See the same note in `bench_list.chr`.
+:- module(bench_maplist, [go/2]).
+
+:- use_module(library(lists)).
+
+:- chr_constraint go/2.
+
+:- function range(int) -> list(int).
+
+range(0) -> [].
+range(N) -> [N - 1 | range(N - 1)].
+
+go(N, R) <=> R is sum_list(maplist(fun(X) -> X * X end, range(N))).
