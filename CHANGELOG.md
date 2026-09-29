@@ -728,6 +728,10 @@ Stdlib additions, both implemented on both backends:
   Prolog module carrying `:- use_module(library(chr)).` compiles
   unchanged, as long as the rest of the module is Prolog-compatible.
   See [`libraries/chr.chr`](libraries/chr.chr).
+- `library(lists)` gains `range/2`: `R is range(From, To)` is the
+  closed integer interval `[From, From + 1, ..., To]` — the one-element
+  list `[From]` when the bounds are equal, and `[]` when `From > To`.
+  See [`libraries/lists.chr`](libraries/lists.chr).
 
 New: the REPL gains a `:time GOAL` meta-command. It runs `GOAL` like any
 other one-shot query but prints `Time: <seconds>s` (CPU time, microsecond

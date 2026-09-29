@@ -22,7 +22,9 @@
     sorted_ties/1,
     indexed/2,
     listness/4,
-    sized/2
+    sized/2,
+    ranged/3,
+    ranged_sum/3
 ]).
 
 :- use_module(library(lists)).
@@ -51,7 +53,9 @@
     sorted_ties/1,
     indexed/2,
     listness/4,
-    sized/2.
+    sized/2,
+    ranged/3,
+    ranged_sum/3.
 
 % The `refining` clause at work. `T` is rigid at this equation, so
 % `length(X)` would be rejected without the guard, whose fact pins `T`
@@ -143,3 +147,12 @@ listness(A, B, C, D) <=>
     D is is_list(quote([1|foo])).
 
 sized(V, R) <=> R is size(V).
+
+% The closed integer interval: both bounds included, the one-element
+% list when they are equal, and `[]` when the interval is inverted.
+ranged(From, To, R) <=> R is range(From, To).
+
+% `range/2` builds an ordinary proper list, so the rest of the library
+% consumes it like any other -- here `sum_list/1`, including at the
+% equal-bounds endpoint.
+ranged_sum(From, To, S) <=> S is sum_list(range(From, To)).

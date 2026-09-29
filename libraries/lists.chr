@@ -35,7 +35,8 @@
     fun sum_list/1,
     fun product_list/1,
     fun nth/2,
-    fun nth_maybe/2
+    fun nth_maybe/2,
+    fun range/2
 ]).
 
 :- use_module(library(maybe)).
@@ -69,7 +70,9 @@
     (insert_by(fun(A, A) -> bool end, A, list(A)) -> list(A)),
     (sum_list(list(int)) -> int),
     (product_list(list(int)) -> int),
-    (nth_maybe(int, list(T)) -> maybe(T)).
+    (nth_maybe(int, list(T)) -> maybe(T)),
+    (range(int, int) -> list(int)),
+    (range_(int, int, list(int)) -> list(int)).
 
 % head/1, tail/1 and nth/2 are deliberately left untyped.
 %
@@ -229,3 +232,13 @@ nth_maybe(N, _) | N < 0 -> nothing.
 nth_maybe(_, []) -> nothing.
 nth_maybe(0, [X|_]) -> just(X).
 nth_maybe(N, [_|Xs]) -> nth_maybe(N - 1, Xs).
+
+% The closed integer interval `[From, From + 1, ..., To]`: `[]` when
+% `From > To`, and the one-element list `[From]` when the bounds are
+% equal. Built from the top down and prepended, so the elements come out
+% in ascending order and the final accumulator is the result.
+range(From, To) | From > To -> [].
+range(From, To) -> range_(To - 1, From, [To]).
+
+range_(N, From, Acc) | N < From -> Acc.
+range_(N, From, Acc) -> range_(N - 1, From, [N | Acc]).
