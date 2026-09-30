@@ -63,9 +63,6 @@ HASKELL_ONLY = {
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only
 # some cases in a directory diverge.
 HASKELL_ONLY_CASES = {
-    # `ground/1` reports a different answer for a partially-unbound
-    # term in the Scheme backend.
-    ("type_predicates", "grd_no"),
     # Scheme prints quoted atoms without quotes for non-ASCII content.
     ("unicode_atoms_strings", "quoted_with_space"),
     ("unicode_atoms_strings", "quoted_unicode"),
@@ -328,3 +325,46 @@ def test_gen_driver_dynamic_call_mapping(ychr_bin, project_root, tmp_path):
     assert "call_" not in driver_text
     assert "(%apply-closure %s F 1)" in driver_text
 
+
+def test_gen_driver_nested_goal_var_declaration(ychr_bin, project_root, tmp_path):
+    """A variable nested inside a goal argument must be bound in the
+    driver's `let*`, not only the ones appearing at the top level.
+
+    The driver once collected variables with a comprehension over the
+    *top-level* arguments, so a nested variable (then spelled
+    `p(1, X)`, today `quote(p(1, X))`) reached the constraint as a free
+    identifier and Guile rejected the whole script with
+    `Unbound variable: X`. This pins the recursive collection that
+    closed the `type_predicates-grd_no` gap
+    (dev-docs/SCHEME_BACKEND_GAPS.md) without needing Guile.
+    """
+    program = tmp_path / "gdn.chr"
+    program.write_text(
+        ":- module(gdn, [go/2]).\n"
+        ":- use_module(library(prelude)).\n"
+        ":- chr_constraint go(any, any).\n"
+    )
+
+    def driver(goal):
+        result = subprocess.run(
+            [ychr_bin, "gen-driver", "-g", goal, str(program)],
+            capture_output=True,
+            text=True,
+            cwd=project_root,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return result.stdout
+
+    # `X` is nested in the compound argument and `R` is top-level; both
+    # must be declared, referenced, and printed.
+    quoted = driver("gdn:go(quote(p(1, X)), R)")
+    assert "(X (make-var %s))" in quoted
+    assert "(R (make-var %s))" in quoted
+    assert "(make-term (quote p) (vector 1 X))" in quoted
+    assert "(cons (quote X) X)" in quoted
+
+    # A host-call argument takes a different branch of the variable
+    # collection, so pin that shape too.
+    host_call = driver("gdn:go(host:'+'(X, 1), R)")
+    assert "(X (make-var %s))" in host_call
+    assert "(R (make-var %s))" in host_call

@@ -148,18 +148,6 @@ logic as `renderAtom` — bare lowercase + alphanumeric + underscore stays
 unquoted, anything else gets `'…'` with embedded `'` doubled.
 
 
-## `ground/1` in goal queries with nested unbound vars
-
-The case `("type_predicates", "grd_no")` runs the goal
-`type_predicates:t(grd, p(1, X), R)`. The Scheme runtime's `%ground?`
-appears correct in isolation, but the generated driver produced by
-`ychr gen-driver` for a goal that introduces an unbound variable inside
-a compound argument (`X` inside `p(1, X)`) does not bind that variable
-before passing it to the constraint, so Guile rejects with
-`Unbound variable: X`. This is a driver-side bug, not a runtime one.
-Needs investigation before claiming a root cause.
-
-
 ## Numeric primitives accept more than Haskell's
 
 Orthogonal to which *failures* are classified (that gap is closed
@@ -287,3 +275,18 @@ record of which fixes have already shipped.
   `test/golden/is_evaluable_host_term/` (two cases, run on both
   backends) and by the `host functor deep-eval` group in
   `scheme/test/test-runtime.scm`.
+- **`ground/1` in goal queries with nested unbound vars** — never a
+  runtime gap: the Scheme `%ground?` was correct all along. The
+  generated driver collected goal variables over the *top-level*
+  arguments only (`nub [n | VarTerm n <- constraint.args]` in the old
+  `YCHR.Backend.SchemeDriver`), so a variable nested inside a compound
+  argument (then spelled `p(1, X)`, today `quote(p(1, X))`) was
+  emitted as a bare identifier that no `let*` declared, and Guile
+  rejected the script with `Unbound variable: X` before any constraint
+  ran. Already fixed when
+  `0c50265` ("Evaluate constraint arguments") rewrote `generateDriver`
+  to take `[R.Expr]` and collect variables with the structural
+  `exprVars`. Closed the `HASKELL_ONLY_CASES` entry for
+  `("type_predicates", "grd_no")`; the driver-side invariant stays
+  pinned without Guile by
+  `test/scheme/test_golden.py::test_gen_driver_nested_goal_var_declaration`.
