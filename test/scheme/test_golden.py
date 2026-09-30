@@ -63,16 +63,6 @@ HASKELL_ONLY = {
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only
 # some cases in a directory diverge.
 HASKELL_ONLY_CASES = {
-    # Scheme prints quoted atoms without quotes for non-ASCII content.
-    ("unicode_atoms_strings", "quoted_with_space"),
-    ("unicode_atoms_strings", "quoted_unicode"),
-    ("unicode_atoms_strings", "quoted_chinese"),
-    # Same quoting gap as above: '£foo' is an atom whose first char
-    # ('£') is not alphanumeric, so Haskell quotes it; the Scheme
-    # pretty-printer has no needsQuoting equivalent yet and prints
-    # the bare form. The escape decoding the test exercises is shared
-    # with the four passing siblings in the same directory.
-    ("qualified_unicode_ctor", "pound_foo"),
     # The Scheme runtime registers a suspension as an observer of the
     # variables reachable at *store* time only. The Haskell runtime
     # additionally transfers a bound variable's observers onto the
@@ -98,6 +88,9 @@ HASKELL_ONLY_CASES = {
 # here (`typecheck_goal_ctor_arity`).
 WERROR_EXEMPT = {
     "arity_overload",
+    # The `= …` right-hand sides are undeclared sentinel atoms, so every
+    # rule emits YCHR-20101; the cases pin how those atoms print.
+    "atom_quoting",
     "nonexhaustive_color",
     "nonexhaustive_nested",
     "bare_atom_canonicalization",

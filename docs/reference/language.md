@@ -756,9 +756,12 @@ operation it relies on, so most programs never write `host:`.
 
 `print/1` and `name_base/1` work on both backends. `print/1` renders
 its argument with the surface pretty-printer followed by a newline, and
-returns the unit atom `()`. Its output inherits the pretty-printer's
-atom-quoting divergence: atoms whose spelling needs quoting (and `()`
-itself) still print unquoted on the Scheme backend. Haskell-only:
+returns the unit atom `()`. Both backends render atoms the same way: an
+identifier starting with a lowercase letter and otherwise made of
+letters, digits and underscores prints unquoted, unless it is a
+reserved word operator, and anything else is single-quoted with `''`
+for an embedded quote, so `hello world` prints as `'hello world'`, `is`
+as `'is'`, and the unit atom as `'()'`. Haskell-only:
 `read_term_from_string/1`, `write_term_to_string/1`,
 `write_store_to_list/0`, `print_store/0`, `run_chr_session/1`, and all
 of `library(search)`. On the Scheme backend the unimplemented meta

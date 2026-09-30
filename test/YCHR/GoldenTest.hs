@@ -48,6 +48,9 @@ expectsWarnings :: Set String
 expectsWarnings =
   Set.fromList
     [ "arity_overload",
+      -- Every rule's `= …` right-hand side is an undeclared sentinel
+      -- atom, so each emits YCHR-20101; the cases pin how those atoms print.
+      "atom_quoting",
       "nonexhaustive_color",
       "nonexhaustive_nested",
       "bare_atom_canonicalization",

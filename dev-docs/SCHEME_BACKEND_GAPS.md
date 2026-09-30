@@ -168,33 +168,6 @@ than `baseHostCallRegistry`; the table's comment now names that
 registry alongside the base one.
 
 
-## Atom pretty-printing divergences
-
-The Haskell `prettyTerm` (`src/YCHR/Internal/Pretty.hs`; the
-`renderAtom`/`needsQuoting` it calls are in `src/YCHR/Internal/PExpr.hs`)
-quotes atoms whose text is not a bare lowercase identifier, escaping
-embedded quotes — so `'hello world'`, `'café'`, and `'你好'` are quoted
-on output. The Scheme `pretty-term` (`scheme/ychr/pretty.sls`) emits
-symbols via `symbol->string` (after the qualified-name unmangle pass)
-with no quoting.
-
-`print/1` renders through this same pretty-printer, so its output
-inherits the divergence for any argument whose rendering is an atom
-that needs quoting. The same holds for the unit atom that `print`
-itself returns, should it be printed in turn: Haskell shows `'()'`,
-Scheme shows `()`.
-
-Tests still skipped on the Scheme backend:
-
-- `("unicode_atoms_strings", "quoted_with_space" | "quoted_unicode" |
-  "quoted_chinese")` — Scheme prints the bare text where Haskell quotes
-  it.
-
-**Fix sketch:** teach `scheme/ychr/pretty.sls` the same `needsQuoting`
-logic as `renderAtom` — bare lowercase + alphanumeric + underscore stays
-unquoted, anything else gets `'…'` with embedded `'` doubled.
-
-
 ## Numeric primitives accept more than Haskell's
 
 Orthogonal to which *failures* are classified (that gap is closed
@@ -351,8 +324,8 @@ record of which fixes have already shipped.
   and `print/1` is registered in the prelude table, so both the
   `meta:print/1` wrapper and direct `host:print(...)` calls agree with
   the Haskell interpreter on the printed lines and the returned value
-  (the unit atom still renders differently if bound; see *Atom
-  pretty-printing divergences*). The direct path is variadic, matching
+  (the unit atom now renders as `'()'` on both backends; see *Closed
+  gaps* — atom pretty-printing). The direct path is variadic, matching
   Haskell's name-keyed registry; `print` at arities other than 1 is
   still not deep-evaluable, the same `(name, arity)`-keying divergence
   as `host:-/1`. Pinned by the `%print` and `host functor deep-eval`
@@ -360,3 +333,31 @@ record of which fixes have already shipped.
   `test/scheme/test_golden.py::test_meta_print_end_to_end` (no shared
   golden case is possible: the Haskell runner compares bindings only,
   while the Scheme runner compares all of stdout).
+- **Atom pretty-printing** — `pretty-term` emitted atoms via
+  `symbol->string` with no quoting, so `'hello world'`, `'你好'`,
+  `mymodule:'£foo'`, the unit atom `'()'`, uppercase-leading and
+  symbolic atoms, and embedded quotes all lost their surface spelling
+  (`hello world`, `你好`, `mymodule:£foo`, `()`, `Abc`, `+`, `a'b`).
+  The printer now ports `needsQuoting`/`renderAtom`
+  (`src/YCHR/Internal/PExpr.hs`): a non-empty bare lowercase identifier
+  of letters, digits and underscores stays bare unless it collides with
+  a word operator of the fixed `prettyOps` table (`fun`, `is`,
+  `chr_constraint`, `div`, …, so `'is'` prints quoted) or contains
+  `__`; anything else is wrapped in `'…'` with each embedded `'`
+  doubled. The predicate uses `char-general-category` (via
+  `(rnrs unicode)`) rather than `char-alphabetic?`/`char-numeric?`,
+  because Haskell's `isAlphaNum` also covers the `Nl`/`No` categories:
+  `a²` and `aⅧ` must stay bare on both backends. Quoting is applied per
+  segment — the module and base halves unmangle independently, as
+  Haskell renders them through separate `renderAtom` calls — so a
+  mangled `mymodule__%%u0000a3foo` prints `mymodule:'£foo'`, never
+  `'mymodule:£foo'`. `decode-mangled-name` still renders the unquoted
+  decoded name, so diagnostics (`is: functor is not evaluable:
+  host:-/1`, `m:pair/2`) are unchanged. Closed the
+  `HASKELL_ONLY_CASES` entries for the three `unicode_atoms_strings`
+  cases and for `("qualified_unicode_ctor", "pound_foo")`. The shared
+  rule is pinned by the new `test/golden/atom_quoting/` directory (unit
+  atom, word operator, uppercase lead, embedded quote, symbolic atom,
+  and the `Nl`/`No` non-regressions) and, on the Scheme side alone, by
+  the `pretty-term quotes atoms like renderAtom` group in
+  `scheme/test/test-runtime.scm`.

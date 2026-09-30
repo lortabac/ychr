@@ -1,6 +1,7 @@
 (import (rnrs)
         (srfi :64)
-        (ychr runtime))
+        (ychr runtime)
+        (ychr pretty))
 
 (define (fresh-session) (%make-session 0))
 
@@ -432,6 +433,63 @@
   (test-equal "returns the unit atom"
               (cons unit-atom "42\n")
               (capture-stdout+value (lambda () (%print 42)))))
+
+;;; --------------------------------------------------------------------------
+;;; `pretty-term` quotes atoms like Haskell's `renderAtom`
+;;;
+;;; `prettyTerm` renders an atom through `renderAtom`/`needsQuoting`
+;;; (YCHR.Internal.Pretty / YCHR.Internal.PExpr): only a bare lowercase
+;;; identifier of letters, digits and underscores stays bare, and the
+;;; module and base halves of a qualified name are quoted independently.
+;;; Locked here against the printer itself so a regression is local, and
+;;; because `a²`/`aⅧ` (categories No/Nl) would silently become quoted
+;;; under a narrower `char-alphabetic?`/`char-numeric?` port.
+;;; --------------------------------------------------------------------------
+
+(test-group "pretty-term quotes atoms like renderAtom"
+  (test-equal "bare lowercase atom"
+              "foo"
+              (pretty-term 'foo))
+  (test-equal "underscore stays bare"
+              "foo_bar"
+              (pretty-term 'foo_bar))
+  (test-equal "the unit atom is quoted"
+              "'()'"
+              (pretty-term unit-atom))
+  (test-equal "a space is quoted"
+              "'hello world'"
+              (pretty-term (string->symbol "hello world")))
+  (test-equal "a word operator is quoted"
+              "'is'"
+              (pretty-term 'is))
+  (test-equal "an uppercase lead is quoted"
+              "'Abc'"
+              (pretty-term (string->symbol "Abc")))
+  (test-equal "an embedded quote is doubled"
+              "'a''b'"
+              (pretty-term (string->symbol "a'b")))
+  ;; Nl/No categories are isAlphaNum in Haskell: they must stay bare,
+  ;; which is why the predicate uses `char-general-category`.
+  (test-equal "an No character stays bare"
+              "a²"
+              (pretty-term (string->symbol "a²")))
+  (test-equal "an Nl character stays bare"
+              "aⅧ"
+              (pretty-term (string->symbol "aⅧ")))
+  ;; Lt (titlecase) is isAlpha but not isLower: quoted as a lead,
+  ;; allowed in the tail.
+  (test-equal "a titlecase lead is quoted"
+              "'ǅabc'"
+              (pretty-term (string->symbol "ǅabc")))
+  (test-equal "a titlecase tail character stays bare"
+              "aǅb"
+              (pretty-term (string->symbol "aǅb")))
+  (test-equal "qualified halves are quoted independently"
+              "mymodule:'£foo'"
+              (pretty-term (string->symbol "mymodule__%%u0000a3foo")))
+  (test-equal "qualified bare halves stay bare"
+              "mymodule:uaafoo"
+              (pretty-term (string->symbol "mymodule__uaafoo"))))
 
 ;;; --------------------------------------------------------------------------
 ;;; Unimplemented meta host calls are bound stubs

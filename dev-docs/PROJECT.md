@@ -922,7 +922,7 @@ To add a new golden test, create a directory under `test/golden/`, drop the `.ch
 
 ### Scheme backend skip lists
 
-Some tests pin Haskell-runtime behavior that the Scheme runtime does not (yet) match — typically because the Scheme runtime lacks a primitive (e.g. Guile's r6rs subset has no `quotient`, so integer `div`/`mod` is unimplemented), pretty-prints values differently (e.g. negative numbers as `-2` vs Haskell's `(-2)`, unicode-quoted atoms), or doesn't implement a meta primitive (e.g. `copy_term`). The Scheme harness in `test/scheme/test_golden.py` provides two skip mechanisms so a divergent case does not block `make test`:
+Some tests pin behavior that the Scheme runtime does not (yet) match — typically because it lacks a whole subsystem (`library(search)`'s `solve/1` and friends, or the meta primitives `print_store`, `run_chr_session` and `read_term_from_string`), keys its prelude host-call table by `(name, arity)` where the Haskell registry keys by name alone (so a host call at an arity no primitive provides reports a different error), or misses an observer-transfer rule in `unify` (`reactivation_through_binding`). The Scheme harness in `test/scheme/test_golden.py` provides two skip mechanisms so a divergent case does not block `make test`:
 
 - `HASKELL_ONLY` — a set of test-directory names. Every case in those directories is skipped on the Scheme backend.
 - `HASKELL_ONLY_CASES` — a set of `(test_dir, case_name)` pairs for finer control when only some cases in a directory diverge.

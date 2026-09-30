@@ -1,0 +1,24 @@
+% Pins the atom-quoting rule both backends share: only a bare
+% lowercase identifier of letters, digits and underscores prints
+% unquoted, an embedded quote doubles, and the halves of a qualified
+% name quote independently (see qualified_unicode_ctor for the
+% qualified case). The `.chr` deliberately leaves the `= '…'` right
+% sides undeclared, so every rule warns (YCHR-20101) and the directory
+% is in `expectsWarnings` / `WERROR_EXEMPT`.
+%
+% `superscript` (`²`, category No) and `roman_numeral` (`Ⅷ`, category
+% Nl) are not regressions to pin: Haskell's `isAlphaNum` accepts both,
+% so they must print bare. A narrower port of the predicate (say,
+% `char-alphabetic?`/`char-numeric?`) would quote them and fail here.
+:- module(aq, [t/2, type(tags/0)]).
+:- chr_constraint t/2.
+:- chr_type tags ---> unit ; wordop ; upper ; quoted_quote ; sign ; superscript ; roman_numeral ; underscore.
+
+t(unit, R)          <=> R = '()'.
+t(wordop, R)        <=> R = 'is'.
+t(upper, R)         <=> R = 'Abc'.
+t(quoted_quote, R)  <=> R = 'a''b'.
+t(sign, R)          <=> R = '+'.
+t(superscript, R)   <=> R = 'a²'.
+t(roman_numeral, R) <=> R = 'aⅧ'.
+t(underscore, R)    <=> R = foo_bar.

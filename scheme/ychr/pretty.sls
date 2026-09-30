@@ -3,7 +3,9 @@
 ;;;; Matches the output format of prettyTerm in YCHR.Internal.Pretty (Haskell).
 (library (ychr pretty)
   (export pretty-term pretty-bindings bindings->string decode-mangled-name)
-  (import (rnrs) (ychr var))
+  ;; (rnrs unicode) supplies `char-general-category`, which the atom
+  ;; quoting predicate needs to mirror Haskell's `isAlphaNum` exactly.
+  (import (rnrs) (rnrs unicode) (ychr var))
 
   ;; Escape a string for display (matching Haskell renderString).
   (define (escape-string s)
@@ -115,22 +117,31 @@
            i)
           (else (loop (+ i 1)))))))
 
-  ;; Inverse of vmName in Compile/Names.hs. The encoding is injective
+  ;; Split a mangled vmName into its decoded halves: the car is the
+  ;; decoded module for a qualified name and #f for an unqualified one;
+  ;; the cdr is always the decoded base name. The encoding is injective
   ;; (see encodeText's haddock): encodeText emits no "__" of its own
   ;; (non-ASCII chars use "%%u<6 hex>" instead), and the lexer rejects
-  ;; "__" in source, so the only "__" in the mangled form is the
-  ;; module/base separator. Split there; decode "%%u..." escapes in
-  ;; each half. A leading "__" (compiler-internal name like
-  ;; "__lambda_3") yields an empty module — treat as unqualified.
-  (define (unmangle-qualified s)
+  ;; "__" in source, so the first "__" is the module/base separator. A
+  ;; leading "__" (compiler-internal name like "__lambda_3") yields an
+  ;; empty module — treated as unqualified.
+  (define (unmangle-segments s)
     (let ((n (string-length s))
           (sep (find-double-underscore s)))
-      (cond
-        ((or (not sep) (zero? sep)) (decode-escapes s))
-        (else
-         (string-append (decode-escapes-range s 0 sep)
-                        ":"
-                        (decode-escapes-range s (+ sep 2) n))))))
+      (if (or (not sep) (zero? sep))
+          (cons #f (decode-escapes s))
+          (cons (decode-escapes-range s 0 sep)
+                (decode-escapes-range s (+ sep 2) n)))))
+
+  ;; Inverse of vmName in Compile/Names.hs, unquoted: used for
+  ;; diagnostics, which name a functor the way the source spelled it
+  ;; (`host:-/1`, `m:pair/2`), never the way `renderAtom` would quote
+  ;; it. Output goes through `pretty-symbol` instead.
+  (define (unmangle-qualified s)
+    (let ((segments (unmangle-segments s)))
+      (if (car segments)
+          (string-append (car segments) ":" (cdr segments))
+          (cdr segments))))
 
   ;; Inverse of vmName as the runtime needs it: a mangled functor
   ;; string in, its decoded surface name out ("host:+", "m:f", "pair").
@@ -140,8 +151,78 @@
   ;; YCHR.Internal.Meta.
   (define (decode-mangled-name s) (unmangle-qualified s))
 
+  ;; ---- Atom quoting ------------------------------------------------
+  ;;
+  ;; Mirror of needsQuoting/renderAtom in YCHR.Internal.PExpr, which
+  ;; prettyTerm reaches through YCHR.Internal.Pretty: a bare lowercase
+  ;; identifier of letters, digits and underscores stays bare unless it
+  ;; collides with a word operator or contains "__"; anything else is
+  ;; single-quoted with an embedded quote doubled.
+
+  ;; The word operators of `prettyOps` in YCHR.Internal.Pretty: every
+  ;; non-symbolic operator of `builtinOps` (YCHR.Internal.Parser) plus
+  ;; the arithmetic table there. `prettyTerm` always uses that fixed
+  ;; table, so user-declared operators are deliberately not consulted.
+  (define word-ops
+    '("fun" "is" "requiring" "refining"
+      "chr_constraint" "chr_type" "opaque_type"
+      "function" "open_function" "class" "open_class"
+      "extend_class_type" "extend_class" "extend_function"
+      "end" "div" "mod" "rem"))
+
+  ;; Haskell Data.Char.isLower is exactly the Ll general category.
+  (define (lower-letter? c) (eq? (char-general-category c) 'Ll))
+
+  ;; Haskell Data.Char.isAlphaNum — isAlpha (Lu Ll Lt Lm Lo) or
+  ;; isNumber (Nd Nl No) — plus the `_` needsQuoting allows explicitly.
+  ;; `char-alphabetic?`/`char-numeric?` would be narrower: they miss
+  ;; Nl/No, so `a²` would be quoted here but bare in Haskell.
+  (define (atom-name-char? c)
+    (or (char=? c #\_)
+        (memq (char-general-category c) '(Lu Ll Lt Lm Lo Nd Nl No))))
+
+  ;; True if every character of S from index 1 on is an atom-name char.
+  (define (atom-name-tail? s)
+    (let ((n (string-length s)))
+      (let loop ((i 1))
+        (cond ((>= i n) #t)
+              ((atom-name-char? (string-ref s i)) (loop (+ i 1)))
+              (else #f)))))
+
+  ;; Mirror of needsQuoting in YCHR.Internal.PExpr.
+  (define (needs-quoting? s)
+    (or (zero? (string-length s))
+        (not (lower-letter? (string-ref s 0)))
+        (not (atom-name-tail? s))
+        (and (member s word-ops) #t)
+        (and (find-double-underscore s) #t)))
+
+  ;; Haskell renderAtom's escape: double each embedded quote.
+  (define (escape-atom-quotes s)
+    (let-values (((port extract) (open-string-output-port)))
+      (string-for-each
+       (lambda (c)
+         (if (char=? c #\') (put-string port "''") (put-char port c)))
+       s)
+      (extract)))
+
+  (define (render-atom s)
+    (if (needs-quoting? s)
+        (string-append "'" (escape-atom-quotes s) "'")
+        s))
+
+  ;; Render a functor or atom the way prettyTerm does: unmangle the
+  ;; vmName, then quote each half independently — Haskell renders the
+  ;; module and base through renderAtom separately, so a mangled
+  ;; `mymodule__%%u0000a3foo` is `mymodule:'£foo'`, never
+  ;; `'mymodule:£foo'`.
   (define (pretty-symbol sym)
-    (unmangle-qualified (symbol->string sym)))
+    (let ((segments (unmangle-segments (symbol->string sym))))
+      (if (car segments)
+          (string-append (render-atom (car segments))
+                         ":"
+                         (render-atom (cdr segments)))
+          (render-atom (cdr segments)))))
 
   ;; Pretty-print a CHR value, matching Haskell prettyTerm exactly.
   (define (pretty-term v)

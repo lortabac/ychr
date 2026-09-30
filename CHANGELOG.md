@@ -806,6 +806,26 @@ Runtime:
   function is called. `library(search)` still needs the same treatment.
   See [the Scheme backend gaps](dev-docs/SCHEME_BACKEND_GAPS.md).
 
+- The Scheme backend's pretty-printer now quotes atoms exactly as the
+  interpreter's does, so bindings, `print/1` output, `%unify` failure
+  messages and `write`/`writeln` results agree on both backends instead
+  of dropping the surrounding quotes. `pretty-term` ports
+  `needsQuoting`/`renderAtom`: a bare lowercase identifier of letters,
+  digits and underscores stays bare unless it collides with a word
+  operator or contains `__`, and anything else — an atom with a space or
+  a non-ASCII character, an uppercase lead, a symbolic atom, the unit
+  atom `()` — prints single-quoted with `''` for an embedded quote.
+  The module and base halves of a qualified name are quoted
+  independently (`mymodule:'£foo'`, never `'mymodule:£foo'`), and the
+  predicate uses `char-general-category` so the `Nl`/`No` characters
+  that Haskell's `isAlphaNum` accepts (`a²`, `aⅧ`) stay bare. Diagnostics
+  that name a functor keep the unquoted decoded form (`host:-/1`).
+  This closes the last quoting divergences in the Scheme golden
+  harness: the three `unicode_atoms_strings` cases and
+  `qualified_unicode_ctor/pound_foo` now run on both backends, and the
+  new `test/golden/atom_quoting/` directory pins the edge cases.
+  See [the Scheme backend gaps](dev-docs/SCHEME_BACKEND_GAPS.md).
+
 Benchmarks:
 
 The Scheme backend has a benchmark suite of its own. `make bench` now runs
