@@ -754,15 +754,21 @@ operation it relies on, so most programs never write `host:`.
 
 ## Scheme backend portability
 
-`print/1` and `name_base/1` work on both backends. `print/1` renders
+`print/1`, `read_term_from_string/1` and `name_base/1` work on both
+backends. `print/1` renders
 its argument with the surface pretty-printer followed by a newline, and
-returns the unit atom `()`. Both backends render atoms the same way: an
+returns the unit atom `()`. `read_term_from_string/1` parses its string
+argument as a term with the built-in operator table, so an operator the
+prelude declares (such as `+`) is a syntax error there, exactly as on
+the interpreter; `_` becomes a fresh logical variable and a repeated
+variable name is one shared variable, and a parse failure raises a
+runtime error. Both backends render atoms the same way: an
 identifier starting with a lowercase letter and otherwise made of
 letters, digits and underscores prints unquoted, unless it is a
 reserved word operator, and anything else is single-quoted with `''`
 for an embedded quote, so `hello world` prints as `'hello world'`, `is`
 as `'is'`, and the unit atom as `'()'`. Haskell-only:
-`read_term_from_string/1`, `write_term_to_string/1`,
+`write_term_to_string/1`,
 `write_store_to_list/0`, `print_store/0`, `run_chr_session/1`, and all
 of `library(search)`. On the Scheme backend the unimplemented meta
 primitives are bound stubs that raise a runtime error when called, so

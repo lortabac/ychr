@@ -386,7 +386,32 @@
               (capture-stdout+value
                (lambda ()
                  (deep-eval-value (fresh-session)
-                                  (make-term 'print (vector 1)))))))
+                                  (make-term 'print (vector 1))))))
+  ;; `read_term_from_string` lives in Haskell's `metaHostCallRegistry`,
+  ;; which the composed `defaultHostCallRegistry` includes, so `is`
+  ;; reaches it; the Scheme table registered it at arity 1. Its result is
+  ;; a term that pretty-prints in surface syntax.
+  (test-equal "host__read_term_from_string deep-evaluates a term"
+              "f(1, hello)"
+              (pretty-term
+               (deep-eval-value (fresh-session)
+                                (make-term 'host__read_term_from_string
+                                           (vector "f(1, hello)")))))
+  ;; The raw-functor tier answers a bare `read_term_from_string` atom too.
+  (test-equal "a bare read_term_from_string name deep-evaluates"
+              'hello
+              (deep-eval-value (fresh-session)
+                               (make-term 'read_term_from_string
+                                          (vector "hello"))))
+  ;; Arity is part of the prelude key, so the binary shape misses the
+  ;; table and is reported as not-evaluable.
+  (test-equal "read_term_from_string at a wrong arity is not evaluable"
+              "is: functor is not evaluable: host:read_term_from_string/2"
+              (error-message
+               (lambda ()
+                 (deep-eval-value (fresh-session)
+                                  (make-term 'host__read_term_from_string
+                                             (vector "f(1)" "g(2)")))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; `%print`: the runtime's `print` host call
@@ -502,9 +527,6 @@
 ;;; --------------------------------------------------------------------------
 
 (test-group "unimplemented meta host calls raise on call"
-  (test-equal "read_term_from_string bound and raises"
-              "not implemented"
-              (error-message (lambda () (%read-term-from-string "x"))))
   (test-equal "print_store bound and raises"
               "not implemented"
               (error-message (lambda () (%print-store))))
@@ -517,6 +539,161 @@
   (test-equal "run_chr_session bound and raises"
               "not implemented"
               (error-message (lambda () (%run-chr-session 1)))))
+
+;;; --------------------------------------------------------------------------
+;;; `%read-term-from-string`
+;;;
+;;; The reader behind `read_term_from_string/1`, mirroring
+;;; `YCHR.Internal.Meta.read_term_from_string` (`parseTermWith
+;;; builtinOps` followed by `termToValue`). The parser is the Pratt
+;;; parser of `YCHR.Internal.PExpr` driven by `Parser.builtinOps`, so
+;;; only the built-in operators are recognized: a prelude operator such
+;;; as `+` is a syntax error here, exactly as it is on the interpreter.
+;;; The first cases mirror `test/YCHR/MetaTest.hs`.
+;;; --------------------------------------------------------------------------
+
+;; Read `text` in a fresh session, so each case gets its own variables.
+(define (read-term text) (%read-term-from-string (fresh-session) text))
+
+(test-group "%read-term-from-string parses terms"
+  (test-equal "integer" 42 (read-term "42"))
+  (test-equal "negative integer" -7 (read-term "-7"))
+  (test-equal "float" 1.5 (read-term "1.5"))
+  (test-equal "negative float" -1.5 (read-term "-1.5"))
+  (test-equal "atom" 'hello (read-term "hello"))
+  (test-equal "quoted atom" (string->symbol "hello world")
+              (read-term "'hello world'"))
+  (test-equal "an embedded quote is doubled and unescaped"
+              (string->symbol "a'b")
+              (read-term "'a''b'"))
+  (test-equal "string" "hello" (read-term "\"hello\""))
+  (test-equal "string escapes are unescaped" "1\n2" (read-term "\"1\\n2\""))
+  ;; A 0-arity compound collapses to an atom, as `termToValue` does.
+  (test-equal "an empty argument list collapses to an atom" 'f (read-term "f()"))
+  (test-equal "compound prints in surface syntax"
+              "f(1, hello)"
+              (pretty-term (read-term "f(1, hello)")))
+  (test-equal "nested compound prints in surface syntax"
+              "f(g(1), h(2, 3))"
+              (pretty-term (read-term "f(g(1), h(2, 3))")))
+  (test-equal "list prints in surface syntax"
+              "[1, 2, 3]"
+              (pretty-term (read-term "[1, 2, 3]")))
+  ;; The list functors are the parser's `.` / `[]`, not the prelude's
+  ;; canonicalized `prelude__.` / `prelude__[]`; the pretty-printer
+  ;; accepts both, so this only shows up structurally.
+  (let ((l (read-term "[1, 2, 3]")))
+    (test-equal "the list functor is the bare dot"
+                (string->symbol ".")
+                (term-functor l))
+    (test-equal "the list ends in the bare nil atom"
+                (string->symbol "[]")
+                (get-arg (get-arg (get-arg l 1) 1) 1))))
+
+(test-group "%read-term-from-string reads booleans"
+  (test-equal "true" #t (read-term "true"))
+  (test-equal "false" #f (read-term "false"))
+  (test-equal "prelude:true" #t (read-term "prelude:true"))
+  (test-equal "prelude:false" #f (read-term "prelude:false"))
+  (test-assert "a parsed true is a native boolean"
+               (boolean? (read-term "true"))))
+
+(test-group "%read-term-from-string reads variables"
+  (test-assert "a variable is an unbound variable" (var? (read-term "X")))
+  (test-assert "a wildcard is an unbound variable" (var? (read-term "_")))
+  (let ((t (read-term "f(X, X)")))
+    (test-assert "a repeated name is one shared variable"
+                 (eq? (get-arg t 0) (get-arg t 1))))
+  (let ((t (read-term "f(X, Y)")))
+    (test-assert "different names are different variables"
+                 (not (eq? (get-arg t 0) (get-arg t 1)))))
+  (let ((t (read-term "f(_, _)")))
+    (test-assert "each wildcard is a distinct variable"
+                 (not (eq? (get-arg t 0) (get-arg t 1))))))
+
+(test-group "%read-term-from-string keeps qualified names in colon form"
+  (test-equal "a qualified atom" (string->symbol "m:f") (read-term "m:f"))
+  (test-equal "a qualified functor" (string->symbol "m:f")
+              (term-functor (read-term "m:f(1)")))
+  (test-equal "a qualified compound prints like the reference"
+              "'m:f'(1)"
+              (pretty-term (read-term "m:f(1)"))))
+
+(test-group "%read-term-from-string parses infix operators"
+  (let ((t (read-term "a <=> b")))
+    (test-equal "<=> is the functor" (string->symbol "<=>") (term-functor t))
+    (test-equal "<=> takes two arguments" 2 (vector-length (term-args t))))
+  (let ((t (read-term "a = b")))
+    (test-equal "= is the functor" (string->symbol "=") (term-functor t))
+    (test-equal "= takes two arguments" 2 (vector-length (term-args t))))
+  ;; `,` is xfy, so a chain nests to the right.
+  (let ((t (read-term "a, b, c")))
+    (test-equal "a comma chain is right-nested"
+                (string->symbol ",")
+                (term-functor (get-arg t 1)))))
+
+(test-group "%read-term-from-string parses the rest of the grammar"
+  ;; `%` starts a line comment, as in source.
+  (test-equal "a line comment is skipped" 'hello (read-term "hello% comment"))
+  ;; `fun(...) -> body end` desugars to the reference's `->` compound,
+  ;; with the parameter list as a `fun` compound.
+  (let ((t (read-term "fun(X, Y) -> X end")))
+    (test-equal "a lambda is an -> compound" (string->symbol "->") (term-functor t))
+    (test-equal "the lambda parameters are a fun compound"
+                (string->symbol "fun")
+                (term-functor (get-arg t 0)))
+    (test-equal "the lambda parameter list has both parameters"
+                2
+                (vector-length (term-args (get-arg t 0)))))
+  ;; Identifiers may contain non-ASCII letters (`Ll`/`Lu` and the
+  ;; `Lt`/`Lm`/`Lo`/`Nl`/`No` families).
+  (test-equal "a unicode identifier" (string->symbol "café") (read-term "café"))
+  ;; Sharing is by name across the whole term, not just siblings.
+  (let ((t (read-term "f(g(X), h(X))")))
+    (test-assert "sharing reaches nested occurrences"
+                 (eq? (get-arg (get-arg t 0) 0)
+                      (get-arg (get-arg t 1) 0))))
+  ;; A non-breaking space is `Data.Char.isSpace`; a line separator is
+  ;; not, so the two backends agree on which trailing whitespace is
+  ;; skipped.
+  (test-equal "a Zs character is whitespace" 'a
+              (read-term (string-append "a" (string #\x00a0))))
+  (test-equal "a line separator is not whitespace" 'general
+              (failure-kind
+               (lambda () (read-term (string-append "a" (string #\x2028)))))))
+
+(test-group "%read-term-from-string rejects malformed input"
+  ;; Both the empty input and a syntax error are general runtime errors:
+  ;; there is no value the caller could have meant. In particular a
+  ;; prelude operator is *not* readable — the reference parses with
+  ;; `builtinOps` only.
+  (test-equal "empty input" 'general (failure-kind (lambda () (read-term ""))))
+  (test-equal "a prelude operator is not readable" 'general
+              (failure-kind (lambda () (read-term "1 + 2"))))
+  (test-equal "unterminated compound" 'general
+              (failure-kind (lambda () (read-term "f("))))
+  (test-equal "a dangling comma in arguments" 'general
+              (failure-kind (lambda () (read-term "f(a,)"))))
+  (test-equal "a dangling comma in a list" 'general
+              (failure-kind (lambda () (read-term "[a,]"))))
+  (test-equal "trailing input" 'general
+              (failure-kind (lambda () (read-term "f(1) x"))))
+  (test-equal "a bare dot" 'general
+              (failure-kind (lambda () (read-term "."))))
+  ;; `end` is a prefix operator above `maxPrec`, so it is never a term.
+  (test-equal "a bare end is rejected" 'general
+              (failure-kind (lambda () (read-term "end"))))
+  ;; `<=>` is xfx: it cannot chain.
+  (test-equal "an xfx operator does not chain" 'general
+              (failure-kind (lambda () (read-term "a <=> b <=> c")))))
+
+(test-group "%read-term-from-string classifies its argument"
+  (let ((s (fresh-session)))
+    (test-equal "an unbound argument is an instantiation failure" 'inst
+                (failure-kind
+                 (lambda () (%read-term-from-string s (make-var s))))))
+  (test-equal "a bound non-string is a general failure" 'general
+              (failure-kind (lambda () (%read-term-from-string (fresh-session) 1)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; `deep-eval-value` arguments: declared calls evaluate, data stays data

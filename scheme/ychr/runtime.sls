@@ -49,7 +49,8 @@
           (ychr store)
           (ychr history)
           (ychr reactivation)
-          (ychr pretty))
+          (ychr pretty)
+          (ychr read))
 
   ;;; Session initialization: creates a fully initialized session
   (define %make-session
@@ -370,10 +371,11 @@
 
   ;; Prelude host-call table for `deep-eval-value`. Mirrors the
   ;; bare-name entries in Haskell's `baseHostCallRegistry`
-  ;; (`src/YCHR/Internal/Runtime/Registry.hs`), plus `print`, the one
-  ;; reachable entry of `metaHostCallRegistry` (`src/YCHR/Internal/Meta.hs`);
-  ;; `name_base` and the unimplemented meta calls are deliberately left
-  ;; out (see dev-docs/SCHEME_BACKEND_GAPS.md). It is consulted both
+  ;; (`src/YCHR/Internal/Runtime/Registry.hs`), plus `print` and
+  ;; `read_term_from_string`, the reachable entries of
+  ;; `metaHostCallRegistry` (`src/YCHR/Internal/Meta.hs`); `name_base`
+  ;; and the unimplemented meta calls are deliberately left out (see
+  ;; dev-docs/SCHEME_BACKEND_GAPS.md). It is consulted both
   ;; under the raw functor and under the bare name decoded out of a
   ;; `host:` functor (`evaluable-key-proc`); the raw route is what
   ;; answers a bare atom that no canonicalization qualified, such as
@@ -429,6 +431,10 @@
       ;; the only arity `library(meta)` declares; the direct
       ;; `host:print(...)` path handled by `hostCallMap` is variadic.
       (h 'print 1 (lambda (s v) (%print v)))
+      ;; `read_term_from_string` is the meta registry's reader, which
+      ;; needs the session to allocate the fresh variables of `_` and of
+      ;; the named variables it shares.
+      (h 'read_term_from_string 1 (lambda (s v) (%read-term-from-string s v)))
       (h 'term_variables 1 (lambda (s v) (%term-variables v)))
       (h 'compound_to_list 1 (lambda (s v) (%compound-to-list v)))
       (h 'list_to_compound 1 (lambda (s v) (%list-to-compound v)))
@@ -840,6 +846,25 @@
           v
           (string->symbol (substring s (+ sep 2) n)))))
 
+  ;;; read_term_from_string: read one term out of a string, mirroring
+  ;;; `read_term_from_string` in `YCHR.Internal.Meta` (`parseTermWith
+  ;;; builtinOps` followed by `termToValue`). The parser itself lives in
+  ;;; `(ychr read)` so it can be documented on its own; this is the
+  ;;; host-call entry point. The session is threaded because reading `_`
+  ;;; or a named variable allocates fresh logical variables in it.
+  ;;;
+  ;;; A non-string argument is classified like the other strict
+  ;;; primitives: an unbound variable is an instantiation failure (so a
+  ;;; rule guard delays and is retried), a bound non-string a general
+  ;;; one. A parse failure is always a general CHR error — there is no
+  ;;; value the caller could have meant.
+  (define (%read-term-from-string session text)
+    (if (string? text)
+        (let-values (((ok result) (parse-term session text)))
+          (if ok result (%chr-error result)))
+        (%arg-error "read_term_from_string" (list text)
+                    "read_term_from_string: expected 1 Text argument")))
+
   ;;; Unimplemented meta host calls: stubs.
   ;;;
   ;;; Each must still be *bound*, because a generated library defines
@@ -848,8 +873,6 @@
   ;;; whole library fail to load on a strict R6RS implementation
   ;;; (Chez). Lowering to a stub keeps the module loadable and reports
   ;;; the gap only when the function is actually called.
-  (define (%read-term-from-string s)
-    (error "%read-term-from-string" "not implemented"))
   (define (%write-term-to-string v)
     (error "%write-term-to-string" "not implemented"))
   (define (%write-store-to-list)
