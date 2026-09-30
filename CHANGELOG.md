@@ -792,6 +792,20 @@ Runtime:
   instead of failing on the list's cons cell.
   See [the `is` operator](docs/reference/language.md#the-is-operator).
 
+- The Scheme backend's `print/1` (from `library(meta)`) now renders its
+  argument through the surface pretty-printer instead of raw `display`,
+  one line per argument, and returns the unit atom, matching the
+  interpreter's `print` host call; `print` also joins the Scheme
+  prelude host-call table so a `host:print` term reaches it under `is`.
+  The `meta` primitives that still have no Scheme implementation
+  (`print_store`, `write_term_to_string`, `write_store_to_list`,
+  `run_chr_session`, alongside the existing `read_term_from_string`
+  stub) are now bound runtime stubs rather than bare identifiers, so a
+  module importing `library(meta)` loads on a strict R6RS
+  implementation such as Chez and the gap is reported only when the
+  function is called. `library(search)` still needs the same treatment.
+  See [the Scheme backend gaps](dev-docs/SCHEME_BACKEND_GAPS.md).
+
 Benchmarks:
 
 The Scheme backend has a benchmark suite of its own. `make bench` now runs

@@ -13,12 +13,39 @@ runtime in `scheme/ychr/`. Goals are run through `guile3.0 --r6rs` per
 
 ## Missing meta primitives
 
+None of these has a Scheme-side implementation. Each is nevertheless
+mapped in `hostCallMap` to a bound stub in `runtime.sls` of the form
+`(error "%<scheme-name>" "not implemented")`, so calling it raises with
+message `"not implemented"` and origin the mangled Scheme name. The
+mapping is what keeps
+`library(meta)` importable: a generated library defines *every* function
+of an imported library, so an unmapped name lowers to a bare identifier
+and the whole module fails to load on a strict R6RS implementation
+(Chez reports `attempt to reference unbound identifier print_store`),
+even for a program that only calls `print/1`.
+
 | Primitive               | Status |
 |-------------------------|--------|
-| `read_term_from_string` | Stubbed in `runtime.sls` as `(error "%read-term-from-string" "not implemented")`. The whole `read_term_test` directory is in `HASKELL_ONLY`. |
-| `write_store_to_list`   | No Scheme-side implementation; `write_store_to_list_test` is in `HASKELL_ONLY` (parallels the unimplemented `print_store`). |
-| `write_term_to_string`  | No Scheme-side implementation and no `hostCallMap` entry, so a call lowers to a bare verbatim identifier and fails as an unbound variable at load time. No golden test covers it, so it is in neither `HASKELL_ONLY` nor this file's test lists. |
-| `run_chr_session`       | No Scheme-side implementation — it spawns a nested interpreter session (the search driver, `YCHR.Internal.Runtime.Search`, on the Haskell side). `run_chr_session_test` is in `HASKELL_ONLY`. |
+| `read_term_from_string` | Stubbed as `(error "%read-term-from-string" "not implemented")`. The whole `read_term_test` directory is in `HASKELL_ONLY`. |
+| `write_store_to_list`   | Stub `%write-store-to-list`; `write_store_to_list_test` is in `HASKELL_ONLY` (parallels the unimplemented `print_store`). |
+| `write_term_to_string`  | Stub `%write-term-to-string`. No golden test covers it, so it is in neither `HASKELL_ONLY` nor this file's test lists. |
+| `print_store`           | Stub `%print-store`. |
+| `run_chr_session`       | Stub `%run-chr-session`; it spawns a nested interpreter session (the search driver, `YCHR.Internal.Runtime.Search`, on the Haskell side). `run_chr_session_test` is in `HASKELL_ONLY`. |
+
+The load-time invariant is pinned, without Guile, by
+`test/scheme/test_golden.py::test_meta_module_host_calls_are_bound`; the
+stub behaviour itself by
+`scheme/test/test-runtime.scm`'s `unimplemented meta host calls raise on
+call` group.
+
+These names are still absent from `*prelude-host-calls*`, so
+deep-evaluating a `host:` *term* with arguments (rather than calling
+the function directly) reports `is: functor is not evaluable` instead
+of reaching the stub — the same distinction the section below draws.
+For example `T = host:write_term_to_string(1), R is T.` reports
+`is: functor is not evaluable: host:write_term_to_string/1`. A nullary
+`host:print_store` builds the atom `host:print_store` instead and never
+reaches the evaluator at all.
 
 
 ## `library(search)`
@@ -43,12 +70,19 @@ Compilation itself succeeds. The library wrappers become ordinary
 compiled procedures (`func_search__solve1`, `func_search__fail0`, …),
 but the `host:` call inside each has no `hostCallMap` entry, so
 `Scheme.compileHostCall` lowers it to a bare verbatim identifier —
-`(solve (deref arg_0))`, `(fail)`. Importing the generated library
-still succeeds under Guile, which resolves free identifiers lazily;
-the failure comes when a search is first *called*:
+`(solve (deref arg_0))`, `(fail)`. Guile resolves free identifiers
+lazily, so importing the generated library succeeds there and the
+failure comes when a search is first *called*:
 
     ERROR: In procedure %resolve-variable:
     Unbound variable: solve
+
+A strict R6RS implementation is harsher: Chez rejects the *import*
+itself (`attempt to reference unbound identifier solve`). `library(meta)`
+had the same problem and is fixed — see *Missing meta primitives* above —
+by mapping each unimplemented call to a bound stub. `library(search)`
+still needs the equivalent stubs (`%solve`, `%fail`, `%findall`,
+`%fold-solutions`) or real implementations.
 
 `alt/1`, `choose/2`, `between/3` and `try_unify/2` need nothing special
 — they are ordinary CHR and compile and run fine; a program that only
@@ -106,7 +140,9 @@ never as the vmName `host__-/2`. Locked by the Haskell golden cases in
 
 ## Prelude host calls missing from `*prelude-host-calls*`
 
-The table's comment says to keep it in sync with `baseHostCallRegistry`.
+The table's comment asks for it to be kept in sync with the Haskell
+registries (`baseHostCallRegistry`, and the reachable part of
+`metaHostCallRegistry`).
 `write` and `writeln` were absent, so this used to diverge:
 
     X = writeln("x"), R is X.
@@ -122,20 +158,31 @@ deep-eval` group.
 `__chr_error` remains absent by design: `__` is reserved by the lexer,
 so no source program can name it.
 
-`print` and `read_term_from_string` live in `metaHostCallRegistry` rather
-than `baseHostCallRegistry`, so their absence is by design — but the
-comment names only `baseHostCallRegistry` and so understates what
-Haskell's `is` can reach.
+`read_term_from_string` stays absent — the Scheme procedure is still a
+stub — and `name_base` is absent even though `%name-base` exists, so
+`T = host:name_base(foo), R is T.` still reports
+`is: functor is not evaluable: host:name_base/1` where Haskell answers
+`R = foo`. `print` was in the same state and is now registered (see
+*Closed gaps* below). All three live in `metaHostCallRegistry` rather
+than `baseHostCallRegistry`; the table's comment now names that
+registry alongside the base one.
 
 
 ## Atom pretty-printing divergences
 
-The Haskell `prettyTerm` (`src/YCHR/Internal/PExpr.hs`) quotes atoms whose text is
-not a bare lowercase identifier, escaping embedded quotes — so `'hello
-world'`, `'café'`, and `'你好'` are quoted on output. The Scheme
-`pretty-term` (`scheme/ychr/pretty.sls`) emits symbols via
-`symbol->string` (after the qualified-name unmangle pass) with no
-quoting.
+The Haskell `prettyTerm` (`src/YCHR/Internal/Pretty.hs`; the
+`renderAtom`/`needsQuoting` it calls are in `src/YCHR/Internal/PExpr.hs`)
+quotes atoms whose text is not a bare lowercase identifier, escaping
+embedded quotes — so `'hello world'`, `'café'`, and `'你好'` are quoted
+on output. The Scheme `pretty-term` (`scheme/ychr/pretty.sls`) emits
+symbols via `symbol->string` (after the qualified-name unmangle pass)
+with no quoting.
+
+`print/1` renders through this same pretty-printer, so its output
+inherits the divergence for any argument whose rendering is an atom
+that needs quoting. The same holds for the unit atom that `print`
+itself returns, should it be printed in turn: Haskell shows `'()'`,
+Scheme shows `()`.
 
 Tests still skipped on the Scheme backend:
 
@@ -290,3 +337,26 @@ record of which fixes have already shipped.
   `("type_predicates", "grd_no")`; the driver-side invariant stays
   pinned without Guile by
   `test/scheme/test_golden.py::test_gen_driver_nested_goal_var_declaration`.
+- **`print/1`** — the host-call wiring existed (`hostCallMap` already
+  mapped `print` to `%print`), but `%print` was
+  `(display v) (newline)`, so a compound printed as a Scheme record
+  (`#<term functor: …>`), a string printed unquoted, a list printed as
+  a cons record, and the call returned the unspecified value of
+  `newline` instead of the unit atom. `print` was also absent from
+  `*prelude-host-calls*`, so the `is`-on-a-variable path diverged:
+  `T = host:print(1), R is T.` printed `1` and bound `R = '()'` on
+  Haskell, but reported `is: functor is not evaluable: host:print/1` on
+  Scheme. `%print` now renders each argument through `pretty-term`
+  (the Haskell `prettyTerm`) on its own line and returns the unit atom,
+  and `print/1` is registered in the prelude table, so both the
+  `meta:print/1` wrapper and direct `host:print(...)` calls agree with
+  the Haskell interpreter on the printed lines and the returned value
+  (the unit atom still renders differently if bound; see *Atom
+  pretty-printing divergences*). The direct path is variadic, matching
+  Haskell's name-keyed registry; `print` at arities other than 1 is
+  still not deep-evaluable, the same `(name, arity)`-keying divergence
+  as `host:-/1`. Pinned by the `%print` and `host functor deep-eval`
+  groups in `scheme/test/test-runtime.scm` and by
+  `test/scheme/test_golden.py::test_meta_print_end_to_end` (no shared
+  golden case is possible: the Haskell runner compares bindings only,
+  while the Scheme runner compares all of stdout).

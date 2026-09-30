@@ -754,7 +754,15 @@ operation it relies on, so most programs never write `host:`.
 
 ## Scheme backend portability
 
-`print/1` and `name_base/1` work on both backends. Haskell-only:
+`print/1` and `name_base/1` work on both backends. `print/1` renders
+its argument with the surface pretty-printer followed by a newline, and
+returns the unit atom `()`. Its output inherits the pretty-printer's
+atom-quoting divergence: atoms whose spelling needs quoting (and `()`
+itself) still print unquoted on the Scheme backend. Haskell-only:
 `read_term_from_string/1`, `write_term_to_string/1`,
 `write_store_to_list/0`, `print_store/0`, `run_chr_session/1`, and all
-of `library(search)`. Details in `dev-docs/SCHEME_BACKEND_GAPS.md`.
+of `library(search)`. On the Scheme backend the unimplemented meta
+primitives are bound stubs that raise a runtime error when called, so
+importing a module that declares them (such as `library(meta)`) still
+loads; `library(search)` is not yet at that point. Details in
+`dev-docs/SCHEME_BACKEND_GAPS.md`.

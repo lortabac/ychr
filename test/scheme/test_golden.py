@@ -289,6 +289,116 @@ def test_gen_driver_host_call_mapping(ychr_bin, project_root, tmp_path):
     assert "(my_add (deref 1) (deref 2))" in unmapped
 
 
+def test_meta_print_end_to_end(ychr_bin, guile_bin, scheme_lib_dir, project_root, tmp_path):
+    """`library(meta)`'s `print/1` must pretty-print on the Scheme
+    backend, matching the Haskell interpreter's `print` host call: each
+    argument is rendered in surface syntax on its own line.
+
+    Pinned end to end (compile -> gen-driver -> Guile) because the
+    golden harness cannot: the Haskell runner compares variable
+    bindings only, while this harness compares all of stdout, so a
+    program that prints has no shared `.expected` form.
+    """
+    program = tmp_path / "mp.chr"
+    program.write_text(
+        ":- module(mp, [go/1]).\n"
+        ":- use_module(library(prelude)).\n"
+        ":- use_module(library(meta)).\n"
+        ":- chr_constraint go(any).\n"
+        'go(X) <=> print([1, X]), print("hi"), print(42).\n'
+    )
+
+    result = subprocess.run(
+        [ychr_bin, "compile", "-t", "scheme", "-d", str(tmp_path), str(program)],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    result = subprocess.run(
+        [ychr_bin, "gen-driver", "-g", "mp:go(R)", str(program)],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    driver_path = tmp_path / "driver.sps"
+    driver_path.write_text(result.stdout)
+
+    result = subprocess.run(
+        [
+            guile_bin,
+            "--r6rs",
+            "--no-auto-compile",
+            "-L",
+            scheme_lib_dir,
+            "-L",
+            str(tmp_path),
+            str(driver_path),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    # Each argument on its own line, in surface syntax; then the
+    # driver's bindings. `X` is unbound, so it renders as `_`.
+    assert result.stdout == '[1, _]\n"hi"\n42\nR = _\n'
+
+
+def test_meta_module_host_calls_are_bound(ychr_bin, project_root, tmp_path):
+    """A module importing `library(meta)` defines *every* meta function,
+    including the ones with no Scheme implementation. Those calls must
+    lower to bound runtime stubs, not to bare identifiers: a bare
+    identifier makes the whole generated library fail to load on a
+    strict R6RS implementation (Chez reports `attempt to reference
+    unbound identifier print_store`), so a program that only uses
+    `print/1` could not be loaded at all.
+
+    Pinned on the generated text so it holds regardless of which Scheme
+    runs the suite (the harness itself is Guile-only).
+    """
+    program = tmp_path / "metab.chr"
+    program.write_text(
+        ":- module(metab, [go/1]).\n"
+        ":- use_module(library(prelude)).\n"
+        ":- use_module(library(meta)).\n"
+        ":- chr_constraint go(any).\n"
+        "go(X) <=> print(X).\n"
+    )
+    result = subprocess.run(
+        [ychr_bin, "compile", "-t", "scheme", "-d", str(tmp_path), str(program)],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = (tmp_path / "ychr" / "generated" / "program.sls").read_text()
+
+    for stub in (
+        "%write-term-to-string",
+        "%write-store-to-list",
+        "%print-store",
+        "%run-chr-session",
+        "%read-term-from-string",
+    ):
+        assert stub in generated, f"{stub} missing from the generated library"
+    # No bare, unbound call to any meta function may survive. The
+    # `register-evaluable!` tables spell the same names as
+    # `meta__print_store`, so match the call shape at both arities:
+    # `(name)` for the nullary ones and `(name ` for the unary ones.
+    for bare in (
+        "print_store",
+        "write_term_to_string",
+        "write_store_to_list",
+        "run_chr_session",
+        "read_term_from_string",
+    ):
+        for call in (f"({bare})", f"({bare} "):
+            assert call not in generated, f"bare {call}... in generated library"
+
+
 def test_gen_driver_dynamic_call_mapping(ychr_bin, project_root, tmp_path):
     """A `'$call'` in a goal must lower to the runtime's `%apply-closure`
     — which resolves the closure through the session's callables table —

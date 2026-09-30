@@ -762,6 +762,17 @@ hostCallMap =
       ("list_to_compound", "%list-to-compound"),
       ("name_base", "%name-base"),
       ("read_term_from_string", "%read-term-from-string"),
+      -- The remaining `meta` host calls have no Scheme implementation
+      -- yet. They are mapped to stubs that raise a clear runtime error
+      -- rather than left to pass through verbatim: a generated library
+      -- defines *every* function of an imported library, so an
+      -- unmapped meta call would make the whole module unloadable on a
+      -- strict R6RS implementation (Chez), even for a program that only
+      -- uses `print/1`.
+      ("write_term_to_string", "%write-term-to-string"),
+      ("write_store_to_list", "%write-store-to-list"),
+      ("print_store", "%print-store"),
+      ("run_chr_session", "%run-chr-session"),
       ("copy_term", "%copy-term")
     ]
 

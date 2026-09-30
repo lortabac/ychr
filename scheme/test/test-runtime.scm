@@ -285,6 +285,18 @@
 ;; `VAtom "()"`.
 (define unit-atom (string->symbol "()"))
 
+;; Capture everything `thunk` writes to (current-output-port) and
+;; return it as a string. The only way to assert a printed form.
+(define (capture-stdout thunk)
+  (cdr (capture-stdout+value thunk)))
+
+;; Capture both the value `thunk` returns and what it printed, as
+;; (value . text). Used where a call both prints and yields a value.
+(define (capture-stdout+value thunk)
+  (let-values (((port extract) (open-string-output-port)))
+    (let ((v (parameterize ((current-output-port port)) (thunk))))
+      (cons v (extract)))))
+
 (test-group "host functor deep-eval"
   (test-equal "host__+/2 evaluates"
               2
@@ -356,7 +368,97 @@
   (test-equal "host__writeln prints and returns unit"
               unit-atom
               (deep-eval-value (fresh-session)
-                               (make-term 'host__writeln (vector "x")))))
+                               (make-term 'host__writeln (vector "x"))))
+  ;; `print` lives in Haskell's `metaHostCallRegistry`, which the
+  ;; composed `defaultHostCallRegistry` includes, so `is` reaches it;
+  ;; the Scheme table registered it at arity 1. Pinned as (value .
+  ;; stdout) so the printed form is checked too.
+  (test-equal "host__print deep-evaluates to unit"
+              (cons unit-atom "1\n")
+              (capture-stdout+value
+               (lambda ()
+                 (deep-eval-value (fresh-session)
+                                  (make-term 'host__print (vector 1))))))
+  ;; The raw-functor tier answers a bare `print` atom too.
+  (test-equal "a bare print name deep-evaluates to unit"
+              (cons unit-atom "1\n")
+              (capture-stdout+value
+               (lambda ()
+                 (deep-eval-value (fresh-session)
+                                  (make-term 'print (vector 1)))))))
+
+;;; --------------------------------------------------------------------------
+;;; `%print`: the runtime's `print` host call
+;;;
+;;; Mirrors `print` in `YCHR.Internal.Meta`: each argument is rendered
+;;; with the surface pretty-printer (`prettyTerm` on the Haskell side)
+;;; on its own line, and the unit atom is returned. Pinned here because
+;;; `print` writes to stdout, which the golden harness compares on the
+;;; Scheme side but ignores on the Haskell side, so no shared
+;;; `.expected` can capture it.
+;;; --------------------------------------------------------------------------
+
+(test-group "%print pretty-prints and returns unit"
+  (test-equal "compound with an unbound variable"
+              "pair(1, _)\n"
+              (capture-stdout
+               (lambda ()
+                 (%print (make-term 'pair (vector 1 (fresh-var)))))))
+  (test-equal "string is quoted"
+              "\"hi\"\n"
+              (capture-stdout (lambda () (%print "hi"))))
+  (test-equal "list uses surface syntax"
+              "[1, 2]\n"
+              (capture-stdout
+               (lambda () (%print (%cons 1 (%cons 2 (%nil)))))))
+  (test-equal "atom stays bare"
+              "foo\n"
+              (capture-stdout (lambda () (%print 'foo))))
+  ;; Negative integers are parenthesized and booleans become
+  ;; `true`/`false`; both differ from `display`, so these two bite if
+  ;; `%print` ever regresses to a raw `display`.
+  (test-equal "negative integer is parenthesized"
+              "(-3)\n"
+              (capture-stdout (lambda () (%print -3))))
+  (test-equal "boolean uses surface spelling"
+              "true\n"
+              (capture-stdout (lambda () (%print #t))))
+  (test-equal "one line per argument"
+              "1\n\"hi\"\n"
+              (capture-stdout (lambda () (%print 1 "hi"))))
+  (test-equal "no arguments prints nothing and returns unit"
+              (cons unit-atom "")
+              (capture-stdout+value (lambda () (%print))))
+  (test-equal "returns the unit atom"
+              (cons unit-atom "42\n")
+              (capture-stdout+value (lambda () (%print 42)))))
+
+;;; --------------------------------------------------------------------------
+;;; Unimplemented meta host calls are bound stubs
+;;;
+;;; A generated library defines every function of an imported library,
+;;; so these names are referenced even by a program that uses none of
+;;; them. They must be *bound* (a bare unbound identifier makes the
+;;; whole module fail to load on a strict R6RS implementation such as
+;;; Chez); the gap is reported only when the function is called.
+;;; --------------------------------------------------------------------------
+
+(test-group "unimplemented meta host calls raise on call"
+  (test-equal "read_term_from_string bound and raises"
+              "not implemented"
+              (error-message (lambda () (%read-term-from-string "x"))))
+  (test-equal "print_store bound and raises"
+              "not implemented"
+              (error-message (lambda () (%print-store))))
+  (test-equal "write_term_to_string bound and raises"
+              "not implemented"
+              (error-message (lambda () (%write-term-to-string 1))))
+  (test-equal "write_store_to_list bound and raises"
+              "not implemented"
+              (error-message (lambda () (%write-store-to-list))))
+  (test-equal "run_chr_session bound and raises"
+              "not implemented"
+              (error-message (lambda () (%run-chr-session 1)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; `deep-eval-value` arguments: declared calls evaluate, data stays data

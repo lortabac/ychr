@@ -28,7 +28,8 @@
     %print %write %writeln %ground?
     %term-variables %compound-to-list %list-to-compound
     %name-base
-    %read-term-from-string
+    %read-term-from-string %write-term-to-string %write-store-to-list
+    %print-store %run-chr-session
     %int-to-float %float-to-int
     %add %sub %mul %fdiv
     %lt %gt %le %ge
@@ -369,14 +370,17 @@
 
   ;; Prelude host-call table for `deep-eval-value`. Mirrors the
   ;; bare-name entries in Haskell's `baseHostCallRegistry`
-  ;; (`src/YCHR/Internal/Runtime/Registry.hs`). It is consulted both
+  ;; (`src/YCHR/Internal/Runtime/Registry.hs`), plus `print`, the one
+  ;; reachable entry of `metaHostCallRegistry` (`src/YCHR/Internal/Meta.hs`);
+  ;; `name_base` and the unimplemented meta calls are deliberately left
+  ;; out (see dev-docs/SCHEME_BACKEND_GAPS.md). It is consulted both
   ;; under the raw functor and under the bare name decoded out of a
   ;; `host:` functor (`evaluable-key-proc`); the raw route is what
   ;; answers a bare atom that no canonicalization qualified, such as
   ;; one built by `quote`. Each procedure receives the session as its
   ;; first argument (uniform with user-defined functions); host calls
   ;; that don't need it ignore the parameter. Keep this list in sync
-  ;; with `baseHostCallRegistry` when adding new bare-name host calls.
+  ;; with the registries above when adding new bare-name host calls.
   (define *prelude-host-calls*
     (let ((t (make-hashtable evaluable-key-hash evaluable-key-eq?)))
       (define (h functor arity proc)
@@ -420,7 +424,11 @@
       ;; identically on both backends.
       (h 'write 1 (lambda (s v) (%write v)))
       (h 'writeln 1 (lambda (s v) (%writeln v)))
-      ;; Meta
+      ;; Meta. `print` is the meta registry's pretty-printer (`%print`
+      ;; above), which returns the unit atom. Registered at arity 1 —
+      ;; the only arity `library(meta)` declares; the direct
+      ;; `host:print(...)` path handled by `hostCallMap` is variadic.
+      (h 'print 1 (lambda (s v) (%print v)))
       (h 'term_variables 1 (lambda (s v) (%term-variables v)))
       (h 'compound_to_list 1 (lambda (s v) (%compound-to-list v)))
       (h 'list_to_compound 1 (lambda (s v) (%list-to-compound v)))
@@ -622,8 +630,14 @@
         (%arg-error "string_lower" (list v)
                     "string_lower: expected 1 Text argument")))
 
-  ;;; Print
-  (define (%print v) (display v) (newline))
+  ;;; Print. Mirrors `print` in `YCHR.Internal.Meta`: every argument is
+  ;;; rendered with the surface pretty-printer (`prettyTerm` on the
+  ;;; Haskell side) on its own line, and the unit atom is returned.
+  ;;; Variadic because the Haskell registry is keyed by name alone, so a
+  ;;; `host:print(a, b)` call prints both.
+  (define (%print . args)
+    (for-each (lambda (v) (display (pretty-term v)) (newline)) args)
+    (%unit))
 
   ;;; Write / writeln. `display` accepts any value, so on its own it
   ;;; has no failure path to classify; `writeStr`/`writeStrLn` in the
@@ -826,9 +840,24 @@
           v
           (string->symbol (substring s (+ sep 2) n)))))
 
-  ;;; read_term_from_string: stub
+  ;;; Unimplemented meta host calls: stubs.
+  ;;;
+  ;;; Each must still be *bound*, because a generated library defines
+  ;;; every function of an imported library regardless of which one the
+  ;;; program calls, and a reference to an unbound identifier makes the
+  ;;; whole library fail to load on a strict R6RS implementation
+  ;;; (Chez). Lowering to a stub keeps the module loadable and reports
+  ;;; the gap only when the function is actually called.
   (define (%read-term-from-string s)
     (error "%read-term-from-string" "not implemented"))
+  (define (%write-term-to-string v)
+    (error "%write-term-to-string" "not implemented"))
+  (define (%write-store-to-list)
+    (error "%write-store-to-list" "not implemented"))
+  (define (%print-store)
+    (error "%print-store" "not implemented"))
+  (define (%run-chr-session v)
+    (error "%run-chr-session" "not implemented"))
 
   ;;; copy_term: deep-copy a term, replacing each unbound variable with
   ;;; a fresh one. Sharing is preserved via an id->fresh-var hashtable,
