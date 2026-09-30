@@ -694,7 +694,10 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
   changes.
   Because an alternative is a *goal*, `choose/2` is not primitive: it
   is one library rule, `choose(X, Alts) <=> alt(maplist(fun(A) ->
-  quote(try_unify(X, A)) end, Alts))`. The surface disjunction operator
+  quote(try_unify(X, A)) end, Alts))`. `between/3` is one rule more of
+  the same, over an internal `between_alts/3` that offers the current
+  integer and the next step, so the closed interval is enumerated one
+  value at a time and never materialized. The surface disjunction operator
   `;` is the other way in, lowered by
   `src/YCHR/Internal/Desugar/Disjunction.hs` — a pass shaped like
   lambda lifting, run after it and after the type checker has seen each

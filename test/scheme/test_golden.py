@@ -50,6 +50,7 @@ HASKELL_ONLY = {
     # runtime has none of that yet.
     "search_alt",
     "search_basic",
+    "search_between",
     "search_deep",
     "search_disj",
     "search_fold",

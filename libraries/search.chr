@@ -2,6 +2,7 @@
     type(step/1),
     alt/1,
     choose/2,
+    between/3,
     try_unify/2,
     fun fail/0,
     fun solve/1,
@@ -14,7 +15,7 @@
 :- use_module(library(lists)).
 
 :- chr_constraint alt(list(any)), choose(any, list(any)),
-                  try_unify(any, any).
+                  between(int, int, any), try_unify(any, any).
 
 % What a fold's step function answers at a solution. `continue(A)` asks
 % for the next solution; `stop(A)` ends the search and undoes
@@ -32,7 +33,8 @@
     (forall(T, any, fun(T) -> bool end) -> bool),
     (forall_step(bool) -> step(bool)),
     (find_n(int, T, any) -> list(T)),
-    (find_n_step(int, list(T)) -> step(list(T))).
+    (find_n_step(int, list(T)) -> step(list(T))),
+    (between_alts(int, int, any) -> list(any)).
 
 % `alt(Goals)` marks a pending choice and has deliberately no rules:
 % telling it simply leaves it in the store, where the search driver
@@ -56,6 +58,37 @@
 % tell time and what is stored is the `alt`.
 choose(X, Alts) <=>
     alt(maplist(fun(A) -> quote(try_unify(X, A)) end, Alts)).
+
+% Bind X to each integer of the closed interval [Low, High], ascending,
+% one step at a time: each `between` offers the current value and the
+% same problem one integer up, so the rest of the interval is never
+% built. Like `choose`, `between` never reaches the store — the rule
+% fires at tell time and what is stored is the `alt`. The recursive
+% alternative is a quoted goal, resolved through the export list when
+% the choice is fired, so `between/3` has to stay exported.
+%
+% `Low > High` is the empty interval, so it is immediate exhaustion:
+% the branch fails, exactly as `choose(X, [])` does. `between_alts`
+% answers `[]` rather than calling `fail`, so telling an inverted
+% interval outside a search leaves an inert `alt` rather than raising.
+% A bound X turns each step into a membership test through
+% `try_unify/2`; the walk is one integer per step, so a value is
+% reached in as many steps as its distance from Low.
+between(Low, High, X) <=> alt(between_alts(Low, High, X)).
+
+% One step of `between/3`. The declared `int` bounds reject a
+% non-integer call site statically. `Low > High` is this function's
+% equation guard, and `between` calls it from a rule *body*: an
+% instantiation failure there is a hard runtime error, since only a
+% rule guard is caught by the soft-guard boundary. That is deliberate:
+% a guard on `between` itself would soft-fail on an unbound bound and
+% leave the constraint in the store, and a goal that quiesces with no
+% choice point is a *solution*, so the bound would silently succeed
+% with X unbound instead of being reported.
+between_alts(Low, High, _) | Low > High -> [].
+between_alts(Low, High, X) ->
+    Next is Low + 1,
+    [quote(try_unify(X, Low)), quote(between(Next, High, X))].
 
 % Abandon the current branch. Outside a search there is no branch to
 % abandon, and this is a runtime error rather than a silent success.

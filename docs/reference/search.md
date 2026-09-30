@@ -30,6 +30,7 @@ Search is built from these pieces:
 | `alt/1` | CHR constraint, **no rules** | The primitive choice point: a list of alternative goals. Sits inert in the store. |
 | `;` | body operator | Surface syntax for a choice between two rule-body conjunctions. Lowers to `alt/1`. |
 | `choose/2` | CHR constraint, **derived** | Labeling: bind one variable to one of a list of values. One rule over `alt` and `try_unify`. |
+| `between/3` | CHR constraint, **derived** | Labeling over a closed integer interval: unify one variable with each integer of `[Low, High]`, one step at a time. |
 | `fail/0` | function | Fails the current branch. |
 | `try_unify/2` | CHR constraint | Prolog's `=`: unify, or fail the branch. |
 | `solve/1` | function | Runs a goal; commits to its first solution. |
@@ -69,7 +70,8 @@ label, repeat.
 exports
 
 ```prolog
-:- chr_constraint alt(list(any)), choose(any, list(any)), try_unify(any, any).
+:- chr_constraint alt(list(any)), choose(any, list(any)),
+                  between(int, int, any), try_unify(any, any).
 
 :- chr_type step(A) ---> continue(A) ; stop(A) ; commit(A).
 
@@ -198,6 +200,60 @@ The driver may later recognize `choose` directly as a fast path — it
 is the labeling primitive, and the extra tell plus closure call per
 alternative is a measurable constant. That is an optimization, not a
 semantic change, and it is not done today.
+
+### `between/3`, derived
+
+`between(Low, High, X)` binds `X` to each integer of the closed
+interval `[Low, High]`, ascending, *one step at a time*. It is one
+library rule over a small internal step function:
+
+```prolog
+between(Low, High, X) <=> alt(between_alts(Low, High, X)).
+
+between_alts(Low, High, _) | Low > High -> [].
+between_alts(Low, High, X) ->
+    Next is Low + 1,
+    [quote(try_unify(X, Low)), quote(between(Next, High, X))].
+```
+
+Each step stores a two-alternative `alt`: take the current integer, or
+carry on from the next one. Nothing beyond the current step is built, so
+the work is proportional to the values actually visited rather than to
+the size of the interval: over `between(1, 1000000000, X)`, three
+`find_n/3` solutions cost three steps and `solve` reaches the first in
+one, where a materialized `range/2` would have to build the whole
+interval first. What the stepwise form gives up is the eager form's
+flat alternative list: enumerating *N* values costs *N* rule firings and
+*N* choice points, the `;`-generator path's cost (see
+[`search_generate`](../../test/golden/search_generate/search_generate.chr)),
+whereas `choose(X, range(Low, High))` pays for the whole list up front
+and then one tell per value.
+
+`Low > High` is the empty interval and so immediate exhaustion: the
+branch fails, exactly as `choose(X, [])` does. The step function answers
+`[]` rather than calling `fail/0`, so telling an inverted interval
+**outside** a search leaves an inert `alt` instead of raising. A bound
+`X` turns each step into a membership test through `try_unify/2`; since
+the walk is one integer at a time, a value in the interval is reached in
+as many steps as its distance from `Low`.
+
+The bounds are **demanded**: `between_alts` compares them, so a bound
+that is still unbound when `between` is told is a runtime error at tell
+time — not a branch failure and not a delay. (The declared `int`
+arguments reject a non-integer call site statically; a value smuggled
+through an `any` position follows `lists:range/2`'s arithmetic.) That
+is why the rule carries no guard. A guard such as `Low =< High` would
+soft-fail on an unbound bound and leave `between` in the store, and a
+goal that quiesces with no live `alt` is a **solution**, so
+`between(K, 3, X)` would silently succeed with `X` unbound. Comparing
+in the step function's *guard* — reached from the rule's body, where
+only a rule guard is soft-caught — makes the demand a hard error
+instead, and the error names the comparison (see
+[Failure and error](#failure-and-error)).
+
+Like `choose`, `between` never reaches the store: the rule fires at
+tell time and what is stored is the `alt`. A rule of yours can intercept
+that `alt`, not the `between`.
 
 ### ωr interaction
 
@@ -680,6 +736,9 @@ so an inner search never sees an outer search's pending choices.
 | `choose(X, Alts)` where `X` is already bound | `try_unify` makes it a membership test: alternatives that do not unify with `X`'s value fail individually, and the branch continues with the next one. |
 | `choose(X, Alts)` where `X` is bound by propagation *after* the `choose` was told | Same as above — `X` is dereferenced when the alternative is tried, not when the `choose` was told. |
 | `choose(X, Alts)` where `Alts` is not a proper list | Runtime error at *tell* time, inside `maplist`, before anything is stored. |
+| `between(Low, High, X)` with `Low > High` | The branch fails: the empty interval is immediate exhaustion, exactly `alt([])`. Outside a search it is an inert `alt`, not an error. |
+| `between(Low, High, X)` where `X` is already bound | `try_unify` makes each step a membership test, as in `choose/2`; a value inside the interval is reached one integer per step. |
+| `between(Low, High, X)` where a bound is still unbound when `between` is told | Runtime error at tell time, from the comparison in `between_alts/3`. Not a failure, and not a delay: a guard would quiesce as a solution with `X` unbound. |
 | Several `alt` constraints alive at quiescence | The oldest is taken; the others stay stored and are reached at a later quiescence, in insertion order. |
 | An `alt` killed by a user rule | Never seen by the driver. |
 | An `alt` told inside a branch — including the inner `alt` of a nested `;` | Picked up at that branch's next quiescence, so it is nested *under* the current choice. |

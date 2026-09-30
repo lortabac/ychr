@@ -478,6 +478,16 @@ runtime is the only backend that implements it. See the
   branch is picked.
 - `choose(X, Alts)` labels a variable and is one library rule over
   `alt/1` and `try_unify/2`, not a runtime primitive.
+- `between(Low, High, X)` labels a variable over the closed integer
+  interval `[Low, High]`, ascending, one value at a time: each step
+  offers the current integer and the next one, so nothing proportional
+  to the size of the interval is built and `find_n/3` over a huge
+  interval returns promptly. `Low > High` is the empty interval, so the
+  branch fails as `choose(X, [])` does; a bound `X` is a membership
+  test. The declared `int` bounds reject a non-integer call site
+  statically, and an unbound bound is a runtime error when the
+  constraint is told, not a silent delay.
+  See [`libraries/search.chr`](libraries/search.chr).
 - Solutions are fetched with `solve/1` (first solution, bindings
   kept), `findall/2` (all of them, everything undone) or
   `fold_solutions/4`, a fold over the solution sequence with early

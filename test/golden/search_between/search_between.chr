@@ -1,0 +1,83 @@
+% `between/3`, the lazy closed-interval label: one library rule over
+% `between_alts/3`, which offers the current integer and the next step.
+% This directory covers the interval shape (ascending, equal bounds,
+% negative bounds, inverted bounds), the bound-third-argument membership
+% test, the interaction with a later choice, the demanded bounds, and
+% laziness.
+
+:- module(search_between, [
+    interval/2, interval_single/2, interval_negative/2,
+    interval_inverted/2, inverted_solve/2, outside_inverted/1,
+    member_of/2, not_member_of/2, late_member/2,
+    first_two/2, lazy_bound/2, lazy_solve/2, nested_range/3,
+    bad_bounds/3, bad_high/3,
+    % Goal constraints have to be exported: the search entry points
+    % resolve them through the program's exports.
+    at_least/2, set_x/2
+]).
+
+:- use_module(library(search)).
+
+:- chr_constraint
+   interval(any, any), interval_single(any, any),
+   interval_negative(any, any), interval_inverted(any, any),
+   inverted_solve(any, any), outside_inverted(any),
+   member_of(any, any), not_member_of(any, any), late_member(any, any),
+   first_two(any, any), lazy_bound(any, any), lazy_solve(any, any),
+   nested_range(any, any, any),
+   bad_bounds(any, any, any), bad_high(any, any, any),
+   at_least(any, any), set_x(any, any).
+
+% The whole interval, in ascending search order.
+interval(X, Ss) <=> Ss is findall(X, quote(between(1, 3, X))).
+
+% The one-element interval.
+interval_single(X, Ss) <=> Ss is findall(X, quote(between(2, 2, X))).
+
+% Negative and zero bounds; `range/2`'s closed-interval convention, so
+% the step is still +1.
+interval_negative(X, Ss) <=> Ss is findall(X, quote(between(-2, 2, X))).
+
+% An inverted interval is the empty one: no solutions, and no error.
+interval_inverted(X, Ss) <=> Ss is findall(X, quote(between(3, 1, X))).
+inverted_solve(X, Ok) <=> Ok is solve(quote(between(3, 1, X))).
+
+% ... and told outside a search it is an inert `alt`, not an error:
+% nothing drives the choice, so the goal succeeds with X unbound, as
+% `choose(X, [])` does.
+outside_inverted(X) <=> between(3, 1, X).
+
+% A bound third argument makes each step a membership test.
+member_of(X, Ok) <=> X = 3, Ok is solve(quote(between(1, 5, X))).
+not_member_of(X, Ok) <=> X = 7, Ok is solve(quote(between(1, 5, X))).
+
+% The test dereferences X when an alternative is tried, not when
+% `between` was told: `set_x/2` binds X to a member of the interval
+% after the choice point already exists.
+late_member(X, Ss) <=>
+    Ss is findall(X, quote([between(1, 5, X), set_x(X, 3)])).
+set_x(X, N) <=> X = N.
+
+% Ascending search order, with the search stopped after two solutions.
+first_two(X, Xs) <=> Xs is find_n(2, X, quote(between(1, 5, X))).
+
+% Laziness is the point: only the steps actually visited are built, so a
+% bound no eager alternative list could hold is still cheap for the first
+% few solutions, and for the first solution alone.
+lazy_bound(X, Xs) <=> Xs is find_n(3, X, quote(between(1, 1000000000, X))).
+lazy_solve(X, Ok) <=> Ok is solve(quote(between(1, 1000000000, X))).
+
+% A second `between` driven by the first choice: X is bound only at the
+% next quiescence, so `at_least/2` delays on it (soft guard failure) and
+% runs its own `between` when reactivation binds it. The X = 3 branch
+% then dies on the empty interval.
+nested_range(X, Y, Ss) <=>
+    Ss is findall([X, Y], quote([between(1, 3, X), at_least(X, Y)])).
+at_least(X, Y) <=> integer(X) | between(X, 2, Y).
+
+% The bounds are demanded: `between_alts/3` compares them, so a bound
+% still unbound when `between` is told is a runtime error, not a
+% failure and not a delay. Both operand positions reach the same
+% comparison.
+bad_bounds(K, X, Ok) <=> Ok is solve(quote(between(K, 3, X))).
+bad_high(K, X, Ok) <=> Ok is solve(quote(between(1, K, X))).
