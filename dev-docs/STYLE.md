@@ -54,6 +54,18 @@ that's the whole point of the extension trio.
 
 Do not prefix field names with an abbreviation of the type (e.g. `cArgs`).
 
+## No partial record selectors
+
+A record field must be defined for every constructor of its type. Sharing a
+field across only some alternatives of a sum makes its projection partial:
+GHC's `-Wincomplete-record-selectors` (in `-Wall` from 9.14) flags the access
+site, and the projection throws at run time on the alternatives that lack the
+field. Give each alternative its own single-constructor record and match the
+constructor before projecting from the payload, as
+`YCHR.Internal.Parsed.Declaration` does. `-Wpartial-fields` catches the
+definition itself, but the build does not enable it, so the rule is on the
+author.
+
 ## Track effects with `transformers`
 
 The runtime is a single concrete monad — `type Chr = ReaderT SessionEnv IO`

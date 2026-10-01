@@ -176,7 +176,11 @@ library :: Module -> Text -> Module
 library m libName =
   m {imports = m.imports ++ [noAnnP (LibraryImport libName Nothing)]}
 
--- | Append constraint, function, operator, or type-export declarations.
+-- | Append declarations to a module. Constraint and function forms are
+-- the ones the compiler reads out of @decls@; operators and type
+-- exports describe entries of an export or import list and belong in
+-- 'exporting' (or an import list). The declaration walks ignore an
+-- operator appended here rather than crashing on it.
 declaring :: Module -> [Declaration] -> Module
 declaring m ds = m {decls = m.decls ++ map noAnn ds}
 
@@ -218,65 +222,69 @@ exporting m ds = case m.exports of
 
 -- | Constraint declaration: @:- chr_constraint name/arity@.
 (//) :: Text -> Int -> Declaration
-(//) name arity = ConstraintDecl name arity Nothing Nothing
+(//) name arity = ConstraintDecl (ConstraintDeclBody name arity Nothing Nothing)
 
 -- | Function declaration: @:- function name/arity@.
 function :: Text -> Int -> Declaration
 function name arity =
   FunctionDecl
-    { name = name,
-      arity = arity,
-      argTypes = Nothing,
-      returnType = Nothing,
-      isOpen = False,
-      kind = DKFunction,
-      requiring = Nothing,
-      refining = Nothing
-    }
+    FunctionDeclBody
+      { name = name,
+        arity = arity,
+        argTypes = Nothing,
+        returnType = Nothing,
+        isOpen = False,
+        kind = DKFunction,
+        requiring = Nothing,
+        refining = Nothing
+      }
 
 -- | Open-function declaration: @:- open_function name/arity@ (extensible
 -- from other modules via 'withExtensions').
 openFunction :: Text -> Int -> Declaration
 openFunction name arity =
   FunctionDecl
-    { name = name,
-      arity = arity,
-      argTypes = Nothing,
-      returnType = Nothing,
-      isOpen = True,
-      kind = DKFunction,
-      requiring = Nothing,
-      refining = Nothing
-    }
+    FunctionDeclBody
+      { name = name,
+        arity = arity,
+        argTypes = Nothing,
+        returnType = Nothing,
+        isOpen = True,
+        kind = DKFunction,
+        requiring = Nothing,
+        refining = Nothing
+      }
 
 -- | Class declaration: @:- class name/arity@ (multi-signature overloading).
 class_ :: Text -> Int -> Declaration
 class_ name arity =
   FunctionDecl
-    { name = name,
-      arity = arity,
-      argTypes = Nothing,
-      returnType = Nothing,
-      isOpen = False,
-      kind = DKClass,
-      requiring = Nothing,
-      refining = Nothing
-    }
+    FunctionDeclBody
+      { name = name,
+        arity = arity,
+        argTypes = Nothing,
+        returnType = Nothing,
+        isOpen = False,
+        kind = DKClass,
+        requiring = Nothing,
+        refining = Nothing
+      }
 
 -- | Open-class declaration: @:- open_class name/arity@ (extensible with
 -- signatures and equations from other modules).
 openClass :: Text -> Int -> Declaration
 openClass name arity =
   FunctionDecl
-    { name = name,
-      arity = arity,
-      argTypes = Nothing,
-      returnType = Nothing,
-      isOpen = True,
-      kind = DKClass,
-      requiring = Nothing,
-      refining = Nothing
-    }
+    FunctionDeclBody
+      { name = name,
+        arity = arity,
+        argTypes = Nothing,
+        returnType = Nothing,
+        isOpen = True,
+        kind = DKClass,
+        requiring = Nothing,
+        refining = Nothing
+      }
 
 -- | @:- extend_class_type (name(args) -> ret)@: adds a signature to an
 -- open class declared in another module, resolved through this module's
@@ -284,22 +292,24 @@ openClass name arity =
 extendClassType :: Text -> [TypeExpr] -> TypeExpr -> Declaration
 extendClassType name argTypes returnType =
   ExtendClassTypeDecl
-    { name = name,
-      arity = length argTypes,
-      argTypes = Just argTypes,
-      returnType = Just returnType,
-      target = Nothing
-    }
+    ( ExtendClassTypeDeclBody
+        { name = name,
+          arity = length argTypes,
+          argTypes = Just argTypes,
+          returnType = Just returnType,
+          target = Nothing
+        }
+    )
 
 -- | @:- module(m, [type(name/arity)])@: exports the type and all its
 -- constructors.
 typeExport :: Text -> Int -> Declaration
-typeExport n a = TypeExportDecl n a Nothing
+typeExport n a = TypeExportDecl (TypeExportDeclBody n a Nothing)
 
 -- | @:- module(m, [type(name/arity, [c1, c2])])@: exports the type and
 -- only the listed constructors; @[]@ exports the type alone.
 typeExportWith :: Text -> Int -> [Text] -> Declaration
-typeExportWith n a cs = TypeExportDecl n a (Just cs)
+typeExportWith n a cs = TypeExportDecl (TypeExportDeclBody n a (Just cs))
 
 -- | Operator declaration: @:- op(Fixity, OpType, Name)@.
 op :: Int -> OpType -> Text -> Declaration

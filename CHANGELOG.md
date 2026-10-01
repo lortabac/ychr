@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+The parsed AST's `Declaration` no longer has partial record fields:
+the constructors that carry fields now take their own
+single-constructor record (the operator alternative already took
+`OpDecl`), so every field projection is total and GHC 9.14's
+`-Wincomplete-record-selectors` no longer fires anywhere in this
+codebase. The suppression the build carried for it in `ychr.cabal` is
+gone. As a side effect, `YCHR.DSL.declaring` no longer crashes the
+renamer when handed an operator declaration; operators and type exports
+belong on the export list.
+
 The Scheme backend now implements the paper's *Indexing* optimization
 (§5.3), the same one the Haskell runtime gained earlier, with the same
 interface and the same on-demand threshold. The compiler was already
@@ -896,19 +906,9 @@ GHC 9.14.1 is supported. The `base` bound moves to `<4.23` and
 `template-haskell` to `<2.25` — one major above the `base-4.22` and
 `template-haskell-2.24` that 9.14.1 ships — and `tested-with` lists the
 release. The CI build matrix gains 9.14.1 while the test job stays on
-9.12.2. The one build-level change is a version-gated
-`-Wno-incomplete-record-selectors`: 9.14's `-Wall` enables that warning
-(the flag itself dates to 9.10), and it fires on every projection of a
-`Declaration` field that only some constructors carry — `OperatorDecl`
-has no `name`, `arity` or `argTypes`, `TypeExportDecl` no `argTypes` —
-even though the parser produces those two alternatives only from
-export/import items and a source-file `decls` list never holds one.
-`Parser`, `Rename` and `Resolve` use the partial-field accessor style, so
-under `-Werror` the warning breaks the build; eliminating the partiality
-would mean rewriting that style across those modules, which is a larger
-change than this compatibility fix. GHC < 9.14 does not enable the
-warning and 9.6/9.8 do not even know the flag, so the option is guarded
-by `impl(ghc >= 9.14)`.
+9.12.2. 9.14's `-Wall` enables `-Wincomplete-record-selectors`; the
+parsed `Declaration` now has no partial fields (see above), so no
+version-gated suppression is needed to keep the build warning-free.
 
 ## 0.1.0.0 -- 2026-08-02
 

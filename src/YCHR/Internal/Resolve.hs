@@ -267,19 +267,19 @@ qualifiedNameToLooseName (QualifiedName m b) = Qualified m b
 buildConstraintNames :: [CollectedModule] -> Set QualifiedIdentifier
 buildConstraintNames mods =
   Set.fromList
-    [ QualifiedIdentifier m.name d.name d.arity
+    [ QualifiedIdentifier m.name cd.name cd.arity
     | m <- mods,
       P.Ann d _ <- m.decls,
-      P.ConstraintDecl {} <- [d]
+      P.ConstraintDecl cd <- [d]
     ]
 
 buildFunctionNames :: [CollectedModule] -> Set QualifiedName
 buildFunctionNames mods =
   Set.fromList
-    [ QualifiedName m.name d.name
+    [ QualifiedName m.name fd.name
     | m <- mods,
       P.Ann d _ <- m.decls,
-      P.FunctionDecl {} <- [d]
+      P.FunctionDecl fd <- [d]
     ]
 
 {- Note [FunVisibility vs renamer visibility]
@@ -328,38 +328,38 @@ buildFunctionVisibility mods =
     perModule selfMod =
       Map.fromListWith
         (\a b -> nub (a ++ b))
-        [ ((d.name, d.arity), [QualifiedName provider.name d.name])
+        [ ((fd.name, fd.arity), [QualifiedName provider.name fd.name])
         | provider <- mods,
           P.Ann d _ <- provider.decls,
-          P.FunctionDecl {} <- [d],
-          visibleTo selfMod provider d
+          P.FunctionDecl fd <- [d],
+          visibleTo selfMod provider fd
         ]
 
-    visibleTo selfMod provider d
+    visibleTo selfMod provider fd
       | provider.name == selfMod.name = True
-      | not (importPermits selfMod provider d) = False
-      | otherwise = exportPermits provider d
+      | not (importPermits selfMod provider fd) = False
+      | otherwise = exportPermits provider fd
 
-    importPermits selfMod provider d =
+    importPermits selfMod provider fd =
       any
-        (matchesImport provider.name d)
+        (matchesImport provider.name fd)
         [im.node | im <- selfMod.imports]
 
-    matchesImport providerName d im
-      | im.importModule == providerName = importListPermitsFun d im.importItems
+    matchesImport providerName fd im
+      | im.importModule == providerName = importListPermitsFun fd im.importItems
       | otherwise = False
 
     importListPermitsFun _ Nothing = True
-    importListPermitsFun d (Just decls) = any (matchesFunDecl d) decls
+    importListPermitsFun fd (Just decls) = any (matchesFunDecl fd) decls
 
-    exportPermits provider d = case provider.exports of
+    exportPermits provider fd = case provider.exports of
       Nothing -> True
-      Just annExports -> any (matchesFunDecl d) annExports.node
+      Just annExports -> any (matchesFunDecl fd) annExports.node
 
-    matchesFunDecl d (P.FunctionDecl {name = n, arity = a}) =
-      n == d.name && a == d.arity
-    matchesFunDecl d (P.ConstraintDecl {name = n, arity = a}) =
-      n == d.name && a == d.arity
+    matchesFunDecl fd (P.FunctionDecl fd') =
+      fd'.name == fd.name && fd'.arity == fd.arity
+    matchesFunDecl fd (P.ConstraintDecl cd) =
+      cd.name == fd.name && cd.arity == fd.arity
     matchesFunDecl _ _ = False
 
 -- | Look up the function-visibility table for a single module,
@@ -380,31 +380,31 @@ buildQueryFunctionVisibility :: [CollectedModule] -> FunVisibility
 buildQueryFunctionVisibility mods =
   Map.fromListWith
     (\a b -> nub (a ++ b))
-    [ ((d.name, d.arity), [QualifiedName m.name d.name])
+    [ ((fd.name, fd.arity), [QualifiedName m.name fd.name])
     | m <- mods,
       P.Ann d _ <- m.decls,
-      P.FunctionDecl {} <- [d],
-      exportedBy m d
+      P.FunctionDecl fd <- [d],
+      exportedBy m fd
     ]
   where
-    exportedBy m d = case m.exports of
+    exportedBy m fd = case m.exports of
       Nothing -> True
-      Just annExports -> any (matchesFunDecl d) annExports.node
+      Just annExports -> any (matchesFunDecl fd) annExports.node
 
-    matchesFunDecl d (P.FunctionDecl {name = n, arity = a}) =
-      n == d.name && a == d.arity
-    matchesFunDecl d (P.ConstraintDecl {name = n, arity = a}) =
-      n == d.name && a == d.arity
+    matchesFunDecl fd (P.FunctionDecl fd') =
+      fd'.name == fd.name && fd'.arity == fd.arity
+    matchesFunDecl fd (P.ConstraintDecl cd) =
+      cd.name == fd.name && cd.arity == fd.arity
     matchesFunDecl _ _ = False
 
 -- | Map each declared function to whether its declaration is open.
 buildFunctionOpenness :: [CollectedModule] -> Map.Map QualifiedName Bool
 buildFunctionOpenness mods =
   Map.fromList
-    [ (QualifiedName m.name d.name, d.isOpen)
+    [ (QualifiedName m.name fd.name, fd.isOpen)
     | m <- mods,
       P.Ann d _ <- m.decls,
-      P.FunctionDecl {} <- [d]
+      P.FunctionDecl fd <- [d]
     ]
 
 -- | Map each declared function to the kind of its primary declaration.
@@ -414,22 +414,22 @@ buildFunctionOpenness mods =
 buildFunctionKinds :: [CollectedModule] -> Map.Map QualifiedName FunctionDeclKind
 buildFunctionKinds mods =
   Map.fromList
-    [ (QualifiedName m.name d.name, d.kind)
+    [ (QualifiedName m.name fd.name, fd.kind)
     | m <- mods,
       P.Ann d _ <- m.decls,
-      P.FunctionDecl {} <- [d]
+      P.FunctionDecl fd <- [d]
     ]
 
 collectConstraintTypes :: [CollectedModule] -> Map.Map ConstraintKey [TypeExpr]
 collectConstraintTypes mods =
   Map.fromList
-    [ (ConstraintKey (QualifiedName m.name d.name) d.arity, ts)
+    [ (ConstraintKey (QualifiedName m.name cd.name) cd.arity, ts)
     | m <- mods,
       P.Ann d _ <- m.decls,
-      P.ConstraintDecl {} <- [d],
-      let ts = case d.argTypes of
+      P.ConstraintDecl cd <- [d],
+      let ts = case cd.argTypes of
             Just types -> types
-            Nothing -> replicate d.arity (TypeCon (Unqualified "any") [])
+            Nothing -> replicate cd.arity (TypeCon (Unqualified "any") [])
     ]
 
 -- | Bounds declared on every @:- chr_constraint@ that carries a
@@ -437,10 +437,11 @@ collectConstraintTypes mods =
 collectConstraintBounds :: [CollectedModule] -> Map.Map ConstraintKey [BoundSig]
 collectConstraintBounds mods =
   Map.fromList
-    [ (ConstraintKey (QualifiedName m.name d.name) d.arity, bs)
+    [ (ConstraintKey (QualifiedName m.name cd.name) cd.arity, bs)
     | m <- mods,
       P.Ann d _ <- m.decls,
-      P.ConstraintDecl {requiring = Just bs} <- [d]
+      P.ConstraintDecl cd <- [d],
+      Just bs <- [cd.requiring]
     ]
 
 -- | Bounds declared on every @:- function@ / @:- open_function@ that
@@ -448,10 +449,11 @@ collectConstraintBounds mods =
 buildFunctionRequiring :: [CollectedModule] -> Map.Map QualifiedName [BoundSig]
 buildFunctionRequiring mods =
   Map.fromList
-    [ (QualifiedName m.name d.name, bs)
+    [ (QualifiedName m.name fd.name, bs)
     | m <- mods,
       P.Ann d _ <- m.decls,
-      P.FunctionDecl {requiring = Just bs} <- [d]
+      P.FunctionDecl fd <- [d],
+      Just bs <- [fd.requiring]
     ]
 
 -- ---------------------------------------------------------------------------
@@ -509,10 +511,11 @@ checkExtendsClosed ::
 checkExtendsClosed funcOpenness mods =
   let declErrs =
         [ noDiag
-            (P.AnnP (ExtendsClosedFunction target) loc (PExpr.Atom d.name))
+            (P.AnnP (ExtendsClosedFunction target) loc (PExpr.Atom ed.name))
         | m <- mods,
           P.Ann d loc <- m.extensionTypes,
-          Just target <- [d.target],
+          P.ExtendClassTypeDecl ed <- [d],
+          Just target <- [ed.target],
           isKnownClosed funcOpenness target
         ]
       eqnErrs =
@@ -542,19 +545,16 @@ checkExtendsClosed funcOpenness mods =
 -- second offending declaration.
 checkMultiSigOnFunction :: [CollectedModule] -> [Diagnostic ResolveError]
 checkMultiSigOnFunction mods =
-  [ noDiag (P.AnnP (MultiSigOnFunction (Qualified m.name d.name)) loc (PExpr.Atom d.name))
+  [ noDiag (P.AnnP (MultiSigOnFunction (Qualified m.name fd.name)) loc (PExpr.Atom fd.name))
   | (_, decls) <- groupedFunctionDecls mods,
     let typedFunDecls =
           [ entry
-          | entry@(d, _, _, _) <- decls,
-            P.FunctionDecl
-              { kind = DKFunction,
-                argTypes = Just _,
-                returnType = Just _
-              } <-
-              [d]
+          | entry@(fd, _, _, _) <- decls,
+            fd.kind == DKFunction,
+            Just _ <- [fd.argTypes],
+            Just _ <- [fd.returnType]
           ],
-    (d, m, loc, _) : _ <- [drop 1 typedFunDecls]
+    (fd, m, loc, _) : _ <- [drop 1 typedFunDecls]
   ]
 
 -- | Reject groups where the same name+arity is declared with both
@@ -563,12 +563,12 @@ checkMultiSigOnFunction mods =
 -- differs from the group's first declaration.
 checkMixedDeclKinds :: [CollectedModule] -> [Diagnostic ResolveError]
 checkMixedDeclKinds mods =
-  [ noDiag (P.AnnP (MixedDeclKinds (Qualified m.name d.name)) loc (PExpr.Atom d.name))
-  | (_, decls@((P.FunctionDecl {kind = k0}, _, _, _) : _)) <- groupedFunctionDecls mods,
-    let kinds = [k | (P.FunctionDecl {kind = k}, _, _, _) <- decls],
-    any (/= k0) kinds,
-    (d, m, loc, _) : _ <-
-      [[entry | entry@(P.FunctionDecl {kind = k}, _, _, _) <- decls, k /= k0]]
+  [ noDiag (P.AnnP (MixedDeclKinds (Qualified m.name fd.name)) loc (PExpr.Atom fd.name))
+  | (_, decls@((fd0, _, _, _) : _)) <- groupedFunctionDecls mods,
+    let kinds = [fn.kind | (fn, _, _, _) <- decls],
+    any (/= fd0.kind) kinds,
+    (fd, m, loc, _) : _ <-
+      [[entry | entry@(fn, _, _, _) <- decls, fn.kind /= fd0.kind]]
   ]
 
 -- | Reject same name+arity declared as both @:- chr_constraint@ and a
@@ -584,17 +584,17 @@ checkConstraintFunctionCollision :: [CollectedModule] -> [Diagnostic ResolveErro
 checkConstraintFunctionCollision mods = snd $ foldl go (Set.empty, []) entries
   where
     entries =
-      [ (m, d, loc)
+      [ (m, fd, loc)
       | m <- mods,
         let conKeys =
               Set.fromList
-                [(c.name, c.arity) | P.Ann c _ <- m.decls, P.ConstraintDecl {} <- [c]],
+                [(cd.name, cd.arity) | P.Ann c _ <- m.decls, P.ConstraintDecl cd <- [c]],
         P.Ann d loc <- m.decls,
-        P.FunctionDecl {} <- [d],
-        Set.member (d.name, d.arity) conKeys
+        P.FunctionDecl fd <- [d],
+        Set.member (fd.name, fd.arity) conKeys
       ]
-    go (seen, errs) (m, d, loc) =
-      let key = (m.name, d.name, d.arity)
+    go (seen, errs) (m, fd, loc) =
+      let key = (m.name, fd.name, fd.arity)
        in if Set.member key seen
             then (seen, errs)
             else
@@ -602,9 +602,9 @@ checkConstraintFunctionCollision mods = snd $ foldl go (Set.empty, []) entries
                 errs
                   ++ [ noDiag
                          ( P.AnnP
-                             (ConstraintFunctionCollision (Qualified m.name d.name))
+                             (ConstraintFunctionCollision (Qualified m.name fd.name))
                              loc
-                             (PExpr.Atom d.name)
+                             (PExpr.Atom fd.name)
                          )
                      ]
               )
@@ -642,7 +642,7 @@ checkConstructorFunctionCollision mods = snd $ foldl go (Set.empty, []) entries
       | m <- mods,
         let funNames =
               Set.fromList
-                [d.name | P.Ann d _ <- m.decls, P.FunctionDecl {} <- [d]],
+                [fn.name | P.Ann d _ <- m.decls, P.FunctionDecl fn <- [d]],
         P.Ann td loc <- m.typeDecls,
         dc <- typeConstructors td,
         let n = unqualifiedText dc.conName,
@@ -681,10 +681,11 @@ checkExtensionKinds funcKinds mods =
   where
     classTypeErrs =
       [ noDiag
-          (P.AnnP (ExtendClassTypeOnFunction target) loc (PExpr.Atom d.name))
+          (P.AnnP (ExtendClassTypeOnFunction target) loc (PExpr.Atom ed.name))
       | m <- mods,
         P.Ann d loc <- m.extensionTypes,
-        Just target <- [d.target],
+        P.ExtendClassTypeDecl ed <- [d],
+        Just target <- [ed.target],
         targetKind target == Just DKFunction
       ]
     extendFunErrs =
@@ -721,7 +722,10 @@ checkExtensionKinds funcKinds mods =
 -- offending declaration" can rely on list position.
 groupedFunctionDecls ::
   [CollectedModule] ->
-  [((Text, Text, Int), [(P.Declaration, CollectedModule, P.SourceLoc, PExpr.PExpr)])]
+  [ ( (Text, Text, Int),
+      [(P.FunctionDeclBody, CollectedModule, P.SourceLoc, PExpr.PExpr)]
+    )
+  ]
 groupedFunctionDecls mods =
   -- 'Map.fromListWith (++)' would build groups in *reverse* source
   -- order (right-associative accumulation). We want source order, so
@@ -732,10 +736,12 @@ groupedFunctionDecls mods =
     grouped =
       Map.fromListWith
         (\new old -> old . new)
-        [ ((m.name, d.name, d.arity), ([(d, m, loc, PExpr.Atom d.name)] ++))
+        [ ( (m.name, fd.name, fd.arity),
+            ([(fd, m, loc, PExpr.Atom fd.name)] ++)
+          )
         | m <- mods,
           P.Ann d loc <- m.decls,
-          P.FunctionDecl {} <- [d]
+          P.FunctionDecl fd <- [d]
         ]
 
 -- | Reject @:- extend_class_type@ directives that target a bounded
@@ -749,10 +755,11 @@ checkExtendsBounded ::
   Map.Map QualifiedName [BoundSig] -> [CollectedModule] -> [Diagnostic ResolveError]
 checkExtendsBounded funcRequiring mods =
   [ noDiag
-      (P.AnnP (ExtendTypeOnBoundedFunction target) loc (PExpr.Atom d.name))
+      (P.AnnP (ExtendTypeOnBoundedFunction target) loc (PExpr.Atom ed.name))
   | m <- mods,
     P.Ann d loc <- m.extensionTypes,
-    Just target <- [d.target],
+    P.ExtendClassTypeDecl ed <- [d],
+    Just target <- [ed.target],
     isBounded target
   ]
   where
@@ -779,22 +786,24 @@ checkBoundedDeclarations ::
   Set QualifiedName -> [CollectedModule] -> [Diagnostic ResolveError]
 checkBoundedDeclarations functionNames mods =
   let funcBounds =
-        [ (QualifiedName m.name d.name, primaryVars, bs, originForDecl m d)
+        [ (QualifiedName m.name fd.name, primaryVars, bs, originForDecl m fd)
         | m <- mods,
           P.Ann d _ <- m.decls,
-          P.FunctionDecl {requiring = Just bs, argTypes, returnType} <- [d],
+          P.FunctionDecl fd <- [d],
+          Just bs <- [fd.requiring],
           let primaryVars =
                 Set.fromList $
-                  concatMap typeExprVars (maybe [] id argTypes)
-                    ++ maybe [] typeExprVars returnType
+                  concatMap typeExprVars (maybe [] id fd.argTypes)
+                    ++ maybe [] typeExprVars fd.returnType
         ]
       conBounds =
-        [ (QualifiedName m.name d.name, primaryVars, bs, originForDecl m d)
+        [ (QualifiedName m.name cd.name, primaryVars, bs, originForDecl m cd)
         | m <- mods,
           P.Ann d _ <- m.decls,
-          P.ConstraintDecl {requiring = Just bs, argTypes} <- [d],
+          P.ConstraintDecl cd <- [d],
+          Just bs <- [cd.requiring],
           let primaryVars =
-                Set.fromList (concatMap typeExprVars (maybe [] id argTypes))
+                Set.fromList (concatMap typeExprVars (maybe [] id cd.argTypes))
         ]
       allBounded = funcBounds ++ conBounds
       varErrs =
@@ -833,7 +842,7 @@ checkBoundedDeclarations functionNames mods =
         -- diagnostic ourselves. (The renamer used to pre-report
         -- this as the generic YCHR-20002; it now defers to us.)
         False
-    originForDecl m d = PExpr.Atom (m.name <> ":" <> d.name)
+    originForDecl m fd = PExpr.Atom (m.name <> ":" <> fd.name)
 
 -- | Validate every @refining@ clause in the program.
 --
@@ -855,18 +864,19 @@ checkRefiningDeclarations mods =
   [ noDiag (P.AnnP (InvalidRefining declText v) loc origin)
   | m <- mods,
     P.Ann d loc <- m.decls,
-    P.FunctionDecl {refining = Just refined} <- [d],
+    P.FunctionDecl fd <- [d],
+    Just refined <- [fd.refining],
     let declText =
-          flattenName (qualifiedNameToLooseName (QualifiedName m.name d.name)),
-    let origin = PExpr.Atom (m.name <> ":" <> d.name),
-    v <- declViolations d ++ refinedTypeViolations refined
+          flattenName (qualifiedNameToLooseName (QualifiedName m.name fd.name)),
+    let origin = PExpr.Atom (m.name <> ":" <> fd.name),
+    v <- declViolations fd ++ refinedTypeViolations refined
   ]
   where
-    declViolations d =
-      [RefiningOnClass | d.kind == DKClass]
-        ++ [RefiningOnOpenDeclaration | d.isOpen]
-        ++ [RefiningArity d.arity | d.arity /= 1]
-        ++ case (d.argTypes, d.returnType) of
+    declViolations fd =
+      [RefiningOnClass | fd.kind == DKClass]
+        ++ [RefiningOnOpenDeclaration | fd.isOpen]
+        ++ [RefiningArity fd.arity | fd.arity /= 1]
+        ++ case (fd.argTypes, fd.returnType) of
           (Just [argTy], Just retTy) ->
             [RefiningArgNotAny | not (isAnyType argTy)]
               ++ [RefiningReturnNotBool | not (isBoolType retTy)]
@@ -1025,16 +1035,16 @@ reservedDeclNames = Set.fromList ["quote"]
 -- | Check that no declaration uses a reserved name.
 checkReservedNames :: [CollectedModule] -> [Diagnostic ResolveError]
 checkReservedNames mods =
-  [ noDiag (P.AnnP (ReservedName (Qualified m.name d.name)) loc (PExpr.Atom ""))
+  [ noDiag (P.AnnP (ReservedName (Qualified m.name n)) loc (PExpr.Atom ""))
   | m <- mods,
     P.Ann d loc <- m.decls,
-    isDeclNamed d,
-    d.name `Set.member` reservedDeclNames
+    n <- declNames d,
+    n `Set.member` reservedDeclNames
   ]
   where
-    isDeclNamed P.ConstraintDecl {} = True
-    isDeclNamed P.FunctionDecl {} = True
-    isDeclNamed _ = False
+    declNames (P.ConstraintDecl cd) = [cd.name]
+    declNames (P.FunctionDecl fd) = [fd.name]
+    declNames _ = []
 
 -- | Reserved names that cannot be used as user module names. Currently
 -- just @host@, which is wired in as the host-call qualifier in
@@ -1129,21 +1139,21 @@ resolveFunctions visMap mods =
       -- Modules are tagged with their input position so 'build' can
       -- gather equations once per distinct declaring module.
       allDecls =
-        [ (QualifiedName m.name d.name, d.arity, d, im, m)
+        [ (QualifiedName m.name fd.name, fd.arity, fd, im, m)
         | (im, m) <- zip [0 :: Int ..] mods,
           P.Ann d _ <- m.decls,
-          P.FunctionDecl {} <- [d]
+          P.FunctionDecl fd <- [d]
         ]
       -- Group by (qualifiedName, arity)
       grouped =
         Map.toList $
           Map.fromListWith
             (++)
-            [ ((qn, ar), [(d, im, m)])
-            | (qn, ar, d, im, m) <- allDecls
+            [ ((qn, ar), [(fd, im, m)])
+            | (qn, ar, fd, im, m) <- allDecls
             ]
       build ((qn, ar), decls) =
-        let declPairs = [(d, m) | (d, _, m) <- decls]
+        let declPairs = [(fd, m) | (fd, _, m) <- decls]
             -- 'gatherEquations' selects equations by (name, arity)
             -- from the declaring module, and every declaration in the
             -- group shares both — so it is gathered once per distinct
@@ -1155,9 +1165,9 @@ resolveFunctions visMap mods =
             -- accepted (see dev-docs/BUGS.md); per-module gathering
             -- keeps every file's equations in that case.
             declModules =
-              Map.elems (Map.fromList [(im, (d, m)) | (d, im, m) <- decls])
+              Map.elems (Map.fromList [(im, (fd, m)) | (fd, im, m) <- decls])
             (eqss, eqErrss) =
-              unzip [gatherEquations visMap mods m d | (d, m) <- declModules]
+              unzip [gatherEquations visMap mods m fd | (fd, m) <- declModules]
             def =
               R.FunctionDef
                 { name = qn,
@@ -1165,8 +1175,8 @@ resolveFunctions visMap mods =
                   signatures =
                     collectSignatures declPairs
                       ++ collectExtensionSignatures mods qn ar,
-                  isOpen = any (\(d, _) -> d.isOpen) declPairs,
-                  requiring = concatMap (\(d, _) -> maybe [] id d.requiring) declPairs,
+                  isOpen = any (\(fd, _) -> fd.isOpen) declPairs,
+                  requiring = concatMap (\(fd, _) -> maybe [] id fd.requiring) declPairs,
                   -- At most one declaration of the group can carry
                   -- one: 'checkRefiningDeclarations' rejects it on
                   -- everything but a single-signature @:- function@,
@@ -1174,7 +1184,7 @@ resolveFunctions visMap mods =
                   -- signature for the same name and arity.
                   refining =
                     listToMaybe
-                      [t | (d, _) <- declPairs, Just t <- [d.refining]],
+                      [t | (fd, _) <- declPairs, Just t <- [fd.refining]],
                   equations = concat eqss
                 }
          in (def, concat eqErrss)
@@ -1182,12 +1192,12 @@ resolveFunctions visMap mods =
    in (defs, concat defErrss)
 
 -- | Collect type signatures from a group of declarations for the same function.
-collectSignatures :: [(P.Declaration, CollectedModule)] -> [([TypeExpr], TypeExpr)]
+collectSignatures :: [(P.FunctionDeclBody, CollectedModule)] -> [([TypeExpr], TypeExpr)]
 collectSignatures decls =
   [ (argTys, retTy)
-  | (d, _) <- decls,
-    Just argTys <- [d.argTypes],
-    Just retTy <- [d.returnType]
+  | (fd, _) <- decls,
+    Just argTys <- [fd.argTypes],
+    Just retTy <- [fd.returnType]
   ]
 
 -- | Collect signatures contributed by @:- extend_class_type@
@@ -1199,11 +1209,12 @@ collectExtensionSignatures mods qn ar =
   [ (argTys, retTy)
   | m <- mods,
     P.Ann d _ <- m.extensionTypes,
-    d.arity == ar,
-    Just (Qualified tm tn) <- [d.target],
+    P.ExtendClassTypeDecl ed <- [d],
+    ed.arity == ar,
+    Just (Qualified tm tn) <- [ed.target],
     QualifiedName tm tn == qn,
-    Just argTys <- [d.argTypes],
-    Just retTy <- [d.returnType]
+    Just argTys <- [ed.argTypes],
+    Just retTy <- [ed.returnType]
   ]
 
 -- | Gather equations for a function declaration, stripping the funName.
@@ -1218,22 +1229,22 @@ gatherEquations ::
   Map Text FunVisibility ->
   [CollectedModule] ->
   CollectedModule ->
-  P.Declaration ->
+  P.FunctionDeclBody ->
   ([P.AnnP R.FunctionEquation], [Diagnostic ResolveError])
-gatherEquations visMap mods m d =
-  let qualName = Qualified m.name d.name
+gatherEquations visMap mods m fd =
+  let qualName = Qualified m.name fd.name
       primaryEqs =
         [ (annEq, m)
         | annEq <- m.equations,
           annEq.node.funName == qualName,
-          length annEq.node.args == d.arity
+          length annEq.node.args == fd.arity
         ]
       extensionEqs =
         [ (annEq, mod_)
         | mod_ <- mods,
           annEq <- mod_.extensions ++ mod_.classExtensions,
           annEq.node.funName == qualName,
-          length annEq.node.args == d.arity
+          length annEq.node.args == fd.arity
         ]
       strip (annEq, srcMod) =
         stripFunName (funVisibilityFor visMap srcMod.name) annEq

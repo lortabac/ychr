@@ -459,9 +459,10 @@ conProvidersAnyArity ctx n =
 buildDeclEnv :: [CollectedModule] -> DeclEnv
 buildDeclEnv mods =
   makeDeclEnv
-    [ ((d.name, d.arity), [m.name])
+    [ ((n, a), [m.name])
     | m <- mods,
-      Ann d _ <- m.decls
+      Ann d _ <- m.decls,
+      Just (n, a) <- [declNameArity d]
     ]
 
 -- | Only /exported/ constraints and functions (for cross-module resolution).
@@ -471,11 +472,12 @@ buildDeclEnv mods =
 buildExportEnv :: [CollectedModule] -> ExportEnv
 buildExportEnv mods =
   makeExportEnv
-    [ ((d.name, d.arity), [m.name])
+    [ ((n, a), [m.name])
     | m <- mods,
       d <- case m.exports of
         Nothing -> map (.node) m.decls
-        Just annExports -> filter isConstraintOrFunctionDecl annExports.node
+        Just annExports -> filter isConstraintOrFunctionDecl annExports.node,
+      Just (n, a) <- [declNameArity d]
     ]
 
 -- | All type declarations across all modules.
@@ -492,25 +494,31 @@ buildTypeDeclEnv mods =
 buildTypeExportEnv :: [CollectedModule] -> ExportEnv
 buildTypeExportEnv mods =
   makeExportEnv
-    [ ((d.name, d.arity), [m.name])
+    [ (key, [m.name])
     | m <- mods,
-      d <- case m.exports of
+      key <- case m.exports of
         Nothing ->
-          [ TypeExportDecl (unqualifiedText td.name) (length td.typeVars) Nothing
+          [ (unqualifiedText td.name, length td.typeVars)
           | Ann td _ <-
               m.typeDecls
           ]
-        Just annExports -> filter isTypeExportDecl annExports.node
+        Just annExports -> [(td.name, td.arity) | TypeExportDecl td <- annExports.node]
     ]
+
+-- | The @(name, arity)@ a declaration is referenced by. Operator
+-- declarations name an operator rather than a symbol in the
+-- constraint/function namespace, so they contribute nothing.
+declNameArity :: Declaration -> Maybe (Text, Int)
+declNameArity (ConstraintDecl cd) = Just (cd.name, cd.arity)
+declNameArity (FunctionDecl fd) = Just (fd.name, fd.arity)
+declNameArity (ExtendClassTypeDecl ed) = Just (ed.name, ed.arity)
+declNameArity (TypeExportDecl td) = Just (td.name, td.arity)
+declNameArity (OperatorDecl {}) = Nothing
 
 isConstraintOrFunctionDecl :: Declaration -> Bool
 isConstraintOrFunctionDecl ConstraintDecl {} = True
 isConstraintOrFunctionDecl FunctionDecl {} = True
 isConstraintOrFunctionDecl _ = False
-
-isTypeExportDecl :: Declaration -> Bool
-isTypeExportDecl TypeExportDecl {} = True
-isTypeExportDecl _ = False
 
 -- ---------------------------------------------------------------------------
 -- Entry points
@@ -579,13 +587,13 @@ validateExports = traverse_ validateOne
       Just (AnnP exports loc origin) -> traverse_ (checkExport m loc origin) exports
 
     checkExport m loc origin d = case d of
-      ConstraintDecl {name, arity}
+      ConstraintDecl ConstraintDeclBody {name, arity}
         | not (isDeclared m name arity) ->
             emitError (AnnP (UnknownExport m.name name arity) loc origin)
-      FunctionDecl {name, arity}
+      FunctionDecl FunctionDeclBody {name, arity}
         | not (isDeclared m name arity) ->
             emitError (AnnP (UnknownExport m.name name arity) loc origin)
-      TypeExportDecl {name, arity, conExports}
+      TypeExportDecl TypeExportDeclBody {name, arity, conExports}
         | not (isTypeDeclared m name arity) ->
             emitError (AnnP (UnknownExport m.name name arity) loc origin)
         | otherwise ->
@@ -607,7 +615,8 @@ validateExports = traverse_ validateOne
             )
             cs
 
-    isDeclared m n a = (n, a) `elem` [(d.name, d.arity) | Ann d _ <- m.decls]
+    isDeclared m n a =
+      (n, a) `elem` [k | Ann d _ <- m.decls, Just k <- [declNameArity d]]
     isTypeDeclared m n a =
       (n, a)
         `elem` [ ( unqualifiedText td.name,
@@ -700,14 +709,14 @@ validateImportLists mods ctx =
     checkItem mn loc origin (OperatorDecl op) =
       when (op `notElem` Map.findWithDefault [] mn ctx.operatorExports) $
         emitError (AnnP (UnknownOperatorImport mn op.opName) loc origin)
-    checkItem mn loc origin (ConstraintDecl {name = n, arity = a}) =
+    checkItem mn loc origin (ConstraintDecl ConstraintDeclBody {name = n, arity = a}) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
-    checkItem mn loc origin (FunctionDecl {name = n, arity = a}) =
+    checkItem mn loc origin (FunctionDecl FunctionDeclBody {name = n, arity = a}) =
       when (mn `notElem` lookupExport (n, a) ctx.exportEnv) $
         emitError (AnnP (UnknownImport mn n a) loc origin)
     checkItem _ _ _ ExtendClassTypeDecl {} = pure ()
-    checkItem mn loc origin (TypeExportDecl {name = n, arity = a, conExports = cs}) =
+    checkItem mn loc origin (TypeExportDecl (TypeExportDeclBody n a cs)) =
       if mn `notElem` lookupExport (n, a) ctx.typeExportEnv
         then emitError (AnnP (UnknownImport mn n a) loc origin)
         else checkImportedCons mn loc origin n a cs
@@ -751,7 +760,11 @@ validateImportLists mods ctx =
           let allowed = case m.exports of
                 Nothing -> Nothing
                 Just (AnnP exports _ _) ->
-                  case [acs | TypeExportDecl tn ta acs <- exports, tn == n, ta == a] of
+                  case [ acs
+                       | TypeExportDecl (TypeExportDeclBody tn ta acs) <- exports,
+                         tn == n,
+                         ta == a
+                       ] of
                     (acs : _) -> acs
                     [] -> Just []
            in case allowed of
@@ -1224,27 +1237,27 @@ buildVisibleFunctionNames :: [CollectedModule] -> CollectedModule -> Map Text [T
 buildVisibleFunctionNames mods self =
   Map.fromListWith
     (\a b -> nub (a ++ b))
-    [ (d.name, [provider.name])
+    [ (fd.name, [provider.name])
     | provider <- mods,
       Ann d _ <- provider.decls,
-      FunctionDecl {} <- [d],
-      visibleTo provider d
+      FunctionDecl fd <- [d],
+      visibleTo provider fd
     ]
   where
     imports = [(imp.importModule, imp.importItems) | AnnP imp _ _ <- self.imports]
 
-    visibleTo provider d
+    visibleTo provider fd
       | provider.name == self.name = True
-      | otherwise = importPermits provider d && exportPermits provider d
+      | otherwise = importPermits provider fd && exportPermits provider fd
 
-    importPermits provider d =
+    importPermits provider fd =
       any
-        (\(imn, il) -> imn == provider.name && importListPermits d.name d.arity il)
+        (\(imn, il) -> imn == provider.name && importListPermits fd.name fd.arity il)
         imports
 
-    exportPermits provider d = case provider.exports of
+    exportPermits provider fd = case provider.exports of
       Nothing -> True
-      Just annExports -> importListPermits d.name d.arity (Just annExports.node)
+      Just annExports -> importListPermits fd.name fd.arity (Just annExports.node)
 
 -- | Check whether a name/arity is permitted by an import list.
 -- 'Nothing' means import everything; 'Just' restricts to listed items.
@@ -1252,8 +1265,8 @@ importListPermits :: Text -> Int -> Maybe [Declaration] -> Bool
 importListPermits _ _ Nothing = True
 importListPermits n arity (Just decls) = any match decls
   where
-    match (ConstraintDecl {name = dn, arity = da}) = dn == n && da == arity
-    match (FunctionDecl {name = dn, arity = da}) = dn == n && da == arity
+    match (ConstraintDecl ConstraintDeclBody {name = dn, arity = da}) = dn == n && da == arity
+    match (FunctionDecl FunctionDeclBody {name = dn, arity = da}) = dn == n && da == arity
     match _ = False
 
 -- | Check whether a type name/arity is permitted by an import list.
@@ -1261,7 +1274,7 @@ importListPermitsType :: Text -> Int -> Maybe [Declaration] -> Bool
 importListPermitsType _ _ Nothing = True
 importListPermitsType n arity (Just decls) = any match decls
   where
-    match (TypeExportDecl {name = tn, arity = ta}) = tn == n && ta == arity
+    match (TypeExportDecl TypeExportDeclBody {name = tn, arity = ta}) = tn == n && ta == arity
     match _ = False
 
 -- | The set of constructor names a single import-list entry permits for
@@ -1272,7 +1285,7 @@ importListPermitsCons ::
   Text -> Int -> Set.Set Text -> Maybe [Declaration] -> Set.Set Text
 importListPermitsCons _ _ allCons Nothing = allCons
 importListPermitsCons n arity allCons (Just decls) =
-  case [cs | TypeExportDecl tn ta cs <- decls, tn == n, ta == arity] of
+  case [cs | TypeExportDecl (TypeExportDeclBody tn ta cs) <- decls, tn == n, ta == arity] of
     (Nothing : _) -> allCons
     (Just xs : _) -> Set.fromList xs
     [] -> Set.empty
@@ -1315,7 +1328,11 @@ visibleDataCons mods ctx =
     exporterAllowance m n a allCons = case m.exports of
       Nothing -> Just allCons
       Just (AnnP exports _ _) ->
-        case [cs | TypeExportDecl tn ta cs <- exports, tn == n, ta == a] of
+        case [ cs
+             | TypeExportDecl (TypeExportDeclBody tn ta cs) <- exports,
+               tn == n,
+               ta == a
+             ] of
           (Nothing : _) -> Just allCons
           (Just xs : _) -> Just (Set.fromList xs)
           [] -> Nothing
@@ -1381,39 +1398,44 @@ renameAnnDecl ctx (Ann d loc) = do
 
 renameDeclaration ::
   RenameCtx -> SourceLoc -> Declaration -> Rename Declaration
-renameDeclaration ctx loc (ConstraintDecl n a argTypes requiring) = do
-  requiring' <- traverse (traverse (renameBoundSig ctx loc)) requiring
+renameDeclaration ctx loc (ConstraintDecl cd) = do
+  requiring' <- traverse (traverse (renameBoundSig ctx loc)) cd.requiring
   pure
-    ConstraintDecl
-      { name = n,
-        arity = a,
-        argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
-        requiring = requiring'
-      }
-renameDeclaration
-  ctx
-  loc
-  (FunctionDecl n a argTypes returnType isOpen kind requiring refining) = do
-    requiring' <- traverse (traverse (renameBoundSig ctx loc)) requiring
-    pure
-      FunctionDecl
-        { name = n,
-          arity = a,
-          argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
-          returnType = fmap (renameTypeExpr ctx) returnType,
-          isOpen = isOpen,
-          kind = kind,
-          requiring = requiring',
-          refining = fmap (renameTypeExpr ctx) refining
-        }
-renameDeclaration ctx loc d@ExtendClassTypeDecl {name, arity, argTypes, returnType} = do
-  resolved <- resolveName ResolveTop ctx loc (Atom name) (Unqualified name) arity
+    ( ConstraintDecl
+        ConstraintDeclBody
+          { name = cd.name,
+            arity = cd.arity,
+            argTypes = fmap (map (renameTypeExpr ctx)) cd.argTypes,
+            requiring = requiring'
+          }
+    )
+renameDeclaration ctx loc (FunctionDecl fd) = do
+  requiring' <- traverse (traverse (renameBoundSig ctx loc)) fd.requiring
   pure
-    d
-      { argTypes = fmap (map (renameTypeExpr ctx)) argTypes,
-        returnType = fmap (renameTypeExpr ctx) returnType,
-        target = Just resolved
-      }
+    ( FunctionDecl
+        FunctionDeclBody
+          { name = fd.name,
+            arity = fd.arity,
+            argTypes = fmap (map (renameTypeExpr ctx)) fd.argTypes,
+            returnType = fmap (renameTypeExpr ctx) fd.returnType,
+            isOpen = fd.isOpen,
+            kind = fd.kind,
+            requiring = requiring',
+            refining = fmap (renameTypeExpr ctx) fd.refining
+          }
+    )
+renameDeclaration ctx loc (ExtendClassTypeDecl ed) = do
+  resolved <- resolveName ResolveTop ctx loc (Atom ed.name) (Unqualified ed.name) ed.arity
+  pure
+    ( ExtendClassTypeDecl
+        ExtendClassTypeDeclBody
+          { name = ed.name,
+            arity = ed.arity,
+            argTypes = fmap (map (renameTypeExpr ctx)) ed.argTypes,
+            returnType = fmap (renameTypeExpr ctx) ed.returnType,
+            target = Just resolved
+          }
+    )
 renameDeclaration _ _ d = pure d
 
 -- | Rename a 'BoundSig' inside a @requiring@ clause: resolve the bound

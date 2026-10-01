@@ -685,8 +685,8 @@ convertModule defaultName terms =
       modClassExtensions_ = [e | ItemDirective (DirExtendClassEqn e) <- items]
       openNames =
         Set.fromList $
-          [d.name | DirOpenFunctionDecl ds <- dirs, Ann d _ <- ds]
-            ++ [d.name | DirOpenClassDecl ds <- dirs, Ann d _ <- ds]
+          [fd.name | DirOpenFunctionDecl ds <- dirs, Ann (FunctionDecl fd) _ <- ds]
+            ++ [fd.name | DirOpenClassDecl ds <- dirs, Ann (FunctionDecl fd) _ <- ds]
       contiguityErrors = checkContiguity openNames items
       duplicateModuleHeaderErrors =
         [ AnnP (DuplicateModuleHeader n) l p
@@ -759,7 +759,7 @@ checkDeclContiguity openNames = go Set.empty Set.empty
     go _closed _active [] = []
     go closed active (ItemDirective dir : rest)
       | Just ds <- declListOf dir =
-          let names = [(d.name, loc) | Ann d loc <- ds]
+          let names = [(fd.name, loc) | Ann (FunctionDecl fd) loc <- ds]
               nonOpenNames = [n | n <- map fst names, n `Set.notMember` openNames]
               reopened =
                 [ noAnnPAt loc (DiscontiguousFunctionDecls n)
@@ -942,11 +942,11 @@ convertImportWithList dirLoc dirPExpr imp importList =
 requiringOnClassErrors ::
   SourceLoc -> PExpr -> [Ann Declaration] -> [AnnP ParseValidationError]
 requiringOnClassErrors loc origin decls =
-  [ AnnP (RequiringOnClass d.name) loc origin
-  | Ann d _ <- decls,
-    case d of
-      FunctionDecl {requiring = Just _} -> True
-      _ -> False
+  [ AnnP (RequiringOnClass fd.name) loc origin
+  | Ann (FunctionDecl fd) _ <- decls,
+    case fd.requiring of
+      Just _ -> True
+      Nothing -> False
   ]
 
 -- | Convert an export item PExpr to a 'Declaration'. Items whose shape
@@ -965,19 +965,24 @@ convertExportItem (Ann pexpr loc) = case pexpr of
   Compound "fun" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
     ( Just
         ( FunctionDecl
-            name
-            (fromInteger arity)
-            Nothing
-            Nothing
-            False
-            DKFunction
-            Nothing
-            Nothing
+            ( FunctionDeclBody
+                name
+                (fromInteger arity)
+                Nothing
+                Nothing
+                False
+                DKFunction
+                Nothing
+                Nothing
+            )
         ),
       []
     )
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    (Just (ConstraintDecl name (fromInteger arity) Nothing Nothing), [])
+    ( Just
+        (ConstraintDecl (ConstraintDeclBody name (fromInteger arity) Nothing Nothing)),
+      []
+    )
   Compound "op" [Ann (P.Int fix) _, Ann tyExpr _, Ann nameExpr _]
     | Just ty <- parseOpTypeFromPExpr tyExpr,
       Just name <- atomName nameExpr ->
@@ -985,7 +990,7 @@ convertExportItem (Ann pexpr loc) = case pexpr of
   -- @type(name/arity)@ — covers both algebraic and opaque types (they
   -- share one type namespace).
   Compound "type" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
-    (Just (TypeExportDecl name (fromInteger arity) Nothing), [])
+    (Just (TypeExportDecl (TypeExportDeclBody name (fromInteger arity) Nothing)), [])
   Compound "type" [spec, conList]
     | Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] <- spec.node ->
         case unfoldListStrict conList.node of
@@ -993,7 +998,12 @@ convertExportItem (Ann pexpr loc) = case pexpr of
             (Nothing, [AnnP MalformedExportItem conList.sourceLoc conList.node])
           Just items -> case partitionEithers (map atomElement items) of
             ([], names) ->
-              (Just (TypeExportDecl name (fromInteger arity) (Just names)), [])
+              ( Just
+                  ( TypeExportDecl
+                      (TypeExportDeclBody name (fromInteger arity) (Just names))
+                  ),
+                []
+              )
             (errs, _) -> (Nothing, errs)
   _ -> (Nothing, [AnnP MalformedExportItem loc pexpr])
   where
@@ -1017,10 +1027,12 @@ convertConstraintDecl (Ann pexpr loc) = case pexpr of
               ( Just
                   ( Ann
                       ( ConstraintDecl
-                          name
-                          (length args)
-                          (Just argTypes)
-                          (Just bs)
+                          ( ConstraintDeclBody
+                              name
+                              (length args)
+                              (Just argTypes)
+                              (Just bs)
+                          )
                       )
                       loc
                   ),
@@ -1030,7 +1042,13 @@ convertConstraintDecl (Ann pexpr loc) = case pexpr of
     _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
   -- Untyped: name/arity
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-    (Just (Ann (ConstraintDecl name (fromInteger arity) Nothing Nothing) loc), [])
+    ( Just
+        ( Ann
+            (ConstraintDecl (ConstraintDeclBody name (fromInteger arity) Nothing Nothing))
+            loc
+        ),
+      []
+    )
   -- @refining@ is an operator word, so @c(any) refining int@ parses as
   -- a compound named @refining@ at arity 2 — indistinguishable from a
   -- constraint literally named @refining@ with two arguments. Only a
@@ -1043,7 +1061,9 @@ convertConstraintDecl (Ann pexpr loc) = case pexpr of
     ([], argTypes) ->
       ( Just
           ( Ann
-              (ConstraintDecl name (length args) (Just argTypes) Nothing)
+              ( ConstraintDecl
+                  (ConstraintDeclBody name (length args) (Just argTypes) Nothing)
+              )
               loc
           ),
         []
@@ -1051,7 +1071,10 @@ convertConstraintDecl (Ann pexpr loc) = case pexpr of
     (errs, _) -> (Nothing, errs)
   -- Zero-arity bare atom
   Atom name ->
-    (Just (Ann (ConstraintDecl name 0 Nothing Nothing) loc), [])
+    ( Just
+        (Ann (ConstraintDecl (ConstraintDeclBody name 0 Nothing Nothing)) loc),
+      []
+    )
   _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
 
 -- | Convert a PExpr to a closed-function declaration.
@@ -1103,11 +1126,13 @@ convertExtendClassTypeDecl (Ann pexpr loc) = case pexpr of
             ( Just
                 ( Ann
                     ( ExtendClassTypeDecl
-                        name
-                        (length args)
-                        (Just argTypes)
-                        (Just retType)
-                        Nothing
+                        ( ExtendClassTypeDeclBody
+                            name
+                            (length args)
+                            (Just argTypes)
+                            (Just retType)
+                            Nothing
+                        )
                     )
                     l
                 ),
@@ -1152,6 +1177,12 @@ convertFunctionDeclWith open kind (Ann pexpr loc) = case pexpr of
   where
     malformed = [AnnP MalformedDeclaration loc pexpr]
 
+    -- Build the declaration from its core fields, partially applied up
+    -- to the two optional trailing clauses (@requiring@ / @refining@).
+    mkDecl n ar argTys retTy requiring refining =
+      FunctionDecl
+        (FunctionDeclBody n ar argTys retTy open kind requiring refining)
+
     -- The typed spelling @name(type, ...) -> type@, partially applied
     -- up to the two optional trailing clauses.
     typedCore sig = case sig.node of
@@ -1160,22 +1191,14 @@ convertFunctionDeclWith open kind (Ann pexpr loc) = case pexpr of
                convertTypeExpr ret
              ) of
           (([], argTypes), Right retType) ->
-            Right
-              ( FunctionDecl
-                  name
-                  (length args)
-                  (Just argTypes)
-                  (Just retType)
-                  open
-                  kind
-              )
+            Right (mkDecl name (length args) (Just argTypes) (Just retType))
           ((argErrs, _), retE) -> Left (argErrs ++ leftToList retE)
       _ -> Left malformed
 
     -- Either spelling: the untyped @name/arity@ or the typed one.
     anyCore core = case core.node of
       Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
-        Right (FunctionDecl name (fromInteger arity) Nothing Nothing open kind)
+        Right (mkDecl name (fromInteger arity) Nothing Nothing)
       _ -> typedCore core
 
 -- | Lift a single 'Left' into a singleton list of errors, dropping the

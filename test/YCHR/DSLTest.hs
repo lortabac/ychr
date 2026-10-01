@@ -67,7 +67,7 @@ moduleTests =
       testCase "declaring sets modDecls" $
         module' "Foo" `declaring` ["leq" // 2]
           @?= (emptyModule "Foo")
-            { decls = [noAnn (ConstraintDecl "leq" 2 Nothing Nothing)]
+            { decls = [noAnn (ConstraintDecl (ConstraintDeclBody "leq" 2 Nothing Nothing))]
             },
       testCase "defining sets modRules" $
         let r = [term "leq" [var "X"]] <=> [atom "true"]
@@ -81,13 +81,14 @@ moduleTests =
               `defining` [r]
               @?= (emptyModule "M")
                 { imports = [noAnnP (ModuleImport "A" Nothing)],
-                  decls = [noAnn (ConstraintDecl "c" 0 Nothing Nothing)],
+                  decls = [noAnn (ConstraintDecl (ConstraintDeclBody "c" 0 Nothing Nothing))],
                   rules = [r]
                 },
       testCase "exporting sets modExports" $
         module' "Foo" `exporting` ["leq" // 2]
           @?= (emptyModule "Foo")
-            { exports = Just (noAnnP [ConstraintDecl "leq" 2 Nothing Nothing])
+            { exports =
+                Just (noAnnP [ConstraintDecl (ConstraintDeclBody "leq" 2 Nothing Nothing)])
             },
       testCase "library appends a LibraryImport" $
         module' "Foo" `library` "lists" `library` "math"
@@ -105,8 +106,8 @@ moduleTests =
             { exports =
                 Just
                   ( noAnnP
-                      [ ConstraintDecl "a" 1 Nothing Nothing,
-                        ConstraintDecl "b" 2 Nothing Nothing
+                      [ ConstraintDecl (ConstraintDeclBody "a" 1 Nothing Nothing),
+                        ConstraintDecl (ConstraintDeclBody "b" 2 Nothing Nothing)
                       ]
                   )
             },
@@ -136,7 +137,7 @@ declarationTests =
   testGroup
     "declaration"
     [ testCase "\"leq\" // 2 produces ConstraintDecl" $
-        "leq" // 2 @?= ConstraintDecl "leq" 2 Nothing Nothing,
+        "leq" // 2 @?= ConstraintDecl (ConstraintDeclBody "leq" 2 Nothing Nothing),
       testCase "withExtensions appends to module.extensions" $
         let eq = equation "classify" [atom "dog"] [] (atom "animal")
             m = module' "ext" `withExtensions` [eq]
@@ -154,71 +155,77 @@ functionDeclarationTests =
     [ testCase "function produces FunctionDecl with isOpen = False" $
         function "factorial" 1
           @?= FunctionDecl
-            { name = "factorial",
-              arity = 1,
-              argTypes = Nothing,
-              returnType = Nothing,
-              isOpen = False,
-              kind = DKFunction,
-              requiring = Nothing,
-              refining = Nothing
-            },
+            FunctionDeclBody
+              { name = "factorial",
+                arity = 1,
+                argTypes = Nothing,
+                returnType = Nothing,
+                isOpen = False,
+                kind = DKFunction,
+                requiring = Nothing,
+                refining = Nothing
+              },
       testCase "openFunction produces FunctionDecl with isOpen = True" $
         openFunction "show" 1
           @?= FunctionDecl
-            { name = "show",
-              arity = 1,
-              argTypes = Nothing,
-              returnType = Nothing,
-              isOpen = True,
-              kind = DKFunction,
-              requiring = Nothing,
-              refining = Nothing
-            },
+            FunctionDeclBody
+              { name = "show",
+                arity = 1,
+                argTypes = Nothing,
+                returnType = Nothing,
+                isOpen = True,
+                kind = DKFunction,
+                requiring = Nothing,
+                refining = Nothing
+              },
       testCase "class_ produces FunctionDecl with kind = DKClass" $
         class_ "size" 1
           @?= FunctionDecl
-            { name = "size",
-              arity = 1,
-              argTypes = Nothing,
-              returnType = Nothing,
-              isOpen = False,
-              kind = DKClass,
-              requiring = Nothing,
-              refining = Nothing
-            },
+            FunctionDeclBody
+              { name = "size",
+                arity = 1,
+                argTypes = Nothing,
+                returnType = Nothing,
+                isOpen = False,
+                kind = DKClass,
+                requiring = Nothing,
+                refining = Nothing
+              },
       testCase "openClass produces FunctionDecl with kind = DKClass and isOpen = True" $
         openClass "show" 1
           @?= FunctionDecl
-            { name = "show",
-              arity = 1,
-              argTypes = Nothing,
-              returnType = Nothing,
-              isOpen = True,
-              kind = DKClass,
-              requiring = Nothing,
-              refining = Nothing
-            },
+            FunctionDeclBody
+              { name = "show",
+                arity = 1,
+                argTypes = Nothing,
+                returnType = Nothing,
+                isOpen = True,
+                kind = DKClass,
+                requiring = Nothing,
+                refining = Nothing
+              },
       testCase "extendClassType arity matches argTypes length" $
         let intCon = TypeCon (Unqualified "int") []
          in extendClassType "add" [intCon, intCon] intCon
               @?= ExtendClassTypeDecl
-                { name = "add",
-                  arity = 2,
-                  argTypes = Just [intCon, intCon],
-                  returnType = Just intCon,
-                  target = Nothing
-                },
+                ExtendClassTypeDeclBody
+                  { name = "add",
+                    arity = 2,
+                    argTypes = Just [intCon, intCon],
+                    returnType = Just intCon,
+                    target = Nothing
+                  },
       testCase "extendClassType with zero args is allowed" $
         let intCon = TypeCon (Unqualified "int") []
          in extendClassType "zero" [] intCon
               @?= ExtendClassTypeDecl
-                { name = "zero",
-                  arity = 0,
-                  argTypes = Just [],
-                  returnType = Just intCon,
-                  target = Nothing
-                }
+                ExtendClassTypeDeclBody
+                  { name = "zero",
+                    arity = 0,
+                    argTypes = Just [],
+                    returnType = Just intCon,
+                    target = Nothing
+                  }
     ]
 
 typeDeclarationTests :: TestTree
@@ -226,15 +233,15 @@ typeDeclarationTests =
   testGroup
     "type declaration"
     [ testCase "typeExport with no allowlist" $
-        typeExport "color" 0 @?= TypeExportDecl "color" 0 Nothing,
+        typeExport "color" 0 @?= TypeExportDecl (TypeExportDeclBody "color" 0 Nothing),
       testCase "typeExportWith carries the allowlist" $
         typeExportWith "color" 0 ["red", "green", "blue"]
-          @?= TypeExportDecl "color" 0 (Just ["red", "green", "blue"]),
+          @?= TypeExportDecl (TypeExportDeclBody "color" 0 (Just ["red", "green", "blue"])),
       testCase "typeExportWith with empty allowlist exports type only" $
         -- Empty list is distinct from Nothing: exports the type tag
         -- without any of its constructors.
         typeExportWith "opaque" 0 []
-          @?= TypeExportDecl "opaque" 0 (Just []),
+          @?= TypeExportDecl (TypeExportDeclBody "opaque" 0 (Just [])),
       testCase "tyDef with no type variables (mono-type)" $
         tyDef "color" [] [dataCtor "red" [], dataCtor "green" []]
           @?= TypeDefinition
@@ -527,7 +534,7 @@ integrationTests =
             { name = "Order",
               nameLoc = dummyLoc,
               imports = [],
-              decls = [noAnn (ConstraintDecl "leq" 2 Nothing Nothing)],
+              decls = [noAnn (ConstraintDecl (ConstraintDeclBody "leq" 2 Nothing Nothing))],
               extensionTypes = [],
               typeDecls = [],
               rules =
@@ -593,7 +600,8 @@ endToEndTests =
       factorialEndToEnd,
       chrTypeEndToEnd,
       chrTypeCtorGoalEndToEnd,
-      guardEndToEnd
+      guardEndToEnd,
+      operatorInDeclaringEndToEnd
     ]
 
 -- | A full @leq@ handler exercising simplification, simpagation, and
@@ -737,3 +745,19 @@ guardEndToEnd =
                        ]
     bindings <- runDSL stdlib [m] (term "clamp" [int 3, int 5, var "R"])
     Map.lookup "R" bindings @?= Just (IntTerm 5)
+
+-- | An operator appended to the declaration list must not crash the
+-- declaration walks: 'declaring' puts it in @decls@, but the walks
+-- read names and arities through a total case analysis that ignores
+-- it. Operators belong on the export list; the constraint declared
+-- alongside still works. Regression test for the renamer's @No match
+-- in record selector name@.
+operatorInDeclaringEndToEnd :: TestTree
+operatorInDeclaringEndToEnd =
+  testCase "declaring with an operator compiles" $ do
+    let m =
+          module' "ops"
+            `declaring` [op 700 Xfx "@@", "foo" // 1]
+            `defining` [[term "foo" [var "X"]] <=> [var "X" .=. int 1]]
+    bindings <- runDSL stdlib [m] (term "foo" [var "R"])
+    Map.lookup "R" bindings @?= Just (IntTerm 1)

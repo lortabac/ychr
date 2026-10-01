@@ -1013,7 +1013,11 @@ warningTests =
         ws <- warningsOf [m]
         ws @?= [],
       testCase "exporting undeclared type produces error" $ do
-        let m = (module' "M") {exports = Just (noAnnP [TypeExportDecl "tree" 0 Nothing])}
+        let m =
+              (module' "M")
+                { exports =
+                    Just (noAnnP [TypeExportDecl (TypeExportDeclBody "tree" 0 Nothing)])
+                }
         renameProgram [m]
           @?= Left
             [ noDiag
@@ -1040,7 +1044,8 @@ warningTests =
                             dummyLoc
                         )
                     ],
-                  exports = Just (noAnnP [TypeExportDecl "tree" 0 Nothing])
+                  exports =
+                    Just (noAnnP [TypeExportDecl (TypeExportDeclBody "tree" 0 Nothing)])
                 }
         case renameProgram [m] of
           Right _ -> pure ()
@@ -1138,10 +1143,12 @@ importListTests =
                             "Order"
                             ( Just
                                 [ ConstraintDecl
-                                    "leq"
-                                    2
-                                    Nothing
-                                    Nothing
+                                    ( ConstraintDeclBody
+                                        "leq"
+                                        2
+                                        Nothing
+                                        Nothing
+                                    )
                                 ]
                             )
                         )
@@ -1175,10 +1182,12 @@ importListTests =
                             "Order"
                             ( Just
                                 [ ConstraintDecl
-                                    "geq"
-                                    2
-                                    Nothing
-                                    Nothing
+                                    ( ConstraintDeclBody
+                                        "geq"
+                                        2
+                                        Nothing
+                                        Nothing
+                                    )
                                 ]
                             )
                         )
@@ -1200,10 +1209,12 @@ importListTests =
                             "Order"
                             ( Just
                                 [ ConstraintDecl
-                                    "nonexistent"
-                                    1
-                                    Nothing
-                                    Nothing
+                                    ( ConstraintDeclBody
+                                        "nonexistent"
+                                        1
+                                        Nothing
+                                        Nothing
+                                    )
                                 ]
                             )
                         )
@@ -1305,7 +1316,15 @@ importListTests =
                     [ noAnnP
                         ( ModuleImport
                             "Lib"
-                            (Just [TypeExportDecl "missing" 0 (Just ["c1", "c2"])])
+                            ( Just
+                                [ TypeExportDecl
+                                    ( TypeExportDeclBody
+                                        "missing"
+                                        0
+                                        (Just ["c1", "c2"])
+                                    )
+                                ]
+                            )
                         )
                     ]
                 }
@@ -1325,14 +1344,16 @@ importListTests =
                             "prelude"
                             ( Just
                                 [ FunctionDecl
-                                    "max"
-                                    2
-                                    Nothing
-                                    Nothing
-                                    False
-                                    DKFunction
-                                    Nothing
-                                    Nothing
+                                    ( FunctionDeclBody
+                                        "max"
+                                        2
+                                        Nothing
+                                        Nothing
+                                        False
+                                        DKFunction
+                                        Nothing
+                                        Nothing
+                                    )
                                 ]
                             )
                         )

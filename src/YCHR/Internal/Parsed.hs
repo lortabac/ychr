@@ -37,6 +37,10 @@ module YCHR.Internal.Parsed
     Module (..),
     Import (..),
     Declaration (..),
+    ConstraintDeclBody (..),
+    FunctionDeclBody (..),
+    ExtendClassTypeDeclBody (..),
+    TypeExportDeclBody (..),
     FunctionDeclKind (..),
     OpType (..),
     OpDecl (..),
@@ -130,59 +134,92 @@ data Module = Module
 data FunctionDeclKind = DKFunction | DKClass
   deriving (Show, Eq)
 
+-- | Fields of a @:- chr_constraint@ declaration.
+data ConstraintDeclBody = ConstraintDeclBody
+  { name :: Text,
+    arity :: Int,
+    argTypes :: Maybe [TypeExpr],
+    -- | Bounded polymorphism: a non-'Nothing' value carries the
+    -- @requiring@ clause's bound signatures. Permitted only on
+    -- the typed form of a constraint declaration; the parser
+    -- enforces this.
+    requiring :: Maybe [BoundSig]
+  }
+  deriving (Show, Eq)
+
+-- | Fields of a function-like declaration (@:- function@,
+-- @:- open_function@, @:- class@, @:- open_class@).
+data FunctionDeclBody = FunctionDeclBody
+  { name :: Text,
+    arity :: Int,
+    argTypes :: Maybe [TypeExpr],
+    returnType :: Maybe TypeExpr,
+    isOpen :: Bool,
+    kind :: FunctionDeclKind,
+    -- | Bounded polymorphism: a non-'Nothing' value carries the
+    -- @requiring@ clause's bound signatures. Permitted only on
+    -- the @:- function@ / @:- open_function@ forms (i.e. with
+    -- @kind == DKFunction@). The parser rejects @requiring@ on
+    -- @:- class@ / @:- open_class@ declarations.
+    requiring :: Maybe [BoundSig],
+    -- | Refinement predicate: a non-'Nothing' value carries the
+    -- @refining@ clause's refined type. Permitted only on a
+    -- closed @:- function@ whose single typed signature has the
+    -- shape @name(any) -> bool@; the refined type must be a base
+    -- type or a type constructor applied to distinct type
+    -- variables. Resolve validates all of this and reports
+    -- @YCHR-16021@.
+    refining :: Maybe TypeExpr
+  }
+  deriving (Show, Eq)
+
+-- | Fields of an @:- extend_class_type@ declaration: it adds an
+-- overloaded type signature to an @:- open_class@ declared in another
+-- module. The renamer fills in @target@ with the class's resolved
+-- qualified name. After the rename phase, @target@ is always
+-- @Just (Qualified _ _)@; @Nothing@ only appears in the freshly-parsed
+-- AST, before the renamer has run.
+data ExtendClassTypeDeclBody = ExtendClassTypeDeclBody
+  { name :: Text,
+    arity :: Int,
+    argTypes :: Maybe [TypeExpr],
+    returnType :: Maybe TypeExpr,
+    target :: Maybe Name
+  }
+  deriving (Show, Eq)
+
+-- | Fields of a type entry in a module's export or import list, written
+-- @type(T/n)@ or @type(T/n, [Con, ...])@. Covers both algebraic and
+-- opaque types: they share one type namespace, so a single export
+-- form is used. Opaque types have no constructors, so a constructor
+-- allowlist on one is rejected by the usual unknown-constructor
+-- check (@YCHR-20008@).
+data TypeExportDeclBody = TypeExportDeclBody
+  { name :: Text,
+    arity :: Int,
+    conExports :: Maybe [Text]
+  }
+  deriving (Show, Eq)
+
+-- | A parsed declaration item.
+--
+-- Each constructor carries its fields in a dedicated single-constructor
+-- record rather than declaring them on 'Declaration' itself. A field
+-- shared by only some of the alternatives would make its projection
+-- partial ('-Wincomplete-record-selectors'), so keeping the records
+-- separate makes every field total. Pattern-match the constructor and
+-- project from the payload.
+--
+-- 'OperatorDecl' and 'TypeExportDecl' describe entries of a module's
+-- export or import list rather than declarations of a name in the
+-- constraint/function namespace; the parser only produces them for
+-- those lists.
 data Declaration
-  = ConstraintDecl
-      { name :: Text,
-        arity :: Int,
-        argTypes :: Maybe [TypeExpr],
-        -- | Bounded polymorphism: a non-'Nothing' value carries the
-        -- @requiring@ clause's bound signatures. Permitted only on
-        -- the typed form of a constraint declaration; the parser
-        -- enforces this.
-        requiring :: Maybe [BoundSig]
-      }
-  | FunctionDecl
-      { name :: Text,
-        arity :: Int,
-        argTypes :: Maybe [TypeExpr],
-        returnType :: Maybe TypeExpr,
-        isOpen :: Bool,
-        kind :: FunctionDeclKind,
-        -- | Bounded polymorphism: a non-'Nothing' value carries the
-        -- @requiring@ clause's bound signatures. Permitted only on
-        -- the @:- function@ / @:- open_function@ forms (i.e. with
-        -- @kind == DKFunction@). The parser rejects @requiring@ on
-        -- @:- class@ / @:- open_class@ declarations.
-        requiring :: Maybe [BoundSig],
-        -- | Refinement predicate: a non-'Nothing' value carries the
-        -- @refining@ clause's refined type. Permitted only on a
-        -- closed @:- function@ whose single typed signature has the
-        -- shape @name(any) -> bool@; the refined type must be a base
-        -- type or a type constructor applied to distinct type
-        -- variables. Resolve validates all of this and reports
-        -- @YCHR-16021@.
-        refining :: Maybe TypeExpr
-      }
-  | -- | Adds an overloaded type signature to an @:- open_class@
-    -- declared in another module. The renamer fills in @target@ with
-    -- the class's resolved qualified name. After the rename phase,
-    -- @target@ is always @Just (Qualified _ _)@; @Nothing@ only appears
-    -- in the freshly-parsed AST, before the renamer has run.
-    ExtendClassTypeDecl
-      { name :: Text,
-        arity :: Int,
-        argTypes :: Maybe [TypeExpr],
-        returnType :: Maybe TypeExpr,
-        target :: Maybe Name
-      }
+  = ConstraintDecl ConstraintDeclBody
+  | FunctionDecl FunctionDeclBody
+  | ExtendClassTypeDecl ExtendClassTypeDeclBody
   | OperatorDecl OpDecl
-  | -- | A type entry in a module's export or import list, written
-    -- @type(T/n)@ or @type(T/n, [Con, ...])@. Covers both algebraic and
-    -- opaque types: they share one type namespace, so a single export
-    -- form is used. Opaque types have no constructors, so a constructor
-    -- allowlist on one is rejected by the usual unknown-constructor
-    -- check (@YCHR-20008@).
-    TypeExportDecl {name :: Text, arity :: Int, conExports :: Maybe [Text]}
+  | TypeExportDecl TypeExportDeclBody
   deriving (Show, Eq)
 
 data OpDecl = OpDecl
