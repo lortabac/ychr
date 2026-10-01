@@ -73,11 +73,11 @@ homepage:           https://github.com/lortabac/ychr
 bug-reports:        https://github.com/lortabac/ychr/issues
 category:           Language
 build-type:         Simple
--- Only versions actually exercised are listed here. 9.6.6 and 9.12.x have
--- been built and had the test suite run against them locally; 9.8.4 and
--- 9.10.1 are built (compile-only) by the CI matrix.
+-- Only versions actually exercised are listed here. 9.6.6 and 9.12.2 have
+-- been built and had the test suite run against them locally; 9.8.4,
+-- 9.10.1 and 9.14.1 are built (compile-only) by the CI matrix.
 tested-with:        GHC == 9.6.6, GHC == 9.8.4, GHC == 9.10.1,
-                    GHC == 9.12.2, GHC == 9.12.4
+                    GHC == 9.12.2, GHC == 9.14.1
 
 extra-doc-files:      README.md
                     , CHANGELOG.md
@@ -114,13 +114,31 @@ flag examples
 
 common warnings
     ghc-options: -Wall
+    -- GHC 9.14's -Wall enables -Wincomplete-record-selectors, which fires
+    -- on every projection of a 'Declaration' field that only some of the
+    -- constructors carry: 'YCHR.Internal.Parsed.Declaration' shares
+    -- 'name'/'arity'/'argTypes' across some of its record alternatives,
+    -- but 'OperatorDecl' carries none of them and 'TypeExportDecl' only
+    -- 'name'/'arity', so a projection such as @d.name@ or @d.argTypes@ is
+    -- defined for only some constructors. The parser builds those two
+    -- alternatives solely from export/import items ('convertExportItem'),
+    -- so a source-file 'decls' list never holds one; that invariant lives
+    -- in the parser, not in the type, and 'Parser', 'Rename' and 'Resolve'
+    -- are where the partial projections the warning flags live. Removing
+    -- the partiality would mean rewriting the accessor style across those
+    -- modules; silencing the warning is the smaller change. The warning is
+    -- only enabled by -Wall from 9.14 (the flag itself dates to 9.10), so
+    -- the suppression is unnecessary below that, and GHC 9.6/9.8 would
+    -- reject the unknown flag under -Werror; hence the conditional.
+    if impl(ghc >= 9.14)
+        ghc-options: -Wno-incomplete-record-selectors
     default-extensions:
         DuplicateRecordFields
         NoFieldSelectors
         OverloadedRecordDot
 
 common deps
-    build-depends:    base >=4.18 && <4.22
+    build-depends:    base >=4.18 && <4.23
                     , containers >=0.6 && <0.9
                     , filepath >=1.4 && <1.6
                     , text >=2.0 && <2.2
@@ -167,7 +185,7 @@ executable ychr
         hs-source-dirs:   embed
         other-modules:    YCHR.Embedded.StdLib
                         , YCHR.Embedded.TypeCheck
-        build-depends:    template-haskell >=2.20 && <2.24
+        build-depends:    template-haskell >=2.20 && <2.25
     if impl(mhs)
         hs-source-dirs:   src/mhs
     default-language: GHC2021
@@ -192,7 +210,7 @@ executable stlc-typechecker
     hs-source-dirs:   examples/stlc
                     , embed
     if impl(ghc)
-        build-depends: template-haskell >=2.20 && <2.24
+        build-depends: template-haskell >=2.20 && <2.25
     default-language: GHC2021
 
 test-suite ychr-tests
@@ -247,7 +265,7 @@ test-suite ychr-tests
                     , tasty-hedgehog >=1.4 && <2
                     , tasty-hunit >=0.10 && <0.11
     if impl(ghc)
-        build-depends: template-haskell >=2.20 && <2.24
+        build-depends: template-haskell >=2.20 && <2.25
     default-language: GHC2021
 
 benchmark ychr-bench
@@ -263,7 +281,7 @@ benchmark ychr-bench
                     , criterion >=1.6 && <1.7
                     , directory >=1.3 && <1.4
     if impl(ghc)
-        build-depends: template-haskell >=2.20 && <2.24
+        build-depends: template-haskell >=2.20 && <2.25
     ghc-options:      -O2
     default-language: GHC2021
 

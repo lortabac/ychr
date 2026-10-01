@@ -743,3 +743,47 @@ consistent; only the global placement misbehaves.
 **Fix sketch.** Either accept the global flags before a subcommand and
 apply them to it, or reword the usage line so the flags are shown only
 where they are honoured.
+
+## `YCHR.DSL.declaring` with an operator crashes in the renamer
+
+**Documented claim.** `src/YCHR/DSL.hs:179` says `declaring` appends
+"constraint, function, operator, or type-export declarations", and
+`YCHR.DSL.op` (`src/YCHR/DSL.hs:305`) / `typeExport`
+(`src/YCHR/DSL.hs:296`) build those `Declaration`s.
+
+**Test.** Build a module that declares an operator with `declaring` and
+compile it (using `libraries/*.chr` parsed by `parseStdLib` as the
+stdlib):
+
+    module' "ops"
+      `declaring` [ op 700 Xfx "@@", "foo" // 1 ]
+      `defining`  [ [term "foo" [var "X"]] <=> [bool True] ]
+
+**Expected.** The module compiles; the operator declaration is unused by
+the rule, but `declaring` documents it as legal.
+
+**Actual.**
+
+    Main.hs: Uncaught exception ... GHC.Internal.Exception.ErrorCall:
+    No match in record selector name
+
+**Cause.** `declaring` (`src/YCHR/DSL.hs:181`) appends every
+`Declaration` to the module's `decls`, so an `OperatorDecl` can reach a
+`decls` list. The renamer's `buildDeclEnv`
+(`src/YCHR/Internal/Rename.hs:459`) then projects `d.name`/`d.arity` from
+every `decls` element, and `OperatorDecl` has no such field, so the
+partial record selector throws. The parser never puts an `OperatorDecl`
+in `decls` — it builds them only from export/import items
+(`convertExportItem`, `src/YCHR/Internal/Parser.hs:984`) — so parsed
+input is unaffected; only the DSL API can violate the invariant.
+`TypeExportDecl` (from `YCHR.DSL.typeExport`) carries `name`/`arity`, so
+it passes `buildDeclEnv`; it is partial only for the other `Declaration`
+fields the warning lists.
+
+**Fix sketch.** Either reject `OperatorDecl`/`TypeExportDecl` in
+`declaring` — they belong on the export list, via `exporting` — or teach
+the `decls`-walking passes to skip them. GHC 9.14's new
+`-Wincomplete-record-selectors` warning flags every such projection; the
+build silences it in `ychr.cabal` because eliminating the partiality is a
+larger refactor, so this entry is what keeps the underlying issue
+visible.
