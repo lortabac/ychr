@@ -25,14 +25,14 @@ jobs:
 
   # Compile-only check across the whole supported GHC range. The full test
   # suite needs Guile and pytest, so it runs once (in 'test') on the primary
-  # compiler; this job exists to catch base-API drift on older releases.
-  # Keep this matrix in sync with 'tested-with' in ychr.cabal.
+  # compiler; this job exists to catch base-API drift on older and newer
+  # releases. Keep this matrix in sync with 'tested-with' in ychr.cabal.
   build:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        ghc: ["9.6.6", "9.8.4", "9.10.1", "9.12.2"]
+        ghc: ["9.6.6", "9.8.4", "9.10.1", "9.12.2", "9.14.1"]
     steps:
       - uses: actions/checkout@v4
 

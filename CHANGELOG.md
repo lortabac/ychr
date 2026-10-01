@@ -890,6 +890,26 @@ including the store size the transitive closure must leave behind — so a
 benchmark cannot silently stop doing work. See
 [dev-docs/BENCHMARKS.md](dev-docs/BENCHMARKS.md).
 
+Build:
+
+GHC 9.14.1 is supported. The `base` bound moves to `<4.23` and
+`template-haskell` to `<2.25` — one major above the `base-4.22` and
+`template-haskell-2.24` that 9.14.1 ships — and `tested-with` lists the
+release. The CI build matrix gains 9.14.1 while the test job stays on
+9.12.2. The one build-level change is a version-gated
+`-Wno-incomplete-record-selectors`: 9.14's `-Wall` enables that warning
+(the flag itself dates to 9.10), and it fires on every projection of a
+`Declaration` field that only some constructors carry — `OperatorDecl`
+has no `name`, `arity` or `argTypes`, `TypeExportDecl` no `argTypes` —
+even though the parser produces those two alternatives only from
+export/import items and a source-file `decls` list never holds one.
+`Parser`, `Rename` and `Resolve` use the partial-field accessor style, so
+under `-Werror` the warning breaks the build; eliminating the partiality
+would mean rewriting that style across those modules, which is a larger
+change than this compatibility fix. GHC < 9.14 does not enable the
+warning and 9.6/9.8 do not even know the flag, so the option is guarded
+by `impl(ghc >= 9.14)`.
+
 ## 0.1.0.0 -- 2026-08-02
 
 First release. See the
