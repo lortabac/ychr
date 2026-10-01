@@ -95,7 +95,12 @@ expectsWarnings =
       "typecheck_qualified_in_head_dead",
       "typecheck_shared_var_dead",
       "unicode_atoms_strings",
-      "unifiable"
+      "unifiable",
+      -- The goal hands over undeclared constructors (@f@, @hello@) so
+      -- the pinned @write_term_to_string@ output keeps their
+      -- unqualified spelling; a declared one would print as
+      -- @write_term_test:f@.
+      "write_term_test"
     ]
 
 data Case

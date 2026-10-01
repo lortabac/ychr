@@ -129,6 +129,10 @@ WERROR_EXEMPT = {
     "typecheck_shared_var_dead",
     "unicode_atoms_strings",
     "unifiable",
+    # The goal hands over undeclared constructors (`f`, `hello`) so the
+    # pinned `write_term_to_string` output keeps their unqualified
+    # spelling; a declared one would print as `write_term_test:f`.
+    "write_term_test",
 }
 
 
@@ -273,6 +277,11 @@ def test_gen_driver_host_call_mapping(ychr_bin, project_root, tmp_path):
     # argument; without it the driver calls `%copy-term` at arity 1.
     session = driver("gdhc:go(host:copy_term(1), R)")
     assert "(%copy-term %s (deref 1))" in session
+
+    # `write_term_to_string` is mapped but needs no session — the
+    # reference primitive only renders — so it must *not* thread `%s`.
+    writer = driver("gdhc:go(host:write_term_to_string(1), R)")
+    assert "(%write-term-to-string (deref 1))" in writer
 
     # An unmapped name passes through verbatim, exactly as the compiled
     # library emits it.

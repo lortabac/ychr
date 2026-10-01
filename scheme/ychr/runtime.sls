@@ -371,11 +371,11 @@
 
   ;; Prelude host-call table for `deep-eval-value`. Mirrors the
   ;; bare-name entries in Haskell's `baseHostCallRegistry`
-  ;; (`src/YCHR/Internal/Runtime/Registry.hs`), plus `print` and
-  ;; `read_term_from_string`, the reachable entries of
-  ;; `metaHostCallRegistry` (`src/YCHR/Internal/Meta.hs`); `name_base`
-  ;; and the unimplemented meta calls are deliberately left out (see
-  ;; dev-docs/SCHEME_BACKEND_GAPS.md). It is consulted both
+  ;; (`src/YCHR/Internal/Runtime/Registry.hs`), plus `print`,
+  ;; `read_term_from_string` and `write_term_to_string`, the reachable
+  ;; entries of `metaHostCallRegistry` (`src/YCHR/Internal/Meta.hs`);
+  ;; `name_base` and the unimplemented meta calls are deliberately left
+  ;; out (see dev-docs/SCHEME_BACKEND_GAPS.md). It is consulted both
   ;; under the raw functor and under the bare name decoded out of a
   ;; `host:` functor (`evaluable-key-proc`); the raw route is what
   ;; answers a bare atom that no canonicalization qualified, such as
@@ -435,6 +435,11 @@
       ;; needs the session to allocate the fresh variables of `_` and of
       ;; the named variables it shares.
       (h 'read_term_from_string 1 (lambda (s v) (%read-term-from-string s v)))
+      ;; `write_term_to_string` is the meta registry's writer. Unlike
+      ;; its reader counterpart it needs no session — it only renders,
+      ;; and an unbound variable renders as `_` rather than allocating
+      ;; anything.
+      (h 'write_term_to_string 1 (lambda (s v) (%write-term-to-string v)))
       (h 'term_variables 1 (lambda (s v) (%term-variables v)))
       (h 'compound_to_list 1 (lambda (s v) (%compound-to-list v)))
       (h 'list_to_compound 1 (lambda (s v) (%list-to-compound v)))
@@ -865,6 +870,25 @@
         (%arg-error "read_term_from_string" (list text)
                     "read_term_from_string: expected 1 Text argument")))
 
+  ;;; write_term_to_string: render one value in surface syntax, the
+  ;;; inverse of the reader above and a port of
+  ;;; `write_term_to_string` in `YCHR.Internal.Meta` (`prettyValue`,
+  ;;; i.e. `prettyTerm` over an empty alias map). `pretty-term` is the
+  ;;; shared printer, so the spelling — atom quoting, `(…)` around
+  ;;; negative numbers, list syntax, `true`/`false` — agrees with
+  ;;; `%print`, `%unify`'s failure messages and the drivers. Flonums
+  ;;; are the one exception, and a pre-existing one: each host formats
+  ;;; them with its own float printer (see
+  ;;; dev-docs/SCHEME_BACKEND_GAPS.md).
+  ;;;
+  ;;; The argument is `any`, so nothing is classified: an unbound
+  ;;; variable is a *success* that renders as `_`, exactly as the
+  ;;; reference's `valueToTerm` does for a variable with no alias. The
+  ;;; procedure is therefore fixed at one argument and needs no
+  ;;; session.
+  (define (%write-term-to-string v)
+    (pretty-term v))
+
   ;;; Unimplemented meta host calls: stubs.
   ;;;
   ;;; Each must still be *bound*, because a generated library defines
@@ -873,8 +897,6 @@
   ;;; whole library fail to load on a strict R6RS implementation
   ;;; (Chez). Lowering to a stub keeps the module loadable and reports
   ;;; the gap only when the function is actually called.
-  (define (%write-term-to-string v)
-    (error "%write-term-to-string" "not implemented"))
   (define (%write-store-to-list)
     (error "%write-store-to-list" "not implemented"))
   (define (%print-store)

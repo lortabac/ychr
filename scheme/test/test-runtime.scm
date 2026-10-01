@@ -411,7 +411,25 @@
                (lambda ()
                  (deep-eval-value (fresh-session)
                                   (make-term 'host__read_term_from_string
-                                             (vector "f(1)" "g(2)")))))))
+                                             (vector "f(1)" "g(2)"))))))
+  ;; `write_term_to_string` lives in the same registry and joined the
+  ;; table at arity 1, so the `host:` term form reaches it too.
+  (test-equal "host__write_term_to_string deep-evaluates a term"
+              "f(1, hello)"
+              (deep-eval-value (fresh-session)
+                               (make-term 'host__write_term_to_string
+                                          (vector (make-term 'f (vector 1 'hello))))))
+  (test-equal "a bare write_term_to_string name deep-evaluates"
+              "1"
+              (deep-eval-value (fresh-session)
+                               (make-term 'write_term_to_string (vector 1))))
+  (test-equal "write_term_to_string at a wrong arity is not evaluable"
+              "is: functor is not evaluable: host:write_term_to_string/2"
+              (error-message
+               (lambda ()
+                 (deep-eval-value (fresh-session)
+                                  (make-term 'host__write_term_to_string
+                                             (vector 1 2)))))))
 
 ;;; --------------------------------------------------------------------------
 ;;; `%print`: the runtime's `print` host call
@@ -530,15 +548,59 @@
   (test-equal "print_store bound and raises"
               "not implemented"
               (error-message (lambda () (%print-store))))
-  (test-equal "write_term_to_string bound and raises"
-              "not implemented"
-              (error-message (lambda () (%write-term-to-string 1))))
   (test-equal "write_store_to_list bound and raises"
               "not implemented"
               (error-message (lambda () (%write-store-to-list))))
   (test-equal "run_chr_session bound and raises"
               "not implemented"
               (error-message (lambda () (%run-chr-session 1)))))
+
+;;; --------------------------------------------------------------------------
+;;; `%write-term-to-string`
+;;;
+;;; The writer behind `write_term_to_string/1`, mirroring
+;;; `YCHR.Internal.Meta.write_term_to_string` (`prettyValue`, i.e.
+;;; `prettyTerm` over an empty alias map). It shares `pretty-term` with
+;;; `%print`, so these cases pin the host-call entry point: the returned
+;;; value is a *string*, an unbound variable is a success that renders
+;;; `_` (not an instantiation failure), and nothing is classified. The
+;;; printer's own edge cases live in the `pretty-term` group above.
+;;; --------------------------------------------------------------------------
+
+(test-group "%write-term-to-string renders with the surface printer"
+  (test-equal "integer" "1" (%write-term-to-string 1))
+  (test-equal "negative integer is parenthesized" "(-3)"
+              (%write-term-to-string -3))
+  (test-equal "float" "1.5" (%write-term-to-string 1.5))
+  (test-equal "atom stays bare" "foo" (%write-term-to-string 'foo))
+  (test-equal "string is quoted" "\"hi\"" (%write-term-to-string "hi"))
+  (test-equal "boolean uses the surface spelling" "true"
+              (%write-term-to-string #t))
+  (test-equal "compound" "f(1, hello)"
+              (%write-term-to-string (make-term 'f (vector 1 'hello))))
+  (test-equal "list uses surface syntax" "[1, 2]"
+              (%write-term-to-string (%cons 1 (%cons 2 (%nil)))))
+  ;; An improper tail is separated by ` | `, matching
+  ;; `prettyListTail` in `YCHR.Internal.PExpr` (the cons case above uses
+  ;; `, `). This is the shape the `write_term_test`/`improper_list`
+  ;; golden case pins end to end.
+  (test-equal "improper list tail"
+              "[1, 2 | _]"
+              (let ((s (fresh-session)))
+                (%write-term-to-string
+                 (%cons 1 (%cons 2 (make-var s))))))
+  ;; The argument is `any`, so an unbound variable is a *success*: it
+  ;; renders `_`, the form the reference's `valueToTerm` gives a
+  ;; variable with no alias. It must not classify as an instantiation
+  ;; failure the way the strict primitives do.
+  (test-equal "an unbound variable renders as _"
+              "_"
+              (let ((s (fresh-session)))
+                (%write-term-to-string (make-var s))))
+  ;; The result is a string, so a binder can concatenate it rather than
+  ;; pretty-printing it back.
+  (test-assert "the result is a string"
+               (string? (%write-term-to-string 'foo))))
 
 ;;; --------------------------------------------------------------------------
 ;;; `%read-term-from-string`
