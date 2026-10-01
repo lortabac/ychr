@@ -792,6 +792,28 @@ Runtime:
   instead of failing on the list's cons cell.
   See [the `is` operator](docs/reference/language.md#the-is-operator).
 
+- The Scheme backend's `write_term_to_string/1` (from `library(meta)`)
+  is implemented, so `R is write_term_to_string(T)` now returns the
+  surface rendering of `T` instead of raising `not implemented`. The
+  new `%write-term-to-string` is the counterpart of the interpreter's
+  `prettyValue` — it calls the shared `pretty-term` — so the two
+  backends agree on atom quoting, `(…)` around negative numbers, list
+  syntax (including the ` | ` before an improper tail) and
+  `true`/`false`. Flonum rendering still follows each host's own float
+  format, a pre-existing printer divergence recorded in
+  [dev-docs/SCHEME_BACKEND_GAPS.md](dev-docs/SCHEME_BACKEND_GAPS.md).
+  The declaration is
+  `(any) -> string`, so nothing is classified: an unbound variable is a
+  success that renders as `_`, and no session is threaded
+  (`Scheme.sessionHostCalls` deliberately does not grow the name). The
+  name also joins the Scheme prelude host-call table at arity 1, so a
+  `host:write_term_to_string` *term* is deep-evaluable under `is` like
+  `host:read_term_from_string`. The new
+  `test/golden/write_term_test/` directory runs on both backends, and
+  `scheme/test/test-runtime.scm` pins the primitive and its `deep-eval`
+  route directly. See
+  [the Scheme backend gaps](dev-docs/SCHEME_BACKEND_GAPS.md).
+
 - The Scheme backend's `print/1` (from `library(meta)`) now renders its
   argument through the surface pretty-printer instead of raw `display`,
   one line per argument, and returns the unit atom, matching the

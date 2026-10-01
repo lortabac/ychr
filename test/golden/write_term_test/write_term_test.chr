@@ -1,0 +1,20 @@
+% `write_term_to_string/1` from `library(meta)`: the inverse of the
+% reader pinned by `read_term_test`. The result is a string, so the
+% cases pin the *surface spelling* the printer produces — compound
+% syntax, string quoting, and `_` for an unbound variable — rather than
+% a term structure. The compiler's own printer is already covered by
+% `atom_quoting`; what this directory adds is the host-call path itself.
+%
+% The data the goals hand over (`f`, `hello`) is deliberately left
+% undeclared: the renamer would qualify a declared constructor to
+% `write_term_test:f`, and the cases pin the unqualified surface
+% spelling. The `compound` goal therefore emits YCHR-20101, so the
+% directory is in `expectsWarnings` (test/YCHR/GoldenTest.hs) and
+% `WERROR_EXEMPT` (test/scheme/test_golden.py).
+:- module(write_term_test, [go/2]).
+
+:- use_module(library(meta)).
+
+:- chr_constraint go/2.
+
+go(T, R) <=> R is write_term_to_string(T).

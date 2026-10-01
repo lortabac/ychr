@@ -1,0 +1,1 @@
+write_term_test:go(f(1, hello), R)

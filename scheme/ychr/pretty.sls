@@ -49,7 +49,7 @@
          (string-append ", " (pretty-term (get-arg d 0))
                         (pretty-list-tail (get-arg d 1))))
         ;; improper list tail
-        (else (string-append "|" (pretty-term d))))))
+        (else (string-append " | " (pretty-term d))))))
 
   ;; Join a list of strings with a separator.
   (define (join sep strs)

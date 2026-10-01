@@ -27,7 +27,6 @@ even for a program that only calls `print/1`.
 | Primitive               | Status |
 |-------------------------|--------|
 | `write_store_to_list`   | Stub `%write-store-to-list`; `write_store_to_list_test` is in `HASKELL_ONLY` (parallels the unimplemented `print_store`). |
-| `write_term_to_string`  | Stub `%write-term-to-string`. No golden test covers it, so it is in neither `HASKELL_ONLY` nor this file's test lists. |
 | `print_store`           | Stub `%print-store`. |
 | `run_chr_session`       | Stub `%run-chr-session`; it spawns a nested interpreter session (the search driver, `YCHR.Internal.Runtime.Search`, on the Haskell side). `run_chr_session_test` is in `HASKELL_ONLY`. |
 
@@ -41,11 +40,10 @@ These names are still absent from `*prelude-host-calls*`, so
 deep-evaluating a `host:` *term* with arguments (rather than calling
 the function directly) reports `is: functor is not evaluable` instead
 of reaching the stub — the same distinction the section below draws.
-For example `T = host:write_term_to_string(1), R is T.` reports
-`is: functor is not evaluable: host:write_term_to_string/1`. A nullary
-`host:print_store` builds the atom `host:print_store` instead and never
-reaches the evaluator at all. `read_term_from_string` was in the same
-state but is now implemented and registered (see *Closed gaps*).
+For example a nullary `host:print_store` builds the atom
+`host:print_store` instead and never reaches the evaluator at all.
+`read_term_from_string` and `write_term_to_string` were in the same
+state but are now implemented and registered (see *Closed gaps*).
 
 
 ## `library(search)`
@@ -193,10 +191,57 @@ the unbound `X`, and delays. Wrong-arity host calls to a prelude
 primitive are the only way in.
 
 
+## Float pretty-printing uses the host's own format
+
+`pretty-term` renders a flonum with `number->string`, where the
+interpreter renders it with Haskell's `show`. The two agree on the
+common shapes (`1.5`, `0.1`, `-2.5`, `0.0`) but not on the magnitude
+ranges where `show` switches to scientific notation — roughly
+`|x| < 0.1` or `|x| >= 1e7`:
+
+| Value | Haskell (`show`) | Scheme (`number->string`) |
+|---|---|---|
+| `0.01` | `1.0e-2` | `0.01` |
+| `0.001` | `1.0e-3` | `0.001` |
+| `12345678.0` | `1.2345678e7` | `12345678.0` |
+
+Both Scheme implementations agree with each other (Guile and Chez were
+checked), and the difference is in the printer rather than in the
+numbers: `decimal`/`tagged` matches and arithmetic results are
+unaffected, because `Equal` and the store compare values, not their
+rendering. It shows up wherever the printer's text escapes the runtime
+— `write_term_to_string/1`, `print/1`, and the binding lines a driver
+prints. It pre-dates `write_term_to_string/1`, which merely made it
+easy to observe; a port of `show`'s float layout (shortest round-trip
+digits plus `show`'s exponent thresholds) would close it, and the
+printer is shared, so that is a change of its own.
+
+
 ## Closed gaps (reference)
 
 The following used to live here and are now closed. Kept as a brief
 record of which fixes have already shipped.
+
+- **`write_term_to_string`** — the Scheme procedure was a stub raising
+  `not implemented`, and no golden test covered it at all. It is now
+  `%write-term-to-string`, a one-line call to the shared `pretty-term`
+  (the port of `prettyTerm`), the counterpart of the reference's
+  `prettyValue`: `write_term_to_string/1` is declared `(any) -> string`,
+  so nothing is classified — an unbound variable is a *success* that
+  renders `_`, as `valueToTerm` does for a variable with no alias — and
+  the argument is dereferenced by the printer, so no session is
+  threaded (`sessionHostCalls` deliberately does not grow the name).
+  The name joined `*prelude-host-calls*` at arity 1, so
+  `T = host:write_term_to_string(1), R is T.` is deep-evaluable like
+  `host:read_term_from_string`; at any other arity it still reports
+  `is: functor is not evaluable: host:write_term_to_string/N`, the
+  `(name, arity)` keying all the table's entries share. The new
+  `test/golden/write_term_test/` directory pins the host-call path on
+  both backends (compound, string-literal quoting, the unbound case,
+  and an improper list), and `scheme/test/test-runtime.scm` pins the
+  primitive directly, including its `deep-eval` route. The one printer
+  divergence left is flonum rendering (see *Float pretty-printing*
+  above), which pre-dates this call and is shared by `print/1`.
 
 - **`read_term_from_string`** — the Scheme procedure was a stub raising
   `not implemented`, and the whole `read_term_test` directory was in
