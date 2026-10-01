@@ -516,15 +516,18 @@ showDeclarations prog = mapM_ putStrLn declLines
       | m <- prog.allModules,
         Parsed.Ann d _ <- m.decls,
         (kw, n, a) <- case d of
-          Parsed.ConstraintDecl {name = n, arity = a} -> [("chr_constraint", n, a)]
-          Parsed.FunctionDecl {name = n, arity = a, isOpen = o, kind = k} ->
-            let kw = case (o, k) of
-                  (False, Parsed.DKFunction) -> "function"
-                  (True, Parsed.DKFunction) -> "open_function"
-                  (False, Parsed.DKClass) -> "class"
-                  (True, Parsed.DKClass) -> "open_class"
-             in [(kw, n, a)]
-          Parsed.ExtendClassTypeDecl {name = n, arity = a} ->
+          Parsed.ConstraintDecl
+            Parsed.ConstraintDeclBody {name = n, arity = a} ->
+              [("chr_constraint", n, a)]
+          Parsed.FunctionDecl
+            Parsed.FunctionDeclBody {name = n, arity = a, isOpen = o, kind = k} ->
+              let kw = case (o, k) of
+                    (False, Parsed.DKFunction) -> "function"
+                    (True, Parsed.DKFunction) -> "open_function"
+                    (False, Parsed.DKClass) -> "class"
+                    (True, Parsed.DKClass) -> "open_class"
+               in [(kw, n, a)]
+          Parsed.ExtendClassTypeDecl Parsed.ExtendClassTypeDeclBody {name = n, arity = a} ->
             [("extend_class_type", n, a)]
           _ -> []
       ]
@@ -767,13 +770,13 @@ classifyQualified prog qn arity =
 functionDeclKind :: CompiledProgram -> QualifiedName -> Int -> DeclKind
 functionDeclKind prog qn arity =
   let matches =
-        [ (d.isOpen, d.kind)
+        [ (fd.isOpen, fd.kind)
         | m <- prog.allModules,
           m.name == qn.moduleName,
           Parsed.Ann d _ <- m.decls,
-          Parsed.FunctionDecl {} <- [d],
-          d.name == qn.baseName,
-          d.arity == arity
+          Parsed.FunctionDecl fd <- [d],
+          fd.name == qn.baseName,
+          fd.arity == arity
         ]
    in case matches of
         ((False, Parsed.DKFunction) : _) -> DKFunction
@@ -834,7 +837,11 @@ isCtorExportedByParent prog td c =
         Just m -> case m.exports of
           Nothing -> True
           Just (Parsed.AnnP exports _ _) ->
-            case [cs | Parsed.TypeExportDecl tn' ta' cs <- exports, tn' == tn, ta' == ta] of
+            case [ cs
+                 | Parsed.TypeExportDecl (Parsed.TypeExportDeclBody tn' ta' cs) <- exports,
+                   tn' == tn,
+                   ta' == ta
+                 ] of
               (Nothing : _) -> True
               (Just xs : _) -> cn `elem` xs
               [] -> False

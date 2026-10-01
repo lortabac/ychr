@@ -666,16 +666,18 @@ lambdaLiftTests =
             listPattern = term "." [var "X", var "Xs"]
             funDecl =
               noAnn
-                FunctionDecl
-                  { name = "f",
-                    arity = 1,
-                    argTypes = Nothing,
-                    returnType = Nothing,
-                    isOpen = False,
-                    kind = DKFunction,
-                    requiring = Nothing,
-                    refining = Nothing
-                  }
+                ( FunctionDecl
+                    FunctionDeclBody
+                      { name = "f",
+                        arity = 1,
+                        argTypes = Nothing,
+                        returnType = Nothing,
+                        isOpen = False,
+                        kind = DKFunction,
+                        requiring = Nothing,
+                        refining = Nothing
+                      }
+                )
             funEq =
               noAnnP
                 FunctionEquation
@@ -713,7 +715,18 @@ lambdaLiftTests =
                 ]
             funDecl =
               Ann
-                (FunctionDecl "f" 1 Nothing Nothing False DKFunction Nothing Nothing)
+                ( FunctionDecl
+                    ( FunctionDeclBody
+                        "f"
+                        1
+                        Nothing
+                        Nothing
+                        False
+                        DKFunction
+                        Nothing
+                        Nothing
+                    )
+                )
                 dummyLoc
             funEq =
               AnnP
