@@ -26,7 +26,6 @@ even for a program that only calls `print/1`.
 
 | Primitive               | Status |
 |-------------------------|--------|
-| `read_term_from_string` | Stubbed as `(error "%read-term-from-string" "not implemented")`. The whole `read_term_test` directory is in `HASKELL_ONLY`. |
 | `write_store_to_list`   | Stub `%write-store-to-list`; `write_store_to_list_test` is in `HASKELL_ONLY` (parallels the unimplemented `print_store`). |
 | `write_term_to_string`  | Stub `%write-term-to-string`. No golden test covers it, so it is in neither `HASKELL_ONLY` nor this file's test lists. |
 | `print_store`           | Stub `%print-store`. |
@@ -45,7 +44,8 @@ of reaching the stub — the same distinction the section below draws.
 For example `T = host:write_term_to_string(1), R is T.` reports
 `is: functor is not evaluable: host:write_term_to_string/1`. A nullary
 `host:print_store` builds the atom `host:print_store` instead and never
-reaches the evaluator at all.
+reaches the evaluator at all. `read_term_from_string` was in the same
+state but is now implemented and registered (see *Closed gaps*).
 
 
 ## `library(search)`
@@ -158,14 +158,13 @@ deep-eval` group.
 `__chr_error` remains absent by design: `__` is reserved by the lexer,
 so no source program can name it.
 
-`read_term_from_string` stays absent — the Scheme procedure is still a
-stub — and `name_base` is absent even though `%name-base` exists, so
+`name_base` is absent even though `%name-base` exists, so
 `T = host:name_base(foo), R is T.` still reports
 `is: functor is not evaluable: host:name_base/1` where Haskell answers
-`R = foo`. `print` was in the same state and is now registered (see
-*Closed gaps* below). All three live in `metaHostCallRegistry` rather
-than `baseHostCallRegistry`; the table's comment now names that
-registry alongside the base one.
+`R = foo`. `print` and `read_term_from_string` were in the same state
+and are now registered (see *Closed gaps* below). All of them live in
+`metaHostCallRegistry` rather than `baseHostCallRegistry`; the table's
+comment now names that registry alongside the base one.
 
 
 ## Numeric primitives accept more than Haskell's
@@ -198,6 +197,34 @@ primitive are the only way in.
 
 The following used to live here and are now closed. Kept as a brief
 record of which fixes have already shipped.
+
+- **`read_term_from_string`** — the Scheme procedure was a stub raising
+  `not implemented`, and the whole `read_term_test` directory was in
+  `HASKELL_ONLY`. It is now a port of the reference reader: the new
+  `(ychr read)` library carries the Pratt parser of
+  `YCHR.Internal.PExpr` driven by `YCHR.Internal.Parser.builtinOps`, and
+  converts the parse the way `convertTerm` + `termToValue` do — a named
+  variable is one fresh logical variable shared between its occurrences,
+  `_` is fresh per occurrence, `true`/`false` (and the `prelude:` forms)
+  are native booleans, a 0-arity name is an atom, and a `module:name` is
+  kept in the reference's colon spelling rather than the compiler's
+  mangled form. `runtime.sls`'s `%read-term-from-string` wraps it: a
+  non-string argument is classified by `%arg-error` (unbound ⇒
+  instantiation, bound wrong type ⇒ general), while a parse failure is a
+  general error and so stays fatal in a soft guard. The name joined
+  `Scheme.sessionHostCalls` so the session is threaded for the fresh
+  variables, and `*prelude-host-calls*` at arity 1 so a
+  `host:read_term_from_string` *term* is deep-evaluable as well.
+  `read_term_test` left `HASKELL_ONLY`; the reader is pinned directly by
+  `scheme/test/test-runtime.scm`, including its `deep-eval` route.
+  One deliberate classification divergence remains: the interpreter's
+  name-keyed registry reports a *general* error for any non-text
+  argument, whereas the Scheme primitive treats an unbound one as an
+  instantiation failure, so `p(S) <=> boolean(read_term_from_string(S)) |
+  out(1).` delays on `p(Y)` here and aborts there. That is the same
+  choice every other strict Scheme primitive makes (see *Soft guard
+  failure*): an argument that must be there but is not is exactly what a
+  soft guard is for.
 
 - **[Soft guard failure](../docs/reference/language.md#soft-guard-failure)**
   — the `bsoft-guard` VM form was implemented, but the failures it is

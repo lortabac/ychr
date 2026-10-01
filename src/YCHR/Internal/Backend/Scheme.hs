@@ -778,7 +778,7 @@ hostCallMap =
 
 -- | Host calls that need the session threaded as their first argument.
 sessionHostCalls :: Set.Set Text
-sessionHostCalls = Set.fromList ["copy_term"]
+sessionHostCalls = Set.fromList ["copy_term", "read_term_from_string"]
 
 -- | Where a @host:@ call lands in the Scheme runtime: the procedure to
 -- call and whether that procedure takes the current session as an extra

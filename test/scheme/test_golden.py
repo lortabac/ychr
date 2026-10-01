@@ -21,8 +21,6 @@ GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden")
 # Test directories whose tests exercise Haskell-only meta-programming
 # primitives and therefore cannot run on the Scheme backend.
 HASKELL_ONLY = {
-    # read_term_from_string is a stub on the Scheme runtime.
-    "read_term_test",
     # write_store_to_list is a Haskell-only meta host call; no Scheme
     # implementation exists yet (parallels print_store).
     "write_store_to_list_test",
@@ -342,12 +340,12 @@ def test_meta_print_end_to_end(ychr_bin, guile_bin, scheme_lib_dir, project_root
 
 def test_meta_module_host_calls_are_bound(ychr_bin, project_root, tmp_path):
     """A module importing `library(meta)` defines *every* meta function,
-    including the ones with no Scheme implementation. Those calls must
-    lower to bound runtime stubs, not to bare identifiers: a bare
-    identifier makes the whole generated library fail to load on a
-    strict R6RS implementation (Chez reports `attempt to reference
-    unbound identifier print_store`), so a program that only uses
-    `print/1` could not be loaded at all.
+    whether or not the Scheme runtime implements it (some are still
+    stubs). Each call must lower to a bound runtime procedure, not to a
+    bare identifier: a bare identifier makes the whole generated library
+    fail to load on a strict R6RS implementation (Chez reports `attempt
+    to reference unbound identifier print_store`), so a program that
+    only uses `print/1` could not be loaded at all.
 
     Pinned on the generated text so it holds regardless of which Scheme
     runs the suite (the harness itself is Guile-only).

@@ -799,10 +799,9 @@ Runtime:
   prelude host-call table so a `host:print` term reaches it under `is`.
   The `meta` primitives that still have no Scheme implementation
   (`print_store`, `write_term_to_string`, `write_store_to_list`,
-  `run_chr_session`, alongside the existing `read_term_from_string`
-  stub) are now bound runtime stubs rather than bare identifiers, so a
-  module importing `library(meta)` loads on a strict R6RS
-  implementation such as Chez and the gap is reported only when the
+  `run_chr_session`) are now bound runtime stubs rather than bare
+  identifiers, so a module importing `library(meta)` loads on a strict
+  R6RS implementation such as Chez and the gap is reported only when the
   function is called. `library(search)` still needs the same treatment.
   See [the Scheme backend gaps](dev-docs/SCHEME_BACKEND_GAPS.md).
 
@@ -825,6 +824,23 @@ Runtime:
   `qualified_unicode_ctor/pound_foo` now run on both backends, and the
   new `test/golden/atom_quoting/` directory pins the edge cases.
   See [the Scheme backend gaps](dev-docs/SCHEME_BACKEND_GAPS.md).
+
+- The Scheme backend's `read_term_from_string/1` (from
+  `library(meta)`) is implemented, so the whole
+  `test/golden/read_term_test/` directory runs on both backends. The new
+  `(ychr read)` library ports the reference reader
+  (`YCHR.Internal.PExpr`'s Pratt parser driven by `Parser.builtinOps`,
+  converted the way `termToValue` does): a named variable is one fresh
+  logical variable shared between its occurrences, `_` is fresh per
+  occurrence, `true`/`false` (and the `prelude:` forms) are native
+  booleans, a 0-arity name is an atom, and a `module:name` keeps the
+  reference's colon spelling rather than the compiler's mangled form.
+  Because reading allocates variables, the call now takes the session
+  (`Scheme.sessionHostCalls` grew the name), and it is registered in the
+  Scheme prelude host-call table at arity 1 so a
+  `host:read_term_from_string` term is deep-evaluable too.
+  `read_term_test` left `HASKELL_ONLY`. See
+  [the Scheme backend gaps](dev-docs/SCHEME_BACKEND_GAPS.md).
 
 Benchmarks:
 
