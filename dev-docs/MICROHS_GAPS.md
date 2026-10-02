@@ -20,12 +20,14 @@ terse, fix-shaped, removable when closed.
 
 Re-verified against MicroHs `f65d3c65` (the checkout's HEAD, which
 includes `0a1c3095`, the `try` fix) and its `base` package rebuilt from
-it. Nine gaps are recorded; two have closed and been removed from this
-document. The local workarounds for gaps 1, 3, 4, 5, 6, 7 and 8 are
+it. Ten gaps are recorded; two have closed and been removed from this
+document. The local workarounds for gaps 1, 3, 4, 5, 6, 7, 8 and 10 are
 applied (gap 4 also touches the importers, tests included; gap 5 is the
 run-time resources provider described below; gaps 7 and 8 are one pair of
-parentheses and one no-op modifier respectively). Gap 9 has no YCHR-side
-workaround: it breaks the MicroHs-built executable's help screens only.
+parentheses and one no-op modifier respectively; gap 10 is one helper
+taking its argument as `Text` rather than as a record). Gap 9 has no
+YCHR-side workaround: it breaks the MicroHs-built executable's help
+screens only.
 No Template Haskell remains in `library ychr`, and the `ychr` executable
 has a MicroHs twin of the compile-time embedder, so `mcabal build` now
 completes: it builds `library ychr` and `exe:ychr`, and the binary reads
@@ -47,6 +49,7 @@ and 9 were found on the way to that point and are recorded below.
 | 7 | `Data.List` functions lack their fixity declarations | open — workaround applied to `src/` (see below) |
 | 8 | `optparse-applicative`'s `fullDesc` is missing from the MicroHs package | open — workaround applied to `app/Main.hs` (see below) |
 | 9 | `Data.Text.replicate` rejects a zero multiplier | open upstream — no YCHR-side workaround; the MicroHs `ychr` cannot render help (see below) |
+| 10 | A local binding inferred as `HasField`-polymorphic is not generalized | open — workaround applied to `src/YCHR/Internal/Resolve.hs` (see below) |
 
 `Data.Either.partitionEithers` (formerly gap 5) is now exported by
 MicroHs (`lib/Data/Either.hs:51`) and used directly by
@@ -436,12 +439,12 @@ locations (line numbers current as of this revision):
 
 | Missing  | YCHR call sites |
 |----------|------------------|
-| `breakOn`    | `src/YCHR/Internal/Runtime/Trace.hs:233`, `src/YCHR/Internal/Resolve.hs:1409`, `src/YCHR/Internal/Meta.hs:92` |
-| `concatMap`  | `src/YCHR/Internal/Compile/Names.hs:112`, `src/YCHR/Internal/Compile/Names.hs:137`, `src/YCHR/Internal/SExpr.hs:71` |
+| `breakOn`    | `src/YCHR/Internal/Runtime/Trace.hs:233`, `src/YCHR/Internal/Runtime/Interpreter.hs:1234`, `src/YCHR/Internal/Resolve.hs:1421`, `src/YCHR/Internal/Meta.hs:92` |
+| `concatMap`  | `src/YCHR/Internal/Compile/Names.hs:111`, `src/YCHR/Internal/Compile/Names.hs:136`, `src/YCHR/Internal/SExpr.hs:71` |
 | `breakOnEnd` | `test/YCHR/TypeSoundness/Observe.hs:180,183` |
 | `last`       | `src/YCHR/Internal/Parser.hs:258` |
 
-The first failure a build hits is `Text.last`
+The first failure such a build used to hit was `Text.last`
 (`Parser.hs:258`, `Text.last trimmed`), reported as
 `undefined value: Text.last`. `last` and `breakOnEnd` were not in the
 original list; `all`, `any` and `strip` no longer belong in it.
@@ -489,7 +492,7 @@ Applied as one shim module rather than a per-call-site rewrite:
 
 | edit | sites |
 |---|---|
-| `import Data.Text.Shim qualified as …` | `Compile/Names.hs`, `SExpr.hs`, `Parser.hs`, `Resolve.hs`, `Meta.hs`, `Runtime/Trace.hs`, `test/YCHR/TypeSoundness/Observe.hs` |
+| `import Data.Text.Shim qualified as …` | `Compile/Names.hs`, `SExpr.hs`, `Parser.hs`, `Resolve.hs`, `Meta.hs`, `Runtime/Trace.hs`, `Runtime/Interpreter.hs`, `test/YCHR/TypeSoundness/Observe.hs` |
 
 The shim deliberately replaces the native implementations under GHC too:
 one implementation then serves both compilers, and the GHC test suite
@@ -514,9 +517,10 @@ while writing it:
   works on both compilers.
 
 Verified with `mhs -fno-code -isrc`: `Data.Text.Shim` itself plus
-`SExpr.hs`, `Compile/Names.hs`, `Parser.hs`, `Resolve.hs` and
-`Runtime/Trace.hs` compile (`No code generated`); before the shim, each
-stopped on `undefined value: T.concatMap` / `Text.last` / `T.breakOn`.
+`SExpr.hs`, `Compile/Names.hs`, `Parser.hs`, `Resolve.hs`,
+`Runtime/Trace.hs` and `Runtime/Interpreter.hs` compile (`No code
+generated`); before the shim, each stopped on `undefined value:
+T.concatMap` / `Text.last` / `T.breakOn`.
 `Meta.hs` and `Compile.Pipeline` now get past gaps 3 and 4 as well.
 There was still no end-to-end check at the time: the library stopped on
 gap 7 in `Display.hs` (the `try` gap, since closed, had been worked
@@ -976,6 +980,47 @@ Verified:
 - `YCHR_LIB_DIR=$PWD dist-mcabal/bin/mhs/ychr run --show-bindings -g
   'order:leq(X, X)' test/golden/leq/leq.chr` prints `X = _`, and
   `repl --quiet` on EOF exits 0; neither renders help.
+
+
+## 10. A local binding inferred as `HasField`-polymorphic is not generalized
+
+> **New; found while fixing the `originForDecl` helper in
+> `src/YCHR/Internal/Resolve.hs`, which had broken the MicroHs build.**
+
+Under `OverloadedRecordDot`, a local helper that reads a field off its
+argument is inferred with a `HasField "field" r a` constraint. GHC
+generalizes the binding (it has arguments, so the monomorphism
+restriction does not apply); MicroHs does not, so it monomorphizes the
+helper at its first use and a second use at a different record type
+fails to unify:
+
+```haskell
+{-# LANGUAGE DuplicateRecordFields, NoFieldSelectors, OverloadedRecordDot #-}
+data A = A { name :: String }
+data B = B { name :: String }
+
+origin m x = m ++ ":" ++ x.name
+
+f :: A -> B -> [String]
+f a b = [origin "m" a, origin "m" b]
+-- mhs: uncaught exception: error: ... Cannot satisfy constraint: A ~ B
+-- GHC: compiles
+```
+
+### Upstream fix sketch
+
+Generalize `where`/`let`-bound bindings over their inferred type-class
+constraints, as GHC does.
+
+### Local workaround
+
+Pass the projected field value instead of the record, so the helper's
+type is monomorphic. In `Resolve.checkBoundedDeclarations`:
+
+```haskell
+originForDecl m n = PExpr.Atom (m.name <> ":" <> n)
+-- used as originForDecl m fd.name and originForDecl m cd.name
+```
 
 
 ## Out of scope (not gaps, just noted)
