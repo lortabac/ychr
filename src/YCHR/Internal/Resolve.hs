@@ -786,7 +786,7 @@ checkBoundedDeclarations ::
   Set QualifiedName -> [CollectedModule] -> [Diagnostic ResolveError]
 checkBoundedDeclarations functionNames mods =
   let funcBounds =
-        [ (QualifiedName m.name fd.name, primaryVars, bs, originForDecl m fd)
+        [ (QualifiedName m.name fd.name, primaryVars, bs, originForDecl m fd.name)
         | m <- mods,
           P.Ann d _ <- m.decls,
           P.FunctionDecl fd <- [d],
@@ -797,7 +797,7 @@ checkBoundedDeclarations functionNames mods =
                     ++ maybe [] typeExprVars fd.returnType
         ]
       conBounds =
-        [ (QualifiedName m.name cd.name, primaryVars, bs, originForDecl m cd)
+        [ (QualifiedName m.name cd.name, primaryVars, bs, originForDecl m cd.name)
         | m <- mods,
           P.Ann d _ <- m.decls,
           P.ConstraintDecl cd <- [d],
@@ -842,7 +842,12 @@ checkBoundedDeclarations functionNames mods =
         -- diagnostic ourselves. (The renamer used to pre-report
         -- this as the generic YCHR-20002; it now defers to us.)
         False
-    originForDecl m fd = PExpr.Atom (m.name <> ":" <> fd.name)
+    -- Takes the declaration's name rather than the declaration record:
+    -- a helper that projected @.name@ off its argument would be inferred
+    -- as 'HasField'-polymorphic, which MicroHs does not generalize, so
+    -- its two uses at different record types would fail to unify
+    -- (dev-docs/MICROHS_GAPS.md, gap 10).
+    originForDecl m n = PExpr.Atom (m.name <> ":" <> n)
 
 -- | Validate every @refining@ clause in the program.
 --
