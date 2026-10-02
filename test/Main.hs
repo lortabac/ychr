@@ -3,6 +3,7 @@
 module Main (main) where
 
 import Test.Tasty (Timeout, defaultMain, localOption, mkTimeout, testGroup)
+import YCHR.Backend.SchemeTest qualified
 import YCHR.CollectTest qualified
 import YCHR.CompileTest qualified
 import YCHR.ConvertTest qualified
@@ -58,6 +59,7 @@ main = do
         [ golden,
           YCHR.CollectTest.tests,
           YCHR.CompileTest.tests,
+          YCHR.Backend.SchemeTest.tests,
           YCHR.PrettyTest.tests,
           YCHR.RunTest.tests,
           YCHR.MetaTest.tests,

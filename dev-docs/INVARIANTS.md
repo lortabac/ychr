@@ -919,11 +919,23 @@ change to the reading has to be deliberate.
 
 `src/YCHR/Internal/Backend/Scheme.hs` bakes in many assumptions the Scheme
 runtime must satisfy: the `(ychr runtime)` library is imported, every
-procedure takes `%s` as its first parameter, return is via `call/cc`
-with `%return`, the session thunk exported by each generated library
+procedure takes `%s` as its first parameter, a procedure whose `Return`s
+can only leave it from tail position compiles to a plain value-producing
+expression while a procedure with a `Return` trapped in a `Foreach` or
+`DrainReactivationQueue` body uses `call/cc` with `%return`, `Break` and
+`Continue` use a `call/cc` at the loop that owns the label (and only when
+the body names it), the session thunk exported by each generated library
 calls `(%make-session N)` directly, `drain-queue!` takes
 `(session, alive-checking-lambda)`, `Foreach` expects
-`(snapshot, count)` from the runtime. These contracts live only in
+`(snapshot, count)` from the runtime. One more assumption rides on the
+tail compilation: an `If` whose arm contains a `Return` is emitted as
+`(if c ARM-spliced-before-rest ARM-spliced-before-rest)`, so a binder an
+arm introduces lexically scopes over the statements that follow the
+`If`. That matches the interpreter's flat mutable `Env` (`LetVal` and
+`AssignVal` both just insert), and it is sound for the same reason the
+interpreter's slot walk is — no emitted `If` leaves a name in `rest`
+that an arm bound (see "Two properties of emitted code are what make
+that reading sound" above). These contracts live only in
 code, on both sides. A small ABI-doc section in
 `SCHEME_BACKEND_GAPS.md` (or here) would at minimum make the surface
 explicit; encoding it in types is harder because it crosses a

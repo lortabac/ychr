@@ -12,6 +12,34 @@ gone. As a side effect, `YCHR.DSL.declaring` no longer crashes the
 renamer when handed an operator declaration; operators and type exports
 belong on the export list.
 
+The Scheme backend no longer allocates a `call/cc` escape for every
+procedure. A procedure whose `Return`s can only leave it from tail
+position — every prelude arithmetic and comparison helper, most user
+functions, and every `tell`/`activate`/`occurrence` whose early drop is
+not inside a partner loop — now compiles to a plain value-producing
+expression; only a `Return` trapped inside a `Foreach` or
+`DrainReactivationQueue` body keeps the `call/cc` and its `%return`
+binding. The loop escapes follow the same rule: `Break` and `Continue`
+get their `call/cc` at the loop that owns the label, and only when the
+loop body names that label (the compiler emits `Continue` for
+backjumping but never emits `Break`, so the outer loop escape disappears
+from generated code entirely). `call/cc` captures the continuation on
+every call, so the unconditional wrapper made a non-tail-recursive
+procedure pay O(depth) per call and O(depth²) per run: the report's
+`sum(2000)` program goes from ≈1.4 s to 3.7 ms on Guile. Measured with
+the Guile suite (`BENCHMARKS.md`'s previous medians as the before
+column): `fib(20)` 531 → 128 ms, `list_sum` 46 → 2.3 ms, `maplist`
+97 → 3.9 ms, `leq_closure` 71 → 47.5 ms, and the new `sum(2000)` case is
+3.7 ms; `session` and `guard` are unchanged and `graph` improves slightly
+(0.31 → 0.26 ms). On Chez, whose
+`call/cc` is cheap, `fib` goes 1.66 → 1.0 ms and the list cases move by a
+few hundredths of a millisecond, with `leq_closure` inside the suite's
+run-to-run spread. The emitted VM, its serialization, the runtime ABI and
+the runtime libraries are untouched; the change is confined to
+`YCHR.Internal.Backend.Scheme`, and a codegen unit test
+(`YCHR.Backend.SchemeTest`) pins that a tail-return program emits no
+`call/cc` while a loop-trapped `Return` still does.
+
 The Scheme backend now implements the paper's *Indexing* optimization
 (§5.3), the same one the Haskell runtime gained earlier, with the same
 interface and the same on-demand threshold. The compiler was already

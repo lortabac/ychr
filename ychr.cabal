@@ -201,6 +201,7 @@ test-suite ychr-tests
     main-is:          Main.hs
     other-modules:    YCHR.CollectTest
                     , YCHR.CompileTest
+                    , YCHR.Backend.SchemeTest
                     , YCHR.ConvertTest
                     , YCHR.ErrorCodeTest
                     , YCHR.RunTest

@@ -6,9 +6,14 @@
 -- YCHR Scheme runtime libraries (@(ychr var)@, @(ychr store)@,
 -- @(ychr history)@, @(ychr reactivation)@).
 --
--- Control flow ('Return', 'Break', 'Continue') is implemented via
--- @call\/cc@ escape continuations.  Internal names use a @%@ prefix
--- to avoid collisions with user-defined identifiers.
+-- A procedure whose @Return@s can only leave it from tail position
+-- compiles to a plain value-producing expression (see
+-- 'compileTailStmts'); only a procedure with a @Return@ trapped inside a
+-- 'Foreach' or 'DrainReactivationQueue' body keeps a @call\/cc@ escape
+-- continuation.  'Break' and 'Continue' keep their own @call\/cc@ escapes
+-- at the loop that owns the label, and each escape is emitted only when
+-- the loop body actually names its label.  Internal names use a @%@
+-- prefix to avoid collisions with user-defined identifiers.
 module YCHR.Internal.Backend.Scheme
   ( generateScheme,
     compileSymbol,
@@ -338,9 +343,39 @@ compileProcedure proc =
                   (SAtom . mangleName)
                   proc.params
             )
-          : [wrapReturn (compileStmts proc.body)]
+          : [bodyExpr]
       )
   ]
+  where
+    body = dropAfterReturn proc.body
+    -- 'compileTailStmts' is only sound when no 'Return' is trapped in a
+    -- nested body; 'needsEscape' is exactly that condition, and the
+    -- node-count guard keeps a pathological 'If' split out of the
+    -- generated code. Either failure falls back to the @call\/cc@ escape
+    -- path.
+    tailExpr = compileTailStmts body
+    bodyExpr
+      | needsEscape body = wrapReturn (compileStmts body)
+      | sexprNodes tailExpr <= maxTailExprNodes = tailExpr
+      | otherwise = wrapReturn (compileStmts body)
+
+-- | Maximum size of a procedure compiled without a @call\/cc@ escape.
+-- The tail compiler duplicates the continuation of an 'If' once per
+-- branch that can return, so a pathological program could grow the
+-- expression exponentially. The guard bounds what is *emitted*, not the
+-- work done to get there: the candidate is materialized and measured
+-- before the decision, so a pathological split is still built once and
+-- then discarded in favour of the escape path. The compiler-generated
+-- shapes are linear in the statement count, so that build-then-check is
+-- not on any real path.
+maxTailExprNodes :: Int
+maxTailExprNodes = 8192
+
+-- | Number of nodes in an s-expression, for the 'maxTailExprNodes'
+-- guard.
+sexprNodes :: SExpr -> Int
+sexprNodes (SList xs) = 1 + sum (map sexprNodes xs)
+sexprNodes _ = 1
 
 -- | Wrap a procedure body in a call/cc for %return.
 wrapReturn :: SExpr -> SExpr
@@ -349,6 +384,120 @@ wrapReturn body =
     [ SAtom "call/cc",
       SList [SAtom "lambda", SList [SAtom "%return"], body, SAtom "#f"]
     ]
+
+-- ---------------------------------------------------------------------------
+-- Escape analysis and tail-position compilation
+-- ---------------------------------------------------------------------------
+
+-- | Whether a procedure needs a @call\/cc@ escape: some 'Return' sits
+-- inside a 'Foreach' or 'DrainReactivationQueue' body, where the value
+-- compiler would otherwise treat it as terminating only that inner body
+-- instead of the procedure.
+--
+-- A 'Return' anywhere else — including a branch of an 'If' that is
+-- followed by further statements — is delivered correctly by
+-- 'compileTailStmts', because a sequence stops at the return.
+needsEscape :: [Stmt] -> Bool
+needsEscape = any trapped
+  where
+    trapped (Foreach _ _ _ _ body) = containsReturn body
+    trapped (DrainReactivationQueue _ body) = containsReturn body
+    trapped (If _ thn els) = needsEscape thn || needsEscape els
+    trapped _ = False
+
+-- | Whether any statement in the list is a 'Return' (at any depth,
+-- including nested loop and drain bodies).
+containsReturn :: [Stmt] -> Bool
+containsReturn = any go
+  where
+    go (Return _) = True
+    go (If _ thn els) = containsReturn thn || containsReturn els
+    go (Foreach _ _ _ _ body) = containsReturn body
+    go (DrainReactivationQueue _ body) = containsReturn body
+    go _ = False
+
+-- | Whether the loop body names 'Break' for the given label. The walk
+-- recurses into nested bodies because a label is unique to the loop that
+-- owns it, so a nested loop's @Break@ names a different label and does
+-- not match.
+hasBreak :: Text -> [Stmt] -> Bool
+hasBreak lbl = any go
+  where
+    go (Break (Label l)) = l == lbl
+    go (If _ thn els) = hasBreak lbl thn || hasBreak lbl els
+    go (Foreach _ _ _ _ body) = hasBreak lbl body
+    go (DrainReactivationQueue _ body) = hasBreak lbl body
+    go _ = False
+
+-- | Whether the loop body names 'Continue' for the given label. See
+-- 'hasBreak' for the label-uniqueness argument.
+hasContinue :: Text -> [Stmt] -> Bool
+hasContinue lbl = any go
+  where
+    go (Continue (Label l)) = l == lbl
+    go (If _ thn els) = hasContinue lbl thn || hasContinue lbl els
+    go (Foreach _ _ _ _ body) = hasContinue lbl body
+    go (DrainReactivationQueue _ body) = hasContinue lbl body
+    go _ = False
+
+-- | Remove statements that follow a 'Return' in the same statement list:
+-- they are unreachable, and dropping them keeps the generated code (and
+-- the escape analysis) honest. Applied recursively; never moves anything
+-- across an 'If' arm, which is where fall-through lives.
+dropAfterReturn :: [Stmt] -> [Stmt]
+dropAfterReturn = go
+  where
+    go [] = []
+    go (r@(Return _) : _) = [r]
+    go (If c thn els : rest) = If c (dropAfterReturn thn) (dropAfterReturn els) : go rest
+    go (Foreach lbl ct sv conds body : rest) =
+      Foreach lbl ct sv conds (dropAfterReturn body) : go rest
+    go (DrainReactivationQueue sv body : rest) =
+      DrainReactivationQueue sv (dropAfterReturn body) : go rest
+    go (s : rest) = s : go rest
+
+-- | Compile a statement list to an expression whose value is the
+-- procedure's result, with no @call\/cc@ escape. A 'Return' becomes the
+-- value it returns and ends the sequence; a list that runs off the end
+-- yields @#f@, matching the @#f@ the @call\/cc@ wrapper would have
+-- produced.
+--
+-- Callers must have checked 'needsEscape'; the 'Foreach' and
+-- 'DrainReactivationQueue' bodies it delegates to 'compileStmt' can
+-- therefore contain no 'Return'.
+compileTailStmts :: [Stmt] -> SExpr
+compileTailStmts [] = SAtom "#f"
+compileTailStmts (Return e : _) = compileValExpr e
+compileTailStmts (LetVal n e : rest) =
+  SList
+    [ SAtom "let",
+      SList [SList [SAtom (mangleName n), compileValExpr e]],
+      compileTailStmts rest
+    ]
+compileTailStmts (LetId n e : rest) =
+  SList
+    [ SAtom "let",
+      SList [SList [SAtom (mangleName n), compileIdExpr e]],
+      compileTailStmts rest
+    ]
+compileTailStmts (If c thn els : rest)
+  -- When neither arm can return, both fall through to 'rest'; share it
+  -- in one place instead of emitting it once per arm.
+  | not (containsReturn thn) && not (containsReturn els) =
+      SList
+        [ SAtom "begin",
+          SList [SAtom "if", compileBoolExpr c, compileStmts thn, compileStmts els],
+          compileTailStmts rest
+        ]
+  | otherwise =
+      SList
+        [ SAtom "if",
+          compileBoolExpr c,
+          compileTailStmts (thn ++ rest),
+          compileTailStmts (els ++ rest)
+        ]
+compileTailStmts (s : rest) =
+  SList [SAtom "begin", compileStmt s, compileTailStmts rest]
 
 -- ---------------------------------------------------------------------------
 -- Statement compilation
@@ -468,47 +617,52 @@ compileBody stmts = compileStmts stmts
 -- @store-snapshot@ call unchanged.
 compileForeach :: Label -> Int -> Name -> [(ArgIndex, ValExpr)] -> [Stmt] -> SExpr
 compileForeach (Label lbl) ct (Name sv) conds body =
-  SList
-    [ SAtom "call/cc",
-      SList
-        [ SAtom "lambda",
-          SList [SAtom (breakName lbl)],
+  wrapBreak
+    ( SList
+        [ SAtom "let-values",
           SList
-            [ SAtom "let-values",
+            [ SList
+                [ SList [SAtom "%vec", SAtom "%count"],
+                  candidatesExpr
+                ]
+            ],
+          SList
+            [ SAtom "let",
+              SAtom (foreachName lbl),
+              SList [SList [SAtom "%i", SInt 0]],
               SList
-                [ SList
-                    [ SList [SAtom "%vec", SAtom "%count"],
-                      candidatesExpr
-                    ]
-                ],
-              SList
-                [ SAtom "let",
-                  SAtom (foreachName lbl),
-                  SList [SList [SAtom "%i", SInt 0]],
+                [ SAtom "when",
+                  SList [SAtom "<", SAtom "%i", SAtom "%count"],
                   SList
-                    [ SAtom "when",
-                      SList [SAtom "<", SAtom "%i", SAtom "%count"],
+                    [ SAtom "let",
                       SList
-                        [ SAtom "let",
-                          SList
-                            [ SList
-                                [ SAtom sv,
-                                  SList
-                                    [ SAtom "vector-ref",
-                                      SAtom "%vec",
-                                      SAtom "%i"
-                                    ]
+                        [ SList
+                            [ SAtom sv,
+                              SList
+                                [ SAtom "vector-ref",
+                                  SAtom "%vec",
+                                  SAtom "%i"
                                 ]
-                            ],
-                          foreachInner lbl sv conds body
+                            ]
                         ],
-                      SList [SAtom (foreachName lbl), SList [SAtom "+", SAtom "%i", SInt 1]]
-                    ]
+                      foreachInner lbl sv conds body
+                    ],
+                  SList [SAtom (foreachName lbl), SList [SAtom "+", SAtom "%i", SInt 1]]
                 ]
             ]
         ]
-    ]
+    )
   where
+    -- 'Break' escapes the whole loop through a call/cc whose parameter is
+    -- 'breakName'; a body that never names its own label needs neither
+    -- the continuation nor the binding.
+    wrapBreak e
+      | hasBreak lbl body =
+          SList
+            [ SAtom "call/cc",
+              SList [SAtom "lambda", SList [SAtom (breakName lbl)], e]
+            ]
+      | otherwise = e
     typeArg = SInt (fromIntegral ct)
     snapshot = SList [SAtom "store-snapshot", SAtom "%s", typeArg]
     -- Only a total expression may be evaluated eagerly at loop entry; see
@@ -571,15 +725,20 @@ foreachInner lbl sv conds body =
       guard = case allChecks of
         [c] -> c
         cs -> SList (SAtom "and" : cs)
-      innerBody =
-        SList
-          [ SAtom "call/cc",
+      -- 'Continue' escapes one iteration through a call/cc whose
+      -- parameter is 'continueName'; a body that never names its own
+      -- label needs neither the continuation nor the binding.
+      innerBody
+        | hasContinue lbl body =
             SList
-              [ SAtom "lambda",
-                SList [SAtom (continueName lbl)],
-                compileBody body
+              [ SAtom "call/cc",
+                SList
+                  [ SAtom "lambda",
+                    SList [SAtom (continueName lbl)],
+                    compileBody body
+                  ]
               ]
-          ]
+        | otherwise = compileBody body
    in SList [SAtom "when", guard, innerBody]
   where
     compileCondition (ArgIndex i, e) =
