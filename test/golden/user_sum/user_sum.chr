@@ -1,0 +1,14 @@
+% The exact program from the Scheme-backend performance report: a
+% non-tail-recursive user function whose generated code used to be
+% dominated by one `call/cc` escape per recursion level (and one per
+% prelude arithmetic/comparison helper it called). The codegen unit test
+% pins the generated shape; this case pins the semantics on both
+% backends end to end.
+:- module(user_sum, [compute/2, fun sum/1]).
+:- chr_constraint compute(int, int).
+:- function sum(int) -> int.
+
+sum(0) -> 0.
+sum(N) | N > 0 -> N + sum(N - 1).
+
+compute(N, R) <=> R is sum(N).

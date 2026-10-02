@@ -76,7 +76,8 @@ SCHEME_BENCH_CASES = \
 	bench_fib:test/golden/fib/fib.chr \
 	bench_leqc:test/golden/leq_closure/leq_closure.chr \
 	bench_list:bench/scheme/bench_list.chr \
-	bench_maplist:bench/scheme/bench_maplist.chr
+	bench_maplist:bench/scheme/bench_maplist.chr \
+	bench_sum:bench/scheme/bench_sum.chr
 
 # Depends on `build`, so that resolving the binary and compiling the
 # programs cannot race a concurrent `cabal build` under `make -j`.

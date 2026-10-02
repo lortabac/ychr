@@ -211,6 +211,18 @@ The VM uses plain procedure calls (`CallExpr`) and does not include trampoline o
 - Scheme: tail call optimization (in compliant implementations) or trampolining
 - Haskell interpreter: native support for deep recursion, or explicit strategy
 
+The Scheme backend implements early return with `call/cc`, but only where
+a return is actually non-local. A procedure whose `Return`s can only
+leave it from tail position compiles to a plain value-producing
+expression; a procedure with a `Return` trapped inside a `Foreach` or
+`DrainReactivationQueue` body keeps the `call/cc` escape. This matters
+because `call/cc` captures the continuation on every call, so a
+non-tail-recursive procedure wrapped unconditionally pays O(depth) per
+call and O(depth²) overall (measured at ~20× on the `sum(2000)` example).
+`Break` and `Continue` likewise emit a `call/cc` at the loop that owns
+the label, and only when the loop body names it — the compiler emits
+`Continue` for backjumping but never emits `Break` today.
+
 ### Constraint Store Implementation
 
 Indexing is delegated entirely to the runtime. The VM's `Foreach` specifies a constraint type and a set of argument conditions, and the runtime is responsible for finding matching constraints. This keeps the compiler simple and avoids baking indexing strategies into the VM.

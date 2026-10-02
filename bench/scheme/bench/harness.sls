@@ -37,7 +37,8 @@
           (only (ychr generated bench_leqc) bench_leqc leqc:run/1)
           (only (ychr generated bench_list) bench_list bench_list:go/2)
           (only (ychr generated bench_maplist) bench_maplist
-            bench_maplist:go/2))
+            bench_maplist:go/2)
+          (only (ychr generated bench_sum) bench_sum bench_sum:go/2))
 
   ;; ------------------------------------------------------------------
   ;; Measurement policy
@@ -174,7 +175,16 @@
           (let* ((s (bench_maplist)) (a (make-var s)))
             (bench_maplist:go/2 s 500 a)
             (deref a)))
-        (lambda (r) (equal? r 41541750)))))
+        (lambda (r) (equal? r 41541750)))
+      ;; Non-tail user-function recursion: equation dispatch plus the
+      ;; prelude arithmetic helpers, with no constraint partner search.
+      ;; This is the case that showed the per-call `call/cc` escape.
+      (make-bench-case "sum" "bench_sum:go(2000,R)"
+        (lambda ()
+          (let* ((s (bench_sum)) (a (make-var s)))
+            (bench_sum:go/2 s 2000 a)
+            (deref a)))
+        (lambda (r) (equal? r 2001000)))))
 
   ;; ------------------------------------------------------------------
   ;; Driver

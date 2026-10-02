@@ -1,0 +1,22 @@
+% Benchmark program: non-tail user-function recursion, exercised by
+% `bench/scheme/bench/harness.sls` through the `sum` case.
+%
+% `sum(N)` walks N down through one equation chain per level, so the case
+% measures user-function dispatch, equation pattern matching and the
+% prelude arithmetic/comparison helpers on the hottest possible path.
+% It is the shape whose generated code used to capture a `call/cc`
+% continuation on every level (and once more for each prelude helper
+% it called), which is the Scheme backend's dominant recursion cost.
+%
+% The result is N*(N+1)/2: 2001000 at N = 2000, which is the value the
+% harness checks.
+:- module(bench_sum, [go/2]).
+
+:- chr_constraint go/2.
+
+:- function sum(int) -> int.
+
+sum(0) -> 0.
+sum(N) | N > 0 -> N + sum(N - 1).
+
+go(N, R) <=> R is sum(N).

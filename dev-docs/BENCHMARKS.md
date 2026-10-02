@@ -77,20 +77,21 @@ any case raised or failed its result check.
 
 ### Cases
 
-Four cases reuse golden programs exactly as `bench/Main.hs` does, two are
+Four cases reuse golden programs exactly as `bench/Main.hs` does, three are
 benchmark-only programs under `bench/scheme/`, and `session` is a synthetic
 baseline that tells no goal. Every goal uses integers and fresh variables
 only, so no runtime list or atom has to be encoded into Scheme by hand.
 
 | case | goal | exercises | Guile ms | Chez ms |
 |------|------|-----------|----------|---------|
-| `session` | — | session creation | 0.05 | 0.01 |
-| `guard` | `guard:clamp(3,5,R)` | guards, arithmetic | 0.06 | 0.01 |
-| `graph` | `graph_test:run(R1,R2,R3)` | partner search, removal | 0.31 | 0.01 |
-| `fib` | `fib:fib(20,R)` | recursion, trail | 531 | 1.66 |
-| `leq_closure` | `leqc:run(20)` | store growth, history, reactivation, **store index** | 71 | 0.69 |
-| `list_sum` | `bench_list:go(500,R)` | lists, `is` deep eval | 46 | 0.08 |
-| `maplist` | `bench_maplist:go(500,R)` | `'$call'` dispatch | 97 | 0.13 |
+| `session` | — | session creation | 0.06 | 0.01 |
+| `guard` | `guard:clamp(3,5,R)` | guards, arithmetic | 0.07 | 0.01 |
+| `graph` | `graph_test:run(R1,R2,R3)` | partner search, removal | 0.26 | 0.01 |
+| `fib` | `fib:fib(20,R)` | recursion, trail | 128 | 1.00 |
+| `leq_closure` | `leqc:run(20)` | store growth, history, reactivation, **store index** | 47.5 | 0.76 |
+| `list_sum` | `bench_list:go(500,R)` | lists, `is` deep eval | 2.32 | 0.06 |
+| `maplist` | `bench_maplist:go(500,R)` | `'$call'` dispatch | 3.93 | 0.10 |
+| `sum` | `bench_sum:go(2000,R)` | non-tail user-function recursion, equation dispatch, arithmetic helpers | 3.69 | 0.06 |
 
 `session` is the cost every other case pays a *library-specific* part of: a
 library that registers many evaluables and callables costs more to open than
@@ -104,17 +105,30 @@ gained the index. `graph`'s buckets stay below the threshold, so it is the
 case that measures the *cost* of having the optimization available — one
 type-index check per `Foreach` execution, ≈20 µs here.
 
-The medians are the median of three default runs on the development machine
-(Guile 3.0.9, Chez Scheme 10.3.0), interleaved round by round against the
-build being compared where that mattered. They are machine- and
-implementation-specific and are **not** golden-tested; only the result checks
-are asserted, and every case has one: `session` must return a session,
-`guard` 5, `fib(20)` 6765, `list_sum` 124750, `maplist` 41541750, `graph` the
-three expected `found`/`none` results, and `leq_closure` the 190 live `leq`
-constraints the 20-node closure must leave. A case that has silently stopped
-doing its work fails its check rather than posting a suspiciously good time.
-Case sizes are tuned for the slower implementation — the same size is reused
-on Chez, where the budget simply buys many more iterations.
+`sum` is the case that measures the Scheme backend's control flow: a
+non-tail-recursive user function was wrapped in one `call/cc` escape per
+procedure — and once more for each prelude arithmetic/comparison helper
+it called — so every level captured the continuation and the whole run
+was O(N²). The backend now compiles a procedure to a plain
+value-producing expression unless a `Return` is trapped in a loop body,
+which leaves equation dispatch and the arithmetic helpers as the cost
+(3.7 ms at N = 2000, down from ≈1.4 s). `fib` is the same effect through
+constraint recursion, and `Continue` escapes are still emitted only for
+loops that name them.
+
+The medians are the `median ms` column of a default run on the development
+machine (Guile 3.0.9, Chez Scheme 10.3.0); the before/after figures quoted
+above come from the previous revision of this table (for `fib`,
+`leq_closure`, `list_sum` and `maplist`) and from the `sum` case added with
+the change. They are machine- and implementation-specific and are **not**
+golden-tested; only the result checks are asserted, and every case has one:
+`session` must return a session, `guard` 5, `fib(20)` 6765, `list_sum`
+124750, `maplist` 41541750, `sum(2000)` 2001000, `graph` the three expected
+`found`/`none` results, and `leq_closure` the 190 live `leq` constraints the
+20-node closure must leave. A case that has silently stopped doing its work
+fails its check rather than posting a suspiciously good time. Case sizes
+are tuned for the slower implementation — the same size is reused on Chez,
+where the budget simply buys many more iterations.
 
 ### Adding a case
 
