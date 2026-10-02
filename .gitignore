@@ -6,6 +6,7 @@ tags
 /dist
 /dist-newstyle
 /dist-mcabal
+/dist-thc
 /dist-scheme-bench
 .hiedb
 .hiefiles/
