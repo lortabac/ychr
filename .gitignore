@@ -8,6 +8,10 @@ tags
 /dist-mcabal
 /dist-thc
 /dist-scheme-bench
+# Emscripten SDK (make playground-emsdk) and the generated playground
+# bundle (make playground-wasm).
+/.emsdk
+/playground/build
 .hiedb
 .hiefiles/
 CLAUDE.local.md

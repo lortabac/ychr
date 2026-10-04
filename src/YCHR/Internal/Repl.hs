@@ -8,10 +8,19 @@
 -- constraint store between queries, exit with @:end@), prompts, and
 -- the help text. Line input (history, tab completion, EOF handling)
 -- is delegated to 'YCHR.Internal.LineInput', whose implementation differs
--- between GHC (haskeline) and MicroHS (bare 'getLine'). Only
--- 'runRepl' is exported; everything else is internal.
+-- between GHC (haskeline) and MicroHs (bare 'getLine').
+--
+-- 'runRepl' is the entry point; 'modulesText', 'declarationsText' and
+-- 'infoText' are the pure renderings behind @:list_modules@,
+-- @:list_declarations@ and @:info@. They are exported so the web
+-- playground ('YCHR.Playground') prints the same output into its REPL
+-- pane instead of growing a second, drifting implementation; the
+-- terminal REPL is just @putStr@ of them.
 module YCHR.Internal.Repl
   ( runRepl,
+    modulesText,
+    declarationsText,
+    infoText,
   )
 where
 
@@ -504,11 +513,21 @@ showFiles :: [FilePath] -> IO ()
 showFiles = mapM_ putStrLn
 
 showModules :: CompiledProgram -> IO ()
-showModules prog =
-  mapM_ (\(CollectedModule {name = n}) -> putStrLn (T.unpack n)) prog.allModules
+showModules prog = putStr (modulesText prog)
+
+-- | @:list_modules@: one line per compiled module. Pure so the web
+-- playground can render it into its REPL pane ('YCHR.Playground').
+modulesText :: CompiledProgram -> String
+modulesText prog =
+  concatMap (\(CollectedModule {name = n}) -> T.unpack n ++ "\n") prog.allModules
 
 showDeclarations :: CompiledProgram -> IO ()
-showDeclarations prog = mapM_ putStrLn declLines
+showDeclarations prog = putStr (declarationsText prog)
+
+-- | @:list_declarations@: one line per declaration, deduplicated. Pure
+-- for the same reason as 'modulesText'.
+declarationsText :: CompiledProgram -> String
+declarationsText prog = concatMap (++ "\n") declLines
   where
     declLines = dedup entries
     entries =
@@ -586,7 +605,12 @@ builtinTypeModule :: Text
 builtinTypeModule = typeModule
 
 showInfoUsage :: IO ()
-showInfoUsage = putStrLn "usage: :info <identifier>"
+showInfoUsage = putStrLn infoUsageText
+
+-- | The @:info@ usage line, without its newline. Shared with
+-- 'infoText', which appends one.
+infoUsageText :: String
+infoUsageText = "usage: :info <identifier>"
 
 -- | Parse the argument to @:info@. Accepts @name@, @name/arity@,
 -- @mod:name@, or @mod:name/arity@. Returns 'Nothing' if the parse
@@ -857,18 +881,24 @@ findModule prog modName =
 -- multiple matches are separated by blank lines. An empty result set
 -- (no matches in any category) prints "unknown identifier: <raw>".
 showInfo :: CompiledProgram -> String -> IO ()
-showInfo prog raw =
+showInfo prog raw = putStr (infoText prog raw)
+
+-- | @:info@ rendered to a 'String'. Pure for the same reason as
+-- 'modulesText': the web playground shows exactly what the terminal
+-- REPL shows.
+infoText :: CompiledProgram -> String -> String
+infoText prog raw =
   let trimmed = T.strip (T.pack raw)
    in if T.null trimmed
-        then showInfoUsage
+        then infoUsageText ++ "\n"
         else case parseInfoArg prog trimmed of
           Nothing -> printUnknown (T.unpack trimmed)
           Just (name, mArity) ->
             case lookupInfo prog name mArity of
               [] -> printUnknown (T.unpack trimmed)
-              entries -> putStr (renderInfo entries)
+              entries -> renderInfo entries
   where
-    printUnknown s = putStrLn ("unknown identifier: " ++ s)
+    printUnknown s = "unknown identifier: " ++ s ++ "\n"
 
 renderInfo :: [InfoEntry] -> String
 renderInfo = intercalate "\n" . map renderInfoEntry

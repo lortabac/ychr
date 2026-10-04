@@ -7,10 +7,46 @@ GUILE ?= $(shell command -v guile3.0 >/dev/null 2>&1 && echo guile3.0 || echo gu
 CHEZ ?= scheme
 
 .PHONY: test test-haskell test-scheme test-scheme-runtime test-repl test-stlc
-.PHONY: test-typecheck test-docs test-style
+.PHONY: test-typecheck test-docs test-style test-playground playground-check
 .PHONY: bench bench-haskell bench-scheme bench-scheme-chez bench-scheme-all
 .PHONY: scheme-bench-compile
+.PHONY: playground-emsdk playground-wasm playground-serve
 .PHONY: build install format clean coverage
+
+# ---------------------------------------------------------------------------
+# Web playground (MicroHs -> WASM)
+#
+# `make playground-wasm` compiles the ychr library together with the bridge
+# in playground/ to JavaScript and WebAssembly through MicroHs and
+# emscripten, with libraries/ and typechecker/ preloaded into the module's
+# file system. `make playground-serve` then serves playground/ as a static
+# site. See docs/how-to/web-playground.md.
+#
+# Emscripten is the only toolchain MicroHs can emit WASM with (it shells out
+# to a C compiler; there is no pure-JavaScript backend), and it is not
+# vendored here, so `playground-emsdk` fetches it into .emsdk/ — gitignored,
+# and only needed by the targets below.
+# ---------------------------------------------------------------------------
+PLAYGROUND_DIR = playground
+PLAYGROUND_BUILD = $(PLAYGROUND_DIR)/build
+EMSDK ?= $(CURDIR)/.emsdk
+EMSDK_VERSION ?= 6.0.10
+# The MicroHs compiler whose data directory holds mhs.conf and src/runtime.
+# `mhs` on PATH is the installed one (~/.mcabal/bin/mhs); override to point
+# at a checkout's bin/mhs.
+MHS ?= mhs
+# -sINVOKE_RUN=0: main never runs; JavaScript calls mhs_init() and then the
+# exported functions, which is the flow MicroHs's own tests/ForExp.hs uses.
+PLAYGROUND_EMCCFLAGS ?= \
+	-O2 \
+	-sMODULARIZE=1 \
+	-sEXPORT_NAME=createYchr \
+	-sINVOKE_RUN=0 \
+	-sALLOW_MEMORY_GROWTH=1 \
+	-sENVIRONMENT=web,node \
+	-sFORCE_FILESYSTEM=1 \
+	-sEXPORTED_FUNCTIONS=_mhs_init,_malloc,_free,_ychr_pg_init,_ychr_pg_compile,_ychr_pg_query,_ychr_pg_check,_ychr_pg_free \
+	-sEXPORTED_RUNTIME_METHODS=stringToNewUTF8,UTF8ToString
 
 build:
 	cabal build
@@ -18,7 +54,7 @@ build:
 install:
 	cabal install --overwrite-policy=always
 
-test: test-haskell test-scheme-runtime test-scheme test-repl test-stlc test-typecheck test-docs test-style
+test: test-haskell test-scheme-runtime test-scheme test-repl test-stlc test-typecheck test-docs test-style test-playground
 
 test-haskell: build
 	cabal test
@@ -43,6 +79,14 @@ test-docs:
 
 test-style:
 	$(PYTEST) test/style/ -v
+
+# The native half of the playground suite always runs; the WASM half needs
+# the module to have been built and `node`, and skips itself otherwise.
+# `playground-check` is the full verification: build, then test.
+test-playground: build
+	$(PYTEST) test/playground/ -v
+
+playground-check: playground-wasm test-playground
 
 bench: bench-haskell bench-scheme
 
@@ -107,6 +151,45 @@ bench-scheme-chez: scheme-bench-compile
 
 bench-scheme-all: bench-scheme bench-scheme-chez
 
+# ---------------------------------------------------------------------------
+# Web playground build
+# ---------------------------------------------------------------------------
+
+# Fetch and activate the emscripten SDK, pinned to $(EMSDK_VERSION). Idempotent.
+playground-emsdk:
+	@test -d $(EMSDK) || \
+	  git clone --depth 1 https://github.com/emscripten-core/emsdk.git $(EMSDK)
+	@cd $(EMSDK) && ./emsdk install $(EMSDK_VERSION) >/dev/null && \
+	  ./emsdk activate $(EMSDK_VERSION) >/dev/null
+	@echo "emscripten $(EMSDK_VERSION) ready in $(EMSDK)"
+
+playground-wasm:
+	@if ! command -v emcc >/dev/null 2>&1 && \
+	    ! test -x $(EMSDK)/upstream/emscripten/emcc; then \
+	  echo "emcc not found: run 'make playground-emsdk', or put emscripten on PATH" >&2; \
+	  exit 1; \
+	fi
+	@command -v $(MHS) >/dev/null 2>&1 || { \
+	  echo "the MicroHs compiler '$(MHS)' not found; set MHS=path/to/mhs" >&2; \
+	  exit 1; \
+	}
+	@mkdir -p $(PLAYGROUND_BUILD)
+	@cp examples/leq.chr $(PLAYGROUND_BUILD)/starter.chr
+	. $(EMSDK)/emsdk_env.sh >/dev/null 2>&1 || true; \
+	CC=emcc MHSCONF=unix MHSCCLIBS=-lm MHSCCFLAGS="$(PLAYGROUND_EMCCFLAGS)" \
+	$(MHS) -tenvironment -z \
+	  -isrc -isrc/mhs -i$(PLAYGROUND_DIR) \
+	  -optl --preload-file=libraries@/libraries \
+	  -optl --preload-file=typechecker@/typechecker \
+	  -o$(PLAYGROUND_BUILD)/ychr-pg.js YCHR.Playground.Wasm
+	@echo "built $(PLAYGROUND_BUILD)/ychr-pg.js"
+
+# Serve the page. The bundle is static, so any file server works; this one
+# needs nothing but Python. Open http://localhost:8080/.
+playground-serve:
+	@echo "serving $(PLAYGROUND_DIR)/ at http://localhost:8080/ (Ctrl-C to stop)"
+	python3 -m http.server 8080 --directory $(PLAYGROUND_DIR)
+
 coverage:
 	cabal test --enable-coverage
 	@echo
@@ -114,7 +197,7 @@ coverage:
 	@find dist-newstyle -path '*/hpc/vanilla/html/hpc_index.html' -print -quit
 
 format:
-	ormolu -i $$(find src embed app test bench examples -name '*.hs')
+	ormolu -i $$(find src embed app test bench examples playground -name '*.hs')
 
 clean:
 	cabal clean

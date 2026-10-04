@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YCHR playground</title>
+    <link rel="stylesheet" href="playground.css" />
+  </head>
+  <body>
+    <header>
+      <h1>YCHR playground</h1>
+      <div class="toolbar">
+        <button id="reload" type="button">Reload</button>
+        <button id="typecheck" type="button">Typecheck</button>
+        <span id="status" class="status busy" role="status">loading…</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="pane">
+        <h2>Program</h2>
+        <textarea
+          id="program"
+          spellcheck="false"
+          autocomplete="off"
+          autocapitalize="off"
+          wrap="off"
+          aria-label="CHR program"
+        ></textarea>
+      </section>
+
+      <section class="pane">
+        <h2>REPL</h2>
+        <div id="output" class="output" tabindex="0"></div>
+        <form id="query-form" autocomplete="off">
+          <span class="prompt" aria-hidden="true">ychr&gt;</span>
+          <input
+            id="input"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="goal, or :help"
+            aria-label="Goal"
+          />
+          <button type="submit">Run</button>
+        </form>
+      </section>
+    </main>
+
+    <footer>
+      <p>
+        <strong>Reload</strong> compiles the editor and loads it into the
+        REPL, without type checking. <strong>Typecheck</strong> reloads the
+        editor first, then runs the CHR type checker over the program. Type a
+        goal in the REPL box, or a command such as <code>:help</code>.
+      </p>
+      <p id="boot-error" class="boot-error" hidden></p>
+    </footer>
+
+    <script src="build/ychr-pg.js"></script>
+    <script src="playground.js"></script>
+  </body>
+</html>
