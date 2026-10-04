@@ -88,6 +88,23 @@ what is planned.
 - [x] Info queries (`:info`, which reports the declared type)
 - [x] Tracing
 
+## Web playground
+
+The whole compiler — front end, VM compiler, interpreter and type
+checker — compiled to WebAssembly by MicroHs and Emscripten, behind a
+page with a program editor and a REPL. See the
+[how-to](how-to/web-playground.md).
+
+- [x] MicroHs/Emscripten build of the library and a bridge
+      (`foreign export ccall` entry points returning text responses)
+- [x] Editor + REPL page with Reload and Typecheck
+- [x] Native harness and headless WASM test sharing one expectation table
+- [ ] Live sessions (`:begin`) in the page
+- [ ] Precompiled `typechecker.vm` embedded in the build, to remove the
+      checker's one-off compile cost
+- [ ] Web Worker, so a long compile does not block the page
+- [ ] Editor with syntax highlighting and in-place diagnostics
+
 ## Testing
 
 - [x] Unit tests (parser, renamer, desugarer, runtime components)

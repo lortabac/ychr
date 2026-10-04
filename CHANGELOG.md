@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+There is now a web playground: the whole compiler — front end, VM
+compiler, interpreter and the optional type checker — built to
+WebAssembly by MicroHs and Emscripten, behind a static page with a
+program editor and a REPL. `make playground-emsdk` fetches the
+Emscripten SDK into a gitignored `.emsdk/`, `make playground-wasm`
+builds `playground/build/ychr-pg.{js,wasm,data}`, and `make
+playground-serve` serves the page. The page reaches the compiler through
+five `foreign export ccall` entry points that take and return UTF-8 C
+strings carrying a `status\n\npayload` response envelope; the payload is
+the CLI's own text — the same diagnostics, warnings and bindings, ANSI
+colours included — with one addition, a short "Loaded N constraint(s)"
+line after a successful reload. Reload and goals behave like
+`--no-check`, and compile with `includeStdlib = False` as every CLI
+command does, so the bundled libraries are pulled in only as far as the
+program's own `:- use_module` clauses reach. Type checking is a separate
+button, and it reloads the editor before checking, so what it reports on
+is always what is in the editor; the first press also compiles the CHR
+checker itself, and later presses reuse it. Nothing in the library's public API changes: the bridge
+logic is `YCHR.Playground` (an internal module of a new
+`ychr-playground` component, built by GHC for the test harness), and the
+WASM entry point is compiled by `mhs` directly. `YCHR.Internal.Repl` now
+also exports `modulesText`, `declarationsText` and `infoText`, the pure
+renderings behind `:list_modules`, `:list_declarations` and `:info`, so
+the page prints the terminal REPL's output instead of a second copy of
+it. See [`docs/how-to/web-playground.md`](docs/how-to/web-playground.md).
+
 The parsed AST's `Declaration` no longer has partial record fields:
 the constructors that carry fields now take their own
 single-constructor record (the operator alternative already took

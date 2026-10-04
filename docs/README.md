@@ -15,6 +15,8 @@ Conventions for these pages: [`dev-docs/DOC_CONVENTIONS.md`](../dev-docs/DOC_CON
 - [Call host-language functions](how-to/call-host-functions.md)
 - [Embed a CHR module in Haskell](how-to/embed-a-chr-module.md)
 - [Drive a compiled program from the Scheme REPL](how-to/scheme-repl.md)
+- [Run the playground in a browser](how-to/web-playground.md) — the whole
+  compiler as WebAssembly, with an editor and a REPL.
 
 ## Reference
 

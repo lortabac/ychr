@@ -1,0 +1,256 @@
+/* The YCHR playground: two panes, a toolbar, and a REPL. No framework —
+   the page only has to move strings between two text widgets and a WASM
+   module. */
+
+:root {
+  color-scheme: dark;
+  --bg: #14161a;
+  --bg-pane: #1b1e24;
+  --bg-input: #101216;
+  --border: #2b303a;
+  --fg: #d6dae1;
+  --fg-dim: #8b93a1;
+  --accent: #6ea8fe;
+  --ok: #7ec27e;
+  --error: #ff6b6b;
+  --busy: #e0b341;
+}
+
+/* The colours ychr's diagnostics use (System.Console.ANSI, "vivid"
+   variants), plus the normal-intensity ones. */
+.fg-black {
+  color: #8b93a1;
+}
+.fg-red {
+  color: #ff7070;
+}
+.fg-green {
+  color: #86d986;
+}
+.fg-yellow {
+  color: #e5c07b;
+}
+.fg-blue {
+  color: #74a8fc;
+}
+.fg-magenta {
+  color: #d98de0;
+}
+.fg-cyan {
+  color: #62d4d4;
+}
+.fg-white {
+  color: #f2f4f8;
+}
+.sgr-bold {
+  font-weight: bold;
+}
+.sgr-italic {
+  font-style: italic;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, sans-serif;
+  font-size: 15px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-pane);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3rem 0.8rem;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.status {
+  font-size: 0.85rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+}
+
+.status.ok {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.status.error {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.status.busy {
+  color: var(--busy);
+  border-color: var(--busy);
+}
+
+main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  min-height: 0;
+}
+
+@media (max-width: 800px) {
+  main {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-pane);
+}
+
+.pane h2 {
+  margin: 0;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+textarea,
+.output,
+input {
+  font-family: ui-monospace, "SF Mono", "DejaVu Sans Mono", Menlo,
+    Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+#program {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  outline: none;
+  padding: 0.6rem 0.8rem;
+  background: var(--bg-pane);
+  color: var(--fg);
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+}
+
+.output {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.6rem 0.8rem;
+}
+
+.output .block {
+  margin-bottom: 0.6rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.output .echo {
+  color: var(--fg-dim);
+}
+
+.output .payload.error {
+  color: var(--fg);
+  border-left: 2px solid var(--error);
+  padding-left: 0.6rem;
+}
+
+#query-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.8rem;
+  border-top: 1px solid var(--border);
+}
+
+.prompt {
+  color: var(--fg-dim);
+}
+
+#input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3rem 0.5rem;
+  outline: none;
+}
+
+#input:focus {
+  border-color: var(--accent);
+}
+
+footer {
+  padding: 0.5rem 1rem;
+  border-top: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: 0.8rem;
+}
+
+footer p {
+  margin: 0.2rem 0;
+}
+
+.boot-error {
+  color: var(--error);
+}

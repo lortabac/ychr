@@ -95,6 +95,16 @@ extra-source-files:   libraries/*.chr
                     , bench/scheme/*.chr
                     , bench/scheme/*.scm
                     , bench/scheme/bench/*.sls
+                    -- The playground's page and its MicroHs-only bridge.
+                    -- Neither is a component source — the bridge is
+                    -- compiled by `mhs` directly, from the Makefile —
+                    -- so without these the sdist could not run
+                    -- `make playground-wasm`.
+                    , playground/*.html
+                    , playground/*.css
+                    , playground/*.js
+                    , playground/test/smoke.cjs
+                    , playground/YCHR/Playground/Wasm.hs
                     , test/golden/**/*.chr
                     , test/golden/**/*.goal
                     , test/golden/**/*.expected
@@ -193,6 +203,30 @@ executable stlc-typechecker
                     , embed
     if impl(ghc)
         build-depends: template-haskell >=2.20 && <2.25
+    default-language: GHC2021
+
+-- The web playground's native harness: the same compile/query/type-check
+-- operations the page drives through WASM, over a line protocol on
+-- stdin/stdout, so the bridge can be tested without emscripten
+-- (@test/playground/@). 'YCHR.Playground' holds the logic and is shared
+-- with the WASM entry point ('playground/YCHR/Playground/Wasm.hs'),
+-- which is deliberately not listed here: it carries 'foreign export'
+-- declarations and only the MicroHs build — @make playground-wasm@, which
+-- invokes @mhs@ directly — compiles it.
+--
+-- Unbuildable unless '-fexamples' is set, like the stlc driver and for
+-- the same reason: @cabal install ychr@ should put only the compiler on
+-- a user's PATH. Under MicroHs it is never buildable — the WASM build
+-- does not go through cabal, and @mcabal build@ must keep building
+-- exactly what it built before.
+executable ychr-playground
+    import:           warnings, deps
+    main-is:          Main.hs
+    other-modules:    YCHR.Playground
+    hs-source-dirs:   playground
+    build-depends:    ychr
+    if impl(mhs) || !flag(examples)
+        buildable:    False
     default-language: GHC2021
 
 test-suite ychr-tests

@@ -22,6 +22,7 @@ jobs:
             test/**/*.hs
             bench/**/*.hs
             examples/**/*.hs
+            playground/**/*.hs
 
   # Compile-only check across the whole supported GHC range. The full test
   # suite needs Guile and pytest, so it runs once (in 'test') on the primary
