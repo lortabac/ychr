@@ -208,11 +208,28 @@ library ships that loop as
 `loadResources` looks the sources up under `$YCHR_LIB_DIR`, or the
 current directory when that variable is unset or empty — point it at a
 YCHR source tree (the directory holding `libraries/` and `typechecker/`).
-This is the path the MicroHs build takes: the `ychr` executable's
-`YCHR.Embedded` has a MicroHs twin
-([`src/mhs/YCHR/Embedded.hs`](../../src/mhs/YCHR/Embedded.hs)) that
-re-exports `loadResources`, while the GHC one returns the values its
-splice baked in and touches no filesystem. Keep the type-checker binding
-lazy if the program never type-checks (`SessionInput` is only forced on
-first use), and note that the standard library is always needed: the
-prelude is seeded into every compilation.
+Keep the type-checker binding lazy if the program never type-checks
+(`SessionInput` is only forced on first use), and note that the standard
+library is always needed: the prelude is seeded into every compilation.
+
+Reading the sources at run time is convenient but not free: on a slow
+target it costs the parse of the standard library and, once per process,
+the compilation of the type-checker. The repository's own MicroHs
+executable therefore takes a third path — `make resources` decodes both
+once at build time and writes them as literal Haskell data under
+`generated/`, which the executable's `YCHR.Embedded`
+([`src/mhs/YCHR/Embedded.hs`](../../src/mhs/YCHR/Embedded.hs)) returns
+without touching the filesystem. The generator is
+[`codegen/Main.hs`](../../codegen/Main.hs); its rationale, the format it
+emits and the measurements are in
+[`dev-docs/MICROHS_PERFORMANCE.md`](../../dev-docs/MICROHS_PERFORMANCE.md),
+option B. Emulate it if you have the same fixed cost and a compiler that
+is happy to compile literal data; the generated modules are ordinary
+Haskell with no Template Haskell, so both GHC and MicroHs accept them.
+The GHC executable keeps its splice: it never reads a file at run time.
+
+Two consequences of that path, if you take it: the generated modules are
+an input to the build, so the MicroHs executable is built as
+`make resources && mcabal build` (or `make mhs-build`), and the binary no
+longer honours `$YCHR_LIB_DIR` — its resources are the ones it was built
+with. An embedder that keeps the on-disk loader keeps the variable.

@@ -6,10 +6,17 @@
 -- library ('StdLib') and the compiled type-checker ('SessionInput') are
 -- explicit inputs (see @docs\/how-to\/embed-a-chr-module.md@, §Supplying
 -- the resources). This module builds both from the @libraries\/*.chr@ and
--- @typechecker\/*.chr@ sources on disk, which is the path the MicroHs
--- build takes: MicroHs has no Template Haskell
--- (@dev-docs\/MICROHS_GAPS.md@, gap 5), so the @ychr@ executable reads the
--- sources at run time instead of splicing them in.
+-- @typechecker\/*.chr@ sources on disk, for an embedder that would rather
+-- point at a source tree than carry the decoded values in its binary.
+--
+-- Neither bundled provider takes this path any more. Under GHC the
+-- executable splices the sources in with Template Haskell
+-- (@embed\/YCHR\/Embedded.hs@); under MicroHs, which has no Template
+-- Haskell (@dev-docs\/MICROHS_GAPS.md@, gap 5) and cannot afford to
+-- decode them in every process, it compiles the modules @make resources@
+-- emits (@dev-docs\/MICROHS_PERFORMANCE.md@, option B). The bundled
+-- executable therefore no longer honours @YCHR_LIB_DIR@; this loader is
+-- for library embedders, and for the GHC test suite.
 --
 -- The two directories are looked up under the root given by
 -- 'resourceRoot' — the @YCHR_LIB_DIR@ environment variable, or the
@@ -18,9 +25,7 @@
 --
 -- 'loadResourcesAt' takes the root as an argument and is what the GHC
 -- test suite calls, to compare a run-time load against the values the
--- Template Haskell embedder bakes in. The GHC components themselves do
--- not call it: their binary stays self-contained
--- (@embed\/YCHR\/Embedded.hs@).
+-- Template Haskell embedder bakes in.
 module YCHR.Internal.Resources
   ( -- * Types
     Resources (..),

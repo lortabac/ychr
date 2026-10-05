@@ -19,6 +19,7 @@ module YCHR.Internal.Runtime.Session
     -- * Session input
     SessionInput (..),
     toSessionInput,
+    mkSessionInput,
 
     -- * Reactivation
     drainReactivation,
@@ -54,7 +55,7 @@ import Data.Text qualified as T
 import YCHR.Internal.Compile (tellProcName)
 import YCHR.Internal.Compile.Names (reactivateDispatchName)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), ExportResolution (..))
-import YCHR.Internal.Interpreter.Slots (SlotProgram (..), lowerProcedure)
+import YCHR.Internal.Interpreter.Slots (SlotProgram (..), lowerProcedure, lowerProgram)
 import YCHR.Internal.Runtime.Error (runtimeErrorS)
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallRegistry,
@@ -76,6 +77,7 @@ import YCHR.Internal.Runtime.Trace (TraceEvent (..), TraceHandler)
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (CallableKey, Name (..), Procedure (..), Program (..))
+import YCHR.Internal.VM.Index (indexablePositions)
 
 -- | The narrow slice of a compiled program that 'withCHR' /
 -- 'withCHRExtra' need: the VM 'Program' and the export-resolution maps
@@ -99,6 +101,27 @@ data SessionInput = SessionInput
     exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
     exportedSet :: Set Types.QualifiedIdentifier
   }
+
+-- | Build a 'SessionInput' from the parts a caller can supply out of
+-- band: the VM program and the two export tables. The remaining fields
+-- are pure functions of the program — the slot phase is
+-- 'lowerProgram', the indexable positions 'indexablePositions' — and
+-- are derived here so that a caller holding only those three values
+-- (the build step that emits the precompiled type-checker) builds the
+-- exact same 'SessionInput' the compiler's own pipeline builds.
+mkSessionInput ::
+  Program ->
+  Map Types.UnqualifiedIdentifier ExportResolution ->
+  Set Types.QualifiedIdentifier ->
+  SessionInput
+mkSessionInput prog exMap exSet =
+  SessionInput
+    { program = prog,
+      slotProgram = lowerProgram prog,
+      indexPositions = indexablePositions prog,
+      exportMap = exMap,
+      exportedSet = exSet
+    }
 
 -- | Project a 'CompiledProgram' down to the slice 'withCHR' /
 -- 'withCHRExtra' actually read.

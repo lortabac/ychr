@@ -2,8 +2,10 @@
 
 `dev-docs/MICROHS_GAPS.md` records what stops YCHR from *building* under
 MicroHs. This document records what stops it from running *fast* there, with
-the measurements behind each claim and the options for fixing it. It is a
-diagnosis, not a plan of record: nothing here is implemented.
+the measurements behind each claim and the options for fixing it. It began as
+a diagnosis only: options A, C, D and E are still just that. Option B has
+since been implemented — its section below records what was built and what it
+measured.
 
 Everything below was measured on 2026-10-05 against YCHR `d031947` (branch
 `mhs-optimization`) and MicroHs `f65d3c65`, on an AMD Ryzen AI 9 HX 370. The
@@ -226,7 +228,8 @@ essentially all parser and rename records.
    typechecker CHR compilation (~4.5 s) on every type-checking command. GHC pays
    the same work — its embedder splices source text, not parsed values — at
    roughly the 0.14 s that separates `check leq` from `run --no-check leq`;
-   under MicroHs it is 5.2 s of the 7.9 s that `check leq` takes.
+   under MicroHs it is 5.2 s of the 7.9 s that `check leq` takes. **Removed on
+   the MicroHs side by option B** (§7B): both now happen at build time.
 4. **Allocation-driven collection**: the big run allocates 20.4 G nodes (about
    326 GB) and spends 36 % of its time in the collector at the default heap
    (§4).
@@ -255,23 +258,102 @@ desktop/server setting and the WASM target needs a much smaller value. And it
 must be validated against the `-H100M` `ERR: ARR_WRITE` abort of §4, which is
 the reason this is not simply "raise the default and move on".
 
-### B. Precompute the per-process resources
+### B. Precompute the per-process resources — implemented
 
-Both builds parse the stdlib and compile the type-checker on every process
-(§3); only the source provenance and the laziness differ. A build step that
-emits a generated Haskell module carrying the decoded `StdLib` and
-`SessionInput` — a TH substitute, since MicroHs has no staged compilation but
-does compile literal data cheaply — would remove that work from both builds.
-An on-disk cache keyed by a source hash is the fallback shape; it is simpler to
-build but adds I/O, invalidation and a deserialisation cost that the
-generated-module approach does not have. A generated module large enough to hit
-MicroHs's own compile-time limits is the obvious risk.
+Both builds used to parse the stdlib and compile the type-checker on every
+process (§3). That work is gone from the MicroHs path. `make resources` runs
+`ychr-codegen` (`codegen/Main.hs`), which decodes `libraries/*.chr` and
+`typechecker/*.chr` with `parseStdLib` and `compileTypeCheckerModules` and
+writes two Haskell modules under `generated/`:
 
-Expected under MicroHs: `check leq` 7.9 s → ~2.7 s, `check pairs_library`
-17.6 s → ~12 s, `check typechecker/*.chr` unchanged apart from the ~5 s. The
-same change is on GHC's path too — its `check leq` spends part of its 0.166 s
-on the same parse and compile — so it is worth measuring there as well.
-Feasibility under `mcabal` is the open question: no pre-build hook is visible.
+- `YCHR.Embedded.Generated.StdLib`, carrying the parsed `StdLib`;
+- `YCHR.Embedded.Generated.TypeCheck`, carrying the type-checker's VM
+  `Program` and its two export tables, wrapped in
+  `Session.mkSessionInput` so that the slot phase and the indexable positions
+  are rebuilt from the program at load time. Serializing those two derived
+  fields as well would add about 1.3 MB of generated source; carrying the
+  indexable positions explicitly was tried and moved no counter, so they stay
+  derived.
+
+The modules are plain literal data — constructor applications, no Template
+Haskell — so MicroHs compiles them without a staged-compilation facility. The
+emitter (`embed/YCHR/Embedded/Generate/`) is GHC-only: it walks the AST with
+`GHC.Generics`, renders each node as Haskell source (`Text` and `String` as
+string literals under `OverloadedStrings`, containers through `fromList`,
+everything else positionally), and then flattens the tree into many small
+top-level bindings. That last step is what makes the module compilable at all:
+the type-checker's program is about 1.5 MB of `Show` output, and one expression
+that size is not something MicroHs will accept. Splitting is by list length
+and by rendered size (`--chunk`, `--max-binding-bytes`), and a binding that is
+still over budget once lifted has its structured arguments lifted in turn, so
+that what remains is a head and a few names: with the defaults, the longest
+binding body in either module is 8 191 characters. The one node that can
+exceed the budget is one whose bulk is a literal — a constructor application
+or tuple holding a long string — which cannot be split without giving the
+lifted literal a type.
+The two modules total 1.7 MB, are gitignored, and are listed in the
+executable's `other-modules` and `autogen-modules`; only `generated/README.md`
+is committed, because Cabal rejects an `hs-source-dirs` entry that names a
+missing directory even in a conditional for another compiler.
+
+`mcabal build` must follow `make resources` (or `make mhs-build`); a GHC build
+never looks at the directory and keeps its Template Haskell splice. The
+MicroHs executable consequently ignores `YCHR_LIB_DIR`: its resources are
+whatever it was built with.
+
+Reductions first, because they are the stable figure:
+
+| workload | §3 baseline | now |
+|---|---:|---:|
+| `repl --quiet` (startup only, EOF) | 73.4 M | **7.5 M** |
+| `run --no-check` `leq` | — | 3.5 M |
+| `check leq` | 805 M | **367 M** |
+| `check pairs_library` | 1 583 M | **1 143 M** |
+| `compile --no-check -t vm typechecker/*.chr` | 564 M | **498 M** |
+
+and wall clock (medians of three runs; the baseline column is §2/§3):
+
+| command | baseline | now |
+|---|---:|---:|
+| `repl --quiet` startup | 0.81 s | **0.14 s** |
+| `run --no-check -g … leq` | 0.704 s | **0.08 s** |
+| `check leq` | 7.94 s | **4.07 s** |
+| `check pairs_library` | 17.61 s | **13.43 s** |
+| `compile --no-check -t vm typechecker/*.chr` | 4.96 s | 4.77 s |
+
+The startup row is the one option B set out to remove, and it is gone: 73.4 M
+reductions of parsing became 7.5 M of materializing the literal standard
+library, which is why the short commands that never type-check are now
+dominated by process start. Its baseline is the one figure in the table taken
+from §3's runtime clock rather than §2's wall clock; for that command the
+runtime reports 0.09–0.12 s today, so the like-for-like comparison is 0.81 s →
+0.1 s and the 0.15 s above is process start plus that.
+
+`check` improved by about 440 M reductions — 55 % of its fixed cost — on both
+workloads, but not to the ~2.7 s predicted here. That prediction assumed the
+fixed cost was startup + compile + a small session setup; it is not. `check` on
+an *empty* module still costs 346 M reductions, so the fixed cost decomposes as
+startup (7.5 M) + materializing the precomputed checker (~120 M) + the session
+setup and checker start-up that running the checker has always cost (~220 M,
+which is option C's territory, not B's). Against that, the baseline's ~491 M
+compilation is a four-fold saving on the compilation alone, which is what
+option B can claim: on this workload 784 M of fixed work became 346 M.
+
+The `compile -t vm` row is the one workload that never compiled the
+type-checker; it saves only the 66 M startup parse, and its wall clock is flat
+within the run-to-run spread (the same command has measured between 4.65 s and
+5.36 s here, `check leq` between 4.04 s and 4.58 s, and `repl` between 0.09 s
+and 0.21 s — about ±10 % either way). A generated module large enough to hit
+MicroHs's own compile-time limits was the risk named above: `mcabal build`
+compiles the whole package, generated modules included, in about five minutes
+at ~1 GB peak RSS — acceptable for a build step, and the flattening is the
+knob if that changes.
+
+The same change is on GHC's path too, but only as a cost: its `check leq`
+spends part of its 0.166 s on the same parse and compile, while compiling a
+1.7 MB literal-data module into four components on five CI compilers would be
+paid at build time. GHC therefore keeps its Template Haskell splice, and
+adopting the generated data there stays open, to be decided on a measurement.
 
 ### C. Interpreter hot path
 
@@ -330,8 +412,11 @@ The `unix_x86` target that already exists in `mhs.conf`
 - Is the `-H100M` `ERR: ARR_WRITE` abort (§4) a runtime bug or specific to this
   workload and heap size? It is the only thing standing between A and a default
   change, and it is worth a minimal reproducer regardless.
-- Can `mcabal` be made to run a pre-build step for B, or does the generated
-  module have to be produced out of band by `make`?
+- ~~Can `mcabal` be made to run a pre-build step for B, or does the generated
+  module have to be produced out of band by `make`?~~ No pre-build hook is
+  visible in `mcabal`, and none was needed: the modules are produced out of
+  band by `make resources`, and `autogen-modules` keeps `cabal check` and
+  `cabal sdist` happy when they are absent. See B below.
 - How much of C is worth doing? The profile says where the entries go, but
   entries are not reductions and the container calls inside those entries are
   uninstrumented; C needs an A/B per item, not a combined one.
@@ -339,7 +424,12 @@ The `unix_x86` target that already exists in `mhs.conf`
 ## 9. Reproducing
 
 ```sh
-export YCHR_LIB_DIR=$PWD
+# Build the MicroHs binary: the resources are decoded by a separate build
+# step, so `make resources` (or `make mhs-build`, which chains the two)
+# has to run before `mcabal build`. No YCHR_LIB_DIR is involved: the
+# resources are baked in.
+make resources
+mcabal build
 
 # Counters and the GC split.
 ./dist-mcabal/bin/mhs/ychr check typechecker/*.chr +RTS -v -RTS
@@ -348,12 +438,14 @@ export YCHR_LIB_DIR=$PWD
 ./dist-mcabal/bin/mhs/ychr check typechecker/*.chr +RTS -H400M -v -RTS
 
 # Tick profile: build an instrumented binary in a scratch copy, then
-# run any command with +RTS -T -RTS. The copy is disposable.
+# run any command with +RTS -T -RTS. The copy needs the generated
+# modules too — copy them, or run `make resources` inside it.
 mkdir -p .perf-scratch/ychr-tick
 cp -a app embed libraries typechecker src ychr.cabal cabal.project \
   .perf-scratch/ychr-tick/
+cp -a generated .perf-scratch/ychr-tick/
 (cd .perf-scratch/ychr-tick && mcabal --options=-T build)
-YCHR_LIB_DIR=$PWD .perf-scratch/ychr-tick/dist-mcabal/bin/mhs/ychr check \
+.perf-scratch/ychr-tick/dist-mcabal/bin/mhs/ychr check \
   test/golden/pairs_library/pairs_library.chr +RTS -T -RTS \
   | grep -E '^[A-Za-z]' | sort -k2 -nr | head -25
 ```

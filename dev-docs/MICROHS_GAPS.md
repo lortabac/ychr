@@ -23,16 +23,19 @@ includes `0a1c3095`, the `try` fix) and its `base` package rebuilt from
 it. Ten gaps are recorded; two have closed and been removed from this
 document. The local workarounds for gaps 1, 3, 4, 5, 6, 7, 8 and 10 are
 applied (gap 4 also touches the importers, tests included; gap 5 is the
-run-time resources provider described below; gaps 7 and 8 are one pair of
+resources provider described below, which since
+`dev-docs/MICROHS_PERFORMANCE.md` option B decodes its two resources at
+build time rather than at run time; gaps 7 and 8 are one pair of
 parentheses and one no-op modifier respectively; gap 10 is one helper
 taking its argument as `Text` rather than as a record). Gap 9 has no
 YCHR-side workaround: it breaks the MicroHs-built executable's help
 screens only.
 No Template Haskell remains in `library ychr`, and the `ychr` executable
 has a MicroHs twin of the compile-time embedder, so `mcabal build` now
-completes: it builds `library ychr` and `exe:ychr`, and the binary reads
-`libraries/*.chr` and `typechecker/*.chr` from `$YCHR_LIB_DIR` (or the
-current directory) at run time. `mcabal build` does not build the test
+completes: it builds `library ychr` and `exe:ychr`, and the binary runs
+on `libraries/*.chr` and `typechecker/*.chr` decoded at build time by
+`make resources` — no run-time lookup, and `YCHR_LIB_DIR` no longer
+affects it. `mcabal build` does not build the test
 suite, the benchmark or the `stlc` example (they need
 `tasty`/`hedgehog`/`criterion`, which the MicroHs package set lacks, and
 the `examples` flag defaults off), so those remain GHC-only. Gaps 7, 8
@@ -44,7 +47,7 @@ and 9 were found on the way to that point and are recorded below.
 | 2 | `NoFieldSelectors` silently ignored | open |
 | 3 | Record update on a record-dot expression doesn't parse | open — workaround applied to `src/` (see below) |
 | 4 | Missing `Data.Text` functions | open — workaround applied (`Data.Text.Shim`) |
-| 5 | No `TemplateHaskell` support | open upstream — workaround applied: no TH in `library ychr`, and the MicroHs `ychr` loads both resources at run time (see below) |
+| 5 | No `TemplateHaskell` support | open upstream — workaround applied: no TH in `library ychr`; the MicroHs `ychr` compiles resources decoded at build time by `make resources` (see below) |
 | 6 | `mapAccumL` is list-only | open — workaround applied to `src/` (see below) |
 | 7 | `Data.List` functions lack their fixity declarations | open — workaround applied to `src/` (see below) |
 | 8 | `optparse-applicative`'s `fullDesc` is missing from the MicroHs package | open — workaround applied to `app/Main.hs` (see below) |
@@ -542,11 +545,13 @@ MicroHs exports the four functions.
 > **Re-verified, and now closed on the YCHR side.** Still open upstream —
 > mhs has no staged compilation and never will (see "Root cause"). The
 > `ychr` *library* uses no TH at all, and the `ychr` *executable* has a
-> MicroHs twin of its compile-time embedder, so `mcabal build` now
-> completes and the resulting binary reads both resources from disk at
-> run time. TH is confined to the shared `embed/` source directory, which
-> only the components that want a self-contained GHC binary compile: the
-> `ychr` executable, the test suite, the benchmark and the `stlc` example.
+> MicroHs twin of its compile-time embedder, so `mcabal build` completes.
+> The twin no longer re-decodes the resources in every process: it
+> compiles the modules `make resources` emits, so the MicroHs side has no
+> run-time resource path either. TH is confined to the shared `embed/`
+> source directory, which only the components that want a self-contained
+> GHC binary compile: the `ychr` executable, the test suite, the
+> benchmark and the `stlc` example.
 
 MicroHs is a combinator-based compiler with no staged compilation.
 The `TemplateHaskell` extension is not recognised; modules using it
@@ -598,69 +603,67 @@ arguments — see
 The mhs side is the *provider* for those two values:
 `src/mhs/YCHR/Embedded.hs` is the MicroHs twin of
 `embed/YCHR/Embedded.hs`, switched in by the executable's
-`hs-source-dirs` under `if impl(mhs)`. It re-exports a loader that lives
-in the library, so the disk-reading logic is compiler-independent and the
-GHC test suite exercises it:
+`hs-source-dirs` under `if impl(mhs)`. It reads nothing at run time: the
+executable compiles the modules under `generated/`, which `make
+resources` writes by decoding `libraries/*.chr` and `typechecker/*.chr`
+with the library's own `parseStdLib` / `compileTypeCheckerModules`
+(`dev-docs/MICROHS_PERFORMANCE.md`, option B; `generated/README.md`).
 
 | file | role |
 |---|---|
-| `src/YCHR/Internal/Resources.hs` | loader: `resourceRoot` (the `YCHR_LIB_DIR` policy), `readChrDir`, `loadResourcesAt`, `loadResources`, and the `Resources` record |
-| `src/mhs/YCHR/Embedded.hs` | re-exports `YCHR.Internal.Resources.loadResources` as the executable's `YCHR.Embedded.loadResources` |
-| `embed/YCHR/Embedded.hs` | GHC twin: `loadResources` returns the compile-time-embedded `stdlib` / `typeCheckerProgram`, and never touches the filesystem |
+| `codegen/Main.hs` | generator entry point: writes `generated/`, `--check` reports staleness |
+| `embed/YCHR/Embedded/Generate/` | the emitter — a `Code` tree, a `ToCode` class with `GHC.Generics` defaults, and the hoisting/assembly pass |
+| `generated/YCHR/Embedded/Generated/StdLib.hs` | generated: `stdlib :: StdLib` |
+| `generated/YCHR/Embedded/Generated/TypeCheck.hs` | generated: `typeCheckerProgram :: SessionInput` |
+| `src/mhs/YCHR/Embedded.hs` | re-exports the two generated values as the executable's `YCHR.Embedded`, plus a `loadResources` that cannot fail |
+| `embed/YCHR/Embedded.hs` | GHC twin: `loadResources` returns the compile-time-embedded `stdlib` / `typeCheckerProgram` |
+| `src/YCHR/Internal/Resources.hs` | the on-disk loader (`readChrDir`, `loadResourcesAt`, the `YCHR_LIB_DIR` policy); no bundled provider calls it any more |
 
 The executable imports only `YCHR.Embedded (loadResources)` and threads
 the returned `Resources` through its subcommands, so `app/Main.hs` is one
-source file for both compilers. Resources are loaded after the command
+source file for both compilers. Resources are obtained after the command
 line is parsed, so `--help` and usage errors work without a source tree.
-Under MicroHs a load failure — a bad `YCHR_LIB_DIR`, or a root without
-`libraries/` or `typechecker/` — is printed and exits non-zero before
-that command runs.
+Both providers now hand back already-decoded values, so neither can fail;
+`app/Main.hs` keeps its error branch because the loader's type admits a
+failure.
 
-The root is `$YCHR_LIB_DIR` when set and non-empty, and the current
-directory otherwise, so running the binary from a YCHR source tree works
-with no configuration. The standard library is parsed eagerly (every
-compilation needs it, and a bad root should be reported before any work
-starts); the type-checker is compiled lazily, exactly as the GHC
-embedder's thunk is. That laziness buys the CLI little in practice —
-`run`, `compile`, `gen-driver` and `check` all type-check the program,
-the REPL does so on load and on every query, and only `--no-check` never
-compiles the checker (under MicroHs its sources are still read, because
-the loader reads both directories) — but it keeps both providers'
-failure modes identical, and an embedder that never type-checks (the
-`stlc` example) still never pays for it. A type-checker that fails to
-compile surfaces as a Haskell `error` when
-first forced, exactly as the GHC embedder does. `readChrDir` filters and
-sorts `.chr`, and reports a directory that is missing, holds no `.chr`
-sources, cannot be listed, or holds an unreadable source as a plain
-error.
+The generated modules are listed in `other-modules` and `autogen-modules`
+under `if impl(mhs)` — the latter so that `cabal check` and `cabal sdist`
+pass on a checkout where `make resources` has not run — and they are
+gitignored. Only `generated/README.md` is committed, because Cabal
+rejects an `hs-source-dirs` entry that names a missing directory even
+when it sits in a conditional for another compiler. `YCHR_LIB_DIR` no
+longer affects the bundled executable; it is honoured only by an embedder
+that calls `YCHR.Internal.Resources` itself.
 
 Verified on this revision:
 
-- `mcabal build` completes: it builds `library ychr` and `exe:ychr`. The
-  executable is compiled with `-iapp -isrc/mhs` (not `-iembed`), so
-  `Language.Haskell.TH` is never reached.
+- `make resources` writes both modules (1.7 MB total) and is idempotent;
+  `make resources-check` reports `generated resources are up to date`.
+- `mcabal build` completes: it builds `library ychr` and `exe:ychr`, the
+  latter compiling `generated/YCHR/Embedded/Generated/*.hs` as well. The
+  executable is compiled with `-iapp -isrc/mhs -igenerated` (not
+  `-iembed`), so `Language.Haskell.TH` is never reached.
 - `dist-mcabal/bin/mhs/ychr run --show-bindings -g 'order:leq(X, X)'
-  test/golden/leq/leq.chr` prints `X = _`, both with `YCHR_LIB_DIR=$PWD`
-  and, from the repo root, with the variable unset. `repl`, `compile`,
-  `gen-driver` and `check` work too; `--help` and usage-error screens
-  trip gap 9, which is unrelated to the resources.
-- A wrong root is reported:
-  `YCHR_LIB_DIR=/nonexistent … ychr check …` prints
-  `Error: resource directory not found: /nonexistent/libraries (set
-  YCHR_LIB_DIR to the YCHR source tree, or run ychr from it)` and exits
-  non-zero.
+  test/golden/leq/leq.chr` prints `X = _`, from the repo root and from any
+  other directory, with or without `YCHR_LIB_DIR` set: the variable no
+  longer has any effect. `repl`, `compile`, `gen-driver` and `check` work
+  too; `--help` and usage-error screens trip gap 9, which is unrelated to
+  the resources.
 - GHC is unchanged: `cabal build all` (`-Werror`) and `make test` are
-  green, and `YCHR.ResourcesTest` compares the modules the run-time
-  loader parses with the ones the embedder baked in, so the half of the
-  MicroHs path that is compiler-independent is covered by the GHC suite.
-  `mhs -fno-code -isrc YCHR.Internal.StdLib` still prints "No code
-  generated"; the new library module adds only `Data.Text.IO`,
-  `System.Directory`, `System.Environment` and `System.FilePath` to the
-  imports the library already compiles under mhs.
+  green. `YCHR.ResourcesTest` still compares the modules the run-time
+  loader parses with the ones the Template Haskell embedder baked in, and
+  `YCHR.GenerateTest` covers the emitter (`renderCode`, `toCode`, the
+  hoisting pass, and a full emission of both modules from the embedded
+  resources). `mhs -fno-code -isrc YCHR.Internal.StdLib` still prints "No
+  code generated".
 - The executable's TH modules are GHC-only: their `template-haskell`
   dependency sits under `if impl(ghc)`, so nothing in the mhs dependency
-  graph pulls TH in. The library's own module list no longer mentions
-  the former `YCHR.Internal.StdLib.TH` / `YCHR.Internal.TypeCheck.TH`.
+  graph pulls TH in. The generator is likewise GHC-only
+  (`if impl(mhs) buildable: False`), and the library gains no dependency:
+  the emitter lives in `embed/`, not `src/`.
+- Measured effect, and the reason the fixed cost is only half gone, are in
+  `MICROHS_PERFORMANCE.md`, option B.
 
 
 ## 6. `Data.List.mapAccumL` and friends are list-only, not `Foldable`
