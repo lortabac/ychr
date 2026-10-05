@@ -16,11 +16,11 @@
 --
 -- The MicroHs build cannot splice, so it compiles
 -- @src\/mhs\/YCHR\/Embedded.hs@ instead: the same 'loadResources' entry
--- point, backed by "YCHR.Internal.Resources" reading @$YCHR_LIB_DIR@ (or
--- the current directory) at run time. The @ychr@ executable imports only
--- 'loadResources', so it has one code path on both compilers; the pure
--- 'stdlib' and 'typeCheckerProgram' below are this component's
--- compile-time-embedded values.
+-- point, backed by the literal-data modules @make resources@ writes under
+-- @generated\/@. The @ychr@ executable imports only 'loadResources', so
+-- it has one code path on both compilers; the pure 'stdlib' and
+-- 'typeCheckerProgram' below are this component's compile-time-embedded
+-- values.
 --
 -- An embedder outside this repository writes the same few lines: splice
 -- (or read) its own source lists and hand them to @parseStdLib@ /
@@ -58,8 +58,9 @@ typeCheckerProgram =
     Left err -> error ("Failed to compile embedded typechecker: " ++ show err)
 
 -- | Both resources as an IO action, so the @ychr@ executable can share
--- one code path with the MicroHs build, which loads them from disk.
--- Under GHC nothing is read at run time: the values above are baked into
--- the binary, and this can only return 'Right'.
+-- one code path with the MicroHs build, whose provider also returns
+-- already-decoded values. Under GHC nothing is read at run time: the
+-- values above are baked into the binary, and this can only return
+-- 'Right'.
 loadResources :: IO (Either Text Resources)
 loadResources = pure (Right (Resources stdlib typeCheckerProgram))

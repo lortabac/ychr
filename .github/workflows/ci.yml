@@ -19,6 +19,7 @@ jobs:
             src/**/*.hs
             embed/**/*.hs
             app/**/*.hs
+            codegen/**/*.hs
             test/**/*.hs
             bench/**/*.hs
             examples/**/*.hs
@@ -122,6 +123,18 @@ jobs:
 
       - name: cabal update
         run: cabal update
+
+      # Exercises ychr-codegen end to end: it compiles the generator,
+      # runs it on the real libraries/ and typechecker/ sources, and
+      # parses and typechecks the result with GHC — so a broken emitter
+      # fails here rather than in a later MicroHs build. The MicroHs
+      # build itself, which is the only other consumer of the output, is
+      # not part of CI.
+      - name: make resources
+        run: make resources
+
+      - name: make resources-check
+        run: make resources-check
 
       - name: make test
         run: make test GUILE=guile-3.0

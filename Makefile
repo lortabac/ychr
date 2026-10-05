@@ -11,6 +11,7 @@ CHEZ ?= scheme
 .PHONY: bench bench-haskell bench-scheme bench-scheme-chez bench-scheme-all
 .PHONY: scheme-bench-compile
 .PHONY: playground-emsdk playground-wasm playground-serve
+.PHONY: resources resources-check mhs-build
 .PHONY: build install format clean coverage
 
 # ---------------------------------------------------------------------------
@@ -35,6 +36,8 @@ EMSDK_VERSION ?= 6.0.10
 # `mhs` on PATH is the installed one (~/.mcabal/bin/mhs); override to point
 # at a checkout's bin/mhs.
 MHS ?= mhs
+# `mcabal`, the MicroHs build front end, used only by `make mhs-build`.
+MCABAL ?= mcabal
 # -sINVOKE_RUN=0: main never runs; JavaScript calls mhs_init() and then the
 # exported functions, which is the flow MicroHs's own tests/ForExp.hs uses.
 PLAYGROUND_EMCCFLAGS ?= \
@@ -53,6 +56,45 @@ build:
 
 install:
 	cabal install --overwrite-policy=always
+
+# ---------------------------------------------------------------------------
+# Generated resources (MicroHs)
+#
+# `make resources` runs ychr-codegen, which decodes libraries/*.chr and
+# typechecker/*.chr once and writes them as literal Haskell modules under
+# generated/ (gitignored). The MicroHs executable compiles those instead
+# of re-parsing the standard library and re-compiling the type-checker in
+# every process; a GHC build never looks at them. `--check` re-emits in
+# memory and reports a stale or missing tree without rewriting it. See
+# dev-docs/MICROHS_PERFORMANCE.md, option B, and generated/README.md.
+#
+# The generator is resolved like YCHR in the Scheme benchmark: only after
+# `build`, because `cabal list-bin` needs the component to exist.
+# ---------------------------------------------------------------------------
+GENERATED_DIR ?= generated
+GENERATED_MODULES = $(GENERATED_DIR)/YCHR/Embedded/Generated/StdLib.hs \
+                  $(GENERATED_DIR)/YCHR/Embedded/Generated/TypeCheck.hs
+
+resources: build
+	@test -n "$$(cabal list-bin ychr-codegen 2>/dev/null)" || { \
+	  echo "cannot resolve ychr-codegen; run 'cabal build' first" >&2; \
+	  exit 1; }
+	$$(cabal list-bin ychr-codegen) --root . --out $(GENERATED_DIR)
+
+# Also parses and typechecks the generated modules with GHC: they are
+# only ever compiled by MicroHs in a normal build, so nothing else would
+# catch an emitter change that produces Haskell MicroHs happens to
+# accept but GHC does not — or, more to the point, unparsable output.
+resources-check: build
+	@test -n "$$(cabal list-bin ychr-codegen 2>/dev/null)" || { \
+	  echo "cannot resolve ychr-codegen; run 'cabal build' first" >&2; \
+	  exit 1; }
+	$$(cabal list-bin ychr-codegen) --root . --out $(GENERATED_DIR) --check
+	cabal exec -- ghc -fno-code -i$(GENERATED_DIR) $(GENERATED_MODULES)
+
+# The documented MicroHs build order: regenerate, then compile.
+mhs-build: resources
+	$(MCABAL) build
 
 test: test-haskell test-scheme-runtime test-scheme test-repl test-stlc test-typecheck test-docs test-style test-playground
 
@@ -197,8 +239,9 @@ coverage:
 	@find dist-newstyle -path '*/hpc/vanilla/html/hpc_index.html' -print -quit
 
 format:
-	ormolu -i $$(find src embed app test bench examples playground -name '*.hs')
+	ormolu -i $$(find src embed app codegen test bench examples playground -name '*.hs')
 
 clean:
 	cabal clean
+	rm -rf $(GENERATED_DIR)/YCHR
 	rm -rf $(SCHEME_BENCH_DIR)

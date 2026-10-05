@@ -11,6 +11,7 @@ import YCHR.DSLTest qualified
 import YCHR.DesugarTest qualified
 import YCHR.ErrorCodeTest qualified
 import YCHR.ExhaustivenessTest qualified
+import YCHR.GenerateTest qualified
 import YCHR.GoldenTest qualified
 import YCHR.Interpreter.SlotsTest qualified
 import YCHR.MetaTest qualified
@@ -68,6 +69,7 @@ main = do
           YCHR.DesugarTest.tests,
           YCHR.ErrorCodeTest.tests,
           YCHR.ExhaustivenessTest.tests,
+          YCHR.GenerateTest.tests,
           YCHR.ParserTest.tests,
           YCHR.PExprTest.tests,
           YCHR.PExprRoundtripTest.tests,

@@ -143,7 +143,10 @@ page with a program editor and a REPL. See the
 
 ## Development
 
-- [ ] MicroHs compatibility. `mcabal build` now builds the library and
-      the `ychr` CLI, and the binary's commands run against resources
-      read at run time; the divergences that remain are tracked in
-      [dev-docs/MICROHS_GAPS.md](../dev-docs/MICROHS_GAPS.md).
+- [ ] MicroHs compatibility. `mcabal build` builds the library and the
+      `ychr` CLI, and the binary's commands run against resources
+      decoded at build time by `make resources`; the divergences that
+      remain are tracked in
+      [dev-docs/MICROHS_GAPS.md](../dev-docs/MICROHS_GAPS.md), and the
+      performance work in
+      [dev-docs/MICROHS_PERFORMANCE.md](../dev-docs/MICROHS_PERFORMANCE.md).

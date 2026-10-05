@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+The MicroHs executable no longer decodes its bundled resources at run
+time. A new build step, `make resources`, runs `ychr-codegen` over
+`libraries/*.chr` and `typechecker/*.chr` and writes the decoded standard
+library and type-checker to `generated/` as literal Haskell data, which
+the MicroHs provider (`src/mhs/YCHR/Embedded.hs`) compiles instead of
+reading anything from disk. The generator is `codegen/Main.hs` and its
+emitter lives in `embed/YCHR/Embedded/Generate/`, so `test:ychr-tests`
+exercises it (`YCHR.GenerateTest`); the modules are listed in the
+executable's `other-modules` and `autogen-modules` under `if impl(mhs)`,
+and only `generated/README.md` is committed, because Cabal rejects an
+`hs-source-dirs` entry that names a missing directory even in a
+conditional for another compiler. The MicroHs binary therefore starts
+without parsing the standard library or compiling the checker, and it no
+longer honours `YCHR_LIB_DIR`: its resources are always the ones it was
+built with. `mcabal build` must follow `make resources` (or `make
+mhs-build`); GHC builds are unchanged and keep the Template Haskell
+splice, and the library keeps `YCHR.Internal.Resources` for embedders and
+the GHC test suite. Measured on the workloads in
+`dev-docs/MICROHS_PERFORMANCE.md`: startup (73.4 M → 7.5 M reductions,
+0.81 s → 0.14 s), `run --no-check` on `leq` (0.704 s → 0.08 s),
+`check leq` (7.94 s → 4.07 s), `check pairs_library` (17.6 s → 13.4 s).
+The library gains `YCHR.Internal.Runtime.Session.mkSessionInput`, which
+builds a `SessionInput` from a VM program and its export tables so the
+generated module and the compiler's own pipeline construct identical
+values.
+
 There is now a web playground: the whole compiler — front end, VM
 compiler, interpreter and the optional type checker — built to
 WebAssembly by MicroHs and Emscripten, behind a static page with a

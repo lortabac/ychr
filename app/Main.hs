@@ -217,11 +217,13 @@ main = do
     GenDriver opts files -> runGenDriver resources opts files
     Check opts files -> runCheck resources opts files
 
--- | Load the two resources the CLI runs on. Under GHC they are the
--- values embedded at build time and this cannot fail; under MicroHs they
--- are read from disk once the command line has been parsed
--- (@dev-docs\/MICROHS_GAPS.md@, gap 5), so a misconfigured
--- 'YCHR_LIB_DIR' is reported here, before the command runs.
+-- | Load the two resources the CLI runs on. Both providers hand back
+-- values that were decoded before the binary ran — a Template Haskell
+-- splice under GHC, the modules @make resources@ writes under MicroHs
+-- (@dev-docs\/MICROHS_PERFORMANCE.md@, option B) — so neither reads the
+-- filesystem and the 'Left' branch is unreachable in the shipped
+-- executable. It stays because the loader's type admits a failure, and
+-- a library embedder may supply one that does.
 loadResourcesOrExit :: IO Resources
 loadResourcesOrExit = do
   result <- loadResources

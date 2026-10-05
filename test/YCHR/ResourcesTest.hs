@@ -5,9 +5,11 @@
 -- Description : Pins the run-time resources loader to the compile-time embedder.
 --
 -- Under GHC the bundled resources are baked in by a Template Haskell
--- splice; under MicroHs they are read from disk at run time
--- (@dev-docs\/MICROHS_GAPS.md@, gap 5). "YCHR.Internal.Resources" is the
--- loader both this executable's provider and the MicroHs one share, so
+-- splice, and the MicroHs executable gets the equivalent values from the
+-- modules @make resources@ writes (@dev-docs\/MICROHS_GAPS.md@, gap 5;
+-- @dev-docs\/MICROHS_PERFORMANCE.md@, option B).
+-- "YCHR.Internal.Resources" is the loader this executable's provider and
+-- the on-disk embedder share, so
 -- these tests run it under GHC — where the embedded values are available
 -- to compare against — and pin the directory lookup, the @YCHR_LIB_DIR@
 -- policy, the @.chr@ filter and sort, and the error reporting for a

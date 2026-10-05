@@ -9,8 +9,9 @@
 -- 'parseStdLib' turns their sources into the 'StdLib' value the compiler
 -- takes as an explicit input. Where the sources come from is the
 -- caller's business: the @ychr@ executable embeds them at compile time
--- (see @embed\/YCHR\/Embedded.hs@), while a library embedder or the
--- MicroHs build reads them from disk. See
+-- (see @embed\/YCHR\/Embedded.hs@ under GHC, and the modules @make
+-- resources@ writes under MicroHs), while a library embedder reads them
+-- from disk. See
 -- @docs\/how-to\/embed-a-chr-module.md@.
 module YCHR.Internal.StdLib
   ( -- * Types

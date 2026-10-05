@@ -89,6 +89,13 @@ extra-doc-files:      README.md
 -- to be cut with the flag on.
 extra-source-files:   libraries/*.chr
                     , typechecker/*.chr
+                    -- The generated resource modules themselves are
+                    -- produced by `make resources` and are not
+                    -- committed. This file is here so the directory
+                    -- exists in the checkout and in the sdist, which
+                    -- Cabal requires for the `hs-source-dirs` entry
+                    -- that names it (see `executable ychr` below).
+                    , generated/README.md
                     , examples/*.chr
                     , examples/stlc/*.chr
                     , examples/stlc/*.hs
@@ -115,8 +122,11 @@ source-repository head
     type:     git
     location: https://github.com/lortabac/ychr.git
 
--- The @stlc-typechecker@ example driver is not built by default, so that
--- @cabal install ychr@ puts only the @ychr@ compiler on a user's PATH.
+-- The @stlc-typechecker@ example driver and the playground harness are
+-- not built by default, so that @cabal install ychr@ does not put them on
+-- a user's PATH. @ychr-codegen@ is *not* gated: it is the documented way
+-- to regenerate the resources @exe:ychr@ needs under MicroHs, so an
+-- sdist consumer has to be able to build and run it.
 flag examples
     description: Build the example executables.
     default:     False
@@ -161,10 +171,11 @@ executable ychr
     --    libraries/*.chr and typechecker/*.chr into the binary with
     --    Template Haskell (self-contained, no run-time lookup);
     --  * MicroHs has no Template Haskell (dev-docs/MICROHS_GAPS.md,
-    --    gap 5), so it compiles 'src/mhs/YCHR/Embedded.hs' instead:
-    --    the same 'loadResources' entry point, backed by the library's
-    --    'YCHR.Internal.Resources' reading $YCHR_LIB_DIR (or the current
-    --    directory) at run time.
+    --    gap 5) and cannot afford to re-decode the resources in every
+    --    process, so it compiles 'src/mhs/YCHR/Embedded.hs': the same
+    --    'loadResources' entry point, backed by the modules under
+    --    'generated/' that `make resources` writes
+    --    (dev-docs/MICROHS_PERFORMANCE.md, option B).
     --
     -- 'app/Main.hs' imports only 'loadResources', so it is one source
     -- file for both compilers.
@@ -180,6 +191,40 @@ executable ychr
         build-depends:    template-haskell >=2.20 && <2.25
     if impl(mhs)
         hs-source-dirs:   src/mhs
+                        , generated
+        other-modules:    YCHR.Embedded.Generated.StdLib
+                        , YCHR.Embedded.Generated.TypeCheck
+        -- Both modules are written by `make resources` before
+        -- `mcabal build` runs. Listing them in 'autogen-modules' is
+        -- what lets `cabal check` and `cabal sdist` pass on a checkout
+        -- where they have not been generated yet: without it Cabal
+        -- reports the module missing and refuses to pack the sdist.
+        autogen-modules:  YCHR.Embedded.Generated.StdLib
+                        , YCHR.Embedded.Generated.TypeCheck
+    default-language: GHC2021
+
+-- The build step behind solution B of dev-docs/MICROHS_PERFORMANCE.md:
+-- it decodes libraries/*.chr and typechecker/*.chr once and writes them
+-- as literal Haskell modules under generated/ (see `executable ychr`
+-- above). Run through `make resources`; `--check` re-emits in memory and
+-- diffs against the files on disk.
+--
+-- GHC-only: it uses GHC.Generics to walk the AST, and its output — not
+-- the generator — is what MicroHs compiles. The emitter modules live in
+-- 'embed/' so that 'test:ychr-tests' can exercise them too.
+executable ychr-codegen
+    import:           warnings, deps
+    main-is:          Main.hs
+    hs-source-dirs:   codegen
+                    , embed
+    other-modules:    YCHR.Embedded.Generate.Code
+                    , YCHR.Embedded.Generate.ToCode
+                    , YCHR.Embedded.Generate.Instances
+                    , YCHR.Embedded.Generate.Emit
+    build-depends:    ychr
+                    , directory >=1.3 && <1.4
+    if impl(mhs)
+        buildable:    False
     default-language: GHC2021
 
 -- End-to-end example: a Haskell program that embeds a CHR module.
@@ -242,6 +287,11 @@ test-suite ychr-tests
                     , YCHR.DSLTest
                     , YCHR.DesugarTest
                     , YCHR.ExhaustivenessTest
+                    , YCHR.Embedded.Generate.Code
+                    , YCHR.Embedded.Generate.Emit
+                    , YCHR.Embedded.Generate.Instances
+                    , YCHR.Embedded.Generate.ToCode
+                    , YCHR.GenerateTest
                     , YCHR.GoldenTest
                     , YCHR.Interpreter.SlotsTest
                     , YCHR.MetaTest
