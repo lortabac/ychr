@@ -20,6 +20,9 @@
 
 (function () {
   var STORAGE_KEY = "ychr-playground-program";
+  // Which preset the editor holds, so the menu survives a reload the way the
+  // program does. Empty means the buffer is not an untouched preset.
+  var STORAGE_KEY_PRESET = "ychr-playground-preset";
 
   var FALLBACK_PROGRAM = [
     "% The canonical CHR example: a less-or-equal solver.",
@@ -40,6 +43,7 @@
     form: document.getElementById("query-form"),
     reload: document.getElementById("reload"),
     typecheck: document.getElementById("typecheck"),
+    preset: document.getElementById("preset"),
     status: document.getElementById("status"),
     bootError: document.getElementById("boot-error"),
   };
@@ -193,6 +197,7 @@
     busy = value;
     el.reload.disabled = value;
     el.typecheck.disabled = value;
+    el.preset.disabled = value;
   }
 
   /* Give the browser a chance to paint `setStatus` before the blocking
@@ -269,6 +274,56 @@
     }
   }
 
+  /* Load one of the example programs the toolbar offers. The text comes from
+     a copy of `examples/<name>` that `make playground-wasm` puts in the
+     bundle, so the page keeps `examples/` as the single source of truth
+     without reaching outside the directory it is served from.
+
+     Selecting an entry is meant to end with a working program, so the editor
+     is replaced and reloaded in one step — the same thing Reload does with
+     the new text. A copy that cannot be fetched leaves both the editor and
+     the loaded program alone and says so, rather than emptying the editor on
+     a failure. */
+  async function loadPreset() {
+    var name = el.preset.value;
+    if (busy || name === "") return;
+    if (!Module) {
+      // The menu stays disabled until the module is up, so this is belt and
+      // braces: never leave it naming a program it did not load.
+      el.preset.value = "";
+      setStatus("not ready", "error");
+      return;
+    }
+    setBusy(true);
+    setStatus("loading " + name + "…", "busy");
+    await paint();
+    try {
+      var response = await fetch("./build/" + name);
+      if (!response.ok) {
+        throw new Error("HTTP " + response.status);
+      }
+      var text = await response.text();
+      el.program.value = text;
+      persistProgram();
+      persistPreset(name);
+      setStatus("compiling…", "busy");
+      await paint();
+      show(
+        "--- " + name + " ---",
+        splitResponse(invoke("_ychr_pg_compile", text))
+      );
+    } catch (err) {
+      el.preset.value = "";
+      persistPreset("");
+      show("--- " + name + " ---", {
+        status: "error",
+        payload: "Could not load " + name + ": " + err + "\n",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /* Typecheck reloads first, so what is checked is always what the editor
      says — never a buffer that has been edited since the last reload. A
      reload that does not compile ends the action: the check would other-
@@ -322,13 +377,20 @@
 
   function restoreProgram() {
     var stored = null;
+    var storedPreset = null;
     try {
       stored = window.localStorage.getItem(STORAGE_KEY);
+      storedPreset = window.localStorage.getItem(STORAGE_KEY_PRESET);
     } catch (err) {
       // Private mode, or storage disabled: fall back to the bundled example.
     }
     if (stored) {
       el.program.value = stored;
+      // Only a restored buffer can still be the example the menu names; the
+      // starter below is not one.
+      if (storedPreset) {
+        el.preset.value = storedPreset;
+      }
       return;
     }
     fetch("./build/starter.chr")
@@ -350,6 +412,30 @@
     } catch (err) {
       // Ignore: persistence is a convenience, not a requirement.
     }
+  }
+
+  /* Remember which preset the menu shows, or forget it when the buffer is
+     something else (a manual edit, or a preset that failed to load). */
+  function persistPreset(name) {
+    try {
+      if (name) {
+        window.localStorage.setItem(STORAGE_KEY_PRESET, name);
+      } else {
+        window.localStorage.removeItem(STORAGE_KEY_PRESET);
+      }
+    } catch (err) {
+      // Ignore, as above.
+    }
+  }
+
+  /* The buffer changed: save it, and drop the menu back to its placeholder,
+     because what is in the editor is no longer the example it names. Both
+     ways of editing call this — the `input` event, and the Tab handler
+     below, which changes the value itself and so fires no event. */
+  function editorChanged() {
+    persistProgram();
+    el.preset.value = "";
+    persistPreset("");
   }
 
   el.form.addEventListener("submit", function (event) {
@@ -380,7 +466,8 @@
 
   el.reload.addEventListener("click", reload);
   el.typecheck.addEventListener("click", typecheck);
-  el.program.addEventListener("input", persistProgram);
+  el.preset.addEventListener("change", loadPreset);
+  el.program.addEventListener("input", editorChanged);
   el.program.addEventListener("keydown", function (event) {
     // Tab indents instead of leaving the editor: CHR programs are small,
     // and the browser's default focus change is never what you want here.
@@ -388,9 +475,13 @@
       event.preventDefault();
       var start = el.program.selectionStart;
       var end = el.program.selectionEnd;
+      if (start === end) {
+        return;
+      }
       el.program.value =
         el.program.value.slice(0, start) + "  " + el.program.value.slice(end);
       el.program.selectionStart = el.program.selectionEnd = start + 2;
+      editorChanged();
     }
   });
 
@@ -402,6 +493,8 @@
         "build/ychr-pg.js not found. Run `make playground-wasm`, then serve " +
           "this directory (`make playground-serve`) and reload."
       );
+      // Nothing can be compiled: a working menu would only pretend otherwise.
+      el.preset.disabled = true;
       return;
     }
     try {
@@ -413,9 +506,12 @@
       Module._mhs_init();
       show("--- init ---", splitResponse(invoke("_ychr_pg_init", "/")));
       setStatus("ready", "ok");
+      // Disabled in the markup until there is something to compile with.
+      el.preset.disabled = false;
       el.input.focus();
     } catch (err) {
       bootError("Could not start the YCHR module: " + err);
+      el.preset.disabled = true;
     }
   })();
 })();

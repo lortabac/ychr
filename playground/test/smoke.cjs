@@ -10,7 +10,9 @@
  * or a response is not a well-formed envelope — the mechanical failures.
  * What the payloads *say* is asserted by test/playground/test_wasm.py,
  * which parses this output through the same expectation table the native
- * harness is checked against, so the two front ends stay in step.
+ * harness is checked against, so the two front ends stay in step: that
+ * includes the four presets the page's dropdown offers, which have to
+ * compile from the copies `make playground-wasm` puts in the bundle.
  *
  * Usage: node smoke.cjs <program-file>
  */
@@ -81,6 +83,18 @@ async function main() {
 
   const starter = fs.readFileSync(programPath, "utf8");
 
+  /* The preset dropdown's programs. The page fetches `build/<name>`, which
+     `make playground-wasm` copies from `examples/<name>`; compiling them here
+     is what proves the bundle carries usable copies, not just that the copy
+     step ran. The list mirrors the menu in index.html. */
+  function readPreset(name) {
+    const file = path.join(BUILD_DIR, name);
+    if (!fs.existsSync(file)) {
+      fail("missing preset " + file + " (run `make playground-wasm`)");
+    }
+    return fs.readFileSync(file, "utf8");
+  }
+
   // The resource root: the preloaded directories are mounted at "/".
   step("init", "_ychr_pg_init", "/");
   step("compile-starter", "_ychr_pg_compile", starter);
@@ -95,6 +109,9 @@ async function main() {
   step("query-after-failed-reload", "_ychr_pg_query", "leq(1, 1)");
   // Builds the type checker on first call — the slow step.
   step("check", "_ychr_pg_check");
+  for (const preset of ["bakery.chr", "leq.chr", "fib_memo.chr", "gcd.chr"]) {
+    step("preset-" + preset, "_ychr_pg_compile", readPreset(preset));
+  }
 
   console.log("smoke: ok");
 }

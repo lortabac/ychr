@@ -10,6 +10,19 @@
     <header>
       <h1>YCHR playground</h1>
       <div class="toolbar">
+        <!-- Each value names a file under examples/ that the page fetches from
+             build/; adding one means adding it to PLAYGROUND_PRESETS in the
+             Makefile, which copies it into the bundle. -->
+        <label class="preset">
+          <span class="visually-hidden">Example program</span>
+          <select id="preset" disabled>
+            <option value="">Examples…</option>
+            <option value="bakery.chr">bakery.chr</option>
+            <option value="leq.chr">leq.chr</option>
+            <option value="fib_memo.chr">fib_memo.chr</option>
+            <option value="gcd.chr">gcd.chr</option>
+          </select>
+        </label>
         <button id="reload" type="button">Reload</button>
         <button id="typecheck" type="button">Typecheck</button>
         <span id="status" class="status busy" role="status">loading…</span>
@@ -51,8 +64,11 @@
       <p>
         <strong>Reload</strong> compiles the editor and loads it into the
         REPL, without type checking. <strong>Typecheck</strong> reloads the
-        editor first, then runs the CHR type checker over the program. Type a
-        goal in the REPL box, or a command such as <code>:help</code>.
+        editor first, then runs the CHR type checker over the program. The
+        <strong>Examples</strong> menu replaces the editor with one of the
+        programs in the repository's <code>examples/</code> directory and
+        reloads it. Type a goal in the REPL box, or a command such as
+        <code>:help</code>.
       </p>
       <p id="boot-error" class="boot-error" hidden></p>
     </footer>

@@ -109,6 +109,46 @@ button:disabled {
   cursor: default;
 }
 
+/* The example menu: the same chrome as a button, since it sits beside them.
+   Its label is for assistive technology only. */
+select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-pane);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3rem 0.4rem;
+  cursor: pointer;
+}
+
+select:hover:not(:disabled),
+select:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.preset {
+  display: inline-flex;
+  align-items: center;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .status {
   font-size: 0.85rem;
   padding: 0.15rem 0.55rem;
