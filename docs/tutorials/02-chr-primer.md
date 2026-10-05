@@ -6,8 +6,8 @@ guards, and firing order.
 ## 1. The constraint store is a multiset
 
 The only state is the *constraint store*, a multiset of facts called
-*constraints*. Duplicates count: the bakery rule needed three `egg`s
-and got three.
+*constraints*. Duplicates count: the bakery rule needed two `egg`s
+and got two.
 
 CHR is forward-chaining and committed-choice. It starts from the
 store, fires rules until none applies, and never undoes a firing.
@@ -22,7 +22,7 @@ A rule has a *head* (what must be in the store), an optional *guard*
 
 ```prolog
 cake_recipe @
-    egg, egg, egg, glass_of_milk, glass_of_flour, glass_of_sugar, bake
+    egg, egg, milk, flour, sugar, bake
   <=> cake.
 ```
 

@@ -9,14 +9,10 @@ Start from a blank `recipes.chr` and grow the bakery program from
 :- module(recipes).
 
 :- chr_constraint
-    egg/0, glass_of_milk/0, glass_of_flour/0, glass_of_sugar/0,
+    egg/0, milk/0, flour/0, sugar/0,
     bake/0, cake/0.
 
-cake_recipe @
-    egg, egg, egg,
-    glass_of_milk, glass_of_flour, glass_of_sugar,
-    bake
-  <=> cake.
+cake_recipe @ egg, egg, milk, flour, sugar, bake <=> cake.
 ```
 
 `ychr repl recipes.chr`, then add the ingredients as in tutorial 01.
@@ -30,7 +26,7 @@ Append a rule whose head overlaps the first:
 
 cookies_recipe @
     egg, butter,
-    glass_of_flour, glass_of_sugar,
+    flour, sugar,
     bake
   <=> cookies.
 ```
@@ -44,8 +40,8 @@ Cookies alone:
 ychr> :begin
 ychr live> egg.
 ychr live> butter.
-ychr live> glass_of_flour.
-ychr live> glass_of_sugar.
+ychr live> flour.
+ychr live> sugar.
 ychr live> bake.
 ychr live> print_store.
 recipes:cookies
@@ -59,11 +55,10 @@ Now stock enough for either recipe, with one `bake`:
 ychr> :begin
 ychr live> egg.
 ychr live> egg.
-ychr live> egg.
 ychr live> butter.
-ychr live> glass_of_milk.
-ychr live> glass_of_flour.
-ychr live> glass_of_sugar.
+ychr live> milk.
+ychr live> flour.
+ychr live> sugar.
 ychr live> bake.
 ychr live> print_store.
 recipes:butter
@@ -90,10 +85,9 @@ serve @ cake ==> serving_ready.
 ychr> :begin
 ychr live> egg.
 ychr live> egg.
-ychr live> egg.
-ychr live> glass_of_milk.
-ychr live> glass_of_flour.
-ychr live> glass_of_sugar.
+ychr live> milk.
+ychr live> flour.
+ychr live> sugar.
 ychr live> bake.
 ychr live> print_store.
 recipes:cake
@@ -111,17 +105,15 @@ identity and gets its own `serving_ready`:
 ychr> :begin
 ychr live> egg.
 ychr live> egg.
-ychr live> egg.
-ychr live> glass_of_milk.
-ychr live> glass_of_flour.
-ychr live> glass_of_sugar.
+ychr live> milk.
+ychr live> flour.
+ychr live> sugar.
 ychr live> bake.
 ychr live> egg.
 ychr live> egg.
-ychr live> egg.
-ychr live> glass_of_milk.
-ychr live> glass_of_flour.
-ychr live> glass_of_sugar.
+ychr live> milk.
+ychr live> flour.
+ychr live> sugar.
 ychr live> bake.
 ychr live> print_store.
 recipes:cake

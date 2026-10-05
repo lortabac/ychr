@@ -36,19 +36,19 @@ ychr --help
 :- module(bakery).
 
 :- chr_constraint
-    egg/0, glass_of_milk/0, glass_of_flour/0, glass_of_sugar/0,
+    egg/0, milk/0, flour/0, sugar/0,
     bake/0, cake/0.
 
 cake_recipe @
-    egg, egg, egg,
-    glass_of_milk, glass_of_flour, glass_of_sugar,
+    egg, egg,
+    milk, flour, sugar,
     bake
   <=> cake.
 ```
 
 `<=>` is *simplification*: the matched constraints are removed and the
 body takes their place. The store is a multiset, so the head needs
-three separate `egg`s, in any order.
+two separate `egg`s, in any order.
 
 ## 4. Try it in a live session
 
@@ -63,21 +63,18 @@ lists the store.
 ```ychr-repl
 ychr> :begin
 ychr live> egg.
+ychr live> print_store.
+bakery:egg
 ychr live> egg.
+ychr live> milk.
+ychr live> flour.
+ychr live> sugar.
 ychr live> print_store.
 bakery:egg
 bakery:egg
-ychr live> egg.
-ychr live> glass_of_milk.
-ychr live> glass_of_flour.
-ychr live> glass_of_sugar.
-ychr live> print_store.
-bakery:egg
-bakery:egg
-bakery:egg
-bakery:glass_of_flour
-bakery:glass_of_milk
-bakery:glass_of_sugar
+bakery:flour
+bakery:milk
+bakery:sugar
 ychr live> bake.
 ychr live> print_store.
 bakery:cake
