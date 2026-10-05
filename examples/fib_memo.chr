@@ -1,0 +1,21 @@
+% Fibonacci as a constraint, with memoization (defined for N >= 0).
+
+:- module(fib_memo, [fib/2]).
+
+:- chr_constraint fib/2, memo/2.
+
+% Base cases
+fib(0, R) <=> R = 0.
+fib(1, R) <=> R = 1.
+
+% If the memo/2 constraint is present, drop the fib/2 one and unify R
+% with memo's second argument. This rule must precede the recursive one
+% below, or a memoized fib/2 is recomputed instead.
+memo(N, M) \ fib(N, R) <=> R = M.
+
+% Recursive case: guarded by N > 1; compute fib/2 and add a memo/2
+% constraint for memoization.
+fib(N, R) <=> N > 1 |
+    N1 is N - 1, N2 is N - 2,
+    fib(N1, R1), fib(N2, R2),
+    R is R1 + R2, memo(N, R).
