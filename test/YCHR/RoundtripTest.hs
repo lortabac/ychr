@@ -28,7 +28,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import Test.Tasty.Hedgehog (testProperty)
 import YCHR.Internal.Parsed qualified as P
-import YCHR.Internal.Parser (parseConstraint, parseRule, parseTerm)
+import YCHR.Internal.Parser (builtinOps, parseConstraint, parseRule, parseTerm)
 import YCHR.Internal.Pretty (prettyConstraintSrc, prettyRuleSrc, prettyTermSrc)
 import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), baseHostCallRegistry, valueList)
@@ -266,6 +266,7 @@ runChrEmpty action = do
       []
       []
       IntMap.empty
+      builtinOps
       Map.empty
       Map.empty
       Map.empty

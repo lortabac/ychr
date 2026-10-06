@@ -24,9 +24,31 @@ the GHC test suite. Measured on the workloads in
 0.81 s → 0.14 s), `run --no-check` on `leq` (0.704 s → 0.08 s),
 `check leq` (7.94 s → 4.07 s), `check pairs_library` (17.6 s → 13.4 s).
 The library gains `YCHR.Internal.Runtime.Session.mkSessionInput`, which
-builds a `SessionInput` from a VM program and its export tables so the
-generated module and the compiler's own pipeline construct identical
-values.
+builds a `SessionInput` from a VM program, its export tables and its
+operator table, so the generated module and the compiler's own pipeline
+construct identical values.
+
+`read_term_from_string/1` now parses with the program's operator table
+instead of the built-in one. The table is `CompiledProgram.opTable` —
+the built-ins merged with every operator the loaded modules declare or
+import, which is the same table `YCHR.Run.prepareGoal`, the REPL and
+`:info` already parse with — so a string read at run time can spell the
+prelude's arithmetic and comparison operators: with `go(S, R) <=> R is
+read_term_from_string(S).`, the goal `go("1 + 1", R)` binds `R = 1 + 1`
+(where it used to fail with `YCHR-60001`, `unknown operator: +`), and an
+operator a module declares for itself is readable too. A string naming
+an operator that is neither built-in nor declared by a loaded module
+still fails with the same parse error. The pretty-printer is unchanged,
+so a user-declared operator still prints as a compound. The Scheme
+backend's reader remains built-in-only; the divergence is recorded in
+`dev-docs/SCHEME_BACKEND_GAPS.md` and pinned by
+`("read_term_test", "arith_op")` in the Scheme golden harness. API
+changes that go with it: `SessionEnv` and `SessionInput` gain an
+`opTable` field, `initSessionEnv` and `mkSessionInput` take the table as
+an argument, `emitTypeChecker` emits it as a `PExpr.mkOpTable` literal
+(the VM program carries no operator information), and a hand-built
+session (`initSessionEnv` without a program, `interpret`) gets
+`builtinOps` exactly as before.
 
 There is now a web playground: the whole compiler — front end, VM
 compiler, interpreter and the optional type checker — built to

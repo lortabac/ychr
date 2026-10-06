@@ -328,13 +328,13 @@ exhaustive:
 
 | Site                                                     | Kind                                        |
 |----------------------------------------------------------|---------------------------------------------|
-| `src/YCHR/Internal/Runtime/Interpreter.hs:516` (`activateSuspensionId`) | leading-id shape check |
+| `src/YCHR/Internal/Runtime/Interpreter.hs:541` (`activateSuspensionId`) | leading-id shape check |
 | `src/YCHR/Run.hs:548` (`executeBodyGoal`, `BodyOr`)       | query disjunction should have been rejected (YCHR-30006) |
 | `src/YCHR/Internal/Compile.hs:1122` (`compileBodyGoal`, `BodyOr`) | `lowerDisjunctions` should have run first |
 | `src/YCHR/Internal/Desugar.hs:987` (`ruleModName`)        | non-empty head                             |
 | `src/YCHR/Internal/Desugar/Disjunction.hs:101,206`        | lifted rule is a simplification; non-empty head |
 | `src/YCHR/Internal/Backend/Scheme.hs:214` (`programInfoBindingName`) | non-empty library name          |
-| `src/YCHR/Internal/Meta.hs:184,190,192`                   | host-call arity / parse result (`write_term_to_string`, `read_term_from_string`) |
+| `src/YCHR/Internal/Meta.hs:187,199,201`                   | host-call arity / parse result (`write_term_to_string`, `read_term_from_string`) |
 
 The two `BodyOr` sites are phase invariants of the same family as
 the `LambdaExpr` case below: the constructor survives in the type and
@@ -342,7 +342,7 @@ each pass asserts it was already lowered. A phase index on
 `Desugared.BodyGoal` (or a post-lowering type without `BodyOr`) would
 discharge both. The `Meta.hs` sites are the mildest — `invokeHostCall`
 wraps the host function in `try @SomeException`
-(`Interpreter.hs:951`), so they surface as an ordinary runtime error
+(`Interpreter.hs:999`), so they surface as an ordinary runtime error
 rather than a process abort; they are nonetheless `error` rather than
 `runtimeErrorS` for a difficulty that is really just arity.
 

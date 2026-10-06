@@ -46,6 +46,7 @@ import Data.List (intercalate, nub)
 import YCHR.Embedded.Generate.Code
 import YCHR.Embedded.Generate.Instances ()
 import YCHR.Embedded.Generate.ToCode (ToCode (..))
+import YCHR.Internal.PExpr (OpTable, opTableEntries)
 import YCHR.Internal.Runtime.Session (SessionInput (..))
 import YCHR.Internal.StdLib (StdLib (..))
 
@@ -114,14 +115,16 @@ emitStdLib opts (StdLib modules) =
 -- | The module holding the precomputed type-checker, as
 -- @typeCheckerProgram :: SessionInput@.
 --
--- Only the parts that are not recomputable are emitted: the VM program
--- and the two export tables.
--- 'YCHR.Internal.Runtime.Session.mkSessionInput' rebuilds the slot phase
--- and the indexable positions from the program, exactly as the
--- compiler's own pipeline does, which keeps the generated module about
--- 1.3 MB smaller than serializing the full 'SessionInput'.
+-- Only the parts that are not recomputable are emitted: the VM program,
+-- the two export tables and the operator table (the VM program carries
+-- no operator information, so the runtime reader's table has to be
+-- spelled out). 'YCHR.Internal.Runtime.Session.mkSessionInput'
+-- rebuilds the slot phase and the indexable positions from the program,
+-- exactly as the compiler's own pipeline does, which keeps the
+-- generated module about 1.3 MB smaller than serializing the full
+-- 'SessionInput'.
 emitTypeChecker :: EmitOptions -> SessionInput -> GeneratedModule
-emitTypeChecker opts (SessionInput program _ _ exportMap exportedSet) =
+emitTypeChecker opts (SessionInput program _ _ exportMap exportedSet ops) =
   buildModule
     "YCHR.Embedded.Generated.TypeCheck"
     ["typeCheckerProgram"]
@@ -140,8 +143,29 @@ emitTypeChecker opts (SessionInput program _ _ exportMap exportedSet) =
         opts
         ( CApp
             (CName "Session.mkSessionInput")
-            [toCode program, toCode exportMap, toCode exportedSet]
+            [ toCode program,
+              toCode exportMap,
+              toCode exportedSet,
+              opTableCode ops
+            ]
         )
+
+-- | Render an operator table as the @PExpr.mkOpTable@ call that rebuilds
+-- it. The table is a derived structure — buckets keyed by fixity plus
+-- three lookup maps — so it is emitted from 'opTableEntries' and
+-- reconstructed by 'YCHR.Internal.PExpr.mkOpTable' rather than written
+-- field by field. The reconstruction is behaviourally identical: a name
+-- may not be declared twice at different fixities in one category, so
+-- the three lookup maps and the word-operator set are reproduced
+-- exactly. Only the order of entries within a fixity bucket may differ
+-- ('mkOpTable' prepends with @fromListWith (++)@), which is unobservable
+-- because that order is unspecified ('YCHR.Internal.Parser.opTableEntries'
+-- documents it as such) and only the maps are consulted when parsing.
+opTableCode :: OpTable -> Code
+opTableCode table =
+  CApp
+    (CName "PExpr.mkOpTable")
+    [toCode [(fix, [(ty, name)]) | (fix, ty, name) <- opTableEntries table]]
 
 -- ---------------------------------------------------------------------------
 -- Hoisting

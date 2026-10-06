@@ -14,7 +14,10 @@
 -- the fields of 'YCHR.Internal.Runtime.Session.SessionInput' that are
 -- not recomputable at load time ('YCHR.Internal.Runtime.Session.mkSessionInput'
 -- rebuilds the slot phase and the indexable positions from the program,
--- so no @Slots@ type appears here).
+-- so no @Slots@ type appears here, and 'YCHR.Embedded.Generate.Emit'
+-- emits the operator table as a @mkOpTable@ call over
+-- 'YCHR.Internal.PExpr.opTableEntries', so no @OpTable@ instance
+-- appears here either).
 --
 -- A new constructor in one of these types needs no edit — the generic
 -- default covers it. A new /field type/ does: it fails to compile until

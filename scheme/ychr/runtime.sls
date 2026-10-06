@@ -851,9 +851,12 @@
           v
           (string->symbol (substring s (+ sep 2) n)))))
 
-  ;;; read_term_from_string: read one term out of a string, mirroring
-  ;;; `read_term_from_string` in `YCHR.Internal.Meta` (`parseTermWith
-  ;;; builtinOps` followed by `termToValue`). The parser itself lives in
+  ;;; read_term_from_string: read one term out of a string, mirroring the
+  ;;; conversion of `read_term_from_string` in `YCHR.Internal.Meta`
+  ;;; (`termToValue`). The reference reader takes its operator table from
+  ;;; the session (the program's own operators); this one parses with the
+  ;;; built-in table only, a deliberate divergence recorded in
+  ;;; dev-docs/SCHEME_BACKEND_GAPS.md. The parser itself lives in
   ;;; `(ychr read)` so it can be documented on its own; this is the
   ;;; host-call entry point. The session is threaded because reading `_`
   ;;; or a named variable allocates fresh logical variables in it.

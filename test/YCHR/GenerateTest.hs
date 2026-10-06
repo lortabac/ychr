@@ -34,7 +34,9 @@ import YCHR.Embedded.Generate.Emit
 import YCHR.Embedded.Generate.Instances ()
 import YCHR.Embedded.Generate.ToCode (toCode)
 import YCHR.Internal.Loc (SourceLoc (..))
-import YCHR.Internal.PExpr (PExpr (..))
+import YCHR.Internal.PExpr (OpTable, PExpr (..), mkOpTable, opTableEntries)
+import YCHR.Internal.Parser (parseTermWith)
+import YCHR.Internal.Runtime.Session (SessionInput (..))
 import YCHR.Internal.StdLib (StdLib (..))
 
 tests :: TestTree
@@ -147,7 +149,20 @@ tests =
             assertContains (emitted.moduleSource) "typeCheckerProgram :: SessionInput"
             assertContains (emitted.moduleSource) "Session.mkSessionInput"
             assertContains (emitted.moduleSource) "VM.Program"
-            assertBool "the module is substantial" (length (emitted.moduleSource) > 100000)
+            -- The operator table is not derivable from the VM program, so
+            -- the module rebuilds it from an emitted mkOpTable literal.
+            assertContains (emitted.moduleSource) "PExpr.mkOpTable"
+            assertBool
+              "the module is substantial"
+              (length (emitted.moduleSource) > 100000),
+          testCase "the emitted operator table parses like the table it came from" $ do
+            let table = Embedded.typeCheckerProgram.opTable
+                rebuilt =
+                  mkOpTable
+                    [(fix, [(ty, name)]) | (fix, ty, name) <- opTableEntries table]
+            mapM_
+              (sameParse table rebuilt)
+              ["1 + 1", "1 + 1.5", "a = b", "f(X, Y)", "X is 2 * 3"]
         ],
       testGroup
         "hoisted bindings"
@@ -235,3 +250,17 @@ assertContains haystack needle =
   assertBool
     ("expected the generated module to contain: " ++ take 80 needle)
     (needle `isInfixOf` haystack)
+
+-- | Assert that two operator tables parse @src@ to the same term. The
+-- emitted table is rebuilt from 'opTableEntries' through 'mkOpTable';
+-- its bucket order (documented as unspecified) may differ, its parse may
+-- not. Failing either parse is a failure too, so the case cannot pass
+-- vacuously.
+sameParse :: OpTable -> OpTable -> Text -> Assertion
+sameParse original rebuilt src =
+  case (parseTermWith original "<table>" src, parseTermWith rebuilt "<table>" src) of
+    (Right t, Right t') -> t @?= t'
+    (Left err, _) ->
+      assertFailure ("the original table failed to parse " ++ show src ++ ": " ++ show err)
+    (_, Left err) ->
+      assertFailure ("the rebuilt table failed to parse " ++ show src ++ ": " ++ show err)

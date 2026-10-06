@@ -56,6 +56,7 @@ import YCHR.Internal.Compile (tellProcName)
 import YCHR.Internal.Compile.Names (reactivateDispatchName)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), ExportResolution (..))
 import YCHR.Internal.Interpreter.Slots (SlotProgram (..), lowerProcedure, lowerProgram)
+import YCHR.Internal.PExpr (OpTable)
 import YCHR.Internal.Runtime.Error (runtimeErrorS)
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallRegistry,
@@ -80,9 +81,10 @@ import YCHR.Internal.VM (CallableKey, Name (..), Procedure (..), Program (..))
 import YCHR.Internal.VM.Index (indexablePositions)
 
 -- | The narrow slice of a compiled program that 'withCHR' /
--- 'withCHRExtra' need: the VM 'Program' and the export-resolution maps
+-- 'withCHRExtra' need: the VM 'Program', the export-resolution maps
 -- used by 'tellConstraint' to canonicalize unqualified constraint
--- names. A 'CompiledProgram' projects to one via 'toSessionInput'; the
+-- names, and the operator table the runtime reader parses strings with.
+-- A 'CompiledProgram' projects to one via 'toSessionInput'; the
 -- pre-compiled type-checker bundle is a 'SessionInput' directly.
 data SessionInput = SessionInput
   { program :: Program,
@@ -99,28 +101,35 @@ data SessionInput = SessionInput
     -- included, and a session is created per goal.
     indexPositions :: IntMap IntSet,
     exportMap :: Map Types.UnqualifiedIdentifier ExportResolution,
-    exportedSet :: Set Types.QualifiedIdentifier
+    exportedSet :: Set Types.QualifiedIdentifier,
+    -- | The program's operator table, carried for the runtime reader
+    -- (@read_term_from_string@). Taken from the 'CompiledProgram' by
+    -- 'toSessionInput'; see 'mkSessionInput' for the hand-built case.
+    opTable :: OpTable
   }
 
 -- | Build a 'SessionInput' from the parts a caller can supply out of
--- band: the VM program and the two export tables. The remaining fields
--- are pure functions of the program — the slot phase is
--- 'lowerProgram', the indexable positions 'indexablePositions' — and
--- are derived here so that a caller holding only those three values
--- (the build step that emits the precompiled type-checker) builds the
--- exact same 'SessionInput' the compiler's own pipeline builds.
+-- band: the VM program, the two export tables and the operator table.
+-- The remaining fields are pure functions of the program — the slot
+-- phase is 'lowerProgram', the indexable positions
+-- 'indexablePositions' — and are derived here so that a caller holding
+-- only those values (the build step that emits the precompiled
+-- type-checker) builds the exact same 'SessionInput' the compiler's own
+-- pipeline builds.
 mkSessionInput ::
   Program ->
   Map Types.UnqualifiedIdentifier ExportResolution ->
   Set Types.QualifiedIdentifier ->
+  OpTable ->
   SessionInput
-mkSessionInput prog exMap exSet =
+mkSessionInput prog exMap exSet ops =
   SessionInput
     { program = prog,
       slotProgram = lowerProgram prog,
       indexPositions = indexablePositions prog,
       exportMap = exMap,
-      exportedSet = exSet
+      exportedSet = exSet,
+      opTable = ops
     }
 
 -- | Project a 'CompiledProgram' down to the slice 'withCHR' /
@@ -132,7 +141,8 @@ toSessionInput cp =
       slotProgram = cp.slotProgram,
       indexPositions = cp.indexPositions,
       exportMap = cp.exportMap,
-      exportedSet = cp.exportedSet
+      exportedSet = cp.exportedSet,
+      opTable = cp.opTable
     }
 
 -- | Run a CHR action in a fresh session for a compiled program. All
@@ -171,6 +181,7 @@ withCHRExtra si hc extraProcs extraCallables action = do
       si.program.ruleNames
       si.program.inertTypes
       si.indexPositions
+      si.opTable
       procMap
       hc
       evaluableMap

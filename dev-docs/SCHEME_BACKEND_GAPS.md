@@ -136,6 +136,39 @@ never as the vmName `host__-/2`. Locked by the Haskell golden cases in
 `test/golden/is_non_evaluable_error/`, and on the Scheme side by
 `scheme/test/test-runtime.scm`'s `host functor deep-eval` group.
 
+## `read_term_from_string` ignores the program's operators
+
+The reference reader takes its operator table from the session
+(`SessionEnv.opTable`, filled by `toSessionInput` from
+`CompiledProgram.opTable` — the same table the goal parser and the REPL
+use). A string may therefore spell any operator the program has, the
+prelude's arithmetic and comparison operators included:
+
+    go(S, R) <=> R is read_term_from_string(S).
+    % with library(meta) imported
+    ?- go("1 + 1", R).
+    R = 1 + 1
+
+`(ychr read)` is still a direct transcription of
+`YCHR.Internal.Parser.builtinOps`. The session is already threaded into
+`parse-term` (for the fresh variables of `_` and of named variables),
+but the session record carries no operator table, so the same string is
+a parse error on the Scheme backend — `unknown operator: +`, surfaced as
+a general runtime error. Closing the gap means emitting the program's
+table into the generated library, carrying it on the session record, and
+making the parser procedures of `read.sls` (which thread a string index
+through every step) consult it instead of the module-level `infix-ops` /
+`prefix-ops` / `word-ops` constants.
+
+Pinned by `("read_term_test", "arith_op")` in the Scheme harness's
+`HASKELL_ONLY_CASES`; the directory's other cases use no operators and
+run on both backends, and `unknown_op` (a goal-negative case, which the
+Scheme harness does not collect) pins that an undeclared operator still
+fails on the interpreter. The operator-declaration half of the
+reference behaviour is pinned without the Scheme backend by
+`test/YCHR/MetaTest.hs`'s `end-to-end: an operator the program declares
+is readable`.
+
 ## Prelude host calls missing from `*prelude-host-calls*`
 
 The table's comment asks for it to be kept in sync with the Haskell
@@ -262,6 +295,11 @@ record of which fixes have already shipped.
   `host:read_term_from_string` *term* is deep-evaluable as well.
   `read_term_test` left `HASKELL_ONLY`; the reader is pinned directly by
   `scheme/test/test-runtime.scm`, including its `deep-eval` route.
+  (The reference reader's table has since become program-dependent —
+  it reads `SessionEnv.opTable` rather than `builtinOps` — which
+  re-opened one case of this directory as a divergence; see
+  *`read_term_from_string` ignores the program's operators* above. The
+  Scheme port itself is unchanged.)
   One deliberate classification divergence remains: the interpreter's
   name-keyed registry reports a *general* error for any non-text
   argument, whereas the Scheme primitive treats an unbound one as an
