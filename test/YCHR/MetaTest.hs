@@ -12,6 +12,9 @@ import YCHR.Embedded (stdlib, typeCheckerProgram)
 import YCHR.Internal.Compile.Names (vmName)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Meta (metaHostCallRegistry, valueToTerm)
+import YCHR.Internal.PExpr (OpTable, OpType (..))
+import YCHR.Internal.Parsed (OpDecl (..))
+import YCHR.Internal.Parser (builtinOps, mergeOps)
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
     HostCallRegistry,
@@ -36,14 +39,17 @@ tests =
 hostCalls :: HostCallRegistry
 hostCalls = baseHostCallRegistry <> metaHostCallRegistry
 
-runChrBase :: Chr a -> IO a
-runChrBase action = do
+-- | A session whose operator table is the given one. The reader's table
+-- is a per-session input, so two sessions may differ.
+runChrWith :: OpTable -> Chr a -> IO a
+runChrWith table action = do
   env <-
     initSessionEnv
       []
       []
       []
       IntMap.empty
+      table
       Map.empty
       baseHostCallRegistry
       Map.empty
@@ -52,11 +58,21 @@ runChrBase action = do
       Set.empty
   runChr action env
 
+-- | The hand-built session every direct reader test uses: no program, so
+-- the built-in operator table.
+runChrBase :: Chr a -> IO a
+runChrBase = runChrWith builtinOps
+
 -- | Invoke the read_term_from_string host call directly and return the Value.
 readTerm :: Text -> IO Value
-readTerm s = case Map.lookup (Name "read_term_from_string") metaHostCallRegistry of
+readTerm = readTermWith builtinOps
+
+-- | Invoke the read_term_from_string host call in a session carrying the
+-- given operator table.
+readTermWith :: OpTable -> Text -> IO Value
+readTermWith table s = case Map.lookup (Name "read_term_from_string") metaHostCallRegistry of
   Nothing -> assertFailure "read_term_from_string not found in registry"
-  Just (HostCallFn f) -> runChrBase (f [VText s])
+  Just (HostCallFn f) -> runChrWith table (f [VText s])
 
 compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
 compileOrFail inputs = case compileModules stdlib False inputs of
@@ -147,7 +163,27 @@ readTermTests =
         case v of
           VTerm "=" [VAtom "a", VAtom "b"] -> pure ()
           _ -> assertFailure "unexpected result for a = b",
-      endToEndReadTermTest
+      testCase "a session operator outside builtinOps parses as a compound term" $ do
+        table <- case mergeOps builtinOps [OpDecl 500 Yfx "+++"] of
+          Right t -> pure t
+          Left name -> assertFailure ("operator conflict: " ++ show name)
+        v <- readTermWith table "a +++ b"
+        case v of
+          VTerm "+++" [VAtom "a", VAtom "b"] -> pure ()
+          _ -> assertFailure "unexpected result for a +++ b",
+      -- The prelude declares `+` at 500 yfx, so a program that has the
+      -- prelude can read it. A session with only builtinOps cannot.
+      testCase "the prelude's + is readable once the session table has it" $ do
+        table <- case mergeOps builtinOps [OpDecl 500 Yfx "+"] of
+          Right t -> pure t
+          Left name -> assertFailure ("operator conflict: " ++ show name)
+        v <- readTermWith table "1 + 1"
+        case v of
+          VTerm "+" [VInt 1, VInt 1] -> pure ()
+          _ -> assertFailure "unexpected result for 1 + 1",
+      endToEndReadTermTest,
+      endToEndPreludeOperatorTest,
+      endToEndDeclaredOperatorTest
     ]
 
 endToEndReadTermTest :: TestTree
@@ -172,6 +208,57 @@ endToEndReadTermTest =
             [IntTerm 1, CompoundTerm (Types.Unqualified "hello") []]
           ) -> pure ()
       other -> assertFailure $ "Expected T = f(1, hello), got: " ++ show other
+
+-- | The user-facing case: a program that has the prelude can read a
+-- string spelling a prelude operator. The reader takes the table from
+-- the session, which 'toSessionInput' fills from
+-- 'CompiledProgram.opTable' exactly as the goal parser does.
+endToEndPreludeOperatorTest :: TestTree
+endToEndPreludeOperatorTest =
+  testCase "end-to-end: the prelude's operators are readable" $ do
+    let src =
+          ":- module(m, [check/2]).\n\
+          \:- chr_constraint check/2.\n\
+          \\n\
+          \check(X, X) <=> true.\n"
+    prog <- compileOrFail [("m.chr", src)]
+    bindings <-
+      runProgramWithQuery
+        typeCheckerProgram
+        prog
+        hostCalls
+        "T is host:read_term_from_string(\"1 + 1\"), check(T, quote(1 + 1))."
+    case Map.lookup "T" bindings of
+      Just (CompoundTerm (Types.Unqualified "+") [IntTerm 1, IntTerm 1]) -> pure ()
+      other -> assertFailure $ "Expected T = 1 + 1, got: " ++ show other
+
+-- | An operator the program itself declares -- not a prelude one -- is
+-- readable too. This is what separates "the session's table" from a
+-- hard-coded built-ins-plus-arithmetic table.
+endToEndDeclaredOperatorTest :: TestTree
+endToEndDeclaredOperatorTest =
+  testCase "end-to-end: an operator the program declares is readable" $ do
+    let src =
+          ":- module(m, [check/2, op(500, yfx, '++')]).\n\
+          \:- chr_constraint check/2.\n\
+          \\n\
+          \check(X, X) <=> true.\n"
+    prog <- compileOrFail [("m.chr", src)]
+    bindings <-
+      runProgramWithQuery
+        typeCheckerProgram
+        prog
+        hostCalls
+        "T is host:read_term_from_string(\"a ++ b\"), check(T, quote(a ++ b))."
+    case Map.lookup "T" bindings of
+      Just
+        ( CompoundTerm
+            (Types.Unqualified "++")
+            [ CompoundTerm (Types.Unqualified "a") [],
+              CompoundTerm (Types.Unqualified "b") []
+              ]
+          ) -> pure ()
+      other -> assertFailure $ "Expected T = a ++ b, got: " ++ show other
 
 -- | Property: 'YCHR.Internal.Meta.valueToTerm' (run on a 'VAtom' whose payload
 -- comes from 'YCHR.Internal.Compile.Names.vmName') recovers the original

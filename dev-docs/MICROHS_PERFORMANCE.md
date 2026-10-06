@@ -268,12 +268,14 @@ writes two Haskell modules under `generated/`:
 
 - `YCHR.Embedded.Generated.StdLib`, carrying the parsed `StdLib`;
 - `YCHR.Embedded.Generated.TypeCheck`, carrying the type-checker's VM
-  `Program` and its two export tables, wrapped in
+  `Program`, its two export tables and its operator table, wrapped in
   `Session.mkSessionInput` so that the slot phase and the indexable positions
   are rebuilt from the program at load time. Serializing those two derived
   fields as well would add about 1.3 MB of generated source; carrying the
   indexable positions explicitly was tried and moved no counter, so they stay
-  derived.
+  derived. The operator table is not derivable from the VM program, so it is
+  emitted as a `PExpr.mkOpTable` literal over `opTableEntries` — a few dozen
+  entries.
 
 The modules are plain literal data — constructor applications, no Template
 Haskell — so MicroHs compiles them without a staged-compilation facility. The

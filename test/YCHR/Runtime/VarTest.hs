@@ -8,6 +8,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
+import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Types (SuspensionId (..), Value (..))
 import YCHR.Internal.Runtime.Var
@@ -48,6 +49,7 @@ runVarEnv action = do
       []
       []
       IntMap.empty
+      builtinOps
       Map.empty
       Map.empty
       Map.empty

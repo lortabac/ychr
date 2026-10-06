@@ -15,6 +15,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Internal.Interpreter.Slots (SlotProc, SlotProgram (..), lowerProgram)
 import YCHR.Internal.Loc (dummyLoc)
+import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.Error (RuntimeErrorKind (..), RuntimeErrorThrown (..))
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
@@ -62,6 +63,7 @@ runChrEmpty action = do
       []
       []
       IntMap.empty
+      builtinOps
       Map.empty
       Map.empty
       Map.empty
@@ -79,6 +81,7 @@ runChrBase action = do
       []
       []
       IntMap.empty
+      builtinOps
       Map.empty
       baseHostCallRegistry
       Map.empty
@@ -96,6 +99,7 @@ runChrLeq action = do
       []
       []
       IntMap.empty
+      builtinOps
       leqProcMap
       Map.empty
       Map.empty

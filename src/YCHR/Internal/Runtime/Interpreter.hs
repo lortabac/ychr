@@ -88,6 +88,7 @@ import YCHR.Internal.Interpreter.Slots
     lowerProgram,
   )
 import YCHR.Internal.Meta (decodeName, valueToTerm)
+import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error
   ( RuntimeErrorKind (..),
@@ -226,6 +227,7 @@ interpret prog hostCalls entryName args = do
       prog.ruleNames
       prog.inertTypes
       (indexablePositions prog)
+      builtinOps
       procMap
       hostCalls
       evaluableMap

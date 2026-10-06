@@ -48,6 +48,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import YCHR.Internal.Compile.Pipeline (ExportResolution)
 import YCHR.Internal.Interpreter.Slots (SlotProc)
+import YCHR.Internal.PExpr (OpTable)
 import YCHR.Internal.Runtime.Index (StoreIndex, emptyStoreIndex)
 import YCHR.Internal.Runtime.Trace (TraceHandler)
 import YCHR.Internal.Runtime.Types
@@ -164,6 +165,13 @@ data SessionEnv = SessionEnv
     -- program's callables table at session init, plus any query-time
     -- lifted lambdas the caller merges in.
     callables :: !CallableRegistry,
+    -- | The program's operator table ('CompiledProgram.opTable'): the
+    -- built-in operators merged with every operator the program's
+    -- modules declare or import. Consulted by the
+    -- @read_term_from_string@ host call, so a string read at run time
+    -- can spell every operator the program can. A hand-built session
+    -- (no compiled program) gets 'YCHR.Internal.Parser.builtinOps'.
+    opTable :: !OpTable,
     -- | Export map from the compiler — used to resolve unqualified
     -- constraint names at 'tellConstraint' time.
     exportMap :: !(Map Types.UnqualifiedIdentifier ExportResolution),
@@ -198,12 +206,14 @@ data SessionEnv = SessionEnv
 -- The indexable positions come from
 -- 'YCHR.Internal.Runtime.Index.indexablePositions' applied to the same
 -- program; a caller that has no program in hand (a unit test building a
--- session by hand) passes 'IntMap.empty' and gets an unindexed store.
+-- session by hand) passes 'IntMap.empty' and gets an unindexed store,
+-- and 'YCHR.Internal.Parser.builtinOps' for the operator table.
 initSessionEnv ::
   [Types.Name] ->
   [Text] ->
   [Types.ConstraintType] ->
   IntMap IntSet ->
+  OpTable ->
   ProcMap ->
   HostCallRegistry ->
   EvaluableRegistry ->
@@ -211,7 +221,7 @@ initSessionEnv ::
   Map Types.UnqualifiedIdentifier ExportResolution ->
   Set Types.QualifiedIdentifier ->
   IO SessionEnv
-initSessionEnv typeNames rNames inert indexable pm hc ev cl expMap expSet = do
+initSessionEnv typeNames rNames inert indexable ops pm hc ev cl expMap expSet = do
   vc <- newIORef (VarId 0)
   let typeCount = List.length typeNames
       emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
@@ -245,6 +255,7 @@ initSessionEnv typeNames rNames inert indexable pm hc ev cl expMap expSet = do
         hostCalls = hc,
         evaluables = ev,
         callables = cl,
+        opTable = ops,
         exportMap = expMap,
         exportedSet = expSet,
         trail = Nothing,

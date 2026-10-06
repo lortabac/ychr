@@ -2,13 +2,17 @@
 ;;;;
 ;;;; The dual of (ychr pretty): `parse-term` reads one term out of a
 ;;;; string and builds the runtime value it denotes. It mirrors the
-;;;; Haskell reference, `YCHR.Internal.Meta.read_term_from_string`
-;;;; (`parseTermWith builtinOps` followed by `termToValue`).
+;;;; Haskell reference, `YCHR.Internal.Meta.read_term_from_string`'s
+;;;; conversion (`termToValue`), though not its operator table.
 ;;;;
 ;;;; The grammar is the Pratt parser of `YCHR.Internal.PExpr` driven by
 ;;;; `YCHR.Internal.Parser.builtinOps`, so only the built-in operators
 ;;;; are recognized: an operator the prelude declares (such as `+`) is
-;;;; a syntax error here, exactly as it is on the interpreter.
+;;;; a syntax error here. The interpreter's reader instead takes the
+;;;; table from the session (`SessionEnv.opTable`, the program's own
+;;;; operators), so this is a deliberate divergence — recorded in
+;;;; dev-docs/SCHEME_BACKEND_GAPS.md and pinned by
+;;;; `("read_term_test", "arith_op")` in test/scheme/test_golden.py.
 ;;;;
 ;;;; The conversion mirrors `convertTerm` + `termToValue`:
 ;;;;

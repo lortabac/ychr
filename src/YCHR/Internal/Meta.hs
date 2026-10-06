@@ -15,6 +15,7 @@ where
 
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Reader (ask)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, gets, modify')
 import Data.Char (chr)
 import Data.Foldable (toList)
@@ -24,10 +25,10 @@ import Data.Text (Text, pack)
 -- (dev-docs/MICROHS_GAPS.md, gap 4).
 import Data.Text.Shim qualified as T
 import Numeric (readHex)
-import YCHR.Internal.Parser (builtinOps, parseTermWith)
+import YCHR.Internal.Parser (parseTermWith)
 import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error (instantiationErrorS, runtimeErrorS)
-import YCHR.Internal.Runtime.Monad (Chr)
+import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..))
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), HostCallRegistry, unit, valueList)
 import YCHR.Internal.Runtime.Store (Suspension (..), getAllStoredConstraints, isSuspAlive)
 import YCHR.Internal.Runtime.Types (Value (..), VarId)
@@ -187,8 +188,14 @@ metaHostCallRegistry =
       ),
       ( Name "read_term_from_string",
         HostCallFn $ \case
-          [VText s] ->
-            case parseTermWith builtinOps "<read_term_from_string>" s of
+          [VText s] -> do
+            -- The program's operator table, not the built-in one: a
+            -- string read at run time can spell every operator the
+            -- program can, exactly like the goal parser
+            -- ('CompiledProgram.opTable'). A hand-built session carries
+            -- 'YCHR.Internal.Parser.builtinOps'.
+            SessionEnv {opTable = ops} <- ask
+            case parseTermWith ops "<read_term_from_string>" s of
               Left err -> error $ "read_term_from_string: " ++ show err
               Right term -> evalStateT (termToValue term) Map.empty
           _ -> error "read_term_from_string: expected 1 Text argument"

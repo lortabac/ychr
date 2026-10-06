@@ -606,11 +606,14 @@
 ;;; `%read-term-from-string`
 ;;;
 ;;; The reader behind `read_term_from_string/1`, mirroring
-;;; `YCHR.Internal.Meta.read_term_from_string` (`parseTermWith
-;;; builtinOps` followed by `termToValue`). The parser is the Pratt
-;;; parser of `YCHR.Internal.PExpr` driven by `Parser.builtinOps`, so
-;;; only the built-in operators are recognized: a prelude operator such
-;;; as `+` is a syntax error here, exactly as it is on the interpreter.
+;;; `YCHR.Internal.Meta.read_term_from_string`'s conversion
+;;; (`termToValue`). The parser is the Pratt parser of
+;;; `YCHR.Internal.PExpr` driven by `Parser.builtinOps`, so only the
+;;; built-in operators are recognized: a prelude operator such as `+` is
+;;; a syntax error here. The interpreter's reader takes its table from
+;;; the session (the program's own operators) instead, so the `+` case
+;;; below is a deliberate divergence — see
+;;; dev-docs/SCHEME_BACKEND_GAPS.md.
 ;;; The first cases mirror `test/YCHR/MetaTest.hs`.
 ;;; --------------------------------------------------------------------------
 
@@ -727,8 +730,9 @@
 (test-group "%read-term-from-string rejects malformed input"
   ;; Both the empty input and a syntax error are general runtime errors:
   ;; there is no value the caller could have meant. In particular a
-  ;; prelude operator is *not* readable — the reference parses with
-  ;; `builtinOps` only.
+  ;; prelude operator is *not* readable here — the Scheme reader parses
+  ;; with `builtinOps` only, where the interpreter's reader would have
+  ;; the program's table and accept it (dev-docs/SCHEME_BACKEND_GAPS.md).
   (test-equal "empty input" 'general (failure-kind (lambda () (read-term ""))))
   (test-equal "a prelude operator is not readable" 'general
               (failure-kind (lambda () (read-term "1 + 2"))))
