@@ -24,12 +24,29 @@ STARTER = os.path.join(PROJECT_ROOT, "examples", "leq.chr")
 #: program survives it.
 BROKEN_SOURCE = "this is not a CHR program."
 
+#: The example programs the page's preset dropdown offers, by file name under
+#: ``examples/``, each with the reload summary its declarations produce. The
+#: page is served from ``playground/`` alone, so ``make playground-wasm``
+#: copies these four into ``playground/build/`` and the page fetches
+#: ``build/<name>``: both the copies and the compile are asserted (here and in
+#: ``test_wasm.py``), which is what keeps the copied files from drifting away
+#: from their source in ``examples/``.
+PRESET_SUMMARIES = {
+    "bakery.chr": "Loaded 6 constraints: bake/0 cake/0 egg/0 flour/0 milk/0 sugar/0",
+    "leq.chr": "Loaded 1 constraint: leq/2",
+    "fib_memo.chr": "Loaded 2 constraints: fib/2 memo/2",
+    "gcd.chr": "Loaded 1 constraint: gcd/1",
+}
+
+PRESETS = list(PRESET_SUMMARIES)
+
 #: The ordered scenario. ``op`` is one of:
 #:
 #: * ``compile-starter`` — compile ``examples/leq.chr`` (the page's starter)
-#: * ``compile-broken``  — compile :data:`BROKEN_SOURCE`
 #: * ``query``           — run one REPL line, given by ``arg``
+#: * ``compile-broken``  — compile :data:`BROKEN_SOURCE`
 #: * ``check``           — type-check the loaded program
+#: * ``compile-preset``  — compile ``examples/<preset>``, given by ``preset``
 SCENARIO = [
     {"label": "compile-starter", "op": "compile-starter"},
     {"label": "query-ground", "op": "query", "arg": "leq(1, 1)"},
@@ -46,7 +63,19 @@ SCENARIO = [
     {"label": "compile-broken", "op": "compile-broken"},
     {"label": "query-after-failed-reload", "op": "query", "arg": "leq(1, 1)"},
     {"label": "check", "op": "check"},
+    # Every preset the page offers compiles. These come last so that the
+    # partial-order queries above still run against the program loaded at
+    # startup.
+] + [
+    {"label": "preset-" + preset, "op": "compile-preset", "preset": preset}
+    for preset in PRESETS
 ]
+
+
+def preset_path(name):
+    """The source of a preset, under ``examples/``."""
+    return os.path.join(PROJECT_ROOT, "examples", name)
+
 
 LABELS = [step["label"] for step in SCENARIO]
 
@@ -65,6 +94,8 @@ def native_commands():
             commands.append(":text")
             commands.extend(BROKEN_SOURCE.splitlines())
             commands.append(".")
+        elif step["op"] == "compile-preset":
+            commands.append(f":load {preset_path(step['preset'])}")
         elif step["op"] == "query":
             commands.append(f":query {step['arg']}")
         elif step["op"] == "check":
@@ -130,3 +161,13 @@ def check(results):
 
     # Type checking the (untyped) starter program finds nothing to report.
     assert status("check") == "ok", payload("check")
+
+    # Every program the preset dropdown offers compiles, and reports the
+    # constraint declarations the example under `examples/` has. The WASM
+    # runner additionally checks that the bundled copies of these files are
+    # byte-identical to their source (`test_wasm.py`), so a preset the page
+    # offers cannot silently differ from the example it names.
+    for preset, summary in PRESET_SUMMARIES.items():
+        label = "preset-" + preset
+        assert status(label) == "ok", payload(label)
+        assert summary in payload(label), payload(label)

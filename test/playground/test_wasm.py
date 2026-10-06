@@ -22,6 +22,7 @@ emscripten SDK — the test skips rather than failing.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 
@@ -31,6 +32,7 @@ import pytest
 BUILD_DIR = os.path.join(expectations.PROJECT_ROOT, "playground", "build")
 MODULE = os.path.join(BUILD_DIR, "ychr-pg.js")
 SMOKE = os.path.join(expectations.PROJECT_ROOT, "playground", "test", "smoke.cjs")
+INDEX = os.path.join(expectations.PROJECT_ROOT, "playground", "index.html")
 
 TIMEOUT = 3600
 
@@ -66,8 +68,53 @@ def steps():
 
 
 def test_scenario_in_wasm(steps):
-    """The shared scenario passes on the WASM bridge."""
+    """The shared scenario passes on the WASM bridge.
+
+    That includes the four presets the page's dropdown offers: ``smoke.cjs``
+    compiles each of them from its copy in the bundle.
+    """
     assert "init" in steps, "the module never reported an init step"
     status, payload = steps["init"]
     assert status == "ok", payload
     expectations.check(steps)
+
+
+def test_presets_are_bundled():
+    """Each preset is in the bundle, byte-identical to its source.
+
+    The page fetches ``build/<name>``; the copy step in ``make playground-wasm``
+    is the only thing that puts it there, so this is what notices a bundled
+    copy that stops matching the example it names.
+    """
+    require_wasm_module()
+    for preset in expectations.PRESETS:
+        bundled = os.path.join(BUILD_DIR, preset)
+        assert os.path.exists(bundled), f"{preset} is not bundled; rebuild the module"
+        with open(bundled, "rb") as f:
+            bundled_bytes = f.read()
+        assert os.path.exists(expectations.preset_path(preset))
+        with open(expectations.preset_path(preset), "rb") as f:
+            source_bytes = f.read()
+        assert bundled_bytes == source_bytes, f"{preset} differs from examples/{preset}"
+
+
+def test_menu_matches_presets():
+    """The page's Examples menu lists exactly the presets the tests expect.
+
+    Nothing else ties the options in ``index.html`` to ``PLAYGROUND_PRESETS`` in
+    the Makefile and to :data:`expectations.PRESETS`: an option added to the
+    page but not to the Makefile would 404 at runtime, and an option dropped
+    from the page would leave a preset untested. Reading the markup is a blunt
+    instrument, but it is the file the browser actually loads, and it needs no
+    build.
+    """
+    with open(INDEX, encoding="utf-8") as f:
+        markup = f.read()
+    menu = re.search(
+        r'<select id="preset".*?</select>',
+        markup,
+        re.DOTALL,
+    )
+    assert menu, "index.html has no preset select"
+    listed = re.findall(r'<option value="([^"]*)"', menu.group(0))
+    assert listed == [""] + expectations.PRESETS, listed

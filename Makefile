@@ -197,6 +197,12 @@ bench-scheme-all: bench-scheme bench-scheme-chez
 # Web playground build
 # ---------------------------------------------------------------------------
 
+# The example programs the page's preset dropdown offers, by file name under
+# examples/. The page is served from $(PLAYGROUND_DIR) alone, so the examples
+# it offers have to be copied into the bundle; examples/ stays their source of
+# truth.
+PLAYGROUND_PRESETS = bakery.chr leq.chr fib_memo.chr gcd.chr
+
 # Fetch and activate the emscripten SDK, pinned to $(EMSDK_VERSION). Idempotent.
 playground-emsdk:
 	@test -d $(EMSDK) || \
@@ -217,6 +223,10 @@ playground-wasm:
 	}
 	@mkdir -p $(PLAYGROUND_BUILD)
 	@cp examples/leq.chr $(PLAYGROUND_BUILD)/starter.chr
+	@for name in $(PLAYGROUND_PRESETS); do \
+	  echo "  preset $$name"; \
+	  cp examples/$$name $(PLAYGROUND_BUILD)/$$name || exit 1; \
+	done
 	. $(EMSDK)/emsdk_env.sh >/dev/null 2>&1 || true; \
 	CC=emcc MHSCONF=unix MHSCCLIBS=-lm MHSCCFLAGS="$(PLAYGROUND_EMCCFLAGS)" \
 	$(MHS) -tenvironment -z \

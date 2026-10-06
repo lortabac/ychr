@@ -66,6 +66,7 @@ passed through `-optl`.
 
 | Control | Effect |
 |---|---|
+| **Examples** menu | Replaces the editor's contents with one of the examples the repository ships (`bakery.chr`, `leq.chr`, `fib_memo.chr`, `gcd.chr`) and reloads it. |
 | **Reload** | Compiles the editor's text as a one-file program and makes it the loaded program. Never type-checks. |
 | **Typecheck** | Reloads the editor first, then runs the CHR type checker over the program. The checker itself is compiled on first use. |
 | Enter in the REPL box | Runs one goal (or colon command) against the loaded program, in a fresh CHR session. |
@@ -73,6 +74,14 @@ passed through `-optl`.
 A reload that fails keeps the previously loaded program — the same
 policy the terminal REPL applies to `:recompile` — so a typo never costs
 you a working program.
+
+The **Examples** menu has no program text of its own: `make playground-wasm`
+copies the four files under `examples/` into `playground/build/`, and the
+page fetches them from there (the page is served from `playground/` alone,
+so it cannot reach `examples/`). Selecting an entry replaces the editor
+and reloads in one step; editing the buffer afterwards returns the menu to
+its placeholder, and a copy that cannot be fetched leaves both the editor
+and the loaded program alone and reports the failure in the REPL pane.
 
 The REPL box takes a goal, or one of these colon commands: `:help` (or
 `:h`), `:list_modules`, `:list_files`, `:list_declarations`, `:info <id>`
@@ -176,7 +185,7 @@ should be verified with locally.
 | `playground/YCHR/Playground.hs` | the engine: state, reload, queries, colon commands, type checking |
 | `playground/YCHR/Playground/Wasm.hs` | the `foreign export ccall` bridge (WASM build only) |
 | `playground/Main.hs` | the native harness used by the tests |
-| `playground/build/` | generated bundle (gitignored) |
+| `playground/build/` | the generated bundle (gitignored): the module, plus `starter.chr` and the preset copies of `examples/*.chr` the page loads |
 | `test/playground/` | the native and WASM test suites, with their shared expectations |
 
 ## Limits
