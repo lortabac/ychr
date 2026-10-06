@@ -15,7 +15,15 @@ def project_root():
 
 @pytest.fixture(scope="session")
 def ychr_bin():
-    """Build and return the path to the ychr binary."""
+    """Return the path to the ychr binary.
+
+    The Makefile resolves it once (after `cabal build`) and exports it as
+    ``YCHR``; when that is absent — a bare `pytest` run — fall back to
+    `cabal list-bin`, which needs the component to have been built already.
+    """
+    override = os.environ.get("YCHR")
+    if override:
+        return override
     result = subprocess.run(
         ["cabal", "list-bin", "ychr"],
         capture_output=True,

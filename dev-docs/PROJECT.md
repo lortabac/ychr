@@ -934,6 +934,8 @@ Test IDs are nested: a test directory `strings/` with cases `concat_basic.goal` 
 
 Golden tests run on both the Haskell interpreter (`cabal test`) and the Scheme backend (`python3 -m pytest test/scheme/`). The Scheme harness only runs positive cases. Run both with `make test`.
 
+The Scheme harness compiles each test directory's `.chr` files once per session and reuses the emitted library for every case in that directory. Its per-case `gen-driver` call passes `--no-check`, because the compile call already type-checks the same files: type errors still fail the compile step, and compile- and goal-level warnings are still reported and still gated by `--Werror`.
+
 To add a new golden test, create a directory under `test/golden/`, drop the `.chr`, `.goal`, and `.expected` files into it, and the test is picked up automatically.
 
 ### Scheme backend skip lists

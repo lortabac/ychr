@@ -169,7 +169,16 @@ def discover_cases():
 
 
 @pytest.mark.parametrize("test_dir,case_name", discover_cases())
-def test_scheme_golden(test_dir, case_name, ychr_bin, guile_bin, scheme_lib_dir, project_root, tmp_path):
+def test_scheme_golden(
+    test_dir,
+    case_name,
+    ychr_bin,
+    guile_bin,
+    scheme_lib_dir,
+    scheme_compile_cache,
+    project_root,
+    tmp_path,
+):
     if test_dir in HASKELL_ONLY:
         pytest.skip(f"{test_dir} uses Haskell-only meta primitives")
     if (test_dir, case_name) in HASKELL_ONLY_CASES:
@@ -188,18 +197,20 @@ def test_scheme_golden(test_dir, case_name, ychr_bin, guile_bin, scheme_lib_dir,
 
     werror_flags = [] if test_dir in WERROR_EXEMPT else ["--Werror"]
 
-    # 1. Compile to Scheme
-    result = subprocess.run(
-        [ychr_bin, "compile", *werror_flags, "-t", "scheme", "-d", str(tmp_path), *chr_files],
-        capture_output=True,
-        text=True,
-        cwd=project_root,
+    # 1. Compile to Scheme. Every case in a directory compiles the same
+    # files, so the library is built once per directory and reused; the
+    # cached result (success or failure) is replayed for each case.
+    lib_dir, result = scheme_compile_cache.compile(
+        test_dir, chr_files, werror_flags, ychr_bin, project_root
     )
     assert result.returncode == 0, f"compile failed:\n{result.stdout}\n{result.stderr}"
 
-    # 2. Generate driver
+    # 2. Generate driver. The compile step above already type-checked the
+    # same files, so `--no-check` only skips a redundant second pass:
+    # type errors still fail step 1, and compile- and goal-level warnings
+    # are still reported and still gated by `--Werror`.
     result = subprocess.run(
-        [ychr_bin, "gen-driver", *werror_flags, "-g", query, *chr_files],
+        [ychr_bin, "gen-driver", "--no-check", *werror_flags, "-g", query, *chr_files],
         capture_output=True,
         text=True,
         cwd=project_root,
@@ -209,14 +220,14 @@ def test_scheme_golden(test_dir, case_name, ychr_bin, guile_bin, scheme_lib_dir,
     driver_path = tmp_path / "driver.sps"
     driver_path.write_text(result.stdout)
 
-    # 3. Run with Guile
+    # 3. Run with Guile, importing the cached library.
     result = subprocess.run(
         [
             guile_bin,
             "--r6rs",
             "--no-auto-compile",
             "-L", scheme_lib_dir,
-            "-L", str(tmp_path),
+            "-L", str(lib_dir),
             str(driver_path),
         ],
         capture_output=True,
