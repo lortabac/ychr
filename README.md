@@ -67,7 +67,13 @@ optional type checker (program and goal checks); `check` always checks.
 `make test` runs the full test suite: the Haskell interpreter, the
 Scheme backend and runtime, the REPL, the type checker, the embedding
 example, and lint checks over the documentation. Besides GHC it needs
-`python3` with `pytest`, and Guile 3.
+`python3` with `pytest`, and Guile 3. The independent suites run
+concurrently (`make test JOBS=1` runs them one after another, though
+each suite still parallelizes internally), and
+[`pytest-xdist`](https://pypi.org/project/pytest-xdist/), when
+installed, shards the subprocess-heavy Scheme, REPL and type-checker
+suites across worker processes (`PYTEST_XDIST='-n 8' make test` picks a
+worker count).
 
 `make bench` runs the Haskell interpreter benchmarks and then the
 in-process Scheme benchmarks (Guile 3). The same Scheme programs run

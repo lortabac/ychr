@@ -331,6 +331,16 @@ test-suite ychr-tests
                     , tasty >=1.4 && <1.6
                     , tasty-hedgehog >=1.4 && <2
                     , tasty-hunit >=0.10 && <0.11
+    -- Tasty runs the suite's ~1900 independent tests on all cores, so the
+    -- Golden group and the two TypeSoundness properties overlap instead of
+    -- serializing on one core. The tests are independent and touch no
+    -- process-global state (no temp files, no handle redirection, no
+    -- chdir); keep it that way. On a machine that already runs another
+    -- suite, bound the worker count with `TASTY_NUM_THREADS=N` or
+    -- `cabal test --test-options='-jN'`.
+    ghc-options:      -threaded
+                      -rtsopts
+                      "-with-rtsopts=-N"
     if impl(ghc)
         build-depends: template-haskell >=2.20 && <2.25
     default-language: GHC2021

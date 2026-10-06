@@ -1,10 +1,26 @@
-PYTEST ?= python3 -m pytest
+PYTEST_PY ?= python3
+PYTEST ?= $(PYTEST_PY) -m pytest
 # Prefer the Fedora binary name, fall back to Debian/Ubuntu's.
 GUILE ?= $(shell command -v guile3.0 >/dev/null 2>&1 && echo guile3.0 || echo guile-3.0)
 # Chez Scheme, used only by `bench-scheme-chez` (the test suite runs on
 # Guile). `scheme` is the Chez binary name on a typical install; override
 # it if a different Scheme owns that name.
 CHEZ ?= scheme
+
+# The nine test suites are independent; `test` overlaps them by default.
+# JOBS=1 restores the ordered, sequential behaviour. (The Haskell suite is
+# also threaded with Tasty on all cores — see ychr.cabal; its tests are
+# independent and mutate no process-global state, so keep new tests free
+# of cwd, environment and handle changes.) `$(or …)` keeps an empty JOBS
+# from turning the recipe's `-j` into "no limit".
+JOBS ?= $(shell nproc 2>/dev/null || echo 1)
+
+# pytest-xdist is optional: when the interpreter running pytest can import
+# it, the subprocess-heavy suites are sharded across worker processes.
+# Override PYTEST_XDIST= to force it off, or set a worker count explicitly
+# (e.g. PYTEST_XDIST='-n 8'). Probed through PYTEST_PY so it matches the
+# interpreter PYTEST uses.
+PYTEST_XDIST ?= $(shell $(PYTEST_PY) -c 'import xdist' 2>/dev/null && printf '%s' '-n auto')
 
 .PHONY: test test-haskell test-scheme test-scheme-runtime test-repl test-stlc
 .PHONY: test-typecheck test-docs test-style test-playground playground-check
@@ -96,25 +112,27 @@ resources-check: build
 mhs-build: resources
 	$(MCABAL) build
 
-test: test-haskell test-scheme-runtime test-scheme test-repl test-stlc test-typecheck test-docs test-style test-playground
+test:
+	$(MAKE) -j$(or $(JOBS),1) test-haskell test-scheme-runtime test-scheme test-repl \
+	  test-stlc test-typecheck test-docs test-style test-playground
 
 test-haskell: build
 	cabal test
 
 test-scheme: build
-	GUILE=$(GUILE) $(PYTEST) test/scheme/ -v
+	GUILE=$(GUILE) $(PYTEST) $(PYTEST_XDIST) test/scheme/ -v
 
 test-scheme-runtime:
 	cd scheme/test && $(GUILE) -L .. -x .sls run-all.scm
 
 test-repl: build
-	$(PYTEST) test/repl/ -v
+	$(PYTEST) $(PYTEST_XDIST) test/repl/ -v
 
 test-stlc: build
 	$(PYTEST) test/stlc/ -v
 
 test-typecheck: build
-	$(PYTEST) test/typecheck/ -v
+	$(PYTEST) $(PYTEST_XDIST) test/typecheck/ -v
 
 test-docs:
 	$(PYTEST) test/docs/ -v
@@ -153,6 +171,10 @@ bench-haskell: build
 # refuses to load in Guile.
 # ---------------------------------------------------------------------------
 YCHR ?= $(shell cabal list-bin ychr 2>/dev/null)
+# Export the resolved binary so recursive make and the pytest suites reuse
+# it instead of each calling `cabal list-bin` while `cabal test` is running
+# (the test fixtures fall back to `cabal list-bin` when this is empty).
+export YCHR
 SCHEME_BENCH_DIR ?= dist-scheme-bench
 SCHEME_BENCH_ARGS ?=
 
