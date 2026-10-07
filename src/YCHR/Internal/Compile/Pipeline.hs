@@ -32,7 +32,7 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Text.Parsec (ParseError)
 import YCHR.Internal.Collect
-  ( CollectError,
+  ( CollectError (..),
     addLibraryPrelude,
     resolveLibraryClosure,
     rewriteImports,
@@ -43,11 +43,11 @@ import YCHR.Internal.Compile (CompileError, compile)
 import YCHR.Internal.Desugar (DesugarError, desugarProgram, extractSymbolTable, liftAllLambdas)
 import YCHR.Internal.Desugar.Disjunction (lowerDisjunctions)
 import YCHR.Internal.Desugared qualified as D
-import YCHR.Internal.Diagnostic (Diagnostic)
+import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning, checkExhaustiveness)
 import YCHR.Internal.Interpreter.Slots (SlotProgram, lowerProgram)
-import YCHR.Internal.PExpr (PExpr)
-import YCHR.Internal.Parsed (AnnP (..), Import (..), Module (..), OpDecl, SourceLoc, noAnnP)
+import YCHR.Internal.PExpr (PExpr (Atom))
+import YCHR.Internal.Parsed (AnnP (..), Import (..), Module (..), OpDecl, SourceLoc (..), dummyLoc, noAnnP)
 import YCHR.Internal.Parser
   ( ModuleHeader (..),
     OpTable,
@@ -375,6 +375,37 @@ finalizeCompilation ::
   [Module] ->
   Either Error (CompiledProgram, [Warning])
 finalizeCompilation libraryMods opExports trailingLocMap parsed = do
+  -- A module name is declared in exactly one input. Two user modules that
+  -- carry the same name are rejected here rather than merged: the
+  -- downstream passes key declarations by qualified name, so letting both
+  -- through would silently pool their declarations and equations. This
+  -- includes the same path given twice on the command line — the second
+  -- module is a separate input, not a duplicate to deduplicate.
+  --
+  -- The diagnostic is anchored at the second declaration, so the header
+  -- points at the offending file rather than the first one; the message
+  -- lists every path that declares the name. A header-less module carries
+  -- 'dummyLoc', whose file is the @\<generated\>@ sentinel rather than a
+  -- real path, so it is left out of the list — the message falls back to
+  -- not naming any file rather than repeating a placeholder.
+  let modulesByName =
+        Map.fromListWith (flip (++)) [(m.name, [m]) | m <- parsed]
+      duplicateModuleDiags =
+        [ Diagnostic
+            Nothing
+            ( AnnP
+                ( DuplicateModuleName
+                    n
+                    [m.nameLoc.file | m <- ms, m.nameLoc /= dummyLoc]
+                )
+                second.nameLoc
+                (Atom n)
+            )
+        | (n, ms@(_ : second : _)) <- Map.toList modulesByName
+        ]
+  case duplicateModuleDiags of
+    [] -> pure ()
+    _ -> Left (CollectErrors duplicateModuleDiags)
   -- A bundled library is dropped when a user module carries its name:
   -- module identity is the name alone, so keeping both would list two
   -- providers for every name the library exports and make each use

@@ -1140,12 +1140,10 @@ resolveFunctions ::
   [CollectedModule] ->
   ([R.FunctionDef], [Diagnostic ResolveError])
 resolveFunctions visMap mods =
-  let -- Collect all function declarations with their module context.
-      -- Modules are tagged with their input position so 'build' can
-      -- gather equations once per distinct declaring module.
+  let -- Collect all function declarations with their declaring module.
       allDecls =
-        [ (QualifiedName m.name fd.name, fd.arity, fd, im, m)
-        | (im, m) <- zip [0 :: Int ..] mods,
+        [ (QualifiedName m.name fd.name, fd.arity, fd, m)
+        | m <- mods,
           P.Ann d _ <- m.decls,
           P.FunctionDecl fd <- [d]
         ]
@@ -1154,25 +1152,24 @@ resolveFunctions visMap mods =
         Map.toList $
           Map.fromListWith
             (++)
-            [ ((qn, ar), [(fd, im, m)])
-            | (qn, ar, fd, im, m) <- allDecls
+            [ ((qn, ar), [(fd, m)])
+            | (qn, ar, fd, m) <- allDecls
             ]
       build ((qn, ar), decls) =
-        let declPairs = [(fd, m) | (fd, _, m) <- decls]
+        let declPairs = decls
             -- 'gatherEquations' selects equations by (name, arity)
-            -- from the declaring module, and every declaration in the
-            -- group shares both — so it is gathered once per distinct
-            -- declaring module, not once per declaration (a
+            -- from the declaring module. Module names are unique
+            -- across the whole input — two user modules with the same
+            -- name are rejected by
+            -- 'YCHR.Internal.Compile.Pipeline.finalizeCompilation' —
+            -- so every declaration in the group comes from the same
+            -- module and its equations are gathered exactly once. (A
             -- multi-signature @:- class@ contributes one declaration
-            -- per signature and would repeat every equation N times).
-            -- A group spans more than one module only when two input
-            -- files declare the same module name, which is currently
-            -- accepted (see dev-docs/BUGS.md); per-module gathering
-            -- keeps every file's equations in that case.
-            declModules =
-              Map.elems (Map.fromList [(im, (fd, m)) | (fd, im, m) <- decls])
-            (eqss, eqErrss) =
-              unzip [gatherEquations visMap mods m fd | (fd, m) <- declModules]
+            -- per signature; gathering per declaration would repeat
+            -- every equation N times.)
+            (eqs, eqErrs) = case decls of
+              (fd, m) : _ -> gatherEquations visMap mods m fd
+              [] -> ([], [])
             def =
               R.FunctionDef
                 { name = qn,
@@ -1190,9 +1187,9 @@ resolveFunctions visMap mods =
                   refining =
                     listToMaybe
                       [t | (fd, _) <- declPairs, Just t <- [fd.refining]],
-                  equations = concat eqss
+                  equations = eqs
                 }
-         in (def, concat eqErrss)
+         in (def, eqErrs)
       (defs, defErrss) = unzip (map build grouped)
    in (defs, concat defErrss)
 

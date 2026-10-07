@@ -186,6 +186,7 @@ collectErrorCode :: CollectError -> ErrorCode
 collectErrorCode (UnknownLibrary _) = ErrorCode 10001
 collectErrorCode (CircularLibraryImport _) = ErrorCode 10002
 collectErrorCode (SelfNamedLibraryImport _) = ErrorCode 10003
+collectErrorCode (DuplicateModuleName _ _) = ErrorCode 10004
 
 -- | 15xxx — parse validation phase
 parseValidationErrorCode :: ParseValidationError -> ErrorCode
@@ -695,6 +696,18 @@ collectErrorMsg (SelfNamedLibraryImport name) =
         ++ T.unpack name
         ++ "' is replaced by this module; rename the module or drop the import"
     )
+collectErrorMsg (DuplicateModuleName name []) =
+  withHint
+    ("Module '" ++ T.unpack name ++ "' is declared in more than one input")
+    "a module name may be declared in exactly one input; give the modules distinct names"
+collectErrorMsg (DuplicateModuleName name paths) =
+  withHint
+    ( "Module '"
+        ++ T.unpack name
+        ++ "' is declared in more than one input file: "
+        ++ intercalate ", " paths
+    )
+    "a module name may be declared in exactly one input; give the modules distinct names"
 
 instance Display (Diagnostic RenameError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =
