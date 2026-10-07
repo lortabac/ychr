@@ -227,6 +227,27 @@ def test_repl(query, expected, ychr_bin):
     assert result.stdout == expected
 
 
+def test_repl_query_warning_snippet(ychr_bin):
+    """A query warning echoes the query's own source term, not `''`.
+
+    Regression: the renamer anchored query terms at the `<generated>`
+    dummy location with an empty `Atom ""` origin, so the diagnostic's
+    source snippet rendered as the empty-quotes `''`. Query diagnostics
+    now use `<query>` and reconstruct the term from itself.
+    """
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet"],
+        input="B is atom(foo).\n",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    assert "YCHR-20101" in result.stderr, result.stderr
+    assert "<query>:1:1" in result.stderr, result.stderr
+    assert "B is atom(foo)" in result.stderr, result.stderr
+    assert "''" not in result.stderr, result.stderr
+
+
 def test_repl_unsupported_call_arity(ychr_bin):
     """A query whose `$call` is outside the supported 1..10 arity range
     is rejected by the resolver (YCHR-16022) rather than becoming a data

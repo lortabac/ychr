@@ -12,6 +12,7 @@ module YCHR.Internal.Pretty
     prettyRuleSrc,
     prettyPExprSrc,
     renderAtom,
+    termToPExpr,
 
     -- * Declaration pretty-printers
     DeclKind (..),

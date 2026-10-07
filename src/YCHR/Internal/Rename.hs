@@ -74,6 +74,7 @@ import YCHR.Internal.Collected (CollectedImport (..), CollectedModule (..))
 import YCHR.Internal.Diagnostic (Diagnostic, noDiag)
 import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed
+import YCHR.Internal.Pretty (termToPExpr)
 import YCHR.Internal.Rename.Types
 import YCHR.Internal.Types
 
@@ -1635,6 +1636,13 @@ renameQueryGoalsWith ::
     )
 renameQueryGoalsWith env goals = renameQueryTerms env ResolveTop goals
 
+-- | Location reported for every diagnostic raised while renaming a query
+-- goal or argument. Queries have no file of their own, so they are
+-- anchored at @\<query\>@ rather than the renamer's @\<generated\>@
+-- placeholder.
+queryTermLoc :: SourceLoc
+queryTermLoc = SourceLoc "<query>" 1 1
+
 renameQueryTerms ::
   QueryRenameEnv ->
   ResolveMode ->
@@ -1644,7 +1652,9 @@ renameQueryTerms (QueryRenameEnv ctx) mode terms =
   let ((renamed, warnings), errs) =
         runWriter
           ( runWriterT $
-              traverse (renameTerm ctx dummyLoc (Atom "") mode) terms
+              traverse
+                (\t -> renameTerm ctx queryTermLoc (termToPExpr t) mode t)
+                terms
           )
    in if null errs then Right (renamed, warnings) else Left errs
 
