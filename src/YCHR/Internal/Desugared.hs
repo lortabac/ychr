@@ -148,7 +148,12 @@ data Function = Function
     -- dispatch branches no call can reach. 'Nothing' for an ordinary
     -- function.
     lambdaArity :: Maybe Int,
-    equations :: AnnP [Equation]
+    -- | The function's equations, each carrying the source location and
+    -- original p-expr of the declaration that wrote it. Keeping the
+    -- annotation per equation lets a diagnostic about an equation from
+    -- another module's @:- extend_function@ point at that equation
+    -- rather than at the owning declaration's first equation.
+    equations :: [AnnP Equation]
   }
   deriving (Show)
 

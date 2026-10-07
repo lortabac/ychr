@@ -102,6 +102,43 @@ def test_werror_inaccessible_branch(ychr_bin, project_root, test_dir, message):
     assert "YCHR-20104" in werror.stdout + werror.stderr
 
 
+def test_dead_equation_attributed_to_extension(ychr_bin, project_root):
+    """An `:- extend_function` equation's diagnostic points at the module
+    that wrote it, not at the owning declaration's first equation.
+
+    `owner:classify` is declared in `a_owner.chr`; the dead equation is
+    the `:- extend_function classify("oops") -> 1.` directive in
+    `b_extender.chr`. The warning must name `b_extender.chr`, echo that
+    equation, and never mention `a_owner.chr`.
+    """
+    import subprocess
+
+    directory = os.path.join(
+        project_root, "test", "golden", "typecheck_open_function_dead_equation"
+    )
+    programs = sorted(glob.glob(os.path.join(directory, "*.chr")))
+    assert programs, f"no .chr files in {directory}"
+
+    result = subprocess.run(
+        [ychr_bin, "check", *programs],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, f"expected a clean check:\n{output}"
+    assert "YCHR-20104" in output, output
+
+    # Exactly one warning, whose location line names the extension site.
+    location_lines = [line for line in output.splitlines() if "YCHR-20104" in line]
+    assert len(location_lines) == 1, output
+    assert "b_extender.chr:14" in location_lines[0], output
+
+    # The echoed source is the extension equation, not the owner's.
+    assert 'classify("oops")' in output, output
+    assert "a_owner.chr" not in output, output
+
+
 def test_werror_at_run(ychr_bin, project_root):
     """`--Werror` also gates `ychr run`, not just `ychr check`."""
     import subprocess

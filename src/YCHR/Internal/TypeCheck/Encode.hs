@@ -244,7 +244,11 @@ headArg HeadWildcard = ast "head_wild" []
 
 function :: D.Function -> Enc Term
 function f = do
-  eqs <- ann (listTerm . map equation) f.equations
+  -- Each equation is annotated on its own so an `ann` id (and the
+  -- p-expr it registers in `seenOrigins`) belongs to the declaration
+  -- that wrote that equation. An equation contributed by another
+  -- module's `:- extend_function` then reports at its own site.
+  eqs <- traverse (ann equation) f.equations
   pure
     ( ast
         "fun_def"
@@ -252,7 +256,7 @@ function f = do
           intTerm f.arity,
           listTerm (map funSig f.signatures),
           listTerm (map boundSig f.requiring),
-          eqs
+          listTerm eqs
         ]
     )
 

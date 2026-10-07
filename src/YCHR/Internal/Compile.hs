@@ -79,7 +79,7 @@ import YCHR.Internal.Compile.Types
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Loc (SourceLoc)
-import YCHR.Internal.PExpr (PExpr)
+import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Pretty (prettyPExprSrc)
@@ -1318,12 +1318,19 @@ compileFunctionDef func = do
               <> "/"
               <> T.pack (show func.arity)
           )
-      funcSi = SrcInfo func.equations.sourceLoc func.equations.parsed funcLabel
+      -- The function-level frame and source info take the first
+      -- equation's annotation: before equations carried per-equation
+      -- annotations, the whole block's annotation was the first
+      -- equation's, so the emitted frame is unchanged.
+      (funcLoc, funcParsed) = case func.equations of
+        (eq : _) -> (eq.sourceLoc, eq.parsed)
+        [] -> (P.dummyLoc, Atom "function")
+      funcSi = SrcInfo funcLoc funcParsed funcLabel
       frame =
         mkFrame
           ("function " <> flattenName funcName <> "/" <> T.pack (show func.arity))
-          func.equations.sourceLoc
-          func.equations.parsed
+          funcLoc
+          funcParsed
       -- Dispatch tracking: every equation's pattern tests record, in
       -- two procedure-level locals, whether a test failed only because
       -- the value it inspected was still unbound. Falling off the end
@@ -1338,8 +1345,8 @@ compileFunctionDef func = do
       -- exempts the hot path: the prelude's arithmetic and comparison
       -- functions, and any single-equation helper, are all in this
       -- class.
-      tracksDispatch = any hasPatternTest func.equations.node
-  eqStmts <- traverse (compileEquation tracksDispatch params funcSi) func.equations.node
+      tracksDispatch = any (hasPatternTest . (.node)) func.equations
+  eqStmts <- traverse (compileEquation tracksDispatch params funcSi . (.node)) func.equations
   let fnLabel = flattenName funcName <> "/" <> T.pack (show func.arity)
       dispatchInit
         | tracksDispatch =

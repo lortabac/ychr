@@ -414,9 +414,6 @@ decomposeArg HnfState {counter, seen, guards} parentVar i term =
 desugarFunctionDef :: R.FunctionDef -> Writer [Diagnostic DesugarError] D.Function
 desugarFunctionDef fdef = do
   desugaredEqs <- traverse desugarResolvedEquation fdef.equations
-  let (loc, parsed) = case fdef.equations of
-        (AnnP _eq eqLoc eqParsed : _) -> (eqLoc, eqParsed)
-        [] -> (P.dummyLoc, Atom "function")
   pure
     D.Function
       { name = fdef.name,
@@ -425,13 +422,15 @@ desugarFunctionDef fdef = do
         requiring = fdef.requiring,
         refining = fdef.refining,
         lambdaArity = Nothing,
-        equations = AnnP desugaredEqs loc parsed
+        equations = desugaredEqs
       }
 
 desugarResolvedEquation ::
   AnnP R.FunctionEquation ->
-  Writer [Diagnostic DesugarError] D.Equation
-desugarResolvedEquation annEq = desugarEquation' annEq.node
+  Writer [Diagnostic DesugarError] (AnnP D.Equation)
+desugarResolvedEquation annEq = do
+  eq <- desugarEquation' annEq.node
+  pure (AnnP eq annEq.sourceLoc annEq.parsed)
 
 desugarEquation' :: R.FunctionEquation -> Writer [Diagnostic DesugarError] D.Equation
 desugarEquation' eq = do
@@ -773,14 +772,14 @@ liftExpr modName scope st0 expr = case expr of
               refining = Nothing,
               lambdaArity = Just (length paramsList),
               equations =
-                noAnnP
-                  [ D.Equation
+                [ noAnnP
+                    D.Equation
                       { params = allParams,
                         guards = [],
                         prelude = prelude,
                         rhs = rhsExpr
                       }
-                  ]
+                ]
             }
         st2 =
           st1'
@@ -957,13 +956,23 @@ funStmtBindings = Set.fromList . concatMap binds
 liftFunction :: LiftState -> D.Function -> (LiftState, D.Function)
 liftFunction st func =
   let modName = func.name.moduleName
-      eqsAnn = func.equations
       (st', eqs') =
         mapAccumL
-          (liftEquation modName)
+          (liftAnnEquation modName)
           st
-          eqsAnn.node
-   in (st', func {D.equations = eqsAnn {node = eqs'}})
+          func.equations
+   in (st', func {D.equations = eqs'})
+
+-- | Lift lambdas in one annotated equation, preserving the equation's
+-- own source location and parsed origin.
+liftAnnEquation ::
+  Text ->
+  LiftState ->
+  AnnP D.Equation ->
+  (LiftState, AnnP D.Equation)
+liftAnnEquation modName st (AnnP eq loc parsed) =
+  let (st', eq') = liftEquation modName st eq
+   in (st', AnnP eq' loc parsed)
 
 -- | Variables introduced by a single 'HeadArg'. Wildcards contribute
 -- nothing.

@@ -195,8 +195,11 @@
 
 % A function, `YCHR.Internal.Desugared.Function`: name, arity, declared
 % signatures (more than one means a class function), `requiring`
-% bounds, and the annotated equation block.
-:- chr_type fun_def ---> fun_def(any, int, list(fun_sig), list(bound_sig), ann(list(fun_eq))).
+% bounds, and the equations. Each equation carries its own annotation —
+% its origin id and source location — so a diagnostic about an equation
+% contributed by another module's `:- extend_function` can point at that
+% extension site rather than at the owning declaration.
+:- chr_type fun_def ---> fun_def(any, int, list(fun_sig), list(bound_sig), list(ann(fun_eq))).
 
 % A data constructor of an algebraic type,
 % `YCHR.Internal.Types.DataConstructor`.

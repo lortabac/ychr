@@ -489,8 +489,13 @@ handleLiveQuery mtypeChecker cp werror src = do
         then pure (QueryRecoverable "")
         else case prep.queryLambdas of
           (lam : _) ->
-            let lamEqs = lam.equations :: Parsed.AnnP [D.Equation]
-                Parsed.AnnP _ loc origin = lamEqs
+            let lamEqs = lam.equations :: [Parsed.AnnP D.Equation]
+                -- One location/origin for the lambda: its first
+                -- equation's annotation, which is the annotation the
+                -- whole block used to carry.
+                (loc, origin) = case lamEqs of
+                  (Parsed.AnnP _ l o : _) -> (l, o)
+                  [] -> (Parsed.dummyLoc, P.Atom "")
              in pure (QueryRecoverable (displayMsg (LambdasInLiveQuery loc origin)))
           [] -> do
             env <- ask

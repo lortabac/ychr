@@ -263,28 +263,29 @@ funs_arity_errors(Env, [F|Fs], Unit) ->
            funs_arity_errors(Env, Fs, Unit + fun_unit_count(F))).
 
 :- function fun_unit_count(fun_def) -> int.
-fun_unit_count(fun_def(_, _, Sigs, _, ann(_, _, _))) | length(Sigs) > 1 -> 0.
-fun_unit_count(fun_def(_, _, _, _, ann(_, _, Eqs))) -> length(Eqs).
+fun_unit_count(fun_def(_, _, Sigs, _, _)) | length(Sigs) > 1 -> 0.
+fun_unit_count(fun_def(_, _, _, _, Eqs)) -> length(Eqs).
 
 :- function fun_arity_errors(con_env, fun_def, int) -> list(error).
-fun_arity_errors(Env, fun_def(FName, _, Sigs, _, ann(A, Loc, Eqs)), _) | length(Sigs) > 1 ->
-    eqs_arity_errors(Env, FName, A, Loc, Eqs, no_unit).
-fun_arity_errors(Env, fun_def(FName, _, _, _, ann(A, Loc, Eqs)), Unit) ->
-    eqs_arity_errors(Env, FName, A, Loc, Eqs, unit(Unit)).
+fun_arity_errors(Env, fun_def(FName, _, Sigs, _, Eqs), _) | length(Sigs) > 1 ->
+    eqs_arity_errors(Env, FName, Eqs, no_unit).
+fun_arity_errors(Env, fun_def(FName, _, _, _, Eqs), Unit) ->
+    eqs_arity_errors(Env, FName, Eqs, unit(Unit)).
 
 % The one walk that mixes the two cases, and so is the one that carries
 % a `unit_id` rather than an `int`: one unit per equation of a plain
 % function, and no unit at all for every equation of a class function.
 % Both fall out of `bump_unit`, which leaves `no_unit` alone — hence no
 % step parameter to hold the counter still, which the old
-% sentinel-integer form needed.
-:- function eqs_arity_errors(con_env, any, int, loc, list(fun_eq), unit_id)
+% sentinel-integer form needed. Each equation carries its own
+% annotation, so the diagnostic context is built per equation.
+:- function eqs_arity_errors(con_env, any, list(ann(fun_eq)), unit_id)
        -> list(error).
-eqs_arity_errors(_, _, _, _, [], _) -> [].
-eqs_arity_errors(Env, FName, A, Loc, [Eq|Eqs], Unit) ->
+eqs_arity_errors(_, _, [], _) -> [].
+eqs_arity_errors(Env, FName, [ann(A, Loc, Eq)|Eqs], Unit) ->
     append(arity_diags(Unit, label_function(FName), origin_ann(A), Loc,
                        eq_arity(Env, Eq)),
-           eqs_arity_errors(Env, FName, A, Loc, Eqs, bump_unit(Unit))).
+           eqs_arity_errors(Env, FName, Eqs, bump_unit(Unit))).
 
 % Parameters are post-HNF head arguments and so contain no constructor
 % application. The prelude statements are not walked, and nothing else
