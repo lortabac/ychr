@@ -11,7 +11,7 @@
  * What the payloads *say* is asserted by test/playground/test_wasm.py,
  * which parses this output through the same expectation table the native
  * harness is checked against, so the two front ends stay in step: that
- * includes the four presets the page's dropdown offers, which have to
+ * includes the five presets the page's dropdown offers, which have to
  * compile from the copies `make playground-wasm` puts in the bundle.
  *
  * Usage: node smoke.cjs <program-file>
@@ -109,7 +109,13 @@ async function main() {
   step("query-after-failed-reload", "_ychr_pg_query", "leq(1, 1)");
   // Builds the type checker on first call — the slow step.
   step("check", "_ychr_pg_check");
-  for (const preset of ["bakery.chr", "leq.chr", "fib_memo.chr", "gcd.chr"]) {
+  for (const preset of [
+    "bakery.chr",
+    "leq.chr",
+    "fib_memo.chr",
+    "gcd.chr",
+    "shortest_path.chr",
+  ]) {
     step("preset-" + preset, "_ychr_pg_compile", readPreset(preset));
   }
 

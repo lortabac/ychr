@@ -250,7 +250,7 @@ bench-scheme-all: bench-scheme bench-scheme-chez
 # examples/. The page is served from $(PLAYGROUND_DIR) alone, so the examples
 # it offers have to be copied into the bundle; examples/ stays their source of
 # truth.
-PLAYGROUND_PRESETS = bakery.chr leq.chr fib_memo.chr gcd.chr
+PLAYGROUND_PRESETS = bakery.chr leq.chr fib_memo.chr gcd.chr shortest_path.chr
 
 # Fetch and activate the emscripten SDK, pinned to $(EMSDK_VERSION). Idempotent.
 playground-emsdk:

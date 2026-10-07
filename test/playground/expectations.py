@@ -27,7 +27,7 @@ BROKEN_SOURCE = "this is not a CHR program."
 #: The example programs the page's preset dropdown offers, by file name under
 #: ``examples/``, each with the reload summary its declarations produce. The
 #: page is served from ``playground/`` alone, so ``make playground-wasm``
-#: copies these four into ``playground/build/`` and the page fetches
+#: copies these five into ``playground/build/`` and the page fetches
 #: ``build/<name>``: both the copies and the compile are asserted (here and in
 #: ``test_wasm.py``), which is what keeps the copied files from drifting away
 #: from their source in ``examples/``.
@@ -36,6 +36,7 @@ PRESET_SUMMARIES = {
     "leq.chr": "Loaded 1 constraint: leq/2",
     "fib_memo.chr": "Loaded 2 constraints: fib/2 memo/2",
     "gcd.chr": "Loaded 1 constraint: gcd/1",
+    "shortest_path.chr": "Loaded 3 constraints: edge/3 path/4 shortest_path/4",
 }
 
 PRESETS = list(PRESET_SUMMARIES)
