@@ -1,0 +1,1 @@
+read_term_funref_test:unary("fun inc/1", R)

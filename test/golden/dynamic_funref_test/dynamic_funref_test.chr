@@ -1,0 +1,42 @@
+% A `fun name/arity` term built at run time — here with
+% `list_to_compound`, but any host call or unification that assembles the
+% shape does the same — is callable through `call/N`: the runtime
+% resolves the flat name at the `'$call'` dispatch site, with the same
+% rules the string reader uses. The term keeps its surface shape (it is
+% not rewritten to a compiled closure), so `R is call(F, …)` is what
+% exercises the resolution.
+%
+% `plus` is the user-facing case (a prelude operator); `inc_dyn` resolves
+% a declared non-operator function to its module-qualified identity.
+% `unknown` and `mismatch` pin the fall-through: a name that resolves to
+% nothing, and an application at an arity the reference does not record,
+% are both the ordinary `call: no matching closure` error.
+:- module(dynamic_funref_test, [plus/1, inc_dyn/1, unknown/1, mismatch/1]).
+
+:- use_module(library(prelude)).
+
+:- chr_constraint plus/1, inc_dyn/1, unknown/1, mismatch/1.
+
+:- function inc/1.
+
+inc(X) -> X + 1.
+
+plus(R) <=>
+    F is list_to_compound([quote('fun'),
+                           list_to_compound([quote('/'), quote('+'), 2])]),
+    R is call(F, 1, 1).
+
+inc_dyn(R) <=>
+    F is list_to_compound([quote('fun'),
+                           list_to_compound([quote('/'), quote(inc), 1])]),
+    R is call(F, 41).
+
+unknown(R) <=>
+    F is list_to_compound([quote('fun'),
+                           list_to_compound([quote('/'), quote(nope), 1])]),
+    R is call(F, 1).
+
+mismatch(R) <=>
+    F is list_to_compound([quote('fun'),
+                           list_to_compound([quote('/'), quote('+'), 2])]),
+    R is call(F, 1).

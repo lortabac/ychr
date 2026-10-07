@@ -334,7 +334,7 @@ exhaustive:
 | `src/YCHR/Internal/Desugar.hs:987` (`ruleModName`)        | non-empty head                             |
 | `src/YCHR/Internal/Desugar/Disjunction.hs:101,206`        | lifted rule is a simplification; non-empty head |
 | `src/YCHR/Internal/Backend/Scheme.hs:214` (`programInfoBindingName`) | non-empty library name          |
-| `src/YCHR/Internal/Meta.hs:187,199,201`                   | host-call arity / parse result (`write_term_to_string`, `read_term_from_string`) |
+| `src/YCHR/Internal/Meta.hs:191,203,210`                   | host-call arity / parse result (`write_term_to_string`, `read_term_from_string`) |
 
 The two `BodyOr` sites are phase invariants of the same family as
 the `LambdaExpr` case below: the constructor survives in the type and

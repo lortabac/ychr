@@ -21,6 +21,10 @@
 ;;;;   * `_` is a fresh logical variable per occurrence;
 ;;;;   * `true` / `false` (and the qualified `prelude:true` /
 ;;;;     `prelude:false`) are the native booleans, not atoms;
+;;;;   * `fun name/arity` is a first-class function reference: the name is
+;;;;     resolved against the session's callables table and the shape is
+;;;;     rewritten to the canonical `/`(flat-name, arity) closure, exactly
+;;;;     as the reference reader does (see the resolution section below);
 ;;;;   * a 0-arity name is an atom; a compound with arguments is a term;
 ;;;;   * a `module:name` is kept in its colon spelling, as the
 ;;;;     reference's `flattenName` does — never the mangled `module__name`
@@ -29,7 +33,7 @@
 ;;;;   * list syntax keeps the `.` / `[]` functors the parser builds,
 ;;;;     not the prelude's canonicalized `prelude__.` / `prelude__[]`.
 (library (ychr read)
-  (export parse-term)
+  (export parse-term resolve-funref-identity)
   (import (rnrs)
           (rnrs unicode)
           (ychr session)
@@ -545,6 +549,204 @@
                                 args)))))
         (else #f))))
 
+  ;;; ---------------------------------------------------------------------
+  ;;; Function-reference resolution
+  ;;;
+  ;;; `fun name/arity` is surface syntax for a first-class reference to a
+  ;;; declared function, so a string read at run time must produce the
+  ;;; same `/`(flat-name, arity) closure a compiled occurrence of that
+  ;;; spelling does. The reader has no renamer, so it resolves the name
+  ;;; against the session's callables table — the same table
+  ;;; `%apply-closure` dispatches through — and rewrites the parsed shape
+  ;;; before `node->value` builds the term. The identity is read back off
+  ;;; the matching callable key, never re-derived, so a resolved
+  ;;; reference always dispatches.
+  ;;;
+  ;;; Without a renamer the module of an unqualified name is not known,
+  ;;; so resolution is program-wide, exactly like the synthetic
+  ;;; `<query>` module the reference's renamer builds for top-level
+  ;;; goals: a bare name matches any module's function of that base and
+  ;;; arity, two matches are an ambiguity, and a `module:name` spelling
+  ;;; (accepted only by this reader) picks one exactly. The reader does
+  ;;; not implement `quote/1`, so `fun` resolves inside `quote(...)`
+  ;;; too.
+  ;;; ---------------------------------------------------------------------
+
+  ;; The parsed surface shape of `fun name/arity`: a one-argument `fun`
+  ;; compound whose argument is a two-argument `/` compound with an
+  ;; integer arity and a literal name. Anything else — `fun(X)`
+  ;; parameters, `fun X/1`, a negative arity — is not a reference and
+  ;; stays data.
+  (define (funref-shape? node)
+    (and (vector? node)
+         (eq? (vector-ref node 0) 'compound)
+         (string=? (vector-ref node 1) "fun")
+         (= (length (vector-ref node 2)) 1)
+         (let ((inner (car (vector-ref node 2))))
+           (and (vector? inner)
+                (eq? (vector-ref inner 0) 'compound)
+                (string=? (vector-ref inner 1) "/")
+                (= (length (vector-ref inner 2)) 2)
+                (let ((name-node (car (vector-ref inner 2)))
+                      (arity-node (cadr (vector-ref inner 2))))
+                  (and (eq? (vector-ref arity-node 0) 'int)
+                       (>= (vector-ref arity-node 1) 0)
+                       (funref-name name-node)))))))
+
+  ;; The surface name of a `fun` name node, as `(module . base)` — the
+  ;; same split `Types.Name` carries, module `#f` when unqualified.
+  ;; `#f` for anything that is not a literal atom.
+  (define (funref-name node)
+    (cond
+      ((and (vector? node) (eq? (vector-ref node 0) 'atom))
+       (cons #f (vector-ref node 1)))
+      ((and (vector? node)
+            (eq? (vector-ref node 0) 'compound)
+            (string=? (vector-ref node 1) ":")
+            (= (length (vector-ref node 2)) 2)
+            (eq? (vector-ref (car (vector-ref node 2)) 0) 'atom)
+            (eq? (vector-ref (cadr (vector-ref node 2)) 0) 'atom))
+       (cons (vector-ref (car (vector-ref node 2)) 1)
+             (vector-ref (cadr (vector-ref node 2)) 1)))
+      (else #f)))
+
+  ;; The first colon in `s`, or #f. The module part of an identity never
+  ;; contains a colon, and the base may, so only the first one splits.
+  (define (first-colon s)
+    (let loop ((i 0))
+      (cond ((>= i (string-length s)) #f)
+            ((char=? (string-ref s i) #\:) i)
+            (else (loop (+ i 1))))))
+
+  (define (funref-base s)
+    (let ((i (first-colon s)))
+      (if i (substring s (+ i 1) (string-length s)) s)))
+
+  ;; Does identity symbol `ident` name the function surface name `name`
+  ;; denotes? An unqualified name matches any module's function of that
+  ;; base; a qualified one matches the flattened identity exactly.
+  (define (funref-matches? name ident)
+    (let ((s (symbol->string ident)))
+      (if (car name)
+          (string=? s (flatten-name name))
+          (string=? (funref-base s) (cdr name)))))
+
+  ;; The surface spelling of a reference, for diagnostics.
+  (define (funref-label name arity)
+    (string-append (flatten-name name) "/" (number->string arity)))
+
+  ;; Join strings with ", " (`string-join` is not R6RS).
+  (define (comma-join strings)
+    (cond ((null? strings) "")
+          ((null? (cdr strings)) (car strings))
+          (else (string-append (car strings) ", " (comma-join (cdr strings))))))
+
+  ;; Order identities by their printed form. The callables table is a
+  ;; hashtable, so its key order is not specified; sorting makes the
+  ;; ambiguity list deterministic and matches the reference's ordered
+  ;; map output.
+  (define (sort-identities idents)
+    (define (insert ident sorted)
+      (cond ((null? sorted) (list ident))
+            ((string<? (symbol->string ident) (symbol->string (car sorted)))
+             (cons ident sorted))
+            (else (cons (car sorted) (insert ident (cdr sorted))))))
+    (let loop ((rest idents) (acc '()))
+      (if (null? rest)
+          acc
+          (loop (cdr rest) (insert (car rest) acc)))))
+
+  ;; Resolve `fun name/arity` against the session's callables: the
+  ;; flattened identity on a unique match, a failure message when no
+  ;; function matches or several do. Returns (values ok text), where a
+  ;; `#f` flag marks `text` as an error message.
+  (define (resolve-funref-name session name arity)
+    (let loop ((keys (vector->list (hashtable-keys (session-callables session))))
+               (matches '()))
+      (if (null? keys)
+          (cond
+            ((null? matches)
+             (values
+              #f
+              (string-append
+               "read_term_from_string: unknown function '"
+               (funref-label name arity)
+               "'")))
+            ((null? (cdr matches))
+             (values #t (symbol->string (car matches))))
+            (else
+             (values
+              #f
+              (string-append
+               "read_term_from_string: ambiguous function reference '"
+               (funref-label name arity)
+               "' (could be: "
+               (comma-join
+                (map (lambda (ident)
+                       (string-append (symbol->string ident) "/"
+                                      (number->string arity)))
+                     (sort-identities matches)))
+               ")"))))
+          (let* ((key (car keys))
+                 (functor (car key))
+                 (identity (cadr key))
+                 (key-arity (caddr key)))
+            (loop (cdr keys)
+                  (if (and (eq? functor '/)
+                           (= key-arity arity)
+                           (funref-matches? name identity))
+                      (cons identity matches)
+                      matches))))))
+
+  ;; The `(module . base)` split of a flat name atom: `foo` is
+  ;; unqualified, `module:foo` is qualified at the first colon. Used for
+  ;; a dynamically built `fun name/arity` term, and for the flat
+  ;; `module:name` identities the callables table is keyed on.
+  (define (flat-name->name ident)
+    (let* ((s (symbol->string ident))
+           (i (first-colon s)))
+      (if i
+          (cons (substring s 0 i) (substring s (+ i 1) (string-length s)))
+          (cons #f s))))
+
+  ;; Resolve a flat surface name atom (`foo` or `module:foo`) and arity to
+  ;; the callables identity, or #f. Exported for the runtime's dynamic
+  ;; `fun` dispatch: a term built at run time carries a flat atom rather
+  ;; than a parsed name node, but resolves through the same table and
+  ;; matching rules.
+  (define (resolve-funref-identity session ident arity)
+    (let-values (((ok text) (resolve-funref-name session (flat-name->name ident) arity)))
+      (if ok text #f)))
+
+  ;; Rewrite every well-formed `fun name/arity` in the parsed node tree
+  ;; to the canonical `/`(flat-name, arity) shape, recursing into
+  ;; compound arguments. Returns (values #t node) on success and
+  ;; (values #f message) when a name does not resolve.
+  (define (resolve-funrefs session node)
+    (cond
+      ((funref-shape? node)
+       (let* ((inner (car (vector-ref node 2)))
+              (name-node (car (vector-ref inner 2)))
+              (arity-node (cadr (vector-ref inner 2)))
+              (name (funref-name name-node))
+              (arity (vector-ref arity-node 1)))
+         (let-values (((ok flat) (resolve-funref-name session name arity)))
+           (if ok
+               (values
+                #t
+                (vector 'compound "/"
+                        (list (vector 'atom flat) arity-node)))
+               (values #f flat)))))
+      ((and (vector? node) (eq? (vector-ref node 0) 'compound))
+       (let loop ((rest (vector-ref node 2)) (acc '()))
+         (if (null? rest)
+             (values #t (vector 'compound (vector-ref node 1) (reverse acc)))
+             (let-values (((ok arg) (resolve-funrefs session (car rest))))
+               (if ok
+                   (loop (cdr rest) (cons arg acc))
+                   (values #f arg))))))
+      (else (values #t node))))
+
   ;;; Read a single term from `text` in `session`.
   ;;;
   ;;; The operator table is the session's (`session-op-table`), so a
@@ -565,7 +767,10 @@
               ((< (cdr t) n)
                (values #f "read_term_from_string: unexpected input after term"))
               (else
-               (values #t (node->value session
-                                       (make-hashtable string-hash string=?)
-                                       (car t)))))))))
+               (let-values (((ok node) (resolve-funrefs session (car t))))
+                 (if ok
+                     (values #t (node->value session
+                                             (make-hashtable string-hash string=?)
+                                             node))
+                     (values #f node)))))))))
 )

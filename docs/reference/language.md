@@ -706,7 +706,10 @@ make_adder(N) -> fun(X) -> X + N end.
 ```
 
 `fun name/arity` (`fun member/2`) makes a named function a first-class
-value the same way.
+value the same way. A string read with `read_term_from_string/1` accepts
+the same spelling and yields the same value, and additionally accepts a
+qualified `module:name` to disambiguate (see
+[Scheme backend portability](#scheme-backend-portability)).
 
 ### `call` and `'$call'`
 
@@ -733,6 +736,22 @@ limit is a property of the surface language, aligned with the `call/N`
 family above: that family is the supported way to apply a callable, and
 every arity it covers is reachable through it. Prefer `call/N` and
 reserve `'$call'` for the layer below the typed wrapper.
+
+`'$call'` also accepts the surface shape `fun name/arity` assembled at
+run time — by `list_to_compound`, a host call, or unification — not only
+the compiled reference a source `fun` produces. The name is resolved
+against the program's functions at the call, with the same matching
+rules as `read_term_from_string/1`, so
+
+```prolog
+F is list_to_compound([quote('fun'),
+                       list_to_compound([quote('/'), quote('+'), 2])]),
+R is call(F, 1, 1).                        % R = 2
+```
+
+A name that resolves to no function, or to several functions at that
+arity, is not a callable and reports the ordinary `call: no matching
+closure`.
 
 ## Host calls
 
@@ -769,8 +788,20 @@ the reader consults it. A session created without a compiled program
 (the runtime's hand-built sessions) gets the built-in table only, the
 same `builtinOps` the interpreter gives a hand-built session. An
 operator that is neither built-in nor declared by a loaded module is a
-syntax error on either backend. On
-both backends `_` becomes a fresh logical variable and a repeated
+syntax error on either backend.
+`fun name/arity` in a read string is a first-class function reference,
+exactly as the source spelling is: the reader resolves the name against
+the program's functions and yields the same closure value a compiled
+`fun name/arity` does, so `call/N` can apply it. An unqualified name
+matches any loaded module's function of that base and arity — the view a
+top-level goal has; a qualified `module:name` — which the string reader
+accepts but a source `fun` does not — picks one exactly and is also how
+to disambiguate. An unknown name, or one that two modules declare at the
+same arity, raises a runtime error. A `fun` term that is not a reference
+spelling — `fun X/1`, or a lambda's parameter list — stays an ordinary
+term. The reader does not implement `quote/1`, so `fun` resolves inside
+a `quote(...)` too. Both backends do this.
+On both backends `_` becomes a fresh logical variable and a repeated
 variable name is one shared variable, and a parse failure raises a
 runtime error. Both binding printers keep their own fixed table
 (the built-in operators plus the arithmetic and comparison ones), so a

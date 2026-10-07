@@ -1,0 +1,1 @@
+read_term_funref_test:unary("fun nonexistent/1", R)

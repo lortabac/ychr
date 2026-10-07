@@ -46,6 +46,22 @@ REPL_TESTS = [
         'T is read_term_from_string("foo(X, Y)"), [X, Y] is term_variables(T), X = 1, Y = 2.',
         "T = foo(1, 2),\nX = 1,\nY = 2.\n",
     ),
+    # A string spelling `fun name/arity` reads as a first-class function
+    # reference, so the prelude's `call/N` can apply it. The binding
+    # printer renders the closure in its flat form, as it does for a
+    # source `fun '+'/2`.
+    (
+        'F is read_term_from_string("fun \'+\'/2"), R is call(F, 1, 1).',
+        "F = 'prelude:+' / 2,\nR = 2.\n",
+    ),
+    # Any `fun name/arity` term built at run time is callable too: the
+    # `'$call'` dispatch site resolves the flat name, so the term keeps
+    # its surface shape while `call/N` applies it.
+    (
+        "F is list_to_compound([quote('fun'), "
+        "list_to_compound([quote('/'), quote('+'), 2])]), R is call(F, 1, 1).",
+        "F = fun '+' / 2,\nR = 2.\n",
+    ),
     ("R is member(1, []).", "R = false.\n"),
     ("R is member(1, [1]).", "R = true.\n"),
     ("R is member(1, [1, 2]).", "R = true.\n"),
