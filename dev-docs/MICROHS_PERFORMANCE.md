@@ -426,10 +426,11 @@ The `unix_x86` target that already exists in `mhs.conf`
 ## 9. Reproducing
 
 ```sh
-# Build the MicroHs binary: the resources are decoded by a separate build
-# step, so `make resources` (or `make mhs-build`, which chains the two)
-# has to run before `mcabal build`. No YCHR_LIB_DIR is involved: the
-# resources are baked in.
+# Install the pinned MicroHs toolchain and package set, then build: the
+# resources are decoded by a separate build step, so `make resources` (or
+# `make mhs-build`, which chains the two) has to run before `mcabal
+# build`. No YCHR_LIB_DIR is involved: the resources are baked in.
+make mhs-install
 make resources
 mcabal build
 

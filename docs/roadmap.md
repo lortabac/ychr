@@ -145,8 +145,10 @@ page with a program editor and a REPL. See the
 
 - [ ] MicroHs compatibility. `mcabal build` builds the library and the
       `ychr` CLI, and the binary's commands run against resources
-      decoded at build time by `make resources`; the divergences that
-      remain are tracked in
+      decoded at build time by `make resources`; CI builds the same
+      target on every push and pull request (the `microhs` job), from
+      the pinned environment `make mhs-install` provides, without
+      running any tests. The divergences that remain are tracked in
       [dev-docs/MICROHS_GAPS.md](../dev-docs/MICROHS_GAPS.md), and the
       performance work in
       [dev-docs/MICROHS_PERFORMANCE.md](../dev-docs/MICROHS_PERFORMANCE.md).

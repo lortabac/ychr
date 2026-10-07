@@ -1078,6 +1078,18 @@ release. The CI build matrix gains 9.14.1 while the test job stays on
 parsed `Declaration` now has no partial fields (see above), so no
 version-gated suppression is needed to keep the build warning-free.
 
+CI also gains a MicroHs job, the second consumer of the modules
+`make resources` generates. It runs `make mhs-install` — the new target
+that installs a pinned MicroHs toolchain and package set, so a
+developer's build and CI's use the same compiler and versions instead of
+each using whatever its `~/.mcabal` happens to hold — and then
+`make mhs-build`. The pins are the MicroHs revision and the two git
+package commits in `tools/mhs-install.sh` and the Hackage versions in
+`tools/mhs-packages.txt`. The job runs no tests, because the MicroHs
+package set has no `tasty`/`hedgehog`; the gate is that the build
+produces `dist-mcabal/bin/mhs/ychr`, and a dry build is not possible
+(`mcabal`'s `-fno-code` handling silently produces no executable).
+
 ## 0.1.0.0 -- 2026-08-02
 
 First release. See the
