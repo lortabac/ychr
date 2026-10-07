@@ -128,8 +128,8 @@ jobs:
       # runs it on the real libraries/ and typechecker/ sources, and
       # parses and typechecks the result with GHC — so a broken emitter
       # fails here rather than in a later MicroHs build. The MicroHs
-      # build itself, which is the only other consumer of the output, is
-      # not part of CI.
+      # build itself, which is the only other consumer of the output,
+      # runs in the 'microhs' job below, without tests.
       - name: make resources
         run: make resources
 
@@ -141,3 +141,76 @@ jobs:
 
       - name: make bench
         run: make bench
+
+  # Compile-only check under MicroHs, the second consumer of the resources
+  # `make resources` generates and the only check that the tree still
+  # builds under a compiler other than GHC. No tests run here: the MicroHs
+  # package set has no tasty/hedgehog, so the test suite, the benchmark and
+  # the stlc example are GHC-only (dev-docs/MICROHS_GAPS.md records that
+  # and the divergences that remain); the gate is that the build produces
+  # the executable.
+  #
+  # This is a normal build, not a dry one. MicroHs does have a no-code
+  # mode — 'mhs -fno-code' prints "No code generated" — but it cannot
+  # stand in for a package build: mcabal builds a library with '-P', which
+  # mhs checks before -fno-code, so the flag is ignored there; on an
+  # executable it *is* honoured and mhs then generates nothing, while
+  # mcabal still exits 0 because it never checks. mcabal's only other dry
+  # flag, '--dry-run', prints the commands without building anything.
+  #
+  # The environment is not the job's own: `make mhs-install` builds the
+  # same pinned one a developer gets, from tools/mhs-install.sh and
+  # tools/mhs-packages.txt, and the steps below only add a cache for it.
+  microhs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # GHC is here only for the resources half of `make mhs-build`:
+      # ychr-codegen decodes libraries/*.chr and typechecker/*.chr into the
+      # literal modules under generated/ that the MicroHs executable
+      # compiles (dev-docs/MICROHS_PERFORMANCE.md, option B).
+      - uses: haskell-actions/setup@v2
+        id: setup-haskell
+        with:
+          ghc-version: "9.12.2"
+          cabal-version: "latest"
+
+      - name: Cache cabal store
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.setup-haskell.outputs.cabal-store }}
+            dist-newstyle
+          key: ${{ runner.os }}-microhs-ghc-9.12.2-${{ hashFiles('ychr.cabal') }}
+          restore-keys: |
+            ${{ runner.os }}-microhs-ghc-9.12.2-
+
+      # Keyed on the two files that carry the pins, so bumping one starts
+      # from a clean package set. No restore-keys: the compiled packages
+      # are tied to the compiler that built them. A stale cache would not
+      # be trusted anyway — `make mhs-install` installs whenever its own
+      # stamp no longer matches the pins.
+      - name: Cache MicroHs
+        uses: actions/cache@v4
+        with:
+          path: ~/.mcabal
+          key: ${{ runner.os }}-mcabal-${{ hashFiles('tools/mhs-install.sh', 'tools/mhs-packages.txt') }}
+
+      # The pinned toolchain and package set, from the same command the
+      # "MicroHs environment" section of the Makefile documents.
+      - name: make mhs-install
+        run: |
+          make mhs-install
+          echo "$HOME/.mcabal/bin" >> "$GITHUB_PATH"
+
+      - run: cabal update
+
+      # The documented MicroHs build order — regenerate the resources with
+      # GHC, then compile with mcabal — and the end of the gate. The
+      # 'test -x' guards the false success described above: mcabal reports
+      # success even when mhs produced no binary.
+      - name: make mhs-build
+        run: |
+          make mhs-build
+          test -x dist-mcabal/bin/mhs/ychr

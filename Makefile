@@ -27,7 +27,7 @@ PYTEST_XDIST ?= $(shell $(PYTEST_PY) -c 'import xdist' 2>/dev/null && printf '%s
 .PHONY: bench bench-haskell bench-scheme bench-scheme-chez bench-scheme-all
 .PHONY: scheme-bench-compile
 .PHONY: playground-emsdk playground-wasm playground-serve
-.PHONY: resources resources-check mhs-build
+.PHONY: resources resources-check mhs-build mhs-install
 .PHONY: build install format clean coverage
 
 # ---------------------------------------------------------------------------
@@ -108,7 +108,34 @@ resources-check: build
 	$$(cabal list-bin ychr-codegen) --root . --out $(GENERATED_DIR) --check
 	cabal exec -- ghc -fno-code -i$(GENERATED_DIR) $(GENERATED_MODULES)
 
-# The documented MicroHs build order: regenerate, then compile.
+# ---------------------------------------------------------------------------
+# MicroHs environment (pinned)
+#
+# ychr's MicroHs build needs an mhs/mcabal at a known revision and the
+# packages ychr depends on, neither of which a MicroHs install ships.
+# `make mhs-install` provides both, from the pins in
+# tools/mhs-install.sh and the versions in tools/mhs-packages.txt; it is
+# what CI runs before `make mhs-build`, so a developer who runs it and CI
+# compile against the same environment. The script installs only while
+# what it provides is not already in place, so a machine that is up to
+# date runs it in no time.
+#
+# `make mhs-build` itself only compiles: nothing at build time reads the
+# lock file, mcabal only checks that each dependency is installed. The
+# package set is the subset of MicroHs's Makefile.packages that ychr
+# needs, in that file's order (dependency order).
+# https://github.com/augustss/MicroHs/blob/master/Makefile.packages
+# ---------------------------------------------------------------------------
+# The installation to provision. Override it, as a variable or from the
+# environment, to install somewhere else: `make mhs-install
+# MHS_HOME=/tmp/mhs`.
+MHS_HOME ?= $(HOME)/.mcabal
+
+mhs-install:
+	@MHS_HOME="$(MHS_HOME)" tools/mhs-install.sh
+
+# The documented MicroHs build order: regenerate, then compile. The
+# toolchain and package set come from `make mhs-install`.
 mhs-build: resources
 	$(MCABAL) build
 

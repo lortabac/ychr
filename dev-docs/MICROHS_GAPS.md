@@ -38,8 +38,14 @@ on `libraries/*.chr` and `typechecker/*.chr` decoded at build time by
 affects it. `mcabal build` does not build the test
 suite, the benchmark or the `stlc` example (they need
 `tasty`/`hedgehog`/`criterion`, which the MicroHs package set lacks, and
-the `examples` flag defaults off), so those remain GHC-only. Gaps 7, 8
-and 9 were found on the way to that point and are recorded below.
+the `examples` flag defaults off), so those remain GHC-only. CI compiles
+the MicroHs target on every push and pull request — the `microhs` job,
+which runs no tests — from the environment `make mhs-install` installs:
+MicroHs `f65d3c65`, the prettyprinter and optparse-applicative commits
+pinned in `tools/mhs-install.sh`, and the package versions in
+`tools/mhs-packages.txt`. Keep those pins in sync with this paragraph.
+Gaps 7, 8 and 9 were found on the way to that point and are recorded
+below.
 
 | # | Gap | State |
 |---|---|---|

@@ -167,8 +167,8 @@ tests =
       testGroup
         "hoisted bindings"
         [ -- A dangling reference is the one way 'hoist' could emit a
-          -- module that does not compile, and the MicroHs build that
-          -- would otherwise catch it is not part of CI.
+          -- module that does not compile. The 'microhs' CI job compiles
+          -- the generated modules, but this catches it without one.
           testCase "every generated_ reference has a definition" $ do
             mapM_ checkDangling emittedModules,
           -- The budget is what keeps a binding small enough for MicroHs

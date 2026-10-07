@@ -230,6 +230,9 @@ The GHC executable keeps its splice: it never reads a file at run time.
 
 Two consequences of that path, if you take it: the generated modules are
 an input to the build, so the MicroHs executable is built as
-`make resources && mcabal build` (or `make mhs-build`), and the binary no
-longer honours `$YCHR_LIB_DIR` — its resources are the ones it was built
-with. An embedder that keeps the on-disk loader keeps the variable.
+`make mhs-install && make mhs-build` — the first installs the pinned
+MicroHs toolchain and package set, so a local build and the CI build use
+the same one, and the second chains the resources step and the compile —
+and the binary no longer honours `$YCHR_LIB_DIR`: its resources are the
+ones it was built with. An embedder that keeps the on-disk loader keeps
+the variable.
