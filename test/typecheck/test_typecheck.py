@@ -139,6 +139,102 @@ def test_dead_equation_attributed_to_extension(ychr_bin, project_root):
     assert "a_owner.chr" not in output, output
 
 
+def test_compile_error_attributed_to_extension(ychr_bin, tmp_path):
+    """A *compile*-phase diagnostic from an `:- extend_function` equation
+    is anchored at the extension site too, not only the type checker's.
+
+    The extension equation `classify(X) -> Y` has an unbound `Y`, which
+    the compiler reports as YCHR-40002. Before per-equation annotations
+    were threaded into `Compile`, that error borrowed the owning
+    declaration's source info and pointed at `a_owner.chr`'s
+    `classify(0) -> 100`.
+    """
+    import subprocess
+
+    owner = tmp_path / "a_owner.chr"
+    owner.write_text(
+        ":- module(owner, [classify/1]).\n"
+        ":- open_function (classify(int) -> int).\n"
+        "\n"
+        "classify(0) -> 100.\n"
+    )
+    extender = tmp_path / "b_ext.chr"
+    extender.write_text(
+        ":- module(ext, [go/1]).\n"
+        ":- use_module(owner, [classify/1]).\n"
+        "\n"
+        ":- chr_constraint go/1.\n"
+        "\n"
+        ":- extend_function classify(X) -> Y.\n"
+        "\n"
+        "go(R) <=> R is owner:classify(0).\n"
+    )
+
+    result = subprocess.run(
+        [ychr_bin, "check", str(owner), str(extender)],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "YCHR-40002" in output, output
+
+    location_lines = [line for line in output.splitlines() if "YCHR-40002" in line]
+    assert len(location_lines) == 1, output
+    assert "b_ext.chr" in location_lines[0], output
+
+    # The echoed equation is the extension's, and the owner is not named.
+    assert "classify(X) -> Y" in output, output
+    assert "a_owner.chr" not in output, output
+
+
+def test_duplicate_module_name_anchored_at_second_file(ychr_bin, tmp_path):
+    """A header-less module's duplicate is reported against its real file.
+
+    Header-less inputs are named `<basename>` and carry `dummyLoc`, so
+    the diagnostic used to read `<generated>:1:1` with no file names.
+    The input paths are now threaded to the duplicate check, which
+    anchors at the second input and lists both. Header-less files with
+    distinct basenames still combine.
+    """
+    import subprocess
+
+    first = tmp_path / "d1"
+    second = tmp_path / "d2"
+    first.mkdir()
+    second.mkdir()
+    (first / "m.chr").write_text(":- function f/1.\nf(1) -> 1.\n")
+    (second / "m.chr").write_text(":- function f/1.\nf(2) -> 2.\n")
+
+    result = subprocess.run(
+        [ychr_bin, "check", str(first / "m.chr"), str(second / "m.chr")],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "YCHR-10004" in output, output
+
+    location_lines = [line for line in output.splitlines() if "YCHR-10004" in line]
+    assert len(location_lines) == 1, output
+    assert "d2" in location_lines[0] and "m.chr" in location_lines[0], output
+    assert "generated" not in location_lines[0], output
+    assert str(first / "m.chr") in output, output
+    assert str(second / "m.chr") in output, output
+
+    # Control: header-less files with distinct basenames still combine.
+    (second / "n.chr").write_text(":- function g/1.\ng(1) -> 1.\n")
+    combined = subprocess.run(
+        [ychr_bin, "check", str(first / "m.chr"), str(second / "n.chr")],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+    assert combined.returncode == 0, combined.stdout + combined.stderr
+
+
 def test_werror_at_run(ychr_bin, project_root):
     """`--Werror` also gates `ychr run`, not just `ychr check`."""
     import subprocess

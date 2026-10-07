@@ -1140,10 +1140,12 @@ resolveFunctions ::
   [CollectedModule] ->
   ([R.FunctionDef], [Diagnostic ResolveError])
 resolveFunctions visMap mods =
-  let -- Collect all function declarations with their declaring module.
+  let -- Collect all function declarations with their declaring module,
+      -- tagged with the module's input position so 'build' can tell two
+      -- same-named modules apart.
       allDecls =
-        [ (QualifiedName m.name fd.name, fd.arity, fd, m)
-        | m <- mods,
+        [ (QualifiedName m.name fd.name, fd.arity, fd, im, m)
+        | (im, m) <- zip [0 :: Int ..] mods,
           P.Ann d _ <- m.decls,
           P.FunctionDecl fd <- [d]
         ]
@@ -1152,24 +1154,29 @@ resolveFunctions visMap mods =
         Map.toList $
           Map.fromListWith
             (++)
-            [ ((qn, ar), [(fd, m)])
-            | (qn, ar, fd, m) <- allDecls
+            [ ((qn, ar), [(fd, im, m)])
+            | (qn, ar, fd, im, m) <- allDecls
             ]
       build ((qn, ar), decls) =
-        let declPairs = decls
+        let declPairs = [(fd, m) | (fd, _, m) <- decls]
             -- 'gatherEquations' selects equations by (name, arity)
-            -- from the declaring module. Module names are unique
-            -- across the whole input — two user modules with the same
-            -- name are rejected by
-            -- 'YCHR.Internal.Compile.Pipeline.finalizeCompilation' —
-            -- so every declaration in the group comes from the same
-            -- module and its equations are gathered exactly once. (A
-            -- multi-signature @:- class@ contributes one declaration
-            -- per signature; gathering per declaration would repeat
-            -- every equation N times.)
-            (eqs, eqErrs) = case decls of
-              (fd, m) : _ -> gatherEquations visMap mods m fd
-              [] -> ([], [])
+            -- from the declaring module. Module names are unique across
+            -- a program that went through
+            -- 'YCHR.Internal.Compile.Pipeline.finalizeCompilation',
+            -- which rejects duplicates, so a group normally comes from
+            -- one module and gathering once per declaration would
+            -- suffice. Deduplicating by input position anyway keeps
+            -- 'resolveProgram' safe for a direct caller that bypasses
+            -- that check: the two same-named modules' equations are
+            -- then both gathered rather than one module's being
+            -- silently dropped. (A multi-signature @:- class@
+            -- contributes one declaration per signature; gathering per
+            -- distinct module, not per declaration, is what stops
+            -- every equation being repeated N times.)
+            declModules =
+              Map.elems (Map.fromList [(im, (fd, m)) | (fd, im, m) <- decls])
+            (eqss, eqErrss) =
+              unzip [gatherEquations visMap mods m fd | (fd, m) <- declModules]
             def =
               R.FunctionDef
                 { name = qn,
@@ -1187,9 +1194,9 @@ resolveFunctions visMap mods =
                   refining =
                     listToMaybe
                       [t | (fd, _) <- declPairs, Just t <- [fd.refining]],
-                  equations = eqs
+                  equations = concat eqss
                 }
-         in (def, eqErrs)
+         in (def, concat eqErrss)
       (defs, defErrss) = unzip (map build grouped)
    in (defs, concat defErrss)
 

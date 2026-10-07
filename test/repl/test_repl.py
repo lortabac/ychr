@@ -212,6 +212,8 @@ REPL_TESTS = [
     # A `%` inside a string literal is data, not a comment: only the text
     # after the closing quote is dropped.
     ('X = "% done". % trailing comment', 'X = "% done".\n'),
+    # Likewise inside a quoted atom, including one with an escaped quote.
+    ("X = '% done'. % trailing comment", "X = '% done'.\n"),
 ]
 
 

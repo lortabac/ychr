@@ -1318,14 +1318,11 @@ compileFunctionDef func = do
               <> "/"
               <> T.pack (show func.arity)
           )
-      -- The function-level frame and source info take the first
-      -- equation's annotation: before equations carried per-equation
-      -- annotations, the whole block's annotation was the first
-      -- equation's, so the emitted frame is unchanged.
+      -- The function-entry frame takes the first equation's annotation:
+      -- it is pushed before dispatch, so it cannot name one equation.
       (funcLoc, funcParsed) = case func.equations of
         (eq : _) -> (eq.sourceLoc, eq.parsed)
         [] -> (P.dummyLoc, Atom "function")
-      funcSi = SrcInfo funcLoc funcParsed funcLabel
       frame =
         mkFrame
           ("function " <> flattenName funcName <> "/" <> T.pack (show func.arity))
@@ -1346,7 +1343,15 @@ compileFunctionDef func = do
       -- functions, and any single-equation helper, are all in this
       -- class.
       tracksDispatch = any (hasPatternTest . (.node)) func.equations
-  eqStmts <- traverse (compileEquation tracksDispatch params funcSi . (.node)) func.equations
+      -- Every equation carries its own annotation, so a compile-phase
+      -- diagnostic raised while compiling its body — an unbound
+      -- variable, say — points at the equation that wrote it, including
+      -- an `:- extend_function` equation from another module.
+      eqSi (AnnP _ eqLoc eqParsed) = SrcInfo eqLoc eqParsed funcLabel
+  eqStmts <-
+    traverse
+      (\eq -> compileEquation tracksDispatch params (eqSi eq) eq.node)
+      func.equations
   let fnLabel = flattenName funcName <> "/" <> T.pack (show func.arity)
       dispatchInit
         | tracksDispatch =

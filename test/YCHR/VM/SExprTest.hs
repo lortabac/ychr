@@ -108,6 +108,20 @@ roundtripTests =
                 (StackFrame "rule reflexivity" (SourceLoc "mymodule.chr" 4 15) "leq(X, X)")
             ]
         ),
+    -- The quoted fields are escaped on the way out and unescaped on the
+    -- way back in, so a quote or backslash inside a label, file or
+    -- source fragment survives the round-trip.
+    testCase "push-frame with quotes and backslashes" $
+      roundtrip
+        ( mkProg
+            [ PushFrame
+                ( StackFrame
+                    "rule \"q\""
+                    (SourceLoc "a\\b.chr" 1 2)
+                    "f(\"x\", \\)"
+                )
+            ]
+        ),
     testCase "all expression types" $
       roundtrip
         ( mkProg

@@ -329,7 +329,7 @@ compileModules (StdLib stdlib) includeStdlib inputs = do
     errs -> Left (ParseValidationErrors errs)
   let trailingLoc =
         Map.fromList [(h.modName, h.trailingLoc) | (_, h) <- userHeaders]
-  finalizeCompilation libraryMods opExports trailingLoc parsed
+  finalizeCompilation libraryMods opExports trailingLoc (map fst inputs) parsed
 
 -- | Compile already-parsed modules. This is the entry point used by
 -- "YCHR.DSL" callers that build 'Module' values in Haskell rather than
@@ -365,7 +365,7 @@ compileParsedModules (StdLib stdlib) includeStdlib parsed = do
       userOpExports = Map.fromList [(m.name, extractOpDecls m) | m <- parsed]
       -- Left-biased for the same reason as in 'compileModules'.
       opExports = userOpExports `Map.union` stdlibOpExports
-  finalizeCompilation libraryMods opExports Map.empty parsed
+  finalizeCompilation libraryMods opExports Map.empty [] parsed
 
 -- | Shared post-parse, post-library-resolution pipeline: rename, resolve,
 -- desugar, lambda-lift, compile, and assemble the resulting
@@ -379,10 +379,14 @@ finalizeCompilation ::
   -- | Trailing-location map for the renamer's
   -- "use_module after non-import" check. Empty for DSL-built input.
   Map Text (Maybe SourceLoc) ->
+  -- | The input file each user module came from, positionally aligned
+  -- with the user modules. Empty for DSL-built input, which has no
+  -- files of its own.
+  [FilePath] ->
   -- | User modules (parsed).
   [Module] ->
   Either Error (CompiledProgram, [Warning])
-finalizeCompilation libraryMods opExports trailingLocMap parsed = do
+finalizeCompilation libraryMods opExports trailingLocMap inputPaths parsed = do
   -- A module name is declared in exactly one input. Two user modules that
   -- carry the same name are rejected here rather than merged: the
   -- downstream passes key declarations by qualified name, so letting both
@@ -392,24 +396,33 @@ finalizeCompilation libraryMods opExports trailingLocMap parsed = do
   --
   -- The diagnostic is anchored at the second declaration, so the header
   -- points at the offending file rather than the first one; the message
-  -- lists every path that declares the name. A header-less module carries
-  -- 'dummyLoc', whose file is the @\<generated\>@ sentinel rather than a
-  -- real path, so it is left out of the list — the message falls back to
-  -- not naming any file rather than repeating a placeholder.
+  -- lists every file that declares the name. A header-less module carries
+  -- 'dummyLoc', so its real path comes from the positional 'inputPaths'
+  -- instead — the file is what makes the header useful, and the module
+  -- name of such a module is only its basename.
   let modulesByName =
-        Map.fromListWith (flip (++)) [(m.name, [m]) | m <- parsed]
+        Map.fromListWith
+          (flip (++))
+          [ (m.name, [(i, m)])
+          | (i, m) <- zip [0 :: Int ..] parsed
+          ]
+      fileOf i m = case drop i inputPaths of
+        (p : _) -> Just p
+        []
+          | m.nameLoc /= dummyLoc -> Just m.nameLoc.file
+          | otherwise -> Nothing
       duplicateModuleDiags =
         [ Diagnostic
             Nothing
             ( AnnP
                 ( DuplicateModuleName
                     n
-                    [m.nameLoc.file | m <- ms, m.nameLoc /= dummyLoc]
+                    [p | (i, m) <- ms, Just p <- [fileOf i m]]
                 )
-                second.nameLoc
+                (maybe second.nameLoc (\p -> SourceLoc p 1 1) (fileOf secondIdx second))
                 (Atom n)
             )
-        | (n, ms@(_ : second : _)) <- Map.toList modulesByName
+        | (n, ms@((_, _) : (secondIdx, second) : _)) <- Map.toList modulesByName
         ]
   case duplicateModuleDiags of
     [] -> pure ()
