@@ -47,7 +47,15 @@ import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning, checkExhaustiveness)
 import YCHR.Internal.Interpreter.Slots (SlotProgram, lowerProgram)
 import YCHR.Internal.PExpr (PExpr (Atom))
-import YCHR.Internal.Parsed (AnnP (..), Import (..), Module (..), OpDecl, SourceLoc (..), dummyLoc, noAnnP)
+import YCHR.Internal.Parsed
+  ( AnnP (..),
+    Import (..),
+    Module (..),
+    OpDecl,
+    SourceLoc (..),
+    dummyLoc,
+    noAnnP,
+  )
 import YCHR.Internal.Parser
   ( ModuleHeader (..),
     OpTable,
