@@ -205,6 +205,13 @@ REPL_TESTS = [
         ":trace",
         ":trace GOAL  -- run GOAL with refined-operational-semantics tracing\n",
     ),
+    # A `%` comment at the end of a line is stripped before the query is
+    # parsed, matching the file grammar (docs/reference/language.md): the
+    # period still terminates the goal, so the query runs.
+    ("X = 1. % trailing comment", "X = 1.\n"),
+    # A `%` inside a string literal is data, not a comment: only the text
+    # after the closing quote is dropped.
+    ('X = "% done". % trailing comment', 'X = "% done".\n'),
 ]
 
 
@@ -521,3 +528,83 @@ def test_repl_time_failure(ychr_bin):
     assert prep.returncode == 0, f"repl failed:\n{prep.stdout}\n{prep.stderr}"
     assert "YCHR-30001" in prep.stdout, prep.stdout
     assert "Time:" not in prep.stdout, prep.stdout
+
+
+def test_compile_vm_creates_output_dirs(ychr_bin, tmp_path):
+    """`compile -t vm` creates the output directory before writing,
+    mirroring the Scheme target's `createDirectoryIfMissing`. Two
+    layouts exercise the call: a missing `-d DIR` whose parents do not
+    exist either, and a `-n` base name that itself contains a
+    subdirectory. Without it, `writeFile` raises an uncaught
+    `IOException` instead of compiling."""
+    program = tmp_path / "w.chr"
+    program.write_text(
+        ":- module(w, [go/1]).\n"
+        ":- chr_constraint go/1.\n"
+        "go(X) <=> X = 1.\n"
+    )
+
+    # A missing -d directory, including its parents. The default base
+    # name is `program`.
+    out_dir = tmp_path / "nested" / "deeper"
+    result = subprocess.run(
+        [ychr_bin, "compile", "-t", "vm", "-d", str(out_dir), str(program)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"compile failed:\n{result.stdout}\n{result.stderr}"
+    assert (out_dir / "program.vm").exists()
+
+    # A -n base name carrying its own subdirectory, resolved under -d.
+    named_dir = tmp_path / "named"
+    result = subprocess.run(
+        [ychr_bin, "compile", "-t", "vm", "-d", str(named_dir), "-n", "sub/w", str(program)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"compile failed:\n{result.stdout}\n{result.stderr}"
+    assert (named_dir / "sub" / "w.vm").exists()
+
+
+def test_repl_comment_only_line(ychr_bin):
+    """A line holding only a `%` comment vanishes: it becomes an empty
+    line, which the loop already skips, so the following goal runs. The
+    `%` is otherwise a parse error, since the REPL only sees raw lines."""
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet"],
+        input="% only a comment\nX = 1.\n",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    assert result.stdout == "X = 1.\n"
+
+
+def test_repl_crlf_input(ychr_bin):
+    """CRLF line endings are tolerated: the trailing `\\r` is trimmed
+    before the line is dispatched, so `:quit\\r` exits. Previously the
+    `\\r` made the command fall through to the query parser, which
+    failed on `:quit\\r` after the preceding goal had already run."""
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet"],
+        input="X = 1.\r\n:quit\r\n",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    assert result.stdout == "X = 1.\n"
+
+
+def test_repl_live_session_comment_and_crlf(ychr_bin):
+    """The live session normalizes its own input with the same helper:
+    a trailing comment and a CRLF ending are stripped there too, and
+    `:end\\r` ends the session cleanly instead of being parsed as a
+    goal."""
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet"],
+        input=":begin\nX = 1. % trailing comment\r\n:end\r\n",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    assert result.stdout == "X = 1.\n"
