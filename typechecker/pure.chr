@@ -98,15 +98,20 @@ type_ref_errors(_, _, N, Args, All) | has_type_def(N, length(Args), All) -> [].
 type_ref_errors(Td, Dc, N, Args, _) | is_base_type(N), length(Args) > 0 ->
     [arity_ref_error(Td, Dc, N, length(Args), 0)].
 type_ref_errors(_, _, N, _, _) | is_base_type(N) -> [].
-% The renamer resolves type names by (name, arity), so a reference at
-% the wrong arity never gets qualified and so never matches. When the
-% base name is declared at exactly one other arity, say so instead of
-% claiming the type does not exist.
+% The renamer resolves type names by (name, arity), so a reference that
+% missed the table never matches and never gets qualified. When the base
+% name is declared at exactly one arity, hand off to `sole_arity_error`
+% to tell a genuine arity mismatch apart from an invisible declaration.
 type_ref_errors(Td, Dc, N, Args, All) ->
     sole_arity_error(Td, Dc, N, Args, base_name_arities(name_base(N), All)).
 
 :- function sole_arity_error(type_def, data_con, any, list(ty_expr), list(int)) -> list(error).
-sole_arity_error(Td, Dc, N, Args, [Declared]) ->
+% Found at a different arity: the reference names the declared type but
+% was written with the wrong number of arguments, so report the arity.
+% A base name found at the *same* arity means the reference is
+% invisible/undefined here (the renamer left it unqualified), not an
+% arity mismatch, so fall through to the undefined-type diagnosis.
+sole_arity_error(Td, Dc, N, Args, [Declared]) | not(Declared == length(Args)) ->
     [arity_ref_error(Td, Dc, N, length(Args), Declared)].
 sole_arity_error(Td, Dc, N, _, _) ->
     [decl_error(Td, undefined_type,
@@ -194,13 +199,13 @@ decl_pair(con_decl(TName, A, _)) -> kv(TName, A).
 
 % Strictly earlier by source position, on `(file, line, col)` — the same
 % key `List.sortOn` uses, and the strict less-than `sort_by` sorts a
-% group of declarations under. Two files may carry the same
-% `:- module` header and are merged, so two declarations of one
-% *qualified* constructor name really can sit in different files, and
-% the file has to be part of the key: without it the reported
-% declaration order, source location and origin all depend on which of
-% the two files happened to be encoded first. `<` on two strings is
-% lexicographic by code point.
+% group of declarations under. Two declarations of one *qualified*
+% constructor name can no longer sit in different files: two user
+% modules with the same name are rejected during collection
+% (`YCHR-10004`), so a collision is always within one module and the
+% file components compare equal. The file stays part of the key as the
+% canonical source position, which also keeps the order total.
+% `<` on two strings is lexicographic by code point.
 :- function decl_before(con_decl, con_decl) -> bool.
 decl_before(con_decl(_, _, loc(F1, _, _)), con_decl(_, _, loc(F2, _, _)))
   | F1 < F2 -> true.

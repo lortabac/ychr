@@ -1,0 +1,4 @@
+:- module(exp_none, [mkcol/0]).
+:- chr_type col ---> red ; green.
+:- function mkcol/0.
+mkcol() -> red.
