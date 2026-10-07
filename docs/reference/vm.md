@@ -468,7 +468,8 @@ Push a frame onto the call stack used for error stack traces. The
 compiler emits one at each occurrence-procedure entry (`rule <name>`,
 before the guard) and each function entry
 (`function <module:name/arity>`), with the source location and the
-pretty-printed source of the fired rule head or matched equation.
+pretty-printed source of the fired rule head. A function entry precedes
+dispatch, so its frame carries the function's first equation.
 There is no pop: the runtime saves the stack at every procedure call
 and restores it on return, so frames pushed inside a body are visible
 until the enclosing procedure exits. Only the innermost frames are

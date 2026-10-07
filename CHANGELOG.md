@@ -398,7 +398,7 @@ See
 [the design notes](dev-docs/PROJECT.md#constraint-store-implementation).
 
 Breaking: the serialized VM program now carries a VM format version.
-`serialize` writes `(version 1)` as the first child of `vm-program`, and
+`serialize` writes `(version 2)` as the first child of `vm-program`, and
 `deserialize` accepts only that version: a unit declaring any other
 `version`, or none at all — version 0, the pre-versioning format — is
 rejected with an error naming the version it found. The version is

@@ -81,9 +81,11 @@ Without an export list:
 This exports every constraint, function, type and operator the module
 declares, and re-exports no imports. A file with no `:- module` header
 is an *unnamed* module with the same visibility; diagnostics call it
-`<a>` for `a.chr`. Several header-less files may be combined, but an
-unqualified reference to a name declared in more than one of them is
-ambiguous and rejected.
+`<a>` for `a.chr`. Several header-less files may be combined, but two
+inputs may not carry the same module name — whether written with an
+explicit `:- module` or taken from the same basename — and are rejected
+(`YCHR-10004`). An unqualified reference to a name declared in more
+than one module is ambiguous and rejected.
 
 Names are qualified with their defining module; unqualified references
 resolve through the module's imports. Data constructors and atoms are
