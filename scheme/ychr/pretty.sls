@@ -5,7 +5,7 @@
   (export pretty-term pretty-bindings bindings->string decode-mangled-name)
   ;; (rnrs unicode) supplies `char-general-category`, which the atom
   ;; quoting predicate needs to mirror Haskell's `isAlphaNum` exactly.
-  (import (rnrs) (rnrs unicode) (ychr var))
+  (import (rnrs) (rnrs unicode) (ychr var) (ychr optable))
 
   ;; Escape a string for display (matching Haskell renderString).
   (define (escape-string s)
@@ -30,26 +30,6 @@
   (define (nil-functor? f)
     (or (eq? f (string->symbol "prelude__[]"))
         (eq? f (string->symbol "[]"))))
-
-  ;; Pretty-print the tail of a Prolog-style list.
-  (define (pretty-list-tail v)
-    (let ((d (deref v)))
-      (cond
-        ;; nil: [] (legacy bare-symbol form)
-        ((and (symbol? d) (nil-functor? d)) "")
-        ;; nil: [] (canonicalized 0-arity term form)
-        ((and (term? d)
-              (nil-functor? (term-functor d))
-              (= (vector-length (term-args d)) 0))
-         "")
-        ;; cons cell: , head <tail>
-        ((and (term? d)
-              (cons-functor? (term-functor d))
-              (= (vector-length (term-args d)) 2))
-         (string-append ", " (pretty-term (get-arg d 0))
-                        (pretty-list-tail (get-arg d 1))))
-        ;; improper list tail
-        (else (string-append " | " (pretty-term d))))))
 
   ;; Join a list of strings with a separator.
   (define (join sep strs)
@@ -136,7 +116,7 @@
   ;; Inverse of vmName in Compile/Names.hs, unquoted: used for
   ;; diagnostics, which name a functor the way the source spelled it
   ;; (`host:-/1`, `m:pair/2`), never the way `renderAtom` would quote
-  ;; it. Output goes through `pretty-symbol` instead.
+  ;; it. Values go through `value->pexpr` + `render-pexpr` instead.
   (define (unmangle-qualified s)
     (let ((segments (unmangle-segments s)))
       (if (car segments)
@@ -159,16 +139,28 @@
   ;; collides with a word operator or contains "__"; anything else is
   ;; single-quoted with an embedded quote doubled.
 
-  ;; The word operators of `prettyOps` in YCHR.Internal.Pretty: every
-  ;; non-symbolic operator of `builtinOps` (YCHR.Internal.Parser) plus
-  ;; the arithmetic table there. `prettyTerm` always uses that fixed
-  ;; table, so user-declared operators are deliberately not consulted.
-  (define word-ops
-    '("fun" "is" "requiring" "refining"
-      "chr_constraint" "chr_type" "opaque_type"
-      "function" "open_function" "class" "open_class"
-      "extend_class_type" "extend_class" "extend_function"
-      "end" "div" "mod" "rem"))
+  ;; The printer's fixed operator table: `builtinOps` plus the standard
+  ;; arithmetic and comparison operators, i.e. `Pretty.prettyOps`.
+  ;; `prettyTerm` always uses that fixed table, so an operator a program
+  ;; declares for itself is deliberately not consulted — it prints as a
+  ;; compound. `std-arith-entries` transcribes the `stdArithOps` list in
+  ;; YCHR.Internal.Pretty (note `/` is already a built-in).
+  (define std-arith-entries
+    '((200 fy "-")
+      (500 yfx "+")
+      (500 yfx "-")
+      (400 yfx "*")
+      (400 yfx "div")
+      (400 yfx "mod")
+      (400 yfx "rem")
+      (700 xfx "<")
+      (700 xfx ">")
+      (700 xfx ">=")
+      (700 xfx "=<")
+      (700 xfx "==")))
+
+  (define pretty-ops
+    (make-op-table (append builtin-op-entries std-arith-entries)))
 
   ;; Haskell Data.Char.isLower is exactly the Ll general category.
   (define (lower-letter? c) (eq? (char-general-category c) 'Ll))
@@ -194,7 +186,7 @@
     (or (zero? (string-length s))
         (not (lower-letter? (string-ref s 0)))
         (not (atom-name-tail? s))
-        (and (member s word-ops) #t)
+        (and (member s (op-table-word pretty-ops)) #t)
         (and (find-double-underscore s) #t)))
 
   ;; Haskell renderAtom's escape: double each embedded quote.
@@ -211,66 +203,206 @@
         (string-append "'" (escape-atom-quotes s) "'")
         s))
 
-  ;; Render a functor or atom the way prettyTerm does: unmangle the
-  ;; vmName, then quote each half independently — Haskell renders the
-  ;; module and base through renderAtom separately, so a mangled
-  ;; `mymodule__%%u0000a3foo` is `mymodule:'£foo'`, never
-  ;; `'mymodule:£foo'`.
-  (define (pretty-symbol sym)
-    (let ((segments (unmangle-segments (symbol->string sym))))
-      (if (car segments)
-          (string-append (render-atom (car segments))
-                         ":"
-                         (render-atom (cdr segments)))
-          (render-atom (cdr segments)))))
+  ;;; ---------------------------------------------------------------------
+  ;;; Value -> PExpr projection
+  ;;;
+  ;;; Mirrors `runtimeToPExpr` in YCHR.Internal.Pretty: it shapes a
+  ;;; runtime value into the node form the renderer consumes. Nodes are
+  ;;; tagged vectors:
+  ;;;   #(wildcard) #(int n) #(float x) #(text s)
+  ;;;   #(atom name) #(compound name (node ...)) #(opaque value)
+  ;;; A mangled `module__name` splits into the `:` compound, so the
+  ;;; infix renderer can parenthesize the qualified form exactly as
+  ;;; `prettyPrec` does.
+  ;;;
+  ;;; One exception: a `__closure` value is *not* unwrapped to its source
+  ;;; form the way the reference's `runtimeToPExpr` does, so it prints as
+  ;;; the internal compound. That pre-dates this port and is recorded in
+  ;;; dev-docs/SCHEME_BACKEND_GAPS.md ("Closure pretty-printing").
+  ;;; ---------------------------------------------------------------------
+
+  (define (value->pexpr v)
+    (let ((d (deref v)))
+      (cond
+        ;; An unbound variable has no alias on the Scheme side, so it is
+        ;; a wildcard — the form `valueToTerm` gives a variable with no
+        ;; alias.
+        ((var? d) (vector 'wildcard))
+        ;; Scheme booleans are the atoms `true`/`false` at the Term
+        ;; level (`valueToTerm`).
+        ((boolean? d) (vector 'atom (if d "true" "false")))
+        ((and (integer? d) (exact? d)) (vector 'int d))
+        ((and (number? d) (inexact? d)) (vector 'float d))
+        ((string? d) (vector 'text d))
+        ((symbol? d) (atom->pexpr d))
+        ((term? d)
+         (let ((f (term-functor d))
+               (args (map value->pexpr (vector->list (term-args d)))))
+           (cond
+             ;; Canonicalized nil, in the bare and the mangled spelling.
+             ((and (nil-functor? f) (null? args)) (vector 'atom "[]"))
+             ;; Canonicalized cons: the surface list syntax, whatever the
+             ;; arity (`runtimeToPExpr` does not check it).
+             ((cons-functor? f) (vector 'compound "." args))
+             (else (name->pexpr f args)))))
+        (else (vector 'opaque d)))))
+
+  ;; An atom or a mangled functor plus its arguments, split into the `:`
+  ;; compound when the spelling is qualified. A compound with no
+  ;; arguments is the atom of its base name, as `runtimeToPExpr` maps a
+  ;; 0-arity `CompoundTerm` to `PE.Atom`.
+  (define (name->pexpr sym args)
+    (let* ((segments (unmangle-segments (symbol->string sym)))
+           (module (car segments))
+           (base (cdr segments))
+           (inner (if (null? args)
+                      (vector 'atom base)
+                      (vector 'compound base args))))
+      (if module
+          (vector 'compound ":" (list (vector 'atom module) inner))
+          inner)))
+
+  ;; A bare symbol value: `[]` stays the nil atom, everything else goes
+  ;; through the qualified split.
+  (define (atom->pexpr sym)
+    (if (nil-functor? sym)
+        (vector 'atom "[]")
+        (name->pexpr sym '())))
+
+  ;;; ---------------------------------------------------------------------
+  ;;; PExpr -> string
+  ;;;
+  ;;; A port of `prettyPrec` in YCHR.Internal.PExpr driven by `pretty-ops`.
+  ;;; `ctx` is the maximum fixity the expression may have without needing
+  ;;; parentheses; only operators honor it (atoms, regular compounds and
+  ;;; the list/lambda forms never gain parentheses).
+  ;;; ---------------------------------------------------------------------
+
+  (define (render-pexpr ctx p)
+    (let ((kind (vector-ref p 0)))
+      (cond
+        ((eq? kind 'wildcard) "_")
+        ((eq? kind 'int)
+         (let ((n (vector-ref p 1)))
+           (if (negative? n)
+               (string-append "(" (number->string n) ")")
+               (number->string n))))
+        ((eq? kind 'float)
+         ;; The host's own float format, not Haskell's `show`: this is
+         ;; the printer divergence recorded under "Float pretty-printing"
+         ;; in dev-docs/SCHEME_BACKEND_GAPS.md, and it pre-dates this
+         ;; port.
+         (let* ((x (vector-ref p 1))
+                (s (number->string x)))
+           (if (negative? x) (string-append "(" s ")") s)))
+        ((eq? kind 'text) (string-append "\"" (escape-string (vector-ref p 1)) "\""))
+        ((eq? kind 'opaque)
+         (call-with-string-output-port
+          (lambda (port) (display (vector-ref p 1) port))))
+        ((eq? kind 'atom)
+         (let ((name (vector-ref p 1)))
+           (if (string=? name "[]") "[]" (render-atom name))))
+        ((eq? kind 'compound) (render-compound ctx p))
+        (else ""))))
+
+  (define (render-compound ctx p)
+    (let ((f (vector-ref p 1))
+          (args (vector-ref p 2)))
+      (cond
+        ;; List syntax, and the tail of an improper list.
+        ((and (string=? f ".") (= (length args) 2))
+         (string-append "["
+                        (render-pexpr max-arg-prec (car args))
+                        (render-list-tail (cadr args))
+                        "]"))
+        ;; Lambda: `fun(X, ...) -> body end`.
+        ((and (string=? f "->")
+              (= (length args) 2)
+              (let ((head (car args)))
+                (and (eq? (vector-ref head 0) 'compound)
+                     (string=? (vector-ref head 1) "fun"))))
+         (let ((params (vector-ref (car args) 2))
+               (body (cadr args)))
+           (string-append "fun("
+                          (join ", "
+                                (map (lambda (a) (render-pexpr max-arg-prec a))
+                                     params))
+                          ") -> "
+                          (render-pexpr max-prec body)
+                          " end")))
+        (else
+         (let ((infix (and (= (length args) 2)
+                           (op-lookup f (op-table-infix pretty-ops))))
+               (prefix (and (= (length args) 1)
+                            (op-lookup f (op-table-prefix pretty-ops))))
+               (postfix (and (= (length args) 1)
+                             (op-lookup f (op-table-infix pretty-ops)))))
+           (cond
+             ((and infix (memq (cadr infix) '(xfx xfy yfx)))
+              (render-infix ctx f infix args))
+             ((and prefix (memq (cadr prefix) '(fx fy)))
+              (render-prefix ctx f prefix args))
+             ((and postfix (memq (cadr postfix) '(xf yf)))
+              (render-postfix ctx f postfix args))
+             (else
+              (string-append (render-atom f)
+                             "("
+                             (join ", "
+                                   (map (lambda (a) (render-pexpr max-arg-prec a))
+                                        args))
+                             ")"))))))))
+
+  ;; Yfx: left keeps the fixity, right is strict; Xfy: the reverse;
+  ;; Xfx: strict on both sides. `:` and `,`/`;` close up on the left.
+  (define (render-infix ctx f entry args)
+    (let* ((fix (car entry))
+           (ty (cadr entry))
+           (lctx (if (eq? ty 'yfx) fix (- fix 1)))
+           (rctx (if (eq? ty 'xfy) fix (- fix 1)))
+           (lspace (if (or (string=? f ":") (string=? f ",") (string=? f ";"))
+                       ""
+                       " "))
+           (rspace (if (string=? f ":") "" " "))
+           (rendered (string-append (render-pexpr lctx (car args))
+                                    lspace
+                                    f
+                                    rspace
+                                    (render-pexpr rctx (cadr args)))))
+      (if (> fix ctx) (string-append "(" rendered ")") rendered)))
+
+  (define (render-prefix ctx f entry args)
+    (let* ((fix (car entry))
+           (ty (cadr entry))
+           (argctx (if (eq? ty 'fy) fix (- fix 1)))
+           (rendered (string-append f " " (render-pexpr argctx (car args)))))
+      (if (> fix ctx) (string-append "(" rendered ")") rendered)))
+
+  ;; No operator of `pretty-ops` is postfix (`xf`/`yf`) today, so this
+  ;; branch is unreachable from `pretty-term`; it mirrors `prettyPrec`
+  ;; for parity with the reference.
+  (define (render-postfix ctx f entry args)
+    (let* ((fix (car entry))
+           (ty (cadr entry))
+           (argctx (if (eq? ty 'yf) fix (- fix 1)))
+           (rendered (string-append (render-pexpr argctx (car args)) " " f)))
+      (if (> fix ctx) (string-append "(" rendered ")") rendered)))
+
+  ;; `prettyListTail`: the rest of a list after its first element.
+  (define (render-list-tail p)
+    (cond
+      ((and (eq? (vector-ref p 0) 'atom) (string=? (vector-ref p 1) "[]")) "")
+      ((and (eq? (vector-ref p 0) 'compound)
+            (string=? (vector-ref p 1) ".")
+            (= (length (vector-ref p 2)) 2))
+       (let ((args (vector-ref p 2)))
+         (string-append ", "
+                        (render-pexpr max-arg-prec (car args))
+                        (render-list-tail (cadr args)))))
+      (else (string-append " | " (render-pexpr max-arg-prec p)))))
 
   ;; Pretty-print a CHR value, matching Haskell prettyTerm exactly.
   (define (pretty-term v)
-    (let ((d (deref v)))
-      (cond
-        ;; Unbound variable
-        ((var? d) "_")
-        ;; Boolean (Scheme #t/#f → "true"/"false")
-        ((boolean? d) (if d "true" "false"))
-        ;; Exact integer. Negative literals are parenthesized to match
-        ;; Haskell prettyTerm.
-        ((and (integer? d) (exact? d))
-         (if (negative? d)
-             (string-append "(" (number->string d) ")")
-             (number->string d)))
-        ;; Inexact number (covers integer-valued floats like 0.0).
-        ((and (number? d) (inexact? d))
-         (let ((s (number->string d)))
-           (if (negative? d)
-               (string-append "(" s ")")
-               s)))
-        ;; String
-        ((string? d) (string-append "\"" (escape-string d) "\""))
-        ;; Empty list (atom form — the runtime collapse of 0-arity
-        ;; @prelude:[]@). Checked before the general symbol case so the
-        ;; nil functor isn't unmangled to "prelude:[]".
-        ((and (symbol? d) (nil-functor? d)) "[]")
-        ;; Symbol (atom)
-        ((symbol? d) (pretty-symbol d))
-        ;; Empty list (legacy 0-arity term form)
-        ((and (term? d)
-              (nil-functor? (term-functor d))
-              (= (vector-length (term-args d)) 0))
-         "[]")
-        ;; Prolog-style list (cons functor arity 2)
-        ((and (term? d)
-              (cons-functor? (term-functor d))
-              (= (vector-length (term-args d)) 2))
-         (string-append "[" (pretty-term (get-arg d 0))
-                        (pretty-list-tail (get-arg d 1)) "]"))
-        ;; Other compound term
-        ((term? d)
-         (let ((args (vector->list (term-args d))))
-           (string-append (pretty-symbol (term-functor d))
-                          "(" (join ", " (map pretty-term args)) ")")))
-        ;; Fallback
-        (else (call-with-string-output-port
-               (lambda (p) (display d p)))))))
+    (render-pexpr max-prec (value->pexpr v)))
 
   ;; Format an alist of ((symbol . value) ...) bindings as
   ;;   Name = pretty-term\n

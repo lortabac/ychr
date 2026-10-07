@@ -1,10 +1,18 @@
-:- module(read_term_test, [go/2, is_bool/2, matches/2, observed/1, type(answer/0)]).
+:- module(read_term_test,
+          [go/2, is_bool/2, matches/2, observed/1, type(answer/0),
+           op(500, yfx, '&&&')]).
 
 :- use_module(library(meta)).
 
 :- chr_constraint go/2.
 
 go(S, R) <=> R is read_term_from_string(S).
+
+% `&&&` is declared by this program and by nothing else: a string
+% spelling it must be readable (the reader takes the program's table),
+% yet it still prints as a compound because the binding printer uses its
+% own fixed table (see dev-docs/SCHEME_BACKEND_GAPS.md). `++`, used by
+% the goal-negative `unknown_op` case, is deliberately left undeclared.
 
 % A parsed `true` / `false` is the boolean, not an atom that merely
 % prints like one: it has to answer `boolean/1` and match a bool head

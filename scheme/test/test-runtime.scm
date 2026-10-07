@@ -535,6 +535,76 @@
               (pretty-term (string->symbol "mymodule__uaafoo"))))
 
 ;;; --------------------------------------------------------------------------
+;;; `pretty-term` renders operators like `prettyTerm`
+;;;
+;;; A port of `prettyPrec` in `YCHR.Internal.PExpr` driven by
+;;; `Pretty.prettyOps`: infix, prefix and postfix forms with the
+;;; precedence-based parenthesization, the `:`/`,`/`;` spacing rules,
+;;; the `fun(...) -> ... end` lambda form, and list elements at argument
+;;; precedence. Operators are spelled through `string->symbol` where the
+;;; reader would otherwise treat them as Scheme syntax (`,`, `;`).
+;;; --------------------------------------------------------------------------
+
+(test-group "pretty-term renders operators like prettyTerm"
+  (test-equal "infix"
+              "1 + 1"
+              (pretty-term (make-term '+ (vector 1 1))))
+  ;; `*` (400) binds tighter than `+` (500): the nested one is
+  ;; parenthesized only on the side that needs it.
+  (test-equal "tighter operator as an argument stays bare"
+              "1 * 2 + 3"
+              (pretty-term (make-term '+ (vector (make-term '* (vector 1 2)) 3))))
+  (test-equal "looser operator as an argument is parenthesized"
+              "1 * (2 + 3)"
+              (pretty-term (make-term '* (vector 1 (make-term '+ (vector 2 3))))))
+  ;; `=` is xfx, so its right operand at equal fixity needs parentheses.
+  (test-equal "an xfx operator does not chain without parentheses"
+              "a = (b = c)"
+              (pretty-term (make-term '= (vector 'a (make-term '= (vector 'b 'c))))))
+  ;; `-` is `fy 200` (prefix) as well as `yfx 500` (infix); arity picks
+  ;; the form, exactly as the parser's table does.
+  (test-equal "a prefix operator" "- x" (pretty-term (make-term '- (vector 'x))))
+  (test-equal "a left-associative chain"
+              "1 + 2 + 3"
+              (pretty-term (make-term '+
+                                      (vector (make-term '+ (vector 1 2)) 3))))
+  ;; `,` and `;` close up on the left, `:` on both sides.
+  (test-equal "comma spacing"
+              "a, b"
+              (pretty-term (make-term (string->symbol ",") (vector 'a 'b))))
+  (test-equal "semicolon spacing"
+              "a; b"
+              (pretty-term (make-term (string->symbol ";") (vector 'a 'b))))
+  (test-equal "colon spacing"
+              "m:f"
+              (pretty-term (make-term (string->symbol ":") (vector 'm 'f))))
+  ;; A qualified operator is the `:` compound, so its argument is
+  ;; parenthesized against the `:` fixity.
+  (test-equal "a mangled qualified operator"
+              "prelude:(1 + 1)"
+              (pretty-term (make-term (string->symbol "prelude__+") (vector 1 1))))
+  (test-equal "a mangled qualified functor"
+              "m:f(1)"
+              (pretty-term (make-term (string->symbol "m__f") (vector 1))))
+  ;; List elements are rendered at argument precedence, so a comma
+  ;; operator inside a list is parenthesized.
+  (test-equal "a comma compound inside a list"
+              "[(a, b)]"
+              (pretty-term
+               (%cons (make-term (string->symbol ",") (vector 'a 'b)) (%nil))))
+  ;; A lambda keeps its `end` delimiter; its variables are unbound, so
+  ;; they render as `_` (the Scheme runtime has no variable aliases).
+  (test-equal "a lambda term"
+              "fun(_, _) -> _ end"
+              (pretty-term (%read-term-from-string (fresh-session)
+                                                  "fun(X, Y) -> X end")))
+  ;; A 0-arity compound is the atom of its name, as `runtimeToPExpr`
+  ;; maps a 0-arity `CompoundTerm` to `PE.Atom`.
+  (test-equal "a 0-arity term is an atom"
+              "f"
+              (pretty-term (make-term 'f (vector)))))
+
+;;; --------------------------------------------------------------------------
 ;;; Unimplemented meta host calls are bound stubs
 ;;;
 ;;; A generated library defines every function of an imported library,
@@ -606,19 +676,25 @@
 ;;; `%read-term-from-string`
 ;;;
 ;;; The reader behind `read_term_from_string/1`, mirroring
-;;; `YCHR.Internal.Meta.read_term_from_string`'s conversion
-;;; (`termToValue`). The parser is the Pratt parser of
-;;; `YCHR.Internal.PExpr` driven by `Parser.builtinOps`, so only the
-;;; built-in operators are recognized: a prelude operator such as `+` is
-;;; a syntax error here. The interpreter's reader takes its table from
-;;; the session (the program's own operators) instead, so the `+` case
-;;; below is a deliberate divergence — see
-;;; dev-docs/SCHEME_BACKEND_GAPS.md.
+;;; `YCHR.Internal.Meta.read_term_from_string`: the Pratt parser of
+;;; `YCHR.Internal.PExpr` driven by the session's operator table,
+;;; followed by `termToValue`'s conversion. A session built with
+;;; `%make-session`'s short clauses carries `builtin-op-table`, so a
+;;; prelude operator such as `+` is a syntax error there — the same
+;;; `builtinOps` a hand-built interpreter session gets. The generated
+;;; library passes the program's own table as the third argument, which
+;;; is what the group below pins.
 ;;; The first cases mirror `test/YCHR/MetaTest.hs`.
 ;;; --------------------------------------------------------------------------
 
 ;; Read `text` in a fresh session, so each case gets its own variables.
 (define (read-term text) (%read-term-from-string (fresh-session) text))
+
+;; A session carrying a program-like table: the operators the strings
+;; below spell. Mirrors what the generated library hands to
+;; `%make-session`.
+(define (table-session entries)
+  (%make-session 0 '() (make-op-table entries)))
 
 (test-group "%read-term-from-string parses terms"
   (test-equal "integer" 42 (read-term "42"))
@@ -727,12 +803,29 @@
               (failure-kind
                (lambda () (read-term (string-append "a" (string #\x2028)))))))
 
+(test-group "%read-term-from-string uses the session's operator table"
+  ;; The table is the session's, exactly as `SessionEnv.opTable` is the
+  ;; interpreter's: a string can spell any operator the session lists,
+  ;; and one it does not list is a parse error.
+  (let ((s (table-session '((500 yfx "+") (500 yfx "++")))))
+    (test-equal "a prelude operator the session lists is readable"
+                "1 + 2"
+                (pretty-term (%read-term-from-string s "1 + 2")))
+    (test-equal "an operator the program declares is readable"
+                (string->symbol "++")
+                (term-functor (%read-term-from-string s "a ++ b")))
+    (test-equal "an operator the session does not list is rejected"
+                'general
+                (failure-kind
+                 (lambda () (%read-term-from-string s "a <=> b"))))))
+
 (test-group "%read-term-from-string rejects malformed input"
   ;; Both the empty input and a syntax error are general runtime errors:
-  ;; there is no value the caller could have meant. In particular a
-  ;; prelude operator is *not* readable here — the Scheme reader parses
-  ;; with `builtinOps` only, where the interpreter's reader would have
-  ;; the program's table and accept it (dev-docs/SCHEME_BACKEND_GAPS.md).
+  ;; there is no value the caller could have meant. The short
+  ;; `%make-session` clauses install `builtin-op-table`, so a prelude
+  ;; operator is not readable in a hand-built session — the same
+  ;; `builtinOps` `initSessionEnv` gives a hand-built interpreter
+  ;; session.
   (test-equal "empty input" 'general (failure-kind (lambda () (read-term ""))))
   (test-equal "a prelude operator is not readable" 'general
               (failure-kind (lambda () (read-term "1 + 2"))))

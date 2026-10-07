@@ -760,19 +760,22 @@ with the surface pretty-printer followed by a newline, and returns the
 unit atom `()`. `write_term_to_string/1` returns that same surface
 rendering as a string instead of printing it, so an unbound variable
 becomes the text `"_"` rather than an error.
-`read_term_from_string/1` parses its string argument as a term. On the
-interpreter it uses the program's operator table — the same one the goal
-parser uses, so the prelude's arithmetic and comparison operators and
-any operator a loaded module declares are readable. An operator that is
-neither built-in nor declared by a loaded module is a syntax error. The
-Scheme backend's reader still knows only the built-in operator table, so
-an operator the prelude declares (such as `+`) is a syntax error there;
-that divergence is recorded in `dev-docs/SCHEME_BACKEND_GAPS.md`. On
+`read_term_from_string/1` parses its string argument as a term, using
+the program's operator table — the same one the goal parser uses, so the
+prelude's arithmetic and comparison operators and any operator a loaded
+module declares are readable. Both backends do this: the Scheme compiler
+emits the table into the generated library, the session carries it, and
+the reader consults it. A session created without a compiled program
+(the runtime's hand-built sessions) gets the built-in table only, the
+same `builtinOps` the interpreter gives a hand-built session. An
+operator that is neither built-in nor declared by a loaded module is a
+syntax error on either backend. On
 both backends `_` becomes a fresh logical variable and a repeated
 variable name is one shared variable, and a parse failure raises a
-runtime error. The binding printer keeps its own fixed table, so a
-user-declared operator prints as a compound (e.g. `'++'(a, b)`) even
-though it is readable. Both
+runtime error. Both binding printers keep their own fixed table
+(the built-in operators plus the arithmetic and comparison ones), so a
+user-declared operator prints as a compound (e.g. `'&&&'(a, b)`) even
+though it is readable, while `1 + 1` prints infix on both. Both
 backends render atoms the same way: an
 identifier starting with a lowercase letter and otherwise made of
 letters, digits and underscores prints unquoted, unless it is a

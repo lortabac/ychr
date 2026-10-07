@@ -2,17 +2,17 @@
 ;;;;
 ;;;; The dual of (ychr pretty): `parse-term` reads one term out of a
 ;;;; string and builds the runtime value it denotes. It mirrors the
-;;;; Haskell reference, `YCHR.Internal.Meta.read_term_from_string`'s
-;;;; conversion (`termToValue`), though not its operator table.
+;;;; Haskell reference, `YCHR.Internal.Meta.read_term_from_string`:
+;;;; the Pratt parser of `YCHR.Internal.PExpr` driven by the session's
+;;;; operator table (`SessionEnv.opTable`, carried here as
+;;;; `session-op-table`), followed by `termToValue`'s conversion.
 ;;;;
-;;;; The grammar is the Pratt parser of `YCHR.Internal.PExpr` driven by
-;;;; `YCHR.Internal.Parser.builtinOps`, so only the built-in operators
-;;;; are recognized: an operator the prelude declares (such as `+`) is
-;;;; a syntax error here. The interpreter's reader instead takes the
-;;;; table from the session (`SessionEnv.opTable`, the program's own
-;;;; operators), so this is a deliberate divergence — recorded in
-;;;; dev-docs/SCHEME_BACKEND_GAPS.md and pinned by
-;;;; `("read_term_test", "arith_op")` in test/scheme/test_golden.py.
+;;;; The table is the program's own — the built-ins merged with every
+;;;; operator the loaded modules declare or import — so a string read at
+;;;; run time can spell any operator the program can, exactly as the
+;;;; goal parser can. A hand-built session carries `(ychr optable)`'s
+;;;; `builtin-op-table`, the counterpart of the `builtinOps`
+;;;; `initSessionEnv` gives the reference's hand-built sessions.
 ;;;;
 ;;;; The conversion mirrors `convertTerm` + `termToValue`:
 ;;;;
@@ -32,7 +32,9 @@
   (export parse-term)
   (import (rnrs)
           (rnrs unicode)
-          (ychr var))
+          (ychr session)
+          (ychr var)
+          (ychr optable))
 
   ;;; ---------------------------------------------------------------------
   ;;; Character classes
@@ -67,9 +69,6 @@
             ((char=? c (string-ref str i)) #t)
             (else (loop (+ i 1))))))
 
-  ;; Symbol characters of `YCHR.Internal.PExpr.symbolChars`.
-  (define symbol-chars "\\:=<>+-*/#@^~!&?")
-
   ;; True when `needle` occurs in `s` (no portable `string-contains`).
   (define (string-has? s needle)
     (let ((n (string-length s)) (m (string-length needle)))
@@ -79,59 +78,15 @@
               (else (loop (+ i 1)))))))
 
   ;;; ---------------------------------------------------------------------
-  ;;; Operator table
+  ;;; Operator-table helpers
   ;;;
-  ;;; A direct transcription of `YCHR.Internal.Parser.builtinOps`. Each
-  ;;; entry is (name fixity type); the tables are keyed by name string so
-  ;;; no Scheme symbol escaping is needed for `|`, `;` or `\`.
+  ;;; The table itself — the built-in transcription and the
+  ;;; `(fixity type name)` entry shape — lives in `(ychr optable)`.
+  ;;; Every parser procedure below takes a table as its first argument
+  ;;; and consults it through `op-lookup`, `op-table-infix`,
+  ;;; `op-table-prefix` and `op-table-word`, mirroring the `OpTable ->`
+  ;;; parameter threaded through `YCHR.Internal.PExpr`.
   ;;; ---------------------------------------------------------------------
-
-  (define max-prec 1200)
-  (define max-arg-prec 999)
-
-  (define infix-ops
-    '((":" 100 yfx)
-      ("/" 400 yfx)
-      ("is" 750 xfx)
-      ("=" 750 xfx)
-      ("," 1000 xfy)
-      ("|" 1105 xfy)
-      ("->" 1110 xfy)
-      (";" 1100 xfy)
-      ("\\" 1100 xfx)
-      ("requiring" 1140 xfx)
-      ("refining" 1140 xfx)
-      ("--->" 1150 xfx)
-      ("<=>" 1180 xfx)
-      ("==>" 1180 xfx)
-      ("@" 1190 xfx)))
-
-  (define prefix-ops
-    '(("fun" 500 fx)
-      ("chr_constraint" 1180 fx)
-      ("chr_type" 1180 fx)
-      ("opaque_type" 1180 fx)
-      ("function" 1180 fx)
-      ("open_function" 1180 fx)
-      ("class" 1180 fx)
-      ("open_class" 1180 fx)
-      ("extend_class_type" 1180 fx)
-      ("extend_class" 1180 fx)
-      ("extend_function" 1180 fx)
-      (":-" 1200 fx)
-      ("end" 1201 fx)))
-
-  ;; Non-symbolic operator names: all of `wordOpSet` in `mkOpTable`.
-  (define word-ops
-    '("is" "requiring" "refining" "fun" "chr_constraint" "chr_type"
-      "opaque_type" "function" "open_function" "class" "open_class"
-      "extend_class_type" "extend_class" "extend_function" "end"))
-
-  ;; The (fixity type) of an infix/postfix or prefix operator, or #f.
-  (define (op-lookup name table)
-    (cond ((null? table) #f)
-          ((string=? name (car (car table))) (cdr (car table)))
-          (else (op-lookup name (cdr table)))))
 
   ;; Maximum fixity allowed for an operator's left argument: an `y`
   ;; position allows equal fixity, an `x` position requires strictly
@@ -281,7 +236,7 @@
   ;; `anyOpToken`: the longest symbol-operator run (the whole run must be
   ;; an operator, so `=<` — not in the table — is unknown rather than
   ;; `=` followed by `<`), a single `,`/`|`/`;`, or a word operator.
-  (define (parse-op-token s i)
+  (define (parse-op-token ops s i)
     (let ((n (string-length s)))
       (if (>= i n)
           #f
@@ -292,11 +247,13 @@
                  (if (and (< j n) (char-in-string? (string-ref s j) symbol-chars))
                      (loop (+ j 1))
                      (let ((t (substring s i j)))
-                       (and (or (op-lookup t infix-ops) (op-lookup t prefix-ops))
+                       (and (or (op-lookup t (op-table-infix ops))
+                                (op-lookup t (op-table-prefix ops)))
                             (cons t (skip-sc s j)))))))
               ((char-in-string? c ",|;")
                (let ((t (string c)))
-                 (and (or (op-lookup t infix-ops) (op-lookup t prefix-ops))
+                 (and (or (op-lookup t (op-table-infix ops))
+                          (op-lookup t (op-table-prefix ops)))
                       (cons t (skip-sc s (+ i 1))))))
               ((lower-letter? c)
                (let loop ((j (+ i 1)))
@@ -305,7 +262,7 @@
                               (char=? (string-ref s j) #\_)))
                      (loop (+ j 1))
                      (let ((t (substring s i j)))
-                       (and (member t word-ops)
+                       (and (member t (op-table-word ops))
                             (cons t (skip-sc s j)))))))
               (else #f))))))
 
@@ -314,21 +271,22 @@
   ;;;
   ;;; Nodes are tagged vectors: #(var name), #(wildcard), #(int n),
   ;;; #(float x), #(text s), #(atom name), #(compound name (node ...)).
-  ;;; Every parser threads a string index and returns a pair
-  ;;; (node . next-index), or #f when the input does not parse; the
-  ;;; index-based state is what makes the parser's `try` alternatives a
-  ;;; saved-index retry.
+  ;;; Every parser threads the operator table in scope and a string
+  ;;; index, and returns a pair (node . next-index), or #f when the input
+  ;;; does not parse; the index-based state is what makes the parser's
+  ;;; `try` alternatives a saved-index retry.
   ;;; ---------------------------------------------------------------------
 
   ;; `atomP`: an unquoted identifier that is not a prefix word operator
   ;; (those are handled by the Pratt parser, or as `name(...)` functors),
   ;; or a quoted atom.
-  (define (parse-atom s i)
+  (define (parse-atom ops s i)
     (or (parse-quoted-atom s i)
         (let ((id (parse-identifier s i)))
           (and id
                (let ((t (car id)))
-                 (and (not (and (member t word-ops) (op-lookup t prefix-ops)))
+                 (and (not (and (member t (op-table-word ops))
+                                (op-lookup t (op-table-prefix ops))))
                       (cons (vector 'atom t) (cdr id))))))))
 
   ;; `sepBy` over `,` at argument precedence: zero or more terms. Returns
@@ -337,9 +295,9 @@
   ;; but a comma left dangling with no element after it is a parse
   ;; failure (`parsec`'s `many` propagates a failure that consumed
   ;; input), so `f(a,)` is rejected rather than read as `f(a)`.
-  (define (parse-args s i)
+  (define (parse-args ops s i)
     (let loop ((i i) (acc '()) (no-dangling-comma #t))
-      (let ((t (parse-term-at s i max-arg-prec)))
+      (let ((t (parse-term-at ops s i max-arg-prec)))
         (if (not t)
             (values no-dangling-comma (reverse acc) i)
             (let ((k (cdr t)))
@@ -350,8 +308,8 @@
 
   ;; The argument list and closing `)` of a compound, starting after the
   ;; `(`.
-  (define (parse-compound-tail s name i)
-    (let-values (((ok args k) (parse-args s i)))
+  (define (parse-compound-tail ops s name i)
+    (let-values (((ok args k) (parse-args ops s i)))
       (if (and ok
                (< k (string-length s))
                (char=? (string-ref s k) #\)))
@@ -360,14 +318,14 @@
 
   ;; `listTermP`: `[a, b | T]`, desugared to right-nested `.` compounds
   ;; terminated by the atom `[]`.
-  (define (parse-list s i)
+  (define (parse-list ops s i)
     (let ((n (string-length s)))
       (if (and (< i n) (char=? (string-ref s i) #\[))
-          (let-values (((ok elems k) (parse-args s (skip-sc s (+ i 1)))))
+          (let-values (((ok elems k) (parse-args ops s (skip-sc s (+ i 1)))))
             (cond
               ((not ok) #f)
               ((and (< k n) (char=? (string-ref s k) #\|))
-               (let ((tail (parse-term-at s (skip-sc s (+ k 1)) max-arg-prec)))
+               (let ((tail (parse-term-at ops s (skip-sc s (+ k 1)) max-arg-prec)))
                  (and tail
                       (let ((k2 (cdr tail)))
                         (and (< k2 n)
@@ -388,20 +346,20 @@
   ;; `lambdaP`: `fun(X, Y) -> body end`. The whole production
   ;; backtracks, so `fun(a)` without the arrow still parses as the
   ;; compound `fun(a)`.
-  (define (parse-lambda s i)
+  (define (parse-lambda ops s i)
     (and (starts-with? s i "fun")
          (word-boundary? s (+ i 3))
          (let ((j (skip-sc s (+ i 3))))
            (and (< j (string-length s))
                 (char=? (string-ref s j) #\()
                 (let-values (((params-ok params k)
-                              (parse-args s (skip-sc s (+ j 1)))))
+                              (parse-args ops s (skip-sc s (+ j 1)))))
                   (and params-ok
                        (< k (string-length s))
                        (char=? (string-ref s k) #\))
                        (let ((m (skip-sc s (+ k 1))))
                          (and (starts-with? s m "->")
-                              (let ((body (parse-term-at s (skip-sc s (+ m 2)) max-prec)))
+                              (let ((body (parse-term-at ops s (skip-sc s (+ m 2)) max-prec)))
                                 (and body
                                      (let ((e (skip-sc s (cdr body))))
                                        (and (starts-with? s e "end")
@@ -412,10 +370,10 @@
                                                   (skip-sc s (+ e 3)))))))))))))))
 
   ;; `parens`: a parenthesised term at top precedence.
-  (define (parse-parens s i)
+  (define (parse-parens ops s i)
     (let ((n (string-length s)))
       (if (and (< i n) (char=? (string-ref s i) #\())
-          (let ((t (parse-term-at s (skip-sc s (+ i 1)) max-prec)))
+          (let ((t (parse-term-at ops s (skip-sc s (+ i 1)) max-prec)))
             (and t
                  (let ((k (cdr t)))
                    (and (< k n)
@@ -424,54 +382,54 @@
           #f)))
 
   ;; A prefix word operator used as a functor: `chr_constraint(x)`.
-  (define (parse-prefix-word-functor s i)
+  (define (parse-prefix-word-functor ops s i)
     (let ((id (parse-identifier s i)))
       (and id
            (let ((t (car id)))
-             (and (member t word-ops)
-                  (op-lookup t prefix-ops)
+             (and (member t (op-table-word ops))
+                  (op-lookup t (op-table-prefix ops))
                   (let ((k (cdr id)))
                     (and (< k (string-length s))
                          (char=? (string-ref s k) #\()
-                         (parse-compound-tail s t (skip-sc s (+ k 1))))))))))
+                         (parse-compound-tail ops s t (skip-sc s (+ k 1))))))))))
 
   ;; `atomOrCompoundP`: an atom, optionally followed by `(args)`.
-  (define (parse-atom-or-compound s i)
-    (or (parse-prefix-word-functor s i)
-        (let ((a (parse-atom s i)))
+  (define (parse-atom-or-compound ops s i)
+    (or (parse-prefix-word-functor ops s i)
+        (let ((a (parse-atom ops s i)))
           (and a
                (let ((k (cdr a)))
                  (if (and (< k (string-length s))
                           (char=? (string-ref s k) #\())
-                     (parse-compound-tail s (vector-ref (car a) 1)
+                     (parse-compound-tail ops s (vector-ref (car a) 1)
                                           (skip-sc s (+ k 1)))
                      a))))))
 
   ;; `atomicTermP`, in the reference's order.
-  (define (parse-atomic s i)
+  (define (parse-atomic ops s i)
     (or (parse-var-or-wildcard s i)
         (parse-number s i)
         (parse-string-literal s i)
-        (parse-list s i)
-        (parse-lambda s i)
-        (parse-parens s i)
-        (parse-atom-or-compound s i)))
+        (parse-list ops s i)
+        (parse-lambda ops s i)
+        (parse-parens ops s i)
+        (parse-atom-or-compound ops s i)))
 
   ;; `nudP`: an atomic term, or a prefix operator and its operand.
   ;; Returns (node fixity next-index) or #f.
-  (define (parse-nud s i max-fix)
-    (let ((atomic (parse-atomic s i)))
+  (define (parse-nud ops s i max-fix)
+    (let ((atomic (parse-atomic ops s i)))
       (if atomic
           (list (car atomic) 0 (cdr atomic))
-          (let ((op (parse-op-token s i)))
+          (let ((op (parse-op-token ops s i)))
             (and op
-                 (let ((entry (op-lookup (car op) prefix-ops)))
+                 (let ((entry (op-lookup (car op) (op-table-prefix ops))))
                    (and entry
                         (<= (car entry) max-fix)
                         (let* ((fix (car entry))
                                (ty (cadr entry))
                                (operand-max (if (eq? ty 'fy) fix (- fix 1)))
-                               (operand (parse-term-at s (cdr op) operand-max)))
+                               (operand (parse-term-at ops s (cdr op) operand-max)))
                           (and operand
                                (list (vector 'compound (car op) (list (car operand)))
                                      fix
@@ -480,26 +438,26 @@
   ;; `ledLoop`: consume infix (and, generically, postfix) operators whose
   ;; fixity is within range and whose left-position constraint the
   ;; current left-hand side satisfies. Returns (node . next-index).
-  (define (parse-led-loop s node node-fix i max-fix)
-    (let ((op (parse-op-token s i)))
+  (define (parse-led-loop ops s node node-fix i max-fix)
+    (let ((op (parse-op-token ops s i)))
       (if (not op)
           (cons node i)
-          (let ((entry (op-lookup (car op) infix-ops)))
+          (let ((entry (op-lookup (car op) (op-table-infix ops))))
             (if (and entry
                      (<= (car entry) max-fix)
                      (<= node-fix (left-max (cadr entry) (car entry))))
                 (let ((fix (car entry)) (ty (cadr entry)))
                   (if (or (eq? ty 'xf) (eq? ty 'yf))
-                      (parse-led-loop s
+                      (parse-led-loop ops s
                                       (vector 'compound (car op) (list node))
                                       fix
                                       (cdr op)
                                       max-fix)
-                      (let ((rhs (parse-term-at s
+                      (let ((rhs (parse-term-at ops s
                                                 (cdr op)
                                                 (if (eq? ty 'xfy) fix (- fix 1)))))
                         (and rhs
-                             (parse-led-loop s
+                             (parse-led-loop ops s
                                              (vector 'compound (car op)
                                                      (list node (car rhs)))
                                              fix
@@ -507,10 +465,10 @@
                                              max-fix)))))
                 (cons node i))))))
 
-  (define (parse-term-at s i max-fix)
-    (let ((nud (parse-nud s i max-fix)))
+  (define (parse-term-at ops s i max-fix)
+    (let ((nud (parse-nud ops s i max-fix)))
       (and nud
-           (parse-led-loop s (car nud) (cadr nud) (caddr nud) max-fix))))
+           (parse-led-loop ops s (car nud) (cadr nud) (caddr nud) max-fix))))
 
   ;;; ---------------------------------------------------------------------
   ;;; Conversion to runtime values
@@ -589,16 +547,19 @@
 
   ;;; Read a single term from `text` in `session`.
   ;;;
-  ;;; Returns two values: `(values #t value)` on success, and
-  ;;; `(values #f message)` when the text is not a term (an empty input,
-  ;;; a syntax error, or trailing input after a complete term). The
-  ;;; caller decides how to report the failure.
+  ;;; The operator table is the session's (`session-op-table`), so a
+  ;;; string can spell every operator the program can, exactly as the
+  ;;; goal parser can. Returns two values: `(values #t value)` on
+  ;;; success, and `(values #f message)` when the text is not a term (an
+  ;;; empty input, a syntax error, or trailing input after a complete
+  ;;; term). The caller decides how to report the failure.
   (define (parse-term session text)
-    (let* ((n (string-length text))
+    (let* ((ops (session-op-table session))
+           (n (string-length text))
            (i (skip-sc text 0)))
       (if (>= i n)
           (values #f "read_term_from_string: unexpected end of input")
-          (let ((t (parse-term-at text i max-prec)))
+          (let ((t (parse-term-at ops text i max-prec)))
             (cond
               ((not t) (values #f "read_term_from_string: parse error"))
               ((< (cdr t) n)

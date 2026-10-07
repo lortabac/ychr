@@ -136,39 +136,6 @@ never as the vmName `host__-/2`. Locked by the Haskell golden cases in
 `test/golden/is_non_evaluable_error/`, and on the Scheme side by
 `scheme/test/test-runtime.scm`'s `host functor deep-eval` group.
 
-## `read_term_from_string` ignores the program's operators
-
-The reference reader takes its operator table from the session
-(`SessionEnv.opTable`, filled by `toSessionInput` from
-`CompiledProgram.opTable` — the same table the goal parser and the REPL
-use). A string may therefore spell any operator the program has, the
-prelude's arithmetic and comparison operators included:
-
-    go(S, R) <=> R is read_term_from_string(S).
-    % with library(meta) imported
-    ?- go("1 + 1", R).
-    R = 1 + 1
-
-`(ychr read)` is still a direct transcription of
-`YCHR.Internal.Parser.builtinOps`. The session is already threaded into
-`parse-term` (for the fresh variables of `_` and of named variables),
-but the session record carries no operator table, so the same string is
-a parse error on the Scheme backend — `unknown operator: +`, surfaced as
-a general runtime error. Closing the gap means emitting the program's
-table into the generated library, carrying it on the session record, and
-making the parser procedures of `read.sls` (which thread a string index
-through every step) consult it instead of the module-level `infix-ops` /
-`prefix-ops` / `word-ops` constants.
-
-Pinned by `("read_term_test", "arith_op")` in the Scheme harness's
-`HASKELL_ONLY_CASES`; the directory's other cases use no operators and
-run on both backends, and `unknown_op` (a goal-negative case, which the
-Scheme harness does not collect) pins that an undeclared operator still
-fails on the interpreter. The operator-declaration half of the
-reference behaviour is pinned without the Scheme backend by
-`test/YCHR/MetaTest.hs`'s `end-to-end: an operator the program declares
-is readable`.
-
 ## Prelude host calls missing from `*prelude-host-calls*`
 
 The table's comment asks for it to be kept in sync with the Haskell
@@ -250,6 +217,29 @@ digits plus `show`'s exponent thresholds) would close it, and the
 printer is shared, so that is a change of its own.
 
 
+## Closure pretty-printing does not unwrap the source form
+
+The reference printer unwraps a closure value before rendering it:
+`runtimeToPExpr` turns `__closure`(identity, sourceForm, captures…) into
+the source form and runs `unquoteToPExpr` over it, which also renders a
+0-arity atom whose name looks like a variable (uppercase- or
+`_`-initial) as a variable rather than a quoted atom
+(`src/YCHR/Internal/Pretty.hs`). `pretty-term` has no such branch, so a
+bound closure prints as the internal compound. With a function
+`mk(X) -> fun(Y) -> X + Y end.` and
+`go(X, R) <=> T is mk(X), R is write_term_to_string(T).`:
+
+    Haskell: R = "fun(Y) -> prelude:(X + Y) end"
+    Scheme : R = "'__closure'(pp:'__lambda_0', fun('Y') -> prelude:('X' + 'Y') end, 1)"
+
+The operator port below improved the *inner* source form (it used to
+render `'->'('fun'('Y'), prelude:('X' + 'Y'))`), but the wrapper is
+still shown. This pre-dates the operator port and no golden case pins
+it; closing it needs an `unquoteToPExpr` equivalent in `value->pexpr`
+and a `render-pexpr` `var` node, and the printer is shared, so it is a
+change of its own.
+
+
 ## Closed gaps (reference)
 
 The following used to live here and are now closed. Kept as a brief
@@ -280,7 +270,7 @@ record of which fixes have already shipped.
   `not implemented`, and the whole `read_term_test` directory was in
   `HASKELL_ONLY`. It is now a port of the reference reader: the new
   `(ychr read)` library carries the Pratt parser of
-  `YCHR.Internal.PExpr` driven by `YCHR.Internal.Parser.builtinOps`, and
+  `YCHR.Internal.PExpr`, and
   converts the parse the way `convertTerm` + `termToValue` do — a named
   variable is one fresh logical variable shared between its occurrences,
   `_` is fresh per occurrence, `true`/`false` (and the `prelude:` forms)
@@ -295,11 +285,10 @@ record of which fixes have already shipped.
   `host:read_term_from_string` *term* is deep-evaluable as well.
   `read_term_test` left `HASKELL_ONLY`; the reader is pinned directly by
   `scheme/test/test-runtime.scm`, including its `deep-eval` route.
-  (The reference reader's table has since become program-dependent —
-  it reads `SessionEnv.opTable` rather than `builtinOps` — which
-  re-opened one case of this directory as a divergence; see
-  *`read_term_from_string` ignores the program's operators* above. The
-  Scheme port itself is unchanged.)
+  (The reference reader's table later became program-dependent — it
+  reads `SessionEnv.opTable` rather than `builtinOps` — which the Scheme
+  reader now does too; see *`read_term_from_string` ignores the
+  program's operators* under *Closed gaps*.)
   One deliberate classification divergence remains: the interpreter's
   name-keyed registry reports a *general* error for any non-text
   argument, whereas the Scheme primitive treats an unbound one as an
@@ -470,4 +459,42 @@ record of which fixes have already shipped.
   atom, word operator, uppercase lead, embedded quote, symbolic atom,
   and the `Nl`/`No` non-regressions) and, on the Scheme side alone, by
   the `pretty-term quotes atoms like renderAtom` group in
+  `scheme/test/test-runtime.scm`.
+
+- **`read_term_from_string` ignores the program's operators** — the
+  Scheme reader parsed with the built-in table only, so a string
+  spelling an operator the program had (the prelude's `+`, a declared
+  `&&&`) was a parse error there while the interpreter read it. The
+  table now travels the reference's path. The new `(ychr optable)`
+  library owns the table (`#(INFIX PREFIX WORD)`), its `builtinOps`
+  transcription as `(fixity type name)` entries, `make-op-table` and
+  the lookups. `YCHR.Internal.Backend.Scheme` emits the program's merged
+  table (`CompiledProgram.opTable`) as a
+  `(make-op-table (quote ((FIXITY TYPE "name") …)))` literal — the
+  analogue of the embed generator's `PExpr.mkOpTable` literal — in the
+  session thunk, as `%make-session`'s third argument. The session record
+  gains an immutable `op-table` field (`session-op-table`), and every
+  parser procedure of `read.sls` takes the table as its first argument,
+  mirroring `PExpr`'s `OpTable ->` threading; `parse-term` reads it from
+  the session. `%make-session`'s one- and two-argument clauses install
+  `builtin-op-table`, the counterpart of the `builtinOps`
+  `initSessionEnv` gives the reference's hand-built sessions, so
+  `scheme/test/test-runtime.scm`'s "a prelude operator is not readable"
+  case still holds for a hand-built session; a new group pins a session
+  that carries a program table. The printer had to follow: `pretty-term`
+  rendered every compound as `functor(args)`, so the reader fix alone
+  would have read `1 + 1` but printed `'+'(1, 1)` where the reference
+  prints `1 + 1`. `(ychr pretty)` now ports `prettyPrec`/`prettyOps`
+  over a `runtimeToPExpr`-shaped intermediate — infix/prefix/postfix
+  with precedence-based parenthesization, the `:`/`,`/`;` spacing rules,
+  the `fun(…) -> … end` lambda form and argument-precedence list
+  elements — while keeping the fixed built-ins-plus-arithmetic table
+  `prettyTerm` uses, so an operator a program declares still prints as a
+  compound. `("read_term_test", "arith_op")` left
+  `HASKELL_ONLY_CASES`, and the new `declared_op` case
+  (`op(500, yfx, '&&&')` exported by `read_term_test.chr`, expected
+  `R = '&&&'(a, b)`) pins both halves on both backends. The emitter is
+  pinned without Guile by `test/YCHR/Backend/SchemeTest.hs`'s "the
+  generated library threads the program's operator table"; the printer
+  by the `pretty-term renders operators like prettyTerm` group in
   `scheme/test/test-runtime.scm`.

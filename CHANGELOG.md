@@ -38,17 +38,40 @@ read_term_from_string(S).`, the goal `go("1 + 1", R)` binds `R = 1 + 1`
 (where it used to fail with `YCHR-60001`, `unknown operator: +`), and an
 operator a module declares for itself is readable too. A string naming
 an operator that is neither built-in nor declared by a loaded module
-still fails with the same parse error. The pretty-printer is unchanged,
-so a user-declared operator still prints as a compound. The Scheme
-backend's reader remains built-in-only; the divergence is recorded in
-`dev-docs/SCHEME_BACKEND_GAPS.md` and pinned by
-`("read_term_test", "arith_op")` in the Scheme golden harness. API
+still fails with the same parse error. The interpreter's pretty-printer is
+unchanged, so a user-declared operator still prints as a compound there. API
 changes that go with it: `SessionEnv` and `SessionInput` gain an
 `opTable` field, `initSessionEnv` and `mkSessionInput` take the table as
 an argument, `emitTypeChecker` emits it as a `PExpr.mkOpTable` literal
 (the VM program carries no operator information), and a hand-built
 session (`initSessionEnv` without a program, `interpret`) gets
 `builtinOps` exactly as before.
+
+The Scheme backend now follows it. The new `(ychr optable)` library owns
+the operator table (the `builtinOps` transcription, `make-op-table`, the
+lookups); the backend emits the program's merged table as a
+`(make-op-table (quote ((FIXITY TYPE "name") …)))` literal in the
+generated library's session thunk, and the session record gains an
+immutable `op-table` field. `%make-session`'s new three-argument clause
+installs it, while the one- and two-argument clauses install the
+built-in table a hand-built session gets, mirroring `initSessionEnv`'s
+`builtinOps` default. Every parser procedure of `(ychr read)` now takes
+the table and consults it instead of a module-level constant. This also
+required the binding printer: `pretty-term` rendered every compound as
+`functor(args)`, so a reader that could read `1 + 1` would still have
+printed `'+'(1, 1)`. `(ychr pretty)` now ports `prettyPrec`/`prettyOps`
+— infix, prefix and postfix rendering with precedence-based
+parenthesization, the `:`/`,`/`;` spacing rules, the
+`fun(…) -> … end` lambda form and argument-precedence list elements —
+over a `runtimeToPExpr`-shaped intermediate, keeping the fixed
+built-ins-plus-arithmetic table the reference printer uses, so a
+user-declared operator still prints as a compound.
+`("read_term_test", "arith_op")` left `HASKELL_ONLY_CASES`, and the new
+`declared_op` golden case pins that a program-declared operator is
+readable and prints as a compound on both backends.
+`generateScheme` takes the operator table as a third argument, and the
+scheme runtime tests pin both the session's table and the printer's
+operator forms.
 
 There is now a web playground: the whole compiler — front end, VM
 compiler, interpreter and the optional type checker — built to

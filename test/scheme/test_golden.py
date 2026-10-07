@@ -74,13 +74,6 @@ HASKELL_ONLY_CASES = {
     # and passes on both backends. Remove this entry once the Scheme
     # runtime's unify does the same transfer.
     ("reactivation_through_binding", "through_binding"),
-    # The interpreter's `read_term_from_string` parses with the program's
-    # operator table (`CompiledProgram.opTable`), so a string spelling a
-    # prelude operator (here `+`) is readable. The Scheme reader is still
-    # hard-coded to the built-in operators, so it reports a parse error;
-    # see dev-docs/SCHEME_BACKEND_GAPS.md. The directory's other cases
-    # use no operators and run on both backends.
-    ("read_term_test", "arith_op"),
 }
 
 # Test directories where the .chr program or goal deliberately uses

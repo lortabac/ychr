@@ -35,6 +35,7 @@ import Data.Text qualified as T
 import Numeric (showHex)
 import YCHR.Internal.Compile (tellProcName)
 import YCHR.Internal.Compile.Names (encodeIdentifier, isIdInitialSafe)
+import YCHR.Internal.PExpr (OpTable, OpType (..), opTableEntries)
 import YCHR.Internal.SExpr (SExpr (..), printSExpr)
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM.Index (indexablePositions, nonRaising)
@@ -54,6 +55,12 @@ import YCHR.Internal.VM.Types
 -- (see 'programInfoBindingName'); it is a zero-argument thunk that
 -- creates and returns a fresh session.
 --
+-- The last argument is the program's operator table
+-- ('YCHR.Internal.Compile.Pipeline.CompiledProgram'@@.opTable@). The VM
+-- program carries no operator information, so it is spelled out as a
+-- @make-op-table@ literal in the session thunk and installed on the
+-- session, where 'read_term_from_string' picks it up.
+--
 -- For every exported constraint with a generated @tell_*@, two
 -- user-facing identifiers may be exported:
 --
@@ -65,8 +72,8 @@ import YCHR.Internal.VM.Types
 --
 -- The mangled @tell_MOD__NAME_ARITY@ procedures remain defined inside
 -- the library (the aliases are bound to them) but are not exported.
-generateScheme :: [Text] -> VMProgram -> Text
-generateScheme libName vmp =
+generateScheme :: [Text] -> VMProgram -> OpTable -> Text
+generateScheme libName vmp ops =
   let procs = vmp.program.procedures
       infoName = programInfoBindingName libName
       aliases = collectAliases vmp
@@ -79,7 +86,7 @@ generateScheme libName vmp =
         ]
           ++ map renderSExpr (concatMap compileProcedure procs)
           ++ map renderSExpr (aliasDefines aliases)
-          ++ [renderSExpr (programInfoSExpr infoName vmp)]
+          ++ [renderSExpr (programInfoSExpr infoName vmp ops)]
           ++ [") ;; end library"]
 
 -- ---------------------------------------------------------------------------
@@ -229,26 +236,30 @@ programInfoBindingName libName = case reverse libName of
 -- user-defined function in the library.
 --
 -- > (define (NAME)
--- >   (let ((%s (%make-session N)))
+-- >   (let ((%s (%make-session N POSITIONS TABLE)))
 -- >     (register-evaluable! %s 'functor1 arity1 proc1)
 -- >     ...
 -- >     (register-callable! %s '/ "prelude:double" 1 proc2)
 -- >     ...
 -- >     %s))
 --
+-- @TABLE@ is the program's operator table (see 'opTableSExpr'), which
+-- the session carries for @read_term_from_string@.
+--
 -- @(open-session NAME)@ in the REPL library simply invokes this thunk;
 -- the dispatcher-style @(NAME 'init)@ / @(NAME 'tells)@ protocol is
 -- gone since tell procedures are now reached statically through the
 -- exported alias identifiers.
-programInfoSExpr :: Text -> VMProgram -> SExpr
-programInfoSExpr infoName vmp =
+programInfoSExpr :: Text -> VMProgram -> OpTable -> SExpr
+programInfoSExpr infoName vmp ops =
   let bindings =
         [ SList
             [ SAtom "%s",
               SList
                 [ SAtom "%make-session",
                   SInt (fromIntegral vmp.program.numTypes),
-                  indexPositionsSExpr (indexablePositions vmp.program)
+                  indexPositionsSExpr (indexablePositions vmp.program),
+                  opTableSExpr ops
                 ]
             ]
         ]
@@ -267,6 +278,46 @@ programInfoSExpr infoName vmp =
           SList [SAtom infoName],
           SList ([SAtom "let", SList bindings] ++ registrations ++ [letBody])
         ]
+
+-- | Render the program's operator table as the @(make-op-table
+-- (quote (…)))@ call that rebuilds it. The table is a derived structure
+-- — buckets keyed by fixity plus three lookup maps — so it is emitted
+-- from 'opTableEntries' and reconstructed by @(ychr optable)@'s
+-- @make-op-table@ rather than written field by field. This mirrors the
+-- embed generator's @PExpr.mkOpTable@ literal
+-- (@embed\/YCHR\/Embedded\/Generate\/Emit.hs@), which is the Haskell
+-- counterpart of the same problem: the VM program carries no operator
+-- information.
+--
+-- Each entry is @(FIXITY TYPE "name")@. The type is a bare symbol
+-- quoted along with the whole list; the name is a string, so
+-- 'printSExpr' escapes whatever a symbolic operator needs.
+opTableSExpr :: OpTable -> SExpr
+opTableSExpr table =
+  SList
+    [ SAtom "make-op-table",
+      SList
+        [ SAtom "quote",
+          SList
+            [ SList
+                [ SInt (fromIntegral fix),
+                  SAtom (opTypeText ty),
+                  SString name
+                ]
+            | (fix, ty, name) <- opTableEntries table
+            ]
+        ]
+    ]
+
+-- | Render an 'OpType' as the surface specifier @(ychr optable)@ reads.
+opTypeText :: OpType -> Text
+opTypeText Xfx = "xfx"
+opTypeText Xfy = "xfy"
+opTypeText Yfx = "yfx"
+opTypeText Fx = "fx"
+opTypeText Fy = "fy"
+opTypeText Xf = "xf"
+opTypeText Yf = "yf"
 
 -- | The @(constraint type, argument position)@ pairs a session should
 -- index, as the alist @%make-session@'s second argument takes: one

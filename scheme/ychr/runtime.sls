@@ -42,17 +42,25 @@
     ;; Closure-apply dispatch table for @'$call'@
     register-callable! %apply-closure
     ;; Session initialization
-    %make-session)
+    %make-session make-op-table)
   (import (rnrs)
           (ychr session)
           (ychr var)
           (ychr store)
           (ychr history)
           (ychr reactivation)
+          (ychr optable)
           (ychr pretty)
           (ychr read))
 
-  ;;; Session initialization: creates a fully initialized session
+  ;;; Session initialization: creates a fully initialized session.
+  ;;;
+  ;;; `ops` is the operator table `read_term_from_string` parses with:
+  ;;; the program's own table, built by the generated library with
+  ;;; `make-op-table` (see `Scheme.hs`'s `opTableSExpr`). The shorter
+  ;;; clauses install `builtin-op-table`, the counterpart of the
+  ;;; `builtinOps` `initSessionEnv` gives a hand-built interpreter
+  ;;; session.
   (define %make-session
     (case-lambda
       ;; A session with no store index. Hand-built sessions (the unit
@@ -60,7 +68,7 @@
       ;; positions take this clause; the store then scans, exactly as it
       ;; did before the index existed.
       ((num-types)
-       (%make-session num-types '()))
+       (%make-session num-types '() builtin-op-table))
       ;; `positions` is the compiler-emitted alist of the (constraint
       ;; type, argument position) pairs the program looks a partner up
       ;; through an index condition: one `(cons TYPE (list POS ...))` per
@@ -69,6 +77,8 @@
       ;; positions are recorded in the store index, and only those may be
       ;; looked up in it; anything else falls back to the scan.
       ((num-types positions)
+       (%make-session num-types positions builtin-op-table))
+      ((num-types positions ops)
        (make-session
         0
         (make-store-by-type num-types)
@@ -89,7 +99,8 @@
         ;; procedures `%apply-closure` calls for that
         ;; closure. Generated libraries fill this in via
         ;; @register-callable!@.
-        (make-hashtable equal-hash equal?)))))
+        (make-hashtable equal-hash equal?)
+        ops))))
 
   ;;; --- Deep-eval dispatch for the @is@ operator ---
 
@@ -851,15 +862,14 @@
           v
           (string->symbol (substring s (+ sep 2) n)))))
 
-  ;;; read_term_from_string: read one term out of a string, mirroring the
-  ;;; conversion of `read_term_from_string` in `YCHR.Internal.Meta`
-  ;;; (`termToValue`). The reference reader takes its operator table from
-  ;;; the session (the program's own operators); this one parses with the
-  ;;; built-in table only, a deliberate divergence recorded in
-  ;;; dev-docs/SCHEME_BACKEND_GAPS.md. The parser itself lives in
-  ;;; `(ychr read)` so it can be documented on its own; this is the
-  ;;; host-call entry point. The session is threaded because reading `_`
-  ;;; or a named variable allocates fresh logical variables in it.
+  ;;; read_term_from_string: read one term out of a string, mirroring
+  ;;; `read_term_from_string` in `YCHR.Internal.Meta` (`parseTermWith`
+  ;;; over the session's operator table, followed by `termToValue`). The
+  ;;; parser itself lives in `(ychr read)` so it can be documented on
+  ;;; its own; this is the host-call entry point. The session is
+  ;;; threaded for the fresh variables of `_` and of named variables and
+  ;;; for its operator table (`session-op-table`), so the string can
+  ;;; spell every operator the program can.
   ;;;
   ;;; A non-string argument is classified like the other strict
   ;;; primitives: an unbound variable is an instantiation failure (so a
