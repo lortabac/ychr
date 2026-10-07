@@ -925,9 +925,16 @@ expression while a procedure with a `Return` trapped in a `Foreach` or
 `DrainReactivationQueue` body uses `call/cc` with `%return`, `Break` and
 `Continue` use a `call/cc` at the loop that owns the label (and only when
 the body names it), the session thunk exported by each generated library
-calls `(%make-session N)` directly, `drain-queue!` takes
+calls `(%make-session N POSITIONS TABLE)` directly, where `TABLE` is the
+program's operator table as a `make-op-table` literal over
+`(FIXITY TYPE "name")` entries and `POSITIONS`/`TABLE` default to the
+unindexed store and `builtin-op-table` in the shorter clauses,
+`drain-queue!` takes
 `(session, alive-checking-lambda)`, `Foreach` expects
-`(snapshot, count)` from the runtime. One more assumption rides on the
+`(snapshot, count)` from the runtime. (The binding printer's operator
+table is the fixed `Pretty.prettyOps` — built-ins plus arithmetic — not
+the session's, so a user-declared operator still prints as a compound.)
+One more assumption rides on the
 tail compilation: an `If` whose arm contains a `Return` is emitted as
 `(if c ARM-spliced-before-rest ARM-spliced-before-rest)`, so a binder an
 arm introduces lexically scopes over the statements that follow the

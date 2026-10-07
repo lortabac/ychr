@@ -1,15 +1,19 @@
 (import (rnrs)
         (srfi :64)
         (ychr session)
+        (ychr optable)
         (ychr var))
 
 ;; Helper: create a fresh session (var counter starts at 0)
 ;; Mirrors %make-session's empty dispatch tables and empty store index so
-;; this low-level test doesn't depend on the runtime entry point.
+;; this low-level test doesn't depend on the runtime entry point. The
+;; operator table is the built-in one, the default a hand-built session
+;; gets.
 (define (fresh)
   (make-session 0 (vector) (vector) (vector) 0 #f '() '()
                 (make-hashtable equal-hash equal?)
-                (make-hashtable equal-hash equal?)))
+                (make-hashtable equal-hash equal?)
+                builtin-op-table))
 
 (test-begin "var")
 

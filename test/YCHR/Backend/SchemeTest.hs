@@ -42,7 +42,20 @@ tests =
         assertInfix "%continue-" code,
       testCase "a loop that never names Break drops the break escape" $ do
         code <- schemeFor leqSource
-        assertNotInfix "%break-" code
+        assertNotInfix "%break-" code,
+      -- The program's operator table is not derivable from the VM
+      -- program, so the backend emits it as a `make-op-table` literal in
+      -- the session thunk. Without it `read_term_from_string` would
+      -- parse with the built-in table only and reject the prelude's `+`.
+      -- The assertions cover a declared operator, a built-in one, and
+      -- the escaping `printSExpr` applies to the backslash entry.
+      testCase "the generated library threads the program's operator table" $ do
+        code <- schemeFor declaredOpSource
+        assertInfix "(make-op-table" code
+        assertInfix "(500 yfx \"&&&\")" code
+        assertInfix "(700 xfx \"===\")" code
+        assertInfix "(1201 fx \"end\")" code
+        assertInfix "(1100 xfx \"\\\\\")" code
     ]
 
 -- ---------------------------------------------------------------------------
@@ -66,6 +79,7 @@ schemeFor src = do
           exportedSet = cp.exportedSet,
           symbolTable = cp.symbolTable
         }
+      cp.opTable
 
 assertInfix :: Text -> Text -> IO ()
 assertInfix needle haystack =
@@ -109,3 +123,14 @@ leqSource =
   \antisymmetry @ leq(X, Y), leq(Y, X) <=> X = Y.\n\
   \idempotence @ leq(X, Y) \\ leq(X, Y) <=> true.\n\
   \transitivity @ leq(X, Y), leq(Y, Z) ==> leq(X, Z).\n"
+
+-- | A program that declares operators of its own. Their entries must
+-- reach the emitted table with their fixity and type, or a run-time
+-- @read_term_from_string@ could not spell them. @===@ is @xfx@ where
+-- @&&&@ is @yfx@, so 'opTypeText' is exercised for more than one type.
+declaredOpSource :: Text
+declaredOpSource =
+  ":- module(opdecl, [go/2, op(500, yfx, '&&&'), op(700, xfx, '===')]).\n\
+  \:- chr_constraint go/2.\n\
+  \\n\
+  \go(X, Y) <=> X = Y.\n"

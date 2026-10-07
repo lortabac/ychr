@@ -297,7 +297,7 @@ runCompile resources opts files = withCompiled resources False files $ \prog war
       let libName = [T.pack "ychr", T.pack "generated", name]
           outPath = opts.outputDir </> "ychr" </> "generated" </> T.unpack name ++ ".sls"
       createDirectoryIfMissing True (takeDirectory outPath)
-      TIO.writeFile outPath (generateScheme libName vmp)
+      TIO.writeFile outPath (generateScheme libName vmp prog.opTable)
       putStrLn outPath
       schemeRuntimeNote
 

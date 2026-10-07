@@ -10,7 +10,8 @@
           session-queue-front session-queue-front-set!
           session-queue-back session-queue-back-set!
           session-evaluables
-          session-callables)
+          session-callables
+          session-op-table)
   (import (rnrs))
 
   ;; `evaluables` holds the deep-eval dispatch table for the @is@
@@ -31,6 +32,12 @@
   ;; `index-threshold`. The field is immutable, but the vector (and the
   ;; index structures it holds) is mutated in place — the Scheme runtime
   ;; has no snapshot or undo, so the index is simply session state.
+  ;;
+  ;; `op-table` is the operator table `read_term_from_string` parses
+  ;; with: the program's own table, built by the generated library and
+  ;; handed to `%make-session` (see `(ychr optable)`), or
+  ;; `builtin-op-table` for a hand-built session — the same
+  ;; `builtinOps` default `initSessionEnv` gives one. Immutable.
   (define-record-type (session make-session session?)
     (fields (mutable var-id session-var-id session-var-id-set!)
             (mutable store-by-type session-store-by-type session-store-by-type-set!)
@@ -41,5 +48,6 @@
             (mutable queue-front session-queue-front session-queue-front-set!)
             (mutable queue-back session-queue-back session-queue-back-set!)
             (immutable evaluables session-evaluables)
-            (immutable callables session-callables)))
+            (immutable callables session-callables)
+            (immutable op-table session-op-table)))
 )
