@@ -98,13 +98,16 @@ current module imports `m` and `m` exports `name`. Unimported module:
 (`UnknownModule`). Imported module without that export: `YCHR-20009`
 (`NotExportedByModule`).
 
-`:- use_module(M)` and `:- use_module(library(M))` are equivalent;
-there is no library search path. `:- use_module` directives come
-before everything else in the file (`YCHR-20007`). The bundled
-libraries `lists`, `maybe`, `pairs`, `strings`, `meta`, `search` and
-`chr` ([`libraries/`](../../libraries/)) need an explicit import
-outside the REPL. The prelude is always imported, in full; an import
-list on it is rejected (`YCHR-20019`).
+`:- use_module(library(M))` names a bundled library: `M` is resolved
+from the standard library map, and an unknown name is rejected
+(`YCHR-10001`). A bare `:- use_module(M)` names a *user module*
+supplied to the compiler; it is not looked up on any search path.
+`:- use_module` directives come before everything else in the file
+(`YCHR-20007`). The bundled libraries `lists`, `maybe`, `pairs`,
+`strings`, `meta`, `search` and `chr`
+([`libraries/`](../../libraries/)) need an explicit import outside the
+REPL. The prelude is always imported, in full; an import list on it is
+rejected (`YCHR-20019`).
 
 `chr` is an empty compatibility module: it declares and exports
 nothing. It exists so that a Prolog module carrying
