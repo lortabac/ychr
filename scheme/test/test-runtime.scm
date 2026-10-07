@@ -855,6 +855,92 @@
               (failure-kind (lambda () (%read-term-from-string (fresh-session) 1)))))
 
 ;;; --------------------------------------------------------------------------
+;;; `%read-term-from-string` resolves function references
+;;;
+;;; `fun name/arity` is surface syntax for a first-class reference, as in
+;;; the reference reader: the parsed shape is rewritten to the canonical
+;;; `/`(flat-name, arity) closure, resolving the name against the
+;;; session's callables table. Without a renamer the module of an
+;;; unqualified name is not known, so resolution is program-wide; a
+;;; qualified `module:name` picks one exactly. An unknown or ambiguous
+;;; name is a general runtime error. Mirrors `test/YCHR/MetaTest.hs` and
+;;; the `read_term_funref_test` golden directory.
+;;; --------------------------------------------------------------------------
+
+;; A session whose callables table names two function references: one
+;; under `prelude:` reached by its base name, one under `m:` reached by
+;; its qualified spelling.
+(define (funref-session)
+  (let ((s (fresh-session)))
+    (register-callable! s '/ (string->symbol "prelude:double") 1
+                        (lambda (s a) (* 2 a)))
+    (register-callable! s '/ (string->symbol "m:inc") 1
+                        (lambda (s a) (+ a 1)))
+    s))
+
+;; A session with two same-base references in different modules, which
+;; an unqualified name resolves ambiguously.
+(define (ambiguous-funref-session)
+  (let ((s (fresh-session)))
+    (register-callable! s '/ (string->symbol "a:clash") 1 (lambda (s a) a))
+    (register-callable! s '/ (string->symbol "b:clash") 1 (lambda (s a) a))
+    s))
+
+(test-group "%read-term-from-string resolves function references"
+  (let ((s (funref-session)))
+    (let ((t (%read-term-from-string s "fun double/1")))
+      (test-equal "an unqualified name resolves to its flat identity"
+                  (string->symbol "prelude:double")
+                  (get-arg t 0))
+      (test-equal "the resolved reference has the closure functor"
+                  '/ (term-functor t))
+      (test-equal "the resolved reference records the arity" 1 (get-arg t 1)))
+    (test-equal "a qualified name resolves exactly"
+                (string->symbol "m:inc")
+                (get-arg (%read-term-from-string s "fun m:inc/1") 0))
+    (let ((t (%read-term-from-string s "wrap(fun double/1)")))
+      (test-equal "a nested reference resolves" 'wrap (term-functor t))
+      (let ((inner (get-arg t 0)))
+        (test-equal "the nested argument is the closure"
+                    '/ (term-functor inner))
+        (test-equal "the nested closure carries the flat identity"
+                    (string->symbol "prelude:double")
+                    (get-arg inner 0))))
+    (test-equal "an unknown name is a general error" 'general
+                (failure-kind
+                 (lambda () (%read-term-from-string s "fun nope/1"))))
+    (test-equal "an unknown name reports its spelling"
+                "read_term_from_string: unknown function 'nope/1'"
+                (error-message
+                 (lambda () (%read-term-from-string s "fun nope/1"))))
+    (let ((t (%read-term-from-string s "quote(fun double/1)")))
+      (test-equal "a reference inside quote resolves too" 'quote (term-functor t))
+      (test-equal "the quoted argument is the closure"
+                  '/ (term-functor (get-arg t 0)))))
+  (test-equal "an ambiguous name is a general error" 'general
+              (failure-kind
+               (lambda ()
+                 (%read-term-from-string (ambiguous-funref-session)
+                                         "fun clash/1"))))
+  (test-equal "an ambiguous name reports its candidates"
+              (string-append
+               "read_term_from_string: ambiguous function reference 'clash/1'"
+               " (could be: a:clash/1, b:clash/1)")
+              (error-message
+               (lambda ()
+                 (%read-term-from-string (ambiguous-funref-session)
+                                         "fun clash/1"))))
+  ;; A `fun` that is not a reference spelling is data, exactly as before:
+  ;; a variable name, a non-literal name, and a lambda's parameter list.
+  (test-equal "a variable name stays data" 'fun
+              (term-functor (read-term "fun X/1")))
+  (test-equal "a non-literal name stays data" 'fun
+              (term-functor (read-term "fun f(X)/1")))
+  (test-equal "a lambda is not mistaken for a reference"
+              (string->symbol "->")
+              (term-functor (read-term "fun(x, y) -> x end"))))
+
+;;; --------------------------------------------------------------------------
 ;;; `deep-eval-value` arguments: declared calls evaluate, data stays data
 ;;;
 ;;; An argument is dispatched only when its own functor is evaluable.
@@ -970,6 +1056,47 @@
                (lambda ()
                  (%apply-closure (closure-session)
                                  (make-term 'pair (vector prelude-double 1))
-                                 5)))))
+                                 5))))
+  ;; A `fun name/arity` term built at run time — here directly, and by
+  ;; `list_to_compound` in the `dynamic_funref_test` golden — is resolved
+  ;; at the dispatch site, so it is callable like a reader-produced
+  ;; reference. The term keeps its surface shape.
+  (let ((dynamic
+         (lambda (name arity)
+           (make-term 'fun
+                      (vector (make-term '/ (vector name arity)))))))
+    (test-equal "a dynamic fun term resolves its unqualified name"
+                10
+                (%apply-closure (closure-session)
+                                (dynamic 'double 1)
+                                5))
+    (test-equal "a dynamic fun term resolves a qualified name"
+                10
+                (%apply-closure (closure-session)
+                                (dynamic prelude-double 1)
+                                5))
+    (test-equal "a dynamic fun term at the wrong arity is a general failure"
+                'general
+                (failure-kind
+                 (lambda ()
+                   (%apply-closure (closure-session)
+                                   (dynamic 'double 1)
+                                   5 6))))
+    (test-equal "a dynamic fun term with an unknown name is a general failure"
+                'general
+                (failure-kind
+                 (lambda ()
+                   (%apply-closure (closure-session)
+                                   (dynamic 'nope 1)
+                                   5))))
+    ;; The inner fields are read through their bindings, like a closure's
+    ;; header fields, so a term whose name is a bound variable resolves.
+    (let* ((s (closure-session))
+           (ident (make-var s))
+           (term (make-term 'fun (vector (make-term '/ (vector ident 1))))))
+      (%unify s ident 'double)
+      (test-equal "a dynamic fun term derefs a bound name field"
+                  10
+                  (%apply-closure s term 5)))))
 
 (test-end "runtime")

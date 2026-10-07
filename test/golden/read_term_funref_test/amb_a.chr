@@ -1,0 +1,11 @@
+% One of two modules declaring `clash/1`, so an unqualified
+% `fun clash/1` names two functions and the reader must report the
+% ambiguity. Nothing has to import this module: the reader resolves
+% against the whole program, like a top-level goal does.
+:- module(amb_a, [clash/1]).
+
+:- use_module(library(meta)).
+
+:- function clash/1.
+
+clash(X) -> X.

@@ -1,0 +1,30 @@
+% `read_term_from_string/1` resolves a `fun name/arity` spelling to a
+% first-class function reference, on both backends: the reader rewrites
+% it to the same `/`(flat-name, arity) closure a source `fun name/arity`
+% compiles to, so the value can be applied through the prelude's
+% `call/N`.
+%
+% `unary`/`binary` read a reference and apply it; `same` checks that the
+% reference read from a string equals the source spelling. `amb_a.chr`
+% and `amb_b.chr` each declare `clash/1`, so the `ambiguous` case (a
+% goal-negative one, skipped by the Scheme harness) pins the reader's
+% program-wide ambiguity error, and `unknown` the unknown-name error.
+:- module(read_term_funref_test, [unary/2, binary/2, same/1]).
+
+:- use_module(library(meta)).
+
+:- chr_constraint unary(string, any), binary(string, any), same(any).
+
+:- function inc/1, plus/2.
+
+inc(X) -> X + 1.
+plus(X, Y) -> X + Y.
+
+unary(S, R) <=> F is read_term_from_string(S), R is call(F, 41).
+
+binary(S, R) <=> F is read_term_from_string(S), R is call(F, 1, 1).
+
+same(R) <=>
+    F is read_term_from_string("fun inc/1"),
+    G is fun inc/1,
+    R is (F == G).

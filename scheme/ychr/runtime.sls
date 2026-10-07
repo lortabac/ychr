@@ -328,6 +328,13 @@
   ;;     closure does not record the arity its source lambda declared;
   ;;     the table only holds that declared arity, so any other arity
   ;;     misses. Captures are the fields after the quoted source form.
+  ;;
+  ;; A value `callable-invocation` does not recognize may still be the
+  ;; surface shape of a function reference, `fun('/`(name, arity))` —
+  ;; what `list_to_compound` and friends build at run time, with no
+  ;; renamer to resolve the name. `dynamic-funref-key` resolves that name
+  ;; against the same callables table, so a dynamically constructed
+  ;; reference is callable exactly like one the string reader produced.
   (define (%apply-closure s closure . args)
     (let* ((d (deref closure))
            (n (length args))
@@ -340,6 +347,13 @@
            (if proc
                (apply proc s (append captures args))
                (%chr-error "call: no matching closure"))))
+        ((dynamic-funref-key s d n)
+         =>
+         (lambda (key)
+           (let ((proc (hashtable-ref (session-callables s) key #f)))
+             (if proc
+                 (apply proc s args)
+                 (%chr-error "call: no matching closure")))))
         ((%unbound? d)
          (%chr-inst-error
           (string-append
@@ -379,6 +393,44 @@
                      (list-tail (vector->list fields) 2))
                #f)))
         (else #f))))
+
+  ;; The dispatch key of a surface-shaped `fun name/arity` term applied at
+  ;; `n` arguments, or #f for any other value.
+  ;;
+  ;; Such a term has functor `fun` and a single `/` argument holding the
+  ;; name and declared arity, exactly the shape the renamer strips from
+  ;; source. Built at run time it carries no resolved identity, so the
+  ;; name atom is resolved against the callables table here, with the
+  ;; same matching rules as the string reader
+  ;; (`resolve-funref-identity`). Both failures — no match, several
+  ;; matches — leave the term uncallable, and `%apply-closure` reports
+  ;; the ordinary `call: no matching closure`.
+  ;;
+  ;; Runs only after `callable-invocation` misses, and only inspects
+  ;; values whose functor is `fun`, so the common dispatch path is
+  ;; untouched.
+  (define (dynamic-funref-key s d n)
+    (and (term? d)
+         (eq? (term-functor d) 'fun)
+         (let ((fields (term-args d)))
+           (and (= (vector-length fields) 1)
+                (let ((inner (deref (vector-ref fields 0))))
+                  (and (term? inner)
+                       (eq? (term-functor inner) '/)
+                       (let ((inner-fields (term-args inner)))
+                         (and (= (vector-length inner-fields) 2)
+                              (let ((ident (deref (vector-ref inner-fields 0)))
+                                    (declared (deref (vector-ref inner-fields 1))))
+                                (and (symbol? ident)
+                                     (integer? declared)
+                                     (exact? declared)
+                                     (= declared n)
+                                     (let ((flat
+                                            (resolve-funref-identity
+                                             s ident declared)))
+                                       (and flat
+                                            (make-callable-key
+                                             '/ (string->symbol flat) n)))))))))))))
 
   ;; Prelude host-call table for `deep-eval-value`. Mirrors the
   ;; bare-name entries in Haskell's `baseHostCallRegistry`

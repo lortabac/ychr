@@ -73,6 +73,49 @@ readable and prints as a compound on both backends.
 scheme runtime tests pin both the session's table and the printer's
 operator forms.
 
+`read_term_from_string/1` now resolves the surface spelling
+`fun name/arity` to a first-class function reference, on both backends.
+The reader has no renamer, so it used to return the parsed `fun`
+compound as data and a later `call/N` failed with `YCHR-60001`,
+`call: no matching closure`; it now rewrites every well-formed
+`fun name/arity` to the canonical `'/'("module:name", arity)` closure a
+compiled occurrence of that spelling produces, so
+`F is read_term_from_string("fun '+'/2"), R is call(F, 1, 1)` binds the
+`prelude:+/2` reference and `R = 2`. Because there is no module context
+at run time, an unqualified name resolves against every function of the
+loaded program — the same view a top-level goal has — and the
+`module:name` spelling (accepted only by this reader) picks one exactly,
+which is also how to disambiguate. An unknown name, or two modules
+declaring the same base name and arity, raises a general runtime error
+naming the reference. A `fun` shape that is not a reference spelling
+(`fun X/1`, an arity that is not a non-negative integer, a lambda's
+parameter list) stays an ordinary term, and the reader still does not
+implement `quote/1`. The
+resolution lives in `YCHR.Internal.Meta` (interpreter) and `(ychr read)`
+(Scheme), and reads the identity back off the session's callables keys,
+so a resolved reference always dispatches. Pinned by
+`test/golden/read_term_funref_test/` on both backends, by
+`YCHR.MetaTest` and the `%read-term-from-string` group in
+`scheme/test/test-runtime.scm`, and by a REPL case.
+
+The same resolution now covers a `fun name/arity` term assembled at run
+time rather than read from a string. `'$call'` dispatch
+(`applyClosure` / `%apply-closure`) accepts the surface shape
+`fun('/'(name, arity))` — what `list_to_compound`, a host call, or
+unification builds — and resolves the flat name against the callables
+table, with the same matching rules as the reader, so
+`F is list_to_compound([quote('fun'),
+list_to_compound([quote('/'), quote('+'), 2])]), R is call(F, 1, 1)`
+binds `R = 2`. The term keeps its surface shape (it is not rewritten to
+a compiled closure), and the resolution runs only after the ordinary
+closure key misses and only for a `fun`-headed value, so the common
+dispatch path is untouched. A name that resolves to nothing, or to
+several functions at that arity, or an application at an arity the term
+does not record, leaves it uncallable and reports the ordinary
+`call: no matching closure`. Pinned by `test/golden/dynamic_funref_test/`
+on both backends, the `%apply-closure` group in
+`scheme/test/test-runtime.scm`, and a REPL case.
+
 There is now a web playground: the whole compiler — front end, VM
 compiler, interpreter and the optional type checker — built to
 WebAssembly by MicroHs and Emscripten, behind a static page with a

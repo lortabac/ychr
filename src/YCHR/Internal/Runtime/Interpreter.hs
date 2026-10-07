@@ -87,7 +87,13 @@ import YCHR.Internal.Interpreter.Slots
     SlotValExpr (..),
     lowerProgram,
   )
-import YCHR.Internal.Meta (decodeName, valueToTerm)
+import YCHR.Internal.Meta
+  ( FunRefLookup (..),
+    decodeName,
+    flatToName,
+    lookupFunRef,
+    valueToTerm,
+  )
 import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error
@@ -1287,6 +1293,13 @@ evalCallArgDeep (SCallId e) = CId <$> evalIdExpr e
 -- whose length grew with the number of same-arity functions and
 -- lifted lambdas the program defines.
 --
+-- A value 'closureKey' does not recognize may still be the surface
+-- shape of a function reference, @fun('/'(name, arity))@ — what
+-- @list_to_compound@ and friends build at run time, with no renamer to
+-- resolve the name. 'dynamicFunRefKey' resolves that name against the
+-- same callables table, so a dynamically constructed reference is
+-- callable exactly like one the string reader produced.
+--
 -- The failure modes, and their kinds, are the dispatchers': an unbound
 -- closure is an instantiation error, so a rule guard soft-fails and
 -- retries the occurrence once reactivation binds the variable;
@@ -1296,14 +1309,63 @@ applyClosure closure args = do
   v <- deref closure
   v' <- derefClosureHeader v
   case closureKey (length args) v' of
-    Just (key, captures) -> do
+    Just (key, captures) -> dispatch key captures
+    Nothing -> do
+      mKey <- dynamicFunRefKey (length args) v'
+      case mKey of
+        Just key -> dispatch key []
+        Nothing
+          | isVar v -> closureUnboundError
+          | otherwise -> closureNoMatchError
+  where
+    dispatch key captures = do
       SessionEnv {callables} <- ask
       case Map.lookup key callables of
         Just procName -> callProc procName (map CVal (captures <> args))
         Nothing -> closureNoMatchError
-    Nothing
-      | isVar v -> closureUnboundError
-      | otherwise -> closureNoMatchError
+
+-- | The dispatch key of a surface-shaped @fun name\/arity@ term applied
+-- at @n@ arguments, or 'Nothing' for any other value.
+--
+-- Such a term has functor @fun@ and a single @'/'@ argument holding the
+-- name and declared arity, exactly the shape the renamer strips from
+-- source. Built at run time it carries no resolved identity, so the name
+-- atom is resolved against the callables table here, with the same
+-- matching rules as the string reader ('YCHR.Internal.Meta.lookupFunRef').
+-- Both failures — no match, several matches — leave the term uncallable,
+-- and the caller reports the ordinary @call: no matching closure@.
+--
+-- Runs only after 'closureKey' misses, and only inspects values whose
+-- functor is @fun@, so the common dispatch path is untouched. The inner
+-- fields are read through their bindings, like a closure's header
+-- fields, so a term whose name or arity is a bound variable still
+-- resolves.
+dynamicFunRefKey :: Int -> Value -> Chr (Maybe CallableKey)
+dynamicFunRefKey n v = case v of
+  VTerm "fun" [inner] -> do
+    inner' <- deref inner
+    case inner' of
+      VTerm "/" [nameField, arityField] -> do
+        name' <- deref nameField
+        arity' <- deref arityField
+        case (name', arity') of
+          (VAtom flat, VInt declared)
+            | fromIntegral declared == n -> resolve flat declared
+          _ -> pure Nothing
+      _ -> pure Nothing
+  _ -> pure Nothing
+  where
+    resolve flat declared = do
+      SessionEnv {callables} <- ask
+      pure $ case lookupFunRef callables (flatToName flat) declared of
+        FunRefFound ident ->
+          Just
+            CallableKey
+              { functor = funRefFunctor,
+                identity = Name ident,
+                arity = fromIntegral declared
+              }
+        _ -> Nothing
 
 -- | Read a closure's two header fields through their bindings.
 --

@@ -2,7 +2,9 @@
 
 module YCHR.MetaTest (tests) where
 
+import Control.Exception (try)
 import Data.IntMap.Strict qualified as IntMap
+import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -15,17 +17,18 @@ import YCHR.Internal.Meta (metaHostCallRegistry, valueToTerm)
 import YCHR.Internal.PExpr (OpTable, OpType (..))
 import YCHR.Internal.Parsed (OpDecl (..))
 import YCHR.Internal.Parser (builtinOps, mergeOps)
+import YCHR.Internal.Runtime.Error (RuntimeErrorThrown (..))
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
     HostCallRegistry,
     baseHostCallRegistry,
   )
-import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
+import YCHR.Internal.Runtime.Monad (CallableRegistry, Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.Runtime.Var (deref, equal)
 import YCHR.Internal.Types (Term (..))
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (Name (..))
+import YCHR.Internal.VM (CallableKey (..), Name (..), funRefFunctor, lambdaClosureFunctor)
 import YCHR.Run (compileModules, runProgramWithQuery)
 
 tests :: TestTree
@@ -33,6 +36,7 @@ tests =
   testGroup
     "YCHR.Internal.Meta"
     [ readTermTests,
+      funRefTests,
       vmNameRoundTripTests
     ]
 
@@ -73,6 +77,44 @@ readTermWith :: OpTable -> Text -> IO Value
 readTermWith table s = case Map.lookup (Name "read_term_from_string") metaHostCallRegistry of
   Nothing -> assertFailure "read_term_from_string not found in registry"
   Just (HostCallFn f) -> runChrWith table (f [VText s])
+
+-- | A session carrying the given callables table and the built-in
+-- operator table. The function-reference reader resolves against the
+-- callables, so its cases inject one instead of compiling a program.
+runChrWithCallables :: CallableRegistry -> Chr a -> IO a
+runChrWithCallables cl action = do
+  env <-
+    initSessionEnv
+      []
+      []
+      []
+      IntMap.empty
+      builtinOps
+      Map.empty
+      baseHostCallRegistry
+      Map.empty
+      cl
+      Map.empty
+      Set.empty
+  runChr action env
+
+-- | Invoke the reader in a session carrying the given callables table.
+readTermWithCallables :: CallableRegistry -> Text -> IO Value
+readTermWithCallables cl s =
+  case Map.lookup (Name "read_term_from_string") metaHostCallRegistry of
+    Nothing -> assertFailure "read_term_from_string not found in registry"
+    Just (HostCallFn f) -> runChrWithCallables cl (f [VText s])
+
+-- | A callables table of function references. The mapped procedure name
+-- is never used: the reader only reads the keys back.
+callableTable :: [(Text, Int)] -> CallableRegistry
+callableTable entries =
+  Map.fromList
+    [ ( CallableKey {functor = funRefFunctor, identity = Name ident, arity = arity},
+        Name "unused"
+      )
+    | (ident, arity) <- entries
+    ]
 
 compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
 compileOrFail inputs = case compileModules stdlib False inputs of
@@ -183,7 +225,78 @@ readTermTests =
           _ -> assertFailure "unexpected result for 1 + 1",
       endToEndReadTermTest,
       endToEndPreludeOperatorTest,
-      endToEndDeclaredOperatorTest
+      endToEndDeclaredOperatorTest,
+      endToEndFunRefTest
+    ]
+
+-- | The reader resolves a well-formed @fun name\/arity@ against the
+-- session's callables table into the canonical closure shape.
+funRefTests :: TestTree
+funRefTests =
+  testGroup
+    "fun name/arity"
+    [ testCase "an unqualified name resolves to its flat identity" $ do
+        v <- readTermWithCallables (callableTable [("prelude:double", 1)]) "fun double/1"
+        case v of
+          VTerm "/" [VAtom "prelude:double", VInt 1] -> pure ()
+          _ -> assertFailure "unexpected reader result",
+      testCase "a qualified name resolves exactly" $ do
+        v <- readTermWithCallables (callableTable [("m:inc", 1)]) "fun m:inc/1"
+        case v of
+          VTerm "/" [VAtom "m:inc", VInt 1] -> pure ()
+          _ -> assertFailure "unexpected reader result",
+      testCase "a nested reference resolves" $ do
+        v <- readTermWithCallables (callableTable [("prelude:double", 1)]) "wrap(fun double/1)"
+        case v of
+          VTerm "wrap" [VTerm "/" [VAtom "prelude:double", VInt 1]] -> pure ()
+          _ -> assertFailure "unexpected reader result",
+      testCase "an unknown name is a runtime error" $ do
+        outcome <-
+          try (readTermWithCallables Map.empty "fun nope/1") ::
+            IO (Either RuntimeErrorThrown Value)
+        case outcome of
+          Left (RuntimeErrorThrown _ msg _)
+            | "unknown function 'nope/1'" `isInfixOf` msg -> pure ()
+          _ -> assertFailure "expected the reader to fail with a runtime error",
+      testCase "an ambiguous name is a runtime error" $ do
+        let cl = callableTable [("a:clash", 1), ("b:clash", 1)]
+        outcome <-
+          try (readTermWithCallables cl "fun clash/1") ::
+            IO (Either RuntimeErrorThrown Value)
+        case outcome of
+          Left (RuntimeErrorThrown _ msg _)
+            | "ambiguous function reference 'clash/1'" `isInfixOf` msg -> pure ()
+          _ -> assertFailure "expected the reader to fail with a runtime error",
+      testCase "a variable name in fun stays data" $ do
+        v <- readTermWithCallables (callableTable [("m:inc", 1)]) "fun X/1"
+        case v of
+          VTerm "fun" [VTerm "/" [VVar _, VInt 1]] -> pure ()
+          _ -> assertFailure "unexpected reader result",
+      testCase "a reference inside quote resolves too" $ do
+        v <- readTermWithCallables (callableTable [("m:inc", 1)]) "quote(fun inc/1)"
+        case v of
+          VTerm "quote" [VTerm "/" [VAtom "m:inc", VInt 1]] -> pure ()
+          _ -> assertFailure "unexpected reader result",
+      -- The functor filter: a lifted lambda's key is a `__closure`, not a
+      -- function reference, so a base-name match must not resolve to it.
+      testCase "a lambda closure key is not a function reference" $ do
+        let cl =
+              Map.fromList
+                [ ( CallableKey
+                      { functor = lambdaClosureFunctor,
+                        identity = Name "m:inc",
+                        arity = 1
+                      },
+                    Name "unused"
+                  )
+                ]
+        outcome <-
+          try (readTermWithCallables cl "fun inc/1") ::
+            IO (Either RuntimeErrorThrown Value)
+        case outcome of
+          Left (RuntimeErrorThrown _ msg _)
+            | "unknown function 'inc/1'" `isInfixOf` msg -> pure ()
+          _ -> assertFailure "expected the lambda key to be ignored"
     ]
 
 endToEndReadTermTest :: TestTree
@@ -259,6 +372,37 @@ endToEndDeclaredOperatorTest =
               ]
           ) -> pure ()
       other -> assertFailure $ "Expected T = a ++ b, got: " ++ show other
+
+-- | End to end: a string read as @fun name\/arity@ names a declared
+-- function, the value is the function-reference closure the compiler
+-- builds, and the prelude's @call\/2@ can apply it.
+endToEndFunRefTest :: TestTree
+endToEndFunRefTest =
+  testCase "end-to-end: read_term_from_string resolves a function reference" $ do
+    let src =
+          ":- module(m, [check/2]).\n\
+          \:- chr_constraint check/2.\n\
+          \:- function inc/1.\n\
+          \inc(X) -> X + 1.\n\
+          \\n\
+          \check(X, X) <=> true.\n"
+    prog <- compileOrFail [("m.chr", src)]
+    bindings <-
+      runProgramWithQuery
+        typeCheckerProgram
+        prog
+        hostCalls
+        "F is host:read_term_from_string(\"fun inc/1\"), R is call(F, 41), check(R, 42)."
+    case Map.lookup "R" bindings of
+      Just (IntTerm 42) -> pure ()
+      other -> assertFailure $ "Expected R = 42, got: " ++ show other
+    case Map.lookup "F" bindings of
+      Just
+        ( CompoundTerm
+            (Types.Unqualified "/")
+            [CompoundTerm (Types.Unqualified "m:inc") [], IntTerm 1]
+          ) -> pure ()
+      other -> assertFailure $ "Expected the m:inc/1 closure, got: " ++ show other
 
 -- | Property: 'YCHR.Internal.Meta.valueToTerm' (run on a 'VAtom' whose payload
 -- comes from 'YCHR.Internal.Compile.Names.vmName') recovers the original

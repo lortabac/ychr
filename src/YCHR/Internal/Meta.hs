@@ -10,6 +10,9 @@ module YCHR.Internal.Meta
     valueToTerm,
     termToValue,
     decodeName,
+    FunRefLookup (..),
+    lookupFunRef,
+    flatToName,
   )
 where
 
@@ -19,6 +22,7 @@ import Control.Monad.Trans.Reader (ask)
 import Control.Monad.Trans.State.Strict (StateT, evalStateT, gets, modify')
 import Data.Char (chr)
 import Data.Foldable (toList)
+import Data.List (intercalate)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text, pack)
 -- MicroHs's 'Data.Text' lacks 'breakOn'; the shim supplies it
@@ -28,14 +32,14 @@ import Numeric (readHex)
 import YCHR.Internal.Parser (parseTermWith)
 import YCHR.Internal.Pretty (prettyTerm)
 import YCHR.Internal.Runtime.Error (instantiationErrorS, runtimeErrorS)
-import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..))
+import YCHR.Internal.Runtime.Monad (CallableRegistry, Chr, SessionEnv (..))
 import YCHR.Internal.Runtime.Registry (HostCallFn (..), HostCallRegistry, unit, valueList)
 import YCHR.Internal.Runtime.Store (Suspension (..), getAllStoredConstraints, isSuspAlive)
 import YCHR.Internal.Runtime.Types (Value (..), VarId)
 import YCHR.Internal.Runtime.Var (deref, getVarId, newVar)
 import YCHR.Internal.Types (Term (..), flattenName)
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (Name (..))
+import YCHR.Internal.VM (CallableKey (..), Name (..), funRefFunctor)
 
 -- | Convert a runtime 'Value' to a surface 'Term', dereferencing logical
 -- variables. An unbound variable is rendered as 'VarTerm' carrying the
@@ -197,7 +201,12 @@ metaHostCallRegistry =
             SessionEnv {opTable = ops} <- ask
             case parseTermWith ops "<read_term_from_string>" s of
               Left err -> error $ "read_term_from_string: " ++ show err
-              Right term -> evalStateT (termToValue term) Map.empty
+              Right term -> do
+                -- @fun name\/arity@ is surface syntax for a first-class
+                -- function reference, exactly as in a compiled rule; the
+                -- reader has no renamer, so it resolves the name here.
+                term' <- resolveFunRefs term
+                evalStateT (termToValue term') Map.empty
           _ -> error "read_term_from_string: expected 1 Text argument"
       ),
       ( Name "print_store",
@@ -255,3 +264,164 @@ metaHostCallRegistry =
       case v' of
         VTerm f xs -> VTerm f <$> traverse deepDeref xs
         _ -> pure v'
+
+-- ---------------------------------------------------------------------------
+-- Function-reference resolution for the reader
+-- ---------------------------------------------------------------------------
+
+-- Note [Function-reference resolution in the reader]
+--
+-- @fun name\/arity@ is surface syntax for a first-class function
+-- reference, so a string read at run time must produce the same value a
+-- compiled occurrence of that spelling does: the canonical
+-- @'\/'("module:name", arity)@ closure the compiler bakes in
+-- ('Compile.compileExpr') and @'$call'@ dispatches through
+-- ('SessionEnv.callables').
+--
+-- Without a renamer at run time the module of an unqualified name is not
+-- known, so the reader resolves against the whole program, exactly like
+-- the synthetic @\<query\>@ module the renamer builds for top-level
+-- goals: a bare name matches any loaded module's function of that base
+-- and arity, and two matches are the same 'AmbiguousName' situation the
+-- compiler reports. A qualified @module:name@ is accepted too (the
+-- string reader is the only place that accepts one, since a source
+-- @fun module:name\/arity@ is a separate pre-existing gap), which is
+-- also the way to disambiguate. Both spellings let the reader name a
+-- function the /calling/ module could not see; the reader has no module
+-- context to narrow that with.
+--
+-- The reader does not implement @quote\/1@, so @fun@ is resolved in
+-- every position, inside a @quote(\...)@ compound included. A
+-- hand-built session with no callables has no functions, so every
+-- well-formed @fun@ is unknown there.
+
+-- | Rewrite every well-formed surface @fun name\/arity@ in a parsed term
+-- into the canonical @'/'("module:name", arity)@ shape, which
+-- 'termToValue' then turns into a function-reference closure. Every
+-- other term — including a malformed @fun@ shape such as @fun X\/1@ — is
+-- left as data, exactly as before.
+resolveFunRefs :: Term -> Chr Term
+resolveFunRefs t = case funRefShape t of
+  Just (name, refArity) -> do
+    flat <- resolveFunRefName name refArity
+    pure
+      ( CompoundTerm
+          (Types.Unqualified "/")
+          [CompoundTerm (Types.Unqualified flat) [], IntTerm refArity]
+      )
+  Nothing -> case t of
+    CompoundTerm name args -> CompoundTerm name <$> traverse resolveFunRefs args
+    _ -> pure t
+
+-- | The name and arity of a well-formed surface @fun name\/arity@, or
+-- 'Nothing' for any other term (a malformed @fun@ shape included).
+funRefShape :: Term -> Maybe (Types.Name, Integer)
+funRefShape (CompoundTerm (Types.Unqualified "fun") [inner]) = slashShape inner
+funRefShape _ = Nothing
+
+-- | The @name\/arity@ argument of a @fun@: a two-argument @'/'@ whose
+-- arity is a non-negative integer literal and whose name is a literal
+-- atom, unqualified or qualified.
+slashShape :: Term -> Maybe (Types.Name, Integer)
+slashShape (CompoundTerm (Types.Unqualified "/") [nameTerm, IntTerm refArity])
+  | refArity >= 0,
+    Just name <- funRefName nameTerm =
+      Just (name, refArity)
+slashShape _ = Nothing
+
+-- | The surface name inside a @fun name\/arity@, when it is a literal
+-- atom (unqualified or qualified). A variable, or any other shape, is
+-- not a function reference and leaves the @fun@ compound as data.
+funRefName :: Term -> Maybe Types.Name
+funRefName (CompoundTerm n []) = Just n
+funRefName _ = Nothing
+
+-- | The outcome of resolving a surface function name and arity against a
+-- callables table. 'FunRefFound' carries the flattened @module:name@
+-- identity; the two failures are kept apart so the string reader can
+-- diagnose them and the runtime's dynamic @fun@ dispatch can treat both
+-- as "not a callable".
+data FunRefLookup
+  = FunRefFound Text
+  | FunRefUnknown
+  | FunRefAmbiguous [Name]
+  deriving (Show, Eq)
+
+-- | Resolve a surface function name and arity to the callables identity
+-- that dispatches it. An unqualified name matches any module's function
+-- of that base and arity; a qualified @module:name@ matches exactly.
+--
+-- The identity is read back off the matching 'CallableKey', never
+-- re-derived from the input spelling, so a resolved reference is exactly
+-- the key @'$call'@ dispatches with — it cannot name a callable the
+-- table lacks.
+lookupFunRef :: CallableRegistry -> Types.Name -> Integer -> FunRefLookup
+lookupFunRef callables name refArity =
+  case [ key.identity
+       | key <- Map.keys callables,
+         key.functor == funRefFunctor,
+         toInteger key.arity == refArity,
+         refMatches name key.identity
+       ] of
+    [ident] -> FunRefFound ident.unName
+    [] -> FunRefUnknown
+    idents -> FunRefAmbiguous idents
+
+-- | The 'Types.Name' a flat surface atom denotes: @foo@ is unqualified,
+-- @module:foo@ is qualified at the first @:@. Used for a dynamically
+-- built @fun name\/arity@ term, whose identity is a flat atom rather
+-- than a parsed name node, and for the flat @module:name@ identities the
+-- callables table is keyed on.
+flatToName :: Text -> Types.Name
+flatToName s = case T.breakOn ":" s of
+  (m, rest) | not (T.null rest) -> Types.Qualified m (T.drop 1 rest)
+  _ -> Types.Unqualified s
+
+-- | Resolve a surface function name and arity to the flattened
+-- @module:name@ identity the callables table keys function references
+-- on. Fails with a runtime error when no function matches, or when
+-- several do.
+resolveFunRefName :: Types.Name -> Integer -> Chr Text
+resolveFunRefName name refArity = do
+  SessionEnv {callables} <- ask
+  case lookupFunRef callables name refArity of
+    FunRefFound ident -> pure ident
+    FunRefUnknown ->
+      runtimeErrorS $
+        "read_term_from_string: unknown function '" ++ refLabel name refArity ++ "'"
+    FunRefAmbiguous idents ->
+      runtimeErrorS $
+        "read_term_from_string: ambiguous function reference '"
+          ++ refLabel name refArity
+          ++ "' (could be: "
+          ++ intercalate ", " (map (candidateLabel refArity) idents)
+          ++ ")"
+
+-- | A callable identity rendered as the @module:name/arity@ a diagnostic
+-- names it by.
+candidateLabel :: Integer -> Name -> String
+candidateLabel refArity ident = T.unpack ident.unName ++ "/" ++ show refArity
+
+-- | Does a callable identity name the function a surface name denotes?
+-- An unqualified name matches any module's function of that base; a
+-- qualified one matches the flattened identity exactly. The base is the
+-- text after the first @:@ — module names cannot contain one, a base
+-- name can.
+refMatches :: Types.Name -> Name -> Bool
+refMatches (Types.Unqualified b) ident = baseOfFlat ident.unName == b
+refMatches (Types.Qualified m b) ident = ident.unName == m <> ":" <> b
+
+-- | The base (module-less) part of a flattened @module:name@ identity.
+baseOfFlat :: Text -> Text
+baseOfFlat s = case T.breakOn ":" s of
+  (_, rest) | T.null rest -> s
+  (_, rest) -> T.drop 1 rest
+
+-- | The surface spelling of a function reference, for diagnostics.
+refLabel :: Types.Name -> Integer -> String
+refLabel name refArity = T.unpack (surfaceName name) ++ "/" ++ show refArity
+
+-- | A name as the user wrote it: @foo@ or @module:foo@.
+surfaceName :: Types.Name -> Text
+surfaceName (Types.Unqualified b) = b
+surfaceName (Types.Qualified m b) = m <> ":" <> b
