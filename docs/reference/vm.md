@@ -110,7 +110,7 @@ table:
   header at all, anything written before VM version numbers existed;
   an explicit `(version 0)` is rejected as well. Such a unit is
   rejected by any version-aware binary, because only a binary predating
-  VM version numbers knows that format. The current version is 1.
+  VM version numbers knows that format. The current version is 2.
 - **`<program>`** — the VM program (see below).
 - **`exports`** — the CHR identifiers (name + arity) visible to
   external callers; backends should generate a public entry point
@@ -476,10 +476,9 @@ reported, so a runtime that truncates does so where the stack is
 read, not where it is pushed. A backend that ignores `push-frame`
 loses stack traces in runtime errors and nothing else.
 
-The five fields are emitted as raw unquoted text — a label or source
-fragment containing spaces or parentheses (the common case) does not
-survive re-parsing as a single atom. Treat `push-frame` fields as
-display-only.
+The `<label>`, `<file>` and `<source>` fields are quoted strings; the
+`<line>` and `<col>` fields are integers. The quoted fields may contain
+spaces, commas and parentheses, so the frame survives re-parsing.
 
 
 ## Value Expressions
@@ -886,7 +885,7 @@ is `mymodule:leq/2`, so procedure names follow
 
 ```scheme
 (vm-program
-  (version 1)
+  (version 2)
   (program 1
     (type-names (qualified "mymodule" "leq"))
     1
@@ -923,7 +922,7 @@ is `mymodule:leq/2`, so procedure names follow
     ;   reflexivity @ leq(X, X1) <=> X == X1 | true.
     (procedure "occurrence_mymodule__leq2_1" ("active" "X_0" "X_1")
                (occurrence 0 1 0 "reflexivity")
-      (push-frame rule reflexivity 4 15 mymodule.chr leq(X, X))
+      (push-frame "rule reflexivity" 4 15 "mymodule.chr" "leq(X, X)")
       (if (bequal (var "X_0") (var "X_1"))
         ((kill (id-var "active"))
          (return true))

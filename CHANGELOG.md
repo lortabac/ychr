@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+The s-expression VM format is now version 2, a breaking change. The
+`push-frame` statement previously emitted its label, file and
+pretty-printed source fields as bare atoms, so a dump containing a rule
+or a user function — where those fields contain spaces, commas or
+parentheses — could not be re-read by `deserialize`. Those three fields
+are now quoted strings and the line and column fields are integers, so
+`deserialize . serialize` is the identity again. A dump written at
+version 1 is no longer readable and is rejected as an unsupported VM
+version.
+
 The MicroHs executable no longer decodes its bundled resources at run
 time. A new build step, `make resources`, runs `ychr-codegen` over
 `libraries/*.chr` and `typechecker/*.chr` and writes the decoded standard
