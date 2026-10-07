@@ -128,6 +128,10 @@ Anchor a `Note [Title]` in one module and reference it from others:
 This keeps long-form rationale in one place and avoids the same paragraph
 drifting out of sync across modules.
 
+Describe the present system only. We don't care about how it got to this point;
+we only care about how it works now.
+However you can add historical notes sparingly, to avoid reproposing failed or rejected attempts.
+
 ## Module hygiene
 
 Every module has an explicit export list. Organize exports and internal
@@ -168,3 +172,8 @@ limit, so this is on the author: break long expressions, signatures, and
 comments before they wrap. The only acceptable exception is an unusually long
 literal (a URL, a fixture string, a generated identifier) that cannot be split
 without harming readability.
+
+## Natural language
+
+Keep the style simple, concise and natural. No heavy AI style.
+Imagine you are a lazy programmer who wants to minimize typing.
