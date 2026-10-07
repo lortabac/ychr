@@ -34,6 +34,7 @@ import Control.Exception
 import Control.Monad (unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask, runReaderT)
+import Data.Char (isSpace)
 import Data.List (intercalate, sort, stripPrefix)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -163,6 +164,53 @@ mkReplInputs quietMode exported = do
     withoutHistory = mkLineInput . settings Nothing
 
 -- ---------------------------------------------------------------------------
+-- Input normalization
+-- ---------------------------------------------------------------------------
+
+-- | Normalize one raw line of REPL input: drop a trailing @%@ line
+-- comment, then trim trailing whitespace — the @\\r@ of a CRLF line
+-- ending included.
+--
+-- The language lexer treats @%@ as a comment to end of line
+-- (docs\/reference\/language.md), so files and the REPL must agree on
+-- what a line means. The REPL reads raw lines and hands them straight
+-- to the query parser, so normalizing here — in front of both the outer
+-- loop and the live session — keeps the two in step. A comment-only
+-- line collapses to @""@, which both dispatch paths already treat as a
+-- no-op, and the trim turns CRLF into plain LF (a stray @\\r@ would
+-- otherwise ride along into colon-command matching, so @:quit\\r@ would
+-- miss @:quit@).
+stripCommentAndCR :: String -> String
+stripCommentAndCR = reverse . dropWhile isSpace . reverse . stripComment
+
+-- | Drop everything from the first @%@ that starts a line comment.
+-- A @%@ inside a double-quoted string or a quoted atom is literal and
+-- kept, so 'stripComment' tracks those regions with the lexer's escape
+-- rules: a backslash escapes the following character in both, and @''@
+-- is a literal quote inside a quoted atom. An unterminated literal
+-- stays in its region to the end of the line: the parser rejects that
+-- line anyway, and keeping the @%@ is the less surprising failure.
+stripComment :: String -> String
+stripComment = go
+  where
+    go [] = []
+    go ('%' : _) = []
+    go ('"' : rest) = '"' : inDoubleQuoted rest
+    go ('\'' : rest) = '\'' : inQuotedAtom rest
+    go (c : rest) = c : go rest
+
+    inDoubleQuoted [] = []
+    inDoubleQuoted ('\\' : c : rest) = '\\' : c : inDoubleQuoted rest
+    inDoubleQuoted ('"' : rest) = '"' : go rest
+    inDoubleQuoted (c : rest) = c : inDoubleQuoted rest
+
+    inQuotedAtom [] = []
+    inQuotedAtom ('\'' : '\'' : rest) = '\'' : '\'' : inQuotedAtom rest
+    inQuotedAtom ('\\' : c : rest) = '\\' : c : inQuotedAtom rest
+    inQuotedAtom ('\'' : rest) = '\'' : go rest
+    inQuotedAtom (c : rest) = c : inQuotedAtom rest
+
+-- ---------------------------------------------------------------------------
 -- Outer REPL loop
 -- ---------------------------------------------------------------------------
 
@@ -185,7 +233,7 @@ outerLoop stdlib mtypeChecker hostCalls quietMode werror files outerInput liveIn
       case minput of
         Nothing -> pure ()
         Just input -> dispatch prog input
-    dispatch prog input = case input of
+    dispatch prog input = case stripCommentAndCR input of
       ":quit" -> pure ()
       ":q" -> pure ()
       ":help" -> showHelp *> go prog
@@ -392,7 +440,7 @@ runLiveSession mtypeChecker hostCalls liveInput quietMode werror cp =
           liftIO showTraceUsage
           liveLoop
       | otherwise = do
-          outcome <- handleLiveQuery mtypeChecker cp werror (T.pack line)
+          outcome <- handleLiveQuery mtypeChecker cp werror (T.pack line')
           case outcome of
             QueryOk bindings -> do
               liftIO (putStr (prettyQueryResult bindings))
@@ -404,7 +452,8 @@ runLiveSession mtypeChecker hostCalls liveInput quietMode werror cp =
               hPutStr stderr msg
               hPutStrLn stderr "live session aborted due to runtime error."
       where
-        stripped = T.strip (T.pack line)
+        line' = stripCommentAndCR line
+        stripped = T.strip (T.pack line')
 
 -- | Outcome of executing a single live-session query.
 data QueryOutcome
@@ -440,8 +489,13 @@ handleLiveQuery mtypeChecker cp werror src = do
         then pure (QueryRecoverable "")
         else case prep.queryLambdas of
           (lam : _) ->
-            let lamEqs = lam.equations :: Parsed.AnnP [D.Equation]
-                Parsed.AnnP _ loc origin = lamEqs
+            let lamEqs = lam.equations :: [Parsed.AnnP D.Equation]
+                -- One location/origin for the lambda: its first
+                -- equation's annotation, which is the annotation the
+                -- whole block used to carry.
+                (loc, origin) = case lamEqs of
+                  (Parsed.AnnP _ l o : _) -> (l, o)
+                  [] -> (Parsed.dummyLoc, P.Atom "")
              in pure (QueryRecoverable (displayMsg (LambdasInLiveQuery loc origin)))
           [] -> do
             env <- ask

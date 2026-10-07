@@ -281,6 +281,7 @@ runCompile resources opts files = withCompiled resources False files $ \prog war
   case opts.target of
     TargetVM -> do
       let outPath = opts.outputDir </> T.unpack name ++ ".vm"
+      createDirectoryIfMissing True (takeDirectory outPath)
       TIO.writeFile outPath (serialize vmp)
       putStrLn outPath
     TargetScheme -> do

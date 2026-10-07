@@ -7,6 +7,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
+import YCHR.Internal.Loc (SourceLoc (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
 import YCHR.Internal.VM.SExpr (VMProgram (..), deserialize, serialize, vmVersion)
@@ -98,6 +99,27 @@ roundtripTests =
             [ DrainReactivationQueue
                 "rs"
                 [ExprStmt (CallExpr "reactivate_dispatch" [AId (IdVar "rs")])]
+            ]
+        ),
+    testCase "push-frame with spaces, commas and parentheses" $
+      roundtrip
+        ( mkProg
+            [ PushFrame
+                (StackFrame "rule reflexivity" (SourceLoc "mymodule.chr" 4 15) "leq(X, X)")
+            ]
+        ),
+    -- The quoted fields are escaped on the way out and unescaped on the
+    -- way back in, so a quote or backslash inside a label, file or
+    -- source fragment survives the round-trip.
+    testCase "push-frame with quotes and backslashes" $
+      roundtrip
+        ( mkProg
+            [ PushFrame
+                ( StackFrame
+                    "rule \"q\""
+                    (SourceLoc "a\\b.chr" 1 2)
+                    "f(\"x\", \\)"
+                )
             ]
         ),
     testCase "all expression types" $
@@ -219,7 +241,7 @@ formatTests =
   [ testCase "version header serialization" $
       assertContains
         (serializeProg (mkProg []))
-        ( "(vm-program (version 1) (program 0 (type-names) 0 (rule-names) "
+        ( "(vm-program (version 2) (program 0 (type-names) 0 (rule-names) "
             <> "(evaluables) (callables) (inert-types) "
         ),
     testCase "var serialization" $
@@ -249,6 +271,16 @@ formatTests =
         "(atom \"foo\")",
     testCase "new-var is a bare atom" $
       assertContains (serializeProg (mkProg [LetVal "x" NewVar])) "new-var",
+    testCase "push-frame quotes its string fields" $
+      assertContains
+        ( serializeProg
+            ( mkProg
+                [ PushFrame
+                    (StackFrame "rule reflexivity" (SourceLoc "mymodule.chr" 4 15) "leq(X, X)")
+                ]
+            )
+        )
+        "(push-frame \"rule reflexivity\" 4 15 \"mymodule.chr\" \"leq(X, X)\")",
     testCase "exports and symbol table roundtrip" $
       let vmp =
             VMProgram
@@ -290,12 +322,12 @@ serializeProg :: Program -> Text
 serializeProg = serialize . mkVMProg
 
 -- | The @(version N)@ header gates deserialization: this binary writes
--- and accepts only version 1, and a unit with no header is version 0 —
+-- and accepts only version 2, and a unit with no header is version 0 —
 -- the pre-versioning format, which only a binary predating VM version
 -- numbers could read.
 versionTests :: [TestTree]
 versionTests =
-  [ testCase "a version-1 program without the callables and inert-types entries loads" $
+  [ testCase "a version-2 program without the callables and inert-types entries loads" $
       case deserialize versionedProgramText of
         Left e -> assertBool ("deserialization failed: " <> T.unpack e) False
         Right vmp' -> vmp' @?= mkVMProg (mkProg [ExprStmt (Var "x")]),
@@ -306,49 +338,53 @@ versionTests =
         Right vmp' -> vmp' @?= mkVMProg (mkProg [ExprStmt (Var "x")]),
     testCase "a version-less program is rejected as version 0" $
       assertRejected versionlessProgramText "version 0",
+    testCase "a version-1 program is rejected" $
+      assertRejected
+        (T.replace "(version 2)" "(version 1)" versionedProgramText)
+        "version 1",
     testCase "an explicit version 0 is rejected" $
       assertRejected
-        (T.replace "(version 1)" "(version 0)" versionedProgramText)
+        (T.replace "(version 2)" "(version 0)" versionedProgramText)
         "version 0",
     testCase "a newer version is rejected" $
       assertRejected
-        (T.replace "(version 1)" "(version 2)" versionedProgramText)
-        "version 2",
+        (T.replace "(version 2)" "(version 3)" versionedProgramText)
+        "version 3",
     testCase "the version is checked before the program body" $
       assertRejected
-        "(vm-program (version 2) (bogus) (exports) (symbol-table))"
-        "version 2",
+        "(vm-program (version 3) (bogus) (exports) (symbol-table))"
+        "version 3",
     testCase "a supported version with a malformed body is a shape error" $
       assertRejected
-        "(vm-program (version 1) (bogus) (exports) (symbol-table))"
+        "(vm-program (version 2) (bogus) (exports) (symbol-table))"
         "expected (program ...)",
     testCase "a negative version is rejected" $
       assertRejected
-        (T.replace "(version 1)" "(version -1)" versionedProgramText)
+        (T.replace "(version 2)" "(version -1)" versionedProgramText)
         "invalid VM version",
     testCase "a malformed version is rejected" $
       assertRejected
-        (T.replace "(version 1)" "(version \"one\")" versionedProgramText)
+        (T.replace "(version 2)" "(version \"one\")" versionedProgramText)
         "expected (version N)",
     testCase "a version header with no argument is rejected" $
       assertRejected
-        (T.replace "(version 1)" "(version)" versionedProgramText)
+        (T.replace "(version 2)" "(version)" versionedProgramText)
         "expected (version N)",
     testCase "a misplaced version header is rejected" $
       assertRejected
         ( "(vm-program (program 0 (type-names) 0 (rule-names) (evaluables))"
-            <> " (version 1) (exports) (symbol-table))"
+            <> " (version 2) (exports) (symbol-table))"
         )
         "must be the first child",
     testCase "a duplicate version header is rejected" $
       assertRejected
-        (T.replace "(version 1)" "(version 1) (version 1)" versionedProgramText)
+        (T.replace "(version 2)" "(version 2) (version 2)" versionedProgramText)
         "duplicate (version N) header"
   ]
 
 versionedProgramText :: Text
 versionedProgramText =
-  "(vm-program (version 1) (program 0 (type-names) 0 (rule-names) (evaluables) "
+  "(vm-program (version 2) (program 0 (type-names) 0 (rule-names) (evaluables) "
     <> "(procedure \"p\" () (reactivate-dispatch) "
     <> "(expr-stmt (var \"x\")))) (exports) (symbol-table))"
 

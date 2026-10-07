@@ -1,0 +1,3 @@
+:- module(cons, []).
+:- use_module(exp_none).
+:- chr_type box ---> bx(col).

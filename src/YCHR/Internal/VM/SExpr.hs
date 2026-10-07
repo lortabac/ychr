@@ -40,7 +40,6 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Text.Read (readMaybe)
 import YCHR.Internal.Loc (SourceLoc (..))
 import YCHR.Internal.SExpr (SExpr (..), parseSExpr, printSExpr)
 import YCHR.Internal.Types qualified as Types
@@ -73,9 +72,12 @@ data VMProgram = VMProgram
 -- written before VM version numbers existed.  Since this binary's
 -- version is 'vmVersion', a headerless dump is rejected rather than
 -- read: its format is not this one, and only a binary predating VM
--- version numbers could have known it.
+-- version numbers could have known it.  Version 1 is likewise no
+-- longer read: its @push-frame@ fields were bare atoms, so dumps
+-- containing a rule or a user function did not round-trip, and version
+-- 2 quotes those fields instead.
 vmVersion :: Int
-vmVersion = 1
+vmVersion = 2
 
 -- ---------------------------------------------------------------------------
 -- High-level API
@@ -224,11 +226,11 @@ stmtToSExpr (DrainReactivationQueue sv body) =
 stmtToSExpr (PushFrame frame) =
   SList
     [ SAtom "push-frame",
-      SAtom frame.frameLabel,
-      SAtom (T.pack (show frame.frameSourceLoc.line)),
-      SAtom (T.pack (show frame.frameSourceLoc.col)),
-      SAtom (T.pack frame.frameSourceLoc.file),
-      SAtom frame.frameSourceCode
+      SString frame.frameLabel,
+      SInt (fromIntegral frame.frameSourceLoc.line),
+      SInt (fromIntegral frame.frameSourceLoc.col),
+      SString (T.pack frame.frameSourceLoc.file),
+      SString frame.frameSourceCode
     ]
 
 valExprToSExpr :: ValExpr -> SExpr
@@ -388,8 +390,8 @@ checkVMVersion (Just n)
             <> shown vmVersion
         )
   | otherwise =
-      -- An older positive version.  Unreachable while 'vmVersion' is 1,
-      -- but this is the arm a future version bump lands in.
+      -- An older positive version, such as a version-1 dump with its
+      -- bare-atom @push-frame@ fields.  Every version bump lands here.
       err
         ( "unsupported VM version "
             <> shown n
@@ -564,17 +566,22 @@ stmtFromSExpr (SList (SAtom "drain-reactivation-queue" : sv : body)) =
 stmtFromSExpr
   ( SList
       [ SAtom "push-frame",
-        SAtom label,
-        SAtom lineStr,
-        SAtom colStr,
-        SAtom file,
-        SAtom src
+        SString label,
+        SInt lineN,
+        SInt colN,
+        SString file,
+        SString src
         ]
     ) =
-    case (readMaybe (T.unpack lineStr), readMaybe (T.unpack colStr)) of
-      (Just l, Just c) ->
-        pure $ PushFrame $ StackFrame label (SourceLoc (T.unpack file) l c) src
-      _ -> err "push-frame: invalid line/col"
+    pure $
+      PushFrame $
+        StackFrame label (SourceLoc (T.unpack file) (fromInteger lineN) (fromInteger colN)) src
+stmtFromSExpr s@(SList (SAtom "push-frame" : _)) =
+  err
+    ( "expected (push-frame <label> <line> <col> <file> <source>) with quoted"
+        <> " label, file and source, got: "
+        <> printSExpr s
+    )
 stmtFromSExpr s = err ("expected statement, got: " <> printSExpr s)
 
 valExprFromSExpr :: SExpr -> Err ValExpr

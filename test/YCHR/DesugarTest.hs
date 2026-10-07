@@ -694,7 +694,7 @@ lambdaLiftTests =
         case filter isLambda lifted.functions of
           [lam] -> do
             lam.arity @?= 2
-            case lam.equations.node of
+            case map (.node) lam.equations of
               [eq] -> do
                 eq.params @?= [D.HeadVar "X", D.HeadVar "Y"]
                 eq.guards @?= []

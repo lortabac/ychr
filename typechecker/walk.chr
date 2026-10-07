@@ -24,7 +24,7 @@
     walk_program/3,
     walk_goals/4,
     tell_decls/3,
-    class_eq_search/7
+    class_eq_search/5
 ]).
 
 :- use_module('$tc_ast').
@@ -1171,9 +1171,10 @@ merge_bc(New, Old) -> bc(append(bc_ambs(Old), bc_ambs(New)),
 %
 % Checking a plain function's equations.
 % Each equation is its own checking unit, including one contributed by
-% an `:- extend_function` / `:- extend_class` directive: extension
-% equations share the owning declaration's annotation and so its source
-% location, and only the unit id keeps their diagnostics apart.
+% an `:- extend_function` / `:- extend_class` directive: every equation
+% carries its own annotation, so a diagnostic points at the module that
+% wrote it, and the unit id keeps its warnings apart from its
+% neighbours'.
 %
 % Unit ids continue from the rules, one per equation of a *plain*
 % function; a class function's equations get none, because their
@@ -1186,9 +1187,9 @@ merge_bc(New, Old) -> bc(append(bc_ambs(Old), bc_ambs(New)),
 :- chr_constraint
     walk_funs(tc_env, list(decl_fact), list(fun_def), int),
     walk_fun(tc_env, fun_def, int),
-    walk_fun_eqs(tc_env, any, int, loc, fun_sig, list(bound_sig),
-                 list(fun_eq), int),
-    check_equation(tc_env, any, int, loc, fun_sig, list(bound_sig), fun_eq, int),
+    walk_fun_eqs(tc_env, any, fun_sig, list(bound_sig),
+                 list(ann(fun_eq)), int),
+    check_equation(tc_env, any, fun_sig, list(bound_sig), ann(fun_eq), int),
     check_equation_at(scope, list(pair(string, ty)), fun_sig, list(bound_sig),
                       fun_eq),
     tell_equation_bounds(scope, list(pair(string, ty)), list(bound_sig)),
@@ -1217,7 +1218,7 @@ walk_funs_plain @
 fun_sig_count(fun_def(_, _, Sigs, _, _)) -> length(Sigs).
 
 :- function fun_eq_count(fun_def) -> int.
-fun_eq_count(fun_def(_, _, _, _, ann(_, _, Eqs))) -> length(Eqs).
+fun_eq_count(fun_def(_, _, _, _, Eqs)) -> length(Eqs).
 
 % The effective single signature. An untyped function checks exactly
 % like its all-`any` spelled-out form, which mentions no type variables
@@ -1226,20 +1227,20 @@ fun_eq_count(fun_def(_, _, _, _, ann(_, _, Eqs))) -> length(Eqs).
 % lambda's inherited clause is ignored here exactly as
 % `tell_function_decls_untyped` ignores it.
 walk_fun_untyped @
-    walk_fun(Env, fun_def(N, A, [], _, ann(EAnn, ELoc, Eqs)), Unit) <=>
-    walk_fun_eqs(Env, N, EAnn, ELoc, all_any_sig(A), [], Eqs, Unit).
+    walk_fun(Env, fun_def(N, A, [], _, Eqs), Unit) <=>
+    walk_fun_eqs(Env, N, all_any_sig(A), [], Eqs, Unit).
 
 walk_fun_typed @
-    walk_fun(Env, fun_def(N, _, [Sig], Bounds, ann(EAnn, ELoc, Eqs)), Unit) <=>
-    walk_fun_eqs(Env, N, EAnn, ELoc, Sig, Bounds, Eqs, Unit).
+    walk_fun(Env, fun_def(N, _, [Sig], Bounds, Eqs), Unit) <=>
+    walk_fun_eqs(Env, N, Sig, Bounds, Eqs, Unit).
 
 walk_fun_eqs_nil @
-    walk_fun_eqs(_, _, _, _, _, _, [], _) <=> true.
+    walk_fun_eqs(_, _, _, _, [], _) <=> true.
 
 walk_fun_eqs_cons @
-    walk_fun_eqs(Env, N, EAnn, ELoc, Sig, Bounds, [Eq|Eqs], Unit) <=>
-    check_equation(Env, N, EAnn, ELoc, Sig, Bounds, Eq, Unit),
-    walk_fun_eqs(Env, N, EAnn, ELoc, Sig, Bounds, Eqs, Unit + 1).
+    walk_fun_eqs(Env, N, Sig, Bounds, [Eq|Eqs], Unit) <=>
+    check_equation(Env, N, Sig, Bounds, Eq, Unit),
+    walk_fun_eqs(Env, N, Sig, Bounds, Eqs, Unit + 1).
 
 % An equation of a single-signature function (untyped, bounded or
 % unbounded). The declared type variables become *rigid* identities
@@ -1250,7 +1251,8 @@ walk_fun_eqs_cons @
 % operator at its own type parameter fail rather than silently pass.
 % One equation against the function's single declared signature.
 check_equation1 @
-    check_equation(Env, FName, EAnn, ELoc, fun_sig(ArgTys, RetTy), Bounds, Eq, Unit) <=>
+    check_equation(Env, FName, fun_sig(ArgTys, RetTy), Bounds,
+                   ann(EAnn, ELoc, Eq), Unit) <=>
     alloc_var_types(collect_vars_eq(Eq),
                     param_var_skeletons(Env, eq_params(Eq), ArgTys, eq_guards(Eq)),
                     VarTypes),
@@ -1413,25 +1415,25 @@ check_fun_stmt_apply @
 
 :- chr_constraint
     walk_class_fun(tc_env, list(decl_fact), fun_def),
-    class_eqs(tc_env, list(decl_fact), any, int, loc, list(fun_sig), list(fun_eq)),
-    class_eq_try(tc_env, list(decl_fact), any, int, loc, fun_eq, list(fun_sig)),
+    class_eqs(tc_env, list(decl_fact), any, list(fun_sig), list(ann(fun_eq))),
+    class_eq_try(tc_env, list(decl_fact), any, ann(fun_eq), list(fun_sig)),
     class_eq_result(any, int, loc, bool),
-    class_eq_search(tc_env, list(decl_fact), any, int, loc, fun_eq,
+    class_eq_search(tc_env, list(decl_fact), any, ann(fun_eq),
                     list(fun_sig)),
-    class_attempt(tc_env, list(decl_fact), any, int, loc, fun_eq, fun_sig),
+    class_attempt(tc_env, list(decl_fact), any, ann(fun_eq), fun_sig),
     attempt_result(attempt_verdict).
 
 walk_class_fun1 @
-    walk_class_fun(Env, Facts, fun_def(N, _, Sigs, _, ann(EAnn, ELoc, Eqs))) <=>
-    class_eqs(Env, Facts, N, EAnn, ELoc, Sigs, Eqs).
+    walk_class_fun(Env, Facts, fun_def(N, _, Sigs, _, Eqs)) <=>
+    class_eqs(Env, Facts, N, Sigs, Eqs).
 
 class_eqs_nil @
-    class_eqs(_, _, _, _, _, _, []) <=> true.
+    class_eqs(_, _, _, _, []) <=> true.
 
 class_eqs_cons @
-    class_eqs(Env, Facts, N, EAnn, ELoc, Sigs, [Eq|Eqs]) <=>
-    class_eq_try(Env, Facts, N, EAnn, ELoc, Eq, Sigs),
-    class_eqs(Env, Facts, N, EAnn, ELoc, Sigs, Eqs).
+    class_eqs(Env, Facts, N, Sigs, [Eq|Eqs]) <=>
+    class_eq_try(Env, Facts, N, Eq, Sigs),
+    class_eqs(Env, Facts, N, Sigs, Eqs).
 
 % One equation. The search runs in its own session — `solve` forks one,
 % the way `run_chr_session` does — so the attempts cannot see the
@@ -1439,9 +1441,9 @@ class_eqs_cons @
 % die with the fork. What crosses back out is the boolean and whatever
 % the committed branch bound in the caller's variables.
 class_eq_try1 @
-    class_eq_try(Env, Facts, FName, EAnn, ELoc, Eq, Sigs) <=>
-    Fits is solve(quote(class_eq_search(Env, Facts, FName, EAnn, ELoc,
-                                        Eq, Sigs))),
+    class_eq_try(Env, Facts, FName, ann(EAnn, ELoc, Eq), Sigs) <=>
+    Fits is solve(quote(class_eq_search(Env, Facts, FName,
+                                        ann(EAnn, ELoc, Eq), Sigs))),
     class_eq_result(FName, EAnn, ELoc, Fits).
 
 class_eq_result_fitted @
@@ -1479,12 +1481,12 @@ class_eq_result_none @
 % anywhere in the merged program and every choice point here becomes an
 % observer of every declared type parameter in the program.
 class_eq_search_none @
-    class_eq_search(_, _, _, _, _, _, []) <=> fail.
+    class_eq_search(_, _, _, _, []) <=> fail.
 
 class_eq_search_sig @
-    class_eq_search(Env, Facts, FName, EAnn, ELoc, Eq, [Sig|Sigs]) <=>
-    ( class_attempt(Env, Facts, FName, EAnn, ELoc, Eq, Sig)
-    ; class_eq_search(Env, Facts, FName, EAnn, ELoc, Eq, Sigs) ).
+    class_eq_search(Env, Facts, FName, EqAnn, [Sig|Sigs]) <=>
+    ( class_attempt(Env, Facts, FName, EqAnn, Sig)
+    ; class_eq_search(Env, Facts, FName, EqAnn, Sigs) ).
 
 % One attempt, in its own branch. Both the environment and the
 % declaration facts travel by value: the environment is ground AST, and
@@ -1503,13 +1505,13 @@ class_eq_search_sig @
 % cannot change the verdict, since it only drops warnings when there is
 % an error, and an error already fails the attempt.
 class_attempt1 @
-    class_attempt(Env, Facts, FName, EAnn, ELoc, Eq, Sig) <=>
+    class_attempt(Env, Facts, FName, ann(EAnn, ELoc, Eq), Sig) <=>
     errors([]),
     warnings([]),
     rigid_supply(-1),
     decl_rigid_supply(0),
     retell_decls(Facts),
-    check_equation(Env, FName, EAnn, ELoc, Sig, [], Eq, 0),
+    check_equation(Env, FName, Sig, [], ann(EAnn, ELoc, Eq), 0),
     collect(Errs),
     collect_warnings(Warns),
     attempt_result(verdict_of(Errs, suppress_warnings(Errs, Warns))).

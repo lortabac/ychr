@@ -79,7 +79,7 @@ import YCHR.Internal.Compile.Types
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Loc (SourceLoc)
-import YCHR.Internal.PExpr (PExpr)
+import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Pretty (prettyPExprSrc)
@@ -1318,12 +1318,16 @@ compileFunctionDef func = do
               <> "/"
               <> T.pack (show func.arity)
           )
-      funcSi = SrcInfo func.equations.sourceLoc func.equations.parsed funcLabel
+      -- The function-entry frame takes the first equation's annotation:
+      -- it is pushed before dispatch, so it cannot name one equation.
+      (funcLoc, funcParsed) = case func.equations of
+        (eq : _) -> (eq.sourceLoc, eq.parsed)
+        [] -> (P.dummyLoc, Atom "function")
       frame =
         mkFrame
           ("function " <> flattenName funcName <> "/" <> T.pack (show func.arity))
-          func.equations.sourceLoc
-          func.equations.parsed
+          funcLoc
+          funcParsed
       -- Dispatch tracking: every equation's pattern tests record, in
       -- two procedure-level locals, whether a test failed only because
       -- the value it inspected was still unbound. Falling off the end
@@ -1338,8 +1342,16 @@ compileFunctionDef func = do
       -- exempts the hot path: the prelude's arithmetic and comparison
       -- functions, and any single-equation helper, are all in this
       -- class.
-      tracksDispatch = any hasPatternTest func.equations.node
-  eqStmts <- traverse (compileEquation tracksDispatch params funcSi) func.equations.node
+      tracksDispatch = any (hasPatternTest . (.node)) func.equations
+      -- Every equation carries its own annotation, so a compile-phase
+      -- diagnostic raised while compiling its body — an unbound
+      -- variable, say — points at the equation that wrote it, including
+      -- an `:- extend_function` equation from another module.
+      eqSi (AnnP _ eqLoc eqParsed) = SrcInfo eqLoc eqParsed funcLabel
+  eqStmts <-
+    traverse
+      (\eq -> compileEquation tracksDispatch params (eqSi eq) eq.node)
+      func.equations
   let fnLabel = flattenName funcName <> "/" <> T.pack (show func.arity)
       dispatchInit
         | tracksDispatch =

@@ -98,15 +98,20 @@ type_ref_errors(_, _, N, Args, All) | has_type_def(N, length(Args), All) -> [].
 type_ref_errors(Td, Dc, N, Args, _) | is_base_type(N), length(Args) > 0 ->
     [arity_ref_error(Td, Dc, N, length(Args), 0)].
 type_ref_errors(_, _, N, _, _) | is_base_type(N) -> [].
-% The renamer resolves type names by (name, arity), so a reference at
-% the wrong arity never gets qualified and so never matches. When the
-% base name is declared at exactly one other arity, say so instead of
-% claiming the type does not exist.
+% The renamer resolves type names by (name, arity), so a reference that
+% missed the table never matches and never gets qualified. When the base
+% name is declared at exactly one arity, hand off to `sole_arity_error`
+% to tell a genuine arity mismatch apart from an invisible declaration.
 type_ref_errors(Td, Dc, N, Args, All) ->
     sole_arity_error(Td, Dc, N, Args, base_name_arities(name_base(N), All)).
 
 :- function sole_arity_error(type_def, data_con, any, list(ty_expr), list(int)) -> list(error).
-sole_arity_error(Td, Dc, N, Args, [Declared]) ->
+% Found at a different arity: the reference names the declared type but
+% was written with the wrong number of arguments, so report the arity.
+% A base name found at the *same* arity means the reference is
+% invisible/undefined here (the renamer left it unqualified), not an
+% arity mismatch, so fall through to the undefined-type diagnosis.
+sole_arity_error(Td, Dc, N, Args, [Declared]) | not(Declared == length(Args)) ->
     [arity_ref_error(Td, Dc, N, length(Args), Declared)].
 sole_arity_error(Td, Dc, N, _, _) ->
     [decl_error(Td, undefined_type,
@@ -194,13 +199,13 @@ decl_pair(con_decl(TName, A, _)) -> kv(TName, A).
 
 % Strictly earlier by source position, on `(file, line, col)` — the same
 % key `List.sortOn` uses, and the strict less-than `sort_by` sorts a
-% group of declarations under. Two files may carry the same
-% `:- module` header and are merged, so two declarations of one
-% *qualified* constructor name really can sit in different files, and
-% the file has to be part of the key: without it the reported
-% declaration order, source location and origin all depend on which of
-% the two files happened to be encoded first. `<` on two strings is
-% lexicographic by code point.
+% group of declarations under. Two declarations of one *qualified*
+% constructor name can no longer sit in different files: two user
+% modules with the same name are rejected during collection
+% (`YCHR-10004`), so a collision is always within one module and the
+% file components compare equal. The file stays part of the key as the
+% canonical source position, which also keeps the order total.
+% `<` on two strings is lexicographic by code point.
 :- function decl_before(con_decl, con_decl) -> bool.
 decl_before(con_decl(_, _, loc(F1, _, _)), con_decl(_, _, loc(F2, _, _)))
   | F1 < F2 -> true.
@@ -258,28 +263,29 @@ funs_arity_errors(Env, [F|Fs], Unit) ->
            funs_arity_errors(Env, Fs, Unit + fun_unit_count(F))).
 
 :- function fun_unit_count(fun_def) -> int.
-fun_unit_count(fun_def(_, _, Sigs, _, ann(_, _, _))) | length(Sigs) > 1 -> 0.
-fun_unit_count(fun_def(_, _, _, _, ann(_, _, Eqs))) -> length(Eqs).
+fun_unit_count(fun_def(_, _, Sigs, _, _)) | length(Sigs) > 1 -> 0.
+fun_unit_count(fun_def(_, _, _, _, Eqs)) -> length(Eqs).
 
 :- function fun_arity_errors(con_env, fun_def, int) -> list(error).
-fun_arity_errors(Env, fun_def(FName, _, Sigs, _, ann(A, Loc, Eqs)), _) | length(Sigs) > 1 ->
-    eqs_arity_errors(Env, FName, A, Loc, Eqs, no_unit).
-fun_arity_errors(Env, fun_def(FName, _, _, _, ann(A, Loc, Eqs)), Unit) ->
-    eqs_arity_errors(Env, FName, A, Loc, Eqs, unit(Unit)).
+fun_arity_errors(Env, fun_def(FName, _, Sigs, _, Eqs), _) | length(Sigs) > 1 ->
+    eqs_arity_errors(Env, FName, Eqs, no_unit).
+fun_arity_errors(Env, fun_def(FName, _, _, _, Eqs), Unit) ->
+    eqs_arity_errors(Env, FName, Eqs, unit(Unit)).
 
 % The one walk that mixes the two cases, and so is the one that carries
 % a `unit_id` rather than an `int`: one unit per equation of a plain
 % function, and no unit at all for every equation of a class function.
 % Both fall out of `bump_unit`, which leaves `no_unit` alone — hence no
 % step parameter to hold the counter still, which the old
-% sentinel-integer form needed.
-:- function eqs_arity_errors(con_env, any, int, loc, list(fun_eq), unit_id)
+% sentinel-integer form needed. Each equation carries its own
+% annotation, so the diagnostic context is built per equation.
+:- function eqs_arity_errors(con_env, any, list(ann(fun_eq)), unit_id)
        -> list(error).
-eqs_arity_errors(_, _, _, _, [], _) -> [].
-eqs_arity_errors(Env, FName, A, Loc, [Eq|Eqs], Unit) ->
+eqs_arity_errors(_, _, [], _) -> [].
+eqs_arity_errors(Env, FName, [ann(A, Loc, Eq)|Eqs], Unit) ->
     append(arity_diags(Unit, label_function(FName), origin_ann(A), Loc,
                        eq_arity(Env, Eq)),
-           eqs_arity_errors(Env, FName, A, Loc, Eqs, bump_unit(Unit))).
+           eqs_arity_errors(Env, FName, Eqs, bump_unit(Unit))).
 
 % Parameters are post-HNF head arguments and so contain no constructor
 % application. The prelude statements are not walked, and nothing else

@@ -40,6 +40,9 @@ data CollectError
   = UnknownLibrary Text
   | CircularLibraryImport [Text]
   | SelfNamedLibraryImport Text
+  | -- | Two user modules declare the same name. Carries the name and
+    -- the file paths that declare it, in input order.
+    DuplicateModuleName Text [FilePath]
   deriving (Show, Eq)
 
 -- | Walk the transitive closure of library imports.

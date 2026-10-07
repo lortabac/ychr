@@ -32,7 +32,7 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Text.Parsec (ParseError)
 import YCHR.Internal.Collect
-  ( CollectError,
+  ( CollectError (..),
     addLibraryPrelude,
     resolveLibraryClosure,
     rewriteImports,
@@ -43,11 +43,19 @@ import YCHR.Internal.Compile (CompileError, compile)
 import YCHR.Internal.Desugar (DesugarError, desugarProgram, extractSymbolTable, liftAllLambdas)
 import YCHR.Internal.Desugar.Disjunction (lowerDisjunctions)
 import YCHR.Internal.Desugared qualified as D
-import YCHR.Internal.Diagnostic (Diagnostic)
+import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning, checkExhaustiveness)
 import YCHR.Internal.Interpreter.Slots (SlotProgram, lowerProgram)
-import YCHR.Internal.PExpr (PExpr)
-import YCHR.Internal.Parsed (AnnP (..), Import (..), Module (..), OpDecl, SourceLoc, noAnnP)
+import YCHR.Internal.PExpr (PExpr (Atom))
+import YCHR.Internal.Parsed
+  ( AnnP (..),
+    Import (..),
+    Module (..),
+    OpDecl,
+    SourceLoc (..),
+    dummyLoc,
+    noAnnP,
+  )
 import YCHR.Internal.Parser
   ( ModuleHeader (..),
     OpTable,
@@ -321,7 +329,7 @@ compileModules (StdLib stdlib) includeStdlib inputs = do
     errs -> Left (ParseValidationErrors errs)
   let trailingLoc =
         Map.fromList [(h.modName, h.trailingLoc) | (_, h) <- userHeaders]
-  finalizeCompilation libraryMods opExports trailingLoc parsed
+  finalizeCompilation libraryMods opExports trailingLoc (map fst inputs) parsed
 
 -- | Compile already-parsed modules. This is the entry point used by
 -- "YCHR.DSL" callers that build 'Module' values in Haskell rather than
@@ -357,7 +365,7 @@ compileParsedModules (StdLib stdlib) includeStdlib parsed = do
       userOpExports = Map.fromList [(m.name, extractOpDecls m) | m <- parsed]
       -- Left-biased for the same reason as in 'compileModules'.
       opExports = userOpExports `Map.union` stdlibOpExports
-  finalizeCompilation libraryMods opExports Map.empty parsed
+  finalizeCompilation libraryMods opExports Map.empty [] parsed
 
 -- | Shared post-parse, post-library-resolution pipeline: rename, resolve,
 -- desugar, lambda-lift, compile, and assemble the resulting
@@ -371,10 +379,54 @@ finalizeCompilation ::
   -- | Trailing-location map for the renamer's
   -- "use_module after non-import" check. Empty for DSL-built input.
   Map Text (Maybe SourceLoc) ->
+  -- | The input file each user module came from, positionally aligned
+  -- with the user modules. Empty for DSL-built input, which has no
+  -- files of its own.
+  [FilePath] ->
   -- | User modules (parsed).
   [Module] ->
   Either Error (CompiledProgram, [Warning])
-finalizeCompilation libraryMods opExports trailingLocMap parsed = do
+finalizeCompilation libraryMods opExports trailingLocMap inputPaths parsed = do
+  -- A module name is declared in exactly one input. Two user modules that
+  -- carry the same name are rejected here rather than merged: the
+  -- downstream passes key declarations by qualified name, so letting both
+  -- through would silently pool their declarations and equations. This
+  -- includes the same path given twice on the command line — the second
+  -- module is a separate input, not a duplicate to deduplicate.
+  --
+  -- The diagnostic is anchored at the second declaration, so the header
+  -- points at the offending file rather than the first one; the message
+  -- lists every file that declares the name. A header-less module carries
+  -- 'dummyLoc', so its real path comes from the positional 'inputPaths'
+  -- instead — the file is what makes the header useful, and the module
+  -- name of such a module is only its basename.
+  let modulesByName =
+        Map.fromListWith
+          (flip (++))
+          [ (m.name, [(i, m)])
+          | (i, m) <- zip [0 :: Int ..] parsed
+          ]
+      fileOf i m = case drop i inputPaths of
+        (p : _) -> Just p
+        []
+          | m.nameLoc /= dummyLoc -> Just m.nameLoc.file
+          | otherwise -> Nothing
+      duplicateModuleDiags =
+        [ Diagnostic
+            Nothing
+            ( AnnP
+                ( DuplicateModuleName
+                    n
+                    [p | (i, m) <- ms, Just p <- [fileOf i m]]
+                )
+                (maybe second.nameLoc (\p -> SourceLoc p 1 1) (fileOf secondIdx second))
+                (Atom n)
+            )
+        | (n, ms@((_, _) : (secondIdx, second) : _)) <- Map.toList modulesByName
+        ]
+  case duplicateModuleDiags of
+    [] -> pure ()
+    _ -> Left (CollectErrors duplicateModuleDiags)
   -- A bundled library is dropped when a user module carries its name:
   -- module identity is the name alone, so keeping both would list two
   -- providers for every name the library exports and make each use

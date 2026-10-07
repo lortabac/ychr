@@ -74,6 +74,7 @@ import YCHR.Internal.Collected (CollectedImport (..), CollectedModule (..))
 import YCHR.Internal.Diagnostic (Diagnostic, noDiag)
 import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed
+import YCHR.Internal.Pretty (termToPExpr)
 import YCHR.Internal.Rename.Types
 import YCHR.Internal.Types
 
@@ -1160,15 +1161,17 @@ resolveName _ ctx loc origin name@(Qualified m n) arity = do
 -- renamer into 'NoResolveQuoted' mode and skips this check entirely.
 -- The @host@ pseudo-module is exempt (host calls are external).
 --
--- For a miss, the diagnostic pinpoints the actual cause:
+-- For a miss, the diagnostic pinpoints the actual cause, first match
+-- wins:
 --
---   * constructor-flavored ('NonExportedConstructor', YCHR-20010) iff
---     @M@ declares @(n, arity)@ as a constructor anywhere — the user
---     named a real but hidden ctor;
 --   * 'UnknownModule' (YCHR-20015) iff no module named @M@ exists;
 --   * 'ModuleNotImported' (YCHR-20014) iff @M@ exists but the current
 --     module never imports it (qualification does not bypass the
---     import requirement);
+--     import requirement). The current module itself is exempt: it
+--     never imports itself, yet its own declarations are in scope;
+--   * constructor-flavored ('NonExportedConstructor', YCHR-20010) iff
+--     @M@ declares @(n, arity)@ as a constructor anywhere — the user
+--     named a real but hidden ctor;
 --   * 'NotExportedByModule' (YCHR-20009) otherwise — @M@ is imported
 --     but does not export @(n, arity)@ (or a restricted import list
 --     excludes it).
@@ -1179,13 +1182,13 @@ validateQualified ::
 validateQualified ctx loc origin m n arity
   | m == "host" = pure ()
   | m `elem` visibleProviders ctx n arity = pure ()
+  | m `notElem` ctx.allModuleNames =
+      emitError (AnnP (UnknownModule m) loc origin)
+  | m /= ctx.currentModule.name && m `notElem` importedModuleNames ctx =
+      emitError (AnnP (ModuleNotImported m n arity) loc origin)
   | m `elem` Map.findWithDefault [] (n, arity) ctx.dataConProviders = pure ()
   | m `elem` Map.findWithDefault [] (n, arity) ctx.allDataConProviders =
       emitError (AnnP (NonExportedConstructor m n arity) loc origin)
-  | m `notElem` ctx.allModuleNames =
-      emitError (AnnP (UnknownModule m) loc origin)
-  | m `notElem` importedModuleNames ctx =
-      emitError (AnnP (ModuleNotImported m n arity) loc origin)
   | otherwise =
       emitError (AnnP (NotExportedByModule m n arity) loc origin)
 
@@ -1633,6 +1636,13 @@ renameQueryGoalsWith ::
     )
 renameQueryGoalsWith env goals = renameQueryTerms env ResolveTop goals
 
+-- | Location reported for every diagnostic raised while renaming a query
+-- goal or argument. Queries have no file of their own, so they are
+-- anchored at @\<query\>@ rather than the renamer's @\<generated\>@
+-- placeholder.
+queryTermLoc :: SourceLoc
+queryTermLoc = SourceLoc "<query>" 1 1
+
 renameQueryTerms ::
   QueryRenameEnv ->
   ResolveMode ->
@@ -1642,7 +1652,9 @@ renameQueryTerms (QueryRenameEnv ctx) mode terms =
   let ((renamed, warnings), errs) =
         runWriter
           ( runWriterT $
-              traverse (renameTerm ctx dummyLoc (Atom "") mode) terms
+              traverse
+                (\t -> renameTerm ctx queryTermLoc (termToPExpr t) mode t)
+                terms
           )
    in if null errs then Right (renamed, warnings) else Left errs
 

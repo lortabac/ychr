@@ -1140,9 +1140,9 @@ resolveFunctions ::
   [CollectedModule] ->
   ([R.FunctionDef], [Diagnostic ResolveError])
 resolveFunctions visMap mods =
-  let -- Collect all function declarations with their module context.
-      -- Modules are tagged with their input position so 'build' can
-      -- gather equations once per distinct declaring module.
+  let -- Collect all function declarations with their declaring module,
+      -- tagged with the module's input position so 'build' can tell two
+      -- same-named modules apart.
       allDecls =
         [ (QualifiedName m.name fd.name, fd.arity, fd, im, m)
         | (im, m) <- zip [0 :: Int ..] mods,
@@ -1160,15 +1160,19 @@ resolveFunctions visMap mods =
       build ((qn, ar), decls) =
         let declPairs = [(fd, m) | (fd, _, m) <- decls]
             -- 'gatherEquations' selects equations by (name, arity)
-            -- from the declaring module, and every declaration in the
-            -- group shares both — so it is gathered once per distinct
-            -- declaring module, not once per declaration (a
-            -- multi-signature @:- class@ contributes one declaration
-            -- per signature and would repeat every equation N times).
-            -- A group spans more than one module only when two input
-            -- files declare the same module name, which is currently
-            -- accepted (see dev-docs/BUGS.md); per-module gathering
-            -- keeps every file's equations in that case.
+            -- from the declaring module. Module names are unique across
+            -- a program that went through
+            -- 'YCHR.Internal.Compile.Pipeline.finalizeCompilation',
+            -- which rejects duplicates, so a group normally comes from
+            -- one module and gathering once per declaration would
+            -- suffice. Deduplicating by input position anyway keeps
+            -- 'resolveProgram' safe for a direct caller that bypasses
+            -- that check: the two same-named modules' equations are
+            -- then both gathered rather than one module's being
+            -- silently dropped. (A multi-signature @:- class@
+            -- contributes one declaration per signature; gathering per
+            -- distinct module, not per declaration, is what stops
+            -- every equation being repeated N times.)
             declModules =
               Map.elems (Map.fromList [(im, (fd, m)) | (fd, im, m) <- decls])
             (eqss, eqErrss) =
