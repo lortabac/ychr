@@ -1,0 +1,6 @@
+:- module(user, [go/2]).
+:- chr_constraint go/2.
+
+% No `:- use_module(palette).`: the constructor `red` is exported by
+% `palette`, but qualification does not bypass the import requirement.
+go(X, R) <=> R = palette:red.

@@ -1,0 +1,8 @@
+:- module(palette, [type(col/0, [red, green])]).
+
+% `palette` exports both `red` and `green`. `user` never imports it,
+% so the qualified reference `palette:red` must fail with
+% `YCHR-20014` (`ModuleNotImported`) — not the misleading
+% `YCHR-20010` ("does not export") that a program-wide constructor map
+% would otherwise produce.
+:- chr_type col ---> red ; green ; blue.
