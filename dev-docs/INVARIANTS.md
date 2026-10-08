@@ -312,9 +312,12 @@ panic into a compile-time error.
 _ -> error "getArg: not a compound term"
 ```
 
-`getArg` is partial on shape (must be `VTerm`) and on index. Callers
-guarantee both, but neither is enforced. A typed term-projection API
-keyed on a verified `(VTerm functor arity)` handle would close it.
+`getArg` is partial on shape (must be `VTerm`) and on index. The
+index half is now narrowed to its upper bound: the index is a `Word`
+(see the closed VM IR entry above), so no negative value can reach it,
+but the present check remains a partial `error`. A typed
+term-projection API keyed on a verified `(VTerm functor arity)` handle
+would close both halves.
 
 ### `lookupSusp` — `src/YCHR/Internal/Runtime/Store.hs:72`
 
