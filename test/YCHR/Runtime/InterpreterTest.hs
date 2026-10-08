@@ -12,7 +12,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
-import YCHR.Internal.Interpreter.Slots (SlotProc, SlotProgram (..), lowerProgram)
+import YCHR.Internal.Interpreter.Slots (SlotProgram, emptySlotProgram, lowerProgram)
 import YCHR.Internal.Loc (dummyLoc)
 import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.Error (RuntimeErrorKind (..), RuntimeErrorThrown (..))
@@ -64,7 +64,7 @@ runChrEmpty action = do
       []
       IntMap.empty
       builtinOps
-      Map.empty
+      emptySlotProgram
       Map.empty
       Map.empty
       Map.empty
@@ -82,7 +82,7 @@ runChrBase action = do
       []
       IntMap.empty
       builtinOps
-      Map.empty
+      emptySlotProgram
       baseHostCallRegistry
       Map.empty
       Map.empty
@@ -100,7 +100,7 @@ runChrLeq action = do
       []
       IntMap.empty
       builtinOps
-      leqProcMap
+      leqSlotProgram
       Map.empty
       Map.empty
       Map.empty
@@ -571,9 +571,9 @@ leqProgram =
         ]
     }
 
-leqProcMap :: Map.Map Name SlotProc
-leqProcMap =
-  (lowerProgram leqProgram).slotProcedures
+leqSlotProgram :: SlotProgram
+leqSlotProgram =
+  lowerProgram leqProgram
 
 tellLeq :: Procedure
 tellLeq =

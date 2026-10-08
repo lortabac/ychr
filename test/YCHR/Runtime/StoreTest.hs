@@ -10,6 +10,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
 import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Store
@@ -42,7 +43,7 @@ runStoreEnv action = do
       []
       IntMap.empty
       builtinOps
-      Map.empty
+      emptySlotProgram
       Map.empty
       Map.empty
       Map.empty
@@ -67,7 +68,7 @@ runInertStoreEnv action = do
       [ConstraintType 1]
       IntMap.empty
       builtinOps
-      Map.empty
+      emptySlotProgram
       Map.empty
       Map.empty
       Map.empty

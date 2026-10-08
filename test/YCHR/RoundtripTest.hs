@@ -27,6 +27,7 @@ import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import Test.Tasty.Hedgehog (testProperty)
+import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
 import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Parser (builtinOps, parseConstraint, parseRule, parseTerm)
 import YCHR.Internal.Pretty (prettyConstraintSrc, prettyRuleSrc, prettyTermSrc)
@@ -267,7 +268,7 @@ runChrEmpty action = do
       []
       IntMap.empty
       builtinOps
-      Map.empty
+      emptySlotProgram
       Map.empty
       Map.empty
       Map.empty

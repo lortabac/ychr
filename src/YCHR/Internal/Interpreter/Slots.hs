@@ -15,9 +15,11 @@
 -- This module is that backend's private AST: the same statements and
 -- expressions, with the two reference forms ('SVar', 'SIdVar') and the
 -- four binding forms ('SLetVal', 'SLetId', 'SAssignVal', 'SAssignId')
--- carrying a 'Slot' instead of a 'Name'. Everything else is a direct
--- counterpart of a VM constructor, so the phase is a total, structure-
--- preserving rewrite of the program and nothing more.
+-- carrying a 'Slot' instead of a 'Name', and a 'CallExpr' carrying a
+-- 'CallTarget' that 'lowerProgram' resolves to a 'ProcIx' where it can.
+-- Everything else is a direct counterpart of a VM constructor, so the
+-- phase is a total, structure-preserving rewrite of the program and
+-- nothing more.
 --
 -- == Ownership
 --
@@ -50,6 +52,14 @@
 -- build treats as an error under @-Wall -Werror@; that is the mechanism
 -- that keeps the phase from going silently stale. Extend the lowering in
 -- the same change as the VM.
+--
+-- The one place the phase adds rather than mirrors is the callee of a
+-- 'CallExpr': the VM names it, and 'lowerProgram' resolves that name to
+-- the position of the callee in the program's procedure list
+-- ('CallTarget'). The name survives only as the fallback for a target
+-- no procedure of the program declares, which compiler output never
+-- produces ("YCHR.Internal.VM.Closure" asserts it) but a hand-built
+-- 'Program' may.
 --
 -- == Slot assignment
 --
@@ -99,6 +109,8 @@
 module YCHR.Internal.Interpreter.Slots
   ( -- * The phase
     Slot,
+    ProcIx (..),
+    CallTarget (..),
     SlotProgram (..),
     SlotProc (..),
     SlotStmt (..),
@@ -109,7 +121,8 @@ module YCHR.Internal.Interpreter.Slots
 
     -- * Lowering
     lowerProgram,
-    lowerProcedure,
+    addProcedures,
+    emptySlotProgram,
   )
 where
 
@@ -144,24 +157,81 @@ type Slot = Int
 -- The phase
 -- ---------------------------------------------------------------------------
 
+-- | A procedure index: the position of a procedure in its program's
+-- procedure list ('Program.procedures'), which is what a resolved
+-- 'CallTarget' carries.
+--
+-- A newtype rather than the bare 'Int' @Slot@ is: a local slot and a
+-- procedure index are both integer keys that end up in an @IntMap@, and
+-- only the type keeps one from being written where the other belongs.
+newtype ProcIx = ProcIx {unProcIx :: Int}
+  deriving (Show, Eq, Ord)
+
+-- | How a compiled call names its callee.
+--
+-- 'ProcIndex' is the resolver's answer for an emitted call: the callee
+-- is a procedure of the same program, so the interpreter reaches it by
+-- index instead of by a 'Map' lookup over 'Name' with its 'Data.Text'
+-- comparisons on every call.
+--
+-- 'ProcName' is the fallback for a target no procedure of the program
+-- declares. Compiler output never produces one — `lowerProgram` is
+-- where the compiler's calls are resolved, and
+-- "YCHR.Internal.VM.Closure" asserts the closure of what it emits
+-- before the program is built — but a hand-built 'Program' passed to
+-- 'YCHR.Internal.Runtime.Interpreter.interpret' may, and that keeps the
+-- interpreter's existing @unknown procedure@ runtime error.
+data CallTarget
+  = ProcIndex !ProcIx
+  | ProcName !Name
+  deriving (Show, Eq)
+
 -- | A whole program in slot form.
-newtype SlotProgram = SlotProgram
+data SlotProgram = SlotProgram
   { -- | The phase's procedures, keyed by name — the lookup table the
-    -- interpreter runs against. Same keys as the VM program's procedure
-    -- list, so a name that resolves there resolves here.
-    slotProcedures :: Map Name SlotProc
+    -- interpreter's name-based entry points run against (a query's
+    -- @tell_\<c\>@, reactivation dispatch, @'$call'@ and @is@ dispatch,
+    -- and the interpreter's own 'interpret' entry). Same keys as the VM
+    -- program's procedure list, so a name that resolves there resolves
+    -- here.
+    --
+    -- This is also the map the walk resolves emitted call targets
+    -- through: a callee's index is a field on its 'SlotProc', so there
+    -- is no second name-keyed map to build.
+    slotProcedures :: Map Name SlotProc,
+    -- | The same procedures keyed by their index, unwrapped: the table
+    -- a resolved 'CallTarget' reads.
+    --
+    -- A @Map Int@, not an @IntMap@, and deliberately so: under MicroHs an
+    -- @IntMap@ lookup costs about 2.5 times a @Map@-with-literal-'Text'
+    -- lookup, and about 3.9 times a @Map Int@ one (micro-benchmarks in
+    -- @dev-docs/MICROHS_PERFORMANCE.md@), because MicroHs does not inline
+    -- the @Data.Bits@ operations @IntMap@ searches with. The key is the
+    -- unwrapped 'Int' rather than 'ProcIx' for the same reason: unwrapping
+    -- by pattern match costs nothing, where the newtype's derived 'Ord'
+    -- would add a dispatch per comparison on the interpreter's hottest
+    -- path.
+    slotProcEntries :: Map Int SlotProc
   }
   deriving (Show, Eq)
 
 -- | A procedure in slot form.
 data SlotProc = SlotProc
-  { -- | How many arguments the procedure takes. Parameters occupy slots
+  { -- | The procedure's name, kept for diagnostics only: the arity
+    -- mismatch 'YCHR.Internal.Runtime.Interpreter.bindParams' reports,
+    -- and the "stale procedure index" internal error. A resolved
+    -- 'CallTarget' needs no name to reach the procedure, and the
+    -- interpreter reads this field only on a failure path.
+    slotProcName :: !Name,
+    -- | The procedure's position in its program's procedure list: what
+    -- a call to this procedure resolves to. Carried here rather than in
+    -- a name-to-index map so that a program needs one name-keyed map
+    -- ('slotProcedures') and one index-keyed one ('slotProcEntries'),
+    -- not three.
+    slotProcIx :: !ProcIx,
+    -- | How many arguments the procedure takes. Parameters occupy slots
     -- @0 .. slotProcArity - 1@, so this is also the first slot a local
     -- can be bound to and all the interpreter needs for its arity check.
-    --
-    -- There is deliberately no procedure name here: the interpreter
-    -- holds these keyed by name and resolves a call by the name it is
-    -- calling with, which is the same one for diagnostics.
     slotProcArity :: !Int,
     slotProcBody :: [SlotStmt],
     -- | Structural classification, carried through unchanged so the
@@ -190,16 +260,20 @@ data SlotStmt
   | SPushFrame StackFrame
   deriving (Show, Eq)
 
--- | Value-producing expressions, with local references slot-resolved.
+-- | Value-producing expressions, with local references slot-resolved
+-- and call targets procedure-resolved.
 --
 -- 'SVar' carries the source 'Name' next to the slot for one reason
 -- only: the interpreter's "unbound variable" message names it, and that
 -- message is part of the runtime's contract. It is read on the failure
--- path and nowhere else.
+-- path and nowhere else. 'SCallExpr' carries a 'CallTarget' instead of a
+-- name, so the interpreter does not pay a name lookup per call; see
+-- 'CallTarget' for the fallback that keeps a hand-built program's
+-- unknown-callee error.
 data SlotValExpr
   = SVar Slot Name
   | SLit Literal
-  | SCallExpr Name [SlotCallArg]
+  | SCallExpr CallTarget [SlotCallArg]
   | SHostCall Name [SlotValExpr]
   | SEvalDeep SlotValExpr
   | SApplyClosure SlotValExpr [SlotValExpr]
@@ -245,31 +319,117 @@ data SlotCallArg
 -- Lowering
 -- ---------------------------------------------------------------------------
 
--- | Lower a whole program. The map spine is built eagerly — so a session
--- has a lookup table to index — but each procedure's body stays a thunk
--- until that procedure is first called, which is why this can be a lazy
--- field on a compiled program without costing anything on a short goal.
+-- | Lower a whole program, resolving every emitted call target against
+-- the program's own procedures.
+--
+-- The map spines are built eagerly — so a session has both lookup
+-- tables to index — but each procedure's body stays a thunk until that
+-- procedure is first called, which is why this can be a lazy field on a
+-- compiled program without costing anything on a short goal. The
+-- resolution lives in that thunk too: a body resolves the calls it
+-- contains when it is first forced, not when the program is lowered.
+--
+-- @resolve@ and @procMap@ are mutually recursive (resolution consults
+-- the map that holds the procedures being resolved), which is fine
+-- because resolution happens strictly inside a body thunk: 'SlotProc'
+-- forces its index and arity, never its body, so building the map never
+-- demands the resolver.
 lowerProgram :: Program -> SlotProgram
 lowerProgram prog =
-  SlotProgram (Map.fromList [(p.name, lowerProcedure p) | p <- prog.procedures])
+  let lowered =
+        [ (i, p.name, lowerProcedureWith (ProcIx i) (resolveCallIn procMap) p)
+        | (i, p) <- zip [0 ..] prog.procedures
+        ]
+      procMap = Map.fromList [(n, proc) | (_, n, proc) <- lowered]
+   in SlotProgram
+        { slotProcedures = procMap,
+          slotProcEntries = Map.fromList [(i, proc) | (i, _, proc) <- lowered]
+        }
+
+-- | Extend a lowered program with procedures compiled after it —
+-- query-time lifted lambdas ('YCHR.Internal.Runtime.Session.withCHRExtra').
+-- The entries the program already has keep their indices; the extras
+-- take the ones after the highest index in use, so a program built by
+-- 'lowerProgram' or by an earlier 'addProcedures' (whose keys are
+-- @0 .. n - 1@) is extended rather than re-based.
+--
+-- An extra may call a compiled procedure and one extra may call
+-- another, so the extras are resolved against the union of both name
+-- spaces — the same union 'YCHR.Internal.Runtime.Session.withCHRExtra'
+-- merges into the interpreter's table. On a name collision the extras
+-- shadow the compiled procedures in the name view, matching the
+-- left-biased @Map.union@ that merge is; a compiled body's calls were
+-- resolved when it was lowered, so they keep pointing at the compiled
+-- procedure (see @dev-docs\/INVARIANTS.md@,
+-- "Session construction"). Query-time lambdas are lifted under fresh
+-- @__lambda_N@ names, so the collision cannot occur today.
+--
+-- The empty list returns the program unchanged, so a query that lifts
+-- no lambda pays nothing.
+addProcedures :: SlotProgram -> [Procedure] -> SlotProgram
+addProcedures sp [] = sp
+addProcedures sp extras =
+  let base = maybe 0 ((+ 1) . fst) (Map.lookupMax sp.slotProcEntries)
+      lowered =
+        [ (i, p.name, lowerProcedureWith (ProcIx i) (resolveCallIn merged) p)
+        | (i, p) <- zip [base ..] extras
+        ]
+      merged =
+        Map.fromList [(n, proc) | (_, n, proc) <- lowered]
+          `Map.union` sp.slotProcedures
+   in SlotProgram
+        { slotProcedures = merged,
+          slotProcEntries =
+            Map.fromList [(i, proc) | (i, _, proc) <- lowered]
+              `Map.union` sp.slotProcEntries
+        }
+
+-- | A program with no procedures: what a hand-built session (a unit
+-- test exercising primitives, which needs no compiled procedure) starts
+-- from.
+emptySlotProgram :: SlotProgram
+emptySlotProgram = SlotProgram Map.empty Map.empty
+
+-- | The resolver 'lowerProgram' and 'addProcedures' hand the walk: a
+-- name the table knows becomes the callee's index, and anything else
+-- keeps its name for the interpreter's runtime error.
+resolveCallIn :: Map Name SlotProc -> Name -> CallTarget
+resolveCallIn procMap n = case Map.lookup n procMap of
+  Just proc -> ProcIndex proc.slotProcIx
+  Nothing -> ProcName n
 
 -- | Lower one procedure: parameters take the first slots, then every
--- binder in the body takes the next one.
-lowerProcedure :: Procedure -> SlotProc
-lowerProcedure proc =
+-- binder in the body takes the next one, and calls are resolved through
+-- @resolveCall@.
+--
+-- Not exported: a 'SlotProc' carries the index its callers will reach it
+-- by ('slotProcIx'), so one lowered on its own — with no position in a
+-- program — would be a procedure whose index means nothing. Only
+-- 'lowerProgram' and 'addProcedures', which know the position, call
+-- this.
+lowerProcedureWith :: ProcIx -> (Name -> CallTarget) -> Procedure -> SlotProc
+lowerProcedureWith ix resolveCall proc =
   let initialScope = Map.fromList (zip proc.params [0 ..])
-      body = fst (lowerStmts (Walker (length proc.params) initialScope) proc.body)
+      body =
+        fst
+          ( lowerStmts
+              (Walker (length proc.params) initialScope resolveCall)
+              proc.body
+          )
    in SlotProc
-        { slotProcArity = length proc.params,
+        { slotProcName = proc.name,
+          slotProcIx = ix,
+          slotProcArity = length proc.params,
           slotProcBody = body,
           slotProcKind = proc.procKind
         }
 
--- | The walk's state: the next free slot, and the slot each name in
--- scope is bound to.
+-- | The walk's state: the next free slot, the slot each name in
+-- scope is bound to, and how to name the callee of a call.
 data Walker = Walker
   { nextSlot :: !Int,
-    scope :: Map Name Slot
+    scope :: Map Name Slot,
+    resolveCall :: Name -> CallTarget
   }
 
 -- | The slot a name is already bound to, or a fresh one that nothing
@@ -360,7 +520,7 @@ lowerValExpr w = \case
   Lit lit -> (SLit lit, w)
   CallExpr name args ->
     let (args', w') = lowerCallArgs w args
-     in (SCallExpr name args', w')
+     in (SCallExpr (w.resolveCall name) args', w')
   HostCall name args ->
     let (args', w') = lowerValExprs w args
      in (SHostCall name args', w')

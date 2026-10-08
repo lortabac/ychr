@@ -447,8 +447,11 @@ integer slot (`YCHR.Internal.Interpreter.Slots`), and its environment is
 keyed by that slot rather than by `Name`. The phase is derived once per
 compiled program, lazily, and carried on `CompiledProgram.slotProgram`;
 `YCHR.Internal.Runtime.Session` copies it into `SessionInput`, the
-interpreter reads it out of `SessionEnv.procMap`, and query-time lifted
-lambdas are lowered with `lowerProcedure` before they are merged in.
+interpreter reads its local environments out of `SessionEnv.procEntries`
+and its name-keyed entry points out of `SessionEnv.procMap`, and
+query-time lifted lambdas are merged in by
+`YCHR.Internal.Interpreter.Slots.addProcedures` before the session
+exists.
 
 Why a second AST rather than a compiler-emitted slot: the code
 generation backends want names. `YCHR.Internal.Backend.Scheme` emits a
@@ -511,7 +514,11 @@ For contrast with the discarded item 1: interning removed *all* the
 `Text` comparisons and did not move this benchmark; removing the
 environment along with them does.
 
-**3. Resolve call targets at compile time.**
+**3. Resolve call targets at compile time. — implemented.**
+
+(Measured 2026-10-08; the full write-up, including the MicroHs side that
+motivated a second look, is in
+`dev-docs/MICROHS_PERFORMANCE.md` §7C.1.)
 
 `CallExpr` and `HostCall` carry a `Name` that the runtime looks up on
 every call: `lookupProc` (2.74 M calls per run — an `IORef` read plus a
@@ -533,6 +540,29 @@ compatibility surface is the serialization format plus the Scheme backend
 and driver, which
 resolve by name today; and the index space has to stay open, because
 query-time lambdas are added to the procedure map at run time.
+
+The `CallExpr` half is done, in the interpreter's slot phase rather than
+in the VM: the VM IR, its s-expression format and the Scheme backend keep
+their names, and `SCallExpr` carries a `CallTarget` (`ProcIndex` or the
+fallback `ProcName`) that `lowerProgram` resolves against the program's
+own procedure list. The runtime table is `SessionEnv.procEntries`, an
+`Int`-keyed `Map` — not an `IntMap`, which §7C.1 measured at 3.9 times a
+`Map Int` lookup under MicroHs, where this work was measured. Query-time
+lambdas are resolved against the union of the compiled names and their own
+by `Slots.addProcedures`, so the index space stays open exactly where it
+was. `interpret` and a hand-built `Program` keep the name path and their
+`unknown procedure` runtime error, and a new `YCHR.Internal.VM.Closure`
+check asserts that compiler output never leaves a call target unresolved
+(see `dev-docs/INVARIANTS.md`'s "Closed procedure-name set"). The
+`HostCall` half and the `evaluables`/`callables` index treatment are still
+open.
+
+It was kept on the measurements, not on the profile: on GHC criterion
+(three interleaved rounds a side) `typecheck/pairs_library` moves −2.1 %
+and most micro-benchmarks −1 % to −5.8 %, at the cost of a 0.10 %
+allocation increase, while MicroHs `check pairs_library` falls 1.01 % in
+reductions. Unlike item 1, this is not a second AST and moves no public
+type: the slot phase item 2 introduced is where the resolution lives.
 
 **4. One traversal, not two, in the argument-access primitives. — first change tried and discarded.**
 
@@ -589,14 +619,27 @@ here: the `try` wrapped around every host call (`invokeHostCall`,
 loop entry, and the per-statement allocation in `execStmts`/`execStmt`
 (11.4% and 6.4% of allocation).
 
-That leaves item 3, the one item still unimplemented. The evidence the
-other three accumulated is worth carrying to it, because the relative
+That left item 3 as the one item still unimplemented, and the evidence the
+other three accumulated was worth carrying to it, because the relative
 shares in the profile have not predicted the benchmarks: item 1 removed
 every `Text` comparison and moved nothing, item 2 removed the local
 environment and moved everything, and item 4's first change removed two
 list walks and moved backwards. Item 3 is item 1's remaining scope — the
 procedure and host-call tables and the keys behind `is` and `'$call'` —
 so the experiment that settled item 1 is already evidence about it.
+
+Item 3 has since been tried, and this time the benchmark agrees: its
+`CallExpr` half is implemented and `typecheck/pairs_library` moves
+−2.1 % on criterion, with no other benchmark outside its own interleaved
+spread. The `HostCall` half and the `evaluables`/`callables` keys are
+still open. What made the difference is not that the profile was wrong
+this time — `lookupProc` is ~1 % of profiled time, as item 1 predicted —
+but that the change is small: it resolves calls where item 2 already
+built the interpreter's own AST, so it adds no second AST and no public
+type, which is what the discarded interning attempt could not avoid. See
+`dev-docs/MICROHS_PERFORMANCE.md` §7C.1 for the measurements, including
+the MicroHs-side container measurement (`Map Int`, not `IntMap`) that
+the item's MicroHs motivation turned out to hinge on.
 
 Judge any of this with `make bench` and re-profile as described above.
 The relevant benchmark is `typecheck/pairs_library`, which drives the

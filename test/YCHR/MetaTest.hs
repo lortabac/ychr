@@ -13,6 +13,7 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase)
 import YCHR.Embedded (stdlib, typeCheckerProgram)
 import YCHR.Internal.Compile.Names (vmName)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
+import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
 import YCHR.Internal.Meta (metaHostCallRegistry, valueToTerm)
 import YCHR.Internal.PExpr (OpTable, OpType (..))
 import YCHR.Internal.Parsed (OpDecl (..))
@@ -55,7 +56,7 @@ runChrWith table action = do
       []
       IntMap.empty
       table
-      Map.empty
+      emptySlotProgram
       baseHostCallRegistry
       Map.empty
       Map.empty
@@ -92,7 +93,7 @@ runChrWithCallables cl action = do
       []
       IntMap.empty
       builtinOps
-      Map.empty
+      emptySlotProgram
       baseHostCallRegistry
       Map.empty
       cl

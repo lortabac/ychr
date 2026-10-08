@@ -47,7 +47,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import YCHR.Internal.Compile.Pipeline (ExportResolution)
-import YCHR.Internal.Interpreter.Slots (SlotProc)
+import YCHR.Internal.Interpreter.Slots (SlotProc, SlotProgram (..))
 import YCHR.Internal.PExpr (OpTable)
 import YCHR.Internal.Runtime.Index (StoreIndex, emptyStoreIndex)
 import YCHR.Internal.Runtime.Trace (TraceHandler)
@@ -68,8 +68,9 @@ type CallStack = [StackFrame]
 
 -- | Map from procedure name to its definition in the interpreter's slot
 -- phase ("YCHR.Internal.Interpreter.Slots"). Query-time procedures are
--- lowered with 'YCHR.Internal.Interpreter.Slots.lowerProcedure' before being
--- merged in, so every entry is in the same phase as the compiled ones.
+-- merged in by
+-- 'YCHR.Internal.Interpreter.Slots.addProcedures' before the session is
+-- built, so every entry is in the same phase as the compiled ones.
 type ProcMap = Map VM.Name SlotProc
 
 -- | Registry of host-language functions callable from compiled code.
@@ -155,6 +156,23 @@ data SessionEnv = SessionEnv
     -- one; nothing writes to it after 'initSessionEnv', which already
     -- merges the query-time lambdas.
     procMap :: !(IORef ProcMap),
+    -- | The same procedures keyed by the index a resolved call target
+    -- carries ('YCHR.Internal.Interpreter.Slots.SCallExpr'), so a call
+    -- inside a compiled procedure reaches its callee without a
+    -- @Name@-keyed lookup. Immutable, and shared by a search fork.
+    --
+    -- Deliberately /not/ strict, unlike the rest of this record: the
+    -- table is only needed once a compiled call runs, and building it
+    -- is the one thing this field adds to a session. A run that makes
+    -- no compiled call — @repl --quiet@ startup, a compile-only
+    -- invocation — never forces it, and the first session that does
+    -- forces the program's shared thunk for every session after it.
+    --
+    -- Keyed by the unwrapped index in a 'Map', not an @IntMap@; see
+    -- 'YCHR.Internal.Interpreter.Slots.SlotProgram' for why (MicroHs
+    -- does not inline the @Data.Bits@ work an @IntMap@ search is made
+    -- of, so an @IntMap@ lookup is the more expensive one there).
+    procEntries :: Map Int SlotProc,
     -- | Host-call registry.
     hostCalls :: !HostCallRegistry,
     -- | Deep-evaluator dispatch table for the @is@ operator.
@@ -203,25 +221,29 @@ data SessionEnv = SessionEnv
 
 -- | Build a fresh 'SessionEnv' for a compiled program.
 --
--- The indexable positions come from
+-- The procedure table arrives as a 'SlotProgram' — the phase the
+-- interpreter runs — and is split into the name-keyed view the
+-- name-based entry points use and the index-keyed one a resolved call
+-- target reads. The indexable positions come from
 -- 'YCHR.Internal.Runtime.Index.indexablePositions' applied to the same
 -- program; a caller that has no program in hand (a unit test building a
--- session by hand) passes 'IntMap.empty' and gets an unindexed store,
--- and 'YCHR.Internal.Parser.builtinOps' for the operator table.
+-- session by hand) passes 'YCHR.Internal.Interpreter.Slots.emptySlotProgram'
+-- and gets an empty procedure table, and
+-- 'YCHR.Internal.Parser.builtinOps' for the operator table.
 initSessionEnv ::
   [Types.Name] ->
   [Text] ->
   [Types.ConstraintType] ->
   IntMap IntSet ->
   OpTable ->
-  ProcMap ->
+  SlotProgram ->
   HostCallRegistry ->
   EvaluableRegistry ->
   CallableRegistry ->
   Map Types.UnqualifiedIdentifier ExportResolution ->
   Set Types.QualifiedIdentifier ->
   IO SessionEnv
-initSessionEnv typeNames rNames inert indexable ops pm hc ev cl expMap expSet = do
+initSessionEnv typeNames rNames inert indexable ops slotProgram hc ev cl expMap expSet = do
   vc <- newIORef (VarId 0)
   let typeCount = List.length typeNames
       emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
@@ -234,7 +256,7 @@ initSessionEnv typeNames rNames inert indexable ops pm hc ev cl expMap expSet = 
   hi <- newIORef Set.empty
   rq <- newIORef Seq.empty
   cs <- newIORef []
-  pmRef <- newIORef pm
+  pmRef <- newIORef slotProgram.slotProcedures
   th <- newIORef Nothing
   td <- newIORef 0
   pure
@@ -252,6 +274,7 @@ initSessionEnv typeNames rNames inert indexable ops pm hc ev cl expMap expSet = 
         reactQueue = rq,
         callStack = cs,
         procMap = pmRef,
+        procEntries = slotProgram.slotProcEntries,
         hostCalls = hc,
         evaluables = ev,
         callables = cl,
@@ -266,9 +289,13 @@ initSessionEnv typeNames rNames inert indexable ops pm hc ev cl expMap expSet = 
 -- | A fresh session of the same program, ready to run a search: same
 -- procedures, constraint types, rule names, host calls and exports,
 -- but its own store, history, reactivation queue and call stack, and
--- with a trail guaranteed to be installed. The procedure map is
--- copied into a new 'IORef', so the fork may add procedures without
--- the original seeing them.
+-- with a trail guaranteed to be installed. The procedure map is copied
+-- into a new 'IORef' — a defensive copy with no writer today, since the
+-- one point that adds procedures is
+-- 'YCHR.Internal.Runtime.Session.withCHRExtra', which builds a fresh
+-- session before this one exists. The index-keyed table ('procEntries')
+-- is shared as it is for the same reason: nothing extends the table
+-- once a session has been built.
 --
 -- Every fork goes through here, because every entry point that opens
 -- one — @solve\/1@, @findall\/2@, @fold_solutions\/4@ and
