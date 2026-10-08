@@ -93,6 +93,7 @@ import YCHR.Internal.TypeCheck.Error (TypeCheckError, TypeCheckWarning)
 import YCHR.Internal.Types (SymbolTable)
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Program (..), StackFrame)
+import YCHR.Internal.VM.Closure (closureFailure, danglingTargets)
 import YCHR.Internal.VM.Index (indexablePositions)
 
 -- | Anything that can stop a program from compiling or running, tagged by
@@ -495,6 +496,15 @@ finalizeCompilation libraryMods opExports trailingLocMap inputPaths parsed = do
         [RenameWarnings renameWarnings | not (null renameWarnings)]
           ++ [ExhaustivenessWarnings exhaustWarnings | not (null exhaustWarnings)]
   prog <- first CompileErrors (compile desugared' symTab)
+  -- Assert the procedure-name closure invariant: every call the
+  -- generated program carries must name one of its own procedures (see
+  -- "YCHR.Internal.VM.Closure", and "Closed procedure-name set" in
+  -- @dev-docs/INVARIANTS.md@). A miss cannot come from user input;
+  -- it is a compiler bug, and this is where it is caught instead of on
+  -- the interpreter path that happens to reach the call first.
+  case closureFailure "compileModules" (danglingTargets prog) of
+    Just msg -> error msg
+    Nothing -> pure ()
   -- The query parser uses the union of every user module's operator
   -- visibility, so a query at the REPL can use any operator any user
   -- module declares.

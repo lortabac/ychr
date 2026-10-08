@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+The Haskell interpreter resolves its call targets when it lowers a
+program, instead of looking each one up by name on every call. The
+change is the remaining half of `dev-docs/PROJECT.md`'s interpreter
+performance item 3 and lives entirely in the interpreter's slot phase
+(`YCHR.Internal.Interpreter.Slots`): `SCallExpr` now carries a
+`CallTarget` — the callee's index in the program's procedure list, or the
+declared name as a fallback — and `SlotProgram` carries the index-keyed
+table the interpreter reads (`SessionEnv.procEntries`). The VM IR, its
+s-expression format and the Scheme backend are unchanged. Query-time
+lifted lambdas are resolved against the union of the compiled names and
+their own by `Slots.addProcedures`, and a hand-built `Program` passed to
+`interpret` keeps the old name-based path and its `unknown procedure`
+runtime error.
+
+`YCHR.Internal.VM.Closure` is new: it checks that every `CallExpr` a
+program carries, and every target of its `evaluables` and `callables`
+tables, names one of its own procedures. `compileModules` asserts it with
+an internal error (a miss is a compiler bug, not user input) and
+`Session.withCHRExtra` checks query-time procedures and callables against
+the unioned table; `test/YCHR/VM/ClosureTest.hs` pins the checker.
+
+Internal API movement that goes with it: `SlotValExpr`'s `SCallExpr`,
+`SlotProgram`'s fields, `SlotProc`'s new `slotProcName`/`slotProcIx`,
+`SessionEnv.procEntries`, and `initSessionEnv`, which now takes a
+`SlotProgram` in place of a `ProcMap`. Measured on `make bench`
+(criterion, three interleaved rounds a side) `typecheck/pairs_library`
+moves 137.0 ms → 134.1 ms (−2.1 %), most micro-benchmarks −1 % to −5.8 %,
+and GHC heap allocation on `check typechecker/*.chr` +0.10 %; under
+MicroHs `check pairs_library` falls 1.01 % in reductions and `check leq`
+0.78 %, while the closure walk costs 0.74 % on a large `compile` and
+1.0 M reductions on `repl --quiet` startup. The container choice matters
+on MicroHs: the table is a `Map Int`, because an `IntMap` lookup there
+costs about 4 to 6 times a `Map Int` one (measured per lookup, key
+construction excluded). See
+`dev-docs/MICROHS_PERFORMANCE.md` §7C.1 for the full write-up.
+
 The s-expression VM format is now version 2, a breaking change. The
 `push-frame` statement previously emitted its label, file and
 pretty-printed source fields as bare atoms, so a dump containing a rule

@@ -320,6 +320,7 @@ test-suite ychr-tests
                     , YCHR.Runtime.ReactivationTest
                     , YCHR.Runtime.InterpreterTest
                     , YCHR.VM.SExprTest
+                    , YCHR.VM.ClosureTest
                     , YCHR.Embedded
                     , YCHR.Embedded.StdLib
                     , YCHR.Embedded.TypeCheck
@@ -432,6 +433,7 @@ library
                     , YCHR.Internal.VM.Types
                     , YCHR.Internal.VM.SExpr
                     , YCHR.Internal.VM.Index
+                    , YCHR.Internal.VM.Closure
                     , YCHR.Internal.SExpr
                     , YCHR.Internal.Runtime.Interpreter
                     , YCHR.Internal.Runtime.Monad

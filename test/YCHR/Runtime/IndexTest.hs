@@ -18,6 +18,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
+import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
 import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.Index
 import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
@@ -78,7 +79,7 @@ runIndexEnv action = do
       []
       (IntMap.fromList [(0, IntSet.singleton 0)])
       builtinOps
-      Map.empty
+      emptySlotProgram
       Map.empty
       Map.empty
       Map.empty

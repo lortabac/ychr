@@ -9,6 +9,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
+import YCHR.Internal.Interpreter.Slots (emptySlotProgram)
 import YCHR.Internal.Parser (builtinOps)
 import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Reactivation
@@ -36,7 +37,7 @@ runReactEnv action = do
       []
       IntMap.empty
       builtinOps
-      Map.empty
+      emptySlotProgram
       Map.empty
       Map.empty
       Map.empty
@@ -57,7 +58,7 @@ runReactStoreEnv action = do
       []
       IntMap.empty
       builtinOps
-      Map.empty
+      emptySlotProgram
       Map.empty
       Map.empty
       Map.empty

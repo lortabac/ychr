@@ -333,19 +333,25 @@ allocation API).
 
 ### Remaining interpreter shape checks — `src/YCHR/Internal/Runtime/Interpreter.hs`
 
-After the value-vs-id and bool splits, three sites remain that are
-name-resolution invariants rather than shape invariants:
+After the value-vs-id and bool splits, these sites remain that are
+name- or index-resolution invariants rather than shape invariants:
 
-| Site                                | Required precondition          |
-|-------------------------------------|--------------------------------|
-| `callProc` (unknown name)           | name resolves in `procMap`     |
-| `evalValExpr (SVar slot name)`      | slot in `envValues`            |
-| `invokeHostCall` (unknown)          | name in registry               |
+| Site                                | Required precondition                     |
+|-------------------------------------|-------------------------------------------|
+| `callProc` (unknown name)           | name resolves in `procMap`                |
+| `callProcAt` (stale index)          | index resolves in `procEntries`           |
+| `evalValExpr (SVar slot name)`      | slot in `envValues`                       |
+| `invokeHostCall` (unknown)          | name in registry                          |
 
-Closure checks at compile time (see §5 "Closed procedure-name set")
-would close the first; an opaque `IdExpr`/`ValExpr` constructor that
-can only be made by the binder would close the second; a typed
-`HostCallRef` issued by the registry would close the third.
+The first closes for compiler output — see §5 "Closed procedure-name
+set" — and stays a runtime error only for a hand-built `Program` that
+the interpreter is handed directly. The second is unreachable by
+construction: a `CallTarget` index and the `procEntries` table it is
+read from come from the same `SlotProgram`, and nothing rebuilds one
+without the other; `callProcAt` still reports a miss rather than
+projecting a partial record. An opaque `IdExpr`/`ValExpr` constructor
+that can only be made by the binder would close the third; a typed
+`HostCallRef` issued by the registry would close the fourth.
 
 ### Panics this catalogue missed
 
@@ -692,26 +698,33 @@ that they agree.
 
 ### Closed procedure-name set
 
-Every `CallExpr` name (`tell_<c>/<n>`, `activate_<c>/<n>`,
-`occurrence_<c>_<n>_<j>`, `func_<…>`,
-`reactivate_dispatch`) must exist in the generated `procMap`. The
-interpreter (`Interpreter.hs:422`) errors at runtime if any name is
-missing. There is no whole-program closure check.
+Closed for compiler output. Every `CallExpr` name (`tell_<c>/<n>`,
+`activate_<c>/<n>`, `occurrence_<c>_<n>_<j>`, `func_<…>`,
+`reactivate_dispatch`) must exist in the generated procedure table. The
+interpreter still errors at runtime if a name it is handed is missing, but
+compiler output can no longer reach that error:
+`YCHR.Internal.VM.Closure.danglingTargets` checks every `CallExpr` name,
+and every target of the program's `evaluables` and `callables` tables,
+against the program's own procedures; `Compile.Pipeline.compileModules`
+asserts it with an internal `error` (a miss is a compiler bug, not user
+input, so it is not given a diagnostic code), and a test in
+`test/YCHR/VM/ClosureTest.hs` pins the checker's own behaviour.
 
-Every name in the program's *callables* table must likewise exist in the
-`procMap`: nothing checks that the table's entries and the generated
-procedures agree. The compiler derives both from the same function list
-in one pass (`buildCallables` and `compileFunctionDef`), so they cannot
-drift today — but a backend or a future pass that rewrites procedure
-names would have to keep the table in step.
+The union caveat is handled where the item said it must be. Query-time
+procedures and callables are compiled after the program and merged in by
+`Session.withCHRExtra`, so that is where they are checked, against the
+union of the compiled names and their own (`extraClosureFailure`); the
+check short-circuits when a query adds neither, which is every query that
+does not lift a lambda. What remains a runtime error is the hand-built
+`Program` the interpreter's `interpret` entry accepts — that is not
+compiler output, and `test/YCHR/Runtime/InterpreterTest.hs` pins the
+`unknown procedure` message it produces.
 
-A post-compilation pass (or a typed `ProcRef` issued only by the
-generator that introduces the procedure) would catch missing names
-before runtime. Such a pass must run against the *unioned* procedure
-map: `Run.hs` merges query-time procedures (lifted query lambdas and
-their callables entries) into the map via `Session.withCHRExtra`, so a
-check over the compiled program's map alone would reject valid
-query-time calls.
+The check is not free: it walks the program once per compile, which on
+MicroHs is 3.7 M reductions on `compile -t vm typechecker/*.chr` (+0.7 %)
+and 1.0 M on `repl --quiet` startup. The measurements are in
+`MICROHS_PERFORMANCE.md` §7C.1, which is also where the alternative —
+keeping the checker as a test only — is weighed.
 
 ### `reactivate_dispatch` covers every constraint type
 
@@ -847,13 +860,24 @@ CHR) that no longer exists: `Chr` is a `ReaderT SessionEnv IO`, and
 `initSessionEnv` allocates every piece of session state into one
 record. The ordering invariant went away with the stack.
 
-What is left is weaker and lives in `withCHRExtra`: the procedure map
-is `extraProcMap \`Map.union\` si.slotProgram.slotProcedures`, i.e.
-query-time procedures deliberately *shadow* compiled ones on a name
-collision. `Map.union` is left-biased, so swapping the operands
-silently reverses that. Nothing but the argument order says which side
-wins. Extras are lowered with `lowerProcedure` before the merge, so
-every entry in the map is in the same phase as the compiled ones.
+What is left is weaker and lives in `withCHRExtra`: the procedure map is
+`addProcedures si.slotProgram extraProcs`, i.e. query-time procedures
+deliberately *shadow* compiled ones on a name collision. The merged map
+is left-biased, so swapping the operands silently reverses that. Nothing
+but the argument order says which side wins. Extras are lowered by
+`addProcedures` before the merge, so every entry in the map is in the
+same phase as the compiled ones.
+
+One asymmetry is newer than the rest and is worth stating: a *resolved*
+call does not see that shadowing. A compiled procedure's calls were
+resolved against the compiled program's own procedures when it was
+lowered, so an extra that shadows a compiled name is reached by
+host-initiated calls (a query's `tell_<c>`, `'$call'`, `is`) but not by a
+compiled call to that name. Nothing observable depends on this today:
+extras are lifted lambdas with fresh `__lambda_N` names and cannot
+collide, which is the same reason the merge order is only a convention.
+It would matter to a future feature that genuinely overrode a compiled
+procedure at query time.
 
 ### The interpreter's slot phase mirrors the VM AST — `src/YCHR/Internal/Interpreter/Slots.hs`
 
@@ -867,11 +891,23 @@ type:
 - **The phase is total and structure-preserving.** Every VM `Stmt`,
   `ValExpr`, `BoolExpr`, `IdExpr` and `CallArg` constructor has exactly
   one counterpart, and the lowering only rewrites the local-variable
-  slots. A VM constructor added without its counterpart makes the
-  lowering's pattern matches non-exhaustive, which is a compile error
-  under `-Wall -Werror`; that is the mechanism that keeps the phase
-  from going silently stale. `test/YCHR/Interpreter/SlotsTest.hs` pins the
-  slot numbering the interpreter depends on.
+  slots and a call's callee. A VM constructor added without its
+  counterpart makes the lowering's pattern matches non-exhaustive, which
+  is a compile error under `-Wall -Werror`; that is the mechanism that
+  keeps the phase from going silently stale.
+  `test/YCHR/Interpreter/SlotsTest.hs` pins the slot numbering the
+  interpreter depends on.
+- **A call target and the procedure table it is read from come from the
+  same `SlotProgram`.** `lowerProgram` resolves each `CallExpr` name to
+  the callee's `ProcIx` (its position in the program's procedure list)
+  and stores the procedures in `slotProcEntries` keyed by that same
+  index; `addProcedures` extends both together when query-time lambdas
+  arrive. The interpreter therefore reads a `ProcIndex` target out of
+  `SessionEnv.procEntries` with no lookup by name, and a miss is
+  impossible by construction rather than by convention. A name the
+  program does not declare stays a `ProcName` target and reaches the
+  interpreter's existing "unknown procedure" error; compiler output
+  cannot produce one (§5, "Closed procedure-name set").
 - **A slot is read from the map its kind binds it in, and a name the
   phase never saw in scope lowers to a slot nothing binds.** Slots are
   numbered from one counter per procedure, shared by both kinds,
@@ -1006,11 +1042,11 @@ Shortening any of them would change either a URL or a test name.
 
 If you want a roughly-ordered list of the most actionable wins:
 
-1. **Procedure-name closure check** (§5). A post-compile pass that
-   verifies every `CallExpr` resolves in the procedure map. Catches a
-   whole class of compiler bugs at compile time. Must run against the
-   *unioned* map — `Run.hs` adds query-time procedures that the
-   compiled program's map does not contain.
+1. ~~**Procedure-name closure check** (§5).~~ Done: every `CallExpr` name
+   and both dispatch tables are checked against the procedure table, over
+   the compiled program and over the query-time extras against the
+   unioned map. See §5 "Closed procedure-name set" and
+   `MICROHS_PERFORMANCE.md` §7C.1 for what the walk costs.
 2. **Phase-indexed `Expr`** (§1, `R.LambdaExpr`; and the two `BodyOr`
    sites in "Panics this catalogue missed"). The larger
    follow-up: a trees-that-grow field on `LambdaExpr` (or an `Expr

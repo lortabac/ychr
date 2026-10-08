@@ -77,12 +77,13 @@ import Data.Text (Text)
 -- (dev-docs/MICROHS_GAPS.md, gap 4).
 import Data.Text.Shim qualified as T
 import YCHR.Internal.Interpreter.Slots
-  ( Slot,
+  ( CallTarget (..),
+    ProcIx (..),
+    Slot,
     SlotBoolExpr (..),
     SlotCallArg (..),
     SlotIdExpr (..),
     SlotProc (..),
-    SlotProgram (..),
     SlotStmt (..),
     SlotValExpr (..),
     lowerProgram,
@@ -224,7 +225,7 @@ liftChr = lift
 -- buys and what a hand-built 'Program' in a test expects.
 interpret :: Program -> HostCallRegistry -> Name -> [Value] -> IO Value
 interpret prog hostCalls entryName args = do
-  let procMap = (lowerProgram prog).slotProcedures
+  let slotProgram = lowerProgram prog
       evaluableMap = Map.fromList prog.evaluables
       callableMap = Map.fromList prog.callables
   env <-
@@ -234,7 +235,7 @@ interpret prog hostCalls entryName args = do
       prog.inertTypes
       (indexablePositions prog)
       builtinOps
-      procMap
+      slotProgram
       hostCalls
       evaluableMap
       callableMap
@@ -438,34 +439,67 @@ lookupRuleName env (RuleId i) =
 -- Core interpreter
 -- ---------------------------------------------------------------------------
 
--- | Call a procedure. Creates a fresh local 'Env' with parameter
--- bindings, executes the body, and consumes its 'SRet' signal. Default
--- return: 'VBool False'. Emits trace events at entry (and on return
--- for user functions / lambdas) when tracing is on; uses the
--- procedure's 'procKind' tag to label the event and decide whether
+-- | Call a procedure by name. Creates a fresh local 'Env' with
+-- parameter bindings, executes the body, and consumes its 'SRet'
+-- signal. Default return: 'VBool False'. Emits trace events at entry
+-- (and on return for user functions / lambdas) when tracing is on; uses
+-- the procedure's 'procKind' tag to label the event and decide whether
 -- to bump the trace indentation.
+--
+-- This is the entry point for a name that arrives from outside the
+-- compiled code — a query's @tell_\<c\>@, reactivation dispatch,
+-- @'$call'@ and @is@ dispatch, the interpreter's own 'interpret'
+-- entry — and for a hand-built 'Program' whose call target nothing
+-- declares. A call inside compiled code carries a resolved 'ProcIx'
+-- and goes through 'callProcAt' instead.
 callProc :: Name -> [CallVal] -> Chr Value
 callProc name args = do
   mproc <- lookupProc name
   case mproc of
     Nothing -> runtimeError' "callProc: unknown procedure " name.unName
-    Just proc -> do
-      env <- case bindParams name proc.slotProcArity args of
-        Right e -> pure e
-        Left msg -> runtimeErrorS msg
-      traceEntry proc args
-      let runBody = withSavedCallStack $ do
-            sig <- withFreshEnv env (execStmts proc.slotProcBody)
-            case sig of
-              SFall -> pure (VBool False)
-              SRet v -> pure v
-              _ -> uncaughtSignal "callProc" sig
-      result <-
-        if bumpDepthFor proc.slotProcKind
-          then withTraceDepth runBody
-          else runBody
-      traceExit proc.slotProcKind result
-      pure result
+    Just proc -> callProcEntry proc args
+
+-- | Call the procedure a resolved call target points at. The index is
+-- read off the session's 'procEntries' table, which is the table of the
+-- same 'SlotProgram' the AST was lowered from, so a miss is a stale
+-- index rather than a program error — the reportable "unknown
+-- procedure" path is 'callProc', which a hand-built 'Program' still
+-- reaches.
+callProcAt :: ProcIx -> [CallVal] -> Chr Value
+callProcAt (ProcIx ix) args = do
+  SessionEnv {procEntries} <- ask
+  case Map.lookup ix procEntries of
+    Nothing -> error ("callProcAt: stale procedure index " ++ show ix)
+    Just proc -> callProcEntry proc args
+
+-- | The body of a procedure call, shared by the two entry points above:
+-- bind the parameters, emit the entry-time event, run the body inside a
+-- saved call stack and at the depth its kind asks for, consume the
+-- 'SRet' it ends in, and emit the return event.
+callProcEntry :: SlotProc -> [CallVal] -> Chr Value
+callProcEntry proc args = do
+  env <- case bindParams proc.slotProcName proc.slotProcArity args of
+    Right e -> pure e
+    Left msg -> runtimeErrorS msg
+  traceEntry proc args
+  let runBody = withSavedCallStack $ do
+        sig <- withFreshEnv env (execStmts proc.slotProcBody)
+        case sig of
+          SFall -> pure (VBool False)
+          SRet v -> pure v
+          _ -> uncaughtSignal "callProc" sig
+  result <-
+    if bumpDepthFor proc.slotProcKind
+      then withTraceDepth runBody
+      else runBody
+  traceExit proc.slotProcKind result
+  pure result
+
+-- | Call a slot-phase call target: by the resolved index when the
+-- lowering knew the callee, by name otherwise.
+callTarget :: CallTarget -> [CallVal] -> Chr Value
+callTarget (ProcIndex ix) args = callProcAt ix args
+callTarget (ProcName name) args = callProc name args
 
 -- | Report a jump signal that reached a boundary with no owner: a
 -- 'Continue' or 'Break' whose label names no enclosing 'Foreach' in
@@ -825,9 +859,9 @@ evalValExpr (SLit (FloatLit n)) = pure (VFloat n)
 evalValExpr (SLit (AtomLit s)) = pure (VAtom s)
 evalValExpr (SLit (TextLit s)) = pure (VText s)
 evalValExpr (SLit (BoolLit b)) = pure (VBool b)
-evalValExpr (SCallExpr name args) = do
+evalValExpr (SCallExpr target args) = do
   argVals <- traverse evalCallArg args
-  liftChr (callProc name argVals)
+  liftChr (callTarget target argVals)
 evalValExpr (SHostCall name args) = do
   argVals <- traverse evalValExpr args
   derefedVals <- liftChr (traverse deref argVals)
@@ -1069,9 +1103,9 @@ evalValExprDeep (SVar slot name) = do
 evalValExprDeep (SHostCall name args) = do
   argVals <- traverse evalValExprDeep args
   liftChr (invokeHostCall name argVals)
-evalValExprDeep (SCallExpr name args) = do
+evalValExprDeep (SCallExpr target args) = do
   argVals <- traverse evalCallArgDeep args
-  liftChr (callProc name argVals)
+  liftChr (callTarget target argVals)
 evalValExprDeep (SApplyClosure f args) = do
   fv <- evalValExprDeep f
   argVals <- traverse evalValExprDeep args

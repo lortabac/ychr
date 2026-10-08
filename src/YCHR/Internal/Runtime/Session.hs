@@ -55,7 +55,7 @@ import Data.Text qualified as T
 import YCHR.Internal.Compile (tellProcName)
 import YCHR.Internal.Compile.Names (reactivateDispatchName)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), ExportResolution (..))
-import YCHR.Internal.Interpreter.Slots (SlotProgram (..), lowerProcedure, lowerProgram)
+import YCHR.Internal.Interpreter.Slots (SlotProgram (..), addProcedures, lowerProgram)
 import YCHR.Internal.PExpr (OpTable)
 import YCHR.Internal.Runtime.Error (runtimeErrorS)
 import YCHR.Internal.Runtime.Interpreter
@@ -78,6 +78,12 @@ import YCHR.Internal.Runtime.Trace (TraceEvent (..), TraceHandler)
 import YCHR.Internal.Runtime.Types (CallVal (..), Value (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (CallableKey, Name (..), Procedure (..), Program (..))
+import YCHR.Internal.VM.Closure
+  ( closureFailure,
+    danglingCallables,
+    danglingCalls,
+    procedureNames,
+  )
 import YCHR.Internal.VM.Index (indexablePositions)
 
 -- | The narrow slice of a compiled program that 'withCHR' /
@@ -162,33 +168,64 @@ withCHRExtra ::
   [(CallableKey, Name)] ->
   Chr a ->
   IO a
-withCHRExtra si hc extraProcs extraCallables action = do
-  -- Query-time lambdas are compiled by the same CHR-to-VM compiler, so
-  -- they arrive in the VM phase and are lowered here, once per session
-  -- and only for the handful a query actually lifts.
-  let extraProcMap = Map.fromList [(p.name, lowerProcedure p) | p <- extraProcs]
-      procMap = extraProcMap `Map.union` si.slotProgram.slotProcedures
-  let evaluableMap = Map.fromList si.program.evaluables
-  -- Extras win, as in the procedure map: a query-time lambda can never
-  -- collide with a compiled one (its lifted name is fresh), but the
-  -- two merges then follow the same rule.
-  let callableMap =
-        Map.fromList extraCallables
-          `Map.union` Map.fromList si.program.callables
-  env <-
-    initSessionEnv
-      si.program.typeNames
-      si.program.ruleNames
-      si.program.inertTypes
-      si.indexPositions
-      si.opTable
-      procMap
-      hc
-      evaluableMap
-      callableMap
-      si.exportMap
-      si.exportedSet
-  runChr action env
+withCHRExtra si hc extraProcs extraCallables action
+  | Just msg <- extraClosureFailure si extraProcs extraCallables = error msg
+  | otherwise = do
+      -- Query-time lambdas are compiled by the same CHR-to-VM compiler, so
+      -- they arrive in the VM phase and are lowered here, once per session
+      -- and only for the handful a query actually lifts. 'addProcedures'
+      -- keeps the compiled entries' indices and gives the extras the next
+      -- ones, resolving the extras' calls against both name spaces; with
+      -- no extras it returns the compiled program unchanged.
+      let slotProgram = addProcedures si.slotProgram extraProcs
+          evaluableMap = Map.fromList si.program.evaluables
+      -- Extras win, as in the procedure map: a query-time lambda can never
+      -- collide with a compiled one (its lifted name is fresh), but the
+      -- two merges then follow the same rule.
+      let callableMap =
+            Map.fromList extraCallables
+              `Map.union` Map.fromList si.program.callables
+      env <-
+        initSessionEnv
+          si.program.typeNames
+          si.program.ruleNames
+          si.program.inertTypes
+          si.indexPositions
+          si.opTable
+          slotProgram
+          hc
+          evaluableMap
+          callableMap
+          si.exportMap
+          si.exportedSet
+      runChr action env
+
+-- | Assert the procedure-name closure invariant for the query-time
+-- procedures and callables a session merges in.
+--
+-- An extra may call a compiled procedure and one extra may call
+-- another, so the check resolves against the union of the compiled
+-- names and the extras' own — the same union 'addProcedures' merges
+-- into the interpreter's table, read off the same 'SlotProgram' it
+-- extends rather than off the VM program. See
+-- "YCHR.Internal.VM.Closure" and "Closed procedure-name set" in
+-- @dev-docs/INVARIANTS.md@.
+--
+-- The guard returns without building the union set when a query adds
+-- neither procedures nor callables; the compiled program was already
+-- checked by 'YCHR.Internal.Compile.Pipeline.compileModules', so the
+-- per-session path pays nothing in that case.
+extraClosureFailure ::
+  SessionInput ->
+  [Procedure] ->
+  [(CallableKey, Name)] ->
+  Maybe String
+extraClosureFailure si procs callables
+  | null procs && null callables = Nothing
+  | otherwise = closureFailure "withCHRExtra" dangling
+  where
+    known = procedureNames procs <> Map.keysSet si.slotProgram.slotProcedures
+    dangling = danglingCalls known procs ++ danglingCallables known callables
 
 -- | Like 'withCHRExtra' but also installs a trace handler so that the
 -- interpreter emits 'TraceEvent's at each canonical ωr step (plus

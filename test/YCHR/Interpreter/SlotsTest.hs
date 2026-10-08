@@ -57,9 +57,18 @@ mkProc n ps body =
       procKind = PKReactivateDispatch
     }
 
+-- | The lowered form of a procedure lowered on its own: a program is
+-- built for it so that it gets the index a program would give it (the
+-- phase no longer exposes a way to lower a procedure without one).
+lowerSingle :: [Name] -> [Stmt] -> SlotProc
+lowerSingle params body =
+  case Map.lookup "p" (lowerProgram (programWith [mkProc "p" params body])).slotProcedures of
+    Just p -> p
+    Nothing -> error "lowerSingle: fixture procedure missing"
+
 -- | The lowered body of a procedure with the given parameters and body.
 lowerBody :: [Name] -> [Stmt] -> [SlotStmt]
-lowerBody params body = (lowerProcedure (mkProc "p" params body)).slotProcBody
+lowerBody params body = (lowerSingle params body).slotProcBody
 
 programWith :: [Procedure] -> Program
 programWith procs =
@@ -72,6 +81,10 @@ programWith procs =
       inertTypes = []
     }
 
+-- | A program whose only procedure is the given one.
+singleProc :: Name -> [Stmt] -> Program
+singleProc n body = programWith [mkProc n [] body]
+
 -- ---------------------------------------------------------------------------
 -- Slots
 -- ---------------------------------------------------------------------------
@@ -82,7 +95,7 @@ slotTests =
     "slot assignment"
     [ testCase "parameters take slots 0..n-1, reported as the arity" $ do
         let lowered =
-              lowerProcedure (mkProc "p" ["a", "b"] [Return (Var "a"), Return (Var "b")])
+              lowerSingle ["a", "b"] [Return (Var "a"), Return (Var "b")]
         lowered.slotProcArity @?= 2
         lowered.slotProcBody @?= [SReturn (SVar 0 "a"), SReturn (SVar 1 "b")],
       testCase "a let binder takes the next slot and is visible afterwards" $
@@ -146,7 +159,9 @@ slotTests =
           ]
           @?= [ SDrainReactivationQueue
                   0
-                  [SExprStmt (SCallExpr "reactivate_dispatch" [SCallId (SIdVar 0 "q")])]
+                  [ SExprStmt
+                      (SCallExpr (ProcName "reactivate_dispatch") [SCallId (SIdVar 0 "q")])
+                  ]
               ],
       testCase "a Tell procedure's fresh id keeps its slot through the call" $
         -- The shape 'genTell' emits: create an id, pass the id to
@@ -158,7 +173,7 @@ slotTests =
             Store (IdVar "active")
           ]
           @?= [ SLetId 1 (SCreateConstraint (ConstraintType 7) [SVar 0 "X"]),
-                SExprStmt (SCallExpr "activate_c" [SCallId (SIdVar 1 "active")]),
+                SExprStmt (SCallExpr (ProcName "activate_c") [SCallId (SIdVar 1 "active")]),
                 SStore (SIdVar 1 "active")
               ]
     ]
@@ -277,7 +292,7 @@ programTests =
             q.slotProcArity @?= 1
             q.slotProcBody @?= [SReturn (SVar 0 "b")],
       testCase "carries the proc kind through unchanged" $
-        let lowered = lowerProcedure (mkProc "p" [] [])
+        let lowered = lowerSingle [] []
          in lowered.slotProcKind @?= PKReactivateDispatch,
       testCase "history ids keep the canonical order mkHistoryIds established" $
         -- 'mkHistoryIds' orders by head position; the phase must not
@@ -305,5 +320,114 @@ programTests =
                           (SBNot (SBAlive (SIdVar 1 "x")))
                       )
                   )
-              ]
+              ],
+      testCase "indices follow the program's procedure order" $ do
+        let lowered =
+              lowerProgram
+                ( programWith
+                    [ mkProc "tell_c" [] [],
+                      mkProc "activate_c" [] []
+                    ]
+                )
+        Map.keys lowered.slotProcEntries @?= [0, 1]
+        fmap (.slotProcIx) (Map.lookup "activate_c" lowered.slotProcedures)
+          @?= Just (ProcIx 1),
+      testCase "a call to another procedure of the program is resolved" $ do
+        let lowered =
+              lowerProgram
+                ( programWith
+                    [ mkProc "p" [] [ExprStmt (CallExpr "q" [])],
+                      mkProc "q" [] []
+                    ]
+                )
+        case Map.lookup "p" lowered.slotProcedures of
+          Nothing -> assertFailure "p missing"
+          Just p ->
+            p.slotProcBody
+              @?= [SExprStmt (SCallExpr (ProcIndex (ProcIx 1)) [])],
+      testCase "a call to a name nothing declares stays by name" $ do
+        let lowered =
+              lowerProgram (singleProc "p" [ExprStmt (CallExpr "ghost" [])])
+        case Map.lookup "p" lowered.slotProcedures of
+          Nothing -> assertFailure "p missing"
+          Just p ->
+            p.slotProcBody
+              @?= [SExprStmt (SCallExpr (ProcName "ghost") [])],
+      testCase "addProcedures keeps base indices and resolves against both spaces" $ do
+        let base = lowerProgram (singleProc "compiled" [])
+            extra =
+              mkProc
+                "__lambda_0"
+                []
+                [ ExprStmt (CallExpr "compiled" []),
+                  ExprStmt (CallExpr "other" [])
+                ]
+            extended = addProcedures base [extra]
+        Map.keys extended.slotProcEntries @?= [0, 1]
+        case Map.lookup "__lambda_0" extended.slotProcedures of
+          Nothing -> assertFailure "__lambda_0 missing"
+          Just p ->
+            p.slotProcBody
+              @?= [ SExprStmt (SCallExpr (ProcIndex (ProcIx 0)) []),
+                    SExprStmt (SCallExpr (ProcName "other") [])
+                  ],
+      testCase "an extra may call another extra" $ do
+        let extended =
+              addProcedures
+                emptySlotProgram
+                [ mkProc "__lambda_0" [] [ExprStmt (CallExpr "__lambda_1" [])],
+                  mkProc "__lambda_1" [] []
+                ]
+        case Map.lookup "__lambda_0" extended.slotProcedures of
+          Nothing -> assertFailure "__lambda_0 missing"
+          Just p ->
+            p.slotProcBody
+              @?= [SExprStmt (SCallExpr (ProcIndex (ProcIx 1)) [])],
+      testCase "addProcedures with no extras is the program unchanged" $ do
+        let base = lowerProgram (singleProc "p" [])
+        addProcedures base [] @?= base,
+      testCase "a duplicated name resolves to its last procedure" $ do
+        -- 'Map.fromList' keeps the last binding for a repeated key, and
+        -- a call site follows it; the earlier procedure stays in the
+        -- entry table but is unreachable by name. Emitted programs have
+        -- unique names, so this pins the degenerate case rather than a
+        -- supported one.
+        let lowered =
+              lowerProgram
+                ( programWith
+                    [ mkProc "p" [] [ExprStmt (CallExpr "dup" [])],
+                      mkProc "dup" [] [],
+                      mkProc "dup" [] []
+                    ]
+                )
+        Map.keys lowered.slotProcEntries @?= [0, 1, 2]
+        case Map.lookup "p" lowered.slotProcedures of
+          Nothing -> assertFailure "p missing"
+          Just p ->
+            p.slotProcBody
+              @?= [SExprStmt (SCallExpr (ProcIndex (ProcIx 2)) [])],
+      testCase "an extra shadows a compiled name in the name view only" $ do
+        -- A compiled body resolved its calls when it was lowered, so it
+        -- keeps pointing at the compiled procedure; the name view and
+        -- the entry table prefer the extra. Query-time lambdas carry
+        -- fresh names, so the two never actually disagree today.
+        let base =
+              lowerProgram
+                ( programWith
+                    [ mkProc "p" [] [ExprStmt (CallExpr "q" [])],
+                      mkProc "q" [] []
+                    ]
+                )
+            extended = addProcedures base [mkProc "q" [] []]
+        case Map.lookup "p" extended.slotProcedures of
+          Nothing -> assertFailure "p missing"
+          Just p ->
+            p.slotProcBody
+              @?= [SExprStmt (SCallExpr (ProcIndex (ProcIx 1)) [])]
+        fmap (.slotProcIx) (Map.lookup "q" extended.slotProcedures)
+          @?= Just (ProcIx 2)
+        Map.keys extended.slotProcEntries @?= [0, 1, 2],
+      testCase "emptySlotProgram has no procedures" $ do
+        emptySlotProgram.slotProcedures @?= Map.empty
+        emptySlotProgram.slotProcEntries @?= Map.empty
     ]
