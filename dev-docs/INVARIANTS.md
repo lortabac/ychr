@@ -264,6 +264,12 @@ removable when closed.
   index is still an `Int`; the `ArgIndex` / non-negative
   representation work in §2 remains the structural fix.
 
+- **The reactivation observer list is LIFO (most-recently registered
+  first).** §3's entry asked for a named `Note`; it now lives in
+  `src/YCHR/Internal/Runtime/Var.hs` as `Note [Observer registration
+  order]`, so the prepend order at every registration site is called
+  out rather than implied by the code.
+
 
 ## 1. `error` / `runtimeErrorS` for "can't happen" cases
 
@@ -539,17 +545,6 @@ through named helpers (`check_constraint_use`, `check_function_use`,
 `check_constructor_use`), which put the operands in place themselves.
 Two distinct `ty`-like types — one for each side — would make an
 emitter's call total, at the cost of a conversion at every helper.
-
-### Reactivation observer list is LIFO — `src/YCHR/Internal/Runtime/Var.hs:376`
-
-```haskell
-(\vid obs -> writeVarState var (Unbound vid (oid : obs)))
-```
-
-The reactivation order semantics is "most-recently registered first."
-Documented only in code; a comment is enough for now, but worth a
-named `Note [Observer registration order]` so it can't drift.
-
 
 ## 4. Undocumented invariants the implementation relies on
 

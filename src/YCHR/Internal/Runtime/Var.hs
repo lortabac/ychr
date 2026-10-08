@@ -184,6 +184,8 @@ unify' (VVar var) v =
         -- X := f(A) — a later binding of A silently misses the
         -- ωr /Reactivate/ step (and a stored residual type-checker
         -- constraint would never be retried).
+        --
+        -- See @Note [Observer registration order]@.
         mapM_ (\oid -> addObserver oid v) obs
         pure (True, obs)
     )
@@ -364,6 +366,8 @@ getArg v idx = do
 -- be reactivated when the nested variable is later bound, missing an
 -- ωr /Reactivate/ step. Anything else (already bound, or a non-variable
 -- leaf) is a no-op.
+--
+-- See @Note [Observer registration order]@.
 addObserver :: SuspensionId -> Value -> Chr ()
 addObserver oid v = do
   d <- deref v
@@ -375,6 +379,23 @@ addObserver oid v = do
         (\_ -> pure ())
     VTerm _ args -> mapM_ (addObserver oid) args
     _ -> pure ()
+
+{- Note [Observer registration order]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+An unbound variable's observer list is kept most-recently-registered
+first. 'addObserver' and 'addObserverAndKey' prepend on every store
+(@oid : obs@), and binding one variable to another merges the two
+lists without reversing either ('obs1 ++ obs2'), so each variable's own
+observers keep that order. Reactivation walks the list front to back
+and therefore processes the most recently registered observer first
+(dev-docs/INVARIANTS.md §3).
+
+The order is not incidental. Appending instead of prepending
+(@obs ++ [oid]@, or otherwise adding at the back) changes which
+observer a later binding wakes first, and that changes the order
+constraints are re-examined and rules fire — observable behaviour, not
+just a list layout. Keep the prepend at every registration site.
+-}
 
 -- | One traversal with the two jobs a constraint argument needs when it
 -- is stored: register @oid@ as an observer on every unbound variable
