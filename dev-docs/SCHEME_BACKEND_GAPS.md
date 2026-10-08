@@ -240,6 +240,61 @@ and a `render-pexpr` `var` node, and the printer is shared, so it is a
 change of its own.
 
 
+## Scheme runtime ABI
+
+Reference contract for the boundary between `src/YCHR/Internal/Backend/Scheme.hs`
+and the runtime in `scheme/ychr/`. This is not a gap: both sides must satisfy
+it, and none of it is scheduled to change. `INVARIANTS.md` §5 records the same
+contracts from the invariant side.
+
+- **Import.** Every generated library imports `(ychr runtime)` alongside
+  `(rnrs)` (`importClause`), so each runtime name the backend emits has to be
+  exported from `runtime.sls`.
+- **Session first.** Every generated constraint/function procedure takes `%s`,
+  the session, as its first parameter after the name (`compileProcedure`); the
+  only exception is the exported session thunk, which is zero-argument. Emitted
+  calls thread `%s` explicitly — `compileValExpr (CallExpr …)` produces
+  `(proc %s arg …)`.
+- **Tail values vs `call/cc`.** A procedure whose `Return`s can only leave it
+  from tail position compiles to a plain value-producing expression
+  (`compileTailStmts`). Only a `Return` trapped inside a `Foreach` or
+  `DrainReactivationQueue` body keeps a `call/cc` escape
+  (`needsEscape`/`wrapReturn`, emitting `(call/cc (lambda (%return) body #f))`);
+  a tail expression over `maxTailExprNodes` falls back to the same escape.
+  `compileStmt (Return e)` is `(%return <value>)`.
+- **`Break`/`Continue`.** Each gets its own `call/cc` at the loop that owns the
+  label, and only when the loop body actually names that label
+  (`hasBreak`/`hasContinue`). `Break` wraps the whole `Foreach` (continuation
+  parameter `breakName lbl`); `Continue` wraps one iteration inside the alive
+  check (parameter `continueName lbl`).
+- **Session thunk.** The exported zero-argument thunk calls
+  `(%make-session N POSITIONS TABLE)`: `N` is the program's type count,
+  `POSITIONS` is `indexPositionsSExpr`'s alist of `(cons TYPE (list POS …))`
+  entries (or `(list)` when nothing is indexed), and `TABLE` is
+  `(make-op-table (quote ((FIXITY TYPE "name") …)))` over `opTableEntries`.
+  `%make-session`'s one- and two-argument clauses install the unindexed store
+  (`'()`) and `builtin-op-table` for the arguments not supplied.
+- **Queue drain.** `DrainReactivationQueue` emits
+  `(drain-queue! %s (lambda (sv) (when (alive-constraint? sv) …)))`: the
+  runtime's `drain-queue!` takes `(session, callback)` and calls the callback
+  on every dequeued constraint id, so the liveness check lives in the generated
+  lambda rather than the runtime.
+- **Snapshot shape.** `Foreach` destructures two values from the runtime with
+  `(let-values (((%vec %count) CANDIDATES)) …)`; both `store-snapshot` and
+  `candidate-suspensions` return `(values storage count)`.
+- **`If` fall-through.** In the tail compilation an `If` with a `Return` in an
+  arm is emitted as `(if c ARM-spliced-before-rest ARM-spliced-before-rest)`,
+  so a binder an arm introduces lexically scopes over the statements after the
+  `If`. That matches the interpreter's flat mutable `Env`, and is sound only
+  because no emitted `If` leaves a name in the rest that an arm bound; see
+  `INVARIANTS.md` §5, "Two properties of emitted code are what make that
+  reading sound", rather than restating the argument here.
+- **Binding printer.** `pretty-term` renders operators from the fixed
+  `pretty-ops` table (`builtin-op-entries` plus the standard arithmetic
+  entries), the port of `Pretty.prettyOps`, not the session's `op-table`, so a
+  user-declared operator still prints as a compound.
+
+
 ## Closed gaps (reference)
 
 The following used to live here and are now closed. Kept as a brief

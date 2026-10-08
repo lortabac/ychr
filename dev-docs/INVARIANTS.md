@@ -958,10 +958,10 @@ arm introduces lexically scopes over the statements that follow the
 `AssignVal` both just insert), and it is sound for the same reason the
 interpreter's slot walk is — no emitted `If` leaves a name in `rest`
 that an arm bound (see "Two properties of emitted code are what make
-that reading sound" above). These contracts live only in
-code, on both sides. A small ABI-doc section in
-`SCHEME_BACKEND_GAPS.md` (or here) would at minimum make the surface
-explicit; encoding it in types is harder because it crosses a
+that reading sound" above). These contracts live only in code, on both
+sides. The surface is now written down in `SCHEME_BACKEND_GAPS.md`'s
+*Scheme runtime ABI* section, which closes the documentation half of
+this entry; encoding it in types remains harder because it crosses a
 host-language boundary.
 
 
