@@ -188,7 +188,7 @@ metaHostCallRegistry =
           [arg] -> do
             s <- prettyValue arg
             pure (VText (pack s))
-          _ -> error "write_term_to_string: expected 1 argument"
+          _ -> runtimeErrorS "write_term_to_string: expected 1 argument"
       ),
       ( Name "read_term_from_string",
         HostCallFn $ \case
@@ -200,14 +200,14 @@ metaHostCallRegistry =
             -- 'YCHR.Internal.Parser.builtinOps'.
             SessionEnv {opTable = ops} <- ask
             case parseTermWith ops "<read_term_from_string>" s of
-              Left err -> error $ "read_term_from_string: " ++ show err
+              Left err -> runtimeErrorS ("read_term_from_string: " ++ show err)
               Right term -> do
                 -- @fun name\/arity@ is surface syntax for a first-class
                 -- function reference, exactly as in a compiled rule; the
                 -- reader has no renamer, so it resolves the name here.
                 term' <- resolveFunRefs term
                 evalStateT (termToValue term') Map.empty
-          _ -> error "read_term_from_string: expected 1 Text argument"
+          _ -> runtimeErrorS "read_term_from_string: expected 1 Text argument"
       ),
       ( Name "print_store",
         HostCallFn $ \_ -> do

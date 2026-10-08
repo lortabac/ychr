@@ -362,7 +362,6 @@ exhaustive:
 | `src/YCHR/Internal/Desugar.hs:999` (`ruleModName`)        | non-empty head                             |
 | `src/YCHR/Internal/Desugar/Disjunction.hs:103,209`        | lifted rule is a simplification; non-empty head |
 | `src/YCHR/Internal/Backend/Scheme.hs:231` (`programInfoBindingName`) | non-empty library name          |
-| `src/YCHR/Internal/Meta.hs:191,203,210`                   | host-call arity / parse result (`write_term_to_string`, `read_term_from_string`) |
 | `src/YCHR/Internal/Resolve.hs:1438` (`parseFlatName`)     | renamer post-condition: flat name contains `':'` |
 | `src/YCHR/Internal/TypeCheck.hs:404` (`malformed`)        | solver returned a shape the decoder does not know |
 | `src/YCHR/Internal/TypeCheck/Encode.hs:403,407` (`encodedToValue`) | encoded term is ground (no `Wildcard` / `VarTerm`) |
@@ -377,11 +376,11 @@ The two `BodyOr` sites are phase invariants of the same family as
 the `LambdaExpr` case below: the constructor survives in the type and
 each pass asserts it was already lowered. A phase index on
 `Desugared.BodyGoal` (or a post-lowering type without `BodyOr`) would
-discharge both. The `Meta.hs` sites are the mildest — `invokeHostCall`
-wraps the host function in `try @SomeException`
-(`Interpreter.hs:999`), so they surface as an ordinary runtime error
-rather than a process abort; they are nonetheless `error` rather than
-`runtimeErrorS` for a difficulty that is really just arity.
+discharge both. The three `Meta.hs` host-call sites
+(`write_term_to_string`, `read_term_from_string`) are closed: an arity
+or parse failure now raises `runtimeErrorS` rather than `error`, so it
+is a structured runtime error rather than a plain `ErrorCall` that
+`invokeHostCall`'s `try @SomeException` happens to catch.
 
 Deliberately partial, and not to be "fixed": `Data.Text.Shim.breakOn`
 and `Data.Text.Shim.last` (`src/Data/Text/Shim.hs:39,71`) raise exactly
