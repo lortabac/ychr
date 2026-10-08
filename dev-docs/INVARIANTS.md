@@ -979,12 +979,6 @@ unexpected solver value. Readable, but it also swallows encoding drift;
 asserting, or routing through `malformed`, would surface it earlier.
 A deliberate trade today: "decide and document", not a clear bug.
 
-### `ParserTest` parse-or-fail scaffolding
-
-`test/YCHR/ParserTest.hs:928-980`: `typeDefsOf`, `bodyOf`, `headOf` and
-`guardOf` each repeat the same `case p src of` prologue. One helper
-parameterised by the extractor would remove the copies.
-
 ### Unqualified imports of utility-module helpers
 
 `STYLE.md` asks for qualified imports of container/utility modules. The

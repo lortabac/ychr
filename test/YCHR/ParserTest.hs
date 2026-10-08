@@ -926,10 +926,28 @@ firstPassTests =
 -- Helpers
 -- ---------------------------------------------------------------------------
 
-typeDefsOf :: Text -> IO [TypeDefinition]
-typeDefsOf src = case p src of
+-- | Parse @src@ with @parseSrc@, failing the test on a parse error, and pass
+-- the resulting module to @extract@.
+parseAndExtract ::
+  (Text -> Either ParseError Module) ->
+  (Module -> IO a) ->
+  Text ->
+  IO a
+parseAndExtract parseSrc extract src = case parseSrc src of
   Left err -> assertFailure (show err)
-  Right m -> pure (map (normalizeTypeDefLoc . (.node)) m.typeDecls)
+  Right m -> extract m
+
+-- | Apply @extract@ to the first rule of a parsed module, failing the test
+-- when the module has no rules.
+withFirstRule :: (Rule -> a) -> Module -> IO a
+withFirstRule extract m = case m.rules of
+  [] -> assertFailure "expected at least one rule, got none"
+  (r : _) -> pure (extract r)
+
+typeDefsOf :: Text -> IO [TypeDefinition]
+typeDefsOf src = parseAndExtract p extract src
+  where
+    extract m = pure (map (normalizeTypeDefLoc . (.node)) m.typeDecls)
 
 -- | Build an algebraic type definition positionally (the constructors
 -- are wrapped in the 'Algebraic' 'TypeKind').
@@ -948,11 +966,7 @@ normalizeTypeDefLoc td =
     }
 
 bodyOf :: Text -> IO [Term]
-bodyOf src = case p src of
-  Left err -> assertFailure (show err)
-  Right m -> case m.rules of
-    [] -> assertFailure "expected at least one rule, got none"
-    (r : _) -> pure r.body.node
+bodyOf src = parseAndExtract p (withFirstRule (.body.node)) src
 
 -- | Like 'bodyOf', but parses with @<@ added as a 700 xfx operator so
 -- precedence interactions between @is@\/@=@ and a comparison can be tested
@@ -960,22 +974,11 @@ bodyOf src = case p src of
 bodyOfWithLt :: Text -> IO [Term]
 bodyOfWithLt src = case mergeOps builtinOps [OpDecl 700 Xfx "<"] of
   Left e -> assertFailure ("mergeOps failed: " <> Text.unpack e)
-  Right table -> case fst <$> parseModuleWith table "" src of
-    Left err -> assertFailure (show err)
-    Right m -> case m.rules of
-      [] -> assertFailure "expected at least one rule, got none"
-      (r : _) -> pure r.body.node
+  Right table ->
+    parseAndExtract (fmap fst . parseModuleWith table "") (withFirstRule (.body.node)) src
 
 headOf :: Text -> IO Head
-headOf src = case p src of
-  Left err -> assertFailure (show err)
-  Right m -> case m.rules of
-    [] -> assertFailure "expected at least one rule, got none"
-    (r : _) -> pure r.head.node
+headOf src = parseAndExtract p (withFirstRule (.head.node)) src
 
 guardOf :: Text -> IO [Term]
-guardOf src = case p src of
-  Left err -> assertFailure (show err)
-  Right m -> case m.rules of
-    [] -> assertFailure "expected at least one rule, got none"
-    (r : _) -> pure r.guard.node
+guardOf src = parseAndExtract p (withFirstRule (.guard.node)) src
