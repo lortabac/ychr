@@ -9,6 +9,7 @@ import YCHR.DSL
 import YCHR.Embedded (stdlib)
 import YCHR.Internal.Parsed
 
+-- | The embedded Haskell DSL: module, declaration and rule builders and their operators.
 tests :: TestTree
 tests =
   testGroup

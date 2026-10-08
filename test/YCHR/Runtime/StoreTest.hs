@@ -18,6 +18,7 @@ import YCHR.Internal.Runtime.Types (SuspensionId (..), Value (..))
 import YCHR.Internal.Runtime.Var (equal, newVar, unify)
 import YCHR.Internal.Types (ConstraintType (..), Name (..))
 
+-- | Constraint-store tests: storing, iterating and killing suspensions, and observers.
 tests :: TestTree
 tests =
   testGroup

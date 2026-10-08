@@ -21,6 +21,7 @@ import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.VM.SExpr (VMProgram (..))
 import YCHR.Run (compileModules)
 
+-- | Scheme-backend control-flow codegen: when a 'Return' needs a @call\/cc@ escape.
 tests :: TestTree
 tests =
   testGroup

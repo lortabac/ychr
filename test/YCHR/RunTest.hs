@@ -46,6 +46,7 @@ import YCHR.Run
     withCHR,
   )
 
+-- | End-to-end 'YCHR.Run' tests: compiling and running surface programs and queries.
 tests :: TestTree
 tests =
   testGroup

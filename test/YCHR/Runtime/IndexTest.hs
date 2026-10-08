@@ -51,6 +51,7 @@ import YCHR.Internal.VM
     ValExpr (..),
   )
 
+-- | Store indexes: ground keys, candidate narrowing, and indexable positions.
 tests :: TestTree
 tests =
   testGroup

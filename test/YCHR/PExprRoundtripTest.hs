@@ -232,6 +232,7 @@ prop_roundtrip ops gen = property $ do
 -- Test tree
 -- ---------------------------------------------------------------------------
 
+-- | Hedgehog round-trips: parsing then pretty-printing 'PExpr' with and without operators.
 tests :: TestTree
 tests =
   testGroup

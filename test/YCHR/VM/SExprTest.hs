@@ -12,6 +12,7 @@ import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
 import YCHR.Internal.VM.SExpr (VMProgram (..), deserialize, serialize, vmVersion)
 
+-- | Round-trip tests for the VM's S-expression serializer over 'VMProgram'.
 tests :: TestTree
 tests =
   testGroup

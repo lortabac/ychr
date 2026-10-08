@@ -19,6 +19,7 @@ import YCHR.Internal.Parser
     parseModuleWith,
   )
 
+-- | Parser tests: directives, rules, terms, operators, type declarations, and errors.
 tests :: TestTree
 tests =
   testGroup

@@ -14,6 +14,7 @@ import Text.Parsec (ParseError)
 import YCHR.Internal.Loc (Ann (..), SourceLoc (..), noAnn)
 import YCHR.Internal.PExpr
 
+-- | 'PExpr' unit tests: atoms, variables, lists, operators and precedence, and rendering.
 tests :: TestTree
 tests =
   testGroup

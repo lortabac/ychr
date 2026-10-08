@@ -12,6 +12,7 @@ import YCHR.Internal.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed
 
+-- | Library-import resolution: transitive imports, stdlib inclusion, and error cases.
 tests :: TestTree
 tests =
   testGroup

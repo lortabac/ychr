@@ -171,6 +171,7 @@ codesByNumber =
 -- Tests
 -- ---------------------------------------------------------------------------
 
+-- | Guards that every @YCHR-NNNNN@ error code is unique and the allowlist is not stale.
 tests :: TestTree
 tests =
   testGroup

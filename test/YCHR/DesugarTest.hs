@@ -32,6 +32,7 @@ import YCHR.Internal.Types
 getNode :: AnnP a -> a
 getNode (AnnP n _ _) = n
 
+-- | Desugaring: head flattening, HNF, goal and guard classification, and lambda lifting.
 tests :: TestTree
 tests =
   testGroup

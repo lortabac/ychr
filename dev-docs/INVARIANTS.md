@@ -1026,13 +1026,6 @@ a domain value in a record or API rather than a local zip, and a `Bool`
 field carrying a convention a sum type could carry. A modelling pass,
 not a mechanical edit; it would change exported signatures.
 
-### Test entry points have no Haddock
-
-Most `test/YCHR*Test.hs` modules export a single `tests :: TestTree`
-with no `-- |` comment. The style pass read `STYLE.md`'s Haddock rule
-as applying to library API; documenting them is a one-line sweep per
-module if wanted.
-
 ### Accepted long literals (do not shorten)
 
 `STYLE.md` allows a line over 90 characters only for an unsplittable

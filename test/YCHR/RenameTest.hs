@@ -46,6 +46,7 @@ renameProgram = Rn.renameProgram defaultRenameInputs . rewriteImports
 algebraicTD :: Name -> [Text] -> [DataConstructor] -> SourceLoc -> TypeDefinition
 algebraicTD n vs cs loc = TypeDefinition n vs (Algebraic cs) loc
 
+-- | Renamer tests: cross-module name resolution, visibility, imports, exports, warnings.
 tests :: TestTree
 tests =
   testGroup

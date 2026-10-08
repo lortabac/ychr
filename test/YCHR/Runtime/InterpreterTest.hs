@@ -32,6 +32,7 @@ import YCHR.Internal.Runtime.Var (equal, newVar, unify)
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
 
+-- | Interpreter tests: evaluation, primitives, type predicates, closures, and errors.
 tests :: TestTree
 tests =
   testGroup

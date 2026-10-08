@@ -33,6 +33,7 @@ import YCHR.Internal.VM
     mkHistoryIds,
   )
 
+-- | Interpreter slot assignment: scoping, shadowing, and totality on unbound names.
 tests :: TestTree
 tests =
   testGroup

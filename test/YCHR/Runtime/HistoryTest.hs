@@ -14,6 +14,7 @@ import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
 import YCHR.Internal.Runtime.Types (SuspensionId (..))
 import YCHR.Internal.VM (RuleId (..))
 
+-- | Propagation-history tests: 'addHistory', distinctness, and the remaining bookkeeping.
 tests :: TestTree
 tests =
   testGroup
