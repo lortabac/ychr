@@ -1,0 +1,66 @@
+% A shortest-path finder: candidate routes live in the constraint store
+% and a query constraint extracts the best one known for a pair.
+%
+% An `edge(X, Y, W)` is a directed edge from X to Y with integer weight
+% W. Telling edges builds `path/4` constraints carrying candidate routes,
+% and telling a `shortest_path/4` goal binds the best route between two
+% nodes that the store knows at that point:
+%
+%   - `edge_to_path` adds (and is kept alongside) a one-hop `path/4`
+%     whose route is the single pair `kv(X, Y)` and whose distance is W.
+%   - `dominance`: of two candidate routes between the same endpoints,
+%     only the shortest survives (simpagation); ties keep one
+%     arbitrarily. Dominated candidates are dropped and never extended.
+%   - `relaxation`: two paths that meet end-to-start compose into a
+%     path from the first's start to the second's end (propagation).
+%     This is what turns one-hop edges into longer routes.
+%   - `answer`: `shortest_path/4` is matched by the surviving `path/4`
+%     for its endpoints, which binds the route and distance and
+%     consumes the goal. It must precede `no_route` below, so a pair
+%     that does have a path is answered rather than discarded.
+%   - `no_route`: a `shortest_path/4` whose endpoints have no route yet
+%     is discarded and binds nothing, so its output arguments stay
+%     unbound.
+%
+% The goal is consumed as soon as it is told, so order matters: tell
+% every edge first, and the goal last.
+%
+%   edge(1, 2, 1), edge(2, 3, 2), edge(1, 3, 5),
+%   shortest_path(1, 3, P, D).
+%   % P = [pairs:kv(1, 2), pairs:kv(2, 3)], D = 3.
+%
+% Nodes are polymorphic (the constraint declarations are over `A`); only
+% weights are `int`. A cycle of negative total weight makes `relaxation`
+% diverge: each lap yields a cheaper walk.
+
+:- module(shortest_path, [edge/3, shortest_path/4]).
+
+% append/2 comes from library(lists); pair/2 and kv/2 from library(pairs).
+:- use_module(library(lists)).
+:- use_module(library(pairs)).
+
+:- chr_constraint edge(A, A, int).
+:- chr_constraint path(A, A, list(pair(A, A)), int).
+:- chr_constraint shortest_path(A, A, list(pair(A, A)), int).
+
+% Each edge becomes a one-hop path; the edge itself stays in the store.
+edge_to_path @ edge(X, Y, W) ==> path(X, Y, [kv(X, Y)], W).
+
+% Dominance: keep one candidate per pair, the shortest told so far. A
+% cheaper route told later wins, because simpagation matches either
+% occurrence as the kept one.
+dominance    @ path(X, Y, _P1, D1) \ path(X, Y, _P2, D2) <=> D1 =< D2 | true.
+
+% Relaxation: compose a path with a path that starts where it ends.
+relaxation   @
+    path(X, Y, P1, D1), path(Y, Z, P2, D2) ==>
+    path(X, Z, append(P1, P2), D1 + D2).
+
+% The query: bind the surviving route for the pair. Must precede
+% `no_route` below, or a reachable pair goes unanswered.
+answer       @
+    path(X, Y, P, D) \ shortest_path(X, Y, SP, SD) <=> SP = P, SD = D.
+
+% No route for the pair yet: the goal is discarded and binds nothing,
+% so its output arguments stay unbound.
+no_route     @ shortest_path(_, _, _, _) <=> true.

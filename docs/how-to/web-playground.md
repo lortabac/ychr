@@ -66,7 +66,7 @@ passed through `-optl`.
 
 | Control | Effect |
 |---|---|
-| **Examples** menu | Replaces the editor's contents with one of the examples the repository ships (`bakery.chr`, `leq.chr`, `fib_memo.chr`, `gcd.chr`) and reloads it. |
+| **Examples** menu | Replaces the editor's contents with one of the examples the repository ships (`bakery.chr`, `leq.chr`, `fib_memo.chr`, `gcd.chr`, `shortest_path.chr`) and reloads it. |
 | **Reload** | Compiles the editor's text as a one-file program and makes it the loaded program. Never type-checks. |
 | **Typecheck** | Reloads the editor first, then runs the CHR type checker over the program. The checker itself is compiled on first use. |
 | Enter in the REPL box | Runs one goal (or colon command) against the loaded program, in a fresh CHR session. |
@@ -76,7 +76,7 @@ policy the terminal REPL applies to `:recompile` — so a typo never costs
 you a working program.
 
 The **Examples** menu has no program text of its own: `make playground-wasm`
-copies the four files under `examples/` into `playground/build/`, and the
+copies the five files under `examples/` into `playground/build/`, and the
 page fetches them from there (the page is served from `playground/` alone,
 so it cannot reach `examples/`). Selecting an entry replaces the editor
 and reloads in one step; editing the buffer afterwards returns the menu to

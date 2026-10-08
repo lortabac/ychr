@@ -70,7 +70,7 @@ def steps():
 def test_scenario_in_wasm(steps):
     """The shared scenario passes on the WASM bridge.
 
-    That includes the four presets the page's dropdown offers: ``smoke.cjs``
+    That includes the five presets the page's dropdown offers: ``smoke.cjs``
     compiles each of them from its copy in the bundle.
     """
     assert "init" in steps, "the module never reported an init step"
