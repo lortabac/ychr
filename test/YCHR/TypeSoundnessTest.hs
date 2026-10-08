@@ -184,7 +184,12 @@ soundnessProperty mode = do
       ( timeout
           runBudgetMicros
           ( try @SomeException
-              (runProgramWithQuery typeCheckerProgram cp (observerRegistry prog.obs ref) query)
+              ( runProgramWithQuery
+                  typeCheckerProgram
+                  cp
+                  (observerRegistry prog.obs ref)
+                  query
+              )
           )
       )
   -- The log is read before anything else is decided, so a violation is
@@ -220,16 +225,15 @@ soundnessProperty mode = do
 --
 -- Without this the property can go quietly vacuous: a size-scaled
 -- 'Hedgehog.Range.linear' whose span is 1 or 2 truncates to its lower
--- bound over most of hedgehog's size sweep, which once left the first
--- ~40% of every run with a single-constraint store, no guards, no body
--- tells and no probes — nothing that could observe a soundness
--- violation.
+-- bound over most of hedgehog's size sweep, leaving the first ~40% of
+-- a run with a single-constraint store, no guards, no body tells and
+-- no probes — nothing that could observe a soundness violation.
 --
 -- The floors are therefore set /between/ the current rates and the
 -- rates that same degeneration would produce, not merely somewhere
--- above zero — a floor of 20% would have let the original defect
--- through. Measured rates (n = 3000) against the rate the degeneration
--- would give:
+-- above zero — a floor of 20% would let the degeneration through.
+-- Measured rates (n = 3000) against the rate the degeneration would
+-- give:
 --
 -- > join two heads  85% (would be 53%)   floor 65
 -- > body tell       52% (would be 37%)   floor 30
@@ -279,14 +283,12 @@ coverShape mode prog = do
   -- every pin turns a rigid variable concrete, so evidence competes for
   -- exactly the variables a merge or a tell would otherwise use. Both
   -- draws are therefore biased towards the rigid case (see
-  -- 'YCHR.TypeSoundness.Gen.pickTarget' and @pickTellTarget@) — and the
-  -- merge row's history is a caution about how tight its floor can sit:
-  -- the 'YCHR.TypeSoundness.Types.skForce' split reclassified the
-  -- parameter-depth pairs that used to count as merges, quietly cutting
-  -- the rate from 7% to 3%, and the 2% floor then failed about one CI
-  -- run in seven. @maybeAlias@ now takes a skolem-to-skolem merge
-  -- outright whenever one is offered, which is what holds the row at
-  -- 9%; if it sags again, suspect that preference before the floor.
+  -- 'YCHR.TypeSoundness.Gen.pickTarget' and @pickTellTarget@). The
+  -- merge row's floor is tight, so it holds at 9% only because
+  -- @maybeAlias@ takes a skolem-to-skolem merge outright whenever one
+  -- is offered; a plain coin would leave it near 3% and fail about one
+  -- CI run in seven. If the row sags, suspect that preference before
+  -- the floor.
   --
   -- Rates near 5% are why this property runs @withTests 300@ rather
   -- than 100: at 100 a 5% event is absent from a whole run about once
@@ -337,11 +339,11 @@ coverShape mode prog = do
   cover 15 "a pattern match pinned a rigid variable" (pinnedBy PinMatch)
   cover 10 "a shared variable pinned a rigid variable" (pinnedBy PinMergeConcrete)
   cover 12 "a type predicate pinned a rigid variable" (pinnedBy PinTypePred)
-  -- The case the GuardEqual soundness fix opened up: an alias whose
-  -- pair meets a parameter position (a parametric pin's fresh betas,
-  -- or two types meeting inside a shared constructor). The checker
-  -- derives nothing there; the instance generator carries the
-  -- identification in 'skForce'. Measured at 17% over 5000 programs.
+  -- The case where an alias's pair meets a parameter position (a
+  -- parametric pin's fresh betas, or two types meeting inside a shared
+  -- constructor): the checker derives nothing there, so the instance
+  -- generator carries the identification in 'skForce'. Measured at 17%
+  -- over 5000 programs.
   cover 10 "an alias forced a parameter identification" anyForce
   where
     rs = prog.rules
@@ -438,11 +440,10 @@ coverShape mode prog = do
 -- This is the half 'coverShape' cannot see. A program whose rules never
 -- fire runs none of the observations that carry the property, so it
 -- costs a test iteration and observes nothing — and whether a rule
--- fires is a runtime fact. Before the host observer it had to be
--- measured out of band with a canary (see @Note [Firing rates]@ in
--- "YCHR.TypeSoundness.Gen"); the observer's per-site hit counts make it
--- assertable here instead, so CI enforces continuously what used to be
--- a measurement someone had to remember to redo.
+-- fires is a runtime fact the observer's per-site hit counts make
+-- assertable here. CI then enforces the floors on every run, rather
+-- than leaving them a measurement someone has to remember to redo (see
+-- @Note [Firing rates]@ in "YCHR.TypeSoundness.Gen").
 --
 -- Floors are set the same way as 'coverShape'\'s: measured first, then
 -- placed below the measured rate but above what the degeneration
@@ -456,15 +457,14 @@ coverShape mode prog = do
 -- > a rule body ran a bind    51 51 46            floor 30
 -- > the program observed      88 89 88  (was 77)  floor 80
 --
--- Two of these are the cross-check that retires the canary. The note
+-- Two of these cross-check the note's out-of-band numbers. The note
 -- puts \"program fires some rule\" at 70% and \"vacuous\" at 8% —
 -- i.e. 92% observed something — measured out of band by splicing a
 -- raising body into every rule and counting the runs that failed. The
 -- observer reproduces both to within a few points from inside the same
--- run. The residual gap is expected: 'maxInstances' came down from 200
--- to 120 when the guard-position observations landed, so
+-- run. The residual gap is expected: at 'maxInstances' 120,
 -- 'YCHR.TypeSoundness.Instrument.pruneTells' strips marginally more
--- body tells than it did when the note was written.
+-- body tells than the note's 200-instance measurement allowed for.
 --
 -- The joined-rule row has no directly comparable \"before\" number —
 -- the note's are per-rule, not per-program — so its degenerate value
@@ -487,7 +487,10 @@ coverRuntime mode prog lg = do
   -- defined the same way: a program is vacuous when it neither fires a
   -- rule nor carries a goal probe, and has therefore observed nothing
   -- at all. Reaching a rule without firing it does not count.
-  cover 80 "the program observed something" (any hit firedCodes || not (null prog.goal.probes))
+  cover
+    80
+    "the program observed something"
+    (any hit firedCodes || not (null prog.goal.probes))
   cover 28 "a rule with rigid head variables fired" (any hit rigidFiredCodes)
   -- The evidence criterion, made observable. This site sits after the
   -- evidence guards and asserts the type they pinned; if it never ran,
@@ -497,7 +500,11 @@ coverRuntime mode prog lg = do
   -- The one that says the store-interleaving regime was actually
   -- entered, rather than merely declared: a rule was reached with a
   -- position holding no value yet.
-  coverOpen mode 10 "an unbound value reached a rule head" (not (IntMap.null lg.logUnbound))
+  coverOpen
+    mode
+    10
+    "an unbound value reached a rule head"
+    (not (IntMap.null lg.logUnbound))
   -- Lower in the open regime: an unbound value fires fewer rules, so
   -- more candidate matches are examined and rejected, and every one of
   -- them is observed.

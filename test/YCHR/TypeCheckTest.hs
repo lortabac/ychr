@@ -60,7 +60,7 @@ tests =
       testCase "a match against a foreign constructor warns" $ do
         -- The other emitter: constructor membership fails, so the
         -- head pattern can never match a `color`-typed value. The
-        -- goldens only assert that this is no longer an error, so the
+        -- goldens only assert that this is not an error, so the
         -- payload is pinned here.
         (errs, ws) <- checkModule (mod_ ["dead @ tag([_|_], R) <=> R = 1."])
         errs @?= []
@@ -214,8 +214,8 @@ tests =
         -- signature, but its equations belong to the group, not to
         -- each declaration: an equation that checks under no declared
         -- signature reports one NoMatchingOverload, not one per
-        -- signature (Resolve used to gather the equation once per
-        -- declaration, multiplying every class diagnostic N-fold).
+        -- signature. Gathering the equation once per declaration would
+        -- multiply every class diagnostic N-fold.
         (errs, ws) <-
           checkModule
             ( mod_

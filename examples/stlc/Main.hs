@@ -132,7 +132,10 @@ runRepl cp = do
   hSetBuffering stdout NoBuffering
   interactive <- hIsTerminalDevice stdin
   when interactive $
-    putStrLn "STLC type-inference REPL. Enter a lambda term (e.g. \\x. x + 1); :q to quit."
+    putStrLn
+      ( "STLC type-inference REPL. Enter a lambda term (e.g. \\x. x + 1); "
+          ++ ":q to quit."
+      )
   loop interactive
   where
     loop interactive = do

@@ -410,7 +410,7 @@ softGuardWrapTests =
 -- designates it, and every @'$call'@ compiles to the closure-apply
 -- construct that consults it.
 --
--- These tests pin the table's shape and the absence of the old
+-- These tests pin the table's shape and the absence of @call_N@
 -- dispatchers. The behavior the table encodes is exercised at run time
 -- by @RunTest@ and the @closure_dispatch_errors@ / @lambda_test@ golden
 -- directories, on both backends.

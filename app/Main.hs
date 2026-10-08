@@ -1,4 +1,4 @@
-module Main where
+module Main (main) where
 
 import Control.Exception (SomeException, displayException, fromException, try)
 import Control.Monad (unless, when)
@@ -86,7 +86,8 @@ werrorFlag = switch (long "Werror" <> help "Treat warnings as errors")
 -- itself is unchanged — parse, rename, resolve and compile errors still
 -- fail — and so is @--Werror@ over the warnings that remain.
 noCheckFlag :: Parser Bool
-noCheckFlag = switch (long "no-check" <> help "Skip type checking (program and goal checks)")
+noCheckFlag =
+  switch (long "no-check" <> help "Skip type checking (program and goal checks)")
 
 replParser :: Parser Command
 replParser =
@@ -102,7 +103,9 @@ runParser :: Parser Command
 runParser =
   Run
     <$> ( RunOpts
-            <$> fmap T.pack (strOption (short 'g' <> metavar "GOAL" <> help "Goal to execute"))
+            <$> fmap
+              T.pack
+              (strOption (short 'g' <> metavar "GOAL" <> help "Goal to execute"))
             <*> switch (long "show-bindings" <> help "Print variable bindings")
             <*> werrorFlag
             <*> noCheckFlag
@@ -150,7 +153,9 @@ genDriverParser :: Parser Command
 genDriverParser =
   GenDriver
     <$> ( GenDriverOpts
-            <$> fmap T.pack (strOption (short 'g' <> metavar "GOAL" <> help "Goal to execute"))
+            <$> fmap
+              T.pack
+              (strOption (short 'g' <> metavar "GOAL" <> help "Goal to execute"))
             <*> werrorFlag
             <*> noCheckFlag
         )
@@ -170,7 +175,9 @@ commandParser =
                 "Start the interactive REPL (default)"
             )
         )
-        <> command "run" (info (runParser <**> helper) (progDesc "Compile and run a goal"))
+        <> command
+          "run"
+          (info (runParser <**> helper) (progDesc "Compile and run a goal"))
         <> command
           "compile"
           ( info
@@ -187,7 +194,9 @@ commandParser =
                   "Generate a Scheme driver script for a goal"
               )
           )
-        <> command "check" (info (checkParser <**> helper) (progDesc "Type-check the program"))
+        <> command
+          "check"
+          (info (checkParser <**> helper) (progDesc "Type-check the program"))
     )
     <|> replParser
 
@@ -267,69 +276,72 @@ runGoal resources opts files = withCompiled resources False files $ \prog warnin
       exitFailure
 
 runCompile :: Resources -> CompileOpts -> [FilePath] -> IO ()
-runCompile resources opts files = withCompiled resources False files $ \prog warnings -> do
-  printWarnings warnings
-  typeWarnings <- typeCheckUnless opts.noCheck resources prog
-  exitOnWerror opts.werror (warnings ++ typeWarnings)
-  let vmp =
-        VMProgram
-          { program = prog.program,
-            exportedSet = prog.exportedSet,
-            symbolTable = prog.symbolTable
-          }
-      name = maybe (T.pack "program") T.pack opts.baseName
-  case opts.target of
-    TargetVM -> do
-      let outPath = opts.outputDir </> T.unpack name ++ ".vm"
-      createDirectoryIfMissing True (takeDirectory outPath)
-      TIO.writeFile outPath (serialize vmp)
-      putStrLn outPath
-    TargetScheme -> do
-      unless (isValidSchemeIdentifier name) $ do
-        hPutStr
-          stderr
-          ( "Error: --base-name "
-              ++ show (T.unpack name)
-              ++ " is not a valid Scheme identifier; the Scheme target uses\n"
-              ++ "       it as the library's final segment and as the exported\n"
-              ++ "       program-info binding name.\n"
-          )
-        exitFailure
-      let libName = [T.pack "ychr", T.pack "generated", name]
-          outPath = opts.outputDir </> "ychr" </> "generated" </> T.unpack name ++ ".sls"
-      createDirectoryIfMissing True (takeDirectory outPath)
-      TIO.writeFile outPath (generateScheme libName vmp prog.opTable)
-      putStrLn outPath
-      schemeRuntimeNote
+runCompile resources opts files =
+  withCompiled resources False files $ \prog warnings -> do
+    printWarnings warnings
+    typeWarnings <- typeCheckUnless opts.noCheck resources prog
+    exitOnWerror opts.werror (warnings ++ typeWarnings)
+    let vmp =
+          VMProgram
+            { program = prog.program,
+              exportedSet = prog.exportedSet,
+              symbolTable = prog.symbolTable
+            }
+        name = maybe (T.pack "program") T.pack opts.baseName
+    case opts.target of
+      TargetVM -> do
+        let outPath = opts.outputDir </> T.unpack name ++ ".vm"
+        createDirectoryIfMissing True (takeDirectory outPath)
+        TIO.writeFile outPath (serialize vmp)
+        putStrLn outPath
+      TargetScheme -> do
+        unless (isValidSchemeIdentifier name) $ do
+          hPutStr
+            stderr
+            ( "Error: --base-name "
+                ++ show (T.unpack name)
+                ++ " is not a valid Scheme identifier; the Scheme target uses\n"
+                ++ "       it as the library's final segment and as the exported\n"
+                ++ "       program-info binding name.\n"
+            )
+          exitFailure
+        let libName = [T.pack "ychr", T.pack "generated", name]
+            outPath =
+              opts.outputDir </> "ychr" </> "generated" </> T.unpack name ++ ".sls"
+        createDirectoryIfMissing True (takeDirectory outPath)
+        TIO.writeFile outPath (generateScheme libName vmp prog.opTable)
+        putStrLn outPath
+        schemeRuntimeNote
 
 runGenDriver :: Resources -> GenDriverOpts -> [FilePath] -> IO ()
-runGenDriver resources opts files = withCompiled resources False files $ \prog warnings -> do
-  printWarnings warnings
-  typeWarnings <- typeCheckUnless opts.noCheck resources prog
-  -- 'prepareGoal' parses the goal and canonicalizes bare
-  -- data-constructor references in its arguments, so they reach the
-  -- runtime in the same flat-functor form the compiled head patterns
-  -- expect.
-  prepResult <- try @SomeException (prepareGoal prog opts.gdGoal)
-  (constraint, goalWarnings) <- case prepResult of
-    Left e -> reportGenErrorAndExit e
-    Right pair -> pure pair
-  printWarnings goalWarnings
-  outcome <- try @SomeException (resolveQueryTellOrThrow prog constraint)
-  (qn, exprs) <- case outcome of
-    Left e -> reportGenErrorAndExit e
-    Right pair -> pure pair
-  -- Combine file-level, type-check, and goal-level warnings into a
-  -- single Werror decision so a single run reports every warning
-  -- before exiting.
-  exitOnWerror opts.werror (warnings ++ typeWarnings ++ goalWarnings)
-  case generateDriver (T.pack "program") qn exprs of
-    Left err -> do
-      putStr (displayMsg err)
-      exitFailure
-    Right driver -> do
-      TIO.putStr driver
-      schemeRuntimeNote
+runGenDriver resources opts files =
+  withCompiled resources False files $ \prog warnings -> do
+    printWarnings warnings
+    typeWarnings <- typeCheckUnless opts.noCheck resources prog
+    -- 'prepareGoal' parses the goal and canonicalizes bare
+    -- data-constructor references in its arguments, so they reach the
+    -- runtime in the same flat-functor form the compiled head patterns
+    -- expect.
+    prepResult <- try @SomeException (prepareGoal prog opts.gdGoal)
+    (constraint, goalWarnings) <- case prepResult of
+      Left e -> reportGenErrorAndExit e
+      Right pair -> pure pair
+    printWarnings goalWarnings
+    outcome <- try @SomeException (resolveQueryTellOrThrow prog constraint)
+    (qn, exprs) <- case outcome of
+      Left e -> reportGenErrorAndExit e
+      Right pair -> pure pair
+    -- Combine file-level, type-check, and goal-level warnings into a
+    -- single Werror decision so a single run reports every warning
+    -- before exiting.
+    exitOnWerror opts.werror (warnings ++ typeWarnings ++ goalWarnings)
+    case generateDriver (T.pack "program") qn exprs of
+      Left err -> do
+        putStr (displayMsg err)
+        exitFailure
+      Right driver -> do
+        TIO.putStr driver
+        schemeRuntimeNote
   where
     reportGenErrorAndExit exc = do
       case fromException exc of

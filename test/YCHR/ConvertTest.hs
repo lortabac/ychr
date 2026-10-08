@@ -146,7 +146,9 @@ encodingTests =
         toTerm ([] :: [Int]) @?= CompoundTerm (Unqualified "[]") [],
       testCase "[1]" $
         toTerm [1 :: Int]
-          @?= CompoundTerm (Unqualified ".") [IntTerm 1, CompoundTerm (Unqualified "[]") []],
+          @?= CompoundTerm
+            (Unqualified ".")
+            [IntTerm 1, CompoundTerm (Unqualified "[]") []],
       testCase "(1, \"a\")" $
         toTerm (1 :: Int, "a" :: Text)
           @?= CompoundTerm (Unqualified "tuple") [IntTerm 1, TextTerm "a"],
@@ -177,10 +179,14 @@ acceptanceTests =
   testGroup
     "decode acceptance"
     [ testCase "prelude:true decodes to True" $
-        (fromTerm (CompoundTerm (Qualified "prelude" "true") []) :: Either ConvertError Bool)
+        ( fromTerm (CompoundTerm (Qualified "prelude" "true") []) ::
+            Either ConvertError Bool
+        )
           @?= Right True,
       testCase "prelude:[] decodes to []" $
-        (fromTerm (CompoundTerm (Qualified "prelude" "[]") []) :: Either ConvertError [Int])
+        ( fromTerm (CompoundTerm (Qualified "prelude" "[]") []) ::
+            Either ConvertError [Int]
+        )
           @?= Right []
     ]
 
@@ -533,13 +539,15 @@ hostRegistry =
     sumTerms ts = toTerm . sum <$> (traverse fromTerm ts :: Either ConvertError [Int])
 
 runHost :: (FromTerm a) => HostCallRegistry -> Term -> IO (Either ConvertError a)
-runHost reg goal = runQueryWithHostCallRegistry stdlib reg [hostProgram] goal (decodeVar "R")
+runHost reg goal =
+  runQueryWithHostCallRegistry stdlib reg [hostProgram] goal (decodeVar "R")
 
 -- | Assert that running @goal@ raises a runtime error whose message
 -- contains @needle@.
 expectHostError :: String -> Term -> IO ()
 expectHostError needle goal = do
-  outcome <- try @SomeException (runHost hostRegistry goal :: IO (Either ConvertError Term))
+  outcome <-
+    try @SomeException (runHost hostRegistry goal :: IO (Either ConvertError Term))
   case outcome of
     Left exc ->
       assertBool

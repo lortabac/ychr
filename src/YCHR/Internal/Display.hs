@@ -2,11 +2,16 @@
 
 -- | Human-readable error display.
 module YCHR.Internal.Display
-  ( Display (..),
+  ( -- * Types
+    Display (..),
     Severity (..),
     ErrorCode (..),
+
+    -- * Displaying
     displaySrcLoc,
     displayMsgWithSrcLoc,
+
+    -- * Error codes
     displayErrorCode,
     collectErrorCode,
     parseValidationErrorCode,
@@ -56,6 +61,7 @@ import YCHR.Internal.TypeCheck (TypeCheckError (..), TypeCheckWarning (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (StackFrame (..))
 
+-- | Types that render themselves as user-facing diagnostic text.
 class Display a where
   displayMsg :: a -> String
 
@@ -72,6 +78,7 @@ data Severity
   | SevRuntimeError
   | SevStackTrace
 
+-- | A stable numeric identifier for a diagnostic class.
 newtype ErrorCode = ErrorCode Int
   deriving (Show, Eq, Ord)
 
@@ -240,8 +247,8 @@ resolveErrorCode EmptyLambdaParams = ErrorCode 16018
 resolveErrorCode (UnsupportedCallArity _) = ErrorCode 16022
 
 -- | 2xxxx — rename phase (errors).
--- Code 20004 was previously used for OperatorInImportList; now reserved
--- because operators are permitted in import lists (see UnknownOperatorImport).
+-- Code 20004 is reserved: operators are permitted in import lists
+-- (see UnknownOperatorImport).
 renameErrorCode :: RenameError -> ErrorCode
 renameErrorCode (AmbiguousName _ _ _) = ErrorCode 20001
 renameErrorCode (UnknownName _ _) = ErrorCode 20002
@@ -313,12 +320,15 @@ typeCheckErrorCode (TypeRefArityMismatch _ _ _ _ _) = ErrorCode 60013
 parseErrorCode :: ErrorCode
 parseErrorCode = ErrorCode 50001
 
+-- | 5xxxx — an operator redeclared with a different fixity or associativity.
 operatorConflictCode :: ErrorCode
 operatorConflictCode = ErrorCode 50002
 
+-- | 5xxxx — a live session received an anonymous lambda.
 lambdasInLiveQueryCode :: ErrorCode
 lambdasInLiveQueryCode = ErrorCode 50003
 
+-- | 5xxxx — `ychr gen-driver` received an anonymous lambda in a goal argument.
 lambdasInSchemeDriverCode :: ErrorCode
 lambdasInSchemeDriverCode = ErrorCode 50004
 
@@ -1258,7 +1268,14 @@ instance Display Error where
       -- An empty stack means the error fired before any 'PushFrame'; we
       -- still produce a runtime-error block, just anchored at 'dummyLoc'.
       renderFrames m [] =
-        [displayMsgWithSrcLoc runtimeErrorCode SevRuntimeError m P.dummyLoc Nothing Nothing]
+        [ displayMsgWithSrcLoc
+            runtimeErrorCode
+            SevRuntimeError
+            m
+            P.dummyLoc
+            Nothing
+            Nothing
+        ]
       renderFrames m (top : rest) = renderTop top m : map renderRest rest
       renderTop frame m =
         displayMsgWithSrcLoc

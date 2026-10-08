@@ -28,6 +28,7 @@ newtype LineInput = LineInput
   { readLine :: String -> IO (Maybe String)
   }
 
+-- | Build a history-less, completion-less 'LineInput' over 'getLine'.
 mkLineInput :: LineInputSettings -> IO LineInput
 mkLineInput _ = pure (LineInput {readLine = readOneLine})
   where

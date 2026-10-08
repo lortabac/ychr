@@ -231,7 +231,8 @@ baseHostCallRegistry =
             "list_to_compound"
             args
             "list_to_compound: expected a non-empty list with an atom head"
-      args -> argError "list_to_compound" args "list_to_compound: expected 1 list argument"
+      args ->
+        argError "list_to_compound" args "list_to_compound: expected 1 list argument"
     copyTermHost = HostCallFn $ \case
       [v] -> copyTerm v
       _ -> runtimeErrorS "copy_term: expected 1 argument"
@@ -376,9 +377,9 @@ valueList (x : xs) = VTerm "prelude__." [x, valueList xs]
 
 -- | Decompose a Prolog-style list back into a Haskell list. Recognizes
 -- both the canonicalized cons form (@prelude__.@/@prelude__[]@,
--- emitted by the renamer-driven pipeline) and the legacy bare form
--- (@.@/@[]@, used by Haskell-side code that constructs values without
--- going through the renamer — e.g. test fixtures, the DSL).
+-- emitted by the renamer-driven pipeline) and the bare form
+-- (@.@/@[]@) that Haskell-side code produces when it constructs values
+-- without going through the renamer — e.g. test fixtures and the DSL.
 -- Returns 'Nothing' if the value is not a well-formed list.
 fromValueList :: Value -> Maybe [Value]
 fromValueList (VAtom "prelude__[]") = Just []

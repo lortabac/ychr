@@ -6,10 +6,9 @@
 -- position to a plain value-producing expression, and keeps a @call\/cc@
 -- escape only when a @Return@ is trapped inside a 'Foreach' or
 -- 'DrainReactivationQueue' body (see 'YCHR.Internal.Backend.Scheme'). A
--- non-tail-recursive user function that took the escape path used to
--- capture a continuation on every call, which is where the Scheme
--- backend's recursion cost came from; these tests pin the shape so it
--- cannot come back silently.
+-- non-tail-recursive user function routed through the escape path captures
+-- a continuation on every call — the backend's main recursion cost; these
+-- tests pin the shape so it cannot come back silently.
 module YCHR.Backend.SchemeTest (tests) where
 
 import Data.Text (Text)

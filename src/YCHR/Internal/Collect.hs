@@ -3,9 +3,8 @@
 -- | Library import collector.
 --
 -- Resolves @use_module(library(name))@ imports against the standard
--- library map. The two responsibilities are now exposed as separate
--- functions so the pipeline can build per-module operator tables before
--- the full parse:
+-- library map. The work is split across separate functions so the
+-- pipeline can build per-module operator tables before the full parse:
 --
 --   * 'resolveLibraryClosure' walks the dependency graph from a set of
 --     seed library names, returns the reachable libraries in topological
@@ -36,6 +35,7 @@ import YCHR.Internal.Collected (CollectedModule, collectedFromParsed)
 import YCHR.Internal.Diagnostic (Diagnostic, noDiag)
 import YCHR.Internal.Parsed
 
+-- | Why import collection failed.
 data CollectError
   = UnknownLibrary Text
   | CircularLibraryImport [Text]
@@ -165,8 +165,8 @@ addLibraryPrelude = map go
       | otherwise = m {imports = noAnnP (LibraryImport "prelude" Nothing) : m.imports}
 
 -- | Convert each parsed 'Module' to a 'CollectedModule', collapsing both
--- import kinds into 'CollectedImport'. After this point the
--- library-vs-module distinction no longer exists in the types. The
--- per-module conversion lives in "YCHR.Internal.Collected" ('collectedFromParsed').
+-- import kinds into 'CollectedImport'. After this point the types carry
+-- no library-vs-module distinction. The per-module conversion lives in
+-- "YCHR.Internal.Collected" ('collectedFromParsed').
 rewriteImports :: [Module] -> [CollectedModule]
 rewriteImports = map collectedFromParsed

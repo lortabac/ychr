@@ -1110,7 +1110,7 @@ table assigns a numeric ID to every CHR constraint type so the VM can
 dispatch activations by array index. Rule heads provide the primary
 source (they determine which constraints participate in the &omega;r
 activation-dispatch loop). Functions are invoked by name through
-'D.BodyFunctionCall', not through the constraint dispatch table, so they
+'D.BodyCall', not through the constraint dispatch table, so they
 do not need numeric IDs. Constraints declared via ':- chr_constraint'
 that never appear in any rule are also included from the
 'prog.constraintTypes' map; without a symbol-table entry the compiler
@@ -1128,7 +1128,7 @@ compiled program.
 
 Why 'liftEquation's scope includes 'guardVars': HNF may decompose a
 compound pattern like @[X|Xs]@ into a 'D.GuardGetArg' that binds @X@ and
-@Xs@. Those names are no longer visible from @eq.params@ (which only
+@Xs@. Those names are not visible from @eq.params@ (which only
 contains the top-level @_hnf_N@), but they are valid references from
 the RHS — including from inside a lambda. The lambda-lifter therefore
 has to see them too, otherwise the lambda would be lifted without

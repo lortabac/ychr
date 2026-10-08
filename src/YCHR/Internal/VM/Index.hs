@@ -81,14 +81,13 @@ indexablePositions prog = List.foldl' addProc IntMap.empty prog.procedures
 -- | Whether evaluating an expression is total.
 --
 -- A store index is consulted once, before a loop body runs, so a
--- condition it drives must not be able to raise: an index-driven lookup
--- that evaluated one eagerly could turn a working query into an
--- instantiation error where the old code, having no candidate to check,
--- never evaluated it. The constructors below are what the compiler
--- emits for a guard's expected value — a head variable, a literal, or a
--- compound built from them. Everything else (a host call, a user
--- function, @is@, a field or term accessor) is left to the per-candidate
--- check.
+-- condition it drives must not be able to raise: evaluating one eagerly
+-- could turn a working query into an instantiation error, whereas the
+-- per-candidate check only evaluates it when a candidate exists. The
+-- constructors below are what the compiler emits for a guard's expected
+-- value — a head variable, a literal, or a compound built from them.
+-- Everything else (a host call, a user function, @is@, a field or term
+-- accessor) is left to the per-candidate check.
 --
 -- The set is deliberately narrow, and it is the compiler's business to
 -- keep it so: 'YCHR.Internal.Compile.classifyEqual' only lifts the

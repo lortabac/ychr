@@ -52,18 +52,18 @@ import YCHR.Internal.VM (StackFrame)
 -- Truncation happens here, at the single point where the stack is
 -- /read/, rather than on every 'YCHR.Internal.Runtime.Interpreter.pushFrame':
 -- pushing is on the hot path (once per rule fire and per function
--- entry) and re-truncating there allocated a fresh spine every time.
--- The reported frames are identical either way — the stack is
--- newest-first, so taking the first @n@ of the whole thing is what
--- truncating on the way in used to leave behind.
+-- entry), where re-truncating would allocate a fresh spine every time.
+-- The reported frames are identical either way: the stack is
+-- newest-first, so taking the first @n@ of the whole thing is the same
+-- as truncating on the way in.
 --
 -- The un-truncated stack is bounded by the interpreter's call depth,
 -- because every procedure call restores the frames it found on the
--- way out. That does make the stack O(call depth) rather than O(1):
--- a program that nests a million activations deep now retains a
--- million cons cells here. That is proportional to the interpreter's
--- own IO continuation chain at the same depth, so it adds no new
--- asymptotic class.
+-- way out. That makes the stack O(call depth) rather than O(1): a
+-- program that nests a million activations deep retains a million
+-- cons cells here. That is proportional to the interpreter's own IO
+-- continuation chain at the same depth, so it adds no new asymptotic
+-- class.
 maxCallStackDepth :: Int
 maxCallStackDepth = 10
 
@@ -122,9 +122,8 @@ chrRuntimeErrorPrefix = "CHR runtime error: "
 -- /instantiation/ error, not a general one — a rule guard catches it
 -- and retries the occurrence once reactivation binds the variable.
 --
--- The message is the one the generated @call_N@ dispatchers used to
--- raise, kept byte-for-byte so guards, golden tests and both backends
--- keep reporting it identically.
+-- The exact wording is part of the runtime's contract: guards, golden
+-- tests and both backends report it identically.
 closureUnboundError :: Chr a
 closureUnboundError =
   instantiationErrorS $

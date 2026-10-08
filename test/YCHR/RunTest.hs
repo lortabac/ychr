@@ -204,7 +204,8 @@ fibTests =
     "Fibonacci (from surface language)"
     [ testCase "fib 10 = 55" $ do
         prog <- compileOrFail [("fib.chr", fibSource)]
-        bindings <- runProgramWithGoal typeCheckerProgram prog fibHostCalls "fib:fib(10, R)"
+        bindings <-
+          runProgramWithGoal typeCheckerProgram prog fibHostCalls "fib:fib(10, R)"
         Map.lookup "R" bindings @?= Just (IntTerm 55)
     ]
 
@@ -261,7 +262,9 @@ visibilityTests =
       testCase "unqualified hidden constraint fails" $ do
         cp <- compileOrFail [("secret.chr", hiddenSource)]
         let q = Constraint (Unqualified "hidden") [VarTerm "X"]
-        assertBool "Should fail for hidden constraint" (isLeft (resolveQueryConstraint cp q)),
+        assertBool
+          "Should fail for hidden constraint"
+          (isLeft (resolveQueryConstraint cp q)),
       testCase "qualified exported constraint succeeds" $ do
         cp <- compileOrFail [("pub.chr", exportedSource)]
         let q = Constraint (Qualified "pub" "visible") [VarTerm "X"]
@@ -391,7 +394,7 @@ queryErrorTests =
         -- Goals are checked exactly like rule bodies (spec §Type
         -- Checking Procedure): a known constructor at the wrong arity
         -- is the YCHR-60008 type error, not a silent fall-through to
-        -- `any`. This used to slip past goal-time checking.
+        -- `any`. It must not slip past goal-time checking.
         cp <-
           compileOrFail
             [ ( "opt.chr",
@@ -420,7 +423,12 @@ queryErrorTests =
         cp <- compileOrFail [("pub.chr", exportedSource)]
         outcome <-
           try @SomeException
-            (runProgramWithGoal typeCheckerProgram cp Map.empty "this is not a valid goal")
+            ( runProgramWithGoal
+                typeCheckerProgram
+                cp
+                Map.empty
+                "this is not a valid goal"
+            )
         case outcome of
           Left exc -> case fromException exc :: Maybe Error of
             Just (ParseError _ _) -> pure ()
@@ -434,7 +442,8 @@ queryErrorTests =
       testCase "runProgramWithGoal: undeclared constraint → GoalNotAConstraint" $ do
         cp <- compileOrFail [("pub.chr", exportedSource)]
         outcome <-
-          try @SomeException (runProgramWithGoal typeCheckerProgram cp Map.empty "nope(X)")
+          try @SomeException
+            (runProgramWithGoal typeCheckerProgram cp Map.empty "nope(X)")
         case outcome of
           Left exc -> case fromException exc :: Maybe Error of
             Just (GoalNotAConstraint _ NoSuchConstraint) -> pure ()
@@ -578,7 +587,8 @@ queryBodyTests =
     "Query body forms"
     [ testCase "BodyTrue: 'true, R = 1' binds R" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
-        bindings <- runProgramWithQuery typeCheckerProgram prog qbodyHostCalls "true, R = 1."
+        bindings <-
+          runProgramWithQuery typeCheckerProgram prog qbodyHostCalls "true, R = 1."
         Map.lookup "R" bindings @?= Just (IntTerm 1),
       testCase "BodyUnify chain: X = 1, Y = X, R = Y" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
@@ -609,7 +619,11 @@ queryBodyTests =
       testCase "BodyHostStmt: host:'+'(1, 2) as statement runs and is discarded" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
         bindings <-
-          runProgramWithQuery typeCheckerProgram prog qbodyHostCalls "host:'+'(1, 2), R = ok."
+          runProgramWithQuery
+            typeCheckerProgram
+            prog
+            qbodyHostCalls
+            "host:'+'(1, 2), R = ok."
         Map.lookup "R" bindings @?= Just (CompoundTerm (Unqualified "ok") []),
       testCase "BodyCall: triple(5) as statement runs and is discarded" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
@@ -648,7 +662,8 @@ queryBodyTests =
         Map.lookup "R" bindings @?= Just (FloatTerm 1.5),
       testCase "BodyUnify with TextExpr RHS binds R to TextTerm" $ do
         prog <- compileOrFail [("qbody.chr", qbodySource)]
-        bindings <- runProgramWithQuery typeCheckerProgram prog qbodyHostCalls "R = \"hello\"."
+        bindings <-
+          runProgramWithQuery typeCheckerProgram prog qbodyHostCalls "R = \"hello\"."
         Map.lookup "R" bindings @?= Just (TextTerm "hello")
     ]
 
@@ -659,9 +674,8 @@ queryBodyTests =
 -- A guard expression that evaluates to a non-boolean is a runtime error. It
 -- must render as a user-facing YCHR-60001 anchored at the rule's source
 -- location (like other runtime errors), without leaking the internal VM
--- construct 'BFromVal'. Regression test for a fixed BUGS.md entry: the rule
--- frame is now pushed at occurrence-procedure entry so it is live during
--- guard evaluation.
+-- construct 'BFromVal'. The rule frame must be live during guard evaluation
+-- for that source location to resolve.
 
 guardNonBoolSource :: Text
 guardNonBoolSource =
@@ -733,7 +747,9 @@ uncheckedQueryTests =
             assertFailure $
               "expected prepareQueryUnchecked to prepare the goal, got: " ++ show exc
           Right (prepared, ws) -> do
-            assertBool "expected the query to be prepared" (not (null prepared.liftedGoals))
+            assertBool
+              "expected the query to be prepared"
+              (not (null prepared.liftedGoals))
             assertBool "expected no type-check warnings" $
               null [() | TypeCheckWarnings _ <- ws]
     ]

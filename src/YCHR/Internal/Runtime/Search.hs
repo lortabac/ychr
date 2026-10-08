@@ -208,7 +208,7 @@ hostFail _ = runtimeErrorS "fail: expected 0 arguments"
 -- pointer write, captured at a choice point. The store index is in here
 -- with the store it describes: both are persistent structures, and
 -- restoring one without the other would leave the iterator answering
--- from entries the restored store no longer has.
+-- from entries the restored store lacks.
 data StoreSnapshot = StoreSnapshot
   { byType :: !(IntMap (Seq Suspension)),
     byId :: !(IntMap Suspension),

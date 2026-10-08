@@ -51,7 +51,7 @@ benchmarkPrograms =
     "lambda_test",
     -- The two search shapes, measured separately because they cost
     -- different things. "search_label" is `choose/2` labeling, which is
-    -- now derived: a rule firing, a `maplist` over the values, and a
+    -- derived: a rule firing, a `maplist` over the values, and a
     -- `try_unify` tell per alternative, on top of the choice point
     -- itself. "search_generate" is the `;` path, one lifted disjunct
     -- and one `alt` per level of a recursive generator.
@@ -82,7 +82,8 @@ loadCase name = do
   goalText <- TIO.readFile goalPath
   parsedGoal <- case parseConstraint "<bench>" (T.strip goalText) of
     Left err -> fail ("goal parse failed for " ++ name ++ ": " ++ show err)
-    Right (Left validErr) -> fail ("goal parse failed for " ++ name ++ ": " ++ show validErr)
+    Right (Left validErr) ->
+      fail ("goal parse failed for " ++ name ++ ": " ++ show validErr)
     Right (Right c) -> pure c
   -- Canonicalize the goal's arguments here, at setup time, so criterion
   -- measures VM execution only. 'runGoalConstraint' takes the prepared

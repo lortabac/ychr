@@ -154,7 +154,7 @@ allCodes = constructorCodes ++ standaloneCodes
 
 -- | Codes deliberately shared by more than one error. Every entry needs a
 -- comment justifying the share; the @allowlist is not stale@ test keeps this
--- honest by rejecting entries that no longer correspond to a real duplicate.
+-- honest by rejecting entries that do not correspond to a real duplicate.
 intentionalShared :: Set Int
 intentionalShared =
   Set.fromList

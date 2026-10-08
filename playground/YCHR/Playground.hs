@@ -143,7 +143,7 @@ response status payload = status ++ "\n\n" ++ payload
 -- still raise while its payload is being rendered (the compiler has
 -- partial pure functions on these paths). Past this function the payload
 -- is written into a C string and crosses back into JavaScript, where
--- there is no longer a handler: on the WASM side that would abort the
+-- there is no handler: on the WASM side that would abort the
 -- module and lose the loaded program. So the payload is forced /here/,
 -- inside the same 'try' as the operation itself, and a failure becomes
 -- an ordinary error response.

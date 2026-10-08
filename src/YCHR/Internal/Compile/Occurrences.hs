@@ -114,7 +114,9 @@ ruleOccurrences symTab (ruleIdx, rule) = do
       -- gets the lowest (earliest) occurrence number.
       orderedOccurrences =
         [(i, c, False) | (i, c) <- zip [HeadPosition 0 ..] (reverse removed)]
-          ++ [(i, c, True) | (i, c) <- zip [HeadPosition (length removed) ..] (reverse kept)]
+          ++ [ (i, c, True)
+             | (i, c) <- zip [HeadPosition (length removed) ..] (reverse kept)
+             ]
       ruleId' = RuleId ruleIdx
       display = ruleDisplayName ruleIdx rule
   fmap catMaybes $ for orderedOccurrences $ \(idx, con, isKept) ->

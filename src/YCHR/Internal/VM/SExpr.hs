@@ -139,6 +139,8 @@ chrNameToSExpr :: Types.Name -> SExpr
 chrNameToSExpr (Types.Unqualified t) = SString t
 chrNameToSExpr (Types.Qualified m t) = SList [SAtom "qualified", SString m, SString t]
 
+-- | Encode a 'Program' as an s-expression; the inverse of
+-- 'programFromSExpr'.
 programToSExpr :: Program -> SExpr
 programToSExpr prog =
   SList
@@ -202,7 +204,12 @@ stmtToSExpr (LetId n e) = SList [SAtom "let-id", nameToSExpr n, idExprToSExpr e]
 stmtToSExpr (AssignVal n e) = SList [SAtom "assign-val", nameToSExpr n, valExprToSExpr e]
 stmtToSExpr (AssignId n e) = SList [SAtom "assign-id", nameToSExpr n, idExprToSExpr e]
 stmtToSExpr (If c ts es) =
-  SList [SAtom "if", boolExprToSExpr c, SList (map stmtToSExpr ts), SList (map stmtToSExpr es)]
+  SList
+    [ SAtom "if",
+      boolExprToSExpr c,
+      SList (map stmtToSExpr ts),
+      SList (map stmtToSExpr es)
+    ]
 stmtToSExpr (Foreach lbl ct sv conds body) =
   SList
     [ SAtom "foreach",
@@ -247,7 +254,12 @@ valExprToSExpr (ApplyClosure f es) =
 valExprToSExpr NewVar = SAtom "new-var"
 valExprToSExpr (MakeTerm n es) =
   SList (SAtom "make-term" : nameToSExpr n : map valExprToSExpr es)
-valExprToSExpr (GetArg e i) = SList [SAtom "get-arg", valExprToSExpr e, SInt (fromIntegral i)]
+valExprToSExpr (GetArg e i) =
+  SList
+    [ SAtom "get-arg",
+      valExprToSExpr e,
+      SInt (fromIntegral i)
+    ]
 valExprToSExpr (FieldArg e (ArgIndex i)) =
   SList [SAtom "field-arg", idExprToSExpr e, SInt (fromIntegral i)]
 valExprToSExpr (FieldType e) = SList [SAtom "field-type", idExprToSExpr e]
@@ -266,12 +278,21 @@ boolExprToSExpr (BMatchTerm e n a) =
       SInt (fromIntegral a)
     ]
 boolExprToSExpr (BEqual a b) = SList [SAtom "bequal", valExprToSExpr a, valExprToSExpr b]
-boolExprToSExpr (BIdEqual a b) = SList [SAtom "bid-equal", idExprToSExpr a, idExprToSExpr b]
+boolExprToSExpr (BIdEqual a b) =
+  SList
+    [ SAtom "bid-equal",
+      idExprToSExpr a,
+      idExprToSExpr b
+    ]
 boolExprToSExpr (BAlive e) = SList [SAtom "balive", idExprToSExpr e]
 boolExprToSExpr (BIsConstraintType e ct) =
   SList [SAtom "bis-constraint-type", idExprToSExpr e, constraintTypeToSExpr ct]
 boolExprToSExpr (BNotInHistory rid es) =
-  SList (SAtom "bnot-in-history" : ruleIdToSExpr rid : map idExprToSExpr (historyIdsList es))
+  SList
+    ( SAtom "bnot-in-history"
+        : ruleIdToSExpr rid
+        : map idExprToSExpr (historyIdsList es)
+    )
 boolExprToSExpr (BUnify a b) = SList [SAtom "bunify", valExprToSExpr a, valExprToSExpr b]
 boolExprToSExpr (BFromVal e) = SList [SAtom "bfrom-val", valExprToSExpr e]
 boolExprToSExpr (BEvalDeep e) = SList [SAtom "beval-deep", boolExprToSExpr e]
@@ -327,7 +348,12 @@ vmProgramFromSExpr (SList (SAtom "vm-program" : rest)) = do
       prog <- programFromSExpr progS
       exports <- traverse identFromSExpr exportSexprs
       st <- symbolTableFromSExpr stS
-      pure VMProgram {program = prog, exportedSet = Set.fromList exports, symbolTable = st}
+      pure
+        VMProgram
+          { program = prog,
+            exportedSet = Set.fromList exports,
+            symbolTable = st
+          }
     _ -> case firstVersionHeader body of
       Just v -> err ("duplicate (version N) header in vm-program: " <> printSExpr v)
       Nothing ->
@@ -409,7 +435,10 @@ symbolTableFromSExpr (SList (SAtom "symbol-table" : entries)) = do
   where
     entryFromSExpr (SList [n, SInt arity, SInt ct]) = do
       name <- chrNameFromSExpr n
-      pure (Types.Identifier name (fromInteger arity), Types.ConstraintType (fromInteger ct))
+      pure
+        ( Types.Identifier name (fromInteger arity),
+          Types.ConstraintType (fromInteger ct)
+        )
     entryFromSExpr s = err ("expected (name arity int), got: " <> printSExpr s)
 symbolTableFromSExpr s = err ("expected (symbol-table ...), got: " <> printSExpr s)
 
@@ -423,9 +452,12 @@ identFromSExpr s = err ("expected (name arity), got: " <> printSExpr s)
 
 chrNameFromSExpr :: SExpr -> Err Types.Name
 chrNameFromSExpr (SString t) = pure (Types.Unqualified t)
-chrNameFromSExpr (SList [SAtom "qualified", SString m, SString t]) = pure (Types.Qualified m t)
+chrNameFromSExpr (SList [SAtom "qualified", SString m, SString t]) =
+  pure (Types.Qualified m t)
 chrNameFromSExpr s = err ("expected name, got: " <> printSExpr s)
 
+-- | Decode a 'Program' from the output of 'programToSExpr', reporting a
+-- malformed or unsupported s-expression as 'Left'.
 programFromSExpr :: SExpr -> Err Program
 programFromSExpr
   ( SList
@@ -575,7 +607,10 @@ stmtFromSExpr
     ) =
     pure $
       PushFrame $
-        StackFrame label (SourceLoc (T.unpack file) (fromInteger lineN) (fromInteger colN)) src
+        StackFrame
+          label
+          (SourceLoc (T.unpack file) (fromInteger lineN) (fromInteger colN))
+          src
 stmtFromSExpr s@(SList (SAtom "push-frame" : _)) =
   err
     ( "expected (push-frame <label> <line> <col> <file> <source>) with quoted"

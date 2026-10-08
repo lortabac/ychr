@@ -110,7 +110,11 @@ import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Meta (valueToTerm)
 import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed (AnnP (..), SourceLoc (..))
-import YCHR.Internal.Parser (ParseValidationError (..), parseConstraintWith, parseQueryWith)
+import YCHR.Internal.Parser
+  ( ParseValidationError (..),
+    parseConstraintWith,
+    parseQueryWith,
+  )
 import YCHR.Internal.Pretty (prettyPExprSrc, prettyTerm)
 import YCHR.Internal.Rename (RenameWarning, renameQueryArgsWith, renameQueryGoalsWith)
 import YCHR.Internal.Resolve (ResolveError, termToExpr)
@@ -496,8 +500,8 @@ prepareQueryUnchecked cp src = do
 --
 -- The extras are only the query's own lambdas. A callable the query
 -- reaches through a compiled function is already in the session's
--- table, which is built from the program; nothing has to be
--- regenerated per query any more.
+-- table, which is built from the program; nothing is regenerated
+-- per query.
 prepareResolved :: ResolvedQuery -> PreparedQuery
 prepareResolved resolved =
   PreparedQuery
@@ -600,7 +604,8 @@ termToValue (CompoundTerm name []) | Just b <- Types.preludeBool name = pure (VB
 termToValue (CompoundTerm name@(Types.Qualified _ _) []) =
   pure (VAtom (vmName name).unName)
 termToValue (CompoundTerm (Types.Unqualified n) []) = pure (VAtom n)
-termToValue (CompoundTerm name ts) = VTerm (vmName name).unName <$> traverse termToValue ts
+termToValue (CompoundTerm name ts) =
+  VTerm (vmName name).unName <$> traverse termToValue ts
 
 -- | Execute a single desugared body goal in the query context.
 executeBodyGoal :: D.BodyGoal -> QueryM ()

@@ -84,7 +84,8 @@ tests =
           testCase "Maybe and NonEmpty" $ do
             toCode (Just (1 :: Int)) @?= CApp (CName "Just") [CInt 1]
             toCode (Nothing :: Maybe Int) @?= CName "Nothing"
-            toCode (1 :| [2 :: Int]) @?= CApp (CName "NE.fromList") [CList [CInt 1, CInt 2]],
+            toCode (1 :| [2 :: Int])
+              @?= CApp (CName "NE.fromList") [CList [CInt 1, CInt 2]],
           testCase "containers rebuild through fromList" $ do
             toCode (Map.fromList [("a" :: Text, 1 :: Int)])
               @?= CApp (CName "Map.fromList") [CList [CTuple [CString "a", CInt 1]]]
@@ -139,7 +140,9 @@ tests =
                     (renderCode (CString (T.unpack name)))
               )
               (Map.keys modules)
-            assertBool "the module is substantial" (length (emitted.moduleSource) > 100000),
+            assertBool
+              "the module is substantial"
+              (length (emitted.moduleSource) > 100000),
           testCase "the type-checker module rebuilds through mkSessionInput" $ do
             let emitted = emitTypeChecker defaultEmitOptions Embedded.typeCheckerProgram
             emitted.modulePath @?= "YCHR/Embedded/Generated/TypeCheck.hs"
@@ -261,6 +264,7 @@ sameParse original rebuilt src =
   case (parseTermWith original "<table>" src, parseTermWith rebuilt "<table>" src) of
     (Right t, Right t') -> t @?= t'
     (Left err, _) ->
-      assertFailure ("the original table failed to parse " ++ show src ++ ": " ++ show err)
+      assertFailure
+        ("the original table failed to parse " ++ show src ++ ": " ++ show err)
     (_, Left err) ->
       assertFailure ("the rebuilt table failed to parse " ++ show src ++ ": " ++ show err)

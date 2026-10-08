@@ -9,9 +9,9 @@
 -- Desugaring already performed at this stage:
 --
 --   * Simplification and propagation rules are represented uniformly
---     as simpagation rules. A simplification rule has an empty 'headKept'
---     list; a propagation rule has an empty 'headRemoved' list. The
---     compiler checks whether 'headRemoved' is empty to decide whether
+--     as simpagation rules. A simplification rule has an empty 'kept'
+--     list; a propagation rule has an empty 'removed' list. The
+--     compiler checks whether 'removed' is empty to decide whether
 --     propagation history maintenance is needed.
 --
 --   * Guards and body goals are represented with distinct types
@@ -56,6 +56,8 @@ import YCHR.Internal.Parsed (AnnP)
 import YCHR.Internal.Resolved (Expr (..))
 import YCHR.Internal.Types
 
+-- | A whole desugared program, ready for symbol-table extraction and
+-- compilation.
 data Program = Program
   { rules :: [Rule],
     functions :: [Function],
@@ -69,6 +71,8 @@ data Program = Program
   }
   deriving (Show)
 
+-- | A desugared rule, with its head normalized and its guards and body
+-- goals typed.
 data Rule = Rule
   { name :: Maybe Text,
     head :: AnnP Head,
@@ -77,6 +81,8 @@ data Rule = Rule
   }
   deriving (Show)
 
+-- | A rule head split into the constraints kept after firing and the
+-- constraints removed by it.
 data Head = Head
   { kept :: [HeadConstraint],
     removed :: [HeadConstraint]
@@ -105,8 +111,8 @@ data Guard
 -- question is decided structurally for tells but does not arise for
 -- patterns.
 --
--- 'BodyCall' replaces the legacy @BodyFunctionCall@ for static calls
--- and 'BodyApply' replaces it for dynamic dispatch ('$call').
+-- 'BodyCall' is a static user-function call; 'BodyApply' is dynamic
+-- dispatch ('$call').
 --
 -- 'BodyOr' is the surface @;@ operator: a choice between two or more
 -- body conjunctions, flattened out of the right-nested @;@ the parser
@@ -128,6 +134,8 @@ data BodyGoal
   | BodyOr (NonEmpty [BodyGoal])
   deriving (Show, Eq)
 
+-- | A function declaration with its equations grouped under it. Also
+-- describes lambdas lifted out of rule bodies.
 data Function = Function
   { name :: QualifiedName,
     arity :: Int,
@@ -157,6 +165,8 @@ data Function = Function
   }
   deriving (Show)
 
+-- | One equation of a 'Function': pattern parameters, guards, a prelude
+-- of statements, and a return expression.
 data Equation = Equation
   { params :: [HeadArg],
     guards :: [Guard],

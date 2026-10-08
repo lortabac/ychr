@@ -14,10 +14,10 @@
 -- are not committed, so @make resources@ must have run since those
 -- sources last changed.
 --
--- Unlike the previous provider, this one reads nothing at run time and
--- ignores @YCHR_LIB_DIR@: the bundled resources are always the ones the
--- binary was built with. "YCHR.Internal.Resources" still ships the
--- on-disk loader for library embedders and for the GHC test suite.
+-- This provider reads nothing at run time and ignores @YCHR_LIB_DIR@:
+-- the bundled resources are always the ones the binary was built with.
+-- "YCHR.Internal.Resources" provides the on-disk loader for library
+-- embedders and for the GHC test suite.
 --
 -- The two modules are switched by the @if impl(...)@ blocks in
 -- @ychr.cabal@: @embed\/@ under GHC, @src\/mhs\/@ under MicroHs.

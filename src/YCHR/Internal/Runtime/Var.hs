@@ -108,18 +108,16 @@ deref val = pure val
 -- pass its contents to @onUnbound@.
 --
 -- 'deref' promises such a cell is unbound, but the promise lives
--- outside the types: every consumer that needed the cell's contents
--- used to read the 'VarState' itself and dismiss the 'Bound' arm with
--- a panic. This is that promise made structural. The caller never sees
--- a 'VarState', so there is no impossible arm for it to write, and
--- @onBound@ is an ordinary handler — passed the value the cell turned
--- out to hold — rather than a crash site.
+-- outside the types. This function makes it structural: the caller
+-- never sees a 'VarState', so there is no impossible arm for it to
+-- write, and @onBound@ is an ordinary handler — passed the value the
+-- cell turned out to hold — rather than a crash site.
 --
 -- Continuation-passing rather than a returned sum type on purpose:
 -- unification reaches this at every variable of every term it walks,
 -- and reifying the result would allocate a box per call. Inlined,
--- this form compiles to the same @case@ the panicking version had, so
--- the safety costs nothing.
+-- this form compiles to the same @case@ a direct read would, so the
+-- safety costs nothing.
 withUnboundVar ::
   Var ->
   (VarId -> [SuspensionId] -> Chr a) ->

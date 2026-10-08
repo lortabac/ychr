@@ -21,9 +21,9 @@
 --     'Encoded' returns the id-to-p-expr map so the driver can recover
 --     the snippet when a diagnostic comes back naming that id.
 --
---   * Fresh type variables. The old driver allocated a solver variable
---     per source type variable while encoding; here 'TypeVar' stays a
---     named source variable and the allocation is a CHR rule's job.
+--   * Fresh type variables. 'TypeVar' stays a named source variable
+--     while encoding; allocating the solver variable is a CHR rule's
+--     job.
 --
 -- Names — of constraints, functions, constructors, type constructors —
 -- are encoded in the runtime-mangled form ('runtimeName'), which is

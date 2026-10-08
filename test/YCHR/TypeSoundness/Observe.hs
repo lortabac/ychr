@@ -6,7 +6,7 @@
 -- what it finds.
 --
 -- Why a host function rather than an in-language @assert_τ\/1@
--- predicate, which is what v1 used:
+-- predicate:
 --
 --   * A host call's arguments carry no typing obligation at all
 --     (@HostExpr@ types them and returns @any@), so an observation is
@@ -238,9 +238,9 @@ emptyLog =
 -- over an n-instance store is quadratic; the cap keeps a pathological
 -- program from exhausting memory before the timeout catches it.
 --
--- Raised once already: at 50 000 about 1% of polymorphic programs
--- tripped it, and a run that overflowed has observed less than its
--- coverage suggests.
+-- A run that overflows has observed less than its coverage suggests,
+-- so the cap sits well above what polymorphic programs need: when the
+-- cap was 50 000, about 1% of them overflowed it.
 obsLimit :: Int
 obsLimit = 200_000
 

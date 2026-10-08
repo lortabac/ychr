@@ -266,7 +266,13 @@ assertInstantiation :: Name -> [ValExpr] -> IO ()
 assertInstantiation host args = do
   (kind, msg) <- hostFailure host args
   assertBool
-    ("expected InstantiationError from " ++ show host ++ ", got " ++ show kind ++ ": " ++ msg)
+    ( "expected InstantiationError from "
+        ++ show host
+        ++ ", got "
+        ++ show kind
+        ++ ": "
+        ++ msg
+    )
     (kind == InstantiationError)
 
 -- | Assert that a host call fails as a general error — fatal in every
@@ -460,9 +466,11 @@ softGuardTests =
         (kind, _) <- expectRuntimeErrorKindWith baseHostCallRegistry prog "p" []
         kind @?= GeneralError,
       testCase "a decidable guard is unaffected" $ do
-        yes <- softGuardBranch [] (BFromVal (HostCall ">" [Lit (IntLit 1), Lit (IntLit 0)]))
+        yes <-
+          softGuardBranch [] (BFromVal (HostCall ">" [Lit (IntLit 1), Lit (IntLit 0)]))
         yes @?= True
-        no <- softGuardBranch [] (BFromVal (HostCall ">" [Lit (IntLit 0), Lit (IntLit 1)]))
+        no <-
+          softGuardBranch [] (BFromVal (HostCall ">" [Lit (IntLit 0), Lit (IntLit 1)]))
         no @?= False,
       testCase "the catch also applies in deep-deref mode" $ do
         result <-
@@ -1297,10 +1305,9 @@ closureApplyTests =
           [VTerm "pair" [VAtom "m:f", VInt 1]]
           >>= assertContains "call: no matching closure",
       testCase "a header field bound to the identity still dispatches" $ do
-        -- The old dispatchers compared the header fields with BEqual,
-        -- which dereferences: a function-reference term whose identity
-        -- and arity fields are bound variables dispatched, and still
-        -- must.
+        -- The header fields are compared with BEqual, which dereferences,
+        -- so a function-reference term whose identity and arity fields
+        -- are bound variables still dispatches.
         let prog =
               (closureProg [(funKey, "fun_proc")])
                 { procedures =

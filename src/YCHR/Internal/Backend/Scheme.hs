@@ -246,10 +246,9 @@ programInfoBindingName libName = case reverse libName of
 -- @TABLE@ is the program's operator table (see 'opTableSExpr'), which
 -- the session carries for @read_term_from_string@.
 --
--- @(open-session NAME)@ in the REPL library simply invokes this thunk;
--- the dispatcher-style @(NAME 'init)@ / @(NAME 'tells)@ protocol is
--- gone since tell procedures are now reached statically through the
--- exported alias identifiers.
+-- @(open-session NAME)@ in the REPL library simply invokes this thunk,
+-- and tell procedures are reached statically through the exported alias
+-- identifiers.
 programInfoSExpr :: Text -> VMProgram -> OpTable -> SExpr
 programInfoSExpr infoName vmp ops =
   let bindings =
@@ -664,8 +663,8 @@ compileBody stmts = compileStmts stmts
 -- total ('nonRaising'), which is what makes moving its evaluation to loop
 -- entry safe, and @indexed-positions-for@ returning @#f@ short-circuits
 -- the key bindings, so an unindexed type evaluates no condition and scans
--- exactly as before. A loop with no eligible condition emits the old
--- @store-snapshot@ call unchanged.
+-- the whole bucket. A loop with no eligible condition emits a plain
+-- @store-snapshot@ call.
 compileForeach :: Label -> Int -> Name -> [(ArgIndex, ValExpr)] -> [Stmt] -> SExpr
 compileForeach (Label lbl) ct (Name sv) conds body =
   wrapBreak
@@ -1080,7 +1079,12 @@ compileBoolEvalDeep (BAnd a b) =
 compileBoolEvalDeep (BOr a b) =
   SList [SAtom "or", compileBoolEvalDeep a, compileBoolEvalDeep b]
 compileBoolEvalDeep (BMatchTerm e (Name f) arity) =
-  SList [SAtom "match-term", compileEvalDeep e, compileSymbol f, SInt (fromIntegral arity)]
+  SList
+    [ SAtom "match-term",
+      compileEvalDeep e,
+      compileSymbol f,
+      SInt (fromIntegral arity)
+    ]
 compileBoolEvalDeep (BEqual a b) =
   SList [SAtom "equal?/chr", compileEvalDeep a, compileEvalDeep b]
 compileBoolEvalDeep (BUnify a b) =
@@ -1135,4 +1139,5 @@ isValidSchemeIdentifier t = case T.uncons t of
     isSchemeInitial c && T.all isSchemeSubsequent rest
   where
     isSchemeInitial c = isAlpha c || c `elem` ("!$%&*/:<=>?^_~" :: [Char])
-    isSchemeSubsequent c = isSchemeInitial c || isAlphaNum c || c `elem` ("+-.@" :: [Char])
+    isSchemeSubsequent c =
+      isSchemeInitial c || isAlphaNum c || c `elem` ("+-.@" :: [Char])

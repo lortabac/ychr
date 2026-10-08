@@ -9,10 +9,9 @@
 -- silent behaviour change in the compiler rather than a build error.
 --
 -- The comparisons below run over an exhaustive small corpus: every string
--- over a three-character alphabet up to a fixed length. That corpus is
--- what caught a first-cut 'breakOnEnd' which reversed the haystack but not
--- the pattern (it agreed with @Data.Text@ on every single-character
--- pattern and failed on @breakOnEnd "a:b" "a:b:c"@).
+-- over a three-character alphabet up to a fixed length. Patterns run up
+-- to length three, so the corpus exercises overlapping and multi-character
+-- occurrences, which is what a reverse-based 'breakOnEnd' gets wrong.
 --
 -- Delete this module together with 'Data.Text.Shim'
 -- (dev-docs/MICROHS_GAPS.md, gap 4).
@@ -123,10 +122,8 @@ corpus n = map T.pack (concatMap (`sequences` "a:b") [0 .. n])
     sequences 0 _ = [[]]
     sequences k as = [a : rest | a <- as, rest <- sequences (k - 1) as]
 
--- | Every non-empty pattern the corpus offers, up to length three.
---
--- Length three is what generates the @breakOnEnd "a:b" "a:b:c"@ witness
--- named in the module Haddock.
+-- | Every non-empty pattern the corpus offers, up to length three, so
+-- multi-character patterns are exercised as well as single characters.
 needles :: [Text]
 needles = filter (not . T.null) (corpus 3)
 

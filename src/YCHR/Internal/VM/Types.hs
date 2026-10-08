@@ -369,15 +369,14 @@ data ValExpr
     -- 'Program'.'callables' table — one map lookup keyed by the
     -- closure's 'CallableKey' — and calls the procedure it maps to
     -- with any captured values the closure carries, followed by the
-    -- arguments. This is the whole of @'$call'(F, A1, …, An)@; the
-    -- compiler no longer emits a per-arity dispatcher procedure to
-    -- scan.
+    -- arguments. @'$call'(F, A1, …, An)@ compiles to exactly this
+    -- lookup and call; no per-arity dispatcher scans a chain of
+    -- branches.
     --
-    -- Failures match the dispatcher's, in kind and message: an unbound
-    -- closure is an instantiation error (so a rule guard soft-fails
-    -- and retries after reactivation), and any other value — or a
-    -- closure applied at an arity other than the one it was declared
-    -- at — is a general @call: no matching closure@ error.
+    -- An unbound closure is an instantiation error (so a rule guard
+    -- soft-fails and retries after reactivation), and any other value
+    -- — or a closure applied at an arity other than the one it was
+    -- declared at — is a general @call: no matching closure@ error.
     ApplyClosure ValExpr [ValExpr]
   | -- | The @is@-with-variable-RHS case: evaluate the nested expression
     -- in deep-deref mode and then walk the resulting 'Value',
@@ -525,10 +524,9 @@ newtype ArgIndex = ArgIndex Int
 -- match reached from a different active occurrence would key to a
 -- different entry and the rule would fire twice.
 --
--- That ordering used to be maintained by discipline at the one place
--- the list was built. 'mkHistoryIds' is now the only ordinary way to
--- make one, and it establishes the order from the caller's position
--- keys; consumers read the tuple back with 'historyIdsList'.
+-- 'mkHistoryIds' is the only ordinary way to make one, and it
+-- establishes the order from the caller's position keys; consumers
+-- read the tuple back with 'historyIdsList'.
 newtype HistoryIds = HistoryIds [IdExpr]
   deriving (Show, Eq)
 

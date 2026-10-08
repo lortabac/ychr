@@ -80,7 +80,11 @@ import YCHR.Internal.Meta (termToValue, valueToTerm)
 import YCHR.Internal.Parsed (Module)
 import YCHR.Internal.Runtime.Error (instantiationErrorS, runtimeErrorS)
 import YCHR.Internal.Runtime.Monad (Chr)
-import YCHR.Internal.Runtime.Registry (HostCallFn (..), HostCallRegistry, baseHostCallRegistry)
+import YCHR.Internal.Runtime.Registry
+  ( HostCallFn (..),
+    HostCallRegistry,
+    baseHostCallRegistry,
+  )
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
 import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.StdLib (StdLib)
@@ -421,7 +425,9 @@ what the compiled head patterns match.
 --
 -- The 'StdLib' is an explicit input: the @ychr@ library embeds nothing at
 -- compile time. See 'YCHR.Internal.StdLib.parseStdLib'.
-runQuery :: (FromTerm a) => StdLib -> [Module] -> Term -> Text -> IO (Either ConvertError a)
+runQuery ::
+  (FromTerm a) =>
+  StdLib -> [Module] -> Term -> Text -> IO (Either ConvertError a)
 runQuery stdlib modules goal v = runQueryWith stdlib modules goal (decodeVar v)
 
 -- | 'runQuery' with a decoder over the whole binding map (assemble a

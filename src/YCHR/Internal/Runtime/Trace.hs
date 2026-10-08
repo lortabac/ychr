@@ -165,7 +165,7 @@ formatEvent depth ev = indent ++ body
       TEActivate ct s as ->
         "activate " ++ showSid s ++ ": " ++ T.unpack ct ++ argList as
       TETryOccurrence ct n r ->
-        "try occurrence " ++ T.unpack ct ++ " #" ++ show n ++ " (rule " ++ T.unpack r ++ ")"
+        concat ["try occurrence ", T.unpack ct, " #", show n, " (rule ", T.unpack r, ")"]
       TEPartner ct s as ->
         "partner " ++ showSid s ++ ": " ++ T.unpack ct ++ argList as
       TEHistoryHit r ss ->

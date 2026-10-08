@@ -29,7 +29,17 @@ roundtripTests :: [TestTree]
 roundtripTests =
   [ testCase "empty program" $ roundtrip (Program 0 [] 0 [] [] [] [] []),
     testCase "single empty procedure" $
-      roundtrip (Program 1 [Types.Unqualified "foo"] 0 [] [mkProcedure "foo" [] []] [] [] []),
+      roundtrip
+        ( Program
+            1
+            [Types.Unqualified "foo"]
+            0
+            []
+            [mkProcedure "foo" [] []]
+            []
+            []
+            []
+        ),
     testCase "procedure with params" $
       roundtrip
         ( Program
@@ -45,7 +55,10 @@ roundtripTests =
     testCase "let-val statement" $
       roundtrip (mkProg [LetVal "x" (Lit (IntLit 42))]),
     testCase "let-id statement" $
-      roundtrip (mkProg [LetId "id" (CreateConstraint (ConstraintType 0) [Lit (IntLit 1)])]),
+      roundtrip
+        ( mkProg
+            [LetId "id" (CreateConstraint (ConstraintType 0) [Lit (IntLit 1)])]
+        ),
     testCase "assign-val statement" $
       roundtrip (mkProg [AssignVal "x" (Lit (BoolLit True))]),
     testCase "assign-id statement" $
@@ -105,7 +118,11 @@ roundtripTests =
       roundtrip
         ( mkProg
             [ PushFrame
-                (StackFrame "rule reflexivity" (SourceLoc "mymodule.chr" 4 15) "leq(X, X)")
+                ( StackFrame
+                    "rule reflexivity"
+                    (SourceLoc "mymodule.chr" 4 15)
+                    "leq(X, X)"
+                )
             ]
         ),
     -- The quoted fields are escaped on the way out and unescaped on the
@@ -255,7 +272,9 @@ formatTests =
     testCase "callables entry serialization" $
       assertContains
         ( serializeProg
-            (mkProgWithCallables [(funRefKey "prelude:double" 1, "func_prelude__double1")])
+            ( mkProgWithCallables
+                [(funRefKey "prelude:double" 1, "func_prelude__double1")]
+            )
         )
         "(callables (\"/\" \"prelude:double\" 1 \"func_prelude__double1\"))",
     testCase "apply-closure serialization" $
@@ -276,7 +295,11 @@ formatTests =
         ( serializeProg
             ( mkProg
                 [ PushFrame
-                    (StackFrame "rule reflexivity" (SourceLoc "mymodule.chr" 4 15) "leq(X, X)")
+                    ( StackFrame
+                        "rule reflexivity"
+                        (SourceLoc "mymodule.chr" 4 15)
+                        "leq(X, X)"
+                    )
                 ]
             )
         )
@@ -309,7 +332,9 @@ formatTests =
                           2,
                         Types.ConstraintType 0
                       ),
-                      (Types.Identifier (Types.Unqualified "gcd") 1, Types.ConstraintType 1)
+                      ( Types.Identifier (Types.Unqualified "gcd") 1,
+                        Types.ConstraintType 1
+                      )
                     ]
               }
           text = serialize vmp

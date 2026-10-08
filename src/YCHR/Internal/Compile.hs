@@ -5,8 +5,9 @@
 -- Description : Transforms a desugared CHR program into a VM program.
 --
 -- The Compiler is the transformation pass between the desugared
--- 'YCHR.Internal.Desugared.Program' and the abstract 'YCHR.Internal.VM.Program' consumed by
--- the backends and the interpreter. It performs, in order:
+-- 'YCHR.Internal.Desugared.Program' and the abstract
+-- 'YCHR.Internal.VM.Program' consumed by the backends and the
+-- interpreter. It performs, in order:
 --
 -- 1. /Occurrence collection/: 'collectOccurrences' walks every rule head
 --    and produces, for each constraint type, a top-down list of
@@ -200,10 +201,9 @@ buildCallables functions =
     -- A lifted lambda whose 'lambdaArity' is unset contributes no
     -- entry: the runtime keys a lambda on the arity its source lambda
     -- declared, and only 'lambdaArity' records that. The desugarer sets
-    -- it on every lambda it lifts, so this arm is unreachable; the old
-    -- dispatchers could fall back to the closure's own field count
-    -- instead, because they tested the closure term at run time, which
-    -- a table built before any closure exists cannot do.
+    -- it on every lambda it lifts, so this arm is unreachable. A table
+    -- built before any closure exists cannot recover the arity by
+    -- testing the closure term at run time.
     callableKey funcName func
       | isLambdaFunc func =
           ( \declaredArity ->
@@ -375,7 +375,8 @@ genOccurrence symTab name cType arity occ = do
       { name = procName',
         params = params,
         body = body,
-        procKind = PKOccurrence cType occ.number.unOccurrenceNumber occ.ruleId occ.ruleDisplay
+        procKind =
+          PKOccurrence cType occ.number.unOccurrenceNumber occ.ruleId occ.ruleDisplay
       }
 
 -- | Map every user-written head variable in an 'Occurrence' to the
@@ -571,7 +572,8 @@ genFireStmts symTab varMap occ = do
   bodyStmts <- compileBodyGoals symTab varMap bodySi ruleBody
   let earlyDropStmts
         | activeIsRemoved = [Return (Lit (BoolLit True))]
-        | otherwise = [If (BNot (BAlive (IdVar activeName))) [Return (Lit (BoolLit True))] []]
+        | otherwise =
+            [If (BNot (BAlive (IdVar activeName))) [Return (Lit (BoolLit True))] []]
       -- Backjumping (paper §5.3): after body execution, check each
       -- partner's liveness outermost-first.  If a partner died (e.g.
       -- killed by a rule fired during body execution), Continue to its
@@ -1290,7 +1292,10 @@ compileBodyGoal _ varMap si (D.BodyIs v expr) = do
 compileBodyGoal _ varMap si (D.BodyCall qn args) = do
   args' <- traverse (compileExpr varMap si) args
   let funcName = Types.qualifiedToName qn
-  pure ([ExprStmt (CallExpr (funcProcName funcName (length args')) (map AVal args'))], varMap)
+  pure
+    ( [ExprStmt (CallExpr (funcProcName funcName (length args')) (map AVal args'))],
+      varMap
+    )
 compileBodyGoal _ varMap si (D.BodyApply f args) = do
   f' <- compileExpr varMap si f
   args' <- traverse (compileExpr varMap si) args
@@ -1569,7 +1574,7 @@ The active constraint is called @active@ everywhere: at runtime
 'YCHR.Internal.Runtime.Types.Suspension'). The compiler picks the
 paper's terminology — "active constraint" — and uses 'activeName' as
 the single local-variable name in @tell_c@, @activate_c@, and inside
-every @occurrence_c_j@ procedure. The only places that still talk about
+every @occurrence_c_j@ procedure. The only places that talk about
 a "suspension" are @reactivate_dispatch@ ('suspParamName') and
 'DrainReactivationQueue' ('pendingName'), where the value really is
 "a suspension we received from somewhere else".
@@ -1585,12 +1590,12 @@ one), so the only @_@ the compiler sees is in a term or evaluating
 position — an @=@ operand, the contents of @quote(...)@, a tell
 argument, a guard, or an @is@ right-hand side.
 
-Both lowerings therefore allocate a variable rather than the
-non-binding wildcard value the VM once carried: 'compileTerm' and
-'compileExpr' emit 'NewVar' for each occurrence. The distinction is not
-cosmetic. A constraint told with a real variable is registered as an
-observer of it, so binding that variable later reactivates the
-constraint; a non-binding wildcard value has no cell to observe and left
+Both lowerings therefore allocate a variable rather than a
+non-binding wildcard value: 'compileTerm' and 'compileExpr' emit
+'NewVar' for each occurrence. The distinction is not cosmetic. A
+constraint told with a real variable is registered as an observer of
+it, so binding that variable later reactivates the constraint, whereas
+a non-binding wildcard value has no cell to observe and would leave
 the constraint asleep for ever.
 -}
 
@@ -1605,8 +1610,7 @@ evaluated when @foo@ is a declared function. The user opts out of this
 with @quote\/1@: @quote(foo(X))@ delegates to 'compileTerm' on the
 surface 'Term' shape and keeps the subterm opaque regardless of whether
 @foo@ happens to be a declared function. The call-vs-constructor
-distinction was once made by a 'funSet' membership check at every
-compound; it is now structural at the 'D.Expr' level
+distinction is structural at the 'D.Expr' level
 ('YCHR.Internal.Resolve' commits to it once, in
 'YCHR.Internal.Resolve.termToExpr').
 -}
