@@ -5,7 +5,6 @@ module YCHR.Runtime.InterpreterTest (tests) where
 
 import Control.Exception (try)
 import Control.Monad.IO.Class (liftIO)
-import Data.Foldable (toList)
 import Data.IntMap.Strict qualified as IntMap
 import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
@@ -26,11 +25,11 @@ import YCHR.Internal.Runtime.Interpreter
     interpret,
   )
 import YCHR.Internal.Runtime.Monad (Chr, initSessionEnv, runChr)
-import YCHR.Internal.Runtime.Store (getStoreSnapshot, isSuspAlive)
 import YCHR.Internal.Runtime.Types (CallVal (..), SuspensionId (..), Value (..))
 import YCHR.Internal.Runtime.Var (equal, newVar, unify)
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
+import YCHR.TestHelpers (countAliveByType)
 
 -- | Interpreter tests: evaluation, primitives, type predicates, closures, and errors.
 tests :: TestTree
@@ -878,12 +877,6 @@ reactivateDispatch =
 -- Test helpers
 -- ---------------------------------------------------------------------------
 
-countAlive :: ConstraintType -> Chr Int
-countAlive cType = do
-  snapshot <- getStoreSnapshot cType
-  alives <- traverse isSuspAlive (toList snapshot)
-  pure (length (filter id alives))
-
 callTellLeq :: Value -> Value -> Chr Value
 callTellLeq x y =
   callProc "tell_leq2" [CVal x, CVal y]
@@ -899,12 +892,12 @@ leqTests =
     [ testCase "reflexivity: leq(3, 3) fires, store empty" $ do
         n <- runChrLeq $ do
           _ <- callTellLeq (VInt 3) (VInt 3)
-          countAlive leqType
+          countAliveByType leqType
         n @?= 0,
       testCase "no rule fires: leq(1, 2) stays" $ do
         n <- runChrLeq $ do
           _ <- callTellLeq (VInt 1) (VInt 2)
-          countAlive leqType
+          countAliveByType leqType
         n @?= 1,
       testCase "antisymmetry: leq(X, Y), leq(Y, X) unifies X=Y, store empty" $ do
         (n, areEqual) <- runChrLeq $ do
@@ -912,7 +905,7 @@ leqTests =
           y <- newVar
           _ <- callTellLeq x y
           _ <- callTellLeq y x
-          n <- countAlive leqType
+          n <- countAliveByType leqType
           eq <- equal x y
           pure (n, eq)
         n @?= 0
@@ -921,13 +914,13 @@ leqTests =
         n <- runChrLeq $ do
           _ <- callTellLeq (VInt 1) (VInt 2)
           _ <- callTellLeq (VInt 2) (VInt 3)
-          countAlive leqType
+          countAliveByType leqType
         n @?= 3,
       testCase "idempotence: leq(1,2), leq(1,2) removes duplicate" $ do
         n <- runChrLeq $ do
           _ <- callTellLeq (VInt 1) (VInt 2)
           _ <- callTellLeq (VInt 1) (VInt 2)
-          countAlive leqType
+          countAliveByType leqType
         n @?= 1,
       testCase "full cycle: leq(a,b), leq(b,c), leq(c,a) — all removed, all unified" $ do
         (n, eqAB, eqBC) <- runChrLeq $ do
@@ -937,7 +930,7 @@ leqTests =
           _ <- callTellLeq a b
           _ <- callTellLeq b c
           _ <- callTellLeq c a
-          n <- countAlive leqType
+          n <- countAliveByType leqType
           eqAB <- equal a b
           eqBC <- equal b c
           pure (n, eqAB, eqBC)

@@ -3,7 +3,6 @@
 module YCHR.RunTest (tests) where
 
 import Control.Exception (SomeException, fromException, try)
-import Data.Foldable (toList)
 import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -13,7 +12,6 @@ import YCHR.Embedded (stdlib, typeCheckerProgram)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
 import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Runtime.Interpreter (HostCallFn (..), HostCallRegistry)
-import YCHR.Internal.Runtime.Store (getStoreSnapshot, isSuspAlive)
 import YCHR.Internal.Types
   ( Constraint (..),
     ConstraintType,
@@ -26,8 +24,7 @@ import YCHR.Internal.Types
   )
 import YCHR.Internal.VM qualified as VM
 import YCHR.Run
-  ( Chr,
-    Error (..),
+  ( Error (..),
     GoalRejection (..),
     PreparedQuery (..),
     Value (..),
@@ -45,6 +42,7 @@ import YCHR.Run
     toSessionInput,
     withCHR,
   )
+import YCHR.TestHelpers (countAliveByType, expectErrorContaining)
 
 -- | End-to-end 'YCHR.Run' tests: compiling and running surface programs and queries.
 tests :: TestTree
@@ -70,12 +68,6 @@ compileOrFail :: [(FilePath, Text)] -> IO CompiledProgram
 compileOrFail inputs = case compileModules stdlib False inputs of
   Left err -> assertFailure $ show err
   Right (cp, _) -> pure cp
-
-countAlive :: VM.ConstraintType -> Chr Int
-countAlive cType = do
-  snapshot <- getStoreSnapshot cType
-  alives <- traverse isSuspAlive (toList snapshot)
-  pure (length (filter id alives))
 
 -- ---------------------------------------------------------------------------
 -- LEQ surface source
@@ -109,14 +101,14 @@ leqTests =
         let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
         n <- withCHR (toSessionInput prog) leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 3, VInt 3]
-          countAlive leqType
+          countAliveByType leqType
         n @?= 0,
       testCase "no rule fires: leq(1, 2) stays" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
         let leqType = lookupType prog (Identifier (Qualified "order" "leq") 2)
         n <- withCHR (toSessionInput prog) leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
-          countAlive leqType
+          countAliveByType leqType
         n @?= 1,
       testCase "antisymmetry: leq(X, Y), leq(Y, X) unifies X=Y, store empty" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
@@ -126,7 +118,7 @@ leqTests =
           y <- newVar
           tellConstraint (Unqualified "leq") [x, y]
           tellConstraint (Unqualified "leq") [y, x]
-          n <- countAlive leqType
+          n <- countAliveByType leqType
           eq <- equal x y
           pure (n, eq)
         n @?= 0
@@ -137,7 +129,7 @@ leqTests =
         n <- withCHR (toSessionInput prog) leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           tellConstraint (Unqualified "leq") [VInt 2, VInt 3]
-          countAlive leqType
+          countAliveByType leqType
         n @?= 3,
       testCase "idempotence: leq(1,2), leq(1,2) removes duplicate" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
@@ -145,7 +137,7 @@ leqTests =
         n <- withCHR (toSessionInput prog) leqHostCalls $ do
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
           tellConstraint (Unqualified "leq") [VInt 1, VInt 2]
-          countAlive leqType
+          countAliveByType leqType
         n @?= 1,
       testCase "full cycle: leq(a,b), leq(b,c), leq(c,a) — all removed, all unified" $ do
         prog <- compileOrFail [("order.chr", leqSource)]
@@ -157,7 +149,7 @@ leqTests =
           tellConstraint (Unqualified "leq") [a, b]
           tellConstraint (Unqualified "leq") [b, c]
           tellConstraint (Unqualified "leq") [c, a]
-          n <- countAlive leqType
+          n <- countAliveByType leqType
           eqAB <- equal a b
           eqBC <- equal b c
           pure (n, eqAB, eqBC)
@@ -570,17 +562,6 @@ qbodyHostCalls =
           let (a, b) = extractIntArgs "*" args in pure (VInt (a * b))
       )
     ]
-
-expectErrorContaining :: String -> IO a -> IO ()
-expectErrorContaining needle act = do
-  outcome <- try @SomeException act
-  case outcome of
-    Left exc ->
-      assertBool
-        ("expected exception message to contain " ++ show needle ++ ", got: " ++ show exc)
-        (needle `isInfixOf` show exc)
-    Right _ ->
-      assertFailure ("expected exception containing " ++ show needle ++ ", got success")
 
 queryBodyTests :: TestTree
 queryBodyTests =

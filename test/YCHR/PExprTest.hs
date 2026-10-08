@@ -13,6 +13,7 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import Text.Parsec (ParseError)
 import YCHR.Internal.Loc (Ann (..), SourceLoc (..), noAnn)
 import YCHR.Internal.PExpr
+import YCHR.TestHelpers (strip)
 
 -- | 'PExpr' unit tests: atoms, variables, lists, operators and precedence, and rendering.
 tests :: TestTree
@@ -71,12 +72,6 @@ testOps =
       (700, [(Xfx, "is")]),
       (500, [(Fx, "~")])
     ]
-
--- | Strip source locations from a term for structural comparison.
-strip :: Ann PExpr -> PExpr
-strip (Ann t _) = case t of
-  Compound f args -> Compound f (map (noAnn . strip) args)
-  other -> other
 
 -- | Strip all terms in a parse result.
 stripAll :: Either e [Ann PExpr] -> Either e [PExpr]

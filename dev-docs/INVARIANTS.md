@@ -979,14 +979,6 @@ unexpected solver value. Readable, but it also swallows encoding drift;
 asserting, or routing through `malformed`, would surface it earlier.
 A deliberate trade today: "decide and document", not a clear bug.
 
-### Duplicated test helpers
-
-A shared `test/YCHR/TestHelpers.hs` would remove `strip`
-(`PExprTest.hs:75`, `PExprRoundtripTest.hs:212`),
-`expectErrorContaining` (`RunTest.hs:573`, `Runtime/StoreTest.hs:288`)
-and `countAlive` (`RunTest.hs:73`, `Runtime/StoreTest.hs:77`,
-`Runtime/InterpreterTest.hs:880`; two signatures across the three).
-
 ### `ParserTest` parse-or-fail scaffolding
 
 `test/YCHR/ParserTest.hs:928-980`: `typeDefsOf`, `bodyOf`, `headOf` and

@@ -9,8 +9,9 @@ import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.Hedgehog (testProperty)
-import YCHR.Internal.Loc (Ann (..), noAnn)
+import YCHR.Internal.Loc (noAnn)
 import YCHR.Internal.PExpr
+import YCHR.TestHelpers (strip)
 
 -- ---------------------------------------------------------------------------
 -- Operator table
@@ -203,16 +204,6 @@ genPExprFull =
         pure (foldr (\h t -> Compound "." [noAnn h, noAnn t]) (Atom "[]") elems),
       genLambda genPExprFull
     ]
-
--- ---------------------------------------------------------------------------
--- Stripping
--- ---------------------------------------------------------------------------
-
--- | Strip source locations for structural comparison.
-strip :: Ann PExpr -> PExpr
-strip (Ann t _) = case t of
-  Compound f args -> Compound f (map (noAnn . strip) args)
-  other -> other
 
 -- ---------------------------------------------------------------------------
 -- Properties

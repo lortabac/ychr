@@ -302,6 +302,7 @@ test-suite ychr-tests
                     , YCHR.RenameTest
                     , YCHR.ResourcesTest
                     , YCHR.RoundtripTest
+                    , YCHR.TestHelpers
                     , YCHR.TextShimTest
                     , YCHR.TypeCheckTest
                     , YCHR.TypeSoundnessTest
