@@ -136,9 +136,7 @@ expectRuntimeErrorKindWith registry prog entry args = do
 singleProc :: Name -> [Name] -> [Stmt] -> Program
 singleProc procName params body =
   Program
-    { numTypes = 0,
-      typeNames = [],
-      numRules = 0,
+    { typeNames = [],
       ruleNames = [],
       procedures = [mkProc procName params body],
       evaluables = [],
@@ -485,9 +483,7 @@ softGuardTests =
         -- every procedure call restores the saved stack on the way out.
         let prog =
               Program
-                { numTypes = 0,
-                  typeNames = [],
-                  numRules = 0,
+                { typeNames = [],
                   ruleNames = [],
                   procedures =
                     [ mkProc
@@ -556,9 +552,7 @@ leqType = ConstraintType 0
 leqProgram :: Program
 leqProgram =
   Program
-    { numTypes = 1,
-      typeNames = [Types.Unqualified "leq"],
-      numRules = 1,
+    { typeNames = [Types.Unqualified "leq"],
       ruleNames = ["transitivity"],
       evaluables = [],
       callables = [],
@@ -961,9 +955,7 @@ arithCalls =
 makeCalcProc :: ValExpr -> Program
 makeCalcProc body =
   Program
-    { numTypes = 0,
-      typeNames = [],
-      numRules = 0,
+    { typeNames = [],
       ruleNames = [],
       evaluables = [],
       callables = [],
@@ -1215,9 +1207,7 @@ lamClosure = VTerm "__closure" [VAtom "m__lambda_0", VAtom "src", VInt 10]
 closureProg :: [(CallableKey, Name)] -> Program
 closureProg callables =
   Program
-    { numTypes = 0,
-      typeNames = [],
-      numRules = 0,
+    { typeNames = [],
       ruleNames = [],
       procedures =
         [ mkProc "p" ["f"] [Return (ApplyClosure (Var "f") [Lit (IntLit 1)])],

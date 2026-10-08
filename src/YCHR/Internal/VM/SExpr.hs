@@ -141,13 +141,19 @@ chrNameToSExpr (Types.Qualified m t) = SList [SAtom "qualified", SString m, SStr
 
 -- | Encode a 'Program' as an s-expression; the inverse of
 -- 'programFromSExpr'.
+--
+-- The two integers in the @(program ...)@ header are redundant with the
+-- name lists that follow them: they are written as the lists' lengths,
+-- and 'programFromSExpr' rejects a unit where the two disagree. The
+-- wire format still carries them, so a reader is not required to derive
+-- the counts to consume the header.
 programToSExpr :: Program -> SExpr
 programToSExpr prog =
   SList
     ( SAtom "program"
-        : SInt (fromIntegral prog.numTypes)
+        : SInt (fromIntegral (length prog.typeNames))
         : SList (SAtom "type-names" : map chrNameToSExpr prog.typeNames)
-        : SInt (fromIntegral prog.numRules)
+        : SInt (fromIntegral (length prog.ruleNames))
         : SList (SAtom "rule-names" : map SString prog.ruleNames)
         : SList (SAtom "evaluables" : map evaluableEntryToSExpr prog.evaluables)
         : SList (SAtom "callables" : map callableEntryToSExpr prog.callables)
@@ -351,6 +357,30 @@ nonNegative what n
       err (what <> " does not fit in a machine word, got " <> T.pack (show n))
   | otherwise = pure (fromInteger n)
 
+-- | Check a redundant @(program ...)@ count against the list it counts.
+--
+-- The header's integers are not authoritative: each must equal the
+-- length of the @(type-names ...)@ \/ @(rule-names ...)@ list that
+-- follows it. The format keeps them (see 'programToSExpr'), so the
+-- reader cannot simply drop them; accepting a unit where they disagree
+-- would let the exact drift this header shape invites go unnoticed. The
+-- error names both the declared count and the list it contradicts.
+checkDeclaredCount :: Text -> Integer -> Int -> Err ()
+checkDeclaredCount what declared actual
+  | declared == toInteger actual = pure ()
+  | otherwise =
+      err
+        ( "declared "
+            <> what
+            <> " count "
+            <> T.pack (show declared)
+            <> " does not match the "
+            <> T.pack (show actual)
+            <> " entries in ("
+            <> what
+            <> "-names)"
+        )
+
 vmProgramFromSExpr :: SExpr -> Err VMProgram
 vmProgramFromSExpr (SList (SAtom "vm-program" : rest)) = do
   (version, body) <- headerVersion rest
@@ -487,6 +517,10 @@ programFromSExpr
     ) = do
     tns <- traverse chrNameFromSExpr tnSexprs
     rns <- traverse textFromSExpr rnSexprs
+    -- The header's declared counts are held against the lists they
+    -- claim to count; a disagreeing unit is malformed.
+    checkDeclaredCount "type" n (length tns)
+    checkDeclaredCount "rule" nr (length rns)
     evs <- traverse evaluableEntryFromSExpr evSexprs
     -- Both @callables@ and @inert-types@ are optional on read, so a
     -- program that simply lacks either header entry still loads: an
@@ -510,9 +544,7 @@ programFromSExpr
     ps <- traverse procedureFromSExpr procs
     pure
       Program
-        { numTypes = fromInteger n,
-          typeNames = tns,
-          numRules = fromInteger nr,
+        { typeNames = tns,
           ruleNames = rns,
           evaluables = evs,
           callables = cls,

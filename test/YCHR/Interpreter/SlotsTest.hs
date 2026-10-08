@@ -64,9 +64,7 @@ lowerBody params body = (lowerProcedure (mkProc "p" params body)).slotProcBody
 programWith :: [Procedure] -> Program
 programWith procs =
   Program
-    { numTypes = 1,
-      typeNames = [],
-      numRules = 0,
+    { typeNames = [],
       ruleNames = [],
       procedures = procs,
       evaluables = [],

@@ -91,7 +91,6 @@ import YCHR.Internal.Types
     SymbolTable,
     Term (..),
     flattenName,
-    symbolTableSize,
     symbolTableToList,
   )
 import YCHR.Internal.Types qualified as Types
@@ -139,9 +138,7 @@ compile prog symTab =
         then
           Right
             Program
-              { numTypes = symbolTableSize symTab,
-                typeNames = buildTypeNames symTab,
-                numRules = length ruleDisplayNames,
+              { typeNames = buildTypeNames symTab,
                 ruleNames = ruleDisplayNames,
                 procedures = procs ++ funProcs ++ [dispatch],
                 evaluables = buildEvaluables prog.functions,

@@ -101,20 +101,24 @@ data StackFrame = StackFrame
   deriving (Show, Eq)
 
 -- | A VM program is a collection of named procedures.
+--
+-- The program header carries no standalone type or rule counts: the
+-- number of distinct constraint types is @length typeNames@ and the
+-- number of rules is @length ruleNames@, derived from those lists at
+-- every use site. Storing a count beside its list would let the two
+-- drift; deriving it makes that state unrepresentable.
 data Program = Program
-  { -- | Number of distinct constraint types (for pre-allocating the store).
-    numTypes :: !Int,
-    -- | Source names of constraint types, indexed by the 'ConstraintType'
+  { -- | Source names of constraint types, indexed by the 'ConstraintType'
     -- integer. @typeNames !! i@ is the structured source name of the
     -- type with index @i@. Used by runtime introspection (e.g.
-    -- @print_store@) and preserved across VM serialization.
+    -- @print_store@) and preserved across VM serialization. Its length
+    -- is the program's constraint-type count.
     typeNames :: ![Types.Name],
-    -- | Number of rules in the program.
-    numRules :: !Int,
     -- | Display names of rules, indexed by the 'RuleId' integer.
     -- @ruleNames !! i@ is the source name (or synthetic @__rule_N@
     -- fallback for anonymous rules) of the rule with id @i@. Used
     -- by runtime introspection and preserved across VM serialization.
+    -- Its length is the program's rule count.
     ruleNames :: ![Text],
     -- | The procedures that make up the program.
     procedures :: [Procedure],

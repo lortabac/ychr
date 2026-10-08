@@ -20,6 +20,7 @@ tests =
     [ testGroup "roundtrip" roundtripTests,
       testGroup "format" formatTests,
       testGroup "version" versionTests,
+      testGroup "declared counts" countTests,
       testGroup "non-negative slots" nonNegativeSlotTests
     ]
 
@@ -29,13 +30,11 @@ tests =
 
 roundtripTests :: [TestTree]
 roundtripTests =
-  [ testCase "empty program" $ roundtrip (Program 0 [] 0 [] [] [] [] []),
+  [ testCase "empty program" $ roundtrip (Program [] [] [] [] [] []),
     testCase "single empty procedure" $
       roundtrip
         ( Program
-            1
             [Types.Unqualified "foo"]
-            0
             []
             [mkProcedure "foo" [] []]
             []
@@ -45,9 +44,7 @@ roundtripTests =
     testCase "procedure with params" $
       roundtrip
         ( Program
-            1
             [Types.Unqualified "leq"]
-            0
             []
             [mkProcedure "tell_leq2" ["X", "Y"] []]
             []
@@ -191,9 +188,7 @@ roundtripTests =
     testCase "multi-procedure program" $
       roundtrip
         ( Program
-            2
             [Types.Unqualified "a", Types.Unqualified "b"]
-            0
             []
             [ mkProcedure
                 "tell_a1"
@@ -311,9 +306,7 @@ formatTests =
             VMProgram
               { program =
                   Program
-                    2
                     [Types.Qualified "M" "leq", Types.Unqualified "gcd"]
-                    0
                     []
                     []
                     []
@@ -422,6 +415,34 @@ versionlessProgramText =
     <> "(expr-stmt (var \"x\")))) (exports) (symbol-table))"
 
 -- ---------------------------------------------------------------------------
+-- Declared counts
+-- ---------------------------------------------------------------------------
+
+-- | The two integers in the @(program N ...)@ header are redundant with
+-- the name lists that follow them: the reader must hold each against its
+-- list's length rather than trust either side alone. A unit whose
+-- declared count disagrees with its list is malformed and is rejected
+-- with the mismatch named.
+countTests :: [TestTree]
+countTests =
+  [ testCase "a declared type count that disagrees with (type-names) is rejected" $
+      assertRejected
+        (T.replace "(program 0 (type-names)" "(program 1 (type-names)" versionedProgramText)
+        "declared type count 1 does not match the 0 entries in (type-names)",
+    testCase "a declared rule count that disagrees with (rule-names) is rejected" $
+      assertRejected
+        (T.replace "0 (rule-names)" "1 (rule-names)" versionedProgramText)
+        "declared rule count 1 does not match the 0 entries in (rule-names)",
+    -- The matching direction: a consistent header still loads. The
+    -- roundtrip tests cover this for non-empty lists; this pins the
+    -- empty-list header the format tests assert on.
+    testCase "matching zero counts still load" $
+      case deserialize versionedProgramText of
+        Left e -> assertBool ("deserialization failed: " <> T.unpack e) False
+        Right vmp' -> vmp' @?= mkVMProg (mkProg [ExprStmt (Var "x")])
+  ]
+
+-- ---------------------------------------------------------------------------
 -- Non-negative slots
 -- ---------------------------------------------------------------------------
 
@@ -474,12 +495,12 @@ histIds ids = mkHistoryIds (zip [0 :: Int ..] ids)
 
 -- | Build a minimal program with one procedure containing the given body.
 mkProg :: [Stmt] -> Program
-mkProg body = Program 0 [] 0 [] [mkProcedure "p" [] body] [] [] []
+mkProg body = Program [] [] [mkProcedure "p" [] body] [] [] []
 
 -- | 'mkProg' with a non-empty callables table.
 mkProgWithCallables :: [(CallableKey, Name)] -> Program
 mkProgWithCallables callables =
-  Program 0 [] 0 [] [mkProcedure "p" [] []] [] callables []
+  Program [] [] [mkProcedure "p" [] []] [] callables []
 
 -- | A function-reference callables key, the shape
 -- 'YCHR.Internal.Compile.buildCallables' mints for @fun name\/arity@.

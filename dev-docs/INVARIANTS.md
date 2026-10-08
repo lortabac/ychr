@@ -286,6 +286,18 @@ removable when closed.
   the call site; §1's `getConstraintArg` entry is closed by this, since
   the compiler can no longer produce a negative index.
 
+- **`VM.Program`'s type and rule counts are derived, not stored.** The
+  redundant `numTypes` / `numRules` fields are gone; every use is
+  `length typeNames` / `length ruleNames` (`VM/Types.hs`,
+  `Compile.hs`, `SExpr.hs`, `Backend/Scheme.hs`). The s-expression
+  header still carries the two integers, so the decoder now holds them
+  against the lists they count through `checkDeclaredCount` and rejects
+  a disagreeing unit (`test/YCHR/VM/SExprTest.hs`, "declared counts"
+  group); `docs/reference/vm.md` documents them as redundant. This
+  closes the `VM.Program` paragraph of §2's "Compiler IR carries
+  unchecked arity fields"; the `Partner` / `IndexCondition` items
+  remain.
+
 
 ## 1. `error` / `runtimeErrorS` for "can't happen" cases
 
@@ -451,15 +463,6 @@ convention, not a type", and do not expect a cheap type fix.
 A common fix for these two: make arity a `newtype` and have a smart
 constructor for `Partner`/`IndexCondition` that reconciles or rejects
 mismatches.
-
-Related, same "derive instead of store" shape: `VM.Program`
-(`src/YCHR/Internal/VM/Types.hs:103,110`) stores `numTypes` next to
-`typeNames` and `numRules` next to `ruleNames`, with the invariants
-`numTypes == length typeNames` and `numRules == length ruleNames`
-never checked. `Compile.hs:140-143` derives both pairs from the same
-symbol table / rule list today. The counts are read by SExpr
-serialization and the Scheme backend's `%make-session`, so removal is
-a wider edit.
 
 ### Import-placement checking fails open on a missing `trailingLoc` key — `src/YCHR/Internal/Rename.hs:274`, `:532`
 

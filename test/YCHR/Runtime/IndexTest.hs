@@ -90,9 +90,7 @@ runIndexEnv action = do
 programWith :: [Stmt] -> Program
 programWith stmts =
   Program
-    { numTypes = 1,
-      typeNames = [],
-      numRules = 0,
+    { typeNames = [],
       ruleNames = [],
       procedures =
         [ Procedure
