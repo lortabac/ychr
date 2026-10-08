@@ -5,8 +5,12 @@ module YCHR.VM.SExprTest (tests) where
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Hedgehog (Gen, Property, annotate, forAll, property, (===))
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
+import Test.Tasty.Hedgehog (testProperty)
 import YCHR.Internal.Loc (SourceLoc (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM
@@ -21,7 +25,10 @@ tests =
       testGroup "format" formatTests,
       testGroup "version" versionTests,
       testGroup "declared counts" countTests,
-      testGroup "non-negative slots" nonNegativeSlotTests
+      testGroup "non-negative slots" nonNegativeSlotTests,
+      testGroup
+        "generated roundtrip"
+        [testProperty "Stmt" prop_stmtRoundtrip]
     ]
 
 -- ---------------------------------------------------------------------------
@@ -483,6 +490,194 @@ programWithStmt stmt =
     <> "(procedure \"p\" () (reactivate-dispatch) "
     <> stmt
     <> ")) (exports) (symbol-table))"
+
+-- ---------------------------------------------------------------------------
+-- Generated roundtrip
+-- ---------------------------------------------------------------------------
+
+-- | Serialize then deserialize a generated 'Stmt'. The hand-written
+-- cases above pin one constructor at a time; this property draws a whole
+-- statement from a generator that reaches every constructor of 'Stmt'
+-- and of every value it nests ('ValExpr', 'IdExpr', 'BoolExpr',
+-- 'CallArg', 'Literal', 'StackFrame', 'HistoryIds' and the supporting
+-- newtypes), so an encoder or decoder case that is missing or
+-- asymmetric fails here rather than during review.
+--
+-- The generated text fields span the codec's escaping — lowercase
+-- letters and digits plus @_@, @.@, @-@, space, quote, backslash,
+-- newline and tab — and the double literals stay finite because the
+-- printer appends @.0@ to a 'show' with no decimal point and re-parses
+-- with 'readMaybe', which NaN and infinities do not survive.
+prop_stmtRoundtrip :: Property
+prop_stmtRoundtrip = property $ do
+  stmt <- forAll genStmt
+  let vmp = mkVMProg (mkProg [stmt])
+  annotate (T.unpack (serialize vmp))
+  deserialize (serialize vmp) === Right vmp
+
+-- | Text for a name, label, atom or source fragment, over the alphabet
+-- the string codec has to escape or pass through. Short lengths keep
+-- the string content from crowding out the structural cases.
+genCodecText :: Gen Text
+genCodecText =
+  T.pack
+    <$> Gen.list
+      (Range.linear 0 6)
+      ( Gen.choice
+          [ Gen.lower,
+            Gen.digit,
+            Gen.element ['_', '.', '-', ' ', '"', '\\', '\n', '\t']
+          ]
+      )
+
+genName :: Gen Name
+genName = Name <$> genCodecText
+
+genLabel :: Gen Label
+genLabel = Label <$> genCodecText
+
+genRuleId :: Gen RuleId
+genRuleId = RuleId <$> Gen.int (Range.linear (-3) 5)
+
+genConstraintType :: Gen ConstraintType
+genConstraintType = ConstraintType <$> Gen.int (Range.linear 0 4)
+
+genArgIndex :: Gen ArgIndex
+genArgIndex = ArgIndex <$> genWord
+
+-- | A non-negative slot, as stored by 'GetArg', 'FieldArg' and
+-- 'BMatchTerm'.
+genWord :: Gen Word
+genWord = Gen.word (Range.linear 0 5)
+
+-- | A propagation-history tuple, built through the compiler's own
+-- 'mkHistoryIds' path (here the module's 'histIds' helper) so the
+-- generated value carries canonical head-position order.
+genHistoryIds :: Gen HistoryIds
+genHistoryIds = histIds <$> Gen.list (Range.linear 0 3) genIdExpr
+
+genLiteral :: Gen Literal
+genLiteral =
+  Gen.choice
+    [ IntLit <$> Gen.integral (Range.linear (-1000) 1000),
+      FloatLit <$> Gen.double (Range.linearFrac (-1e6) 1e6),
+      AtomLit <$> genCodecText,
+      TextLit <$> genCodecText,
+      BoolLit <$> Gen.bool
+    ]
+
+genStackFrame :: Gen StackFrame
+genStackFrame = do
+  label <- genCodecText
+  file <- genCodecText
+  line <- Gen.int (Range.linear 1 10000)
+  col <- Gen.int (Range.linear 1 200)
+  code <- genCodecText
+  pure (StackFrame label (SourceLoc (T.unpack file) line col) code)
+
+-- | Every 'ValExpr' constructor. The recursive cases go through
+-- 'Gen.recursive', so nesting is depth-bounded, and 'Gen.small' keeps
+-- each nested subterm cheaper than the term that carries it.
+genValExpr :: Gen ValExpr
+genValExpr =
+  Gen.recursive
+    Gen.choice
+    [ Var <$> genName,
+      Lit <$> genLiteral,
+      pure NewVar
+    ]
+    [ CallExpr <$> genName <*> Gen.list (Range.linear 0 3) genCallArg,
+      HostCall <$> genName <*> Gen.list (Range.linear 0 3) (Gen.small genValExpr),
+      EvalDeep <$> Gen.small genValExpr,
+      EvalIs <$> Gen.small genValExpr,
+      ApplyClosure
+        <$> Gen.small genValExpr
+        <*> Gen.list (Range.linear 0 3) (Gen.small genValExpr),
+      MakeTerm
+        <$> genName
+        <*> Gen.list (Range.linear 0 3) (Gen.small genValExpr),
+      GetArg <$> Gen.small genValExpr <*> genWord,
+      FieldArg <$> Gen.small genIdExpr <*> genArgIndex,
+      FieldType <$> Gen.small genIdExpr
+    ]
+
+-- | Every 'IdExpr' constructor.
+genIdExpr :: Gen IdExpr
+genIdExpr =
+  Gen.recursive
+    Gen.choice
+    [IdVar <$> genName]
+    [ CreateConstraint
+        <$> genConstraintType
+        <*> Gen.list (Range.linear 0 3) (Gen.small genValExpr)
+    ]
+
+-- | Every 'BoolExpr' constructor.
+genBoolExpr :: Gen BoolExpr
+genBoolExpr =
+  Gen.recursive
+    Gen.choice
+    [BLit <$> Gen.bool]
+    [ BNot <$> Gen.small genBoolExpr,
+      BAnd <$> Gen.small genBoolExpr <*> Gen.small genBoolExpr,
+      BOr <$> Gen.small genBoolExpr <*> Gen.small genBoolExpr,
+      BMatchTerm <$> Gen.small genValExpr <*> genName <*> genWord,
+      BEqual <$> Gen.small genValExpr <*> Gen.small genValExpr,
+      BIdEqual <$> Gen.small genIdExpr <*> Gen.small genIdExpr,
+      BAlive <$> Gen.small genIdExpr,
+      BIsConstraintType <$> Gen.small genIdExpr <*> genConstraintType,
+      BNotInHistory <$> genRuleId <*> genHistoryIds,
+      BUnify <$> Gen.small genValExpr <*> Gen.small genValExpr,
+      BFromVal <$> Gen.small genValExpr,
+      BEvalDeep <$> Gen.small genBoolExpr,
+      BSoftGuard <$> Gen.small genBoolExpr
+    ]
+
+genCallArg :: Gen CallArg
+genCallArg =
+  Gen.choice
+    [ AVal <$> Gen.small genValExpr,
+      AId <$> Gen.small genIdExpr
+    ]
+
+-- | Every 'Stmt' constructor. 'If', 'Foreach' and
+-- 'DrainReactivationQueue' are the recursive cases and nest only
+-- through 'Gen.recursive'; their bodies are short so a statement stays
+-- a readable counterexample when the property fails.
+genStmt :: Gen Stmt
+genStmt =
+  Gen.recursive
+    Gen.choice
+    [ LetVal <$> genName <*> Gen.small genValExpr,
+      LetId <$> genName <*> Gen.small genIdExpr,
+      AssignVal <$> genName <*> Gen.small genValExpr,
+      AssignId <$> genName <*> Gen.small genIdExpr,
+      Continue <$> genLabel,
+      Break <$> genLabel,
+      Return <$> Gen.small genValExpr,
+      ExprStmt <$> Gen.small genValExpr,
+      BoolExprStmt <$> Gen.small genBoolExpr,
+      Store <$> Gen.small genIdExpr,
+      Kill <$> Gen.small genIdExpr,
+      AddHistory <$> genRuleId <*> genHistoryIds,
+      PushFrame <$> genStackFrame
+    ]
+    [ If
+        <$> Gen.small genBoolExpr
+        <*> Gen.list (Range.linear 0 3) (Gen.small genStmt)
+        <*> Gen.list (Range.linear 0 3) (Gen.small genStmt),
+      Foreach
+        <$> genLabel
+        <*> genConstraintType
+        <*> genName
+        <*> Gen.list
+          (Range.linear 0 3)
+          ((,) <$> genArgIndex <*> Gen.small genValExpr)
+        <*> Gen.list (Range.linear 0 3) (Gen.small genStmt),
+      DrainReactivationQueue
+        <$> genName
+        <*> Gen.list (Range.linear 0 3) (Gen.small genStmt)
+    ]
 
 -- ---------------------------------------------------------------------------
 -- Helpers

@@ -964,13 +964,6 @@ the renamer says so at `Rename.hs:1236` — but only by hand. Unifying on
 the resolver's representation, or one shared helper, would make the
 agreement structural.
 
-### Hand-written `VM.SExpr` codec
-
-`VM/SExpr.hs` keeps an encoder and decoder in sync constructor by
-constructor. A round-trip property over a `Stmt` generator in
-`test/YCHR/VM/SExprTest.hs`, or a schema-driven codec, would catch a
-forgotten constructor instead of relying on review.
-
 ### `TypeCheck.decodeError` is a long hand-written case
 
 `TypeCheck.hs:275-342` has one `case` arm per diagnostic code; a
