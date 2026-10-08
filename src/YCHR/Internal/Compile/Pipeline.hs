@@ -3,7 +3,7 @@
 -- | The compilation pipeline: parsing, renaming, resolving, desugaring,
 -- and compiling CHR modules to VM programs.
 --
--- Extracted from "YCHR.Run" so that 'compileModules' can be imported by
+-- Separate from "YCHR.Run" so that 'compileModules' can be imported by
 -- the type-checker TH splice without creating a circular dependency.
 module YCHR.Internal.Compile.Pipeline
   ( -- * Compilation
@@ -40,7 +40,12 @@ import YCHR.Internal.Collect
   )
 import YCHR.Internal.Collected (CollectedModule)
 import YCHR.Internal.Compile (CompileError, compile)
-import YCHR.Internal.Desugar (DesugarError, desugarProgram, extractSymbolTable, liftAllLambdas)
+import YCHR.Internal.Desugar
+  ( DesugarError,
+    desugarProgram,
+    extractSymbolTable,
+    liftAllLambdas,
+  )
 import YCHR.Internal.Desugar.Disjunction (lowerDisjunctions)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..))
@@ -317,7 +322,8 @@ compileModules (StdLib stdlib) includeStdlib inputs = do
     traverse
       ( \((fp, src), (_, hdr)) -> do
           table <- case buildModuleOpTable builtinOps preludeOps opExports hdr of
-            Left conflict -> Left (OperatorConflict (AnnP conflict hdr.modLoc hdr.modOrigin))
+            Left conflict ->
+              Left (OperatorConflict (AnnP conflict hdr.modLoc hdr.modOrigin))
             Right t -> Right t
           first (ParseError fp) (parseModuleWith table fp src)
       )
@@ -462,7 +468,10 @@ finalizeCompilation libraryMods opExports trailingLocMap inputPaths parsed = do
           ]
       exportedSet =
         Set.fromList
-          [Types.QualifiedIdentifier m n a | ((n, a), ms) <- toListExport exportEnv, m <- ms]
+          [ Types.QualifiedIdentifier m n a
+          | ((n, a), ms) <- toListExport exportEnv,
+            m <- ms
+          ]
       renameInputs =
         RenameInputs
           { operatorExports = opExports,
@@ -493,7 +502,11 @@ finalizeCompilation libraryMods opExports trailingLocMap inputPaths parsed = do
     Left conflict -> Left (OperatorConflict (noAnnP conflict))
     Right t -> Right t
   let lambdaCount =
-        length [() | f <- desugared'.functions, isLambdaName (Types.qualifiedToName f.name)]
+        length
+          [ ()
+          | f <- desugared'.functions,
+            isLambdaName (Types.qualifiedToName f.name)
+          ]
   pure
     ( CompiledProgram
         { program = prog,
@@ -540,7 +553,11 @@ addPreludeImport m
 --
 -- The 'StdLib' and the 'Bool' have the same meaning as in
 -- 'compileModules'. All files are compiled together as one program.
-compileFiles :: StdLib -> Bool -> [FilePath] -> IO (Either Error (CompiledProgram, [Warning]))
+compileFiles ::
+  StdLib ->
+  Bool ->
+  [FilePath] ->
+  IO (Either Error (CompiledProgram, [Warning]))
 compileFiles stdlib includeStdlib paths = do
   contents <- mapM (\fp -> (fp,) <$> TIO.readFile fp) paths
   pure (compileModules stdlib includeStdlib contents)

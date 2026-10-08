@@ -57,6 +57,8 @@ import YCHR.Internal.Types
 -- Hidden so '.head' resolves under MicroHs (dev-docs/MICROHS_GAPS.md, gap 1).
 import Prelude hiding (head)
 
+-- | Why a program's declarations or extension directives cannot be
+-- resolved.
 data ResolveError
   = -- | A name declared as a constraint has function equations.
     ConstraintHasEquations Name
@@ -462,7 +464,8 @@ buildFunctionRequiring mods =
 
 -- | Check that no equation targets a constraint-declared name.
 -- Reports only the first equation per name.
-checkEquations :: Set QualifiedIdentifier -> [CollectedModule] -> [Diagnostic ResolveError]
+checkEquations ::
+  Set QualifiedIdentifier -> [CollectedModule] -> [Diagnostic ResolveError]
 checkEquations cNames mods = snd $ foldl go (Set.empty, []) allEqs
   where
     allEqs = [annEq | m <- mods, annEq <- m.equations]
@@ -488,7 +491,8 @@ checkEquations cNames mods = snd $ foldl go (Set.empty, []) allEqs
 -- other modules must be wrapped in @:- extend_function ...@ directives.
 -- Unknown function names are skipped here; they are reported by the
 -- renamer as YCHR-20002.
-checkOrphanEquations :: Set QualifiedName -> [CollectedModule] -> [Diagnostic ResolveError]
+checkOrphanEquations ::
+  Set QualifiedName -> [CollectedModule] -> [Diagnostic ResolveError]
 checkOrphanEquations functionNames mods =
   [ noDiag
       ( P.AnnP
@@ -545,7 +549,8 @@ checkExtendsClosed funcOpenness mods =
 -- second offending declaration.
 checkMultiSigOnFunction :: [CollectedModule] -> [Diagnostic ResolveError]
 checkMultiSigOnFunction mods =
-  [ noDiag (P.AnnP (MultiSigOnFunction (Qualified m.name fd.name)) loc (PExpr.Atom fd.name))
+  [ noDiag
+      (P.AnnP (MultiSigOnFunction (Qualified m.name fd.name)) loc (PExpr.Atom fd.name))
   | (_, decls) <- groupedFunctionDecls mods,
     let typedFunDecls =
           [ entry
@@ -838,9 +843,9 @@ checkBoundedDeclarations functionNames mods =
       Unqualified _ ->
         -- If the renamer left the name 'Unqualified', no visible
         -- provider exposes a function (or anything else) at this
-        -- name/arity — emit the dedicated 'UnknownBoundFunction'
-        -- diagnostic ourselves. (The renamer used to pre-report
-        -- this as the generic YCHR-20002; it now defers to us.)
+        -- name/arity, so the dedicated 'UnknownBoundFunction'
+        -- diagnostic is ours to emit; the renamer does not report
+        -- this case as the generic YCHR-20002.
         False
     -- Takes the declaration's name rather than the declaration record:
     -- a helper that projected @.name@ off its argument would be inferred

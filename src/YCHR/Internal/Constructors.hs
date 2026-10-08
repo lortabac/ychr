@@ -55,6 +55,7 @@ buildConEnv tds =
       conAlias = buildConAlias tds
     }
 
+-- | Build the constructor-name index consulted by 'lookupCon'.
 buildConMap :: [TypeDefinition] -> Map Name (TypeDefinition, DataConstructor)
 buildConMap tds =
   Map.fromList

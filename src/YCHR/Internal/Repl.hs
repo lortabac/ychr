@@ -134,7 +134,16 @@ runRepl stdlib mtypeChecker hostCalls quietMode werror files = do
       unless quietMode (printTypeDiagnosticsWhen mtypeChecker prog)
       let exported = exportedNames prog
       (outerInput, liveInput) <- mkReplInputs quietMode exported
-      outerLoop stdlib mtypeChecker hostCalls quietMode werror files outerInput liveInput prog
+      outerLoop
+        stdlib
+        mtypeChecker
+        hostCalls
+        quietMode
+        werror
+        files
+        outerInput
+        liveInput
+        prog
 
 -- | Build the outer and live line inputs, which share one history file.
 -- If that file cannot be used — its parent directory is not creatable,
@@ -491,8 +500,7 @@ handleLiveQuery mtypeChecker cp werror src = do
           (lam : _) ->
             let lamEqs = lam.equations :: [Parsed.AnnP D.Equation]
                 -- One location/origin for the lambda: its first
-                -- equation's annotation, which is the annotation the
-                -- whole block used to carry.
+                -- equation's annotation.
                 (loc, origin) = case lamEqs of
                   (Parsed.AnnP _ l o : _) -> (l, o)
                   [] -> (Parsed.dummyLoc, P.Atom "")
@@ -600,8 +608,9 @@ declarationsText prog = concatMap (++ "\n") declLines
                     (False, Parsed.DKClass) -> "class"
                     (True, Parsed.DKClass) -> "open_class"
                in [(kw, n, a)]
-          Parsed.ExtendClassTypeDecl Parsed.ExtendClassTypeDeclBody {name = n, arity = a} ->
-            [("extend_class_type", n, a)]
+          Parsed.ExtendClassTypeDecl
+            Parsed.ExtendClassTypeDeclBody {name = n, arity = a} ->
+              [("extend_class_type", n, a)]
           _ -> []
       ]
     dedup = go Set.empty
@@ -624,7 +633,11 @@ declarationsText prog = concatMap (++ "\n") declLines
 showOperators :: CompiledProgram -> IO ()
 showOperators prog = mapM_ (putStrLn . renderOp) entries
   where
-    entries = sort [(fix, opTypeStr ty, name) | (fix, ty, name) <- opTableEntries prog.opTable]
+    entries =
+      sort
+        [ (fix, opTypeStr ty, name)
+        | (fix, ty, name) <- opTableEntries prog.opTable
+        ]
     renderOp (fix, ty, name) =
       "op(" ++ show fix ++ ", " ++ ty ++ ", " ++ renderAtom name ++ ")"
     opTypeStr ty = case ty of
@@ -792,7 +805,10 @@ qualifiedLookup prog qn mArity =
                   m == qn.moduleName && n == qn.baseName
                 ]
               allArities =
-                sort (Set.toAscList (Set.fromList (cTyArities ++ fArities ++ exportArities)))
+                sort
+                  ( Set.toAscList
+                      (Set.fromList (cTyArities ++ fArities ++ exportArities))
+                  )
            in concatMap (classifyQualified prog qn) allArities
       typeEntries =
         [ IEType td
@@ -916,7 +932,9 @@ isCtorExportedByParent prog td c =
           Nothing -> True
           Just (Parsed.AnnP exports _ _) ->
             case [ cs
-                 | Parsed.TypeExportDecl (Parsed.TypeExportDeclBody tn' ta' cs) <- exports,
+                 | Parsed.TypeExportDecl
+                     (Parsed.TypeExportDeclBody tn' ta' cs) <-
+                     exports,
                    tn' == tn,
                    ta' == ta
                  ] of

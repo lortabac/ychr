@@ -33,7 +33,7 @@ import YCHR.Run
 -- reference bare atoms that the renamer cannot resolve — typically
 -- because the test exists to verify the renamer's behaviour on
 -- unexported or unknown constructors, or because the test uses bare
--- sentinel atoms as RHS of @=@ (where @quote/1@ no longer strips,
+-- sentinel atoms as RHS of @=@ (where @quote/1@ does not strip,
 -- per the spec). Warnings emitted by these tests are part of what
 -- they exercise, not a failure mode.
 --
@@ -182,7 +182,9 @@ validate dir name chrs goals expecteds errors
             ( "Orphan files in "
                 ++ dir
                 ++ ":"
-                ++ concatMap (("\n  missing .expected or .error for " ++) . (<.> "goal")) gs
+                ++ concatMap
+                  (("\n  missing .expected or .error for " ++) . (<.> "goal"))
+                  gs
                 ++ concatMap (("\n  missing .goal for " ++) . (<.> "expected")) es
                 ++ concatMap
                   ( ("\n  bare .error not paired with a .goal in mixed dir for " ++)
@@ -314,7 +316,8 @@ runNegative spec errorFile = do
     Right (prog, _ws) -> do
       typeResult <- typeCheckProgram typeCheckerProgram prog.desugaredProgram
       case typeResult.errors of
-        [] -> assertFailure "Expected compilation or type checking to fail, but it succeeded"
+        [] ->
+          assertFailure "Expected compilation or type checking to fail, but it succeeded"
         errs -> assertAllPresent (unlines (map displayMsg errs)) expectedSubstrings
   where
     trim = reverse . dropWhile isSpace . reverse . dropWhile isSpace

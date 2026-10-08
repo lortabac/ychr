@@ -49,7 +49,8 @@ genericToTerm = gToTerm . from
 
 -- | Inverse of 'genericToTerm': dispatches on functor and arity across the
 -- type's constructors.
-genericFromTerm :: forall a. (Generic a, GFromTerm (Rep a)) => Term -> Either ConvertError a
+genericFromTerm ::
+  forall a. (Generic a, GFromTerm (Rep a)) => Term -> Either ConvertError a
 genericFromTerm t = to <$> decodeSum (gRows @(Rep a)) t
 
 -- | Lowercase the first character only: @Red -> "red"@, @MkPoint -> "mkPoint"@.

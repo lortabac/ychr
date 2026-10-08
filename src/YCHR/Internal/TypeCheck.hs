@@ -130,7 +130,11 @@ labelValue (Just t) = VTerm (diagAtom "label_text") [VText t]
 
 -- | Run one checking session: allocate the two out-variables, tell the
 -- entry constraint, and decode what it bound them to.
-runChecker :: SessionInput -> IntMap PExpr -> (Value -> Value -> Chr ()) -> IO TypeCheckResult
+runChecker ::
+  SessionInput ->
+  IntMap PExpr ->
+  (Value -> Value -> Chr ()) ->
+  IO TypeCheckResult
 runChecker typeChecker origins enter =
   withCHR typeChecker defaultHostCallRegistry $ do
     errorsVar <- newVar

@@ -56,8 +56,7 @@ data SExpr
 -- Printer
 -- ---------------------------------------------------------------------------
 
--- | Render an s-expression as 'Text'.  The output is single-line; use
--- 'printSExprPretty' (not yet implemented) for indented multi-line output.
+-- | Render an s-expression as 'Text' on a single line.
 printSExpr :: SExpr -> Text
 printSExpr (SAtom t) = t
 printSExpr (SInt n) = T.pack (show n)

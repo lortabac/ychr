@@ -70,7 +70,8 @@ singleRule :: Module -> IO Rule
 singleRule m = do
   renamed <- case renameProgram [m] of
     Right ([r], _) -> return r
-    Right (mods, _) -> assertFailure $ "expected 1 renamed module, got " ++ show (length mods)
+    Right (mods, _) ->
+      assertFailure $ "expected 1 renamed module, got " ++ show (length mods)
     Left errs -> assertFailure $ "unexpected errors: " ++ show errs
   case renamed.rules of
     [rule] -> return rule
@@ -91,7 +92,8 @@ sameModuleTests =
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         rule <- singleRule m
         rule.head.node
-          @?= Simplification [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]],
+          @?= Simplification
+            [Constraint (Qualified "M" "leq") [VarTerm "X", VarTerm "Y"]],
       testCase "zero-arity constraint" $ do
         let m =
               module' "M"
@@ -162,12 +164,10 @@ ambiguousTests =
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
       testCase "ambiguous function used as a body-tell constraint argument" $ do
         -- The bare 'f(1)' lands in 'NoResolve' (demoted from the
-        -- 'ResolveTop' parent 'c(...)'). Previously this was the silent
-        -- 'otherwise -> pure ()' branch — 'Resolve.termToExpr' would
-        -- fall through to 'CtorExpr' with no diagnostic at any stage.
-        -- The renamer now mirrors 'resolveName''s multi-provider arm
-        -- so the user gets the same YCHR-20001 diagnostic they would
-        -- in a guard or 'is'-RHS position.
+        -- 'ResolveTop' parent 'c(...)'). The renamer mirrors
+        -- 'resolveName''s multi-provider arm, so the user gets the same
+        -- YCHR-20001 diagnostic they would in a guard or 'is'-RHS
+        -- position.
         let modA = module' "A" `declaring` [function "f" 1]
             modB = module' "B" `declaring` [function "f" 1]
             modC =
@@ -181,12 +181,10 @@ ambiguousTests =
           Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _)] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
       testCase "ambiguous function on '=' operand" $ do
-        -- '=' no longer has a special arm that routed operands to
-        -- 'ResolveAll' (the lambda workaround). Operands inherit
-        -- 'NoResolve' from the 'ResolveTop' body, so the multi-provider
-        -- check has to live in 'NoResolve' itself; this case locks in
-        -- that the diagnostic that the workaround used to surface still
-        -- fires under the uniform path.
+        -- '=' has no special arm routing operands to 'ResolveAll'.
+        -- Operands inherit 'NoResolve' from the 'ResolveTop' body, so the
+        -- multi-provider check lives in 'NoResolve' itself; this case
+        -- pins the diagnostic on that uniform path.
         let modA = module' "A" `declaring` [function "f" 1]
             modB = module' "B" `declaring` [function "f" 1]
             modC =
@@ -201,11 +199,10 @@ ambiguousTests =
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
       testCase "ambiguous compound nested inside a head-pattern argument" $ do
         -- The constraint functor itself (the outer 'c') resolves via
-        -- 'renameCon' → 'resolveName ResolveTop', which has always
-        -- diagnosed multi-provider. The compound /inside/ the head arg
-        -- ('f(X)' below) is renamed in 'NoResolve' via 'renameTerm';
-        -- previously that arm silently accepted multi-provider names.
-        -- The 'NoResolve' multi-provider arm now diagnoses it.
+        -- 'renameCon' → 'resolveName ResolveTop', which diagnoses
+        -- multi-provider. The compound /inside/ the head arg ('f(X)'
+        -- below) is renamed in 'NoResolve' via 'renameTerm'; that arm
+        -- diagnoses multi-provider names too.
         let modA = module' "A" `declaring` [function "f" 1]
             modB = module' "B" `declaring` [function "f" 1]
             modC =
@@ -238,7 +235,7 @@ ambiguousTests =
         -- Companion to the compound cases for the 'AtomTerm' arm.
         -- A bare 'f' inside a tell-side constraint argument lands in
         -- 'NoResolve'; if two modules export 'f/0' as a function, the
-        -- atom arm now emits 'AmbiguousName' instead of silently
+        -- atom arm emits 'AmbiguousName' instead of silently
         -- producing an 'AtomTerm' that 'Resolve.termToExpr' can't
         -- disambiguate.
         let modA = module' "A" `declaring` [function "f" 0]
@@ -355,13 +352,15 @@ alreadyQualifiedTests =
                 `defining` [[qterm "Order" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedM) <- case renameProgram [modOrder, modM] of
           Right ([a, b], _) -> return (a, b)
-          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Right (mods, _) ->
+            assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedM.rules of
           [r] -> return r
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
         rule.head.node
-          @?= Simplification [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"]],
+          @?= Simplification
+            [Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"]],
       testCase "pre-qualified reference to non-existent module produces error" $ do
         -- Module 'Order' does not exist anywhere in the program.
         let m =
@@ -379,13 +378,15 @@ alreadyQualifiedTests =
                 `defining` [[qterm "A" "leq" [var "X", var "Y"]] <=> [atom "true"]]
         renamedC <- case renameProgram [modA, modB, modC] of
           Right ([_, _, c], _) -> return c
-          Right (mods, _) -> assertFailure $ "expected 3 modules, got " ++ show (length mods)
+          Right (mods, _) ->
+            assertFailure $ "expected 3 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedC.rules of
           [r] -> return r
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
         rule.head.node
-          @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
+          @?= Simplification
+            [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
       testCase "pre-qualified reference to non-imported module is rejected" $ do
         -- A declares leq/2 but B does not import A; the qualification
         -- must not silently bypass the visibility rules.
@@ -443,7 +444,8 @@ goalClassificationTests =
                 [CompoundTerm (Unqualified "inner") [VarTerm "X"]]
             ],
       testCase "nested arg of body goal NOT resolved" $ do
-        -- Outer functor is resolved (isGoal = True), inner is not (args use isGoal = False)
+        -- Outer functor is resolved (isGoal = True), inner is not
+        -- (args use isGoal = False)
         let m =
               module' "M"
                 `declaring` ["c" // 0, "leq" // 1, "pair" // 1]
@@ -480,7 +482,9 @@ goalClassificationTests =
         rule.body.node
           @?= [ CompoundTerm
                   (Unqualified "is")
-                  [VarTerm "R", CompoundTerm (Unqualified "pair") [VarTerm "X", IntTerm 1]]
+                  [ VarTerm "R",
+                    CompoundTerm (Unqualified "pair") [VarTerm "X", IntTerm 1]
+                  ]
               ],
       testCase "non-compound terms in guard untouched" $ do
         let m =
@@ -606,7 +610,8 @@ multiModuleTests =
                            ]
         (renamedOrder, renamedLogic) <- case renameProgram [modOrder, modLogic] of
           Right ([a, b], _) -> return (a, b)
-          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Right (mods, _) ->
+            assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         (renamedOrder.rules, renamedLogic.rules)
           @?= ( [ Rule
@@ -628,8 +633,12 @@ multiModuleTests =
                     (Just (noAnn "trans"))
                     ( noAnnP
                         ( Propagation
-                            [ Constraint (Qualified "Order" "leq") [VarTerm "X", VarTerm "Y"],
-                              Constraint (Qualified "Order" "leq") [VarTerm "Y", VarTerm "Z"]
+                            [ Constraint
+                                (Qualified "Order" "leq")
+                                [VarTerm "X", VarTerm "Y"],
+                              Constraint
+                                (Qualified "Order" "leq")
+                                [VarTerm "Y", VarTerm "Z"]
                             ]
                         )
                     )
@@ -698,13 +707,15 @@ exportTests =
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedB) <- case renameProgram [modA, modB] of
           Right ([a, b], _) -> return (a, b)
-          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Right (mods, _) ->
+            assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedB.rules of
           [r] -> return r
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
         rule.head.node
-          @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
+          @?= Simplification
+            [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
       testCase "non-exported constraint is hidden from importer" $ do
         -- A declares leq/2 and gt/2 but only exports leq/2; B can't see gt/2
         let modA =
@@ -748,13 +759,15 @@ exportTests =
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         (_, renamedB) <- case renameProgram [modA, modB] of
           Right ([a, b], _) -> return (a, b)
-          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Right (mods, _) ->
+            assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
         rule <- case renamedB.rules of
           [r] -> return r
           rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
         rule.head.node
-          @?= Simplification [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
+          @?= Simplification
+            [Constraint (Qualified "A" "leq") [VarTerm "X", VarTerm "Y"]],
       testCase "exporting undeclared name produces error" $ do
         let m = module' "M" `exporting` ["foo" // 1]
         renameProgram [m]
@@ -788,7 +801,10 @@ warningTests =
         let m =
               module' "M"
                 `declaring` ["c" // 1]
-                `defining` [[term "c" [var "X"]] <=> [atom "true"] |- [term "foo" [var "X"]]]
+                `defining` [ [term "c" [var "X"]]
+                               <=> [atom "true"]
+                               |- [term "foo" [var "X"]]
+                           ]
         ws <- warningsOf [m]
         ws @?= [noDiag (AnnP (UndeclaredDataConstructor "foo") dummyLoc (Atom ""))],
       testCase "declared data constructor produces no warning" $ do
@@ -866,9 +882,9 @@ warningTests =
         ws <- warningsOf [m]
         ws @?= [],
       testCase "warns on unknown data constructor in NoResolve mode (head arguments)" $ do
-        -- Per the user's "warn everywhere" choice, the renamer now emits
+        -- Per the user's "warn everywhere" choice, the renamer emits
         -- 'UndeclaredDataConstructor' for unknown atoms/compounds in head
-        -- pattern position too (previously only resolving contexts warned).
+        -- pattern position as well as resolving contexts.
         let m =
               module' "M"
                 `declaring` ["c" // 1]
@@ -936,13 +952,10 @@ warningTests =
         -- Regression for BUGS.md "Spurious 'Undeclared data constructor'
         -- warnings for 'fun' and '->'". A lambda is a first-class value;
         -- its synthetic '->' and 'fun' functors are surface syntax, not
-        -- data constructors. Previously the renamer demoted the
-        -- constraint's argument to 'NoResolve', the lambda arm's
-        -- 'isResolving' guard failed, and the synthetic functors leaked
-        -- through to 'warnUnknownDataCon'. The lambda body is a bare
-        -- variable so the test isolates the surface-syntax bug without
-        -- pulling in prelude functions that this minimal DSL module
-        -- doesn't import.
+        -- data constructors, so they must not reach
+        -- 'warnUnknownDataCon'. The lambda body is a bare variable so the
+        -- test isolates the surface-syntax bug without pulling in prelude
+        -- functions that this minimal DSL module doesn't import.
         let m =
               module' "M"
                 `declaring` ["c" // 1]
@@ -952,12 +965,10 @@ warningTests =
         ws <- warningsOf [m]
         ws @?= [],
       testCase "lambda bound via '=' then passed is not warned" $ do
-        -- The bind-then-pass form ('F = fun(...) -> ... end, c(F)') was
-        -- the documented workaround for the lambda bug. Now that the
-        -- lambda arm fires in every non-quoted mode, the workaround on
-        -- '=' itself was removed; this case verifies the bind-then-pass
-        -- form still produces no spurious warnings under the simplified
-        -- pipeline.
+        -- The bind-then-pass form ('F = fun(...) -> ... end, c(F)')
+        -- must stay warning-free under the simplified pipeline: the
+        -- lambda arm fires in every non-quoted mode and '=' carries no
+        -- special workaround.
         let m =
               module' "M"
                 `declaring` ["c" // 1]
@@ -970,9 +981,9 @@ warningTests =
         ws @?= [],
       testCase "function reference passed directly as constraint argument is not warned" $ do
         -- Same structural bug as the lambda case, on the @fun name/arity@
-        -- arm: a funref is a first-class value, not data. Previously
-        -- 'c(fun f/1)' would emit a spurious 'UndeclaredDataConstructor
-        -- "fun"' under 'NoResolve'.
+        -- arm: a funref is a first-class value, not data, so
+        -- 'c(fun f/1)' must not emit 'UndeclaredDataConstructor "fun"'
+        -- under 'NoResolve'.
         let m =
               module' "M"
                 `declaring` ["c" // 1, function "f" 1]
@@ -1074,7 +1085,8 @@ warningTests =
                 [dc] -> dc.conName @?= Qualified "M" "leaf"
                 dcs -> assertFailure $ "expected 1 constructor, got " ++ show (length dcs)
             tds -> assertFailure $ "expected 1 type decl, got " ++ show (length tds)
-          Right (mods, _) -> assertFailure $ "expected 1 module, got " ++ show (length mods)
+          Right (mods, _) ->
+            assertFailure $ "expected 1 module, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs,
       testCase "type references resolved across modules" $ do
         let modA =
@@ -1118,7 +1130,8 @@ warningTests =
                 args -> assertFailure $ "unexpected constructor args: " ++ show args
               dcs -> assertFailure $ "expected 1 constructor, got " ++ show (length dcs)
             tds -> assertFailure $ "expected 1 type decl, got " ++ show (length tds)
-          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Right (mods, _) ->
+            assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs
     ]
 
@@ -1167,7 +1180,8 @@ importListTests =
                       ]
                   ]
             rules -> assertFailure $ "expected 1 rule, got " ++ show (length rules)
-          Right (mods, _) -> assertFailure $ "expected 2 modules, got " ++ show (length mods)
+          Right (mods, _) ->
+            assertFailure $ "expected 2 modules, got " ++ show (length mods)
           Left errs -> assertFailure $ "unexpected errors: " ++ show errs,
       testCase "name NOT in import list is not resolved" $ do
         let modOrder =
@@ -1221,7 +1235,8 @@ importListTests =
                     ]
                 }
         renameProgram [modOrder, modLogic]
-          @?= Left [noDiag (AnnP (UnknownImport "Order" "nonexistent" 1) dummyLoc (Atom ""))],
+          @?= Left
+            [noDiag (AnnP (UnknownImport "Order" "nonexistent" 1) dummyLoc (Atom ""))],
       testCase "operator in import list is accepted when source module exports it" $ do
         let modOrder =
               module' "Order"
@@ -1276,7 +1291,8 @@ importListTests =
                     ]
                 }
         renameProgram [modOrder, modLogic]
-          @?= Left [noDiag (AnnP (UnknownOperatorImport "Order" "===") dummyLoc (Atom ""))],
+          @?= Left
+            [noDiag (AnnP (UnknownOperatorImport "Order" "===") dummyLoc (Atom ""))],
       testCase "use_module after non-import directive is reported as out-of-order" $ do
         let modOrder =
               module' "Order"
@@ -1304,8 +1320,8 @@ importListTests =
           Right _ -> assertFailure "expected UseModuleOutOfOrder error",
       testCase "import of unknown type with constructor list reports one UnknownImport" $ do
         -- Regression: `type(missing/0, [c1, c2])` against a module that
-        -- doesn't declare `missing` used to fire one UnknownImport plus
-        -- one UnknownExportedConstructor per listed constructor.
+        -- doesn't declare `missing` must report exactly one UnknownImport,
+        -- not one UnknownExportedConstructor per listed constructor.
         let modLib =
               module' "Lib"
                 `declaring` ["leq" // 2]
@@ -1364,7 +1380,7 @@ importListTests =
       testCase "narrowed prelude import is rejected without library(...)" $ do
         -- `use_module(M)` and `use_module(library(M))` are equivalent, so
         -- the bare spelling must be rejected too. An empty list is still
-        -- a list: it is the spelling whose silent no-op was least visible.
+        -- a list: it is the spelling whose silent no-op is least visible.
         let modUser =
               (module' "User")
                 { imports = [noAnnP (ModuleImport "prelude" (Just []))]

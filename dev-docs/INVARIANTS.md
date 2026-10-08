@@ -12,6 +12,8 @@ original audit:
 3. Documented invariants worth promoting into types.
 4. Undocumented invariants the implementation relies on.
 5. Cross-cutting compiler ↔ runtime contracts.
+6. Clean-up ideas: duplications and structural improvements that are
+   not themselves invariants (added after the Haskell style pass).
 
 Entries are concrete (file:line, code snippet) so they can be picked up
 as standalone tasks.
@@ -269,7 +271,7 @@ Each of these crashes if the documented runtime invariant is violated.
 A stronger type or a checked smart constructor would turn the runtime
 panic into a compile-time error.
 
-### `getArg` operand and bounds — `src/YCHR/Internal/Runtime/Var.hs:358-359`
+### `getArg` operand and bounds — `src/YCHR/Internal/Runtime/Var.hs:356-357`
 
 ```haskell
 | otherwise -> error $ "getArg: index " ++ show idx ++ " out of bounds"
@@ -280,7 +282,7 @@ _ -> error "getArg: not a compound term"
 guarantee both, but neither is enforced. A typed term-projection API
 keyed on a verified `(VTerm functor arity)` handle would close it.
 
-### `lookupSusp` — `src/YCHR/Internal/Runtime/Store.hs:66`
+### `lookupSusp` — `src/YCHR/Internal/Runtime/Store.hs:72`
 
 ```haskell
 Nothing -> error $ "lookupSusp: unknown SuspensionId " ++ show sid
@@ -292,7 +294,7 @@ invariant violation, not a user-facing failure" — exactly the case for
 a typed handle (e.g. an opaque newtype that can only be created by the
 allocation API).
 
-### `getConstraintArg` bounds — `src/YCHR/Internal/Runtime/Store.hs:214`
+### `getConstraintArg` bounds — `src/YCHR/Internal/Runtime/Store.hs:220`
 
 ```haskell
 else error $ "getConstraintArg: index " ++ show idx ++ " out of bounds"
@@ -328,13 +330,22 @@ exhaustive:
 
 | Site                                                     | Kind                                        |
 |----------------------------------------------------------|---------------------------------------------|
-| `src/YCHR/Internal/Runtime/Interpreter.hs:541` (`activateSuspensionId`) | leading-id shape check |
-| `src/YCHR/Run.hs:548` (`executeBodyGoal`, `BodyOr`)       | query disjunction should have been rejected (YCHR-30006) |
-| `src/YCHR/Internal/Compile.hs:1122` (`compileBodyGoal`, `BodyOr`) | `lowerDisjunctions` should have run first |
-| `src/YCHR/Internal/Desugar.hs:987` (`ruleModName`)        | non-empty head                             |
-| `src/YCHR/Internal/Desugar/Disjunction.hs:101,206`        | lifted rule is a simplification; non-empty head |
-| `src/YCHR/Internal/Backend/Scheme.hs:214` (`programInfoBindingName`) | non-empty library name          |
+| `src/YCHR/Internal/Runtime/Interpreter.hs:547` (`activateSuspensionId`) | leading-id shape check |
+| `src/YCHR/Run.hs:616` (`executeBodyGoal`, `BodyOr`)       | query disjunction should have been rejected (YCHR-30006) |
+| `src/YCHR/Internal/Compile.hs:1220` (`compileBodyGoal`, `BodyOr`) | `lowerDisjunctions` should have run first |
+| `src/YCHR/Internal/Desugar.hs:999` (`ruleModName`)        | non-empty head                             |
+| `src/YCHR/Internal/Desugar/Disjunction.hs:103,209`        | lifted rule is a simplification; non-empty head |
+| `src/YCHR/Internal/Backend/Scheme.hs:231` (`programInfoBindingName`) | non-empty library name          |
 | `src/YCHR/Internal/Meta.hs:191,203,210`                   | host-call arity / parse result (`write_term_to_string`, `read_term_from_string`) |
+| `src/YCHR/Internal/Resolve.hs:1438` (`parseFlatName`)     | renamer post-condition: flat name contains `':'` |
+| `src/YCHR/Internal/TypeCheck.hs:404` (`malformed`)        | solver returned a shape the decoder does not know |
+| `src/YCHR/Internal/TypeCheck/Encode.hs:403,407` (`encodedToValue`) | encoded term is ground (no `Wildcard` / `VarTerm`) |
+| `src/YCHR/Internal/Resources.hs:138` (`compileChecker`)   | bundled type-checker sources failed to compile |
+| `src/YCHR/DSL.hs:373` (`termToConstraint`)                | DSL combinator given a non-compound `Term` |
+| `src/ghc/YCHR/Convert/Generic.hs:120`                     | `undefined :: M1 C c f p` passed to `conName` to read a constructor name |
+| `embed/YCHR/Embedded/Generate/Code.hs:76`                 | non-finite `Double` in generated code       |
+| `embed/YCHR/Embedded/Generate/ToCode.hs:89,108`           | `V1` value; defining module missing from the alias table |
+| `embed/YCHR/Embedded.hs:48,58`                            | embedded stdlib / type-checker failed to parse or compile |
 
 The two `BodyOr` sites are phase invariants of the same family as
 the `LambdaExpr` case below: the constructor survives in the type and
@@ -346,7 +357,12 @@ wraps the host function in `try @SomeException`
 rather than a process abort; they are nonetheless `error` rather than
 `runtimeErrorS` for a difficulty that is really just arity.
 
-### `R.LambdaExpr` survives lambda lifting — `src/YCHR/Run.hs:691`, `src/YCHR/Internal/Compile.hs:709`, `src/YCHR/Internal/Backend/SchemeDriver.hs:171`
+Deliberately partial, and not to be "fixed": `Data.Text.Shim.breakOn`
+and `Data.Text.Shim.last` (`src/Data/Text/Shim.hs:39,71`) raise exactly
+where `Data.Text` raises, so the shim stays a drop-in replacement.
+Totalising them would silently diverge from the API they stand in for.
+
+### `R.LambdaExpr` survives lambda lifting — `src/YCHR/Run.hs:757`, `src/YCHR/Internal/Compile.hs:806`, `src/YCHR/Internal/Backend/SchemeDriver.hs:190`
 
 ```haskell
 -- Run.hs
@@ -451,7 +467,7 @@ each slot with `fromInteger` with no range check
 into a huge positive. The boundary needs an explicit
 `parseNonNegative`/`Maybe` and an `Err` on failure; the type change is
 the prerequisite that forces it to be written, not the check itself.
-Two further wrinkles: `sargs !! idx` (`Store.hs:218,323`) takes `Int`,
+Two further wrinkles: `sargs !! idx` (`Store.hs:219,324`) takes `Int`,
 so `suspArg`/`getConstraintArg` need a `Word -> Int` conversion, and
 `matchTerm` compares against `length args` (`Var.hs:341-347`).
 
@@ -948,6 +964,94 @@ code, on both sides. A small ABI-doc section in
 explicit; encoding it in types is harder because it crosses a
 host-language boundary.
 
+
+## 6. Clean-up ideas (not invariants)
+
+Duplications and structural improvements that no invariant depends on,
+recorded so they do not have to live in review comments. Line numbers
+are from the style pass that added this section.
+
+### Function visibility is computed twice
+
+`buildVisibleFunctionNames` (`Rename.hs:1239`, name-keyed, per module)
+and `buildFunctionVisibility` (`Resolve.hs:326`, `(name, arity)`-keyed,
+whole program) both decide what a module can see. They agree today —
+the renamer says so at `Rename.hs:1236` — but only by hand. Unifying on
+the resolver's representation, or one shared helper, would make the
+agreement structural.
+
+### `ruleModName` is duplicated
+
+`Desugar.hs:999` and `Desugar/Disjunction.hs:209` are the same "module
+name of a rule's head" helper, each guarding the empty head with
+`error`. Sharing one moves code between modules, which is why the style
+pass left it.
+
+### Hand-written `VM.SExpr` codec
+
+`VM/SExpr.hs` keeps an encoder and decoder in sync constructor by
+constructor. A round-trip property over a `Stmt` generator in
+`test/YCHR/VM/SExprTest.hs`, or a schema-driven codec, would catch a
+forgotten constructor instead of relying on review.
+
+### `TypeCheck.decodeError` is a long hand-written case
+
+`TypeCheck.hs:275-342` has one `case` arm per diagnostic code; a
+`(code, arity, constructor)` table would be shorter and could be shared
+with `decodeWarning` (`:360`).
+
+### `TypeCheck/Render.hs` fallbacks can hide encoding drift
+
+`Render.hs:75,83,99` render `"(?)"`, `"fun(?) -> "` and `"?"` for an
+unexpected solver value. Readable, but it also swallows encoding drift;
+asserting, or routing through `malformed`, would surface it earlier.
+A deliberate trade today: "decide and document", not a clear bug.
+
+### Duplicated test helpers
+
+A shared `test/YCHR/TestHelpers.hs` would remove `strip`
+(`PExprTest.hs:75`, `PExprRoundtripTest.hs:212`),
+`expectErrorContaining` (`RunTest.hs:573`, `Runtime/StoreTest.hs:288`)
+and `countAlive` (`RunTest.hs:73`, `Runtime/StoreTest.hs:77`,
+`Runtime/InterpreterTest.hs:880`; two signatures across the three).
+
+### `ParserTest` parse-or-fail scaffolding
+
+`test/YCHR/ParserTest.hs:928-980`: `typeDefsOf`, `bodyOf`, `headOf` and
+`guardOf` each repeat the same `case p src of` prologue. One helper
+parameterised by the extractor would remove the copies.
+
+### Unqualified imports of utility-module helpers
+
+`STYLE.md` asks for qualified imports of container/utility modules. The
+codebase does so for `Data.Text`/`Set`/`Map`, but open-imports small
+helpers from `Data.List`/`Data.Maybe`/`Data.Char` (e.g.
+`SchemeDriver.hs:15`). Needs a repo-wide decision plus a mechanical
+rewrite; changing one module alone would be worse than leaving it.
+
+### Naked scalars and domain tuples
+
+`STYLE.md`'s "Named, unique data types" and records-over-tuples rules
+have not had a codebase-wide audit. Look for a bare `Text`/`Int` used
+as an identifier where a `newtype` would name the slot, a tuple used as
+a domain value in a record or API rather than a local zip, and a `Bool`
+field carrying a convention a sum type could carry. A modelling pass,
+not a mechanical edit; it would change exported signatures.
+
+### Test entry points have no Haddock
+
+Most `test/YCHR*Test.hs` modules export a single `tests :: TestTree`
+with no `-- |` comment. The style pass read `STYLE.md`'s Haddock rule
+as applying to library API; documenting them is a one-line sweep per
+module if wanted.
+
+### Accepted long literals (do not shorten)
+
+`STYLE.md` allows a line over 90 characters only for an unsplittable
+literal. The style pass left six: the README URL at `src/YCHR.hs:14`,
+an error-message literal at `src/YCHR/Internal/Meta.hs:233`, and four
+`testCase` names in `test/YCHR/RenameTest.hs` (951, 982, 1270, 1321).
+Shortening any of them would change either a URL or a test name.
 
 ## Suggested next targets
 

@@ -82,14 +82,14 @@ showType (VTerm functor [a, b])
             <> showType b
         Nothing -> "fun(?) -> " <> showType b
 -- Rigid type variable: rendered with its synthetic id so distinct
--- rigids are distinguishable in inconsistency messages. The original
+-- rigids are distinguishable in inconsistency messages. The
 -- source-level tvar name (@T@, @A@, ...) is not preserved because the
--- checker does not currently maintain an id-to-name map; @T#<n>@ is
--- enough to communicate "this is a polymorphic type variable" to the
--- reader. A skolem pinned by guard-derived evidence is rendered as
--- the type it was pinned to — that is the type the reader's guard
--- established. (Callers deep-dereference first, so a bound cell
--- arrives here as a concrete type rather than a variable.)
+-- checker maintains no id-to-name map; @T#<n>@ is enough to
+-- communicate "this is a polymorphic type variable" to the reader. A
+-- skolem pinned by guard-derived evidence is rendered as the type it
+-- was pinned to — that is the type the reader's guard established.
+-- (Callers deep-dereference first, so a bound cell arrives here as a
+-- concrete type rather than a variable.)
 showType (VTerm functor [cell, VInt n])
   | functor == typeAtom "rigid" = case cell of
       VVar _ -> "T#" <> T.pack (show n)

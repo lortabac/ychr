@@ -100,7 +100,8 @@ listRenderingTests =
       testCase "improper list with variable tail" $
         prettyTerm (cons (IntTerm 1) (VarTerm "T")) @?= "[1 | T]",
       testCase "improper list with atom tail" $
-        prettyTerm (cons (IntTerm 1) (CompoundTerm (Unqualified "foo") [])) @?= "[1 | foo]"
+        prettyTerm (cons (IntTerm 1) (CompoundTerm (Unqualified "foo") []))
+          @?= "[1 | foo]"
     ]
   where
     nil = CompoundTerm (Unqualified "prelude__[]") []
@@ -118,7 +119,9 @@ closureUnwrapTests =
               CompoundTerm
                 (Unqualified "->")
                 [ CompoundTerm (Unqualified "fun") [CompoundTerm (Unqualified "X") []],
-                  CompoundTerm (Unqualified "+") [CompoundTerm (Unqualified "X") [], IntTerm 1]
+                  CompoundTerm
+                    (Unqualified "+")
+                    [CompoundTerm (Unqualified "X") [], IntTerm 1]
                 ]
             closure =
               CompoundTerm

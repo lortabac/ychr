@@ -186,7 +186,8 @@ storeConstraint sid = do
                   then pure []
                   else traverse withEntries (zip [0 ..] (toList owned))
               keys <- traverse walk (zip [0 ..] susp.args)
-              let entries = [(j, key) | (j, key) <- zip [0 ..] keys, IntSet.member j positions]
+              let entries =
+                    [(j, key) | (j, key) <- zip [0 ..] keys, IntSet.member j positions]
               liftIO $ do
                 modifyIORef' storeByType append
                 -- The index is a persistent value behind one reference,

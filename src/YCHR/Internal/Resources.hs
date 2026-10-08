@@ -9,13 +9,13 @@
 -- @typechecker\/*.chr@ sources on disk, for an embedder that would rather
 -- point at a source tree than carry the decoded values in its binary.
 --
--- Neither bundled provider takes this path any more. Under GHC the
+-- Neither bundled provider takes this path. Under GHC the
 -- executable splices the sources in with Template Haskell
 -- (@embed\/YCHR\/Embedded.hs@); under MicroHs, which has no Template
 -- Haskell (@dev-docs\/MICROHS_GAPS.md@, gap 5) and cannot afford to
 -- decode them in every process, it compiles the modules @make resources@
 -- emits (@dev-docs\/MICROHS_PERFORMANCE.md@, option B). The bundled
--- executable therefore no longer honours @YCHR_LIB_DIR@; this loader is
+-- executable therefore ignores @YCHR_LIB_DIR@; this loader is
 -- for library embedders, and for the GHC test suite.
 --
 -- The two directories are looked up under the root given by
@@ -144,7 +144,10 @@ compileChecker lib sources =
 -- | A missing directory is a configuration error worth naming; an empty
 -- one is almost always the same mistake one level down, and an empty
 -- standard library would otherwise be accepted silently.
-requireSources :: FilePath -> Either Text [(FilePath, Text)] -> Either Text [(FilePath, Text)]
+requireSources ::
+  FilePath ->
+  Either Text [(FilePath, Text)] ->
+  Either Text [(FilePath, Text)]
 requireSources dir (Right []) = Left (empty dir)
 requireSources _ result = result
 

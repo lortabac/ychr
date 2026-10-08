@@ -74,9 +74,10 @@ readTerm = readTermWith builtinOps
 -- | Invoke the read_term_from_string host call in a session carrying the
 -- given operator table.
 readTermWith :: OpTable -> Text -> IO Value
-readTermWith table s = case Map.lookup (Name "read_term_from_string") metaHostCallRegistry of
-  Nothing -> assertFailure "read_term_from_string not found in registry"
-  Just (HostCallFn f) -> runChrWith table (f [VText s])
+readTermWith table s =
+  case Map.lookup (Name "read_term_from_string") metaHostCallRegistry of
+    Nothing -> assertFailure "read_term_from_string not found in registry"
+    Just (HostCallFn f) -> runChrWith table (f [VText s])
 
 -- | A session carrying the given callables table and the built-in
 -- operator table. The function-reference reader resolves against the
@@ -193,7 +194,10 @@ readTermTests =
       testCase "list syntax" $ do
         v <- readTerm "[1, 2, 3]"
         case v of
-          VTerm "." [VInt 1, VTerm "." [VInt 2, VTerm "." [VInt 3, VAtom "[]"]]] -> pure ()
+          VTerm
+            "."
+            [VInt 1, VTerm "." [VInt 2, VTerm "." [VInt 3, VAtom "[]"]]] ->
+              pure ()
           _ -> assertFailure "unexpected result for [1, 2, 3]",
       testCase "infix operator <=> parses as compound term" $ do
         v <- readTerm "a <=> b"
@@ -246,7 +250,10 @@ funRefTests =
           VTerm "/" [VAtom "m:inc", VInt 1] -> pure ()
           _ -> assertFailure "unexpected reader result",
       testCase "a nested reference resolves" $ do
-        v <- readTermWithCallables (callableTable [("prelude:double", 1)]) "wrap(fun double/1)"
+        v <-
+          readTermWithCallables
+            (callableTable [("prelude:double", 1)])
+            "wrap(fun double/1)"
         case v of
           VTerm "wrap" [VTerm "/" [VAtom "prelude:double", VInt 1]] -> pure ()
           _ -> assertFailure "unexpected reader result",
@@ -417,13 +424,11 @@ vmNameRoundTripTests =
       roundTrip "non-ASCII base" (Types.Qualified "m" "naïve"),
       roundTrip "non-ASCII module" (Types.Qualified "naïve" "foo"),
       roundTrip "non-ASCII both" (Types.Qualified "café" "naïve"),
-      -- Previously broken: base whose encoded form follows a non-ASCII
-      -- escape with literal "u<hex>" chars, which the old "__u<HEX>__"
-      -- decoder mis-split.
+      -- The encoded base follows a non-ASCII escape with literal
+      -- "u<hex>" chars; the decoder must not mis-split it.
       roundTrip "uffï base" (Types.Qualified "mymodule" "uffï"),
-      -- Previously broken: module ending in non-ASCII + literal
-      -- "u<hex>". With the old encoding this collided with another
-      -- (m, n) pair; the new "%%u<6 hex>" encoding is injective.
+      -- A module ending in non-ASCII plus literal "u<hex>" must not
+      -- collide with another (m, n) pair; "%%u<6 hex>" is injective.
       roundTrip "fooáue module" (Types.Qualified "fooáue" "b"),
       -- Base that LOOKS like a stale "__u<HEX>__" escape but is just
       -- ASCII content past the separator.

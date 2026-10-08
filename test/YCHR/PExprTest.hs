@@ -340,7 +340,8 @@ maxPrecTests =
         assertBool "should fail" (isLeft (pComma "a = b = c.")),
       testCase "parenthesized comma in compound arg" $
         stripAll (pComma "f((a, b)).")
-          @?= Right [Compound "f" [noAnn (Compound "," [noAnn (Atom "a"), noAnn (Atom "b")])]],
+          @?= Right
+            [Compound "f" [noAnn (Compound "," [noAnn (Atom "a"), noAnn (Atom "b")])]],
       testCase "comma roundtrip" $
         roundtrip commaOps "comma" (Compound "," [noAnn (Atom "a"), noAnn (Atom "b")]),
       testCase "comma in compound arg roundtrip" $
@@ -704,7 +705,7 @@ prefixChainingTests =
             [Compound "-" [noAnn (Compound "-" [noAnn (Var "X")])]],
       testCase "Fx does not chain" $
         -- 'neg' is Fx at 500; its operand parses at 499, where 'neg'
-        -- (fixity 500) is no longer a legal prefix.  The whole parse
+        -- (fixity 500) is not a legal prefix.  The whole parse
         -- fails.
         assertBool "should fail" (isLeft (pPrefixChain "neg neg X.")),
       testCase "Fx single use is fine" $
@@ -1122,7 +1123,8 @@ roundtrip ops label expr = do
   let src = prettyPExpr ops expr
       input = T.pack (src ++ ".")
   case parseTerms ops "<roundtrip>" input of
-    Left err -> assertFailure (label ++ ": parse failed on: " ++ show src ++ "\n" ++ show err)
+    Left err ->
+      assertFailure (label ++ ": parse failed on: " ++ show src ++ "\n" ++ show err)
     Right [ann] -> strip ann @?= expr
     Right ts -> assertFailure (label ++ ": expected 1 term, got " ++ show (length ts))
 
@@ -1145,7 +1147,8 @@ roundtripTests =
       testCase "compound" $
         roundtrip emptyOps "compound" (Compound "f" [noAnn (Var "X"), noAnn (Atom "a")]),
       testCase "nested compound" $
-        roundtrip emptyOps "nested" (Compound "f" [noAnn (Compound "g" [noAnn (Atom "a")])]),
+        roundtrip emptyOps "nested" $
+          Compound "f" [noAnn (Compound "g" [noAnn (Atom "a")])],
       testCase "zero-arg compound" $
         roundtrip emptyOps "zero-arg" (Compound "f" []),
       testCase "list" $

@@ -97,11 +97,15 @@ noAnnP x = AnnP x dummyLoc (Atom "")
 noAnnPAt :: SourceLoc -> a -> AnnP a
 noAnnPAt loc x = AnnP x loc (Atom "")
 
+-- | A @use_module@ target: a module name or @library(name)@, plus its
+-- optional item list.
 data Import
   = ModuleImport Text (Maybe [Declaration])
   | LibraryImport Text (Maybe [Declaration])
   deriving (Show, Eq)
 
+-- | A parsed CHR module: header, imports, declarations, rules, and
+-- equations.
 data Module = Module
   { name :: Text,
     -- | Source location of the @:- module(...)@ directive. For
@@ -222,6 +226,7 @@ data Declaration
   | TypeExportDecl TypeExportDeclBody
   deriving (Show, Eq)
 
+-- | An @op(...)@ entry from a module's export or import list.
 data OpDecl = OpDecl
   { fixity :: Int,
     opType :: OpType,
@@ -229,6 +234,7 @@ data OpDecl = OpDecl
   }
   deriving (Show, Eq)
 
+-- | A function equation: @lhs [| guard] -> rhs@.
 data FunctionEquation = FunctionEquation
   { funName :: Name,
     args :: [Term],
@@ -237,6 +243,7 @@ data FunctionEquation = FunctionEquation
   }
   deriving (Show, Eq)
 
+-- | A CHR rule: optional name, head, guard, and body.
 data Rule = Rule
   { name :: Maybe (Ann Text),
     head :: AnnP Head,
@@ -245,6 +252,7 @@ data Rule = Rule
   }
   deriving (Show, Eq)
 
+-- | A rule head: the constraints to match, split by rule kind.
 data Head
   = Simplification [Constraint]
   | Propagation [Constraint]

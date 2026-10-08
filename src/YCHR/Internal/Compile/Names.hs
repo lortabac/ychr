@@ -104,9 +104,8 @@ import YCHR.Internal.VM (Label (..), Name (..))
 -- For generated /procedure/ names — @tell_*@, @activate_*@, @func_*@
 -- — use 'encodeIdentifier' instead. Those names are emitted as bare
 -- identifiers in target code and must be valid in both Scheme and
--- JavaScript, neither of which accept @%@; the older
--- @__u\<hex\>__@ escape is retained there since procedure names are
--- never decoded.
+-- JavaScript, neither of which accept @%@; the @__u\<hex\>__@ escape
+-- is used there since procedure names are never decoded.
 encodeText :: Text -> Text
 encodeText = T.concatMap encodeChar
   where
@@ -243,7 +242,8 @@ partIdName k = Name ("pId_" <> T.pack (show k.unPartnerIndex))
 
 -- | VM variable name for the @j@-th argument of partner @k@: @pArg_k_j@.
 partArgName :: PartnerIndex -> Int -> Name
-partArgName k j = Name ("pArg_" <> T.pack (show k.unPartnerIndex) <> "_" <> T.pack (show j))
+partArgName k j =
+  Name ("pArg_" <> T.pack (show k.unPartnerIndex) <> "_" <> T.pack (show j))
 
 -- | VM 'Label' attached to partner @k@'s 'YCHR.Internal.VM.Foreach' loop. Used
 -- by 'YCHR.Internal.VM.Continue' for backjumping. Numbered from 1 so the

@@ -250,7 +250,10 @@ iterationTests =
             (s : _) -> pure s
             [] -> assertFailure "expected at least 1 suspension in store"
           liftIO $ case suspArg s 0 of VInt 10 -> pure (); _ -> assertBool "arg 0" False
-          liftIO $ case suspArg s 1 of VAtom "y" -> pure (); _ -> assertBool "arg 1" False,
+          liftIO $
+            case suspArg s 1 of
+              VAtom "y" -> pure ()
+              _ -> assertBool "arg 1" False,
       testCase "suspArg out-of-range index errors" $ do
         runStoreEnv $ do
           sid <- createConstraint (ConstraintType 0) [VInt 10, VAtom "y"]

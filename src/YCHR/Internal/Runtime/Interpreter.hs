@@ -195,8 +195,8 @@ data Signal
 
 -- | The interpreter's local stack: an 'IORef Env' threaded above 'Chr'.
 -- Using a ref lets the state changes made before a 'BSoftGuard'
--- failure survive the catch, matching the original
--- effectful-static-Local 'runError'-with-outer-state semantics.
+-- failure survive the catch, so a soft-failed guard keeps whatever
+-- bindings it made before failing.
 type InterpM = ReaderT (IORef Env) Chr
 
 -- ---------------------------------------------------------------------------
@@ -676,14 +676,13 @@ execStmt (SPushFrame frame) = do
 
 -- | The candidate suspension list for a 'Foreach' loop.
 --
--- The default is the whole type bucket, which is what this was before
--- the store grew indexes. When one of the loop's index conditions can
--- drive a store index, the list narrows to what that condition could
--- select: the bucket for the condition's value plus the position's
--- non-ground fallback set. See "YCHR.Internal.Runtime.Index" for why
--- the narrowed list is still a superset of the matches; 'driverKey'
--- holds the two guards that keep the narrowing invisible to a
--- program's behaviour.
+-- The default is the whole type bucket. When one of the loop's index
+-- conditions can drive a store index, the list narrows to what that
+-- condition could select: the bucket for the condition's value plus the
+-- position's non-ground fallback set. See "YCHR.Internal.Runtime.Index"
+-- for why the narrowed list is still a superset of the matches;
+-- 'driverKey' holds the two guards that keep the narrowing invisible to
+-- a program's behaviour.
 foreachCandidates :: ConstraintType -> [(ArgIndex, SlotValExpr)] -> InterpM [Suspension]
 foreachCandidates cType conditions = do
   mIndexed <- liftChr (indexedPositionsFor cType)
@@ -707,8 +706,7 @@ foreachCandidates cType conditions = do
 -- dereference to a fully ground term, because only a ground value's key
 -- is stable for the loop's duration. Anything else — including a
 -- compound term holding an unbound variable — falls through to the
--- unindexed path, which evaluates the condition per candidate exactly
--- as before.
+-- unindexed path, which evaluates the condition per candidate.
 driverKey :: IntSet -> [(ArgIndex, SlotValExpr)] -> InterpM (Maybe (Int, GroundKey))
 driverKey _ [] = pure Nothing
 driverKey indexed ((ArgIndex pos, expr) : rest)
@@ -726,12 +724,12 @@ driverKey indexed ((ArgIndex pos, expr) : rest)
 -- A store index is consulted once, before the loop body runs, so a
 -- condition it drives must not be able to raise: an index-driven lookup
 -- that evaluated one eagerly could turn a working query into an
--- instantiation error where the old code, having no candidate to check,
--- never evaluated it. The constructors below are what the compiler
--- emits for a guard's expected value — a head variable, a literal, or a
--- compound built from them. Everything else (a host call, a user
--- function, @is@, a field or term accessor) is left to the per-candidate
--- check.
+-- instantiation error that a per-candidate check, having no candidate
+-- to check, would never have raised. The constructors below are what
+-- the compiler emits for a guard's expected value — a head variable, a
+-- literal, or a compound built from them. Everything else (a host call,
+-- a user function, @is@, a field or term accessor) is left to the
+-- per-candidate check.
 --
 -- The set is deliberately narrow, and it is the compiler's business to
 -- keep it so: 'classifyEqual' only lifts the operands of a @GuardEqual@
@@ -1121,11 +1119,11 @@ evalValExprDeep expr = evalValExpr expr
 -- what makes @T = member(1, [0, 1, 2]), R is T@ (with
 -- @library(lists)@ imported) work: the list
 -- argument stays data instead of being dispatched as a call.
--- Walking the arguments with 'deepEvalValue' used to dispatch the
--- cons cell and report @is: functor is not evaluable: prelude:.\/2@.
+-- Dispatching the cons cell with 'deepEvalValue' would report
+-- @is: functor is not evaluable: prelude:.\/2@.
 -- The /outermost/ compound is still required to be evaluable:
 -- 'invokeByKey' raises the not-evaluable error for it, so
--- @T = pair(1, 2), R is T@ keeps failing as before.
+-- @T = pair(1, 2), R is T@ still fails.
 --
 -- One consequence is that a stored term can be less evaluated than the
 -- same expression written inline, and deliberately so: the compiler
@@ -1288,10 +1286,10 @@ evalCallArgDeep (SCallId e) = CId <$> evalIdExpr e
 -- The closure is dereferenced and turned into a 'CallableKey' by
 -- 'closureKey'; the key selects a procedure from the session's
 -- callables table, and that procedure is called with any captured
--- values the closure carries, followed by the arguments. One map
--- lookup replaces the per-arity dispatcher chain this used to be,
--- whose length grew with the number of same-arity functions and
--- lifted lambdas the program defines.
+-- values the closure carries, followed by the arguments. A single map
+-- lookup covers every arity, so dispatch cost does not grow with the
+-- number of same-arity functions and lifted lambdas the program
+-- defines.
 --
 -- A value 'closureKey' does not recognize may still be the surface
 -- shape of a function reference, @fun('/'(name, arity))@ — what
@@ -1300,10 +1298,10 @@ evalCallArgDeep (SCallId e) = CId <$> evalIdExpr e
 -- same callables table, so a dynamically constructed reference is
 -- callable exactly like one the string reader produced.
 --
--- The failure modes, and their kinds, are the dispatchers': an unbound
--- closure is an instantiation error, so a rule guard soft-fails and
--- retries the occurrence once reactivation binds the variable;
--- everything else is a general error.
+-- The failure modes, and their kinds: an unbound closure is an
+-- instantiation error, so a rule guard soft-fails and retries the
+-- occurrence once reactivation binds the variable; everything else is
+-- a general error.
 applyClosure :: Value -> [Value] -> Chr Value
 applyClosure closure args = do
   v <- deref closure
@@ -1393,7 +1391,7 @@ derefClosureHeader v = pure v
 -- together with the captured values to pass before those arguments.
 --
 -- See 'CallableKey' for the shape a closure value has and why the key
--- is what it is. Two details preserve the old dispatchers' behaviour:
+-- is what it is. Two arity rules decide the lookup:
 --
 --   * a function reference is looked up at the arity it records, and
 --     an application at any other arity is a mismatch. Without that

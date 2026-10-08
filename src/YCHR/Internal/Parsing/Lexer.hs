@@ -3,10 +3,10 @@
 
 -- | Lexer helpers shared by 'YCHR.Internal.SExpr' and 'YCHR.Internal.PExpr'.
 --
--- A small set of parsec combinators that mimic the parts of
--- 'Text.Megaparsec.Char.Lexer' the codebase used to depend on:
--- whitespace + line-comment consumer ('space'), 'lexeme', 'symbol',
--- integer 'decimal', and a permissive C-style 'charLiteral'.
+-- A small set of parsec combinators mirroring the
+-- 'Text.Megaparsec.Char.Lexer' API: whitespace + line-comment consumer
+-- ('space'), 'lexeme', 'symbol', integer 'decimal', and a permissive
+-- C-style 'charLiteral'.
 module YCHR.Internal.Parsing.Lexer
   ( space,
     space1,

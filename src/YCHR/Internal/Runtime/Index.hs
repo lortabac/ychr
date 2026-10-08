@@ -174,7 +174,7 @@ emptyStoreIndex = IntMap.empty
 --
 -- The value comes from the benchmark suite: @test/golden/graph_test@,
 -- a store-heavy shape whose constraint types stay below it, runs ~13%
--- slower with indexing from the first store and exactly as before with
+-- slower with indexing from the first store and exactly as fast with
 -- this threshold; @leq_closure@, whose @leq@ bucket reaches the
 -- thousands, crosses it immediately and keeps its ~50% gain.
 indexThreshold :: Int

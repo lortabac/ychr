@@ -37,21 +37,21 @@ import YCHR.TypeSoundness.Types
 A program whose rules never fire runs none of the observations that
 carry the property, so it costs a test iteration and observes nothing.
 This note records why the goal- and guard-seeding below exists, and the
-measurement that justified it.
+rates it produces.
 
-The measurement predates the host observer. At the time, whether a rule
-fired was a runtime fact nothing could see from Haskell, so it was
-measured out of band with a canary: splice a body that always raises
-(`Z = 1, Z = 2` — well-typed, and a failed body unification is a runtime
-error) into the rules of interest, run, and count the programs that then
-fail. A failure means those rules fired.
+The rates were measured before the host observer existed, when firing
+was not visible from Haskell, so they come from an out-of-band canary:
+splice a body that always raises (`Z = 1, Z = 2` — well-typed, and a
+failed body unification is a runtime error) into the rules of interest,
+run, and count the programs that then fail. A failure means those rules
+fired.
 
-That method is retired. The observer's per-site hit counts make firing
-directly assertable, so `coverRuntime` in the test module now carries
-these rates as `cover` floors that CI enforces on every run, rather
-than as a number someone has to remember to re-measure. Its haddock
-records the cross-check: the observer reproduces the two program-level
-rows below from inside the run to within a few points.
+The observer's per-site hit counts make firing directly assertable, so
+`coverRuntime` in the test module carries these rates as `cover` floors
+that CI enforces on every run, rather than as a number someone has to
+remember to re-measure. Its haddock records the cross-check: the
+observer reproduces the two program-level rows below from inside the
+run to within a few points.
 
 Measured across the size sweep, before and after the goal- and
 guard-seeding described at `genGuard`, `patInstance` and
@@ -380,7 +380,11 @@ genAdts = do
       let params = take nParams [TvName "A", TvName "B"]
           earlier = fixedAdts ++ reverse acc
       (cs, ctorIx') <- genCtors earlier params ctorIx
-      let used = [p | p <- params, any (mentionsTv p) (concatMap (.ctorFields) (NE.toList cs))]
+      let used =
+            [ p
+            | p <- params,
+              any (mentionsTv p) (concatMap (.ctorFields) (NE.toList cs))
+            ]
           def =
             AdtDef
               { adtName = "t" <> tshow tyIx,
@@ -689,8 +693,8 @@ genRule univ adts cls sigList ix = do
             ctxBounded = bounded,
             ctxTainted = tainted
           }
-  -- Boundness first, then evidence: both establish something used to
-  -- their right and nothing to their left, and a variable has to be
+  -- Boundness first, then evidence: both establish a fact that is used
+  -- to their right and nothing to their left, and a variable has to be
   -- known bound before a type predicate on it can succeed.
   (modeGs, ctxM) <- genModeGuards ctxHead
   (ev, ctx0) <- genEvidenceGuards ctxM
@@ -923,15 +927,12 @@ varName path = "V" <> T.intercalate "_" (map tshow (reverse path))
 --
 -- A pair that merges one skolem into /another skolem/ is taken
 -- outright rather than by coin. That merge is the case the checker's
--- GuardEqual skolem discipline exists for, and programs offering one
--- at all are rare — the 'skForce' split reclassified the
--- parameter-depth pairs that used to swell the bucket, and a coin on
--- top of that rarity left the closed property's rigid-merge coverage
--- floor flaky. Only the top rung is deterministic: taking every
--- /constraining/ pair outright was tried and starved the evidence
--- guards of rigid variables, dropping the type-predicate pin toward
--- its own floor. Everything below the top rung keeps the original
--- weighted coin.
+-- GuardEqual skolem discipline exists for, and it is rare, so a coin
+-- on top of that rarity would leave the closed property's rigid-merge
+-- coverage floor flaky. Only the top rung is deterministic: taking
+-- every /constraining/ pair outright would starve the evidence guards
+-- of rigid variables and drop the type-predicate pin toward its own
+-- floor. Everything below the top rung keeps the weighted coin.
 maybeAlias ::
   [ClassFn] ->
   SkolemEnv ->
@@ -1623,7 +1624,11 @@ richAlts ctx d ty
       ]
         ++ copyAlt
   | ty' == gToS gBool =
-      [ (ECmp <$> Gen.element [CLt, CGt, CGe, CLe] <*> sub (gToS gInt) <*> sub (gToS gInt)),
+      [ ( ECmp
+            <$> Gen.element [CLt, CGt, CGe, CLe]
+            <*> sub (gToS gInt)
+            <*> sub (gToS gInt)
+        ),
         eqAlt,
         (ENot <$> sub (gToS gBool)),
         (call FnLt),

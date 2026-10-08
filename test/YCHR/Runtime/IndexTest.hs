@@ -202,7 +202,10 @@ stateTests =
     "insertConstraints/candidateSlots"
     [ testCase "a ground key lands in its bucket" $
         let si =
-              insertConstraints (ConstraintType 0) [(3, [(0, Just (KInt 1))])] emptyStoreIndex
+              insertConstraints
+                (ConstraintType 0)
+                [(3, [(0, Just (KInt 1))])]
+                emptyStoreIndex
          in candidateSlots (ConstraintType 0) 0 (KInt 1) si @?= IntSet.singleton 3,
       testCase "an unkeyable value lands in the fallback set of every key" $
         let si =
@@ -212,7 +215,10 @@ stateTests =
               candidateSlots (ConstraintType 0) 0 (KInt 99) si @?= IntSet.singleton 4,
       testCase "an unindexed position has no entries" $
         let si =
-              insertConstraints (ConstraintType 0) [(5, [(0, Just (KInt 1))])] emptyStoreIndex
+              insertConstraints
+                (ConstraintType 0)
+                [(5, [(0, Just (KInt 1))])]
+                emptyStoreIndex
          in candidateSlots (ConstraintType 0) 1 (KInt 1) si @?= IntSet.empty,
       testCase "entries accumulate per type and position" $
         let type1 = insertConstraints (ConstraintType 1) [(2, [(0, Just (KInt 1))])]

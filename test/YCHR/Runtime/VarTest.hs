@@ -210,7 +210,10 @@ unifiableTests =
         assertUnifiable (VInt 42) x True,
       testCase "Compound: matching ground args" $
         runVarEnv $
-          assertUnifiable (makeTerm "f" [VInt 1, VInt 2]) (makeTerm "f" [VInt 1, VInt 2]) True,
+          assertUnifiable
+            (makeTerm "f" [VInt 1, VInt 2])
+            (makeTerm "f" [VInt 1, VInt 2])
+            True,
       testCase "Compound: mismatched functor" $
         runVarEnv $
           assertUnifiable (makeTerm "f" [VInt 1]) (makeTerm "g" [VInt 1]) False,

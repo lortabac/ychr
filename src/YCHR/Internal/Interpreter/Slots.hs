@@ -277,7 +277,9 @@ data Walker = Walker
 slotOf :: Walker -> Name -> (Slot, Walker)
 slotOf w name = case Map.lookup name w.scope of
   Just s -> (s, w)
-  Nothing -> let s = w.nextSlot in (s, w {nextSlot = s + 1, scope = Map.insert name s w.scope})
+  Nothing ->
+    let s = w.nextSlot
+     in (s, w {nextSlot = s + 1, scope = Map.insert name s w.scope})
 
 -- | Bind a name to a fresh slot, shadowing any earlier binding.
 bindName :: Walker -> Name -> (Slot, Walker)
@@ -356,8 +358,12 @@ lowerValExpr :: Walker -> ValExpr -> (SlotValExpr, Walker)
 lowerValExpr w = \case
   Var name -> let (slot, w') = slotOf w name in (SVar slot name, w')
   Lit lit -> (SLit lit, w)
-  CallExpr name args -> let (args', w') = lowerCallArgs w args in (SCallExpr name args', w')
-  HostCall name args -> let (args', w') = lowerValExprs w args in (SHostCall name args', w')
+  CallExpr name args ->
+    let (args', w') = lowerCallArgs w args
+     in (SCallExpr name args', w')
+  HostCall name args ->
+    let (args', w') = lowerValExprs w args
+     in (SHostCall name args', w')
   EvalDeep expr -> let (expr', w') = lowerValExpr w expr in (SEvalDeep expr', w')
   ApplyClosure f args ->
     let (f', w1) = lowerValExpr w f

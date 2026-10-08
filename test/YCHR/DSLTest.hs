@@ -67,7 +67,8 @@ moduleTests =
       testCase "declaring sets modDecls" $
         module' "Foo" `declaring` ["leq" // 2]
           @?= (emptyModule "Foo")
-            { decls = [noAnn (ConstraintDecl (ConstraintDeclBody "leq" 2 Nothing Nothing))]
+            { decls =
+                [noAnn (ConstraintDecl (ConstraintDeclBody "leq" 2 Nothing Nothing))]
             },
       testCase "defining sets modRules" $
         let r = [term "leq" [var "X"]] <=> [atom "true"]
@@ -81,14 +82,16 @@ moduleTests =
               `defining` [r]
               @?= (emptyModule "M")
                 { imports = [noAnnP (ModuleImport "A" Nothing)],
-                  decls = [noAnn (ConstraintDecl (ConstraintDeclBody "c" 0 Nothing Nothing))],
+                  decls =
+                    [noAnn (ConstraintDecl (ConstraintDeclBody "c" 0 Nothing Nothing))],
                   rules = [r]
                 },
       testCase "exporting sets modExports" $
         module' "Foo" `exporting` ["leq" // 2]
           @?= (emptyModule "Foo")
             { exports =
-                Just (noAnnP [ConstraintDecl (ConstraintDeclBody "leq" 2 Nothing Nothing)])
+                Just
+                  (noAnnP [ConstraintDecl (ConstraintDeclBody "leq" 2 Nothing Nothing)])
             },
       testCase "library appends a LibraryImport" $
         module' "Foo" `library` "lists" `library` "math"
@@ -236,7 +239,8 @@ typeDeclarationTests =
         typeExport "color" 0 @?= TypeExportDecl (TypeExportDeclBody "color" 0 Nothing),
       testCase "typeExportWith carries the allowlist" $
         typeExportWith "color" 0 ["red", "green", "blue"]
-          @?= TypeExportDecl (TypeExportDeclBody "color" 0 (Just ["red", "green", "blue"])),
+          @?= TypeExportDecl
+            (TypeExportDeclBody "color" 0 (Just ["red", "green", "blue"])),
       testCase "typeExportWith with empty allowlist exports type only" $
         -- Empty list is distinct from Nothing: exports the type tag
         -- without any of its constructors.
@@ -534,7 +538,8 @@ integrationTests =
             { name = "Order",
               nameLoc = dummyLoc,
               imports = [],
-              decls = [noAnn (ConstraintDecl (ConstraintDeclBody "leq" 2 Nothing Nothing))],
+              decls =
+                [noAnn (ConstraintDecl (ConstraintDeclBody "leq" 2 Nothing Nothing))],
               extensionTypes = [],
               typeDecls = [],
               rules =
@@ -616,14 +621,18 @@ leqEndToEnd =
             `declaring` ["leq" // 2]
             `defining` [ "refl" @: [term "leq" [var "X", var "X"]] <=> [bool True],
                          "antisymm"
-                           @: [term "leq" [var "X", var "Y"], term "leq" [var "Y", var "X"]]
+                           @: [ term "leq" [var "X", var "Y"],
+                                term "leq" [var "Y", var "X"]
+                              ]
                            <=> [var "X" .=. var "Y"],
                          "idemp"
                            @: [term "leq" [var "X", var "Y"]]
                            \\ [term "leq" [var "X", var "Y"]]
                            <=> [bool True],
                          "trans"
-                           @: [term "leq" [var "X", var "Y"], term "leq" [var "Y", var "Z"]]
+                           @: [ term "leq" [var "X", var "Y"],
+                                term "leq" [var "Y", var "Z"]
+                              ]
                            ==> [term "leq" [var "X", var "Z"]]
                        ]
     bindings <- runDSL stdlib [m] (term "leq" [var "X", var "X"])
@@ -671,7 +680,11 @@ factorialEndToEnd =
                                 "factorial"
                                 [var "N"]
                                 [var "N" .> int 0]
-                                (var "N" .* call_ (funRef "factorial" 1) [var "N" .- int 1])
+                                ( var "N"
+                                    .* call_
+                                      (funRef "factorial" 1)
+                                      [var "N" .- int 1]
+                                )
                             ]
             `defining` [ [term "compute" [var "R"]]
                            <=> [var "R" `is` call_ (funRef "factorial" 1) [int 5]]

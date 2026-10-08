@@ -171,10 +171,9 @@ data Expr
 -- entry in @dev-docs\/INVARIANTS.md@.
 --
 -- The limit is a surface-language choice, aligned with the prelude's
--- @call\/N@ wrapper family. It is no longer forced by the backend:
--- keyed @'$call'@ dispatch compiles a dynamic call to the arity-generic
--- 'YCHR.Internal.VM.ApplyClosure' construct, which would work at any
--- arity.
+-- @call\/N@ wrapper family, not a backend restriction: keyed @'$call'@
+-- dispatch compiles a dynamic call to the arity-generic
+-- 'YCHR.Internal.VM.ApplyClosure' construct, which works at any arity.
 maxCallArity :: Int
 maxCallArity = 10
 

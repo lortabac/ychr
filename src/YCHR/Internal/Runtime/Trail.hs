@@ -19,12 +19,11 @@
 -- ('SessionEnv.trail' is 'Nothing') every hook is a field read and a
 -- 'case'.
 --
--- Note that 'YCHR.Internal.Runtime.Var.deref' writes through
--- 'writeVarState' too, so path compression is trailed. That is not
--- merely harmless, it is necessary: a cell compressed to point /past/
--- a variable the branch bound has to be restored alongside that
--- variable, or unwinding leaves it pointing at a value the branch was
--- supposed to have taken back.
+-- 'YCHR.Internal.Runtime.Var.deref' writes through 'writeVarState' too,
+-- so path compression is trailed. That is not merely harmless, it is
+-- necessary: a cell compressed to point /past/ a variable the branch
+-- bound has to be restored alongside that variable, or unwinding leaves
+-- it pointing at a value the branch was supposed to have taken back.
 --
 -- 'YCHR.Internal.Runtime.Var.unifiable' is the one deliberate
 -- exception. It reverts its own hypothetical writes from a private

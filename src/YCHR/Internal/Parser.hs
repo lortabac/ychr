@@ -243,8 +243,8 @@ parseQuery = parseQueryWith builtinOps
 -- stripped) ends in a dot, the dot-terminated parser is used; otherwise
 -- the non-terminated one. Picking the parser up front (rather than
 -- retrying on failure) keeps the parse error message attached to the
--- right phase — a missing or extra dot is no longer reported as a
--- term-shape error.
+-- right phase: a missing or extra dot surfaces as a terminator error
+-- rather than a term-shape error.
 parseQueryWith ::
   OpTable ->
   String ->
@@ -1291,10 +1291,9 @@ convertTypeDefinition (Ann pexpr loc) = case pexpr of
 
 -- | Validate a type head's parameter list: every parameter must be a
 -- variable, and no variable may repeat. Rejecting outright keeps the
--- declared arity equal to the written arity — the silent filter this
--- replaces dropped malformed parameters, changing the definition's
--- arity, and kept duplicates, silently aliasing two parameter
--- positions to one variable.
+-- declared arity equal to the written arity: dropping a malformed
+-- parameter would shrink the arity, and keeping a duplicate would
+-- alias two parameter positions to one variable.
 validateTypeParams ::
   [Ann PExpr] -> Either [AnnP ParseValidationError] [Text]
 validateTypeParams params = case go Set.empty params of

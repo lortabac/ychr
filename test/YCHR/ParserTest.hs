@@ -154,7 +154,8 @@ directiveTests =
       testCase "type export with constructor allowlist" $
         fmap (.node) . (.exports)
           <$> p ":- module(m, [type(foo/0, [bar, baz])])."
-          @?= Right (Just [TypeExportDecl (TypeExportDeclBody "foo" 0 (Just ["bar", "baz"]))]),
+          @?= Right
+            (Just [TypeExportDecl (TypeExportDeclBody "foo" 0 (Just ["bar", "baz"]))]),
       testCase "type export with empty constructor list" $
         fmap (.node) . (.exports)
           <$> p ":- module(m, [type(foo/0, [])])."
@@ -178,7 +179,8 @@ directiveTests =
         pErrs ":- module(m, [type(foo/0, [X, Y])])."
           @?= Right [MalformedExportItem, MalformedExportItem],
       testCase "unknown directive is skipped" $
-        (map (.node) . (.decls)) <$> p ":- mystery_directive(foo).\n:- chr_constraint leq/2."
+        (map (.node) . (.decls))
+          <$> p ":- mystery_directive(foo).\n:- chr_constraint leq/2."
           @?= Right [ConstraintDecl (ConstraintDeclBody "leq" 2 Nothing Nothing)],
       testCase "chr_constraint typed" $
         (map (.node) . (.decls)) <$> p ":- chr_constraint leq(int, int)."
@@ -247,7 +249,11 @@ directiveTests =
                 ( FunctionDeclBody
                     "add"
                     2
-                    (Just [TypeCon (Unqualified "int") [], TypeCon (Unqualified "int") []])
+                    ( Just
+                        [ TypeCon (Unqualified "int") [],
+                          TypeCon (Unqualified "int") []
+                        ]
+                    )
                     (Just (TypeCon (Unqualified "int") []))
                     False
                     DKFunction
@@ -362,7 +368,10 @@ negativeIntTests =
           >>= (@?= [CompoundTerm (Unqualified "f") [IntTerm (-5)]]),
       testCase "negative literal as constraint argument" $
         headOf "c(-3, X) <=> true."
-          >>= (@?= Simplification [Constraint (Unqualified "c") [IntTerm (-3), VarTerm "X"]]),
+          >>= ( @?=
+                  Simplification
+                    [Constraint (Unqualified "c") [IntTerm (-3), VarTerm "X"]]
+              ),
       testCase "negative literal in guard" $
         guardOf "r @ c(X) <=> host:'>='(X, -1) | true."
           >>= (@?= [CompoundTerm (Qualified "host" ">=") [VarTerm "X", IntTerm (-1)]]),
@@ -591,7 +600,9 @@ typeTests =
                       (Unqualified "tree")
                       []
                       [ DataConstructor (Unqualified "empty") [],
-                        DataConstructor (Unqualified "leaf") [TypeCon (Unqualified "int") []],
+                        DataConstructor
+                          (Unqualified "leaf")
+                          [TypeCon (Unqualified "int") []],
                         DataConstructor
                           (Unqualified "branch")
                           [ TypeCon
@@ -640,7 +651,9 @@ typeTests =
                           (Unqualified "wrap")
                           [ TypeCon
                               (Unqualified "pair")
-                              [TypeCon (Unqualified "int") [], TypeCon (Unqualified "int") []]
+                              [ TypeCon (Unqualified "int") [],
+                                TypeCon (Unqualified "int") []
+                              ]
                           ]
                       ]
                       dummyLoc
@@ -650,7 +663,8 @@ typeTests =
         case p ":- chr_type t ---> a.\n:- chr_constraint c/1." of
           Left err -> assertFailure (show err)
           Right m -> do
-            map (.node) m.decls @?= [ConstraintDecl (ConstraintDeclBody "c" 1 Nothing Nothing)]
+            map (.node) m.decls
+              @?= [ConstraintDecl (ConstraintDeclBody "c" 1 Nothing Nothing)]
             map (normalizeTypeDefLoc . (.node)) m.typeDecls
               @?= [ algebraicTD
                       (Unqualified "t")

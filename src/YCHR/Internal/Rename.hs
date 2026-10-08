@@ -1268,7 +1268,8 @@ importListPermits :: Text -> Int -> Maybe [Declaration] -> Bool
 importListPermits _ _ Nothing = True
 importListPermits n arity (Just decls) = any match decls
   where
-    match (ConstraintDecl ConstraintDeclBody {name = dn, arity = da}) = dn == n && da == arity
+    match (ConstraintDecl ConstraintDeclBody {name = dn, arity = da}) =
+      dn == n && da == arity
     match (FunctionDecl FunctionDeclBody {name = dn, arity = da}) = dn == n && da == arity
     match _ = False
 
@@ -1277,7 +1278,8 @@ importListPermitsType :: Text -> Int -> Maybe [Declaration] -> Bool
 importListPermitsType _ _ Nothing = True
 importListPermitsType n arity (Just decls) = any match decls
   where
-    match (TypeExportDecl TypeExportDeclBody {name = tn, arity = ta}) = tn == n && ta == arity
+    match (TypeExportDecl TypeExportDeclBody {name = tn, arity = ta}) =
+      tn == n && ta == arity
     match _ = False
 
 -- | The set of constructor names a single import-list entry permits for
@@ -1288,10 +1290,13 @@ importListPermitsCons ::
   Text -> Int -> Set.Set Text -> Maybe [Declaration] -> Set.Set Text
 importListPermitsCons _ _ allCons Nothing = allCons
 importListPermitsCons n arity allCons (Just decls) =
-  case [cs | TypeExportDecl (TypeExportDeclBody tn ta cs) <- decls, tn == n, ta == arity] of
+  case matching of
     (Nothing : _) -> allCons
     (Just xs : _) -> Set.fromList xs
     [] -> Set.empty
+  where
+    matching =
+      [cs | TypeExportDecl (TypeExportDeclBody tn ta cs) <- decls, tn == n, ta == arity]
 
 -- | For each type visible to the current module, the set of constructor
 -- names also visible. Locally declared types contribute every declared

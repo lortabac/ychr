@@ -192,7 +192,9 @@ hnfTests =
           @?= D.Head
             []
             [ D.HeadConstraint (D.QualifiedName "M" "leq") [D.HeadVar "X", D.HeadVar "Y"],
-              D.HeadConstraint (D.QualifiedName "M" "leq") [D.HeadVar "_hnf_0", D.HeadVar "Z"]
+              D.HeadConstraint
+                (D.QualifiedName "M" "leq")
+                [D.HeadVar "_hnf_0", D.HeadVar "Z"]
             ]
         getNode rule.guard @?= [D.GuardEqual (R.VarExpr "Y") (R.VarExpr "_hnf_0")],
       testCase "simpagation: kept processed before removed" $ do
@@ -206,14 +208,19 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             [D.HeadConstraint (D.QualifiedName "M" "leq") [D.HeadVar "X", D.HeadVar "Y"]]
-            [D.HeadConstraint (D.QualifiedName "M" "leq") [D.HeadVar "_hnf_0", D.HeadVar "Z"]]
+            [ D.HeadConstraint
+                (D.QualifiedName "M" "leq")
+                [D.HeadVar "_hnf_0", D.HeadVar "Z"]
+            ]
         getNode rule.guard @?= [D.GuardEqual (R.VarExpr "Y") (R.VarExpr "_hnf_0")],
       testCase "hnf guards prepended before user guards" $ do
         let m =
               module' "M"
                 `defining` [ Rule
                                Nothing
-                               (noAnnP (Simplification [qcon "M" "leq" [var "X", var "X"]]))
+                               ( noAnnP
+                                   (Simplification [qcon "M" "leq" [var "X", var "X"]])
+                               )
                                (noAnnP [hostCall "gt" [var "X", IntTerm 0]])
                                (noAnnP [atom "true"])
                            ]
@@ -228,7 +235,10 @@ hnfTests =
         getNode rule.head
           @?= D.Head
             []
-            [D.HeadConstraint (D.QualifiedName "M" "foo") [D.HeadWildcard, D.HeadWildcard]]
+            [ D.HeadConstraint
+                (D.QualifiedName "M" "foo")
+                [D.HeadWildcard, D.HeadWildcard]
+            ]
         getNode rule.guard @?= [],
       testCase "wildcard and non-variable: only non-variable gets guard" $ do
         let m = simpleModule (Simplification [qcon "M" "foo" [wildcard, IntTerm 1]])
@@ -301,7 +311,8 @@ bodyTests =
   testGroup
     "body-classification"
     [ testCase "= becomes BodyUnify" $ do
-        rule <- singleRule [simpleModule' (Simplification [leqQual]) [var "X" .=. var "Y"]]
+        rule <-
+          singleRule [simpleModule' (Simplification [leqQual]) [var "X" .=. var "Y"]]
         getNode rule.body @?= [D.BodyUnify (R.VarExpr "X") (R.VarExpr "Y")],
       testCase "is becomes BodyIs" $ do
         rule <-
@@ -375,7 +386,8 @@ errorTests =
                            ]
         rprog <- resolve [m]
         case desugarProgram rprog of
-          Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyExpr badExpr) dummyLoc (Atom ""))]
+          Left errs ->
+            errs @?= [noDiag (AnnP (UnexpectedBodyExpr badExpr) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "two unqualified compounds collect both errors" $ do
         let bad1 = R.CtorExpr (Unqualified "foo") [R.VarExpr "X"]
@@ -408,7 +420,8 @@ errorTests =
                            ]
         rprog <- resolve [m]
         case desugarProgram rprog of
-          Left errs -> errs @?= [noDiag (AnnP (UnexpectedBodyExpr badExpr) dummyLoc (Atom ""))]
+          Left errs ->
+            errs @?= [noDiag (AnnP (UnexpectedBodyExpr badExpr) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "bare variable in guard becomes GuardExpr" $ do
         let goal = var "X"
@@ -438,7 +451,8 @@ errorTests =
                            ]
         rprog <- resolve [m]
         case desugarProgram rprog of
-          Left errs -> errs @?= [noDiag (AnnP (NonBooleanGuard badExpr) dummyLoc (Atom ""))]
+          Left errs ->
+            errs @?= [noDiag (AnnP (NonBooleanGuard badExpr) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "non-true/false atom in guard produces NonBooleanGuard" $ do
         let badExpr = R.CtorExpr (Unqualified "foo") []
@@ -452,7 +466,8 @@ errorTests =
                            ]
         rprog <- resolve [m]
         case desugarProgram rprog of
-          Left errs -> errs @?= [noDiag (AnnP (NonBooleanGuard badExpr) dummyLoc (Atom ""))]
+          Left errs ->
+            errs @?= [noDiag (AnnP (NonBooleanGuard badExpr) dummyLoc (Atom ""))]
           Right _ -> assertFailure "expected Left",
       testCase "atom false becomes GuardExpr" $ do
         let m =
@@ -701,7 +716,8 @@ lambdaLiftTests =
                 eq.prelude @?= []
                 eq.rhs @?= lambdaBodyExpr
               eqs -> assertFailure $ "expected 1 equation, got " ++ show (length eqs)
-          fs -> assertFailure $ "expected exactly one __lambda_0, got " ++ show (length fs),
+          fs ->
+            assertFailure $ "expected exactly one __lambda_0, got " ++ show (length fs),
       testCase "rejects non-variable lambda parameter" $ do
         -- fun("hello") -> "world" end is rejected at the resolve phase:
         -- the resolver's term-to-Expr translator validates lambda

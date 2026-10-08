@@ -114,7 +114,13 @@ slotTests =
         lowerBody
           []
           [Foreach "l" (ConstraintType 0) "s" [] [BoolExprStmt (BAlive (IdVar "s"))]]
-          @?= [SForeach "l" (ConstraintType 0) 0 [] [SBoolExprStmt (SBAlive (SIdVar 0 "s"))]],
+          @?= [ SForeach
+                  "l"
+                  (ConstraintType 0)
+                  0
+                  []
+                  [SBoolExprStmt (SBAlive (SIdVar 0 "s"))]
+              ],
       testCase "Foreach conditions are lowered in the enclosing scope" $
         lowerBody
           ["a"]

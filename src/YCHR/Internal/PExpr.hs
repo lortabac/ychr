@@ -76,7 +76,17 @@ import Text.Parsec
     try,
     (<|>),
   )
-import Text.Parsec.Char (alphaNum, anyChar, char, digit, lower, oneOf, satisfy, string, upper)
+import Text.Parsec.Char
+  ( alphaNum,
+    anyChar,
+    char,
+    digit,
+    lower,
+    oneOf,
+    satisfy,
+    string,
+    upper,
+  )
 import Text.Parsec.Pos (sourceColumn, sourceLine, sourceName)
 import Text.Parsec.Text ()
 import YCHR.Internal.Loc
@@ -727,7 +737,8 @@ parseLeadingTerms table = parse (sc *> loop [])
 -- prefix, or postfix operators, with minimal parenthesisation based on
 -- precedence.
 prettyPExpr :: OpTable -> PExpr -> String
-prettyPExpr table = prettyPrec table.infixByName table.prefixByName table.wordOpSet maxPrec
+prettyPExpr table =
+  prettyPrec table.infixByName table.prefixByName table.wordOpSet maxPrec
 
 -- | Render a PExpr within a precedence context.
 --

@@ -55,9 +55,9 @@ generateDriver moduleName qn args =
     let arity = length args
         -- Use the exported friendly alias (e.g. @mod:name/2@) emitted by
         -- the Scheme backend, not the internal mangled @tell_*@ — the
-        -- mangled procedures are no longer exported by generated
-        -- libraries. 'qualifiedAliasIdentifier' is total: it encodes any
-        -- constraint name into a well-formed Scheme identifier.
+        -- mangled procedures are not exported by generated libraries.
+        -- 'qualifiedAliasIdentifier' is total: it encodes any constraint
+        -- name into a well-formed Scheme identifier.
         tellAlias = qualifiedAliasIdentifier (Types.qualifiedToName qn) arity
         varNames = nub (concatMap exprVars args)
         sortedVars = sort varNames
@@ -170,8 +170,7 @@ exprToScheme (R.ApplyExpr f args) =
 exprToScheme (R.FunRefExpr qn arity) =
   -- Mirrors 'compileExpr's encoding for first-class function refs:
   -- the identity is the *flattened* source name (`module:name`), which
-  -- is what the callables table is keyed on and what the compiled
-  -- dispatcher used to compare against. Encoding it with 'vmName'
+  -- is what the callables table is keyed on. Encoding it with 'vmName'
   -- instead would mint `module__name`, an identity nothing matches.
   let flat = flattenName (Types.qualifiedToName qn)
    in "(make-term "
@@ -237,7 +236,11 @@ termToScheme (CompoundTerm name@(Types.Qualified _ _) ts) =
 termToScheme (CompoundTerm (Types.Unqualified n) ts) =
   let symExpr = compileSymbol n
       argExprs = map termToScheme ts
-   in "(make-term " <> printSExpr symExpr <> " (vector " <> T.intercalate " " argExprs <> "))"
+   in "(make-term "
+        <> printSExpr symExpr
+        <> " (vector "
+        <> T.intercalate " " argExprs
+        <> "))"
 
 -- | Collect every variable name mentioned anywhere in an expression
 -- tree, so each can be declared as a logical variable in the

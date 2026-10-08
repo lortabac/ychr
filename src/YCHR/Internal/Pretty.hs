@@ -91,7 +91,11 @@ termToPExpr (CompoundTerm (Unqualified f) []) = PE.Atom f
 termToPExpr (CompoundTerm (Qualified m f) []) =
   PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Atom f)]
 termToPExpr (CompoundTerm (Qualified m f) args) =
-  PE.Compound ":" [noAnn (PE.Atom m), noAnn (PE.Compound f (map (noAnn . termToPExpr) args))]
+  PE.Compound
+    ":"
+    [ noAnn (PE.Atom m),
+      noAnn (PE.Compound f (map (noAnn . termToPExpr) args))
+    ]
 termToPExpr (CompoundTerm (Unqualified f) args) =
   PE.Compound f (map (noAnn . termToPExpr) args)
 
@@ -403,8 +407,14 @@ prettyFunctionDecl qn arity sigs bounds refined kind =
             ++ refStr
             ++ "."
         _ ->
-          let oneSig (argTys, retTy) = "    (" ++ prettyFunSig qn.baseName argTys retTy ++ ")"
-           in ":- " ++ keyword ++ "\n" ++ intercalate ",\n" (map oneSig sigs) ++ reqStr ++ "."
+          let oneSig (argTys, retTy) =
+                "    (" ++ prettyFunSig qn.baseName argTys retTy ++ ")"
+           in ":- "
+                ++ keyword
+                ++ "\n"
+                ++ intercalate ",\n" (map oneSig sigs)
+                ++ reqStr
+                ++ "."
 
 -- | Render a @:- chr_type@ declaration: the type head (with its type
 -- variables) followed by @--->@ and the list of data constructors
@@ -422,7 +432,11 @@ prettyTypeDecl td =
    in case td.kind of
         Opaque -> ":- opaque_type " ++ head_ ++ "."
         Algebraic cs ->
-          ":- chr_type " ++ head_ ++ " ---> " ++ intercalate " ; " (map ctorToString cs) ++ "."
+          ":- chr_type "
+            ++ head_
+            ++ " ---> "
+            ++ intercalate " ; " (map ctorToString cs)
+            ++ "."
 
 ctorToString :: DataConstructor -> String
 ctorToString c =
