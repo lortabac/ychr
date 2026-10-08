@@ -396,7 +396,7 @@ data ValExpr
     -- | Construct a compound term: @MakeTerm functor args@.
     MakeTerm Name [ValExpr]
   | -- | Extract an argument from a compound term by index (0-based).
-    GetArg ValExpr Int
+    GetArg ValExpr Word
   | -- Suspension field access
 
     -- | Extract a constraint argument from a suspension by index.
@@ -422,7 +422,7 @@ data BoolExpr
     BOr BoolExpr BoolExpr
   | -- | Check whether a value is a compound term with the given
     -- functor and arity: @BMatchTerm expr functor arity@.
-    BMatchTerm ValExpr Name Int
+    BMatchTerm ValExpr Name Word
   | -- | Check equality of two terms (ask semantics). No mutation.
     -- Uses Prolog @==@ semantics: two distinct unbound variables
     -- are not equal.
@@ -508,7 +508,11 @@ data Literal
   deriving (Show, Eq)
 
 -- | Zero-based index into a constraint's argument list.
-newtype ArgIndex = ArgIndex Int
+--
+-- The field is a 'Word' so that a negative index is unrepresentable.
+-- Producers enumerate argument positions, so every constructed value
+-- is necessarily non-negative.
+newtype ArgIndex = ArgIndex Word
   deriving (Show, Eq)
 
 -- | The constraint identifiers a propagation-history entry is keyed

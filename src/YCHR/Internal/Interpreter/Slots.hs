@@ -206,7 +206,7 @@ data SlotValExpr
   | SEvalIs SlotValExpr
   | SNewVar
   | SMakeTerm Name [SlotValExpr]
-  | SGetArg SlotValExpr Int
+  | SGetArg SlotValExpr Word
   | SFieldArg SlotIdExpr ArgIndex
   | SFieldType SlotIdExpr
   deriving (Show, Eq)
@@ -217,7 +217,7 @@ data SlotBoolExpr
   | SBNot SlotBoolExpr
   | SBAnd SlotBoolExpr SlotBoolExpr
   | SBOr SlotBoolExpr SlotBoolExpr
-  | SBMatchTerm SlotValExpr Name Int
+  | SBMatchTerm SlotValExpr Name Word
   | SBEqual SlotValExpr SlotValExpr
   | SBIdEqual SlotIdExpr SlotIdExpr
   | SBAlive SlotIdExpr

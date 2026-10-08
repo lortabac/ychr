@@ -120,6 +120,12 @@ qualify m c = case aliasForModule m of
 instance ToCode Int where
   toCode = CInt . toInteger
 
+-- | @Word@ slots (VM @ArgIndex@, @GetArg@ indices, @BMatchTerm@ arities)
+-- render as ordinary non-negative integer literals; the generated
+-- module reads them back through 'fromInteger'.
+instance ToCode Word where
+  toCode = CInt . toInteger
+
 instance ToCode Integer where
   toCode = CInt
 

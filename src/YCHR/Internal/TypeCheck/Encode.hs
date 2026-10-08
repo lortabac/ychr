@@ -152,7 +152,7 @@ maybeTerm (Just t) = CompoundTerm (Unqualified "maybe__just") [t]
 kvTerm :: Term -> Term -> Term
 kvTerm k v = CompoundTerm (Unqualified "pairs__kv") [k, v]
 
-intTerm :: Int -> Term
+intTerm :: (Integral a) => a -> Term
 intTerm = IntTerm . fromIntegral
 
 -- ---------------------------------------------------------------------------

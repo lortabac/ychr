@@ -336,6 +336,21 @@ type Err a = Either Text a
 err :: Text -> Err a
 err = Left
 
+-- | Decode a serialized non-negative slot. @what@ names the construct
+-- the integer belongs to, so a rejected unit is diagnosed against the
+-- syntax the writer emitted rather than against an internal
+-- constructor. Under the 'Word'-typed IR slots a bare @fromInteger@
+-- would wrap a negative input to a large positive one; this is the
+-- checked boundary that keeps the "non-negative is unrepresentable"
+-- invariant true of deserialized programs too.
+nonNegative :: Text -> Integer -> Err Word
+nonNegative what n
+  | n < 0 =
+      err (what <> " must be non-negative, got " <> T.pack (show n))
+  | n > toInteger (maxBound :: Word) =
+      err (what <> " does not fit in a machine word, got " <> T.pack (show n))
+  | otherwise = pure (fromInteger n)
+
 vmProgramFromSExpr :: SExpr -> Err VMProgram
 vmProgramFromSExpr (SList (SAtom "vm-program" : rest)) = do
   (version, body) <- headerVersion rest
@@ -639,9 +654,9 @@ valExprFromSExpr (SAtom "new-var") = pure NewVar
 valExprFromSExpr (SList (SAtom "make-term" : n : es)) =
   MakeTerm <$> nameFromSExpr n <*> traverse valExprFromSExpr es
 valExprFromSExpr (SList [SAtom "get-arg", e, SInt i]) =
-  GetArg <$> valExprFromSExpr e <*> pure (fromInteger i)
+  GetArg <$> valExprFromSExpr e <*> nonNegative "get-arg index" i
 valExprFromSExpr (SList [SAtom "field-arg", e, SInt i]) =
-  FieldArg <$> idExprFromSExpr e <*> pure (ArgIndex (fromInteger i))
+  FieldArg <$> idExprFromSExpr e <*> (ArgIndex <$> nonNegative "field-arg index" i)
 valExprFromSExpr (SList [SAtom "field-type", e]) =
   FieldType <$> idExprFromSExpr e
 valExprFromSExpr s = err ("expected value expression, got: " <> printSExpr s)
@@ -655,7 +670,7 @@ boolExprFromSExpr (SList [SAtom "band", a, b]) =
 boolExprFromSExpr (SList [SAtom "bor", a, b]) =
   BOr <$> boolExprFromSExpr a <*> boolExprFromSExpr b
 boolExprFromSExpr (SList [SAtom "bmatch-term", e, n, SInt a]) =
-  BMatchTerm <$> valExprFromSExpr e <*> nameFromSExpr n <*> pure (fromInteger a)
+  BMatchTerm <$> valExprFromSExpr e <*> nameFromSExpr n <*> nonNegative "match arity" a
 boolExprFromSExpr (SList [SAtom "bequal", a, b]) =
   BEqual <$> valExprFromSExpr a <*> valExprFromSExpr b
 boolExprFromSExpr (SList [SAtom "bid-equal", a, b]) =
@@ -686,7 +701,9 @@ callArgFromSExpr (SList [SAtom "arg-id", e]) = AId <$> idExprFromSExpr e
 callArgFromSExpr s = err ("expected call argument, got: " <> printSExpr s)
 
 condFromSExpr :: SExpr -> Err (ArgIndex, ValExpr)
-condFromSExpr (SList [SInt i, e]) = (ArgIndex (fromInteger i),) <$> valExprFromSExpr e
+condFromSExpr (SList [SInt i, e]) = do
+  pos <- nonNegative "foreach condition index" i
+  (ArgIndex pos,) <$> valExprFromSExpr e
 condFromSExpr s = err ("expected (index expr), got: " <> printSExpr s)
 
 nameFromSExpr :: SExpr -> Err Name

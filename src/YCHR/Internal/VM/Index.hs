@@ -74,9 +74,11 @@ indexablePositions prog = List.foldl' addProc IntMap.empty prog.procedures
         List.foldl' addStmt (List.foldl' addStmt acc thenStmts) elseStmts
       DrainReactivationQueue _ body -> List.foldl' addStmt acc body
       _ -> acc
+    -- 'pos' is bounded by the constraint arity, so the conversion to
+    -- 'Int' for the 'IntSet' is safe.
     addCond cType acc (ArgIndex pos, _) =
       let ConstraintType tidx = cType
-       in IntMap.insertWith IntSet.union tidx (IntSet.singleton pos) acc
+       in IntMap.insertWith IntSet.union tidx (IntSet.singleton (fromIntegral pos)) acc
 
 -- | Whether evaluating an expression is total.
 --

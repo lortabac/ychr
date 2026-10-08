@@ -338,23 +338,24 @@ makeTerm = VTerm
 -- arity. Dereferences first. 0-arity compounds collapse to 'VAtom' at
 -- the runtime layer, so a 'VAtom' matches when @arity == 0@ and its
 -- name matches @functor@.
-matchTerm :: Value -> Text -> Int -> Chr Bool
+matchTerm :: Value -> Text -> Word -> Chr Bool
 matchTerm v functor arity = do
   d <- deref v
   case d of
     VAtom a -> pure (arity == 0 && a == functor)
-    VTerm f args -> pure (f == functor && length args == arity)
+    -- 'length' is non-negative, so the conversion is safe.
+    VTerm f args -> pure (f == functor && fromIntegral (length args) == arity)
     _ -> pure False
 
 -- | Extract an argument from a compound term by 0-based index.
 -- Dereferences first. Raises an error if the value is not a term
 -- or the index is out of bounds.
-getArg :: Value -> Int -> Chr Value
+getArg :: Value -> Word -> Chr Value
 getArg v idx = do
   d <- deref v
   case d of
     VTerm _ args
-      | idx >= 0 && idx < length args -> pure (args !! idx)
+      | idx < fromIntegral (length args) -> pure (args !! fromIntegral idx)
       | otherwise -> error $ "getArg: index " ++ show idx ++ " out of bounds"
     _ -> error "getArg: not a compound term"
 

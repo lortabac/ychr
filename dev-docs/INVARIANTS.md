@@ -270,6 +270,22 @@ removable when closed.
   order]`, so the prepend order at every registration site is called
   out rather than implied by the code.
 
+- **VM IR index/arity slots are non-negative.** `ArgIndex`,
+  `GetArg`'s index and `BMatchTerm`'s arity — and the desugared
+  `GuardMatch` / `GuardGetArg` slots that feed them — are `Word` in
+  `VM/Types.hs`, `Desugared.hs` and `Interpreter/Slots.hs`, so a
+  negative index or arity is unrepresentable in the IR. Because
+  `fromInteger` would silently wrap a negative serialized slot under
+  `Word`, `VM.SExpr`'s decoder gained a checked `nonNegative` helper
+  used at all four decode sites (`GetArg`, `FieldArg`'s `ArgIndex`,
+  `BMatchTerm`'s arity, `Foreach` conditions), which rejects a negative
+  or out-of-`Word` value by name. Rejection is pinned by the
+  "non-negative slots" group in `test/YCHR/VM/SExprTest.hs`. The
+  runtime store accessors (`suspArg`, `getConstraintArg`) still take an
+  `Int` with an upper-bound guard, converted from the `Word` slot at
+  the call site; §1's `getConstraintArg` entry is closed by this, since
+  the compiler can no longer produce a negative index.
+
 
 ## 1. `error` / `runtimeErrorS` for "can't happen" cases
 
@@ -299,17 +315,6 @@ Every `SuspensionId` in circulation must have been allocated by
 invariant violation, not a user-facing failure" — exactly the case for
 a typed handle (e.g. an opaque newtype that can only be created by the
 allocation API).
-
-### `getConstraintArg` bounds — `src/YCHR/Internal/Runtime/Store.hs:220`
-
-```haskell
-else error $ "getConstraintArg: index " ++ show idx ++ " out of bounds"
-```
-
-Same shape as `getArg`. The compiler is responsible for emitting only
-in-range `ArgIndex` values; a smart-constructor for `ArgIndex` keyed
-on the constraint type's arity (or a `Vector` of fixed length in the
-suspension) would push the check up.
 
 ### Remaining interpreter shape checks — `src/YCHR/Internal/Runtime/Interpreter.hs`
 
@@ -455,27 +460,6 @@ never checked. `Compile.hs:140-143` derives both pairs from the same
 symbol table / rule list today. The counts are read by SExpr
 serialization and the Scheme backend's `%make-session`, so removal is
 a wider edit.
-
-### VM IR `Int`/`ArgIndex` slots accept negatives — `src/YCHR/Internal/VM/Types.hs`
-
-- `BMatchTerm ValExpr Name Int` (line 350) — arity slot.
-- `GetArg ValExpr Int` (line 324) — index slot.
-- `FieldArg IdExpr ArgIndex` (line 328) — `ArgIndex` is `newtype
-  ArgIndex = ArgIndex Int` (line 438), so any signed value fits.
-
-None of these use smart constructors. Switching to `Word` (or a
-specialized non-negative newtype) is mechanical in the IR, **but it is
-not the whole fix at the boundary**. `VM.SExpr`'s deserializer rebuilds
-each slot with `fromInteger` with no range check
-(`SExpr.hs:460,462,476,507` for `GetArg`, `FieldArg`, `BMatchTerm`, and
-`Foreach` conditions). Under `Word`, `fromInteger (-1)` wraps to
-`maxBound` silently, so the type change alone converts a raw negative
-into a huge positive. The boundary needs an explicit
-`parseNonNegative`/`Maybe` and an `Err` on failure; the type change is
-the prerequisite that forces it to be written, not the check itself.
-Two further wrinkles: `sargs !! idx` (`Store.hs:219,324`) takes `Int`,
-so `suspArg`/`getConstraintArg` need a `Word -> Int` conversion, and
-`matchTerm` compares against `length args` (`Var.hs:341-347`).
 
 ### Import-placement checking fails open on a missing `trailingLoc` key — `src/YCHR/Internal/Rename.hs:274`, `:532`
 
@@ -1038,23 +1022,12 @@ Shortening any of them would change either a URL or a test name.
 
 If you want a roughly-ordered list of the most actionable wins:
 
-1. **`ArgIndex` / `BMatchTerm` arity / `GetArg` index to a
-   non-negative representation** (§2). Still worth doing, but not the
-   mechanical swap an earlier revision called it: the `VM.SExpr`
-   boundary rebuilds each slot with `fromInteger`
-   (`SExpr.hs:460,462,476,507`), which wraps rather than rejects once
-   the slot is `Word`, so a checked parser is required; `sargs !! idx`
-   and `matchTerm`'s `length` comparison need `Int` conversions. Budget
-   ~30 sites. Doing it closes the remaining `Store.hs` bounds entry in
-   §1 (`getConstraintArg`; `suspArg` is already checked) in the sense
-   that the compiler can no longer produce a negative index, and makes
-   the boundary check meaningful.
-2. **Procedure-name closure check** (§5). A post-compile pass that
+1. **Procedure-name closure check** (§5). A post-compile pass that
    verifies every `CallExpr` resolves in the procedure map. Catches a
    whole class of compiler bugs at compile time. Must run against the
    *unioned* map — `Run.hs` adds query-time procedures that the
    compiled program's map does not contain.
-3. **Phase-indexed `Expr`** (§1, `R.LambdaExpr`; and the two `BodyOr`
+2. **Phase-indexed `Expr`** (§1, `R.LambdaExpr`; and the two `BodyOr`
    sites in "Panics this catalogue missed"). The larger
    follow-up: a trees-that-grow field on `LambdaExpr` (or an `Expr
    'PreLift` / `Expr 'PostLift` index) removes the constructor after

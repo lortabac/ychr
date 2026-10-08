@@ -711,11 +711,12 @@ driverKey :: IntSet -> [(ArgIndex, SlotValExpr)] -> InterpM (Maybe (Int, GroundK
 driverKey _ [] = pure Nothing
 driverKey indexed ((ArgIndex pos, expr) : rest)
   | nonRaising expr,
-    IntSet.member pos indexed = do
+    -- 'pos' is bounded by the constraint arity, so the conversion is safe.
+    IntSet.member (fromIntegral pos) indexed = do
       value <- evalValExpr expr
       mkey <- liftChr (groundKey value)
       case mkey of
-        Just key -> pure (Just (pos, key))
+        Just key -> pure (Just (fromIntegral pos, key))
         Nothing -> driverKey indexed rest
   | otherwise = driverKey indexed rest
 
@@ -799,7 +800,8 @@ checkConditions :: Suspension -> [(ArgIndex, SlotValExpr)] -> InterpM Bool
 checkConditions _ [] = pure True
 checkConditions susp ((ArgIndex i, expr) : rest) = do
   v <- evalValExpr expr
-  let argVal = suspArg susp i
+  -- Store's argument accessor is still 'Int'-indexed; 'i' is non-negative.
+  let argVal = suspArg susp (fromIntegral i)
   eq <- liftChr (equal v argVal)
   if eq
     then checkConditions susp rest
@@ -839,7 +841,8 @@ evalValExpr (SGetArg expr idx) = do
   liftChr (getArg v idx)
 evalValExpr (SFieldArg expr (ArgIndex i)) = do
   sid <- evalIdExpr expr
-  liftChr (getConstraintArg sid i)
+  -- Store's argument accessor is still 'Int'-indexed; 'i' is non-negative.
+  liftChr (getConstraintArg sid (fromIntegral i))
 evalValExpr (SFieldType expr) = do
   sid <- evalIdExpr expr
   ct <- liftChr (getConstraintType sid)

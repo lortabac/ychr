@@ -19,7 +19,8 @@ tests =
     "VM.SExpr"
     [ testGroup "roundtrip" roundtripTests,
       testGroup "format" formatTests,
-      testGroup "version" versionTests
+      testGroup "version" versionTests,
+      testGroup "non-negative slots" nonNegativeSlotTests
     ]
 
 -- ---------------------------------------------------------------------------
@@ -419,6 +420,48 @@ versionlessProgramText =
   "(vm-program (program 0 (type-names) 0 (rule-names) (evaluables) "
     <> "(procedure \"p\" () (reactivate-dispatch) "
     <> "(expr-stmt (var \"x\")))) (exports) (symbol-table))"
+
+-- ---------------------------------------------------------------------------
+-- Non-negative slots
+-- ---------------------------------------------------------------------------
+
+-- | The three IR slots the task moved to 'Word' (@GetArg@ index,
+-- @FieldArg@'s @ArgIndex@, @BMatchTerm@ arity) plus the @Foreach@
+-- condition index all previously decoded with a bare @fromInteger@,
+-- which wraps a negative input to a large positive one. The checked
+-- boundary must reject each of them by name.
+nonNegativeSlotTests :: [TestTree]
+nonNegativeSlotTests =
+  [ testCase "a negative get-arg index is rejected" $
+      assertRejected
+        (programWithStmt "(expr-stmt (get-arg (var \"x\") -1))")
+        "get-arg index must be non-negative",
+    testCase "a negative field-arg index is rejected" $
+      assertRejected
+        (programWithStmt "(expr-stmt (field-arg (id-var \"s\") -1))")
+        "field-arg index must be non-negative",
+    testCase "a negative match arity is rejected" $
+      assertRejected
+        (programWithStmt "(bool-expr-stmt (bmatch-term (var \"x\") \"f\" -1))")
+        "match arity must be non-negative",
+    testCase "a negative foreach condition index is rejected" $
+      assertRejected
+        (programWithStmt "(foreach \"L\" 0 \"s\" ((-1 (int 0))) ())")
+        "foreach condition index must be non-negative",
+    testCase "an index beyond a machine word is rejected" $
+      assertRejected
+        (programWithStmt "(expr-stmt (get-arg (var \"x\") 99999999999999999999999))")
+        "get-arg index does not fit in a machine word"
+  ]
+
+-- | The versioned skeleton with a single statement spliced into
+-- procedure @p@'s body.
+programWithStmt :: Text -> Text
+programWithStmt stmt =
+  "(vm-program (version 2) (program 0 (type-names) 0 (rule-names) (evaluables) "
+    <> "(procedure \"p\" () (reactivate-dispatch) "
+    <> stmt
+    <> ")) (exports) (symbol-table))"
 
 -- ---------------------------------------------------------------------------
 -- Helpers

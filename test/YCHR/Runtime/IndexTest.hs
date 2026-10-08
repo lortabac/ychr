@@ -108,7 +108,7 @@ programWith stmts =
     }
 
 -- | A 'Foreach' with one condition on argument @pos@.
-foreach :: ConstraintType -> Int -> [Stmt] -> Stmt
+foreach :: ConstraintType -> Word -> [Stmt] -> Stmt
 foreach cType pos body =
   Foreach "L" cType "susp" [(ArgIndex pos, Lit (IntLit 0))] body
 
