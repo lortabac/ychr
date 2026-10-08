@@ -975,13 +975,6 @@ the renamer says so at `Rename.hs:1236` — but only by hand. Unifying on
 the resolver's representation, or one shared helper, would make the
 agreement structural.
 
-### `ruleModName` is duplicated
-
-`Desugar.hs:999` and `Desugar/Disjunction.hs:209` are the same "module
-name of a rule's head" helper, each guarding the empty head with
-`error`. Sharing one moves code between modules, which is why the style
-pass left it.
-
 ### Hand-written `VM.SExpr` codec
 
 `VM/SExpr.hs` keeps an encoder and decoder in sync constructor by

@@ -58,6 +58,9 @@ module YCHR.Internal.Desugar
     bodyGoalVars,
     guardVars,
 
+    -- * Rule helpers
+    ruleModName,
+
     -- * Errors
     DesugarError (..),
   )
