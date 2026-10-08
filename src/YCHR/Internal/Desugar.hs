@@ -58,6 +58,9 @@ module YCHR.Internal.Desugar
     bodyGoalVars,
     guardVars,
 
+    -- * Rule helpers
+    ruleModName,
+
     -- * Errors
     DesugarError (..),
   )
@@ -361,12 +364,13 @@ normalizeArg HnfState {counter, seen, guards} term =
 -- 'GuardMatch' per compound regardless of where the name originated.
 decomposeCompound :: HnfState -> Text -> Name -> [Term] -> HnfState
 decomposeCompound HnfState {counter, seen, guards} parentVar cname cargs =
-  let matchGuard = D.GuardMatch (R.VarExpr parentVar) cname (length cargs)
+  -- 'length' is non-negative, so the conversion to 'Word' is safe.
+  let matchGuard = D.GuardMatch (R.VarExpr parentVar) cname (fromIntegral (length cargs))
       st' = HnfState {counter, seen, guards = guards |> matchGuard}
    in List.foldl' (\s (i, arg) -> decomposeArg s parentVar i arg) st' (zip [0 ..] cargs)
 
 -- | Decompose a single argument of a compound term.
-decomposeArg :: HnfState -> Text -> Int -> Term -> HnfState
+decomposeArg :: HnfState -> Text -> Word -> Term -> HnfState
 decomposeArg HnfState {counter, seen, guards} parentVar i (VarTerm v)
   | Set.member v seen =
       -- Duplicate variable: extract and check equality

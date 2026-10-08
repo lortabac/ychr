@@ -41,6 +41,7 @@ import YCHR.Internal.Parsed (Module)
 import YCHR.Internal.Types (Name (..), Term (..))
 import YCHR.Run (compileModules, compileParsedModules)
 
+-- | 'YCHR.Convert' round-trips, goal-argument canonicalization, and host functions.
 tests :: TestTree
 tests =
   testGroup

@@ -39,6 +39,7 @@ import YCHR.Internal.Parser (parseTermWith)
 import YCHR.Internal.Runtime.Session (SessionInput (..))
 import YCHR.Internal.StdLib (StdLib (..))
 
+-- | The resource code generator: 'renderCode', 'toCode', and the 'hoist' pass.
 tests :: TestTree
 tests =
   testGroup

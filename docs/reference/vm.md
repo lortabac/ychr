@@ -147,15 +147,24 @@ compilation.
   ...)
 ```
 
-- `<num-types>` — integer, number of distinct constraint types.
+- `<num-types>` — integer, the declared number of distinct constraint
+  types. Redundant with the `type-names` list that follows it: the
+  compiler writes the list's length, and the reader rejects a unit whose
+  declared count differs from that length. Derive the count from
+  `type-names` rather than treating this integer as authoritative.
 - `type-names` — CHR names (see [Names](#names)) indexed by
   constraint type: `type-names[i]` is the source name of type `i`, in
   practice always qualified, e.g. `(qualified "mymodule" "leq")`.
-  Used by runtime introspection.
-- `<num-rules>` — integer, number of rules in the compilation unit.
+  Its length is the number of distinct constraint types. Used by
+  runtime introspection.
+- `<num-rules>` — integer, the declared number of rules in the
+  compilation unit. Redundant with the `rule-names` list in the same
+  way as `<num-types>`: the reader rejects a declared count that
+  differs from the list's length.
 - `rule-names` — strings indexed by rule id: `rule-names[i]` is the
   source name of rule `i`, or a synthetic `"__rule_N"` for an
-  anonymous rule. Used by runtime introspection.
+  anonymous rule. Its length is the rule count. Used by runtime
+  introspection.
 - `evaluables` — the dispatch table `eval-is` consults (see
   [is evaluation](#is-evaluation)), one entry per user-defined
   function: `<functor>` is the term functor in its runtime encoding

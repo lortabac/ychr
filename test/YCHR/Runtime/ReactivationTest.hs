@@ -16,6 +16,7 @@ import YCHR.Internal.Runtime.Store (createConstraint, killConstraint)
 import YCHR.Internal.Runtime.Types (SuspensionId (..), Value (..))
 import YCHR.Internal.Types (ConstraintType (..), Name (..))
 
+-- | Reactivation-queue tests: 'enqueueObservers', FIFO order, and reentrancy.
 tests :: TestTree
 tests =
   testGroup

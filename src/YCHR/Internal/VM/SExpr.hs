@@ -141,13 +141,19 @@ chrNameToSExpr (Types.Qualified m t) = SList [SAtom "qualified", SString m, SStr
 
 -- | Encode a 'Program' as an s-expression; the inverse of
 -- 'programFromSExpr'.
+--
+-- The two integers in the @(program ...)@ header are redundant with the
+-- name lists that follow them: they are written as the lists' lengths,
+-- and 'programFromSExpr' rejects a unit where the two disagree. The
+-- wire format still carries them, so a reader is not required to derive
+-- the counts to consume the header.
 programToSExpr :: Program -> SExpr
 programToSExpr prog =
   SList
     ( SAtom "program"
-        : SInt (fromIntegral prog.numTypes)
+        : SInt (fromIntegral (length prog.typeNames))
         : SList (SAtom "type-names" : map chrNameToSExpr prog.typeNames)
-        : SInt (fromIntegral prog.numRules)
+        : SInt (fromIntegral (length prog.ruleNames))
         : SList (SAtom "rule-names" : map SString prog.ruleNames)
         : SList (SAtom "evaluables" : map evaluableEntryToSExpr prog.evaluables)
         : SList (SAtom "callables" : map callableEntryToSExpr prog.callables)
@@ -336,6 +342,45 @@ type Err a = Either Text a
 err :: Text -> Err a
 err = Left
 
+-- | Decode a serialized non-negative slot. @what@ names the construct
+-- the integer belongs to, so a rejected unit is diagnosed against the
+-- syntax the writer emitted rather than against an internal
+-- constructor. Under the 'Word'-typed IR slots a bare @fromInteger@
+-- would wrap a negative input to a large positive one; this is the
+-- checked boundary that keeps the "non-negative is unrepresentable"
+-- invariant true of deserialized programs too.
+nonNegative :: Text -> Integer -> Err Word
+nonNegative what n
+  | n < 0 =
+      err (what <> " must be non-negative, got " <> T.pack (show n))
+  | n > toInteger (maxBound :: Word) =
+      err (what <> " does not fit in a machine word, got " <> T.pack (show n))
+  | otherwise = pure (fromInteger n)
+
+-- | Check a redundant @(program ...)@ count against the list it counts.
+--
+-- The header's integers are not authoritative: each must equal the
+-- length of the @(type-names ...)@ \/ @(rule-names ...)@ list that
+-- follows it. The format keeps them (see 'programToSExpr'), so the
+-- reader cannot simply drop them; accepting a unit where they disagree
+-- would let the exact drift this header shape invites go unnoticed. The
+-- error names both the declared count and the list it contradicts.
+checkDeclaredCount :: Text -> Integer -> Int -> Err ()
+checkDeclaredCount what declared actual
+  | declared == toInteger actual = pure ()
+  | otherwise =
+      err
+        ( "declared "
+            <> what
+            <> " count "
+            <> T.pack (show declared)
+            <> " does not match the "
+            <> T.pack (show actual)
+            <> " entries in ("
+            <> what
+            <> "-names)"
+        )
+
 vmProgramFromSExpr :: SExpr -> Err VMProgram
 vmProgramFromSExpr (SList (SAtom "vm-program" : rest)) = do
   (version, body) <- headerVersion rest
@@ -472,6 +517,10 @@ programFromSExpr
     ) = do
     tns <- traverse chrNameFromSExpr tnSexprs
     rns <- traverse textFromSExpr rnSexprs
+    -- The header's declared counts are held against the lists they
+    -- claim to count; a disagreeing unit is malformed.
+    checkDeclaredCount "type" n (length tns)
+    checkDeclaredCount "rule" nr (length rns)
     evs <- traverse evaluableEntryFromSExpr evSexprs
     -- Both @callables@ and @inert-types@ are optional on read, so a
     -- program that simply lacks either header entry still loads: an
@@ -495,9 +544,7 @@ programFromSExpr
     ps <- traverse procedureFromSExpr procs
     pure
       Program
-        { numTypes = fromInteger n,
-          typeNames = tns,
-          numRules = fromInteger nr,
+        { typeNames = tns,
           ruleNames = rns,
           evaluables = evs,
           callables = cls,
@@ -639,9 +686,9 @@ valExprFromSExpr (SAtom "new-var") = pure NewVar
 valExprFromSExpr (SList (SAtom "make-term" : n : es)) =
   MakeTerm <$> nameFromSExpr n <*> traverse valExprFromSExpr es
 valExprFromSExpr (SList [SAtom "get-arg", e, SInt i]) =
-  GetArg <$> valExprFromSExpr e <*> pure (fromInteger i)
+  GetArg <$> valExprFromSExpr e <*> nonNegative "get-arg index" i
 valExprFromSExpr (SList [SAtom "field-arg", e, SInt i]) =
-  FieldArg <$> idExprFromSExpr e <*> pure (ArgIndex (fromInteger i))
+  FieldArg <$> idExprFromSExpr e <*> (ArgIndex <$> nonNegative "field-arg index" i)
 valExprFromSExpr (SList [SAtom "field-type", e]) =
   FieldType <$> idExprFromSExpr e
 valExprFromSExpr s = err ("expected value expression, got: " <> printSExpr s)
@@ -655,7 +702,7 @@ boolExprFromSExpr (SList [SAtom "band", a, b]) =
 boolExprFromSExpr (SList [SAtom "bor", a, b]) =
   BOr <$> boolExprFromSExpr a <*> boolExprFromSExpr b
 boolExprFromSExpr (SList [SAtom "bmatch-term", e, n, SInt a]) =
-  BMatchTerm <$> valExprFromSExpr e <*> nameFromSExpr n <*> pure (fromInteger a)
+  BMatchTerm <$> valExprFromSExpr e <*> nameFromSExpr n <*> nonNegative "match arity" a
 boolExprFromSExpr (SList [SAtom "bequal", a, b]) =
   BEqual <$> valExprFromSExpr a <*> valExprFromSExpr b
 boolExprFromSExpr (SList [SAtom "bid-equal", a, b]) =
@@ -686,7 +733,9 @@ callArgFromSExpr (SList [SAtom "arg-id", e]) = AId <$> idExprFromSExpr e
 callArgFromSExpr s = err ("expected call argument, got: " <> printSExpr s)
 
 condFromSExpr :: SExpr -> Err (ArgIndex, ValExpr)
-condFromSExpr (SList [SInt i, e]) = (ArgIndex (fromInteger i),) <$> valExprFromSExpr e
+condFromSExpr (SList [SInt i, e]) = do
+  pos <- nonNegative "foreach condition index" i
+  (ArgIndex pos,) <$> valExprFromSExpr e
 condFromSExpr s = err ("expected (index expr), got: " <> printSExpr s)
 
 nameFromSExpr :: SExpr -> Err Name

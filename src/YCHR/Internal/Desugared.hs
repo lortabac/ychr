@@ -96,8 +96,8 @@ data Head = Head
 -- lifter and pretty-printer can walk guards uniformly.
 data Guard
   = GuardEqual Expr Expr
-  | GuardMatch Expr Name Int
-  | GuardGetArg Text Expr Int
+  | GuardMatch Expr Name Word
+  | GuardGetArg Text Expr Word
   | GuardExpr Expr
   deriving (Show, Eq)
 

@@ -51,6 +51,7 @@ import YCHR.Internal.VM
     ValExpr (..),
   )
 
+-- | Store indexes: ground keys, candidate narrowing, and indexable positions.
 tests :: TestTree
 tests =
   testGroup
@@ -89,9 +90,7 @@ runIndexEnv action = do
 programWith :: [Stmt] -> Program
 programWith stmts =
   Program
-    { numTypes = 1,
-      typeNames = [],
-      numRules = 0,
+    { typeNames = [],
       ruleNames = [],
       procedures =
         [ Procedure
@@ -107,7 +106,7 @@ programWith stmts =
     }
 
 -- | A 'Foreach' with one condition on argument @pos@.
-foreach :: ConstraintType -> Int -> [Stmt] -> Stmt
+foreach :: ConstraintType -> Word -> [Stmt] -> Stmt
 foreach cType pos body =
   Foreach "L" cType "susp" [(ArgIndex pos, Lit (IntLit 0))] body
 

@@ -256,7 +256,7 @@ programInfoSExpr infoName vmp ops =
             [ SAtom "%s",
               SList
                 [ SAtom "%make-session",
-                  SInt (fromIntegral vmp.program.numTypes),
+                  SInt (fromIntegral (length vmp.program.typeNames)),
                   indexPositionsSExpr (indexablePositions vmp.program),
                   opTableSExpr ops
                 ]

@@ -8,6 +8,7 @@ import Test.Tasty.HUnit (testCase, (@?=))
 import YCHR.Internal.Pretty (prettyBindings, prettyQueryResult, prettyTerm, renderAtom)
 import YCHR.Internal.Types (Name (..), Term (..))
 
+-- | Pretty-printer tests: term rendering, quoting, lists, closures, and binding maps.
 tests :: TestTree
 tests =
   testGroup

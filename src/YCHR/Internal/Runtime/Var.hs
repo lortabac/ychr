@@ -184,6 +184,8 @@ unify' (VVar var) v =
         -- X := f(A) — a later binding of A silently misses the
         -- ωr /Reactivate/ step (and a stored residual type-checker
         -- constraint would never be retried).
+        --
+        -- See @Note [Observer registration order]@.
         mapM_ (\oid -> addObserver oid v) obs
         pure (True, obs)
     )
@@ -336,23 +338,24 @@ makeTerm = VTerm
 -- arity. Dereferences first. 0-arity compounds collapse to 'VAtom' at
 -- the runtime layer, so a 'VAtom' matches when @arity == 0@ and its
 -- name matches @functor@.
-matchTerm :: Value -> Text -> Int -> Chr Bool
+matchTerm :: Value -> Text -> Word -> Chr Bool
 matchTerm v functor arity = do
   d <- deref v
   case d of
     VAtom a -> pure (arity == 0 && a == functor)
-    VTerm f args -> pure (f == functor && length args == arity)
+    -- 'length' is non-negative, so the conversion is safe.
+    VTerm f args -> pure (f == functor && fromIntegral (length args) == arity)
     _ -> pure False
 
 -- | Extract an argument from a compound term by 0-based index.
 -- Dereferences first. Raises an error if the value is not a term
 -- or the index is out of bounds.
-getArg :: Value -> Int -> Chr Value
+getArg :: Value -> Word -> Chr Value
 getArg v idx = do
   d <- deref v
   case d of
     VTerm _ args
-      | idx >= 0 && idx < length args -> pure (args !! idx)
+      | idx < fromIntegral (length args) -> pure (args !! fromIntegral idx)
       | otherwise -> error $ "getArg: index " ++ show idx ++ " out of bounds"
     _ -> error "getArg: not a compound term"
 
@@ -364,6 +367,8 @@ getArg v idx = do
 -- be reactivated when the nested variable is later bound, missing an
 -- ωr /Reactivate/ step. Anything else (already bound, or a non-variable
 -- leaf) is a no-op.
+--
+-- See @Note [Observer registration order]@.
 addObserver :: SuspensionId -> Value -> Chr ()
 addObserver oid v = do
   d <- deref v
@@ -375,6 +380,23 @@ addObserver oid v = do
         (\_ -> pure ())
     VTerm _ args -> mapM_ (addObserver oid) args
     _ -> pure ()
+
+{- Note [Observer registration order]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+An unbound variable's observer list is kept most-recently-registered
+first. 'addObserver' and 'addObserverAndKey' prepend on every store
+(@oid : obs@), and binding one variable to another merges the two
+lists without reversing either ('obs1 ++ obs2'), so each variable's own
+observers keep that order. Reactivation walks the list front to back
+and therefore processes the most recently registered observer first
+(dev-docs/INVARIANTS.md §3).
+
+The order is not incidental. Appending instead of prepending
+(@obs ++ [oid]@, or otherwise adding at the back) changes which
+observer a later binding wakes first, and that changes the order
+constraints are re-examined and rules fire — observable behaviour, not
+just a list layout. Keep the prepend at every registration site.
+-}
 
 -- | One traversal with the two jobs a constraint argument needs when it
 -- is stored: register @oid@ as an observer on every unbound variable

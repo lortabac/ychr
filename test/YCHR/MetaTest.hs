@@ -31,6 +31,7 @@ import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (CallableKey (..), Name (..), funRefFunctor, lambdaClosureFunctor)
 import YCHR.Run (compileModules, runProgramWithQuery)
 
+-- | Runtime meta: 'read_term_from_string' and function-reference resolution.
 tests :: TestTree
 tests =
   testGroup

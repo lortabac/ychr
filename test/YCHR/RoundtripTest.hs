@@ -370,6 +370,7 @@ fixedRuleCases =
 -- Test tree
 -- ---------------------------------------------------------------------------
 
+-- | Round-trip properties: 'prettyTermSrc' and 'prettyConstraintSrc' invert the parser.
 tests :: TestTree
 tests =
   testGroup

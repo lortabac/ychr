@@ -49,6 +49,7 @@ mod_ rules =
         ++ rules
     )
 
+-- | Type-checker diagnostics the golden harness cannot observe, such as dropped warnings.
 tests :: TestTree
 tests =
   testGroup

@@ -31,6 +31,7 @@ exhWarnings src =
           Diagnostic _ (AnnP (NonExhaustiveMatch name witness) _ _) <- ds
         ]
 
+-- | Exhaustiveness warnings: the missing-constructor witness and function name reported.
 tests :: TestTree
 tests =
   testGroup

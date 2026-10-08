@@ -19,6 +19,7 @@ import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM qualified as VM
 import YCHR.Run (compileModules)
 
+-- | The VM code 'YCHR.Internal.Compile.compile' emits for representative CHR programs.
 tests :: TestTree
 tests =
   testGroup

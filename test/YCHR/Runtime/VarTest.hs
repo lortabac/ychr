@@ -24,6 +24,7 @@ import YCHR.Internal.Runtime.Var
     unify,
   )
 
+-- | Runtime variables: unification, dereferencing, equality, rollback, and observer lists.
 tests :: TestTree
 tests =
   testGroup

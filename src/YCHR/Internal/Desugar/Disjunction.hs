@@ -41,7 +41,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import YCHR.Internal.Desugar (bodyGoalVars, guardVars)
+import YCHR.Internal.Desugar (bodyGoalVars, guardVars, ruleModName)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Parsed (AnnP (..))
 import YCHR.Internal.Resolved qualified as R
@@ -198,12 +198,3 @@ ruleScope rule =
       guardVars rule.guard.node,
       bodyGoalVars rule.body.node
     ]
-
--- | The module a rule belongs to, read off its head. Mirrors
--- 'YCHR.Internal.Desugar.ruleModName'; the qualification invariant is
--- enforced by 'HeadConstraint', and only an empty head could fail,
--- which the parser does not produce.
-ruleModName :: D.Head -> Text
-ruleModName h = case h.kept ++ h.removed of
-  (c : _) -> c.name.moduleName
-  [] -> error "Disjunction.ruleModName: empty rule head"

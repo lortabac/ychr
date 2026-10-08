@@ -50,6 +50,7 @@ import YCHR.Internal.Resources
   )
 import YCHR.Internal.StdLib (StdLib (..), parseStdLib)
 
+-- | Pins the runtime resources loader to the compile-time embedder and its root resolution.
 tests :: TestTree
 tests =
   testGroup

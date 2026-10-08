@@ -91,7 +91,6 @@ import YCHR.Internal.Types
     SymbolTable,
     Term (..),
     flattenName,
-    symbolTableSize,
     symbolTableToList,
   )
 import YCHR.Internal.Types qualified as Types
@@ -139,9 +138,7 @@ compile prog symTab =
         then
           Right
             Program
-              { numTypes = symbolTableSize symTab,
-                typeNames = buildTypeNames symTab,
-                numRules = length ruleDisplayNames,
+              { typeNames = buildTypeNames symTab,
                 ruleNames = ruleDisplayNames,
                 procedures = procs ++ funProcs ++ [dispatch],
                 evaluables = buildEvaluables prog.functions,
@@ -323,7 +320,7 @@ genActivate :: Types.Name -> ConstraintType -> Int -> [Occurrence] -> Procedure
 genActivate name cType arity occs =
   let activateName = activateProcName name arity
       argExtracts =
-        [ LetVal (argName i) (FieldArg (IdVar activeName) (ArgIndex i))
+        [ LetVal (argName i) (FieldArg (IdVar activeName) (ArgIndex (fromIntegral i)))
         | i <- [0 .. arity - 1]
         ]
       -- Late Storage (paper §5.3): a constraint that survives every
@@ -511,7 +508,9 @@ wrapInPartnerLoops activeCType occ condMap inner =
           -- 'IdVar (partIdName k)' for symmetry with subsequent uses.
           fieldExtracts =
             LetId (partIdName k) (IdVar suspVar)
-              : [ LetVal (partArgName k j) (FieldArg (IdVar suspVar) (ArgIndex j))
+              : [ LetVal
+                    (partArgName k j)
+                    (FieldArg (IdVar suspVar) (ArgIndex (fromIntegral j)))
                 | j <- [0 .. partArity - 1]
                 ]
           -- The partner must be distinct from the active constraint and
@@ -863,7 +862,7 @@ asPartnerArg occ (Var n) = Map.lookup n partArgs
   where
     partArgs =
       Map.fromList
-        [ (partArgName k j, (k, ArgIndex j))
+        [ (partArgName k j, (k, ArgIndex (fromIntegral j)))
         | (k, p) <- zip [PartnerIndex 0 ..] occ.partners,
           j <- [0 .. length p.constraint.args - 1]
         ]

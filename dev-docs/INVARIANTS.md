@@ -264,6 +264,40 @@ removable when closed.
   index is still an `Int`; the `ArgIndex` / non-negative
   representation work in §2 remains the structural fix.
 
+- **The reactivation observer list is LIFO (most-recently registered
+  first).** §3's entry asked for a named `Note`; it now lives in
+  `src/YCHR/Internal/Runtime/Var.hs` as `Note [Observer registration
+  order]`, so the prepend order at every registration site is called
+  out rather than implied by the code.
+
+- **VM IR index/arity slots are non-negative.** `ArgIndex`,
+  `GetArg`'s index and `BMatchTerm`'s arity — and the desugared
+  `GuardMatch` / `GuardGetArg` slots that feed them — are `Word` in
+  `VM/Types.hs`, `Desugared.hs` and `Interpreter/Slots.hs`, so a
+  negative index or arity is unrepresentable in the IR. Because
+  `fromInteger` would silently wrap a negative serialized slot under
+  `Word`, `VM.SExpr`'s decoder gained a checked `nonNegative` helper
+  used at all four decode sites (`GetArg`, `FieldArg`'s `ArgIndex`,
+  `BMatchTerm`'s arity, `Foreach` conditions), which rejects a negative
+  or out-of-`Word` value by name. Rejection is pinned by the
+  "non-negative slots" group in `test/YCHR/VM/SExprTest.hs`. The
+  runtime store accessors (`suspArg`, `getConstraintArg`) still take an
+  `Int` with an upper-bound guard, converted from the `Word` slot at
+  the call site; §1's `getConstraintArg` entry is closed by this, since
+  the compiler can no longer produce a negative index.
+
+- **`VM.Program`'s type and rule counts are derived, not stored.** The
+  redundant `numTypes` / `numRules` fields are gone; every use is
+  `length typeNames` / `length ruleNames` (`VM/Types.hs`,
+  `Compile.hs`, `SExpr.hs`, `Backend/Scheme.hs`). The s-expression
+  header still carries the two integers, so the decoder now holds them
+  against the lists they count through `checkDeclaredCount` and rejects
+  a disagreeing unit (`test/YCHR/VM/SExprTest.hs`, "declared counts"
+  group); `docs/reference/vm.md` documents them as redundant. This
+  closes the `VM.Program` paragraph of §2's "Compiler IR carries
+  unchecked arity fields"; the `Partner` / `IndexCondition` items
+  remain.
+
 
 ## 1. `error` / `runtimeErrorS` for "can't happen" cases
 
@@ -278,9 +312,12 @@ panic into a compile-time error.
 _ -> error "getArg: not a compound term"
 ```
 
-`getArg` is partial on shape (must be `VTerm`) and on index. Callers
-guarantee both, but neither is enforced. A typed term-projection API
-keyed on a verified `(VTerm functor arity)` handle would close it.
+`getArg` is partial on shape (must be `VTerm`) and on index. The
+index half is now narrowed to its upper bound: the index is a `Word`
+(see the closed VM IR entry above), so no negative value can reach it,
+but the present check remains a partial `error`. A typed
+term-projection API keyed on a verified `(VTerm functor arity)` handle
+would close both halves.
 
 ### `lookupSusp` — `src/YCHR/Internal/Runtime/Store.hs:72`
 
@@ -293,17 +330,6 @@ Every `SuspensionId` in circulation must have been allocated by
 invariant violation, not a user-facing failure" — exactly the case for
 a typed handle (e.g. an opaque newtype that can only be created by the
 allocation API).
-
-### `getConstraintArg` bounds — `src/YCHR/Internal/Runtime/Store.hs:220`
-
-```haskell
-else error $ "getConstraintArg: index " ++ show idx ++ " out of bounds"
-```
-
-Same shape as `getArg`. The compiler is responsible for emitting only
-in-range `ArgIndex` values; a smart-constructor for `ArgIndex` keyed
-on the constraint type's arity (or a `Vector` of fixed length in the
-suspension) would push the check up.
 
 ### Remaining interpreter shape checks — `src/YCHR/Internal/Runtime/Interpreter.hs`
 
@@ -336,7 +362,6 @@ exhaustive:
 | `src/YCHR/Internal/Desugar.hs:999` (`ruleModName`)        | non-empty head                             |
 | `src/YCHR/Internal/Desugar/Disjunction.hs:103,209`        | lifted rule is a simplification; non-empty head |
 | `src/YCHR/Internal/Backend/Scheme.hs:231` (`programInfoBindingName`) | non-empty library name          |
-| `src/YCHR/Internal/Meta.hs:191,203,210`                   | host-call arity / parse result (`write_term_to_string`, `read_term_from_string`) |
 | `src/YCHR/Internal/Resolve.hs:1438` (`parseFlatName`)     | renamer post-condition: flat name contains `':'` |
 | `src/YCHR/Internal/TypeCheck.hs:404` (`malformed`)        | solver returned a shape the decoder does not know |
 | `src/YCHR/Internal/TypeCheck/Encode.hs:403,407` (`encodedToValue`) | encoded term is ground (no `Wildcard` / `VarTerm`) |
@@ -351,11 +376,11 @@ The two `BodyOr` sites are phase invariants of the same family as
 the `LambdaExpr` case below: the constructor survives in the type and
 each pass asserts it was already lowered. A phase index on
 `Desugared.BodyGoal` (or a post-lowering type without `BodyOr`) would
-discharge both. The `Meta.hs` sites are the mildest — `invokeHostCall`
-wraps the host function in `try @SomeException`
-(`Interpreter.hs:999`), so they surface as an ordinary runtime error
-rather than a process abort; they are nonetheless `error` rather than
-`runtimeErrorS` for a difficulty that is really just arity.
+discharge both. The three `Meta.hs` host-call sites
+(`write_term_to_string`, `read_term_from_string`) are closed: an arity
+or parse failure now raises `runtimeErrorS` rather than `error`, so it
+is a structured runtime error rather than a plain `ErrorCall` that
+`invokeHostCall`'s `try @SomeException` happens to catch.
 
 Deliberately partial, and not to be "fixed": `Data.Text.Shim.breakOn`
 and `Data.Text.Shim.last` (`src/Data/Text/Shim.hs:39,71`) raise exactly
@@ -441,36 +466,6 @@ A common fix for these two: make arity a `newtype` and have a smart
 constructor for `Partner`/`IndexCondition` that reconciles or rejects
 mismatches.
 
-Related, same "derive instead of store" shape: `VM.Program`
-(`src/YCHR/Internal/VM/Types.hs:103,110`) stores `numTypes` next to
-`typeNames` and `numRules` next to `ruleNames`, with the invariants
-`numTypes == length typeNames` and `numRules == length ruleNames`
-never checked. `Compile.hs:140-143` derives both pairs from the same
-symbol table / rule list today. The counts are read by SExpr
-serialization and the Scheme backend's `%make-session`, so removal is
-a wider edit.
-
-### VM IR `Int`/`ArgIndex` slots accept negatives — `src/YCHR/Internal/VM/Types.hs`
-
-- `BMatchTerm ValExpr Name Int` (line 350) — arity slot.
-- `GetArg ValExpr Int` (line 324) — index slot.
-- `FieldArg IdExpr ArgIndex` (line 328) — `ArgIndex` is `newtype
-  ArgIndex = ArgIndex Int` (line 438), so any signed value fits.
-
-None of these use smart constructors. Switching to `Word` (or a
-specialized non-negative newtype) is mechanical in the IR, **but it is
-not the whole fix at the boundary**. `VM.SExpr`'s deserializer rebuilds
-each slot with `fromInteger` with no range check
-(`SExpr.hs:460,462,476,507` for `GetArg`, `FieldArg`, `BMatchTerm`, and
-`Foreach` conditions). Under `Word`, `fromInteger (-1)` wraps to
-`maxBound` silently, so the type change alone converts a raw negative
-into a huge positive. The boundary needs an explicit
-`parseNonNegative`/`Maybe` and an `Err` on failure; the type change is
-the prerequisite that forces it to be written, not the check itself.
-Two further wrinkles: `sargs !! idx` (`Store.hs:219,324`) takes `Int`,
-so `suspArg`/`getConstraintArg` need a `Word -> Int` conversion, and
-`matchTerm` compares against `length args` (`Var.hs:341-347`).
-
 ### Import-placement checking fails open on a missing `trailingLoc` key — `src/YCHR/Internal/Rename.hs:274`, `:532`
 
 ```haskell
@@ -539,17 +534,6 @@ through named helpers (`check_constraint_use`, `check_function_use`,
 `check_constructor_use`), which put the operands in place themselves.
 Two distinct `ty`-like types — one for each side — would make an
 emitter's call total, at the cost of a conversion at every helper.
-
-### Reactivation observer list is LIFO — `src/YCHR/Internal/Runtime/Var.hs:376`
-
-```haskell
-(\vid obs -> writeVarState var (Unbound vid (oid : obs)))
-```
-
-The reactivation order semantics is "most-recently registered first."
-Documented only in code; a comment is enough for now, but worth a
-named `Note [Observer registration order]` so it can't drift.
-
 
 ## 4. Undocumented invariants the implementation relies on
 
@@ -958,10 +942,10 @@ arm introduces lexically scopes over the statements that follow the
 `AssignVal` both just insert), and it is sound for the same reason the
 interpreter's slot walk is — no emitted `If` leaves a name in `rest`
 that an arm bound (see "Two properties of emitted code are what make
-that reading sound" above). These contracts live only in
-code, on both sides. A small ABI-doc section in
-`SCHEME_BACKEND_GAPS.md` (or here) would at minimum make the surface
-explicit; encoding it in types is harder because it crosses a
+that reading sound" above). These contracts live only in code, on both
+sides. The surface is now written down in `SCHEME_BACKEND_GAPS.md`'s
+*Scheme runtime ABI* section, which closes the documentation half of
+this entry; encoding it in types remains harder because it crosses a
 host-language boundary.
 
 
@@ -980,20 +964,6 @@ the renamer says so at `Rename.hs:1236` — but only by hand. Unifying on
 the resolver's representation, or one shared helper, would make the
 agreement structural.
 
-### `ruleModName` is duplicated
-
-`Desugar.hs:999` and `Desugar/Disjunction.hs:209` are the same "module
-name of a rule's head" helper, each guarding the empty head with
-`error`. Sharing one moves code between modules, which is why the style
-pass left it.
-
-### Hand-written `VM.SExpr` codec
-
-`VM/SExpr.hs` keeps an encoder and decoder in sync constructor by
-constructor. A round-trip property over a `Stmt` generator in
-`test/YCHR/VM/SExprTest.hs`, or a schema-driven codec, would catch a
-forgotten constructor instead of relying on review.
-
 ### `TypeCheck.decodeError` is a long hand-written case
 
 `TypeCheck.hs:275-342` has one `case` arm per diagnostic code; a
@@ -1006,20 +976,6 @@ with `decodeWarning` (`:360`).
 unexpected solver value. Readable, but it also swallows encoding drift;
 asserting, or routing through `malformed`, would surface it earlier.
 A deliberate trade today: "decide and document", not a clear bug.
-
-### Duplicated test helpers
-
-A shared `test/YCHR/TestHelpers.hs` would remove `strip`
-(`PExprTest.hs:75`, `PExprRoundtripTest.hs:212`),
-`expectErrorContaining` (`RunTest.hs:573`, `Runtime/StoreTest.hs:288`)
-and `countAlive` (`RunTest.hs:73`, `Runtime/StoreTest.hs:77`,
-`Runtime/InterpreterTest.hs:880`; two signatures across the three).
-
-### `ParserTest` parse-or-fail scaffolding
-
-`test/YCHR/ParserTest.hs:928-980`: `typeDefsOf`, `bodyOf`, `headOf` and
-`guardOf` each repeat the same `case p src of` prologue. One helper
-parameterised by the extractor would remove the copies.
 
 ### Unqualified imports of utility-module helpers
 
@@ -1038,13 +994,6 @@ a domain value in a record or API rather than a local zip, and a `Bool`
 field carrying a convention a sum type could carry. A modelling pass,
 not a mechanical edit; it would change exported signatures.
 
-### Test entry points have no Haddock
-
-Most `test/YCHR*Test.hs` modules export a single `tests :: TestTree`
-with no `-- |` comment. The style pass read `STYLE.md`'s Haddock rule
-as applying to library API; documenting them is a one-line sweep per
-module if wanted.
-
 ### Accepted long literals (do not shorten)
 
 `STYLE.md` allows a line over 90 characters only for an unsplittable
@@ -1057,23 +1006,12 @@ Shortening any of them would change either a URL or a test name.
 
 If you want a roughly-ordered list of the most actionable wins:
 
-1. **`ArgIndex` / `BMatchTerm` arity / `GetArg` index to a
-   non-negative representation** (§2). Still worth doing, but not the
-   mechanical swap an earlier revision called it: the `VM.SExpr`
-   boundary rebuilds each slot with `fromInteger`
-   (`SExpr.hs:460,462,476,507`), which wraps rather than rejects once
-   the slot is `Word`, so a checked parser is required; `sargs !! idx`
-   and `matchTerm`'s `length` comparison need `Int` conversions. Budget
-   ~30 sites. Doing it closes the remaining `Store.hs` bounds entry in
-   §1 (`getConstraintArg`; `suspArg` is already checked) in the sense
-   that the compiler can no longer produce a negative index, and makes
-   the boundary check meaningful.
-2. **Procedure-name closure check** (§5). A post-compile pass that
+1. **Procedure-name closure check** (§5). A post-compile pass that
    verifies every `CallExpr` resolves in the procedure map. Catches a
    whole class of compiler bugs at compile time. Must run against the
    *unioned* map — `Run.hs` adds query-time procedures that the
    compiled program's map does not contain.
-3. **Phase-indexed `Expr`** (§1, `R.LambdaExpr`; and the two `BodyOr`
+2. **Phase-indexed `Expr`** (§1, `R.LambdaExpr`; and the two `BodyOr`
    sites in "Panics this catalogue missed"). The larger
    follow-up: a trees-that-grow field on `LambdaExpr` (or an `Expr
    'PreLift` / `Expr 'PostLift` index) removes the constructor after

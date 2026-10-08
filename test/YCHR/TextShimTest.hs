@@ -24,6 +24,7 @@ import Data.Text.Shim qualified as Shim
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase)
 
+-- | Pins "Data.Text.Shim" to the "Data.Text" semantics it stands in for.
 tests :: TestTree
 tests =
   testGroup

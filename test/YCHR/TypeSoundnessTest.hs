@@ -603,6 +603,7 @@ isStillFree t = case t of
   VarTerm _ -> True
   _ -> False
 
+-- | Soundness property: well-typed programs bind runtime values within their static types.
 tests :: TestTree
 tests =
   testGroup
