@@ -42,7 +42,6 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
-import YCHR.Internal.Loc (SourceLoc (..))
 import YCHR.Internal.Parsed (Declaration (..), MacroDef (..), MacroExportDeclBody (..))
 import YCHR.Internal.Types (Constraint (..), Name (..), Term (..))
 
@@ -65,32 +64,29 @@ importListPermitsMacro n arity (Just decls) = any match decls
 -- clash with any variable of the use site. 'Wildcard' is left alone
 -- (each occurrence already denotes its own fresh anonymous variable).
 --
--- Freshness is derived from the use site's 'SourceLoc' rather than a
--- counter threaded through the renamer: two occurrences of the same
--- non-parameter variable within one macro body must substitute to the
--- /same/ fresh variable (to preserve the relation between them), while
--- two different uses of the same macro must not collide. Keying the
--- fresh name on the use-site location achieves both, for any program
--- whose terms carry distinct source locations — which is every
--- parsed program; see the note below for the one case this does not
--- cover.
+-- Freshness is derived from 'seed', a number distinct for every call
+-- within one renaming run (see
+-- 'YCHR.Internal.Rename.freshMacroSeed') — not from the use site's
+-- 'SourceLoc', which cannot do this job: two sibling goals of one
+-- rule body, or two kept conjuncts of one rule head, share a single
+-- 'SourceLoc' (and 'YCHR.Internal.Parsed.PExpr' origin) across the
+-- whole section, by construction (see 'YCHR.Internal.Parsed.Rule').
+-- Two uses of the same macro under the same section — even two plain
+-- sibling uses, let alone two uses reached through nested expansion —
+-- would then instantiate their non-parameter variables to the
+-- identical fresh name and silently alias them. A counter has no such
+-- collision.
 --
 -- Caller's responsibility: 'args' must have the same length as
 -- 'def.params' (the caller already knows the arity matched when it
--- decided this was a macro use).
---
--- Note: two syntactically identical macro uses that both carry
--- exactly the same 'SourceLoc' (only reachable via hand-built 'Term's
--- with a shared dummy location, e.g. two 'YCHR.DSL'-built uses that
--- were never parsed from text) would generate colliding fresh names.
--- This cannot happen for anything parsed from source, where every
--- subterm has a distinct line\/column.
-instantiateMacro :: SourceLoc -> MacroDef -> [Term] -> Term
-instantiateMacro useLoc def args = go def.body
+-- decided this was a macro use), and 'seed' must not repeat across
+-- the uses expanded within one renaming run.
+instantiateMacro :: Int -> MacroDef -> [Term] -> Term
+instantiateMacro seed def args = go def.body
   where
     paramMap = zip def.params args
-    freshen v = "_macro_" <> locKey <> "_" <> v
-    locKey = Text.pack (show useLoc.line) <> "_" <> Text.pack (show useLoc.col)
+    freshen v = "_macro_" <> seedKey <> "_" <> v
+    seedKey = Text.pack (show seed)
     go t = case t of
       VarTerm v -> case lookup v paramMap of
         Just arg -> arg

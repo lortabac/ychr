@@ -64,6 +64,7 @@ where
 
 import Control.Monad (foldM, foldM_, unless, when)
 import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.State.Strict (StateT, evalStateT, get, put)
 import Control.Monad.Trans.Writer.CPS (Writer, WriterT, runWriter, runWriterT, tell)
 import Data.Foldable (traverse_)
 import Data.List (nub)
@@ -279,29 +280,48 @@ data DeclaredType = DeclaredType
   }
   deriving (Eq, Ord, Show)
 
--- | Renamer monad: two stacked 'Writer's, one for errors (inner) and
--- one for warnings (outer). Concrete type so callers don't need 'mtl'
--- classes; 'emitError' lifts past the warning layer.
-type Rename = WriterT [Diagnostic RenameWarning] (Writer [Diagnostic RenameError])
+-- | Renamer monad: an 'Int' counter (for 'freshMacroSeed') over two
+-- stacked 'Writer's, one for errors (inner) and one for warnings
+-- (middle). Concrete type so callers don't need 'mtl' classes;
+-- 'emitError' lifts past the state and warning layers.
+type Rename =
+  StateT Int (WriterT [Diagnostic RenameWarning] (Writer [Diagnostic RenameError]))
+
+-- | A counter, distinct on every call within one 'renameProgram' \/
+-- 'renameQueryTerms' \/ 'expandQueryGoalWith' run, consumed by
+-- 'YCHR.Internal.Rename.Macro.instantiateMacro' to freshen a macro
+-- body's non-parameter variables. Not keyed on a 'SourceLoc': two
+-- macro uses — even uses of two different macros — occurring under
+-- the same section (a rule's body, guard, or head share one
+-- 'SourceLoc'\/'PExpr' across every one of their goals; see
+-- 'YCHR.Internal.Parsed.Rule') need distinct fresh names, which a
+-- location cannot tell apart, but a counter always can.
+freshMacroSeed :: Rename Int
+freshMacroSeed = do
+  n <- get
+  put (n + 1)
+  pure n
 
 -- | Emit an error with no macro-expansion context. Used by checks that
 -- never run on macro-expanded code (export/import-list and type-decl
 -- validation); every other site goes through 'emitErrorIn' so its
 -- diagnostic carries whatever macro chain is active.
 emitError :: AnnP RenameError -> Rename ()
-emitError e = lift (tell [noDiag e])
+emitError e = lift (lift (tell [noDiag e]))
 
 -- | Emit an error, attaching the current macro-expansion chain
 -- (rendered, innermost first) from 'RenameCtx.macroChain'. Used at
 -- every site reachable while renaming a rule head, body, guard, or
 -- equation — i.e. everywhere macro-expanded code could be in scope.
 emitErrorIn :: RenameCtx -> AnnP RenameError -> Rename ()
-emitErrorIn ctx e = lift (tell [(noDiag e) {diagContext = map renderMacroUse ctx.macroChain}])
+emitErrorIn ctx e =
+  lift (lift (tell [(noDiag e) {diagContext = map renderMacroUse ctx.macroChain}]))
 
 -- | Emit a warning, attaching the current macro-expansion chain. See
 -- 'emitErrorIn'.
 emitWarningIn :: RenameCtx -> AnnP RenameWarning -> Rename ()
-emitWarningIn ctx w = tell [(noDiag w) {diagContext = map renderMacroUse ctx.macroChain}]
+emitWarningIn ctx w =
+  lift (tell [(noDiag w) {diagContext = map renderMacroUse ctx.macroChain}])
 
 -- | Render one macro-expansion-chain entry as a display line, e.g.
 -- @"in the expansion of aggregates:count\/2, used at graph.chr:4:3"@.
@@ -325,6 +345,21 @@ renderMacroUse (m, n, arity, loc) =
   where
     tshow :: (Show a) => a -> Text
     tshow = Text.pack . show
+
+-- | The @(definingModule, name, arity)@ identity of one
+-- 'RenameCtx.macroChain' entry, with its use-site location dropped.
+-- Two entries with the same identity, reached at different locations,
+-- are the same macro still being expanded — the condition 'MacroCycle'
+-- checks for — so every expansion site's cycle test compares on this
+-- projection, via 'inMacroChain', rather than repeating it inline.
+macroChainEntryKey :: (Text, Text, Int, SourceLoc) -> (Text, Text, Int)
+macroChainEntryKey (m, n, arity, _) = (m, n, arity)
+
+-- | Whether @key@ (a macro's defining module, name, and arity) is
+-- already being expanded somewhere up the chain — i.e. expanding it
+-- now would cycle.
+inMacroChain :: (Text, Text, Int) -> [(Text, Text, Int, SourceLoc)] -> Bool
+inMacroChain key chain = key `elem` map macroChainEntryKey chain
 
 -- | Global environments consulted while renaming one module. Bundled
 -- into a record so recursive helpers don't have to thread every
@@ -742,9 +777,13 @@ renameProgram inputs mods =
         errs
         ) =
           runWriter
-            ( runWriterT $ do
-                validateExports mods
-                traverse (\m -> renameModule mods (ctxFor m)) mods
+            ( runWriterT $
+                evalStateT
+                  ( do
+                      validateExports mods
+                      traverse (\m -> renameModule mods (ctxFor m)) mods
+                  )
+                  0
             )
    in if null errs then Right (result, warnings) else Left errs
 
@@ -1092,18 +1131,18 @@ expandHeadUse ctx loc origin providerMod name args =
   case Map.lookup key ctx.macroDefTable of
     Nothing -> pure [] -- defensive: 'classifyGoalName' only names real providers
     Just def
-      | key `elem` map chainKey ctx.macroChain -> do
+      | inMacroChain key ctx.macroChain -> do
           emitErrorIn ctx (AnnP (MacroCycle (QualifiedName providerMod n) arity) loc origin)
           pure []
       | otherwise -> do
+          seed <- freshMacroSeed
           let ctx' = ctx {macroChain = (providerMod, n, arity, loc) : ctx.macroChain}
-              goals = flattenConj (instantiateMacro loc def args)
+              goals = flattenConj (instantiateMacro seed def args)
           concat <$> traverse (expandedHeadGoal ctx') goals
   where
     n = unqualifiedText name
     arity = length args
     key = (providerMod, n, arity)
-    chainKey (m, cn, ca, _) = (m, cn, ca)
     expandedHeadGoal ctx' goal = case headConjunct goal of
       HeadConjunctOk c -> renameCon ctx' loc origin c
       HeadConjunctInvalid _ -> do
@@ -1213,18 +1252,18 @@ expandBodyUse ctx loc origin providerMod name args =
   case Map.lookup key ctx.macroDefTable of
     Nothing -> pure []
     Just def
-      | key `elem` map chainKey ctx.macroChain -> do
+      | inMacroChain key ctx.macroChain -> do
           emitErrorIn ctx (AnnP (MacroCycle (QualifiedName providerMod n) arity) loc origin)
           pure []
       | otherwise -> do
+          seed <- freshMacroSeed
           let ctx' = ctx {macroChain = (providerMod, n, arity, loc) : ctx.macroChain}
-              goals = flattenConj (instantiateMacro loc def args)
+              goals = flattenConj (instantiateMacro seed def args)
           concat <$> traverse (renameBodyGoal ctx' loc origin) goals
   where
     n = unqualifiedText name
     arity = length args
     key = (providerMod, n, arity)
-    chainKey (m, cn, ca, _) = (m, cn, ca)
 
 -- | @;@ lowers to a tell of @search:alt\/1@, a name the module never
 -- writes itself. Require the import that makes it visible, so a module
@@ -2097,7 +2136,7 @@ renameQueryTerms (QueryRenameEnv ctx) mode terms =
         ResolveTop -> renameBodyGoal ctx queryTermLoc (termToPExpr t) t
         _ -> (: []) <$> renameTerm ctx queryTermLoc (termToPExpr t) mode t
       ((renamedLists, warnings), errs) =
-        runWriter (runWriterT (traverse renameOne terms))
+        runWriter (runWriterT (evalStateT (traverse renameOne terms) 0))
    in if null errs then Right (concat renamedLists, warnings) else Left errs
 
 -- | Expand a single goal constraint if its name names a macro,
@@ -2119,7 +2158,8 @@ expandQueryGoalWith ::
   Constraint ->
   Either [Diagnostic RenameError] [Term]
 expandQueryGoalWith (QueryRenameEnv ctx0) (Constraint cname0 cargs0) =
-  let ((result, _warnings), errs) = runWriter (runWriterT (go ctx0 cname0 cargs0))
+  let ((result, _warnings), errs) =
+        runWriter (runWriterT (evalStateT (go ctx0 cname0 cargs0) 0))
    in if null errs then Right result else Left errs
   where
     -- Structural expansion only — no 'renameTerm' involved, and no
@@ -2143,18 +2183,19 @@ expandQueryGoalWith (QueryRenameEnv ctx0) (Constraint cname0 cargs0) =
           let n = unqualifiedText cname
               arity = length cargs
               key = (providerMod, n, arity)
-           in if key `elem` map (\(m, cn, ca, _) -> (m, cn, ca)) ctx.macroChain
+           in if inMacroChain key ctx.macroChain
                 then do
                   let err = MacroCycle (QualifiedName providerMod n) arity
                   emitErrorIn ctx (AnnP err queryTermLoc (Atom ""))
                   pure []
                 else case Map.lookup key ctx.macroDefTable of
                   Nothing -> pure []
-                  Just def ->
+                  Just def -> do
+                    seed <- freshMacroSeed
                     let entry = (providerMod, n, arity, queryTermLoc)
                         ctx' = ctx {macroChain = entry : ctx.macroChain}
-                        goals = flattenConj (instantiateMacro queryTermLoc def cargs)
-                     in concat <$> traverse (expandGoalTerm ctx') goals
+                        goals = flattenConj (instantiateMacro seed def cargs)
+                    concat <$> traverse (expandGoalTerm ctx') goals
         NotAMacro -> pure [CompoundTerm cname cargs]
     expandGoalTerm ctx t = case t of
       CompoundTerm nm as -> go ctx nm as

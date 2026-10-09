@@ -1,6 +1,6 @@
 :- module(macro_basic,
           [test_head/3, test_body/2, test_nested/2, test_single/2,
-           result/2, macro(direct_single/2)]).
+           test_fresh/4, result/2, macro(direct_single/2)]).
 
 % --- Head-position macro expansion ---------------------------------------
 
@@ -62,3 +62,21 @@ result(X, R) <=> R = X.
 % by `ychr run -g` and `runProgramWithGoal`), expanding to exactly one
 % goal so it can still be represented as a single 'Constraint'.
 :- macro direct_single(X, R) ---> result(X, R).
+
+% --- Two uses of the same macro in one body (fresh-variable scoping) -----
+
+:- chr_constraint helper/2.
+:- chr_constraint use_tmp/2.
+:- chr_constraint test_fresh/4.
+
+% 'Tmp' is a non-parameter variable: each use must get its own fresh
+% one, so the two expansions below don't alias their 'Tmp's. They
+% share one enclosing rule body (one 'SourceLoc'), which is exactly
+% the case a use-site-location-keyed freshening scheme would collide
+% on; a per-expansion counter does not.
+:- macro inner(Y, R) ---> (helper(Y, Tmp), use_tmp(Tmp, R)).
+
+helper(Y, Tmp) <=> Tmp = Y + 100.
+use_tmp(Tmp, R) <=> R = Tmp.
+
+test_fresh(X1, X2, R1, R2) <=> inner(X1, R1), inner(X2, R2).
