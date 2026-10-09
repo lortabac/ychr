@@ -223,6 +223,34 @@ errorPathTests =
           "unbound variable" `isInfixOf` msg
         assertBool ("expected the missing name in: " ++ msg) $
           "missing" `isInfixOf` msg,
+      testCase "reading a value slot as a constraint id errors as unbound" $ do
+        -- A hand-built program can bind a name in value position and
+        -- read it as an id. The slot phase gives both the same slot, so
+        -- the environment holds a value cell where an id is expected;
+        -- that is the same recoverable error the old id map reported
+        -- for a slot it never saw, rather than a wrong id.
+        let prog =
+              singleProc
+                "p"
+                []
+                [ LetVal "x" (Lit (IntLit 1)),
+                  Store (IdVar "x"),
+                  Return (Lit (BoolLit False))
+                ]
+        msg <- expectRuntimeError prog "p" []
+        assertBool ("expected 'unbound id variable' in: " ++ msg) $
+          "unbound id variable" `isInfixOf` msg,
+      testCase "reading an id slot as a value errors as unbound" $ do
+        let prog =
+              singleProc
+                "p"
+                []
+                [ LetId "c" (CreateConstraint (ConstraintType 0) []),
+                  Return (Var "c")
+                ]
+        msg <- expectRuntimeError prog "p" []
+        assertBool ("expected 'unbound variable' in: " ++ msg) $
+          "unbound variable" `isInfixOf` msg,
       testCase "EvalDeep of an unbound fresh variable returns the variable itself" $ do
         let prog =
               singleProc
@@ -514,30 +542,37 @@ softGuardTests =
           Right _ -> assertFailure "expected RuntimeErrorThrown, got a value"
     ]
 
+-- | The slot count is the callee's 'SlotProc.slotProcSlots'; it sizes
+-- the environment and bounds every write, so the tests pass one that
+-- covers the arity (as a real call does).
 bindParamsTests :: TestTree
 bindParamsTests =
   testGroup
     "bindParams"
-    [ testCase "matching arity returns Right" $
-        case bindParams "p" 2 [CVal (VInt 1), CVal (VInt 2)] of
+    [ testCase "matching arity returns Right" $ do
+        bound <- bindParams "p" 2 2 [CVal (VInt 1), CVal (VInt 2)]
+        case bound of
           Right _ -> pure ()
           Left msg -> assertFailure ("expected Right, got Left: " ++ msg),
-      testCase "too few args returns Left with proc name" $
-        case bindParams "myProc" 2 [CVal (VInt 1)] of
+      testCase "too few args returns Left with proc name" $ do
+        bound <- bindParams "myProc" 2 2 [CVal (VInt 1)]
+        case bound of
           Left msg -> do
             assertBool ("missing arity-mismatch text in: " ++ msg) $
               "arity mismatch" `isInfixOf` msg
             assertBool ("missing proc name in: " ++ msg) $
               "myProc" `isInfixOf` msg
           Right _ -> assertFailure "expected Left",
-      testCase "too many args returns Left" $
-        case bindParams "p" 1 [CVal (VInt 1), CVal (VInt 2)] of
+      testCase "too many args returns Left" $ do
+        bound <- bindParams "p" 1 1 [CVal (VInt 1), CVal (VInt 2)]
+        case bound of
           Left msg ->
             assertBool ("missing arity-mismatch text in: " ++ msg) $
               "arity mismatch" `isInfixOf` msg
           Right _ -> assertFailure "expected Left",
-      testCase "mixed-kind args bind by tag" $
-        case bindParams "p" 2 [CVal (VInt 7), CId (SuspensionId 3)] of
+      testCase "mixed-kind args bind by tag" $ do
+        bound <- bindParams "p" 2 2 [CVal (VInt 7), CId (SuspensionId 3)]
+        case bound of
           Right _ -> pure ()
           Left msg -> assertFailure ("expected Right, got Left: " ++ msg)
     ]

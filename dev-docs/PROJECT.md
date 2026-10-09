@@ -443,9 +443,13 @@ text order.
 The interpreter no longer runs the VM AST. It runs a second,
 interpreter-owned AST in which every local variable is a per-procedure
 integer slot (`YCHR.Internal.Interpreter.Slots`), and its environment is
-`Env { envValues :: IntMap Value, envIds :: IntMap SuspensionId }`
-keyed by that slot rather than by `Name`. The phase is derived once per
-compiled program, lazily, and carried on `CompiledProgram.slotProgram`;
+one mutable cell array per call, `Env = IOArray Int Cell`, indexed by
+that slot rather than by `Name`; a cell holds a `Value`, a
+`SuspensionId`, or nothing. (The environment was two slot-keyed
+`IntMap`s when this item landed; `dev-docs/MICROHS_PERFORMANCE.md`
+§7C.2 replaced them with the array and measured it.) The phase is
+derived once per compiled program, lazily, and carried on
+`CompiledProgram.slotProgram`;
 `YCHR.Internal.Runtime.Session` copies it into `SessionInput`, the
 interpreter reads its local environments out of its own per-call `Env`
 and its procedure tables out of `SessionEnv.procEntries` (index-keyed)
@@ -487,17 +491,21 @@ so the interpreter still reports its own "unbound variable" runtime
 error instead of the phase failing. Slots are numbered from one counter
 per procedure, shared by both kinds, because a parameter is
 heterogeneous at run time and must occupy the same slot number whether
-it lands in `envValues` or `envIds`. See
+it lands in a value cell or an id cell, and the counter's final value
+is the procedure's slot count — the size of the per-call array. See
 `dev-docs/INVARIANTS.md` for what is and is not an invariant here.
 
 What it removes is visible in the fine profile (both trees built with
 `cabal build exe:ychr --ghc-options=-fprof-auto`, run over
-`typechecker/*.chr`): the run goes from 25.33 s / 20.93 GB to 18.16 s /
+`typechecker/*.chr`; the environment was still the two `IntMap`s here,
+which is what C.2 later replaced, so these shares are the `IntMap`
+version's): the run goes from 25.33 s / 20.93 GB to 18.16 s /
 19.30 GB; `$fOrdText_$ccompare` falls from 9.3% of individual time to
 4.7% and `Ord Name`'s `compare` from 3.2% to 1.1%; `bindParams` from
 4.0% to 1.8% and `insertVal` from 3.8% to 1.8%; and `balanceL` plus
 `balanceR` (1.5% and 0.7%) leave the report entirely, their place taken
-by the `IntMap` insert at 1.8% / 4.6%.
+by the `IntMap` insert at 1.8% / 4.6%. The array version's figures are
+in `dev-docs/MICROHS_PERFORMANCE.md` §7C.2.
 
 `make bench` is the authority and it agrees, by more than those
 shares suggested: measured by interleaving the benchmark binary against

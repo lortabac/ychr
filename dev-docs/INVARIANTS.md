@@ -73,10 +73,9 @@ removable when closed.
   `ExprStmt` take `ValExpr`; `Let`/`Assign` split into `LetVal`/`LetId`
   and `AssignVal`/`AssignId`. The interpreter splits `evalExpr` into
   `evalValExpr :: ValExpr -> Eff es Value` and `evalIdExpr :: IdExpr ->
-  Eff es SuspensionId`, and the local environment splits into
-  `envValues` and `envIds`, keyed by the locals' slots rather than
-  their names since the interpreter moved to its own slot phase (see
-  "The interpreter's slot phase mirrors the VM AST" below).
+  Eff es SuspensionId`, and the local environment is one cell per local
+  slot, holding either kind, since the interpreter moved to its own slot
+  phase (see "The interpreter's slot phase mirrors the VM AST" below).
   `RuntimeVal` is removed; cross-procedure args use `Runtime.Types.CallVal`
   (`CVal Value | CId SuspensionId`). `HostCallFn` narrows to
   `[Value] -> Eff es Value`. Closes seven interpreter `runtimeErrorS`
@@ -340,7 +339,8 @@ name- or index-resolution invariants rather than shape invariants:
 |-------------------------------------|-------------------------------------------|
 | `callProc` (unknown name)           | name resolves in `procMap`                |
 | `callProcAt` (stale index)          | index resolves in `procEntries`           |
-| `evalValExpr (SVar slot name)`      | slot in `envValues`                       |
+| `evalValExpr (SVar slot name)`      | the slot holds a value cell               |
+| `evalIdExpr (SIdVar slot name)`     | the slot holds an id cell                 |
 | `invokeHostCall` (unknown)          | name in registry                          |
 
 The first closes for compiler output — see §5 "Closed procedure-name
@@ -349,9 +349,22 @@ the interpreter is handed directly. The second is unreachable by
 construction: a `CallTarget` index and the `procEntries` table it is
 read from come from the same `SlotProgram`, and nothing rebuilds one
 without the other; `callProcAt` still reports a miss rather than
-projecting a partial record. An opaque `IdExpr`/`ValExpr` constructor
-that can only be made by the binder would close the third; a typed
-`HostCallRef` issued by the registry would close the fourth.
+projecting a partial record. The cell rows are unreachable for an
+emitted program: the same walk hands out the write's slot and the
+read's, so a written slot always holds the kind its read expects, and
+the `unsafeRead` index a read uses is below the array size for the same
+reason. What *is* reachable, and intended, is reading a cell the phase's
+totality left empty (a name with no binder in scope): that is the
+"unbound variable" error, not a wrong value. A cell holding the other
+kind is a hand-built `Program`'s doing — no emitted program can produce
+one — and reports the "unbound variable" / "unbound id variable" error
+the split maps reported for a slot they had never seen. One difference
+that split had and one cell cannot: a hand-built slot written both as a
+value and as an id could be read back as either from the two maps,
+while the cell keeps only the second write and reports the first read as
+unbound. An opaque `IdExpr`/`ValExpr` constructor that can only be made
+by the binder would close those rows; a typed `HostCallRef` issued by
+the registry would close the last.
 
 ### Panics this catalogue missed
 
@@ -884,8 +897,8 @@ procedure at query time.
 The Haskell interpreter does not run the VM AST. It runs a second,
 interpreter-owned AST in which every local variable is a per-procedure
 integer slot (`YCHR.Internal.Interpreter.Slots`), produced once at
-compilation and carried on `CompiledProgram.slotProgram`. Two
-invariants make that duplication safe, and neither is encoded in a
+compilation and carried on `CompiledProgram.slotProgram`. The
+invariants below make that duplication safe, and none is encoded in a
 type:
 
 - **The phase is total and structure-preserving.** Every VM `Stmt`,
@@ -911,22 +924,49 @@ type:
   program does not declare stays a `ProcName` target and reaches the
   interpreter's existing "unknown procedure" error; compiler output
   cannot produce one (§5, "Closed procedure-name set").
-- **A slot is read from the map its kind binds it in, and a name the
-  phase never saw in scope lowers to a slot nothing binds.** Slots are
+- **A slot is read as the kind of cell its binder wrote, and a name the
+  phase never saw in scope lowers to a slot nothing writes.** Slots are
   numbered from one counter per procedure, shared by both kinds,
   because a parameter is heterogeneous at run time: `bindParams` binds
   by the runtime tag of the argument it is handed, so parameter *i*
-  must be slot *i* whether the value lands in `envValues` or `envIds`.
-  The IR guarantees a name is bound in only one of the two maps; the
-  interpreter therefore reads a value reference (`SVar`) from
-  `envValues` and an id reference (`SIdVar`) from `envIds`, and a
-  reference with no binder in scope reaches the existing "unbound
-  variable" runtime error rather than a wrong slot.
+  must be slot *i* whether the value lands in a value cell or an id
+  cell. The IR guarantees a name is bound in only one of the two ways;
+  the interpreter therefore reads a value reference (`SVar`) expecting
+  a value cell and an id reference (`SIdVar`) expecting an id cell, and
+  a reference with no binder in scope reads an empty cell and reaches
+  the existing "unbound variable" runtime error rather than a wrong
+  slot. `test/YCHR/Runtime/InterpreterTest.hs` pins both the empty-cell
+  error and the hand-built wrong-kind one.
+- **A procedure's slot count bounds every slot in its body, and it
+  stays lazy.** The count is the final value of the walk's per-procedure
+  counter (`SlotProc.slotProcSlots`), so it is exactly one past the last
+  slot the body mentions and the size of the array
+  ("YCHR.Internal.Runtime.Interpreter") the interpreter allocates for a
+  call. That is what makes the environment's `unsafeRead`/`unsafeWrite`
+  in range, and it is structural: the counter that hands out the slots
+  is the counter the size comes from. `SlotProc` is exported without its
+  constructor — only its fields — so the record can only come from the
+  phase, which is what lets `bindParams` write a parameter into the
+  array without a bounds check. The field is deliberately lazy,
+  like `slotProcBody`: the two are projections of one walk, and a
+  consumer that reads only the name, index, arity or kind must not run
+  it. It is /not/ a cycle-breaker — a resolved `CallTarget` is built as
+  a thunk and holds nothing but the callee's index, so nothing in the
+  phase needs a callee's body — it is what keeps `lowerProgram`'s "each
+  body stays a thunk until its procedure is first called" true; the
+  name-keyed `slotProcedures` map is strict in its values, so without
+  the laziness forcing it would walk every body. The interpreter demands
+  the count at call time, through the same thunk that supplies the body,
+  so the walk still happens once.
+  `test/YCHR/Interpreter/SlotsTest.hs` pins the count, the slot a
+  reference with no binder takes, the mutually-recursive case, and the
+  laziness itself (a body the walk cannot survive is left unforced when
+  a record is read for its name).
 
 What is deliberately *not* an invariant: that a binder's slot matches a
 particular lexical scope. The interpreter's environment is one mutable
-map per call, so a binding made inside an `If` branch is visible after
-it and a `Foreach` body sees the bindings made earlier in the same
+cell array per call, so a binding made inside an `If` branch is visible
+after it and a `Foreach` body sees the bindings made earlier in the same
 body; the lowering walks the body left to right and allocates a fresh
 slot per binder.
 
@@ -940,16 +980,16 @@ walk:
   equation chain binds the same pattern variable once per equation — but
   each read sits in the segment that follows its own binder, so the
   fresh slot is the one that read should see. A read textually before
-  its binder in a loop body relies on the flat map surviving an earlier
-  iteration, and would resolve to the slot that binder takes, which is
-  what the flat map would have read too.
+  its binder in a loop body relies on the slot's cell surviving an
+  earlier iteration, and would resolve to the slot that binder takes,
+  which is what the flat environment would have read too.
 - **No emitted `If` binds a name in its else arm.** The then arm carries
   the rule body or the equation and the else arm is either empty or
   `inconclusiveElse`, which only `AssignVal`s a binder introduced
   outside the `If`. A hand-built program that bound one name in *both*
   arms and read it after the `If` would see the walk resolve that read
   to the else arm's slot, so a then-arm execution would leave it unbound
-  where the flat map succeeded.
+  where the old flat environment succeeded.
 
 The second is pinned by a case in `test/YCHR/Interpreter/SlotsTest.hs`, so a
 change to the reading has to be deliberate.

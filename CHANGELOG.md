@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+The interpreter's per-call local environment is one mutable array
+instead of two slot-keyed `IntMap`s. `SlotProc` gains `slotProcSlots` —
+the number of slots the procedure's body uses, the final value of the
+phase's per-procedure counter, lazy like `slotProcBody` so that forcing
+a procedure for its name, index, arity or kind runs no walk — and is
+now exported with its fields but without its constructor, so a record
+(the count, the arity and every body slot) can only come from the
+phase's walk; `Runtime.Interpreter`'s `Env` becomes
+`IOArray Int Cell`, where a cell holds a value, a constraint id, or
+nothing. Reads and writes are `unsafeRead`/`unsafeWrite` bounded by the
+slot count; the per-call `IORef Env` layer is gone (`withFreshEnv` is
+now a `runReaderT`, and the `BSoftGuard` catch still sees the same
+mutable array); and `bindParams`
+allocates the environment after its arity check and writes one cell per
+argument, so it becomes
+`Name -> Int -> Int -> [CallVal] -> IO (Either String Env)`. The VM IR,
+its s-expression format and the Scheme backend are untouched.
+
+Measured on `make bench` (criterion, three interleaved rounds a side)
+`typecheck/pairs_library` moves 118.99 ms → 115.45 ms (−3.0 %) and GHC
+allocation on `check typechecker/*.chr` falls 3.5 %, at up to +2.4 % on
+the call-and-bind microbenchmarks (a repeat run measured +2 % to +4 %);
+under MicroHs `check
+pairs_library` falls 36.6 % in reductions and `check leq` 35.2 % (≈ −40 %
+and −37 % in runtime), `run --no-check fib(10)` 12.6 %, while `repl
+--quiet` and `compile` are unchanged. See
+`dev-docs/MICROHS_PERFORMANCE.md` §7C.2 for the full write-up.
+
 The Haskell interpreter resolves its call targets when it lowers a
 program, instead of looking each one up by name on every call. The
 change is the remaining half of `dev-docs/PROJECT.md`'s interpreter
