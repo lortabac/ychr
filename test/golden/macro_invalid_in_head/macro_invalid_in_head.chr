@@ -1,0 +1,6 @@
+:- module(macro_invalid_in_head).
+:- chr_constraint a/1.
+:- chr_constraint b/1.
+:- chr_constraint r/1.
+:- macro foo(X) ---> (a(X) ; b(X)).
+r(X), foo(X) <=> true.

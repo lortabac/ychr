@@ -161,7 +161,7 @@ ambiguousTests =
                 `importing` ["A", "B"]
                 `defining` [[term "leq" [var "X", var "Y"]] <=> [atom "true"]]
         case renameProgram [modA, modB, modC] of
-          Left [Diagnostic _ (AnnP (AmbiguousName "leq" 2 _) _ _)] -> pure ()
+          Left [Diagnostic _ (AnnP (AmbiguousName "leq" 2 _) _ _) _] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
       testCase "ambiguous function used as a body-tell constraint argument" $ do
         -- The bare 'f(1)' lands in 'NoResolve' (demoted from the
@@ -179,7 +179,7 @@ ambiguousTests =
                                <=> [term "c" [term "f" [int 1]]]
                            ]
         case renameProgram [modA, modB, modC] of
-          Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _)] -> pure ()
+          Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _) _] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
       testCase "ambiguous function on '=' operand" $ do
         -- '=' has no special arm routing operands to 'ResolveAll'.
@@ -196,7 +196,7 @@ ambiguousTests =
                                <=> [var "R" .=. term "f" [int 1]]
                            ]
         case renameProgram [modA, modB, modC] of
-          Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _)] -> pure ()
+          Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _) _] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
       testCase "ambiguous compound nested inside a head-pattern argument" $ do
         -- The constraint functor itself (the outer 'c') resolves via
@@ -214,7 +214,7 @@ ambiguousTests =
                                <=> [atom "true"]
                            ]
         case renameProgram [modA, modB, modC] of
-          Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _)] -> pure ()
+          Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _) _] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
       testCase "ambiguous compound in a function-equation pattern" $ do
         -- 'renameEquation' renames the equation's argument patterns in
@@ -230,7 +230,7 @@ ambiguousTests =
               )
                 `withEquations` [equation "g" [term "f" [var "X"]] [] (var "X")]
         case renameProgram [modA, modB, modC] of
-          Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _)] -> pure ()
+          Left [Diagnostic _ (AnnP (AmbiguousName "f" 1 _) _ _) _] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other,
       testCase "ambiguous zero-arity atom in 'NoResolve' position" $ do
         -- Companion to the compound cases for the 'AtomTerm' arm.
@@ -249,7 +249,7 @@ ambiguousTests =
                                <=> [term "c" [atom "f"]]
                            ]
         case renameProgram [modA, modB, modC] of
-          Left [Diagnostic _ (AnnP (AmbiguousName "f" 0 _) _ _)] -> pure ()
+          Left [Diagnostic _ (AnnP (AmbiguousName "f" 0 _) _ _) _] -> pure ()
           other -> assertFailure $ "expected AmbiguousName error, got " ++ show other
     ]
 
@@ -274,7 +274,7 @@ ambiguousDataConTests =
                   `defining` [[term "r" [var "R"]] <=> [var "R" .=. atom "foo"]]
               )
         case renameProgram [modA, modB, modC] of
-          Left [Diagnostic _ (AnnP (AmbiguousDataConstructor "foo" _) _ _)] ->
+          Left [Diagnostic _ (AnnP (AmbiguousDataConstructor "foo" _) _ _) _] ->
             pure ()
           other ->
             assertFailure $
@@ -291,7 +291,7 @@ ambiguousDataConTests =
                              ]
               )
         case renameProgram [modA, modB, modC] of
-          Left [Diagnostic _ (AnnP (AmbiguousDataConstructor "foo" _) _ _)] ->
+          Left [Diagnostic _ (AnnP (AmbiguousDataConstructor "foo" _) _ _) _] ->
             pure ()
           other ->
             assertFailure $
@@ -1312,7 +1312,7 @@ importListTests =
         case Rn.renameProgram inputs (rewriteImports [modOrder, modLogic]) of
           Left errs ->
             any
-              ( \(Diagnostic _ (AnnP e _ _)) -> case e of
+              ( \(Diagnostic _ (AnnP e _ _) _) -> case e of
                   UseModuleOutOfOrder "Order" -> True
                   _ -> False
               )

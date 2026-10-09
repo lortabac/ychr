@@ -48,6 +48,8 @@ module YCHR.Internal.Parsed
     Rule (..),
     Head (..),
     FunctionEquation (..),
+    MacroDef (..),
+    MacroExportDeclBody (..),
 
     -- * Re-exports from YCHR.Internal.Types
     Name (..),
@@ -129,6 +131,10 @@ data Module = Module
     -- elsewhere in this same module, whose calls should be substituted
     -- inline at eligible call sites. See 'YCHR.Internal.Desugar.Inline'.
     inlines :: [Ann InlineDecl],
+    -- | @:- macro Name(V1, ..., Vn) ---> Body.@ definitions. See
+    -- 'YCHR.Internal.Rename.Macro' and
+    -- [the macro reference](../../docs/reference/macros.md).
+    macros :: [AnnP MacroDef],
     exports :: Maybe (AnnP [Declaration])
   }
   deriving (Show, Eq)
@@ -220,6 +226,34 @@ data InlineDecl = InlineDecl
   }
   deriving (Show, Eq)
 
+-- | A @:- macro Name(V1, ..., Vn) ---> Body.@ definition.
+--
+-- 'params' are the parameter variables in left-to-right order; the
+-- parser guarantees they are distinct (duplicates are rejected as
+-- 'YCHR.Internal.Parser.MalformedMacroHead'). 'body' is an arbitrary
+-- term — typically a @,@\/@;@ conjunction — kept exactly as written;
+-- it is not checked when the macro is defined beyond the head-shape
+-- and reserved-name rules, since whether an expansion is valid
+-- depends on where it is used. See
+-- [the macro reference](../../docs/reference/macros.md).
+data MacroDef = MacroDef
+  { name :: Text,
+    params :: [Text],
+    body :: Term
+  }
+  deriving (Show, Eq)
+
+-- | Fields of a @macro(Name\/Arity)@ entry in a module's export or
+-- import list. Like 'TypeExportDeclBody', this describes an
+-- export\/import-list item rather than a declaration of a name in the
+-- constraint\/function namespace; the parser only produces it for
+-- those lists.
+data MacroExportDeclBody = MacroExportDeclBody
+  { name :: Text,
+    arity :: Int
+  }
+  deriving (Show, Eq)
+
 -- | A parsed declaration item.
 --
 -- Each constructor carries its fields in a dedicated single-constructor
@@ -239,6 +273,7 @@ data Declaration
   | ExtendClassTypeDecl ExtendClassTypeDeclBody
   | OperatorDecl OpDecl
   | TypeExportDecl TypeExportDeclBody
+  | MacroExportDecl MacroExportDeclBody
   deriving (Show, Eq)
 
 -- | An @op(...)@ entry from a module's export or import list.

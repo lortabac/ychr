@@ -40,6 +40,7 @@ static type checker is specified in [type-system.md](type-system.md).
 | `:- extend_function` / `:- extend_class` / `:- extend_class_type` | [Declaration placement](#declaration-placement) |
 | `:- inline Decls.` | [Inlining](#inlining) |
 | `:- constraint_use Decls.` | [Constraint use](#constraint-use) |
+| `:- macro Name(Vs) ---> Body.` | [macros.md](macros.md) |
 
 Declaration directives take comma-separated lists:
 `:- chr_constraint a/1, b/2.` Unknown directives are dropped silently
@@ -80,8 +81,8 @@ Without an export list:
 :- module(order).
 ```
 
-This exports every constraint, function, type and operator the module
-declares, and re-exports no imports. A file with no `:- module` header
+This exports every constraint, function, type, macro and operator the
+module declares, and re-exports no imports. A file with no `:- module` header
 is an *unnamed* module with the same visibility; diagnostics call it
 `<a>` for `a.chr`. Several header-less files may be combined, but two
 inputs may not carry the same module name — whether written with an
@@ -162,6 +163,20 @@ introduced and eliminated only by the functions declared over it
 the type namespace with algebraic types and use the same
 `type(Name/Arity)` export/import form. Naming a constructor in the
 allowlist form is `YCHR-20008`.
+
+### Macro exports
+
+A macro ([macros.md](macros.md)) is a module-level name, like a
+constraint or a function, exported and imported with
+`macro(Name/Arity)`:
+
+```prolog
+:- module(aggregates, [macro(count/2)]).
+:- use_module(aggregates, [macro(count/2)]).
+```
+
+A module with no export list exports every macro it defines, same as
+for constraints and functions.
 
 ## Constraints
 

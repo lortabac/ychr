@@ -1,0 +1,64 @@
+:- module(macro_basic,
+          [test_head/3, test_body/2, test_nested/2, test_single/2,
+           result/2, macro(direct_single/2)]).
+
+% --- Head-position macro expansion ---------------------------------------
+
+:- chr_constraint edge/2.
+:- chr_constraint node/1.
+:- chr_constraint has_edge/1.
+:- chr_constraint check1/2.
+:- chr_constraint test_head/3.
+
+% A head-position macro, expanding to two kept conjuncts.
+:- macro in_degree(N) ---> edge(_, N), has_edge(N).
+
+node(N), in_degree(N), check1(N, R) <=> R = 1.
+
+test_head(N, M, R) <=> node(N), edge(M, N), has_edge(N), check1(N, R).
+
+% --- Body-position macro expansion ----------------------------------------
+
+:- chr_constraint trigger/1.
+:- chr_constraint a/1.
+:- chr_constraint b/1.
+:- chr_constraint check2/2.
+:- chr_constraint test_body/2.
+
+% A body-position macro, expanding to two tells.
+:- macro both(X) ---> (a(X), b(X)).
+
+trigger(X) <=> both(X).
+a(X), b(X), check2(X, R) <=> R = 1.
+
+test_body(X, R) <=> trigger(X), check2(X, R).
+
+% --- Nested macro expansion (a macro body using another macro) -----------
+
+:- chr_constraint outer/1.
+:- chr_constraint c/1.
+:- chr_constraint check3/2.
+:- chr_constraint test_nested/2.
+
+% A macro whose body uses another macro.
+:- macro wrap(X) ---> both(X).
+
+outer(X) <=> wrap(X), c(X).
+a(X), b(X), c(X), check3(X, R) <=> R = 1.
+
+test_nested(X, R) <=> outer(X), check3(X, R).
+
+% --- A macro expanding to a single goal, usable from a single-goal query --
+
+:- chr_constraint result/2.
+:- chr_constraint test_single/2.
+
+:- macro single_macro(X, R) ---> result(X, R).
+
+test_single(X, R) <=> single_macro(X, R).
+result(X, R) <=> R = X.
+
+% A macro usable directly as a single-goal query (the entry point used
+% by `ychr run -g` and `runProgramWithGoal`), expanding to exactly one
+% goal so it can still be represented as a single 'Constraint'.
+:- macro direct_single(X, R) ---> result(X, R).

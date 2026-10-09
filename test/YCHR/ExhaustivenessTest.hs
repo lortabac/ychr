@@ -28,7 +28,7 @@ exhWarnings src =
       pure
         [ (name, prettyTermSrc witness)
         | ExhaustivenessWarnings ds <- ws,
-          Diagnostic _ (AnnP (NonExhaustiveMatch name witness) _ _) <- ds
+          Diagnostic _ (AnnP (NonExhaustiveMatch name witness) _ _) _ <- ds
         ]
 
 -- | Exhaustiveness warnings: the missing-constructor witness and function name reported.

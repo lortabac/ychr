@@ -687,7 +687,7 @@ compileTerm :: VarMap -> SrcInfo -> Term -> Writer [Diagnostic CompileError] Val
 compileTerm varMap si (VarTerm v) = case lookupVar v varMap of
   Just expr -> pure expr
   Nothing -> do
-    tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed)]
+    tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed) []]
     pure unreachableValue
 compileTerm _ _ (IntTerm n) = pure (Lit (IntLit n))
 compileTerm _ _ (FloatTerm n) = pure (Lit (FloatLit n))
@@ -747,7 +747,7 @@ compileExpr varMap si e = case e of
   R.VarExpr v -> case lookupVar v varMap of
     Just expr -> pure expr
     Nothing -> do
-      tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed)]
+      tell [Diagnostic si.srcLabel (AnnP (UnboundVariable v) si.srcLoc si.srcParsed) []]
       pure unreachableValue
   R.IntExpr n -> pure (Lit (IntLit n))
   R.FloatExpr n -> pure (Lit (FloatLit n))

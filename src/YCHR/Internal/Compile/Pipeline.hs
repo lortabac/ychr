@@ -174,6 +174,12 @@ data GoalRejection
     -- than a constraint (e.g. @ychr run -g '1 + 1'@ resolves to
     -- @prelude:+/2@, which is a function). Carries the resolved name.
     NotAConstraintItem Types.QualifiedName
+  | -- | The goal names a macro whose expansion is a conjunction of
+    -- several goals (or none at all). The single-goal entry points
+    -- (@ychr run -g@, @gen-driver@, 'YCHR.Run.runProgramWithGoal') parse
+    -- a goal as exactly one constraint and cannot represent more; use
+    -- the REPL or a multi-goal query instead.
+    MacroExpandsToConjunction
   deriving (Show)
 
 instance Exception Error
@@ -430,6 +436,7 @@ finalizeCompilation libraryMods opExports trailingLocMap inputPaths parsed = do
                 (maybe second.nameLoc (\p -> SourceLoc p 1 1) (fileOf secondIdx second))
                 (Atom n)
             )
+            []
         | (n, ms@((_, _) : (secondIdx, second) : _)) <- Map.toList modulesByName
         ]
   case duplicateModuleDiags of

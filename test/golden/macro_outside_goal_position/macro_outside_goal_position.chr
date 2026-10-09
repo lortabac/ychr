@@ -1,0 +1,5 @@
+:- module(macro_outside_goal_position).
+:- chr_constraint a/1.
+:- chr_constraint r/1.
+:- macro foo(X) ---> a(X).
+r(X) <=> foo(X) | true.

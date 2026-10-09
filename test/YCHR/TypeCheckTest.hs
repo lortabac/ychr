@@ -32,8 +32,8 @@ checkModule src =
     Right (prog, _) -> do
       result <- typeCheckProgram typeCheckerProgram prog.desugaredProgram
       pure
-        ( [show payload | Diagnostic _ (AnnP payload _ _) <- result.errors],
-          [payload | Diagnostic _ (AnnP payload _ _) <- result.warnings]
+        ( [show payload | Diagnostic _ (AnnP payload _ _) _ <- result.errors],
+          [payload | Diagnostic _ (AnnP payload _ _) _ <- result.warnings]
         )
 
 -- | A module with a @color@ type and a @tag@ constraint whose first

@@ -123,7 +123,7 @@ checkFunction conEnv typeMap fd
             Just witness
               | any hasCon witness ->
                   let warning = NonExhaustiveMatch displayName (witnessCall fd witness)
-                   in [Diagnostic (Just label) (AnnP warning loc origin)]
+                   in [Diagnostic (Just label) (AnnP warning loc origin) []]
             _ -> []
   | otherwise = []
   where

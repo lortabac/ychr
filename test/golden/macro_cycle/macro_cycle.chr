@@ -1,0 +1,6 @@
+:- module(macro_cycle).
+:- chr_constraint a/1.
+:- chr_constraint r/1.
+:- macro foo(X) ---> bar(X).
+:- macro bar(X) ---> foo(X).
+r(X) <=> foo(X).

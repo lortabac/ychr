@@ -49,6 +49,7 @@ module YCHR.Internal.Rename
     buildQueryRenameEnv,
     renameQueryGoalsWith,
     renameQueryArgsWith,
+    expandQueryGoalWith,
     buildExportEnv,
 
     -- * Errors and warnings
@@ -61,7 +62,7 @@ module YCHR.Internal.Rename
   )
 where
 
-import Control.Monad (foldM_, when)
+import Control.Monad (foldM, foldM_, unless, when)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Writer.CPS (Writer, WriterT, runWriter, runWriterT, tell)
 import Data.Foldable (traverse_)
@@ -70,11 +71,22 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as Text
 import YCHR.Internal.Collected (CollectedImport (..), CollectedModule (..))
-import YCHR.Internal.Diagnostic (Diagnostic, noDiag)
+import YCHR.Internal.Diagnostic (Diagnostic (..), noDiag)
 import YCHR.Internal.PExpr (PExpr (Atom))
 import YCHR.Internal.Parsed
 import YCHR.Internal.Pretty (termToPExpr)
+import YCHR.Internal.Rename.Macro
+  ( HeadConjunctResult (..),
+    flattenConj,
+    goalsToChain,
+    headConjunct,
+    importListPermitsMacro,
+    instantiateMacro,
+    qualifiedRefsIn,
+    varsIn,
+  )
 import YCHR.Internal.Rename.Types
 import YCHR.Internal.Types
 
@@ -194,6 +206,40 @@ data RenameError
     -- choice between /goals/, and only a rule body has goals in it.
     -- Inside @quote\/1@ it stays ordinary data and is not affected.
     DisjunctionNotInRuleBody
+  | -- | A @:- macro@ use's name is not recognized because it appears
+    -- outside a goal position: a guard, an @is@ right-hand side, a
+    -- lambda body, a function equation (which has no goal positions
+    -- at all), or a @fun name\/arity@ function reference. The
+    -- exceptions are @quote\/1@ and rule-head\/equation /arguments/,
+    -- both opaque data, where the same compound is an ordinary term.
+    -- Carries the macro's qualified name and arity.
+    MacroOutsideGoalPosition QualifiedName Int
+  | -- | Expanding a macro use required, directly or transitively,
+    -- expanding another use of the same macro — the expansion has no
+    -- finite form. Carries the qualified macro name and arity whose
+    -- expansion cycled; the macro-expansion chain on the diagnostic
+    -- itself names every macro in the cycle.
+    MacroCycle QualifiedName Int
+  | -- | A rule-head expansion produced something other than a
+    -- conjunction of constraints — a disjunction, a simpagation
+    -- @\\@, a bare variable or literal, or any other non-constraint
+    -- shape. Carries the macro whose expansion produced it.
+    MacroInvalidInHead QualifiedName Int
+  | -- | Two @:- macro@ definitions in the same module share a
+    -- @name\/arity@. Carries the name and arity.
+    DuplicateMacro Text Int
+  | -- | A @:- macro@ definition shares its @name\/arity@ with a
+    -- @:- chr_constraint@ or @:- function@ declared in the same
+    -- module. Carries the macro's qualified name and arity.
+    MacroNameCollision QualifiedName Int
+  | -- | A macro body refers to @M:x\/a@, where @M@ is the macro's own
+    -- declaring module, and @M@ does not declare and export
+    -- @x\/a@ (as a constraint, function, macro, or data constructor).
+    -- Without this check every use of the macro would fail the same
+    -- way, at the use site instead of the definition. Carries the
+    -- macro's qualified name and arity, and the undeclared reference's
+    -- name and arity.
+    MacroBodyNotExported QualifiedName Int Text Int
   deriving (Eq, Show)
 
 -- | Non-fatal warnings about data-constructor references the renamer could
@@ -205,6 +251,10 @@ data RenameWarning
   | -- | A declared data constructor used with the wrong number of
     -- arguments (YCHR-20102). Carries the name and the arity used.
     DataConstructorArityMismatch Text Int
+  | -- | A @:- macro@ parameter that does not occur in the macro's
+    -- body. The corresponding argument is dropped at every use site.
+    -- Carries the macro's qualified name and the unused parameter.
+    UnusedMacroParameter QualifiedName Text
   deriving (Eq, Show)
 
 -- | Maps data constructor names to their declared arities (from type
@@ -234,11 +284,47 @@ data DeclaredType = DeclaredType
 -- classes; 'emitError' lifts past the warning layer.
 type Rename = WriterT [Diagnostic RenameWarning] (Writer [Diagnostic RenameError])
 
+-- | Emit an error with no macro-expansion context. Used by checks that
+-- never run on macro-expanded code (export/import-list and type-decl
+-- validation); every other site goes through 'emitErrorIn' so its
+-- diagnostic carries whatever macro chain is active.
 emitError :: AnnP RenameError -> Rename ()
 emitError e = lift (tell [noDiag e])
 
-emitWarning :: AnnP RenameWarning -> Rename ()
-emitWarning w = tell [noDiag w]
+-- | Emit an error, attaching the current macro-expansion chain
+-- (rendered, innermost first) from 'RenameCtx.macroChain'. Used at
+-- every site reachable while renaming a rule head, body, guard, or
+-- equation — i.e. everywhere macro-expanded code could be in scope.
+emitErrorIn :: RenameCtx -> AnnP RenameError -> Rename ()
+emitErrorIn ctx e = lift (tell [(noDiag e) {diagContext = map renderMacroUse ctx.macroChain}])
+
+-- | Emit a warning, attaching the current macro-expansion chain. See
+-- 'emitErrorIn'.
+emitWarningIn :: RenameCtx -> AnnP RenameWarning -> Rename ()
+emitWarningIn ctx w = tell [(noDiag w) {diagContext = map renderMacroUse ctx.macroChain}]
+
+-- | Render one macro-expansion-chain entry as a display line, e.g.
+-- @"in the expansion of aggregates:count\/2, used at graph.chr:4:3"@.
+-- A tiny formatter of its own rather than a shared one from
+-- "YCHR.Internal.Display": that module already imports "YCHR.Internal.Rename"
+-- for 'RenameError'\/'RenameWarning', so the reverse import would cycle.
+renderMacroUse :: (Text, Text, Int, SourceLoc) -> Text
+renderMacroUse (m, n, arity, loc) =
+  "in the expansion of "
+    <> m
+    <> ":"
+    <> n
+    <> "/"
+    <> tshow arity
+    <> ", used at "
+    <> Text.pack loc.file
+    <> ":"
+    <> tshow loc.line
+    <> ":"
+    <> tshow loc.col
+  where
+    tshow :: (Show a) => a -> Text
+    tshow = Text.pack . show
 
 -- | Global environments consulted while renaming one module. Bundled
 -- into a record so recursive helpers don't have to thread every
@@ -281,7 +367,26 @@ data RenameCtx = RenameCtx
     -- ('ModuleNotImported') from one to a non-existent module
     -- ('UnknownModule').
     allModuleNames :: [Text],
-    currentModule :: CollectedModule
+    currentModule :: CollectedModule,
+    -- | Where each @(name, arity)@ macro is /declared/, mirroring
+    -- 'declEnv' for the macro namespace. Built from every module's
+    -- @macros@ field.
+    macroDeclEnv :: DeclEnv,
+    -- | Where each @(name, arity)@ macro is /exported/, mirroring
+    -- 'exportEnv' for the macro namespace.
+    macroExportEnv :: ExportEnv,
+    -- | Every macro's own definition, keyed by its declaring module,
+    -- name, and arity. Looked up once a use has been resolved to a
+    -- provider module (by 'visibleMacroProviders' or a qualified
+    -- reference) to get at the actual 'MacroDef' to instantiate.
+    macroDefTable :: Map (Text, Text, Int) MacroDef,
+    -- | The chain of macro uses currently being expanded, innermost
+    -- (most recently entered) first: each entry is
+    -- @(definingModule, name, arity, useLoc)@. Used both to detect
+    -- 'MacroCycle' (membership test) and, rendered by
+    -- 'renderMacroUse', as the context on every diagnostic raised
+    -- while expanding. Empty outside any expansion.
+    macroChain :: [(Text, Text, Int, SourceLoc)]
   }
 
 -- | Inputs to 'renameProgram' beyond the module list itself. Lets the
@@ -398,7 +503,7 @@ checkAmbiguousDataCon ::
 checkAmbiguousDataCon ctx loc origin n arity =
   case Map.lookup (n, arity) ctx.dataConProviders of
     Just ms@(_ : _ : _) ->
-      emitError (AnnP (AmbiguousDataConstructor n ms) loc origin)
+      emitErrorIn ctx (AnnP (AmbiguousDataConstructor n ms) loc origin)
     _ -> pure ()
 
 -- | Emit 'ConstructorFunctionAmbiguity' (YCHR-20020) when a bare name
@@ -440,7 +545,7 @@ checkConstructorFunctionAmbiguity ctx loc origin n
           self = ctx.currentModule.name
           declaresBoth = self `elem` conMods && self `elem` funMods
        in when (not (null conMods) && not (null funMods) && not declaresBoth) $
-            emitError (AnnP (ConstructorFunctionAmbiguity n conMods funMods) loc origin)
+            emitErrorIn ctx (AnnP (ConstructorFunctionAmbiguity n conMods funMods) loc origin)
 
 -- | Every module that makes @n@ visible as a data constructor, at any
 -- arity. 'dataConEnv' supplies the arities the name is declared at and
@@ -506,6 +611,49 @@ buildTypeExportEnv mods =
         Just annExports -> [(td.name, td.arity) | TypeExportDecl td <- annExports.node]
     ]
 
+-- | Where each @(name, arity)@ macro is declared, mirroring
+-- 'buildDeclEnv' for the macro namespace: macros are a separate
+-- namespace from constraints and functions (see
+-- 'MacroNameCollision'), so this is kept apart from 'DeclEnv' rather
+-- than folded into it.
+buildMacroDeclEnv :: [CollectedModule] -> DeclEnv
+buildMacroDeclEnv mods =
+  makeDeclEnv
+    [ ((d.node.name, length d.node.params), [m.name])
+    | m <- mods,
+      d <- m.macros
+    ]
+
+-- | Where each @(name, arity)@ macro is exported. A module with no
+-- export list exports every macro it defines; otherwise only the
+-- @macro(name\/arity)@ entries in its export list count. Mirrors
+-- 'buildExportEnv' for the macro namespace.
+buildMacroExportEnv :: [CollectedModule] -> ExportEnv
+buildMacroExportEnv mods =
+  makeExportEnv
+    [ (key, [m.name])
+    | m <- mods,
+      key <- case m.exports of
+        Nothing -> [(d.node.name, length d.node.params) | d <- m.macros]
+        Just annExports ->
+          [ (meb.name, meb.arity)
+          | MacroExportDecl meb <- annExports.node,
+            any (\d -> d.node.name == meb.name && length d.node.params == meb.arity) m.macros
+          ]
+    ]
+
+-- | Every macro's own definition, keyed by its declaring module, name,
+-- and arity. A module's /own/ macros only — the table is consulted
+-- after 'visibleMacroProviders' (or a qualified reference) has already
+-- named the provider module, so no visibility filtering happens here.
+buildMacroDefTable :: [CollectedModule] -> Map (Text, Text, Int) MacroDef
+buildMacroDefTable mods =
+  Map.fromList
+    [ ((m.name, d.node.name, length d.node.params), d.node)
+    | m <- mods,
+      d <- m.macros
+    ]
+
 -- | The @(name, arity)@ a declaration is referenced by. Operator
 -- declarations name an operator rather than a symbol in the
 -- constraint/function namespace, so they contribute nothing.
@@ -515,6 +663,11 @@ declNameArity (FunctionDecl fd) = Just (fd.name, fd.arity)
 declNameArity (ExtendClassTypeDecl ed) = Just (ed.name, ed.arity)
 declNameArity (TypeExportDecl td) = Just (td.name, td.arity)
 declNameArity (OperatorDecl {}) = Nothing
+-- Macros are tracked through their own table ('YCHR.Internal.Rename.Macro'),
+-- not through 'DeclEnv'\/'ExportEnv': they are a separate namespace from
+-- constraints and functions, so a 'MacroExportDecl' export/import item
+-- contributes nothing here.
+declNameArity (MacroExportDecl {}) = Nothing
 
 isConstraintOrFunctionDecl :: Declaration -> Bool
 isConstraintOrFunctionDecl ConstraintDecl {} = True
@@ -547,6 +700,9 @@ renameProgram inputs mods =
       typeDeclEnv0 = buildTypeDeclEnv mods
       typeExportEnv0 = buildTypeExportEnv mods
       allCons = buildAllDataConProviders mods
+      macroDeclEnv0 = buildMacroDeclEnv mods
+      macroExportEnv0 = buildMacroExportEnv mods
+      macroDefTable0 = buildMacroDefTable mods
       ctxFor m =
         let ctx0 =
               RenameCtx
@@ -562,7 +718,11 @@ renameProgram inputs mods =
                   currentTrailingLoc =
                     Map.findWithDefault Nothing m.name inputs.trailingLoc,
                   allModuleNames = map (.name) mods,
-                  currentModule = m
+                  currentModule = m,
+                  macroDeclEnv = macroDeclEnv0,
+                  macroExportEnv = macroExportEnv0,
+                  macroDefTable = macroDefTable0,
+                  macroChain = []
                 }
             visible = visibleDataCons mods ctx0
          in ctx0
@@ -599,6 +759,9 @@ validateExports = traverse_ validateOne
             emitError (AnnP (UnknownExport m.name name arity) loc origin)
         | otherwise ->
             checkConList m loc origin name arity conExports
+      MacroExportDecl MacroExportDeclBody {name, arity}
+        | not (isMacroDeclared m name arity) ->
+            emitError (AnnP (UnknownExport m.name name arity) loc origin)
       _ -> pure ()
 
     checkConList _ _ _ _ _ Nothing = pure ()
@@ -625,6 +788,8 @@ validateExports = traverse_ validateOne
                  )
                | Ann td _ <- m.typeDecls
                ]
+    isMacroDeclared m n a =
+      (n, a) `elem` [(d.node.name, length d.node.params) | d <- m.macros]
 
     declaredConstructors m n a =
       [ unqualifiedText dc.conName
@@ -643,6 +808,7 @@ renameModule mods ctx = do
   let m = ctx.currentModule
   validateImportLists mods ctx
   validateTypeDecls ctx
+  checkMacroDefinitions ctx
   renamedRules <- traverse (renameRule ctx) m.rules
   renamedEquations <- traverse (traverse (renameEquation ctx)) m.equations
   renamedExtensions <- traverse (traverse (renameEquation ctx)) m.extensions
@@ -664,6 +830,7 @@ renameModule mods ctx = do
         extensions = renamedExtensions,
         classExtensions = renamedClassExtensions,
         inlines = m.inlines,
+        macros = m.macros,
         typeDecls = renamedTypeDecls,
         decls = renamedDecls,
         extensionTypes = renamedExtensionTypes,
@@ -722,6 +889,9 @@ validateImportLists mods ctx =
       if mn `notElem` lookupExport (n, a) ctx.typeExportEnv
         then emitError (AnnP (UnknownImport mn n a) loc origin)
         else checkImportedCons mn loc origin n a cs
+    checkItem mn loc origin (MacroExportDecl MacroExportDeclBody {name = n, arity = a}) =
+      when (mn `notElem` lookupExport (n, a) ctx.macroExportEnv) $
+        emitError (AnnP (UnknownImport mn n a) loc origin)
 
     checkImportedCons _ _ _ _ _ Nothing = pure ()
     checkImportedCons mn loc origin n a (Just xs) =
@@ -779,6 +949,68 @@ validateImportLists mods ctx =
 locAtOrAfter :: SourceLoc -> SourceLoc -> Bool
 locAtOrAfter a b = (a.line, a.col) >= (b.line, b.col)
 
+-- | Definition-time checks on a module's @:- macro@ definitions,
+-- mirroring 'validateImportLists' and 'validateTypeDecls': run once
+-- per module, before any use site is renamed. Three checks:
+--
+--   * 'DuplicateMacro' — a second definition of the same @name\/arity@
+--     in this module.
+--   * 'MacroNameCollision' — a macro sharing @name\/arity@ with a
+--     @:- chr_constraint@ or @:- function@ of the same module.
+--   * 'MacroBodyNotExported' — a self-qualified reference @M:x@ (@M@
+--     being this module) in the body that @M@ does not both declare
+--     and export, as a constraint, function, macro, or data
+--     constructor.
+--
+-- Plus the 'UnusedMacroParameter' warning for a parameter that never
+-- occurs in the body.
+checkMacroDefinitions :: RenameCtx -> Rename ()
+checkMacroDefinitions ctx = do
+  _ <- foldM checkDuplicate Set.empty m.macros
+  traverse_ checkCollision m.macros
+  traverse_ checkBodyAndParams m.macros
+  where
+    m = ctx.currentModule
+    self = m.name
+    declKeys = Set.fromList [k | Ann d _ <- m.decls, Just k <- [declNameArity d]]
+
+    checkDuplicate seen annDef =
+      let key = (annDef.node.name, length annDef.node.params)
+       in if Set.member key seen
+            then do
+              emitErrorIn
+                ctx
+                (AnnP (uncurry DuplicateMacro key) annDef.sourceLoc annDef.parsed)
+              pure seen
+            else pure (Set.insert key seen)
+
+    checkCollision annDef =
+      let key@(n, a) = (annDef.node.name, length annDef.node.params)
+          err = MacroNameCollision (QualifiedName self n) a
+       in when (Set.member key declKeys) $
+            emitErrorIn ctx (AnnP err annDef.sourceLoc annDef.parsed)
+
+    checkBodyAndParams annDef = do
+      let d = annDef.node
+          used = varsIn d.body
+          unused = filter (`Set.notMember` used) d.params
+          macroName = QualifiedName self d.name
+          warnUnused p =
+            emitWarningIn
+              ctx
+              (AnnP (UnusedMacroParameter macroName p) annDef.sourceLoc annDef.parsed)
+          checkRef (rn, ra) =
+            unless (selfDeclaresAndExports rn ra) $
+              let err = MacroBodyNotExported macroName (length d.params) rn ra
+               in emitErrorIn ctx (AnnP err annDef.sourceLoc annDef.parsed)
+      traverse_ warnUnused unused
+      traverse_ checkRef (qualifiedRefsIn self d.body)
+
+    selfDeclaresAndExports n a =
+      self `elem` lookupExport (n, a) ctx.exportEnv
+        || self `elem` lookupExport (n, a) ctx.macroExportEnv
+        || self `elem` Map.findWithDefault [] (n, a) ctx.dataConProviders
+
 renameRule :: RenameCtx -> Rule -> Rename Rule
 renameRule ctx r = do
   h <- traverse (renameHead ctx r.head.sourceLoc r.head.parsed) r.head
@@ -788,7 +1020,7 @@ renameRule ctx r = do
       r.guard
   b <-
     traverse
-      (traverse (renameTerm ctx r.body.sourceLoc r.body.parsed ResolveTop))
+      (fmap concat . traverse (renameBodyGoal ctx r.body.sourceLoc r.body.parsed))
       r.body
   pure r {head = h, guard = g, body = b}
 
@@ -814,18 +1046,63 @@ renameEquation ctx eq = do
 
 renameHead :: RenameCtx -> SourceLoc -> PExpr -> Head -> Rename Head
 renameHead ctx loc origin h = case h of
-  Simplification cs -> Simplification <$> traverse (renameCon ctx loc origin) cs
-  Propagation cs -> Propagation <$> traverse (renameCon ctx loc origin) cs
+  Simplification cs -> Simplification . concat <$> traverse (renameCon ctx loc origin) cs
+  Propagation cs -> Propagation . concat <$> traverse (renameCon ctx loc origin) cs
   Simpagation k r ->
     Simpagation
-      <$> traverse (renameCon ctx loc origin) k
-      <*> traverse (renameCon ctx loc origin) r
+      <$> (concat <$> traverse (renameCon ctx loc origin) k)
+      <*> (concat <$> traverse (renameCon ctx loc origin) r)
 
-renameCon :: RenameCtx -> SourceLoc -> PExpr -> Constraint -> Rename Constraint
-renameCon ctx loc origin (Constraint cname cargs) = do
-  renamedName <- resolveName ResolveTop ctx loc origin cname (length cargs)
-  renamedArgs <- traverse (renameTerm ctx loc origin NoResolve) cargs
-  pure (Constraint renamedName renamedArgs)
+-- | Rename one head conjunct. A macro use expands to zero or more
+-- constraint conjuncts, spliced into the head at the position of the
+-- use ('expandHeadUse'); an ordinary constraint renames to exactly
+-- one, as before.
+renameCon :: RenameCtx -> SourceLoc -> PExpr -> Constraint -> Rename [Constraint]
+renameCon ctx loc origin (Constraint cname cargs) =
+  case classifyGoalName ctx cname (length cargs) of
+    AmbiguousGoalName ms -> do
+      let err = AmbiguousName (unqualifiedText cname) (length cargs) ms
+      emitErrorIn ctx (AnnP err loc origin)
+      pure []
+    IsMacro providerMod -> expandHeadUse ctx loc origin providerMod cname cargs
+    NotAMacro -> do
+      renamedName <- resolveName ResolveTop ctx loc origin cname (length cargs)
+      renamedArgs <- traverse (renameTerm ctx loc origin NoResolve) cargs
+      pure [Constraint renamedName renamedArgs]
+
+-- | Expand a macro use found in head position. Instantiates the
+-- macro's body at the use's arguments, flattens the result on @,@,
+-- and classifies each resulting goal with 'headConjunct': a
+-- constraint-shaped goal is renamed (recursively — the replacement
+-- may itself use a macro, in head position again); anything else is
+-- 'MacroInvalidInHead'. 'MacroCycle' is reported, and the use dropped,
+-- if this exact macro is already being expanded higher up the chain.
+expandHeadUse ::
+  RenameCtx -> SourceLoc -> PExpr -> Text -> Name -> [Term] -> Rename [Constraint]
+expandHeadUse ctx loc origin providerMod name args =
+  case Map.lookup key ctx.macroDefTable of
+    Nothing -> pure [] -- defensive: 'classifyGoalName' only names real providers
+    Just def
+      | key `elem` map chainKey ctx.macroChain -> do
+          emitErrorIn ctx (AnnP (MacroCycle (QualifiedName providerMod n) arity) loc origin)
+          pure []
+      | otherwise -> do
+          let ctx' = ctx {macroChain = (providerMod, n, arity, loc) : ctx.macroChain}
+              goals = flattenConj (instantiateMacro loc def args)
+          concat <$> traverse (expandedHeadGoal ctx') goals
+  where
+    n = unqualifiedText name
+    arity = length args
+    key = (providerMod, n, arity)
+    chainKey (m, cn, ca, _) = (m, cn, ca)
+    expandedHeadGoal ctx' goal = case headConjunct goal of
+      HeadConjunctOk c -> renameCon ctx' loc origin c
+      HeadConjunctInvalid _ -> do
+        case ctx'.macroChain of
+          (m, cn, ca, _) : _ ->
+            emitErrorIn ctx' (AnnP (MacroInvalidInHead (QualifiedName m cn) ca) loc origin)
+          [] -> pure () -- unreachable: 'ctx'' always has at least this use pushed
+        pure []
 
 -- ---------------------------------------------------------------------------
 -- Resolution mode and term renaming
@@ -889,14 +1166,56 @@ renameLambdaBody ctx loc origin t = case t of
 
 -- | Rename one branch of a disjunction. A branch is a body
 -- conjunction, so walk the top-level commas and rename each item the
--- way a rule-body item is renamed. Mirrors 'renameLambdaBody'.
+-- way a rule-body item is renamed (including macro expansion — a
+-- disjunct is a goal position too). Mirrors 'renameLambdaBody'; unlike
+-- it, a leaf's macro expansion can produce several goals, spliced back
+-- in via 'goalsToChain' since this function's own return type is one
+-- 'Term'.
 renameBodySeq :: RenameCtx -> SourceLoc -> PExpr -> Term -> Rename Term
 renameBodySeq ctx loc origin t = case t of
   CompoundTerm (Unqualified ",") [l, r] -> do
     l' <- renameBodySeq ctx loc origin l
     r' <- renameBodySeq ctx loc origin r
     pure (CompoundTerm (Unqualified ",") [l', r'])
-  _ -> renameTerm ctx loc origin ResolveTop t
+  _ -> goalsToChain <$> renameBodyGoal ctx loc origin t
+
+-- | Rename one goal of a rule body or a top-level query: the
+-- principal goal position. A macro use expands (recursively — the
+-- replacement's own goals are each re-classified the same way, so a
+-- macro whose body uses another macro keeps expanding) into zero or
+-- more goals; an ordinary goal renames to exactly one, via the
+-- existing 'renameTerm' machinery unchanged.
+renameBodyGoal :: RenameCtx -> SourceLoc -> PExpr -> Term -> Rename [Term]
+renameBodyGoal ctx loc origin t = case t of
+  CompoundTerm name args -> case classifyGoalName ctx name (length args) of
+    AmbiguousGoalName ms -> do
+      emitErrorIn ctx (AnnP (AmbiguousName (unqualifiedText name) (length args) ms) loc origin)
+      pure []
+    IsMacro providerMod -> expandBodyUse ctx loc origin providerMod name args
+    NotAMacro -> (: []) <$> renameTerm ctx loc origin ResolveTop t
+  _ -> (: []) <$> renameTerm ctx loc origin ResolveTop t
+
+-- | Expand a macro use found in body\/query-goal position. Mirrors
+-- 'expandHeadUse': instantiate, flatten on @,@, detect a cycle, and
+-- recurse into 'renameBodyGoal' on each resulting goal so a nested
+-- macro use (in a further body position) keeps expanding.
+expandBodyUse :: RenameCtx -> SourceLoc -> PExpr -> Text -> Name -> [Term] -> Rename [Term]
+expandBodyUse ctx loc origin providerMod name args =
+  case Map.lookup key ctx.macroDefTable of
+    Nothing -> pure []
+    Just def
+      | key `elem` map chainKey ctx.macroChain -> do
+          emitErrorIn ctx (AnnP (MacroCycle (QualifiedName providerMod n) arity) loc origin)
+          pure []
+      | otherwise -> do
+          let ctx' = ctx {macroChain = (providerMod, n, arity, loc) : ctx.macroChain}
+              goals = flattenConj (instantiateMacro loc def args)
+          concat <$> traverse (renameBodyGoal ctx' loc origin) goals
+  where
+    n = unqualifiedText name
+    arity = length args
+    key = (providerMod, n, arity)
+    chainKey (m, cn, ca, _) = (m, cn, ca)
 
 -- | @;@ lowers to a tell of @search:alt\/1@, a name the module never
 -- writes itself. Require the import that makes it visible, so a module
@@ -908,7 +1227,7 @@ requireSearchImport ctx loc origin =
     ( ctx.currentModule.name /= searchModuleName
         && searchModuleName `notElem` importedModuleNames ctx
     )
-    (emitError (AnnP DisjunctionWithoutSearch loc origin))
+    (emitErrorIn ctx (AnnP DisjunctionWithoutSearch loc origin))
 
 -- | The module that declares the choice-point constraint @;@ compiles
 -- to. Matches 'YCHR.Internal.Runtime.Goal.altName'.
@@ -940,7 +1259,7 @@ renameTerm ctx loc origin mode t = case t of
         r' <- renameBodySeq ctx loc origin r
         pure (CompoundTerm (Unqualified ";") [l', r'])
     | mode == ResolveAll -> do
-        emitError (AnnP DisjunctionNotInRuleBody loc origin)
+        emitErrorIn ctx (AnnP DisjunctionNotInRuleBody loc origin)
         pure t
   -- Lambda: @fun(params) -> body end@. A lambda is a first-class value,
   -- not data; @'->'@ and @fun@ are surface syntax for the desugarable
@@ -989,6 +1308,24 @@ renameTerm ctx loc origin mode t = case t of
   -- funref appears; the @fun@ wrapper is then stripped so downstream
   -- passes see bare @name/arity@. The explicit opt-out for opaque
   -- shape is @quote/1@.
+  -- A function reference is one of the "elsewhere" positions a macro
+  -- name is an error in (spec: "...or as a function reference"),
+  -- unconditionally — @fun@ fires in every non-quoted position, the
+  -- same guard as the ordinary case just below.
+  CompoundTerm
+    (Unqualified "fun")
+    [ CompoundTerm
+        (Unqualified "/")
+        [ CompoundTerm (Unqualified fname) [],
+          IntTerm farity
+          ]
+      ]
+      | mode /= NoResolveQuoted,
+        Just providerMod <- isVisibleMacro ctx (Unqualified fname) (fromInteger farity) -> do
+          let arity = fromInteger farity
+              err = MacroOutsideGoalPosition (QualifiedName providerMod fname) arity
+          emitErrorIn ctx (AnnP err loc origin)
+          pure t
   CompoundTerm
     (Unqualified "fun")
     [ CompoundTerm
@@ -1010,15 +1347,25 @@ renameTerm ctx loc origin mode t = case t of
   -- as a 0-arity data-constructor use, so we force 'ResolveAll' here
   -- (warn but don't error on undeclared) regardless of the surrounding
   -- 'ResolveTop'. Then fall back to data-constructor canonicalization.
+  -- A bare 0-arity macro name used in an evaluating position: not a
+  -- goal position (that is handled upstream, by 'renameBodyGoal'
+  -- before it ever calls 'renameTerm' in 'ResolveTop' mode), so this
+  -- can only be reached in 'ResolveAll'.
+  CompoundTerm (Unqualified n) []
+    | mode == ResolveAll,
+      Just providerMod <- isVisibleMacro ctx (Unqualified n) 0 -> do
+        let err = MacroOutsideGoalPosition (QualifiedName providerMod n) 0
+        emitErrorIn ctx (AnnP err loc origin)
+        pure t
   CompoundTerm (Unqualified n) [] -> do
     when (mode /= NoResolveQuoted) $
       checkConstructorFunctionAmbiguity ctx loc origin n
     resolved <- case mode of
       NoResolve -> do
-        warnUnknownDataCon ctx.dataConEnv loc origin n 0
+        warnUnknownDataCon ctx loc origin n 0
         case visibleProviders ctx n 0 of
           ms@(_ : _ : _) ->
-            emitError (AnnP (AmbiguousName n 0 ms) loc origin)
+            emitErrorIn ctx (AnnP (AmbiguousName n 0 ms) loc origin)
           _ -> pure ()
         pure (Unqualified n)
       NoResolveQuoted ->
@@ -1035,6 +1382,15 @@ renameTerm ctx loc origin mode t = case t of
         case canonicalizeDataCon ctx n 0 of
           Just qn -> pure (CompoundTerm qn [])
           Nothing -> pure (CompoundTerm (Unqualified n) [])
+  -- Same "elsewhere" check as the 0-arity case above, for a macro
+  -- name used at a nonzero arity in an evaluating position.
+  CompoundTerm name args
+    | mode == ResolveAll,
+      Just providerMod <- isVisibleMacro ctx name (length args) -> do
+        let qn = QualifiedName providerMod (unqualifiedText name)
+            err = MacroOutsideGoalPosition qn (length args)
+        emitErrorIn ctx (AnnP err loc origin)
+        pure t
   CompoundTerm name args -> do
     let childMode = case mode of
           NoResolve -> NoResolve
@@ -1077,10 +1433,10 @@ renameTerm ctx loc origin mode t = case t of
           Unqualified n ->
             case visibleProviders ctx n (length args) of
               [] -> do
-                warnUnknownDataCon ctx.dataConEnv loc origin n (length args)
+                warnUnknownDataCon ctx loc origin n (length args)
                 checkAmbiguousDataCon ctx loc origin n (length args)
               [_] -> pure ()
-              ms -> emitError (AnnP (AmbiguousName n (length args) ms) loc origin)
+              ms -> emitErrorIn ctx (AnnP (AmbiguousName n (length args) ms) loc origin)
           -- Qualified references in pattern position (head args,
           -- body-tell args) get the same visibility check as in
           -- resolving positions; the parser can't tell a constructor,
@@ -1141,13 +1497,13 @@ resolveName mode ctx loc origin (Unqualified n) arity
         [] ->
           if errorOnUnknown mode
             then do
-              emitError (AnnP (UnknownName n arity) loc origin)
+              emitErrorIn ctx (AnnP (UnknownName n arity) loc origin)
               pure (Unqualified n)
             else do
-              warnUnknownDataCon ctx.dataConEnv loc origin n arity
+              warnUnknownDataCon ctx loc origin n arity
               pure (Unqualified n)
         ms -> do
-          emitError (AnnP (AmbiguousName n arity ms) loc origin)
+          emitErrorIn ctx (AnnP (AmbiguousName n arity ms) loc origin)
           pure (Unqualified n)
 resolveName _ ctx loc origin name@(Qualified m n) arity = do
   validateQualified ctx loc origin m n arity
@@ -1184,14 +1540,14 @@ validateQualified ctx loc origin m n arity
   | m == "host" = pure ()
   | m `elem` visibleProviders ctx n arity = pure ()
   | m `notElem` ctx.allModuleNames =
-      emitError (AnnP (UnknownModule m) loc origin)
+      emitErrorIn ctx (AnnP (UnknownModule m) loc origin)
   | m /= ctx.currentModule.name && m `notElem` importedModuleNames ctx =
-      emitError (AnnP (ModuleNotImported m n arity) loc origin)
+      emitErrorIn ctx (AnnP (ModuleNotImported m n arity) loc origin)
   | m `elem` Map.findWithDefault [] (n, arity) ctx.dataConProviders = pure ()
   | m `elem` Map.findWithDefault [] (n, arity) ctx.allDataConProviders =
-      emitError (AnnP (NonExportedConstructor m n arity) loc origin)
+      emitErrorIn ctx (AnnP (NonExportedConstructor m n arity) loc origin)
   | otherwise =
-      emitError (AnnP (NotExportedByModule m n arity) loc origin)
+      emitErrorIn ctx (AnnP (NotExportedByModule m n arity) loc origin)
 
 -- | Every module the current module imports. Used to decide whether a
 -- qualified reference's target module is in scope at all (distinct from
@@ -1220,6 +1576,71 @@ visibleProviders ctx n arity =
    in -- Deduplicate: multiple declarations with the same name/arity in
       -- one module (e.g., overloaded function signatures) are not ambiguous.
       nub (ownProviders ++ importProviders)
+
+-- | Every module that makes @(n, arity)@ visible as a macro to the
+-- current module: the module itself if it defines the macro, plus
+-- every imported module that exports it and whose import list
+-- permits it. Exact mirror of 'visibleProviders' for the macro
+-- namespace.
+visibleMacroProviders :: RenameCtx -> Text -> Int -> [Text]
+visibleMacroProviders ctx n arity =
+  let ownProviders =
+        filter
+          (== ctx.currentModule.name)
+          (lookupDecl (n, arity) ctx.macroDeclEnv)
+      imports =
+        [ (imp.importModule, imp.importItems)
+        | AnnP imp _ _ <- ctx.currentModule.imports
+        ]
+      importProviders =
+        filter
+          (\mn -> any (\(imn, il) -> imn == mn && importListPermitsMacro n arity il) imports)
+          (lookupExport (n, arity) ctx.macroExportEnv)
+   in nub (ownProviders ++ importProviders)
+
+-- | The classification of an unqualified or qualified name at a /goal
+-- position/ (a rule head conjunct, a rule-body or query goal): either
+-- not a macro at all (ordinary resolution proceeds as before), a
+-- macro provided by exactly one module (expand it), or ambiguous
+-- because more than one visible provider answers to the name —
+-- whether several ordinary providers, several macro providers, or one
+-- of each. See 'isVisibleMacro' for the simpler check used outside
+-- goal positions, which does not need to weigh macro providers against
+-- ordinary ones.
+data GoalNameClass
+  = NotAMacro
+  | AmbiguousGoalName [Text]
+  | IsMacro Text
+
+-- | Classify a goal-position name. Only called for 'ResolveTop'
+-- positions.
+classifyGoalName :: RenameCtx -> Name -> Int -> GoalNameClass
+classifyGoalName ctx (Unqualified n) arity =
+  let ords = visibleProviders ctx n arity
+      macs = visibleMacroProviders ctx n arity
+   in case (ords, macs) of
+        ([], []) -> NotAMacro
+        ([], [m]) -> IsMacro m
+        ([_], []) -> NotAMacro
+        _ -> AmbiguousGoalName (nub (ords ++ macs))
+classifyGoalName ctx (Qualified m n) arity
+  | m `elem` visibleMacroProviders ctx n arity = IsMacro m
+  | otherwise = NotAMacro
+
+-- | Whether @(n, arity)@ is visible as a macro at all, regardless of
+-- any competing ordinary (constraint\/function) binding. Used outside
+-- goal positions — guards, @is@ right-hand sides, lambda bodies,
+-- function equations, @fun name\/arity@ references — where a macro
+-- name is simply not applicable (spec: "Elsewhere a macro name is an
+-- error"), so there is nothing to disambiguate against an ordinary
+-- binding the way 'classifyGoalName' does.
+isVisibleMacro :: RenameCtx -> Name -> Int -> Maybe Text
+isVisibleMacro ctx (Unqualified n) arity = case visibleMacroProviders ctx n arity of
+  (m : _) -> Just m
+  [] -> Nothing
+isVisibleMacro ctx (Qualified m n) arity
+  | m `elem` visibleMacroProviders ctx n arity = Just m
+  | otherwise = Nothing
 
 -- | The modules that make each /function/ name visible to @self@,
 -- keyed by base name with the arity dropped.
@@ -1362,13 +1783,13 @@ visibleDataCons mods ctx =
 -- position (e.g. @set@ for an opaque type, or @list@ for an algebraic
 -- one) is not a declared data constructor, so it falls through to the
 -- 'UndeclaredDataConstructor' warning like any other unknown functor.
-warnUnknownDataCon :: DataConEnv -> SourceLoc -> PExpr -> Text -> Int -> Rename ()
-warnUnknownDataCon dataConEnv loc origin n arity =
-  case Map.lookup n dataConEnv of
+warnUnknownDataCon :: RenameCtx -> SourceLoc -> PExpr -> Text -> Int -> Rename ()
+warnUnknownDataCon ctx loc origin n arity =
+  case Map.lookup n ctx.dataConEnv of
     Just arities
       | arity `elem` arities -> pure ()
-      | otherwise -> emitWarning (AnnP (DataConstructorArityMismatch n arity) loc origin)
-    Nothing -> emitWarning (AnnP (UndeclaredDataConstructor n) loc origin)
+      | otherwise -> emitWarningIn ctx (AnnP (DataConstructorArityMismatch n arity) loc origin)
+    Nothing -> emitWarningIn ctx (AnnP (UndeclaredDataConstructor n) loc origin)
 
 -- ---------------------------------------------------------------------------
 -- Type definition renaming
@@ -1484,7 +1905,7 @@ renameBoundSig ctx _ bs = do
               [m] -> pure (Qualified m n)
               [] -> pure (Unqualified n)
               ms -> do
-                emitError (AnnP (AmbiguousName n bs.arity ms) bs.loc origin)
+                emitErrorIn ctx (AnnP (AmbiguousName n bs.arity ms) bs.loc origin)
                 pure (Unqualified n)
 
 renameTypeExpr :: RenameCtx -> TypeExpr -> TypeExpr
@@ -1591,6 +2012,7 @@ buildQueryRenameEnv mods =
             extensions = [],
             classExtensions = [],
             inlines = [],
+            macros = [],
             exports = Nothing
           }
       ctx0 =
@@ -1606,7 +2028,11 @@ buildQueryRenameEnv mods =
             operatorExports = Map.empty,
             currentTrailingLoc = Nothing,
             allModuleNames = map (.name) mods,
-            currentModule = queryMod
+            currentModule = queryMod,
+            macroDeclEnv = buildMacroDeclEnv mods,
+            macroExportEnv = buildMacroExportEnv mods,
+            macroDefTable = buildMacroDefTable mods,
+            macroChain = []
           }
       visible = visibleDataCons mods ctx0
    in QueryRenameEnv
@@ -1656,14 +2082,74 @@ renameQueryTerms ::
   [Term] ->
   Either [Diagnostic RenameError] ([Term], [Diagnostic RenameWarning])
 renameQueryTerms (QueryRenameEnv ctx) mode terms =
-  let ((renamed, warnings), errs) =
-        runWriter
-          ( runWriterT $
-              traverse
-                (\t -> renameTerm ctx queryTermLoc (termToPExpr t) mode t)
-                terms
-          )
-   in if null errs then Right (renamed, warnings) else Left errs
+  let renameOne t = case mode of
+        -- Query goals are a goal position: a macro use expands, same
+        -- as a rule-body goal.
+        ResolveTop -> renameBodyGoal ctx queryTermLoc (termToPExpr t) t
+        _ -> (: []) <$> renameTerm ctx queryTermLoc (termToPExpr t) mode t
+      ((renamedLists, warnings), errs) =
+        runWriter (runWriterT (traverse renameOne terms))
+   in if null errs then Right (concat renamedLists, warnings) else Left errs
+
+-- | Expand a single goal constraint if its name names a macro,
+-- repeating until the head is no longer a macro (so a macro that
+-- expands to exactly one further macro use keeps unfolding). Returns
+-- the flattened list of resulting goal terms, unrenamed otherwise — a
+-- plain, non-macro constraint comes back as its own singleton list,
+-- completely unchanged.
+--
+-- Used by the single-goal entry points ('YCHR.Run.prepareGoalTerm' and
+-- callers), which parse a goal as one 'Constraint' and rename only its
+-- arguments (never going through 'renameQueryGoalsWith', the
+-- conjunction path above). A macro that expands to more than one goal
+-- cannot be represented as a single 'Constraint'; the caller is
+-- expected to reject that case (see
+-- 'YCHR.Internal.Compile.Pipeline.GoalRejection').
+expandQueryGoalWith ::
+  QueryRenameEnv ->
+  Constraint ->
+  Either [Diagnostic RenameError] [Term]
+expandQueryGoalWith (QueryRenameEnv ctx) (Constraint cname0 cargs0) =
+  let ((result, _warnings), errs) = runWriter (runWriterT (go [] cname0 cargs0))
+   in if null errs then Right result else Left errs
+  where
+    -- Structural expansion only — no 'renameTerm' involved, and no
+    -- diagnostics beyond the macro-specific ones below. The caller
+    -- renames whatever single goal comes back exactly as it always
+    -- has (goal name via its own export lookup, arguments via
+    -- 'renameQueryArgsWith'), so a goal untouched by macros is
+    -- renamed once, not twice.
+    go :: [(Text, Text, Int, SourceLoc)] -> Name -> [Term] -> Rename [Term]
+    go chain cname cargs =
+      case classifyGoalName ctx cname (length cargs) of
+        AmbiguousGoalName ms ->
+          chainError chain (AmbiguousName (unqualifiedText cname) (length cargs) ms) >> pure []
+        IsMacro providerMod ->
+          let n = unqualifiedText cname
+              arity = length cargs
+              key = (providerMod, n, arity)
+           in if key `elem` map (\(m, cn, ca, _) -> (m, cn, ca)) chain
+                then do
+                  chainError chain (MacroCycle (QualifiedName providerMod n) arity)
+                  pure []
+                else case Map.lookup key ctx.macroDefTable of
+                  Nothing -> pure []
+                  Just def ->
+                    let chain' = (providerMod, n, arity, queryTermLoc) : chain
+                        goals = flattenConj (instantiateMacro queryTermLoc def cargs)
+                     in concat <$> traverse (expandGoalTerm chain') goals
+        NotAMacro -> pure [CompoundTerm cname cargs]
+    expandGoalTerm chain t = case t of
+      CompoundTerm nm as -> go chain nm as
+      _ -> pure [t]
+    chainError chain e =
+      lift
+        ( tell
+            [ (noDiag (AnnP e queryTermLoc (Atom "")))
+                { diagContext = map renderMacroUse chain
+                }
+            ]
+        )
 
 {- ---------------------------------------------------------------------------
 Notes

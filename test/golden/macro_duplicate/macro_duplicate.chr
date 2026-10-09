@@ -1,0 +1,4 @@
+:- module(macro_duplicate).
+:- chr_constraint a/1.
+:- macro foo(X) ---> a(X).
+:- macro foo(X) ---> a(X).

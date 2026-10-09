@@ -183,7 +183,7 @@ decodeDiagnostics origins constructor decodeBody var = do
           code <- deref codeVal
           detail <- deref detailVal
           payload <- decodeBody code detail
-          pure (Diagnostic info.label (AnnP payload info.loc info.origin))
+          pure (Diagnostic info.label (AnnP payload info.loc info.origin) [])
         _ -> malformed (constructor <> " entry") item'
 
 decodeCtx :: IntMap PExpr -> Value -> Chr CtxInfo

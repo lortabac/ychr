@@ -499,12 +499,12 @@ classifyFunStmt loc origin e = case e of
   R.HostExpr f args -> pure (D.FunHostStmt f args)
   R.CtorExpr (Unqualified "is") [R.VarExpr v, expr] -> pure (D.FunIs v expr)
   R.CtorExpr (Unqualified "is") [_, _] -> do
-    tell [Diagnostic Nothing (AnnP (NonVariableIsInFunctionBody e) loc origin)]
+    tell [Diagnostic Nothing (AnnP (NonVariableIsInFunctionBody e) loc origin) []]
     pure (D.FunHostStmt "" [])
   R.CallExpr qn args -> pure (D.FunCall qn args)
   R.ApplyExpr f args -> pure (D.FunApply f args)
   _ -> do
-    tell [Diagnostic Nothing (AnnP (NonPreludeFunctionBodyItem e) loc origin)]
+    tell [Diagnostic Nothing (AnnP (NonPreludeFunctionBodyItem e) loc origin) []]
     pure (D.FunHostStmt "" [])
 
 -- | Classify a resolved guard expression into a 'D.Guard'.
@@ -524,7 +524,7 @@ desugarGuard ::
 desugarGuard loc origin e
   | guardExprIsAllowed e = pure (D.GuardExpr e)
   | otherwise = do
-      tell [Diagnostic Nothing (AnnP (NonBooleanGuard e) loc origin)]
+      tell [Diagnostic Nothing (AnnP (NonBooleanGuard e) loc origin) []]
       pure (D.GuardExpr e)
 
 -- | Predicate: can this expression plausibly evaluate to a boolean?
@@ -644,7 +644,7 @@ desugarBodyGoal label loc origin e = case e of
   R.CtorExpr (Qualified m b) args ->
     pure [D.BodyTell (QualifiedName m b) args]
   _ -> do
-    lift (tell [Diagnostic label (AnnP (UnexpectedBodyExpr e) loc origin)])
+    lift (tell [Diagnostic label (AnnP (UnexpectedBodyExpr e) loc origin) []])
     pure [D.BodyTrue]
 
 -- | The branches of a disjunction, read off the right spine. Always at

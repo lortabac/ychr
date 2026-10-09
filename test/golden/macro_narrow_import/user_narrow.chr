@@ -1,0 +1,7 @@
+:- module(user_narrow).
+:- use_module(aggregates, [macro(count/2)]).
+:- chr_constraint edge/2.
+:- chr_constraint node/1.
+:- chr_constraint indeg/2.
+
+node(N), count(edge(_, N), C) ==> indeg(N, C).

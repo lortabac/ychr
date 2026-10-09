@@ -78,6 +78,7 @@ userMod imps =
       extensions = [],
       classExtensions = [],
       inlines = [],
+      macros = [],
       exports = Nothing
     }
 
@@ -95,9 +96,10 @@ libMod name =
       extensions = [],
       classExtensions = [],
       inlines = [],
+      macros = [],
       exports = Nothing
     }
 
 isCircularError :: Diagnostic CollectError -> Bool
-isCircularError (Diagnostic _ (AnnP (CircularLibraryImport _) _ _)) = True
+isCircularError (Diagnostic _ (AnnP (CircularLibraryImport _) _ _) _) = True
 isCircularError _ = False

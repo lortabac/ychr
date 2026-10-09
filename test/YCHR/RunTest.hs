@@ -222,6 +222,21 @@ exportedSource =
   \visible(X) <=> true.\n\
   \internal(X) <=> true.\n"
 
+macroConjunctionSource :: Text
+macroConjunctionSource =
+  ":- module(mac, [macro(both/1)]).\n\
+  \:- chr_constraint a/1.\n\
+  \:- chr_constraint b/1.\n\
+  \:- macro both(X) ---> (a(X), b(X)).\n"
+
+macroSingleGoalSource :: Text
+macroSingleGoalSource =
+  ":- module(mac1, [result/2, macro(single/2)]).\n\
+  \:- chr_constraint result/2.\n\
+  \:- macro single(X, R) ---> result(X, R).\n\
+  \\n\
+  \result(X, R) <=> R = X.\n"
+
 ambiguousSourceA :: Text
 ambiguousSourceA =
   ":- module(modA, [foo/1]).\n\
@@ -449,6 +464,27 @@ queryErrorTests =
                 "expected Error, got non-Error exception: " ++ show exc
           Right _ ->
             assertFailure "expected an exception for unknown constraint",
+      testCase "runProgramWithGoal: macro expanding to a conjunction is rejected" $ do
+        cp <- compileOrFail [("mac.chr", macroConjunctionSource)]
+        outcome <-
+          try @SomeException
+            (runProgramWithGoal typeCheckerProgram cp Map.empty "both(5)")
+        case outcome of
+          Left exc -> case fromException exc :: Maybe Error of
+            Just (GoalNotAConstraint _ MacroExpandsToConjunction) -> pure ()
+            Just other ->
+              assertFailure $
+                "expected GoalNotAConstraint MacroExpandsToConjunction, got Error:\n"
+                  ++ displayMsg other
+            Nothing ->
+              assertFailure $
+                "expected Error, got non-Error exception: " ++ show exc
+          Right _ ->
+            assertFailure "expected an exception for a macro goal expanding to several goals",
+      testCase "runProgramWithGoal: macro expanding to exactly one goal runs normally" $ do
+        cp <- compileOrFail [("mac1.chr", macroSingleGoalSource)]
+        bindings <- runProgramWithGoal typeCheckerProgram cp Map.empty "single(11, R)"
+        Map.lookup "R" bindings @?= Just (IntTerm 11),
       testCase "runProgramWithQuery: one variable scope across the whole query" $ do
         -- The goals of a query share their variable slots (spec §Type
         -- Checking Procedure), so a name two goals mention has one

@@ -198,5 +198,5 @@ lookupCType ::
 lookupCType symTab loc p label ident = case lookupSymbol ident symTab of
   Just ct -> pure (Just ct)
   Nothing -> do
-    tell [Diagnostic label (AnnP (UnknownConstraintType ident.name) loc p)]
+    tell [Diagnostic label (AnnP (UnknownConstraintType ident.name) loc p) []]
     pure Nothing
