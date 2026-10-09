@@ -160,6 +160,19 @@ data ResolveError
     -- recognized, so that programs, queries and generated drivers all
     -- see the error.
     UnsupportedCallArity Int
+  | -- | An @:- inline@ directive names a @name\/arity@ that this
+    -- module does not itself declare with @:- function@ \/
+    -- @:- class@. Cross-module inlining is not supported: a bare
+    -- name only says which function is meant via the declaring
+    -- module's own declaration, so @:- inline@ can only target a
+    -- local one. Carries the local name and arity as written.
+    InlineUnknownFunction Text Int
+  | -- | An @:- inline@ directive targets an @:- open_function@ \/
+    -- @:- open_class@ declaration. An open function's equation set
+    -- is not fixed in the declaring module, so there is nothing
+    -- there to substitute at a call site. Carries the local name
+    -- and arity as written.
+    InlineOpenFunction Text Int
   deriving (Eq, Show)
 
 -- | Why a @refining@ clause is rejected. A @refining@ clause is
@@ -226,9 +239,11 @@ resolveProgram mods =
       extensionKindErrors = checkExtensionKinds funcKinds mods
       collisionErrors = checkConstraintFunctionCollision mods
       conCollisionErrors = checkConstructorFunctionCollision mods
+      inlineErrors = checkInlineDeclarations mods
+      inlineSet = buildInlineSet mods
       funVisibility = buildFunctionVisibility mods
       (resolvedRules, ruleErrs) = resolveRules funVisibility mods
-      (resolvedFunctions, funErrs) = resolveFunctions funVisibility mods
+      (resolvedFunctions, funErrs) = resolveFunctions funVisibility inlineSet mods
       errs =
         eqErrors
           ++ headErrors
@@ -244,6 +259,7 @@ resolveProgram mods =
           ++ extensionKindErrors
           ++ collisionErrors
           ++ conCollisionErrors
+          ++ inlineErrors
           ++ ruleErrs
           ++ funErrs
    in if null errs
@@ -668,6 +684,47 @@ checkConstructorFunctionCollision mods = snd $ foldl go (Set.empty, []) entries
                          )
                      ]
               )
+
+-- | Validate every @:- inline@ directive: the named @name\/arity@ must
+-- be declared, by the /same/ module, with @:- function@ \/ @:- class@
+-- (not @:- open_function@ \/ @:- open_class@). One diagnostic per
+-- offending entry.
+--
+-- The remaining eligibility checks — exactly one equation, no guards,
+-- no prelude, no inline-to-inline cycle — need the post-HNF shape of
+-- the function's equations, which only exists after desugaring; see
+-- 'YCHR.Internal.Desugar.Inline'.
+checkInlineDeclarations :: [CollectedModule] -> [Diagnostic ResolveError]
+checkInlineDeclarations mods =
+  [ noDiag (P.AnnP err entry.sourceLoc (PExpr.Atom entry.node.name))
+  | m <- mods,
+    entry <- m.inlines,
+    let spec = entry.node
+        ownDecls =
+          [ fd
+          | P.Ann d _ <- m.decls,
+            P.FunctionDecl fd <- [d],
+            fd.name == spec.name,
+            fd.arity == spec.arity
+          ],
+    err <- case ownDecls of
+      [] -> [InlineUnknownFunction spec.name spec.arity]
+      _ | any (.isOpen) ownDecls -> [InlineOpenFunction spec.name spec.arity]
+      _ -> []
+  ]
+
+-- | The set of @(qualified name, arity)@ pairs named by a valid
+-- @:- inline@ directive somewhere in the program. Built regardless of
+-- 'checkInlineDeclarations'\'s errors; 'resolveProgram' only consults
+-- the resulting 'R.Program' when that list is empty, so an invalid
+-- entry here never reaches a 'R.FunctionDef'.
+buildInlineSet :: [CollectedModule] -> Set (QualifiedName, Int)
+buildInlineSet mods =
+  Set.fromList
+    [ (QualifiedName m.name entry.node.name, entry.node.arity)
+    | m <- mods,
+      entry <- m.inlines
+    ]
 
 -- | Reject extension directives whose declaration kind disagrees with
 -- the target's kind:
@@ -1142,9 +1199,10 @@ qualifyConstraint loc origin (Constraint n args) = case n of
 
 resolveFunctions ::
   Map Text FunVisibility ->
+  Set (QualifiedName, Int) ->
   [CollectedModule] ->
   ([R.FunctionDef], [Diagnostic ResolveError])
-resolveFunctions visMap mods =
+resolveFunctions visMap inlineSet mods =
   let -- Collect all function declarations with their declaring module,
       -- tagged with the module's input position so 'build' can tell two
       -- same-named modules apart.
@@ -1199,6 +1257,7 @@ resolveFunctions visMap mods =
                   refining =
                     listToMaybe
                       [t | (fd, _) <- declPairs, Just t <- [fd.refining]],
+                  inline = Set.member (qn, ar) inlineSet,
                   equations = concat eqss
                 }
          in (def, concat eqErrss)

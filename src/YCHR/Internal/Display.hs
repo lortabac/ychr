@@ -245,6 +245,8 @@ resolveErrorCode (InvalidRefining _ _) = ErrorCode 16021
 resolveErrorCode (LambdaParamError _) = ErrorCode 16017
 resolveErrorCode EmptyLambdaParams = ErrorCode 16018
 resolveErrorCode (UnsupportedCallArity _) = ErrorCode 16022
+resolveErrorCode (InlineUnknownFunction _ _) = ErrorCode 16023
+resolveErrorCode (InlineOpenFunction _ _) = ErrorCode 16024
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 is reserved: operators are permitted in import lists
@@ -294,6 +296,10 @@ desugarErrorCode (NonBooleanGuard _) = ErrorCode 30002
 desugarErrorCode (NonPreludeFunctionBodyItem _) = ErrorCode 30003
 desugarErrorCode (NonVariableIsInFunctionBody _) = ErrorCode 30004
 desugarErrorCode DisjunctionInQuery = ErrorCode 30006
+desugarErrorCode (InlineNotSingleEquation _ _) = ErrorCode 30007
+desugarErrorCode (InlineGuardedEquation _) = ErrorCode 30008
+desugarErrorCode (InlineStatefulEquation _) = ErrorCode 30009
+desugarErrorCode (InlineCycle _) = ErrorCode 30010
 
 -- | 4xxxx — compile phase
 compileErrorCode :: CompileError -> ErrorCode
@@ -629,6 +635,26 @@ resolveErrorMsg (UnsupportedCallArity arity) =
         ++ show R.maxCallArity
         ++ " arguments"
     )
+resolveErrorMsg (InlineUnknownFunction name arity) =
+  withHint
+    ( "':- inline' names '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "', which this module does not declare"
+    )
+    ( "':- inline' can only target a function declared with :- function / :- class"
+        ++ " in the same module"
+    )
+resolveErrorMsg (InlineOpenFunction name arity) =
+  withHint
+    ( "':- inline' targets '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "', which is declared as :- open_function / :- open_class"
+    )
+    "an open function's equation set is not fixed here, so it cannot be inlined"
 resolveErrorMsg (ConstraintFunctionCollision name) =
   withHint
     ( "'"
@@ -1025,6 +1051,38 @@ desugarErrorMsg (NonVariableIsInFunctionBody e) =
         ++ prettyTermSrc (R.exprToTerm e)
     )
     "use 'X is E' to bind, then pattern-match on X in subsequent positions"
+desugarErrorMsg (InlineNotSingleEquation qn n) =
+  withHint
+    ( "':- inline' function '"
+        ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+        ++ "' has "
+        ++ show n
+        ++ " equations"
+    )
+    "an inline substitution has no way to try equations in order; it must have exactly one"
+desugarErrorMsg (InlineGuardedEquation qn) =
+  withHint
+    ( "':- inline' function '"
+        ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+        ++ "' has a guarded equation"
+    )
+    ( "an inlined equation cannot have a guard, including one synthesized from a"
+        ++ " non-variable parameter pattern; every parameter must be a plain"
+        ++ " variable or '_'"
+    )
+desugarErrorMsg (InlineStatefulEquation qn) =
+  withHint
+    ( "':- inline' function '"
+        ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+        ++ "' has statements before its return value"
+    )
+    "an inlined equation's body must be a single expression"
+desugarErrorMsg (InlineCycle names) =
+  withHint
+    ( "':- inline' functions call each other in a cycle: "
+        ++ intercalate ", " (map T.unpack names)
+    )
+    "remove ':- inline' from at least one function on the cycle"
 
 instance Display (Diagnostic CompileError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin)) =

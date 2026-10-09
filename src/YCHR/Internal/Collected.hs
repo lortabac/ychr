@@ -32,6 +32,7 @@ import YCHR.Internal.Parsed
     Declaration,
     FunctionEquation,
     Import (..),
+    InlineDecl,
     Module (..),
     Rule,
     SourceLoc,
@@ -59,6 +60,7 @@ data CollectedModule = CollectedModule
     equations :: [AnnP FunctionEquation],
     extensions :: [AnnP FunctionEquation],
     classExtensions :: [AnnP FunctionEquation],
+    inlines :: [Ann InlineDecl],
     exports :: Maybe (AnnP [Declaration])
   }
   deriving (Show, Eq)
@@ -83,6 +85,7 @@ collectedFromParsed m =
       equations = m.equations,
       extensions = m.extensions,
       classExtensions = m.classExtensions,
+      inlines = m.inlines,
       exports = m.exports
     }
   where

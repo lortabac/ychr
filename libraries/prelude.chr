@@ -147,6 +147,17 @@
 :- function max(T, T) -> T requiring '>='(T, T) -> bool.
 :- function min(T, T) -> T requiring '=<'(T, T) -> bool.
 
+% Every one of these is a thin wrapper around a single host call (or,
+% for the arithmetic/comparison classes, the same wrapper shared by
+% every overload), so each is eligible for `:- inline`: one equation,
+% no guard, no prelude statement. `not/1` and `max`/`min` are not
+% listed — each has two equations (one per pattern), so neither
+% qualifies.
+:- inline
+    '+'/2, '-'/2, '*'/2, '/'/2, div/2, mod/2, rem/2,
+    '<'/2, '>'/2, '>='/2, '=<'/2, '=='/2,
+    var/1, nonvar/1, integer/1, float/1, atom/1, boolean/1, string/1, ground/1.
+
 X + Y -> host:'+'(X, Y).
 
 X - Y -> host:'-'(X, Y).

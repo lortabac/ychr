@@ -120,7 +120,8 @@ builtinOps =
           (P.Fx, "open_class"),
           (P.Fx, "extend_class_type"),
           (P.Fx, "extend_class"),
-          (P.Fx, "extend_function")
+          (P.Fx, "extend_function"),
+          (P.Fx, "inline")
         ]
       ),
       (1190, [(P.Xfx, "@")]),
@@ -561,6 +562,7 @@ data Directive
   | DirOpenFunctionDecl [Ann Declaration]
   | DirClassDecl [Ann Declaration]
   | DirOpenClassDecl [Ann Declaration]
+  | DirInlineDecl [Ann InlineDecl]
   | DirExtendClassTypeDecl [Ann Declaration]
   | DirExtendFunctionEqn (AnnP FunctionEquation)
   | DirExtendClassEqn (AnnP FunctionEquation)
@@ -683,6 +685,7 @@ convertModule defaultName terms =
       modTypeDecls_ = concat [ds | DirTypeDecl ds <- dirs]
       modExtensions_ = [e | ItemDirective (DirExtendFunctionEqn e) <- items]
       modClassExtensions_ = [e | ItemDirective (DirExtendClassEqn e) <- items]
+      modInlines_ = concat [ds | DirInlineDecl ds <- dirs]
       openNames =
         Set.fromList $
           [fd.name | DirOpenFunctionDecl ds <- dirs, Ann (FunctionDecl fd) _ <- ds]
@@ -704,6 +707,7 @@ convertModule defaultName terms =
             equations = eqs,
             extensions = modExtensions_,
             classExtensions = modClassExtensions_,
+            inlines = modInlines_,
             exports = modExports_
           }
    in (mod_, itemErrors ++ contiguityErrors ++ duplicateModuleHeaderErrors)
@@ -850,6 +854,10 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
     let (decls', errs) = collectDecls convertOpenClassDecl decls
         classReqErrs = requiringOnClassErrors loc body.node decls'
      in (DirOpenClassDecl decls', errs ++ classReqErrs)
+  -- :- inline double/1, succ/1.
+  Compound "inline" [decls] ->
+    let (decls', errs) = collectDecls convertInlineDecl decls
+     in (DirInlineDecl decls', errs)
   -- :- extend_class_type (foo(int) -> int).
   Compound "extend_class_type" [decls] ->
     let (decls', errs) = collectDecls convertExtendClassTypeDecl decls
@@ -887,9 +895,9 @@ convertDirective _ = (DirOther, [])
 -- list, dropping declarations that failed conversion and accumulating
 -- their errors.
 collectDecls ::
-  (Ann PExpr -> (Maybe (Ann Declaration), [AnnP ParseValidationError])) ->
+  (Ann PExpr -> (Maybe (Ann a), [AnnP ParseValidationError])) ->
   Ann PExpr ->
-  ([Ann Declaration], [AnnP ParseValidationError])
+  ([Ann a], [AnnP ParseValidationError])
 collectDecls conv = collectMaybes . map conv . flattenComma
 
 -- | Flatten a list of @(Maybe a, errors)@ results: keep the successes,
@@ -1075,6 +1083,14 @@ convertConstraintDecl (Ann pexpr loc) = case pexpr of
         (Ann (ConstraintDecl (ConstraintDeclBody name 0 Nothing Nothing)) loc),
       []
     )
+  _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
+
+-- | Convert one @name\/arity@ entry of an @:- inline@ directive.
+convertInlineDecl ::
+  Ann PExpr -> (Maybe (Ann InlineDecl), [AnnP ParseValidationError])
+convertInlineDecl (Ann pexpr loc) = case pexpr of
+  Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
+    (Just (Ann (InlineDecl name (fromInteger arity)) loc), [])
   _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
 
 -- | Convert a PExpr to a closed-function declaration.

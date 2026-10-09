@@ -77,6 +77,7 @@ userMod imps =
       equations = [],
       extensions = [],
       classExtensions = [],
+      inlines = [],
       exports = Nothing
     }
 
@@ -93,6 +94,7 @@ libMod name =
       equations = [],
       extensions = [],
       classExtensions = [],
+      inlines = [],
       exports = Nothing
     }
 

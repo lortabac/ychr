@@ -114,6 +114,13 @@ data FunctionDef = FunctionDef
     -- proves that variable has this type. 'Nothing' for an ordinary
     -- function.
     refining :: Maybe TypeExpr,
+    -- | Whether this function was named by an @:- inline@ directive in
+    -- its declaring module. 'YCHR.Internal.Resolve.checkInlineDeclarations'
+    -- has already verified it is local and closed; the remaining
+    -- eligibility checks (single equation, no guards, no prelude, no
+    -- inline-to-inline cycle) run on the desugared AST, after HNF — see
+    -- 'YCHR.Internal.Desugar.Inline'.
+    inline :: Bool,
     equations :: [AnnP FunctionEquation]
   }
   deriving (Show)

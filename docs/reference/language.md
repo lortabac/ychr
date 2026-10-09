@@ -38,6 +38,7 @@ static type checker is specified in [type-system.md](type-system.md).
 | `:- chr_type T ---> Cs.` / `:- opaque_type T.` | [Type and constructor exports](#type-and-constructor-exports), [type-system.md](type-system.md) |
 | `:- function` / `:- open_function` / `:- class` / `:- open_class` | [Functions](#functions) |
 | `:- extend_function` / `:- extend_class` / `:- extend_class_type` | [Declaration placement](#declaration-placement) |
+| `:- inline Decls.` | [Inlining](#inlining) |
 
 Declaration directives take comma-separated lists:
 `:- chr_constraint a/1, b/2.` Unknown directives are dropped silently
@@ -289,6 +290,52 @@ YCHR-15001. To extend across modules, use `:- open_function` /
 `:- extend_class_type`. Extending a closed declaration is YCHR-16005;
 the wrong kind, YCHR-16013/16014/16015; a free-floating equation
 outside the declaring module, YCHR-16006.
+
+### Inlining
+
+`:- inline name/arity, ...` marks a function declared in the same
+module as a candidate for substituting its body directly at a call
+site, in place of an ordinary call:
+
+```prolog
+:- function inc/1.
+:- inline inc/1.
+inc(X) -> X + 1.
+```
+
+Only a function with exactly one equation, no guard (including one
+synthesized from a non-variable parameter pattern — every parameter
+must be a plain variable or `_`), and no statements before its result
+is eligible; declaring `:- inline` on anything else is a compile
+error (YCHR-30007/30008/30009, one per violation). The function must
+also be local (`InlineUnknownFunction`, YCHR-16023) and closed, not
+`:- open_function` / `:- open_class` (`InlineOpenFunction`,
+YCHR-16024) — `:- class` is fine, since overloading is type-level
+only and there is one runtime equation set. Two or more `:- inline`
+functions calling each other, directly or transitively, is
+`InlineCycle`, YCHR-30010: a function with no finite inlined form.
+
+At a given call, the substitution happens only when it cannot change
+what gets evaluated, when, or how often: an argument that is a
+variable, a literal, `_`, or a nullary constructor may always be
+substituted, but anything else (another call, a host call, `'$call'`,
+or a non-nullary constructor) only when its parameter is used exactly
+once, not inside `quote/1`, and — together with every other such
+argument — in the same left-to-right order the call wrote them in.
+Otherwise that one call site keeps calling the function; this is
+silent, not a diagnostic, and it is what makes `:- inline` safe to
+write on a function even when some of its callers cannot benefit.
+The function's own procedure is always compiled too, since `fun
+name/arity`, `'$call'`, and `is`'s evaluables table still need it.
+
+An inlined call has no procedure call of its own, so it also has no
+call-stack frame: an error inside it is attributed to the caller's
+frame, and it never appears as its own frame in a trace. That is the
+cost of the hint.
+
+The prelude marks its arithmetic and comparison functions (`+ - * /
+div mod rem < > >= =< ==`) and its type tests (`var`, `nonvar`,
+`integer`, `float`, `atom`, `boolean`, `string`, `ground`) this way.
 
 ## Expression forms
 

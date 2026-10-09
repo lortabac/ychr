@@ -1,0 +1,4 @@
+:- module(inline_open_function, [f/1]).
+:- open_function f/1.
+:- inline f/1.
+f(X) -> X.

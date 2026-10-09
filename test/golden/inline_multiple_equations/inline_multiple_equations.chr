@@ -1,0 +1,5 @@
+:- module(inline_multiple_equations, [f/1]).
+:- function f/1.
+:- inline f/1.
+f(0) -> 0.
+f(X) -> X.

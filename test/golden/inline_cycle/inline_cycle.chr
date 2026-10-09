@@ -1,0 +1,7 @@
+:- module(inline_cycle, [f/1, g/1]).
+:- use_module(library(prelude)).
+:- function f/1.
+:- function g/1.
+:- inline f/1, g/1.
+f(X) -> g(X) + 1.
+g(X) -> f(X) + 1.

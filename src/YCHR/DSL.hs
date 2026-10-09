@@ -160,6 +160,7 @@ module' name =
       equations = [],
       extensions = [],
       classExtensions = [],
+      inlines = [],
       exports = Nothing
     }
 
