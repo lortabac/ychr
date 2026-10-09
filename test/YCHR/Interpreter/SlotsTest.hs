@@ -7,10 +7,11 @@
 -- The properties under test are the ones the interpreter's environment
 -- depends on: parameters take the first slots in order, every other
 -- binder takes the next one and is visible to the statements that
--- follow it, a re-binding shadows, and the walk is total — a name that
--- is not in scope lowers to a slot nothing binds, so the runtime still
--- reports its own "unbound variable" error rather than the phase
--- failing.
+-- follow it, a re-binding shadows, the procedure's slot count is one
+-- past the last slot its body uses (the size of the per-call
+-- environment), and the walk is total — a name that is not in scope
+-- lowers to a slot nothing binds, so the runtime still reports its own
+-- "unbound variable" error rather than the phase failing.
 module YCHR.Interpreter.SlotsTest (tests) where
 
 import Data.Array qualified as A
@@ -176,7 +177,67 @@ slotTests =
           @?= [ SLetId 1 (SCreateConstraint (ConstraintType 7) [SVar 0 "X"]),
                 SExprStmt (SCallExpr (ProcName "activate_c") [SCallId (SIdVar 1 "active")]),
                 SStore (SIdVar 1 "active")
-              ]
+              ],
+      testCase "the slot count is the arity when the body binds nothing" $
+        (lowerSingle ["a", "b"] [Return (Var "a")]).slotProcSlots @?= 2,
+      testCase "the slot count is one past the last slot the body uses" $
+        -- One counter serves both kinds of binding, so the count covers
+        -- the value binder, the constraint id and the loop variable.
+        ( lowerSingle
+            ["X"]
+            [ LetVal "v" (Var "X"),
+              LetId "c" (CreateConstraint (ConstraintType 0) [Var "X"]),
+              Foreach "l" (ConstraintType 0) "s" [] [BoolExprStmt (BAlive (IdVar "s"))]
+            ]
+        ).slotProcSlots
+          @?= 4,
+      testCase "a reference no binder writes still consumes and counts a slot" $ do
+        -- The phase stays total, so this slot is one the environment has
+        -- and nothing writes; the interpreter's "unbound variable" error
+        -- reads the empty cell.
+        let lowered = lowerSingle [] [ExprStmt (Var "x")]
+        lowered.slotProcBody @?= [SExprStmt (SVar 0 "x")]
+        lowered.slotProcSlots @?= 1,
+      testCase "forcing the slot counts of mutually recursive procedures terminates" $ do
+        -- Reading a count runs that caller's walk, and the walk resolves
+        -- the callee of a call; the two run in either order (and in a
+        -- cycle) without forcing anything still under evaluation,
+        -- because a resolved call target is built as a thunk.
+        let lowered =
+              lowerProgram
+                ( programWith
+                    [ mkProc
+                        "p"
+                        []
+                        [LetVal "x" (Lit (IntLit 1)), ExprStmt (CallExpr "q" [])],
+                      mkProc
+                        "q"
+                        []
+                        [LetVal "y" (Lit (IntLit 2)), ExprStmt (CallExpr "p" [])]
+                    ]
+                )
+        [proc.slotProcSlots | proc <- A.elems lowered.slotProcEntries] @?= [1, 1],
+      testCase "reading a record's name does not walk its body" $ do
+        -- The lowering pattern-matches every statement, so a walk of this
+        -- body would raise. Reading the fields a consumer needs without
+        -- the body — a name for a by-name lookup, the arity for a call
+        -- check, the kind for a trace label — must therefore not run it:
+        -- the count and the body stay thunks until they are demanded.
+        -- (`lowered.slotProcedures` is a strict map, so this exercises
+        -- the force the map performs as well.)
+        let lowered = lowerProgram (singleProc "p" [error "unwalkable body" :: Stmt])
+        case Map.lookup "p" lowered.slotProcedures of
+          Nothing -> assertFailure "p missing"
+          Just proc -> do
+            proc.slotProcName @?= "p"
+            proc.slotProcArity @?= 0
+            proc.slotProcKind @?= PKReactivateDispatch,
+      testCase "addProcedures counts each extra's own slots" $ do
+        let extended =
+              addProcedures
+                (lowerProgram (singleProc "compiled" []))
+                [mkProc "__lambda_0" ["a"] [LetVal "v" (Var "a")]]
+        [proc.slotProcSlots | proc <- A.elems extended.slotProcEntries] @?= [0, 2]
     ]
 
 -- ---------------------------------------------------------------------------

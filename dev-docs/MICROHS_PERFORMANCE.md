@@ -4,10 +4,10 @@
 MicroHs. This document records what stops it from running *fast* there, with
 the measurements behind each claim and the options for fixing it. It began as
 a diagnosis only: options A, D and E are still just that. Option B, the
-`CallExpr` half of C.1 and the procedure-table half of C.8 have since been
-implemented — their sections record what was built and what it measured — and
-C.7 was implemented and dropped for now, with a re-measurement to revisit on
-the item 8 baseline.
+`CallExpr` half of C.1, C.2 and the procedure-table half of C.8 have since
+been implemented — their sections record what was built and what it measured
+— and C.7 was implemented and dropped for now, with a re-measurement to
+revisit on the item 8 baseline.
 
 Everything below was measured on 2026-10-05 against YCHR `d031947` (branch
 `mhs-optimization`) and MicroHs `f65d3c65`, on an AMD Ryzen AI 9 HX 370. The
@@ -226,7 +226,8 @@ essentially all parser and rename records.
    projection YCHR's runtime is written in terms of stays a real call with real
    allocation. This is the ~66× floor of §2.
 2. **YCHR's hot path is unusually call-dense.** `Chr` is
-   `ReaderT SessionEnv IO`, `InterpM` is `ReaderT (IORef Env) Chr`, and the
+   `ReaderT SessionEnv IO`, `InterpM` was `ReaderT (IORef Env) Chr` when this
+   profile was taken (C.2 has since made it `ReaderT Env Chr`, §7C.2), and the
    per-call and per-binding paths go through `Map`/`IntMap`/`Text` and a trace
    hook that is checked even when disabled. That is the extra factor over
    MicroHs's own baseline.
@@ -421,11 +422,12 @@ item names its evidence in §5.
    structure this item would pick for either host.
 
    This is worth knowing beyond this item: the interpreter's local environment
-   (`Env`'s two `IntMap`s, item 2, and §5's `envValues` and `insertVal` rows) is
-   the largest remaining user of `IntMap` on the hot path, and it is exactly the
-   container the table above says to replace. It is not changed here — that is a
-   separate experiment with its own A/B, and it needs a slot count on `SlotProc`
-   before an array can be sized.
+   (`Env`'s two `IntMap`s at the time, item 2, and §5's `envValues` and
+   `insertVal` rows) was the largest remaining user of `IntMap` on the hot path,
+   and it was exactly the container the table above says to replace. It was not
+   changed here — that was a separate experiment with its own A/B, and it needed
+   a slot count on `SlotProc` before an array could be sized. That experiment is
+   item 2 below, and it has since been built and measured there.
 
    Measured on the change as a whole (this item plus the closure check; the GHC
    figures below are criterion, three interleaved rounds a side, medians of the
@@ -465,16 +467,117 @@ item names its evidence in §5.
    item 7 below, which has since been built and dropped on measurement; the
    second is the smaller, still-unclaimed remainder — one `Map` lookup per `is`
    and `'$call'` dispatch today, and `PROJECT.md` item 3's scope names them.
-2. **Array-based locals.** The slot phase already numbers every local from one
-   per-procedure counter. Let `SlotProc` carry its slot count and back `Env`
-   with a single mutable array written in place, instead of two `IntMap`s
-   rebuilt at every `insertVal`/`insertId` (`Env.envValues` + `insertVal` are
-   ~16 % of entries here). A flat association list for small arities is a
-   cheaper first cut. Item 8's container measurements are the evidence, and the
-   slot-count field it needs is the one item 8 describes.
+2. **Array-based locals. — implemented.** The slot phase already numbered every
+   local from one per-procedure counter; the change gives `SlotProc` the
+   counter's final value (`slotProcSlots`) and backs the interpreter's per-call
+   environment with one mutable `IOArray Int Cell` written in place, instead of
+   two `IntMap`s rebuilt at every `insertVal`/`insertId` (`Env.envValues` +
+   `insertVal` are ~16 % of entries here). A `Cell` is a value, a suspension
+   id, or empty; an empty cell is the slot a reference with no binder in scope
+   reads, which is what keeps the interpreter's "unbound variable" error rather
+   than a wrong value.
+
+   The array is sized once per call, so `SlotProc` had to carry the count the
+   walk ends at (`slotProcArity` is only a lower bound). The new field is lazy,
+   like `slotProcBody`: the two are projections of one shared walk, so forcing a
+   `SlotProc` for its name, index, arity or kind runs nothing, and the
+   interpreter forces the count at call time, through the same thunk that
+   supplies the body, so the walk still happens once. (A resolved call target is
+   built as a thunk and holds nothing but a callee's index, so nothing in the
+   phase needs a callee's body while another body is walking; the name-keyed
+   `slotProcedures` map is strict in its values, so without the laziness forcing
+   it would run every body's walk.) The reads and writes are
+   `unsafeRead`/`unsafeWrite` from `Data.Array.Base`, bounded by the count the
+   same walk produced: `SlotProc` is exported without its constructor, so only
+   the phase can build one, and the count, the arity and every body slot come
+   out of one walk. `bindParams` still checks the arity before it writes, so a
+   call that disagrees with its callee cannot write past the array; the field
+   exports keep the record readable everywhere it was before, so nothing outside
+   `Slots` notices.
+
+   Two things fall out of the array being mutable. The per-call `IORef Env`
+   layer goes away: `withFreshEnv` is a `runReaderT` and the `BSoftGuard` catch
+   sees the same array, so "bindings survive the catch" is unchanged with one
+   less indirection per access. And the MicroHs runtime's `array alloc` counter
+   does not move at all — 63 601 on `check leq` and 195 319 on `check
+   pairs_library`, both unchanged to the digit — because MicroHs represents an
+   `IORef` as a one-element array, so the per-call `IORef` this replaces and the
+   per-call environment array are one array either way. What changes is the
+   array's size and everything inside the accesses.
+
+   Measured on 2026-10-09 against `8618597` on the same machine, as item 8 was:
+   GHC figures are criterion, three interleaved rounds a side, medians of the
+   per-round means (the percentages use the unrounded medians, so they need not
+   recompute from the rounded figures below); MicroHs figures are `+RTS -v`
+   reductions, which are deterministic (a second run repeats every figure
+   exactly), with both binaries invoked through one symlink path because the
+   counter includes a little startup work on the argument string, and the same
+   inputs:
+
+   | workload | before | after | change |
+   |---|---:|---:|---:|
+   | GHC `typecheck/pairs_library` | 118.99 ms | 115.45 ms | **−2.98 %** |
+   | GHC `guard` | 3.381 µs | 3.339 µs | −1.25 % |
+   | GHC `leq` | 2.677 µs | 2.640 µs | −1.39 % |
+   | GHC `leq_closure` | 6.459 ms | 6.471 ms | +0.18 % |
+   | GHC `fib` | 318.9 µs | 320.0 µs | +0.35 % |
+   | GHC `sum_list_test` | 11.457 µs | 11.695 µs | +2.07 % |
+   | GHC `graph_test` | 38.77 µs | 39.71 µs | +2.44 % |
+   | GHC `lambda_test` | 4.865 µs | 4.960 µs | +1.95 % |
+   | GHC `search_label` | 1.644 ms | 1.644 ms | +0.03 % |
+   | GHC `search_label_alt` | 1.592 ms | 1.624 ms | +2.04 % |
+   | GHC `search_generate` | 25.62 ms | 25.59 ms | −0.13 % |
+   | GHC `search_deep` | 42.40 ms | 42.11 ms | −0.68 % |
+   | GHC allocation, `check typechecker/*.chr` | 11.6239 GB | 11.2130 GB | −411 MB (−3.54 %) |
+   | MicroHs `check leq` reductions | 352 501 266 | 228 504 960 | **−35.18 %** |
+   | MicroHs `check pairs_library` reductions | 1 080 123 726 | 685 027 255 | **−36.58 %** |
+   | MicroHs `run --no-check` leq reductions | 3 768 588 | 3 772 967 | +0.12 % |
+   | MicroHs `run --no-check` fib(10) reductions | 7 523 580 | 6 579 734 | −12.55 % |
+   | MicroHs `compile -t vm typechecker/*.chr` reductions | 507 044 800 | 507 044 749 | −0.00001 % |
+   | MicroHs `repl --quiet` reductions | 8 805 690 | 8 805 690 | 0.00 % |
+   | MicroHs `check leq` runtime | 4.06 s | 2.57–2.60 s | **≈ −36 %** |
+   | MicroHs `check pairs_library` runtime | 13.19–13.20 s | 7.93–7.99 s | **≈ −40 %** |
+
+   The MicroHs side is the verdict, and it is not close: the two `check`
+   workloads lose a third of their reductions, `run fib(10)` loses an eighth,
+   and their wall clock follows the reduction count (the ranges are two rounds
+   a side). The arms that make no compiled call are flat — `repl --quiet` is
+   bit-identical, `compile` moves by 51 reductions in a 507 M run, which is the
+   lazy slot count doing its job. The one MicroHs arm that moves up is `run
+   --no-check leq`, by 0.12 % (4 379 reductions in 3.77 M), a run whose
+   interpreter work is a few calls over a program with almost no locals.
+
+   On GHC the headline benchmark improves — `typecheck/pairs_library` −3.0 %,
+   with its own before-side rounds at 118.1, 119.0 and 130.4 ms against after
+   rounds at 114.2, 115.4 and 151.4 ms, so the medians separate and even the
+   best round either side favours the change — and the allocation figure on
+   `check typechecker/*.chr` falls 411 MB, which is the `IntMap` nodes the
+   environment is no longer rebuilt from. The regressions are all in the
+   call-and-bind microbenchmarks: up to +2.4 % (`graph_test` 38.8 µs,
+   `sum_list_test` 11.5 µs, `search_label_alt` 1.6 ms, `lambda_test` 4.9 µs),
+   and they are the price of allocating and filling an environment array per
+   call, which the shortest procedures have few accesses to amortise. A repeat
+   three-round comparison of the same change put `typecheck/pairs_library` at
+   −2.68 % (118.49 → 115.32 ms), `sum_list_test` at +4.2 % and `graph_test` at
+   +3.4 %: the win and the few-percent cost are the same across runs, and the
+   small arms' exact figures are the benchmarks' own spread. `sum_list_test` was
+   one of the three workloads this item named for its A/B, and it is the one
+   named arm the change does not help (in the repeat its after rounds are 11.53,
+   11.98 and 12.73 µs, so the median is lifted by an outlier while the lowest
+   round sits inside the before range); `leq_closure` is flat here and +1.7 % in
+   the repeat, inside the spread each run shows; `typecheck/pairs_library`
+   carries the item.
+
+   Not attempted here: the flat association list for small arities that this
+   item suggested as a cheaper first cut. The per-call array fill is exactly
+   what the GHC microbenchmarks pay for, so an arity-sized association list (or
+   a shared empty environment for a procedure with no locals) is the shape a
+   follow-up A/B would test, on the same three workloads. Also untouched: C.3's
+   monad flattening and C.5's `bindParams` traversal — `bindParams` keeps its
+   `zip [0 ..]` shape so that its own change stays a separate measurement.
 3. **Flatten the monad.** Collapse the double `ReaderT` into one newtype over
-   `SessionEnv -> IORef Env -> IO a` (or explicit state passing) and stop
-   calling `ask` from helpers.
+   `SessionEnv -> Env -> IO a` (or explicit state passing) and stop calling
+   `ask` from helpers.
 4. **Trace fast path.** Read "tracing is on" once per call into a `Bool`, skip
    constructing the event action when it is off, and do not touch
    `traceHandler` per event. `traceEntry`, `traceExit`, `withTraceDepth`,
@@ -682,19 +785,20 @@ item names its evidence in §5.
    workload regresses outside its spread, and `make test` passes unchanged:
    this is a container change and no observable behaviour moves.
 
-   Not attempted here: the larger version, item 2's array-backed locals. This
-   measurement is still the argument for it: `envValues` and `insertVal` are
-   ~16 % of the profiled entries, and `IntMap` is the container this table says
-   is worst under MicroHs. It needs one addition first: an array must be sized
-   before the body runs, and slots are handed out as the walk meets binders, so
-   `SlotProc` must carry the number of slots the body uses (the slot phase
-   counts them; only the arity is carried today). Slots are dense from `0`, but
-   a slot may be value-bound or id-bound, so the environment array needs one
-   entry per slot with enough shape to hold either — `Maybe Value` /
-   `Maybe SuspensionId`, or one array of a sum type, rather than the two
-   `IntMap`s. The environment is read and written per variable access rather
-   than per call, so its A/B is the one that decides, and it wants
-   `sum_list_test`, `leq_closure` and the type-checker workload.
+   Not attempted here: the larger version, item 2's array-backed locals — built
+   and measured since, in item 2 below. This measurement is what argued for it:
+   `envValues` and `insertVal` are ~16 % of the profiled entries, and `IntMap`
+   is the container this table says is worst under MicroHs. It needed one
+   addition first: an array must be sized before the body runs, and slots are
+   handed out as the walk meets binders, so `SlotProc` must carry the number of
+   slots the body uses (the slot phase counts them; only the arity was carried
+   then). Slots are dense from `0`, but a slot may be value-bound or id-bound,
+   so the environment array needs one entry per slot with enough shape to hold
+   either — `Maybe Value` / `Maybe SuspensionId`, or one array of a sum type,
+   rather than the two `IntMap`s. Item 2 took the array of a sum type. The
+   environment is read and written per variable access rather than per call, so
+   its A/B was the one that decided, and it wanted `sum_list_test`,
+   `leq_closure` and the type-checker workload.
 
 Items 1–3 and 7–8 also help the GHC runtime, which is the benchmark of record;
 4–6 are mostly MicroHs-facing. Any of them needs `make bench` and a `make test`
@@ -734,14 +838,12 @@ The `unix_x86` target that already exists in `mhs.conf`
   micro-benchmark (§7C.1) is a worked example of settling one: it turned a
   15 % regression into a 1 % win by measuring the container, not the entry
   count.
-- Is `IntMap` the right structure for the interpreter's local environment? The
-  container measurements are in §7C.1 and item 8; they say a boxed `Data.Array`
-  is the candidate on both hosts, and item 8 says what an array-backed `Env`
-  needs first (a slot count on `SlotProc`) and how to judge it. Item 8's
-  procedure-table half is no longer open — it is implemented and measured — but
-  the question about the environment is: it is touched per variable access
-  rather than per call, so its A/B is the one that decides, and it should be run
-  separately from the procedure-table change.
+- ~~Is `IntMap` the right structure for the interpreter's local environment?~~
+  No: item 2 replaced both `IntMap`s with one boxed mutable array, and the
+  measurement there is what settles it. The container measurements that pointed
+  at an array are in §7C.1 and item 8; item 8 named what an array-backed `Env`
+  needed first (a slot count on `SlotProc`) and how to judge it, and item 2 was
+  run separately from the procedure-table change, as this question asked.
 
 ## 9. Reproducing
 

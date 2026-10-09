@@ -9,8 +9,9 @@
 -- propagation history, reactivation queue, unification-variable
 -- counter, interpreter call stack, the procedure map and the host-call
 -- registry. Per-procedure-call local variables ('Env') live in a
--- mutable 'IORef' read through a thin 'ReaderT' layer so state changes
--- survive the exception-driven catches that remain ('BSoftGuard').
+-- mutable cell array read through a thin 'ReaderT' layer: the array is
+-- mutable, so state changes survive the exception-driven catches that
+-- remain ('BSoftGuard') and no enclosing 'IORef' is needed.
 --
 -- Non-local control flow ('Return', labelled 'Continue', 'Break') is
 -- implemented /without/ exceptions: statement execution returns an
@@ -58,20 +59,23 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
 import Data.Array (bounds, inRange, (!))
+-- The environment's cell reads and writes. They are the class's
+-- `unsafe` operations because the index is in range by construction
+-- (see 'Env'), and `Data.Array.Base` is where both the GHC `array` and
+-- `array-mhs` expose them: `Data.Array.IO` re-exports only the
+-- bounds-checking `readArray`/`writeArray`.
+import Data.Array.Base (unsafeRead, unsafeWrite)
+import Data.Array.IO (IOArray, newArray)
 import Data.Foldable (toList)
 import Data.IORef
-  ( IORef,
-    atomicModifyIORef',
+  ( atomicModifyIORef',
     modifyIORef',
-    newIORef,
     readIORef,
     writeIORef,
   )
-import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
 import Data.IntSet (IntSet)
 import Data.IntSet qualified as IntSet
-import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 -- MicroHs's 'Data.Text' lacks 'breakOn'; the shim supplies it
@@ -161,24 +165,39 @@ import YCHR.Internal.VM
 -- Types
 -- ---------------------------------------------------------------------------
 
--- | Local variable environment for a procedure call. Split by kind:
--- value-bound slots live in 'envValues', id-bound slots in 'envIds'.
--- The VM IR guarantees a local is bound in only one of the two, and the
--- slot phase ("YCHR.Internal.Interpreter.Slots") numbers both kinds from one
--- per-procedure counter, so the two maps are keyed by the same space.
-data Env = Env
-  { envValues :: !(IntMap Value),
-    envIds :: !(IntMap SuspensionId)
-  }
+-- | One local slot's contents: a value, a constraint id, or nothing.
+--
+-- A call's environment is one cell per slot rather than a value map and
+-- an id map, because the slot phase
+-- ("YCHR.Internal.Interpreter.Slots") numbers both kinds from one
+-- per-procedure counter and the VM IR guarantees a local is bound in
+-- only one of the two ways. 'CellEmpty' is a slot nothing has written
+-- yet, which is what a reference whose name no binder in scope covers
+-- reads: that is how the interpreter keeps its "unbound variable"
+-- runtime error rather than failing in the phase.
+data Cell
+  = CellEmpty
+  | CellValue !Value
+  | CellId !SuspensionId
 
-emptyEnv :: Env
-emptyEnv = Env IntMap.empty IntMap.empty
+-- | A procedure call's local environment: one mutable cell per slot,
+-- sized by 'SlotProc.slotProcSlots' and written in place, so a binding
+-- neither rebuilds a map nor allocates a new environment.
+--
+-- The array is shared by everything that runs in the call — a nested
+-- 'execStmts', the body a loop runs per candidate, and the
+-- 'catchInstantiation' boundary behind 'BSoftGuard' — so a write made
+-- before a guard failure is visible afterwards, exactly as the
+-- 'IORef'-held environment it replaces was.
+type Env = IOArray Int Cell
 
-insertVal :: Slot -> Value -> Env -> Env
-insertVal slot v e = e {envValues = IntMap.insert slot v e.envValues}
-
-insertId :: Slot -> SuspensionId -> Env -> Env
-insertId slot s e = e {envIds = IntMap.insert slot s e.envIds}
+-- | Allocate a call's environment. Slot @i@ is drawn from
+-- @0 .. slotProcSlots - 1@, so that range is the whole array; a
+-- procedure with no slots gets one cell that nothing reads, because
+-- MicroHs's array allocator takes a zero size through an unsigned
+-- @size - 1@, which is not worth relying on.
+newEnv :: Int -> IO Env
+newEnv slots = newArray (0, max 1 slots - 1) CellEmpty
 
 -- | How a statement (or a statement list) finished.
 --
@@ -195,11 +214,11 @@ data Signal
   | SCont !Label
   | SBrk !Label
 
--- | The interpreter's local stack: an 'IORef Env' threaded above 'Chr'.
--- Using a ref lets the state changes made before a 'BSoftGuard'
--- failure survive the catch, so a soft-failed guard keeps whatever
--- bindings it made before failing.
-type InterpM = ReaderT (IORef Env) Chr
+-- | The interpreter's local stack: the call's 'Env' array threaded above
+-- 'Chr'. The array is mutable, so the state changes made before a
+-- 'BSoftGuard' failure survive the catch and a soft-failed guard keeps
+-- whatever bindings it made before failing.
+type InterpM = ReaderT Env Chr
 
 -- ---------------------------------------------------------------------------
 -- Lifting
@@ -248,20 +267,25 @@ interpret prog hostCalls entryName args = do
 -- Env helpers
 -- ---------------------------------------------------------------------------
 
-getEnv :: InterpM Env
-getEnv = do
-  ref <- ask
-  liftIO (readIORef ref)
+-- | Read the cell a slot holds. The index is in range by construction:
+-- the array was sized by 'SlotProc.slotProcSlots' and the slot came out
+-- of the same walk ("YCHR.Internal.Interpreter.Slots").
+readCell :: Slot -> InterpM Cell
+readCell slot = do
+  cells <- ask
+  liftIO (unsafeRead cells slot)
 
-modifyEnv :: (Env -> Env) -> InterpM ()
-modifyEnv f = do
-  ref <- ask
-  liftIO (modifyIORef' ref f)
+-- | Write a slot's cell in place.
+writeCell :: Slot -> Cell -> InterpM ()
+writeCell slot cell = do
+  cells <- ask
+  liftIO (unsafeWrite cells slot cell)
 
+-- | Run @action@ against a call's environment. The environment is
+-- already a mutable array built for this call ('newEnv'), so nothing
+-- has to be allocated here.
 withFreshEnv :: Env -> InterpM a -> Chr a
-withFreshEnv env action = do
-  ref <- liftIO (newIORef env)
-  runReaderT action ref
+withFreshEnv env action = runReaderT action env
 
 -- ---------------------------------------------------------------------------
 -- Session helpers
@@ -480,7 +504,14 @@ callProcAt (ProcIx ix) args = do
 -- 'SRet' it ends in, and emit the return event.
 callProcEntry :: SlotProc -> [CallVal] -> Chr Value
 callProcEntry proc args = do
-  env <- case bindParams proc.slotProcName proc.slotProcArity args of
+  bound <-
+    liftIO $
+      bindParams
+        proc.slotProcName
+        proc.slotProcArity
+        proc.slotProcSlots
+        args
+  env <- case bound of
     Right e -> pure e
     Left msg -> runtimeErrorS msg
   traceEntry proc args
@@ -586,13 +617,22 @@ activateSuspensionId _ = error "activateSuspensionId: expected leading id argume
 -- declared at, based on the runtime tag of each argument. Parameters
 -- occupy slots @0 .. arity - 1@ in declaration order
 -- ("YCHR.Internal.Interpreter.Slots"), so this is a single walk of the
--- argument list with no name lookup and no rebalancing. The count is
--- the callee's, since the slot phase carries an arity rather than a
--- parameter-name list.
-bindParams :: Name -> Int -> [CallVal] -> Either String Env
-bindParams pname arity args
+-- argument list with no name lookup and no rebalancing. The counts are
+-- the callee's, since the slot phase carries an arity and a slot count
+-- rather than a parameter-name list: @slots@ sizes the environment and
+-- @arity@ is what the arguments are checked against.
+--
+-- The arity check runs before the environment is written, so a call
+-- whose argument count disagrees with the callee can never write past
+-- the array, and the array is sized to cover the parameters because
+-- every 'SlotProc' is built by the phase, which starts the slot counter
+-- at the arity: 'SlotProc' is exported without its constructor, so a
+-- record whose count is below its arity cannot be built. A mismatch is
+-- a runtime error, not a partial environment.
+bindParams :: Name -> Int -> Int -> [CallVal] -> IO (Either String Env)
+bindParams pname arity slots args
   | arity /= length args =
-      Left $
+      pure . Left $
         "bindParams: arity mismatch in "
           ++ T.unpack pname.unName
           ++ ": "
@@ -600,10 +640,13 @@ bindParams pname arity args
           ++ " params, "
           ++ show (length args)
           ++ " args"
-  | otherwise = Right (List.foldl' step emptyEnv (zip [0 ..] args))
+  | otherwise = do
+      env <- newEnv slots
+      mapM_ (\(slot, arg) -> unsafeWrite env slot (cellOf arg)) (zip [0 ..] args)
+      pure (Right env)
   where
-    step e (slot, CVal v) = insertVal slot v e
-    step e (slot, CId s) = insertId slot s e
+    cellOf (CVal v) = CellValue v
+    cellOf (CId s) = CellId s
 
 -- | Execute a list of statements sequentially, stopping at the first
 -- statement that signals a non-local jump and handing that signal to
@@ -622,19 +665,19 @@ execStmts (s : rest) = do
 execStmt :: SlotStmt -> InterpM Signal
 execStmt (SLetVal slot expr) = do
   v <- evalValExpr expr
-  modifyEnv (insertVal slot v)
+  writeCell slot (CellValue v)
   pure SFall
 execStmt (SLetId slot expr) = do
   s <- evalIdExpr expr
-  modifyEnv (insertId slot s)
+  writeCell slot (CellId s)
   pure SFall
 execStmt (SAssignVal slot expr) = do
   v <- evalValExpr expr
-  modifyEnv (insertVal slot v)
+  writeCell slot (CellValue v)
   pure SFall
 execStmt (SAssignId slot expr) = do
   s <- evalIdExpr expr
-  modifyEnv (insertId slot s)
+  writeCell slot (CellId s)
   pure SFall
 execStmt (SIf cond thenBranch elseBranch) = do
   b <- evalBoolExpr cond
@@ -680,7 +723,7 @@ execStmt (SAddHistory ruleId exprs) = do
     addHistory ruleId sids
   pure SFall
 execStmt (SDrainReactivationQueue suspSlot body) = do
-  envRef <- ask
+  cells <- ask
   liftChr $
     drainQueue $ \sid -> do
       alive <- aliveConstraint sid
@@ -691,12 +734,12 @@ execStmt (SDrainReactivationQueue suspSlot body) = do
             ctName <- constraintTypeLabel ct
             ts <- snapshotValues vs
             pure (TEReactivate sid ctName ts)
-          liftIO (modifyIORef' envRef (insertId suspSlot sid))
+          liftIO (unsafeWrite cells suspSlot (CellId sid))
           -- The compiler fixes this body to a single dispatch call
           -- ('ExprStmt'), which cannot jump; anything else would have
           -- no owner here, since the drain is not a labelled loop and
           -- 'drainQueue' has no way to return a value.
-          sig <- runReaderT (execStmts body) envRef
+          sig <- runReaderT (execStmts body) cells
           case sig of
             SFall -> pure ()
             _ -> uncaughtSignal "DrainReactivationQueue" sig
@@ -821,9 +864,9 @@ execForeach lbl suspSlot conditions body (susp : rest) = do
             ctName <- constraintTypeLabel susp.suspType
             ts <- snapshotValues susp.args
             pure (TEPartner ctName susp.suspId ts)
-          modifyEnv (insertId suspSlot susp.suspId)
-          envRef <- ask
-          sig <- liftChr (withTraceDepth (runReaderT (execStmts body) envRef))
+          writeCell suspSlot (CellId susp.suspId)
+          cells <- ask
+          sig <- liftChr (withTraceDepth (runReaderT (execStmts body) cells))
           case sig of
             SFall -> execForeach lbl suspSlot conditions body rest
             SCont l
@@ -852,10 +895,10 @@ checkConditions susp ((ArgIndex i, expr) : rest) = do
 -- followed. 'SEvalDeep' delegates to 'evalValExprDeep'.
 evalValExpr :: SlotValExpr -> InterpM Value
 evalValExpr (SVar slot name) = do
-  env <- getEnv
-  case IntMap.lookup slot env.envValues of
-    Just v -> pure v
-    Nothing -> liftChr (runtimeError' "evalValExpr: unbound variable " name.unName)
+  cell <- readCell slot
+  case cell of
+    CellValue v -> pure v
+    _ -> liftChr (runtimeError' "evalValExpr: unbound variable " name.unName)
 evalValExpr (SLit (IntLit n)) = pure (VInt n)
 evalValExpr (SLit (FloatLit n)) = pure (VFloat n)
 evalValExpr (SLit (AtomLit s)) = pure (VAtom s)
@@ -990,26 +1033,26 @@ evalBoolExpr (SBSoftGuard expr) = softGuard (evalBoolExpr expr)
 
 -- | Run a nested boolean evaluation under the soft-guard boundary.
 -- Delegates to 'catchInstantiation' at the 'Chr' level; the local
--- 'Env' is an 'IORef', so bindings introduced before the failure
+-- 'Env' is a mutable array, so bindings introduced before the failure
 -- survive the catch.
 softGuard :: InterpM Bool -> InterpM Bool
 softGuard m = do
-  ref <- ask
-  liftChr (catchInstantiation (runReaderT m ref))
+  cells <- ask
+  liftChr (catchInstantiation (runReaderT m cells))
 
 -- ---------------------------------------------------------------------------
 -- Id-expression evaluator
 -- ---------------------------------------------------------------------------
 
--- | Evaluate a 'SlotIdExpr' to a 'SuspensionId': either a lookup in
--- the id slot of the local 'Env', or a fresh suspension created from a
+-- | Evaluate a 'SlotIdExpr' to a 'SuspensionId': either a read of the
+-- id held in the local 'Env' slot, or a fresh suspension created from a
 -- 'SCreateConstraint' (not yet 'Store'd).
 evalIdExpr :: SlotIdExpr -> InterpM SuspensionId
 evalIdExpr (SIdVar slot name) = do
-  env <- getEnv
-  case IntMap.lookup slot env.envIds of
-    Just s -> pure s
-    Nothing -> liftChr (runtimeError' "evalIdExpr: unbound id variable " name.unName)
+  cell <- readCell slot
+  case cell of
+    CellId s -> pure s
+    _ -> liftChr (runtimeError' "evalIdExpr: unbound id variable " name.unName)
 evalIdExpr (SCreateConstraint cType args) = do
   argVals <- traverse evalValExpr args
   liftChr (createConstraint cType argVals)

@@ -67,13 +67,16 @@
 -- kinds of binding, because a parameter is heterogeneous at run time:
 -- "YCHR.Internal.Runtime.Interpreter" binds a call's arguments by the
 -- runtime tag it is handed, so a parameter's slot number must be the
--- same whether the value lands in the value map or the id map.
+-- same whether the value lands in a value cell or an id cell. The
+-- counter's final value is the procedure's slot count, carried on
+-- 'SlotProc.slotProcSlots'; it is the size of the per-call environment
+-- the interpreter allocates, and the bound its cell reads rely on.
 --
 -- Parameters take @0 .. length params - 1@ in order. Every other binder
 -- takes the next free slot at the point it is reached in a left-to-right
 -- walk of the body: a @let@ binding, a 'Foreach' loop variable, and the
 -- variable a 'DrainReactivationQueue' binds (the compiler emits no @let@
--- for it — the interpreter's @insertId@ creates it on first write). A
+-- for it — the interpreter writes its cell on the first queue entry). A
 -- binder always takes a fresh slot, so a re-binding shadows the earlier
 -- one rather than overwriting its cell.
 --
@@ -87,8 +90,9 @@
 --
 -- One reading is an assumption on emitted code rather than a consequence
 -- of the walk: an 'If' arm's binders stay in scope for the *other* arm
--- and for the statements after the 'If' (the interpreter's environment is
--- one flat map, so that is where its bindings live). No emitted 'If'
+-- and for the statements after the 'If' (the interpreter's environment
+-- is one flat cell array per call, so that is where its bindings live).
+-- No emitted 'If'
 -- binds a name in its else arm — the then arm carries the rule body or
 -- equation, and the else arm is either empty or the eq-dispatch
 -- fallback, whose only statements are 'AssignVal's of a binder
@@ -103,16 +107,26 @@
 -- gets a fresh slot that no earlier binder wrote; a reference then
 -- reaches the interpreter's existing "unbound variable" runtime error
 -- when it runs, exactly as it does today, instead of this pass turning a
--- recoverable error into a Haskell 'error'. (An assignment does bind its
--- slot — the interpreter's @insertVal@ inserts — so what it lacks is a
--- prior value, not a place to put one.)
+-- recoverable error into a Haskell 'error'. (An assignment does give its
+-- slot a place — the interpreter writes a cell on it — so what it lacks
+-- is a prior value, not a place to put one.)
 module YCHR.Internal.Interpreter.Slots
   ( -- * The phase
     Slot,
     ProcIx (..),
     CallTarget (..),
     SlotProgram (..),
-    SlotProc (..),
+    -- The fields, not the constructor: a 'SlotProc' is only ever built
+    -- by the phase, so the count/bound relationship the interpreter's
+    -- cell accesses rely on holds by construction.
+    SlotProc
+      ( slotProcName,
+        slotProcIx,
+        slotProcArity,
+        slotProcSlots,
+        slotProcBody,
+        slotProcKind
+      ),
     SlotStmt (..),
     SlotValExpr (..),
     SlotBoolExpr (..),
@@ -149,9 +163,10 @@ import YCHR.Internal.VM.Types
 
 -- | A local-variable slot, numbered per procedure.
 --
--- A bare 'Int' alias on purpose: the interpreter keys 'Data.IntMap.Strict'
--- by it, and the precision of the phase comes from this module's own
--- types, not from making the key a newtype the maps would have to unwrap.
+-- A bare 'Int' alias on purpose: the interpreter indexes its per-call
+-- @IOArray Int Cell@ by it, and the precision of the phase comes from
+-- this module's own types, not from making the key a newtype the array
+-- would have to unwrap.
 type Slot = Int
 
 -- ---------------------------------------------------------------------------
@@ -163,10 +178,9 @@ type Slot = Int
 -- 'CallTarget' carries.
 --
 -- A newtype rather than the bare 'Int' @Slot@ is: a local slot and a
--- procedure index are both integer keys — the slot goes into the
--- interpreter's @Env@ 'Data.IntMap.Strict's, the index into its entry
--- array — and only the type keeps one from being written where the
--- other belongs.
+-- procedure index are both integer keys — the slot indexes the
+-- interpreter's per-call cell array, the index its entry array — and
+-- only the type keeps one from being written where the other belongs.
 newtype ProcIx = ProcIx {unProcIx :: Int}
   deriving (Show, Eq, Ord)
 
@@ -252,6 +266,25 @@ data SlotProc = SlotProc
     -- @0 .. slotProcArity - 1@, so this is also the first slot a local
     -- can be bound to and all the interpreter needs for its arity check.
     slotProcArity :: !Int,
+    -- | How many slots the body uses: every 'Slot' the body mentions is
+    -- below this, and slots are dense from @0@, so it is the size of the
+    -- per-call environment the interpreter allocates
+    -- ("YCHR.Internal.Runtime.Interpreter"). It is the final value of
+    -- the walk's slot counter, so it includes the parameters
+    -- (@slotProcArity@ alone is a lower bound).
+    --
+    -- Deliberately /lazy/ (no bang), matching 'slotProcBody': this and
+    -- the body are two projections of one walk, and a consumer that
+    -- wants only the name, index, arity or kind — a by-name procedure
+    -- lookup, resolution handing a callee's 'slotProcIx' to a
+    -- 'CallTarget', dispatch deciding a trace label — must not run that
+    -- walk by forcing the record. The interpreter demands the field
+    -- where it needs it, at call time in
+    -- 'YCHR.Internal.Runtime.Interpreter.bindParams'; the shared thunk
+    -- means the walk still happens once, and a run that never interprets
+    -- a program — a compile-only invocation, a `repl` startup — never
+    -- forces the program's procedures at all.
+    slotProcSlots :: Int,
     slotProcBody :: [SlotStmt],
     -- | Structural classification, carried through unchanged so the
     -- tracer keeps labelling events off it.
@@ -433,19 +466,22 @@ resolveCallIn procMap n = case Map.lookup n procMap of
 -- program — would be a procedure whose index means nothing. Only
 -- 'lowerProgram' and 'addProcedures', which know the position, call
 -- this.
+--
+-- The body and the walk's final counter are two projections of one
+-- shared walk, so forcing either runs the walk once and forcing the
+-- record itself (for its name, index, arity or kind) runs nothing.
 lowerProcedureWith :: ProcIx -> (Name -> CallTarget) -> Procedure -> SlotProc
 lowerProcedureWith ix resolveCall proc =
   let initialScope = Map.fromList (zip proc.params [0 ..])
-      body =
-        fst
-          ( lowerStmts
-              (Walker (length proc.params) initialScope resolveCall)
-              proc.body
-          )
+      (body, finalWalker) =
+        lowerStmts
+          (Walker (length proc.params) initialScope resolveCall)
+          proc.body
    in SlotProc
         { slotProcName = proc.name,
           slotProcIx = ix,
           slotProcArity = length proc.params,
+          slotProcSlots = finalWalker.nextSlot,
           slotProcBody = body,
           slotProcKind = proc.procKind
         }
