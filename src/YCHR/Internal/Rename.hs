@@ -368,6 +368,13 @@ data RenameCtx = RenameCtx
     -- ('UnknownModule').
     allModuleNames :: [Text],
     currentModule :: CollectedModule,
+    -- | @currentModule@'s imports as @(sourceModule, importItems)@
+    -- pairs — the shape both 'visibleProviders' and
+    -- 'visibleMacroProviders' filter against. Computed once per module
+    -- (alongside the other per-module fields below) rather than
+    -- rebuilt by each of those two functions on every call, since both
+    -- run once per goal-position name.
+    moduleImports :: [(Text, Maybe [Declaration])],
     -- | Where each @(name, arity)@ macro is /declared/, mirroring
     -- 'declEnv' for the macro namespace. Built from every module's
     -- @macros@ field.
@@ -719,6 +726,8 @@ renameProgram inputs mods =
                     Map.findWithDefault Nothing m.name inputs.trailingLoc,
                   allModuleNames = map (.name) mods,
                   currentModule = m,
+                  moduleImports =
+                    [(imp.importModule, imp.importItems) | AnnP imp _ _ <- m.imports],
                   macroDeclEnv = macroDeclEnv0,
                   macroExportEnv = macroExportEnv0,
                   macroDefTable = macroDefTable0,
@@ -1553,8 +1562,7 @@ validateQualified ctx loc origin m n arity
 -- qualified reference's target module is in scope at all (distinct from
 -- whether it exports the referenced name).
 importedModuleNames :: RenameCtx -> [Text]
-importedModuleNames ctx =
-  [imp.importModule | AnnP imp _ _ <- ctx.currentModule.imports]
+importedModuleNames ctx = map fst ctx.moduleImports
 
 -- | All modules that can provide @(name, arity)@ to the current module:
 -- the current module itself if it declares the name, plus every imported
@@ -1565,13 +1573,13 @@ visibleProviders ctx n arity =
         filter
           (== ctx.currentModule.name)
           (lookupDecl (n, arity) ctx.declEnv)
-      imports =
-        [ (imp.importModule, imp.importItems)
-        | AnnP imp _ _ <- ctx.currentModule.imports
-        ]
       importProviders =
         filter
-          (\mn -> any (\(imn, il) -> imn == mn && importListPermits n arity il) imports)
+          ( \mn ->
+              any
+                (\(imn, il) -> imn == mn && importListPermits n arity il)
+                ctx.moduleImports
+          )
           (lookupExport (n, arity) ctx.exportEnv)
    in -- Deduplicate: multiple declarations with the same name/arity in
       -- one module (e.g., overloaded function signatures) are not ambiguous.
@@ -1588,13 +1596,13 @@ visibleMacroProviders ctx n arity =
         filter
           (== ctx.currentModule.name)
           (lookupDecl (n, arity) ctx.macroDeclEnv)
-      imports =
-        [ (imp.importModule, imp.importItems)
-        | AnnP imp _ _ <- ctx.currentModule.imports
-        ]
       importProviders =
         filter
-          (\mn -> any (\(imn, il) -> imn == mn && importListPermitsMacro n arity il) imports)
+          ( \mn ->
+              any
+                (\(imn, il) -> imn == mn && importListPermitsMacro n arity il)
+                ctx.moduleImports
+          )
           (lookupExport (n, arity) ctx.macroExportEnv)
    in nub (ownProviders ++ importProviders)
 
@@ -2029,6 +2037,7 @@ buildQueryRenameEnv mods =
             currentTrailingLoc = Nothing,
             allModuleNames = map (.name) mods,
             currentModule = queryMod,
+            moduleImports = [(m.name, Nothing) | m <- mods],
             macroDeclEnv = buildMacroDeclEnv mods,
             macroExportEnv = buildMacroExportEnv mods,
             macroDefTable = buildMacroDefTable mods,
@@ -2109,8 +2118,8 @@ expandQueryGoalWith ::
   QueryRenameEnv ->
   Constraint ->
   Either [Diagnostic RenameError] [Term]
-expandQueryGoalWith (QueryRenameEnv ctx) (Constraint cname0 cargs0) =
-  let ((result, _warnings), errs) = runWriter (runWriterT (go [] cname0 cargs0))
+expandQueryGoalWith (QueryRenameEnv ctx0) (Constraint cname0 cargs0) =
+  let ((result, _warnings), errs) = runWriter (runWriterT (go ctx0 cname0 cargs0))
    in if null errs then Right result else Left errs
   where
     -- Structural expansion only — no 'renameTerm' involved, and no
@@ -2118,38 +2127,38 @@ expandQueryGoalWith (QueryRenameEnv ctx) (Constraint cname0 cargs0) =
     -- renames whatever single goal comes back exactly as it always
     -- has (goal name via its own export lookup, arguments via
     -- 'renameQueryArgsWith'), so a goal untouched by macros is
-    -- renamed once, not twice.
-    go :: [(Text, Text, Int, SourceLoc)] -> Name -> [Term] -> Rename [Term]
-    go chain cname cargs =
+    -- renamed once, not twice. Threads an updated 'ctx' — rather than
+    -- a parallel chain parameter — the same way 'expandHeadUse' and
+    -- 'expandBodyUse' do, so 'RenameCtx.macroChain' and 'emitErrorIn'
+    -- are the one chain representation and diagnostic path, not a
+    -- second copy local to this function.
+    go :: RenameCtx -> Name -> [Term] -> Rename [Term]
+    go ctx cname cargs =
       case classifyGoalName ctx cname (length cargs) of
-        AmbiguousGoalName ms ->
-          chainError chain (AmbiguousName (unqualifiedText cname) (length cargs) ms) >> pure []
+        AmbiguousGoalName ms -> do
+          let err = AmbiguousName (unqualifiedText cname) (length cargs) ms
+          emitErrorIn ctx (AnnP err queryTermLoc (Atom ""))
+          pure []
         IsMacro providerMod ->
           let n = unqualifiedText cname
               arity = length cargs
               key = (providerMod, n, arity)
-           in if key `elem` map (\(m, cn, ca, _) -> (m, cn, ca)) chain
+           in if key `elem` map (\(m, cn, ca, _) -> (m, cn, ca)) ctx.macroChain
                 then do
-                  chainError chain (MacroCycle (QualifiedName providerMod n) arity)
+                  let err = MacroCycle (QualifiedName providerMod n) arity
+                  emitErrorIn ctx (AnnP err queryTermLoc (Atom ""))
                   pure []
                 else case Map.lookup key ctx.macroDefTable of
                   Nothing -> pure []
                   Just def ->
-                    let chain' = (providerMod, n, arity, queryTermLoc) : chain
+                    let entry = (providerMod, n, arity, queryTermLoc)
+                        ctx' = ctx {macroChain = entry : ctx.macroChain}
                         goals = flattenConj (instantiateMacro queryTermLoc def cargs)
-                     in concat <$> traverse (expandGoalTerm chain') goals
+                     in concat <$> traverse (expandGoalTerm ctx') goals
         NotAMacro -> pure [CompoundTerm cname cargs]
-    expandGoalTerm chain t = case t of
-      CompoundTerm nm as -> go chain nm as
+    expandGoalTerm ctx t = case t of
+      CompoundTerm nm as -> go ctx nm as
       _ -> pure [t]
-    chainError chain e =
-      lift
-        ( tell
-            [ (noDiag (AnnP e queryTermLoc (Atom "")))
-                { diagContext = map renderMacroUse chain
-                }
-            ]
-        )
 
 {- ---------------------------------------------------------------------------
 Notes
