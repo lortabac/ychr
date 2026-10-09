@@ -32,6 +32,7 @@ module YCHR.Internal.Runtime.Monad
 where
 
 import Control.Monad.Trans.Reader (ReaderT, runReaderT)
+import Data.Array (Array)
 import Data.IORef
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
@@ -156,10 +157,11 @@ data SessionEnv = SessionEnv
     -- one; nothing writes to it after 'initSessionEnv', which already
     -- merges the query-time lambdas.
     procMap :: !(IORef ProcMap),
-    -- | The same procedures keyed by the index a resolved call target
-    -- carries ('YCHR.Internal.Interpreter.Slots.SCallExpr'), so a call
-    -- inside a compiled procedure reaches its callee without a
-    -- @Name@-keyed lookup. Immutable, and shared by a search fork.
+    -- | The same procedures in a boxed 'Data.Array', indexed by the
+    -- index a resolved call target carries
+    -- ('YCHR.Internal.Interpreter.Slots.SCallExpr'), so a call inside a
+    -- compiled procedure reaches its callee without a @Name@-keyed
+    -- lookup. Immutable, and shared by a search fork.
     --
     -- Deliberately /not/ strict, unlike the rest of this record: the
     -- table is only needed once a compiled call runs, and building it
@@ -168,11 +170,12 @@ data SessionEnv = SessionEnv
     -- invocation — never forces it, and the first session that does
     -- forces the program's shared thunk for every session after it.
     --
-    -- Keyed by the unwrapped index in a 'Map', not an @IntMap@; see
-    -- 'YCHR.Internal.Interpreter.Slots.SlotProgram' for why (MicroHs
-    -- does not inline the @Data.Bits@ work an @IntMap@ search is made
-    -- of, so an @IntMap@ lookup is the more expensive one there).
-    procEntries :: Map Int SlotProc,
+    -- An array, not a 'Map'; see
+    -- 'YCHR.Internal.Interpreter.Slots.SlotProgram' for why (it is the
+    -- one container that is fastest on both hosts, with a constant
+    -- lookup cost under MicroHs). Its bounds are dense:
+    -- @(0, n - 1)@, or @(0, -1)@ when the program has no procedures.
+    procEntries :: Array Int SlotProc,
     -- | Host-call registry.
     hostCalls :: !HostCallRegistry,
     -- | Deep-evaluator dispatch table for the @is@ operator.

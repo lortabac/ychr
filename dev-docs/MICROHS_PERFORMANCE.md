@@ -3,10 +3,11 @@
 `dev-docs/MICROHS_GAPS.md` records what stops YCHR from *building* under
 MicroHs. This document records what stops it from running *fast* there, with
 the measurements behind each claim and the options for fixing it. It began as
-a diagnosis only: options A, D and E are still just that. Option B and the
-`CallExpr` half of C.1 have since been implemented — their sections record what
-was built and what it measured — and C.7 was implemented and dropped for now,
-with a re-measurement to revisit after item 8.
+a diagnosis only: options A, D and E are still just that. Option B, the
+`CallExpr` half of C.1 and the procedure-table half of C.8 have since been
+implemented — their sections record what was built and what it measured — and
+C.7 was implemented and dropped for now, with a re-measurement to revisit on
+the item 8 baseline.
 
 Everything below was measured on 2026-10-05 against YCHR `d031947` (branch
 `mhs-optimization`) and MicroHs `f65d3c65`, on an AMD Ryzen AI 9 HX 370. The
@@ -16,7 +17,9 @@ Times are wall clock; most figures are single runs, and the ones used to judge
 an A/B (the `-flto` comparison of §7E) are medians of interleaved rounds.
 §7C.1's measurements were taken later, on 2026-10-08 on the same machine,
 against `5e2d5a6`; they interleave three rounds a side and use the runtime's
-counters, which are deterministic.
+counters, which are deterministic. §7C.8's were taken on 2026-10-09 against
+`716f4b6`, with the same interleaved GHC rounds and the same deterministic
+MicroHs counters.
 
 ## 1. How the numbers were taken
 
@@ -386,9 +389,11 @@ item names its evidence in §5.
    produces one, and `YCHR.Internal.VM.Closure` now asserts that before a
    program is built (see `dev-docs/INVARIANTS.md`).
 
-   **The table is a `Map Int`, not an `IntMap`, and that is the first measured
-   lesson of this item.** The first cut used `IntMap`, on the usual GHC
-   intuition, and made MicroHs **15 % slower** on `check` — the opposite of
+   **The table this item built was a `Map Int`, not an `IntMap`, and that is
+   the first measured lesson of this item** (item 8 later replaced it with the
+   array its own table picks; the lesson and the measurements stand). The first
+   cut used `IntMap`, on the usual GHC intuition, and made MicroHs **15 %
+   slower** on `check` — the opposite of
    every GHC measurement. A micro-benchmark isolated it: 2 000 000 lookups of
    pre-existing keys in a table of @n@ entries, with the key list forced
    identically in every run, so the difference is the lookup alone (`+RTS -v`):
@@ -585,15 +590,16 @@ item names its evidence in §5.
    and `PROJECT.md` item 3's `HostCall` half stays open; item 8's container
    choice is untouched by this result.
 
-   Parked rather than closed: item 8 puts the procedure table behind an
-   `Array Int SlotProc` and brings `Data.Array` into the build on its own
+   Parked rather than closed: item 8 has since put the procedure table behind
+   an `Array Int SlotProc` and brought `Data.Array` into the build on its own
    account, so this dispatch table should be built on top of it and re-measured
-   on the post-item-8 baseline before the result above is treated as final.
+   on the item 8 baseline before the result above is treated as final.
 
-8. **Back dense `Int`-keyed tables with `Data.Array`.** Item 1's container
-   table is the evidence; the row to act on is the array's. In summary, per
-   2 000 000 lookups of pre-existing keys with the key list forced identically
-   in every arm (so the figure is the lookup alone):
+8. **Back dense `Int`-keyed tables with `Data.Array`. — the procedure table
+   implemented.** Item 1's container table is the evidence; the row to act on
+   is the array's. In summary, per 2 000 000 lookups of pre-existing keys with
+   the key list forced identically in every arm (so the figure is the lookup
+   alone):
 
    | table | MicroHs reductions/lookup n = 50 | n = 1000 | GHC bytes/2 M | GHC wall n = 1000 |
    |---|---:|---:|---:|---:|
@@ -604,9 +610,11 @@ item names its evidence in §5.
 
    An array is the fastest on **both** hosts and flat in `n`, so unlike the
    `IntMap`/`Map Int` choice it does not make the two builds disagree. `array`
-   is available to both: GHC boot-provides `array-0.5.8.0`, and MicroHs bundles
-   `Data.Array` (`array-mhs` is already in `tools/mhs-packages.txt`); it does
-   have to be added to the library's `build-depends`. A standalone `mhs`
+   is available to both: GHC boot-provides it, and MicroHs bundles `Data.Array`
+   (`array-mhs` is already in `tools/mhs-packages.txt`). It is now in the
+   package's `build-depends` under the name `array`, which both builds accept:
+   MicroCabal's `mhsPatchDepends` rewrites that name to `array-mhs` for the
+   MicroHs backend, so no `impl(mhs)` conditional is needed. A standalone `mhs`
    program using `Data.Array` compiles today, which is how the numbers above
    were taken.
 
@@ -614,34 +622,79 @@ item names its evidence in §5.
    `0 .. n - 1`:
 
    - `SlotProgram.slotProcEntries :: Array Int SlotProc`. `lowerProgram` builds
-     it with `listArray`; `Interpreter.callProcAt` reads it with `(!)`;
-     `Slots.addProcedures` rebuilds it as `elems` of the base array followed by
-     the extras' entries — extras arrive only for queries that lift lambdas, so
-     the `O(n)` rebuild is on a cold path, and the no-extras case returns the
-     program unchanged as it does today. Its `base` index is
-     `snd (bounds arr) + 1` rather than the `Map.lookupMax` the map needs to
-     stay correct if a program's keys were ever sparse.
-   - `SessionEnv.procEntries` becomes the array; nothing else moves.
-     `slotProcedures` (name-keyed) stays a `Map`.
+     it with `listArray`, over the same procedure thunks the name-keyed map
+     holds; `Interpreter.callProcAt` reads it with `(!)`; `Slots.addProcedures`
+     rebuilds it as `elems` of the base array followed by the extras' entries —
+     extras arrive only for queries that lift lambdas, so the `O(n)` rebuild is
+     on a cold path, and the no-extras case returns the program unchanged as it
+     does today. Its `base` index is `snd (bounds arr) + 1` rather than the
+     `Map.lookupMax` the map needed to stay correct if a program's keys were
+     ever sparse, and an empty program's bounds are `(0, -1)`.
+   - `SessionEnv.procEntries` is the array; nothing else moved.
+     `slotProcedures` (name-keyed) stays a `Map`. The field is still lazy, so a
+     run that makes no compiled call (`repl --quiet` startup, a compile-only
+     invocation) never forces it, and the array's elements stay thunks.
+   - `callProcAt`'s index read keeps its "stale procedure index" report behind
+     an `inRange (bounds arr)` check: the array read alone would be an
+     uninformative out-of-range error. The bounds come from the same
+     `SlotProgram` the AST was lowered from, so the check can only be false for
+     a stale index.
 
-   The larger version is item 2's array-backed locals, and this measurement is
-   the argument for it: `envValues` and `insertVal` are ~16 % of the profiled
-   entries, and `IntMap` is the container this table says is worst under
-   MicroHs. It needs one addition first: an array must be sized before the body
-   runs, and slots are handed out as the walk meets binders, so `SlotProc` must
-   carry the number of slots the body uses (the slot phase counts them; only
-   the arity is carried today). Slots are dense from `0`, but a slot may be
-   value-bound or id-bound, so the environment array needs one entry per slot
-   with enough shape to hold either — `Maybe Value`/`Maybe SuspensionId`, or one
-   array of a sum type, rather than the two `IntMap`s.
+   Measured as item 1. GHC figures are criterion means, three interleaved rounds
+   a side, medians of the per-round means (the percentages use the unrounded
+   medians, so they need not recompute from the rounded figures shown); MicroHs
+   figures are `+RTS -v`
+   reductions, one run a side (the counters are deterministic — a second round
+   repeats every figure exactly), with both binaries invoked through the same
+   symlink path because the counter includes a little startup work on the
+   argument string, so two binaries called under different paths differ in
+   figures that have nothing to do with the change; allocation is
+   `check typechecker/*.chr` under `+RTS -s`:
 
-   Measure as item 1: `make bench` against a parent-commit worktree, three
-   interleaved rounds a side, plus the MicroHs `+RTS -v` counters. The
-   procedure table is read once per compiled call, so watch
-   `typecheck/pairs_library` and `fib`; the environment is read and written per
-   variable access, so the locals version wants `sum_list_test`, `leq_closure`
-   and the type-checker workload. `make test` must pass unchanged — this is a
-   container change and no observable behaviour may move.
+   | workload | before | after | change |
+   |---|---:|---:|---:|
+   | GHC `typecheck/pairs_library` | 119.90 ms | 117.97 ms | −1.61 % |
+   | GHC `fib` | 319.0 µs | 311.3 µs | −2.41 % |
+   | GHC `leq_closure` | 6.550 ms | 6.495 ms | −0.85 % |
+   | GHC `search_label` | 1.668 ms | 1.617 ms | −3.07 % |
+   | GHC `search_label_alt` | 1.622 ms | 1.565 ms | −3.48 % |
+   | GHC `search_generate` | 25.51 ms | 24.83 ms | −2.68 % |
+   | GHC `search_deep` | 42.85 ms | 42.59 ms | −0.62 % |
+   | GHC `graph_test` | 40.8 µs | 38.9 µs | −4.68 % |
+   | GHC allocation, `check typechecker/*.chr` | 11.6239 GB | 11.5938 GB | −30 MB (−0.26 %) |
+   | MicroHs `check pairs_library` reductions | 1 091 211 048 | 1 080 123 725 | −1.02 % |
+   | MicroHs `check leq` reductions | 356 383 161 | 352 501 266 | −1.09 % |
+   | MicroHs `run --no-check` leq reductions | 3 781 323 | 3 768 588 | −0.34 % |
+   | MicroHs `run --no-check` fib(10) reductions | 7 542 098 | 7 523 580 | −0.25 % |
+   | MicroHs `compile -t vm typechecker/*.chr` reductions | 507 057 498 | 507 057 353 | −145 (−0.00003 %) |
+   | MicroHs `repl --quiet` reductions | 8 805 690 | 8 805 690 | 0.00 % |
+
+   The wins are where the table is read: `check pairs_library` and `check leq`
+   each lose about 1 % of their reductions, the compiled-call-heavy GHC
+   benchmarks (`fib`, `search_label`, `search_label_alt`, `search_generate`)
+   move down −2.4 % to −3.5 %, and `graph_test` is cleanly separated at
+   −4.7 %. `leq_closure` (−0.9 %) and `search_deep` (−0.6 %) overlap their own
+   spread, as do the four sub-20 µs benchmarks (`guard`, `leq`, `sum_list_test`,
+   `lambda_test`). The arms that make no compiled call or almost none are flat:
+   `repl --quiet` is bit-identical and `compile` moves by 145 reductions in a
+   507 M run, which is the lazy field doing its job. Allocation drops 30 MB per
+   `check typechecker/*.chr`, the map's per-lookup allocation disappearing. No
+   workload regresses outside its spread, and `make test` passes unchanged:
+   this is a container change and no observable behaviour moves.
+
+   Not attempted here: the larger version, item 2's array-backed locals. This
+   measurement is still the argument for it: `envValues` and `insertVal` are
+   ~16 % of the profiled entries, and `IntMap` is the container this table says
+   is worst under MicroHs. It needs one addition first: an array must be sized
+   before the body runs, and slots are handed out as the walk meets binders, so
+   `SlotProc` must carry the number of slots the body uses (the slot phase
+   counts them; only the arity is carried today). Slots are dense from `0`, but
+   a slot may be value-bound or id-bound, so the environment array needs one
+   entry per slot with enough shape to hold either — `Maybe Value` /
+   `Maybe SuspensionId`, or one array of a sum type, rather than the two
+   `IntMap`s. The environment is read and written per variable access rather
+   than per call, so its A/B is the one that decides, and it wants
+   `sum_list_test`, `leq_closure` and the type-checker workload.
 
 Items 1–3 and 7–8 also help the GHC runtime, which is the benchmark of record;
 4–6 are mostly MicroHs-facing. Any of them needs `make bench` and a `make test`
@@ -684,10 +737,11 @@ The `unix_x86` target that already exists in `mhs.conf`
 - Is `IntMap` the right structure for the interpreter's local environment? The
   container measurements are in §7C.1 and item 8; they say a boxed `Data.Array`
   is the candidate on both hosts, and item 8 says what an array-backed `Env`
-  needs first (a slot count on `SlotProc`) and how to judge it. What is still
-  open is whether the environment pays as well as the procedure table does: it
-  is touched per variable access rather than per call, so its A/B is the one
-  that decides, and it should be run separately from the procedure-table change.
+  needs first (a slot count on `SlotProc`) and how to judge it. Item 8's
+  procedure-table half is no longer open — it is implemented and measured — but
+  the question about the environment is: it is touched per variable access
+  rather than per call, so its A/B is the one that decides, and it should be run
+  separately from the procedure-table change.
 
 ## 9. Reproducing
 
