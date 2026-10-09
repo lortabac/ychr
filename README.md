@@ -158,10 +158,6 @@ starting with
 [PROJECT.md](https://github.com/lortabac/ychr/blob/master/dev-docs/PROJECT.md)
 (architecture and compilation scheme).
 
-## AI disclosure
-
-This project has been developed with the help of large language models.
-
 ## License
 
 BSD-3-Clause
