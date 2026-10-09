@@ -39,6 +39,7 @@ static type checker is specified in [type-system.md](type-system.md).
 | `:- function` / `:- open_function` / `:- class` / `:- open_class` | [Functions](#functions) |
 | `:- extend_function` / `:- extend_class` / `:- extend_class_type` | [Declaration placement](#declaration-placement) |
 | `:- inline Decls.` | [Inlining](#inlining) |
+| `:- constraint_use Decls.` | [Constraint use](#constraint-use) |
 
 Declaration directives take comma-separated lists:
 `:- chr_constraint a/1, b/2.` Unknown directives are dropped silently
@@ -183,6 +184,37 @@ scope at the concrete instantiation of a type variable
 ([type-system.md](type-system.md)). A constraint may not share name
 and arity with a function-like declaration in the same module
 (`YCHR-16016`).
+
+## Constraint use
+
+`:- constraint_use Tag(Name/Arity), ...` declares which rule-head
+position(s) a constraint's occurrences may appear in — see
+[kept and removed](type-system.md#constraint-use-checking) for what
+those positions mean:
+
+```prolog
+:- constraint_use fact(log/2), event(click/1), tell_only(alt/1).
+```
+
+| Tag | Allowed occurrences | Typical use |
+|---|---|---|
+| `any` (default) | kept, removed, or none | ordinary constraints; writing it is only documentation |
+| `fact` | kept only | an accumulated or derived fact, never retracted by a rule |
+| `event` | removed only | a one-shot signal, consumed exactly once |
+| `tell_only` | none at all | told but never matched, e.g. a search driver's internal constraint |
+
+Each entry names a constraint declared `:- chr_constraint` in the
+*same* module: `:- constraint_use` does not reach across modules the
+way `:- extend_function` does, so there is exactly one declaration
+site per constraint. A `Name/Arity` not declared in the module is
+`ConstraintUseUnknownConstraint`, `YCHR-16025`; naming one constraint
+more than once — under the same tag or different tags — is
+`ConstraintUseConflictingDeclaration`, `YCHR-16026`. A constraint with
+no `:- constraint_use` entry defaults to `any`.
+
+The directive only records the policy. Checking rule heads against it
+is a type-checking feature, specified in
+[type-system.md](type-system.md#constraint-use-checking).
 
 ## Functions
 

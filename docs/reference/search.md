@@ -91,6 +91,13 @@ for a library to nominate a constraint to the runtime would replace it
 without changing the surface language. Everything else in the module
 is ordinary CHR and ordinary functions, defined in the library itself.
 
+`alt/1` never appears in a rule head anywhere in this library, by
+convention: nothing today stops a rule — here or in an importing
+module — from matching on it by accident. It is the motivating case
+for the proposed `:- constraint_use tell_only(...)` declaration (see
+[type-system.md](type-system.md#constraint-use-checking)), which would
+make that convention a checked compile-time guarantee.
+
 
 ## Scope: search runs in a sub-session
 
