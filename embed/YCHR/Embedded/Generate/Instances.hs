@@ -41,6 +41,8 @@ import YCHR.Internal.Parsed
     Head (..),
     Import (..),
     InlineDecl (..),
+    MacroDef (..),
+    MacroExportDeclBody (..),
     Module (..),
     OpDecl (..),
     Rule (..),
@@ -196,6 +198,10 @@ deriving instance Generic TypeExportDeclBody
 
 deriving instance Generic InlineDecl
 
+deriving instance Generic MacroDef
+
+deriving instance Generic MacroExportDeclBody
+
 deriving instance Generic FunctionDeclKind
 
 deriving instance Generic OpDecl
@@ -229,6 +235,12 @@ instance ToCode TypeExportDeclBody where
   toCode = genericToCode
 
 instance ToCode InlineDecl where
+  toCode = genericToCode
+
+instance ToCode MacroDef where
+  toCode = genericToCode
+
+instance ToCode MacroExportDeclBody where
   toCode = genericToCode
 
 instance ToCode FunctionDeclKind where

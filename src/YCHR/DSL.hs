@@ -161,6 +161,7 @@ module' name =
       extensions = [],
       classExtensions = [],
       inlines = [],
+      macros = [],
       exports = Nothing
     }
 

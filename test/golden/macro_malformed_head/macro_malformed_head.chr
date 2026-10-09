@@ -1,0 +1,3 @@
+:- module(macro_malformed_head).
+:- chr_constraint a/1.
+:- macro foo(X, X) ---> a(X).

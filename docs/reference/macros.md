@@ -1,6 +1,6 @@
 # YCHR Macro Specification
 
-**Status: design draft, not implemented.**
+**Status: implemented.**
 
 A *macro* is a named abbreviation for a conjunction of head
 constraints or body goals. A use of the macro is replaced by its
@@ -53,8 +53,9 @@ A macro is recognized by name and arity in **goal positions** only:
 
 Elsewhere a macro name is an error (`MacroOutsideGoalPosition`): in a
 guard, inside an argument in an expression position, or as a function
-reference. The exceptions are `quote/1` and rule-head *arguments*:
-both are opaque data, so `count(a, b)` there is an ordinary compound.
+reference. The exceptions are `quote/1` and rule-head or
+equation-pattern *arguments*: all three are opaque data, so
+`count(a, b)` there is an ordinary compound.
 
 Function equations have no goal positions, so macros do not apply
 inside them.
@@ -160,38 +161,64 @@ and its own arguments resolves the same way at every use site.
 
 ## Diagnostics
 
-Every diagnostic raised inside an expansion, including those from
-renaming, the type checker and validity checks, carries the macro
-chain that produced the code, with the location of each use:
+Every diagnostic raised while *expanding* a macro, or while *renaming*
+the code an expansion produced, carries the macro-expansion chain that
+produced it, with the location of each use, innermost first:
 
 ```
-graph.chr:7:12: error: [YCHR-20009] ...
-  in the expansion of aggregates:count/2, used at graph.chr:4:3
-  in the expansion of graph:in_degree/2, used at graph.chr:7:12
+/path/graph.chr:7:12: YCHR-20009
+Module 'aggregates' does not export 'count_spec/0'
+  Hint: check the spelling and the export list of 'aggregates'
+  in the expansion of aggregates:count/2, used at /path/graph.chr:7:12
+  in the expansion of graph:in_degree/2, used at /path/graph.chr:7:12
 ```
 
-New errors (codes are assigned at implementation):
+The chain covers expansion-time errors (the ones below) and renaming
+errors and warnings (`YCHR-20001`–`YCHR-20022`, `YCHR-20101`,
+`YCHR-20102`) reached while renaming expanded code. Resolve, Desugar,
+and the optional type checker have no per-goal provenance to attach a
+chain to, so a diagnostic from one of those phases about expanded code
+carries no chain — it is anchored at the outermost use site, the same
+location every pre-expansion diagnostic there would have used.
 
-| Name | Condition |
-|---|---|
-| `MalformedMacroHead` | Head is not an atom or a compound of distinct variables. |
-| `DuplicateMacro` | Two definitions of the same `Name/Arity` in one module. |
-| `MacroNameCollision` | A macro shares `Name/Arity` with a constraint or function of the same module. |
-| `MacroOutsideGoalPosition` | A macro name used outside a goal position (and outside `quote/1` and head arguments). |
-| `MacroCycle` | A macro's expansion requires expanding itself. |
-| `MacroBodyNotExported` | A body names `M:x` in the macro's own module `M`, and `M` does not export `x`. |
+New errors:
 
-New warning: `UnusedMacroParameter`.
+| Name | Code | Condition |
+|---|---|---|
+| `MalformedMacroHead` | YCHR-15021 | Head is not an atom or a compound of distinct variables, naming neither a reserved symbol (`,`, `;`, `\`, `\|`, `->`, `=`, `is`, `true`, `quote`, `fun`, `$call`) nor a qualified name. |
+| `DuplicateMacro` | YCHR-20023 | Two definitions of the same `Name/Arity` in one module. |
+| `MacroNameCollision` | YCHR-20024 | A macro shares `Name/Arity` with a constraint or function of the same module. |
+| `MacroOutsideGoalPosition` | YCHR-20025 | A macro name used outside a goal position (and outside `quote/1` and head/equation arguments). |
+| `MacroCycle` | YCHR-20026 | A macro's expansion requires expanding itself. |
+| `MacroBodyNotExported` | YCHR-20027 | A body names `M:x` in the macro's own module `M`, and `M` does not declare and export `x`. |
+| `MacroInvalidInHead` | YCHR-20028 | A head expansion is not a conjunction of constraints (see [Validity](#expansion)). |
+
+New warning: `UnusedMacroParameter` (YCHR-20105).
 
 
 ## Pipeline placement
 
-Expansion runs after Collect, which resolves the import closure, and
-before Rename. It needs the same visibility environment as Rename to
-resolve macro names, so it is built from the same module tables. Query
-goals are expanded on the query renaming path
-(`renameQueryGoalsWith`), with the visibility a goal's constraint
-names already have.
+Expansion is driven from the renamer itself, at each of its goal
+positions (a rule head conjunct, a rule-body or disjunction-branch
+goal, a query goal): the renamer's existing per-module visibility
+tables already answer "is this name a macro, and if so which module's,"
+so building a separate visibility environment for a standalone
+pre-pass would only duplicate them. Observably this is the same as a
+pre-pass that runs between Collect and Rename and then re-enters
+Rename on its output: an expansion's replacement is renamed with the
+visibility of the module whose code it replaced, nested macro uses are
+expanded by the same mechanism before the renamer moves past them, and
+the rest of the pipeline (resolving, desugaring, type checking,
+compilation) sees only the expanded program. A backend never sees a
+macro.
+
+The single-goal entry points (`ychr run -g`, `gen-driver`,
+`YCHR.Run.runProgramWithGoal`) parse a goal as exactly one
+`Constraint` rather than a conjunction. A macro used there is expanded
+the same way; if the expansion is exactly one goal it runs as any
+other goal would, and if it expands to more than one goal (or to
+none) the goal is rejected with a hint to use the REPL or the
+multi-goal query API instead.
 
 
 ## Not in this version

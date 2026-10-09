@@ -1,0 +1,5 @@
+:- module(macro_body_not_exported, [macro(foo/1)]).
+:- chr_constraint hidden/1.
+:- chr_constraint r/1.
+:- macro foo(X) ---> macro_body_not_exported:hidden(X).
+r(X) <=> foo(X).

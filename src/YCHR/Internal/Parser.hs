@@ -121,7 +121,8 @@ builtinOps =
           (P.Fx, "extend_class_type"),
           (P.Fx, "extend_class"),
           (P.Fx, "extend_function"),
-          (P.Fx, "inline")
+          (P.Fx, "inline"),
+          (P.Fx, "macro")
         ]
       ),
       (1190, [(P.Xfx, "@")]),
@@ -567,6 +568,7 @@ data Directive
   | DirExtendFunctionEqn (AnnP FunctionEquation)
   | DirExtendClassEqn (AnnP FunctionEquation)
   | DirTypeDecl [Ann TypeDefinition]
+  | DirMacro (AnnP MacroDef)
   | DirOther
 
 -- | Internal module item type.
@@ -653,6 +655,13 @@ data ParseValidationError
     -- declaration. Only a function can be a refinement predicate. The
     -- declaration is dropped.
     RefiningOnConstraint
+  | -- | A @:- macro Name(...) ---> Body@ directive's head is not an
+    -- atom or a compound of distinct variables: it has a non-variable
+    -- or wildcard parameter, a repeated parameter, a qualified name
+    -- (@m:f(...)@), or a name that is a control symbol or otherwise
+    -- reserved (@,@, @;@, @\\@, @|@, @->@, @=@, @is@, @true@, @quote@,
+    -- @fun@, @'$call'@). The macro definition is dropped.
+    MalformedMacroHead
   deriving (Eq, Show)
 
 -- | Convert a list of top-level PExpr terms to a 'Module', along with
@@ -686,6 +695,7 @@ convertModule defaultName terms =
       modExtensions_ = [e | ItemDirective (DirExtendFunctionEqn e) <- items]
       modClassExtensions_ = [e | ItemDirective (DirExtendClassEqn e) <- items]
       modInlines_ = concat [ds | DirInlineDecl ds <- dirs]
+      modMacros_ = [d | ItemDirective (DirMacro d) <- items]
       openNames =
         Set.fromList $
           [fd.name | DirOpenFunctionDecl ds <- dirs, Ann (FunctionDecl fd) _ <- ds]
@@ -708,6 +718,7 @@ convertModule defaultName terms =
             extensions = modExtensions_,
             classExtensions = modClassExtensions_,
             inlines = modInlines_,
+            macros = modMacros_,
             exports = modExports_
           }
    in (mod_, itemErrors ++ contiguityErrors ++ duplicateModuleHeaderErrors)
@@ -887,6 +898,12 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
     case convertOpaqueTypeDefinition typeBody of
       (Just annDef, errs) -> (DirTypeDecl [annDef], errs)
       (Nothing, errs) -> (DirOther, errs)
+  -- :- macro Name(V1, ..., Vn) ---> Body.
+  -- Parsed as prefix op: Compound "macro" [Compound "--->" [head, body]]
+  Compound "macro" [macroBody] ->
+    case convertMacroDefinition macroBody of
+      (Just annDef, errs) -> (DirMacro annDef, errs)
+      (Nothing, errs) -> (DirOther, errs)
   -- Unknown directives (any other @:- name(...)@ shape).
   _ -> (DirOther, [])
 convertDirective _ = (DirOther, [])
@@ -991,6 +1008,8 @@ convertExportItem (Ann pexpr loc) = case pexpr of
         (ConstraintDecl (ConstraintDeclBody name (fromInteger arity) Nothing Nothing)),
       []
     )
+  Compound "macro" [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _] ->
+    (Just (MacroExportDecl (MacroExportDeclBody name (fromInteger arity))), [])
   Compound "op" [Ann (P.Int fix) _, Ann tyExpr _, Ann nameExpr _]
     | Just ty <- parseOpTypeFromPExpr tyExpr,
       Just name <- atomName nameExpr ->
@@ -1341,6 +1360,68 @@ convertOpaqueTypeDefinition (Ann pexpr loc) = case pexpr of
   where
     mk tname tvars =
       Ann (TypeDefinition (Unqualified tname) tvars Opaque loc) loc
+
+-- | Reserved macro-head names: control-flow and expression symbols the
+-- rest of the language parses specially. A macro head using one of
+-- these would be indistinguishable from the built-in form at every use
+-- site, so it is rejected at definition time rather than left to
+-- collide silently. Mirrors 'YCHR.Internal.Rename.Types.reservedSymbolSet'
+-- plus the conjunction\/disjunction\/guard operators, which that set
+-- does not need to cover because the renamer never resolves a bare
+-- @,@\/@;@\/@\\@\/@|@ as a callable name.
+reservedMacroHeadNames :: Set.Set Text
+reservedMacroHeadNames =
+  Set.fromList
+    [",", ";", "\\", "|", "->", "=", "is", "true", "quote", "fun", "$call", ":"]
+
+-- | Convert a @:- macro Name(V1, ..., Vn) ---> Body@ directive's body
+-- (the @Compound \"--->\" [head, body]@ term the @macro@ prefix
+-- operator wraps) to a 'MacroDef'. The head must be an atom or a
+-- compound of distinct variables, naming neither a reserved symbol nor
+-- a qualified name ('reservedMacroHeadNames' includes @\":\"@, so
+-- @m:f(...)@ — which parses as @Compound \":\" [...]@ — is rejected
+-- there in one error, rather than falling through to have its two
+-- operands independently rejected as malformed parameters); any other
+-- shape is 'MalformedMacroHead'. The macro's own body is kept exactly
+-- as written — it is not checked here, beyond parsing it as an
+-- ordinary 'Term' — since whether an expansion is valid depends on
+-- where it is used (see "YCHR.Internal.Rename.Macro").
+convertMacroDefinition ::
+  Ann PExpr -> (Maybe (AnnP MacroDef), [AnnP ParseValidationError])
+convertMacroDefinition (Ann pexpr loc) = case pexpr of
+  Compound "--->" [macroHead, macroBody] -> case macroHeadShape macroHead.node of
+    Nothing -> (Nothing, [AnnP MalformedMacroHead loc pexpr])
+    Just (mname, rawParams)
+      | Set.member mname reservedMacroHeadNames ->
+          (Nothing, [AnnP MalformedMacroHead loc pexpr])
+      | otherwise -> case validateMacroParams rawParams of
+          Left errs -> (Nothing, errs)
+          Right params ->
+            (Just (AnnP (MacroDef mname params (convertTerm macroBody)) loc pexpr), [])
+  _ -> (Nothing, [AnnP MalformedMacroHead loc pexpr])
+  where
+    macroHeadShape (Atom n) = Just (n, [])
+    macroHeadShape (Compound n vars) = Just (n, vars)
+    macroHeadShape _ = Nothing
+
+-- | Validate a macro head's parameter list: every parameter must be a
+-- distinct variable. @_@ (the anonymous wildcard) is explicitly
+-- disallowed as a parameter, matching the language reference. Any
+-- non-variable parameter, or a repeated one, is rejected the same way
+-- as a malformed head: dropping just the offending parameter would
+-- change the macro's declared arity relative to what the user wrote.
+validateMacroParams ::
+  [Ann PExpr] -> Either [AnnP ParseValidationError] [Text]
+validateMacroParams params = case go Set.empty params of
+  [] -> Right [v | Ann (Var v) _ <- params]
+  errs -> Left errs
+  where
+    go _ [] = []
+    go seen (Ann p ploc : rest) = case p of
+      Var v
+        | Set.member v seen -> AnnP MalformedMacroHead ploc p : go seen rest
+        | otherwise -> go (Set.insert v seen) rest
+      _ -> AnnP MalformedMacroHead ploc p : go seen rest
 
 -- | Convert a PExpr to a 'DataConstructor'. Returns 'Left' if the
 -- constructor or any of its argument types is malformed.

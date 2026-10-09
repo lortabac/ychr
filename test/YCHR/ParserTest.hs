@@ -276,7 +276,57 @@ directiveTests =
                     Nothing
                     Nothing
                 )
-            ]
+            ],
+      testCase "macro nullary head, single goal body" $
+        (map (.node) . (.macros)) <$> p ":- macro foo ---> bar."
+          @?= Right [MacroDef "foo" [] (CompoundTerm (Unqualified "bar") [])],
+      testCase "macro with parameters, single-compound body" $
+        (map (.node) . (.macros))
+          <$> p ":- macro in_degree(N, C) ---> count(edge(_, N), C)."
+          @?= Right
+            [ MacroDef
+                "in_degree"
+                ["N", "C"]
+                ( CompoundTerm
+                    (Unqualified "count")
+                    [ CompoundTerm (Unqualified "edge") [Wildcard, VarTerm "N"],
+                      VarTerm "C"
+                    ]
+                )
+            ],
+      testCase "macro with a conjunction body" $
+        (map (.node) . (.macros)) <$> p ":- macro both(X) ---> (a(X), b(X))."
+          @?= Right
+            [ MacroDef
+                "both"
+                ["X"]
+                ( CompoundTerm
+                    (Unqualified ",")
+                    [ CompoundTerm (Unqualified "a") [VarTerm "X"],
+                      CompoundTerm (Unqualified "b") [VarTerm "X"]
+                    ]
+                )
+            ],
+      testCase "macro(n/a) in export list" $
+        fmap (.node) . (.exports) <$> p ":- module(m, [macro(foo/2)])."
+          @?= Right (Just [MacroExportDecl (MacroExportDeclBody "foo" 2)]),
+      testCase "macro(n/a) in use_module import list" $
+        case p ":- use_module(agg, [macro(count/2)])." of
+          Right m -> case m.imports of
+            [AnnP (ModuleImport "agg" (Just decls)) _ _] ->
+              decls @?= [MacroExportDecl (MacroExportDeclBody "count" 2)]
+            other -> assertFailure ("unexpected imports: " ++ show other)
+          Left err -> assertFailure ("parse failed: " ++ show err),
+      testCase "macro head '_' parameter is rejected" $
+        pErrs ":- macro foo(_) ---> true." @?= Right [MalformedMacroHead],
+      testCase "macro head duplicate parameter is rejected" $
+        pErrs ":- macro foo(X, X) ---> true." @?= Right [MalformedMacroHead],
+      testCase "macro head non-variable parameter is rejected" $
+        pErrs ":- macro foo(1) ---> true." @?= Right [MalformedMacroHead],
+      testCase "macro head qualified name is rejected" $
+        pErrs ":- macro m:foo(X) ---> true." @?= Right [MalformedMacroHead],
+      testCase "macro head reserved name is rejected" $
+        pErrs ":- macro is(X, Y) ---> true." @?= Right [MalformedMacroHead]
     ]
 
 -- ---------------------------------------------------------------------------
@@ -783,6 +833,7 @@ moduleTests =
                   extensions = [],
                   classExtensions = [],
                   inlines = [],
+                  macros = [],
                   exports = Just (noAnnP [])
                 }
             ),

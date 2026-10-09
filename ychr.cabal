@@ -421,6 +421,7 @@ library
                     , YCHR.Internal.PExpr
                     , YCHR.Internal.Pretty
                     , YCHR.Internal.Rename
+                    , YCHR.Internal.Rename.Macro
                     , YCHR.Internal.Rename.Types
                     , YCHR.Internal.StdLib
                     , YCHR.Internal.Types

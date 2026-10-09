@@ -1,0 +1,3 @@
+:- module(macro_name_collision).
+:- chr_constraint foo/1.
+:- macro foo(X) ---> true.

@@ -21,6 +21,7 @@ Conventions for these pages: [`dev-docs/DOC_CONVENTIONS.md`](../dev-docs/DOC_CON
 ## Reference
 
 - [Language](reference/language.md) — syntax, modules, functions, evaluation, host calls.
+- [Macros](reference/macros.md) — `:- macro`, compile-time term rewriting.
 - [Type system](reference/type-system.md)
 - [Search](reference/search.md) — `library(search)`
 - [REPL](reference/repl.md)

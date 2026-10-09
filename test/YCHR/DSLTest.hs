@@ -134,6 +134,7 @@ moduleTests =
           extensions = [],
           classExtensions = [],
           inlines = [],
+          macros = [],
           exports = Nothing
         }
 
@@ -562,6 +563,7 @@ integrationTests =
               extensions = [],
               classExtensions = [],
               inlines = [],
+              macros = [],
               exports = Nothing
             },
       testCase "logicModule structure" $
@@ -592,6 +594,7 @@ integrationTests =
               extensions = [],
               classExtensions = [],
               inlines = [],
+              macros = [],
               exports = Nothing
             }
     ]

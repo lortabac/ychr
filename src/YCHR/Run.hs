@@ -116,7 +116,12 @@ import YCHR.Internal.Parser
     parseQueryWith,
   )
 import YCHR.Internal.Pretty (prettyPExprSrc, prettyTerm)
-import YCHR.Internal.Rename (RenameWarning, renameQueryArgsWith, renameQueryGoalsWith)
+import YCHR.Internal.Rename
+  ( RenameWarning,
+    expandQueryGoalWith,
+    renameQueryArgsWith,
+    renameQueryGoalsWith,
+  )
 import YCHR.Internal.Resolve (ResolveError, termToExpr)
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Runtime.Error
@@ -324,14 +329,24 @@ prepareGoal cp src = case parseConstraintWith cp.opTable "<query>" src of
 -- | 'prepareGoal' minus the parse: canonicalize a goal already in term
 -- form. Throws 'RenameErrors'.
 prepareGoalTerm :: CompiledProgram -> Constraint -> IO (Constraint, [Warning])
-prepareGoalTerm cp (Constraint cname cargs) = do
-  (renamedArgs, ws) <-
-    either
-      (throwIO . RenameErrors)
-      pure
-      (renameQueryArgsWith cp.queryRenameEnv cargs)
-  let warnings = [RenameWarnings ws | not (null ws)]
-  pure (Constraint cname renamedArgs, warnings)
+prepareGoalTerm cp original@(Constraint cname0 cargs0) = do
+  expanded <-
+    either (throwIO . RenameErrors) pure (expandQueryGoalWith cp.queryRenameEnv original)
+  case expanded of
+    [CompoundTerm cname cargs] -> do
+      (renamedArgs, ws) <-
+        either
+          (throwIO . RenameErrors)
+          pure
+          (renameQueryArgsWith cp.queryRenameEnv cargs)
+      let warnings = [RenameWarnings ws | not (null ws)]
+      pure (Constraint cname renamedArgs, warnings)
+    -- A macro expanding to a conjunction (or to zero goals, or to a
+    -- bare variable/literal) cannot be represented as a single
+    -- 'Constraint'. The single-goal entry points parse exactly one
+    -- constraint; reject with a hint toward the multi-goal API. The
+    -- un-expanded original name/arity is what the message names.
+    _ -> throwIO (GoalNotAConstraint (Constraint cname0 cargs0) MacroExpandsToConjunction)
 
 -- | Turn a 'MalformedConstraint' goal (bare literal, variable, wildcard)
 -- into a 0-arity goal named after the term, so name resolution rejects it
