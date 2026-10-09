@@ -5,7 +5,8 @@ MicroHs. This document records what stops it from running *fast* there, with
 the measurements behind each claim and the options for fixing it. It began as
 a diagnosis only: options A, D and E are still just that. Option B and the
 `CallExpr` half of C.1 have since been implemented — their sections record what
-was built and what it measured.
+was built and what it measured — and C.7 was implemented and dropped for now,
+with a re-measurement to revisit after item 8.
 
 Everything below was measured on 2026-10-05 against YCHR `d031947` (branch
 `mhs-optimization`) and MicroHs `f65d3c65`, on an AMD Ryzen AI 9 HX 370. The
@@ -456,10 +457,9 @@ item names its evidence in §5.
 
    Not attempted here: indexing the host-call registry and keying the
    `evaluables`/`callables` tables by index rather than by `Name`. The first is
-   item 7 below, with the design and the measurements that make it worth
-   another look; the second is the smaller, still-unclaimed remainder — one
-   `Map` lookup per `is` and `'$call'` dispatch today, and `PROJECT.md` item 3's
-   scope names them.
+   item 7 below, which has since been built and dropped on measurement; the
+   second is the smaller, still-unclaimed remainder — one `Map` lookup per `is`
+   and `'$call'` dispatch today, and `PROJECT.md` item 3's scope names them.
 2. **Array-based locals.** The slot phase already numbers every local from one
    per-procedure counter. Let `SlotProc` carry its slot count and back `Env`
    with a single mutable array written in place, instead of two `IntMap`s
@@ -481,59 +481,114 @@ item names its evidence in §5.
    only on the error path.
 
 7. **Index host calls, and make compiled host dispatch symmetric with compiled
-   procedure calls.** Item 1 did the procedure half of this; the host half is
-   still one `Map` lookup per call, `lookupHostCall` (1.83 M calls per run on
-   the type-checker profile in `PROJECT.md` item 3). The registry is a runtime
-   argument of `interpret`, and different callers hand in different ones
-   (`defaultHostCallRegistry`, the search driver's, a host-built extension), so
-   an index cannot be assigned at lowering time against the registry — but it
-   can be assigned at lowering time against the *program*, and resolved against
-   the registry once per session.
+   procedure calls. — implemented, measured, and dropped.** Item 1 did the
+   procedure half of this; the host half was still one `Map` lookup per call,
+   `lookupHostCall` (1.83 M calls per run on the type-checker profile in
+   `PROJECT.md` item 3). The registry is a runtime argument of `interpret`, and
+   different callers hand in different ones (`defaultHostCallRegistry`, the
+   search driver's, a host-built extension), so an index cannot be assigned at
+   lowering time against the registry — but it can be assigned at lowering time
+   against the *program*, and resolved against the registry once per session.
 
-   The plan, following what item 1 built:
+   The change was built exactly as follows, measured on 2026-10-09 against
+   `716f4b6`, and reverted; the numbers that settled it are below.
 
    - Enumerate the host-call names a program's bodies mention, in order of
      first appearance, with a total walk over `Program` (one arm per VM
      constructor, no catch-all — `YCHR.Internal.VM.Closure` walks the same AST
      and is the model). The VM IR stays the serialization ABI, so the
-     enumeration belongs in the interpreter's own phase:
-     `SlotProgram` gains the name list next to `slotProcEntries`.
-   - `SlotValExpr.SHostCall` takes a `HostIx` instead of a `Name` (the VM's
+     enumeration lives in the interpreter's own phase: `SlotProgram` gained the
+     name list next to `slotProcEntries`.
+   - `SlotValExpr.SHostCall` took a `HostIx` instead of a `Name` (the VM's
      `HostCall` and its serialization are untouched, as item 1 left them);
-     `Slots.lowerProgram` and `Slots.addProcedures` assign the index and extend
-     the name list for query-time lambdas.
-   - At session init, build the dispatch table from the program's name list and
-     the registry the caller passed:
+     `Slots.lowerProgram` and `Slots.addProcedures` assigned the index and
+     extended the name list for query-time lambdas.
+   - At session init the dispatch table was built from the program's name list
+     and the registry the caller passed:
      `hostCallTable :: Array Int (Name, Maybe HostCallFn)`. Boxed arrays are
      lazy in their elements on both hosts (item 8), so each element is a
      `Map.lookup name registry` thunk: forced the first time that index is
      called, memoised for the rest of the session, never forced if the program
      never reaches it. The stored name keeps the unknown-host-call message.
-   - `invokeHostCallAt :: HostIx -> [Value] -> Chr Value` reads the table; the
-     name-keyed `HostCallRegistry` stays in `SessionEnv`, because `is`'s deep
+   - `invokeHostCallAt :: HostIx -> [Value] -> Chr Value` read the table; the
+     name-keyed `HostCallRegistry` stayed in `SessionEnv`, because `is`'s deep
      evaluator (`invokeByKey`, `valueKeyIsEvaluable`) resolves a functor name
      built at run time, and `YCHR.Run`'s query path looks up by name. Only the
-     compiled `HostCall` sites move to indices.
-   - The closure check should cover the host-name list too (an index that names
-     no registry entry is not a compiler bug — the registry is the caller's —
-     but an index past the end of the program's list is).
+     compiled `HostCall` sites moved to indices.
+   - The closure check was to cover the host-name list too: the enumeration
+     produced the list the lowering resolved against, so "an index past the end
+     of the program's list" was unreachable from `lowerProgram` — a divergence
+     between the two walks was an internal error — while an index naming no
+     registry entry stayed the interpreter's runtime "unknown host call" (the
+     registry is the caller's).
 
-   Two things make this different from `PROJECT.md` item 1's discarded
+   **Two costs outweigh the per-call saving.** The first is the enumeration
+   itself: it is a full walk of the VM AST, paid the first time a program makes
+   a compiled host call, and for the precompiled type checker — whose
+   `slotProgram` is a CAF — it lands once, on `check`. That is the same order
+   as item 1's closure walk, which §7C.1 records at 3.7 M reductions on
+   `typechecker/*.chr`. On MicroHs `check leq` goes 356 383 170 → 359 521 122
+   reductions (+0.88 %) and `check pairs_library` 1 091 211 048 → 1 096 825 215
+   (+0.51 %); those deltas are the walk, the second cost below and the dispatch
+   saving combined. (§7C.1's figures are from `5e2d5a6`; these are from
+   `716f4b6`, which includes the inlining change, so the two runs are not
+   directly comparable.) The second is the table: it is O(host names) *per
+   session*, and `initSessionEnv` rebuilds it for every goal, so the short GHC
+   benchmarks — one session an iteration — see it. On `make bench` (criterion,
+   three interleaved rounds a side):
+
+   | workload | before | after | change |
+   |---|---:|---:|---:|
+   | `typecheck/pairs_library` | 119.67 ms | 117.84 ms | −1.5 % |
+   | `fib` | 321.1 µs | 317.7 µs | −1.0 % |
+   | `leq_closure` | 6.449 ms | 6.423 ms | −0.4 % |
+   | `leq` | 2.626 µs | 2.597 µs | −1.1 % |
+   | `guard` | 3.350 µs | 3.480 µs | **+3.9 %** |
+   | `sum_list_test` | 11.49 µs | 11.99 µs | **+4.4 %** |
+   | GHC allocation, `guard` + `sum_list_test` | 6.43 GB | 6.64 GB | +3.3 %, 2.1 kB a session |
+
+   The two clean moves outside an interleaved spread are `guard` and
+   `sum_list_test`, and both are regressions — the class that killed
+   `PROJECT.md` item 1's host-call interning. `typecheck/pairs_library`'s
+   −1.5 % is not a clean win: its feature rounds (114.7, 117.8 and 119.2 ms)
+   overlap the baseline's (118.7, 119.7 and 120.0 ms), so it is inside the
+   combined spread, and `fib`, `leq` and `leq_closure` are inside their own.
+   The per-call arithmetic says why the saving cannot pay for the two costs
+   above: measured under MicroHs on the same machine with a standalone program
+   (2 000 000 lookups over a 32-entry table, keys forced identically), a
+   `Map`-with-`Text` lookup costs 166 reductions and the deferred array element
+   — `(!)` plus the pair and the `Maybe` — 119, so the dispatch change is worth
+   ~47 reductions a call, while one 32-entry table build is ~107 reductions and
+   the change as a whole allocates ~2.1 kB a session. `lookupHostCall` was 0.4
+   points of `compare` in item 3's profile, so there was never much to win.
+
+   Two things still distinguish this from `PROJECT.md` item 1's discarded
    host-call interning, which cost a fixed ~9 µs a session and regressed every
-   short benchmark: the table is built by size, not by scanning the registry
-   once per key, and the `Text` lookups are deferred and memoised rather than
-   done eagerly at session init. It should still be judged on the short
-   benchmarks (`guard`, `leq`), because that is where the last attempt died.
+   short benchmark: the table was built by size, not by scanning the registry
+   once per key, and the `Text` lookups were deferred and memoised rather than
+   done eagerly at session init. Neither removes the enumeration walk nor the
+   per-session table, which is where this attempt died. The laziness itself
+   worked: `repl --quiet` (8 805 690 reductions) and `compile --no-check -t vm
+   typechecker/*.chr` were unchanged to the digit, because neither forces the
+   slot program on a path that runs a compiled host call, and MicroHs `run
+   --no-check leq` moved +497 reductions (+0.01 %).
 
    Evidence: item 8's table — each call this removes is one `Map`-with-`Text`
    lookup, 172 reductions at a ~50-entry table under MicroHs, or the per-session
    array index (89) once the table exists. The count is workload-dependent:
    1.83 M on the type-checker profile, but `invokeHostCall` does not appear in
-   §5's `check pairs_library` top 25, so measure `check pairs_library` and
-   `compile`/`check typechecker/*.chr` under MicroHs and
+   §5's `check pairs_library` top 25, so the work was measured on `check
+   pairs_library` and `compile`/`check typechecker/*.chr` under MicroHs and
    `typecheck/pairs_library`, `fib`, `sum_list_test`, `leq_closure` under GHC.
    Decision rule as item 1: keep for a move outside the interleaved spread with
-   no session-init regression.
+   no session-init regression. It fails both halves, so the change was dropped
+   and `PROJECT.md` item 3's `HostCall` half stays open; item 8's container
+   choice is untouched by this result.
+
+   Parked rather than closed: item 8 puts the procedure table behind an
+   `Array Int SlotProc` and brings `Data.Array` into the build on its own
+   account, so this dispatch table should be built on top of it and re-measured
+   on the post-item-8 baseline before the result above is treated as final.
 
 8. **Back dense `Int`-keyed tables with `Data.Array`.** Item 1's container
    table is the evidence; the row to act on is the array's. In summary, per
