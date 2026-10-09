@@ -57,6 +57,7 @@ import Control.Monad (unless, void, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
+import Data.Array (bounds, inRange, (!))
 import Data.Foldable (toList)
 import Data.IORef
   ( IORef,
@@ -460,17 +461,18 @@ callProc name args = do
     Just proc -> callProcEntry proc args
 
 -- | Call the procedure a resolved call target points at. The index is
--- read off the session's 'procEntries' table, which is the table of the
+-- read off the session's 'procEntries' array, which is the table of the
 -- same 'SlotProgram' the AST was lowered from, so a miss is a stale
 -- index rather than a program error — the reportable "unknown
 -- procedure" path is 'callProc', which a hand-built 'Program' still
--- reaches.
+-- reaches. The bounds check is what keeps that miss report: the array
+-- read itself would be an uninformative out-of-range error.
 callProcAt :: ProcIx -> [CallVal] -> Chr Value
 callProcAt (ProcIx ix) args = do
   SessionEnv {procEntries} <- ask
-  case Map.lookup ix procEntries of
-    Nothing -> error ("callProcAt: stale procedure index " ++ show ix)
-    Just proc -> callProcEntry proc args
+  if inRange (bounds procEntries) ix
+    then callProcEntry (procEntries ! ix) args
+    else error ("callProcAt: stale procedure index " ++ show ix)
 
 -- | The body of a procedure call, shared by the two entry points above:
 -- bind the parameters, emit the entry-time event, run the body inside a

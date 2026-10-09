@@ -900,11 +900,14 @@ type:
 - **A call target and the procedure table it is read from come from the
   same `SlotProgram`.** `lowerProgram` resolves each `CallExpr` name to
   the callee's `ProcIx` (its position in the program's procedure list)
-  and stores the procedures in `slotProcEntries` keyed by that same
-  index; `addProcedures` extends both together when query-time lambdas
-  arrive. The interpreter therefore reads a `ProcIndex` target out of
-  `SessionEnv.procEntries` with no lookup by name, and a miss is
-  impossible by construction rather than by convention. A name the
+  and stores the procedures in `slotProcEntries`, a boxed
+  `Data.Array Int SlotProc` in that same order; `addProcedures` extends
+  both together when query-time lambdas arrive. The interpreter therefore
+  reads a `ProcIndex` target out of `SessionEnv.procEntries` with no
+  lookup by name, and a miss is impossible by construction rather than by
+  convention: the array's bounds are exactly `(0, n - 1)`, or
+  `(0, base + #extras - 1)` after `addProcedures`, so `callProcAt`'s
+  `inRange (bounds arr)` check is false only for a stale index. A name the
   program does not declare stays a `ProcName` target and reaches the
   interpreter's existing "unknown procedure" error; compiler output
   cannot produce one (§5, "Closed procedure-name set").

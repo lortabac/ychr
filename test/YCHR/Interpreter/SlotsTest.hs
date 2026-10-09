@@ -13,6 +13,7 @@
 -- failing.
 module YCHR.Interpreter.SlotsTest (tests) where
 
+import Data.Array qualified as A
 import Data.Map.Strict qualified as Map
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
@@ -329,7 +330,10 @@ programTests =
                       mkProc "activate_c" [] []
                     ]
                 )
-        Map.keys lowered.slotProcEntries @?= [0, 1]
+        A.indices lowered.slotProcEntries @?= [0, 1]
+        A.bounds lowered.slotProcEntries @?= (0, 1)
+        [p.slotProcName | p <- A.elems lowered.slotProcEntries]
+          @?= ["tell_c", "activate_c"]
         fmap (.slotProcIx) (Map.lookup "activate_c" lowered.slotProcedures)
           @?= Just (ProcIx 1),
       testCase "a call to another procedure of the program is resolved" $ do
@@ -363,7 +367,10 @@ programTests =
                   ExprStmt (CallExpr "other" [])
                 ]
             extended = addProcedures base [extra]
-        Map.keys extended.slotProcEntries @?= [0, 1]
+        A.indices extended.slotProcEntries @?= [0, 1]
+        A.bounds extended.slotProcEntries @?= (0, 1)
+        [p.slotProcName | p <- A.elems extended.slotProcEntries]
+          @?= ["compiled", "__lambda_0"]
         case Map.lookup "__lambda_0" extended.slotProcedures of
           Nothing -> assertFailure "__lambda_0 missing"
           Just p ->
@@ -400,7 +407,7 @@ programTests =
                       mkProc "dup" [] []
                     ]
                 )
-        Map.keys lowered.slotProcEntries @?= [0, 1, 2]
+        A.indices lowered.slotProcEntries @?= [0, 1, 2]
         case Map.lookup "p" lowered.slotProcedures of
           Nothing -> assertFailure "p missing"
           Just p ->
@@ -426,8 +433,12 @@ programTests =
               @?= [SExprStmt (SCallExpr (ProcIndex (ProcIx 1)) [])]
         fmap (.slotProcIx) (Map.lookup "q" extended.slotProcedures)
           @?= Just (ProcIx 2)
-        Map.keys extended.slotProcEntries @?= [0, 1, 2],
+        A.indices extended.slotProcEntries @?= [0, 1, 2]
+        A.bounds extended.slotProcEntries @?= (0, 2)
+        [p.slotProcName | p <- A.elems extended.slotProcEntries]
+          @?= ["p", "q", "q"],
       testCase "emptySlotProgram has no procedures" $ do
         emptySlotProgram.slotProcedures @?= Map.empty
-        emptySlotProgram.slotProcEntries @?= Map.empty
+        A.indices emptySlotProgram.slotProcEntries @?= []
+        A.bounds emptySlotProgram.slotProcEntries @?= (0, -1)
     ]

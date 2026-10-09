@@ -32,11 +32,30 @@ moves 137.0 ms → 134.1 ms (−2.1 %), most micro-benchmarks −1 % to −5.8 %
 and GHC heap allocation on `check typechecker/*.chr` +0.10 %; under
 MicroHs `check pairs_library` falls 1.01 % in reductions and `check leq`
 0.78 %, while the closure walk costs 0.74 % on a large `compile` and
-1.0 M reductions on `repl --quiet` startup. The container choice matters
-on MicroHs: the table is a `Map Int`, because an `IntMap` lookup there
+1.0 M reductions on `repl --quiet` startup. The container choice mattered
+on MicroHs: the table was a `Map Int`, because an `IntMap` lookup there
 costs about 4 to 6 times a `Map Int` one (measured per lookup, key
-construction excluded). See
-`dev-docs/MICROHS_PERFORMANCE.md` §7C.1 for the full write-up.
+construction excluded), and the entry below replaces it with an array.
+See `dev-docs/MICROHS_PERFORMANCE.md` §7C.1 for the full write-up.
+
+The interpreter's index-keyed procedure table is now a boxed
+`Data.Array` rather than a `Map Int`: `SlotProgram.slotProcEntries` and
+`SessionEnv.procEntries` change type. `lowerProgram` builds the array
+with `listArray`, `callProcAt` reads it with `(!)` behind a bounds check
+that keeps the "stale procedure index" report, and `Slots.addProcedures`
+extends it by `elems` on the cold query-time-lambda path; the
+name-keyed `slotProcedures` map is unchanged, as are the VM IR, its
+s-expression format and the Scheme backend. The package now depends on
+`array` (MicroCabal rewrites that name to `array-mhs` for the MicroHs
+build). Measured on `make bench` (criterion, three interleaved rounds a
+side) `typecheck/pairs_library` moves 119.90 ms → 117.97 ms (−1.61 %),
+`fib` −2.41 %, `graph_test` −4.68 %, and `search_label`,
+`search_label_alt` and `search_generate` −2.7 % to −3.5 %, while the
+sub-20 µs benchmarks are flat, and GHC allocation on
+`check typechecker/*.chr` falls 0.26 %; under MicroHs `check pairs_library`
+falls 1.02 % in reductions and `check leq` 1.09 %, while `repl --quiet`
+and `compile` are unchanged. See
+`dev-docs/MICROHS_PERFORMANCE.md` §7C.8 for the full write-up.
 
 The s-expression VM format is now version 2, a breaking change. The
 `push-frame` statement previously emitted its label, file and

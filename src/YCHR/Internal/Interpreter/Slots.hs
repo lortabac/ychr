@@ -126,6 +126,7 @@ module YCHR.Internal.Interpreter.Slots
   )
 where
 
+import Data.Array (Array, bounds, elems, listArray)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import YCHR.Internal.Types (ConstraintType, RuleId)
@@ -162,8 +163,10 @@ type Slot = Int
 -- 'CallTarget' carries.
 --
 -- A newtype rather than the bare 'Int' @Slot@ is: a local slot and a
--- procedure index are both integer keys that end up in an @IntMap@, and
--- only the type keeps one from being written where the other belongs.
+-- procedure index are both integer keys — the slot goes into the
+-- interpreter's @Env@ 'Data.IntMap.Strict's, the index into its entry
+-- array — and only the type keeps one from being written where the
+-- other belongs.
 newtype ProcIx = ProcIx {unProcIx :: Int}
   deriving (Show, Eq, Ord)
 
@@ -199,19 +202,35 @@ data SlotProgram = SlotProgram
     -- through: a callee's index is a field on its 'SlotProc', so there
     -- is no second name-keyed map to build.
     slotProcedures :: Map Name SlotProc,
-    -- | The same procedures keyed by their index, unwrapped: the table
-    -- a resolved 'CallTarget' reads.
+    -- | The program's procedures in the order of its procedure list and
+    -- indexed @0 .. n - 1@: the table a resolved 'CallTarget' reads.
+    -- 'slotProcedures' is the name-keyed view of the same list, with
+    -- one difference a duplicated name produces: the map keeps the last
+    -- procedure of that name, while the array keeps every one at its
+    -- own index. An empty program has bounds @(0, -1)@, so the bounds
+    -- are a dense range with no gaps, and 'addProcedures' can append at
+    -- @snd (bounds arr) + 1@.
     --
-    -- A @Map Int@, not an @IntMap@, and deliberately so: under MicroHs an
-    -- @IntMap@ lookup costs about 2.5 times a @Map@-with-literal-'Text'
-    -- lookup, and about 3.9 times a @Map Int@ one (micro-benchmarks in
-    -- @dev-docs/MICROHS_PERFORMANCE.md@), because MicroHs does not inline
-    -- the @Data.Bits@ operations @IntMap@ searches with. The key is the
-    -- unwrapped 'Int' rather than 'ProcIx' for the same reason: unwrapping
-    -- by pattern match costs nothing, where the newtype's derived 'Ord'
-    -- would add a dispatch per comparison on the interpreter's hottest
-    -- path.
-    slotProcEntries :: Map Int SlotProc
+    -- A boxed 'Data.Array', and deliberately so: it is the one
+    -- container of the four the micro-benchmarks measured that is
+    -- fastest on /both/ hosts — a constant ~89 reductions per lookup
+    -- under MicroHs whatever @n@ is, against 130 to 285 for a
+    -- 'Data.Map.Strict' ('Int'- or 'Data.Text.Text'-keyed) and 716 to
+    -- 1186 for an @IntMap@, which MicroHs cannot inline the
+    -- @Data.Bits@ work of — and under GHC it allocates nothing per
+    -- lookup (micro-benchmarks in @dev-docs/MICROHS_PERFORMANCE.md@
+    -- §7C.1 and item 8). The key is the unwrapped 'Int' rather than
+    -- 'ProcIx' because a resolved index is read off
+    -- 'SlotProc.slotProcIx' by pattern match, which costs nothing,
+    -- where the newtype's derived 'Ord' would add a dispatch per
+    -- comparison.
+    --
+    -- Boxed arrays are lazy in their elements, so the 'SlotProc's here
+    -- are the same thunks 'slotProcedures' holds and no body is forced
+    -- by building the array. The array is built once per program, and
+    -- "YCHR.Internal.Runtime.Monad" keeps its field lazy for that
+    -- reason.
+    slotProcEntries :: Array Int SlotProc
   }
   deriving (Show, Eq)
 
@@ -226,7 +245,7 @@ data SlotProc = SlotProc
     -- | The procedure's position in its program's procedure list: what
     -- a call to this procedure resolves to. Carried here rather than in
     -- a name-to-index map so that a program needs one name-keyed map
-    -- ('slotProcedures') and one index-keyed one ('slotProcEntries'),
+    -- ('slotProcedures') and one index-keyed array ('slotProcEntries'),
     -- not three.
     slotProcIx :: !ProcIx,
     -- | How many arguments the procedure takes. Parameters occupy slots
@@ -322,7 +341,7 @@ data SlotCallArg
 -- | Lower a whole program, resolving every emitted call target against
 -- the program's own procedures.
 --
--- The map spines are built eagerly — so a session has both lookup
+-- The table spines are built eagerly — so a session has both lookup
 -- tables to index — but each procedure's body stays a thunk until that
 -- procedure is first called, which is why this can be a lazy field on a
 -- compiled program without costing anything on a short goal. The
@@ -343,15 +362,21 @@ lowerProgram prog =
       procMap = Map.fromList [(n, proc) | (_, n, proc) <- lowered]
    in SlotProgram
         { slotProcedures = procMap,
-          slotProcEntries = Map.fromList [(i, proc) | (i, _, proc) <- lowered]
+          slotProcEntries =
+            listArray
+              (0, length prog.procedures - 1)
+              [proc | (_, _, proc) <- lowered]
         }
 
 -- | Extend a lowered program with procedures compiled after it —
 -- query-time lifted lambdas ('YCHR.Internal.Runtime.Session.withCHRExtra').
 -- The entries the program already has keep their indices; the extras
 -- take the ones after the highest index in use, so a program built by
--- 'lowerProgram' or by an earlier 'addProcedures' (whose keys are
--- @0 .. n - 1@) is extended rather than re-based.
+-- 'lowerProgram' or by an earlier 'addProcedures' (whose indices are
+-- @0 .. n - 1@) is extended rather than re-based. The base index is
+-- @snd (bounds arr) + 1@: the entry table is a dense array, so its
+-- upper bound is the last index in use, and the @O(n)@ rebuild of
+-- 'elems' is paid only on this cold path — a query that lifts lambdas.
 --
 -- An extra may call a compiled procedure and one extra may call
 -- another, so the extras are resolved against the union of both name
@@ -369,7 +394,7 @@ lowerProgram prog =
 addProcedures :: SlotProgram -> [Procedure] -> SlotProgram
 addProcedures sp [] = sp
 addProcedures sp extras =
-  let base = maybe 0 ((+ 1) . fst) (Map.lookupMax sp.slotProcEntries)
+  let base = snd (bounds sp.slotProcEntries) + 1
       lowered =
         [ (i, p.name, lowerProcedureWith (ProcIx i) (resolveCallIn merged) p)
         | (i, p) <- zip [base ..] extras
@@ -380,15 +405,16 @@ addProcedures sp extras =
    in SlotProgram
         { slotProcedures = merged,
           slotProcEntries =
-            Map.fromList [(i, proc) | (i, _, proc) <- lowered]
-              `Map.union` sp.slotProcEntries
+            listArray
+              (0, base + length extras - 1)
+              (elems sp.slotProcEntries ++ [proc | (_, _, proc) <- lowered])
         }
 
 -- | A program with no procedures: what a hand-built session (a unit
 -- test exercising primitives, which needs no compiled procedure) starts
 -- from.
 emptySlotProgram :: SlotProgram
-emptySlotProgram = SlotProgram Map.empty Map.empty
+emptySlotProgram = SlotProgram Map.empty (listArray (0, -1) [])
 
 -- | The resolver 'lowerProgram' and 'addProcedures' hand the walk: a
 -- name the table knows becomes the callee's index, and anything else
