@@ -1192,6 +1192,102 @@ inaccessible-branch warning (`YCHR-20104`, §Guard-Derived Type
 Evidence), which follows the same severity policy.
 
 
+## Constraint-use checking
+
+A rule-head constraint occurrence is **kept** if it survives the rule
+— the sole occurrence in `foo ==> bar`, or either side of `\` that is
+not dropped — and **removed** if the rule consumes it — `foo` in
+`foo <=> bar`, or the right side of `\` in a simpagation rule. (In the
+linear-logic reading of CHR these correspond to *positive* and
+*negative* occurrences; this document uses kept/removed throughout,
+matching the compiler's own vocabulary.) A simpagation rule can give
+one constraint both roles at once:
+
+```prolog
+foo(X) \ foo(Y) <=> X == Y | true.
+```
+
+`foo(X)` (left of `\`) is a kept occurrence; `foo(Y)` (right of `\`)
+is a removed occurrence of the same constraint, in the same rule.
+
+[`:- constraint_use`](language.md#constraint-use) declares, per
+constraint, which of these positions its occurrences may use:
+
+| Tag | Allowed occurrences |
+|---|---|
+| `any` (default) | kept, removed, or none |
+| `fact` | kept only |
+| `event` | removed only |
+| `tell_only` | none |
+
+The checker walks every rule head in the whole flattened program —
+every module's rules, since a constraint's mode is declared once by
+its defining module but any importing module can add an occurrence —
+and reports one `ConstraintUseViolation` (`YCHR-45001`) per occurrence
+that lands in a position its constraint's declared mode forbids:
+
+```prolog
+:- module(m, []).
+:- chr_constraint click/1.
+:- constraint_use event(click/1).
+
+% Rejected: click/1 is declared event (removed only), but this
+% occurrence is kept.
+handle(X) ==> click(X).
+```
+
+A violation is always a hard error; there is no `--Werror` dimension
+to it, unlike the warnings elsewhere in this document. `tell_only`
+forbids occurrences in *either* position — a constraint so declared
+can be told, but never written in a rule head at all:
+
+```prolog
+:- chr_constraint alt(list(any)).
+:- constraint_use tell_only(alt/1).
+
+% Rejected: alt/1 is tell_only, so it may not occur in any rule head.
+decided \ alt(_) <=> true.
+```
+
+`search:alt/1` ([search.md](search.md)) is the motivating case: it is
+already told but never matched by any rule in `libraries/search.chr`
+today, by convention rather than by anything the compiler enforces.
+
+**Relation to `--no-check`.** From the CLI's point of view this check
+behaves as part of ordinary type-checking: `--no-check` disables it,
+exactly as it disables the rest of this checker, for the whole
+program. (It has nothing to say about a goal or query — a goal has no
+rule head — so it runs once, at compile time, never per goal.)
+Internally it stays an *independent* pass: its own Haskell module and
+its own error type, with no dependency on the CHR-encoded checker this
+document otherwise specifies — the same separation [Exhaustiveness
+checking](#exhaustiveness-checking) uses — but unlike exhaustiveness,
+it is wired to the `--no-check` flag rather than running
+unconditionally. Its error code lives in its own `45xxx` bucket rather
+than this checker's `60xxx` band, reflecting that same implementation
+independence.
+
+The check is deliberately narrow:
+
+- It inspects **rule heads only**. Telling a constraint — from a rule
+  body, a goal, or the host — is unrestricted regardless of declared
+  mode; `tell_only` restricts where a constraint may be *matched*, not
+  where it may be *told*.
+- It does not look inside guards or bodies: a guard expression or a
+  body goal mentioning a constraint's name as a function or data
+  constructor is not an occurrence.
+- It is purely structural: it does not reason about whether an
+  occurrence can actually fire (Passive Occurrences, or a guard that
+  statically fails) — a never-reachable occurrence is still checked at
+  its syntactic position.
+- A constraint with no `:- constraint_use` entry is unrestricted
+  (`any`); there is no inference of a constraint's likely use from how
+  existing rules happen to use it.
+- There is no per-occurrence override: a declared mode applies to
+  every occurrence of a constraint everywhere in the program, not to
+  one rule.
+
+
 ## Host Calls
 
 Host language calls (`host:f(args)`) impose no expected type on their
