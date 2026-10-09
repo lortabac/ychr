@@ -1,0 +1,4 @@
+:- module(inline_guarded_equation, [f/1]).
+:- function f/1.
+:- inline f/1.
+f(0) -> 0.

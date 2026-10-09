@@ -1,0 +1,5 @@
+:- module(inline_stateful_equation, [f/1]).
+:- use_module(library(prelude)).
+:- function f/1.
+:- inline f/1.
+f(X) -> Y is X + 1, Y.

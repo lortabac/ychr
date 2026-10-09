@@ -663,6 +663,7 @@ renameModule mods ctx = do
         equations = renamedEquations,
         extensions = renamedExtensions,
         classExtensions = renamedClassExtensions,
+        inlines = m.inlines,
         typeDecls = renamedTypeDecls,
         decls = renamedDecls,
         extensionTypes = renamedExtensionTypes,
@@ -1589,6 +1590,7 @@ buildQueryRenameEnv mods =
             equations = [],
             extensions = [],
             classExtensions = [],
+            inlines = [],
             exports = Nothing
           }
       ctx0 =

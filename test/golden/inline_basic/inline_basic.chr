@@ -1,0 +1,76 @@
+:- module(
+       inline_basic,
+       [arith_guard/2, arith_is/2, chain/2, chain_in_body/2, nonlinear/3,
+        is_identity/2, wildcard_side_effect/1, side_effect/2]
+   ).
+:- use_module(library(prelude)).
+
+:- chr_constraint
+       arith_guard/2, arith_is/2, chain/2, chain_in_body/2, nonlinear/3,
+       is_identity/2, wildcard_side_effect/1, side_effect/2.
+
+:- function inc/1.
+:- function double/1.
+:- function dup/1.
+:- function first/2.
+:- function myid/1.
+:- function noisy/1.
+:- function inc_twice/1.
+
+% One directive naming several functions, exactly like
+% ':- function'/':- chr_constraint'.
+:- inline inc/1, double/1, dup/1, first/2, myid/1, noisy/1, inc_twice/1.
+
+inc(X) -> X + 1.
+double(X) -> X * 2.
+% Calls another inline candidate from inside its own equation (not
+% just from a rule, as 'chain' below does): finalizing this candidate
+% must inline 'inc' into its body before anything that calls
+% 'inc_twice' sees it, which is what forces processing candidates in a
+% topological order (callees before callers).
+inc_twice(X) -> inc(inc(X)).
+% X occurs twice: a non-trivial argument cannot be substituted here, so
+% a call with one must keep calling 'dup' (see 'nonlinear' below).
+dup(X) -> X + X.
+% The second parameter is never used.
+first(X, _) -> X.
+myid(X) -> X.
+noisy(X) -> host:ground(X).
+
+% Arithmetic inside a guard: a candidate call nested under a
+% non-inline function (prelude's '>') must still be substituted.
+arith_guard(X, R) <=> inc(X) > 0 | R = 1.
+
+% Arithmetic as an 'is' right-hand side.
+arith_is(X, R) <=> R is inc(X).
+
+% A chain of inline calls: 'inc' is substituted into 'double''s own
+% body first (bottom-up), then the call to 'double' is substituted
+% here, in one step.
+chain(X, R) <=> R is double(inc(X)).
+
+% Same chain, but through 'inc_twice', whose own equation (not this
+% rule) is where the two 'inc' calls meet.
+chain_in_body(X, R) <=> R is inc_twice(X).
+
+% 'dup's parameter occurs twice, so a non-trivial argument ('X + Y')
+% cannot be placed there without evaluating it twice; the call must
+% stay an ordinary call and still produce the right answer.
+nonlinear(X, Y, R) <=> R is dup(X + Y).
+
+% 'myid's body is literally its own parameter. Substituting naively
+% would turn 'R is myid(Y)' into the syntactically bare 'R is Y',
+% which the compiler treats differently ('EvalIs' instead of
+% 'EvalDeep'); this must keep calling 'myid' instead.
+is_identity(Y, R) <=> R is myid(Y).
+
+% 'first's second parameter is a wildcard: a non-trivial argument
+% bound to it would be silently dropped, losing its evaluation (and
+% here, the error it would raise). The call must stay ordinary, so
+% the division by zero still surfaces.
+wildcard_side_effect(R) <=> R is first(1, 10 div 0).
+
+% A statement-position call ('noisy(X)', result discarded) whose body
+% is itself a host call: this is the one shape a statement-position
+% substitution can produce.
+side_effect(X, R) <=> noisy(X), R = 1.

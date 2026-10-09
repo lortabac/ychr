@@ -1,0 +1,2 @@
+:- module(inline_unknown_function, []).
+:- inline bogus/1.

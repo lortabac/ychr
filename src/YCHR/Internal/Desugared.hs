@@ -156,6 +156,11 @@ data Function = Function
     -- dispatch branches no call can reach. 'Nothing' for an ordinary
     -- function.
     lambdaArity :: Maybe Int,
+    -- | Whether this function is a candidate for inlining at eligible
+    -- call sites, carried over from 'YCHR.Internal.Resolved.FunctionDef.inline'.
+    -- Always 'False' for a lifted lambda. See 'YCHR.Internal.Desugar.Inline',
+    -- which does the remaining eligibility checks and the substitution.
+    inline :: Bool,
     -- | The function's equations, each carrying the source location and
     -- original p-expr of the declaration that wrote it. Keeping the
     -- annotation per equation lets a diagnostic about an equation from

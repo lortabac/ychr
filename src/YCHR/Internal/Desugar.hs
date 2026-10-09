@@ -116,6 +116,23 @@ data DesugarError
     -- (@solve(quote((A ; B)))@), where the driver reads the @;@ at run
     -- time.
     DisjunctionInQuery
+  | -- | An @:- inline@-marked function does not have exactly one
+    -- equation. Carries the function's qualified name and the actual
+    -- equation count. See 'YCHR.Internal.Desugar.Inline'.
+    InlineNotSingleEquation QualifiedName Int
+  | -- | An @:- inline@-marked function's single equation carries a
+    -- guard — either user-written, or HNF-synthesized because a
+    -- parameter is not a plain variable or wildcard. Carries the
+    -- function's qualified name.
+    InlineGuardedEquation QualifiedName
+  | -- | An @:- inline@-marked function's single equation has a
+    -- non-empty prelude (statements before its final expression).
+    -- Carries the function's qualified name.
+    InlineStatefulEquation QualifiedName
+  | -- | Two or more @:- inline@-marked functions call each other,
+    -- directly or transitively. Carries the flattened names of every
+    -- function on the cycle, sorted.
+    InlineCycle [Text]
   deriving (Eq, Show)
 
 -- | Prefix for fresh variables introduced by the Head Normal Form
@@ -426,6 +443,7 @@ desugarFunctionDef fdef = do
         requiring = fdef.requiring,
         refining = fdef.refining,
         lambdaArity = Nothing,
+        inline = fdef.inline,
         equations = desugaredEqs
       }
 
@@ -775,6 +793,7 @@ liftExpr modName scope st0 expr = case expr of
               requiring = [],
               refining = Nothing,
               lambdaArity = Just (length paramsList),
+              inline = False,
               equations =
                 [ noAnnP
                     D.Equation

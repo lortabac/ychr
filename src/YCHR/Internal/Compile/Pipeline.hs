@@ -47,6 +47,7 @@ import YCHR.Internal.Desugar
     liftAllLambdas,
   )
 import YCHR.Internal.Desugar.Disjunction (lowerDisjunctions)
+import YCHR.Internal.Desugar.Inline (inlineFunctions)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning, checkExhaustiveness)
@@ -490,12 +491,16 @@ finalizeCompilation libraryMods opExports trailingLocMap inputPaths parsed = do
   -- 'desugaredProgram' below keeps the /pre/-lowering AST, because the
   -- type checker has to see each branch in the rule it was written in.
   let desugared' = lowerDisjunctions desugaredLifted
-      symTab = extractSymbolTable desugared'
+  let (desugaredInlined, inlineErrs) = inlineFunctions desugared'
+  case inlineErrs of
+    [] -> pure ()
+    _ -> Left (DesugarErrors inlineErrs)
+  let symTab = extractSymbolTable desugaredInlined
       exhaustWarnings = checkExhaustiveness resolved
       warnings =
         [RenameWarnings renameWarnings | not (null renameWarnings)]
           ++ [ExhaustivenessWarnings exhaustWarnings | not (null exhaustWarnings)]
-  prog <- first CompileErrors (compile desugared' symTab)
+  prog <- first CompileErrors (compile desugaredInlined symTab)
   -- Assert the procedure-name closure invariant: every call the
   -- generated program carries must name one of its own procedures (see
   -- "YCHR.Internal.VM.Closure", and "Closed procedure-name set" in
@@ -514,7 +519,7 @@ finalizeCompilation libraryMods opExports trailingLocMap inputPaths parsed = do
   let lambdaCount =
         length
           [ ()
-          | f <- desugared'.functions,
+          | f <- desugaredInlined.functions,
             isLambdaName (Types.qualifiedToName f.name)
           ]
   pure
@@ -527,7 +532,7 @@ finalizeCompilation libraryMods opExports trailingLocMap inputPaths parsed = do
           symbolTable = symTab,
           allModules = allMods,
           opTable = queryTable,
-          allFunctions = desugared'.functions,
+          allFunctions = desugaredInlined.functions,
           nextLambdaIndex = lambdaCount,
           queryFunctionVisibility = buildQueryFunctionVisibility allMods,
           queryRenameEnv = buildQueryRenameEnv allMods,

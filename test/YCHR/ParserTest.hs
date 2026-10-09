@@ -782,6 +782,7 @@ moduleTests =
                   equations = [],
                   extensions = [],
                   classExtensions = [],
+                  inlines = [],
                   exports = Just (noAnnP [])
                 }
             ),

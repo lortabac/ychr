@@ -62,7 +62,7 @@ import YCHR.Internal.Rename (RenameError (..), RenameWarning (..))
 import YCHR.Internal.Resolve (RefiningViolation (..), ResolveError (..))
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.TypeCheck (TypeCheckError (..))
-import YCHR.Internal.Types (Name, Term)
+import YCHR.Internal.Types (Name, QualifiedName, Term)
 
 -- ---------------------------------------------------------------------------
 -- Opaque Data instances for the error payload types that are not already
@@ -86,6 +86,11 @@ instance Data R.Expr where
   gunfold _ _ = error "Data R.Expr: gunfold (unused)"
   toConstr _ = error "Data R.Expr: toConstr (unused)"
   dataTypeOf _ = mkNoRepType "YCHR.Internal.Resolved.Expr"
+
+instance Data QualifiedName where
+  gunfold _ _ = error "Data QualifiedName: gunfold (unused)"
+  toConstr _ = error "Data QualifiedName: toConstr (unused)"
+  dataTypeOf _ = mkNoRepType "YCHR.Types.QualifiedName"
 
 deriving instance Data CollectError
 

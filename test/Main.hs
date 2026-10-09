@@ -8,6 +8,7 @@ import YCHR.CollectTest qualified
 import YCHR.CompileTest qualified
 import YCHR.ConvertTest qualified
 import YCHR.DSLTest qualified
+import YCHR.Desugar.InlineTest qualified
 import YCHR.DesugarTest qualified
 import YCHR.ErrorCodeTest qualified
 import YCHR.ExhaustivenessTest qualified
@@ -69,6 +70,7 @@ main = do
           YCHR.DSLTest.tests,
           YCHR.ConvertTest.tests,
           YCHR.DesugarTest.tests,
+          YCHR.Desugar.InlineTest.tests,
           YCHR.ErrorCodeTest.tests,
           YCHR.ExhaustivenessTest.tests,
           YCHR.GenerateTest.tests,

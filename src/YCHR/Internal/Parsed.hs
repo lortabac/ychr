@@ -41,6 +41,7 @@ module YCHR.Internal.Parsed
     FunctionDeclBody (..),
     ExtendClassTypeDeclBody (..),
     TypeExportDeclBody (..),
+    InlineDecl (..),
     FunctionDeclKind (..),
     OpType (..),
     OpDecl (..),
@@ -124,6 +125,10 @@ data Module = Module
     -- | Equations contributed by @:- extend_class@ directives.
     -- Each must target an @:- open_class@.
     classExtensions :: [AnnP FunctionEquation],
+    -- | @:- inline name\/arity, ...@ directives naming functions, declared
+    -- elsewhere in this same module, whose calls should be substituted
+    -- inline at eligible call sites. See 'YCHR.Internal.Desugar.Inline'.
+    inlines :: [Ann InlineDecl],
     exports :: Maybe (AnnP [Declaration])
   }
   deriving (Show, Eq)
@@ -202,6 +207,16 @@ data TypeExportDeclBody = TypeExportDeclBody
   { name :: Text,
     arity :: Int,
     conExports :: Maybe [Text]
+  }
+  deriving (Show, Eq)
+
+-- | One @name\/arity@ entry of an @:- inline@ directive. Unlike
+-- 'FunctionDeclBody', the name is never qualified: an @:- inline@
+-- directive only ever targets a function declared by the same
+-- module (see 'YCHR.Internal.Resolve.checkInlineDeclarations').
+data InlineDecl = InlineDecl
+  { name :: Text,
+    arity :: Int
   }
   deriving (Show, Eq)
 

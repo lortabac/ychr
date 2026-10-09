@@ -40,6 +40,7 @@ import YCHR.Internal.Parsed
     FunctionEquation (..),
     Head (..),
     Import (..),
+    InlineDecl (..),
     Module (..),
     OpDecl (..),
     Rule (..),
@@ -193,6 +194,8 @@ deriving instance Generic ExtendClassTypeDeclBody
 
 deriving instance Generic TypeExportDeclBody
 
+deriving instance Generic InlineDecl
+
 deriving instance Generic FunctionDeclKind
 
 deriving instance Generic OpDecl
@@ -223,6 +226,9 @@ instance ToCode ExtendClassTypeDeclBody where
   toCode = genericToCode
 
 instance ToCode TypeExportDeclBody where
+  toCode = genericToCode
+
+instance ToCode InlineDecl where
   toCode = genericToCode
 
 instance ToCode FunctionDeclKind where

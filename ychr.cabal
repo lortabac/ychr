@@ -286,6 +286,7 @@ test-suite ychr-tests
                     , YCHR.RunTest
                     , YCHR.DSLTest
                     , YCHR.DesugarTest
+                    , YCHR.Desugar.InlineTest
                     , YCHR.ExhaustivenessTest
                     , YCHR.Embedded.Generate.Code
                     , YCHR.Embedded.Generate.Emit
@@ -412,6 +413,7 @@ library
                     , YCHR.Internal.Desugared
                     , YCHR.Internal.Desugar
                     , YCHR.Internal.Desugar.Disjunction
+                    , YCHR.Internal.Desugar.Inline
                     , YCHR.Internal.Parser
                     , YCHR.Internal.Parsed
                     , YCHR.Internal.Parsing.Lexer
