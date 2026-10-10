@@ -1162,6 +1162,16 @@ Implement the shim's hot conversions without the list round trip, or avoid
 `concatMap` in the serializer. This is the serializer, so it shortens `compile
 -t vm/scheme`, not `check`.
 
+One half of this is now measured rather than hypothesised, because it is also
+the cleanest test of root cause 1. `{-# INLINE concatMap #-}` was added to the
+shim and the binary rebuilt: `compile --no-check -t vm typechecker/*.chr`
+moves from 510 315 630 to 510 315 631 reductions and its wall clock from
+4.71–4.84 s to 4.75–4.79 s. MicroHs ignores the pragma, exactly as §6.1 says,
+and that is worth knowing before anyone tries to pay for a change with
+inlining: the only lever is to not write the intermediate list, which is what
+the first sentence of this option asks for. The item stays open and
+unmeasured on the `mhs` side; it cannot move `check`.
+
 ### E. Do not reach for `-flto -march=native` first
 
 The `unix_x86` target that already exists in `mhs.conf`
