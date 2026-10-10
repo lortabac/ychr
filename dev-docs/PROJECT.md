@@ -336,7 +336,11 @@ half was implemented and kept, and its `HostCall` half was later tried
 twice and dropped (see below, and `MICROHS_PERFORMANCE.md` §7C.7). All
 four are recorded here, with the evidence that motivates them and the
 measurements that settled the others, so that whoever picks them up does
-not have to re-derive it.
+not have to re-derive it. The third is the one whose *shape* was wrong in
+the first proposal and right in the second: item 3 as written named the
+index space, but what it bought on the MicroHs side was the monad layer,
+and `MICROHS_PERFORMANCE.md` §7C.3 now records `InterpM` flattened to
+`Env -> Chr` for −8 % reductions on the `check` workloads.
 
 The measurements are from the workload used to profile the interpreter
 here — the CHR type checker running over its own sources:
@@ -669,6 +673,16 @@ same CHR type checker over a different unit than the profile did, so
 use it as a proxy; the numbers in this section come from a profiled
 build over the checker's own sources and are indicative, not a
 baseline.
+
+One item outside that list is now the largest lever measured on the
+MicroHs side, and it is a runtime setting rather than a source change:
+`MICROHS_PERFORMANCE.md` §4.1 re-measures the heap-size knob on the
+current interpreter and finds the default 50 M-cell heap spends 47 s of
+143 s in the collector on `check typechecker/*.chr`, against 16 s at
+`+RTS -H150M` (108 s) and 9 s at `-H300M` (101 s). It is worth having
+only once a run's own GC bill exceeds the fixed page cost of the larger
+heap, so it is a recommended argument for long runs rather than a
+default.
 
 
 ## User-Defined Functions

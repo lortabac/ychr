@@ -1196,6 +1196,22 @@ The `unix_x86` target that already exists in `mhs.conf`
   at an array are in §7C.1 and item 8; item 8 named what an array-backed `Env`
   needed first (a slot count on `SlotProc`) and how to judge it, and item 2 was
   run separately from the procedure-table change, as this question asked.
+- ~~Is `IntMap` the right structure for the store's id table
+  ('SessionEnv.storeById')?~~ No, at least not on the MicroHs side, and the
+  measurement contradicts what §7C.1's table suggests. The table prices a
+  boxed `Array` lookup at a constant 89 reductions against 716–1186 for
+  `IntMap` and 130–207 for `Map`, so the id table was swapped to
+  `Data.Map.Strict Int` on 2026-10-10 against the flattened interpreter
+  (`af8fc00`) to test the direction: every arm regressed —
+  `check leq` 210 734 858 → 211 009 444 reductions (+0.13 %) and 229.5 →
+  232.0 M cells allocated (+1.1 %), `check pairs_library` 628 264 770 →
+  629 122 016 (+0.14 %) and 688.9 → 699.0 M cells (+1.5 %), `compile` and
+  `repl` flat. The reads the table prices are not what this table spends its
+  time on: `storeById` is written once per suspension created and read once
+  per liveness check, and its snapshot and restore are whole-structure
+  pointer writes that `Map` makes no cheaper. The swap was reverted. An
+  `Array`/`IntMap` hybrid would need the id distribution measured first, and
+  this result says the read path is not where the win would be.
 
 ## 9. Reproducing
 

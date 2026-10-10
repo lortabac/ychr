@@ -101,6 +101,14 @@ resources: build
 # only ever compiled by MicroHs in a normal build, so nothing else would
 # catch an emitter change that produces Haskell MicroHs happens to
 # accept but GHC does not — or, more to the point, unparsable output.
+#
+# Deliberately GHC-only. Compiling the same two modules under `mhs` here
+# would need the MicroHs toolchain and a built package file, and it would
+# add nothing: CI's `microhs` job runs `make mhs-build`, which compiles
+# everything under MicroHs including these modules, and it is the gate
+# for them. The failure mode this target did not catch in
+# dev-docs/MICROHS_PERFORMANCE.md's header was a stale `ychr-codegen`
+# binary, which compiling with `mhs` here would not have caught either.
 resources-check: build
 	@test -n "$$(cabal list-bin ychr-codegen 2>/dev/null)" || { \
 	  echo "cannot resolve ychr-codegen; run 'cabal build' first" >&2; \
