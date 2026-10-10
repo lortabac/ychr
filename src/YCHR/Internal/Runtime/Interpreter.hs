@@ -9,9 +9,11 @@
 -- propagation history, reactivation queue, unification-variable
 -- counter, interpreter call stack, the procedure map and the host-call
 -- registry. Per-procedure-call local variables ('Env') live in a
--- mutable cell array read through a thin 'ReaderT' layer: the array is
--- mutable, so state changes survive the exception-driven catches that
--- remain ('BSoftGuard') and no enclosing 'IORef' is needed.
+-- mutable cell array threaded through 'InterpM', a flat newtype over
+-- @Env -> Chr@ (see its own note for why it is not a 'ReaderT'): the
+-- array is mutable, so state changes survive the exception-driven
+-- catches that remain ('BSoftGuard') and no enclosing 'IORef' is
+-- needed.
 --
 -- Non-local control flow ('Return', labelled 'Continue', 'Break') is
 -- implemented /without/ exceptions: statement execution returns an
@@ -55,9 +57,8 @@ import Control.Exception
     try,
   )
 import Control.Monad (unless, void, when)
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Class (lift)
-import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
+import Control.Monad.IO.Class (MonadIO (liftIO))
+import Control.Monad.Trans.Reader (ask)
 import Data.Array (bounds, inRange, (!))
 -- The environment's cell reads and writes. They are the class's
 -- `unsafe` operations because the index is in range by construction
@@ -218,7 +219,41 @@ data Signal
 -- 'Chr'. The array is mutable, so the state changes made before a
 -- 'BSoftGuard' failure survive the catch and a soft-failed guard keeps
 -- whatever bindings it made before failing.
-type InterpM = ReaderT Env Chr
+--
+-- A flat @newtype@ over @Env -> Chr@ rather than a 'ReaderT', and
+-- deliberately so. MicroHs ignores @{-\# INLINE \#-}@ and does not
+-- unbox, so a class-method @ask@ stays a dictionary selection and a
+-- call: a micro-benchmark of this module's statement shape — five cell
+-- reads, three writes and a trace-flag read per statement, through a
+-- 'ReaderT' versus through a plain function argument — costs 412
+-- reductions per statement against 267, for an identical program. The
+-- instances below are the whole 'ReaderT' surface this module uses.
+newtype InterpM a = InterpM (Env -> Chr a)
+
+instance Functor InterpM where
+  fmap f (InterpM m) = InterpM (\env -> fmap f (m env))
+
+instance Applicative InterpM where
+  pure x = InterpM (\_ -> pure x)
+  InterpM f <*> InterpM x = InterpM (\env -> f env <*> x env)
+
+instance Monad InterpM where
+  InterpM m >>= k = InterpM (\env -> m env >>= \a -> runInterpM (k a) env)
+
+instance MonadIO InterpM where
+  liftIO io = InterpM (\_ -> liftIO io)
+
+-- | Run an 'InterpM' action against a call's environment.
+runInterpM :: InterpM a -> Env -> Chr a
+runInterpM (InterpM m) env = m env
+
+-- | The local 'Env' an 'InterpM' action runs against. The flat
+-- representation makes this the environment itself rather than a
+-- 'Reader' lookup, which is the point of the change: a helper that
+-- needs the environment pays a function application rather than a
+-- dictionary selection.
+interpEnv :: InterpM Env
+interpEnv = InterpM (\env -> pure env)
 
 -- ---------------------------------------------------------------------------
 -- Lifting
@@ -227,8 +262,7 @@ type InterpM = ReaderT Env Chr
 -- | Run a 'Chr' action in 'InterpM'. The single lift this stack needs;
 -- named so call sites read as "do this in the session".
 liftChr :: Chr a -> InterpM a
-liftChr = lift
-{-# INLINE liftChr #-}
+liftChr action = InterpM (\_ -> action)
 
 -- ---------------------------------------------------------------------------
 -- Public API
@@ -272,20 +306,20 @@ interpret prog hostCalls entryName args = do
 -- of the same walk ("YCHR.Internal.Interpreter.Slots").
 readCell :: Slot -> InterpM Cell
 readCell slot = do
-  cells <- ask
+  cells <- interpEnv
   liftIO (unsafeRead cells slot)
 
 -- | Write a slot's cell in place.
 writeCell :: Slot -> Cell -> InterpM ()
 writeCell slot cell = do
-  cells <- ask
+  cells <- interpEnv
   liftIO (unsafeWrite cells slot cell)
 
 -- | Run @action@ against a call's environment. The environment is
 -- already a mutable array built for this call ('newEnv'), so nothing
 -- has to be allocated here.
 withFreshEnv :: Env -> InterpM a -> Chr a
-withFreshEnv env action = runReaderT action env
+withFreshEnv env action = runInterpM action env
 
 -- ---------------------------------------------------------------------------
 -- Session helpers
@@ -723,7 +757,7 @@ execStmt (SAddHistory ruleId exprs) = do
     addHistory ruleId sids
   pure SFall
 execStmt (SDrainReactivationQueue suspSlot body) = do
-  cells <- ask
+  cells <- interpEnv
   liftChr $
     drainQueue $ \sid -> do
       alive <- aliveConstraint sid
@@ -739,7 +773,7 @@ execStmt (SDrainReactivationQueue suspSlot body) = do
           -- ('ExprStmt'), which cannot jump; anything else would have
           -- no owner here, since the drain is not a labelled loop and
           -- 'drainQueue' has no way to return a value.
-          sig <- runReaderT (execStmts body) cells
+          sig <- runInterpM (execStmts body) cells
           case sig of
             SFall -> pure ()
             _ -> uncaughtSignal "DrainReactivationQueue" sig
@@ -865,8 +899,8 @@ execForeach lbl suspSlot conditions body (susp : rest) = do
             ts <- snapshotValues susp.args
             pure (TEPartner ctName susp.suspId ts)
           writeCell suspSlot (CellId susp.suspId)
-          cells <- ask
-          sig <- liftChr (withTraceDepth (runReaderT (execStmts body) cells))
+          cells <- interpEnv
+          sig <- liftChr (withTraceDepth (runInterpM (execStmts body) cells))
           case sig of
             SFall -> execForeach lbl suspSlot conditions body rest
             SCont l
@@ -1037,8 +1071,8 @@ evalBoolExpr (SBSoftGuard expr) = softGuard (evalBoolExpr expr)
 -- survive the catch.
 softGuard :: InterpM Bool -> InterpM Bool
 softGuard m = do
-  cells <- ask
-  liftChr (catchInstantiation (runReaderT m cells))
+  cells <- interpEnv
+  liftChr (catchInstantiation (runInterpM m cells))
 
 -- ---------------------------------------------------------------------------
 -- Id-expression evaluator

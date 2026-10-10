@@ -25,6 +25,21 @@ MicroHs counters. §7C.7's second attempt was measured on 2026-10-09 against
 with other work on it, and the per-round spreads it reports are correspondingly
 wider.
 
+§4.1's heap re-measurement and §5.1's tick profile were taken on 2026-10-10
+against `aff6778`. That tip also had a broken MicroHs build for a reason worth
+recording: `generated/` is a gitignored build product, and the copy in the
+working tree used for these runs was older than a `Parsed.Module` field the
+macro work (`461e4e6`) added, so `mcabal build` died with a constructor-arity
+error while `make resources-check` passed — the local `ychr-codegen` binary
+that `make resources` and `make resources-check` both run was itself older than
+the field, so `make resources` reported the tree "unchanged". A clean checkout
+is unaffected (`cabal build` rebuilds the generator first), but the failure
+mode is silent: when `mcabal build` reports a constructor-arity error under
+`generated/`, rebuild `ychr-codegen` and rerun `make resources` before looking
+anywhere else. The emitter imports `Data.Maybe` explicitly as of this tip:
+defensive rather than a fix, since both hosts resolve the emitted
+`Just`/`Nothing` without it, but two compilers read the file.
+
 ## 1. How the numbers were taken
 
 No source was changed. Three instruments were used, all built into the
@@ -63,17 +78,58 @@ real cost.
 | `check test/golden/pairs_library/pairs_library.chr` | 0.261 s | 17.606 s | 67× |
 | `check typechecker/*.chr` | 2.291 s | 299.4 s | 131× |
 
-The fixed per-process cost is ≈0.7 s, or ≈5.2 s for the commands that compile
-the type-checker (§3). For the short commands that never do, the *marginal*
-ratios are worse than the table suggests: `fib(18)` is ≈100×, leq_closure
-≈55×.
+The fixed per-process cost of this measurement is ≈0.7 s, or ≈5.2 s for the
+commands that compile the type-checker (§3); option B removed most of it and
+§2.1 re-takes the whole table.
+
+### 2.1 The table, re-taken
+
+The table above is the 2026-10-05 measurement of `d031947`, before options B
+and C.1/C.2/C.8, so it records where the work started rather than where it is.
+The commands above, re-taken on 2026-10-10 at `aff6778` plus the C.3
+flattening of §5.1, with the GHC side re-timed on the same machine at the same
+time (best of three, since several round to 0.01 s). `fib(10)` stands in for
+§2's `fib(18)`, which includes the type-checker compile and so measures
+something the table is no longer about:
+
+| command | MicroHs | MicroHs, old table | factor | GHC (ratio) |
+|---|---:|---:|---:|---:|
+| `run --no-check` leq | 0.06 s | 0.704 s | **12×** | 0.01 s (6×) |
+| `run --no-check` `fib(10)` | 0.10 s | — | — | 0.01 s (10×) |
+| `run --no-check` leq_closure `run(20)` | 0.84 s | 1.588 s | 1.9× | 0.02 s (42×) |
+| `run --no-check` search_label | 0.28 s | 0.930 s | 3.3× | 0.02 s (14×) |
+| `run --no-check` sum_list_test | 0.09 s | 0.745 s | 8.3× | 0.01 s (9×) |
+| `compile --no-check -t vm typechecker/*.chr` | 4.61 s | 4.962 s | 1.1× | 0.13 s (35×) |
+| `check test/golden/leq/leq.chr` | 2.11 s | 7.937 s | 3.8× | 0.15 s (14×) |
+| `check test/golden/pairs_library/pairs_library.chr` | 6.43 s | 17.606 s | 2.7× | 0.25 s (26×) |
+| `check typechecker/*.chr` | 122.4 s | 299.4 s | 2.4× | 2.29 s (53×) |
+
+The MicroHs column is the median `total expired` of three runs through one
+symlink path; GHC is `best of three` wall clock. The old MicroHs column is §2's
+original figure for the same command, and the GHC side has moved a little too
+(`compile` 0.119 → 0.13 s, `check typechecker` 2.291 → 2.29 s), so the
+factor and the parenthesis are the like-for-like comparison and the MicroHs
+column is the present state. The column being compared is the runtime's own
+`total expired` time while §2's is wall clock, so the factor is only
+indicative for the sub-second rows. `check leq` at 14× and the 131× case
+at 53× are the two numbers this document exists to move; both are now under
+the ≈66× floor of MicroHs's own `nfib` ratio, and the large case is down to
+two-fifths of its old ratio.
 
 The important context is that this is not mostly a YCHR defect. MicroHs's own
 `tests/Nfib.hs` records `mhs` at 8.07 M nfib/s against `ghc` at 535 M nfib/s,
 about 66×; the combinator runtime's intrinsic floor is around that. YCHR's
-worst case, `check` at 131×, is roughly twice it — though that comparison
-crosses two different workloads, so treat it as an indication rather than a
-measurement. The extra factor is YCHR-shaped; see §6.
+worst case, `check typechecker/*.chr`, was 131× when §2's table was taken and
+is 53× at §2.1 — the one ratio in this document that has come inside that
+floor. Both figures cross two different workloads, so treat the comparison as
+an indication rather than a measurement; the YCHR-shaped part of it is §6's
+territory.
+
+What is left in the biggest row is §3's phase budget over a much smaller
+interpreter: the ~0.1 s startup, ~0.4 s of `compile -t vm` front end, and the
+checker running over its own sources, plus ~35 % of that wall clock in the
+collector at the default heap (§4.1).
+
 
 ## 3. Where the time goes
 
@@ -175,6 +231,74 @@ a heap-layout- or GC-timing-sensitive bug in the MicroHs runtime or the
 generated code rather than anything in YCHR, but it is unverified. It is the
 reason the heap recommendation below is not a one-line default change.
 
+### 4.1 Re-measured on the current interpreter
+
+The rows above predate C.2 and C.8, which cut the reductions this workload
+performs by well over half. The knob was therefore re-taken on 2026-10-10
+against YCHR `aff6778` and MicroHs `f65d3c65` on the same machine, with the
+binary that `mcabal build` produces at that tip, copied aside and invoked
+through one fixed symlink path (the counter includes a little startup work on
+the argument string, so two binaries called under different paths differ in
+figures that have nothing to do with the change). Wall clock and maximum RSS
+are `/usr/bin/time -f 'rss=%MkB wall=%es'`, the rest `+RTS -v`, with the
+binary reached through one `run` symlink (the same arrangement §7C.1 uses to
+keep the argv[0]-dependent startup work identical across binaries):
+`./run check typechecker/*.chr +RTS -H<heap> -v -RTS`.
+
+`check typechecker/*.chr` — the 96 % interpreter workload — remains the case
+that is mostly collector:
+
+| heap | GCs | GC time | total | wall | max RSS | max live cells |
+|---|---:|---:|---:|---:|---:|---:|
+| default (50 M cells / 800 MB) | 236 | 46.95 s (32.9 %) | 142.78 s | 142.86 s | 0.83 GB | 4 710 139 |
+| `+RTS -H100M` | 115 | 22.62 s (19.7 %) | 114.92 s | — | 1.69 GB | — |
+| `+RTS -H150M` | 77 | 16.01 s (14.8 %) | 108.15 s | — | 2.51 GB | — |
+| `+RTS -H200M` | 58 | 13.49 s (12.6 %) | 107.46 s | — | 3.24 GB | 4 770 921 |
+| `+RTS -H300M` | 39 | 9.12 s (9.1 %) | 100.78 s | 100.97 s | 4.95 GB | — |
+| `+RTS -H400M` | 30 | 7.43 s (7.4 %) | 99.81 s | — | 6.44 GB | 4 859 604 |
+
+The default heap collects 236 times for a working set under 5 M cells: the
+collector is re-scanning a nearly-empty 800 MB heap roughly every 45 M cells
+allocated. Four to six times fewer collections is worth up to 30 % of the run. The
+collector's own time falls monotonically with the heap, but the *total* need
+not: 200 M (107.46 s) comes in just under 150 M (108.15 s), and above that the
+returns flatten — `-H400M` buys one more second over `-H300M` (99.81 against
+100.78 s) for another 1.5 GB, because each collection's mark pass walks the
+whole heap. The `-H100M`
+`ERR: ARR_WRITE` abort of §4 does **not** reproduce at this pin — the run above
+completed — so that abort was either fixed upstream or specific to the older
+interpreter's allocation pattern; either way it is no longer a reason to hold
+the knob back.
+
+The same knob is *not* free on short workloads, because the runtime allocates
+the whole heap up front and page-faults what it touches. `check leq` (default
+2.32 s total, 0.11 s GC):
+
+| heap | GCs | GC time | total |
+|---|---:|---:|---:|
+| default | 7 | 0.11 s (4.9 %) | 2.32 s |
+| `+RTS -H100M` | 5 | 0.08 s (3.4 %) | 2.42 s |
+| `+RTS -H150M` | 4 | 0.06 s (2.2 %) | 2.50 s |
+| `+RTS -H200M` | 4 | 0.06 s (2.1 %) | 2.65 s |
+
+and `check pairs_library` (default 7.41 s wall, 826 MB; `-H200M` 7.30 s wall,
+3.24 GB; `-H400M` 7.65 s wall, 6.44 GB). The fixed per-process cost is ≈0.1 s of
+wall clock and the heap's page footprint per 100 M cells, so the knob is a
+win only once a run's own GC bill exceeds it — from a couple of seconds of
+collector time upward. That is the shape to recommend it in, not a new
+default.
+
+The reductions are *not* invariant across these rows even though the program
+is fixed: `check leq` reports 228.6 M at the default heap and 239.7 M at
+`-H400M`; `check typechecker/*.chr` reports 9 850 M at the default heap,
+9 852 M at `-H100M`, 9 859 M at `-H150M`, 9 864 M at `-H300M` and 9 876 M at
+`-H400M`. The counter is deterministic *for a fixed heap*
+— repeated runs at one size agree to the digit — so reductions are still the
+right A/B metric, but a change that shifts the GC schedule shifts the figure
+with it, and §7C.1/§7C.8's "deterministic, so a single run a side" caveat
+should be read as "for a fixed heap and a change that does not move the
+collector's schedule".
+
 ## 5. Function profile
 
 Tick build, `check pairs_library`, 15.8 M YCHR function entries. Shares are of
@@ -223,6 +347,100 @@ The front-end profile looks different and much healthier:
 lead, followed by the lexer and parser records. The startup-only profile is
 essentially all parser and rename records.
 
+### 5.1 Re-measured, and what entries are worth
+
+A tick build of the current tree (`aff6778`, `mcabal --options=-T build`) on the
+96 % workload, `check typechecker/*.chr`: 193.2 M YCHR function entries across
+1 434 instrumented bindings.
+
+```
+13.7%  Runtime.Interpreter.evalValExpr
+10.8%  Runtime.Interpreter.execStmts
+ 8.5%  Runtime.Interpreter.execStmt
+ 8.4%  Runtime.Interpreter.readCell
+ 8.4%  Runtime.Var.deref
+ 4.8%  Runtime.Interpreter.evalBoolExpr
+ 3.8%  Runtime.Monad.get$.SessionEnv.traceHandler  <- tracing is OFF
+ 3.3%  Runtime.Interpreter.writeCell
+ 3.0%  Interpreter.Slots.get$.SlotProc.slotProcKind
+ 2.7%  Runtime.Interpreter.emitTrace
+ 2.2%  Runtime.Interpreter.evalCallArg
+ 2.0%  VM.Types.get$.Name.unName
+ 1.9%  Runtime.Var.matchTerm
+ 1.7%  Runtime.Var.getArg
+ 1.7%  Runtime.Interpreter.boolFromValue
+ 1.3%  Runtime.Interpreter.evalValExprDeep
+```
+
+The `envValues`/`insertVal` rows are gone with C.2's array, as expected, and the
+list is now the interpreter loop itself — dispatch (`evalValExpr`, `execStmts`,
+`execStmt`, `evalBoolExpr`), cell traffic (`readCell`, `writeCell`) and
+dereferencing. The per-call block of §5's second paragraph is visible as a flat
+shelf: `callProcEntry`, `bindParams`, `newEnv`, `traceEntry`, `traceExit`,
+`withTraceDepth`, `withSavedCallStack`, `withFreshEnv`, `bumpDepthFor` and the
+three `SlotProc` projections each sit at exactly 1 950 675 entries — 1.0 % of the
+total each, ~12 % together, for 1 950 675 procedure calls. (Shares are of the
+YCHR-side total only, per §1: the prebuilt `base`/`containers`/`text` packages
+are not instrumented.)
+
+**An entry's cost is not in the entry count.** Two experiments pin that down,
+with opposite answers, and the difference between them is the lever.
+
+The trace half of the shelf was built and measured first.
+`callProcEntry` read the session's `traceHandler` once per call and threaded it
+through `traceEntry` / `withTraceDepth` / `traceExit` / `emitTrace` / the
+statement loop, taking `check pairs_library` from 541 144 `traceHandler` entries
+to 164 903 and removing most of `withTraceDepth`'s, `emitTrace`'s and
+`traceEntry`/`traceExit`'s on the way. The reduction count did not move:
+`check leq` 228 620 381 → 228 038 042 (−0.26 %), `check pairs_library`
+685 391 800 → 684 051 899 (−0.20 %), `compile -t vm typechecker/*.chr`
+unchanged to within 40 reductions in 510 M, `repl --quiet` bit-identical — while
+cells allocated went *up* 0.8 % on both `check` workloads. Every entry removed
+was an `ask`, a record projection or an `IORef` read. The projection and the
+`IORef` read are primitives whose entry costs no reduction; the `ask` is a
+class-method selection, which is exactly what C.3's flattening is worth
+elsewhere — but there was one per call here against the 23 M cell reads and
+writes per run that C.3 removes an `ask` from, and the added threading offset
+it. The change was reverted.
+
+**Flattening the interpreter's monad layer, by contrast, is worth 8 %.** C.3
+had proposed collapsing the double `ReaderT` into a function; §7C.3 now records
+the shape it took — `InterpM` as `newtype InterpM a = InterpM (Env -> Chr a)`
+with hand-written instances, `Chr` untouched — and what it measured:
+
+| workload | before | after | change |
+|---|---:|---:|---:|
+| `check leq` reductions | 228 620 381 | 210 734 858 | **−7.8 %** |
+| `check pairs_library` reductions | 685 391 800 | 628 264 770 | **−8.3 %** |
+| `check typechecker/*.chr` reductions | 9 844 651 592 | 8 951 142 133 | **−9.1 %** |
+| `check typechecker/*.chr` runtime | 132.94 s | 121.73 s | **−8.4 %** |
+| `check leq` runtime | 2.34 s | 2.10 s | −10 % |
+| `check pairs_library` runtime | 7.07 s | 6.41 s | −9.3 % |
+| `compile -t vm typechecker/*.chr` reductions | 510 315 582 | 510 315 603 | +21 (0.00 %) |
+| `repl --quiet` reductions | 9 241 770 | 9 241 770 | 0.00 % |
+
+The two arms that never interpret a compiled call do not move — `repl
+--quiet` is bit-identical and `compile` changes by 21 reductions in 510 M,
+which is the lazy slot phase doing its job — and that is what makes the rest
+attributable to the interpreter's own `ask`s: each `readCell`/`writeCell`
+and each session helper was paying a dictionary selection for an environment
+that is a function argument once `InterpM` is a `newtype` over `Env -> Chr`.
+The micro-benchmark that predicted it — this module's statement shape, five
+cell reads, three writes and a trace-flag read per statement — costs 412
+reductions per statement through `ReaderT` against 267 through the argument,
+and the workload moves by the
+order of the `ask`s it removes rather than by that factor.
+
+What the two results together say about what is left: the interpreter is a
+tree-walk, so its remaining cost is roughly linear in AST node visits and in the
+reductions each visit costs, and `evalValExpr` alone is entered 26.5 M times for
+9.85 G reductions. A cheaper *primitive* is worth its reductions removed only
+when the primitive is a container lookup or a class-method call; when it is a
+projection on a value already in hand, removing it buys nothing measurable, and
+the tick table cannot tell the two apart. The collector is still the other half
+of the bill (§4.1).
+
+
 ## 6. Root causes
 
 1. **Combinator graph reduction has no inlining or unboxing.** MicroHs ignores
@@ -231,10 +449,13 @@ essentially all parser and rename records.
    allocation. This is the ~66× floor of §2.
 2. **YCHR's hot path is unusually call-dense.** `Chr` is
    `ReaderT SessionEnv IO`, `InterpM` was `ReaderT (IORef Env) Chr` when this
-   profile was taken (C.2 has since made it `ReaderT Env Chr`, §7C.2), and the
-   per-call and per-binding paths go through `Map`/`IntMap`/`Text` and a trace
-   hook that is checked even when disabled. That is the extra factor over
-   MicroHs's own baseline.
+   profile was taken, and the per-call and per-binding paths went through
+   `Map`/`IntMap`/`Text` and a trace hook that is checked even when disabled.
+   C.2 replaced the local `IntMap`s with an array and C.3 flattened `InterpM`
+   to `Env -> Chr` (§7C.2, §7C.3), which is what took the extra factor down
+   from §2's 131× to §2.1's 53× on the worst case; the trace hook remains, and
+   §5.1 records why removing its per-emitter projection is not worth
+   repeating.
 3. **A per-process front-end bill that both builds pay, at 40× the price.**
    The stdlib parse (~0.7 s, 73 M reductions) runs on every invocation and the
    typechecker CHR compilation (~4.5 s) on every type-checking command. GHC pays
@@ -269,6 +490,20 @@ Two constraints. The cost is real RSS (6.4 GB at 400 M cells), so this is a
 desktop/server setting and the WASM target needs a much smaller value. And it
 must be validated against the `-H100M` `ERR: ARR_WRITE` abort of §4, which is
 the reason this is not simply "raise the default and move on".
+
+**Re-measured and re-verified, 2026-10-10 (§4.1).** The abort no longer
+reproduces at MicroHs `f65d3c65`, and on the current interpreter the option is
+worth up to 30 % of the big workload's wall clock: 142.9 s → 108.2 s at
+`-H150M` and 100.8 s at `-H300M`, for 2.5 GB and 4.9 GB of RSS against 0.8 GB.
+It is *not* free on short runs — the runtime allocates the whole heap at
+startup, and `check leq` pays ≈0.1 s of wall clock for the extra pages while
+saving 0.05 s of GC, so the knob only pays from a couple of seconds of
+collector time upward. That makes it a **recommended argument for long runs**
+(CI's MicroHs job, batch checks, the §9 reproducing recipes), not a default in
+this tree: `HEAP_CELLS` is a property of the installed MicroHs runtime, not of
+the combinator file, so a YCHR-side default is not possible without a toolchain
+rebuild (see the §9 recipe). What this option still does not have is a
+per-heap-size decision on the WASM target.
 
 ### B. Precompute the per-process resources — implemented
 
@@ -577,17 +812,33 @@ item names its evidence in §5.
    item suggested as a cheaper first cut. The per-call array fill is exactly
    what the GHC microbenchmarks pay for, so an arity-sized association list (or
    a shared empty environment for a procedure with no locals) is the shape a
-   follow-up A/B would test, on the same three workloads. Also untouched: C.3's
-   monad flattening and C.5's `bindParams` traversal — `bindParams` keeps its
-   `zip [0 ..]` shape so that its own change stays a separate measurement.
-3. **Flatten the monad.** Collapse the double `ReaderT` into one newtype over
-   `SessionEnv -> Env -> IO a` (or explicit state passing) and stop calling
-   `ask` from helpers.
-4. **Trace fast path.** Read "tracing is on" once per call into a `Bool`, skip
+   follow-up A/B would test, on the same three workloads. C.3's monad
+   flattening has since been measured on its own (§7C.3); C.5's `bindParams`
+   traversal is still untouched — `bindParams` keeps its `zip [0 ..]` shape so
+   that its own change stays a separate measurement.
+3. **Flatten the monad. — implemented.** Collapse the double `ReaderT` into one
+   newtype over `SessionEnv -> Env -> IO a` (or explicit state passing) and stop
+   calling `ask` from helpers. The implementation took the narrower of the two
+   shapes and flattened only the interpreter's own layer: `InterpM` is now
+   `newtype InterpM a = InterpM (Env -> Chr a)` with hand-written
+   `Functor`/`Applicative`/`Monad`/`MonadIO` instances, so the per-call `Env` is
+   a function argument instead of a class-method `ask` under MicroHs's
+   no-inlining, no-unboxing model. `Chr` itself is unchanged, which keeps the
+   rest of the runtime (store, unification, search, the query driver) out of the
+   change. Measured: `check leq` −7.8 % reductions, `check pairs_library`
+   −8.3 %, `check typechecker/*.chr` −9.1 % and −8.4 % runtime, with
+   `repl --quiet` bit-identical and `compile -t vm typechecker/*.chr` moving by
+   21 reductions in 510 M, because neither interprets a compiled call. See
+   §5.1.
+4. **Trace fast path. — implemented, measured, reverted.** Read "tracing is on"
+   once per call into a `Bool`, skip
    constructing the event action when it is off, and do not touch
    `traceHandler` per event. `traceEntry`, `traceExit`, `withTraceDepth`,
    `emitTrace` and the handler projection together are ~11 % of entries for a
-   subsystem that is disabled.
+   subsystem that is disabled — but entries into record projections and `IORef`
+   reads cost no reductions, and threading the handler through the call did not
+   move the reduction count. §5.1 records the measurement; do not re-attempt it
+   without a different reason.
 5. **`bindParams`**: drop the `length` + `zip [0..]` pair of traversals; walk
    the argument list once with a counter.
 6. Merge `pushFrame` and `withSavedCallStack`, and materialise the call stack
@@ -911,6 +1162,16 @@ Implement the shim's hot conversions without the list round trip, or avoid
 `concatMap` in the serializer. This is the serializer, so it shortens `compile
 -t vm/scheme`, not `check`.
 
+One half of this is now measured rather than hypothesised, because it is also
+the cleanest test of root cause 1. `{-# INLINE concatMap #-}` was added to the
+shim and the binary rebuilt: `compile --no-check -t vm typechecker/*.chr`
+moves from 510 315 630 to 510 315 631 reductions and its wall clock from
+4.71–4.84 s to 4.75–4.79 s. MicroHs ignores the pragma, exactly as §6.1 says,
+and that is worth knowing before anyone tries to pay for a change with
+inlining: the only lever is to not write the intermediate list, which is what
+the first sentence of this option asks for. The item stays open and
+unmeasured on the `mhs` side; it cannot move `check`.
+
 ### E. Do not reach for `-flto -march=native` first
 
 The `unix_x86` target that already exists in `mhs.conf`
@@ -922,9 +1183,12 @@ The `unix_x86` target that already exists in `mhs.conf`
 
 ## 8. Open questions
 
-- Is the `-H100M` `ERR: ARR_WRITE` abort (§4) a runtime bug or specific to this
-  workload and heap size? It is the only thing standing between A and a default
-  change, and it is worth a minimal reproducer regardless.
+- ~~Is the `-H100M` `ERR: ARR_WRITE` abort (§4) a runtime bug or specific to this
+  workload and heap size?~~ No longer reproducible at `f65d3c65` on the current
+  interpreter: `check typechecker/*.chr` completes at `-H100M` (§4.1). What
+  remains open is the *default*: whether a larger `HEAP_CELLS` should be baked
+  into the MicroHs side of the build, which is a toolchain question with an RSS
+  and WASM cost (§7A), not a YCHR-side one.
 - ~~Can `mcabal` be made to run a pre-build step for B, or does the generated
   module have to be produced out of band by `make`?~~ No pre-build hook is
   visible in `mcabal`, and none was needed: the modules are produced out of
@@ -942,6 +1206,22 @@ The `unix_x86` target that already exists in `mhs.conf`
   at an array are in §7C.1 and item 8; item 8 named what an array-backed `Env`
   needed first (a slot count on `SlotProc`) and how to judge it, and item 2 was
   run separately from the procedure-table change, as this question asked.
+- ~~Is `IntMap` the right structure for the store's id table
+  ('SessionEnv.storeById')?~~ No, at least not on the MicroHs side, and the
+  measurement contradicts what §7C.1's table suggests. The table prices a
+  boxed `Array` lookup at a constant 89 reductions against 716–1186 for
+  `IntMap` and 130–207 for `Map`, so the id table was swapped to
+  `Data.Map.Strict Int` on 2026-10-10 against the flattened interpreter
+  (`af8fc00`) to test the direction: every arm regressed —
+  `check leq` 210 734 858 → 211 009 444 reductions (+0.13 %) and 229.5 →
+  232.0 M cells allocated (+1.1 %), `check pairs_library` 628 264 770 →
+  629 122 016 (+0.14 %) and 688.9 → 699.0 M cells (+1.5 %), `compile` and
+  `repl` flat. The reads the table prices are not what this table spends its
+  time on: `storeById` is written once per suspension created and read once
+  per liveness check, and its snapshot and restore are whole-structure
+  pointer writes that `Map` makes no cheaper. The swap was reverted. An
+  `Array`/`IntMap` hybrid would need the id distribution measured first, and
+  this result says the read path is not where the win would be.
 
 ## 9. Reproducing
 
@@ -957,20 +1237,162 @@ mcabal build
 # Counters and the GC split.
 ./dist-mcabal/bin/mhs/ychr check typechecker/*.chr +RTS -v -RTS
 
-# The heap experiment.
-./dist-mcabal/bin/mhs/ychr check typechecker/*.chr +RTS -H400M -v -RTS
+# The heap experiment (§4.1). The argument is read by the runtime, not by
+# ychr, so it must sit between +RTS and -RTS; the CLI never sees it.
+./dist-mcabal/bin/mhs/ychr check typechecker/*.chr +RTS -H300M -v -RTS
+
+# Making a larger heap the default is a MicroHs-side change, because
+# HEAP_CELLS is compiled into the runtime rather than the combinator file:
+# add a target to MicroHs's mhs.conf with
+#   ccflags = "-O3 -DHEAP_CELLS=300000000"
+# and install that mhs (tools/mhs-install.sh pins the revision the package
+# set is verified against, so expect to carry the target as a patch or a
+# fork). The WASM target needs its own, much smaller, value.
 
 # Tick profile: build an instrumented binary in a scratch copy, then
 # run any command with +RTS -T -RTS. The copy needs the generated
-# modules too — copy them, or run `make resources` inside it.
+# modules too — copy them, or run `make resources` inside it. The scratch
+# copy also needs the test inputs if the command names them.
 mkdir -p .perf-scratch/ychr-tick
 cp -a app embed libraries typechecker src ychr.cabal cabal.project \
   .perf-scratch/ychr-tick/
 cp -a generated .perf-scratch/ychr-tick/
+mkdir -p .perf-scratch/ychr-tick/test
+cp -a test/golden .perf-scratch/ychr-tick/test/
 (cd .perf-scratch/ychr-tick && mcabal --options=-T build)
 .perf-scratch/ychr-tick/dist-mcabal/bin/mhs/ychr check \
   test/golden/pairs_library/pairs_library.chr +RTS -T -RTS \
   | grep -E '^[A-Za-z]' | sort -k2 -nr | head -25
+```
+
+The tick table's shares are of the **whole** table, not of the printed rows:
+sum the counts first (§5.1's 193.2 M, over 1 434 bindings), or a `head`-ed
+excerpt overstates every row it keeps.
+
+§7C.3's numbers before the workloads come from a standalone program, not from
+`ychr`, because the question is the monad layer and not the interpreter. It
+runs the same statement shape twice — five cell reads, three writes and a
+trace-flag read, once through a `ReaderT Env IO` and once through a `newtype`
+over `Env -> IO` with hand-written instances:
+
+```sh
+mhs -o stmts stmts.hs
+for m in r d; do ./stmts $m 20000 +RTS -v -RTS | grep 'reductions'; done
+# r 8 229 732   (411.5 per statement, through ReaderT)
+# d 5 329 303   (266.5 per statement, environment as an argument)
+```
+
+and `stmts.hs` is the two monads over that one statement body:
+
+```haskell
+{-# LANGUAGE OverloadedRecordDot #-}
+module Main where
+
+import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Trans.Reader (ReaderT, ask, runReaderT)
+import Data.Array.Base (unsafeRead, unsafeWrite)
+import Data.Array.IO (IOArray, newArray)
+import Data.IORef
+import System.Environment (getArgs)
+
+data Cell = CellEmpty | CellValue !Int | CellId !Int
+
+data Env = Env { cells :: !(IOArray Int Cell), traceRef :: !(IORef Bool) }
+
+type Chr = ReaderT Env IO
+runChr :: Chr a -> Env -> IO a
+runChr = runReaderT
+
+-- baseline: the reader layer, as InterpM/Chr has it
+readCell :: Int -> Chr Int
+readCell i = do
+  e <- ask
+  c <- liftIO (unsafeRead e.cells i)
+  case c of
+    CellValue v -> pure v
+    _ -> pure 0
+
+writeCell :: Int -> Int -> Chr ()
+writeCell i v = do
+  e <- ask
+  liftIO (unsafeWrite e.cells i (CellValue v))
+
+traceOn :: Chr Bool
+traceOn = do
+  e <- ask
+  on <- liftIO (readIORef e.traceRef)
+  pure on
+
+stmt :: Int -> Chr Int
+stmt i = do
+  a <- readCell 0
+  writeCell 1 (a + 1)
+  b <- readCell 1
+  on <- traceOn
+  if on then writeCell 2 (b + 1) else pure ()
+  c <- readCell 1
+  writeCell 0 (c + 1)
+  readCell 0
+
+loop :: Int -> Int -> Chr Int
+loop n acc
+  | n <= 0 = pure acc
+  | otherwise = do
+      v <- stmt n
+      loop (n - 1) (acc + v)
+
+-- candidate: no reader layer; the env is an argument
+newtype D a = D { runD :: Env -> IO a }
+instance Functor D where fmap f (D m) = D (\e -> fmap f (m e))
+instance Applicative D where
+  pure x = D (\_ -> pure x)
+  D f <*> D x = D (\e -> f e <*> x e)
+instance Monad D where
+  D m >>= k = D (\e -> m e >>= \a -> runD (k a) e)
+
+dReadCell :: Int -> D Int
+dReadCell i = D $ \e -> do
+  c <- unsafeRead e.cells i
+  case c of
+    CellValue v -> pure v
+    _ -> pure 0
+
+dWriteCell :: Int -> Int -> D ()
+dWriteCell i v = D $ \e -> unsafeWrite e.cells i (CellValue v)
+
+dTraceOn :: D Bool
+dTraceOn = D $ \e -> readIORef e.traceRef
+
+dStmt :: Int -> D Int
+dStmt i = do
+  a <- dReadCell 0
+  dWriteCell 1 (a + 1)
+  b <- dReadCell 1
+  on <- dTraceOn
+  if on then dWriteCell 2 (b + 1) else pure ()
+  c <- dReadCell 1
+  dWriteCell 0 (c + 1)
+  dReadCell 0
+
+dLoop :: Int -> Int -> D Int
+dLoop n acc
+  | n <= 0 = pure acc
+  | otherwise = do
+      v <- dStmt n
+      dLoop (n - 1) (acc + v)
+
+main :: IO ()
+main = do
+  args <- getArgs
+  let mode = case args of (m : _) -> m; [] -> "r"
+      n = case args of (_ : s : _) -> read s; _ -> 20000
+  arr <- newArray (0, 2) (CellValue 0) :: IO (IOArray Int Cell)
+  ref <- newIORef False
+  let e = Env arr ref
+  case mode of
+    "r" -> runChr (loop n 0) e >>= print
+    "d" -> runD (dLoop n 0) e >>= print
+    _ -> pure ()
 ```
 
 The container numbers of §7C.1 and item 8 come from a standalone program, not
