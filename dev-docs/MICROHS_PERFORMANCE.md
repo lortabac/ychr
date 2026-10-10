@@ -6,8 +6,9 @@ the measurements behind each claim and the options for fixing it. It began as
 a diagnosis only: options A, D and E are still just that. Option B, the
 `CallExpr` half of C.1, C.2 and the procedure-table half of C.8 have since
 been implemented — their sections record what was built and what it measured
-— and C.7 was implemented and dropped for now, with a re-measurement to
-revisit on the item 8 baseline.
+— and C.7 has been implemented twice and dropped both times, the second time
+on the item 8 baseline: §7C.7 records both attempts, the measurements that
+settled them, and why a `Data.Array` dispatch does not change the verdict.
 
 Everything below was measured on 2026-10-05 against YCHR `d031947` (branch
 `mhs-optimization`) and MicroHs `f65d3c65`, on an AMD Ryzen AI 9 HX 370. The
@@ -19,7 +20,10 @@ an A/B (the `-flto` comparison of §7E) are medians of interleaved rounds.
 against `5e2d5a6`; they interleave three rounds a side and use the runtime's
 counters, which are deterministic. §7C.8's were taken on 2026-10-09 against
 `716f4b6`, with the same interleaved GHC rounds and the same deterministic
-MicroHs counters.
+MicroHs counters. §7C.7's second attempt was measured on 2026-10-09 against
+`8618597`, the item 8 baseline; unlike the runs above it was taken on a machine
+with other work on it, and the per-round spreads it reports are correspondingly
+wider.
 
 ## 1. How the numbers were taken
 
@@ -464,7 +468,8 @@ item names its evidence in §5.
 
    Not attempted here: indexing the host-call registry and keying the
    `evaluables`/`callables` tables by index rather than by `Name`. The first is
-   item 7 below, which has since been built and dropped on measurement; the
+   item 7 below, which has since been built twice — most recently on the item 8
+   `Data.Array` — and dropped on measurement both times; the
    second is the smaller, still-unclaimed remainder — one `Map` lookup per `is`
    and `'$call'` dispatch today, and `PROJECT.md` item 3's scope names them.
 2. **Array-based locals. — implemented.** The slot phase already numbered every
@@ -589,7 +594,7 @@ item names its evidence in §5.
    only on the error path.
 
 7. **Index host calls, and make compiled host dispatch symmetric with compiled
-   procedure calls. — implemented, measured, and dropped.** Item 1 did the
+   procedure calls. — implemented twice, measured, and dropped.** Item 1 did the
    procedure half of this; the host half was still one `Map` lookup per call,
    `lookupHostCall` (1.83 M calls per run on the type-checker profile in
    `PROJECT.md` item 3). The registry is a runtime argument of `interpret`, and
@@ -693,10 +698,103 @@ item names its evidence in §5.
    and `PROJECT.md` item 3's `HostCall` half stays open; item 8's container
    choice is untouched by this result.
 
-   Parked rather than closed: item 8 has since put the procedure table behind
-   an `Array Int SlotProc` and brought `Data.Array` into the build on its own
-   account, so this dispatch table should be built on top of it and re-measured
-   on the item 8 baseline before the result above is treated as final.
+   **Second attempt: on the item 8 array table (2026-10-09, `8618597`).** Item 8
+   has since put the procedure table behind a boxed `Data.Array` and brought
+   `Data.Array` into the build on its own account, so the dispatch half was
+   rebuilt on top of it, with the two costs the first attempt measured attacked
+   directly.
+
+   - The index space is unchanged — `SlotValExpr.SHostCall` carries a `HostIx`,
+     the position of its name in `SlotProgram.slotHostCallNames` — but the
+     element is bare. The first attempt's table was
+     `Array Int (Name, Maybe HostCallFn)`, whose element measures 119
+     reductions against 166 for the `Map`-with-`Text` lookup; the second
+     attempt's is `Array Int (Maybe HostCallFn)`, with the names in the
+     program's own shared array and the name read back only on the failure and
+     trace paths. A dispatch is then one `(!)` and a `Maybe` case, whose
+     floor is the bare array's 89.
+   - The enumeration is fused into the closure walk the compiler already makes:
+     `VM.Closure.programTargetsAndHostCalls` returns the dangling call targets
+     and the host-call names in one traversal, and the precompiled
+     type-checker's generated module emits the names as a literal, so nothing
+     walks the 901-procedure program at MicroHs load time.
+
+   GHC is criterion, three interleaved rounds a side, medians of the per-round
+   means. The machine was not quiet for this change — per-round spreads ran
+   1.4 to 14 % — so the rows that decide are read as the three base/after
+   pairs. `typecheck/pairs_library` is faster in all three (115.0, 115.4 and
+   120.4 ms against 120.4, 118.8 and 126.5 ms), `lambda_test` is slower in all
+   three (4.99, 5.03 and 5.35 µs against 4.80, 4.87 and 5.01 µs), and `guard`
+   is slower in two of the three (3.48, 3.36 and 3.66 µs against 3.31, 3.39 and
+   3.29 µs). The other rows move by less than the range spanned by their six
+   interleaved rounds (`sum_list_test` is inside its after-side spread but above
+   its before-side one).
+
+   | workload | before | after | change |
+   |---|---:|---:|---:|
+   | `typecheck/pairs_library` | 120.39 ms | 115.43 ms | **−4.1 %** |
+   | `search_label_alt` | 1.620 ms | 1.569 ms | **−3.2 %** |
+   | `sum_list_test` | 11.39 µs | 11.03 µs | **−3.1 %** |
+   | `search_deep` | 42.33 ms | 41.30 ms | −2.4 % |
+   | `search_label` | 1.651 ms | 1.614 ms | −2.3 % |
+   | `leq` | 2.647 µs | 2.598 µs | −1.9 % |
+   | `search_generate` | 25.25 ms | 24.94 ms | −1.2 % |
+   | `leq_closure` | 6.439 ms | 6.363 ms | −1.2 % |
+   | `fib` | 317.97 µs | 314.48 µs | −1.1 % |
+   | `graph_test` | 39.46 µs | 39.36 µs | −0.3 % |
+   | `lambda_test` | 4.87 µs | 5.03 µs | **+3.2 %** |
+   | `guard` | 3.310 µs | 3.477 µs | **+5.0 %** |
+
+   and MicroHs `+RTS -v` reductions (deterministic; two interleaved runs
+   identical to the digit, so these are single runs a side):
+
+   | workload | before | after | change |
+   |---|---:|---:|---:|
+   | `repl --quiet` | 8 805 690 | 9 190 290 | **+4.4 %** |
+   | `check leq` | 352 464 694 | 355 449 511 | **+0.85 %** |
+   | `check pairs_library` | 1 080 123 748 | 1 087 761 387 | **+0.71 %** |
+   | `compile --no-check -t vm typechecker/*.chr` | 507 045 549 | 509 796 890 | +0.54 % |
+
+   The GHC table is the trade-off in one place: the change is worth up to
+   about 4 % on the call-heavy benchmarks that moved (`typecheck/pairs_library`,
+   `sum_list_test` and the `search_*` arms; `graph_test` is flat), and costs 3
+   to 5 % on the two benchmarks whose whole cost is opening a session and
+   running one goal.
+   The table is on the order of 4 kB a session — an estimate from the build,
+   not an allocation measurement: 32 host-call names for a program the size of
+   `guard`, whose prelude supplies almost all of them, and `listArray` over them
+   allocates the array, a thunk per cell and a few list cells per name — against
+   a 3 µs session. A second variant was built to separate the table's *size*
+   from its *existence*: a mutable `IOArray Int (Maybe HostCallFn)` filled from
+   the registry on first dispatch, which cuts the per-session allocation to a
+   few hundred bytes (again an estimate) but puts an `IO` read on the per-call
+   path. It did not turn the picture around — it improved only the proxy,
+   `typecheck/pairs_library` −3.1 % with `search_generate` flat at −0.3 %, while
+   `guard` +2.6 %, `lambda_test` +2.9 %, `graph_test` +4.6 %, `leq` +2.1 % and
+   the remaining micro-benchmarks +0.3 % to +2.4 %. The session cost is therefore
+   not simply the table's construction: any per-session table indexing 32 names
+   is visible on a 3 µs session, and the memo that avoids one gives back the
+   per-call win it exists for. (That variant was measured on GHC only.)
+
+   MicroHs settles it on its own: every arm regresses. The *compile* arms show
+   the fused walk's cost by itself — it runs on every compile, even one that
+   never dispatches a compiled host call, where the first attempt's lazy
+   enumeration left `repl --quiet` and `compile` untouched to the digit — and
+   the *check* arms add the per-session table to it. Together they outweigh the
+   47 to 77 reductions a call saves (§7C.1's array element, item 8's bare array)
+   at the call counts a `check` reaches — unmeasured for these runs, but well
+   short of the 1.83 M of the type-checker profile in `PROJECT.md` item 3. That
+   is the same arithmetic the first attempt failed on, and it does not move.
+
+   Decision rule as item 1, and the same answer as the first attempt: this fails
+   the GHC session-init half (`guard`, `lambda_test`) and it fails MicroHs
+   outright, so it was reverted and `PROJECT.md` item 3's `HostCall` half stays
+   open. The item is no longer parked: two attempts — the first with a deferred
+   `Map` lookup in each array element, the second with a bare element on item
+   8's `Data.Array` — agree that indexing host calls does not pay under MicroHs,
+   and that the GHC side can only pay by accepting a per-session regression the
+   short benchmarks exist to catch. The `evaluables`/`callables` keys behind
+   `is` and `'$call'` remain the smaller, still-unclaimed remainder of item 3.
 
 8. **Back dense `Int`-keyed tables with `Data.Array`. — the procedure table
    implemented.** Item 1's container table is the evidence; the row to act on
