@@ -234,7 +234,8 @@ multi-goal query API instead.
 - **Definition-site name resolution** (hygiene). It can be added
   compatibly, because a qualified name means the same under both
   schemes.
-- **Aggregates.** The aggregate core form is specified separately.
+- **Aggregates.** The aggregate core form is specified separately,
+  in [aggregates.md](aggregates.md) (draft).
   Its goal argument will be a goal position for this specification,
   so nested aggregates such as
   `argmax(S, (client(C), sum(B, account(_, C, _, B), S)))` expand.
