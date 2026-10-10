@@ -25,6 +25,23 @@ MicroHs counters. §7C.7's second attempt was measured on 2026-10-09 against
 with other work on it, and the per-round spreads it reports are correspondingly
 wider.
 
+§4.1's heap re-measurement and §5.1's tick profile were taken on 2026-10-10
+against `aff6778`, the tip this section's edits were made on. That tip also had
+a broken MicroHs build for a reason worth recording: `generated/` is a
+gitignored build product, and the copy in this working tree was older than a
+`Parsed.Module` field the macro work (`461e4e6`) added, so `mcabal build` died
+with a constructor-arity error while `make resources-check` passed — the local
+`ychr-codegen` binary that `make resources` and `make resources-check` both run
+was itself older than the field, so `make resources` reported the tree
+"unchanged". A clean checkout is unaffected (`cabal build` rebuilds the
+generator first), but the failure mode is silent, so if `mcabal build` reports
+a constructor-arity error under `generated/`, rebuild `ychr-codegen` and rerun
+`make resources` before looking anywhere else. The emitter also imports
+`Data.Maybe` explicitly now, which is defensive rather than a fix — both
+hosts resolve the emitted `Just`/`Nothing` without it, but the module is
+compiled by two implementations and only one has a Prelude that re-exports
+`Maybe`.
+
 ## 1. How the numbers were taken
 
 No source was changed. Three instruments were used, all built into the
@@ -175,6 +192,63 @@ a heap-layout- or GC-timing-sensitive bug in the MicroHs runtime or the
 generated code rather than anything in YCHR, but it is unverified. It is the
 reason the heap recommendation below is not a one-line default change.
 
+### 4.1 Re-measured on the current interpreter
+
+The rows above predate C.2 and C.8, which cut the reductions this workload
+performs by well over half. The knob was therefore re-taken on 2026-10-10
+against YCHR `aff6778` and MicroHs `f65d3c65` on the same machine, with the
+current binary (`.perf-scratch/bin/ychr-baseline`'s build), `/usr/bin/time` for
+the wall clock and maximum RSS, and `+RTS -v` for everything else.
+
+`check typechecker/*.chr` — the 96 % interpreter workload — remains the case
+that is mostly collector:
+
+| heap | GCs | GC time | total | wall | max RSS | max live cells |
+|---|---:|---:|---:|---:|---:|---:|
+| default (50 M cells / 800 MB) | 236 | 46.95 s (32.9 %) | 142.78 s | 142.86 s | 0.83 GB | 4 710 139 |
+| `+RTS -H100M` | 115 | 22.62 s (19.7 %) | 114.92 s | — | 1.69 GB | — |
+| `+RTS -H150M` | 77 | 16.01 s (14.8 %) | 108.15 s | — | 2.51 GB | — |
+| `+RTS -H200M` | 58 | 13.49 s (12.6 %) | 107.46 s | — | 3.24 GB | 4 770 921 |
+| `+RTS -H300M` | 39 | 9.12 s (9.1 %) | 100.78 s | 100.97 s | 4.95 GB | — |
+| `+RTS -H400M` | 30 | 7.43 s (7.4 %) | 99.81 s | — | 6.44 GB | 4 859 604 |
+
+The default heap collects 236 times for a working set under 5 M cells: the
+collector is re-scanning a nearly-empty 800 MB heap roughly every 45 M cells
+allocated. Four to six times fewer collections is worth up to 30 % of the run,
+and the re-measured curve is monotone down to 300 M cells. The `-H100M`
+`ERR: ARR_WRITE` abort of §4 does **not** reproduce at this pin — the run above
+completed — so that abort was either fixed upstream or specific to the older
+interpreter's allocation pattern; either way it is no longer a reason to hold
+the knob back.
+
+The same knob is *not* free on short workloads, because the runtime allocates
+the whole heap up front and page-faults what it touches. `check leq` (default
+2.32 s total, 0.11 s GC):
+
+| heap | GCs | GC time | total |
+|---|---:|---:|---:|
+| default | 7 | 0.11 s (4.9 %) | 2.32 s |
+| `+RTS -H100M` | 5 | 0.08 s (3.4 %) | 2.42 s |
+| `+RTS -H150M` | 4 | 0.06 s (2.2 %) | 2.50 s |
+| `+RTS -H200M` | 4 | 0.06 s (2.1 %) | 2.65 s |
+
+and `check pairs_library` (default 7.41 s wall, 826 MB; `-H200M` 7.30 s,
+3.24 GB; `-H400M` 7.65 s, 6.44 GB). The fixed per-process cost is ≈0.1 s of
+wall clock and the heap's page footprint per 100 M cells, so the knob is a
+win only once a run's own GC bill exceeds it — from a couple of seconds of
+collector time upward. That is the shape to recommend it in, not a new
+default.
+
+The reductions are *not* invariant across these rows even though the program
+is fixed: `check leq` reports 228.6 M at the default heap and 239.7 M at
+`-H400M`; `check typechecker/*.chr` reports 9 850 M, 9 852 M, 9 859 M, 9 864 M
+and 9 876 M as the heap grows. The counter is deterministic *for a fixed heap*
+— repeated runs at one size agree to the digit — so reductions are still the
+right A/B metric, but a change that shifts the GC schedule shifts the figure
+with it, and §7C.1/§7C.8's "deterministic, so a single run a side" caveat
+should be read as "for a fixed heap and a change that does not move the
+collector's schedule".
+
 ## 5. Function profile
 
 Tick build, `check pairs_library`, 15.8 M YCHR function entries. Shares are of
@@ -223,6 +297,64 @@ The front-end profile looks different and much healthier:
 lead, followed by the lexer and parser records. The startup-only profile is
 essentially all parser and rename records.
 
+### 5.1 Re-measured, and what entries are worth
+
+A tick build of the current tree (`aff6778`, `mcabal --options=-T build`) on the
+96 % workload, `check typechecker/*.chr`: 193.2 M YCHR function entries across
+1 434 instrumented bindings.
+
+```
+13.7%  Runtime.Interpreter.evalValExpr
+10.8%  Runtime.Interpreter.execStmts
+ 8.5%  Runtime.Interpreter.execStmt
+ 8.4%  Runtime.Interpreter.readCell
+ 8.4%  Runtime.Var.deref
+ 4.8%  Runtime.Interpreter.evalBoolExpr
+ 3.8%  Runtime.Monad.get$.SessionEnv.traceHandler  <- tracing is OFF
+ 3.3%  Runtime.Interpreter.writeCell
+ 3.0%  Interpreter.Slots.get$.SlotProc.slotProcKind
+ 2.7%  Runtime.Interpreter.emitTrace
+ 2.2%  Runtime.Interpreter.evalCallArg
+ 2.0%  VM.Types.get$.Name.unName
+ 1.9%  Runtime.Var.matchTerm
+ 1.7%  Runtime.Var.getArg
+ 1.7%  Runtime.Interpreter.boolFromValue
+ 1.3%  Runtime.Interpreter.evalValExprDeep
+```
+
+The `envValues`/`insertVal` rows are gone with C.2's array, as expected, and the
+list is now the interpreter loop itself — dispatch (`evalValExpr`, `execStmts`,
+`execStmt`, `evalBoolExpr`), cell traffic (`readCell`, `writeCell`) and
+dereferencing. The per-call block of §5's second paragraph is visible as a flat
+shelf: `callProcEntry`, `bindParams`, `newEnv`, `traceEntry`, `traceExit`,
+`withTraceDepth`, `withSavedCallStack`, `withFreshEnv`, `bumpDepthFor` and the
+three `SlotProc` projections each sit at exactly 1 950 675 entries — call it 1 %
+of the total each, ~10 % together, for 1 950 675 procedure calls.
+
+**That shelf is not worth attacking, and the tick table cannot show that.**
+The trace half of it was built and measured: `callProcEntry` read the session's
+`traceHandler` once per call and threaded it through `traceEntry` /
+`withTraceDepth` / `traceExit` / `emitTrace` / the statement loop, taking
+`check pairs_library` from 541 144 `traceHandler` entries to 164 903 and
+removing most of `withTraceDepth`'s, `emitTrace`'s and
+`traceEntry`/`traceExit`'s on the way. The reduction count did not move:
+`check leq` 228 620 381 → 228 038 042 (−0.26 %), `check pairs_library`
+685 391 800 → 684 051 899 (−0.20 %), `compile -t vm typechecker/*.chr`
+unchanged to within 40 reductions in 510 M, `repl --quiet` bit-identical — while
+cells allocated went *up* 0.8 % on both `check` workloads. Every entry removed
+was an `ask`, a record projection or an `IORef` read: primitives whose entry
+costs no reduction, unlike the `Map`/`IntMap` calls §7C.1's container table
+prices at 130–1186 reductions each. The change was reverted.
+
+The same arithmetic is why the rest of the shelf is not followed up here: the
+*cost* of an entry is not in the entry count, and what the interpreter has left
+is one reduction per AST node visit — `evalValExpr` alone is entered 26.5 M
+times for 9.85 G reductions, and its cases are the program. What is left to
+attack is therefore either the collector (§4.1: up to 30 % of wall clock, and
+the only lever measured to move it) or the reduction count itself, and the
+latter needs an algorithmic change rather than a cheaper projection.
+
+
 ## 6. Root causes
 
 1. **Combinator graph reduction has no inlining or unboxing.** MicroHs ignores
@@ -269,6 +401,20 @@ Two constraints. The cost is real RSS (6.4 GB at 400 M cells), so this is a
 desktop/server setting and the WASM target needs a much smaller value. And it
 must be validated against the `-H100M` `ERR: ARR_WRITE` abort of §4, which is
 the reason this is not simply "raise the default and move on".
+
+**Re-measured and re-verified, 2026-10-10 (§4.1).** The abort no longer
+reproduces at MicroHs `f65d3c65`, and on the current interpreter the option is
+worth up to 30 % of the big workload's wall clock: 142.9 s → 108.2 s at
+`-H150M` and 100.8 s at `-H300M`, for 2.5 GB and 4.9 GB of RSS against 0.8 GB.
+It is *not* free on short runs — the runtime allocates the whole heap at
+startup, and `check leq` pays ≈0.1 s of wall clock for the extra pages while
+saving 0.05 s of GC, so the knob only pays from a couple of seconds of
+collector time upward. That makes it a **recommended argument for long runs**
+(CI's MicroHs job, batch checks, the §9 reproducing recipes), not a default in
+this tree: `HEAP_CELLS` is a property of the installed MicroHs runtime, not of
+the combinator file, so a YCHR-side default is not possible without a toolchain
+rebuild (see the §9 recipe). What this option still does not have is a
+per-heap-size decision on the WASM target.
 
 ### B. Precompute the per-process resources — implemented
 
@@ -922,9 +1068,12 @@ The `unix_x86` target that already exists in `mhs.conf`
 
 ## 8. Open questions
 
-- Is the `-H100M` `ERR: ARR_WRITE` abort (§4) a runtime bug or specific to this
-  workload and heap size? It is the only thing standing between A and a default
-  change, and it is worth a minimal reproducer regardless.
+- ~~Is the `-H100M` `ERR: ARR_WRITE` abort (§4) a runtime bug or specific to this
+  workload and heap size?~~ No longer reproducible at `f65d3c65` on the current
+  interpreter: `check typechecker/*.chr` completes at `-H100M` (§4.1). What
+  remains open is the *default*: whether a larger `HEAP_CELLS` should be baked
+  into the MicroHs side of the build, which is a toolchain question with an RSS
+  and WASM cost (§7A), not a YCHR-side one.
 - ~~Can `mcabal` be made to run a pre-build step for B, or does the generated
   module have to be produced out of band by `make`?~~ No pre-build hook is
   visible in `mcabal`, and none was needed: the modules are produced out of
@@ -957,21 +1106,37 @@ mcabal build
 # Counters and the GC split.
 ./dist-mcabal/bin/mhs/ychr check typechecker/*.chr +RTS -v -RTS
 
-# The heap experiment.
-./dist-mcabal/bin/mhs/ychr check typechecker/*.chr +RTS -H400M -v -RTS
+# The heap experiment (§4.1). The argument is read by the runtime, not by
+# ychr, so it must sit between +RTS and -RTS; the CLI never sees it.
+./dist-mcabal/bin/mhs/ychr check typechecker/*.chr +RTS -H300M -v -RTS
+
+# Making a larger heap the default is a MicroHs-side change, because
+# HEAP_CELLS is compiled into the runtime rather than the combinator file:
+# add a target to MicroHs's mhs.conf with
+#   ccflags = "-O3 -DHEAP_CELLS=300000000"
+# and install that mhs (tools/mhs-install.sh pins the revision the package
+# set is verified against, so expect to carry the target as a patch or a
+# fork). The WASM target needs its own, much smaller, value.
 
 # Tick profile: build an instrumented binary in a scratch copy, then
 # run any command with +RTS -T -RTS. The copy needs the generated
-# modules too — copy them, or run `make resources` inside it.
+# modules too — copy them, or run `make resources` inside it. The scratch
+# copy also needs the test inputs if the command names them.
 mkdir -p .perf-scratch/ychr-tick
 cp -a app embed libraries typechecker src ychr.cabal cabal.project \
   .perf-scratch/ychr-tick/
 cp -a generated .perf-scratch/ychr-tick/
+mkdir -p .perf-scratch/ychr-tick/test
+cp -a test/golden .perf-scratch/ychr-tick/test/
 (cd .perf-scratch/ychr-tick && mcabal --options=-T build)
 .perf-scratch/ychr-tick/dist-mcabal/bin/mhs/ychr check \
   test/golden/pairs_library/pairs_library.chr +RTS -T -RTS \
   | grep -E '^[A-Za-z]' | sort -k2 -nr | head -25
 ```
+
+The tick table's shares are of the **whole** table, not of the printed rows:
+sum the counts first (§5.1's 193.2 M, over 1 434 bindings), or a `head`-ed
+excerpt overstates every row it keeps.
 
 The container numbers of §7C.1 and item 8 come from a standalone program, not
 from the `ychr` binary, because the question is the container and not the

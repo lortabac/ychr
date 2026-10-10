@@ -101,7 +101,13 @@ emitStdLib opts (StdLib modules) =
     "YCHR.Embedded.Generated.StdLib"
     ["stdlib"]
     "The bundled standard library, decoded by ychr-codegen."
-    ["import YCHR.Internal.StdLib (StdLib (..))"]
+    [ -- Belt-and-braces: the emitter renders 'Maybe' as the bare @Just@/
+      -- @Nothing@, both hosts resolve those from their default scope today,
+      -- and only one of the two compilers that read this file has a Prelude
+      -- that re-exports 'Maybe'.
+      "import Data.Maybe (Maybe (..))",
+      "import YCHR.Internal.StdLib (StdLib (..))"
+    ]
     [ TopBinding
         { topBindingName = "stdlib",
           topBindingSignature = Just "StdLib",
@@ -129,7 +135,12 @@ emitTypeChecker opts (SessionInput program _ _ exportMap exportedSet ops) =
     "YCHR.Embedded.Generated.TypeCheck"
     ["typeCheckerProgram"]
     "The bundled type-checker, decoded by ychr-codegen."
-    ["import YCHR.Internal.Runtime.Session (SessionInput)"]
+    [ -- Unused today, but the emitted AST is the same literal vocabulary as
+      -- 'emitStdLib''s, so a field that becomes a 'Maybe' must not have to
+      -- remember this import to keep MicroHs compiling.
+      "import Data.Maybe (Maybe (..))",
+      "import YCHR.Internal.Runtime.Session (SessionInput)"
+    ]
     [ TopBinding
         { topBindingName = "typeCheckerProgram",
           topBindingSignature = Just "SessionInput",
