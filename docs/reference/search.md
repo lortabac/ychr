@@ -91,12 +91,12 @@ for a library to nominate a constraint to the runtime would replace it
 without changing the surface language. Everything else in the module
 is ordinary CHR and ordinary functions, defined in the library itself.
 
-`alt/1` never appears in a rule head anywhere in this library, by
-convention: nothing today stops a rule — here or in an importing
-module — from matching on it by accident. It is the motivating case
-for the proposed `:- constraint_use tell_only(...)` declaration (see
-[type-system.md](type-system.md#constraint-use-checking)), which would
-make that convention a checked compile-time guarantee.
+`alt/1` is declared `:- constraint_use tell_only(alt/1)`: it can be
+told from anywhere, but no rule — in this library or in an importing
+module — may match on it. A rule head that mentions it is rejected as
+`YCHR-45001` when the program is type-checked (see
+[type-system.md](type-system.md#constraint-use-checking)); like the
+rest of type checking, `--no-check` skips that check.
 
 
 ## Scope: search runs in a sub-session
@@ -140,10 +140,10 @@ order. Alternatives are tried in **list order**, left to right. Search
 is therefore depth-first and fully deterministic: a given program and
 goal yield a fixed sequence of solutions.
 
-`alt` is an ordinary constraint, so a rule may remove or rewrite one
-before the driver sees it — `alt([G]) <=> ...` is a legitimate (if
-pointless) way to make a unary choice deterministic. The driver only
-ever considers what is alive and stored at quiescence.
+A type-checked program has no rule that can remove or rewrite an
+`alt` before the driver sees it, since `alt/1` is `tell_only` (under
+`--no-check` such a rule compiles and fires; see above). The driver
+only ever considers what is alive and stored at quiescence.
 
 ### Firing a choice
 
@@ -767,10 +767,8 @@ Abridged from `:trace bound_pick(X, Ss).` over
 `test/golden/search_basic`, where `X` is bound to 2 before a
 `choose(X, [1, 2, 3])`, so labeling is a membership test. Elided:
 the frames outside the search, `choose`'s `maplist` building its three
-goals, the ordinary activation of each `try_unify`, the occurrence
-`alt/1` is tried at (`search_basic` has its own `decided \ alt(_)`
-rule; a program that does not put `alt/1` in a head shows no such
-line), and the alternative list where it repeats as an argument.
+goals, the ordinary activation of each `try_unify`, and the
+alternative list where it repeats as an argument.
 
 ```
       call search:findall(2, pick3(2))

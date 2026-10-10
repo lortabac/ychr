@@ -17,6 +17,9 @@
 :- chr_constraint alt(list(any)), choose(any, list(any)),
                   between(int, int, any), try_unify(any, any).
 
+% `alt/1` is told but never matched: see the comment below.
+:- constraint_use tell_only(alt/1).
+
 % What a fold's step function answers at a solution. `continue(A)` asks
 % for the next solution; `stop(A)` ends the search and undoes
 % everything, back to the state before the goal ran; `commit(A)` ends
@@ -38,9 +41,9 @@
 
 % `alt(Goals)` marks a pending choice and has deliberately no rules:
 % telling it simply leaves it in the store, where the search driver
-% finds it once the goal has propagated to quiescence. It is still an
-% ordinary constraint, so a rule of yours may inspect or remove one
-% before the driver ever sees it.
+% finds it once the goal has propagated to quiescence. It is declared
+% `tell_only`, so no rule — here or in an importing module — may match
+% it: the type checker rejects any rule head that mentions it.
 %
 % The driver takes the oldest live `alt` at each quiescence and tries
 % its goals in list order: kill the `alt`, tell one goal, propagate to

@@ -13,6 +13,7 @@ import YCHR.Embedded (loadResources)
 import YCHR.Internal.Backend.Scheme (generateScheme, isValidSchemeIdentifier)
 import YCHR.Internal.Backend.SchemeDriver (generateDriver)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
+import YCHR.Internal.ConstraintUse (checkConstraintUse)
 import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Pretty (prettyBindings)
 import YCHR.Internal.Repl qualified as Repl
@@ -405,15 +406,20 @@ typeCheckUnless noCheck resources prog
   | noCheck = pure []
   | otherwise = typeCheckOrExit resources prog
 
--- | Type-check the compiled program with the loaded type-checker. If
--- errors are found, print them to stderr and exit non-zero. Otherwise
+-- | Type-check the compiled program with the loaded type-checker, and
+-- check its rule heads against their @:- constraint_use@ declarations
+-- (an independent pass, but part of type checking as far as the CLI and
+-- @--no-check@ are concerned). If either reports errors, print them all
+-- to stderr and exit non-zero. Otherwise
 -- print the type-check warnings and return them, so the caller can
 -- fold them into its @--Werror@ decision together with the compile-time
 -- warnings.
 typeCheckOrExit :: Resources -> CompiledProgram -> IO [Warning]
 typeCheckOrExit resources prog = do
+  let useErrors = checkConstraintUse prog.desugaredProgram
   result <- typeCheckProgram resources.typeCheckerProgram prog.desugaredProgram
-  unless (null result.errors) $ do
+  unless (null useErrors && null result.errors) $ do
+    mapM_ (hPutStr stderr . displayMsg) useErrors
     mapM_ (hPutStr stderr . displayMsg) result.errors
     exitFailure
   let ws = [TypeCheckWarnings result.warnings | not (null result.warnings)]

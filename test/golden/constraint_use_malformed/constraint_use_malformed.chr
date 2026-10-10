@@ -1,0 +1,3 @@
+:- module(constraint_use_malformed, []).
+:- chr_constraint c/1.
+:- constraint_use positive(c/1).

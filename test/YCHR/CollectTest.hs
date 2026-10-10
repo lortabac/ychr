@@ -78,6 +78,7 @@ userMod imps =
       extensions = [],
       classExtensions = [],
       inlines = [],
+      constraintUses = [],
       macros = [],
       exports = Nothing
     }
@@ -96,6 +97,7 @@ libMod name =
       extensions = [],
       classExtensions = [],
       inlines = [],
+      constraintUses = [],
       macros = [],
       exports = Nothing
     }

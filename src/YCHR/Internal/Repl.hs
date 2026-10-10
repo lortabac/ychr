@@ -47,6 +47,7 @@ import System.Exit (exitFailure)
 import System.IO (hPutStr, hPutStrLn, stderr, stdout)
 import YCHR.Internal.Collected (CollectedModule (..))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..), ExportResolution (..))
+import YCHR.Internal.ConstraintUse (checkConstraintUse)
 import YCHR.Internal.Desugared qualified as D
 import YCHR.Internal.Display (Display (..), displayMsg)
 import YCHR.Internal.LineInput (LineInput (..), LineInputSettings (..), mkLineInput)
@@ -1023,12 +1024,13 @@ printWarnings :: [Warning] -> IO ()
 printWarnings = mapM_ (hPutStr stderr . displayMsg)
 
 -- | Type-check the loaded program and print both its errors and its
--- warnings. Neither aborts the REPL: type diagnostics are
--- informational here, so @--Werror@ (which governs the /compile/
--- warnings deciding whether a program loads at all) does not consult
--- them.
+-- warnings, together with any @:- constraint_use@ violations. Neither
+-- aborts the REPL: type diagnostics are informational here, so
+-- @--Werror@ (which governs the /compile/ warnings deciding whether a
+-- program loads at all) does not consult them.
 printTypeDiagnostics :: SessionInput -> CompiledProgram -> IO ()
 printTypeDiagnostics typeChecker prog = do
+  mapM_ (hPutStr stderr . displayMsg) (checkConstraintUse prog.desugaredProgram)
   result <- typeCheckProgram typeChecker prog.desugaredProgram
   mapM_ (hPutStr stderr . displayMsg) result.errors
   unless (null result.warnings) (printWarnings [TypeCheckWarnings result.warnings])

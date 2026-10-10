@@ -29,6 +29,7 @@ import Data.Text (Text)
 import YCHR.Internal.Parsed
   ( Ann,
     AnnP (..),
+    ConstraintUseDecl,
     Declaration,
     FunctionEquation,
     Import (..),
@@ -62,6 +63,7 @@ data CollectedModule = CollectedModule
     extensions :: [AnnP FunctionEquation],
     classExtensions :: [AnnP FunctionEquation],
     inlines :: [Ann InlineDecl],
+    constraintUses :: [Ann ConstraintUseDecl],
     macros :: [AnnP MacroDef],
     exports :: Maybe (AnnP [Declaration])
   }
@@ -88,6 +90,7 @@ collectedFromParsed m =
       extensions = m.extensions,
       classExtensions = m.classExtensions,
       inlines = m.inlines,
+      constraintUses = m.constraintUses,
       macros = m.macros,
       exports = m.exports
     }

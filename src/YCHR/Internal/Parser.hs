@@ -122,6 +122,7 @@ builtinOps =
           (P.Fx, "extend_class"),
           (P.Fx, "extend_function"),
           (P.Fx, "inline"),
+          (P.Fx, "constraint_use"),
           (P.Fx, "macro")
         ]
       ),
@@ -564,6 +565,7 @@ data Directive
   | DirClassDecl [Ann Declaration]
   | DirOpenClassDecl [Ann Declaration]
   | DirInlineDecl [Ann InlineDecl]
+  | DirConstraintUseDecl [Ann ConstraintUseDecl]
   | DirExtendClassTypeDecl [Ann Declaration]
   | DirExtendFunctionEqn (AnnP FunctionEquation)
   | DirExtendClassEqn (AnnP FunctionEquation)
@@ -695,6 +697,7 @@ convertModule defaultName terms =
       modExtensions_ = [e | ItemDirective (DirExtendFunctionEqn e) <- items]
       modClassExtensions_ = [e | ItemDirective (DirExtendClassEqn e) <- items]
       modInlines_ = concat [ds | DirInlineDecl ds <- dirs]
+      modConstraintUses_ = concat [ds | DirConstraintUseDecl ds <- dirs]
       modMacros_ = [d | ItemDirective (DirMacro d) <- items]
       openNames =
         Set.fromList $
@@ -718,6 +721,7 @@ convertModule defaultName terms =
             extensions = modExtensions_,
             classExtensions = modClassExtensions_,
             inlines = modInlines_,
+            constraintUses = modConstraintUses_,
             macros = modMacros_,
             exports = modExports_
           }
@@ -869,6 +873,10 @@ convertDirective (Ann (Compound ":-" [body]) loc) = case body.node of
   Compound "inline" [decls] ->
     let (decls', errs) = collectDecls convertInlineDecl decls
      in (DirInlineDecl decls', errs)
+  -- :- constraint_use fact(log/2), event(click/1).
+  Compound "constraint_use" [decls] ->
+    let (decls', errs) = collectDecls convertConstraintUseDecl decls
+     in (DirConstraintUseDecl decls', errs)
   -- :- extend_class_type (foo(int) -> int).
   Compound "extend_class_type" [decls] ->
     let (decls', errs) = collectDecls convertExtendClassTypeDecl decls
@@ -1111,6 +1119,25 @@ convertInlineDecl (Ann pexpr loc) = case pexpr of
   Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _] ->
     (Just (Ann (InlineDecl name (fromInteger arity)) loc), [])
   _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
+
+-- | Convert one @Tag(name\/arity)@ entry of a @:- constraint_use@
+-- directive. The tag must be one of the four modes, applied to exactly
+-- one @name\/arity@.
+convertConstraintUseDecl ::
+  Ann PExpr -> (Maybe (Ann ConstraintUseDecl), [AnnP ParseValidationError])
+convertConstraintUseDecl (Ann pexpr loc) = case pexpr of
+  Compound tag [Ann (Compound "/" [Ann (Atom name) _, Ann (P.Int arity) _]) _]
+    | Just use <- constraintUseTag tag ->
+        (Just (Ann (ConstraintUseDecl use name (fromInteger arity)) loc), [])
+  _ -> (Nothing, [AnnP MalformedDeclaration loc pexpr])
+  where
+    constraintUseTag :: Text -> Maybe ConstraintUse
+    constraintUseTag t = case t of
+      "any" -> Just UseAny
+      "fact" -> Just UseFact
+      "event" -> Just UseEvent
+      "tell_only" -> Just UseTellOnly
+      _ -> Nothing
 
 -- | Convert a PExpr to a closed-function declaration.
 convertFunctionDecl ::

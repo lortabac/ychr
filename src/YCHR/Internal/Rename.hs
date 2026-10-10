@@ -878,6 +878,7 @@ renameModule mods ctx = do
         extensions = renamedExtensions,
         classExtensions = renamedClassExtensions,
         inlines = m.inlines,
+        constraintUses = m.constraintUses,
         macros = m.macros,
         typeDecls = renamedTypeDecls,
         decls = renamedDecls,
@@ -2059,6 +2060,7 @@ buildQueryRenameEnv mods =
             extensions = [],
             classExtensions = [],
             inlines = [],
+            constraintUses = [],
             macros = [],
             exports = Nothing
           }

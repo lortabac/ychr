@@ -394,6 +394,7 @@ library
                     , YCHR.Internal.Collect
                     , YCHR.Internal.Collected
                     , YCHR.Internal.Constructors
+                    , YCHR.Internal.ConstraintUse
                     , YCHR.Internal.Compile
                     , YCHR.Internal.Loc
                     , YCHR.Internal.Compile.Pipeline

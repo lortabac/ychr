@@ -19,6 +19,7 @@ module YCHR.Internal.Types
     Name (..),
     QualifiedName (..),
     ConstraintKey (..),
+    ConstraintUse (..),
 
     -- * Post-HNF head constraints
     HeadConstraint (..),
@@ -146,6 +147,21 @@ data ConstraintKey = ConstraintKey
   { name :: !QualifiedName,
     arity :: !Int
   }
+  deriving (Show, Eq, Ord)
+
+-- | Which rule-head positions a constraint's occurrences may use, as
+-- declared by @:- constraint_use@. A constraint with no declaration is
+-- 'UseAny'. See docs/reference/type-system.md §Constraint-use checking
+-- and "YCHR.Internal.ConstraintUse".
+data ConstraintUse
+  = -- | @any@: kept, removed, or none.
+    UseAny
+  | -- | @fact@: kept occurrences only.
+    UseFact
+  | -- | @event@: removed occurrences only.
+    UseEvent
+  | -- | @tell_only@: no rule-head occurrence at all.
+    UseTellOnly
   deriving (Show, Eq, Ord)
 
 -- | Flatten a 'Name' to its surface 'Text' form. Qualified names are

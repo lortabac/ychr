@@ -21,6 +21,7 @@ module YCHR.Internal.Display
     exhaustivenessWarningCode,
     desugarErrorCode,
     compileErrorCode,
+    constraintUseErrorCode,
     typeCheckErrorCode,
     typeCheckWarningCode,
     parseErrorCode,
@@ -47,6 +48,7 @@ import Text.Parsec.Pos (SourcePos, sourceColumn, sourceLine, sourceName)
 import YCHR.Internal.Collect (CollectError (..))
 import YCHR.Internal.Compile (CompileError (..))
 import YCHR.Internal.Compile.Pipeline (Error (..), GoalRejection (..), Warning (..))
+import YCHR.Internal.ConstraintUse (ConstraintUseError (..), OccurrenceRole (..))
 import YCHR.Internal.Desugar (DesugarError (..))
 import YCHR.Internal.Diagnostic (Diagnostic (..))
 import YCHR.Internal.Exhaustiveness (ExhaustivenessWarning (..))
@@ -260,6 +262,8 @@ resolveErrorCode EmptyLambdaParams = ErrorCode 16018
 resolveErrorCode (UnsupportedCallArity _) = ErrorCode 16022
 resolveErrorCode (InlineUnknownFunction _ _) = ErrorCode 16023
 resolveErrorCode (InlineOpenFunction _ _) = ErrorCode 16024
+resolveErrorCode (ConstraintUseUnknownConstraint _ _) = ErrorCode 16025
+resolveErrorCode (ConstraintUseConflictingDeclaration _ _) = ErrorCode 16026
 
 -- | 2xxxx — rename phase (errors).
 -- Code 20004 is reserved: operators are permitted in import lists
@@ -325,6 +329,12 @@ desugarErrorCode (InlineCycle _) = ErrorCode 30010
 compileErrorCode :: CompileError -> ErrorCode
 compileErrorCode (UnknownConstraintType _) = ErrorCode 40001
 compileErrorCode (UnboundVariable _) = ErrorCode 40002
+
+-- | 45xxx — constraint-use check. Its own bucket rather than the type
+-- checker's 6xxxx band: the pass is independent of the CHR checker,
+-- even though @--no-check@ gates the two together.
+constraintUseErrorCode :: ConstraintUseError -> ErrorCode
+constraintUseErrorCode (ConstraintUseViolation _ _ _ _) = ErrorCode 45001
 
 -- | 6xxxx — type-check phase
 typeCheckErrorCode :: TypeCheckError -> ErrorCode
@@ -686,6 +696,24 @@ resolveErrorMsg (InlineOpenFunction name arity) =
         ++ "', which is declared as :- open_function / :- open_class"
     )
     "an open function's equation set is not fixed here, so it cannot be inlined"
+resolveErrorMsg (ConstraintUseUnknownConstraint name arity) =
+  withHint
+    ( "':- constraint_use' names '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "', which this module does not declare with :- chr_constraint"
+    )
+    "':- constraint_use' can only target a constraint declared in the same module"
+resolveErrorMsg (ConstraintUseConflictingDeclaration name arity) =
+  withHint
+    ( "':- constraint_use' names '"
+        ++ T.unpack name
+        ++ "/"
+        ++ show arity
+        ++ "' more than once"
+    )
+    "give each constraint a single ':- constraint_use' entry"
 resolveErrorMsg (ConstraintFunctionCollision name) =
   withHint
     ( "'"
@@ -1109,6 +1137,47 @@ exhaustivenessWarningMsg (NonExhaustiveMatch name witness) =
         ++ prettyTermSrc witness
     )
     "add an equation for the missing case, or a catch-all variable/wildcard pattern"
+
+instance Display (Diagnostic ConstraintUseError) where
+  displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =
+    displayMsgWithSrcLoc
+      (constraintUseErrorCode err)
+      SevError
+      (constraintUseErrorMsg err)
+      loc
+      (fmap T.unpack lbl)
+      (Just (prettyPExprSrc origin))
+      (map T.unpack ctx)
+
+constraintUseErrorMsg :: ConstraintUseError -> String
+constraintUseErrorMsg (ConstraintUseViolation qn arity use role) =
+  withHint
+    ( "'"
+        ++ T.unpack (Types.flattenName (Types.qualifiedToName qn))
+        ++ "/"
+        ++ show arity
+        ++ "' is declared "
+        ++ useDescription
+        ++ ", but occurs "
+        ++ roleText
+        ++ " in this rule head"
+    )
+    hint
+  where
+    roleText = case role of
+      KeptOccurrence -> "kept"
+      RemovedOccurrence -> "removed"
+    useDescription = case use of
+      Types.UseAny -> "any"
+      Types.UseFact -> "fact (kept occurrences only)"
+      Types.UseEvent -> "event (removed occurrences only)"
+      Types.UseTellOnly -> "tell_only (no rule-head occurrences)"
+    hint = case use of
+      Types.UseTellOnly ->
+        "a tell_only constraint may be told, but never matched in a rule head"
+      _ ->
+        "move the occurrence to the other side of the rule head,"
+          ++ " or change its ':- constraint_use' declaration"
 
 instance Display (Diagnostic DesugarError) where
   displayMsg (Diagnostic lbl (AnnP err loc origin) ctx) =

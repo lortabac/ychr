@@ -1,0 +1,7 @@
+:- module(constraint_use_event_kept, [click/1]).
+:- chr_constraint click/1, handled/1.
+:- constraint_use event(click/1).
+
+% Rejected: click/1 is declared event (removed only), but this
+% occurrence is kept.
+click(X) ==> handled(X).

@@ -42,6 +42,7 @@ module YCHR.Internal.Parsed
     ExtendClassTypeDeclBody (..),
     TypeExportDeclBody (..),
     InlineDecl (..),
+    ConstraintUseDecl (..),
     FunctionDeclKind (..),
     OpType (..),
     OpDecl (..),
@@ -54,6 +55,7 @@ module YCHR.Internal.Parsed
     -- * Re-exports from YCHR.Internal.Types
     Name (..),
     Constraint (..),
+    ConstraintUse (..),
     Term (..),
     TypeDefinition (..),
     TypeKind (..),
@@ -71,6 +73,7 @@ import YCHR.Internal.PExpr (OpType (..), PExpr (..))
 import YCHR.Internal.Types
   ( BoundSig (..),
     Constraint (..),
+    ConstraintUse (..),
     DataConstructor (..),
     Name (..),
     Term (..),
@@ -131,6 +134,11 @@ data Module = Module
     -- elsewhere in this same module, whose calls should be substituted
     -- inline at eligible call sites. See 'YCHR.Internal.Desugar.Inline'.
     inlines :: [Ann InlineDecl],
+    -- | @:- constraint_use Tag(name\/arity), ...@ entries naming
+    -- constraints declared elsewhere in this same module. See
+    -- 'YCHR.Internal.Resolve.checkConstraintUseDeclarations' and
+    -- "YCHR.Internal.ConstraintUse".
+    constraintUses :: [Ann ConstraintUseDecl],
     -- | @:- macro Name(V1, ..., Vn) ---> Body.@ definitions. See
     -- 'YCHR.Internal.Rename.Macro' and
     -- [the macro reference](../../docs/reference/macros.md).
@@ -222,6 +230,17 @@ data TypeExportDeclBody = TypeExportDeclBody
 -- module (see 'YCHR.Internal.Resolve.checkInlineDeclarations').
 data InlineDecl = InlineDecl
   { name :: Text,
+    arity :: Int
+  }
+  deriving (Show, Eq)
+
+-- | One @Tag(name\/arity)@ entry of a @:- constraint_use@ directive.
+-- Like 'InlineDecl', the name is never qualified: the directive only
+-- ever targets a constraint declared by the same module (see
+-- 'YCHR.Internal.Resolve.checkConstraintUseDeclarations').
+data ConstraintUseDecl = ConstraintUseDecl
+  { use :: ConstraintUse,
+    name :: Text,
     arity :: Int
   }
   deriving (Show, Eq)

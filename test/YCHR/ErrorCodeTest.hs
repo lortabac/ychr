@@ -37,11 +37,13 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 import YCHR.Internal.Collect (CollectError (..))
 import YCHR.Internal.Compile (CompileError (..))
+import YCHR.Internal.ConstraintUse (ConstraintUseError (..), OccurrenceRole (..))
 import YCHR.Internal.Desugar (DesugarError (..))
 import YCHR.Internal.Display
   ( ErrorCode (..),
     collectErrorCode,
     compileErrorCode,
+    constraintUseErrorCode,
     desugarErrorCode,
     exhaustivenessWarningCode,
     goalNotAConstraintCode,
@@ -62,7 +64,7 @@ import YCHR.Internal.Rename (RenameError (..), RenameWarning (..))
 import YCHR.Internal.Resolve (RefiningViolation (..), ResolveError (..))
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.TypeCheck (TypeCheckError (..))
-import YCHR.Internal.Types (Name, QualifiedName, Term)
+import YCHR.Internal.Types (ConstraintUse (..), Name, QualifiedName, Term)
 
 -- ---------------------------------------------------------------------------
 -- Opaque Data instances for the error payload types that are not already
@@ -106,6 +108,12 @@ deriving instance Data RenameWarning
 
 deriving instance Data ExhaustivenessWarning
 
+deriving instance Data ConstraintUse
+
+deriving instance Data OccurrenceRole
+
+deriving instance Data ConstraintUseError
+
 deriving instance Data DesugarError
 
 deriving instance Data CompileError
@@ -138,6 +146,7 @@ constructorCodes =
       enumCodes exhaustivenessWarningCode,
       enumCodes desugarErrorCode,
       enumCodes compileErrorCode,
+      enumCodes constraintUseErrorCode,
       enumCodes typeCheckErrorCode
     ]
 

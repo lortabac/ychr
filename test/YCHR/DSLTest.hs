@@ -134,6 +134,7 @@ moduleTests =
           extensions = [],
           classExtensions = [],
           inlines = [],
+          constraintUses = [],
           macros = [],
           exports = Nothing
         }
@@ -563,6 +564,7 @@ integrationTests =
               extensions = [],
               classExtensions = [],
               inlines = [],
+              constraintUses = [],
               macros = [],
               exports = Nothing
             },
@@ -594,6 +596,7 @@ integrationTests =
               extensions = [],
               classExtensions = [],
               inlines = [],
+              constraintUses = [],
               macros = [],
               exports = Nothing
             }

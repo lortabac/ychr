@@ -1,0 +1,6 @@
+:- module(constraint_use_fact_removed, []).
+:- chr_constraint log/1, flush/0.
+:- constraint_use fact(log/1).
+
+% Rejected: log/1 is a fact (kept only), but this occurrence is removed.
+flush \ log(_) <=> true.

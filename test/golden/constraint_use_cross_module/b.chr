@@ -1,0 +1,6 @@
+:- module(b, []).
+:- use_module(a).
+:- chr_constraint clear/0.
+
+% Rejected: the policy declared by module a applies to b's rules too.
+clear \ log(_) <=> true.

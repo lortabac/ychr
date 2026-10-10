@@ -1,0 +1,16 @@
+:- module(constraint_use_ok, [log/1, click/2, run/1]).
+:- chr_constraint log(any), click(int, any), pending(int), run(any), seen(int), noted(any).
+:- constraint_use fact(log/1), event(click/2), tell_only(pending/1), any(seen/1).
+
+% log/1 is a fact: kept occurrences only, in a propagation and on the
+% kept side of a simpagation.
+log(X) ==> noted(X).
+log(X) \ noted(X) <=> true.
+
+% click/2 is an event: removed occurrences only, here on the removed
+% side of a simpagation and in a simplification.
+seen(N) \ click(N, R) <=> R = 2.
+click(N, R) <=> seen(N), R = 1.
+
+% pending/1 is tell_only: told from a body, never matched.
+run(Out) <=> pending(1), log(0), click(1, A), click(1, B), Out = [A, B].

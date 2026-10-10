@@ -33,6 +33,7 @@ import YCHR.Internal.PExpr (OpType (..), PExpr (..))
 import YCHR.Internal.Parsed
   ( AnnP (..),
     ConstraintDeclBody (..),
+    ConstraintUseDecl (..),
     Declaration (..),
     ExtendClassTypeDeclBody (..),
     FunctionDeclBody (..),
@@ -52,6 +53,7 @@ import YCHR.Internal.Types
   ( BoundSig (..),
     Constraint (..),
     ConstraintType (..),
+    ConstraintUse (..),
     DataConstructor (..),
     Name (..),
     QualifiedIdentifier (..),
@@ -198,6 +200,10 @@ deriving instance Generic TypeExportDeclBody
 
 deriving instance Generic InlineDecl
 
+deriving instance Generic ConstraintUseDecl
+
+deriving instance Generic ConstraintUse
+
 deriving instance Generic MacroDef
 
 deriving instance Generic MacroExportDeclBody
@@ -235,6 +241,12 @@ instance ToCode TypeExportDeclBody where
   toCode = genericToCode
 
 instance ToCode InlineDecl where
+  toCode = genericToCode
+
+instance ToCode ConstraintUseDecl where
+  toCode = genericToCode
+
+instance ToCode ConstraintUse where
   toCode = genericToCode
 
 instance ToCode MacroDef where

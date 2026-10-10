@@ -1,0 +1,6 @@
+:- module(constraint_use_unknown, []).
+:- chr_constraint known/1.
+:- function f/1.
+f(X) -> X.
+% Wrong arity, a function, and an undeclared name.
+:- constraint_use fact(known/2), event(f/1), tell_only(nowhere/0).

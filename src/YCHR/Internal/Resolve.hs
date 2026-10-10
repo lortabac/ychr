@@ -42,6 +42,7 @@ import YCHR.Internal.Types
   ( BoundSig (..),
     Constraint (..),
     ConstraintKey (..),
+    ConstraintUse (..),
     DataConstructor (..),
     HeadArg (..),
     Name (..),
@@ -173,6 +174,17 @@ data ResolveError
     -- there to substitute at a call site. Carries the local name
     -- and arity as written.
     InlineOpenFunction Text Int
+  | -- | A @:- constraint_use@ entry names a @name\/arity@ that this
+    -- module does not itself declare with @:- chr_constraint@. The
+    -- directive does not reach across modules, so a constraint's use
+    -- policy has exactly one declaration site. Carries the local name
+    -- and arity as written.
+    ConstraintUseUnknownConstraint Text Int
+  | -- | A @:- constraint_use@ entry names a constraint that an earlier
+    -- entry in the same module already named, under the same tag or a
+    -- different one. Reported on every entry after the first. Carries
+    -- the local name and arity as written.
+    ConstraintUseConflictingDeclaration Text Int
   deriving (Eq, Show)
 
 -- | Why a @refining@ clause is rejected. A @refining@ clause is
@@ -241,6 +253,7 @@ resolveProgram mods =
       conCollisionErrors = checkConstructorFunctionCollision mods
       inlineErrors = checkInlineDeclarations mods
       inlineSet = buildInlineSet mods
+      constraintUseErrors = checkConstraintUseDeclarations mods
       funVisibility = buildFunctionVisibility mods
       (resolvedRules, ruleErrs) = resolveRules funVisibility mods
       (resolvedFunctions, funErrs) = resolveFunctions funVisibility inlineSet mods
@@ -260,6 +273,7 @@ resolveProgram mods =
           ++ collisionErrors
           ++ conCollisionErrors
           ++ inlineErrors
+          ++ constraintUseErrors
           ++ ruleErrs
           ++ funErrs
    in if null errs
@@ -270,6 +284,7 @@ resolveProgram mods =
                 functions = resolvedFunctions,
                 constraintTypes = conTypes,
                 constraintBounds = conBounds,
+                constraintUses = buildConstraintUses mods,
                 functionNames = functionNames,
                 typeDefinitions = typeDefs
               }
@@ -724,6 +739,54 @@ buildInlineSet mods =
     [ (QualifiedName m.name entry.node.name, entry.node.arity)
     | m <- mods,
       entry <- m.inlines
+    ]
+
+-- | Validate every @:- constraint_use@ directive: the named
+-- @name\/arity@ must be declared with @:- chr_constraint@ by the
+-- /same/ module, and no constraint may be named twice within it. One
+-- diagnostic per offending entry; a repeated entry is reported on each
+-- occurrence after the first, whether or not its tag agrees.
+--
+-- Checking rule heads against the declared policy is a separate,
+-- @--no-check@-gated pass; see "YCHR.Internal.ConstraintUse".
+checkConstraintUseDeclarations :: [CollectedModule] -> [Diagnostic ResolveError]
+checkConstraintUseDeclarations mods =
+  [ noDiag (P.AnnP err entry.sourceLoc (PExpr.Atom spec.name))
+  | m <- mods,
+    let declared =
+          Set.fromList
+            [ (cd.name, cd.arity)
+            | P.Ann d _ <- m.decls,
+              P.ConstraintDecl cd <- [d]
+            ],
+    (i, entry) <- zip [0 :: Int ..] m.constraintUses,
+    let spec = entry.node
+        earlier = [(e.node.name, e.node.arity) | e <- take i m.constraintUses],
+    err <- entryErrors declared earlier spec
+  ]
+  where
+    entryErrors declared earlier spec
+      | not (Set.member key declared) =
+          [ConstraintUseUnknownConstraint spec.name spec.arity]
+      | key `elem` earlier =
+          [ConstraintUseConflictingDeclaration spec.name spec.arity]
+      | otherwise = []
+      where
+        key = (spec.name, spec.arity)
+
+-- | The declared use policy of every constraint named by a
+-- @:- constraint_use@ directive, keyed by its qualified name and arity.
+-- A constraint absent from the map is 'UseAny', so explicit @any@
+-- entries are left out. Built regardless of
+-- 'checkConstraintUseDeclarations'\'s errors; 'resolveProgram' only
+-- returns the program when that list is empty.
+buildConstraintUses :: [CollectedModule] -> Map ConstraintKey ConstraintUse
+buildConstraintUses mods =
+  Map.fromList
+    [ (ConstraintKey (QualifiedName m.name entry.node.name) entry.node.arity, entry.node.use)
+    | m <- mods,
+      entry <- m.constraintUses,
+      entry.node.use /= UseAny
     ]
 
 -- | Reject extension directives whose declaration kind disagrees with

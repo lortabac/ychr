@@ -1,0 +1,3 @@
+:- module(a, [log/1]).
+:- chr_constraint log/1.
+:- constraint_use fact(log/1).

@@ -469,6 +469,7 @@ resolveQueryGoals cp src = do
               functions = cdp.functions ++ lambdas,
               constraintTypes = cdp.constraintTypes,
               constraintBounds = cdp.constraintBounds,
+              constraintUses = cdp.constraintUses,
               typeDefinitions = cdp.typeDefinitions
             },
         renameWarnings = renameWs
