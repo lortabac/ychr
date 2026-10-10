@@ -331,10 +331,12 @@ The fourth's first change was implemented and discarded too: it is
 slower than the code it replaces, by about 5% on the one benchmark that
 exercises it, because the profile that motivated it was built with
 `-fprof-auto`, which stops the `length` and `!!` it removes from
-inlining; its second change was not attempted. The third is the only one
-still unimplemented. All four are recorded here, with the evidence that
-motivates them and the measurements that settled the others, so that
-whoever picks them up does not have to re-derive it.
+inlining; its second change was not attempted. The third's `CallExpr`
+half was implemented and kept, and its `HostCall` half was later tried
+twice and dropped (see below, and `MICROHS_PERFORMANCE.md` §7C.7). All
+four are recorded here, with the evidence that motivates them and the
+measurements that settled the others, so that whoever picks them up does
+not have to re-derive it.
 
 The measurements are from the workload used to profile the interpreter
 here — the CHR type checker running over its own sources:
@@ -565,8 +567,13 @@ index space stays open exactly where it was. `interpret` and a hand-built
 `Program` keep the name path and their `unknown procedure` runtime error,
 and a new `YCHR.Internal.VM.Closure` check asserts that compiler output
 never leaves a call target unresolved (see `dev-docs/INVARIANTS.md`'s
-"Closed procedure-name set"). The `HostCall` half and the
-`evaluables`/`callables` index treatment are still open.
+"Closed procedure-name set"). The `HostCall` half has since been tried
+twice and dropped: the second attempt, on item 8's `Data.Array`, wins on
+most of the call-heavy benchmarks (up to −4 % on the
+`typecheck/pairs_library` proxy, with `graph_test` flat) but regresses the
+two small session-dominated ones by 3 to 5 % and every MicroHs arm it was
+measured on, and `MICROHS_PERFORMANCE.md` §7C.7 records both attempts and
+the numbers; the `evaluables`/`callables` index treatment is still open.
 
 It was kept on the measurements, not on the profile: on GHC criterion
 (three interleaved rounds a side) `typecheck/pairs_library` moves −2.1 %
@@ -642,12 +649,14 @@ so the experiment that settled item 1 is already evidence about it.
 Item 3 has since been tried, and this time the benchmark agrees: its
 `CallExpr` half is implemented and `typecheck/pairs_library` moves
 −2.1 % on criterion, with no other benchmark outside its own interleaved
-spread. The `HostCall` half and the `evaluables`/`callables` keys are
-still open. What made the difference is not that the profile was wrong
-this time — `lookupProc` is ~1 % of profiled time, as item 1 predicted —
-but that the change is small: it resolves calls where item 2 already
-built the interpreter's own AST, so it adds no second AST and no public
-type, which is what the discarded interning attempt could not avoid. See
+spread. Its `HostCall` half was later tried twice and dropped on
+measurement (`MICROHS_PERFORMANCE.md` §7C.7); the
+`evaluables`/`callables` keys are still open. What made the difference is
+not that the profile was wrong this time — `lookupProc` is ~1 % of
+profiled time, as item 1 predicted — but that the change is small: it
+resolves calls where item 2 already built the interpreter's own AST, so
+it adds no second AST and no public type, which is what the discarded
+interning attempt could not avoid. See
 `dev-docs/MICROHS_PERFORMANCE.md` §7C.1 for the measurements, including
 the MicroHs-side container measurement that the item's MicroHs motivation
 turned out to hinge on: the entry table was a `Map Int` at first, and
@@ -967,7 +976,7 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
 
 The following components have not yet been implemented:
 
-- **Optimizations**: Implement the optimizations listed above, at the appropriate stage. Of the profiling-driven interpreter items under "Haskell Interpreter Performance", item 2 was kept while items 1 and 4 were tried and discarded on measurement; item 3 is the only one still open, and its evidence base is item 1's experiment.
+- **Optimizations**: Implement the optimizations listed above, at the appropriate stage. Of the profiling-driven interpreter items under "Haskell Interpreter Performance", item 2 was kept while items 1 and 4 were tried and discarded on measurement; item 3's `CallExpr` half was kept, its `HostCall` half was tried twice and discarded on measurement (`MICROHS_PERFORMANCE.md` §7C.7), and the `evaluables`/`callables` keys behind `is` and `'$call'` are what remains open.
 - **JavaScript backend**: Translate VM programs to JavaScript code.
 - **JavaScript runtime**: Implement logical variables, compound terms, constraint store, propagation history, reactivation queue, and iterators in JavaScript.
 - **Testing**: Test suite covering individual components and end-to-end execution of standard CHR programs (leq, Fibonacci, Dijkstra, RAM simulator, etc.).
