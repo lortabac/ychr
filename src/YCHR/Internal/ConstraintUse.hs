@@ -41,6 +41,8 @@ import YCHR.Internal.Types
     HeadConstraint (..),
     QualifiedName,
   )
+-- Hidden so '.head' resolves under MicroHs (dev-docs/MICROHS_GAPS.md, gap 1).
+import Prelude hiding (head)
 
 -- | Which side of a rule head an occurrence is on.
 data OccurrenceRole = KeptOccurrence | RemovedOccurrence
