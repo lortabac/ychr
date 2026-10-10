@@ -326,7 +326,22 @@ directiveTests =
       testCase "macro head qualified name is rejected" $
         pErrs ":- macro m:foo(X) ---> true." @?= Right [MalformedMacroHead],
       testCase "macro head reserved name is rejected" $
-        pErrs ":- macro is(X, Y) ---> true." @?= Right [MalformedMacroHead]
+        pErrs ":- macro is(X, Y) ---> true." @?= Right [MalformedMacroHead],
+      testCase "constraint_use with every tag" $
+        (map (.node) . (.constraintUses))
+          <$> p ":- constraint_use any(a/0), fact(b/1), event(c/2), tell_only(d/3)."
+          @?= Right
+            [ ConstraintUseDecl UseAny "a" 0,
+              ConstraintUseDecl UseFact "b" 1,
+              ConstraintUseDecl UseEvent "c" 2,
+              ConstraintUseDecl UseTellOnly "d" 3
+            ],
+      testCase "constraint_use with an unknown tag is rejected" $
+        pErrs ":- constraint_use positive(c/1)." @?= Right [MalformedDeclaration],
+      testCase "constraint_use tag with two entries is rejected" $
+        pErrs ":- constraint_use fact(a/1, b/1)." @?= Right [MalformedDeclaration],
+      testCase "constraint_use bare name/arity is rejected" $
+        pErrs ":- constraint_use c/1." @?= Right [MalformedDeclaration]
     ]
 
 -- ---------------------------------------------------------------------------
@@ -833,6 +848,7 @@ moduleTests =
                   extensions = [],
                   classExtensions = [],
                   inlines = [],
+                  constraintUses = [],
                   macros = [],
                   exports = Just (noAnnP [])
                 }

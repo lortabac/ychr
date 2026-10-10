@@ -67,6 +67,8 @@ data Program = Program
     -- bounded-vs-unbounded convention (constraints without bounds are
     -- absent from the map).
     constraintBounds :: Map ConstraintKey [BoundSig],
+    -- | See 'YCHR.Internal.Resolved.Program'.
+    constraintUses :: Map ConstraintKey ConstraintUse,
     typeDefinitions :: [TypeDefinition]
   }
   deriving (Show)

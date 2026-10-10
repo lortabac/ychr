@@ -3,12 +3,12 @@
     empty_alts/1, bound_pick/2,
     unify_ok/1, unify_clash/1,
     bad_alts/1, outside/1, error_escapes/1,
-    prop_rollback/2, killed_choice/2, no_solutions/2, tu_var/3,
+    prop_rollback/2, no_solutions/2, tu_var/3,
     type(tag/0),
     % Goal constraints have to be exported: solve/1 and findall/2
     % resolve them through the program's exports, in the caller.
     pair/3, pick_nothing/1, pick3/1, unify_two/2, pick_from/2,
-    divide_by_zero/1, prop_label/2, pick_or_decide/1, tu_pick/2
+    divide_by_zero/1, prop_label/2, tu_pick/2
 ]).
 
 :- use_module(library(search)).
@@ -26,7 +26,6 @@
    error_escapes(any), divide_by_zero(any),
    prop_rollback(any, any), prop_label(any, any),
    marker(any), seen(any), sink(any),
-   killed_choice(any, any), decided, pick_or_decide(any),
    no_solutions(any, any),
    tu_var(any, any, any), tu_pick(any, any), tu_check(any, any).
 
@@ -91,17 +90,6 @@ prop_label(X, M) <=> choose(X, [1, 2]), marker(X), sink(M).
 marker(X) ==> X > 0 | seen(X).
 seen(1) <=> fail.
 seen(2), sink(M) <=> M = two.
-
-% A choice point that a rule removes before quiescence never reaches
-% the driver, so the goal quiesces with no choice point at all: one
-% solution, and the variable stays unbound.
-%
-% The rule matches `alt/1`, not `choose/2`: `choose` is rewritten to an
-% `alt` at tell time and never reaches the store, so it is the `alt`
-% that is interceptable.
-killed_choice(X, Ok) <=> Ok is solve(quote(pick_or_decide(X))).
-pick_or_decide(X) <=> choose(X, [1, 2]), decided.
-decided \ alt(_) <=> true.
 
 % findall over an empty space is [], not a failure.
 no_solutions(X, Ss) <=> Ss is findall(X, quote(pick_nothing(X))).

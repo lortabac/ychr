@@ -1,0 +1,4 @@
+:- module(constraint_use_conflicting, []).
+:- chr_constraint c/1.
+:- constraint_use fact(c/1).
+:- constraint_use event(c/1).

@@ -1,0 +1,6 @@
+:- module(constraint_use_tell_only, []).
+:- chr_constraint alt(list(any)), decided/0.
+:- constraint_use tell_only(alt/1).
+
+% Rejected: alt/1 is tell_only, so it may not occur in any rule head.
+decided \ alt(_) <=> true.

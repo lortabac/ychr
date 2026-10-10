@@ -217,6 +217,7 @@ desugarProgram rprog =
               functions = functions,
               constraintTypes = rprog.constraintTypes,
               constraintBounds = rprog.constraintBounds,
+              constraintUses = rprog.constraintUses,
               typeDefinitions = rprog.typeDefinitions
             }
    in if null errs then Right result else Left errs

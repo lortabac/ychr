@@ -46,6 +46,7 @@ import YCHR.Internal.Parsed (AnnP)
 import YCHR.Internal.Types
   ( BoundSig,
     ConstraintKey,
+    ConstraintUse,
     HeadArg,
     Name (..),
     QualifiedConstraint,
@@ -69,6 +70,10 @@ data Program = Program
     -- this map (rather than mapping to @[]@) so a single membership
     -- check distinguishes "bounded constraint" from "unbounded".
     constraintBounds :: Map ConstraintKey [BoundSig],
+    -- | The @:- constraint_use@ policy of each constraint that declares
+    -- one other than @any@. Constraints absent from the map are
+    -- unrestricted. Checked by "YCHR.Internal.ConstraintUse".
+    constraintUses :: Map ConstraintKey ConstraintUse,
     functionNames :: Set QualifiedName,
     typeDefinitions :: [TypeDefinition]
   }

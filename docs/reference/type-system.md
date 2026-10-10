@@ -1228,30 +1228,40 @@ that lands in a position its constraint's declared mode forbids:
 
 ```prolog
 :- module(m, []).
-:- chr_constraint click/1.
+:- chr_constraint click/1, handled/1.
 :- constraint_use event(click/1).
 
 % Rejected: click/1 is declared event (removed only), but this
 % occurrence is kept.
-handle(X) ==> click(X).
+click(X) ==> handled(X).
 ```
 
-A violation is always a hard error; there is no `--Werror` dimension
-to it, unlike the warnings elsewhere in this document. `tell_only`
+```
+=== error ===
+m.chr:7:1: YCHR-45001
+'m:click/1' is declared event (removed occurrences only), but occurs kept in this rule head
+  Hint: move the occurrence to the other side of the rule head, or change its ':- constraint_use' declaration
+click(X)
+```
+
+A violation is always an error, never a warning: there is no
+`--Werror` dimension to it, unlike the warnings elsewhere in this
+document. (The REPL reports it alongside type errors without refusing
+to load the program, as it does for every type error.) `tell_only`
 forbids occurrences in *either* position — a constraint so declared
 can be told, but never written in a rule head at all:
 
 ```prolog
-:- chr_constraint alt(list(any)).
+:- chr_constraint alt(list(any)), decided/0.
 :- constraint_use tell_only(alt/1).
 
 % Rejected: alt/1 is tell_only, so it may not occur in any rule head.
 decided \ alt(_) <=> true.
 ```
 
-`search:alt/1` ([search.md](search.md)) is the motivating case: it is
-already told but never matched by any rule in `libraries/search.chr`
-today, by convention rather than by anything the compiler enforces.
+`search:alt/1` ([search.md](search.md)) is the motivating case: the
+search driver finds it in the store at quiescence, so it is told but
+never matched, and `libraries/search.chr` declares it `tell_only`.
 
 **Relation to `--no-check`.** From the CLI's point of view this check
 behaves as part of ordinary type-checking: `--no-check` disables it,

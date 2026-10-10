@@ -17,6 +17,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 import YCHR.Embedded (stdlib, typeCheckerProgram)
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
+import YCHR.Internal.ConstraintUse (checkConstraintUse)
 import YCHR.Internal.Display (Display (..))
 import YCHR.Internal.Pretty (prettyBindings)
 import YCHR.Internal.Runtime.Search (defaultHostCallRegistry)
@@ -315,10 +316,13 @@ runNegative spec errorFile = do
     Left err -> assertAllPresent (displayMsg err) expectedSubstrings
     Right (prog, _ws) -> do
       typeResult <- typeCheckProgram typeCheckerProgram prog.desugaredProgram
-      case typeResult.errors of
+      let errs =
+            map displayMsg (checkConstraintUse prog.desugaredProgram)
+              ++ map displayMsg typeResult.errors
+      case errs of
         [] ->
           assertFailure "Expected compilation or type checking to fail, but it succeeded"
-        errs -> assertAllPresent (unlines (map displayMsg errs)) expectedSubstrings
+        _ -> assertAllPresent (unlines errs) expectedSubstrings
   where
     trim = reverse . dropWhile isSpace . reverse . dropWhile isSpace
     nonEmptyLines = filter (not . null) . map trim . lines
@@ -336,11 +340,14 @@ runNegative spec errorFile = do
 typeCheckOrFail :: TestSpec -> CompiledProgram -> IO ()
 typeCheckOrFail spec prog = do
   result <- typeCheckProgram typeCheckerProgram prog.desugaredProgram
-  case result.errors of
+  let errs =
+        map displayMsg (checkConstraintUse prog.desugaredProgram)
+          ++ map displayMsg result.errors
+  case errs of
     [] -> pure ()
-    errs ->
+    _ ->
       assertFailure
-        ("Type errors in " ++ spec.testName ++ ":\n" ++ unlines (map displayMsg errs))
+        ("Type errors in " ++ spec.testName ++ ":\n" ++ unlines errs)
   checkWarnings
     spec
     "typecheck"

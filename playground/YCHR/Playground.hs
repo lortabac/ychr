@@ -60,6 +60,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import YCHR.Internal.Collected (CollectedModule (..))
 import YCHR.Internal.Compile.Pipeline (CompiledProgram (..))
+import YCHR.Internal.ConstraintUse (checkConstraintUse)
 import YCHR.Internal.Display (displayMsg)
 import YCHR.Internal.Parsed qualified as Parsed
 import YCHR.Internal.Pretty (prettyQueryResult)
@@ -333,22 +334,28 @@ noProgram = "No program loaded. Press Reload first.\n"
 -- ---------------------------------------------------------------------------
 
 -- | Type-check the loaded program with the compiled type checker,
--- forcing the checker on first use. Errors make the response an error
--- (as @ychr check@ exits non-zero); warnings do not.
+-- forcing the checker on first use, and check its rule heads against
+-- their @:- constraint_use@ declarations. Errors from either make the
+-- response an error (as @ychr check@ exits non-zero); warnings do not.
 typecheck :: Playground -> IO (Playground, String)
 typecheck pg = guarded pg $ case pg.loaded of
   Nothing -> pure (pg, response statusError noProgram)
   Just prog -> do
+    let useErrors = checkConstraintUse prog.desugaredProgram
     checked <-
       try @SomeException (typeCheckProgram pg.checker prog.desugaredProgram)
     pure $ case checked of
-      Left exc -> (pg, response statusError (renderException exc))
+      Left exc ->
+        (pg, response statusError (concatMap displayMsg useErrors ++ renderException exc))
       Right result
-        | not (null result.errors) ->
+        | not (null useErrors && null result.errors) ->
             ( pg,
               response
                 statusError
-                (concatMap displayMsg result.errors ++ renderTypeWarnings result)
+                ( concatMap displayMsg useErrors
+                    ++ concatMap displayMsg result.errors
+                    ++ renderTypeWarnings result
+                )
             )
         | otherwise ->
             (pg, response statusOk (renderTypeWarnings result))
