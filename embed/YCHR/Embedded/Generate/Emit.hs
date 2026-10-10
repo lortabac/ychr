@@ -102,9 +102,9 @@ emitStdLib opts (StdLib modules) =
     ["stdlib"]
     "The bundled standard library, decoded by ychr-codegen."
     [ -- Belt-and-braces: the emitter renders 'Maybe' as the bare @Just@/
-      -- @Nothing@, both hosts resolve those from their default scope today,
-      -- and only one of the two compilers that read this file has a Prelude
-      -- that re-exports 'Maybe'.
+      -- @Nothing@, and both hosts resolve those without this import today.
+      -- It is spelled out because two compilers read the file and only one
+      -- of them would notice the day that stops being true.
       "import Data.Maybe (Maybe (..))",
       "import YCHR.Internal.StdLib (StdLib (..))"
     ]
