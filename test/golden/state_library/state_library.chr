@@ -1,11 +1,12 @@
 :- module(state_library, [
-    put_get/1,
+    new_get/1,
     put_replace/1,
     modified/1,
     independent/2,
-    get_before_put/1,
-    modify_before_put/1,
-    pending_order/2,
+    get_before_new/1,
+    put_before_new/1,
+    modify_before_new/1,
+    pending_order/3,
     retyped/1,
     get_twice/2
 ]).
@@ -15,47 +16,52 @@
 :- chr_type key ---> k ; n ; count ; name.
 
 :- chr_constraint
-    put_get/1,
+    new_get/1,
     put_replace/1,
     modified/1,
     independent/2,
-    get_before_put/1,
-    modify_before_put/1,
-    pending_order/2,
+    get_before_new/1,
+    put_before_new/1,
+    modify_before_new/1,
+    pending_order/3,
     retyped/1,
     get_twice/2.
 
-put_get(R) <=> put(k, 1), get(k, R).
+new_get(R) <=> new_state(k, 1), get(k, R).
 
-put_replace(R) <=> put(k, 1), put(k, 2), get(k, R).
+put_replace(R) <=> new_state(k, 1), put(k, 2), get(k, R).
 
 modified(R) <=>
-    put(n, 0),
+    new_state(n, 0),
     modify(n, fun(X) -> X + 1 end),
     modify(n, fun(X) -> X * 10 end),
     get(n, R).
 
 % Two keys holding values of different types.
 independent(A, B) <=>
-    put(count, 1), put(name, "x"),
+    new_state(count, 1), new_state(name, "x"),
     modify(count, fun(X) -> X + 1 end),
     get(count, A), get(name, B).
 
-% The documented behaviour of the unenforced invariant: a `get` on a key
-% with no value waits in the store and fires once the key is put.
-get_before_put(R) <=> get(k, R), put(k, 7).
+% The documented behaviour of the unenforced invariant: a request on a
+% key that does not exist yet waits in the store and fires once the key
+% is created.
+get_before_new(R) <=> get(k, R), new_state(k, 7).
 
-modify_before_put(R) <=>
-    modify(k, fun(X) -> X + 1 end), put(k, 1), get(k, R).
+put_before_new(R) <=> put(k, 5), new_state(k, 1), get(k, R).
 
-% Pending requests are not served in tell order: when the key is put,
-% every pending `get` sees the value it was put with, before any pending
-% `modify` runs.
-pending_order(A, B) <=>
-    modify(k, fun(X) -> X + 1 end), get(k, A), put(k, 0), get(k, B).
+modify_before_new(R) <=>
+    modify(k, fun(X) -> X + 1 end), new_state(k, 1), get(k, R).
+
+% Pending requests are not served in tell order: when the key is
+% created, every pending `get` sees the initial value, then pending
+% `put`s apply, then pending `modify`s.
+pending_order(A, B, C) <=>
+    modify(k, fun(X) -> X * 10 end), put(k, 2), get(k, A),
+    new_state(k, 0), get(k, B), put(k, 3), get(k, C).
 
 % A key may be overwritten with a value of a different type.
-retyped(R) <=> put(k, 1), put(k, "a"), get(k, R).
+retyped(R) <=> new_state(k, 1), put(k, "a"), get(k, R).
 
 % `get` does not consume the value.
-get_twice(A, B) <=> put(k, 3), get(k, A), get(k, B).
+get_twice(A, B) <=> new_state(k, 3), get(k, A), get(k, B).

@@ -1,38 +1,40 @@
-:- module(state, [get/2, put/2, modify/2]).
+:- module(state, [new_state/2, get/2, put/2, modify/2]).
 
 % Mutable variables, emulated with constraints. Each key names one
 % stateful value, held by a private `state(K, V)` constraint:
 %
-%   put(K, V)     sets the value of K, creating K if it has none
-%   get(K, R)     unifies R with the current value of K
-%   modify(K, F)  replaces the value V of K with F(V)
+%   new_state(K, V)  creates K with initial value V
+%   get(K, R)        unifies R with the current value of K
+%   put(K, V)        replaces the value of K with V
+%   modify(K, F)     replaces the value V of K with F(V)
 %
 % Keys are matched with `==`, not unification, and must be ground (an
 % atom is the usual choice). Two unbound keys that are later aliased
 % would leave two values for one key.
 %
-% Invariant (not enforced): a key must be `put` before it is read or
-% modified. A `get` or `modify` on a key that has no value is not an
-% error; it stays in the store and fires once the key is put. Such
-% pending requests are not served in the order they were made: every
-% pending `get` sees the value the key was put with, before any pending
-% `modify` is applied.
+% Invariants (not enforced): a key must be created with `new_state`
+% before it is read or updated, and created only once. A `get`, `put` or
+% `modify` on a key that does not exist yet is not an error; it stays in
+% the store and fires once the key is created. Such pending requests are
+% not served in the order they were made: every pending `get` sees the
+% initial value, then pending `put`s apply, then pending `modify`s.
+% Creating a key twice leaves two values for it.
 
 % The values are typed `any`. A key does not fix the type of its value
 % (two keys may hold values of different types), and the checker types
 % each head occurrence on its own, so a `V` shared between `state` and
 % `get` would not be the same type in the rules below.
-:- chr_constraint state(K, any), get(K, any), put(K, any),
-                  modify(K, fun(any) -> any end).
+:- chr_constraint state(K, any), new_state(K, any), get(K, any),
+                  put(K, any), modify(K, fun(any) -> any end).
 
 % Requests are consumed by the rules below and never kept.
-:- constraint_use event(get/2), event(put/2), event(modify/2).
+:- constraint_use event(new_state/2), event(get/2), event(put/2),
+                  event(modify/2).
+
+init @ new_state(K, V) <=> state(K, V).
 
 get @ state(K, V) \ get(K, R) <=> R = V.
 
-% `put` must come before `init`, so a key that already has a value is
-% overwritten instead of gaining a second `state`.
 put @ state(K, _), put(K, V) <=> state(K, V).
-init @ put(K, V) <=> state(K, V).
 
 modify @ state(K, V), modify(K, F) <=> state(K, call(F, V)).

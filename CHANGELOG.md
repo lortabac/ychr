@@ -3,15 +3,16 @@
 ## Unreleased
 
 `library(state)` emulates mutable variables with constraints, under a
-key-value interface: `put(K, V)` sets the value of key `K` (creating it
-if it has none), `get(K, R)` unifies `R` with it, and `modify(K, F)`
-replaces it with `F` applied to it. The associations are held by a
-private `state/2` constraint. Keys are matched with `==` and must be
-ground; values are typed `any`, since different keys may hold values of
-different types. A key must be `put` before it is read or modified;
-this is documented rather than enforced, and a `get` or `modify` on a
-key with no value waits in the store until the key is put (pending
-`get`s are then served before pending `modify`s).
+key-value interface: `new_state(K, V)` creates key `K` with initial
+value `V`, `get(K, R)` unifies `R` with its value, `put(K, V)` replaces
+it, and `modify(K, F)` replaces it with `F` applied to it. The
+associations are held by a private `state/2` constraint. Keys are
+matched with `==` and must be ground; values are typed `any`, since
+different keys may hold values of different types. A key must be
+created once, before it is read or updated; this is documented rather
+than enforced, and a `get`, `put` or `modify` on a key that does not
+exist yet waits in the store until the key is created (pending `get`s
+are then served first, then `put`s, then `modify`s).
 
 `\==` is the prelude's ask-disequality: `X \== Y` is true when the two
 arguments are not structurally identical after dereferencing, so it is
