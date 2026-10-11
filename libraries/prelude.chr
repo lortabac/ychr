@@ -39,6 +39,7 @@
     fun write/1,
     fun nl/0,
     fun writeln/1,
+    fun panic/1,
     fun call/2,
     fun call/3,
     fun call/4,
@@ -143,7 +144,8 @@
     (call(fun(A, B, C, D, E, F, G, H, I, J) -> K end, A, B, C, D, E, F, G, H, I, J) -> K),
     (write(string) -> any),
     (nl() -> any),
-    (writeln(string) -> any).
+    (writeln(string) -> any),
+    (panic(string) -> any).
 
 % Bounded: `>=` / `=<` are closed classes over int, float and string, so
 % `max`/`min` work at exactly those types. A user type is YCHR-60012.
@@ -253,6 +255,11 @@ write(S) -> host:write(S).
 nl -> host:write("\n").
 
 writeln(S) -> host:writeln(S).
+
+% Abort the computation with a runtime error carrying the message `S`.
+% It returns no value, so it fits any expression position. Render a term
+% into the message with meta's `write_term_to_string/1`.
+panic(S) -> host:panic(S).
 
 % A copy with fresh variables.
 copy_term(T) -> host:copy_term(T).

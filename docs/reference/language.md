@@ -603,7 +603,7 @@ arguments, so for them "an unbound argument on the failure path" means
 | `<`, `>`, `=<`, `>=` | instantiation failure |
 | `int_to_float`, `float_to_int` | instantiation failure |
 | `string_concat`, `string_length`, `string_upper`, `string_lower` | instantiation failure |
-| `write`, `writeln` | instantiation failure |
+| `write`, `writeln`, `panic` | instantiation failure |
 | `compound_to_list`, `list_to_compound` | instantiation failure |
 | `name_base` | instantiation failure |
 | `==`, `\==`, `unifiable` | answers normally (never raises) |
@@ -814,6 +814,27 @@ Store the argument already evaluated when you want the value.
 `quote(...)` keeps a subtree symbolic where it is written, but the
 resulting value is an ordinary term: `is` on a variable bound to it
 still walks it.
+
+## Runtime errors: `panic/1`
+
+The prelude's `panic(string) -> any` aborts the run with a runtime
+error (`YCHR-60001`) whose message is the string, verbatim, followed by
+the usual stack trace. It returns no value, so it fits any position: a
+rule body, a function equation's result, an `is` right-hand side. To
+put a term in the message, render it with `library(meta)`'s
+`write_term_to_string/1`.
+
+```prolog
+nonneg(X) | X >= 0 -> X.
+nonneg(_) -> panic("nonneg: negative argument").
+```
+
+A panic is a general failure, not an instantiation failure, so a rule
+guard does not soften it: a guard that panics aborts the run (see
+[Soft guard failure](#soft-guard-failure)). The only thing that catches
+it is `library(meta)`'s `run_chr_session/1`, which turns it into that
+call's `false`, as it does any runtime error; the `library(search)`
+entry points let it propagate.
 
 ## Lambdas and function references
 

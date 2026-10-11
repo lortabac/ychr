@@ -87,6 +87,7 @@ baseHostCallRegistry =
       (Name "__chr_inst_error", chrInstError),
       (Name "write", writeStr),
       (Name "writeln", writeStrLn),
+      (Name "panic", panicHost),
       (Name "integer", typePred isInteger),
       (Name "atom", typePred isAtom),
       (Name "boolean", typePred isBoolean),
@@ -195,6 +196,10 @@ baseHostCallRegistry =
     writeStrLn = HostCallFn $ \case
       [VText s] -> unit <$ liftIO (putStrLn (T.unpack s))
       args -> argError "writeln" args "writeln: expected 1 Text argument"
+    -- The prelude's `panic/1`: the message is the user's, verbatim.
+    panicHost = HostCallFn $ \case
+      [VText s] -> runtimeErrorS (T.unpack s)
+      args -> argError "panic" args "panic: expected 1 Text argument"
     typePred p = HostCallFn $ \case
       [v] -> do
         v' <- deref v

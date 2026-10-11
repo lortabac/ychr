@@ -2,17 +2,20 @@
 
 ## Unreleased
 
+`panic(string) -> any` is a new prelude function that aborts the run
+with a runtime error carrying the given message. It returns no value, so
+it fits any expression position. A panic in a rule guard is a hard
+failure, not a soft one, and only `run_chr_session/1` catches it.
+
 `library(state)` emulates mutable variables with constraints, under a
 key-value interface: `new_state(K, V)` creates key `K` with initial
 value `V`, `get(K, R)` unifies `R` with its value, `put(K, V)` replaces
 it, and `modify(K, F)` replaces it with `F` applied to it. The
-associations are held by a private `state/2` constraint. Keys are
-matched with `==` and must be ground; values are typed `any`, since
-different keys may hold values of different types. A key must be
-created once, before it is read or updated; this is documented rather
-than enforced, and a `get`, `put` or `modify` on a key that does not
-exist yet waits in the store until the key is created (pending `get`s
-are then served first, then `put`s, then `modify`s).
+associations are held by a private `state/2` constraint. Values are
+typed `any`, since different keys may hold values of different types.
+Misuse panics when the request is made: a request on a non-ground key,
+`new_state` on a key that already exists, and `get`, `put` or `modify`
+on a key that does not exist.
 
 `\==` is the prelude's ask-disequality: `X \== Y` is true when the two
 arguments are not structurally identical after dereferencing, so it is
