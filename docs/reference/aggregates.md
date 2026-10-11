@@ -144,38 +144,6 @@ makes the whole aggregate undefined, so the rule does not apply, as
 for [soft guard failure](language.md#soft-guard-failure). It does not
 silently drop the one match that raised it.
 
-### When a rule with an aggregate is tried
-
-Under ωr a rule is tried when one of its head constraints is active.
-A rule with aggregates is tried in three further situations:
-
-1. **A regular head is active.** The aggregates are computed while
-   matching, as above.
-2. **A goal constraint is active.** A constraint that matches a
-   constraint of an aggregate goal is active because it was told, or
-   reactivated by a variable binding. The rule is tried with the
-   regular heads as partners.
-3. **A goal constraint is removed.** When a rule firing removes a
-   constraint that matches a constraint of an aggregate goal, the
-   rules containing that aggregate are tried, again with the regular
-   heads as partners. Removals are processed at the start of the
-   removing rule's body, before its first goal, in the order the
-   constraints were removed.
-
-Case 3 is what makes "no", "for all" and "minimum" behave as expected
-when constraints go away:
-
-```prolog
-task(T), none(depends(T, _)) ==> ready(T).
-done(D) \ depends(_, D) <=> true.
-```
-
-`ready(T)` is derived when the last dependency of `T` is removed.
-
-A constraint that matches an aggregate goal is observed only through
-the aggregate. It is not a head of the rule, it is never removed by it
-(except for `takemin`), and it does not enter the propagation history.
-
 ### Fire once
 
 A propagation rule fires at most once per combination of regular head
@@ -213,6 +181,96 @@ constraints of the selected match are removed when the rule fires.
 
 Every other aggregate keeps its goal's constraints, whatever side of
 `\` or `<=>` the aggregate is written on.
+
+
+## Extension of ωr
+
+YCHR executes rules under the refined operational semantics ωr
+(Duck et al., 2004). Aggregates extend ωr in three places and leave
+the rest unchanged.
+
+### 1. Applicability
+
+Under ωr a rule applies to a match of its heads whose guard succeeds.
+A rule with aggregates also requires every aggregate to be defined and
+its `Result` to match (see [Value of an aggregate](#value-of-an-aggregate)).
+This is the paper's `matchings'` (Defs. 3–4). It is the only condition
+that reads the store beyond a rule's own heads.
+
+### 2. Goal occurrences
+
+Every CHR constraint conjunct of an aggregate goal is a *goal
+occurrence* of its constraint type, alongside the type's ordinary
+head occurrences. When a constraint is active, because it was told or
+reactivated, its goal occurrences are tried like any other occurrence.
+Trying a goal occurrence means:
+
+1. Match the active constraint against the conjunct.
+2. Find matches for the remaining conjuncts and the guard of the same
+   aggregate goal, then for those of every enclosing aggregate goal,
+   then for the rule's regular heads.
+3. For each combination found, try the rule as usual: compute every
+   aggregate from scratch, check the guard and the propagation history,
+   and fire.
+
+The active constraint is not a head of the rule. Firing does not
+remove it, except through `takemin`/`takemax`, and it does not enter
+the propagation history.
+
+**Order.** Goal occurrences are numbered with the ordinary ones, top
+to bottom by rule. Within one rule, they come after all of the rule's
+regular occurrences of the same type, so the rule's ωr occurrence order
+is unchanged. Among themselves they are numbered left to right, with
+an aggregate's goal before the goals of the aggregates nested in it.
+
+### 3. The removal step
+
+When a rule fires and removes constraints, the first thing its body
+does, before its first goal, is the *removal step*. This happens even
+if the body is `true`. For each removed constraint whose type has goal
+occurrences, in the textual order of the removed heads, the removal
+step tries each of those goal occurrences, in occurrence order, as in
+§2. The removed constraint is matched against the conjunct as if it
+were active, but it is no longer in the store, so no fold counts it.
+
+A rule firing inside the removal step is an ordinary firing, so its
+own removals have their own removal steps. When the removal step ends,
+the body runs from its first goal in ωr order.
+
+The CHR¬ semantics (Van Weert et al., 2006) formalizes the same thing
+as removal entries on the execution stack. Treating the removal step
+as a hidden first body goal gives the same order.
+
+Without the removal step, `none`, `forall` and `min` would never
+notice a constraint going away:
+
+```prolog
+task(T), none(depends(T, _)) ==> ready(T).
+done(D) \ depends(_, D) <=> true.
+```
+
+`ready(T)` is derived when the last dependency of `T` is removed, by
+the removal step of the second rule.
+
+### What does not change
+
+The extension is *conservative*.
+
+- **Without aggregates.** A program without aggregates has no goal
+  occurrences and no removal steps, and §1 reduces to the ωr
+  condition, so it runs exactly under ωr. The compiler generates the
+  same code it generates today.
+- **With aggregates.** The changes are bounded by two static facts.
+  Only a constraint type that appears in some aggregate goal gains
+  occurrences. Only a rule that may remove such a constraint gains a
+  removal step. Every other constraint type is activated exactly as
+  under ωr, and every other rule fires exactly as under ωr. Adding an
+  aggregate affects the rest of a program the way adding an ordinary
+  rule does.
+
+The paper's own implementation makes the same point: it rewrites a
+program with aggregates into plain CHR, run under ωr, with auxiliary
+constraints at the start of the bodies of removing rules.
 
 
 ## Predefined aggregates
@@ -263,17 +321,25 @@ lowers an aggregate in the occurrence procedure itself:
 - An aggregate is a nested `Foreach` over the goal's constraints, with
   the shared variables as index conditions. It folds into a local with
   `AssignVal`. No new VM instruction is needed.
-- Case 2 of [when a rule is tried](#when-a-rule-with-an-aggregate-is-tried)
-  is an extra occurrence procedure per goal constraint. It searches for
-  the regular heads as partners and does not count the goal constraint
-  as a head.
-- Case 3 is a *removal occurrence*: a procedure the compiler calls from
-  the start of the body of every rule that may remove a goal
-  constraint. Nothing is added to the runtime's `Kill`.
+- A [goal occurrence](#2-goal-occurrences) is an ordinary occurrence
+  procedure. It searches for the rest of its goal and for the regular
+  heads as partners, and it does not count the active constraint as a
+  head.
+- The [removal step](#3-the-removal-step) is a call, at the start of
+  the body of every rule that may remove a constraint with goal
+  occurrences, to one procedure per goal occurrence. The procedure
+  takes the removed constraint as its argument. Nothing is added to
+  the runtime's `Kill`.
 - Late Storage: the active constraint is not yet stored when its
   occurrence runs, so the fold has to include it explicitly; a
-  `Foreach` alone would miss it.
-
+  `Foreach` alone would miss it. A removal step counts as a non-empty
+  body, so the active constraint is stored before it runs whenever
+  the rule keeps it.
+- Analyses that assume a rule observes only its own heads have to take
+  goal occurrences into account: passive-occurrence detection, inert
+  types (a type with goal occurrences is not inert) and
+  constraint-use checking. For a program without aggregates they see
+  nothing new.
 
 ## Diagnostics
 
@@ -306,7 +372,8 @@ Codes are assigned at implementation.
    mirrors a rule. The paper writes the guard as a conjunct,
    `?(Guard)`, which allows guards between constraints.
 2. **When removals are processed.** Processing them at the start of the
-   body follows the paper's implementation. It means an update written
+   body ([the removal step](#3-the-removal-step)) follows the paper's
+   implementation. It means an update written
    as remove-then-tell (`withdraw(A, X), account(A, C, T, B) <=>
    account(A, C, T, B - X)`) shows the aggregate an intermediate state
    in which the account is missing. Processing removals at the end of
