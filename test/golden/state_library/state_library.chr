@@ -1,0 +1,67 @@
+:- module(state_library, [
+    new_get/1,
+    put_replace/1,
+    modified/1,
+    independent/2,
+    get_uninit/1,
+    put_uninit/0,
+    modify_uninit/0,
+    new_twice/0,
+    new_unground/1,
+    get_unground/2,
+    retyped/1,
+    get_twice/2
+]).
+
+:- use_module(library(state)).
+
+:- chr_type key ---> k ; n ; count ; name.
+
+:- chr_constraint
+    new_get/1,
+    put_replace/1,
+    modified/1,
+    independent/2,
+    get_uninit/1,
+    put_uninit/0,
+    modify_uninit/0,
+    new_twice/0,
+    new_unground/1,
+    get_unground/2,
+    retyped/1,
+    get_twice/2.
+
+new_get(R) <=> new_state(k, 1), get(k, R).
+
+put_replace(R) <=> new_state(k, 1), put(k, 2), get(k, R).
+
+modified(R) <=>
+    new_state(n, 0),
+    modify(n, fun(X) -> X + 1 end),
+    modify(n, fun(X) -> X * 10 end),
+    get(n, R).
+
+% Two keys holding values of different types.
+independent(A, B) <=>
+    new_state(count, 1), new_state(name, "x"),
+    modify(count, fun(X) -> X + 1 end),
+    get(count, A), get(name, B).
+
+% Misuse is a runtime error, raised when the request is made.
+get_uninit(R) <=> get(k, R).
+
+put_uninit <=> put(k, 1).
+
+modify_uninit <=> modify(k, fun(X) -> X end).
+
+new_twice <=> new_state(k, 1), new_state(k, 2).
+
+new_unground(K) <=> new_state(K, 1).
+
+get_unground(K, R) <=> get(K, R).
+
+% A key may be overwritten with a value of a different type.
+retyped(R) <=> new_state(k, 1), put(k, "a"), get(k, R).
+
+% `get` does not consume the value.
+get_twice(A, B) <=> new_state(k, 3), get(k, A), get(k, B).

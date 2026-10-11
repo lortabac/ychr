@@ -1,0 +1,61 @@
+:- module(state, [new_state/2, get/2, put/2, modify/2]).
+
+:- use_module(library(meta)).
+:- use_module(library(strings)).
+
+% Mutable variables, emulated with constraints. Each key names one
+% stateful value, held by a private `state(K, V)` constraint:
+%
+%   new_state(K, V)  creates K with initial value V
+%   get(K, R)        unifies R with the current value of K
+%   put(K, V)        replaces the value of K with V
+%   modify(K, F)     replaces the value V of K with F(V)
+%
+% A key must be ground (an atom is the usual choice), and is matched
+% with `==`. It must be created exactly once, before it is read or
+% updated. Each of these is checked when the request is made, and a
+% violation is a runtime error: a request on a non-ground key,
+% `new_state` on a key that already exists, and `get`, `put` or `modify`
+% on a key that does not exist.
+
+% The values are typed `any`. A key does not fix the type of its value
+% (two keys may hold values of different types), and the checker types
+% each head occurrence on its own, so a `V` shared between `state` and
+% `get` would not be the same type in the rules below.
+:- chr_constraint state(K, any), new_state(K, any), get(K, any),
+                  put(K, any), modify(K, fun(any) -> any end).
+
+% Requests are consumed by the rules below and never kept.
+:- constraint_use event(new_state/2), event(get/2), event(put/2),
+                  event(modify/2).
+
+:- function
+    (key_error(any, string) -> any),
+    (missing_key(any) -> any).
+
+key_error(K, Problem) ->
+    panic(string_concat("state: key ",
+          string_concat(write_term_to_string(K), Problem))).
+
+% A request that found no `state` for its key: either the key is not
+% ground, so no `state` could ever match it, or it was never created.
+missing_key(K) | ground(K) -> key_error(K, " is not initialized").
+missing_key(K) -> key_error(K, " is not ground").
+
+% `new_state`'s error rules come before `init`. Every other request is
+% tried against its own rule first, and its error rule fires only when
+% that one could not.
+new_unground @ new_state(K, _) <=> not(ground(K)) |
+    key_error(K, " is not ground").
+new_twice @ state(K, _) \ new_state(K, _) <=>
+    key_error(K, " is already initialized").
+init @ new_state(K, V) <=> state(K, V).
+
+get @ state(K, V) \ get(K, R) <=> R = V.
+get_missing @ get(K, _) <=> missing_key(K).
+
+put @ state(K, _), put(K, V) <=> state(K, V).
+put_missing @ put(K, _) <=> missing_key(K).
+
+modify @ state(K, V), modify(K, F) <=> state(K, call(F, V)).
+modify_missing @ modify(K, _) <=> missing_key(K).

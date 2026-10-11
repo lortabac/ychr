@@ -950,6 +950,7 @@ hostCallMap =
       ("float_to_int", "%float-to-int"),
       ("write", "%write"),
       ("writeln", "%writeln"),
+      ("panic", "%panic"),
       ("print", "%print"),
       ("string_concat", "%str-concat"),
       ("string_length", "%str-length"),

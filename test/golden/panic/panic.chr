@@ -1,0 +1,14 @@
+:- module(panic, [checked/2, in_guard/1]).
+
+:- chr_constraint checked(int, int), in_guard(int).
+
+% `panic/1` returns `any`, so it fits a function equation's result.
+:- function nonneg(int) -> int.
+
+nonneg(X) | X >= 0 -> X.
+nonneg(_) -> panic("nonneg: negative argument").
+
+checked(X, R) <=> R is nonneg(X).
+
+% A panic in a guard is not a soft failure: it aborts the run.
+in_guard(R) <=> panic("raised in a guard") | R = 1.

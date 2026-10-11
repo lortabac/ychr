@@ -25,7 +25,7 @@
     ;; Helpers for generated code
     %unify %unifiable? %nonvar? %unbound? %chr-error %chr-inst-error
     chr-inst? %bool-from-value
-    %print %write %writeln %ground?
+    %print %write %writeln %panic %ground?
     %term-variables %compound-to-list %list-to-compound
     %name-base
     %read-term-from-string %write-term-to-string %write-store-to-list
@@ -489,6 +489,7 @@
       ;; identically on both backends.
       (h 'write 1 (lambda (s v) (%write v)))
       (h 'writeln 1 (lambda (s v) (%writeln v)))
+      (h 'panic 1 (lambda (s v) (%panic v)))
       ;; Meta. `print` is the meta registry's pretty-printer (`%print`
       ;; above), which returns the unit atom. Registered at arity 1 —
       ;; the only arity `library(meta)` declares; the direct
@@ -736,6 +737,14 @@
     (if (string? v)
         (begin (display v) (newline) (%unit))
         (%arg-error "writeln" (list v) "writeln: expected 1 Text argument")))
+
+  ;;; The prelude's `panic/1`, mirroring `panicHost` in
+  ;;; `src/YCHR/Internal/Runtime/Registry.hs`: the message is the
+  ;;; user's, verbatim.
+  (define (%panic v)
+    (if (string? v)
+        (%chr-error v)
+        (%arg-error "panic" (list v) "panic: expected 1 Text argument")))
 
   ;;; The unit value: the atom `()`, Haskell's `VAtom "()"`.
   (define (%unit) (string->symbol "()"))

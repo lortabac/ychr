@@ -101,6 +101,8 @@
                           (lambda () (%write 1)))
    (list "writeln"        (lambda () (%writeln (fresh-var)))
                           (lambda () (%writeln 1)))
+   (list "panic"          (lambda () (%panic (fresh-var)))
+                          (lambda () (%panic 1)))
    (list "compound_to_list"
                           (lambda () (%compound-to-list (fresh-var)))
                           (lambda () (%compound-to-list 1)))
@@ -122,6 +124,10 @@
      (when (caddr entry)
        (test-equal (car entry) 'general (failure-kind (caddr entry)))))
    strict-primitives))
+
+;;; `panic/1` with a string is the error it exists to raise.
+(test-equal "panic with a message is a general failure"
+  'general (failure-kind (lambda () (%panic "boom"))))
 
 ;;; language.md §Soft guard failure: "When a call is both
 ;;; under-instantiated and ill-typed ... the instantiation diagnosis

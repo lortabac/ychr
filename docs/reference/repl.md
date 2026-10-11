@@ -8,8 +8,8 @@ ychr repl [--quiet] [--no-check] [--Werror] [FILES...]
 
 Loads the files (or none), prints warnings and type-check messages,
 shows the `ychr> ` prompt. The full standard library is auto-loaded;
-no `:- use_module(library(...))` is needed for prelude, meta or search
-names.
+no `:- use_module(library(...))` is needed for prelude, meta, search or
+state names.
 
 A query resolves against every auto-loaded library, so a bare name a
 loaded file also exports is ambiguous at the prompt (inside a module
@@ -28,7 +28,8 @@ constraints `alt/1`, `choose/2`, `between/3`, `try_unify/2`; the
 functions `fail/0`, `solve/1`, `findall/2`, `fold_solutions/4`,
 `forall/3`, `find_n/3`; and the type `step/1` with constructors
 `continue/1`, `stop/1`, `commit/1` — so a bare `continue(1)` is
-`search:continue(1)`.
+`search:continue(1)`. `library(state)` puts in query scope the
+constraints `new_state/2`, `get/2`, `put/2` and `modify/2`.
 
 `--quiet` drops the prompt, the warnings and the type-check report,
 except under `--Werror`,
