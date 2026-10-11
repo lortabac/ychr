@@ -60,6 +60,7 @@ librarySources =
     "pairs.chr",
     "prelude.chr",
     "search.chr",
+    "state.chr",
     "strings.chr"
   ]
 

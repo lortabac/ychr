@@ -109,7 +109,7 @@ from the standard library map, and an unknown name is rejected
 supplied to the compiler; it is not looked up on any search path.
 `:- use_module` directives come before everything else in the file
 (`YCHR-20007`). The bundled libraries `lists`, `maybe`, `pairs`,
-`strings`, `meta`, `search` and `chr`
+`strings`, `meta`, `search`, `state` and `chr`
 ([`libraries/`](../../libraries/)) need an explicit import outside the
 REPL. The prelude is always imported, in full; an import list on it is
 rejected (`YCHR-20019`).
