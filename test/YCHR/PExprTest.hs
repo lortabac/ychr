@@ -822,6 +822,22 @@ symbolOpTokenTests =
       testCase "unknown symbol sequence fails" $
         -- '?' is a symbolChar but '??' is not declared as an operator.
         assertBool "should fail" (isLeft (pGreedy "X ?? Y.")),
+      testCase "backslash is a symbol character" $
+        -- `\` is declared (as simpagation) in the built-in table, so a
+        -- bare backslash token parses as an operator.
+        case mergeOps greedyOps [(100, Xfx, "\\")] of
+          Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
+          Right ops ->
+            stripAll (parseTerms ops "" "X \\ Y.")
+              @?= Right [Compound "\\" [noAnn (Var "X"), noAnn (Var "Y")]],
+      testCase "declared backslash-disequality tokenizes greedily" $
+        case mergeOps greedyOps [(700, Xfx, "\\==")] of
+          Left n -> assertFailure ("unexpected conflict: " ++ T.unpack n)
+          Right ops -> do
+            stripAll (parseTerms ops "" "X \\== Y.")
+              @?= Right [Compound "\\==" [noAnn (Var "X"), noAnn (Var "Y")]]
+            -- Non-associative (xfx): chaining is rejected.
+            assertBool "should fail" (isLeft (parseTerms ops "" "X \\== Y \\== Z.")),
       testCase "symbol operator usable as functor via quoting" $
         stripAll (pGreedy "'+'(X, Y).")
           @?= Right [Compound "+" [noAnn (Var "X"), noAnn (Var "Y")]]
@@ -1065,7 +1081,22 @@ renderAtomTests =
       testCase "double underscore forces quoting" $
         renderAtom mempty "foo__bar" @?= "'foo__bar'",
       testCase "symbol-only name forces quoting" $
-        renderAtom mempty "+" @?= "'+'"
+        renderAtom mempty "+" @?= "'+'",
+      testCase "backslash inside a quoted atom is escaped" $
+        -- `'\=='` would decode to `==`; the escaped spelling re-parses
+        -- to the two-character name.
+        renderAtom mempty "\\==" @?= "'\\\\=='",
+      testCase "newline and tab inside a quoted atom are escaped" $
+        renderAtom mempty "a\nb\tc" @?= "'a\\nb\\tc'",
+      -- The escapes exist so the printed form re-parses: assert the
+      -- round trip, not only the produced string.
+      testCase "rendered atoms re-parse to the same atom" $
+        mapM_
+          ( \s ->
+              stripAll (p (T.pack (renderAtom mempty s) <> "."))
+                @?= Right [Atom s]
+          )
+          ["\\==", "a\nb\tc", "it's", "hello world", "back\\slash\\\\tail"]
     ]
 
 -- ---------------------------------------------------------------------------

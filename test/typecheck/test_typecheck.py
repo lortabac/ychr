@@ -437,6 +437,38 @@ def test_no_check_in_repl(ychr_bin, project_root):
     assert "YCHR-60006" not in no_report.stdout + no_report.stderr
 
 
+def test_disequality_operands_share_a_type(ychr_bin, project_root, tmp_path):
+    """`\\==` has the same same-type rule as `==` (YCHR-60001).
+
+    The prelude declares `'\\=='(A, A) -> bool`, so two different concrete
+    types are a type error rather than a disequality that happens to be
+    true; naming one side `any` asks across types.
+    """
+    program = tmp_path / "disequality.chr"
+    program.write_text(
+        ":- module(dsq, [t/2, type(tags/0)]).\n"
+        ":- use_module(prelude).\n"
+        ":- chr_constraint t/2.\n"
+        ":- chr_type tags ---> mixed.\n"
+        't(mixed, R) <=> 1 \\== "a" | R = true.\n'
+    )
+    result = _run(ychr_bin, project_root, "check", str(program))
+    assert result.returncode != 0, "expected the mixed-type disequality to fail"
+    assert "YCHR-60001" in result.stdout + result.stderr
+
+    any_operand = tmp_path / "disequality_any.chr"
+    any_operand.write_text(
+        ":- module(dsqa, [t/3, type(tags/0)]).\n"
+        ":- use_module(prelude).\n"
+        ":- chr_constraint t/3.\n"
+        ":- chr_type tags ---> mixed.\n"
+        "t(mixed, R, X) <=> X \\== 0 | R = true.\n"
+        "t(mixed, R, _) <=> R = false.\n"
+    )
+    allowed = _run(ychr_bin, project_root, "check", "--Werror", str(any_operand))
+    assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+
+
 def test_no_check_only_on_auto_checking_commands(ychr_bin, project_root):
     """`check` keeps checking: it is the one command without `--no-check`."""
     program = os.path.join(project_root, "test", "golden", "leq", "leq.chr")

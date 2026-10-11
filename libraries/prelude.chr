@@ -17,6 +17,7 @@
     fun '>='/2,
     fun '=<'/2,
     fun '=='/2,
+    fun '\\=='/2,
     fun not/1,
     fun max/2,
     fun min/2,
@@ -59,7 +60,8 @@
     op(700, xfx, '>'),
     op(700, xfx, '>='),
     op(700, xfx, '=<'),
-    op(700, xfx, '==')
+    op(700, xfx, '=='),
+    op(700, xfx, '\\==')
 ]).
 
 :- chr_type bool ---> true ; false.
@@ -112,6 +114,7 @@
     ('mod'(int, int) -> int),
     ('rem'(int, int) -> int),
     ('=='(A, A) -> bool),
+    ('\\=='(A, A) -> bool),
     (not(bool) -> bool),
     (var(any) -> bool),
     (nonvar(any) -> bool),
@@ -155,7 +158,7 @@
 % qualifies.
 :- inline
     '+'/2, '-'/2, '*'/2, '/'/2, div/2, mod/2, rem/2,
-    '<'/2, '>'/2, '>='/2, '=<'/2, '=='/2,
+    '<'/2, '>'/2, '>='/2, '=<'/2, '=='/2, '\\=='/2,
     var/1, nonvar/1, integer/1, float/1, atom/1, boolean/1, string/1, ground/1.
 
 X + Y -> host:'+'(X, Y).
@@ -182,14 +185,25 @@ X =< Y -> host:'=<'(X, Y).
 
 X == Y -> host:'=='(X, Y).
 
-% Boolean negation; `not(1)` matches no equation (YCHR-60001). There is
-% no `\=` / `\==`
-% operator: write `not(X == Y)` or `not(unifiable(X, Y))`. `==` never
-% binds, and two distinct unbound variables are not `==`.
+% Boolean negation; `not(1)` matches no equation (YCHR-60001). `==` never
+% binds, and two distinct unbound variables are not `==`. `\==` (below)
+% is its ask-disequality counterpart; there is no `\=` (unifiability
+% negation) — write `not(unifiable(X, Y))` for that.
 % `bool` is an ordinary algebraic type, so this needs no host primitive:
 % the two constructors are matchable in equation patterns like any other.
 not(true) -> false.
 not(false) -> true.
+
+% Ask-disequality: true when the two arguments are not structurally
+% identical after dereferencing. Never binds, so it is usable in a guard
+% and leaves its operands intact. Two distinct unbound variables are
+% `\==`; `X \== X` is false. Structural, not a unification test:
+% `quote(p(X, 1)) \== quote(p(2, Y))` is true for distinct `X` and `Y`.
+%
+% In a quoted atom a backslash must itself be escaped, so the operator
+% is declared as `'\\=='` (the `\\` escape), while written bare as
+% `X \== Y`.
+X \== Y -> not(X == Y).
 
 max(X, Y) | X >= Y -> X.
 max(_, Y) -> Y.

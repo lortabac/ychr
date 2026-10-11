@@ -58,9 +58,23 @@ genSafeAtom = Gen.filter isOk $ do
       s `notElem` wordOps
         && not ("__" `Text.isInfixOf` s)
     wordOps = [name | (_, ty, name) <- opTableEntries testOps, not (isSymOp ty name)]
+    -- The real symbol set (`YCHR.Internal.PExpr.symbolChars`), kept in
+    -- sync here: `\` is a symbol character (the prelude's disequality
+    -- operator and the simpagation operator both use it).
     isSymOp ty name
       | isPrefix ty || isPostfix ty = True
-      | otherwise = Text.all (`elem` (":=<>+-*/#@^~!&?" :: [Char])) name
+      | otherwise = Text.all (`elem` ("\\:=<>+-*/#@^~!&?" :: [Char])) name
+
+-- | An atom that needs quoting and exercises the escapes the printer
+-- emits: an embedded backslash, apostrophe, newline or tab.
+genEscapingAtom :: Gen Text
+genEscapingAtom = do
+  lead <- Gen.choice [Gen.lower, Gen.upper, pure '\'', pure '\\']
+  mid <-
+    Gen.list
+      (Range.linear 0 3)
+      (Gen.choice [Gen.alphaNum, pure '\\', pure '\'', pure '\n', pure '\t'])
+  pure (Text.pack (lead : mid))
 
 -- | Generate atoms including cases that require quoting.
 genAtom :: Gen Text
@@ -68,6 +82,7 @@ genAtom =
   Gen.choice
     [ genSafeAtom,
       pure "",
+      genEscapingAtom,
       -- Atom with embedded quote
       do
         s <- genSafeAtom

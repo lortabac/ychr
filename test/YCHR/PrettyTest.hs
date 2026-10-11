@@ -60,7 +60,20 @@ basicTests =
       testCase "TextTerm renders with surrounding quotes" $
         prettyTerm (TextTerm "hello") @?= "\"hello\"",
       testCase "TextTerm escapes embedded quotes/backslashes/newlines" $
-        prettyTerm (TextTerm "a\"b\\c\n") @?= "\"a\\\"b\\\\c\\n\""
+        prettyTerm (TextTerm "a\"b\\c\n") @?= "\"a\\\"b\\\\c\\n\"",
+      testCase "disequality prints infix from the fixed printer table" $
+        prettyTerm
+          ( CompoundTerm
+              (Unqualified "\\==")
+              [VarTerm "X", VarTerm "Y"]
+          )
+          @?= "X \\== Y",
+      testCase "quoted disequality functor keeps its backslash" $
+        -- The pretty-printed form has to be readable again: `'\=='`
+        -- decodes to `==`, so the printer must not produce that spelling
+        -- for this functor.
+        prettyTerm (CompoundTerm (Unqualified "\\==") [VarTerm "X"])
+          @?= "'\\\\=='(X)"
     ]
 
 renderAtomTests :: TestTree

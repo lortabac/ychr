@@ -72,7 +72,8 @@ prettyOps = case PE.mergeOps builtinOps stdArithOps of
         (700, PE.Xfx, ">"),
         (700, PE.Xfx, ">="),
         (700, PE.Xfx, "=<"),
-        (700, PE.Xfx, "==")
+        (700, PE.Xfx, "=="),
+        (700, PE.Xfx, "\\==")
       ]
 
 -- ---------------------------------------------------------------------------

@@ -157,7 +157,8 @@
       (700 xfx ">")
       (700 xfx ">=")
       (700 xfx "=<")
-      (700 xfx "==")))
+      (700 xfx "==")
+      (700 xfx "\\==")))
 
   (define pretty-ops
     (make-op-table (append builtin-op-entries std-arith-entries)))
@@ -189,12 +190,19 @@
         (and (member s (op-table-word pretty-ops)) #t)
         (and (find-double-underscore s) #t)))
 
-  ;; Haskell renderAtom's escape: double each embedded quote.
+  ;; Haskell renderAtom's escapes: double each embedded quote, and escape
+  ;; the characters the reader would otherwise decode as escapes. Without
+  ;; the backslash escape the output would not re-read as the same atom
+  ;; (`'\=='` decodes to `==`).
   (define (escape-atom-quotes s)
     (let-values (((port extract) (open-string-output-port)))
       (string-for-each
        (lambda (c)
-         (if (char=? c #\') (put-string port "''") (put-char port c)))
+         (cond ((char=? c #\') (put-string port "''"))
+               ((char=? c #\\) (put-string port "\\\\"))
+               ((char=? c #\newline) (put-string port "\\n"))
+               ((char=? c #\tab) (put-string port "\\t"))
+               (else (put-char port c))))
        s)
       (extract)))
 

@@ -511,6 +511,15 @@
   (test-equal "an embedded quote is doubled"
               "'a''b'"
               (pretty-term (string->symbol "a'b")))
+  ;; The reader decodes `\\`, `\n` and `\t` inside a quoted atom, so the
+  ;; printer has to escape them or its output would not re-read as the
+  ;; same name (`'\=='` decodes to `==`).
+  (test-equal "an embedded backslash is escaped"
+              "'\\\\=='"
+              (pretty-term (string->symbol "\\==")))
+  (test-equal "a newline and tab are escaped"
+              "'a\\nb\\tc'"
+              (pretty-term (string->symbol "a\nb\tc")))
   ;; Nl/No categories are isAlphaNum in Haskell: they must stay bare,
   ;; which is why the predicate uses `char-general-category`.
   (test-equal "an No character stays bare"
