@@ -498,7 +498,10 @@ record of which fixes have already shipped.
   a word operator of the fixed `prettyOps` table (`fun`, `is`,
   `chr_constraint`, `div`, …, so `'is'` prints quoted) or contains
   `__`; anything else is wrapped in `'…'` with each embedded `'`
-  doubled. The predicate uses `char-general-category` (via
+  doubled and with `\\`, `\n` and `\t` escaping a backslash, newline and
+  tab (the pairs the reader decodes; without the backslash escape the
+  emitted atom would not read back as the same name). The predicate
+  uses `char-general-category` (via
   `(rnrs unicode)`) rather than `char-alphabetic?`/`char-numeric?`,
   because Haskell's `isAlphaNum` also covers the `Nl`/`No` categories:
   `a²` and `aⅧ` must stay bare on both backends. Quoting is applied per

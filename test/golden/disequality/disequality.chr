@@ -1,0 +1,60 @@
+:- module(diseq, [t/4, type(tags/0)]).
+:- use_module(prelude).
+:- chr_constraint t/4.
+:- chr_type tags --->
+    dis_eq_yes ;
+    dis_eq_no ;
+    dis_body ;
+    dis_ask_unbound ;
+    dis_ask_bound ;
+    dis_same_unbound ;
+    dis_rhs_unbound ;
+    dis_eval_operands ;
+    dis_unifiable_terms.
+
+% `\==` is the prelude's ask-disequality: true when its two arguments
+% are not structurally identical after dereferencing, and it never
+% binds. It is usable wherever `==` is: a guard, a body, an `is`
+% right-hand side.
+
+% Bound literals, both verdicts: `4 \== 5` succeeds and `4 \== 4` fails,
+% which sends the second tag to its fallback clause.
+t(dis_eq_yes, R, _, _) <=> 4 \== 5 | R = true.
+t(dis_eq_yes, R, _, _) <=> R = false.
+
+t(dis_eq_no, R, _, _) <=> 4 \== 4 | R = true.
+t(dis_eq_no, R, _, _) <=> R = false.
+
+% In a body rather than a guard: the right-hand side is the boolean.
+t(dis_body, R, _, _) <=> R is (quote(p(1, 2)) \== quote(p(1, 3))).
+
+% The last two arguments are the operands. Two distinct unbound
+% variables are `\==`, and asking binds neither, so the body is still
+% free to bind them.
+t(dis_ask_unbound, R, X, _Y) <=> X \== _Y | R = true.
+t(dis_ask_unbound, R, _, _) <=> R = false.
+
+% The guard asks before the body unifies, so distinct variables pass and
+% then bind; the same spelling with equal operands fails into the
+% fallback.
+t(dis_ask_bound, R, X, Y) <=> X \== Y | X = 1, Y = 1, R = true.
+t(dis_ask_bound, R, _, _) <=> R = false.
+
+% A variable is `==` itself, so `X \== X` is false.
+t(dis_same_unbound, R, X, Y) <=> X \== Y | R = true.
+t(dis_same_unbound, R, _, _) <=> R = false.
+
+% The evaluating side answers normally on unbound operands, exactly as
+% `==` does: two distinct variables are not identical, so the boolean is
+% true and no instantiation failure is raised.
+t(dis_rhs_unbound, R, X, Y) <=> R is (X \== Y).
+
+% `\==` is an ordinary declared call, so expression operands are
+% evaluated before the comparison: `1 + 1` is the value 2, which *is*
+% identical to 2. (Prolog's `1 + 1 \== 2` is true; this is not.)
+t(dis_eval_operands, R, _, _) <=> R is (1 + 1 \== 2).
+
+% Structural, not a unification test: the two terms unify (at `X = 2`,
+% `Y = 1`) but are not identical, so the ask is true. The mirror case,
+% `not(unifiable(...))`, would be false.
+t(dis_unifiable_terms, R, X, Y) <=> R is (quote(p(X, 1)) \== quote(p(2, Y))).

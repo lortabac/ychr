@@ -4,8 +4,9 @@
 :- chr_type tags ---> lit_true ; lit_false ; neq_ints ; eq_ints ; not_unifiable ; guard_neg.
 :- chr_type outcome ---> fired ; not_fired.
 
-% `not/1` is the prelude's boolean negation. YCHR has no `\=` or `\==`
-% operator, so structural inequality is written as an explicit negation.
+% `not/1` is the prelude's boolean negation. Structural inequality has
+% its own operator, `\==` (see test/golden/disequality); these cases pin
+% the explicit-negation spelling for the same verdicts.
 t(lit_true, R)      <=> R is not(true).
 t(lit_false, R)     <=> R is not(false).
 t(neq_ints, R)      <=> R is not(1 == 2).

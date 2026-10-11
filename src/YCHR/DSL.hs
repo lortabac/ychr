@@ -117,6 +117,7 @@ module YCHR.DSL
     (.>),
     (.>=),
     (.==),
+    (.\==),
 
     -- * Compiling and running
     StdLib,
@@ -405,7 +406,7 @@ r |- g = let Rule n h _ b = r in Rule n h (noAnnP g) b
 
 infix 4 .=.
 
-infix 4 .==, .<, .<=, .>, .>=
+infix 4 .==, .\==, .<, .<=, .>, .>=
 
 infixl 6 .+, .-
 
@@ -561,12 +562,13 @@ l .- r = CompoundTerm (Unqualified "-") [l, r]
 l .* r = CompoundTerm (Unqualified "*") [l, r]
 l ./ r = CompoundTerm (Unqualified "/") [l, r]
 
-(.<), (.<=), (.>), (.>=), (.==) :: Term -> Term -> Term
+(.<), (.<=), (.>), (.>=), (.==), (.\==) :: Term -> Term -> Term
 l .< r = CompoundTerm (Unqualified "<") [l, r]
 l .<= r = CompoundTerm (Unqualified "=<") [l, r]
 l .> r = CompoundTerm (Unqualified ">") [l, r]
 l .>= r = CompoundTerm (Unqualified ">=") [l, r]
 l .== r = CompoundTerm (Unqualified "==") [l, r]
+l .\== r = CompoundTerm (Unqualified "\\==") [l, r]
 
 -- ---------------------------------------------------------------------------
 -- Compiling and running

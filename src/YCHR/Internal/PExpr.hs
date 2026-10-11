@@ -872,12 +872,21 @@ needsQuoting wordOps t = case T.uncons t of
       )
 
 -- | Render an atom, quoting with @\'...\'@ if necessary.
+--
+-- The quoted form escapes what 'quotedAtomP' would otherwise decode as
+-- an escape sequence: a backslash (which the catch-all would drop),
+-- plus newline and tab. Without the backslash escape the output would
+-- not re-parse to the same atom — @'\\=='@ written literally decodes to
+-- @==@, not to the two-character name @\\==@.
 renderAtom :: Set Text -> Text -> String
 renderAtom wordOps s
   | needsQuoting wordOps s = "'" ++ concatMap esc (T.unpack s) ++ "'"
   | otherwise = T.unpack s
   where
     esc '\'' = "''"
+    esc '\\' = "\\\\"
+    esc '\n' = "\\n"
+    esc '\t' = "\\t"
     esc c = [c]
 
 -- | Render a double-quoted string literal with escape sequences.

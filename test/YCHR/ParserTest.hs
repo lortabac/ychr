@@ -531,7 +531,29 @@ operatorTests =
                           [VarTerm "X", VarTerm "Y"]
                       ]
                   ]
-              )
+              ),
+      -- `\` is a symbol character, so a multi-character operator may use
+      -- it (both `\` as simpagation and `\==` as disequality).
+      testCase "backslash disequality operator" $
+        bodyOfWithBackslashEq "c <=> X \\== Y."
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "\\==")
+                      [VarTerm "X", VarTerm "Y"]
+                  ]
+              ),
+      testCase "backslash disequality operator via quoted functor" $
+        bodyOfWithBackslashEq "c <=> '\\\\=='(X, Y)."
+          >>= ( @?=
+                  [ CompoundTerm
+                      (Unqualified "\\==")
+                      [VarTerm "X", VarTerm "Y"]
+                  ]
+              ),
+      testCase "backslash disequality rejects when undeclared" $
+        -- Without the `\==` operator in the table the greedy symbol
+        -- tokenizer consumes it whole and rejects it.
+        assertBool "expected parse failure" (isLeft (p "c <=> X \\== Y."))
     ]
 
 -- ---------------------------------------------------------------------------
@@ -1041,6 +1063,15 @@ bodyOf src = parseAndExtract p (withFirstRule (.body.node)) src
 -- without pulling in the whole prelude.
 bodyOfWithLt :: Text -> IO [Term]
 bodyOfWithLt src = case mergeOps builtinOps [OpDecl 700 Xfx "<"] of
+  Left e -> assertFailure ("mergeOps failed: " <> Text.unpack e)
+  Right table ->
+    parseAndExtract (fmap fst . parseModuleWith table "") (withFirstRule (.body.node)) src
+
+-- | Like 'bodyOf', but parses with @\\==@ added as a 700 xfx operator, the
+-- fixity the prelude declares, so a body can use the disequality operator
+-- without pulling in the whole prelude.
+bodyOfWithBackslashEq :: Text -> IO [Term]
+bodyOfWithBackslashEq src = case mergeOps builtinOps [OpDecl 700 Xfx "\\=="] of
   Left e -> assertFailure ("mergeOps failed: " <> Text.unpack e)
   Right table ->
     parseAndExtract (fmap fst . parseModuleWith table "") (withFirstRule (.body.node)) src

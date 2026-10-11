@@ -522,13 +522,15 @@ numericInstanceTests =
           var "X" .<= var "Y",
           var "X" .> var "Y",
           var "X" .>= var "Y",
-          var "X" .== var "Y"
+          var "X" .== var "Y",
+          var "X" .\== var "Y"
         ]
           @?= [ CompoundTerm (Unqualified "<") [VarTerm "X", VarTerm "Y"],
                 CompoundTerm (Unqualified "=<") [VarTerm "X", VarTerm "Y"],
                 CompoundTerm (Unqualified ">") [VarTerm "X", VarTerm "Y"],
                 CompoundTerm (Unqualified ">=") [VarTerm "X", VarTerm "Y"],
-                CompoundTerm (Unqualified "==") [VarTerm "X", VarTerm "Y"]
+                CompoundTerm (Unqualified "==") [VarTerm "X", VarTerm "Y"],
+                CompoundTerm (Unqualified "\\==") [VarTerm "X", VarTerm "Y"]
               ]
     ]
 
@@ -616,6 +618,7 @@ endToEndTests =
       chrTypeEndToEnd,
       chrTypeCtorGoalEndToEnd,
       guardEndToEnd,
+      disequalityEndToEnd,
       operatorInDeclaringEndToEnd
     ]
 
@@ -768,6 +771,27 @@ guardEndToEnd =
                        ]
     bindings <- runDSL stdlib [m] (term "clamp" [int 3, int 5, var "R"])
     Map.lookup "R" bindings @?= Just (IntTerm 5)
+
+-- | The prelude's @\\==@ through the DSL sugar: a guard that fires when
+-- the two head variables differ, and a fallback clause when they do not.
+disequalityEndToEnd :: TestTree
+disequalityEndToEnd =
+  testCase "disequality: .\\== guard picks the branch" $ do
+    let m =
+          module' "d"
+            `exporting` ["pick" // 3]
+            `declaring` ["pick" // 3]
+            `defining` [ [term "pick" [var "A", var "B", var "R"]]
+                           <=> [var "R" .=. atom "different"]
+                           |- [var "A" .\== var "B"],
+                         [term "pick" [var "A", var "B", var "R"]]
+                           <=> [var "R" .=. atom "same"]
+                           |- [var "A" .== var "B"]
+                       ]
+    different <- runDSL stdlib [m] (term "pick" [int 1, int 2, var "R"])
+    Map.lookup "R" different @?= Just (CompoundTerm (Unqualified "different") [])
+    same <- runDSL stdlib [m] (term "pick" [int 1, int 1, var "R"])
+    Map.lookup "R" same @?= Just (CompoundTerm (Unqualified "same") [])
 
 -- | An operator appended to the declaration list must not crash the
 -- declaration walks: 'declaring' puts it in @decls@, but the walks

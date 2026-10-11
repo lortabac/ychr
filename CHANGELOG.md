@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+`\==` is the prelude's ask-disequality: `X \== Y` is true when the two
+arguments are not structurally identical after dereferencing, so it is
+the boolean negation of `==` and behaves the same way — no binding, the
+same argument evaluation as any other call, and a normal answer on
+unbound operands. It is declared at fixity 700, `xfx`, with the
+comparison operators, and is marked `:- inline` like them. There is
+still no `\=` (unifiability negation); `not(unifiable(X, Y))` remains
+the way to write that. In a quoted atom a backslash escapes, so the
+operator's own spelling is `'\\=='` (and `'\=='` was, and remains, the
+atom `==`). The DSL gains the matching `(.\==)` sugar. As a
+consequence the source printer now escapes a backslash, newline and tab
+in a single-quoted atom, so an atom name containing one re-parses to
+itself — `'\\=='` rather than the `'\=='` that decodes to `==`.
+
 The interpreter's per-call local environment is one mutable array
 instead of two slot-keyed `IntMap`s. `SlotProc` gains `slotProcSlots` —
 the number of slots the procedure's body uses, the final value of the

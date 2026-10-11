@@ -381,7 +381,7 @@ frame, and it never appears as its own frame in a trace. That is the
 cost of the hint.
 
 The prelude marks its arithmetic and comparison functions (`+ - * /
-div mod rem < > >= =< ==`) and its type tests (`var`, `nonvar`,
+div mod rem < > >= =< == \==`) and its type tests (`var`, `nonvar`,
 `integer`, `float`, `atom`, `boolean`, `string`, `ground`) this way.
 
 ## Expression forms
@@ -401,7 +401,7 @@ decided at resolution (see [Tell-side evaluation](#tell-side-evaluation)).
 | `fun(X, Y) -> Body end` | Lambda; parameters are variables or wildcards. |
 | `fun name/arity` | Function reference. |
 | `'$call'(F, A1, …, An)` | Wired-in dynamic call, 1–10 arguments; prefer the prelude's `call/N`. |
-| `X is E`, `X = E`, `A == B` | Evaluation, unification (tell), structural equality (ask). |
+| `X is E`, `X = E`, `A == B`, `A \== B` | Evaluation, unification (tell), structural (ask) equality and disequality. |
 | `A ; B` | [Disjunction](#disjunction-in-rule-bodies) in a rule body. |
 
 ## Tell-side evaluation
@@ -577,7 +577,7 @@ does not delay:
 - an *ignored* argument (`fst(pair(A, _)) -> A.` on `pair(1, U)`, `U`
   unbound);
 - data construction (`quote(...)`, constructor application, `=`);
-- primitives total on unbound values — `==`, `unifiable`, the type
+- primitives total on unbound values — `==`, `\==`, `unifiable`, the type
   predicates (`var`, `nonvar`, `ground`, `integer`, `atom`, …),
   `term_variables`, `copy_term`.
 
@@ -606,7 +606,7 @@ arguments, so for them "an unbound argument on the failure path" means
 | `write`, `writeln` | instantiation failure |
 | `compound_to_list`, `list_to_compound` | instantiation failure |
 | `name_base` | instantiation failure |
-| `==`, `unifiable` | answers normally (never raises) |
+| `==`, `\==`, `unifiable` | answers normally (never raises) |
 | `var`, `nonvar`, `ground`, `integer`, `float`, `atom`, `boolean`, `string` | answers normally (never raises) |
 | `term_variables`, `copy_term` | answers normally (never raises) |
 
@@ -725,6 +725,43 @@ test(R) <=> R = double(YY).                      % R bound to compound 'double(Y
 
 Use [`is`](#the-is-operator) to evaluate. The same policy applies in
 rule bodies and queries.
+
+## The `\==` operator
+
+`\==` is ask-disequality: it is the boolean negation of `==`, so it is
+true when its two arguments are not structurally identical after
+dereferencing. It never binds, which makes it usable in a guard exactly
+like `==`:
+
+```prolog
+nonzero(X) <=> X \== 0 | count(X).
+```
+
+`==` and `\==` are ordinary declared calls, so their arguments are
+expressions and are evaluated first, as everywhere else (see
+[Tell-side evaluation](#tell-side-evaluation)). `1 + 1 \== 2` is
+therefore false — the left operand is the value `2` before the
+comparison runs — while a variable bound to an unevaluated term is
+compared as the data it holds: `T = 1 + 1, T \== 2` is false, but
+`T = 1 + 1, T \== quote(1 + 1)` is true. That differs from Prolog,
+where `1 + 1 \== 2` is true.
+
+Two distinct unbound variables are `==` neither way round — they are
+`\==` — while `X \== X` is false. Being structural, `\==` is not a
+unifiability test: `quote(p(X, 1)) \== quote(p(2, Y))` is true for
+distinct `X` and `Y` even though the two terms unify, and there is no
+`\=` operator; write `not(unifiable(X, Y))` for that. Like `==`, `\==`
+answers normally on unbound operands rather than raising an
+instantiation failure.
+
+The operands share a type, `'\=='(A, A) -> bool`, exactly as `==`'s do,
+so two different concrete types are a type error rather than a
+disequality that happens to be true: `1 \== "a"` is `YCHR-60001`. Type
+one side `any` (or compare at a type variable) to ask across types.
+
+`\==` sits with the other comparisons at priority 700, `xfx`:
+`X = a \== b` parses as `X = (a \== b)`. In a quoted atom the
+backslash is escaped, so the operator's own spelling is `'\\=='`.
 
 ## The `is` operator
 
@@ -910,7 +947,9 @@ backends render atoms the same way: an
 identifier starting with a lowercase letter and otherwise made of
 letters, digits and underscores prints unquoted, unless it is a
 reserved word operator, and anything else is single-quoted with `''`
-for an embedded quote, so `hello world` prints as `'hello world'`, `is`
+for an embedded quote and `\\`, `\n`, `\t` for a backslash, newline and
+tab — the escapes the reader decodes — so `hello world` prints as
+`'hello world'`, `is`
 as `'is'`, and the unit atom as `'()'`. Flonums are the one rendering
 exception, each backend using its host language's float format; the
 divergence is recorded in `dev-docs/SCHEME_BACKEND_GAPS.md`.

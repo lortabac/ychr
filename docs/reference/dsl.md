@@ -135,9 +135,11 @@ declared in [`libraries/prelude.chr`](../../libraries/prelude.chr):
 | `.>` | `>` |
 | `.>=` | `>=` |
 | `.==` | `==` |
+| `.\==` | `\==` |
 
-No inequality operator: negate with the prelude's `not/1`. Structural
-unification (CHR's `=`) is `.=.`:
+`.\==` is the prelude's ask-disequality (no unification); there is no
+`.\=` — negate `unifiable/2` with the prelude's `not/1` instead.
+Structural unification (CHR's `=`) is `.=.`:
 
 ```haskell
 var "X" .=. var "Y"
