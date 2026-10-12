@@ -59,6 +59,10 @@ HASKELL_ONLY = {
     "search_label",
     "search_label_alt",
     "search_nested",
+    "search_fork",
+    # library(state)'s run_state/3 and run_states/2 run their goal with
+    # search:solve/1, so they are Haskell-only for the same reason.
+    "state_run",
 }
 
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only
@@ -395,6 +399,7 @@ def test_meta_module_host_calls_are_bound(ychr_bin, project_root, tmp_path):
         "%write-store-to-list",
         "%print-store",
         "%run-chr-session",
+        "%run-chr-session-ep",
         "%read-term-from-string",
     ):
         assert stub in generated, f"{stub} missing from the generated library"
@@ -407,8 +412,39 @@ def test_meta_module_host_calls_are_bound(ychr_bin, project_root, tmp_path):
         "write_term_to_string",
         "write_store_to_list",
         "run_chr_session",
+        "run_chr_session_ep",
         "read_term_from_string",
     ):
+        for call in (f"({bare})", f"({bare} "):
+            assert call not in generated, f"bare {call}... in generated library"
+
+
+def test_search_module_host_calls_are_bound(ychr_bin, project_root, tmp_path):
+    """The `library(search)` counterpart of
+    `test_meta_module_host_calls_are_bound`: the driver calls are stubs
+    on this backend, but each must lower to a bound runtime procedure so
+    that a program importing the library (directly, or through
+    `library(state)`) still loads on Chez.
+    """
+    program = tmp_path / "searchb.chr"
+    program.write_text(
+        ":- module(searchb, [go/1]).\n"
+        ":- use_module(library(state)).\n"
+        ":- chr_constraint go(any).\n"
+        "go(R) <=> new_state(k, 1), get(k, R).\n"
+    )
+    result = subprocess.run(
+        [ychr_bin, "compile", "-t", "scheme", "-d", str(tmp_path), str(program)],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    generated = (tmp_path / "ychr" / "generated" / "program.sls").read_text()
+
+    for stub in ("%solve", "%fail", "%findall", "%fold-solutions"):
+        assert stub in generated, f"{stub} missing from the generated library"
+    for bare in ("solve", "fail", "findall", "fold_solutions"):
         for call in (f"({bare})", f"({bare} "):
             assert call not in generated, f"bare {call}... in generated library"
 

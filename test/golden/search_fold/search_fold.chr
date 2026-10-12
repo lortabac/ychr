@@ -70,8 +70,8 @@ take_more(X, Xs) <=> Xs is find_n(10, X, quote(pick(X))).
 % ran, `exploding/1` would raise.
 none_at_all(N, X, Xs) <=> Xs is find_n(N, X, quote(exploding(X))).
 
-% `commit` ends the fold and keeps the solution's bindings, as solve/1
-% does: X stays bound to the first solution.
+% `commit` ends the fold and keeps the solution's values of the goal's
+% variables, as solve/1 does: X stays bound to the first solution.
 commit_first(X, R) <=>
     R is fold_solutions(X, quote(pick(X)), fun(C, _) -> commit(C) end, 0).
 

@@ -1,0 +1,91 @@
+:- module(state_run, [
+    type(key/0),
+    inc/1,
+    double/1,
+    swap/0,
+    leak/1,
+    counted/1,
+    pair_run/2,
+    nested/2,
+    single_goal/1,
+    no_leak/0,
+    uninit/1,
+    dup_keys/1,
+    bad_kvs/2,
+    failing/1,
+    unexported/1,
+    out_var/2,
+    unground_key/2,
+    nested_inner/1,
+    nested_clash/2,
+    nested_clash_inner/1,
+    caller_key/2
+]).
+
+:- use_module(library(state)).
+:- use_module(library(pairs)).
+:- use_module(library(search)).
+
+:- chr_type key ---> k ; n ; m.
+
+:- chr_constraint
+    inc(key), double(key), swap, leak(key), hidden(key),
+    counted(any), pair_run(any, any), nested(any, any), single_goal(any),
+    no_leak, uninit(any), dup_keys(any), bad_kvs(any, any), failing(any),
+    unexported(any), out_var(any, any), unground_key(any, any).
+
+% Stateful steps, run by the goals below. They are exported because a
+% run_state goal is resolved through the export list.
+inc(K) <=> modify(K, fun(X) -> X + 1 end).
+double(K) <=> modify(K, fun(X) -> X * 2 end).
+swap <=> get(k, A), get(n, B), put(k, B), put(n, A).
+leak(K) <=> new_state(K, 0).
+hidden(K) <=> inc(K).
+
+counted(R) <=> R is run_state(k, 1, quote([inc(k), double(k), inc(k)])).
+
+pair_run(A, B) <=>
+    [kv(k, A), kv(n, B)] is
+        run_states([kv(k, 1), kv(n, 2)], quote([swap, inc(k)])).
+
+% A run forks its caller's store, so a nested run sees the outer run's
+% keys: it has to use a key of its own ...
+nested(Outer, Inner) <=>
+    Outer is run_state(k, 10, quote([inc(k), nested_inner(Inner)])).
+
+:- chr_constraint nested_inner(any).
+nested_inner(I) <=> I is run_state(n, 0, quote(inc(n))).
+
+% ... and one on the outer key is a `new_state` on a key that exists.
+nested_clash(Outer, Inner) <=>
+    Outer is run_state(k, 10, quote([inc(k), nested_clash_inner(Inner)])).
+
+:- chr_constraint nested_clash(any, any), nested_clash_inner(any),
+                  caller_key(any, any).
+nested_clash_inner(I) <=> I is run_state(k, 0, quote(inc(k))).
+
+% The caller's own keys are visible to the goal.
+caller_key(M, R) <=>
+    new_state(m, 5), R is run_state(k, 0, quote(state:get(m, M))).
+
+% The goal's own variables are a second way out. Its `get` is qualified
+% because other.chr exports a `get/2` too.
+out_var(Mid, Final) <=>
+    Final is run_state(k, 1, quote([inc(k), state:get(k, Mid), double(k)])).
+
+single_goal(R) <=> R is run_state(k, 5, quote(double(k))).
+
+% Keys made inside a run are gone when it returns.
+no_leak <=> _ is run_state(k, 0, quote(leak(n))), get(n, _).
+
+uninit(R) <=> R is run_state(k, 0, quote(inc(n))).
+
+dup_keys(R) <=> R is run_states([kv(k, 1), kv(k, 2)], quote([])).
+
+bad_kvs(L, R) <=> R is run_states(L, quote([])).
+
+failing(R) <=> R is run_state(k, 0, quote(try_unify(1, 2))).
+
+unexported(R) <=> R is run_state(k, 0, quote(hidden(k))).
+
+unground_key(K, R) <=> R is run_state(K, 0, quote([])).

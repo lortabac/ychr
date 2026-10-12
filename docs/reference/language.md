@@ -653,8 +653,9 @@ propagation history and the reactivation queue as it found them. That
 is what makes the catch sound.
 
 The one thing that outlives a guard is a host function that binds a
-variable it was handed — `run_chr_session/1` does this as its result
-channel. Those bindings persist, but equally when the guard
+variable it was handed — the search entry points (`solve/1`,
+`run_chr_session/1`, …) do this with the goal's variables, their
+result channel. Those bindings persist, but equally when the guard
 evaluates to false, so this is a property of effectful host calls in
 guards, not of the delaying. If it matters, keep effectful host calls
 in rule bodies, where they run once and only when the rule fires.

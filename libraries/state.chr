@@ -1,9 +1,11 @@
 :- module(state, [new_state/2, get/2, put/2, modify/2, close_state/1,
-                  new_states/1, close_states/1]).
+                  new_states/1, close_states/1,
+                  fun run_state/3, fun run_states/2]).
 
 :- use_module(library(lists)).
 :- use_module(library(meta)).
 :- use_module(library(pairs)).
+:- use_module(library(search)).
 :- use_module(library(strings)).
 
 % Mutable variables, emulated with constraints. Each key names one
@@ -31,6 +33,33 @@
 % `close_state` request, so the checks above apply to it (a key repeated
 % in a `new_states` list is a `new_state` on a key that already exists),
 % and the elements before a failing one have already taken effect.
+%
+% The scoped interface runs a goal against keys of its own, the way
+% Haskell's runState runs a State computation:
+%
+%   run_state(K, V, quote(Goal))     the final value of K
+%   run_states(KVs, quote(Goal))     the final kv(K, V) of each key of KVs
+%
+% The goal is a constraint term or a list of them, as for search:solve/1,
+% and runs as solve/1 runs it, against a fork of the calling session
+% (search.md, "Scope: search forks the calling session"): the keys are
+% created there before the goal and read back after it, and the fork's
+% store is discarded when the run returns, so there is nothing to close.
+% The goal sees the caller's constraints, its keys included: a run on a
+% key the caller holds is a `new_state` on a key that already exists.
+% Nothing the goal tells or removes survives, and results come back
+% through the returned value and the goal's own variables only. Its
+% constraints must be exported, and are resolved through the exports of
+% the whole program, as for any goal run by solve/1: qualify one
+% (`state:get`) if another module exports the same name.
+%
+% A runtime error in the goal propagates, the state library's own
+% included; a run whose goal fails (search:fail/0, or a choice point
+% with no solution) is a runtime error too. The final values are read
+% when the goal's tells have finished, before any choice point it left
+% is explored, so a goal that searches does not give the values of its
+% solution: write the goal deterministically. KVs is checked as for
+% new_states. Both are Haskell-only, as library(search) is.
 
 % The values are typed `any`. A key does not fix the type of its value
 % (two keys may hold values of different types), and the checker types
@@ -56,7 +85,15 @@
     (missing_key(any) -> any),
     (list_error(string, string, any) -> any),
     (kv_list(any) -> bool),
-    (is_kv(any) -> bool).
+    (is_kv(any) -> bool),
+    (run_state(K, any, any) -> any),
+    (run_states(list(pair(K, any)), any) -> list(pair(K, any))),
+    (run_with(list(pair(K, any)), any, list(pair(K, any)))
+        -> list(pair(K, any))),
+    (run_result(bool, list(pair(K, any))) -> list(pair(K, any))),
+    (goal_list(any) -> list(any)),
+    (fresh_value(pair(K, any)) -> pair(K, any)),
+    (get_goal(pair(K, any)) -> any).
 
 key_error(K, Problem) ->
     panic(string_concat("state: key ",
@@ -116,3 +153,32 @@ close_states @ close_states(Ks) <=> close_each(Ks).
 
 close_each([]) <=> true.
 close_each([K|Ks]) <=> close_state(K), close_each(Ks).
+
+% The library's own goals are qualified: a goal is resolved through the
+% exports of the whole program, where an unqualified `get/2` would be
+% ambiguous as soon as another module exports one.
+%
+% `run_states` asks for a fresh variable per key, then hands the same
+% list to the goal's trailing `get`s and to the result: the `get`s bind
+% the variables inside the fork, and they are goal variables, so
+% committing its solution keeps them bound.
+run_state(K, V, G) -> value(head(run_states([kv(K, V)], G))).
+
+run_states(KVs, _) | not(kv_list(KVs)) ->
+    list_error("run_states", "a list of kv(K, V)", KVs).
+run_states(KVs, G) -> run_with(KVs, G, maplist(fun fresh_value/1, KVs)).
+
+run_with(KVs, G, Out) ->
+    run_result(solve([quote(state:new_states(KVs))
+                      | append(goal_list(G), maplist(fun get_goal/1, Out))]),
+               Out).
+
+run_result(true, Out) -> Out.
+run_result(false, _) -> panic("state: the goal of a run has no solution").
+
+goal_list(G) | is_list(G) -> G.
+goal_list(G) -> [G].
+
+fresh_value(kv(K, _)) -> kv(K, _).
+
+get_goal(kv(K, R)) -> quote(state:get(K, R)).

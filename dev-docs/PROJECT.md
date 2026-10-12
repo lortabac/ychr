@@ -774,14 +774,15 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
 - CHR-to-VM compiler in `src/YCHR/Internal/Compile.hs`.
 - Compile-time embedding of `libraries/*.chr` and `typechecker/*.chr`, which lives *outside* the library in the shared `embed/` source directory (`YCHR.Embedded`, `YCHR.Embedded.StdLib`, `YCHR.Embedded.TypeCheck`). It is compiled into the components that want a self-contained binary — the `ychr` executable, the test suite, the benchmark and the `stlc` example — all of which therefore depend on `template-haskell`. The library instead takes the parsed standard library (`YCHR.Internal.StdLib.StdLib`, built by `parseStdLib`) and the compiled type-checker (`SessionInput`, built by `YCHR.Internal.TypeCheck.Compiled.compileTypeCheckerModules`) as explicit inputs, so it carries no Template Haskell dependency. The MicroHs build has no Template Haskell, so its `ychr` executable compiles `src/mhs/YCHR/Embedded.hs` instead: the same `loadResources` entry point, backed by the modules `make resources` decodes once at build time into the gitignored `generated/` (generator `codegen/Main.hs`, emitter `embed/YCHR/Embedded/Generate/`, which is GHC-only), so the MicroHs binary pays for the standard-library parse and the type-checker compilation at build time rather than in every process. The library's `YCHR.Internal.Resources` still ships the on-disk loader for embedders. See [`docs/how-to/embed-a-chr-module.md`](../docs/how-to/embed-a-chr-module.md#5-supplying-the-resources), `MICROHS_GAPS.md` gap 5, and `MICROHS_PERFORMANCE.md` option B.
 - Optional static type checker. The checker *is* a CHR program, under `typechecker/`. Its whole Haskell side is `src/YCHR/Internal/TypeCheck.hs` — the entry points `typeCheckProgram` / `typeCheckGoals` and the diagnostic decoder — plus `src/YCHR/Internal/TypeCheck/{Encode,Render,Error,Compiled}.hs`: `Encode` turns a desugared program into one ground term, `Render` formats solved types back into source syntax, and `Compiled` compiles the checker's sources once on first demand. Declaration collection, slot skeletons, the walkers, overload resolution and warning suppression all happen in CHR. Programs without type annotations are accepted unchanged. It reports errors and warnings; `--Werror` promotes the latter, and the CLI's `--no-check` skips the checker outright (whole-program and per-goal). See [`docs/reference/type-system.md`](../docs/reference/type-system.md).
-- The CHR side is: `ast.chr` (the encoded AST's declarations — a matched pair with `Encode.hs`, and its header records how a mismatch between the two is caught), `diag.chr` (the diagnostic vocabulary — `error/3` and `warning/3` are declared over `error_code`/`warning_code` and `error_detail` rather than `any`, so `ychr check --Werror` on the checker's own source rejects a report site that invents a code; the code↔detail pairing is not statically checked and is enforced instead by `decodeError` — plus the accumulators and per-unit warning suppression, keyed on a `unit_id` that spells "outside any checking unit" as `no_unit` instead of a sentinel integer), `env.chr` (the declaration environment), `pure.chr` (the checks that need no solver — duplicate constructors, type-definition validation, constructor arity), `solver.chr` (the solver core: the type representation, the meet table, overload resolution, bound discharge and the guard-derived-evidence rules, every diagnostic carrying a structured `ctx`), `skel.chr` (slot skeletons and variable collection), `walk.chr` (the declaration facts, the rule walk, the function-equation walk, the class-function overload search — one `solve/1` per equation over a `;` chain of attempts, where an attempt that does not fit its candidate signature ends in `fail/0` and the search driver undoes everything it did — and the goal walk), and `main.chr` (the two entry points). Every module — `env.chr`, `pure.chr`, `skel.chr`, `walk.chr` and `solver.chr` — expresses its list traversals with `library(lists)` / `library(pairs)` higher-order functions (`maplist`, `concat_map`, `foldl`, `filter`, `all`, `any`, `all2`, `same_length`, `assoc_get`, `assoc_put_with`, …) instead of hand-rolled recursion, and the solver's trial substitution and per-bound candidate sets are plain association lists rather than bespoke pair types. That is a deliberate readability-over-speed choice, taken with the cost measured, in two steps. The first four modules were worth about +80% of the checker's runtime over the golden corpus (13.4 s → 24.4 s for the corpus's programs plus their rule bodies as goal lists), spread over about 55 call sites at roughly 2–3x per list element. `solver.chr` came last — it had been left as a rule-for-rule mirror of the Haskell solver it replaced so the two could be read side by side while that port was in progress, and was converted once that reason lapsed — for +8% of `cabal bench`'s `typecheck/pairs_library` (180.6 ms → 195.3 ms, measured 2026-09-03). The two figures are over different workloads and do not sum. Neither step has a hot spot to reclaim: the cost is closure dispatch through `'$call'`, not wrapper overhead. That diagnosis held up — keyed `'$call'` dispatch (see "Already implemented") has since removed the per-call dispatch chain and taken a further 13% off this benchmark. The declaration facts a session needs are built as data before being told, so the overload search can hand a whole declaration environment to each attempt (`retell_decls`, which `copy_term`s it first so no variable is shared across the boundary — the attempt that fits is committed, so the trail does not undo its bindings) instead of re-deriving it from the AST on every attempt. Checking one golden program cost ~47 ms on average and checking a query's goals ~13 ms when last measured over the whole corpus (2026-09-02, before the conformance walk was removed); nearly all of the goal figure is per-program work the query repeats (encode, `build_tc_env`, `tell_decls`), and caching that across queries is left to a general mechanism rather than a per-caller one. `cabal bench`'s `typecheck/pairs_library` is the standing single-program measurement.
+- The CHR side is: `ast.chr` (the encoded AST's declarations — a matched pair with `Encode.hs`, and its header records how a mismatch between the two is caught), `diag.chr` (the diagnostic vocabulary — `error/3` and `warning/3` are declared over `error_code`/`warning_code` and `error_detail` rather than `any`, so `ychr check --Werror` on the checker's own source rejects a report site that invents a code; the code↔detail pairing is not statically checked and is enforced instead by `decodeError` — plus the accumulators and per-unit warning suppression, keyed on a `unit_id` that spells "outside any checking unit" as `no_unit` instead of a sentinel integer), `env.chr` (the declaration environment), `pure.chr` (the checks that need no solver — duplicate constructors, type-definition validation, constructor arity), `solver.chr` (the solver core: the type representation, the meet table, overload resolution, bound discharge and the guard-derived-evidence rules, every diagnostic carrying a structured `ctx`), `skel.chr` (slot skeletons and variable collection), `walk.chr` (the declaration facts, the rule walk, the function-equation walk, the class-function overload search — one `run_chr_session_ep/1` (`solve/1` on a fresh session) per equation over a `;` chain of attempts, where an attempt that does not fit its candidate signature ends in `fail/0` and the search driver undoes everything it did — and the goal walk), and `main.chr` (the two entry points). Every module — `env.chr`, `pure.chr`, `skel.chr`, `walk.chr` and `solver.chr` — expresses its list traversals with `library(lists)` / `library(pairs)` higher-order functions (`maplist`, `concat_map`, `foldl`, `filter`, `all`, `any`, `all2`, `same_length`, `assoc_get`, `assoc_put_with`, …) instead of hand-rolled recursion, and the solver's trial substitution and per-bound candidate sets are plain association lists rather than bespoke pair types. That is a deliberate readability-over-speed choice, taken with the cost measured, in two steps. The first four modules were worth about +80% of the checker's runtime over the golden corpus (13.4 s → 24.4 s for the corpus's programs plus their rule bodies as goal lists), spread over about 55 call sites at roughly 2–3x per list element. `solver.chr` came last — it had been left as a rule-for-rule mirror of the Haskell solver it replaced so the two could be read side by side while that port was in progress, and was converted once that reason lapsed — for +8% of `cabal bench`'s `typecheck/pairs_library` (180.6 ms → 195.3 ms, measured 2026-09-03). The two figures are over different workloads and do not sum. Neither step has a hot spot to reclaim: the cost is closure dispatch through `'$call'`, not wrapper overhead. That diagnosis held up — keyed `'$call'` dispatch (see "Already implemented") has since removed the per-call dispatch chain and taken a further 13% off this benchmark. The declaration facts a session needs are built as data before being told, so the overload search can hand a whole declaration environment to each attempt (`retell_decls`; the list is `copy_term`ed once per equation before it enters the search, so no variable is shared with a stored fact of the caller — which is also what the search driver's commit-time watched-goal-variable check demands) instead of re-deriving it from the AST on every attempt. Checking one golden program cost ~47 ms on average and checking a query's goals ~13 ms when last measured over the whole corpus (2026-09-02, before the conformance walk was removed); nearly all of the goal figure is per-program work the query repeats (encode, `build_tc_env`, `tell_decls`), and caching that across queries is left to a general mechanism rather than a per-caller one. `cabal bench`'s `typecheck/pairs_library` is the standing single-program measurement.
 - Pattern-match exhaustiveness checking for functions over algebraic types in `src/YCHR/Internal/Exhaustiveness.hs` (Maranget's usefulness algorithm), reported as a warning with a concrete unmatched example.
 - Opt-in search for the Haskell runtime: `libraries/search.chr` plus
   `src/YCHR/Internal/Runtime/{Search,Trail}.hs`. `alt/1` is an ordinary
   CHR constraint with no rules, so it sits inert in the store; the
-  driver forks a session, runs the goal to quiescence, takes the oldest
-  live `search:alt` suspension, and tells each of its alternative goals
-  in turn. The continuation after a choice is always "tell this goal
+  driver forks the calling session (copying its store and propagation
+  history, both persistent, so the copy is pointer reads), runs the goal
+  to quiescence, takes the oldest live `search:alt` suspension told
+  since the fork, and tells each of its alternative goals in turn. The continuation after a choice is always "tell this goal
   and propagate to quiescence", which the driver invokes itself, so
   nothing has to be captured and neither the VM nor the `Chr` monad
   changes.
@@ -809,8 +810,11 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
   optimization those numbers exist to judge; it is not done.
   Solutions are fetched by three host calls over one driver. The
   driver's per-solution callback answers `continue` / `stop` /
-  `commit`, and only `commit` skips the unwind to the base mark taken
-  when the search was entered; `solve/1` and `findall/2` are the
+  `commit`. Every exit unwinds to the base mark taken when the search
+  was entered; `commit` differs only in reading the goal's variables'
+  values first and binding them again afterwards, in the calling
+  session — the one thing a search leaves behind. `solve/1` and
+  `findall/2` are the
   constant functions `commit` and `continue`, and `fold_solutions/4`
   runs the user's step function to decide. `forall/3` and `find_n/3`
   are derived over `fold_solutions` in CHR rather than added to the
@@ -849,8 +853,9 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
   cells a snapshot cannot reach — variable cells and the
   `alive` / `stored` suspension flags, hooked at `writeVarState` and
   the `Store` flag writes. One trail is shared down through nested
-  forks with a mark per choice point, so a nested search that commits
-  still leaves its writes undoable by the enclosing one; the counters
+  forks with a mark per choice point, so the goal-variable bindings a
+  nested search commits are recorded on it and stay undoable by the
+  enclosing one; the counters
   stay monotonic across backtracking. `SessionEnv.trail` is `Nothing`
   outside a search, so an ordinary program pays a field read and a
   branch per variable and flag write, and records nothing.
@@ -930,24 +935,27 @@ Internally, `fun(X, Y) -> Expr end` is syntactic sugar for the ordinary compound
   shows the pattern, so it is not built.
   `run_chr_session/1` (`library(meta)`) is the same driver: it
   predated the search and had become a near-duplicate of `solve/1`, so
-  it is now `hostRunChrSession` in `Search.hs` — same fork, same base
-  mark, same commit on the first solution, with one runtime-error
-  catch around it. That is its one distinct job, and the reason it
-  cannot be written as `run_chr_session(G) -> solve(G)` in CHR: the
-  language has no catch form. The merge also gives it two behaviours
+  it is now `hostRunChrSession` in `Search.hs` — same base mark, same
+  commit on the first solution, but on a fresh, empty session
+  (`ForkStore`'s `FreshStore`) rather than a copy of the caller's, and
+  with one runtime-error catch around it. `run_chr_session_ep/1` is the
+  same without the catch, for the type checker's overload search, whose
+  attempts must not see the caller's error accumulator. The catch is
+  the reason `run_chr_session/1` cannot be written in CHR over
+  `run_chr_session_ep/1`: the language has no catch form. The merge also gives it two behaviours
   it did not have. A `false` is now rolled back to the base mark
   rather than leaving the sub-session's bindings in place, and a
   choice point the goal tells is explored rather than sitting inert —
   a goal that tells `alt` is a search whichever entry point runs it.
-  Goal resolution stays outside the catch, so a misspelled or
-  unexported goal constraint is still a loud caller error and not a
-  `false`. `forkSessionEnv` and `forkSearchSessionEnv` collapsed into
+  Goal resolution and a commit's watched-goal-variable check stay
+  outside the catch, so a misspelled or unexported goal constraint is still a loud
+  caller error and not a `false`. `forkSessionEnv` and `forkSearchSessionEnv` collapsed into
   the latter, since every fork now belongs to a search.
   The cost is that a sub-session's writes are trailed even when no
   enclosing search is running. That is not measured: no benchmark
   calls `run_chr_session/1`, and the one hot caller that used to — the
   type checker's overload resolution — migrated to `solve/1` in
-  8082a26. The per-write cost itself is the one recorded above for the
+  8082a26, and from there to `run_chr_session_ep/1`. The per-write cost itself is the one recorded above for the
   trail hook.
   Haskell runtime only. See
   [`docs/reference/search.md`](../docs/reference/search.md).

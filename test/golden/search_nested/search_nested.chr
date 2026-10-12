@@ -22,9 +22,9 @@
 % commits a binding to B — a variable shared all the way out to the
 % query. Branch A = 1 is then rejected.
 %
-% The inner search committed, so it unwound nothing itself; its trail
-% entries have to remain on the shared trail for the outer driver to
-% undo. If they did not, B would still be bound to `first` when the
+% The inner search unwinds and then binds its goal variable B in the
+% calling branch, on the shared trail, where the outer driver can still
+% undo it. If it could not, B would still be bound to `first` when the
 % A = 2 branch runs, and `B = second` would be a unification failure —
 % a loud runtime error rather than a quietly wrong answer.
 track(A, B, Ok) <=> Ok is solve(quote(labelled(A, B))).

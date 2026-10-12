@@ -36,7 +36,8 @@
 pair(X, Y, S) <=> choose(X, [1, 2, 3]), choose(Y, [1, 2, 3]), sum_is(X, Y, S).
 sum_is(X, Y, S) <=> not(X + Y == S) | fail.
 
-% solve/1 commits: the first solution's bindings survive the call.
+% solve/1 commits: the goal's variables keep their values in the first
+% solution.
 first_pair(X, Y, Ok) <=> Ok is solve(quote(pair(X, Y, 5))).
 
 % findall/2 undoes everything: only the copies survive. X and Y are

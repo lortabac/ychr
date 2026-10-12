@@ -10,10 +10,11 @@ changes and no per-step bookkeeping.
 Search generalizes the try-keep-or-discard pattern the type checker's
 overload resolution once hand-rolled with one throwaway
 `run_chr_session/1` per candidate signature; that resolution now runs
-over `solve/1`, `run_chr_session/1` is itself the search driver (see
-[`run_chr_session/1` is `solve/1` made
-total](#run_chr_session1-is-solve1-made-total)), and a finite-domain
-solver (propagate, label, propagate, backtrack) would be another use.
+over `run_chr_session_ep/1`, `run_chr_session/1` is itself the search
+driver (see [`run_chr_session/1` is `run_chr_session_ep/1` made
+total](#run_chr_session1-is-run_chr_session_ep1-made-total)), and a
+finite-domain solver (propagate, label, propagate, backtrack) would be
+another use.
 
 **Availability.** Haskell interpreter only. The Scheme backend does
 not implement the search host calls, so a program that uses them
@@ -33,17 +34,19 @@ Search is built from these pieces:
 | `between/3` | CHR constraint, **derived** | Labeling over a closed integer interval: unify one variable with each integer of `[Low, High]`, one step at a time. |
 | `fail/0` | function | Fails the current branch. |
 | `try_unify/2` | CHR constraint | Prolog's `=`: unify, or fail the branch. |
-| `solve/1` | function | Runs a goal; commits to its first solution. |
+| `solve/1` | function | Runs a goal against a fork of the caller's store; commits to its first solution. |
+| `run_chr_session_ep/1` | function, in `library(meta)` | `solve/1` on a fresh, empty session; errors propagate. |
 | `findall/2` | function | Runs a goal; collects a copy of a template per solution, then undoes everything. |
 | `fold_solutions/4` | function | Folds a function over the solutions, in search order, with early exit. |
 | `forall/3` | function | Derived from `fold_solutions`: does every solution satisfy a predicate? |
 | `find_n/3` | function | Derived from `fold_solutions`: the first *N* solutions. Terminates on an infinite space. |
-| `run_chr_session/1` | function, in `library(meta)` | `solve/1` made total: a runtime error in the goal is `false` rather than propagating. |
+| `run_chr_session/1` | function, in `library(meta)` | `run_chr_session_ep/1` made total: a runtime error in the goal is `false` rather than propagating. |
 
 The execution model is *choice at quiescence* (labeling), not
 continuation capture:
 
-1. A search entry point forks a sub-session and tells the goal,
+1. A search entry point forks the calling session (or, for the
+   isolated entry points, starts a fresh one) and tells the goal,
    running it to quiescence under the ordinary ωr semantics.
 2. At quiescence the driver looks in the store for an alive
    `search:alt/1` constraint. None: the current state is a
@@ -99,18 +102,43 @@ module — may match on it. A rule head that mentions it is rejected as
 rest of type checking, `--no-check` skips that check.
 
 
-## Scope: search runs in a sub-session
+## Scope: search forks the calling session
 
-`solve(quote(Goal))`, `findall(Template, quote(Goal))`,
-`fold_solutions(Template, quote(Goal), F, Acc0)` and
-`run_chr_session(quote(Goal))` run `Goal` in a **fresh session of the
-current program** — its own constraint store, propagation history,
-reactivation queue, and call stack, with the same rules, functions,
-host calls, and exports. One fork serves every entry point:
+`solve(quote(Goal))`, `findall(Template, quote(Goal))` and
+`fold_solutions(Template, quote(Goal), F, Acc0)` — and everything built
+on them: `forall/3`, `find_n/3`, and `library(state)`'s `run_state/3`
+and `run_states/2` — run `Goal` in a **fork of the calling session**:
+a session of the same program whose constraint store and propagation
+history start as a copy of the caller's, at the moment the entry point
+is called. The fork has its own reactivation queue, which starts empty,
+and its own call stack.
 
-- **The caller's store is not searched.** Constraints stored in the
-  calling session are invisible to the goal and vice versa: search
-  explores the goal, not the ambient program state.
+- **The caller's constraints are visible.** The goal's rules see the
+  caller's stored constraints as partners and may fire on them, as a
+  rule body's tells would; a caller constraint observing a variable the
+  search binds is reactivated *in the fork*. Search explores the goal
+  *against* the ambient program state.
+- **The caller's store is not changed.** Whatever the search does to
+  the store — constraints added, caller constraints removed,
+  propagation rules recorded as fired — is discarded when the entry
+  point returns, on every exit: commit included. Only bindings of the
+  goal's own variables can survive (see
+  [What a commit keeps](#what-a-commit-keeps)), so an entry point called
+  from a guard does not tell, and a caller constraint that the goal's
+  rules consumed is alive and stored again afterwards.
+- **The copy is the store as it stands, not a quiescent one.** An entry
+  point called from a rule body sees the store mid-rule: the
+  constraints the rule removed are already gone, and the active
+  constraint is in the copy exactly when the rule keeps it (it is
+  stored before a kept rule's body runs). Called from a guard, whether
+  the active constraint is in the copy depends on whether it had been
+  stored by an earlier activation, so a program must not rely on it.
+  Reactivations the caller has queued but not yet run stay with the
+  caller; the fork does not run them.
+- **Only the search's own choice points are explored.** An `alt` that
+  was already in the caller's store — inert outside a search, or
+  pending in an enclosing one — is in the copy but is never selected
+  by this driver; it is reached, if at all, by the driver that owns it.
 - **Goal shape.** `Goal` is a single constraint term, a list of them
   told in order, or a disjunction (see
   [Dynamic disjunction](#dynamic-disjunction)), wrapped in `quote/1`
@@ -120,15 +148,63 @@ host calls, and exports. One fork serves every entry point:
   before the search starts; an unknown, unexported, or wrong-arity
   goal constraint is a loud runtime error — never a `false` result,
   never a failed branch.
-- **Variable sharing is the result channel.** Logical variables are
-  mutable cells, so a variable reachable from the goal is the same
-  variable inside the search; bindings that survive (see
-  [Commit](#commit-and-undo)) are readable afterwards.
-- **Reactivation does not cross the boundary.** A *live* stored
-  constraint of the calling session observing a variable the search
-  binds is not reactivated. Pass ground terms and fresh variables in;
-  read results out.
+- **The goal's variables are its outputs.** The *goal's variables* are
+  the unbound variables reachable from `Goal` when the entry point is
+  called. They are the result channel, and nothing else is: a commit
+  binds them to their values in the solution, and leaves every other
+  variable of the caller as it was (see
+  [What a commit keeps](#what-a-commit-keeps)). Pass them fresh, and
+  unify the caller's own variables with them after the call.
+- **Committing to a watched goal variable is a caller error.** If a
+  search commits while one of its goal variables is observed by a live
+  stored constraint of the calling session, the entry point raises a
+  runtime error instead of binding it: `goal variable is observed by a
+  stored constraint; pass a fresh variable and unify after the call`.
+  A commit binds goal variables outside any rule body, so nothing would
+  reactivate that constraint, and its rules would silently miss the new
+  value. A search that does not commit — `findall/2`, a fold that never
+  answers `commit`, an exhausted `solve/1` — binds nothing and is not
+  checked, so it may label a variable the caller's store constrains:
+  the caller's constraints see it bound inside the fork, where they are
+  reactivated as usual. Like goal resolution, the check runs in the
+  calling session, outside `run_chr_session/1`'s catch, so it is never
+  a `false`. A constraint of an inert type
+  registers no observers (see PROJECT.md, Delay Avoidance), so it does
+  not count: nothing would reactivate it either way.
 
+  ```prolog
+  % Error if a stored constraint watches R, e.g. after the query
+  % bar(R), go(R).
+  go(R) <=> solve(quote(foo(R))).
+
+  % Correct: X is fresh; R = X is an ordinary body unification, and
+  % reactivates whatever watches R.
+  go(R) <=> solve(quote(foo(X))), R = X.
+  ```
+
+### Isolated sessions
+
+Two entry points keep the older behaviour, and run `Goal` in a **fresh
+session of the current program** instead — an empty store, history and
+reactivation queue, with the same rules, functions, host calls and
+exports. Neither the caller's constraints nor its choice points are
+visible, and the goal's constraints cannot interact with them.
+
+| Entry point | Store | A runtime error in `Goal` |
+|---|---|---|
+| `solve/1`, `findall/2`, `fold_solutions/4` | fork of the caller's | propagates |
+| `run_chr_session_ep/1` (`library(meta)`) | fresh | propagates |
+| `run_chr_session/1` (`library(meta)`) | fresh | is `false` |
+
+`run_chr_session_ep/1` ("error-propagating") is `solve/1` on a fresh
+session: same driver, same commit on the first solution. It lives in
+`library(meta)` beside `run_chr_session/1`, which differs from it only
+in catching errors. It exists for a computation that has to
+be sealed off from its caller in both directions — the type checker's
+overload search, whose attempts must not see the program-wide error
+accumulator and seed their own inside the branch. Everything else in
+this document applies to all three; where the starting store matters,
+the text says so.
 
 ## Choice points
 
@@ -265,7 +341,9 @@ that `alt`, not the `between`.
 ### ωr interaction
 
 Each branch inherits the store, the propagation history, and the
-reactivation queue as they stood at the choice point, and all three are
+reactivation queue as they stood at the choice point — at the first
+choice point of a forking search, that includes everything copied from
+the caller, and all three are
 restored when the branch is undone. Two consequences:
 
 - A rule that fired in a failed branch is **not** recorded as fired in
@@ -461,13 +539,13 @@ is the same error as calling `fail/0` there; the message names
 `fail/0` rather than `try_unify/2`, and the call stack on the error
 identifies the rule.
 
-### `run_chr_session/1` is `solve/1` made total
+### `run_chr_session/1` is `run_chr_session_ep/1` made total
 
 `run_chr_session/1` (in [`library(meta)`](../../libraries/meta.chr))
-is the same driver as `solve/1`: same fork, same base mark, same
-commit on the first solution. A choice point the goal tells is
-explored exactly as under `solve/1`, and the first solution's
-bindings are kept.
+is the same driver as `run_chr_session_ep/1`: same fresh session, same
+base mark, same commit on the first solution. A choice point the goal tells is
+explored exactly as under `solve/1`, and the first solution is
+committed (see [What a commit keeps](#what-a-commit-keeps)).
 
 The one difference is at the top of this section: a runtime error
 raised inside the goal becomes `false` instead of propagating. That
@@ -528,8 +606,33 @@ The rules:
   entry and a mark per alternative. A failed branch unwinds to that
   alternative's mark; exhaustion, any ending that does not commit, and
   an escaping runtime error unwind to the base mark.
-- **Commit means "do not unwind".** The entries stay on the shared
-  trail, so an enclosing driver can still undo them.
+- **A commit's bindings are recorded like any other.** The bindings a
+  commit makes (see below) go on the shared trail, so an enclosing
+  driver can still undo them.
+
+### What a commit keeps
+
+A commit — `solve/1` and `run_chr_session_ep/1` reaching their first
+solution, `run_chr_session/1` returning `true`, a fold step answering
+`commit` — keeps exactly one thing: the values of the goal's variables.
+At the solution the driver
+
+1. reads each of the goal's variables at its value in the solution,
+   dereferenced throughout: a variable the branch bound is replaced by
+   its value, and one still unbound stays itself;
+2. unwinds everything to the base mark, as a search that does not
+   commit does;
+3. binds each of the goal's variables to the value read in step 1.
+
+So a search changes nothing in its caller except binding the goal's
+variables. A binding the branch made to any other variable of the
+caller — for instance by a rule that fired on a copy of a caller
+constraint and unified one of its arguments — is undone, together with
+the store change that came with it. What the solution saw in such a
+variable is kept only where it reached the goal's variables, by value.
+
+In a fresh session every variable the goal can reach came in through
+the goal, so there the rule only states what a commit always did.
 
 
 ## Entry points
@@ -539,18 +642,23 @@ The rules:
 `Ok is solve(quote(Goal))`
 
 Runs `Goal` and stops at the **first solution**, returning `true`.
-That solution is **committed**: nothing is unwound, so bindings made
-to variables shared with the goal are visible to the caller. If the
-search space is exhausted without a solution, everything is unwound
-to the base mark and `solve` returns `false`.
+That solution is **committed**: the goal's variables are bound to their
+values in it, and are visible to the caller. Nothing else is kept: the
+fork's store is discarded, and any other variable the branch bound is
+unbound again (see [What a commit keeps](#what-a-commit-keeps)). If the search space
+is exhausted without a solution, everything is unwound to the base mark
+and `solve` returns `false`.
 
 "Committed" is relative to the enclosing computation: a `solve`
 running inside a search branch leaves its trail entries on the shared
 trail, and they are undone if *that* branch is later abandoned.
 
-`run_chr_session/1` is this entry point with a runtime-error catch
-around it; see [`run_chr_session/1` is `solve/1` made
-total](#run_chr_session1-is-solve1-made-total).
+`run_chr_session_ep/1`, in `library(meta)`, is this entry point on a
+fresh session rather than a fork of the caller's, and
+`run_chr_session/1` is that with a runtime-error catch around it; see
+[Isolated sessions](#isolated-sessions) and [`run_chr_session/1` is
+`run_chr_session_ep/1` made
+total](#run_chr_session1-is-run_chr_session_ep1-made-total).
 
 ### `findall/2`
 
@@ -612,7 +720,7 @@ returns a `step`:
 |---|---|
 | `continue(A)` | The accumulator becomes `A`. Backtrack and look for the next solution. |
 | `stop(A)` | Stop now. Unwind everything to the base mark. `fold_solutions` returns `A`. |
-| `commit(A)` | Stop now. Unwind **nothing**: this solution's bindings survive, as they do for `solve`. `fold_solutions` returns `A`. |
+| `commit(A)` | Stop now. Keep this solution's values of the goal's variables, as `solve` does (see [What a commit keeps](#what-a-commit-keeps)). `fold_solutions` returns `A`. |
 
 Exhausting the search space unwinds everything to the base mark and
 returns the accumulator as it stands. `stop` and `commit` differ only
@@ -719,8 +827,8 @@ function, in a guard-called function, and inside a goal that is itself
 under search. Each nested call forks again and takes its own marks on
 the one shared trail:
 
-- an inner **commit** leaves its entries on the trail for the enclosing
-  driver, which may still undo them;
+- an inner **commit** binds the inner goal's variables, on the shared
+  trail, so the enclosing driver may still undo them;
 - an inner **failure** unwinds only to the inner driver's own marks,
   leaving the outer branch's state alone;
 - an inner **error** unwinds to the inner base mark and then keeps
@@ -728,8 +836,10 @@ the one shared trail:
   mark in turn — until it reaches a `run_chr_session/1`, which stops
   it and reports `false`.
 
-`alt/1` constraints belong to the store of the session that told them,
-so an inner search never sees an outer search's pending choices.
+An inner forking search copies the outer branch's store, pending
+`alt` constraints included, but selects only the choice points told
+after it was entered (see [Scope](#scope-search-forks-the-calling-session)),
+so it never takes an outer search's pending choice.
 
 
 ## Edge cases
@@ -750,6 +860,7 @@ so an inner search never sees an outer search's pending choices.
 | An `alt` killed by a user rule | Never seen by the driver. |
 | An `alt` told inside a branch — including the inner `alt` of a nested `;` | Picked up at that branch's next quiescence, so it is nested *under* the current choice. |
 | The goal quiesces with no `alt` at all | One solution, immediately. |
+| A commit onto a goal variable observed by a live stored constraint of the caller | Runtime error instead of the commit, from every entry point that commits, `run_chr_session/1` included. A search that does not commit is not affected. See [Scope](#scope-search-forks-the-calling-session). |
 | An empty goal list | Quiesces immediately with no `alt`: one solution. |
 | Non-terminating propagation inside a branch | Does not terminate. Search adds no fairness or depth limit. |
 | `;` in a module that does not import `library(search)` | Compile-time error, `YCHR-20021`. |

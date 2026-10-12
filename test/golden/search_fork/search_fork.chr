@@ -1,0 +1,135 @@
+:- module(search_fork, [
+    fact/1, probe/1, eat/0, told/1, bindit/1, bar/1, note/1, boom/0,
+    sees_caller/2, no_fact/2, consumed_restored/2, tells_discarded/2,
+    other_var_undone/2, findall_sees_caller/2, watched_goal_var/1,
+    watched_session/2, inert_watcher_ok/1, own_choices_only/2,
+    ep_isolated/2, ep_error/1,
+    setit/0, ask/1, dup/1, al/2, fpick/1, ep_probe/1,
+    reactivated_in_fork/2, history_copied/2, aliased_commit/2,
+    fold_commit/2, fold_stop/2, ep_in_search/2, type(shape/0),
+    lab/1, no_sol/1, findall_watched/2, watched_no_commit/2
+]).
+
+:- use_module(library(search)).
+:- use_module(library(meta)).
+
+% Search forks the calling session: the goal's rules see the caller's
+% constraints, nothing the goal does to the store survives, and a
+% commit keeps the goal's variables only. docs/reference/search.md,
+% "Scope: search forks the calling session".
+
+:- chr_constraint
+   fact(int), probe(any), eat, check(any), told(any), mark, holder(any),
+   bindit(any), bar(any), note(any), boom,
+   sees_caller(bool, any), no_fact(bool, any), consumed_restored(bool, any),
+   tells_discarded(bool, any), other_var_undone(any, any),
+   findall_sees_caller(any, any), watched_goal_var(any),
+   watched_session(any, any), inert_watcher_ok(any),
+   own_choices_only(bool, any), ep_isolated(bool, any), ep_error(any).
+
+% `probe` reads a stored `fact` as a partner, or reports 0 without one.
+fact(N) \ probe(R) <=> R = N.
+probe(R) <=> R = 0.
+
+sees_caller(Ok, X) <=> fact(7), Ok is solve(quote(probe(X))).
+no_fact(Ok, X) <=> Ok is solve(quote(probe(X))).
+
+% The goal consumes the caller's `fact`; it is back afterwards.
+fact(_) \ eat <=> true.
+fact(N) \ check(R) <=> R = N.
+check(R) <=> R = -1.
+consumed_restored(Ok, R) <=>
+    fact(3), Ok is solve(quote(eat)), check(R).
+
+% A constraint the goal tells is gone once the search returns.
+told(_) <=> mark.
+mark \ check(R) <=> R = -2.
+tells_discarded(Ok, R) <=>
+    Ok is solve(quote(told(1))), check(R).
+
+% The goal binds Y, which is not one of its variables but a caller
+% variable it reached through `holder`: undone. R is a goal variable:
+% kept, by value.
+holder(Y) \ bindit(R) <=> Y = 1, R = Y.
+other_var_undone(R, Y) <=> holder(Y), solve(quote(bindit(R))).
+
+findall_sees_caller(L, X) <=>
+    fact(4), L is findall(X, quote(probe(X))).
+
+% `bar` is stored and watches R, so a commit cannot bind R.
+bar(R) <=> R == 1 | true.
+watched_goal_var(R) <=> bar(R), solve(quote(probe(R))).
+% The same from run_chr_session/1 is an error, not a false.
+watched_session(R, Ok) <=> bar(R), Ok is run_chr_session(quote(probe(R))).
+
+% Only a commit is checked: findall rebinds nothing, so it can label a
+% variable the caller's `dom` constrains, and a solve that finds no
+% solution is a plain false.
+:- chr_constraint dom(any, any), lab(any), no_sol(any),
+                  findall_watched(any, any), watched_no_commit(bool, any).
+dom(X, _) <=> nonvar(X) | true.
+dom(X, L) \ lab(X) <=> choose(X, L).
+findall_watched(L, X) <=> dom(X, [1, 2, 3]), L is findall(X, quote(lab(X))).
+no_sol(_) <=> fail.
+watched_no_commit(Ok, R) <=> bar(R), Ok is solve(quote(no_sol(R))).
+
+% `note` has no rules, so it is inert and observes nothing.
+inert_watcher_ok(R) <=> note(R), solve(quote(probe(R))).
+
+% A pending choice point in the caller's store is not this search's.
+boom <=> _ is 1 div 0.
+own_choices_only(Ok, X) <=>
+    alt([quote(boom)]), Ok is solve(quote(probe(X))).
+
+% run_chr_session_ep/1 runs in a fresh session: no caller constraints,
+% and a runtime error propagates.
+ep_isolated(Ok, X) <=> fact(5), Ok is run_chr_session_ep(quote(probe(X))).
+ep_error(Ok) <=> Ok is run_chr_session_ep(quote(boom)).
+
+% A caller constraint watching a variable the search binds is
+% reactivated in the fork. `watch(Y)` sees Y bound there, and is back to
+% watching an unbound Y afterwards.
+:- chr_constraint
+   watch(any), seen(any), ask(any), hold(any), setit,
+   pa(int, any), pb(int), dup(any), al(any, any),
+   fpick(any), ep_probe(any),
+   reactivated_in_fork(any, any), history_copied(any, any),
+   aliased_commit(any, any), fold_commit(any, any),
+   fold_stop(any, any), ep_in_search(bool, any).
+
+hold(Y) \ setit <=> Y = 9.
+watch(Y) <=> nonvar(Y) | seen(Y).
+seen(V) \ ask(R) <=> R = V.
+ask(R) <=> R = 0.
+reactivated_in_fork(R, Y) <=>
+    watch(Y), hold(Y), solve(quote([setit, ask(R)])).
+
+% The caller's propagation history is copied: `pa` is reactivated in
+% the fork when Z is bound, and does not fire a second time.
+pa(X, _) ==> pb(X).
+pb(X), pb(X) \ dup(R) <=> R = 1.
+dup(R) <=> R = 0.
+history_copied(R, Z) <=>
+    pa(1, Z), hold(Z), solve(quote([setit, dup(R)])).
+
+:- chr_type shape ---> g(any) ; h(any).
+
+% Goal variables that alias each other, or whose value contains another
+% goal variable, keep that shape.
+al(X, Y) <=> X = g(Y), Y = h(_).
+aliased_commit(X, Y) <=> solve(quote(al(X, Y))).
+
+% fold_solutions sees the caller's constraints too; `commit` keeps the
+% goal's variable, `stop` does not.
+fact(N) \ fpick(X) <=> choose(X, [N, 0]).
+fold_commit(X, R) <=>
+    fact(2),
+    R is fold_solutions(X, quote(fpick(X)), fun(C, _) -> commit(C) end, 0).
+fold_stop(X, R) <=>
+    fact(2),
+    R is fold_solutions(X, quote(fpick(X)), fun(C, _) -> stop(C) end, 0).
+
+% run_chr_session_ep inside a search branch is still a fresh session:
+% it does not see the branch's `fact(8)`.
+ep_probe(X) <=> run_chr_session_ep(quote(probe(X))).
+ep_in_search(Ok, X) <=> Ok is solve(quote([fact(8), ep_probe(X)])).
