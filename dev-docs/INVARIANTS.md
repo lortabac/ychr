@@ -1005,11 +1005,14 @@ expression while a procedure with a `Return` trapped in a `Foreach` or
 `DrainReactivationQueue` body uses `call/cc` with `%return`, `Break` and
 `Continue` use a `call/cc` at the loop that owns the label (and only when
 the body names it), the session thunk exported by each generated library
-calls `(%make-session N POSITIONS TABLE)` directly, where `TABLE` is the
+calls `(%make-session N POSITIONS TABLE TYPES)` directly, where `TABLE` is the
 program's operator table as a `make-op-table` literal over
-`(FIXITY TYPE "name")` entries and `POSITIONS`/`TABLE` default to the
-unindexed store and `builtin-op-table` in the shorter clauses,
-`drain-queue!` takes
+`(FIXITY TYPE "name")` entries, `TYPES` is one mangled `vmName` per
+constraint type in index order (which `print_store` and
+`write_store_to_list` split to label a stored constraint), and
+`POSITIONS`/`TABLE`/`TYPES` default to the
+unindexed store, `builtin-op-table` and the empty table in the shorter
+clauses. `drain-queue!` takes
 `(session, alive-checking-lambda)`, `Foreach` expects
 `(snapshot, count)` from the runtime. (The binding printer's operator
 table is the fixed `Pretty.prettyOps` — built-ins plus arithmetic — not

@@ -16,6 +16,7 @@
           suspension?
           suspension-alive?
           suspension-arg
+          suspension-args
           suspension-id
           suspension-type
           ;; Store index (the paper's Indexing optimization) — see below.

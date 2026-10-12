@@ -975,8 +975,7 @@ tab — the escapes the reader decodes — so `hello world` prints as
 as `'is'`, and the unit atom as `'()'`. Flonums are the one rendering
 exception, each backend using its host language's float format; the
 divergence is recorded in `dev-docs/SCHEME_BACKEND_GAPS.md`.
-Haskell-only: `write_store_to_list/0`, `print_store/0`,
-`run_chr_session/1`, and all
+Haskell-only: `run_chr_session/1`, and all
 of `library(search)`. On the Scheme backend the unimplemented meta
 primitives are bound stubs that raise a runtime error when called, so
 importing a module that declares them (such as `library(meta)`) still

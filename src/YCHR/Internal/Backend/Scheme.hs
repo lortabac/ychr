@@ -34,7 +34,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Numeric (showHex)
 import YCHR.Internal.Compile (tellProcName)
-import YCHR.Internal.Compile.Names (encodeIdentifier, isIdInitialSafe)
+import YCHR.Internal.Compile.Names (encodeIdentifier, isIdInitialSafe, vmName)
 import YCHR.Internal.PExpr (OpTable, OpType (..), opTableEntries)
 import YCHR.Internal.SExpr (SExpr (..), printSExpr)
 import YCHR.Internal.Types qualified as Types
@@ -236,7 +236,7 @@ programInfoBindingName libName = case reverse libName of
 -- user-defined function in the library.
 --
 -- > (define (NAME)
--- >   (let ((%s (%make-session N POSITIONS TABLE)))
+-- >   (let ((%s (%make-session N POSITIONS TABLE TYPES)))
 -- >     (register-evaluable! %s 'functor1 arity1 proc1)
 -- >     ...
 -- >     (register-callable! %s '/ "prelude:double" 1 proc2)
@@ -244,7 +244,9 @@ programInfoBindingName libName = case reverse libName of
 -- >     %s))
 --
 -- @TABLE@ is the program's operator table (see 'opTableSExpr'), which
--- the session carries for @read_term_from_string@.
+-- the session carries for @read_term_from_string@, and @TYPES@ the
+-- program's constraint type names (see 'typeNamesSExpr'), which the
+-- session carries for @print_store@ and @write_store_to_list@.
 --
 -- @(open-session NAME)@ in the REPL library simply invokes this thunk,
 -- and tell procedures are reached statically through the exported alias
@@ -258,7 +260,8 @@ programInfoSExpr infoName vmp ops =
                 [ SAtom "%make-session",
                   SInt (fromIntegral (length vmp.program.typeNames)),
                   indexPositionsSExpr (indexablePositions vmp.program),
-                  opTableSExpr ops
+                  opTableSExpr ops,
+                  typeNamesSExpr vmp.program.typeNames
                 ]
             ]
         ]
@@ -307,6 +310,21 @@ opTableSExpr table =
             ]
         ]
     ]
+
+-- | The program's constraint type names, as the @(vector …)@
+-- @%make-session@'s fourth argument takes: one entry per type in
+-- 'ConstraintType' index order — @typeNames@ is already ordered by
+-- index ('YCHR.Internal.Compile.buildTypeNames') — each the 'vmName'
+-- mangling of the type's 'Types.Name'.
+--
+-- The runtime splits each entry back into its module and base at the
+-- first @__@ (see @(ychr runtime)@'s @split-mangled-name@), which is why
+-- the mangled spelling travels rather than the surface @module:name@: a
+-- quoted base name may itself contain a @:@, so only the @__@ encoding
+-- inverts unambiguously.
+typeNamesSExpr :: [Types.Name] -> SExpr
+typeNamesSExpr names =
+  SList (SAtom "vector" : map (SString . (.unName) . vmName) names)
 
 -- | Render an 'OpType' as the surface specifier @(ychr optable)@ reads.
 opTypeText :: OpType -> Text
@@ -973,13 +991,13 @@ hostCallMap =
       ("name_base", "%name-base"),
       ("read_term_from_string", "%read-term-from-string"),
       ("write_term_to_string", "%write-term-to-string"),
-      -- The meta host calls that still have no Scheme implementation
-      -- are mapped to stubs that raise a clear runtime error rather
-      -- than left to pass through verbatim: a generated library
-      -- defines *every* function of an imported library, so an
-      -- unmapped meta call would make the whole module unloadable on a
-      -- strict R6RS implementation (Chez), even for a program that only
-      -- uses `print/1`.
+      -- The meta host calls are all mapped, so none lowers to a bare
+      -- identifier: a generated library defines *every* function of an
+      -- imported library, and an unmapped meta call would make the whole
+      -- module unloadable on a strict R6RS implementation (Chez), even
+      -- for a program that only uses `print/1`. `run_chr_session` is the
+      -- only one still backed by a stub, which raises a clear runtime
+      -- error when it is called.
       ("write_store_to_list", "%write-store-to-list"),
       ("print_store", "%print-store"),
       ("run_chr_session", "%run-chr-session"),
@@ -997,8 +1015,16 @@ hostCallMap =
     ]
 
 -- | Host calls that need the session threaded as their first argument.
+-- @print_store@ and @write_store_to_list@ read the store, so they need it
+-- even though neither takes a user-visible argument.
 sessionHostCalls :: Set.Set Text
-sessionHostCalls = Set.fromList ["copy_term", "read_term_from_string"]
+sessionHostCalls =
+  Set.fromList
+    [ "copy_term",
+      "read_term_from_string",
+      "write_store_to_list",
+      "print_store"
+    ]
 
 -- | Where a @host:@ call lands in the Scheme runtime: the procedure to
 -- call and whether that procedure takes the current session as an extra
