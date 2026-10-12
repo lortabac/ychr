@@ -39,11 +39,12 @@ may occur as a conjunct of a rule head, kept or removed.
   `aggregator(Init, Inc, Final)`, a constructor of
   `library(aggregates)`:
   - `Init` — the initial working value;
-  - `Inc` — a closure `(W, E) -> W`, applied to the working value and
-    one element;
-  - `Final` — a closure `W -> maybe(R)`, turning the last working value
-    into the result. `nothing` means the aggregate is *undefined* (the
-    maximum of no elements, say) and the rule does not apply.
+  - `Inc` — a closure applied to the working value and one element,
+    returning the next working value;
+  - `Final` — a closure turning the last working value into the
+    result, as a `maybe` (`library(maybe)`). `nothing` means the
+    aggregate is *undefined* (the maximum of no elements, say) and the
+    rule does not apply.
 - `Element` is an expression, evaluated once per match of `Goal`.
 - `Goal` is an *aggregate goal* (see [Aggregate goals](#aggregate-goals)).
 - `Result` is a pattern, matched against the result.
@@ -51,23 +52,23 @@ may occur as a conjunct of a rule head, kept or removed.
 User-defined aggregates are ordinary aggregators:
 
 ```prolog
-:- function avg_inc/2, avg_final/1.
-avg_inc(t(N, S), X) -> t(N + 1, S + X).
-avg_final(t(0, _)) -> nothing.
-avg_final(t(N, S)) | N > 0 -> just(S / N).
+:- use_module(library(aggregates)).
+:- use_module(library(maybe)).
 
-:- macro avg(E, G, R) --->
-       aggregate(aggregates:aggregator(t(0, 0), fun avg_inc/2,
-                                        fun avg_final/1), E, G, R).
+:- macro sum_sq(E, G, R) --->
+       aggregate(aggregates:aggregator(0, fun(W, X) -> W + X * X end,
+                                          fun(W) -> just(W) end),
+                 E, G, R).
 ```
 
 ### Typing
 
-For an aggregator over elements of type `E` with working value `W`
-and result `R`:
+`library(aggregates)` declares the aggregator type, over elements of
+type `E`, working values of type `W` and results of type `R`:
 
-```
-aggregator(W, (W, E) -> W, W -> maybe(R))
+```prolog
+:- chr_type aggregator(W, E, R) --->
+       aggregator(W, fun(W, E) -> W end, fun(W) -> maybe(R) end).
 ```
 
 `Element` has type `E` and `Result` type `R`. The full typing rules,
@@ -94,7 +95,8 @@ ask-only boolean expression.
 
 `?/1` is recognized structurally inside an aggregate goal, as `,` is;
 outside one it has no meaning. `library(aggregates)` exports the
-operator `op(900, fy, '?')`. Without the operator, write the functor quoted: `'?'(Guard)`.
+operator `op(900, fy, '?')`. Without the operator, write the functor
+quoted: `'?'(Guard)`.
 
 The goal is a goal position for [macros](macros.md), so the
 predefined aggregates may be nested:
@@ -105,17 +107,28 @@ argmax(S, (client(C), sum(B, account(_, C, _, B), S)))
 
 ### Variables
 
-A variable of an aggregate goal is *shared* if it also occurs in:
+A variable of an aggregate's `Goal` or `Element` is *shared* if it
+also occurs outside that aggregate in:
 
 - the regular (non-aggregate) head conjuncts of the rule;
-- an enclosing aggregate goal;
-- the `Result` of an aggregate to its left in the same conjunction.
+- the enclosing aggregate goals, for a nested aggregate;
+- the `Result` of an aggregate to its left, at the same level;
+- the `Goal` of a selection form to its left, at the same level
+  (see [Selection aggregates](#selection-aggregates)).
 
-Every other variable is *local* to the goal: it is renamed apart per
-match and is not visible to the rule's guard or body, nor to other
-aggregates. Shared variables are inputs: matching the goal never binds
-them, and a match must agree with their values (`==`, as for head
-matching). `argmin` and `takemin` are the exception (see below).
+Every other variable of `Goal` and `Element` is *local* to the
+aggregate: it is renamed apart per match. Shared variables are inputs:
+matching the goal never binds them, and a match must agree with their
+values (`==`, as for head matching). The selection forms are the
+exception: their goal variables are visible to the rest of the rule.
+
+A local variable is not visible to the rule's guard or body. Using its
+name there anyway is an error (`AggregateLocalEscapes`), not a
+distinct variable, so a typo cannot silently change its meaning.
+
+`Element` must be computable from the match: a variable of `Element`
+that occurs neither in `Goal` nor among the shared variables is an
+unbound name (`YCHR-40002`), as in a rule body.
 
 
 ## Semantics
@@ -189,9 +202,10 @@ rule. The matches it selects are those of
 Goal, \+ (Goal', ? X' < X)
 ```
 
-where `Goal'` and `X'` are `Goal` and `X` with `Goal`'s fresh variables
-renamed apart. On ties, the rule fires with the first minimal match
-in goal order.
+(in notation, not YCHR syntax), where `Goal'` and `X'` are `Goal` and
+`X` with `Goal`'s fresh variables renamed apart. `X` is compared with
+the prelude's `<`, so it must be a number. On ties, the rule fires
+with the first minimal match in goal order.
 
 The equivalence fixes which match is selected and which variables are
 visible, nothing else. `Goal` is still an aggregate goal:
@@ -235,16 +249,21 @@ reactivated, its goal occurrences are tried like any other occurrence.
 Trying a goal occurrence means:
 
 1. Match the active constraint against the conjunct.
-2. Find matches for the remaining conjuncts and the guard of the same
+2. Find matches for the remaining conjuncts and guards of the same
    aggregate goal, then for those of every enclosing aggregate goal,
    then for the rule's regular heads.
-3. For each combination found, try the rule as usual: compute every
-   aggregate from scratch, check the guard and the propagation history,
-   and fire.
+3. Keep only the regular head constraints of each match found, and
+   discard every binding of an aggregate goal's variables. For each
+   *distinct* combination of regular heads, in the order first found,
+   try the rule as usual: compute every aggregate from scratch
+   (re-selecting, for a selection form), check the guard and the
+   propagation history, and fire.
 
-The active constraint is not a head of the rule. Firing does not
-remove it, except through `takemin`/`takemax`, and it does not enter
-the propagation history.
+A goal occurrence only *locates* the combinations of regular heads
+the active constraint may affect. The active constraint is not a head
+of the rule. Firing does not remove it, except when a
+`takemin`/`takemax` re-selects it, and it does not enter the
+propagation history.
 
 **Order.** Goal occurrences are numbered with the ordinary ones, top
 to bottom by rule. Within one rule, they come after all of the rule's
@@ -257,10 +276,13 @@ an aggregate's goal before the goals of the aggregates nested in it.
 When a rule fires and removes constraints, the first thing its body
 does, before its first goal, is the *removal step*. This happens even
 if the body is `true`. For each removed constraint whose type has goal
-occurrences, in the textual order of the removed heads, the removal
-step tries each of those goal occurrences, in occurrence order, as in
-§2. The removed constraint is matched against the conjunct as if it
-were active, but it is no longer in the store, so no fold counts it.
+occurrences, the removal step tries each of those goal occurrences, in
+occurrence order, as in §2. The removed constraints are taken in the
+textual order of the removed heads, followed by the constraints a
+`takemin`/`takemax` removed, in the textual order of the selection
+forms and then in goal order. A removed constraint is matched against
+the conjunct as if it were active, only to locate regular heads; it is
+no longer in the store, so no fold counts it.
 
 A rule firing inside the removal step is an ordinary firing, so its
 own removals have their own removal steps. When the removal step ends,
@@ -274,7 +296,7 @@ again before its own body runs. Without this, firings would be lost.
 This rule walks a dependency chain `a ← b ← c` only because of it:
 
 ```prolog
-step @ task(T), \+ depends(T, _) \ depends(U, T) <=> started(U).
+step @ task(T), \+ depends(T, _) \ depends(U, T) <=> released(U, T).
 ```
 
 Firing for `a` removes `depends(b, a)`, which makes the rule
@@ -300,10 +322,6 @@ With `next(M)` removed, the removal step finds no regular head to
 match and does nothing. The body's `next(M)` starts the next iteration
 after `run/2` is told. The paper's Sudoku solver uses the same idiom
 with its `solve` constraint.
-
-The CHR¬ semantics (Van Weert et al., 2006) formalizes the same thing
-as removal entries on the execution stack. Treating the removal step
-as a hidden first body goal gives the same order.
 
 Without the removal step, `\+`, `forall` and `min` would never
 notice a constraint going away:
@@ -341,13 +359,10 @@ The extension is *conservative*.
   Only a constraint type that appears in some aggregate goal gains
   occurrences. Only a rule that may remove such a constraint gains a
   removal step. Every other constraint type is activated exactly as
-  under ωr, and every other rule fires exactly as under ωr. Adding an
-  aggregate affects the rest of a program the way adding an ordinary
-  rule does.
-
-The paper's own implementation makes the same point: it rewrites a
-program with aggregates into plain CHR, run under ωr, with auxiliary
-constraints at the start of the bodies of removing rules.
+  under ωr, and every other rule's own firing is unchanged, though
+  the firings a removal step adds can change when it is reached.
+  Adding an aggregate affects the rest of a program the way adding an
+  ordinary rule does.
 
 
 ## Predefined aggregates
@@ -370,7 +385,7 @@ selection forms, and these macros over `aggregate/4`:
 
 `exists` and `\+` are aggregates whose `Final` returns `nothing`
 when the condition fails, so they need no guard. Their result is
-`true`, and a use ignores it.
+`true`, and the macro passes `_` as `Result`.
 
 Each macro refers to its aggregator by qualified name, as
 [macros.md](macros.md#names-and-modules) requires of a library macro.
@@ -388,8 +403,9 @@ operator syntax the functors are written quoted, `'\\+'(G)` and
 
 - **Constraint use.** A constraint in an aggregate goal is a kept
   occurrence for [`:- constraint_use`](type-system.md#constraint-use-checking),
-  or a removed one inside `takemin`/`takemax`. A `tell_only`
-  constraint cannot occur in an aggregate goal.
+  or a removed one inside `takemin`/`takemax`, and YCHR-45001 applies
+  as usual. So a `tell_only` constraint cannot occur in an aggregate
+  goal, and an `event` constraint only inside `takemin`/`takemax`.
 - **`library(search)`.** Nothing to add: an on-demand aggregate keeps
   no state between attempts, so undo has nothing to restore.
 - **Scheme backend.** Supported. Aggregates compile to existing VM
@@ -403,9 +419,13 @@ constraints. That depends on Prolog guard backtracking and on CHR
 constraints in guards, and YCHR has neither. Instead, the compiler
 lowers an aggregate in the occurrence procedure itself:
 
-- An aggregate is a nested `Foreach` over the goal's constraints, with
-  the shared variables as index conditions. It folds into a local with
-  `AssignVal`. No new VM instruction is needed.
+- An aggregate is a compiler-generated procedure: a nested `Foreach`
+  over the goal's constraints, with the shared variables as index
+  conditions, folding into a local with `AssignVal`. It returns the
+  result or `nothing`. The occurrence calls it inside a `BSoftGuard`,
+  so an instantiation error anywhere in the fold makes the aggregate
+  undefined; `BSoftGuard` wraps a `BoolExpr`, so it cannot enclose the
+  loop directly. No new VM instruction is needed.
 - A [goal occurrence](#2-goal-occurrences) is an ordinary occurrence
   procedure. It searches for the rest of its goal and for the regular
   heads as partners, and it does not count the active constraint as a
@@ -415,11 +435,13 @@ lowers an aggregate in the occurrence procedure itself:
   occurrences, to one procedure per goal occurrence. The procedure
   takes the removed constraint as its argument. Nothing is added to
   the runtime's `Kill`.
-- Late Storage: the active constraint is not yet stored when its
-  occurrence runs, so the fold has to include it explicitly; a
-  `Foreach` alone would miss it. A removal step counts as a non-empty
-  body, so the active constraint is stored before it runs whenever
-  the rule keeps it.
+- Late Storage: an active constraint that is not yet stored must
+  still be counted, so the fold includes it explicitly while it is
+  unstored. Once it is stored (a reactivated constraint is), the
+  `Foreach` finds it and it must not be counted twice. Any firing that
+  can run a body, including one from a goal occurrence, stores a kept
+  active constraint before the body, and a removal step counts as a
+  non-empty body.
 - Analyses that assume a rule observes only its own heads have to take
   goal occurrences into account: passive-occurrence detection, inert
   types (a type with goal occurrences is not inert) and
@@ -435,7 +457,8 @@ Codes are assigned at implementation.
 | `AggregateOutsideHead` | `aggregate/4` or a selection form outside a rule head. |
 | `AggregateOnlyHead` | A rule head consists of aggregates only. |
 | `MalformedAggregateGoal` | A goal conjunct that is neither a constraint, an aggregate nor a `?` guard. |
-| `TellOnlyInAggregate` | A `tell_only` constraint in an aggregate goal. |
+| `GuardOutsideAggregateGoal` | A `?` guard outside an aggregate goal. |
+| `AggregateLocalEscapes` | A local variable of an aggregate used in the rule's guard or body. |
 
 
 ## Not in this version
