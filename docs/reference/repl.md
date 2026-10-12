@@ -29,7 +29,8 @@ functions `fail/0`, `solve/1`, `findall/2`, `fold_solutions/4`,
 `forall/3`, `find_n/3`; and the type `step/1` with constructors
 `continue/1`, `stop/1`, `commit/1` — so a bare `continue(1)` is
 `search:continue(1)`. `library(state)` puts in query scope the
-constraints `new_state/2`, `get/2`, `put/2` and `modify/2`.
+constraints `new_state/2`, `get/2`, `put/2`, `modify/2`,
+`close_state/1`, `new_states/1` and `close_states/1`.
 
 `--quiet` drops the prompt, the warnings and the type-check report,
 except under `--Werror`,

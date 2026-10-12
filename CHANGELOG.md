@@ -13,9 +13,14 @@ value `V`, `get(K, R)` unifies `R` with its value, `put(K, V)` replaces
 it, and `modify(K, F)` replaces it with `F` applied to it. The
 associations are held by a private `state/2` constraint. Values are
 typed `any`, since different keys may hold values of different types.
-Misuse panics when the request is made: a request on a non-ground key,
-`new_state` on a key that already exists, and `get`, `put` or `modify`
-on a key that does not exist.
+`close_state(K)` deletes a key, which may then be created again;
+`new_states(KVs)` creates every key of a `list(pair(K, any))` of
+`kv(K, V)` and `close_states(Ks)` deletes every key of a list, one
+element at a time, in order. Misuse panics when the request is made: a
+request on a non-ground key, `new_state` on a key that already exists,
+`get`, `put`, `modify` or `close_state` on a key that does not exist,
+and `new_states` or `close_states` on anything but a proper list (of
+`kv` pairs, for `new_states`), checked before any element takes effect.
 
 `\==` is the prelude's ask-disequality: `X \== Y` is true when the two
 arguments are not structurally identical after dereferencing, so it is

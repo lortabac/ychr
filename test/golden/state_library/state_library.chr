@@ -10,10 +10,25 @@
     new_unground/1,
     get_unground/2,
     retyped/1,
-    get_twice/2
+    get_twice/2,
+    close_reopen/1,
+    close_get/1,
+    close_uninit/0,
+    new_states_get/2,
+    new_states_empty/1,
+    new_states_dup/0,
+    new_states_partial/1,
+    close_states_all/2,
+    close_states_missing/0,
+    close_unground/1,
+    new_states_open_tail/1,
+    new_states_bad_element/1,
+    new_states_unground/1,
+    close_states_partial/1
 ]).
 
 :- use_module(library(state)).
+:- use_module(library(pairs)).
 
 :- chr_type key ---> k ; n ; count ; name.
 
@@ -29,7 +44,21 @@
     new_unground/1,
     get_unground/2,
     retyped/1,
-    get_twice/2.
+    get_twice/2,
+    close_reopen/1,
+    close_get/1,
+    close_uninit/0,
+    new_states_get/2,
+    new_states_empty/1,
+    new_states_dup/0,
+    new_states_partial/1,
+    close_states_all/2,
+    close_states_missing/0,
+    close_unground/1,
+    new_states_open_tail/1,
+    new_states_bad_element/1,
+    new_states_unground/1,
+    close_states_partial/1.
 
 new_get(R) <=> new_state(k, 1), get(k, R).
 
@@ -65,3 +94,40 @@ retyped(R) <=> new_state(k, 1), put(k, "a"), get(k, R).
 
 % `get` does not consume the value.
 get_twice(A, B) <=> new_state(k, 3), get(k, A), get(k, B).
+
+% A closed key can be created again.
+close_reopen(R) <=>
+    new_state(k, 1), close_state(k), new_state(k, 2), get(k, R).
+
+close_get(R) <=> new_state(k, 1), close_state(k), get(k, R).
+
+close_uninit <=> close_state(k).
+
+new_states_get(A, B) <=>
+    new_states([kv(k, 1), kv(n, 2)]), get(k, A), get(n, B).
+
+new_states_empty(R) <=> new_states([]), new_state(k, 1), get(k, R).
+
+new_states_dup <=> new_states([kv(k, 1), kv(k, 2)]).
+
+new_states_partial(L) <=> new_states(L).
+
+close_states_all(A, B) <=>
+    new_states([kv(k, 1), kv(n, 2)]),
+    close_states([k, n]),
+    new_states([kv(k, 3), kv(n, 4)]),
+    get(k, A), get(n, B).
+
+close_states_missing <=> new_state(k, 1), close_states([k, n]).
+
+close_unground(K) <=> close_state(K).
+
+% The list's shape is checked before any element takes effect, so `k`
+% is never created here.
+new_states_open_tail(T) <=> new_states([kv(k, 1)|T]).
+
+new_states_bad_element(X) <=> new_states([X]).
+
+new_states_unground(K) <=> new_states([kv(K, 1)]).
+
+close_states_partial(T) <=> new_state(k, 1), close_states([k|T]).
