@@ -59,28 +59,22 @@ trail hooked into every variable-cell and suspension-flag write
 directory with runnable goals is in `HASKELL_ONLY`: `search_alt`,
 `search_basic`, `search_between`, `search_deep`, `search_disj`,
 `search_fold`, `search_generate`, `search_label`, `search_label_alt`
-and `search_nested`. The two
+and `search_nested`; so is `state_run`, since `library(state)`'s
+`run_state/3` and `run_states/2` run their goal with `solve/1`. The two
 compilation-negative directories, `search_disj_no_import` and
 `search_disj_type_error`, need no entry: the Scheme harness discovers
 cases from `.goal` files and they have none.
 
-Compilation itself succeeds. The library wrappers become ordinary
+Compilation and loading succeed. The library wrappers become ordinary
 compiled procedures (`func_search__solve1`, `func_search__fail0`, …),
-but the `host:` call inside each has no `hostCallMap` entry, so
-`Scheme.compileHostCall` lowers it to a bare verbatim identifier —
-`(solve (deref arg_0))`, `(fail)`. Guile resolves free identifiers
-lazily, so importing the generated library succeeds there and the
-failure comes when a search is first *called*:
-
-    ERROR: In procedure %resolve-variable:
-    Unbound variable: solve
-
-A strict R6RS implementation is harsher: Chez rejects the *import*
-itself (`attempt to reference unbound identifier solve`). `library(meta)`
-had the same problem and is fixed — see *Missing meta primitives* above —
-by mapping each unimplemented call to a bound stub. `library(search)`
-still needs the equivalent stubs (`%solve`, `%fail`, `%findall`,
-`%fold-solutions`) or real implementations.
+and the `host:` call inside each is mapped to a bound stub (`%solve`,
+`%fail`, `%findall`, `%fold-solutions`) that raises `not implemented`
+when called — the same treatment as the meta primitives above. Without
+the stubs the calls would lower to bare identifiers, which Guile
+resolves lazily but Chez rejects at import time (`attempt to reference
+unbound identifier solve`); since `library(state)` imports
+`library(search)`, that would make every program using
+`library(state)` unloadable on Chez, even one that never runs a search.
 
 `alt/1`, `choose/2`, `between/3` and `try_unify/2` need nothing special
 — they are ordinary CHR and compile and run fine; a program that only

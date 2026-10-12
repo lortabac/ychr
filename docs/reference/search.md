@@ -103,8 +103,9 @@ rest of type checking, `--no-check` skips that check.
 
 `solve(quote(Goal))`, `findall(Template, quote(Goal))`,
 `fold_solutions(Template, quote(Goal), F, Acc0)` and
-`run_chr_session(quote(Goal))` run `Goal` in a **fresh session of the
-current program** — its own constraint store, propagation history,
+`run_chr_session(quote(Goal))` (and, through `solve/1`,
+`library(state)`'s `run_state/3` and `run_states/2`) run `Goal` in a
+**fresh session of the current program** — its own constraint store, propagation history,
 reactivation queue, and call stack, with the same rules, functions,
 host calls, and exports. One fork serves every entry point:
 

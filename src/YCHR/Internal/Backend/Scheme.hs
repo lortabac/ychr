@@ -983,6 +983,13 @@ hostCallMap =
       ("write_store_to_list", "%write-store-to-list"),
       ("print_store", "%print-store"),
       ("run_chr_session", "%run-chr-session"),
+      -- `library(search)`'s driver calls, for the same reason: a
+      -- program importing `library(state)` imports the search library
+      -- too, and must load even if it never runs a search.
+      ("solve", "%solve"),
+      ("fail", "%fail"),
+      ("findall", "%findall"),
+      ("fold_solutions", "%fold-solutions"),
       -- `copy_term` is implemented (it takes the session, hence the
       -- separate `sessionHostCalls` entry below).
       ("copy_term", "%copy-term")

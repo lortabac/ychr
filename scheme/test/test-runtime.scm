@@ -638,7 +638,19 @@
               (error-message (lambda () (%write-store-to-list))))
   (test-equal "run_chr_session bound and raises"
               "not implemented"
-              (error-message (lambda () (%run-chr-session 1)))))
+              (error-message (lambda () (%run-chr-session 1))))
+  (test-equal "solve bound and raises"
+              "not implemented"
+              (error-message (lambda () (%solve 1))))
+  (test-equal "fail bound and raises"
+              "not implemented"
+              (error-message (lambda () (%fail))))
+  (test-equal "findall bound and raises"
+              "not implemented"
+              (error-message (lambda () (%findall 1 2))))
+  (test-equal "fold_solutions bound and raises"
+              "not implemented"
+              (error-message (lambda () (%fold-solutions 1 2 3 4)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; `%write-term-to-string`

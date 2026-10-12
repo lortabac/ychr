@@ -22,6 +22,17 @@ request on a non-ground key, `new_state` on a key that already exists,
 and `new_states` or `close_states` on anything but a proper list (of
 `kv` pairs, for `new_states`), checked before any element takes effect.
 
+`library(state)` also has a scoped interface, after Haskell's
+`runState`: `run_state(K, V, quote(Goal))` runs `Goal` with key `K`
+created at `V` and returns the key's final value, and
+`run_states(KVs, quote(Goal))` does the same for a list of `kv(K, V)`
+and returns the final `kv` list. The goal runs through `search:solve/1`
+in a fresh session, so its keys need no closing and cannot clash with
+the caller's, its constraints must be exported, and errors in it
+propagate. The final values are read before any choice point the goal
+leaves is explored, so the goal should be deterministic. Haskell
+runtime only, like `library(search)`.
+
 `\==` is the prelude's ask-disequality: `X \== Y` is true when the two
 arguments are not structurally identical after dereferencing, so it is
 the boolean negation of `==` and behaves the same way — no binding, the
