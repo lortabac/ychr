@@ -1,6 +1,9 @@
-:- module(state, [new_state/2, get/2, put/2, modify/2]).
+:- module(state, [new_state/2, get/2, put/2, modify/2, close_state/1,
+                  new_states/1, close_states/1]).
 
+:- use_module(library(lists)).
 :- use_module(library(meta)).
+:- use_module(library(pairs)).
 :- use_module(library(strings)).
 
 % Mutable variables, emulated with constraints. Each key names one
@@ -10,28 +13,50 @@
 %   get(K, R)        unifies R with the current value of K
 %   put(K, V)        replaces the value of K with V
 %   modify(K, F)     replaces the value V of K with F(V)
+%   close_state(K)   deletes K, which may then be created again
+%   new_states(KVs)  creates each key K of a list of kv(K, V), in order
+%   close_states(Ks) deletes each key of a list, in order
 %
 % A key must be ground (an atom is the usual choice), and is matched
-% with `==`. It must be created exactly once, before it is read or
-% updated. Each of these is checked when the request is made, and a
-% violation is a runtime error: a request on a non-ground key,
-% `new_state` on a key that already exists, and `get`, `put` or `modify`
-% on a key that does not exist.
+% with `==`. It must be created before it is read, updated or closed,
+% and not created again until it is closed. Each of these is checked
+% when the request is made, and a violation is a runtime error: a
+% request on a non-ground key, `new_state` on a key that already exists,
+% and `get`, `put`, `modify` or `close_state` on a key that does not
+% exist.
+%
+% The argument of `new_states` must be a proper list of `kv(K, V)`, and
+% that of `close_states` a proper list; this is checked before any
+% element takes effect. Each element is then one `new_state` or
+% `close_state` request, so the checks above apply to it (a key repeated
+% in a `new_states` list is a `new_state` on a key that already exists),
+% and the elements before a failing one have already taken effect.
 
 % The values are typed `any`. A key does not fix the type of its value
 % (two keys may hold values of different types), and the checker types
 % each head occurrence on its own, so a `V` shared between `state` and
-% `get` would not be the same type in the rules below.
+% `get` would not be the same type in the rules below. A `new_states`
+% list is an ordinary list, though, so its values do share one type
+% unless they are themselves typed `any`.
 :- chr_constraint state(K, any), new_state(K, any), get(K, any),
-                  put(K, any), modify(K, fun(any) -> any end).
+                  put(K, any), modify(K, fun(any) -> any end),
+                  close_state(K), new_states(list(pair(K, any))),
+                  close_states(list(K)), create_each(list(pair(K, any))),
+                  close_each(list(K)).
 
-% Requests are consumed by the rules below and never kept.
+% Requests are consumed by the rules below and never kept, and so are
+% the private `create_each` and `close_each`.
 :- constraint_use event(new_state/2), event(get/2), event(put/2),
-                  event(modify/2).
+                  event(modify/2), event(close_state/1),
+                  event(new_states/1), event(close_states/1),
+                  event(create_each/1), event(close_each/1).
 
 :- function
     (key_error(any, string) -> any),
-    (missing_key(any) -> any).
+    (missing_key(any) -> any),
+    (list_error(string, string, any) -> any),
+    (kv_list(any) -> bool),
+    (is_kv(any) -> bool).
 
 key_error(K, Problem) ->
     panic(string_concat("state: key ",
@@ -41,6 +66,19 @@ key_error(K, Problem) ->
 % ground, so no `state` could ever match it, or it was never created.
 missing_key(K) | ground(K) -> key_error(K, " is not initialized").
 missing_key(K) -> key_error(K, " is not ground").
+
+list_error(Request, Expected, L) ->
+    panic(string_concat("state: ",
+          string_concat(Request,
+          string_concat(" expects ",
+          string_concat(Expected,
+          string_concat(", got ", write_term_to_string(L))))))).
+
+kv_list(L) | is_list(L) -> all(fun is_kv/1, L).
+kv_list(_) -> false.
+
+is_kv(kv(_, _)) -> true.
+is_kv(_) -> false.
 
 % `new_state`'s error rules come before `init`. Every other request is
 % tried against its own rule first, and its error rule fires only when
@@ -59,3 +97,22 @@ put_missing @ put(K, _) <=> missing_key(K).
 
 modify @ state(K, V), modify(K, F) <=> state(K, call(F, V)).
 modify_missing @ modify(K, _) <=> missing_key(K).
+
+close @ state(K, _), close_state(K) <=> true.
+close_missing @ close_state(K) <=> missing_key(K).
+
+% The list requests check their whole argument once, then hand it to a
+% private constraint that walks it.
+new_states_bad @ new_states(L) <=> not(kv_list(L)) |
+    list_error("new_states", "a list of kv(K, V)", L).
+new_states @ new_states(KVs) <=> create_each(KVs).
+
+create_each([]) <=> true.
+create_each([kv(K, V)|KVs]) <=> new_state(K, V), create_each(KVs).
+
+close_states_bad @ close_states(L) <=> not(is_list(L)) |
+    list_error("close_states", "a list", L).
+close_states @ close_states(Ks) <=> close_each(Ks).
+
+close_each([]) <=> true.
+close_each([K|Ks]) <=> close_state(K), close_each(Ks).
