@@ -129,7 +129,7 @@ follows:
 2. Enumerate every match of `Goal` against the current store. The
    store here *includes* the rule's own head constraints, so
    `c(X), count(c(_), N)` counts the `c` in the head too. Matches are
-   enumerated in store order.
+   enumerated in *goal order*, defined below.
 3. Fold: `W0 = Init`, `Wi = Inc(Wi−1, Element_i)` for each match `i`,
    where `Element_i` is `Element` evaluated under that match.
 4. `Final(Wn)`: `nothing` makes the aggregate undefined and the rule
@@ -137,8 +137,17 @@ follows:
 5. Match `Result` against `R`. A failed match makes the rule
    inapplicable.
 
-Because matches are enumerated in store order, a non-commutative
-`Inc` (as in `collect`) gives a deterministic result.
+**Goal order** is nested-loop order over the goal's constraint
+conjuncts, left to right. The first conjunct's matching constraints
+are taken in store order (the order they were told). For each of them,
+the second conjunct's matches are taken in store order, and so on. A
+nested aggregate contributes no loop of its own; it is computed in
+place for each partial match. For `collect(X, (a(Y), b(Y, X)), L)`,
+the `b` constraints matching the first `a` come first, in store order,
+then those matching the second `a`.
+
+Because matches are enumerated in goal order, a non-commutative `Inc`
+(as in `collect`) gives a deterministic result.
 
 Several aggregates in one head are computed left to right, after the
 regular heads are matched and before the rule's guard is checked; the
@@ -174,16 +183,27 @@ A rule must have at least one regular head conjunct.
 aggregators. `argmin(X, Goal)` matches `Goal` like ordinary head
 conjuncts, restricted to the matches whose `X` is minimal. The
 variables of `Goal` are not local; they are visible to the rest of the
-rule. It is equivalent to
+rule. The matches it selects are those of
 
 ```prolog
 Goal, \+ (Goal', ? X' < X)
 ```
 
 where `Goal'` and `X'` are `Goal` and `X` with `Goal`'s fresh variables
-renamed apart. The constraints of `Goal` are kept. On ties, the rule
-fires with whichever minimal match the join reaches first, in store
-order.
+renamed apart. On ties, the rule fires with the first minimal match
+in goal order.
+
+The equivalence fixes which match is selected and which variables are
+visible, nothing else. `Goal` is still an aggregate goal:
+
+- its constraints are kept;
+- they are goal occurrences, not head occurrences
+  ([Extension of ωr](#extension-of-ωr));
+- they are not recorded in the propagation history.
+
+So `p(K), argmin(X, item(K, X)) ==> best(K, X)` fires once per
+`p(K)`, as for any other aggregate, not once for each `item` that is
+the minimum at some point.
 
 `takemin(X, Goal)` and `takemax(X, Goal)` are the same, but the
 constraints of the selected match are removed when the rule fires.
@@ -343,7 +363,7 @@ selection forms, and these macros over `aggregate/4`:
 | `min(X, G, M)` | the minimum of `X`; undefined if there are no matches |
 | `max(X, G, M)` | the maximum of `X`; undefined if there are no matches |
 | `avg(X, G, A)` | the arithmetic mean of `X`; undefined if there are no matches |
-| `collect(X, G, L)` | the list of `X` over the matches, in store order |
+| `collect(X, G, L)` | the list of `X` over the matches, in goal order |
 | `exists(G)` | holds if `G` has at least one match |
 | `\+ G` | holds if `G` has no match (negation as absence) |
 | `forall(G, C)` | holds if every match of `G` extends to a match of `C`; defined as `\+ (G, \+ C)` |
