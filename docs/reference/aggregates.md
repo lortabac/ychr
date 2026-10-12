@@ -81,11 +81,20 @@ An aggregate goal is a conjunction of:
 
 - CHR constraints;
 - aggregates (nested aggregates);
-- one optional trailing guard, written `Goal | Guard` as in a rule.
+- guard conjuncts, written `? Guard`.
 
 ```prolog
-count((employee(E, C), salary(E, S) | S > 1000), N)
+count((employee(E, C), salary(E, S), ? S > 1000), N)
 ```
+
+A guard conjunct is checked in place, left to right, so it can test
+variables bound by the conjuncts before it and filter matches before
+the conjuncts after it are searched. Like a rule guard, it is an
+ask-only boolean expression.
+
+`?/1` is recognized structurally inside an aggregate goal, as `,` is;
+outside one it has no meaning. `library(aggregates)` exports the
+operator `op(900, fy, '?')`. Without the import, write `?(Guard)`.
 
 The goal is a goal position for [macros](macros.md), so the
 predefined aggregates may be nested:
@@ -168,7 +177,7 @@ variables of `Goal` are not local; they are visible to the rest of the
 rule. It is equivalent to
 
 ```prolog
-Goal, none((Goal', X' < X))
+Goal, \+ (Goal', ? X' < X)
 ```
 
 where `Goal'` and `X'` are `Goal` and `X` with `Goal`'s fresh variables
@@ -241,16 +250,29 @@ The CHR¬ semantics (Van Weert et al., 2006) formalizes the same thing
 as removal entries on the execution stack. Treating the removal step
 as a hidden first body goal gives the same order.
 
-Without the removal step, `none`, `forall` and `min` would never
+Without the removal step, `\+`, `forall` and `min` would never
 notice a constraint going away:
 
 ```prolog
-task(T), none(depends(T, _)) ==> ready(T).
+task(T), \+ depends(T, _) ==> ready(T).
 done(D) \ depends(_, D) <=> true.
 ```
 
 `ready(T)` is derived when the last dependency of `T` is removed, by
 the removal step of the second rule.
+
+Because the removal step runs before the body, an update written as
+remove-then-tell shows aggregates an intermediate state. In
+
+```prolog
+withdraw(A, X), account(A, C, T, B) <=> account(A, C, T, B - X).
+```
+
+rules aggregating over `account` are tried once with the account
+missing, before the new one is told. A rule whose guard bounds an
+aggregate from above (`S < 1000`) can fire on that intermediate state.
+This is the paper's semantics. To avoid it, keep the head and update
+it in place, or make the guard robust to the intermediate value.
 
 ### What does not change
 
@@ -288,15 +310,22 @@ selection forms, and these macros over `aggregate/4`:
 | `avg(X, G, A)` | the arithmetic mean of `X`; undefined if there are no matches |
 | `collect(X, G, L)` | the list of `X` over the matches, in store order |
 | `exists(G)` | holds if `G` has at least one match |
-| `none(G)` | holds if `G` has no match |
-| `forall(G, C)` | holds if every match of `G` extends to a match of `C`; defined as `none((G, none(C)))` |
+| `\+ G` | holds if `G` has no match (negation as absence) |
+| `forall(G, C)` | holds if every match of `G` extends to a match of `C`; defined as `\+ (G, \+ C)` |
 
-`exists` and `none` are aggregates whose `Final` returns `nothing`
+`exists` and `\+` are aggregates whose `Final` returns `nothing`
 when the condition fails, so they need no guard. Their result is
 `true`, and a use ignores it.
 
 Each macro refers to its aggregator by qualified name, as
 [macros.md](macros.md#names-and-modules) requires of a library macro.
+
+The library also exports two prefix operators, `op(900, fy, '\\+')`
+and `op(900, fy, '?')`. At 900 they bind tighter than `,` (1000), so
+`\+ p(X), q(X)` is `(\+ p(X)), q(X)`, and looser than comparisons, so
+`? X > 1` is `?(X > 1)`. A module that imports the library with an
+import list must list them to use the operator syntax; the
+`\+(G)` and `?(G)` forms work either way.
 
 
 ## Interaction with other features
@@ -349,7 +378,7 @@ Codes are assigned at implementation.
 |---|---|
 | `AggregateOutsideHead` | `aggregate/4` or a selection form outside a rule head. |
 | `AggregateOnlyHead` | A rule head consists of aggregates only. |
-| `MalformedAggregateGoal` | A goal conjunct that is neither a constraint nor an aggregate, or a guard that is not last. |
+| `MalformedAggregateGoal` | A goal conjunct that is neither a constraint, an aggregate nor a `?` guard. |
 | `TellOnlyInAggregate` | A `tell_only` constraint in an aggregate goal. |
 
 
@@ -368,19 +397,50 @@ Codes are assigned at implementation.
 
 ## Open questions
 
-1. **Guard syntax in a goal.** This draft uses `Goal | Guard`, which
-   mirrors a rule. The paper writes the guard as a conjunct,
-   `?(Guard)`, which allows guards between constraints.
-2. **When removals are processed.** Processing them at the start of the
-   body ([the removal step](#3-the-removal-step)) follows the paper's
-   implementation. It means an update written
-   as remove-then-tell (`withdraw(A, X), account(A, C, T, B) <=>
-   account(A, C, T, B - X)`) shows the aggregate an intermediate state
-   in which the account is missing. Processing removals at the end of
-   the body avoids that, but delays `none`-style rules past the body's
-   own tells.
-3. **Self-removal.** Should a rule that removes a constraint of its own
-   aggregate's goal (with `takemin`, say) trigger its own removal
-   occurrence?
-4. **Spelling of `none`.** The paper's `\+` is not an operator in
-   YCHR's default table. `none/1` avoids adding one.
+1. **Self-triggering.** A rule may remove a constraint of a type that
+   appears in its own aggregate goals, through `takemin`/`takemax` or
+   through an ordinary removed head. Its removal step then includes
+   its own goal occurrences, and the rule is tried again *before its
+   own body runs*. The choice is whether the removal step includes
+   those occurrences.
+
+   **Including them** is what the paper's transformation does, and it
+   never misses a firing that ωt allows. Without it, this rule stalls
+   on a dependency chain `a ← b ← c`:
+
+   ```prolog
+   step @ task(T), \+ depends(T, _) \ depends(U, T) <=> started(U).
+   ```
+
+   Firing for `a` removes `depends(b, a)`, which makes the rule
+   applicable for `task(b)`. Nothing else retries `task(b)`, so only
+   the removal step can find that firing.
+
+   The cost is nesting. In a drain loop with a kept head,
+
+   ```prolog
+   machine(M) \ takemin(D, job(M, D, J)) <=> run(M, J).
+   ```
+
+   firing for the shortest job removes it. The removal step retries the
+   rule, which takes the next job, whose removal step takes the next
+   one, and so on. The bodies run only as this unwinds, so `run/2` is
+   told longest job first, at a recursion depth equal to the number of
+   jobs. Under plain ωr the kept `machine(M)` would stay at the same
+   occurrence, take the jobs one per firing and run them shortest
+   first. The paper's examples avoid the pattern: Sudoku removes its
+   driver (`solve`) in the same rule and tells it again in the body,
+   and Dijkstra marks its `argmin` passive.
+
+   **Excluding them** keeps drain loops in order and flat, but misses
+   firings like the dependency chain above.
+
+   Recommendation: include them, as the paper does, and document the
+   driver idiom for drains: remove a driver constraint in the same
+   rule and tell it again at the end of the body. Removing the driver
+   leaves the removal step no regular head to match, so it does
+   nothing, and the body's tell starts the next iteration in order:
+
+   ```prolog
+   next(M), machine(M) \ takemin(D, job(M, D, J)) <=> run(M, J), next(M).
+   ```
