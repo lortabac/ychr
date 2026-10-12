@@ -5,34 +5,39 @@
 
 -- | The search driver: @solve\/1@, @findall\/2@, @fold_solutions\/4@
 -- and @fail\/0@, the host calls behind @library(search)@ — and
--- @run_chr_session\/1@, which is 'hostSolve' made total.
+-- @library(meta)@'s @run_chr_session_ep\/1@ ('hostSolve' on a fresh
+-- session) and @run_chr_session\/1@ (that, made total).
 --
 -- See @docs\/reference\/search.md@ for the user-facing contract. This
 -- module implements it.
 --
--- == Variable sharing across a fork
+-- == What a fork starts from
 --
--- Logical variables are 'Data.IORef.IORef' cells, so a variable
--- reachable from the goal is /the same variable/ inside the forked
--- session: bindings made there are visible to the caller once the
--- search commits. This is the result channel — pass fresh unbound
--- out-variables in the goal and read them afterwards.
+-- @solve\/1@, @findall\/2@ and @fold_solutions\/4@ fork the /calling/
+-- session: the fork's store, store index, suspension map and
+-- propagation history start as a copy of the caller's
+-- ('CopyStore'), so the goal's rules see the caller's constraints as
+-- partners. @run_chr_session\/1@ and @run_chr_session_ep\/1@ start
+-- from an empty store instead ('FreshStore'). Either way the fork has
+-- its own reactivation queue and call stack.
 --
--- Reactivation does NOT cross the boundary. A shared variable's
--- observer list may carry suspension ids from both sessions; ids are
--- globally unique (the id supply is shared, like the variable
--- counter), and each session drops foreign ids at enqueue
--- ("YCHR.Internal.Runtime.Reactivation"). So binding a shared
--- variable reactivates only the binding session's own observers. The
--- common benign case is the calling rule's already-killed head
--- constraint observing an out-variable — nothing to reactivate. The
--- case to avoid is a /live/ stored constraint of one session
--- observing a variable the other session binds: the observer is
--- simply not reactivated, which can leave the observing session
--- incomplete (a rule that should have fired on the new binding does
--- not). In practice: pass only ground terms and fresh variables in,
--- and have the forked session bind its out-variables before
--- quiescence.
+-- == What survives a search
+--
+-- Every exit unwinds to the base mark taken when the search was
+-- entered — commit included — so the caller's store, its constraints'
+-- flags, and every variable the search bound are as they were. A
+-- commit keeps exactly one thing, the values of the /goal's
+-- variables/: the unbound variables reachable from the goal at entry.
+-- The driver reads them, fully dereferenced, at the solution; unwinds;
+-- and binds each one to the value read, in the calling session (so on
+-- the caller's trail, if it has one, where an enclosing driver can
+-- still undo it).
+--
+-- That rebinding happens outside any rule body, so nothing reactivates
+-- a constraint watching a goal variable. Hence the check before it: a
+-- commit onto a goal variable observed by a live stored constraint of
+-- the caller is a runtime error ('checkUnwatched'). A search that does
+-- not commit rebinds nothing and is never checked.
 --
 -- == Choice at quiescence
 --
@@ -82,7 +87,8 @@ module YCHR.Internal.Runtime.Search
   )
 where
 
-import Control.Exception (throwIO, try)
+import Control.Exception (finally, throwIO, try)
+import Control.Monad (filterM, when, zipWithM_)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Reader (ask)
 import Data.Foldable (toList)
@@ -94,6 +100,7 @@ import Data.Maybe (listToMaybe)
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import YCHR.Internal.Compile.Names (runtimeName)
 import YCHR.Internal.Meta (metaHostCallRegistry)
@@ -119,6 +126,7 @@ import YCHR.Internal.Runtime.Interpreter
 import YCHR.Internal.Runtime.Monad
   ( CallStack,
     Chr,
+    ForkStore (..),
     SessionEnv (..),
     forkSearchSessionEnv,
     runChr,
@@ -127,6 +135,7 @@ import YCHR.Internal.Runtime.Registry
   ( HostCallFn (..),
     HostCallRegistry,
     baseHostCallRegistry,
+    collectVars,
     copyTerm,
     valueList,
   )
@@ -144,20 +153,23 @@ import YCHR.Internal.Runtime.Trace
   )
 import YCHR.Internal.Runtime.Trail (trailMark, unwindTo)
 import YCHR.Internal.Runtime.Types
-  ( SuspensionId,
+  ( SuspensionId (..),
     TrailMark,
     Value (..),
+    Var (..),
+    VarState (..),
   )
-import YCHR.Internal.Runtime.Var (deref)
+import YCHR.Internal.Runtime.Var (deref, unify)
 import YCHR.Internal.Types (ConstraintType (..))
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM (Name (..), RuleId)
 
 -- | Registry providing @solve\/1@, @findall\/2@, @fold_solutions\/4@
--- and @fail\/0@, plus the @meta@ library's @run_chr_session\/1@,
--- which is the same driver. Part of 'defaultHostCallRegistry'; union
--- it in explicitly when assembling a custom registry that should
--- support @library(search)@ or @run_chr_session@.
+-- and @fail\/0@, plus the @meta@ library's @run_chr_session\/1@ and
+-- @run_chr_session_ep\/1@, which are the same driver. Part of
+-- 'defaultHostCallRegistry'; union it in explicitly when assembling a
+-- custom registry that should support @library(search)@ or
+-- @run_chr_session@.
 searchHostCallRegistry :: HostCallRegistry
 searchHostCallRegistry =
   Map.fromList
@@ -165,7 +177,8 @@ searchHostCallRegistry =
       (Name "findall", HostCallFn hostFindAll),
       (Name "fold_solutions", HostCallFn hostFoldSolutions),
       (Name "fail", HostCallFn hostFail),
-      (Name "run_chr_session", HostCallFn hostRunChrSession)
+      (Name "run_chr_session", HostCallFn hostRunChrSession),
+      (Name "run_chr_session_ep", HostCallFn hostRunChrSessionEp)
     ]
 
 -- | The default host-call registry — base builtins, the @meta@
@@ -292,7 +305,8 @@ data SolutionStep
     StepContinue
   | -- | End the search and unwind everything to the base mark.
     StepStop
-  | -- | End the search and keep this solution's bindings.
+  | -- | End the search and keep this solution's values of the goal's
+    -- variables.
     StepCommit
 
 -- | 0-based position in a constraint type's store sequence. Those
@@ -345,10 +359,10 @@ searchFrom ctx cursor =
 -- | How one alternative turned out.
 data AltOutcome
   = -- | 'onSolution' ended the search inside this alternative, keeping
-    -- the solution's bindings or discarding them. Nothing is undone
-    -- here either way: undoing is the entry point's job, since a
-    -- 'StepStop' unwinds past every choice point at once, to the base
-    -- mark.
+    -- the solution's goal-variable values or discarding them. Nothing
+    -- is undone here either way: undoing is the entry point's job,
+    -- since both steps unwind past every choice point at once, to the
+    -- base mark.
     --
     -- Running out of alternatives is 'AltFailed', not an outcome, so
     -- the payload is the two /stopping/ steps rather than a
@@ -364,7 +378,7 @@ data AltOutcome
 data StopKind
   = -- | @stop@: unwind to the base mark.
     StopUndoing
-  | -- | @commit@: keep the bindings.
+  | -- | @commit@: keep the goal variables' values.
     StopKeeping
 
 -- | Try each alternative of one choice point in list order, undoing
@@ -423,18 +437,23 @@ withoutFailure act = do
 --
 -- Skipping the prefix is not an optimization the caller may get wrong.
 -- The invariant is that at every quiescence in the subtree entered on
--- the choice at index @i@, every entry below @i + 1@ is dead: the ones
--- in @[cursor, i)@ because this scan read them dead, the ones below
--- @cursor@ by the same property one level up, and @i@ itself because
--- taking the choice kills it. Nothing in that subtree can revive one.
--- A suspension\'s @alive@ flag only goes back to 'True' by trail undo,
--- and every undo reachable from inside the subtree is to a mark taken
--- at or after it was entered. So the subtree may start at @i + 1@ —
--- which is what keeps a path of depth @k@ from rescanning @k@ dead
--- choice points at every quiescence.
+-- the choice at index @i@, every entry below @i + 1@ is dead or not
+-- this search's (see below): the ones in @[cursor, i)@ because this
+-- scan read them dead, the ones below @cursor@ by the same property
+-- one level up, and @i@ itself because taking the choice kills it.
+-- Nothing in that subtree can revive one. A suspension\'s @alive@ flag
+-- only goes back to 'True' by trail undo, and every undo reachable from
+-- inside the subtree is to a mark taken at or after it was entered. So
+-- the subtree may start at @i + 1@ — which is what keeps a path of
+-- depth @k@ from rescanning @k@ dead choice points at every
+-- quiescence.
 --
--- A nested search forks a fresh store, so its sequence is its own and
--- so is its driver's cursor.
+-- A search's first cursor is the length of the @alt@ sequence at the
+-- moment it forked. A forking search copies its caller's store, so the
+-- prefix below that cursor holds the caller's @alt@s — inert outside
+-- a search, or pending choices of an enclosing driver — and a live one
+-- among them is skipped on purpose: only the choice points the search
+-- told itself are its to take.
 findChoice :: SearchCtx -> StoreSlot -> Chr (Maybe Choice)
 findChoice ctx cursor@(StoreSlot from) = case ctx.altType of
   Nothing -> pure Nothing
@@ -477,85 +496,196 @@ altTypeOf env =
 -- ---------------------------------------------------------------------------
 
 -- | Resolve the goal, then drive it: 'runSearch' is 'driveSearch'
--- with the goal decoded in the /calling/ session, before the fork
--- exists, so an unknown goal constraint is a caller error and never a
--- failed branch.
-runSearch :: String -> Value -> Chr SolutionStep -> Chr SearchOutcome
-runSearch who goalArg onSolution = do
+-- with the goal decoded and checked in the /calling/ session, before
+-- the fork exists, so an unknown goal constraint is a caller error and
+-- never a failed branch.
+runSearch ::
+  String ->
+  ForkStore ->
+  Value ->
+  Chr SolutionStep ->
+  Chr SearchOutcome
+runSearch who mode goalArg onSolution = do
   goals <- goalConstraints who goalArg
-  driveSearch who goals onSolution
+  prepared <- prepareSearch goals
+  (exit, kept) <- driveSearch who mode prepared onSolution
+  commitGoalVars who prepared kept
+  pure exit
+
+-- | A resolved goal and its variables, collected in the calling
+-- session.
+data PreparedGoal = PreparedGoal
+  { goals :: ![(Types.Name, [Value])],
+    -- | The unbound variables reachable from the goal at entry: the
+    -- only thing a commit keeps.
+    goalVars :: ![Value]
+  }
+
+-- | Collect the goal's variables, before the fork exists: they are the
+-- unbound variables reachable from the goal /at entry/.
+prepareSearch :: [(Types.Name, [Value])] -> Chr PreparedGoal
+prepareSearch goals = do
+  vars <- collectAll Set.empty (concatMap snd goals)
+  pure (PreparedGoal {goals = goals, goalVars = vars})
+  where
+    collectAll _ [] = pure []
+    collectAll seen (v : vs) = do
+      (found, seen') <- collectVars seen v
+      (found ++) <$> collectAll seen' vs
+
+-- | Reject a commit that would bind a goal variable a live stored
+-- constraint of the calling session observes. A commit binds goal
+-- variables outside any rule body, so nothing would reactivate that
+-- constraint and its rules would silently miss the new value. A search
+-- that does not commit binds nothing, so it is never checked: that is
+-- what lets @findall@ label a variable the caller's store constrains.
+--
+-- An observer id that names no suspension of this session is foreign
+-- (see 'YCHR.Internal.Runtime.Reactivation.enqueueObservers') and a
+-- dead one is stale; neither counts. An inert constraint registers no
+-- observers, so it does not count either.
+checkUnwatched :: String -> [Value] -> Chr ()
+checkUnwatched who vars = do
+  env <- ask
+  byId <- liftIO (readIORef env.storeById)
+  let watchedBy (SuspensionId n) = case IntMap.lookup n byId of
+        Nothing -> pure False
+        Just susp -> (&&) <$> readIORef susp.alive <*> readIORef susp.stored
+      watched (VVar (Var ref)) =
+        readIORef ref >>= \case
+          Unbound _ obs -> not . null <$> filterM watchedBy obs
+          Bound _ -> pure False
+      watched _ = pure False
+  anyWatched <- liftIO (or <$> mapM watched vars)
+  when anyWatched $
+    runtimeErrorS
+      ( who
+          ++ ": goal variable is observed by a stored constraint;"
+          ++ " pass a fresh variable and unify after the call"
+      )
 
 -- | Fork a search session, tell the already-resolved goal, and drive
 -- it.
 --
--- Returns how the search ended. 'SearchCommitted' is the one outcome
--- that leaves the search's writes in place; on every other exit —
--- a @stop@ step, exhaustion, or an escaping runtime error — the search
--- is unwound to the mark taken here before returning or rethrowing. A
--- caller that catches the error ('hostRunChrSession', which turns it
--- into @false@) therefore resumes with the bindings it had, the way
--- ISO @catch\/3@ does.
---
--- Split from 'runSearch' so 'hostRunChrSession' can resolve the goal
--- outside the @try@ that swallows runtime errors.
+-- Returns how the search ended. Every exit — a commit, a @stop@ step,
+-- exhaustion, or an escaping runtime error — unwinds the search to the
+-- mark taken here before returning or rethrowing. A caller that
+-- catches the error ('hostRunChrSession', which turns it into
+-- @false@) therefore resumes with the bindings it had, the way ISO
+-- @catch\/3@ does. On a commit it also returns the goal variables'
+-- values in the solution, read before the unwind, for
+-- 'commitGoalVars'.
 driveSearch ::
   String ->
-  [(Types.Name, [Value])] ->
+  ForkStore ->
+  PreparedGoal ->
   Chr SolutionStep ->
-  Chr SearchOutcome
-driveSearch who goals onSolution = do
+  Chr (SearchOutcome, Maybe [Value])
+driveSearch who mode prepared onSolution = do
   env <- ask
-  sub <- liftIO (forkSearchSessionEnv env)
+  sub <- liftIO (forkSearchSessionEnv mode env)
+  let altTy = altTypeOf sub
+  -- Only the choice points this search tells are its own; see
+  -- 'findChoice'.
+  cursor <- case altTy of
+    Nothing -> pure (StoreSlot 0)
+    Just ct ->
+      StoreSlot . Seq.length <$> liftIO (runChr (getStoreSnapshot ct) sub)
   let ctx =
         SearchCtx
-          { altType = altTypeOf sub,
+          { altType = altTy,
             onSolution = onSolution
           }
       label = T.pack who
       body = do
         emitTrace (pure (TESearchEnter label))
         outcome <- withoutFailure $ do
-          mapM_ (uncurry tellResolvedConstraint) goals
-          searchFrom ctx (StoreSlot 0)
-        let exit = case outcome of
-              AltDone StopKeeping -> SearchCommitted
-              AltDone StopUndoing -> SearchStopped
-              AltFailed _ -> SearchExhausted
+          mapM_ (uncurry tellResolvedConstraint) prepared.goals
+          searchFrom ctx cursor
+        (exit, kept) <- case outcome of
+          AltDone StopKeeping -> do
+            -- Read before the unwind below takes the solution away.
+            vals <- mapM resolveValue prepared.goalVars
+            pure (SearchCommitted, Just vals)
+          AltDone StopUndoing -> pure (SearchStopped, Nothing)
+          AltFailed _ -> pure (SearchExhausted, Nothing)
         emitTrace (pure (TESearchExit label exit))
-        pure exit
+        pure (exit, kept)
   liftIO $ do
     base <- runChr trailMark sub
-    try (runChr body sub) >>= \case
-      Left (e :: RuntimeErrorThrown) -> do
-        runChr (unwindTo base) sub
-        throwIO e
-      Right SearchCommitted -> pure SearchCommitted
-      Right exit -> do
-        runChr (unwindTo base) sub
-        pure exit
+    -- Every exception, not only 'RuntimeErrorThrown': a 'CopyStore'
+    -- fork's kills write the caller's own suspension flags, so an exit
+    -- that skipped this would leave the caller's constraints dead.
+    runChr body sub `finally` runChr (unwindTo base) sub
 
--- | @solve(Goal)@: run @Goal@ and stop at its first solution.
+-- | The second half of a commit, in the calling session once the search
+-- has unwound: check that no goal variable is watched
+-- ('checkUnwatched'), then bind each one to its value in the solution.
+-- A no-op when the search did not commit.
 --
--- Commits: nothing is unwound, so bindings made to variables shared
--- with the goal are visible to the caller. @false@ when the space is
+-- Run outside 'hostRunChrSession'\'s @try@, so a watched goal variable
+-- is a loud caller error from every entry point, never a @false@.
+-- The bindings land on the caller's trail if it has one. The observers
+-- 'unify' returns are dropped: the check ruled out a live one, and this
+-- is not a rule body, so there is no drain to hand them to.
+commitGoalVars :: String -> PreparedGoal -> Maybe [Value] -> Chr ()
+commitGoalVars _ _ Nothing = pure ()
+commitGoalVars who prepared (Just vals) = do
+  checkUnwatched who prepared.goalVars
+  zipWithM_ rebind prepared.goalVars vals
+  where
+    -- Cannot fail: the goal variables are distinct and unbound again
+    -- after the unwind, and a resolved value names a goal variable only
+    -- if that variable was unbound in the solution.
+    rebind var val =
+      unify var val >>= \case
+        (True, _) -> pure ()
+        (False, _) -> error "commitGoalVars: rebinding a goal variable failed"
+
+-- | A value with every bound variable replaced by what it is bound to,
+-- all the way down. Unbound variables stay themselves.
+--
+-- Does not terminate on a cyclic term (unification has no occurs
+-- check), like 'copyTerm' and 'collectVars': a commit, like a
+-- @findall@ copy, does not support one.
+resolveValue :: Value -> Chr Value
+resolveValue v =
+  deref v >>= \case
+    VTerm f args -> VTerm f <$> mapM resolveValue args
+    other -> pure other
+
+-- | @solve(Goal)@: run @Goal@ against a fork of the caller's store and
+-- stop at its first solution.
+--
+-- Commits: the goal's variables are bound to their values in the
+-- solution, and nothing else is kept. @false@ when the space is
 -- exhausted, with everything undone.
 hostSolve :: [Value] -> Chr Value
 hostSolve [goalArg] =
-  VBool . (== SearchCommitted) <$> runSearch "solve" goalArg (pure StepCommit)
+  VBool . (== SearchCommitted)
+    <$> runSearch "solve" CopyStore goalArg (pure StepCommit)
 hostSolve _ = runtimeErrorS "solve: expected 1 argument"
 
--- | @run_chr_session(Goal)@: 'hostSolve' made total.
+-- | @run_chr_session_ep(Goal)@: 'hostSolve' on a fresh, empty session
+-- instead of a fork of the caller's store. Errors propagate.
+hostRunChrSessionEp :: [Value] -> Chr Value
+hostRunChrSessionEp [goalArg] =
+  VBool . (== SearchCommitted)
+    <$> runSearch "run_chr_session_ep" FreshStore goalArg (pure StepCommit)
+hostRunChrSessionEp _ =
+  runtimeErrorS "run_chr_session_ep: expected 1 argument"
+
+-- | @run_chr_session(Goal)@: 'hostRunChrSessionEp' made total.
 --
--- Same fork, same base mark, same commit-on-first-solution — the one
--- difference is that a runtime error escaping @Goal@ becomes @false@
--- instead of propagating. That makes this the language's only error
--- catcher, which is the whole reason it is a host call rather than
--- @run_chr_session(G) -> solve(G)@ in CHR.
+-- Same fresh session, same base mark, same commit-on-first-solution —
+-- the one difference is that a runtime error escaping @Goal@ becomes
+-- @false@ instead of propagating. That makes this the language's only
+-- error catcher, which is the whole reason it is a host call rather
+-- than written in CHR over @run_chr_session_ep@.
 --
 -- Every @false@ is fully rolled back: 'driveSearch' unwinds to its
--- base mark before rethrowing an error and before reporting
--- exhaustion, so a failed sub-session leaves no half-made bindings
--- behind.
+-- base mark on every exit, so a failed sub-session leaves no half-made
+-- bindings behind.
 --
 -- The cost of the one distinct behaviour is that @false@ does not
 -- distinguish a bug in the goal from a deliberate failure. That was
@@ -569,18 +699,22 @@ hostSolve _ = runtimeErrorS "solve: expected 1 argument"
 -- it into 'SearchExhausted', which is @false@ by the same rule.
 hostRunChrSession :: [Value] -> Chr Value
 hostRunChrSession [goalArg] = do
-  -- Resolved here rather than inside 'driveSearch', so that it happens
-  -- outside the 'try' below: a misspelled or unexported goal
-  -- constraint stays a loud caller error instead of being swallowed
-  -- into a @false@ result.
+  -- Resolved here, and committed below, rather than inside
+  -- 'driveSearch', so that both happen outside the 'try': a misspelled
+  -- or unexported goal constraint, or a commit onto a watched goal
+  -- variable, stays a loud caller error instead of being swallowed into
+  -- a @false@ result.
   goals <- goalConstraints "run_chr_session" goalArg
+  prepared <- prepareSearch goals
   env <- ask
-  let search = driveSearch "run_chr_session" goals (pure StepCommit)
+  let search =
+        driveSearch "run_chr_session" FreshStore prepared (pure StepCommit)
   outcome <- liftIO (try (runChr search env))
-  pure . VBool $ case outcome of
-    Right SearchCommitted -> True
-    Right _ -> False
-    Left (_ :: RuntimeErrorThrown) -> False
+  case outcome of
+    Right (exit, kept) -> do
+      commitGoalVars "run_chr_session" prepared kept
+      pure (VBool (exit == SearchCommitted))
+    Left (_ :: RuntimeErrorThrown) -> pure (VBool False)
 hostRunChrSession _ = runtimeErrorS "run_chr_session: expected 1 argument"
 
 -- | @findall(Template, Goal)@: every solution of @Goal@, as a list of
@@ -600,7 +734,7 @@ hostFindAll [template, goalArg] = do
         -- Never stop: asking for the next solution backtracks out of
         -- this one.
         pure StepContinue
-  _ <- runSearch "findall" goalArg onSolution
+  _ <- runSearch "findall" CopyStore goalArg onSolution
   valueList . reverse <$> liftIO (readIORef acc)
 hostFindAll _ = runtimeErrorS "findall: expected 2 arguments"
 
@@ -611,7 +745,7 @@ hostFindAll _ = runtimeErrorS "findall: expected 2 arguments"
 -- At each solution @F@ is applied to a copy of @Template@ and the
 -- accumulator, and answers with a @step@: @continue@ asks for the next
 -- solution, @stop@ ends the search and undoes everything, @commit@
--- ends it and keeps the solution's bindings.
+-- ends it and keeps the solution's values of the goal's variables.
 --
 -- The accumulator lives in an 'IORef' the driver owns, so backtracking
 -- does not roll it back: the trail covers variable cells and
@@ -642,7 +776,7 @@ hostFoldSolutions [template, goalArg, f, acc0] = do
         (step, acc') <- readStep result
         liftIO (writeIORef accRef acc')
         pure step
-  _ <- runSearch "fold_solutions" goalArg onSolution
+  _ <- runSearch "fold_solutions" CopyStore goalArg onSolution
   liftIO (readIORef accRef)
 hostFoldSolutions _ = runtimeErrorS "fold_solutions: expected 4 arguments"
 

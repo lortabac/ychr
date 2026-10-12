@@ -23,9 +23,10 @@
 % What a fold's step function answers at a solution. `continue(A)` asks
 % for the next solution; `stop(A)` ends the search and undoes
 % everything, back to the state before the goal ran; `commit(A)` ends
-% it and keeps the solution's bindings, as solve/1 does. `stop` is the
-% one you want unless you specifically need the witness — committing
-% inside a fold is the surprising outcome, so it is the one you name.
+% it and keeps the solution's values of the goal's variables, as
+% solve/1 does. `stop` is the one you want unless you specifically need
+% the witness — committing inside a fold is the surprising outcome, so
+% it is the one you name.
 :- chr_type step(A) ---> continue(A) ; stop(A) ; commit(A).
 
 :- function
@@ -98,20 +99,32 @@ between_alts(Low, High, X) ->
 fail -> host:fail.
 
 % Run a goal (a constraint term, a list of them, or a `;` disjunction,
-% wrapped in quote/1 to keep it symbolic) in a fresh session of the
-% current program, and stop at its first solution: true, with the
-% bindings of that solution left in place. False when the search space is exhausted, with every
-% binding it made undone. Runtime errors propagate — unlike
-% run_chr_session/1, a search does not turn a bug into a false.
+% wrapped in quote/1 to keep it symbolic) against a fork of the calling
+% session -- its store and propagation history start as a copy of the
+% caller's, so the goal's rules see the caller's constraints -- and stop
+% at its first solution: true, with the goal's variables bound to their
+% values in that solution. Nothing else is kept: the fork's store is
+% discarded, and any other variable the search bound is unbound again.
+% False when the search space is exhausted, with everything undone.
+% Runtime errors propagate -- unlike run_chr_session/1, a search does
+% not turn a bug into a false.
+%
+% The goal's variables are the unbound variables reachable from the
+% goal at the call. A commit onto one watched by a live stored
+% constraint of the caller is a runtime error, so pass fresh variables
+% and unify after the call. A search that does not commit (findall/2, a
+% fold that stops or runs out) binds nothing and is not checked.
 solve(G) -> host:solve(G).
 
 % Every solution of a goal, as a list of copies of Template in search
-% order. The copies are all that survives: the search is fully unwound
-% afterwards, so no binding it made is visible to the caller. An empty
+% order, run against a fork of the caller's store as solve/1 is. The
+% copies are all that survives: the search is fully unwound afterwards,
+% so no binding it made is visible to the caller. An empty
 % list means no solutions; findall never fails.
 findall(Template, G) -> host:findall(Template, G).
 
-% Fold F over the solutions of a goal, in search order. At each
+% Fold F over the solutions of a goal, run against a fork of the
+% caller's store as solve/1 is, in search order. At each
 % solution the driver evaluates `call(F, copy_term(Template), Acc)`
 % with that solution's bindings still live and nothing yet undone, and
 % F answers with a `step` saying what to do next. Exhausting the space

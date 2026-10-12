@@ -19,6 +19,7 @@ module YCHR.Internal.Runtime.Monad
     -- * Session environment
     SessionEnv (..),
     initSessionEnv,
+    ForkStore (..),
     forkSearchSessionEnv,
 
     -- * Auxiliary types
@@ -289,10 +290,23 @@ initSessionEnv typeNames rNames inert indexable ops slotProgram hc ev cl expMap 
         traceDepth = td
       }
 
--- | A fresh session of the same program, ready to run a search: same
+-- | Where a search fork's store starts.
+data ForkStore
+  = -- | Empty store and propagation history: the isolated entry points,
+    -- @run_chr_session\/1@ and @run_chr_session_ep\/1@.
+    FreshStore
+  | -- | A copy of the caller's store, store index, suspension map and
+    -- propagation history as they stand at the call: @solve\/1@,
+    -- @findall\/2@ and @fold_solutions\/4@. All four are persistent
+    -- structures behind one reference each, so the copy is four reads.
+    CopyStore
+
+-- | A session of the same program, ready to run a search: same
 -- procedures, constraint types, rule names, host calls and exports,
--- but its own store, history, reactivation queue and call stack, and
--- with a trail guaranteed to be installed. The procedure map is copied
+-- its own store references (empty or copied from the caller's, by
+-- 'ForkStore'), an empty reactivation queue and call stack, and a
+-- trail guaranteed to be installed. The caller's pending reactivations
+-- stay with the caller. The procedure map is copied
 -- into a new 'IORef' — a defensive copy with no writer today, since the
 -- one point that adds procedures is
 -- 'YCHR.Internal.Runtime.Session.withCHRExtra', which builds a fresh
@@ -301,8 +315,16 @@ initSessionEnv typeNames rNames inert indexable ops slotProgram hc ev cl expMap 
 -- once a session has been built.
 --
 -- Every fork goes through here, because every entry point that opens
--- one — @solve\/1@, @findall\/2@, @fold_solutions\/4@ and
--- @run_chr_session\/1@ — is the search driver.
+-- one — @solve\/1@, @findall\/2@, @fold_solutions\/4@,
+-- @run_chr_session\/1@ and @run_chr_session_ep\/1@ — is the search
+-- driver.
+--
+-- A 'CopyStore' fork shares the caller's 'Suspension' records, and so
+-- their @alive@ and @stored@ flags: a goal rule that kills a caller
+-- constraint writes the caller's flag. Those writes are trailed, and
+-- the driver unwinds to its base mark on every exit, so the caller
+-- finds its constraints as it left them
+-- ("YCHR.Internal.Runtime.Search").
 --
 -- The variable and suspension-id counters are /shared/, so a fork's
 -- ids never collide with its parent's: a cross-session observer leak
@@ -317,18 +339,27 @@ initSessionEnv typeNames rNames inert indexable ops slotProgram hc ev cl expMap 
 -- equation).
 --
 -- A fresh trail is installed only when the parent has none. A nested
--- search /shares/ its parent's, so that entries an inner search
--- commits stay visible to the outer driver: variable cells are shared
+-- search /shares/ its parent's, so that the bindings an inner search
+-- commits stay undoable by the outer driver: variable cells are shared
 -- across forks even though store references are not, and an outer
 -- branch that later fails must be able to undo bindings an inner
 -- search made. Marks, not trails, are what delimit an undo.
-forkSearchSessionEnv :: SessionEnv -> IO SessionEnv
-forkSearchSessionEnv env = do
+forkSearchSessionEnv :: ForkStore -> SessionEnv -> IO SessionEnv
+forkSearchSessionEnv mode env = do
   pm <- readIORef env.procMap
-  bt <- newIORef (IntMap.map (const Seq.empty) env.storeTypeNames)
-  sx <- newIORef emptyStoreIndex
-  bi <- newIORef IntMap.empty
-  hi <- newIORef Set.empty
+  (bt, sx, bi, hi) <- case mode of
+    FreshStore ->
+      (,,,)
+        <$> newIORef (IntMap.map (const Seq.empty) env.storeTypeNames)
+        <*> newIORef emptyStoreIndex
+        <*> newIORef IntMap.empty
+        <*> newIORef Set.empty
+    CopyStore ->
+      (,,,)
+        <$> (newIORef =<< readIORef env.storeByType)
+        <*> (newIORef =<< readIORef env.storeIndex)
+        <*> (newIORef =<< readIORef env.storeById)
+        <*> (newIORef =<< readIORef env.history)
   rq <- newIORef Seq.empty
   cs <- newIORef []
   pmRef <- newIORef pm

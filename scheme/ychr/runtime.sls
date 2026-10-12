@@ -29,7 +29,7 @@
     %term-variables %compound-to-list %list-to-compound
     %name-base
     %read-term-from-string %write-term-to-string %write-store-to-list
-    %print-store %run-chr-session
+    %print-store %run-chr-session %run-chr-session-ep
     %solve %fail %findall %fold-solutions
     %int-to-float %float-to-int
     %add %sub %mul %fdiv
@@ -978,6 +978,8 @@
     (error "%print-store" "not implemented"))
   (define (%run-chr-session v)
     (error "%run-chr-session" "not implemented"))
+  (define (%run-chr-session-ep v)
+    (error "%run-chr-session-ep" "not implemented"))
   ;; library(search): the driver needs a session fork, a store snapshot
   ;; and an undo trail (dev-docs/SCHEME_BACKEND_GAPS.md).
   (define (%solve g)

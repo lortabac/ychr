@@ -687,9 +687,10 @@ observable divergence Late Storage introduces.
 bookkeeping — constraint store, propagation history, reactivation
 queue, call stack, trace depth — and it is what the catch depends on.
 It does *not* extend to a `HostCall` in the guard. A host function
-receives the session and can bind shared logical-variable cells;
-`run_chr_session/1` (`src/YCHR/Internal/Runtime/Search.hs`)
-documents doing exactly that as its result channel. Such a binding
+receives the session and can bind shared logical-variable cells; the
+search entry points (`src/YCHR/Internal/Runtime/Search.hs`) document
+doing exactly that, with the goal's variables, as their result
+channel. Such a binding
 survives whether the guard is abandoned by `BSoftGuard` or simply
 evaluates to `False` on its own, so the catch adds no exposure the
 language did not already have — but "a guard cannot mutate anything"

@@ -41,16 +41,17 @@
 %   run_states(KVs, quote(Goal))     the final kv(K, V) of each key of KVs
 %
 % The goal is a constraint term or a list of them, as for search:solve/1,
-% and runs in a fresh session of the program (search.md, "Scope: search
-% runs in a sub-session"): the keys are created there before the goal
-% and read back after it, and they disappear with the session, so there
-% is nothing to close and a key in use outside does not clash with one
-% inside. For the same reason the goal does not see the caller's
-% constraints, what it tells stays behind, and results come back through
-% the returned value and the goal's own variables only. Its constraints
-% must be exported, and are resolved through the exports of the whole
-% program, as for any goal run by solve/1: qualify one (`state:get`) if
-% another module exports the same name.
+% and runs as solve/1 runs it, against a fork of the calling session
+% (search.md, "Scope: search forks the calling session"): the keys are
+% created there before the goal and read back after it, and the fork's
+% store is discarded when the run returns, so there is nothing to close.
+% The goal sees the caller's constraints, its keys included: a run on a
+% key the caller holds is a `new_state` on a key that already exists.
+% Nothing the goal tells or removes survives, and results come back
+% through the returned value and the goal's own variables only. Its
+% constraints must be exported, and are resolved through the exports of
+% the whole program, as for any goal run by solve/1: qualify one
+% (`state:get`) if another module exports the same name.
 %
 % A runtime error in the goal propagates, the state library's own
 % included; a run whose goal fails (search:fail/0, or a choice point
@@ -159,8 +160,8 @@ close_each([K|Ks]) <=> close_state(K), close_each(Ks).
 %
 % `run_states` asks for a fresh variable per key, then hands the same
 % list to the goal's trailing `get`s and to the result: the `get`s bind
-% the variables inside the session, and committing its solution keeps
-% them bound.
+% the variables inside the fork, and they are goal variables, so
+% committing its solution keeps them bound.
 run_state(K, V, G) -> value(head(run_states([kv(K, V)], G))).
 
 run_states(KVs, _) | not(kv_list(KVs)) ->

@@ -983,6 +983,7 @@ hostCallMap =
       ("write_store_to_list", "%write-store-to-list"),
       ("print_store", "%print-store"),
       ("run_chr_session", "%run-chr-session"),
+      ("run_chr_session_ep", "%run-chr-session-ep"),
       -- `library(search)`'s driver calls, for the same reason: a
       -- program importing `library(state)` imports the search library
       -- too, and must load even if it never runs a search.

@@ -16,7 +16,10 @@
     unexported/1,
     out_var/2,
     unground_key/2,
-    nested_inner/1
+    nested_inner/1,
+    nested_clash/2,
+    nested_clash_inner/1,
+    caller_key/2
 ]).
 
 :- use_module(library(state)).
@@ -45,13 +48,25 @@ pair_run(A, B) <=>
     [kv(k, A), kv(n, B)] is
         run_states([kv(k, 1), kv(n, 2)], quote([swap, inc(k)])).
 
-% The inner run has keys of its own, so it neither sees nor clashes with
-% the outer `k`.
+% A run forks its caller's store, so a nested run sees the outer run's
+% keys: it has to use a key of its own ...
 nested(Outer, Inner) <=>
     Outer is run_state(k, 10, quote([inc(k), nested_inner(Inner)])).
 
 :- chr_constraint nested_inner(any).
-nested_inner(I) <=> I is run_state(k, 0, quote(inc(k))).
+nested_inner(I) <=> I is run_state(n, 0, quote(inc(n))).
+
+% ... and one on the outer key is a `new_state` on a key that exists.
+nested_clash(Outer, Inner) <=>
+    Outer is run_state(k, 10, quote([inc(k), nested_clash_inner(Inner)])).
+
+:- chr_constraint nested_clash(any, any), nested_clash_inner(any),
+                  caller_key(any, any).
+nested_clash_inner(I) <=> I is run_state(k, 0, quote(inc(k))).
+
+% The caller's own keys are visible to the goal.
+caller_key(M, R) <=>
+    new_state(m, 5), R is run_state(k, 0, quote(state:get(m, M))).
 
 % The goal's own variables are a second way out. Its `get` is qualified
 % because other.chr exports a `get/2` too.

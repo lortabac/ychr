@@ -155,21 +155,26 @@ and its own call stack.
   variable of the caller as it was (see
   [What a commit keeps](#what-a-commit-keeps)). Pass them fresh, and
   unify the caller's own variables with them after the call.
-- **A watched goal variable is a caller error.** If a goal variable is
-  observed by a live stored constraint of the calling session, the
-  entry point raises a runtime error before the search starts:
-  `goal variable is observed by a stored constraint; pass a fresh
-  variable and unify after the call`. A commit binds goal variables
-  outside any rule body, so nothing would reactivate that constraint,
-  and its rules would silently miss the new value. Like goal resolution,
-  the check runs in the calling session, outside `run_chr_session/1`'s
-  catch, so it is never a `false`. A constraint of an inert type
+- **Committing to a watched goal variable is a caller error.** If a
+  search commits while one of its goal variables is observed by a live
+  stored constraint of the calling session, the entry point raises a
+  runtime error instead of binding it: `goal variable is observed by a
+  stored constraint; pass a fresh variable and unify after the call`.
+  A commit binds goal variables outside any rule body, so nothing would
+  reactivate that constraint, and its rules would silently miss the new
+  value. A search that does not commit — `findall/2`, a fold that never
+  answers `commit`, an exhausted `solve/1` — binds nothing and is not
+  checked, so it may label a variable the caller's store constrains:
+  the caller's constraints see it bound inside the fork, where they are
+  reactivated as usual. Like goal resolution, the check runs in the
+  calling session, outside `run_chr_session/1`'s catch, so it is never
+  a `false`. A constraint of an inert type
   registers no observers (see PROJECT.md, Delay Avoidance), so it does
   not count: nothing would reactivate it either way.
 
   ```prolog
   % Error if a stored constraint watches R, e.g. after the query
-  % go(R), bar(R).
+  % bar(R), go(R).
   go(R) <=> solve(quote(foo(R))).
 
   % Correct: X is fresh; R = X is an ordinary body unification, and
@@ -855,7 +860,7 @@ so it never takes an outer search's pending choice.
 | An `alt` killed by a user rule | Never seen by the driver. |
 | An `alt` told inside a branch — including the inner `alt` of a nested `;` | Picked up at that branch's next quiescence, so it is nested *under* the current choice. |
 | The goal quiesces with no `alt` at all | One solution, immediately. |
-| A goal variable observed by a live stored constraint of the caller | Runtime error before the search starts, from every entry point, `run_chr_session/1` included. See [Scope](#scope-search-forks-the-calling-session). |
+| A commit onto a goal variable observed by a live stored constraint of the caller | Runtime error instead of the commit, from every entry point that commits, `run_chr_session/1` included. A search that does not commit is not affected. See [Scope](#scope-search-forks-the-calling-session). |
 | An empty goal list | Quiesces immediately with no `alt`: one solution. |
 | Non-terminating propagation inside a branch | Does not terminate. Search adds no fairness or depth limit. |
 | `;` in a module that does not import `library(search)` | Compile-time error, `YCHR-20021`. |

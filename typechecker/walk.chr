@@ -15,7 +15,8 @@
 %
 % `class_eq_search` is exported not because another module calls it but
 % because a search resolves an unqualified goal name through the export
-% map: the class-function overload search below hands it to `solve/1`.
+% map: the class-function overload search below hands it to
+% `run_chr_session_ep/1`.
 %
 % The list traversals here go through `library(lists)` rather than
 % hand-rolled recursion; the cost of that is recorded once, in
@@ -308,25 +309,25 @@ tell_decls1 @
     Out = Facts.
 
 % The same declaration environment, in a session that does not have it
-% yet. Everything is copied first, so no *stored* fact shares a
-% variable with the session the list came from: an attempt runs inside
-% a search branch, where a shared logical variable is *the same
-% variable*, and a fact bound in the attempt would corrupt the outer
-% one silently. The attempt that fits is *committed* — that is what
-% `solve` means — so its bindings stay, and the copy is the only thing
-% keeping them off the caller's facts; only a failed attempt is undone
-% by the trail. Copying makes that impossible rather than merely unlikely —
-% and it is still far cheaper than re-deriving the facts, which is
-% O(size of every declaration in the program). (The uncopied list does
-% reach the search's session, as this constraint's own argument, so the
-% two short-lived suspensions that carry it register as observers of the
-% outer variables. They are killed immediately and each session drops
-% foreign observer ids, so nothing comes of it.)
+% yet. The list must not share a variable with any *stored* fact of the
+% session it came from: an attempt runs inside a search branch, where a
+% shared logical variable is *the same variable*, and a fact bound in
+% the attempt would corrupt the outer one silently. So the list is not
+% the caller's own: `class_eq_try1` hands the search a `copy_term` of
+% it, made once per equation, and the facts told here share variables
+% only with that copy. Between attempts nothing needs copying again —
+% a failed attempt's bindings, to the copy included, are undone by the
+% trail, and the attempt that fits is committed into a copy nobody
+% else holds. The copy is also what the search driver requires of its
+% goal: the caller's stored facts observe the original list's
+% variables, and committing onto a goal variable watched by a live
+% stored constraint is a runtime error.
 %
 % Only the *sharing* half of this is tested. Deleting the `copy_term`
-% leaves the whole suite green, because no solver rule today unifies
-% against a stored declaration fact without freshening it first; if one
-% is ever added, the cross-session corruption is silent. Keep the copy.
+% now fails on that check at the first fitting attempt; before the
+% check existed it left the whole suite green, because no solver rule
+% today unifies against a stored declaration fact without freshening it
+% first. Keep the copy.
 %
 % The whole list is copied in ONE call, and that is load-bearing: a
 % bounded declaration contributes two facts — the signature and the
@@ -336,9 +337,7 @@ tell_decls1 @
 % so it stays residual and succeeds silently.
 % `test/golden/typecheck_class_bounded_call/` pins that.
 retell_decls1 @
-    retell_decls(Facts) <=>
-    Fresh is copy_term(quote(Facts)),
-    tell_facts(Fresh).
+    retell_decls(Facts) <=> tell_facts(Facts).
 
 tell_facts_nil @
     tell_facts([]) <=> true.
@@ -1381,11 +1380,12 @@ check_fun_stmt_apply @
 % declaration order and the search stops at the first that fits; an
 % equation that fits none reports one `no_matching_overload`.
 %
-% That is a search, and it is written as one: `solve/1` per equation
-% over a `;` chain of attempts (`library(search)`), where an attempt
-% that does not fit ends in `fail/0` and the driver undoes everything
-% it did — its diagnostics, its bindings, its rigid pins — before
-% trying the next signature. An attempt's diagnostics describe the
+% That is a search, and it is written as one: one
+% `run_chr_session_ep/1` per equation (`library(meta)`'s `solve/1` on a
+% fresh session) over a `;` chain of attempts (`library(search)`),
+% where an attempt that does not fit ends in `fail/0` and the driver
+% undoes everything it did — its diagnostics, its bindings, its rigid
+% pins — before trying the next signature. An attempt's diagnostics describe the
 % failed fit rather than the program and never leave the search;
 % that includes its warnings, since under a candidate signature a
 % contradicting evidence fact counts as failure of that candidate and
@@ -1401,15 +1401,15 @@ check_fun_stmt_apply @
 % equation is the net that catches a drift between them and the
 % encoder (see `ast.chr`'s header). The net now escapes.
 %
-% A failed attempt's bindings to variables it shares with the caller
-% are rolled back with the branch. Nothing here relies on that — the
-% environment is ground AST and the declaration facts are copied on
-% arrival — but it is what makes the copy the only thing standing
-% between an attempt and the caller's facts, rather than one of two.
+% Nothing an attempt binds reaches the caller's facts: the environment
+% is ground AST, and the declaration facts the search sees are a copy
+% made for it (`class_eq_try1`). A failed attempt's bindings are rolled
+% back with its branch, and the committed one keeps only the values of
+% the copy's variables, which nothing else holds.
 
 % Whether one (equation x signature) attempt fitted. The verdict is
 % local to the attempt: `attempt_ok` lets the branch reach quiescence,
-% which is the solution `solve` commits to, and `attempt_failed` fails
+% which is the solution the search commits to, and `attempt_failed` fails
 % the branch.
 :- chr_type attempt_verdict ---> attempt_ok ; attempt_failed.
 
@@ -1435,15 +1435,19 @@ class_eqs_cons @
     class_eq_try(Env, Facts, N, Eq, Sigs),
     class_eqs(Env, Facts, N, Sigs, Eqs).
 
-% One equation. The search runs in its own session — `solve` forks one,
-% the way `run_chr_session` does — so the attempts cannot see the
-% program-wide error accumulator, and the winning attempt's diagnostics
-% die with the fork. What crosses back out is the boolean and whatever
-% the committed branch bound in the caller's variables.
+% One equation. The search runs in a fresh, empty session —
+% `run_chr_session_ep` is `solve` without the copy of the caller's store
+% — so the attempts cannot see the program-wide error accumulator, and
+% the winning attempt's diagnostics die with the session. What crosses
+% back out is the boolean and the committed solution's values of the
+% goal's variables. The facts go in as a copy, made in one call; see
+% `retell_decls` for why.
 class_eq_try1 @
     class_eq_try(Env, Facts, FName, ann(EAnn, ELoc, Eq), Sigs) <=>
-    Fits is solve(quote(class_eq_search(Env, Facts, FName,
-                                        ann(EAnn, ELoc, Eq), Sigs))),
+    Fresh is copy_term(quote(Facts)),
+    Fits is run_chr_session_ep(quote(class_eq_search(Env, Fresh, FName,
+                                                     ann(EAnn, ELoc, Eq),
+                                                     Sigs))),
     class_eq_result(FName, EAnn, ELoc, Fits).
 
 class_eq_result_fitted @
@@ -1490,9 +1494,10 @@ class_eq_search_sig @
 
 % One attempt, in its own branch. Both the environment and the
 % declaration facts travel by value: the environment is ground AST, and
-% the facts are copied on arrival (`retell_decls`), so the attempt
-% starts from a complete declaration environment without re-deriving
-% one and without sharing a variable with the session it came from.
+% the facts are a copy made for this search (`class_eq_try1`), so the
+% attempt starts from a complete declaration environment without
+% re-deriving one and without sharing a variable with the session it
+% came from.
 %
 % The accumulators and the rigid supplies are seeded here, inside the
 % branch, so they are part of the branch's store and vanish with it —

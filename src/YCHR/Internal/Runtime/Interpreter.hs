@@ -389,9 +389,10 @@ only sound because of three properties of that position:
     This covers the runtime's own bookkeeping, which is what the catch
     depends on. It does not cover a 'HostCall' in the guard: a host
     function gets the session and can bind shared logical-variable
-    cells, and @run_chr_session\/1@ does. But such a binding survives a
-    guard that merely evaluates to 'False' just the same, so the catch
-    adds no exposure that guard failure did not already have.
+    cells, and the search entry points do, to their goal's variables.
+    But such a binding survives a guard that merely evaluates to
+    'False' just the same, so the catch adds no exposure that guard
+    failure did not already have.
 
   * The call stack is restored. 'withSavedCallStack' only restores on
     the normal exit path, so 'catchInstantiation' snapshots and

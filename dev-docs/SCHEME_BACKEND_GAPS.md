@@ -29,6 +29,7 @@ even for a program that only calls `print/1`.
 | `write_store_to_list`   | Stub `%write-store-to-list`; `write_store_to_list_test` is in `HASKELL_ONLY` (parallels the unimplemented `print_store`). |
 | `print_store`           | Stub `%print-store`. |
 | `run_chr_session`       | Stub `%run-chr-session`; it spawns a nested interpreter session (the search driver, `YCHR.Internal.Runtime.Search`, on the Haskell side). `run_chr_session_test` is in `HASKELL_ONLY`. |
+| `run_chr_session_ep`    | Stub `%run-chr-session-ep`; the same driver as `run_chr_session`, without the error catch. |
 
 The load-time invariant is pinned, without Guile, by
 `test/scheme/test_golden.py::test_meta_module_host_calls_are_bound`; the
@@ -58,8 +59,8 @@ trail hooked into every variable-cell and suspension-flag write
 (`src/YCHR/Internal/Runtime/{Search,Trail}.hs`). Every `search_*`
 directory with runnable goals is in `HASKELL_ONLY`: `search_alt`,
 `search_basic`, `search_between`, `search_deep`, `search_disj`,
-`search_fold`, `search_generate`, `search_label`, `search_label_alt`
-and `search_nested`; so is `state_run`, since `library(state)`'s
+`search_fold`, `search_fork`, `search_generate`, `search_label`,
+`search_label_alt` and `search_nested`; so is `state_run`, since `library(state)`'s
 `run_state/3` and `run_states/2` run their goal with `solve/1`. The two
 compilation-negative directories, `search_disj_no_import` and
 `search_disj_type_error`, need no entry: the Scheme harness discovers

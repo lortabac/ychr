@@ -639,6 +639,9 @@
   (test-equal "run_chr_session bound and raises"
               "not implemented"
               (error-message (lambda () (%run-chr-session 1))))
+  (test-equal "run_chr_session_ep bound and raises"
+              "not implemented"
+              (error-message (lambda () (%run-chr-session-ep 1))))
   (test-equal "solve bound and raises"
               "not implemented"
               (error-message (lambda () (%solve 1))))

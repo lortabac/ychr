@@ -59,6 +59,7 @@ HASKELL_ONLY = {
     "search_label",
     "search_label_alt",
     "search_nested",
+    "search_fork",
     # library(state)'s run_state/3 and run_states/2 run their goal with
     # search:solve/1, so they are Haskell-only for the same reason.
     "state_run",
@@ -398,6 +399,7 @@ def test_meta_module_host_calls_are_bound(ychr_bin, project_root, tmp_path):
         "%write-store-to-list",
         "%print-store",
         "%run-chr-session",
+        "%run-chr-session-ep",
         "%read-term-from-string",
     ):
         assert stub in generated, f"{stub} missing from the generated library"
@@ -410,6 +412,7 @@ def test_meta_module_host_calls_are_bound(ychr_bin, project_root, tmp_path):
         "write_term_to_string",
         "write_store_to_list",
         "run_chr_session",
+        "run_chr_session_ep",
         "read_term_from_string",
     ):
         for call in (f"({bare})", f"({bare} "):
