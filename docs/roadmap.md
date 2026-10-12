@@ -133,7 +133,8 @@ page with a program editor and a REPL. See the
       runtime only; no VM changes. See the
       [search specification](reference/search.md).
 - [ ] Aggregates, as described in Sneyers, Van Weert, Schrijvers,
-      Demoen, 2007. *Aggregates in CHR*.
+      Demoen, 2007. *Aggregates in CHR*. See the draft
+      [aggregates specification](reference/aggregates.md).
 - [ ] Rule priorities
 
 ## Tooling

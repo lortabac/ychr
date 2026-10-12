@@ -96,7 +96,9 @@ r <=> twice(f(1)).   % calls f(1) twice: r <=> p(f(1)), p(f(1)).
 expansion that contains anything other than a conjunction of
 constraints (for example a `;` or a `\`) is rejected, as are body
 goals that are not allowed in a body. The diagnostic names the macro
-(see [Diagnostics](#diagnostics)).
+(see [Diagnostics](#diagnostics)). Aggregates, once implemented, are
+valid head conjuncts, and `?` guards are valid inside an aggregate
+goal ([aggregates.md](aggregates.md)).
 
 **Cycles.** If expanding a use of `M` requires, directly or
 transitively, expanding another use of `M`, the expansion has no
@@ -139,7 +141,7 @@ follow:
 
 ```prolog
 :- module(aggregates, [macro(count/2), count_spec/0]).
-:- macro count(G, N) ---> aggregate(aggregates:count_spec, G, N).
+:- macro count(G, N) ---> aggregate(aggregates:count_spec, 1, G, N).
 ```
 
 A user who imports `library(aggregates)` in full can use `count/2`.
@@ -234,7 +236,8 @@ multi-goal query API instead.
 - **Definition-site name resolution** (hygiene). It can be added
   compatibly, because a qualified name means the same under both
   schemes.
-- **Aggregates.** The aggregate core form is specified separately.
-  Its goal argument will be a goal position for this specification,
-  so nested aggregates such as
+- **Aggregates.** The aggregate core form is specified separately,
+  in [aggregates.md](aggregates.md) (draft, not implemented).
+  That specification makes its goal argument a goal position, so
+  nested aggregates such as
   `argmax(S, (client(C), sum(B, account(_, C, _, B), S)))` expand.
