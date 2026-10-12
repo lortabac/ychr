@@ -177,16 +177,24 @@ silently drop the one match that raised it.
 
 ### Fire once
 
-A propagation rule fires at most once per combination of regular head
-constraints, as without aggregates. Its propagation history records
-the regular heads only. If an aggregate's value changes after the rule
-fired, the rule does not fire again for the same heads. In the banking
-example, a client is made platinum once; a later withdrawal does not
-derive `platinum` again, and nothing retracts it.
+A rule with aggregates fires at most once per combination of regular
+head constraints, whatever its kind. Every such rule has a propagation
+history, and it records the regular heads only, as in the paper's
+ωt (Apply′). If an aggregate's value changes after the rule fired,
+the rule does not fire again for the same heads:
 
-This is the paper's choice. It differs from the fire-many semantics of
-negation as absence in CHR¬, where a rule fires again each time the
-negated head becomes absent.
+- In the banking example, a client is made platinum once; a later
+  withdrawal does not derive `platinum` again, and nothing retracts
+  it.
+- `c(X) \ count(d(X), N) <=> N > 3 | alarm(X)` removes nothing, since
+  an aggregate keeps its goal's constraints. It raises the alarm once
+  per `c(X)`, not on every later `d`.
+- A rule that removes a regular head can match that combination only
+  once anyway, so for it the history changes nothing.
+
+This differs from the fire-many semantics of negation as absence in
+CHR¬, where a rule fires again each time the negated head becomes
+absent.
 
 A rule must have at least one regular head conjunct.
 
@@ -302,26 +310,32 @@ step @ task(T), \+ depends(T, _) \ depends(U, T) <=> released(U, T).
 Firing for `a` removes `depends(b, a)`, which makes the rule
 applicable for `task(b)`. Only the removal step retries `task(b)`.
 
-The consequence is nesting. A drain loop with a kept head,
+The consequence is nesting. The firing for `b` happens inside the
+removal step of the firing for `a`, before that firing's body, so
+`released(c, b)` is told before `released(b, a)`, at a recursion depth
+equal to the length of the chain.
+
+**Loops over a selection form.** Because of [fire once](#fire-once),
+a rule with kept regular heads takes one selection per combination:
 
 ```prolog
 machine(M) \ takemin(D, job(M, D, J)) <=> run(M, J).
 ```
 
-takes the next job from each firing's removal step. The bodies run
-only as this unwinds, so `run/2` is told longest job first, at a
-recursion depth equal to the number of jobs. To drain in order, remove
-a driver constraint in the same rule and tell it again at the end of
-the body:
+runs one job per `machine(M)`, not all of them. To drain the jobs,
+remove a driver constraint in the same rule and tell it again at the
+end of the body:
 
 ```prolog
 next(M), machine(M) \ takemin(D, job(M, D, J)) <=> run(M, J), next(M).
 ```
 
-With `next(M)` removed, the removal step finds no regular head to
-match and does nothing. The body's `next(M)` starts the next iteration
-after `run/2` is told. The paper's Sudoku solver uses the same idiom
-with its `solve` constraint.
+Each `next(M)` is a new constraint, so each iteration is a new
+combination of regular heads. With `next(M)` removed, the removal step
+finds no regular head to match and does nothing, and the body's
+`next(M)` starts the next iteration after `run/2` is told, so jobs run
+shortest first. The paper's Sudoku solver uses the same idiom with its
+`solve` constraint.
 
 Without the removal step, `\+`, `forall` and `min` would never
 notice a constraint going away:
@@ -442,6 +456,10 @@ lowers an aggregate in the occurrence procedure itself:
   can run a body, including one from a goal occurrence, stores a kept
   active constraint before the body, and a removal step counts as a
   non-empty body.
+- A rule with aggregates gets `BNotInHistory`/`AddHistory` over its
+  regular heads whatever its kind, where today only propagation rules
+  do. History elimination may still drop it for a rule that always
+  removes a regular head.
 - Analyses that assume a rule observes only its own heads have to take
   goal occurrences into account: passive-occurrence detection, inert
   types (a type with goal occurrences is not inert) and
