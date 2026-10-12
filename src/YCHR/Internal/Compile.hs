@@ -86,7 +86,8 @@ import YCHR.Internal.Parsed qualified as P
 import YCHR.Internal.Pretty (prettyPExprSrc)
 import YCHR.Internal.Resolved qualified as R
 import YCHR.Internal.Types
-  ( HeadArg (..),
+  ( ConstraintKey (..),
+    HeadArg (..),
     Identifier (..),
     SymbolTable,
     Term (..),
@@ -143,6 +144,7 @@ compile prog symTab =
                 procedures = procs ++ funProcs ++ [dispatch],
                 evaluables = buildEvaluables prog.functions,
                 callables = buildCallables prog.functions,
+                tellables = buildTellables prog,
                 inertTypes = sortOn ctIndex (mapMaybe (.inertType) constraintProcs)
               }
         else Left allErrs
@@ -218,6 +220,42 @@ buildCallables functions =
                 identity = Name (flattenName funcName),
                 arity = func.arity
               }
+
+-- | Build the dispatch table consumed by 'TellTerm', the dynamic
+-- @tell\/N@. A module contributes entries only if one of its rule
+-- bodies contains a dynamic tell, so a program that never uses one
+-- pays nothing for the table at session start or library load.
+--
+-- Within such a module, every constraint it can name contributes its
+-- qualified spelling, and the bare spelling as well when nothing else
+-- visible — constraint or function — shares the name and arity: the
+-- choice the renamer makes for a goal written in that module's source,
+-- so a term told dynamically resolves as it would have statically. An
+-- ambiguous bare name has no entry and is reported as not visible.
+--
+-- A bare name has two runtime spellings when it is not ASCII: a
+-- compound's functor is 'vmName'-encoded, while an atom keeps the raw
+-- name ('compileTerm'). Both are registered, so @tell(G)@ finds the
+-- constraint whichever shape @G@ has.
+buildTellables :: D.Program -> [(TellableKey, Name)]
+buildTellables prog =
+  [ ( TellableKey {scope = sc, functor = functor, arity = arity},
+      tellProcName (Types.qualifiedToName qn) arity
+    )
+  | sc <- Set.toList scopes,
+    ((n, arity), providers) <-
+      Map.toList (Map.findWithDefault Map.empty sc prog.nameVisibility),
+    qn <- providers,
+    Map.member (ConstraintKey qn arity) prog.constraintTypes,
+    functor <-
+      vmName (Types.qualifiedToName qn)
+        : concat [nub [vmName (Types.Unqualified n), Name n] | [_] <- [providers]]
+  ]
+  where
+    scopes = Set.fromList [sc | r <- prog.rules, sc <- concatMap goalScopes r.body.node]
+    goalScopes (D.BodyTellDynamic sc _ _) = [sc]
+    goalScopes (D.BodyOr branches) = concatMap (concatMap goalScopes) branches
+    goalScopes _ = []
 
 -- | Build the list of constraint type source names, indexed by
 -- 'Types.ConstraintType'. The list is ordered by the constraint type's
@@ -1299,6 +1337,27 @@ compileBodyGoal _ varMap si (D.BodyApply f args) = do
   f' <- compileExpr varMap si f
   args' <- traverse (compileExpr varMap si) args
   pure ([ExprStmt (ApplyClosure f' args')], varMap)
+compileBodyGoal _ varMap si (D.BodyTellDynamic sc g extras) = do
+  -- The appended arguments are tell arguments, so they introduce
+  -- variables the way 'D.BodyTell''s do: a top-level bare 'VarExpr'
+  -- (an output argument, @tell(G, R)@) and any variable inside a
+  -- @quote/1@. The goal itself is not an argument: a fresh variable
+  -- there could only ever be an unbound goal, so it is left to the
+  -- usual unbound-variable error; only variables quoted inside it are
+  -- introduced (@tell(quote(inc(N, R)))@).
+  let freshVars =
+        nub
+          [ v
+          | v <-
+              [v' | R.VarExpr v' <- extras]
+                ++ concatMap quotedTermVars (g : extras),
+            notMemberVar v varMap
+          ]
+      newStmts = [LetVal (Name v) NewVar | v <- freshVars]
+      varMap' = List.foldl' (\m v -> insertVar v (Var (Name v)) m) varMap freshVars
+  g' <- compileExpr varMap' si g
+  extras' <- traverse (compileExpr varMap' si) extras
+  pure (newStmts ++ [TellTerm sc g' extras'], varMap')
 
 -- ---------------------------------------------------------------------------
 -- Compile function definitions

@@ -80,6 +80,7 @@ programWith procs =
       procedures = procs,
       evaluables = [],
       callables = [],
+      tellables = [],
       inertTypes = []
     }
 

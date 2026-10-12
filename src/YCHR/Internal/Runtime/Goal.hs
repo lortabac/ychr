@@ -20,6 +20,7 @@ module YCHR.Internal.Runtime.Goal
   ( -- * Decoding goals
     goalConstraints,
     altGoalConstraints,
+    tellGoalConstraint,
 
     -- * Choice points
     altName,
@@ -37,9 +38,9 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import YCHR.Internal.Compile (tellProcName)
 import YCHR.Internal.Meta (decodeName)
-import YCHR.Internal.Runtime.Error (runtimeErrorS)
+import YCHR.Internal.Runtime.Error (runtimeErrorS, tellNotAGoalError, tellUnboundError)
 import YCHR.Internal.Runtime.Monad (Chr, SessionEnv (..))
-import YCHR.Internal.Runtime.Registry (valueList)
+import YCHR.Internal.Runtime.Registry (isListFunctor, valueList)
 import YCHR.Internal.Runtime.Session (resolveByExport)
 import YCHR.Internal.Runtime.Types (Value (..))
 import YCHR.Internal.Runtime.Var (deref)
@@ -83,6 +84,23 @@ goalConstraints = goalTells ExportedOnly
 -- reaches constraints no module exports. See 'AnyDeclared'.
 altGoalConstraints :: String -> Value -> Chr [(Types.Name, [Value])]
 altGoalConstraints = goalTells AnyDeclared
+
+-- | The constraint a query goal's dynamic @tell(G, A1, …, Ak)@ tells:
+-- @G@'s functor, resolved against the program's exports — what a query
+-- can name — at the arity @G@'s own arguments plus the appended ones
+-- give it. A rule body's dynamic tell resolves through the compiled
+-- tellables table instead ('YCHR.Internal.Runtime.Interpreter.tellTerm'),
+-- because it is scoped to the module the rule was written in; the
+-- failure kinds are the same.
+tellGoalConstraint :: Value -> [Value] -> Chr (Types.Name, [Value])
+tellGoalConstraint v extras = do
+  v' <- deref v
+  case v' of
+    VAtom f | not (isListFunctor f) -> resolveGoal ExportedOnly "tell" f extras
+    VTerm f args
+      | not (isListFunctor f) -> resolveGoal ExportedOnly "tell" f (args ++ extras)
+    VVar _ -> tellUnboundError
+    _ -> tellNotAGoalError
 
 goalTells :: GoalScope -> String -> Value -> Chr [(Types.Name, [Value])]
 goalTells scope who v = do
@@ -174,14 +192,6 @@ requireTellProc who name arity = do
           ++ "/"
           ++ show arity
       )
-
--- | Is this mangled functor the list constructor or the empty list?
--- A goal must never be one: a cons cell here means an improper list
--- slipped past 'listElems', which should fail as a malformed goal,
--- not resolve as a constraint named @.@.
-isListFunctor :: T.Text -> Bool
-isListFunctor f =
-  f == "prelude__." || f == "." || f == "prelude__[]" || f == "[]"
 
 -- | Walk a (possibly nested-under-variables) runtime list. 'Nothing'
 -- when the value is not a list at all. A deref-aware variant of

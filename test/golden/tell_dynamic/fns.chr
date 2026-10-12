@@ -1,0 +1,7 @@
+% Exports a function with the name and arity of the constraint
+% `tell_provider:twin/2`, so in `tell_client` the bare name `twin/2` is
+% ambiguous, dynamically as it is statically.
+:- module(tell_fns, [fun twin/2]).
+
+:- function twin/2.
+twin(X, Y) -> X + Y.

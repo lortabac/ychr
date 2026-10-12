@@ -467,6 +467,8 @@ rewriteBodyGoal cands g = case g of
     SubstCall qn' args' -> D.BodyCall qn' args'
     SubstApply f args' -> D.BodyApply f args'
   D.BodyApply f args -> D.BodyApply (rewriteExpr cands f) (map (rewriteExpr cands) args)
+  D.BodyTellDynamic m goal extras ->
+    D.BodyTellDynamic m (rewriteExpr cands goal) (map (rewriteExpr cands) extras)
   D.BodyOr branches -> D.BodyOr (NE.map (map (rewriteBodyGoal cands)) branches)
 
 rewriteFunStmt :: Candidates -> D.FunStmt -> D.FunStmt

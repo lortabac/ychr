@@ -80,6 +80,7 @@ import YCHR.Internal.VM.Types
     Program (..),
     StackFrame (..),
     Stmt (..),
+    TellableKey (..),
     ValExpr (..),
     historyIdsList,
   )
@@ -315,6 +316,8 @@ deriving instance Generic EvaluableKey
 
 deriving instance Generic CallableKey
 
+deriving instance Generic TellableKey
+
 deriving instance Generic Procedure
 
 deriving instance Generic Program
@@ -356,6 +359,9 @@ instance ToCode EvaluableKey where
   toCode = genericToCode
 
 instance ToCode CallableKey where
+  toCode = genericToCode
+
+instance ToCode TellableKey where
   toCode = genericToCode
 
 instance ToCode Procedure where

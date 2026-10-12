@@ -464,6 +464,8 @@ collect_vars_body_goal(body_is(V, E)) -> [V|collect_vars_expr(E)].
 collect_vars_body_goal(body_call(_, Args)) -> collect_vars_exprs(Args).
 collect_vars_body_goal(body_apply(F, Args)) ->
     append(collect_vars_expr(F), collect_vars_exprs(Args)).
+collect_vars_body_goal(body_tell_dyn(G, Args)) ->
+    append(collect_vars_expr(G), collect_vars_exprs(Args)).
 % Every branch contributes to the same scope: a disjunct's variables
 % are the enclosing rule's variables.
 collect_vars_body_goal(body_or(Branches)) ->

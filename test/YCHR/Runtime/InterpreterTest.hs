@@ -69,6 +69,7 @@ runChrEmpty action = do
       Map.empty
       Map.empty
       Map.empty
+      Map.empty
       Set.empty
   runChr action env
 
@@ -87,6 +88,7 @@ runChrBase action = do
       Map.empty
       Map.empty
       Map.empty
+      Map.empty
       Set.empty
   runChr action env
 
@@ -101,6 +103,7 @@ runChrLeq action = do
       IntMap.empty
       builtinOps
       leqSlotProgram
+      Map.empty
       Map.empty
       Map.empty
       Map.empty
@@ -141,6 +144,7 @@ singleProc procName params body =
       procedures = [mkProc procName params body],
       evaluables = [],
       callables = [],
+      tellables = [],
       inertTypes = []
     }
 
@@ -532,6 +536,7 @@ softGuardTests =
                     ],
                   evaluables = [],
                   callables = [],
+                  tellables = [],
                   inertTypes = []
                 }
         outcome <-
@@ -591,6 +596,7 @@ leqProgram =
       ruleNames = ["transitivity"],
       evaluables = [],
       callables = [],
+      tellables = [],
       inertTypes = [],
       procedures =
         [ tellLeq,
@@ -994,6 +1000,7 @@ makeCalcProc body =
       ruleNames = [],
       evaluables = [],
       callables = [],
+      tellables = [],
       inertTypes = [],
       procedures =
         [ mkProc
@@ -1255,6 +1262,7 @@ closureProg callables =
         ],
       evaluables = [],
       callables = callables,
+      tellables = [],
       inertTypes = []
     }
 

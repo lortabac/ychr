@@ -1399,7 +1399,7 @@ convertOpaqueTypeDefinition (Ann pexpr loc) = case pexpr of
 reservedMacroHeadNames :: Set.Set Text
 reservedMacroHeadNames =
   Set.fromList
-    [",", ";", "\\", "|", "->", "=", "is", "true", "quote", "fun", "$call", ":"]
+    [",", ";", "\\", "|", "->", "=", "is", "true", "quote", "fun", "$call", "tell", ":"]
 
 -- | Convert a @:- macro Name(V1, ..., Vn) ---> Body@ directive's body
 -- (the @Compound \"--->\" [head, body]@ term the @macro@ prefix

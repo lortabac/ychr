@@ -1,0 +1,4 @@
+% tell/N is a goal; a function body has none.
+:- chr_constraint c/1.
+:- function f/1.
+f(X) -> tell(c(X)).

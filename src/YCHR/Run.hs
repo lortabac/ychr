@@ -129,6 +129,7 @@ import YCHR.Internal.Runtime.Error
     isControlException,
     runtimeErrorS,
   )
+import YCHR.Internal.Runtime.Goal (tellGoalConstraint)
 import YCHR.Internal.Runtime.Interpreter
   ( HostCallFn (..),
     HostCallRegistry,
@@ -470,6 +471,7 @@ resolveQueryGoals cp src = do
               constraintTypes = cdp.constraintTypes,
               constraintBounds = cdp.constraintBounds,
               constraintUses = cdp.constraintUses,
+              nameVisibility = cdp.nameVisibility,
               typeDefinitions = cdp.typeDefinitions
             },
         renameWarnings = renameWs
@@ -670,6 +672,15 @@ executeBodyGoal (D.BodyApply f args) = do
   argVals <- traverse evalNestedExpr args
   _ <- liftChr (applyClosure fVal argVals)
   pure ()
+-- A query's scope is every module's exports, which is what
+-- 'tellGoalConstraint' resolves against, so the scope the desugarer
+-- recorded is not consulted.
+executeBodyGoal (D.BodyTellDynamic _ g extras) = do
+  gVal <- evalNestedExpr g
+  extraVals <- traverse evalNestedExpr extras
+  liftChr $ do
+    (name, args) <- tellGoalConstraint gVal extraVals
+    tellConstraint name args
 
 -- | Runtime error for a failed unification.
 raiseUnifyFailure :: Value -> Value -> Chr ()

@@ -1,0 +1,3 @@
+% A reserved name never names a constraint, in a head as anywhere else.
+:- chr_constraint a/1.
+a(X), tell(X) <=> true.

@@ -61,6 +61,7 @@ runChrWith table action = do
       Map.empty
       Map.empty
       Map.empty
+      Map.empty
       Set.empty
   runChr action env
 
@@ -97,6 +98,7 @@ runChrWithCallables cl action = do
       baseHostCallRegistry
       Map.empty
       cl
+      Map.empty
       Map.empty
       Set.empty
   runChr action env

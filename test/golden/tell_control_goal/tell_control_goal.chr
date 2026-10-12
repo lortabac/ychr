@@ -1,0 +1,3 @@
+% A literal control form is a goal of its own, not a constraint.
+:- chr_constraint go/1, a/1.
+go(X) <=> tell((a(X), a(X))).

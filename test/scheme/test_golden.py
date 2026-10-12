@@ -60,6 +60,8 @@ HASKELL_ONLY = {
     # library(state)'s run_state/3 and run_states/2 run their goal with
     # search:solve/1, so they are Haskell-only for the same reason.
     "state_run",
+    # A dynamic tell inside a `;` branch, collected with findall/2.
+    "tell_dynamic_disj",
 }
 
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only

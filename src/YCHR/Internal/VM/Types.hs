@@ -49,6 +49,7 @@ module YCHR.Internal.VM.Types
     ProcKind (..),
     EvaluableKey (..),
     CallableKey (..),
+    TellableKey (..),
     funRefFunctor,
     lambdaClosureFunctor,
 
@@ -146,6 +147,13 @@ data Program = Program
     -- lambda. Consulted by 'ApplyClosure'; the runtime never scans a
     -- chain of branches to resolve a callable.
     callables :: ![(CallableKey, Name)],
+    -- | Dispatch table for the dynamic @tell\/N@ construct 'TellTerm'.
+    -- Maps a 'TellableKey' — the calling module, a goal term's functor
+    -- and the arity it is told at — to the mangled name of that
+    -- constraint's @tell_c@ procedure. Holds entries only for the
+    -- modules that contain a 'TellTerm', so a program that never
+    -- tells dynamically carries an empty table.
+    tellables :: ![(TellableKey, Name)],
     -- | The constraint types that are /inert/: types whose
     -- activation runs no occurrence procedure, because the type has
     -- no occurrences at all or only passive ones. Reactivating such
@@ -199,6 +207,23 @@ data CallableKey = CallableKey
     -- | The closure's identity field (argument 0).
     identity :: !Name,
     -- | The arity the callable was declared at, as described above.
+    arity :: !Int
+  }
+  deriving (Show, Eq, Ord)
+
+-- | Dispatch key for the dynamic @tell\/N@ construct 'TellTerm'.
+--
+-- The scope is the module whose rule body contains the tell: it decides
+-- which constraints the term may name, by the same visibility rules as
+-- a constraint written in that module's source. The functor is the
+-- VM-encoded text found on a @VTerm@ or @VAtom@ — the bare name for an
+-- unqualified reference (present only when exactly one visible
+-- constraint has that name and arity), the mangled @module__name@ for a
+-- qualified one — and the arity is the goal term's own argument count
+-- plus the arguments 'TellTerm' appends.
+data TellableKey = TellableKey
+  { scope :: !Text,
+    functor :: !Name,
     arity :: !Int
   }
   deriving (Show, Eq, Ord)
@@ -337,6 +362,22 @@ data Stmt
     -- The body typically dispatches to the appropriate @activate_c@
     -- procedure based on constraint type.
     DrainReactivationQueue Name [Stmt]
+  | -- Dynamic tells
+
+    -- | Tell a constraint chosen at run time: the whole of a dynamic
+    -- @tell(G, A1, …, Ak)@.
+    --
+    -- @TellTerm scope goal extraArgs@
+    --
+    -- The goal is dereferenced; an atom names a constraint with no
+    -- arguments of its own, a compound one whose arguments are the
+    -- compound's. The extra arguments are appended, and the
+    -- 'TellableKey' of @scope@, the functor and the total arity is
+    -- resolved through the program's 'tellables' table to the
+    -- constraint's tell procedure, which is called with the arguments.
+    -- An unbound goal is an instantiation error; any other goal, or one
+    -- whose key is not in the table, is a general runtime error.
+    TellTerm Text ValExpr [ValExpr]
   | -- Call stack frames
 
     -- | Push a frame onto the runtime call stack.

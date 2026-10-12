@@ -268,6 +268,7 @@ programInfoSExpr infoName vmp ops =
       registrations =
         map evaluableRegistration vmp.program.evaluables
           ++ map callableRegistration vmp.program.callables
+          ++ map tellableRegistration vmp.program.tellables
       -- 'inertTypes' is deliberately not emitted. It only lets a
       -- runtime skip observer registration that could never lead to a
       -- useful reactivation, so honoring it changes no result, and
@@ -385,6 +386,21 @@ callableRegistration (key, procName) =
       SAtom "%s",
       compileSymbol key.functor.unName,
       compileSymbol key.identity.unName,
+      SInt (fromIntegral key.arity),
+      SAtom procName.unName
+    ]
+
+-- | Emit @(register-tellable! %s "scope" 'functor arity procedure)@ for
+-- a single entry of the program's tellables table. The functor is the
+-- symbol a goal term carries at run time, as for 'callableRegistration';
+-- the scope is a module name, compared as a string.
+tellableRegistration :: (TellableKey, Name) -> SExpr
+tellableRegistration (key, procName) =
+  SList
+    [ SAtom "register-tellable!",
+      SAtom "%s",
+      SString key.scope,
+      compileSymbol key.functor.unName,
       SInt (fromIntegral key.arity),
       SAtom procName.unName
     ]
@@ -645,6 +661,17 @@ compileStmt (AddHistory (RuleId rid) ids) =
     ]
 compileStmt (PushFrame _) =
   SList [SAtom "values"]
+compileStmt (TellTerm sc g extras) =
+  -- Resolve the goal through the session's tellables table and call the
+  -- tell procedure it maps to. Mirrors 'tellTerm' in the Haskell
+  -- interpreter, including which failure raises which kind of error.
+  SList
+    ( SAtom "%tell-term"
+        : SAtom "%s"
+        : SString sc
+        : compileValExpr g
+        : map compileValExpr extras
+    )
 compileStmt (DrainReactivationQueue (Name sv) body) =
   SList
     [ SAtom "drain-queue!",

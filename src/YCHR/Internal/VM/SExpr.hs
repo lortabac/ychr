@@ -157,6 +157,7 @@ programToSExpr prog =
         : SList (SAtom "rule-names" : map SString prog.ruleNames)
         : SList (SAtom "evaluables" : map evaluableEntryToSExpr prog.evaluables)
         : SList (SAtom "callables" : map callableEntryToSExpr prog.callables)
+        : SList (SAtom "tellables" : map tellableEntryToSExpr prog.tellables)
         : SList (SAtom "inert-types" : map constraintTypeToSExpr prog.inertTypes)
         : map procedureToSExpr prog.procedures
     )
@@ -170,6 +171,15 @@ callableEntryToSExpr (key, procName) =
   SList
     [ nameToSExpr key.functor,
       nameToSExpr key.identity,
+      SInt (fromIntegral key.arity),
+      nameToSExpr procName
+    ]
+
+tellableEntryToSExpr :: (TellableKey, Name) -> SExpr
+tellableEntryToSExpr (key, procName) =
+  SList
+    [ SString key.scope,
+      nameToSExpr key.functor,
       SInt (fromIntegral key.arity),
       nameToSExpr procName
     ]
@@ -236,6 +246,8 @@ stmtToSExpr (AddHistory rid es) =
   SList (SAtom "add-history" : ruleIdToSExpr rid : map idExprToSExpr (historyIdsList es))
 stmtToSExpr (DrainReactivationQueue sv body) =
   SList (SAtom "drain-reactivation-queue" : nameToSExpr sv : map stmtToSExpr body)
+stmtToSExpr (TellTerm sc g es) =
+  SList (SAtom "tell-term" : SString sc : valExprToSExpr g : map valExprToSExpr es)
 stmtToSExpr (PushFrame frame) =
   SList
     [ SAtom "push-frame",
@@ -522,10 +534,11 @@ programFromSExpr
     checkDeclaredCount "type" n (length tns)
     checkDeclaredCount "rule" nr (length rns)
     evs <- traverse evaluableEntryFromSExpr evSexprs
-    -- Both @callables@ and @inert-types@ are optional on read, so a
-    -- program that simply lacks either header entry still loads: an
-    -- absent @callables@ is an empty dispatch table, and an absent
-    -- @inert-types@ is a hint no result depends on.
+    -- @callables@, @tellables@ and @inert-types@ are all optional on
+    -- read, so a program that simply lacks one of these header entries
+    -- still loads: an absent @callables@ or @tellables@ is an empty
+    -- dispatch table, and an absent @inert-types@ is a hint no result
+    -- depends on.
     --
     -- This is not a general back-compatibility promise for older text.
     -- A stale dump is fenced off before the reader gets here: the
@@ -537,7 +550,11 @@ programFromSExpr
           SList (SAtom "callables" : cls) : rs -> (cls, rs)
           rs -> ([], rs)
     cls <- traverse callableEntryFromSExpr clSexprs
-    let (itSexprs, procs) = case rest' of
+    let (tlSexprs, rest'') = case rest' of
+          SList (SAtom "tellables" : tls) : rs -> (tls, rs)
+          rs -> ([], rs)
+    tls <- traverse tellableEntryFromSExpr tlSexprs
+    let (itSexprs, procs) = case rest'' of
           SList (SAtom "inert-types" : its) : ps -> (its, ps)
           ps -> ([], ps)
     its <- traverse constraintTypeFromSExpr itSexprs
@@ -548,6 +565,7 @@ programFromSExpr
           ruleNames = rns,
           evaluables = evs,
           callables = cls,
+          tellables = tls,
           inertTypes = its,
           procedures = ps
         }
@@ -574,6 +592,16 @@ callableEntryFromSExpr (SList [fSexpr, iSexpr, SInt arity, pSexpr]) = do
       procName
     )
 callableEntryFromSExpr s = err ("expected callable entry, got: " <> printSExpr s)
+
+tellableEntryFromSExpr :: SExpr -> Err (TellableKey, Name)
+tellableEntryFromSExpr (SList [SString sc, fSexpr, SInt arity, pSexpr]) = do
+  functor <- nameFromSExpr fSexpr
+  procName <- nameFromSExpr pSexpr
+  pure
+    ( TellableKey {scope = sc, functor = functor, arity = fromInteger arity},
+      procName
+    )
+tellableEntryFromSExpr s = err ("expected tellable entry, got: " <> printSExpr s)
 
 textFromSExpr :: SExpr -> Err Text
 textFromSExpr (SString t) = pure t
@@ -642,6 +670,8 @@ stmtFromSExpr (SList (SAtom "add-history" : rid : es)) =
     <*> fmap historyIdsFromSerialized (traverse idExprFromSExpr es)
 stmtFromSExpr (SList (SAtom "drain-reactivation-queue" : sv : body)) =
   DrainReactivationQueue <$> nameFromSExpr sv <*> traverse stmtFromSExpr body
+stmtFromSExpr (SList (SAtom "tell-term" : SString sc : g : es)) =
+  TellTerm sc <$> valExprFromSExpr g <*> traverse valExprFromSExpr es
 stmtFromSExpr
   ( SList
       [ SAtom "push-frame",

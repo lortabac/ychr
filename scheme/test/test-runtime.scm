@@ -1229,4 +1229,60 @@
                   10
                   (%apply-closure s term 5)))))
 
+;;; --------------------------------------------------------------------------
+;;; `%tell-term` — the dynamic `tell/N` construct
+;;;
+;;; Mirrors `tellTerm` in the Haskell interpreter. The goal's functor, the
+;;; calling module and the total arity key the tellables table; an atom
+;;; goal has no arguments of its own, a compound goal's come before the
+;;; appended ones. Pinned here because the golden harness runs positive
+;;; cases only.
+;;; --------------------------------------------------------------------------
+
+;; A session where module `m` can tell `c/2` under its bare and its
+;; qualified spelling. The tell procedure answers its arguments, so a
+;; test can see what was passed.
+(define (tell-session)
+  (let ((s (fresh-session))
+        (proc (lambda (s a b) (list a b))))
+    (register-tellable! s "m" 'c 2 proc)
+    (register-tellable! s "m" (string->symbol "m__c") 2 proc)
+    s))
+
+(test-group "%tell-term"
+  (test-equal "a compound goal's arguments come first"
+              '(1 2)
+              (%tell-term (tell-session) "m" (make-term 'c (vector 1)) 2))
+  (test-equal "an atom goal takes only the appended arguments"
+              '(1 2)
+              (%tell-term (tell-session) "m" 'c 1 2))
+  (test-equal "a qualified functor resolves"
+              '(1 2)
+              (%tell-term (tell-session)
+                          "m"
+                          (make-term (string->symbol "m__c") (vector 1 2))))
+  (test-equal "another module cannot reach it"
+              "tell: no constraint c/2 is visible in module other"
+              (error-message
+               (lambda ()
+                 (%tell-term (tell-session) "other" (make-term 'c (vector 1 2))))))
+  (test-equal "a miss names the qualified spelling"
+              "tell: no constraint m:d/0 is visible in module m"
+              (error-message
+               (lambda () (%tell-term (tell-session) "m" (string->symbol "m__d")))))
+  (test-equal "an unbound goal is an instantiation failure"
+              'inst
+              (failure-kind (lambda () (%tell-term (tell-session) "m" (fresh-var)))))
+  (test-equal "a number is a general failure"
+              'general
+              (failure-kind (lambda () (%tell-term (tell-session) "m" 42))))
+  (test-equal "a list is not a constraint term"
+              "tell: goal is not a constraint term"
+              (error-message
+               (lambda ()
+                 (%tell-term (tell-session)
+                             "m"
+                             (make-term (string->symbol "prelude__.")
+                                        (vector 'c (string->symbol "prelude__[]"))))))))
+
 (test-end "runtime")

@@ -6,6 +6,7 @@ module YCHR.Internal.VM
     ProcKind (..),
     EvaluableKey (..),
     CallableKey (..),
+    TellableKey (..),
     funRefFunctor,
     lambdaClosureFunctor,
 

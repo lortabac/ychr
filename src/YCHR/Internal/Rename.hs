@@ -89,6 +89,7 @@ import YCHR.Internal.Rename.Macro
     varsIn,
   )
 import YCHR.Internal.Rename.Types
+import YCHR.Internal.Resolved (maxTellArity)
 import YCHR.Internal.Types
 
 -- | Errors raised while resolving and qualifying surface names. Most
@@ -233,6 +234,22 @@ data RenameError
     -- @:- chr_constraint@ or @:- function@ declared in the same
     -- module. Carries the macro's qualified name and arity.
     MacroNameCollision QualifiedName Int
+  | -- | The built-in @tell\/N@ appears outside a goal position: a guard,
+    -- an @is@ right-hand side, a lambda body or a function equation.
+    -- @tell@ tells a constraint, and only a rule body or a query has
+    -- goals. Inside @quote\/1@ and in head\/equation arguments it stays
+    -- ordinary data, as a macro name does. Carries the arity used.
+    TellOutsideGoalPosition Int
+  | -- | @tell@ used as a goal with no argument (a bare @tell@) or with
+    -- more than 'maxTellArity' of them. Carries the number of
+    -- arguments.
+    UnsupportedTellArity Int
+  | -- | A @tell\/N@ whose goal is written literally as a body control
+    -- form — a conjunction, a disjunction, @true@, @=@, @is@ or another
+    -- @tell@ — rather than a constraint. Each is a goal the body can
+    -- state directly, and none is a constraint @tell@ could reach.
+    -- Carries the form's name and arity.
+    TellControlGoal Text Int
   | -- | A macro body refers to @M:x\/a@, where @M@ is the macro's own
     -- declaring module, and @M@ does not declare and export
     -- @x\/a@ (as a constraint, function, macro, or data constructor).
@@ -1114,6 +1131,21 @@ renameCon ctx loc origin (Constraint cname cargs) =
       emitErrorIn ctx (AnnP err loc origin)
       pure []
     IsMacro providerMod -> expandHeadUse ctx loc origin providerMod cname cargs
+    -- A reserved name (@tell@, @quote@, @is@, …) never names a
+    -- constraint. 'resolveName' passes reserved names through
+    -- unqualified for the forms that use them, which in a head would
+    -- reach Resolve as an internal error; report the unknown constraint
+    -- here instead. A declaration of the name is Resolve's
+    -- 'YCHR.Internal.Resolve.ReservedName' to report, so that case is
+    -- left to it. The arguments are still renamed for their own
+    -- diagnostics.
+    NotAMacro
+      | Unqualified n <- cname,
+        isReserved n,
+        null (visibleProviders ctx n (length cargs)) -> do
+          traverse_ (renameTerm ctx loc origin NoResolve) cargs
+          emitErrorIn ctx (AnnP (UnknownName n (length cargs)) loc origin)
+          pure []
     NotAMacro -> do
       renamedName <- resolveName ResolveTop ctx loc origin cname (length cargs)
       renamedArgs <- traverse (renameTerm ctx loc origin NoResolve) cargs
@@ -1236,6 +1268,20 @@ renameBodySeq ctx loc origin t = case t of
 -- existing 'renameTerm' machinery unchanged.
 renameBodyGoal :: RenameCtx -> SourceLoc -> PExpr -> Term -> Rename [Term]
 renameBodyGoal ctx loc origin t = case t of
+  CompoundTerm (Unqualified "tell") args
+    | null args || length args > maxTellArity -> do
+        emitErrorIn ctx (AnnP (UnsupportedTellArity (length args)) loc origin)
+        pure []
+  CompoundTerm (Unqualified "tell") (CompoundTerm (Unqualified n) gargs : _)
+    | n `Set.member` tellControlForms -> do
+        emitErrorIn ctx (AnnP (TellControlGoal n (length gargs)) loc origin)
+        pure []
+  CompoundTerm (Unqualified "tell") (CompoundTerm name gargs : extras)
+    | isLiteralTellGoal ctx name ->
+        renameBodyGoal ctx loc origin (CompoundTerm name (gargs ++ extras))
+  CompoundTerm (Unqualified "tell") args ->
+    (: []) . CompoundTerm (Unqualified "tell")
+      <$> traverse (renameTerm ctx loc origin NoResolve) args
   CompoundTerm name args -> case classifyGoalName ctx name (length args) of
     AmbiguousGoalName ms -> do
       emitErrorIn ctx (AnnP (AmbiguousName (unqualifiedText name) (length args) ms) loc origin)
@@ -1243,6 +1289,31 @@ renameBodyGoal ctx loc origin t = case t of
     IsMacro providerMod -> expandBodyUse ctx loc origin providerMod name args
     NotAMacro -> (: []) <$> renameTerm ctx loc origin ResolveTop t
   _ -> (: []) <$> renameTerm ctx loc origin ResolveTop t
+
+-- | The body control forms a literal @tell\/N@ goal may not be: each is
+-- a goal in its own right, not a constraint (see 'TellControlGoal').
+tellControlForms :: Set.Set Text
+tellControlForms = Set.fromList [",", ";", "true", "=", "is", "tell"]
+
+-- | Whether the goal argument of a @tell\/N@ goal is written as a
+-- literal constraint term — a compound or atom whose head is neither a
+-- reserved form (@quote@, @fun@, @'$call'@, …) nor a host call nor a
+-- function. Such a @tell(foo(X), Y)@ is the plain goal @foo(X, Y)@, so
+-- 'renameBodyGoal' rewrites it to that and it is resolved, checked and
+-- compiled like one. Anything else is evaluated and told through the
+-- runtime's tellables table.
+--
+-- The function test is by base name, as 'checkConstructorFunctionAmbiguity'
+-- does it, so a head that names a function at /some/ arity stays
+-- dynamic. That is the conservative direction: the dynamic path
+-- reaches the same constraints, only later.
+isLiteralTellGoal :: RenameCtx -> Name -> Bool
+isLiteralTellGoal ctx name = case name of
+  Unqualified n ->
+    not (isReserved n) && not (Map.member n ctx.visibleFunNames)
+  Qualified "host" _ -> False
+  Qualified m n ->
+    m `notElem` Map.findWithDefault [] n ctx.visibleFunNames
 
 -- | Expand a macro use found in body\/query-goal position. Mirrors
 -- 'expandHeadUse': instantiate, flatten on @,@, detect a cycle, and
@@ -1309,6 +1380,14 @@ renameTerm ctx loc origin mode t = case t of
         pure (CompoundTerm (Unqualified ";") [l', r'])
     | mode == ResolveAll -> do
         emitErrorIn ctx (AnnP DisjunctionNotInRuleBody loc origin)
+        pure t
+  -- @tell\/N@ is a goal, and goal positions are handled upstream by
+  -- 'renameBodyGoal'; every other evaluating position is an error. The
+  -- coverage is 'MacroOutsideGoalPosition''s: quoted and pattern
+  -- arguments are data, and stay ordinary @tell@ compounds.
+  CompoundTerm (Unqualified "tell") args
+    | mode == ResolveAll -> do
+        emitErrorIn ctx (AnnP (TellOutsideGoalPosition (length args)) loc origin)
         pure t
   -- Lambda: @fun(params) -> body end@. A lambda is a first-class value,
   -- not data; @'->'@ and @fun@ are surface syntax for the desugarable

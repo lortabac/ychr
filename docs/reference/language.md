@@ -58,7 +58,8 @@ Heads are comma-separated constraint applications. Guards are
 comma-separated boolean expressions with ask semantics (no binding);
 they are expressions, not Prolog predicates, and may call
 [host functions](#host-calls) or user-defined functions. Bodies are
-comma-separated tells.
+comma-separated tells; [`tell/N`](#dynamic-tells-telln) tells a
+constraint chosen at run time.
 
 ## Modules
 
@@ -401,6 +402,7 @@ decided at resolution (see [Tell-side evaluation](#tell-side-evaluation)).
 | `fun(X, Y) -> Body end` | Lambda; parameters are variables or wildcards. |
 | `fun name/arity` | Function reference. |
 | `'$call'(F, A1, …, An)` | Wired-in dynamic call, 1–10 arguments; prefer the prelude's `call/N`. |
+| `tell(G, A1, …, Ak)` | [Dynamic tell](#dynamic-tells-telln), a goal only: tell `G` with `A1..Ak` appended. |
 | `X is E`, `X = E`, `A == B`, `A \== B` | Evaluation, unification (tell), structural (ask) equality and disequality. |
 | `A ; B` | [Disjunction](#disjunction-in-rule-bodies) in a rule body. |
 
@@ -706,6 +708,71 @@ rule-body form only: in a guard, an `is` right-hand side or a function
 body it is `YCHR-20022`; at the top level of a query, `YCHR-30006`.
 Semantics — choice points, lifting, shared variables, `quote/1` — are in
 [search.md](search.md#disjunction-).
+
+## Dynamic tells: `tell/N`
+
+`tell(G, A1, ..., Ak)` tells the constraint `G` names, with `A1..Ak`
+appended to `G`'s own arguments — the CHR counterpart of Prolog's
+`call/N`. `G` is an atom or a compound; `tell(c(X), Y)` and `tell(c, X, Y)`
+both tell `c(X, Y)`. `tell` takes one to ten arguments; a bare `tell`
+or one with more is `YCHR-20030`.
+
+```prolog
+:- module(tasks, [run/2, step/1, done/1]).
+
+:- chr_constraint run/2, step/1, done/1.
+
+% Tell each goal of a list, appending the same argument to every one.
+run([], _) <=> true.
+run([G | Gs], X) <=> tell(G, X), run(Gs, X).
+
+step(X) <=> host:print(step(X)).
+done(X) <=> host:print(done(X)).
+```
+
+```
+ychr> run([quote(step), quote(done)], 1).
+step(1)
+done(1)
+ychr> run([quote(nope)], 1).
+=== runtime error ===
+tasks.chr:7:1: YCHR-60001
+<<rule __rule_24>>
+CHR runtime error: tell: no constraint nope/1 is visible in module tasks
+run([G | Gs], X)
+```
+
+`tell` is a goal: it may appear in a rule body, a disjunction branch or
+a query. In a guard, an `is` right-hand side, or a function or lambda
+body it is `YCHR-20029`; inside `quote/1` and in head and equation
+arguments, `tell(...)` is ordinary data. The name is reserved, so
+declaring a constraint or function `tell` is `YCHR-16003`.
+
+`G` is an evaluated expression, like any constraint argument. When it
+is written as a literal compound or atom, the tell is resolved at
+compile time: `tell(c(X), Y)` *is* the goal `c(X, Y)`, type-checked as
+one, and an unknown name is the usual `YCHR-20002`. A literal body
+control form — `(A, B)`, `(A ; B)`, `true`, `=`, `is`, another `tell` —
+is not a constraint and is `YCHR-20031`; write the goal directly.
+Otherwise the term is resolved when the tell runs. That covers a
+variable, `quote(...)`, a host call, and a compound whose head names a
+function at *any* arity, which is called to compute the goal.
+
+- The name is resolved in the module the rule was written in, by the
+  same rules as a goal written there: its own constraints and those its
+  imports make visible, unqualified when exactly one constraint or
+  function matches the name and total arity, `M:name` otherwise. A
+  query resolves against every module's exports.
+- An unbound `G` is an instantiation error. Any other value that does
+  not name a visible constraint — a number, a string, a list, an
+  unexported or ambiguous name, the wrong arity — is a runtime error
+  (`YCHR-60001`).
+- The appended arguments are constraint arguments, so a variable that
+  first appears there, or inside a quoted `G`, is a fresh logical
+  variable the told constraint can bind:
+  `tell(G, R), S is R * 2` reads `R` back.
+- A macro is expanded at compile time, so only a literal `G` can name
+  one.
 
 ## The `=` operator
 

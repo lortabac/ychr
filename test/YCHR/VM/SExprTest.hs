@@ -37,13 +37,14 @@ tests =
 
 roundtripTests :: [TestTree]
 roundtripTests =
-  [ testCase "empty program" $ roundtrip (Program [] [] [] [] [] []),
+  [ testCase "empty program" $ roundtrip (Program [] [] [] [] [] [] []),
     testCase "single empty procedure" $
       roundtrip
         ( Program
             [Types.Unqualified "foo"]
             []
             [mkProcedure "foo" [] []]
+            []
             []
             []
             []
@@ -54,6 +55,7 @@ roundtripTests =
             [Types.Unqualified "leq"]
             []
             [mkProcedure "tell_leq2" ["X", "Y"] []]
+            []
             []
             []
             []
@@ -232,6 +234,7 @@ roundtripTests =
             ]
             []
             []
+            []
             [ConstraintType 1]
         )
   ]
@@ -263,13 +266,13 @@ formatTests =
       assertContains
         (serializeProg (mkProg []))
         ( "(vm-program (version 2) (program 0 (type-names) 0 (rule-names) "
-            <> "(evaluables) (callables) (inert-types) "
+            <> "(evaluables) (callables) (tellables) (inert-types) "
         ),
     testCase "var serialization" $
       assertContains
         (serializeProg (mkProg [ExprStmt (Var "x")]))
         ( "(program 0 (type-names) 0 (rule-names) (evaluables) (callables) "
-            <> "(inert-types) "
+            <> "(tellables) (inert-types) "
             <> "(procedure \"p\" () (reactivate-dispatch) "
             <> "(expr-stmt (var \"x\"))))"
         ),
@@ -281,6 +284,38 @@ formatTests =
             )
         )
         "(callables (\"/\" \"prelude:double\" 1 \"func_prelude__double1\"))",
+    testCase "tellables entry serialization" $
+      assertContains
+        ( serializeProg
+            ( Program
+                []
+                []
+                [mkProcedure "p" [] []]
+                []
+                []
+                [ ( TellableKey {scope = "m", functor = "m__c", arity = 2},
+                    "tell_m__c2"
+                  )
+                ]
+                []
+            )
+        )
+        "(tellables (\"m\" \"m__c\" 2 \"tell_m__c2\"))",
+    testCase "tellables entry roundtrip" $
+      roundtrip
+        ( Program
+            []
+            []
+            [mkProcedure "p" [] [TellTerm "m" (Var "g") [Var "a"]]]
+            []
+            []
+            [(TellableKey {scope = "m", functor = "c", arity = 2}, "tell_m__c2")]
+            []
+        ),
+    testCase "tell-term serialization" $
+      assertContains
+        (serializeProg (mkProg [TellTerm "m" (Var "g") [Var "a"]]))
+        "(tell-term \"m\" (var \"g\") (var \"a\"))",
     testCase "apply-closure serialization" $
       assertContains
         (serializeProg (mkProg [ExprStmt (ApplyClosure (Var "f") [Var "a"])]))
@@ -314,6 +349,7 @@ formatTests =
               { program =
                   Program
                     [Types.Qualified "M" "leq", Types.Unqualified "gcd"]
+                    []
                     []
                     []
                     []
@@ -361,6 +397,15 @@ versionTests =
     testCase "an explicit empty callables entry reads the same" $
       case deserialize
         (T.replace "(evaluables)" "(evaluables) (callables)" versionedProgramText) of
+        Left e -> assertBool ("deserialization failed: " <> T.unpack e) False
+        Right vmp' -> vmp' @?= mkVMProg (mkProg [ExprStmt (Var "x")]),
+    testCase "an explicit empty tellables entry reads the same" $
+      case deserialize
+        ( T.replace
+            "(evaluables)"
+            "(evaluables) (callables) (tellables)"
+            versionedProgramText
+        ) of
         Left e -> assertBool ("deserialization failed: " <> T.unpack e) False
         Right vmp' -> vmp' @?= mkVMProg (mkProg [ExprStmt (Var "x")]),
     testCase "a version-less program is rejected as version 0" $
@@ -660,6 +705,10 @@ genStmt =
       Store <$> Gen.small genIdExpr,
       Kill <$> Gen.small genIdExpr,
       AddHistory <$> genRuleId <*> genHistoryIds,
+      TellTerm
+        <$> genCodecText
+        <*> Gen.small genValExpr
+        <*> Gen.list (Range.linear 0 3) (Gen.small genValExpr),
       PushFrame <$> genStackFrame
     ]
     [ If
@@ -690,12 +739,12 @@ histIds ids = mkHistoryIds (zip [0 :: Int ..] ids)
 
 -- | Build a minimal program with one procedure containing the given body.
 mkProg :: [Stmt] -> Program
-mkProg body = Program [] [] [mkProcedure "p" [] body] [] [] []
+mkProg body = Program [] [] [mkProcedure "p" [] body] [] [] [] []
 
 -- | 'mkProg' with a non-empty callables table.
 mkProgWithCallables :: [(CallableKey, Name)] -> Program
 mkProgWithCallables callables =
-  Program [] [] [mkProcedure "p" [] []] [] callables []
+  Program [] [] [mkProcedure "p" [] []] [] callables [] []
 
 -- | A function-reference callables key, the shape
 -- 'YCHR.Internal.Compile.buildCallables' mints for @fun name\/arity@.

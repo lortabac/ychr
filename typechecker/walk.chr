@@ -857,6 +857,13 @@ check_body_apply @
     type_of_expr(S, F, _),
     type_of_exprs(S, Args, _).
 
+% Which constraint a dynamic tell reaches is only known at run time, so
+% its expressions are typed for their own sake and meet no signature.
+check_body_tell_dyn @
+    check_body_goal(S, body_tell_dyn(G, Args)) <=>
+    type_of_expr(S, G, _),
+    type_of_exprs(S, Args, _).
+
 check_body_host @
     check_body_goal(S, body_host(_, Args)) <=>
     type_of_exprs(S, Args, _).

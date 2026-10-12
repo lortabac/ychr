@@ -30,6 +30,7 @@ module YCHR.Internal.Resolved
 
     -- * Limits
     maxCallArity,
+    maxTellArity,
 
     -- * Operations
     exprToTerm,
@@ -74,6 +75,13 @@ data Program = Program
     -- one other than @any@. Constraints absent from the map are
     -- unrestricted. Checked by "YCHR.Internal.ConstraintUse".
     constraintUses :: Map ConstraintKey ConstraintUse,
+    -- | For each module, every @(name, arity)@ it can name as a
+    -- constraint or a function, with the qualified declarations that
+    -- provide it (more than one when the bare name is ambiguous) — the
+    -- view the renamer resolves a goal's name in. A dynamic @tell\/N@
+    -- resolves against its calling module's entry; see
+    -- 'YCHR.Internal.Compile.buildTellables'.
+    nameVisibility :: Map Text (Map (Text, Int) [QualifiedName]),
     functionNames :: Set QualifiedName,
     typeDefinitions :: [TypeDefinition]
   }
@@ -89,6 +97,9 @@ data Program = Program
 -- to re-check the function-name set.
 data Rule = Rule
   { name :: Maybe (Ann Text),
+    -- | The module the rule was written in: the scope a dynamic
+    -- @tell\/N@ in its body resolves constraint names against.
+    moduleName :: Text,
     head :: AnnP Head,
     guard :: AnnP [Expr],
     body :: AnnP [Expr]
@@ -188,6 +199,15 @@ data Expr
 -- 'YCHR.Internal.VM.ApplyClosure' construct, which works at any arity.
 maxCallArity :: Int
 maxCallArity = 10
+
+-- | The largest number of arguments the built-in @tell\/N@ goal may
+-- carry: the goal term plus up to nine arguments appended to it,
+-- mirroring Prolog's @call\/1@ … @call\/10@. Checked by the renamer
+-- ('YCHR.Internal.Rename.UnsupportedTellArity'). Like 'maxCallArity'
+-- this is a surface-language limit; the VM's
+-- 'YCHR.Internal.VM.TellTerm' works at any arity.
+maxTellArity :: Int
+maxTellArity = 10
 
 -- | Convert an 'Expr' back to a surface-shaped 'Term'. Used as a
 -- narrow bridge for code that still operates on 'Term' (notably the
