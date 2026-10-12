@@ -55,7 +55,17 @@ tests =
         assertInfix "(500 yfx \"&&&\")" code
         assertInfix "(700 xfx \"===\")" code
         assertInfix "(1201 fx \"end\")" code
-        assertInfix "(1100 xfx \"\\\\\")" code
+        assertInfix "(1100 xfx \"\\\\\")" code,
+      -- The constraint type names are not derivable from the VM program
+      -- either, and `print_store` / `write_store_to_list` need them to
+      -- label a stored constraint: they travel as `%make-session`'s
+      -- fourth argument, the mangled `vmName` of each type in index
+      -- order. For `order`'s single constraint the table is one entry;
+      -- assert the literal, which no registration can produce (those
+      -- emit symbols, not strings).
+      testCase "the generated library threads the constraint type names" $ do
+        code <- schemeFor leqSource
+        assertInfix "(vector \"order__leq\")" code
     ]
 
 -- ---------------------------------------------------------------------------

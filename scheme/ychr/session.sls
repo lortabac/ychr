@@ -5,6 +5,7 @@
           session-store-by-type session-store-by-type-set!
           session-index-positions
           session-store-index
+          session-type-names
           session-store-next-id session-store-next-id-set!
           session-history session-history-set!
           session-queue-front session-queue-front-set!
@@ -33,6 +34,16 @@
   ;; index structures it holds) is mutated in place — the Scheme runtime
   ;; has no snapshot or undo, so the index is simply session state.
   ;;
+  ;; `type-names` is the source name of each constraint type, indexed by
+  ;; the same constraint-type integer the store uses: the compiler's
+  ;; `vmName` mangling of `CompiledProgram.typeNames`, emitted by the
+  ;; generated library as `%make-session`'s fourth argument (see
+  ;; `Scheme.hs`'s `typeNamesSExpr`). `write_store_to_list` and
+  ;; `print_store` split each entry at the first `__` to recover the
+  ;; module and base the reference's `constraintAsValue` needs; a
+  ;; hand-built session that passes no names — or an index past the
+  ;; vector — falls back to the `c#type_N` label. Immutable.
+  ;;
   ;; `op-table` is the operator table `read_term_from_string` parses
   ;; with: the program's own table, built by the generated library and
   ;; handed to `%make-session` (see `(ychr optable)`), or
@@ -43,6 +54,7 @@
             (mutable store-by-type session-store-by-type session-store-by-type-set!)
             (immutable index-positions session-index-positions)
             (immutable store-index session-store-index)
+            (immutable type-names session-type-names)
             (mutable store-next-id session-store-next-id session-store-next-id-set!)
             (mutable history session-history session-history-set!)
             (mutable queue-front session-queue-front session-queue-front-set!)

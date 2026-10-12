@@ -13,21 +13,21 @@ runtime in `scheme/ychr/`. Goals are run through `guile3.0 --r6rs` per
 
 ## Missing meta primitives
 
-None of these has a Scheme-side implementation. Each is nevertheless
+`run_chr_session` has no Scheme-side implementation. It is nevertheless
 mapped in `hostCallMap` to a bound stub in `runtime.sls` of the form
-`(error "%<scheme-name>" "not implemented")`, so calling it raises with
+`(error "%run-chr-session" "not implemented")`, so calling it raises with
 message `"not implemented"` and origin the mangled Scheme name. The
 mapping is what keeps
 `library(meta)` importable: a generated library defines *every* function
 of an imported library, so an unmapped name lowers to a bare identifier
 and the whole module fails to load on a strict R6RS implementation
-(Chez reports `attempt to reference unbound identifier print_store`),
-even for a program that only calls `print/1`.
+(Chez reports `attempt to reference unbound identifier run_chr_session`),
+even for a program that only calls `print/1`. `print_store` and
+`write_store_to_list` were in the same state and are now implemented
+(see *Closed gaps*).
 
 | Primitive               | Status |
 |-------------------------|--------|
-| `write_store_to_list`   | Stub `%write-store-to-list`; `write_store_to_list_test` is in `HASKELL_ONLY` (parallels the unimplemented `print_store`). |
-| `print_store`           | Stub `%print-store`. |
 | `run_chr_session`       | Stub `%run-chr-session`; it spawns a nested interpreter session (the search driver, `YCHR.Internal.Runtime.Search`, on the Haskell side). `run_chr_session_test` is in `HASKELL_ONLY`. |
 
 The load-time invariant is pinned, without Guile, by
@@ -36,14 +36,27 @@ stub behaviour itself by
 `scheme/test/test-runtime.scm`'s `unimplemented meta host calls raise on
 call` group.
 
-These names are still absent from `*prelude-host-calls*`, so
+`run_chr_session` is absent from `*prelude-host-calls*`, so
 deep-evaluating a `host:` *term* with arguments (rather than calling
 the function directly) reports `is: functor is not evaluable` instead
 of reaching the stub — the same distinction the section below draws.
-For example a nullary `host:print_store` builds the atom
-`host:print_store` instead and never reaches the evaluator at all.
 `read_term_from_string` and `write_term_to_string` were in the same
 state but are now implemented and registered (see *Closed gaps*).
+
+`print_store` and `write_store_to_list` are implemented but are
+deliberately *not* registered, because only their arity-0 key is
+unreachable: a nullary `host:` compound collapses to an atom on both
+backends (`T = host:print_store(), R is T.` binds the atom
+`host:print_store`), and the deep evaluator dispatches only `term?`
+values, so a `(name, 0)` key can never be asked for. At any arity ≥ 1
+they are an instance of *deep-eval host-call lookup ignores arity*
+above: the reference's name-keyed registry ignores the extra argument,
+so `T = host:write_store_to_list(9), R is T.` returns the store on the
+Haskell side while the Scheme `(name, arity)` table reports
+`is: functor is not evaluable: host:write_store_to_list/1`. A *direct*
+wrong-arity call (`R is host:print_store(1).`) reaches the fixed-arity
+procedure on the Scheme side and raises the host's own argument-count
+condition, as for every other fixed-arity primitive.
 
 
 ## `library(search)`
@@ -268,12 +281,16 @@ contracts from the invariant side.
   parameter `breakName lbl`); `Continue` wraps one iteration inside the alive
   check (parameter `continueName lbl`).
 - **Session thunk.** The exported zero-argument thunk calls
-  `(%make-session N POSITIONS TABLE)`: `N` is the program's type count,
+  `(%make-session N POSITIONS TABLE TYPES)`: `N` is the program's type count,
   `POSITIONS` is `indexPositionsSExpr`'s alist of `(cons TYPE (list POS …))`
-  entries (or `(list)` when nothing is indexed), and `TABLE` is
-  `(make-op-table (quote ((FIXITY TYPE "name") …)))` over `opTableEntries`.
-  `%make-session`'s one- and two-argument clauses install the unindexed store
-  (`'()`) and `builtin-op-table` for the arguments not supplied.
+  entries (or `(list)` when nothing is indexed), `TABLE` is
+  `(make-op-table (quote ((FIXITY TYPE "name") …)))` over `opTableEntries`, and
+  `TYPES` is `typeNamesSExpr`'s `(vector …)` of one mangled `vmName` per
+  constraint type in index order, which `print_store` and
+  `write_store_to_list` split at the first `__` to label a stored constraint.
+  `%make-session`'s shorter clauses install the unindexed store (`'()`),
+  `builtin-op-table` and the empty type-name table for the arguments not
+  supplied.
 - **Queue drain.** `DrainReactivationQueue` emits
   `(drain-queue! %s (lambda (sv) (when (alive-constraint? sv) …)))`: the
   runtime's `drain-queue!` takes `(session, callback)` and calls the callback
@@ -299,6 +316,58 @@ contracts from the invariant side.
 
 The following used to live here and are now closed. Kept as a brief
 record of which fixes have already shipped.
+
+- **`print_store` / `write_store_to_list`** — the two meta primitives that
+  expose the store were bound stubs raising `not implemented`, and
+  `write_store_to_list_test` was in `HASKELL_ONLY`. They are now
+  `%print-store` / `%write-store-to-list` on top of the port of
+  `getAllStoredConstraints`: every alive constraint, grouped by constraint
+  type in ascending index order and, within a type, in store order, with
+  each argument deeply dereferenced (`deep-deref`, the port of
+  `deepDeref`). `print_store` renders each value with the shared
+  `pretty-term` on its own line and returns the unit atom;
+  `write_store_to_list` returns them as a list, the empty store being
+  `[]`. Both need the session, so `Scheme.sessionHostCalls` grew both
+  names and `scheme/test/test_golden.py`'s
+  `test_gen_driver_host_call_mapping` pins the driver's
+  `(%print-store %s)` / `(%write-store-to-list %s)`.
+  *Value shape*: `constraint-value` is a direct port of the reference's
+  `constraintAsValue` — an unqualified type is the type name applied to
+  its arguments, a qualified one the surface `:` compound
+  (`m:c(1)`), never the mangled `m__c` functor a compiled term of the
+  same spelling carries. That choice is the reference's, and it has the
+  same consequence there: a value from `write_store_to_list` does not
+  unify with the equivalent written term on either backend
+  (`R is write_store_to_list(), R = [m:c(1)]` fails on both). Printing,
+  which is what the golden harness compares, is identical either way.
+  *Type names*: the session grew an immutable `type-names` field and
+  `%make-session` a fourth argument, `typeNamesSExpr`'s `(vector …)` of
+  the compiler's mangled `vmName` for each entry of
+  `CompiledProgram.typeNames`, in index order. The runtime splits an
+  entry at the first `__` (`split-mangled-name`, the same decode the
+  printer applies to a functor), so the table travels in the one encoding
+  that inverts unambiguously even for a quoted base name containing `:`;
+  a hand-built session with no table falls back to the `c#type_N` label
+  `constraintTypeLabel` uses. That fallback is a deliberate Scheme-side
+  extrapolation: the reference iterates its own type-name table, so a
+  session built without names has no store buckets and cannot reach the
+  case at all, while `make-store-by-type` always creates one bucket per
+  type. The shorter `%make-session` clauses keep loading older generated
+  libraries and the hand-built test sessions.
+  `write_store_to_list_test` left `HASKELL_ONLY`; the new
+  `test/scheme/test_golden.py::test_meta_print_store_end_to_end` pins
+  `print_store`'s stdout (no shared golden case is possible — the Haskell
+  runner compares bindings only, while the Scheme runner compares all of
+  stdout), `scheme/test/test-runtime.scm` pins both primitives directly
+  (ordering, dead-constraint filtering, the `:` compound, deep
+  dereference, 0-arity constraints, an indexed bucket and the fallback
+  label), and `test/YCHR/Backend/SchemeTest.hs` pins the emitted
+  type-name vector.
+  Neither name joined `*prelude-host-calls*`: only their `(name, 0)` key
+  is unreachable (a nullary `host:` compound is an atom on both
+  backends), and a `host:` term at arity ≥ 1 is the separate,
+  pre-existing *deep-eval host-call lookup ignores arity* divergence
+  recorded above, not something this port changes.
 
 - **`write_term_to_string`** — the Scheme procedure was a stub raising
   `not implemented`, and no golden test covered it at all. It is now

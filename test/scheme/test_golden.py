@@ -24,9 +24,6 @@ GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden")
 # Test directories whose tests exercise Haskell-only meta-programming
 # primitives and therefore cannot run on the Scheme backend.
 HASKELL_ONLY = {
-    # write_store_to_list is a Haskell-only meta host call; no Scheme
-    # implementation exists yet (parallels print_store).
-    "write_store_to_list_test",
     # Variable-alias printing (A = B, B = A) is implemented in the
     # Haskell runtime only; the Scheme runtime still renders aliased
     # logical variables as `_`.
@@ -297,6 +294,14 @@ def test_gen_driver_host_call_mapping(ychr_bin, project_root, tmp_path):
     writer = driver("gdhc:go(host:write_term_to_string(1), R)")
     assert "(%write-term-to-string (deref 1))" in writer
 
+    # `print_store` and `write_store_to_list` have no user-visible
+    # argument but read the store, so they thread the session like
+    # `copy_term`.
+    store_printer = driver("gdhc:go(host:print_store(), R)")
+    assert "(%print-store %s)" in store_printer
+    store_list = driver("gdhc:go(host:write_store_to_list(), R)")
+    assert "(%write-store-to-list %s)" in store_list
+
     # An unmapped name passes through verbatim, exactly as the compiled
     # library emits it.
     unmapped = driver("gdhc:go(host:my_add(1, 2), R)")
@@ -361,14 +366,85 @@ def test_meta_print_end_to_end(ychr_bin, guile_bin, scheme_lib_dir, project_root
     assert result.stdout == '[1, _]\n"hi"\n42\nR = _\n'
 
 
+def test_meta_print_store_end_to_end(
+    ychr_bin, guile_bin, scheme_lib_dir, project_root, tmp_path
+):
+    """`library(meta)`'s `print_store/0` and `write_store_to_list/0` must
+    read the store on the Scheme backend, matching the Haskell
+    interpreter: every alive constraint, module-qualified, type index
+    ascending — and the same constraints as a list from
+    `write_store_to_list/0`.
+
+    Pinned end to end (compile -> gen-driver -> Guile) because the golden
+    harness cannot carry a shared case: the Haskell runner compares
+    variable bindings only, while this harness compares all of stdout, so
+    a program that prints has no shared `.expected` form. The
+    `write_store_to_list_test` golden directory covers the no-printing
+    half on both backends.
+    """
+    program = tmp_path / "mps.chr"
+    program.write_text(
+        ":- module(mps, [go/1]).\n"
+        ":- use_module(library(prelude)).\n"
+        ":- use_module(library(meta)).\n"
+        ":- chr_constraint go(any).\n"
+        ":- chr_constraint c/1.\n"
+        ":- chr_constraint d/2.\n"
+        "go(R) <=> c(1), d(2, 3), print_store(), R is write_store_to_list().\n"
+    )
+
+    result = subprocess.run(
+        [ychr_bin, "compile", "-t", "scheme", "-d", str(tmp_path), str(program)],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    result = subprocess.run(
+        [ychr_bin, "gen-driver", "-g", "mps:go(R)", str(program)],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    driver_path = tmp_path / "driver.sps"
+    driver_path.write_text(result.stdout)
+
+    result = subprocess.run(
+        [
+            guile_bin,
+            "--r6rs",
+            "--no-auto-compile",
+            "-L",
+            scheme_lib_dir,
+            "-L",
+            str(tmp_path),
+            str(driver_path),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=project_root,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    # One module-qualified line per alive constraint, in type index
+    # order, then the driver's binding for the same store as a list.
+    assert result.stdout == (
+        "mps:c(1)\n"
+        "mps:d(2, 3)\n"
+        "R = [mps:c(1), mps:d(2, 3)]\n"
+    )
+
+
 def test_meta_module_host_calls_are_bound(ychr_bin, project_root, tmp_path):
     """A module importing `library(meta)` defines *every* meta function,
-    whether or not the Scheme runtime implements it (some are still
-    stubs). Each call must lower to a bound runtime procedure, not to a
-    bare identifier: a bare identifier makes the whole generated library
-    fail to load on a strict R6RS implementation (Chez reports `attempt
-    to reference unbound identifier print_store`), so a program that
-    only uses `print/1` could not be loaded at all.
+    whether or not the Scheme runtime implements it (only
+    `run_chr_session` is still a stub). Each call must lower to a bound
+    runtime procedure, not to a bare identifier: a bare identifier makes
+    the whole generated library fail to load on a strict R6RS
+    implementation (Chez reports `attempt to reference unbound
+    identifier run_chr_session`), so a program that only uses `print/1`
+    could not be loaded at all.
 
     Pinned on the generated text so it holds regardless of which Scheme
     runs the suite (the harness itself is Guile-only).

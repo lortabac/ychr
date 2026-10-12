@@ -60,7 +60,9 @@
   ;;; `make-op-table` (see `Scheme.hs`'s `opTableSExpr`). The shorter
   ;;; clauses install `builtin-op-table`, the counterpart of the
   ;;; `builtinOps` `initSessionEnv` gives a hand-built interpreter
-  ;;; session.
+  ;;; session. They install no constraint type names either, so a
+  ;;; hand-built session's stored constraints label as `c#type_N` in
+  ;;; `write_store_to_list` and `print_store`.
   (define %make-session
     (case-lambda
       ;; A session with no store index. Hand-built sessions (the unit
@@ -68,7 +70,7 @@
       ;; positions take this clause; the store then scans, exactly as it
       ;; did before the index existed.
       ((num-types)
-       (%make-session num-types '() builtin-op-table))
+       (%make-session num-types '() builtin-op-table (vector)))
       ;; `positions` is the compiler-emitted alist of the (constraint
       ;; type, argument position) pairs the program looks a partner up
       ;; through an index condition: one `(cons TYPE (list POS ...))` per
@@ -77,13 +79,21 @@
       ;; positions are recorded in the store index, and only those may be
       ;; looked up in it; anything else falls back to the scan.
       ((num-types positions)
-       (%make-session num-types positions builtin-op-table))
+       (%make-session num-types positions builtin-op-table (vector)))
       ((num-types positions ops)
+       (%make-session num-types positions ops (vector)))
+      ;; `type-names` is the compiler-emitted source name of every
+      ;; constraint type, one per type index, in the mangled `vmName`
+      ;; form (built by `Scheme.hs`'s `typeNamesSExpr` from
+      ;; `CompiledProgram.typeNames`). `write_store_to_list` and
+      ;; `print_store` split it back into a module and a base name.
+      ((num-types positions ops type-names)
        (make-session
         0
         (make-store-by-type num-types)
         (make-index-positions num-types positions)
         (make-store-index num-types)
+        type-names
         0
         (make-hashtable equal-hash equal?)
         '()
@@ -436,9 +446,13 @@
   ;; bare-name entries in Haskell's `baseHostCallRegistry`
   ;; (`src/YCHR/Internal/Runtime/Registry.hs`), plus `print`,
   ;; `read_term_from_string` and `write_term_to_string`, the reachable
-  ;; entries of `metaHostCallRegistry` (`src/YCHR/Internal/Meta.hs`);
+  ;; entries of `metaHostCallRegistry` (`src/YCHR/Internal/Meta.hs`).
   ;; `name_base` and the unimplemented meta calls are deliberately left
-  ;; out (see dev-docs/SCHEME_BACKEND_GAPS.md). It is consulted both
+  ;; out (see dev-docs/SCHEME_BACKEND_GAPS.md), and so are
+  ;; `print_store` and `write_store_to_list`: their only arity is 0, and
+  ;; a nullary `host:` spelling compiles to an atom, so the deep
+  ;; evaluator — which dispatches only `term?` values — can never ask
+  ;; for their key. It is consulted both
   ;; under the raw functor and under the bare name decoded out of a
   ;; `host:` functor (`evaluable-key-proc`); the raw route is what
   ;; answers a bare atom that no canonicalization qualified, such as
@@ -963,6 +977,120 @@
   (define (%write-term-to-string v)
     (pretty-term v))
 
+  ;;; ---------------------------------------------------------------------
+  ;;; print_store / write_store_to_list
+  ;;;
+  ;;; The two meta primitives that expose the store, ports of
+  ;;; `print_store` and `write_store_to_list` in `YCHR.Internal.Meta`.
+  ;;; Both are built on `getAllStoredConstraints`
+  ;;; (`YCHR.Internal.Runtime.Store`): every constraint type in index
+  ;;; order, every suspension of a type in store order, dead ones
+  ;;; filtered out. `%make-session` supplies the type names.
+  ;;; ---------------------------------------------------------------------
+
+  ;;; The source name of a constraint type, in the compiler's mangled
+  ;;; `vmName` form, or the `c#type_N` fallback `constraintTypeLabel`
+  ;;; uses for a type the session does not know
+  ;;; (`YCHR.Internal.Runtime.Interpreter`).
+  (define (constraint-type-name s ctype)
+    (let ((names (session-type-names s)))
+      (if (and (< ctype (vector-length names))
+               (vector-ref names ctype))
+          (vector-ref names ctype)
+          (string-append "c#type_" (number->string ctype)))))
+
+  ;;; Split a mangled vmName into its decoded components, `(module .
+  ;;; base)`, with #f for the module of an unqualified name. This is the
+  ;;; inverse the printer applies to every functor: split at the first
+  ;;; `__` (a source name never contains one), treat a leading `__` — an
+  ;;; internal name — as unqualified, and decode each half's `%u`
+  ;;; escapes. Its counterpart in `(ychr pretty)` is `unmangle-segments`,
+  ;;; which the printer keeps private and which joins the halves;
+  ;;; runtime.sls already carries its own `__` split for `%name-base` and
+  ;;; `host-bare-name` (neither of which is this one — `%name-base` must
+  ;;; leave escapes in place).
+  (define (split-mangled-name mangled)
+    (let ((sep (find-double-underscore mangled)))
+      (if (or (not sep) (zero? sep))
+          (cons #f (decode-mangled-name mangled))
+          (cons (decode-mangled-name (substring mangled 0 sep))
+                (decode-mangled-name
+                 (substring mangled (+ sep 2) (string-length mangled)))))))
+
+  ;;; Deep-dereference a value: `deref` at the top, then recursively in
+  ;;; every compound's arguments, the port of `deepDeref` in
+  ;;; `YCHR.Internal.Meta`. An unbound variable is left in place, so the
+  ;;; printer renders it `_`.
+  (define (deep-deref v)
+    (let ((d (deref v)))
+      (if (term? d)
+          (make-term (term-functor d) (deep-deref-args (term-args d)))
+          d)))
+
+  (define (deep-deref-args args)
+    (let* ((n (vector-length args))
+           (out (make-vector n)))
+      (do ((i 0 (+ i 1))) ((= i n))
+        (vector-set! out i (deep-deref (vector-ref args i))))
+      out))
+
+  ;;; One stored constraint as the value the reference's
+  ;;; `constraintAsValue` builds: the type name applied to its deeply
+  ;;; dereferenced arguments, where a qualified type is the surface `:`
+  ;;; compound (`m:c(1)`) and not the mangled `m__c` functor a compiled
+  ;;; occurrence of the same spelling carries. The reference makes the
+  ;;; same choice, so a value from `write_store_to_list` does not unify
+  ;;; with the equivalent written term on either backend; see
+  ;;; dev-docs/SCHEME_BACKEND_GAPS.md. The name is the caller's, resolved
+  ;;; once per type group the way `suspsOfGroup` resolves it.
+  (define (constraint-value name susp)
+    (let* ((parts (split-mangled-name name))
+           (inner (make-term (string->symbol (cdr parts))
+                             (deep-deref-args (suspension-args susp)))))
+      (if (car parts)
+          (make-term (string->symbol ":")
+                     (vector (string->symbol (car parts)) inner))
+          inner)))
+
+  ;;; Every alive stored constraint, in the reference's order: the
+  ;;; constraint type index ascending — the counterpart of the
+  ;;; `IntMap.toAscList` over `storeTypeNames` — and store order within a
+  ;;; type. Dead suspensions are skipped, as `renderSusp` and
+  ;;; `suspAsValue` skip them. Iterates each type's snapshot, the same
+  ;;; interface the generated `Foreach` uses.
+  (define (stored-constraint-values s)
+    (let ((num-types (vector-length (session-store-by-type s))))
+      (let loop ((ctype 0) (acc '()))
+        (if (>= ctype num-types)
+            (reverse acc)
+            (let ((name (constraint-type-name s ctype)))
+              (let-values (((storage count) (store-snapshot s ctype)))
+                (loop
+                 (+ ctype 1)
+                 (let inner ((slot 0) (acc acc))
+                   (if (>= slot count)
+                       acc
+                       (let ((susp (snapshot-ref storage slot)))
+                         (inner
+                          (+ slot 1)
+                          (if (alive-constraint? susp)
+                              (cons (constraint-value name susp) acc)
+                              acc))))))))))))
+
+  ;;; write_store_to_list: the whole store as a list of constraint
+  ;;; values. The empty store is the empty list, as `valueList []` is on
+  ;;; the Haskell side.
+  (define (%write-store-to-list s)
+    (fold-right %cons (%nil) (stored-constraint-values s)))
+
+  ;;; print_store: one line per alive constraint, in surface syntax,
+  ;;; then the unit atom, mirroring `print_store` in
+  ;;; `YCHR.Internal.Meta` (which returns `unit`).
+  (define (%print-store s)
+    (for-each (lambda (v) (display (pretty-term v)) (newline))
+              (stored-constraint-values s))
+    (%unit))
+
   ;;; Unimplemented meta host calls: stubs.
   ;;;
   ;;; Each must still be *bound*, because a generated library defines
@@ -971,10 +1099,6 @@
   ;;; whole library fail to load on a strict R6RS implementation
   ;;; (Chez). Lowering to a stub keeps the module loadable and reports
   ;;; the gap only when the function is actually called.
-  (define (%write-store-to-list)
-    (error "%write-store-to-list" "not implemented"))
-  (define (%print-store)
-    (error "%print-store" "not implemented"))
   (define (%run-chr-session v)
     (error "%run-chr-session" "not implemented"))
 

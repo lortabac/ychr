@@ -620,6 +620,112 @@
               (pretty-term (make-term 'f (vector)))))
 
 ;;; --------------------------------------------------------------------------
+;;; print_store and write_store_to_list
+;;;
+;;; The two meta primitives that expose the store, ports of
+;;; `YCHR.Internal.Meta`'s `print_store` and `write_store_to_list` on top
+;;; of `getAllStoredConstraints`: every *alive* constraint, grouped by
+;;; constraint type in ascending index order and, within a type, in store
+;;; order. A hand-built session carries the type names as
+;;; `%make-session`'s fourth argument, in the compiler's mangled `vmName`
+;;; form.
+;;; --------------------------------------------------------------------------
+
+;; A two-type session: type 0 is the qualified `m:c`, type 1 the
+;; unqualified `d`.
+(define (named-session)
+  (%make-session 2 '() (make-op-table '()) (vector "m__c" "d")))
+
+(test-group "print_store and write_store_to_list"
+  ;; `m:c` with an unbound variable, a dead `m:c(1)` stored before it,
+  ;; and `d(2, 3)` after it: the list is type-ordered, dead-free, and the
+  ;; variable renders `_`.
+  (define (seeded)
+    (let* ((s (named-session))
+           (x (make-var s)))
+      (let ((dead (create-constraint s 0 (vector 1))))
+        (store-constraint s dead)
+        (kill-constraint dead))
+      (store-constraint s (create-constraint s 0 (vector x)))
+      (store-constraint s (create-constraint s 1 (vector 2 3)))
+      s))
+  (test-equal "type-ordered, dead-free, qualified, deep-rendered"
+              "[m:c(_), d(2, 3)]"
+              (pretty-term (%write-store-to-list (seeded))))
+  (test-equal "print_store prints the same lines and returns the unit atom"
+              (cons unit-atom "m:c(_)\nd(2, 3)\n")
+              (capture-stdout+value (lambda () (%print-store (seeded)))))
+  (test-equal "an empty store is the empty list"
+              "[]"
+              (pretty-term (%write-store-to-list (fresh-session))))
+  ;; The port of `deepDeref` walks the arguments recursively, so a bound
+  ;; variable inside a compound argument is resolved.
+  (test-equal "arguments are deep-dereferenced"
+              "[d(f(7))]"
+              (let* ((s (named-session))
+                     (x (make-var s)))
+                (%unify s x 7)
+                (store-constraint
+                 s (create-constraint s 1 (vector (make-term 'f (vector x)))))
+                (pretty-term (%write-store-to-list s))))
+  ;; A 0-arity constraint is a 0-arity compound, which the printer
+  ;; renders as the bare atom, as `runtimeToPExpr` maps a 0-arity
+  ;; `CompoundTerm` to `PE.Atom`.
+  (test-equal "a 0-arity constraint prints as an atom"
+              "[d]"
+              (let ((s (named-session)))
+                (store-constraint s (create-constraint s 1 (vector)))
+                (pretty-term (%write-store-to-list s))))
+  ;; The qualified form goes through the same atom collapse on both
+  ;; halves: the `:` compound's right operand is a 0-arity compound, so it
+  ;; renders `m:c`, not `m:c()`.
+  (test-equal "a 0-arity qualified constraint prints as a qualified atom"
+              "[m:c]"
+              (let ((s (named-session)))
+                (store-constraint s (create-constraint s 0 (vector)))
+                (pretty-term (%write-store-to-list s))))
+  ;; A session with no type names labels by index: the `c#type_N`
+  ;; fallback `constraintTypeLabel` uses.
+  (test-equal "an unnamed type falls back to c#type_N"
+              "['c#type_0'(1)]"
+              (let ((s (%make-session 1)))
+                (store-constraint s (create-constraint s 0 (vector 1)))
+                (pretty-term (%write-store-to-list s))))
+  ;; `print_store` on an empty store prints nothing and still returns the
+  ;; unit atom.
+  (test-equal "print_store on an empty store prints nothing"
+              (cons unit-atom "")
+              (capture-stdout+value (lambda () (%print-store (fresh-session)))))
+  ;; The traversal reads each type's storage snapshot, which the store
+  ;; index does not change. Twenty constraints cross `index-threshold`
+  ;; (16) and make the type indexed; a killed slot is still skipped and
+  ;; the rest stay in store order.
+  (test-equal "an indexed bucket lists in store order, dead slot skipped"
+              (string-append
+               "["
+               (apply string-append
+                      (map (lambda (i)
+                             (string-append "d(" (number->string i) "), "))
+                           '(0 1 2 3 4 5 6 8 9 10 11 12 13 14 15 16 17 18)))
+               "d(19)]")
+              (let ((s (%make-session 1 (list (cons 0 (list 0)))
+                                     (make-op-table '()) (vector "d"))))
+                (do ((i 0 (+ i 1))) ((= i 20))
+                  (let ((susp (create-constraint s 0 (vector i))))
+                    (store-constraint s susp)
+                    (when (= i 7) (kill-constraint susp))))
+                (pretty-term (%write-store-to-list s))))
+  ;; The mangled table's `%u` escapes and a base that itself contains a
+  ;; `:` both survive the split: only `__` separates module from base.
+  (test-equal "escaped and colon-bearing type names round-trip"
+              "[esc:'a:b'(1), esc:héllo(2)]"
+              (let ((s (%make-session 2 '() (make-op-table '())
+                                     (vector "esc__a:b" "esc__h%%u0000e9llo"))))
+                (store-constraint s (create-constraint s 0 (vector 1)))
+                (store-constraint s (create-constraint s 1 (vector 2)))
+                (pretty-term (%write-store-to-list s)))))
+
+;;; --------------------------------------------------------------------------
 ;;; Unimplemented meta host calls are bound stubs
 ;;;
 ;;; A generated library defines every function of an imported library,
@@ -630,12 +736,6 @@
 ;;; --------------------------------------------------------------------------
 
 (test-group "unimplemented meta host calls raise on call"
-  (test-equal "print_store bound and raises"
-              "not implemented"
-              (error-message (lambda () (%print-store))))
-  (test-equal "write_store_to_list bound and raises"
-              "not implemented"
-              (error-message (lambda () (%write-store-to-list))))
   (test-equal "run_chr_session bound and raises"
               "not implemented"
               (error-message (lambda () (%run-chr-session 1)))))

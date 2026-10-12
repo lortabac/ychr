@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+The Scheme backend's `print_store/0` and `write_store_to_list/0` (from
+`library(meta)`) are implemented, so `write_store_to_list()` returns the
+store as a list of constraints and `print_store()` prints one per line,
+both module-qualified, instead of raising `not implemented`;
+`write_store_to_list_test` leaves the Scheme harness's `HASKELL_ONLY`
+list. The two share a port of the interpreter's
+`getAllStoredConstraints`: every alive constraint, grouped by constraint
+type in ascending index order and, within a type, in store order, with
+each argument deeply dereferenced. As in the interpreter, a
+`write_store_to_list()` value does not unify with the equivalent written
+term — a qualified type is built as the surface `:` compound, not the
+mangled functor a compiled term carries — while the printed form is the
+same on both backends. The session grew a constraint-type-name table,
+emitted by the generated library as `%make-session`'s fourth argument
+(the compiler's mangled `vmName` per type; a hand-built session falls
+back to the `c#type_N` label), and the shorter `%make-session` clauses
+keep older generated libraries loading. `print_store` is pinned end to
+end by the new
+`test/scheme/test_golden.py::test_meta_print_store_end_to_end` (the
+golden harness cannot carry a shared case, because the Haskell runner
+compares bindings only); the primitives are pinned directly by
+`scheme/test/test-runtime.scm`. See
+[the Scheme backend gaps](dev-docs/SCHEME_BACKEND_GAPS.md).
+
 `panic(string) -> any` is a new prelude function that aborts the run
 with a runtime error carrying the given message. It returns no value, so
 it fits any expression position. A panic in a rule guard is a hard
