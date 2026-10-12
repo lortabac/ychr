@@ -94,7 +94,7 @@ ask-only boolean expression.
 
 `?/1` is recognized structurally inside an aggregate goal, as `,` is;
 outside one it has no meaning. `library(aggregates)` exports the
-operator `op(900, fy, '?')`. Without the import, write `?(Guard)`.
+operator `op(900, fy, '?')`. Without the operator, write the functor quoted: `'?'(Guard)`.
 
 The goal is a goal position for [macros](macros.md), so the
 predefined aggregates may be nested:
@@ -246,6 +246,41 @@ A rule firing inside the removal step is an ordinary firing, so its
 own removals have their own removal steps. When the removal step ends,
 the body runs from its first goal in ωr order.
 
+**Self-triggering.** The removal step includes the firing rule's own
+goal occurrences, as the paper's transformation does. A rule that
+removes a constraint its own aggregates observe, through
+`takemin`/`takemax` or an ordinary removed head, is therefore tried
+again before its own body runs. Without this, firings would be lost.
+This rule walks a dependency chain `a ← b ← c` only because of it:
+
+```prolog
+step @ task(T), \+ depends(T, _) \ depends(U, T) <=> started(U).
+```
+
+Firing for `a` removes `depends(b, a)`, which makes the rule
+applicable for `task(b)`. Only the removal step retries `task(b)`.
+
+The consequence is nesting. A drain loop with a kept head,
+
+```prolog
+machine(M) \ takemin(D, job(M, D, J)) <=> run(M, J).
+```
+
+takes the next job from each firing's removal step. The bodies run
+only as this unwinds, so `run/2` is told longest job first, at a
+recursion depth equal to the number of jobs. To drain in order, remove
+a driver constraint in the same rule and tell it again at the end of
+the body:
+
+```prolog
+next(M), machine(M) \ takemin(D, job(M, D, J)) <=> run(M, J), next(M).
+```
+
+With `next(M)` removed, the removal step finds no regular head to
+match and does nothing. The body's `next(M)` starts the next iteration
+after `run/2` is told. The paper's Sudoku solver uses the same idiom
+with its `solve` constraint.
+
 The CHR¬ semantics (Van Weert et al., 2006) formalizes the same thing
 as removal entries on the execution stack. Treating the removal step
 as a hidden first body goal gives the same order.
@@ -324,8 +359,9 @@ The library also exports two prefix operators, `op(900, fy, '\\+')`
 and `op(900, fy, '?')`. At 900 they bind tighter than `,` (1000), so
 `\+ p(X), q(X)` is `(\+ p(X)), q(X)`, and looser than comparisons, so
 `? X > 1` is `?(X > 1)`. A module that imports the library with an
-import list must list them to use the operator syntax; the
-`\+(G)` and `?(G)` forms work either way.
+import list must list them to use the operator syntax. Outside
+operator syntax the functors are written quoted, `'\\+'(G)` and
+`'?'(G)`, which works with or without the operators.
 
 
 ## Interaction with other features
@@ -394,53 +430,3 @@ Codes are assigned at implementation.
 - **`stddev`, `variance`.** They are easy to define as user
   aggregators.
 
-
-## Open questions
-
-1. **Self-triggering.** A rule may remove a constraint of a type that
-   appears in its own aggregate goals, through `takemin`/`takemax` or
-   through an ordinary removed head. Its removal step then includes
-   its own goal occurrences, and the rule is tried again *before its
-   own body runs*. The choice is whether the removal step includes
-   those occurrences.
-
-   **Including them** is what the paper's transformation does, and it
-   never misses a firing that ωt allows. Without it, this rule stalls
-   on a dependency chain `a ← b ← c`:
-
-   ```prolog
-   step @ task(T), \+ depends(T, _) \ depends(U, T) <=> started(U).
-   ```
-
-   Firing for `a` removes `depends(b, a)`, which makes the rule
-   applicable for `task(b)`. Nothing else retries `task(b)`, so only
-   the removal step can find that firing.
-
-   The cost is nesting. In a drain loop with a kept head,
-
-   ```prolog
-   machine(M) \ takemin(D, job(M, D, J)) <=> run(M, J).
-   ```
-
-   firing for the shortest job removes it. The removal step retries the
-   rule, which takes the next job, whose removal step takes the next
-   one, and so on. The bodies run only as this unwinds, so `run/2` is
-   told longest job first, at a recursion depth equal to the number of
-   jobs. Under plain ωr the kept `machine(M)` would stay at the same
-   occurrence, take the jobs one per firing and run them shortest
-   first. The paper's examples avoid the pattern: Sudoku removes its
-   driver (`solve`) in the same rule and tells it again in the body,
-   and Dijkstra marks its `argmin` passive.
-
-   **Excluding them** keeps drain loops in order and flat, but misses
-   firings like the dependency chain above.
-
-   Recommendation: include them, as the paper does, and document the
-   driver idiom for drains: remove a driver constraint in the same
-   rule and tell it again at the end of the body. Removing the driver
-   leaves the removal step no regular head to match, so it does
-   nothing, and the body's tell starts the next iteration in order:
-
-   ```prolog
-   next(M), machine(M) \ takemin(D, job(M, D, J)) <=> run(M, J), next(M).
-   ```
