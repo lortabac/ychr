@@ -1382,7 +1382,7 @@
   ;;;     alternatives are often disjuncts lifted out of a `;`, which are
   ;;;     module-internal and exported by nobody, so the export check
   ;;;     would reject exactly the goals the compiler itself generated.
-  ;;;
+
   ;;; The elements of a proper list, or `#f` when the value is not a list
   ;;; at all. The deref-aware counterpart of `fromValueList` in the
   ;;; Haskell registry, mirroring `listElems`.
@@ -1390,10 +1390,7 @@
     (let ((d (deref v)))
       (cond
         ((%nil? d) '())
-        ((and (term? d)
-              (or (eq? (term-functor d) (string->symbol "prelude__."))
-                  (eq? (term-functor d) (string->symbol ".")))
-              (= (vector-length (term-args d)) 2))
+        ((%cons? d)
          (let ((rest (list-elems (get-arg d 1))))
            (and rest (cons (get-arg d 0) rest))))
         (else #f))))
@@ -1408,10 +1405,8 @@
   (define (goal-tells s scope who v)
     (let ((elems (list-elems v)))
       (if elems
-          (let ((r (apply append (map (lambda (g) (one-goal s scope who g)) elems))))
-            r)
-          (let ((r (one-goal s scope who v)))
-            r))))
+          (apply append (map (lambda (g) (one-goal s scope who g)) elems))
+          (one-goal s scope who v))))
 
   ;;; One goal. A `;` compound becomes a tell of `search:alt` over its
   ;;; flattened alternatives, so a disjunction reaches the driver as an
@@ -1444,12 +1439,17 @@
   ;;; One goal: a compound or atom whose functor names a constraint.
   ;;; Arguments are passed through untouched so unbound out-variables
   ;;; reach the forked session live.
+  ;;;
+  ;;; A goal is never a list cell or the empty list: one here means an
+  ;;; improper list slipped past `list-elems`, which has to fail as a
+  ;;; malformed goal rather than resolve as a constraint named `.`.
   (define (goal-constraint s scope who v)
     (let* ((d (deref v))
-           (f (cond ((term? d) (term-functor d))
+           (f (cond ((or (%nil? d) (%cons? d)) #f)
+                    ((term? d) (term-functor d))
                     ((symbol? d) d)
                     (else #f))))
-      (if (and f (not (list-functor? f)))
+      (if f
           (let* ((args (if (term? d) (vector->list (term-args d)) '()))
                  (arity (length args))
                  (resolved (resolve-goal s scope who f arity)))
@@ -1544,50 +1544,26 @@
         "/"
         (number->string arity)))))
 
-  ;;; The distinct unbound variables reachable from a value, outermost
-  ;;; first: the same walk `%term-variables` performs, kept as a list so
-  ;;; the driver can use it as the commit's channel. A variable already
-  ;;; bound when the walk reaches it is dereferenced through, exactly as
-  ;;; `collectVars` does on the Haskell side.
-  (define (walk-vars seen vars v)
-    (let ((d (deref v)))
-      (cond
-        ((var? d)
-         (let ((id (var-id d)))
-           (if (memv id seen)
-               (values seen vars)
-               (values (cons id seen) (cons d vars)))))
-        ((term? d)
-         ;; `let*`, not `let`: R6RS leaves the order in which a `let`'s
-         ;; inits are evaluated unspecified, and Guile's choice makes
-         ;; `args` invisible to the `n` init.
-         (let* ((args (term-args d))
-                (n (vector-length args)))
-           (let loop ((i 0) (seen seen) (vars vars))
-             (if (>= i n)
-                 (values seen vars)
-                 (call-with-values
-                     (lambda () (walk-vars seen vars (vector-ref args i)))
-                   (lambda (seen* vars*)
-                     (loop (+ i 1) seen* vars*)))))))
-        (else (values seen vars)))))
-
-  ;;; The unbound variables reachable from the goal at entry: the only
-  ;;; thing a commit keeps. Collected in the calling session, before the
-  ;;; fork exists, so nothing the goal does can change the set. The walk
-  ;;; threads its two accumulators rather than mutating a pair, because
-  ;;; R6RS has no `set-car!` without the mutable-pairs library.
+  ;;; The unbound variables reachable from the goal at entry, distinct
+  ;;; and outermost first: the only thing a commit keeps. The same walk
+  ;;; `%term-variables` performs, and a variable already bound when the
+  ;;; walk reaches it is dereferenced through, exactly as `collectVars`
+  ;;; does on the Haskell side. Collected in the calling session, before
+  ;;; the fork exists, so nothing the goal does can change the set.
   (define (prepare-search goals)
-    (let loop ((gs goals) (seen (quote ())) (vars (quote ())))
-      (if (null? gs)
-          (reverse vars)
-          (let inner ((vs (car (cddr (car gs)))) (seen seen) (vars vars))
-            (if (null? vs)
-                (loop (cdr gs) seen vars)
-                (call-with-values
-                    (lambda () (walk-vars seen vars (car vs)))
-                  (lambda (seen* vars*)
-                    (inner (cdr vs) seen* vars*))))))))
+    (let ((seen (make-eqv-hashtable))
+          (vars '()))
+      (define (walk v)
+        (let ((d (deref v)))
+          (cond
+            ((var? d)
+             (unless (hashtable-contains? seen (var-id d))
+               (hashtable-set! seen (var-id d) #t)
+               (set! vars (cons d vars))))
+            ((term? d) (vector-for-each walk (term-args d))))))
+      (for-each (lambda (g) (for-each walk (car (cddr g)))) goals)
+      (reverse vars)))
+
   ;;; Run a branch, mapping a failure to an outcome. Only the failure
   ;;; marker is caught: a runtime error is not a failure and must escape
   ;;; the search.
@@ -1649,18 +1625,17 @@
            "alt/1: argument must be a proper list of alternative goals"))))
 
   ;;; Explore from the current, quiescent state, looking for choice
-  ;;; points from `cursor` onwards. `on-step` is the solution handler:
-  ;;; called with `'solution` at quiescence and with the step a fold's
-  ;;; function asked for otherwise.
-  (define (search-from s cursor on-step)
+  ;;; points from `cursor` onwards. `at-solution` is called, with no
+  ;;; arguments, at each quiescent state with no choice left — a solution.
+  (define (search-from s cursor at-solution)
     (let ((choice (find-choice s cursor)))
       (if (not choice)
-          (on-step 'solution)
+          (at-solution)
           (try-alternatives s
                             (car choice)
                             (cdr choice)
                             (choice-goals (car choice))
-                            on-step))))
+                            at-solution))))
 
   ;;; Tell one resolved goal: the tell procedure the driver looked up.
   ;;; `who` prefixes the error for a goal that got this far unregistered.
@@ -1684,7 +1659,7 @@
   ;;; covers both "the branch failed" and "the handler asked for the next
   ;;; solution" — which is what makes every enclosing alternative level
   ;;; undo and try its next one too.
-  (define (try-alternatives s susp slot goals on-step)
+  (define (try-alternatives s susp slot goals at-solution)
     (if (null? goals)
         'failed
         (let* ((goal (car goals))
@@ -1712,15 +1687,13 @@
                    ;; killed just above. Each alternative gets the same
                    ;; starting point, because the undo below puts the
                    ;; bucket back exactly as it was.
-                   (search-from s (+ slot 1) on-step))))
-               (value (if (pair? branch)
-                          (if (eq? (car branch) 'ok) (cdr branch) 'failed)
-                          'failed)))
+                   (search-from s (+ slot 1) at-solution))))
+               (value (if (eq? (car branch) 'ok) (cdr branch) 'failed)))
           (if (eq? value 'failed)
               (begin
                 (use-queue! s queue)
                 (trail-unwind! mark)
-                (try-alternatives s susp slot (cdr goals) on-step))
+                (try-alternatives s susp slot (cdr goals) at-solution))
               value))))
 
   ;;; A value with every bound variable replaced by what it is bound to,
@@ -1740,7 +1713,7 @@
 
   ;;; Fork a search session, tell the already-resolved goal, and drive it.
   ;;;
-  ;;; Returns `(values outcome kept)` where `outcome` is `'committed`,
+  ;;; Returns the pair `(outcome . kept)` where `outcome` is `'committed`,
   ;;; `'stopped` or `'exhausted`, and `kept` is the goal variables' values
   ;;; in the solution — read before the unwind — or `#f`.
   ;;;
@@ -1764,53 +1737,43 @@
                            (((storage count) (store-snapshot sub ctype)))
                          count)
                        0))
-           (outcome #f)
            (kept #f))
-      (define (on-step step)
-        (if (not (eq? step 'solution))
-            'failed
-            ;; `on-solution` answers a real value, or the symbol `failed`
-            ;; when the handler asked for the next solution. An ambiguous
-            ;; pair is not used: a handler's value can itself be a pair.
-            (let ((decision (on-solution)))
-              (cond
-                ((eq? decision 'continue) 'failed)
-                ((eq? decision 'stop)
-                 (set! outcome 'stopped)
-                 'stopped)
-                ((eq? decision 'commit)
-                 ;; Read before the unwind below takes the solution away.
-                 (set! kept (map resolve-value goal-vars))
-                 (set! outcome 'committed)
-                 'committed)
-                (else
-                 (%chr-error
-                  (string-append
-                   "fold_solutions: the step function must return continue/1,"
-                   " stop/1 or commit/1")))))))
+      ;; Answers the symbol `failed` when the handler asked for the next
+      ;; solution, which makes the enclosing alternative undo and move on,
+      ;; and `stopped` or `committed` to end the search.
+      (define (at-solution)
+        (let ((decision (on-solution)))
+          (cond
+            ((eq? decision 'continue) 'failed)
+            ((eq? decision 'stop) 'stopped)
+            ((eq? decision 'commit)
+             ;; Read before the unwind below takes the solution away.
+             (set! kept (map resolve-value goal-vars))
+             'committed)
+            (else
+             (%chr-error
+              (string-append
+               "fold_solutions: the step function must return continue/1,"
+               " stop/1 or commit/1"))))))
       (define (body)
         (for-each
          (lambda (g)
            (tell-goal sub (car g) (cadr g) (car (cddr g)) "solve"))
          goals)
-        (search-from sub cursor on-step))
-
-      (define (unwind) (trail-unwind! base))
-      ;; The unwind runs on every exit, including one that escapes as a
-      ;; condition: the trail must not stay active for the caller, or its
-      ;; next `%fail` would report an enclosing search that is not there.
-      ;; `dynamic-wind` covers the normal and continuation paths, the
-      ;; `guard` the escaping one.
+        (search-from sub cursor at-solution))
+      (define (leave)
+        (trail-unwind! base)
+        (trail-exit! prev))
+      ;; Unwind and restore the trail on every exit, including one that
+      ;; escapes as a condition: the trail must not stay active for the
+      ;; caller, or its next `%fail` would report an enclosing search that
+      ;; is not there. Conditions are the only non-local exit to cover:
+      ;; the generated code's `call/cc` escapes never leave the procedure
+      ;; that captured them, so none crosses this host call.
       (let ((result
-             (guard (c (#t (unwind) (trail-exit! prev) (raise c)))
-               (dynamic-wind
-                (lambda () #f)
-                (lambda ()
-                  (let ((r (with-failures-caught body)))
-                    (unwind)
-                    (trail-exit! prev)
-                    r))
-                unwind))))
+             (guard (c (#t (leave) (raise c)))
+               (with-failures-caught body))))
+        (leave)
         (if (not (eq? (car result) 'ok))
             (cons 'exhausted #f)
             (let ((r (cdr result)))

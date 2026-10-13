@@ -60,8 +60,8 @@ and `run_chr_session_ep/1`. `forall/3`, `find_n/3` and `between/3` are
 derived in CHR and needed nothing of their own.
 
 The runtime lives in `scheme/ychr/trail.sls` (a global trail box, undo
-thunks, mark/unwind, and the outermost-driver install/restore used by
-`dynamic-wind`), plus the search section of `scheme/ychr/runtime.sls`
+thunks, mark/unwind, and the outermost driver's install/restore),
+plus the search section of `scheme/ychr/runtime.sls`
 and the trailing hooks in `var.sls` (variable cells and observer lists),
 `store.sls` (growable counts, `alive`/`stored` flags, the store-index
 pointer and every index entry filed while a search is active) and
@@ -73,8 +73,9 @@ are easy to miss:
 * The fork shares the store *objects*, not copies of them, so a `'copy`
   search's kills write the caller's own suspension flags. Every exit —
   including an escaping condition — must unwind and deactivate the
-  trail; `drive-search` wraps its body in `dynamic-wind` for the normal
-  paths and a `guard` for the escaping one.
+  trail; `drive-search` does both on its normal return and in a `guard`
+  that re-raises an escaping condition. No continuation escape crosses
+  the host call, so a `dynamic-wind` would add nothing.
 * `stored` is recorded only on the *first, effective* store, and
   `kill-constraint` writes only `alive` — both matching the reference
   (`Store.hs`'s `storeConstraint` guards on `unless stored` and
