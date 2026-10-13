@@ -68,6 +68,7 @@ import Control.Monad (foldM)
 import Control.Monad.Trans.Writer.CPS (Writer, runWriter, tell)
 import Data.List (nub, partition, sortOn)
 import Data.List qualified as List
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, mapMaybe)
 import Data.Set (Set)
@@ -254,7 +255,7 @@ buildTellables prog =
   where
     scopes = Set.fromList [sc | r <- prog.rules, sc <- concatMap goalScopes r.body.node]
     goalScopes (D.BodyTellDynamic sc _ _) = [sc]
-    goalScopes (D.BodyOr branches) = concatMap (concatMap goalScopes) branches
+    goalScopes (D.BodyOr branches) = concatMap (concatMap goalScopes) (NE.toList branches)
     goalScopes _ = []
 
 -- | Build the list of constraint type source names, indexed by
