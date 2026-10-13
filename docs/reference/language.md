@@ -41,10 +41,13 @@ static type checker is specified in [type-system.md](type-system.md).
 | `:- inline Decls.` | [Inlining](#inlining) |
 | `:- constraint_use Decls.` | [Constraint use](#constraint-use) |
 | `:- macro Name(Vs) ---> Body.` | [macros.md](macros.md) |
+| *(Draft)* `:- macro Name/N.`, `:- macro_decls …`, `Head ---> Body.`, `:- Name(Args).` | [macros.md](macros.md) |
 
 Declaration directives take comma-separated lists:
 `:- chr_constraint a/1, b/2.` Unknown directives are dropped silently
-(Prolog-source compatibility, not an extension point).
+(Prolog-source compatibility, not an extension point). *(Draft)* The
+[declaration-macro draft](macros.md#using-a-declaration-macro) makes
+them an error instead.
 
 ## Rules
 
