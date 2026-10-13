@@ -34,9 +34,16 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Numeric (showHex)
 import YCHR.Internal.Compile (tellProcName)
-import YCHR.Internal.Compile.Names (encodeIdentifier, isIdInitialSafe, vmName)
+import YCHR.Internal.Compile.Names
+  ( encodeIdentifier,
+    encodeText,
+    isIdInitialSafe,
+    runtimeName,
+    vmName,
+  )
 import YCHR.Internal.PExpr (OpTable, OpType (..), opTableEntries)
 import YCHR.Internal.SExpr (SExpr (..), printSExpr)
+import YCHR.Internal.Types (SymbolTable, symbolTableToList)
 import YCHR.Internal.Types qualified as Types
 import YCHR.Internal.VM.Index (indexablePositions, nonRaising)
 import YCHR.Internal.VM.SExpr (VMProgram (..))
@@ -72,8 +79,13 @@ import YCHR.Internal.VM.Types
 --
 -- The mangled @tell_MOD__NAME_ARITY@ procedures remain defined inside
 -- the library (the aliases are bound to them) but are not exported.
-generateScheme :: [Text] -> VMProgram -> OpTable -> Text
-generateScheme libName vmp ops =
+--
+-- The 'SymbolTable' is the compiler's @(constraint name, arity) -> type
+-- index@ map. The VM program carries the type *names* but not the
+-- arities paired with them, and the search driver's goal table is keyed
+-- by both, so it is threaded in from the caller ('CompiledProgram').
+generateScheme :: [Text] -> SymbolTable -> VMProgram -> OpTable -> Text
+generateScheme libName symTab vmp ops =
   let procs = vmp.program.procedures
       infoName = programInfoBindingName libName
       aliases = collectAliases vmp
@@ -86,7 +98,7 @@ generateScheme libName vmp ops =
         ]
           ++ map renderSExpr (concatMap compileProcedure procs)
           ++ map renderSExpr (aliasDefines aliases)
-          ++ [renderSExpr (programInfoSExpr infoName vmp ops)]
+          ++ [renderSExpr (programInfoSExpr infoName symTab vmp ops)]
           ++ [") ;; end library"]
 
 -- ---------------------------------------------------------------------------
@@ -251,8 +263,8 @@ programInfoBindingName libName = case reverse libName of
 -- @(open-session NAME)@ in the REPL library simply invokes this thunk,
 -- and tell procedures are reached statically through the exported alias
 -- identifiers.
-programInfoSExpr :: Text -> VMProgram -> OpTable -> SExpr
-programInfoSExpr infoName vmp ops =
+programInfoSExpr :: Text -> SymbolTable -> VMProgram -> OpTable -> SExpr
+programInfoSExpr infoName symTab vmp ops =
   let bindings =
         [ SList
             [ SAtom "%s",
@@ -261,7 +273,10 @@ programInfoSExpr infoName vmp ops =
                   SInt (fromIntegral (length vmp.program.typeNames)),
                   indexPositionsSExpr (indexablePositions vmp.program),
                   opTableSExpr ops,
-                  typeNamesSExpr vmp.program.typeNames
+                  typeNamesSExpr vmp.program.typeNames,
+                  inertTypesSExpr
+                    (length vmp.program.typeNames)
+                    vmp.program.inertTypes
                 ]
             ]
         ]
@@ -269,11 +284,8 @@ programInfoSExpr infoName vmp ops =
         map evaluableRegistration vmp.program.evaluables
           ++ map callableRegistration vmp.program.callables
           ++ map tellableRegistration vmp.program.tellables
-      -- 'inertTypes' is deliberately not emitted. It only lets a
-      -- runtime skip observer registration that could never lead to a
-      -- useful reactivation, so honoring it changes no result, and
-      -- the Scheme runtime has no search driver for which the saving
-      -- would matter.
+          ++ goalRegistrations symTab vmp
+          ++ shortExportRegistrations vmp.exportedSet
       -- The let body is the session itself, returned to the caller.
       letBody = SAtom "%s"
    in SList
@@ -281,6 +293,105 @@ programInfoSExpr infoName vmp ops =
           SList [SAtom infoName],
           SList ([SAtom "let", SList bindings] ++ registrations ++ [letBody])
         ]
+
+-- ---------------------------------------------------------------------------
+-- Search-driver registrations
+-- ---------------------------------------------------------------------------
+
+-- | The inert-type vector @%make-session@'s fifth argument takes: one
+-- boolean per constraint type, in 'ConstraintType' index order, @#t@ for a
+-- type the compiler marked inert
+-- ('YCHR.Internal.VM.Types.Program'.'inertTypes').
+--
+-- Honoring it is what keeps a deep search linear: an inert type's
+-- suspensions register no observers, so a rule-less choice point costs
+-- nothing at every later binding.
+inertTypesSExpr :: Int -> [ConstraintType] -> SExpr
+inertTypesSExpr numTypes inert =
+  let inertSet = IntSet.fromList [i | ConstraintType i <- inert]
+   in SList
+        ( SAtom "vector"
+            : [ if IntSet.member i inertSet then SAtom "#t" else SAtom "#f"
+              | i <- [0 .. numTypes - 1]
+              ]
+        )
+
+-- | Emit one @(register-goal! %s 'FUNCTOR ARITY tell_proc EXPORTED?)@ per
+-- declared constraint, keyed by the functor a compiled term of that
+-- constraint carries and its arity.
+--
+-- Every declared constraint is registered, not only the exported ones: a
+-- choice point's alternatives routinely name module-internal constraints
+-- the compiler itself lifted out of a @;@, and the driver resolves those
+-- without the export check.
+--
+-- The declaration list comes from the symbol table, which is the only
+-- place the program records arities; its order is 'ConstraintType' index
+-- order, so the emitted table is stable.
+--
+-- The @EXPORTED?@ field is the program's export set membership for the
+-- constraint's *qualified* name. It is what lets a caller-written
+-- qualified goal be rejected with "Constraint not exported" — mirroring
+-- `resolveByExport`'s `Set.member (QualifiedIdentifier m n arity) expSet`
+-- — while a lifted disjunct's qualified name, which no module exports, is
+-- still reachable through the alternatives of a choice point (those go
+-- through the driver's unexport-checked path).
+goalRegistrations :: SymbolTable -> VMProgram -> [SExpr]
+goalRegistrations symTab vmp =
+  [ SList
+      [ SAtom "register-goal!",
+        SAtom "%s",
+        compileSymbol (runtimeName ident.name),
+        SInt (fromIntegral ident.arity),
+        SAtom (tellProcName ident.name ident.arity).unName,
+        if Set.member qualified vmp.exportedSet then SAtom "#t" else SAtom "#f"
+      ]
+  | (ident, _) <- symbolTableToList symTab,
+    let tellName = (tellProcName ident.name ident.arity).unName,
+    Set.member tellName tellNames,
+    let qualified = qualifiedIdentifier ident.name ident.arity
+  ]
+  where
+    tellNames = Set.fromList [n.unName | p <- vmp.program.procedures, let n = p.name]
+
+-- | The 'Types.QualifiedIdentifier' a declared constraint's name denotes,
+-- for the export-set membership test. A declared constraint is normally
+-- module-qualified already; an unqualified one (a compiler-internal
+-- @__lambda_N@, say) is never in the export set, and the empty module
+-- below can never match, so it correctly answers @False@.
+qualifiedIdentifier :: Types.Name -> Int -> Types.QualifiedIdentifier
+qualifiedIdentifier name arity = case name of
+  Types.Qualified m n -> Types.QualifiedIdentifier m n arity
+  Types.Unqualified n -> Types.QualifiedIdentifier "" n arity
+
+-- | Emit one @(register-short-export! %s 'NAME ARITY TARGET)@ per
+-- @(name, arity)@ the program exports, where @TARGET@ is the resolved
+-- mangled functor symbol when exactly one module exports it, and a list
+-- of module names when several do.
+--
+-- This is the driver's @resolveByExport@, precomputed. Grouping
+-- 'vmp.exportedSet' by @(name, arity)@ derives exactly the module set
+-- the compiler's own export map holds, so the two cannot disagree.
+shortExportRegistrations :: Set.Set Types.QualifiedIdentifier -> [SExpr]
+shortExportRegistrations exported =
+  [ SList
+      [ SAtom "register-short-export!",
+        SAtom "%s",
+        compileSymbol (encodeText n),
+        SInt (fromIntegral a),
+        targetSExpr n mods
+      ]
+  | ((n, a), mods) <- Map.toAscList grouped
+  ]
+  where
+    grouped =
+      Map.fromListWith
+        (++)
+        [ ((i.localName, i.arity), [i.moduleName])
+        | i <- Set.toList exported
+        ]
+    targetSExpr n [m] = compileSymbol (encodeText m <> "__" <> encodeText n)
+    targetSExpr _ mods = SList (SAtom "list" : map SString mods)
 
 -- | Render the program's operator table as the @(make-op-table
 -- (quote (…)))@ call that rebuilds it. The table is a derived structure
@@ -1022,16 +1133,16 @@ hostCallMap =
       -- identifier: a generated library defines *every* function of an
       -- imported library, and an unmapped meta call would make the whole
       -- module unloadable on a strict R6RS implementation (Chez), even
-      -- for a program that only uses `print/1`. `run_chr_session` is the
-      -- only one still backed by a stub, which raises a clear runtime
-      -- error when it is called.
+      -- for a program that only uses `print/1`.
       ("write_store_to_list", "%write-store-to-list"),
       ("print_store", "%print-store"),
       ("run_chr_session", "%run-chr-session"),
       ("run_chr_session_ep", "%run-chr-session-ep"),
       -- `library(search)`'s driver calls, for the same reason: a
       -- program importing `library(state)` imports the search library
-      -- too, and must load even if it never runs a search.
+      -- too, and must load even if it never runs a search. All six are
+      -- implemented, and all six take the session (see
+      -- 'sessionHostCalls').
       ("solve", "%solve"),
       ("fail", "%fail"),
       ("findall", "%findall"),
@@ -1044,13 +1155,24 @@ hostCallMap =
 -- | Host calls that need the session threaded as their first argument.
 -- @print_store@ and @write_store_to_list@ read the store, so they need it
 -- even though neither takes a user-visible argument.
+--
+-- The search driver's entry points are here too: every one of them
+-- resolves its goal, forks the session and reads the store, so all six
+-- take the session as their first argument. @fail@ reads only the trail,
+-- but it keeps the same convention.
 sessionHostCalls :: Set.Set Text
 sessionHostCalls =
   Set.fromList
     [ "copy_term",
       "read_term_from_string",
       "write_store_to_list",
-      "print_store"
+      "print_store",
+      "solve",
+      "findall",
+      "fold_solutions",
+      "fail",
+      "run_chr_session",
+      "run_chr_session_ep"
     ]
 
 -- | Where a @host:@ call lands in the Scheme runtime: the procedure to

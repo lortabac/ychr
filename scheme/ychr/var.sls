@@ -14,11 +14,14 @@
           match-term
           get-arg
           add-observer!
+          var-observers
+          var-value
           add-observer-and-key
           ground-key
           get-var-id)
   (import (rnrs)
-          (ychr session))
+          (ychr session)
+          (ychr trail))
 
   ;;; Logical variables
   (define *unbound* (list 'unbound))
@@ -33,19 +36,40 @@
       (session-var-id-set! s (+ id 1))
       (%make-var id *unbound* '())))
 
+  ;;; Trail one variable cell, immediately before it is overwritten.
+  ;;; Two helpers rather than one because a write changes only one of the
+  ;;; two cells, and trailing the other would restore a value it still
+  ;;; holds. Each reads the old value only when a search is active.
+  (define (trail-value! v)
+    (when (trail-active?)
+      (let ((old (var-value v)))
+        (trail-push! (lambda () (var-value-set! v old))))))
+  (define (trail-observers! v)
+    (when (trail-active?)
+      (let ((old (var-observers v)))
+        (trail-push! (lambda () (var-observers-set! v old))))))
+
   ;;; Compound terms
   (define-record-type (term make-term term?)
     (fields (immutable functor term-functor)
             (immutable args term-args)))
 
   ;;; Dereferencing with path compression
+  ;;;
+  ;;; The compression write is skipped while a search trail is active.
+  ;;; Trailing it would work (the Haskell runtime does), but it is not
+  ;;; needed: a compression records nothing the walk could not recompute,
+  ;;; and a branch that bound the variable underneath it is undone by the
+  ;;; entry for that binding. Skipping is cheaper and loses only the
+  ;;; shortening, so a long binding chain built inside a search is walked
+  ;;; in full until the search exits.
   (define (deref v)
     (if (var? v)
         (let ((val (var-value v)))
           (if (eq? val *unbound*)
               v
               (let ((result (deref val)))
-                (when (not (eq? result v))
+                (when (and (not (eq? result v)) (not (trail-active?)))
                   (var-value-set! v result))
                 result)))
         v))
@@ -70,6 +94,10 @@
         v))
 
   ;;; Unification (tell semantics, Prolog =)
+  ;;;
+  ;;; Every cell write is recorded on the search trail, if one is active:
+  ;;; the driver unwinds a branch by replaying them, and the observers it
+  ;;; emits are dropped there rather than drained.
   (define (unify v1 v2)
     (let ((observers '()))
       (define (emit! obs)
@@ -83,6 +111,9 @@
       ((and (var? d1) (var? d2))
        (let ((obs1 (var-observers d1))
              (obs2 (var-observers d2)))
+         (trail-value! d1)
+         (trail-observers! d1)
+         (trail-observers! d2)
          (var-value-set! d1 d2)
          (var-observers-set! d1 '())
          (var-observers-set! d2 (append obs1 obs2))
@@ -90,6 +121,8 @@
          #t))
       ((var? d1)
        (let ((obs (var-observers d1)))
+         (trail-value! d1)
+         (trail-observers! d1)
          (var-value-set! d1 d2)
          (var-observers-set! d1 '())
          (emit! obs)
@@ -226,6 +259,7 @@
     (let ((d (deref v)))
       (cond
         ((and (var? d) (eq? (var-value d) *unbound*))
+         (trail-observers! d)
          (var-observers-set! d (cons suspension-id (var-observers d))))
         ((term? d)
          (add-observer-args! suspension-id (term-args d) 0)))))
@@ -297,6 +331,7 @@
       (cond
         ((and (var? d) (eq? (var-value d) *unbound*))
          (when oid
+           (trail-observers! d)
            (var-observers-set! d (cons oid (var-observers d))))
          #f)
         ((number? d) (cons 'num (number-key d)))

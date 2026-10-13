@@ -1,0 +1,35 @@
+% A failed search branch must leave the store index as it found it.
+%
+% `item/2` is looked up by its first argument (the `probe` rule), so the
+% store indexes that position once the type holds enough constraints.
+% `fill(20)` pushes it past the threshold before the search starts, so
+% the branch files its `item(100, phantom)` into an index that already
+% exists; undoing the branch must take that entry back out, or the later
+% `probe(100, R)` finds a suspension the restored store no longer holds.
+% `late` is the same search with the index first built inside the branch.
+:- module(search_index_undo, [
+    early/1, late/1,
+    % Goal constraints have to be exported: solve/1 resolves them
+    % through the program's exports, in the caller.
+    bad/0, ok/0, bad_fill/0
+]).
+:- use_module(library(search)).
+
+:- chr_type tag ---> real ; phantom ; none.
+
+:- chr_constraint
+   early(any), late(any), fill(int), item(int, tag), probe(int, any),
+   bad, ok, bad_fill.
+
+fill(0) <=> true.
+fill(N) <=> item(N, real), fill(N - 1).
+
+probe(K, R), item(K, V) <=> R = V.
+probe(_, R) <=> R = none.
+
+bad <=> item(100, phantom), fail.
+bad_fill <=> fill(20), item(100, phantom), fail.
+ok <=> true.
+
+early(R) <=> fill(20), _ is solve(quote((bad ; ok))), probe(100, R).
+late(R) <=> _ is solve(quote((bad_fill ; ok))), fill(20), probe(100, R).

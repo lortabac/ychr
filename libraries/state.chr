@@ -59,7 +59,7 @@
 % when the goal's tells have finished, before any choice point it left
 % is explored, so a goal that searches does not give the values of its
 % solution: write the goal deterministically. KVs is checked as for
-% new_states. Both are Haskell-only, as library(search) is.
+% new_states.
 
 % The values are typed `any`. A key does not fix the type of its value
 % (two keys may hold values of different types), and the checker types

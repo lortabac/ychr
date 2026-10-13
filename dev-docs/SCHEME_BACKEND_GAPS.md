@@ -13,36 +13,28 @@ runtime in `scheme/ychr/`. Goals are run through `guile3.0 --r6rs` per
 
 ## Missing meta primitives
 
-`run_chr_session` has no Scheme-side implementation. It is nevertheless
-mapped in `hostCallMap` to a bound stub in `runtime.sls` of the form
-`(error "%run-chr-session" "not implemented")`, so calling it raises with
-message `"not implemented"` and origin the mangled Scheme name. The
-mapping is what keeps
-`library(meta)` importable: a generated library defines *every* function
-of an imported library, so an unmapped name lowers to a bare identifier
-and the whole module fails to load on a strict R6RS implementation
-(Chez reports `attempt to reference unbound identifier run_chr_session`),
-even for a program that only calls `print/1`. `print_store` and
-`write_store_to_list` were in the same state and are now implemented
-(see *Closed gaps*).
+`library(meta)`'s host calls all have Scheme implementations. Every one
+is mapped in `hostCallMap` to a bound procedure in `runtime.sls`, which
+is what keeps `library(meta)` importable: a generated library defines
+*every* function of an imported library, so an unmapped name lowers to a
+bare identifier and the whole module fails to load on a strict R6RS
+implementation (Chez reports `attempt to reference unbound identifier
+run_chr_session`), even for a program that only calls `print/1`.
 
 | Primitive               | Status |
 |-------------------------|--------|
-| `run_chr_session`       | Stub `%run-chr-session`; it spawns a nested interpreter session (the search driver, `YCHR.Internal.Runtime.Search`, on the Haskell side). `run_chr_session_test` is in `HASKELL_ONLY`. |
-| `run_chr_session_ep`    | Stub `%run-chr-session-ep`; the same driver as `run_chr_session`, without the error catch. |
+| `run_chr_session`       | Implemented as `%run-chr-session`; it spawns a nested interpreter session via the search driver. |
+| `run_chr_session_ep`    | Implemented as `%run-chr-session-ep`; the same driver as `run_chr_session`, without the error catch. |
 
 The load-time invariant is pinned, without Guile, by
-`test/scheme/test_golden.py::test_meta_module_host_calls_are_bound`; the
-stub behaviour itself by
-`scheme/test/test-runtime.scm`'s `unimplemented meta host calls raise on
-call` group.
+`test/scheme/test_golden.py::test_meta_module_host_calls_are_bound`.
 
 `run_chr_session` is absent from `*prelude-host-calls*`, so
 deep-evaluating a `host:` *term* with arguments (rather than calling
 the function directly) reports `is: functor is not evaluable` instead
-of reaching the stub — the same distinction the section below draws.
-`read_term_from_string` and `write_term_to_string` were in the same
-state but are now implemented and registered (see *Closed gaps*).
+of reaching the implementation — the same distinction the section below
+draws. `read_term_from_string` and `write_term_to_string` were in the
+same state but are now implemented and registered (see *Closed gaps*).
 
 `print_store` and `write_store_to_list` are implemented but are
 deliberately *not* registered, because only their arity-0 key is
@@ -62,43 +54,61 @@ condition, as for every other fixed-arity primitive.
 
 ## `library(search)`
 
-No Scheme-side implementation of `solve/1`, `findall/2`,
-`fold_solutions/4` or `fail/0` (`forall/3`, `find_n/3` and `between/3` are
-derived in CHR and need nothing of their own).
-The search driver needs three things the Scheme runtime does not have:
-a session fork (as `run_chr_session` above), a snapshot of the store /
-suspension-map / history / reactivation-queue references, and an undo
-trail hooked into every variable-cell and suspension-flag write
-(`src/YCHR/Internal/Runtime/{Search,Trail}.hs`). Every `search_*`
-directory with runnable goals is in `HASKELL_ONLY`: `search_alt`,
-`search_basic`, `search_between`, `search_deep`, `search_disj`,
-`search_fold`, `search_fork`, `search_generate`, `search_label`,
-`search_label_alt` and `search_nested`; so is `state_run`, since `library(state)`'s
-`run_state/3` and `run_states/2` run their goal with `solve/1`. The two
-compilation-negative directories, `search_disj_no_import` and
-`search_disj_type_error`, need no entry: the Scheme harness discovers
-cases from `.goal` files and they have none.
+`solve/1`, `findall/2`, `fold_solutions/4` and `fail/0` are implemented
+on the Scheme backend, along with `library(meta)`'s `run_chr_session/1`
+and `run_chr_session_ep/1`. `forall/3`, `find_n/3` and `between/3` are
+derived in CHR and needed nothing of their own.
 
-Compilation and loading succeed. The library wrappers become ordinary
-compiled procedures (`func_search__solve1`, `func_search__fail0`, …),
-and the `host:` call inside each is mapped to a bound stub (`%solve`,
-`%fail`, `%findall`, `%fold-solutions`) that raises `not implemented`
-when called — the same treatment as the meta primitives above. Without
-the stubs the calls would lower to bare identifiers, which Guile
-resolves lazily but Chez rejects at import time (`attempt to reference
-unbound identifier solve`); since `library(state)` imports
-`library(search)`, that would make every program using
-`library(state)` unloadable on Chez, even one that never runs a search.
+The runtime lives in `scheme/ychr/trail.sls` (a global trail box, undo
+thunks, mark/unwind, and the outermost driver's install/restore),
+plus the search section of `scheme/ychr/runtime.sls`
+and the trailing hooks in `var.sls` (variable cells and observer lists),
+`store.sls` (growable counts, `alive`/`stored` flags, the store-index
+pointer and every index entry filed while a search is active) and
+`history.sls` (deletions).
 
-`alt/1`, `choose/2`, `between/3` and `try_unify/2` need nothing special
-— they are ordinary CHR and compile and run fine; a program that only
-tells a choice point without ever calling `solve/1` behaves identically
-on both backends (the choice just sits in the store).
+Two things on top of the trail are what make a fork correct, and both
+are easy to miss:
 
-Note that the Haskell driver deliberately does *not* reuse the trail
-for anything outside a search: `SessionEnv.trail` is `Nothing` at the
-top level, so a Scheme implementation would not have to pay for the
-hook in ordinary programs either.
+* The fork shares the store *objects*, not copies of them, so a `'copy`
+  search's kills write the caller's own suspension flags. Every exit —
+  including an escaping condition — must unwind and deactivate the
+  trail; `drive-search` does both on its normal return and in a `guard`
+  that re-raises an escaping condition. No continuation escape crosses
+  the host call, so a `dynamic-wind` would add nothing.
+* `stored` is recorded only on the *first, effective* store, and
+  `kill-constraint` writes only `alive` — both matching the reference
+  (`Store.hs`'s `storeConstraint` guards on `unless stored` and
+  `killConstraint` never touches the flag). A re-store of an
+  already-stored suspension is a no-op that Late Storage emits at the end
+  of every activation; recording a trail entry for it would let a search
+  exit clear `stored` on a suspension still in the store, which both
+  defeats `checkUnwatched` (it reads `alive` *and* `stored` together) and
+  lets the next re-store append the same constraint twice.
+
+`src/YCHR/Internal/Backend/Scheme.hs` supplies the rest. It emits, into
+the generated library's session:
+
+* one `register-goal!` per declared constraint, from the compiler's
+  symbol table (the only place arities are recorded), keyed by the
+  mangled functor and arity a compiled term carries. Every declared
+  constraint is registered, not only exported ones: a choice point's
+  alternatives routinely name module-internal constraints the compiler
+  lifted out of a `;`;
+* one `register-short-export!` per exported `(name, arity)`, which is
+  the driver's `resolveByExport` precomputed;
+* the inert-type vector, as `%make-session`'s fifth argument. Honouring
+  it is what keeps a deep search linear: an inert type's suspensions
+  register no observers, so a rule-less choice point costs nothing at
+  every later binding.
+
+The search entry points are all in `sessionHostCalls`, so the code
+generator threads the session into each of them.
+
+Every search-related golden directory now runs on the Scheme backend,
+along with `state_run` and `run_chr_session_test`. The compile-negative
+directories need no entry: the harness discovers cases from `.goal` files
+and they have none.
 
 
 ## `deep-eval` host-call lookup ignores arity
@@ -311,6 +321,13 @@ contracts from the invariant side.
 
 The following used to live here and are now closed. Kept as a brief
 record of which fixes have already shipped.
+
+- **`library(search)`** — `solve/1`, `findall/2`, `fold_solutions/4`,
+  `fail/0`, `run_chr_session/1` and `run_chr_session_ep/1` were bound
+  stubs raising `not implemented`, and eleven `search_*` directories
+  plus `state_run` were in `HASKELL_ONLY`. They are now implemented on
+  top of `(ychr trail)` and the search section of the runtime; see
+  *`library(search)`* above for the design.
 
 - **`print_store` / `write_store_to_list`** — the two meta primitives that
   expose the store were bound stubs raising `not implemented`, and

@@ -15,9 +15,13 @@
           snapshot-ref
           suspension?
           suspension-alive?
+          suspension-alive-set!
           suspension-arg
           suspension-args
           suspension-id
+          suspension-owner
+          suspension-stored?
+          suspension-stored-set!
           suspension-type
           ;; Store index (the paper's Indexing optimization) — see below.
           index-threshold
@@ -27,7 +31,8 @@
           candidate-suspensions)
   (import (rnrs)
           (ychr session)
-          (ychr var))
+          (ychr var)
+          (ychr trail))
 
   ;;; Growable vectors (internal)
   (define-record-type (growable %make-growable growable?)
@@ -42,15 +47,16 @@
         ((= i (vector-length from)))
       (vector-set! to (+ at i) (vector-ref from i))))
 
-  (define (growable-push! g value)
+  (define (growable-push! s g value)
+    (trail-growable! g)
     (let ((n (growable-count g))
-          (s (growable-storage g)))
-      (when (= n (vector-length s))
-        (let ((new-s (make-vector (* 2 (vector-length s)) #f)))
-          (vector-copy!/ychr new-s 0 s)
+          (storage (growable-storage g)))
+      (when (= n (vector-length storage))
+        (let ((new-s (make-vector (* 2 (vector-length storage)) #f)))
+          (vector-copy!/ychr new-s 0 storage)
           (growable-storage-set! g new-s)
-          (set! s new-s)))
-      (vector-set! s n value)
+          (set! storage new-s)))
+      (vector-set! storage n value)
       (growable-count-set! g (+ n 1))))
 
   ;;; Suspensions. The stored flag makes store-constraint idempotent:
@@ -58,12 +64,20 @@
   ;;; same suspension more than once (per fired kept occurrence, and at
   ;;; the end of every activation), and only the first may append to
   ;;; the store and register observers.
+  ;;;
+  ;;; `owner` is the identity token of the store the suspension belongs
+  ;;; to (see `(ychr session)`). A session that tells a goal in a fresh
+  ;;; sub-session creates suspensions owned by *that* store; if one of
+  ;;; their ids is ever enqueued for reactivation in the session that
+  ;;; called it, the owner test drops it rather than activating an
+  ;;; unrelated constraint that happens to hold the same id.
   (define-record-type (suspension %make-suspension suspension?)
     (fields (immutable id suspension-id)
             (immutable type suspension-type)
             (immutable args suspension-args)
             (mutable alive suspension-alive? suspension-alive-set!)
-            (mutable stored suspension-stored? suspension-stored-set!)))
+            (mutable stored suspension-stored? suspension-stored-set!)
+            (immutable owner suspension-owner)))
 
   (define (suspension-arg susp idx)
     (vector-ref (suspension-args susp) idx))
@@ -100,10 +114,9 @@
   ;;; growable vector, which is what makes ascending slot order
   ;;; reproduce the store's iteration order exactly. Slots stay valid
   ;;; because the store is only ever appended to, and its storage vector
-  ;;; only ever grows by copying its prefix. There is no search driver
-  ;;; on this backend, so unlike the Haskell runtime the index needs no
-  ;;; snapshot or undo counterpart; a future one must capture and
-  ;;; restore it together with the store.
+  ;;; only ever grows by copying its prefix. A search branch's writes to
+  ;;; the index are undone with the rest of the store (see "Search undo
+  ;;; hooks" below).
   ;;; -------------------------------------------------------------------
 
   ;;; How many constraints of one type the store must hold before an
@@ -165,22 +178,45 @@
   ;;; ground when it was stored, so the slot goes to the position's
   ;;; fallback set and stays there: binding the variable afterwards does
   ;;; not re-file it.
+  ;;;
+  ;;; Trailed while a search is active. A type indexed before the search
+  ;;; started keeps the same index object across the branch, so an entry
+  ;;; filed there by a branch would otherwise outlive it: restoring the
+  ;;; growable's count does not reach the index, and the stale slot would
+  ;;; hand back the abandoned branch's suspension, which is still alive.
+  ;;; Each write only prepends, so the undo puts the old list back.
   (define (file-entry! ti slot pos key)
     (let* ((pi (cdr (assv pos ti)))
            (buckets (pos-index-buckets pi)))
       (if key
-          (hashtable-set! buckets key (cons slot (hashtable-ref buckets key '())))
-          (pos-index-rest-set! pi (cons slot (pos-index-rest pi))))))
+          (let ((old (hashtable-ref buckets key '())))
+            (when (trail-active?)
+              (trail-push!
+               (lambda ()
+                 (if (null? old)
+                     (hashtable-delete! buckets key)
+                     (hashtable-set! buckets key old)))))
+            (hashtable-set! buckets key (cons slot old)))
+          (let ((old (pos-index-rest pi)))
+            (when (trail-active?)
+              (trail-push! (lambda () (pos-index-rest-set! pi old))))
+            (pos-index-rest-set! pi (cons slot old))))))
 
   ;;; A type that is being indexed from now on must still hold the
   ;;; suspensions stored below the threshold, which were never filed.
   ;;; Their observers were registered when they were stored, so only
   ;;; their keys are wanted here.
+  ;;;
+  ;;; Under a search, the installed index is a new object behind a new
+  ;;; pointer (`trail-store-index!`), so undoing the branch discards it
+  ;;; whole; the entries filed into it are trailed too (`file-entry!`),
+  ;;; which costs a little and keeps one rule for every index write.
   (define (file-backlog! s ctype g positions)
     (let* ((ti (make-type-index positions))
            (storage (growable-storage g))
            (count (growable-count g)))
-      (vector-set! (session-store-index s) ctype ti)
+      (trail-store-index! s)
+      (install-type-index! s ctype ti)
       (let loop ((slot 0))
         (when (< slot count)
           (let ((susp (vector-ref storage slot)))
@@ -275,11 +311,63 @@
                           (loop (+ i 1) (cdr ss)))
                         (values v n)))))))))
 
+  ;;; -------------------------------------------------------------------
+  ;;; Search undo hooks
+  ;;;
+  ;;; The store is a shared object across a forking search: a `'copy`
+  ;;; fork *is* the caller's store, so the driver undoes a branch's
+  ;;; writes instead of discarding a private copy. Three of the writes
+  ;;; need recording — the suspension `alive` and `stored` flags, and the
+  ;;; growable's count — and all three are recorded only while a search
+  ;;; is active.
+  ;;;
+  ;;; The growable's count is enough by itself: the store is append-only,
+  ;;; so restoring an older count truncates exactly the suspensions a
+  ;;; branch appended. Its storage vector only ever grows, and a vector
+  ;;; swap copies the prefix, so a slot index a driver is holding names
+  ;;; the same suspension before and after.
+  ;;;
+  ;;; The store index needs one more hook. An index is per type and lives
+  ;;; in the session's `store-index` vector, which a fork shares; when a
+  ;;; branch pushes a type past `index-threshold` it installs a whole new
+  ;;; index there, and restoring the pointer discards it. That is not
+  ;;; enough on its own: a type indexed *before* the search keeps its
+  ;;; index object across the branch, so every `file-entry!` write is
+  ;;; trailed as well — otherwise a stale slot past the restored count
+  ;;; would hand back an abandoned branch's suspension.
+  ;;; -------------------------------------------------------------------
+
+  (define (trail-growable! g)
+    (when (trail-active?)
+      (let ((old (growable-count g)))
+        (trail-push! (lambda () (growable-count-set! g old))))))
+
+  ;;; The whole index *pointer* is what a branch installs, so that is
+  ;;; what is saved and restored: a fresh vector with the slot filled.
+  ;;; The old vector object is untouched, so the entries filed into the
+  ;;; new one disappear with it.
+  (define (trail-store-index! s)
+    (when (trail-active?)
+      (let ((old (session-store-index s)))
+        (trail-push!
+         (lambda () (session-store-index-set! s old))))))
+
+  ;;; Install a new store-index vector with `ctype`'s slot set to `ti`.
+  (define (install-type-index! s ctype ti)
+    (let* ((old (session-store-index s))
+           (n (vector-length old))
+           (new (make-vector n #f)))
+      (do ((i 0 (+ i 1))) ((= i n))
+        (vector-set! new i (vector-ref old i)))
+      (session-store-index-set! s (if (< ctype n)
+                                      (begin (vector-set! new ctype ti) new)
+                                      new))))
+
   ;;; Operations
   (define (create-constraint s ctype args)
     (let ((id (session-store-next-id s)))
       (session-store-next-id-set! s (+ id 1))
-      (%make-suspension id ctype args #t #f)))
+      (%make-suspension id ctype args #t #f (session-owner s))))
 
   ;;; Add a constraint to the type-indexed store, register it as an
   ;;; observer on each of its variable arguments, and record it in the
@@ -294,18 +382,42 @@
   ;;; traversal per argument, not two — and only once the type's bucket
   ;;; is worth indexing at all. Below `index-threshold` this is the
   ;;; pre-index path exactly.
+  ;;;
+  ;;; An *inert* type takes the plainest path of all: pushed, and
+  ;;; nothing else. Nothing an inert constraint does can reactivate
+  ;;; anything, so the walk that would register observers is skipped
+  ;;; outright (Delay Avoidance's trivial instance). That is not only a
+  ;;; saving: it is what makes `solve/1` accept a goal variable a
+  ;;; caller's rule-less constraint mentions
+  ;;; (`test/golden/search_fork/inert_watcher_ok`), and what keeps a deep
+  ;;; search's choice points off every variable's observer list.
   (define (store-constraint s susp)
+    ;; Only the *first* store records `stored` and puts anything in the
+    ;; store. A re-store of an already-stored suspension is a no-op
+    ;; (Late Storage emits one at the end of every activation), so
+    ;; recording a trail entry here would let a search exit clear the
+    ;; flag on a suspension that is still in the store — which would
+    ;; both defeat `check-unwatched` and let the next re-store append
+    ;; the same constraint twice.
     (unless (suspension-stored? susp)
+      (when (trail-active?)
+        (trail-push!
+         (lambda () (suspension-stored-set! susp #f))))
       (suspension-stored-set! susp #t)
       (let* ((ctype (suspension-type susp))
              (g (vector-ref (session-store-by-type s) ctype))
              (positions (vector-ref (session-index-positions s) ctype)))
-        (if (null? positions)
-            ;; No position of this type is ever looked up through an
-            ;; index, so this is the pre-index path exactly.
+        (if (or (vector-ref (session-inert s) ctype) (null? positions))
+            ;; Inert, or no position of this type is ever looked up
+            ;; through an index: the pre-index path exactly. An inert
+            ;; type registers no observers at all — that is what makes a
+            ;; rule-less choice point free at every later binding, and
+            ;; what keeps `check-unwatched` from seeing a live `alt` on
+            ;; a goal variable.
             (begin
-              (observe-args! susp (suspension-args susp))
-              (growable-push! g susp))
+              (unless (vector-ref (session-inert s) ctype)
+                (observe-args! susp (suspension-args susp)))
+              (growable-push! s g susp))
             (let* ((slot (growable-count g))
                    (indexed (vector-ref (session-store-index s) ctype))
                    ;; `slot` is where this store lands, so the bucket
@@ -315,16 +427,21 @@
                   ;; Too small to be worth indexing: still the pre-index
                   ;; path, and the whole bucket is filed in one pass
                   ;; later if it grows past the threshold.
-                  (begin
-                    (observe-args! susp (suspension-args susp))
-                    (growable-push! g susp))
+                  (growable-push! s g susp)
                   (let ((entries (keys-and-observe! susp positions)))
                     (when (not indexed)
                       (file-backlog! s ctype g positions))
-                    (growable-push! g susp)
+                    (growable-push! s g susp)
                     (insert-entries! s ctype slot entries))))))))
 
   (define (kill-constraint susp)
+    ;; Only `alive` is written, matching the reference: `stored` means
+    ;; "has been stored", and `check-unwatched` reads the pair so that a
+    ;; dead suspension's observer list stops counting. Clearing
+    ;; `stored` here as well would make a kill-then-store re-append a
+    ;; suspension that is already in the bucket.
+    (when (trail-active?)
+      (trail-push! (lambda () (suspension-alive-set! susp #t))))
     (suspension-alive-set! susp #f))
 
   (define (alive-constraint? susp)

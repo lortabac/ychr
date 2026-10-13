@@ -310,7 +310,7 @@ runCompile resources opts files =
             outPath =
               opts.outputDir </> "ychr" </> "generated" </> T.unpack name ++ ".sls"
         createDirectoryIfMissing True (takeDirectory outPath)
-        TIO.writeFile outPath (generateScheme libName vmp prog.opTable)
+        TIO.writeFile outPath (generateScheme libName prog.symbolTable vmp prog.opTable)
         putStrLn outPath
         schemeRuntimeNote
 

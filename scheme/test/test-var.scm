@@ -10,11 +10,24 @@
 ;; on the runtime entry point. The operator table is the built-in one, the
 ;; default a hand-built session gets.
 (define (fresh)
-  (make-session 0 (vector) (vector) (vector) (vector) 0 #f '() '()
+  (make-session (make-counters 0 0)
+                (vector)
+                (vector)
+                (vector)
+                (vector)
+                #f
+                '()
+                '()
                 (make-hashtable equal-hash equal?)
                 (make-hashtable equal-hash equal?)
                 (make-hashtable equal-hash equal?)
-                builtin-op-table))
+                builtin-op-table
+                (make-hashtable equal-hash equal?)
+                (make-hashtable equal-hash equal?)
+                (make-hashtable equal-hash equal?)
+                (vector)
+                #f
+                (vector)))
 
 (test-begin "var")
 

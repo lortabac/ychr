@@ -2,7 +2,7 @@
 (library (ychr runtime)
   (export
     ;; Session
-    make-session session?
+    make-session session? make-counters
     ;; From (ychr var)
     make-var var? var-id deref unify unifiable? equal?/chr
     make-term term? term-functor term-args
@@ -45,13 +45,17 @@
     ;; Dynamic tell dispatch table for @tell/N@
     register-tellable! %tell-term
     ;; Session initialization
-    %make-session make-op-table)
+    %make-session make-op-table
+    ;; Search driver and its program-level tables
+    %fork-session register-goal! register-short-export!
+    search-failure?)
   (import (rnrs)
           (ychr session)
           (ychr var)
           (ychr store)
           (ychr history)
           (ychr reactivation)
+          (ychr trail)
           (ychr optable)
           (ychr pretty)
           (ychr read))
@@ -66,6 +70,11 @@
   ;;; session. They install no constraint type names either, so a
   ;;; hand-built session's stored constraints label as `c#type_N` in
   ;;; `write_store_to_list` and `print_store`.
+  ;;;
+  ;;; A session built here owns its store: its `owner` token is the
+  ;;; `store-by-type` object itself, which is what makes the reactivation
+  ;;; queue's foreign-suspension filter answer correctly for a fresh
+  ;;; `run_chr_session` fork (`%fork-session`).
   (define %make-session
     (case-lambda
       ;; A session with no store index. Hand-built sessions (the unit
@@ -91,34 +100,167 @@
       ;; `CompiledProgram.typeNames`). `write_store_to_list` and
       ;; `print_store` split it back into a module and a base name.
       ((num-types positions ops type-names)
-       (make-session
-        0
-        (make-store-by-type num-types)
-        (make-index-positions num-types positions)
-        (make-store-index num-types)
-        type-names
-        0
-        (make-hashtable equal-hash equal?)
-        '()
-        '()
-        ;; Deep-eval dispatch table: keys are
-        ;; (functor-symbol . arity) pairs; values are the
-        ;; procedures the deep-evaluator calls when @is@
-        ;; walks a @VTerm@ matching the key. Generated
-        ;; libraries fill this in via @register-evaluable!@.
-        (make-hashtable evaluable-key-hash evaluable-key-eq?)
-        ;; Closure-apply dispatch table: keys are
-        ;; (functor identity arity) lists; values are the
-        ;; procedures `%apply-closure` calls for that
-        ;; closure. Generated libraries fill this in via
-        ;; @register-callable!@.
-        (make-hashtable equal-hash equal?)
-        ;; Dynamic tell dispatch table: keys are
-        ;; ("scope" functor arity) lists; values are the tell
-        ;; procedures `%tell-term` calls. Generated libraries
-        ;; fill this in via @register-tellable!@.
-        (make-hashtable equal-hash equal?)
-        ops))))
+       (%make-session num-types
+                      positions
+                      ops
+                      type-names
+                      (make-vector num-types #f)))
+      ;; `inert` is the compiler-emitted inert-type vector: one boolean
+      ;; per constraint type, `#t` for a type whose activation runs no
+      ;; occurrence procedure (built by `Scheme.hs`'s `inertTypesSExpr`
+      ;; from `CompiledProgram.inertTypes`). `store-constraint` skips
+      ;; observer registration for those types — the Delay Avoidance
+      ;; optimization's trivial instance. The clause above defaults it to
+      ;; "none inert", which is what a hand-built session or an older
+      ;; generated library gets.
+      ((num-types positions ops type-names inert)
+       (let ((store (make-store-by-type num-types))
+             (counter (make-counters 0 0))
+             ;; A session is only ever asked about a type index below its
+             ;; own type count, so this table is sized by that count. A
+             ;; hand-built session passes a shorter (often empty)
+             ;; type-name vector, so its length is not a safe bound.
+             (inert* (if (>= (vector-length inert) num-types)
+                         inert
+                         (let ((v (make-vector num-types #f)))
+                           (do ((i 0 (+ i 1))) ((= i (vector-length inert)))
+                             (vector-set! v i (vector-ref inert i)))
+                           v))))
+         (make-session
+          counter
+          store
+          (make-index-positions num-types positions)
+          (make-store-index num-types)
+          type-names
+          (make-hashtable equal-hash equal?)
+          '()
+          '()
+          ;; Deep-eval dispatch table: keys are
+          ;; (functor-symbol . arity) pairs; values are the
+          ;; procedures the deep-evaluator calls when @is@
+          ;; walks a @VTerm@ matching the key. Generated
+          ;; libraries fill this in via @register-evaluable!@.
+          (make-hashtable evaluable-key-hash evaluable-key-eq?)
+          ;; Closure-apply dispatch table: keys are
+          ;; (functor identity arity) lists; values are the
+          ;; procedures `%apply-closure` calls for that
+          ;; closure. Generated libraries fill this in via
+          ;; @register-callable!@.
+          (make-hashtable equal-hash equal?)
+          ;; Dynamic tell dispatch table: keys are
+          ;; ("scope" functor arity) lists; values are the tell
+          ;; procedures `%tell-term` calls. Generated libraries
+          ;; fill this in via @register-tellable!@.
+          (make-hashtable equal-hash equal?)
+          ops
+          ;; The search tables. `goals`, `exported-goals` and
+          ;; `short-exports` are filled by the generated library's
+          ;; `register-goal!` and `register-short-export!`; `alt-type` is
+          ;; derived here from `type-names`, so no emission is needed for
+          ;; it. `exported-goals` is the subset of `goals` the program
+          ;; exports: a caller-written qualified goal is checked against
+          ;; it, while a lifted disjunct — registered but not exported —
+          ;; stays reachable from a choice point's alternatives.
+          (make-hashtable equal-hash equal?)
+          (make-hashtable equal-hash equal?)
+          (make-hashtable equal-hash equal?)
+          inert*
+          (alt-type-of type-names)
+          store)))))
+  ;;; The constraint type holding `search:alt/1`, or `#f` when the
+  ;;; program never declares it. Derived from the mangled type-name
+  ;;; table: `search:alt` is a qualified name, so its `vmName` is
+  ;;; `search__alt`. A program with no `alt` type answers `#f` and the
+  ;;; driver simply finds no choice points — the honest reading of a goal
+  ;;; with no alternatives in it.
+  (define (alt-type-of names)
+    (let ((target "search__alt")
+          (n (vector-length names)))
+      (let loop ((i 0))
+        (cond ((>= i n) #f)
+              ;; The table holds the mangled name as a *string* — the
+              ;; compiler emits a `(vector "…")` literal — so the compare
+              ;; is `string=?`, not `eq?`.
+              ((and (string? (vector-ref names i))
+                    (string=? (vector-ref names i) target))
+               i)
+              (else (loop (+ i 1)))))))
+
+  ;;; A session of the same program, ready to run a search. Both modes
+  ;;; share the program-level tables, the counters, the value tables and
+  ;;; the trail (a global box, see `(ychr trail)`), and give the fork an
+  ;;; empty reactivation queue.
+  ;;;
+  ;;;   * `'copy` — `solve`, `findall` and `fold_solutions` — *shares* the
+  ;;;     caller's `store-by-type`, `store-index` and `history` objects.
+  ;;;     No copy is made: every write to them is trailed at the mutation
+  ;;;     choke points and every driver exit unwinds to the base mark, so
+  ;;;     the caller gets them back as they were. This is the Scheme
+  ;;;     counterpart of the Haskell runtime's four pointer reads.
+  ;;;   * `'fresh` — `run_chr_session` and `_ep` — starts from an empty
+  ;;;     store, an empty store index and an empty history, and its own
+  ;;;     owner token, so a constraint of the caller's is neither visible
+  ;;;     to the goal nor reactivated by it.
+
+  (define (%fork-session s mode)
+    (let* ((num-types (vector-length (session-store-by-type s)))
+           (copy? (eq? mode 'copy))
+           (store (if copy?
+                      (session-store-by-type s)
+                      (make-store-by-type num-types))))
+      (make-session
+       (session-counters s)
+       store
+       (session-index-positions s)
+       (if copy? (session-store-index s) (make-store-index num-types))
+       (session-type-names s)
+       (if copy? (session-history s) (make-hashtable equal-hash equal?))
+       '()
+       '()
+       (session-evaluables s)
+       (session-callables s)
+       (session-tellables s)
+       (session-op-table s)
+       (session-goals s)
+       (session-short-exports s)
+       (session-exported-goals s)
+       (session-inert s)
+       (session-alt-type s)
+       (if copy? (session-owner s) store))))
+
+  ;;; Register the tell procedure of one declared constraint, keyed by the
+  ;;; functor a compiled term of that constraint carries and its arity.
+  ;;; The generated library calls this for every constraint it declares
+  ;;; that has a tell procedure — exported or not, because a choice
+  ;;; point's alternatives routinely name module-internal constraints the
+  ;;; compiler itself lifted out of a `;`.
+  ;;;
+  ;;; `exported?` is recorded so a goal error can say whether a name is
+  ;;; unknown or merely not exported; the driver decides the latter from
+  ;;; `short-exports` before it ever looks here.
+
+  (define (register-goal! s functor arity tell-proc exported?)
+    (hashtable-set! (session-goals s)
+                    (cons functor arity)
+                    (cons tell-proc (if exported? #t #f)))
+    ;; The export flag is what lets a *caller-written* qualified goal be
+    ;; rejected with "Constraint not exported", mirroring the Haskell
+    ;; driver's `Set.member`. It is deliberately separate from the goal
+    ;; table: a lifted disjunct is registered but never exported, and the
+    ;; alternatives of a choice point must still reach it.
+    (when exported?
+      (hashtable-set! (session-exported-goals s) (cons functor arity) #t)))
+
+  ;;; Register one *unqualified* surface name with the module that
+  ;;; exports it, so a caller-supplied goal spelled without a qualifier
+  ;;; resolves the way the source program's own would: the module
+  ;;; qualification the compiler would have applied. `target` is the
+  ;;; resolved mangled functor, or a list of module names when several
+  ;;; modules export the same name and arity, which the driver reports as
+  ;;; ambiguous.
+
+  (define (register-short-export! s name arity target)
+    (hashtable-set! (session-short-exports s) (cons name arity) target))
 
   ;;; --- Deep-eval dispatch for the @is@ operator ---
 
@@ -127,6 +269,7 @@
   ;; record type for every key construction; the contract is
   ;; documented here. The hashtable that uses these keys is built with
   ;; `evaluable-key-hash` and `evaluable-key-eq?` below.
+
   (define (make-evaluable-key functor arity) (cons functor arity))
   (define (evaluable-key-hash k)
     (+ (* 31 (symbol-hash (car k))) (cdr k)))
@@ -580,6 +723,17 @@
       (h 'compound_to_list 1 (lambda (s v) (%compound-to-list v)))
       (h 'list_to_compound 1 (lambda (s v) (%list-to-compound v)))
       (h 'copy_term 1 (lambda (s v) (%copy-term s v)))
+      ;; library(search): each reads the store or a session table, so all
+      ;; take the session first; `fail` reads only the trail but keeps
+      ;; the same convention.
+      (h 'solve 1 (lambda (s goal) (%solve s goal)))
+      (h 'findall 2 (lambda (s template goal) (%findall s template goal)))
+      (h 'fold_solutions 4 (lambda (s template goal f acc)
+                             (%fold-solutions s template goal f acc)))
+      (h 'fail 0 (lambda (s) (%fail s)))
+      (h 'run_chr_session 1 (lambda (s goal) (%run-chr-session s goal)))
+      (h 'run_chr_session_ep 1 (lambda (s goal)
+                                 (%run-chr-session-ep s goal)))
       t))
 
   ;;; Unify wrapper: unifies and enqueues observers. Raises a runtime
@@ -1149,28 +1303,681 @@
               (stored-constraint-values s))
     (%unit))
 
-  ;;; Unimplemented meta host calls: stubs.
+  ;;; ---------------------------------------------------------------------
+  ;;; The search driver
+  ;;
+  ;;; A port of `YCHR.Internal.Runtime.Search` and
+  ;;; `YCHR.Internal.Runtime.Goal`: @solve\/1@, @findall\/2@,
+  ;;; @fold_solutions\/4@ and @fail\/0@ from @library(search)@, plus
+  ;;; @library(meta)@'s @run_chr_session\/1@ and @run_chr_session_ep\/1@,
+  ;;; which are the same driver on a fresh store. See
+  ;;; @docs\/reference\/search.md@ for the user-facing contract.
+  ;;
+  ;;; Search here is /labeling/, not continuation capture. @alt\/1@ is an
+  ;;; ordinary CHR constraint with no rules, so telling it leaves it in
+  ;;; the store. The driver forks a session, tells the goal, and runs it
+  ;;; to quiescence under the ordinary refined semantics; at quiescence
+  ;;; it looks for an alive @search:alt@ suspension. None means the state
+  ;;; is a solution. Otherwise it takes the oldest one and, for each
+  ;;; alternative in turn, kills the choice, tells that alternative's
+  ;;; goal, and recurses.
+  ;;
+  ;;; Two mechanisms undo a branch, split by what a session reference
+  ;;; actually holds:
+  ;;
+  ;;;   * The snapshot half: the store's growable counts, the store index
+  ;;;     pointer, the propagation history and the reactivation queue are
+  ;;;     handled here. The queue is per session and simply saved and
+  ;;;     restored; the rest are shared objects whose writes are trailed
+  ;;;     at the mutation choke points.
+  ;;;   * The trail half: variable cells, observer lists and suspension
+  ;;;     flags, recorded write-by-write in @(ychr trail)@.
+  ;;
+  ;;; The variable and suspension-id counters are deliberately part of
+  ;;; neither: they stay monotonic across backtracking, so an id burned in
+  ;;; an abandoned branch is never handed out again.
+  ;;
+  ;;; Every exit unwinds to the base mark taken when the search was
+  ;;; entered — commit included — so the caller's store, its
+  ;;; constraints' flags and every variable the search bound are as they
+  ;;; were. A commit keeps exactly one thing, the values of the /goal's
+  ;;; variables/: the unbound variables reachable from the goal at entry.
+  ;;; The driver reads them, fully dereferenced, at the solution; unwinds;
+  ;;; and binds each one to the value read, in the calling session, where
+  ;;; an enclosing driver can still undo it.
+  ;;; ---------------------------------------------------------------------
+
+  ;;; The marker condition @fail/0@ raises to abandon a branch. Distinct
+  ;;; from every other runtime error, because the branch handlers catch
+  ;;; exactly this and nothing else: a runtime error must escape the whole
+  ;;; search rather than fail a branch.
   ;;;
-  ;;; Each must still be *bound*, because a generated library defines
-  ;;; every function of an imported library regardless of which one the
-  ;;; program calls, and a reference to an unbound identifier makes the
-  ;;; whole library fail to load on a strict R6RS implementation
-  ;;; (Chez). Lowering to a stub keeps the module loadable and reports
-  ;;; the gap only when the function is actually called.
-  (define (%run-chr-session v)
-    (error "%run-chr-session" "not implemented"))
-  (define (%run-chr-session-ep v)
-    (error "%run-chr-session-ep" "not implemented"))
-  ;; library(search): the driver needs a session fork, a store snapshot
-  ;; and an undo trail (dev-docs/SCHEME_BACKEND_GAPS.md).
-  (define (%solve g)
-    (error "%solve" "not implemented"))
-  (define (%fail)
-    (error "%fail" "not implemented"))
-  (define (%findall t g)
-    (error "%findall" "not implemented"))
-  (define (%fold-solutions t g f acc)
-    (error "%fold-solutions" "not implemented"))
+  ;;; It is deliberately *not* a @&chr-inst@ condition. A rule guard is
+  ;;; compiled to a @guard@ that catches @chr-inst?@ and answers @#f@, so
+  ;;; a failure carrying that marker would be swallowed by a guard and
+  ;;; read as "delayed" instead of unwinding to the driver.
+  (define-condition-type &search-failure &condition
+    make-search-failure-condition search-failure?)
+
+  (define (raise-search-failure)
+    (raise (condition (make-search-failure-condition))))
+
+  ;;; The functors @library(search)@'s @step(A)@ constructors carry, in
+  ;;; the mangled form a `MakeTerm` produces for a module-qualified name.
+  (define step-continue (string->symbol "search__continue"))
+  (define step-stop (string->symbol "search__stop"))
+  (define step-commit (string->symbol "search__commit"))
+
+  ;;; The `;` functor, built rather than written as a quoted literal: the
+  ;;; Scheme reader takes a semicolon for a comment start even inside a
+  ;;; quote, so there is no literal spelling for this symbol.
+  (define semicolon-functor (string->symbol ";"))
+
+  ;;; How a goal's constraint names are resolved.
+  ;;;
+  ;;;   * `'exported-only` — through the program's exports, the way a
+  ;;;     caller-supplied goal has to be: a name the caller could not have
+  ;;;     written by hand is a caller error.
+  ;;;   * `'any-declared` — by qualified name alone. A choice point's
+  ;;;     alternatives are often disjuncts lifted out of a `;`, which are
+  ;;;     module-internal and exported by nobody, so the export check
+  ;;;     would reject exactly the goals the compiler itself generated.
+
+  ;;; The elements of a proper list, or `#f` when the value is not a list
+  ;;; at all. The deref-aware counterpart of `fromValueList` in the
+  ;;; Haskell registry, mirroring `listElems`.
+  (define (list-elems v)
+    (let ((d (deref v)))
+      (cond
+        ((%nil? d) '())
+        ((%cons? d)
+         (let ((rest (list-elems (get-arg d 1))))
+           (and rest (cons (get-arg d 0) rest))))
+        (else #f))))
+
+  ;;; A proper runtime list from a Scheme list of values.
+  (define (%list-from-list xs)
+    (fold-right %cons (%nil) xs))
+
+  ;;; Decompose a goal argument into `(functor arity args)` tells,
+  ;;; resolving each name up front. A list value means several goals in
+  ;;; order; anything else is a single goal.
+  (define (goal-tells s scope who v)
+    (let ((elems (list-elems v)))
+      (if elems
+          (apply append (map (lambda (g) (one-goal s scope who g)) elems))
+          (one-goal s scope who v))))
+
+  ;;; One goal. A `;` compound becomes a tell of `search:alt` over its
+  ;;; flattened alternatives, so a disjunction reaches the driver as an
+  ;;; ordinary choice point; anything else is a single constraint.
+  (define (one-goal s scope who v)
+    (let ((d (deref v)))
+      (if (and (term? d)
+               (eq? (term-functor d) semicolon-functor)
+               (= (vector-length (term-args d)) 2))
+          (let ((alts (semicolon-alts d)))
+            (require-tell-proc s who 'search__alt 1)
+            (let ((built (%list-from-list alts)))
+              (list (list 'search__alt 1 (list built)))))
+          (list (goal-constraint s scope who d)))))
+
+  ;;; Flatten the right spine of a `;` compound. `;` is xfy, so
+  ;;; `(a ; b ; c)` is a right-nested pair of semicolon compounds and
+  ;;; yields three alternatives. A left-nested `((a ; b) ; c)` keeps its
+  ;;; left operand as a single alternative, which is itself a disjunctive
+  ;;; goal and becomes a nested choice point — the same solution order
+  ;;; either way.
+  (define (semicolon-alts v)
+    (let ((d (deref v)))
+      (if (and (term? d)
+               (eq? (term-functor d) semicolon-functor)
+               (= (vector-length (term-args d)) 2))
+          (cons (get-arg d 0) (semicolon-alts (get-arg d 1)))
+          (list d))))
+
+  ;;; One goal: a compound or atom whose functor names a constraint.
+  ;;; Arguments are passed through untouched so unbound out-variables
+  ;;; reach the forked session live.
+  ;;;
+  ;;; A goal is never a list cell or the empty list: one here means an
+  ;;; improper list slipped past `list-elems`, which has to fail as a
+  ;;; malformed goal rather than resolve as a constraint named `.`.
+  (define (goal-constraint s scope who v)
+    (let* ((d (deref v))
+           (f (cond ((or (%nil? d) (%cons? d)) #f)
+                    ((term? d) (term-functor d))
+                    ((symbol? d) d)
+                    (else #f))))
+      (if f
+          (let* ((args (if (term? d) (vector->list (term-args d)) '()))
+                 (arity (length args))
+                 (resolved (resolve-goal s scope who f arity)))
+            (list resolved arity args))
+          (%chr-error
+           (string-append
+            who ": goal must be a constraint term or a list of them")))))
+
+  ;;; Resolve a goal functor to its qualified constraint name and check
+  ;;; that the tell procedure exists. Failing here — rather than inside
+  ;;; the forked session — keeps "unknown constraint" a caller error.
+  (define (resolve-goal s scope who f arity)
+    (let ((resolved (if (and (eq? scope 'any-declared)
+                             (qualified-functor? f))
+                        f
+                        (resolve-export s who f arity))))
+      (require-tell-proc s who resolved arity)
+      resolved))
+
+  ;;; Is this mangled functor already module-qualified? A qualified name
+  ;;; embeds the module and the base separated by `__`, and its mangling
+  ;;; never introduces one of its own (non-ASCII is escaped as
+  ;;; `%%uNNNNNN`), so any occurrence of `__` not at the very start marks
+  ;;; a qualified functor. A leading `__` is a compiler-internal name
+  ;;; (`__lambda_3`, a lifted disjunct), which is unqualified.
+  (define (qualified-functor? f)
+    (let* ((s (symbol->string f))
+           (sep (find-double-underscore s)))
+      (and sep (not (zero? sep)))))
+
+  ;;; Resolve an unqualified (or explicitly qualified) goal name, the way
+  ;;; `resolveByExport` does on the Haskell side. Every error here is the
+  ;;; caller's: it names a constraint the program cannot reach from this
+  ;;; goal.
+  (define (resolve-export s who f arity)
+    (let ((text (symbol->string f)))
+      (if (qualified-functor? f)
+          (if (hashtable-contains? (session-exported-goals s) (cons f arity))
+              f
+              (%chr-error
+               (string-append
+                who ": Constraint not exported: "
+                (readable-functor f) "/" (number->string arity))))
+          (let ((target (hashtable-ref (session-short-exports s)
+                                       (cons f arity) #f)))
+            (cond
+              ((not target)
+               (%chr-error
+                (string-append
+                 who ": Unknown constraint: "
+                 text "/" (number->string arity))))
+              ((symbol? target) target)
+              ((pair? target)
+               (%chr-error
+                (string-append
+                 who ": Ambiguous constraint: "
+                 text "/" (number->string arity)
+                 ", exported by: "
+                 (fold-left
+                  (lambda (acc m)
+                    (if (null? acc) m (string-append acc ", " m)))
+                  ""
+                  target))))
+              (else
+               (%chr-error
+                (string-append
+                 who ": Unknown constraint: "
+                 text "/" (number->string arity)))))))))
+
+  ;;; A mangled functor in the form a diagnostic prints it: the module
+  ;;; and base of a qualified name joined by `:`, escapes decoded.
+  (define (readable-functor f)
+    (let* ((s (symbol->string f))
+           (sep (find-double-underscore s)))
+      (if (or (not sep) (zero? sep))
+          (decode-mangled-name s)
+          (string-append
+           (decode-mangled-name (substring s 0 sep))
+           ":"
+           (decode-mangled-name
+            (substring s (+ sep 2) (string-length s)))))))
+
+  ;;; Check that a resolved constraint has a tell procedure in this
+  ;;; program, so a missing one is reported against the goal rather than
+  ;;; as a bare procedure-lookup failure later on.
+  (define (require-tell-proc s who name arity)
+    (unless (hashtable-contains? (session-goals s) (cons name arity))
+      (%chr-error
+       (string-append
+        who ": constraint not found: "
+        (readable-functor name)
+        "/"
+        (number->string arity)))))
+
+  ;;; The unbound variables reachable from the goal at entry, distinct
+  ;;; and outermost first: the only thing a commit keeps. The same walk
+  ;;; `%term-variables` performs, and a variable already bound when the
+  ;;; walk reaches it is dereferenced through, exactly as `collectVars`
+  ;;; does on the Haskell side. Collected in the calling session, before
+  ;;; the fork exists, so nothing the goal does can change the set.
+  (define (prepare-search goals)
+    (let ((seen (make-eqv-hashtable))
+          (vars '()))
+      (define (walk v)
+        (let ((d (deref v)))
+          (cond
+            ((var? d)
+             (unless (hashtable-contains? seen (var-id d))
+               (hashtable-set! seen (var-id d) #t)
+               (set! vars (cons d vars))))
+            ((term? d) (vector-for-each walk (term-args d))))))
+      (for-each (lambda (g) (for-each walk (car (cddr g)))) goals)
+      (reverse vars)))
+
+  ;;; Run a branch, mapping a failure to an outcome. Only the failure
+  ;;; marker is caught: a runtime error is not a failure and must escape
+  ;;; the search.
+  (define (with-failures-caught thunk)
+    (guard (c ((search-failure? c) (cons 'failed #f)))
+      (cons 'ok (thunk))))
+
+  ;;; The one session reference a branch saves that is neither on the
+  ;;; trail nor part of the store: the reactivation queue. It is per
+  ;;; session — the caller's pending reactivations stay with the caller —
+  ;;; so putting the two halves back restores it exactly.
+  (define (begin-queue s)
+    (cons (session-queue-front s) (session-queue-back s)))
+
+  (define (use-queue! s saved)
+    (session-queue-front-set! s (car saved))
+    (session-queue-back-set! s (cdr saved)))
+
+  ;;; The choice point at or after `cursor` in the `alt` type's bucket:
+  ;;; `(suspension . slot)`, or `#f` when the state is quiescent.
+  ;;;
+  ;;; The bucket is read as its storage vector plus its count rather than
+  ;;; as a list. That is load-bearing for complexity, not just for style:
+  ;;; building the suffix list at every quiescence would make a search
+  ;;; path of depth k cost k list steps per quiescence, which is the
+  ;;; quadratic behaviour `test/golden/search_deep` exists to catch.
+  ;;;
+  ;;; Skipping the prefix below `cursor` is not an optimization the caller
+  ;;; may get wrong. At every quiescence in the subtree entered on the
+  ;;; choice at slot i, every entry below i + 1 is dead or not this
+  ;;; search's: the ones in [cursor, i) because this scan read them dead,
+  ;;; the ones below cursor by the same property one level up, and i
+  ;;; itself because taking the choice kills it. Nothing in that subtree
+  ;;; can revive one — a suspension's alive flag only goes back on by
+  ;;; trail undo, and every undo reachable from inside the subtree is to
+  ;;; a mark taken at or after it was entered.
+  (define (find-choice s cursor)
+    (let ((ctype (session-alt-type s)))
+      (if (not ctype)
+          #f
+          (let-values (((storage count) (store-snapshot s ctype)))
+            (let loop ((slot cursor))
+              (if (>= slot count)
+                  #f
+                  (let ((susp (snapshot-ref storage slot)))
+                    (if (and (alive-constraint? susp)
+                             (= (vector-length (suspension-args susp)) 1))
+                        (cons susp slot)
+                        (loop (+ slot 1))))))))))
+
+  ;;; Read `alt(Goals)`. An argument that is not a proper list is a
+  ;;; runtime error, not a failure: it is a malformed choice point rather
+  ;;; than a dead end.
+  (define (choice-goals susp)
+    (let ((elems (list-elems (suspension-arg susp 0))))
+      (if elems
+          elems
+          (%chr-error
+           "alt/1: argument must be a proper list of alternative goals"))))
+
+  ;;; Explore from the current, quiescent state, looking for choice
+  ;;; points from `cursor` onwards. `at-solution` is called, with no
+  ;;; arguments, at each quiescent state with no choice left — a solution.
+  (define (search-from s cursor at-solution)
+    (let ((choice (find-choice s cursor)))
+      (if (not choice)
+          (at-solution)
+          (try-alternatives s
+                            (car choice)
+                            (cdr choice)
+                            (choice-goals (car choice))
+                            at-solution))))
+
+  ;;; Tell one resolved goal: the tell procedure the driver looked up.
+  ;;; `who` prefixes the error for a goal that got this far unregistered.
+  (define (tell-goal s name arity args who)
+    (let ((entry (hashtable-ref (session-goals s) (cons name arity) #f)))
+      (if entry
+          (apply (car entry) s args)
+          (%chr-error
+           (string-append
+            who ": constraint not found: "
+            (readable-functor name)
+            "/"
+            (number->string arity))))))
+
+  ;;; Try each alternative of one choice point in list order, undoing the
+  ;;; branch between attempts.
+  ;;;
+  ;;; Contract: this answers either the value the solution handler
+  ;;; returned, or the symbol `failed`. `with-failures-caught` already
+  ;;; turns an abandoned branch into `failed`, so the single check below
+  ;;; covers both "the branch failed" and "the handler asked for the next
+  ;;; solution" — which is what makes every enclosing alternative level
+  ;;; undo and try its next one too.
+  (define (try-alternatives s susp slot goals at-solution)
+    (if (null? goals)
+        'failed
+        (let* ((goal (car goals))
+               (mark (trail-mark))
+               (queue (begin-queue s))
+               (branch
+                (with-failures-caught
+                 (lambda ()
+                   ;; Taking the choice consumes it: an alternative must
+                   ;; not rediscover its own choice point and recurse
+                   ;; forever. The kill is trailed like any other flag
+                   ;; write, so the constraint is alive again if this
+                   ;; alternative is abandoned.
+                   (kill-constraint susp)
+                   ;; Resolved here, inside the branch, and without the
+                   ;; export check: a lifted disjunct is a
+                   ;; module-internal constraint, so the check that
+                   ;; guards a caller-supplied goal would reject exactly
+                   ;; the goals the compiler generated.
+                   (for-each
+                    (lambda (g)
+                      (tell-goal s (car g) (cadr g) (car (cddr g)) "alt"))
+                    (goal-tells s 'any-declared "alt" goal))
+                   ;; Past this choice, not from the front: this one is
+                   ;; killed just above. Each alternative gets the same
+                   ;; starting point, because the undo below puts the
+                   ;; bucket back exactly as it was.
+                   (search-from s (+ slot 1) at-solution))))
+               (value (if (eq? (car branch) 'ok) (cdr branch) 'failed)))
+          (if (eq? value 'failed)
+              (begin
+                (use-queue! s queue)
+                (trail-unwind! mark)
+                (try-alternatives s susp slot (cdr goals) at-solution))
+              value))))
+
+  ;;; A value with every bound variable replaced by what it is bound to,
+  ;;; all the way down. Unbound variables stay themselves. Does not
+  ;;; terminate on a cyclic term (unification has no occurs check), like
+  ;;; `%copy-term` and the goal-variable walk.
+  (define (resolve-value v)
+    (let ((d (deref v)))
+      (if (term? d)
+          (let* ((args (term-args d))
+                 (n (vector-length args))
+                 (out (make-vector n)))
+            (do ((i 0 (+ i 1))) ((= i n))
+              (vector-set! out i (resolve-value (vector-ref args i))))
+            (make-term (term-functor d) out))
+          d)))
+
+  ;;; Fork a search session, tell the already-resolved goal, and drive it.
+  ;;;
+  ;;; Returns the pair `(outcome . kept)` where `outcome` is `'committed`,
+  ;;; `'stopped` or `'exhausted`, and `kept` is the goal variables' values
+  ;;; in the solution — read before the unwind — or `#f`.
+  ;;;
+  ;;; Every exit — a commit, a `stop` step, exhaustion, or an escaping
+  ;;; runtime error — unwinds the search to the mark taken here before
+  ;;; returning or rethrowing. A caller that catches the error
+  ;;; (`%run-chr-session`, which turns it into `#f`) therefore resumes
+  ;;; with the bindings it had, the way ISO `catch/3` does.
+  (define (drive-search s mode goal-vars goals on-solution)
+    (let* ((sub (%fork-session s mode))
+           (prev (trail-enter!))
+           (base (trail-mark))
+           (ctype (session-alt-type sub))
+           ;; Only the choice points this search tells are its own, so the
+           ;; cursor starts past the caller's — which may hold pending
+           ;; choices of an enclosing driver, or an inert `alt` told
+           ;; outside any search. A `'fresh` fork starts from an empty
+           ;; store, so its count is 0 in either reading.
+           (cursor (if ctype
+                       (let-values
+                           (((storage count) (store-snapshot sub ctype)))
+                         count)
+                       0))
+           (kept #f))
+      ;; Answers the symbol `failed` when the handler asked for the next
+      ;; solution, which makes the enclosing alternative undo and move on,
+      ;; and `stopped` or `committed` to end the search.
+      (define (at-solution)
+        (let ((decision (on-solution)))
+          (cond
+            ((eq? decision 'continue) 'failed)
+            ((eq? decision 'stop) 'stopped)
+            ((eq? decision 'commit)
+             ;; Read before the unwind below takes the solution away.
+             (set! kept (map resolve-value goal-vars))
+             'committed)
+            (else
+             (%chr-error
+              (string-append
+               "fold_solutions: the step function must return continue/1,"
+               " stop/1 or commit/1"))))))
+      (define (body)
+        (for-each
+         (lambda (g)
+           (tell-goal sub (car g) (cadr g) (car (cddr g)) "solve"))
+         goals)
+        (search-from sub cursor at-solution))
+      (define (leave)
+        (trail-unwind! base)
+        (trail-exit! prev))
+      ;; Unwind and restore the trail on every exit, including one that
+      ;; escapes as a condition: the trail must not stay active for the
+      ;; caller, or its next `%fail` would report an enclosing search that
+      ;; is not there. Conditions are the only non-local exit to cover:
+      ;; the generated code's `call/cc` escapes never leave the procedure
+      ;; that captured them, so none crosses this host call.
+      (let ((result
+             (guard (c (#t (leave) (raise c)))
+               (with-failures-caught body))))
+        (leave)
+        (if (not (eq? (car result) 'ok))
+            (cons 'exhausted #f)
+            (let ((r (cdr result)))
+              (if (eq? r 'committed)
+                  (cons 'committed kept)
+                  (cons (if (eq? r 'stopped) 'stopped 'exhausted)
+                        #f)))))))
+
+  ;;; Reject a commit that would bind a goal variable a live stored
+  ;;; constraint of the calling session observes. A commit binds goal
+  ;;; variables outside any rule body, so nothing would reactivate that
+  ;;; constraint and its rules would silently miss the new value. A search
+  ;;; that does not commit binds nothing, so it is never checked: that is
+  ;;; what lets @findall@ label a variable the caller's store constrains.
+  ;;;
+  ;;; An observer owned by another session's store is foreign and a dead
+  ;;; or unstored one is stale; neither counts. An inert constraint
+  ;;; registers no observers at all, so it does not count either.
+  (define (watchful? owner obs)
+    (cond
+      ((null? obs) #f)
+      ((and (suspension-alive? (car obs))
+            (suspension-stored? (car obs))
+            (eq? (suspension-owner (car obs)) owner))
+       #t)
+      (else (watchful? owner (cdr obs)))))
+
+  (define (check-unwatched who owner vars)
+    (for-each
+     (lambda (v)
+       (let ((d (deref v)))
+         (when (and (var? d) (watchful? owner (var-observers d)))
+           (%chr-error
+            (string-append
+             who
+             ": goal variable is observed by a stored constraint;"
+             " pass a fresh variable and unify after the call")))))
+     vars))
+
+  ;;; The second half of a commit, in the calling session once the search
+  ;;; has unwound: check that no goal variable is watched
+  ;;; (`check-unwatched`), then bind each one to its value in the
+  ;;; solution. A no-op when the search did not commit.
+  ;;;
+  ;;; Run outside `%run-chr-session`'s catch, so a watched goal variable
+  ;;; is a loud caller error from every entry point, never a `#f`. The
+  ;;; observers `unify` returns are dropped: the check ruled out a live
+  ;;; one, and this is not a rule body, so there is no drain to hand them
+  ;;; to.
+  (define (commit-goal-vars s who vars kept)
+    (when kept
+      (check-unwatched who (session-owner s) vars)
+      (for-each
+       (lambda (var val)
+         (let-values (((ok obs) (unify var val)))
+           (unless ok
+             (%chr-error
+              (string-append
+               who ": rebinding a goal variable failed")))))
+       vars
+       kept)))
+
+  ;;; Resolve the goal, collect its variables, and drive it: the decode
+  ;;; and the collection happen in the calling session, before the fork
+  ;;; exists, so an unknown goal constraint is a caller error and never a
+  ;;; failed branch.
+  (define (run-search s who mode goal on-solution)
+    (let* ((goals (goal-tells s 'exported-only who goal))
+           (vars (prepare-search goals))
+           (result (drive-search s mode vars goals on-solution))
+           (outcome (car result))
+           (kept (cdr result)))
+      (commit-goal-vars s who vars kept)
+      outcome))
+  ;;; @solve(Goal)@: run @Goal@ against a fork of the caller's store and
+  ;;; stop at its first solution. Commits: the goal's variables are bound
+  ;;; to their values in the solution, and nothing else is kept. @#f@ when
+  ;;; the space is exhausted, with everything undone.
+  (define (%solve s g)
+    (eq? (run-search s "solve" 'copy g (lambda () 'commit))
+         'committed))
+
+  ;;; @run_chr_session_ep(Goal)@: @solve/1@ on a fresh, empty session
+  ;;; instead of a fork of the caller's store. Errors propagate.
+  (define (%run-chr-session-ep s g)
+    (eq? (run-search s "run_chr_session_ep" 'fresh g (lambda () 'commit))
+         'committed))
+
+  ;;; @run_chr_session(Goal)@: @%run-chr-session-ep@ made total.
+  ;;;
+  ;;; Same fresh session, same base mark, same commit-on-first-solution —
+  ;;; the one difference is that a runtime error escaping @Goal@ becomes
+  ;;; @#f@ instead of propagating. That makes this the language's only
+  ;;; error catcher, which is the whole reason it is a host call rather
+  ;;; than written in CHR over @run_chr_session_ep@.
+  ;;;
+  ;;; Only an error is caught. A failure — from @fail/0@ in the goal, or
+  ;;; from an exhausted choice point — never reaches here:
+  ;;; `with-failures-caught` inside `drive-search` absorbs it into
+  ;;; `'exhausted`, which is @#f@ by the same rule.
+  (define (%run-chr-session s g)
+    (let* ((goals (goal-tells s 'exported-only "run_chr_session" g))
+           (vars (prepare-search goals))
+           (outcome #f)
+           (kept #f))
+      ;; Resolved and prepared above, and committed below, rather than
+      ;; inside the catch: a misspelled or unexported goal constraint, or
+      ;; a commit onto a watched goal variable, stays a loud caller error
+      ;; instead of being swallowed into a `#f`.
+      (guard (c ((or (error? c) (serious-condition? c))
+                 (set! outcome 'exhausted)))
+        ;; `drive-search` answers ONE value, the pair `(outcome . kept)`;
+        ;; destructuring it as multiple values would raise, and the guard
+        ;; above would turn that into a silent `#f`.
+        (let ((result
+               (drive-search s 'fresh vars goals (lambda () 'commit))))
+          (set! outcome (car result))
+          (set! kept (cdr result))))
+      (commit-goal-vars s "run_chr_session" vars kept)
+      (eq? outcome 'committed)))
+
+  ;;; @findall(Template, Goal)@: every solution of @Goal@, as a list of
+  ;;; copies of @Template@ in search order.
+  ;;;
+  ;;; The copies are what survive: the search is fully unwound
+  ;;; afterwards, so no binding it made is visible to the caller. The
+  ;;; accumulator is an ordinary Scheme variable, which backtracking does
+  ;;; not roll back — the trail covers variable cells and suspension flags
+  ;;; and nothing else.
+  (define (%findall s template g)
+    (let ((acc '()))
+      (run-search
+       s
+       "findall"
+       'copy
+       g
+       (lambda ()
+         (set! acc (cons (%copy-term s template) acc))
+         ;; Never stop: asking for the next solution backtracks out of
+         ;; this one.
+         'continue))
+      ;; `acc` is newest-first, so reversing it (in the accumulator, not in
+      ;; the trail-covered cells) yields search order.
+      (fold-right %cons (%nil) (reverse acc))))
+
+  ;;; @fold_solutions(Template, Goal, F, Acc0)@: fold @F@ over the
+  ;;; solutions of @Goal@, in search order, with the fold in control of
+  ;;; when to stop.
+  ;;;
+  ;;; At each solution @F@ is applied to a copy of @Template@ and the
+  ;;; accumulator, and answers with a @step(A)@: @continue@ asks for the
+  ;;; next solution, @stop@ ends the search and undoes everything,
+  ;;; @commit@ ends it and keeps the solution's values of the goal's
+  ;;; variables.
+  ;;;
+  ;;; The witness is copied and the accumulator is not; see
+  ;;; @docs\/reference\/search.md@, "What the fold may carry".
+  (define (%fold-solutions s template g f acc0)
+    (let ((acc acc0))
+      (run-search
+       s
+       "fold_solutions"
+       'copy
+       g
+       (lambda ()
+         (let* ((copied (%copy-term s template))
+                (result (%apply-closure s f copied acc))
+                (step (read-step result)))
+           (set! acc (cdr step))
+           (car step))))
+      acc))
+
+  ;;; Read the @step(A)@ a fold's step function returned, as `(step .
+  ;;; accumulator)`. Anything else is a runtime error: a fold whose step
+  ;;; function answers with a bare value has no way to say what to do
+  ;;; next.
+  (define (read-step v)
+    (let ((d (deref v)))
+      (if (and (term? d)
+               (= (vector-length (term-args d)) 1)
+               (memq (term-functor d)
+                     (list step-continue step-stop step-commit)))
+          (cons (cond ((eq? (term-functor d) step-continue) 'continue)
+                      ((eq? (term-functor d) step-stop) 'stop)
+                      (else 'commit))
+                (get-arg d 0))
+          (%chr-error
+           (string-append
+            "fold_solutions: the step function must return continue/1,"
+            " stop/1 or commit/1, got "
+            (pretty-term d))))))
+
+  ;;; @fail()@: abandon the current branch.
+  ;;;
+  ;;; The trail doubles as the "is a search running?" flag, since a search
+  ;;; entry point installs it and nothing else does. Outside a search
+  ;;; there is no branch to fail, so this is a loud runtime error rather
+  ;;; than a silent success or a stuck query.
+  (define (%fail s)
+    (if (trail-active?)
+        (raise-search-failure)
+        (%chr-error
+         "fail/0 outside a search: no enclosing search entry point")))
+
 
   ;;; copy_term: deep-copy a term, replacing each unbound variable with
   ;;; a fresh one. Sharing is preserved via an id->fresh-var hashtable,

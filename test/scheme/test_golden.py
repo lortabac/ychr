@@ -28,9 +28,6 @@ HASKELL_ONLY = {
     # Haskell runtime only; the Scheme runtime still renders aliased
     # logical variables as `_`.
     "alias_print",
-    # run_chr_session is a Haskell-only meta host call (spawns a nested
-    # interpreter session); no Scheme implementation exists yet.
-    "run_chr_session_test",
     # `host:'-'(3)` is a host call at an arity no primitive provides.
     # The Haskell registry is keyed by name alone, so it reaches the
     # binary primitive and reports that primitive's arity error; the
@@ -41,27 +38,6 @@ HASKELL_ONLY = {
     # the divergence (dev-docs/SCHEME_BACKEND_GAPS.md). The evaluable
     # counterpart, `is_evaluable_host_term`, runs on both backends.
     "host_term_wrong_arity",
-    # library(search) — solve/1, findall/2, fold_solutions/4 and
-    # fail/0 are Haskell-only host calls. The search driver needs a
-    # session fork, a snapshot of the store references and an undo
-    # trail hooked into variable and suspension-flag writes; the Scheme
-    # runtime has none of that yet.
-    "search_alt",
-    "search_basic",
-    "search_between",
-    "search_deep",
-    "search_disj",
-    "search_fold",
-    "search_generate",
-    "search_label",
-    "search_label_alt",
-    "search_nested",
-    "search_fork",
-    # library(state)'s run_state/3 and run_states/2 run their goal with
-    # search:solve/1, so they are Haskell-only for the same reason.
-    "state_run",
-    # A dynamic tell inside a `;` branch, collected with findall/2.
-    "tell_dynamic_disj",
 }
 
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only
