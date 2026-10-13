@@ -376,23 +376,31 @@
   ;;; (`test/golden/search_fork/inert_watcher_ok`), and what keeps a deep
   ;;; search's choice points off every variable's observer list.
   (define (store-constraint s susp)
-    ;; The trail entry is recorded unconditionally, before the write: a
-    ;; suspension that `kill-constraint` un-stored and that an undo has
-    ;; since revived would otherwise lose its "stored" flag, which is
-    ;; half of what `checkUnwatched` reads.
-    (when (trail-active?)
-      (trail-push!
-       (lambda () (suspension-stored-set! susp #f))))
+    ;; Only the *first* store records `stored` and puts anything in the
+    ;; store. A re-store of an already-stored suspension is a no-op
+    ;; (Late Storage emits one at the end of every activation), so
+    ;; recording a trail entry here would let a search exit clear the
+    ;; flag on a suspension that is still in the store — which would
+    ;; both defeat `check-unwatched` and let the next re-store append
+    ;; the same constraint twice.
     (unless (suspension-stored? susp)
+      (when (trail-active?)
+        (trail-push!
+         (lambda () (suspension-stored-set! susp #f))))
       (suspension-stored-set! susp #t)
       (let* ((ctype (suspension-type susp))
              (g (vector-ref (session-store-by-type s) ctype))
              (positions (vector-ref (session-index-positions s) ctype)))
         (if (or (vector-ref (session-inert s) ctype) (null? positions))
             ;; Inert, or no position of this type is ever looked up
-            ;; through an index: the pre-index path exactly.
+            ;; through an index: the pre-index path exactly. An inert
+            ;; type registers no observers at all — that is what makes a
+            ;; rule-less choice point free at every later binding, and
+            ;; what keeps `check-unwatched` from seeing a live `alt` on
+            ;; a goal variable.
             (begin
-              (observe-args! susp (suspension-args susp))
+              (unless (vector-ref (session-inert s) ctype)
+                (observe-args! susp (suspension-args susp)))
               (growable-push! s g susp))
             (let* ((slot (growable-count g))
                    (indexed (vector-ref (session-store-index s) ctype))
@@ -411,18 +419,14 @@
                     (insert-entries! s ctype slot entries))))))))
 
   (define (kill-constraint susp)
-    ;; Killing takes the constraint out of the store, so `stored` goes
-    ;; with `alive`: the pair is what `checkUnwatched` reads to decide
-    ;; whether an observer list still names a live constraint. Both are
-    ;; trail-recorded before the write, so an undo revives the pair
-    ;; together.
+    ;; Only `alive` is written, matching the reference: `stored` means
+    ;; "has been stored", and `check-unwatched` reads the pair so that a
+    ;; dead suspension's observer list stops counting. Clearing
+    ;; `stored` here as well would make a kill-then-store re-append a
+    ;; suspension that is already in the bucket.
     (when (trail-active?)
-      (trail-push! (lambda ()
-                     (suspension-alive-set! susp #t)))
-      (trail-push! (lambda ()
-                     (suspension-stored-set! susp #t))))
-    (suspension-alive-set! susp #f)
-    (suspension-stored-set! susp #f))
+      (trail-push! (lambda () (suspension-alive-set! susp #t))))
+    (suspension-alive-set! susp #f))
 
   (define (alive-constraint? susp)
     (suspension-alive? susp))

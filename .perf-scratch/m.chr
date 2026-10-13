@@ -1,5 +1,0 @@
-:- module(m, [go/1, p/1]).
-:- use_module(library(search)).
-:- chr_constraint go(any), p(any).
-go(R) <=> R is solve(quote(p(1))).
-p(X) <=> X = 1.

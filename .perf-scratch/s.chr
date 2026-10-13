@@ -1,7 +1,0 @@
-:- module(s, [go/3, pr/3, sumis/3]).
-:- use_module(library(search)).
-:- chr_constraint go(any, any, any), pr(any, any, any), sumis(any, any, any).
-go(X, Y, Ss) <=> Ss is findall([X, Y], quote(pr(X, Y, 5))).
-pr(X, Y, S) <=> choose(X, [1,2,3]), choose(Y, [1,2,3]), sumis(X, Y, S).
-sumis(X, Y, S) <=> X + Y == S | true.
-sumis(_, _, _) <=> fail.

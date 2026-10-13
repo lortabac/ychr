@@ -16,9 +16,7 @@ one `register-goal!` per declared constraint from the compiler's symbol
 table, one `register-short-export!` per exported `(name, arity)`, and the
 compiler's inert-type vector as `%make-session`'s fifth argument — the
 last of which is what keeps a deep search linear, since an inert type's
-suspensions register no observers. Three cases still diverge
-(`run_chr_session_test`, `search_fold/committing_inner`,
-`search_nested/rtrack`); `dev-docs/SCHEME_BACKEND_GAPS.md` records why.
+suspensions register no observers. Every search-related golden case now runs on both backends.
 
 The Scheme backend's `print_store/0` and `write_store_to_list/0` (from
 `library(meta)`) are implemented, so `write_store_to_list()` returns the

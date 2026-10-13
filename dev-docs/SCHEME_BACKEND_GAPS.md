@@ -74,11 +74,15 @@ are easy to miss:
   including an escaping condition — must unwind and deactivate the
   trail; `drive-search` wraps its body in `dynamic-wind` for the normal
   paths and a `guard` for the escaping one.
-* `stored` must be recorded before *every* write, not only the first.
-  A suspension that `kill-constraint` un-stored and that a later undo
-  revived would otherwise lose the flag, and `checkUnwatched` reads
-  `alive` *and* `stored` together to decide whether an observer list
-  still names a live constraint.
+* `stored` is recorded only on the *first, effective* store, and
+  `kill-constraint` writes only `alive` — both matching the reference
+  (`Store.hs`'s `storeConstraint` guards on `unless stored` and
+  `killConstraint` never touches the flag). A re-store of an
+  already-stored suspension is a no-op that Late Storage emits at the end
+  of every activation; recording a trail entry for it would let a search
+  exit clear `stored` on a suspension still in the store, which both
+  defeats `checkUnwatched` (it reads `alive` *and* `stored` together) and
+  lets the next re-store append the same constraint twice.
 
 `src/YCHR/Internal/Backend/Scheme.hs` supplies the rest. It emits, into
 the generated library's session:
@@ -99,21 +103,10 @@ the generated library's session:
 The search entry points are all in `sessionHostCalls`, so the code
 generator threads the session into each of them.
 
-### Remaining divergences
-
-Three cases are still skipped, all recorded in
-`test/scheme/test_golden.py`:
-
-* `run_chr_session_test` — `run_chr_session/1` answers `false` for goals
-  the Haskell runtime commits. `run_chr_session_ep/1` and the
-  `test-runtime.scm` driver tests pass, so the fork and the goal table
-  are sound; the `false` comes from the entry point's own error catch.
-* `search_fold/committing_inner` — the fold's `commit` step is rejected
-  by the watched-goal check. The outer choice point that observes the
-  template is still `alive` after the inner fold unwinds, where the
-  Haskell runtime sees it dead.
-* `search_nested/rtrack` — a variable the caller's store observes, read
-  across a nested search, comes back unbound instead of `s`.
+Every search-related golden directory now runs on the Scheme backend,
+along with `state_run` and `run_chr_session_test`. The compile-negative
+directories need no entry: the harness discovers cases from `.goal` files
+and they have none.
 
 
 ## `deep-eval` host-call lookup ignores arity

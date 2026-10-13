@@ -24,6 +24,7 @@
                 builtin-op-table
                 (make-hashtable equal-hash equal?)
                 (make-hashtable equal-hash equal?)
+                (make-hashtable equal-hash equal?)
                 (vector)
                 #f
                 (vector)))

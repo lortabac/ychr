@@ -24,10 +24,6 @@ GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden")
 # Test directories whose tests exercise Haskell-only meta-programming
 # primitives and therefore cannot run on the Scheme backend.
 HASKELL_ONLY = {
-    # run_chr_session/1 answers a nested goal through the goal table, but
-    # the Scheme entry point currently reports `false` for goals the
-    # Haskell runtime commits. Recorded in dev-docs/SCHEME_BACKEND_GAPS.md.
-    "run_chr_session_test",
     # Variable-alias printing (A = B, B = A) is implemented in the
     # Haskell runtime only; the Scheme runtime still renders aliased
     # logical variables as `_`.
@@ -47,16 +43,6 @@ HASKELL_ONLY = {
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only
 # some cases in a directory diverge.
 HASKELL_ONLY_CASES = {
-    # `committing_inner` folds to a `commit` step over a template the
-    # outer choice point observes. The Scheme driver's watched-goal check
-    # still sees that choice point live after the inner fold unwinds, so
-    # it reports a watched goal variable where the Haskell runtime
-    # commits. Recorded in dev-docs/SCHEME_BACKEND_GAPS.md.
-    ("search_fold", "committing_inner"),
-    # `rtrack` watches a variable a constraint of the caller's store
-    # observes across a nested search. Recorded in
-    # dev-docs/SCHEME_BACKEND_GAPS.md.
-    ("search_nested", "rtrack"),
     # The Scheme runtime registers a suspension as an observer of the
     # variables reachable at *store* time only. The Haskell runtime
     # additionally transfers a bound variable's observers onto the

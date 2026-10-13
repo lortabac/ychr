@@ -20,3 +20,5 @@ CLAUDE.local.md
 *.log
 *.pyc
 .perf-scratch/
+/dist-newstyle1
+/.perf-scratch/

@@ -24,6 +24,7 @@
           session-op-table
           session-goals
           session-short-exports
+          session-exported-goals
           session-inert
           session-alt-type
           session-owner)
@@ -64,6 +65,7 @@
                         op-table
                         goals
                         short-exports
+                        exported-goals
                         inert
                         alt-type
                         owner)
@@ -81,6 +83,7 @@
                           op-table
                           goals
                           short-exports
+                          exported-goals
                           inert
                           alt-type
                           owner))
@@ -169,6 +172,7 @@
             (immutable op-table session-op-table)
             (immutable goals session-goals)
             (immutable short-exports session-short-exports)
+            (immutable exported-goals session-exported-goals)
             (immutable inert session-inert)
             (immutable alt-type session-alt-type)
             (immutable owner session-owner)))

@@ -1,7 +1,0 @@
-:- module(r5, [go/3, w/2, ck/2, got/1]).
-:- use_module(library(search)).
-:- use_module(library(meta)).
-:- chr_constraint go(any, any, any), w(any, any), ck(any, any), got(any).
-go(X, Y, Ss) <=> Ss is findall([X, Y], quote([w(X, Y), print_store])).
-w(X, Y) <=> choose(X, [1,2,3]), choose(Y, [1,2,3]), ck(X, Y).
-ck(X, Y) <=> X + Y == 3 | got(X + Y).

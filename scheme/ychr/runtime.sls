@@ -153,10 +153,15 @@
           ;; fill this in via @register-tellable!@.
           (make-hashtable equal-hash equal?)
           ops
-          ;; The search tables. `goals` and `short-exports` are filled
-          ;; by the generated library's `register-goal!` and
-          ;; `register-short-export!`; `alt-type` is derived here from
-          ;; `type-names`, so no emission is needed for it.
+          ;; The search tables. `goals`, `exported-goals` and
+          ;; `short-exports` are filled by the generated library's
+          ;; `register-goal!` and `register-short-export!`; `alt-type` is
+          ;; derived here from `type-names`, so no emission is needed for
+          ;; it. `exported-goals` is the subset of `goals` the program
+          ;; exports: a caller-written qualified goal is checked against
+          ;; it, while a lifted disjunct — registered but not exported —
+          ;; stays reachable from a choice point's alternatives.
+          (make-hashtable equal-hash equal?)
           (make-hashtable equal-hash equal?)
           (make-hashtable equal-hash equal?)
           inert*
@@ -218,6 +223,7 @@
        (session-op-table s)
        (session-goals s)
        (session-short-exports s)
+       (session-exported-goals s)
        (session-inert s)
        (session-alt-type s)
        (if copy? (session-owner s) store))))
@@ -236,7 +242,14 @@
   (define (register-goal! s functor arity tell-proc exported?)
     (hashtable-set! (session-goals s)
                     (cons functor arity)
-                    (cons tell-proc (if exported? #t #f))))
+                    (cons tell-proc (if exported? #t #f)))
+    ;; The export flag is what lets a *caller-written* qualified goal be
+    ;; rejected with "Constraint not exported", mirroring the Haskell
+    ;; driver's `Set.member`. It is deliberately separate from the goal
+    ;; table: a lifted disjunct is registered but never exported, and the
+    ;; alternatives of a choice point must still reach it.
+    (when exported?
+      (hashtable-set! (session-exported-goals s) (cons functor arity) #t)))
 
   ;;; Register one *unqualified* surface name with the module that
   ;;; exports it, so a caller-supplied goal spelled without a qualifier
@@ -1474,7 +1487,7 @@
   (define (resolve-export s who f arity)
     (let ((text (symbol->string f)))
       (if (qualified-functor? f)
-          (if (hashtable-contains? (session-goals s) (cons f arity))
+          (if (hashtable-contains? (session-exported-goals s) (cons f arity))
               f
               (%chr-error
                (string-append
@@ -1909,11 +1922,13 @@
       ;; instead of being swallowed into a `#f`.
       (guard (c ((or (error? c) (serious-condition? c))
                  (set! outcome 'exhausted)))
-        (let-values
-            (((o k)
-              (car (drive-search s 'fresh vars goals (lambda () 'commit)))))
-          (set! outcome o)
-          (set! kept k)))
+        ;; `drive-search` answers ONE value, the pair `(outcome . kept)`;
+        ;; destructuring it as multiple values would raise, and the guard
+        ;; above would turn that into a silent `#f`.
+        (let ((result
+               (drive-search s 'fresh vars goals (lambda () 'commit))))
+          (set! outcome (car result))
+          (set! kept (cdr result))))
       (commit-goal-vars s "run_chr_session" vars kept)
       (eq? outcome 'committed)))
 

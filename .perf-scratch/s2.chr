@@ -1,7 +1,0 @@
-:- module(s2, [go/2, pr/3, sumis/3]).
-:- use_module(library(search)).
-:- chr_constraint go(any, any), pr(any, any, any), sumis(any, any, any).
-go(Ok, Z) <=> Ok is solve(quote([pr(Z, 3, 5), Z = 2])).
-pr(X, Y, S) <=> choose(X, [1,2,3]), choose(Y, [1,2,3]), sumis(X, Y, S).
-sumis(X, Y, S) <=> X + Y == S | true.
-sumis(_, _, _) <=> fail.

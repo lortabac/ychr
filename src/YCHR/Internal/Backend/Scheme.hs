@@ -327,10 +327,15 @@ inertTypesSExpr numTypes inert =
 --
 -- The declaration list comes from the symbol table, which is the only
 -- place the program records arities; its order is 'ConstraintType' index
--- order, so the emitted table is stable. The @EXPORTED?@ field records
--- whether the constraint's qualified name is in the program's export set;
--- the driver decides "unknown" versus "not exported" from the short-export
--- table before it ever reads it.
+-- order, so the emitted table is stable.
+--
+-- The @EXPORTED?@ field is the program's export set membership for the
+-- constraint's *qualified* name. It is what lets a caller-written
+-- qualified goal be rejected with "Constraint not exported" — mirroring
+-- `resolveByExport`'s `Set.member (QualifiedIdentifier m n arity) expSet`
+-- — while a lifted disjunct's qualified name, which no module exports, is
+-- still reachable through the alternatives of a choice point (those go
+-- through the driver's unexport-checked path).
 goalRegistrations :: SymbolTable -> VMProgram -> [SExpr]
 goalRegistrations symTab vmp =
   [ SList
@@ -338,25 +343,35 @@ goalRegistrations symTab vmp =
         SAtom "%s",
         compileSymbol (runtimeName ident.name),
         SInt (fromIntegral ident.arity),
-        SAtom tellName,
-        if exported then SAtom "#t" else SAtom "#f"
+        SAtom (tellProcName ident.name ident.arity).unName,
+        if Set.member qualified vmp.exportedSet then SAtom "#t" else SAtom "#f"
       ]
   | (ident, _) <- symbolTableToList symTab,
     let tellName = (tellProcName ident.name ident.arity).unName,
-    Set.member tellName tellNames
+    Set.member tellName tellNames,
+    let qualified = qualifiedIdentifier ident.name ident.arity
   ]
   where
     tellNames = Set.fromList [n.unName | p <- vmp.program.procedures, let n = p.name]
-    exported = False
+
+-- | The 'Types.QualifiedIdentifier' a declared constraint's name denotes,
+-- for the export-set membership test. A declared constraint is normally
+-- module-qualified already; an unqualified one (a compiler-internal
+-- @__lambda_N@, say) is never in the export set, and the empty module
+-- below can never match, so it correctly answers @False@.
+qualifiedIdentifier :: Types.Name -> Int -> Types.QualifiedIdentifier
+qualifiedIdentifier name arity = case name of
+  Types.Qualified m n -> Types.QualifiedIdentifier m n arity
+  Types.Unqualified n -> Types.QualifiedIdentifier "" n arity
 
 -- | Emit one @(register-short-export! %s 'NAME ARITY TARGET)@ per
 -- @(name, arity)@ the program exports, where @TARGET@ is the resolved
--- mangled functor symbol when exactly one module exports it, and a list of
--- module names when several do.
+-- mangled functor symbol when exactly one module exports it, and a list
+-- of module names when several do.
 --
 -- This is the driver's @resolveByExport@, precomputed. Grouping
--- 'vmp.exportedSet' by @(name, arity)@ derives exactly the module set the
--- compiler's own export map holds, so the two cannot disagree.
+-- 'vmp.exportedSet' by @(name, arity)@ derives exactly the module set
+-- the compiler's own export map holds, so the two cannot disagree.
 shortExportRegistrations :: Set.Set Types.QualifiedIdentifier -> [SExpr]
 shortExportRegistrations exported =
   [ SList
