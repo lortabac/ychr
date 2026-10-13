@@ -726,34 +726,84 @@
                 (pretty-term (%write-store-to-list s)))))
 
 ;;; --------------------------------------------------------------------------
-;;; Unimplemented meta host calls are bound stubs
+;;; The search driver: `%solve`, `%findall`, `%fold-solutions`, `%fail`,
+;;; `%run-chr-session` and `%run-chr-session-ep`.
 ;;;
-;;; A generated library defines every function of an imported library,
-;;; so these names are referenced even by a program that uses none of
-;;; them. They must be *bound* (a bare unbound identifier makes the
-;;; whole module fail to load on a strict R6RS implementation such as
-;;; Chez); the gap is reported only when the function is called.
+;;; A hand-built session has no program registrations, so these tests
+;;; install the goal tables themselves: `register-goal!` maps the functor
+;;; a compiled term carries to its tell procedure, and
+;;; `register-short-export!` maps an unqualified caller name to the
+;;; qualified functor it resolves to.
 ;;; --------------------------------------------------------------------------
 
-(test-group "unimplemented meta host calls raise on call"
-  (test-equal "run_chr_session bound and raises"
-              "not implemented"
-              (error-message (lambda () (%run-chr-session 1))))
-  (test-equal "run_chr_session_ep bound and raises"
-              "not implemented"
-              (error-message (lambda () (%run-chr-session-ep 1))))
-  (test-equal "solve bound and raises"
-              "not implemented"
-              (error-message (lambda () (%solve 1))))
-  (test-equal "fail bound and raises"
-              "not implemented"
-              (error-message (lambda () (%fail))))
-  (test-equal "findall bound and raises"
-              "not implemented"
-              (error-message (lambda () (%findall 1 2))))
-  (test-equal "fold_solutions bound and raises"
-              "not implemented"
-              (error-message (lambda () (%fold-solutions 1 2 3 4)))))
+(define p-qualified 'test__p)
+(define q-qualified 'test__q)
+(define fail-qualified 'test__fail0)
+
+;;; `p(X)` binds X to 1 and tells `q(X)`, which binds nothing more.
+(define (tell-p s x)
+  (%unify s x 1)
+  (store-constraint s (create-constraint s 0 (vector x))))
+
+(define (tell-q s x)
+  (%unify s x 1))
+
+(define (tell-fail s)
+  (%fail s))
+
+;;; A session with one constraint type and a goal that binds its argument.
+(define (search-session)
+  (let ((s (%make-session 1)))
+    (register-short-export! s 'p 1 p-qualified)
+    (register-short-export! s 'q 1 q-qualified)
+    (register-short-export! s 'fail0 0 fail-qualified)
+    (register-goal! s p-qualified 1 tell-p #t)
+    (register-goal! s q-qualified 1 tell-q #t)
+    (register-goal! s fail-qualified 0 tell-fail #t)
+    s))
+
+(test-group "the search driver"
+  (let* ((s (search-session))
+         (x (make-var s)))
+    (test-assert "solve answers true"
+                 (%solve s (make-term p-qualified (vector x))))
+    (test-equal "solve commits the goal variable" 1 (deref x)))
+  ;; findall copies the template per solution and undoes everything else.
+  (let* ((s (search-session))
+         (x (make-var s)))
+    (test-equal "findall collects a copy per solution"
+                "[1]"
+                (pretty-term (%findall s x (make-term p-qualified (vector x))))))
+  ;; fold_solutions with `continue` walks every solution.
+  (let* ((s (search-session))
+         (x (make-var s))
+         (continue-functor (string->symbol "test__continue")))
+    (test-equal "fold_solutions folds to exhaustion"
+                1
+                (%fold-solutions
+                 s x (make-term p-qualified (vector x))
+                 (lambda (s copied acc)
+                   (make-term continue-functor (vector acc)))
+                 0)))
+  ;; fail/0 inside a search is a failed branch, so the search is exhausted.
+  (test-assert "fail inside a search is a failed branch, not an error"
+               (not (%solve (search-session)
+                            (make-term fail-qualified (vector)))))
+  ;; ... but outside one it is a loud error.
+  (test-equal "fail outside a search is a runtime error"
+              "fail/0 outside a search: no enclosing search entry point"
+              (error-message
+               (lambda () (%fail (search-session)))))
+  (test-equal "run_chr_session answers false for a failing goal"
+              #f
+              (%run-chr-session (search-session)
+                                (make-term fail-qualified (vector))))
+  (test-equal "run_chr_session_ep propagates the failure"
+              #t
+              (guard (c (#t #t))
+                (%run-chr-session-ep (search-session)
+                                     (make-term fail-qualified (vector)))
+                #f)))
 
 ;;; --------------------------------------------------------------------------
 ;;; `%write-term-to-string`
