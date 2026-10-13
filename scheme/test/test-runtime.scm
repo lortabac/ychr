@@ -739,6 +739,7 @@
 (define p-qualified 'test__p)
 (define q-qualified 'test__q)
 (define fail-qualified 'test__fail0)
+(define boom-qualified 'test__boom)
 
 ;;; `p(X)` binds X to 1 and tells `q(X)`, which binds nothing more.
 (define (tell-p s x)
@@ -751,15 +752,21 @@
 (define (tell-fail s)
   (%fail s))
 
+;;; A goal that raises a runtime error, for the error-propagation cases.
+(define (tell-boom s)
+  (%chr-error "boom"))
+
 ;;; A session with one constraint type and a goal that binds its argument.
 (define (search-session)
   (let ((s (%make-session 1)))
     (register-short-export! s 'p 1 p-qualified)
     (register-short-export! s 'q 1 q-qualified)
     (register-short-export! s 'fail0 0 fail-qualified)
+    (register-short-export! s 'boom 0 boom-qualified)
     (register-goal! s p-qualified 1 tell-p #t)
     (register-goal! s q-qualified 1 tell-q #t)
     (register-goal! s fail-qualified 0 tell-fail #t)
+    (register-goal! s boom-qualified 0 tell-boom #t)
     s))
 
 (test-group "the search driver"
@@ -774,17 +781,25 @@
     (test-equal "findall collects a copy per solution"
                 "[1]"
                 (pretty-term (%findall s x (make-term p-qualified (vector x))))))
-  ;; fold_solutions with `continue` walks every solution.
+  ;; fold_solutions with `continue` walks every solution. The fold
+  ;; function is a closure value the callables table can resolve: the
+  ;; generated library registers one per lifted lambda, so a hand-built
+  ;; session has to do the same. This fold sums the witness, so the
+  ;; accumulator shows that the single solution was visited exactly once.
   (let* ((s (search-session))
          (x (make-var s))
-         (continue-functor (string->symbol "test__continue")))
+         (continue-functor (string->symbol "search__continue"))
+         (fold-identity 'test__fold)
+         (fold-value (make-term '/ (vector fold-identity 2)))
+         (_ (register-callable!
+             s '/ fold-identity 2
+             (lambda (s copied acc)
+               (make-term continue-functor
+                          (vector (%add copied acc)))))))
     (test-equal "fold_solutions folds to exhaustion"
                 1
-                (%fold-solutions
-                 s x (make-term p-qualified (vector x))
-                 (lambda (s copied acc)
-                   (make-term continue-functor (vector acc)))
-                 0)))
+                (%fold-solutions s x (make-term p-qualified (vector x))
+                                 fold-value 0)))
   ;; fail/0 inside a search is a failed branch, so the search is exhausted.
   (test-assert "fail inside a search is a failed branch, not an error"
                (not (%solve (search-session)
@@ -798,12 +813,18 @@
               #f
               (%run-chr-session (search-session)
                                 (make-term fail-qualified (vector))))
-  (test-equal "run_chr_session_ep propagates the failure"
-              #t
-              (guard (c (#t #t))
+  ;; run_chr_session_ep propagates a runtime error (it has no catch) —
+  ;; a *failure* is a branch failure and stays contained, as in Haskell.
+  (test-equal "run_chr_session_ep propagates a runtime error"
+              'raised
+              (guard (c (#t 'raised))
                 (%run-chr-session-ep (search-session)
-                                     (make-term fail-qualified (vector)))
-                #f)))
+                                     (make-term boom-qualified (vector)))
+                #f))
+  (test-equal "run_chr_session_ep answers false for a failed branch"
+              #f
+              (%run-chr-session-ep (search-session)
+                                   (make-term fail-qualified (vector)))))
 
 ;;; --------------------------------------------------------------------------
 ;;; `%write-term-to-string`
