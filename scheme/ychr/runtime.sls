@@ -42,6 +42,8 @@
     register-evaluable! deep-eval-value
     ;; Closure-apply dispatch table for @'$call'@
     register-callable! %apply-closure
+    ;; Dynamic tell dispatch table for @tell/N@
+    register-tellable! %tell-term
     ;; Session initialization
     %make-session make-op-table)
   (import (rnrs)
@@ -110,6 +112,11 @@
         ;; procedures `%apply-closure` calls for that
         ;; closure. Generated libraries fill this in via
         ;; @register-callable!@.
+        (make-hashtable equal-hash equal?)
+        ;; Dynamic tell dispatch table: keys are
+        ;; ("scope" functor arity) lists; values are the tell
+        ;; procedures `%tell-term` calls. Generated libraries
+        ;; fill this in via @register-tellable!@.
         (make-hashtable equal-hash equal?)
         ops))))
 
@@ -371,6 +378,56 @@
            "'$call': closure argument is not sufficiently instantiated"
            " (unbound variable)")))
         (else (%chr-error "call: no matching closure")))))
+
+  ;;; --- Dynamic tell dispatch for `tell/N` ---
+
+  ;; The list constructor or the empty list, in both spellings. Mirrors
+  ;; `isListFunctor` in `YCHR.Internal.Runtime.Registry`.
+  (define list-functors
+    (map string->symbol '("prelude__." "." "prelude__[]" "[]")))
+  (define (list-functor? f) (and (memq f list-functors) #t))
+
+  ;; Register the tell procedure a `tell/N` written in module `scope`
+  ;; reaches for a goal with this functor at this total arity. Keys are
+  ;; `(scope functor arity)` lists — a string, a symbol and an integer —
+  ;; hashed with `equal-hash`/`equal?`. Mirrors the Haskell runtime's
+  ;; `TellableKey` table (`YCHR.Internal.Runtime.Monad.TellableRegistry`).
+  (define (register-tellable! s scope functor arity proc)
+    (hashtable-set! (session-tellables s) (list scope functor arity) proc))
+
+  ;; Tell a constraint chosen at run time: the whole of a dynamic
+  ;; `tell(G, A1, ..., Ak)` written in module `scope`. Mirrors `tellTerm`
+  ;; in the Haskell interpreter, including which failure raises which
+  ;; kind of error. An atom goal contributes no arguments of its own and
+  ;; a compound its own, ahead of the appended ones; they are passed on
+  ;; un-dereferenced, as a direct tell's would be. A list can only be a
+  ;; malformed goal, and is reported as not a constraint term.
+  (define (%tell-term s scope goal . extras)
+    (let ((d (deref goal)))
+      (define (dispatch functor args)
+        (let* ((all (append args extras))
+               (n (length all))
+               (proc (hashtable-ref (session-tellables s)
+                                    (list scope functor n)
+                                    #f)))
+          (if proc
+              (apply proc s all)
+              (%chr-error
+               (string-append
+                "tell: no constraint "
+                (decode-mangled-name (symbol->string functor))
+                "/"
+                (number->string n)
+                " is visible in module "
+                scope)))))
+      (cond
+        ((and (symbol? d) (not (list-functor? d))) (dispatch d '()))
+        ((and (term? d) (not (list-functor? (term-functor d))))
+         (dispatch (term-functor d) (vector->list (term-args d))))
+        ((%unbound? d)
+         (%chr-inst-error
+          "tell: goal is not sufficiently instantiated (unbound variable)"))
+        (else (%chr-error "tell: goal is not a constraint term")))))
 
   ;; The dispatch key of a closure value applied at `n` arguments,
   ;; paired with the captured values to pass before those arguments —

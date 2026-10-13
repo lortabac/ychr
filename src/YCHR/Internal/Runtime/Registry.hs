@@ -36,6 +36,7 @@ module YCHR.Internal.Runtime.Registry
     copyTerm,
     fromValueList,
     valueList,
+    isListFunctor,
   )
 where
 
@@ -371,6 +372,15 @@ allM _ [] = pure True
 allM p (x : xs) = do
   b <- p x
   if b then allM p xs else pure False
+
+-- | Is this mangled functor the list constructor or the empty list, in
+-- either spelling 'fromValueList' accepts? A goal must never be one: a
+-- list reaching a goal position is malformed (or, in
+-- "YCHR.Internal.Runtime.Goal", an improper list that slipped past its
+-- walker), not a constraint named @.@ or @[]@.
+isListFunctor :: T.Text -> Bool
+isListFunctor f =
+  f == "prelude__." || f == "." || f == "prelude__[]" || f == "[]"
 
 -- | Build a Prolog-style list (@[H|T]@) from a Haskell list of values.
 --

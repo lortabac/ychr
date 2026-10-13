@@ -12,16 +12,19 @@
           session-queue-back session-queue-back-set!
           session-evaluables
           session-callables
+          session-tellables
           session-op-table)
   (import (rnrs))
 
   ;; `evaluables` holds the deep-eval dispatch table for the @is@
   ;; operator (functor + arity → procedure). `callables` holds the
   ;; closure-apply dispatch table for `$call` (closure functor +
-  ;; identity + arity → procedure). Both are populated once at library
-  ;; load time, via `register-evaluable!` and `register-callable!`
-  ;; respectively, and never mutated after; hence immutable in the
-  ;; record.
+  ;; identity + arity → procedure). `tellables` holds the dynamic
+  ;; `tell/N` dispatch table (calling module + goal functor + arity →
+  ;; tell procedure). All three are populated once at library load
+  ;; time, via `register-evaluable!`, `register-callable!` and
+  ;; `register-tellable!` respectively, and never mutated after; hence
+  ;; immutable in the record.
   ;;
   ;; `index-positions` is the per-type set of argument positions the
   ;; program looks up through a `Foreach` index condition — a vector of
@@ -61,5 +64,6 @@
             (mutable queue-back session-queue-back session-queue-back-set!)
             (immutable evaluables session-evaluables)
             (immutable callables session-callables)
+            (immutable tellables session-tellables)
             (immutable op-table session-op-table)))
 )

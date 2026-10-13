@@ -218,6 +218,7 @@ desugarProgram rprog =
               constraintTypes = rprog.constraintTypes,
               constraintBounds = rprog.constraintBounds,
               constraintUses = rprog.constraintUses,
+              nameVisibility = rprog.nameVisibility,
               typeDefinitions = rprog.typeDefinitions
             }
    in if null errs then Right result else Left errs
@@ -273,7 +274,8 @@ getRuleConstraints r =
 desugarRule :: R.Rule -> Writer [Diagnostic DesugarError] D.Rule
 desugarRule r = do
   let ruleLabel = fmap (\ann -> "rule " <> ann.node) r.name
-  ruleBody <- desugarBodyGoals ruleLabel r.body.sourceLoc r.body.parsed r.body.node
+  ruleBody <-
+    desugarBodyGoals r.moduleName ruleLabel r.body.sourceLoc r.body.parsed r.body.node
   userGuards <- traverse (desugarGuard r.guard.sourceLoc r.guard.parsed) r.guard.node
   let (rawKept, rawRemoved) = flattenHeadKind r.head.node
       (guards, normalizedHead) = normalizeHead rawKept rawRemoved
@@ -546,13 +548,21 @@ guardExprIsAllowed e = case e of
   R.CtorExpr (Qualified "prelude" "false") [] -> True
   _ -> False
 
+-- | The scope a query goal's dynamic @tell\/N@ carries: the name of the
+-- pseudo-module the renamer resolves query goals in
+-- ("YCHR.Internal.Rename"'s @buildQueryRenameEnv@). The query runner
+-- resolves such a tell against every module's exports, which is that
+-- pseudo-module's visibility, so it does not consult the scope.
+queryScope :: Text
+queryScope = "<query>"
+
 -- | Desugar a list of query goal expressions into 'BodyGoal's.
 -- Returns 'Left' if any desugaring errors occur.
 desugarQueryGoals :: [R.Expr] -> Either [Diagnostic DesugarError] [D.BodyGoal]
 desugarQueryGoals goals =
   let (results, errs) =
         runWriter $
-          desugarBodyGoals Nothing P.dummyLoc (Atom "") goals
+          desugarBodyGoals queryScope Nothing P.dummyLoc (Atom "") goals
       -- A query has no enclosing rule to lift a disjunct out of, and
       -- the program it runs against is already compiled, so there is
       -- nowhere to put the lifted constraint either. Rejected here
@@ -587,13 +597,14 @@ runVarNameSupply m = evalStateT m 0
 -- | Desugar a list of body expressions, flattening any multi-goal
 -- expansions (e.g. non-variable @is@ LHS).
 desugarBodyGoals ::
+  Text ->
   Maybe Text ->
   P.SourceLoc ->
   PExpr ->
   [R.Expr] ->
   Writer [Diagnostic DesugarError] [D.BodyGoal]
-desugarBodyGoals label loc origin exprs =
-  runVarNameSupply $ concat <$> traverse (desugarBodyGoal label loc origin) exprs
+desugarBodyGoals scope label loc origin exprs =
+  runVarNameSupply $ concat <$> traverse (desugarBodyGoal scope label loc origin) exprs
 
 -- | Classify a resolved body expression into 'D.BodyGoal's.
 --
@@ -604,18 +615,19 @@ desugarBodyGoals label loc origin exprs =
 -- 3. @T is Expr@ (non-variable LHS) -> @R is Expr, R = T@ with fresh @R@
 -- 4. 'R.HostExpr' -> 'D.BodyHostStmt'
 -- 5. 'R.CallExpr' -> 'D.BodyCall'
--- 6. 'R.ApplyExpr' -> 'D.BodyApply'
+-- 6. 'R.ApplyExpr' -> 'D.BodyApply'; @tell(G, …)@ -> 'D.BodyTellDynamic'
 -- 7. @A ; B@ -> 'D.BodyOr'
 -- 8. Constructor with a 'Qualified' name -> 'D.BodyTell'
 -- 9. @true@ in any spelling -> 'D.BodyTrue'
 -- 10. Anything else -> error
 desugarBodyGoal ::
+  Text ->
   Maybe Text ->
   P.SourceLoc ->
   PExpr ->
   R.Expr ->
   StateT Int (Writer [Diagnostic DesugarError]) [D.BodyGoal]
-desugarBodyGoal label loc origin e = case e of
+desugarBodyGoal scope label loc origin e = case e of
   -- Surface '=' arrives as CtorExpr "=" from the resolver.
   R.CtorExpr (Unqualified "=") [l, r] -> pure [D.BodyUnify l r]
   -- 'is' with a variable LHS.
@@ -630,6 +642,11 @@ desugarBodyGoal label loc origin e = case e of
   R.CtorExpr (Unqualified "true") [] -> pure [D.BodyTrue]
   R.CallExpr qn args -> pure [D.BodyCall qn args]
   R.ApplyExpr f args -> pure [D.BodyApply f args]
+  -- A dynamic @tell\/N@. The renamer has already rejected a bare @tell@
+  -- and one wider than 'R.maxTellArity', and rewritten every literal
+  -- goal into the plain tell it denotes.
+  R.CtorExpr (Unqualified "tell") (g : extras) ->
+    pure [D.BodyTellDynamic scope g extras]
   -- Disjunction. The parser nests @;@ to the right, so the branches of
   -- @(a ; b ; c)@ are read off the right spine; a left-nested
   -- @((a ; b) ; c)@ keeps its left operand as one branch, which is
@@ -639,7 +656,7 @@ desugarBodyGoal label loc origin e = case e of
   R.CtorExpr (Unqualified ";") [_, _] -> do
     branches <-
       traverse
-        (fmap concat . traverse (desugarBodyGoal label loc origin) . conjuncts)
+        (fmap concat . traverse (desugarBodyGoal scope label loc origin) . conjuncts)
         (disjuncts e)
     pure [D.BodyOr (NE.fromList branches)]
   R.CtorExpr (Qualified m b) args ->
@@ -872,6 +889,11 @@ liftBodyGoal modName scope st goal = case goal of
         (st'', args') =
           mapAccumL (liftExpr modName scope) st' args
      in (st'', D.BodyApply f' args')
+  D.BodyTellDynamic m g extras ->
+    let (st', g') = liftExpr modName scope st g
+        (st'', extras') =
+          mapAccumL (liftExpr modName scope) st' extras
+     in (st'', D.BodyTellDynamic m g' extras')
   D.BodyTell qn args ->
     let (st', args') =
           mapAccumL (liftExpr modName scope) st args
@@ -1030,6 +1052,8 @@ bodyGoalVars = Set.unions . map goalVars
     goalVars (D.BodyCall _ args) = Set.unions (map exprVars args)
     goalVars (D.BodyApply f args) =
       exprVars f `Set.union` Set.unions (map exprVars args)
+    goalVars (D.BodyTellDynamic _ g extras) =
+      exprVars g `Set.union` Set.unions (map exprVars extras)
     goalVars (D.BodyTell _ args) = Set.unions (map exprVars args)
     goalVars (D.BodyUnify e1 e2) = exprVars e1 `Set.union` exprVars e2
     goalVars (D.BodyHostStmt _ args) = Set.unions (map exprVars args)

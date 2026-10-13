@@ -285,6 +285,7 @@ resolveProgram mods =
                 constraintTypes = conTypes,
                 constraintBounds = conBounds,
                 constraintUses = buildConstraintUses mods,
+                nameVisibility = buildNameVisibility mods,
                 functionNames = functionNames,
                 typeDefinitions = typeDefs
               }
@@ -346,6 +347,12 @@ are read by 'termToExpr' to commit each compound to a 'CallExpr' or
 -- See Note [FunVisibility vs renamer visibility].
 type FunVisibility = Map (Text, Int) [QualifiedName]
 
+-- | Per-module constraint and function visibility: each local
+-- @(name, arity)@ a module can name, with the qualified declarations
+-- that provide it. Same shape as 'FunVisibility'; see
+-- 'buildNameVisibility'.
+type NameVisibility = Map (Text, Int) [QualifiedName]
+
 -- | Build a function-visibility map for every module in a program.
 --
 -- A function declared in module @P@ is visible in module @M@ iff
@@ -355,45 +362,70 @@ type FunVisibility = Map (Text, Int) [QualifiedName]
 -- 'YCHR.Internal.Collect.rewriteImports' has collapsed every import into a
 -- 'CollectedImport', so there is only one import kind to handle.
 buildFunctionVisibility :: [CollectedModule] -> Map Text FunVisibility
-buildFunctionVisibility mods =
+buildFunctionVisibility = buildDeclVisibility functionKey
+  where
+    functionKey (P.FunctionDecl fd) = Just (fd.name, fd.arity)
+    functionKey _ = Nothing
+
+-- | Per-module visibility of constraints and functions together, built
+-- by the same rule as 'buildFunctionVisibility'. It is the namespace the
+-- renamer resolves a goal's name in, so a bare name with both a
+-- constraint and a function provider is ambiguous here as it is there.
+-- Read by the compiler to build the tellables table a dynamic
+-- @tell\/N@ resolves through (see 'YCHR.Internal.Compile.buildTellables').
+buildNameVisibility :: [CollectedModule] -> Map Text NameVisibility
+buildNameVisibility = buildDeclVisibility valueKey
+  where
+    valueKey (P.ConstraintDecl cd) = Just (cd.name, cd.arity)
+    valueKey (P.FunctionDecl fd) = Just (fd.name, fd.arity)
+    valueKey _ = Nothing
+
+-- | The visibility rule shared by 'buildFunctionVisibility' and
+-- 'buildNameVisibility', over the declarations @declKey@ selects.
+-- A declaration in module @P@ is visible in module @M@ iff either
+-- @P == M@, or @M@ has a @use_module(P)@ import whose import list
+-- permits it and @P@'s export list (if any) includes it.
+buildDeclVisibility ::
+  (P.Declaration -> Maybe (Text, Int)) ->
+  [CollectedModule] ->
+  Map Text (Map (Text, Int) [QualifiedName])
+buildDeclVisibility declKey mods =
   Map.fromList [(m.name, perModule m) | m <- mods]
   where
     perModule selfMod =
       Map.fromListWith
         (\a b -> nub (a ++ b))
-        [ ((fd.name, fd.arity), [QualifiedName provider.name fd.name])
+        [ (key, [QualifiedName provider.name (fst key)])
         | provider <- mods,
           P.Ann d _ <- provider.decls,
-          P.FunctionDecl fd <- [d],
-          visibleTo selfMod provider fd
+          Just key <- [declKey d],
+          visibleTo selfMod provider key
         ]
 
-    visibleTo selfMod provider fd
+    visibleTo selfMod provider key
       | provider.name == selfMod.name = True
-      | not (importPermits selfMod provider fd) = False
-      | otherwise = exportPermits provider fd
+      | not (importPermits selfMod provider key) = False
+      | otherwise = exportPermits provider key
 
-    importPermits selfMod provider fd =
+    importPermits selfMod provider key =
       any
-        (matchesImport provider.name fd)
+        (matchesImport provider.name key)
         [im.node | im <- selfMod.imports]
 
-    matchesImport providerName fd im
-      | im.importModule == providerName = importListPermitsFun fd im.importItems
+    matchesImport providerName key im
+      | im.importModule == providerName = importListPermits key im.importItems
       | otherwise = False
 
-    importListPermitsFun _ Nothing = True
-    importListPermitsFun fd (Just decls) = any (matchesFunDecl fd) decls
+    importListPermits _ Nothing = True
+    importListPermits key (Just decls) = any (matchesDecl key) decls
 
-    exportPermits provider fd = case provider.exports of
+    exportPermits provider key = case provider.exports of
       Nothing -> True
-      Just annExports -> any (matchesFunDecl fd) annExports.node
+      Just annExports -> any (matchesDecl key) annExports.node
 
-    matchesFunDecl fd (P.FunctionDecl fd') =
-      fd'.name == fd.name && fd'.arity == fd.arity
-    matchesFunDecl fd (P.ConstraintDecl cd) =
-      cd.name == fd.name && cd.arity == fd.arity
-    matchesFunDecl _ _ = False
+    matchesDecl (n, a) (P.FunctionDecl fd') = fd'.name == n && fd'.arity == a
+    matchesDecl (n, a) (P.ConstraintDecl cd) = cd.name == n && cd.arity == a
+    matchesDecl _ _ = False
 
 -- | Look up the function-visibility table for a single module,
 -- returning the empty map for unknown modules.
@@ -1160,7 +1192,7 @@ checkRuleHeads fNames mods = snd $ foldl go (Set.empty, []) allRules
 
 -- | Reserved names that cannot be used as constraint or function declarations.
 reservedDeclNames :: Set Text
-reservedDeclNames = Set.fromList ["quote"]
+reservedDeclNames = Set.fromList ["quote", "tell"]
 
 -- | Check that no declaration uses a reserved name.
 checkReservedNames :: [CollectedModule] -> [Diagnostic ResolveError]
@@ -1229,6 +1261,7 @@ resolveRules visMap mods =
                     rule =
                       R.Rule
                         { name = r.name,
+                          moduleName = m.name,
                           head = P.AnnP rh r.head.sourceLoc r.head.parsed,
                           guard = P.AnnP guardExprs r.guard.sourceLoc r.guard.parsed,
                           body = P.AnnP bodyExprs r.body.sourceLoc r.body.parsed

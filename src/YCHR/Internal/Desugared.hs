@@ -69,6 +69,8 @@ data Program = Program
     constraintBounds :: Map ConstraintKey [BoundSig],
     -- | See 'YCHR.Internal.Resolved.Program'.
     constraintUses :: Map ConstraintKey ConstraintUse,
+    -- | See 'YCHR.Internal.Resolved.Program'.
+    nameVisibility :: Map Text (Map (Text, Int) [QualifiedName]),
     typeDefinitions :: [TypeDefinition]
   }
   deriving (Show)
@@ -133,6 +135,13 @@ data BodyGoal
   | BodyIs Text Expr
   | BodyCall QualifiedName [Expr]
   | BodyApply Expr [Expr]
+  | -- | A dynamic @tell(G, A1, …, Ak)@: evaluate @G@ to a constraint
+    -- term, append @A1..Ak@ to its arguments, and tell the result. The
+    -- 'Text' is the calling module — the scope the term's functor is
+    -- resolved in at run time — or @\<query\>@ for a query goal. A
+    -- @tell@ whose goal is written literally never gets here: the
+    -- renamer turns it into the plain tell it denotes.
+    BodyTellDynamic Text Expr [Expr]
   | BodyOr (NonEmpty [BodyGoal])
   deriving (Show, Eq)
 

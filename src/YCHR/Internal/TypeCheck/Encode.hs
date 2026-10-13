@@ -304,6 +304,7 @@ bodyGoal (D.BodyHostStmt f args) = ast "body_host" [atomTerm f, exprs args]
 bodyGoal (D.BodyIs v e) = ast "body_is" [atomTerm v, expr e]
 bodyGoal (D.BodyCall n args) = ast "body_call" [qnameTerm n, exprs args]
 bodyGoal (D.BodyApply f args) = ast "body_apply" [expr f, exprs args]
+bodyGoal (D.BodyTellDynamic _ g extras) = ast "body_tell_dyn" [expr g, exprs extras]
 bodyGoal (D.BodyOr branches) =
   ast "body_or" [listTerm (map bodyGoals (NE.toList branches))]
 

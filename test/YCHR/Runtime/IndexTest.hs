@@ -84,6 +84,7 @@ runIndexEnv action = do
       Map.empty
       Map.empty
       Map.empty
+      Map.empty
       Set.empty
   runChr action env
 
@@ -103,6 +104,7 @@ programWith stmts =
         ],
       evaluables = [],
       callables = [],
+      tellables = [],
       inertTypes = []
     }
 

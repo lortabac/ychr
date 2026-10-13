@@ -17,8 +17,10 @@ manipulation) is a dedicated VM instruction; `call-expr` calls a
 compiler-generated procedure, `host-call` a host language function
 ([Procedure and host calls](#procedure-and-host-calls)) and
 `apply-closure` a first-class callable the program's callables table
-resolves ([Closure application](#closure-application)). Every
-expression has one of the three kinds below.
+resolves ([Closure application](#closure-application)), and the
+`tell-term` statement a constraint the tellables table resolves
+([tell-term](#tell-term)). Every expression has one of the three kinds
+below.
 
 ### Expression kinds: values, ids, and bools
 
@@ -142,6 +144,7 @@ compilation.
   (rule-names "<rule-name>" ...)
   (evaluables ("<functor>" <arity> "<proc-name>") ...)
   (callables ("<functor>" "<identity>" <arity> "<proc-name>") ...)
+  (tellables ("<module>" "<functor>" <arity> "<proc-name>") ...)
   (inert-types <constraint-type> ...)
   <procedure>
   ...)
@@ -181,6 +184,16 @@ compilation.
   the mangled name of the `func_*` procedure. Present, possibly empty,
   in everything the compiler emits; optional on read (an absent table
   is an empty one), like `inert-types`.
+- `tellables` — the dispatch table `tell-term` consults (see
+  [tell-term](#tell-term)). `<module>` is the module a dynamic `tell`
+  was written in, `<functor>` a goal term's functor in its runtime
+  encoding, `<arity>` the total arity told, and `<proc-name>` the
+  mangled name of the constraint's `tell_*` procedure. Only modules
+  containing a `tell-term` have entries; each gets one per constraint
+  it can name under its qualified functor (`"m__c"`), plus one under
+  the bare functor (`"c"`) when no other visible constraint shares the
+  name and arity. Present, possibly empty, in everything the compiler
+  emits; optional on read, like `callables`.
 - `inert-types` — constraint types whose activation runs no
   occurrence procedure (no occurrences, or only passive ones).
   Reactivating one can only re-store it, and `store` is idempotent,
@@ -466,6 +479,31 @@ Iterate over the constraints pending reactivation (enqueued by
 drain is neither a labelled loop nor a value-producing position. The
 compiler emits only a single dispatch call here, so the restriction is
 never felt; a runtime may diagnose a violation as a runtime error.
+
+### tell-term
+
+```scheme
+(tell-term "<module>" <goal-val-expr> <val-expr> ...)
+```
+
+Tell a constraint chosen at run time: the whole of a dynamic
+`tell(G, A1, …, Ak)` written in `<module>`. Evaluate and dereference
+the goal. An atom contributes no arguments of its own, a compound its
+own arguments; the remaining operands are evaluated and appended. Look
+up `<module>`, the goal's functor and the total argument count in the
+program's `tellables` table (see [Program](#program)) and call the
+`tell_*` procedure found with the arguments, un-dereferenced.
+
+Three failures, with distinct kinds:
+
+- an *unbound* goal is an insufficient-instantiation error, with the
+  message `tell: goal is not sufficiently instantiated (unbound
+  variable)`;
+- a goal that is neither an atom nor a compound is a general
+  `tell: goal is not a constraint term` error;
+- a key absent from the table is a general
+  `tell: no constraint <name>/<arity> is visible in module <module>`
+  error, with `<name>` in source spelling (`m:c` for `"m__c"`).
 
 ### push-frame
 
@@ -908,6 +946,7 @@ is `mymodule:leq/2`, so procedure names follow
       ("/" "prelude:+" 2 "func_prelude____u2b__2")
       ; ... one entry per prelude function and lifted lambda elided
       )
+    (tellables)
     (inert-types)
 
     ; tell_mymodule__leq2(X_0, X_1): create, store, activate

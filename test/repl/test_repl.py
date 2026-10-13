@@ -407,6 +407,41 @@ def test_trace_nested_foreach(ychr_bin, tmp_path):
     assert result.stdout == expected
 
 
+def test_repl_dynamic_tell(ychr_bin, tmp_path):
+    """`tell/N` in a query: a literal goal, a goal held in a variable
+    with appended arguments, and the query-side failures. A query sees
+    what every module exports, so the unexported `hidden/1` is not
+    reachable."""
+    (tmp_path / "succ_m.chr").write_text(
+        ":- module(succ_m, [succ/2]).\n"
+        ":- chr_constraint succ/2, hidden/1.\n"
+        "succ(X, R) <=> R is X + 1.\n"
+    )
+    result = subprocess.run(
+        [ychr_bin, "repl", "--quiet", str(tmp_path / "succ_m.chr")],
+        input=(
+            "tell(succ(1, R)).\n"
+            "tell(quote(succ), 3, R).\n"
+            "tell(quote(succ_m:succ(4)), R).\n"
+            "tell(quote(hidden(1))).\n"
+            "tell(G).\n"
+        ),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"repl failed:\n{result.stdout}\n{result.stderr}"
+    assert result.stdout == (
+        "R = 2.\n"
+        "R = 4.\n"
+        "R = 5.\n"
+        + runtime_error("tell: Unknown constraint: hidden/1")
+        + runtime_error(
+            "CHR runtime error: tell: goal is not sufficiently instantiated"
+            " (unbound variable)"
+        )
+    )
+
+
 def test_info_cross_module_ambiguity(ychr_bin, tmp_path):
     """Two modules exporting the same `(name, arity)` make `:info NAME`
     refuse to guess. The user's documented choice is to error and list

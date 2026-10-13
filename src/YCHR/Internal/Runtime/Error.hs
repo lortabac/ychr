@@ -25,6 +25,9 @@ module YCHR.Internal.Runtime.Error
     chrRuntimeErrorPrefix,
     closureUnboundError,
     closureNoMatchError,
+    tellUnboundError,
+    tellNotAGoalError,
+    tellNotVisibleError,
 
     -- * Control-flow exceptions
     SearchFailure (..),
@@ -138,6 +141,33 @@ closureUnboundError =
 closureNoMatchError :: Chr a
 closureNoMatchError =
   runtimeErrorS (chrRuntimeErrorPrefix <> "call: no matching closure")
+
+-- | Dynamic @tell\/N@, first failure mode: the goal is still an
+-- unbound logical variable. An /instantiation/ error, like
+-- 'closureUnboundError'.
+tellUnboundError :: Chr a
+tellUnboundError =
+  instantiationErrorS $
+    chrRuntimeErrorPrefix
+      <> "tell: goal is not sufficiently instantiated (unbound variable)"
+
+-- | Dynamic @tell\/N@, second failure mode: the goal is bound to
+-- something that cannot name a constraint — a number, a string, a list.
+tellNotAGoalError :: Chr a
+tellNotAGoalError =
+  runtimeErrorS (chrRuntimeErrorPrefix <> "tell: goal is not a constraint term")
+
+-- | Dynamic @tell\/N@, third failure mode: no constraint with this name
+-- and arity is visible, unambiguously, in the calling module. Takes the
+-- rendered @name\/arity@ and the calling module.
+tellNotVisibleError :: String -> String -> Chr a
+tellNotVisibleError nameArity modName =
+  runtimeErrorS $
+    chrRuntimeErrorPrefix
+      <> "tell: no constraint "
+      <> nameArity
+      <> " is visible in module "
+      <> modName
 
 throwWithStack :: RuntimeErrorKind -> String -> Chr a
 throwWithStack kind msg = do

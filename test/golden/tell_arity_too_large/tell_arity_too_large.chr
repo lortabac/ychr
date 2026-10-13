@@ -1,0 +1,3 @@
+% tell/1 to tell/10 are supported; this is tell/11.
+:- chr_constraint go/1, c/10.
+go(X) <=> tell(c, X, X, X, X, X, X, X, X, X, X).

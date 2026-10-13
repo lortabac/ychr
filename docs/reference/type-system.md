@@ -646,6 +646,12 @@ A body constraint call constrains its argument expressions: with
 `leq(int, int)` declared, a body `leq(X, Z)` requires `X` and `Z`
 consistent with `int`.
 
+A [`tell/N`](language.md#dynamic-tells-telln) whose goal is written
+literally is that body constraint call: `tell(leq(X), Z)` is checked as
+`leq(X, Z)`. A dynamic one names its constraint only at run time, so its
+goal and appended arguments are typed as expressions and meet no
+signature.
+
 ### 7. Body function calls
 
 A function call in a body or guard constrains its argument expressions

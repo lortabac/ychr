@@ -13,6 +13,7 @@
   (make-session 0 (vector) (vector) (vector) (vector) 0 #f '() '()
                 (make-hashtable equal-hash equal?)
                 (make-hashtable equal-hash equal?)
+                (make-hashtable equal-hash equal?)
                 builtin-op-table))
 
 (test-begin "var")

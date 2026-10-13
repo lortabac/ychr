@@ -1,0 +1,11 @@
+% The constraints `tell/N` reaches from the other module. `note/2` and
+% `pair/3` are exported; `secret/2` is not, so `client` cannot name it,
+% statically or dynamically.
+:- module(tell_provider, [note/2, pair/3, twin/2]).
+
+:- chr_constraint note/2, pair/3, secret/2, twin/2.
+
+note(X, R) <=> R is X + 1.
+pair(A, B, R) <=> R is A * 10 + B.
+secret(X, R) <=> R is X + 100.
+twin(X, R) <=> R is X + 1000.

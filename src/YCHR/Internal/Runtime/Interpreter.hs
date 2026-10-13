@@ -112,6 +112,9 @@ import YCHR.Internal.Runtime.Error
     isControlException,
     runtimeError',
     runtimeErrorS,
+    tellNotAGoalError,
+    tellNotVisibleError,
+    tellUnboundError,
   )
 import YCHR.Internal.Runtime.History (addHistory, notInHistory)
 import YCHR.Internal.Runtime.Index (GroundKey, indexablePositions)
@@ -126,6 +129,7 @@ import YCHR.Internal.Runtime.Monad
 import YCHR.Internal.Runtime.Reactivation (drainQueue, enqueueObservers)
 import YCHR.Internal.Runtime.Registry
   ( baseHostCallRegistry,
+    isListFunctor,
     isVar,
     unit,
   )
@@ -293,6 +297,7 @@ interpret prog hostCalls entryName args = do
       hostCalls
       evaluableMap
       callableMap
+      (Map.fromList prog.tellables)
       Map.empty
       mempty
   runChr (callProc entryName (map CVal args)) env
@@ -779,6 +784,11 @@ execStmt (SDrainReactivationQueue suspSlot body) = do
             SFall -> pure ()
             _ -> uncaughtSignal "DrainReactivationQueue" sig
         else pure ()
+  pure SFall
+execStmt (STellTerm sc goal extras) = do
+  goal' <- evalValExpr goal
+  extras' <- traverse evalValExpr extras
+  liftChr (tellTerm sc goal' extras')
   pure SFall
 execStmt (SPushFrame frame) = do
   liftChr (pushFrame frame)
@@ -1396,6 +1406,42 @@ evalCallArgDeep (SCallId e) = CId <$> evalIdExpr e
 -- ---------------------------------------------------------------------------
 -- Closure application
 -- ---------------------------------------------------------------------------
+
+-- | Tell a constraint chosen at run time: the whole of a dynamic
+-- @tell(G, A1, …, Ak)@ written in module @scope@.
+--
+-- The goal is dereferenced; an atom contributes no arguments of its
+-- own and a compound its own arguments, ahead of the appended ones.
+-- The functor, the calling module and the total arity key the
+-- session's tellables table, and the tell procedure found there is
+-- called with the arguments, which are passed un-dereferenced as a
+-- direct tell's would be. An unbound goal is an instantiation error;
+-- anything else that misses is a general error, and a list, which can
+-- only be a malformed goal, is reported as not a constraint term.
+tellTerm :: Text -> Value -> [Value] -> Chr ()
+tellTerm scope goal extras = do
+  goal' <- deref goal
+  case goal' of
+    VAtom f | not (isListFunctor f) -> dispatch f []
+    VTerm f args | not (isListFunctor f) -> dispatch f args
+    VVar _ -> tellUnboundError
+    _ -> tellNotAGoalError
+  where
+    dispatch f args = do
+      let allArgs = args <> extras
+          key = TellableKey {scope = scope, functor = Name f, arity = length allArgs}
+      SessionEnv {tellables} <- ask
+      case Map.lookup key tellables of
+        Just procName -> void (callProc procName (map CVal allArgs))
+        Nothing ->
+          tellNotVisibleError
+            (T.unpack (displayFunctor f) <> "/" <> show (length allArgs))
+            (T.unpack scope)
+    -- The functor as the user would write it: @m:foo@ for a mangled
+    -- qualified name, the bare name otherwise.
+    displayFunctor f = case decodeName f [] of
+      CompoundTerm name _ -> Types.flattenName name
+      _ -> f
 
 -- | Apply a first-class callable to arguments: the whole of
 -- @'$call'(F, A1, …, An)@.

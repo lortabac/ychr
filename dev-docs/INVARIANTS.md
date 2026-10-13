@@ -718,8 +718,8 @@ Closed for compiler output. Every `CallExpr` name (`tell_<c>/<n>`,
 interpreter still errors at runtime if a name it is handed is missing, but
 compiler output can no longer reach that error:
 `YCHR.Internal.VM.Closure.danglingTargets` checks every `CallExpr` name,
-and every target of the program's `evaluables` and `callables` tables,
-against the program's own procedures; `Compile.Pipeline.compileModules`
+and every target of the program's `evaluables`, `callables` and
+`tellables` tables, against the program's own procedures; `Compile.Pipeline.compileModules`
 asserts it with an internal `error` (a miss is a compiler bug, not user
 input, so it is not given a diagnostic code), and a test in
 `test/YCHR/VM/ClosureTest.hs` pins the checker's own behaviour.

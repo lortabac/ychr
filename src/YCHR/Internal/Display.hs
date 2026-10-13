@@ -295,6 +295,9 @@ renameErrorCode (MacroOutsideGoalPosition _ _) = ErrorCode 20025
 renameErrorCode (MacroCycle _ _) = ErrorCode 20026
 renameErrorCode (MacroBodyNotExported _ _ _ _) = ErrorCode 20027
 renameErrorCode (MacroInvalidInHead _ _) = ErrorCode 20028
+renameErrorCode (TellOutsideGoalPosition _) = ErrorCode 20029
+renameErrorCode (UnsupportedTellArity _) = ErrorCode 20030
+renameErrorCode (TellControlGoal _ _) = ErrorCode 20031
 
 -- | 2x1xx — rename phase (warnings)
 renameWarningCode :: RenameWarning -> ErrorCode
@@ -940,6 +943,30 @@ renameErrorMsg (MacroOutsideGoalPosition qn arity) =
     )
     ( "macros are recognized only in a rule head, a rule body, or a query"
         ++ " goal; use quote/1 if you meant the bare compound as data"
+    )
+renameErrorMsg (TellOutsideGoalPosition arity) =
+  withHint
+    ("tell/" ++ show arity ++ " used outside a goal position")
+    ( "tell/N tells a constraint, so it is only valid as a goal of a rule"
+        ++ " body or a query; use quote/1 to write a tell term as data"
+    )
+renameErrorMsg (TellControlGoal n arity) =
+  withHint
+    ( "tell's goal '"
+        ++ T.unpack n
+        ++ "'/"
+        ++ show arity
+        ++ " is a control form, not a constraint"
+    )
+    "write the goal directly in the rule body; tell/N only tells constraints"
+renameErrorMsg (UnsupportedTellArity arity) =
+  withHint
+    ("tell/" ++ show arity ++ " is not supported")
+    ( "tell takes a goal followed by up to "
+        ++ show (R.maxTellArity - 1)
+        ++ " arguments to append to it (tell/1 to tell/"
+        ++ show R.maxTellArity
+        ++ ")"
     )
 renameErrorMsg (MacroCycle qn arity) =
   withHint

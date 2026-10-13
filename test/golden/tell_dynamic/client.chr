@@ -1,0 +1,38 @@
+% The built-in `tell/N`: tell a constraint chosen at run time, with the
+% arguments after the first appended to the goal's own. Only constraints
+% visible in the calling module (`tell_client`) can be reached.
+:- module(tell_client, [
+    run1/1, run2/2, run3/3,
+    own/2, via_fn/2, static_partial/2, local_out/2, quoted_out/2
+]).
+:- use_module(tell_provider).
+:- use_module(tell_fns).
+
+:- chr_constraint run1/1, run2/2, run3/3, own/2, via_fn/2, static_partial/2,
+   local_out/2, quoted_out/2, mine/2, 'café'/2.
+
+run1(G) <=> tell(G).
+run2(G, A) <=> tell(G, A).
+run3(G, A, B) <=> tell(G, A, B).
+
+% `mine/2` is this module's own and unexported: visible here, though a
+% query could not name it.
+mine(X, R) <=> R is X * 3.
+own(X, R) <=> G = mine(X, R), tell(G).
+
+% The goal is computed by a function, so the tell is dynamic.
+:- function goal_of/1.
+goal_of(X) -> quote(note(X)).
+via_fn(X, R) <=> tell(goal_of(X), R).
+
+% A literal goal is resolved at compile time: this is the plain tell
+% `note(X, R)`.
+static_partial(X, R) <=> tell(note(X), R).
+
+% An output argument that is local to the body is introduced by the tell,
+% as it would be by a plain tell — appended, or inside the quoted goal.
+local_out(X, S) <=> tell(goal_of(X), R), S is R * 2.
+quoted_out(X, S) <=> tell(quote(note(X, R))), S is R * 2.
+
+% A constraint whose name is not ASCII, reachable as an atom goal.
+'café'(X, R) <=> R is X - 1.

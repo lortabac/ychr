@@ -29,6 +29,7 @@ module YCHR.Internal.Runtime.Monad
     HostCallRegistry,
     EvaluableRegistry,
     CallableRegistry,
+    TellableRegistry,
   )
 where
 
@@ -62,7 +63,7 @@ import YCHR.Internal.Runtime.Types
     VarId (..),
   )
 import YCHR.Internal.Types qualified as Types
-import YCHR.Internal.VM (CallableKey, EvaluableKey, RuleId, StackFrame)
+import YCHR.Internal.VM (CallableKey, EvaluableKey, RuleId, StackFrame, TellableKey)
 import YCHR.Internal.VM qualified as VM
 
 -- | The runtime call stack (newest frame first), used for error reporting.
@@ -89,6 +90,11 @@ type EvaluableRegistry = Map EvaluableKey VM.Name
 -- identity field and declared arity) to the mangled 'ProcMap' key that
 -- resolves the corresponding compiled procedure.
 type CallableRegistry = Map CallableKey VM.Name
+
+-- | Registry of the constraints a dynamic @tell\/N@ can reach. Maps a
+-- 'TellableKey' (calling module, goal functor, total arity) to the
+-- mangled 'ProcMap' key of the constraint's tell procedure.
+type TellableRegistry = Map TellableKey VM.Name
 
 -- | The host-side runtime monad.
 type Chr = ReaderT SessionEnv IO
@@ -187,6 +193,10 @@ data SessionEnv = SessionEnv
     -- program's callables table at session init, plus any query-time
     -- lifted lambdas the caller merges in.
     callables :: !CallableRegistry,
+    -- | Dispatch table for the dynamic @tell\/N@ ('VM.TellTerm').
+    -- Populated from the program's tellables table at session init,
+    -- which is empty unless the program tells dynamically.
+    tellables :: !TellableRegistry,
     -- | The program's operator table ('CompiledProgram.opTable'): the
     -- built-in operators merged with every operator the program's
     -- modules declare or import. Consulted by the
@@ -244,10 +254,11 @@ initSessionEnv ::
   HostCallRegistry ->
   EvaluableRegistry ->
   CallableRegistry ->
+  TellableRegistry ->
   Map Types.UnqualifiedIdentifier ExportResolution ->
   Set Types.QualifiedIdentifier ->
   IO SessionEnv
-initSessionEnv typeNames rNames inert indexable ops slotProgram hc ev cl expMap expSet = do
+initSessionEnv typeNames rNames inert indexable ops slotProgram hc ev cl tl expMap expSet = do
   vc <- newIORef (VarId 0)
   let typeCount = List.length typeNames
       emptyStore = IntMap.fromList [(i, Seq.empty) | i <- [0 .. typeCount - 1]]
@@ -282,6 +293,7 @@ initSessionEnv typeNames rNames inert indexable ops slotProgram hc ev cl expMap 
         hostCalls = hc,
         evaluables = ev,
         callables = cl,
+        tellables = tl,
         opTable = ops,
         exportMap = expMap,
         exportedSet = expSet,

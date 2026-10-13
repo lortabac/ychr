@@ -1,0 +1,4 @@
+% A literal goal is resolved at compile time, so an unknown constraint
+% is the ordinary unknown-name error rather than a runtime one.
+:- chr_constraint go/1.
+go(X) <=> tell(nope(X)).

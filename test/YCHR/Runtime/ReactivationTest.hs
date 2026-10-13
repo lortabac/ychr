@@ -42,6 +42,7 @@ runReactEnv action = do
       Map.empty
       Map.empty
       Map.empty
+      Map.empty
       Set.empty
   runChr action env
 
@@ -59,6 +60,7 @@ runReactStoreEnv action = do
       IntMap.empty
       builtinOps
       emptySlotProgram
+      Map.empty
       Map.empty
       Map.empty
       Map.empty

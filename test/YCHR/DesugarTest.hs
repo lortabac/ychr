@@ -537,7 +537,7 @@ symbolTableTests =
   testGroup
     "symbol-table"
     [ testCase "empty program yields empty table" $
-        extractSymbolTable (D.Program [] [] Map.empty Map.empty Map.empty [])
+        extractSymbolTable (D.Program [] [] Map.empty Map.empty Map.empty Map.empty [])
           @?= mkSymbolTable [],
       testCase "one qualified constraint in head gets id 0" $ do
         let prog =
@@ -549,6 +549,7 @@ symbolTableTests =
                     (noAnnP [])
                 ]
                 []
+                Map.empty
                 Map.empty
                 Map.empty
                 Map.empty
@@ -576,6 +577,7 @@ symbolTableTests =
                 Map.empty
                 Map.empty
                 Map.empty
+                Map.empty
                 []
         extractSymbolTable prog
           @?= mkSymbolTable
@@ -593,6 +595,7 @@ symbolTableTests =
                     (noAnnP [D.BodyHostStmt "print" []])
                 ]
                 []
+                Map.empty
                 Map.empty
                 Map.empty
                 Map.empty
@@ -617,6 +620,7 @@ symbolTableTests =
                     (noAnnP [])
                 ]
                 []
+                Map.empty
                 Map.empty
                 Map.empty
                 Map.empty
@@ -649,6 +653,7 @@ symbolTableTests =
                     )
                 ]
                 []
+                Map.empty
                 Map.empty
                 Map.empty
                 Map.empty

@@ -3,10 +3,11 @@
 -- | Procedure-name closure over a VM program.
 --
 -- Every @CallExpr@ a program carries must name one of the program's own
--- procedures, and so must every target of its 'Program.evaluables' and
--- 'Program.callables' dispatch tables. The compiler derives the
--- procedure names, the call sites that name them, and both tables'
--- targets from the same function list, so a dangling target is a
+-- procedures, and so must every target of its 'Program.evaluables',
+-- 'Program.callables' and 'Program.tellables' dispatch tables. The
+-- compiler derives the procedure names, the call sites that name them,
+-- and the tables' targets from the same function and constraint lists,
+-- so a dangling target is a
 -- compiler bug rather than anything a user program can produce. The
 -- interpreter reports one at run time as @callProc: unknown procedure
 -- \@name@, on whichever path reaches it first; this module lets the
@@ -35,6 +36,7 @@ module YCHR.Internal.VM.Closure
     danglingTargets,
     danglingCalls,
     danglingCallables,
+    danglingTellables,
     procedureNames,
     closureFailure,
   )
@@ -53,6 +55,7 @@ import YCHR.Internal.VM.Types
     Procedure (..),
     Program (..),
     Stmt (..),
+    TellableKey,
     ValExpr (..),
     historyIdsList,
   )
@@ -64,7 +67,8 @@ procedureNames procs = Set.fromList [p.name | p <- procs]
 
 -- | Every call target a compiled program carries that its own procedure
 -- table does not define: the @CallExpr@ sites of every body, then the
--- 'Program.evaluables' and 'Program.callables' targets. In
+-- 'Program.evaluables', 'Program.callables' and 'Program.tellables'
+-- targets. In
 -- first-appearance order, without duplicates. An empty list means the
 -- program is closed; 'closureFailure' turns a non-empty one into the
 -- message a caller reports.
@@ -73,6 +77,7 @@ danglingTargets prog =
   danglingCalls known prog.procedures
     ++ danglingEvaluables known prog.evaluables
     ++ danglingCallables known prog.callables
+    ++ danglingTellables known prog.tellables
   where
     known = procedureNames prog.procedures
 
@@ -104,6 +109,7 @@ danglingCalls known = dedup . concatMap procedureCalls
       Kill e -> idCalls e
       AddHistory _ ids -> concatMap idCalls (historyIdsList ids)
       DrainReactivationQueue _ body -> concatMap stmtCalls body
+      TellTerm _ g es -> valCalls g ++ concatMap valCalls es
       PushFrame _ -> []
 
     valCalls = \case
@@ -154,6 +160,10 @@ danglingEvaluables known entries = missingIn known (map snd entries)
 -- | 'danglingEvaluables' over a program's callables table.
 danglingCallables :: Set Name -> [(CallableKey, Name)] -> [Name]
 danglingCallables known entries = missingIn known (map snd entries)
+
+-- | The 'Program.tellables' targets @known@ does not define.
+danglingTellables :: Set Name -> [(TellableKey, Name)] -> [Name]
+danglingTellables known entries = missingIn known (map snd entries)
 
 missingIn :: Set Name -> [Name] -> [Name]
 missingIn known = dedup . filter (`Set.notMember` known)

@@ -517,6 +517,7 @@ hasApplyClosure = any goStmt
       VM.Kill e -> goId e
       VM.AddHistory _ _ -> False
       VM.DrainReactivationQueue _ body -> any goStmt body
+      VM.TellTerm _ g es -> goVal g || any goVal es
       VM.PushFrame _ -> False
     goVal e = case e of
       VM.ApplyClosure {} -> True

@@ -143,6 +143,7 @@ where
 import Data.Array (Array, bounds, elems, listArray)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Text (Text)
 import YCHR.Internal.Types (ConstraintType, RuleId)
 import YCHR.Internal.VM.Types
   ( ArgIndex,
@@ -309,6 +310,7 @@ data SlotStmt
   | SKill SlotIdExpr
   | SAddHistory RuleId [SlotIdExpr]
   | SDrainReactivationQueue Slot [SlotStmt]
+  | STellTerm Text SlotValExpr [SlotValExpr]
   | SPushFrame StackFrame
   deriving (Show, Eq)
 
@@ -566,6 +568,10 @@ lowerStmt w = \case
     let (slot, w1) = slotOf w suspVar
         (body', w2) = lowerStmts w1 body
      in (SDrainReactivationQueue slot body', w2)
+  TellTerm sc goal extras ->
+    let (goal', w1) = lowerValExpr w goal
+        (extras', w2) = lowerValExprs w1 extras
+     in (STellTerm sc goal' extras', w2)
   PushFrame frame -> (SPushFrame frame, w)
 
 lowerConditions :: Walker -> [(ArgIndex, ValExpr)] -> ([(ArgIndex, SlotValExpr)], Walker)

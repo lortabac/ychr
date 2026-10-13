@@ -1,0 +1,17 @@
+% A dynamic `tell/N` inside a disjunction branch. The branch is lifted
+% into its own rule, which keeps resolving in the module it was written
+% in.
+:- module(tell_dynamic_disj, [both/3, pick/2]).
+:- use_module(library(search)).
+
+:- chr_constraint both/3, pick/2, inc/2, dbl/2.
+
+inc(X, R) <=> R is X + 1.
+dbl(X, R) <=> R is X * 2.
+
+:- function goal_of/1.
+goal_of(1) -> quote(inc).
+goal_of(2) -> quote(dbl).
+
+both(X, R, Rs) <=> Rs is findall(R, quote(pick(X, R))).
+pick(X, R) <=> (tell(goal_of(1), X, R) ; tell(goal_of(2), X, R)).

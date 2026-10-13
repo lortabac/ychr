@@ -1,0 +1,2 @@
+% `tell` is a built-in and cannot be declared.
+:- chr_constraint tell/1.
