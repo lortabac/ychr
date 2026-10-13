@@ -16,10 +16,9 @@ total](#run_chr_session1-is-run_chr_session_ep1-made-total)), and a
 finite-domain solver (propagate, label, propagate, backtrack) would be
 another use.
 
-**Availability.** Haskell interpreter only. The Scheme backend does
-not implement the search host calls, so a program that uses them
-fails to run there — as for `run_chr_session/1` (see
-[`dev-docs/SCHEME_BACKEND_GAPS.md`](../../dev-docs/SCHEME_BACKEND_GAPS.md)).
+**Availability.** Both backends. A handful of golden cases still
+diverge on the Scheme backend; they are listed, with the reason, in
+[`dev-docs/SCHEME_BACKEND_GAPS.md`](../../dev-docs/SCHEME_BACKEND_GAPS.md).
 
 
 ## Overview

@@ -84,6 +84,7 @@ schemeFor src = do
   pure $
     generateScheme
       ["ychr", "generated", "test"]
+      cp.symbolTable
       VMProgram
         { program = cp.program,
           exportedSet = cp.exportedSet,

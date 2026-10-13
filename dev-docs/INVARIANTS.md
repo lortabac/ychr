@@ -840,13 +840,14 @@ matter are:
   a type can hold suspensions while unindexed, so the crossing store must
   file them from the growable (`file-backlog!`); a lookup whose type is
   not indexed yet must scan, not read the empty index.
-- **The index is state of *this* session and has no snapshot or undo
-  counterpart, because the Scheme runtime has no search driver.** Unlike
-  the Haskell runtime, there is nothing to restore it from, so nothing
-  keeps it in step with a fork. A future search driver
-  (`dev-docs/SCHEME_BACKEND_GAPS.md`, `library(search)`) must capture and
-  restore it together with the store and the history, or a branch will
-  answer from slots the restored store no longer has.
+- **The index is state of *this* session, restored by the same snapshot
+  and trail as the store it describes.** A branch that shrank a type's
+  growable without restoring the index pointer would answer from slots
+  the restored store no longer has, so `trail-store-index!` records the
+  whole per-type index vector before a write and
+  `install-type-index!` puts a fresh copy in place when a bucket crosses
+  the threshold. The history is undone through the trail too (an added
+  entry's deletion).
 
 What is deliberately not trimmed is the same as on the Haskell side: a
 kill leaves the bucket entry in place (the iterator's liveness check

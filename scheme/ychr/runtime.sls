@@ -1378,8 +1378,8 @@
       (cond
         ((%nil? d) '())
         ((and (term? d)
-              (or (eq? (term-functor d) 'prelude__.)
-                  (eq? (term-functor d) '.))
+              (or (eq? (term-functor d) (string->symbol "prelude__."))
+                  (eq? (term-functor d) (string->symbol ".")))
               (= (vector-length (term-args d)) 2))
          (let ((rest (list-elems (get-arg d 1))))
            (and rest (cons (get-arg d 0) rest))))

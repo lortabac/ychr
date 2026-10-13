@@ -1,0 +1,10 @@
+(import (rnrs) (ychr runtime) (ychr pretty)
+        (ychr generated program))
+
+(let ((%s (program)))
+  (let* ((X (make-var %s))
+         (Y (make-var %s))
+         (Ok (make-var %s)))
+    (search_basic:first_pair/3 %s X Y Ok)
+    (pretty-bindings (list (cons (quote Ok) Ok) (cons (quote X) X) (cons (quote Y) Y)))
+))

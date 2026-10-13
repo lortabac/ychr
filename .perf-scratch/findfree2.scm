@@ -1,0 +1,32 @@
+(import (rnrs))
+(define (binds f)   ; f is a form whose car is one of the binding forms
+  (let ((rest (cdr f)))
+    (cond ((eq? (car f) 'do) (map (lambda (b) (if (pair? b) (car b) b)) (cadr f)))
+          ((null? rest) '())
+          ((symbol? (car rest)) (list (car rest)))          ; (lambda args body)
+          ((pair? (car rest))
+           (map (lambda (b) (if (pair? b) (car b) b)) (car rest)))
+          (else '()))))
+(define (scan f bs hits)
+  (cond ((symbol? f)
+         (when (and (eq? f 'a) (not (memq 'a bs)))
+           (set! hits (+ hits 1))
+           (display "FREE a #") (display hits) (newline)))
+        ((pair? f)
+         (if (and (pair? (car f)) (memq (car (car f)) '(lambda let let* letrec do)))
+             (scan (cdr f) (append (binds (car f)) bs) hits)
+             (begin (scan (car f) bs hits) (scan (cdr f) bs hits))))
+        ((vector? f) (let loop ((i 0)) (when (< i (vector-length f))
+                         (scan (vector-ref f i) bs hits) (loop (+ i 1))))))
+  hits)
+;; Walk into (define (f ...) body)/(define x e), (define-syntax ...), and
+;; any other top-level form: scan the whole form but with the library
+;; body's own binders empty (that is the point -- `a` must be bound by
+;; some lambda).
+(define p (open-input-file "scheme/ychr/runtime.sls"))
+(let loop ((n 0))
+  (let ((f (read p)))
+    (unless (eof-object? f)
+      (let ((before (scan f '() 0)))
+        (display "form ") (display n) (display ": ") (display before) (display " free-a\n"))
+      (loop (+ n 1)))))

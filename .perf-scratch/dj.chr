@@ -1,0 +1,5 @@
+:- module(dj, [go/2, set/2]).
+:- use_module(library(search)).
+:- chr_constraint go(any, any), set(any, any).
+go(X, Ss) <=> Ss is findall(X, quote((set(X, 1) ; set(X, 2)))).
+set(V, N) <=> V = N.

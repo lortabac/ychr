@@ -38,8 +38,7 @@
           trail-unwind!
           trail-enter!
           trail-exit!
-          trail-box
-          trail-box-set!)
+          trail-box)
   (import (rnrs))
 
   ;;; The current trail, or @#f@ when no search is active. A one-slot

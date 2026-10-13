@@ -1,0 +1,10 @@
+(import (rnrs) (ychr runtime) (ychr pretty)
+        (ychr generated program))
+
+(let ((%s (program)))
+  (let* ((X (make-var %s))
+         (Y (make-var %s))
+         (Ss (make-var %s)))
+    (r4:go/3 %s X Y Ss)
+    (pretty-bindings (list (cons (quote Ss) Ss) (cons (quote X) X) (cons (quote Y) Y)))
+))

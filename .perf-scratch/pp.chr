@@ -1,0 +1,5 @@
+:- module(pp, [go/3, pr/2, sumis/3]).
+:- use_module(library(search)).
+:- chr_constraint go(any, any, any), pr(any, any), sumis(any, any, any).
+go(X, Y, Ss) <=> Ss is findall([X, Y], quote(pr(X, Y))).
+pr(X, Y) <=> choose(X, [1, 2, 3]), choose(Y, [1, 2, 3]).

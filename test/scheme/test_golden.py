@@ -24,13 +24,14 @@ GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden")
 # Test directories whose tests exercise Haskell-only meta-programming
 # primitives and therefore cannot run on the Scheme backend.
 HASKELL_ONLY = {
+    # run_chr_session/1 answers a nested goal through the goal table, but
+    # the Scheme entry point currently reports `false` for goals the
+    # Haskell runtime commits. Recorded in dev-docs/SCHEME_BACKEND_GAPS.md.
+    "run_chr_session_test",
     # Variable-alias printing (A = B, B = A) is implemented in the
     # Haskell runtime only; the Scheme runtime still renders aliased
     # logical variables as `_`.
     "alias_print",
-    # run_chr_session is a Haskell-only meta host call (spawns a nested
-    # interpreter session); no Scheme implementation exists yet.
-    "run_chr_session_test",
     # `host:'-'(3)` is a host call at an arity no primitive provides.
     # The Haskell registry is keyed by name alone, so it reaches the
     # binary primitive and reports that primitive's arity error; the
@@ -41,32 +42,21 @@ HASKELL_ONLY = {
     # the divergence (dev-docs/SCHEME_BACKEND_GAPS.md). The evaluable
     # counterpart, `is_evaluable_host_term`, runs on both backends.
     "host_term_wrong_arity",
-    # library(search) — solve/1, findall/2, fold_solutions/4 and
-    # fail/0 are Haskell-only host calls. The search driver needs a
-    # session fork, a snapshot of the store references and an undo
-    # trail hooked into variable and suspension-flag writes; the Scheme
-    # runtime has none of that yet.
-    "search_alt",
-    "search_basic",
-    "search_between",
-    "search_deep",
-    "search_disj",
-    "search_fold",
-    "search_generate",
-    "search_label",
-    "search_label_alt",
-    "search_nested",
-    "search_fork",
-    # library(state)'s run_state/3 and run_states/2 run their goal with
-    # search:solve/1, so they are Haskell-only for the same reason.
-    "state_run",
-    # A dynamic tell inside a `;` branch, collected with findall/2.
-    "tell_dynamic_disj",
 }
 
 # Specific (test_dir, case_name) pairs to skip on Scheme. Used when only
 # some cases in a directory diverge.
 HASKELL_ONLY_CASES = {
+    # `committing_inner` folds to a `commit` step over a template the
+    # outer choice point observes. The Scheme driver's watched-goal check
+    # still sees that choice point live after the inner fold unwinds, so
+    # it reports a watched goal variable where the Haskell runtime
+    # commits. Recorded in dev-docs/SCHEME_BACKEND_GAPS.md.
+    ("search_fold", "committing_inner"),
+    # `rtrack` watches a variable a constraint of the caller's store
+    # observes across a nested search. Recorded in
+    # dev-docs/SCHEME_BACKEND_GAPS.md.
+    ("search_nested", "rtrack"),
     # The Scheme runtime registers a suspension as an observer of the
     # variables reachable at *store* time only. The Haskell runtime
     # additionally transfers a bound variable's observers onto the

@@ -1,0 +1,6 @@
+:- module(r6, [go/2, w/1, ck2/2]).
+:- use_module(library(search)).
+:- chr_constraint go(any, any), w(any), ck2(any, any).
+go(X, Ss) <=> Ss is findall(X, quote(w(X))).
+w(X) <=> choose(X, [1,2,3]), ck2(a, X).
+ck2(a, X) <=> integer(X) | true.
