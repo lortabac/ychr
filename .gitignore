@@ -19,3 +19,4 @@ CLAUDE.local.md
 .envrc.local
 *.log
 *.pyc
+.perf-scratch/
